@@ -492,7 +492,8 @@ Java_com_vibesdr_app_VibeRemoteSetup_nativeEnable(JNIEnv* env, jclass cls, jbool
             },
             [](const std::string& body, std::string& err) -> bool {
                 std::string patch; bool restart = false;
-                if (!vibe::androidsetup::settingsPatch(body, patch, restart, err)) return false;
+                // ★ The current settings + device + radio: the patch reads only the controls THIS phone and radio offer.
+                if (!vibe::androidsetup::settingsPatch(body, jniRemoteGet(), patch, restart, err)) return false;
                 const std::string why = jniRemoteSet(patch, restart);
                 if (!why.empty()) { err = why; return false; }
                 return true;

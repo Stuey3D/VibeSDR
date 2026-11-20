@@ -23,6 +23,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -235,25 +236,193 @@ inline std::string strOr(const J* v, const std::string& d) {
 
 // ── What the phone's server has, as the page's control ids ───────────────────────────────────────────────────────
 
-/** ★★ THE CONTROLS THE PAGE KEEPS ON A PHONE — every other control is hidden by the page (androidPrune). Each id here has
- *  its mapping in BOTH functions below and its mirror on the phone's screen (ServerModeScreen, remoteKeys); adding one
- *  means all three, and test-android-setup.cpp checks the two here agree. */
-inline const std::vector<std::string>& supportedControls() {
-    static const std::vector<std::string> ids = {
-        // the server tab
-        "name", "mdns", "landingMessage", "landingLinkUrl", "landingLinkLabel", "uncompressed", "trustedProxies",
-        "maxRadiosPerIp", "decoderMax", "galleryMb", "galleryPublic", "gallerySaveLive", "batteryPauseAt",
-        // the radio tab
-        "radioName", "antenna", "users", "askFirst", "zoomSpectrum", "landingFreq", "demodMode", "sessionLimit",
-        "sessionLimitMode", "idleKick", "nbWide", "vfoB", "idleGrace", "radioPin", "radioPinClear",
+/* ★★★ EVERY SETTING ON THE PHONE'S SERVER SCREEN IS ON THE PAGE (Stuart, 2026-11-20: "all settings for android need to be
+ *  on the remote setup page"). The first cut (beta88 morning) carried 28 controls; this table carries every setting
+ *  ServerModeScreen has, except the ones only the phone can change (docs/v12/ANDROID-SERVER-PROCESS.md, "Device-only") and
+ *  the admin password, which never travels to or from the page.
+ *
+ * ★★ A CONTROL THE RADIO CANNOT USE IS NEVER OFFERED (AGENTS.md). Each row says which radios it belongs to — the SAME rule
+ *    ServerModeScreen draws by (isRtl = no radio or an RTL; hasHwSetup = not an HF+ and not an Icom; the SDRplay card only
+ *    for an RSP; the HF+ calibration only for an HF+; an Icom's own settings only for an Icom) — and which builds/devices
+ *    (raw IQ is not on Lite; the battery is not on a television; the public listing needs the tunnel binary). The page
+ *    hides every control not in `android.supported`; a save of a control that is not supported here is IGNORED, never
+ *    stored, whatever the page posts.
+ * ★ P_ADV rows are the settings the phone's server applies only in Advanced mode (VibeServerBoot: `if (adv)`); the page
+ *   hides them while its Simple/Advanced choice says Simple (android.advancedOnly), live, as the phone's screen does.
+ * ★ Ids are the page's own control ids. A row may name a CONTAINER whose generated inputs have no id of their own (the
+ *   modes tree, the background-decoding profiles, the per-band gain rows): the page keeps an id-less input when its
+ *   nearest ancestor with an id is supported (androidPrune). */
+enum : unsigned {
+    D_RTL = 1u << 0, D_AHF = 1u << 1, D_ASP = 1u << 2, D_HRF = 1u << 3, D_RSP = 1u << 4, D_ICOM = 1u << 5,
+    D_ANY = 0x3Fu,
+    D_RADIO = D_ANY & ~D_ICOM,              // every radio but an Icom (an Icom serves its own one dial)
+    D_HWSETUP = D_RTL | D_ASP | D_HRF | D_RSP,   // ServerModeScreen hasHwSetup: not an HF+, not an Icom
+};
+enum : unsigned { P_ADV = 1u, P_NOT_LITE = 2u, P_NOT_TV = 4u, P_TUNNEL = 8u, P_LITE = 16u };
+
+struct Control { const char* ids; unsigned drivers; unsigned needs; };
+
+/** ★★ THE TABLE — every remote control, its radios and its needs. Adding a setting to the phone's screen means a row here,
+ *  its mapping in pageConfig() and settingsPatch() below, and its mirror in src/services/serverSettingsMirror.ts;
+ *  scripts/check-remote-keys.mjs fails until all of them agree, and until every ServerModeScreen key is either here or in
+ *  the documented device-only list. */
+inline const std::vector<Control>& controlTable() {
+    static const std::vector<Control> t = {
+        // ── the server tab ──
+        { "name mdns",                                   D_ANY,   0 },
+        { "landingMessage landingLinkUrl landingLinkLabel", D_ANY, 0 },
+        { "uncompressed",                                D_ANY,   0 },
+        { "trustedProxies",                              D_ANY,   P_ADV },
+        { "maxRadiosPerIp",                              D_ANY,   0 },
+        { "decoderMax rttySkimWorkers",                  D_ANY,   0 },
+        { "galleryMb galleryPublic gallerySaveLive",     D_ANY,   0 },
+        { "batteryPauseAt",                              D_ANY,   P_NOT_TV },
+        { "place lat lon locFollow country locator",     D_ANY,   0 },
+        { "dirList dirName dirShareSec",                 D_ANY,   P_TUNNEL },
+        // ★ The phone's own three, which the Linux page never needed (androidSrvCard): the web client, Opus, Simple/Advanced.
+        { "androidWebServer androidCompress androidAdvanced", D_ANY, 0 },
+        // ── the radio tab ──
+        { "radioName antenna",                           D_ANY,   0 },
+        { "radioPin radioPinClear",                      D_ANY,   0 },
+        { "users askFirst",                              D_ANY,   P_ADV },
+        { "modeSingle modeLocked lockFreq",              D_RADIO, P_ADV },
+        { "zoomSpectrum",                                D_RADIO, 0 },
+        { "landingFreq demodMode",                       D_RADIO, 0 },
+        { "sessionLimit sessionLimitMode idleKick",      D_ANY,   0 },
+        { "nbWide vfoB",                                 D_RADIO, 0 },
+        { "idleGrace",                                   D_ANY,   0 },
+        { "spectrogram",                                 D_RADIO, P_ADV },
+        { "rate rateLock maxFps",                        D_RADIO, 0 },
+        { "modeBlockList bandModeList",                  D_ANY,   0 },   // the modes this aerial is offered (blockedModes)
+        { "dabRateBoost",                                D_RADIO, 0 },
+        { "adsb256 ism256",                              D_RTL,   0 },
+        { "dabScanLabels",                               D_RADIO, P_LITE },
+        { "gainRestSlider gainRest gainRestLock rtlAgc androidTunerBw", D_RTL, 0 },
+        { "gainAgcLock",                                 D_RTL,   P_ADV },
+        { "gainPick gainCurve gainMaxSlider gainMax gainIfSlider gainIfMax gainSplitSlider gainAspLock gainLock "
+          "bandCopyFrom gainList gainAdd",               D_RADIO, P_ADV },
+        { "gainIfBw",                                    D_RTL,   P_ADV },
+        { "allowPick allowLo allowHi blockPick blockLo blockHi", D_ANY, P_ADV },
+        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep", D_RADIO, 0 },
+        { "fmDeemph fmStereo fmNr fmIms fmCeq fmAutoBw fmNb fmReturn fmRemember", D_RADIO, 0 },
+        { "antRangePreset antFilterPreset antPortNames", D_ANY,   0 },
+        { "swYes swNo swBroker swUser swPass swLocked swAntennas", D_ANY, 0 },
+        { "antennaMap antennaPortLocked",                D_RSP,   0 },
+        { "ppm",                                         D_RTL | D_RSP, 0 },
+        { "ppb",                                         D_AHF,   0 },
+        { "biasT",                                       D_HWSETUP, 0 },
+        { "autoDs autoDsBelow androidDsFixed",           D_RTL,   0 },
+        { "convLo convDown convHi androidConvInLo",      D_HWSETUP, 0 },
+        { "icomBaud icomCiv icomScopeSpeed icomTuneLock icomPowerOn icomAutoOff icomOffDelayMin", D_ICOM, 0 },
+        { "bgOn bgWait bgKeepInRange bgProfiles",        D_RADIO, 0 },
+        { "dxOn dxWait dxBands dxRaster dxOirt dxExt dxViewAdmin", D_RADIO, 0 },
+        { "rawIqOn rawIqLan rawIqStreams rawIqLocalOnly", D_RADIO, P_NOT_LITE },
+        { "rspVibeAgc rfNotch dabNotch rspAmNotch rspHdr rspExtRef rspDabDecim rfAgc autoNotch userNotch "
+          "dabAgcOverride dabAgcTarget agcSet agcSetLock", D_RSP, 0 },
     };
+    return t;
+}
+
+inline std::vector<std::string> splitIds(const char* s) {
+    std::vector<std::string> out; std::string cur;
+    for (const char* p = s; ; ++p) {
+        if (*p == ' ' || *p == 0) { if (!cur.empty()) out.push_back(cur); cur.clear(); if (!*p) break; }
+        else cur += *p;
+    }
+    return out;
+}
+
+/** Which radio, as ServerModeScreen reads it: no radio (or one it does not name) is treated as an RTL-SDR, exactly as the
+ *  screen's `isRtl = !radio || radio.driver === 'rtl'` does. */
+inline unsigned driverBit(const std::string& d) {
+    if (d == "airspyhf") return D_AHF;
+    if (d == "airspy") return D_ASP;
+    if (d == "hackrf") return D_HRF;
+    if (d == "sdrplay") return D_RSP;
+    if (d == "icom") return D_ICOM;
+    return D_RTL;
+}
+
+/** What this phone is, for the table's needs. */
+struct Platform { unsigned driver = D_RTL; bool lite = false, tv = false, tunnel = false; };
+
+inline bool rowApplies(const Control& c, const Platform& pf) {
+    if (!(c.drivers & pf.driver)) return false;
+    if ((c.needs & P_NOT_LITE) && pf.lite) return false;
+    if ((c.needs & P_LITE) && !pf.lite) return false;
+    if ((c.needs & P_NOT_TV) && pf.tv) return false;
+    if ((c.needs & P_TUNNEL) && !pf.tunnel) return false;
+    return true;
+}
+
+/** The ids the page keeps for THIS phone and radio (and, in `advOnly`, those of them shown only in Advanced). */
+inline std::vector<std::string> supportedControls(const Platform& pf, std::vector<std::string>* advOnly = nullptr) {
+    std::vector<std::string> ids;
+    for (const auto& c : controlTable()) {
+        if (!rowApplies(c, pf)) continue;
+        for (auto& id : splitIds(c.ids)) { if (advOnly && (c.needs & P_ADV)) advOnly->push_back(id); ids.push_back(std::move(id)); }
+    }
     return ids;
+}
+/** Every id in the table, whatever the radio — for the tests. */
+inline std::vector<std::string> allControlIds() {
+    std::vector<std::string> ids;
+    for (const auto& c : controlTable()) for (auto& id : splitIds(c.ids)) ids.push_back(std::move(id));
+    return ids;
+}
+/** Is control `id` offered on this phone? */
+inline bool offered(const Platform& pf, const char* id) {
+    for (const auto& c : controlTable()) {
+        for (const auto& x : splitIds(c.ids)) if (x == id) return rowApplies(c, pf);
+    }
+    return false;
 }
 
 /** The demodulator names the phone's server lands on — the page's own list is wider (it serves every radio). */
 inline bool knownMode(const std::string& m) {
     static const std::set<std::string> ok = { "am", "sam", "nfm", "wfm", "usb", "lsb", "cw", "cwu", "cwl", "dsb", "drm", "dab", "iq", "raw" };
     return ok.count(m) > 0;
+}
+
+/** ★★ THE CAPTURE WIDTHS THE PHONE'S SCREEN OFFERS, per radio (ServerModeScreen RATE_OPTIONS_*, without its 0 =
+ *  "Client-controlled"). A page save snaps to the nearest of them — the same snap the engine makes to a pinned rate —
+ *  so the phone's own picker can always show what the page chose. check-remote-keys.mjs holds these to the screen's. */
+inline const std::vector<double>& ratesFor(unsigned drv) {
+    static const std::vector<double> rtl = { 2400000, 2160000, 2048000, 1920000, 1792000, 1536000, 1200000, 1024000, 960000, 250000 };
+    static const std::vector<double> hrf = { 2000000, 2400000, 4000000, 5000000, 8000000 };
+    static const std::vector<double> rsp = { 2000000, 2048000, 3000000, 4000000, 5000000, 6000000, 8000000 };
+    static const std::vector<double> ahf = { 912000, 768000, 384000 };
+    static const std::vector<double> asp = { 10000000, 6000000, 3000000, 2500000 };
+    switch (drv) { case D_HRF: return hrf; case D_RSP: return rsp; case D_AHF: return ahf; case D_ASP: return asp; default: return rtl; }
+}
+inline double snapTo(const std::vector<double>& list, double v) {
+    double best = list.empty() ? v : list[0];
+    for (double x : list) if (std::fabs(x - v) < std::fabs(best - v)) best = x;
+    return best;
+}
+
+/** Maidenhead to 6 characters — the page shows it beside the latitude and longitude. */
+inline std::string gridOf(double lat, double lon) {
+    if (!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180)) return "";
+    double x = std::min(359.9999, lon + 180), y = std::min(179.9999, lat + 90);
+    std::string g;
+    g += char('A' + int(x / 20)); g += char('A' + int(y / 10));
+    g += char('0' + int(std::fmod(x, 20) / 2)); g += char('0' + int(std::fmod(y, 10)));
+    g += char('a' + int(std::fmod(x, 2) * 12)); g += char('a' + int(std::fmod(y, 1) * 24));
+    return g;
+}
+
+inline Platform platformOf(const J& in) {
+    Platform pf;
+    const J* rad = in.get("radio");
+    const J* dev = in.get("device");
+    pf.driver = driverBit(rad ? strOr(rad->get("driver"), "") : "");
+    if (dev) {
+        pf.lite = boolOr(dev->get("lite"), false);
+        pf.tv = boolOr(dev->get("tv"), false);
+        pf.tunnel = boolOr(dev->get("tunnelSupported"), false);
+    }
+    return pf;
 }
 
 /**
@@ -267,6 +436,7 @@ inline std::string pageConfig(const std::string& raw) {
     const J* st = in.get("settings"); if (!st || st->t != J::Obj) st = &empty;
     const J* dev = in.get("device");
     const J* rad = in.get("radio");
+    const Platform pf = platformOf(in);
     auto S = [&](const char* k) { return st->get(k); };
 
     J out = J::obj();
@@ -283,12 +453,35 @@ inline std::string pageConfig(const std::string& raw) {
     out.set("oneRadioPerIp", J::boolean(oneIp));
     out.set("maxRadiosPerIp", J::num(oneIp ? 1 : 0));
     out.set("decoderMax", J::num(numOr(S("decoderMax"), 0)));
+    out.set("rttySkimWorkers", J::num(numOr(S("rttySkimWorkers"), 0)));
     out.set("galleryMb", J::num(numOr(S("galleryMb"), 100)));
     out.set("galleryPublic", J::boolean(boolOr(S("galleryPublic"), true)));
     out.set("gallerySaveLive", J::boolean(boolOr(S("gallerySaveLive"), true)));
     out.set("batteryPauseAt", J::num(numOr(S("batteryPauseAt"), 0)));
     out.set("batteryResumeAt", J::num(numOr(S("batteryResumeAt"), 40)));
     out.set("port", J::num(0));
+    // ★ Where the receiver is (the phone's RECEIVER LOCATION): "manual" = a place with a position; "off" = none published.
+    {
+        const J* loc = S("serverLocation");
+        const bool manual = loc && strOr(loc->get("mode"), "off") == "manual";
+        const double lat = loc ? numOr(loc->get("lat"), NAN) : NAN, lon = loc ? numOr(loc->get("lon"), NAN) : NAN;
+        const bool pos = manual && std::isfinite(lat) && std::isfinite(lon);
+        auto fix = [](double v) { char b[32]; std::snprintf(b, sizeof b, "%.5f", v); return std::string(b); };
+        out.set("place", J::str(pos ? strOr(loc->get("label"), "") : ""));
+        out.set("lat", J::str(pos ? fix(lat) : ""));
+        out.set("lon", J::str(pos ? fix(lon) : ""));
+        out.set("locator", J::str(pos ? gridOf(lat, lon) : ""));
+        out.set("country", J::str(loc ? strOr(loc->get("country"), "") : ""));
+        out.set("locFollow", J::boolean(loc ? boolOr(loc->get("moving"), false) : false));
+    }
+    // ★ The public listing: the switch is what the phone's tunnel is doing now (device.listing), the name the owner's.
+    {
+        const J* li = dev ? dev->get("listing") : nullptr;
+        out.set("dirList", J::boolean(li ? boolOr(li->get("wanted"), false) : false));
+        out.set("dirName", J::str(strOr(S("publicName"), "")));
+        out.set("dirShareSec", J::num(numOr(S("publicShareSec"), 0)));
+        out.set("dirStatus", li && li->t == J::Obj ? *li : J::obj());
+    }
 
     J r = J::obj();
     r.set("serial", J::str("android"));
@@ -296,7 +489,8 @@ inline std::string pageConfig(const std::string& raw) {
     r.set("configured", J::boolean(true));
     r.set("driver", J::str(rad ? strOr(rad->get("driver"), "") : ""));
     r.set("model", J::str(rad ? strOr(rad->get("model"), "") : ""));
-    r.set("mode", J::str("shared"));
+    const bool locked = pf.driver != D_ICOM && strOr(S("radioUse"), "single") == "locked";
+    r.set("mode", J::str(locked ? "locked" : "single"));
     r.set("label", J::str(strOr(S("radioLabel"), "")));
     r.set("antenna", J::str(strOr(S("antenna"), "")));
     r.set("users", J::num(std::max(1.0, numOr(S("maxUsers"), 1))));
@@ -313,15 +507,108 @@ inline std::string pageConfig(const std::string& raw) {
     r.set("idleGrace", J::num(numOr(S("idleGraceSec"), 300)));
     // ★ The PIN comes down behind the admin password like the Linux file does; the page never renders it, only its state.
     r.set("pin", J::str(strOr(S("pin"), "")));
+    // ── the capture: the phone's "rate 0 = the listener's choice" is the page's rate + an unticked pin box ──
+    {
+        const double lockedRate = numOr(S("lockedRate"), 0);
+        r.set("rate", J::num(lockedRate > 0 ? lockedRate : snapTo(ratesFor(pf.driver), numOr(S("sampleRate"), 2400000))));
+        r.set("rateLock", J::boolean(lockedRate > 0));
+        const double fps = numOr(S("maxFftRate"), 10);
+        r.set("maxFps", J::num(fps > 0 ? fps : 10)); r.set("fftRate", J::num(fps > 0 ? fps : 10));
+    }
+    r.set("lockFreq", J::num(numOr(S("lockedCentre"), 0)));
+    r.set("spectrogram", J::boolean(boolOr(S("spectrogram"), false)));
+    r.set("blockedModes", J::str(strOr(S("blockedModes"), "")));
+    r.set("dabRateBoost", J::boolean(boolOr(S("dabRateBoost"), false)));
+    r.set("adsb256", J::boolean(boolOr(S("adsb256"), false)));
+    r.set("ism256", J::boolean(boolOr(S("ism256"), false)));
+    r.set("dabScanLabels", J::num(numOr(S("dabScanLabels"), -1)));
+    // ── gain ──
+    r.set("gainLimits", J::str(strOr(S("gainLimits"), "")));
+    r.set("gainLocks", J::str(strOr(S("gainLocks"), "")));
+    r.set("gainSplits", J::str(strOr(S("gainSplits"), "")));
+    r.set("gainCurves", J::str(strOr(S("gainCurves"), "")));
+    r.set("ifBwLimits", J::str(strOr(S("ifBwLimits"), "")));
+    r.set("restGain", J::num(numOr(S("restGain"), -1)));
+    r.set("agcLock", J::num(boolOr(S("agcLock"), false) ? 1 : 0));
+    r.set("rtlAgc", J::boolean(boolOr(S("rtlAgc"), false)));
+    r.set("tunerBwAuto", J::boolean(boolOr(S("tunerBwAuto"), false)));
+    r.set("allowRanges", J::str(strOr(S("allowRanges"), "")));
+    r.set("blockRanges", J::str(strOr(S("blockRanges"), "")));
+    // ── landings ──
+    r.set("landingDabChannel", J::num(numOr(S("landingDabChannel"), -1)));
+    r.set("landingDabSid", J::num(numOr(S("landingDabSid"), 0)));
+    r.set("landingDabService", J::str(strOr(S("landingDabService"), "")));
+    r.set("landingAdsb", J::boolean(boolOr(S("landingAdsb"), false)));
+    r.set("adsbKeepRunning", J::boolean(boolOr(S("adsbKeepRunning"), false)));
+    // ── Broadcast FM defaults (FM_DEFAULTS in services/fmDefaults.ts) ──
+    r.set("fmDeemph", J::num(numOr(S("fmDeemph"), -1)));
+    r.set("fmStereo", J::boolean(boolOr(S("fmStereo"), true)));
+    r.set("fmNr", J::boolean(boolOr(S("fmNr"), false)));
+    r.set("fmIms", J::boolean(boolOr(S("fmIms"), true)));
+    r.set("fmCeq", J::boolean(boolOr(S("fmCeq"), true)));
+    r.set("fmAutoBw", J::boolean(boolOr(S("fmAutoBw"), true)));
+    r.set("fmNb", J::boolean(boolOr(S("fmNb"), true)));
+    r.set("fmRemember", J::boolean(boolOr(S("fmRemember"), false)));
+    // ── the aerial ──
+    r.set("antennaIcon", J::str(strOr(S("antennaIcon"), "")));
+    r.set("antennaRanges", J::str(strOr(S("antennaRanges"), "")));
+    r.set("antennaFilters", J::str(strOr(S("antennaFilters"), "")));
+    r.set("antennaNames", J::str(strOr(S("antennaNames"), "")));
+    r.set("antennaSwitch", J::str(strOr(S("antennaSwitch"), "")));
+    r.set("antennaMap", J::str(strOr(S("antennaMap"), "")));
+    r.set("antennaPortLocked", J::boolean(boolOr(S("antennaLocked"), false)));
+    // ── the front end ──
+    r.set("ppm", J::num(numOr(S("ppm"), 0)));
+    r.set("ppb", J::num(numOr(S("ppb"), 0)));
+    r.set("biasT", J::boolean(boolOr(S("biasT"), false)));
+    r.set("autoDirectSampling", J::boolean(boolOr(S("autoDirectSampling"), false)));
+    r.set("directSamplingBelowHz", J::num(numOr(S("directSamplingBelowHz"), 24e6)));
+    r.set("directSampling", J::num(numOr(S("directSampling"), 0)));
+    r.set("converterOffsetHz", J::num(numOr(S("converterOffsetHz"), 0)));
+    r.set("converterInputLoHz", J::num(numOr(S("converterInputLoHz"), 0)));
+    r.set("converterInputHiHz", J::num(numOr(S("converterInputHiHz"), 0)));
+    // ── an Icom's own (VibeIcom.prepareStart's defaults) ──
+    r.set("icomBaud", J::num(numOr(S("icomBaud"), 115200)));
+    r.set("icomCiv", J::num(numOr(S("icomCiv"), 0)));
+    r.set("icomScopeSpeed", J::num(numOr(S("icomScopeSpeed"), 0)));
+    r.set("icomTuneLock", J::boolean(boolOr(S("icomTuneLock"), false)));
+    r.set("icomPowerOn", J::boolean(boolOr(S("icomPowerOn"), false)));
+    r.set("icomAutoOff", J::boolean(boolOr(S("icomAutoOff"), true)));
+    r.set("icomOffDelayMin", J::num(numOr(S("icomOffDelayMin"), 5)));
+    // ── background decoding and the DX scanner, one JSON text each (RadioConfig::bgDecode / dxScan) ──
+    r.set("bgDecode", J::str(strOr(S("bgDecode"), "")));
+    r.set("dxScan", J::str(strOr(S("dxScan"), "")));
+    // ── raw IQ out (the phone stores the LAN ceiling as text — see nativeServerConfig) ──
+    r.set("rawIq", J::num(numOr(S("rawIq"), 0)));
+    r.set("rawIqMax", J::num(numOr(S("rawIqMax"), 0)));
+    r.set("rawIqLanMaxHz", J::num(numOr(S("rawIqLanMaxHz"), 0)));
+    // ── the SDRplay card (rspCard.ts RSP_DEFAULTS) ──
+    r.set("rspVibeAgc", J::num(numOr(S("rspVibeAgc"), 0)));
+    for (const char* k : { "rfNotch", "dabNotch", "rspAmNotch", "rspHdr", "rspExtRef", "rspDabDecim", "rfAgc", "autoNotch", "agcSetLock" })
+        r.set(k, J::boolean(boolOr(S(k), false)));
+    r.set("userNotch", J::boolean(boolOr(S("userNotch"), true)));
+    r.set("dabAgcOverride", J::boolean(boolOr(S("dabAgcOverride"), true)));
+    r.set("dabAgcTarget", J::num(numOr(S("dabAgcTarget"), -40)));
+    r.set("agcSet", J::num(numOr(S("agcSet"), -30)));
     J radios = J::arr(); radios.a.push_back(std::move(r));
     out.set("radios", std::move(radios));
 
     J android = J::obj();
+    std::vector<std::string> adv;
     J sup = J::arr();
-    for (const auto& id : supportedControls()) sup.a.push_back(J::str(id));
+    for (const auto& id : supportedControls(pf, &adv)) sup.a.push_back(J::str(id));
     android.set("supported", std::move(sup));
+    J advJ = J::arr();
+    for (const auto& id : adv) advJ.a.push_back(J::str(id));
+    android.set("advancedOnly", std::move(advJ));
+    // ★ The phone's own three, for androidSrvCard.
+    J srv = J::obj();
+    srv.set("webServer", J::boolean(boolOr(S("webServer"), true)));
+    srv.set("compressAudio", J::boolean(boolOr(S("compressAudio"), true)));
+    srv.set("advanced", J::boolean(boolOr(S("advanced"), false)));
+    android.set("server", std::move(srv));
     // ★★ The phone-only facts, shown READ-ONLY on the page with "change it on the phone" — the page can see them, never set
-    //    them: battery optimisation, start when power returns and the USB grant are Android's own dialogs.
+    //    them (docs/v12/ANDROID-SERVER-PROCESS.md, "Device-only").
     android.set("device", dev && dev->t == J::Obj ? *dev : J::obj());
     out.set("android", std::move(android));
     return dump(out);
@@ -329,16 +616,25 @@ inline std::string pageConfig(const std::string& raw) {
 
 /**
  * The page's save (`body`, the page's config shape) → a patch of Android keys (`patchOut`, a JSON object; a key whose
- * value is null is REMOVED from the settings). Only the supported controls are read. `restart` says whether the page
- * asked for the server to restart (its main Save does; "Save radio settings" does not). False + `err` on a bad body.
+ * value is null is REMOVED from the settings). Only the controls offered for THIS phone and radio are read (`current` =
+ * the same raw pageConfig() takes; it names the radio and the device). `restart` says whether the page asked for the
+ * server to restart (its main Save does; "Save radio settings" does not). False + `err` on a bad body.
+ * ★ Keys that are ACTIONS rather than settings travel in the patch too and are taken out by VibeRemoteSetup.kt:
+ *   `publicListed` (list / unlist on vibesdr.net now).
  */
-inline bool settingsPatch(const std::string& body, std::string& patchOut, bool& restart, std::string& err) {
+inline bool settingsPatch(const std::string& body, const std::string& current, std::string& patchOut, bool& restart, std::string& err) {
     J b;
     if (!parse(body, b) || b.t != J::Obj) { err = "the settings were not valid JSON"; return false; }
+    J cur; if (!parse(current, cur) || cur.t != J::Obj) cur = J::obj();
+    J noSettings = J::obj();
+    const J* curS = cur.get("settings"); if (!curS || curS->t != J::Obj) curS = &noSettings;
+    const Platform pf = platformOf(cur);
+    auto on = [&](const char* id) { return offered(pf, id); };
+
     restart = boolOr(b.get("restart"), false);
     J p = J::obj();
-    auto str = [&](const char* pageKey, const char* key, size_t maxLen) {
-        const J* v = b.get(pageKey);
+    auto str = [&](const J* src, const char* pageKey, const char* key, size_t maxLen) {
+        const J* v = src ? src->get(pageKey) : nullptr;
         if (v && v->t == J::Str) p.set(key, J::str(v->s.substr(0, maxLen)));
     };
     auto num = [&](const J* src, const char* pageKey, const char* key, double lo, double hi) {
@@ -353,32 +649,81 @@ inline bool settingsPatch(const std::string& body, std::string& patchOut, bool& 
         const J* v = src ? src->get(pageKey) : nullptr;
         if (v && (v->t == J::Bool || v->t == J::Num)) p.set(key, J::boolean(boolOr(v, false)));
     };
+    // ★ A JSON text carried as a string ("" = none): refused unless it is an object, so the server never boots on junk.
+    auto jsonText = [&](const J* src, const char* pageKey, const char* key, size_t maxLen, const char* what) -> bool {
+        const J* v = src ? src->get(pageKey) : nullptr;
+        if (!v || v->t != J::Str) return true;
+        if (v->s.empty()) { p.set(key, J::str("")); return true; }
+        J chk;
+        if (v->s.size() > maxLen || !parse(v->s, chk) || chk.t != J::Obj) { err = std::string(what) + " could not be read"; return false; }
+        p.set(key, J::str(v->s));
+        return true;
+    };
 
-    // the server tab
+    // ── the server tab ──
     if (const J* v = b.get("name"); v && v->t == J::Str) {
         std::string n = v->s.substr(0, 60);
         if (n.find_first_not_of(" \t") == std::string::npos) { err = "the server needs a name"; return false; }
         p.set("name", J::str(n));
     }
     flag(&b, "mdnsAdvertise", "advertise");
-    str("landingMessage", "landingMessage", 500);
-    str("landingLinkUrl", "landingLinkUrl", 300);
-    str("landingLinkLabel", "landingLinkLabel", 60);
+    str(&b, "landingMessage", "landingMessage", 500);
+    str(&b, "landingLinkUrl", "landingLinkUrl", 300);
+    str(&b, "landingLinkLabel", "landingLinkLabel", 60);
     num(&b, "uncompressed", "uncompressedAudio", 0, 2);
-    str("trustedProxies", "trustedProxies", 400);
+    str(&b, "trustedProxies", "trustedProxies", 400);
     if (const J* v = b.get("maxRadiosPerIp"); v && v->t == J::Num) p.set("oneRadioPerIp", J::boolean(v->n != 0));
     num(&b, "decoderMax", "decoderMax", 0, 64);
+    num(&b, "rttySkimWorkers", "rttySkimWorkers", 0, 8);
     num(&b, "galleryMb", "galleryMb", 0, 100000);
     flag(&b, "galleryPublic", "galleryPublic");
     flag(&b, "gallerySaveLive", "gallerySaveLive");
-    if (const J* v = b.get("batteryPauseAt"); v && v->t == J::Num) {
+    if (on("batteryPauseAt")) if (const J* v = b.get("batteryPauseAt"); v && v->t == J::Num) {
         double at = std::round(std::max(0.0, std::min(95.0, v->n)));
         p.set("batteryPauseAt", J::num(at));
         // ★ The phone's own rule (ServerModeScreen: resume 20 points above the pause, 40 when there is none) — one truth.
         p.set("batteryResumeAt", J::num(at > 0 ? at + 20 : 40));
     }
+    // ★ RECEIVER LOCATION — a place needs a position (the page finds one for a typed place; the phone's screen does too).
+    if (const J* la = b.get("lat"), *lo = b.get("lon"); la && lo && la->t == J::Str && lo->t == J::Str) {
+        J loc = J::obj();
+        const J* fol = b.get("locFollow");
+        loc.set("moving", J::boolean(fol && boolOr(fol, false)));
+        if (const J* c = b.get("country"); c && c->t == J::Str) {
+            std::string cc;
+            for (char ch : c->s.substr(0, 3)) if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) cc += char(ch & ~0x20);
+            loc.set("country", J::str(cc));
+        }
+        const bool blank = la->s.find_first_not_of(" ") == std::string::npos && lo->s.find_first_not_of(" ") == std::string::npos;
+        if (blank) {
+            loc.set("mode", J::str("off"));
+        } else {
+            const double lat = numOr(la, NAN), lon = numOr(lo, NAN);
+            if (!std::isfinite(lat) || !std::isfinite(lon) || std::fabs(lat) > 90 || std::fabs(lon) > 180) {
+                err = "the receiver's location needs a latitude (-90 to 90) and a longitude (-180 to 180)"; return false;
+            }
+            loc.set("mode", J::str("manual"));
+            loc.set("lat", J::num(std::round(lat * 1e5) / 1e5)); loc.set("lon", J::num(std::round(lon * 1e5) / 1e5));
+            const J* pl = b.get("place");
+            std::string label = pl && pl->t == J::Str ? pl->s.substr(0, 80) : "";
+            if (label.find_first_not_of(" ") == std::string::npos) label = gridOf(lat, lon);
+            loc.set("label", J::str(label));
+        }
+        p.set("serverLocation", std::move(loc));
+    }
+    if (on("dirList")) {
+        str(&b, "dirName", "publicName", 48);
+        num(&b, "dirShareSec", "publicShareSec", 0, 366.0 * 86400);
+        flag(&b, "dirList", "publicListed");   // ★ an ACTION — VibeRemoteSetup lists or unlists, and does not store it
+    }
+    // ── the phone's own three (androidSrvCard) ──
+    flag(&b, "webServer", "webServer");
+    flag(&b, "compressAudio", "compressAudio");
+    flag(&b, "advanced", "advanced");
+    // ★ The screen's rule: no web client, no Advanced (the admin page IS the web client).
+    if (const J* w = p.get("webServer"); w && !w->b) p.set("advanced", J::boolean(false));
 
-    // the radio tab — the phone has exactly one
+    // ── the radio tab — the phone has exactly one ──
     const J* radios = b.get("radios");
     const J* r = (radios && radios->t == J::Arr && !radios->a.empty() && radios->a[0].t == J::Obj) ? &radios->a[0] : nullptr;
     if (r) {
@@ -386,8 +731,8 @@ inline bool settingsPatch(const std::string& body, std::string& patchOut, bool& 
         if (const J* v = r->get("antenna"); v && v->t == J::Str) p.set("antenna", J::str(v->s.substr(0, 120)));
         num(r, "users", "maxUsers", 1, 50);
         flag(r, "askBeforeTuning", "askBeforeTuning");
-        flag(r, "zoomSpectrum", "zoomSpectrum");
-        if (const J* v = r->get("landingFreq"); v && v->t == J::Num) {
+        if (on("zoomSpectrum")) flag(r, "zoomSpectrum", "zoomSpectrum");
+        if (on("landingFreq")) if (const J* v = r->get("landingFreq"); v && v->t == J::Num) {
             if (v->n > 0) {
                 p.set("centerFreq", J::num(std::round(v->n)));
                 const J* m = r->get("demodMode");
@@ -405,8 +750,8 @@ inline bool settingsPatch(const std::string& body, std::string& patchOut, bool& 
         num(r, "sessionLimitMin", "sessionLimitMin", 0, 24 * 60);
         flag(r, "sessionLimitSoft", "sessionLimitSoft");
         num(r, "idleKickMin", "idleKickMin", 0, 24 * 60);
-        num(r, "nbWide", "nbWide", 0, 2);
-        num(r, "vfoB", "vfoB", 0, 1);
+        if (on("nbWide")) num(r, "nbWide", "nbWide", 0, 2);
+        if (on("vfoB")) num(r, "vfoB", "vfoB", 0, 1);
         num(r, "idleGrace", "idleGraceSec", 0, 24 * 3600);
         // ★ Sent only when typed or deliberately cleared (collectRadio) — an absent key leaves the PIN alone.
         if (const J* v = r->get("pin"); v && v->t == J::Str) {
@@ -416,9 +761,147 @@ inline bool settingsPatch(const std::string& body, std::string& patchOut, bool& 
             if (!v->s.empty() && (d.empty() || d.size() > 12)) { err = "a PIN is digits only, up to 12 of them"; return false; }
             p.set("pin", J::str(d));
         }
+
+        // ── how it is shared ──
+        if (on("modeLocked")) {
+            if (const J* v = r->get("mode"); v && v->t == J::Str) p.set("radioUse", J::str(v->s == "locked" ? "locked" : "single"));
+            // ★ 0 is what the page sends for a radio that is not locked — never a real centre; the phone keeps its own.
+            if (const J* v = r->get("lockFreq"); v && v->t == J::Num && v->n > 0) p.set("lockedCentre", J::num(std::round(std::min(v->n, 7e9))));
+        }
+        if (on("spectrogram")) flag(r, "spectrogram", "spectrogram");
+        // ── the capture: the page's rate + its pin box → the phone's "0 = the listener's choice, else pinned" ──
+        if (on("rate")) {
+            const J* rv = r->get("rate"); const J* lk = r->get("rateLock");
+            if (rv && rv->t == J::Num && rv->n > 0) {
+                const bool pin = lk && boolOr(lk, false);
+                const double hz = snapTo(ratesFor(pf.driver), rv->n);
+                p.set("lockedRate", J::num(pin ? hz : 0));
+                p.set("sampleRate", J::num(pin ? hz : 2400000));   // ★ the screen's `rate || 2_400_000`
+                p.set("rateLock", J::boolean(pin));
+            }
+            if (const J* v = r->get("maxFps"); v && v->t == J::Num) p.set("maxFftRate", J::num(snapTo({ 5, 10, 20 }, v->n)));
+        }
+        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 400);
+        if (on("dabRateBoost")) flag(r, "dabRateBoost", "dabRateBoost");
+        if (on("adsb256")) { flag(r, "adsb256", "adsb256"); flag(r, "ism256", "ism256"); }
+        if (on("dabScanLabels")) num(r, "dabScanLabels", "dabScanLabels", -1, 1);
+        // ── gain ──
+        if (on("gainRest")) {
+            num(r, "restGain", "restGain", -1, 500);
+            flag(r, "rtlAgc", "rtlAgc");
+            flag(r, "tunerBwAuto", "tunerBwAuto");
+        }
+        if (on("gainAgcLock")) flag(r, "agcLock", "agcLock");
+        if (on("gainMax")) {
+            str(r, "gainLimits", "gainLimits", 600); str(r, "gainLocks", "gainLocks", 600);
+            str(r, "gainSplits", "gainSplits", 600); str(r, "gainCurves", "gainCurves", 600);
+        }
+        if (on("gainIfBw")) str(r, "ifBwLimits", "ifBwLimits", 600);
+        if (on("allowPick")) { str(r, "allowRanges", "allowRanges", 600); str(r, "blockRanges", "blockRanges", 600); }
+        // ── landings ──
+        if (on("dabLandOn")) {
+            const J* bm = p.get("blockedModes"); if (!bm) bm = curS->get("blockedModes");
+            std::string bms = bm && bm->t == J::Str ? bm->s : "";
+            for (auto& c : bms) c = char(std::tolower((unsigned char)c));
+            bool dabBlocked = false;
+            { std::string tok; for (size_t i = 0; i <= bms.size(); ++i) {
+                const char c = i < bms.size() ? bms[i] : ',';
+                if (c == ',' || c == ';' || c == ' ' || c == '\t') { if (tok == "dab") dabBlocked = true; tok.clear(); } else tok += c; } }
+            if (const J* ch = r->get("landingDabChannel"); ch && ch->t == J::Num) {
+                // ★★★ never a DAB landing beside a DAB block (the screen and the engine both refuse it)
+                const bool none = ch->n < 0 || dabBlocked;
+                p.set("landingDabChannel", J::num(none ? -1 : std::round(std::min(ch->n, 255.0))));
+                p.set("landingDabSid", J::num(none ? 0 : std::max(0.0, std::min(4294967295.0, numOr(r->get("landingDabSid"), 0)))));
+                p.set("landingDabService", J::str(none ? "" : strOr(r->get("landingDabService"), "").substr(0, 64)));
+            }
+            flag(r, "landingAdsb", "landingAdsb");
+            if (const J* la = r->get("landingAdsb"); la && (la->t == J::Bool || la->t == J::Num))
+                p.set("adsbKeepRunning", J::boolean(boolOr(la, false) && boolOr(r->get("adsbKeepRunning"), false)));
+        }
+        if (on("fmDeemph")) {
+            if (const J* v = r->get("fmDeemph"); v && v->t == J::Num) {
+                const int d = int(std::lround(v->n));
+                p.set("fmDeemph", J::num(d == 0 || d == 50 || d == 75 ? d : -1));
+            }
+            for (const char* k : { "fmStereo", "fmNr", "fmIms", "fmCeq", "fmAutoBw", "fmNb", "fmRemember" }) flag(r, k, k);
+        }
+        // ── the aerial ──
+        if (on("antRangePreset")) {
+            if (const J* v = r->get("antennaIcon"); v && v->t == J::Str) {
+                std::string ic; for (char c : v->s.substr(0, 40)) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') ic += c;
+                p.set("antennaIcon", J::str(ic));
+            }
+            str(r, "antennaRanges", "antennaRanges", 600); str(r, "antennaFilters", "antennaFilters", 600);
+            str(r, "antennaNames", "antennaNames", 400);
+        }
+        if (on("swYes")) {
+            if (!jsonText(r, "antennaSwitch", "antennaSwitch", 4000, "the antenna switch")) return false;
+            // ★ With a switch, the per-band list is the switch's; without one, only an RSP has a per-band socket list.
+            const J* sw = p.get("antennaSwitch");
+            const bool hasSwitch = sw && !sw->s.empty();
+            if (hasSwitch || on("antennaMap")) {
+                str(r, "antennaMap", "antennaMap", 300);
+                flag(r, "antennaPortLocked", "antennaLocked");
+            }
+        }
+        // ── the front end ──
+        if (on("ppm")) if (const J* v = r->get("ppm"); v && v->t == J::Num) {
+            // ★ The phone sends ppm only when the owner gave one (absent = leave the radio alone); the page shows that as 0.
+            const double x = std::round(std::max(-500.0, std::min(500.0, v->n)));
+            if (x != 0 || curS->get("ppm")) p.set("ppm", J::num(x));
+        }
+        if (on("ppb")) num(r, "ppb", "ppb", -100000, 100000);
+        if (on("biasT")) flag(r, "biasT", "biasT");
+        if (on("autoDs")) {
+            flag(r, "autoDirectSampling", "autoDirectSampling");
+            num(r, "directSamplingBelowHz", "directSamplingBelowHz", 500000, 60e6);
+            num(r, "directSampling", "directSampling", 0, 2);
+        }
+        if (on("convLo")) {
+            num(r, "converterOffsetHz", "converterOffsetHz", -2e10, 2e10);
+            num(r, "converterInputHiHz", "converterInputHiHz", 0, 2e10);
+            // ★ The Linux page has no input-low box and always posts 0; the phone's comes from androidConvInLo, posted
+            //   only on a phone (collectRadio) — and a 0 from an older page must not wipe the phone's.
+            if (b.get("androidPage")) num(r, "converterInputLoHz", "converterInputLoHz", 0, 2e10);
+        }
+        // ── an Icom's own ──
+        if (on("icomBaud")) {
+            if (const J* v = r->get("icomBaud"); v && v->t == J::Num)
+                p.set("icomBaud", J::num(snapTo({ 4800, 9600, 19200, 38400, 57600, 115200 }, v->n)));
+            num(r, "icomCiv", "icomCiv", 0, 255);
+            num(r, "icomScopeSpeed", "icomScopeSpeed", 0, 2);
+            flag(r, "icomTuneLock", "icomTuneLock"); flag(r, "icomPowerOn", "icomPowerOn"); flag(r, "icomAutoOff", "icomAutoOff");
+            if (const J* v = r->get("icomOffDelayMin"); v && v->t == J::Num)
+                p.set("icomOffDelayMin", J::num(snapTo({ 0, 1, 5, 10, 15, 30, 60 }, v->n)));
+        }
+        // ── background decoding and the DX scanner ──
+        if (on("bgOn") && !jsonText(r, "bgDecode", "bgDecode", 16000, "the background decoding profiles")) return false;
+        if (on("dxOn") && !jsonText(r, "dxScan", "dxScan", 4000, "the DX scanner's settings")) return false;
+        // ── raw IQ out ──
+        if (on("rawIqOn")) {
+            num(r, "rawIq", "rawIq", 0, 2);
+            num(r, "rawIqMax", "rawIqMax", 0, 16);
+            // ★ As TEXT, the way VibeServerBoot reads it (nativeServerConfig: "250000.0" would parse to nothing).
+            if (const J* v = r->get("rawIqLanMaxHz"); v && v->t == J::Num) {
+                char b2[24]; std::snprintf(b2, sizeof b2, "%.0f", std::max(0.0, std::min(1e8, std::round(v->n))));
+                p.set("rawIqLanMaxHz", J::str(b2));
+            }
+        }
+        // ── the SDRplay card ──
+        if (on("rspVibeAgc")) {
+            num(r, "rspVibeAgc", "rspVibeAgc", 0, 2);
+            for (const char* k : { "rfNotch", "dabNotch", "rspAmNotch", "rspHdr", "rspExtRef", "rspDabDecim", "rfAgc",
+                                   "autoNotch", "userNotch", "dabAgcOverride", "agcSetLock" }) flag(r, k, k);
+            num(r, "dabAgcTarget", "dabAgcTarget", -60, -10);
+            num(r, "agcSet", "agcSet", -72, -10);
+        }
     }
     patchOut = dump(p);
     return true;
+}
+/** The first cut's signature (no current settings): the radio is then taken as an RTL-SDR, the screen's own default. */
+inline bool settingsPatch(const std::string& body, std::string& patchOut, bool& restart, std::string& err) {
+    return settingsPatch(body, std::string(), patchOut, restart, err);
 }
 
 }  // namespace androidsetup
