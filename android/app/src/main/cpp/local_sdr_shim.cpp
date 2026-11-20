@@ -140,6 +140,7 @@
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
 #include "vibe_navtex_map.h"   // ★ V12 2026-11-01 the NAVTEX map: the stations received
 #include "vibe_navtex_warn.h"  // ★ V12 2026-11-01 the NAVTEX map: the warnings (navtex-warn.idx beside the gallery)
+#include "vibe_navtex_warm.h"  // ★ V12 2026-11-20 the shipping map kept built in the background (vsnav, above Impl)
 #include "vibe_ndb_service.h"   // ★★ V12 2026-10-26: NDB skimmer — every beacon in the LF band, idents by consensus (docs/v12/NDB-SKIMMER.md)
 #include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_ais_service.h"   // ★★ V12 AIS (both VHF channels, M.1371) — our own decoder, docs/v12/AIS-APRS.md
@@ -7131,8 +7132,8 @@ static int vsKickMinutes(double m, bool given) {
 // answered "pending" → "Building … %" ("if there has been no spare cpu time to build the map then we revert to building
 // on open like we do now"). Neither can double-index: in-process the one mutex, across a multi-radio box's processes
 // (every radio's process serves the one machine gallery) an flock on gallery/.navtex-idx.lock.
-#include "vibe_navtex_warm.h"
-namespace {
+// (vibe_navtex_warm.h is included with the other headers at the top — this part of the file is inside namespace vibe)
+namespace vsnav {
 struct NavShared {
     std::mutex wMtx;                                            ///< the warnings/met index AND the placed cache
     std::string placedKey;                                      ///< navKey() the placed cache was built for
@@ -7308,7 +7309,9 @@ vibe::navwarm::Worker& navWarmWorker() {
     static vibe::navwarm::Worker* w = new vibe::navwarm::Worker(navWarmPass, navWarmGate, [] { vibeIdleThread("vibe-navwarm"); });
     return *w;
 }
-}  // namespace
+}  // namespace vsnav
+using vsnav::navShared; using vsnav::navSyncLocked; using vsnav::navPlacedFreshLocked; using vsnav::navKey; using vsnav::navStationsJson;
+using vsnav::g_navWarmFirstTick; using vsnav::navWarmNow; using vsnav::navWarmWorker;
 /** ★ Called by the housekeeping tick (every ~2 s): starts the warm-up thread once, then kicks it. Costs a few atomics. */
 static void vsNavWarmTick() {
     if (g_navWarmFirstTick.load() <= 0) g_navWarmFirstTick.store(navWarmNow());
