@@ -135,6 +135,42 @@ Stuart (2026-11-02): *"can we add the shipping lanes and shipping zones to the m
 - `GET /vibeserver/gallery/ais-ships.json?since=<s>&range=<km>&tracks=1&limit=` — the live report's vessel shape plus
   `stored:1` and `pts:[[lat,lon,ageSec]…]`; `"off":1` when AIS or the store is switched off.
 
+## Kept built in the background (2026-11-20, branch `v12-navtexwarm`)
+
+Stuart (the Lenovo, "Building the map from 14,717 saved messages… 88 %"): *"the navtex shipping map needs to continually
+build in the background so it opens instantly instead of waiting, only when free cpu to do so so on the lenovo it can do
+it all the time as there is an abundance of cpu"* — and *"if there has been no spare cpu time to build the map then we
+revert to building on open like we do now"*.
+
+- **What is kept built:** `navtex-warn.idx` + `navtex-met.idx` (the same `navwarn::sync` the requests run, in slices),
+  then the "placed" cache and the stations map's ALL — one `navmap::scan` fills both — then each other range a client
+  asked for in the last 24 h. Code: `vibe_navtex_warm.h` (the gate, the slice, the thread) and, in
+  `local_sdr_shim.cpp`, "THE NAVTEX MAP'S SHARED STATE" just above `struct LocalSdrShim::Impl`: `navSyncLocked`,
+  `navPlacedFreshLocked`, `navStationsJson`, `navWarmPass`. The HTTP handlers call the same functions under the same
+  mutex — never a second copy of the index logic.
+- **The fallback is the old path, unchanged:** whatever the warm-up has not done (no spare CPU, mid-backfill, switched
+  off) a request does as before — 400 messages a request, answered `pending` so the map says "Building … %". In-process
+  the one mutex, across a multi-radio box's processes an `flock` on `gallery/.navtex-idx.lock`: every message is indexed
+  once, whichever gets there first.
+- **Where it runs:** its own thread, `vibe-navwarm`, at the lowest rung (`vibeIdleThread`: SCHED_IDLE + nice 19 on
+  Linux/Android, QOS_CLASS_BACKGROUND on macOS, THREAD_PRIORITY_IDLE on Windows) — below decoders and bulk HTTP. The
+  housekeeping tick (every ~2 s, beside `bgTick` / `dxTick`) only KICKS it.
+- **The CPU rule (`navwarm::gate`, checked before every pass):** work only when the health badge's CPU level is OK (its
+  combined pressure — machine total, hottest core, run queue, dropped IQ — under 50 %), the box is not throttling, no
+  benchmark is running (`benchProgress().running`), and the server is past a 30 s start-up grace. A busy box waits; the
+  Lenovo, idle most of the time, effectively builds continuously; a Pi 2 serving WFM (75 % busy) waits for nobody to be
+  listening, and otherwise builds on open as before.
+- **The slice:** messages a pass adapt so a pass's work stays near 25 ms (1 – 400); after a pass the thread rests at least
+  as long as the pass took (≥ 20 ms) — at most half of one core, at idle priority. With nothing new (the gallery's NAVTEX
+  fingerprint, `Gallery::kindStamp("navtex")`, and the index unchanged) a kick costs one in-memory walk. Another kind
+  being saved (an FT8 spot) no longer invalidates the NAVTEX caches.
+- **The stations map's cache:** ALL is good until a NAVTEX message changes; a range's window edge may be 1 % stale (1 H
+  36 s, 24 H 14 min, 7 DAYS 1.7 h — was 20 s for every range). The answer carries `X-Navtex-Cache: hit|miss`.
+- **`GET /vibeserver/gallery/navtex-warm.json`** (the gallery's read rule): `state` (starting · idle · working ·
+  paused-cpu · paused-benchmark · paused-throttle · paused-test · off), passes, parsed, budget, lastMs, maxMs, busyMs, pauses.
+- **Test-only knobs** (the environment): `VIBESERVER_NAVWARM_TEST_BUSY=<file>` (gate shut while it exists),
+  `VIBESERVER_NAVWARM_GRACE_SEC`, `VIBESERVER_NAVWARM=0` (off: the on-request build alone).
+
 ## Data flow
 
 ```
