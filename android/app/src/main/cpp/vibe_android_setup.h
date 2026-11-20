@@ -862,7 +862,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             num(r, "converterInputHiHz", "converterInputHiHz", 0, 2e10);
             // ★ The Linux page has no input-low box and always posts 0; the phone's comes from androidConvInLo, posted
             //   only on a phone (collectRadio) — and a 0 from an older page must not wipe the phone's.
-            if (b.get("androidPage")) num(r, "converterInputLoHz", "converterInputLoHz", 0, 2e10);
+            if (r->get("androidPage") || b.get("androidPage")) num(r, "converterInputLoHz", "converterInputLoHz", 0, 2e10);
         }
         // ── an Icom's own ──
         if (on("icomBaud")) {
