@@ -1898,7 +1898,7 @@ class Hwd:
         #    is low, and the 0.30 A tail lines — FastCapture, driven from the same 100 ms tick
         fast = FastCapture(dev, trace.res_div, vlim_mv=lambda: self.cfg["vlimMv"]) if dev else None
         if fast and not fast.enabled:
-            log("chgtrace-fast: off — add ' vibe.usbcap' to the APPEND line to run the ~1 ms capture (costs ~17 %% of a "
+            log("chgtrace-fast: off — add ' vibe.usbcap' to the APPEND line to run the ~1 ms capture (costs ~17 % of a "
                 "core while charging near full); the 20 ms trace and the tail lines still run")
         elif fast and not fast.available:
             log("chgtrace-fast: %s missing — no fast capture (the tail lines still run)" % USBCAP)

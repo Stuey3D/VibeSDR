@@ -45,7 +45,7 @@ func ParseExt(s string) Ext {
 
 // carryTokens are the kernel arguments an owner may have added to a VibeSDR card that a new system keeps.
 // ★ Only ours, by name — anything else on the old line belongs to the old system (root=, its PARTUUID, …).
-var carryTokens = []string{"vibe.debuglog"}
+var carryTokens = []string{"vibe.debuglog", "vibe.usbcap"} // ★ vibe.usbcap (h83+): the opt-in USB-drop capture survives an Update too
 
 // Plan is what will be done to the new image's boot partition.
 type Plan struct {

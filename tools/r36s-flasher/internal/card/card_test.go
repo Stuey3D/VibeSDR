@@ -39,3 +39,14 @@ func TestParseRewriteExt(t *testing.T) {
 		t.Fatalf("rewrite:\n%s", out)
 	}
 }
+
+// ★ h83: an Update keeps ' vibe.usbcap' as it keeps ' vibe.debuglog' (the opt-in USB-drop capture)
+func TestCarryTokensKeepUsbcap(t *testing.T) {
+	found := map[string]bool{}
+	for _, k := range carryTokens {
+		found[k] = true
+	}
+	if !found["vibe.debuglog"] || !found["vibe.usbcap"] {
+		t.Fatalf("carryTokens = %v, want vibe.debuglog and vibe.usbcap", carryTokens)
+	}
+}
