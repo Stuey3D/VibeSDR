@@ -229,7 +229,11 @@ try {
   if (!only) {
   // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   console.log('── A. FM: nobody here → the scan starts and finds the RDS stations ──');
-  const S = await startServer('fm', { on: true, bands: 'fm', waitMin: 5, raster: 100, oirt: false, ext: false }, ['--rate', '2400000', '--fm-rds', STATIONS]);
+  /* ★ --tones 0: the fake dongle's three AM test carriers sit at fixed offsets FROM ITS CENTRE, so every hop held one —
+   *  strong, mono, no RDS — and since "stations without RDS are stations" (2026-11-14, kFmNoRdsMonoSnr) each was logged
+   *  as PI 0000 (13 entries) and held its hop for the extended dwell (6.9 s, 23 hops in the 180 s). No aerial delivers a
+   *  carrier that follows the tuning; the stations here are the --fm-rds ones at their absolute frequencies. */
+  const S = await startServer('fm', { on: true, bands: 'fm', waitMin: 5, raster: 100, oirt: false, ext: false }, ['--rate', '2400000', '--tones', '0', '--fm-rds', STATIONS]);
   const a = ws(S.port, '/ws/user-spectrum?user_session_id=dxaa0001&bins=256');
   ok(await S.until(() => a.hw), 'hwinfo arrives');
   ok(a.hw?.dxLog === true, `hwinfo offers the DX Log (dxLog=${a.hw?.dxLog})`);
