@@ -389,7 +389,10 @@ const CSS = `
 #ismChips button { flex: 0 0 auto; }
 #ismChips button.on { background: rgba(255, 176, 0, 0.85); color: #0b0b0b; }
 #ismChips .ismUnits { margin-left: auto; }
-#ismList { overflow-y: auto; padding: 4px 0; }
+/* ★★ NOTHING ABOVE THE LIST SHRINKS (Stuart 11-20, Safari: the messages ate into the chips). In a max-height column a
+ *  scrolling row (overflow-x: auto) has a minimum height of 0, so a long list squeezed the chips flat; only the list gives. */
+#ismHead, #ismChips { flex-shrink: 0; }
+#ismList { overflow-y: auto; padding: 4px 0; flex: 1 1 auto; min-height: 0; }
 .ismRow { display: flex; gap: 10px; padding: 3px 10px; }
 .ismRow:nth-child(odd) { background: rgba(255, 176, 0, 0.04); }
 .ismAgo { flex: 0 0 4.6em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
