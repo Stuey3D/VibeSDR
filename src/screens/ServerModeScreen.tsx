@@ -41,9 +41,12 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'ecssu', label: 'ECSS-U' }, { id: 'ecssl', label: 'ECSS-L' }, { id: 'amst', label: 'AM Stereo (C-QUAM compatible)' },
   { id: 'lsb', label: 'LSB' }, { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
   { id: 'drm', label: 'DRM' },
-  /* ★ V12 FreeDV is NOT here, on purpose: the setup page lists it only where the system's libcodec2 loaded, and the
-   *  server in this phone never loads it (vibe_freedv.h VIBE_FREEDV_NO_DLOPEN on Android) — a switch here would be dead.
-   *  ★ V12 M17 is not here for the same reason: its voice is Codec 2 from the same library. */
+  /* ★★ V12 2026-11-20 FreeDV (700D / 700E / 1600) and M17: the APK now ships its own libcodec2.so (sdr-kit/build-codec2.sh,
+   *  Codec 2 1.2.0), which vibe_freedv.h dlopens — so the phone's server offers both, and the switches are here as on the
+   *  setup page. ★ RADE V1 (the setup page's "rade", under FreeDV) is NOT here: the phone's server is built without RADE
+   *  (VIBE_HAVE_RADE is VibeServer-only), so that switch would be dead. FreeDV here is the codec2 modes only. */
+  { id: 'freedv', label: 'FreeDV (digital voice)' },
+  { id: 'm17', label: 'M17 (digital voice)' },
   { id: 'dab', label: 'DAB' }, { id: 'dabScan', label: '', parent: 'dab', node: 'dabScan' },
   { id: 'rtty', label: 'RTTY (and RTTY AUTO)' }, { id: 'navtex', label: 'NAVTEX' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
