@@ -120,7 +120,7 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
         </NavRow>
         {open && chipRow && (
           <NavRow>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}
+            <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow}
                         contentContainerStyle={s.chipRowIn} keyboardShouldPersistTaps="handled">
               {!!g && <GainKey s={s} g={g} open={gainOpen} onPress={() => setGainOpen((o) => !o)} />}
               {chips.map((c) => <Chip key={c.key} s={s} c={c} onPress={() => p.onFocus(c.hex)} />)}

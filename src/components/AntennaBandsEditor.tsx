@@ -102,7 +102,7 @@ export default function AntennaBandsEditor({ ranges, filters, onChange, C, F }: 
       {presets === 'range' && ANTENNA_RANGE_PRESETS.map(([group, list]) => (
         <View key={group} style={{ marginTop: 6 }}>
           <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11 }}>{group}</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 4 }}>
+          <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 4 }}>
             {list.map(([name, lo, hi, unit]) => chip(name, false, () => { setR([...rr, { name, lo, hi, unit }]); setPresets(''); }))}
           </ScrollView>
         </View>

@@ -322,10 +322,12 @@ const Marquee = React.memo(function Marquee({ text, style }: { text: string; sty
   }, [textW, boxW, x, text]);
   const anim = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   return (
+    // ★★ showsVerticalScrollIndicator={false} TOO (2026-11-20, the Mac app with a mouse attached: macOS's classic,
+    //    always-visible scroll bars drew a small dark VERTICAL track at the end of every row of the DAB panel).
     // ★★★ A HORIZONTAL SCROLLVIEW, NOT A VIEW — the one container Yoga measures unconstrained, so
     //     the text takes its natural width and textW really exceeds boxW (measured on the Xcover
     //     three times before this was found). Scrolling is disabled; the transform moves it.
-    <ScrollView horizontal scrollEnabled={false} showsHorizontalScrollIndicator={false}
+    <ScrollView horizontal showsVerticalScrollIndicator={false} scrollEnabled={false} showsHorizontalScrollIndicator={false}
                 style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 0 }}
                 onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
       <Reanimated.View style={[{ flexDirection: 'row' }, anim]}>

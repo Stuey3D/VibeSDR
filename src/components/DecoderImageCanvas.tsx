@@ -655,7 +655,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
             otherwise sit against the left edge with dead space beside it. */}
         {/* ★ Zoomed wider than the box: the picture pans SIDEWAYS too (the outer view scrolls down). */}
-        <ScrollView horizontal scrollEnabled={drawW > panelW + 1} showsHorizontalScrollIndicator={drawW > panelW + 1}
+        <ScrollView horizontal showsVerticalScrollIndicator={false} scrollEnabled={drawW > panelW + 1} showsHorizontalScrollIndicator={drawW > panelW + 1}
                     contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
           <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
             {img && (

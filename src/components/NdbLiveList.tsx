@@ -107,7 +107,7 @@ export default function NdbLiveList(p: {
             </NavRow>
             {open && !!tiles && (
               <NavRow>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}>
+                <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}>
                   {([['CARRIERS', tiles.carriers], ['IDENTIFIED', tiles.identified], ['FURTHEST', tiles.furthest], ['COVERAGE', tiles.coverage]] as const)
                     .map(([k, v]) => <Tile key={k} s={s} k={k} v={v} />)}
                 </ScrollView>
@@ -115,7 +115,7 @@ export default function NdbLiveList(p: {
             )}
             {open && (
               <NavRow>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}
+                <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}
                             keyboardShouldPersistTaps="handled">
                   <Chip s={s} label="RINGS" on={p.prefs.rings} a11y="Range rings in nautical miles" onPress={() => p.onPrefs({ rings: !p.prefs.rings })} />
                   <Chip s={s} label="UNHEARD" on={p.prefs.unheard} a11y="The published beacons not heard, faint"
