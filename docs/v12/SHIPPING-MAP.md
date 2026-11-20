@@ -170,6 +170,20 @@ revert to building on open like we do now"*.
   paused-cpu · paused-benchmark · paused-throttle · paused-test · off), passes, parsed, budget, lastMs, maxMs, busyMs, pauses.
 - **Test-only knobs** (the environment): `VIBESERVER_NAVWARM_TEST_BUSY=<file>` (gate shut while it exists),
   `VIBESERVER_NAVWARM_GRACE_SEC`, `VIBESERVER_NAVWARM=0` (off: the on-request build alone).
+- **The scans are not sliced:** `navmap::scan` is two passes over the whole gallery (an undecided station is settled
+  by the rest of the history), so it runs whole, once per change to the gallery's NAVTEX, in a pass of its own — the
+  same scan a request used to run on the spot, now at idle priority.
+- **A benchmark in ANOTHER process** (the front door, or another radio's process on a multi-radio box) is not seen by
+  `benchProgress()`; there the CPU gate is the guard (the benchmark's load lifts the health level within a sample or
+  two, and the warm-up stops before its next pass).
+- **Measured (this M5 Pro Mac, 2026-11-20, shared with other agents' builds):** parsing a NAVTEX message
+  (`navwarn::fromMessage`, its libc++ `std::regex` lexicon) costs ~4 ms on a P-core — 2–21 ms by message; that, not the
+  slicing, is why a 14 717-message backfill takes minutes. In the server at QOS_CLASS_BACKGROUND (E-cores) a
+  2 000-message backfill took 32.5 s of CPU over 151 s (22 % of one core), slices of 1–2 messages, the longest slice
+  154 ms of CPU, the whole-gallery scan 388 ms of CPU (92 ms on a P-core); an up-to-date pass ~1 ms. Afterwards the
+  first `navtex-warnings.json` answered whole in 7 ms, `navtex-met.json` 6 ms, the stations map from cache 2 ms. At
+  the Lenovo's 14 717 (not run here): ~60 s of P-core CPU for the backfill, ~0.7 s a scan per new message.
+  **Worth doing next:** the parser's regex lexicon — at ~4 ms a message it is the whole cost, warm-up or not.
 
 ## Data flow
 
@@ -203,6 +217,15 @@ radio C (DSC)        ──► gallery DSC alerts (plat/plon) ──────
 
 ## RESUME HERE
 
+- **KEPT BUILT IN THE BACKGROUND (branch `v12-navtexwarm`, from `v12-experimental` 1d68d9f09, 2026-11-20) — built and
+  tested on this Mac; nothing pushed, merged or deployed.** See "Kept built in the background" above. Tests:
+  `test-navtex-warm` 25 (new: gate, slice, worker, the cost over 3 000 synthetic messages), `test-navtex-warm.mjs` 21
+  (new: warm with no request → the first answer whole and the stations map a cache hit; a later message re-warmed;
+  the gate held shut → 400 a request exactly as before; the gate opened mid-backfill with requests still coming → every
+  message indexed once; off), `test-web-navtex-map.mjs` 48, `test-web-shipping-map.mjs` 36, `test-navtex-warn` 135,
+  `test-navtex-map` 58, `test-gallery-store` all pass. **Owed:** a run on the Lenovo (Linux SCHED_IDLE, 8 threads, the
+  real 14 717) and on a Pi 2 (does its health level ever read OK long enough?); the Android server (nice 19 if
+  SCHED_IDLE is refused); no client change was needed.
 - **SEA AREAS PASS 2 (branch `v12-sea-areas-2`, from `v12-experimental` 84340f3b3, 2026-11-02) — built and tested on this
   Mac; nothing pushed, merged or published:** MET Norway (18), Met Éireann (18), AEMET coastal (51), JMA (37) and 25
   high-seas sub-areas as broadcast (NZ/Fiji, SAWS, La Réunion, Argentina, Chile, BoM South Eastern) — sources above.
