@@ -16445,6 +16445,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeavshare::sharer().provide("adsb", [](int64_t since, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>&) {
             g_adsb.shareSince(since, out);
         });
+        // ★★ beta88: while this radio's ADS-B decoder runs it says so in the table's header — the map's "ADS-B: this
+        //    server's ADS-B radio is in use for something else" once it stops (Stuart, the Pi 500 in ACARS mode).
+        vibeavshare::sharer().adsbLive([] { return g_adsb.running(); });
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
         if (adsbGainIdx_ >= 0) LocalSdrShim::instance().setGain(adsbGainSet_);
@@ -28634,12 +28637,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 body = "{\"now\":" + std::to_string((long long)(now / 1000)) + ",\"count\":0,\"aircraft\":[],\"stations\":[],\"off\":1}";
             else {
                 std::vector<vibeavshare::GsHeard> gs;
-                const auto rows = vibeavshare::table().read(now, since ? now - since * 1000 : 0, &gs);
+                int64_t adsbLiveMs = 0;   // ★ beta88 the header's "a radio is decoding ADS-B" stamp
+                const auto rows = vibeavshare::table().read(now, since ? now - since * 1000 : 0, &gs, &adsbLiveMs);
                 body = vibeavshare::toJson(rows, gs, now, [](const std::string& l) { return std::string(vibeavi::labelName(l)); },
                     [](int id, std::string& name, double& lat, double& lon) {
                         for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
                         return false;
-                    });
+                    }, adsbLiveMs, vsModeBlocked("adsb"));
             }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "

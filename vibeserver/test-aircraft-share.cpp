@@ -235,6 +235,44 @@ int main(int argc, char** argv) {
         CHECK(j.find("G-\"QUOTE") == std::string::npos && j.find("G-\\\"QUOTE") != std::string::npos, "a quote reaches the JSON escaped, never raw");
         CHECK(j.find("\"key\":\"r:G\\\"QUOTE\"") != std::string::npos || j.find("\"key\":\"r:") != std::string::npos, "a registration-only row keyed r:");
     }
+    // ── 11. beta88 ADS-B ONLY WHILE HEARD (Stuart, the Pi 500 in ACARS mode: "there should be 0 then") ──
+    {
+        std::printf("── 11. ADS-B counted only while heard; the radio's live stamp ──\n");
+        const std::string d = tmpDir();
+        Table t; t.setDir(d);
+        int64_t live = -7;
+        t.read(T, 0, nullptr, &live);
+        CHECK(live == 0, "a new file: no radio has decoded ADS-B (%lld)", (long long)live);
+        // 400F11 ADS-B now; 406B90 ADS-B 5 min ago (still kept: the hour); 4CA97B ADS-B 5 min ago + VDL2 now
+        t.write({ adsb(0x406B90, "EZY45KL", "", T - 300000, 52.1, -1.1), adsb(0x4CA97B, "RYR12AB", "EI-EST", T - 300000, 53.3, -2.2) }, {}, T - 300000);
+        t.write({ adsb(0x400F11, "BAW117", "", T, 52.4, -1.6), dl(kVdl2, 0x4CA97B, "EI-EST", "FR1234", T) }, {}, T, true);
+        std::vector<GsHeard> gs;
+        auto v = t.read(T + 1000, 0, &gs, &live);
+        CHECK(v.size() == 3, "the hour keeps all three rows (%zu)", v.size());
+        CHECK(live == T && adsbLiveNow(live, T + 1000), "the writer's ADS-B stamp is in the header (%lld)", (long long)live);
+        int now = 0; for (const auto& r : v) now += adsbHeardNow(r, live, T + 1000);
+        CHECK(now == 1, "ADS-B heard now: only 400F11 (%d)", now);
+        std::string j = toJson(v, gs, T + 1000, nullptr, nullptr, live, false);
+        CHECK(j.find("\"adsbLive\":1,\"adsbLast\":1,\"adsbNow\":1,\"adsbWin\":60") != std::string::npos, "the JSON's ADS-B state: %s", j.substr(0, 120).c_str());
+        // the radio leaves ADS-B (no more stamps): after kAdsbLiveSec no radio is decoding it — the count is 0
+        const int64_t later = T + (kAdsbLiveSec + 2) * 1000;
+        t.write({ dl(kVdl2, 0x4CA97B, "EI-EST", "FR1234", later) }, {}, later, false);
+        v = t.read(later, 0, &gs, &live);
+        CHECK(live == T && !adsbLiveNow(live, later), "no stamp for %llds: no radio decoding ADS-B", (long long)kAdsbLiveSec + 2);
+        now = 0; for (const auto& r : v) now += adsbHeardNow(r, live, later);
+        CHECK(now == 0, "…and ADS-B heard now is 0, though 400F11 was heard %llds ago (%d)", (long long)kAdsbLiveSec + 2, now);
+        j = toJson(v, gs, later, nullptr, nullptr, live, true);
+        CHECK(j.find("\"adsbLive\":0,\"adsbLast\":12,\"adsbNow\":0") != std::string::npos && j.find("\"adsbOff\":1") != std::string::npos, "the JSON: %s", j.substr(0, 140).c_str());
+        CHECK(toJson(v, gs, later).find("adsbLive") == std::string::npos, "no state given: no ADS-B fields (as before)");
+        // the Sharer stamps the header with no aircraft at all while its ADS-B decoder runs
+        CHECK(t.write({}, {}, later + 5000, true) == 0, "a stamp-only write changes no row");
+        t.read(later + 5000, 0, nullptr, &live);
+        CHECK(live == later + 5000, "…but stamps the header (%lld)", (long long)live);
+        t.reset(); ::rmdir(d.c_str());
+        Table m; int64_t ml = -1;
+        m.write({}, {}, T, true); m.read(T, 0, nullptr, &ml);
+        CHECK(ml == T, "the memory table (the app's one radio) carries the stamp too");
+    }
     std::printf("test-aircraft-share: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
