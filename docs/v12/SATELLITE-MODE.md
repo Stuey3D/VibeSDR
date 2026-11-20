@@ -21,6 +21,10 @@
    - satellites **outside this SDR's range greyed out** (reach rule: vibe_decoder_reach.h — greyed in this list, as the
      list is a timetable; nothing else offers an unreachable control).
 7. **It replaces all the existing satellite modes / keys.**
+8. **Where its key lives (Stuart, 2026-11-20): "put it in the tunes the whole radio section too next to ism sondes etc"** —
+   SATELLITE is a WHOLE-RADIO mode key, beside DAB / ADS-B / ISM / AIS / DATALINK / SONDES in the mode menu (web
+   mobile.ts mode grid, the app's ModeSelector), not a decoder under DECODERS…. Like those, it takes the receiver: the
+   pick tunes the radio and Doppler steers it, under the shared-dial contract (a joiner on a shared tuner does not steer).
 
 ## Rules it must keep (project rules)
 - Orbits come from the directory's mirror (GET /api/sats, directory/src/sats.js) — never CelesTrak from a server/app.
