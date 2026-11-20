@@ -92,8 +92,8 @@ const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url
 // ★ 8f0e275dd wraps the list in withAmSync (the AM sync modes, also by capability) — DRM's gate is unchanged inside it.
 // ★ V12 FreeDV wraps it again (withFreeDv, by its own capability) — DRM's gate is unchanged inside it.
 ok('the app offers DRM only through the capability', /withAmSync\(drmCapable \? withDrm\(LOCAL_MODES\) : LOCAL_MODES, amSyncCap\)/.test(scr));
-// ★ V12 M17 adds its own condition after FreeDV's — DRM's is unchanged at the front
-ok('the width row goes in DRM', /onFilterBoth=\{status\.mode === 'drm' (\|\| \(status\.mode === 'freedv' && freedvCap\.length\) )?(\|\| \(status\.mode === 'm17' && m17Cap\) )?\? undefined : onFilterBoth\}/.test(scr));
+// ★ V12 M17 then DV ID add their own conditions after FreeDV's — DRM's is unchanged at the front
+ok('the width row goes in DRM', /onFilterBoth=\{status\.mode === 'drm' (\|\| \(status\.mode === 'freedv' && freedvCap\.length\) )?(\|\| \(status\.mode === 'm17' && m17Cap\) )?(\|\| \(status\.mode === 'dvsig' && dvsigCap\) )?\? undefined : onFilterBoth\}/.test(scr));
 ok('the shim lists drm in its modes', readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8').match(/"ncdxf",[^}]*"drm",[^}]*\}/) !== null);   // ★ balloon / tones now sit between ncdxf and drm
 
 // ── ★★ V12 THE SIGNAL PANE (2026-10-26): the app's rows ARE the web's — same headings, labels, values, tones, tooltips ──

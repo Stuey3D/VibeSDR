@@ -172,8 +172,10 @@ export function composeModeLabel(mode: string, decoder: string | null | undefine
    *  (test_faceplate_segfield / dotfield / meters / landscape caught all of them). Bare, the box keeps the exact name. */
   const ml = String(mode).toLowerCase();
   /* ★ V12 FreeDV the same: "FREEDV: NAVTEX" does not fit the field either, so with a decoder riding it reads FDV (the
-   *  length of USB). Bare, the box keeps FREEDV. */
-  const base = dec && isAmSync(ml) ? (ml === 'amst' ? 'AM' : 'SAM') : dec && ml === 'freedv' ? 'FDV' : modeDisplay(mode);
+   *  length of USB). Bare, the box keeps FREEDV. ★ V12 DV ID likewise: "DVSIG: NAVTEX" overflowed every faceplate, so
+   *  with a decoder riding it reads DV. */
+  const base = dec && isAmSync(ml) ? (ml === 'amst' ? 'AM' : 'SAM') : dec && ml === 'freedv' ? 'FDV'
+             : dec && ml === 'dvsig' ? 'DV' : modeDisplay(mode);
   return base + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
     && dec.toUpperCase() !== base ? `: ${dec.toUpperCase()}` : '');
 }
