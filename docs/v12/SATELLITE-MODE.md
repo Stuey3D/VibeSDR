@@ -35,6 +35,29 @@
 - Web client (main.ts / mobile.ts), the app (SDRScreen / decoder panels) and the R36S handheld all get it.
 - Fix the tours/notes that point at the old satellite keys (AGENTS.md "when a control moves").
 
+9. **Orbit data on demand (Stuart, 2026-11-20): "if the server doesnt have any orbit data it needs to pull from our data
+   on open and android needs this too, afterwards every 24h is fine."** — opening SATELLITE on a server with NO orbits
+   makes it fetch GET https://vibesdr.net/api/sats (our mirror — never CelesTrak) at once; then the usual daily sync.
+   Linux (satcat.cpp) AND Android (app server + Lite). One fetch at a time, the satcat flock / its hold rules kept
+   (a 503 from the mirror → retry in 15 min, the mirror's Retry-After).
+10. **The box shows when the orbit data was last synced** (e.g. "Orbits synced 16:08 · 2 h ago"; "Fetching orbit data…"
+    while the on-open fetch runs; "No orbit data — <why>" if it failed).
+
+## THE CONTRACT (server ↔ clients) — fixed before the build splits
+- `{"type":"sat_list"}` (unchanged request) → the reply adds:
+  `source.synced` (unix s of the last good /api/sats fetch, 0 = never), `source.fetching` (bool),
+  per bird `inRangeFor` (s to LOS while up, else absent), per tx `use`: `"voice" | "image" | "packet"` and `sstv: true`
+  on the ISS 145.800 downlink. `tx.reach` stays; clients GREY a tx/bird with reach false and show `tx.why`.
+  An empty catalogue with `source.synced == 0` makes the server start the on-open fetch (item 9) and answer
+  `source.fetching: true`; clients re-ask every 3 s while fetching.
+- `{"type":"sat","op":"pick","norad":N,"tx":i,"doppler":true|false}` → tune to the tx, lock Doppler (if doppler), attach
+  the decoder its `use` needs (image: lrpt / sstv; packet: aprs at its baud; voice: none, but sstv auto on `sstv:true`),
+  ALL server-side in one step; gated exactly like `sat lock` (shared-dial contract, ask-before-tune).
+  Reply/broadcast: `{"type":"sat","state":"picked","norad","tx","decoder":"lrpt|sstv|aprs|"}` or a refusal with why.
+- `{"type":"sat","op":"doppler","on":bool}` toggles the lock on the current pick; `{"type":"sat","op":"drop"}` = unlock +
+  detach what pick attached. Leaving the SATELLITE mode sends drop.
+- The existing `sat lock/unlock` stays for old clients (one release), then goes.
+
 ## What exists today (inventory 2026-11-20, v12 3bc309995)
 - **SAT key** (web mode menu + TUNES THE RADIO ITSELF; app ModeSelector wholeKeys; R36S sat_page.h): a picker with passes,
   a polar sky plot (web/app only), DOPPLER, TRACK per downlink. TRACK tunes + `{"type":"sat","op":"lock"}` 400 ms later —
