@@ -51,6 +51,31 @@ object VibeServerRestore {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * ★★★ A TRAIL THAT OUTLIVES THE PROCESS (beta88). The XCover's 15:18:12 restart left NO log line after
+     * am_proc_start, and logcat on a phone nobody watches is gone within the hour. Each step of a start or restore is
+     * appended here (filesDir/server_trail.txt, the last ~200 lines, with the wall clock and pid) as well as logged, so
+     * "how far did it get" has an answer the next morning. Read by Diagnostics alongside the exit records.
+     * ★ Only this app's own words — no addresses, no settings, nothing a listener sent.
+     */
+    @Synchronized
+    fun breadcrumb(ctx: Context, what: String) {
+        Log.i(TAG, "trail: $what")
+        try {
+            val f = java.io.File(ctx.filesDir, "server_trail.txt")
+            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.UK).format(java.util.Date())
+            val line = "$stamp pid ${android.os.Process.myPid()} $what\n"
+            if (f.length() > 24_000) {
+                val keep = f.readLines().takeLast(150)
+                f.writeText(keep.joinToString("\n", postfix = "\n"))
+            }
+            f.appendText(line)
+        } catch (_: Throwable) {}
+    }
+
+    /** The trail, for Diagnostics. */
+    fun trail(ctx: Context): String = try { java.io.File(ctx.filesDir, "server_trail.txt").readText() } catch (_: Throwable) { "" }
+
     /** Remember the live config, whole. Called when the server starts.
      *  ★ And WHICH radio it runs (`dev`), so restore() reopens that one — see K_VIDPID. */
     fun arm(ctx: Context, cfg: org.json.JSONObject, dev: UsbDevice? = null) {
@@ -339,6 +364,8 @@ object VibeServerRestore {
         Log.w(TAG, "the server's radio has been gone for more than ${RADIO_BLIP_WINDOW_MS / 1000} s — " +
                    "stopping the server; the owner starts it again when they want it")
         disarm(ctx)
+        VibeServerWatchdog.cancel(ctx)
+        VibeServerOps.unadvertise(ctx)
         try { VibeLocalSDR.stopMdns() } catch (t: Throwable) { Log.w(TAG, "stopMdns: ${t.message}") }
         VibeIcom.onServerStopping()   // ★ the AudioRecord thread first, then the engine it pushes into
         try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "stopping the engine: ${t.message}") }
@@ -453,8 +480,13 @@ object VibeServerRestore {
         } catch (_: Throwable) {}
 
         if (VibeServerBoot.advertise(cfg))
-            advertise(ctx, VibeServerBoot.name(cfg), port, VibeServerBoot.pin(cfg).isNotEmpty())
+            VibeServerOps.advertise(ctx, VibeServerBoot.name(cfg), port, VibeServerBoot.pin(cfg).isNotEmpty())
+        // ★★ The phone's settings store and /setup follow the restored server (VibeRemoteSetup), and the watchdog keeps
+        //    watching it (VibeServerWatchdog).
+        VibeRemoteSetup.onStarted(ctx, cfg)
+        VibeServerWatchdog.schedule(ctx)
         Log.i(TAG, "VibeServer rebuilt after a process death, port $port")
+        breadcrumb(ctx, "restore: serving again on port $port")
         return null
     }
 
@@ -560,7 +592,7 @@ object VibeServerRestore {
      *  while the server (running or armed) is an ICOM — a CP2102 is as often somebody's GPS, and its coming and going
      *  must not stamp an RTL server's radio as gone (VibeIcom). */
     internal fun isServable(ctx: Context, dev: UsbDevice): Boolean =
-        VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId) ||
+        VibeRadioIds.isServableRadio(dev.vendorId, dev.productId) ||
             (VibeIcom.isCandidate(dev) && servesIcom(ctx))
 
     /** ★ Is this phone's server (running now, or armed to come back) an Icom? The stored radio id (K_VIDPID) says so
@@ -580,36 +612,13 @@ object VibeServerRestore {
      *    for a V4 between crash and restore still comes back as before. Any other radio must match its own
      *    VID:PID, which also keeps a restore from handing an HF+ server some dongle on the same hub. */
     private fun isRestoreRadio(dev: UsbDevice, want: Int): Boolean {
-        if (want < 0 || VibeLocalSdrModule.RTL_SDR_VIDPIDS.contains(want)) return isRtlSdr(dev)
+        if (want < 0 || VibeRadioIds.RTL_SDR_VIDPIDS.contains(want)) return isRtlSdr(dev)
         // ★ An Icom's CP210x: matched by id here; restore() checks the serial still names an Icom once it may read it.
         return ((dev.vendorId shl 16) or dev.productId) == want
     }
 
     private fun isRtlSdr(dev: UsbDevice): Boolean {
         val key = (dev.vendorId shl 16) or dev.productId
-        return VibeLocalSdrModule.RTL_SDR_VIDPIDS.contains(key)
-    }
-
-    private fun advertise(ctx: Context, name: String, port: Int, pinRequired: Boolean) {
-        try {
-            val m = ctx.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
-            val info = NsdServiceInfo().apply {
-                serviceName = name
-                serviceType = "_vibesdr._tcp."
-                this.port = port
-                setAttribute("name", name)
-                setAttribute("proto", "vibeserver")
-                setAttribute("pin", if (pinRequired) "1" else "0")
-            }
-            m.registerService(info, NsdManager.PROTOCOL_DNS_SD,
-                object : NsdManager.RegistrationListener {
-                    override fun onServiceRegistered(i: NsdServiceInfo) {}
-                    override fun onRegistrationFailed(i: NsdServiceInfo, e: Int) {}
-                    override fun onServiceUnregistered(i: NsdServiceInfo) {}
-                    override fun onUnregistrationFailed(i: NsdServiceInfo, e: Int) {}
-                })
-        } catch (t: Throwable) {
-            Log.w(TAG, "re-advertise failed: ${t.message}")
-        }
+        return VibeRadioIds.RTL_SDR_VIDPIDS.contains(key)
     }
 }

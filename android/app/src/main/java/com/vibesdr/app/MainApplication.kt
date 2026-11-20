@@ -35,6 +35,14 @@ class MainApplication : Application(), ReactApplication {
     // ★ 2026-10-05: names the build on this process's exit record, so Diagnostics can say which version
     //   crashed (Nick's overnight VibeServer crash had no version, no log, nothing). See VibeExitInfo.
     VibeExitInfo.stampProcess(this)
+    /* ★★★ THE SERVER'S PROCESS STOPS HERE (beta88). ":server" hosts only the VibeServer (AndroidManifest) — no React
+     *  Native, no Hermes, no Expo modules, no TLS pins for React's HTTP client, and therefore no System WebView, which
+     *  React Native's cookie handler loads on the first request. A WebView update stops every process that loaded it;
+     *  this one never does. Everything the server needs is plain Kotlin + the native engine, loaded on first use. */
+    if (VibeProcess.isServerProcess(this)) {
+      android.util.Log.i("MainApplication", "server process — React Native is not loaded here")
+      return
+    }
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {

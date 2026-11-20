@@ -135,11 +135,17 @@ object VibeIcom {
      * the permission is missing. Never at app start, never for any other radio. The answer starts the audio (and the
      * service's microphone type); a refusal is reported, and asked again only on the owner's next Start.
      */
+    /* ★★ THE DIALOG IS THE UI'S, THE AUDIO IS THE SERVER'S (beta88). This runs in the UI process (it needs an Activity);
+     *  the AudioRecord, the foreground service's microphone type and the engine's audio state live in the server's
+     *  process. So the answer goes there through VibeServerLink — the same call in Lite, where both are one process. */
+    private fun toServer(ctx: Context, problem: String) =
+        VibeServerLink.callAsync(ctx, "icomReport", org.json.JSONObject().put("problem", problem))
+
     fun askForMicIfNeeded(activity: Activity?, ctx: Context) {
         if (hasMicPermission(ctx) || asking) return
-        val act = activity ?: run { IcomAudio.report(ctx, problem = NEEDS_PERMISSION); return }
+        val act = activity ?: run { toServer(ctx, NEEDS_PERMISSION); return }
         val pa = act as? com.facebook.react.modules.core.PermissionAwareActivity
-            ?: run { IcomAudio.report(ctx, problem = NEEDS_PERMISSION); return }
+            ?: run { toServer(ctx, NEEDS_PERMISSION); return }
         asking = true
         act.runOnUiThread {
             try {
@@ -156,22 +162,21 @@ object VibeIcom {
                                 asking = false
                                 if (results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED) {
                                     Log.i(TAG, "microphone permission granted — starting the radio's audio")
-                                    RtlTcpServerService.wantMicrophone(ctx)
-                                    IcomAudio.startIfPossible(ctx)
+                                    VibeServerLink.callAsync(ctx, "icomMicGranted")
                                 } else {
-                                    IcomAudio.report(ctx, problem = PERMISSION_REFUSED)
+                                    toServer(ctx, PERMISSION_REFUSED)
                                 }
                                 true
                             }
                         } else asking = false
                     }
-                    .setNegativeButton("Not now") { _, _ -> asking = false; IcomAudio.report(ctx, problem = PERMISSION_REFUSED) }
-                    .setOnCancelListener { asking = false; IcomAudio.report(ctx, problem = NEEDS_PERMISSION) }
+                    .setNegativeButton("Not now") { _, _ -> asking = false; toServer(ctx, PERMISSION_REFUSED) }
+                    .setOnCancelListener { asking = false; toServer(ctx, NEEDS_PERMISSION) }
                     .show()
             } catch (t: Throwable) {
                 asking = false
                 Log.w(TAG, "could not ask for the microphone permission: $t")
-                IcomAudio.report(ctx, problem = NEEDS_PERMISSION)
+                toServer(ctx, NEEDS_PERMISSION)
             }
         }
     }
