@@ -205,3 +205,9 @@ CPU clocks and temperatures, memory and pressure, `top`, failed units, the state
 unit, the GPU / input / sound devices and mixer, USB devices, the journal and the kernel log. With no VIBESDR mounted
 it writes to VIBEBOOT instead. Remove the word to stop it — the card is not a log disk. Use it when the receiver
 itself will not come up and EXPORT DIAGNOSTICS cannot be reached.
+
+**USB-drop fast capture (h81's `vibe-usbcap`) is off unless asked for.** Add ` vibe.usbcap` to the same `APPEND` line to
+run it: a charger-chip sample about every 2 ms (I2C limits it; it aims for 1 ms) while the cord is in, a USB device is
+plugged and the charge current is below 0.45 A. It costs about 17 % of a core and a full point of load average the whole
+time a near-full battery charges, so leave it off unless you are chasing a drop. The 20 ms charger trace and the 0.30 A
+tail lines run either way, and they are what recorded the drops so far.

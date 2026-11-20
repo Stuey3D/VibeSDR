@@ -248,6 +248,18 @@ ok(m.dwc2_base_for({"1-1"}) == 0xff300000, "★ bound + the device under it: 0xf
 ok(m.dwc2_base_for({"2-1"}) is None, "a device on another controller: none")
 ok(m.hprt_text(0x00001405) == "otg conn/en/pwr hs D+D- 10" and m.hprt_text(0x00021015).startswith("otg conn/en/OVERCURRENT/pwr fs"), "HPRT0 decoded (hw.h bits)")
 
+# ── h83: the fast capture is OPT-IN (vibe.usbcap on the APPEND line) — off, it never spawns, and the tail log still runs ──
+LOG.clear(); spawned = []
+fc3 = m.FastCapture("/dev/i2c-0", 1, usb=lambda: frozenset({"1-1"}), spawn=lambda argv: spawned.append(argv),
+                    dwc2=lambda d: None, threads=False, enabled=False)
+for i in range(100): fc3.tick(500.0 + i * 0.1, True, 0.20)
+ok(not spawned and fc3.proc is None, "off (no vibe.usbcap): a low charge current never starts vibe-usbcap")
+ok(any("0.30" in l for l in LOG), "off: the 0.30 A tail line still logs")
+m._cmdline_has = lambda w: False
+ok(not m.FastCapture("/dev/i2c-0", 1, exe="/bin/true").enabled, "the real path reads the boot line — off without vibe.usbcap")
+m._cmdline_has = lambda w: w == "vibe.usbcap"
+ok(m.FastCapture("/dev/i2c-0", 1, exe="/bin/true").enabled, "… and on with it")
+
 if sys.argv[1:] == ["bench"]:
     N = 20000; tr2 = m.FastTrace(FakePmic(), usb=lambda: frozenset({"1-1"}), res_div=1); tr2.set_online(True)
     m.log = lambda *a: None

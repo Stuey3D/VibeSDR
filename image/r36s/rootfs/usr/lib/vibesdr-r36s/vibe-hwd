@@ -1203,6 +1203,15 @@ class FastTrace:
 #   here, with the 20 ms trace's own scaling (fmt_sample / stats_text): "chgtrace-fast#N …", times relative to the drop.
 USBCAP = "/usr/lib/vibesdr-r36s/vibe-usbcap"
 
+
+def _cmdline_has(word):
+    """True when the kernel command line carries `word` as a whole token (vibe.usbcap, like vibe.debuglog)."""
+    try:
+        with open("/proc/cmdline") as f:
+            return word in f.read().split()
+    except OSError:
+        return False
+
 class Threshold:
     """A debounced 'below LIMIT' on a noisy current: below once it has been < limit for hold_s, above again once it has
     been ≥ limit + hyst for hold_s. update() returns True when the state flips. None (no reading) changes nothing."""
@@ -1426,7 +1435,7 @@ class FastCapture:
     TAIL_MAX, TAIL_WINDOW_S = 20, 600.0
 
     def __init__(self, i2c_dev, res_div, vlim_mv=lambda: VLIM_DEFAULT_MV, usb=usb_devices, exe=USBCAP,
-                 spawn=None, dwc2=dwc2_base_for, threads=True):
+                 spawn=None, dwc2=dwc2_base_for, threads=True, enabled=None):
         self.dev, self.res_div, self.vlim_mv, self.usb, self.exe = i2c_dev, res_div, vlim_mv, usb, exe
         self.spawn = spawn or self._popen
         self.dwc2, self.threads = dwc2, threads
@@ -1439,6 +1448,16 @@ class FastCapture:
         self.tail_dropped = 0
         self.online = False
         self.available = bool(i2c_dev) and os.access(exe, os.X_OK) if spawn is None else bool(i2c_dev)
+        # ★★★ OPT-IN SINCE h83 (Stuart 11-20, the h81 card: "that new logging you added was really cpu heavy"). On the A35 a
+        #     PMIC read is ~1.7 ms of I2C, so the "1 ms" sampler managed one every ~2 ms (gaps to 28 ms) for ~17 % of a core,
+        #     mostly in D state on the bus — load average 1.8 (h80) → 2.85 (h81) — and it ran ALL the time a near-full
+        #     battery sat below FAST_A. In 72 min it caught nothing; the one drop (22 s after boot) was recorded by the 20 ms
+        #     trace. Only with ` vibe.usbcap` on the APPEND line (like vibe.debuglog); the tail log above stays on.
+        if enabled is None:
+            enabled = True if spawn is not None else _cmdline_has("vibe.usbcap")
+        self.enabled = bool(enabled)
+        if not self.enabled:
+            self.available = False
 
     @staticmethod
     def _popen(argv):
@@ -1878,7 +1897,10 @@ class Hwd:
         # ★★ h81: the ~1 ms USB-drop capture (vibe-usbcap, native, read only) while the cord is in and the charge current
         #    is low, and the 0.30 A tail lines — FastCapture, driven from the same 100 ms tick
         fast = FastCapture(dev, trace.res_div, vlim_mv=lambda: self.cfg["vlimMv"]) if dev else None
-        if fast and not fast.available:
+        if fast and not fast.enabled:
+            log("chgtrace-fast: off — add ' vibe.usbcap' to the APPEND line to run the ~1 ms capture (costs ~17 %% of a "
+                "core while charging near full); the 20 ms trace and the tail lines still run")
+        elif fast and not fast.available:
             log("chgtrace-fast: %s missing — no fast capture (the tail lines still run)" % USBCAP)
         elif fast:
             log("chgtrace-fast: ready — %s runs (~1 ms samples) while the cord is in, a USB device is plugged and the "

@@ -183,3 +183,14 @@ GSNPSID; whether the RK817 ADC refreshes fast enough to show a sub-20 ms sag at 
   RK817 register 0xB4/BOOST_EN and the vcc_host switch decide).
 - Confirm the "ADC check" line: registers = sysfs within the 8 s staleness. If they disagree, the scaling is wrong; say so.
 - If a floor fixes it, decide with Stuart whether the floor becomes the default or the row goes (it is a TEST row).
+
+## h83: the fast capture is opt-in (2026-11-20)
+
+The h81 card (72 min, near-full battery on the cord): `vibe-usbcap` ran the whole time (the charge current never rose
+above 0.45 A), 12 min 12 s of CPU — ~17 % of a core — mostly in D state on I2C, load average 2.85 against h80's 1.8. A
+PMIC read takes ~1.7 ms (max 23 ms), so the sampler averaged one sample every ~2 ms with gaps to 28 ms: the 1 ms premise
+does not hold on this bus. It caught no drop: the only one (mono 21.890 s, before the capture started at 179 s) was
+recorded by the 20 ms trace — port 4.78–4.81 V, +0.46 A, input clamp 0 of 153, nothing moves at the drop — and was
+followed by four failed enumerations (device numbers 3–6) until the dongle came back at 58 s, which points at start-up
+enumeration rather than the charger. From h83 FastCapture runs only with ` vibe.usbcap` on the APPEND line; the 20 ms
+trace and the tail lines are unchanged (chgtrace-test.py §h83).
