@@ -1985,6 +1985,8 @@ static bool vsSondeAnyBand();        // false = not offered at all (the HF+, an 
 static bool vsSatReachFn(double lo, double hi);        // ★ V12 this radio receives [lo, hi] (and a locked window holds it)
 static bool vsSatAnyReach();                           // ★ false = no Doppler button at all (no dead controls)
 static std::string vsSatWhyNot();                      // "" = a lock can be tried now
+static std::string vsSatReachWhy(double lo, double hi); // ★ V12 SATELLITE MODE: "" = reaches, else why (greyed in the list)
+static vibe::sat::SupplyInfo vsSatSupply(bool kickIfEmpty);   // ★ the orbit-data supply for sat_list (+ the on-open fetch)
 static std::string vsSondeWhyNot(const vibers41::Band* b = nullptr);   // "" = it can run here now
 static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach* reach = nullptr);   // ★ V12 "" = this radio reaches that fixed-frequency decoder (vibe_decoder_reach.h)
 static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (the HF+): no control, no reason
@@ -11253,35 +11255,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }).detach();
     }
     /** {"type":"sat","op":"lock"|"unlock", norad?} — the Doppler button / the picker's TRACK. */
+    /** ★ {"type":"sat","op":"lock"|"unlock", norad?} — the old Doppler button / picker TRACK (kept for old clients, one
+     *  release); ★★ V12 SATELLITE MODE: "pick" / "doppler" / "drop" (satPick … below, docs/v12/SATELLITE-MODE.md "THE
+     *  CONTRACT"). ★★★ ALL of them arrive here only through clientFrame's gates: `sat` is in askRefuses' kGated and
+     *  scanLockRefuses' kLocked — so a pick on a shared tuner obeys ask-before-tuning and the owner's scan lock exactly as
+     *  `sat lock` and a tune do (the shared-dial contract: a joiner who may not tune does not steer). */
     void satControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         const std::string op = jsonStr(msg, "op");
+        if (op == "pick") { satPick(sock, msg); return; }
+        if (op == "doppler") { satDopplerOp(sock, msg); return; }
+        if (op == "drop") { satDrop(sock); return; }
+        double noradV = 0; jsonNum(msg, "norad", noradV);
+        satLockOp(sock, op, (long long)noradV, -1);
+    }
+    /** The lock / unlock — the body `sat lock` always had. `wantTx` ≥ 0 = SATELLITE MODE's pick: that downlink only.
+     *  Every outcome is told to the listener in the existing `{"type":"sat",…}` words. @return true = locked / armed. */
+    bool satLockOp(const std::shared_ptr<net::Socket>& sock, const std::string& op, long long noradV, int wantTx) {
         auto off = [&](const std::string& why) {
             sendText(sock, "{\"type\":\"sat\",\"state\":\"OFF\",\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\""
                            + satEngine().timeState(satClock()) + "\"}");
         };
-        double noradV = 0; jsonNum(msg, "norad", noradV);
         const vibe::sat::Clock clk = satClock();
         if (perClientDsp()) {
             auto me = dspFor(sock);
-            if (!me) return;
+            if (!me) return false;
             if (op == "unlock") {
                 if (satEngine().active(me->session)) satEndListener(me, "Doppler correction off", true);
                 else off("Doppler correction off");
-                return;
+                return false;
             }
             const std::string why = vsSatWhyNot();
-            if (!why.empty()) { off(why); return; }
+            if (!why.empty()) { off(why); return false; }
             double dial; std::string mode;
             { std::lock_guard<std::mutex> lk(me->mtx); dial = me->vfoHz; mode = me->mode; }
             if (satEngine().active(me->session)) satEngine().stop(me->session);
-            vibe::sat::Track t = satEngine().start(me->session, me->session, dial, mode, clk, (long long)noradV);
-            if (t.state == vibe::sat::LockState::Off) { sendText(sock, vibe::sat::Engine::trackJsonMsg(t)); return; }
+            vibe::sat::Track t = satEngine().start(me->session, me->session, dial, mode, clk, noradV, wantTx);
+            if (t.state == vibe::sat::LockState::Off) { sendText(sock, vibe::sat::Engine::trackJsonMsg(t)); return false; }
             // ★ the largest Doppler of a LEO at this frequency (~2.7e-5·f) + the trim clamp: the channel holds it all
             const double maxShift = t.nominalHz * 2.7e-5 + vibe::sat::Engine::kTrimClampHz;
             if (!vsSatReachFn(t.nominalHz - maxShift, t.nominalHz + maxShift)) {
                 satEngine().stop(me->session);
                 off("The Doppler would take this channel outside the range this receiver can hear here");
-                return;
+                return false;
             }
             {
                 std::lock_guard<std::mutex> lk(me->mtx);
@@ -11295,26 +11310,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sendConfig(sock);         // ★ the dial shows the nominal (brief §8: "snap main digits to nominal")
             sendText(sock, vibe::sat::Engine::trackJsonMsg(t));
             satEnsureTracker();
-            return;
+            return true;
         }
         // ── the shared dial: the lock moves the channel for everyone (brief §11); anyone with tune rights ends it ──
         if (op == "unlock") {
             if (satEngine().active(kSatShared)) satEndShared("Doppler correction off", true); else off("Doppler correction off");
-            return;
+            return false;
         }
         const std::string why = vsSatWhyNot();
-        if (!why.empty()) { off(why); return; }
+        if (!why.empty()) { off(why); return false; }
         std::string owner;
         { std::lock_guard<std::mutex> lk(clientMtx); auto it = sockSession.find(sock.get()); if (it != sockSession.end()) owner = it->second; }
         std::string mode; { std::lock_guard<std::recursive_mutex> lk(modeMtx); mode = this->mode; }
         if (satEngine().active(kSatShared)) { satEngine().stop(kSatShared); satSharedShift_.store(0.0); }
-        vibe::sat::Track t = satEngine().start(kSatShared, owner, audioFreq.load(), mode, clk, (long long)noradV);
-        if (t.state == vibe::sat::LockState::Off) { sendText(sock, vibe::sat::Engine::trackJsonMsg(t)); return; }
+        vibe::sat::Track t = satEngine().start(kSatShared, owner, audioFreq.load(), mode, clk, noradV, wantTx);
+        if (t.state == vibe::sat::LockState::Off) { sendText(sock, vibe::sat::Engine::trackJsonMsg(t)); return false; }
         const double maxShift = t.nominalHz * 2.7e-5 + vibe::sat::Engine::kTrimClampHz;
         if (!vsSatReachFn(t.nominalHz - maxShift, t.nominalHz + maxShift)) {
             satEngine().stop(kSatShared);
             off("The Doppler would take the dial outside the range this receiver can hear here");
-            return;
+            return false;
         }
         LOGI("[sat] shared dial: Doppler lock on %s %s at %.3f kHz by [%s] (%s)", t.satName.c_str(), t.txLabel.c_str(),
              t.nominalHz / 1e3, owner.c_str(), vibe::sat::lockName(t.state));
@@ -11323,6 +11338,186 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         broadcastConfig();
         if (!vsSharedDial()) sendConfig(sock);
         satEnsureTracker();
+        return true;
+    }
+
+    // ══ ★★ V12 SATELLITE MODE — pick / doppler / drop (docs/v12/SATELLITE-MODE.md "THE CONTRACT") ════════════════════
+    /** One pick per listener (per-VFO radios: keyed by session) or one for the room (one pipeline: kSatShared). What
+     *  the pick ATTACHED is remembered so `drop` detaches exactly that — never a decoder the listener started since. */
+    struct SatPick {
+        long long norad = 0; int tx = -1;
+        std::string owner;                 // the session that picked (housekeeping: their pick goes when they do)
+        std::string decoder, decoderKey;   // the ext the pick started and its DecoderHost start key ("" = none)
+        bool perVfo = false;               // the listener's own host (keyed by owner) or the one-pipeline host
+    };
+    std::mutex satPickMtx_;
+    std::map<std::string, SatPick> satPicks_;
+    /** This socket's pick key and session: the listener's own (per-VFO) or the room's. false = no channel yet. */
+    bool satPickKey(const std::shared_ptr<net::Socket>& sock, std::string& key, std::string& session, std::shared_ptr<ClientDsp>& me) {
+        if (perClientDsp()) {
+            me = dspFor(sock);
+            if (!me) return false;
+            session = me->session; key = session;
+            return true;
+        }
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = sockSession.find(sock.get()); if (it != sockSession.end()) session = it->second; }
+        key = kSatShared;
+        return true;
+    }
+    bool satLockActive(const std::string& key) { return satEngine().active(key); }
+    /** `{"type":"sat","state":"picked",…}` — to the listener, or (the room's pick) to everybody with "shared":true. */
+    void satSendPicked(const std::shared_ptr<net::Socket>& sock, const std::string& key, const SatPick& p, const std::string& decoderWhy) {
+        vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
+        const bool have = satEngine().txAt(p.norad, p.tx, sd, tx);
+        std::string m = "{\"type\":\"sat\",\"state\":\"picked\"";
+        if (key == kSatShared) m += ",\"shared\":true";
+        m += ",\"norad\":" + std::to_string(p.norad) + ",\"tx\":" + std::to_string(p.tx) + ",\"decoder\":\"" + p.decoder + "\"";
+        m += std::string(",\"doppler\":") + (satLockActive(key) ? "true" : "false");
+        if (have) {
+            m += ",\"hz\":" + vibe::sat::fmtNum(vibe::sat::tuneHzOf(tx), 0) + ",\"mode\":\"" + vibe::sat::listenModeOf(tx) + "\"";
+            m += std::string(",\"use\":\"") + vibe::sat::useOf(tx) + "\",\"name\":\"" + vibe::sat::jsonEsc(sd.name) + "\",\"label\":\""
+               + vibe::sat::jsonEsc(tx.label) + "\"";
+        }
+        if (!decoderWhy.empty()) m += ",\"decoderWhy\":\"" + vibe::sat::jsonEsc(decoderWhy) + "\"";
+        m += ",\"time\":\"" + satEngine().timeState(satClock()) + "\"}";
+        if (key == kSatShared) { for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m); }
+        else sendText(sock, m);
+    }
+    /** A refusal of a SATELLITE op — the existing OFF shape, with `op` so the box knows which press it answers. */
+    void satRefuse(const std::shared_ptr<net::Socket>& sock, const char* op, const std::string& why) {
+        sendText(sock, std::string("{\"type\":\"sat\",\"state\":\"OFF\",\"op\":\"") + op + "\",\"why\":\"" + vibe::sat::jsonEsc(why)
+                       + "\",\"time\":\"" + satEngine().timeState(satClock()) + "\"}");
+    }
+    /** End a lock with no words to anyone — a new pick is about to move the dial itself (its own tune follows). */
+    void satQuietUnlock(const std::string& key, const std::shared_ptr<ClientDsp>& me) {
+        if (!satEngine().active(key)) return;
+        satEngine().stop(key);
+        if (key == kSatShared) { satSharedShift_.store(0.0); return; }
+        if (me) { std::lock_guard<std::mutex> lk(me->mtx); me->satShiftHz = 0; me->satOn = false; me->satSent.clear(); }
+    }
+    /** ★★ The decoder a pick needs, through THE SAME HOST a decoder socket's audio_extension_attach uses (DecoderRouter
+     *  hostFor → DecoderHost::start) with the same gates: the owner's switch (decoderBlocked), the reach rule
+     *  (vsDecoderWhyNot), the decoder slots (and background decoding yielding to a listener). No second attach path:
+     *  the listener's decoder socket — a peer of that same host — gets its output; one that attaches the same decoder
+     *  with the same parameters later JOINS it. "" = started; else why not, in words. */
+    std::string satAttach(bool perVfo, const std::string& session, const std::string& ext, const std::string& params, std::string& keyOut) {
+        keyOut.clear();
+        if (decoderOnly) return "This server does not run decoders for listeners";
+        if (decoderBlocked(ext)) return "The server owner has switched this decoder off on this receiver";
+        if (const std::string why = vsDecoderWhyNot(ext); !why.empty()) return why;
+        if (useIcom()) return "Decoders are not started from SATELLITE on an Icom";
+        if (perVfo && session.empty()) return "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.";
+        std::shared_ptr<DecoderHost> host = decoders_.hostFor(perVfo ? session : std::string(), perVfo);
+        const std::string am = vibe::sat::decoderAttachMsg(ext, params);
+        DecoderHost::Start r = host->start(ext, am);
+        if (r == DecoderHost::Start::Refused && bgYieldForListener()) r = host->start(ext, am);
+        if (r == DecoderHost::Start::Refused) return decoderLimitMessage(vsDecoderSlots().max());
+        if (r == DecoderHost::Start::Unknown) return "This server has no " + ext + " decoder";
+        keyOut = DecoderHost::startKeyFor(ext, am);
+        if (!perVfo) {
+            if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+            resumeCaptureIdle();   // ★ a decoder is a consumer of the radio's audio — as the socket attach does
+        }
+        navWideSync();
+        LOGI("[sat] decoder %s attached for %s (SATELLITE pick)", ext.c_str(), perVfo ? session.substr(0, 8).c_str() : "the shared dial");
+        return "";
+    }
+    /** Forget `key`'s pick and detach what it attached — only while that host still runs the very decoder the pick
+     *  started (the listener may have replaced it with their own since: then it is theirs, and stays). */
+    void satDetachPick(const std::string& key) {
+        SatPick p;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it == satPicks_.end()) return; p = it->second; satPicks_.erase(it); }
+        if (p.decoderKey.empty()) return;
+        std::shared_ptr<DecoderHost> host = p.perVfo ? decoders_.find(p.owner) : decoders_.shared();
+        if (!host || host->startKey() != p.decoderKey) return;
+        host->stop();
+        navWideSync();
+        LOGI("[sat] decoder %s detached (SATELLITE drop)", p.decoder.c_str());
+    }
+    /** {"type":"sat","op":"pick","norad":N,"tx":i,"doppler":true|false} — tune to the downlink, lock the Doppler (when
+     *  asked; AUTO DOPPLER defaults ON, so an absent "doppler" is on), attach the decoder its use needs. ONE step. */
+    void satPick(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        double nv = 0, tv = -1;
+        jsonNum(msg, "norad", nv); jsonNum(msg, "tx", tv);
+        const bool doppler = msg.find("\"doppler\":false") == std::string::npos && msg.find("\"doppler\":0") == std::string::npos;
+        vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
+        if (!(nv > 0) || tv < 0 || tv != std::floor(tv) || !satEngine().txAt((long long)nv, (int)tv, sd, tx)) {
+            satRefuse(sock, "pick", "That satellite or downlink is not in this server's list");
+            return;
+        }
+        if (const std::string rw = vsSatReachWhy(tx.hz, tx.passband() ? tx.hiHz : tx.hz); !rw.empty()) { satRefuse(sock, "pick", rw); return; }
+        std::string key, session; std::shared_ptr<ClientDsp> me;
+        if (!satPickKey(sock, key, session, me)) return;
+        // 1. what an earlier pick left: its lock (quietly — this pick moves the dial itself) and its decoder
+        satQuietUnlock(key, me);
+        satDetachPick(key);
+        // 2. ★ the tune — the listener's own tune frame through the ordinary handler (handleControl), so every rule a tune
+        //    has (the locked window, band defaults on a person's tune, the shared dial's config to the room, the RDS
+        //    owner …) applies unchanged. The gate this frame would meet has already been met by this `sat` frame.
+        const double hz = vibe::sat::tuneHzOf(tx);
+        const std::string md = vibe::sat::listenModeOf(tx);
+        handleControl(sock, "{\"type\":\"tune\",\"frequency\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\"}");
+        double dial = 0;
+        if (me) { std::lock_guard<std::mutex> lk(me->mtx); dial = me->vfoHz; } else dial = audioFreq.load();
+        if (std::fabs(dial - hz) > 1000.0) {
+            // ★ a whole-radio mode (DAB, ADS-B …) owns the receiver and ignored the tune: say so, change nothing else
+            satRefuse(sock, "pick", "Another whole-radio mode has the receiver \xe2\x80\x94 leave it first, then pick again");
+            return;
+        }
+        // 3. the Doppler lock on exactly this downlink (refusals are told in the usual `sat` words; the pick stands)
+        if (doppler) satLockOp(sock, "lock", (long long)nv, (int)tv);
+        // 4. the decoder
+        SatPick p; p.norad = (long long)nv; p.tx = (int)tv; p.owner = session; p.perVfo = perClientDsp() && !decoderOnly;
+        std::string params, decoderWhy;
+        const std::string ext = vibe::sat::decoderOf(tx, params);
+        if (!ext.empty()) {
+            decoderWhy = satAttach(p.perVfo, session, ext, params, p.decoderKey);
+            if (decoderWhy.empty()) p.decoder = ext;
+        }
+        { std::lock_guard<std::mutex> lk(satPickMtx_); satPicks_[key] = p; }
+        LOGI("[sat] %s picked %s %s (%.3f MHz %s, Doppler %s, decoder %s)", key == kSatShared ? "the shared dial" : session.substr(0, 8).c_str(),
+             sd.name.c_str(), tx.label.c_str(), hz / 1e6, md.c_str(), doppler ? "on" : "off", p.decoder.empty() ? "none" : p.decoder.c_str());
+        satSendPicked(sock, key, p, decoderWhy);
+    }
+    /** {"type":"sat","op":"doppler","on":bool} — the AUTO DOPPLER key on the current pick. */
+    void satDopplerOp(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        std::string key, session; std::shared_ptr<ClientDsp> me;
+        if (!satPickKey(sock, key, session, me)) return;
+        SatPick p; bool have = false;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it != satPicks_.end()) { p = it->second; have = true; } }
+        if (!have) { satRefuse(sock, "doppler", "Pick a satellite first"); return; }
+        double on = 1; jsonNum(msg, "on", on);
+        const bool want = on != 0 && msg.find("\"on\":false") == std::string::npos;
+        if (want) { if (!satLockActive(key)) satLockOp(sock, "lock", p.norad, p.tx); }
+        else if (satLockActive(key)) satLockOp(sock, "unlock", 0, -1);   // ★ freezes the dial where the channel is (brief §9)
+        satSendPicked(sock, key, p, "");
+    }
+    /** {"type":"sat","op":"drop"} — leaving SATELLITE: the lock ends (the dial frozen where the channel is) and what
+     *  the pick attached is detached. Exactly one `{"type":"sat","state":"OFF"…}` answers it. */
+    void satDrop(const std::shared_ptr<net::Socket>& sock) {
+        std::string key, session; std::shared_ptr<ClientDsp> me;
+        if (!satPickKey(sock, key, session, me)) return;
+        if (satLockActive(key)) {
+            if (key == kSatShared) satEndShared("Satellite mode left", true);
+            else satEndListener(me, "Satellite mode left", true);
+        } else satRefuse(sock, "drop", "");
+        satDetachPick(key);
+    }
+    /** ★ Housekeeping (the house thread): a listener's pick goes when they have gone for good (no socket, not held) —
+     *  its decoder with it; the room's pick goes when nobody at all is left. The lock has its own rules (LOS / the
+     *  listener's channel). */
+    void satPickHousekeep() {
+        std::vector<std::string> gone;
+        {
+            std::lock_guard<std::mutex> pl(satPickMtx_);
+            if (satPicks_.empty()) return;
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : satPicks_) {
+                if (kv.first == kSatShared) { if (allSpecClientsLocked().empty()) gone.push_back(kv.first); continue; }
+                if (!sessionHasSocketLocked(kv.second.owner) && !isHeldLocked(kv.second.owner)) gone.push_back(kv.first);
+            }
+        }
+        for (auto& k : gone) satDetachPick(k);
     }
     /** ★ A shared-dial tune or mode change while locked (brief §9): a nudge under 15 kHz moves the nominal and keeps the
      *  lock; a deliberate tune, a mode change, a bookmark ends it — the dial goes where the person asked, no freeze. */
@@ -22931,8 +23126,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                + ",\"los\":" + vibe::sat::fmtNum(b, 0) + ",\"pts\":" + satEngine().trackJson((long long)nv, a, b) + "}");
                 return;
             }
-            std::string j = satEngine().listJson(satClock(), [](double lo, double hi) { return vsSatReachFn(lo, hi); });
-            const std::string why = vsSatWhyNot();
+            // ★★ V12 SATELLITE MODE (THE CONTRACT): reach in words, the supply's last sync / fetch — and the on-open fetch:
+            //    a listener asking on a server with NO orbit data that never synced starts it now (vsSatSupply)
+            const vibe::sat::SupplyInfo supply = vsSatSupply(true);
+            std::string j = satEngine().listJson(satClock(), [](double lo, double hi) { return vsSatReachWhy(lo, hi); }, supply);
+            std::string why = vsSatWhyNot();
+            if (supply.fetching && why.rfind("NO SAT DATA", 0) == 0) why = "Fetching orbit data\xe2\x80\xa6";
             if (!why.empty()) j.insert(j.size() - 1, ",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"");
             sendText(sock, j);
             return;
@@ -36660,6 +36859,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           for (auto it = noHoldUntil_.begin(); it != noHoldUntil_.end(); ) it = it->second <= now ? noHoldUntil_.erase(it) : std::next(it); }
         for (const auto& s : ended) finishHold(s);
         decoderHoldTick();
+        satPickHousekeep();   // ★ V12 SATELLITE MODE: a departed listener's pick (and the decoder it attached) goes
     }
 
     /* ── ★★ A DECODER KEPT FOR A SESSION THAT MAY BE HELD ───────────────────────────────────────────────────────────────
@@ -42015,22 +42215,54 @@ static bool vsSondeAnyBand() {
 /** ★★ V12 SATELLITES: this radio receives [lo, hi] — inside one of its tuning ranges, not an Icom (no channel NCO to
  *  move: a control there would be dead), and on a LOCKED window (per-listener channels) inside that window too: the
  *  Doppler never moves a locked centre (brief, and the owner's lock). */
-static bool vsSatReachFn(double lo, double hi) {
-    if (g_icomOn.load()) return false;
+/** ★★ V12 SATELLITE MODE: the same rule in words — "" = this radio receives [lo, hi]; else why the clients grey it.
+ *  ★★★ NOT ON THE R36S HANDHELD (Stuart, 2026-11-20: "r36s cant have the satellite mode as no network connection to
+ *      sync the orbit data") — every downlink unreachable there, so no `doppler` in hwinfo, no SATELLITE, nothing
+ *      fetched (satWanted false; main.cpp starts no supply for a handheld radio either). */
+static std::string vsSatReachWhy(double lo, double hi) {
+    if (g_vsHandheld.load()) return "Satellites are not on the handheld \xe2\x80\x94 it has no network to fetch the orbit data";
+    if (g_icomOn.load()) return "Not on an Icom \xe2\x80\x94 there is no channel here for the Doppler correction to move";
     bool tunes = false;
     for (const auto& x : vsTunableRanges()) if (double(x.lo) <= lo && double(x.hi) >= hi) { tunes = true; break; }
-    if (!tunes) return false;
+    char b[160];
+    if (!tunes) {
+        std::snprintf(b, sizeof b, "This receiver cannot tune to %.3f MHz", 0.5 * (lo + hi) / 1e6);
+        return b;
+    }
     const double lc = g_vsLockedCentre.load();
     if (lc > 0.0 && g_vsMaxUsers.load() > 1) {
         const double half = LocalSdrShim::instance().captureSpanHz() * 0.45;   // ★ clear of the anti-alias roll-off
-        if (lo < lc - half || hi > lc + half) return false;
+        if (lo < lc - half || hi > lc + half) {
+            std::snprintf(b, sizeof b, "Outside the range the owner has locked this receiver to (%.3f\xe2\x80\x93%.3f MHz)",
+                          (lc - half) / 1e6, (lc + half) / 1e6);
+            return b;
+        }
     }
-    return true;
+    return "";
 }
+static bool vsSatReachFn(double lo, double hi) { return vsSatReachWhy(lo, hi).empty(); }
 static bool vsSatAnyReach() { return satEngine().reaches([](double lo, double hi) { return vsSatReachFn(lo, hi); }); }
 static std::mutex g_satNoteMtx;
 static std::string g_satNote;   // ★ the supply's reason for no data (satcat.cpp via setSatSupplyNote)
+// ★★ V12 SATELLITE MODE: the supply's hooks (setSatSupplyHooks) — under g_satNoteMtx
+static std::function<long long()> g_satSyncedFn;
+static std::function<bool()> g_satFetchingFn, g_satKickFn;
+/** sat_list's `source.synced` / `source.fetching` — and ★★ THE ON-OPEN FETCH (item 9): asked with `kickIfEmpty` (a
+ *  listener's sat_list) on a server with no orbit data that has never synced, it starts the fetch at once. */
+static vibe::sat::SupplyInfo vsSatSupply(bool kickIfEmpty) {
+    std::function<long long()> syn; std::function<bool()> fet, kick;
+    { std::lock_guard<std::mutex> lk(g_satNoteMtx); syn = g_satSyncedFn; fet = g_satFetchingFn; kick = g_satKickFn; }
+    vibe::sat::SupplyInfo s;
+    if (!syn || g_vsHandheld.load()) return s;   // ★ no supply here (iOS, the handheld): nothing claimed, nothing fetched
+    s.known = true;
+    s.synced = (double)syn();
+    s.fetching = fet && fet();
+    if (kickIfEmpty && !s.fetching && s.synced <= 0 && satEngine().elementCount() == 0 && vsSatAnyReach() && kick)
+        s.fetching = kick();
+    return s;
+}
 static std::string vsSatWhyNot() {
+    if (g_vsHandheld.load()) return "Satellites are not on the handheld \xe2\x80\x94 it has no network to fetch the orbit data";
     if (!satEngine().haveObserver()) return "This server has no location set \xe2\x80\x94 the owner sets its locator on the setup page";
     if (satEngine().elementCount() == 0) {
         std::lock_guard<std::mutex> lk(g_satNoteMtx);
@@ -43473,6 +43705,10 @@ int LocalSdrShim::satLoadSats(const std::string& json, std::string* err) {
 }
 bool LocalSdrShim::satWanted() { return vsSatAnyReach(); }
 void LocalSdrShim::setSatSupplyNote(const std::string& note) { std::lock_guard<std::mutex> lk(g_satNoteMtx); g_satNote = note; }
+void LocalSdrShim::setSatSupplyHooks(std::function<long long()> synced, std::function<bool()> fetching, std::function<bool()> kick) {
+    std::lock_guard<std::mutex> lk(g_satNoteMtx);
+    g_satSyncedFn = std::move(synced); g_satFetchingFn = std::move(fetching); g_satKickFn = std::move(kick);
+}
 
 void LocalSdrShim::setLocationJson(const std::string& json) {
     {

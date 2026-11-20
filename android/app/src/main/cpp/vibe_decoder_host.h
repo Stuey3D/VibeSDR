@@ -672,6 +672,11 @@ public:
 
     // ── what the admin page reads ──────────────────────────────────────────────────────────────
     std::string name() { std::lock_guard<std::mutex> lk(decMtx_); return name_; }
+    /** ★ V12 SATELLITE MODE: the running decoder's identity (ext + its parameters, "" = none) — a pick's drop detaches
+     *  only the decoder the pick started, never one the listener has since replaced with their own. */
+    std::string startKey() { std::lock_guard<std::mutex> lk(decMtx_); return startKey_; }
+    /** The key start() would give `ext` with the attach message `msg`. */
+    static std::string startKeyFor(const std::string& ext, const std::string& msg) { return ext + "|" + paramsOf(msg); }
     bool spotsOn() { std::lock_guard<std::mutex> lk(spotsMtx_); return spotsOn_; }
     /** The slots this host holds (0, 1 or 2). */
     int slotsHeld() {
