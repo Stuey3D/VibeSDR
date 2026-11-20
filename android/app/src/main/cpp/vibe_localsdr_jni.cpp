@@ -957,7 +957,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
  *    is the upload speed Kotlin measured, because the C++ path shells out to curl, which Android does not have. */
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstring clipPath, jstring adsbClipPath,
-                                                     jstring decoderClipPath, jdouble uplinkKBps) {
+                                                     jstring decoderClipPath, jdouble uplinkKBps, jboolean ownRadio) {
     auto str = [&](jstring s) { std::string o; if (!s) return o; const char* c = env->GetStringUTFChars(s, nullptr);
                                 if (c) { o = c; env->ReleaseStringUTFChars(s, c); } return o; };
     const std::string clip = str(clipPath), adsbClip = str(adsbClipPath), decoderClip = str(decoderClipPath);
@@ -972,7 +972,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstri
         return (jstring)nullptr;
     };
     if (vibe::benchProgress().running.load()) return fail("a benchmark is already running");
-    const int listeners = shim.isRunning() ? shim.listenerCount() : 0;
+    /* ★★ V12 LOCAL HARDWARE (Stuart, 2026-11-20: "we should offer the benchmark to the local hardware mode too so people on
+     *  weaker devices know exactly what they are getting"). There the engine is bound to loopback and its one listener IS the
+     *  app asking — which has paused its waterfall for the run and resumes it after (src/services/localBenchRun.ts). So
+     *  `ownRadio` skips the refusal, but only while the engine is NOT serving the network: a phone that is a server keeps
+     *  the refusal in words, whoever asks. The hold below (release, measure, take back) is the same either way. */
+    const bool ownLoopbackOnly = ownRadio && !vibe::LocalSdrShim::serveOnLan();
+    const int listeners = shim.isRunning() && !ownLoopbackOnly ? shim.listenerCount() : 0;
     if (listeners > 0)
         return fail(std::to_string(listeners) + (listeners == 1 ? " listener is" : " listeners are")
                     + " connected \xe2\x80\x94 the radio goes off the air for the measurement. Try again when nobody is listening.");

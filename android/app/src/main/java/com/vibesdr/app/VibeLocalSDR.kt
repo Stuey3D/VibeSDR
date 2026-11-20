@@ -121,9 +121,12 @@ object VibeLocalSDR {
     fun getServerStatus(): String { return if (loaded) nativeGetServerStatus() else "{\"running\":false}" }
     fun getVibeServerStatus(): String { return if (loaded) nativeGetVibeServerStatus() else "{\"running\":false}" }
     /** ★ The server benchmark — see VibeBenchmark, which stops the radio first and calls this off the main
-     *  thread. Blocks for a minute or two. */
-    fun runBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double): String =
-        if (loaded) nativeRunBenchmark(clipPath, adsbClipPath, decoderClipPath, uplinkKBps) else ""
+     *  thread. Blocks for a minute or two.
+     *  ★★ V12 `ownRadio` = asked from LOCAL HARDWARE, where the engine's only listener is this app over loopback (see
+     *     nativeRunBenchmark). False everywhere else — the server screen and Lite are unchanged. */
+    fun runBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double,
+                     ownRadio: Boolean = false): String =
+        if (loaded) nativeRunBenchmark(clipPath, adsbClipPath, decoderClipPath, uplinkKBps, ownRadio) else ""
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
     /** ★ Live benchmark progress — {running, step, steps, label}. See nativeBenchProgress. */
     fun benchProgress(): String =
@@ -614,5 +617,6 @@ object VibeLocalSDR {
     private external fun nativeSetServerSampleRate(rate: Double)
     private external fun nativeGetServerStatus(): String
     private external fun nativeGetVibeServerStatus(): String
-    private external fun nativeRunBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double): String
+    private external fun nativeRunBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double,
+                                            ownRadio: Boolean): String
 }
