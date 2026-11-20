@@ -61,7 +61,6 @@ struct MapModes {
     std::string onlyNow;   // ★★ V12 the only mode as last read (mapTick) — for the dial's hint, which has no RadioState
     std::string ismLanding;
     std::vector<std::pair<std::string, std::string>> sondeBands;   // ★ V12 radiosondes: vibeserver.json sondesBands (id, "402–404")
-    int satCap = -1; std::string satWhy;   // ★ V12 satellites: vibeserver.json doppler (-1 absent · 0 greyed · 1) / dopplerWhy
     // ISM band stepper (main.ts ismStepperFor: the band the person STOPPED on, once, 450 ms after the last press)
     int ismHop = -1; double ismSendAt = 0; double ismAskUntil = 0; int ismAsk = -1;
     // ADS-B aircraft data (adsb_info), per hex
@@ -169,9 +168,7 @@ inline void mapFetchCaps(int port) {
                 x.sondeBands.push_back({b["id"].s.substr(0, 8), n});
             }
         for (auto& m : x.m) if (m.id == "ism" && x.ismBands.empty()) m.cap = -1;   // ★ no bands = no ISM (main.ts ismReadCap)
-        // ★ V12 satellites (sat_page.h): `doppler` is a version — absent = no SAT key; `dopplerWhy` = greyed with it
-        x.satWhy = j["dopplerWhy"].str().substr(0, 200);
-        x.satCap = j["doppler"].num(0) >= 1 ? (x.satWhy.empty() ? 1 : 0) : -1;
+        // ★ `doppler` (SATELLITE) is not read: no satellite mode on the R36S (no network to sync the orbit data, 2026-11-20)
     });
 }
 

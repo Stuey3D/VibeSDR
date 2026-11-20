@@ -192,7 +192,7 @@ inline PicUi& picUi() { static PicUi u; return u; }
 /** A key in the box's header (dec_pic_box.h decPicKeys). */
 struct PicKey { std::string id, label; int act; bool on; };
 
-inline bool decIsPicture(const std::string& id) { return id == "wefax" || id == "sstv" || id == "hell" || id == "lrpt"; }
+inline bool decIsPicture(const std::string& id) { return id == "wefax" || id == "sstv" || id == "hell"; }
 
 // ── GL ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool picRgb(const Pic& p) { return p.kind == PK_SSTV; }
@@ -499,7 +499,7 @@ inline void decPicBinary(App& a, const RadioState& s, const std::string& b) {
             d.status = ph <= 4 ? kWefaxPhaseText[ph] : "receiving";
             d.live = ph >= 1 && ph <= 3; d.liveAt = nowSec();
         } else if (op == 0x08) std::fprintf(stderr, "vibe-hhui: [wefax] %s\n", b.substr(1, 300).c_str());
-    } else if (d.active == "sstv" || d.active == "lrpt") {   // ★ V12 LRPT's preview: SSTV's frames (392 × up to 1600)
+    } else if (d.active == "sstv") {
         if (op == 0x07 && b.size() >= 9) {
             const uint32_t w = decU32(b, 1), h = decU32(b, 5);
             if (w > 0 && w <= (uint32_t)kSstvMaxDim && h > 0 && h <= (uint32_t)kSstvMaxDim) {
@@ -530,29 +530,7 @@ inline std::string picHellStatus(bool have, int hz, bool signal) {
     if (have && signal) return "drawing · " + std::to_string(hz) + " Hz";
     return have && hz ? "listening — last tone " + std::to_string(hz) + " Hz" : "listening for a Hell tone";
 }
-/** lrpt.ts lrptStatusText — the METEOR box's status line from {"type":"lrpt_status","data":{…}}. */
-inline std::string picLrptStatus(const Json& d) {
-    if (d["why"].str().size()) return decClip(d["why"].str(), 120);
-    const int lines = (int)std::max(0.0, d["lines"].num(0)), frames = (int)std::max(0.0, d["frames"].num(0)), bad = (int)std::max(0.0, d["bad"].num(0));
-    const bool sync = d["sync"].kind == Json::Bool && d["sync"].b, carrier = d["carrier"].kind == Json::Bool && d["carrier"].b;
-    const std::string mode = decClip(d["mode"].str(), 8);
-    if (lines > 0) {
-        std::string ch;
-        for (size_t i = 0; i < d["channels"].size() && i < 6; i++) { const std::string c = d["channels"][i].str(); ch += (ch.empty() ? "" : ", ") + c.substr(0, c.find(' ')); }
-        return std::to_string(lines) + " lines" + (ch.empty() ? "" : " · channels " + ch) + " · " + std::to_string(frames) + " frames" + (sync ? "" : " · signal lost");
-    }
-    if (sync) return mode + " locked · frames " + std::to_string(frames) + (bad ? " (" + std::to_string(bad) + " unreadable)" : "");
-    if (carrier) { const int off = (int)std::lround(d["offsetHz"].num(0)); return "carrier found (" + mode + ", " + (off >= 0 ? "+" : "") + std::to_string(off) + " Hz) · looking for frames"; }
-    return "listening for a METEOR satellite";
-}
 inline bool decPicJson(const std::string& type, const Json& d) {
-    if (type == "lrpt_status") {
-        DecUi& u = decUi();
-        if (u.active != "lrpt" || d.kind != Json::Obj) return true;
-        u.status = picLrptStatus(d);
-        u.live = (d["sync"].kind == Json::Bool && d["sync"].b) || d["lines"].num(0) > 0; u.liveAt = nowSec();
-        return true;
-    }
     if (type != "hell_status") return false;
     DecUi& u = decUi();
     if (u.active != "hell" || d.kind != Json::Obj) return true;
@@ -571,7 +549,6 @@ inline void decPicOpen(const RadioState& s, const std::string& id) {
 /** The attach parameters (main.ts decParams: wefax). */
 inline std::string decPicParams(const std::string& id) {
     if (id == "wefax") return ",\"lpm\":" + std::to_string(picUi().lpm) + ",\"carrier\":1900,\"deviation\":400,\"image_width\":1809";
-    if (id == "lrpt") return ",\"modulation\":\"auto\",\"diff\":\"auto\"";   // ★ lrpt.ts lrptAttachParams: the rate AUTO (72k / 80k)
     return "";
 }
 
