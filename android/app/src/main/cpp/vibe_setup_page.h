@@ -952,7 +952,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <div class="note hide" id="satNote" style="margin-top:18px">
           <b>Satellite data</b>
           <div class="hint" id="satState"></div>
-          <div class="hint">The satellites, their frequencies and their orbits for the SAT picker and Doppler
+          <div class="hint">The satellites, their frequencies and their orbits for the SATELLITE mode and its Doppler
             correction &mdash; downloaded once a day from vibesdr.net, which collects the orbits from CelesTrak for
             every VibeServer (CelesTrak asks that its data is fetched once and shared, not by every receiver).</div>
         </div>

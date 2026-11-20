@@ -128,7 +128,7 @@ const STEPS: Step[] = [
         + 'talker alias and, on the amateur bands, a position for the MAP); off the amateur bands it says only that a system was '
         + 'heard, with its colour code and slot. Analogue FM on the same channel still plays. '
         + 'In DECODERS… there, the modes that tune the radio themselves and open '
-        + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
+        + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, SATELLITE, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
         // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md) — where the server allows it, a pick is the listener's alone
         + 'are in this menu too; DAB\u2019s station list marks \u25B6 2 beside a station two listeners are hearing, and where the '
         + 'server gives each listener their own station a pick changes only what you hear (the multiplex stays shared); they '
@@ -136,7 +136,11 @@ const STEPS: Step[] = [
         + 'the two bands in its top bar, and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
         + 'aircraft once, its card saying which sources heard it, with a layer key for each source, HFDL STATIONS and AIRPORTS (on until you switch '
         + 'it off); ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft, and SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
-        + '(serial, height, climb; pick one for its track), its bands in the top bar. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
+        + '(serial, height, climb; pick one for its track), its bands in the top bar. '
+        // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md) — replaced SAT and the METEOR LRPT decoder key, 2026-11-20
+        + 'SATELLITE lists every satellite\u2019s passes (up now first, greyed where this receiver cannot hear it); tap one and the '
+        + 'radio tunes there, follows its Doppler (AUTO DOPPLER) and decodes it \u2014 METEOR pictures grow in its box, packets '
+        + 'are listed, a voice satellite shows a little globe with it overhead. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION MAP, SELCAL, and on the VHF '
         + 'and UHF tabs VOR / ILS: tune a VOR in AM for the radial you are on FROM it, its ident and the station, with a compass card in the box '
         + '(two VORs\u2019 radials cross where you are), or an ILS localiser or glideslope for how far off the approach you are), Maritime (on the UHF tab '
