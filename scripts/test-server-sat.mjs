@@ -98,7 +98,7 @@ function syncState(extra = '') {
   return `checked ${t}\nattempt ${t}\nseed 0\n${extra}`;
 }
 
-async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 437800000, mode = 'nfm', state = '' } = {}) {
+async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 437800000, mode = 'nfm', state = '', env: extraEnv = {}, args = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-${tag}-`));
   for (const d of ['data', 'run', 'data/sat']) fs.mkdirSync(path.join(dir, d), { recursive: true });
   if (orbits) fs.writeFileSync(path.join(dir, 'data/sat', 'sats.json'), freshSats());
@@ -111,10 +111,10 @@ async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 4
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE)], { stdio: 'ignore' });
   await sleep(300);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
-                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run'), ...extraEnv };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), '--freq', String(freq), '--mode', mode,
-                          '--users', '4', '--admin-pass', PASS], { env, stdio: ['ignore', log, log] });
+                          '--users', '4', '--admin-pass', PASS, ...args], { env, stdio: ['ignore', log, log] });
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
   const L = () => { try { return fs.readFileSync(path.join(dir, 'server.log'), 'utf8'); } catch { return ''; } };
@@ -267,6 +267,213 @@ try {
       const sp = await sock(S, 'satnd0001');
       sp.send({ type: 'sat', op: 'lock' });
       ok(await until(() => { const m = lastOf(sp, 'sat'); return m && m.state === 'OFF' && /NO SAT DATA/.test(m.why || ''); }, 3000), `refused: ${lastOf(sp, 'sat')?.why}`);
+      // ★★ SATELLITE MODE: inside a hold, opening it asks NOTHING (the on-open fetch obeys the holds)
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 3000);
+      const l = lastOf(sp, 'sat_list');
+      ok(l && l.source && l.source.synced === 0 && l.source.fetching === false && /NO SAT DATA/.test(l.why || ''), `an open inside the hold: synced 0, fetching false, ${l?.why}`);
+      await sleep(800);
+      ok(!/satellite data refreshed|satellite data not refreshed/.test(S.L()), 'and nothing was asked');
+      sp.close();
+    } finally { S.stop(); }
+  }
+
+  // ── 5. ★★ SATELLITE MODE on the shared dial: the list's new fields, pick / doppler / drop ──
+  const picked = (sp) => jsons(sp, 'sat').filter((m) => m.state === 'picked');
+  const lastPicked = (sp) => picked(sp).slice(-1)[0] || null;
+  {
+    console.log(`── SATELLITE MODE, shared dial (${issLoc}) ──`);
+    const S = await server('satmode', { loc: issLoc });
+    try {
+      const sp = await sock(S, 'satmd0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      const l = lastOf(sp, 'sat_list');
+      const iss = l?.sats?.find((s) => s.id === 'ISS');
+      ok(l?.source && typeof l.source.synced === 'number' && l.source.synced > 0 && l.source.fetching === false, `source.synced ${l?.source?.synced}, fetching ${l?.source?.fetching}`);
+      ok(iss && iss.el > 0 && iss.inRangeFor > 0 && iss.inRangeFor < 900, `ISS up: inRangeFor ${iss?.inRangeFor} s`);
+      ok(l?.sats?.filter((s) => (s.el ?? -90) < 0).every((s) => s.inRangeFor === undefined), 'no inRangeFor on a bird below the horizon');
+      const uses = Object.fromEntries((iss?.tx || []).map((t) => [t.label, `${t.use}${t.sstv ? '+sstv' : ''}`]));
+      ok(uses['FM repeater'] === 'voice' && uses['Voice / SSTV'] === 'voice+sstv' && uses['APRS'] === 'packet', `ISS uses: ${JSON.stringify(uses)}`);
+      ok(l?.sats?.find((s) => s.id === 'METEOR-M2-3')?.tx?.[0]?.use === 'image', 'Meteor LRPT: image');
+      ok(l?.sats?.every((s) => s.tx.every((t) => typeof t.use === 'string' && t.reach === true && t.why === undefined)), 'every tx has use; reachable = no why');
+
+      // pick ISS Voice / SSTV with Doppler: tune + lock + SSTV, one step
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1, doppler: true });
+      ok(await until(() => !!lastPicked(sp), 4000), `picked: ${JSON.stringify(lastPicked(sp))}`);
+      let p = lastPicked(sp);
+      ok(p && p.norad === 25544 && p.tx === 1 && p.decoder === 'sstv' && p.doppler === true && p.shared === true && p.hz === 145800000 && p.mode === 'nfm' && p.use === 'voice',
+         `ISS voice: decoder ${p?.decoder}, doppler ${p?.doppler}, ${p?.hz} ${p?.mode}`);
+      ok(await until(() => lastOf(sp, 'config')?.vfo === 145800000, 3000), `the dial on 145.800 (vfo ${lastOf(sp, 'config')?.vfo})`);
+      ok(await until(() => jsons(sp, 'sat').some((m) => (m.state === 'TRACK' || m.state === 'COAST') && m.tx === 'Voice / SSTV' && m.nominal === 145800000), 3000),
+         'the Doppler lock on exactly that downlink');
+      ok(/\[sat\] decoder sstv attached for the shared dial/.test(S.L()), 'the SSTV decoder attached on the server (the same host a decoder socket uses)');
+      // the decoder socket sees it: a socket that attaches the SAME decoder joins it (no restart)
+      const dx = ws(S.port, '/ws/dxcluster?user_session_id=satmd0001');
+      await until(() => dx.open, 3000);
+      await sleep(300);
+      const attachesBefore = (S.L().match(/decoder attached: sstv/g) || []).length;
+      dx.send({ type: 'audio_extension_attach', extension_name: 'sstv' });
+      await until(() => dx.txt.some((t) => t.includes('audio_extension_attached')), 3000);
+      await sleep(300);
+      ok((S.L().match(/decoder attached: sstv/g) || []).length === attachesBefore, 'a client attaching the same decoder JOINS the pick\'s (not restarted)');
+      dx.close();
+      await sleep(400);
+
+      // AUTO DOPPLER off / on
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'doppler', on: false });
+      ok(await until(() => lastPicked(sp)?.doppler === false, 3000) && jsons(sp, 'sat').some((m) => m.state === 'OFF'), 'doppler off: the lock ends, the pick stands');
+      sp.send({ type: 'sat', op: 'doppler', on: true });
+      ok(await until(() => lastPicked(sp)?.doppler === true && jsons(sp, 'sat').some((m) => m.state === 'TRACK' || m.state === 'COAST'), 3000),
+         `doppler on again: TRACK (${jsons(sp, 'sat').slice(-3).map((m) => `${m.state}${m.why ? ' ' + m.why : ''}${m.doppler !== undefined ? ' d=' + m.doppler : ''}`).join(' | ')})`);
+
+      // a new pick replaces the old one — its decoder detached, the new one attached
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 57166, tx: 0, doppler: false });
+      ok(await until(() => lastPicked(sp)?.norad === 57166, 4000), `Meteor-M2-3: ${JSON.stringify(lastPicked(sp))}`);
+      p = lastPicked(sp);
+      ok(p && p.decoder === 'lrpt' && p.doppler === false && p.use === 'image' && p.hz === 137900000, `Meteor: lrpt, no Doppler (${p?.decoder})`);
+      ok(/\[sat\] decoder sstv detached/.test(S.L()) && /\[sat\] decoder lrpt attached/.test(S.L()), 'the SSTV the pick started detached; LRPT attached');
+      ok(/decoder attached: lrpt/.test(S.L()) || /lrpt/.test(S.L()), 'the LRPT decoder runs');
+      ok(await until(() => lastOf(sp, 'config')?.vfo === 137900000, 3000), 'the dial on 137.900');
+
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 2, doppler: true });
+      ok(await until(() => lastPicked(sp)?.tx === 2, 4000) && lastPicked(sp).decoder === 'aprs', `ISS APRS: ${lastPicked(sp)?.decoder}`);
+      sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 0, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 44909, 4000), 'RS-44 picked');
+      p = lastPicked(sp);
+      ok(p && p.decoder === '' && p.mode === 'usb' && p.hz === 435640000, `RS-44 transponder: USB at its centre, no decoder (${p?.mode} ${p?.hz})`);
+      ok(/\[sat\] decoder aprs detached/.test(S.L()), 'the APRS decoder the previous pick started detached');
+
+      // refusals
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 9 });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'OFF' && m.op === 'pick' && /not in this server's list/.test(m.why || '')), 3000), 'a bad downlink refused in words');
+      sp.send({ type: 'sat', op: 'doppler', on: true });
+      await sleep(300);
+
+      // drop: unlock + detach, one OFF
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1, doppler: true });
+      await until(() => lastPicked(sp)?.tx === 1 && lastPicked(sp)?.norad === 25544, 4000);
+      await sleep(300);
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'drop' });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'OFF'), 3000), `drop: ${JSON.stringify(lastOf(sp, 'sat'))}`);
+      await sleep(600);
+      ok(jsons(sp, 'sat').filter((m) => m.state === 'OFF').length === 1, 'exactly one OFF');
+      ok((S.L().match(/\[sat\] decoder sstv detached/g) || []).length >= 2, 'the pick\'s SSTV detached');
+      sp.send({ type: 'sat', op: 'doppler', on: true });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.op === 'doppler' && /Pick a satellite first/.test(m.why || '')), 3000), 'after drop: doppler asks for a pick');
+      // the old lock still works for old clients
+      sp.send({ type: 'tune', frequency: 437800000, mode: 'nfm' });
+      await sleep(500);
+      sp.send({ type: 'sat', op: 'lock' });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' || m.state === 'COAST'), 3000), 'the old sat lock still locks');
+      sp.send({ type: 'sat', op: 'unlock' });
+      sp.close();
+    } finally { S.stop(); }
+  }
+
+  // ── 6. per-listener channels: a pick is the listener's own; reach in words ──
+  {
+    console.log('── SATELLITE MODE, a locked window on 437.8 MHz ──');
+    const S = await server('satmodelk', { loc: issLoc, radio: { mode: 'locked', lockFreq: 437800000, rate: RATE } });
+    try {
+      const sp = await sock(S, 'satml0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      const iss = lastOf(sp, 'sat_list')?.sats?.find((s) => s.id === 'ISS');
+      const v = iss?.tx?.[1];
+      ok(v && v.reach === false && /Outside the range the owner has locked/.test(v.why || ''), `145.800 outside the window: greyed, why "${v?.why}"`);
+      ok(iss?.tx?.[0]?.reach === true, '437.800 inside it: reachable');
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1 });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.op === 'pick' && m.state === 'OFF' && /Outside the range/.test(m.why || '')), 3000), 'picking it is refused with the same words');
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 0 });
+      ok(await until(() => lastPicked(sp)?.norad === 25544, 4000), `picked the repeater: ${JSON.stringify(lastPicked(sp))}`);
+      const p = lastPicked(sp);
+      ok(p && !p.shared && p.decoder === '' && p.doppler === true, 'the listener\'s own pick, voice: no decoder, Doppler on');
+      const other = await sock(S, 'satml0002');
+      await sleep(1000);
+      ok(!picked(other).length && !jsons(other, 'sat').some((m) => m.state === 'TRACK'), 'another listener is not moved and not told');
+      other.close();
+      sp.send({ type: 'sat', op: 'drop' });
+      ok(await until(() => lastOf(sp, 'sat')?.state === 'OFF', 3000), 'dropped');
+      sp.close();
+    } finally { S.stop(); }
+  }
+
+  // ── 7. ★★ THE ON-OPEN FETCH: no orbit data, never synced — a fake vibesdr.net mirror (503, then 200) ──
+  {
+    console.log('── on-open fetch against a local fake mirror ──');
+    const http = await import('node:http');
+    const hits = [];
+    let answer = 503;
+    const mirror = http.createServer((req, res) => {
+      hits.push({ url: req.url, ua: req.headers['user-agent'] || '' });
+      if (answer === 503) { res.writeHead(503, { 'Retry-After': '900' }); res.end('busy'); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json', ETag: '"t1"' }); res.end(freshSats());
+    });
+    await new Promise((r) => mirror.listen(0, '127.0.0.1', r));
+    const mport = mirror.address().port;
+    const S = await server('satfetch', { loc: issLoc, orbits: false, state: ' ', env: { VIBESERVER_SATS_TEST_URL: `http://127.0.0.1:${mport}/api/sats` } });
+    try {
+      const sp = await sock(S, 'satft0001');
+      await sleep(500);
+      ok(hits.length === 0, 'nothing asked at start-up (its 30–330 s delay)');
+      sp.send({ type: 'sat_list' });
+      ok(await until(() => !!lastOf(sp, 'sat_list'), 3000), 'sat_list answered');
+      let l = lastOf(sp, 'sat_list');
+      ok(l?.source?.synced === 0 && l?.source?.fetching === true && /Fetching orbit data/.test(l?.why || ''), `★ the open starts the fetch: synced ${l?.source?.synced}, fetching ${l?.source?.fetching}, "${l?.why}"`);
+      // the client re-asks every 3 s while fetching (here faster)
+      const reask = async (pred, ms) => until(async () => { sp.txt.length = 0; sp.send({ type: 'sat_list' }); await sleep(250); const x = lastOf(sp, 'sat_list'); return x && pred(x); }, ms);
+      ok(await reask((x) => x.source.fetching === false, 8000), 'the fetch ends');
+      l = lastOf(sp, 'sat_list');
+      ok(hits.length === 1 && hits[0].url === '/api/sats' && /^VibeServer/.test(hits[0].ua), `ONE request to the mirror (${hits.length}), UA ${hits[0]?.ua}`);
+      ok(l.source.synced === 0 && /NO SAT DATA — vibesdr\.net's satellite data could not be downloaded \(HTTP 503\)/.test(l.why || ''), `the 503: no data, why "${l.why}"`);
+      const st = fs.readFileSync(path.join(S.dir, 'data/sat/sync-state'), 'utf8');
+      const until503 = Number((st.match(/\nuntil (\d+)/) || [])[1] || 0) - Math.floor(Date.now() / 1000);
+      ok(until503 >= 15 * 60 - 5 && until503 <= 15 * 60 + 5 * 60 + 5, `held 15 min (+ 0–5) — the Retry-After 900 honoured (${until503} s)`);
+      sp.send({ type: 'sat_list' });
+      await sleep(800);
+      ok(hits.length === 1, 'inside the hold: another open asks nothing');
+      // ★ 15 minutes pass (the hold rewritten as expired) — the next open fetches, and the mirror answers 200
+      const t = Math.floor(Date.now() / 1000);
+      fs.writeFileSync(path.join(S.dir, 'data/sat/sync-state'), `checked 0\nattempt ${t - 1000}\nuntil ${t - 10}\nfails 1\ncode 503\nseed 0\n`);
+      answer = 200;
+      sp.txt.length = 0;
+      sp.send({ type: 'sat_list' });
+      ok(await until(() => lastOf(sp, 'sat_list')?.source?.fetching === true, 3000), 'the next open: fetching');
+      ok(await reask((x) => x.source.fetching === false && x.source.synced > 0, 8000), 'the 200: synced');
+      l = lastOf(sp, 'sat_list');
+      ok(hits.length === 2 && Math.abs(l.source.synced - Date.now() / 1000) < 30 && !l.why, `synced ${l.source.synced}, no why (${l.why || ''})`);
+      ok(l.sats.find((s) => s.id === 'ISS')?.passes?.length > 0, 'the orbits are in: passes listed');
+      ok(fs.existsSync(path.join(S.dir, 'data/sat/sats.json')), 'the copy kept on disk (a restart does not refetch)');
+      sp.send({ type: 'sat_list' });
+      await sleep(800);
+      ok(hits.length === 2, 'synced: an open asks nothing more');
+      sp.close();
+    } finally { S.stop(); mirror.close(); }
+  }
+
+  // ── 8. ★★★ the R36S handheld: no satellites at all (Stuart, 2026-11-20) ──
+  {
+    console.log('── the handheld radio: no satellites ──');
+    const S = await server('sathh', { loc: issLoc, args: ['--handheld-radio'] });
+    try {
+      const st = await S.status();
+      ok(st && st.doppler === undefined, `vibeserver.json: no doppler (${st && st.doppler})`);
+      const sp = await sock(S, 'sathh0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      const l = lastOf(sp, 'sat_list');
+      ok(l && l.sats.every((s) => s.tx.every((t) => t.reach === false && /not on the handheld/.test(t.why || ''))), 'every downlink greyed: "not on the handheld"');
+      ok(l && l.source && l.source.synced === undefined && l.source.fetching === undefined, 'no supply claimed');
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1 });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.op === 'pick' && m.state === 'OFF' && /handheld/.test(m.why || '')), 3000), 'a pick refused in words');
+      ok(!/satellite data/.test(S.L()), 'no satellite data asked or loaded');
       sp.close();
     } finally { S.stop(); }
   }

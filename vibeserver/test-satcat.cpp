@@ -10,6 +10,7 @@
 //  · a clock that jumped back does not hold for ever
 #include "satcat.h"
 #include "vibe_sat_engine.h"
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -44,9 +45,11 @@ static std::string satsBody() {
     std::string b = readFile("vibeserver/testdata-sat/sats-2026-11-19.json");
     return b;
 }
+static long g_retryAfter = 0;   // ★ the fake mirror's Retry-After (s), 0 = none
 static void fake(const vssat::Request& rq, vssat::Response& rs) {
     ++g_calls; g_last = rq;
     g_onDiskDuring = readFile(g_dir + "/sat/sync-state");
+    rs.retryAfter = g_retryAfter;
     if (g_mode == "503" || g_mode == "500" || g_mode == "404") { rs.code = std::atoi(g_mode.c_str()); return; }
     if (g_mode == "net") { rs.code = 0; rs.msg = "curl: (7) Failed to connect to vibeserver.vibesdr.net port 443"; return; }
     if (g_mode == "timeout") { rs.code = 0; rs.msg = "curl: (28) Operation timed out after 45001 milliseconds"; return; }
@@ -191,6 +194,84 @@ int main() {
         CHECK(vssat::loadFromCache() == 1 && g_legacy == 0 && g_published == 1, "with sats.json: the old caches are not");
         std::system((std::string("rm -rf '") + d2 + "'").c_str());
         vssat::setDir(dir);
+    }
+
+    std::printf("§10 ★★ SATELLITE MODE item 9: NO copy at all — 15 min, 30, then hourly; Retry-After honoured\n");
+    {
+        char t3[] = "/tmp/test-satcat-nocopy-XXXXXX";
+        const char* d3 = mkdtemp(t3);
+        vssat::setDir(d3); g_dir = d3;
+        g_mode = "503"; g_calls = 0; g_rand = 0; g_retryAfter = 0;
+        CHECK(!vssat::haveCopy() && vssat::lastSynced() == 0, "nothing here, never synced");
+        CHECK(vssat::needsRefresh() && vssat::refresh(err) == 0 && g_calls == 1, "a 503: ONE request");
+        long long u = stateNum(readFile(g_dir + "/sat/sync-state"), "until");
+        CHECK(u - g_now == vssat::kHoldFloorSec, "first hold with no copy: 15 min exactly (%lld s)", u - g_now);
+        CHECK(err.find("overloaded (HTTP 503)") != std::string::npos, "the owner's words: %s", err.c_str());
+        g_now += 14 * 60;
+        CHECK(!vssat::needsRefresh(), "14 min later: not yet");
+        g_now = u + 1;
+        CHECK(vssat::needsRefresh(), "after the 15 min: allowed (attempts 15 min apart with no copy, not hourly)");
+        g_rand = 299;
+        vssat::refresh(err);
+        u = stateNum(readFile(g_dir + "/sat/sync-state"), "until");
+        CHECK(u - g_now == 30 * 60 + 299, "second: 30 min + this machine's 0–5 min (%lld s)", u - g_now);
+        g_rand = 0;
+        for (int k = 0; k < 3; ++k) { g_now = u + 1; vssat::refresh(err); u = stateNum(readFile(g_dir + "/sat/sync-state"), "until"); }
+        CHECK(u - g_now == 3600, "then hourly, never longer while there is nothing (%lld s)", u - g_now);
+        g_now = u + 1; g_retryAfter = 7200; g_calls = 0;
+        vssat::refresh(err);
+        u = stateNum(readFile(g_dir + "/sat/sync-state"), "until");
+        CHECK(g_calls == 1 && u - g_now == 7200, "★ the mirror's Retry-After: 2 h asked = 2 h held (%lld s)", u - g_now);
+        g_now = u + 1; g_retryAfter = 60;
+        vssat::refresh(err);
+        u = stateNum(readFile(g_dir + "/sat/sync-state"), "until");
+        CHECK(u - g_now >= vssat::kHoldFloorSec && u - g_now == 3600, "a Retry-After under the hold never shortens it (%lld s)", u - g_now);
+        g_now = u + 1; g_retryAfter = 0; g_mode = "ok"; g_published = 0;
+        CHECK(vssat::refresh(err) == 1 && g_published == 1 && vssat::haveCopy() && vssat::lastSynced() == (long long)g_now,
+              "then a 200: published, synced %lld", vssat::lastSynced());
+        CHECK(!vssat::needsRefresh(), "and the daily cadence after it");
+        // ★ with a copy the old rules stand: a 503 holds 1 h + 0–60 min, as §4
+        g_now += 25 * 3600; g_mode = "503"; g_rand = 0;
+        vssat::refresh(err);
+        u = stateNum(readFile(g_dir + "/sat/sync-state"), "until");
+        CHECK(u - g_now == 3600 && vssat::lastSynced() > 0, "with a copy: 1 h as before; the last good sync kept (%lld s)", u - g_now);
+        std::system((std::string("rm -rf '") + d3 + "'").c_str());
+    }
+
+    std::printf("§11 Retry-After\n");
+    CHECK(vssat::parseRetryAfter("120", 1000) == 120 && vssat::parseRetryAfter(" 900\r", 1000) == 900, "seconds");
+    {
+        std::tm t{}; t.tm_year = 2026 - 1900; t.tm_mon = 10; t.tm_mday = 20; t.tm_hour = 16; t.tm_min = 8;
+        const std::time_t at = timegm(&t);
+        CHECK(vssat::parseRetryAfter("Fri, 20 Nov 2026 16:08:00 GMT", at - 600) == 600, "an HTTP date (%ld)", vssat::parseRetryAfter("Fri, 20 Nov 2026 16:08:00 GMT", at - 600));
+        CHECK(vssat::parseRetryAfter("Fri, 20 Nov 2026 16:08:00 GMT", at + 5) == 0, "a date already past: 0");
+    }
+    CHECK(vssat::parseRetryAfter("", 0) == 0 && vssat::parseRetryAfter("soon", 0) == 0, "absent / unreadable: 0");
+
+    std::printf("§12 ★★ the runner and THE ON-OPEN FETCH (a real thread; waits have deadlines)\n");
+    {
+        char t4[] = "/tmp/test-satcat-runner-XXXXXX";
+        const char* d4 = mkdtemp(t4);
+        vssat::setDir(d4); g_dir = d4;
+        CHECK(!vssat::kick(), "no runner yet: kick says no");
+        static std::atomic<int> notes{0};
+        vssat::RunnerHooks h;
+        h.wanted = [] { return true; };
+        h.note = [](const std::string&) { notes.fetch_add(1); };
+        vssat::startDaily(h, 3600);   // ★ an hour's start-up delay: only a kick can make it ask now
+        auto settle = [] { for (int i = 0; i < 100 && vssat::fetching(); ++i) usleep(50 * 1000); return !vssat::fetching(); };
+        g_mode = "503"; g_calls = 0; g_rand = 0; g_retryAfter = 900;
+        usleep(200 * 1000);
+        CHECK(g_calls == 0, "nothing asked during the start-up delay");
+        CHECK(vssat::kick() && vssat::fetching(), "kick on an empty server: fetching at once");
+        CHECK(settle() && g_calls == 1 && vssat::lastSynced() == 0 && notes.load() >= 1, "the 503: one request, still never synced (%d calls)", g_calls);
+        CHECK(!vssat::kick() && g_calls == 1, "inside the 15-min hold: a second open asks nothing");
+        g_now = stateNum(readFile(g_dir + "/sat/sync-state"), "until") + 1; g_mode = "ok"; g_published = 0; g_retryAfter = 0;
+        CHECK(vssat::kick(), "the hold over: the next open fetches");
+        CHECK(settle() && g_calls == 2 && g_published == 1 && vssat::lastSynced() == (long long)g_now, "the 200: published, synced");
+        CHECK(!vssat::kick() && g_calls == 2, "synced: an open asks nothing (the daily cadence rules)");
+        std::system((std::string("rm -rf '") + d4 + "'").c_str());
+        vssat::setDir(dir); g_dir = dir;
     }
 
     std::string cmd = std::string("rm -rf '") + dir + "'";

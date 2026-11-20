@@ -903,6 +903,12 @@ public:
     /** ★ Why there is no orbit data, in a few words, for the greyed button ("vibesdr.net could not be reached …");
      *  "" = not downloaded yet. */
     static void setSatSupplyNote(const std::string& note);
+    /** ★★ V12 SATELLITE MODE (docs/v12/SATELLITE-MODE.md items 9–10): the orbit-data supply, for sat_list —
+     *  `synced` = Unix s of the last good /api/sats sync (0 = never), `fetching` = a fetch is running, `kick` = start
+     *  the on-open fetch now (true = it is under way; false = held / not possible). Set by whoever supplies the data:
+     *  main.cpp (satcat.cpp) and the Android app's server (vibe_localsdr_jni.cpp, the same satcat.cpp). Unset = the
+     *  list carries no `synced` / `fetching` and nothing is fetched on open (iOS, the handheld). */
+    static void setSatSupplyHooks(std::function<long long()> synced, std::function<bool()> fetching, std::function<bool()> kick);
     /** Is the running source an SDRplay? The client's controls differ materially. */
     bool isSdrplay() const;
     /** RF gain positions on an RSP (0 = not an RSP / no radio). */

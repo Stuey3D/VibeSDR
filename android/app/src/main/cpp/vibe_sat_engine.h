@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -194,6 +195,62 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
 
 /** The CelesTrak GP groups the list needs. */
 inline std::vector<std::string> catalogueGroups() { return {"amateur", "weather"}; }
+
+// ── ★★ V12 SATELLITE MODE (docs/v12/SATELLITE-MODE.md "THE CONTRACT"): what a downlink is FOR, and what a pick runs ────
+/** ISS-style "Voice / SSTV" downlinks: an FM channel whose label or note names SSTV — the picture events go out on it,
+ *  so a pick there runs the SSTV decoder (auto-sync) under the voice. Read from the data, never a hard-coded number. */
+inline bool sstvOf(const Transmitter& t) {
+    if (t.mode != "nfm") return false;
+    auto has = [](const std::string& s) {
+        for (size_t i = 0; i + 4 <= s.size(); ++i)
+            if (std::toupper((unsigned char)s[i]) == 'S' && std::toupper((unsigned char)s[i + 1]) == 'S'
+                && std::toupper((unsigned char)s[i + 2]) == 'T' && std::toupper((unsigned char)s[i + 3]) == 'V') return true;
+        return false;
+    };
+    return has(t.label) || has(t.note);
+}
+/** "image" (a picture decoder: Meteor LRPT) · "packet" (AX.25 / APRS) · "voice" (listening: FM repeaters, linear
+ *  transponders, CW beacons — and telemetry with no decoder of ours yet, which is heard, not decoded). */
+inline const char* useOf(const Transmitter& t) {
+    if (t.consumer == "lrpt" || t.mode == "lrpt") return "image";
+    if (t.consumer.rfind("ax25", 0) == 0) return "packet";
+    return "voice";
+}
+/** The demodulator a downlink is listened with (a decoder's own mode → its carrier's) — the same answer as the clients'
+ *  txListenMode (src/services/satellites.ts). */
+inline std::string listenModeOf(const Transmitter& t) {
+    if (t.mode == "nfm" || t.mode == "usb" || t.mode == "lsb" || t.mode == "cw" || t.mode == "am") return t.mode;
+    return "nfm";   // ★ lrpt: the LRPT decoder cuts its own slice; NFM is its listening mode
+}
+/** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz). */
+inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre()); }
+/** The decoder a pick attaches and its attach parameters (the JSON body after the extension name, "" = none) — the
+ *  same parameters the clients' own keys send, so a client that later attaches the same decoder JOINS it (DecoderHost
+ *  start: the same ext + paramsOf = Joined, nothing restarted).
+ *   · image / lrpt → "lrpt", AUTO modulation and coding, the symbol rate from the satellite's entry (72k / 80k)
+ *   · packet → "aprs" at the downlink's baud ("packet":"1200" | "9600")
+ *   · voice with sstv → "sstv" (auto-sync; it waits quietly between pictures)
+ *   · voice → "" (nothing to decode). */
+inline std::string decoderOf(const Transmitter& t, std::string& params) {
+    params.clear();
+    if (t.consumer == "lrpt" || t.mode == "lrpt") {
+        params = "\"modulation\":\"auto\",\"diff\":\"auto\"";
+        if (t.baud > 0) params += std::string(",\"symbol_rate\":") + (t.baud >= 76000 ? "80000" : "72000");
+        return "lrpt";
+    }
+    if (t.consumer == "ax25-9600") { params = "\"packet\":\"9600\",\"baud_rate\":1200"; return "aprs"; }
+    if (t.consumer == "ax25-1200" || t.consumer.rfind("ax25", 0) == 0) { params = "\"packet\":\"1200\",\"baud_rate\":1200"; return "aprs"; }
+    if (sstvOf(t)) return "sstv";
+    return "";
+}
+/** The attach message a pick hands the decoder host — the shape a client's audio_extension_attach has. */
+inline std::string decoderAttachMsg(const std::string& ext, const std::string& params) {
+    return "{\"type\":\"audio_extension_attach\",\"extension_name\":\"" + ext + "\"" + (params.empty() ? "" : "," + params) + "}";
+}
+/** What sat_list says about the satellite DATA SUPPLY (item 10): the last good sync and a fetch in progress. */
+struct SupplyInfo { bool known = false; double synced = 0; bool fetching = false; };
+/** Why a downlink is greyed (the reach rule, in words) — "" = this radio receives it. */
+using ReachWhyFn = std::function<std::string(double lo, double hi)>;
 
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────
 inline std::string jsonEsc(const std::string& s) {
@@ -437,6 +494,17 @@ public:
     }
     /** A copy: sats.json can replace the list at any time (loadSats). */
     std::vector<SatDef> defs() const { std::lock_guard<std::mutex> lk(m_); return defs_; }
+    /** ★ SATELLITE MODE's pick: bird `norad`'s downlink number `txIndex` (the index in sat_list's tx[]). false = no such. */
+    bool txAt(long long norad, int txIndex, SatDef& sat, Transmitter& tx) const {
+        std::lock_guard<std::mutex> lk(m_);
+        for (const auto& d : defs_)
+            if (d.norad == norad) {
+                if (txIndex < 0 || txIndex >= (int)d.tx.size()) return false;
+                sat = d; tx = d.tx[(size_t)txIndex];
+                return true;
+            }
+        return false;
+    }
 
     /** ★ TIME (brief §5 TRAPs): measured by SNTP = "ok"; unmeasured but within a plausible window of the element sets
      *  (a desktop whose own NTP is fine but whose SNTP to us is blocked) = "system", tracked with the word shown; a
@@ -467,7 +535,7 @@ public:
      *  the highest; none up but one will rise → ARMED for its AOS; else refused (Track.state Off, why set).
      *  ★ `wantNorad` > 0: the listener chose a bird in the picker — only that bird's downlinks match. */
     Track start(const std::string& key, const std::string& owner, double dialHz, const std::string& mode, const Clock& clk,
-                long long wantNorad = 0) {
+                long long wantNorad = 0, int wantTx = -1) {
         std::lock_guard<std::mutex> lk(m_);
         Track out;
         out.time = timeStateLocked(clk);
@@ -479,6 +547,7 @@ public:
         for (size_t i = 0; i < defs_.size(); ++i) {
             if (wantNorad > 0 && defs_[i].norad != wantNorad) continue;
             for (size_t k = 0; k < defs_[i].tx.size(); ++k) {
+                if (wantNorad > 0 && wantTx >= 0 && (int)k != wantTx) continue;   // ★ SATELLITE MODE's pick: that downlink only
                 const Transmitter& t = defs_[i].tx[k];
                 const bool near = t.passband() ? (dialHz >= t.hz - kMatchHz && dialHz <= t.hiHz + kMatchHz)
                                                : std::fabs(dialHz - t.hz) <= kMatchHz;
@@ -612,6 +681,13 @@ public:
      *  ★ Bounded: ≤ 4 passes a bird in the next 24 h. */
     std::string listJson(const Clock& clk, double lo, double hi) { return listJson(clk, rangeReach(lo, hi)); }
     std::string listJson(const Clock& clk, const ReachFn& reachFn) {
+        return listJson(clk, ReachWhyFn([reachFn](double lo, double hi) {
+            return reachFn(lo, hi) ? std::string() : std::string("This receiver cannot tune to it"); }), SupplyInfo{});
+    }
+    /** ★★ V12 SATELLITE MODE (THE CONTRACT): + `source.synced` / `source.fetching` (when `supply.known`), per bird
+     *  `inRangeFor` (s to LOS while up), per tx `use` (voice | image | packet), `sstv:true` on a Voice / SSTV downlink,
+     *  and `why` beside every `reach:false` (the clients grey it and show this). */
+    std::string listJson(const Clock& clk, const ReachWhyFn& whyFn, const SupplyInfo& supply) {
         std::lock_guard<std::mutex> lk(m_);
         std::string j = "{\"type\":\"sat_list\",\"time\":\"" + timeStateLocked(clk) + "\",\"located\":" + (obs_.valid ? "true" : "false");
         j += ",\"now\":" + fmtNum(clk.unix, 1);
@@ -623,6 +699,7 @@ public:
             j += ",\"via\":\"" + std::string(meta_.fromMirror ? "vibesdr.net" : "built-in") + "\"";
             if (meta_.orbitsAt > 0) j += ",\"fetched\":" + fmtNum(meta_.orbitsAt, 0);
             if (newest > 0) j += ",\"newestEpoch\":" + fmtNum(newest, 0);
+            if (supply.known) j += ",\"synced\":" + fmtNum(supply.synced, 0) + ",\"fetching\":" + (supply.fetching ? "true" : "false");
             j += "}";
         }
         j += ",\"sats\":[";
@@ -640,7 +717,8 @@ public:
             for (size_t k = 0; k < d.tx.size(); ++k) {
                 const Transmitter& t = d.tx[k];
                 if (k) j += ",";
-                const bool reach = reachFn(t.hz, t.passband() ? t.hiHz : t.hz);
+                const std::string why = whyFn ? whyFn(t.hz, t.passband() ? t.hiHz : t.hz) : std::string();
+                const bool reach = why.empty();
                 j += "{\"label\":\"" + jsonEsc(t.label) + "\",\"hz\":" + fmtNum(t.hz, 0);
                 if (t.passband()) j += ",\"hiHz\":" + fmtNum(t.hiHz, 0);
                 j += ",\"mode\":\"" + t.mode + "\",\"loop\":\"" + t.loop + "\"";
@@ -649,7 +727,11 @@ public:
                 if (t.ctcss > 0) j += ",\"ctcss\":" + fmtNum(t.ctcss, 1);
                 if (!t.note.empty()) j += ",\"note\":\"" + jsonEsc(t.note) + "\"";
                 if (!t.status.empty()) j += ",\"status\":\"" + t.status + "\"";
-                j += std::string(",\"reach\":") + (reach ? "true" : "false") + "}";
+                j += std::string(",\"use\":\"") + useOf(t) + "\"";
+                if (sstvOf(t)) j += ",\"sstv\":true";
+                j += std::string(",\"reach\":") + (reach ? "true" : "false");
+                if (!reach) j += ",\"why\":\"" + jsonEsc(why) + "\"";
+                j += "}";
             }
             j += "]";
             if (r.have && obs_.valid) {
@@ -657,6 +739,10 @@ public:
                 if (L.ok) j += ",\"az\":" + fmtNum(L.azDeg, 1) + ",\"el\":" + fmtNum(L.elDeg, 1) + ",\"rangeKm\":" + fmtNum(L.rangeKm, 0)
                             + ",\"lat\":" + fmtNum(L.subLatDeg, 2) + ",\"lon\":" + fmtNum(L.subLonDeg, 2);
                 auto ps = passesLocked(i, clk.unix);
+                // ★ "in range for 09:55": while it is up, the seconds to this pass's LOS (absent below the horizon)
+                if (L.ok && L.elDeg >= 0)
+                    for (auto& p : ps)
+                        if (p.aos <= clk.unix + 5 && p.los > clk.unix) { j += ",\"inRangeFor\":" + fmtNum(p.los - clk.unix, 0); break; }
                 j += ",\"passes\":[";
                 int np = 0;
                 for (auto& p : ps) {
