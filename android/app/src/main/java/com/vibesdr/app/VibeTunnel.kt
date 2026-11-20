@@ -233,6 +233,9 @@ object VibeTunnel {
     /** ★ Is the tunnel up? Asked by the boot path, which must re-apply loopback trust after a
      *  restart or the session limit silently stops applying — see VibeServerBoot. */
     fun isTunnelRunning(): Boolean = running.get()
+    /** ★ beta88: is a listing the owner's standing instruction (the switch is on), running or paused? — for the remote
+     *  settings page's "List this server publicly" (VibeRemoteSetup). */
+    fun wanted(ctx: Context): Boolean = try { prefs(ctx).getBoolean(K_WANT, false) } catch (_: Throwable) { false }
 
     /** What the switch shows: whether we are up, the address to share, and why not if not. */
     fun statusJson(): String = JSONObject().apply {

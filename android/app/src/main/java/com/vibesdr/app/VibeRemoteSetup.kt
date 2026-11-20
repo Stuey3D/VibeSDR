@@ -132,7 +132,99 @@ object VibeRemoteSetup {
         o.put("radioPresent", dev != null)
         o.put("usbPermission", dev != null && mgr?.hasPermission(dev) == true)
         o.put("serving", VibeServerRestore.isShimServing())
+        // ★★ What decides which controls the page may offer (vibe_android_setup.h Platform): Lite has no raw IQ, a
+        //    television no battery, and the public listing needs the tunnel binary (arm64 builds only).
+        o.put("lite", ctx.packageName.endsWith(".serverlite"))
+        o.put("tv", ctx.packageManager.hasSystemFeature("android.hardware.type.television")
+                    || ctx.packageManager.hasSystemFeature("android.software.leanback_only"))
+        val tunnel = try { VibeTunnel.isSupported(ctx) } catch (_: Throwable) { false }
+        o.put("tunnelSupported", tunnel)
+        if (tunnel) o.put("listing", try {
+            JSONObject(VibeTunnel.statusJson()).put("wanted", VibeTunnel.wanted(ctx))
+        } catch (_: Throwable) { JSONObject() })
+        // ★ An Icom's audio needs the microphone permission — Android's own prompt, on the phone only.
+        if (dev != null && VibeRadioIds.driverOf(dev.vendorId, dev.productId) == "icom")
+            o.put("micPermission", ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED)
         return o
+    }
+
+    // ── What a page save does beyond storing: where the receiver is, and the public listing ─────────────────────
+
+    /** ★ The page set where the receiver is: tell the engine now, in this process, so listeners and the directory see it
+     *  without the phone's screen being open (the screen re-publishes it with the place's town and country when it next
+     *  opens — serverSettingsMirror). Off = the name only, as the screen's publishLocation does. */
+    private fun applyLocation(ctx: Context, s: JSONObject) {
+        val loc = s.optJSONObject("serverLocation") ?: return
+        val name = s.optString("publicName", "").trim().ifEmpty { VibeServerBoot.name(s) }
+        val o = JSONObject().put("name", name)
+        if (loc.optString("mode") == "manual" && loc.has("lat") && loc.has("lon")) {
+            val lat = loc.optDouble("lat"); val lon = loc.optDouble("lon")
+            o.put("lat", lat).put("lon", lon).put("label", loc.optString("label", ""))
+            val iso = loc.optString("country", "")
+            if (iso.length == 2) o.put("iso", iso)
+            o.put("grid", grid(lat, lon))
+        }
+        try { VibeLocalSDR.setLocationJson(o.toString()); VibeServerRestore.cacheLocation(ctx, o.toString()) }
+        catch (t: Throwable) { Log.w(TAG, "location from the page: $t") }
+    }
+
+    /** Maidenhead, 6 characters — the directory places a listing by it. */
+    internal fun grid(lat: Double, lon: Double): String {
+        if (lat.isNaN() || lon.isNaN() || lat !in -90.0..90.0 || lon !in -180.0..180.0) return ""
+        val x = minOf(359.9999, lon + 180); val y = minOf(179.9999, lat + 90)
+        return buildString {
+            append('A' + (x / 20).toInt()); append('A' + (y / 10).toInt())
+            append('0' + ((x % 20) / 2).toInt()); append('0' + (y % 10).toInt())
+            append('a' + ((x % 2) * 12).toInt()); append('a' + ((y % 1) * 24).toInt())
+        }
+    }
+
+    /** Why the page may not list this server now, or null — the screen's own three refusals, in its words. */
+    private fun listingRefusal(s: JSONObject): String? {
+        val nm = s.optString("publicName", "").trim().ifEmpty { VibeServerBoot.name(s) }
+        if (nm.length < 2) return "Give this server a public name first."
+        val loc = s.optJSONObject("serverLocation")
+        val placed = loc != null && loc.optString("mode") == "manual" && loc.has("lat") && loc.has("lon")
+        if (!placed && loc?.optBoolean("moving", false) != true)
+            return "Set this receiver\u2019s location first \u2014 the directory places servers on a map."
+        if (!VibeServerRestore.isShimServing()) return "Start the server first \u2014 the listing points at a receiver that has to be running."
+        return null
+    }
+
+    /** ★★ List or unlist on vibesdr.net, as the phone's "List this server publicly" switch does (VibeServerOps tunnel.*),
+     *  in the background — cloudflared can take a minute to hand out an address. */
+    private fun applyListing(ctx: Context, want: Boolean, s: JSONObject) {
+        val app = ctx.applicationContext
+        Thread({
+            try {
+                val running = VibeTunnel.isTunnelRunning()
+                if (!want) {
+                    if (running || VibeTunnel.wanted(app)) {
+                        VibeServerOps.call(app, "tunnel.stop", JSONObject().put("ownerProxies", s.optString("trustedProxies", "")))
+                        VibeServerRestore.breadcrumb(app, "unlisted from the remote settings page")
+                    }
+                    return@Thread
+                }
+                val st = try { JSONObject(VibeLocalSDR.getVibeServerStatus()) } catch (_: Throwable) { JSONObject() }
+                val port = st.optInt("port", 0)
+                val loc = s.optJSONObject("serverLocation")
+                val grid = if (loc != null && loc.optString("mode") == "manual") grid(loc.optDouble("lat"), loc.optDouble("lon")) else ""
+                val a = JSONObject()
+                    .put("name", s.optString("publicName", "").trim().ifEmpty { VibeServerBoot.name(s) })
+                    .put("locator", grid).put("port", port)
+                    .put("radioModel", s.optString("radioLabel", "").trim().ifEmpty { radioFacts(app).optString("model", "") })
+                    .put("radioDriver", radioFacts(app).optString("driver", ""))
+                    .put("antenna", s.optString("antenna", "").trim())
+                    .put("coverage", s.optString("allowRanges", ""))
+                    .put("locked", s.optBoolean("advanced", false) && s.optString("radioUse", "single") == "locked")
+                    .put("shareForSec", s.optLong("publicShareSec", 0L))
+                    .put("ownerProxies", s.optString("trustedProxies", ""))
+                if (running) VibeServerOps.call(app, "tunnel.republish", a)
+                else if (port > 0) VibeServerOps.call(app, "tunnel.start", a)
+                VibeServerRestore.breadcrumb(app, "listed from the remote settings page")
+            } catch (t: Throwable) { Log.w(TAG, "listing from the page: $t") }
+        }, "vibe-remote-listing").start()
     }
 
     /** Which radio — the page branches its controls on the driver, as the Linux page does. From the USB ids, never by
@@ -171,9 +263,17 @@ object VibeRemoteSetup {
         val ctx = appCtx ?: return "the server is not ready"
         return try {
             val p = JSONObject(patch)
+            // ★ An ACTION, not a setting: list / unlist now. Checked BEFORE anything is stored, so a refusal changes nothing.
+            val listing: Boolean? = if (p.has("publicListed")) p.optBoolean("publicListed") else null
+            p.remove("publicListed")
             val merged: JSONObject
             synchronized(this) {
                 merged = settings(ctx)
+                if (listing == true && !VibeTunnel.isTunnelRunning()) {
+                    val trial = JSONObject(merged.toString())
+                    val ks = p.keys(); while (ks.hasNext()) { val k = ks.next(); if (!p.isNull(k)) trial.put(k, p.get(k)) }
+                    listingRefusal(trial)?.let { return it }
+                }
                 val keys = p.keys()
                 while (keys.hasNext()) {
                     val k = keys.next()
@@ -187,7 +287,11 @@ object VibeRemoteSetup {
             // ★★ THE MIRROR: the phone's screen hears it now and redraws (ServerModeScreen listens for "settings").
             val shown = JSONObject(merged.toString()).apply { remove("adminPassword") }
             VibeServerOps.emit("settings", JSONObject().put("source", "remote").put("settings", shown))
-            if (restart) VibeServerOps.restartFromSettings(ctx)
+            if (p.has("serverLocation")) applyLocation(ctx, merged)
+            // ★ The listing after the restart (a restart closes and re-opens the tunnel itself — restoreIfWanted).
+            if (restart) VibeServerOps.restartFromSettings(ctx) {
+                if (listing != null && listing != VibeTunnel.isTunnelRunning()) applyListing(ctx, listing, merged)
+            } else if (listing != null) applyListing(ctx, listing, merged)
             ""
         } catch (t: Throwable) { Log.w(TAG, "configSetPatch: $t"); "the settings could not be saved (${t.javaClass.simpleName})" }
     }
