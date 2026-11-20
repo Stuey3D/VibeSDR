@@ -445,6 +445,33 @@
   </div>
 </section>
 
+<!-- ══ DAB ══ (2026-11-20, Stuart: "our USP seems to be our DAB"). Every figure here is MEASURED: the Pi 2's own benchmark
+     on 2026-11-20 (an extra station 18.8 % of one 900 MHz core with its audio encode, 6–7 stations, 0 dropped; the
+     multiplex 66 %) and dab-station-bench (6 stations on the Pi 2, 0 frames dropped, on a deliberately damaged recording).
+     ★ On its own merits: nothing here is said against anyone else's receiver. -->
+<section id="dab">
+  <div class="wrap">
+    <span class="lbl"><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span> Digital radio</span>
+    <h2 style="margin-top:8px">Five people. Five different DAB stations. One Raspberry Pi 2.</h2>
+    <p style="margin-top:12px">On a shared VibeServer, each listener picks their own station on the multiplex, and everyone else keeps theirs. Nobody has to ask, and nobody gets moved. A 2015 Raspberry Pi 2 does it with room to spare: decoding the whole multiplex takes two thirds of one of its 900&nbsp;MHz cores, and each extra listener's own station, audio and all, under a fifth of another.</p>
+    <div class="grid3" style="margin-top:28px">
+      <div>
+        <h3>Built for weak signals</h3>
+        <p>DAB was written to hold on where the signal is barely there: the edge of coverage, an indoor aerial, a multiplex from the next county. Every change to the decoder is checked against recordings of weak multiplexes before it ships, and nothing goes out that loses one.</p>
+      </div>
+      <div>
+        <h3>Everything on the multiplex</h3>
+        <p>Every service appears at once, with its logo, its live text and its slideshow pictures. The receiver can tell you which transmitter you are hearing. Pick a station and it plays on the phone, in the browser or on the watch; the server does the decoding, so a watch gets DAB+ with nothing added to the watch.</p>
+      </div>
+      <div>
+        <h3>A DAB receiver, if that is all you want</h3>
+        <p>Switch every other mode off and a VibeServer becomes a DAB-only receiver: listeners arrive straight on your station. Left idle, it can sweep the band for DX and log a distant multiplex the moment one gets through. Give it a wide enough radio and listeners can each be on a different multiplex too.</p>
+      </div>
+    </div>
+    <p class="fine" style="margin-top:18px">Measured on a Raspberry Pi 2 (4 × Cortex-A7, 900 MHz, 1 GB), with the server's own benchmark: the multiplex 66 % of one core, each extra listener's station 18.8 % including its audio encoding, six to seven stations with nothing dropped. DAB+ audio is decoded on the server by its own operating-system AAC decoder; plain DAB by our own MP2 decoder, with advanced signal metrics for both. The mark appears beside a receiver in the directory only when its owner has set it up for DAB+.</p>
+  </div>
+</section>
+
 <!-- ══ LOOKS ══ (2026-10-14: V11 front panels on a Mac, Stuart's own screenshots of that evening) -->
 <section id="looks">
   <div class="wrap">
@@ -648,15 +675,7 @@
         <p>Then the measurements you'd normally buy hardware for. Pilot and RDS deviation. Block error rate. A live constellation with a scatter figure, the MPX spectrum, and the symbol trace that explains the error rate at a glance.</p>
         <p>And the RDS-to-pilot phase, the reason this panel exists. Near 0°, or near 90° for quadrature encoding, is correct. The middle ground means a transmitter fault. It will also tell you when a station's encoder isn't locked to its own pilot at all, which draws as a rotating ring rather than two lobes. That's a real fault, found on air, confirmed on two independent receivers.</p>
         <p class="fine">Calibrated against a PIRA broadcast analyser by <a href="https://fmdx.org">Hans van Eijsden</a>, who measured our readings against professional equipment station by station until they agreed. Thank you, Hans.</p>
-
-        <div class="panel" style="margin-top:24px">
-          <div class="panel-h" id="dab"><span class="lbl">New</span><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span></div>
-          <div class="panel-b">
-            <h3>DAB and DAB+, decoded on the server.</h3>
-            <p style="margin-top:8px">Tune a VibeServer to a Band III ensemble and every service on it appears, with its logo and its live text, all at once. Pick one and it plays, on the phone, in the browser, or on the watch. The receiver does the decoding, so a watch gets DAB+ with nothing added to the watch.</p>
-            <p class="fine">DAB+ audio is decoded on the server by its own operating-system AAC decoder; plain DAB by our own MP2 decoder, with advanced signal metrics for both. The mark appears beside a receiver in the directory only when its owner has set it up for DAB+.</p>
-          </div>
-        </div>
+        <p class="fine">DAB and DAB+ have their own section now: <a href="#dab">digital radio</a>.</p>
       </div>
       <figure>
         <img class="bezel" src="assets/rds-inhand.jpg" loading="lazy" alt="The Advanced RDS panel open on a phone held in a garden: PI, station, deviation, AF list, constellation, MPX spectrum and symbol trace, with the RDS-to-pilot phase reading a rotating 47 degrees" />
