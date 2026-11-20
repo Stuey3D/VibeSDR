@@ -24,9 +24,15 @@ const ok = (c, what) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (
 // The phone's config, made by the phone's own code (pageConfig) from a phone's settings.
 const settings = { name: 'Allotment Moto', advertise: true, landingMessage: 'Hello', uncompressedAudio: 0, maxUsers: 2,
   radioLabel: 'V4', antenna: 'Discone', centerFreq: 198000, mode: 'am', sessionLimitMin: 0, idleGraceSec: 300,
-  galleryMb: 100, batteryPauseAt: 0, pin: '', adminPassword: 'not-in-the-page' };
+  galleryMb: 100, batteryPauseAt: 0, pin: '', adminPassword: 'not-in-the-page',
+  // ★★ beta88 every setting remote — the new ones, at values that are not their defaults
+  advanced: true, webServer: true, compressAudio: true, radioUse: 'single', rttySkimWorkers: 2,
+  serverLocation: { mode: 'manual', lat: 52.25, lon: -0.9, label: 'Moulton', country: 'GB', moving: false },
+  publicName: 'Moulton V4', sampleRate: 2400000, lockedRate: 0, rateLock: false, maxFftRate: 10,
+  ppm: 3, tunerBwAuto: true, directSampling: 0, converterInputLoHz: 0, blockedModes: 'drm', fmDeemph: 50, fmStereo: true };
 const raw = JSON.stringify({ settings, device: { batteryOptimisation: 'off', startOnPowerSupported: false, radioPresent: true,
-  usbPermission: true, keepRadioAlive: false }, radio: { driver: 'rtl', model: 'RTL-SDR Blog V4' } });
+  usbPermission: true, keepRadioAlive: false, tunnelSupported: true, listing: { wanted: false } },
+  radio: { driver: 'rtl', model: 'RTL-SDR Blog V4' } });
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vibe-android-setup-'));
 const rawFile = path.join(tmp, 'raw.json');
 fs.writeFileSync(rawFile, raw);
@@ -68,15 +74,32 @@ ok(!doc.getElementById('setup').classList.contains('hide'), 'the settings are sh
 ok(!!doc.getElementById('androidDevCard'), 'the "This phone" card is drawn');
 ok(doc.getElementById('name').value === 'Allotment Moto', 'the phone\'s name is in the box');
 ok(doc.getElementById('landingMessage').value === 'Hello', 'the landing message is in the box');
+ok(doc.getElementById('place').value === 'Moulton' && doc.getElementById('lat').value === '52.25000', 'the receiver\'s place and position are in the boxes');
+ok(doc.getElementById('dirName').value === 'Moulton V4', 'the public name is in the box');
+ok(doc.getElementById('androidAdvanced').value === '1' && doc.getElementById('androidCompress').checked, 'the phone\'s own server card shows Advanced and compression on');
+ok(doc.getElementById('rttySkimWorkers').value === '2', 'the RTTY skimmer workers');
 
 // Change things on the server tab, then on the radio tab, and Apply.
 doc.getElementById('landingMessage').value = 'Welcome to the allotment';
+doc.getElementById('androidCompress').checked = false;
+doc.getElementById('place').value = 'Northampton';
+doc.getElementById('lat').value = '52.2405'; doc.getElementById('lon').value = '-0.9027';
+doc.getElementById('dirName').value = 'Allotment';
 const tabs = [...doc.querySelectorAll('#radioTabs button')];
 const radioTab = tabs.find((b) => !/server/i.test(b.textContent));
 if (radioTab) radioTab.click();
 await new Promise((r) => setTimeout(r, 300));
 doc.getElementById('users').value = '5';
 doc.getElementById('radioName').value = 'V4 on the mast';
+ok(doc.getElementById('ppm').value === '3', 'the radio tab shows the phone\'s ppm');
+ok(doc.getElementById('androidTunerBw').checked, '…and the phone\'s IF filter row');
+const vis = (id) => { for (let e = doc.getElementById(id); e; e = e.parentElement) if (e.classList && e.classList.contains('androidOff')) return false; return !!doc.getElementById(id); };
+ok(vis('ppm') && vis('androidTunerBw') && vis('adsb256') && !vis('ppb') && !vis('icomBaud'), 'an RTL\'s rows are offered and no other radio\'s (after the radio\'s own rows were drawn)');
+doc.getElementById('ppm').value = '-4';
+doc.getElementById('androidTunerBw').checked = false;
+doc.getElementById('androidDsFixed').value = '2';
+doc.getElementById('maxFps').value = '20';
+doc.getElementById('maxFps').dispatchEvent(new w.Event('change', { bubbles: true }));
 doc.getElementById('saveBtn').click();
 await new Promise((r) => setTimeout(r, 600));
 ok(errors.length === 0, `Apply ran without a script error${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);
@@ -87,7 +110,7 @@ ok(posted && posted.restart === true, '…and restart:true');
 if (posted) {
   const bodyFile = path.join(tmp, 'body.json');
   fs.writeFileSync(bodyFile, JSON.stringify(posted));
-  const patch = JSON.parse(execFileSync(bin, ['--patch', bodyFile], { encoding: 'utf8' }));
+  const patch = JSON.parse(execFileSync(bin, ['--patch', bodyFile, rawFile], { encoding: 'utf8' }));
   ok(patch.landingMessage === 'Welcome to the allotment', 'the patch carries the new landing message');
   ok(patch.maxUsers === 5, 'the patch carries the new listener limit');
   ok(patch.radioLabel === 'V4 on the mast', 'the patch carries the new radio name');
@@ -95,6 +118,17 @@ if (posted) {
   // ★ The page posts its radio objects back whole (collect: radios = cfg.radios), so an untouched PIN comes back AS IT WAS.
   ok(!('pin' in patch) || patch.pin === settings.pin, 'an untouched PIN comes back unchanged');
   ok(!('adminPassword' in patch) && !('cpuGovernor' in patch) && !('port' in patch), 'nothing the phone does not have');
+  // ★★ beta88 — the new settings, through the phone's own translation
+  ok(patch.compressAudio === false && patch.advanced === true && patch.webServer === true, 'the phone\'s own server card: compression off, Advanced kept');
+  ok(patch.serverLocation && patch.serverLocation.mode === 'manual' && patch.serverLocation.label === 'Northampton'
+     && Math.abs(patch.serverLocation.lat - 52.2405) < 1e-9, 'the new place and position');
+  ok(patch.publicName === 'Allotment' && patch.publicListed === false, 'the public name; the listing left off');
+  ok(patch.ppm === -4 && patch.tunerBwAuto === false && patch.directSampling === 2, 'ppm, the IF filter and the fixed branch');
+  ok(patch.maxFftRate === 20, 'the waterfall rate');
+  ok(patch.lockedRate === 0 && patch.rateLock === false, 'the capture width stays the listener\'s choice');
+  ok(patch.rttySkimWorkers === 2 && patch.blockedModes === 'drm' && patch.fmDeemph === 50 && patch.radioUse === 'single',
+     'untouched new settings come back as they were');
+  ok(!('ppb' in patch) && !('rfNotch' in patch) && !('icomBaud' in patch), 'no other radio\'s settings');
 }
 fs.rmSync(tmp, { recursive: true, force: true });
 w.close();

@@ -264,12 +264,24 @@ object VibeRemoteSetup {
         return try {
             val p = JSONObject(patch)
             // ★ An ACTION, not a setting: list / unlist now. Checked BEFORE anything is stored, so a refusal changes nothing.
+            // ★★ Every page save carries the switch as the page last saw it, so only a FLIP acts (the standing instruction is
+            //    VibeTunnel's own: a restart re-lists by itself) — or, while listed, a new public name or share length.
             val listing: Boolean? = if (p.has("publicListed")) p.optBoolean("publicListed") else null
             p.remove("publicListed")
+            val listedNow = VibeTunnel.wanted(ctx) || VibeTunnel.isTunnelRunning()
+            val before = settings(ctx)
+            val offerChanged = (p.has("publicName") && p.optString("publicName") != before.optString("publicName", "")) ||
+                               (p.has("publicShareSec") && p.optLong("publicShareSec") != before.optLong("publicShareSec", 0L))
+            val listingAct: Boolean? = when {
+                listing == null -> null
+                listing != listedNow -> listing
+                listing && offerChanged && VibeTunnel.isTunnelRunning() -> true   // republish with the new offer
+                else -> null
+            }
             val merged: JSONObject
             synchronized(this) {
                 merged = settings(ctx)
-                if (listing == true && !VibeTunnel.isTunnelRunning()) {
+                if (listingAct == true && !listedNow) {
                     val trial = JSONObject(merged.toString())
                     val ks = p.keys(); while (ks.hasNext()) { val k = ks.next(); if (!p.isNull(k)) trial.put(k, p.get(k)) }
                     listingRefusal(trial)?.let { return it }
@@ -289,9 +301,8 @@ object VibeRemoteSetup {
             VibeServerOps.emit("settings", JSONObject().put("source", "remote").put("settings", shown))
             if (p.has("serverLocation")) applyLocation(ctx, merged)
             // ★ The listing after the restart (a restart closes and re-opens the tunnel itself — restoreIfWanted).
-            if (restart) VibeServerOps.restartFromSettings(ctx) {
-                if (listing != null && listing != VibeTunnel.isTunnelRunning()) applyListing(ctx, listing, merged)
-            } else if (listing != null) applyListing(ctx, listing, merged)
+            if (restart) VibeServerOps.restartFromSettings(ctx) { if (listingAct != null) applyListing(ctx, listingAct, merged) }
+            else if (listingAct != null) applyListing(ctx, listingAct, merged)
             ""
         } catch (t: Throwable) { Log.w(TAG, "configSetPatch: $t"); "the settings could not be saved (${t.javaClass.simpleName})" }
     }
