@@ -469,7 +469,7 @@ are not intelligible, which is RADE's own limit. 700D is still unproven off air:
   - The R36S UI on the device (golden lines only).
   - The setup page's new switch in a browser.
 
-### Android, Lite and iOS: RADE could be offered there (not built in this task)
+### Android, Lite and iOS: RADE could be offered there (not built in this task) — ★ Android + Lite BUILT 2026-11-20, see "RADE V1 on Android and Lite" at the end
 
 RADE needs no libcodec2 and is all BSD C, so the LGPL questions that kept FreeDV off the phones do not apply. Static
 linking is fine on iOS and on Android.
@@ -594,11 +594,71 @@ Why dynamic, and why not a hard dependency:
     app's namespace), then the same name beside our own library (dladdr — Android 5–6, which search only system dirs for
     a bare name). Separate and replaceable, so LGPL-2.1's relinking route stays open; `COPYING.codec2` and
     `CODEC2-BUILT-FROM` sit beside it; About → credits and the README name it.
-  - The app's server screen now has the FreeDV and M17 switches (the setup page's list). RADE is still not built for
-    Android — FreeDV on a phone is 700D / 700E / 1600 only, and the "rade" switch stays off the app's screen.
+  - The app's server screen now has the FreeDV and M17 switches (the setup page's list). ★ RADE followed the same day —
+    see "RADE V1 on Android and Lite" below.
   - **Unverified until a phone runs it:** the dlopen itself (macOS cannot load an Android ELF), a decode, CPU on a 32-bit
     1 GB phone with AUTO's three modems open, and Lite's API-21 build on Android 5.1.
 - **iOS:** the App Store does not allow `dlopen` of a library outside the bundle. It would need codec2 built as an
   embedded dynamic framework, signed with the app. That is allowed, and keeps LGPL relinking possible through the
   framework. Static linking would make the LGPL obligations harder for an App Store binary, so it is not recommended.
 - **Windows:** `libcodec2.dll` from an installer, loaded the same way (`windows/compat/dlfcn.h`). It is not wired yet.
+
+## RADE V1 on Android and Lite (2026-11-20 — Stuart: "add it because the benchmark will advise it to be disabled")
+
+### RESUME HERE
+Built and linked; the native library compiles and links for arm64-v8a (android-24) and armeabi-v7a (android-21, Lite's
+configuration). NOT yet run on a phone — see "Unverified" below. Nothing to do until a phone has run the benchmark and
+decoded a RADE over; then fill in the figures here.
+
+### How
+- **`android/app/src/main/cpp/sdr-kit/build-rade-android.sh`** reads the pins from `vibeserver/linux/build-deps.sh` (rade_c
+  `77980d6e…`, freedv-backend `49006b02…`, Opus 1.6.1 — never written twice) and runs **the servers' own builder,
+  `vibeserver/linux/build-rade.sh`**, with the NDK 27.1's clang for each target: arm64-v8a and armeabi-v7a (ARM mode,
+  NEON, as the app's other C) at android-24 into `sdr-kit/<ABI>/`, and armeabi-v7a at android-21 into
+  `lite/native/kit/armeabi-v7a/`. Both archives (`librade_vibe.a`, `librade_vibe_tx.a`) and `include/vibe_rade.h`;
+  `RADE-BUILT-FROM` (source pins + every archive's SHA-256) and the three licences beside each kit.
+- **Two changes to `build-rade.sh`**, both inert on Linux and the Mac: it asks the COMPILER whether it makes Mach-O
+  (`__APPLE__`), not the host's `uname` (the Android build runs on a Mac and makes ELF); and where the `-r` linker has no
+  `--force-group-allocation` (the NDK's ld.lld 18) it dissolves the COMDAT groups with `llvm-objcopy
+  --remove-section=.group` first, then checks no group survived. ★ Changing the script changes the Mac deps stamp
+  (`RADE_WRAP_SUM`), so the next Mac `build-deps.sh` rebuilds RADE once.
+- **API 21:** nothing Android 5 lacks — checked by the script: no `stderr`/`stdout` import, no C99 complex-maths import
+  (RADE uses none; its complex arithmetic is its own). Its imports are libc/libm/libc++ basics plus `getauxval` (API 18).
+- **Linked** in `android/app/src/main/cpp/CMakeLists.txt`, outside the `NOT VIBE_LITE_APP` block (Lite is a server):
+  `VIBE_HAVE_RADE` + `VIBE_HAVE_RADE_TX`, `librade_vibe_tx.a` before `librade_vibe.a`, as `vibeserver/CMakeLists.txt`.
+  Only `vrade_*` is global in either archive, so their Opus 1.6.1 DNN code never meets the app's own libopus.a (1.5.2).
+- **SIMD:** build-rade.sh's runtime dispatch. Opus reads `/proc/cpuinfo` on Android (`__linux__`): arm64 NEON → dot
+  product (`asimddp`); armeabi-v7a NEON (presumed — the app's floor) → dot product where a 64-bit core reports it.
+
+### The benchmark sets the default (never hides)
+The phone's server runs the same `vibe_benchmark_more.h`, so its `dec_rade` row now measures (searching AND decoding a
+real over from rade_c's transmitter, now linked). Not GREEN → `ruleFor` puts `{switch:"rade"}` in `decoders.defaultOff`
+→ `ServerModeScreen.tsx applyBench` ticks "FreeDV: RADE V1" (now in BLOCKABLE, under FreeDV) off on a fresh setup, with
+the figure beside it; the owner can tick it back. The block reaches the receiver through `radeBlockedFn` →
+`vsModeBlocked("rade")` (local_sdr_shim.cpp), and hwinfo lists `rade` only where `radeBuilt()`.
+
+### Sizes
+Measured 2026-11-20 on the native build (CMake straight on android/app/src/main/cpp, target vibelocalsdr, -DVIBE_LITE_APP=ON
+to skip React Native; under the build lock). No RADE-off baseline was compiled; the growth is the archives' allocated
+sections (code + weights), which match the linked symbols' sizes (4.37 MB on arm64):
+
+| ABI (API) | librade_vibe.a (receiver) | librade_vibe_tx.a (transmitter) | libvibelocalsdr.so stripped, with RADE |
+|---|---|---|---|
+| arm64-v8a (24) | 3.03 MB | 1.39 MB | 27.65 MB |
+| armeabi-v7a (24, app) | 3.01 MB | 1.37 MB | (not linked separately) |
+| armeabi-v7a (21, Lite) | 3.01 MB | 1.37 MB | 23.60 MB |
+
+So ~4.4 MB uncompressed per ABI (the transmitter is 1.4 MB of it — decision 1 above applies here too). In both .so files:
+`vrade_rx_open`, `vrade_tx_open` (the dec_rade row's transmitter is referenced, so VIBE_HAVE_RADE_TX code compiled),
+`compute_linear_neon` and `compute_linear_dotprod` as LOCAL symbols (the dispatch tiers), and the app's own libopus
+`opus_select_arch` still the only global of that name. Lite's .so imports no `stderr`/`stdout` or complex-maths symbol.
+★ This direct build's .so has 4 KB LOAD alignment — gradle's build sets the 16 KB page flags for our own libraries; a static
+archive adds none of its own (check the APK's `libvibelocalsdr.so` p_align after assembleRelease as usual).
+
+### Unverified (needs a phone)
+- That a RADE receiver opens and decodes on a device (`radeRuns()` → `vrade_rx_open`), and FARGAN's speech.
+- The dec_rade figures on a modern arm64 phone, a 32-bit 1 GB phone and Lite on a Fire 7 (Android 5.1), and that the
+  default comes out OFF where it should.
+- That Opus's `/proc/cpuinfo` read picks the NEON / dot-product path on Android (a log line from `vrade_rx_arch_name()`
+  would show it).
+
