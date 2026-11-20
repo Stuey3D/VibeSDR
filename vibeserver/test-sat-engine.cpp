@@ -277,6 +277,84 @@ static void s8(const std::string& dir) {
     CHECK(!decoderView("lrpt-listener").on, "stopped");
 }
 
+static void s9(const std::string& dir) {
+    std::printf("§9 sats.json (vibesdr.net's mirror): the list, the elements, the credit; the built-in copy matches it\n");
+    const std::string js = readFile(dir + "/sats-2026-11-19.json");
+    std::vector<SatDef> d; std::vector<Elements> el; std::vector<bool> have; SatsMeta meta; std::string err;
+    CHECK(parseSats(js, d, el, have, meta, err), "the mirror's fixture parses (%s)", err.c_str());
+    // ★★ the built-in list (first boot offline) and directory/src/sats-curated.json (what the mirror serves) must agree
+    const auto cur = curatedCatalogue();
+    bool same = d.size() == cur.size();
+    for (size_t i = 0; same && i < d.size(); ++i) {
+        const SatDef &a = d[i], &b = cur[i];
+        same = a.id == b.id && a.name == b.name && a.norad == b.norad && a.group == b.group && a.note == b.note && a.tx.size() == b.tx.size();
+        for (size_t k = 0; same && k < a.tx.size(); ++k) {
+            const Transmitter &x = a.tx[k], &y = b.tx[k];
+            same = x.label == y.label && x.hz == y.hz && x.hiHz == y.hiHz && x.mode == y.mode && x.loop == y.loop && x.consumer == y.consumer
+                && x.baud == y.baud && x.upHz == y.upHz && x.ctcss == y.ctcss && x.note == y.note;
+            if (!same) std::printf("   differs: %s / %s\n", a.id.c_str(), x.label.c_str());
+        }
+        if (!same && i < d.size()) std::printf("   differs at %s\n", a.id.c_str());
+    }
+    CHECK(same, "curatedCatalogue() == directory/src/sats-curated.json (via the mirror) — no drift");
+    CHECK(meta.orbitsCredit.find("CelesTrak") != std::string::npos && meta.txCredit.find("SatNOGS") != std::string::npos
+          && std::fabs(meta.orbitsAt - 1795111200.0) < 1, "the credit and the data's fetch time (%s, %.0f)", meta.orbitsCredit.c_str(), meta.orbitsAt);
+    Engine e;
+    CHECK(e.loadSats(js) == (int)cur.size(), "every bird has elements from sats.json alone");
+    e.setObserver(kSaoLat, kSaoLon);
+    const std::string L = e.listJson(Clock{kIssTca, true}, 24e6, 1766e6);
+    CHECK(L.find("\"source\":{\"orbits\":\"Orbits: CelesTrak (celestrak.org) GP data\"") != std::string::npos
+          && L.find("\"via\":\"vibesdr.net\"") != std::string::npos && L.find("\"fetched\":1795111200") != std::string::npos, "sat_list carries the credit + age (%s)",
+          L.substr(L.find("\"source\""), 200).c_str());
+    Engine b;   // built in, elements from the old per-group path
+    b.loadOmm(readFile(dir + "/celestrak-amateur-2026-11-19.json"));
+    CHECK(b.listJson(Clock{kIssTca, true}, 24e6, 1766e6).find("\"orbits\":\"Orbits: CelesTrak\",\"via\":\"built-in\"") != std::string::npos, "the built-in list still credits CelesTrak");
+    // refusals keep what is there
+    std::string why;
+    CHECK(e.loadSats("<html>no</html>", &why) < 0 && e.elementCount() == (int)cur.size(), "an HTML page refused, data kept (%s)", why.c_str());
+    CHECK(e.loadSats("{\"format\":2,\"satellites\":[]}", &why) < 0 && why.find("format") != std::string::npos, "an unknown format refused");
+    std::string bad = js; bad.replace(bad.find("\"norad\":25544"), 13, "\"norad\":25544.5");
+    CHECK(e.loadSats(bad, &why) < 0, "a fractional catalogue number refused");
+    bad = js; bad.replace(bad.find("\"norad\":25544"), 13, "\"norad\":1234567890");
+    CHECK(e.loadSats(bad, &why) < 0, "a ten-digit catalogue number refused");
+    // a lock survives a reload of the same list (it follows its bird and transmitter)
+    Track t = e.start("k", "o", 437.8e6, "nfm", Clock{kIssTca, true});
+    CHECK(t.state == LockState::Track && t.norad == 25544, "ISS locked");
+    CHECK(e.loadSats(js) >= 0 && e.active("k") && e.tick("k", Clock{kIssTca + 0.04, true}).norad == 25544, "a reload keeps the lock on its bird");
+    // a SatNOGS-marked transmitter reaches the picker
+    std::string st = js; st.replace(st.find("\"label\":\"FM repeater\",\"downlink\":436795000"), 0, "\"status\":\"inactive\",");
+    CHECK(e.loadSats(st) >= 0 && e.listJson(Clock{kIssTca, true}, 24e6, 1766e6).find("\"status\":\"inactive\"") != std::string::npos, "status: inactive shown");
+}
+
+static void s10(const std::string& dir) {
+    std::printf("§10 ★★ six-digit catalogue numbers end to end (TEST-101095 = ERMINAZ-2V's real elements)\n");
+    const std::string js = readFile(dir + "/sats-6digit-2026-11-19.json");
+    Engine& g = engine();
+    for (auto& k : g.keys()) g.stop(k);
+    CHECK(g.loadSats(js) == (int)curatedCatalogue().size() + 1, "parsed: the six-digit bird has elements");
+    g.setObserver(kSaoLat, kSaoLon);
+    double t = 0, el = -90, dz = 0, rz = 0;
+    for (double x = kIssTca; x < kIssTca + 86400 && el < 15; x += 30) { if (dopplerNow(101095, 435.5e6, x, dz, rz, &el)) t = x; }
+    CHECK(el >= 15 && std::fabs(dz) < 12000, "dopplerNow(101095): up over São Paulo within a day (el %.1f, %.0f Hz)", el, dz);
+    Track tr = g.start("six", "six", 435.5e6, "nfm", Clock{t, true}, 101095);
+    CHECK(tr.state == LockState::Track && tr.norad == 101095, "locked by catalogue number 101095 (%s)", tr.why.c_str());
+    tr = g.tick("six", Clock{t + 0.04, true});
+    const std::string m = Engine::trackJsonMsg(tr);
+    CHECK(m.find("\"norad\":101095,") != std::string::npos && m.find("\"id\":\"TEST-101095\"") != std::string::npos, "the {\"type\":\"sat\"} readout (%s)", m.substr(0, 110).c_str());
+    DecoderView v = decoderView("six");
+    CHECK(v.on && v.norad == 101095 && v.satId == "TEST-101095", "decoderView: norad %lld", v.norad);
+    const std::string L = g.listJson(Clock{t, true}, 24e6, 1766e6);
+    CHECK(L.find("\"norad\":101095,") != std::string::npos, "sat_list carries 101095 in full");
+    CHECK(g.trackJson(101095, tr.aos, tr.los) != "[]", "the sky track by 101095");
+    g.stop("six");
+    // a nine-digit number (the OMM field's range) parses and is kept whole
+    std::string big = js; big.replace(big.find("\"norad\":101095"), 14, "\"norad\":123456789");
+    big.replace(big.find("\"NORAD_CAT_ID\":101095"), 21, "\"NORAD_CAT_ID\":123456789");
+    Engine e2;
+    CHECK(e2.loadSats(big) == (int)curatedCatalogue().size() + 1 && e2.listJson(Clock{t, true}, 24e6, 1766e6).find("\"norad\":123456789,") != std::string::npos, "nine digits kept whole");
+    for (auto& k : g.keys()) g.stop(k);
+}
+
 static void refLag(const float* iq, int n, float prev[2], LagSums& acc) {
     float hr = sumOfProducts(iq[0], prev[0], iq[1], prev[1]), hi = diffOfProducts(iq[1], prev[0], iq[0], prev[1]);
     float hp = sumOfProducts(iq[0], iq[0], iq[1], iq[1]), h4 = squared(hp);
@@ -322,7 +400,7 @@ int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
     if (readFile(dir + "/celestrak-amateur-2026-11-19.json").empty()) { std::printf("data missing\n"); return 3; }
-    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir);
+    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

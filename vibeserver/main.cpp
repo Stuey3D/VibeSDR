@@ -91,6 +91,7 @@
 #include "vibe_benchmark_adsb.h"  // ★ …and its ADS-B rows (CPU only — the radio is not touched)
 #include "eibi.h"
 #include "satcat.h"
+#include "vibe_sat_engine.h"   // ★ parseSats: the dry parse a download must pass
 #include "adsb_data_curl.h"   // V12 ADS-B aircraft data: curl transport + the updater
 #include "solar.h"
 #include "geoip.h"
@@ -2843,6 +2844,9 @@ int main(int argc, char** argv) {
             // ★ The JSON ends "}\n", so j.back() was never '}' and dirStatus NEVER reached the setup page
             //   (found 2026-09-28). Splice before the LAST brace, wherever the trailing whitespace is.
             if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, ",\"dirStatus\":" + vibedir::statusJson());
+            // ★★ V12 the satellite data's state for the owner (satcat.cpp): where from, when checked, and in words what
+            //    went wrong and when VibeServer asks again
+            if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, ",\"satStatus\":" + vssat::statusJson());
             /* ★★ V12 THE GALLERY'S DISK — the setup page shows the space LEFT beside the size the owner sets (Stuart:
              *  "showing the REMAINING disk/SD space beside it"), and what the gallery holds now. */
             {
@@ -3974,26 +3978,37 @@ int main(int argc, char** argv) {
         }).detach();
     }
 
-    // ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md §6): CelesTrak GP orbits for the curated birds. The cache is
-    //    the MACHINE's (every radio process shares it and its one attempt marker — satcat.cpp has CelesTrak's rules), is
-    //    published at once (yesterday's orbits are good for days), and refreshed by age, detached: a hung download costs
-    //    orbits, never a receiver.
+    // ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md §6): sats.json from vibesdr.net's mirror — the list, the
+    //    element sets and the credit. ★★★ This server NEVER asks CelesTrak (satcat.cpp has the rules: the mirror is the
+    //    one CelesTrak client). The copy is the MACHINE's (every radio process shares it, its state and its lock), is
+    //    published at once whatever its age, and synced daily, detached: a hung download costs orbits, never a receiver.
     vssat::setDir(vsDataDir());
-    vssat::setPublisher([](const std::string& group, const std::string& json) { LocalSdrShim::satLoadOmm(group, json); });
+    vssat::setPublisher([](const std::string& json) { LocalSdrShim::satLoadSats(json); });
+    vssat::setLegacyPublisher([](const std::string& group, const std::string& json) { LocalSdrShim::satLoadOmm(group, json); });
+    vssat::setValidator([](const std::string& body, std::string& err) {
+        std::vector<vibe::sat::SatDef> d; std::vector<vibe::sat::Elements> e; std::vector<bool> h; vibe::sat::SatsMeta m;
+        return vibe::sat::parseSats(body, d, e, h, m, err);
+    });
     {
         const int g = vssat::loadFromCache();
-        if (g > 0) std::printf("VibeServer: satellite orbits — %d group(s) from the cache\n", g);
+        if (g > 0) std::printf("VibeServer: satellite data — from the machine's copy\n");
+        LocalSdrShim::setSatSupplyNote(vssat::listenerNote());
         std::thread([] {
             // ★ a few minutes' jitter first, so a fleet restarted together (an apt upgrade) does not ask together
             std::this_thread::sleep_for(std::chrono::seconds(30 + (std::random_device{}() % 300)));
+            std::string lastLogged;
             for (;;) {
-                if (vssat::needsRefresh()) {
+                vssat::reloadIfChanged();   // ★ another radio process on this machine fetched it
+                // ★★ ONLY WHEN USED: no radio here reaches a listed downlink = nothing is asked at all
+                if (LocalSdrShim::satWanted() && vssat::needsRefresh()) {
                     std::string e;
-                    const int n = vssat::refresh(e);
-                    if (n > 0) std::printf("VibeServer: satellite orbits refreshed — %d group(s)\n", n);
-                    if (!e.empty()) std::fprintf(stderr, "VibeServer: satellite orbits not refreshed — %s\n", e.c_str());
+                    if (vssat::refresh(e) > 0) std::printf("VibeServer: satellite data refreshed from vibesdr.net\n");
+                    // ★ the owner's words, in the log ONCE per new failure (the setup page shows them too)
+                    if (!e.empty() && e != lastLogged) std::fprintf(stderr, "VibeServer: satellite data not refreshed — %s\n", e.c_str());
+                    lastLogged = e;
                 }
-                std::this_thread::sleep_for(std::chrono::minutes(30));
+                LocalSdrShim::setSatSupplyNote(vssat::listenerNote());
+                std::this_thread::sleep_for(std::chrono::minutes(10));
             }
         }).detach();
     }

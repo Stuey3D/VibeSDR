@@ -32,13 +32,16 @@ function locator(lat, lon) {
   return `${a}${b}${c}${d}${L[Math.floor(x * 12)].toLowerCase()}${L[Math.floor(y * 24)].toLowerCase()}`;
 }
 function seedOrbits(dataDir) {
+  // ★ vibesdr.net's sats.json fixture (the mirror's own output from CelesTrak's 2026-11-19 data) with the epochs an hour
+  //   ago, and the sync's state "just checked" so the server asks vibesdr.net nothing (no network in tests)
   fs.mkdirSync(path.join(dataDir, 'sat'), { recursive: true });
   const iso = new Date(Date.now() - 3600e3).toISOString().replace('Z', '');
-  for (const g of ['amateur', 'weather']) {
-    const a = JSON.parse(fs.readFileSync(path.join(root, `vibeserver/testdata-sat/celestrak-${g}-2026-11-19.json`), 'utf8'));
-    for (const o of a) o.EPOCH = iso;
-    fs.writeFileSync(path.join(dataDir, 'sat', `gp-${g}.json`), JSON.stringify(a));
-  }
+  const d = JSON.parse(fs.readFileSync(path.join(root, 'vibeserver/testdata-sat/sats-2026-11-19.json'), 'utf8'));
+  for (const s of d.satellites) if (s.omm) s.omm.EPOCH = iso;
+  for (const g of Object.keys(d.orbits)) d.orbits[g].fetched = new Date(Date.now() - 5 * 3600e3).toISOString();
+  fs.writeFileSync(path.join(dataDir, 'sat', 'sats.json'), JSON.stringify(d));
+  const t = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(path.join(dataDir, 'sat', 'sync-state'), `checked ${t}\nattempt ${t}\nseed 0\n`);
 }
 async function startServer(dir, loc) {
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d), { recursive: true });
@@ -126,6 +129,8 @@ try {
   const firstRow = await ev(`document.querySelector('#satPanel .sat-row')?.textContent || ''`);
   ok(/UP · EL \d+°/.test(firstRow) && /437\.800 MHz FM/.test(firstRow), 'up, with its downlinks in words');
   ok(/AOS \d\d:\d\d \(in /.test(await ev(`document.getElementById('satPanel').textContent`) || ''), 'the others with their next AOS');
+  const credit = await ev(`document.querySelector('#satPanel .sat-credit')?.textContent || ''`);
+  ok(/^Orbits: CelesTrak · 5 h old · Transmitters: SatNOGS DB \(CC BY-SA 4\.0\)$/.test(credit), `the credit with the data's age: "${credit}"`);
   await shot('picker');
   await ev(`(() => { const b = [...document.querySelectorAll('#satPanel button[data-act="track"]')].find(x => /FM repeater · 437\\.800/.test(x.textContent)); b && b.click(); return !!b; })()`);
   ok(await until(`/ISS · [▲▼] \\d+\\.\\d\\d kHz/.test(document.getElementById('mFreq')?.parentElement?.textContent || document.body.textContent)`, 6000),

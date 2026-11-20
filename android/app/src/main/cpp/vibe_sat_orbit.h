@@ -287,13 +287,128 @@ inline bool parseArray(const std::string& s, std::vector<Object>& out, size_t ma
         return false;
     }
 }
+
+/** ★ A small bounded JSON tree — for sats.json (vibesdr.net's mirror: nested objects and arrays). Depth ≤ 24, at most
+ *  `maxNodes` values, strings capped at `maxStr` bytes; \uXXXX (and surrogate pairs) decoded to UTF-8. */
+struct Value {
+    enum Type { Null, Bool, Num, Str, Arr, Obj } t = Null;
+    double n = 0; bool b = false; std::string s;
+    std::vector<Value> a;
+    std::vector<std::pair<std::string, Value>> o;
+    const Value* get(const char* k) const {
+        if (t != Obj) return nullptr;
+        for (auto& kv : o) if (kv.first == k) return &kv.second;
+        return nullptr;
+    }
+    double num(const char* k, double d = 0) const { const Value* v = get(k); return v && v->t == Num ? v->n : d; }
+    std::string str(const char* k) const { const Value* v = get(k); return v && v->t == Str ? v->s : std::string(); }
+    /** An object's number and string members as a flat Object (what fromOmm reads). */
+    Object flat() const {
+        Object out;
+        for (auto& kv : o) {
+            Field f; f.key = kv.first;
+            if (kv.second.t == Num) { f.num = kv.second.n; f.isNum = true; out.push_back(std::move(f)); }
+            else if (kv.second.t == Str) { f.str = kv.second.s; out.push_back(std::move(f)); }
+        }
+        return out;
+    }
+};
+inline bool parseValue(const std::string& s, Value& out, size_t maxNodes = 200000, size_t maxStr = 4096) {
+    size_t i = 0, nodes = 0; const size_t n = s.size();
+    auto ws = [&] { while (i < n && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) ++i; };
+    auto put = [](std::string& v, unsigned cp) {
+        if (cp < 0x80) v += (char)cp;
+        else if (cp < 0x800) { v += (char)(0xC0 | (cp >> 6)); v += (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { v += (char)(0xE0 | (cp >> 12)); v += (char)(0x80 | ((cp >> 6) & 0x3F)); v += (char)(0x80 | (cp & 0x3F)); }
+        else { v += (char)(0xF0 | (cp >> 18)); v += (char)(0x80 | ((cp >> 12) & 0x3F)); v += (char)(0x80 | ((cp >> 6) & 0x3F)); v += (char)(0x80 | (cp & 0x3F)); }
+    };
+    auto hex4 = [&](unsigned& cp) -> bool {
+        if (i + 4 > n) return false;
+        cp = 0;
+        for (int k = 0; k < 4; ++k) {
+            const char c = s[i++]; cp <<= 4;
+            if (c >= '0' && c <= '9') cp |= (unsigned)(c - '0');
+            else if (c >= 'a' && c <= 'f') cp |= (unsigned)(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') cp |= (unsigned)(c - 'A' + 10);
+            else return false;
+        }
+        return true;
+    };
+    auto readStr = [&](std::string& v) -> bool {
+        if (i >= n || s[i] != '"') return false;
+        ++i; v.clear();
+        while (i < n && s[i] != '"') {
+            char c = s[i++];
+            if (c == '\\') {
+                if (i >= n) return false;
+                const char x = s[i++];
+                if (x == 'u') {
+                    unsigned cp = 0; if (!hex4(cp)) return false;
+                    if (cp >= 0xD800 && cp < 0xDC00 && i + 6 <= n && s[i] == '\\' && s[i + 1] == 'u') {
+                        i += 2; unsigned lo = 0; if (!hex4(lo)) return false;
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    }
+                    if (v.size() < maxStr) put(v, cp);
+                    continue;
+                }
+                c = x == 'n' ? '\n' : x == 't' ? '\t' : x == 'r' ? '\r' : x == 'b' ? '\b' : x == 'f' ? '\f' : x;
+            }
+            if (v.size() < maxStr) v += c;
+        }
+        if (i >= n) return false;
+        ++i; return true;
+    };
+    std::function<bool(Value&, int)> val;
+    val = [&](Value& v, int depth) -> bool {
+        if (depth > 24 || ++nodes > maxNodes) return false;
+        ws();
+        if (i >= n) return false;
+        const char c = s[i];
+        if (c == '"') { v.t = Value::Str; return readStr(v.s); }
+        if (c == '{' || c == '[') {
+            const bool obj = c == '{';
+            v.t = obj ? Value::Obj : Value::Arr;
+            ++i; ws();
+            if (i < n && s[i] == (obj ? '}' : ']')) { ++i; return true; }
+            for (;;) {
+                if (obj) {
+                    ws(); std::string k; if (!readStr(k)) return false;
+                    ws(); if (i >= n || s[i] != ':') return false;
+                    ++i;
+                    v.o.emplace_back(std::move(k), Value{});
+                    if (!val(v.o.back().second, depth + 1)) return false;
+                } else {
+                    v.a.emplace_back();
+                    if (!val(v.a.back(), depth + 1)) return false;
+                }
+                ws();
+                if (i < n && s[i] == ',') { ++i; continue; }
+                if (i < n && s[i] == (obj ? '}' : ']')) { ++i; return true; }
+                return false;
+            }
+        }
+        const size_t a = i;
+        while (i < n && s[i] != ',' && s[i] != '}' && s[i] != ']' && s[i] != ' ' && s[i] != '\n' && s[i] != '\r' && s[i] != '\t') ++i;
+        const std::string lit = s.substr(a, i - a);
+        if (lit == "null") { v.t = Value::Null; return true; }
+        if (lit == "true" || lit == "false") { v.t = Value::Bool; v.b = lit == "true"; return true; }
+        char* end = nullptr; v.n = std::strtod(lit.c_str(), &end);
+        if (lit.empty() || !end || *end || !std::isfinite(v.n)) return false;
+        v.t = Value::Num; return true;
+    };
+    out = Value{};
+    if (!val(out, 0)) return false;
+    ws();
+    return i == n;
+}
 }  // namespace json
 
 /** One CelesTrak OMM object (FORMAT=json) → Elements. Units as CCSDS OMM / TLE-derived: MEAN_MOTION rev/day,
  *  MEAN_MOTION_DOT rev/day² (the TLE's ṅ/2), MEAN_MOTION_DDOT rev/day³ (n̈/6), angles in degrees. */
 inline bool fromOmm(const json::Object& o, Elements& e, std::string& err) {
     double norad = 0, n = 0, ecc = 0, incl = 0, raan = 0, argp = 0, ma = 0, bstar = 0, ndot = 0, nddot = 0, jd = 0;
-    if (!json::num(o, "NORAD_CAT_ID", norad) || norad <= 0) { err = "no NORAD_CAT_ID"; return false; }
+    // ★★ six digits and more are normal now (101095 ERMINAZ-2V): an integer 1 … 999 999 999, the OMM field's range
+    if (!json::num(o, "NORAD_CAT_ID", norad) || norad <= 0 || norad > 999999999.0 || norad != std::floor(norad)) { err = "no NORAD_CAT_ID"; return false; }
     if (!json::num(o, "MEAN_MOTION", n) || !json::num(o, "ECCENTRICITY", ecc) || !json::num(o, "INCLINATION", incl)
         || !json::num(o, "RA_OF_ASC_NODE", raan) || !json::num(o, "ARG_OF_PERICENTER", argp) || !json::num(o, "MEAN_ANOMALY", ma)) {
         err = "an orbital element is missing"; return false;

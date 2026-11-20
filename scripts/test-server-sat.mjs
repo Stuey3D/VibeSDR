@@ -76,22 +76,33 @@ function locator(lat, lon) {
   return `${a}${b}${c}${d}${L[Math.floor(x * 12)].toLowerCase()}${L[Math.floor(y * 24)].toLowerCase()}`;
 }
 
-/** The fixture groups with every EPOCH moved to an hour ago. */
-function freshGroups() {
+/** vibesdr.net's sats.json fixture (built by the mirror's own code from CelesTrak's 2026-11-19 data, plus TEST-101095:
+ *  ERMINAZ-2V's real elements under a test-only downlink) with every EPOCH moved to an hour ago. */
+function freshSats() {
   const iso = new Date(Date.now() - 3600e3).toISOString().replace('Z', '');
-  const out = {};
-  for (const g of ['amateur', 'weather']) {
-    const a = JSON.parse(fs.readFileSync(path.join(root, `vibeserver/testdata-sat/celestrak-${g}-2026-11-19.json`), 'utf8'));
-    for (const o of a) o.EPOCH = iso;
-    out[g] = JSON.stringify(a);
-  }
-  return out;
+  const d = JSON.parse(fs.readFileSync(path.join(root, 'vibeserver/testdata-sat/sats-6digit-2026-11-19.json'), 'utf8'));
+  for (const s of d.satellites) if (s.omm) s.omm.EPOCH = iso;
+  for (const g of Object.keys(d.orbits)) d.orbits[g].fetched = new Date(Date.now() - 2 * 3600e3).toISOString();
+  return JSON.stringify(d);
+}
+async function adminGet(port, p) {
+  try {
+    const nonce = (await fetch(`http://127.0.0.1:${port}/vibeserver/auth`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json())).nonce;
+    const q = `vs_admin_nonce=${nonce}&vs_admin_auth=${crypto.createHmac('sha256', PASS).update(nonce).digest('hex')}`;
+    return await fetch(`http://127.0.0.1:${port}${p}?${q}`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json());
+  } catch { return null; }
+}
+/** ★ The sync's shared state: just checked — so the server under test asks vibesdr.net NOTHING (no network in tests). */
+function syncState(extra = '') {
+  const t = Math.floor(Date.now() / 1000);
+  return `checked ${t}\nattempt ${t}\nseed 0\n${extra}`;
 }
 
-async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 437800000, mode = 'nfm' } = {}) {
+async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 437800000, mode = 'nfm', state = '' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-${tag}-`));
   for (const d of ['data', 'run', 'data/sat']) fs.mkdirSync(path.join(dir, d), { recursive: true });
-  if (orbits) for (const [g, j] of Object.entries(freshGroups())) fs.writeFileSync(path.join(dir, 'data/sat', `gp-${g}.json`), j);
+  if (orbits) fs.writeFileSync(path.join(dir, 'data/sat', 'sats.json'), freshSats());
+  fs.writeFileSync(path.join(dir, 'data/sat', 'sync-state'), state || syncState());
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'Satellite test', locator: loc, adminPass: PASS,
     radios: [{ serial: `${tag}-test`, label: 'Test radio', enabled: true, configured: true, users: 4, ...radio }],
@@ -142,7 +153,11 @@ try {
       sp.send({ type: 'sat_list' });
       await until(() => !!lastOf(sp, 'sat_list'), 4000);
       const l = lastOf(sp, 'sat_list');
-      ok(l && l.sats.length === 13 && l.located === true && l.time !== 'none', `the list: ${l?.sats?.length} birds, located ${l?.located}, time ${l?.time}`);
+      ok(l && l.sats.length === 14 && l.located === true && l.time !== 'none', `the list: ${l?.sats?.length} birds (13 + the six-digit test bird), located ${l?.located}, time ${l?.time}`);
+      ok(l?.source && /CelesTrak/.test(l.source.orbits) && l.source.via === 'vibesdr.net' && Math.abs(Date.now() / 1000 - 2 * 3600 - l.source.fetched) < 120
+         && /SatNOGS/.test(l.source.transmitters || ''), `the credit + the data's age: ${JSON.stringify(l?.source)}`);
+      const six = l?.sats?.find((s) => s.norad === 101095);
+      ok(six && six.id === 'TEST-101095' && six.ageState === 'fresh' && Array.isArray(six.passes), `★ six digits in sat_list: ${six?.norad} ${six?.ageState}`);
       const iss = l?.sats?.find((s) => s.id === 'ISS');
       ok(iss && iss.el > 45, `ISS overhead (el ${iss?.el})`);
       ok(l?.sats?.every((s) => s.tx.every((t) => t.reach === true)), 'an RTL reaches every listed downlink');
@@ -184,6 +199,16 @@ try {
         sp.send({ type: 'sat_list', op: 'track', norad: 25544, aos: p.aos, los: p.los });
         ok(await until(() => !!lastOf(sp, 'sat_track'), 3000) && lastOf(sp, 'sat_track').pts.length > 5, `the sky track for a pass: ${lastOf(sp, 'sat_track')?.pts?.length} points`);
       }
+      // ★★ six digits end to end: the lock by catalogue number 101095 (ARMED for its next pass, or TRACK if it is up)
+      sp.send({ type: 'tune', frequency: 435500000, mode: 'nfm' });
+      await sleep(600);
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'lock', norad: 101095 });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.norad === 101095 && ['ARMED', 'TRACK', 'COAST'].includes(m.state)), 3000),
+         `★ locked by 101095: ${JSON.stringify(lastOf(sp, 'sat'))?.slice(0, 140)}`);
+      ok(/"norad":101095[,}]/.test(sp.txt.find((t) => t.includes('"type":"sat"')) || ''), 'the readout carries 101095 in full');
+      sp.send({ type: 'sat', op: 'unlock' });
+      await until(() => lastOf(sp, 'sat')?.state === 'OFF', 2000);
       sp.send({ type: 'tune', frequency: 100000000, mode: 'wfm' });
       await sleep(500);
       sp.txt.length = 0;
@@ -229,10 +254,16 @@ try {
   // ── 4. no orbit data ──
   {
     console.log('── no orbit data yet ──');
-    const S = await server('satnodata', { orbits: false });
+    const until0 = Math.floor(Date.now() / 1000) + 5400;
+    const S = await server('satnodata', { orbits: false, state: syncState(`until ${until0}\nfails 1\ncode 0\nmsg vibesdr.net could not be reached for the satellite data (curl: (6) Could not resolve host) \u2014 VibeServer has stopped asking and will try again after 2026-11-20 03:00 UTC\n`) });
     try {
       const st = await S.status();
-      ok(st && st.doppler === 1 && /NO SAT DATA/.test(st.dopplerWhy || ''), `advertised greyed: ${st && st.dopplerWhy}`);
+      ok(st && st.doppler === 1 && /NO SAT DATA — this server could not reach vibesdr\.net/.test(st.dopplerWhy || ''), `advertised greyed with the reason: ${st && st.dopplerWhy}`);
+      // ★ the owner's words on the setup page (GET /vibeserver/config's satStatus)
+      const cfgr = await adminGet(S.port, '/vibeserver/config');
+      ok(cfgr && cfgr.satStatus && /could not be reached .* will try again after/.test(cfgr.satStatus.message) && cfgr.satStatus.code === 0
+         && cfgr.satStatus.nextTry === until0 && cfgr.satStatus.have === false, `setup page: ${JSON.stringify(cfgr && cfgr.satStatus)}`);
+      ok(!/vibesdr\.net\/api\/sats|satellite data refreshed/.test(S.L()), 'inside the hold: nothing asked');
       const sp = await sock(S, 'satnd0001');
       sp.send({ type: 'sat', op: 'lock' });
       ok(await until(() => { const m = lastOf(sp, 'sat'); return m && m.state === 'OFF' && /NO SAT DATA/.test(m.why || ''); }, 3000), `refused: ${lastOf(sp, 'sat')?.why}`);

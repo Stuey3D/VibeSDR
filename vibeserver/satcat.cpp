@@ -1,72 +1,114 @@
-// V12 SATELLITE ENGINE — CelesTrak GP data for a headless VibeServer (docs/v12/SATELLITE-ENGINE.md §6).
+// V12 SATELLITE ENGINE — sats.json from vibesdr.net, synced like the EiBi schedule (docs/v12/SATELLITE-ENGINE.md §6).
 //
-// ★★★ CELESTRAK'S ETIQUETTE IS THE DESIGN (brief §6.1 TRAP). They ask for no more than one download of the same data
-//     every couple of hours, an immediate stop on any non-200 answer, and they firewall repeat offenders by IP — and
-//     Brazilian hosts on mobile data share carrier CGNAT addresses, so one badly behaved server could get a whole
-//     carrier blocked. So:
-//       · the cache's AGE decides (12 h), never uptime — a restart does not fetch;
-//       · ONE attempt marker per MACHINE, in the shared data dir: every radio process on the box sees the others' tries,
-//         and none fetches within 2 h of any attempt, good or bad;
-//       · a non-200 stops the round at once (the other groups are not tried) and backs off 6 h, doubling to a day;
-//       · a few minutes' random jitter before the first fetch after start-up, so a fleet restarted together (an apt
-//         upgrade) does not arrive together.
-// ★★ OFFLINE-SAFE: a failed, refused, truncated or non-JSON download never touches the cache; the cache is published at
-//    start-up whatever its age (the engine shows STALE / the age, and refuses past 14 days).
-// ★ OMM JSON, not TLE: six-digit catalogue numbers (brief §6.1 TRAP).
-// ★ Phase 2 (brief §6.2): a vibesdr.net mirror joining SatNOGS transmitters into sats.json, synced like EiBi. Until it
-//   exists the server asks CelesTrak itself with the rules above — an open decision for Stuart (SATELLITE-ENGINE.md).
+// ★★★ A VibeServer NEVER ASKS CELESTRAK. CelesTrak's usage policy (https://celestrak.org/usage-policy.php) asks for one
+//     download per update, an immediate stop on any non-200, and firewalls offenders by IP — and Brazilian hosts on
+//     mobile data share carrier CGNAT addresses, so many servers asking directly could get a whole carrier blocked. The
+//     ONE client is vibesdr.net's mirror (directory/src/sats.js), which follows every point of the policy; servers sync
+//     its sats.json. There is no fallback to CelesTrak: a server that cannot reach vibesdr.net keeps its last good copy
+//     (the engine shows the age, STALE / ELEMENTS n d, and refuses past 14 days), then shows NO SAT DATA with the reason.
+// ★★★ HARD RULE, kept here although the mirror is the one that meets CelesTrak: NO RETRY LOOPS, EVER. One request per
+//     round; any answer other than 200 / 304 (and a network failure, a timeout, a reset — the far end may be overloaded)
+//     ENDS the round and starts a hold of at least kHoldFloorSec (15 min — no configuration can lower it; ours is 1 h
+//     doubling to a day) PLUS a random 0–60 min, so a fleet that lost the mirror together does not come back together.
+//     The hold is written to the shared state BEFORE anything else happens, and a provisional hold is written BEFORE
+//     the request, so a crash or restart mid-fetch still honours it. Nothing a listener does triggers a fetch.
+// ★★ ONE FETCH PER MACHINE: the state file and a flock() are in the machine's data dir — every radio process sees the
+//    others' attempts and holds, and a second process finds the lock held and asks nothing. The one that fetched
+//    publishes; the others pick the new copy up by its mtime (reloadIfChanged).
+// ★★ ONLY WHEN USED: main.cpp asks only while a radio in the process reaches a listed downlink (LocalSdrShim::satWanted).
+// ★ Daily, a conditional GET (If-None-Match / If-Modified-Since — the mirror answers 304), --compressed, a plain
+//   User-Agent naming VibeServer and its version (no owner details — the privacy rule). The copy's last check decides,
+//   never uptime: a restart does not fetch. A start-up delay of 30–330 s (main.cpp) staggers a fleet restarted together.
+// ★ OFFLINE-SAFE: a failed, refused, truncated or invalid download never touches the copy.
 #include "satcat.h"
 #include "proc.h"
 
+#include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <mutex>
-#include <algorithm>
+#include <random>
 #include <string>
-#include <vector>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 namespace vssat {
 namespace {
 
 std::string g_dir = "/var/lib/vibeserver";
-std::function<void(const std::string&, const std::string&)> g_publish;
-std::vector<std::string> g_groups = {"amateur", "weather"};
+std::function<void(const std::string&)> g_publish;
+std::function<void(const std::string&, const std::string&)> g_legacy;
+std::function<bool(const std::string&, std::string&)> g_validate;
 Fetcher g_fetcher;
 std::function<std::time_t()> g_clock;
+std::function<uint32_t()> g_random;
 std::mutex g_mtx;
-std::string g_lastError;
+long long g_loadedMtime = 0;
 
 std::time_t nowT() { return g_clock ? g_clock() : std::time(nullptr); }
+uint32_t rnd() { if (g_random) return g_random(); std::random_device rd; return rd(); }
 std::string satDir() { return g_dir + "/sat"; }
-std::string cachePath(const std::string& g) { return satDir() + "/gp-" + g + ".json"; }
-std::string markerPath() { return satDir() + "/last-attempt"; }
+std::string copyPath() { return satDir() + "/sats.json"; }
+std::string statePath() { return satDir() + "/sync-state"; }
+std::string lockPath() { return satDir() + "/sync.lock"; }
+void ensureDir() { ::mkdir(g_dir.c_str(), 0755); ::mkdir(satDir().c_str(), 0755); }
 
-void ensureDir() {
-    ::mkdir(g_dir.c_str(), 0755);
-    ::mkdir(satDir().c_str(), 0755);
-}
-
-/** "<unix> <backoffSec> <failures>" */
-void readMarker(std::time_t& at, long& backoff, int& fails) {
-    at = 0; backoff = kMinAttemptSec; fails = 0;
-    FILE* f = std::fopen(markerPath().c_str(), "rb");
-    if (!f) return;
-    long long a = 0; long b = 0; int c = 0;
-    if (std::fscanf(f, "%lld %ld %d", &a, &b, &c) >= 1) { at = (std::time_t)a; if (b > 0) backoff = b; fails = c; }
+/** The shared state: one "key value" a line. */
+struct State {
+    long long checked = 0, attempt = 0, until = 0; int fails = 0, code = 0; long seed = -1;
+    std::string etag, lastmod, msg;
+};
+State readState() {
+    State s;
+    FILE* f = std::fopen(statePath().c_str(), "rb");
+    if (!f) return s;
+    char line[1024];
+    while (std::fgets(line, sizeof line, f)) {
+        std::string l(line);
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+        const size_t sp = l.find(' ');
+        const std::string k = l.substr(0, sp), v = sp == std::string::npos ? "" : l.substr(sp + 1);
+        if (k == "checked") s.checked = std::atoll(v.c_str());
+        else if (k == "attempt") s.attempt = std::atoll(v.c_str());
+        else if (k == "until") s.until = std::atoll(v.c_str());
+        else if (k == "fails") s.fails = std::atoi(v.c_str());
+        else if (k == "code") s.code = std::atoi(v.c_str());
+        else if (k == "seed") s.seed = std::atol(v.c_str());
+        else if (k == "etag") s.etag = v;
+        else if (k == "lastmod") s.lastmod = v;
+        else if (k == "msg") s.msg = v;
+    }
     std::fclose(f);
+    return s;
 }
-void writeMarker(std::time_t at, long backoff, int fails) {
+std::string oneLine(const std::string& v) {
+    std::string o;
+    for (char c : v) if ((unsigned char)c >= 0x20 || (unsigned char)c >= 0x80) o += c;
+    return o.substr(0, 400);
+}
+void writeState(const State& s) {
     ensureDir();
-    const std::string tmp = markerPath() + ".tmp";
+    const std::string tmp = statePath() + ".tmp." + std::to_string((long)::getpid());
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return;
-    std::fprintf(f, "%lld %ld %d\n", (long long)at, backoff, fails);
+    std::fprintf(f, "checked %lld\nattempt %lld\nuntil %lld\nfails %d\ncode %d\nseed %ld\netag %s\nlastmod %s\nmsg %s\n",
+                 s.checked, s.attempt, s.until, s.fails, s.code, s.seed, oneLine(s.etag).c_str(), oneLine(s.lastmod).c_str(),
+                 oneLine(s.msg).c_str());
+    std::fflush(f);
+    ::fsync(fileno(f));
     std::fclose(f);
-    std::rename(tmp.c_str(), markerPath().c_str());
+    std::rename(tmp.c_str(), statePath().c_str());
+}
+/** ★ This machine's own offset into the day, chosen once and kept: the fleet's daily checks spread over 4 hours. */
+long seedOf(State& s) {
+    if (s.seed < 0 || s.seed > kCheckJitterSec) { s.seed = (long)(rnd() % (uint32_t)kCheckJitterSec); writeState(s); }
+    return s.seed;
 }
 
 bool readCapped(const std::string& path, std::string& out) {
@@ -76,135 +118,241 @@ bool readCapped(const std::string& path, std::string& out) {
     char buf[16384]; size_t n;
     while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) {
         out.append(buf, n);
-        if (out.size() > kMaxGroupBytes) { std::fclose(f); out.clear(); return false; }
+        if (out.size() > kMaxBytes) { std::fclose(f); out.clear(); return false; }
     }
     std::fclose(f);
     return true;
 }
+long long mtimeOf(const std::string& p) { struct stat st{}; return ::stat(p.c_str(), &st) == 0 ? (long long)st.st_mtime : 0; }
 
-/** A CelesTrak GP JSON answer looks like `[{"OBJECT_NAME":…,"NORAD_CAT_ID":…}, …]` — and an error is plain text ("No
- *  GP data found") or an HTML page. Cheap structural check; the engine's parser does the real work. */
-bool looksLikeGp(const std::string& s) {
+bool structural(const std::string& s, std::string& err) {
     size_t i = 0;
     while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) ++i;
-    if (i >= s.size() || s[i] != '[') return false;
-    return s.find("\"NORAD_CAT_ID\"") != std::string::npos && s.find("\"MEAN_MOTION\"") != std::string::npos;
+    if (i >= s.size() || s[i] != '{' || s.find("\"satellites\"") == std::string::npos) { err = "not sats.json"; return false; }
+    return true;
+}
+bool valid(const std::string& s, std::string& err) { return g_validate ? g_validate(s, err) : structural(s, err); }
+
+std::string hhmm(long long t) {
+    std::time_t tt = (std::time_t)t; std::tm g{}; gmtime_r(&tt, &g);
+    char b[40]; std::strftime(b, sizeof b, "%Y-%m-%d %H:%M UTC", &g); return b;
 }
 
-Fetch curlFetch(const std::string& url, const std::string& dest, std::string& msg) {
+std::string headerValue(const std::string& hdrs, const char* name) {
+    // the LAST response's headers (no redirects are followed, but be safe), case-insensitive
+    std::string out; size_t pos = 0; const size_t nl = std::strlen(name);
+    while (pos < hdrs.size()) {
+        size_t e = hdrs.find('\n', pos); if (e == std::string::npos) e = hdrs.size();
+        std::string l = hdrs.substr(pos, e - pos);
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        if (l.size() > nl && strncasecmp(l.c_str(), name, nl) == 0 && l[nl] == ':') {
+            out = l.substr(nl + 1); while (!out.empty() && out.front() == ' ') out.erase(0, 1);
+        }
+        pos = e + 1;
+    }
+    return out;
+}
+
+void curlFetch(const Request& rq, Response& rs) {
+    const std::string hdr = rq.dest + ".hdr";
+    std::remove(hdr.c_str());
+    // ★ no -f (we want the code), no -L (an address that moves is a fault to report, not to follow), no --retry
+    std::vector<std::string> a = {"curl", "-sS", "--compressed", "--max-time", "45", "--connect-timeout", "15",
+                                  "-A", userAgent(), "-D", hdr, "-o", rq.dest, "-w", "\n%{http_code}"};
+    if (!rq.ifNoneMatch.empty()) { a.push_back("-H"); a.push_back("If-None-Match: " + rq.ifNoneMatch); }
+    if (!rq.ifModifiedSince.empty()) { a.push_back("-H"); a.push_back("If-Modified-Since: " + rq.ifModifiedSince); }
+    a.push_back(rq.url);
     std::string out;
-    // ★ -f: an HTTP error is exit 22, never a saved error page. A plain product name as the agent (no address, no
-    //   owner details — the privacy rule).
-    vibeproc::Child c = vibeproc::spawn({"curl", "-fsSL", "--max-time", "45", "-A", "VibeServer", "-o", dest, url}, true);
-    if (c.ok()) { char buf[4096]; size_t n; while ((n = std::fread(buf, 1, sizeof buf, c.out)) > 0) out.append(buf, n); }
+    vibeproc::Child c = vibeproc::spawn(a, true);
+    if (c.ok()) { char buf[4096]; size_t n; while ((n = std::fread(buf, 1, sizeof buf, c.out)) > 0 && out.size() < 65536) out.append(buf, n); }
     const int rc = vibeproc::reap(c);
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
-    if (rc == 0) return Fetch::Ok;
-    msg = out.empty() ? (rc < 0 ? "curl could not be run" : "curl exited " + std::to_string(rc)) : out;
-    return rc == 22 ? Fetch::Refused : Fetch::Failed;
+    const size_t nl = out.rfind('\n');
+    const std::string codeS = nl == std::string::npos ? out : out.substr(nl + 1);
+    std::string msg = nl == std::string::npos ? "" : out.substr(0, nl);
+    while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) msg.pop_back();
+    rs.code = std::atoi(codeS.c_str());
+    if (rc != 0) { rs.code = 0; rs.msg = !msg.empty() ? msg : rc < 0 ? "curl could not be run" : "curl exited " + std::to_string(rc); }
+    std::string h;
+    if (readCapped(hdr, h)) { rs.etag = headerValue(h, "ETag"); rs.lastModified = headerValue(h, "Last-Modified"); }
+    std::remove(hdr.c_str());
 }
 
-long ageOf(const std::string& path) {
-    struct stat st{};
-    if (::stat(path.c_str(), &st) != 0) return -1;
-    return (long)std::difftime(nowT(), st.st_mtime);
+bool eligible(State& s, std::time_t now, bool haveCopy) {
+    // ★ a time in the FUTURE beyond any hold we write = a clock that jumped back (an RTC-less Pi): not honoured
+    const long long maxAhead = 86400 + kResumeJitterSec + 60;
+    if (s.until > now && s.until - now <= maxAhead) return false;
+    if (s.attempt > 0 && s.attempt <= now && now - s.attempt < kMinAttemptSec) return false;
+    if (s.attempt > now && s.attempt - now < 86400) return false;
+    if (!haveCopy) return true;
+    const long due = kCheckSec - seedOf(s);
+    return s.checked <= 0 || s.checked > now || now - s.checked >= due;
 }
+
+/** ★★ A failure: the hold FIRST, on disk, before the caller does anything else. */
+void hold(State& s, std::time_t now, int code, const std::string& what) {
+    s.fails += 1;
+    long h = std::min<long>(86400, kBackoffSec << std::min(s.fails - 1, 5));
+    h = std::max(h, kHoldFloorSec);
+    h += (long)(rnd() % (uint32_t)kResumeJitterSec);
+    s.until = now + h;
+    s.code = code;
+    const std::string when = hhmm(s.until);
+    if (code == 0)
+        s.msg = "vibesdr.net could not be reached for the satellite data (" + what + ") \xe2\x80\x94 VibeServer has stopped asking and will try again after " + when;
+    else if (code >= 500)
+        s.msg = "vibesdr.net's satellite mirror is overloaded (HTTP " + std::to_string(code) + ") \xe2\x80\x94 VibeServer has stopped asking and will try again after " + when;
+    else if (code == 200)
+        s.msg = "vibesdr.net's answer was not satellite data (" + what + ") \xe2\x80\x94 the last good copy is kept; VibeServer will try again after " + when;
+    else
+        s.msg = "vibesdr.net answered HTTP " + std::to_string(code) + " for the satellite data \xe2\x80\x94 VibeServer will not ask again until " + when;
+    writeState(s);
+}
+
+struct FileLock {
+    int fd = -1;
+    bool take() {
+        ensureDir();
+        fd = ::open(lockPath().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+        if (fd < 0) return true;   // ★ a read-only data dir: the state file still guards
+        if (::flock(fd, LOCK_EX | LOCK_NB) != 0) { ::close(fd); fd = -1; return false; }
+        return true;
+    }
+    ~FileLock() { if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } }
+};
 
 }  // namespace
 
 void setDir(const std::string& dir) { if (!dir.empty()) g_dir = dir; }
-void setPublisher(std::function<void(const std::string&, const std::string&)> fn) { g_publish = std::move(fn); }
-void setGroups(const std::vector<std::string>& groups) { if (!groups.empty()) g_groups = groups; }
+void setPublisher(std::function<void(const std::string&)> fn) { g_publish = std::move(fn); }
+void setLegacyPublisher(std::function<void(const std::string&, const std::string&)> fn) { g_legacy = std::move(fn); }
+void setValidator(std::function<bool(const std::string&, std::string&)> fn) { g_validate = std::move(fn); }
 void setFetcher(Fetcher fn) { g_fetcher = std::move(fn); }
 void setClock(std::function<std::time_t()> fn) { g_clock = std::move(fn); }
-std::string urlFor(const std::string& group) { return "https://celestrak.org/NORAD/elements/gp.php?GROUP=" + group + "&FORMAT=json"; }
+void setRandom(std::function<uint32_t()> fn) { g_random = std::move(fn); }
+std::string userAgent() {
+#ifdef VIBESERVER_VERSION_STR
+    return std::string("VibeServer/") + VIBESERVER_VERSION_STR + " (satellite data; +https://vibesdr.net)";
+#else
+    return "VibeServer (satellite data; +https://vibesdr.net)";
+#endif
+}
 
 int loadFromCache() {
     std::lock_guard<std::mutex> lk(g_mtx);
+    std::string s, e;
+    if (readCapped(copyPath(), s) && valid(s, e)) {
+        g_loadedMtime = mtimeOf(copyPath());
+        if (g_publish) g_publish(s);
+        return 1;
+    }
     int n = 0;
-    for (const auto& g : g_groups) {
-        std::string s;
-        if (!readCapped(cachePath(g), s) || !looksLikeGp(s)) continue;
-        if (g_publish) g_publish(g, s);
+    for (const char* g : {"amateur", "weather"}) {
+        std::string j;
+        if (!readCapped(satDir() + "/gp-" + g + ".json", j) || j.find("\"NORAD_CAT_ID\"") == std::string::npos) continue;
+        if (g_legacy) g_legacy(g, j);
         ++n;
     }
     return n;
 }
 
+bool reloadIfChanged() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    const long long m = mtimeOf(copyPath());
+    if (m == 0 || m == g_loadedMtime) return false;
+    std::string s, e;
+    if (!readCapped(copyPath(), s) || !valid(s, e)) return false;
+    g_loadedMtime = m;
+    if (g_publish) g_publish(s);
+    return true;
+}
+
 bool needsRefresh() {
     std::lock_guard<std::mutex> lk(g_mtx);
-    std::time_t at; long backoff; int fails;
-    readMarker(at, backoff, fails);
-    const std::time_t now = nowT();
-    if (at > 0 && now >= at && now - at < std::max(backoff, kMinAttemptSec)) return false;
-    // ★ a marker in the FUTURE is a clock that jumped back (an RTC-less Pi): honour it no longer than a day
-    if (at > now && at - now < 86400) return false;
-    for (const auto& g : g_groups) {
-        const long a = ageOf(cachePath(g));
-        if (a < 0 || a > kRefreshSec) return true;
-    }
-    return false;
+    State s = readState();
+    return eligible(s, nowT(), mtimeOf(copyPath()) != 0);
 }
 
 int refresh(std::string& err) {
     std::lock_guard<std::mutex> lk(g_mtx);
-    ensureDir();
-    std::time_t at; long backoff; int fails;
-    readMarker(at, backoff, fails);
+    err.clear();
+    FileLock fl;
+    if (!fl.take()) return 0;                          // ★ another radio process is asking right now
+    State s = readState();
     const std::time_t now = nowT();
-    int ok = 0;
-    for (const auto& g : g_groups) {
-        const std::string dest = cachePath(g), tmp = dest + ".part";
-        std::string msg;
-        std::remove(tmp.c_str());
-        const Fetch r = (g_fetcher ? g_fetcher : Fetcher(curlFetch))(urlFor(g), tmp, msg);
-        std::string body;
-        if (r == Fetch::Ok && (!readCapped(tmp, body) || !looksLikeGp(body))) {
-            msg = body.empty() ? "the answer was empty or larger than any GP group" : "the answer was not GP JSON";
-            std::remove(tmp.c_str());
-            err = "CelesTrak " + g + ": " + msg;
-            // ★ a 200 that is not the data (a captive portal, "No GP data found") is treated as a refusal
-            fails += 1; backoff = std::min<long>(86400, kBackoffFailSec << std::min(fails - 1, 2));
-            writeMarker(now, backoff, fails);
-            g_lastError = err;
-            return ok;
-        }
-        if (r != Fetch::Ok) {
-            std::remove(tmp.c_str());
-            err = "CelesTrak " + g + ": " + msg;
-            fails += 1; backoff = std::min<long>(86400, kBackoffFailSec << std::min(fails - 1, 2));
-            writeMarker(now, backoff, fails);
-            g_lastError = err;
-            return ok;   // ★ STOP: the other groups are not asked for
-        }
-        if (std::rename(tmp.c_str(), dest.c_str()) != 0) { std::remove(tmp.c_str()); err = "could not write the cache"; continue; }
-        if (g_publish) g_publish(g, body);
-        ++ok;
+    const bool haveCopy = mtimeOf(copyPath()) != 0;
+    if (!eligible(s, now, haveCopy)) return 0;         // ★ re-checked under the lock: the other process may just have
+    seedOf(s);                                         // this machine's daily offset, chosen on its first attempt
+    // ★★ the attempt and a provisional hold BEFORE the request: a crash mid-fetch still waits
+    s.attempt = now;
+    s.until = std::max<long long>(s.until, now + kHoldFloorSec);
+    writeState(s);
+
+    Request rq;
+    rq.url = kUrl;
+    rq.dest = copyPath() + ".part." + std::to_string((long)::getpid());
+    if (haveCopy) { rq.ifNoneMatch = s.etag; rq.ifModifiedSince = s.lastmod; }
+    std::remove(rq.dest.c_str());
+    Response rs;
+    (g_fetcher ? g_fetcher : Fetcher(curlFetch))(rq, rs);   // ★ ONE request — no retry, whatever it answers
+
+    if (rs.code == 304 && haveCopy) {
+        std::remove(rq.dest.c_str());
+        s.checked = now; s.fails = 0; s.code = 304; s.until = 0; s.msg.clear();
+        writeState(s);
+        return 0;
     }
-    writeMarker(now, kMinAttemptSec, 0);
-    g_lastError.clear();
-    return ok;
+    if (rs.code != 200) {
+        std::remove(rq.dest.c_str());
+        hold(s, now, rs.code == 304 ? 304 : rs.code, rs.msg.empty() ? "no answer" : rs.msg);
+        err = s.msg;
+        return 0;
+    }
+    std::string body, why;
+    if (!readCapped(rq.dest, body) || body.empty() || !valid(body, why)) {
+        std::remove(rq.dest.c_str());
+        hold(s, now, 200, body.empty() ? "empty, or larger than any sats.json" : why);
+        err = s.msg;
+        return 0;
+    }
+    if (std::rename(rq.dest.c_str(), copyPath().c_str()) != 0) {
+        std::remove(rq.dest.c_str());
+        hold(s, now, 200, "the copy could not be written");
+        err = s.msg;
+        return 0;
+    }
+    s.checked = now; s.fails = 0; s.code = 200; s.until = 0; s.msg.clear();
+    s.etag = rs.etag; s.lastmod = rs.lastModified;
+    writeState(s);
+    g_loadedMtime = mtimeOf(copyPath());
+    if (g_publish) g_publish(body);
+    return 1;
+}
+
+std::string ownerMessage() { std::lock_guard<std::mutex> lk(g_mtx); return readState().msg; }
+
+std::string listenerNote() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    const State s = readState();
+    if (s.msg.empty()) return "";
+    if (s.code == 0) return "this server could not reach vibesdr.net for the satellite data";
+    return "vibesdr.net's satellite data could not be downloaded (HTTP " + std::to_string(s.code) + ")";
 }
 
 std::string statusJson() {
     std::lock_guard<std::mutex> lk(g_mtx);
-    std::time_t at; long backoff; int fails;
-    readMarker(at, backoff, fails);
-    std::string j = "{\"groups\":[";
-    bool first = true;
-    for (const auto& g : g_groups) {
-        struct stat st{};
-        const bool have = ::stat(cachePath(g).c_str(), &st) == 0;
-        if (!first) j += ",";
-        first = false;
-        j += "{\"group\":\"" + g + "\",\"age\":" + std::to_string(have ? ageOf(cachePath(g)) : -1)
-           + ",\"bytes\":" + std::to_string(have ? (long long)st.st_size : 0LL) + "}";
-    }
+    State s = readState();
+    const std::time_t now = nowT();
+    const long long m = mtimeOf(copyPath());
+    long long next = 0;
+    if (s.until > now) next = s.until;
+    else if (m) next = std::max<long long>(s.checked + kCheckSec - (s.seed >= 0 ? s.seed : 0), s.attempt + kMinAttemptSec);
     std::string e;
-    for (char c : g_lastError) { if (c == '"' || c == '\\') e += '\\'; if ((unsigned char)c >= 0x20) e += c; }
-    j += "],\"lastAttempt\":" + std::to_string((long long)at) + ",\"backoff\":" + std::to_string(backoff)
-       + ",\"failures\":" + std::to_string(fails) + ",\"lastError\":\"" + e + "\"}";
-    return j;
+    for (char c : s.msg) { if (c == '"' || c == '\\') e += '\\'; if ((unsigned char)c >= 0x20) e += c; }
+    return std::string("{\"source\":\"vibesdr.net\",\"url\":\"") + kUrl + "\",\"have\":" + (m ? "true" : "false")
+         + ",\"checked\":" + std::to_string(s.checked) + ",\"nextTry\":" + std::to_string(next)
+         + ",\"code\":" + std::to_string(s.code) + ",\"failures\":" + std::to_string(s.fails)
+         + ",\"message\":\"" + e + "\"}";
 }
 
 }  // namespace vssat
