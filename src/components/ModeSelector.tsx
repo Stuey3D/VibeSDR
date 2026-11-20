@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { sortModes } from '../utils/modeOrder';
 import { scrollLane } from '../constants/popupTokens';
 import {
   Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
@@ -1594,7 +1595,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   useEffect(() => { if (!visible) setMoreOpen(false); }, [visible]);
 
   const list = modes && modes.length ? modes : MODES.map(m => ({ id: m, label: m.toUpperCase() }));
-  const common = list.filter(isCommon);
+  const common = sortModes(list.filter(isCommon), m => m.id);   // ★★ MODE_ORDER: analogue, SAM/ECSS, then digital (Stuart 11-20)
   // Decoder/digital list — OWRX reports these in server-add order (no order at
   // all), so sort alphabetically by label to make the long list scannable.
   const others = useMemo(

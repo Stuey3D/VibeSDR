@@ -225,6 +225,7 @@ import { RTTY_WAITING, rttyShort, rttyJoin } from './rttySkim';   // ★★ V12 
 import { callHtml, wireQrz } from './qrzLink';
 import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
 import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
+import { sortModes } from '../../../src/utils/modeOrder';   // ★★ one order for the mode keys, web + app (11-20)
 // ★★ V12 FreeDV digital voice (src/services/freedv.ts — the rules the app and the R36S share)
 import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME, FREEDV_HINT,
          FREEDV_SIDEBANDS, freedvSidebandLabel,
@@ -7621,7 +7622,8 @@ function offeredModes(): SDRMode[] {
     if (m === 'nfm' && dvsigCap) out.push('dvsig');   // ★★ V12 DV ID likewise
   }
   if (drmCap) out.push('drm');
-  return out.filter((m) => !isModeBlocked(m));
+  // ★★ the menu's order is MODE_ORDER (WFM NFM AM LSB USB CWL CWU, SAM … ECSS, AM-ST, then the digital modes — Stuart 11-20)
+  return sortModes(out.filter((m) => !isModeBlocked(m)));
 }
 /** ★ V12 the AM sync line beside the frequency (amSync.ts amSyncReadout): lock + offset, the applied width, a notch. */
 function amSyncSync() {
