@@ -11,7 +11,10 @@ const R = read('src/services/icomRadio.ts');
 const C = read('src/components/IcomSetupCard.tsx');
 const A = read('src/services/androidIcom.ts');
 const KT = read('android/app/src/main/java/com/vibesdr/app/VibeIcom.kt');
-const MOD = read('android/app/src/main/java/com/vibesdr/app/VibeLocalSdrModule.kt');
+// ★ beta88: the server runs in its own process (":server") — the start path is VibeServerOps (Start) and VibeServerRestore
+//   (a restore after a reboot, a kill or the watchdog), no longer VibeLocalSdrModule.
+const OPS = read('android/app/src/main/java/com/vibesdr/app/VibeServerOps.kt');
+const RESTORE = read('android/app/src/main/java/com/vibesdr/app/VibeServerRestore.kt');
 const PAGE = read('android/app/src/main/cpp/vibe_setup_page.h');
 const MODELS = read('android/app/src/main/cpp/icom_models.h');
 const LITE = read('lite/app/index.js');
@@ -38,7 +41,8 @@ for (const k of keys) {
   ok(new RegExp(`\\b${k}: cfg\\.${k} \\?\\? `).test(V), `nativeServerConfig sends ${k} at a definite value`);
   has(S, `${k}: icomSet.${k}`, `the screen's start config carries ${k}`);
 }
-has(MOD, 'if (isIcom(dev)) VibeIcom.prepareStart(cfg, dev)', 'the start path hands the whole config to prepareStart');
+has(OPS, 'if (icom) VibeIcom.prepareStart(cfg, dev)', 'the start path (VibeServerOps) hands the whole config to prepareStart');
+has(RESTORE, 'if (icom) VibeIcom.prepareStart(cfg, dev)', '…and so does a restore (VibeServerRestore)');
 
 // ── option lists from the radio's menu, not invented here ──
 const pageSel = PAGE.slice(PAGE.indexOf('<select id="icomBaud">'), PAGE.indexOf('</select>', PAGE.indexOf('<select id="icomBaud">')));

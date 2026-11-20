@@ -3,7 +3,7 @@
 // under test is the one just built and the server binary need not be rebuilt for a client change).
 //   A fake rtl_tcp replays test-freedv's synthetic clip (three stations made by codec2's own transmitter: 700D at centre
 //   +10 kHz, 700E +20 kHz, 1600 −10 kHz). Headless Edge, SILENT (--mute-audio --disable-audio-output), then:
-//   • the mode picker has a FreeDV key, beside USB / LSB, legend "FreeDV";
+//   • the mode picker has a FreeDV key, among the digital modes after the analogue ones, legend "FreeDV";
 //   • choosing it sends {"type":"tune",mode:"freedv"} and asks for the report (freedv_sub with no sub);
 //   • the VTS line says "FreeDV · searching", then "FreeDV 700D · N dB" once the modem is in sync;
 //   • in the picker: no BANDWIDTH row, a FREEDV row of AUTO + the server's sub-modes, AUTO lit by the server's report;
@@ -158,7 +158,9 @@ await scenario('20 m, USB: the key, the line, the sub-mode row', { clip: CLIP, c
   await P.openPicker();
   const keys = await P.keys();
   const i = keys.indexOf('FreeDV');
-  ok(i > 0 && keys[i - 1] === 'LSB', `a FreeDV key, beside USB / LSB (${keys.join(' ')})`);
+  // ★ Stuart 11-20: "wfm nfm am lsb usb cwl cwu sam ecss then digital modes" — FreeDV after every analogue key.
+  const lastAnalogue = Math.max(...['WFM', 'NFM', 'AM', 'LSB', 'USB', 'CWL', 'CWU', 'SAM', 'SAM-U', 'SAM-L', 'ECSS-U', 'ECSS-L', 'AM-ST'].map((k) => keys.indexOf(k)));
+  ok(i > 0 && i > lastAnalogue, `a FreeDV key, among the digital modes after the analogue ones (${keys.join(' ')})`);
   ok(await P.ev(`[...document.querySelectorAll('#mModeMenu .mModeOpt')].find(b => b.textContent === 'FreeDV')?.title === 'FreeDV digital voice'`), 'its name in the tooltip');
   ok(!(await P.ev(`!!document.getElementById('mFreeDvSub')`)), 'no FREEDV row while the mode is USB');
   await P.closePicker();

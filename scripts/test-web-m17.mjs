@@ -4,7 +4,7 @@
 //   A fake rtl_tcp replays test-m17's synthetic clip (our own M17 transmitter from the spec at 433.425 MHz: a voice over from
 //   G4ABC with META text "VIBE TEST", then an SMS to M0XYZ, on a 10 s loop). Headless Edge, SILENT (--mute-audio
 //   --disable-audio-output), then:
-//   • the mode picker has an M17 key, beside NFM, its name in the tooltip;
+//   • the mode picker has an M17 key, among the digital modes after the analogue ones (FreeDV before it), its name in the tooltip;
 //   • choosing it sends {"type":"tune",mode:"m17"} and asks for the report (m17_status);
 //   • the VTS line says "M17 · searching" or names the station, "M17 · G4ABC" once in sync, "M17 · last G4ABC" between
 //     overs; the line's ticker carries the META text and then the SMS ("SMS G4ABC → M0XYZ: Hello from VibeServer");
@@ -145,7 +145,9 @@ await scenario('70 cm: the key, the line, its text', { clip: CLIP, centre: CENTR
   await P.openPicker();
   const keys = await P.keys();
   const i = keys.indexOf('M17');
-  ok(i > 0 && keys[i - 1] === 'NFM', `an M17 key, beside NFM (${keys.join(' ')})`);
+  // ★ Stuart 11-20: "wfm nfm am lsb usb cwl cwu sam ecss then digital modes" — M17 after AM-ST / DRM / FreeDV, before DV ID.
+  const am = keys.indexOf('AM-ST'), dv = keys.indexOf('DV ID');
+  ok(i > 0 && i > keys.indexOf('CWU') && (am < 0 || i > am) && (dv < 0 || i < dv), `an M17 key, among the digital modes after the analogue ones (${keys.join(' ')})`);
   ok(await P.ev(`[...document.querySelectorAll('#mModeMenu .mModeOpt')].find(b => b.textContent === 'M17')?.title === 'M17 digital voice'`), 'its name in the tooltip');
   await P.closePicker();
   await P.ev(`window.__m17.out.length = 0; 1`);
