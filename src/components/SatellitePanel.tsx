@@ -31,7 +31,8 @@ import { globeScene, satAltKm, satBoxSize, satCorrectedHz, satCountdownText, sat
          type SatInfo, type SatList, type SatPicked, type SatReadout } from '../services/satellites';
 
 const SAT_MAX_W = 760;
-const GLOBE_W = 168, GLOBE_H = 96;
+/** ★ The half-globe's drawing size (viewBox); on screen it is the box's width, capped at GLOBE_MAX_W (Stuart 11-20). */
+const GLOBE_W = 640, GLOBE_H = 300, GLOBE_MAX_W = 420;
 
 export interface SatellitePanelProps {
   list: SatList | null;
@@ -63,15 +64,17 @@ export interface SatellitePanelProps {
 
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg. */
 function HalfGlobe({ rx, sat, ink, beam }: { rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string }) {
-  const g = useMemo(() => globeScene(GLOBE_W * 2, GLOBE_H * 2, rx,
+  const g = useMemo(() => globeScene(GLOBE_W, GLOBE_H, rx,
     sat && sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null),
   [rx.lat, rx.lon, sat?.lat, sat?.lon, sat?.rangeKm, sat?.el]);   // eslint-disable-line react-hooks/exhaustive-deps
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
-    <Svg width={GLOBE_W} height={GLOBE_H} viewBox={`0 0 ${GLOBE_W * 2} ${GLOBE_H * 2}`}
+    <View style={{ width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}>
+    <Svg width="100%" height="100%" viewBox={`0 0 ${GLOBE_W} ${GLOBE_H}`}
          accessibilityLabel="Where the satellite is: above the globe, its beam to the ground">
       <Path d={dome} fill={ink} fillOpacity={0.12} stroke={ink} strokeOpacity={0.55} strokeWidth={2} />
       {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.22} strokeWidth={1} />}
+      {!!g.coast && <Path d={g.coast} fill="none" stroke={ink} strokeOpacity={0.55} strokeWidth={1} />}
       {!!g.foot && <Path d={g.foot} fill={beam} fillOpacity={0.28} />}
       {!!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
       {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={4} fill={ink} />}
@@ -82,6 +85,7 @@ function HalfGlobe({ rx, sat, ink, beam }: { rx: { lat: number; lon: number }; s
         <Rect x={g.sat.x + 14} y={g.sat.y - 4} width={6} height={8} fill={beam} />
       </>}
     </Svg>
+    </View>
   );
 }
 
@@ -196,7 +200,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   dot:     { width: 8, height: 8, borderRadius: 4, backgroundColor: T.muted, opacity: 0.6 },
   dotOn:   { backgroundColor: T.good, opacity: 1 },
   box:     { margin: 8, padding: 8, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: T.muted, gap: 6 },
-  ro:      { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  ro:      { flexDirection: 'column', gap: 6, alignItems: 'stretch' },   // ★ the globe on its own row, full width
   coast:   { opacity: 0.6 },
   big:     { fontFamily: F, fontSize: 18, color: T.value, fontVariant: ['tabular-nums'], ...engraveStyle(T) },
   img:     { marginTop: 4 },

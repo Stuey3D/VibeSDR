@@ -56,12 +56,12 @@ const CSS = `
 #satPanel .sat-why{color:var(--text-dim);margin:4px 0}
 #satPanel .sat-box{border:1px solid var(--btn-border);border-radius:8px;padding:8px;margin:6px 0}
 #satPanel .sat-box[hidden]{display:none}
-#satPanel .sat-ro{display:grid;grid-template-columns:minmax(0,1fr) 168px;gap:8px;align-items:center}
+#satPanel .sat-ro{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;align-items:center}
 #satPanel .sat-ro.coast .sat-big{opacity:.55}
 #satPanel .sat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #satPanel .sat-big{font-size:18px;font-variant-numeric:tabular-nums;margin:2px 0}
 #satPanel .sat-cd{font-variant-numeric:tabular-nums}
-#satPanel canvas.sat-globe{width:168px;height:96px;display:block}
+#satPanel canvas.sat-globe{width:100%;max-width:420px;height:auto;aspect-ratio:640/300;display:block;margin:0 auto}   /* ★ its own row, the box's width (Stuart 11-20: it shows the pass at a glance) */
 #satPanel .sat-img{margin-top:8px}
 #satPanel .sat-img[hidden]{display:none}
 #satPanel .sat-img #decImage{max-height:min(52vh,440px);object-fit:contain}
@@ -81,8 +81,6 @@ const CSS = `
 #satPanel .sat-row.up .sat-w{color:var(--amber)}
 @media (max-width:560px){
   #satPanel,#satPanel.big{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:62vh}
-  #satPanel .sat-ro{grid-template-columns:minmax(0,1fr) 128px}
-  #satPanel canvas.sat-globe{width:128px;height:74px}
 }
 `;
 
@@ -126,7 +124,7 @@ export class SatPanel {
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
       +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div>`
       +   `<div class="sat-cd" data-s="cd"></div><div class="sat-dim" data-s="state"></div></div>`
-      +   `<canvas class="sat-globe" data-s="globe" width="336" height="192" aria-label="Where the satellite is: above the globe, its beam to the ground"></canvas></div>`
+      +   `<canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground"></canvas></div>`
       + `<div class="sat-img" data-s="img" hidden></div><div class="sat-pk" data-s="pk" hidden></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary><div data-s="rows"></div></details>`
@@ -339,6 +337,7 @@ export class SatPanel {
     ctx.globalAlpha = 0.12; ctx.fillStyle = ink; ctx.fill();
     ctx.globalAlpha = 0.55; ctx.strokeStyle = ink; ctx.lineWidth = 2; ctx.stroke();
     if (g.grid) { ctx.globalAlpha = 0.22; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.grid)); }
+    if (g.coast) { ctx.globalAlpha = 0.55; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.coast)); }   // ★ rough land (globeCoast.ts)
     if (g.foot) { ctx.globalAlpha = 0.28; ctx.fillStyle = amber; ctx.fill(new Path2D(g.foot)); }
     if (g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
     ctx.globalAlpha = 1;

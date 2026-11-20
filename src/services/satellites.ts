@@ -17,6 +17,7 @@
  *    channel actually is relative to it — the waterfall marker goes there (marker TRAP), bookmarks store the nominal.
  * ★ No flashing anywhere: COAST only dims the readout.
  */
+import { GLOBE_COAST } from './globeCoast';
 
 export type SatLockState = 'OFF' | 'ARMED' | 'TRACK' | 'COAST' | 'ENDED';
 
@@ -394,6 +395,8 @@ export interface GlobeScene {
   w: number; h: number; cx: number; cy: number; r: number;
   /** the graticule (30°), SVG path in pixels — Path2D on the web, <Path d> in the app */
   grid: string;
+  /** rough land outlines (globeCoast.ts, Natural Earth simplified 0.6°), the same clipping as the grid */
+  coast: string;
   rx: { x: number; y: number } | null;
   sat: { x: number; y: number } | null;
   /** the beam: a cone from the bird down to its footprint (SVG path), and the footprint itself */
@@ -418,6 +421,11 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
   };
   for (let la = -60; la <= 60; la += 30) { const pts: Array<[number, number]> = []; for (let lo = -180; lo <= 180; lo += 6) pts.push([la, lo]); line(pts); }
   for (let lo = -180; lo < 180; lo += 30) { const pts: Array<[number, number]> = []; for (let la = -90; la <= 90; la += 6) pts.push([la, lo]); line(pts); }
+  // ★ rough outlines (Stuart 11-20: "rough outlines would be fine, its just to show satellite pass status visually") —
+  //   the same pen as the grid, written to `coast`; the far side and below the cut lift the pen
+  const gridOnly = grid; grid = '';
+  for (const ring of GLOBE_COAST) { const pts: Array<[number, number]> = []; for (let k = 0; k + 1 < ring.length; k += 2) pts.push([ring[k + 1] / 10, ring[k] / 10]); line(pts); }
+  const coast = grid; grid = gridOnly;
   const [rxX, rxY, rxZ] = orthoXYZ(rx.lat, rx.lon, lat0, lon0);
   const rxPt = rxZ >= 0 && rxY >= 0 ? { x: cx + rxX * r, y: cy - rxY * r } : null;
   let satPt: { x: number; y: number } | null = null, beam = '', foot = '';
@@ -452,5 +460,5 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
       }
     }
   }
-  return { w, h, cx, cy, r, grid, rx: rxPt, sat: satPt, beam, foot };
+  return { w, h, cx, cy, r, grid, coast, rx: rxPt, sat: satPt, beam, foot };
 }
