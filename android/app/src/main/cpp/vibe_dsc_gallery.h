@@ -13,8 +13,21 @@
 //    (the clients colour it), and pinned ("plat"/"plon") where a position was sent, so the gallery can put it on a map.
 //    A transmission's repeats (a distress alert goes five times) are ONE item.
 //
+//  • ★★ V12 beta88 ANY CALL THAT SENT A POSITION — a routine or safety call too (Stuart, 2026-11-20, background decoding
+//    on the Pi 500's locked-range RSP1B: "i have no map button to view them from the gallery"). On HF the common case is a
+//    POSITION REPLY (a coast station asked a ship where it is); it was only a line in the day's log, so never on a map.
+//    Now it is an item of its own, pinned, marked with its level ("lv" 1 safety, 0 routine — the map colours them), so
+//    the SHIPPING MAP's DSC layer has it. Test calls and their acknowledgements never carry a position, so never one.
+//
 // ★★ NEVER A WRITE PER CALL for the log (the RTTY rule): held in RAM and appended once a minute, at a UTC midnight and
-//    when the decoder stops. A distress item is written at once — it is the one thing worth the write.
+//    when the decoder stops. A distress item is written at once — it is the one thing worth the write. A positioned
+//    routine / safety call is written at once too: they are rare (a few a day on a busy HF channel), and
+//    ★ BOUNDED, beside the gallery's own size limit (the owner's space, vibe_gallery.h — the oldest item goes first):
+//      · the same ship at the same position within kPinSameSec is ONE item (a coast station that polls a ship at anchor
+//        gets the same answer each time — the log still has every line);
+//      · at most kPinPerHour positioned routine / safety items per decoder per UTC hour — beyond that (a fault, a
+//        malicious transmitter) the calls go only into the log, and the log says how many were not pinned.
+//    Distress and urgency are never capped: they are the reason the gallery keeps DSC at all.
 #pragma once
 #include "vibe_gallery.h"
 #include "decoders/dsc_decoder.h"
@@ -26,6 +39,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace vibe {
 namespace bg {
@@ -54,6 +68,7 @@ public:
         if (c.level() >= 3) ++distress_;
         else if (c.level() == 2) ++urgency_;
         if (c.level() >= 2) saveAlert(c, line, now);
+        else if (positionOf(c).known) savePinned(c, line, now);   // ★ beta88 a routine / safety call with a position
         // ★ Distress and urgency go into the log at once too, not a minute later.
         if (c.level() >= 2 || now - lastFlush_ >= 60) flush(now);
     }
@@ -159,24 +174,49 @@ private:
         pending_.clear();
         lastFlush_ = now;
     }
+    /** The position a call is ABOUT: its distress position, else a position reply's. */
+    static const dsc::Position& positionOf(const dsc::Call& c) { return c.pos.known ? c.pos : c.posReply; }
+    /** ★★ beta88 a routine or safety call that sent a position: its own pinned item, bounded (see the top). */
+    void savePinned(const dsc::Call& c, const std::string& line, int64_t now) {
+        const dsc::Position& p = positionOf(c);
+        const std::string who = !c.distressId.empty() ? c.distressId : c.self;
+        // the same ship, the same position, within kPinSameSec: one item
+        for (const auto& r : recentPins_)
+            if (r.who == who && std::fabs(r.lat - p.lat) < 1e-4 && std::fabs(r.lon - p.lon) < 1e-4 && now - r.t <= kPinSameSec) return;
+        const int64_t hour = now / 3600;
+        if (hour != pinHour_) { pinHour_ = hour; pinsThisHour_ = 0; pinsSkipped_ = 0; }
+        if (pinsThisHour_ >= kPinPerHour) {
+            if (++pinsSkipped_ == 1 || pinsSkipped_ % 100 == 0)
+                pending_ += gallery::utcStamp(now, "%H:%M:%S") + "  (" + std::to_string(pinsSkipped_)
+                    + " positioned calls this hour not pinned on the map: more than " + std::to_string(kPinPerHour) + " an hour)\n";
+            return;
+        }
+        ++pinsThisHour_;
+        recentPins_.push_back({ who, p.lat, p.lon, now });
+        while (recentPins_.size() > 64 || (!recentPins_.empty() && now - recentPins_.front().t > kPinSameSec)) recentPins_.erase(recentPins_.begin());
+        saveAlert(c, line, now);
+    }
     void saveAlert(const dsc::Call& c, const std::string& line, int64_t now) {
         gallery::Meta m = meta_;
         m.utc = now;
         m.title = line;
         m.level = c.level();
-        const dsc::Position& p = c.pos.known ? c.pos : c.posReply;
+        const dsc::Position& p = positionOf(c);
         if (p.known) { m.pinLat = p.lat; m.pinLon = p.lon; }
         const std::string who = !c.distressId.empty() ? c.distressId : c.self;
-        m.dlName = std::string("DSC ") + (c.level() >= 3 ? "DISTRESS " : "URGENCY ") + who + " " + gallery::utcStamp(now, "%Y-%m-%d %H%M") + ".txt";
-        std::string body = (c.level() >= 3 ? "DSC DISTRESS" : "DSC URGENCY") + std::string(" \xc2\xb7 heard ")
+        const int lv = c.level();
+        const char* word = lv >= 3 ? "DISTRESS" : lv == 2 ? "URGENCY" : lv == 1 ? "SAFETY" : "POSITION";
+        m.dlName = std::string("DSC ") + word + " " + who + " " + gallery::utcStamp(now, "%Y-%m-%d %H%M") + ".txt";
+        std::string body = std::string("DSC ") + (lv >= 2 ? word : lv == 1 ? "SAFETY CALL WITH A POSITION" : "CALL WITH A POSITION") + " \xc2\xb7 heard "
             + gallery::utcStamp(now, "%Y-%m-%d %H:%M:%S UTC") + " on " + freqText() + " ("
             + (meta_.origin == "background" ? "background decoding" : "a listener's decoder") + ")\n\n" + line + "\n";
         if (p.known) {
             char b[96]; std::snprintf(b, sizeof b, "\nPosition %s (%.4f, %.4f)\n", dsc::positionText(p).c_str(), p.lat, p.lon);
             body += b;
         }
-        body += "\nDSC is the GMDSS alerting system. A distress call heard here may already have been answered by a coast\n"
-                "station; this is a receiver's log, not an alerting service.\n";
+        if (lv >= 2)
+            body += "\nDSC is the GMDSS alerting system. A distress call heard here may already have been answered by a coast\n"
+                    "station; this is a receiver's log, not an alerting service.\n";
         if (!store_.add(m, "txt", body).empty()) ++items_;
     }
 
@@ -190,6 +230,14 @@ private:
     unsigned long calls_ = 0, distress_ = 0, urgency_ = 0;
     size_t items_ = 0;
     double rfHz_ = 0;     // the DSC frequency the calls come from (from the call's JSON); 0 = the dial
+    // ★ beta88 the positioned routine / safety items' bounds (see the top)
+    static constexpr int kPinPerHour = 60;
+    static constexpr int64_t kPinSameSec = 600;
+    struct RecentPin { std::string who; double lat, lon; int64_t t; };
+    std::vector<RecentPin> recentPins_;
+    int64_t pinHour_ = -1;
+    int pinsThisHour_ = 0;
+    unsigned long pinsSkipped_ = 0;
 };
 
 } // namespace bg

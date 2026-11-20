@@ -329,6 +329,50 @@ int main() {
         rmTree(dir);
     }
 
+    std::printf("── beta88 the gallery: a routine call WITH a position is its own pinned item (Stuart: no map button on the Pi 500)\n");
+    {
+        gallery::Store st; const std::string dir = tmpDir("galpos"); st.setDir(dir); st.setLimitBytes(10u << 20);
+        gallery::Meta m; m.kind = "dsc"; m.origin = "background"; m.freqHz = 8414500; m.mode = "usb"; m.decoder = "dsc"; m.profile = "Profile 1";
+        const auto cs = calls();
+        auto byName = [&](const char* n) { Call c; for (const auto& tc : cs) if (tc.name == n) { parse(tc.syms, c); break; } return c; };
+        const Call pr = byName("position reply"), tst = byName("test call"), tack = byName("test acknowledgement"), saf = byName("safety, all ships");
+        ok(pr.level() == 0 && pr.posReply.known && std::fabs(pr.posReply.lat - 36.85) < 0.01, "the position reply: routine, with a position (36.85, -76.3)");
+        ok(!tst.pos.known && !tst.posReply.known && !tack.pos.known && !tack.posReply.known, "a test call and its acknowledgement carry no position");
+        {
+            bg::DscGalleryTap tap(st, m);
+            tap.dscCall(tst, describe(tst), "", false);
+            tap.dscCall(tack, describe(tack), "", false);
+            tap.dscCall(saf, describe(saf), "", false);
+            tap.dscCall(pr, describe(pr), "", false);
+            tap.dscCall(pr, describe(pr), "", false);   // polled again: the same ship, the same position → still one item
+            ok(tap.saved() == 1, "one pinned item: the position reply (not the test, the ack, the safety call without a position, nor the same answer twice) — " + std::to_string(tap.saved()));
+            tap.finish(false);
+        }
+        const std::string idx = slurp(dir + "/index.jsonl");
+        ok(idx.find("\"plat\":36.85") != std::string::npos && idx.find("\"plon\":-76.3") != std::string::npos && idx.find("\"lv\":0") != std::string::npos,
+           "…pinned at its position, level 0 (routine — the map colours it)");
+        ok(idx.find("\"dn\":\"DSC POSITION 366123450 ") != std::string::npos, "…downloads as \"DSC POSITION 366123450 <date time>.txt\"");
+        const std::string all = slurpTxt(dir);
+        ok(all.find("DSC CALL WITH A POSITION") != std::string::npos && all.find("not an alerting service") == std::string::npos,
+           "…its text says what it is, without the distress words");
+        int lines = 0; for (size_t i = 0; (i = all.find("ROUTINE POSITION", i)) != std::string::npos; ++i) ++lines;
+        ok(lines == 3, "the day's log still has every line (twice) + the item once: " + std::to_string(lines));
+        rmTree(dir);
+    }
+    {
+        // ★ bounded: 100 different ships' position replies in one hour → kPinPerHour (60) items, the rest only in the log
+        gallery::Store st; const std::string dir = tmpDir("galcap"); st.setDir(dir); st.setLimitBytes(10u << 20);
+        gallery::Meta m; m.kind = "dsc"; m.origin = "background"; m.freqHz = 8414500; m.mode = "usb"; m.decoder = "dsc";
+        Call pr; for (const auto& tc : calls()) if (tc.name == "position reply") { parse(tc.syms, pr); break; }
+        bg::DscGalleryTap tap(st, m);
+        for (int i = 0; i < 100; ++i) { Call c = pr; c.self = std::to_string(366123000 + i); c.posReply.lat += i * 0.01; tap.dscCall(c, describe(c), "", false); }
+        const size_t n = tap.saved();
+        tap.finish(false);
+        ok(n == 60 || n == 61, "100 positioned calls in an hour: 60 pinned items (+ the log) — " + std::to_string(n));
+        ok(slurpTxt(dir).find("positioned calls this hour not pinned") != std::string::npos, "…and the log says some were not pinned");
+        rmTree(dir);
+    }
+
     std::printf("── background decoding's table\n");
     {
         const bg::DecoderDef* d = bg::decoderDef("dsc");
