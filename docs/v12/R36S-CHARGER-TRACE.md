@@ -153,6 +153,13 @@ chgtrace-fast#1 end — port …/…/… · bat … (min/mean/max) · input clam
   **1.000 ms median interval, mean 0.999 ms, max gap 1.7 ms, 1.1 % of a core** — the stub answers in 4 µs, so the R36S's
   real figures (0.6 ms of 400 kHz bus per sample, the A35) come from its STAT lines.
 
+### The image
+`vibesdr-r36s-12.0.0-beta86+handheld81-20261120.img.gz`, sha256 `8b7382b4b5df72275ce49fa20502f0749d53c2d575000b1b8579f848f08a5b5a`,
+engine `12.0.0~beta86+handheld81-81` built from this branch (`scripts/build-debs-remote.sh --rev 81 --arch arm64`, the
+CMake prerelease set for the build only). build-image.sh ran usbcap-test (29/29) in the container; **verify: all checks
+passed**; the flasher's Update test from h80 to h81 PASSED (settings, recordings, debug log kept). On the Desktop in
+`VibeSDR-Flasher/` beside h80 (kept), with a new HOW TO TEST; a copy in `~/R36S-images/`.
+
 ### Only the device can tell
 The real interval and CPU on the A35 with the real bus (estimate: ~1 ms kept, a few % of a core); whether `/dev/mem`
 is allowed by the ROCKNIX kernel (if not: `HPRT0 off(/dev/mem: …)` and sysfs presence only); the dwc2 address and
