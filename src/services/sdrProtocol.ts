@@ -516,6 +516,8 @@ export interface SDRCallbacks {
   onSatList?:   (l: import('./satellites').SatList) => void;
   onSat?:       (r: import('./satellites').SatReadout) => void;
   onSatTrack?:  (t: import('./satellites').SatTrack) => void;
+  /** ★★★ SATELLITE MODE: the server's answer to a pick (it tuned, locked and attached `decoder`). */
+  onSatPicked?: (p: import('./satellites').SatPicked) => void;
   /** ★★ V12, VIBESERVER-ONLY: the answer to modeResume (wholeModeResume.ts) — may this listener have the whole-radio mode
    *  the server left while they were away back? `why` = the refusal, in words. */
   onModeResume?: (kind: 'adsb' | 'ndb' | 'ism' | 'ais', ok: boolean, why?: string) => void;

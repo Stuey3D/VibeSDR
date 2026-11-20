@@ -33,7 +33,7 @@ import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the pass
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
 import { parseSondeReport } from './sondes';   // ★ V12 radiosondes (RS41)
-import { parseSatList, parseSatReadout, parseSatTrack } from './satellites';   // ★ V12 satellites
+import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, satPickMsg, satDopplerMsg, SAT_DROP_MSG } from './satellites';   // ★ V12 satellites
 import { parseDabScan, parseFmScan } from './dabBandScan';
 import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
@@ -351,6 +351,15 @@ export class VibeServerClient extends VibeServerWsClient {
     if (this.askBlocked()) return;
     this.sendSpectrum(on ? (norad ? { type: 'sat', op: 'lock', norad } : { type: 'sat', op: 'lock' }) : { type: 'sat', op: 'unlock' });
   }
+  /* ★★★ SATELLITE MODE (docs/v12/SATELLITE-MODE.md THE CONTRACT): a pick tunes, locks and attaches the decoder in one step on
+   *  the server, so it asks before tuning like a tune (false = held by the gate); the Doppler key and the drop do not move
+   *  the dial by themselves, and the drop is always sent — a lock must never outlive the mode. */
+  satPick(norad: number, tx: number, doppler: boolean): boolean {
+    if (this.askBlocked()) return false;
+    this.sendSpectrum(satPickMsg(norad, tx, doppler)); return true;
+  }
+  satDoppler(on: boolean) { this.sendSpectrum(satDopplerMsg(on)); }
+  satDrop() { this.sendSpectrum({ ...SAT_DROP_MSG }); }
   /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
   aisTrail(mmsi: number) {
     if (Number.isInteger(mmsi) && mmsi > 0) this.sendSpectrum({ type: 'ais_trail', mmsi });
@@ -594,7 +603,11 @@ export class VibeServerClient extends VibeServerWsClient {
         return true;
       /* ★★ V12 SATELLITES — the picker's list, the lock's readout, a pass's sky track (src/services/satellites.ts). */
       case 'sat_list': { const l = parseSatList(msg); if (l) this.callbacks.onSatList?.(l); return true; }
-      case 'sat': { const r = parseSatReadout(msg); if (r) this.callbacks.onSat?.(r); return true; }
+      case 'sat': {
+        const pk = parseSatPicked(msg);   // ★★★ SATELLITE MODE: {"state":"picked"} answers a pick — not a readout
+        if (pk) { this.callbacks.onSatPicked?.(pk); return true; }
+        const r = parseSatReadout(msg); if (r) this.callbacks.onSat?.(r); return true;
+      }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.callbacks.onSatTrack?.(t); return true; }
       case 'ais_off':
         this.aisExit.offConfirmed(Date.now());

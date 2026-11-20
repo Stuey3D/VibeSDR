@@ -24,11 +24,12 @@
  *   map         MAP — the spots map, an OpenWebRX's map (VIEWS; was the colour 🗺 emoji, 2026-10-29)
  *   picture     FILES — an OpenWebRX's decoded pictures (VIEWS; was the colour 🖼 emoji)
  *   balloon     SONDES (RS41 radiosondes — a weather balloon with its instrument hanging below)
+ *   satellite   SATELLITE (V12 — a body with two solar panels and its downlink waves)
  */
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -133,6 +134,12 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { d: 'M2.5 6.2 8.8 3.5l6.4 2.7 6.3-2.7v14.3l-6.3 2.7-6.4-2.7-6.3 2.7Z' },
     { d: 'M8.8 3.5v14.3M15.2 6.2v14.3', w: 1.5 },
   ],
+  satellite: [   // ★ V12 SATELLITE mode: a body tipped 45° with a solar panel either side, its downlink waves below-left
+    { d: 'M10.6 8.2l3.6-3.6 3.6 3.6-3.6 3.6z' },
+    { d: 'M12.4 6.4 9.6 3.6 6.8 6.4l2.8 2.8M16 10l2.8 2.8-2.8 2.8-2.8-2.8', w: 1.5 },
+    { d: 'M6.6 14.2a3.6 3.6 0 0 0 3.2 3.2M3.6 14a6.6 6.6 0 0 0 6.4 6.4', w: 1.5 },
+    { c: [11.2, 12.8, 1.2], fill: true },
+  ],
   picture: [   // a framed picture: the sun over hills
     { r: [2.5, 4, 19, 16, 2] },
     { c: [8.3, 9.3, 1.7], fill: true },
@@ -166,7 +173,8 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'cw': case 'morse': case 'cwdecoder': case 'cwskimmer': return 'morseKey';
     case 'psk': case 'bpsk31': case 'bpsk63': case 'psk31': case 'psk63': case 'jtty': case 'mfsk': case 'hell': return 'keyboard';
     case 'tones': case 'dtmf': case 'zvei': case 'ccir': return 'keyboard';   // ★ V12 DTMF + 5-tone: a keypad's tones
-    case 'lrpt': case 'meteor': return 'picture';   // ★ V12 METEOR LRPT: a weather-satellite picture
+    case 'lrpt': case 'meteor': return 'picture';   // ★ V12 METEOR LRPT: a weather-satellite picture (the gallery's METEOR kind)
+    case 'sat': case 'satellite': return 'satellite';   // ★ V12 SATELLITE mode (one key for every satellite)
     case 'ft8': case 'ft4': case 'wspr': case 'js8': case 'jt65': case 'jt9': case 'q65': case 'fst4': case 'fst4w':
     case 'msk144': case 'digi': case 'spots': case 'spotsband': return 'spots';
     case 'dab': case 'rds': case 'advrds': case 'same': case 'eas': return 'broadcast';

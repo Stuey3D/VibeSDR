@@ -136,6 +136,7 @@ export type MobileDeps = {
   /** ★ V12 satellites — not a whole-radio mode: opens the picker (passes, sky track, DOPPLER). Absent = no entry. */
   satCap?: () => { ok: boolean; why: string } | null;
   satOn?: () => boolean;
+  /** ★★★ V12 SATELLITE: into the mode, or out of it (a toggle, like the other whole-radio modes). */
   openSat?: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
@@ -456,16 +457,18 @@ export function initMobileControls(deps: MobileDeps) {
       sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
       grid.appendChild(sdRow);
     }
-    /* ★★ V12 SATELLITES — only where the server offers `doppler` (the radio reaches a listed downlink), and with the menu's
-     *  rule: not drawn while it cannot run (no dead modes), unless its readout is up so it can be closed. */
+    /* ★★★ V12 SATELLITE beside SONDES (Stuart, 2026-11-20: "put it in the tunes the whole radio section too next to ism sondes
+     *  etc") — a whole-radio mode: every satellite's passes, a pick tunes + decodes, AUTO DOPPLER. The same three states:
+     *  absent where the server offers no `doppler` (the radio reaches no listed downlink), not drawn while it cannot run
+     *  unless on (so it can be left). It replaced the SAT picker and the METEOR LRPT decoder key. */
     const stc = deps.satCap?.();
     if (stc && deps.openSat && (stc.ok || deps.satOn?.())) {
       const stRow = document.createElement('button');
       stRow.className = 'mModeOpt' + (deps.satOn?.() ? ' on' : '') + (stc.ok ? '' : ' dis');
-      setModeLabel(stRow, 'sat', 'SAT');
-      stRow.title = stc.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${stc.why}`;
+      setModeLabel(stRow, 'sat', 'SATELLITE');
+      stRow.title = stc.ok ? 'Satellites — pick one from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets' : `SATELLITE is not available: ${stc.why}`;
       if (!stc.ok) stRow.setAttribute('aria-disabled', 'true');
-      stRow.onclick = () => { close(); deps.openSat!(); };
+      stRow.onclick = () => { deps.openSat!(); close(); refresh(); };
       grid.appendChild(stRow);
     }
 

@@ -56,8 +56,8 @@ import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel } from './satellites';   // ★ V12 satellites — the picker, the readout, the DOPPLER button
-import { satCapFrom, satChanText, satStateWord } from '../../../src/services/satellites';
+import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { satCapFrom, satChanText, satStateWord, satPacketBaud, type SatPicked, type SatTx } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -2016,11 +2016,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       const p = satPanelGet();
       const was = !!p?.readout();
       p?.onReadout(r);
-      // ★ an ending or a refusal says why, once (no flashing, no repeat)
-      if (r.state === 'OFF' && r.why && (was || !p?.open)) showPill(r.why, 6000);
+      // ★ an ending or a refusal says why, once (no flashing, no repeat) — the SATELLITE window says it itself when open
+      if (r.state === 'OFF' && r.why && !p?.open) showPill(r.why, 6000);
+      void was;
       renderFreq();
     },
     onSatTrack: (t) => satPanelGet()?.onTrack(t),
+    onSatPicked: (p) => satPanelGet()?.onPicked(p),   // ★★★ SATELLITE: the server tuned, locked and attached the decoder
     onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
@@ -10342,13 +10344,63 @@ function satPanelGet(): SatPanel | null {
   if (!satPanel) {
     satPanel = new SatPanel({
       list: () => spec?.satList(),
-      track: (n, a, l) => spec?.satTrack(n, a, l),
-      lock: (on, norad) => spec?.satLock(on, norad),
-      tune: (hz, mode) => tuneTo({ frequency: hz, mode } as unknown as SearchResult),
+      pick: (norad, tx, doppler) => !!spec?.satPick(norad, tx, doppler),
+      doppler: (on) => spec?.satDoppler(on),
+      drop: () => spec?.satDrop(),
+      rxPos: () => myPos(),
+      follow: (d, t) => satFollow(d, t),
+      left: () => satFollow('', null),
+      image: (slot) => satLendImage(slot),
     });
     satPanel.setCap(satCap);
   }
   return satPanel;
+}
+/* ★★★ SATELLITE: THE DECODER THE SERVER ATTACHED ON A PICK. Its frames arrive on the decoder socket, which opens only while a
+ *  decoder is attached and parses frames only for the mode it attached (decoders.ts) — so the page follows the server's
+ *  choice with the same attach a decoder key sends (the same decoder: the server keeps it running). The decoder box itself
+ *  stays shut: the SATELLITE window is the box (its image canvas is lent there, satLendImage). '' = none (voice). */
+let satDec: SatPicked['decoder'] = '';
+function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
+  if (satDec && activeDec === satDec && d !== satDec) stopDecoder();
+  satDec = d;
+  if (!d || !t || !decoders) return;
+  if (activeDec === d) return;
+  if (activeDec) stopDecoder();
+  if (d === 'aprs') { packetMode = satPacketBaud(t); aprsBaud = 1200; aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; }
+  decVfo = 'A';
+  activeDec = d;
+  decTuneHint = '';
+  if (d === 'lrpt' || d === 'sstv') { clearDecImage(''); $('decImage').classList.add('on'); }
+  decoders.attach(decExt(d), decParams(d), decVfo);
+  syncDecButtons();
+}
+/** The decoder box's image canvas (#decImgWrap) lent to the SATELLITE window's big box, and home again (null). */
+let satImgHome: { parent: Node; next: Node | null } | null = null;
+function satLendImage(slot: HTMLElement | null) {
+  const wrap = document.getElementById('decImgWrap');
+  if (!wrap) return;
+  if (slot) {
+    if (!satImgHome && wrap.parentNode) satImgHome = { parent: wrap.parentNode, next: wrap.nextSibling };
+    slot.appendChild(wrap);
+    $('decImage').classList.add('on');
+  } else if (satImgHome) {
+    satImgHome.parent.insertBefore(wrap, satImgHome.next);
+    satImgHome = null;
+  }
+}
+/** Leave SATELLITE (another whole-radio mode is starting) — the drop is sent, the decoder stops. */
+function satModeOff() { if (satPanel?.active) satPanel.exit(); }
+/** The SATELLITE key: in (leaving whichever whole-radio mode is on, as each of them does) or out. */
+function toggleSatMode() {
+  const p = satPanelGet();
+  if (!p) return;
+  if (!p.active) {
+    // ★ each switched OFF properly (its own toggle tells the server), not just its view — SATELLITE takes the receiver
+    if (dabOn) toggleDabMode(); if (adsbOn) toggleAdsbMode(); if (ismOn) toggleIsmMode(); if (aisOn) toggleAisMode();
+    if (ndbOn) toggleNdbMode(); if (avOn) toggleAvMode(); if (sdOn) toggleSdMode();
+  }
+  p.toggle();
 }
 
 /** ★ A report (on) or the server's `sondes_off` (null). */
@@ -10822,9 +10874,9 @@ function buildControls() {
     avOn:          () => avOn,
     toggleAv:      toggleAvMode,
     sdCap:         () => sdCap,          // ★ V12 radiosondes
-    satCap:        () => satCap,         // ★ V12 satellites (opens the picker)
-    satOn:         () => !!satPanel?.readout(),
-    openSat:       () => satPanelGet()?.show(),
+    satCap:        () => satCap,         // ★★★ V12 SATELLITE (a whole-radio mode)
+    satOn:         () => !!satPanel?.active,
+    openSat:       toggleSatMode,
     sdOn:          () => sdOn,
     toggleSd:      toggleSdMode,
     ndbCap:        () => ndbCap,
@@ -14386,7 +14438,11 @@ function initDecoders(host: string, auth: AuthState) {
     // ★ NAVTEX: the server's own FEC count for the message its NNNN just closed — into the title (2026-10-05).
     onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
     // ★ FELD HELL's 0x02 (a fresh decoder): the next line starts a new page; the one on screen stays until it does.
-    onImageStart: (w, h) => { if (activeDec === 'hell') { hellPager.reset(); return; } startDecImage(w, h); },
+    onImageStart: (w, h) => {
+      if (activeDec === 'hell') { hellPager.reset(); return; }
+      startDecImage(w, h);
+      if (satDec && activeDec === satDec && (satDec === 'lrpt' || satDec === 'sstv')) satPanel?.pictureStart();   // ★★★ SATELLITE grows to show it
+    },
     // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
     onImageLine: (y, w, px, rgb) => {
       if (activeDec === 'hell') { drawHellLine(y, w, px); setDecLive(true); return; }
@@ -14410,7 +14466,7 @@ function initDecoders(host: string, auth: AuthState) {
       $('decStatus').textContent = WEFAX_PHASE_TEXT[p] ?? 'receiving';
       setDecLive(p >= 1 && p <= 3);
     },
-    onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
+    onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); if (satDec && activeDec === satDec) satPanel?.pictureEnd(); },
     onHellStatus: (d) => {
       if (activeDec !== 'hell') return;
       const st = parseHellStatus(d);
@@ -14420,7 +14476,7 @@ function initDecoders(host: string, auth: AuthState) {
     },
     // ★ SSTV 0x08: the same picture repainted in place (see decoders.ts) — the lines overwrite it.
     onImageRedraw: () => { decLiveComplete = false; },
-    onSstvMode: (name) => { $('decStatus').textContent = name; },
+    onSstvMode: (name) => { $('decStatus').textContent = name; if (satDec === 'sstv' && activeDec === 'sstv') satPanel?.status(`SSTV · ${name}`); },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpotsStatus: (st) => { if (!bandSpots) return; spotModeStates = st.modes; renderSpotModeChips(); },
     onTimeSync: (t) => { if (isHandheld()) noteTimeSync(t); },
@@ -14465,6 +14521,7 @@ function initDecoders(host: string, auth: AuthState) {
     },
     onAprsPacket: (p) => {
       if (activeDec !== 'aprs') return;
+      if (satDec === 'aprs') satPanel?.packet(p.line || p.raw);   // ★★★ SATELLITE: the packet lines in the compact box
       aprsLog.unshift({ t: Date.now(), line: p.line || p.raw });
       if (aprsLog.length > 60) aprsLog.length = 60;
       // ★ the track grows from the packets between lists (the list carries the whole track only to a joiner)
@@ -14554,6 +14611,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);
       decStateText = lrptStatusText(st); $('decStatus').textContent = decStateText;
+      if (satDec === 'lrpt') satPanel?.status(decStateText);   // ★★★ SATELLITE: the LRPT line in the window
       setDecLive(!!st && (st.sync || st.lines > 0));
     },
     onHfdlStatus: (d) => {   // ★ V12 HFDL: the messages and bursts heard on this dial
@@ -15368,18 +15426,18 @@ function anyDecoderLeft(): boolean {
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
     || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones')) || (aleCap && !blockedModes.has('ale'))
-    || (vorCap && !blockedModes.has('vor')) || (sarsatCap && !blockedModes.has('sarsat')) || (lrptCap && !blockedModes.has('lrpt'));
+    || (vorCap && !blockedModes.has('vor')) || (sarsatCap && !blockedModes.has('sarsat'));   // ★ METEOR LRPT: inside SATELLITE now (no key here)
 }
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
  *  (decoderBandsDom.ts). Each leaves whichever other whole-radio mode is on first, as the menu always did. */
-function toggleDabMode() { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
-function toggleAdsbMode() { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
-function toggleIsmMode() { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
-function toggleAisMode() { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
-function toggleAvMode() { if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
-function toggleSdMode() { if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
-function toggleNdbMode() { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
+function toggleDabMode() { satModeOff(); if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
+function toggleAdsbMode() { satModeOff(); if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
+function toggleIsmMode() { satModeOff(); if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
+function toggleAisMode() { satModeOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleAvMode() { satModeOff(); if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
+function toggleSdMode() { satModeOff(); if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
+function toggleNdbMode() { satModeOff(); if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
 /* ★★★ TUNES THE RADIO ITSELF in the decoder panel — the mode menu's keys, with the mode menu's rule: a REFUSED mode is not
  *  drawn unless it is ON (so it can be left), DAB where the radio is DAB-capable. A press closes the panel, as the menu does. */
 setWholeRadioKeys(() => {
@@ -15397,11 +15455,10 @@ setWholeRadioKeys(() => {
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
   add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
-  // ★★ V12 SATELLITES: not a whole-radio mode — it opens the picker (passes, the sky track, DOPPLER). Only where the server
-  //    offers `doppler` (the radio reaches a listed downlink); the menu's rule — not drawn while it cannot run, unless open.
-  if (satCap && (satCap.ok || !!satPanel?.readout())) keys.push({ id: 'sat', label: 'SAT', on: !!satPanel?.readout(), dis: !satCap.ok,
-                          title: satCap.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${satCap.why}`,
-                          press: () => { satPanelGet()?.toggle(); closePanels(); } });
+  // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md): a whole-radio mode — every satellite, its passes, a pick tunes and
+  //     decodes, AUTO DOPPLER. Only where the server offers `doppler` (the radio reaches a listed downlink); the menu's rule
+  //     — not drawn while it cannot run, unless on (so it can be left).
+  add('sat', 'SATELLITE', satCap, !!satPanel?.active, toggleSatMode, 'Satellites — pick one from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets');
   return keys;
 });
 

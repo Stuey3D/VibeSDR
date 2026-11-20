@@ -54,9 +54,9 @@ export function lrptStatusText(st: LrptStatus | null): string {
 }
 
 export const LRPT_HINT =
-  'METEOR-M weather satellite pictures (LRPT): tune 137.100 or 137.900 MHz while a METEOR satellite passes over (a pass ' +
-  'lasts up to 15 minutes; a 137 MHz QFH or V-dipole aerial helps a lot). The picture grows here during the pass; each ' +
-  "pass's channels and colour composite are saved to the gallery as PNG.";
+  'METEOR-M weather satellite pictures (LRPT): pick a METEOR in SATELLITE (TUNES THE RADIO ITSELF) while one passes over — ' +
+  'the radio tunes and follows its Doppler by itself (a pass lasts up to 15 minutes; a 137 MHz QFH or V-dipole aerial ' +
+  "helps a lot). The picture grows during the pass; each pass's channels and colour composite are saved to the gallery as PNG.";
 
 /** The attach parameters. The symbol rate is the satellite's (72000, or 80000 for the 80k mode) when its entry is known
  *  (the satellite engine, sats.json); without one nothing is sent and the server tries both (AUTO). The rest AUTO. */

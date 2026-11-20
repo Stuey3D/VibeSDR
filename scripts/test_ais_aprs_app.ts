@@ -207,7 +207,7 @@ const tour = src('src/screens/SDRScreen.tsx');
 // ★ 53b94f5c0 reworded the card ("DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver").
 // ★ 2026-11-02: AIS opens the SHIPPING MAP (the ships beside the NAVTEX / DSC / sea-area layers) — the card says so.
 // ★ 2026-11-16 the mode card is an overview (Stuart): the AIS / APRS details live on their keys and in About, not the tour
-ok('Tour: the Mode card is the overview and names whole-receiver views', /whole-receiver views such as DAB, ADS-B and the shipping map/.test(tour));
+ok('Tour: the Mode card is the overview and names whole-receiver views', /whole-receiver views such as DAB, ADS-B, the shipping map and SATELLITE/.test(tour));
 ok('About: EXIT AIS is described', /EXIT AIS/.test(about));
 
 console.log(`${fails ? 'FAIL' : 'ok'}  test_ais_aprs_app — ${passes} passed, ${fails} failed`);

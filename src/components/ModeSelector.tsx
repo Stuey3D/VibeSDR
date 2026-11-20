@@ -547,7 +547,7 @@ interface ModeSelectorProps {
     /** ★★ V12 DTMF + 5-tone — only where `"tones"` is offered; DTMF / 5-TONE each on or off, and the 5-tone STANDARD (AUTO,
      *  with one table pinned under it). What is SHOWN is the server's rule (digits on the amateur bands only). */
     tonesAvail?: boolean; tonesSettings?: TonesOptions; onTonesSettings?: (s: TonesOptions) => void;
-    /** ★★ V12 METEOR-M LRPT — only where `"lrpt"` is present (true, or false with `lrptWhy`: greyed). Never on an Icom. */
+    /** ✗ Retired (2026-11-20): METEOR LRPT is decoded inside SATELLITE — no key reads this any more. */
     lrptAvail?: boolean;
     /** ★★ V12 VOR / ILS and 406 MHz beacons — only where `"vor"` / `"sarsat"` is offered (greyed with why off their
      *  frequencies). No settings: AUTO (the channel says VOR, localiser or glideslope); the hint under the key. */
@@ -672,7 +672,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const ncdxfShown = !!decoderControls?.ncdxfAvail && !isBlocked('ncdxf');   // ★ V12 NCDXF beacons
   const balloonShown = !!decoderControls?.balloonAvail && !isBlocked('balloon');   // ★ V12 balloons
   const tonesShown = !!decoderControls?.tonesAvail && !isBlocked('tones');   // ★ V12 DTMF + 5-tone
-  const lrptShown = !!decoderControls?.lrptAvail && !isBlocked('lrpt');   // ★ V12 METEOR LRPT
+  const lrptShown = false;   // ★★★ V12 METEOR LRPT has no key of its own since SATELLITE (2026-11-20) — it is decoded inside that mode
   const vorShown = !!decoderControls?.vorAvail && !isBlocked('vor');         // ★ V12 VOR / ILS
   const sarsatShown = !!decoderControls?.sarsatAvail && !isBlocked('sarsat'); // ★ V12 406 MHz beacons
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
@@ -755,6 +755,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (aisShown) addLegend('AIS', 'ais');
     if (avShown) addLegend('DATALINK', 'acars');
     if (sdShown) addLegend('SONDES', 'sondes');
+    if (decoderControls.satAvail) addLegend('SATELLITE', 'sat');   // ★★★ V12 SATELLITE (a whole-radio mode)
     if (decoderControls.dabAvail) addLegend('DAB', 'dab');
     if (ismShown) addLegend('ISM', 'ism');
     if (ndbShown) addLegend('NDB', 'ndb');
@@ -766,7 +767,6 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (ncdxfShown) addLegend('BEACONS', 'ncdxf');
     if (balloonShown) addLegend('BALLOONS', 'balloon');
     if (tonesShown) addLegend('DTMF / 5-TONE', 'tones');
-    if (lrptShown) addLegend('METEOR LRPT', 'lrpt');
     if (vorShown) addLegend('VOR / ILS', 'vor');
     if (sarsatShown) addLegend('406 BEACONS', 'sarsat');
     if (dscShown) addLegend('DSC', 'dsc');
@@ -1062,18 +1062,21 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const dc = decoderControls!;
     return (
       <NavItem key="sat" onPress={() => dc.onSat?.()}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label="SAT" active={satLit} pip stack={stackIco}
+        <MetalKey navRef={navRef} focused={navFocused} label="SATELLITE" active={satLit} pip iconId="sat" stack={stackIco}
           onPress={() => dc.onSat?.()} fontSize={12}
           style={satOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
-        accessibilityLabel={satOff ? `Satellites, unavailable: ${dc.satWhy}` : 'Satellites — next passes, a sky track and Doppler correction'}
+        accessibilityLabel={satOff ? `Satellite mode, unavailable: ${dc.satWhy}` : 'Satellite mode — pick a satellite from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets'}
         style={[st.btn, { borderColor: satLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
                 satLit && { backgroundColor: decBg },
                 satOff && { opacity: 0.45, borderStyle: 'dashed' as const },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => dc.onSat?.()} activeOpacity={0.8}>
-        <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: satLit ? dec : t.btnText }]}>SAT</Text>
+        <ModeLabel id="sat" stack={stackIco} numberOfLines={1} color={satLit ? dec : t.btnText}
+              style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: satLit ? dec : t.btnText }]}>
+          SATELLITE
+        </ModeLabel>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -1261,6 +1264,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'ais':  return { id, node: aisShown ? aisKey(false) : null };
       case 'avdata': return { id, node: avShown ? avKey() : null };
       case 'sondes': return { id, node: sdShown ? sdKey() : null };
+      case 'sat':  return { id, node: decoderControls.satAvail ? satKey() : null };   // ★★★ V12 SATELLITE beside SONDES
       case 'dab':  return { id, node: decoderControls.dabAvail ? dabKey() : null };
       case 'ism':  return { id, node: ismShown ? ismKey(false) : null };
       case 'ndb':  return { id, node: ndbShown ? ndbKey(false) : null };
@@ -1268,9 +1272,6 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       default: return { id, node: null };
     }
   }).filter(k => !!k.node);
-  // ★★ V12 SATELLITES beside them (it tunes the radio too: TRACK puts the dial on a downlink) — not in WHOLE_RADIO_IDS, it
-  //    is not a whole-radio mode
-  if (decoderControls?.satAvail) wholeKeys.push({ id: 'sat', node: satKey() });
   /* ★★ V12 THE BAND GROUPS — one renderer per id (utils/decoderBands names them), so a decoder placed in two bands (DSC,
    *  CW, APRS, SSTV, DIGITAL SPOTS) is the same key in each. null = not on this radio / not allowed here (the rules above,
    *  unchanged — a locked range still hides ADS-B and the rest). */
@@ -1285,7 +1286,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'ncdxf': return ncdxfShown ? srvKey('ncdxf', 'BEACONS', 'NCDXF beacon tracker') : null;
       case 'balloon': return balloonShown ? srvKey('balloon', 'BALLOONS', 'High-altitude balloon telemetry and pictures') : null;
       case 'tones': return tonesShown ? srvKey('tones', 'DTMF / 5-TONE', 'DTMF and 5-tone selective calling decoder') : null;
-      case 'lrpt': return lrptShown ? srvKey('lrpt', 'METEOR LRPT', 'METEOR weather satellite pictures decoder, LRPT') : null;
+      // ★★★ METEOR LRPT has no key of its own (2026-11-20): SATELLITE picks a METEOR and the server decodes it
       case 'vor':   return vorShown ? srvKey('vor', 'VOR / ILS', 'VOR radial and ILS deviation decoder') : null;
       case 'sarsat': return sarsatShown ? srvKey('sarsat', '406 BEACONS', 'COSPAS-SARSAT 406 MHz distress beacon decoder') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;

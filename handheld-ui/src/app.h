@@ -151,7 +151,7 @@ public:
     bool quit_ = false;
 
     // ── state ──
-    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC, S_MAP, S_SAT };   // ★ V12 S_SAT: sat_page.h
+    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC, S_MAP };   // ★ V12: no S_SAT — SATELLITE is not on the R36S (no network to sync orbit data, Stuart 2026-11-20)
     std::vector<Sheet> sheets_;
     std::deque<Btn> presses_;
     Jog tuneJog_{30}, zoomJog_{45};
@@ -214,7 +214,7 @@ public:
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
         switch (s) { case S_MODE: return "mode"; case S_STEP: return "step"; case S_MENU: return "menu"; case S_AUDIO: return "audio";
-                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; case S_MAP: return "map"; case S_SAT: return "sat"; default: return "deck"; }
+                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; case S_MAP: return "map"; default: return "deck"; }
     }
     void applyLook() {
         wfp_.setPalette(set_.palette);
@@ -241,7 +241,6 @@ public:
     // BOOKMARKS + SEARCH (bm_page.h, search_page.h) — reached from the frequency pad's two keys
     void drawBookmarks(Ctx& c, const RadioState& s);
     void drawSearch(Ctx& c, const RadioState& s);
-    void drawSat(Ctx& c, const RadioState& s);   // ★ V12 sat_page.h — the satellites page
     void drawSearchLive(Ctx& c, Rect r);
     void drawPadLinks(Ctx& c, Rect r);
     bool padLinksInput(Btn b);
@@ -331,9 +330,6 @@ inline void mapTick(App&, const RadioState&);
 inline bool mapTune(App&, int);
 inline bool mapZoom(App&, int);
 inline void mapModeEntries(const RadioState&, std::vector<ModeDef>&);
-inline void satModeEntries(const RadioState&, std::vector<ModeDef>&);   // ★ V12 sat_page.h
-inline void satOpen(App&);
-inline void satDrawLine(Ctx&, const RadioState&, float, float);
 inline bool mapModeLit(const std::string&);
 inline bool mapModePick(App&, const RadioState&, const std::string&);
 inline void mapDecFeed(App&, const std::string&, const Json&);
@@ -369,7 +365,8 @@ namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "dec_box.h"
 #include "map_page.h"
 #include "map_modes.h"
-#include "sat_page.h"   // ★ V12 satellites — the picker, the readout, DOPPLER (docs/v12/SATELLITE-ENGINE.md)
+// ★★★ No satellites page here (sat_page.h removed 2026-11-20): Stuart — "r36s cant have the satellite mode as no network
+//     connection to sync the orbit data". A control that only works in one scenario is not drawn (AGENTS.md).
 #include "memory.h"
 #include "clock_rds.h"
 #include "adv_rds.h"
