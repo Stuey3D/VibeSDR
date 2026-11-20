@@ -3442,7 +3442,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   sudden drop is the owner's restriction — not a fault in VibeSDR. For unrestricted
                   access, use UberSDR or OpenWebRX.
                 </Text>
-                {/* ★★ HIGH DETAIL MAPS — installed (size, Remove?) or not (approx 230 MB, Download now?),
+                {/* ★★ HIGH DETAIL MAPS — installed (size, Remove?) or not (approx 250 MB, Download now?),
                     exactly as Stuart worded it (2026-09-27). The coarse maps built into the app do the
                     job for HFDL / ADS-B / AIS / ACARS / spots; this is for zooming right in. */}
                 {(() => {
@@ -3455,7 +3455,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     ? `High Detail Maps update available (${mb(DETAIL_BYTES)}) — rivers drawn as water, so ports up a river are no longer on land. Update now?`
                     : detailMaps.installed
                     ? `High Detail Maps installed, current space taken ${mb(detailMaps.bytes)} — Remove?`
-                    : 'High Detail Maps not installed. These require approx 230 MB of storage space on this device and are a one time download — Download now?';
+                    : 'High Detail Maps not installed. These require approx 250 MB of storage space on this device and are a one time download — Download now?';
                   const onPress = () => {
                     if (st.kind === 'downloading') return;
                     if (detailMaps.outdated) {

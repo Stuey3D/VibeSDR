@@ -367,7 +367,7 @@ export default function App() {
       t = setTimeout(() => {
         appAlert(
           'High Detail Maps',
-          'Download the high detail maps? They need approx 230 MB of storage space on this device and are a one time download.\n\nWithout them the standard maps still work. You can download them later from the bottom of the server list.',
+          'Download the high detail maps? They need approx 250 MB of storage space on this device and are a one time download.\n\nWithout them the standard maps still work. You can download them later from the bottom of the server list.',
           [{ text: 'Not now', style: 'cancel', onPress: () => { void markDetailAsked(); } },
            { text: 'Download', onPress: () => { void markDetailAsked(); void downloadDetail(); } }],
           { cancelable: false });

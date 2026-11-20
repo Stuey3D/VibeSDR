@@ -8,7 +8,7 @@
 // ★★★ TWO DIRECTORIES, AND THEY ARE DIFFERENT PROMISES.
 //     The BUNDLE dir (read-only) is what the package installed: the renderer, the style, the
 //     glyphs, the icons, and the basic + relief packs. It is always complete or absent.
-//     The DATA dir (writable) holds ONE optional file — vibemap-detail.pmtiles, ~223 MB — which an
+//     The DATA dir (writable) holds ONE optional file — vibemap-detail.pmtiles, ~239 MB — which an
 //     owner downloads from the admin page, and which can be removed again. So it is `no-cache`,
 //     while the bundle is cached for a day.
 //
@@ -68,10 +68,10 @@ namespace vibemapgl {
 
 // ★ One release asset, shared with the app (src/services/mapglDetail.ts). Change both or neither.
 inline constexpr const char* DETAIL_URL =
-    "https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v3/vibemap-detail.pmtiles";   // ★ v3 2026-11-20: rivers as water
+    "https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v4/vibemap-detail.pmtiles";   // ★ v4 2026-11-20: rivers as water (wide ones from z8)
 // ★★ v2 (2026-11-18): islands in lakes are land again (v1 drew Flevoland and every lake island as water). An
 //    installed pack of any other size is an OLDER pack and a server replaces it by itself — see refreshOutdated().
-inline constexpr int64_t DETAIL_BYTES = 234132571;
+inline constexpr int64_t DETAIL_BYTES = 250319197;
 inline constexpr const char* DETAIL_NAME = "vibemap-detail.pmtiles";
 
 using Downloader = std::function<bool(const std::string&, const std::string&,
