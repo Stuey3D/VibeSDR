@@ -3,7 +3,8 @@
 // and the store, the DSC pins from the box and the gallery, the time filter, the KEY, and the weather arrows.
 //   npx tsx scripts/test_shipping_map.ts
 import { shipLayersPresent, shipToggles, shipOn, shipLayersOf, storeSanitise, shipShips, shipItems, shipRows, dscPinsFromCalls, dscPinsFromGallery,
-         dscPinsMerge, dscInRange, dscPinItems, dscIcon, shipLegendRows, windLegendRows, SHIPPING_TITLE, type ShipHave } from '../src/services/shippingMap';
+         dscPinsMerge, dscInRange, dscPinItems, dscIcon, shipLegendRows, windLegendRows, SHIPPING_TITLE, dscGalSummary, DSC_SHIP_EMPTY, dscPinRows,
+         type ShipHave } from '../src/services/shippingMap';
 import { navWindSanitise, windSvg, windLabel, windColour, windLength, windWords, windBox } from '../src/services/navtexWind';
 import { navMetSanitise, navMetIcon, navMetCard, navMetAria } from '../src/services/navtexWarn';
 
@@ -108,6 +109,23 @@ yes('the marker is centred on the arrow (name and label the same height)', ic.h 
 yes('an older server (no wind): the pill as before', !navMetIcon(met.areas[1]).html.includes('<svg') && navMetIcon(met.areas[1]).html.includes('DOVER'));
 yes('the card says what the arrows show', navMetCard(met.areas[0], 2000).includes('from the south-west, force 8'));
 yes('…and the screen reader', navMetAria(met.areas[0]).includes('wind from the south-west'));
+
+console.log('── beta88 the gallery\'s DSC row: a routine call with a position is on the map ──');
+const T0 = 1800000000;
+const gal88 = dscPinsFromGallery({ items: [
+  { k: 'dsc', f: 'dsc-pos.txt', t: T0, title: 'ROUTINE POSITION · 366123450 (United States) · 36°51\'N 076°18\'W at 09:41 UTC', lv: 0, plat: 36.85, plon: -76.3 },
+  { k: 'dsc', f: 'dsc-saf.txt', t: T0 - 60, title: 'SAFETY · 235000111 · 50°N 001°W', lv: 1, plat: 50, plon: -1 },
+  { k: 'dsc', f: 'dsc-day.txt', t: T0 - 3600, title: 'DSC 8414.5 kHz · 20 Nov · 23 calls', lv: -1 },   // the day's log: no pin
+] });
+eq('the positioned routine and safety calls are pins (the day\'s log is not)', gal88.map((p) => [p.key, p.level]), [['d:g:dsc-pos.txt', 0], ['d:g:dsc-saf.txt', 1]]);
+eq('…the row\'s words', dscGalSummary(gal88), 'SHIPPING MAP · DSC calls with a position: 2');
+eq('…with alerts counted', dscGalSummary([...gal88, { ...gal88[0], key: 'd:g:x', level: 3 }]), 'SHIPPING MAP · DSC calls with a position: 3 · 1 distress');
+eq('no pinned DSC call in the gallery: no row (no dead control)', dscGalSummary(dscPinsFromGallery({ items: [{ k: 'dsc', f: 'd.txt', t: T0, title: 'DSC log', lv: -1 }] })), null);
+eq('…nor from the box\'s live calls alone (the row is the gallery\'s)', dscGalSummary([{ ...gal88[0], from: 'live' }]), null);
+yes('the routine pin is on the map within the day', dscInRange(gal88, T0 + 3600).some((p) => p.key === 'd:g:dsc-pos.txt'));
+yes('…its item and row, coloured routine', dscPinItems(gal88, null, T0).length === 2 && dscPinRows(gal88, null, T0)[0].colour === '#9fb3c8');
+eq('…gone after a day (the shipping map\'s time rule): the empty text', dscInRange(gal88, T0 + 2 * 86400).length, 0);
+eq('the empty text', DSC_SHIP_EMPTY, 'No DSC call with a position in this time.');
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

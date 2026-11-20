@@ -4,7 +4,8 @@
 // its sources is on, the basemap profile, the items / rows / card / KEY, and never a message body.
 //   npx tsx scripts/test_aviation_map.ts
 import { avLayersOf, avLayersPresent, avToggles, avOn, avProfile, sharedSanitise, avMerge, avHave, avVisible, avPlaneItems, avPlaneRows,
-         avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, type AvHave } from '../src/services/aviationMap';
+         avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, avNowRule, avAdsbNote, AV_ADSB_NOW_SEC,
+         type AvHave } from '../src/services/aviationMap';
 import { parseAvReport } from '../src/services/aviation';
 
 let passes = 0, fails = 0;
@@ -102,6 +103,55 @@ yes('ADS-B off: 400F11 neither on the map nor in the list', !c.items.some((i) =>
 yes('the station item drawn (HFDL STATIONS on)', c.items.some((i) => i.key === 'g:3'));
 yes('the app\'s card wrapper', c.items[0]._cd.includes('max-width:320px'));
 eq('the title', AVIATION_TITLE, 'AVIATION MAP');
+
+console.log('── beta88 ADS-B only while heard (Stuart: "326 adsb aircraft on the map when i am in ACARS mode … there should be 0") ──');
+// the hour the server keeps: 4 ADS-B heard now, 322 more ADS-B-only heard 2–59 min ago, one ADS-B + VDL2 whose ADS-B is 20 min old
+const NOW = 1800000000;
+const hourRows: any[] = [];
+for (let i = 0; i < 326; i++) {
+  const age = i < 4 ? 1 + i : 120 + i * 10;
+  hourRows.push({ key: (0x400000 + i).toString(16).toUpperCase(), icao: (0x400000 + i).toString(16).toUpperCase(), flight: `T${i}`, lat: 52 + i / 1000, lon: -1, posSrc: 'ADS-B', posAge: age, trk: 90, gs: 400,
+                  src: ['ADS-B'], srcAge: { 'ADS-B': age }, age, n: 5 });
+}
+hourRows.push({ key: '4CA97B', icao: '4CA97B', reg: 'EI-EST', flight: 'RYR12AB', lat: 52.6, lon: -1.3, alt: 36000, trk: 90, gs: 450, posSrc: 'ADS-B', posAge: 1200,
+                src: ['ADS-B', 'VDL2'], srcAge: { 'ADS-B': 1200, VDL2: 30 }, age: 30, n: 30 });
+const tbl = (extra: object) => sharedSanitise({ now: NOW, count: hourRows.length, aircraft: hourRows, stations: [], ...extra })!;
+const live1 = tbl({ adsbLive: 1, adsbLast: 1, adsbNow: 4 });
+eq('the server\'s ADS-B state parsed', live1.adsb, { live: true, last: 1, off: false });
+eq('an older server: live unknown (null)', sharedSanitise({ aircraft: [] })!.adsb, { live: null, last: -1, off: false });
+eq('the window is a minute', AV_ADSB_NOW_SEC, 60);
+const r1 = avNowRule(avMerge(null, live1), live1);
+eq('ADS-B decoding: only the 4 heard in the last minute count (and 4CA97B, for its VDL2)', r1.planes.length, 5);
+eq('…ADS-B 4 in the status, not 326', /ADS-B 4\b/.test(avMapStatus(r1.planes)), true);
+const ei2 = r1.planes.find((p) => p.icao === '4CA97B')!;
+eq('ADS-B + VDL2, ADS-B 20 min old: kept for its VDL2, ADS-B out of its sources', ei2.src, ['VDL2']);
+eq('…its ADS-B history kept for the card', ei2.adsbWas, 1200);
+eq('…its ADS-B position is "last seen" (UTC HH:MM), never a live fix', ei2.lastSeen, new Date((NOW - 1200) * 1000).toISOString().slice(11, 16));
+yes('…no track or speed drawn for it', ei2.trk == null && ei2.gs == null);
+const c88 = avCompose(null, live1, 'datalink', avLayersOf(null), { lat: 52, lon: -1 }, 'web');
+const eiItem = c88.items.find((i) => i.key === 'a:4CA97B')!;
+yes('…drawn faded', eiItem._ic.html.includes('opacity=".45"'));
+yes('…the card says Last seen and not since, and ADS-B as history', /Last seen/.test(eiItem._cd) && /not heard there since/.test(eiItem._cd) && /ADS-B 20 min ago \(not since\)/.test(eiItem._cd));
+yes('…the row says ADS-B last seen', c88.rows.find((r) => r.key === 'a:4CA97B')!.second.includes(`ADS-B last seen ${ei2.lastSeen} UTC`));
+eq('the status line counts now', c88.status, '5 aircraft (5 on the map) · ADS-B 4 · VDL2 1');
+// Stuart's case: the ADS-B radio is in ACARS mode — the server says no radio is decoding ADS-B
+const off1 = tbl({ adsbLive: 0, adsbLast: 300, adsbNow: 0 });
+const cOff = avCompose(null, off1, 'datalink', avLayersOf(null), null, 'web');
+eq('no radio decoding ADS-B: ADS-B count 0 — only 4CA97B (its VDL2) remains', cOff.planes.map((p) => p.key), ['4CA97B']);
+yes('…even the 4 heard seconds ago are gone', !cOff.items.some((i) => i.key === 'a:400000'));
+eq('…the status says why, in plain words', cOff.status, '1 aircraft (1 on the map) · VDL2 1 · ADS-B: this server\'s ADS-B radio is in use for something else');
+yes('…the ADS-B layer toggle is absent (nothing to show)', !cOff.present.includes('adsb'));
+const none = avCompose(null, tbl({ adsbLive: 0, adsbLast: -1 }), 'datalink', avLayersOf(null), null, 'web');
+yes('never decoded ADS-B (but rows from before): "no radio on this server is decoding it"', /ADS-B: no radio on this server is decoding it/.test(none.status));
+const old = avCompose(null, tbl({}), 'datalink', avLayersOf(null), null, 'web');
+eq('an older server (cannot tell): the age alone — 4 ADS-B now', /ADS-B 4\b/.test(old.status), true);
+const quiet = avCompose(null, sharedSanitise({ now: NOW, aircraft: hourRows.slice(10, 20), stations: [], adsbLive: 1, adsbLast: 0 })!, 'adsb', avLayersOf(null), null, 'web');
+eq('decoding but nothing heard for a minute: "none heard in the last minute"', quiet.status, 'ADS-B: none heard in the last minute');
+eq('the owner switched ADS-B off', avAdsbNote([], { live: false, last: 10, off: true }, 3, 'datalink'), 'ADS-B: switched off on this server');
+eq('a datalink-only server that never had ADS-B: no ADS-B words at all', avAdsbNote([], { live: false, last: -1, off: false }, 0, 'hfdl'), '');
+eq('ADS-B aircraft on the map: no note', avAdsbNote(r1.planes, live1.adsb, 322, 'datalink'), '');
+yes('the input rows are not changed by the rule', avMerge(null, live1).length === 327 && live1.aircraft[326].src.includes('ADS-B'));
+yes('the KEY explains "last seen"', avLegendRows(['adsb', 'airports']).some((r) => /last seen/.test(r[1])));
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

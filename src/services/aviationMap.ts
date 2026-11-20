@@ -90,9 +90,17 @@ export interface AvPlane {
   age: number; n: number;
   /** ★ this listener's live DATALINK report has it now (the rest is the shared table's) */
   live?: boolean;
+  /** ★ beta88 (avNowRule): ADS-B heard it, but not in the last AV_ADSB_NOW_SEC — how long ago (s). 'ADS-B' is then out of
+   *  `src` (the counts, layers and "heard on more than one" are NOW); the card keeps it as history. */
+  adsbWas?: number;
+  /** ★ beta88: the position is an ADS-B fix older than AV_ADSB_NOW_SEC — drawn faded, shown as "last seen HH:MM UTC",
+   *  never as a live fix (no track, no speed). */
+  lastSeen?: string;
 }
 export interface AvStation { id: number; name: string; lat: number; lon: number; khz: number; age: number }
-export interface SharedAircraft { now: number; count: number; off: boolean; aircraft: AvPlane[]; stations: AvStation[] }
+/** ★ beta88 the server's ADS-B state (vibe_aircraft_share.h toJson). `live` null = an older server that cannot say. */
+export interface AvAdsbState { live: boolean | null; last: number; off: boolean }
+export interface SharedAircraft { now: number; count: number; off: boolean; aircraft: AvPlane[]; stations: AvStation[]; adsb: AvAdsbState }
 
 const str = (v: unknown, max: number): string | undefined =>
   typeof v === 'string' && v.length ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : undefined;
@@ -129,7 +137,8 @@ export function sharedSanitise(j: any): SharedAircraft | null {
     if (id == null || lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
     stations.push({ id, name: str(s.name, 40) ?? `station ${id}`, lat, lon, khz: num(s.khz) ?? 0, age: Math.max(0, num(s.age) ?? 0) });
   }
-  return { now: num(j.now) ?? 0, count: num(j.count) ?? aircraft.length, off: j.off === 1, aircraft, stations };
+  const adsb: AvAdsbState = { live: j.adsbLive === 1 ? true : j.adsbLive === 0 ? false : null, last: num(j.adsbLast) ?? -1, off: j.adsbOff === 1 };
+  return { now: num(j.now) ?? 0, count: num(j.count) ?? aircraft.length, off: j.off === 1, aircraft, stations, adsb };
 }
 
 /** ★ The datalink mode's live row → the map's shape (its sources from how it was heard). */
@@ -176,6 +185,46 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
   const order = (p: AvPlane) => Math.min(p.age, ...Object.values(p.srcAge));
   return out.sort((a, b) => order(a) - order(b));
 }
+
+/** ★★★ beta88 ADS-B ONLY WHILE HEARD (Stuart, 2026-11-20, the Pi 500 in ACARS mode on the V4L that normally does ADS-B:
+ *  "how is there 326 adsb aircraft on the map when i am in ACARS mode? plus my adsb only picks up about 30-40 on this
+ *  box … there should be 0 then"). The server's table keeps every aircraft an HOUR — right for ACARS / VDL2 / HFDL, which
+ *  talk in bursts minutes apart, wrong for ADS-B: an aircraft in range squitters its position twice a second, so one ADS-B
+ *  has not heard for a minute has flown out of range or the radio stopped listening. Same number as the server's
+ *  kAdsbNowSec (vibe_aircraft_share.h). */
+export const AV_ADSB_NOW_SEC = 60;
+const hhmmUtc = (epochSec: number) => { const d = new Date(epochSec * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
+/** ★★ The now-rule, on the merged aircraft (copies; the input is not touched):
+ *   · ADS-B heard it in the last AV_ADSB_NOW_SEC AND the server says a radio is decoding ADS-B (adsb.live; an older
+ *     server that cannot say → the age alone) → ADS-B counts.
+ *   · else an aircraft heard ONLY on ADS-B is gone — neither drawn nor counted;
+ *   · else (a datalink source too) it stays with its datalink history: 'ADS-B' leaves `src` (adsbWas keeps when), and an
+ *     ADS-B position is "last seen HH:MM UTC" — faded, never a live fix.
+ *  `adsbGone`: how many had ADS-B and lost it (the status line's ADS-B words). */
+export function avNowRule(planes: AvPlane[], shared: SharedAircraft | null): { planes: AvPlane[]; adsbGone: number } {
+  const adsbOk = shared?.adsb?.live !== false && !shared?.adsb?.off;
+  const nowSec = shared?.now || Date.now() / 1000;
+  const out: AvPlane[] = [];
+  let adsbGone = 0;
+  for (const p0 of planes) {
+    const hadAdsb = p0.src.includes('ADS-B');
+    const heard = hadAdsb && adsbOk && (p0.srcAge['ADS-B'] ?? Infinity) <= AV_ADSB_NOW_SEC;
+    const p: AvPlane = { ...p0, src: p0.src.slice(), srcAge: { ...p0.srcAge } };
+    if (hadAdsb && !heard) {
+      adsbGone++;
+      p.src = p.src.filter((x) => x !== 'ADS-B');
+      if (!p.src.length) continue;                      // ADS-B only: not heard now = not on the map, not counted
+      p.adsbWas = p0.srcAge['ADS-B'] ?? p0.age;
+      delete p.srcAge['ADS-B'];
+    }
+    if (p.posSrc === 'ADS-B' && p.lat != null && (!heard || (p.posAge ?? Infinity) > AV_ADSB_NOW_SEC)) {
+      p.lastSeen = hhmmUtc(nowSec - (p.posAge ?? 0));
+      p.trk = undefined; p.gs = undefined;              // ★ never drawn as if it were flying there now
+    }
+    out.push(p);
+  }
+  return { planes: out, adsbGone };
+}
 const SRC_LAYER: Record<string, AvSrcId> = Object.fromEntries(AV_SRC.map((s) => [s.name, s.id]));
 export function avHave(planes: AvPlane[], stations: AvStation[]): AvHave {
   const h: AvHave = { adsb: 0, acars: 0, vdl2: 0, hfdl: 0, adsc: 0, stations: stations.length };
@@ -188,7 +237,7 @@ export function avVisible(p: AvPlane, present: AvLayerId[], layers: AvLayers): b
 }
 /** A position is drawn for an hour (the table's keep); past ten minutes it is faded — the aircraft has flown on. */
 export const AV_FADE_SEC = 600;
-export function avFaded(p: AvPlane): boolean { return (p.posAge ?? 0) > AV_FADE_SEC; }
+export function avFaded(p: AvPlane): boolean { return !!p.lastSeen || (p.posAge ?? 0) > AV_FADE_SEC; }
 export function avColour(p: AvPlane): string { return SRC_BY_NAME.get(p.posSrc || p.src[0] || '')?.colour ?? '#ffd34d'; }
 export function avName(p: AvPlane): string { return p.flight || p.reg || p.icao || 'aircraft'; }
 /** ★ The aircraft glyph: pointing along its track where one is known (ADS-B), coloured by the source of its position. */
@@ -198,7 +247,9 @@ export function avPlaneIcon(p: AvPlane): { html: string; w: number; h: number } 
   return { w: 24, h: 24, html: `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"${op}><g transform="rotate(${rot} 12 12)"><path fill="${col}" stroke="#000" stroke-width="0.8" d="M12 2l1.6 7.2 7.4 3.3v1.9l-7.4-1.6-.4 5.2 2.3 1.7V21L12 20l-3.5 1v-1.3l2.3-1.7-.4-5.2L3 14.4v-1.9l7.4-3.3z"/></g>${multi}</svg>` };
 }
 function heardLine(p: AvPlane): string {
-  return AV_SRC.filter((s) => p.src.includes(s.name)).map((s) => `${s.name} ${ago(p.srcAge[s.name] ?? p.age)}`).join(' · ');
+  const now = AV_SRC.filter((s) => p.src.includes(s.name)).map((s) => `${s.name} ${ago(p.srcAge[s.name] ?? p.age)}`);
+  if (p.adsbWas != null) now.push(`ADS-B ${heardAgo(p.adsbWas)} (not since)`);   // ★ beta88 the history, never a live source
+  return now.join(' · ');
 }
 export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' = 'web'): string {
   const rows: string[] = [];
@@ -207,8 +258,8 @@ export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' =
   if (p.from && p.to) add('Route', `${p.from} → ${p.to}`);
   if (p.oooi) add(p.oooi.toUpperCase(), p.oooiTime ? `${p.oooiTime} UTC` : 'heard');
   if (p.lat != null && p.lon != null) {
-    add('Position', `${Math.abs(p.lat).toFixed(3)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(3)}°${p.lon >= 0 ? 'E' : 'W'}`
-      + `${p.posSrc ? ` · from ${p.posSrc}` : ''}${p.posAge != null ? ` · ${heardAgo(p.posAge)}` : ''}`);
+    add(p.lastSeen ? 'Last seen' : 'Position', `${Math.abs(p.lat).toFixed(3)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(3)}°${p.lon >= 0 ? 'E' : 'W'}`
+      + `${p.posSrc ? ` · from ${p.posSrc}` : ''}${p.lastSeen ? ` · at ${p.lastSeen} UTC — not heard there since` : p.posAge != null ? ` · ${heardAgo(p.posAge)}` : ''}`);
     if (p.alt != null) add('Altitude', p.ground ? 'on the ground' : `${Math.round(p.alt).toLocaleString('en-GB')} ft`);
     if (p.gs != null) add('Speed', `${Math.round(p.gs)} kt${p.trk != null ? ` · track ${Math.round(p.trk)}°` : ''}`);
     if (p.posTime) add('Fix time', p.posTime.startsWith(':') ? `${p.posTime} past the hour (as reported)` : `${p.posTime} UTC (as reported)`);
@@ -226,7 +277,8 @@ export function avPlaneItems(planes: AvPlane[], rx: LatLon | null, wrap: 'web' |
   return planes.filter((p) => p.lat != null && p.lon != null).slice(0, 2048).map((p) => ({
     key: `a:${p.key}`, lat: p.lat as number, lon: p.lon as number, _ic: avPlaneIcon(p), _lb: avName(p), _cd: avPlaneCard(p, rx, wrap),
     // ★ the declutter: a fresh fix's name above a faded one's; stations and airports' names yield to aircraft
-    _rk: 5e11 - Math.min(p.posAge ?? 1e6, 1e6), _aria: `${avName(p)}: heard on ${p.src.join(', ')}. Press Enter for the card.`,
+    _rk: 5e11 - Math.min(p.posAge ?? 1e6, 1e6),
+    _aria: `${avName(p)}: heard on ${p.src.join(', ')}${p.lastSeen ? `; its ADS-B position was last seen at ${p.lastSeen} UTC` : ''}. Press Enter for the card.`,
   } as TrackItem));
 }
 export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
@@ -235,7 +287,8 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
     const who = [p.reg && p.reg !== avName(p) ? p.reg : '', p.icao && p.icao !== avName(p) ? p.icao : '', p.type ?? ''].filter(Boolean).join(' · ');
     return {
       key: `a:${p.key}`, colour: avColour(p), flag: '', name: avName(p),
-      second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft), avFix({ ...p, posSrc: p.posApp ?? p.posSrc } as unknown as AvAircraft), p.labelName ?? ''].filter(Boolean).join(' · '),
+      second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft),
+               p.lastSeen ? `ADS-B last seen ${p.lastSeen} UTC` : avFix({ ...p, posSrc: p.posApp ?? p.posSrc } as unknown as AvAircraft), p.labelName ?? ''].filter(Boolean).join(' · '),
       sp: p.alt != null ? (p.ground ? 'GND' : `FL${String(Math.max(0, Math.round(p.alt / 100))).padStart(3, '0')}`) : '', trend: 0 as const,
       range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : p.lat == null ? 'no position' : '',
       brg: rb ? compass8(rb.brg) : '', noPos: p.lat == null, age: ago(Math.min(p.age, ...Object.values(p.srcAge))), em: false,
@@ -254,12 +307,24 @@ export function avStationItems(st: AvStation[], wrap: 'web' | 'app' = 'web'): Tr
       _rk: 1e11, _aria: `HFDL ground station ${s.name}. Press Enter for the card.` } as TrackItem;
   });
 }
-export function avMapStatus(planes: AvPlane[]): string {
-  if (!planes.length) return '';
+/** ★★ beta88 the ADS-B words, in plain language, when the map has no ADS-B aircraft to show: why. '' when it has some, or
+ *  when ADS-B has nothing to explain (a server that never decoded it and has no ADS-B history, not opened for ADS-B). */
+export function avAdsbNote(planes: AvPlane[], adsb: AvAdsbState | null | undefined, adsbGone: number, focus: AvFocus): string {
+  if (planes.some((p) => p.src.includes('ADS-B'))) return '';
+  const relevant = adsbGone > 0 || focus === 'adsb' || (adsb?.last ?? -1) >= 0;
+  if (!relevant) return '';
+  if (adsb?.off) return 'ADS-B: switched off on this server';
+  if (adsb?.live === false) return adsb.last >= 0 ? 'ADS-B: this server\'s ADS-B radio is in use for something else' : 'ADS-B: no radio on this server is decoding it';
+  return 'ADS-B: none heard in the last minute';
+}
+/** ★ The status line counts NOW (beta88): ADS-B's within the last minute (avNowRule), the datalink's within the hour the
+ *  server keeps them (their bursts are minutes apart). */
+export function avMapStatus(planes: AvPlane[], note = ''): string {
+  if (!planes.length) return note;
   const pos = planes.filter((p) => p.lat != null).length;
   const by = AV_SRC.map((s) => [s.name, planes.filter((p) => p.src.includes(s.name)).length] as const).filter(([, n]) => n > 0).map(([n, c]) => `${n} ${c}`);
   const both = planes.filter((p) => p.src.filter((s) => s !== 'ADS-C').length > 1).length;
-  return `${planes.length} aircraft (${pos} on the map)${by.length ? ` · ${by.join(' · ')}` : ''}${both ? ` · ${both} heard on more than one` : ''}`;
+  return `${planes.length} aircraft (${pos} on the map)${by.length ? ` · ${by.join(' · ')}` : ''}${both ? ` · ${both} heard on more than one` : ''}${note ? ` · ${note}` : ''}`;
 }
 export const AV_EMPTY = 'No aircraft yet. ADS-B (1090 MHz), the aircraft datalink (ACARS / VDL2) and HFDL each add theirs — on any radio of this server.';
 
@@ -270,7 +335,7 @@ export function avLegendRows(present: AvLayerId[]): Array<[string, string]> {
   const rows: Array<[string, string]> = [];
   for (const s of AV_SRC) if (present.includes(s.id)) rows.push([small(plane(s.name, [s.name])), `Aircraft whose position came from ${s.name}`]);
   rows.push([small(plane('ADS-B', ['ADS-B', 'VDL2'])), 'The number: heard on that many sources (one aircraft, never drawn twice)']);
-  rows.push([small(plane('VDL2', ['VDL2'], { posAge: AV_FADE_SEC + 1 })), 'Faded: the position is over ten minutes old']);
+  rows.push([small(plane('VDL2', ['VDL2'], { posAge: AV_FADE_SEC + 1 })), 'Faded: an old position — a datalink fix over ten minutes old, or an ADS-B one not heard for a minute ("last seen")']);
   if (present.includes('stations')) rows.push([small(avStationIcon().html), 'HFDL ground station heard']);
   if (present.includes('airports')) rows.push(['<span style="display:inline-block;width:20px;text-align:center">✈</span>', 'Airports and runways (the AIRPORTS layer)']);
   return rows;
@@ -281,11 +346,12 @@ export function avLegendHtml(present: AvLayerId[]): string {
 
 /** ★★ ONE COMPOSITION for both clients: the items, the list's rows (sections when several layers), the status line. */
 export function avCompose(live: AvReport | null, shared: SharedAircraft | null, focus: AvFocus, layers: AvLayers, rx: LatLon | null, wrap: 'web' | 'app' = 'web') {
-  const planes = avMerge(live, shared);
+  const { planes, adsbGone } = avNowRule(avMerge(live, shared), shared);   // ★ beta88 ADS-B only while heard
   const stations = shared?.stations ?? [];
   const present = avLayersPresent(avHave(planes, stations), focus);
   const shown = planes.filter((p) => avVisible(p, present, layers));
   const items: TrackItem[] = [...avPlaneItems(shown, rx, wrap)];
   if (avOn('stations', present, layers)) items.push(...avStationItems(stations, wrap));
-  return { planes: shown, items, rows: avPlaneRows(shown, rx), status: avMapStatus(shown), present, toggles: avToggles(present), profile: avProfile(present, layers) };
+  const note = avAdsbNote(planes, shared?.adsb, adsbGone, focus);
+  return { planes: shown, items, rows: avPlaneRows(shown, rx), status: avMapStatus(shown, note), present, toggles: avToggles(present), profile: avProfile(present, layers) };
 }

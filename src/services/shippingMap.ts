@@ -130,8 +130,8 @@ export function dscPinsFromCalls(calls: readonly DscCall[]): DscPin[] {
     who: c.distressId || c.self || '', from: 'live' as const,
   }));
 }
-/** ★ /vibeserver/gallery.json?kind=dsc — the pinned items ("plat"/"plon", vibe_dsc_gallery.h): distress and urgency alerts
- *  from ANY radio on the server (background decoding included). */
+/** ★ /vibeserver/gallery.json?kind=dsc — the pinned items ("plat"/"plon", vibe_dsc_gallery.h): distress and urgency alerts,
+ *  and (beta88) every routine or safety call that sent a position, from ANY radio on the server (background decoding too). */
 export function dscPinsFromGallery(j: any): DscPin[] {
   if (!j || !Array.isArray(j.items)) return [];
   const out: DscPin[] = [];
@@ -147,6 +147,18 @@ export function dscPinsFromGallery(j: any): DscPin[] {
   }
   return out;
 }
+/** ★★ beta88 THE GALLERY'S DSC ROW (Stuart, 2026-11-20: "i have no map button to view them from the gallery on the
+ *  pi500"): on page 1 of ALL / DSC, a standing "SHIPPING MAP · DSC calls with a position" row with MAP — NAVTEX's row's
+ *  shape. Drawn only when the gallery holds a pinned DSC call (no dead control); null = no row. */
+export function dscGalSummary(pins: DscPin[]): string | null {
+  const g = pins.filter((p) => p.from === 'gallery');
+  if (!g.length) return null;
+  const d = g.filter((p) => p.level >= 3).length, u = g.filter((p) => p.level === 2).length;
+  return `SHIPPING MAP · DSC calls with a position: ${g.length}${d ? ` · ${d} distress` : ''}${u ? ` · ${u} urgency` : ''}`;
+}
+export const DSC_GAL_WORDS = 'Every DSC call in this gallery that sent a position — distress, urgency, safety and routine (HF position replies) — a listener’s decoder and background decoding';
+/** The SHIPPING MAP's DSC list with nothing in the time chosen (web and app). */
+export const DSC_SHIP_EMPTY = 'No DSC call with a position in this time.';
 /** ★ The two together, the same call heard both ways (the box and the gallery's alert) once: same position, within 2 min. */
 export function dscPinsMerge(live: DscPin[], gal: DscPin[]): DscPin[] {
   const out = live.slice();

@@ -4,7 +4,8 @@
 #
 #   scripts/test-dsc.sh                  build both; every format, decode rate vs SNR, 30 min of noise, CPU (both builds)
 #   scripts/test-dsc.sh build            build only (prints the binaries' paths)
-#   scripts/test-dsc.sh clip <file> [vhf]  the server tests' IQ clip (960 kHz; MF/HF on 2187.5 kHz or VHF ch 70)
+#   scripts/test-dsc.sh clip <file> [vhf|pos]  the server tests' IQ clip (960 kHz; MF/HF on 2187.5 kHz or VHF ch 70;
+#                                              pos = MF/HF + a routine position reply, for the gallery's SHIPPING MAP row)
 #   scripts/test-dsc.sh wav <file.wav> [centreHz]   a recording (mono int16, 12/24/48 kHz) through the MF/HF receiver
 #
 # ★ Silent (nothing is played). ★ CPU: nice, one compile at a time. The pass/fail checks are vibeserver/test-dsc.cpp
@@ -24,6 +25,7 @@ case "${1:-all}" in
   clip)
     build
     if [ "${3:-}" = "vhf" ]; then "$OUT/dsc_bench" clip "${2:?clip file}" 960000 18 156525000 156525000 vhf
+    elif [ "${3:-}" = "pos" ]; then "$OUT/dsc_bench" clip "${2:?clip file}" 960000 28 2187500 2187500 pos   # ★ beta88 + a position reply
     else "$OUT/dsc_bench" clip "${2:?clip file}" 960000 18 2187500 2187500; fi ;;
   wav)   build; "$OUT/dsc_bench" wav "${2:?file.wav}" "${3:-1700}" ;;
   all)

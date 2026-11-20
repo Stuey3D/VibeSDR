@@ -43,6 +43,7 @@ import { NAV_HAZARD_COLOURS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRow
 // ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
 import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
+         dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
@@ -9848,7 +9849,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
       const pins = shipDscPins(now);
       items.push(...dscPinItems(pins, rx, now, 'web'));
       out.push(sec('DSC'));
-      out.push(pins.length ? dscPinRows(pins, rx, now).map(trkRowHtml).join('') : `<div class="trkEmpty">No DSC call with a position in this time.</div>`);
+      out.push(pins.length ? dscPinRows(pins, rx, now).map(trkRowHtml).join('') : `<div class="trkEmpty">${escapeHtml(DSC_SHIP_EMPTY)}</div>`);
       const s = dscStatus(pins); if (s) status.push(s);
     } else if (id === 'stations' && r) {
       items.push(...navItems(r, 'web'));
@@ -18526,6 +18527,8 @@ async function renderGallery(page = galPage) {
       const row = document.createElement('div'); row.className = 'sres';
       // ★ V12 DSC: a distress or urgency item is coloured as the DSC box colours it.
       if (typeof it.lv === 'number' && it.lv >= 2) row.classList.add(it.lv >= 3 ? 'galDistress' : 'galUrgency');
+      // ★ beta88 a routine / safety call that sent a position: its own item, coloured as its map pin (DSC_PIN_COLOURS)
+      else if (it.k === 'dsc' && typeof it.lv === 'number' && typeof it.plat === 'number') row.classList.add(it.lv === 1 ? 'galSafety' : 'galRoutine');
       // ★ A focusable row: Tab / arrows / D-pad reach it, Enter or the controller's A opens it.
       row.tabIndex = 0; row.setAttribute('role', 'button');
       const f = document.createElement('span'); f.className = 'f'; f.textContent = galFreq(it.hz);
@@ -18590,6 +18593,32 @@ async function renderGallery(page = galPage) {
         mb.onclick = (e) => { e.stopPropagation(); void navMapOpen(); };
         row.onclick = () => void navMapOpen();
         row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void navMapOpen(); } };
+        row.appendChild(f); row.appendChild(n); row.appendChild(mb);
+        host.insertBefore(row, host.firstChild);
+      });
+    }
+    /* ★★ beta88 THE DSC CALLS WITH A POSITION (Stuart, 2026-11-20: "i have no map button to view them from the gallery on
+     *  the pi500") — NAVTEX's standing row's shape, on the first page of ALL or DSC: MAP opens the SHIPPING MAP, DSC first.
+     *  Drawn only when the gallery holds a pinned DSC call (dscGalSummary; no dead control). */
+    if ((galKind === '' || galKind === 'dsc') && galPage === 1) {
+      const kindAt = galKind;
+      void dscGalFetch().then((pins) => {
+        const words = dscGalSummary(pins);
+        // ★ a filter or page changed while it was asked: not this listing's row
+        if (!words || host.querySelector('.galDsc') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
+        const row = document.createElement('div'); row.className = 'sres galDsc'; row.tabIndex = 0; row.setAttribute('role', 'button');
+        const f = document.createElement('span'); f.className = 'f'; f.textContent = 'DSC';
+        const n = document.createElement('span'); n.className = 'n';
+        n.appendChild(document.createTextNode(words));
+        n.appendChild(document.createElement('br'));
+        const src = document.createElement('span'); src.className = 'src'; src.textContent = DSC_GAL_WORDS;
+        n.appendChild(src);
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.id = 'galDscMap'; mb.textContent = 'MAP';
+        mb.title = 'The DSC calls with a position, on the SHIPPING MAP'; mb.setAttribute('aria-label', 'DSC calls with a position, on the shipping map');
+        mb.onclick = (e) => { e.stopPropagation(); void navMapOpen('dsc'); };
+        mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+        row.onclick = () => void navMapOpen('dsc');
+        row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void navMapOpen('dsc'); } };
         row.appendChild(f); row.appendChild(n); row.appendChild(mb);
         host.insertBefore(row, host.firstChild);
       });

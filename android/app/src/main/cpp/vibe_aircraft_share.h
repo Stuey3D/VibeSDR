@@ -40,6 +40,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -71,6 +72,17 @@ static constexpr uint32_t kHeader = 64;
 static constexpr uint32_t kGs = 128, kGsSize = 16;
 static constexpr int64_t kKeepSec = 3600;          ///< a row unheard for an hour is free (the datalink table's own keep)
 static constexpr double kFlushSec = 2.0;
+/** ★★ V12 beta88 (Stuart, 2026-11-20, the Pi 500 in ACARS mode on the V4L that normally does ADS-B: "how is there 326 adsb
+ *  aircraft on the map when i am in ACARS mode? … there should be 0 then"). The hour above is the DATALINK's keep — an
+ *  ACARS / VDL2 / HFDL aircraft talks in bursts minutes apart, so an hour-old row is still worth a line. ADS-B is not like
+ *  that: an aircraft in range squitters its position twice a second, so one not heard for a minute has flown out of range
+ *  (or the radio stopped listening). The map counts and draws an ADS-B aircraft only while ADS-B heard it within
+ *  kAdsbNowSec — the same constant as the clients' AV_ADSB_NOW_SEC (src/services/aviationMap.ts). */
+static constexpr int64_t kAdsbNowSec = 60;
+/** ★ "Is any radio on this server decoding ADS-B NOW?" Every process whose ADS-B decoder is running stamps the file's
+ *  header each flush (kFlushSec); a stamp older than this means none is (the radio left ADS-B mode — Stuart's case — or
+ *  its process ended). Five flushes: a busy Pi's decoder-priority Sharer thread may run late, never that late. */
+static constexpr int64_t kAdsbLiveSec = 10;
 
 /** What one writer knows about one aircraft (only the fields it knows are set). Times are wall-clock milliseconds. */
 struct Update {
@@ -104,8 +116,12 @@ struct Rec {
 static_assert(sizeof(Rec) <= kRecSize, "an aircraft record is 256 bytes");
 struct GsRec { int64_t ms; double khz; };
 static_assert(sizeof(GsRec) == kGsSize, "a ground station is 16 bytes");
-struct Header { uint32_t magic = kMagic, version = kVersion, cap = kCap, recSize = kRecSize; uint32_t pad[12] = {}; };
+/** ★ adsbLiveMs (beta88) sits in what was padding: a file made by an older build reads 0 there = "never", the same file
+ *  layout, the same version — an older writer never touches those bytes. */
+struct Header { uint32_t magic = kMagic, version = kVersion, cap = kCap, recSize = kRecSize; int64_t adsbLiveMs = 0; uint32_t pad[10] = {}; };
+static constexpr uint64_t kAdsbLiveAt = 16;   ///< the byte offset of Header::adsbLiveMs
 static_assert(sizeof(Header) == kHeader, "the header is 64 bytes");
+static_assert(offsetof(Header, adsbLiveMs) == kAdsbLiveAt, "adsbLiveMs is at byte 16");
 static constexpr uint64_t kFileBytes = kHeader + (uint64_t)kGs * kGsSize + (uint64_t)kCap * kRecSize;
 
 inline void putStr(char* dst, size_t n, const std::string& s) { std::memset(dst, 0, n); std::memcpy(dst, s.data(), std::min(n - 1, s.size())); }
@@ -277,10 +293,13 @@ public:
     std::string dir() { std::lock_guard<std::mutex> lk(m_); return dir_; }
     std::string path() { std::lock_guard<std::mutex> lk(m_); return dir_.empty() ? std::string() : dir_ + "/" + kFile; }
 
-    /** Merge one writer's updates and the ground stations it heard. Returns the rows changed. */
-    size_t write(const std::vector<Update>& ups, const std::vector<GsHeard>& gs, int64_t nowMs) {
+    /** Merge one writer's updates and the ground stations it heard. Returns the rows changed. `adsbLive`: this writer's
+     *  ADS-B decoder is running now — the header's stamp (kAdsbLiveSec) says so to every reader. */
+    size_t write(const std::vector<Update>& ups, const std::vector<GsHeard>& gs, int64_t nowMs, bool adsbLive = false) {
         Io io(*this, false);
         if (!io.ok()) return 0;
+        if (adsbLive) io.write(kAdsbLiveAt, &nowMs, sizeof nowMs);
+        if (ups.empty() && gs.empty()) return 0;
         std::vector<Row> rows(kCap);
         std::vector<Rec> recs(kCap);
         io.read(kHeader + kGs * kGsSize, recs.data(), (size_t)kCap * kRecSize, true);
@@ -295,11 +314,13 @@ public:
         }
         return d.size();
     }
-    /** Every row heard since `sinceMs` (0 = all still kept), newest first, and the ground stations. */
-    std::vector<Row> read(int64_t nowMs, int64_t sinceMs, std::vector<GsHeard>* gs = nullptr) {
+    /** Every row heard since `sinceMs` (0 = all still kept), newest first, and the ground stations. `adsbLiveMs`: when a
+     *  radio's ADS-B decoder last said it was running (0 = never, since this file was made). */
+    std::vector<Row> read(int64_t nowMs, int64_t sinceMs, std::vector<GsHeard>* gs = nullptr, int64_t* adsbLiveMs = nullptr) {
         std::vector<Row> out;
         Io io(*this, true);
         if (!io.ok()) return out;
+        if (adsbLiveMs) { int64_t v = 0; io.readRaw(kAdsbLiveAt, &v, sizeof v); *adsbLiveMs = v > 0 && v <= nowMs + 60000 ? v : 0; }
         std::vector<Rec> recs(kCap);
         io.read(kHeader + kGs * kGsSize, recs.data(), (size_t)kCap * kRecSize, true);
         for (const Rec& r : recs) {
@@ -386,13 +407,33 @@ inline std::string jsonEsc(const std::string& s) {
     }
     return o;
 }
-/** `labelName(label)` → the plain-words meaning (vibe_avi_service.h's table — passed in so this header stands alone). */
+/** ★ beta88: is a radio decoding ADS-B now (the header's stamp, kAdsbLiveSec)? */
+inline bool adsbLiveNow(int64_t adsbLiveMs, int64_t nowMs) { return adsbLiveMs > 0 && nowMs - adsbLiveMs <= kAdsbLiveSec * 1000; }
+/** ★ beta88: an aircraft ADS-B heard NOW — within kAdsbNowSec, and only while a radio is decoding ADS-B. */
+inline bool adsbHeardNow(const Row& w, int64_t adsbLiveMs, int64_t nowMs) {
+    return ((w.srcMask >> kAdsb) & 1) && adsbLiveNow(adsbLiveMs, nowMs) && nowMs - w.srcMs[kAdsb] <= kAdsbNowSec * 1000;
+}
+/** `labelName(label)` → the plain-words meaning (vibe_avi_service.h's table — passed in so this header stands alone).
+ *  ★ beta88 `adsbLiveMs` (Table::read's; < 0 = not given): the map's ADS-B state — "adsbLive" 1/0 (a radio is decoding
+ *  ADS-B now), "adsbLast" (seconds since one last was; -1 never), "adsbNow" (aircraft ADS-B heard in the last kAdsbNowSec
+ *  — the count the map shows), "adsbOff" (the owner switched ADS-B off). The rows stay the hour: the datalink needs it, and
+ *  the clients apply the same now-rule (aviationMap.ts avNowRule). */
 inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHeard>& gs, int64_t nowMs,
                           const std::function<std::string(const std::string&)>& labelName = nullptr,
-                          const std::function<bool(int, std::string&, double&, double&)>& gsInfo = nullptr) {
+                          const std::function<bool(int, std::string&, double&, double&)>& gsInfo = nullptr,
+                          int64_t adsbLiveMs = -1, bool adsbOff = false) {
     char b[256];
-    std::snprintf(b, sizeof b, "{\"now\":%lld,\"count\":%zu,\"aircraft\":[", (long long)(nowMs / 1000), rows.size());
+    std::snprintf(b, sizeof b, "{\"now\":%lld,\"count\":%zu", (long long)(nowMs / 1000), rows.size());
     std::string o = b;
+    if (adsbLiveMs >= 0) {
+        size_t n = 0;
+        for (const Row& w : rows) if (adsbHeardNow(w, adsbLiveMs, nowMs)) ++n;
+        std::snprintf(b, sizeof b, ",\"adsbLive\":%d,\"adsbLast\":%lld,\"adsbNow\":%zu,\"adsbWin\":%lld%s",
+                      adsbLiveNow(adsbLiveMs, nowMs) ? 1 : 0, adsbLiveMs > 0 ? (long long)std::max<int64_t>(0, (nowMs - adsbLiveMs) / 1000) : -1LL,
+                      n, (long long)kAdsbNowSec, adsbOff ? ",\"adsbOff\":1" : "");
+        o += b;
+    }
+    o += ",\"aircraft\":[";
     bool first = true;
     for (const Row& w : rows) {
         o += first ? "{" : ",{"; first = false;
@@ -454,7 +495,10 @@ public:
         { std::lock_guard<std::mutex> lk(m_); prov_[name] = { std::move(p), 0 }; }
         start_();
     }
-    void remove(const std::string& name) { std::lock_guard<std::mutex> lk(m_); prov_.erase(name); }
+    void remove(const std::string& name) { std::lock_guard<std::mutex> lk(m_); prov_.erase(name); if (name == "adsb") adsbLive_ = nullptr; }
+    /** ★ beta88: "is this process's ADS-B decoder running now?" — asked each flush; true stamps the header (kAdsbLiveSec),
+     *  so every radio's map knows whether ANY radio on the server is decoding ADS-B. Cheap (an atomic read). */
+    void adsbLive(std::function<bool()> f) { std::lock_guard<std::mutex> lk(m_); adsbLive_ = std::move(f); }
     /** Write now (a test; a mode leaving, so its last updates are not lost). Never from a DSP thread. */
     void flushNow() { std::lock_guard<std::mutex> fl(flushMtx_); flush_(); }
     void stop() {
@@ -494,14 +538,17 @@ private:
             if (u.size() > kCap) u.resize(kCap);
             ups.insert(ups.end(), std::make_move_iterator(u.begin()), std::make_move_iterator(u.end()));
         }
-        { std::lock_guard<std::mutex> lk(m_); for (auto& p : ps) { auto it = prov_.find(p.first); if (it != prov_.end()) it->second.lastMs = now; } }
-        if (ups.empty() && gs.empty()) return;
-        table().write(ups, gs, now);
+        std::function<bool()> live;
+        { std::lock_guard<std::mutex> lk(m_); for (auto& p : ps) { auto it = prov_.find(p.first); if (it != prov_.end()) it->second.lastMs = now; } live = adsbLive_; }
+        const bool adsbOn = live && live();
+        if (ups.empty() && gs.empty() && !adsbOn) return;
+        table().write(ups, gs, now, adsbOn);
     }
     struct P { Provider fn; int64_t lastMs = 0; };
     std::mutex m_, flushMtx_;
     std::condition_variable cv_;
     std::map<std::string, P> prov_;
+    std::function<bool()> adsbLive_;
     bool run_ = false;
     std::thread th_;
 };

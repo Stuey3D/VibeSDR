@@ -2160,12 +2160,14 @@ fi
 #     key's tune, the gallery's DSC chip, 390 px (test-web-dsc). The engine's numbers are vibeserver/test-dsc.cpp above;
 #     the measuring bench is scripts/test-dsc.sh. Needs VIBESERVER_BIN.
 printf '\n\033[1m── DSC (end to end: server, then the web client) ──\033[0m\n'
-if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-dsc.sh clip "$OUT/dsc-hf.cu8" >/dev/null && scripts/test-dsc.sh clip "$OUT/dsc-vhf.cu8" vhf >/dev/null; then
+# ★ beta88 the web half runs on the `pos` clip (+ a routine position reply): the gallery's SHIPPING MAP row and its map.
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-dsc.sh clip "$OUT/dsc-hf.cu8" >/dev/null && scripts/test-dsc.sh clip "$OUT/dsc-vhf.cu8" vhf >/dev/null \
+   && scripts/test-dsc.sh clip "$OUT/dsc-pos.cu8" pos >/dev/null; then
   VIBE_DSC_CLIP="$OUT/dsc-hf.cu8" VIBE_DSC_CLIP_VHF="$OUT/dsc-vhf.cu8" node scripts/test-server-dsc.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  VIBE_DSC_CLIP="$OUT/dsc-hf.cu8" node scripts/test-web-dsc.mjs; rc=$?
+  VIBE_DSC_CLIP_POS="$OUT/dsc-pos.cu8" node scripts/test-web-dsc.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  rm -f "$OUT/dsc-hf.cu8" "$OUT/dsc-vhf.cu8"
+  rm -f "$OUT/dsc-hf.cu8" "$OUT/dsc-vhf.cu8" "$OUT/dsc-pos.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-dsc.sh)'; notrun=$((notrun+1))
 fi
