@@ -355,6 +355,11 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     idleGraceSec: cfg.idleGraceSec ?? 300,
     antenna: cfg.antenna ?? '',
     antennaIcon: cfg.antennaIcon ?? '',
+    // ★★ beta88: SENT AT LAST — VibeServerBoot has read both (setAntennaPortNames, setRttySkimWorkers) since V12, the
+    //    screen has set both, and this list never carried them, so neither reached the engine: the hand-maintained-list
+    //    fault this function's notes record, twice more. Found by check-remote-keys.mjs (every mirrored key must be here).
+    antennaNames: cfg.antennaNames ?? '',
+    rttySkimWorkers: Math.max(0, Math.min(8, Math.round(cfg.rttySkimWorkers ?? 0))),
     antennaRanges: cfg.antennaRanges ?? '',
     antennaFilters: cfg.antennaFilters ?? '',
     antennaSwitch: cfg.antennaSwitch ?? '',
