@@ -165,12 +165,21 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g+
 rm -rf /work/hhui && cmake -S /repo/handheld-ui -B /work/hhui -DCMAKE_BUILD_TYPE=Release >/dev/null
 make -C /work/hhui -j"${JOBS:-6}" >/dev/null || die "vibe-hhui did not build"
 HHUI_BIN=/work/hhui/vibe-hhui
+# ── 4c. vibe-usbcap, the ~1 ms USB-drop capture (h81; native/vibe-usbcap.c — read only, run by vibe-hwd) ─────────────
+# ★ Same container, same compiler, plain C + the kernel's i2c-dev header (linux-libc-dev, pulled in with g++). Its unit
+#   test (test/usbcap-test.c: the ring, the trigger, the dump) runs here too, so a card never carries an untested build.
+echo "==> vibe-usbcap (the fast USB-drop capture)"
+gcc -O2 -Wall -Wextra -Werror -o /work/vibe-usbcap "$H/native/vibe-usbcap.c" || die "vibe-usbcap did not build"
+gcc -O2 -Wall -Wextra -Werror -o /work/usbcap-test "$H/test/usbcap-test.c" || die "usbcap-test did not build"
+/work/usbcap-test >/work/usbcap-test.log 2>&1 || { cat /work/usbcap-test.log; die "usbcap-test failed"; }
+say "vibe-usbcap: $(tail -1 /work/usbcap-test.log | sed 's/^ *//')"
 
 # ── 5. Our files, users and units ────────────────────────────────────────────────────────────────────────────────────
 # ★ modes and times from the repository, ownership root's (the checkout belongs to the Mac's user)
 cp -R --preserve=mode,timestamps "$H/rootfs/." "$R/"
 chmod 0755 "$R"/usr/lib/vibesdr-r36s/*
 install -m 0755 "$HHUI_BIN" "$R/usr/lib/vibesdr-r36s/vibe-hhui"
+install -m 0755 /work/vibe-usbcap "$R/usr/lib/vibesdr-r36s/vibe-usbcap"
 mkdir -p "$R/usr/share/vibesdr-r36s/fonts"
 cp /repo/assets/mapfonts/JetBrainsMono-Bold.ttf /repo/assets/mapfonts/JetBrainsMono-Regular.ttf /repo/assets/mapfonts/OFL-JetBrainsMono.txt \
    /repo/assets/fonts/DSEG14Classic-BoldItalic.ttf /repo/assets/fonts/DSEG-LICENSE.txt \
@@ -321,7 +330,8 @@ S=$R/usr/share/doc/vibesdr-r36s/SOURCES
   echo "MAPS — vibeserver-mapdata-detail $MAP_VER  (package sha256 $MAP_SHA), built by scripts/build-mapdata-deb.sh from"
   echo "  assets/mapdata/v1 (Natural Earth and the other sources listed, with their licences, in scripts/gen-map-data.mjs)"
   echo
-  echo "OURS — /usr/lib/vibesdr-r36s/* (vibe-hwd, vibe-splash, vibe-card, vibe-bootkeys, vibe-clock, overlay-init, …),"
+  echo "OURS — /usr/lib/vibesdr-r36s/* (vibe-hwd, vibe-splash, vibe-card, vibe-bootkeys, vibe-clock, overlay-init, vibe-usbcap"
+  echo "  from image/r36s/native/vibe-usbcap.c, vibe-hhui from handheld-ui/, …),"
   echo "  the units in /usr/lib/systemd/system/vibe*.service and /etc: image/r36s/ in the VibeSDR repository."
   echo "  Splash artwork: assets/icon.png and assets/fonts/AtkinsonHyperlegible-Regular.ttf (SIL OFL 1.1)."
 } > "$S"
