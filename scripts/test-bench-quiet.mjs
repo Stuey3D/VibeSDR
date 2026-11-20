@@ -11,9 +11,11 @@
 //      starts, by name — and nothing anywhere was touched;
 //   B. ★ a QUICK run from the FRONT DOOR: the busy radio (DX scanner sweeping FM) and the other radio are both held still —
 //      no DX scanner hop is logged inside the run — and both come back after; the DX scanner sweeps again;
-//   C. a listener on ANY radio refuses the run (summed across processes, the radio named); forced, it runs;
 //   D. a WIDE run (in a radio's own process, reached through the door) holds the OTHER radio still too;
-//   E. the lease: a radio held by a coordinator that never says "done" brings itself back.
+//   E. the lease: a radio held by a coordinator that never says "done" brings itself back;
+//   C. (last — a departed listener's session is held, and counted, for 180 s) a listener on ANY radio refuses the run
+//      (summed across processes, the radio named); forced, it runs;
+//   F. a one-process server (Simple mode, the Mac): its own DX scanner stops for the run and comes back.
 // ★ SILENT: fake rtl_tcp, no audio device, no browser. usage: VIBESERVER_BIN=… node scripts/test-bench-quiet.mjs (~2 min)
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -106,7 +108,7 @@ function listener(port) {
   s.on('connect', () => s.write(`GET /ws/user-spectrum?user_session_id=bq000001&bins=256 HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
   s.on('data', () => {});
-  return { close: () => { try { s.write(Buffer.from([0x88, 0x80, 0, 0, 0, 0])); } catch {} s.end(); } };
+  return { close: () => { try { s.write(Buffer.from([0x88, 0x80, 0, 0, 0, 0])); } catch {} s.end(); setTimeout(() => s.destroy(), 300); } };
 }
 
 try {
@@ -152,23 +154,6 @@ try {
     ok(count(T('rtl'), HOP) >= hopsBefore, 'its hops carry on from where they were');
   }
 
-  // ── C. a listener on ANY radio refuses the run ──
-  console.log('── C. a listener on any radio refuses the run (summed across processes); forced, it runs ──');
-  {
-    const L = listener(P + 2);
-    ok(await until(async () => { const j = await fetch(`http://127.0.0.1:${P + 2}/vibeserver/benchmark?hold=check&${await auth(P + 2)}`).then((x) => x.json()).catch(() => ({})); return j.listeners >= 1; }, 10000),
-       'the RTL counts its listener (hold=check)');
-    const r = await runBench(H);
-    ok(r.status === 409 && /1 listener is connected \(Test RTL: 1\)/.test(r.body) && /every radio on this machine/.test(r.body),
-       `★ refused at the DOOR for a listener on the RTL's process, the radio named (${r.body.slice(0, 160)})`);
-    const holds = count(T('rtl'), /benchmark hold: idle work stopped/);
-    const f = await runBench(H, '&force=1');
-    ok(f.status === 200 && f.done, 'forced (the owner\'s call), it runs');
-    ok(count(T('rtl'), /benchmark hold: idle work stopped/) === holds + 1, '…with the RTL held still all the same');
-    L.close();
-    await until(() => (T('rtl').match(/benchmark hold: the radio is back on the air/g) || []).length >= 2, 30000);
-  }
-
   // ── D. the WIDE run, in the RSP's own process, through the door ──
   console.log('── D. a WIDE run (in a radio\'s own process) holds the OTHER radio still ──');
   {
@@ -199,6 +184,50 @@ try {
     ok(bad.status === 401, `★ never without the admin proof (${bad.status})`);
     ok(await until(() => /lease ran out/.test(T('rtl').slice(at)) && /benchmark hold: the radio is back on the air/.test(T('rtl').slice(at)), 20000),
        '★ nobody renewed it: after its lease (6 s here, 90 s for real) it brought itself back');
+  }
+  // ── C. a listener on ANY radio refuses the run ──
+  console.log('── C. a listener on any radio refuses the run (summed across processes); forced, it runs ──');
+  {
+    const L = listener(P + 2);
+    ok(await until(async () => { const j = await fetch(`http://127.0.0.1:${P + 2}/vibeserver/benchmark?hold=check&${await auth(P + 2)}`).then((x) => x.json()).catch(() => ({})); return j.listeners >= 1; }, 10000),
+       'the RTL counts its listener (hold=check)');
+    const r = await runBench(H);
+    ok(r.status === 409 && /1 listener is connected \(Test RTL: 1\)/.test(r.body) && /every radio on this machine/.test(r.body),
+       `★ refused at the DOOR for a listener on the RTL's process, the radio named (${r.body.slice(0, 160)})`);
+    const holds = count(T('rtl'), /benchmark hold: idle work stopped/);
+    const f = await runBench(H, '&force=1');
+    ok(f.status === 200 && f.done, 'forced (the owner\'s call), it runs');
+    ok(count(T('rtl'), /benchmark hold: idle work stopped/) === holds + 1, '…with the RTL held still all the same');
+    L.close();
+    await until(() => (T('rtl').match(/benchmark hold: the radio is back on the air/g) || []).length >= 2, 30000);
+    // ★ Last on purpose: a listener who leaves keeps their place for 180 s (their session is HELD), and still counts.
+  }
+
+
+  // ── F. a ONE-PROCESS server (the radio in the process that takes the run — Simple mode, the Mac) ──
+  console.log('── F. a one-process server: its own DX scanner stops for the run and comes back ──');
+  {
+    const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-bq1-'));
+    for (const d of ['data', 'run']) fs.mkdirSync(path.join(d2, d));
+    fs.writeFileSync(path.join(d2, 'config.json'), JSON.stringify({ configured: true, name: 'One radio', adminPass: ADMIN,
+      radios: [{ serial: 'bq-one', label: 'Only RTL', enabled: true, configured: true, users: 1, rate: 2400000, dxScan: DX }] }));
+    const port1 = await fakePort();
+    const log1 = path.join(d2, 'server.log');
+    const one = spawn(BIN, ['--tcp', `127.0.0.1:${rtlTcp}`, '--port', String(port1), '--rate', '2400000', '--freq', '93200000', '--mode', 'wfm', '--users', '1'],
+                      { env: { ...env, VIBESERVER_CONFIG: path.join(d2, 'config.json'), VIBESERVER_DATA_DIR: path.join(d2, 'data'), VIBESERVER_RUNTIME_DIR: path.join(d2, 'run') },
+                        stdio: ['ignore', fs.openSync(log1, 'w'), fs.openSync(log1, 'a')] });
+    procs.push(one);
+    const O = () => fs.readFileSync(log1, 'utf8');
+    ok(await up(port1) && await until(() => SWEEP.test(O()), 30000), 'the one-process server is up and its DX scanner sweeping');
+    const r = await runBench(`http://127.0.0.1:${port1}`, '', port1);
+    ok(r.status === 200 && r.done, `the run started and finished (${r.status})`);
+    const w = windowOf(O(), 0, /benchmark hold: idle work stopped/, /benchmark hold: ended/);
+    ok(w !== null && /the machine is quiet \(0 other radio process\(es\) held\)/.test(O()), 'its own radio quieted (nobody else to ask)');
+    ok(w !== null && !HOP.test(w) && !SWEEP.test(w), '★ no DX hop or sweep inside the run');
+    ok(await until(() => { const t = O(); const e = t.search(/benchmark hold: ended/); return e > 0 && SWEEP.test(t.slice(e)); }, 30000),
+       '…and the DX scanner sweeps again afterwards');
+    try { one.kill('SIGTERM'); } catch {}
+    if (!fail) fs.rmSync(d2, { recursive: true, force: true });
   }
 } catch (e) {
   fail++; console.log(`   FAIL threw: ${e && e.stack || e}`);

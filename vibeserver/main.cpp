@@ -1517,9 +1517,16 @@ static int vsLocalHttp(const char* method, int port, const std::string& pathQuer
     const double end = vsBenchNow() + timeoutMs / 1000.0;
     size_t hdrEnd = std::string::npos;
     long want = -1;
+    /* ★★ A BLOCKING READ WITH A SOCKET TIMEOUT, NOT recv(…, timeout). The poll-based read gives up on POLLHUP even with the
+     *  reply still unread — and the answer is "Connection: close", so the reply and the hang-up arrive together and every
+     *  peer read as "did not answer". SO_RCVTIMEO bounds each wait instead (a timed-out read returns 0, socket still open). */
+#ifdef _WIN32
+    { DWORD ms = 500; ::setsockopt((SOCKET)s->rawFd(), SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof ms); }
+#else
+    { struct timeval tv{0, 500000}; ::setsockopt(s->rawFd(), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); }
+#endif
     while (vsBenchNow() < end) {
-        const double t0 = vsBenchNow();
-        const int n = s->recv(buf, sizeof buf, false, 500);
+        const int n = s->recv(buf, sizeof buf, false, net::NO_TIMEOUT);
         if (n < 0) break;
         if (n > 0) resp.append((const char*)buf, (size_t)n);
         if (hdrEnd == std::string::npos && (hdrEnd = resp.find("\r\n\r\n")) != std::string::npos) {
@@ -1527,7 +1534,7 @@ static int vsLocalHttp(const char* method, int port, const std::string& pathQuer
             if (cl != std::string::npos && cl < hdrEnd) want = std::atol(resp.c_str() + cl + 15);
         }
         if (hdrEnd != std::string::npos && want >= 0 && resp.size() >= hdrEnd + 4 + (size_t)want) break;
-        if (n == 0 && vsBenchNow() - t0 < 0.05) break;   // ★ an immediate 0 is the peer's close, not a quiet wait
+        if (n == 0 && !s->isOpen()) break;   // ★ the peer closed
     }
     s->close();
     if (resp.rfind("HTTP/1.", 0) != 0 || resp.size() < 12) return 0;
@@ -1564,7 +1571,7 @@ static std::vector<VsBenchPeer> vsBenchPeers() {
 /** The admin-gated route to a peer — a ticket the machine's shared admin secret signs (never an open endpoint). */
 static std::string vsPeerPath(const std::string& verb, bool force) {
     return "/vibeserver/benchmark?hold=" + verb + (force ? "&force=1" : "")
-         + "&vs_admin_ticket=" + LocalSdrShim::machineAdminTicket();
+         + "&vs_admin_ticket=" + vibe::LocalSdrShim::machineAdminTicket();
 }
 
 /* ── the COORDINATOR's half: check, hold, keep holding, let go ── */
@@ -1579,7 +1586,7 @@ static std::string vsBenchCheckMachine(bool force, std::vector<VsBenchPeer>& pee
     using namespace vibe::benchquiet;
     peers.clear();
     std::vector<std::pair<std::string, int>> who;
-    if (!g_amFrontDoor.load()) who.push_back({vsMyRadioLabel(), LocalSdrShim::instance().listenerCount()});
+    if (!g_amFrontDoor.load()) who.push_back({vsMyRadioLabel(), vibe::LocalSdrShim::instance().listenerCount()});
     for (auto& pr : vsBenchPeers()) {
         std::string body;
         const int st = vsLocalHttp("GET", pr.port, vsPeerPath("check", false), body, 10000);
@@ -1672,7 +1679,7 @@ static std::string vsBenchQuietMachine(bool force, bool& released) {
     refuse = vsBenchHoldPeers(force, peers);
     if (!refuse.empty()) return refuse;
     std::string why;
-    if (!LocalSdrShim::instance().benchQuiesce(released, why)) {
+    if (!vibe::LocalSdrShim::instance().benchQuiesce(released, why)) {
         vsBenchReleasePeers();
         return vibe::benchquiet::cannotQuietRefusal(vsMyRadioLabel(), why);
     }
@@ -1683,7 +1690,7 @@ static std::string vsBenchQuietMachine(bool force, bool& released) {
 static void vsBenchWakeMachine(bool released) {
     vsBenchReleasePeers();
     vsBenchBringBack(released);
-    LocalSdrShim::instance().benchUnhold();
+    vibe::LocalSdrShim::instance().benchUnhold();
 }
 
 /* ── a PEER's half: held still for a benchmark another process on this machine is running ── */
@@ -1703,13 +1710,13 @@ static void vsBenchHoldEnd(const std::string& why) {
     std::thread([rel] {
         std::lock_guard<std::mutex> back(g_bqBackMx);
         vsBenchBringBack(rel);
-        LocalSdrShim::instance().benchUnhold();
+        vibe::LocalSdrShim::instance().benchUnhold();
         std::fprintf(stderr, "VibeServer: benchmark hold: the radio is back on the air\n");
     }).detach();
 }
 static std::string vsBenchHoldVerb(const std::string& verb, bool force, std::string& err) {
     using namespace vibe::benchquiet;
-    auto& shim = LocalSdrShim::instance();
+    auto& shim = vibe::LocalSdrShim::instance();
     auto& p = vibe::benchProgress();
     if (verb == "check") {
         bool held;
