@@ -1406,6 +1406,28 @@
       }
     }
     container.addEventListener('click', onMinClick, true);
+    /* ★★ A CARD PICTURE THAT FAILED TO LOAD IS NEVER LEFT BROKEN (Mac Ha, 2026-11-20, Vietnam Airlines: the list showed the
+     *  logo, the card a broken image). The card keeps its picture nodes so they do not flicker (setCard), so a logo whose
+     *  first load failed — a slow SD card still reading the owner's logos when the server named it — stayed broken until
+     *  a restart. Now: hidden at once and tried again once 10 s later; failing again, the logo becomes the operator's text
+     *  badge and a silhouette or photo is removed. ('error' does not bubble — caught on the way down.) */
+    function onCardImgError(e) {
+      const im = e.target;
+      if (!im || im.tagName !== 'IMG' || !im.closest || !im.closest('.vsadsb-pop-' + th)) return;
+      if (!im.dataset.vsRetry) {
+        im.dataset.vsRetry = '1';
+        im.style.visibility = 'hidden';
+        const src = im.getAttribute('src');
+        setTimeout(() => { if (im.isConnected) { im.addEventListener('load', () => { im.style.visibility = ''; }, { once: true }); im.src = src + (src.includes('?') ? '&' : '?') + 'r=1'; } }, 10000);
+        return;
+      }
+      const ph = im.closest('a.ph');
+      if (ph) { ph.remove(); return; }
+      if (im.classList.contains('sil')) { im.remove(); return; }
+      const op = /^[A-Z0-9]{2,4}$/.test(im.alt || '') ? im.alt : '';
+      if (op) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = op; im.replaceWith(b); } else im.remove();
+    }
+    container.addEventListener('error', onCardImgError, true);
     function closePopup() {
       const p = popup; popup = null; popupHex = null;
       if (p) { try { if (gl) p.remove(); else lm.closePopup(p); } catch (e) { console.error('adsblayer: popup close', e); } }
@@ -1687,6 +1709,7 @@
         try { ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }
         for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) container.removeEventListener(ev, onInput, { capture: true });
         container.removeEventListener('click', onMinClick, true);
+        container.removeEventListener('error', onCardImgError, true);
         if (gl) {
           gl.off('movestart', onMoveStart); gl.off('moveend', onMoveEnd); gl.off('click', onGlClick); gl.off('mousemove', onGlHover);
           for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-trail', 'vsadsb-trail-glow', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
