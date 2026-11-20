@@ -276,6 +276,9 @@ flags_for() {
     # ★★ V12 the NAVTEX map's warnings (2026-11-01): strict positions (garbled ones refused, LAT/LONG, Greek hemispheres),
     #    the multilingual hazard lexicon, series / cancellations / windows, one marker per warning, the index. Fast.
     test-navtex-warn)      echo "-O2 -lpthread" ;;
+    # ★★ V12 the shipping map kept built in the background (vibe_navtex_warm.h, 2026-11-20): the CPU gate, the slice, the
+    #    worker pausing and resuming, and the cost of the backfill in warm-up slices over 3 000 synthetic messages (~15 s).
+    test-navtex-warm)      echo "-O2 -lpthread" ;;
     # ★★ V12 the NAVTEX map's met labels (vibe_navtex_met.h, 2026-11-01): headings, the first period only, wind / gale words
     #    and their negations / sea state from words or wave height / visibility; native gale words set only the flag; the
     #    latest per area; then every forecast of the fixture set. Fast.
@@ -1816,6 +1819,11 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   # ★★ V12 2026-11-02 THE SHIPPING MAP: the NAVTEX fixtures + a ship store (test-ais-store --write) + a DSC distress call —
   #    the layers present, ships / DSC / arrows on the map, the KEY, a ship's card, DSC first from the gallery's DSC row
   VIBE_AIS_STORE_BIN="$OUT/test-ais-store" node scripts/test-web-shipping-map.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 2026-11-20 THE SHIPPING MAP KEPT BUILT: a 2 000-message gallery indexed by the background warm-up with no map
+  #    request (the first answers whole, the stations map from cache); the gate held shut → the on-request build exactly
+  #    as before, then both together with every message indexed once; the warm-up off.
+  node scripts/test-navtex-warm.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/lora-clip.u8"
 else

@@ -21,7 +21,7 @@
 //     it to itself), and the server has been up a grace period (the first health sample, the radio's own start).
 //     Checked before EVERY pass, so a listener arriving shuts it within one pass.
 //   ★ THE SLICE (Slicer) — a pass syncs at most `budget` messages; the budget adapts so a pass's work stays near
-//     kTargetMs (25 ms), between kMinBudget and kMaxBudget. After a pass the thread sleeps at least as long as the pass
+//     kTargetMs (25 ms), between 1 and 400 (the request's own slice). After a pass the thread sleeps at least as long as the pass
 //     took (≥ kMinRestMs): at most half of one core, at idle priority.
 //   ★ WHEN THERE IS NOTHING TO DO — a pass is skipped while the gallery's NAVTEX fingerprint (Gallery::kindStamp) and
 //     the index file are unchanged since everything was last brought up to date: one in-memory walk every ~2 s.
@@ -68,7 +68,7 @@ inline State gate(const GateIn& in) {
 
 /** ★ THE SLICE — messages per pass, adapted to the pass's measured time. */
 struct Slicer {
-    static constexpr size_t kMinBudget = 8, kMaxBudget = 400, kStartBudget = 32;
+    static constexpr size_t kMinBudget = 1, kMaxBudget = 400, kStartBudget = 8;
     static constexpr double kTargetMs = 25.0;
     size_t budget = kStartBudget;
     /** done = messages parsed this pass, ms = the pass's wall time. A pass that parsed nothing says nothing. */
