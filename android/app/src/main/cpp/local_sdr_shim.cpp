@@ -42146,10 +42146,34 @@ static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach
 }
 /** ★ hwinfo's pair for a fixed-frequency decoder: `,"id":true` live · `,"id":false` the owner switched it off (hidden, as
  *  ever) · `,"id":false,"idWhy":"…"` this radio cannot reach it (GREYED with the reason — the ais / aisWhy shape). */
+/** ★ What the RADIO ITSELF can reach — driver coverage, converter, an RTL's HF path (as vsRadioCaps reads them) — with none
+ *  of the owner's choices (locked window, allow / block lists). An Icom: its own model ranges. Empty = not known. */
+static vibebands::Ranges vsHardwareRanges() {
+    if (g_icomOn.load()) return vsTunableRanges();
+    auto& shim = LocalSdrShim::instance();
+    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf" : shim.isHackRf() ? "hackrf"
+                          : shim.isAirspy() ? "airspy" : shim.isUsrp() ? "usrp" : "rtl";
+    int rtlHf = 1;
+    if (drv == "rtl") {
+        const std::string m = shim.deviceModel();
+        rtlHf = (g_autoDs.load() || g_dsNow.load() > 0) ? 2 : (m.empty() || m.find("V4") != std::string::npos) ? 1 : 0;
+    }
+    return vibereach::reachRanges(drv, shim.converterOffsetHz(), shim.converterInputLoHz(), shim.converterInputHiHz(), rtlHf);
+}
 static std::string vsDecoderCapJson(const char* id, const vibereach::Reach& reach) {
     if (vsModeBlocked(id)) return std::string(",\"") + id + "\":false";
     const std::string why = vsDecoderWhyNot(id, &reach);
     if (why.empty()) return std::string(",\"") + id + "\":true";
+    /* ★★★ THE HARDWARE CANNOT EVER GET THERE → NOT DRAWN AT ALL (Stuart, 2026-11-20, BALLOONS greyed on the XCover's
+     *  Airspy HF+: "this button shouldnt be present at all it cannot reach the frequency"). Greyed-with-a-reason is for what
+     *  the OWNER's settings shut out (a locked range, the allow / block lists) — something they can change. What the radio
+     *  itself (driver coverage, converter, an RTL's HF path) can never reach goes out as plain false, the owner-blocked
+     *  shape every client already hides (web, app, R36S): no dead controls. Judged on the HARDWARE ranges alone, so a
+     *  locked range or an allow list never hides a key the radio could reach. */
+    {
+        vibereach::Reach hw; hw.ranges = vsHardwareRanges();
+        if (!hw.ranges.empty() && !vibereach::whyNot(id, hw).empty()) return std::string(",\"") + id + "\":false";
+    }
     return std::string(",\"") + id + "\":false,\"" + id + "Why\":\"" + vibereach::jsonEsc(why) + "\"";
 }
 

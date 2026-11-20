@@ -6,8 +6,13 @@
 // ★★★ REACH — "can this radio tune the frequencies at all?" A decoder tied to fixed frequencies (SAME on 162.4 MHz,
 //     NAVTEX on 518 kHz, DSC on channel 70 …) cannot work on a radio that cannot get there: a locked range that does not
 //     hold them, a driver whose coverage stops short, an RTL with no HF path. Such a key is drawn GREYED WITH THE REASON
-//     IN WORDS, numbers included — never hidden (a missing key reads as a missing feature) and never live (a live key
-//     that can only ever decode silence reads as a broken one). AGENTS.md: a control that cannot work here is not live.
+//     IN WORDS, numbers included — never live (a live key that can only ever decode silence reads as a broken one).
+//     AGENTS.md: a control that cannot work here is not live.
+//     ★★★ BUT WHAT THE HARDWARE ITSELF CAN NEVER REACH IS NOT DRAWN AT ALL (Stuart, 2026-11-20: BALLOONS greyed on an
+//     Airspy HF+ — "this button shouldnt be present at all it cannot reach the frequency"). Greyed-with-a-reason is for
+//     the OWNER's settings (a locked range, the allow / block lists) — something that can change; the radio's own
+//     coverage (driver, converter, an RTL's HF path) cannot, so the server sends that key as plain false and every client
+//     hides it (local_sdr_shim.cpp vsDecoderCapJson / vsHardwareRanges).
 //     Decoders that work on whatever the listener tunes (RTTY, SSTV, WEFAX, Advanced RDS …) are not in the table.
 //     CW, PSK and JTTY are, by the amateur bands — and only if NOT ONE band is reachable.
 //

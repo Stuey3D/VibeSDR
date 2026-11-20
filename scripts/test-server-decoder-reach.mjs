@@ -161,5 +161,20 @@ const rd = (st, id) => (st && Array.isArray(st.regionDefaults) ? st.regionDefaul
   } finally { S.stop(); }
 }
 
+// ── 6. THE HARDWARE CANNOT EVER GET THERE → NOT DRAWN AT ALL (Stuart 2026-11-20, BALLOONS greyed on an Airspy HF+: "this
+//    button shouldnt be present at all it cannot reach the frequency"). An RTL behind a converter that only passes
+//    2300–2450 MHz: no fixed-frequency decoder is in the radio's own reach, so each goes out as plain false with NO reason —
+//    the owner-blocked shape every client hides. (A locked range, section 5, still greys with its reason.) ──
+{
+  console.log('── the hardware cannot reach them (a 2.3–2.45 GHz converter): hidden, not greyed ──');
+  const S = await server('hw', ['--freq', '2400000000', '--mode', 'nfm'], { locator: 'IO92nh' },
+                         { converterOffsetHz: 1000000000, converterInputLoHz: 2300000000, converterInputHiHz: 2450000000, blockedModes: '+same' });
+  try {
+    const st = await S.status();
+    for (const id of FIXED) ok(st && st[id] === false && st[id + 'Why'] === undefined, `${id}: false, no reason — not drawn (${JSON.stringify(st && st[id])} ${st && st[id + 'Why'] || ''})`);
+    ok(st && Array.isArray(st.modes) && st.modes.includes('nfm'), 'the radio itself is still offered (NFM)');
+  } finally { S.stop(); }
+}
+
 console.log(`\n${fail ? 'FAIL' : 'ok'}  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
