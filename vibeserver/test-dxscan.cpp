@@ -92,6 +92,54 @@ int main() {
         ok(log.listJson(Log::Query{}, T0 + 60).find("\"rds\":false") != std::string::npos, "the API says rds:false for a station without RDS");
     }
 
+    std::printf("── a listener's RDS names a station (Stuart, 2026-11-20: the Sony's 104.5 \"PI 0000\" was BBC 3CR) ──\n");
+    {
+        // two strong locals through the bootstrap (98.2 and 98.5, one hop with its DC at 98.95): 98.8 is their intermod,
+        // 99.4 the image of 98.5
+        Log log(T0);
+        int64_t t = T0;
+        for (; t < T0 + 26 * 3600; t += 600)
+            log.commitFm(98000, 99800, 98950, 100, { fm(98200, 0xC201, "BBC R1", 8, true), fm(98500, 0xC204, "BBC R4", 8, true) }, t);
+        ok(log.findKey(fmKey(0xC201, 98200))->cls == Cls::Local && log.findKey(fmKey(0xC204, 98500))->cls == Cls::Local, "(two locals established)");
+        // a weak stereo station the sweeps never name
+        log.commitFm(98000, 99800, 98950, 100, { fm(99300, 0, "", 0, false, -70, 7, true) }, t);
+        const Entry* z = log.findKey(fmKey(0, 99300));
+        const int zid = z ? z->id : -1, zHeard = z ? z->timesHeard : -1; const int64_t zFirst = z ? z->firstHeard : 0;
+        ok(z && z->cls == Cls::Dx, "a weak pilot with no RDS: DX, PI 0000");
+        ok(log.noteListenerFm(99300, 0xC717, "", t + 60) == 2, "★ the listener's held PI is news (2)");
+        const Entry* n = log.findKey(fmKey(0xC717, 99300));
+        ok(n && !log.findKey(fmKey(0, 99300)) && n->id == zid && n->firstHeard == zFirst && n->timesHeard == zHeard && n->cls == Cls::Dx && n->stereo,
+           "★ the PI 0000 entry BECOMES PI C717 — same row, first heard, times heard, stereo and class kept");
+        ok(log.noteListenerFm(99300, 0xC717, "BBC 3CR", t + 90) == 2 && log.findKey(fmKey(0xC717, 99300))->psLast == "BBC 3CR",
+           "★ then its settled name: BBC 3CR");
+        ok(log.noteListenerFm(99300, 0xC717, "BBC 3CR", t + 100) == 0, "the same again within the minute: nothing (no churn)");
+        ok(log.noteListenerFm(99300, 0xC717, "BBC 3CR", t + 200) == 1 && log.findKey(fmKey(0xC717, 99300))->lastHeard == t + 200,
+           "a minute on: only \"heard now\" moves (1)");
+        ok(log.findKey(fmKey(0xC717, 99300))->timesHeard == zHeard, "★ a listener is not a sweep: times heard (presence) untouched");
+        // a station the log never had: filed and alerted like a sweep's new DX
+        const uint32_t a0 = log.alertSeq();
+        ok(log.noteListenerFm(97200, 0xC7A2, "Smooth", t + 300) == 2, "a station the log has never seen (97.2 Smooth) is news");
+        const Entry* s = log.findKey(fmKey(0xC7A2, 97200));
+        ok(s && s->cls == Cls::Dx && s->psLast == "Smooth" && s->timesHeard == 1 && log.alertSeq() == a0 + 1
+           && log.alertsJson(a0).find("New DX: 97.2 MHz PI C7A2 Smooth") != std::string::npos,
+           "★ filed as DX, named, one detection, and one \"New DX\" alert");
+        // the rules still judge it: the intermod of the two locals stays Suspect with the listener's PI
+        ok(log.noteListenerFm(98800, 0xC201, "BBC R1", t + 400) == 2 && log.findKey(fmKey(0xC201, 98800))
+           && log.findKey(fmKey(0xC201, 98800))->cls == Cls::Suspect, "★ a listener on the locals' intermod (98.8): filed, but SUSPECT (" +
+           (log.findKey(fmKey(0xC201, 98800)) ? log.findKey(fmKey(0xC201, 98800))->suspectWhy : std::string("none")) + ")");
+        // ★ an image carries its parent's PI: a suspect no-RDS "image" whose own PI turns out different is a station
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC204, "BBC R4", 8, true, -5, 45, true), fm(99400, 0, "", 0, false, -60, 9, true) }, t + 500);
+        const Entry* im = log.findKey(fmKey(0, 99400));
+        ok(im && im->cls == Cls::Suspect, "a no-RDS pilot on 98.5's mirror (99.4) is SUSPECT (" + (im ? im->suspectWhy : std::string("none")) + ")");
+        log.noteListenerFm(99400, 0xC9A1, "Classic", t + 560);
+        const Entry* cl = log.findKey(fmKey(0xC9A1, 99400));
+        ok(cl && cl->cls == Cls::Dx && cl->suspectWhy.empty(), "★ …and with the listener's PI C9A1 (not R4's C204) it is not an image: DX, Classic");
+        ok(log.noteListenerFm(70000, 0xC201, "X", t) == 0 && log.noteListenerFm(99300, 0, "X", t) == 0, "only the main band, only a PI");
+        // saved and loaded: the named entry survives
+        Log back(T0); back.fromFileJson(log.toFileJson());
+        ok(back.findKey(fmKey(0xC717, 99300)) && back.findKey(fmKey(0xC717, 99300))->psLast == "BBC 3CR", "saved and loaded: PI C717 BBC 3CR");
+    }
+
     std::printf("── spill of a strong local (the Sony's log, 2026-11-14) ──\n");
     {
         Log log(T0);

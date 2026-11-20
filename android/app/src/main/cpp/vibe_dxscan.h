@@ -544,6 +544,60 @@ public:
         it->second.bmLocal = true; dirty_ = true; return true;
     }
 
+    /** ★★ A LISTENER'S RDS NAMES A STATION (Stuart, 2026-11-20, the Sony: 104.5 sat in the log as "PI 0000, DX, 59 min ago"
+     *  while he was listening to it with "PI C717 BBC 3CR" on screen — and 97.2 Smooth the same). The sweeps only look while
+     *  nobody listens and give a weak station a few seconds; a listener sits on it for minutes. `pi` is one the bookmark
+     *  learner has held (kProvisionalDwellSecs), `ps` the name it voted and settled ("" = none yet) — never raw RDS.
+     *  ★ Identity only: a listener is not a sweep, so visits, presence and the class stay the sweeps' — except that a
+     *  frequency's no-RDS entry becomes this PI's (as foldNoRdsInto does for a sweep) and is judged again with its PI, and
+     *  a station the log has never seen is filed (and alerted, if DX) like a sweep's new one. Returns 2 when it learned something
+     *  (a name, a PI, a new station), 1 when only "heard now" moved, 0 for nothing. */
+    int noteListenerFm(int khz, uint16_t pi, const std::string& psIn, int64_t now) {
+        if (pi == 0 || fmRangeOf(khz) != kFmRangeCount - 1) return 0;   // the main band only (the learner's 100 kHz grid)
+        const std::string ps = trimRight(psIn);
+        bool changed = false, news = false;
+        auto name = [&](Entry& e) {
+            if (!ps.empty() && e.psLast != ps) { e.psLast = ps; changed = news = true; }
+            if (!ps.empty() && std::find(e.psVariants.begin(), e.psVariants.end(), ps) == e.psVariants.end()) {
+                e.psVariants.push_back(ps);
+                if ((int)e.psVariants.size() > kMaxVariants) e.psVariants.erase(e.psVariants.begin());
+                changed = news = true;
+            }
+            if (now - e.lastHeard >= 60) { e.lastHeard = now; changed = true; }   // ★ heard now (a minute's grain: no churn)
+        };
+        const std::string k = fmKey(pi, khz);
+        if (auto it = byKey_.find(k); it != byKey_.end()) {
+            name(entries_[it->second]);
+        } else if (auto z = byKey_.find(fmKey(0, khz)); z != byKey_.end()) {
+            // ★ the unnamed entry IS this station: same id, row, history — now with its PI, and judged again with it
+            Entry e = entries_[z->second];
+            byKey_.erase(z);
+            e.pi = pi; e.key = k;
+            name(e);
+            if (e.cls != Cls::Local) {
+                const std::string why = suspectWhy(khz, pi, e.dcKhz ? e.dcKhz : khz, e.halfKhz ? e.halfKhz : 1200, rasterKhz_);
+                if (!why.empty()) { e.cls = Cls::Suspect; e.suspectWhy = why; }
+                else if (e.cls == Cls::Suspect) { e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx; e.suspectWhy.clear(); }
+            }
+            entries_[e.id] = e; byKey_[k] = e.id;
+            changed = news = true;
+        } else {
+            if (!makeRoom()) return 0;
+            Entry e; e.id = nextId_++; e.dab = false; e.key = k; e.khz = khz; e.pi = pi; e.firstHeard = now;
+            e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx;
+            e.dcKhz = khz; e.halfKhz = 1200;   // ★ no capture of its own: the neighbours either side are what a spill rule needs
+            const std::string why = suspectWhy(khz, pi, e.dcKhz, e.halfKhz, rasterKhz_);
+            if (!why.empty()) { e.cls = Cls::Suspect; e.suspectWhy = why; }
+            name(e);
+            entries_[e.id] = e; byKey_[k] = e.id;
+            VisitResult vr;
+            heardOne(entries_[e.id], true, -200.0f, 0.0f, now, {}, vr, sweepsFm_);
+            changed = news = true;
+        }
+        if (changed) dirty_ = true;
+        return news ? 2 : changed ? 1 : 0;
+    }
+
     /** Promote: the caller wrote the bookmark; this remembers it (and makes the entry unprunable). */
     bool setPromoted(int id, const std::string& bm) {
         auto it = entries_.find(id); if (it == entries_.end()) return false;
@@ -1082,6 +1136,9 @@ private:
         }
         char b[96];
         for (const Entry* l : locals) {
+            /* ★ An image carries its parent's PI. A station whose own PI is known and is NOT this local's cannot be its image
+             *  (the Sony, 2026-11-19: Classic FM's brief C7A1 on 100.4 filed as "image of 99.7 MHz (PI C201)" — BBC R1's). */
+            if (pi != 0 && l->pi != 0 && l->pi != pi) continue;
             const int img = 2 * dcKhz - l->khz;
             if (std::abs(img - khz) < tol && l->khz != khz) {
                 std::snprintf(b, sizeof b, "image of %.1f MHz (PI %04X)%s", l->khz / 1000.0, l->pi, l->pi == pi ? ", same PI" : "");

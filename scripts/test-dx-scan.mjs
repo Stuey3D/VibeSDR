@@ -222,10 +222,47 @@ async function testRanges() {
   await sleep(1000);
 }
 
+/* ★★ H. A LISTENER'S RDS INTO THE DX LOG (Stuart, 2026-11-20: the Sony's 104.5 showed "DX, PI 0000" on the spectrum while
+ *  his own RDS read C717 BBC 3CR — "we need to add to the DX log when the radio is in use"). The log starts with 98.8 as a
+ *  no-RDS DX entry; a listener sits on 98.8 (RAI R1 on the fake dongle), then on 104.6, which the log has never seen. */
+async function testListener() {
+  console.log('── H. a listener\'s RDS names the DX log\'s stations (the radio in use) ──');
+  const now = Math.floor(Date.now() / 1000), DAY = 86400;
+  const seed = (dir) => fs.writeFileSync(path.join(dir, 'data', 'dxlog-dx-test.json'), JSON.stringify({ v: 1, created: now - 10 * DAY, nextId: 2,
+    sweepsFm: 50, sweepsDab: 0, alertSeq: 0, fmCursorKhz: 87500, dabCursor: 0, nextDab: false, bootDone: true, alerts: [],
+    entries: [{ id: 1, band: 'FM', key: 'FM:0000:98800', class: 'dx', khz: 98800, piN: 0, ps: '', psVariants: [], st: 1, dc: 98850, hw: 550,
+                firstHeard: now - 2 * DAY, lastHeard: now - 3600, timesHeard: 7, presence: 0.4, lastSweep: 48 }] }));
+  const H = await startServer('listen', { on: true, bands: 'fm', waitMin: 5 }, ['--rate', '2400000', '--tones', '0', '--fm-rds', STATIONS], { seed });
+  const get = () => fetch(`${H.H}/vibeserver/dxlog.json?limit=100&suspect=1&local=1`).then((r) => r.json()).catch(() => ({ entries: [] }));
+  const a = ws(H.port, '/ws/user-spectrum?user_session_id=dxhh0001&bins=256');
+  ok(await H.until(() => a.hw), 'hwinfo arrives');
+  const ping = setInterval(() => a.send({ type: 'ping' }), 5000);   // ★ a silent session is released after 30 s
+  try {
+    let list = await get();
+    ok(list.entries.some((e) => e.freqKhz === 98800 && e.pi === '0000'), 'the log starts with 98.8 as PI 0000 (no RDS)');
+    a.send({ type: 'tune', frequency: 98800000, mode: 'wfm' });
+    // the learner holds the PI 20 s, then votes the name and lets it settle
+    const named = async (khz, pi, ps) => { list = await get(); return list.entries.some((e) => e.freqKhz === khz && e.pi === pi && e.ps === ps); };
+    ok(await H.until(() => named(98800, '5201', 'RAI R1'), 90000), '★ listening to 98.8: the entry becomes PI 5201 RAI R1');
+    const e = list.entries.find((x) => x.freqKhz === 98800 && x.pi === '5201');
+    ok(!list.entries.some((x) => x.freqKhz === 98800 && x.pi === '0000') && e && e.id === 1 && e.timesHeard === 7 && e.class === 'dx',
+       `★ the SAME row (id ${e?.id}), its history kept (heard ${e?.timesHeard}), still DX — one row on 98.8, not two`);
+    ok(/DX log: 98\.8 MHz PI 5201/.test(H.logText()), 'the server log says so');
+    a.send({ type: 'tune', frequency: 104600000, mode: 'wfm' });
+    ok(await H.until(() => named(104600, 'F201', 'FR INTER'), 90000), '★ 104.6, never in the log: filed as PI F201 FR INTER');
+    const f = list.entries.find((x) => x.freqKhz === 104600);
+    ok(f && f.class === 'dx', `…as DX (${f?.class})`);
+    const al = await fetch(`${H.H}/vibeserver/dxlog/alerts?since=0`).then((r) => r.text()).catch(() => '');
+    ok(al.includes('New DX: 104.6 MHz PI F201'), `…with its "New DX" alert (${(al.match(/New DX: 104\.6[^"]*/) || ['none'])[0]})`);
+  } finally { clearInterval(ping); a.close(); H.stop(); await sleep(1000); }
+}
+
 try {
   const only = process.env.DX_TEST_ONLY || '';
+  if (only === 'listener') await testListener();
   if (!only || only === 'locals') await testLocals();
   if (!only || only === 'ranges') await testRanges();
+  if (!only) await testListener();
   if (!only) {
   // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   console.log('── A. FM: nobody here → the scan starts and finds the RDS stations ──');

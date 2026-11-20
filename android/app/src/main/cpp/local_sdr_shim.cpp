@@ -6807,6 +6807,38 @@ static void dxLogFlushLocked(const char* why) {
     if (ok && std::rename(tmp.c_str(), g_dxLogPath.c_str()) == 0) { g_dxLog.clean(); LOGI("DX log: %zu entries written (%s, %zu bytes)", g_dxLog.size(), why, j.size()); }
     else { std::remove(tmp.c_str()); LOGE("DX log: writing %s failed", g_dxLogPath.c_str()); }
 }
+/** ★★ A LISTENER'S RDS INTO THE DX LOG (Stuart, 2026-11-20: "we need to add to the DX log when the radio is in use" — the
+ *  Sony's 104.5 showed "DX, PI 0000" on the spectrum while the listener's own RDS read C717 BBC 3CR). Called beside
+ *  bmLearn on every PS callback; it takes the LEARNER'S verdict, never raw RDS: the PI once the learner has held it
+ *  (kProvisionalDwellSecs — a bookmark with that PI, or the pending one that long), the name only once it was voted and
+ *  settled (kNameHeard). Only while the owner has the DX Log on with FM. ★ The two locks are taken one after the other,
+ *  never nested (the locals hand-over below takes them the same way). */
+static void dxNoteListenerRds(double vfoHz, int pi) {
+    if (pi <= 0) return;
+    vibe::dx::Config cfg;
+    { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+    if (!cfg.on || !cfg.fm) return;
+    const double hz = bmSnapFm(vfoHz);
+    if (hz < 87.5e6 || hz > 108.0e6) return;
+    const long long key = bmKey(hz), now = (long long)time(nullptr);
+    bool held = false; std::string name;
+    {
+        std::lock_guard<std::mutex> lk(g_bmMtx);
+        auto it = g_bookmarks.find(key);
+        if (it != g_bookmarks.end() && it->second.pi == pi) {
+            held = true;
+            if (it->second.nameSrc == kNameHeard) name = it->second.name;
+        } else {
+            auto p = g_bmPending.find(key);
+            held = p != g_bmPending.end() && p->second.pi == pi && now - p->second.piSince >= kProvisionalDwellSecs;
+        }
+    }
+    if (!held) return;
+    std::lock_guard<std::mutex> lk(g_dxLogMtx);
+    dxLogLoadLocked();
+    if (g_dxLog.noteListenerFm((int)std::llround(hz / 1e3), (uint16_t)pi, name, now) == 2)
+        LOGI("DX log: %.1f MHz PI %04X%s%s from a listener's RDS", hz / 1e6, (unsigned)pi, name.empty() ? "" : " ", name.c_str());
+}
 /** ★★★ THE DX LOG'S LOCALS INTO THE DISCOVERED BOOKMARKS (V12, 2026-11-16 — Stuart: "Once the DX Log has established the
  *  locals then we can add them to the RDS discovered bookmarks, same with the DAB multiplexes too").
  *  The locals are the log's own judgement (vibe_dxscan.h: present in ≥ 90 % of a week's visits, every day — or the
@@ -15650,7 +15682,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Learned against THIS listener's VFO — the frequency actually being heard. It used to
         //   read the shared audioFreq, which in per-client mode is nobody's, so a learned
         //   bookmark would be filed under a frequency no one was on.
-        if (ps8) bmLearn(vfoHz, (int)pi, ps8, st.rdsEcc);
+        if (ps8) {
+            bmLearn(vfoHz, (int)pi, ps8, st.rdsEcc);
+            dxNoteListenerRds(vfoHz, (int)pi);   // ★ and the DX log learns the listener's station too (the learner's verdict)
+        }
     }
     static void rdsTextCb_(RdsState& st, double vfoHz, Impl* im, const char* rt64) {
         std::lock_guard<std::mutex> lk(st.rdsMtx);
