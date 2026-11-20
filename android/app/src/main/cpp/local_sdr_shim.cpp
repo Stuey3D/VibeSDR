@@ -42146,35 +42146,18 @@ static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach
 }
 /** ★ hwinfo's pair for a fixed-frequency decoder: `,"id":true` live · `,"id":false` the owner switched it off (hidden, as
  *  ever) · `,"id":false,"idWhy":"…"` this radio cannot reach it (GREYED with the reason — the ais / aisWhy shape). */
-/** ★ What the RADIO ITSELF can reach — driver coverage, converter, an RTL's HF path (as vsRadioCaps reads them) — with none
- *  of the owner's choices (locked window, allow / block lists). An Icom: its own model ranges. Empty = not known. */
-static vibebands::Ranges vsHardwareRanges() {
-    if (g_icomOn.load()) return vsTunableRanges();
-    auto& shim = LocalSdrShim::instance();
-    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf" : shim.isHackRf() ? "hackrf"
-                          : shim.isAirspy() ? "airspy" : shim.isUsrp() ? "usrp" : "rtl";
-    int rtlHf = 1;
-    if (drv == "rtl") {
-        const std::string m = shim.deviceModel();
-        rtlHf = (g_autoDs.load() || g_dsNow.load() > 0) ? 2 : (m.empty() || m.find("V4") != std::string::npos) ? 1 : 0;
-    }
-    return vibereach::reachRanges(drv, shim.converterOffsetHz(), shim.converterInputLoHz(), shim.converterInputHiHz(), rtlHf);
-}
 static std::string vsDecoderCapJson(const char* id, const vibereach::Reach& reach) {
     if (vsModeBlocked(id)) return std::string(",\"") + id + "\":false";
     const std::string why = vsDecoderWhyNot(id, &reach);
     if (why.empty()) return std::string(",\"") + id + "\":true";
-    /* ★★★ THE HARDWARE CANNOT EVER GET THERE → NOT DRAWN AT ALL (Stuart, 2026-11-20, BALLOONS greyed on the XCover's
-     *  Airspy HF+: "this button shouldnt be present at all it cannot reach the frequency"). Greyed-with-a-reason is for what
-     *  the OWNER's settings shut out (a locked range, the allow / block lists) — something they can change. What the radio
-     *  itself (driver coverage, converter, an RTL's HF path) can never reach goes out as plain false, the owner-blocked
-     *  shape every client already hides (web, app, R36S): no dead controls. Judged on the HARDWARE ranges alone, so a
-     *  locked range or an allow list never hides a key the radio could reach. */
-    {
-        vibereach::Reach hw; hw.ranges = vsHardwareRanges();
-        if (!hw.ranges.empty() && !vibereach::whyNot(id, hw).empty()) return std::string(",\"") + id + "\":false";
-    }
-    return std::string(",\"") + id + "\":false,\"" + id + "Why\":\"" + vibereach::jsonEsc(why) + "\"";
+    /* ★★★ A DECODER THIS RADIO CANNOT USE HERE IS NOT DRAWN AT ALL — whatever the reason (Stuart, 2026-11-20: first
+     *  "this button shouldnt be present at all it cannot reach the frequency" — BALLOONS greyed on the XCover's Airspy
+     *  HF+ — then "we also need to hide the buttons where a user has restricted the sdr range or locked it too"). Out of
+     *  the hardware's reach, outside a locked range, outside the owner's allow / block lists: all go out as plain false,
+     *  the owner-blocked shape the web page, the app and the R36S already hide. No dead controls. An attach that arrives
+     *  anyway (an old client) is still refused with the reason in words (vsDecoderWhyNot). */
+    (void)why;
+    return std::string(",\"") + id + "\":false";
 }
 
 /* ★★ V12 DIGITAL SPOTS: BAND (2026-10-26) — decoders/digi_bands.h. The bands this radio can sit on in Band mode: every
@@ -42491,11 +42474,8 @@ static std::string vsTunableJson() {
     j += std::string(",\"tones\":") + (vsModeBlocked("tones") ? "false" : "true");
     /* ★ V12 VOR / ILS (decoders/nav_rx.h) and 406 MHz beacons (decoders/sarsat_rx.h): listener's decoders on the CHANNEL IQ.
      *  Absent on an older server; false + its reason where this radio does not reach them or the owner blocked them. */
-    if (g_icomOn.load()) {   // ★ an Icom's audio is not IQ: shown greyed with the reason (vibe_icom_decode.h's words)
-        if (!vsModeBlocked("vor")) j += ",\"vor\":false,\"vorWhy\":\"" + vibereach::jsonEsc(vibeicomdec::notOfferedWhy("vor")) + "\"";
-        else j += ",\"vor\":false";
-        if (!vsModeBlocked("sarsat")) j += ",\"sarsat\":false,\"sarsatWhy\":\"" + vibereach::jsonEsc(vibeicomdec::notOfferedWhy("sarsat")) + "\"";
-        else j += ",\"sarsat\":false";
+    if (g_icomOn.load()) {   // ★ an Icom's audio is not IQ: never usable here → not drawn (vsDecoderCapJson's rule, Stuart 11-20)
+        j += ",\"vor\":false,\"sarsat\":false";
     } else {
         j += vsDecoderCapJson("vor", reach);
         j += vsDecoderCapJson("sarsat", reach);

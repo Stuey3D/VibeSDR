@@ -1,7 +1,8 @@
 // test-web-decoder-reach.mjs — V12 (2026-11-03) DECODER REACH in the web client (vibe_decoder_reach.h), in headless Edge
-// with --mute-audio (tests are silent): a radio LOCKED to 90.8–93.2 MHz (the owner said SAME on). The DECODERS panel still
-// draws SAME, NAVTEX, DSC, APRS, SELCAL, CW, PSK and JTTY — greyed (class unreach, aria-disabled, the reason as the
-// title); a click shows the reason and attaches nothing; a decoder that works anywhere (RTTY) is untouched. Screenshots.
+// with --mute-audio (tests are silent): a radio LOCKED to 90.8–93.2 MHz (the owner said SAME on). ★★ Since 2026-11-20
+// (Stuart: "we also need to hide the buttons where a user has restricted the sdr range or locked it too") the DECODERS
+// panel does NOT draw SAME, NAVTEX, DSC, APRS, SELCAL, CW, PSK or JTTY at all — no greyed ghosts; a decoder that works
+// anywhere (RTTY) is untouched; owner-blocked ones are gone as ever. Screenshots.
 //   VIBESERVER_BIN=…/vibeserver node scripts/test-web-decoder-reach.mjs
 import net from 'node:net';
 import fs from 'node:fs';
@@ -65,8 +66,8 @@ try {
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => /^DECODERS/.test(x.textContent.trim())); b && b.click(); return !!b; })()`);
   ok(await until(`document.getElementById('decodersPanel')?.classList.contains('open')`, 4000), 'the DECODERS panel opens');
   for (const d of FIXED) {
-    const r = JSON.parse(await ev(`JSON.stringify((() => { const b = document.querySelector('#decodersPanel [data-dec="${d}"]'); return b ? { hidden: b.hidden, un: b.classList.contains('unreach'), dis: b.getAttribute('aria-disabled'), title: b.title } : null; })())`) || 'null');
-    ok(!!r && !r.hidden && r.un && r.dis === 'true' && /^Outside this radio's locked range \(90\.8–93\.2 MHz\)/.test(r.title), `${d}: drawn, greyed, "${r && r.title}"`);
+    const g = JSON.parse(await ev(`JSON.stringify((() => { const b = document.querySelector('#decodersPanel [data-dec="${d}"]'); if (!b) return { gone: true }; const cs = getComputedStyle(b); return { gone: b.hidden || cs.display === 'none' || b.offsetParent === null }; })())`) || 'null');
+    ok(!!g && g.gone, `${d}: outside the locked range — not drawn at all`);
   }
   // ★★ OWNER-BLOCKED = NO GHOST BUTTONS (Stuart 2026-11-03): a decoder the owner switched off is never drawn — not greyed,
   //    not dimmed — whether or not this radio could reach it (DSC is also out of reach here: the owner's block wins).
@@ -78,7 +79,7 @@ try {
   ok(!ghostOpt, `…and none in the mode menu either ("${ghostOpt}")`);
   const rt = JSON.parse(await ev(`JSON.stringify((() => { const b = document.querySelector('#decodersPanel [data-dec="rtty"]'); return b ? { hidden: b.hidden, un: b.classList.contains('unreach') } : null; })())`) || 'null');
   ok(!!rt && !rt.hidden && !rt.un, 'RTTY (works on whatever is tuned): untouched');
-  // ★ every tab of the panel, so a screenshot shows the greyed keys wherever they sit
+  // ★ every tab of the panel, so a screenshot shows what is (and is not) drawn
   const tabs = await ev(`[...document.querySelectorAll('#decodersPanel [data-band-tab], #decodersPanel .decTab, #decodersPanel [role="tab"]')].map(t => t.textContent.trim()).join(',')`);
   console.log('   tabs:', tabs || '(none)');
   console.log('   screenshot', await shot('panel'));
@@ -87,30 +88,6 @@ try {
     await sleep(400);
     console.log('   screenshot', await shot('panel-' + t.toLowerCase().replace(/[^a-z0-9]+/g, '')));
   }
-  // ★ a press: the reason, nothing attached
-  const before = fs.readFileSync(srvLog, 'utf8').length;
-  await ev(`(() => { const b = document.querySelector('#decodersPanel [data-dec="same"]'); b && b.scrollIntoView(); b && b.click(); })()`);
-  ok(await until(`/SAME unavailable — Outside this radio's locked range/.test(document.getElementById('vsPill')?.textContent || '')`, 3000),
-     `a click says why: "${await ev(`document.getElementById('vsPill')?.textContent`)}"`);
-  ok(await ev(`!document.querySelector('#decodersPanel [data-dec="same"]').classList.contains('on')`), 'and the key is not lit');
-  await sleep(1200);
-  const after = fs.readFileSync(srvLog, 'utf8').slice(before);
-  ok(!/decoder same/i.test(after) && !/attach.*same/i.test(after), 'and nothing reached the server (no attach)');
-  console.log('   screenshot', await shot('pill'));
-  // ★ the keyboard reaches it: focus, then Enter
-  // ★ NAVTEX sits on the HF tab — back to it, as a listener would
-  await ev(`(() => { const b = [...document.querySelectorAll('#decodersPanel [data-band-tab], #decodersPanel .decTab, #decodersPanel [role="tab"]')].find(x => x.textContent.trim() === 'HF'); b && b.click(); })()`);
-  await sleep(300);
-  await ev(`document.querySelector('#decodersPanel [data-dec="navtex"]').focus()`);
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
-  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
-  const focused = await ev(`document.activeElement === document.querySelector('#decodersPanel [data-dec="navtex"]')`);
-  ok(focused === true, 'the greyed NAVTEX key takes focus (keyboard and pad reach it — it is not disabled)');
-  if (!(await until(`/NAVTEX unavailable/.test(document.getElementById('vsPill')?.textContent || '')`, 1500))) {
-    // ★ headless Edge does not always turn a CDP Enter into a click: the pad's own press is el.click() (gamepad.ts)
-    await ev(`document.activeElement.click()`);
-  }
-  ok(await until(`/NAVTEX unavailable/.test(document.getElementById('vsPill')?.textContent || '')`, 3000), 'pressing the focused NAVTEX key says why too');
   // ★ a phone
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

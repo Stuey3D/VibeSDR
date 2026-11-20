@@ -138,16 +138,16 @@ const rd = (st, id) => (st && Array.isArray(st.regionDefaults) ? st.regionDefaul
     ok(st && st.same === true, 'SAME live (nothing switched off on a guess)');
   } finally { S.stop(); }
 }
-// ── 5. A LOCKED RANGE 90.8–93.2 MHz (the owner said SAME on): every fixed-frequency decoder greyed with its reason ──
+// ── 5. A LOCKED RANGE 90.8–93.2 MHz (the owner said SAME on): every fixed-frequency decoder NOT DRAWN (2026-11-20) ──
 {
   console.log('── a locked range 90.8–93.2 MHz ──');
   const S = await server('lock', ['--freq', '92000000', '--lock-freq', '92000000', '--users', '4', '--mode', 'wfm', '--idle-grace', '0'],
                          { locator: 'IO92nh' }, { blockedModes: '+same' });
   try {
     const st = await S.status();
-    for (const id of FIXED) ok(st && st[id] === false && typeof st[id + 'Why'] === 'string' && /^Outside this radio's locked range \(90\.8–93\.2 MHz\)/.test(st[id + 'Why']),
-                               `${id}: false + "${st && st[id + 'Why']}"`);
-    ok(st && st.sameWhy === 'Outside this radio\'s locked range (90.8–93.2 MHz) — SAME is at 162.400–162.550 MHz', 'SAME\'s reason, word for word');
+    /* ★★ Stuart 2026-11-20: "we also need to hide the buttons where a user has restricted the sdr range or locked it too" —
+     *  outside a locked range is NOT DRAWN: plain false, no reason (the owner-blocked shape every client hides). */
+    for (const id of FIXED) ok(st && st[id] === false && st[id + 'Why'] === undefined, `${id}: false, no reason — not drawn (${JSON.stringify(st && st[id])})`);
     ok(st && Array.isArray(st.modes) && FIXED.every((id) => !st.modes.includes(id)), `none of them in the offer (${JSON.stringify(st && st.modes)})`);
     ok(st && st.modes.includes('rtty') && st.modes.includes('wfm'), 'RTTY and WFM still offered (not fixed-frequency)');
     ok(st && st.spotsBand === undefined && st.spotBands === undefined, `no Band spots: no amateur band inside the window (${JSON.stringify(st && st.spotsBand)})`);
