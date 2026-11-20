@@ -19,15 +19,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, FileHandle, Paths } from 'expo-file-system';
 
 /** Where the pack is published — a GitHub release asset, beside the Lite APK. */
-export const DETAIL_URL = 'https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v2/vibemap-detail.pmtiles';
+export const DETAIL_URL = 'https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v3/vibemap-detail.pmtiles';
 /** The published size in bytes, for the "approx" wording and the integrity check.
  *  ★ TIED TO THE PUBLISHED ASSET: rebuild the pack and this, the release asset and DETAIL_URL's tag move
- *    together (a new tag, mapgl-detail-v2, so an installed v1 is never mistaken for the new one). */
-export const DETAIL_BYTES = 176874906;
-/* ★★ v2 (2026-11-18): islands in lakes are land again — v1 drew Flevoland (Almere, Lelystad) and every lake island
+ *    together (a new tag each time — mapgl-detail-v3 — so an installed older pack is never mistaken for the new one). */
+export const DETAIL_BYTES = 234132571;
+/* ★★ v3 (2026-11-20): rivers are WATER — OSM river areas from z10, so Wisbech, Saigon and every port up a river are on
+ *    the river, not on land (scripts/gen-river-areas.mjs). SHA-256 a049e6cc…21d4.
+ * ★★ v2 (2026-11-18): islands in lakes are land again — v1 drew Flevoland (Almere, Lelystad) and every lake island
  *    as water. An installed pack of any other size is an OLDER pack: the app says an update is ready (App.tsx, once
  *    per pack version) and the foot of the server list offers it; servers replace theirs by themselves (vibe_mapgl.h). */
-const UPDATE_ASKED_KEY = 'mapgl_detail_update_asked_v2';
+const UPDATE_ASKED_KEY = 'mapgl_detail_update_asked_v3';   // ★ a new pack: asked once again
 /** "Asked once" — set when the first-launch prompt has been answered either way. */
 const ASKED_KEY = 'mapgl_detail_asked_v1';
 

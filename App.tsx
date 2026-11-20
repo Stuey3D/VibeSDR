@@ -356,7 +356,7 @@ export default function App() {
         t = setTimeout(() => {
           appAlert(
             'High Detail Maps update',
-            `An updated High Detail Maps pack is ready. It puts back land the old one drew as water — islands in lakes everywhere, and Flevoland in the Netherlands — and built-up areas now stop at the coast.\n\nAbout ${Math.round(DETAIL_BYTES / 1048576)} MB, once. Wi-Fi is recommended. The maps keep working while it downloads, and you can update later from the bottom of the server list.`,
+            `An updated High Detail Maps pack is ready. Rivers are now drawn as water when zoomed in, so ports up a river — and the ships on it — are on the water instead of on land. Islands in lakes stay land, and built-up areas stop at the coast.\n\nAbout ${Math.round(DETAIL_BYTES / 1048576)} MB, once. Wi-Fi is recommended. The maps keep working while it downloads, and you can update later from the bottom of the server list.`,
             [{ text: 'Later', style: 'cancel', onPress: () => { void markDetailUpdateAsked(); } },
              { text: 'Update', onPress: () => { void markDetailUpdateAsked(); void downloadDetail(); } }],
             { cancelable: false });
@@ -367,7 +367,7 @@ export default function App() {
       t = setTimeout(() => {
         appAlert(
           'High Detail Maps',
-          'Download the high detail maps? They need approx 200 MB of storage space on this device and are a one time download.\n\nWithout them the standard maps still work. You can download them later from the bottom of the server list.',
+          'Download the high detail maps? They need approx 230 MB of storage space on this device and are a one time download.\n\nWithout them the standard maps still work. You can download them later from the bottom of the server list.',
           [{ text: 'Not now', style: 'cancel', onPress: () => { void markDetailAsked(); } },
            { text: 'Download', onPress: () => { void markDetailAsked(); void downloadDetail(); } }],
           { cancelable: false });
