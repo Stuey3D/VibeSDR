@@ -651,6 +651,8 @@ if node scripts/test-rsp-notch-lr.mjs; then pass=$((pass+1)); else fail=$((fail+
 if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE WATERFALL RATE MENU SHOWS THE RATE THE SERVER RUNS (11.0.9): a hand-set 15 is "15 fps (set by hand)", never "Full · 20".
 if node scripts/test-setup-maxfps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta88 "Remote access to server settings": the page on an Android phone's server shows only the phone's controls.
+if node scripts/test-setup-android.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 RATE SWITCH: "change the sample rate when a mode needs it" (dabRateBoost); the RTL 3.2 MS/s ADS-B option stays removed.
 if node scripts/test-setup-mode-rate.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 ADS-B AS THE LANDING: drawn only where ADS-B can run, keep-running only beneath it and never ticked by default,

@@ -13,6 +13,8 @@ package com.vibesdr.app
  */
 object VibeLocalSDR {
     @Volatile private var loaded = false
+    /** ★ Is the engine's library loaded in this process? (VibeRemoteSetup registers its handlers only where it is.) */
+    fun isLoaded(): Boolean = loaded
 
     private fun ensureLoaded() {
         if (loaded) return

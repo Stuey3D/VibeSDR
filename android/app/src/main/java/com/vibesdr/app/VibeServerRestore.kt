@@ -197,8 +197,20 @@ object VibeServerRestore {
         return VibeLocalSDR.giveUpOnGoneRadio(true, radioGoneForMs(ctx), keepRadioAlive(ctx))
     }
 
+    /** ★★ THE OWNER'S SETTINGS CHANGED (the phone's screen, or the /setup page — VibeRemoteSetup): the restore brings
+     *  the server back AS IT IS NOW, the same rule as updateConfig, for the whole config at once. Nothing to do on a
+     *  phone that has never served (the next Start writes it whole). */
+    fun replaceConfig(ctx: Context, cfg: org.json.JSONObject) {
+        val p = prefs(ctx)
+        if ((p.getString(K_CONFIG, "") ?: "").length <= 2) return
+        p.edit().putString(K_CONFIG, cfg.toString()).commit()
+    }
+
+    /** ★ The radio the server was started with, as (vid shl 16) or pid; -1 when none is recorded. */
+    fun storedVidPid(ctx: Context): Int = prefs(ctx).getInt(K_VIDPID, -1)
+
     /** ★ The config the server was started with, whole (K_CONFIG); empty when it has never run. */
-    private fun storedConfig(ctx: Context): org.json.JSONObject =
+    internal fun storedConfig(ctx: Context): org.json.JSONObject =
         try { org.json.JSONObject(prefs(ctx).getString(K_CONFIG, "{}") ?: "{}") } catch (_: Throwable) { org.json.JSONObject() }
 
     /** ★★★ THE OWNER'S "KEEP RADIO ALIVE", as the running server was given it (updateConfig keeps it current) —

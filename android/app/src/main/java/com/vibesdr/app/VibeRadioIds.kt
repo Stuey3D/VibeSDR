@@ -46,4 +46,14 @@ object VibeRadioIds {
         (vid == AIRSPYHF_VID && pid == AIRSPYHF_PID) ||
         (vid == HACKRF_VID && pid == HACKRF_PID) ||
         (vid == AIRSPY_VID && pid == AIRSPY_PID)
+
+    /** ★ The driver name every VibeServer reports for this radio (the screen's getConnectedRadio uses the same words). */
+    fun driverOf(vid: Int, pid: Int): String = when {
+        VibeIcom.isCandidate(vid, pid)              -> "icom"
+        VibeRsp.isRsp(vid, pid)                     -> "sdrplay"
+        vid == AIRSPYHF_VID && pid == AIRSPYHF_PID  -> "airspyhf"
+        vid == AIRSPY_VID && pid == AIRSPY_PID      -> "airspy"
+        vid == HACKRF_VID && pid == HACKRF_PID      -> "hackrf"
+        else                                        -> "rtl"
+    }
 }

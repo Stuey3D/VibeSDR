@@ -207,6 +207,38 @@ object VibeServerOps {
         try { VibeTunnel.pauseForServerStop() } catch (t: Throwable) { Log.w(TAG, "tunnel pause: ${t.message}") }
     }
 
+    /**
+     * ★★ THE /setup PAGE SAVED AND ASKED FOR A RESTART (VibeRemoteSetup.configSetPatch) — "Saving restarts it, so listeners
+     * will reconnect", as on Linux. The engine is stopped and started again from the settings just saved, through the
+     * restore (VibeServerRestore.restore → VibeServerBoot.applyAndStart): one start path. The foreground service keeps
+     * running throughout, and the server stays armed.
+     * ★ Later, on its own thread: the request that asked for it is still being answered by the engine being restarted.
+     */
+    fun restartFromSettings(ctx: Context) {
+        val app = ctx.applicationContext
+        Thread({
+            try { Thread.sleep(600) } catch (_: InterruptedException) {}
+            synchronized(this) {
+                if (!VibeServerRestore.isShimServing()) { Log.i(TAG, "remote save: no server running — it starts with the new settings"); return@synchronized }
+                VibeServerRestore.breadcrumb(app, "restarting for the remote settings page")
+                unadvertise(app)
+                try { VibeLocalSDR.stopMdns() } catch (_: Throwable) {}
+                stopEngine(app)
+                val err = VibeServerRestore.restore(app)
+                if (err != null) {
+                    Log.w(TAG, "the restart for the remote settings did not come back: $err")
+                    VibeServerRestore.breadcrumb(app, "remote restart failed: $err")
+                    RtlTcpServerService.kickRestore("remote restart failed: $err")
+                    return@synchronized
+                }
+                val ip = localIp() ?: ""
+                val name = VibeServerBoot.name(VibeRemoteSetup.settings(app))
+                if (ip.isNotEmpty()) { acquireMulticastLock(app); VibeLocalSDR.startMdns(hostSlug(name), ip) }
+                Log.i(TAG, "restarted with the settings saved on the remote page")
+            }
+        }, "vibe-remote-restart").start()
+    }
+
     // ── Status ───────────────────────────────────────────────────────────────────────────────────────────────────
 
     /** ★ The shim's own status plus what only this process can read: the LAN address and THIS process's CPU — which,

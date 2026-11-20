@@ -424,6 +424,88 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeProbeRtl(JNIEnv* env, jobject /*thiz*/,
     return env->NewStringUTF(desc.c_str());
 }
 
+// ── ★★★ REMOTE ACCESS TO SERVER SETTINGS (beta88) — the /setup page for the phone's server ─────────────────────────
+// The owner's switch (VibeRemoteSetup.kt). On: the shim's GET/POST /vibeserver/config get handlers — the SAME route,
+// admin gate, lockout and nonce + HMAC challenge the Linux /setup page uses — and /setup is served. Off: no handlers (the
+// route answers 501 as it always has on a phone) and /setup is not served. The handlers only TRANSLATE (vibe_android_setup.h);
+// the settings themselves live in Kotlin, in the server's process, reached by the two static upcalls cached here.
+// ★ Same JNI rules as the downloaders above: the class is cached from a Java thread (this call), never FindClass'd on the
+//   shim's HTTP thread, and that thread attaches and detaches around each upcall.
+#include "vibe_android_setup.h"
+static jclass    g_rsCls = nullptr;
+static jmethodID g_rsGet = nullptr;
+static jmethodID g_rsSet = nullptr;
+static std::atomic<bool> g_remoteSetupOn{false};
+
+static std::string jniRemoteGet() {
+    if (!g_vm || !g_rsCls || !g_rsGet) return {};
+    JNIEnv* env = nullptr; bool attached = false;
+    if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return {};
+        attached = true;
+    }
+    std::string out;
+    if (auto r = (jstring)env->CallStaticObjectMethod(g_rsCls, g_rsGet)) {
+        if (const char* c = env->GetStringUTFChars(r, nullptr)) { out = c; env->ReleaseStringUTFChars(r, c); }
+        env->DeleteLocalRef(r);
+    }
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); out.clear(); }
+    if (attached) g_vm->DetachCurrentThread();
+    return out;
+}
+
+static std::string jniRemoteSet(const std::string& patch, bool restart) {
+    if (!g_vm || !g_rsCls || !g_rsSet) return "the phone is not ready to take settings";
+    JNIEnv* env = nullptr; bool attached = false;
+    if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return "could not attach to the JVM";
+        attached = true;
+    }
+    std::string out = "the settings could not be saved";
+    jstring jp = env->NewStringUTF(patch.c_str());
+    if (auto r = (jstring)env->CallStaticObjectMethod(g_rsCls, g_rsSet, jp, restart ? JNI_TRUE : JNI_FALSE)) {
+        if (const char* c = env->GetStringUTFChars(r, nullptr)) { out = c; env->ReleaseStringUTFChars(r, c); }
+        env->DeleteLocalRef(r);
+    }
+    env->DeleteLocalRef(jp);
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); out = "the phone could not save the settings"; }
+    if (attached) g_vm->DetachCurrentThread();
+    return out;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeRemoteSetup_nativeEnable(JNIEnv* env, jclass cls, jboolean on) {
+    if (!g_rsCls) {
+        g_rsCls = (jclass)env->NewGlobalRef(cls);
+        g_rsGet = env->GetStaticMethodID(cls, "configGetRaw", "()Ljava/lang/String;");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_rsGet = nullptr; }
+        g_rsSet = env->GetStaticMethodID(cls, "configSetPatch", "(Ljava/lang/String;Z)Ljava/lang/String;");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_rsSet = nullptr; }
+    }
+    const bool want = on == JNI_TRUE && g_rsGet && g_rsSet;
+    g_remoteSetupOn.store(want);
+    if (want) {
+        vibe::LocalSdrShim::setConfigHandlers(
+            []() -> std::string {
+                const std::string page = vibe::androidsetup::pageConfig(jniRemoteGet());
+                return page.empty() ? std::string("{\"configured\":true,\"host\":\"android\",\"radios\":[]}") : page;
+            },
+            [](const std::string& body, std::string& err) -> bool {
+                std::string patch; bool restart = false;
+                if (!vibe::androidsetup::settingsPatch(body, patch, restart, err)) return false;
+                const std::string why = jniRemoteSet(patch, restart);
+                if (!why.empty()) { err = why; return false; }
+                return true;
+            });
+        vibe::LocalSdrShim::setNativeSetup(false);   // ★ /setup is served while the switch is on
+        LOGI("remote access to server settings: ON (/setup and /vibeserver/config, admin password required)");
+    } else {
+        vibe::LocalSdrShim::setConfigHandlers(nullptr, nullptr);
+        vibe::LocalSdrShim::setNativeSetup(true);
+        LOGI("remote access to server settings: off");
+    }
+}
+
 // Start the local-SDR spectrum pipeline + localhost UberSDR server.
 // Returns the bound TCP port (>0), or -1 on failure (check logcat).
 extern "C" JNIEXPORT jint JNICALL
@@ -443,7 +525,8 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
     //    configured, and the phone's server is always configured by the screen that starts it.
     // ★ setConfigured too, so /vibeserver.json tells the truth about itself — the daemon sets both
     //   from its config file, and a phone had no equivalent.
-    vibe::LocalSdrShim::setNativeSetup(true);
+    // ★★ beta88: …unless the owner switched on remote access to the server's settings, which serves /setup (see above).
+    vibe::LocalSdrShim::setNativeSetup(!g_remoteSetupOn.load());
     vibe::LocalSdrShim::setConfigured(true);
     std::string err;
     int port = vibe::LocalSdrShim::instance().start(
