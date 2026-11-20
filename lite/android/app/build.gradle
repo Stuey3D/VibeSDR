@@ -251,14 +251,16 @@ tasks.register('syncJniLibs', Sync) {
     //   logged "listing not restored: the tunnel component is not present in this build" and dropped the
     //   Sony out of the directory (2026-10-01). A Lite with no tunnel is never what we meant to build.
     doFirst {
+        // ★ V12 2026-11-20 + libcodec2.so (Codec 2, LGPL-2.1, android-21 — sdr-kit/build-codec2.sh): FreeDV + M17 voice,
+        //   dlopened by vibe_freedv.h, never linked
         ['cloudflared/armeabi-v7a/libcloudflared.so', 'kit/armeabi-v7a/lib/librtlsdr.so',
-         'kit/armeabi-v7a/lib/libusb1.0.so'].each { rel ->
+         'kit/armeabi-v7a/lib/libusb1.0.so', 'kit/armeabi-v7a/lib/libcodec2.so'].each { rel ->
             if (!new File(NATIVE, rel).exists())
                 throw new GradleException("Lite: ${NATIVE}/${rel} is missing — copy it from the main checkout " +
                                           "(lite/native is partly gitignored); refusing to build a Lite without it")
         }
     }
-    from("${NATIVE}/kit/armeabi-v7a/lib") { include 'librtlsdr.so', 'libusb1.0.so' }
+    from("${NATIVE}/kit/armeabi-v7a/lib") { include 'librtlsdr.so', 'libusb1.0.so', 'libcodec2.so' }
     from("${NATIVE}/cloudflared/armeabi-v7a") { include 'libcloudflared.so' }
     into "${buildDir}/lite-jniLibs/armeabi-v7a"
 }

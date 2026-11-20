@@ -53,7 +53,9 @@
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
-#if defined(_WIN32) || defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+// ★★ ANDROID (V12, 2026-11-20) LOADS ITS OWN COPY: the app and VibeServer Lite ship libcodec2.so in the APK's native-
+//    library directory (sdr-kit/build-codec2.sh, Codec 2 1.2.0, LGPL-2.1 — a separate, replaceable library, as on Linux).
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 #define VIBE_FREEDV_NO_DLOPEN 1
 #else
 #include <dlfcn.h>
@@ -183,6 +185,27 @@ inline Lib openLib() {
         h = ::dlopen(p, RTLD_NOW | RTLD_LOCAL);
         if (h) { l.path = p; break; }
     }
+#elif defined(__ANDROID__)
+    // ★★ THE APK'S OWN libcodec2.so (sdr-kit/build-codec2.sh; SONAME "libcodec2.so"). From Android 7 the bare name resolves
+    //    in the app's linker namespace, which searches its native-library directory. Android 5–6 (Lite on a 2017 Fire 7)
+    //    search only the system's directories for a bare name, so the second try is the file beside THIS library — the
+    //    directory dladdr reports for our own code, which is the APK's lib dir (extracted: Lite and the app both use
+    //    legacy packaging). Nothing outside the app's own install is ever tried.
+    h = ::dlopen("libcodec2.so", RTLD_NOW | RTLD_LOCAL);
+    if (h) l.path = "libcodec2.so";
+    else {
+        Dl_info self{};
+        if (::dladdr(reinterpret_cast<void*>(&openLib), &self) && self.dli_fname) {
+            std::string p = self.dli_fname;
+            const size_t slash = p.rfind('/');
+            if (slash != std::string::npos) {
+                p = p.substr(0, slash + 1) + "libcodec2.so";
+                h = ::dlopen(p.c_str(), RTLD_NOW | RTLD_LOCAL);
+                if (h) l.path = p;
+            }
+        }
+    }
+    if (!h) { const char* e = ::dlerror(); l.why = std::string("libcodec2 did not load") + (e ? std::string(": ") + e : ""); return l; }
 #else
     // ★ measured 2026-11-16: Debian 12 bookworm libcodec2-1.0 (1.0.5), Debian 13 trixie libcodec2-1.2 (1.2.0)
     static const char* const kTry[] = { "libcodec2.so.1.2", "libcodec2.so.1.1", "libcodec2.so.1.0", "libcodec2.so" };

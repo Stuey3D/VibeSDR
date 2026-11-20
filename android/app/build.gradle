@@ -253,14 +253,25 @@ tasks.matching { it.name ==~ /minify\w*ReleaseWithR8/ }.configureEach { t ->
 
 // Flatten the needed src/main/cpp/sdr-kit/<ABI>/lib/*.so -> build/sdrkit-jniLibs.
 // V5: only librtlsdr + libusb (symlinks dereferenced to real files by Copy).
+// ★★ V12 2026-11-20 + libcodec2.so (Codec 2 1.2.0, LGPL-2.1 — sdr-kit/build-codec2.sh): FreeDV 700D/700E/1600 and M17
+//    voice on the phone's own server. NOT linked — vibe_freedv.h dlopens it by name from the native-library dir, so it
+//    stays a separate, replaceable library. FAIL LOUDLY without it: Copy skips a missing file, and the APK would build
+//    and quietly offer neither mode.
 def sdrKitDir = file("src/main/cpp/sdr-kit")
 def sdrKitJniLibs = file("${buildDir}/sdrkit-jniLibs")
 tasks.register('copySdrKitLibs', Copy) {
     into sdrKitJniLibs
+    doFirst {
+        ['arm64-v8a', 'armeabi-v7a'].each { abi ->
+            if (!new File(sdrKitDir, "${abi}/lib/libcodec2.so").exists())
+                throw new GradleException("sdr-kit/${abi}/lib/libcodec2.so is missing — run sdr-kit/build-codec2.sh")
+        }
+    }
     ['arm64-v8a', 'armeabi-v7a'].each { abi ->
         from("${sdrKitDir}/${abi}/lib") {
             include 'librtlsdr.so'
             include 'libusb*.so'
+            include 'libcodec2.so'
             into abi
         }
     }
