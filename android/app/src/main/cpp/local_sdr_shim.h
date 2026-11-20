@@ -1084,6 +1084,20 @@ public:
     /** Take it back. False (with a reason) when something else now holds it — a normal outcome. */
     bool reacquireRadio(std::string& err);
     bool radioIsReleased() const;
+    /** ★★★ THE BENCHMARK HOLD (Stuart, 2026-11-20: "everything should stop for benchmark runs otherwise they are
+     *  invalid"). Quiets THIS process for a benchmark run anywhere on the machine: the DX scanner and background
+     *  decoding stop (the dial given back), nothing idle may start again or take the radio back while the hold stands
+     *  (a listener who arrives is told why), and the radio is RELEASED — or, where it cannot be (a network source, an
+     *  Android descriptor radio), its capture is paused. `released` says which, for the caller's take-back. False, with
+     *  `why` in words, when this process cannot be quieted — nothing is held then. A front door holds nothing. */
+    bool benchQuiesce(bool& released, std::string& why);
+    /** Ends the hold: a paused capture resumes and the idle work may run again. The caller takes a RELEASED radio back
+     *  first (reacquireRadio, with its retries), then calls this. */
+    void benchUnhold();
+    static bool benchHeld();
+    /** ★ An admin ticket that every process on this machine accepts (the same shared secret) — for the front door to ask
+     *  its own radio processes, over 127.0.0.1, to hold still for a benchmark. Empty when there is no admin password. */
+    static std::string machineAdminTicket();
     /** ★★ V12 THE WIDE BENCHMARK'S USB BUS TEST (main.cpp, vibe_bench_profiles.h usbVerdict). The radio must be RELEASED:
      *  it is taken back at `hz` — a runtime rate for this test only, never written to the config — left `settleSec` to
      *  settle, the counters read, `measSec` streamed through the real intake and IQ buffer, the counters read again,

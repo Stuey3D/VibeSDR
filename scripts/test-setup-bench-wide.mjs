@@ -50,8 +50,9 @@ ok(L2.length === 4 && L2[1] === '40 WFM users @ 8 MS/s (set by CPU)' && L2[2] ==
    `WFM alone: its own line, above WFM + Advanced RDS (${L2.join(' | ')})`);
 ok(api.benchProfileLines({ dab: { n: 1, rate: 2048000, by: 'cpu', blocks: 1 } })[0] === '1 DAB user @ 2.048 MS/s (set by CPU)',
    'one block: no block count; one user: singular');
-ok(api.benchProfileLines({ fm: { n: 0, rate: 56e6, by: 'capture' } })[0] === '0 WFM + Advanced RDS users @ 56 MS/s (the capture itself cannot keep up at this rate)',
-   'the capture could not keep up: said so');
+ok(api.benchProfileLines({ fm: { n: 0, rate: 56e6, by: 'capture' } })[0] === 'WFM + Advanced RDS @ 56 MS/s: the shared front end (one capture for every listener) did not keep up at this rate here, so there is no listener figure',
+   'the capture could not keep up: said so — the shared front end, never "0 users" (the Pi 2, 2026-11-20)');
+ok(!/\b0 WFM users\b/.test(api.benchProfileLines({ fmPlain: { n: 0, rate: 2.4e6, by: 'capture' } })[0]), '★ no "0 WFM users" for a capture verdict');
 const hfOnly = api.benchProfileLines({ wfm: 3, nfm: 9, narrow: { n: 40, rate: 912000, by: 'cpu' } });
 ok(hfOnly.length === 1 && /^40 SSB\/AM\/NFM users @ 912 kS\/s/.test(hfOnly[0]), 'never a line for a profile not measured (an HF+: no DAB, no FM)');
 ok(api.benchProfileLines({ narrow: { n: 5, rate: 8e6, by: 'cpu' }, dabWhy: 'run the quick benchmark first: …' })[0] === 'DAB: run the quick benchmark first: …',
@@ -59,8 +60,8 @@ ok(api.benchProfileLines({ narrow: { n: 5, rate: 8e6, by: 'cpu' }, dabWhy: 'run 
 
 // ── the quick card ──
 api.benchProfilesRender({ v: 1, lockedUsers: lu });
-ok(!els.benchProfiles.classList.contains('hide') && els.benchProfiles.innerHTML.startsWith('<b>Quick benchmark — CPU/RAM:</b><br>50 DAB users'),
-   'the quick result: "CPU/RAM:" then the lines');
+ok(!els.benchProfiles.classList.contains('hide') && els.benchProfiles.innerHTML.startsWith('<b>Quick benchmark — locked range (one capture shared by every listener), CPU/RAM:</b><br>50 DAB users'),
+   'the quick result: labelled as the locked-range path, "CPU/RAM:", then the lines');
 api.benchProfilesRender({ v: 1, lockedUsers: { wfm: 20, nfm: 20 } });
 ok(els.benchProfiles.classList.contains('hide'), 'an older result (no profiles): no CPU/RAM block (its old sentence stays)');
 

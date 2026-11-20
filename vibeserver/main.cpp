@@ -89,6 +89,8 @@
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
 #include "vibe_benchmark_adsb.h"  // ★ …and its ADS-B rows (CPU only — the radio is not touched)
+#include "vibe_bench_quiet.h"      // ★★★ the whole machine holds still for a benchmark (2026-11-20)
+#include "net_shim.h"              // ★ …asked over 127.0.0.1 (vsLocalPost)
 #include "eibi.h"
 #include "satcat.h"
 #include "vibe_sat_engine.h"   // ★ parseSats: the dry parse a download must pass
@@ -1497,6 +1499,283 @@ static void radioStatusWrite(const std::string& serial, const std::string& drive
     }
 }
 
+// ── ★★★ THE WHOLE MACHINE HOLDS STILL FOR A BENCHMARK (Stuart, 2026-11-20) — the design is in vibe_bench_quiet.h ──
+static double vsBenchNow() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+/** POST (or GET) to another VibeServer process on THIS machine, on 127.0.0.1. Returns the HTTP status, 0 = no answer;
+ *  `body` is the reply's body. Bounded by `timeoutMs` (a radio letting go of an RSP takes a few seconds). */
+static int vsLocalHttp(const char* method, int port, const std::string& pathQuery, std::string& body, int timeoutMs) {
+    body.clear();
+    std::shared_ptr<net::Socket> s;
+    try { s = net::connect("127.0.0.1", port, 2000); } catch (...) { return 0; }
+    if (!s) return 0;
+    if (s->sendstr(std::string(method) + " " + pathQuery + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUser-Agent: VibeServer-benchmark\r\n"
+                   "Content-Length: 0\r\nConnection: close\r\n\r\n") < 0) { s->close(); return 0; }
+    std::string resp;
+    uint8_t buf[4096];
+    const double end = vsBenchNow() + timeoutMs / 1000.0;
+    size_t hdrEnd = std::string::npos;
+    long want = -1;
+    while (vsBenchNow() < end) {
+        const double t0 = vsBenchNow();
+        const int n = s->recv(buf, sizeof buf, false, 500);
+        if (n < 0) break;
+        if (n > 0) resp.append((const char*)buf, (size_t)n);
+        if (hdrEnd == std::string::npos && (hdrEnd = resp.find("\r\n\r\n")) != std::string::npos) {
+            const size_t cl = resp.find("Content-Length:");
+            if (cl != std::string::npos && cl < hdrEnd) want = std::atol(resp.c_str() + cl + 15);
+        }
+        if (hdrEnd != std::string::npos && want >= 0 && resp.size() >= hdrEnd + 4 + (size_t)want) break;
+        if (n == 0 && vsBenchNow() - t0 < 0.05) break;   // ★ an immediate 0 is the peer's close, not a quiet wait
+    }
+    s->close();
+    if (resp.rfind("HTTP/1.", 0) != 0 || resp.size() < 12) return 0;
+    if (hdrEnd != std::string::npos) body = resp.substr(hdrEnd + 4);
+    return std::atoi(resp.c_str() + 9);
+}
+/** This process's radio, in the owner's words (for the sentences below). */
+static std::string vsMyRadioLabel() {
+    for (const auto& r : g_serverConfig.radios)
+        if (!r.serial.empty() && r.serial == g_myRadioSerial) return r.label.empty() ? r.driver : r.label;
+    if (g_serverConfig.radios.size() == 1) {
+        const auto& r = g_serverConfig.radios[0];
+        return r.label.empty() ? (r.driver.empty() ? std::string("the radio") : r.driver) : r.label;
+    }
+    return "the radio";
+}
+/** Every OTHER radio process on this machine (none on a one-process server). */
+struct VsBenchPeer { std::string serial, label; int port = 0; bool held = false; };
+static std::vector<VsBenchPeer> vsBenchPeers() {
+    vsconfig::ServerConfig sc;
+    { std::string e; if (g_configPath.empty() || !vsconfig::loadServer(g_configPath, sc, e)) sc = g_serverConfig; }
+    std::vector<VsBenchPeer> out;
+    if (!vsconfig::needsFrontDoor(sc)) return out;   // ★ one process holds the one radio: there is nobody else to ask
+    for (size_t i = 0; i < sc.radios.size(); ++i) {
+        const auto& r = sc.radios[i];
+        if (!r.enabled || !r.configured) continue;   // ★ the supervisor's two gates: no process runs for it
+        if (!g_amFrontDoor.load() && !g_myRadioSerial.empty() && r.serial == g_myRadioSerial) continue;   // ★ ourselves
+        VsBenchPeer pr;
+        pr.serial = r.serial; pr.label = r.label.empty() ? r.driver : r.label; pr.port = vsconfig::portForRadio(sc, i);
+        out.push_back(pr);
+    }
+    return out;
+}
+/** The admin-gated route to a peer — a ticket the machine's shared admin secret signs (never an open endpoint). */
+static std::string vsPeerPath(const std::string& verb, bool force) {
+    return "/vibeserver/benchmark?hold=" + verb + (force ? "&force=1" : "")
+         + "&vs_admin_ticket=" + LocalSdrShim::machineAdminTicket();
+}
+
+/* ── the COORDINATOR's half: check, hold, keep holding, let go ── */
+static std::mutex              g_bqPeersMx;
+static std::vector<VsBenchPeer> g_bqPeers;          // ★ the peers this process holds for its run
+static std::atomic<bool>       g_bqRenewOn{false};
+static std::thread             g_bqRenewer;
+
+/** Step 1 — nothing changes yet. Every other radio is asked whether it has listeners and could hold still; this process's
+ *  own radio counts too. "" = go on (`peers` = who to hold); otherwise the sentence to refuse with. */
+static std::string vsBenchCheckMachine(bool force, std::vector<VsBenchPeer>& peers) {
+    using namespace vibe::benchquiet;
+    peers.clear();
+    std::vector<std::pair<std::string, int>> who;
+    if (!g_amFrontDoor.load()) who.push_back({vsMyRadioLabel(), LocalSdrShim::instance().listenerCount()});
+    for (auto& pr : vsBenchPeers()) {
+        std::string body;
+        const int st = vsLocalHttp("GET", pr.port, vsPeerPath("check", false), body, 10000);
+        if (st == 0) {
+            /* ★ A radio whose process KNOWS it is not running (its device missing or would not open — the radio-status
+             *  file it writes from its restart loop) costs the machine nothing: skipped, and said. Anything else that
+             *  does not answer could be busy, so the run does not go ahead beside it. */
+            const RadioStatus rs = radioStatusRead(pr.serial);
+            if (rs.present) {
+                std::fprintf(stderr, "VibeServer: benchmark: %s is not running (%s) \xe2\x80\x94 nothing to stop there\n",
+                             pr.label.c_str(), rs.state.c_str());
+                continue;
+            }
+            return cannotQuietRefusal(pr.label, noAnswerWhy());
+        }
+        if (st != 200 || body.find("\"hold\":\"check\"") == std::string::npos) {
+            // ★ A 200 without "hold" is an older build answering GET with its saved result: it cannot be asked to hold.
+            const std::string e = jsonStr(body, "error");
+            return cannotQuietRefusal(pr.label, st == 200 ? "runs an older VibeServer that cannot be asked to hold still (restart it)"
+                                                          : "would not say whether it could hold still (" + (e.empty() ? "HTTP " + std::to_string(st) : e) + ")");
+        }
+        if (jsonTrue(body, "busy")) return "The benchmark did not start: " + pr.label + " is running a benchmark of its own.";
+        if (jsonTrue(body, "held")) return "The benchmark did not start: " + pr.label + " is already held still for another benchmark on this machine.";
+        const long n = jsonNum(body, "listeners");
+        who.push_back({pr.label, n > 0 ? (int)n : 0});
+        peers.push_back(pr);
+    }
+    if (!force) { const std::string l = listenersRefusal(who); if (!l.empty()) return l; }
+    return "";
+}
+/** Let every held peer go (and stop renewing). Safe to call twice. */
+static void vsBenchReleasePeers() {
+    g_bqRenewOn.store(false);
+    if (g_bqRenewer.joinable() && g_bqRenewer.get_id() != std::this_thread::get_id()) g_bqRenewer.join();
+    std::vector<VsBenchPeer> peers;
+    { std::lock_guard<std::mutex> lk(g_bqPeersMx); peers.swap(g_bqPeers); }
+    for (auto& pr : peers) {
+        if (!pr.held) continue;
+        std::string body;
+        const int st = vsLocalHttp("POST", pr.port, vsPeerPath("off", false), body, 15000);
+        if (st != 200) std::fprintf(stderr, "VibeServer: benchmark: %s did not answer the release (HTTP %d) \xe2\x80\x94 its lease "
+                                            "brings it back by itself\n", pr.label.c_str(), st);
+    }
+}
+/** Step 2 — hold every peer (under a lease, renewed while the run lasts). On any refusal everything already held is let
+ *  go again and the sentence comes back. */
+static std::string vsBenchHoldPeers(bool force, std::vector<VsBenchPeer> peers) {
+    using namespace vibe::benchquiet;
+    for (auto& pr : peers) {
+        std::string body;
+        const int st = vsLocalHttp("POST", pr.port, vsPeerPath("on", force), body, 60000);
+        if (st == 200 && jsonTrue(body, "held")) {
+            pr.held = true;
+            std::lock_guard<std::mutex> lk(g_bqPeersMx);
+            g_bqPeers.push_back(pr);
+            continue;
+        }
+        vsBenchReleasePeers();
+        const std::string e = jsonStr(body, "error");
+        if (e.find("listener") != std::string::npos) return e;   // ★ the page offers "Run it anyway?" on this
+        return cannotQuietRefusal(pr.label, st == 0 ? noAnswerWhy() : "could not be taken off the air (" + (e.empty() ? "HTTP " + std::to_string(st) : e) + ")");
+    }
+    if (!peers.empty()) {
+        g_bqRenewOn.store(true);
+        g_bqRenewer = std::thread([] {
+            double next = vsBenchNow() + kRenewSec;
+            while (g_bqRenewOn.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                if (vsBenchNow() < next) continue;
+                next = vsBenchNow() + kRenewSec;
+                std::vector<VsBenchPeer> peers;
+                { std::lock_guard<std::mutex> lk(g_bqPeersMx); peers = g_bqPeers; }
+                for (const auto& pr : peers) {
+                    std::string body;
+                    if (vsLocalHttp("POST", pr.port, vsPeerPath("renew", true), body, 30000) != 200)
+                        std::fprintf(stderr, "VibeServer: benchmark: %s did not renew its hold\n", pr.label.c_str());
+                }
+            }
+        });
+    }
+    return "";
+}
+/** Steps 1 + 2 + this process's own radio, in that order. "" = the machine is quiet; otherwise nothing is held and the
+ *  sentence says why. `released`: this process's radio was released (the caller takes it back — vsBenchBringBack). */
+static std::string vsBenchQuietMachine(bool force, bool& released) {
+    released = false;
+    std::vector<VsBenchPeer> peers;
+    std::string refuse = vsBenchCheckMachine(force, peers);
+    if (!refuse.empty()) return refuse;
+    refuse = vsBenchHoldPeers(force, peers);
+    if (!refuse.empty()) return refuse;
+    std::string why;
+    if (!LocalSdrShim::instance().benchQuiesce(released, why)) {
+        vsBenchReleasePeers();
+        return vibe::benchquiet::cannotQuietRefusal(vsMyRadioLabel(), why);
+    }
+    std::fprintf(stderr, "VibeServer: benchmark: the machine is quiet (%zu other radio process(es) held)\n", peers.size());
+    return "";
+}
+/** After the run, whatever happened in it: the other radios first, then this one, then the idle work. */
+static void vsBenchWakeMachine(bool released) {
+    vsBenchReleasePeers();
+    vsBenchBringBack(released);
+    LocalSdrShim::instance().benchUnhold();
+}
+
+/* ── a PEER's half: held still for a benchmark another process on this machine is running ── */
+static std::mutex                   g_bqHoldMx;
+static vibe::benchquiet::Lease      g_bqLease;
+static bool                         g_bqHoldReleased = false;
+static std::mutex                   g_bqBackMx;   // ★ held while a bring-back runs: a new hold waits for it
+static void vsBenchHoldEnd(const std::string& why) {
+    bool rel;
+    {
+        std::lock_guard<std::mutex> lk(g_bqHoldMx);
+        if (!g_bqLease.on) return;
+        g_bqLease.end();
+        rel = g_bqHoldReleased; g_bqHoldReleased = false;
+    }
+    std::fprintf(stderr, "VibeServer: benchmark hold ended \xe2\x80\x94 %s; the radio comes back\n", why.c_str());
+    std::thread([rel] {
+        std::lock_guard<std::mutex> back(g_bqBackMx);
+        vsBenchBringBack(rel);
+        LocalSdrShim::instance().benchUnhold();
+        std::fprintf(stderr, "VibeServer: benchmark hold: the radio is back on the air\n");
+    }).detach();
+}
+static std::string vsBenchHoldVerb(const std::string& verb, bool force, std::string& err) {
+    using namespace vibe::benchquiet;
+    auto& shim = LocalSdrShim::instance();
+    auto& p = vibe::benchProgress();
+    if (verb == "check") {
+        bool held;
+        { std::lock_guard<std::mutex> lk(g_bqHoldMx); held = g_bqLease.on; }
+        return "{\"hold\":\"check\",\"listeners\":" + std::to_string(shim.listenerCount())
+             + ",\"busy\":" + (p.running.load() ? "true" : "false") + ",\"held\":" + (held ? "true" : "false") + "}";
+    }
+    if (verb == "on" || verb == "renew") {
+        {
+            std::lock_guard<std::mutex> lk(g_bqHoldMx);
+            if (g_bqLease.on) {
+                g_bqLease.hold(vsBenchNow(), leaseSec());
+                return "{\"hold\":\"" + verb + "\",\"held\":true}";
+            }
+        }
+        if (verb == "on") {
+            if (p.running.load()) { err = "it is running a benchmark of its own"; return ""; }
+            const int n = shim.listenerCount();
+            if (n > 0 && !force) { err = listenersRefusal({{vsMyRadioLabel(), n}}); return ""; }
+        }
+        std::lock_guard<std::mutex> back(g_bqBackMx);   // ★ never quiet a radio while the last hold's bring-back still runs
+        bool rel = false;
+        std::string why;
+        if (!shim.benchQuiesce(rel, why)) { err = why; return ""; }
+        {
+            std::lock_guard<std::mutex> lk(g_bqHoldMx);
+            g_bqLease.hold(vsBenchNow(), leaseSec());
+            g_bqHoldReleased = rel;
+        }
+        std::fprintf(stderr, "VibeServer: benchmark hold: this radio is off the air while a benchmark measures this machine "
+                             "(lease %.0f s)\n", leaseSec());
+        // ★ The lease: if the coordinator dies, the radio brings itself back.
+        std::thread([] {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                bool expired;
+                {
+                    std::lock_guard<std::mutex> lk(g_bqHoldMx);
+                    if (!g_bqLease.on) return;
+                    expired = g_bqLease.expired(vsBenchNow());
+                }
+                if (expired) { vsBenchHoldEnd("its lease ran out (the benchmark that held it did not say it had finished)"); return; }
+            }
+        }).detach();
+        return "{\"hold\":\"" + verb + "\",\"held\":true,\"released\":" + (rel ? "true" : "false") + "}";
+    }
+    if (verb == "off") {
+        vsBenchHoldEnd("the benchmark has finished");
+        return "{\"hold\":\"off\",\"held\":false}";
+    }
+    err = "unknown hold request";
+    return "";
+}
+static bool vsBenchHeldByPeer() { std::lock_guard<std::mutex> lk(g_bqHoldMx); return g_bqLease.on; }
+/** ★ TEST-ONLY (VIBESERVER_TEST_BENCH_STUB_SEC): the measurement replaced by a wait of that many seconds, so the quiet
+ *  around it can be proved end to end in seconds (scripts/test-bench-quiet.mjs). 0 = the real benchmark. */
+static double vsBenchStubSec() {
+    const char* e = std::getenv("VIBESERVER_TEST_BENCH_STUB_SEC");
+    return e && *e ? std::max(0.0, std::atof(e)) : 0.0;
+}
+static void vsBenchStubWait(double sec) {
+    auto& p = vibe::benchProgress();
+    p.steps.store((int)std::ceil(sec));
+    for (int i = 0; i < (int)std::ceil(sec); ++i) { vibe::benchStep("stub"); std::this_thread::sleep_for(std::chrono::seconds(1)); }
+}
+
 /* ★★ AN ICOM'S POWER, FOR THE FRONT DOOR'S RADIO LIST (Stuart, 2026-11-05). USB there + CI-V answering = "on"; USB there +
  *  CI-V silent = "off"; USB gone = "absent". Written by the radio's own process (which already watches the link: identify
  *  every 3 s while it is silent) on every change and every 30 s, beside the radio-status record; read by whichever
@@ -2656,9 +2935,12 @@ int main(int argc, char** argv) {
              *      timeout returns an HTML error page at ~100 s, which is what the setup page choked on.
              *  So: validate here, hand the work to a thread of its own, and report progress separately. The page
              *  follows vibe::benchProgressJson() and picks the result up when it is saved. */
+            /* ★★★ HOLD STILL (vibe_bench_quiet.h): another process on this machine is running a benchmark and asks this one
+             *  — check / on / renew / off. Admin-gated like every benchmark request (the shim checked the ticket). */
+            if (const std::string hold = vsQueryParam(query, "hold"); !hold.empty()) return vsBenchHoldVerb(hold, force, err);
             auto& p = vibe::benchProgress();
             if (p.running.load()) { err = "a benchmark is already running"; return ""; }
-            auto& shim = LocalSdrShim::instance();
+            if (vsBenchHeldByPeer()) { err = "this radio is held still for a benchmark another part of this machine is running"; return ""; }
             /* ★★★ V12 THE WIDE BENCHMARK (wide=<hz>&radio=<serial | id | index>). It takes ONE radio to a rate for the USB
              *  bus test, so it must run in the process that HOLDS that radio: the front door owns none, and a radio
              *  process only its own. The setup page sends it to /r/<serial>/vibeserver/benchmark, which the door hands
@@ -2681,23 +2963,33 @@ int main(int argc, char** argv) {
                     return "";
                 }
             }
-            const int listeners = shim.listenerCount();
-            if (listeners > 0 && !force) {
-                err = std::to_string(listeners) + (listeners == 1 ? " listener is" : " listeners are")
-                    + " connected — the radio goes off the air for the measurement";
-                return "";
-            }
-            // ★ Claimed HERE, before the thread starts, so a second press cannot slip past the check above.
+            /* ★★★ EVERYTHING ON THE MACHINE STOPS FOR THE RUN (Stuart, 2026-11-20: "everything should stop for benchmark
+             *  runs otherwise they are invalid"). Before: only THIS process's radio was released and only its listeners
+             *  counted — so a quick run started from the front door (which owns no radio) measured beside the radio
+             *  process's DX scanner sweeping DAB (the Pi 2, 2026-11-20: every locked-range profile "0 users"). Now every
+             *  radio process is asked first (listeners summed, refused by name), then held still under a lease, then this
+             *  process's own radio — and the run does not start beside anything that would not stop. vibe_bench_quiet.h.
+             *  ★ Claimed BEFORE the peers are asked, so a second press cannot slip in between; released on any refusal. */
             p.running.store(true);
             p.step.store(0); p.steps.store(0);
+            { std::lock_guard<std::mutex> lk(p.m); p.label = "stopping everything else on this machine"; }
+            const bool heldBefore = LocalSdrShim::instance().isRunning() && !LocalSdrShim::instance().radioIsReleased();
+            bool released = false;
+            if (const std::string refuse = vsBenchQuietMachine(force, released); !refuse.empty()) {
+                { std::lock_guard<std::mutex> lk(p.m); p.label = ""; }
+                p.running.store(false);
+                err = refuse;
+                return "";
+            }
             { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
             if (wideHz > 0) {
                 const auto r = wsc.radios[(size_t)wideIdx];
-                std::thread([wideHz, r, wideIdx] {
-                    auto& shim = LocalSdrShim::instance();
-                    auto& p = vibe::benchProgress();
-                    const bool held = shim.isRunning() && !shim.radioIsReleased();
-                    const bool released = held && shim.releaseRadio();
+                std::thread([wideHz, r, wideIdx, released, heldBefore] {
+                  auto& shim = LocalSdrShim::instance();
+                  auto& p = vibe::benchProgress();
+                  const bool held = heldBefore;
+                  bool testHeld = false;
+                  try {
                     auto step = [](const std::string& l) { vibe::benchStep(l); };
                     const std::string drv = r.driver == "rtlsdr" ? "rtl" : r.driver;
                     const vibe::benchhw::Radio radio = vibe::benchhw::radioFor(drv, r.converterOffsetHz, r.converterInputLoHz,
@@ -2705,15 +2997,17 @@ int main(int argc, char** argv) {
                                                                               r.mode == vsconfig::Mode::LockedRange);
                     const std::string label = r.label.empty() ? r.driver : r.label;
                     p.steps.store(vibe::wideBenchSteps(radio, wideHz) + 2);
-                    std::string entry = vibe::runWideBenchmark(wideHz, radio, label, vsBenchLoad(), 6.0, step);
+                    const double stub = vsBenchStubSec();
+                    std::string entry;
+                    if (stub > 0) { vsBenchStubWait(stub); entry = "{\"stub\":true,\"rate\":" + std::to_string((long long)wideHz) + ",\"at\":" + std::to_string((long long)std::time(nullptr)) + "}"; }
+                    else entry = vibe::runWideBenchmark(wideHz, radio, label, vsBenchLoad(), 6.0, step);
                     /* ★★★ THE USB BUS TEST: the real radio at the chosen rate, through the server's real intake and IQ buffer
                      *  — a few seconds to settle, then 20 s counted (vibe_bench_profiles.h usbVerdict). A runtime rate only:
                      *  the config is never touched, and the radio goes back to its own rate below. */
                     const double settle = 4.0, measure = 20.0;
                     vibe::benchStep("USB bus @ " + vibe::benchhw::rateWords(wideHz) + ": settling");
                     std::string usb;
-                    bool testHeld = false;
-                    if (released) {
+                    if (released && stub <= 0) {
                         LocalSdrShim::UsbBenchCounters a, b;
                         std::string uerr;
                         // ★ The step label moves on once the radio is streaming — the test's own clock starts there.
@@ -2731,13 +3025,20 @@ int main(int argc, char** argv) {
                         if (!uerr.empty()) std::fprintf(stderr, "VibeServer: wide benchmark USB test: %s\n", uerr.c_str());
                     } else {
                         vibe::benchStep("");
-                        usb = std::string("{\"ok\":false,\"notRun\":\"") + (held ? "this radio cannot be taken off the air for the test"
+                        usb = std::string("{\"ok\":false,\"notRun\":\"") + (stub > 0 ? "test stub"
+                                                                               : held ? "this radio cannot be taken off the air for the test"
                                                                                : "the radio was not running, so the USB bus could not be tested") + "\"}";
                     }
                     entry = vibe::benchprof::jsonWithTop(entry, "usb", usb);
                     const std::string key = r.serial.empty() ? "radio" + std::to_string(wideIdx) : r.serial;
                     vsBenchSave(vibe::benchprof::benchWithWide(vsBenchLoad(), key, entry));
+                  } catch (const std::exception& e) {
+                    std::fprintf(stderr, "VibeServer: the wide benchmark failed (%s) \xe2\x80\x94 everything is put back\n", e.what());
+                  } catch (...) {
+                    std::fprintf(stderr, "VibeServer: the wide benchmark failed \xe2\x80\x94 everything is put back\n");
+                  }
                     if (testHeld) {
+                        vsBenchReleasePeers();   // ★ the other radios first: this process is about to restart
                         // ★ It would not let go after the test, so it is still at the test rate: restart, which opens it
                         //   from the config at its own rate (the same fallback as a failed take-back).
                         std::fprintf(stderr, "VibeServer: the radio stayed at the wide benchmark's rate — restarting to put it back\n");
@@ -2754,14 +3055,14 @@ int main(int argc, char** argv) {
 #endif
                         _exit(0);
                     }
-                    vsBenchBringBack(released);
+                    vsBenchWakeMachine(released);
                     p.step.store(p.steps.load());
                     { std::lock_guard<std::mutex> lk(p.m); p.label = "done"; }
                     vibe::benchProgress().running.store(false);
                 }).detach();
                 return "{\"started\":true,\"wide\":true}";
             }
-            std::thread([] {
+            std::thread([released] {
                 /* ★★★ RELEASE THE RADIO, DO NOT STOP THE SERVER (2026-09-20). shim.stop() takes the HTTP server
                  *  down with it, so the page had nothing left to ask for progress — it went silent for the whole
                  *  run and then the process restarted. releaseRadio() is built for exactly this: it quiesces the
@@ -2769,9 +3070,13 @@ int main(int argc, char** argv) {
                  *  reacquireRadio() takes it back. No restart, so nobody has to wait for the server to come home.
                  *  ★ What stops is anything needing IQ — that is the honest cost of measuring, and it is why this
                  *    refuses to run while somebody is listening. */
-                auto& shim = LocalSdrShim::instance();
-                const bool held = shim.isRunning() && !shim.radioIsReleased();
-                const bool released = held && shim.releaseRadio();
+                /* ★★★ AND NOW EVERYTHING ELSE TOO: released above, with every other radio process held still
+                 *  (vsBenchQuietMachine) — the radio is let go before this thread starts. */
+                try {
+                if (const double stub = vsBenchStubSec(); stub > 0) {
+                    vsBenchStubWait(stub);
+                    vsBenchSave(vibe::benchprof::benchKeepWide("{\"v\":1,\"stub\":true,\"at\":" + std::to_string((long long)std::time(nullptr)) + "}", vsBenchLoad()));
+                } else {
                 /* ★★ V12 TAILORED TO THE RADIOS HERE: a clip no row here will use is not even fetched (DAB's and
                  *  ADS-B's are tens of MB — a box with only an HF+ has no business downloading them). */
                 const vibe::benchhw::Hw hw = vsBenchHw();
@@ -2785,7 +3090,13 @@ int main(int argc, char** argv) {
                 // ★ V12: the QUICK run never erases a WIDE one — the saved "wide" block is carried across.
                 vsBenchSave(vibe::benchprof::benchKeepWide(j, vsBenchLoad()));
                 vsApplyRateGate(vibe::usrpcaps::rateGate().locked);   // ★ the reacquire below re-reads it
-                vsBenchBringBack(released);
+                }
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "VibeServer: the benchmark failed (%s) \xe2\x80\x94 everything is put back\n", e.what());
+                } catch (...) {
+                    std::fprintf(stderr, "VibeServer: the benchmark failed \xe2\x80\x94 everything is put back\n");
+                }
+                vsBenchWakeMachine(released);   // ★ whatever happened above: the other radios, this one, the idle work
                 vibe::benchProgress().running.store(false);
             }).detach();
             return "{\"started\":true}";

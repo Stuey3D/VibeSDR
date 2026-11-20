@@ -402,11 +402,14 @@ function benchRateWords(hz: any) {
 }
 function benchProfileLine(p: any, what: string) {
   if (!p || typeof p.n !== 'number') return '';
+  // ★★★ NOT "0 users" — the SHARED front end did not keep up (vibe_setup_page.h benchProfileLine says why)
+  if (p.by === 'capture')
+    return what + ' @ ' + benchRateWords(p.rate) + ': the shared front end (one capture for every listener) did not keep up '
+         + 'at this rate here, so there is no listener figure';
   const n = Math.max(0, p.n | 0);
   let s = n + ' ' + what + (n === 1 ? ' user' : ' users') + ' @ ' + benchRateWords(p.rate);
   if (Number(p.blocks) >= 2) s += ', ' + p.blocks + ' blocks';
-  if (p.by === 'capture') s += ' (the capture itself cannot keep up at this rate)';
-  else if (p.by === 'ram') s += ' (set by RAM)';
+  if (p.by === 'ram') s += ' (set by RAM)';
   else if (p.by === 'cpu') s += ' (set by CPU)';
   return s;
 }
@@ -428,7 +431,7 @@ function benchProfileLines(lu: any) {
 function benchProfileBlocks(j: any): { head: string; lines: string[]; usb?: string; unusable?: boolean }[] {
   const out: { head: string; lines: string[]; usb?: string; unusable?: boolean }[] = [];
   const lu = j?.lockedUsers;
-  if (lu && (lu.fm || lu.narrow || lu.dab)) out.push({ head: 'Quick benchmark \u2014 CPU/RAM:', lines: benchProfileLines(lu) });
+  if (lu && (lu.fm || lu.narrow || lu.dab)) out.push({ head: 'Quick benchmark \u2014 locked range (one capture shared by every listener), CPU/RAM:', lines: benchProfileLines(lu) });
   for (const k of Object.keys(j?.wide || {})) {
     const w = j.wide[k];
     if (!w || !w.rate) continue;
