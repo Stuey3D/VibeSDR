@@ -83,6 +83,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         Thread(r, "vibe-server-ui").apply { isDaemon = true }
     }
 
+    /** ★ Status polls arrive once a second while the screen is open: a small pool, not a thread each. */
+    private val askWork = java.util.concurrent.Executors.newCachedThreadPool { r ->
+        Thread(r, "vibe-server-ask").apply { isDaemon = true }
+    }
+
     /** Ask the server process; resolve with `pick(answer)` or reject with its own words. Off the bridge thread. */
     private fun ask(method: String, args: JSONObject, promise: Promise, serial: Boolean = false,
                     pick: (JSONObject) -> Any?) {
@@ -92,7 +97,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 try { promise.resolve(pick(r)) } catch (t: Throwable) { promise.reject("server_answer", t.message ?: "$t") }
             } else promise.reject(r.optString("code", "server"), r.optString("message", "the server did not answer"))
         }
-        if (serial) serverWork.execute(run) else Thread(run, "vibe-server-ask").start()
+        if (serial) serverWork.execute(run) else askWork.execute(run)
     }
 
     /** A live setter on the running server — fire and forget, as the old direct calls were. */
@@ -1356,13 +1361,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★★ beta88: the server's own process answers (VibeServerOps.status) — its CPU figure is now the SERVER's cost.
         //    No server process at all: "not running", without creating one to ask.
         if (!serverProcessUp()) { promise.resolve(statusMap(JSONObject().put("ok", true).put("status", JSONObject()))); return }
-        Thread {
+        askWork.execute {
             val r = VibeServerLink.call(reactContext, "status")
             if (!r.optBoolean("ok", false)) {
                 Log.w(TAG, "getVibeServerStatus failed: ${r.optString("message")}")
                 promise.reject("status_failed", r.optString("message"))
             } else promise.resolve(statusMap(r))
-        }.start()
+        }
     }
 
     /** ★ Field by field, as before — a field missing here is dropped on its way to the screen (see the old notes). */

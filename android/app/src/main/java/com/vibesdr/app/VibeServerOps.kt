@@ -317,6 +317,10 @@ object VibeServerOps {
         val dev = findDevice(mgr, a) ?: return fail("no_device", "No SDR found")
         if (!mgr.hasPermission(dev)) return fail("no_permission", "Allow this app to use the radio, then press Start again")
         val o = a.optJSONObject("opts") ?: JSONObject()
+        // ★ An rtl_tcp server is not restorable: a VibeServer armed earlier must not be brought back over it by the
+        //   restore or the watchdog.
+        VibeServerRestore.disarm(ctx)
+        VibeServerWatchdog.cancel(ctx)
         stopEngine(ctx)
         rtlStop(ctx)
         val conn = mgr.openDevice(dev) ?: return fail("open_failed", "openDevice returned null")
