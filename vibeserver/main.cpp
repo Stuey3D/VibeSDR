@@ -4300,35 +4300,29 @@ int main(int argc, char** argv) {
     //    element sets and the credit. ★★★ This server NEVER asks CelesTrak (satcat.cpp has the rules: the mirror is the
     //    one CelesTrak client). The copy is the MACHINE's (every radio process shares it, its state and its lock), is
     //    published at once whatever its age, and synced daily, detached: a hung download costs orbits, never a receiver.
-    vssat::setDir(vsDataDir());
-    vssat::setPublisher([](const std::string& json) { LocalSdrShim::satLoadSats(json); });
-    vssat::setLegacyPublisher([](const std::string& group, const std::string& json) { LocalSdrShim::satLoadOmm(group, json); });
-    vssat::setValidator([](const std::string& body, std::string& err) {
-        std::vector<vibe::sat::SatDef> d; std::vector<vibe::sat::Elements> e; std::vector<bool> h; vibe::sat::SatsMeta m;
-        return vibe::sat::parseSats(body, d, e, h, m, err);
-    });
-    {
+    // ★★★ NOT ON THE R36S HANDHELD (Stuart, 2026-11-20: "r36s cant have the satellite mode as no network connection to
+    //     sync the orbit data"): its radio process asks nothing, loads nothing, and the shim offers no satellites there
+    //     (vsSatReachWhy — no `doppler` in hwinfo, every downlink reach:false).
+    if (!g_handheldChild) {
+        vssat::setDir(vsDataDir());
+        vssat::setPublisher([](const std::string& json) { LocalSdrShim::satLoadSats(json); });
+        vssat::setLegacyPublisher([](const std::string& group, const std::string& json) { LocalSdrShim::satLoadOmm(group, json); });
+        vssat::setValidator([](const std::string& body, std::string& err) {
+            std::vector<vibe::sat::SatDef> d; std::vector<vibe::sat::Elements> e; std::vector<bool> h; vibe::sat::SatsMeta m;
+            return vibe::sat::parseSats(body, d, e, h, m, err);
+        });
         const int g = vssat::loadFromCache();
         if (g > 0) std::printf("VibeServer: satellite data — from the machine's copy\n");
         LocalSdrShim::setSatSupplyNote(vssat::listenerNote());
-        std::thread([] {
-            // ★ a few minutes' jitter first, so a fleet restarted together (an apt upgrade) does not ask together
-            std::this_thread::sleep_for(std::chrono::seconds(30 + (std::random_device{}() % 300)));
-            std::string lastLogged;
-            for (;;) {
-                vssat::reloadIfChanged();   // ★ another radio process on this machine fetched it
-                // ★★ ONLY WHEN USED: no radio here reaches a listed downlink = nothing is asked at all
-                if (LocalSdrShim::satWanted() && vssat::needsRefresh()) {
-                    std::string e;
-                    if (vssat::refresh(e) > 0) std::printf("VibeServer: satellite data refreshed from vibesdr.net\n");
-                    // ★ the owner's words, in the log ONCE per new failure (the setup page shows them too)
-                    if (!e.empty() && e != lastLogged) std::fprintf(stderr, "VibeServer: satellite data not refreshed — %s\n", e.c_str());
-                    lastLogged = e;
-                }
-                LocalSdrShim::setSatSupplyNote(vssat::listenerNote());
-                std::this_thread::sleep_for(std::chrono::minutes(10));
-            }
-        }).detach();
+        // ★★ V12 SATELLITE MODE (docs/v12/SATELLITE-MODE.md item 9/10): sat_list reports the last sync and a fetch in
+        //    progress, and a listener opening SATELLITE on a server with NO orbit data kicks the fetch at once.
+        LocalSdrShim::setSatSupplyHooks([] { return vssat::lastSynced(); }, [] { return vssat::fetching(); }, [] { return vssat::kick(); });
+        vssat::RunnerHooks h;
+        h.wanted = [] { return LocalSdrShim::satWanted(); };
+        h.note = [](const std::string& n) { LocalSdrShim::setSatSupplyNote(n); };
+        h.log = [](const std::string& l) { std::fprintf(stderr, "VibeServer: %s\n", l.c_str()); };
+        // ★ a few minutes' jitter first, so a fleet restarted together (an apt upgrade) does not ask together
+        vssat::startDaily(std::move(h), 30 + (int)(std::random_device{}() % 300));
     }
 
     // ★★ THE LIVE-SETTING PATH, deliberately separate from the one above. That one is the setup

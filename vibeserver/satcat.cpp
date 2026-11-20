@@ -24,7 +24,10 @@
 #include "proc.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +38,7 @@
 #include <string>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -174,7 +178,10 @@ void curlFetch(const Request& rq, Response& rs) {
     rs.code = std::atoi(codeS.c_str());
     if (rc != 0) { rs.code = 0; rs.msg = !msg.empty() ? msg : rc < 0 ? "curl could not be run" : "curl exited " + std::to_string(rc); }
     std::string h;
-    if (readCapped(hdr, h)) { rs.etag = headerValue(h, "ETag"); rs.lastModified = headerValue(h, "Last-Modified"); }
+    if (readCapped(hdr, h)) {
+        rs.etag = headerValue(h, "ETag"); rs.lastModified = headerValue(h, "Last-Modified");
+        rs.retryAfter = parseRetryAfter(headerValue(h, "Retry-After"), nowT());
+    }
     std::remove(hdr.c_str());
 }
 
@@ -182,7 +189,8 @@ bool eligible(State& s, std::time_t now, bool haveCopy) {
     // ★ a time in the FUTURE beyond any hold we write = a clock that jumped back (an RTC-less Pi): not honoured
     const long long maxAhead = 86400 + kResumeJitterSec + 60;
     if (s.until > now && s.until - now <= maxAhead) return false;
-    if (s.attempt > 0 && s.attempt <= now && now - s.attempt < kMinAttemptSec) return false;
+    // ★★ item 9: with no copy at all (SATELLITE shows nothing), attempts may come every 15 min — the floor — not hourly
+    if (s.attempt > 0 && s.attempt <= now && now - s.attempt < (haveCopy ? kMinAttemptSec : kNoCopyMinAttemptSec)) return false;
     if (s.attempt > now && s.attempt - now < 86400) return false;
     if (!haveCopy) return true;
     const long due = kCheckSec - seedOf(s);
@@ -190,11 +198,20 @@ bool eligible(State& s, std::time_t now, bool haveCopy) {
 }
 
 /** ★★ A failure: the hold FIRST, on disk, before the caller does anything else. */
-void hold(State& s, std::time_t now, int code, const std::string& what) {
+void hold(State& s, std::time_t now, int code, const std::string& what, bool haveCopy = true, long retryAfter = 0) {
     s.fails += 1;
-    long h = std::min<long>(86400, kBackoffSec << std::min(s.fails - 1, 5));
+    long h;
+    if (haveCopy) {
+        h = std::min<long>(86400, kBackoffSec << std::min(s.fails - 1, 5));
+    } else {
+        // ★★ SATELLITE MODE item 9: nothing on this machine yet — 15 min, 30 min, then hourly (a 503 from the mirror
+        //    while it builds its first copy is expected; the listener is waiting with an empty box)
+        h = std::min<long>(kBackoffSec, kHoldFloorSec << std::min(s.fails - 1, 5));
+    }
+    // ★ the far end's Retry-After is honoured — it can lengthen a hold, never shorten it below the floor
+    if (retryAfter > 0) h = std::max(h, std::min<long>(retryAfter, kMaxRetryAfterSec));
     h = std::max(h, kHoldFloorSec);
-    h += (long)(rnd() % (uint32_t)kResumeJitterSec);
+    h += (long)(rnd() % (uint32_t)(haveCopy ? kResumeJitterSec : kNoCopyJitterSec));
     s.until = now + h;
     s.code = code;
     const std::string when = hhmm(s.until);
@@ -290,6 +307,10 @@ int refresh(std::string& err) {
 
     Request rq;
     rq.url = kUrl;
+    // ★ TESTS ONLY: a fake mirror on THIS machine (scripts/test-server-sat.mjs). Loopback http only — the variable can
+    //   never point a server anywhere else (and never at CelesTrak).
+    if (const char* t = std::getenv("VIBESERVER_SATS_TEST_URL"))
+        if (std::strncmp(t, "http://127.0.0.1:", 17) == 0 && std::strlen(t) < 200) rq.url = t;
     rq.dest = copyPath() + ".part." + std::to_string((long)::getpid());
     if (haveCopy) { rq.ifNoneMatch = s.etag; rq.ifModifiedSince = s.lastmod; }
     std::remove(rq.dest.c_str());
@@ -304,20 +325,20 @@ int refresh(std::string& err) {
     }
     if (rs.code != 200) {
         std::remove(rq.dest.c_str());
-        hold(s, now, rs.code == 304 ? 304 : rs.code, rs.msg.empty() ? "no answer" : rs.msg);
+        hold(s, now, rs.code == 304 ? 304 : rs.code, rs.msg.empty() ? "no answer" : rs.msg, haveCopy, rs.retryAfter);
         err = s.msg;
         return 0;
     }
     std::string body, why;
     if (!readCapped(rq.dest, body) || body.empty() || !valid(body, why)) {
         std::remove(rq.dest.c_str());
-        hold(s, now, 200, body.empty() ? "empty, or larger than any sats.json" : why);
+        hold(s, now, 200, body.empty() ? "empty, or larger than any sats.json" : why, haveCopy);
         err = s.msg;
         return 0;
     }
     if (std::rename(rq.dest.c_str(), copyPath().c_str()) != 0) {
         std::remove(rq.dest.c_str());
-        hold(s, now, 200, "the copy could not be written");
+        hold(s, now, 200, "the copy could not be written", haveCopy);
         err = s.msg;
         return 0;
     }
@@ -354,5 +375,108 @@ std::string statusJson() {
          + ",\"code\":" + std::to_string(s.code) + ",\"failures\":" + std::to_string(s.fails)
          + ",\"message\":\"" + e + "\"}";
 }
+
+long long lastSynced() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (mtimeOf(copyPath()) == 0) return 0;
+    return readState().checked;   // ★ set only by a 200 or a 304 — the last GOOD answer
+}
+bool haveCopy() { std::lock_guard<std::mutex> lk(g_mtx); return mtimeOf(copyPath()) != 0; }
+bool lockBusy() {
+    ensureDir();
+    const int fd = ::open(lockPath().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+    if (fd < 0) return false;
+    const bool busy = ::flock(fd, LOCK_EX | LOCK_NB) != 0;
+    if (!busy) ::flock(fd, LOCK_UN);
+    ::close(fd);
+    return busy;
+}
+
+long parseRetryAfter(const std::string& v0, std::time_t now) {
+    std::string v = v0;
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\r' || v.back() == '\n')) v.pop_back();
+    while (!v.empty() && v.front() == ' ') v.erase(0, 1);
+    if (v.empty()) return 0;
+    bool digits = v.size() <= 9;
+    for (char c : v) if (c < '0' || c > '9') digits = false;
+    if (digits) return std::atol(v.c_str());
+    // an HTTP date: "Fri, 20 Nov 2026 16:08:00 GMT"
+    std::tm t{};
+    const char* end = ::strptime(v.c_str(), "%a, %d %b %Y %H:%M:%S", &t);
+    if (!end) return 0;
+    const std::time_t at = ::timegm(&t);
+    return at > now ? (long)(at - now) : 0;
+}
+
+// ── ★★ the runner ──────────────────────────────────────────────────────────────────────────────────────────────────
+namespace {
+std::mutex g_runMtx;
+std::condition_variable g_runCv;
+bool g_kicked = false;           // under g_runMtx
+RunnerHooks g_hooks;             // under g_runMtx
+std::atomic<bool> g_runnerUp{false}, g_fetching{false};
+
+RunnerHooks hooksCopy() { std::lock_guard<std::mutex> lk(g_runMtx); return g_hooks; }
+/** Wait up to `sec`, or until kicked. Returns true when kicked (and clears it). */
+bool waitOrKick(long sec) {
+    std::unique_lock<std::mutex> lk(g_runMtx);
+    g_runCv.wait_for(lk, std::chrono::seconds(sec), [] { return g_kicked; });
+    const bool k = g_kicked;
+    g_kicked = false;
+    return k;
+}
+void round(bool kicked, std::string& lastLogged) {
+    RunnerHooks h = hooksCopy();
+    reloadIfChanged();   // ★ another radio process on this machine fetched it
+    // ★★ ONLY WHEN USED: no radio here reaches a listed downlink = nothing is asked at all
+    if (h.wanted && h.wanted()) {
+        if (needsRefresh()) {
+            g_fetching.store(true);
+            std::string e;
+            const int r = refresh(e);
+            if (r > 0 && h.log) h.log("satellite data refreshed from vibesdr.net");
+            // ★ the owner's words, in the log ONCE per new failure (the setup page shows them too)
+            if (!e.empty() && e != lastLogged && h.log) h.log("satellite data not refreshed \xe2\x80\x94 " + e);
+            lastLogged = e;
+        }
+        // ★ kicked while ANOTHER process on the machine is asking: wait for its copy (≤ 60 s), not for the next round
+        if (kicked) {
+            g_fetching.store(true);
+            for (int i = 0; i < 30 && lockBusy(); ++i) std::this_thread::sleep_for(std::chrono::seconds(2));
+            reloadIfChanged();
+        }
+    }
+    g_fetching.store(false);
+    if (h.note) h.note(listenerNote());
+}
+}  // namespace
+
+void startDaily(RunnerHooks hooks, int firstDelaySec) {
+    { std::lock_guard<std::mutex> lk(g_runMtx); g_hooks = std::move(hooks); }
+    bool f = false;
+    if (!g_runnerUp.compare_exchange_strong(f, true)) return;
+    std::thread([firstDelaySec] {
+        std::string lastLogged;
+        // ★ a few minutes' jitter first (a fleet restarted together does not ask together) — unless a listener opens
+        //   SATELLITE on a server with nothing: then at once (item 9)
+        bool kicked = waitOrKick(std::max(0, firstDelaySec));
+        for (;;) {
+            round(kicked, lastLogged);
+            kicked = waitOrKick(10 * 60);
+        }
+    }).detach();
+}
+
+bool kick() {
+    if (!g_runnerUp.load()) return false;
+    if (g_fetching.load()) return true;
+    const bool go = needsRefresh() || lockBusy();
+    if (!go) return false;
+    g_fetching.store(true);   // ★ at once, so the reply that triggered it already says so
+    { std::lock_guard<std::mutex> lk(g_runMtx); g_kicked = true; }
+    g_runCv.notify_all();
+    return true;
+}
+bool fetching() { return g_fetching.load(); }
 
 }  // namespace vssat
