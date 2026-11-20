@@ -74,6 +74,61 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "VibeLocalSDR"
 
+    // ── ★★★ THE SERVER LIVES IN ITS OWN PROCESS (beta88) — VibeServerHost / VibeServerLink / VibeServerOps ──────────
+    // Everything below that starts, stops, asks or changes the HOSTED server goes through the link; this process keeps
+    // only what needs an Activity (the USB and microphone prompts) and Local Hardware listening (its own engine copy).
+
+    /** ★ Serial: a Start, a Stop and the rtl_tcp server happen in the order they were asked for. */
+    private val serverWork = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "vibe-server-ui").apply { isDaemon = true }
+    }
+
+    /** ★ Status polls arrive once a second while the screen is open: a small pool, not a thread each. */
+    private val askWork = java.util.concurrent.Executors.newCachedThreadPool { r ->
+        Thread(r, "vibe-server-ask").apply { isDaemon = true }
+    }
+
+    /** Ask the server process; resolve with `pick(answer)` or reject with its own words. Off the bridge thread. */
+    private fun ask(method: String, args: JSONObject, promise: Promise, serial: Boolean = false,
+                    pick: (JSONObject) -> Any?) {
+        val run = Runnable {
+            val r = VibeServerLink.call(reactContext, method, args)
+            if (r.optBoolean("ok", false)) {
+                try { promise.resolve(pick(r)) } catch (t: Throwable) { promise.reject("server_answer", t.message ?: "$t") }
+            } else promise.reject(r.optString("code", "server"), r.optString("message", "the server did not answer"))
+        }
+        if (serial) serverWork.execute(run) else askWork.execute(run)
+    }
+
+    /** A live setter on the running server — fire and forget, as the old direct calls were. */
+    private fun tell(what: String, args: JSONObject = JSONObject()) =
+        VibeServerLink.callAsync(reactContext, "set", args.put("what", what))
+
+    /** ★ Is the server process even running? A status poll for one that is not answers here, WITHOUT binding — binding
+     *  would create the process, and an idle :server process is RAM a 1 GB phone should not spend. */
+    private fun serverProcessUp(): Boolean = !VibeProcess.serverIsSeparate(reactContext) || VibeProcess.serverProcessAlive(reactContext)
+
+    /** The running server's port, or 0 — for the DAB scans, which talk to it over loopback HTTP. */
+    private fun serverLivePort(): Int {
+        if (!serverProcessUp()) return 0
+        val r = VibeServerLink.call(reactContext, "status")
+        val st = r.optJSONObject("status") ?: return 0
+        return if (st.optBoolean("running", false)) st.optInt("port", 0) else 0
+    }
+
+    /** ★★ The server's events reach the screen as "VibeServerEvent" {type, json} — the /setup page changing a setting
+     *  is one, so the phone's screen shows it at once (item B). */
+    private fun emitServerEvent(type: String, json: JSONObject) {
+        try {
+            if (!reactContext.hasActiveReactInstance()) return
+            val m = Arguments.createMap()
+            m.putString("type", type)
+            m.putString("json", json.toString())
+            reactContext.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("VibeServerEvent", m)
+        } catch (t: Throwable) { Log.w(TAG, "server event not delivered: ${t.message}") }
+    }
+
     /** ★ isLite: the shared ServerModeScreen shows Lite-only options (the DAB label-scan switch) when the
      *  package is VibeServer Lite. Read synchronously as NativeModules.VibeLocalSDR.isLite. */
     override fun getConstants(): Map<String, Any> = mapOf(
@@ -141,13 +196,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     /** ★ What the aerial covers / filters fitted, applied NOW on a running server. */
     @ReactMethod
     fun setAntennaBands(ranges: String, filters: String) {
-        try { VibeLocalSDR.setAntennaBands(ranges, filters) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaBands: ${t.message}") }
+        tell("antennaBands", JSONObject().put("ranges", ranges).put("filters", filters))
     }
 
     /** ★ V12 the served radio's hwinfo `radio` object as JSON ("" when nothing is served) — the ports the screen names. */
     @ReactMethod
     fun radioCaps(promise: Promise) {
-        try { promise.resolve(VibeLocalSDR.radioCaps()) } catch (t: Throwable) { promise.resolve("") }
+        if (!serverProcessUp()) { promise.resolve(""); return }
+        Thread { promise.resolve(VibeServerLink.call(reactContext, "radioCaps").optString("json", "")) }.start()
     }
 
     /** ★★ V12 what the background-decoding editor may offer (the engine's decoder table, ISM ids, Band list, slots). */
@@ -191,13 +247,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     /** ★ V12 the owner's per-port antenna names, applied NOW on a running server (a save on the server screen). */
     @ReactMethod
     fun setAntennaPortNames(json: String) {
-        try { VibeLocalSDR.setAntennaPortNames(json) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaPortNames: ${t.message}") }
+        tell("antennaPortNames", JSONObject().put("json", json))
     }
 
     /** ★ Apply the switch, the per-band aerial list and the lock NOW, on a running server (a save on the server screen). */
     @ReactMethod
     fun setAntennaSwitch(json: String, map: String, locked: Boolean) {
-        try { VibeLocalSDR.setAntennaSwitch(json, map, locked) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaSwitch: ${t.message}") }
+        tell("antennaSwitch", JSONObject().put("json", json).put("map", map).put("locked", locked))
     }
 
     private fun isRtlSdr(dev: UsbDevice): Boolean {
@@ -335,6 +391,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @Volatile private var fpsCapHz: Int = try { fpsPrefs.getInt("capHz", 0) } catch (_: Throwable) { 0 }
 
     init {
+        VibeServerLink.addListener { type, json -> emitServerEvent(type, json) }
         reactContext.addLifecycleEventListener(object : LifecycleEventListener {
             override fun onHostResume() { applyFrameRateCap(); frameWatchAttach() }
             override fun onHostPause() {}
@@ -586,8 +643,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 Log.i(TAG, "DAB quick scan: +${android.os.SystemClock.elapsedRealtime() - t0} ms — $p")
             }
             try {
-                val st = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
-                val livePort = if (st.optBoolean("running", false)) st.optInt("port", 0) else 0
+                val livePort = serverLivePort()   // ★ beta88: the server is in its own process
                 if (livePort > 0) {
                     phase("scanning $block on the running server")
                     promise.resolve(dabScanHttp(livePort, block, known))
@@ -699,8 +755,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(bandScanJson)   // ★ at once: the screen polls dabBandScanState
         Thread {
             try {
-                val st = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
-                val livePort = if (st.optBoolean("running", false)) st.optInt("port", 0) else 0
+                val livePort = serverLivePort()   // ★ beta88: the server is in its own process
                 val poll = { port: Int ->
                     bandScanPort = port
                     var j = org.json.JSONObject(dabBandHttp(port, "start=1"))
@@ -788,13 +843,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun setDabScanLabels(mode: Int, promise: Promise) {
-        try {
-            VibeLocalSDR.setDabScanLabels(mode)
-            // ★ ...and into the config a restore replays, or the next rebuild undoes it. See
-            //   VibeServerRestore.updateConfig for the evidence.
-            VibeServerRestore.updateConfig(reactContext, "dabScanLabels", mode)
-            promise.resolve(true)
-        } catch (t: Throwable) { promise.reject("dab_scan_failed", t.message ?: "$t") }
+        // ★ Both halves (the engine's and the restore config's) are the server process's — VibeServerOps.set.
+        if (!serverProcessUp()) { promise.resolve(true); return }
+        ask("set", JSONObject().put("what", "dabScanLabels").put("mode", mode), promise) { true }
     }
 
     /** ★★★ KEEP RADIO ALIVE, APPLIED NOW (2026-10-06) — the same lesson as setDabScanLabels above: a TV server runs
@@ -802,11 +853,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  while serving) and the restore config's, which is where VibeServerRestore reads the give-up half from. */
     @ReactMethod
     fun setKeepRadioAlive(on: Boolean, promise: Promise) {
-        try {
-            VibeLocalSDR.setKeepRadioAlive(on)
-            VibeServerRestore.updateConfig(reactContext, "keepRadioAlive", on)
-            promise.resolve(true)
-        } catch (t: Throwable) { promise.reject("keep_alive_failed", t.message ?: "$t") }
+        if (!serverProcessUp()) { promise.resolve(true); return }
+        ask("set", JSONObject().put("what", "keepRadioAlive").put("on", on), promise) { true }
     }
 
     /**
@@ -918,36 +966,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     // The USB path needs no WiFi lock; the server path holds its own in the FGS.
     private val tcpWifiLock by lazy { VibeWifiLock(reactContext, "VibeSDR:RtlTcpClient") }
 
-    // MULTICAST LOCK — mandatory for the mDNS responder. Android drops multicast packets
-    // for apps that don't hold one, so without this the responder binds, joins the group
-    // and then never sees a single query: "vibesdr.local" would simply never resolve.
-    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
-
-    private fun acquireMulticastLock() {
-        if (multicastLock != null) return
-        try {
-            val wm = reactContext.applicationContext
-                .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            multicastLock = wm.createMulticastLock("VibeSDR:mDNS").apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        } catch (t: Throwable) { Log.w(TAG, "multicast lock failed: ${t.message}") }
-    }
-
-    private fun releaseMulticastLock() {
-        try { multicastLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) {}
-        multicastLock = null
-    }
-
-    /** "VibeSDR: Moto G35" -> "vibesdr-moto-g35". A hostname can't carry spaces or
-     *  punctuation, and a name the user typed is full of both. */
-    private fun hostSlug(name: String): String {
-        val s = name.lowercase()
-            .replace(Regex("[^a-z0-9]+"), "-")
-            .trim('-')
-        return if (s.isEmpty()) "vibesdr" else s.take(32)
-    }
+    // ★ The multicast lock, the host slug and the LAN address moved to VibeServerOps with the server (beta88).
 
     /**
      * Open the first attached RTL-SDR and start the local-SDR spectrum server.
@@ -976,6 +995,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         mgr: UsbManager, dev: UsbDevice,
         opts: com.facebook.react.bridge.ReadableMap, promise: Promise
     ) {
+        /* ★★ NOT WHILE THIS PHONE'S SERVER HAS THE RADIO (beta88). Both used to be one engine in one process, and starting
+         *  local listening simply stopped it — the server, its notification still up, gone. Now the server is a process of
+         *  its own and would keep the radio; say so instead of fighting it for the USB interface. */
+        if (serverProcessUp() && VibeServerLink.call(reactContext, "isServing").optBoolean("serving", false)) {
+            promise.reject("server_running", "This phone is sharing the radio as a VibeServer — listen to it as a server, " +
+                "or stop the server first")
+            return
+        }
         // Learned bookmarks persist for LOCAL listening too — the shim learns whenever
         // it runs, not only when serving.
         VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
@@ -1098,171 +1125,80 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         startVibeServerNow(mgr, dev, opts, promise)
     }
 
-    /** ★★ A START THAT NEVER RETURNS SAYS WHERE IT IS. The Sony (Lite 77, 2026-10-19) span on Start at 96 % of a
-     *  core with the bridge thread busy and not one log line, and a release build gives no way to read a stuck
-     *  thread's stack from outside. So the start thread is watched: past 3 s, its stack goes to the log every 3 s
-     *  (tag VibeStall) until it returns. Silent on every start that finishes. */
-    private fun <T> stallWatched(what: String, body: () -> T): T {
-        val target = Thread.currentThread()
-        val done = java.util.concurrent.atomic.AtomicBoolean(false)
-        val w = Thread({
-            var secs = 0
-            while (!done.get()) {
-                try { Thread.sleep(3000) } catch (_: InterruptedException) { return@Thread }
-                if (done.get()) break
-                secs += 3
-                val st = target.stackTrace.take(30).joinToString("\n  at ")
-                Log.w("VibeStall", "$what still running after ${secs}s on ${target.name}:\n  at $st")
-            }
-        }, "vibe-stall-watch")
-        w.isDaemon = true
-        w.start()
-        try { return body() } finally { done.set(true); w.interrupt() }
-    }
-
+    /**
+     * ★★★ THE START ITSELF RUNS IN THE SERVER'S PROCESS (beta88) — VibeServerOps.startVibeServer, the same body that lived
+     * here, moved so the server outlives this process. This side has done the part that needs an Activity (the USB
+     * permission prompt, and the Icom check that needs it) and stops its own Local Hardware engine, which would otherwise
+     * be holding the very radio the server is about to open.
+     */
     private fun startVibeServerNow(
         mgr: UsbManager, dev: UsbDevice,
         opts: com.facebook.react.bridge.ReadableMap, promise: Promise
-    ) = stallWatched("VibeServer start") { startVibeServerNowWatched(mgr, dev, opts, promise) }
-
-    private fun startVibeServerNowWatched(
-        mgr: UsbManager, dev: UsbDevice,
-        opts: com.facebook.react.bridge.ReadableMap, promise: Promise
     ) {
-        stopSpectrumInternal()
-        stopServerInternal()
-        // ★★★ Not while another VibeServer serves on this device (the other VibeSDR app, or Lite) — VibeServerBoot.
-        VibeServerBoot.otherServerOnDevice()?.let { promise.reject("other_server", VibeServerBoot.otherServerMessage(it)); return }
-        val conn = mgr.openDevice(dev)
-            ?: run { promise.reject("open_failed", "openDevice returned null"); return }
-        val fd = conn.fileDescriptor
-        if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
-        // ★★ An RSP goes to OpenRSP's service, not to the engine — see VibeRsp and LocalSdrShim::start.
-        if (isRsp(dev)) VibeRsp.attach(reactContext, conn, dev)?.let { conn.close(); promise.reject("rsp", it); return }
-        sessionConn = conn
-        // ★ Shared with the re-enumeration recovery, which closes it when it has to replace it.
-        VibeServerRestore.holdServerConn(conn, dev)   // ★ and which radio — see heldVidPid
-
-        // ★★★ THE CONFIG TRAVELS WHOLE. Every setting is read and applied by VibeServerBoot, which
-        //     the CRASH-RESTORE path also uses — see that file for why there is no longer a second,
-        //     hand-maintained list of "settings worth restoring". `toHashMap` gives plain
-        //     JSON-shaped values, so the same object stores itself in SharedPreferences unchanged.
-        val cfg = JSONObject(opts.toHashMap() as Map<*, *>)
-        val name       = VibeServerBoot.name(cfg)
-        val pin        = VibeServerBoot.pin(cfg)
-        val advertiseOnStart = VibeServerBoot.advertise(cfg)
-        // Rebuild the server if the process dies under it? Owner's choice: a shim that crashes
-        // REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
-        val autoRestore = VibeServerBoot.autoRestore(cfg)
-
-        // ★ Before start: the engine cannot read the descriptor on an fd-open. See usbModelName().
-        VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
-        // ★★★ An Icom: the owner's CI-V settings first, then the SAME start every radio takes (start() routes it).
-        if (isIcom(dev)) VibeIcom.prepareStart(cfg, dev)
-        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
-                                                reactContext.filesDir, serveOnLan = true,
-                                                keepRadioAlive = VibeServerBoot.keepRadioAlive(reactContext, cfg))
-        // ★ AFTER the server is up: the monitor pushes the sticky state the moment it registers, and
-        //   a push before the native library is loaded is dropped (473 showed no level, 2026-09-17).
-        VibeServerBoot.startBatteryMonitor(reactContext)
-        // ★★★ PUT THE PUBLIC LISTING BACK IF IT WAS ON. The tunnel dies with the process that
-        //     spawned it, so an update, a low-memory kill or a reboot leaves the directory
-        //     advertising an address that answers 530 until the entry expires — seen 2026-08-22
-        //     after an install: "it just lost the server". The switch is a STANDING INSTRUCTION,
-        //     not a one-off action, so it is re-established here where the port has just been
-        //     bound. ★ Never allowed to fail the start: restoreIfWanted swallows everything.
-        if (port > 0) VibeTunnel.restoreIfWanted(reactApplicationContext, port)
-        // ★★ COUNTRY AND NETWORK LOOKUP, wired up and refreshed if stale. Idempotent and cheap
-        //    unless a download is actually needed — see VibeGeoData.
-        if (port > 0) VibeGeoData.start(reactApplicationContext)
-        // ★★★ THE GPU MAP (/mapgl/) — unpacked from the APK once, plus the High Detail downloader.
-        //     On BOTH start paths, for the same reason as the line above. See VibeMapGL.
-        if (port > 0) VibeMapGL.start(reactApplicationContext)
-        // ★★ STATION LOGOS FROM THE BROADCASTER, wired on BOTH start paths. The geo lookup above
-        //    had to learn that lesson too: a headless restore is how this server usually comes
-        //    back, so anything wired only where the UI starts it is missing exactly when nobody
-        //    is watching.
-        //  ★ The country is a hint from the device's own locale — tried first, with the rest of
-        //    the ECC candidates behind it, so a wrong or absent one still resolves.
-        if (port > 0) {
-            try {
-                VibeLocalSDR.initRadioDns(
-                    java.io.File(reactApplicationContext.filesDir, "radiodns").apply { mkdirs() }.absolutePath,
-                    java.util.Locale.getDefault().country ?: "")
-            } catch (t: Throwable) {
-                android.util.Log.w("VibeSDR", "RadioDNS not started: ${t.message}")
+        serverWork.execute {
+            stopSpectrumInternal()   // ★ this process's Local Hardware engine lets go of the radio first
+            // ★★★ THE CONFIG TRAVELS WHOLE (VibeServerBoot) — `toHashMap` gives plain JSON-shaped values.
+            val cfg = JSONObject(opts.toHashMap() as Map<*, *>)
+            val args = JSONObject().put("cfg", cfg).put("vid", dev.vendorId).put("pid", dev.productId)
+                .put("deviceName", dev.deviceName)
+            // ★ A start can take a while on a slow box (the engine, the map unpack): wait for it as the old call did.
+            val r = VibeServerLink.call(reactContext, "start", args, waitMs = 15_000)
+            if (!r.optBoolean("ok", false)) {
+                promise.reject(r.optString("code", "start_failed"), r.optString("message", "the server did not start"))
+                return@execute
             }
+            /* ★★★ AN ICOM'S AUDIO — the permission is asked for HERE, with the app in front (Android's while-in-use rule);
+             *     the answer goes to the server process (VibeIcom.askForMicIfNeeded → VibeServerLink). */
+            if (r.optBoolean("icom", false)) {
+                if (VibeIcom.hasMicPermission(reactContext)) VibeServerLink.callAsync(reactContext, "icomMicGranted")
+                else VibeIcom.askForMicIfNeeded(reactContext.currentActivity, reactContext)
+            }
+            val res = Arguments.createMap()
+            res.putString("ip", r.optString("ip", "0.0.0.0"))
+            res.putInt("port", r.optInt("port", 0))
+            res.putString("name", r.optString("name", ""))
+            promise.resolve(res)
         }
-        if (port <= 0) {
-            VibeLocalSDR.setServeOnLan(false)
-            conn.close(); sessionConn = null
-            VibeServerRestore.holdServerConn(null)
-            promise.reject("start_failed", "native startVibeServer failed (see logcat)")
-            return
-        }
-        val ip = getLocalIp() ?: "0.0.0.0"
-        // "<name>.local" in any browser on the network. The responder probes first and
-        // renames itself (vibesdr-2, ...) if the name is already taken, so two phones
-        // serving at once don't fight over one name.
-        if (ip != "0.0.0.0") {
-            acquireMulticastLock()
-            VibeLocalSDR.startMdns(hostSlug(name), ip)
-        }
-        RtlTcpServerService.start(reactContext, name, ip, port, "vibeserver")
-        /* ★★★ AN ICOM'S AUDIO — recorded by the app, so started here, with the app in front (Android's while-in-use
-         *     rule). The microphone permission is asked for NOW, only now, with a plain explanation first; refused,
-         *     the dial and waterfall still serve and hwinfo says why there is no audio. */
-        if (isIcom(dev)) {
-            VibeIcom.onServerStarted(reactContext)
-            VibeIcom.askForMicIfNeeded(reactContext.currentActivity, reactContext)
-        }
-        // Remember the live config so the service can rebuild the shim if the process
-        // dies under it (START_STICKY brings the service back, but not the radio).
-        if (autoRestore) {
-            VibeServerRestore.arm(reactContext, cfg, dev)   // ★ and which radio — see K_VIDPID
-        } else {
-            VibeServerRestore.disarm(reactContext)
-        }
-        Log.i(TAG, "VibeServer started $ip:$port as \"$name\" (pin=${pin.isNotEmpty()})")
-
-        val res = Arguments.createMap()
-        res.putString("ip", ip)
-        res.putInt("port", port)
-        res.putString("name", name)
-        promise.resolve(res)
     }
+
+    // ── ★★★ REMOTE ACCESS TO SERVER SETTINGS (beta88) — the server's one settings store (VibeRemoteSetup) ────────────
+
+    /** The server's settings (never the admin password), the remote switch, and whether a store exists yet — JSON. */
+    @ReactMethod
+    fun serverSettingsGet(promise: Promise) = ask("settings.get", JSONObject(), promise) { it.toString() }
+
+    /** The config the screen's Start would send; the server keeps it as the truth the /setup page shows. */
+    @ReactMethod
+    fun serverSettingsPut(json: String, dropLanding: Boolean, promise: Promise) {
+        val cfg = try { JSONObject(json) } catch (t: Throwable) { promise.reject("bad_settings", t.message); return }
+        // ★ The admin password travels too: the remote page is guarded by it, and it must be the one the owner typed.
+        ask("settings.put", JSONObject().put("settings", cfg).put("dropLanding", dropLanding), promise, serial = true) { true }
+    }
+
+    /** The owner's "Remote access to server settings" switch. Rejects with the server's own words (no admin password). */
+    @ReactMethod
+    fun setRemoteAccess(on: Boolean, promise: Promise) =
+        ask("remote.set", JSONObject().put("on", on), promise) { it.optBoolean("remote", false) }
 
     @ReactMethod
     fun stopVibeServer(promise: Promise) {
-        // DISARM FIRST. A deliberate stop must not be undone: without this the crash-
-        // recovery path would happily resurrect a server the user had just switched off.
-        VibeServerRestore.disarm(reactContext)
-        VibeLocalSDR.stopMdns()
-        releaseMulticastLock()
-        RtlTcpServerService.stop(reactContext)
-        stopSpectrumInternal()
-        // ★ After the engine has stopped: the connection a re-enumeration recovery opened is ours to close.
-        VibeServerRestore.releaseServerConn()
-        VibeLocalSDR.setServeOnLan(false)
-        VibeLocalSDR.setVibeServerAuth("")   // clear the secret from process memory
-        // ★★ AND THE PUBLIC DOOR — see VibeTunnel.pauseForServerStop. Inline, not on tunnelWork: it is only a
-        //    process kill and two timer cancels (no network), and queued behind a slow publish it could land
-        //    AFTER the next Start's restore and close the door that Start had just reopened.
-        try { VibeTunnel.pauseForServerStop() } catch (t: Throwable) { Log.w(TAG, "tunnel pause: ${t.message}") }
-        promise.resolve(null)
+        // ★ Disarm, mDNS, NSD, the service, the engine, the secret, the public door — all in the server's process now
+        //   (VibeServerOps.stopVibeServer), in the same order as before. Nothing to do when its process is not running.
+        if (!serverProcessUp()) { promise.resolve(null); return }
+        ask("stop", JSONObject(), promise, serial = true) { null }
     }
 
     /** Live toggle: switch compressed audio on/off without restarting the server. */
     @ReactMethod
-    fun setVibeServerCompressAudio(on: Boolean) { VibeLocalSDR.setVibeServerCompressAudio(on) }
+    fun setVibeServerCompressAudio(on: Boolean) { tell("compressAudio", JSONObject().put("on", on)) }
 
     /** Live, no restart — the operator can lock the controls on a running server. */
     @ReactMethod
-    fun setVibeServerAdminSecret(secret: String) { VibeLocalSDR.setVibeServerAdminSecret(secret) }
+    fun setVibeServerAdminSecret(secret: String) { tell("adminSecret", JSONObject().put("secret", secret)) }
 
     @ReactMethod
     fun setVibeServerUncompressedAudio(mode: Double) {
-        VibeLocalSDR.setVibeServerUncompressedAudio(mode.toInt())
+        tell("uncompressed", JSONObject().put("mode", mode.toInt()))
     }
 
     /** ★★ WHICH RADIO IS PLUGGED IN, before anything is opened. The server settings screen
@@ -1338,25 +1274,26 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  Android half when no Icom server is running. Read-only; nothing is opened. */
     @ReactMethod
     fun icomSetup(promise: Promise) {
-        try { promise.resolve(VibeIcom.facts(reactContext).toString()) }
-        catch (t: Throwable) { promise.reject("icom_setup", t.message ?: "$t") }
+        // ★ The engine's half is the server process's; with no server running there is only the Android half.
+        if (!serverProcessUp()) { promise.resolve(VibeIcom.facts(reactContext).toString()); return }
+        ask("icomFacts", JSONObject(), promise) { it.optString("json", "{}") }
     }
 
     /** ★ The owner tapped "allow the radio's audio" on the setup card — the same explained ask as at Start. Does
      *  nothing unless an Icom is being served. */
     @ReactMethod
     fun icomAskForAudio() {
-        if (!VibeIcom.serving()) return
-        VibeIcom.askForMicIfNeeded(reactContext.currentActivity, reactContext)
-        if (VibeIcom.hasMicPermission(reactContext)) {
-            RtlTcpServerService.wantMicrophone(reactContext)
-            IcomAudio.startIfPossible(reactContext)
-        }
+        if (!serverProcessUp()) return
+        Thread {
+            if (!VibeServerLink.call(reactContext, "icomServing").optBoolean("serving", false)) return@Thread
+            if (VibeIcom.hasMicPermission(reactContext)) VibeServerLink.callAsync(reactContext, "icomMicGranted")
+            else VibeIcom.askForMicIfNeeded(reactContext.currentActivity, reactContext)
+        }.start()
     }
 
     @ReactMethod
     fun setVibeServerSessionLimit(minutes: Double) {
-        VibeLocalSDR.setVibeServerSessionLimit(minutes.toInt())
+        tell("sessionLimit", JSONObject().put("minutes", minutes.toInt()))
     }
 
     /** Hand the web client's search its station list (JSON array), served at
@@ -1365,8 +1302,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  search still works with no internet — the allotment case. */
     @ReactMethod
     fun setStationsJson(json: String) {
-        VibeLocalSDR.setStationsJson(json)
-        VibeServerRestore.cacheStations(reactContext, json)
+        // ★ The server's copy (and the restore's cache) — large, so it may travel as a file (VibeServerLink.wrap).
+        if (serverProcessUp()) tell("stations", JSONObject().put("json", json))
+        else VibeServerRestore.cacheStations(reactContext, json)
     }
 
     /** Publish the RECEIVER's coarse location (GET /location). Clients compute
@@ -1374,70 +1312,40 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  position — not from wherever the listener happens to be. */
     @ReactMethod
     fun setLocationJson(json: String) {
-        VibeLocalSDR.setLocationJson(json)
-        VibeServerRestore.cacheLocation(reactContext, json)
+        // ★ Local Hardware's own engine wants it too (its spots map), and the server's (its listeners').
+        try { VibeLocalSDR.setLocationJson(json) } catch (_: Throwable) {}
+        if (serverProcessUp()) tell("location", JSONObject().put("json", json))
     }
 
     /** Learned station bookmarks (RDS). The shim learns them; JS persists them. */
     @ReactMethod
-    fun setBookmarksJson(json: String) { VibeLocalSDR.setBookmarksJson(json) }
+    fun setBookmarksJson(json: String) {
+        // ★ Whichever engine is running: the server's when this phone serves, else Local Hardware's own.
+        if (serverProcessUp()) tell("bookmarks", JSONObject().put("json", json)) else VibeLocalSDR.setBookmarksJson(json)
+    }
 
     @ReactMethod
     fun getBookmarksJson(promise: Promise) {
-        promise.resolve(VibeLocalSDR.getBookmarksJson())
+        if (!serverProcessUp()) { promise.resolve(VibeLocalSDR.getBookmarksJson()); return }
+        ask("bookmarks.get", JSONObject(), promise) { it.optString("json", "[]") }
     }
 
     @ReactMethod
     fun clearBookmarks(promise: Promise) {
-        VibeLocalSDR.clearBookmarks()
-        promise.resolve(null)
+        try { VibeLocalSDR.clearBookmarks() } catch (_: Throwable) {}
+        if (!serverProcessUp()) { promise.resolve(null); return }
+        ask("bookmarks.clear", JSONObject(), promise) { null }
     }
 
     /** The .local hostname the responder actually took — it renames itself on a clash,
      *  so this is not necessarily the one we asked for. */
     @ReactMethod
     fun getMdnsHostname(promise: Promise) {
-        promise.resolve(VibeLocalSDR.mdnsHostname())
+        if (!serverProcessUp()) { promise.resolve(""); return }
+        ask("mdnsHostname", JSONObject(), promise) { it.optString("host", "") }
     }
 
-    @ReactMethod
-    // ── Process CPU, for the server screen ────────────────────────────────────
-    //
-    // A phone acting as a receiver is a device you leave running on a shelf for hours, so
-    // "what is this costing me" is a fair question to be able to answer on the screen rather
-    // than by guessing from how warm it feels. Read from /proc/self/stat, which needs no
-    // permission and no NDK call.
-    //
-    // Reported as a percentage of ONE core (so >100% is possible and meaningful on a
-    // multi-core phone) — the same convention the DSP benchmarks use, which keeps it
-    // comparable with the Pi figures.
-    // SELF-TIMED AND CACHED, so any number of callers is safe. A naive per-call delta breaks
-    // the moment a second poller appears: the two interleave and each measures the other's
-    // gap. This recomputes at most every 500ms and hands everyone the same current reading.
-    private var lastCpuTicks = 0L
-    private var lastCpuAt = 0L
-    private var cpuValue = 0.0
-    private val clkTck: Long by lazy {
-        try { android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK) } catch (_: Throwable) { 100L }
-    }
-    @Synchronized
-    private fun processCpuPercent(): Double = try {
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (lastCpuAt > 0L && now - lastCpuAt < 500L) cpuValue      // too soon — reuse
-        else {
-            val stat = java.io.File("/proc/self/stat").readText()
-            // Fields 1-2 are pid and (comm); comm can itself contain spaces and brackets, so
-            // split AFTER the last ')' or a process named "foo bar" shifts every index.
-            val f = stat.substring(stat.lastIndexOf(')') + 2).split(" ")
-            val ticks = f[11].toLong() + f[12].toLong()             // utime + stime (fields 14, 15)
-            if (lastCpuAt > 0L) {
-                cpuValue = (((ticks - lastCpuTicks).toDouble() / clkTck) / ((now - lastCpuAt) / 1000.0) * 100.0)
-                    .coerceIn(0.0, 100.0 * Runtime.getRuntime().availableProcessors())
-            }
-            lastCpuTicks = ticks; lastCpuAt = now
-            cpuValue                                                // first call has no delta yet: 0
-        }
-    } catch (_: Throwable) { 0.0 }                                  // never break a status for a stat read
+    // ★ The process CPU figure moved to VibeServerOps (beta88): measured in the server's own process.
 
     /** ★★★ THE ANNOTATION IS THE WHOLE FEATURE. Without @ReactMethod this is not exported to JS at
      *  all — and the call site reads `Local?.getVibeServerStatus?.()`, whose optional call returns
@@ -1450,55 +1358,40 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *     reads it through this bridge. */
     @ReactMethod
     fun getVibeServerStatus(promise: Promise) {
-        try {
-            val o = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
-            val m = Arguments.createMap()
-            m.putBoolean("running", o.optBoolean("running", false))
-            m.putBoolean("client", o.optBoolean("client", false))
-            m.putString("clientAddr", o.optString("clientAddr", ""))
-            m.putDouble("specBytesPerSec", o.optLong("specBytesPerSec", 0).toDouble())
-            m.putDouble("audioBytesPerSec", o.optLong("audioBytesPerSec", 0).toDouble())
-            m.putBoolean("compressed", o.optBoolean("compressed", true))
-            m.putBoolean("pinEnabled", o.optBoolean("pinEnabled", false))
-            m.putDouble("fftRate", o.optLong("fftRate", 0).toDouble())
-            m.putDouble("bandwidthHz", o.optLong("bandwidthHz", 0).toDouble())
-            // NB: this map is built field-by-field, so a new field in the C++ JSON
-            // is silently DROPPED here until it's added. That's why SAMPLE RATE
-            // showed "—" despite the native side emitting it.
-            m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
-            m.putInt("port", o.optInt("port", 0))
-            // ★ The listener COUNT, from the shim's one authoritative counter. See the note on
-            //   clientConnected in getVibeServerStatus() — the screen used to have its own idea.
-            m.putInt("listeners", o.optInt("listeners", 0))
-            m.putInt("maxUsers", o.optInt("maxUsers", 1))
-            // ★★ What the owner has to do about the radio — "needs unplugging and plugging back in" — or ""
-            //    (2026-10-05). Field by field, as the note above warns: left out here, the screen never sees it.
-            m.putString("radioProblem", o.optString("radioProblem", ""))
-            // ★★★ THE DECORATIONS MUST NOT BE ABLE TO KILL THE READING. Everything above comes
-            //     from the shim's own JSON and is the ANSWER; everything in this block is a nicety
-            //     read from the phone — the local address, a CPU percentage out of /proc, the core
-            //     count. They were inside the same try as the rest, so ONE of them throwing
-            //     rejected the WHOLE promise: getVibeServerStatus() returned null, `if (s)
-            //     setStatus(s)` never fired, and the screen sat on "Waiting for a client…" while
-            //     the server had a listener and the admin page showed it correctly (Stuart,
-            //     2026-08-19, on a Unisoc Moto — exactly the sort of device where reading /proc is
-            //     restricted).
-            // ★★ Same shape as the comment above about a field being silently dropped: this
-            //    screen's job is to say what the server is doing, and it must degrade to "I could
-            //    not measure the CPU" rather than "there is nothing here".
-            try { m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "") }
-            catch (e: Throwable) { m.putString("ip", "") }
-            try { m.putDouble("cpu", processCpuPercent()) }
-            catch (e: Throwable) { m.putDouble("cpu", 0.0) }
-            try { m.putInt("cores", Runtime.getRuntime().availableProcessors()) }
-            catch (e: Throwable) { m.putInt("cores", 0) }
-            promise.resolve(m)
-        } catch (e: Throwable) {
-            // ★ And say WHY in the log. A rejected status is invisible on the screen — it looks
-            //   exactly like a server with nobody on it, which is the fault this cost us.
-            Log.w(TAG, "getVibeServerStatus failed: ${e}")
-            promise.reject("status_failed", e.message)
+        // ★★ beta88: the server's own process answers (VibeServerOps.status) — its CPU figure is now the SERVER's cost.
+        //    No server process at all: "not running", without creating one to ask.
+        if (!serverProcessUp()) { promise.resolve(statusMap(JSONObject().put("ok", true).put("status", JSONObject()))); return }
+        askWork.execute {
+            val r = VibeServerLink.call(reactContext, "status")
+            if (!r.optBoolean("ok", false)) {
+                Log.w(TAG, "getVibeServerStatus failed: ${r.optString("message")}")
+                promise.reject("status_failed", r.optString("message"))
+            } else promise.resolve(statusMap(r))
         }
+    }
+
+    /** ★ Field by field, as before — a field missing here is dropped on its way to the screen (see the old notes). */
+    private fun statusMap(r: JSONObject): WritableMap {
+        val o = r.optJSONObject("status") ?: JSONObject()
+        val m = Arguments.createMap()
+        m.putBoolean("running", o.optBoolean("running", false))
+        m.putBoolean("client", o.optBoolean("client", false))
+        m.putString("clientAddr", o.optString("clientAddr", ""))
+        m.putDouble("specBytesPerSec", o.optLong("specBytesPerSec", 0).toDouble())
+        m.putDouble("audioBytesPerSec", o.optLong("audioBytesPerSec", 0).toDouble())
+        m.putBoolean("compressed", o.optBoolean("compressed", true))
+        m.putBoolean("pinEnabled", o.optBoolean("pinEnabled", false))
+        m.putDouble("fftRate", o.optLong("fftRate", 0).toDouble())
+        m.putDouble("bandwidthHz", o.optLong("bandwidthHz", 0).toDouble())
+        m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
+        m.putInt("port", o.optInt("port", 0))
+        m.putInt("listeners", o.optInt("listeners", 0))
+        m.putInt("maxUsers", o.optInt("maxUsers", 1))
+        m.putString("radioProblem", o.optString("radioProblem", ""))
+        m.putString("ip", r.optString("ip", ""))
+        m.putDouble("cpu", r.optDouble("cpu", 0.0))
+        m.putInt("cores", r.optInt("cores", 0))
+        return m
     }
 
     @ReactMethod
@@ -1513,79 +1406,46 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     }
 
     // ── RTL-TCP SERVER (share this device's USB dongle over the network) ──────
-    // Kept separate from the spectrum session's UsbDeviceConnection: the two
-    // modes are mutually exclusive, but a distinct handle keeps teardown clean.
-    private var serverConn: android.hardware.usb.UsbDeviceConnection? = null
+    // ★ beta88: run by the server's process, like VibeServer (VibeServerOps.rtlStart) — the same foreground service.
 
-    /**
-     * Open the attached RTL-SDR and start the RTL-TCP server. Resolves with
-     * { ip, port, name } so JS can advertise it via mDNS and show the address.
-     * opts: name, port?(1234), sampleRate?(2.4M), gainTenthDb?(-1 auto),
-     *       centerFreq?(100M), overrideRate?(0 = client-controlled).
-     */
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
             ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
-            openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
+            openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(dev, opts, promise) }
             return
         }
-        startRtlTcpServerNow(mgr, dev, opts, promise)
+        startRtlTcpServerNow(dev, opts, promise)
     }
 
-    private fun startRtlTcpServerNow(
-        mgr: UsbManager, dev: UsbDevice,
-        opts: com.facebook.react.bridge.ReadableMap, promise: Promise
-    ) {
-        // Free any on-device session + prior server first.
-        stopSpectrumInternal()
-        stopServerInternal()
-        val conn = mgr.openDevice(dev)
-            ?: run { promise.reject("open_failed", "openDevice returned null"); return }
-        val fd = conn.fileDescriptor
-        if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
-        serverConn = conn
-
-        val name       = if (opts.hasKey("name")) opts.getString("name") ?: "VibeSDR RTL-SDR" else "VibeSDR RTL-SDR"
-        val port       = if (opts.hasKey("port")) opts.getInt("port") else 1234
-        val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
-        val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1
-        val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
-        val override   = if (opts.hasKey("overrideRate")) opts.getDouble("overrideRate") else 0.0
-
-        val bound = VibeLocalSDR.startServer(
-            fd, dev.vendorId, dev.productId, sampleRate, centerFreq, gain, port, override)
-        if (bound <= 0) {
-            conn.close(); serverConn = null
-            promise.reject("start_failed", "native startServer failed (see logcat)")
-            return
+    private fun startRtlTcpServerNow(dev: UsbDevice, opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
+        serverWork.execute {
+            stopSpectrumInternal()
+            val args = JSONObject().put("opts", JSONObject(opts.toHashMap() as Map<*, *>))
+                .put("vid", dev.vendorId).put("pid", dev.productId).put("deviceName", dev.deviceName)
+            val r = VibeServerLink.call(reactContext, "rtl.start", args, waitMs = 15_000)
+            if (!r.optBoolean("ok", false)) { promise.reject(r.optString("code", "start_failed"), r.optString("message")); return@execute }
+            val res = Arguments.createMap()
+            res.putString("ip", r.optString("ip")); res.putInt("port", r.optInt("port")); res.putString("name", r.optString("name"))
+            promise.resolve(res)
         }
-        val ip = getLocalIp() ?: "0.0.0.0"
-        RtlTcpServerService.start(reactContext, name, ip, bound)
-        Log.i(TAG, "RTL-TCP server started $ip:$bound as \"$name\"")
-        val res = Arguments.createMap()
-        res.putString("ip", ip)
-        res.putInt("port", bound)
-        res.putString("name", name)
-        promise.resolve(res)
     }
 
     @ReactMethod
     fun stopRtlTcpServer(promise: Promise) {
-        stopServerInternal()
-        promise.resolve(null)
+        if (!serverProcessUp()) { promise.resolve(null); return }
+        ask("rtl.stop", JSONObject(), promise, serial = true) { null }
     }
 
     @ReactMethod
-    fun setServerSampleRate(rate: Double) { VibeLocalSDR.setServerSampleRate(rate) }
+    fun setServerSampleRate(rate: Double) { tell("rtlRate", JSONObject().put("rate", rate)) }
 
     @ReactMethod
     fun getServerStatus(promise: Promise) {
-        try {
-            val json = VibeLocalSDR.getServerStatus()
-            val o = org.json.JSONObject(json)
+        val empty = { r: JSONObject ->
+            val o = r.optJSONObject("status") ?: JSONObject()
             val m = Arguments.createMap()
             m.putBoolean("running", o.optBoolean("running", false))
             m.putBoolean("client", o.optBoolean("client", false))
@@ -1593,17 +1453,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putDouble("overrideRate", o.optLong("overrideRate", 0).toDouble())
             m.putDouble("droppedBytes", o.optLong("droppedBytes", 0).toDouble())
-            // ip/port let the UI re-adopt a server that is ALREADY running (persist
-            // mode: the server outlives the screen, so the screen must attach to it
-            // rather than start a second one on the same dongle).
             m.putInt("port", o.optInt("port", 0))
-            m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
-            m.putDouble("cpu", processCpuPercent())
-            m.putInt("cores", Runtime.getRuntime().availableProcessors())
-            promise.resolve(m)
-        } catch (e: Throwable) {
-            promise.reject("status_failed", e.message)
+            m.putString("ip", r.optString("ip", ""))
+            m.putDouble("cpu", r.optDouble("cpu", 0.0))
+            m.putInt("cores", r.optInt("cores", 0))
+            m
         }
+        if (!serverProcessUp()) { promise.resolve(empty(JSONObject())); return }
+        ask("rtl.status", JSONObject(), promise) { empty(it) }
     }
 
     /** rtl_tcp CLIENT link health — drives the connection meter on the network path. */
@@ -1623,32 +1480,6 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Throwable) {
             promise.reject("net_status_failed", e.message)
         }
-    }
-
-    private fun stopServerInternal() {
-        try { VibeLocalSDR.stopServer() } catch (_: Throwable) {}
-        try { RtlTcpServerService.stop(reactContext) } catch (_: Throwable) {}
-        serverConn?.let { try { it.close() } catch (_: Exception) {} }
-        serverConn = null
-    }
-
-    /** Best-effort non-loopback IPv4 for the LAN (prefer wlan/AP interfaces). */
-    private fun getLocalIp(): String? {
-        return try {
-            val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
-            var fallback: String? = null
-            for (nif in ifaces) {
-                if (!nif.isUp || nif.isLoopback) continue
-                for (addr in nif.inetAddresses) {
-                    if (addr.isLoopbackAddress || addr !is java.net.Inet4Address) continue
-                    val ip = addr.hostAddress ?: continue
-                    val n = nif.name.lowercase()
-                    if (n.startsWith("wlan") || n.startsWith("ap") || n.startsWith("swlan")) return ip
-                    if (fallback == null) fallback = ip
-                }
-            }
-            fallback
-        } catch (_: Throwable) { null }
     }
 
     // ── Hardware controls ──────────────────────────────────────────────────
@@ -1832,7 +1663,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         unregisterUsbReceiver()
         pendingPromise = null
         stopSpectrumInternal()
-        stopServerInternal()
+        // ★ beta88: NOT the server — it lives in its own process precisely so that this one going away leaves it running.
         super.invalidate()
     }
 
@@ -1858,134 +1689,74 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  inert, where it cannot work (AGENTS.md). */
     @ReactMethod
     fun tunnelSupported(promise: Promise) {
+        // ★ A file check — answered here, without waking the server process.
         try { promise.resolve(VibeTunnel.isSupported(reactApplicationContext)) }
         catch (t: Throwable) { promise.resolve(false) }
     }
 
     @ReactMethod
     fun tunnelStatus(promise: Promise) {
-        try { promise.resolve(VibeTunnel.statusJson()) }
-        catch (t: Throwable) { promise.reject("tunnel_status", t) }
+        if (!serverProcessUp()) { promise.resolve(VibeTunnel.statusJson()); return }
+        ask("tunnel.status", JSONObject(), promise) { it.optString("json", "{}") }
     }
 
     /**
-     * Start the tunnel, then list the server.
-     *
-     * ★★★ THE TRUSTED-PROXY WIRING IS PART OF THIS ACTION, NOT A SETTING TO REMEMBER. cloudflared
-     *     dials in from loopback, so without it every listener reads as 127.0.0.1 and the session
-     *     limit, IP cooldown and one-address rule silently stop applying — which is precisely what
-     *     happened to the demo on 2026-08-09.
+     * Start the tunnel, then list the server — in the SERVER's process (beta88): cloudflared lives and dies with the
+     * process that spawned it, and that must be the one that survives.
+     * ★★★ THE TRUSTED-PROXY WIRING IS PART OF THIS ACTION — see VibeServerOps.tunnelStart.
      */
     @ReactMethod
     fun tunnelStart(name: String, locator: String, port: Int, ownerProxies: String,
                     radioModel: String, radioDriver: String,
                     antenna: String, coverage: String, locked: Boolean,
                     shareForSec: Double, promise: Promise) {
-        // ★ Off the bridge thread — see tunnelWork. (An already-running tunnel calls back at once,
-        //   which put the directory POST straight onto the bridge.)
         tunnelWork.execute {
-            try {
-                VibeTunnel.applyLoopbackTrust(true, ownerProxies)
-                VibeTunnel.startTunnel(reactApplicationContext, port) { url ->
-                    if (url == null) { promise.resolve(VibeTunnel.statusJson()); return@startTunnel }
-                    VibeTunnel.publish(reactApplicationContext, name, locator, port, radioModel, radioDriver,
-                                       antenna, coverage, locked, shareForSec.toLong())
-                    promise.resolve(VibeTunnel.statusJson())
-                }
-            } catch (t: Throwable) { promise.reject("tunnel_start", t) }
+            val r = VibeServerLink.call(reactContext, "tunnel.start", JSONObject()
+                .put("name", name).put("locator", locator).put("port", port).put("ownerProxies", ownerProxies)
+                .put("radioModel", radioModel).put("radioDriver", radioDriver).put("antenna", antenna)
+                .put("coverage", coverage).put("locked", locked).put("shareForSec", shareForSec.toLong()), waitMs = 15_000)
+            if (r.optBoolean("ok", false)) promise.resolve(r.optString("json", "{}"))
+            else promise.reject("tunnel_start", r.optString("message"))
         }
     }
 
-    /**
-     * Re-publish the listing from the values the app holds RIGHT NOW, without touching the tunnel.
-     *
-     * ★★★ THE HEADLESS RESTORE CAN ONLY REPLAY WHAT IT STORED. When the server comes back on its
-     *     own — after an update, a reboot or a low-memory kill — there is no UI to ask, so
-     *     restoreIfWanted republishes the values captured the last time the switch was flicked BY
-     *     HAND. That keeps a listing alive with nobody present, which is the point, but it also
-     *     means the entry can describe the server as it was rather than as it is: Stuart's listing
-     *     still read "fm" hours after the app had learned to say "FM Broadcast Band", and a
-     *     changed aerial or band limit would be just as stale (2026-08-22).
-     * ★★ So the screen corrects it as soon as there IS a UI. Cheap — it is the ordinary ping, with
-     *    fresh arguments — and it needs no tunnel restart, so nobody listening is disturbed.
-     */
+    /** Re-publish the listing from the values the app holds RIGHT NOW (see VibeServerOps.tunnelRepublish). */
     @ReactMethod
     fun tunnelRepublish(name: String, locator: String, port: Int,
                         radioModel: String, radioDriver: String,
                         antenna: String, coverage: String, locked: Boolean,
                         shareForSec: Double, promise: Promise) {
-        if (!VibeTunnel.isTunnelRunning() || port <= 0 || name.length < 2) {
-            promise.resolve(VibeTunnel.statusJson()); return
+        if (!serverProcessUp()) { promise.resolve(VibeTunnel.statusJson()); return }
+        tunnelWork.execute {
+            val r = VibeServerLink.call(reactContext, "tunnel.republish", JSONObject()
+                .put("name", name).put("locator", locator).put("port", port)
+                .put("radioModel", radioModel).put("radioDriver", radioDriver).put("antenna", antenna)
+                .put("coverage", coverage).put("locked", locked).put("shareForSec", shareForSec.toLong()))
+            if (r.optBoolean("ok", false)) promise.resolve(r.optString("json", "{}"))
+            else promise.reject("tunnel_republish", r.optString("message"))
         }
-        // ★ Off the bridge thread — see tunnelWork. This is the one the Sony's logcat caught.
-        tunnelWork.execute { try {
-            // ★★★ -1 means "leave the share window alone", 0 means "permanent", >0 sets a window.
-            //     The periodic refresh sends -1, so it can never extend an offer by accident; only
-            //     a deliberate change from the switch carries 0 or a length. Two states were not
-            //     enough — with 0 doing double duty, turning the temporary toggle OFF could not
-            //     make a share permanent (Stuart, 2026-08-22).
-            VibeTunnel.publish(reactApplicationContext, name, locator, port,
-                               radioModel, radioDriver, antenna, coverage, locked,
-                               shareForSec.toLong())
-            promise.resolve(VibeTunnel.statusJson())
-        } catch (t: Throwable) { promise.reject("tunnel_republish", t) } }
     }
 
     /** ★ Off means OFF: delist immediately so the public address is freed now, not at expiry. */
     @ReactMethod
     fun tunnelStop(ownerProxies: String, promise: Promise) {
-        // ★ Off the bridge thread — see tunnelWork. delist() is a POST to vibesdr.net.
         tunnelWork.execute {
-            try {
-                VibeTunnel.delist(reactApplicationContext)
-                VibeTunnel.stopTunnel()
-                VibeTunnel.applyLoopbackTrust(false, ownerProxies)
-                promise.resolve(VibeTunnel.statusJson())
-            } catch (t: Throwable) { promise.reject("tunnel_stop", t) }
+            val r = VibeServerLink.call(reactContext, "tunnel.stop", JSONObject().put("ownerProxies", ownerProxies))
+            if (r.optBoolean("ok", false)) promise.resolve(r.optString("json", "{}"))
+            else promise.reject("tunnel_stop", r.optString("message"))
         }
     }
 
     companion object {
-        // RTL-SDR VID/PID allowlist (from SDR++ Brown), packed as (vid<<16)|pid.
-        // internal, not private: VibeServerRestore matches on the SAME list — a copy
-        // would drift and quietly stop recognising a dongle on the restore path only.
-        internal val RTL_SDR_VIDPIDS: Set<Int> = listOf(
-            0x0bda to 0x2832, 0x0bda to 0x2838, 0x0413 to 0x6680, 0x0413 to 0x6f0f,
-            0x0458 to 0x707f, 0x0ccd to 0x00a9, 0x0ccd to 0x00b3, 0x0ccd to 0x00b4,
-            0x0ccd to 0x00b5, 0x0ccd to 0x00b7, 0x0ccd to 0x00b8, 0x0ccd to 0x00b9,
-            0x0ccd to 0x00c0, 0x0ccd to 0x00c6, 0x0ccd to 0x00d3, 0x0ccd to 0x00d7,
-            0x0ccd to 0x00e0, 0x1554 to 0x5020, 0x15f4 to 0x0131, 0x15f4 to 0x0133,
-            0x185b to 0x0620, 0x185b to 0x0650, 0x185b to 0x0680, 0x1b80 to 0xd393,
-            0x1b80 to 0xd394, 0x1b80 to 0xd395, 0x1b80 to 0xd397, 0x1b80 to 0xd398,
-            0x1b80 to 0xd39d, 0x1b80 to 0xd3a4, 0x1b80 to 0xd3a8, 0x1b80 to 0xd3af,
-            0x1b80 to 0xd3b0, 0x1d19 to 0x1101, 0x1d19 to 0x1102, 0x1d19 to 0x1103,
-            0x1d19 to 0x1104, 0x1f4d to 0xa803, 0x1f4d to 0xb803, 0x1f4d to 0xc803,
-            0x1f4d to 0xd286, 0x1f4d to 0xd803
-        ).map { (vid, pid) -> (vid shl 16) or pid }.toSet()
-
-        /** Airspy HF+ — see isAirspyHf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
-        internal const val AIRSPYHF_VID = 0x03eb
-        internal const val AIRSPYHF_PID = 0x800c
-
-        /** HackRF One — see isHackRf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
-        internal const val HACKRF_VID = 0x1d50
-        internal const val HACKRF_PID = 0x6089
-
-        /** ★ Airspy R2 / Mini — ONE id for both models; the board id read at open tells them
-         *  apart (see airspy_source.cpp). Mirrored in device_filter.xml and in the engine's
-         *  start() dispatch: three copies of one fact, and they must agree. */
-        internal const val AIRSPY_VID = 0x1d50
-        internal const val AIRSPY_PID = 0x60a1
-
-        /** ★ Any radio a server can be running on — the same four allowlists as isSupportedRadio(),
-         *  reachable without a module instance. The service asks it of a USB device that has just
-         *  DETACHED, to know whether the server's radio is what left (VibeServerRestore.noteRadioGone). */
-        internal fun isServableRadio(vid: Int, pid: Int): Boolean =
-            VibeRsp.isRsp(vid, pid) ||      // ★ API 26+ only — VibeRsp.supported
-            RTL_SDR_VIDPIDS.contains((vid shl 16) or pid) ||
-            (vid == AIRSPYHF_VID && pid == AIRSPYHF_PID) ||
-            (vid == HACKRF_VID && pid == HACKRF_PID) ||
-            (vid == AIRSPY_VID && pid == AIRSPY_PID)
+        // ★ The allowlists live in VibeRadioIds (beta88) — the server process reads them without React Native.
+        internal val RTL_SDR_VIDPIDS: Set<Int> get() = VibeRadioIds.RTL_SDR_VIDPIDS
+        internal const val AIRSPYHF_VID = VibeRadioIds.AIRSPYHF_VID
+        internal const val AIRSPYHF_PID = VibeRadioIds.AIRSPYHF_PID
+        internal const val HACKRF_VID = VibeRadioIds.HACKRF_VID
+        internal const val HACKRF_PID = VibeRadioIds.HACKRF_PID
+        internal const val AIRSPY_VID = VibeRadioIds.AIRSPY_VID
+        internal const val AIRSPY_PID = VibeRadioIds.AIRSPY_PID
+        internal fun isServableRadio(vid: Int, pid: Int): Boolean = VibeRadioIds.isServableRadio(vid, pid)
     }
 }
 

@@ -74,13 +74,24 @@ class RtlTcpServerService : Service() {
         @Volatile internal var micTypeActive = false
             private set
 
-        /** The app's process is showing an activity (the service alone makes it 125, FOREGROUND_SERVICE — not that). */
-        fun appVisible(ctx: Context): Boolean = try {
-            val mi = android.app.ActivityManager.RunningAppProcessInfo()
-            android.app.ActivityManager.getMyMemoryState(mi)
-            mi.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-                mi.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-        } catch (_: Throwable) { false }
+        /** The APP is showing an activity — in ANY of its processes (beta88: the server has a process of its own, which
+         *  never shows one; getMyMemoryState described only the calling process). See VibeProcess.appVisible. */
+        fun appVisible(ctx: Context): Boolean = VibeProcess.appVisible(ctx)
+
+        /** ★ A restore thread is running in this process right now — the watchdog does not start a second. */
+        @Volatile var restoreRunning = false
+            private set
+
+        /** ★ The service is alive in this process: start its restore directly (no Intent, so no background-start rule to
+         *  meet). False when there is no service here, and the caller must start one. */
+        fun kickRestore(why: String): Boolean {
+            val svc = instance ?: return false
+            svc.handler.post { svc.startRestore(boot = false, why = why) }
+            return true
+        }
+
+        /** ★ "VibeServer stopped — open the app and press Start", from anywhere (the watchdog when Android refuses it). */
+        fun postStopped(ctx: Context) = postStoppedNotice(ctx)
 
         /** May the radio's audio be recorded right now and go on being recorded once the app is in the background?
          *  Below Android 11 any foreground service will do; from 11 the service must carry the microphone type, or the
@@ -124,6 +135,22 @@ class RtlTcpServerService : Service() {
         IcomAudio.startIfPossible(applicationContext)
     }
 
+    /** ★★★ THE SERVICE NOTICES ITS OWN DEAD SERVER (beta88). Armed, not serving, no restore under way, and the last
+     *  restore's reason was one that can change by itself: try the restore again, at most once a minute. Without this a
+     *  restore that gave up ("no SDR attached" after its minute of tries, an engine that would not start) left a running
+     *  service showing why — and nothing ever tried again until a person did. Never for an rtl_tcp server (not armed),
+     *  never after "not armed", "no stored config" or a radio gone longer than the owner allows. */
+    private fun tickSelfHeal() {
+        if (mode != "vibeserver" || restoreRunning) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastRestoreAt < 60_000L) return
+        val err = lastRestoreErr
+        if (err == "not armed" || err == "no stored config" || err == VibeServerRestore.RADIO_GONE_TOO_LONG) return
+        if (!VibeServerRestore.isArmed(applicationContext) || VibeServerRestore.isShimServing()) return
+        Log.w(TAG, "armed but not serving (last restore: ${err ?: "none"}) — trying the restore again")
+        startRestore(boot = false, why = "self-heal: armed but not serving")
+    }
+
     private var wakeLock: PowerManager.WakeLock? = null
     private val wifiLock by lazy { VibeWifiLock(this, "VibeSDR:RtlTcpServer") }
     private val handler = Handler(Looper.getMainLooper())
@@ -138,6 +165,7 @@ class RtlTcpServerService : Service() {
             pollUsbRecovery()
             applyCpuHold()
             try { tickIcomAudio() } catch (t: Throwable) { Log.w(TAG, "Icom audio tick: $t") }
+            try { tickSelfHeal() } catch (t: Throwable) { Log.w(TAG, "self-heal tick: $t") }
             handler.postDelayed(this, 2000)
         }
     }
@@ -274,7 +302,26 @@ class RtlTcpServerService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /* ★★★ SAY HOW FAR EVERY START GOT (beta88). The XCover, 2026-11-20 15:18:12: Android started a process for this
+     *  service after a backup's kill — and there was no log line at all after am_proc_start, so nobody can say whether
+     *  onCreate ran, onStartCommand ran, or the restore hung. onStartCommand logged nothing on entry, and a restore that
+     *  blocked logged nothing ever. Every step now leaves a line in the log AND in a small file that survives the process
+     *  (VibeServerRestore.breadcrumb), which Diagnostics and the next agent can read. */
+    override fun onCreate() {
+        super.onCreate()
+        Log.i(TAG, "service created in process ${VibeProcess.name(this)} (pid ${android.os.Process.myPid()})")
+        VibeServerRestore.breadcrumb(this, "service onCreate in ${VibeProcess.name(this)} pid ${android.os.Process.myPid()}")
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val kind = when {
+            intent == null -> "sticky restart (null intent)"
+            intent.getBooleanExtra(EXTRA_BOOT, false) -> "boot start"
+            intent.getBooleanExtra(EXTRA_RESTORE, false) -> "restore"
+            else -> "start (${intent.getStringExtra(EXTRA_MODE) ?: "rtltcp"})"
+        }
+        Log.i(TAG, "onStartCommand: $kind, flags=$flags, startId=$startId")
+        VibeServerRestore.breadcrumb(this, "onStartCommand: $kind flags=$flags")
         /* ★★★ FOREGROUND FIRST, AND A REFUSAL IS A STOP, NEVER A CRASH (NickB G4IRX, Pixel 6, Android 17, 2026-10-16).
          *
          * Nick's phone crashed four times in an afternoon after an update: a Java CRASH at importance "service"
@@ -310,6 +357,8 @@ class RtlTcpServerService : Service() {
                       else if (intent.getBooleanExtra(EXTRA_RESTORE, false)) "a background restart"
                       else "a start"
             Log.e(TAG, "Android refused to let the server run in the foreground ($how): $t")
+            if (instance === this) instance = null
+            VibeServerRestore.breadcrumb(this, "foreground refused ($how): $t")
             postStoppedNotification()
             try { stopSelf(startId) } catch (_: Throwable) {}
             return START_NOT_STICKY
@@ -323,8 +372,30 @@ class RtlTcpServerService : Service() {
         // default and would never match. VibeServerRestore's armed flag is the only
         // thing that survived, and it is the actual source of truth.
         if (intent == null || intent.getBooleanExtra(EXTRA_RESTORE, false)) {
-            val boot = intent?.getBooleanExtra(EXTRA_BOOT, false) == true
-            Thread { try {
+            startRestore(boot = intent?.getBooleanExtra(EXTRA_BOOT, false) == true, why = kind)
+        }
+        acquireWakeLock()
+        wifiLock.acquire()
+        watchForDetach()
+        handler.removeCallbacks(ticker)
+        handler.post(ticker)
+        return START_STICKY
+    }
+
+    /** ★ The last restore's answer (null = it worked, or none yet) — the tick's self-heal retries only a reason that can
+     *  change by itself (a radio not listed yet, a permission not landed yet), never "not armed" or "no stored config". */
+    @Volatile private var lastRestoreErr: String? = null
+    @Volatile private var lastRestoreAt = 0L
+
+    /** The restore, on its own thread — the sticky restart, the update, the boot start, the attach resume and the
+     *  watchdog all come here. One at a time. */
+    internal fun startRestore(boot: Boolean, why: String) {
+        if (restoreRunning) { Log.i(TAG, "restore already running — not starting another ($why)"); return }
+        restoreRunning = true
+        lastRestoreAt = android.os.SystemClock.elapsedRealtime()
+        VibeServerRestore.breadcrumb(applicationContext, "restore thread starting ($why)")
+        mode = "vibeserver"   // ★ a restore only ever rebuilds a VibeServer; the notification reads the right status
+        Thread { try {
                 if (boot) {
                     // ★ Say what it is waiting for, not "Sharing" — there is no server yet.
                     restoreFailure = "Starting when the network is up (power returned)…"
@@ -350,6 +421,7 @@ class RtlTcpServerService : Service() {
                     Thread.sleep(2000); tries++
                     err = VibeServerRestore.restore(applicationContext)
                 }
+                lastRestoreErr = err
                 if (err != null && boot) {
                     // ★★ CHECK, DON'T PRETEND (VibeBootStart). Android still withholds the radio, or there is none:
                     //    tell the owner where they will see it, and stop — the ongoing "Sharing" notification of a
@@ -386,16 +458,13 @@ class RtlTcpServerService : Service() {
                  *    with a stackless CRASH, after which Android restarted it into the same throw. Say it in the
                  *    notification instead, like every other reason the restore can fail. */
                 Log.e(TAG, "rebuilding VibeServer threw", t)
+                lastRestoreErr = "${t.javaClass.simpleName}: ${t.message}"
                 restoreFailure = "Could not restart the server (${t.javaClass.simpleName}) — open the app and press Start"
                 handler.post { try { updateNotification() } catch (_: Throwable) {} }
+            } finally {
+                restoreRunning = false
+                VibeServerRestore.breadcrumb(applicationContext, "restore thread ended: ${lastRestoreErr ?: "serving"}")
             } }.start()
-        }
-        acquireWakeLock()
-        wifiLock.acquire()
-        watchForDetach()
-        handler.removeCallbacks(ticker)
-        handler.post(ticker)
-        return START_STICKY
     }
 
     private fun startForegroundInternal() {
@@ -530,30 +599,8 @@ class RtlTcpServerService : Service() {
         } catch (t: Throwable) { Log.w(TAG, "could not post the start-when-power-returns notice: $t") }
     }
 
-    /** ★ Android would not let the server run (see onStartCommand). Dismissable, tappable, and worded for the
-     *  person who finds it later — the server is OFF, and how to put it back. The app's own name, because this
-     *  file is shared with Lite. Same id as the boot notice: both say "it did not start", and one is enough. */
-    private fun postStoppedNotification() {
-        try {
-            ensureChannel()
-            val app = try { applicationInfo.loadLabel(packageManager).toString() } catch (_: Throwable) { "the app" }
-            val text = "Android stopped it running in the background. Open $app and press Start to share the radio again."
-            val pi = PendingIntent.getActivity(
-                this, 2, appEntryIntent(this),
-                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                    or PendingIntent.FLAG_UPDATE_CURRENT)
-            val n = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("VibeServer stopped")
-                .setContentText(text)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setAutoCancel(true)
-                .setContentIntent(pi)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .build()
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(BOOT_NOTIF_ID, n)
-        } catch (t: Throwable) { Log.w(TAG, "could not post the server-stopped notice: $t") }
-    }
+    /** ★ Android would not let the server run (see onStartCommand). See postStoppedNotice. */
+    private fun postStoppedNotification() = postStoppedNotice(this)
 
     private fun updateNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -591,4 +638,33 @@ internal fun appEntryIntent(ctx: android.content.Context): android.content.Inten
     return i.setAction(android.content.Intent.ACTION_MAIN)
         .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
         .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+}
+
+/** ★ Android would not let the server run (onStartCommand, or the watchdog — VibeServerWatchdog). Dismissable, tappable,
+ *  and worded for the person who finds it later — the server is OFF, and how to put it back. The app's own name, because
+ *  this file is shared with Lite. Same id as the boot notice: both say "it did not start", and one is enough. */
+internal fun postStoppedNotice(ctx: Context) {
+    try {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm.getNotificationChannel("vibesdr_rtltcp_server") == null) {
+            nm.createNotificationChannel(NotificationChannel("vibesdr_rtltcp_server", "RTL-TCP server",
+                NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+        }
+        val app = try { ctx.applicationInfo.loadLabel(ctx.packageManager).toString() } catch (_: Throwable) { "the app" }
+        val text = "Android stopped it running in the background. Open $app and press Start to share the radio again."
+        val pi = PendingIntent.getActivity(
+            ctx, 2, appEntryIntent(ctx),
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(ctx, "vibesdr_rtltcp_server")
+            .setContentTitle("VibeServer stopped")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        nm.notify(4712, n)
+    } catch (t: Throwable) { Log.w("RtlTcpServerService", "could not post the server-stopped notice: $t") }
 }

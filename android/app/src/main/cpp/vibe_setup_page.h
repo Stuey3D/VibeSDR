@@ -33,6 +33,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   /* ★★ ROOM FOR THE SAVE BAR (Stuart, V12 beta27, 2026-10-28: "couldn't reach the save buttons"). The bar is fixed to
      the bottom and WRAPS to two rows on a narrow window (its message above, the buttons below), ~120 px — the old 80 px
      let it cover the end of the page there. Both clear the bottom safe area (an iPhone's home indicator in Safari). */
+  /* ★★ beta88: a control the phone's server does not have is never drawn (androidPrune) — !important so no later
+     show/hide of the page's own can bring it back as a dead control. */
+  .androidOff{display:none!important}
   .wrap{max-width:760px;margin:0 auto;padding:32px 20px calc(140px + env(safe-area-inset-bottom, 0px))}
   h1{font-size:26px;margin:0 0 4px;color:var(--amber);letter-spacing:.3px}
   .sub{color:var(--dim);margin:0 0 28px}
@@ -3800,6 +3803,63 @@ let DAB_DECODER = true;
 /** ★ Is this VibeServer Lite? Lite MEASURES ITSELF at first setup — it is the class of box that needs it —
  *  while the full versions only offer the button (Stuart, 2026-09-19). */
 let IS_LITE = false;
+
+/* ── ★★★ AN ANDROID PHONE'S SERVER (beta88, "Remote access to server settings") ───────────────────────────────────────
+ * The phone's VibeServer serves this page only when its owner has switched remote access on (VibeSDR → Share this radio),
+ * and only behind the admin password the owner typed on the phone — the same challenge and lockout as on Linux. Its
+ * /vibeserver/config answers with `android: {supported, device}` (vibe_android_setup.h):
+ *   • supported — the ids of the controls the phone's server HAS. Everything else on this page is hidden, card by card
+ *     and row by row: a control that does nothing on a phone must not be drawn (AGENTS.md).
+ *   • device — what only the phone can change (battery optimisation, start when power returns, the USB permission, keep
+ *     radio alive): shown READ-ONLY, with where to change it.
+ * A save goes to the phone's one settings store; the phone's own server screen redraws with it at once. */
+let ANDROID = false;
+function androidPrune() {
+  const keep = new Set((cfg.android && Array.isArray(cfg.android.supported)) ? cfg.android.supported : []);
+  const root = document.getElementById("setup");
+  if (!root || !root.querySelectorAll) return;
+  for (const card of root.querySelectorAll(".card")) {
+    if (card.id === "androidDevCard") continue;
+    const ctrls = [...card.querySelectorAll("input,select,textarea")].filter(e => e.type !== "hidden");
+    if (!ctrls.some(e => keep.has(e.id))) { card.classList.add("androidOff"); continue; }
+    for (const e of ctrls) {
+      if (keep.has(e.id)) continue;
+      const row = (e.closest && e.closest("label")) || e;
+      // ★ Never hide a row that also holds a supported control.
+      if (row !== e && [...row.querySelectorAll("input,select,textarea")].some(x => keep.has(x.id))) continue;
+      row.classList.add("androidOff");
+    }
+  }
+  for (const id of ["sdrChangesWrap", "batteryResumeAt"]) { const el = $(id); if (el) el.classList.add("androidOff"); }
+  const sub = document.querySelector("#setup .sub");
+  if (sub) sub.textContent = "This phone's VibeServer. Saving restarts it, so listeners will reconnect for a moment. "
+    + "The phone's own server screen shows every change made here.";
+  androidDeviceCard();
+}
+/** The phone-only facts, read-only. */
+function androidDeviceCard() {
+  const d = (cfg.android && cfg.android.device) || {};
+  let card = $("androidDevCard");
+  if (!card || !card.parentNode) {
+    const pane = $("serverPane");
+    if (!pane || !pane.insertBefore) return;
+    card = document.createElement("div");
+    card.className = "card"; card.id = "androidDevCard";
+    pane.insertBefore(card, pane.firstChild);
+  }
+  const row = (label, value, why) =>
+    `<div style="display:flex;justify-content:space-between;gap:12px;margin:8px 0"><span>${label}</span>`
+    + `<b style="text-align:right">${value}</b></div>` + (why ? `<div class="hint" style="margin:-4px 0 8px">${why}</div>` : "");
+  const yes = (b) => b ? "On" : "Off";
+  let h = "<h2>This phone</h2><p class=\"why\">Set on the phone only, in VibeSDR \u2192 Share this radio. Shown here so you can see them; "
+    + "Android lets only the phone change them.</p>";
+  h += row("Battery optimisation", d.batteryOptimisation === "off" ? "Off (good)" : "On",
+    d.batteryOptimisation === "off" ? "" : "Android may stop the server in the background. Turn it off for VibeSDR on the phone.");
+  h += row("Start when power returns", d.startOnPowerSupported ? yes(!!d.startOnPower) : "Not offered on this Android version", "");
+  h += row("USB permission for the radio", !d.radioPresent ? "No radio plugged in" : (d.usbPermission ? "Granted" : "Not yet \u2014 allow it on the phone"), "");
+  h += row("Keep radio alive", yes(!!d.keepRadioAlive), "");
+  card.innerHTML = h;
+}
 /** ★ V12: the modes this server's Band spots runs (vibeserver.json spotModes) — the per-mode Auto / Always / Off list. */
 let SPOT_MODES = [];
 async function readDabDecoder() {
@@ -6420,7 +6480,8 @@ function paintRadioPinCard() {
   if (!card) return;
   const many = radioList().length > 1;
   const set  = !!((radio().pin || "").length);
-  card.style.display = (many || set) ? "" : "none";
+  // ★★ beta88: on a phone the radio's PIN IS the server's PIN (there is no master PIN there) — always offered.
+  card.style.display = (many || set || ANDROID) ? "" : "none";
 }
 
 /** Copy what is on screen into the radio this tab belongs to, without saving to the server. */
@@ -8408,7 +8469,8 @@ async function signIn(fromTicket) {
     if (r.status === 401) { $("signinErr").textContent = "That password was not accepted."; return; }
     if (!r.ok) { $("signinErr").textContent = "Server error (" + r.status + ")."; return; }
     cfg = await r.json();
-    pollDirStatus();
+    ANDROID = !!(cfg && cfg.android);
+    if (!ANDROID) pollDirStatus();
     // ★ Same page, two jobs. Say which one you are doing — "Save and start" on a receiver that
     //   is already running would read as if it were about to do something drastic.
     if (cfg.configured) {
@@ -8437,6 +8499,8 @@ async function signIn(fromTicket) {
     //   meant two readers of one rule, and this one disagreed with the other on a single radio.
     renderTabs();
     fill();
+    // ★★ beta88: a phone's server — only its own controls, and none of the Linux machine's furniture below.
+    if (ANDROID) { androidPrune(); return; }
     // ★ Missing and newly attached radios — asked once now, and again only on "Check again".
     sdrChangesLoad();
     // ★ The pocket box's Wi-Fi card (only on the pocket image — see POCKET).
@@ -10029,7 +10093,7 @@ $("saveBtn").onclick = async () => {
           if (isNew && j.configured) {
             // ★ Verify rather than celebrate: a reboot that happened is not the same as a serial
             //   that changed, and the owner should be told which of those they got.
-            await serialStatus();
+            if (!ANDROID) await serialStatus();
             backUp();
             return;
           }

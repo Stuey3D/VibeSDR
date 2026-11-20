@@ -178,6 +178,9 @@ import { serverPalette } from '../constants/serverPalette';
 import { meaningText } from '../constants/decoderTokens';
 import type { PopupTokens } from '../constants/popupTokens';
 import { saveServerName, PUBLIC_NAME_KEY, NAME_KEY } from '../services/rtlTcpServer';
+// ★★★ beta88 "Remote access to server settings" — the server's one settings store, mirrored here (serverSettingsMirror.ts)
+import { getServerSettings, onServerSettings, putServerSettings, remoteSettingsSupported,
+         setRemoteAccess as setRemoteAccessNative, storageFromSettings } from '../services/serverSettingsMirror';
 import { readPrefs } from '../services/serverPrefs';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
@@ -188,6 +191,7 @@ import {
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation, homeFromDevice,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
+  nativeServerConfig,   // ★ beta88: the mirror sends the server the config Start would send
   getBackgroundCaps, validateBackgroundDecoding, galleryDisk,
   getRadioCapsFor, capsAllowMode, capsAllowSetting, type RadioCaps,
   dabBandScanStart, dabBandScanState, dabBandScanCancel, dabBandScanSupported, type DabBandScan,
@@ -931,6 +935,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [agcLock, setAgcLock]         = useState(false);
   const [proxies, setProxies]         = useState('');
   const [showAdminPw, setShowAdminPw] = useState(false);
+  /** ★★★ beta88 "Remote access to server settings" — the owner's switch (the server keeps it), and its last refusal. */
+  const [remoteAccess, setRemoteAccess] = useState(false);
+  const [remoteMsg, setRemoteMsg] = useState<string | null>(null);
   // 0 = off, 1 = listener's choice, 2 = compatibility only.
   const [uncomp, setUncomp]       = useState<0 | 1 | 2>(0);
   // ★ Per-listener time limit, minutes. 0 = unlimited — right for a private receiver.
@@ -1503,6 +1510,24 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
          *  ★ Not storage, so not part of this read and never waited on: the band list and the DAB
          *    block table (engine), the radio and the benchmark (other effects). */
         const t0 = Date.now();
+        /* ★★★ beta88: THE SERVER'S SETTINGS FIRST. The page (/setup, "Remote access to server settings") may have changed
+         *  some while nobody had this screen open; the server keeps the truth (VibeRemoteSetup.kt). Its values for the
+         *  settings the page can change are written into this screen's own storage BEFORE the read below, so the screen
+         *  shows them. Never allowed to stop the screen loading: a server that does not answer in 3 s is skipped. */
+        if (remoteSettingsSupported()) {
+          try {
+            const srv = await Promise.race([getServerSettings(),
+              new Promise<null>((res) => setTimeout(() => res(null), 3000))]);
+            if (srv && !cancelled) {
+              setRemoteAccess(srv.remote);
+              if (srv.hasStore) {
+                const cur = await AsyncStorage.multiGet([K.pin, K.pinMode]);
+                const pairs = storageFromSettings(srv.settings, cur[0]?.[1] ?? null, cur[1]?.[1] ?? null);
+                if (pairs.length) await AsyncStorage.multiSet(pairs);
+              }
+            }
+          } catch { /* the screen's own copy stands */ }
+        }
         const v = await patient(readPrefs(AsyncStorage, [NAME_KEY, LOC_KEY, LOCMODE_KEY, LOC_MOVING_KEY, ...Object.values(K)]));
         if (cancelled) return;
         const g = (k: string) => v[k] ?? null;     // null = never set
@@ -1516,7 +1541,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const a = g(K.advertise); if (a != null) setAdvertise(a !== '0'); }
           { const ws = g(K.webServer); if (ws != null) setWebServer(ws !== '0'); }
           { const apw = g(K.adminPw); if (apw != null) setAdminPw(apw); }
-          { const unc = g(K.uncomp); if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2); }
+          // ★ beta88: '0' sets 0 too — a re-read after the remote page turned it off must not keep the old value.
+          { const unc = g(K.uncomp); if (unc != null) setUncomp(unc === '1' ? 1 : unc === '2' ? 2 : 0); }
           // ★ Absent = AGC OFF. An existing server must not come back with the AGC quietly enabled
           //   by an upgrade — it may raise the gain above what the owner set.
           { const ragc = g(K.rtlAgc); if (ragc != null) setRtlAgc(ragc === '1'); }
@@ -2349,6 +2375,29 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const serverConfigRef = useRef(serverConfig);
   serverConfigRef.current = serverConfig;
 
+  /* ★★★ beta88: THE MIRROR, BOTH WAYS ("Remote access to server settings").
+   *  → The server keeps what this screen would start with, so the /setup page always shows the phone's settings: sent
+   *    a moment after the owner stops changing things (never before the settings have been read — a default must never
+   *    be sent over the owner's real values).
+   *  ← The page saved: the server tells us, the values go into this screen's storage, and the screen reads them again. */
+  const remoteSnapshot = remoteSettingsSupported() && prefsRead
+    ? JSON.stringify(nativeServerConfig(serverConfig(name.trim() || 'VibeSDR'))) : '';
+  useEffect(() => {
+    if (!remoteSnapshot) return;
+    const t = setTimeout(() => { void putServerSettings(JSON.parse(remoteSnapshot), landingHz <= 0); }, 800);
+    return () => clearTimeout(t);
+  }, [remoteSnapshot, landingHz]);
+  useEffect(() => onServerSettings((settings) => {
+    void (async () => {
+      try {
+        const cur = await AsyncStorage.multiGet([K.pin, K.pinMode]);
+        const pairs = storageFromSettings(settings, cur[0]?.[1] ?? null, cur[1]?.[1] ?? null);
+        if (pairs.length) await AsyncStorage.multiSet(pairs);
+      } catch { /* the next open reads them from the server */ }
+      setPrefsTry((t) => t + 1);
+    })();
+  }), []);
+
   const start = useCallback(async () => {
     /* ★★ V12 the owner's DAB band scan holds the radio in a private engine — Start waits for it (or Cancel). */
     if (bandScanRef.current) {
@@ -2456,7 +2505,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       void getConnectedRadio().then(setRadio);
       // ★★★ BIAS-T THE MOMENT THE RADIO IS UP — now carried IN the config (serverConfig) and applied by
       //     VibeServerBoot once the radio is open, on every start path, not only this one.
-      if (advertise) advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
+      // ★★ beta88: on Android the SERVER registers itself (VibeServerOps.advertise, in its own process), so the listing
+      //    outlives this screen — and a second registration here would only rename one of them "(2)".
+      if (advertise && Platform.OS !== 'android') advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
     } catch (e: any) {
       setStarting(false);
       void getConnectedRadio().then(setRadio);   // ★ e.g. "that USB serial device is not an Icom" — say what IS there
@@ -3144,6 +3195,38 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               Required. Protects the SETTINGS — bias-T, direct sampling, calibration, the admin
               page. A club owner keeps this; members get the PIN below.
             </Text>
+
+            {/* ★★★ beta88 REMOTE ACCESS TO SERVER SETTINGS (Stuart: "expose the android server settings via the /setup page
+                like we do on linux servers"). Off by default; needs the admin password above (the page asks for it, with
+                the same lock-out as Linux). What the page changes shows here too. */}
+            {remoteSettingsSupported() && (
+              <>
+                <View style={[styles.rowBetween, { marginTop: 14 }]}>
+                  <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                    Remote access to server settings
+                  </Text>
+                  <Switch value={remoteAccess}
+                    onValueChange={(v) => {
+                      setRemoteMsg(null);
+                      if (v && !adminPw) { setRemoteMsg('Set an admin password first — the settings page asks for it.'); return; }
+                      setRemoteAccess(v);
+                      void (async () => {
+                        // ★ The server needs the password the owner just typed before it can open the door with it.
+                        await putServerSettings(nativeServerConfig(serverConfigRef.current(name.trim() || 'VibeSDR')), landingHz <= 0);
+                        const r = await setRemoteAccessNative(v);
+                        if (!r.ok) { setRemoteAccess(!v); setRemoteMsg(r.message ?? 'The server would not change it.'); }
+                      })();
+                    }}
+                    trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+                </View>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
+                  {remoteAccess
+                    ? 'On: while the server runs, open its address with /setup on the end (http://<this phone\u2019s address>:<port>/setup) and sign in with the admin password. Changes made there show here too, and saving there restarts the server. Battery, start-up and the radio\u2019s USB permission stay on this phone.'
+                    : 'Off: the server’s settings can only be changed on this phone. On: from a browser at the server’s address /setup, with the admin password.'}
+                </Text>
+                {remoteMsg ? <Text style={[styles.hint, { ...meaningText(C.m, C.warn), fontFamily: F, marginTop: 4 }]}>{remoteMsg}</Text> : null}
+              </>
+            )}
 
             {/* PIN */}
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PIN — WHO MAY CONNECT</Text>

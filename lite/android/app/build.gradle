@@ -235,7 +235,11 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               //    LiteDiagModule for Diagnostics. Without these Lite reported "none recorded" for every native
               //    crash — on the build that exists to host the C++ engine. React-free bar Arguments/WritableMap.
               // ★ 2026-10-15: plus the Java crash note VibeExitInfo now reads for a CRASH exit (VibeJavaCrash).
-              'VibeExitInfo.kt', 'TombstoneReader.kt', 'VibeJavaCrash.kt']
+              'VibeExitInfo.kt', 'TombstoneReader.kt', 'VibeJavaCrash.kt',
+              // ★★★ beta88: the server in its own process — the door (VibeServerHost/Link), the work it does
+              //     (VibeServerOps), which process is which, the watchdog, remote access to the settings, the radio ids.
+              'VibeProcess.kt', 'VibeServerHost.kt', 'VibeServerOps.kt', 'VibeServerWatchdog.kt',
+              'VibeRemoteSetup.kt', 'VibeRadioIds.kt']
 tasks.register('syncShared', Sync) {
     from("${MAIN}/java/com/vibesdr/app") { include SHARED }
     into "${buildDir}/shared-src/com/vibesdr/app"

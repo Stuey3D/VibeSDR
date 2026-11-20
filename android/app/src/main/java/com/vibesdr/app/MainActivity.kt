@@ -146,7 +146,7 @@ open class MainActivity : ReactActivity() {
     @Suppress("DEPRECATION")
     val dev = intent.getParcelableExtra<android.hardware.usb.UsbDevice>(UsbManager.EXTRA_DEVICE)
     try {
-      VibeServerRestore.onRadioAttached(this, dev, "the app was opened for ${dev?.deviceName ?: "a radio"}")
+      VibeServerLink.radioAttached(this, dev, "the app was opened for ${dev?.deviceName ?: "a radio"}")   // ★ beta88: the server's process decides
     } catch (t: Throwable) {
       android.util.Log.w("MainActivity", "could not resume the server on attach: $t")
     }

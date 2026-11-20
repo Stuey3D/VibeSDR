@@ -42,8 +42,21 @@ object VibeBootStart {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun isEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(K_ON, false)
-    fun setEnabled(ctx: Context, on: Boolean) { prefs(ctx).edit().putBoolean(K_ON, on).apply() }
+    /* ★★ A FILE, NOT SharedPreferences (beta88). The switch is set by the UI and read by the boot receiver, which now runs
+     *  in the SERVER's process — and SharedPreferences caches per process, so a change made in one is not seen by the
+     *  other until it restarts (MODE_MULTI_PROCESS is deprecated and never worked reliably). A one-byte file is read
+     *  fresh every time, from either process. The old preference is carried over once. */
+    private fun flagFile(ctx: Context) = java.io.File(ctx.filesDir, "vibe_start_on_power")
+    fun isEnabled(ctx: Context): Boolean {
+        val f = flagFile(ctx)
+        if (f.exists()) return try { f.readText().trim() == "1" } catch (_: Throwable) { false }
+        val old = try { prefs(ctx).getBoolean(K_ON, false) } catch (_: Throwable) { false }
+        try { f.writeText(if (old) "1" else "0") } catch (_: Throwable) {}
+        return old
+    }
+    fun setEnabled(ctx: Context, on: Boolean) {
+        try { flagFile(ctx).writeText(if (on) "1" else "0") } catch (t: Throwable) { Log.w(TAG, "could not save the switch: $t") }
+    }
 
     /** Start at boot? The owner's switch, a version that may allow it, and a server that was running. */
     fun wanted(ctx: Context): Boolean = supported() && isEnabled(ctx) && VibeServerRestore.isArmed(ctx)

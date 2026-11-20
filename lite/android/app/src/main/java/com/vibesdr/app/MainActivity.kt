@@ -34,7 +34,7 @@ class MainActivity : ReactActivity() {
         try {
             @Suppress("DEPRECATION")
             val dev = i.getParcelableExtra<android.hardware.usb.UsbDevice>(android.hardware.usb.UsbManager.EXTRA_DEVICE)
-            VibeServerRestore.onRadioAttached(this, dev, "the app was opened for ${dev?.deviceName ?: "a radio"}")
+            VibeServerLink.radioAttached(this, dev, "the app was opened for ${dev?.deviceName ?: "a radio"}")   // ★ beta88: the server's process decides
         } catch (t: Throwable) { android.util.Log.w("MainActivity", "attach: $t") }
     }
     // ★★ The remote drives rows + a highlight (TvNav.kt) on EVERY device the moment a remote, keyboard or controller is
