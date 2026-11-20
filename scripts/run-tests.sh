@@ -399,7 +399,6 @@ deps_for() {
     test-dab-ddc) echo "-O2" ;;
     # ★★ V12 §11.1 the wide-capture filter bank against the DDC (vibe_dab_bank.h) — optimised (its cost lines), and threaded.
     test-dab-bank) echo "-O2 -pthread" ;;
-    test-varatag) echo "-O2" ;;   # ★ V12 the VARA HF tag: ~40 simulated captures of 150 s at 192 kS/s
     # ★★★ A SLOW SAMPLE CLOCK (2026-11-12, a B210 4 ppm out on MTVNL 7D): the null walks to the window's front and the tracker
     #     pinned there — the lock broke up hours into a listen. The window re-centres (advanceAfterPush); the old loop must
     #     still show the fault. ~2,000 synthetic frames through the real receiver, so optimised.
@@ -460,7 +459,7 @@ deps_for() {
     test-textmodes)     echo "android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp" ;;   # ★ V12 MFSK / OLIVIA / THOR (pffft: cobj-ndb)
     # ★★ V12 the VARA HF tag (vibe_varatag.h — IDENTIFY ONLY, docs/v12/VARA-TAG.md): VARA-shaped generic OFDM tagged, every
     #    look-alike (PACTOR, single carriers, FreeDV/RADE, DRM, Olivia, MT63, real RADE + speech) 0 labels (pffft: cobj-ndb)
-    test-varatag)       echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp" ;;
+    test-varatag)       echo "-O2 $VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp" ;;   # ★ -O2: ~40 simulated captures of 150 s at 192 kS/s (one case only — a second one above this shadowed the sources)
     test-feld-hell)     echo "android/app/src/main/cpp/decoders/feld_hell.cpp" ;;   # ★ V12 FELD HELL, drawn (pffft: cobj-ndb)
     test-msk144)        echo "android/app/src/main/cpp/decoders/digimodes/msk144_code.cpp android/app/src/main/cpp/decoders/digimodes/msk144_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-q65)           echo "android/app/src/main/cpp/decoders/digimodes/q65_code.cpp android/app/src/main/cpp/decoders/digimodes/q65_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
