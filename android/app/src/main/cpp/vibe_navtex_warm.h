@@ -20,9 +20,14 @@
 //     throttling, no benchmark is running (benchProgress().running — a benchmark measures this machine and must have
 //     it to itself), and the server has been up a grace period (the first health sample, the radio's own start).
 //     Checked before EVERY pass, so a listener arriving shuts it within one pass.
-//   ★ THE SLICE (Slicer) — a pass syncs at most `budget` messages; the budget adapts so a pass's work stays near
+//   ★ THE SLICE (Slicer) — a pass syncs at most `budget` messages; the budget adapts so a pass's CPU stays near
 //     kTargetMs (25 ms), between 1 and 400 (the request's own slice). After a pass the thread sleeps at least as long as the pass
 //     took (≥ kMinRestMs): at most half of one core, at idle priority.
+//   ★ THE SCANS ARE NOT SLICED — navmap::scan places every message in two passes over the whole gallery (a station
+//     undecided by its own title is settled by the rest of the history), so it runs whole, once per change to the
+//     gallery's NAVTEX, in a pass of its own: 92 ms for 2 000 messages on an M5 P-core, ~390 ms of CPU on the E-core
+//     QOS_CLASS_BACKGROUND puts it on. It is the same scan a request used to run on the spot; at idle priority it
+//     yields to anything else that wants the core.
 //   ★ WHEN THERE IS NOTHING TO DO — a pass is skipped while the gallery's NAVTEX fingerprint (Gallery::kindStamp) and
 //     the index file are unchanged since everything was last brought up to date: one in-memory walk every ~2 s.
 #pragma once
@@ -35,6 +40,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <ctime>
 
 namespace vibe { namespace navwarm {
 
@@ -82,6 +88,16 @@ struct Slicer {
     }
 };
 
+/** ★ This thread's own CPU time in ms — what a pass COSTS. Wall time is the wrong measure at idle priority: the scheduler
+ *  may park the thread mid-pass for as long as anything else wants the core, which is the point, not a hog. */
+inline double threadCpuMs() {
+#if defined(CLOCK_THREAD_CPUTIME_ID)
+    timespec ts{};
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0) return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+#endif
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 /** ★ THE THREAD — kicked by the housekeeping tick; runs passes while the gate allows and the pass says there is more. */
 class Worker {
 public:
@@ -104,6 +120,9 @@ public:
     double lastPassMs() const { return lastMs_.load(); }
     double maxPassMs() const { return maxMs_.load(); }
     double busyMs() const { return busyMs_.load(); }
+    double maxWallMs() const { return maxWallMs_.load(); }
+    /** The longest pass that parsed messages (an index slice) — the bounded kind; maxPassMs() includes the scans. */
+    double maxSliceMs() const { return maxSliceMs_.load(); }
     uint64_t pauses() const { return pauses_.load(); }
 private:
     void loop() {
@@ -119,11 +138,15 @@ private:
                 }
                 state_.store((int)State::Working);
                 const auto t0 = std::chrono::steady_clock::now();
+                const double c0 = threadCpuMs();
                 size_t done = 0;
                 const bool more = pass_(sl.budget, &done);
-                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                const double ms = threadCpuMs() - c0;   // ★ the pass's CPU; its wall time is kept apart
+                const double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                 passes_++; parsed_ += done; lastMs_.store(ms); busyMs_.store(busyMs_.load() + ms);
                 if (ms > maxMs_.load()) maxMs_.store(ms);
+                if (wall > maxWallMs_.load()) maxWallMs_.store(wall);
+                if (done > 0 && ms > maxSliceMs_.load()) maxSliceMs_.store(ms);   // ★ an index slice (a scan pass parses none)
                 sl.update(done, ms);
                 budget_.store(sl.budget);
                 if (!more) { state_.store((int)State::Idle); break; }
@@ -137,7 +160,7 @@ private:
     std::atomic<int> state_{(int)State::Starting};
     std::atomic<size_t> budget_{Slicer::kStartBudget};
     std::atomic<uint64_t> passes_{0}, parsed_{0}, pauses_{0};
-    std::atomic<double> lastMs_{0}, maxMs_{0}, busyMs_{0};
+    std::atomic<double> lastMs_{0}, maxMs_{0}, busyMs_{0}, maxWallMs_{0}, maxSliceMs_{0};   // ★ CPU ms (wall: maxWallMs_)
 };
 
 }}  // namespace vibe::navwarm

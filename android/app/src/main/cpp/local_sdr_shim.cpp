@@ -7322,10 +7322,11 @@ static void vsNavWarmTick() {
 /** ★ /vibeserver/gallery/navtex-warm.json — what the warm-up is doing (tests, the curious owner). */
 static std::string vsNavWarmJson() {
     auto& w = navWarmWorker();
-    char b[384];
-    std::snprintf(b, sizeof b, "{\"state\":\"%s\",\"passes\":%llu,\"parsed\":%llu,\"budget\":%zu,\"lastMs\":%.2f,\"maxMs\":%.2f,\"busyMs\":%.1f,\"pauses\":%llu}",
+    char b[448];
+    // ★ lastMs / maxMs / busyMs: the thread's CPU (maxSliceMs: the longest index slice, maxMs includes the scans); maxWallMs: the longest pass by the clock (an idle thread waits its turn)
+    std::snprintf(b, sizeof b, "{\"state\":\"%s\",\"passes\":%llu,\"parsed\":%llu,\"budget\":%zu,\"lastMs\":%.2f,\"maxMs\":%.2f,\"maxSliceMs\":%.2f,\"maxWallMs\":%.1f,\"busyMs\":%.1f,\"pauses\":%llu}",
                   vibe::navwarm::stateName(w.state()), (unsigned long long)w.passes(), (unsigned long long)w.parsed(), w.budget(),
-                  w.lastPassMs(), w.maxPassMs(), w.busyMs(), (unsigned long long)w.pauses());
+                  w.lastPassMs(), w.maxPassMs(), w.maxSliceMs(), w.maxWallMs(), w.busyMs(), (unsigned long long)w.pauses());
     return b;
 }
 

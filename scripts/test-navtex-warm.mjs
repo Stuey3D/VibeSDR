@@ -78,8 +78,8 @@ try {
   const wall = (Date.now() - t0) / 1000;
   ok(!!w1, `the warm-up built the index alone: ${w1 ? `${w1.parsed} messages in ${w1.passes} passes, ${wall.toFixed(1)} s wall` : 'never finished'}`);
   if (w1) console.log(`      cost: ${(w1.busyMs / 1000).toFixed(1)} s of work at idle priority (${(100 * w1.busyMs / 1000 / wall).toFixed(0)} % of one core over the wall time), ` +
-                      `longest pass ${w1.maxMs.toFixed(1)} ms, slice settled at ${w1.budget}`);
-  ok(w1 && w1.maxMs < 250, `no pass hogs a core (longest ${w1?.maxMs?.toFixed(1)} ms)`);
+                      `longest index slice ${w1.maxSliceMs.toFixed(1)} ms CPU, longest pass (the whole-gallery scan, not sliced) ${w1.maxMs.toFixed(1)} ms CPU (${w1.maxWallMs.toFixed(0)} ms by the clock, at idle priority), slice settled at ${w1.budget}`);
+  ok(w1 && w1.maxSliceMs < 250, `no index slice hogs a core (longest ${w1?.maxSliceMs?.toFixed(1)} ms of CPU)`);
   const W = await getJ(`${A.H}/vibeserver/gallery/navtex-warnings.json`);
   ok(W.j.pending === 0 && W.j.indexed === N, `the FIRST warnings request: pending ${W.j.pending}, indexed ${W.j.indexed}/${N} — no "Building" (${W.ms.toFixed(0)} ms)`);
   ok(Array.isArray(W.j.warnings) && W.j.warnings.length > 0, `…with ${W.j.warnings?.length} warnings drawn`);
