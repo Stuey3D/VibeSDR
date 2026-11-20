@@ -282,6 +282,7 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **ncurses** — Thomas E. Dickey & the Free Software Foundation | X11 (MIT-style) | VibeServer on Linux: the settings wizard, linked into the binary |
 | **[opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders)** — Ethan Halsall | MIT | libopus in WebAssembly — how VibeServer's web client decodes Opus on a plain `http://` LAN address |
 | **FAAD2** — Nero AG, M. Bakker & contributors | GPL-2.0-or-later | DRM's AAC on every VibeServer build that has it, and DAB+ (the Linux default); never in the iPhone/iPad app |
+| **[Codec 2](https://github.com/drowe67/codec2)** — David Rowe & contributors | LGPL-2.1 | FreeDV 700D / 700E / 1600 and M17 voice. Linux / Mac VibeServer: the system's libcodec2, loaded at run time. Android app and Lite: 1.2.0, built unmodified as a separate `libcodec2.so` ([sdr-kit/build-codec2.sh](android/app/src/main/cpp/sdr-kit/build-codec2.sh)), dlopened, never linked — replaceable; licence beside it (`COPYING.codec2`) |
 | **libxaac** — Ittiam Systems / The Android Open Source Project | Apache-2.0 | xHE-AAC (DRM) on VibeServer for Linux and the Mac, in process, unmodified 0.1.14 ([docs/v12/LIBXAAC.md](docs/v12/LIBXAAC.md)); never in the iPhone/iPad app |
 | **cloudflared** — Cloudflare | Apache-2.0 | The tunnel that lets a VibeServer be reached without port forwarding |
 | **MapLibre GL JS** — MapLibre contributors | BSD-3-Clause | The GPU map engine (app, web client, directory) |

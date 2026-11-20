@@ -579,13 +579,25 @@ Why dynamic, and why not a hard dependency:
 | `scripts/test_freedv_app.ts` | the app: passband side with an override, the row under the sub-modes, gated and lit by the report | 23/23 |
 | `handheld-ui/test/run_vts_golden.sh` | the R36S VTS lines and sideband rule (override, 60 m), generated from `freedv.ts` | 2427 checks, 0 failed |
 
-## Android, Lite and iOS: not this round (codec2 — for RADE see "RADE V1" above)
+## Android and Lite: codec2 BUNDLED (2026-11-20) · iOS: not this round (for RADE see "RADE V1" above)
 
-- **Android (app with local hardware, and VibeServer Lite):** there is no system libcodec2. It would need codec2 built
-  with the NDK for the four ABIs and shipped as a separate `.so` in the APK, loaded with `dlopen` by name. Shipping it as
-  a separate shared object keeps the LGPL relinking route open. The same `vibe_freedv.h` would then load it unchanged
-  once the `__ANDROID__` guard is lifted. Cost: about 1 MB of APK per ABI. Check memory on 1 GB phones: AUTO opens three
-  modems.
+- **Android (app with local hardware, and VibeServer Lite):** there is no system libcodec2, so the APKs carry their own.
+  `android/app/src/main/cpp/sdr-kit/build-codec2.sh` builds Codec 2 **1.2.0** (github.com/drowe67/codec2, tag 1.2.0,
+  tarball sha256 `cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449`, LGPL-2.1) as a shared
+  `libcodec2.so` — library target only, no LPCNet, stripped, 16 KB pages — into `sdr-kit/{arm64-v8a,armeabi-v7a}/lib`
+  (android-24, the app) and `lite/native/kit/armeabi-v7a/lib` (android-21, Lite). Its gate checks the artefact: SONAME
+  `libcodec2.so`, NEEDED only libc/libm/libdl, every LOAD segment aligned to 16 KB, every symbol the loaders dlsym
+  exported, and (API 21) no `stderr` or C99 complex-maths import — Android 5's libm has none, so the Lite build supplies
+  the seven codec2 uses (crealf, cimagf, conjf, conj, cabsf, cargf, cexp) as static inlines forced into each file.
+  - Packaged by `copySdrKitLibs` (android/app/build.gradle) and `syncJniLibs` (lite/android/app/build.gradle), both of
+    which refuse to build without it. Never linked: `vibe_freedv.h` dlopens `"libcodec2.so"` (Android 7+ finds it in the
+    app's namespace), then the same name beside our own library (dladdr — Android 5–6, which search only system dirs for
+    a bare name). Separate and replaceable, so LGPL-2.1's relinking route stays open; `COPYING.codec2` and
+    `CODEC2-BUILT-FROM` sit beside it; About → credits and the README name it.
+  - The app's server screen now has the FreeDV and M17 switches (the setup page's list). RADE is still not built for
+    Android — FreeDV on a phone is 700D / 700E / 1600 only, and the "rade" switch stays off the app's screen.
+  - **Unverified until a phone runs it:** the dlopen itself (macOS cannot load an Android ELF), a decode, CPU on a 32-bit
+    1 GB phone with AUTO's three modems open, and Lite's API-21 build on Android 5.1.
 - **iOS:** the App Store does not allow `dlopen` of a library outside the bundle. It would need codec2 built as an
   embedded dynamic framework, signed with the app. That is allowed, and keeps LGPL relinking possible through the
   framework. Static linking would make the LGPL obligations harder for an App Store binary, so it is not recommended.

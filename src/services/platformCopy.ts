@@ -22,6 +22,9 @@ export const IOS_REWRITES: ReadonlyArray<readonly [string, string]> = [
   ['Built from source for Android, VibeServer Lite and the Mac; Cloudflare’s own release on Linux.', 'Built from source for the Mac; Cloudflare’s own release on Linux.'],
   ['; on an Android phone, the phone’s decoder, with FAAD2 for DRM’s own AAC.', '.'],
   [' (Linux, the Mac and the Android app’s on-device server)', ' (Linux and the Mac)'],
+  // ★ V12 Codec 2: the iPhone app carries no codec2, and the phone's own server is Android's
+  [', or the copy the Android app and VibeServer Lite carry.', '.'],
+  [' The Android app and VibeServer Lite carry their own copy, built unmodified from the 1.2.0 release (github.com/drowe67/codec2) as a separate library, libcodec2.so, loaded at run time and never linked into VibeSDR \u2014 so it can be replaced with another build of Codec 2. Its licence (LGPL-2.1) is shipped beside it.', ''],
   // V4: on an iPhone the radio is a networked rtl_tcp server, never a USB dongle in the phone.
   ['Local SDR hardware \u2014 VibeSDR now runs a radio on-device. Plug an RTL-SDR into an Android phone over USB (\u201cLocal Hardware\u201d), or connect to a networked rtl_tcp server from either platform, and the app',
    'rtl_tcp \u2014 connect to a networked rtl_tcp server and the app'],
