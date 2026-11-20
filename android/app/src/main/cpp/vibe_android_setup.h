@@ -479,7 +479,8 @@ inline std::string pageConfig(const std::string& raw) {
         const J* li = dev ? dev->get("listing") : nullptr;
         out.set("dirList", J::boolean(li ? boolOr(li->get("wanted"), false) : false));
         out.set("dirName", J::str(strOr(S("publicName"), "")));
-        out.set("dirShareSec", J::num(numOr(S("publicShareSec"), 0)));
+        // ★ The page's own choices (Until I turn it off, 1 h, 6 h, 1 day, 1 week, 30 days) — the nearest, so the box is never blank.
+        out.set("dirShareSec", J::num(snapTo({ 0, 3600, 21600, 86400, 604800, 2592000 }, numOr(S("publicShareSec"), 0))));
         out.set("dirStatus", li && li->t == J::Obj ? *li : J::obj());
     }
 
