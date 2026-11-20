@@ -229,6 +229,7 @@ import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/Audi
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
 import { connectionRefreshPlan, canRefreshConnection, restartAudioOnRegister } from '../services/connectionRefresh';
 import LocalHardwarePanel from '../components/LocalHardwarePanel';
+import { localBenchAvailable } from '../services/localBenchRun';   // ★★ V12 the device benchmark in Local Hardware
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
 import AudioSheet      from '../components/AudioSheet';
@@ -5779,6 +5780,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     new Set(['dab', ...(adsbCap ? ['adsb'] : []), ...(ismCap ? ['ism'] : []), ...(ndbCap ? ['ndb'] : []), ...(aisCap ? ['ais'] : []),
              ...(avCap ? ['avdata'] : []), ...(sdCap ? ['sondes'] : [])]));
   onlyModeRef.current = onlyModeHere;
+  /* ★★ V12 WHAT THIS PHONE CAN RUN (LocalBenchmarkCard, in the hardware sheet) — Android, a radio plugged into THIS phone
+   *  only (pagingHere is exactly that gate). `reach` is the same per-radio answers the decoder keys are drawn from, so the
+   *  verdicts list only what this radio can do here (no dead rows). Pause / resume: the run releases the radio, so this
+   *  app's waterfall is paused first (as backgrounding does — the stale-frame watchdog stops with it) and resumed after;
+   *  the audio socket stays and is revived (LocalAudioPlayer waits 2 s for a frame, reopens only if none came). */
+  const localBench = useMemo(() => (pagingHere && localBenchAvailable() ? {
+    reach: {
+      sampleRate: hwSampleRate, tunable: radioTunable, dab: dabCapable, freedv: freedvCap, m17: m17Cap,
+      adsb: !!adsbCap?.ok, ais: !!aisCap?.ok, ismHz: ismCap?.ok ? ismCap.bands.map((b) => b.hz) : [], ndb: !!ndbCap?.ok,
+      avdata: !!avCap?.ok, sondes: !!sdCap?.ok, hfdl: hfdlCapable, cwSkim: cwCapable && skimCapable && !decWhy.cw,
+      rttySkim: rttySkimCapable, spotsBand: !!spotsBandCap?.ok,
+    },
+    onPause: () => { client.current?.pauseSpectrum?.(); },
+    onResume: () => { client.current?.resumeSpectrum?.(); reviveLocalAudio(); },
+  } : undefined), [pagingHere, hwSampleRate, radioTunable, dabCapable, freedvCap, m17Cap, adsbCap, aisCap, ismCap, ndbCap, avCap,
+                   sdCap, hfdlCapable, cwCapable, skimCapable, decWhy, rttySkimCapable, spotsBandCap]);
   /* ★★★ "THE RADIO IS DEAF AND THAT IS WHY YOU SEE NOTHING." Stuart: "dont want people connecting
    *   to a server seeing a flat spectrum thinking this is fucked and then leaving."
    *   A receiver sitting at minimum gain looks EXACTLY like a broken one — flat waterfall, no
@@ -16592,6 +16609,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Hardware" onClose={() => setHwOpen(false)} resetKey={hwOpen}>
         <LocalHardwarePanel
           isSpy={isSpy}
+          bench={localBench}
           // ★ The ONE gate for the whole feature — see canConvert. A VibeServer reaches this
           //   panel too (it is `isLocal`), and there the owner's own setup page owns the
           //   converter, so it must get none.

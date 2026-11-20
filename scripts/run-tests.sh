@@ -935,6 +935,9 @@ if node scripts/test-spots-band-default.mjs; then pass=$((pass+1)); else fail=$(
 # ★★ …and EVERY decoder's default (2026-10-31): the server's defaultOff list applied by both readers, every switch it can
 #    name on both setup screens (vibe_benchmark_more.h ruleFor).
 if node scripts/test-bench-defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 (2026-11-20): the same benchmark in LOCAL HARDWARE (Android) — a plain verdict per thing this radio can do here,
+#    no dead rows, pause + resume around the run, the engine's own-radio exception (src/services/localBench.ts).
+if node scripts/test-local-bench.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 THE MODES LIST AS A TREE (2026-10-31): a decoder's options under its switch, greyed with the reason when it is
 #    off, "LoRa: listen on every channel" (lora+all) and its benchmark rule — the real page in headless MUTED Edge.
 if [ -n "${VIBESERVER_BIN:-}" ]; then
