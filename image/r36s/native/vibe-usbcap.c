@@ -412,8 +412,9 @@ int main(int argc, char **argv) {
     }
     uint8_t pe = 0, bc = 0;
     int rok = io_regs(&io, &pe, &bc) == 0;
-    emitf(&c, "READY period_us=%ld pre_us=%ld post_us=%ld vcalib=%02x%02x,%02x%02x watch=%s hprt=%s pwr_en3=%s%02x boost_cfg=%s%02x",
-          period, pre_ms * 1000, post_ms * 1000, vc[0], vc[1], vc[2], vc[3], watch, hp, rok ? "" : "?", pe, rok ? "" : "?", bc);
+    // ★ hprt= LAST: its text may hold spaces (an errno message) — the reader takes the rest of the line
+    emitf(&c, "READY period_us=%ld pre_us=%ld post_us=%ld vcalib=%02x%02x,%02x%02x watch=%s pwr_en3=%s%02x boost_cfg=%s%02x hprt=%s",
+          period, pre_ms * 1000, post_ms * 1000, vc[0], vc[1], vc[2], vc[3], watch, rok ? "" : "?", pe, rok ? "" : "?", bc, hp);
 
     int64_t next = now_us(CLOCK_MONOTONIC), stat_t0 = next, cpu0 = now_us(CLOCK_PROCESS_CPUTIME_ID);
     int64_t st_n = 0, st_gap_max = 0, st_over = 0, st_read_sum = 0, st_read_max = 0, last_t = 0, done = 0;

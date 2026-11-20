@@ -106,6 +106,148 @@ tr3.set_online(True); tr3.edge("start-up", 13.45); tt = 13.45
 for _ in range(200): tr3.step(tt); tt += 0.02
 ok(any("already in at start-up" in l and "IN dd OUT a0" in l and "USB 1-1" in l for l in LOG[n0:]), "★ the start-up snapshot: registers + USB")
 ok(any("START-UP: the cord was in at start-up" in l for l in LOG[n0:]), "a START-UP burst")
+# ══ h81: the fast USB-drop capture — vibe-usbcap's records → log lines (FastDumpReader), the gate + tail lines ══
+FL = []
+rdr = m.FastDumpReader(1, logf=lambda *a: FL.append(" ".join(str(x) for x in a)))
+rdr.line("READY period_us=1000 pre_us=1000000 post_us=1000000 vcalib=0800,0e00 watch=1-1 pwr_en3=46 boost_cfg=09 hprt=ok(GSNPSID 4f54330a)\n")
+ok(rdr.kb == (1123, 1) and any("running" in l and "HPRT0 ok(GSNPSID 4f54330a)" in l and "BOOST on, OTG_SWITCH on" in l for l in FL),
+   "★ READY: the ADC calibration from VCALIB (k, b as the 20 ms trace), HPRT0 state, the boost/OTG enables")
+# raw: BAT_VOL 3720 (0e88), BAT_CUR 1366 (0556 → 0.235 A at ÷1), USB_VOL 3330 (0d02) → 4.179 V / +0.235 A / 4.878 V
+DUMP = """DUMP n=1 t0=179912345 why=otg-port-disconnect,usb-1-1-gone@+0.0200 pre_us=1000000 post_us=1020000 samples=2021 med_us=1001 max_gap_us=3100 read_us=410 cut=0 pwr_en3=46 boost_cfg=09
+S -1000000 a0 dd b3 40 0e88 0556 0d02 00001405 1 0
+R 996 -4000
+S -3000 a0 dd b7 40 0e88 0556 0c80 00001405 1 0
+R 2 -1000
+S +0 a0 dd b3 40 0e88 0556 0d02 00001000 1 0
+R 19 +19000
+S +20000 a0 dd b3 40 0e88 0556 0d02 00001000 0 0
+R 299 +319000
+S +320000 a0 dd b3 40 0e88 0556 0d02 00001405 1 0
+R 700 +1020000
+END n=1 lines=11"""
+n0 = len(FL)
+for ln in DUMP.split("\n"): rdr.line(ln + "\n")
+out = FL[n0:]
+hd = [l for l in out if "chgtrace-fast#1 DROP" in l]
+ok(len(hd) == 1 and "the OTG port lost its device (dwc2 HPRT0 connect 1→0); USB 1-1 left sysfs at +0.0200 s" in hd[0]
+   and "at mono 179.9123 s" in hd[0], "★ the DROP header: both events, the drop's monotonic time")
+ok(len(hd) == 1 and "a sample every 1.001 ms (median; longest gap 3.1 ms)" in hd[0] and "PMIC reads 0.41 ms" in hd[0]
+   and "1.000 s before, 1.020 s after" in hd[0], "★ the REAL interval and the read time are in the header")
+ok(len(hd) == 1 and "input floor 4.5 V;" in hd[0] and "POWER_EN3 0x46 (BOOST on, OTG_SWITCH on), BOOST_OTG_CFG 0x09" in hd[0], "the floor and the regulator enables")
+body = [l for l in out if l.startswith("chgtrace-fast#1 ")]
+ok(any(l.startswith("chgtrace-fast#1 -1.0000 cccv/usb/eff IN dd OUT a0 bat 4.179V +0.235A port 4.878V · sys 40 plug · otg conn/en/pwr hs D+D- 10 · USB 1-1") for l in body),
+   "★ a fast line: the same scaling as the 20 ms trace, SYS_STS plug, HPRT0 decoded, USB present")
+ok(any(l.startswith("chgtrace-fast#1 -0.0030 cccv/CLAMP/usb/eff") and "port 4.687V" in l for l in body), "the 3 ms sag with the clamp, 3 ms before")
+ok(any(l.startswith("chgtrace-fast#1 +0.0000") and "★ OTG PORT: NO DEVICE" in l and "otg pwr" in l for l in body), "★ +0: the port without its device")
+ok(any(l.startswith("chgtrace-fast#1 +0.0200") and "★ USB 1-1 GONE" in l and "USB none" in l for l in body), "+20 ms: sysfs follows")
+ok(any(l.startswith("chgtrace-fast#1 +0.3200") and "★ OTG PORT: DEVICE BACK" in l and "★ USB 1-1 BACK" in l for l in body), "+320 ms: back")
+ok(any("… same ×996 to -0.0040" in l for l in body), "runs collapse as in the 20 ms trace")
+end = [l for l in body if " end — " in l]
+ok(len(end) == 1 and "port 4.687V/" in end[0] and "/4.878V" in end[0] and "input clamp 3 of 2021 samples" in end[0] and "2021 samples" in end[0],
+   "★ the end line: min/mean/max over every sample (runs counted): %s" % end[:1])
+ok(m.fmt_sample((0, 0xB3, 0xDD, 0xA0, 3720, 1366, 3330), (1123, 1), 1) == tr._fmt((0, 0xB3, 0xDD, 0xA0, 3720, 1366, 3330)) if tr.kb == (1123, 1) else True,
+   "the fast lines and the 20 ms lines are one formatter")
+# a negative current, a read error, no HPRT0
+n0 = len(FL)
+for ln in ["DUMP n=2 t0=5000000 why=usb-1-1-gone pre_us=500000 post_us=99000 samples=600 med_us=1000 max_gap_us=1000 read_us=400 cut=1 pwr_en3=? boost_cfg=?",
+           "S -500000 a0 dd b3 40 0e88 fe00 0d02 - 1 0", "S -1000 a0 dd b3 40 0000 0000 0000 - 1 1", "S +0 a0 dd b3 00 0e88 fe00 0d02 - 0 0", "END n=2 lines=3"]:
+    rdr.line(ln)
+out = FL[n0:]
+ok(any("-0.088A" in l for l in out), "a negative BAT_CUR (0xfe00 = −512 → −0.088 A) is signed")
+ok(any("✗ PMIC read failed" in l and "STS ?" in l for l in out), "a failed read shows as ? with a mark")
+ok(any("+0.0000" in l and "NO-PLUG" in l and "otg ?" in l and "★ USB 1-1 GONE" in l for l in out), "no HPRT0: 'otg ?'; SYS_STS without the plug bit")
+ok(any("cut short" in l and "POWER_EN3 0x? (?)" in l for l in out), "a dump cut by the stop says so")
+n0 = len(FL)
+rdr.line("STAT wall_us=30000000 samples=29850 mean_us=1005 max_gap_us=4200 over2x=3 read_us=412 read_max_us=1300 cpu_us=900000")
+ok(any("29850 samples, one every 1.005 ms (mean), longest gap 4.2 ms, 3 over twice the period; PMIC reads 0.41 ms a sample (max 1.30); 3.0 % of a core" in l
+       for l in FL[n0:]), "★ STAT: the real interval and the sampler's CPU, every 30 s")
+rdr.line("SKIP t=7000000 why=usb-1-1-gone dumps=10 skipped=1"); rdr.line("garbage here"); rdr.line("S 1 2")
+ok(any("not dumped" in l for l in FL) and any("unknown record" in l for l in FL), "SKIP + unknown records logged, never raised")
+# a dump bigger than LINE_MAX is cut with a note
+rdr2 = m.FastDumpReader(1, logf=lambda *a: FL.append(" ".join(str(x) for x in a))); rdr2.LINE_MAX = 5
+rdr2.line("READY vcalib=0800,0e00 watch=1-1"); n0 = len(FL)
+rdr2.line("DUMP n=3 t0=1 why=usb-1-1-gone samples=20")
+for i in range(20): rdr2.line("S %d a0 dd b3 40 0e88 %04x 0d02 - 1 0" % (i, i))
+rdr2.line("END n=3")
+ok(sum(1 for l in FL[n0:] if l.startswith("chgtrace-fast#3 +")) == 5 and any("15 more lines not logged" in l for l in FL[n0:]), "★ a dump is capped (LINE_MAX) with a note")
+
+# ── Threshold: debounce + hysteresis ──
+th = m.Threshold(0.30, 2.0, 0.02)
+flips = [th.update(t_, c) for t_, c in [(0, 0.29), (1.0, 0.29), (1.9, 0.29)]]
+ok(not any(flips) and not th.below, "below for < 2 s: no flip")
+ok(th.update(2.0, 0.28) and th.below, "below for 2 s: flips to below")
+ok(not th.update(3, 0.31) and not th.update(6, 0.31) and th.below, "★ hysteresis: 0.31 A is not 'back above' (needs ≥ 0.32)")
+ok(not th.update(7, 0.33) and not th.update(8, None) and th.update(9.0, 0.33) and not th.below, "≥ 0.32 for 2 s: above again (None changes nothing)")
+ok(not th.update(10, 0.20) and not th.update(11, 0.40) and not th.update(12.5, 0.20) and not th.below, "a brief dip resets the hold")
+
+# ── FastCapture: when vibe-usbcap runs, the tail lines, the stop grace, the restart cap ──
+class FakeProc:
+    def __init__(self, argv): self.argv, self.returncode, self.stdout, self.terms = argv, None, None, 0
+    def poll(self): return self.returncode
+    def terminate(self): self.terms += 1; self.returncode = -15
+SP = []
+def spawn(argv): p = FakeProc(argv); SP.append(p); return p
+UDEV = [frozenset({"1-1"})]
+LOG.clear()
+fc = m.FastCapture("/dev/i2c-0", 1, usb=lambda: UDEV[0], spawn=spawn, dwc2=lambda d: 0xff300000, threads=False)
+tt = 1000.0
+def fc_run(secs, online, cur, step=0.1):
+    global tt
+    for _ in range(int(round(secs / step))):
+        fc.tick(tt, online, cur, " (x)"); tt += step
+fc_run(5, False, None)
+ok(not SP and not LOG, "on battery: nothing")
+fc_run(10, True, 0.60)
+ok(not SP and not LOG, "★ on the cord, charging at 0.60 A: no sampler, no line")
+fc_run(1.5, True, 0.40)
+ok(not SP, "0.40 A for 1.5 s: not yet (2 s hold)")
+fc_run(1.0, True, 0.40)
+ok(len(SP) == 1 and SP[0].argv[:5] == [m.USBCAP, "--i2c", "/dev/i2c-0", "--watch", "1-1"] and SP[0].argv[5:] == ["--dwc2", "0xff300000"],
+   "★ below 0.45 A for 2 s with a radio: vibe-usbcap starts, watching 1-1 with HPRT0 (%s)" % (SP[0].argv if SP else None))
+ok(any("chgtrace-fast: started" in l for l in LOG) and not any("BELOW 0.30" in l for l in LOG), "a start line; no tail line at 0.40 A")
+fc_run(3, True, 0.24)
+ok(sum(1 for l in LOG if "BELOW 0.30 A — +0.240A" in l and "(x)" in l) == 1, "★ the tail line: below 0.30 A, once")
+fc_run(30, True, 0.24)
+ok(len(SP) == 1 and SP[0].terms == 0, "one sampler, still running")
+fc_run(5, True, 0.50)   # 2 s hold + 2 s grace
+ok(sum(1 for l in LOG if "back ABOVE 0.30 A after" in l) == 1, "the tail line back above")
+ok(SP[0].terms == 1 and any("stopping" in l and "back above 0.45 A" in l for l in LOG), "★ above 0.45 A (+ the grace): the sampler is stopped")
+fc_run(3, True, 0.24); fc_run(1, True, 0.24)
+ok(len(SP) == 2, "low again: a new sampler")
+fc_run(1.0, False, None)
+ok(SP[1].terms == 0, "★ the cord out: it keeps running through the grace (a drop at the plug-out still gets its 'after')")
+fc_run(2.0, False, None)
+ok(SP[1].terms == 1 and any("cord came out while the charge current was below" in l for l in LOG), "then stopped; the tail line says the cord came out")
+UDEV[0] = frozenset(); fc_run(5, True, 0.10)
+ok(len(SP) == 2, "on the cord with no radio: no sampler (nothing to drop)")
+UDEV[0] = frozenset({"1-1"}); fc_run(0.5, True, 0.10)
+ok(len(SP) == 3, "a radio plugged in: it starts")
+SP[-1].returncode = 1; fc_run(1, True, 0.10)
+ok(len(SP) == 3 and any("ended (exit 1)" in l for l in LOG), "★ a crash: logged, and no instant restart")
+fc_run(31, True, 0.10)
+ok(len(SP) == 4, "restarted after 30 s")
+for i in range(6):
+    SP[-1].returncode = 0; fc_run(0.2, True, 0.10)
+ok(len(SP) <= 4 + 2 and any("starts in 10 min" in l for l in LOG), "★ at most 5 starts in 10 min (%d)" % len(SP))
+LOG.clear(); fc2 = m.FastCapture("/dev/i2c-0", 1, usb=lambda: frozenset({"1-1"}), spawn=spawn, dwc2=lambda d: None, threads=False)
+n_sp = len(SP)
+for i in range(30): fc2.tick(2000 + i * 0.1, True, None)
+ok(len(SP) == n_sp, "no current reading at all: nothing starts")
+for i in range(30): fc2.tick(2010 + i * 0.1, True, -0.30)
+ok(len(SP) == n_sp + 1 and "--dwc2" not in SP[-1].argv and any("sysfs presence only" in l for l in LOG),
+   "a NEGATIVE current on the cord counts as low; no dwc2 under it: sysfs only")
+
+# ── dwc2_base_for: only a BOUND dwc2 the device hangs off ──
+D = T + "/sys"
+os.makedirs(D + "/devices/platform/ff300000.usb/usb1/1-1", exist_ok=True)
+os.makedirs(D + "/bus/usb/devices", exist_ok=True); os.makedirs(D + "/bus/platform/drivers/dwc2", exist_ok=True)
+if not os.path.lexists(D + "/bus/usb/devices/1-1"): os.symlink(D + "/devices/platform/ff300000.usb/usb1/1-1", D + "/bus/usb/devices/1-1")
+ok(m.dwc2_base_for({"1-1"}) is None, "dwc2 driver not bound: no HPRT0")
+if not os.path.lexists(D + "/bus/platform/drivers/dwc2/ff300000.usb"): os.symlink(D + "/devices/platform/ff300000.usb", D + "/bus/platform/drivers/dwc2/ff300000.usb")
+ok(m.dwc2_base_for({"1-1"}) == 0xff300000, "★ bound + the device under it: 0xff300000")
+ok(m.dwc2_base_for({"2-1"}) is None, "a device on another controller: none")
+ok(m.hprt_text(0x00001405) == "otg conn/en/pwr hs D+D- 10" and m.hprt_text(0x00021015).startswith("otg conn/en/OVERCURRENT/pwr fs"), "HPRT0 decoded (hw.h bits)")
+
 if sys.argv[1:] == ["bench"]:
     N = 20000; tr2 = m.FastTrace(FakePmic(), usb=lambda: frozenset({"1-1"}), res_div=1); tr2.set_online(True)
     m.log = lambda *a: None
