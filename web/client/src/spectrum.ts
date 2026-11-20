@@ -26,7 +26,7 @@ import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
-import { parseSatList, parseSatReadout, parseSatTrack, type SatList, type SatReadout, type SatTrack } from '../../../src/services/satellites';   // ★ V12 satellites
+import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, satPickMsg, satDopplerMsg, SAT_DROP_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack } from '../../../src/services/satellites';   // ★ V12 satellites
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
@@ -775,6 +775,8 @@ export interface SpectrumCallbacks {
   onSatList?: (l: SatList) => void;
   onSat?: (r: SatReadout) => void;
   onSatTrack?: (t: SatTrack) => void;
+  /** ★★★ SATELLITE MODE: the server's answer to a pick (it tuned, locked and attached `decoder`). */
+  onSatPicked?: (p: SatPicked) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
   onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★★ The answer to modeResume (src/services/wholeModeResume.ts): may this listener have the whole-radio mode the
@@ -1492,7 +1494,11 @@ export class SpectrumClient {
         return;
       /* ★★ V12 SATELLITES */
       case 'sat_list': { const l = parseSatList(msg); if (l) this.cb.onSatList?.(l); return; }
-      case 'sat': { const r = parseSatReadout(msg); if (r) this.cb.onSat?.(r); return; }
+      case 'sat': {
+        const pk = parseSatPicked(msg);   // ★★★ SATELLITE MODE: {"state":"picked"} is the pick's answer, not a readout
+        if (pk) { this.cb.onSatPicked?.(pk); return; }
+        const r = parseSatReadout(msg); if (r) this.cb.onSat?.(r); return;
+      }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.cb.onSatTrack?.(t); return; }
       case 'ais_trail': {
         const m = Number(msg.mmsi);
@@ -2583,6 +2589,15 @@ export class SpectrumClient {
     if (this.askBlocked()) return;
     this._send(on ? (norad ? { type: 'sat', op: 'lock', norad } : { type: 'sat', op: 'lock' }) : { type: 'sat', op: 'unlock' });
   }
+  /* ★★★ SATELLITE MODE (docs/v12/SATELLITE-MODE.md THE CONTRACT): a pick tunes, locks and attaches the decoder in one step
+   *  on the server, so it asks before tuning like a tune; the Doppler key and the drop (leaving the mode) do not move the
+   *  dial by themselves, but the drop is always sent — a held lock must never outlive the mode. */
+  satPick(norad: number, tx: number, doppler: boolean): boolean {
+    if (this.askBlocked()) return false;
+    this._send(satPickMsg(norad, tx, doppler)); return true;
+  }
+  satDoppler(on: boolean) { this._send(satDopplerMsg(on)); }
+  satDrop() { this._send({ ...SAT_DROP_MSG }); }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
 

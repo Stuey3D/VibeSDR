@@ -26,7 +26,8 @@ const all = RADIO_BANDS.flatMap(b => DECODER_PLACES[b.id].flatMap(g => g.ids));
 ok(bandsOfDecoder('dsc').join() === 'hf,vhf', 'DSC is in HF and VHF (MF/HF and channel 70)');
 ok(bandsOfDecoder('hfdl').join() === 'hf' && bandsOfDecoder('time').join() === 'hf', 'HFDL and TIME HF');
 console.log('▶ TUNES THE RADIO ITSELF — its own section, in no band tab, never dimmed (Stuart: "always lit up as they tune the SDR themselves")');
-ok(WHOLE_RADIO_IDS.join() === 'adsb,ais,avdata,dab,ism,ndb,sondes,spotsband', 'ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, DIGITAL SPOTS: BAND, in that order');
+ok(WHOLE_RADIO_IDS.join() === 'adsb,ais,avdata,dab,ism,ndb,sondes,sat,spotsband', 'ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, SATELLITE, DIGITAL SPOTS: BAND, in that order');
+ok(bandsOfDecoder('lrpt').length === 0, 'METEOR LRPT is in no band tab (it lives inside SATELLITE)');
 for (const id of WHOLE_RADIO_IDS) ok(bandsOfDecoder(id).length === 0, `${id} is in no band tab`);
 for (const id of WHOLE_RADIO_IDS) for (const hz of [7.074e6, 145e6, 1090e6, 198e3, 130e6]) for (const b of RADIO_BANDS)
   ok(!decoderDim(id, hz, b.id), `${id} never dimmed (${hz / 1e6} MHz, ${b.label} tab)`);

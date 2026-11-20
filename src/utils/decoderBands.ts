@@ -5,7 +5,7 @@
  * decoderBands.ts), tested by scripts/test_decoder_bands.ts.
  *
  *   TUNES THE RADIO ITSELF (above the tabs, never dimmed — WHOLE_RADIO_IDS):
- *                     ADS-B · AIS · DATALINK (ACARS / VDL2) · DAB · ISM · NDB · SONDES (RS41) · DIGITAL SPOTS: BAND
+ *                     ADS-B · AIS · DATALINK (ACARS / VDL2) · DAB · ISM · NDB · SONDES (RS41) · SATELLITE · DIGITAL SPOTS: BAND
  *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map) · SELCAL
  *                     ⚓ Maritime  NAVTEX · DSC · SITOR-A · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
@@ -14,6 +14,7 @@
  *                     ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV · DTMF / 5-TONE (digits on amateur only)
  *                     Broadcast   ADV RDS · SAME (EAS alert headers, NOAA Weather Radio)
+ *                     (METEOR LRPT pictures: inside SATELLITE, TUNES THE RADIO ITSELF)
  *                     Paging      PAGE (POCSAG — Android local hardware only: the phone's own radio)
  *   UHF               ✈ Aviation  VOR / ILS (the ILS glideslope, 329–335 MHz)
  *                     ⚓ Maritime  406 BEACONS (COSPAS-SARSAT EPIRBs — and ELTs, PLBs; identity and position: the owner only)
@@ -93,7 +94,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv', 'tones'] },   // ★ V12 DTMF + 5-tone (repeater control on 2 m)
     { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
-    { group: 'other',    ids: ['rds', 'same', 'lrpt'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz · LRPT: METEOR weather satellites, 137 MHz
+    { group: 'other',    ids: ['rds', 'same'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz · (METEOR LRPT moved into SATELLITE, 2026-11-20)
   ],
   uhf: [
     { group: 'aviation', ids: ['vor'] },      // ★ V12 the ILS glideslope (329–335 MHz) — the same key as VHF's
@@ -109,7 +110,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
  * frequencies; the tune keys then step bands). Their availability is the callers' existing rules (locked range,
  * blocked modes, what the radio reaches), untouched.
  */
-export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'avdata', 'dab', 'ism', 'ndb', 'sondes', 'spotsband'];   // ★ V12 avdata: the aircraft datalink; sondes: RS41 radiosondes
+export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'avdata', 'dab', 'ism', 'ndb', 'sondes', 'sat', 'spotsband'];   // ★ V12 avdata: the aircraft datalink; sondes: RS41 radiosondes; sat: SATELLITE (every satellite — replaced SAT and METEOR LRPT, 2026-11-20)
 export const WHOLE_RADIO_LABEL = 'TUNES THE RADIO ITSELF';
 export const WHOLE_RADIO_HINT = 'Each moves the radio to its own frequencies and opens its own view.';
 

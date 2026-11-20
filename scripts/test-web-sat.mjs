@@ -1,8 +1,9 @@
-// test-web-sat.mjs — V12 the web client's SATELLITES (docs/v12/SATELLITE-ENGINE.md) against the REAL server (a fake
-// rtl_tcp; CelesTrak's 2026-11-19 groups in the orbit cache with their epochs moved to an hour ago — no network), in
-// headless Edge with --mute-audio (tests are silent), at desktop and 390 px: the mode menu's SAT entry, the picker (ISS up
-// first, its downlinks), TRACK → the dial on the nominal with "ISS · ▲/▼ x.xx kHz · TRACK" beside the digits and the
-// readout in the panel, the panel fitting a phone with no sideways scroll, DOPPLER off → the readout gone. Needs the page
+// test-web-sat.mjs — V12 the web client's SATELLITE mode (docs/v12/SATELLITE-MODE.md; was SATELLITES, SATELLITE-ENGINE.md)
+// against the REAL server (a fake rtl_tcp; CelesTrak's 2026-11-19 groups in the orbit cache with their epochs moved to an
+// hour ago — no network), in headless Edge with --mute-audio (tests are silent), at desktop and 390 px: the mode menu's
+// SATELLITE entry, the timetable (ISS up first, "UP · m:ss left"), a pick ({"op":"pick"} — the server tunes + locks) →
+// the dial on the nominal with "ISS · ▲/▼ x.xx kHz" beside the digits and the compact box, the window fitting a phone with
+// no sideways scroll, AUTO DOPPLER off → the readout gone, EXIT → dropped. ★ Needs the SERVER half of the contract. Needs the page
 // BUILT INTO the server (node scripts/build-web.mjs, then the server rebuilt). ★ No satellite on air: the lock is the model's.
 // Screenshots to $TMPDIR/vibesdr-sat-*.png.     VIBESERVER_BIN=…/vibeserver node scripts/test-web-sat.mjs
 import net from 'node:net';
@@ -122,23 +123,23 @@ try {
   await ev(`document.getElementById('mMode')?.click()`);
   await sleep(700);
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
-  ok(/\bSAT\b/.test(opts || ''), `the mode menu offers SAT: ${opts}`);
-  await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SAT'); b && b.click(); return !!b; })()`);
-  ok(await until(`!!document.getElementById('satPanel') && !document.getElementById('satPanel').hidden`, 4000), 'the picker opens');
+  ok(/\bSATELLITE\b/.test(opts || '') && !/\bSAT\b/.test(opts || ''), `the mode menu offers SATELLITE: ${opts}`);
+  await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SATELLITE'); b && b.click(); return !!b; })()`);
+  ok(await until(`!!document.getElementById('satPanel') && !document.getElementById('satPanel').hidden`, 4000), 'the SATELLITE window opens');
   ok(await until(`/ISS/.test(document.querySelector('#satPanel .sat-row')?.textContent || '')`, 6000), `ISS is the first row (up now): ${(await ev(`document.querySelector('#satPanel .sat-row')?.textContent`) || '').slice(0, 80)}`);
   const firstRow = await ev(`document.querySelector('#satPanel .sat-row')?.textContent || ''`);
-  ok(/UP · EL \d+°/.test(firstRow) && /437\.800 MHz FM/.test(firstRow), 'up, with its downlinks in words');
+  ok(/UP · \d+:\d\d left/.test(firstRow) && /437\.800 MHz FM/.test(firstRow), 'up, with its time left and its downlink in words');
   ok(/AOS \d\d:\d\d \(in /.test(await ev(`document.getElementById('satPanel').textContent`) || ''), 'the others with their next AOS');
   const credit = await ev(`document.querySelector('#satPanel .sat-credit')?.textContent || ''`);
   ok(/^Orbits: CelesTrak · 5 h old · Transmitters: SatNOGS DB \(CC BY-SA 4\.0\)$/.test(credit), `the credit with the data's age: "${credit}"`);
   await shot('picker');
-  await ev(`(() => { const b = [...document.querySelectorAll('#satPanel button[data-act="track"]')].find(x => /FM repeater · 437\\.800/.test(x.textContent)); b && b.click(); return !!b; })()`);
+  await ev(`(() => { const b = [...document.querySelectorAll('#satPanel button.sat-row')].find(x => /437\\.800/.test(x.textContent)); b && b.click(); return !!b; })()`);
   ok(await until(`/ISS · [▲▼] \\d+\\.\\d\\d kHz/.test(document.getElementById('mFreq')?.parentElement?.textContent || document.body.textContent)`, 6000),
      `beside the digits: ${(await ev(`(document.body.textContent.match(/ISS · [▲▼] [\\d.]+ kHz[^A-Z]*[A-Z]+/) || [''])[0]`))}`);
   ok(await until(`/437\\.800/.test(document.getElementById('mFreq')?.textContent || '')`, 3000), `the digits on the nominal: ${await ev(`document.getElementById('mFreq')?.textContent`)}`);
-  ok(await until(`!!document.querySelector('#satPanel .sat-ro') && /TRACK|COAST/.test(document.querySelector('#satPanel .sat-ro').textContent)`, 3000), 'the readout in the panel');
-  ok(await until(`!!document.querySelector('#satPanel .sat-sky path')`, 4000), 'the sky track is drawn');
-  ok(await ev(`document.querySelector('#satPanel button[data-act="doppler"]')?.classList.contains('on')`) === true, 'DOPPLER is lit');
+  ok(await until(`!document.querySelector('#satPanel .sat-box').hidden && /TRACK|COAST/.test(document.querySelector('#satPanel .sat-ro').textContent)`, 3000), 'the compact box with the lock');
+  ok(/In range for \d+:\d\d/.test(await ev(`document.querySelector('#satPanel .sat-ro').textContent`) || ''), 'the countdown');
+  ok(await ev(`document.querySelector('#satPanel button[data-act="doppler"]')?.classList.contains('on')`) === true, 'AUTO DOPPLER is lit');
   await shot('locked');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(900);
@@ -146,7 +147,9 @@ try {
   ok(fit.l >= 0 && fit.r <= fit.w && fit.sw <= fit.w + 1, `390 px: the panel fits, no sideways scroll (${JSON.stringify(fit)})`);
   await shot('phone');
   await ev(`document.querySelector('#satPanel button[data-act="doppler"]')?.click()`);
-  ok(await until(`!document.querySelector('#satPanel .sat-ro') && !/ISS · [▲▼]/.test(document.body.textContent)`, 4000), 'DOPPLER off: the readout is gone');
+  ok(await until(`!/ISS · [▲▼]/.test(document.getElementById('mFreq')?.parentElement?.textContent || '')`, 4000), 'AUTO DOPPLER off: the readout beside the digits is gone');
+  await ev(`document.querySelector('#satPanel button[data-act="exit"]')?.click()`);
+  ok(await until(`document.getElementById('satPanel').hidden`, 2000), 'EXIT leaves the mode');
   ok(await until(`!/437\\.800\\.000/.test(document.getElementById('mFreq')?.textContent || '') || true`, 500), '(dial frozen where the channel was)');
 } catch (e) { ok(false, `driver: ${e}`); }
 finally {

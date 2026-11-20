@@ -403,7 +403,7 @@ export interface GlobeScene {
  *  is the top half of the disc; the bird at radius 1 + its (exaggerated) height above its sub-point, hidden behind the
  *  globe or below the cut. `sat` null = no position (the scene still draws the dome and the receiver). */
 export function globeScene(w: number, h: number, rx: { lat: number; lon: number }, sat: { lat: number; lon: number; altKm?: number } | null): GlobeScene {
-  const r = Math.max(10, Math.min(w * 0.46, h * 0.72));
+  const r = Math.max(10, Math.min(w * 0.46, (h - 14) / 1.38));   // ★ headroom: the highest bird (1 + 0.35) and its panels stay inside
   const cx = w / 2, cy = h - 2;
   const lat0 = Math.max(-90, rx.lat - GLOBE_TILT), lon0 = rx.lon;
   const P = (x: number, y: number) => `${(cx + x * r).toFixed(1)} ${(cy - y * r).toFixed(1)}`;

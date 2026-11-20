@@ -1904,8 +1904,12 @@ fi
 printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★ …then the web client (headless Edge, --mute-audio): the SAT entry, the picker, TRACK, the readout beside the digits, 390 px
+# ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ SATELLITE MODE's web window alone against a fake sat_list (no server): order, greying, the synced line, the pick box sizes
+#     (compact / big with the decoder canvas lent / ISS SSTV growing), APRS lines, AUTO DOPPLER, EXIT → drop; 390 px. Needs Edge + web/dist.
+node --max-old-space-size=512 scripts/test-web-satellite-mode.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by

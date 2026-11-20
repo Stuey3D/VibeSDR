@@ -5670,9 +5670,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 balloons: UKHAS RTTY telemetry, Horus Binary and SSDV pictures — decoded on the server; hidden unless it says "balloon" (greyed with why off 70 cm). -->
     <button class="btn" data-dec="balloon" hidden title="High-altitude balloons — UKHAS RTTY telemetry, Horus Binary 4-FSK and SSDV pictures from amateur payloads, mostly on 434 MHz: tune the payload in USB and everything is found by itself">BALLOONS</button>
     <!-- ★★ V12 DTMF + 5-tone selective calling — decoded on the server; hidden unless it says "tones". Digits only on the amateur bands (the server's rule). -->
-    <!-- ★★ V12 METEOR-M LRPT — weather-satellite pictures on 137.100 / 137.900 MHz, decoded on the server from a 140 kHz IQ
-         slice of this listener's dial; hidden unless the server says "lrpt" (never on an Icom), greyed with why off 137 MHz. -->
-    <button class="btn" data-dec="lrpt" hidden title="METEOR weather satellite pictures (LRPT): tune 137.100 or 137.900 MHz while a METEOR-M satellite passes; the picture grows here and each pass goes to the gallery">METEOR LRPT</button>
+    <!-- ★★★ V12 METEOR-M LRPT has no key of its own any more (2026-11-20): pick a METEOR in SATELLITE (TUNES THE RADIO ITSELF) and
+         the server tunes, follows the Doppler and decodes it; the picture grows in the SATELLITE window, each pass goes to the gallery. -->
     <button class="btn" data-dec="tones" hidden title="DTMF and 5-tone selective calling on NFM / AM — the digits on the amateur bands (repeater and link control codes); anywhere else only what was heard, never a number">DTMF / 5-TONE</button>
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
