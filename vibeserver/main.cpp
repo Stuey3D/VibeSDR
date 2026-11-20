@@ -1645,11 +1645,11 @@ static std::string vsBenchHoldPeers(bool force, std::vector<VsBenchPeer> peers) 
     if (!peers.empty()) {
         g_bqRenewOn.store(true);
         g_bqRenewer = std::thread([] {
-            double next = vsBenchNow() + kRenewSec;
+            double next = vsBenchNow() + renewSec();
             while (g_bqRenewOn.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(250));
                 if (vsBenchNow() < next) continue;
-                next = vsBenchNow() + kRenewSec;
+                next = vsBenchNow() + renewSec();
                 std::vector<VsBenchPeer> peers;
                 { std::lock_guard<std::mutex> lk(g_bqPeersMx); peers = g_bqPeers; }
                 for (const auto& pr : peers) {

@@ -26,6 +26,7 @@ int main() {
         ok(!l.on && !l.expired(1e9), "ended: not held, nothing to expire");
         ok(kRenewSec * 3 < kLeaseSec, "the coordinator renews at least three times inside one lease (a missed renewal is not fatal)");
         ok(leaseSec() == kLeaseSec, "no test override: the real lease");
+        ok(renewSec() == kRenewSec, "…renewed every 20 s");
     }
     // ── reading a radio process's answer (our own JSON) ──
     {

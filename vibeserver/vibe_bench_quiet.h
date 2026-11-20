@@ -42,6 +42,8 @@ inline double leaseSec() {
     }
     return kLeaseSec;
 }
+/** The renewal period for the lease in force: 20 s for the real 90, proportionally shorter under a test lease. */
+inline double renewSec() { return leaseSec() * (kRenewSec / kLeaseSec); }
 
 /** A radio process's hold, by the clock the caller passes (seconds). */
 struct Lease {
