@@ -121,6 +121,13 @@ const TABLE = [
   P(['agcSet', 'agcSetLock'], 'Lock the AGC target', 'agcSetLock'),
   P(['antennaMap', 'antennaPortLocked'], 'Switch aerial by band', { sent: 'antennaLocked: live.current.rspCard.antennaPortLocked', applied: 'cfg.s("antennaMap")' }),
   P(['ppb'], 'CALIBRATION (PPB)', 'ppb'),
+  // ── ★★ beta88: rows the Setup page draws ONLY on a phone (.androidOnly) — the phone's own settings, for the remote page ──
+  P(['androidWebServer'], 'Serve the web client', 'webServer'),
+  P(['androidCompress'], 'K.compress', 'compressAudio'),
+  P(['androidAdvanced'], 'Shared, managed, public', 'advanced'),
+  P(['androidTunerBw'], 'K.tunerBwAuto', 'tunerBwAuto'),
+  P(['androidDsFixed'], 'K.directSampling', 'directSampling'),
+  P(['androidConvInLo'], 'K.convLoMhz', 'converterInputLoHz'),
 ];
 
 console.log('Android server screen ↔ the Setup page\'s settings');

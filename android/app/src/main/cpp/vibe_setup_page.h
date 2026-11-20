@@ -332,6 +332,22 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
+      <!-- ★★ beta88: AN ANDROID PHONE'S SERVER ONLY (androidPrune shows them; .androidOnly is never drawn elsewhere).
+           What only the phone can change, read-only (androidDeviceCard), and the phone's own three server settings. -->
+      <div class="card androidOnly" id="androidDevCard"></div>
+      <div class="card androidOnly" id="androidSrvCard">
+        <h2>This phone's server</h2>
+        <label><input type="checkbox" id="androidWebServer"> <span class="lbl">Serve the web client</span>
+          <div class="hint">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>
+        <label><input type="checkbox" id="androidCompress"> <span class="lbl">Compress the spectrum and audio for the app</span>
+          <div class="hint">On is right for nearly everyone; off sends far more data.</div></label>
+        <label><span class="lbl">Mode</span>
+          <select id="androidAdvanced">
+            <option value="0">Simple &mdash; plug in and share</option>
+            <option value="1">Advanced &mdash; shared, managed, public</option>
+          </select>
+          <div class="hint" id="androidAdvancedHint"></div></label>
+      </div>
       <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
            Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
            signed in (one permission prompt to turn on, one to turn off); "starts when you sign in" = the owner's own
@@ -3842,6 +3858,7 @@ function androidKeeps(e, keep, advOff) {
   return !!id && keep.has(id) && !advOff.has(id);
 }
 function androidPrune() {
+  androidSrvCard();   // ★ first: the Simple/Advanced choice below is read from it
   const keep = new Set((cfg.android && Array.isArray(cfg.android.supported)) ? cfg.android.supported : []);
   const adv = $("androidAdvanced") ? $("androidAdvanced").value === "1"
             : !!(cfg.android && cfg.android.server && cfg.android.server.advanced);
@@ -3849,7 +3866,6 @@ function androidPrune() {
   const root = document.getElementById("setup");
   if (!root || !root.querySelectorAll) return;
   root.classList.add("isAndroid");
-  androidSrvCard();
   // ★ Run again whenever the radio's own rows arrive or Simple/Advanced changes — start from nothing hidden each time.
   for (const e of [...root.querySelectorAll(".androidOff")]) e.classList.remove("androidOff");
   const CTRL = "input,select,textarea,.mode";
@@ -3878,21 +3894,10 @@ function androidPrune() {
 }
 /** ★★ beta88: the three server settings only a phone has — the web client, Opus for listeners, Simple/Advanced. */
 function androidSrvCard() {
-  if ($("androidSrvCard")) return;
-  const pane = $("serverPane");
-  if (!pane || !pane.insertBefore) return;
+  const card = $("androidSrvCard");
+  if (!card || card.__filled) return;
+  card.__filled = 1;
   const s = (cfg.android && cfg.android.server) || {};
-  const card = document.createElement("div");
-  card.className = "card"; card.id = "androidSrvCard";
-  card.innerHTML = "<h2>This phone's server</h2>"
-    + "<label><input type=\"checkbox\" id=\"androidWebServer\"> <span class=\"lbl\">Serve the web client</span>"
-    + "<div class=\"hint\">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>"
-    + "<label><input type=\"checkbox\" id=\"androidCompress\"> <span class=\"lbl\">Compress the spectrum and audio for the app</span>"
-    + "<div class=\"hint\">On is right for nearly everyone; off sends far more data.</div></label>"
-    + "<label><span class=\"lbl\">Mode</span><select id=\"androidAdvanced\">"
-    + "<option value=\"0\">Simple — plug in and share</option><option value=\"1\">Advanced — shared, managed, public</option></select>"
-    + "<div class=\"hint\" id=\"androidAdvancedHint\"></div></label>";
-  pane.insertBefore(card, pane.firstChild);
   $("androidWebServer").checked = s.webServer !== false;
   $("androidCompress").checked = s.compressAudio !== false;
   $("androidAdvanced").value = s.advanced ? "1" : "0";
@@ -3932,14 +3937,8 @@ function androidRadioCollect() {
 /** The phone-only facts, read-only. */
 function androidDeviceCard() {
   const d = (cfg.android && cfg.android.device) || {};
-  let card = $("androidDevCard");
-  if (!card || !card.parentNode) {
-    const pane = $("serverPane");
-    if (!pane || !pane.insertBefore) return;
-    card = document.createElement("div");
-    card.className = "card"; card.id = "androidDevCard";
-    pane.insertBefore(card, pane.firstChild);
-  }
+  const card = $("androidDevCard");
+  if (!card) return;
   const row = (label, value, why) =>
     `<div style="display:flex;justify-content:space-between;gap:12px;margin:8px 0"><span>${label}</span>`
     + `<b style="text-align:right">${value}</b></div>` + (why ? `<div class="hint" style="margin:-4px 0 8px">${why}</div>` : "");
