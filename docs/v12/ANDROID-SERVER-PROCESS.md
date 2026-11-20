@@ -268,9 +268,15 @@ Every-setting pass (2026-11-20 evening):
   control and keeps the rest; choosing Advanced shows them at once; no web client forces Simple; the device-only card
   (battery, power, USB, keep alive, microphone, protocol — not on Lite —, remote switch, admin password never sent); the
   phone's radio rows fill and post; sign-in stops before the Linux loaders; the prune re-runs after `renderHw`.
-- `scripts/test-setup-android-e2e.mjs` — **33 checks, all pass**: the whole page signed in against a phone with the new
+- `scripts/test-setup-android-e2e.mjs` — **32 checks, all pass**: the whole page signed in against a phone with the new
   settings, edited on both tabs, Apply → the posted body through the compiled translation with the phone's own raw.
-- `scripts/check-remote-keys.mjs` — see "The guard"; counts in the report.
+- `scripts/check-remote-keys.mjs` — **450 checks, all pass** (see "The guard"); a fake K key was added by hand and it
+  failed naming it, then the key was removed. Now registered in run-tests.sh (it never was).
+- `VIBE_TESTS="test-android-setup" bash scripts/run-tests.sh` under the build lock: 1 suite built and passed (115).
+- Gradle under the build lock: main app `:app:compileCurrentReleaseKotlin` OK; Lite `android/gradlew -p lite/android
+  :app:compileReleaseKotlin -x :app:bundleJs` OK (the JS bundle step cannot resolve a symlinked node_modules in a
+  worktree; Kotlin is what changed). Temporary symlinks to ~/VibeSDR-v12 (local.properties, keystore, lite node_modules,
+  lite cloudflared) removed afterwards.
 - `scripts/check-android-settings-parity.mjs` (183), `check-setup-page.mjs`, and the existing setup-page tests (tabswitch,
   maxfps, icom, radio-caps 71, filter-kind, bg*, bench*, dir-reach, governors, mode-rate, wifi*) pass.
   `check-icom-servermode.mjs` has ONE failure that predates this branch (it looks for `VibeIcom.prepareStart` in
