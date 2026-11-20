@@ -303,6 +303,12 @@ export async function rebuild(env, curated, now) {
     groups[g] = { fetched: new Date(c.fetched * 1000).toISOString() };
     for (const o of c.omm) byNorad.set(o.NORAD_CAT_ID, o);
   }
+  /* ★★ NEVER A sats.json WITHOUT ORBITS (2026-11-20, the first live round: CelesTrak answered 522 for the amateur group,
+   *  the round stopped as it must, and the mirror then published the 13 curated birds with `orbits: {}` — a list no
+   *  server can place or predict a pass for, which a server would have kept for a day). With no group's good copy yet,
+   *  nothing is published: GET /api/sats stays 503 + Retry-After and servers retry soon. Once a good copy exists, a
+   *  later failure keeps serving it (the `omm:<group>` rows are only ever replaced by a good round). */
+  if (!Object.keys(groups).length) return false;
   const sn = await getKv(env, 'satnogs');
   const sats = curated.satellites.map((x) => {
     const norad = noradOf(x.norad);

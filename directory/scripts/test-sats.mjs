@@ -227,5 +227,28 @@ console.log('§9 serving — ETag, Last-Modified, 304');
   ok((await M.serveSats(req(), empty)).status === 503, 'before the first round: 503 + Retry-After');
 }
 
+console.log('§9 a FIRST round that CelesTrak refuses publishes nothing (the live 2026-11-20 round: 522, then orbits {})');
+{
+  const db2 = new DatabaseSync(':memory:');
+  db2.exec(readFileSync(new URL('schema.sql', dir), 'utf8'));
+  for (const f of readdirSync(new URL('migrations/', dir)).filter((f) => f.endsWith('.sql')).sort()) {
+    try { db2.exec(readFileSync(new URL('migrations/' + f, dir), 'utf8')); } catch { /* as above */ }
+  }
+  const st2 = (sql, args = []) => ({ bind: (...a) => st2(sql, a), first: async () => db2.prepare(sql).get(...args) ?? null,
+    all: async () => ({ results: db2.prepare(sql).all(...args) }), run: async () => { const r = db2.prepare(sql).run(...args); return { meta: { changes: r.changes } }; } });
+  const env2 = { DB: { prepare: (sql) => st2(sql) } };
+  const req = (h = {}) => new Request('https://vibeserver.vibesdr.net/api/sats', { headers: h });
+  log = []; plan = { 'GROUP=amateur': { status: 522 } };
+  const r = await M.runMirror(env2, { fetch: fakeFetch, now, curated });
+  ok(/522|overloaded/.test(String(r.stopped)), `the round stopped at the 522 (${r.stopped})`);
+  ok((await M.serveSats(req(), env2)).status === 503, '★ GET /api/sats is still 503 — no sats.json without orbits');
+  ok(!db2.prepare("SELECT k FROM sat_mirror WHERE k = 'sats'").get(), '…and nothing was stored to serve');
+  plan = {}; now += 7 * 3600; log = [];
+  await M.runMirror(env2, { fetch: fakeFetch, now, curated });
+  const ok200 = await M.serveSats(req(), env2);
+  const b2 = ok200.status === 200 ? JSON.parse(await ok200.text()) : null;
+  ok(b2 && Object.keys(b2.orbits).length > 0 && b2.satellites.some((x) => x.omm), `after the hold, a good round publishes WITH orbits (${b2 ? Object.keys(b2.orbits).join(', ') : 'none'})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
