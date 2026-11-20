@@ -3948,7 +3948,7 @@ function androidDeviceCard() {
   // ★★ beta88: the rest of what only the phone can change — each is Android's own prompt, or would cut this page off.
   if (typeof d.micPermission === "boolean")
     h += row("Microphone (the Icom's audio)", d.micPermission ? "Allowed" : "Not yet \u2014 allow it on the phone", "");
-  h += row("Protocol", "VibeServer", "rtl_tcp is chosen on the phone: it has no web page, so this page could not switch it back.");
+  if (!d.lite) h += row("Protocol", "VibeServer", "rtl_tcp is chosen on the phone: it has no web page, so this page could not switch it back.");
   h += row("Remote access to server settings", "On", "Switched off on the phone only \u2014 from here it would lock you out.");
   h += row("Admin password", "Set on the phone", "Never sent to this page and never set from it.");
   card.innerHTML = h;

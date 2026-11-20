@@ -270,6 +270,14 @@ export type VibeServerConfig = {
   converterOffsetHz?: number;
   converterInputLoHz?: number;
   converterInputHiHz?: number;
+  /* ★★ beta88 (every setting on the remote /setup page): three the engine does not read, carried so the phone's settings
+   *  store (VibeRemoteSetup.kt) holds them for the page — the store is REPLACED by the config every Start sends. */
+  /** "How will it be used?" — 'single' (one dial) or 'locked' (a locked range). The engine reads lockedCentre for it. */
+  radioUse?: 'single' | 'locked';
+  /** Where the receiver is, as the screen keeps it (LOC_KEY / LOCMODE_KEY / LOC_MOVING_KEY). */
+  serverLocation?: { mode: 'off' | 'manual'; lat?: number; lon?: number; label?: string; moving: boolean };
+  /** The vibesdr.net listing's public name (PUBLIC_NAME_KEY). */
+  publicName?: string;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -441,6 +449,10 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     icomPowerOn: cfg.icomPowerOn ?? false,
     icomAutoOff: cfg.icomAutoOff ?? true,
     icomOffDelayMin: cfg.icomOffDelayMin ?? 5,
+    // ★★ beta88: for the remote page only (see the type) — VibeServerBoot ignores them.
+    radioUse: cfg.radioUse === 'locked' ? 'locked' : 'single',
+    ...(cfg.serverLocation ? { serverLocation: cfg.serverLocation } : {}),
+    ...(cfg.publicName != null ? { publicName: cfg.publicName } : {}),
   };
 }
 
