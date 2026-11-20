@@ -607,6 +607,25 @@ class RtlTcpServerService : Service() {
         nm.notify(NOTIF_ID, buildNotification(statusText()))
     }
 
+    /**
+     * ★★★ CLOSING THE APP CLOSES THE SERVER (Stuart, 2026-11-20: "we need to be able to force quit the app to close it, cant
+     * have server still running when app is closed down"). Since beta88 the server lives in its own :server process, so a
+     * swipe out of recent apps — which ends only the UI process — would have left it serving. A swipe now does exactly what
+     * the owner's Stop does: disarm (so neither the restore nor the watchdog brings it back), the watchdog alarm cancelled,
+     * mDNS / tunnel / engine / LAN off, then this service stops. Settings → Force stop already kills both processes and
+     * the alarm. What the split still protects against is what the owner did NOT ask for: a WebView update, a backup, a
+     * low-memory kill of the UI.
+     * ★ A server started at boot with no task (a TV box, Lite on the Sony) has no task to remove, so this never fires there.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "the app was closed (swiped out of recent apps) — stopping the server as Stop would")
+        val ctx = applicationContext
+        try { VibeServerOps.stopVibeServer(ctx) } catch (t: Throwable) { Log.w(TAG, "stop on close: ${t.message}") }
+        try { VibeServerOps.rtlStop(ctx) } catch (t: Throwable) { Log.w(TAG, "rtl_tcp stop on close: ${t.message}") }
+        try { stopSelf() } catch (_: Throwable) {}
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
         if (instance === this) { instance = null; micTypeActive = false }

@@ -339,7 +339,7 @@ object VibeServerOps {
     }
 
     @Synchronized
-    private fun rtlStop(ctx: Context) {
+    internal fun rtlStop(ctx: Context) {
         val had = rtlConn != null
         try { VibeLocalSDR.stopServer() } catch (_: Throwable) {}
         rtlConn?.let { try { it.close() } catch (_: Exception) {} }

@@ -146,7 +146,9 @@ default from Android 14 and USE_EXACT_ALARM is for alarm-clock/calendar apps und
    net.vibesdr.app:server`). Expect START_STICKY back within seconds; if not, the watchdog within ~5–15 min. Read
    `run-as` is closed on a user build — read `server_trail.txt` through Diagnostics once wired, or logcat tag
    `VibeServerRestore`/`RtlTcpServerService`/`VibeServerWatchdog`.
-3. **Kill the UI only:** swipe the app away from recents while serving. Server keeps serving.
+3. **Close the app:** swipe it away from recents while serving. ★ The server STOPS, as Stop would, and stays stopped —
+   no watchdog restart, no restore (Stuart 11-20: "cant have server still running when app is closed down";
+   RtlTcpServerService.onTaskRemoved). Settings → Force stop: the same.
 4. **Remote settings:** set an admin password, switch "Remote access to server settings" on, Start. On a PC open
    `http://<phone>:<port>/setup`, sign in, change the landing message and listeners, Apply. The server restarts (listeners
    reconnect), and the phone's server screen shows the new values (open it, or watch it if open).
