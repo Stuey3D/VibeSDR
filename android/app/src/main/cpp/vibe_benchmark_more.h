@@ -1333,7 +1333,10 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
      *  one 2 MHz band at 2.4 MS/s, fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS and the datalink). Three sondes
      *  from our own transmitter (vibe_rs41_tx.h), one frame a second each, in four seconds of noise, looped. */
     /* ★ The service as the server runs it: `x` (2.4 MS/s, looped) fed IN REAL TIME, scored by the hottest thread. */
-    auto sondeService = [&](Row& r, std::vector<vibers41::cf32>& x, double fs) {
+    /*  ★ `untilSec`: a type whose first frame needs longer than the measured run (the DFM: its serial comes in halves) is
+     *  fed on IN REAL TIME, unmeasured, after the score is taken — until it gives a frame or `untilSec` of signal has gone
+     *  in — so "decoded its signal" is asked of the whole clip, and the CPU figure is the same 3 s as every row. */
+    auto sondeService = [&](Row& r, std::vector<vibers41::cf32>& x, double fs, double untilSec = 0) {
         const vibers41::Band* b = vibers41::bandById("mid");
         vibers41::Service svc;
         svc.start(*b, b->centreHz, fs);
@@ -1349,8 +1352,19 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
+        const bool behind = svc.dropped();
+        if (untilSec > fed) {
+            const double t1 = wallNow(), fed1 = fed;
+            while (fed < untilSec && svc.tracker().frames() == 0) {
+                svc.feed(x.data() + pos, blk);
+                pos = (pos + blk) % x.size(); fed += blk / fs;
+                const double ahead = (fed - fed1) - (wallNow() - t1);
+                if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
         r.decoded = (int)svc.tracker().frames();
-        if (svc.dropped()) r.label += " (fell behind)";
+        if (behind) r.label += " (fell behind)";
         svc.stop();
     };
     run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
@@ -1387,7 +1401,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
             tx.put(0, d.chips(secs));
             tx.render(x.data(), x.size(), 0);
         }
-        sondeService(r, x, fs);
+        sondeService(r, x, fs, secs);   // ★ the whole 12 s if need be (the serial in halves)
         return r;
     });
     run("dec_m10", "Decoder: M10 / M20 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
