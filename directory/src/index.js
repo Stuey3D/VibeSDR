@@ -12,6 +12,9 @@
  *     compare hashes.
  */
 
+import { runMirror, serveSats, serveSatsStatus } from './sats.js';
+import satsCurated from './sats-curated.json' with { type: 'json' };
+
 const PING_SEC = 900;              // 15 minutes — the sdr.hu interval, arrived at independently.
 /**
  * ★★★ NOTHING ABOUT A SERVER IS KEPT MORE THAN 90 DAYS AFTER IT WAS LAST SEEN (2026-10-05, Google Play's Data safety
@@ -1996,6 +1999,19 @@ export default {
     }
     return res;
   },
+
+  /* ★★ V12 THE SATELLITE MIRROR (src/sats.js; wrangler.jsonc "triggers"): the only CelesTrak client in VibeSDR. Every
+   *    VibeServer syncs GET /api/sats from here instead of asking CelesTrak. A round refuses itself inside its holds. */
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil((async () => {
+      try {
+        const r = await runMirror(env, { curated: satsCurated });
+        console.log(JSON.stringify({ sats_mirror_round: r }));
+      } catch (e) {
+        console.error('sats mirror error', (e && e.stack) || String(e));
+      }
+    })());
+  },
 };
 
 async function handle(request, env) {
@@ -2027,6 +2043,9 @@ async function handle(request, env) {
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
       if (p === '/api/directory/delist' && request.method === 'POST') return await delist(request, env);
       if (p === '/api/eibi' && request.method === 'GET') return await eibi(request);
+      // ★ V12 satellites: sats.json (ETag / Last-Modified) and the mirror's state for a person
+      if (p === '/api/sats' && request.method === 'GET') return await serveSats(request, env);
+      if (p === '/api/sats/status' && request.method === 'GET') return await serveSatsStatus(env);
       // ★ The server benchmark's UPLINK test (vibe_benchmark / Stuart, 2026-09-19): the server posts a few MB, we read
       //   and discard it, and it times the upload. Listeners it can carry = uplink / 100 kB/s (his worst case).
       //   Read and dropped, never stored; capped so it cannot be used to push arbitrary volumes through us.

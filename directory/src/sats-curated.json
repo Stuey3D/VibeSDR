@@ -1,0 +1,54 @@
+{
+  "_comment": "V12 SATELLITE ENGINE — the curated birds sats.json is built from (docs/v12/SATELLITE-ENGINE.md §6). Checked 2026-11-19 against AMSAT's live FM and Live Linear Satellites pages, CelesTrak's amateur + weather groups and SatNOGS. The server's built-in copy for a first boot offline is curatedCatalogue() in android/app/src/main/cpp/vibe_sat_engine.h — test-sat-engine §9 fails if the two drift. 'follow': 'mode' = SatNOGS may move this downlink (Meteor's frequency and mode change on orbit, brief §6.2 TRAP). Catalogue numbers are plain integers up to 9 digits (OMM), never 5-digit TLE fields.",
+  "groups": ["amateur", "weather"],
+  "satellites": [
+    { "id": "ISS", "name": "ISS", "norad": 25544, "group": "amateur", "note": "Crew contacts, events and the repeater when ARISS has it on",
+      "transmitters": [
+        { "label": "FM repeater", "downlink": 437800000, "mode": "nfm", "loop": "fll", "uplink": 145990000, "ctcss": 67.0, "note": "Cross-band repeater, uplink 145.990 MHz (67 Hz)" },
+        { "label": "Voice / SSTV", "downlink": 145800000, "mode": "nfm", "loop": "fll", "note": "School contacts and SSTV events" },
+        { "label": "APRS", "downlink": 145825000, "mode": "nfm", "loop": "fll", "consumer": "ax25-1200", "baud": 1200 } ] },
+    { "id": "SO-50", "name": "SO-50 (SaudiSat-1C)", "norad": 27607, "group": "amateur", "note": "FM repeater; armed by a 74.4 Hz tone, 10 minute timer",
+      "transmitters": [
+        { "label": "FM repeater", "downlink": 436795000, "mode": "nfm", "loop": "fll", "uplink": 145850000, "ctcss": 67.0, "note": "Uplink 145.850 MHz (67 Hz)" } ] },
+    { "id": "AO-123", "name": "AO-123 (ASRTU-1)", "norad": 61781, "group": "amateur", "note": "FM repeater",
+      "transmitters": [
+        { "label": "FM repeater", "downlink": 435400000, "mode": "nfm", "loop": "fll", "uplink": 145850000, "ctcss": 67.0, "note": "Uplink 145.850 MHz (67 Hz)" } ] },
+    { "id": "PO-101", "name": "PO-101 (Diwata-2)", "norad": 43678, "group": "amateur", "note": "FM repeater on a schedule",
+      "transmitters": [
+        { "label": "FM repeater", "downlink": 145900000, "mode": "nfm", "loop": "fll", "uplink": 437500000, "ctcss": 141.3, "note": "Uplink 437.500 MHz (141.3 Hz)" } ] },
+    { "id": "RS-44", "name": "RS-44", "norad": 44909, "group": "amateur", "note": "Linear transponder, inverting",
+      "transmitters": [
+        { "label": "Transponder", "downlink": 435610000, "downlinkHigh": 435670000, "mode": "usb", "loop": "none", "uplink": 145935000 },
+        { "label": "CW beacon", "downlink": 435605000, "mode": "cw", "loop": "none" } ] },
+    { "id": "FO-29", "name": "FO-29 (JAS-2)", "norad": 24278, "group": "amateur", "note": "Linear transponder on a schedule (power permitting)",
+      "transmitters": [
+        { "label": "Transponder", "downlink": 435800000, "downlinkHigh": 435900000, "mode": "usb", "loop": "none", "uplink": 145900000 },
+        { "label": "CW beacon", "downlink": 435795000, "mode": "cw", "loop": "none" } ] },
+    { "id": "AO-7", "name": "AO-7", "norad": 7530, "group": "amateur", "note": "Sunlight only; mode A or B by its own timer",
+      "transmitters": [
+        { "label": "Mode B transponder", "downlink": 145925000, "downlinkHigh": 145975000, "mode": "usb", "loop": "none", "uplink": 432125000 },
+        { "label": "Mode A transponder", "downlink": 29400000, "downlinkHigh": 29500000, "mode": "usb", "loop": "none", "uplink": 145850000 },
+        { "label": "Beacon", "downlink": 29502000, "mode": "cw", "loop": "none" } ] },
+    { "id": "AO-73", "name": "AO-73 (FUNcube-1)", "norad": 39444, "group": "amateur", "note": "Transponder in eclipse; telemetry in sunlight",
+      "transmitters": [
+        { "label": "Transponder", "downlink": 145950000, "downlinkHigh": 145970000, "mode": "usb", "loop": "none", "uplink": 435130000 },
+        { "label": "Telemetry", "downlink": 145935000, "mode": "usb", "loop": "none", "consumer": "bpsk-telemetry", "baud": 1200 } ] },
+    { "id": "JO-97", "name": "JO-97 (JY1Sat)", "norad": 43803, "group": "amateur", "note": "Linear transponder",
+      "transmitters": [
+        { "label": "Transponder", "downlink": 145855000, "downlinkHigh": 145875000, "mode": "usb", "loop": "none", "uplink": 435100000 } ] },
+    { "id": "MO-122", "name": "MO-122 (MESAT1)", "norad": 60209, "group": "amateur", "note": "Linear transponder",
+      "transmitters": [
+        { "label": "Transponder", "downlink": 435810000, "downlinkHigh": 435840000, "mode": "usb", "loop": "none", "uplink": 145910000 },
+        { "label": "Telemetry", "downlink": 435800000, "mode": "usb", "loop": "none", "consumer": "bpsk-telemetry", "baud": 1200 } ] },
+    { "id": "SONATE-2", "name": "SONATE-2", "norad": 59112, "group": "amateur", "note": "Telemetry and APRS",
+      "transmitters": [
+        { "label": "Telemetry", "downlink": 437025000, "mode": "nfm", "loop": "none", "consumer": "ax25-9600", "baud": 9600 },
+        { "label": "APRS", "downlink": 145825000, "mode": "nfm", "loop": "fll", "consumer": "ax25-1200", "baud": 1200 } ] },
+    { "id": "METEOR-M2-3", "name": "Meteor-M2-3", "norad": 57166, "group": "weather", "note": "Weather images (LRPT); mode and frequency can change",
+      "transmitters": [
+        { "label": "LRPT", "downlink": 137900000, "mode": "lrpt", "loop": "costas", "consumer": "lrpt", "baud": 72000, "follow": "mode" } ] },
+    { "id": "METEOR-M2-4", "name": "Meteor-M2-4", "norad": 59051, "group": "weather", "note": "Weather images (LRPT); mode and frequency can change",
+      "transmitters": [
+        { "label": "LRPT", "downlink": 137900000, "mode": "lrpt", "loop": "costas", "consumer": "lrpt", "baud": 72000, "follow": "mode" } ] }
+  ]
+}
