@@ -64,6 +64,12 @@ object VibeMapGL {
                 val adsb = File(app.filesDir, "adsb").apply { mkdirs() }
                 val ext = try { app.getExternalFilesDir("adsb") } catch (t: Throwable) { null }
                 nativeInitAdsb(adsb.absolutePath, (ext ?: adsb).absolutePath, "VibeServer-Android (+https://vibesdr.net)")
+                // ★★ V12 SATELLITE DATA (docs/v12/SATELLITE-MODE.md item 9): vibesdr.net's sats.json for this phone's
+                //    server — daily, conditional, held on errors, fetched AT ONCE when a listener opens SATELLITE on a
+                //    server with none. The copy and its state live in filesDir/sat (a restart does not refetch). Never
+                //    CelesTrak. The main app and Lite both come through here (this file is SHARED).
+                try { nativeInitSats(app.filesDir.absolutePath, "VibeServer-Android (satellite data; +https://vibesdr.net)") }
+                catch (t: Throwable) { Log.e(TAG, "satellite data not wired into the server: ${t.message}") }
                 nativeReady = true
             }
         } catch (t: Throwable) {
@@ -245,6 +251,58 @@ object VibeMapGL {
         }
     }
 
+    /**
+     * ★★ V12 SATELLITE DATA'S TRANSPORT (vibeserver/satcat.cpp owns the policy — the SAME file the Linux server runs:
+     *  daily, conditional, the holds, the on-open fetch). One CONDITIONAL GET of vibesdr.net's sats.json into `dest`.
+     *  Returns "status\tetag\tlast-modified\tretry-after\terror" with the REAL HTTP status (satcat tells a 503 from a 404:
+     *  an overloaded mirror is held for its Retry-After, ≥ 15 min). 0 = no answer (network, timeout). No retry here,
+     *  ever — the one request is satcat's to make. Called from satcat's own low-priority thread through JNI.
+     */
+    @JvmStatic
+    fun fetchSats(url: String, dest: String, ifNoneMatch: String, ifModifiedSince: String, userAgent: String): String {
+        val clean = { s: String -> s.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ') }
+        return try {
+            val b = Request.Builder().url(url).header("User-Agent", userAgent)
+            if (ifNoneMatch.isNotEmpty()) b.header("If-None-Match", ifNoneMatch)
+            if (ifModifiedSince.isNotEmpty()) b.header("If-Modified-Since", ifModifiedSince)
+            satHttp.newCall(b.build()).execute().use { r ->
+                val etag = clean(r.header("ETag") ?: "")
+                val lm = clean(r.header("Last-Modified") ?: "")
+                val ra = clean(r.header("Retry-After") ?: "")
+                if (r.code != 200) return "${r.code}\t$etag\t$lm\t$ra\t"
+                val body = r.body ?: return "0\t\t\t\tno body"
+                val f = File(dest); f.parentFile?.mkdirs()
+                val buf = ByteArray(16 * 1024)
+                var total = 0L
+                body.byteStream().use { input ->
+                    FileOutputStream(f, false).use { o ->
+                        while (true) {
+                            val n = input.read(buf); if (n < 0) break
+                            total += n
+                            if (total > 4L * 1024 * 1024) break   // ★ satcat's kMaxBytes: sats.json is ~20 KB
+                            o.write(buf, 0, n)
+                        }
+                        o.fd.sync()
+                    }
+                }
+                "200\t$etag\t$lm\t$ra\t"
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "satellite data fetch failed: ${t.message}")
+            "0\t\t\t\t${clean(t.message ?: "failed")}"
+        }
+    }
+    /** ★ Its own short-timeout client: no redirects (an address that moves is a fault to report, as curl -L is not used on
+     *  Linux), 15 s to connect, 45 s in all — the Linux server's curl limits. */
+    private val satHttp by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
+            .followRedirects(false).followSslRedirects(false)
+            .sslSocketFactory(VibeTls.socketFactory, VibeTls.trustManager)
+            .build()
+    }
+
     // ── Native (vibe_localsdr_jni.cpp) ─────────────────────────────────────────────────────────
     /** Caches this class for the downloader, sets the data dir, installs the downloader. */
     @JvmStatic private external fun nativeInit(dataDir: String)
@@ -252,4 +310,7 @@ object VibeMapGL {
     @JvmStatic private external fun nativeProgress(handle: Long, written: Long, total: Long)
     /** V12 ADS-B aircraft data: its data dir, the owner's image folders, the transport (fetchIf); starts the weekly job. */
     @JvmStatic private external fun nativeInitAdsb(dataDir: String, imagesDir: String, userAgent: String)
+    /** V12 satellite data: the data dir (its sat/ folder), the transport (fetchSats); loads the copy, starts the daily
+     *  runner and installs the on-open fetch (vibeserver/satcat.cpp). */
+    @JvmStatic private external fun nativeInitSats(dataDir: String, userAgent: String)
 }

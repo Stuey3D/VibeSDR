@@ -37,6 +37,11 @@
 #include "../../../../../vibeserver/geoip.h"
 #include "../../../../../vibeserver/asndb.h"
 #include "../../../../../vibeserver/radiodns.h"
+#include "../../../../../vibeserver/satcat.h"   // ★★ V12 satellite data: the Linux server's own sync policy (transport below)
+#include "vibe_sat_engine.h"                     // its validator (parseSats)
+#include <atomic>
+#include <ctime>
+#include <random>
 #include "vibe_bands.h"   // the server's own band list, shared with the limiter
 #include "vibe_dab_channels.h"   // ★ Band III, for the DAB landing station's block list
 #include <cstdio>
@@ -237,6 +242,78 @@ Java_com_vibesdr_app_VibeMapGL_nativeInitAdsb(JNIEnv* env, jclass cls, jstring j
     // ★ V12 balloons: Horus payload names beside the aircraft data, fetched the same way (vibe_horus_names.h)
     { const size_t sl = data.find_last_of('/'); vibe::LocalSdrShim::setHorusNamesDir((sl == std::string::npos ? data : data.substr(0, sl)) + "/horus"); }
     LOGI("adsb data: %s (images %s)", data.c_str(), images.c_str());
+}
+
+// ── ★★ V12 SATELLITE DATA: vibesdr.net's sats.json for the phone's own server (and Lite) ─────────────────────────────
+// ★★★ THE LINUX SERVER'S OWN POLICY, NOT A COPY: vibeserver/satcat.cpp (daily, jittered, conditional, the ≥ 15-min holds,
+//     one fetch per machine, the copy kept on disk so a restart does not refetch, THE ON-OPEN FETCH of SATELLITE MODE
+//     item 9). Only the transport crosses to Kotlin (Android has no curl): VibeMapGL.fetchSats, the class cached as
+//     a global ref by nativeInitAdsb / nativeInit (same JNI rules as jniAdsbFetch above). Never CelesTrak.
+static jmethodID g_satFetch = nullptr;
+static std::string g_satUa;
+
+static void jniSatFetch(const vssat::Request& rq, vssat::Response& rs) {
+    rs = vssat::Response{};
+    if (!g_vm || !g_mapglCls || !g_satFetch) { rs.msg = "no downloader"; return; }
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { rs.msg = "could not attach to the JVM"; return; }
+        attached = true;
+    }
+    jstring a = env->NewStringUTF(rq.url.c_str()), b = env->NewStringUTF(rq.dest.c_str()), c = env->NewStringUTF(rq.ifNoneMatch.c_str()),
+            d = env->NewStringUTF(rq.ifModifiedSince.c_str()), e = env->NewStringUTF(g_satUa.c_str());
+    jstring res = (jstring)env->CallStaticObjectMethod(g_mapglCls, g_satFetch, a, b, c, d, e);
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); res = nullptr; rs.msg = "Java exception"; }
+    if (res) {
+        const char* s = env->GetStringUTFChars(res, nullptr);
+        std::string line = s ? s : "";
+        if (s) env->ReleaseStringUTFChars(res, s);
+        env->DeleteLocalRef(res);
+        // "status\tetag\tlast-modified\tretry-after\terror"
+        std::vector<std::string> f; size_t o = 0;
+        while (f.size() < 4) { const size_t t = line.find('\t', o); if (t == std::string::npos) break; f.push_back(line.substr(o, t - o)); o = t + 1; }
+        f.push_back(line.substr(o));
+        if (f.size() == 5) {
+            rs.code = std::atoi(f[0].c_str()); rs.etag = f[1]; rs.lastModified = f[2];
+            rs.retryAfter = vssat::parseRetryAfter(f[3], std::time(nullptr)); rs.msg = f[4];
+        }
+    }
+    env->DeleteLocalRef(a); env->DeleteLocalRef(b); env->DeleteLocalRef(c); env->DeleteLocalRef(d); env->DeleteLocalRef(e);
+    if (attached) g_vm->DetachCurrentThread();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeMapGL_nativeInitSats(JNIEnv* env, jclass cls, jstring jDir, jstring jUa) {
+    if (!g_mapglCls) g_mapglCls = (jclass)env->NewGlobalRef(cls);
+    if (!g_satFetch) {
+        g_satFetch = env->GetStaticMethodID(cls, "fetchSats",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_satFetch = nullptr; }
+    }
+    auto str = [&](jstring j) { std::string o; if (j) { const char* c = env->GetStringUTFChars(j, nullptr); if (c) { o = c; env->ReleaseStringUTFChars(j, c); } } return o; };
+    const std::string dir = str(jDir);
+    g_satUa = str(jUa);
+    if (dir.empty() || !g_satFetch) { LOGE("satellite data: no %s — this server gets no orbit data", dir.empty() ? "data dir" : "VibeMapGL.fetchSats"); return; }
+    vssat::setDir(dir);
+    vssat::setFetcher(jniSatFetch);
+    vssat::setPublisher([](const std::string& json) { vibe::LocalSdrShim::satLoadSats(json); });
+    vssat::setValidator([](const std::string& body, std::string& err) {
+        std::vector<vibe::sat::SatDef> d; std::vector<vibe::sat::Elements> e; std::vector<bool> h; vibe::sat::SatsMeta m;
+        return vibe::sat::parseSats(body, d, e, h, m, err);
+    });
+    // ★ once per process: the copy published at once (any age — the engine shows how old), then the runner
+    static std::atomic<bool> loaded{false};
+    if (!loaded.exchange(true) && vssat::loadFromCache() > 0) LOGI("satellite data: from this phone's copy");
+    vibe::LocalSdrShim::setSatSupplyNote(vssat::listenerNote());
+    vibe::LocalSdrShim::setSatSupplyHooks([] { return vssat::lastSynced(); }, [] { return vssat::fetching(); }, [] { return vssat::kick(); });
+    vssat::RunnerHooks h;
+    h.wanted = [] { return vibe::LocalSdrShim::satWanted(); };
+    h.note = [](const std::string& n) { vibe::LocalSdrShim::setSatSupplyNote(n); };
+    h.log = [](const std::string& l) { LOGI("%s", l.c_str()); };
+    // ★ 30–330 s first (a fleet of phones restarted by an update does not ask together) — or at once on SATELLITE's open
+    vssat::startDaily(std::move(h), 30 + (int)(std::random_device{}() % 300));
+    LOGI("satellite data: %s/sat (vibesdr.net, daily + on open)", dir.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
