@@ -735,10 +735,11 @@ class ChargerWatch:
     The PMIC reads are the same atomic SMBus transfers as the limit's (pmic_read)."""
     POLL_S, CHECK_S, ERR_BACKOFF_S, FLIP_MAX = 0.1, 1.0, 5.0, 20
 
-    def __init__(self, dev, target=lambda: CHRG_IN_2A, trace=None):
+    def __init__(self, dev, target=lambda: CHRG_IN_2A, trace=None, fast=None):
         self.dev = dev
         self.target = target          # () → the CHRG_IN byte to hold (the INPUT FLOOR setting)
         self.trace = trace            # FastTrace or None
+        self.fast = fast              # FastCapture or None (h81: the ~1 ms USB-drop capture + the 0.30 A tail lines)
         self.online = None            # last `online` seen (None before the first look)
         self.status = None
         self.next_check = 0.0
@@ -785,11 +786,25 @@ class ChargerWatch:
         return {"port": _uv(CHG + "/voltage_avg"), "batV": _uv(BAT + "/voltage_avg"), "batA": _uv(BAT + "/current_avg"),
                 "status": rd(BAT + "/status", "Unknown")}
 
+    def charge_current(self, now):
+        """(A, + = into the battery, where it came from): the 20 ms trace's register reading while it is fresh, else the
+        driver's sysfs current_avg (refreshed every 8 s — fine for a threshold the CV tail crosses over minutes)."""
+        cur = self.trace.latest_cur(now) if self.trace else None
+        if cur is not None:
+            s = self.trace.last
+            return cur, " (registers: %s)" % self.trace._fmt(s)
+        cur = _uv(BAT + "/current_avg")
+        return cur, " (sysfs, the driver's 8 s figure: bat %s, port %s)" % (_f(_uv(BAT + "/voltage_avg"), "V"),
+                                                                           _f(_uv(CHG + "/voltage_avg"), "V"))
+
     def tick(self, now):
         online = rd(CHG + "/online", "0") == "1"
         status = rd(BAT + "/status", "Unknown")
         if self.trace:
             self.trace.set_online(online)
+        if self.fast:
+            cur, how = self.charge_current(now) if online else (None, "")
+            self.fast.tick(now, online, cur, how)
         if self.online is None:
             self.online, self.status = online, status
             if online:
@@ -911,6 +926,22 @@ def sts_text(sts):
     if not sts & 0x80: bits.append("NO-BAT")
     return "/".join(bits)
 
+def fmt_sample(s, kb, res_div):
+    """One trace sample (t, sts, cin, cout, bat_raw, cur_raw, usb_raw) as the chgtrace lines show it — the 20 ms trace and
+    the fast capture both print through this, so their volts and amps are the same arithmetic."""
+    t, sts, cin, cout, bv, bc, uv = s
+    hx = lambda x: "??" if x is None else "%02x" % x
+    return "%s IN %s OUT %s bat %s %s port %s" % (sts_text(sts), hx(cin), hx(cout), _f(adc_bat_v(bv, kb), "V"),
+                                                 _f(adc_bat_a(bc, res_div), "A", True), _f(adc_usb_v(uv, kb), "V"))
+
+def stats_text(samples, kb, res_div):
+    pv = [adc_usb_v(s[6], kb) for s in samples]; pv = [x for x in pv if x is not None]
+    ba = [adc_bat_a(s[5], res_div) for s in samples]; ba = [x for x in ba if x is not None]
+    bv = [adc_bat_v(s[4], kb) for s in samples]; bv = [x for x in bv if x is not None]
+    clamp = sum(1 for s in samples if s[1] is not None and s[1] & 0x04)
+    f3 = lambda xs, u, sg=False: "?" if not xs else "%s/%s/%s" % (_f(min(xs), u, sg), _f(sum(xs) / len(xs), u, sg), _f(max(xs), u, sg))
+    return "port %s · bat %s %s (min/mean/max) · input clamp %d of %d samples" % (f3(pv, "V"), f3(bv, "V"), f3(ba, "A", True), clamp, len(samples))
+
 def usb_devices(root=None):
     """The USB devices on the bus now (sysfs names like '1-1', '1-1.2' — no interfaces, no root hubs)."""
     root = root or SYS + "/bus/usb/devices"
@@ -939,7 +970,15 @@ class FastTrace:
         self.cpu_t0 = self.cpu_w0 = None
         self.gone_at = {}             # name → when it disappeared (for "back after N s")
         self.err_at, self.checked = -1e9, False
+        self.last = None              # the newest sample (FastCapture's charge current, while it is fresh)
         self.lock = threading.Lock()
+
+    def latest_cur(self, now, max_age=0.5):
+        """The battery current (A, + = charging) from the newest register sample, or None when there is none that fresh."""
+        s = self.last
+        if s is None or now - s[0] > max_age:
+            return None
+        return adc_bat_a(s[5], self.res_div)
 
     # ── input from ChargerWatch (the event loop) ──
     def set_online(self, online):
@@ -1001,6 +1040,7 @@ class FastTrace:
                 return False
             self._coeffs(t)
             s = self.read(t)
+            self.last = s
             if not self.checked and s[4] is not None:
                 self.checked = True
                 self._adc_check(s)
@@ -1053,18 +1093,10 @@ class FastTrace:
 
     # ── output ──
     def _fmt(self, s):
-        t, sts, cin, cout, bv, bc, uv = s
-        hx = lambda x: "??" if x is None else "%02x" % x
-        return "%s IN %s OUT %s bat %s %s port %s" % (sts_text(sts), hx(cin), hx(cout), _f(adc_bat_v(bv, self.kb), "V"),
-                                                     _f(adc_bat_a(bc, self.res_div), "A", True), _f(adc_usb_v(uv, self.kb), "V"))
+        return fmt_sample(s, self.kb, self.res_div)
 
     def _stats(self, samples):
-        pv = [adc_usb_v(s[6], self.kb) for s in samples]; pv = [x for x in pv if x is not None]
-        ba = [adc_bat_a(s[5], self.res_div) for s in samples]; ba = [x for x in ba if x is not None]
-        bv = [adc_bat_v(s[4], self.kb) for s in samples]; bv = [x for x in bv if x is not None]
-        clamp = sum(1 for s in samples if s[1] is not None and s[1] & 0x04)
-        f3 = lambda xs, u, sg=False: "?" if not xs else "%s/%s/%s" % (_f(min(xs), u, sg), _f(sum(xs) / len(xs), u, sg), _f(max(xs), u, sg))
-        return "port %s · bat %s %s (min/mean/max) · input clamp %d of %d samples" % (f3(pv, "V"), f3(bv, "V"), f3(ba, "A", True), clamp, len(samples))
+        return stats_text(samples, self.kb, self.res_div)
 
     def _dump(self, b):
         pre, post = b["pre"], b["post"]
@@ -1148,6 +1180,373 @@ class FastTrace:
             else:
                 nxt = now + 0.1                  # idle: look again 10 times a second
             stop.wait(max(0.0, nxt - time.monotonic()))
+
+
+# ── the FAST USB-drop capture (h81, 2026-11-20) ──────────────────────────────────────────────────────────────────────
+# ★★★ WHY: the h80 card (2026-11-19/20). With the cord in and the battery in the CV tail (charge current ~0.24 A,
+#     termination 0.20 A) USB 1-1 (the RTL-SDR on the OTG port, dwc2 ff300000.usb) dropped three times for 0.5 s at
+#     179.9 / 182.9 / 186.9 s: "dwc2 ff300000.usb: Not connected", usb_submit_urb -19, "USB disconnect", back ~0.3 s
+#     later — and the 20 ms trace above saw NOTHING change (port 4.844 V, bat 4.170 V +0.235 A, cccv, CHRG_IN 0xdd, no
+#     clamp). No PMIC write of ours near the drops; the charger state did not flip; never on battery; no drops at 0.4–0.7 A.
+#     So the event is shorter than 20 ms, and it comes in the nearly-full state. Python at 20 ms already costs ~12 % of a
+#     core on the A35, so the fast part is native: vibe-usbcap (image/r36s/native/vibe-usbcap.c), ~1 ms, read only.
+# ★★ WHEN IT RUNS (FastCapture.tick, from ChargerWatch's 100 ms tick): the cord in AND the charge current below FAST_A
+#    for HOLD_S AND a USB device on the bus. It stops STOP_GRACE_S after any of those ends (a drop at the plug-out still
+#    gets its "after"). ★ FAST_A is 0.45 A, not 0.30: the h79 drops came at 0.33–0.40 A (the driver's 8 s average);
+#    the 0.30 A line below is the TAIL LOG the h81 brief asked for. Below FAST_A includes a NEGATIVE current on the cord
+#    (the console taking more than the charger gives) — that is a stressed state too.
+# ★★ THE TAIL LOG: a line whenever the charge current with the cord in falls below TAIL_A (0.30 A, held HOLD_S) and
+#    when it rises back above TAIL_A + HYST_A — so the drops can be matched to the nearly-full state.
+# ★★★ THE BUS: vibe-usbcap reads with the same one-transfer I2C_SMBUS ioctls as PmicFd (pointer write + read under the
+#     adapter's lock), never writes; vibe-hwd stays the only writer of PMIC registers (ChargerWatch.apply_limit).
+# ★ Its records (READY / STAT / DUMP S R END / SKIP / ERR / BYE, one per line on its stdout) are turned into log lines
+#   here, with the 20 ms trace's own scaling (fmt_sample / stats_text): "chgtrace-fast#N …", times relative to the drop.
+USBCAP = "/usr/lib/vibesdr-r36s/vibe-usbcap"
+
+class Threshold:
+    """A debounced 'below LIMIT' on a noisy current: below once it has been < limit for hold_s, above again once it has
+    been ≥ limit + hyst for hold_s. update() returns True when the state flips. None (no reading) changes nothing."""
+    def __init__(self, limit, hold_s, hyst):
+        self.limit, self.hold, self.hyst = limit, hold_s, hyst
+        self.reset()
+
+    def reset(self):
+        self.below, self.since, self.flipped_at = False, None, None
+
+    def update(self, t, cur):
+        if cur is None:
+            return False
+        cond = cur < self.limit if not self.below else not (cur >= self.limit + self.hyst)
+        if cond == self.below:
+            self.since = None
+            return False
+        if self.since is None:
+            self.since = t
+        if t - self.since >= self.hold:
+            self.below, self.since, self.flipped_at = cond, None, t
+            return True
+        return False
+
+
+def dwc2_base_for(devs, sysroot=None):
+    """The physical base of the dwc2 controller the given USB devices hang off — only when the dwc2 DRIVER is bound to
+    it (/sys/bus/platform/drivers/dwc2/<addr>.usb): then its clocks are on (Rockchip: power_down NONE, no_clock_gating)
+    and vibe-usbcap may read HPRT0. None otherwise (the capture runs on the sysfs presence alone)."""
+    root = sysroot or SYS
+    bound = {}
+    for p in glob.glob(root + "/bus/platform/drivers/dwc2/*.usb"):
+        name = os.path.basename(p)
+        try:
+            bound[name] = int(name.split(".")[0], 16)
+        except ValueError:
+            continue
+    for d in sorted(devs):
+        real = os.path.realpath(root + "/bus/usb/devices/" + d)
+        for name, base in bound.items():
+            if "/" + name + "/" in real:
+                return base
+    return None
+
+
+HPRT_BITS = ((0x1, "conn"), (0x2, "conndet"), (0x4, "en"), (0x8, "enchg"), (0x10, "OVERCURRENT"), (0x20, "occhg"),
+             (0x80, "susp"), (0x100, "reset"), (0x1000, "pwr"))
+
+def hprt_text(h):
+    """dwc2 HPRT0 (mainline drivers/usb/dwc2/hw.h) in a few words: flags, speed, the D+/D- levels."""
+    if h is None:
+        return "otg ?"
+    flags = [n for b, n in HPRT_BITS if h & b] or ["-"]
+    spd = ("hs", "fs", "ls", "?")[(h >> 17) & 3] if h & 0x1 else ""
+    return "otg %s%s D+D- %d%d" % ("/".join(flags), " " + spd if spd else "", (h >> 10) & 1, (h >> 11) & 1)
+
+def pwr_en3_text(pe):
+    """RK817_POWER_EN_REG(3) 0xB4 — mainline rk808-regulator.c: bit 1 BOOST, bit 2 OTG_SWITCH (bits 4+ are write masks)."""
+    if pe is None:
+        return "?"
+    return "BOOST %s, OTG_SWITCH %s" % ("on" if pe & 0x2 else "off", "on" if pe & 0x4 else "off")
+
+
+class FastDumpReader:
+    """vibe-usbcap's stdout records → log lines. Pure (no I/O but log()), so the tests feed it synthetic records."""
+    LINE_MAX = 1500                    # a dump that would print more is cut (with a note) — the log is not a firehose
+    WHY = {"otg-port-disconnect": "the OTG port lost its device (dwc2 HPRT0 connect 1→0)"}
+
+    def __init__(self, res_div, vlim_mv=lambda: VLIM_DEFAULT_MV, logf=None):
+        self.res_div, self.vlim_mv = res_div, vlim_mv
+        self.log = logf or (lambda *a: log(*a))
+        self.kb, self.watch, self.ready = None, [], None
+        self.dump = None
+        self.stats = None              # the newest STAT record as a dict (tests + the stop line)
+
+    @staticmethod
+    def _kv(parts):
+        d = {}
+        for p in parts:
+            if "=" in p:
+                k, v = p.split("=", 1)
+                d[k] = v
+        return d
+
+    def _why(self, w):
+        out = []
+        for ev in w.split(","):
+            at = ""
+            if "@" in ev:
+                ev, at = ev.split("@", 1)
+                at = " at %s s" % at
+            if ev.startswith("usb-") and ev.endswith("-gone"):
+                out.append("USB %s left sysfs%s" % (ev[4:-5], at))
+            else:
+                out.append(self.WHY.get(ev, ev) + at)
+        return "; ".join(out)
+
+    def line(self, ln):
+        parts = ln.split()
+        if not parts:
+            return
+        k = parts[0]
+        try:
+            if k == "READY":
+                d = self._kv(parts[1:])
+                if " hprt=" in ln:
+                    d["hprt"] = ln.split(" hprt=", 1)[1].strip()     # the last field; may hold spaces
+                c0, c1 = d.get("vcalib", ",").split(",")
+                self.kb = adc_coeffs(int(c0, 16), int(c1, 16)) if c0 and c1 else None
+                self.watch = d.get("watch", "").split(",")
+                self.ready = d
+                pe = d.get("pwr_en3", "?")
+                self.log("chgtrace-fast: running — a sample every %s µs, a drop dumps %.1f s before / %.1f s after; watching "
+                         "USB %s; dwc2 HPRT0 %s; POWER_EN3 0x%s (%s), BOOST_OTG_CFG 0x%s" %
+                         (d.get("period_us", "?"), int(d.get("pre_us", 0)) / 1e6, int(d.get("post_us", 0)) / 1e6,
+                          d.get("watch", "?"), d.get("hprt", "?"), pe,
+                          pwr_en3_text(None if "?" in pe else int(pe, 16)), d.get("boost_cfg", "?")))
+            elif k == "STAT":
+                d = {x: int(v) for x, v in self._kv(parts[1:]).items()}
+                self.stats = d
+                wall = max(1, d["wall_us"])
+                self.log("chgtrace-fast: last %.0f s — %d samples, one every %.3f ms (mean), longest gap %.1f ms, %d over "
+                         "twice the period; PMIC reads %.2f ms a sample (max %.2f); %.1f %% of a core" %
+                         (wall / 1e6, d["samples"], d["mean_us"] / 1000.0, d["max_gap_us"] / 1000.0, d["over2x"],
+                          d["read_us"] / 1000.0, d["read_max_us"] / 1000.0, 100.0 * d["cpu_us"] / wall))
+            elif k == "DUMP":
+                self.dump = {"h": self._kv(parts[1:]), "rows": [], "prev": None, "lines": 0, "cut": False, "samples": []}
+            elif k in ("S", "R") and self.dump is not None:
+                self._row(k, parts)
+            elif k == "END" and self.dump is not None:
+                self._end()
+            elif k == "SKIP":
+                d = self._kv(parts[1:])
+                self.log("chgtrace-fast: %s at mono %.3f — not dumped (%s drops in 10 min already; %s skipped)" %
+                         (self._why(d.get("why", "?")), int(d.get("t", 0)) / 1e6, d.get("dumps", "?"), d.get("skipped", "?")))
+            elif k == "ERR":
+                self.log("chgtrace-fast: vibe-usbcap:", " ".join(parts[1:]))
+            elif k == "BYE":
+                pass
+            else:
+                self.log("chgtrace-fast: (unknown record)", ln.strip()[:120])
+        except (ValueError, KeyError, IndexError) as e:
+            self.log("chgtrace-fast: bad record (%s): %s" % (e, ln.strip()[:160]))
+
+    def _row(self, k, parts):
+        d = self.dump
+        h = d["h"]
+        n = int(h.get("n", 0))
+        tag = "chgtrace-fast#%d" % n
+        if k == "R":
+            cnt, last = int(parts[1]), int(parts[2])
+            if d["prev"] is not None:
+                d["samples"].extend([d["prev"]] * cnt)
+            self._out("%s   … same ×%d to %+.4f" % (tag, cnt, last / 1e6))
+            return
+        dt = int(parts[1])
+        cout, cin, sts, sysb = (int(x, 16) for x in parts[2:6])
+        bv, bc, uv = int(parts[6], 16), int(parts[7], 16), int(parts[8], 16)
+        if bc >= 0x8000:
+            bc -= 0x10000
+        hp = None if parts[9] == "-" else int(parts[9], 16)
+        present, err = int(parts[10], 16), int(parts[11])
+        s = (dt / 1e6, None if err else sts, None if err else cin, None if err else cout,
+             None if err else bv, None if err else bc, None if err else uv)
+        marks = ""
+        p = d["prev_raw"] if d.get("prev_raw") else None
+        if p is not None:
+            php, ppres = p
+            if php is not None and hp is not None:
+                if php & 1 and not hp & 1: marks += " ★ OTG PORT: NO DEVICE"
+                if not php & 1 and hp & 1: marks += " ★ OTG PORT: DEVICE BACK"
+                if hp & 0x10 and not php & 0x10: marks += " ★ OVERCURRENT"
+            for i, name in enumerate(self.watch):
+                if ppres >> i & 1 and not present >> i & 1: marks += " ★ USB %s GONE" % name
+                if not ppres >> i & 1 and present >> i & 1: marks += " ★ USB %s BACK" % name
+        if err:
+            marks += " ✗ PMIC read failed"
+        d["prev_raw"] = (hp, present)
+        d["prev"] = s
+        d["samples"].append(s)
+        usb = ",".join(nm for i, nm in enumerate(self.watch) if present >> i & 1) or "none"
+        self._out("%s %+.4f %s · sys %02x%s · %s · USB %s%s" %
+                  (tag, dt / 1e6, fmt_sample(s, self.kb, self.res_div), sysb, " plug" if sysb & 0x40 else " NO-PLUG",
+                   hprt_text(hp), usb, marks))
+
+    def _out(self, text):
+        d = self.dump
+        if d["lines"] < self.LINE_MAX:
+            d["rows"].append(text)
+        else:
+            d["cut"] = True
+        d["lines"] += 1
+
+    def _end(self):
+        d, self.dump = self.dump, None
+        h = d["h"]
+        n = int(h.get("n", 0))
+        tag = "chgtrace-fast#%d" % n
+        vl = self.vlim_mv()
+        pe = h.get("pwr_en3", "?")
+        self.log("%s DROP: %s at mono %.4f s (≈ the kernel's [time]) — %.3f s before, %.3f s after%s; a sample every %.3f ms "
+                 "(median; longest gap %.1f ms), PMIC reads %.2f ms a sample; input floor %.1f V%s; POWER_EN3 0x%s (%s), "
+                 "BOOST_OTG_CFG 0x%s" %
+                 (tag, self._why(h.get("why", "?")), int(h["t0"]) / 1e6, int(h.get("pre_us", 0)) / 1e6,
+                  int(h.get("post_us", 0)) / 1e6, " (cut short: the capture was stopped)" if h.get("cut") == "1" else "",
+                  int(h.get("med_us", 0)) / 1000.0, int(h.get("max_gap_us", 0)) / 1000.0, int(h.get("read_us", 0)) / 1000.0,
+                  vl / 1000.0, "" if vl == VLIM_DEFAULT_MV else " (TEST)", pe,
+                  pwr_en3_text(None if "?" in pe else int(pe, 16)), h.get("boost_cfg", "?")))
+        for r in d["rows"]:
+            self.log(r)
+        if d["cut"]:
+            self.log("%s   … %d more lines not logged (a dump prints at most %d)" % (tag, d["lines"] - self.LINE_MAX, self.LINE_MAX))
+        self.log("%s end — %s · %s samples" % (tag, stats_text(d["samples"], self.kb, self.res_div), h.get("samples", "?")))
+
+
+class FastCapture:
+    """Runs vibe-usbcap while the state is risky (see above), logs the tail crossings, and relays its records."""
+    FAST_A, TAIL_A, HOLD_S, HYST_A = 0.45, 0.30, 2.0, 0.02
+    STOP_GRACE_S = 2.0
+    RESTART_MAX, RESTART_WINDOW_S, RESTART_WAIT_S = 5, 600.0, 30.0
+    TAIL_MAX, TAIL_WINDOW_S = 20, 600.0
+
+    def __init__(self, i2c_dev, res_div, vlim_mv=lambda: VLIM_DEFAULT_MV, usb=usb_devices, exe=USBCAP,
+                 spawn=None, dwc2=dwc2_base_for, threads=True):
+        self.dev, self.res_div, self.vlim_mv, self.usb, self.exe = i2c_dev, res_div, vlim_mv, usb, exe
+        self.spawn = spawn or self._popen
+        self.dwc2, self.threads = dwc2, threads
+        self.fast = Threshold(self.FAST_A, self.HOLD_S, self.HYST_A)
+        self.tail = Threshold(self.TAIL_A, self.HOLD_S, self.HYST_A)
+        self.proc, self.reader, self.off_since, self.started_at = None, None, None, None
+        self.starts = collections.deque()
+        self.not_before = 0.0
+        self.tail_lines = collections.deque()
+        self.tail_dropped = 0
+        self.online = False
+        self.available = bool(i2c_dev) and os.access(exe, os.X_OK) if spawn is None else bool(i2c_dev)
+
+    @staticmethod
+    def _popen(argv):
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, bufsize=1,
+                                close_fds=True)
+
+    # ── the tail log ──
+    def _tail_log(self, now, text):
+        while self.tail_lines and now - self.tail_lines[0] > self.TAIL_WINDOW_S:
+            self.tail_lines.popleft()
+        if len(self.tail_lines) >= self.TAIL_MAX:
+            self.tail_dropped += 1
+            return
+        self.tail_lines.append(now)
+        if self.tail_dropped:
+            text += " (%d tail lines not logged before this)" % self.tail_dropped
+            self.tail_dropped = 0
+        log(text)
+
+    def tick(self, now, online, cur, extra=""):
+        """Every ChargerWatch tick: online = the cord, cur = the battery current in A (+ = charging) or None."""
+        if not online:
+            if self.online and self.tail.below:
+                self._tail_log(now, "chgtrace: the cord came out while the charge current was below %.2f A (for %.0f s)" %
+                               (self.TAIL_A, now - (self.tail.flipped_at or now)))
+            self.tail.reset(); self.fast.reset()
+        else:
+            went_below_at = self.tail.flipped_at
+            if self.tail.update(now, cur):
+                if self.tail.below:
+                    self._tail_log(now, "chgtrace: charge current with the cord in BELOW %.2f A — %s at mono %.3f%s" %
+                                   (self.TAIL_A, _f(cur, "A", True), now, extra))
+                else:
+                    self._tail_log(now, "chgtrace: charge current with the cord in back ABOVE %.2f A after %.0f s below — %s at mono %.3f%s" %
+                                   (self.TAIL_A, now - (went_below_at or now), _f(cur, "A", True), now, extra))
+            self.fast.update(now, cur)
+        self.online = online
+        self._run(now, online and self.fast.below)
+
+    # ── the sampler process ──
+    def _run(self, now, want):
+        if self.proc is not None and self.proc.poll() is not None:
+            rc = self.proc.returncode
+            log("chgtrace-fast: vibe-usbcap ended (exit %s) after %.0f s" % (rc, now - self.started_at))
+            self.proc = None
+            if rc not in (0, -signal.SIGTERM):
+                self.not_before = now + self.RESTART_WAIT_S
+        if self.proc is None:
+            if want and self.available and now >= self.not_before:
+                devs = self.usb()
+                if devs:
+                    self._start(now, devs)
+            return
+        if want:
+            self.off_since = None
+        elif self.off_since is None:
+            self.off_since = now
+        elif now - self.off_since >= self.STOP_GRACE_S:
+            self.stop(now, "the cord is out" if not self.online else "the charge current is back above %.2f A" % self.FAST_A)
+
+    def _start(self, now, devs):
+        while self.starts and now - self.starts[0] > self.RESTART_WINDOW_S:
+            self.starts.popleft()
+        if len(self.starts) >= self.RESTART_MAX:
+            self.not_before = now + self.RESTART_WAIT_S
+            log("chgtrace-fast: %d starts in 10 min — waiting %.0f s" % (self.RESTART_MAX, self.RESTART_WAIT_S))
+            return
+        self.starts.append(now)
+        watch = sorted(devs)[:8]
+        argv = [self.exe, "--i2c", self.dev, "--watch", ",".join(watch)]
+        base = self.dwc2(watch)
+        if base:
+            argv += ["--dwc2", "0x%x" % base]
+        try:
+            self.proc = self.spawn(argv)
+        except OSError as e:
+            log("chgtrace-fast: vibe-usbcap did not start:", e)
+            self.not_before = now + self.RESTART_WAIT_S
+            return
+        self.started_at, self.off_since = now, None
+        log("chgtrace-fast: started at mono %.3f — the cord in, the charge current below %.2f A for %.0f s, USB %s%s" %
+            (now, self.FAST_A, self.HOLD_S, ",".join(watch), "" if base else " (no dwc2 bound under it: sysfs presence only)"))
+        self.reader = FastDumpReader(self.res_div, self.vlim_mv)
+        if self.threads and getattr(self.proc, "stdout", None) is not None:
+            threading.Thread(target=self._pump, args=(self.proc, self.reader), name="usbcap", daemon=True).start()
+
+    @staticmethod
+    def _pump(proc, reader):
+        try:
+            for ln in proc.stdout:
+                reader.line(ln)
+        except (OSError, ValueError) as e:
+            log("chgtrace-fast: reading vibe-usbcap:", e)
+        finally:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+    def stop(self, now, why):
+        p, self.proc = self.proc, None
+        if p is None:
+            return
+        log("chgtrace-fast: stopping at mono %.3f after %.0f s — %s" % (now, now - (self.started_at or now), why))
+        try:
+            p.terminate()          # ★ a drop still collecting its "after" is printed, marked cut (vibe-usbcap's SIGTERM)
+        except OSError:
+            pass
 
 
 class Hwd:
@@ -1476,7 +1875,16 @@ class Hwd:
             log("chgtrace: ready — PMIC registers every %d ms while the charger is in and a USB device is plugged; a burst "
                 "at every USB drop and plug edge (sense resistor %s)" % (round(FastTrace.SAMPLE_S * 1000),
                 "÷%d" % trace.res_div if trace.res_div else "unknown — battery current left out"))
-        w = self.watch = ChargerWatch(dev, self.chrg_in_target, trace if reader else None)
+        # ★★ h81: the ~1 ms USB-drop capture (vibe-usbcap, native, read only) while the cord is in and the charge current
+        #    is low, and the 0.30 A tail lines — FastCapture, driven from the same 100 ms tick
+        fast = FastCapture(dev, trace.res_div, vlim_mv=lambda: self.cfg["vlimMv"]) if dev else None
+        if fast and not fast.available:
+            log("chgtrace-fast: %s missing — no fast capture (the tail lines still run)" % USBCAP)
+        elif fast:
+            log("chgtrace-fast: ready — %s runs (~1 ms samples) while the cord is in, a USB device is plugged and the "
+                "charge current has been below %.2f A for %.0f s; a line when it crosses %.2f A" %
+                (USBCAP, FastCapture.FAST_A, FastCapture.HOLD_S, FastCapture.TAIL_A))
+        w = self.watch = ChargerWatch(dev, self.chrg_in_target, trace if reader else None, fast)
         while True:
             w.tick(time.monotonic())
             await asyncio.sleep(ChargerWatch.POLL_S)
