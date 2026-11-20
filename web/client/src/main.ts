@@ -7572,12 +7572,12 @@ async function drawSplashSpectrogram(): Promise<void> {
   if (tip) tip.textContent = '';       // the element stays for layout; the text now lives on canvas
 }
 
-/* ── DAB (experimental) ──────────────────────────────────────────────────────────────────────
+/* ── DAB ─────────────────────────────────────────────────────────────────────────────────────
  *  ★★ OFFERED ONLY WHERE IT CAN WORK. The server decides — it is the only side that knows the
  *     EFFECTIVE limits after allow/block lists and a locked sample rate — and publishes `dab` in
  *     /vibeserver.json. AGENTS.md: never draw a control whose every use is a no-op.
- *  ★ Labelled "DAB (Experimental)" because it is, and because a user who knows to expect rough
- *    edges reports them instead of concluding the receiver is broken.
+ *  ★ No longer "(Experimental)" (Stuart, 2026-11-20: "its the most tested codec we have") — it was labelled so while it
+ *    was new, so a rough edge got reported rather than taken for a broken receiver.
  */
 let dabCapable = false;
 /* ★★ V12 DRM — a DEMODULATOR choice like AM (the server receives it per listener: vibe_drm_listener.h), offered only
@@ -15391,7 +15391,7 @@ setWholeRadioKeys(() => {
   add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
   add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
   add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
-  if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
+  if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
   add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');

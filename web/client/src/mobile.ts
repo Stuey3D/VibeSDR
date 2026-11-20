@@ -374,7 +374,7 @@ export function initMobileControls(deps: MobileDeps) {
       const dabRow = document.createElement('button');
       dabRow.className = 'mModeOpt' + (deps.dabOn() ? ' on' : '');
       setModeLabel(dabRow, 'dab', 'DAB');
-      dabRow.title = 'DAB (Experimental) — digital radio, Band III';
+      dabRow.title = 'DAB — digital radio, Band III';
       dabRow.onclick = () => { deps.toggleDab(); close(); refresh(); };
       grid.appendChild(dabRow);
     }

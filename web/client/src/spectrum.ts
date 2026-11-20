@@ -713,7 +713,7 @@ export interface SpectrumCallbacks {
   onOverload?: (steps: number, dir: number, gainTenthDb: number, agc: boolean,
                 adcPeak?: number) => void;
   onDialRefused?: () => void;
-  /** ★ DAB (experimental): the ensemble, the station list and the signal block, twice a second.
+  /** ★ DAB: the ensemble, the station list and the signal block, twice a second.
    *  Sent whole every time — the list changes rarely, and sending it entire means a client that
    *  joins mid-stream is never missing rows. */
   onDab?: (d: DabState) => void;
