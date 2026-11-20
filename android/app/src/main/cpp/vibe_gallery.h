@@ -468,6 +468,29 @@ public:
         ::close(fd);
         return out;
     }
+    /** ★ V12 2026-11-20 (the NAVTEX warm-up, vibe_navtex_warm.h): a fingerprint of ONE kind's live items — their count and
+     *  each row's name hash, line length and bytes — from the in-memory table, no file read. It changes when an item of
+     *  that kind is added, evicted, removed or replaced, and NOT when another kind is saved (an FT8 spot must not make the
+     *  shipping map rescan every NAVTEX message) nor when the index is compacted (offsets move, rows do not). 0 = none. */
+    uint64_t kindStamp(const std::string& kind) const {
+        const std::string dir = this->dir();
+        if (dir.empty()) return 0;
+        Lock fl(dir, true);
+        std::lock_guard<std::mutex> ck(cacheMtx_);
+        if (!refresh(dir)) return 0;
+        int want = -1;
+        for (size_t k = 0; k < cache_.kinds.size(); k++) if (cache_.kinds[k] == kind) want = (int)k;
+        if (want < 0) return 0;
+        uint64_t s = 1469598103934665603ull, n = 0;
+        auto mix = [&s](uint64_t v) { s ^= v; s *= 1099511628211ull; };
+        for (size_t i = cache_.firstLive; i < cache_.rows.size(); i++) {
+            const Row& r = cache_.rows[i];
+            if ((r.flags & kDead) || r.kind != (uint8_t)want) continue;
+            mix(r.h); mix(((uint64_t)r.len << 32) | r.bytes); n++;
+        }
+        mix(n);
+        return n ? s : 0;
+    }
     /** ★ V12 2026-11-04: an item's text rewritten WHERE IT STANDS with a new title, every other field of its index line
      *  kept exactly as its writer made it — time, origin, profile, radio, slot, download name, partial (a migration
      *  must not need the writer's Meta, nor this process's radio label). tmp + rename, ONE line appended (",\"re\":1").
