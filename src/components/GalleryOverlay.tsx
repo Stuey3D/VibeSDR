@@ -30,6 +30,7 @@ import { langName } from '../services/transcriber';
 import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
 import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
 import { navSanitise, type NavReport } from '../services/navtexMap';
+import { dscGalSummary, dscPinsFromGallery, DSC_GAL_WORDS } from '../services/shippingMap';   // ★ beta88 the DSC row
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -138,6 +139,17 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setNavSum(navSanitise(j)); }).catch(() => {});
     return () => { live = false; };
   }, [visible, kind, page, b, readAuth, !!onNavtexMap]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★ beta88 THE DSC CALLS WITH A POSITION (Stuart, 2026-11-20: "i have no map button to view them from the gallery on the
+   *  pi500") — the web's standing row: on page 1 of ALL / DSC, MAP opens the SHIPPING MAP, DSC first. Only when the gallery
+   *  holds a pinned DSC call (dscGalSummary; no dead control). */
+  const [dscSum, setDscSum] = useState<string | null>(null);
+  useEffect(() => {
+    if (!visible || !onShipMap || page !== 1 || (kind !== '' && kind !== 'dsc')) { setDscSum(null); return; }
+    let live = true;
+    fetch(withReadAuth(`${b}/vibeserver/gallery.json?kind=dsc&limit=300`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setDscSum(dscGalSummary(dscPinsFromGallery(j))); }).catch(() => {});
+    return () => { live = false; };
+  }, [visible, kind, page, b, readAuth, !!onShipMap]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
   /* ★ MAP: every day card of the band still in the gallery (the web's ismGalMapOpen — at most 31, one fetch at a time),
    *  merged; the screen's time filter picks. Today's card is offered for a refresh each minute (it is rewritten that often
@@ -285,7 +297,19 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
                     </View>
                   ) : null}
-                  ListHeaderComponent={navSum && navSum.stations.length > 0 && onNavtexMap ? (
+                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) ? (<>
+                  {!!dscSum && !!onShipMap && (
+                    <TouchableOpacity onPress={() => onShipMap('dsc', '')} accessibilityRole="button"
+                                      accessibilityLabel={`${dscSum}. Show them on the shipping map`} style={s.row}>
+                      <Text style={s.freq}>DSC</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.name}>{dscSum}</Text>
+                        <Text style={s.dim}>{DSC_GAL_WORDS}</Text>
+                      </View>
+                      <View style={[s.key, s.mapKey]}><Text style={s.keyText}>MAP</Text></View>
+                    </TouchableOpacity>
+                  )}
+                  {!!navSum && navSum.stations.length > 0 && !!onNavtexMap && (
                     <TouchableOpacity onPress={onNavtexMap} accessibilityRole="button"
                                       accessibilityLabel={`NAVTEX stations received: ${navSum.stations.length} stations, ${navSum.messages} messages. Show them on the map`}
                                       style={s.row}>
@@ -296,11 +320,14 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       </View>
                       <View style={[s.key, s.mapKey]}><Text style={s.keyText}>MAP</Text></View>
                     </TouchableOpacity>
-                  ) : null}
+                  )}
+                  </>) : null}
                   ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
                     <TouchableOpacity onPress={() => { void show(it); }} accessibilityRole="button"
-                                      style={[s.row, (it.lv ?? 0) >= 2 && { borderLeftWidth: 3, borderLeftColor: (it.lv ?? 0) >= 3 ? '#FF4B4B' : '#FF8A3D', paddingLeft: 6 }]}>
+                                      style={[s.row, (it.lv ?? 0) >= 2 && { borderLeftWidth: 3, borderLeftColor: (it.lv ?? 0) >= 3 ? '#FF4B4B' : '#FF8A3D', paddingLeft: 6 },
+                                              // ★ beta88 a routine / safety DSC call with a position: its map pin's colour (DSC_PIN_COLOURS)
+                                              it.k === 'dsc' && typeof it.plat === 'number' && (it.lv === 0 || it.lv === 1) && { borderLeftWidth: 3, borderLeftColor: it.lv === 1 ? '#E8C547' : '#9fb3c8', paddingLeft: 6 }]}>
                       <Text style={s.freq}>{galleryFreq(it.hz)}</Text>
                       <View style={{ flex: 1 }}>
                         <Text style={s.name}>{it.title || it.k.toUpperCase()}

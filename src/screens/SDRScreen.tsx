@@ -165,7 +165,7 @@ import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChan
 // ★★ V12 2026-11-02 THE SHIPPING MAP — AIS, DSC and NAVTEX on one map, the rules the web shares (docs/v12/SHIPPING-MAP.md)
 import { seaCompose, seaAreasFor, seaPlaceMet } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
 import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
-         dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus,
+         dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type StoredShips, type DscPin } from '../services/shippingMap';
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
 import { PAGING_LAW_NOTICE, pagingRecSilent, pagingMutedBanner } from '../services/paging';   // ★ V12 PAGE: the law, REC silent
@@ -11817,7 +11817,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const building = navBuilding(navWarnRep);
     return {
       items: [...sc.items, ...(navL.stations ? navItems(navReport) : []), ...navMetItems(areas, now, 'app'), ...navWarnItems(warns, now, 'app')],
-      rows, empty: shipFocus === 'dsc' ? DSC_MAP_EMPTY : shipFocus === 'ships' ? AIS_EMPTY : NAV_EMPTY, focus: shipKey,
+      rows, empty: shipFocus === 'dsc' ? DSC_SHIP_EMPTY : shipFocus === 'ships' ? AIS_EMPTY : NAV_EMPTY, focus: shipKey,
       status: [sc.status, navL.stations ? navStatus(navReport) : '', navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : '', building].filter(Boolean).join(' · '),
       note: building,
       trail: () => Promise.resolve([] as [number, number][]),
