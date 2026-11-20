@@ -290,6 +290,30 @@ elseif(VIBE_DRM_FAAD2)
   message(WARNING "FAAD2 (DRM) for ${ANDROID_ABI}: no ${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libfaad_drm.a — DRM AAC will be silent on this build (run sdr-kit/build-faad2.sh)")
 endif()
 
+# ★★ V12 FreeDV RADE V1 (2026-11-20, docs/v12/FREEDV.md "RADE") — FreeDV's rade_c + Opus 1.6.1's DNN code and FARGAN
+#    vocoder + freedv-backend's reliable text, all BSD, STATIC as on the Linux and Mac servers (VIBE_HAVE_RADE). Built by
+#    sdr-kit/build-rade-android.sh with the servers' own builder (vibeserver/linux/build-rade.sh) and pins: sdr-kit/<ABI>/lib
+#    for the app, lite/native/kit/armeabi-v7a for Lite (its own SDR_KIT_ROOT). Only vrade_* is global in either archive, so
+#    their private Opus code never meets the app's libopus.a (1.5.2, the audio codec).
+# ★★ The TRANSMITTER (librade_vibe_tx.a, VIBE_HAVE_RADE_TX) is linked too, BEFORE the receiver it takes its end-of-over
+#    bits from — exactly as vibeserver/CMakeLists.txt does: the benchmark's dec_rade row decodes a real RADE over made by
+#    it, and that row's verdict sets the owner's "rade" switch off by default on a phone that cannot carry RADE (never
+#    hidden). Nothing else calls it; its weights are never paged in unless the benchmark runs.
+# ★ OUTSIDE `if (NOT VIBE_LITE_APP)`: Lite is a server, and FreeDV is a server's mode.
+option(VIBE_RADE "FreeDV RADE V1 receive on the on-device server (rade_c + Opus FARGAN, BSD)" ON)
+if(VIBE_RADE AND EXISTS "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librade_vibe.a")
+  target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_RADE)
+  target_include_directories(vibelocalsdr PRIVATE "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
+  if(EXISTS "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librade_vibe_tx.a")
+    target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_RADE_TX)
+    target_link_libraries(vibelocalsdr PRIVATE "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librade_vibe_tx.a")
+  endif()
+  target_link_libraries(vibelocalsdr PRIVATE "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librade_vibe.a")
+  message(STATUS "RADE V1 for ${ANDROID_ABI}: linked (${SDR_KIT_ROOT})")
+elseif(VIBE_RADE)
+  message(WARNING "RADE V1 for ${ANDROID_ABI}: no ${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librade_vibe.a — FreeDV here is 700D/700E/1600 only (run sdr-kit/build-rade-android.sh)")
+endif()
+
 # --- vibespectrum: the native spectrum engine (docs/NATIVE-SPECTRUM-ENGINE.md) -------------------------------
 # ★ Its own small library, loaded by VibeSpectrum.kt when the SDR screen installs it — NOT part of vibelocalsdr,
 #   which loads only when a USB radio is used. Links JSI (it is a host object) and react-native-skia's prefab

@@ -44,7 +44,8 @@ ok(sws.size >= 13 && !sws.has('rtty') && !sws.has('spots'), `the rule's primary 
 // ★ V12 2026-11-16 a switch whose decoder the phone's own server cannot run is on the setup page only — a switch in the app
 //   would be dead (AGENTS.md). Each says why; when it is ported, it moves into the app and off this list (checked below).
 //   ★ 2026-11-20 FreeDV and M17 moved into the app: the APK ships libcodec2.so (sdr-kit/build-codec2.sh).
-const NOT_IN_APP = { rade: "the phone's server is built without RADE (librade_vibe.a is a VibeServer build only, never VIBE_HAVE_RADE on Android)" };
+//   ★ 2026-11-20 RADE V1 moved into the app: the APK links librade_vibe.a (sdr-kit/build-rade-android.sh). Nothing is left.
+const NOT_IN_APP = {};
 for (const sw of sws) {
   const page = new RegExp(`\\{ id: "${sw}",`).test(src), inApp = new RegExp(`\\{ id: '${sw}',`).test(app);
   if (NOT_IN_APP[sw]) ok(page && !inApp, `"${sw}" is on the setup page, not in the app: ${NOT_IN_APP[sw]}`);

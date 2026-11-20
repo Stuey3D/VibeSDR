@@ -43,9 +43,13 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'drm', label: 'DRM' },
   /* ★★ V12 2026-11-20 FreeDV (700D / 700E / 1600) and M17: the APK now ships its own libcodec2.so (sdr-kit/build-codec2.sh,
    *  Codec 2 1.2.0), which vibe_freedv.h dlopens — so the phone's server offers both, and the switches are here as on the
-   *  setup page. ★ RADE V1 (the setup page's "rade", under FreeDV) is NOT here: the phone's server is built without RADE
-   *  (VIBE_HAVE_RADE is VibeServer-only), so that switch would be dead. FreeDV here is the codec2 modes only. */
+   *  setup page.
+   *  ★★ RADE V1 (2026-11-20): the APK now links FreeDV's RADE receiver too (sdr-kit/build-rade-android.sh — the servers'
+   *  own builder and pins, VIBE_HAVE_RADE), so its switch is here under FreeDV as on the setup page. The benchmark's
+   *  dec_rade row starts it OFF on a phone that measured it below green (applyBench) — offered, never hidden (Stuart:
+   *  "add it because the benchmark will advise it to be disabled"). */
   { id: 'freedv', label: 'FreeDV (digital voice)' },
+  { id: 'rade', label: 'FreeDV: RADE V1', parent: 'freedv' },
   { id: 'm17', label: 'M17 (digital voice)' },
   { id: 'dab', label: 'DAB' }, { id: 'dabScan', label: '', parent: 'dab', node: 'dabScan' },
   { id: 'rtty', label: 'RTTY (and RTTY AUTO)' }, { id: 'navtex', label: 'NAVTEX' },
