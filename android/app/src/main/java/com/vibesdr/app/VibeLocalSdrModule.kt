@@ -1156,6 +1156,25 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ── ★★★ REMOTE ACCESS TO SERVER SETTINGS (beta88) — the server's one settings store (VibeRemoteSetup) ────────────
+
+    /** The server's settings (never the admin password), the remote switch, and whether a store exists yet — JSON. */
+    @ReactMethod
+    fun serverSettingsGet(promise: Promise) = ask("settings.get", JSONObject(), promise) { it.toString() }
+
+    /** The config the screen's Start would send; the server keeps it as the truth the /setup page shows. */
+    @ReactMethod
+    fun serverSettingsPut(json: String, dropLanding: Boolean, promise: Promise) {
+        val cfg = try { JSONObject(json) } catch (t: Throwable) { promise.reject("bad_settings", t.message); return }
+        // ★ The admin password travels too: the remote page is guarded by it, and it must be the one the owner typed.
+        ask("settings.put", JSONObject().put("settings", cfg).put("dropLanding", dropLanding), promise, serial = true) { true }
+    }
+
+    /** The owner's "Remote access to server settings" switch. Rejects with the server's own words (no admin password). */
+    @ReactMethod
+    fun setRemoteAccess(on: Boolean, promise: Promise) =
+        ask("remote.set", JSONObject().put("on", on), promise) { it.optBoolean("remote", false) }
+
     @ReactMethod
     fun stopVibeServer(promise: Promise) {
         // ★ Disarm, mDNS, NSD, the service, the engine, the secret, the public door — all in the server's process now
