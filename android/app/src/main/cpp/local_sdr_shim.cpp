@@ -225,6 +225,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
 #include "vibe_decoder_reach.h"      // ★ V12 which fixed-frequency decoders this radio reaches, and the region defaults
+#include "vibe_varatag.h"            // ★★ V12 the VARA HF identification tag — identify only, NEVER decoded (docs/v12/VARA-TAG.md)
 #include "vibe_radio_caps.h"         // ★★ V12 what this radio can do at all — the Setup page's tabs and the `modes` offer
 #include "vibe_chat_share.h"        // ★ "share a station" in the canned chat: validate, name, say
 #include "vibe_tune_etiquette.h"    // ★★ "Ask before tuning": who may move a shared dial (docs/TUNING-ETIQUETTE.md)
@@ -3781,6 +3782,13 @@ struct SfericDetect {
     double agoSecs(double now) const { return lastStrikeAt > 0 ? now - lastStrikeAt : -1.0; }
 };
 static SfericDetect g_sferic;
+/* ★★★ V12 THE VARA HF TAG (vibe_varatag.h, docs/v12/VARA-TAG.md — Stuart, 2026-11-19). One per server, fed on the DSP thread
+ *  from the shared wide row (stage 1) and, for one candidate at a time, a small slice of the SAME forward FFT (stage 2).
+ *  IDENTIFY ONLY: its whole output is "a VARA-shaped block is at X Hz" — VARA is proprietary and never decoded, here or
+ *  anywhere. HF only (the capture below 30 MHz), a shared / locked radio only (the slice comes off the channeliser), the
+ *  owner's switch "varatag" (Setup → Modes and decoders; on unless switched off). */
+static vibe::varatag::Tagger g_varaTag;
+static std::atomic<bool> g_varaTagLive{false};   // ★ stage 1 ran this second: the channeliser callback may cut a slice
 /* ★★★ A HARDWARE MOVE LIFTS THE WHOLE BAND TOO. The IF filter follows the zoom on an RTL and
  *     VibeClarity re-centres the tuner under a stationary view, so a rapid zoom changes the
  *     passband and the centre several times a second — each one a whole-band step that reads
@@ -12653,14 +12661,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ Its own mutex: the DAB tick sends under g_dabReportMtx and must not take clientMtx in the middle. */
     /** ★ adc / lx per socket: what was last sent and when — sent again only on a change or after 2 s (see the frame
      *  loop). Erased with the socket. */
-    struct TeleLast { std::string msg[2]; double at[2] = { 0, 0 }; };
+    struct TeleLast { std::string msg[3]; double at[3] = { 0, 0, 0 }; };   // ★ [2] = sigtags (the VARA HF tag)
     std::mutex teleMtx;
     std::map<net::Socket*, TeleLast> teleLast;
-    bool teleDue(net::Socket* s, int k, const char* m) {
+    bool teleDue(net::Socket* s, int k, const char* m, double periodS = 2.0) {
         const double now = Impl::nowSecs();
         std::lock_guard<std::mutex> lk(teleMtx);
         TeleLast& t = teleLast[s];
-        if (t.msg[k] == m && now - t.at[k] < 2.0) return false;
+        if (t.msg[k] == m && now - t.at[k] < periodS) return false;
         t.msg[k] = m; t.at[k] = now;
         return true;
     }
@@ -12923,7 +12931,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     that says the front end is clipping almost never arrived.
      *  ★ The enum note above adc already warned "NOT Out::Sig" — the separation was understood and
      *    then undone by a third message quietly reusing the class. One class, one quantity. */
-    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx, Wide };   // ★ Wide: the full-capture row (SPWB)
+    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx, Wide, Tags };   // ★ Wide: the full-capture row (SPWB); Tags: sigtags (V12)
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -13130,7 +13138,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
         //   discard the pending gain telemetry, which is a different quantity that has not changed.
         if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::Adc
-            || cls == Out::RspStat || cls == Out::Lx || cls == Out::Wide) {
+            || cls == Out::RspStat || cls == Out::Lx || cls == Out::Wide || cls == Out::Tags) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
                 if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
@@ -13477,6 +13485,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                       bigSwing || sinceCfg < kRetuneSettleS
                                       || sinceHw < kRetuneSettleS || held);
             else        { g_sferic.hits.clear(); gainHist.clear(); }
+        }
+
+        /* ── ★★ V12 the VARA HF tag, stage 1 — the same averaged row (vibe_varatag.h). Gated: HF capture, the channeliser
+         *  path (perClientDsp: its slice needs the shared forward FFT), the owner's switch (re-read every 2 s, not per
+         *  frame), and someone with a spectrum to show it on. Off → forgotten, so nothing stale comes back. */
+        {
+            static double vtCheckAt = 0; static bool vtOwnerOn = true;
+            const double vtNow = Impl::nowSecs();
+            if (vtNow - vtCheckAt > 2.0) { vtCheckAt = vtNow; vtOwnerOn = !vsModeBlocked("varatag"); }
+            const double vtCentre = rtlCenter.load() + hwOffsetHz();
+            const bool vtOn = vtOwnerOn && perClientDsp() && vtCentre + sampleRate / 2 < 30.5e6
+                              && s_listenersCached.load(std::memory_order_relaxed) > 0;
+            if (vtOn) g_varaTag.row(fftAccum.data(), inv, bins, vtCentre, sampleRate / (double)bins, vtNow);
+            else if (g_varaTagLive.load(std::memory_order_relaxed)) g_varaTag.reset();
+            g_varaTagLive.store(vtOn, std::memory_order_relaxed);
         }
 
         // ── Spectrum rate audit (passive) ──────────────────────────────────
@@ -15431,6 +15454,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     // ★★★ Out::Lx, NOT Out::Adc — see the enum. Sharing the class made this frame
                     //     delete the converter telemetry every tick.
                     if (teleDue(p.sock.get(), 1, sb)) sendText(p.sock, sb, Out::Lx);   // ★ on change / 2 s — see adc
+                    /* ★★ V12 THE VARA HF TAG (vibe_varatag.h): `sigtags` on change, and every 10 s while any are held (the
+                     *  clients drop tags 30 s after the last message). Its own class (Out::Tags), never Lx's or Adc's. An
+                     *  empty set is sent once, on the change, so a client clears; then nothing while there is nothing. */
+                    if (g_varaTagLive.load(std::memory_order_relaxed) || g_varaTag.any()) {
+                        const std::string vt = g_varaTag.json();
+                        const bool vtEmpty = vt == vibe::varatag::Tagger::kEmpty;
+                        if (teleDue(p.sock.get(), 2, vt.c_str(), vtEmpty ? 1e18 : 10.0)) sendText(p.sock, vt, Out::Tags);
+                    }
                 }
                 // ★ The pocketed channels (see `specless`): the same measurement, nobody to send it
                 //   to — it is only the squelch gate in onClientAudio that reads it.
@@ -33469,6 +33500,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //       only has to be taken ONCE however many listeners there are.
             // ★ The first block out after a hole carries it — see chanGapPending_.
             handBlockToListeners(cs, bins, nbins, std::exchange(chanGapPending_, false));
+            // ★★ V12 the VARA HF tag, stage 2: ONE candidate's slice off this same forward FFT (one small inverse a block),
+            //    only while stage 1 asks for it — two relaxed loads otherwise (vibe_varatag.h; identify only, never decoded)
+            if (g_varaTagLive.load(std::memory_order_relaxed)) varaTagSlice(bins);
             fanMs += std::chrono::duration<double,std::milli>(
                          std::chrono::steady_clock::now() - f0).count();
             // ★★★ THE WIDE WATERFALL COMES OFF THIS SAME FFT — ka9q's whole point.
@@ -33512,6 +33546,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         chanInMax_ = std::max(chanInMax_, n);
     }
     double chanFftMs_ = 0, chanFanMs_ = 0, chanWideMs_ = 0, chanClients_ = 0; int chanN_ = 0;
+    /** ★★ V12 the VARA HF tag's slice (DSP thread, inside the channeliser callback): Tagger::wantSlice → extract → slice. */
+    std::vector<cf32> varaSlice_;
+    vibedsp::Channelizer::ExtractCtx varaCtx_;
+    void varaTagSlice(const cf32* bins) {
+        double c = 0, w = 0;
+        if (!chan_ || !g_varaTag.wantSlice(c, w)) return;
+        const double binHz = sampleRate / (double)fftSize;
+        const double hwC = rtlCenter.load() + hwOffsetHz();
+        const int sb = vibe::varatag::sliceBins(sampleRate, fftSize, w);
+        const int cb = (int)std::lround((c - hwC) / binHz);
+        if ((int)varaSlice_.size() != sb) varaSlice_.assign((size_t)sb, cf32{0.0f, 0.0f});
+        const int got = chan_->extract(bins, cb, sb, varaSlice_.data(), varaCtx_, chan_->blockIndex());
+        if (got > 0) g_varaTag.slice(varaSlice_.data(), got, sampleRate * (double)sb / (double)fftSize, hwC + cb * binHz, Impl::nowSecs());
+    }
     int chanBlocksMin_ = INT_MAX, chanBlocksMax_ = 0, chanBlocksTot_ = 0;
     int chanInMin_ = INT_MAX, chanInMax_ = 0;
 

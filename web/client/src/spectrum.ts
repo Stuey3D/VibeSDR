@@ -504,6 +504,9 @@ export interface SpectrumCallbacks {
   onConfig?: (cfg: Config) => void;
   /** Lightning for THIS listener: flashes/min (0 = nothing to say), and how long ago. */
   onLightning?: (ratePerMin: number, agoSecs: number) => void;
+  /** ★★ V12 signal tags (vibe_varatag.h): what the server identified from a signal's shape — the raw message, checked by
+   *  knownSignals.ts parseSigTags. The VARA HF tag only for now (identify only — never decoded). */
+  onSigTags?: (msg: unknown) => void;
   /** The server's radio was unplugged (false) or came back (true). */
   /** ★ `inUse` = the server KNOWS another program has the radio (inUseElsewhere); `radioName` names it. */
   onDevice?: (present: boolean, reason?: string, inUse?: boolean, radioName?: string) => void;
@@ -1806,6 +1809,10 @@ export class SpectrumClient {
        *   it could not run. Adding a message type means adding a CASE. */
       case 'lx':
         this.cb.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
+        break;
+      // ★★ V12 signal tags — ITS OWN CASE (see the lx note above): the VARA HF tag, identify only (vibe_varatag.h)
+      case 'sigtags':
+        this.cb.onSigTags?.(msg);
         break;
       case 'iqout':
         this.cb.onIqOut?.({ on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined, host: typeof msg.host === 'string' ? msg.host : undefined,

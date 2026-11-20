@@ -138,7 +138,7 @@ import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   /
 import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type KnownSignal, type KnownAvail, type DxDialEntry, type SigTagEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
 import { dabBlockSignals, dabMuxNames, dabWideView, dabBlockHit, dabBlockHint, parseDabBlockQ, dabFreshGrades, type DabBlockGrade } from '../../../src/utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, inPassband, TUNED_SETTLE_MS, type Passband, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
@@ -2030,6 +2030,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAfc: (a) => { afcNow = a; afcAt = Date.now(); paintAfc(); },   // ★★ V12 auto-PPM — the owner's line (paintAfc)   // ★ V12: hwinfo comes on every (re)connect — the kept list with it
     onFmScan: (m: unknown) => { const s = parseFmScan(m); if (s) scanLockSet(s.running && s.lock, s.done, s.total); },
     onDxLogOk: (ok: boolean) => { dxLogOk = ok; dxLogSyncBtn(); },   // ★★★ V12 the DX LOG key beside GALLERY
+    onSigTags: (msg: unknown) => { sigTagsReceived(msg); },   // ★★ V12 the VARA HF tag (identify only — vibe_varatag.h)
     onDab: (d: DabState) => {
       if (!d) {
         /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
@@ -18703,6 +18704,7 @@ function dxLogSyncBtn() {
   if (!dxLogOk && isPanelOpen('dxLogPanel')) $('dxLogPanel').classList.remove('open');
   dxAlertsArm();
   dxDialArm();   // ★★ V12 the DX catches on the dial (each connect: this server's own, or none)
+  sigTagsClear();   // ★★ V12 the signal tags are this server's own — the next sigtags message brings them back
 }
 function dxAlertsOn(): boolean { try { return localStorage.getItem(DX_ALERT_KEY) === '1'; } catch { return false; } }
 function dxAlertSeqKey(): string { return `${DX_ALERT_SEEN}:${currentHost}`; }
@@ -19031,10 +19033,33 @@ function applyKnownSignals() {
   const hadDx = dxDialList.length > 0;
   dxDialList = dxDialSignals(dxDialEntries, dxServerNow(dxDialPageNow, dxDialAtMs), base,
                              [...getBookmarks(), ...getServerBookmarks()].map(b => b.frequency));
-  wf.knownSignals = dxDialList.length ? knownSignalList(eibi, bms, dxDialList) : base;
+  const withDx = dxDialList.length ? knownSignalList(eibi, bms, dxDialList) : base;
+  // ★★ V12 + the server's signal tags (the VARA HF tag — identify only), clear of every label above
+  wf.knownSignals = sigTagEntries.length ? withSigTags(withDx, sigTagSignals(sigTagEntries, withDx)) : withDx;
   wf.knownGen++;
   if (hadDx || dxDialList.length) dabBlocksSync();
 }
+/* ★★★ V12 SIGNAL TAGS (knownSignals.ts sigTagSignals, vibe_varatag.h): the server's `sigtags` message — today only the
+ *     VARA HF tag, "VARA HF (proprietary — not decoded)": identified from its shape, NEVER decoded. Held until the next
+ *     message, and dropped SIGTAG_STALE_MS after the last one (the server repeats them every 10 s while any are up), so a
+ *     server that goes quiet, or another server, leaves nothing behind. Drawn only while the labels are on. */
+let sigTagEntries: SigTagEntry[] = [];
+let sigTagsAt = 0, sigTagSig = '';
+let sigTagStaleTimer: number | null = null;
+function sigTagsReceived(msg: unknown) {
+  const tags = parseSigTags(msg);
+  sigTagsAt = Date.now();
+  const sig = tags.map(t => `${t.id}:${t.hz}:${t.bw}`).join(',');
+  if (sigTagStaleTimer == null && tags.length)
+    sigTagStaleTimer = window.setInterval(() => {
+      if (sigTagEntries.length && Date.now() - sigTagsAt > SIGTAG_STALE_MS) { sigTagEntries = []; sigTagSig = ''; applyKnownSignals(); }
+    }, 5000);
+  if (sig === sigTagSig) return;   // ★ the 10 s repeat changes nothing — no re-layout
+  sigTagSig = sig; sigTagEntries = tags;
+  if (knownLabelsOn) applyKnownSignals();
+}
+/** A new server (or none): its tags are not this one's. */
+function sigTagsClear() { if (sigTagEntries.length) { sigTagEntries = []; sigTagSig = ''; applyKnownSignals(); } }
 /* ★★★ V12 DX CATCHES ON THE DIAL (knownSignals.ts dxDialSignals — Stuart, 2026-11-16: "show DX catches on the dial as
  *     signal labels too, marked as sporadic"). The server's own list — GET /vibeserver/dxlog.json?dial=1: real DX
  *     catches heard this week, one a channel, compact, ≤ 100 (an older server sends its ordinary page, filtered here by

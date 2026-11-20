@@ -178,6 +178,8 @@ the NAVTEX channels.
   ✗✗ **NEVER, under any circumstance (Stuart, 2026-11-19):** no VARA decoder of any kind — not linked, not clean-room, not
   "receive only". Its author sells the modem and enforces with cease-and-desist letters; an independent open-source receiver
   had to shut down. At most a signal tag may say "VARA (proprietary — not decoded)".
+  → **BUILT (2026-11-19, branch `v12-varatag`): the identification tag only** — "VARA HF (proprietary — not decoded)",
+  from the power spectrum's shape (width, ~47 Hz carrier comb, ARQ bursts). `docs/v12/VARA-TAG.md`.
 - **WINMOR:** dead (Winlink retired it). Skip.
 - **ARDOP:** spec published (ardop.org); **ardopcf is MIT** ✓. 4FSK/PSK/QAM frames with RS. Receiving one side of
   someone else's ARQ session shows little; ARDOP FEC mode is broadcast-style. Low activity. **Later, low value.**

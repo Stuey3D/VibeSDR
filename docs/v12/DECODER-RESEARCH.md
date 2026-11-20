@@ -629,6 +629,10 @@ SDRplay is a driver test bench, not a product, but it shows that the bandwidth i
 
 ## 5. Signal identification and tags
 
+> **2026-11-19: the first server-side tag exists** — the VARA HF identification tag (`vibe_varatag.h`,
+> `docs/v12/VARA-TAG.md`): stage 1 on the wide row exactly as planned below, stage 2 as a slice of the shared forward FFT,
+> the `sigtags` message as sketched here (kind `vara` only), drawn by the existing known-signal label layer.
+>
 > **Status: paused 2026-10-29 (Stuart: decoders come first).** No code has been written yet. Branch `v12-signal-tags`
 > (from `adfb37d0c`) has this note only. What the survey of the code found, so the next pass can start straight away:
 >

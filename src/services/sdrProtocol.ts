@@ -663,6 +663,9 @@ export interface SDRCallbacks {
   /** ★ LIGHTNING. The server decides — it is gated on the band this listener's VFO sits in and
    *  on whether the activity amounts to a storm — so a non-zero rate is the whole decision. */
   onLightning?: (ratePerMin: number, agoSecs: number) => void;
+  /** ★★ V12 SIGNAL TAGS (vibe_varatag.h): the server's `sigtags` message, raw — knownSignals.ts parseSigTags checks it.
+   *  The VARA HF tag only: identified from its shape, never decoded. A VibeServer only. */
+  onSigTags?: (msg: unknown) => void;
   /** ★ The RADIO's centre and the owner's locked centre (0 = not locked), off hwinfo. The one
    *  figure the walls and the RF-centre marker must be drawn from — the view centre is not it. */
   onRfCentre?: (rfHz: number, lockedHz: number) => void;
