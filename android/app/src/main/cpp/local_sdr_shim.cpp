@@ -11486,8 +11486,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         SatPick p; bool have = false;
         { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it != satPicks_.end()) { p = it->second; have = true; } }
         if (!have) { satRefuse(sock, "doppler", "Pick a satellite first"); return; }
-        double on = 1; jsonNum(msg, "on", on);
-        const bool want = on != 0 && msg.find("\"on\":false") == std::string::npos;
+        // ★ "on": true | false (1 / 0 accepted); absent = on (AUTO DOPPLER defaults ON). jsonNum is not used: it does not
+        //   read a JSON bool, and must not read one as 0.
+        const bool want = msg.find("\"on\":false") == std::string::npos && msg.find("\"on\":0") == std::string::npos;
         if (want) { if (!satLockActive(key)) satLockOp(sock, "lock", p.norad, p.tx); }
         else if (satLockActive(key)) satLockOp(sock, "unlock", 0, -1);   // ★ freezes the dial where the channel is (brief §9)
         satSendPicked(sock, key, p, "");
