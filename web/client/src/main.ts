@@ -15395,8 +15395,8 @@ setWholeRadioKeys(() => {
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
   add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
   // ★★ V12 SATELLITES: not a whole-radio mode — it opens the picker (passes, the sky track, DOPPLER). Only where the server
-  //    offers `doppler` (the radio reaches a listed downlink); greyed with the reason when not ready.
-  if (satCap) keys.push({ id: 'sat', label: 'SAT', on: !!satPanel?.readout(), dis: !satCap.ok,
+  //    offers `doppler` (the radio reaches a listed downlink); the menu's rule — not drawn while it cannot run, unless open.
+  if (satCap && (satCap.ok || !!satPanel?.readout())) keys.push({ id: 'sat', label: 'SAT', on: !!satPanel?.readout(), dis: !satCap.ok,
                           title: satCap.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${satCap.why}`,
                           press: () => { satPanelGet()?.toggle(); closePanels(); } });
   return keys;

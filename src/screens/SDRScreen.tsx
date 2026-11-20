@@ -16302,10 +16302,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           aisOn,
           /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
           /* ★★ V12 RADIOSONDES — the datalink's three states, VibeServer only (the capability is per radio). */
-          /* ★★ V12 SATELLITES — not a whole-radio mode: the key opens the box. Shown (greyed with the reason when not ready)
-           *  only where the server sends `doppler`. */
-          satAvail: !!satCap && !!(client.current as any)?.isVibe,
-          satWhy: satCap && !satCap.ok ? satCap.why : undefined,
+          /* ★★ V12 SATELLITES — not a whole-radio mode: the key opens the box. Only where the server sends `doppler`, and with
+           *  the menu's rule (refused = not drawn, see ADS-B above) unless its readout is up so it can be closed. */
+          satAvail: !!satCap && (satCap.ok || (!!satRo && satRo.state !== 'OFF')) && !!(client.current as any)?.isVibe,
+          satWhy: !(satRo && satRo.state !== 'OFF') && satCap && !satCap.ok ? satCap.why : undefined,
           satOn: !!satRo && satRo.state !== 'OFF',
           onSat: () => { markInteract(); setModeSelOpen(false); setSatBoxOpen((v) => !v); },
           sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,

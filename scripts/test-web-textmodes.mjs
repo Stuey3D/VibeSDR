@@ -52,9 +52,9 @@ try {
   const st = await fetch(`${H}/vibeserver.json`).then((r) => r.json());
   // ★★ V12 (2026-10-31): ONE key, "mfsk" — MFSK16/32, OLIVIA, CONTESTIA and THOR — its choices grouped by family
   const groups = [...new Set((st.mfskModes || []).map((m) => m.group).filter(Boolean))].join(',');
-  ok(st.mfsk === true && st.olivia === undefined && st.thor === undefined && st.mfskModes?.[0]?.id === 'auto' && groups === 'MFSK,OLIVIA,CONTESTIA,THOR'
-     && (st.mfskModes || []).some((m) => m.id === 'olivia-64-2000') && (st.mfskModes || []).length === 40,
-     `vibeserver.json: one key (mfsk ${st.mfsk}, ${(st.mfskModes || []).length} choices in ${groups}; no olivia/thor keys; OLIVIA 64/2000 listed; 40 = AUTO + 4 ANY + 35 sub-modes)`);
+  ok(st.mfsk === true && st.olivia === undefined && st.thor === undefined && st.mfskModes?.[0]?.id === 'auto' && groups === 'MFSK,OLIVIA,CONTESTIA,THOR,DOMINOEX,MT63'
+     && (st.mfskModes || []).some((m) => m.id === 'olivia-64-2000') && (st.mfskModes || []).length === 63,
+     `vibeserver.json: one key (mfsk ${st.mfsk}, ${(st.mfskModes || []).length} choices in ${groups}; no olivia/thor keys; OLIVIA 64/2000 listed; 63 = AUTO + each family's ANY + its sub-modes; DominoEX and MT63 from V12 HF data)`);
 
   edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-first-run', '--no-default-browser-check', '--mute-audio',
     '--disable-audio-output', `--user-data-dir=${prof}`, '--window-size=1280,800', 'about:blank'], { stdio: 'ignore' });
@@ -106,7 +106,7 @@ try {
   await ev(`document.querySelector('#decodersPanel [data-dec="mfsk"]').click()`);
   ok(await until(`document.getElementById('decBox').classList.contains('open') && /MFSK/.test(document.getElementById('decTitle').textContent)`, 5000), 'the box opens, titled MFSK');
   let r = await rows();
-  ok(r.g === 'AUTO*|MFSK|OLIVIA|CONTESTIA|THOR' && r.m === '', `first open: AUTO lit, FAMILY row the server's families, no MODE row under AUTO (${r.g} / ${r.m})`);
+  ok(r.g === 'AUTO*|MFSK|OLIVIA|CONTESTIA|THOR|DOMINOEX|MT63' && r.m === '', `first open: AUTO lit, FAMILY row the server's families, no MODE row under AUTO (${r.g} / ${r.m})`);
   const textHas = (re) => `(${re}).test(document.getElementById('decText').textContent)`;
   // ★ the clip loops every 20 s, so the box is opened mid-over: a WHOLE over must still arrive within three loops, and
   //   nothing may be printed that was not sent (every passage between the "[MODE · Hz]" lines is a piece of an over)
@@ -126,7 +126,7 @@ try {
   ok(!!(await pickG('OLIVIA')), 'FAMILY → OLIVIA pressed');
   await sleep(400);
   r = await rows();
-  ok(r.g === 'AUTO|MFSK|OLIVIA*|CONTESTIA|THOR' && /^ANY\*\|4\/125\|/.test(r.m) && /64\/2000/.test(r.m), `OLIVIA lit; its MODE row: ANY lit, every sub-mode incl. 64/2000 (${r.m})`);
+  ok(r.g === 'AUTO|MFSK|OLIVIA*|CONTESTIA|THOR|DOMINOEX|MT63' && /^ANY\*\|4\/125\|/.test(r.m) && /64\/2000/.test(r.m), `OLIVIA lit; its MODE row: ANY lit, every sub-mode incl. 64/2000 (${r.m})`);
   await ev(`document.getElementById('decodersPanel').classList.remove('open')`);
   await ev(`document.getElementById('decText').textContent = ''`);
   ok(await until(textHas(/CQ DE G4XYZ OLIVIA K/), 60000), 'OLIVIA (any): a whole OLIVIA over arrives');
@@ -140,7 +140,7 @@ try {
   await pickG('CONTESTIA'); await sleep(400);
   r = await rows();
   const CON = 'ANY*|4/125|4/250|4/500|4/1000|4/2000|8/125|8/250|8/500|8/1000|8/2000|16/250|16/500|16/1000|16/2000|32/1000|32/2000|64/500|64/1000|64/2000';
-  ok(r.g === 'AUTO|MFSK|OLIVIA|CONTESTIA*|THOR' && r.m === CON, `CONTESTIA lit; its MODE row: ANY and all 19 sub-modes (${r.m})`);
+  ok(r.g === 'AUTO|MFSK|OLIVIA|CONTESTIA*|THOR|DOMINOEX|MT63' && r.m === CON, `CONTESTIA lit; its MODE row: ANY and all 19 sub-modes (${r.m})`);
   const wCon = await ev(`JSON.stringify([document.documentElement.scrollWidth, document.documentElement.clientWidth])`);
   ok((() => { const [sw, cw] = JSON.parse(wCon || '[1,0]'); return sw <= cw; })(), `the 20-key MODE row wraps, nothing scrolls sideways (${wCon})`);
   await shot('tm-contestia.png');
@@ -149,7 +149,7 @@ try {
   await openPanel(); await sleep(400);
   await pickG('MFSK'); await sleep(400);
   r = await rows();
-  ok(r.g === 'AUTO|MFSK*|OLIVIA|CONTESTIA|THOR' && r.m === 'ANY*|16|32', `MFSK lit; MODE: ANY, 16, 32 (${r.m})`);
+  ok(r.g === 'AUTO|MFSK*|OLIVIA|CONTESTIA|THOR|DOMINOEX|MT63' && r.m === 'ANY*|16|32', `MFSK lit; MODE: ANY, 16, 32 (${r.m})`);
   await ev(`document.getElementById('decodersPanel').classList.remove('open')`);
   ok(await until(textHas(/CQ CQ DE G4XYZ MFSK TEST PSE K/), 60000), 'MFSK (any): a whole MFSK16 over arrives');
   const t = await ev(`document.getElementById('decText').textContent`);
@@ -163,7 +163,7 @@ try {
   await ev(`document.querySelector('#decodersPanel [data-dec="mfsk"]').click()`); await sleep(600);   // off
   await ev(`document.querySelector('#decodersPanel [data-dec="mfsk"]').click()`); await sleep(600);   // on again
   r = await rows();
-  ok(r.g === 'AUTO|MFSK*|OLIVIA|CONTESTIA|THOR', `re-opened in the same session: the manual MFSK kept (${r.g})`);
+  ok(r.g === 'AUTO|MFSK*|OLIVIA|CONTESTIA|THOR|DOMINOEX|MT63', `re-opened in the same session: the manual MFSK kept (${r.g})`);
   console.log('── phone width, 390 px ──');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1500);
@@ -181,7 +181,7 @@ try {
   await until(`!document.querySelector('#decodersPanel [data-dec="mfsk"]').hidden`, 8000);
   await ev(`document.querySelector('#decodersPanel [data-dec="mfsk"]').click()`); await sleep(800);
   r = await rows();
-  ok(r.g === 'AUTO*|MFSK|OLIVIA|CONTESTIA|THOR' && r.m === '', `after a reload: AUTO lit, nothing manual kept (${r.g})`);
+  ok(r.g === 'AUTO*|MFSK|OLIVIA|CONTESTIA|THOR|DOMINOEX|MT63' && r.m === '', `after a reload: AUTO lit, nothing manual kept (${r.g})`);
   ok(errs.length === 0, `no exception on the page${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''}`);
   console.log(`   screenshots: ${[s0, s1, s1b, s2].join('  ')}`);
   if (fail) { console.log('   text: ' + JSON.stringify(t).slice(0, 600)); }

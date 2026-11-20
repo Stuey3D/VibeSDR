@@ -456,10 +456,10 @@ export function initMobileControls(deps: MobileDeps) {
       sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
       grid.appendChild(sdRow);
     }
-    /* ★★ V12 SATELLITES — only where the server offers `doppler` (the radio reaches a listed downlink); greyed with the
-     *  reason when not ready, and a press still opens the picker, which says why. */
+    /* ★★ V12 SATELLITES — only where the server offers `doppler` (the radio reaches a listed downlink), and with the menu's
+     *  rule: not drawn while it cannot run (no dead modes), unless its readout is up so it can be closed. */
     const stc = deps.satCap?.();
-    if (stc && deps.openSat) {
+    if (stc && deps.openSat && (stc.ok || deps.satOn?.())) {
       const stRow = document.createElement('button');
       stRow.className = 'mModeOpt' + (deps.satOn?.() ? ' on' : '') + (stc.ok ? '' : ' dis');
       setModeLabel(stRow, 'sat', 'SAT');

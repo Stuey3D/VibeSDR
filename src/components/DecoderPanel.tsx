@@ -295,8 +295,6 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   hfdl:    'HFDL',
   // ★ V12: the MFSK keyboard modes, one key a family (services/textModes.ts); the status line names the sub-mode
   mfsk:    'MFSK',
-  olivia:  'OLIVIA',
-  thor:    'THOR',
   // ★ V12: Feld Hell, drawn not read (services/feldHell.ts) — the picture box, a page at a time
   hell:    'FELD HELL',
   // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
