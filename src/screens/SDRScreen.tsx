@@ -14196,7 +14196,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     //      new sentence names it; the rest re-read against AudioSheet (NR, notch, squelch, binaural, VFO stereo,
     //      de-emphasis, stereo), MenuSheet and FreqModal — unchanged.
     { id: 'menu', title: 'The settings menu',
-      body: 'This is the main settings menu. In here you can set up your display and controls, and set up the SDR hardware where the server allows it.',
+      /* ★★ V12 2026-11-20: Local Hardware's hardware sheet ("<radio> Controls") now ends with WHAT THIS PHONE CAN RUN (the
+       *  device benchmark, LocalBenchmarkCard) — Android, a radio plugged into the phone only, so said only there. */
+      body: 'This is the main settings menu. In here you can set up your display and controls, and set up the SDR hardware where the server allows it.'
+        + (Platform.OS === 'android' ? ' With a radio plugged into this phone, its Controls also measure what this phone can run — FM, DAB, digital voice and the decoders — under WHAT THIS PHONE CAN RUN.' : ''),
       target: tourRef('menuBtn') },
     { id: 'audio', title: 'The audio menu',
       body: 'This is the audio menu. In here you will find all the audio and signal clean-up controls, including the recorder, squelch and every noise reduction option.',

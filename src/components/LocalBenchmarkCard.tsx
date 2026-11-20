@@ -90,6 +90,7 @@ export default function LocalBenchmarkCard({ bench, styles, m, fill, track, slot
         </View>
       )}
       {!!st.error && !st.busy && <Text style={[styles.note, styles.noteBad]}>{st.error}</Text>}
+      {/* nav-registered: the panel's slot(start) above — Enter runs it, the ring shows where the highlight is */}
       <TouchableOpacity style={[styles.adminBtn, { alignSelf: 'flex-start', marginTop: 10 }, ring, st.busy && { opacity: 0.5 }]}
                         disabled={st.busy} onPress={start}
                         accessibilityRole="button" accessibilityState={{ disabled: st.busy }}>
