@@ -11,6 +11,18 @@ only a real VOR can prove we read it the right way round — see "Live captures 
 
 ## RESUME HERE
 
+**★ ON AIR 2026-11-20 ~02:30 (Pi 500 :48004, the VHF V4L on its ADS-B antenna; tools/vsrec + tools/vor-replay):**
+- **DTY Daventry 116.40, 60 s** (`~/VibeSDR-test-audio/vor/dty-60s-wide.cu8`, 48 kHz cu8, ±12.5 kHz passband): the ident read
+  **"DTY"** (9.4 wpm); var30 27 %, subcarrier 28 % (both as specified); only 2 seconds passed the VOR gate (refCoh 0.42–0.53
+  against ≥ 0.5 — a weak signal on a 1090 MHz aerial), their bearings **54–57°**. Expected: 47.8° true from DTY to the IO92nh
+  square's centre (21 km; the square is good to a few km, i.e. several degrees). **Same side, not BEHIND — the phase sense
+  looks right.** No 3-second believed bearing yet: a better aerial (or a longer run) is wanted before calling the radial exact.
+- **The AM passband (±6 kHz) cuts the 9960 Hz subcarrier** — the first captures had sub 0.8 %. The live decoder widens the
+  channel to 25 kHz itself (navWideSync); a capture must ask (BW=12500).
+- **CFD 116.50, 120 s**: a carrier and a 9960 Hz tone but NO 30 Hz on either (var30 0.6 %, dev 24 Hz) and no ident — not a
+  working VOR as we expected; check the station / frequency before using it.
+
+
 1. **Live capture (the coordinator — agents may not tune Stuart's radios):** 60 s of IQ on two or three UK VORs the Pi 500's
    VHF RTL (`:48004`, serial 00000001) hears, AM, ≥ 2.4 MS/s or a 48 kHz+ channel. Candidates within range of a Humber-area
    server: **OTR Ottringham 113.90**, **GAM Gamston 112.80**, **POL Pole Hill 112.10**, **TNT Trent 115.70**, **DTY Daventry
