@@ -179,7 +179,7 @@ import { meaningText } from '../constants/decoderTokens';
 import type { PopupTokens } from '../constants/popupTokens';
 import { saveServerName, PUBLIC_NAME_KEY, NAME_KEY } from '../services/rtlTcpServer';
 // ★★★ beta88 "Remote access to server settings" — the server's one settings store, mirrored here (serverSettingsMirror.ts)
-import { getServerSettings, onServerSettings, putServerSettings, remoteSettingsSupported,
+import { getServerSettings, onServerSettings, putServerSettings, remoteSettingsSupported, MIRROR_STORAGE_KEYS,
          setRemoteAccess as setRemoteAccessNative, storageFromSettings } from '../services/serverSettingsMirror';
 import { readPrefs } from '../services/serverPrefs';
 import {
@@ -1322,6 +1322,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [locCity, setLocCity]     = useState('');
   /** ★★ "Update this server's location as I move about" — vibeServer.ts resolveMovingLocation. Default OFF. */
   const [locMoving, setLocMoving] = useState(false);
+  /** ★ beta88: the stored HOME point (LOC_KEY) — sent with the settings so the remote /setup page shows where it is. */
+  const [locPoint, setLocPoint] = useState<{ lat: number; lon: number; label?: string } | null>(null);
   /** ★ "Use this phone's location" for HOME — busy while the one-shot look-up runs; a line saying what it found. */
   const [homeFinding, setHomeFinding] = useState(false);
   const [homeNote, setHomeNote] = useState<string | null>(null);
@@ -1340,7 +1342,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       // ★★ The PLACE's centre is stored — the same town rule as a moving server — and the box shows its
       //    name, so Start sees known.label === city and does not geocode it again.
       await setManualServerLocation(r.loc);
-      setLocCity(r.loc.label ?? '');
+      setLocCity(r.loc.label ?? ''); setLocPoint(r.loc);
       setLocMode('manual');
       setHomeNote(r.region
         ? `No large town nearby, so home is the general region: ${r.loc.label}. Your exact position is not stored or published.`
@@ -1521,9 +1523,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             if (srv && !cancelled) {
               setRemoteAccess(srv.remote);
               if (srv.hasStore) {
-                const cur = await AsyncStorage.multiGet([K.pin, K.pinMode]);
-                const pairs = storageFromSettings(srv.settings, cur[0]?.[1] ?? null, cur[1]?.[1] ?? null);
+                const cur = Object.fromEntries(await AsyncStorage.multiGet([...MIRROR_STORAGE_KEYS, K.pinMode]));
+                const pairs = storageFromSettings(srv.settings, cur);
                 if (pairs.length) await AsyncStorage.multiSet(pairs);
+                // ★ A place set on the page: publish it from here too, with its town and country (publishLocation).
+                if (pairs.some(([k]) => k === LOC_KEY || k === LOCMODE_KEY || k === LOC_MOVING_KEY)) void publishLocation();
               }
             }
           } catch { /* the screen's own copy stands */ }
@@ -1533,7 +1537,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         const g = (k: string) => v[k] ?? null;     // null = never set
         const s = (k: string) => v[k] ?? '';       // '' where the old reader used `?? ''`
         let city = '';
-        try { const raw = g(LOC_KEY); city = raw ? (JSON.parse(raw)?.label ?? '') : ''; } catch { city = ''; }
+        let point: { lat: number; lon: number; label?: string } | null = null;
+        try {
+          const raw = g(LOC_KEY); const j = raw ? JSON.parse(raw) : null;
+          city = j?.label ?? '';
+          if (j && Number.isFinite(Number(j.lat)) && Number.isFinite(Number(j.lon))) point = { lat: Number(j.lat), lon: Number(j.lon), label: j.label };
+        } catch { city = ''; }
         unstable_batchedUpdates(() => {
           setName(g(NAME_KEY) || (route.params?.name ?? 'VibeSDR'));
           const p = g(K.proto);
@@ -1627,6 +1636,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const rc = g(K.rsp); if (rc != null) setRspCard(readRspCard(rc)); }
           { const rl = g(K.rspCaps); if (rl) { try { setRspLive(JSON.parse(rl)); } catch { /* re-read at the next serve */ } } }
           { const pb = g(K.ppb); if (pb != null) setPpbText(pb); }
+          // ★ beta88: re-read with the rest, so a value the remote page set shows on the next read (it had its own reader).
+          { const pn = g(K.publicName); if (pn != null) setPublicName(pn); }
+          { const dsl = g(K.dabScanLabels); if (dsl === '0' || dsl === '1') setDabScanLabels(Number(dsl)); }
           // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
           rateGuardState().then((st) => {
             setRateGuard(st);
@@ -1649,6 +1661,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               setLocMode(lm === 'manual' ? 'manual' : 'off'); setLocMoving(g(LOC_MOVING_KEY) === '1');
             } }
           setLocCity(city);
+          setLocPoint(point);
           { const pm = g(K.pinMode); if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm); }
           // Restore the saved PIN for BOTH modes so re-opening the server keeps the
           // same code — it only changes when the user taps refresh (↻) or edits it.
@@ -2371,6 +2384,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     icomBaud: icomSet.icomBaud, icomCiv: icomSet.icomCiv, icomScopeSpeed: icomSet.icomScopeSpeed,
     icomTuneLock: icomSet.icomTuneLock, icomPowerOn: icomSet.icomPowerOn,
     icomAutoOff: icomSet.icomAutoOff, icomOffDelayMin: icomSet.icomOffDelayMin,
+    // ★★ beta88: for the remote /setup page (the engine does not read them) — see VibeServerConfig.
+    radioUse: radioUseEff,
+    serverLocation: locMode === 'manual' && locPoint
+      ? { mode: 'manual', lat: locPoint.lat, lon: locPoint.lon, label: locPoint.label ?? locCity, moving: locMoving }
+      : { mode: 'off', moving: locMoving },
+    publicName,
   });
   const serverConfigRef = useRef(serverConfig);
   serverConfigRef.current = serverConfig;
@@ -2390,9 +2409,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   useEffect(() => onServerSettings((settings) => {
     void (async () => {
       try {
-        const cur = await AsyncStorage.multiGet([K.pin, K.pinMode]);
-        const pairs = storageFromSettings(settings, cur[0]?.[1] ?? null, cur[1]?.[1] ?? null);
+        const cur = Object.fromEntries(await AsyncStorage.multiGet([...MIRROR_STORAGE_KEYS, K.pinMode]));
+        const pairs = storageFromSettings(settings, cur);
         if (pairs.length) await AsyncStorage.multiSet(pairs);
+        if (pairs.some(([k]) => k === LOC_KEY || k === LOCMODE_KEY || k === LOC_MOVING_KEY)) void publishLocation();
       } catch { /* the next open reads them from the server */ }
       setPrefsTry((t) => t + 1);
     })();
@@ -2482,6 +2502,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           return;
         }
         await setManualServerLocation(geo);
+        setLocPoint(geo);
       }
     }
     await setServerLocationMode(locMode);

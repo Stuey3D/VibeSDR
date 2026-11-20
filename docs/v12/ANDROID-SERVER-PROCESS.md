@@ -7,8 +7,11 @@ Branch `b88-android` (off v12-experimental 9da8a5c0d), 2026-11-20. Main app (net
 Built, unit-tested and compiled (see "What was tested"). **Not yet run on a phone.** Next:
 
 1. Install the beta88 APK on the XCover (Stuart — never an agent: no adb to the XCover/Sony).
-2. Run the phone checks in "What needs a real phone" in order; the first two prove item A.
+2. Run the phone checks in "What needs a real phone" in order; the first two prove item A; 4 and 9 prove the remote page.
 3. Read `filesDir/server_trail.txt` (Diagnostics will show it once wired — not done, see Open) after any odd restart.
+
+★ 2026-11-20 evening (branch `b88-remote-all`): **every** setting on the server screen is on the remote page — see
+"Every setting remote" below for the inventory, the device-only list and the guard that keeps it that way.
 
 ## Why (the evidence)
 
@@ -116,26 +119,172 @@ default from Android 14 and USE_EXACT_ALARM is for alarm-clock/calendar apps und
   card and row (no dead controls); a read-only "This phone" card shows battery optimisation, start when power returns, the
   USB permission and keep radio alive, with where to change them. The Linux-only loaders (sdr-changes, Wi-Fi, Windows,
   serial, benchmark, directory status) are not called.
-- **Supported controls:** name, mDNS listing, landing message/link, uncompressed audio, trusted proxies, one radio per
-  address, decoders at once, gallery (size/public/listeners'), battery pause; radio label, aerial name, listeners, ask
-  before tuning, keep the spectrum sharp, landing frequency + mode, session limit + soft, idle kick, wide noise blanker,
-  VFO B, idle grace, PIN (set/clear). Everything else stays phone-only for now (see Open).
+- **Supported controls:** every setting on the phone's server screen since 2026-11-20 — see the next section. (The first
+  cut, the morning of 2026-11-20, carried 28.)
+
+## Every setting remote (2026-11-20, branch b88-remote-all)
+
+Stuart: *"all settings for android need to be on the remote setup page"*.
+
+### How
+
+- **One table** — `vibe_android_setup.h controlTable()`: each row is the page's control ids, the radios it belongs to and
+  what the device must be. The radios follow ServerModeScreen exactly (`isRtl` = no radio or an RTL; `hasHwSetup` = not an
+  HF+ and not an Icom; the SDRplay card only for an RSP; ppb only for an HF+; an Icom's own only for an Icom). Raw IQ is
+  not on Lite, the battery pause not on a television, the public listing needs the tunnel binary (arm64), the DAB label
+  scan is Lite's. `pageConfig()` sends the page `android.supported` for THIS phone and radio, and `android.advancedOnly`
+  (the settings VibeServerBoot applies only in Advanced: listeners, ask-first, the locked range, tuning limits, gain rules,
+  the AGC lock, trusted proxies). `settingsPatch()` now takes the phone's current raw too and **ignores** a control the
+  radio is not offered, whatever the page posts.
+- **The page** (`vibe_setup_page.h`): `androidPrune()` keeps a control by its id, or — for a generated input with no id
+  (the modes tree, the background-decoding profiles, the per-band rows) — by its nearest ancestor's; for each control it
+  does not keep it hides the largest thing around it that holds nothing kept (so the IF-filter select inside the shared
+  per-band row goes, the row stays). It runs again when the radio's own rows arrive (`refreshHw`) and when Simple/Advanced
+  changes — live, no reload. The page's own per-driver hiding (`renderHw`, caps) still applies on top.
+- **Controls the Linux page never needed**, drawn only on a phone (`.androidOnly`): a "This phone's server" card (Serve
+  the web client, Compress for the app, Simple/Advanced — no web client forces Simple, as on the screen), and on the radio
+  tab the RTL's "Keep the tuner's IF filter selective" (`tunerBwAuto`), the fixed direct-sampling branch, and the
+  converter's input low end. Posted only on a phone (`androidSrvCollect`, `androidRadioCollect` with `androidPage:true`, so
+  the Linux page's always-0 converter low end can never wipe the phone's).
+- **Kotlin** (`VibeRemoteSetup.kt`): device facts now say Lite, TV, tunnel, the listing's state and (for an Icom) the
+  microphone permission. A page save of the place applies it in the server process at once (`setLocationJson` + the
+  restore's cache; the screen re-publishes with the town and country when it next opens). The listing switch is an
+  **action**, not a stored setting: only a flip acts (or a new name/length while listed — a republish), checked before
+  anything is stored with the screen's own three refusals (a public name, a location, a running server), and after the
+  restart when the save restarts (a restart re-lists by itself).
+- **The screen** (`serverSettingsMirror.ts`): REMOTE_KEYS (66 plain keys) plus SPECIAL_KEYS (47, written in the screen's
+  own shape — capture width, waterfall tier, ppm absent, direct sampling, converter in MHz, FM defaults / Icom / SDRplay
+  card / antenna switch as one JSON value each, the location's three keys, the PIN). A value already equal is never written
+  back. The start config now also carries `radioUse`, `serverLocation` and `publicName` (the store is replaced whole by
+  every Start, so anything the page shows must be in it).
+- ★ **Found by the new guard and fixed:** `rttySkimWorkers` and `antennaNames` were set on the screen and read by
+  VibeServerBoot but never sent by `nativeServerConfig` — neither had ever reached the engine on a phone. Sent now.
+
+### Inventory — every ServerModeScreen setting
+
+| Setting on the server screen (storage key) | On the remote page | Radios / device |
+|---|---|---|
+| Local name (`vs_name`), mDNS (`vs_advertise`) | remote — `name`, `mdns` | all |
+| Landing message, link, label | remote | all |
+| Uncompressed audio (`vs_uncompressed`) | remote | all |
+| Behind a reverse proxy (`vs_proxies`) | remote (Advanced) | all |
+| One radio per address (`vs_oneradioperip`) | remote — `maxRadiosPerIp` (yes/no on a phone) | all |
+| Decoders at once, RTTY skimmer workers | remote | all |
+| Gallery size / public / keep listeners' | remote | all |
+| Battery pause (`vs_batpause`; resume = pause + 20) | remote | not on a TV |
+| Receiver location (`lsv_server_location`, `vs_locmode`, `vs_loc_moving`) | remote — place, lat/lon, country, follow | all |
+| Advertise on vibesdr.net: public name, list, temporary length | remote — `dirName`, `dirList` (action), `dirShareSec` | tunnel builds |
+| Serve the web client (`vs_webserver`) | remote — phone-only card | all |
+| Compress for the app (`vs_compress`) | remote — phone-only card | all |
+| Simple / Advanced (`vs_advanced`) | remote — phone-only card | all |
+| SDR display name, antenna name | remote | all |
+| PIN — who may connect (`vs_pin`, `vs_pinmode`) | remote — set / clear (a "random" PIN becomes a typed one) | all |
+| How many listeners, ask before tuning | remote (Advanced) | all |
+| How will it be used (`vs_radiouse`), locked centre | remote — single / locked, centre (Advanced) | not an Icom |
+| Zoom detail (`vs_zoomspec`) | remote | not an Icom |
+| Where listeners start (frequency, mode) | remote | not an Icom |
+| Time limit, soft limit, idle kick | remote | all |
+| Impulse noise blanker, VFO B | remote | not an Icom |
+| When nobody is listening (`vs_idlegrace`) | remote | all |
+| Spectrogram (`vs_spectrogram`) | remote (Advanced, locked) | not an Icom |
+| Capture width (`vs_rate`), waterfall rate (`vs_fps`) | remote — `rate` + `rateLock`, `maxFps` (snapped to the screen's lists) | not an Icom |
+| Modes offered (`vs_blockedmodes`) | remote — the modes tree | all |
+| Rate boost for DAB etc. (`vs_dabboost`) | remote | not an Icom |
+| ADS-B / ISM at 2.56 MS/s | remote | RTL |
+| DAB label scan (`vs_dabscan`) | remote | Lite |
+| Resting gain, VibeAGC, IF filter selective (`vs_restgain`, `vs_rtlagc`, `vs_tunerbwauto`) | remote | RTL |
+| Lock VibeAGC on (`vs_agclock`) | remote (Advanced) | RTL |
+| Per-band ceilings, locks, splits, curves | remote (Advanced) | not an Icom |
+| Per-band IF filter (`vs_ifbwlimits`) | remote (Advanced) | RTL |
+| Where listeners may tune (allow / block) | remote (Advanced) | all |
+| DAB landing, ADS-B landing + keep running | remote | not an Icom |
+| Broadcast FM defaults (`vs_fmdefaults`) | remote | not an Icom |
+| Antenna icon, ranges, filters, port names | remote | all |
+| External antenna switch (`vs_antswitch`) | remote (the page's switch card, shown as on Linux once one is set up) | all |
+| RSP sockets by band + lock (in `vs_rsp`) | remote | RSP |
+| Frequency correction (`vs_ppm`) | remote (0 on a radio left alone stays absent) | RTL, RSP |
+| Calibration ppb (`vs_ppb`) | remote | HF+ |
+| Bias-T (`vs_biast`) | remote (the page hides it on an RSP1) | RTL, R2/Mini, HackRF, RSP |
+| Direct sampling: automatic, below, fixed branch | remote (fixed branch: phone-only row) | RTL |
+| Converter: LO, direction, input high, input low | remote (input low: phone-only row) | not an HF+, not an Icom |
+| Icom: baud, CI-V, scope speed, tune lock, power on, auto off, delay (`vs_icom`) | remote | Icom |
+| Background decoding (`vs_bgdecode`), DX scanner (`vs_dxscan`) | remote | not an Icom |
+| Raw IQ out (`vs_rawiq`, `vs_rawiqmax`, `vs_rawiqlanmaxhz`) | remote | not Lite, not an Icom |
+| VibeAGC for SDRplay + the SDRplay card (`vs_rspvibeagc`, `vs_rsp`) | remote | RSP |
+| Protocol rtl_tcp / VibeServer (`vs_proto`) | **device-only** — read-only row | main app |
+| Keep radio alive (`vs_keepalive`) | **device-only** — read-only row | all |
+| Admin password (`vs_adminpw`) | **never** on the page (security rule) | all |
+| Start when power returns | **device-only** — read-only row | Android versions that allow it |
+| Remote access to server settings | **device-only** — read-only row | all |
+
+Not settings (no row): `vs_startonboot` (retired 2026-09-28), `vs_antports` and `vs_rspcaps` (caches of what the radio
+reported). Actions, not settings, that stay on the phone's screen: Start / Stop, Scan all DAB blocks (the page's DAB
+landing scans through `/vibeserver/dab-scan` itself), the benchmark run, the EiBi download, export logs, Lite's update
+check, the PIN's ↻ (random) — a PIN set from the page is a typed one.
+
+### Device-only — and why
+
+Shown read-only on the page's "This phone" card, with where to change them:
+
+- **Battery optimisation** — only Android's own dialog can exempt an app.
+- **Start when power returns** — Android's boot permission and the one-byte file both processes read; a phone setting.
+- **USB permission for the radio** — Android's own prompt, on the phone.
+- **Keep radio alive** (`vs_keepalive`) — the phone holds the USB radio; whether it may wait for it is decided with the
+  phone's own USB handling, and a wrong value from afar could leave a radio held that the owner cannot reach.
+- **Microphone (an Icom's audio)** — Android's own permission prompt.
+- **Protocol** (`vs_proto`, main app only) — rtl_tcp has no web page and no admin password: switching to it from the page
+  would cut the page off with no way back.
+- **Remote access to server settings** — switched off from the page, it would lock the owner out of the page.
+- **The admin password** (`vs_adminpw`) — **never** sent to the page and **never** set from it (security rule, as on
+  Linux: the page proves it with the nonce + HMAC challenge and never sees it). `configSetPatch` drops an
+  `adminPassword` key whatever the patch says; `pageConfig`'s raw never contains it.
+
+### The guard
+
+`scripts/check-remote-keys.mjs` **fails** when a key of ServerModeScreen's K table (or the name/location keys it reads
+beside it) is neither mirrored (REMOTE_KEYS / SPECIAL_KEYS) nor listed in DEVICE_ONLY / NOT_SETTINGS with a reason — so a
+future setting cannot be forgotten on the page. It also holds: every key a page save sets is taken back by the screen and
+vice versa; every mirrored storage key is one the screen reads; every mirrored key is in the config every Start writes
+(else a Start would wipe it); the header's capture-width lists equal the screen's RATE_OPTIONS_*; each device-only key is
+named in this doc; the page's read-only card and this doc name each device-only fact.
 
 ## What was tested, and how
 
-- `vibeserver/test-android-setup.cpp` (63 checks, all pass): the JSON reader (escapes, surrogates, refusal of truncation,
-  control characters, >32 nesting), Android → page → Android identity for every supported control, unsupported fields and
-  a second radio ignored, the phone's rules (resume = pause + 20, landing 0 removes the key, PIN digits ≤ 12, blank name and
-  unknown demodulator refused, clamping, length cuts), the admin password never in the page config.
-- `scripts/test-setup-android.mjs` (jsdom, 78 checks, all pass): every supported id exists on the real page; after the
-  prune each is visible and **no other control is**; the device card is read-only; sign-in returns before the Linux
-  loaders. Registered in run-tests.sh.
-- `scripts/check-remote-keys.mjs` (52 checks): the header's patch keys, the screen mirror's keys and the screen's K table
-  agree.
-- Existing setup-page tests unchanged (tabswitch, maxfps, icom, radio-caps 71, filter-kind).
-- `tsc --noEmit`: 45 errors, the same 45 as the base tree (handheld-ui/test, scripts/wefax-world — no @types/node); none
-  in src/.
-- Gradle: see the report (main app assembleCurrentRelease, Lite assembleRelease, merged manifests checked for `:server`).
+Every-setting pass (2026-11-20 evening):
+
+- `vibeserver/test-android-setup.cpp` — **115 checks, all pass** (also clean under ASan + UBSan): the JSON reader; the
+  first cut's identity and rules; then EVERY setting on every radio — RTL, RSP, HF+, HackRF on Lite without the tunnel, an
+  Icom on a TV — Android → page → Android is the identity, and every key not carried back is one that radio/device is not
+  offered; which controls each radio is offered; saves of a control the radio lacks are dropped (RTL: SDRplay card, ppb,
+  Icom; HF+: only ppb; Icom: no capture/blanker/locked range; no tunnel: no listing; TV: no battery); the new rules (rate
+  snaps to the screen's list and an HF+ never gets a dongle's rate; waterfall 5/10/20; no web → not Advanced; never a DAB
+  landing beside a DAB block; ADS-B keep-running needs the landing; location ranges, blank = off, grid square; ppm 0 on a
+  radio left alone stays absent; the converter's low end only from a phone's page; antenna switch / background decoding
+  must be JSON objects; raw-IQ LAN ceiling as text; Icom baud/delay snap; unknown de-emphasis = by region; listing is an
+  action; a locked range without a centre keeps the phone's; the AGC lock is a yes/no, resting gain clamps to -1); every one
+  of the 151 table ids has its value in the page config.
+- `scripts/test-setup-android.mjs` (jsdom) — **77 checks, all pass**: for six radio/device cases every offered control is
+  on the page and visible, nothing else is left, no other radio's control survives; Simple hides every Advanced-only
+  control and keeps the rest; choosing Advanced shows them at once; no web client forces Simple; the device-only card
+  (battery, power, USB, keep alive, microphone, protocol — not on Lite —, remote switch, admin password never sent); the
+  phone's radio rows fill and post; sign-in stops before the Linux loaders; the prune re-runs after `renderHw`.
+- `scripts/test-setup-android-e2e.mjs` — **32 checks, all pass**: the whole page signed in against a phone with the new
+  settings, edited on both tabs, Apply → the posted body through the compiled translation with the phone's own raw.
+- `scripts/check-remote-keys.mjs` — **450 checks, all pass** (see "The guard"); a fake K key was added by hand and it
+  failed naming it, then the key was removed. Now registered in run-tests.sh (it never was).
+- `VIBE_TESTS="test-android-setup" bash scripts/run-tests.sh` under the build lock: 1 suite built and passed (115).
+- Gradle under the build lock: main app `:app:compileCurrentReleaseKotlin` OK; Lite `android/gradlew -p lite/android
+  :app:compileReleaseKotlin -x :app:bundleJs` OK (the JS bundle step cannot resolve a symlinked node_modules in a
+  worktree; Kotlin is what changed). Temporary symlinks to ~/VibeSDR-v12 (local.properties, keystore, lite node_modules,
+  lite cloudflared) removed afterwards.
+- `scripts/check-android-settings-parity.mjs` (183), `check-setup-page.mjs`, and the existing setup-page tests (tabswitch,
+  maxfps, icom, radio-caps 71, filter-kind, bg*, bench*, dir-reach, governors, mode-rate, wifi*) pass.
+  `check-icom-servermode.mjs` has ONE failure that predates this branch (it looks for `VibeIcom.prepareStart` in
+  VibeLocalSdrModule.kt; the process split moved it to VibeServerOps/VibeServerRestore).
+- `tsc --noEmit`: 45 errors, the base tree's 45 (handheld-ui/test, scripts/wefax-world); none in src/.
+
+First cut (morning): `test-android-setup.cpp` 63, `test-setup-android.mjs` 78, `check-remote-keys.mjs` 52 — superseded by
+the above.
 
 ## What needs a real phone (the XCover)
 
@@ -156,11 +305,21 @@ default from Android 14 and USE_EXACT_ALARM is for alarm-clock/calendar apps und
 6. **Local Hardware** with the server stopped still works; with it running it refuses with the sentence.
 7. **Icom:** start serving an Icom, allow the microphone: audio starts (the answer crossed processes).
 8. **RAM:** `dumpsys meminfo` as above.
+9. **Every setting remote:** with an RTL, then an RSP (and an HF+ if to hand): on the page check only that radio's rows
+   show (no SDRplay card on an RTL, no ppm on an HF+); switch Simple → Advanced on the page and see the sharing rows
+   appear; change the capture width + pin, the waterfall rate, a gain ceiling, the FM defaults, the place, and Apply — the
+   phone's screen shows each. List publicly from the page (with a place set) and unlist it. Change the antenna's port
+   names and the RTTY workers and check the server applies them (they had never reached the engine before).
 
 ## Open (one line each)
 
 - Diagnostics should show `server_trail.txt` (VibeServerRestore.trail exists; not yet wired into diagnostics.ts).
-- More controls for the remote page (DAB landing, blocked modes, allow/block ranges, gain rules, bias-T…) — each needs the
-  page id, the header mapping and the screen mirror (three lists, checked by check-remote-keys.mjs).
+- ~~More controls for the remote page~~ — done 2026-11-20 (every setting). A new setting needs a table row + pageConfig +
+  settingsPatch + the mirror; check-remote-keys.mjs fails until it has them or a DEVICE_ONLY reason.
+- "Follow the phone" (moving) set from the page takes effect when the app runs (the UI process follows the GPS); the page
+  sets the home place at once.
+- The page's antenna-switch card stays behind its V11 gate (SW_SETUP false) as on Linux: shown only once a switch is set
+  up. Rebuilding the screen's switch from the page's keeps relay order = antenna order (the phone's search result names
+  are kept when nothing changed).
 - The remote page restarts the server for every save with "Apply"; live-applicable settings could skip the restart.
 - `maxRadiosPerIp` values above 1 map to "on" (the phone has one radio, so it is a yes/no there).

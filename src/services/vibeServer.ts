@@ -270,6 +270,14 @@ export type VibeServerConfig = {
   converterOffsetHz?: number;
   converterInputLoHz?: number;
   converterInputHiHz?: number;
+  /* ★★ beta88 (every setting on the remote /setup page): three the engine does not read, carried so the phone's settings
+   *  store (VibeRemoteSetup.kt) holds them for the page — the store is REPLACED by the config every Start sends. */
+  /** "How will it be used?" — 'single' (one dial) or 'locked' (a locked range). The engine reads lockedCentre for it. */
+  radioUse?: 'single' | 'locked';
+  /** Where the receiver is, as the screen keeps it (LOC_KEY / LOCMODE_KEY / LOC_MOVING_KEY). */
+  serverLocation?: { mode: 'off' | 'manual'; lat?: number; lon?: number; label?: string; moving: boolean };
+  /** The vibesdr.net listing's public name (PUBLIC_NAME_KEY). */
+  publicName?: string;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -347,6 +355,11 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     idleGraceSec: cfg.idleGraceSec ?? 300,
     antenna: cfg.antenna ?? '',
     antennaIcon: cfg.antennaIcon ?? '',
+    // ★★ beta88: SENT AT LAST — VibeServerBoot has read both (setAntennaPortNames, setRttySkimWorkers) since V12, the
+    //    screen has set both, and this list never carried them, so neither reached the engine: the hand-maintained-list
+    //    fault this function's notes record, twice more. Found by check-remote-keys.mjs (every mirrored key must be here).
+    antennaNames: cfg.antennaNames ?? '',
+    rttySkimWorkers: Math.max(0, Math.min(8, Math.round(cfg.rttySkimWorkers ?? 0))),
     antennaRanges: cfg.antennaRanges ?? '',
     antennaFilters: cfg.antennaFilters ?? '',
     antennaSwitch: cfg.antennaSwitch ?? '',
@@ -441,6 +454,10 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     icomPowerOn: cfg.icomPowerOn ?? false,
     icomAutoOff: cfg.icomAutoOff ?? true,
     icomOffDelayMin: cfg.icomOffDelayMin ?? 5,
+    // ★★ beta88: for the remote page only (see the type) — VibeServerBoot ignores them.
+    radioUse: cfg.radioUse === 'locked' ? 'locked' : 'single',
+    ...(cfg.serverLocation ? { serverLocation: cfg.serverLocation } : {}),
+    ...(cfg.publicName != null ? { publicName: cfg.publicName } : {}),
   };
 }
 

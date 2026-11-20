@@ -653,6 +653,9 @@ if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fa
 if node scripts/test-setup-maxfps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta88 "Remote access to server settings": the page on an Android phone's server shows only the phone's controls.
 if node scripts/test-setup-android.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ …and EVERY setting on the phone's server screen is on that page, or listed device-only with why (Stuart 2026-11-20):
+#     a new setting on the screen fails here until it is on the page; the page, the screen and every Start agree.
+if node scripts/check-remote-keys.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the whole page signed in and saved against a phone's config, the save run through the phone's own translation
 #    (the C++ suite above built $OUT/test-android-setup). Exit 3 = not run (no binary).
 VIBE_ANDROID_SETUP_BIN="$OUT/test-android-setup" node scripts/test-setup-android-e2e.mjs; rc=$?

@@ -36,6 +36,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   /* ★★ beta88: a control the phone's server does not have is never drawn (androidPrune) — !important so no later
      show/hide of the page's own can bring it back as a dead control. */
   .androidOff{display:none!important}
+  /* ★★ beta88 (every setting remote): controls only the phone's server has — drawn only on a phone's page. */
+  .androidOnly{display:none}
+  #setup.isAndroid .androidOnly{display:block}
   .wrap{max-width:760px;margin:0 auto;padding:32px 20px calc(140px + env(safe-area-inset-bottom, 0px))}
   h1{font-size:26px;margin:0 0 4px;color:var(--amber);letter-spacing:.3px}
   .sub{color:var(--dim);margin:0 0 28px}
@@ -329,6 +332,22 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
+      <!-- ★★ beta88: AN ANDROID PHONE'S SERVER ONLY (androidPrune shows them; .androidOnly is never drawn elsewhere).
+           What only the phone can change, read-only (androidDeviceCard), and the phone's own three server settings. -->
+      <div class="card androidOnly" id="androidDevCard"></div>
+      <div class="card androidOnly" id="androidSrvCard">
+        <h2>This phone's server</h2>
+        <label><input type="checkbox" id="androidWebServer"> <span class="lbl">Serve the web client</span>
+          <div class="hint">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>
+        <label><input type="checkbox" id="androidCompress"> <span class="lbl">Compress the spectrum and audio for the app</span>
+          <div class="hint">On is right for nearly everyone; off sends far more data.</div></label>
+        <label><span class="lbl">Mode</span>
+          <select id="androidAdvanced">
+            <option value="0">Simple &mdash; plug in and share</option>
+            <option value="1">Advanced &mdash; shared, managed, public</option>
+          </select>
+          <div class="hint" id="androidAdvancedHint"></div></label>
+      </div>
       <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
            Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
            signed in (one permission prompt to turn on, one to turn off); "starts when you sign in" = the owner's own
@@ -1629,6 +1648,12 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             <br>The <b>starting gain</b> at the bottom of this card is where the loop begins; from
             there it may use the tuner's whole range in either direction. Leave it off and the gain
             stays exactly where you set it.</div></label>
+        <!-- ★★ beta88: THE PHONE'S "Keep the tuner's IF filter selective" (ServerModeScreen tunerBwAuto) — a phone's page only. -->
+        <label class="androidOnly" id="androidTunerBwRow" style="margin-top:10px">
+          <input type="checkbox" id="androidTunerBw">
+          <span class="lbl">Keep the tuner&rsquo;s IF filter selective</span>
+          <div class="note">About 60&nbsp;% of the sample rate, so neighbouring transmitters stay out of the mixer. Off lets
+            the whole capture reach it &mdash; only for a full-rate raw IQ recording.</div></label>
         <!-- ★★ THE TUNER'S IF FILTER, beside VibeAGC because they are the pair an owner sets once
              and expects to STAY set. Stuart had to re-enable both on every connect (2026-08-25) —
              the AGC because a client re-asserted its stored value, this one because it had no
@@ -2108,6 +2133,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <span>This is a down-converter (an LNB or transverter block)</span></label>
         <label style="margin-top:6px"><span class="lbl">Highest frequency it passes (MHz)</span>
           <input type="number" id="convHi" step="0.001" placeholder="30"></label>
+        <!-- ★★ beta88: the phone's converter has a low end too (ServerModeScreen convLoMhz) — a phone's page only. -->
+        <label class="androidOnly"><span class="lbl">Converter input from (MHz)</span>
+          <input type="number" id="androidConvInLo" step="0.001" placeholder="0"></label>
         <!-- ★★★ PICK THE BOX, NOT THE NUMBER. Everything above asks the owner to already know
              their LO, their direction and their pass-band — three facts about a box whose lid
              says "Ham It Up". The prose hint below names two of them, which helps only somebody
@@ -2153,6 +2181,13 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <span>Automatic Direct Sampling for HF</span></label>
         <label style="margin-top:6px"><span class="lbl">Switch below (MHz)</span>
           <input type="number" id="autoDsBelow" step="0.1" placeholder="24"></label>
+        <!-- ★★ beta88: the phone's fixed branch (ServerModeScreen "Leave alone / I branch / Q branch") — a phone's page only. -->
+        <label class="androidOnly" style="margin-top:8px"><span class="lbl">Or a fixed branch</span>
+          <select id="androidDsFixed">
+            <option value="0">Leave alone</option>
+            <option value="1">I branch</option>
+            <option value="2">Q branch</option>
+          </select></label>
         <p id="autoDsV4" class="why hide" style="border-left:3px solid var(--amber);padding-left:8px">
            <strong>This looks like an RTL-SDR Blog V4.</strong> It has its own up-converter, so it
            already hears HF through the tuner <em>with</em> gain control. Direct sampling would
@@ -3814,39 +3849,96 @@ let IS_LITE = false;
  *     radio alive): shown READ-ONLY, with where to change it.
  * A save goes to the phone's one settings store; the phone's own server screen redraws with it at once. */
 let ANDROID = false;
+/** ★★ beta88: is this control kept on the phone? Its own id, or — for a generated input with no id (the modes tree, the
+ *  background-decoding profiles, the per-band rows) — the nearest ancestor that has one (vibe_android_setup.h says which
+ *  containers). Advanced-only ids follow the phone's Simple/Advanced choice on this page, live. */
+function androidKeeps(e, keep, advOff) {
+  let id = e.id;
+  for (let p = e; !id && p && p.parentElement; ) { p = p.parentElement; id = p.id; }
+  return !!id && keep.has(id) && !advOff.has(id);
+}
 function androidPrune() {
+  androidSrvCard();   // ★ first: the Simple/Advanced choice below is read from it
   const keep = new Set((cfg.android && Array.isArray(cfg.android.supported)) ? cfg.android.supported : []);
+  const adv = $("androidAdvanced") ? $("androidAdvanced").value === "1"
+            : !!(cfg.android && cfg.android.server && cfg.android.server.advanced);
+  const advOff = new Set(!adv && cfg.android && Array.isArray(cfg.android.advancedOnly) ? cfg.android.advancedOnly : []);
   const root = document.getElementById("setup");
   if (!root || !root.querySelectorAll) return;
+  root.classList.add("isAndroid");
+  // ★ Run again whenever the radio's own rows arrive or Simple/Advanced changes — start from nothing hidden each time.
+  for (const e of [...root.querySelectorAll(".androidOff")]) e.classList.remove("androidOff");
+  const CTRL = "input,select,textarea,.mode";
+  const kept = (e) => e.type !== "hidden" && androidKeeps(e, keep, advOff);
+  /** Does `el` hold anything the phone keeps — a kept control, or a kept container (its rows may not be drawn yet)? */
+  const holdsKept = (el) => [...el.querySelectorAll(CTRL)].some(kept)
+    || [...el.querySelectorAll("[id]")].some(x => keep.has(x.id) && !advOff.has(x.id));
   for (const card of root.querySelectorAll(".card")) {
-    if (card.id === "androidDevCard") continue;
-    const ctrls = [...card.querySelectorAll("input,select,textarea")].filter(e => e.type !== "hidden");
-    if (!ctrls.some(e => keep.has(e.id))) { card.classList.add("androidOff"); continue; }
-    for (const e of ctrls) {
-      if (keep.has(e.id)) continue;
-      const row = (e.closest && e.closest("label")) || e;
-      // ★ Never hide a row that also holds a supported control.
-      if (row !== e && [...row.querySelectorAll("input,select,textarea")].some(x => keep.has(x.id))) continue;
-      row.classList.add("androidOff");
-    }
+    if (card.id === "androidDevCard" || card.id === "androidSrvCard") continue;
+    if (!holdsKept(card)) card.classList.add("androidOff");
   }
-  for (const id of ["sdrChangesWrap", "batteryResumeAt"]) { const el = $(id); if (el) el.classList.add("androidOff"); }
+  // ★★ Each control the phone does not keep: hide the LARGEST thing around it that holds nothing kept — its own row,
+  //    not the row it shares with kept ones (the IF filter's select inside the per-band gain row), and never the page.
+  for (const e of root.querySelectorAll(CTRL)) {
+    if (e.type === "hidden" || kept(e)) continue;
+    let row = e;
+    while (row.parentElement && row.parentElement !== root && !row.parentElement.classList.contains("androidOff")
+           && !holdsKept(row.parentElement)) row = row.parentElement;
+    row.classList.add("androidOff");
+  }
+  for (const id of ["sdrChangesWrap", "batteryResumeAt", "tunnelResume", "dirPublicUrl"]) { const el = $(id); if (el) ((el.closest && el.closest("label")) || el).classList.add("androidOff"); }
   const sub = document.querySelector("#setup .sub");
   if (sub) sub.textContent = "This phone's VibeServer. Saving restarts it, so listeners will reconnect for a moment. "
     + "The phone's own server screen shows every change made here.";
   androidDeviceCard();
 }
+/** ★★ beta88: the three server settings only a phone has — the web client, Opus for listeners, Simple/Advanced. */
+function androidSrvCard() {
+  const card = $("androidSrvCard");
+  if (!card || card.__filled) return;
+  card.__filled = 1;
+  const s = (cfg.android && cfg.android.server) || {};
+  $("androidWebServer").checked = s.webServer !== false;
+  $("androidCompress").checked = s.compressAudio !== false;
+  $("androidAdvanced").value = s.advanced ? "1" : "0";
+  const sync = () => {
+    const web = $("androidWebServer").checked;
+    // ★ The phone's rule: no web client, no Advanced (the admin page IS the web client).
+    if (!web) $("androidAdvanced").value = "0";
+    $("androidAdvanced").disabled = !web;
+    $("androidAdvancedHint").textContent = !web
+      ? "Advanced needs the web client: its admin page is served to a browser."
+      : $("androidAdvanced").value === "1"
+        ? "Adds shared listening, tuning and gain limits, and the admin page. Its settings are shown below."
+        : "One listener at a time with the whole radio. Choose Advanced to share it or to limit where people may tune.";
+  };
+  $("androidWebServer").addEventListener("change", () => { sync(); androidPrune(); });
+  $("androidAdvanced").addEventListener("change", () => { sync(); androidPrune(); });
+  sync();
+}
+function androidSrvCollect() {
+  if (!$("androidWebServer")) return {};
+  return { webServer: $("androidWebServer").checked, compressAudio: $("androidCompress").checked,
+           advanced: $("androidWebServer").checked && $("androidAdvanced").value === "1" };
+}
+/** ★★ beta88: the phone's own front-end rows on the radio tab (filled from the radio, posted with it). */
+function androidRadioFill(r) {
+  if ($("androidTunerBw")) $("androidTunerBw").checked = !!r.tunerBwAuto;
+  if ($("androidDsFixed")) $("androidDsFixed").value = String(r.directSampling === 1 || r.directSampling === 2 ? r.directSampling : 0);
+  if ($("androidConvInLo")) $("androidConvInLo").value = r.converterInputLoHz > 0 ? r.converterInputLoHz / 1e6 : 0;
+}
+function androidRadioCollect() {
+  const lo = parseFloat(($("androidConvInLo") || {}).value || "0");
+  return { androidPage: true,
+           tunerBwAuto: !!($("androidTunerBw") && $("androidTunerBw").checked),
+           directSampling: parseInt(($("androidDsFixed") || {}).value || "0", 10) || 0,
+           converterInputLoHz: lo > 0 ? Math.round(lo * 1e6) : 0 };
+}
 /** The phone-only facts, read-only. */
 function androidDeviceCard() {
   const d = (cfg.android && cfg.android.device) || {};
-  let card = $("androidDevCard");
-  if (!card || !card.parentNode) {
-    const pane = $("serverPane");
-    if (!pane || !pane.insertBefore) return;
-    card = document.createElement("div");
-    card.className = "card"; card.id = "androidDevCard";
-    pane.insertBefore(card, pane.firstChild);
-  }
+  const card = $("androidDevCard");
+  if (!card) return;
   const row = (label, value, why) =>
     `<div style="display:flex;justify-content:space-between;gap:12px;margin:8px 0"><span>${label}</span>`
     + `<b style="text-align:right">${value}</b></div>` + (why ? `<div class="hint" style="margin:-4px 0 8px">${why}</div>` : "");
@@ -3858,6 +3950,12 @@ function androidDeviceCard() {
   h += row("Start when power returns", d.startOnPowerSupported ? yes(!!d.startOnPower) : "Not offered on this Android version", "");
   h += row("USB permission for the radio", !d.radioPresent ? "No radio plugged in" : (d.usbPermission ? "Granted" : "Not yet \u2014 allow it on the phone"), "");
   h += row("Keep radio alive", yes(!!d.keepRadioAlive), "");
+  // ★★ beta88: the rest of what only the phone can change — each is Android's own prompt, or would cut this page off.
+  if (typeof d.micPermission === "boolean")
+    h += row("Microphone (the Icom's audio)", d.micPermission ? "Allowed" : "Not yet \u2014 allow it on the phone", "");
+  if (!d.lite) h += row("Protocol", "VibeServer", "rtl_tcp is chosen on the phone: it has no web page, so this page could not switch it back.");
+  h += row("Remote access to server settings", "On", "Switched off on the phone only \u2014 from here it would lock you out.");
+  h += row("Admin password", "Set on the phone", "Never sent to this page and never set from it.");
   card.innerHTML = h;
 }
 /** ★ V12: the modes this server's Band spots runs (vibeserver.json spotModes) — the per-mode Auto / Always / Off list. */
@@ -6245,7 +6343,8 @@ function refreshHw() {
   formRadio = -2;
   hwPending = renderHw().then(() => { if (curRadio === want) formRadio = want; })
                         .catch(() => { if (curRadio === want) formRadio = want; })
-                        .finally(() => { if (typeof placeGainRows === "function") placeGainRows(); });   // ★★ V12 see #gainRows
+                        .finally(() => { if (typeof placeGainRows === "function") placeGainRows();   // ★★ V12 see #gainRows
+                                         if (ANDROID) androidPrune(); });   // ★★ beta88: the radio's own rows arrive late
   return hwPending;
 }
 
@@ -7189,6 +7288,7 @@ function fill() {
     })();
   }
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
+  if (ANDROID) androidRadioFill(r);   // ★★ beta88
   if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
   // ★ 300 s is the historical default, so a radio saved before this control existed
   //   keeps the behaviour it already had rather than silently changing.
@@ -8317,7 +8417,8 @@ function collectRadio() {
     vfoB: $("vfoB") && !$("vfoB").checked ? 0 : 1,   // ★★ V12 VFO A/B — the owner's switch
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
-    spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked
+    spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked,
+    ...(ANDROID ? androidRadioCollect() : {})   // ★★ beta88: the phone's own front-end rows
   };
 }
 
@@ -8407,7 +8508,8 @@ function collect() {
     // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
     //   out as a port and the server would fail to bind with nothing to point at.
     port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
-    radios: Array.isArray(cfg.radios) ? cfg.radios : []
+    radios: Array.isArray(cfg.radios) ? cfg.radios : [],
+    ...(ANDROID ? androidSrvCollect() : {})   // ★★ beta88: the phone's web client / Opus / Simple-Advanced
   };
 }
 

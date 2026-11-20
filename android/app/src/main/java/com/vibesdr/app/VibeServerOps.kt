@@ -214,7 +214,7 @@ object VibeServerOps {
      * running throughout, and the server stays armed.
      * ★ Later, on its own thread: the request that asked for it is still being answered by the engine being restarted.
      */
-    fun restartFromSettings(ctx: Context) {
+    fun restartFromSettings(ctx: Context, after: (() -> Unit)? = null) {
         val app = ctx.applicationContext
         Thread({
             try { Thread.sleep(600) } catch (_: InterruptedException) {}
@@ -236,6 +236,7 @@ object VibeServerOps {
                 if (ip.isNotEmpty()) { acquireMulticastLock(app); VibeLocalSDR.startMdns(hostSlug(name), ip) }
                 Log.i(TAG, "restarted with the settings saved on the remote page")
             }
+            try { after?.invoke() } catch (t: Throwable) { Log.w(TAG, "after the remote restart: $t") }
         }, "vibe-remote-restart").start()
     }
 
