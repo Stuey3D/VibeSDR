@@ -49,7 +49,7 @@ async function radioA() {
   await sleep(1500);
   send({ type: 'adsb', on: 1 });
   const keep = setInterval(() => { try { send({ type: 'ping' }); } catch {} }, 10000);   // ★ 30 s silent drop
-  return { stop: () => { clearInterval(keep); try { s.end(); } catch {} srv.kill('SIGTERM'); rtl.kill('SIGTERM'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { adsb: (on) => send({ type: 'adsb', on: on ? 1 : 0 }), stop: () => { clearInterval(keep); try { s.end(); } catch {} srv.kill('SIGTERM'); rtl.kill('SIGTERM'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
 }
 
 async function session(tag, clip, centre, freq, mode, run, runDir) {
@@ -129,6 +129,9 @@ try {
     ok(/^VDL2,ACARS,ADS-B,ADS-C,AIRPORTS$/.test(tg || ''), `the layer keys: ${tg} (no HFDL: nothing heard there)`);
     ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].every(b => b.getAttribute('aria-pressed') === 'true')`), 'every layer on by default (AIRPORTS too)');
     ok(await until(`document.querySelectorAll('.vtl-mk').length >= 5`, 15000), `aircraft on the map: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
+    // ★ beta88 the status line counts NOW: radio A's ADS-B is decoding, its three aircraft heard within the minute
+    ok(await until(`/\\bADS-B 3\\b/.test(${V}?.querySelector('.st')?.textContent || '') && !/ADS-B:/.test(${V}?.querySelector('.st')?.textContent || '')`, 10000),
+       `beta88: the status line counts ADS-B now (${await ev(`${V}?.querySelector('.st')?.textContent`)})`);
     const mk0 = await ev(`document.querySelectorAll('.vtl-mk').length`);
     ok(!/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(await ev(`document.body.innerHTML`) || ''), '★ never a message body on the page');
     // the card: which sources heard it
@@ -169,6 +172,19 @@ try {
     const tg2 = await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',')`);
     ok(/^HFDL,HFDL STATIONS,/.test(tg2 || '') && /ADS-B/.test(tg2 || ''), `HFDL first (what it was opened for), the others after: ${tg2}`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '')`, 8000), 'the other radios\' aircraft are on it');
+    // ★★ beta88 Stuart's case (the Pi 500 in ACARS mode on the V4L that normally does ADS-B: "there should be 0 then"):
+    //    radio A leaves ADS-B. Within kAdsbLiveSec (10 s) + a poll, no radio is decoding ADS-B: the ADS-B-only aircraft
+    //    leave the map, 4CA97B stays for its VDL2 with its ADS-B position "last seen", and the status line says why.
+    A.adsb(false);
+    ok(await until(`/ADS-B: this server's ADS-B radio is in use for something else/.test(${V}?.querySelector('.st')?.textContent || '')`, 30000),
+       `beta88: radio A left ADS-B — the status line says so (${await ev(`${V}?.querySelector('.st')?.textContent`)})`);
+    ok(await until(`!/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '')`, 6000), '…ADS-B-only BAW117 is off the list (0 ADS-B, not the hour\'s)');
+    ok(!/\bADS-B \d/.test(await ev(`${V}?.querySelector('.st')?.textContent`) || ''), '…and no ADS-B count in the status line');
+    ok(/FR1234|EI-EST|4CA97B/.test(await ev(`${V}?.querySelector('.rows')?.textContent || ''`) || ''), '…4CA97B stays, for its VDL2');
+    ok(/ADS-B last seen \d\d:\d\d UTC/.test(await ev(`[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === 'a:4CA97B')?.textContent || ''`) || ''),
+       `…its ADS-B position is "last seen HH:MM UTC" (${(await ev(`[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === 'a:4CA97B')?.textContent || ''`) || '').slice(0, 140)})`);
+    await sleep(800);
+    console.log('   screenshot', await shot('adsb-in-use'));
     ok(/CLOSE MAP/.test(await ev(`${V}.querySelector('.exit').textContent`) || ''), 'CLOSE MAP');
     await ev(`${V}.querySelector('.exit').click()`);
     ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), 'CLOSE MAP closes it');

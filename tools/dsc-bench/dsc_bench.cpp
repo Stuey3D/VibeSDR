@@ -195,10 +195,13 @@ int wav(const char* path, double centre) {
 
 /** ★ The server tests' clip (scripts/test-server-dsc.mjs): unsigned 8-bit IQ at `rate`, centred on `centre`, looped by
  *  vibeserver/fake-rtl-tcp.mjs. MF/HF: the distress alert, then the all-ships safety call, both on `dscHz` (the tones
- *  ±85 Hz about it, 1 = the lower). VHF (`vhf`): the same two calls as an FM subcarrier on `dscHz` (±3 kHz deviation). */
-int clip(const char* out, double rate, double seconds, double centre, double dscHz, bool vhf) {
+ *  ±85 Hz about it, 1 = the lower). VHF (`vhf`): the same two calls as an FM subcarrier on `dscHz` (±3 kHz deviation).
+ *  ★ beta88 `pos`: a third call, the routine POSITION REPLY (366123450 at 36°51'N 076°18'W) — HF's common positioned call,
+ *  for the gallery's SHIPPING MAP row (scripts/test-web-dsc.mjs). Opt-in: test-server-dsc counts exactly two calls. */
+int clip(const char* out, double rate, double seconds, double centre, double dscHz, bool vhf, bool pos = false) {
     const auto cs = calls();
     std::vector<std::vector<uint8_t>> tx = { build::transmission(cs[0].syms, {}, vhf ? 20 : 200), build::transmission(cs[6].syms, {}, vhf ? 20 : 200) };
+    if (pos) for (const auto& tc : cs) if (tc.name == "position reply") { tx.push_back(build::transmission(tc.syms, {}, vhf ? 20 : 200)); break; }
     const size_t n = (size_t)(seconds * rate);
     std::vector<uint8_t> b(n * 2);
     Rng rng(2026);
@@ -258,7 +261,8 @@ int main(int argc, char** argv) {
     if (m == "snr") return snr(argc > 2 ? std::atoi(argv[2]) : 10);
     if (m == "noise") return noise(argc > 2 ? std::atof(argv[2]) : 10);
     if (m == "miss" && argc > 3) return miss(std::atoi(argv[2]) != 0, std::atof(argv[3]), argc > 4 ? std::atoi(argv[4]) : 20, argc > 5 ? std::atof(argv[5]) : 0);
-    if (m == "clip" && argc > 6) return clip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]), argc > 7 && std::string(argv[7]) == "vhf");
+    if (m == "clip" && argc > 6) return clip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]), argc > 7 && std::string(argv[7]) == "vhf",
+                                                  argc > 7 && std::string(argv[7]) == "pos");
     if (m == "cpu") return cpu(argc > 2 ? std::atof(argv[2]) : 120);
     if (m == "wav" && argc > 2) return wav(argv[2], argc > 3 ? std::atof(argv[3]) : 1700);
     std::fprintf(stderr, "usage: dsc_bench formats|snr [trials]|noise <min>|cpu [s]|wav <file> [centre]\n");

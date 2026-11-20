@@ -7,9 +7,14 @@
 //   • a channel key tunes as a DSC receiver does (8414.5 → 8412.8 kHz USB);
 //   • the gallery has a DSC chip, and its distress item is highlighted with MAP;
 //   • at PHONE WIDTH (390 px) nothing scrolls sideways; no exception on the page.
+//   • ★ beta88 (Stuart: "i have no map button to view them from the gallery on the pi500"): with the `pos` clip
+//     (scripts/test-dsc.sh clip <f> pos — + a routine POSITION REPLY, 366123450 at 36°51'N 076°18'W): before any call the
+//     gallery's DSC view has NO "SHIPPING MAP · DSC calls with a position" row; after, the reply is its own pinned item
+//     (coloured routine, MAP) and the row is there; its MAP opens the SHIPPING MAP with both positions in the DSC list.
 //   Screenshots (desktop and 390 px) are written to VIBE_SHOT_DIR (default: the OS temp folder).
 // ★ SILENT: headless Edge with --mute-audio and --disable-audio-output.
 //   VIBESERVER_BIN=…/vibeserver VIBE_DSC_CLIP=…/hf.cu8 node scripts/test-web-dsc.mjs   (scripts/test-dsc.sh clip hf.cu8)
+//   VIBESERVER_BIN=…/vibeserver VIBE_DSC_CLIP_POS=…/pos.cu8 node scripts/test-web-dsc.mjs   (scripts/test-dsc.sh clip pos.cu8 pos)
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,7 +27,10 @@ let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
-const BIN = process.env.VIBESERVER_BIN || '', CLIP = process.env.VIBE_DSC_CLIP || '';
+// ★ beta88 VIBE_DSC_CLIP_POS (scripts/test-dsc.sh clip <f> pos) — the same two calls + a routine position reply — is used
+//   in place of VIBE_DSC_CLIP when given, and turns the gallery → SHIPPING MAP checks on.
+const BIN = process.env.VIBESERVER_BIN || '', CLIP = process.env.VIBE_DSC_CLIP_POS || process.env.VIBE_DSC_CLIP || '';
+const POS = !!process.env.VIBE_DSC_CLIP_POS;
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const SHOTS = process.env.VIBE_SHOT_DIR || os.tmpdir();
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) { console.log('   (not run — set VIBESERVER_BIN and VIBE_DSC_CLIP)'); process.exit(3); }
@@ -82,6 +90,16 @@ try {
      'START RADIO pressed (the splash is gone)');
   await sleep(2500);
 
+  console.log('── beta88: the gallery before any call — no DSC map row ──');
+  await ev(`document.getElementById('galleryBtn').click()`);
+  await until(`!!document.querySelector('#galFilter [data-kind="dsc"]')`, 6000);
+  await ev(`document.querySelector('#galFilter [data-kind="dsc"]').click()`);
+  await until(`!/Loading/.test(document.getElementById('galList').textContent)`, 6000);
+  await sleep(1500);   // the row is asked after the list: give it the time it would take
+  ok(!(await ev(`!!document.querySelector('#galList .galDsc')`)), 'no DSC call with a position in the gallery: no SHIPPING MAP row (no dead control)');
+  await ev(`document.getElementById('galClose').click()`);
+  await sleep(300);
+
   console.log('── DECODERS: the DSC button and its channels ──');
   ok(await until(`!document.querySelector('#decodersPanel [data-dec="dsc"]').hidden`, 8000), 'the DSC button is offered (this server has DSC)');
   await ev(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^DECODERS/.test(x.textContent.trim()) && x.offsetParent); if (b) { b.click(); return true; }
@@ -106,6 +124,8 @@ try {
      'MAP on the call that sent a position, none on the one that did not');
   ok(await ev(`/2187\\.5 kHz/.test(document.querySelector('#dscRows .dscr.distress .f').textContent)`), 'the row names 2187.5 kHz');
   const s1 = await shot('dsc-calls-desktop.png');
+  if (POS) ok(await until(`[...document.querySelectorAll('#dscRows .dscr')].some(x => /ROUTINE POSITION/.test(x.textContent) && /366123450/.test(x.textContent))`, 60000),
+              `beta88: the routine position reply is decoded (${await ev(`[...document.querySelectorAll('#dscRows .dscr .l')].map(x => x.textContent.slice(0, 40)).join(' | ')`)})`);
 
   console.log('── MAP opens this server\'s map with the position ──');
   const before = (await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).filter((t) => t.type === 'page').length;
@@ -161,8 +181,27 @@ try {
      'the distress item is highlighted, with MAP');
   ok(await until(`[...document.querySelectorAll('#galList .sres')].some(r => /DSC 2187\\.5 kHz/.test(r.textContent))`, 4000), "and the day's log for 2187.5 kHz is listed");
   const s3 = await shot('dsc-gallery-desktop.png');
+  const shots88 = [];
+  if (POS) {
+    console.log('── beta88: every DSC call with a position, from the gallery to the SHIPPING MAP ──');
+    ok(await until(`[...document.querySelectorAll('#galList .sres.galRoutine')].some(r => /ROUTINE POSITION/.test(r.textContent) && /366123450/.test(r.textContent) && r.querySelector('.galMap'))`, 8000),
+       'the routine position reply is its own pinned item (coloured routine), with MAP');
+    ok(await until(`!!document.querySelector('#galList .galDsc #galDscMap')`, 8000), 'the gallery\'s DSC view has the SHIPPING MAP row, with MAP');
+    const words = await ev(`document.querySelector('#galList .galDsc')?.textContent || ''`);
+    ok(/SHIPPING MAP · DSC calls with a position: 2 · 1 distress/.test(words), `…its words: ${words.slice(0, 90)}`);
+    const sG = await shot('dsc-gallery-shipmap-row-desktop.png'); shots88.push(sG);
+    await trustedClick('#galDscMap');
+    const V = `document.querySelector('.trkView:not([hidden])')`;
+    ok(await until(`!!${V} && /SHIPPING MAP/.test(${V}.querySelector('.ttl')?.textContent || '')`, 8000), 'MAP opens the SHIPPING MAP');
+    ok(await until(`/366123450/.test(${V}?.querySelector('.rows')?.textContent || '') && /235012345/.test(${V}?.querySelector('.rows')?.textContent || '')`, 15000),
+       `…the DSC list has the position reply AND the distress alert (${(await ev(`${V}?.querySelector('.rows')?.textContent || ''`) || '').slice(0, 120)})`);
+    ok(await until(`document.querySelectorAll('.vtl-mk').length >= 2`, 10000), `…both pinned on the map (${await ev(`document.querySelectorAll('.vtl-mk').length`)} markers)`);
+    await sleep(1500);
+    shots88.push(await shot('dsc-shipping-map-desktop.png'));
+    await ev(`${V}?.querySelector('.exit')?.click()`);
+  }
   ok(errs.length === 0, `no exception on the page${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''}`);
-  console.log(`   screenshots: ${[settings, s1, s2, s3].join('  ')}`);
+  console.log(`   screenshots: ${[settings, s1, s2, s3, ...shots88].join('  ')}`);
 } finally {
   try { edge?.kill('SIGTERM'); } catch {}
   srv.kill('SIGTERM'); rtl.kill('SIGTERM');
