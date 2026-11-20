@@ -3852,17 +3852,23 @@ function androidPrune() {
   androidSrvCard();
   // ★ Run again whenever the radio's own rows arrive or Simple/Advanced changes — start from nothing hidden each time.
   for (const e of [...root.querySelectorAll(".androidOff")]) e.classList.remove("androidOff");
+  const CTRL = "input,select,textarea,.mode";
+  const kept = (e) => e.type !== "hidden" && androidKeeps(e, keep, advOff);
+  /** Does `el` hold anything the phone keeps — a kept control, or a kept container (its rows may not be drawn yet)? */
+  const holdsKept = (el) => [...el.querySelectorAll(CTRL)].some(kept)
+    || [...el.querySelectorAll("[id]")].some(x => keep.has(x.id) && !advOff.has(x.id));
   for (const card of root.querySelectorAll(".card")) {
     if (card.id === "androidDevCard" || card.id === "androidSrvCard") continue;
-    const ctrls = [...card.querySelectorAll("input,select,textarea,.mode")].filter(e => e.type !== "hidden");
-    if (!ctrls.some(e => androidKeeps(e, keep, advOff))) { card.classList.add("androidOff"); continue; }
-    for (const e of ctrls) {
-      if (androidKeeps(e, keep, advOff)) continue;
-      const row = (e.closest && e.closest("label")) || e;
-      // ★ Never hide a row that also holds a supported control.
-      if (row !== e && [...row.querySelectorAll("input,select,textarea")].some(x => androidKeeps(x, keep, advOff))) continue;
-      row.classList.add("androidOff");
-    }
+    if (!holdsKept(card)) card.classList.add("androidOff");
+  }
+  // ★★ Each control the phone does not keep: hide the LARGEST thing around it that holds nothing kept — its own row,
+  //    not the row it shares with kept ones (the IF filter's select inside the per-band gain row), and never the page.
+  for (const e of root.querySelectorAll(CTRL)) {
+    if (e.type === "hidden" || kept(e)) continue;
+    let row = e;
+    while (row.parentElement && row.parentElement !== root && !row.parentElement.classList.contains("androidOff")
+           && !holdsKept(row.parentElement)) row = row.parentElement;
+    row.classList.add("androidOff");
   }
   for (const id of ["sdrChangesWrap", "batteryResumeAt", "tunnelResume", "dirPublicUrl"]) { const el = $(id); if (el) ((el.closest && el.closest("label")) || el).classList.add("androidOff"); }
   const sub = document.querySelector("#setup .sub");
