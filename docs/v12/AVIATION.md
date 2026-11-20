@@ -248,6 +248,30 @@ Modelled on the SHIPPING MAP (`shippingMap.ts`, docs/v12/SHIPPING-MAP.md): one r
 - **Tests:** `test_aviation_map.ts` 47/0; `test-web-avmap.mjs` 28/0 (headless Edge `--mute-audio`, two real radio processes);
   `test-web-avdata.mjs` 22/0 (adapted: the list is the map's); `test-web-shipping-map.mjs` 36/0 (TrackView unchanged for it).
 
+## ADS-B only while heard (beta88, 2026-11-20, branch `b88-maps`)
+
+Stuart, the Pi 500 in DATALINK (ACARS) on the V4L that normally does ADS-B: *"how is there 326 adsb aircraft on the map when i
+am in ACARS mode? plus my adsb only picks up about 30-40 on this box … as i am using the sdr that is normally used for adsb
+there should be 0 then"*. Cause: the table keeps every row `kKeepSec` (an hour — right for the datalink, whose bursts are
+minutes apart) and the map drew and counted every row as live; only 4 had been heard in the last 60 s.
+
+- **Server** (`vibe_aircraft_share.h`): `kAdsbNowSec` 60. A process whose ADS-B decoder is running stamps the file header's
+  `adsbLiveMs` (old padding — same layout, same version) every flush (`Sharer::adsbLive`, registered beside the "adsb"
+  provider in `local_sdr_shim.cpp`, asks `g_adsb.running()`); a stamp older than `kAdsbLiveSec` (10 s) = no radio on this
+  server is decoding ADS-B. `aircraft.json` adds `adsbLive` 1/0, `adsbLast` (s since the stamp; -1 never), `adsbNow` (rows
+  ADS-B heard within the minute while live), `adsbWin` 60, `adsbOff` (the owner's switch). The rows still stay the hour.
+- **Clients** (`aviationMap.ts avNowRule`, inside `avCompose` — web and app alike): ADS-B counts only within
+  `AV_ADSB_NOW_SEC` (60) AND while `adsbLive` is not 0 (an older server that cannot say: the age alone). An ADS-B-only
+  aircraft not heard now is neither drawn nor counted; one also heard on the datalink keeps its datalink history, 'ADS-B'
+  leaves its sources (the card's *Heard on* shows "ADS-B 20 min ago (not since)") and an ADS-B position becomes
+  `lastSeen` "HH:MM UTC" — faded, no track or speed, the row says "ADS-B last seen 17:36 UTC". `avAdsbNote` puts the reason
+  on the status line: "ADS-B: this server's ADS-B radio is in use for something else" (stamp seen, now stale) / "no radio on
+  this server is decoding it" (never stamped, but ADS-B rows exist) / "none heard in the last minute" / "switched off on
+  this server". Nothing is said on a server ADS-B never touched.
+- **Tests:** test-aircraft-share 54/0 (§11 new), test_aviation_map 72/0 (25 new), test-server-avmap 18/0 (3 new),
+  test-web-avmap 34/0 (6 new: "ADS-B 3" while radio A decodes; radio A leaves → the in-use words, BAW117 gone, 4CA97B kept
+  with "ADS-B last seen"), test-web-avdata 22/0, test_aviation_app all passed. Not verified on the Pi 500 itself.
+
 ## On air 2026-11-16 (daytime, 16:38–16:56 UTC)
 
 Recordings (not in git): `~/VibeSDR-test-audio/aviation/2026-11-16/`, each with `.log` (the session) and `.decoded.txt`

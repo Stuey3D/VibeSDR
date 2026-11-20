@@ -101,6 +101,20 @@ watch 8414.5 by day and 2187.5 by night. Each DSC VFO takes one decoder slot.
 as an item of its own, `"lv"` 3/2, pinned (`"plat"`/`"plon"`) where it sent a position — the web gallery highlights it and
 offers MAP. Repeats are not written twice. Listeners' DSC decodes are kept like any other (`live`).
 
+**beta88 (2026-11-20, branch `b88-maps`) — every call with a position is pinned.** Stuart, background decoding on the
+Pi 500's locked-range RSP1B: *"i have no map button to view them from the gallery"*. A routine (`lv` 0) or safety (`lv` 1)
+call that sent a position — on HF nearly always a POSITION REPLY — is now an item of its own too (`savePinned`, downloads as
+"DSC POSITION <MMSI> <date time>.txt"), coloured by level in both galleries (DSC_PIN_COLOURS: grey, yellow). Test calls and
+acks never carry a position. **Bounded** beside the gallery's own size limit: the same ship at the same position within
+`kPinSameSec` (10 min) is one item; at most `kPinPerHour` (60) a decoder per UTC hour — past that only the log has them, and
+the log says how many were not pinned. Distress / urgency are never capped. The galleries (web `renderGallery`, app
+`GalleryOverlay`) show a standing **"SHIPPING MAP · DSC calls with a position: N [· D distress · U urgency]"** row with MAP on
+page 1 of ALL / DSC, only when a pinned DSC item exists (`shippingMap.ts dscGalSummary`); MAP → the SHIPPING MAP, DSC
+first. Its empty DSC list: "No DSC call with a position in this time." (`DSC_SHIP_EMPTY`, both clients). Tests: test-dsc
+(9 new), test_shipping_map 57/0 (9 new), test-server-dsc 18/0, test-web-dsc 27/0 on the `pos` clip
+(`scripts/test-dsc.sh clip <f> pos`: + the position reply) — and its old "map window" check, stale since the DSC MAP moved
+to the in-page SHIPPING MAP on 11-02 (it failed on the base commit too), now checks the SHIPPING MAP.
+
 ## Tests
 
 - `vibeserver/test-dsc.cpp` (run-tests.sh): the code and ECC, every format's line on MF/HF and VHF, the strict reading, the

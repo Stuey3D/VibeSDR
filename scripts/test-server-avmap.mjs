@@ -121,6 +121,9 @@ try {
   const dl = rows(tA, '3C6548');
   ok(dl.length === 1 && dl[0].src.includes('VDL2') && dl[0].src.includes('ADS-C') && dl[0].posSrc === 'ADS-C' && Math.abs(dl[0].lat - 51.75) < 1e-3,
      `3C6548 (VDL2 only, an ADS-C report): ${JSON.stringify(dl)}`);
+  // ★ beta88 the ADS-B state: radio A is decoding ADS-B now
+  ok(tA?.j?.adsbLive === 1 && tA.j.adsbNow >= 3 && tA.j.adsbWin === 60 && tB?.j?.adsbLive === 1,
+     `beta88: adsbLive 1 on both radios' endpoints, adsbNow ${tA?.j?.adsbNow} (≥ 3), window ${tA?.j?.adsbWin} s`);
   const keys = (tA?.j?.aircraft || []).map((x) => x.key);
   ok(keys.length === new Set(keys).size, `no aircraft twice (${keys.length} rows, ${new Set(keys).size} keys)`);
   ok(!/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(tA?.text || ''), '★ never a message body in the table');
@@ -131,6 +134,12 @@ try {
   a.send({ type: 'adsb', on: 0 }); b.send({ type: 'avdata', on: 0 });
   await sleep(3000);
   ok(both(await table(A)), 'after both modes end the aircraft is still on the map (kept an hour)');
+  // ★★ beta88 Stuart's case: no radio decoding ADS-B any more → within kAdsbLiveSec (10 s) adsbLive 0, adsbNow 0 — while the
+  //    hour's rows are still served (the datalink's history; the clients drop the ADS-B-only ones)
+  let off = null;
+  ok(await until(async () => { off = await table(B); return off?.j?.adsbLive === 0; }, 20000),
+     `beta88: ADS-B mode ended → adsbLive 0 on the other radio's endpoint (adsbLast ${off?.j?.adsbLast} s, adsbNow ${off?.j?.adsbNow})`);
+  ok(off?.j?.adsbNow === 0 && off.j.adsbLast >= 10 && rows(off, '400F11').length === 1, '…ADS-B now 0, adsbLast ≥ 10 s, the rows still kept for the hour');
   const s1 = await table(A);
   const since = await A.getJson('/vibeserver/aircraft.json?since=1');
   ok(s1 && since && JSON.parse(since.text).aircraft.length <= s1.j.aircraft.length, '?since narrows the list');

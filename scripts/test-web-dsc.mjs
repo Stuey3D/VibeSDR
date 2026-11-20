@@ -3,7 +3,7 @@
 //   2187.5 kHz); the server's dial is 2185.8 kHz USB. Headless Edge then:
 //   • DECODERS shows DSC (vibeserver.json says "dsc": true); its settings hold the DSC channel keys;
 //   • the calls arrive as rows, newest first: the distress alert in red with MAP, the safety call in amber;
-//   • MAP opens this server's map window with the position;
+//   • MAP opens the SHIPPING MAP in the page, on that call (since 2026-11-02);
 //   • a channel key tunes as a DSC receiver does (8414.5 → 8412.8 kHz USB);
 //   • the gallery has a DSC chip, and its distress item is highlighted with MAP;
 //   • at PHONE WIDTH (390 px) nothing scrolls sideways; no exception on the page.
@@ -128,29 +128,16 @@ try {
               `beta88: the routine position reply is decoded (${await ev(`[...document.querySelectorAll('#dscRows .dscr .l')].map(x => x.textContent.slice(0, 40)).join(' | ')`)})`);
 
   console.log('── MAP opens this server\'s map with the position ──');
-  const before = (await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).filter((t) => t.type === 'page').length;
-  await trustedClick('#dscRows .dscr.distress .dscMap');   // ★ a trusted click: a scripted one is a blocked popup
-  let mapPage = null, seen = [];
-  for (let i = 0; i < 40 && !mapPage; i++) {
-    await sleep(250);
-    const l = await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json());
-    seen = l.filter((t) => t.type === 'page').map((t) => t.title || t.url);
-    if (seen.length > before) mapPage = l.find((t) => t.type === 'page' && /DSC positions/.test(t.title || ''));
-  }
-  ok(!!mapPage, `a map window opened ("${mapPage ? mapPage.title : `none — pages: ${JSON.stringify(seen)}, status: ${await ev(`document.getElementById('decStatus')?.textContent`)}`}")`);
-  if (mapPage) {
-    const mw = new WebSocket(mapPage.webSocketDebuggerUrl);
-    await new Promise((r) => { mw.onopen = r; });
-    let mid = 0; const mp = new Map();
-    mw.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && mp.has(m.id)) { mp.get(m.id)(m); mp.delete(m.id); } };
-    const mev = (x) => new Promise((res) => { const i = ++mid; mp.set(i, (m) => res(m.result?.result?.value)); mw.send(JSON.stringify({ id: i, method: 'Runtime.evaluate', params: { expression: x, returnByValue: true } })); });
-    await sleep(1500);
-    const note = await mev(`document.getElementById('note') ? document.getElementById('note').textContent : ''`);
-    ok(/DISTRESS · MMSI 235012345/.test(note || ''), `the map window names the call (${(note || '').slice(0, 60)})`);
-    const pins = await mev(`JSON.stringify(typeof PINS !== 'undefined' ? PINS.map(p => [p.lat, p.lon]) : [])`);
-    ok(/50\.2/.test(pins || '') && /-4\.16/.test(pins || ''), `…with the position pinned (${pins})`);
-    mw.close();
-  }
+  // ★ Since 2026-11-02 the DSC box's MAP opens the SHIPPING MAP in the page (navMapOpen('dsc', the call)), not a window —
+  //   this check still asked for the old window and failed on every run (found 2026-11-20, beta88; base commit too).
+  const SV = `document.querySelector('.trkView:not([hidden])')`;
+  await trustedClick('#dscRows .dscr.distress .dscMap');
+  ok(await until(`!!${SV} && /SHIPPING MAP/.test(${SV}.querySelector('.ttl')?.textContent || '')`, 8000),
+     `the call's MAP opens the SHIPPING MAP (${await ev(`${SV}?.querySelector('.ttl')?.textContent || 'none'`)})`);
+  ok(await until(`/DISTRESS · MMSI 235012345/.test(document.querySelector('.vtl-card')?.textContent || '') || /235012345/.test(${SV}?.querySelector('.rows')?.textContent || '')`, 8000),
+     `…on the call (${(await ev(`(document.querySelector('.vtl-card')?.textContent || ${SV}?.querySelector('.rows')?.textContent || '')`) || '').slice(0, 80)})`);
+  await ev(`${SV}?.querySelector('.exit')?.click()`);
+  ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), '…and CLOSE MAP closes it');
 
   console.log('── a channel key tunes as a DSC receiver does ──');
   await ev(`(() => { document.getElementById('decodersPanel').classList.add('open'); [...document.querySelectorAll('#dscChans button')].find(b => b.textContent === '8414.5').click(); return 1; })()`);
