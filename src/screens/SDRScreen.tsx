@@ -71,8 +71,8 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
-import SatellitePanel from '../components/SatellitePanel';   // ★ V12 the satellites box (picker, readout, DOPPLER)
-import { satChanText, satStateWord, txListenMode, txTuneHz, type SatList, type SatReadout, type SatTrack } from '../services/satellites';
+import SatellitePanel from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
+import { satChanText, satStateWord, satListEveryMs, satPacketBaud, type SatList, type SatPicked, type SatReadout, type SatTx } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2708,35 +2708,38 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sdBoxOpen, setSdBoxOpen] = useState(false);
   const [sdMapOpen, setSdMapOpen] = useState(false);
   const sdUiOff = useCallback(() => { sdOnRef.current = false; setSdOn(false); setSdReport(null); setSdBoxOpen(false); setSdMapOpen(false); setSdError(undefined); }, []);
-  /* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md) — the picker box (SatellitePanel) and the Doppler lock's readout. The
-   *  server owns the lock: the readout beside the digits (ControlsBar satTag) is what it last said; the box is a view. */
+  /* ★★★ V12 SATELLITE MODE (docs/v12/SATELLITE-MODE.md) — a whole-radio mode: the box (SatellitePanel) IS the mode. A row
+   *  asks {"op":"pick"}; the server tunes, locks the Doppler and attaches the decoder, answering {"state":"picked"}; the app
+   *  follows that decoder on its decoder socket (satFollow) with the box as its view; leaving sends {"op":"drop"}. The lock's
+   *  readout beside the digits (ControlsBar satTag) is what the server last said. */
   const [satCap, setSatCap] = useState<{ ok: boolean; why: string } | undefined>(undefined);
-  const [satBoxOpen, setSatBoxOpen] = useState(false);
+  const [satOn, setSatOn] = useState(false);
+  const satOnRef = useRef(false);
   const [satList, setSatList] = useState<SatList | null>(null);
+  const satListRef = useRef<SatList | null>(null);
   const [satRo, setSatRo] = useState<SatReadout | null>(null);
-  const [satTrack, setSatTrack] = useState<SatTrack | null>(null);
-  const satAskedTrack = useRef('');
   const satRoRef = useRef<SatReadout | null>(null);
-  /* ★ while the box is open: the list now and every 30 s, and the sky track of the locked bird's (else the first row's)
-   *  pass — asked once per pass */
+  const [satPicked, setSatPicked] = useState<SatPicked | null>(null);
+  const [satPending, setSatPending] = useState<{ norad: number; tx: number } | null>(null);
+  const satPendingRef = useRef<{ norad: number; tx: number } | null>(null);
+  const [satAutoDoppler, setSatAutoDoppler] = useState(true);   // ★ AUTO DOPPLER — default ON (spec item 3)
+  const [satWhy, setSatWhy] = useState('');
+  const [satPicture, setSatPicture] = useState(false);
+  const [satPictureDone, setSatPictureDone] = useState(false);
+  /** The decoder SATELLITE owns (the server attached it on the pick) — '' = none; the decoder box stays shut for it. */
+  const satDecRef = useRef<SatPicked['decoder']>('');
+  const [satDec, setSatDec] = useState<SatPicked['decoder']>('');
+  /** satFollow, reached from the client's callbacks (made before it). */
+  const satFollowRef = useRef<(d: SatPicked['decoder'], t: SatTx | null) => void>(() => {});
+  /* ★ while in the mode: the list now, then every 30 s — every 3 s while the server is fetching orbit data (the contract) */
+  const satFetching = !!satList?.source?.fetching;
   useEffect(() => {
-    if (!satBoxOpen) return;
+    if (!satOn) return;
     const c = client.current as unknown as { satList?: () => void } | null;
     c?.satList?.();
-    const t = setInterval(() => c?.satList?.(), 30000);
+    const t = setInterval(() => c?.satList?.(), satListEveryMs(satFetching ? satList : null));
     return () => clearInterval(t);
-  }, [satBoxOpen]);
-  useEffect(() => {
-    if (!satBoxOpen || !satList) return;
-    const now = Date.now() / 1000;
-    const norad = satRo && satRo.state !== 'OFF' ? satRo.norad : satList.sats.find((x) => x.tx.some((t) => t.reach) && x.passes.length)?.norad;
-    const p = satList.sats.find((x) => x.norad === norad)?.passes.find((x) => x.los > now);
-    if (norad == null || !p) return;
-    const key = `${norad}|${Math.round(p.aos / 60)}`;
-    if (satAskedTrack.current === key) return;
-    satAskedTrack.current = key;
-    (client.current as unknown as { satTrack?: (n: number, a: number, l: number) => void } | null)?.satTrack?.(norad, p.aos, p.los);
-  }, [satBoxOpen, satList, satRo?.norad, satRo?.state]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [satOn, satFetching]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
   const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
@@ -6147,13 +6150,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       onImageStart: (w: number, h: number) => {
         if (activeDecRef.current === 'hell') decoderImageRef.current?.hellStart();   // ★ FELD HELL: a fresh decoder, a new page next
         else decoderImageRef.current?.imageStart(w, h);
+        // ★★★ SATELLITE: a picture starting on the pick's decoder grows the box (the ISS SSTV downlink opens compact)
+        if (satOnRef.current && satDecRef.current && activeDecRef.current === satDecRef.current) { setSatPicture(true); setSatPictureDone(false); }
       },
       onImageLine:  (ln: number, w: number, px: Uint8Array) => {
         if (activeDecRef.current === 'sstv' || activeDecRef.current === 'lrpt') decoderImageRef.current?.sstvLine(ln, w, px);   // ★ V12 LRPT's preview: SSTV's RGB lines
         else if (activeDecRef.current === 'hell') decoderImageRef.current?.hellLine(ln, w, px);   // ★ FELD HELL: drawn plainly
         else                                 decoderImageRef.current?.wefaxLine(ln, w, px);
       },
-      onImageDone: ()            => decoderImageRef.current?.imageDone(),
+      onImageDone: () => {
+        decoderImageRef.current?.imageDone();
+        if (satOnRef.current && satDecRef.current && activeDecRef.current === satDecRef.current) setSatPictureDone(true);   // ★★★ SATELLITE: pass end
+      },
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
       onCwSignals: (l) => {
         // ★ V12 PSK's list arrives here too (DecoderClient parses psk_signals into the same shape, with its mode)
@@ -6803,6 +6811,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     setJttyList([]); setJttySpots([]); setNcdxfReport(null); setBalloonReport(null); setBalloonSeen([]); setBalloonPics([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
     aprsReset();   // ★ V12 APRS: closing the box closes its map too (the web's stopDecoder)
   }, [aprsReset]);
+
+  /* ★★★ SATELLITE: THE DECODER THE SERVER ATTACHED ON A PICK. Its frames arrive on the decoder socket, which parses frames
+   *  only for the decoder it attached (DecoderClient) — so the app follows the server's choice with the same start a
+   *  decoder key makes (the same decoder: the server keeps it running). The decoder box stays shut while SATELLITE owns it
+   *  (the SATELLITE box is its view: DecoderPanel gets no activeDecoder, the box mounts the image canvas). '' = none. */
+  const satFollow = useCallback((d: SatPicked['decoder'], t: SatTx | null) => {
+    const was = satDecRef.current;
+    satDecRef.current = d; setSatDec(d);
+    if (was && activeDecRef.current === was && d !== was) closeDecoder();
+    if (!d || !t) return;
+    if (activeDecRef.current === d) return;
+    if (d === 'aprs') { packetModeRef.current = satPacketBaud(t); aprsBaudRef.current = 1200; }   // ★ the downlink's baud, this pick only
+    stopSpots();
+    openDecoder(d);
+  }, [closeDecoder, openDecoder]);   // eslint-disable-line react-hooks/exhaustive-deps
+  satFollowRef.current = satFollow;
+  /** ★ Out of SATELLITE: the drop is ALWAYS sent (a lock must never outlive the mode), its decoder stops, the box closes. */
+  const satModeOff = useCallback(() => {
+    if (!satOnRef.current) return;
+    satOnRef.current = false; setSatOn(false);
+    (client.current as unknown as { satDrop?: () => void } | null)?.satDrop?.();
+    satFollow('', null);
+    satPendingRef.current = null; setSatPending(null);
+    setSatPicked(null); setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
+  }, [satFollow]);
 
   const stopSpots = useCallback(() => {
     decoderClient.current?.stopSpots();
@@ -7729,16 +7762,26 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAvReport(r);
       },
       /* ★★ V12 SATELLITES: the list, the readout (an ending / refusal says why once), a pass's sky track. */
-      onSatList: (l) => { if (!destroyed.current) setSatList(l); },
+      onSatList: (l) => { if (!destroyed.current) { satListRef.current = l; setSatList(l); } },
       onSat: (r) => {
         if (destroyed.current) return;
-        // ★ the server ending a lock (LOS, the owner, another listener's tune on a shared dial) opens the box once to say
-        //   why; the listener's own tune away does not (they know) — no toast, no flashing
-        if (r.state === 'OFF' && r.why && !/^(Tuned away|Mode changed)/.test(r.why) && satRoRef.current && satRoRef.current.state !== 'OFF') setSatBoxOpen(true);
+        // ★ an ending or a refusal says why in the SATELLITE box (a refused pick clears its "Tuning…") — no toast, no flashing
+        if (r.state === 'OFF' && r.why && satOnRef.current && (satPendingRef.current || (satRoRef.current && satRoRef.current.state !== 'OFF'))
+            && !/^(Tuned away|Mode changed)/.test(r.why)) setSatWhy(r.why);
+        if (r.state === 'OFF' && r.why && satPendingRef.current) { satPendingRef.current = null; setSatPending(null); }
         satRoRef.current = r;
         setSatRo(r.state === 'OFF' && !r.why ? null : r);
       },
-      onSatTrack: (t) => { if (!destroyed.current) setSatTrack(t); },
+      /* ★★★ SATELLITE: the server tuned, locked (if asked) and attached the decoder — follow it on the decoder socket */
+      onSatPicked: (pk) => {
+        if (destroyed.current || !satOnRef.current) return;
+        satPendingRef.current = null; setSatPending(null); setSatWhy('');
+        setSatPicked((prev) => {
+          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); }
+          return pk;
+        });
+        satFollowRef.current(pk.decoder, satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx] ?? null);
+      },
       /* ★ V12 RADIOSONDES: as the datalink — a report (the box opens on the transition), sondes_off (null), a refusal. */
       onSondes: (r, why) => {
         if (destroyed.current) return;
@@ -14736,7 +14779,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* ★ The decoder box leaves on a rotation and fades back in after it (RotateFade). */}
       <RotateFade>
-      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
+      {isLandscape && !isTablet && ((activeDecoder !== null && !(satOn && satDec && activeDecoder === satDec)) || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
         // ★★ CLEAR THE VTS BAR — the third time this exact collision has been fixed. VTSBar also
         // sits at `pillBottom + 8` (see its render below), so this banner was drawn straight ON TOP
         // of the live-station bar, with the station name bleeding out at both ends
@@ -14751,7 +14794,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       ) : (
         <PanelBoundary name="Decoder" onClose={dismissDecoderPanel}>
         <DecoderPanel
-          activeDecoder={activeDecoder}
+          /* ★★★ SATELLITE owns the decoder it follows: its box is the view, so the decoder box stays shut for it */
+          activeDecoder={satOn && satDec && activeDecoder === satDec ? null : activeDecoder}
           onNavtexMap={!IS_APPLE_TV && navAvail ? () => { markInteract(); navFromGallery.current = false; setNavMapOpen(true); } : null}
           tunedHz={status.frequency}
           receiverPos={serverPos ?? recvLoc}
@@ -15663,25 +15707,33 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
-      {/* ★★ V12 THE SATELLITES BOX — the decoder boxes' place; the waterfall live above it. */}
+      {/* ★★★ V12 THE SATELLITE MODE's BOX — the decoder boxes' place; the waterfall live above it. The box IS the mode. */}
       <RotateFade>
-      {satBoxOpen && !!satCap && (
-        <PanelBoundary name="Satellites" onClose={() => setSatBoxOpen(false)}>
+      {satOn && !!satCap && (
+        <PanelBoundary name="Satellite" onClose={satModeOff}>
         <SatellitePanel
-          list={satList} readout={satRo} track={satTrack} cap={satCap}
-          onDoppler={(on) => {
+          list={satList} readout={satRo} cap={satCap} autoDoppler={satAutoDoppler}
+          picked={satPicked} pending={satPending} why={satWhy}
+          picture={satPicture} pictureDone={satPictureDone}
+          decLine={satDec && activeDecoder === satDec ? decoderStatus : ''}
+          packets={satDec === 'aprs' ? aprsLog.map((x) => x.line) : []}
+          rxPos={serverPos ?? recvLoc ?? null}
+          imageRef={decoderImageRef}
+          onPick={(norad, i) => {
             markInteract();
-            if (askGate()) return;
-            (client.current as unknown as { satLock?: (on: boolean, norad?: number) => void } | null)?.satLock?.(on);
+            if (satPicked && satPicked.norad === norad && satPicked.tx === i) return;
+            if (askGate()) return;   // ★★ ask before tuning — a pick moves the dial (everybody's, on a shared tuner)
+            const c = client.current as unknown as { satPick?: (n: number, t: number, d: boolean) => boolean } | null;
+            if (c?.satPick?.(norad, i, satAutoDoppler)) { satPendingRef.current = { norad, tx: i }; setSatPending({ norad, tx: i }); setSatWhy(''); }
           }}
-          onTrack={(norad, tx) => {
+          onGreyed={(why) => setSatWhy(why)}
+          onDoppler={() => {
             markInteract();
-            if (askGate()) return;
-            onTuneHz(txTuneHz(tx), txListenMode(tx) as SDRMode);
-            // ★ after the tune has landed, so the server matches the lock at the new dial (within 12 kHz)
-            setTimeout(() => (client.current as unknown as { satLock?: (on: boolean, norad?: number) => void } | null)?.satLock?.(true, norad), 400);
+            const on = !satAutoDoppler;
+            setSatAutoDoppler(on);
+            if (satPicked) (client.current as unknown as { satDoppler?: (on: boolean) => void } | null)?.satDoppler?.(on);
           }}
-          onClose={() => setSatBoxOpen(false)}
+          onExit={() => { markInteract(); satModeOff(); }}
           topLimit={boxTopLimit}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
@@ -16217,7 +16269,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  the rate the receiver will actually run at, and only the server knows both. */
           dabAvail: dabCapable,
           dabOn,
-          onDab: () => { markInteract(); setModeSelOpen(false); toggleDab(); },
+          onDab: () => { markInteract(); setModeSelOpen(false); satModeOff(); toggleDab(); },   // ★★★ entering another whole-radio mode leaves SATELLITE
           /* ★★ V12 ADS-B, beside DAB. Drawn whenever the server STATES a capability (an older server states none and
            *  gets no key); a refusal is drawn DISABLED WITH THE SERVER'S REASON and a press says it again — never
            *  hidden, because a missing key reads as a missing feature (ADSB.md). While the mode runs the key always
@@ -16233,6 +16285,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsbOn,
           onAdsb: () => {
             markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             if (!adsbOnRef.current && adsbCap && !adsbCap.ok) {
               appAlert('ADS-B unavailable', adsbCap.why || 'ADS-B is not available on this receiver');
               return;
@@ -16257,6 +16310,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ismOn,
           onIsm: () => {
             markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             if (!ismOnRef.current && ismCap && !ismCap.ok) { appAlert('ISM unavailable', ismCap.why || 'ISM is not available on this receiver'); return; }
             setModeSelOpen(false);
             toggleIsm();
@@ -16268,6 +16322,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ndbOn,
           onNdb: () => {
             markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             if (!ndbOnRef.current && ndbCap && !ndbCap.ok) { appAlert('NDB unavailable', ndbCap.why || 'NDB is not available on this receiver'); return; }
             setModeSelOpen(false);
             toggleNdb();
@@ -16315,7 +16370,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           balloonAvail: balloonCapable && !!(client.current as any)?.isVibe,
           balloonSettings, onBalloonSettings,
           tonesAvail: tonesCapable && !!(client.current as any)?.isVibe,
-          lrptAvail: lrptCapable && !!(client.current as any)?.isVibe,
           vorAvail: vorCapable && !!(client.current as any)?.isVibe,
           sarsatAvail: sarsatCapable && !!(client.current as any)?.isVibe,
           tonesSettings, onTonesSettings,
@@ -16344,17 +16398,32 @@ export default function SDRScreen({ route, navigation }: Props) {
           aisOn,
           /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
           /* ★★ V12 RADIOSONDES — the datalink's three states, VibeServer only (the capability is per radio). */
-          /* ★★ V12 SATELLITES — not a whole-radio mode: the key opens the box. Only where the server sends `doppler`, and with
-           *  the menu's rule (refused = not drawn, see ADS-B above) unless its readout is up so it can be closed. */
-          satAvail: !!satCap && (satCap.ok || (!!satRo && satRo.state !== 'OFF')) && !!(client.current as any)?.isVibe,
-          satWhy: !(satRo && satRo.state !== 'OFF') && satCap && !satCap.ok ? satCap.why : undefined,
-          satOn: !!satRo && satRo.state !== 'OFF',
-          onSat: () => { markInteract(); setModeSelOpen(false); setSatBoxOpen((v) => !v); },
+          /* ★★★ V12 SATELLITE — a whole-radio mode (Stuart, 2026-11-20: "next to ism sondes etc"). Only where the server sends
+           *  `doppler` (the radio reaches a listed downlink), with the menu's rule (refused = not drawn, see ADS-B above)
+           *  unless on, so it can always be left. Entering leaves whichever whole-radio mode is on; the key again leaves. */
+          satAvail: !!satCap && (satCap.ok || satOn) && !!(client.current as any)?.isVibe,
+          satWhy: !satOn && satCap && !satCap.ok ? satCap.why : undefined,
+          satOn,
+          onSat: () => {
+            markInteract(); setModeSelOpen(false);
+            if (satOnRef.current) { satModeOff(); return; }
+            if (satCap && !satCap.ok) { appAlert('SATELLITE unavailable', satCap.why); return; }
+            const c = client.current as unknown as { sondes?: (on: boolean) => void; avdata?: (on: boolean) => void } | null;
+            if (dabOn) toggleDab();
+            if (adsbOnRef.current) toggleAdsb();
+            if (ismOnRef.current) toggleIsm();
+            if (aisOnRef.current) toggleAis();
+            if (ndbOnRef.current) toggleNdb();
+            if (sdOnRef.current) { c?.sondes?.(false); sdUiOff(); }
+            if (avOnRef.current) { c?.avdata?.(false); avUiOff(); }
+            setSatWhy(''); satOnRef.current = true; setSatOn(true);
+          },
           sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
           sondesWhy: !sdOn && sdCap && !sdCap.ok ? sdCap.why : undefined,
           sondesOn: sdOn,
           onSondes: () => {
             markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             const c = client.current as unknown as { sondes?: (on: boolean, band?: string) => void } | null;
             if (!c?.sondes) return;
             if (!sdOnRef.current && sdCap && !sdCap.ok) { appAlert('Radiosondes unavailable', sdCap.why); return; }
@@ -16376,6 +16445,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           avdataOn: avOn,
           onAvdata: () => {
             markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             const c = client.current as unknown as { avdata?: (on: boolean, band?: string) => void } | null;
             if (!c?.avdata) return;
             if (!avOnRef.current && avCap && !avCap.ok) { appAlert('Aircraft datalink unavailable', avCap.why); return; }
@@ -16389,6 +16459,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           },
           onAis: () => {
             markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             if (!aisOnRef.current && aisCap && !aisCap.ok) { appAlert('AIS unavailable', aisCap.why || 'AIS is not available on this receiver'); return; }
             setModeSelOpen(false);
             toggleAis();
