@@ -51,6 +51,10 @@ object VibeBenchmark {
         val uplink = measureUplinkKBps()
         val json = try {
             VibeLocalSDR.runBenchmark(clip, adsbClip, decoderClip, uplink)
+        } catch (t: IllegalStateException) {
+            // ★★★ A refusal in words (listeners connected, the radio could not be taken off the air) — passed up so the
+            //     screen says it, rather than "did not produce a result" (nativeRunBenchmark, 2026-11-20).
+            throw t
         } catch (t: Throwable) {
             Log.w(TAG, "benchmark failed: $t"); return null
         }

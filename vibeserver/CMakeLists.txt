@@ -1280,6 +1280,10 @@ add_executable(test-bench-wide "${CMAKE_CURRENT_SOURCE_DIR}/test-bench-wide.cpp"
 target_include_directories(test-bench-wide PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-bench-wide)
 add_test(NAME bench-wide COMMAND test-bench-wide)
+# ★★★ The whole machine holds still for a benchmark (2026-11-20): the lease, a radio process's answers, the sentences.
+add_executable(test-bench-quiet "${CMAKE_CURRENT_SOURCE_DIR}/test-bench-quiet.cpp")
+vibe_sanitize(test-bench-quiet)
+add_test(NAME bench-quiet COMMAND test-bench-quiet)
 # ★ V12 2026-11-03: which decoders a radio can reach, and the region defaults of the owner's switches (vibe_decoder_reach.h)
 add_executable(test-decoder-reach "${CMAKE_CURRENT_SOURCE_DIR}/test-decoder-reach.cpp")
 target_include_directories(test-decoder-reach PRIVATE "${CPP_DIR}")

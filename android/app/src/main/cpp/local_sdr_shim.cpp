@@ -1304,6 +1304,12 @@ static void dabBandSaveFinished() {
  *     "ADMIN TRIGGERED SCAN IN PROGRESS — PLEASE WAIT" and lock its controls. An OLD client just does not move. */
 static std::atomic<bool> g_ownerScan{false};
 static std::atomic<bool> g_scanLock{false};
+/* ★★★ THE BENCHMARK HOLD (Stuart, 2026-11-20: "everything should stop for benchmark runs otherwise they are invalid").
+ *  Set by LocalSdrShim::benchQuiesce for as long as a benchmark is measuring this MACHINE — whichever process runs it. On
+ *  the Pi 2 the radio process's idle DX scanner swept DAB (two thirds of a core) right through a quick run started from
+ *  the front door, and the locked-capture rows read "0 WFM users". While it stands: the DX scanner, background decoding
+ *  and kept-running ADS-B do not start, and nothing idle takes the radio back (resumeCaptureIdle). */
+static std::atomic<bool> g_benchHold{false};
 /* ★★★ THE OWNER'S ONE-SHOT FM BAND SCAN (V12, 2026-11-04). The DX scanner's FM hop (vibe_dxscan_fm.h, multi-peak RDS)
  *  run once over 87.5–108 MHz; every station with a confirmed PI is stored as a SCANNED bookmark exactly as the DAB
  *  scan's are (bmScanFm: the same store, the year-long expiry, cleared by "Clear learned stations"). One at a time, and
@@ -16355,6 +16361,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void adsbKeepTick() {
         if (stopping.load() || restarting.load() || frontDoorOnly || decoderOnly) return;
         if (!g_vsAdsbKeep.load(std::memory_order_relaxed)) { adsbKeepLoggedWhy_ = false; return; }
+        if (g_benchHold.load()) return;   // ★★★ never takes the radio back while a benchmark measures the machine
         if (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)) return;
         /* ★★★ NEVER OVER ANOTHER WHOLE-RADIO MODE — WAIT FOR ITS OWN LEAVE (2026-11-12). With ISM (or NDB, AIS) still on
          *  and its leave due, this entered ADS-B through the ADS-B key, which threw ISM off through ismLeave(true) — so the
@@ -27185,6 +27192,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     reply(200, "OK", vibe::benchProgressJson());
                     return;
                 }
+                /* ★★★ hold=check — another process on this machine, about to run a benchmark, asks whether this one has
+                 *  listeners and could hold still (main.cpp vsBenchHoldVerb). A GET, and nothing changes: an older build
+                 *  answers it with its saved result instead, and the asker can tell it cannot be held. */
+                if (queryParam(reqLine, "hold") == "check") {
+                    std::string herr;
+                    const std::string hj = runFn(false, "hold=check", herr);
+                    if (hj.empty()) reply(409, "Conflict", "{\"error\":\"" + jsonEscape(herr) + "\"}");
+                    else reply(200, "OK", hj);
+                    return;
+                }
                 const std::string j = getFn();
                 reply(200, "OK", j.empty() ? "{\"v\":0}" : j);
                 return;
@@ -34373,6 +34390,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // set `restarting` for the whole paused period so the capture watchdog treats the stopped stream as
     // deliberate (it `continue`s on `restarting`) and never false-alarms "dongle gone" or relaunches.
     std::atomic<bool> captureIdle{false};
+    /// ★★★ The benchmark hold PAUSED this capture (a radio that cannot be released) — benchUnhold resumes it.
+    std::atomic<bool> benchPaused{false};
     /** ★★★ PAUSE AND RESUME, ONE AT A TIME. pauseCaptureIdle (the last listener leaving, on the
      *  disconnect path) sets captureIdle and THEN joins the reader — and a listener arriving in that
      *  gap ran resumeCaptureIdle on the connect path, saw captureIdle, and joined the SAME reader.
@@ -35553,6 +35572,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
     void bgTick() {
         if (stopping.load() || frontDoorOnly || decoderOnly) return;
+        /* ★★★ NOT WHILE A BENCHMARK MEASURES THIS MACHINE (g_benchHold) — and a profile still running is stopped, its dial
+         *  given back (benchQuiesce stops it first; this is the belt to that brace, and it covers a locked radio, whose
+         *  profiles otherwise run with listeners on or not). */
+        if (g_benchHold.load()) {
+            std::lock_guard<std::mutex> op(bgOpMtx_);
+            if (bgActive_.load() || bgSaved_.valid) bgStopLocked("the benchmark is measuring this machine", true);
+            bgWanted_.store(false);
+            return;
+        }
         vibe::bg::Config cfg;
         { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
         /* ★★★ KEPT-RUNNING ADS-B OWNS THE IDLE RADIO, NOT BACKGROUND DECODING (V12, 2026-10-24). Both want the radio when
@@ -35695,6 +35723,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string dxWhyNot(const vibe::dx::Config& c) {
         if (!c.any()) return "switched off";
         if (frontDoorOnly || decoderOnly) return "not a radio process";
+        if (g_benchHold.load()) return "the benchmark is measuring this machine";   // ★★★ see g_benchHold
         if (useIcom()) return "not on an Icom radio (it has no IQ to sweep)";
         if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 the DX scanner never moves a locked radio";
         if (adsbKeepHolds()) return "ADS-B is kept running on this radio when nobody is connected";
@@ -37039,6 +37068,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!fromBg && modeLeaveDueAt.exchange(0.0) > 0.0)
             LOGI("listener returned within %.0f s — %s kept", modeLeaveGraceS(),
                  g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "ADS-B");
+        /* ★★★ THE BENCHMARK HOLD: nothing takes the radio back while the machine is being measured — not the idle work
+         *  (fromBg), not an arriving listener. A figure measured beside a live radio is wrong, and the owner only runs it
+         *  with nobody here (or forced it). The listener gets the server and a reason; the radio comes back by itself
+         *  when the run ends (main.cpp vsBenchBringBack, then benchUnhold). */
+        if (g_benchHold.load()) {
+            if (!fromBg) notifyRadioBusy("the server is measuring itself (the benchmark) \xe2\x80\x94 the radio is back in a few minutes");
+            return;
+        }
         // ★★ TAKE THE RADIO BACK FIRST, because everything below assumes a device. If another
         //    program has it we carry on WITHOUT one rather than failing the connection: the
         //    listener gets the server, the band plan and a clear reason, which is far better than
@@ -47199,6 +47236,72 @@ bool LocalSdrShim::releaseRadio() {
     LOGI("radio RELEASED — another program may open it now (spectrogram and band conditions stop)");
     impl->notifyDeviceState();
     return true;
+}
+
+/* ★★★ THE BENCHMARK HOLD — see the header and g_benchHold. Order matters:
+ *   1. the hold goes up FIRST, so no tick can start the DX scanner, background decoding or kept ADS-B, or take the radio
+ *      back, between the stops below and the release;
+ *   2. the DX scanner and background decoding stop WITH THE RADIO STILL HELD, so their dial goes back where the owner
+ *      left it (both retune) — after a release there would be nothing to tune;
+ *   3. the radio is released (USB let go, DSP stopped). A radio that cannot be released has its capture paused
+ *      instead: a network rtl_tcp source (its reader stops), or an Android descriptor radio (releaseRadio parks it).
+ *      Either way no IQ flows and the DSP parks on an empty queue — which is what "quiet" has to mean for a figure.
+ *  ★ An Icom has no IQ and no DSP pipeline to speak of: its idle work is stopped and it is left as it is. */
+bool LocalSdrShim::benchQuiesce(bool& released, std::string& why) {
+    released = false;
+    Impl* impl = p;
+    if (!impl || impl->frontDoorOnly || impl->decoderOnly) return true;   // ★ nothing here to quiet
+    if (g_ownerScan.load()) { why = "the owner's band scan is running on it"; return false; }
+    g_benchHold.store(true);
+    impl->dxStop("the benchmark is measuring this machine", true);
+    impl->dxWanted_.store(false);
+    {
+        std::lock_guard<std::mutex> op(impl->bgOpMtx_);
+        if (impl->bgActive_.load() || impl->bgSaved_.valid) impl->bgStopLocked("the benchmark is measuring this machine", true);
+        impl->bgWanted_.store(false);
+    }
+    impl->idleParkDueAt.store(0.0);
+    if (impl->useIcom()) { LOGI("benchmark hold: idle work stopped (an Icom has no capture to stop)"); return true; }
+    if (!isRunning() || impl->radioReleased.load()) {
+        LOGI("benchmark hold: idle work stopped; the radio was already off the air");
+        return true;
+    }
+    if (releaseRadio()) {
+        released = true;
+        LOGI("benchmark hold: idle work stopped and the radio released for the measurement");
+        return true;
+    }
+    // ★ Could not be released: pause its capture instead.
+    if (impl->useTcp()) {
+        std::lock_guard<std::mutex> il(impl->idleMtx);
+        if (!impl->captureIdle.exchange(true)) {
+            impl->tcpRunning.store(false);
+            joinOnce(impl->rtlThread, "tcp reader");
+            impl->benchPaused.store(true);
+        }
+    } else if (impl->captureIdle.load() && !impl->benchPaused.load()) {
+        impl->benchPaused.store(true);   // ★ releaseRadio parked it (an Android descriptor radio)
+    }
+    if (impl->captureIdle.load()) {
+        LOGI("benchmark hold: idle work stopped and the capture paused for the measurement");
+        return true;
+    }
+    g_benchHold.store(false);
+    why = "its radio could not be taken off the air (a shared receiver whose capture must keep running)";
+    return false;
+}
+
+void LocalSdrShim::benchUnhold() {
+    const bool was = g_benchHold.exchange(false);
+    if (p && p->benchPaused.exchange(false)) p->resumeCaptureIdle(true);
+    if (was) LOGI("benchmark hold: ended \xe2\x80\x94 idle work may run again");
+}
+bool LocalSdrShim::benchHeld() { return g_benchHold.load(); }
+std::string LocalSdrShim::machineAdminTicket() {
+    std::string secret;
+    { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+    if (secret.empty()) return "";
+    return vsMintAdminTicket(vsNowEpoch());
 }
 
 /** Take the radio back. Returns false when something else now holds it — which is a NORMAL

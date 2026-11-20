@@ -961,11 +961,43 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstri
     auto str = [&](jstring s) { std::string o; if (!s) return o; const char* c = env->GetStringUTFChars(s, nullptr);
                                 if (c) { o = c; env->ReleaseStringUTFChars(s, c); } return o; };
     const std::string clip = str(clipPath), adsbClip = str(adsbClipPath), decoderClip = str(decoderClipPath);
-    // ★ decoderClip: the decoder rows' real band (vibe_benchmark_more.h) — empty = those rows read "not measured"
-    const std::string j = vibe::runBenchmark(nullptr, 6.0, (double)uplinkKBps,
-                                             [&] { auto r = vibe::runDabRows(clip, 6.0);
-                                                   for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                   return r; }, 7, decoderClip);
+    /* ★★★ EVERYTHING STOPS FOR THE RUN (Stuart, 2026-11-20: "everything should stop for benchmark runs otherwise they are
+     *  invalid"). The comment above said the caller stops the radio; no caller did — ServerModeScreen measured beside a
+     *  serving radio, its DX scanner and its background decoding. Now the server here holds still (benchQuiesce: idle work
+     *  stopped and held off, the radio released or its capture paused), refused with words while anyone is listening,
+     *  and put back afterwards whatever happens. A phone serves one radio in one process: nothing else to ask. */
+    auto& shim = vibe::LocalSdrShim::instance();
+    auto fail = [&](const std::string& why) {
+        if (jclass ex = env->FindClass("java/lang/IllegalStateException")) env->ThrowNew(ex, why.c_str());
+        return (jstring)nullptr;
+    };
+    if (vibe::benchProgress().running.load()) return fail("a benchmark is already running");
+    const int listeners = shim.isRunning() ? shim.listenerCount() : 0;
+    if (listeners > 0)
+        return fail(std::to_string(listeners) + (listeners == 1 ? " listener is" : " listeners are")
+                    + " connected \xe2\x80\x94 the radio goes off the air for the measurement. Try again when nobody is listening.");
+    bool released = false;
+    std::string why;
+    if (!shim.benchQuiesce(released, why)) return fail("The benchmark did not start: the radio " + why + ".");
+    std::string j;
+    try {
+        // ★ decoderClip: the decoder rows' real band (vibe_benchmark_more.h) — empty = those rows read "not measured"
+        j = vibe::runBenchmark(nullptr, 6.0, (double)uplinkKBps,
+                               [&] { auto r = vibe::runDabRows(clip, 6.0);
+                                     for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
+                                     return r; }, 7, decoderClip);
+    } catch (...) { j.clear(); }
+    // ★ Back on the air: the take-back is given time (libusb letting go — vsBenchBringBack's lesson), then the idle work.
+    if (released) {
+        std::string err;
+        bool back = false;
+        for (int i = 0; i < 10 && !back; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(i == 0 ? 500 : 2000));
+            back = shim.reacquireRadio(err);
+        }
+        if (!back) LOGE("benchmark: the radio did not come back (%s) \xe2\x80\x94 the next listener retries", err.c_str());
+    }
+    shim.benchUnhold();
     return env->NewStringUTF(j.c_str());
 }
 

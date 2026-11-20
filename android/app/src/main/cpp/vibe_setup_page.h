@@ -2529,11 +2529,16 @@ function benchRateWords(hz) {
 }
 function benchProfileLine(p, what) {
   if (!p || typeof p.n !== "number") return "";
+  /* ★★★ NOT "0 users" (Stuart's Pi 2, 2026-11-20). A capture-bound verdict is about the SHARED front end — the one capture
+   *  every listener on a locked range rides on — not about listeners at all: "0 WFM users" beside a plain WFM listener
+   *  measured at 60 % of a core reads as a contradiction. Say what did not keep up. */
+  if (p.by === "capture")
+    return what + " @ " + benchRateWords(p.rate) + ": the shared front end (one capture for every listener) did not keep up "
+         + "at this rate here, so there is no listener figure";
   const n = Math.max(0, p.n | 0);
   let s = n + " " + what + (n === 1 ? " user" : " users") + " @ " + benchRateWords(p.rate);
   if (Number(p.blocks) >= 2) s += ", " + p.blocks + " blocks";
-  if (p.by === "capture") s += " (the capture itself cannot keep up at this rate)";
-  else if (p.by === "ram") s += " (set by RAM)";
+  if (p.by === "ram") s += " (set by RAM)";
   else if (p.by === "cpu") s += " (set by CPU)";
   return s;
 }
@@ -2608,7 +2613,13 @@ function benchProfilesRender(b) {
   const lines = benchProfileLines(b && b.lockedUsers);
   // ★ Only the new shape: the old keys (wfm / nfm …) are not a profile and must not be drawn as one.
   if (!lines.length || !(b.lockedUsers.fm || b.lockedUsers.narrow || b.lockedUsers.dab)) { el.classList.add("hide"); el.innerHTML = ""; return; }
-  el.innerHTML = "<b>Quick benchmark — CPU/RAM:</b><br>" + lines.map(esc).join("<br>");
+  /* ★★ THESE ARE THE LOCKED-RANGE PATH'S FIGURES (one capture shared by every listener) — so they say so, and on a machine
+   *  where no radio runs as a locked range they say these apply when one does (a full radio gives each listener their own
+   *  tuning and is judged by the rows above). radioList() is the page's config; absent (a test harness) = no note. */
+  const radios = typeof radioList === "function" ? radioList() : null;
+  const anyLocked = !radios || radios.some(r => r && r.mode === "locked");
+  el.innerHTML = "<b>Quick benchmark — locked range (one capture shared by every listener), CPU/RAM:</b><br>" + lines.map(esc).join("<br>")
+    + (anyLocked ? "" : "<br><i>No radio here runs as a locked range now — these figures apply when one does.</i>");
   el.classList.remove("hide");
 }
 let BENCH_WIDE = [];        // ★ the wide radios on offer, with their rates (benchWideRadios)
@@ -2912,7 +2923,8 @@ async function benchRun(force) {
   const btn = $("benchRun"), msg = $("benchMsg");
   if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
   if (btn) { btn.disabled = true; btn.textContent = "Measuring\u2026"; }
-  if (msg) msg.textContent = "Measuring this machine. The radio is off the air; this takes a few minutes. "
+  if (msg) msg.textContent = "Measuring this machine. Every radio on it is off the air and its idle work (DX scanner, background "
+    + "decoding) paused; this takes a few minutes. "
     + "Leave it be \u2014 do not switch the machine off while it runs.";
   benchBar(0, "Starting\u2026");
   try {
@@ -2925,7 +2937,9 @@ async function benchRun(force) {
     let j = {};
     try { j = JSON.parse(body); } catch (e) { j = {}; }
     if (!r.ok) {
-      if (r.status === 409 && !force && confirm((j.error || "Busy") + ".\n\nRun it anyway?")) return benchRun(true);
+      // ★ "Run it anyway?" only for LISTENERS — force skips that check and nothing else; a radio that would not hold still
+      //   (vibe_bench_quiet.h) is never measured beside, forced or not.
+      if (r.status === 409 && !force && /listener/.test(j.error || "") && confirm((j.error || "Busy") + ".\n\nRun it anyway?")) return benchRun(true);
       if (msg) msg.textContent = j.error || `The benchmark could not start (HTTP ${r.status}).`;
       benchBar(0, "");
       $("benchBarWrap").classList.add("hide");

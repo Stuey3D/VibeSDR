@@ -1457,6 +1457,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE WHOLE MACHINE HOLDS STILL FOR A BENCHMARK (Stuart, 2026-11-20 — the Pi 2's quick run measured beside the radio
+#     process's DX scanner): a quick run from the FRONT DOOR holds every radio process still (no DX hop inside the run) and
+#     brings them back; a listener on any radio refuses it by name (forced, it runs); a radio that does not answer stops it;
+#     a wide run in a radio's process holds the others; a held radio's lease brings it back. Door + 2 radio processes on
+#     fake rtl_tcp, the measurement stubbed to 8 s. Silent. ~2 min.
+printf '\n\033[1m── the benchmark holds the whole machine still (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bench-quiet.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE RADIO PORTS ARE THIS MACHINE ONLY (security pass, 2026-11-12): behind the front door each radio's own port
 #     (base+1+n) accepts on 127.0.0.1 and refuses on the LAN address; the door still serves /r/<id> in full (json,
 #     waterfall, audio) from loopback and the LAN, and the radio sees the CLIENT's address; a radio with no usable
