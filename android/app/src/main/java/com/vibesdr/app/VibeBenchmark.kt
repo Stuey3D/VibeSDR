@@ -42,15 +42,17 @@ object VibeBenchmark {
     /**
      * Measure this device. Blocks for a minute or two — never call it from the main thread.
      * @param wantDab fetch the DAB clip (~18 MB) if it is not already here. False skips the DAB rows.
+     * @param ownRadio asked from LOCAL HARDWARE (the phone is its own radio; the only listener is this app) — see
+     *        nativeRunBenchmark. The result is the same file either way: one result per device, shown in both places.
      */
-    fun run(ctx: Context, wantDab: Boolean = true): JSONObject? {
+    fun run(ctx: Context, wantDab: Boolean = true, ownRadio: Boolean = false): JSONObject? {
         val clip = if (wantDab) ensureClip(ctx) else ""
         // ★ CPU only — the ADS-B rows never touch the radio (the capture Test beside the 3.2 MS/s switch does that).
         val adsbClip = ensureClip(ctx, ADSB_CLIP_URL, "adsb-bench.vbu8", "VIBEAB81")
         val decoderClip = ensureClip(ctx, DECODER_CLIP_URL, "decoders-bench.vbu8", "VIBEDC81")
         val uplink = measureUplinkKBps()
         val json = try {
-            VibeLocalSDR.runBenchmark(clip, adsbClip, decoderClip, uplink)
+            VibeLocalSDR.runBenchmark(clip, adsbClip, decoderClip, uplink, ownRadio)
         } catch (t: IllegalStateException) {
             // ★★★ A refusal in words (listeners connected, the radio could not be taken off the air) — passed up so the
             //     screen says it, rather than "did not produce a result" (nativeRunBenchmark, 2026-11-20).

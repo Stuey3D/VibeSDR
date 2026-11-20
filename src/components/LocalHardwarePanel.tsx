@@ -15,6 +15,7 @@ import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, P
 import { meaningText } from '../constants/decoderTokens';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from './PanelNav';
 import IcomSetupCard from './IcomSetupCard';
+import LocalBenchmarkCard, { type LocalBenchProps } from './LocalBenchmarkCard';
 import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
@@ -99,6 +100,9 @@ const DS_MODES: { label: string; value: number }[] = [
 
 export interface LocalHardwarePanelProps {
   visible: boolean;
+  /** ★★ V12 WHAT THIS PHONE CAN RUN — the device benchmark, read for someone using the phone as their own radio
+   *  (LocalBenchmarkCard). Given ONLY for a radio plugged into this Android phone (SDRScreen decides); absent = not drawn. */
+  bench?: LocalBenchProps;
   onClose: () => void;
   gains: number[];
   gainTenthDb: number;
@@ -1886,6 +1890,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             Frequency correction, bias-T, digital AGC and direct sampling are not part
             of the SpyServer protocol — they belong to whoever runs this receiver.
           </Text>}
+          {/* ★★ V12 the device benchmark — last, after the radio's own settings, and outside the lock shield above (it is
+              about this phone, not the room's radio). Android local hardware only: `bench` is absent everywhere else. */}
+          {Platform.OS === 'android' && !!p.bench && (
+            <LocalBenchmarkCard bench={p.bench} styles={styles} m={gt.ink.m} fill={K.fill} track={gt.ink.keyBorder} slot={slot} />
+          )}
         </ScrollView>
         </PopupWindow>
       </Animated.View>

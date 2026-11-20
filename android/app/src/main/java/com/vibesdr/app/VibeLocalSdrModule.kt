@@ -504,6 +504,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }.start()
     }
 
+    /** ★★ V12 THE SAME BENCHMARK, ASKED FROM LOCAL HARDWARE (the phone is its own radio — LocalHardwarePanel's
+     *  "What this phone can run"). The app pauses its waterfall first and resumes it after; the engine releases the
+     *  radio for the run and takes it back (nativeRunBenchmark `ownRadio`). Same result file as runBenchmark, so a
+     *  measurement from either screen shows in both. A separate method so the server screen's call is untouched. */
+    @ReactMethod
+    fun runBenchmarkOwnRadio(wantDab: Boolean, promise: Promise) {
+        Thread {
+            try {
+                val j = VibeBenchmark.run(reactContext, wantDab, ownRadio = true)
+                if (j == null) promise.reject("bench_failed", "the benchmark did not produce a result")
+                else promise.resolve(j.toString())
+            } catch (t: Throwable) { promise.reject("bench_failed", t.message ?: "$t") }
+        }.start()
+    }
+
     /** ★ The Band III block list, from the receiver's own table — see VibeLocalSDR.dabBlocksJson. */
     @ReactMethod
     fun dabBlocks(promise: Promise) {
