@@ -43,6 +43,10 @@
 10. **The box shows when the orbit data was last synced** (e.g. "Orbits synced 16:08 · 2 h ago"; "Fetching orbit data…"
     while the on-open fetch runs; "No orbit data — <why>" if it failed).
 
+11. **NOT ON THE R36S (Stuart, 2026-11-20): "r36s cant have the satellite mode as no network connection to sync the
+    orbit data".** The handheld gets no SATELLITE key, its old SAT page and METEOR LRPT key are removed, its engine
+    never advertises doppler/satellites and never tries the orbit fetch.
+
 ## THE CONTRACT (server ↔ clients) — fixed before the build splits
 - `{"type":"sat_list"}` (unchanged request) → the reply adds:
   `source.synced` (unix s of the last good /api/sats fetch, 0 = never), `source.fetching` (bool),
@@ -82,7 +86,7 @@
    `{"type":"sat","op":"pick","norad","tx"}` = tune + lock + attach the right decoder in ONE step (no 400 ms client dance),
    still gated by the shared-dial contract; `op:"drop"` = unlock + detach. Android servers: fetch /api/sats daily like
    satcat.cpp (Kotlin or native) + the missing satLoadSats bridge — else SATELLITE is greyed on every phone server.
-2. **One SATELLITE whole-radio key** (web mode menu grid + TUNES THE RADIO ITSELF row, app ModeSelector, R36S mode list),
+2. **One SATELLITE whole-radio key** (web mode menu grid + TUNES THE RADIO ITSELF row, app ModeSelector — NOT the R36S, item 11),
    replacing SAT and METEOR LRPT (LRPT keeps running underneath; the gallery keeps METEOR / SSTV kinds).
 3. **The window**: the list (name · frequency · "UP · 6:12 left" / "AOS 16:42 (in 0:38)"), ordered: up now by SHORTEST
    remaining first, then next AOS; unreachable greyed with the reason. AUTO DOPPLER key, default ON.
