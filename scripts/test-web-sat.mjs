@@ -126,9 +126,13 @@ try {
   ok(/\bSATELLITE\b/.test(opts || '') && !/\bSAT\b/.test(opts || ''), `the mode menu offers SATELLITE: ${opts}`);
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SATELLITE'); b && b.click(); return !!b; })()`);
   ok(await until(`!!document.getElementById('satPanel') && !document.getElementById('satPanel').hidden`, 4000), 'the SATELLITE window opens');
-  ok(await until(`/ISS/.test(document.querySelector('#satPanel .sat-row')?.textContent || '')`, 6000), `ISS is the first row (up now): ${(await ev(`document.querySelector('#satPanel .sat-row')?.textContent`) || '').slice(0, 80)}`);
-  const firstRow = await ev(`document.querySelector('#satPanel .sat-row')?.textContent || ''`);
-  ok(/UP · \d+:\d\d left/.test(firstRow) && /437\.800 MHz FM/.test(firstRow), 'up, with its time left and its downlink in words');
+  // ★ THE ORDER (Stuart 11-20): up now with the SHORTEST remaining pass first — not the highest bird. At this fixture's
+  //   time ISS and AO-73 are both up and AO-73 has less left, so it leads; the old test assumed ISS on top.
+  ok(await until(`/UP · \\d+:\\d\\d left/.test(document.querySelector('#satPanel .sat-row')?.textContent || '')`, 6000), 'the first row is a satellite up now');
+  const ups = await ev(`[...document.querySelectorAll('#satPanel .sat-row')].map(r => r.textContent).filter(t => /UP · \\d+:\\d\\d left/.test(t)).map(t => { const m = t.match(/UP · (\\d+):(\\d\\d) left/); return [t.slice(0, 40), +m[1] * 60 + +m[2]]; })`) || [];
+  ok(ups.length >= 2 && ups.every((u, k) => k === 0 || u[1] >= ups[k - 1][1]), `up rows in shortest-remaining order: ${ups.map((u) => `${u[0].split(' ')[0]} ${u[1]}s`).join(' · ')}`);
+  const firstRow = await ev(`[...document.querySelectorAll('#satPanel .sat-row')].map(r => r.textContent).find(t => /ISS/.test(t) && /437\\.800 MHz FM/.test(t)) || ''`);
+  ok(/UP · \d+:\d\d left/.test(firstRow), 'the ISS repeater row: up, with its time left and its downlink in words');
   ok(/AOS \d\d:\d\d \(in /.test(await ev(`document.getElementById('satPanel').textContent`) || ''), 'the others with their next AOS');
   const credit = await ev(`document.querySelector('#satPanel .sat-credit')?.textContent || ''`);
   ok(/^Orbits: CelesTrak · 5 h old · Transmitters: SatNOGS DB \(CC BY-SA 4\.0\)$/.test(credit), `the credit with the data's age: "${credit}"`);
