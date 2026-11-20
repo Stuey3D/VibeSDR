@@ -99,7 +99,10 @@ echo "==> RADE DNN code: $ISA$([ "$ISA" = scalar ] || echo ' (runtime dispatch)'
 INC=(-I"$OP/include" -I"$OP/celt" -I"$OP/silk" -I"$OP/dnn" -I"$OP" -I"$B/fb/pipeline" -I"$WRAP" -I"$RC/src")
 DEFS=(-DOPUS_BUILD -DUSE_ALLOCA -DHAVE_LRINT -DHAVE_LRINTF -DDISABLE_DEBUG_FLOAT -DNDEBUG)
 FLAGS=(-O2 -fPIC -w -ffunction-sections -fdata-sections)
-case "$(uname -s)" in Darwin) ;; *) FLAGS+=(-Wa,--noexecstack) ;; esac
+# ★ The TARGET's object format, asked of the compiler — never the host's `uname`: the Android build (sdr-kit/
+#   build-rade-android.sh) runs this on a Mac and makes ELF objects for Android (V12, 2026-11-20).
+MACHO=0; if has __APPLE__; then MACHO=1; fi
+[ "$MACHO" = 1 ] || FLAGS+=(-Wa,--noexecstack)
 
 COMMON_C=("$RC/src/rade_dsp.c" "$RC/src/rade_ofdm.c" "$RC/src/rade_bpf.c"
           "$B/opus/nnet.c" "$OP/dnn/nnet_default.c" ${DNN_C[@]+"${DNN_C[@]}"} "$WRAP/vibe_rade_arch.c"
@@ -160,7 +163,7 @@ objs() { local o=(); for s in "$@"; do o+=("$(objname "$s")"); done; echo "${o[@
 # ── one relocatable object per archive, only vrade_* left global ───────────────────────────────────────────────────
 partial() {   # partial <out.o> <keep-prefix regex> <objects...>
   local out="$1" keep="$2"; shift 2
-  if [ "$(uname -s)" = Darwin ]; then
+  if [ "$MACHO" = 1 ]; then
     "$NM" -g --defined-only "$@" 2>/dev/null | awk '{print $3}' | grep -E "^_($keep)" | sort -u > "$B/keep.txt"
     $CC -r -nostdlib -Wl,-exported_symbols_list,"$B/keep.txt" -o "$out" "$@"
   else
@@ -172,7 +175,21 @@ partial() {   # partial <out.o> <keep-prefix regex> <objects...>
     #    Dissolved here, they are ordinary local sections of this one object and can never be discarded for another's.
     #    GNU ld itself (the toolchain's, beside its nm), not the compiler driver: ARMv6's clang links with lld 14, which
     #    has no --force-group-allocation; binutils' ld has had it since 2.29.
-    "${LD_R:-${NM%nm}ld}" -r --force-group-allocation -o "$out" "$@"
+    # ★★ LLVM's ld.lld (the Android NDK's, 18) has no --force-group-allocation: there the groups are dissolved first, one
+    #    copy of each object at a time, by deleting its SHT_GROUP sections (llvm-objcopy then clears every member's
+    #    SHF_GROUP flag) — the same result: ordinary sections that no other object's copy can displace. Checked below.
+    local ldr="${LD_R:-${NM%nm}ld}"
+    if [ "$("$ldr" --help 2>/dev/null | grep -c -- '--force-group-allocation' || true)" -gt 0 ]; then
+      "$ldr" -r --force-group-allocation -o "$out" "$@"
+    else
+      local dg=() o n=0
+      mkdir -p "$B/dg"
+      for o in "$@"; do n=$((n + 1)); "${OBJCOPY:-objcopy}" --remove-section=.group "$o" "$B/dg/$n.o"; dg+=("$B/dg/$n.o"); done
+      "$ldr" -r -o "$out" "${dg[@]}"
+      rm -rf "$B/dg"
+      [ "$("${READELF:-${NM%nm}readelf}" -g "$out" 2>/dev/null | grep -c 'COMDAT group' || true)" -eq 0 ] \
+        || { echo "!! $out still has COMDAT groups — refusing (see partial())"; exit 1; }
+    fi
     "${OBJCOPY:-objcopy}" --keep-global-symbols="$B/keep.txt" "$out"
   fi
 }

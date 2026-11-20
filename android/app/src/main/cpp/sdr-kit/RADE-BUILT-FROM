@@ -1,0 +1,12 @@
+rade_c 77980d6eb02f16e3f59a60243b4d7578b364b67e sha256 01f16e517b7961796d959de5921b4cfec40b9a2dc72b4625ece019a53bc3dfaf (github.com/freedv/rade_c archive), BSD-2-Clause
+opus 1.6.1 sha256 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1 (downloads.xiph.org), BSD-3-Clause — its DNN code and the FARGAN vocoder only
+freedv-backend 49006b029853061ca4e992f9632a51875aa3ecf1 sha256 d8d8e158f770c9dd26b870a40c6562affae9cd5cda7d87bb6ef21382470d7cc7 (github.com/freedv/freedv-backend archive), BSD-2-Clause — reliable text
+built by vibeserver/linux/build-rade.sh (sha256 83ecb7f2cd1e64c7e61a518af17202de45c90a4515383cd375b17101f5dccd10) — pins read from vibeserver/linux/build-deps.sh
+static archives librade_vibe.a (receiver) + librade_vibe_tx.a (transmitter, the benchmark's dec_rade row); only vrade_* global
+NDK 27.1.12297006; app android-24 (arm64-v8a, armeabi-v7a ARM+NEON), Lite android-21 (armeabi-v7a ARM+NEON)
+sha256 111ff0ef417b952ec5f1512d892dfe71746bd24b5127f501711811dcbab285e6  android/app/src/main/cpp/sdr-kit/arm64-v8a/lib/librade_vibe.a
+sha256 2b4f848e34f1c874c182c8f82859c764184a99d85f3f3e69986dcb762a39acfa  android/app/src/main/cpp/sdr-kit/arm64-v8a/lib/librade_vibe_tx.a
+sha256 3688729c6adbaa4958687e1a2589e769768f62ef1c9356cbb871148471dcf40b  android/app/src/main/cpp/sdr-kit/armeabi-v7a/lib/librade_vibe.a
+sha256 cf43ddbf73475151f73523877d6a463aeb4497c91f9eb2e4a3e31daaf9fc4ace  android/app/src/main/cpp/sdr-kit/armeabi-v7a/lib/librade_vibe_tx.a
+sha256 0c0f72f2e8dc9f9a974c95866971ea6ff72e34aa432ffa658a2c916d7947ede8  lite/native/kit/armeabi-v7a/lib/librade_vibe.a
+sha256 cf43ddbf73475151f73523877d6a463aeb4497c91f9eb2e4a3e31daaf9fc4ace  lite/native/kit/armeabi-v7a/lib/librade_vibe_tx.a
