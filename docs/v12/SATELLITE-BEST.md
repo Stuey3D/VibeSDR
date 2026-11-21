@@ -194,6 +194,22 @@ Doppler-locks and attaches lrpt | sstv | aprs; CW beacons and the BPSK telemetry
   `pickPrivate`). A web headless test with a fake `sat_list` and a fake clock (toast, re-check → why, LISTEN → pick
   message). test-sat-engine for `pickPrivate` on single / locked / shared.
 
+### 1.7 The pass's orbit on the half-globe, dotted (Stuart 2026-11-21) (S)
+**What the user gets:** a dotted line on the half-globe along the satellite's path for the current pass (or the next
+one, while it is below the horizon): from ~10 min before AOS to ~10 min after LOS, drawn at the same exaggerated height
+as the satellite, so how close it comes to the receiver's dot reads at a glance (an overhead pass runs over the dot,
+a 10° pass skims the edge). The highest point (TCA) gets a small tick. Front side only (the far side lifts the pen, as
+the coastlines do).
+**Server:** the existing `{"type":"sat_list","op":"track"}` reply gains `geo:[[lat,lon,altKm],…]` beside `pts` — the
+sub-satellite point `look()` already computes (vibe_sat_orbit.h, Bowring). Same bound: one pass, ≤ 120 points; the
+window widened by 10 min each side. Free (asks nothing of the radio), like sat_list.
+**Client:** satellites.ts `globeScene` takes an optional path and returns `orbit` (a path string, dashed by the
+renderer — canvas `setLineDash`, react-native-svg `strokeDasharray`) and `tca`. Asked once per pick and again when the
+next pass begins; an older server without `geo` simply draws no line.
+**Cost:** nothing measurable (≤ 120 SGP4 steps once per pick). **Test:** test_satellite_mode (an overhead pass crosses
+the receiver; a low pass stays near the edge; the far side is not drawn), test-web-satellite-mode (dashes inked),
+test-sat-engine (`geo` present, bounded, agrees with `pts`).
+
 ## PHASE 2 — make it a satellite station (after the beta lands)
 
 ### 2.1 Bigger catalogue from SatNOGS DB (M — directory + server)
