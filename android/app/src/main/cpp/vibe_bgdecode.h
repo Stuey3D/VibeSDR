@@ -187,7 +187,7 @@ private:
             mm.utc = now;
             // ★ A CW run is written exactly as an RTTY run is (V12 2026-10-25) — only its name differs.
             const std::string what = meta_.kind == "cw" ? "CW" : meta_.kind == "psk" ? "PSK" : meta_.kind == "sitora" ? "SITOR-A"
-                                   : meta_.kind == "balloon" ? "Balloon telemetry" : "RTTY";
+                                   : meta_.kind == "balloon" ? "Balloon telemetry" : meta_.kind == "fctlm" ? "FUNcube telemetry" : "RTTY";
             mm.title = what + " \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " " + upper(meta_.mode);
             const std::string head = what + " \xc2\xb7 " + where() + "\nStarted " + gallery::utcStamp(now, "%Y-%m-%d %H:%M UTC") + "\n\n";
             run_ = store_.create(mm, "txt", head + buf_);
@@ -225,6 +225,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "sitora") return "sitora";  // ★ V12 SITOR-A: the link's text, as an RTTY run (both stations, labelled)
     if (ext == "balloon") return "balloon"; // ★ V12 balloons: the reports as a run, and each SSDV picture as a .jpg
     if (ext == "lrpt") return "lrpt";      // ★ V12 METEOR-M LRPT: each pass's channels and composite as PNGs
+    if (ext == "fctlm") return "fctlm";    // ★ V12 beta90 FUNcube telemetry: a line a frame, as an RTTY run
     return "";
 }
 
@@ -860,7 +861,7 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
     if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta, std::move(dial));
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "balloon") return std::make_shared<BalloonGalleryTap>(st, meta, std::move(dial));
-    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora") {
+    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora" || meta.kind == "fctlm") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
         return t;

@@ -255,8 +255,15 @@ inline std::string listenModeOf(const Transmitter& t) {
     if (t.mode == "nfm" || t.mode == "usb" || t.mode == "lsb" || t.mode == "cw" || t.mode == "am") return t.mode;
     return "nfm";   // ★ lrpt: the LRPT decoder cuts its own slice; NFM is its listening mode
 }
-/** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz). */
-inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre()); }
+/** ★ beta90 1.2: where the DIAL sits relative to the downlink for its decoder — FUNcube BPSK is listened 1200 Hz LOW in
+ *  USB, so the signal lands at 1200 Hz audio (the fctlm decoder's centre); everything else on the frequency itself. */
+inline double listenOffsetHz(const Transmitter& t) {
+    if (t.consumer == "fc-bpsk" && t.mode == "usb") return -1200.0;
+    return 0.0;
+}
+/** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz) — plus the decoder's
+ *  listening offset (listenOffsetHz). */
+inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre() + listenOffsetHz(t)); }
 /** The decoder a pick attaches and its attach parameters (the JSON body after the extension name, "" = none) — the
  *  same parameters the clients' own keys send, so a client that later attaches the same decoder JOINS it (DecoderHost
  *  start: the same ext + paramsOf = Joined, nothing restarted).
@@ -631,7 +638,7 @@ public:
         L.s = c.s; L.t = c.t; L.owner = owner; L.mode = mode; L.pass = c.pass; L.startedAt = clk.unix;
         L.lastMeasure = clk.unix;   // ★ TRACK, not COAST, for the first moment: nothing has been heard yet either way
         const Transmitter& t = defs_[c.s].tx[c.t];
-        L.nominal = t.hz;
+        L.nominal = t.hz + listenOffsetHz(t);   // ★ beta90: FUNcube BPSK's dial 1200 Hz low (its audio centre)
         if (t.passband()) {
             // ★ A linear transponder: the dial the listener is on stays where the signal is — the nominal is the
             //   satellite-frame frequency that puts the channel exactly there now (no jump on engagement).

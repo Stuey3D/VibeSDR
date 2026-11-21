@@ -3613,6 +3613,9 @@ const BLOCKABLE = [
    *  140 kHz IQ slice of the dial; each pass's channels and colour composite go to the gallery as PNGs. Only where the
    *  radio reaches 137 MHz, never an Icom. */
   { id: "lrpt", label: "METEOR weather satellite pictures (LRPT)" },
+  /* ★ V12 beta90 FUNcube telemetry (vibe_fctlm.h): AO-73's BPSK 1200 frames on 145.935 MHz, decoded into named values
+   *  (raw counts where the satellite's document publishes no calibration). A SATELLITE pick of AO-73 attaches it. */
+  { id: "fctlm", label: "FUNcube satellite telemetry (AO-73)" },
   /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
    *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
   { id: "vor", label: "VOR bearing and ILS deviation" },
