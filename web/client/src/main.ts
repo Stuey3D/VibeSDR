@@ -13459,7 +13459,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | null = null;   // ★ fctlm: SATELLITE-BEST 1.2, only ever followed from a SATELLITE pick
 /* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
  *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
  *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
