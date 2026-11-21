@@ -5768,6 +5768,8 @@ select.btn { padding: 6px 8px; }
     <div class="mrow" id="cwBandRow" hidden>
       <label>BAND</label>
       <select id="cwBand" class="btn" aria-label="Band" title="Put the skimmer's window on a band's CW segment"></select>
+      <!-- ★ V12 beta90: the band's windows (shown only when it has more than one) — the band pick goes to its first -->
+      <select id="cwBandWin" class="btn" aria-label="Window" title="The band's windows at this width, from the bottom of its segment" hidden></select>
     </div>
     <div class="mrow" id="cwWidthRow" hidden>
       <label>SEGMENT</label>
@@ -5797,6 +5799,8 @@ select.btn { padding: 6px 8px; }
     <div class="mrow" id="pskBandRow" hidden>
       <label>BAND</label>
       <select id="pskBand" class="btn" aria-label="Band" title="Put the skimmer's window on a band's PSK segment"></select>
+      <!-- ★ V12 beta90: the band's windows (shown only when it has more than one) — the band pick goes to its first -->
+      <select id="pskBandWin" class="btn" aria-label="Window" title="The band's windows at this width, from the bottom of its segment" hidden></select>
     </div>
     <div class="mrow" id="pskWidthRow" hidden>
       <label>SEGMENT</label>
@@ -5924,6 +5928,8 @@ select.btn { padding: 6px 8px; }
     <div class="mrow skimrow" id="rttyBandRow" hidden>
       <label>BAND</label>
       <select id="rttyBand" class="btn" aria-label="Band" title="Put the skimmer's window on a band's RTTY segment"></select>
+      <!-- ★ V12 beta90: the band's windows (shown only when it has more than one) — the band pick goes to its first -->
+      <select id="rttyBandWin" class="btn" aria-label="Window" title="The band's windows at this width, from the bottom of its segment" hidden></select>
     </div>
     <div class="mrow skimrow" id="rttyWidthRow" hidden>
       <label>SEGMENT</label>

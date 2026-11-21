@@ -4,7 +4,7 @@
 import {
   parseBg, collectBg, parseBgCaps, bgNewProfile, bgHalfWindow, bgNdbSegment, bgNdbHint, bgBandReach, bgBandHint,
   bgDscWatch, bgLocal, bgTime, bgReach, bgDecoderSetsFreq, type BgSpotBand,
-  bgSkimCentre, bgSkimBandAt, bgSkimFits, bgSkimFirstFit, bgSkimHint, bgSkimDecoderChange, parseSkimBands, type BgVfo,
+  bgSkimPoints, bgSkimPointAt, bgSkimPointLabel, bgSkimFits, bgSkimFirstFit, bgSkimHint, bgSkimDecoderChange, parseSkimBands, type BgVfo,
 } from '../src/services/bgDecode.ts';
 
 let pass = 0, fail = 0;
@@ -76,40 +76,52 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
   ok(parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}]}')!.satPasses.length === 0, 'an older engine: none (the section is not drawn)');
 }
 
-// ── ★★ V12 beta90 THE SKIMMERS BY BAND (the engine's skimBands; centre = segment bottom + width / 2) ──
+// ── ★★ V12 beta90 THE SKIMMERS BY BAND, SEVERAL WINDOWS EACH (the engine's skimBands points) ──
 {
+  const P = (...hz: (number | [number, string])[]) => hz.map((h) => (Array.isArray(h) ? { hz: h[0], note: h[1] } : { hz: h }));
   const caps = parseBgCaps(JSON.stringify({
     decoders: [{ id: 'cw-skim-24', label: 'CW skimmer, 24 kHz (summary)', modes: ['usb'], tone: 0, width: 24000, skim: 'cw' },
                { id: 'cw-skim-48', label: 'CW skimmer, 48 kHz (summary)', modes: ['usb'], tone: 0, width: 48000, skim: 'cw' },
                { id: 'cw-skim-96', label: 'CW skimmer, 96 kHz (summary)', modes: ['usb'], tone: 0, width: 96000, skim: 'cw' },
                { id: 'rtty-skim-24', label: 'RTTY skimmer, 24 kHz (summary)', modes: ['usb'], tone: 0, width: 24000, skim: 'rtty' },
                { id: 'navtex', label: 'NAVTEX', modes: ['usb'], tone: 500 }],
-    skimBands: { region: 1, cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000 }, { id: '20m', name: '20 m', lo: 14000000, hi: 14070000 }],
-                 rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000 }], psk: [] },
+    skimBands: { region: 2,
+      cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000, points: { 24000: P(7012000, 7036000), 48000: P(7024000), 96000: P(7048000) } },
+           { id: '20m', name: '20 m', lo: 14000000, hi: 14070000, points: { 24000: P(14012000, 14036000, 14060000), 48000: P(14024000, 14072000), 96000: P(14048000) } }],
+      rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000, points: { 24000: P(7052000, [7092000, 'US RTTY'], [7116000, 'US RTTY']) } },
+             { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, 'check your licence']) } }], psk: [] },
   }))!;
-  ok(!!caps.skimBands && caps.skimBands.cw.length === 2 && caps.decoders[1].skim === 'cw' && caps.decoders[1].width === 48000, 'the engine\'s skimBands and each skimmer\'s kind + width reach the editor');
+  const sb = caps.skimBands!;
+  ok(!!sb && sb.cw.length === 2 && caps.decoders[1].skim === 'cw' && caps.decoders[1].width === 48000 && !!sb.cw[0].points, 'the engine\'s skimBands (with each band\'s windows) and each skimmer\'s kind + width reach the editor');
   ok(parseSkimBands(undefined) === null && parseBgCaps('{"decoders":[{"id":"navtex","label":"N","modes":["usb"],"tone":0}]}')!.skimBands === null, 'an older engine: no skimBands (the typed box stays)');
-  const b40 = caps.skimBands!.cw[0];
-  ok(bgSkimCentre(b40, 24000) === 7012000 && bgSkimCentre(b40, 48000) === 7024000 && bgSkimCentre(b40, 96000) === 7048000, '40 m CW: 24 → 7012, 48 → 7024, 96 → 7048 (Stuart\'s figures)');
-  ok(bgSkimBandAt(caps.skimBands!.cw, 48000, 7024000)?.id === '40m' && bgSkimBandAt(caps.skimBands!.cw, 48000, 7020000) === null, 'a stored 7024 is 40 m; an owner\'s 7020 is their own centre');
+  ok(bgSkimPoints(sb.cw, 24000).map((q) => q.hz / 1000).join() === '7012,7036,14012,14036,14060', '24 kHz: 40 m\'s two windows, 20 m\'s three, band by band');
+  ok(bgSkimPoints(sb.cw, 48000).map((q) => q.hz / 1000).join() === '7024,14024,14072' && bgSkimPoints(sb.cw, 96000)[0].hz === 7048000, '48 kHz 7024, 96 kHz 7048 (Stuart\'s figures)');
+  ok(bgSkimPointLabel(bgSkimPoints(sb.rtty, 24000)[1]) === '7080–7104 kHz · US RTTY', 'a practice window reads "7080–7104 kHz · US RTTY"');
+  ok(bgSkimPointAt(sb.cw, 24000, 7036000)?.band.id === '40m' && bgSkimPointAt(sb.cw, 24000, 7020000) === null, 'a stored 7036 is 40 m\'s second window; an owner\'s 7020 is their own centre');
+  ok(bgSkimPoints(parseSkimBands({ region: 1, cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000 }] })!.cw, 48000)[0].hz === 7024000, 'an older engine (no points): one window per band, lo + width/2');
   ok(bgSkimFits(7024000, 48000, 7000000, 2400000) && !bgSkimFits(7048000, 96000, 6900000, 250000), 'capture fit: 7024/48 inside 2.4 MS/s at 7.0; 7048/96 outside 250 kS/s at 6.9');
-  ok(bgSkimFirstFit(caps.skimBands!.cw, 48000, 14100000, 2400000)?.id === '20m', 'a new row at 14.1 MHz lands on 20 m (the first band whose window fits)');
-  const d48 = caps.decoders[1], d96 = caps.decoders[2], dr = caps.decoders[3], nav = caps.decoders[4];
-  const h = bgSkimHint(d48, true, false, caps.skimBands!.cw, 7024000, false, 7000000, 2400000);
-  ok(!h.bad && h.text.startsWith('40 m CW 7000–7048 kHz — every CW signal in it'), 'its line — the Setup page\'s words: ' + h.text);
-  const ho = bgSkimHint(d48, true, false, caps.skimBands!.cw, 7031500, true, 7000000, 2400000);
+  ok(bgSkimFirstFit(sb.cw, 48000, 14100000, 2400000)?.hz === 14024000, 'a new row at 14.1 MHz lands on 20 m\'s first window (the first that fits)');
+  const d24 = caps.decoders[0], d48 = caps.decoders[1], d96 = caps.decoders[2], dr = caps.decoders[3], nav = caps.decoders[4];
+  const h = bgSkimHint(d24, true, false, sb.cw, 7036000, false, 7000000, 2400000);
+  ok(!h.bad && h.text.startsWith('40 m CW 7024–7048 kHz — every CW signal in it') && h.text.includes('part of the band’s CW segment'), 'its line — the Setup page\'s words: ' + h.text);
+  ok(bgSkimHint(dr, true, false, sb.rtty, 7092000, false, 7000000, 2400000).text.includes('US RTTY, outside the band plan’s RTTY segment'), 'a practice window says so');
+  ok(bgSkimHint(dr, true, false, sb.rtty, 5363500, false, 6000000, 2400000).text.includes('check your licence'), '60 m says "check your licence"');
+  const ho = bgSkimHint(d48, true, false, sb.cw, 7031500, true, 7000000, 2400000);
   ok(!ho.bad && ho.text.startsWith('Your own centre: 7007.5–7055.5 kHz'), 'an own centre says what it covers: ' + ho.text);
-  ok(bgSkimHint(d48, true, false, caps.skimBands!.cw, 7024000, false, 14100000, 2400000).bad, 'outside the capture: said in red');
-  ok(bgSkimHint(dr, false, true, caps.skimBands!.rtty, 7052000, false, 7000000, 2400000).text.includes('an Icom'), 'cannot run (an Icom): says why');
-  const v: BgVfo = { hz: 7024000, mode: 'usb', dec: 'cw-skim-48' };
-  bgSkimDecoderChange(v, d48, d96, caps.skimBands, 7000000, 2400000);
-  ok(v.hz === 7048000, 'CW 48 → 96 kHz keeps the band: 7024 → 7048');
+  ok(bgSkimHint(d48, true, false, sb.cw, 7024000, false, 14100000, 2400000).bad, 'outside the capture: said in red');
+  ok(bgSkimHint(dr, false, true, sb.rtty, 7052000, false, 7000000, 2400000).text.includes('an Icom'), 'cannot run (an Icom): says why');
+  const v: BgVfo = { hz: 7036000, mode: 'usb', dec: 'cw-skim-24' };
+  bgSkimDecoderChange(v, d24, d96, caps.skimBands, 7000000, 2400000);
+  ok(v.hz === 7048000, 'CW 24 → 96 kHz keeps the band: 7036 → 40 m\'s one 96 kHz window, 7048');
+  const v2: BgVfo = { hz: 14060000, mode: 'usb', dec: 'cw-skim-24' };
+  bgSkimDecoderChange(v2, d24, d48, caps.skimBands, 14000000, 2400000);
+  ok(v2.hz === 14072000, '20 m 24 kHz 14060 → 48 kHz: the nearest of 20 m\'s windows, 14072');
   const o: BgVfo = { hz: 7031500, mode: 'usb', dec: 'cw-skim-48', own: true };
   bgSkimDecoderChange(o, d48, d96, caps.skimBands, 7000000, 2400000);
   ok(o.hz === 7031500 && o.own === true, '…an owner\'s own centre stays theirs');
   const n: BgVfo = { hz: 517500, mode: 'usb', dec: 'navtex' };
   bgSkimDecoderChange(n, nav, dr, caps.skimBands, 7000000, 2400000);
-  ok(n.hz === 7052000, 'NAVTEX → RTTY skimmer 24 kHz lands on 40 m, 7052 (7040 + 12)');
+  ok(n.hz === 7052000, 'NAVTEX → RTTY skimmer 24 kHz lands on 40 m, 7052 (the first window that fits)');
   ok(JSON.parse(collectBg({ ...parseBg(''), on: true, profiles: [{ centre: 7000000, from: '00:00', to: '00:00', vfos: [o] }] })).profiles[0].vfos[0].own === undefined,
      '"own" is the editor\'s, never stored');
 }

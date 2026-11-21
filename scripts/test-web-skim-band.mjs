@@ -102,7 +102,7 @@ try {
     await sleep(600);
     await ev(`document.getElementById('freqPanel')?.classList.remove('open')`);
   };
-  const pick = async (kind, id) => { if (process.env.DBG) console.log('PICK', kind, id, await ev(`String(!!document.getElementById('rttySettings'))`)); await ev(`(() => { const s = document.getElementById('${kind}Band'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change')); })()`); await sleep(800); };
+  const pick = async (kind, id) => { await ev(`(() => { const s = document.getElementById('${kind}Band'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change')); })()`); await sleep(800); };
   const label = (kind) => ev(`(() => { const s = document.getElementById('${kind}Band'); return s.options[s.selectedIndex]?.textContent || ''; })()`);
 
   console.log('── RTTY › SKIMMER: BAND ──');
@@ -123,7 +123,15 @@ try {
   ok((await label('rtty')) === '20 m \u00b7 tuned', 'at 24 kHz the same dial is no longer the rule-centre: "20 m · tuned" (the dial is not moved by a width change)');
   await pick('rtty', '20m');
   ok((await dial()) === r20.lo + 12000, `…picking 20 m again at 24 kHz: ${(r20.lo + 12000) / 1e3} kHz (+ 12) — now ${await dial()}`);
-  if (process.env.DBG) console.log('BEFORE-ENTER', await ev(`String(!!document.getElementById('rttySettings'))`));
+  // ★★ several windows per band (the server's points): 20 m RTTY R1 (14070–14099) at 24 kHz = 14082 and 14106
+  const w20 = (r20.points && r20.points['24000'] || []).map((q) => q.hz);
+  ok(w20.length >= 2 && w20[0] === r20.lo + 12000 && w20[1] === r20.lo + 36000, `vibeserver.json: 20 m RTTY's 24 kHz windows ${w20.join(', ')} (tiles from the bottom)`);
+  ok(await ev(`!document.getElementById('rttyBandWin').hidden && document.getElementById('rttyBandWin').options.length === ${w20.length}`), 'the band has more than one window: the window select is drawn beside it, one option a window');
+  ok((await ev(`document.getElementById('rttyBandWin').options[1].textContent`)) === `${(r20.lo + 24000) / 1e3}–${(r20.lo + 48000) / 1e3} kHz`, `…its second reads "${await ev(`document.getElementById('rttyBandWin').options[1].textContent`)}"`);
+  await ev(`(() => { const s = document.getElementById('rttyBandWin'); s.value = '${w20[1]}'; s.dispatchEvent(new Event('change')); })()`); await sleep(800);
+  ok((await dial()) === w20[1] && (await label('rtty')) === '20 m', `picking the second window: the dial goes to ${w20[1] / 1e3} kHz, the band still 20 m`);
+  await pick('rtty', '20m');
+  ok((await dial()) === w20[0], 'picking the band again goes back to its first window');
   await enter(((r20.lo + 14000) / 1e6).toFixed(4));   // the frequency box takes MHz
   ok((await dial()) === r20.lo + 14000 && (await label('rtty')) === '20 m \u00b7 tuned', `fine-tuned with the frequency box to ${(r20.lo + 14000) / 1e3} kHz: "${await label('rtty')}", no snap back`);
   const s1 = await shot('skimband-rtty-desktop.png');
@@ -141,6 +149,8 @@ try {
   }
   await ev(`document.querySelector('#cwView [data-cwview="one"]').click()`); await sleep(300);
   ok(await ev(`document.getElementById('cwBandRow').hidden`), 'ONE SIGNAL hides it again');
+  await ev(`document.querySelector('#cwView [data-cwview="skim"]').click()`); await sleep(300);
+  ok(await ev(`document.getElementById('cwBandWin').hidden`), 'CW 20 m at 96 kHz has one window: no window select (no clutter)');
   ok(errs.length === 0, `no exception on the page${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''}`);
   console.log(`   screenshot: ${s1}`);
 } finally {

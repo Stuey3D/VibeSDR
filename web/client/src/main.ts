@@ -16,7 +16,7 @@ import { initMenuCats, revealServerUnlock } from './menuCats';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { kickedSentence } from '../../../src/services/kickedText';
-import { parseSkimBands, skimPickable, skimBandAtDial, skimDial, skimOffLabel, type SkimBands, type SkimKind } from '../../../src/utils/skimBands';
+import { parseSkimBands, skimPickable, skimBandAtDial, skimOffLabel, skimPointLabel, type SkimBands, type SkimKind } from '../../../src/utils/skimBands';
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
@@ -14018,20 +14018,34 @@ function skimBandSync() {
   for (const [kind, on, width] of kinds) {
     const row = document.getElementById(kind + 'BandRow') as HTMLElement | null;
     const sel = document.getElementById(kind + 'Band') as HTMLSelectElement | null;
-    if (!row || !sel) continue;
+    const win = document.getElementById(kind + 'BandWin') as HTMLSelectElement | null;
+    if (!row || !sel || !win) continue;
+    // ★ the bands with at least one window this radio can tune, each with only those windows
     const list = on && skimBandsCap ? skimPickable(skimBandsCap[kind], width, skimCanTune) : [];
     row.hidden = !list.length;
     if (!list.length) continue;
     const dial = spec ? Math.round(vfoNow(spec.abOn ? decVfo : 'A').frequency) : 0;
-    const at = skimBandAtDial(list, width, dial);
-    const want = (at.exact ? '' : '<option value="">' + skimOffLabel(at) + '</option>')
-      + list.map((b) => `<option value="${b.id}">${b.name}</option>`).join('');
+    const bands = list.map((x) => x.band);
+    const at = skimBandAtDial(bands, width, dial);
+    const exact = at.exact && at.point && list.some((x) => x.points.some((q) => q.hz === at.point!.hz)) ? at.point : null;
+    const want = (exact ? '' : '<option value="">' + skimOffLabel(at) + '</option>')
+      + list.map((x) => `<option value="${x.band.id}">${x.band.name}</option>`).join('');
     if (sel.dataset.html !== want) { sel.innerHTML = want; sel.dataset.html = want; }
-    sel.value = at.exact && at.band ? at.band.id : '';
-    sel.onchange = () => {
-      const b = list.find((x) => x.id === sel.value);
-      if (b && spec) { decTune(clampTune(skimDial(b, width))); renderFreq(); }
+    sel.value = exact ? exact.band.id : '';
+    sel.onchange = () => {   // ★ a band pick goes to its first window
+      const x = list.find((y) => y.band.id === sel.value);
+      if (x && spec) { decTune(clampTune(x.points[0].hz)); renderFreq(); }
     };
+    /* ★★ V12 beta90 follow-up — THE BAND'S WINDOWS (Stuart: "maybe list multiple centre points per band"): a second,
+     *  compact select beside the band, drawn only when the band the window is on has more than one ("7000–7024 kHz",
+     *  "7024–7048 kHz", "7080–7104 kHz · US RTTY"). One control more, only where it means something. */
+    const cur = at.band ? list.find((x) => x.band.id === at.band!.id) : undefined;
+    win.hidden = !cur || cur.points.length < 2;
+    if (!cur || cur.points.length < 2) continue;
+    const wantW = (exact ? '' : '<option value="">\u2014</option>') + cur.points.map((q) => `<option value="${q.hz}">${skimPointLabel(q)}</option>`).join('');
+    if (win.dataset.html !== wantW) { win.innerHTML = wantW; win.dataset.html = wantW; }
+    win.value = exact ? String(exact.hz) : '';
+    win.onchange = () => { const hz = Number(win.value); if (hz > 0 && spec) { decTune(clampTune(hz)); renderFreq(); } };
   }
 }
 /** A keyboard-mode list decoder (CW, PSK or the RTTY skimmer) is open. */
