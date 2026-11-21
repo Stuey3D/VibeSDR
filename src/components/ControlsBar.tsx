@@ -78,6 +78,8 @@ import { DECK, portraitDeck, phoneBarStack, landscapeDeck, compactKeyHitSlop, sq
 import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec,
          cellWindow, screenString, segFieldCells, steppedOffset, VFD_STEP_MS } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
+import ModeIcon from './ModeIcon';
+import type { SatDopBadge } from '../services/satellites';
 import { DECODER_MEANING, meaningsFor } from '../constants/decoderTokens';
 
 /**
@@ -161,6 +163,30 @@ interface FreqReadout { hz: number; unit: FreqUnit; layout: NixieLayout }
  */
 const DabMeterContext = React.createContext<DabQuality | null>(null);
 const FreqReadoutContext = React.createContext<FreqReadout>({ hz: 0, unit: 'khz', layout: 'hf' });
+/**
+ * ★★ V12 SATELLITE: the Doppler lock's badge beside the digits — the satellite glyph and ▲ / ▼, nothing else (Stuart
+ *   2026-11-21: "a simple auto doppler icon would be enough with an up or down arrow" — "ISS · ▼ 3.21 kHz · TRACK" squeezed
+ *   the digits; the name, AOS and state are the SATELLITE box's). A context, like DabMeter, for the same reason: the chan
+ *   slot is in DisplayFreq, FreqModePill and CompactDisplay, each with a hand-written prop list. null = no lock.
+ */
+const SatDopContext = React.createContext<SatDopBadge | null>(null);
+/** The badge itself, in the unit's colour (each faceplate's), dim while armed / coasting. Fixed width: ▲ ⇄ ▼ moves nothing. */
+function SatDopTag({ size, color }: { size: number; color: string }) {
+  const b = React.useContext(SatDopContext);
+  if (!b) return null;
+  const a = Math.round(size * 0.55);
+  return (
+    <View accessible accessibilityRole="image" accessibilityLabel={b.label}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 1, width: size + a + 1, opacity: b.dim ? 0.5 : 1 }}>
+      <ModeIcon name="satellite" size={size} color={color} />
+      {b.dir !== 0 && (
+        <Svg width={a} height={a} viewBox="0 0 10 10">
+          <SvgPath d={b.dir > 0 ? 'M5 1.5 9 8.5H1z' : 'M5 8.5 9 1.5H1z'} fill={color} />
+        </Svg>
+      )}
+    </View>
+  );
+}
 
 /** Guard for the keys' handler — never expected to run. */
 const noStep = (_d: -1 | 1) => {};
@@ -669,9 +695,9 @@ export interface ControlsBarProps {
    *  above the unit. Only in MHz: a listener who chose kHz or Hz keeps their digits, and the name
    *  moves into the small line instead. */
   airChannel?: AirChannel | null;
-  /** ★★ V12 SATELLITE DOPPLER: "ISS · ▼ 3.21 kHz · TRACK" beside the digits while a lock runs (the digits stay on the
-   *  NOMINAL — brief §10); the airband channel's slot, so the display font rule applies the same. null = none. */
-  satTag?: string | null;
+  /** ★★ V12 SATELLITE DOPPLER: the badge (glyph + ▲ / ▼) beside the digits while a lock runs (the digits stay on the
+   *  NOMINAL — brief §10); the airband channel's slot (SatDopContext). null = none. */
+  satDop?: SatDopBadge | null;
   /** ★ The Nixie display's FIXED tube row for this radio (§7): `hf` network radios (8 tubes),
    *  `wide` a local radio to 2 GHz (10), `fm` the FM tuner screen (3 + bulb + 3). Never per frequency. */
   tubeLayout?: NixieLayout;
@@ -1142,7 +1168,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
                       fontSize: Math.max(8, Math.round(unitFontSize * 0.72)) }]} numberOfLines={1}>
           {chanTag}
         </Text>
-      ) : null}
+      ) : <SatDopTag size={Math.max(9, Math.round(unitFontSize * 0.9))} color={dk.unit} />}
       {dk.style === 'seg' ? (
         // ★★ VCR: the unit through the window's OWN segments, in capitals — "KHZ" / "MHZ" (Stuart, 2026-10-06;
         //    memory vfd_units_in_segments: no font on a VFD). A fixed three cells, so KHZ ⇄ MHZ moves nothing.
@@ -1620,6 +1646,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
   /* ★★ THE TEXT ROLES ARE THE FACEPLATE'S (fp.deck): frequency, unit, mode, reading, banner — each
    *  with its own font, because under the Nixie display (§2) the frequency and banner are Nixie One
    *  in neon while the mode box is not. Default settings resolve to today's white-theme values. */
+  const satDopOn = !!React.useContext(SatDopContext);
   const fp = useFaceplate();
   const ct = fp.chassis;
   const dk = fp.deck;
@@ -1680,13 +1707,13 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         }]} numberOfLines={1} adjustsFontSizeToFit {...DISPLAY_TEXT}>
           {freqStr}
         </Text>
-        {chanTag ? (
+        {chanTag || satDopOn ? (
           <View style={pm.chanCol}>
-            <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
+            {chanTag ? <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
                           fontSize: Math.max(8, Math.round(unitFontSize * 0.72)) }]}
                   numberOfLines={1} {...DISPLAY_TEXT}>
               {chanTag}
-            </Text>
+            </Text> : <SatDopTag size={Math.max(9, Math.round(unitFontSize * 0.9))} color={dk.unit} />}
             <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1} {...DISPLAY_TEXT}>
               {unit}
             </Text>
@@ -1794,7 +1821,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
                               fontSize: Math.max(8, Math.round(unitFont * 0.72)) }]} numberOfLines={1} {...DISPLAY_TEXT}>
                   {chanTag}
                 </Text>
-              ) : null}
+              ) : <SatDopTag size={Math.max(9, Math.round(unitFont * 0.9))} color={dk.unit} />}
               <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFont, paddingBottom: 0 }]} numberOfLines={1} {...DISPLAY_TEXT}>
                 {unit}
               </Text>
@@ -3333,7 +3360,7 @@ function ControlsBar({
   storms,
   adminMode,
   airChannel = null,
-  satTag = null,
+  satDop = null,
   tubeLayout = 'hf',
 }: ControlsBarProps) {
   // ★★★ Entering a receiver is where the faceplate is really drawn: on trial from this first render
@@ -3367,12 +3394,12 @@ function ControlsBar({
     : freqFormat ? freqFormat(frequency) : formatHz(frequency, freqUnit),
     [frequency, freqUnit, freqFormat, chanMain, airChannel]);
   const chanTag   = useMemo(() => {
-    if (satTag) return satTag;   // ★★ V12 a satellite lock's readout wins the slot (a satellite is never on the airband)
+    if (satDop) return null;   // ★★ V12 a satellite lock's badge wins the slot (a satellite is never on the airband)
     if (!airChannel) return null;
     const sp = airChannel.spacing === 833 ? '8.33' : '25 kHz';
     if (!chanMain) return `CH ${airChannel.name} · ${sp}`;
     return airChannel.spacing === 833 ? `8.33 · ${airChannel.trueText}` : sp;
-  }, [airChannel, chanMain, satTag]);
+  }, [airChannel, chanMain, satDop]);
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   /* The tubes read the NUMBER. On the airband raster the channel name IS the readout (see chanMain),
    * so the tubes show the name's digits; a custom format (the FM tuner screen) is MHz. */
@@ -3567,6 +3594,7 @@ function ControlsBar({
           row DELETION (see PortraitBar) rather than a hand-built hybrid of the two layouts.
           See briefs/BRIEF-tvos-app.md §2. */}
       <FreqReadoutContext.Provider value={readout}>
+      <SatDopContext.Provider value={satDop}>
       {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
       {/* ★★ V12 …and DRM's, in the same slots (one context: every meter slot already knows how to draw it) */}
       <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : drmOn ? (drmMeter ?? DRM_SEARCHING) : null}>
@@ -3575,6 +3603,7 @@ function ControlsBar({
         : <PortraitBar  {...shared} />
       }
       </DabMeterContext.Provider>
+      </SatDopContext.Provider>
       </FreqReadoutContext.Provider>
     </Animated.View>
   );

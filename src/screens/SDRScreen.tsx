@@ -72,7 +72,7 @@ import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satChanText, satStateWord, satListEveryMs, satPacketBaud, type SatList, type SatPicked, type SatReadout, type SatTx } from '../services/satellites';
+import { satDopplerBadge, satListEveryMs, satPacketBaud, type SatList, type SatPicked, type SatReadout, type SatTx } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -15283,7 +15283,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminMode={adminOk}
           sharedDial={sharedDialProp}
           airChannel={airChannelNow}
-          satTag={satRo && satRo.state !== 'OFF' ? `${satChanText(satRo)} · ${satStateWord(satRo)}` : null}
+          satDop={satDopplerBadge(satRo)}
           /* ★ Nixie's FIXED tube row (faceplates §7): a network radio is HF (MAX_HZ 30 MHz, 8 tubes); a
            *  local radio tunes to 2 GHz (10 tubes). A property of the radio, never of the frequency. */
           tubeLayout={isLocal ? 'wide' : 'hf'}
@@ -15741,7 +15741,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (satPicked) (client.current as unknown as { satDoppler?: (on: boolean) => void } | null)?.satDoppler?.(on);
           }}
           onExit={() => { markInteract(); satModeOff(); }}
-          topLimit={boxTopLimit}
+          topLimit={boxTopLimit} topSafe={boxTopSafe}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
         </PanelBoundary>

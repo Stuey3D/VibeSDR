@@ -19,20 +19,23 @@
  * ★★ THE SERVER DOES THE WORK (THE CONTRACT): a row asks {"op":"pick"}; the server tunes, locks and attaches the decoder.
  *    ★ No flashing: COAST dims the readout.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { scrollLane } from '../constants/popupTokens';
-import { globeScene, satAltKm, satBoxSize, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
+import { globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          type SatInfo, type SatList, type SatPicked, type SatReadout } from '../services/satellites';
 
 const SAT_MAX_W = 760;
 /** ★ The half-globe's drawing size (viewBox); on screen it is the box's width, capped at GLOBE_MAX_W (Stuart 11-20). */
 const GLOBE_W = 640, GLOBE_H = 300, GLOBE_MAX_W = 420;
+/** ★ SMALL: the globe beside the words (Stuart 11-21: the box took too much room) */
+const GLOBE_SMALL_W = 120;
 
 export interface SatellitePanelProps {
   list: SatList | null;
@@ -60,16 +63,18 @@ export interface SatellitePanelProps {
   onExit: () => void;
   bottomOffset: number;
   topLimit?: number;
+  /** BIG's ceiling: the status row (DecoderPanel's topSafe) */
+  topSafe?: number;
 }
 
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg. */
-function HalfGlobe({ rx, sat, ink, beam }: { rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string }) {
+function HalfGlobe({ rx, sat, ink, beam, small = false }: { rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string; small?: boolean }) {
   const g = useMemo(() => globeScene(GLOBE_W, GLOBE_H, rx,
     sat && sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null),
   [rx.lat, rx.lon, sat?.lat, sat?.lon, sat?.rangeKm, sat?.el]);   // eslint-disable-line react-hooks/exhaustive-deps
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
-    <View style={{ width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}>
+    <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}>
     <Svg width="100%" height="100%" viewBox={`0 0 ${GLOBE_W} ${GLOBE_H}`}
          accessibilityLabel="Where the satellite is: above the globe, its beam to the ground">
       <Path d={dome} fill={ink} fillOpacity={0.12} stroke={ink} strokeOpacity={0.55} strokeWidth={2} />
@@ -93,9 +98,27 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const s = useDecoderStyles(makeStyles);
   const tk = useDecoderTokens();
   const { height: winH } = useWindowDimensions();
-  const HEADER_H = 46 + 22;
-  const bodyH = Math.round(p.topLimit != null
-    ? Math.max(140, winH - p.bottomOffset - p.topLimit - HEADER_H - decoderBodyInset(tk)) : 320);
+  const insets = useSafeAreaInsets();
+  /* ★★★ THE DECODER BOX's SIZES (Stuart 2026-11-21: "the satellite decoder box needs to be the same as a standard decoder
+   *  box with the minimise and small/big buttons as right now on the phone you cant see the waterfall behind") —
+   *  DecoderPanel's arithmetic: SMALL up to the server-name row (topLimit), BIG up to the status row; BIG offered only where
+   *  it is bigger; − folds it to the header. A picture grows it once; a size chosen by hand carries over to the next pick. */
+  const HEADER_H = 46;
+  const availH = Math.max(160, winH - p.bottomOffset - (p.topSafe ?? insets.top + 16) - HEADER_H - decoderBodyInset(tk));
+  const smallFit = p.topLimit != null ? Math.max(100, winH - p.bottomOffset - p.topLimit - HEADER_H - decoderBodyInset(tk)) : 200;
+  const bigH = winH > 950 ? Math.min(availH, winH * 0.62) : availH;
+  const bigUseful = bigH >= smallFit + 40;
+  const [bigPick, setBigPick] = useState(false);
+  const [minimised, setMinimised] = useState(false);
+  const handBig = useRef(false);
+  const sized = useRef(false);
+  const big = bigPick && bigUseful;
+  const bodyH = Math.round(big ? bigH : Math.min(availH, smallFit));
+  const setBigByHand = (on: boolean) => { handBig.current = on; sized.current = true; setBigPick(on); if (on) setMinimised(false); };
+  // a new pick opens at the size last chosen by hand
+  useEffect(() => { sized.current = false; setBigPick(handBig.current); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // a picture starts: grow once, unless SMALL was chosen for this pick
+  useEffect(() => { if (p.picture && !sized.current) { setBigPick(true); setMinimised(false); } }, [p.picture]);
   // ★ the countdowns tick on between lists
   const [, setTick] = useState(0);
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
@@ -112,31 +135,41 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const tx = sel ? sat?.tx[sel.tx] : undefined;
   const confirmed = !!p.picked && !!tx;
   const mine = p.readout && p.readout.state !== 'OFF' && p.readout.norad === sat?.norad ? p.readout : null;
-  const big = confirmed && satBoxSize(tx, p.picture) === 'big';
+  // ★ the picture area only once a picture has started (or finished), and only BIG — never an empty black frame
+  const showPic = big && confirmed && satBoxSize(tx, true) === 'big' && (p.picture || p.pictureDone);
   const use = tx ? txUse(tx) : 'voice';
   const imageDec = p.picked?.decoder === 'lrpt' || p.picked?.decoder === 'sstv';
   const lockWord = !p.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
   const decWord = !confirmed ? 'Tuning…'
-    : big && p.pictureDone ? 'picture complete — saved to the gallery'
-    : p.decLine || (use === 'image' ? 'waiting for the picture' : use === 'packet' ? 'listening for packets' : tx?.sstv ? 'listening — an SSTV picture opens here' : '');
+    : p.pictureDone && imageDec ? 'picture complete — saved to the gallery'
+    : p.decLine || (use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : tx?.sstv ? 'listening — an SSTV picture opens here' : '');
+  // the folded header still says the pick: "ISS · UP · 6:12 left"
+  const selRow = sat ? rows.find((r) => r.sat.norad === sat.norad) : undefined;
+  const headLine = minimised && sat ? (selRow ? `${sat.name} · ${satWhenText(selRow, now)}` : sat.name) : '';
   const stateLine = [confirmed ? lockWord : '', decWord].filter(Boolean).join(' · ');
 
   return (
     <DecoderShell bottom={p.bottomOffset} maxWidth={SAT_MAX_W}>
-      <DecoderHeader>
+      <DecoderHeader onPress={() => setMinimised((v) => !v)}>
         <View style={[s.dot, !!mine && mine.state === 'TRACK' && s.dotOn]} />
-        <DecoderTitle>SATELLITE</DecoderTitle>
-        <View style={{ flex: 1 }} />
+        <DecoderTitle minimised={minimised}>SATELLITE</DecoderTitle>
+        {minimised ? <Text style={s.headLine} numberOfLines={1}>{headLine}</Text> : <View style={{ flex: 1 }} />}
         <DecoderKey label="AUTO DOPPLER" active={p.autoDoppler} disabled={greyed} onPress={p.onDoppler}
                     accessibilityLabel={greyed ? `Auto Doppler unavailable: ${p.cap.why}` : `Auto Doppler ${p.autoDoppler ? 'on' : 'off'}: keep the satellite centred for the whole pass`} />
+        {bigUseful && !minimised && (
+          <DecoderKey label={big ? 'SMALL' : 'BIG'} active={big} onPress={() => setBigByHand(!big)}
+                      accessibilityLabel={big ? 'Smaller box' : 'Bigger box'} />
+        )}
         <DecoderKey label="EXIT" onPress={p.onExit} accessibilityLabel="Leave SATELLITE (the Doppler lock and the decoder stop)" />
+        <DecoderKey label={minimised ? '□' : '−'} onPress={() => setMinimised((v) => !v)}
+                    accessibilityLabel={minimised ? 'Restore' : 'Minimise'} />
       </DecoderHeader>
-      {(greyed || !!p.why) && <Text style={s.note}>{greyed ? p.cap.why : p.why}</Text>}
-      <DecoderBody>
-        <ScrollView style={{ maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
+      {!minimised && (greyed || !!p.why) && <Text style={s.note}>{greyed ? p.cap.why : p.why}</Text>}
+      {!minimised && <DecoderBody>
+        <ScrollView style={big ? { height: bodyH } : { maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
           {!!sel && !!sat && !!tx && (
             <View style={s.box}>
-              <View style={[s.ro, mine?.state === 'COAST' && s.coast]}
+              <View style={[big ? s.ro : s.roSmall, mine?.state === 'COAST' && s.coast]}
                     accessibilityLabel={`${sat.name} ${tx.label}, ${satHzText(satCorrectedHz(tx, mine))}, ${satCountdownText(sat, now)}`}>
                 <View style={s.txtCol}>
                   <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}`}</Text>
@@ -144,12 +177,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <Text style={s.txt}>{satCountdownText(sat, now)}</Text>
                   {!!stateLine && <Text style={s.detail}>{stateLine}</Text>}
                 </View>
-                {!!p.rxPos && <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} />}
+                {!!p.rxPos && <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} small={!big} />}
               </View>
               {/* ★ the picture: mounted from the pick while the decoder draws one (so an ISS SSTV frame's first lines are
                    not lost before the box grows), shown only BIG */}
               {confirmed && imageDec && (
-                <View style={big ? s.img : s.hidden}>
+                <View style={showPic ? s.img : s.hidden}>
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))}
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
@@ -177,20 +210,23 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <Pressable key={`${r.sat.norad}.${r.i}`}
                     onPress={() => (r.grey || greyed ? p.onGreyed(r.grey ? r.why : p.cap.why) : p.onPick(r.sat.norad, r.i))}
                     accessibilityRole="button" accessibilityState={{ disabled: r.grey || greyed, selected: on }}
-                    accessibilityLabel={`${name}, ${txText(r.tx)}, ${satWhenText(r, now)}${r.grey ? `, unavailable: ${r.why}` : ''}`}
+                    accessibilityLabel={`${name}, ${txText(r.tx)}, ${satWhenText(r, now)}${r.grey ? `, unavailable: ${r.why}` : r.pass ? `, pass ${satPassText(r.pass)}` : ''}`}
                     style={[s.row, on && s.rowOn, (r.grey || greyed) && s.grey]}>
                     <View style={s.nameRow}>
                       <Text style={s.txt} numberOfLines={1}>{name}</Text>
                       <Text style={[s.txt, r.up && s.up]} numberOfLines={1}>{satWhenText(r, now)}</Text>
                     </View>
-                    <Text style={s.detail}>{`${txText(r.tx)}${r.tx.status === 'inactive' ? ' · INACTIVE' : ''}${r.grey ? ` — ${r.why}` : ''}`}</Text>
+                    <Text style={s.detail}>{`${txText(r.tx)}${r.tx.status === 'inactive' ? ' · INACTIVE' : ''}${r.grey ? ` — ${r.why}` : ''}`}
+                      {/* ★★ the pass's rating (satPassQuality — its highest elevation), shaded like n2yo's legend (Stuart 11-21) */}
+                      {!r.grey && !!r.pass && <Text>{' · '}<Text style={[s.q, s[`q_${satPassQuality(r.pass.maxEl)}`]]}>{` ${satPassText(r.pass)} `}</Text></Text>}
+                    </Text>
                   </Pressable>
                 );
               }))}
           {p.list?.time === 'system' && <Text style={s.detail}>TIME: SYSTEM — this server's clock has not been checked against a time server</Text>}
           {!!credit && <Text style={s.detail}>{credit}{txc ? ` · ${txc}` : ''}</Text>}
         </ScrollView>
-      </DecoderBody>
+      </DecoderBody>}
     </DecoderShell>
   );
 }
@@ -200,7 +236,14 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   dot:     { width: 8, height: 8, borderRadius: 4, backgroundColor: T.muted, opacity: 0.6 },
   dotOn:   { backgroundColor: T.good, opacity: 1 },
   box:     { margin: 8, padding: 8, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: T.muted, gap: 6 },
-  ro:      { flexDirection: 'column', gap: 6, alignItems: 'stretch' },   // ★ the globe on its own row, full width
+  ro:      { flexDirection: 'column', gap: 6, alignItems: 'stretch' },   // ★ BIG: the globe on its own row, full width
+  roSmall: { flexDirection: 'row', gap: 8, alignItems: 'center' },      // ★ SMALL: the globe beside the words
+  headLine:{ flex: 1, minWidth: 0, fontFamily: F, fontSize: 11, color: T.muted },
+  q:       { color: T.value, borderRadius: 3, overflow: 'hidden' },
+  q_EXCELLENT: { backgroundColor: 'rgba(255,176,0,0.42)' },
+  q_GOOD:      { backgroundColor: 'rgba(255,176,0,0.24)' },
+  q_MARGINAL:  { backgroundColor: 'rgba(255,176,0,0.10)' },
+  q_POOR:      { color: T.muted },
   coast:   { opacity: 0.6 },
   big:     { fontFamily: F, fontSize: 18, color: T.value, fontVariant: ['tabular-nums'], ...engraveStyle(T) },
   img:     { marginTop: 4 },

@@ -138,7 +138,7 @@ const STEPS: Step[] = [
         + 'it off); ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft, and SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
         + '(serial, height, climb; pick one for its track), its bands in the top bar. '
         // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md) — replaced SAT and the METEOR LRPT decoder key, 2026-11-20
-        + 'SATELLITE lists every satellite\u2019s passes (up now first, greyed where this receiver cannot hear it); tap one and the '
+        + 'SATELLITE lists every satellite\u2019s passes (up now first, each rated EXCELLENT to POOR by how high it climbs, greyed where this receiver cannot hear it); tap one and the '
         + 'radio tunes there, follows its Doppler (AUTO DOPPLER) and decodes it \u2014 METEOR pictures grow in its box, packets '
         + 'are listed, a voice satellite shows a little globe with it overhead. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION MAP, SELCAL, and on the VHF '

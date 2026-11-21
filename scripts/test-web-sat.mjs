@@ -138,8 +138,10 @@ try {
   ok(/^Orbits: CelesTrak · 5 h old · Transmitters: SatNOGS DB \(CC BY-SA 4\.0\)$/.test(credit), `the credit with the data's age: "${credit}"`);
   await shot('picker');
   await ev(`(() => { const b = [...document.querySelectorAll('#satPanel button.sat-row')].find(x => /437\\.800/.test(x.textContent)); b && b.click(); return !!b; })()`);
-  ok(await until(`/ISS · [▲▼] \\d+\\.\\d\\d kHz/.test(document.getElementById('mFreq')?.parentElement?.textContent || document.body.textContent)`, 6000),
-     `beside the digits: ${(await ev(`(document.body.textContent.match(/ISS · [▲▼] [\\d.]+ kHz[^A-Z]*[A-Z]+/) || [''])[0]`))}`);
+  // ★★ 11-21 (Stuart): beside the digits only the badge — the satellite glyph and ▲ / ▼; no name, no words
+  ok(await until(`(() => { const b = document.getElementById('mSatDop'); return !!b && !b.hidden && !!b.querySelector('svg.mSatIco') && !!b.querySelector('svg.mSatArr') && /ISS/.test(b.title); })()`, 6000),
+     `beside the digits: the Doppler badge (${await ev(`document.getElementById('mSatDop')?.title || 'none'`)})`);
+  ok(await ev(`document.getElementById('mChan').hidden && !/ISS · /.test(document.getElementById('mFreq')?.parentElement?.textContent || '')`) === true, 'and no words beside the digits');
   ok(await until(`/437\\.800/.test(document.getElementById('mFreq')?.textContent || '')`, 3000), `the digits on the nominal: ${await ev(`document.getElementById('mFreq')?.textContent`)}`);
   ok(await until(`!document.querySelector('#satPanel .sat-box').hidden && /TRACK|COAST/.test(document.querySelector('#satPanel .sat-ro').textContent)`, 3000), 'the compact box with the lock');
   ok(/In range for \d+:\d\d/.test(await ev(`document.querySelector('#satPanel .sat-ro').textContent`) || ''), 'the countdown');
@@ -151,7 +153,7 @@ try {
   ok(fit.l >= 0 && fit.r <= fit.w && fit.sw <= fit.w + 1, `390 px: the panel fits, no sideways scroll (${JSON.stringify(fit)})`);
   await shot('phone');
   await ev(`document.querySelector('#satPanel button[data-act="doppler"]')?.click()`);
-  ok(await until(`!/ISS · [▲▼]/.test(document.getElementById('mFreq')?.parentElement?.textContent || '')`, 4000), 'AUTO DOPPLER off: the readout beside the digits is gone');
+  ok(await until(`document.getElementById('mSatDop').hidden`, 4000), 'AUTO DOPPLER off: the badge beside the digits is gone');
   await ev(`document.querySelector('#satPanel button[data-act="exit"]')?.click()`);
   ok(await until(`document.getElementById('satPanel').hidden`, 2000), 'EXIT leaves the mode');
   ok(await until(`!/437\\.800\\.000/.test(document.getElementById('mFreq')?.textContent || '') || true`, 500), '(dial frozen where the channel was)');
