@@ -210,6 +210,15 @@ next pass begins; an older server without `geo` simply draws no line.
 the receiver; a low pass stays near the edge; the far side is not drawn), test-web-satellite-mode (dashes inked),
 test-sat-engine (`geo` present, bounded, agrees with `pts`).
 
+### 1.8 A proper satellite on the half-globe (Stuart 2026-11-21) (S)
+Our own drawing (not a copied stock icon): a TUBE body, a DISH on its Earth-facing side pointing DOWN at the
+sub-point (towards the globe's centre), and TWO solar panels on a boom, the boom lying ALONG the direction of travel so
+the bird leans the way its orbit goes (the heading from 1.7's path: the screen direction between the current point and
+the next one; until a path arrives, panels level as today). Drawn as paths in globeScene (one geometry for the web canvas
+and react-native-svg), the beam cone still from the dish, ~2× today's size so the shape reads at SMALL. Panel cells
+ruled, faceplate inks only (amber on default). Test: the panels' axis follows the path's heading; the dish faces the
+globe centre at every position on the dome.
+
 ## PHASE 2 — make it a satellite station (after the beta lands)
 
 ### 2.1 Bigger catalogue from SatNOGS DB (M — directory + server)
