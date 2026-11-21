@@ -296,6 +296,9 @@ flags_for() {
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
     test-sat-orbit|test-sat-engine) echo "-O2 -lpthread" ;;
+    # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
+    #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
+    test-fctlm)            echo "-O2" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
