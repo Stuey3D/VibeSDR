@@ -17,14 +17,14 @@ class El {
     this.classList = { set: new Set(), toggle: (c, on) => (on ? this.classList.set.add(c) : this.classList.set.delete(c)), contains: (c) => this.classList.set.has(c), add: (c) => this.classList.set.add(c), remove: (c) => this.classList.set.delete(c) };
     this.options = this.children; }
   setAttribute(k, v) { this.attrs[k] = v; if (k === 'value') this.value = v; }
-  appendChild(c) { this.children.push(c); if (this.tag === 'select' && this.children.length === 1 && !this._set) this.value = c.value; return c; }
+  appendChild(c) { this.children.push(c); if (this.tag === 'select' && this.children.length === 1 && !this._set && c.tag === 'option') this.value = c.value; return c; }
   addEventListener(ev, f) { this['on' + ev] = f; }
   set innerHTML(_) { this.children.length = 0; }
   get innerHTML() { return ''; }
   all() { return [this, ...this.children.flatMap((c) => c.all())]; }
   text() { return this.textContent + this.children.map((c) => c.text()).join(' '); }
 }
-const mkSelect = () => { const s = new El('select'); let v = ''; Object.defineProperty(s, 'value', { get: () => v, set: (x) => { v = s.children.some((o) => o.value === x) ? x : (s.children[0]?.value ?? ''); }, configurable: true }); return s; };
+const mkSelect = () => { const s = new El('select'); let v = ''; const os = () => s.all().filter((e) => e.tag === 'option'); Object.defineProperty(s, 'value', { get: () => v, set: (x) => { v = os().some((o) => o.value === x) ? x : (os()[0]?.value ?? ''); }, configurable: true }); return s; };
 const els = { bgProfiles: new El('div'), hwBg: new El('div'), bgOn: new El('input'), bgWait: mkSelect() };
 for (const w of ['1', '2', '5', '10', '15', '30', '60']) { const o = new El('option'); o.value = w; els.bgWait.appendChild(o); }
 const document = { createElement: (t) => (t === 'select' ? mkSelect() : new El(t)) };
@@ -43,46 +43,70 @@ const freqIn = (row) => row.children.find((e) => e.tag === 'input');
 const skimSel = (row) => row.children.find((e) => e.attrs.class === 'bgSkimPick');
 const skimNote = (i) => box.all().filter((e) => e.attrs.class === 'hint bgSkimNote')[i];
 
-// the server's skimmer segments for Region 1 (hwinfo / GET /vibeserver/hardware "skimBands" — vibe_skim_bands.h)
+// the server's skimmer bands for Region 2 (hwinfo / GET /vibeserver/hardware "skimBands" — vibe_skim_bands.h points():
+// the segment's tiles from the bottom at each width, then the region's practice segments, labelled)
+const P = (...hz) => hz.map((h) => (Array.isArray(h) ? { hz: h[0], note: h[1] } : { hz: h }));
 const SKIM = {
-  region: 1,
-  cw: [{ id: '160m', name: '160 m', lo: 1810000, hi: 1838000 }, { id: '40m', name: '40 m', lo: 7000000, hi: 7040000 }, { id: '20m', name: '20 m', lo: 14000000, hi: 14070000 }],
-  rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000 }, { id: '20m', name: '20 m', lo: 14070000, hi: 14099000 }],
-  psk: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000 }, { id: '20m', name: '20 m', lo: 14070000, hi: 14099000 }],
+  region: 2,
+  cw: [{ id: '160m', name: '160 m', lo: 1810000, hi: 1840000, points: { 24000: P(1822000, 1846000), 48000: P(1834000), 96000: P(1858000) } },
+       { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, 'check your licence']), 48000: P([5375500, 'check your licence']), 96000: P([5399500, 'check your licence']) } },
+       { id: '40m', name: '40 m', lo: 7000000, hi: 7040000, points: { 24000: P(7012000, 7036000), 48000: P(7024000), 96000: P(7048000) } },
+       { id: '20m', name: '20 m', lo: 14000000, hi: 14070000, points: { 24000: P(14012000, 14036000, 14060000), 48000: P(14024000, 14072000), 96000: P(14048000) } }],
+  rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000, points: { 24000: P(7052000, [7092000, 'US RTTY'], [7116000, 'US RTTY']), 48000: P(7064000, [7104000, 'US RTTY']), 96000: P(7088000, [7128000, 'US RTTY']) } }],
+  psk: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000, points: { 6000: P(7043000, 7049000, [7073000, 'US PSK31']), 12000: P(7046000, [7076000, 'US PSK31']) } }],
 };
+const opts = (sel) => sel.all().filter((e) => e.tag === 'option');
+const groups = (sel) => sel.children.filter((e) => e.tag === 'optgroup').map((g) => g.attrs.label);
 const P40 = { on: true, waitMin: 5, profiles: [{ centre: 7000000, from: '00:00', to: '00:00',
-  vfos: [{ hz: 7024000, mode: 'usb', dec: 'cw-skim-48' }, { hz: 7031500, mode: 'usb', dec: 'cw-skim-24' }, { hz: 7064000, mode: 'usb', dec: 'rtty-skim-48' }] }] };
+  vfos: [{ hz: 7036000, mode: 'usb', dec: 'cw-skim-24' }, { hz: 7031500, mode: 'usb', dec: 'cw-skim-24' }, { hz: 7104000, mode: 'usb', dec: 'rtty-skim-48' }] }] };
 let api = mk({ skimBands: SKIM });
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(P40) });
 const rows = vfoRows;
-ok(rows().length === 3, 'three skimmer rows (CW 48 kHz, CW 24 kHz own centre, RTTY 48 kHz)');
-ok(!!skimSel(rows()[0]) && skimSel(rows()[0]).value === '40m' && !freqIn(rows()[0]), 'CW 48 kHz at 7024: the band picker on 40 m, no kHz box (Stuart: "48k should default to 7024 for 40m")');
+ok(rows().length === 3, 'three skimmer rows (CW 24 kHz at 7036, CW 24 kHz own centre, RTTY 48 kHz at 7104)');
+const s0 = skimSel(rows()[0]);
+ok(!!s0 && groups(s0).join() === '40 m' && !freqIn(rows()[0]), 'the picker groups its windows by band (<optgroup>): only bands whose windows this capture (7.0 MHz, 2.4 MS/s) holds: 40 m; no kHz box — ' + groups(s0).join());
+ok(opts(s0).map((o) => o.textContent).join(' | ') === '7000–7024 kHz | 7024–7048 kHz | Own centre…',
+   'its windows: 40 m 7000–7024 and 7024–7048 (Stuart\'s "multiple centre points"), "Own centre…" last — ' + opts(s0).map((o) => o.textContent).join(' | '));
+ok(s0.value === '7036000', 'a stored 7036 at 24 kHz loads as 40 m\'s SECOND window');
 ok(modeSel(rows()[0]).disabled === true, '…its demodulator greyed (the decoder is fed IQ)');
-ok(skimNote(0) && skimNote(0).textContent.startsWith('40 m CW 7000–7048 kHz') && skimNote(0).style.color === '', 'its line: "40 m CW 7000–7048 kHz — every CW signal…" — ' + (skimNote(0) && skimNote(0).textContent));
-ok(skimSel(rows()[1]).value === '__own' && freqIn(rows()[1]) && freqIn(rows()[1]).value === '7031.5', 'a stored 7031.5 (no band\'s centre) loads as "Own centre…" with the box filled');
-ok(skimSel(rows()[1]).children.some((o) => o.value === '__own' && o.textContent === 'Own centre…'), '…the picker\'s last option is "Own centre…"');
+ok(skimNote(0) && skimNote(0).textContent.startsWith('40 m CW 7024–7048 kHz') && skimNote(0).textContent.includes('part of the band’s CW segment'), 'its line: ' + (skimNote(0) && skimNote(0).textContent));
+ok(skimSel(rows()[1]).value === '__own' && freqIn(rows()[1]) && freqIn(rows()[1]).value === '7031.5', 'a stored 7031.5 (no listed window) loads as "Own centre…" with the box filled');
 ok(skimNote(1).textContent.startsWith('Your own centre: 7019.5–7043.5 kHz'), 'its line says what the typed centre covers — ' + skimNote(1).textContent);
-ok(skimSel(rows()[2]).value === '40m' && skimNote(2).textContent.startsWith('40 m RTTY 7040–7088 kHz'), 'RTTY 48 kHz at 7064: 40 m (7040 + 24) — ' + skimNote(2).textContent);
+const s2 = skimSel(rows()[2]);
+ok(s2.value === '7104000' && opts(s2).some((o) => o.textContent === '7080–7128 kHz · US RTTY'), 'Region 2 RTTY 48 kHz at 7104: the US RTTY practice window, labelled');
+ok(skimNote(2).textContent.includes('US RTTY, outside the band plan’s RTTY segment'), '…its line says it is practice, outside the plan — ' + skimNote(2).textContent);
 ok(api.bgCollect() === JSON.stringify(P40), 'the profile saves back byte for byte (the stored value is still each window\'s centre)');
-// a wider CW window keeps its band: 7024 → 7048
+// a pick of a window
+s0.value = '7012000'; s0.onchange();
+ok(api.model().profiles[0].vfos[0].hz === 7012000 && skimSel(rows()[0]).value === '7012000', 'picking 7000–7024: stored as 7012');
+// width change keeps the band (the nearest of its windows)
 decSel(rows()[0]).value = 'cw-skim-96'; decSel(rows()[0]).onchange();
-ok(api.model().profiles[0].vfos[0].hz === 7048000 && skimSel(rows()[0]).value === '40m', 'CW 48 → 96 kHz on 40 m: the window moves to 7048 (7000–7096)');
-// "Own centre…" at any time: the box appears with the centre it had
+ok(api.model().profiles[0].vfos[0].hz === 7048000, 'CW 24 → 96 kHz on 40 m: its one window there, 7048 (7000–7096)');
+// "Own centre…" at any time
 skimSel(rows()[0]).value = '__own'; skimSel(rows()[0]).onchange();
 ok(skimSel(rows()[0]).value === '__own' && freqIn(rows()[0]) && freqIn(rows()[0]).value === '7048', 'picking "Own centre…" shows the box, holding 7048');
 freqIn(rows()[0]).value = '7050'; freqIn(rows()[0]).oninput();
-ok(api.model().profiles[0].vfos[0].hz === 7050000 && skimNote(0).textContent.startsWith('Your own centre: 7002–7098 kHz'), 'typing 7050: stored, and its line follows — ' + skimNote(0).textContent);
-// back to a band replaces the typed value
-skimSel(rows()[1]).value = '40m'; skimSel(rows()[1]).onchange();
-ok(api.model().profiles[0].vfos[1].hz === 7012000 && !freqIn(rows()[1]), 'the own-centre row picks 40 m: 7012 (24 kHz), the box gone');
-// a NAVTEX row turned into an RTTY skimmer lands on the first band this capture holds
+ok(api.model().profiles[0].vfos[0].hz === 7050000 && skimNote(0).textContent.startsWith('Your own centre: 7002–7098 kHz'), 'typing 7050: stored, its line follows');
+skimSel(rows()[1]).value = '7036000'; skimSel(rows()[1]).onchange();
+ok(api.model().profiles[0].vfos[1].hz === 7036000 && !freqIn(rows()[1]), 'the own-centre row picks 7024–7048: 7036, the box gone');
+// a NAVTEX row turned into an RTTY skimmer lands on the first window that fits
 api.model().profiles[0].vfos.push({ hz: 0, mode: 'usb', dec: 'navtex' }); api.bgRender();
 decSel(rows()[3]).value = 'rtty-skim-24'; decSel(rows()[3]).onchange();
-ok(api.model().profiles[0].vfos[3].hz === 7052000 && skimSel(rows()[3]).value === '40m', 'a new RTTY 24 kHz row lands on 40 m, 7052 (the first band whose window fits)');
-// only the bands whose window this capture holds; the chosen one kept but said outside
+ok(api.model().profiles[0].vfos[3].hz === 7052000, 'a new RTTY 24 kHz row lands on the plan\'s 7052 (the first window that fits)');
+// only windows the capture holds; the chosen one kept but said outside
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 14100000, from: '00:00', to: '00:00', vfos: [{ hz: 7024000, mode: 'usb', dec: 'cw-skim-48' }] }] }) });
-ok(skimSel(rows()[0]).children.map((o) => o.value).join() === '40m,20m,__own' && skimSel(rows()[0]).children[0].textContent.includes('outside this window')
-   && skimNote(0).style.color === '#ff8a7d', 'centre 14.1 MHz: 20 m offered, the chosen 40 m kept but marked outside, said in red — ' + skimNote(0).textContent);
+const sf = skimSel(rows()[0]);
+ok(groups(sf).join() === '40 m,20 m' && opts(sf)[0].textContent.includes('outside this window') && opts(sf).filter((o) => /^140/.test(o.textContent)).length === 2
+   && skimNote(0).style.color === '#ff8a7d', 'centre 14.1 MHz: 20 m\'s two 48 kHz windows offered, the chosen 40 m kept but marked outside, said in red');
+// 60 m says "check your licence" in words
+api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 5400000, from: '00:00', to: '00:00', vfos: [{ hz: 5363500, mode: 'usb', dec: 'cw-skim-24' }] }] }) });
+ok(skimSel(rows()[0]).value === '5363500' && groups(skimSel(rows()[0])).includes('60 m') && opts(skimSel(rows()[0])).some((o) => o.textContent === '5351.5\u20135375.5 kHz \u00b7 check your licence')
+   && skimNote(0).textContent.includes('check your licence'), '60 m: one window 5351.5–5375.5 labelled, its line says the band is allocated country by country — ' + skimNote(0).textContent);
+// an older server (no points): the one rule-centre per band
+api = mk({ skimBands: { region: 1, cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000 }], rtty: [], psk: [] } });
+api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 7000000, from: '00:00', to: '00:00', vfos: [{ hz: 7024000, mode: 'usb', dec: 'cw-skim-48' }] }] }) });
+ok(skimSel(rows()[0]).value === '7024000', 'an older server\'s skimBands (no points): its one window, segment bottom + width / 2');
+api = mk({ skimBands: SKIM });
 // where a skimmer cannot run: not offered
 blocked = new Set(['rtty']);
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(P40) });
@@ -91,10 +115,9 @@ ok(decSel(rows()[2]).value === 'rtty-skim-48' && skimNote(2).style.color === '#f
 blocked = new Set();
 api.bgLoad({ driver: 'icom', bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 7000000, from: '00:00', to: '00:00', vfos: [{ hz: 7000000, mode: 'usb', dec: 'navtex' }] }] }) });
 ok(!decSel(rows()[0]).children.some((o) => /skim-/.test(o.value) && o.value !== 'ndb-skim'), 'an Icom (one audio channel): no CW / RTTY / PSK skimmer offered');
-// no band list (the server did not answer): the kHz box, as before
 api = mk(null);
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(P40) });
-ok(!skimSel(rows()[0]) && freqIn(rows()[0]) && freqIn(rows()[0]).value === '7024', 'no skimBands: the typed centre box, as before');
+ok(!skimSel(rows()[0]) && freqIn(rows()[0]) && freqIn(rows()[0]).value === '7036', 'no skimBands: the typed centre box, as before');
 // GET /vibeserver/hardware and hwinfo carry it; the page takes the door's
 {
   const shim = fs.readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8');

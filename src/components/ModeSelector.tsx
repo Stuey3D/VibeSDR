@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { skimBandAtDial, skimDial, skimOffLabel, type SkimBand, type SkimKind } from '../utils/skimBands';
+import { skimBandAtDial, skimOffLabel, skimPointLabel, type SkimBand, type SkimKind, type SkimPoint } from '../utils/skimBands';
 import { sortModes } from '../utils/modeOrder';
 import { scrollLane } from '../constants/popupTokens';
 import {
@@ -542,7 +542,7 @@ interface ModeSelectorProps {
     onRttyView?: (skim: boolean) => void; onRttyWidth?: (w: number) => void;
     /** ★★ V12 beta90 the skimmers' BAND row (CW / PSK / RTTY, SKIMMER view): the bands whose window this radio can tune at
      *  this width (utils/skimBands — the server's segments), and the tune a pick makes (segment bottom + width / 2). */
-    skimBandsFor?: (kind: SkimKind, width: number) => SkimBand[];
+    skimBandsFor?: (kind: SkimKind, width: number) => { band: SkimBand; points: SkimPoint[] }[];
     onSkimBand?: (hz: number) => void;
     /** ★★ V12 JTTY — only where `"jtty": true`; its settings are the announced calling frequencies THIS radio reaches. */
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
@@ -1654,15 +1654,24 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const skimBandRow = (kind: SkimKind, width: number) => {
       const list = dc.skimBandsFor?.(kind, width) ?? [];
       if (!list.length) return null;
-      const at = skimBandAtDial(list, width, dc.tunedHz ?? 0);
+      const at = skimBandAtDial(list.map((x) => x.band), width, dc.tunedHz ?? 0);
+      const exact = at.exact ? at.point : null;
+      /* ★★ V12 beta90 follow-up: the band's WINDOWS (the server's points), drawn only for the band the dial is on and only
+       *  when it has more than one — a band chip goes to its first window. */
+      const cur = at.band ? list.find((x) => x.band.id === at.band!.id) : undefined;
       return (<>
         <SubLabel label="BAND" />
         <OptRow>
-          {list.map((b) => (
-            <SegBtn key={b.id} label={b.name} active={at.exact && at.band?.id === b.id} onPress={() => dc.onSkimBand?.(skimDial(b, width))} />
+          {list.map((x) => (
+            <SegBtn key={x.band.id} label={x.band.name} active={!!exact && exact.band.id === x.band.id} onPress={() => dc.onSkimBand?.(x.points[0].hz)} />
           ))}
         </OptRow>
-        {!at.exact && <Text style={capText}>{'Band: ' + skimOffLabel(at)}</Text>}
+        {!!cur && cur.points.length > 1 && (
+          <OptRow>{cur.points.map((q) => (
+            <SegBtn key={q.hz} label={skimPointLabel(q)} active={exact?.hz === q.hz} onPress={() => dc.onSkimBand?.(q.hz)} />
+          ))}</OptRow>
+        )}
+        {!exact && <Text style={capText}>{'Band: ' + skimOffLabel(at)}</Text>}
       </>);
     };
     switch (id) {

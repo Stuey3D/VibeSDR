@@ -24,6 +24,34 @@ gives 7048. RTTY and PSK work the same way on their own segments.
 - Clients apply the same rule to that JSON: the Setup page's `bgSkim*`, `src/services/bgDecode.ts` `bgSkim*` and
   `src/utils/skimBands.ts` (the web decoder box and the app's ModeSelector). None of them keeps a table of its own.
 
+## Several windows per band (beta90 follow-up, Stuart: "maybe list multiple centre points per band")
+
+`vibe_skim_bands.h points()` lists each band's windows at a width, in two parts:
+
+- **Tiles.** The segment is cut into windows of the skimmer's width, starting at its bottom (the first tile is the
+  preset). Each centre is `lo + width/2 + k·width`, for as long as the tile starts below the segment's top. For 40 m CW in
+  Region 1 that gives 7012 and 7036 at 24 kHz, 7024 at 48 kHz and 7048 at 96 kHz.
+- **Practice segments.** Where activity really sits outside the plan, the region's practice segments are tiled by the same
+  rule and labelled:
+  - Region 2, 40 m RTTY, 7080–7125 kHz, "US RTTY". Source: the ARRL's Considerate Operator's Frequency Guide.
+  - Region 2, 40 m PSK31, 7070–7075 kHz, "US PSK31". Common practice only, so it is kept to one 5 kHz stretch.
+- **60 m.** This is the WRC-15 allocation, 5351.5–5366.5 kHz. CW and RTTY take all of it; PSK takes the narrow-band part,
+  5351.5–5354. Every 60 m point carries the note "check your licence".
+
+**JSON.** Each band in skimBands now has `"points":{"24000":[{"hz":…,"note":…}],…}`, with entries for every width its
+skimmer offers: CW and RTTY at 24, 48 and 96 kHz, PSK at 6, 12 and 24 kHz. Only windows this radio can tune end to end
+are listed, and a band with none is left out. The pages compute nothing beyond a window's edges, `centre ± width/2`. An
+older server, whose bands have no `points`, still gets one rule-centre per band.
+
+**The pickers:**
+- **Setup page.** The windows are grouped under `<optgroup>`s, with "Own centre…" last.
+- **Android screen.** The windows are chips under each band's name, with "Own centre…" last.
+- **Both background pickers.** A stored centre matching any listed window loads as that window. A width change takes the
+  same band's nearest window.
+- **Listener decoder box.** Picking a band goes to its first window. A second compact select (web) or one chip row (app)
+  lists that band's windows. It is drawn only when the dial is on a band with more than one window. This is the
+  least-noisy design: no extra control for the many bands that have a single window.
+
 ## The segments
 
 The segments come from the published plans:
@@ -88,20 +116,20 @@ How it works:
 
 | Test | What it covers | Result |
 |---|---|---|
-| `vibeserver/test-bg-skim.cpp` | Table and rule (7012/7024/7048, RTTY/PSK examples, region differences), capture fit, JSON and its tunable filter, config/parse/validate (own centre kept, out of window refused), switched-off gate, and end to end: synthetic 40 m RTTY (2 stations) at 250 kS/s → BgRunner → `rttyskim` → RTTY summary card, with both spots reaching PSK Reporter | 33/0 |
+| `vibeserver/test-bg-skim.cpp` | Table and rule (7012/7024/7048, RTTY/PSK examples, region differences), capture fit, JSON and its tunable filter, config/parse/validate (own centre kept, out of window refused), switched-off gate, and end to end: synthetic 40 m RTTY (2 stations) at 250 kS/s → BgRunner → `rttyskim` → RTTY summary card, with both spots reaching PSK Reporter | 44/0 |
 | `vibeserver/test-spot-report.cpp` | +RTTY / BPSK mapping; an RTTY spot is kept when reporting is on and dropped when off | 64/0 |
 | `vibeserver/test-rtty-skimmer.cpp` | Host path: the listener's RTTY skimmer spots reach the reporter | all passed |
-| `scripts/test-setup-bg-skim.mjs` | Setup page picker, Own centre, load/save, width change, fit, gates | 22/0 |
-| `scripts/test_bg_decode_model.ts` | Android screen model | 47/0 |
-| `scripts/test_skim_bands_picker.ts` | Listener picker logic | 11/0 |
-| `scripts/test-web-skim-band.mjs` | Real server and web page in headless Edge (`--mute-audio`): RTTY and CW SKIMMER BAND, rule-centre picks, "20 m · tuned" with no snap-back, ONE SIGNAL hides it | 15/0 |
+| `scripts/test-setup-bg-skim.mjs` | Setup page picker, Own centre, load/save, width change, fit, gates | 27/0 |
+| `scripts/test_bg_decode_model.ts` | Android screen model | 53/0 |
+| `scripts/test_skim_bands_picker.ts` | Listener picker logic | 15/0 |
+| `scripts/test-web-skim-band.mjs` | Real server and web page in headless Edge (`--mute-audio`): RTTY and CW SKIMMER BAND, rule-centre picks, "20 m · tuned" with no snap-back, ONE SIGNAL hides it; the band's windows select | 21/0 |
 
 ## RESUME HERE
 
 - Nothing has been run on a device or against a live band. All tests use synthetic IQ and stand-in DOMs, plus one real
   server and web page under the fake rtl_tcp.
 - For Stuart to decide:
-  - **R2 40 m RTTY/PSK.** These follow the R2 plan (7040), not the US habit of 7080 for RTTY and 7070 for PSK.
+  - **R2 40 m RTTY/PSK.** Answered: both are listed. The plan's 7040 comes first, then the labelled US practice windows.
   - **PSK convention.** The PSK starting points are convention, not taken from a plan.
-  - **The one-signal PSK decoder** now reports too, because it shares the spot callback with the PSK skimmer.
+  - **The one-signal PSK decoder** reporting: answered, keep it (Stuart: "report all spots when it is enabled").
 - R36S handheld: no BAND picker yet. It would read the same skimBands from vibeserver.json.

@@ -23,7 +23,7 @@ import { meaningText } from '../constants/decoderTokens';
 import {
   type BgCaps, type BgModel, type BgProfile, type BgVfo, BG_DEMODS, BG_ISM_WORDS, BG_WAIT_CHOICES,
   bgBandHint, bgBandReach, bgDecoderSetsFreq, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
-  bgHalfWindow, BG_SAT_MIN_EL, bgSkimBandAt, bgSkimCentre, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
+  bgHalfWindow, BG_SAT_MIN_EL, bgSkimPointAt, bgSkimPoints, bgSkimPointLabel, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
 } from '../services/bgDecode';
 
 type Props = {
@@ -104,8 +104,15 @@ export default function BackgroundDecodingSetup(p: Props) {
     const sk = caps.decoders.find((d) => d.id === v.dec && d.skim);
     const skBands = sk && caps.skimBands && caps.skimBands[sk.skim!].length ? caps.skimBands[sk.skim!] : null;
     const skW = sk?.width || 0;
-    const own = !!skBands && (!!v.own || (v.hz > 0 && !bgSkimBandAt(skBands, skW, v.hz)));
-    const curSkim = skBands && !own ? bgSkimBandAt(skBands, skW, v.hz) : null;
+    const own = !!skBands && (!!v.own || (v.hz > 0 && !bgSkimPointAt(skBands, skW, v.hz)));
+    const curSkim = skBands && !own ? bgSkimPointAt(skBands, skW, v.hz) : null;
+    /* ★★ V12 beta90 follow-up: SEVERAL WINDOWS PER BAND (the engine's points), grouped under their band's name — only those
+     *  this capture holds (and the row's own, said to be outside); "Own centre…" last. */
+    const skPts = skBands ? bgSkimPoints(skBands, skW).filter((q) => bgSkimFits(q.hz, skW, centre, p.rate) || curSkim?.hz === q.hz) : [];
+    const skGroups = skPts.reduce<{ name: string; pts: typeof skPts }[]>((a, q) => {
+      if (!a.length || a[a.length - 1].name !== q.band.name) a.push({ name: q.band.name, pts: [] });
+      a[a.length - 1].pts.push(q); return a;
+    }, []);
     const h = v.dec === 'ndb-skim' ? bgNdbHint(p.ndbOk, p.ndbBlocked, centre, p.rate, locked)
             : v.dec === 'spots-band' ? bgBandHint(p.bandOk, caps.spotBands, v.hz, centre, p.rate)
             : sk && skBands ? bgSkimHint(sk, p.skimOk(sk.skim!), p.driver === 'icom', skBands, v.hz, own, centre, p.rate) : null;
@@ -139,14 +146,18 @@ export default function BackgroundDecodingSetup(p: Props) {
                 () => setV((x) => { x.hz = b.hz; }), bgSpotBand(bands, v.hz)?.id === b.id)}</React.Fragment>)}
           </View>
         )}
-        {skBands && (
+        {skBands && (<>
+          {skGroups.map((g) => (
+            <View key={g.name} style={[st.row, { flexWrap: 'wrap' }]}>
+              <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12, minWidth: 40 }}>{g.name}</Text>
+              {g.pts.map((q) => <React.Fragment key={q.hz}>{key(bgSkimPointLabel(q) + (bgSkimFits(q.hz, skW, centre, p.rate) ? '' : ' (outside this window)'),
+                () => { setGen((n) => n + 1); setV((x) => { x.own = false; x.hz = q.hz; }); }, curSkim?.hz === q.hz)}</React.Fragment>)}
+            </View>
+          ))}
           <View style={[st.row, { flexWrap: 'wrap' }]}>
-            {skBands.filter((b) => bgSkimFits(bgSkimCentre(b, skW), skW, centre, p.rate) || curSkim?.id === b.id).map((b) =>
-              <React.Fragment key={b.id}>{key(b.name + (bgSkimFits(bgSkimCentre(b, skW), skW, centre, p.rate) ? '' : ' (outside this window)'),
-                () => { setGen((g) => g + 1); setV((x) => { x.own = false; x.hz = bgSkimCentre(b, skW); }); }, curSkim?.id === b.id)}</React.Fragment>)}
             {key('Own centre…', () => { setGen((g) => g + 1); setV((x) => { x.own = true; }); }, own)}
           </View>
-        )}
+        </>)}
         <View style={[st.row, { flexWrap: 'wrap' }]}>
           {Object.keys(BG_DEMODS).map((k) => <React.Fragment key={k}>{key(BG_DEMODS[k], () => setV((x, pr2) => {
             x.mode = k;
