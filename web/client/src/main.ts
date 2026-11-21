@@ -10827,7 +10827,12 @@ function buildControls() {
       // ★ CLOSED, not merely ARMED. A threshold set above the noise is normal; the state
       //   worth shouting about is the gate actively muting right now.
       sqlClosed: vsSqlOn(squelchDb) && lastSigDb < squelchDb,
-      sqlNorm: vsSqlOn(squelchDb)
+      // ★★ IN AUTO, THE SETTING (sqlAutoShownDb) — as the squelch bar's needle. While auto holds the gate open between
+      //    words the APPLIED threshold is OFF, so drawing from squelchDb took the line away every time the audio passed
+      //    (Stuart 2026-11-21: "it shows when squelch is active but when it opens to allow audio to pass the line disappears").
+      sqlNorm: sqlAuto && Number.isFinite(sqlAutoShownDb)
+        ? Math.max(0, Math.min(1, (sqlAutoShownDb - sqlScaleMin) / Math.max(1, sqlScaleMax - sqlScaleMin)))
+        : vsSqlOn(squelchDb)
         ? Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / Math.max(1, sqlScaleMax - sqlScaleMin)))
         : -1,
     }),

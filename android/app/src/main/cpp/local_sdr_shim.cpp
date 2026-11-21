@@ -11699,7 +11699,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         // ★ Squelch: this listener's gate against this listener's own channel level (sig.chan).
         //   Applied after the decoders (they need the raw audio) and after the effects.
-        const bool squelched = c->squelchOn.load(std::memory_order_relaxed)
+        /* ★★ NO SQUELCH IN DAB OR DRM (Stuart 2026-11-21, web: "it applies even in dab mode when it should be ignored"): a
+         *  decoded digital service is not judged by the passband's power — the gate muted a multiplex that was playing. The
+         *  clients already take the squelch line off the meter in both (mobile.ts paintDab). The setting is kept, not cleared:
+         *  it applies again the moment the listener is back on an analogue mode. */
+        const bool squelched = !c->drmOn.load(std::memory_order_relaxed) && c->squelchOn.load(std::memory_order_relaxed)
                             && c->sigChanDb.load(std::memory_order_relaxed) < c->squelchDb.load(std::memory_order_relaxed);
         // ★★ V12 VFO A/B: VFO A (gated by its own squelch) and the watch channels (each gated by ITS squelch) into one
         //    L/R stream — lower frequency left, higher right (vibe_watch.h). The ordinary path below once the pan is home.
@@ -20237,7 +20241,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     auto it = sockSession.find(sk.get());
                     if (it != sockSession.end()) {
                         auto q = sessionSquelch.find(it->second);
-                        if (q != sessionSquelch.end() && q->second.on && level < q->second.db) closed = true;
+                        // ★★ never in DAB — see the note at the listener's own gate (onClientAudio)
+                        if (q != sessionSquelch.end() && q->second.on && level < q->second.db && !g_dabMode.load(std::memory_order_relaxed)) closed = true;
                     }
                 }
                 (closed ? muted : open).push_back(sk);
@@ -20608,7 +20613,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
         // FFT) is below threshold. Applied AFTER the decoders so they see raw audio.
-        if (squelchOn.load() && channelDb.load() < squelchDb.load()) {
+        if (!g_dabMode.load(std::memory_order_relaxed) && squelchOn.load() && channelDb.load() < squelchDb.load()) {   // ★ never in DAB (sessionSquelch note)
             for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
         }
 
@@ -33671,7 +33676,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (it == sockSession.end()) { rest.push_back(sk); continue; }
                 bySess[it->second].push_back(sk);
                 auto q = sessionSquelch.find(it->second);
-                sqlShut[it->second] = q != sessionSquelch.end() && q->second.on && level < q->second.db;
+                sqlShut[it->second] = q != sessionSquelch.end() && q->second.on && level < q->second.db && !g_dabMode.load(std::memory_order_relaxed);
             }
         }
         const bool mono = audioForceMono.load();
