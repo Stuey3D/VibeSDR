@@ -81,7 +81,7 @@ static void table() {
     ok(hzList(r1r) == "7052", "…Region 1: the plan's 7052 only (no US practice)");
     ok(hzList(pts(sb::Kind::Psk, 2, "40m", 6000)) == "7043,7049,7073" && pts(sb::Kind::Psk, 2, "40m", 6000)[2].note == "US PSK31", "Region 2 40 m PSK at 6 kHz: 7043, 7049 (plan), 7073 (US PSK31)");
     const auto s60 = pts(sb::Kind::Cw, 1, "60m", 24000);
-    ok(s60.size() == 1 && std::fabs(s60[0].hz - 5363500) < 1 && s60[0].note == "check your licence", "60 m: one 24 kHz window 5351.5–5375.5 holds the WRC-15 allocation, noted \"check your licence\"");
+    ok(s60.size() == 1 && std::fabs(s60[0].hz - 5363500) < 1 && s60[0].note.empty(), "60 m: one 24 kHz window 5351.5–5375.5 holds the WRC-15 allocation, no licence note (we only receive)");
     ok(sb::segment(sb::Kind::Cw, 2, "60m") && sb::segment(sb::Kind::Rtty, 3, "60m") && sb::segment(sb::Kind::Psk, 1, "60m"), "…in every region and mode");
     ok(sb::bandAtCentre(sb::Kind::Cw, 1, 24000, 7036000) == c40, "a stored 7036 at 24 kHz is 40 m's second point (loads as that point)");
     ok(sb::bandAtCentre(sb::Kind::Cw, 1, 48000, 7024000) == c40 && !sb::bandAtCentre(sb::Kind::Cw, 1, 48000, 7020000),

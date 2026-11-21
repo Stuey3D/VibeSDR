@@ -24,8 +24,8 @@
 //    ★ 60 m (V12 beta90 follow-up, Stuart: "maybe list multiple centre points per band"): the WRC-15 secondary allocation
 //    5351.5–5366.5 kHz, which all three plans divide the same way — 5351.5–5354 CW / narrow-band, 5354–5366 all modes
 //    (FT8 5357), 5366–5366.5 weak signal. CW and RTTY take the whole allocation (one 24 kHz window holds it), PSK the
-//    narrow-band part. NATIONAL rules differ (some licences give channels only, some nothing): every 60 m point carries
-//    the note "check your licence", and a receiver hearing it costs nobody anything.
+//    narrow-band part. ✗ NO "check your licence" note (Stuart 2026-11-21: "we dont transmit so what has the licence got
+//    to do with anything?") — licences govern transmitting; listening to 60 m needs none, so its windows are plain tiles.
 //
 // ★★ SEVERAL POINTS PER BAND (V12 beta90 follow-up) — points(): a band offers
 //    • TILES of its segment at the skimmer's width, from the bottom (the rule above — the first tile is the preset):
@@ -127,7 +127,7 @@ inline const std::vector<Practice>& practice() {
     };
     return p;
 }
-/** One window a skimmer may sit at: its centre and edges (Hz), and a note ("US RTTY", "check your licence") or "". */
+/** One window a skimmer may sit at: its centre and edges (Hz), and a note ("US RTTY") or "". */
 struct Point { double hz, loHz, hiHz; std::string note; };
 inline void tile(std::vector<Point>& out, double lo, double hi, double widthHz, const std::string& note) {
     if (!(widthHz > 0) || !(hi > lo)) return;
@@ -140,8 +140,7 @@ inline void tile(std::vector<Point>& out, double lo, double hi, double widthHz, 
 /** ★★ The windows a band offers at `widthHz`: its segment's tiles from the bottom, then the region's practice segments'. */
 inline std::vector<Point> points(Kind kind, int region, const Seg& s, double widthHz) {
     std::vector<Point> v;
-    const std::string sixty = std::string(s.id) == "60m" ? "check your licence" : "";
-    tile(v, s.loHz, s.hiHz, widthHz, sixty);
+    tile(v, s.loHz, s.hiHz, widthHz, "");
     for (const auto& p : practice())
         if (p.kind == kind && p.region == region && std::string(p.band) == s.id) tile(v, p.loHz, p.hiHz, widthHz, p.note);
     return v;

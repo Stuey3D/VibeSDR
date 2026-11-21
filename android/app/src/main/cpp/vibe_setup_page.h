@@ -7668,7 +7668,7 @@ function bgSkimList(kind) {
 }
 /* ★★ V12 beta90 follow-up — SEVERAL POINTS PER BAND (Stuart: "maybe list multiple centre points per band"): the SERVER
  *  lists each band's windows at every width (b.points["24000"] — vibe_skim_bands.h points(): the segment's tiles from
- *  the bottom, then the region's practice segments, labelled, e.g. "US RTTY"; 60 m "check your licence"). The page
+ *  the bottom, then the region's practice segments, labelled, e.g. "US RTTY"). The page
  *  computes nothing; only an older server without `points` gets the one rule-centre per band. */
 function bgSkimPoints(kind, width) {
   const out = [];
@@ -7716,8 +7716,7 @@ function bgSkimHint(v, centre, rate) {
   if (!bgSkimFits(v.hz, d.width, centre, rate))
     return { bad: true, text: (b ? b.name + " " + what + " " : "") + span + " is outside this radio’s window at this RF centre — "
       + (b ? "choose a window it holds" : "type a centre nearer the RF centre") + ", or move the RF centre." };
-  const why = !b ? "." : q.note === "check your licence" ? " \u2014 60 m is allocated country by country: check your licence."
-    : q.note ? " (" + q.note + ", outside the band plan\u2019s " + what + " segment)." : " (part of the band\u2019s " + what + " segment).";
+  const why = !b ? "." : q.note ? " (" + q.note + ", outside the band plan\u2019s " + what + " segment)." : " (part of the band\u2019s " + what + " segment).";
   return { bad: false, text: (b ? b.name + " " + what + " " : "Your own centre: ") + span + " — every " + what + " signal in it, one summary card an hour" + why };
 }
 /* ★★ The NDB band, as the server has it (vibe_bgdecode_config.h ndbSegment): what a skimmer VFO covers at a centre and a

@@ -149,7 +149,7 @@ export const parseSkimBands = (j: any): BgSkimBands | null => parseSkimBandsU(j)
 
 /* ★★ V12 beta90 — THE SKIMMERS BY BAND, SEVERAL WINDOWS EACH (Stuart 2026-11-21; the Setup page's bgSkim* — the same
  *  words). The windows are the ENGINE's (skimBands points: the segment's tiles at this width from the bottom, then the
- *  region's practice segments, labelled; 60 m "check your licence"). A stored centre that IS a listed window loads as it;
+ *  region's practice segments, labelled). A stored centre that IS a listed window loads as it;
  *  any other is the owner's own ("Own centre…"). */
 export const bgSkimPoints = (bands: BgSkimBand[], width: number): SkimPoint[] => skimAllPoints(bands, width);
 export const bgSkimPointAt = (bands: BgSkimBand[], width: number, hz: number): SkimPoint | null => skimPointAt(bands, width, hz);
@@ -176,8 +176,7 @@ export function bgSkimHint(d: BgDecoderDef, ok: boolean, icom: boolean, bands: B
   const span = kHzText(hz - w / 2) + '–' + kHzText(hz + w / 2) + ' kHz';
   if (!bgSkimFits(hz, w, centre, rate)) return { bad: true, text: (b ? b.name + ' ' + what + ' ' : '') + span + ' is outside this radio’s window at this RF centre — '
     + (b ? 'choose a window it holds' : 'type a centre nearer the RF centre') + ', or move the RF centre.' };
-  const why = !q ? '.' : q.note === 'check your licence' ? ' — 60 m is allocated country by country: check your licence.'
-    : q.note ? ' (' + q.note + ', outside the band plan’s ' + what + ' segment).' : ' (part of the band’s ' + what + ' segment).';
+  const why = !q ? '.' : q.note ? ' (' + q.note + ', outside the band plan’s ' + what + ' segment).' : ' (part of the band’s ' + what + ' segment).';
   return { bad: false, text: (b ? b.name + ' ' + what + ' ' : 'Your own centre: ') + span + ' — every ' + what + ' signal in it, one summary card an hour' + why };
 }
 /** ★ A row's decoder changed to `to` (from `from`): a skimmer keeps its band at the new width (the same band's nearest

@@ -89,7 +89,7 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
       cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000, points: { 24000: P(7012000, 7036000), 48000: P(7024000), 96000: P(7048000) } },
            { id: '20m', name: '20 m', lo: 14000000, hi: 14070000, points: { 24000: P(14012000, 14036000, 14060000), 48000: P(14024000, 14072000), 96000: P(14048000) } }],
       rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000, points: { 24000: P(7052000, [7092000, 'US RTTY'], [7116000, 'US RTTY']) } },
-             { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, 'check your licence']) } }], psk: [] },
+             { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, '']) } }], psk: [] },
   }))!;
   const sb = caps.skimBands!;
   ok(!!sb && sb.cw.length === 2 && caps.decoders[1].skim === 'cw' && caps.decoders[1].width === 48000 && !!sb.cw[0].points, 'the engine\'s skimBands (with each band\'s windows) and each skimmer\'s kind + width reach the editor');
@@ -105,7 +105,7 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
   const h = bgSkimHint(d24, true, false, sb.cw, 7036000, false, 7000000, 2400000);
   ok(!h.bad && h.text.startsWith('40 m CW 7024–7048 kHz — every CW signal in it') && h.text.includes('part of the band’s CW segment'), 'its line — the Setup page\'s words: ' + h.text);
   ok(bgSkimHint(dr, true, false, sb.rtty, 7092000, false, 7000000, 2400000).text.includes('US RTTY, outside the band plan’s RTTY segment'), 'a practice window says so');
-  ok(bgSkimHint(dr, true, false, sb.rtty, 5363500, false, 6000000, 2400000).text.includes('check your licence'), '60 m says "check your licence"');
+  ok(!/licen[cs]e/i.test(bgSkimHint(dr, true, false, sb.rtty, 5363500, false, 6000000, 2400000).text), '60 m: no licence note — we only receive (Stuart 11-21)');
   const ho = bgSkimHint(d48, true, false, sb.cw, 7031500, true, 7000000, 2400000);
   ok(!ho.bad && ho.text.startsWith('Your own centre: 7007.5–7055.5 kHz'), 'an own centre says what it covers: ' + ho.text);
   ok(bgSkimHint(d48, true, false, sb.cw, 7024000, false, 14100000, 2400000).bad, 'outside the capture: said in red');

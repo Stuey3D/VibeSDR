@@ -5,7 +5,7 @@
  *
  * The bands AND their windows are the SERVER's (`skimBands` in vibeserver.json / hwinfo / backgroundCapsJson —
  * vibe_skim_bands.h points()): each band's segment tiled at the skimmer's width from the bottom (40 m CW R1 at 24 kHz:
- * 7012, 7036), then the region's practice segments by the same rule, labelled ("US RTTY"); 60 m "check your licence".
+ * 7012, 7036), then the region's practice segments by the same rule, labelled ("US RTTY").
  * Nothing is computed here but a window's edges (centre ± width / 2). An OLDER server (bands without `points`) gets the
  * one rule-centre per band: lo + width / 2.
  *
@@ -17,7 +17,7 @@ export type SkimKind = 'cw' | 'rtty' | 'psk';
 export type SkimPointJson = { hz: number; note?: string };
 export type SkimBand = { id: string; name: string; lo: number; hi: number; points?: Record<string, SkimPointJson[]> };
 export type SkimBands = { region: number; cw: SkimBand[]; rtty: SkimBand[]; psk: SkimBand[] };
-/** One window: its band, centre and edges (Hz), and a note ("US RTTY", "check your licence") or ''. */
+/** One window: its band, centre and edges (Hz), and a note ("US RTTY") or ''. */
 export type SkimPoint = { band: SkimBand; hz: number; lo: number; hi: number; note: string };
 
 /** The server's `skimBands` object, or null (an older server: no picker is drawn). */

@@ -36,7 +36,7 @@ gives 7048. RTTY and PSK work the same way on their own segments.
   - Region 2, 40 m RTTY, 7080–7125 kHz, "US RTTY". Source: the ARRL's Considerate Operator's Frequency Guide.
   - Region 2, 40 m PSK31, 7070–7075 kHz, "US PSK31". Common practice only, so it is kept to one 5 kHz stretch.
 - **60 m.** This is the WRC-15 allocation, 5351.5–5366.5 kHz. CW and RTTY take all of it; PSK takes the narrow-band part,
-  5351.5–5354. Every 60 m point carries the note "check your licence".
+  5351.5–5354. No licence note on 60 m (Stuart 11-21: we only receive — licences govern transmitting).
 
 **JSON.** Each band in skimBands now has `"points":{"24000":[{"hz":…,"note":…}],…}`, with entries for every width its
 skimmer offers: CW and RTTY at 24, 48 and 96 kHz, PSK at 6, 12 and 24 kHz. Only windows this radio can tune end to end

@@ -12,7 +12,7 @@ const P = (...hz: (number | [number, string])[]) => hz.map((h) => (Array.isArray
 // the server's skimBands (vibe_skim_bands.h points(): tiles from the bottom, then practice segments) — Region 2
 const sb = parseSkimBands({ region: 2,
   cw: [{ id: '160m', name: '160 m', lo: 1810000, hi: 1840000, points: { 24000: P(1822000, 1846000), 48000: P(1834000) } },
-       { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, 'check your licence']) } },
+       { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, '']) } },
        { id: '40m', name: '40 m', lo: 7000000, hi: 7040000, points: { 24000: P(7012000, 7036000), 48000: P(7024000), 96000: P(7048000) } },
        { id: '20m', name: '20 m', lo: 14000000, hi: 14070000, points: { 24000: P(14012000, 14036000, 14060000) } }],
   rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000, points: { 48000: P(7064000, [7104000, 'US RTTY']) } }, { id: 'bad', name: 'x', lo: 5, hi: 1 }], psk: [] })!;
@@ -23,7 +23,7 @@ ok(skimPoints(b40, 24000).map((q) => q.hz).join() === '7012000,7036000' && skimP
    '40 m CW: 24 kHz 7012 + 7036, 48 kHz 7024, 96 kHz 7048 (the skimmer\'s CURRENT width)');
 ok(skimPointLabel(skimPoints(b40, 24000)[1]) === '7024–7048 kHz' && skimPointLabel(skimPoints(sb.rtty[0], 48000)[1]) === '7080–7128 kHz · US RTTY',
    'labels: "7024–7048 kHz", a practice window "7080–7128 kHz · US RTTY"');
-ok(skimPointLabel(skimPoints(sb.cw[1], 24000)[0]) === '5351.5–5375.5 kHz · check your licence', '60 m: "5351.5–5375.5 kHz · check your licence"');
+ok(skimPointLabel(skimPoints(sb.cw[1], 24000)[0]) === '5351.5–5375.5 kHz', '60 m: "5351.5–5375.5 kHz" — no licence note (we only receive)');
 ok(skimDial(b40, 24000) === 7012000, 'a band pick goes to its first window');
 ok(skimPoints(parseSkimBands({ region: 1, cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000 }] })!.cw[0], 48000)[0].hz === 7024000,
    'an older server (no points): one window, lo + width / 2');

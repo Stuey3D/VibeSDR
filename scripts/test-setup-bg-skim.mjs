@@ -49,7 +49,7 @@ const P = (...hz) => hz.map((h) => (Array.isArray(h) ? { hz: h[0], note: h[1] } 
 const SKIM = {
   region: 2,
   cw: [{ id: '160m', name: '160 m', lo: 1810000, hi: 1840000, points: { 24000: P(1822000, 1846000), 48000: P(1834000), 96000: P(1858000) } },
-       { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, 'check your licence']), 48000: P([5375500, 'check your licence']), 96000: P([5399500, 'check your licence']) } },
+       { id: '60m', name: '60 m', lo: 5351500, hi: 5366500, points: { 24000: P([5363500, '']), 48000: P([5375500, '']), 96000: P([5399500, '']) } },
        { id: '40m', name: '40 m', lo: 7000000, hi: 7040000, points: { 24000: P(7012000, 7036000), 48000: P(7024000), 96000: P(7048000) } },
        { id: '20m', name: '20 m', lo: 14000000, hi: 14070000, points: { 24000: P(14012000, 14036000, 14060000), 48000: P(14024000, 14072000), 96000: P(14048000) } }],
   rtty: [{ id: '40m', name: '40 m', lo: 7040000, hi: 7050000, points: { 24000: P(7052000, [7092000, 'US RTTY'], [7116000, 'US RTTY']), 48000: P(7064000, [7104000, 'US RTTY']), 96000: P(7088000, [7128000, 'US RTTY']) } }],
@@ -98,10 +98,10 @@ api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify({ on: tr
 const sf = skimSel(rows()[0]);
 ok(groups(sf).join() === '40 m,20 m' && opts(sf)[0].textContent.includes('outside this window') && opts(sf).filter((o) => /^140/.test(o.textContent)).length === 2
    && skimNote(0).style.color === '#ff8a7d', 'centre 14.1 MHz: 20 m\'s two 48 kHz windows offered, the chosen 40 m kept but marked outside, said in red');
-// 60 m says "check your licence" in words
+// 60 m: a plain window — no licence note, a receiver needs none (Stuart 11-21)
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 5400000, from: '00:00', to: '00:00', vfos: [{ hz: 5363500, mode: 'usb', dec: 'cw-skim-24' }] }] }) });
-ok(skimSel(rows()[0]).value === '5363500' && groups(skimSel(rows()[0])).includes('60 m') && opts(skimSel(rows()[0])).some((o) => o.textContent === '5351.5\u20135375.5 kHz \u00b7 check your licence')
-   && skimNote(0).textContent.includes('check your licence'), '60 m: one window 5351.5–5375.5 labelled, its line says the band is allocated country by country — ' + skimNote(0).textContent);
+ok(skimSel(rows()[0]).value === '5363500' && groups(skimSel(rows()[0])).includes('60 m') && opts(skimSel(rows()[0])).some((o) => o.textContent === '5351.5\u20135375.5 kHz')
+   && !/licen[cs]e/i.test(skimNote(0).textContent), '60 m: one window 5351.5–5375.5, no licence note — we only receive (Stuart 11-21) — ' + skimNote(0).textContent);
 // an older server (no points): the one rule-centre per band
 api = mk({ skimBands: { region: 1, cw: [{ id: '40m', name: '40 m', lo: 7000000, hi: 7040000 }], rtty: [], psk: [] } });
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 7000000, from: '00:00', to: '00:00', vfos: [{ hz: 7024000, mode: 'usb', dec: 'cw-skim-48' }] }] }) });
