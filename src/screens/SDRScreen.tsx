@@ -71,8 +71,9 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
-import SatellitePanel from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satDopplerBadge, satListEveryMs, satPacketBaud, type SatList, type SatPicked, type SatReadout, type SatTx } from '../services/satellites';
+import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
+import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy, satViaText,
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2731,6 +2732,58 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satDec, setSatDec] = useState<SatPicked['decoder']>('');
   /** satFollow, reached from the client's callbacks (made before it). */
   const satFollowRef = useRef<(d: SatPicked['decoder'], t: SatTx | null) => void>(() => {});
+  const satPickedRef = useRef<SatPicked | null>(null); satPickedRef.current = satPicked;
+  /* ★★ SATELLITE-BEST 1.7 the pick's pass path (the track reply's geo → the dotted orbit), asked once per pick and again
+   *  when the next pass begins; 1.3 the pick's telemetry (fctlm) */
+  const [satOrbit, setSatOrbit] = useState<[number, number, number][] | null>(null);
+  const satTrackAsk = useRef<{ norad: number; aos: number } | null>(null);
+  const [satTlm, setSatTlm] = useState<SatTelemetry | null>(null);
+  useEffect(() => {
+    if (!satPicked) { satTrackAsk.current = null; setSatOrbit(null); return; }
+    const sat = satList?.sats.find((x) => x.norad === satPicked.norad);
+    if (!sat || !satList) return;
+    const p = satModeRows({ ...satList, sats: [sat] }, Date.now() / 1000)[0]?.pass;
+    if (!p || (satTrackAsk.current && satTrackAsk.current.norad === sat.norad && satTrackAsk.current.aos === p.aos)) return;
+    if (satTrackAsk.current?.norad !== sat.norad) setSatOrbit(null);
+    satTrackAsk.current = { norad: sat.norad, aos: p.aos };
+    (client.current as unknown as { satTrack?: (n: number, a: number, l: number) => void } | null)?.satTrack?.(sat.norad, p.aos, p.los);
+  }, [satPicked?.norad, satPicked?.tx, satList]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ SATELLITE-BEST 1.6 REMIND — CLIENT-HELD ONLY (Stuart 11-21): in memory for this app session, keyed to this server;
+   *  nothing on the server, nothing stored — leaving the server (this screen unmounts), the session ending or a kick
+   *  forgets them, and a reminder whose connection is gone never fires. The pop-up is an IN-APP BANNER (no OS notification
+   *  module, Stuart's decision); LISTEN enters SATELLITE and picks through the ordinary pick (ask-before-tuning). */
+  const satRemRef = useRef(new SatReminders());
+  const [satRemN, setSatRemN] = useState(0);
+  const [satToasts, setSatToasts] = useState<SatRemindToast[]>([]);
+  const satToastsRef = useRef<SatRemindToast[]>([]);
+  const [satRemLead, setSatRemLead] = useState<number>(SAT_REMIND_LEAD_DEFAULT);
+  const satRemLeadRef = useRef<number>(SAT_REMIND_LEAD_DEFAULT); satRemLeadRef.current = satRemLead;
+  const satRemListAt = useRef(0);
+  const connectedNowRef = useRef(false); connectedNowRef.current = connected;
+  const satSrvKey = baseUrl || instanceName || 'server';
+  const satSrvKeyRef = useRef(satSrvKey); satSrvKeyRef.current = satSrvKey;
+  /** into SATELLITE the way its key goes in (set beside the key, below — it leaves the other whole-radio modes) */
+  const satEnterRef = useRef<() => void>(() => {});
+  useEffect(() => { AsyncStorage.getItem('vibe.satRemindLead').then((v) => { if (v) setSatRemLead(satRemindLead(v)); }).catch(() => {}); }, []);
+  const satSetToasts = useCallback((ts: SatRemindToast[]) => { satToastsRef.current = ts; setSatToasts(ts); }, []);
+  const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); }, [satSetToasts]);
+  const satRemBusy = satRemN > 0 || satToasts.length > 0;
+  useEffect(() => {
+    if (!satRemBusy) return;
+    const t = setInterval(() => {
+      const now = Date.now() / 1000, lead = satRemLeadRef.current, conn = connectedNowRef.current;
+      // ★ a fresh list ~40 s before one fires (with the mode off nobody else asks) — free, it changes nothing
+      if (conn && satRemRef.current.nextIn(now, lead) < 40 && now - satRemListAt.current > 30) {
+        satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
+      }
+      let ts = satToastsRef.current;
+      for (const r of satRemRef.current.due(now, lead, conn)) ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
+      ts = ts.filter((x) => now < x.r.los);   // ★ a pass that is over takes its banner with it
+      satSetToasts(ts);
+      setSatRemN(satRemRef.current.size);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [satRemBusy, satSetToasts]);
   /* ★ while in the mode: the list now, then every 30 s — every 3 s while the server is fetching orbit data (the contract) */
   const satFetching = !!satList?.source?.fetching;
   useEffect(() => {
@@ -6135,6 +6188,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       // ★ While RTTY AUTO's tuning guide is up it IS the status; the decoder's own state returns when it clears.
       onStatus: (s: string)  => { decStateText.current = s; if (!tuneHintText.current) queueDecoderStatus(s); },
+      onSatTelemetry: (t) => { if (satDecRef.current === 'fctlm') setSatTlm(t); },   // ★★ SATELLITE-BEST 1.3
       onTuneHint: (audioHz: number) => {
         tuneHintText.current = tuneHintLabel(audioHz, String(client.current?.getStatus().mode ?? ''));
         queueDecoderStatus(tuneHintText.current || decStateText.current);
@@ -6819,6 +6873,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satFollow = useCallback((d: SatPicked['decoder'], t: SatTx | null) => {
     const was = satDecRef.current;
     satDecRef.current = d; setSatDec(d);
+    if (d !== was) setSatTlm(null);
     if (was && activeDecRef.current === was && d !== was) closeDecoder();
     if (!d || !t) return;
     if (activeDecRef.current === d) return;
@@ -7769,7 +7824,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAvReport(r);
       },
       /* ★★ V12 SATELLITES: the list, the readout (an ending / refusal says why once), a pass's sky track. */
-      onSatList: (l) => { if (!destroyed.current) { satListRef.current = l; setSatList(l); } },
+      onSatList: (l) => {
+        if (destroyed.current) return;
+        satListRef.current = l; setSatList(l);
+        if (satRemRef.current.size) { satRemRef.current.refresh(satSrvKeyRef.current, l); setSatRemN(satRemRef.current.size); }   // ★ 1.6 a new element set moves the reminder
+      },
+      /* ★ 1.7 the pick's pass path — its geo is the dotted orbit (an older server sends none: no line) */
+      onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current?.norad === t.norad) setSatOrbit(t.geo ?? null); },
       onSat: (r) => {
         if (destroyed.current) return;
         // ★ an ending or a refusal says why in the SATELLITE box (a refused pick clears its "Tuning…") — no toast, no flashing
@@ -8033,6 +8094,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // turn, come back in 2 minutes" reads as a shared radio working.
       onSessionEnded: (cooldownSec: number, freshSec?: number, borrow?: boolean) => {
         if (destroyed.current) return;
+        satRemClear();   // ★★ SATELLITE 1.6: the session ended — nothing fires for the next user of this radio
         terminalRefusal.current = true;
         borrowedRef.current = false; setBorrowed(false);
         /* ★★★ WHEN MAY THEY COME BACK — FROM THE SERVER'S OWN NUMBERS, NEVER A CONSTANT (B10).
@@ -8141,6 +8203,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onKicked: (banned: boolean, secs: number) => {
         if (destroyed.current) return;
+        satRemClear();   // ★★ SATELLITE 1.6: reminders end with the session
         // ★ Same as onEvicted: the socket is about to close, and this is the honest reason.
         if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
         setConnLost(false);
@@ -14286,6 +14349,60 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const bottomInset = insets.bottom;
 
+  /* ★★★ Into SATELLITE (its key, and a REMIND banner's LISTEN): each other whole-radio mode switched OFF properly. */
+  satEnterRef.current = () => {
+    if (!satCap || !satCap.ok || satOnRef.current) return;
+    const c = client.current as unknown as { sondes?: (on: boolean) => void; avdata?: (on: boolean) => void } | null;
+    if (dabOn) toggleDab();
+    if (adsbOnRef.current) toggleAdsb();
+    if (ismOnRef.current) toggleIsm();
+    if (aisOnRef.current) toggleAis();
+    if (ndbOnRef.current) toggleNdb();
+    if (sdOnRef.current) { c?.sondes?.(false); sdUiOff(); }
+    if (avOnRef.current) { c?.avdata?.(false); avUiOff(); }
+    setSatWhy(''); satOnRef.current = true; setSatOn(true);
+  };
+  /** ★★ 1.6 LISTEN on a reminder: re-checked, into SATELLITE, then the ORDINARY pick (ask-before-tuning). */
+  const satRemListen = (key: string) => {
+    markInteract();
+    const t = satToastsRef.current.find((x) => x.r.key === key);
+    if (!t) return;
+    const why = satRemindWhy(satListRef.current, t.r) || (!satCap || !satCap.ok ? (satCap?.why || 'SATELLITE is not available on this radio now') : '');
+    if (why) { satSetToasts(satToastsRef.current.map((x) => (x.r.key === key ? { ...x, why } : x))); return; }
+    satEnterRef.current();
+    if (!satOnRef.current) return;
+    const drop = () => satSetToasts(satToastsRef.current.filter((x) => x.r.key !== key));
+    if (satPicked && satPicked.norad === t.r.norad && satPicked.tx === t.r.tx) { drop(); return; }
+    if (askGate()) return;   // ★★ ask before tuning, exactly as a hand pick — the banner stays to try again
+    const c = client.current as unknown as { satPick?: (n: number, tx: number, d: boolean) => boolean } | null;
+    if (c?.satPick?.(t.r.norad, t.r.tx, satAutoDoppler)) {
+      satPendingRef.current = { norad: t.r.norad, tx: t.r.tx }; setSatPending({ norad: t.r.norad, tx: t.r.tx }); setSatWhy(''); drop();
+    }
+  };
+  /** ★★ 1.6 the row's REMIND key: hold one for its next pass, or cancel it. */
+  const satRemToggle = (norad: number, tx: number) => {
+    markInteract();
+    const held = satRemRef.current.find(satSrvKey, norad, tx);
+    if (held) satRemRef.current.cancel(held.key);
+    else {
+      const now = Date.now() / 1000;
+      const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx);
+      if (!row || !satRemindOffered(satList, row)) return;
+      if (!satRemRef.current.add(satSrvKey, row, now)) setSatWhy('Twenty reminders are held already — cancel one first');
+    }
+    setSatRemN(satRemRef.current.size);
+  };
+  /* ★★ SATELLITE-BEST 1.9 — THE ONE DIGI MODES MAP's opener (Stuart 11-21: APRS joins the digital spots in the VIEWS maps).
+   *  ★ PLACEHOLDER until the b90-maps branch lands that map: today's APRS map (the same stations); the orbit, footprint and
+   *  "via ISS" are for the DIGI MODES map's APRS layer — the coordinator repoints THIS ONE FUNCTION at merge. */
+  const openDigiModesMap = (o: { layer: 'aprs'; via?: string; norad?: number; orbit?: [number, number, number][] | null }) => {
+    void o;
+    setAprsFocus(''); setAprsMapOpen(true);
+  };
+  const satPickedSat = satPicked ? satList?.sats.find((x) => x.norad === satPicked.norad) : undefined;
+  const satMapNow = satDec === 'aprs' && satMapOffered(satPickedSat?.tx[satPicked?.tx ?? -1],
+    aprsList ? aprsList.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0);
+
   return (
     <View
       ref={screenHl.rootRef}
@@ -15725,6 +15842,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           decLine={satDec && activeDecoder === satDec ? decoderStatus : ''}
           packets={satDec === 'aprs' ? aprsLog.map((x) => x.line) : []}
           rxPos={serverPos ?? recvLoc ?? null}
+          rxName={instanceName ?? ''}
+          orbit={satOrbit}
+          telemetry={satTlm}
+          remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
+          remindLead={satRemLead}
+          onRemind={satRemToggle}
+          onRemindLead={(v) => { setSatRemLead(v); AsyncStorage.setItem('vibe.satRemindLead', String(v)).catch(() => {}); }}
+          mapOffered={satMapNow}
+          onMap={() => { markInteract(); openDigiModesMap({ layer: 'aprs', via: satViaText(satPickedSat?.name), norad: satPicked?.norad, orbit: satOrbit }); }}
           imageRef={decoderImageRef}
           onPick={(norad, i) => {
             markInteract();
@@ -15747,6 +15873,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
+      {/* ★★★ SATELLITE-BEST 1.6 — the REMIND banners (with the mode off too), at the top of the screen */}
+      <SatRemindBanner toasts={satToasts} nowSec={Date.now() / 1000} picked={satPicked}
+                       pickedName={satPickedSat?.name} top={insets.top + 8}
+                       onListen={satRemListen} onDismiss={(k) => satSetToasts(satToastsRef.current.filter((x) => x.r.key !== k))} />
       {/* ★★ V12 THE SONDES BOX — the datalink's place (SondesPanel); the waterfall live above it, MAP over everything. */}
       <RotateFade>
       {sdBoxOpen && (
@@ -16415,15 +16545,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             markInteract(); setModeSelOpen(false);
             if (satOnRef.current) { satModeOff(); return; }
             if (satCap && !satCap.ok) { appAlert('SATELLITE unavailable', satCap.why); return; }
-            const c = client.current as unknown as { sondes?: (on: boolean) => void; avdata?: (on: boolean) => void } | null;
-            if (dabOn) toggleDab();
-            if (adsbOnRef.current) toggleAdsb();
-            if (ismOnRef.current) toggleIsm();
-            if (aisOnRef.current) toggleAis();
-            if (ndbOnRef.current) toggleNdb();
-            if (sdOnRef.current) { c?.sondes?.(false); sdUiOff(); }
-            if (avOnRef.current) { c?.avdata?.(false); avUiOff(); }
-            setSatWhy(''); satOnRef.current = true; setSatOn(true);
+            satEnterRef.current();
           },
           sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
           sondesWhy: !sdOn && sdCap && !sdCap.ok ? sdCap.why : undefined,
