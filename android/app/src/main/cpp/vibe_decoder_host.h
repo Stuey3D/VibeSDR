@@ -1260,6 +1260,17 @@ private:
         o.spot = [this](const cw::Spot& sp, double rfHz) {
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, sp.wpm, sp.snrDb, sp.how);
+            /* ★★ V12 beta90 PSK REPORTER takes CW too (Stuart 2026-11-21: "yes cw skimmer should go") — a listener's CW
+             *  decoder, the CW skimmer and background CW skimming all spot here. The reporter keeps its own rules (owner
+             *  switch + callsign, plausible calls only, each station once a batch, call + band + mode once an hour). */
+            if (std::isfinite(rfHz) && rfHz > 0) {
+                vibe::spotreport::Spot rs;
+                rs.mode = "CW"; rs.call = sp.call; rs.rfHz = rfHz;
+                rs.snr = std::isfinite(sp.snrDb) ? (int)std::lround(sp.snrDb) : 0;
+                rs.slotUtc = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
+                vibe::spotreport::Reporter::shared().note(rs);
+            }
         };
         std::function<double(double)> rf;
         if (!skimmer) {

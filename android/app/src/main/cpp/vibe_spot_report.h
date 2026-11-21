@@ -212,9 +212,10 @@ inline std::vector<std::vector<uint8_t>> buildDatagrams(const Receiver& rx, cons
 
 // ══ WHAT IS SENT, AND WHAT IS NOT ═════════════════════════════════════════════════════════════════════════════════
 /** "One of the ADIF values for MODE or SUBMODE" (the page). Our decoders' names → ADIF; "" = not an ADIF mode, never
- *  sent (FT2 and JTTY have no ADIF name yet — a made-up mode would be stored as junk). */
+ *  sent (FT2 and JTTY have no ADIF name yet — a made-up mode would be stored as junk). CW is ADIF "CW". */
 inline std::string adifMode(const std::string& m) {
     std::string u; for (char c : m) u += (char)std::toupper((unsigned char)c);
+    if (u == "CW") return "CW";   // ★ V12 beta90: CW skimmer / CW decoder spots (Stuart 2026-11-21)
     if (u == "FT8" || u == "FT4" || u == "JS8" || u == "WSPR" || u == "MSK144" || u == "PSK31" || u == "PSK63"
         || u == "FST4" || u == "FST4W" || u == "JT65" || u == "JT9") return u;
     if (u.rfind("Q65", 0) == 0) return "Q65";

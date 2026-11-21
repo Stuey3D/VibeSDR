@@ -359,6 +359,7 @@ int main() {
 
     std::printf("── helpers ──\n");
     CHECK(adifMode("ft8") == "FT8" && adifMode("Q65-60A") == "Q65" && adifMode("FST4W-120") == "FST4W" && adifMode("FT2").empty() && adifMode("JTTY").empty(), "ADIF mode names; FT2 and JTTY have none");
+    CHECK(adifMode("CW") == "CW" && adifMode("cw") == "CW", "CW is reported as ADIF CW (beta90: CW skimmer spots go to PSK Reporter)");
     CHECK(cleanGrid("io91wm") == "IO91wm" && cleanGrid("RR73").empty() && cleanGrid("-12").empty() && cleanGrid("ZZ99").empty(), "grids: AA00aa only, never a report");
     CHECK(gridOf(51.5, -0.12) == "IO91wm", "grid from a position (London)");
     CHECK(plausibleCall("G4ABC") && plausibleCall("EA8/DF4UE") && !plausibleCall("CQ") && !plausibleCall("12345") && !plausibleCall("/G4ABC"), "callsign shape");
