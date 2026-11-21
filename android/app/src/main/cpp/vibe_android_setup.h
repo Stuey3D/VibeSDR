@@ -690,7 +690,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
     flag(&b, "gallerySaveLive", "gallerySaveLive");
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (the page refuses "on" without a callsign itself)
     flag(&b, "pskrOn", "pskrOn");
-    str(&b, "pskrCall", "pskrCall", 15);
+    str(&b, "pskrCall", "pskrCall", 20);   // ★ the receiver's NAME (vibe_spot_report.h kMaxReceiverName)
     str(&b, "pskrAntenna", "pskrAntenna", 64);
     flag(&b, "wsprnetOn", "wsprnetOn");
     if (on("dmrIdLookup")) flag(&b, "dmrIdLookup", "dmrIdLookup");

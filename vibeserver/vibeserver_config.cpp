@@ -1000,7 +1000,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn);
     B("dmrIdLookup", c.dmrIdLookup);
-    if (c.pskrCall.size() > 15) c.pskrCall.resize(15);
+    if (c.pskrCall.size() > 20) c.pskrCall.resize(20);   // ★ the receiver's name, ≤ 20 (vibe_spot_report.h)
     if (c.pskrAntenna.size() > 64) c.pskrAntenna.resize(64);
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);

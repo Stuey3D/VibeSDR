@@ -3540,8 +3540,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </View>
               <TextInput
                 value={pskrCall}
-                onChangeText={(t) => { const v = t.toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 15); setPskrCall(v); AsyncStorage.setItem(K.pskrCall, v); }}
-                placeholder="Your callsign (required), e.g. G4ABC" placeholderTextColor={C.placeholder} autoCapitalize="characters" autoCorrect={false}
+                onChangeText={(t) => { const v = t.replace(/[^A-Za-z0-9/-]/g, '').slice(0, 20); setPskrCall(v); AsyncStorage.setItem(K.pskrCall, v); }}   // ★ the receiver's NAME as typed (vibe_spot_report.h cleanCall)
+                placeholder="Receiver name (required), e.g. G4ABC or G4ABC-SDR" placeholderTextColor={C.placeholder} autoCapitalize="none" autoCorrect={false}
                 style={[styles.input, { color: C.text, borderColor: pskrOn && !pskrCall ? C.warn : C.border, fontFamily: F }]} />
               <TextInput
                 value={pskrAntenna}

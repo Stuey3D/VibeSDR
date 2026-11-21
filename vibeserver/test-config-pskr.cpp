@@ -24,7 +24,7 @@ int main() {
     ok(vsconfig::fromJson(old, o, err) && !o.pskrOn && !o.wsprnetOn && !o.dmrIdLookup, "an older file: all OFF");
     const std::string longer = R"({"configured": true, "pskrOn": true, "pskrCall": "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "radios": []})";
     vsconfig::ServerConfig l;
-    ok(vsconfig::fromJson(longer, l, err) && l.pskrCall.size() == 15, "the callsign clamped to 15");
+    ok(vsconfig::fromJson(longer, l, err) && l.pskrCall.size() == 20, "the receiver's name clamped to 20");
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;
 }

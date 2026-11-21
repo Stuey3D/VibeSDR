@@ -275,10 +275,24 @@ inline const char* bandOf(double hz) {
     for (const auto& x : b) if (hz >= x.lo && hz <= x.hi) return x.n;
     return "";
 }
-/** The owner's callsign, cleaned: upper case, A–Z 0–9 / only, ≤ 15. */
-inline std::string cleanCall(const std::string& s) {
+/** The RECEIVER's name, as the owner typed it: letters (case kept), digits, '/' and '-', ≤ 20. ★★ Not a callsign check —
+ *  that is plausibleCall, for the stations HEARD. PSK Reporter lists monitors by any name (its own top lists carry
+ *  "WESSEX", "CMWEBSDR", "PI4NOS/LPK"), and Stuart reports as "Stuey3D-VibeSDR" beside "stuey3d" from his UberSDR
+ *  (2026-11-21) — this used to upper-case it and strip the '-' silently ("STUEY3DVIBESDR"). */
+constexpr size_t kMaxReceiverName = 20;
+/** A HEARD station's call, before plausibleCall judges it: upper case, A–Z 0–9 / only, ≤ 15 (the strict rule stays for
+ *  what came off the air — only the receiver's own name is free text, cleanCall). */
+inline std::string cleanHeardCall(const std::string& s) {
     std::string o;
     for (char c : s) { const char u = (char)std::toupper((unsigned char)c); if (((u >= 'A' && u <= 'Z') || (u >= '0' && u <= '9') || u == '/') && o.size() < 15) o += u; }
+    return o;
+}
+inline std::string cleanCall(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        const unsigned char u = (unsigned char)c;
+        if ((std::isalnum(u) || c == '/' || c == '-') && o.size() < kMaxReceiverName) o += c;
+    }
     return o;
 }
 /** Free text for a datagram field (the antenna, the software): printable ASCII, ≤ 64. */
@@ -469,7 +483,7 @@ public:
         std::lock_guard<std::mutex> l(m_);
         if (!active_()) return;
         Spot s = sIn;
-        s.call = cleanCall(s.call);
+        s.call = cleanHeardCall(s.call);
         const std::string mode = adifMode(s.mode);
         if (mode.empty() || !plausibleCall(s.call) || !(s.rfHz > 0) || s.rfHz >= 4294967295.0) return;
         s.grid = cleanGrid(s.grid);

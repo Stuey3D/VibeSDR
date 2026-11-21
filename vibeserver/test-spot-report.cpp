@@ -218,10 +218,10 @@ int main() {
         Reporter rp;
         rp.setClock([&] { return now; });
         rp.setRandomSeed(7);
-        Config c; c.on = true; c.call = "g4abc"; c.grid = "io91WM"; c.antenna = "Wideband loop"; c.software = "VibeServer 12.0.0-test";
+        Config c; c.on = true; c.call = " Stuey3D-VibeSDR "; c.grid = "io91WM"; c.antenna = "Wideband loop"; c.software = "VibeServer 12.0.0-test";
         c.pskHost = "127.0.0.1"; c.pskPort = sink.port;
         rp.configure(c);
-        CHECK(rp.config().call == "G4ABC" && rp.config().grid == "IO91wm", "the owner's callsign and grid cleaned (upper case call, AA00aa grid)");
+        CHECK(rp.config().call == "Stuey3D-VibeSDR" && rp.config().grid == "IO91wm", "the receiver's name kept as typed (trimmed), the grid cleaned (AA00aa)");
         Spot s; s.mode = "FT8"; s.call = "DL1XYZ"; s.grid = ""; s.snr = -12; s.rfHz = 14075612; s.slotUtc = now;
         rp.note(s);
         s.snr = -9; s.grid = "JO62"; rp.note(s);              // the same station again in the batch
@@ -242,7 +242,7 @@ int main() {
         CHECK(d.tx.size() == 2, "two stations in it");
         bool dlGrid = false; for (auto& r : d.tx) if (r[0] == "DL1XYZ" && r[5] == "JO62") dlGrid = true;
         CHECK(dlGrid, "the locator a later decode carried is kept");
-        CHECK(d.rx.size() == 1 && d.rx[0][0] == "G4ABC" && d.rx[0][1] == "IO91wm" && d.rx[0][3] == "Wideband loop", "the receiver record names the owner's call, the grid and the antenna");
+        CHECK(d.rx.size() == 1 && d.rx[0][0] == "Stuey3D-VibeSDR" && d.rx[0][1] == "IO91wm" && d.rx[0][3] == "Wideband loop", "the receiver record names the owner's call, the grid and the antenna");
         // the same station on the same band in the next hour: not again; on another band: at once
         now += 400; s.call = "DL1XYZ"; s.rfHz = 14075700; rp.note(s);
         CHECK(rp.pendingCount() == 0, "the same call + band + mode within the hour is not reported again");
@@ -282,7 +282,7 @@ int main() {
         for (auto& gm : got) { small = small && gm.size() <= kDatagramBytes; Decoded dd = decode(gm, known); recs += dd.tx.size(); eachRx = eachRx && dd.rx.size() == 1; }
         CHECK(got.size() >= 3 && small && recs == want && eachRx, "a full batch splits into datagrams ≤ 1400 bytes, every one with the receiver record");
         const std::string st = rp.statusJson();
-        CHECK(st.find("\"on\":true") != std::string::npos && st.find("\"sentHour\":") != std::string::npos && st.find("\"call\":\"G4ABC\"") != std::string::npos, "the status line: on, call, spots sent in the hour");
+        CHECK(st.find("\"on\":true") != std::string::npos && st.find("\"sentHour\":") != std::string::npos && st.find("\"call\":\"Stuey3D-VibeSDR\"") != std::string::npos, "the status line: on, call, spots sent in the hour");
         // switched off: nothing waits, nothing goes
         c.on = false; rp.configure(c); rp.note(s); now = rp.nextFlushAt() + 1000; rp.tick();
         CHECK(rp.pendingCount() == 0 && sink.drain().empty(), "off: nothing is kept or sent");
@@ -358,6 +358,11 @@ int main() {
     }
 
     std::printf("── helpers ──\n");
+    // ★★ The RECEIVER's name is what the owner typed (Stuart 2026-11-21: "Stuey3D-VibeSDR"); a HEARD call stays strict.
+    CHECK(cleanCall("Stuey3D-VibeSDR") == "Stuey3D-VibeSDR", "the receiver's name keeps its case and '-'");
+    CHECK(cleanCall(" G4ABC/P ") == "G4ABC/P" && cleanCall("WESSEX") == "WESSEX", "a callsign or a plain name (no digit) as typed");
+    CHECK(cleanCall("ABCDEFGHIJKLMNOPQRSTUVWXYZ").size() == 20 && cleanCall("a b<c>") == "abc", "≤ 20, nothing outside letters, digits, / and -");
+    CHECK(cleanHeardCall("g4abc") == "G4ABC" && cleanHeardCall("G4ABC-") == "G4ABC" && plausibleCall(cleanHeardCall("g4abc")), "a heard call is upper-cased and cut to A–Z 0–9 /");
     CHECK(adifMode("ft8") == "FT8" && adifMode("Q65-60A") == "Q65" && adifMode("FST4W-120") == "FST4W" && adifMode("FT2").empty() && adifMode("JTTY").empty(), "ADIF mode names; FT2 and JTTY have none");
     CHECK(adifMode("CW") == "CW" && adifMode("cw") == "CW", "CW is reported as ADIF CW (beta90: CW skimmer spots go to PSK Reporter)");
     CHECK(cleanGrid("io91wm") == "IO91wm" && cleanGrid("RR73").empty() && cleanGrid("-12").empty() && cleanGrid("ZZ99").empty(), "grids: AA00aa only, never a report");

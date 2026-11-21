@@ -904,9 +904,10 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <label style="display:flex;gap:8px;align-items:center">
         <input type="checkbox" id="pskrOn" style="width:16px;height:16px;accent-color:var(--amber)">
         <span><b>Send this server's digital spots to PSK Reporter</b></span></label>
-      <label><span class="lbl">Your callsign (the receiver)</span>
-        <input type="text" id="pskrCall" maxlength="15" placeholder="e.g. G4ABC" autocapitalize="characters" style="max-width:200px">
-        <div class="hint">Required &mdash; nothing is sent without it. Spots are reported under this callsign, the
+      <label><span class="lbl">Receiver name on PSK Reporter</span>
+        <input type="text" id="pskrCall" maxlength="20" placeholder="e.g. G4ABC or G4ABC-SDR" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:220px">
+        <div class="hint">Required &mdash; nothing is sent without it. Your callsign, or a name of your own so this receiver
+          is listed apart from another you run (letters, digits, / and -, up to 20). Spots are reported under this name, the
           grid square from <b>Location</b> above (<span id="pskrGrid">set a location</span>) and the software
           &ldquo;VibeServer&rdquo; with its version.</div></label>
       <label><span class="lbl">Antenna</span>
@@ -10215,13 +10216,14 @@ $("saveRadioBtn").onclick = async () => {
  *  why where the owner is looking, and takes them to the box. true = stop. */
 /* ★★ V12 beta90 PSK REPORTER. The callsign is REQUIRED: a save with the switch on and no callsign is refused in words. */
 function pskrCallValue() {
-  return ($("pskrCall").value || "").toUpperCase().replace(/[^A-Z0-9\/]/g, "").slice(0, 15);
+  // \u2605 the RECEIVER's name as typed (case kept; letters, digits, / and -, \u2264 20) \u2014 vibe_spot_report.h cleanCall
+  return ($("pskrCall").value || "").trim().replace(/[^A-Za-z0-9\/-]/g, "").slice(0, 20);
 }
 function pskrStops() {
   if (!$("pskrOn") || !$("pskrOn").checked) return false;
   const c = pskrCallValue();
-  if (/^[A-Z0-9\/]{3,15}$/.test(c) && /[0-9]/.test(c) && /[A-Z]/.test(c)) return false;
-  $("saveErr").textContent = "Not saved \u2014 PSK Reporter needs your callsign (the receiver's), or switch it off.";
+  if (/^[A-Za-z0-9\/-]{3,20}$/.test(c) && /[A-Za-z]/.test(c)) return false;
+  $("saveErr").textContent = "Not saved \u2014 PSK Reporter needs a receiver name (your callsign, or e.g. G4ABC-SDR), or switch it off.";
   $("pskrCall").scrollIntoView({behavior: "smooth", block: "center"}); $("pskrCall").focus();
   return true;
 }
