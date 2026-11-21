@@ -22,12 +22,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { scrollLane } from '../constants/popupTokens';
-import { globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
+import { GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
+         satTelemetryLine, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type SatReminder, type SatTelemetry,
+         globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          type SatInfo, type SatList, type SatPicked, type SatReadout } from '../services/satellites';
 
@@ -65,31 +67,98 @@ export interface SatellitePanelProps {
   topLimit?: number;
   /** BIG's ceiling: the status row (DecoderPanel's topSafe) */
   topSafe?: number;
+  /** ★ 1.7 the pick's pass path (the track reply's geo) — the dotted orbit; null = none (an older server) */
+  orbit?: [number, number, number][] | null;
+  /** ★ 1.8 the receiver dot's label: the server's name ('' = RECEIVER) */
+  rxName?: string;
+  /** ★ 1.3 the pick's telemetry (fctlm) */
+  telemetry?: SatTelemetry | null;
+  /** ★★ 1.6 REMIND — held in this app session only; `held` = the reminder on that downlink, if any */
+  remindHeld?: (norad: number, tx: number) => boolean;
+  remindLead?: number;
+  onRemind?: (norad: number, tx: number) => void;
+  onRemindLead?: (min: number) => void;
+  /** ★ 1.9 the MAP key (a packet downlink, once a station with a position is heard) → the DIGI MODES map's APRS layer */
+  mapOffered?: boolean;
+  onMap?: () => void;
 }
 
-/** ★ The half-globe (spec item 4): the scene's paths in react-native-svg. */
-function HalfGlobe({ rx, sat, ink, beam, small = false }: { rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string; small?: boolean }) {
+/** ★ The half-globe (spec item 4): the scene's paths in react-native-svg — the dotted orbit (1.7), the drawn bird, the green
+ *  receiver dot and the labels (1.8); sizes on SCREEN (scene units per point from the laid-out width), so they read at
+ *  SMALL and BIG alike. */
+function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, rxName }: {
+  rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string; ground: string; small?: boolean;
+  orbit?: [number, number, number][] | null; rxName?: string;
+}) {
   const g = useMemo(() => globeScene(GLOBE_W, GLOBE_H, rx,
-    sat && sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null),
-  [rx.lat, rx.lon, sat?.lat, sat?.lon, sat?.rangeKm, sat?.el]);   // eslint-disable-line react-hooks/exhaustive-deps
+    sat && sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, orbit ?? null),
+  [rx.lat, rx.lon, sat?.lat, sat?.lon, sat?.rangeKm, sat?.el, orbit]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [wPx, setWPx] = useState(small ? GLOBE_SMALL_W : GLOBE_MAX_W);
+  const sc = GLOBE_W / Math.max(60, wPx);
+  const font = 10 * sc;
+  const L = globeLabels(g, rxName, sat?.name, font);
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
-    <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}>
+    <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}
+          onLayout={(e) => { const w = e.nativeEvent.layout.width; if (w > 0 && Math.abs(w - wPx) > 1) setWPx(w); }}>
     <Svg width="100%" height="100%" viewBox={`0 0 ${GLOBE_W} ${GLOBE_H}`}
-         accessibilityLabel="Where the satellite is: above the globe, its beam to the ground">
+         accessibilityLabel="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted">
       <Path d={dome} fill={ink} fillOpacity={0.12} stroke={ink} strokeOpacity={0.55} strokeWidth={2} />
-      {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.22} strokeWidth={1} />}
+      {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.12} strokeWidth={1} />}
       {!!g.coast && <Path d={g.coast} fill="none" stroke={ink} strokeOpacity={0.55} strokeWidth={1} />}
       {!!g.foot && <Path d={g.foot} fill={beam} fillOpacity={0.28} />}
       {!!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
-      {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={4} fill={ink} />}
-      {!!g.sat && <>
-        <Rect x={g.sat.x - 4} y={g.sat.y - 4} width={8} height={8} fill={beam} />
-        <Path d={`M${g.sat.x - 14} ${g.sat.y}H${g.sat.x - 6}M${g.sat.x + 6} ${g.sat.y}H${g.sat.x + 14}`} stroke={beam} strokeWidth={2} />
-        <Rect x={g.sat.x - 20} y={g.sat.y - 4} width={6} height={8} fill={beam} />
-        <Rect x={g.sat.x + 14} y={g.sat.y - 4} width={6} height={8} fill={beam} />
+      {!!g.orbit && <Path d={g.orbit} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round"
+                          strokeDasharray={`${(1.5 * sc).toFixed(1)} ${(4 * sc).toFixed(1)}`} />}
+      {!!g.tcaTick && <Path d={g.tcaTick} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round" />}
+      {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={GLOBE_RX_DOT.r * sc} fill={GLOBE_RX_DOT.fill} stroke={GLOBE_RX_DOT.ring} strokeWidth={GLOBE_RX_DOT.ringW * sc} />}
+      {!!g.bird && <>
+        <Path d={g.bird.panels} fill={beam} fillOpacity={0.45} stroke={beam} strokeWidth={1.2 * sc} strokeLinejoin="round" />
+        <Path d={g.bird.cells} fill="none" stroke={beam} strokeOpacity={0.9} strokeWidth={0.8 * sc} />
+        <Path d={g.bird.boom} fill="none" stroke={beam} strokeWidth={1.6 * sc} strokeLinecap="round" />
+        <Path d={g.bird.body} fill={beam} stroke={ground} strokeWidth={1 * sc} strokeLinejoin="round" />
+        <Path d={g.bird.dish} fill={beam} />
       </>}
+      {[L.rx, L.sat].map((lb, i) => lb && (
+        <React.Fragment key={i}>
+          {/* a halo in the window's ground, then the word — legible over the coastlines and the beam */}
+          <SvgText x={lb.x} y={lb.y} fontSize={font} fill={ground} stroke={ground} strokeWidth={3 * sc} strokeOpacity={0.9}
+                   textAnchor={lb.anchor} fontFamily={DECODER_FONT}>{lb.text}</SvgText>
+          <SvgText x={lb.x} y={lb.y} fontSize={font} fill={ink} textAnchor={lb.anchor} fontFamily={DECODER_FONT}>{lb.text}</SvgText>
+        </React.Fragment>
+      ))}
     </Svg>
+    </View>
+  );
+}
+
+/* ★★★ SATELLITE-BEST 1.6 — THE REMIND BANNER (Stuart 11-21: in-app banner only, no OS notification module). Each fired
+ *  reminder its own banner, newest on top, three at most ("+2 more"); LISTEN enters SATELLITE and picks through the
+ *  ordinary pick (ask-before-tuning); a pass that can no longer be picked says why and offers no LISTEN. */
+export interface SatRemindToast { r: SatReminder; why: string }
+export function SatRemindBanner({ toasts, nowSec, picked, pickedName, top, onListen, onDismiss }: {
+  toasts: SatRemindToast[]; nowSec: number; picked: { norad: number; tx: number } | null; pickedName?: string; top: number;
+  onListen: (key: string) => void; onDismiss: (key: string) => void;
+}) {
+  const s = useDecoderStyles(makeStyles);
+  if (!toasts.length) return null;
+  return (
+    <View pointerEvents="box-none" style={[s.remWrap, { top }]}>
+      {toasts.slice(0, 3).map((t) => {
+        const ends = t.why ? '' : satRemindEnds(picked, pickedName, t.r);
+        const line = t.why ? satRemindText(t.r, nowSec).replace(/ — LISTEN\?$/, '') : satRemindText(t.r, nowSec);
+        return (
+          <View key={t.r.key} style={s.remToast} accessibilityRole="alert" accessibilityLiveRegion="polite">
+            <Text style={s.txt}>{line}</Text>
+            {!!(t.why || ends) && <Text style={s.remWhy}>{t.why || ends}</Text>}
+            <View style={s.remKeys}>
+              {!t.why && <DecoderKey label="LISTEN" active onPress={() => onListen(t.r.key)} accessibilityLabel={`Listen: ${line}`} />}
+              <DecoderKey label="DISMISS" onPress={() => onDismiss(t.r.key)} accessibilityLabel="Dismiss this reminder" />
+            </View>
+          </View>
+        );
+      })}
+      {toasts.length > 3 && <Text style={[s.remWhy, s.remMore]}>{`+${toasts.length - 3} more`}</Text>}
     </View>
   );
 }
@@ -140,7 +209,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const use = tx ? txUse(tx) : 'voice';
   const imageDec = p.picked?.decoder === 'lrpt' || p.picked?.decoder === 'sstv';
   const lockWord = !p.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
+  const tlmDec = p.picked?.decoder === 'fctlm';
+  const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
   const decWord = !confirmed ? 'Tuning…'
+    : tlmDec && !p.decLine ? 'listening for telemetry'
     : p.pictureDone && imageDec ? 'picture complete — saved to the gallery'
     : p.decLine || (use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : tx?.sstv ? 'listening — an SSTV picture opens here' : '');
   // the folded header still says the pick: "ISS · UP · 6:12 left"
@@ -154,6 +226,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
         <View style={[s.dot, !!mine && mine.state === 'TRACK' && s.dotOn]} />
         <DecoderTitle minimised={minimised}>SATELLITE</DecoderTitle>
         {minimised ? <Text style={s.headLine} numberOfLines={1}>{headLine}</Text> : <View style={{ flex: 1 }} />}
+        {/* ★★ 1.9 MAP — a packet downlink's stations on the DIGI MODES map (APRS layer), once one with a position is heard */}
+        {!minimised && !!p.mapOffered && !!p.onMap && (
+          <DecoderKey label="MAP" onPress={p.onMap} accessibilityLabel="The stations heard through this satellite, on the DIGI MODES map" />
+        )}
         <DecoderKey label="AUTO DOPPLER" active={p.autoDoppler} disabled={greyed} onPress={p.onDoppler}
                     accessibilityLabel={greyed ? `Auto Doppler unavailable: ${p.cap.why}` : `Auto Doppler ${p.autoDoppler ? 'on' : 'off'}: keep the satellite centred for the whole pass`} />
         {bigUseful && !minimised && (
@@ -172,12 +248,19 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               <View style={[big ? s.ro : s.roSmall, mine?.state === 'COAST' && s.coast]}
                     accessibilityLabel={`${sat.name} ${tx.label}, ${satHzText(satCorrectedHz(tx, mine))}, ${satCountdownText(sat, now)}`}>
                 <View style={s.txtCol}>
-                  <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}`}</Text>
+                  <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}${satTxModeLabel(tx) ? ' · ' + satTxModeLabel(tx) : ''}`}</Text>
                   <Text style={s.big}>{satHzText(satCorrectedHz(tx, mine))}</Text>
                   <Text style={s.txt}>{satCountdownText(sat, now)}</Text>
                   {!!stateLine && <Text style={s.detail}>{stateLine}</Text>}
                 </View>
-                {!!p.rxPos && <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} small={!big} />}
+                {!!p.rxPos && (
+                  <View style={!big ? undefined : { alignSelf: 'stretch' }}>
+                    <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} ground={ground} small={!big}
+                               orbit={confirmed ? p.orbit : null} rxName={p.rxName} />
+                    {/* ★ BIG: the one-line key (the dotted half only when there is an orbit to see) */}
+                    {big && <Text style={[s.detail, s.key]}>{confirmed && p.orbit ? GLOBE_KEY_TEXT : GLOBE_KEY_TEXT.replace(/^.*· /, '')}</Text>}
+                  </View>
+                )}
               </View>
               {/* ★ the picture: mounted from the pick while the decoder draws one (so an ISS SSTV frame's first lines are
                    not lost before the box grows), shown only BIG */}
@@ -186,6 +269,15 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))}
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
+                </View>
+              )}
+              {/* ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw") */}
+              {confirmed && tlmDec && (
+                <View style={s.pk}>
+                  <Text style={s.mono}>{satTelemetryHead(p.telemetry ?? null)}</Text>
+                  {!!p.telemetry?.values.length && <View style={s.tlmGrid}>
+                    {p.telemetry.values.map((v, i) => <Text key={i} style={[s.mono, s.tlmCell]} numberOfLines={1}>{satTelemetryLine(v)}</Text>)}
+                  </View>}
                 </View>
               )}
               {confirmed && use === 'packet' && (
@@ -206,8 +298,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
             : rows.slice(0, 40).map((r) => {
                 const on = !!sel && sel.norad === r.sat.norad && sel.tx === r.i;
                 const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
+                // ★★ 1.6 REMIND — only where a pick disturbs nobody (pickPrivate), hearable, a pass to come; hidden otherwise
+                const offer = !!p.onRemind && !greyed && satRemindOffered(p.list, r);
+                const held = offer && !!p.remindHeld?.(r.sat.norad, r.i);
                 return (
-                  <Pressable key={`${r.sat.norad}.${r.i}`}
+                  <View key={`${r.sat.norad}.${r.i}`} style={s.rw}>
+                  <Pressable
                     onPress={() => (r.grey || greyed ? p.onGreyed(r.grey ? r.why : p.cap.why) : p.onPick(r.sat.norad, r.i))}
                     accessibilityRole="button" accessibilityState={{ disabled: r.grey || greyed, selected: on }}
                     accessibilityLabel={`${name}, ${txText(r.tx)}, ${satWhenText(r, now)}${r.grey ? `, unavailable: ${r.why}` : r.pass ? `, pass ${satPassText(r.pass)}` : ''}`}
@@ -216,13 +312,30 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                       <Text style={s.txt} numberOfLines={1}>{name}</Text>
                       <Text style={[s.txt, r.up && s.up]} numberOfLines={1}>{satWhenText(r, now)}</Text>
                     </View>
-                    <Text style={s.detail}>{`${txText(r.tx)}${r.tx.status === 'inactive' ? ' · INACTIVE' : ''}${r.grey ? ` — ${r.why}` : ''}`}
+                    <Text style={s.detail}>{`${satTxDetail(r.tx)}${r.tx.status === 'inactive' ? ' · INACTIVE' : ''}${r.grey ? ` — ${r.why}` : ''}`}
                       {/* ★★ the pass's rating (satPassQuality — its highest elevation), shaded like n2yo's legend (Stuart 11-21) */}
                       {!r.grey && !!r.pass && <Text>{' · '}<Text style={[s.q, s[`q_${satPassQuality(r.pass.maxEl)}`]]}>{` ${satPassText(r.pass)} `}</Text></Text>}
                     </Text>
                   </Pressable>
+                  {offer && (
+                    <View style={s.remKey}>
+                      <DecoderKey label={satRemindKeyText(held, p.remindLead ?? 2)} active={held} onPress={() => p.onRemind!(r.sat.norad, r.i)}
+                                  accessibilityLabel={held ? `Cancel the reminder for ${name}` : `Remind me shortly before ${name} rises — while still connected to this server`} />
+                    </View>
+                  )}
+                  </View>
                 );
               }))}
+          {listOpen && !!p.onRemind && !greyed && rows.some((r) => satRemindOffered(p.list, r)) && (
+            <View style={s.leadRow}>
+              <Text style={s.detailNp}>REMIND</Text>
+              {SAT_REMIND_LEADS.map((v) => (
+                <DecoderKey key={v} label={String(v)} active={(p.remindLead ?? 2) === v} onPress={() => p.onRemindLead?.(v)}
+                            accessibilityLabel={`Remind ${v} minute${v === 1 ? '' : 's'} before a pass rises`} />
+              ))}
+              <Text style={s.detailNp}>min before it rises · this app session only</Text>
+            </View>
+          )}
           {p.list?.time === 'system' && <Text style={s.detail}>TIME: SYSTEM — this server's clock has not been checked against a time server</Text>}
           {!!credit && <Text style={s.detail}>{credit}{txc ? ` · ${txc}` : ''}</Text>}
         </ScrollView>
@@ -252,7 +365,21 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   mono:    { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.value },
   sumRow:  { paddingHorizontal: 10, paddingVertical: 8, minHeight: 36, justifyContent: 'center' },
   sum:     { fontFamily: F, fontSize: 12, letterSpacing: 1, color: T.value },
-  row:     { paddingHorizontal: 10, paddingVertical: 7, gap: 2, minHeight: 44, justifyContent: 'center' },
+  rw:      { flexDirection: 'row', alignItems: 'center' },
+  remKey:  { paddingRight: 6 },
+  leadRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 },
+  detailNp:{ fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted },
+  key:     { textAlign: 'center', marginTop: 2 },
+  tlmGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
+  tlmCell: { minWidth: 140 },
+  remWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', gap: 6, zIndex: 60 },
+  remToast:{ width: '94%', maxWidth: 460, padding: 10, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border,
+             backgroundColor: T.solidBg ?? T.window?.bg ?? 'rgba(8,6,2,0.96)', gap: 4,
+             shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
+  remWhy:  { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted },
+  remKeys: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 2 },
+  remMore: { textAlign: 'center' },
+  row:     { flex: 1, paddingHorizontal: 10, paddingVertical: 7, gap: 2, minHeight: 44, justifyContent: 'center' },
   rowOn:   { backgroundColor: T.rowActive },
   grey:    { opacity: 0.45 },
   up:      { color: T.accent },
