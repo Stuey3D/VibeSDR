@@ -354,3 +354,90 @@ https://community.libre.space/t/iss-sstv-event-from-2026-04-10-to-2026-04-14/145
 [14] https://funcube.org.uk/wp-content/uploads/2010/11/funcube-1-downlink-data-spec_ver1-as_flown.pdf · [15] http://www.ka9q.net/papers/ao40tlm.html ·
 [16] https://db.satnogs.org/about , https://docs.satnogs.org/projects/satnogs-db/en/latest/api.html · [17] https://amsat.org/?p=3177 ·
 [18] https://www.amsat.org/wordpress/wp-content/uploads/2018/06/AMSAT-Fox-Documentation.pdf · [19] https://wiki.satnogs.org/Artifacts , https://community.libre.space/t/database-download/5516/6
+
+## Contract additions (beta90) — server branch `b90-satsrv`, written FIRST for the client agent (`b90-satcli`)
+Everything below is ADDITIVE: an older client ignores the new fields; a new client facing an older server sees them
+absent and draws what it drew before. All strings that came off the air are whitelisted to printable ASCII on the server.
+
+### `sat_list` (reply) — new fields
+```
+source.pickPrivate   true | false — a pick here disturbs nobody: a single-user radio, or a locked-range radio where
+                     each listener has their own channel (1.6 REMIND is drawn ONLY when true; hidden, not greyed).
+                     ABSENT on a server with no satellites at all.
+tx.band              "U/v" | "V/u" | "V/a" | "U/u" … — AMSAT notation: uplink band UPPER case, downlink lower case
+                     (A 10 m · V 2 m · U 70 cm · L 23 cm · S 13 cm · X 3 cm). Only when the downlink has an uplink
+                     (a transponder / repeater); absent on a beacon, telemetry or a weather downlink.
+tx.modeName          "Mode A" | "Mode B" … — the catalogue's own name for that transponder, when it has one.
+                     ★ Label a row: modeName && band → "Mode B · U/v"; band alone → "U/v"; neither → nothing.
+tx.decoder           the decoder a pick attaches: "lrpt" | "sstv" | "aprs" | "cw" | "fctlm" | "" (none: heard only).
+                     The same answer as `picked.decoder` will give (barring a refusal).
+tx.use               unchanged words; a CW beacon is now "packet" (text lines), FUNcube telemetry "packet".
+```
+
+### `sat_list` `op:"track"` (reply `{"type":"sat_track",…}`) — new fields (1.7)
+```
+geo        [[lat, lon, altKm], …]  sub-satellite points (deg, deg, km), ≤ 120 points, evenly spaced in time from
+           geoT0 to geoT1. Present only when the server knows the bird's orbit and has a location.
+geoT0      unix s — AOS − 600 (the dotted path starts 10 min before AOS)
+geoT1      unix s — LOS + 600
+geoStep    s between consecutive geo points (geo[i] is at geoT0 + i·geoStep)
+tca        unix s of the highest point of that pass (the TCA tick) — the pass's own tca, from the server's passes
+```
+`pts` (az/el AOS→LOS) is unchanged.
+
+### `{"type":"sat","state":"picked",…}` — new fields
+```
+decoder    may now also be "cw" (CW beacons, 1.1) or "fctlm" (FUNcube BPSK 1200 telemetry, 1.2)
+lo, hi     the downlink's passband edges (Hz, satellite frame) — only on a transponder pick; the client may zoom the
+           view to lo–hi + margin and mark the edges. ★ PASSBAND RULE (1.4): while locked, ANY tune that lands inside
+           lo − |Doppler| … hi + |Doppler| re-bases the lock on the new frequency (the lock continues); only a tune
+           OUTSIDE it ends the lock. Single channels keep the old 15 kHz nudge rule.
+band, modeName   as in sat_list (for the box's header)
+```
+
+### Decoder socket — new JSON text frames (the pick's decoder host; a decoder socket open for the session receives them)
+**FUNcube telemetry (`fctlm`, 1.2)** — status, at most once a second while it runs:
+```
+{"type":"fctlm_status","data":{"sync":true|false,     // a sync vector found in the last 10 s
+   "frames":N,          // frame periods with a sync seen
+   "good":N,            // frames whose Reed–Solomon decode succeeded
+   "failed":N,          // sync seen, RS could not correct
+   "afcHz":-123.4,      // the carrier offset the demodulator is holding (audio Hz from its centre)
+   "snrDb":7.5,         // the demodulator's estimate, symbol-rate SNR (approx)
+   "centreHz":1200,     // the audio centre it listens on (manual fallback: "centre" on attach)
+   "auto":true}}        // AFC on (manual fallback: "afc":false on attach)
+```
+Attach parameters (the manual fallback under the AUTO toggle): `{"type":"audio_extension_attach","extension_name":
+"fctlm"[,"centre":<audio Hz, 300–2700, default 1200>][,"afc":true|false][,"invert":true|false]}`.
+The pick attaches `fctlm` with NO parameters (AUTO).
+
+**Telemetry values (1.3)** — one per good frame, from any decoder that has a layout for it (`fctlm` for AO-73, `aprs`
+for APRS `T#` and SONATE-2 9k6 frames):
+```
+{"type":"sat_tlm","data":{
+   "sat":"AO-73",                 // the satellite's name (the pick's, else from the callsign table)
+   "format":"funcube-rt" | "aprs-t" | "sonate2-ax25",
+   "t":1763700000,                // server's unix s when decoded
+   "frame":"RT1" | …,             // the frame's own type / sequence word where the spec has one
+   "seq":12345,                   // the spacecraft's sequence number where the spec has one, else absent
+   "mode":"Safe" | …,             // the spacecraft's mode where the spec has one, else absent
+   "values":[ {"k":"eps.vbat","name":"Battery voltage","v":8.13,"unit":"V"},
+              {"k":"eps.tbat","name":"Battery temperature","v":143,"unit":"","raw":true}, … ],
+   "hex":"…"}}                    // the decoded payload bytes, hex (≤ 512 chars), for the "raw" switch
+```
+`raw:true` = no published calibration: `v` is the raw count and the client must label it "raw" (no unit).
+A value with a published conversion carries its unit and no `raw`. Order of `values` = display order. ≤ 64 values.
+Clients show the last frame's values; the server keeps no history of them (the gallery keeps the day log).
+
+**CW beacon (`cw`, 1.1)** — the existing CW frames unchanged (0x01 text of the primary signal, 0x03 state,
+`cw_signals`). The pick attaches `{"extension_name":"cw"}` with the listener's existing WPM AUTO.
+
+### APRS via a satellite (1.9 server half)
+`aprs_list.data.stations[i].sat` / `aprs_packet.data.sat` = "ISS" | "SONATE-2" | … — the satellite that carried it
+(the digipeater in the path, vibe_sat_calls.h, or the pick's satellite). The gallery's APRS line gains " · via ISS".
+
+### Unattended satellite passes (Decided 3) — no listener wire; owner config only
+`vibeserver.json` / Android config: `"satPasses":{"on":false,"minEl":20,"birds":[{"norad":57166,"tx":0},…],
+"record":false,"recordCapMb":0}`. Gallery entries made by an unattended pass carry `"pass":{"norad":N,"name":"…",
+"aos":…,"los":…,"maxEl":…}` in their metadata. Admin status `"satPass":{"state":"idle|waiting|running","name":…,
+"los":…}` in the setup page's status JSON.
