@@ -1382,9 +1382,17 @@ async function openUnlocked(r, s, win) {
  *     its own flag because an owner can switch the analyser off to save CPU and STILL serve
  *     basic RDS — the card must not read as "no RDS". `modes` is the owner's offered list. */
 const MODE_NAMES = {
-  wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
-  dab: 'DAB', adsb: 'ADS-B', rds: 'Advanced RDS', rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX',
-  sstv: 'SSTV', ft8: 'FT8 / FT4', time: 'Time signals',
+  // ★★ EVERY id the VibeServer publishes (local_sdr_shim.cpp kOffer) — an id missing here was DROPPED (modesOf), so a V12
+  //    server offering DRM, AIS, APRS, SATELLITE decoders… read "16 MODES" (Stuart 2026-11-21). Names = the server's labels.
+  wfm: 'WFM', nfm: 'NFM', am: 'AM', sam: 'SAM', sau: 'SAM-U', sal: 'SAM-L', ecssu: 'ECSS-U', ecssl: 'ECSS-L', amst: 'AM stereo',
+  usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
+  dab: 'DAB', drm: 'DRM', rds: 'Advanced RDS',
+  adsb: 'ADS-B', avdata: 'Aviation datalink', hfdl: 'HFDL', ais: 'AIS', ism: 'ISM', ndb: 'NDB', sondes: 'Radiosondes',
+  aprs: 'APRS', lrpt: 'METEOR LRPT', fctlm: 'FUNcube telemetry',
+  freedv: 'FreeDV', m17: 'M17', dvsig: 'DMR / D-STAR / YSF / NXDN',
+  rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX', sstv: 'SSTV', ft8: 'FT8 / FT4', jtty: 'JTTY', mfsk: 'MFSK / Olivia / THOR', hell: 'Feld Hell',
+  dsc: 'DSC', sitora: 'SITOR-A', same: 'EAS / SAME', selcal: 'SELCAL', ale: 'ALE', tones: 'DTMF / 5-tone',
+  vor: 'VOR / ILS', sarsat: '406 MHz beacons', ncdxf: 'NCDXF beacons', balloon: 'Balloons', time: 'Time signals',
   iq48: 'IQ48',   // ★ not a mode the radio lists — derived from rawIq === 'public' (capsOf)
 };
 const MODE_ORDER = Object.keys(MODE_NAMES);
