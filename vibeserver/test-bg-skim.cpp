@@ -58,8 +58,7 @@ static void table() {
        "…160 m RTTY: R2 1800–1810 (→ 1812), R1 from 1838 (→ 1850)");
     ok(centreOf(sb::Kind::Cw, 3, "80m", 48000) == 3524000 && centreOf(sb::Kind::Rtty, 3, "40m", 24000) == 7042000,
        "…R3: 80 m CW 3500–3535 (48 kHz → 3524), 40 m narrowband from 7030 (24 kHz → 7042, RTTY DX 7040 inside)");
-    ok(sb::segment(sb::Kind::Cw, 1, "6m") && !sb::segment(sb::Kind::Rtty, 1, "6m") && !sb::segment(sb::Kind::Cw, 1, "60m"),
-       "6 m has CW only; 60 m is left out (national channels)");
+    ok(sb::segment(sb::Kind::Cw, 1, "6m") && !sb::segment(sb::Kind::Rtty, 1, "6m"), "6 m has CW only");
     ok(&sb::segments(sb::Kind::Cw, 0) == &sb::segments(sb::Kind::Cw, 1), "an unknown region is Region 1 (vibebands::ituRegion's default)");
     // every segment sane: lo < hi, inside 1.8–54 MHz, and on each band CW sits below the digimodes
     bool sane = true;
@@ -67,9 +66,24 @@ static void table() {
         for (sb::Kind k : { sb::Kind::Cw, sb::Kind::Rtty, sb::Kind::Psk })
             for (const auto& s : sb::segments(k, r)) {
                 sane &= s.loHz < s.hiHz && s.loHz >= 1800000 && s.hiHz <= 54000000;
-                if (k != sb::Kind::Cw) { const sb::Seg* c = sb::segment(sb::Kind::Cw, r, s.id); sane &= c != nullptr && (c->hiHz <= s.loHz || std::string(s.id) == "160m"); }
+                if (k != sb::Kind::Cw) { const sb::Seg* c = sb::segment(sb::Kind::Cw, r, s.id); sane &= c != nullptr && (c->hiHz <= s.loHz || std::string(s.id) == "160m" || std::string(s.id) == "60m"); }
             }
-    ok(sane, "every segment of every region: lo < hi, inside the HF/6 m bands, CW below the digimodes (160 m R2's digimodes sit below its CW)");
+    ok(sane, "every segment of every region: lo < hi, inside the HF/6 m bands, CW below the digimodes (160 m R2's digimodes sit below its CW; 60 m shares one allocation)");
+
+    std::printf("── several points per band (tiles from the bottom + practice segments) ──\n");
+    auto pts = [](sb::Kind k, int r, const char* band, double w) { return sb::points(k, r, *sb::segment(k, r, band), w); };
+    auto hzList = [](const std::vector<sb::Point>& v) { std::string o; for (auto& p : v) o += (o.empty() ? "" : ",") + std::to_string((long long)p.hz / 1000); return o; };
+    ok(hzList(pts(sb::Kind::Cw, 1, "40m", 24000)) == "7012,7036", "40 m CW R1 at 24 kHz: 7012 (7000–7024), 7036 (7024–7048) — " + hzList(pts(sb::Kind::Cw, 1, "40m", 24000)));
+    ok(hzList(pts(sb::Kind::Cw, 1, "40m", 48000)) == "7024" && hzList(pts(sb::Kind::Cw, 1, "40m", 96000)) == "7048", "…at 48 kHz 7024 alone, at 96 kHz 7048 alone");
+    ok(hzList(pts(sb::Kind::Cw, 1, "20m", 24000)) == "14012,14036,14060", "20 m CW R1 (14000–14070) at 24 kHz: three tiles");
+    const auto r2r = pts(sb::Kind::Rtty, 2, "40m", 24000), r1r = pts(sb::Kind::Rtty, 1, "40m", 24000);
+    ok(hzList(r2r) == "7052,7092,7116" && r2r[1].note == "US RTTY" && r2r[0].note.empty(), "Region 2 40 m RTTY: the plan's 7052, then US RTTY 7092 (7080–7104) and 7116 — " + hzList(r2r));
+    ok(hzList(r1r) == "7052", "…Region 1: the plan's 7052 only (no US practice)");
+    ok(hzList(pts(sb::Kind::Psk, 2, "40m", 6000)) == "7043,7049,7073" && pts(sb::Kind::Psk, 2, "40m", 6000)[2].note == "US PSK31", "Region 2 40 m PSK at 6 kHz: 7043, 7049 (plan), 7073 (US PSK31)");
+    const auto s60 = pts(sb::Kind::Cw, 1, "60m", 24000);
+    ok(s60.size() == 1 && std::fabs(s60[0].hz - 5363500) < 1 && s60[0].note == "check your licence", "60 m: one 24 kHz window 5351.5–5375.5 holds the WRC-15 allocation, noted \"check your licence\"");
+    ok(sb::segment(sb::Kind::Cw, 2, "60m") && sb::segment(sb::Kind::Rtty, 3, "60m") && sb::segment(sb::Kind::Psk, 1, "60m"), "…in every region and mode");
+    ok(sb::bandAtCentre(sb::Kind::Cw, 1, 24000, 7036000) == c40, "a stored 7036 at 24 kHz is 40 m's second point (loads as that point)");
     ok(sb::bandAtCentre(sb::Kind::Cw, 1, 48000, 7024000) == c40 && !sb::bandAtCentre(sb::Kind::Cw, 1, 48000, 7020000),
        "a stored centre names its band only when it IS the rule's centre (7024 → 40 m; an owner's 7020 → none, kept as their own)");
 
@@ -81,11 +95,17 @@ static void table() {
 
     std::printf("── the JSON every page reads ──\n");
     const std::string j = sb::skimBandsJson(1);
-    ok(j.rfind(",\"skimBands\":{\"region\":1,\"cw\":[{\"id\":\"160m\",\"name\":\"160 m\",\"lo\":1810000,\"hi\":1838000}", 0) == 0
+    ok(j.rfind(",\"skimBands\":{\"region\":1,\"cw\":[{\"id\":\"160m\",\"name\":\"160 m\",\"lo\":1810000,\"hi\":1838000,\"points\":{\"24000\":[{\"hz\":1822000},{\"hz\":1846000}]", 0) == 0
        && j.find("\"rtty\":[") != std::string::npos && j.find("\"psk\":[") != std::string::npos, "shape: " + j.substr(0, 120) + "…");
     const std::string hfOnly = sb::skimBandsJson(2, [](double lo, double hi) { return lo >= 7000000 && hi <= 7300000; });
     ok(hfOnly.find("\"40m\"") != std::string::npos && hfOnly.find("\"20m\"") == std::string::npos && hfOnly.find("\"region\":2") != std::string::npos,
        "the tunable filter: a radio that reaches only 7.0–7.3 MHz lists only 40 m");
+    const std::string r2j = sb::skimBandsJson(2), r1j = sb::skimBandsJson(1);
+    ok(r2j.find("\"note\":\"US RTTY\"") != std::string::npos && r1j.find("US RTTY") == std::string::npos, "the US RTTY point is in Region 2's JSON only");
+    // a lock 7.000–7.060: 40 m CW 24 kHz both tiles fit, 96 kHz's 7000–7096 does not
+    const std::string lk = sb::skimBandsJson(1, [](double lo, double hi) { return lo >= 7000000 && hi <= 7060000; });
+    ok(lk.find("\"24000\":[{\"hz\":7012000},{\"hz\":7036000}]") != std::string::npos && lk.find("\"96000\"") == std::string::npos,
+       "a lock 7.000–7.060 MHz: 40 m's 24 kHz tiles listed, no 96 kHz window (it does not fit)");
 }
 
 static void config() {
