@@ -286,6 +286,13 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     if (sstvOf(t)) return "sstv";
     return "";
 }
+/** ★ beta90 UNATTENDED PASSES: the downlinks a pass can be KEPT from — the ones with a decoder whose output goes to the
+ *  gallery (pictures, packets, telemetry). A voice / transponder downlink has nothing to keep, so it is not offered. */
+inline bool passKeepable(const Transmitter& t) {
+    std::string p;
+    const std::string d = decoderOf(t, p);
+    return d == "lrpt" || d == "sstv" || d == "aprs" || d == "fctlm";
+}
 /** The attach message a pick hands the decoder host — the shape a client's audio_extension_attach has. */
 inline std::string decoderAttachMsg(const std::string& ext, const std::string& params) {
     return "{\"type\":\"audio_extension_attach\",\"extension_name\":\"" + ext + "\"" + (params.empty() ? "" : "," + params) + "}";
@@ -736,6 +743,23 @@ public:
         return 0;
     }
     static constexpr double kPassActiveLeadSec = 120.0;   // picked a couple of minutes before AOS: waiting counts
+    /** ★ beta90 unattended passes: the downlink of `norad` labelled `label` → its index (−1 = not listed now). */
+    int txIndex(long long norad, const std::string& label) const {
+        std::lock_guard<std::mutex> lk(m_);
+        for (const auto& d : defs_) if (d.norad == norad)
+            for (size_t k = 0; k < d.tx.size(); ++k) if (d.tx[k].label == label) return (int)k;
+        return -1;
+    }
+    /** ★ beta90: the pass of `norad` in progress at `now` (AOS ≤ now + lead, LOS > now) — false when none. */
+    bool passAt(long long norad, double now, Pass& out, double leadSec = 0) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!obs_.valid) return false;
+        for (size_t i = 0; i < defs_.size(); ++i) {
+            if (defs_[i].norad != norad || !sats_[i].have) continue;
+            for (auto& p : passesLocked(i, now)) if (p.aos - leadSec <= now && p.los > now) { out = p; return true; }
+        }
+        return false;
+    }
     /** ★ The brief's orphan rule: with nobody connected, an ARMED lock more than 30 minutes from its AOS goes. Returns
      *  the keys removed. Active locks run to LOS unattended. */
     std::vector<std::string> dropOrphanArms(const Clock& clk) {

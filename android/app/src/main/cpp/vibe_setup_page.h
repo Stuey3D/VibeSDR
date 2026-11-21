@@ -2292,6 +2292,25 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           running on this radio when nobody is connected (Where new listeners start), so these profiles do not run.
           Untick it there to decode in the background instead.</p>
       </div>
+      <!-- ★★ V12 beta90 UNATTENDED SATELLITE PASSES (Stuart 2026-11-21: "when a pass is happening the current background
+           decode is paused it goes to the meteor pass runs it then switches back to normal background decoding
+           afterwards"). Its own switch, beside Background Decoding; saved inside the same setting (satPasses). Off until
+           a satellite is ticked. Not on a locked range or an Icom (said, not greyed: the block is hidden on an Icom). -->
+      <div id="hwSatPass" style="margin-top:14px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="spOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Unattended satellite passes</b></span></label>
+        <p class="why">When a satellite you tick below passes higher than
+          <select id="spMinEl" style="width:auto;display:inline-block">
+            <option value="10">10&deg;</option><option value="20">20&deg;</option><option value="30">30&deg;</option>
+            <option value="45">45&deg;</option></select>
+          and nobody is listening, the radio follows it &mdash; tuned, Doppler-corrected and decoding &mdash; and what it
+          decodes goes to the gallery (Server tab). Background decoding pauses for the pass and carries on when the
+          satellite has set. The moment anybody connects, the pass is given up and the radio is theirs.</p>
+        <div id="spBirds"></div>
+        <p class="why hide" id="spLockedNote" style="border-left:3px solid var(--amber);padding-left:8px">This radio's range
+          is locked, so passes are not followed on it in this version (a pass has to move the radio).</p>
+      </div>
       <!-- ★★★ V12 THE IDLE DX SCANNER (Stuart's brief, 2026-11-04 — docs/v12/DX-SCANNER.md). Beside Background Decoding:
            the same question, what this radio does when nobody is listening. Default OFF per radio. Its options sit UNDER
            its switch (the decoder rule) and are drawn only where they mean something on this radio's driver. -->
@@ -7754,16 +7773,58 @@ function bgNdbOk() {
   return !!r0.autoDirectSampling || (+r0.directSampling || 0) > 0;
 }
 let bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
+/* ★★ V12 beta90 the downlinks an unattended pass can keep (vibe_sat_engine.h passKeepable over the built-in catalogue —
+ *  test-sat-engine §13 fails if this copy drifts). By catalogue number + the downlink's label, as the server stores them. */
+const SAT_PASS_DOWNLINKS = [
+  { norad: 57166, label: "LRPT", name: "Meteor-M2-3", what: "weather pictures (LRPT)" },
+  { norad: 59051, label: "LRPT", name: "Meteor-M2-4", what: "weather pictures (LRPT)" },
+  { norad: 25544, label: "Voice / SSTV", name: "ISS", what: "SSTV pictures on 145.800 MHz" },
+  { norad: 25544, label: "SSTV events", name: "ISS", what: "SSTV pictures on 437.550 MHz" },
+  { norad: 25544, label: "APRS", name: "ISS", what: "APRS packets" },
+  { norad: 59112, label: "SSTV", name: "SONATE-2", what: "SSTV pictures" },
+  { norad: 59112, label: "Telemetry", name: "SONATE-2", what: "9600 Bd telemetry (Germany passes only)" },
+  { norad: 59112, label: "APRS", name: "SONATE-2", what: "APRS packets" },
+  { norad: 39444, label: "Telemetry", name: "AO-73 (FUNcube-1)", what: "FUNcube telemetry" },
+];
+let spModel = { on: false, minEl: 20, birds: [] };
+function spHas(b) { return spModel.birds.some(function (x) { return x.norad === b.norad && x.label === b.label; }); }
+function spRender() {
+  const box = $("spBirds");
+  if (!box) return;
+  box.innerHTML = "";
+  SAT_PASS_DOWNLINKS.forEach(function (b) {
+    const l = document.createElement("label");
+    l.style.cssText = "display:flex;gap:8px;align-items:center;margin:3px 0 3px 24px";
+    const c = document.createElement("input");
+    c.type = "checkbox"; c.checked = spHas(b); c.disabled = !spModel.on;
+    c.style.cssText = "width:16px;height:16px;accent-color:var(--amber)";
+    c.addEventListener("change", function () {
+      spModel.birds = spModel.birds.filter(function (x) { return !(x.norad === b.norad && x.label === b.label); });
+      if (c.checked) spModel.birds.push({ norad: b.norad, label: b.label });
+    });
+    const t = document.createElement("span"); t.textContent = b.name + " \u00b7 " + b.what;
+    l.appendChild(c); l.appendChild(t); box.appendChild(l);
+  });
+  if ($("spMinEl")) $("spMinEl").disabled = !spModel.on;
+  const locked = bgRadio && (bgRadio.mode === "locked" || +bgRadio.lockedCentre > 0 || +bgRadio.lockCentre > 0);
+  if ($("spLockedNote")) $("spLockedNote").classList.toggle("hide", !locked);
+}
 let bgRadio = null;   // ★ the radio the editor shows — its mode decides "locked", its users the user slots
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
 function bgLoad(r) {
   bgRadio = r || null;
   bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
+  spModel = { on: false, minEl: 20, birds: [] };
   try {
     const j = r && r.bgDecode ? JSON.parse(r.bgDecode) : null;
     if (j && typeof j === "object") {
       bgModel.on = !!j.on;
       bgModel.waitMin = j.waitMin > 0 ? j.waitMin : 5;
+      // ★ V12 beta90: unattended satellite passes, carried in the same setting
+      const sp = j.satPasses && typeof j.satPasses === "object" ? j.satPasses : null;
+      spModel = { on: !!(sp && sp.on), minEl: sp && sp.minEl >= 0 ? +sp.minEl : 20,
+                  birds: sp && Array.isArray(sp.birds) ? sp.birds.filter(function (b) { return b && +b.norad > 0 && typeof b.label === "string"; })
+                                                                  .map(function (b) { return { norad: +b.norad, label: b.label }; }) : [] };
       bgModel.keepInRange = j.keepInRange !== false;
       bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
         const q = { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
@@ -7784,6 +7845,22 @@ function bgLoad(r) {
   const drv = String((r && r.driver) || "");
   // ★ V12 and the server's answer (vibe_radio_caps.h; `typeof`: the bg tests lift this function out on its own)
   if ($("hwBg")) $("hwBg").classList.toggle("hide", drv === "icom" || (typeof capSet === "function" && !capSet("bgDecode", r)));
+  // ★ V12 beta90: unattended passes — not on an Icom (background work never runs there), nor where there is no background
+  if ($("hwSatPass")) $("hwSatPass").classList.toggle("hide", drv === "icom" || (typeof capSet === "function" && !capSet("bgDecode", r)));
+  if ($("spOn")) $("spOn").checked = spModel.on;
+  if ($("spMinEl")) {
+    const e = String(spModel.minEl);
+    if (![].some.call($("spMinEl").options, function (o) { return o.value === e; })) {
+      const o = document.createElement("option"); o.value = e; o.textContent = e + "\u00b0"; $("spMinEl").appendChild(o);
+    }
+    $("spMinEl").value = e;
+    if (!$("spMinEl").__wired) {
+      $("spMinEl").__wired = 1;
+      $("spMinEl").addEventListener("change", function () { spModel.minEl = parseInt($("spMinEl").value, 10) || 20; });
+      $("spOn").addEventListener("change", function () { spModel.on = $("spOn").checked; spRender(); });
+    }
+  }
+  spRender();
   if ($("bgOn")) $("bgOn").checked = bgModel.on;
   if ($("bgKeepInRange")) $("bgKeepInRange").checked = bgModel.keepInRange;
   if ($("bgWait")) {
@@ -7883,11 +7960,16 @@ function dxCollect() {
 function bgCollect() {
   bgModel.on = !!($("bgOn") && $("bgOn").checked);
   bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
+  // ★ V12 beta90: unattended satellite passes ride along (absent unless set up — the server reads it the same way)
+  spModel.on = !!($("spOn") && $("spOn").checked);
+  if ($("spMinEl")) spModel.minEl = parseInt($("spMinEl").value, 10) || 20;
+  const spAny = spModel.on || spModel.birds.length > 0;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
-  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim"; }); })) return "";
+  if (!spAny && !bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim"; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
+  if (spAny) out.satPasses = { on: spModel.on, minEl: spModel.minEl, birds: spModel.birds };
   return JSON.stringify(out, function (k, v) { return k.indexOf("__") === 0 ? undefined : v; });   // ★ the page's own notes stay here
 }
 /** "13:00" from "12:00" and the server's offset — the server's local time, which is not the browser's. */

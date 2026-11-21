@@ -427,7 +427,12 @@ for APRS `T#` and SONATE-2 9k6 frames):
    "hex":"…"}}                    // the decoded payload bytes, hex (≤ 512 chars), for the "raw" switch
 ```
 `raw:true` = no published calibration: `v` is the raw count and the client must label it "raw" (no unit).
-A value with a published conversion carries its unit and no `raw`. Order of `values` = display order. ≤ 64 values.
+A value with a published conversion carries its unit and no `raw`. Order of `values` = display order.
+≤ 64 values for funcube-rt (58) and aprs-t (≤ 13); ★ sonate2-ax25 sends ALL 212 fields of its STD HK packet — the client
+should show a short list first (battery voltages / temperatures, OBDH MODE, the radios' modes) and the rest behind "more".
+Optional per value: `"text":"NORMAL MODE"` — an enumeration's meaning (the mission's own words); show it instead of `v`.
+Optional per frame: `"satId"` (funcube: "FUNcube-1"), `"fitter"` (funcube: a fitter message's text, printable ASCII),
+`"from"` (aprs-t: the station's callsign), `"created"` (sonate2: the spacecraft's unix time the packet was made).
 Clients show the last frame's values; the server keeps no history of them (the gallery keeps the day log).
 
 **CW beacon (`cw`, 1.1)** — the existing CW frames unchanged (0x01 text of the primary signal, 0x03 state,
@@ -439,6 +444,8 @@ Clients show the last frame's values; the server keeps no history of them (the g
 
 ### Unattended satellite passes (Decided 3) — no listener wire; owner config only
 `vibeserver.json` / Android config: `"satPasses":{"on":false,"minEl":20,"birds":[{"norad":57166,"tx":0},…],
-"record":false,"recordCapMb":0}`. Gallery entries made by an unattended pass carry `"pass":{"norad":N,"name":"…",
+}` — ★ AS BUILT: carried INSIDE the background-decoding JSON (`bgDecode` per radio / Android's own) as its
+`"satPasses"` member, so every existing save path carries it; its own `on`, independent of background decoding's.
+`minEl` 0–90 (default 20), `birds` ≤ 8. ★ Recording is NOT built this beta (no control is offered for it). Gallery entries made by an unattended pass carry `"pass":{"norad":N,"name":"…",
 "aos":…,"los":…,"maxEl":…}` in their metadata. Admin status `"satPass":{"state":"idle|waiting|running","name":…,
 "los":…}` in the setup page's status JSON.

@@ -35453,6 +35453,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (const auto& d : dxSocks) if (d && d->isOpen()) return true;
         for (const auto& kv : clientDsp)
             if (kv.second && ((kv.second->spec && kv.second->spec->isOpen()) || (kv.second->audio && kv.second->audio->isOpen()))) return true;
+        // ★ V12 beta90: an unattended satellite pass's own decoder is not somebody (it is ours)
+        if (satPassBusy_.load()) return false;
         return sharedDecoderNeedsAudio();
     }
     /** ★★ Put the capture at `centre` and the shared dial at `audio`, as one move. Through retune() first (unlocked) so
@@ -35711,6 +35713,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  radio's centre, dial and rate are never moved for a background VFO. A LOCKED radio's window never moves at all,
      *  so nothing changes there but the "listener on" label. Switched off: background decoding stops, as before. */
     void bgStopForListener(const char* who) {
+        satPassGiveUp(who);   // ★★ V12 beta90: an unattended satellite pass is given up first — the listener takes the radio
         bgWanted_.store(false);
         if (!bgActive_.load() && !bgSaved_.valid) { bgEmptySince_ = 0; return; }
         vibe::bg::Config cfg;
@@ -35811,9 +35814,184 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else if (active) j += ",\"runner\":" + bgRun_.statusJson();
         return j + "}";
     }
+    // ══ ★★ V12 beta90 UNATTENDED SATELLITE PASSES (Stuart 2026-11-21, docs/v12/SATELLITE-BEST.md "Decided 3") ══════════
+    /* "a user can specify that they want to receive meteor passes and when a pass is happening the current background
+     *  decode is paused it goes to the meteor pass runs it then switches back to normal background decoding afterwards".
+     *  Its own switch (vibe::bg::SatPasses, carried in the background-decoding JSON). With NOBODY here, on a radio it may
+     *  move: the highest pass above the owner's elevation among the picked downlinks is PICKED as a listener's pick is —
+     *  the tune, the Doppler lock on the room's key, the decoder its use needs on the shared host (its gallery copy is the
+     *  ordinary one) — background decoding is paused (its saved dial kept, so at LOS it resumes exactly the profile it
+     *  was running, without its wait again), and a listener arriving gives the pass up and takes the radio as ever.
+     *  ★ Not on a locked range (it would need its own channel — not this beta), an Icom, the handheld, beside kept-running
+     *    ADS-B or another whole-radio mode. Recording is not built (no control is offered for it). */
+    struct SatPassRun {
+        bool on = false; long long norad = 0; int tx = -1;
+        std::string name, label, decoder, decoderKey;
+        double aos = 0, los = 0, maxEl = 0, startedAt = 0;
+        bool pausedBg = false;                       // background decoding was running and is paused for this pass
+        bool saved = false; double centre = 0, view = 0, audio = 0; std::string mode;   // the radio before (when background had not saved it)
+    };
+    std::recursive_mutex satPassMtx_;                // ★ recursive: the pass's own tune runs through handleControl
+    SatPassRun satPass_;
+    std::atomic<bool> satPassBusy_{false};
+    std::string satPassWhy_, satPassLast_;
+    double satPassRetryAt_ = 0;
+    static bool& satPassInternal() { static thread_local bool v = false; return v; }   // ★ our own tune is not an arrival
+    std::string satPassWhyNot(const vibe::bg::SatPasses& sp) {
+        if (!sp.on) return "switched off";
+        if (sp.birds.empty()) return "no satellite picked yet";
+        if (frontDoorOnly || decoderOnly) return "not a radio process";
+        if (g_benchHold.load()) return "the benchmark is measuring this machine";
+        if (g_vsHandheld.load()) return "satellites are not on the handheld";
+        if (useIcom()) return "not on an Icom radio (background work never runs there)";
+        if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 an unattended pass would have to move it (not on a locked range in this version)";
+        if (adsbKeepHolds()) return "ADS-B is kept running on this radio when nobody is connected";
+        if (g_ownerScan.load()) return "the owner's band scan has the radio";
+        if (!satEngine().haveObserver()) return "this server has no location set (the setup page's locator)";
+        if (satEngine().elementCount() == 0) return "no satellite orbit data yet";
+        if (satEngine().timeState(satClock()) == "none") return "this server's clock has not been checked yet";
+        return "";
+    }
+    void satPassTick() {
+        if (stopping.load() || frontDoorOnly || decoderOnly) return;
+        vibe::bg::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+        const std::string why = satPassWhyNot(cfg.sat);
+        bool anyone;
+        { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+        const vibe::sat::Clock clk = satClock();
+        std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+        if (satPass_.on) {
+            if (!why.empty()) { satPassEndLocked(why, true, true); return; }
+            if (anyone) { satPassEndLocked("a listener arrived", true, false); return; }
+            if (clk.unix >= satPass_.los + 5) satPassEndLocked("LOS", true, true);
+            return;
+        }
+        satPassWhy_ = why;
+        if (!why.empty() || anyone || nowSecs() < satPassRetryAt_) return;
+        if (g_dabMode.load() || g_adsbMode.load() || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
+            satPassWhy_ = "waiting for the last listener's mode to close"; return;
+        }
+        // the best pass above the owner's elevation, in progress now, with a minute left
+        long long bn = 0; int bt = -1; vibe::sat::Pass bp; vibe::sat::SatDef bsd; vibe::sat::Transmitter btx;
+        for (const auto& b : cfg.sat.birds) {
+            const int ti = satEngine().txIndex(b.norad, b.label);
+            vibe::sat::SatDef sd; vibe::sat::Transmitter t;
+            if (ti < 0 || !satEngine().txAt(b.norad, ti, sd, t) || !vibe::sat::passKeepable(t)) continue;
+            if (!vsSatReachWhy(t.hz, t.passband() ? t.hiHz : t.hz).empty()) continue;
+            vibe::sat::Pass ps;
+            if (!satEngine().passAt(b.norad, clk.unix, ps) || ps.maxElDeg < cfg.sat.minEl || ps.los - clk.unix < 60) continue;
+            if (bt < 0 || ps.maxElDeg > bp.maxElDeg) { bn = b.norad; bt = ti; bp = ps; bsd = sd; btx = t; }
+        }
+        if (bt < 0) { satPassWhy_ = "waiting for a pass above " + std::to_string(cfg.sat.minEl) + "\xc2\xb0"; return; }
+        satPassStartLocked(cfg, bn, bt, bsd, btx, bp, clk);
+    }
+    void satPassStartLocked(const vibe::bg::Config& cfg, long long norad, int tx, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t,
+                            const vibe::sat::Pass& ps, const vibe::sat::Clock& clk) {
+        SatPassRun r;
+        {
+            std::lock_guard<std::mutex> op(bgOpMtx_);
+            r.pausedBg = bgActive_.load();
+            if (r.pausedBg) bgStopLocked(("a satellite pass (" + sd.name + " " + t.label + ") \xe2\x80\x94 it resumes at LOS").c_str(), false);
+            r.saved = !bgSaved_.valid;
+            if (r.saved) { r.centre = rtlCenter.load(); r.view = viewCenter.load(); r.audio = audioFreq.load(); std::lock_guard<std::recursive_mutex> ml(modeMtx); r.mode = mode; }
+        }
+        satPassBusy_.store(true);
+        bgWanted_.store(true);                       // ★ the park is held off; the DX scanner stands aside
+        dxYieldToBg();
+        resumeCaptureIdle(/*fromBg=*/true);
+        if (radioReleased.load()) {
+            LOGI("[sat] unattended pass: %s is up but another program has the radio \xe2\x80\x94 trying again in 60 s", sd.name.c_str());
+            satPass_ = r; satPass_.on = true; satPassEndLocked("another program has the radio", true, true);
+            satPassRetryAt_ = nowSecs() + 60;
+            return;
+        }
+        satPassInternal() = true;
+        const double hz = vibe::sat::tuneHzOf(t);
+        const std::string md = vibe::sat::listenModeOf(t);
+        handleControl(nullptr, "{\"type\":\"tune\",\"frequency\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\",\"modeSet\":1}");
+        satPassInternal() = false;
+        if (satEngine().active(kSatShared)) { satEngine().stop(kSatShared); satSharedShift_.store(0.0); }
+        vibe::sat::Track tr = satEngine().start(kSatShared, "\x02pass", audioFreq.load(), md, clk, norad, tx);
+        if (tr.state != vibe::sat::LockState::Off) {
+            satSharedShift_.store((tr.state == vibe::sat::LockState::Track || tr.state == vibe::sat::LockState::Coast) ? tr.shiftHz : 0.0);
+            retune(tr.nominalHz);
+            satEnsureTracker();
+        }
+        std::string params;
+        r.decoder = vibe::sat::decoderOf(t, params);
+        if (!r.decoder.empty()) {
+            const std::string w = satAttach(nullptr, false, "", r.decoder, params, r.decoderKey);
+            if (!w.empty()) { LOGI("[sat] unattended pass: the %s decoder did not start \xe2\x80\x94 %s", r.decoder.c_str(), w.c_str()); r.decoder.clear(); }
+        }
+        r.on = true; r.norad = norad; r.tx = tx; r.name = sd.name; r.label = t.label;
+        r.aos = ps.aos; r.los = ps.los; r.maxEl = ps.maxElDeg; r.startedAt = clk.unix;
+        satPass_ = r;
+        satPassWhy_.clear();
+        LOGI("[sat] unattended pass: %s %s (max %.0f\xc2\xb0, LOS in %.0f s) \xe2\x80\x94 %.3f MHz %s, Doppler %s, decoder %s%s", sd.name.c_str(), t.label.c_str(),
+             ps.maxElDeg, ps.los - clk.unix, hz / 1e6, md.c_str(), tr.state == vibe::sat::LockState::Off ? ("refused: " + tr.why).c_str() : vibe::sat::lockName(tr.state),
+             r.decoder.empty() ? "none" : r.decoder.c_str(), r.pausedBg ? "; background decoding paused" : "");
+        (void)cfg;
+    }
+    /** End the pass: its decoder (only if the shared host still runs the one the pass started — its gallery copy is
+     *  written as it stops), its lock; `restore` puts the radio back where the pass found it (when background decoding had
+     *  not saved it itself); `resume` lets background decoding start again at once on the profile it was running. */
+    void satPassEndLocked(const std::string& why, bool restore, bool resume) {
+        if (!satPass_.on) { satPassBusy_.store(false); return; }
+        const SatPassRun r = satPass_;
+        if (!r.decoderKey.empty()) {
+            std::shared_ptr<DecoderHost> host = decoders_.shared();
+            if (host && host->startKey() == r.decoderKey) { host->stop(); navWideSync(); }
+        }
+        if (satEngine().active(kSatShared)) { satEngine().stop(kSatShared); satSharedShift_.store(0.0); }
+        if (restore && r.saved && r.audio > 0) {
+            satPassInternal() = true;
+            bgPlace(r.centre, r.view, r.audio);
+            if (!r.mode.empty()) handleControl(nullptr, "{\"type\":\"mode\",\"mode\":\"" + r.mode + "\"}");
+            satPassInternal() = false;
+        }
+        if (resume && r.pausedBg) {
+            vibe::bg::Config cfg;
+            { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+            std::lock_guard<std::mutex> op(bgOpMtx_);
+            bgEmptySince_ = nowSecs() - vsBgWaitSec(cfg) - 1;   // ★ its wait was served before the pass: it resumes now
+        }
+        char b[200];
+        std::snprintf(b, sizeof b, "%s %s, max %.0f\xc2\xb0 \xe2\x80\x94 ended (%s)", r.name.c_str(), r.label.c_str(), r.maxEl, why.c_str());
+        satPassLast_ = b;
+        LOGI("[sat] unattended pass: %s%s", b, resume && r.pausedBg ? "; background decoding resumes" : "");
+        satPass_ = SatPassRun{};
+        satPassBusy_.store(false);
+        if (!resume) bgWanted_.store(false);
+    }
+    /** ★ A listener (or a decoder socket) arrived: the pass is given up — the radio back as the pass found it. */
+    void satPassGiveUp(const char* who) {
+        if (!satPassBusy_.load() || satPassInternal()) return;
+        std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+        if (satPass_.on) satPassEndLocked(who ? who : "a listener arrived", true, false);
+    }
+    /** The admin page's line: "off" · "waiting" (and why) · "running" (the pass), with the last one's outcome. */
+    std::string satPassStatusJson() {
+        vibe::bg::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+        std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+        const char* st = satPass_.on ? "running" : !cfg.sat.on ? "off" : satPassWhy_.empty() || satPassWhy_.rfind("waiting", 0) == 0 ? "waiting" : "blocked";
+        std::string j = std::string("{\"state\":\"") + st + "\",\"why\":\"" + vibe::gallery::jsonEsc(satPass_.on ? std::string() : satPassWhy_) + "\"";
+        j += ",\"birds\":" + std::to_string(cfg.sat.birds.size()) + ",\"minEl\":" + std::to_string(cfg.sat.minEl);
+        if (satPass_.on) {
+            char b[160];
+            std::snprintf(b, sizeof b, ",\"los\":%.0f,\"maxEl\":%.1f,\"pausedBg\":%s", satPass_.los, satPass_.maxEl, satPass_.pausedBg ? "true" : "false");
+            j += ",\"name\":\"" + vibe::gallery::jsonEsc(satPass_.name) + "\",\"label\":\"" + vibe::gallery::jsonEsc(satPass_.label) + "\",\"decoder\":\""
+               + vibe::gallery::jsonEsc(satPass_.decoder) + "\"" + b;
+        }
+        if (!satPassLast_.empty()) j += ",\"last\":\"" + vibe::gallery::jsonEsc(satPassLast_) + "\"";
+        return j + "}";
+    }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
     void bgTick() {
         if (stopping.load() || frontDoorOnly || decoderOnly) return;
+        // ★★ V12 beta90: an unattended satellite pass has the radio — background decoding is paused until its LOS
+        if (satPassBusy_.load()) { bgWanted_.store(true); return; }
         /* ★★★ NOT WHILE A BENCHMARK MEASURES THIS MACHINE (g_benchHold) — and a profile still running is stopped, its dial
          *  given back (benchQuiesce stops it first; this is the belt to that brace, and it covers a locked radio, whose
          *  profiles otherwise run with listeners on or not). */
@@ -38649,6 +38827,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     icom->setInUse(!empty || bgWanted_.load() || dxWanted_.load() || adsbKeepHolds());
                 }
 #endif
+                // ── ★★ V12 beta90: unattended satellite passes — before background decoding, which a pass pauses ──
+                satPassTick();
                 // ── ★★ V12: background decoding — before the park, which it holds off while a profile is due ──
                 bgTick();
                 // ── ★★★ V12: the idle DX scanner — after bgTick: a due profile comes first ──
@@ -41128,6 +41308,7 @@ std::string LocalSdrShim::adminStatusJson() {
     // ★★ V12 beta 4: background decoding on this radio, for the admin page's line (Impl::bgStatusJson).
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"bgDecode\":" + bi->bgStatusJson();
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"dxScan\":" + bi->dxStatusJson();   // ★★★ V12
+    if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"satPass\":" + bi->satPassStatusJson();   // ★★ V12 beta90
     return j + "}";
 }
 
