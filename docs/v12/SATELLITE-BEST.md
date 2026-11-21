@@ -244,7 +244,7 @@ test-sat-engine (`geo` present, bounded, agrees with `pts`).
 - **Server:** the lock's own measurement (already used for TRACK/COAST) is stored per tx with a timestamp, in memory and
   bounded.
 
-### 2.5 Unattended passes: schedule, decode, record (L) — ★ DECIDED: as a BACKGROUND DECODING decoder (see Decided 3)
+### 2.5 Unattended passes: schedule, decode, record (L) — ★ DECIDED: a separate feature that pauses background decoding for the pass and resumes it after (see Decided 3)
 - **User gets (owner switch, default OFF):** "decode every METEOR / ISS SSTV / AO-73 pass above N°". The server tunes when
   the radio is free, decodes into the gallery, and optionally records narrow baseband. Gallery entries are tagged with the
   pass (time, max el).
@@ -300,13 +300,21 @@ test-sat-engine (`geo` present, bounded, agrees with `pts`).
 1. **Icom: yes, by reach.** Satellites are shown only to a receiver that can hear them, so an Icom HF rig shows AO-7's
    Mode A (and any HF downlink) and picks it — the lock steps the Icom's VFO, receive only. No Icom-specific refusal.
 2. **REMIND in the app: an in-app banner** (no OS notification module).
-3. **Unattended satellite decoding works like the existing BACKGROUND DECODING** (WEFAX etc.: `RadioConfig::bgDecode`,
-   "When the last user leaves the server after [N]", keep-in-range while listeners are on, results to the GALLERY) —
-   satellite passes join that scheme as another background decoder, not a separate scheduler. 2.5 is rewritten to that.
+3. **Unattended satellite passes = a SEPARATE feature that interrupts background decoding** (Stuart: "a user can specify
+   that they want to receive meteor passes and when a pass is happening the current background decode is paused it goes
+   to the meteor pass runs it then switches back to normal background decoding afterwards"). The owner picks which
+   satellites / downlinks to catch (e.g. METEOR-M2-3 and -4 LRPT). When one of those passes begins while the radio is in
+   background decoding (nobody listening), the server PAUSES the current background decode, picks the pass (tune +
+   Doppler + decoder, results to the GALLERY), and at LOS RESUMES exactly the background decode it paused. A listener
+   arriving mid-pass gets the radio as now (the pass is given up, as any background decode is). Its own setting, beside
+   Background Decoding (setup page + app + Android remote setup); off until the owner picks a satellite. Optional
+   capped recording stays an owner switch, off by default on a Pi.
 
 ## Still open (my recommendation in brackets)
 1. 1.4 passband rule: any tune inside the passband keeps the lock (yes — otherwise FO-29's 100 kHz cannot be tuned).
 2. 1.6 REMIND ships in the phase-1 beta (yes).
+3. A listener on a picked pass who is not touching anything is not timed out as idle until LOS (still under the
+   server's soft time limit) — proposed, Stuart to confirm.
 
 ## Sources
 [1] https://status.amsat.org/ (reports 2026-11-16 → 21) · [2] AMSAT ANS-109/ANS-130 bulletins https://www.amsat.org/ans-130-amsat-news-service-weekly-bulletins/ ,
