@@ -1681,6 +1681,13 @@
     /* ── public ─────────────────────────────────────────────────────────────────────────────── */
     const api = {
       update,
+      /** ★ V12 beta90 what is drawn (a test's view, read-only): each aircraft on the map — hex, where it is drawn, the way
+       *  it faces, whether a glide is under way. */
+      shown() {
+        const out = [];
+        for (const s of ac.values()) if (s.disp && !s.goneAt) out.push({ hex: s.hex, lat: s.disp.lat, lon: s.disp.lon, hdg: s.hdg, track: s.fix ? s.fix.track : null, gliding: !!s.corr, sparse: !!(s.a && s.a.sparse) });
+        return out;
+      },
       setReceiver(lat, lon) {
         const la = Number(lat), lo = Number(lon);
         rx = isFinite(la) && isFinite(lo) && !(la === 0 && lo === 0) && lat != null && lon != null ? { lat: la, lon: lo } : null;

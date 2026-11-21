@@ -496,6 +496,10 @@ interface ModeSelectorProps {
     galleryAvail?: boolean; onGallery?: () => void;
     /** ★★★ V12 the server's DX LOG (its idle DX scanner), drawn beside GALLERY — only where hwinfo offers it. */
     dxLogAvail?: boolean; onDxLog?: () => void;
+    /** ★★★ V12 beta90 VIEWS' map keys (Stuart, 2026-11-21): AVIATION (every aircraft source on the ADS-B map) and SHIPPING
+     *  (AIS, DSC, NAVTEX) — each only where this server has something for it (no dead keys). */
+    avMapAvail?: boolean; onAvMap?: () => void;
+    shipMapAvail?: boolean; onShipMap?: () => void;
     /** ★★ V12 CW — a VibeServer's own decoder: ONE SIGNAL (the passband) or SKIMMER (a 24/48/96 kHz segment centred on
      *  the dial). Only where the server's vibeserver.json says `"cw": true`; its settings drop in under the row. */
     /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
@@ -643,6 +647,8 @@ interface ModeSelectorProps {
     band?: { ok: boolean; on: boolean; hint: string; onPress: () => void };
     singleOn?: boolean;
     showCwStt: boolean; showMap: boolean;
+    /** ★★ V12 beta90 the MAP key's legend — 'DIGI MODES' on a VibeServer (its station store + APRS), 'MAP' elsewhere. */
+    mapLabel?: string;
     sttActive: boolean; sttSelected: boolean; onSttToggle: () => void;
   } | null;
 }
@@ -776,7 +782,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (hfdlInBands) addLegend('HFDL MAP', 'hfdl');
     if (scanShown) addLegend('SCANNER');
   }
-  if (spotsShown && spotsControls?.showMap) addLegend('MAP', 'map');
+  if (spotsShown && spotsControls?.showMap) addLegend(spotsControls.mapLabel || 'MAP', 'map');
+  if (decoderControls?.avMapAvail) addLegend('AVIATION', 'acars');   // ★ beta90 VIEWS' three map keys
+  if (decoderControls?.shipMapAvail) addLegend('SHIPPING', 'ais');
   if (owrxPages) { addLegend('MAP', 'map'); addLegend('FILES', 'files'); }
   for (const m of serverMapKeys) addLegend(m.label, m.icon);
   if (decoderControls?.galleryAvail) addLegend('GALLERY');
@@ -1902,7 +1910,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the server's GALLERY and TRANSCRIBE. The colour map and picture emoji became line glyphs like every other key's. */
   const viewItems = [
     { id: 'map', node: spotsShown && spotsControls?.showMap
-        ? viewKey('map', 'MAP', 'map', () => spotsControls.onSpotsMap?.(), 'Map of the spots') : null },
+        ? viewKey('map', spotsControls.mapLabel || 'MAP', 'map', () => spotsControls.onSpotsMap?.(),
+                  spotsControls.mapLabel ? 'Digi modes map — the stations heard on the digital modes and APRS, background decoding and every listener' : 'Map of the spots') : null },
+    // ★★★ V12 beta90 AVIATION and SHIPPING beside DIGI MODES (Stuart, 2026-11-21) — only where the server has something
+    { id: 'avmap', node: decoderControls?.avMapAvail && decoderControls.onAvMap
+        ? viewKey('avmap', 'AVIATION', 'acars', () => decoderControls.onAvMap?.(), 'Aviation map — every aircraft this server heard: ADS-B, ACARS, VDL2, HFDL and ADS-C') : null },
+    { id: 'shipmap', node: decoderControls?.shipMapAvail && decoderControls.onShipMap
+        ? viewKey('shipmap', 'SHIPPING', 'ais', () => decoderControls.onShipMap?.(), 'Shipping map — ships (AIS), DSC calls and NAVTEX') : null },
     { id: 'owrxmap', node: owrxPages ? viewKey('owrxmap', 'MAP', 'map', owrxPages.onMap, 'OpenWebRX map') : null },
     { id: 'owrxfiles', node: owrxPages
         ? viewKey('owrxfiles', 'FILES', 'files', owrxPages.onFiles, 'OpenWebRX files — the decoded pictures') : null },

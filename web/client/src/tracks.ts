@@ -790,6 +790,7 @@ export class TrackView {
           onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
         });
         this.placeAcObstacle();
+        w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
       } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
     }
     if (this.pending) { const p = this.pending; this.pending = null; this.feed(p); }

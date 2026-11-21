@@ -18,6 +18,8 @@ import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type 
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
+import { digiStationsSanitise, digiStationsMerge, digiStationRows, type StoredStation } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
+import { digiAprsPoints } from '../utils/digiMapShared';
 import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, sondeRanges, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
@@ -86,7 +88,7 @@ import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeSt
 import { audioQuietFor, noticePlan, shouldAskPermission, endedWhy, NOTICE_DELAY_S, PERMISSION_TITLE, PERMISSION_BODY,
          type HoldTerms } from '../services/sessionHoldNotice';
 // ★ V12 AIS + APRS (docs/v12/AIS-APRS.md) — the web's tracks.ts rules for the app
-import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsItems, aprsListRows,
+import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsIcon, aprsItems, aprsListRows,
          aprsLogPush, aprsMessageLines, aprsPacketSanitise, aprsSanitise, aprsStatus, aprsTuneFor, aprsBaudOf, APRS_EMPTY,
          type AisCap, type AisReport, type AprsBaud, type AprsList } from '../services/tracks';
 // ★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): AUTO / 1200 / 9600 / 300, FX.25 + IL2P, the frame log — the web's rule
@@ -2697,6 +2699,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [avError, setAvError] = useState<string | undefined>(undefined);
   const [avBoxOpen, setAvBoxOpen] = useState(false);
   const [avMapOpen, setAvMapOpen] = useState(false);   // ★ V12 the DATALINK box's MAP (MapOverlay 'avdata'; the mode carries on)
+  /* ★★★ V12 beta90 ONE AIRCRAFT MAP (Stuart, 2026-11-21): the same map from DATALINK, VIEWS' AVIATION and HFDL — which
+   *  source it was opened for goes first (aviationMap.ts avLayersPresent); open without the DATALINK mode too. */
+  const [avMapFocus, setAvMapFocus] = useState<'datalink' | 'hfdl' | 'adsb'>('datalink');
   const avUiOff = useCallback(() => { avOnRef.current = false; setAvOn(false); setAvReport(null); setAvBoxOpen(false); setAvMapOpen(false); setAvError(undefined); }, []);
   /* ★★ V12 RADIOSONDES (RS41) — the datalink's pattern and box (SondesPanel), with a MAP (MapOverlay 'sondes'). */
   const [sdCap, setSdCap] = useState<{ ok: boolean; why: string; bands: SondeBand[] } | undefined>(undefined);
@@ -4363,7 +4368,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     : ismGal && !IS_APPLE_TV ? 'ism'
     : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism'
     : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes'   // ★ V12 the SONDES box's MAP (the mode carries on)
-    : avMapOpen && !IS_APPLE_TV && avOn ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on)
+    : avMapOpen && !IS_APPLE_TV && (avOn || avMapFocus !== 'datalink') ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on); beta90 VIEWS' AVIATION standalone
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -6860,6 +6865,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       setSelDecoder('hfdl');
       openDecoder('hfdl');
     }
+    /* ★★★ V12 beta90 ONE AIRCRAFT MAP (Stuart, 2026-11-21): on a VibeServer HFDL's MAP is the AVIATION MAP, HFDL first —
+     *  every source's aircraft, drawn the ADS-B way. An UberSDR's own HFDL map stays its own. */
+    if ((client.current as { isVibe?: boolean } | null)?.isVibe && !IS_APPLE_TV) { setAvMapFocus('hfdl'); setAvMapOpen(true); return; }
     setMapKind('hfdl');
   }, [stopSpots, openDecoder]);
   /* ★★ VFO B GONE WITH SPOTS ON IT (switched off, a listener needing its place, FM broadcast): the server has stopped them
@@ -11688,7 +11696,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [avLayers, setAvLayers] = useState<AvLayers>(avLayersOf(null));
   useEffect(() => { AsyncStorage.getItem('lsv_av_map_layers').then((v) => setAvLayers(avLayersOf(v))).catch(() => {}); }, []);
   const [avShared, setAvShared] = useState<SharedAircraft | null>(null);
-  const avSharedPolling = avMapOpen && avOn && !IS_APPLE_TV;
+  const avSharedPolling = avMapOpen && (avOn || avMapFocus !== 'datalink') && !IS_APPLE_TV;   // ★ beta90 standalone too
   useEffect(() => {
     if (!avSharedPolling) return;
     let live = true, t: ReturnType<typeof setTimeout> | null = null;
@@ -11704,13 +11712,43 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { live = false; if (t) clearTimeout(t); };
   }, [avSharedPolling, connectBase]);   // eslint-disable-line react-hooks/exhaustive-deps
   const avTrk = useMemo(() => {
-    const c = avCompose(avReport, avShared, 'datalink', avLayers, trkRx, 'app');
+    const c = avCompose(avOn ? avReport : null, avShared, avOn ? 'datalink' : avMapFocus, avLayers, trkRx, 'app');
     return {
       items: c.items, rows: c.rows, status: c.status, empty: AV_EMPTY, trail: () => Promise.resolve([] as [number, number][]),
       toggles: c.toggles, toggled: avLayers as Record<string, boolean>, profile: c.profile,
       onToggle: (id: string, on: boolean) => setAvLayers((l) => { const n = { ...l, [id]: on }; AsyncStorage.setItem('lsv_av_map_layers', JSON.stringify(n)).catch(() => {}); return n; }),
     };
-  }, [avReport, avShared, avLayers, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [avReport, avShared, avLayers, trkRx?.lat, trkRx?.lon, avOn, avMapFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ V12 beta90 THE DIGI MODES MAP (services/digiStations.ts, docs/v12/DIGI-MODES-MAP.md): on a VibeServer the spots map
+   *  also shows every station the server KEPT — background decoding and every listener — over the window its age filter
+   *  picks (stations.json, polled every 15 s while it is open, only what changed since), and the APRS box's stations. */
+  const [digiWin, setDigiWin] = useState('24h');
+  const [digiStore, setDigiStore] = useState<Map<string, StoredStation>>(() => new Map());
+  const [digiAprsOn, setDigiAprsOn] = useState(false);
+  const digiStorePolling = localMapOpen && !!(client.current as { isVibe?: boolean } | null)?.isVibe && !IS_TV;
+  useEffect(() => {
+    if (!digiStorePolling) return;
+    let live = true, t: ReturnType<typeof setTimeout> | null = null, since = 0, held = new Map<string, StoredStation>();
+    const go = async () => {
+      try {
+        const q = `window=${digiWin}${since ? `&since=${since - 30}` : ''}`;
+        const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/stations.json?${q}`, radioAuthSuffix || route.params.authSuffix || ''),
+                              { cache: 'no-store' } as any);
+        const j = r.ok ? digiStationsSanitise(await r.json()) : null;
+        if (live && j && !j.off) { held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); }
+      } catch { /* the next poll */ }
+      if (live) t = setTimeout(() => { void go(); }, 15000);
+    };
+    void go();
+    return () => { live = false; if (t) clearTimeout(t); };
+  }, [digiStorePolling, digiWin, connectBase]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const digiSpots = useMemo(() => (digiStore.size ? [...digiStationRows(digiStore), ...spots] : spots), [digiStore, spots]);
+  const digiAprs = useMemo(() => (localMapOpen && (digiAprsOn || aprsList)
+    ? digiAprsPoints(aprsList?.stations, (st) => aprsIcon(st).html, (k) => aprsTrails.current.get(k),
+                     (la, lo) => { const rx = trkRx; if (!rx) return null; const r = 6371, d2r = Math.PI / 180;
+                       const a = Math.sin((la - rx.lat) * d2r / 2) ** 2 + Math.cos(rx.lat * d2r) * Math.cos(la * d2r) * Math.sin((lo - rx.lon) * d2r / 2) ** 2;
+                       return Math.round(2 * r * Math.asin(Math.min(1, Math.sqrt(a)))); }) : null),
+    [localMapOpen, digiAprsOn, aprsList, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
@@ -14846,7 +14884,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           aprs={activeDecoder === 'aprs' ? {
             rows: aprsBoxRows(aprsList, (serverPos ?? recvLoc) ?? null), messages: aprsMessageLines(aprsList), log: aprsLog,
             baud: aprsBaud, frames: aprsFrames, idle: packetIdle(packetMode), is9600: packetMode === '9600',
-            onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); setAprsFocus(key ?? ''); setAprsMapOpen(true); },
+            // ★★ beta90 the APRS box's MAP opens the DIGI MODES MAP on its APRS layer (APRS joined the digital spots map)
+            onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); setAprsFocus(key ?? ''); setDigiAprsOn(true); setLocalMapOpen(true); },
           } : null}
           cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onDecTuneHz(hz, 'cwu' as SDRMode); } } : null}
           /* ★ V12 PSK: the same list; a tap = USB with the signal in the middle of the passband (LSB if in LSB — pskTuneFor). */
@@ -15798,7 +15837,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (askGate()) return;
             (client.current as unknown as { avdata?: (on: boolean, band?: string) => void } | null)?.avdata?.(true, id);
           }}
-          onMap={IS_APPLE_TV ? undefined : () => { markInteract(); setAvMapOpen(true); }}
+          onMap={IS_APPLE_TV ? undefined : () => { markInteract(); setAvMapFocus('datalink'); setAvMapOpen(true); }}
           topLimit={boxTopLimit}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
@@ -16307,6 +16346,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★★ V12 THE DX LOG, beside GALLERY (Stuart: "The DX Log should live next to the gallery") — only where the
            *  server's hwinfo offers it (its idle DX scanner is on, and the owner has not locked viewing). */
           dxLogAvail: dxLogOk && !!(client.current as any)?.isVibe,
+          /* ★★★ V12 beta90 VIEWS' AVIATION and SHIPPING keys — only where this server has something for them (a mode it
+           *  offers, or NAVTEX stations in its gallery). AVIATION opens the one aircraft map (the source it can hear first). */
+          avMapAvail: !IS_APPLE_TV && !!(client.current as any)?.isVibe && (!!adsbCap?.ok || !!avCap?.ok || hfdlCapable),
+          onAvMap: () => { markInteract(); setModeSelOpen(false); setAvMapFocus(avOn ? 'datalink' : adsbCap?.ok ? 'adsb' : hfdlCapable && !avCap?.ok ? 'hfdl' : 'adsb'); setAvMapOpen(true); },
+          shipMapAvail: !IS_APPLE_TV && !!(client.current as any)?.isVibe && (!!aisCap?.ok || dscCapable || navAvail),
+          onShipMap: () => { markInteract(); setModeSelOpen(false); openShipMap(aisCap?.ok ? 'ships' : dscCapable ? 'dsc' : 'navtex'); },
           onDxLog: () => { markInteract(); setModeSelOpen(false); setDxLogOpen(true); },
           /* ★★ V12 CW — the server's own decoder and skimmer, only where its vibeserver.json says `"cw": true` (an older
            *  server, or the owner's switch off, draws no key: AGENTS.md, no dead control). */
@@ -16577,7 +16622,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           band: spotsBandCap ? { ok: spotsBandCap.ok, on: spotsBandOn, hint: spotsBandHint(spotsBandCap), onPress: onSpotsBand } : undefined,
           singleOn: spotsKind === 'digi' && !spotsBandOn,
           onSpotsMap: () => { setModeSelOpen(false); if (spotsKindRef.current !== 'digi') onSpotsToggle('digi'); setLocalMapOpen(true); },
-          showCwStt: !isLocal && !isKiwi, showMap: isLocal || isKiwi,
+          // ★★ beta90 on a VibeServer the MAP is the DIGI MODES MAP (its station store + APRS) — shown with APRS alone too
+          showCwStt: !isLocal && !isKiwi, showMap: isLocal || isKiwi, mapLabel: (client.current as any)?.isVibe ? 'DIGI MODES' : undefined,
           sttActive: selDecoder === 'whisper' && activeDecoder === 'whisper',
           sttSelected: selDecoder === 'whisper' && activeDecoder !== 'whisper',
           onSttToggle: () => onDecToggle('whisper'),
@@ -16924,11 +16970,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={isLocal ? 'https://localhost' : baseUrl}
         wsBaseOverride={decoderBase}
         sessionUuid={sessionUuid}
-        rxLat={recvLoc?.lat ?? 0}
-        rxLon={recvLoc?.lon ?? 0}
-        spots={spots}
+        rxLat={(serverPos ?? recvLoc)?.lat ?? 0}
+        rxLon={(serverPos ?? recvLoc)?.lon ?? 0}
+        spots={digiSpots}
+        /* ★★ beta90 THE DIGI MODES MAP: the server's windows, its kept stations (digiSpots) and the APRS layer */
+        storeWindows={digiStorePolling}
+        onDigiWindow={(w) => { setDigiWin(w); setDigiStore(new Map()); }}
+        aprsPoints={digiAprs}
+        aprsFocus={aprsFocus}
         onPickCity={() => setCityPickerOpen(true)}
-        onClose={() => setLocalMapOpen(false)}
+        onClose={() => { setLocalMapOpen(false); setDigiAprsOn(false); }}
         disconnected={serverLost || serverBusy || connTimedOut}
         onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
         onRetry={() => fullReconnect()}
