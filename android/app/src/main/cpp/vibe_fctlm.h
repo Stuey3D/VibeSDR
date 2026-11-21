@@ -317,7 +317,10 @@ public:
     }
     void feedAudio(const float* x, int n) {
         rx_.feed(x, n);
-        rx_.setLocked(fr_.sinceGood() < 12000);   // ★ ten seconds without a frame: hunt again
+        // ★ ten seconds without a frame: hunt again. ★★ AND NO FRAME YET = hunting: sinceGood() counts from 0 before the
+        //   first frame, so without good() > 0 a fresh run thought itself locked for its first 10 s and never found a
+        //   signal more than the Costas loop's ~60 Hz off (the benchmark row decoded 0; 20 ms blocks lost frames).
+        rx_.setLocked(fr_.good() > 0 && fr_.sinceGood() < 12000);
         if (rx_.samples() - lastStatus_ >= 48000) { lastStatus_ = rx_.samples(); status(); }
     }
     std::string statusJson() const {

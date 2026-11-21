@@ -177,7 +177,7 @@ private:
     }
     /** 9.6 kS/s: the AFC's hunt, the Costas rotation, the matched filter, Gardner. */
     void stage2(std::complex<float> z) {
-        if (c_.afc && !locked_) {
+        if (c_.afc && !locked_ && n2_ >= huntHold_) {
             sq_.push_back(z * z);
             if (sq_.size() >= kFft) { hunt(); sq_.clear(); }
         } else if (!sq_.empty()) sq_.clear();
@@ -247,6 +247,14 @@ private:
         }
         const double mean = (sum - best) / std::max(1, cnt - 1);
         if (best < 25.0 * mean) return;   // ★ no clear line: keep listening where we are
+        // ★★ ALREADY ON A SIGNAL: a clear line where we are tuned (|2Δf| ≤ 2 bins, ≈ ±19 Hz) — stay. The hunt runs until
+        //   the first frame, and a real (USB) audio signal low in the passband has its mirror image close enough that
+        //   signal × image makes a second line: −500 Hz from 1200 (a 700 Hz carrier) jumped to it and ran to −900 Hz.
+        {
+            double here = 0;
+            for (int k = -2; k <= 2; ++k) here = std::max(here, (double)std::norm(a[(size_t)((k + (int)kFft) % (int)kFft)]));
+            if (here >= 25.0 * mean) { huntHold_ = n2_ + (uint64_t)(kHoldSec * fs2_); return; }
+        }
         // interpolate the peak (parabolic)
         auto mag = [&](int k) { return std::sqrt(std::norm(a[(size_t)((k + (int)kFft) % (int)kFft)])); };
         const double ym = mag(bi - 1), y0 = mag(bi), yp = mag(bi + 1);
@@ -258,6 +266,7 @@ private:
         coarse_ = std::max(-900.0, std::min(900.0, coarse_ + df));
         w2_ = 0; p2_ = 0;
         setNco1();
+        huntHold_ = n2_ + (uint64_t)(kHoldSec * fs2_);   // ★ found: let the Costas loop and the framer work
     }
 
     Cfg c_;
@@ -275,6 +284,12 @@ private:
     std::complex<float> prev_{0, 0};
     float pow_ = 1e-6f, sigPow_ = 0, noisePow_ = 1;
     bool locked_ = false;
+    /* ★★ After a hunt finds a line (moved to it, or it is already where we are tuned), no hunt for kHoldSec — longer than
+     *  a FUNcube frame period (5 s), so the framer gets a whole frame. Re-hunting every 53 ms until the first frame
+     *  knocked the loop off a signal it had (−500 Hz ran to −900: the signal × its audio image is a second line). No
+     *  frame by then: hunt again. Before, ONE hunt ran — only if the first block was ≥ 53 ms (20 ms server blocks: none). */
+    static constexpr double kHoldSec = 6.0;
+    uint64_t huntHold_ = 0;
     std::vector<std::complex<float>> sq_;
 };
 

@@ -106,7 +106,7 @@ static void s3() {
 }
 
 struct Result { int good = 0; uint64_t syncs = 0, failed = 0; double afc = 0; };
-static Result runChain(const tx::Cfg& tc, int nFrames, bool invertRx = false, bool forceScalar = false, std::vector<float>* symsOut = nullptr) {
+static Result runChain(const tx::Cfg& tc, int nFrames, bool invertRx = false, bool forceScalar = false, std::vector<float>* symsOut = nullptr, size_t blk = 4800) {
     std::vector<std::vector<uint8_t>> fr;
     for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(1 + i % 24, 1000 + (uint32_t)i));
     std::vector<float> audio = tx::modulate(fr, tc);
@@ -116,7 +116,7 @@ static Result runChain(const tx::Cfg& tc, int nFrames, bool invertRx = false, bo
     run.rxMut().forceScalar = forceScalar;
     std::vector<uint8_t> got;
     if (symsOut) { auto& rx = run.rxMut(); auto prev = rx.onSymbol; rx.onSymbol = [prev, symsOut](float s) { symsOut->push_back(s); prev(s); }; }
-    for (size_t i = 0; i < audio.size(); i += 4800) run.feedAudio(audio.data() + i, (int)std::min<size_t>(4800, audio.size() - i));
+    for (size_t i = 0; i < audio.size(); i += blk) run.feedAudio(audio.data() + i, (int)std::min<size_t>(blk, audio.size() - i));
     r.good = (int)run.framer().good(); r.syncs = run.framer().syncs(); r.failed = run.framer().failed(); r.afc = run.rx().afcHz();
     return r;
 }
@@ -127,6 +127,17 @@ static void s4() {
     tx::Cfg c; c.ebn0Db = 99;
     Result r = runChain(c, nf);
     CHECK(r.good >= nf - 1, "clean, on 1200 Hz: %d / %d frames", r.good, nf);
+    /* ★★ THE SERVER's 20 ms BLOCKS, OFF CENTRE (2026-11-21): a fresh run used to think itself locked until its first
+     *  frame — one hunt ran only if the first block was ≥ 53 ms, so 960-sample blocks never found ±150 Hz (the benchmark
+     *  row decoded 0). Every frame, from the first. */
+    {
+        tx::Cfg b; b.offsetHz = 150; b.ebn0Db = 12;
+        Result rb = runChain(b, 4, false, false, nullptr, 960);
+        CHECK(rb.good == 4, "20 ms blocks, +150 Hz off, Eb/N0 12 dB: %d / 4 frames (the first one too)", rb.good);
+        b.offsetHz = -500;
+        rb = runChain(b, 4, false, false, nullptr, 960);
+        CHECK(rb.good == 4, "20 ms blocks, −500 Hz off: %d / 4 frames", rb.good);
+    }
     c.offsetHz = 350; c.rampHzS = 8; c.clockPpm = 60; c.phase = 2.1; c.ebn0Db = 14;
     r = runChain(c, nf);
     CHECK(r.good >= nf - 1, "+350 Hz off, an 8 Hz/s Doppler ramp, 60 ppm clock, Eb/N0 14 dB: %d / %d (AFC %.0f Hz)", r.good, nf, r.afc);
