@@ -244,7 +244,7 @@ test-sat-engine (`geo` present, bounded, agrees with `pts`).
 - **Server:** the lock's own measurement (already used for TRACK/COAST) is stored per tx with a timestamp, in memory and
   bounded.
 
-### 2.5 Unattended passes: schedule, decode, record (L)
+### 2.5 Unattended passes: schedule, decode, record (L) — ★ DECIDED: as a BACKGROUND DECODING decoder (see Decided 3)
 - **User gets (owner switch, default OFF):** "decode every METEOR / ISS SSTV / AO-73 pass above N°". The server tunes when
   the radio is free, decodes into the gallery, and optionally records narrow baseband. Gallery entries are tagged with the
   pass (time, max el).
@@ -296,12 +296,17 @@ test-sat-engine (`geo` present, bounded, agrees with `pts`).
 - **On air:** Stuart's servers — an RS-44 pass (CW + linear), an AO-73 sunlit pass, an AO-7 Mode A pass on an HF radio,
   a METEOR pass through `pick`.
 
-## Open questions for Stuart
-1. Icom HF rigs and AO-7 Mode A: allow the lock to step the Icom VFO (receive only), or keep Icom refused?
-2. 1.4 passband rule: any tune inside the passband keeps the lock — OK?
-3. 2.5 recording on Pi-class servers: decode-only by default, recording owner-enabled with a cap — OK?
-4. 1.6 app: add a local-notification module for backgrounded reminders, or in-app banner only?
-5. 1.6 ships in the phase-1 beta, or after it?
+## Decided (Stuart 2026-11-21)
+1. **Icom: yes, by reach.** Satellites are shown only to a receiver that can hear them, so an Icom HF rig shows AO-7's
+   Mode A (and any HF downlink) and picks it — the lock steps the Icom's VFO, receive only. No Icom-specific refusal.
+2. **REMIND in the app: an in-app banner** (no OS notification module).
+3. **Unattended satellite decoding works like the existing BACKGROUND DECODING** (WEFAX etc.: `RadioConfig::bgDecode`,
+   "When the last user leaves the server after [N]", keep-in-range while listeners are on, results to the GALLERY) —
+   satellite passes join that scheme as another background decoder, not a separate scheduler. 2.5 is rewritten to that.
+
+## Still open (my recommendation in brackets)
+1. 1.4 passband rule: any tune inside the passband keeps the lock (yes — otherwise FO-29's 100 kHz cannot be tuned).
+2. 1.6 REMIND ships in the phase-1 beta (yes).
 
 ## Sources
 [1] https://status.amsat.org/ (reports 2026-11-16 → 21) · [2] AMSAT ANS-109/ANS-130 bulletins https://www.amsat.org/ans-130-amsat-news-service-weekly-bulletins/ ,
