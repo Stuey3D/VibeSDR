@@ -218,6 +218,10 @@ the next one; until a path arrives, panels level as today). Drawn as paths in gl
 and react-native-svg), the beam cone still from the dish, ~2× today's size so the shape reads at SMALL. Panel cells
 ruled, faceplate inks only (amber on default). Test: the panels' axis follows the path's heading; the dish faces the
 globe centre at every position on the dome.
+**Labels (Stuart 11-21: "it took me a second or so to realise what the dots and lines were when i first saw them"):** the
+receiver's dot gets a small label (the server's name, else RECEIVER) and the satellite its name; the 30° grid is drawn
+fainter than the coastlines so land reads first; BIG adds a one-line key under the globe ("dotted: this pass's orbit ·
+shaded: where it can be heard"). Labels avoid each other and the globe's edge (bird near the dot → label above).
 
 ## PHASE 2 — make it a satellite station (after the beta lands)
 
