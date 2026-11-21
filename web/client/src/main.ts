@@ -15195,14 +15195,26 @@ function aprsColourOf(st: { kind: string; sym: string; speed?: number }): string
   return '#59c26b';
 }
 
+/* ★★★ THE BOX ALWAYS GOES (Stuart 2026-11-21, Pi 500 RSP1B locked range, Safari: ✕ and the decoder's own key stopped the
+ *  decoder — EXPLAIN/RAW vanished — but the box stayed, and the same session's options sat at the bottom of the menu instead
+ *  of under the key). Something inside syncDecButtons threw on every call, so the close after it never ran. Not reproduced;
+ *  so the close is in a finally, and each step of syncDecButtons is isolated (decStep) and names itself in the console. */
 function stopDecoder() {
-  if (activeDec === 'rds') spec?.rdsxLight(false);
-  if (activeDec === 'aprs') aprsView?.hide();
-  decoders?.detach();
+  try {
+    if (activeDec === 'rds') spec?.rdsxLight(false);
+    if (activeDec === 'aprs') aprsView?.hide();
+    decoders?.detach();
+  } catch (e) { console.error('[decoders] stop', e); }
   activeDec = null;
-  syncDecButtons();
-  if (!decoders?.spotsEnabled) hideDecBox();
-  else showDecBox('spots');
+  try { syncDecButtons(); }
+  finally {
+    if (!decoders?.spotsEnabled) hideDecBox();
+    else showDecBox('spots');
+  }
+}
+/** One step of syncDecButtons: a fault in it is logged by name and cannot stop the steps after it. */
+function decStep(name: string, f: () => void) {
+  try { f(); } catch (e) { console.error(`[decoders] ${name}`, e); }
 }
 
 /** ★★★ WHEN ONE BUTTON IS ALL THE DECODERS PANEL WOULD HOLD, IT GOES ON THE MODE SHEET ITSELF.
@@ -15504,33 +15516,37 @@ function decWhyPaint() {
 }
 
 function syncDecButtons() {
-  aprsSilentSync();   // ★★ APRS is a silent decoder
-  syncCwPlain();   // ★ V12 the CW box's PLAIN key follows the decoder (CW only)
-  decWhyPaint();
-  for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
-    b.classList.toggle('on', b.dataset.dec === activeDec);
-  }
-  sqlRowsPaint();   // ★★ V12: the DEC tag on the decoding VFO's squelch row
-  $('rttySettings').hidden = activeDec !== 'rtty';
-  $('wefaxSettings').hidden = activeDec !== 'wefax';
-  $('timeSettings').hidden = activeDec !== 'time';
-  $('cwSettings').hidden = activeDec !== 'cw';
-  $('pskSettings').hidden = activeDec !== 'psk';
-  $('aprsSettings').hidden = activeDec !== 'aprs';
-  $('dscSettings').hidden = activeDec !== 'dsc';
-  if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
-  $('jttySettings').hidden = activeDec !== 'jtty';
-  if (activeDec === 'jtty') initJttyDials();
-  $('tonesSettings').hidden = activeDec !== 'tones';
-  if (activeDec === 'tones') initTonesSettings();
-  $('balloonSettings').hidden = activeDec !== 'balloon';
-  if (activeDec === 'balloon') initBalloonSettings();
-  $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
-  if (activeDec === 'ncdxf') initNcdxfBands(); else ncdxfFollowStop();   // ★ V12 FOLLOW ends with the tracker
-  $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
-  renderTmModes();
-  renderDscKeys();
-  placeOptions(activeDec);   // ★★★ V12: the settings pop out of the decoder's own key (decoderBandsDom.ts)
+  decStep('aprsSilentSync', aprsSilentSync);   // ★★ APRS is a silent decoder
+  decStep('syncCwPlain', syncCwPlain);         // ★ V12 the CW box's PLAIN key follows the decoder (CW only)
+  decStep('decWhyPaint', decWhyPaint);
+  decStep('keys lit', () => {
+    for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
+      b.classList.toggle('on', b.dataset.dec === activeDec);
+    }
+  });
+  decStep('sqlRowsPaint', sqlRowsPaint);       // ★★ V12: the DEC tag on the decoding VFO's squelch row
+  decStep('settings shown', () => {
+    $('rttySettings').hidden = activeDec !== 'rtty';
+    $('wefaxSettings').hidden = activeDec !== 'wefax';
+    $('timeSettings').hidden = activeDec !== 'time';
+    $('cwSettings').hidden = activeDec !== 'cw';
+    $('pskSettings').hidden = activeDec !== 'psk';
+    $('aprsSettings').hidden = activeDec !== 'aprs';
+    $('dscSettings').hidden = activeDec !== 'dsc';
+    $('jttySettings').hidden = activeDec !== 'jtty';
+    $('tonesSettings').hidden = activeDec !== 'tones';
+    $('balloonSettings').hidden = activeDec !== 'balloon';
+    $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
+    $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
+  });
+  if (activeDec === 'dsc') decStep('initDscChannels', initDscChannels);   // ★ the radio's range may have changed since the page loaded
+  if (activeDec === 'jtty') decStep('initJttyDials', initJttyDials);
+  if (activeDec === 'tones') decStep('initTonesSettings', initTonesSettings);
+  if (activeDec === 'balloon') decStep('initBalloonSettings', initBalloonSettings);
+  decStep('ncdxf', () => { if (activeDec === 'ncdxf') initNcdxfBands(); else ncdxfFollowStop(); });   // ★ V12 FOLLOW ends with the tracker
+  decStep('renderTmModes', renderTmModes);
+  decStep('renderDscKeys', renderDscKeys);
+  decStep('placeOptions', () => placeOptions(activeDec));   // ★★★ V12: the settings pop out of the decoder's own key (decoderBandsDom.ts)
 }
 
 function showDecBox(what: string) {
