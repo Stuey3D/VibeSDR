@@ -534,7 +534,8 @@ export function aprsApplyPacket(l: AprsList | null, trails: Map<string, [number,
  *  owner removed is not either (the web's). */
 export interface TrackItem { key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string;
   /** ★ V12 the NAVTEX map: a shape under it, its cluster group, its screen-reader words, the gallery file its card shows */
-  _sh?: unknown; _cl?: string; _aria?: string; _f?: string; /** ★ a count that grows when heard again — the layer pulses it */ _h?: number; /** ★ label rank (declutter) */ _rk?: number; /** ★ a great-circle line from the receiver */ _arc?: boolean }
+  _sh?: unknown; _cl?: string; _aria?: string; _f?: string; /** ★ a count that grows when heard again — the layer pulses it */ _h?: number; /** ★ label rank (declutter) */ _rk?: number; /** ★ a great-circle line from the receiver */ _arc?: boolean;
+  /** ★ V12 beta90 an aircraft the ADS-B layer draws (aviationMap.ts avPlaneAdsb) — the aviation map's planes */ _adsb?: unknown }
 export function aisItems(r: AisReport | null, rx: LatLon | null): TrackItem[] {
   if (!r) return [];
   return r.vessels.filter((v) => v.lat != null && v.lon != null)

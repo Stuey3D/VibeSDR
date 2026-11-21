@@ -10164,6 +10164,7 @@ function avViewOpts() {
     icon: (it: any) => it._ic, label: (it: any) => it._lb || '', card: (it: any) => it._cd || '',
     labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
     labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain', nautical: true,   // ★ beta90 NM on the scale bar
+    aircraft: true,   // ★★ beta90 every aircraft drawn by the ADS-B layer (rings, AUTO / FIT, the glide, heading from its fixes)
     onToggle: (id: string, on: boolean) => {
       avLayers = { ...avLayers, [id]: on };
       try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }
@@ -10183,7 +10184,7 @@ function avListHtml(c: ReturnType<typeof avCompose>, bodies: Map<string, string>
 }
 function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
   v.setToggles(c.toggles, avLayers as Record<string, boolean>);
-  v.setLegend(avLegendHtml(c.present));
+  v.setLegend(avLegendHtml(c.present, true));   // ★ beta90 the aircraft are the ADS-B layer's
   v.setProfile(c.profile);
 }
 function avUiOn() {

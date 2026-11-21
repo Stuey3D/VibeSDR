@@ -273,9 +273,47 @@ export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' =
   const body = title + rows.join('');
   return wrap === 'app' ? `<div class="trkCard"><div style="white-space:normal;max-width:320px">${body}</div></div>` : `<div class="trkCard">${body}</div>`;
 }
+/* ★★★ V12 beta90 ONE AIRCRAFT MAP BUILT ON THE ADS-B MAP (Stuart, 2026-11-21): every aircraft — ADS-B, ACARS, VDL2, HFDL,
+ *  ADS-C — is drawn by the ADS-B layer (web/mapkit/adsblayer.js): its silhouettes and tones, labels, range rings, AUTO / FIT,
+ *  the glide. This is an AvPlane in the shape that layer reads (docs/v12/ADSB.md aircraft objects):
+ *   · hex: the ICAO address where known, else a stable '~'-address made from the plane's key (the layer's own form for an
+ *     aircraft without one — no address links are offered for it);
+ *   · sparse: a datalink-only position (minutes between fixes): the layer GLIDES it to each new fix, faces it along the
+ *     bearing of its last two fixes when no track is sent, and keeps its tones on a datalink clock (2 min / 10 min);
+ *   · rowsExtra: the AVIATION MAP's own card lines (heard on, route, the last message) — text, escaped by the layer. */
+export interface AvAdsbShape {
+  hex: string; flight?: string; r?: string; t?: string; lat: number; lon: number;
+  alt_baro?: number | 'ground'; gs?: number; track?: number; seen_pos?: number; seen?: number;
+  sparse?: boolean; rowsExtra?: [string, string][];
+}
+function stableHex(key: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return '~' + (h & 0xffffff).toString(16).padStart(6, '0');
+}
+export function avPlaneAdsb(p: AvPlane): AvAdsbShape | null {
+  if (p.lat == null || p.lon == null) return null;
+  const icao = p.icao && /^[0-9A-Fa-f]{6}$/.test(p.icao) ? p.icao.toLowerCase() : '';
+  const rows: [string, string][] = [['Heard on', heardLine(p)]];
+  if (p.posSrc) rows.push(['Position from', p.posSrc + (p.lastSeen ? ` · last seen ${p.lastSeen} UTC` : '')]);
+  if (p.from && p.to) rows.push(['Route', `${p.from} → ${p.to}`]);
+  if (p.oooi) rows.push([p.oooi.toUpperCase(), p.oooiTime ? `${p.oooiTime} UTC` : 'heard']);
+  if (p.posTime) rows.push(['Fix time', p.posTime.startsWith(':') ? `${p.posTime} past the hour (as reported)` : `${p.posTime} UTC (as reported)`]);
+  if (p.labelName || p.label) rows.push(['Last message', p.labelName ? `${p.labelName}${p.label ? ` (label ${p.label})` : ''}` : `label ${p.label}`]);
+  if (p.app) rows.push(['Application', p.app]);
+  if (p.via) rows.push(['Via', p.via]);
+  const sparse = p.posSrc !== 'ADS-B' || !!p.lastSeen;
+  return {
+    hex: icao || stableHex(p.key), flight: p.flight, r: p.reg, t: p.type, lat: p.lat, lon: p.lon,
+    alt_baro: p.ground ? 'ground' : p.alt, gs: p.gs, track: p.trk,
+    // ★ a "last seen" ADS-B fix is old by construction: drawn stale, never as live
+    seen_pos: p.lastSeen ? Math.max(AV_FADE_SEC + 1, p.posAge ?? 0) : p.posAge, seen: p.age, sparse, rowsExtra: rows,
+  };
+}
 export function avPlaneItems(planes: AvPlane[], rx: LatLon | null, wrap: 'web' | 'app' = 'web'): TrackItem[] {
   return planes.filter((p) => p.lat != null && p.lon != null).slice(0, 2048).map((p) => ({
     key: `a:${p.key}`, lat: p.lat as number, lon: p.lon as number, _ic: avPlaneIcon(p), _lb: avName(p), _cd: avPlaneCard(p, rx, wrap),
+    _adsb: avPlaneAdsb(p),   // ★ beta90 the ADS-B layer draws it (TrackView aircraft:true / the app's aviation page)
     // ★ the declutter: a fresh fix's name above a faded one's; stations and airports' names yield to aircraft
     _rk: 5e11 - Math.min(p.posAge ?? 1e6, 1e6),
     _aria: `${avName(p)}: heard on ${p.src.join(', ')}${p.lastSeen ? `; its ADS-B position was last seen at ${p.lastSeen} UTC` : ''}. Press Enter for the card.`,
@@ -329,7 +367,23 @@ export function avMapStatus(planes: AvPlane[], note = ''): string {
 export const AV_EMPTY = 'No aircraft yet. ADS-B (1090 MHz), the aircraft datalink (ACARS / VDL2) and HFDL each add theirs — on any radio of this server.';
 
 // ── the KEY ────────────────────────────────────────────────────────────────────────────────────────────────────────
-export function avLegendRows(present: AvLayerId[]): Array<[string, string]> {
+export function avLegendRows(present: AvLayerId[], adsbWay = false): Array<[string, string]> {
+  /* ★★ V12 beta90: on the map built on the ADS-B layer, the aircraft are its silhouettes in its tones (adsblayer.js TONES,
+   *  dark) — how fresh the position is, on ADS-B's clock or the datalink's; which sources heard it is on its card. */
+  if (adsbWay) {
+    const pl = (rgb: string) => `<span style="display:inline-block;width:20px;text-align:center;color:rgb(${rgb})">✈</span>`;
+    const r: Array<[string, string]> = [
+      [pl('80,255,120'), 'A fresh position — under 10 s (ADS-B) or 2 min (ACARS, VDL2, HFDL, ADS-C)'],
+      [pl('180,255,80'), 'Ageing — 10–30 s (ADS-B) or 2–10 min (datalink)'],
+      [pl('255,190,40'), 'Old — over 30 s (ADS-B) or 10 min (datalink): it has flown on'],
+      [pl('150,160,170'), 'On the ground'], [pl('255,80,60'), 'Emergency'], [pl('90,170,255'), 'Military'],
+      ['<span style="display:inline-block;width:20px;text-align:center">➚</span>', 'Pointing the way it is going: its track, or the line between its last two fixes; each new fix glides in'],
+      ['<span style="display:inline-block;width:20px;text-align:center">◎</span>', 'RINGS: range rings in NM · AUTO / FIT: keep every aircraft in view · its card says which sources heard it'],
+    ];
+    if (present.includes('stations')) r.push([`<span style="display:inline-block;width:20px;height:20px;overflow:hidden;vertical-align:middle">${avStationIcon().html}</span>`, 'HFDL ground station heard']);
+    if (present.includes('airports')) r.push(['<span style="display:inline-block;width:20px;text-align:center">✈</span>', 'Airports and runways (the AIRPORTS layer)']);
+    return r;
+  }
   const small = (h: string) => `<span style="display:inline-block;width:20px;height:20px;overflow:hidden;vertical-align:middle;transform:scale(.8);transform-origin:center">${h}</span>`;
   const plane = (posSrc: string, src: string[], extra: Partial<AvPlane> = {}) => avPlaneIcon({ key: 'k', src, srcAge: {}, age: 0, n: 1, posSrc, trk: 45, ...extra }).html;
   const rows: Array<[string, string]> = [];
@@ -340,8 +394,8 @@ export function avLegendRows(present: AvLayerId[]): Array<[string, string]> {
   if (present.includes('airports')) rows.push(['<span style="display:inline-block;width:20px;text-align:center">✈</span>', 'Airports and runways (the AIRPORTS layer)']);
   return rows;
 }
-export function avLegendHtml(present: AvLayerId[]): string {
-  return avLegendRows(present).map(([g, w]) => `<div class="kr">${g}<span>${esc(w)}</span></div>`).join('');
+export function avLegendHtml(present: AvLayerId[], adsbWay = false): string {
+  return avLegendRows(present, adsbWay).map(([g, w]) => `<div class="kr">${g}<span>${esc(w)}</span></div>`).join('');
 }
 
 /** ★★ ONE COMPOSITION for both clients: the items, the list's rows (sections when several layers), the status line. */
