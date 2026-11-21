@@ -325,9 +325,11 @@ function recorder() {
      && /color=\{lampOff \? LAMP_OFF_INK : G\(0\.95 \* dim\)\} strokeWidth=\{1\.4\}/.test(tk));
   // ★ 2026-10-07: ZOOM's lamp goes OFF in DAB (drum and keys, portrait and landscape) — unlit, never disabled:
   //   it still turns / presses and clicks (disabled_control_reads_as_absent).
+  // ★ 2026-11-21: DAB ONLY — DRM shares the meter context but its zoom works (Stuart): the lamp reads ZoomLampOffContext
   ok('ControlsBar: zoom lamp off in DAB — both drums and both key pairs',
-     (cb.match(/<DrumWheel type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 2
-     && (cb.match(/<TunerKeys type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 2
+     (cb.match(/<DrumWheel type="zoom"[^>]*lampOff=\{zoomLampOff\}/g) ?? []).length === 2
+     && (cb.match(/<TunerKeys type="zoom"[^>]*lampOff=\{zoomLampOff\}/g) ?? []).length === 2
+     && /<ZoomLampOffContext\.Provider value=\{!!dabOn\}>/.test(cb)
      && !/<(?:DrumWheel|TunerKeys) type="zoom"[^>]*disabled/.test(cb));
   ok('TunerKeys: lamp off = unlit legend + no glyph glow, keys never disabled by it',
      /lampOff \? LAMP_OFF_LEGEND/.test(tk) && /lampOff \? null : lit/.test(tk) && !/disabled[^\n]*lampOff/.test(tk));

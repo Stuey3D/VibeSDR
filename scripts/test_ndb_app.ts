@@ -195,8 +195,9 @@ eq('live: quiet', app.ndbRowLive(a.beacons[3], NOW * 1000), false);
   ok('Mode sheet: the NDB key, its reason line, blockable', ms.includes('ndbKey(false)') && ms.includes('NDB unavailable') && ms.includes("isBlocked('ndb')"));
   const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
   ok('map: EXIT NDB', mo.includes('>EXIT NDB<'));
-  ok('map: the NDB layer goes in after the ADS-B layer', mo.indexOf('${isAdsb || isNdb ? `<script>${ADSB_LAYER_JS}') >= 0
-     && mo.indexOf('${isAdsb || isNdb ? `<script>${ADSB_LAYER_JS}') < mo.indexOf('${isNdb ? `<script>${NDB_LAYER_JS}'));
+  // ★ beta90: the same ADS-B layer also draws the one AVIATION map (kind 'avdata') — the condition grew, the order holds
+  const adsbAt = mo.search(/\$\{isAdsb \|\| isNdb[^?]*\? `<script>\$\{ADSB_LAYER_JS\}/);
+  ok('map: the NDB layer goes in after the ADS-B layer', adsbAt >= 0 && adsbAt < mo.indexOf('${isNdb ? `<script>${NDB_LAYER_JS}'));
   ok('map: the layer gets the GPU map or Leaflet, never the compat adapter', mo.includes('VibeNdbLayer.create(GLVM||map'));
   const sc = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
   // ★ db0ef3ec1 moved the rule into sessionHoldNotice.audioQuietFor (shared with the paused note) — check both halves.
