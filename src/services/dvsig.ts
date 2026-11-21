@@ -36,6 +36,9 @@ export interface DvEntry {
   slot?: number; cc?: number; ran?: number; mode?: string;
   // ★ the identities — present only in an identities copy
   src?: number; dst?: number; grp?: boolean;
+  /** ★ V12 beta90: the callsign RadioID.net registers to the source / a private call's destination ID — the server's
+   *  owner-switched lookup (vibe_dmr_id.h), amateur bands only. The talker alias, when sent, still wins as the name. */
+  srcCall?: string; dstCall?: string;
   from?: string; to?: string; via1?: string; via2?: string; alias?: string; text?: string; dg?: number;
   gps?: { lat: number; lon: number };
   ber?: number;
@@ -52,6 +55,8 @@ const clean = (s: unknown, n: number): string | undefined => {
   const t = s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
   return t || undefined;
 };
+/** A looked-up callsign: A–Z 0–9 / only, 3–12 (it is shown to listeners). */
+const callOf = (v: unknown): string | undefined => (typeof v === 'string' && /^[A-Z0-9/]{3,12}$/.test(v) ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 const int = (v: unknown, lo: number, hi: number): number | undefined => { const x = num(v); return x !== undefined && x >= lo && x <= hi ? Math.round(x) : undefined; };
 
@@ -73,6 +78,7 @@ export function parseDvsig(msg: unknown): DvState | null {
       e.slot = int(g.slot, 0, 2); e.cc = int(g.cc, 0, 4095); e.ran = int(g.ran, 0, 63); e.mode = clean(g.mode, 24);
       if (st.ids) {   // ★ an identities copy only; a public one has none of these and none is invented
         e.src = int(g.src, 0, 0xFFFFFF); e.dst = int(g.dst, 0, 0xFFFFFF); if (typeof g.grp === 'boolean') e.grp = g.grp;
+        e.srcCall = callOf(g.srcCall); e.dstCall = callOf(g.dstCall);
         e.from = clean(g.from, 16); e.to = clean(g.to, 16); e.via1 = clean(g.via1, 16); e.via2 = clean(g.via2, 16);
         e.alias = clean(g.alias, 32); e.text = clean(g.text, 120); e.dg = int(g.dg, 0, 127);
         if (g.gps && typeof g.gps === 'object') {
@@ -107,8 +113,10 @@ export function dvWhere(e: DvEntry): string {
 export function dvWho(e: DvEntry): string {
   if (e.sys === 'DMR' || e.sys === 'NXDN' || e.sys === 'dPMR') {
     if (e.src === undefined && e.dst === undefined) return '';
-    const to = e.dst === undefined ? '' : e.grp === false ? `${e.dst}` : e.sys === 'dPMR' ? `${e.dst}` : `TG ${e.dst}`;
-    return [e.src !== undefined ? `${e.src}` : '…', to && `→ ${to}`].filter(Boolean).join(' ');
+    // ★ V12 beta90: "G4ABC (2355254) → TG 2351" once the server's RadioID lookup answered — the alias wins when sent
+    const id = (n: number, call?: string) => (call && !e.alias ? `${call} (${n})` : `${n}`);
+    const to = e.dst === undefined ? '' : e.grp === false ? (e.dstCall ? `${e.dstCall} (${e.dst})` : `${e.dst}`) : e.sys === 'dPMR' ? `${e.dst}` : `TG ${e.dst}`;
+    return [e.src !== undefined ? id(e.src, e.srcCall) : '…', to && `→ ${to}`].filter(Boolean).join(' ');
   }
   if (!e.from && !e.to) return '';
   const via = e.via1 ? ` via ${e.via1.replace(/\s+/g, ' ')}` : '';
@@ -173,7 +181,7 @@ export function dvsigMapPoints(s: DvState | null): { key: string; lat: number; l
     const key = `${e.sys}|${e.from ?? e.src ?? e.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ key, lat: e.gps.lat, lon: e.gps.lon, label: `${e.sys} ${e.alias || e.from || e.src || ''}`.trim(), t: e.t1 });
+    out.push({ key, lat: e.gps.lat, lon: e.gps.lon, label: `${e.sys} ${e.alias || e.from || e.srcCall || e.src || ''}`.trim(), t: e.t1 });
   }
   return out;
 }

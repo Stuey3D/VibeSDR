@@ -168,6 +168,7 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "decoders/tone_id.h"         // ★ V12: CTCSS / DCS tone ID on NFM (its own discriminator on the channel IQ)
+#include "vibe_dmr_id.h"           // ★ V12 beta90: DMR ID → callsign (docs/v12/DMR-ID.md)
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_paging_gate.h"        // ★★★ V12 PAGING: where it may run (Android app / R36S handheld only) — one pure rule
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
@@ -40744,6 +40745,37 @@ static std::atomic<int> g_vsRttySkimWorkers{0};   // ★ 0 = vibe::rttySkimDefau
 void LocalSdrShim::setRttySkimWorkers(int n) {
     g_vsRttySkimWorkers.store(std::max(0, std::min(8, n)), std::memory_order_relaxed);
     LOGI("RTTY skimmer: %d search worker(s) (%s)", rttySkimWorkers(), n > 0 ? "the owner's figure" : "the default for this hardware");
+}
+/* ★★ V12 beta90 PSK REPORTER — the owner's settings into the process's reporter (vibe_spot_report.h). The software id is
+ *  "VibeServer <version>" (the page shows decodingSoftware on its statistics page); the version is this build's. */
+void LocalSdrShim::setSpotReporting(bool on, const std::string& callsign, const std::string& grid, const std::string& antenna, bool wsprnet) {
+    vibe::spotreport::Config c;
+    c.on = on; c.call = callsign; c.grid = grid; c.antenna = antenna; c.wsprnet = wsprnet;
+#ifdef VIBESERVER_VERSION_STR
+    c.software = std::string("VibeServer ") + VIBESERVER_VERSION_STR;
+#else
+    c.software = "VibeServer";
+#endif
+    auto& r = vibe::spotreport::Reporter::shared();
+    const auto before = r.config();
+    r.configure(c);
+    const auto now = r.config();
+    if (before.on != now.on || before.call != now.call || before.wsprnet != now.wsprnet || before.grid != now.grid || before.antenna != now.antenna)
+        LOGI("PSK Reporter: %s%s%s%s", now.on && !now.call.empty() ? "on as " : "off",
+             now.on && !now.call.empty() ? now.call.c_str() : (now.on ? " (no callsign — nothing is sent)" : ""),
+             now.on && !now.call.empty() && now.grid.empty() ? " (no grid: set the server's location)" : "",
+             now.on && now.wsprnet && !now.call.empty() ? ", WSPR spots to WSPRnet too" : "");
+    if (now.on) r.start();
+}
+void LocalSdrShim::setSpotReportStatusDir(const std::string& dir) { vibe::spotreport::Reporter::shared().setStatusDir(dir); }
+void LocalSdrShim::setSpotReportFetcher(std::function<std::string(const std::string& url)> fn) {
+    vibe::spotreport::Reporter::shared().setHttpGet(std::move(fn));
+}
+void LocalSdrShim::setDmrIdLookup(bool on, std::function<std::string(const std::string& url)> fetch) {
+    auto& d = vibe::dmrid::Lookup::shared();
+    if (fetch) d.setFetcher(std::move(fetch));
+    if (d.enabled() != on) LOGI("DMR ID lookup (RadioID.net): %s", on ? "on" : "off");
+    d.setEnabled(on);
 }
 int LocalSdrShim::rttySkimWorkers() {
     const int n = g_vsRttySkimWorkers.load(std::memory_order_relaxed);

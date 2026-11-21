@@ -68,6 +68,7 @@
 #include "vibe_nav_run.h"      // ★ V12 VOR bearing + ILS deviation on the channel IQ — docs/v12/VOR-ILS.md
 #include "vibe_sarsat_run.h"   // ★ V12 COSPAS-SARSAT 406 MHz beacons on the channel IQ — docs/v12/SARSAT.md
 #include "vibe_clock.h"
+#include "vibe_spot_report.h"   // ★ V12 beta90: the spots to PSK Reporter / WSPRnet (owner switch, off by default)
 #include "vibe_thread.h"
 
 #include <algorithm>
@@ -1739,6 +1740,17 @@ private:
         const std::string c = safe(sp.call, 32), g = safe(sp.grid, 8), m = safe(sp.mode, 12);
         if (c.empty() || m.empty()) return;
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(m, c, g, sp.snr, rfHz); }
+        /* ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h, docs/v12/PSK-REPORTER.md): every spot this server decodes — a
+         *  listener's run or background decoding — goes to the process's reporter, which drops it at once unless the owner
+         *  switched reporting on with a callsign. The station heard only: nothing about who was listening. Cheap (a map
+         *  insert under a lock); the network is the reporter's own thread, every five minutes. */
+        {
+            vibe::spotreport::Spot rs;
+            rs.mode = m; rs.call = c; rs.grid = g; rs.snr = sp.snr; rs.rfHz = rfHz; rs.slotUtc = (double)ts / 1000.0;
+            rs.dt = std::isfinite(sp.dt) ? sp.dt : 0.f; rs.drift = std::isfinite(sp.drift) ? sp.drift : 0.f;
+            rs.dbm = sp.dbm >= -30 && sp.dbm <= 70 ? sp.dbm : -1000;
+            vibe::spotreport::Reporter::shared().note(rs);
+        }
         /* ★ V12 (2026-10-27): JTTY and PSK say what the station was doing ("CQ", "QSO", "DE", "TEST"), and every spot
          *  carries the call's country (our own prefix table — vibe_callsign_country.h), printable ASCII only. */
         const std::string how = safe(sp.how, 8);

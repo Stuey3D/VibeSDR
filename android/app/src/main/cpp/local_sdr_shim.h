@@ -362,6 +362,17 @@ public:
     /** ★ V12 the RTTY skimmer's search workers (vibeserver.json "rttySkimWorkers"); 0 = the default for this box. */
     static void setRttySkimWorkers(int n);
     static int  rttySkimWorkers();   ///< what a new skimmer gets: the owner's figure, else the default
+    /** ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h, docs/v12/PSK-REPORTER.md): the owner's switch (OFF by default),
+     *  the receiver's callsign (required — nothing is sent without one), the server's grid, the antenna text, and the
+     *  second switch "Also send WSPR spots to WSPRnet". Live; starts the reporter's thread on first use. */
+    static void setSpotReporting(bool on, const std::string& callsign, const std::string& grid, const std::string& antenna, bool wsprnet);
+    /** ★ Where this process writes its status line for the setup page (the runtime dir the radio processes share). */
+    static void setSpotReportStatusDir(const std::string& dir);
+    /** ★ The HTTPS GET the ranking uses (the daemon: curl; Android: VibeHttp). Unset = no ranking. */
+    static void setSpotReportFetcher(std::function<std::string(const std::string& url)> fn);
+    /** ★★ V12 beta90 DMR ID → CALLSIGN (vibe_dmr_id.h, docs/v12/DMR-ID.md): the owner's switch (OFF by default) and the
+     *  HTTPS GET it looks a new ID up with (unset = no lookups). */
+    static void setDmrIdLookup(bool on, std::function<std::string(const std::string& url)> fetch);
     static int  decoderDefaultMax();
     /** ★★ V12 BACKGROUND DECODING (vibe_bgdecode.h): this radio's profiles, as RadioConfig::bgDecode stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */

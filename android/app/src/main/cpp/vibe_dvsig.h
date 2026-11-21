@@ -21,6 +21,7 @@
 //    two consecutive SACCH CRC-6 with the same RAN; dPMR — the header's CRC-8 with every Hamming word clean, or two
 //    consecutive CCH CRC-7 at 80 ms. test-dvsig runs minutes of noise and analogue FM speech and requires ZERO entries.
 #pragma once
+#include "vibe_dmr_id.h"   // ★ V12 beta90: DMR ID → callsign (owner switch, RadioID.net per-ID lookup)
 #include "vibe_dvsig_front.h"
 #include "vibe_bands.h"
 #include "vibe_thread.h"
@@ -1231,8 +1232,12 @@ public:
         std::lock_guard<std::mutex> lk(sm_);
         if (band != band_) { band_ = band; ++statusVer_; dirty_ = true; }
         if (idsCopy) *idsCopy = ids_.empty() ? std::string("{\"type\":\"dvsig\",\"state\":\"search\",\"log\":[]}") : rewriteBand(ids_, band);
+        // ★★ V12 beta90 DMR ID → CALLSIGN (vibe_dmr_id.h): only the identities copy, only on an amateur band (the rule
+        //    above), only with the owner's switch on — each DMR entry's source (and a private call's destination) gains
+        //    "srcCall" / "dstCall" once RadioID has answered; an answer landing later bumps the version so the box redraws.
+        if (idsCopy && !band.empty() && !ids_.empty()) *idsCopy = vibe::dmrid::Lookup::shared().annotate(*idsCopy);
         if (publicCopy) *publicCopy = pub_.empty() ? std::string("{\"type\":\"dvsig\",\"state\":\"search\",\"log\":[]}") : rewriteBand(pub_, band);
-        if (ver) *ver = statusVer_;
+        if (ver) *ver = statusVer_ + (band.empty() ? 0 : vibe::dmrid::Lookup::shared().generation());
     }
     bool busy() const { return busy_.load(std::memory_order_relaxed); }
     uint64_t droppedBlocks() const { std::lock_guard<std::mutex> lk(m_); return dropped_; }

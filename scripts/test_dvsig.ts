@@ -34,6 +34,13 @@ ok(parseDvsig({ type: 'dvsig', pin: 'tetra' })!.pin === 'auto' && parseDvsig({ t
 console.log('── what each system says ──');
 ok(dvWhere(e) === 'CC 1 · TS2' && dvWho(e) === '2345678 → TG 2350', 'DMR: colour code and slot; source → talkgroup');
 ok(dvWho({ ...e, grp: false, dst: 2342222 }) === '2345678 → 2342222', 'DMR private call');
+// ★ V12 beta90 DMR ID → callsign (the server's RadioID lookup): "G4ABC (2355254) → TG 2351", the alias wins as the name
+const looked = parseDvsig({ type: 'dvsig', ids: true, amateur: true, log: [{ ...dmr, alias: undefined, src: 2355254, dst: 2351, srcCall: 'GI4SZW' }] })!.log[0];
+ok(dvWho(looked) === 'GI4SZW (2355254) → TG 2351', 'DMR: the looked-up callsign with its ID → the talkgroup');
+ok(dvWho({ ...looked, alias: 'GI4SZW Seamus' }) === '2355254 → TG 2351', 'DMR: a talker alias wins — the ID stays a number beside it');
+ok(dvWho({ ...looked, grp: false, dst: 2342222, dstCall: 'G4ABC' }) === 'GI4SZW (2355254) → G4ABC (2342222)', 'DMR private call: both ends named');
+ok(parseDvsig({ type: 'dvsig', ids: true, log: [{ ...dmr, srcCall: 'G4"X<' }] })!.log[0].srcCall === undefined, 'a looked-up callsign is whitelisted');
+ok(parseDvsig({ type: 'dvsig', ids: false, log: [{ ...dmr, srcCall: 'GI4SZW' }] })!.log[0].srcCall === undefined, 'a public copy keeps no looked-up callsign');
 const ds = parseDvsig({ type: 'dvsig', ids: true, log: [{ id: 1, t: 1, sys: 'D-STAR', kind: 'voice', open: false, enc: false, from: 'G4ABC/ID51', to: 'CQCQCQ', via1: 'GB7XX  B', text: 'Hello' }] })!.log[0];
 ok(dvWho(ds) === 'G4ABC/ID51 → CQCQCQ via GB7XX B' && dvRow(ds).includes('Hello'), 'D-STAR: MY → UR via RPT1, the slow-data message');
 const ys = parseDvsig({ type: 'dvsig', ids: true, log: [{ id: 1, t: 1, sys: 'YSF', kind: 'voice', open: true, enc: false, mode: 'DN', dg: 23, from: 'G4ABC', to: 'ALL' }] })!.log[0];
