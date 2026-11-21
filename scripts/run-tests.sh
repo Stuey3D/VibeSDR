@@ -1916,6 +1916,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ WHOLE-RADIO MODES HAND BACK THE SERVER'S GEOMETRY (Stuart 11-21, beta89: blank spectrum + the old readout after ADS-B →
+#     SATELLITE, 1090000 kHz in NFM, 216928 in SATELLITE): the app's REAL client against a real server through ADS-B / DAB /
+#     AIS / ISM / SATELLITE and back, shared dial and one-listener radio — readout = the server's dial, every row drawn in a
+#     view at the server's centre; plus the web client's tune-then-mode race. Needs VIBESERVER_BIN for the server half.
+printf '\n\033[1m── Whole-radio modes: the client re-syncs to the server ──\033[0m\n'
+node --max-old-space-size=512 --no-warnings scripts/test_whole_mode_resync.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SATELLITE MODE's web window alone against a fake sat_list (no server): order, greying, the synced line, the pick box sizes
 #     (compact / big with the decoder canvas lent / ISS SSTV growing), APRS lines, AUTO DOPPLER, EXIT → drop; 390 px. Needs Edge + web/dist.
 node --max-old-space-size=512 scripts/test-web-satellite-mode.mjs; rc=$?

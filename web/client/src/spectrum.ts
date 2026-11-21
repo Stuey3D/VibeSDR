@@ -1090,6 +1090,11 @@ export class SpectrumClient {
    *  as somebody else's passband (see roomPassband.ts). -Infinity for the same reason as below. */
   private lastLocalBwAt = -Infinity;
   private lastLocalTuneAt = -Infinity;   // ★ -Infinity, not 0: performance.now() starts at 0 with the page
+  /** ★★★ A WHOLE-RADIO MODE (DAB, ADS-B, ISM, NDB, AIS, datalink, sondes) or a SATELLITE pick / drop HANDS THE DIAL TO THE
+   *  SERVER — the request is the person's, the frequency that follows is the server's, and the config carrying it is sent
+   *  ONCE. A tune just before it must not have its 1.5 s echo window swallow that config (the readout stayed on the old
+   *  dial — Stuart, 2026-11-21). The app's VibeServerWsClient.serverTakesDial, the same rule. */
+  private serverTakesDial() { this.lastLocalTuneAt = -Infinity; }
   private lastSendAt = -Infinity;
   private pingTimer: number | null = null;
   private lastPingAt = 0;
@@ -2484,6 +2489,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();   // ★ a held tune must not land on top of the multiplex
     this.dabQuietUntil = on ? 0 : Date.now() + 5000;
     this.dabHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
     if (channel !== undefined) m.channel = channel;
     if (sid !== undefined) m.sid = sid;
@@ -2510,6 +2516,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.adsbQuietUntil = on ? 0 : Date.now() + 5000;
     this.adsbHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.adsb = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     this._send({ type: 'adsb', on: on ? 1 : 0 });
   }
@@ -2527,6 +2534,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.ndbQuietUntil = on ? 0 : Date.now() + 5000;
     this.ndbHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ndb = Date.now();
     this._send({ type: 'ndb', on: on ? 1 : 0 });
   }
@@ -2542,6 +2550,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.ismQuietUntil = on ? 0 : Date.now() + 5000;
     this.ismHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ism = Date.now();
     const m: Record<string, unknown> = { type: 'ism', on: on ? 1 : 0 };
     if (on && o.band) m.band = o.band;
@@ -2558,6 +2567,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.aisQuietUntil = on ? 0 : Date.now() + 5000;
     this.aisHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ais = Date.now();
     this._send({ type: 'ais', on: on ? 1 : 0 });
   }
@@ -2569,6 +2579,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.avQuietUntil = on ? 0 : Date.now() + 5000;
     this.avHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     this._send(on && band ? { type: 'avdata', on: 1, band } : { type: 'avdata', on: on ? 1 : 0 });
   }
   /* ★★ V12 RADIOSONDES: `band` 'lo' | 'mid' | 'hi' | 'all' (vibeserver.json sondesBands); omitted = where it last was. */
@@ -2579,6 +2590,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.sdQuietUntil = on ? 0 : Date.now() + 5000;
     this.sdHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     this._send(on && band ? { type: 'sondes', on: 1, band } : { type: 'sondes', on: on ? 1 : 0 });
   }
   /* ★★ V12 SATELLITES: the picker's question (free — it changes nothing) and the Doppler lock (moves the dial on a shared
@@ -2594,10 +2606,11 @@ export class SpectrumClient {
    *  dial by themselves, but the drop is always sent — a held lock must never outlive the mode. */
   satPick(norad: number, tx: number, doppler: boolean): boolean {
     if (this.askBlocked()) return false;
+    this.serverTakesDial();   // ★ the pick tunes on the server — its dial must be adopted
     this._send(satPickMsg(norad, tx, doppler)); return true;
   }
   satDoppler(on: boolean) { this._send(satDopplerMsg(on)); }
-  satDrop() { this._send({ ...SAT_DROP_MSG }); }
+  satDrop() { this.serverTakesDial(); this._send({ ...SAT_DROP_MSG }); }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
 
