@@ -19,7 +19,8 @@ import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 import { digiStationsSanitise, digiStationsMerge, digiStationRows, type StoredStation } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
-import { digiAprsPoints } from '../utils/digiMapShared';
+import { digiAprsPoints, digiOverlayClean, type DigiMapOverlay } from '../utils/digiMapShared';
+import { setDigiModesMapOpener, openDigiModesMap } from '../services/digiModesMap';
 import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, sondeRanges, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
@@ -11725,6 +11726,21 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [digiWin, setDigiWin] = useState('24h');
   const [digiStore, setDigiStore] = useState<Map<string, StoredStation>>(() => new Map());
   const [digiAprsOn, setDigiAprsOn] = useState(false);
+  const [digiOverlay, setDigiOverlay] = useState<DigiMapOverlay | null>(null);
+  /* ★★★ THE ONE OPENER (services/digiModesMap.ts — the satellite client and anything else call it): the layer, a station
+   *  to centre on, a caller's overlay (an ISS pass's track and footprint). */
+  useEffect(() => {
+    setDigiModesMapOpener((o) => {
+      if (IS_TV) return;
+      if (o.overlay !== undefined) setDigiOverlay(digiOverlayClean(o.overlay));
+      if (o.layer === 'aprs') setDigiAprsOn(true);
+      if (o.focus) setAprsFocus(String(o.focus).slice(0, 40));
+      if (o.window && /^(1h|24h|7d|30d|all)$/.test(o.window)) { setDigiWin(o.window); setDigiStore(new Map()); }
+      setModeSelOpen(false);
+      setLocalMapOpen(true);
+    });
+    return () => setDigiModesMapOpener(null);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const digiStorePolling = localMapOpen && !!(client.current as { isVibe?: boolean } | null)?.isVibe && !IS_TV;
   useEffect(() => {
     if (!digiStorePolling) return;
@@ -14885,7 +14901,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             rows: aprsBoxRows(aprsList, (serverPos ?? recvLoc) ?? null), messages: aprsMessageLines(aprsList), log: aprsLog,
             baud: aprsBaud, frames: aprsFrames, idle: packetIdle(packetMode), is9600: packetMode === '9600',
             // ★★ beta90 the APRS box's MAP opens the DIGI MODES MAP on its APRS layer (APRS joined the digital spots map)
-            onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); setAprsFocus(key ?? ''); setDigiAprsOn(true); setLocalMapOpen(true); },
+            onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); openDigiModesMap({ layer: 'aprs', focus: key ?? '' }); },
           } : null}
           cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onDecTuneHz(hz, 'cwu' as SDRMode); } } : null}
           /* ★ V12 PSK: the same list; a tap = USB with the signal in the middle of the passband (LSB if in LSB — pskTuneFor). */
@@ -16978,8 +16994,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDigiWindow={(w) => { setDigiWin(w); setDigiStore(new Map()); }}
         aprsPoints={digiAprs}
         aprsFocus={aprsFocus}
+        digiOverlay={digiOverlay}
         onPickCity={() => setCityPickerOpen(true)}
-        onClose={() => { setLocalMapOpen(false); setDigiAprsOn(false); }}
+        onClose={() => { setLocalMapOpen(false); setDigiAprsOn(false); setDigiOverlay(null); }}
         disconnected={serverLost || serverBusy || connTimedOut}
         onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
         onRetry={() => fullReconnect()}

@@ -190,6 +190,8 @@ interface MapOverlayProps {
   /** ★★ V12 beta90 APRS on the DIGI MODES MAP: the APRS box's stations (digiMap.ts DigiAprsPoint shape), and a key to open on. */
   aprsPoints?: unknown[] | null;
   aprsFocus?: string;
+  /** ★★ V12 beta90 a caller's overlay on the DIGI MODES MAP (digiMapShared.ts DigiMapOverlay — a satellite pass). */
+  digiOverlay?: unknown | null;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -1849,6 +1851,19 @@ if(KIND==='digi'||KIND==='cw'){
   var aprsKey=document.getElementById('fAprs');
   if(aprsKey)aprsKey.addEventListener('click',function(){aprsOn=!aprsOn;aprsDraw();});
   if(window.__pendingAprs){window.__aprsPush(window.__pendingAprs[0],window.__pendingAprs[1]);window.__pendingAprs=null;}
+  /* ★★ beta90 a caller's OVERLAY (openDigiModesMap's — a satellite pass: its ground track, footprint and points), already
+   *  cleaned by digiMapShared.ts digiOverlayClean; numbers and short labels only, checked again here. */
+  var ovGroup=L.layerGroup().addTo(map);
+  window.__digiOverlay=function(json){try{ovGroup.clearLayers();var o=JSON.parse(json);if(!o||typeof o!=='object')return;
+    var c=/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(String(o.colour||''))?String(o.colour):'#88CCEE';
+    var ok=function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));};
+    (Array.isArray(o.lines)?o.lines:[]).slice(0,16).forEach(function(l){var pts=(Array.isArray(l)?l:[]).filter(ok).slice(0,2000);if(pts.length>=2)L.polyline(pts,{color:c,weight:2,opacity:0.85}).addTo(ovGroup);});
+    (Array.isArray(o.circles)?o.circles:[]).slice(0,16).forEach(function(k){if(k&&isFinite(Number(k.lat))&&isFinite(Number(k.lon))&&isFinite(Number(k.km)))
+      L.circle([Number(k.lat),Number(k.lon)],{radius:Math.max(0,Math.min(20000,Number(k.km)))*1000,color:c,weight:1.5,fill:true,fillColor:c,fillOpacity:0.08}).addTo(ovGroup);});
+    (Array.isArray(o.points)?o.points:[]).slice(0,500).forEach(function(p){if(p&&isFinite(Number(p.lat))&&isFinite(Number(p.lon)))
+      L.circleMarker([Number(p.lat),Number(p.lon)],{radius:6,color:RIM,weight:1.2,fillColor:c,fillOpacity:0.95}).addTo(ovGroup).bindPopup('<div style="font-size:13px;color:'+c+'">'+esc(String(p.label||'').slice(0,32))+'</div>');});
+  }catch(e){console.error('digi overlay',e);}};
+  if(window.__pendingOverlay!=null){window.__digiOverlay(window.__pendingOverlay);window.__pendingOverlay=null;}
   setInterval(rebuild,30000); // age filter refresh + prune display
 
   // ── stats sheet (skin lsvSmapStats) ──
@@ -2011,7 +2026,7 @@ function spotToData(s: SpotRow) {
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
-    storeWindows, onDigiWindow, aprsPoints, aprsFocus }:
+    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2158,6 +2173,12 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`(window.__aprsPush?window.__aprsPush(${lit},${f}):(window.__pendingAprs=[${lit},${f}]));true;`);
   };
   useEffect(() => { if (visible) pushAprs(); }, [visible, aprsPoints, aprsFocus]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pushOverlay = () => {
+    if (kind !== 'digi') return;
+    const lit = JSON.stringify(JSON.stringify(digiOverlay ?? null)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    webRef.current?.injectJavaScript(`(window.__digiOverlay?window.__digiOverlay(${lit}):(window.__pendingOverlay=${lit}));true;`);
+  };
+  useEffect(() => { if (visible) pushOverlay(); }, [visible, digiOverlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ★ ADS-B: the whole table each report (about once a second) — it REPLACES, it does not accumulate (the server drops
    *  an aircraft after 60 s), so there is nothing to de-duplicate. Before the page's handler exists the latest is
@@ -2385,7 +2406,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current);
                              if (kind === 'ndb') ndbJs('__ndbListW', adsbListW.current);
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
