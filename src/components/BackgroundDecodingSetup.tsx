@@ -23,7 +23,7 @@ import { meaningText } from '../constants/decoderTokens';
 import {
   type BgCaps, type BgModel, type BgProfile, type BgVfo, BG_DEMODS, BG_ISM_WORDS, BG_WAIT_CHOICES,
   bgBandHint, bgBandReach, bgDecoderSetsFreq, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
-  bgHalfWindow, BG_SAT_MIN_EL,
+  bgHalfWindow, BG_SAT_MIN_EL, bgSkimBandAt, bgSkimCentre, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
 } from '../services/bgDecode';
 
 type Props = {
@@ -35,6 +35,8 @@ type Props = {
   driver: string;
   /** What this radio may do in the background (services/bgDecode bgReach, minus what the owner switched off). */
   ismOk: boolean; aisOk: boolean; ndbOk: boolean; ndbBlocked: boolean; bandOk: boolean; dscOk: boolean;
+  /** ★ V12 beta90: may a CW / RTTY / PSK skimmer run here (not an Icom, not with the mode switched off)? */
+  skimOk: (kind: 'cw' | 'rtty' | 'psk') => boolean;
   /** The capture rate the radio runs at (Hz); 0 = not known yet. */
   rate: number;
   /** A locked range: its centre (Hz) — background never moves it; 0 = not locked. */
@@ -86,7 +88,8 @@ export default function BackgroundDecodingSetup(p: Props) {
   const decodersFor = (pr: BgProfile, v: BgVfo) => caps.decoders.filter((d) =>
     d.modes.includes(v.mode)
     && (!d.band || p.bandOk || v.dec === d.id)
-    && (!d.ndb || (p.ndbOk && !pr.vfos.some((o) => o !== v && o.dec === 'ndb-skim')) || v.dec === d.id));
+    && (!d.ndb || (p.ndbOk && !pr.vfos.some((o) => o !== v && o.dec === 'ndb-skim')) || v.dec === d.id)
+    && (!d.skim || p.skimOk(d.skim) || v.dec === d.id));   // ★ V12 beta90: a skimmer only where it can run here
   const decLabel = (id: string) => caps.decoders.find((d) => d.id === id)?.label ?? id;
 
   const vfoRow = (pr: BgProfile, pi: number, v: BgVfo, vi: number) => {
@@ -95,8 +98,17 @@ export default function BackgroundDecodingSetup(p: Props) {
     const bands = v.dec === 'spots-band' && caps.spotBands.length ? caps.spotBands : null;
     const open = openDec === `${pi}:${vi}`;
     const fits = decodersFor(pr, v);
+    /* ★★ V12 beta90 (Stuart 2026-11-21): a CW / RTTY / PSK skimmer row PICKS ITS BAND — the engine's segments
+     *  (caps.skimBands), the window at segment bottom + width / 2 — or "Own centre…", which shows the kHz box. A stored
+     *  centre that is no band's is the owner's own. With no band list (an older engine), the box alone, as before. */
+    const sk = caps.decoders.find((d) => d.id === v.dec && d.skim);
+    const skBands = sk && caps.skimBands && caps.skimBands[sk.skim!].length ? caps.skimBands[sk.skim!] : null;
+    const skW = sk?.width || 0;
+    const own = !!skBands && (!!v.own || (v.hz > 0 && !bgSkimBandAt(skBands, skW, v.hz)));
+    const curSkim = skBands && !own ? bgSkimBandAt(skBands, skW, v.hz) : null;
     const h = v.dec === 'ndb-skim' ? bgNdbHint(p.ndbOk, p.ndbBlocked, centre, p.rate, locked)
-            : v.dec === 'spots-band' ? bgBandHint(p.bandOk, caps.spotBands, v.hz, centre, p.rate) : null;
+            : v.dec === 'spots-band' ? bgBandHint(p.bandOk, caps.spotBands, v.hz, centre, p.rate)
+            : sk && skBands ? bgSkimHint(sk, p.skimOk(sk.skim!), p.driver === 'icom', skBands, v.hz, own, centre, p.rate) : null;
     const setV = (f: (v2: BgVfo, pr2: BgProfile) => void) => set((m) => f(m.profiles[pi].vfos[vi], m.profiles[pi]));
     return (
       <View key={vi} style={[st.vfo, { borderColor: C.border }]}>
@@ -107,7 +119,7 @@ export default function BackgroundDecodingSetup(p: Props) {
             {key('▼', () => setS((m) => { const a = m.profiles[pi].vfos; const x = a.splice(vi, 1)[0]; a.splice(vi + 1, 0, x); }), false, vi === pr.vfos.length - 1)}
           </>)}
           <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>VFO {vi + 1}</Text>
-          {!bands && (
+          {!bands && (!skBands || own) && (
             <View style={[st.row, { flexShrink: 1 }]}>
               <TextInput editable={v.dec !== 'ndb-skim'}
                 defaultValue={v.hz > 0 && v.dec !== 'ndb-skim' ? String(v.hz / 1e3) : ''}
@@ -127,21 +139,31 @@ export default function BackgroundDecodingSetup(p: Props) {
                 () => setV((x) => { x.hz = b.hz; }), bgSpotBand(bands, v.hz)?.id === b.id)}</React.Fragment>)}
           </View>
         )}
+        {skBands && (
+          <View style={[st.row, { flexWrap: 'wrap' }]}>
+            {skBands.filter((b) => bgSkimFits(bgSkimCentre(b, skW), skW, centre, p.rate) || curSkim?.id === b.id).map((b) =>
+              <React.Fragment key={b.id}>{key(b.name + (bgSkimFits(bgSkimCentre(b, skW), skW, centre, p.rate) ? '' : ' (outside this window)'),
+                () => { setGen((g) => g + 1); setV((x) => { x.own = false; x.hz = bgSkimCentre(b, skW); }); }, curSkim?.id === b.id)}</React.Fragment>)}
+            {key('Own centre…', () => { setGen((g) => g + 1); setV((x) => { x.own = true; }); }, own)}
+          </View>
+        )}
         <View style={[st.row, { flexWrap: 'wrap' }]}>
           {Object.keys(BG_DEMODS).map((k) => <React.Fragment key={k}>{key(BG_DEMODS[k], () => setV((x, pr2) => {
             x.mode = k;
             // ★ only the decoders that make sense for this demodulator (Stuart) — refilled when it changes
             const ok = decodersFor(pr2, x);
             if (!ok.some((d) => d.id === x.dec)) x.dec = ok.length ? ok[0].id : '';
-          }), v.mode === k, fixed)}</React.Fragment>)}
+          }), v.mode === k, fixed || !!sk)}</React.Fragment>)}
           {key(decLabel(v.dec) + (open ? '  ▴' : '  ▾'), () => setOpenDec(open ? '' : `${pi}:${vi}`), true)}
           {key('Remove', () => setS((m) => { const a = m.profiles[pi].vfos; a.splice(vi, 1); if (!a.length) a.push({ hz: 0, mode: 'usb', dec: 'navtex' }); }))}
         </View>
         {open && (
           <View style={{ gap: 4, marginTop: 4 }}>
             {fits.map((d) => (
-              <TouchableOpacity key={d.id} onPress={() => { setOpenDec(''); setV((x) => {
+              <TouchableOpacity key={d.id} onPress={() => { setOpenDec(''); setGen((g) => g + 1); setV((x) => {
+                  const from = caps.decoders.find((q) => q.id === x.dec);
                   x.dec = d.id;
+                  bgSkimDecoderChange(x, from, d, caps.skimBands, centre, p.rate);
                   if (bgDecoderSetsFreq(d.id)) {
                     x.mode = 'usb';
                     if (d.id === 'ndb-skim') x.hz = 0;

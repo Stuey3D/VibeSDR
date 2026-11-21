@@ -4527,6 +4527,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   driver={bgDriver} ismOk={bgReachNow.ismOk} aisOk={bgReachNow.aisOk} ndbOk={bgReachNow.ndbOk}
                   ndbBlocked={bgOff.has('ndb')} bandOk={!bgOff.has('spots') && !bgOff.has('spotsband')}
                   dscOk={!bgOff.has('dsc')} rate={bgRate} lockCentre={bgLockCentre}
+                  skimOk={(k) => !isIcom && !bgOff.has(k)}
                   users={advanced ? maxUsers : 1} decoderMax={decoderMax}
                   adsbKeeps={landingAdsb && adsbKeep} problem={bgProblem} />
               </View>
