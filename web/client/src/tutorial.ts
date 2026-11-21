@@ -140,7 +140,8 @@ const STEPS: Step[] = [
         // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md) — replaced SAT and the METEOR LRPT decoder key, 2026-11-20
         + 'SATELLITE lists every satellite\u2019s passes (up now first, each rated EXCELLENT to POOR by how high it climbs, greyed where this receiver cannot hear it); tap one and the '
         + 'radio tunes there, follows its Doppler (AUTO DOPPLER) and decodes it \u2014 METEOR pictures grow in its box, packets '
-        + 'are listed, a voice satellite shows a little globe with it overhead. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
+        + 'are listed (MAP shows where they are), a voice satellite shows a little globe with it overhead and its orbit dotted, and REMIND on a pass '
+        + 'to come (where picking it disturbs nobody) pops up shortly before it rises with LISTEN. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION MAP, SELCAL, and on the VHF '
         + 'and UHF tabs VOR / ILS: tune a VOR in AM for the radial you are on FROM it, its ident and the station, with a compass card in the box '
         + '(two VORs\u2019 radials cross where you are), or an ILS localiser or glideslope for how far off the approach you are), Maritime (on the UHF tab '
