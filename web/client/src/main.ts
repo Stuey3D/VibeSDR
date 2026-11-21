@@ -17889,7 +17889,7 @@ ${glHead}
   /* ★ beta90 the scale bar clear of the stats column (vibemapgl.js / vibemap.js draw it bottom-left) */
   .maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:285px}
   .maplibregl-ctrl-scale{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
-  .leaflet-control-scale-line{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
+  #m .leaflet-control-scale-line{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
   /* ★ beta90 the layers (SPOTS / APRS / a caller's overlay) and the time window */
   #layers,#wins{display:inline-flex;gap:4px;align-items:center}
   #wins button,#layers button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);
@@ -18500,7 +18500,9 @@ function cell(k, v, sub) {
   return '<div><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>' +
          (sub ? '<div class="k">' + esc(sub) + '</div>' : '') + '</div>';
 }
-document.getElementById('summary').innerHTML = spots.length
+document.getElementById('summary').innerHTML = !show.spots && show.aprs
+  ? cell('APRS', aprs.length + ' station' + (aprs.length === 1 ? '' : 's'), aprs.length ? 'newest ' + aprs[0].call : 'none with a position yet')
+  : spots.length
   ? cell('LATEST', (latest.country || latest.callsign) + ' · ' + latest.band,
          latest.callsign + ' · ' + latest.mode + ' · ' + latest.snr + 'dB') +
     (rarest ? cell('RAREST COUNTRY', rarest[0] + ' (' + rarest[1] + ')', '') : '') +
