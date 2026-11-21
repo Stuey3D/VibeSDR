@@ -162,6 +162,10 @@ interface FreqReadout { hz: number; unit: FreqUnit; layout: NixieLayout }
  *   the ordinary reading is passband power ("S9" on a multiplex that never played a sound).
  */
 const DabMeterContext = React.createContext<DabQuality | null>(null);
+/** ★★ The zoom drum / keys go unlit in DAB ONLY (a multiplex has nothing to zoom into). NOT read from DabMeterContext:
+ *  DRM shares that meter but its zoom works and is needed (Stuart 2026-11-21: "drm is greying out the zoom when zoom
+ *  still works and is a needed control"). */
+const ZoomLampOffContext = React.createContext(false);
 const FreqReadoutContext = React.createContext<FreqReadout>({ hz: 0, unit: 'khz', layout: 'hf' });
 /**
  * ★★ V12 SATELLITE: the Doppler lock's badge beside the digits — the satellite glyph and ▲ / ▼, nothing else (Stuart
@@ -2076,7 +2080,7 @@ function ChatIcon({ size, progress, legend }: { size: number; progress?: SharedV
   return <DomeIcon size={size} k={size / 20} strokes={CHAT_STROKES} progress={progress} legend={legend} />;
 }
 
-// ★ LAMP_OFF_LEGEND — the unlit key (chat on a server with no chat; the zoom drum / keys in DAB) — lives in
+// ★ LAMP_OFF_LEGEND — the unlit key (chat on a server with no chat; the zoom drum / keys in DAB — not DRM, ZoomLampOffContext) — lives in
 //   constants/faceplate.ts since 2026-10-07, so the drum and the tuner keys draw the same dark lamp.
 const NOOP = () => {};
 
@@ -2318,6 +2322,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   /* ★★ DAB (2026-10-06): the thin line becomes the reception meter — bars and a line of text — so it takes a
    *  text line's height out of the pill, never below the 26 pt the banner rule already calls usable. */
   const dab        = React.useContext(DabMeterContext);
+  const zoomLampOff = React.useContext(ZoomLampOffContext);
   // ★ The phone bar stack takes the UNCAPPED deck and the tuning keys' height itself (it shares the room out).
   const stack      = pStack ? phoneBarStack({ base: portraitDeck({ cap: isCap, meter: meterKind, shared: !!sharedDial,
                                                 tablet: false, rowGap: ROW_GAP, r: s.r }),
@@ -2543,8 +2548,8 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         {!singleDrum && (
           <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
             {zoomKeys
-              ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} lampOff={!!dab} />
-              : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} lampOff={!!dab} />}
+              ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} lampOff={zoomLampOff} />
+              : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} lampOff={zoomLampOff} />}
           </ControlSlot>
         )}
       </View>}
@@ -2758,6 +2763,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   /* ★★ DAB (2026-10-06): the thin line becomes the reception meter and takes a text line's height out of the
    *  pill (never below 26 pt) — as in PortraitBar. The band does not change height. */
   const dab       = React.useContext(DabMeterContext);
+  const zoomLampOff = React.useContext(ZoomLampOffContext);
   const LINE_H    = dab ? Math.max(THIN_H, Math.min(s.r(13), BAND_H - THIN_GAP - 26)) : THIN_H;
   const PILL_H    = BAND_H - LINE_H - THIN_GAP;
   const FRAME_DAB_H = s.r(14);
@@ -2910,8 +2916,8 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {!singleDrum && (
         <ControlSlot style={{ flex: 1, minWidth: s.r(80) }} report={onZoomRect}>
           {zoomKeys
-            ? <TunerKeys type="zoom" height={BAND_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} landscape lampOff={!!dab} />
-            : <DrumWheel type="zoom" height={BAND_H} onDelta={onBwDelta} lampOff={!!dab} />}
+            ? <TunerKeys type="zoom" height={BAND_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} landscape lampOff={zoomLampOff} />
+            : <DrumWheel type="zoom" height={BAND_H} onDelta={onBwDelta} lampOff={zoomLampOff} />}
         </ControlSlot>
       )}
 
@@ -3597,12 +3603,14 @@ function ControlsBar({
       <SatDopContext.Provider value={satDop}>
       {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
       {/* ★★ V12 …and DRM's, in the same slots (one context: every meter slot already knows how to draw it) */}
+      <ZoomLampOffContext.Provider value={!!dabOn}>
       <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : drmOn ? (drmMeter ?? DRM_SEARCHING) : null}>
       {band
         ? <UiScaleOverride.Provider value={bandScale}><LandscapeBar {...shared} /></UiScaleOverride.Provider>
         : <PortraitBar  {...shared} />
       }
       </DabMeterContext.Provider>
+      </ZoomLampOffContext.Provider>
       </SatDopContext.Provider>
       </FreqReadoutContext.Provider>
     </Animated.View>

@@ -14446,13 +14446,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     setSatRemN(satRemRef.current.size);
   };
-  /* ★★ SATELLITE-BEST 1.9 — THE ONE DIGI MODES MAP's opener (Stuart 11-21: APRS joins the digital spots in the VIEWS maps).
-   *  ★ PLACEHOLDER until the b90-maps branch lands that map: today's APRS map (the same stations); the orbit, footprint and
-   *  "via ISS" are for the DIGI MODES map's APRS layer — the coordinator repoints THIS ONE FUNCTION at merge. */
-  const openDigiModesMap = (o: { layer: 'aprs'; overlay?: ReturnType<typeof satMapOverlay> | null }) => {
-    void o;
-    setAprsFocus(''); setAprsMapOpen(true);
-  };
   const satPickedSat = satPicked ? satList?.sats.find((x) => x.norad === satPicked.norad) : undefined;
   const satMapNow = satDec === 'aprs' && satMapOffered(satPickedSat?.tx[satPicked?.tx ?? -1],
     aprsList ? aprsList.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0);
