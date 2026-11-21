@@ -377,7 +377,8 @@ tx.use               unchanged words; a CW beacon is now "packet" (text lines), 
 ### `sat_list` `op:"track"` (reply `{"type":"sat_track",…}`) — new fields (1.7)
 ```
 geo        [[lat, lon, altKm], …]  sub-satellite points (deg, deg, km), ≤ 120 points, evenly spaced in time from
-           geoT0 to geoT1. Present only when the server knows the bird's orbit and has a location.
+           geoT0 to geoT1. Present only when the server knows the bird's orbit and has a location. An entry is
+           null where the orbit could not be computed (keeps geo[i] at geoT0 + i·geoStep) — lift the pen there.
 geoT0      unix s — AOS − 600 (the dotted path starts 10 min before AOS)
 geoT1      unix s — LOS + 600
 geoStep    s between consecutive geo points (geo[i] is at geoT0 + i·geoStep)
