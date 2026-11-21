@@ -13,6 +13,7 @@
  */
 
 import { runMirror, serveSats, serveSatsStatus } from './sats.js';
+import { runRanks, serveRanks, serveRanksStatus } from './ranks.js';
 import satsCurated from './sats-curated.json' with { type: 'json' };
 
 const PING_SEC = 900;              // 15 minutes — the sdr.hu interval, arrived at independently.
@@ -2003,6 +2004,15 @@ export default {
   /* ★★ V12 THE SATELLITE MIRROR (src/sats.js; wrangler.jsonc "triggers"): the only CelesTrak client in VibeSDR. Every
    *    VibeServer syncs GET /api/sats from here instead of asking CelesTrak. A round refuses itself inside its holds. */
   async scheduled(controller, env, ctx) {
+    // ★★ V12 beta90: two crons (wrangler.jsonc) — the hourly :41 one is the receiver rankings (src/ranks.js); the others are
+    //    the satellite mirror's ticks. Each round also refuses itself when it ran too recently, whatever calls it.
+    if (controller && controller.cron === '41 * * * *') {
+      ctx.waitUntil((async () => {
+        try { console.log(JSON.stringify({ ranks_round: await runRanks(env) })); }
+        catch (e) { console.error('ranks round error', (e && e.stack) || String(e)); }
+      })());
+      return;
+    }
     ctx.waitUntil((async () => {
       try {
         const r = await runMirror(env, { curated: satsCurated });
@@ -2046,6 +2056,9 @@ async function handle(request, env) {
       // ★ V12 satellites: sats.json (ETag / Last-Modified) and the mirror's state for a person
       if (p === '/api/sats' && request.method === 'GET') return await serveSats(request, env);
       if (p === '/api/sats/status' && request.method === 'GET') return await serveSatsStatus(env);
+      // ★ V12 beta90 the receiver rankings: ONE callsign's places (each server asks for its own), and the round's state
+      if (p === '/api/ranks' && request.method === 'GET') return await serveRanks(request, env);
+      if (p === '/api/ranks/status' && request.method === 'GET') return await serveRanksStatus(env);
       // ★ The server benchmark's UPLINK test (vibe_benchmark / Stuart, 2026-09-19): the server posts a few MB, we read
       //   and discard it, and it times the upload. Listeners it can carry = uplink / 100 kB/s (his worst case).
       //   Read and dropped, never stored; capped so it cannot be used to push arbitrary volumes through us.
