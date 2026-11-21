@@ -303,6 +303,26 @@ static void testViaSatellite() {
     put(ui("M0TLM", 0, "APRS", {}, "T#001,1,2,3,4,5,00000000"));
     bool none = true; for (auto& j : out) if (j.find("sat_tlm") != std::string::npos) none = false;
     CHECK(none, "T# heard direct (no satellite): no sat_tlm");
+    // ★ SONATE-2's housekeeping: our own transfer frame (the mission's sheet) through the run
+    uint8_t hk[111] = {};
+    auto setBits = [&](int pos, int len, uint64_t v) { for (int i = 0; i < len; ++i) if ((v >> (len - 1 - i)) & 1) hk[(pos + i) >> 3] |= uint8_t(0x80 >> ((pos + i) & 7)); };
+    setBits(513, 8, 200);    // P5V1AV battery voltage: 0.020070588·200 = 4.014 V
+    setBits(259, 4, 3);      // OBMODE: NORMAL MODE
+    setBits(625, 8, 120);    // P5V1BT: −47.2389 + 0.548218·120 + 1.95267e-5·120² = 18.828 °C
+    const std::string tf = vibesonate2::encodeStdHk(hk, 1795600000u, 42);
+    out.clear();
+    put(ui("DP0SNX", 0, "CQ", {}, tf));
+    std::string tj;
+    for (auto& j : out) if (j.find("sonate2-ax25") != std::string::npos) tj = j;
+    CHECK(!tj.empty() && tj.find("\"sat\":\"SONATE-2\"") != std::string::npos && tj.find("\"seq\":42") != std::string::npos && tj.find("\"mode\":\"NORMAL MODE\"") != std::string::npos,
+          "SONATE-2 STD HK → sat_tlm (%zu bytes)", tj.size());
+    CHECK(tj.find("{\"k\":\"P5V1AV\",\"name\":\"PCU05V1 BATTERY VOLTAGE\",\"v\":4.014,\"unit\":\"V\"}") != std::string::npos, "battery voltage calibrated by the mission's own figure");
+    CHECK(tj.find("\"k\":\"P5V1BT\",\"name\":\"PCU05V1 BATTERY TEMP\",\"v\":18.828") != std::string::npos, "battery temperature by its polynomial");
+    CHECK(tj.find("\"k\":\"OBMODE\",\"name\":\"OBDH MODE\",\"v\":3,\"text\":\"NORMAL MODE\"") != std::string::npos, "an enumeration carries its words");
+    std::string bad = tf; bad[20] ^= 1;
+    out.clear(); put(ui("DP0SNX", 0, "CQ", {}, bad));
+    bool any = false; for (auto& j : out) if (j.find("sonate2-ax25") != std::string::npos) any = true;
+    CHECK(!any, "a frame whose CRC does not agree: nothing");
 }
 
 static void testCpu() {

@@ -22,7 +22,8 @@ inline std::string byCallsign(const std::string& call) {
         { "DP0ISS", "ISS" },    // ARISS (Columbus)
         { "OR4ISS", "ISS" },    // ARISS
         { "IR0ISS", "ISS" },    // ARISS
-        { "OM9GRB", "GRBAlpha" },   // SatNOGS DB alt. name, NORAD 47959; 9k6 G3RUH, 437.025 MHz (re-entered)
+        { "OM9GRB", "GRBAlpha" },
+        { "DP0SNX", "SONATE-2" },   // Univ. Würzburg, "SONATE-2 — information for radio amateurs" (telemetry, CW, APRS digi)   // SatNOGS DB alt. name, NORAD 47959; 9k6 G3RUH, 437.025 MHz (re-entered)
     };
     for (const E& e : t) if (call == e.call) return e.name;
     return "";

@@ -19,6 +19,7 @@
 #include "vibe_aprs.h"
 #include "vibe_g3ruh.h"       // ★ V12 9600 Bd G3RUH (docs/v12/AX25-9600-FX25-IL2P.md)
 #include "vibe_sat_calls.h"
+#include "vibe_sonate2_tlm.h"   // ★ V12 beta90 SONATE-2 housekeeping
 #include "vibe_station_sink.h"
 
 #include <algorithm>
@@ -293,6 +294,11 @@ private:
             e.text += (c >= 0x20 && c < 0x7f) ? char(c) : '.';
         }
         if (!aprs) ++other_;
+        // ★ V12 beta90 1.3: SONATE-2's housekeeping (DP0SNX, a CCSDS transfer frame) → named values (vibe_sonate2_tlm.h)
+        if (!aprs && o_.json && ax.src.call == "DP0SNX") {
+            const vibesonate2::Result r = vibesonate2::decode(ax.info, e.sat.empty() ? std::string("SONATE-2") : e.sat, tlmNow_());
+            if (!r.json.empty()) o_.json(r.json);
+        }
         log_.push_back(e);
         while (log_.size() > kLogMax) log_.pop_front();
         dirty_ = true;
@@ -320,6 +326,8 @@ private:
         if (e.aprs) o += ",\"aprs\":1";
         o += "}";
     }
+    /** The wall clock for sat_tlm's "t" (the run's own clock is for ages, and is a test seam). */
+    static double tlmNow_() { return (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }
     double now() const {
         if (o_.clock) return o_.clock();
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
