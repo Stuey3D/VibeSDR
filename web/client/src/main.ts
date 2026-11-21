@@ -57,8 +57,8 @@ import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx } from '../../../src/services/satellites';
+import { SatPanel, type SatMapOpen } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -10352,6 +10352,13 @@ function satPanelGet(): SatPanel | null {
       follow: (d, t) => satFollow(d, t),
       left: () => satFollow('', null),
       image: (slot) => satLendImage(slot),
+      track: (norad, aos, los) => spec?.satTrack(norad, aos, los),   // ★ 1.7 the pass's path (geo → the dotted orbit)
+      rxName: () => serverName,                                      // ★ 1.8 the receiver dot's label
+      serverKey: () => location.host,                                // ★ 1.6 the reminders belong to this server
+      connected: () => !!spec && spec.spectrumOpenSince() > 0,       // ★ 1.6 no connection = a reminder never fires
+      enter: () => { if (!satPanel?.active) toggleSatMode(); },      // ★ 1.6 LISTEN goes in as the key does
+      mapStations: () => (satDec === 'aprs' && aprsLast ? aprsLast.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0),
+      openMap: (o) => openDigiModesMap(o),                           // ★ 1.9
     });
     satPanel.setCap(satCap);
   }
@@ -10375,6 +10382,14 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
   if (d === 'lrpt' || d === 'sstv') { clearDecImage(''); $('decImage').classList.add('on'); }
   decoders.attach(decExt(d), decParams(d), decVfo);
   syncDecButtons();
+}
+/* ★★ SATELLITE-BEST 1.9 — THE ONE DIGI MODES MAP's opener (Stuart 11-21: APRS joins the digital spots in the three VIEWS
+ *  maps — DIGI MODES · AVIATION · SHIPPING). ★ PLACEHOLDER until the b90-maps branch lands that map: this opens today's APRS
+ *  map (the same stations); the orbit, the footprint and the "via ISS" labels in `o` are for the DIGI MODES map's APRS layer
+ *  — the coordinator repoints THIS ONE FUNCTION at merge. */
+function openDigiModesMap(o: SatMapOpen) {
+  void o;
+  aprsMapOpen();
 }
 /** The decoder box's image canvas (#decImgWrap) lent to the SATELLITE window's big box, and home again (null). */
 let satImgHome: { parent: Node; next: Node | null } | null = null;
@@ -11887,7 +11902,7 @@ function showBanned() { showRefusal('NO ACCESS',
 /** ★★ Disconnected by the owner from the admin page. Not a ban, and not a fault — said so, with
  *  the time LEFT (the server's `secs`) and no retry button: the server turns this session away
  *  until then regardless. Same card for a refused reconnect during the cool-off. */
-function showKicked(secs: number) { showRefusal('DISCONNECTED', kickedSentence(secs)); }
+function showKicked(secs: number) { satPanel?.remindClear(); showRefusal('DISCONNECTED', kickedSentence(secs)); }   // ★ SATELLITE 1.6: reminders end with the session
 
 /** ★★★ THE IDLE RE-LOCK, as a PILL — not an overlay, and the difference is the whole point.
  *  Nothing has stopped: the audio is still playing, the decoder is still decoding, the session
@@ -11937,6 +11952,7 @@ function showEvicted() { showRefusal('TAKEN OVER',
  *  public receiver reads as a crash, and the listener blames us rather than understanding they
  *  had a share of a shared radio. */
 function showSessionEnded(cooldownSec: number, freshSec = 0, borrow = false) {
+  satPanel?.remindClear();   // ★★ SATELLITE 1.6: the session ended — nothing fires for the next user of this radio
   borrowedTime = false;   // a new connection is told afresh by hwinfo
   showRefusal('TIME UP',
     'Your time on this server has run out, and your session has been closed so the receiver is '
@@ -13459,7 +13475,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | null = null;   // ★ fctlm: SATELLITE-BEST 1.2, only ever followed from a SATELLITE pick
 /* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
  *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
  *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
@@ -14509,6 +14525,7 @@ function initDecoders(host: string, auth: AuthState) {
       aprsStatusExtra = packetStatusExtra(d);
       for (const st of l.stations) if (st.trail && st.trail.length) aprsTrails.set(st.key, st.trail);
       renderAprs(); aprsMapRender();
+      if (satDec === 'aprs') satPanel?.stationsChanged();   // ★★ SATELLITE 1.9: the MAP key appears once a station has a position
       setDecLive(l.stations.some((x) => x.seen < 60));
     },
     onAprsFrame: (d) => {   // ★ V12 every AX.25 frame (packet.ts parsePacketFrame cleans it)
@@ -14522,7 +14539,7 @@ function initDecoders(host: string, auth: AuthState) {
     },
     onAprsPacket: (p) => {
       if (activeDec !== 'aprs') return;
-      if (satDec === 'aprs') satPanel?.packet(p.line || p.raw);   // ★★★ SATELLITE: the packet lines in the compact box
+      if (satDec === 'aprs') { satPanel?.packet(p.line || p.raw); if (p.lat != null) satPanel?.stationsChanged(); }   // ★★★ SATELLITE: the packet lines in the compact box (1.9: a position → the MAP key)
       aprsLog.unshift({ t: Date.now(), line: p.line || p.raw });
       if (aprsLog.length > 60) aprsLog.length = 60;
       // ★ the track grows from the packets between lists (the list carries the whole track only to a joiner)
@@ -14608,6 +14625,7 @@ function initDecoders(host: string, auth: AuthState) {
       decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
+    onSatTlm: (d) => { if (satDec && activeDec === satDec) satPanel?.telemetry(parseSatTelemetry(d)); },   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);

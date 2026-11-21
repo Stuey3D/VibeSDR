@@ -82,7 +82,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -186,7 +186,8 @@ export interface DecoderCallbacks {
   /** ★ SITOR-A: the link status (src/services/sitora.ts parseSitorStatus checks it). */
   onSitorStatus?: (data: unknown) => void;
   onHfdlStatus?: (data: unknown) => void;   // ★ V12 HFDL: {msgs, bursts, detections}
-  onLrptStatus?: (data: unknown) => void;   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
+  onLrptStatus?: (data: unknown) => void;
+  onSatTlm?: (data: unknown) => void;   // ★ SATELLITE-BEST 1.3: fctlm_status / sat_tlm (src/services/satellites.ts parseSatTelemetry)   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
   onAleStatus?: (data: unknown) => void;   // ★ V12 2G HF ALE: {"words","offset","last"} while a transmission is read
@@ -261,6 +262,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   ncdxf: 'ncdxf',   // ★ V12 the NCDXF / IARU beacon tracker (vibe_ncdxf_run.h)
   balloon: 'balloon',   // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV (vibe_balloon_run.h)
   tones: 'tones',       // ★ V12 DTMF + 5-tone selective calling (vibe_tones_run.h)
+  fctlm: 'fctlm',       // ★ SATELLITE-BEST 1.2: AO-73's FUNcube telemetry (attached by a SATELLITE pick only)
   lrpt: 'lrpt',         // ★ V12 METEOR-M LRPT weather-satellite pictures (vibe_lrpt_run.h): "symbol_rate" etc.
   vor: 'vor',           // ★ V12 VOR / ILS (vibe_nav_run.h)
   sarsat: 'sarsat',     // ★ V12 406 MHz beacons (vibe_sarsat_run.h)
@@ -537,6 +539,12 @@ export class DecoderClient {
       this.cb.onHellStatus?.(msg.data);
       return;
     }
+    if ((msg.type === 'fctlm_status' || msg.type === 'sat_tlm') && msg.data) {
+      // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts, and a frame's values (sat_tlm — also from aprs: APRS T#, SONATE-2)
+      if (this.mode !== 'fctlm' && !(msg.type === 'sat_tlm' && this.mode === 'aprs')) return;
+      this.cb.onSatTlm?.(msg.data);
+      return;
+    }
     if (msg.type === 'lrpt_status' && msg.data) {
       if (this.mode !== 'lrpt') return;
       this.cb.onLrptStatus?.(msg.data);
@@ -652,6 +660,8 @@ export class DecoderClient {
       // ★ V12 VOR / ILS and 406 MHz beacons: their lines (what may be shown is the server's decision) and the state.
       case 'vor':
       case 'sarsat':
+      // ★ SATELLITE-BEST 1.2: AO-73's telemetry — a line per frame and the state (its values come as fctlm_status JSON)
+      case 'fctlm':
         if (op === 0x0b && this.mode === 'balloon') { this.cb.onBalloonPicture?.(buf); return; }
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian

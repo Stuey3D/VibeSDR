@@ -32,6 +32,12 @@ export interface SatTx {
   sstv?: boolean;
   /** Why this radio cannot hear it (reach false) — shown on the greyed row. */
   why?: string;
+  /** ★ SATELLITE-BEST 1.4: a transponder's AMSAT band letters, uplink UPPER / downlink lower ("U/v", "V/a") — the server's. */
+  band?: string;
+  /** ★ SATELLITE-BEST 1.4: the catalogue's own name for the mode ("Mode A", "Mode B"), where it has one. */
+  modeName?: string;
+  /** ★ beta90: the decoder a pick attaches (the server's word — the same as picked.decoder); '' = heard only. */
+  decoder?: SatPicked['decoder'];
 }
 export type SatUse = 'voice' | 'image' | 'packet';
 export interface SatPass { aos: number; tca: number; los: number; maxEl: number; aosAz: number; losAz: number }
@@ -46,6 +52,10 @@ export interface SatSource {
   orbits: string; transmitters?: string; via: string; fetched?: number; newestEpoch?: number;
   /** ★ SATELLITE MODE: unix s of the server's last good /api/sats fetch (0 = never) and whether one is running now. */
   synced?: number; fetching?: boolean;
+  /** ★★ SATELLITE-BEST 1.6: true = a pick here disturbs nobody (a single-user radio, or a locked range where each listener has
+   *  their own channel) — only then is REMIND offered. false = a shared dial. Absent (an older server) = never offered: the
+   *  client does not guess. */
+  pickPrivate?: boolean;
 }
 export interface SatList { time: string; located: boolean; now: number; why?: string; source?: SatSource; sats: SatInfo[] }
 export interface SatReadout {
@@ -54,7 +64,16 @@ export interface SatReadout {
   nominal?: number; offset?: number; rate?: number; trim?: number; az?: number; el?: number;
   aos?: number; los?: number; maxEl?: number; age?: number; ageState?: string; time: string;
 }
-export interface SatTrack { norad: number; aos: number; los: number; pts: [number, number][] }
+export interface SatTrack {
+  norad: number; aos: number; los: number; pts: [number, number][];
+  /** ★ SATELLITE-BEST 1.7: the sub-satellite points [lat, lon, altKm] over the pass (AOS − 10 min … LOS + 10 min, evenly
+   *  spaced in time), ≤ 120 — the dotted orbit on the half-globe; null where the server could not compute one (the pen
+   *  lifts). Absent from an older server: no line is drawn. */
+  geo?: GeoPt[];
+  /** the geo index of the pass's highest point (from the server's tca, geoT0, geoStep), when it says */
+  tcaIdx?: number;
+}
+export type GeoPt = [number, number, number] | null;
 
 const str = (v: unknown, max = 80): string | undefined =>
   typeof v === 'string' && v.length ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : undefined;
@@ -80,7 +99,10 @@ export function parseSatList(m: unknown): SatList | null {
                   consumer: str(t.consumer, 20), upHz: num(t.upHz), ctcss: num(t.ctcss), note: str(t.note, 120), reach: t.reach === true,
                   status: t.status === 'inactive' || t.status === 'active' ? t.status : undefined,
                   use: t.use === 'voice' || t.use === 'image' || t.use === 'packet' ? t.use : undefined,
-                  sstv: t.sstv === true ? true : undefined, why: str(t.why, 160) });
+                  sstv: t.sstv === true ? true : undefined, why: str(t.why, 160),
+                  band: typeof t.band === 'string' && /^[A-Za-z]{1,2}\/[A-Za-z]{1,2}$/.test(t.band) ? t.band : undefined,
+                  modeName: str(t.modeName, 24),
+                  decoder: t.decoder === 'lrpt' || t.decoder === 'sstv' || t.decoder === 'aprs' || t.decoder === 'cw' || t.decoder === 'fctlm' || t.decoder === '' ? t.decoder : undefined });
       }
     const passes: SatPass[] = [];
     if (Array.isArray(s.passes))
@@ -99,7 +121,8 @@ export function parseSatList(m: unknown): SatList | null {
   const so = o.source as Record<string, unknown> | undefined;
   const source: SatSource | undefined = so && typeof so === 'object' && (str(so.orbits, 120) || num(so.synced) != null || so.fetching === true)
     ? { orbits: str(so.orbits, 120) ?? '', transmitters: str(so.transmitters, 160), via: str(so.via, 20) ?? '', fetched: num(so.fetched), newestEpoch: num(so.newestEpoch),
-        synced: num(so.synced), fetching: so.fetching === true }
+        synced: num(so.synced), fetching: so.fetching === true,
+        pickPrivate: so.pickPrivate === true ? true : so.pickPrivate === false ? false : undefined }
     : undefined;
   return { time: str(o.time, 8) ?? 'none', located: o.located === true, now: num(o.now) ?? Date.now() / 1000, why: str(o.why, 200), source, sats };
 }
@@ -122,7 +145,21 @@ export function parseSatTrack(m: unknown): SatTrack | null {
   const pts: [number, number][] = [];
   for (const p of (o.pts as unknown[]).slice(0, 200))
     if (Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])) pts.push([Number(p[0]), Math.max(0, Math.min(90, Number(p[1])))]);
-  return { norad: num(o.norad) ?? 0, aos: num(o.aos) ?? 0, los: num(o.los) ?? 0, pts };
+  let geo: GeoPt[] | undefined, tcaIdx: number | undefined;
+  if (Array.isArray(o.geo)) {
+    geo = [];
+    // ★ a bad / null entry stays a gap (null) so geo[i] keeps its time (geoT0 + i·geoStep) and the pen lifts there
+    for (const g of (o.geo as unknown[]).slice(0, 200))
+      geo.push(Array.isArray(g) && isFinite(g[0]) && isFinite(g[1]) && Math.abs(Number(g[0])) <= 90 && Math.abs(Number(g[1])) <= 360
+        ? [Number(g[0]), Number(g[1]), isFinite(g[2]) ? Math.max(0, Math.min(50000, Number(g[2]))) : 600] : null);
+    if (geo.filter(Boolean).length < 2) geo = undefined;
+    const t0 = num(o.geoT0), st = num(o.geoStep), tca = num(o.tca);
+    if (geo && t0 != null && st != null && st > 0 && tca != null) {
+      const i = Math.round((tca - t0) / st);
+      if (i >= 0 && i < geo.length && geo[i]) tcaIdx = i;
+    }
+  }
+  return { norad: num(o.norad) ?? 0, aos: num(o.aos) ?? 0, los: num(o.los) ?? 0, pts, ...(geo ? { geo } : {}), ...(tcaIdx != null ? { tcaIdx } : {}) };
 }
 
 /** hwinfo → the button: absent = no button at all (the radio reaches no listed downlink); else live or greyed. */
@@ -259,14 +296,15 @@ export function txUse(t: SatTx): SatUse {
 }
 
 /** {"type":"sat","state":"picked",norad,tx,decoder} — the server's answer to a pick (a refusal comes as OFF + why). */
-export interface SatPicked { norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' }
+export interface SatPicked { norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'fctlm' }
 export function parseSatPicked(m: unknown): SatPicked | null {
   const o = m as Record<string, unknown> | null;
   if (!o || o.type !== 'sat' || o.state !== 'picked') return null;
   const norad = num(o.norad), tx = num(o.tx);
   if (norad == null || tx == null || tx < 0) return null;
   const d = o.decoder;
-  return { norad, tx: Math.floor(tx), decoder: d === 'lrpt' || d === 'sstv' || d === 'aprs' ? d : '' };
+  // ★ SATELLITE-BEST 1.1 / 1.2: a CW beacon's `cw` and AO-73's FUNcube telemetry `fctlm` (the server's, beta90)
+  return { norad, tx: Math.floor(tx), decoder: d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'fctlm' ? d : '' };
 }
 /** The three requests the mode sends (spectrum socket). */
 export const satPickMsg = (norad: number, tx: number, doppler: boolean) => ({ type: 'sat', op: 'pick', norad, tx, doppler });
@@ -395,7 +433,8 @@ export function satBoxSize(t: SatTx | undefined, pictureRunning: boolean): 'comp
   return t.sstv && pictureRunning ? 'big' : 'compact';
 }
 /** The decoder a pick needs (the server attaches it; the client follows on its decoder socket to receive its frames). */
-export function satDecoderFor(t: SatTx): '' | 'lrpt' | 'sstv' | 'aprs' {
+export function satDecoderFor(t: SatTx): SatPicked['decoder'] {
+  if (t.decoder != null) return t.decoder;   // ★ beta90: the server says
   const u = txUse(t);
   return u === 'image' ? (t.mode === 'lrpt' || t.consumer === 'lrpt' ? 'lrpt' : 'sstv') : u === 'packet' ? 'aprs' : t.sstv ? 'sstv' : '';
 }
@@ -421,6 +460,20 @@ export function orthoXYZ(lat: number, lon: number, lat0: number, lon0: number, r
 }
 /** The view is tipped this far south of the receiver, so the receiver stands near the top of the dome. */
 export const GLOBE_TILT = 50;
+/** ★★ SATELLITE-BEST 1.8: the bird, drawn as paths in scene pixels (one geometry for the web canvas and react-native-svg) —
+ *  a TUBE body standing on the Earth side, a DISH under it opening DOWN towards the globe's centre (the sub-point), and
+ *  TWO panels on a boom lying ALONG the heading (the screen direction of the orbit, 1.7's path; level with no path). */
+export interface GlobeBird {
+  body: string; dish: string; panels: string; cells: string; boom: string;
+  /** unit screen vectors (y down): the boom's axis (the heading) and the dish's (towards the globe centre) */
+  u: [number, number]; d: [number, number];
+  /** where the beam leaves the dish (the rim's middle) */
+  focus: { x: number; y: number };
+  /** half the bird's size across its widest (panel tip to panel tip) */
+  reach: number;
+  /** the drawing's bounding box on screen, for labels to keep clear */
+  box: { l: number; t: number; r: number; b: number };
+}
 export interface GlobeScene {
   w: number; h: number; cx: number; cy: number; r: number;
   /** the graticule (30°), SVG path in pixels — Path2D on the web, <Path d> in the app */
@@ -429,14 +482,68 @@ export interface GlobeScene {
   coast: string;
   rx: { x: number; y: number } | null;
   sat: { x: number; y: number } | null;
-  /** the beam: a cone from the bird down to its footprint (SVG path), and the footprint itself */
+  /** the beam: a cone from the bird's dish down to its footprint (SVG path), and the footprint itself */
   beam: string; foot: string;
+  /** ★ 1.7: the pass's orbit at the bird's (exaggerated) height — the renderer DASHES it ('' = no path from the server) */
+  orbit: string;
+  /** ★ 1.7: the highest point of the pass (closest to the receiver) and its small tick; null = not on the visible side */
+  tca: { x: number; y: number } | null;
+  tcaTick: string;
+  /** ★ 1.8: the bird's drawing (null = no bird to draw) */
+  bird: GlobeBird | null;
 }
-/** ★ The whole half-globe as numbers + SVG paths (no tiles, no coastlines — nothing to download, ~2 kB of code). The dome
- *  is the top half of the disc; the bird at radius 1 + its (exaggerated) height above its sub-point, hidden behind the
- *  globe or below the cut. `sat` null = no position (the scene still draws the dome and the receiver). */
-export function globeScene(w: number, h: number, rx: { lat: number; lon: number }, sat: { lat: number; lon: number; altKm?: number } | null): GlobeScene {
-  const r = Math.max(10, Math.min(w * 0.46, (h - 14) / 1.38));   // ★ headroom: the highest bird (1 + 0.35) and its panels stay inside
+/** How far above the globe a height is drawn (× the radius): exaggerated so 400 km is not a hair above the ground. */
+export function globeLift(altKm: number | undefined): number {
+  const alt = altKm != null && altKm > 0 ? altKm : 600;
+  return Math.max(0.1, Math.min(0.35, (alt / 6371) * 2.5));
+}
+/** The central angle (radians) between two points on the globe. */
+function gcAngle(la1: number, lo1: number, la2: number, lo2: number): number {
+  const p1 = la1 * DEG, p2 = la2 * DEG, dl = (lo2 - lo1) * DEG;
+  const c = Math.sin(p1) * Math.sin(p2) + Math.cos(p1) * Math.cos(p2) * Math.cos(dl);
+  return Math.acos(Math.max(-1, Math.min(1, c)));
+}
+const f1 = (n: number) => n.toFixed(1);
+const poly = (pts: Array<[number, number]>, close = true) => pts.map(([x, y], k) => `${k ? 'L' : 'M'}${f1(x)} ${f1(y)}`).join('') + (close ? 'Z' : '');
+/** ★ 1.8: the bird's paths at screen point `p`, heading `u`, dish towards `d` (unit vectors, y down); `k` = scene size unit. */
+export function globeBird(p: { x: number; y: number }, u: [number, number], d: [number, number], k: number): GlobeBird {
+  const at = (a: number, ua: [number, number], b: number, ub: [number, number]): [number, number] => [p.x + ua[0] * a + ub[0] * b, p.y + ua[1] * a + ub[1] * b];
+  const pu: [number, number] = [-u[1], u[0]];   // across the boom
+  const pd: [number, number] = [-d[1], d[0]];   // across the tube
+  // the tube: along d, rounded ends (a capsule of straight sides + 5-point caps)
+  const HL = 5 * k, HW = 3.6 * k, body: Array<[number, number]> = [];
+  for (let i = 0; i <= 6; i++) { const a = Math.PI * (i / 6); body.push(at(HL - HW + Math.sin(a) * HW, d, Math.cos(a) * HW, pd)); }
+  for (let i = 0; i <= 6; i++) { const a = Math.PI * (i / 6); body.push(at(-(HL - HW) - Math.sin(a) * HW, d, -Math.cos(a) * HW, pd)); }
+  // the dish: a bowl under the tube, its rim towards the globe (the beam leaves the rim's middle)
+  const base = HL + 0.6 * k, DW = 5.6 * k, DD = 3.2 * k, dish: Array<[number, number]> = [];
+  for (let i = 0; i <= 10; i++) { const t = -1 + i / 5; dish.push(at(base + DD * t * t, d, DW * t, pd)); }
+  const focus = at(base + DD, d, 0, pd);
+  // the boom and the two panels along the heading, each ruled into three cells
+  const B0 = 3.8 * k, P0 = 8 * k, P1 = 19 * k, PW = 3.8 * k;
+  let panels = '', cells = '';
+  for (const sg of [-1, 1]) {
+    panels += poly([at(sg * P0, u, -PW, pu), at(sg * P1, u, -PW, pu), at(sg * P1, u, PW, pu), at(sg * P0, u, PW, pu)]);
+    for (let c = 1; c < 3; c++) { const a = sg * (P0 + ((P1 - P0) * c) / 3); cells += poly([at(a, u, -PW, pu), at(a, u, PW, pu)], false); }
+    cells += poly([at(sg * P0, u, 0, pu), at(sg * P1, u, 0, pu)], false);
+  }
+  const boom = poly([at(-P0, u, 0, pu), at(-B0, u, 0, pu)], false) + poly([at(B0, u, 0, pu), at(P0, u, 0, pu)], false)
+    + poly([at(base - 0.4 * k, d, 0, pd), at(base + DD * 0.8, d, 0, pd)], false);   // ★ the feed, in the bowl
+  const out = { body: poly(body), dish: poly(dish), panels, cells, boom };
+  const box = { l: Infinity, t: Infinity, r: -Infinity, b: -Infinity };
+  for (const m of Object.values(out).join(' ').matchAll(/(-?[\d.]+) (-?[\d.]+)/g)) {
+    const x = Number(m[1]), y = Number(m[2]);
+    box.l = Math.min(box.l, x); box.r = Math.max(box.r, x); box.t = Math.min(box.t, y); box.b = Math.max(box.b, y);
+  }
+  return { ...out, u, d, focus: { x: focus[0], y: focus[1] }, reach: P1 + PW, box };
+}
+/** ★ The whole half-globe as numbers + SVG paths (no tiles, nothing to download). The dome is the top half of the disc; the
+ *  bird at radius 1 + its (exaggerated) height above its sub-point, hidden behind the globe or below the cut. `sat` null =
+ *  no position (the scene still draws the dome and the receiver). `path` (1.7, the track reply's geo) = the pass's orbit,
+ *  drawn at the same height, front side only, and the heading the bird's panels lie along. */
+export function globeScene(w: number, h: number, rx: { lat: number; lon: number }, sat: { lat: number; lon: number; altKm?: number } | null,
+                           path?: GeoPt[] | null, tcaIdx?: number): GlobeScene {
+  // ★ headroom: the highest bird (1 + 0.35), its panels and the label over it stay inside
+  const r = Math.max(10, Math.min(w * 0.46, (h - 30) / 1.38));
   const cx = w / 2, cy = h - 2;
   const lat0 = Math.max(-90, rx.lat - GLOBE_TILT), lon0 = rx.lon;
   const P = (x: number, y: number) => `${(cx + x * r).toFixed(1)} ${(cy - y * r).toFixed(1)}`;
@@ -458,15 +565,48 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
   const coast = grid; grid = gridOnly;
   const [rxX, rxY, rxZ] = orthoXYZ(rx.lat, rx.lon, lat0, lon0);
   const rxPt = rxZ >= 0 && rxY >= 0 ? { x: cx + rxX * r, y: cy - rxY * r } : null;
-  let satPt: { x: number; y: number } | null = null, beam = '', foot = '';
+  /** a point above the ground at `altKm` (exaggerated) → the screen, and whether it is on the side we see, above the cut */
+  const lifted = (la: number, lo: number, altKm: number | undefined) => {
+    const [x, y, z] = orthoXYZ(la, lo, lat0, lon0, 1 + globeLift(altKm));
+    return { x: cx + x * r, y: cy - y * r, vis: y > 0 && !(z < 0 && Math.hypot(x, y) < 1) };
+  };
+  // ★ 1.7 the orbit: the pen lifts behind the globe and below the cut, as the coastlines'
+  let orbit = '', tca: { x: number; y: number } | null = null, tcaTick = '';
+  const geo = path && path.filter(Boolean).length >= 2 ? path : null;
+  const gp = geo ? geo.map((p) => (p ? lifted(p[0], p[1], p[2]) : null)) : [];
+  if (geo) {
+    let pen = false;
+    for (const q of gp) { if (!q || !q.vis) { pen = false; continue; } orbit += `${pen ? 'L' : 'M'}${f1(q.x)} ${f1(q.y)}`; pen = true; }
+    // the highest point of the pass: the server's tca where it says, else the point closest to the receiver
+    let best = -1, bestA = Infinity;
+    if (tcaIdx != null && geo[tcaIdx]) best = tcaIdx;
+    else geo.forEach((p, i) => { if (!p) return; const a = gcAngle(p[0], p[1], rx.lat, rx.lon); if (a < bestA) { bestA = a; best = i; } });
+    const q = best >= 0 ? gp[best] : null;
+    if (q && q.vis) {
+      tca = { x: q.x, y: q.y };
+      const a = gp[Math.max(0, best - 1)] ?? q, b = gp[Math.min(gp.length - 1, best + 1)] ?? q;
+      const tx = b.x - a.x, ty = b.y - a.y, n = Math.hypot(tx, ty) || 1, nx = -ty / n, ny = tx / n, L = r * 0.045;
+      tcaTick = `M${f1(q.x - nx * L)} ${f1(q.y - ny * L)}L${f1(q.x + nx * L)} ${f1(q.y + ny * L)}`;
+    }
+  }
+  let satPt: { x: number; y: number } | null = null, beam = '', foot = '', bird: GlobeBird | null = null;
   if (sat) {
     const alt = sat.altKm != null && sat.altKm > 0 ? sat.altKm : 600;
-    const vis = Math.max(0.1, Math.min(0.35, (alt / 6371) * 2.5));   // ★ exaggerated so 400 km is not a hair above the ground
-    const [sx, sy, sz] = orthoXYZ(sat.lat, sat.lon, lat0, lon0, 1 + vis);
-    const behind = sz < 0 && Math.hypot(sx, sy) < 1;
-    if (!behind && sy > 0) {
-      const sp = { x: cx + sx * r, y: cy - sy * r };
+    const sp0 = lifted(sat.lat, sat.lon, alt);
+    if (sp0.vis) {
+      const sp = { x: sp0.x, y: sp0.y };
       satPt = sp;
+      // ★ the heading: the screen direction from the path's point nearest the bird to the next one (level until a path)
+      let u: [number, number] = [1, 0];
+      if (geo) {
+        let near = -1, nA = Infinity;
+        geo.forEach((p, i) => { if (!p) return; const a = gcAngle(p[0], p[1], sat.lat, sat.lon); if (a < nA) { nA = a; near = i; } });
+        const a = near < 0 ? null : gp[near === gp.length - 1 ? near - 1 : near], b = near < 0 ? null : gp[near === gp.length - 1 ? near : near + 1];
+        if (a && b) { const hx = b.x - a.x, hy = b.y - a.y, n = Math.hypot(hx, hy); if (n > 1e-6) u = [hx / n, hy / n]; }
+      }
+      const dx = cx - sp.x, dy = cy - sp.y, dn = Math.hypot(dx, dy) || 1;
+      bird = globeBird(sp, u, [dx / dn, dy / dn], r / 100);
+      const o = bird.focus;
       // the footprint: the ground the bird can see (half-angle acos(R/(R+h))), a ring of points round the sub-point
       const lam = Math.acos(6371 / (6371 + alt));
       const p1 = sat.lat * DEG, l1 = sat.lon * DEG;
@@ -480,15 +620,302 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
       }
       if (ring.length >= 3) {
         foot = ring.map((q, k) => `${k ? 'L' : 'M'}${q.x.toFixed(1)} ${q.y.toFixed(1)}`).join('') + 'Z';
-        // the cone's two edges: the footprint points furthest either side of the bird → sub-point axis
+        // the cone's two edges: the footprint points furthest either side of the dish → sub-point axis
         const [gx, gy] = orthoXYZ(sat.lat, sat.lon, lat0, lon0);
-        const ax = cx + gx * r - sp.x, ay = cy - gy * r - sp.y;
+        const ax = cx + gx * r - o.x, ay = cy - gy * r - o.y;
         const n = Math.hypot(ax, ay) || 1, nx = -ay / n, ny = ax / n;
         let lo = ring[0], hi = ring[0], dlo = Infinity, dhi = -Infinity;
-        for (const q of ring) { const d = (q.x - sp.x) * nx + (q.y - sp.y) * ny; if (d < dlo) { dlo = d; lo = q; } if (d > dhi) { dhi = d; hi = q; } }
-        beam = `M${sp.x.toFixed(1)} ${sp.y.toFixed(1)}L${lo.x.toFixed(1)} ${lo.y.toFixed(1)}L${hi.x.toFixed(1)} ${hi.y.toFixed(1)}Z`;
+        for (const q of ring) { const d = (q.x - o.x) * nx + (q.y - o.y) * ny; if (d < dlo) { dlo = d; lo = q; } if (d > dhi) { dhi = d; hi = q; } }
+        beam = `M${o.x.toFixed(1)} ${o.y.toFixed(1)}L${lo.x.toFixed(1)} ${lo.y.toFixed(1)}L${hi.x.toFixed(1)} ${hi.y.toFixed(1)}Z`;
       }
     }
   }
-  return { w, h, cx, cy, r, grid, coast, rx: rxPt, sat: satPt, beam, foot };
+  return { w, h, cx, cy, r, grid, coast, rx: rxPt, sat: satPt, beam, foot, orbit, tca, tcaTick, bird };
+}
+
+/* ★★ SATELLITE-BEST 1.8 — LABELS (Stuart 11-21: "it took me a second or so to realise what the dots and lines were when i
+ *  first saw them"): the receiver's dot (the server's name, else RECEIVER) and the bird (its name). They keep off each
+ *  other, off the bird and inside the picture; a bird near the dot puts its own label above it. `font` is in scene units
+ *  (the renderer passes ~10 CSS px worth, so the words read at SMALL and BIG alike). */
+export interface GlobeLabel { x: number; y: number; anchor: 'start' | 'middle' | 'end'; text: string }
+/** ★ The receiver dot's look on every faceplate (Stuart 11-21: "make the receiver marker green or a different contrasting
+ *  colour") — the health pill's / the TRACK dot's green, never the dome's ink; r and ring in CSS px (renderers scale). */
+export const GLOBE_RX_DOT = { fill: '#5BE36B', ring: 'rgba(0,0,0,0.85)', r: 5, ringW: 1.5 } as const;
+export const GLOBE_KEY_TEXT = 'dotted: this pass’s orbit · shaded: where it can be heard';
+export function globeLabelText(s: string | undefined, max = 18): string {
+  const t = (s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+export function globeLabels(g: GlobeScene, rxName: string | undefined, satName: string | undefined, font: number): { rx: GlobeLabel | null; sat: GlobeLabel | null } {
+  const cw = font * 0.62, pad = font * 0.25;
+  type Box = { l: number; t: number; r: number; b: number };
+  const boxOf = (L: GlobeLabel): Box => {
+    const wd = L.text.length * cw;
+    const l = L.anchor === 'start' ? L.x : L.anchor === 'end' ? L.x - wd : L.x - wd / 2;
+    return { l, t: L.y - font * 0.85, r: l + wd, b: L.y + font * 0.2 };
+  };
+  const hit = (a: Box, b: Box) => a.l < b.r + pad && b.l < a.r + pad && a.t < b.b + pad && b.t < a.b + pad;
+  const inside = (b: Box) => b.l >= 1 && b.r <= g.w - 1 && b.t >= 1 && b.b <= g.cy;
+  const clampMid = (L: GlobeLabel): GlobeLabel => {
+    if (L.anchor !== 'middle') return L;
+    const half = (L.text.length * cw) / 2;
+    return { ...L, x: Math.max(half + 2, Math.min(g.w - half - 2, L.x)) };
+  };
+  let satL: GlobeLabel | null = null, birdBox: Box | null = null;
+  const st = globeLabelText(satName, 16);
+  if (g.sat && g.bird && st) {
+    const bb = g.bird.box;
+    birdBox = bb;
+    const gap = pad * 1.5 + 1;
+    const tries: GlobeLabel[] = [
+      clampMid({ x: g.sat.x, y: bb.t - gap - font * 0.2, anchor: 'middle', text: st }),       // above (the rule)
+      { x: bb.r + gap, y: g.sat.y + font * 0.35, anchor: 'start', text: st },                 // right
+      { x: bb.l - gap, y: g.sat.y + font * 0.35, anchor: 'end', text: st },                   // left
+      clampMid({ x: g.sat.x, y: bb.b + gap + font * 0.85, anchor: 'middle', text: st }),      // below
+    ];
+    satL = tries.find((L) => inside(boxOf(L)) && !hit(boxOf(L), birdBox!)) ?? null;
+  }
+  let rxL: GlobeLabel | null = null;
+  const rt = globeLabelText(rxName) || 'RECEIVER';
+  if (g.rx) {
+    const dr = font * 0.6;
+    const tries: GlobeLabel[] = [
+      clampMid({ x: g.rx.x, y: g.rx.y + dr + font, anchor: 'middle', text: rt }),             // below the dot
+      clampMid({ x: g.rx.x, y: g.rx.y - dr - pad, anchor: 'middle', text: rt }),              // above
+      { x: g.rx.x + dr + pad, y: g.rx.y + font * 0.35, anchor: 'start', text: rt },
+      { x: g.rx.x - dr - pad, y: g.rx.y + font * 0.35, anchor: 'end', text: rt },
+    ];
+    const clear = (L: GlobeLabel) => inside(boxOf(L)) && !(birdBox && hit(boxOf(L), birdBox)) && !(satL && hit(boxOf(L), boxOf(satL)));
+    rxL = tries.find(clear) ?? null;
+  }
+  return { rx: rxL, sat: satL };
+}
+
+// ══ ★★ SATELLITE-BEST 1.4 — A TRANSPONDER's MODE, as operators know it ═══════════════════════════════════════════════════
+/** AMSAT's band letter of a frequency (A 10 m, H 15 m, V 2 m, U 70 cm, L 23 cm, S 13 cm, X 3 cm); '' = none of those. */
+export function satBandLetter(hz: number | undefined): string {
+  if (!hz || !(hz > 0)) return '';
+  const m = hz / 1e6;
+  return m >= 28 && m < 30 ? 'A' : m >= 21 && m < 21.5 ? 'H' : m >= 144 && m < 148 ? 'V' : m >= 420 && m < 450 ? 'U'
+    : m >= 1240 && m < 1300 ? 'L' : m >= 2300 && m < 2450 ? 'S' : m >= 10000 && m < 10500 ? 'X' : '';
+}
+/** ★ The row's mode label: "Mode B · U/v" (catalogue name · uplink UPPER / downlink lower). The server's `band` first; an
+ *  older server's transponder (a passband with an uplink) is worked out from its two frequencies. The name is left out
+ *  where the row's own label already says it ("AO-7 · Mode B"). '' = nothing to add. */
+export function satTxModeLabel(t: SatTx): string {
+  let band = t.band ?? '';
+  if (!band && t.hiHz && t.upHz) { const up = satBandLetter(t.upHz), dn = satBandLetter(t.hz); if (up && dn) band = `${up}/${dn.toLowerCase()}`; }
+  const name = t.modeName && !t.label.toLowerCase().includes(t.modeName.toLowerCase()) ? t.modeName : '';
+  return [name, band].filter(Boolean).join(' · ');
+}
+/** The row's detail line: "145.925–145.975 MHz USB · Mode B · U/v". */
+export function satTxDetail(t: SatTx): string { const m = satTxModeLabel(t); return m ? `${txText(t)} · ${m}` : txText(t); }
+
+// ══ ★★★ SATELLITE-BEST 1.6 — REMIND ON A PASS (Stuart 2026-11-21) — CLIENT-HELD ONLY ═══════════════════════════════════════
+// A REMIND key on each pass row, offered only where a pick disturbs nobody (source.pickPrivate — the server's word, never
+// guessed). The reminder lives in this page / app session ONLY, in memory: no server state, nothing written to storage — if
+// the listener leaves, the connection is gone or their session ends, nothing fires and the next user of that radio is never
+// disturbed. Shortly before AOS a pop-up says "ISS · Voice / SSTV rises in 2:00 — LISTEN?"; LISTEN enters SATELLITE and
+// picks through the ORDINARY pick (ask-before-tuning; the server gates it as a hand pick). Re-checked when it fires.
+export const SAT_REMIND_LEADS = [1, 2, 5, 10] as const;
+export type SatRemindLead = typeof SAT_REMIND_LEADS[number];
+export const SAT_REMIND_LEAD_DEFAULT: SatRemindLead = 2;
+export const SAT_REMIND_MAX = 20;
+export const SAT_REMIND_SHARED_WHY = 'This radio is now shared — a pass cannot be picked for everyone';
+export function satRemindLead(v: unknown): SatRemindLead {
+  const n = Number(v);
+  return (SAT_REMIND_LEADS as readonly number[]).includes(n) ? (n as SatRemindLead) : SAT_REMIND_LEAD_DEFAULT;
+}
+export interface SatReminder { key: string; server: string; norad: number; tx: number; aos: number; los: number; name: string; label: string }
+/** ★ The REMIND key is drawn only where it can act: the server says a pick is private, the row is hearable (not greyed) and
+ *  its pass is still to come. Hidden — not greyed — everywhere else (a control that can never act is not drawn). */
+export function satRemindOffered(l: SatList | null, r: Pick<SatRow, 'grey' | 'up' | 'next'>): boolean {
+  return l?.source?.pickPrivate === true && !r.grey && !r.up && !!r.next;
+}
+/** The key's words: "REMIND" / "REMINDING · 2 min". */
+export function satRemindKeyText(on: boolean, lead: number): string { return on ? `REMINDING · ${lead} min` : 'REMIND'; }
+/** ★ The re-check as it fires: why it can no longer be picked ('' = it can). The server's own words where it gave them. */
+export function satRemindWhy(l: SatList | null, r: Pick<SatReminder, 'norad' | 'tx' | 'name'>): string {
+  if (!l) return '';
+  if (l.source?.pickPrivate !== true) return SAT_REMIND_SHARED_WHY;
+  const sat = l.sats.find((s) => s.norad === r.norad);
+  const t = sat?.tx[r.tx];
+  if (!sat || !t) return `${r.name} is no longer listed on this server`;
+  if (!t.reach) return t.why || 'out of this receiver’s range';
+  if (sat.ageState === 'expired' || sat.ageState === 'none') return ageText(sat);
+  return '';
+}
+/** The pop-up's line: "ISS · Voice / SSTV rises in 2:00 — LISTEN?" (or "is up now" once AOS has gone by). */
+export function satRemindText(r: Pick<SatReminder, 'aos' | 'name' | 'label'>, nowSec: number): string {
+  const who = r.label ? `${r.name} · ${r.label}` : r.name;
+  return r.aos > nowSec ? `${who} rises in ${mss(r.aos - nowSec)} — LISTEN?` : `${who} is up now — LISTEN?`;
+}
+/** ★ Two passes at once: one receiver, one pick — the pop-up says what picking this one ends ('' = nothing to end). */
+export function satRemindEnds(picked: { norad: number; tx: number } | null, pickedName: string | undefined, r: Pick<SatReminder, 'norad' | 'tx'>): string {
+  if (!picked || (picked.norad === r.norad && picked.tx === r.tx) || !pickedName) return '';
+  return `picking this ends ${pickedName}`;
+}
+/** ★ The in-memory book of reminders for this page / app session — bounded (SAT_REMIND_MAX), never stored. The clock is the
+ *  caller's (unix s), so a fake clock tests it. */
+export class SatReminders {
+  private m = new Map<string, SatReminder>();
+  static key(server: string, norad: number, tx: number, aos: number) { return `${server}|${norad}|${tx}|${Math.round(aos)}`; }
+  get size() { return this.m.size; }
+  all(): SatReminder[] { return [...this.m.values()].sort((a, b) => a.aos - b.aos); }
+  /** the reminder on this downlink (any pass), if one is held */
+  find(server: string, norad: number, tx: number): SatReminder | undefined {
+    for (const r of this.m.values()) if (r.server === server && r.norad === norad && r.tx === tx) return r;
+    return undefined;
+  }
+  /** Hold one for the row's next pass. false = refused (no pass to come, AOS gone, or the book is full). */
+  add(server: string, row: Pick<SatRow, 'sat' | 'tx' | 'i' | 'next'>, nowSec: number): boolean {
+    const p = row.next;
+    if (!p || p.aos <= nowSec) return false;
+    const ex = this.find(server, row.sat.norad, row.i);
+    if (ex) this.m.delete(ex.key);
+    if (this.m.size >= SAT_REMIND_MAX) return false;
+    const key = SatReminders.key(server, row.sat.norad, row.i, p.aos);
+    this.m.set(key, { key, server, norad: row.sat.norad, tx: row.i, aos: p.aos, los: p.los, name: row.sat.name, label: row.sat.tx.length > 1 ? row.tx.label : '' });
+    return true;
+  }
+  cancel(key: string): boolean { return this.m.delete(key); }
+  /** Leaving the server (or the session ending) cancels every reminder for it. */
+  clearServer(server: string) { for (const [k, r] of this.m) if (r.server === server) this.m.delete(k); }
+  clear() { this.m.clear(); }
+  /** ★ Every sat_list: a new element set moves the pass a little — the reminder follows its pass (the nearest AOS within
+   *  15 min on the same norad/tx), rather than keeping a stale time. A bird the list no longer has is kept (the fire-time
+   *  check says why). */
+  refresh(server: string, l: SatList | null) {
+    if (!l) return;
+    for (const r of [...this.m.values()]) {
+      if (r.server !== server) continue;
+      const sat = l.sats.find((s) => s.norad === r.norad);
+      if (!sat) continue;
+      let best: SatPass | undefined, bd = 15 * 60;
+      for (const p of sat.passes) { const dd = Math.abs(p.aos - r.aos); if (dd <= bd) { bd = dd; best = p; } }
+      if (!best || (best.aos === r.aos && best.los === r.los)) continue;
+      this.m.delete(r.key);
+      const key = SatReminders.key(server, r.norad, r.tx, best.aos);
+      this.m.set(key, { ...r, key, aos: best.aos, los: best.los });
+    }
+  }
+  /** ★ The reminders due now (AOS − lead reached, the pass not yet over) — taken out of the book as they fire; passes that
+   *  are over are dropped unfired. `connected` false = a reminder whose connection is gone never fires: it is dropped
+   *  silently when its time comes. */
+  due(nowSec: number, leadMin: number, connected: boolean): SatReminder[] {
+    const out: SatReminder[] = [];
+    for (const [k, r] of this.m) {
+      if (nowSec >= r.los) { this.m.delete(k); continue; }
+      if (nowSec >= r.aos - leadMin * 60) { this.m.delete(k); if (connected) out.push(r); }
+    }
+    return out.sort((a, b) => a.aos - b.aos);
+  }
+  /** seconds until the next one is due (Infinity = none) — the caller asks for a fresh list shortly before */
+  nextIn(nowSec: number, leadMin: number): number {
+    let n = Infinity;
+    for (const r of this.m.values()) n = Math.min(n, r.aos - leadMin * 60 - nowSec);
+    return n;
+  }
+}
+
+// ══ ★★ SATELLITE-BEST 1.3 — TELEMETRY TURNED INTO VALUES (the client half) ═══════════════════════════════════════════════
+/* The server's decoder (AO-73 FUNcube `fctlm`; SONATE-2 / APRS later) sends {"type":"fctlm_status","data":{…}} on the decoder
+ * socket — frames, good / failed, the bird's mode, and named values with units; a channel with no published calibration
+ * comes RAW, labelled "raw" (never a guessed conversion). Whitelisted ASCII / numbers only — cleaned again here. */
+export interface SatTlmValue { name: string; value: string; unit: string; raw: boolean }
+/** The box's telemetry: the decoder's counts (fctlm_status, once a second) and the last frame's values (sat_tlm — from
+ *  fctlm for AO-73, from aprs for APRS T# and SONATE-2), merged; a field a message does not carry keeps its last value. */
+export interface SatTelemetry {
+  frames?: number; good?: number; failed?: number; sync?: boolean; snrDb?: number;
+  sat: string; format: string; mode: string; at: number; values: SatTlmValue[];
+  /** the decoded payload, hex — behind the RAW switch */
+  hex: string;
+}
+/** {"type":"fctlm_status","data":{sync,frames,good,failed,afcHz,snrDb,…}} or {"type":"sat_tlm","data":{sat,format,t,mode,
+ *  values:[{k,name,v,unit,raw}],hex}} (docs/v12/SATELLITE-BEST.md "Contract additions") → one shape. */
+export function parseSatTelemetry(d: unknown): Partial<SatTelemetry> | null {
+  const o = d as Record<string, unknown> | null;
+  if (!o || typeof o !== 'object') return null;
+  const out: Partial<SatTelemetry> = {};
+  const cnt = (x: unknown) => { const k = num(x); return k != null && k >= 0 ? Math.floor(k) : undefined; };
+  if (cnt(o.frames) != null) out.frames = cnt(o.frames);
+  if (cnt(o.good) != null) out.good = cnt(o.good);
+  if (cnt(o.failed) != null) out.failed = cnt(o.failed);
+  if (typeof o.sync === 'boolean') out.sync = o.sync;
+  if (num(o.snrDb) != null) out.snrDb = num(o.snrDb);
+  if (str(o.sat, 24)) out.sat = str(o.sat, 24);
+  if (str(o.format, 24)) out.format = str(o.format, 24);
+  if (str(o.mode, 24)) out.mode = str(o.mode, 24);
+  const at = num(o.t) ?? num(o.at); if (at != null) out.at = at;
+  if (typeof o.hex === 'string') out.hex = o.hex.replace(/[^0-9a-fA-F]/g, '').slice(0, 512);
+  if (Array.isArray(o.values)) {
+    const values: SatTlmValue[] = [];
+    for (const v0 of (o.values as unknown[]).slice(0, 64)) {
+      const v = v0 as Record<string, unknown>;
+      const name = str(v?.name ?? v?.n ?? v?.k, 32);
+      const val = v?.v ?? v?.value;
+      if (!name || (typeof val !== 'number' && typeof val !== 'string')) continue;
+      const value = typeof val === 'number' ? (isFinite(val) ? String(Math.round(val * 1000) / 1000) : '') : str(val, 24) ?? '';
+      if (!value) continue;
+      const raw = v.raw === true;
+      values.push({ name, value, unit: raw ? '' : str(v.unit ?? v.u, 8) ?? '', raw });   // ★ raw: the count, no unit
+    }
+    out.values = values;
+  }
+  return out;
+}
+/** A message merged into what the box shows (a status keeps the last frame's values; a frame keeps the counts). */
+export function satTelemetryMerge(prev: SatTelemetry | null, m: Partial<SatTelemetry> | null): SatTelemetry | null {
+  if (!m) return prev;
+  const base: SatTelemetry = prev ?? { sat: '', format: '', mode: '', at: 0, values: [], hex: '' };
+  const next = { ...base } as SatTelemetry;
+  for (const [k, v] of Object.entries(m)) if (v !== undefined) (next as unknown as Record<string, unknown>)[k] = v;
+  return next;
+}
+/** The block's first line: "TELEMETRY · 14 frames · 13 good · 1 failed · Safe" ("waiting for a frame" until one). */
+export function satTelemetryHead(t: SatTelemetry | null): string {
+  if (!t || (t.frames == null && !t.values.length)) return t?.sync ? 'TELEMETRY · in sync — waiting for a good frame' : 'TELEMETRY · waiting for a frame';
+  const parts = ['TELEMETRY'];
+  if (t.frames != null) parts.push(`${t.frames} frame${t.frames === 1 ? '' : 's'}`, `${t.good ?? 0} good`, `${t.failed ?? 0} failed`);
+  if (t.mode) parts.push(t.mode);
+  return parts.join(' · ');
+}
+/** A value in words: "Battery voltage 8.13 V" / "Reboots 14" / "Battery temperature 143 raw". */
+export function satTelemetryLine(v: SatTlmValue): string { return `${v.name} ${v.value}${v.unit ? ' ' + v.unit : ''}${v.raw ? ' raw' : ''}`; }
+/** The RAW switch's text: the payload hex in groups of 4 bytes. */
+export function satTelemetryHex(t: SatTelemetry | null): string { return (t?.hex ?? '').replace(/(.{8})/g, '$1 ').trim(); }
+
+// ══ ★★ SATELLITE-BEST 1.9 — THE MAP KEY of a packet satellite ═══════════════════════════════════════════════════════════
+/** "via ISS" — the label stations heard through the bird carry on the DIGI MODES map's APRS layer. */
+export function satViaText(name: string | undefined): string { return name ? `via ${name}` : ''; }
+/** ★ What the DIGI MODES map draws over its APRS layer for the pass (the b90-maps DigiMapOverlay shape): the orbit's ground
+ *  track (split where it crosses the antimeridian or has a gap), the footprint around the bird now, and the bird itself. */
+export interface SatMapOverlay {
+  label: string;
+  lines?: [number, number][][];
+  circles?: { lat: number; lon: number; km: number }[];
+  points?: { lat: number; lon: number; label: string }[];
+}
+export function satMapOverlay(name: string, geo: GeoPt[] | null | undefined, now: { lat?: number; lon?: number; altKm?: number } | null): SatMapOverlay {
+  const lines: [number, number][][] = [];
+  let cur: [number, number][] = [];
+  for (const p of geo ?? []) {
+    if (!p) { if (cur.length > 1) lines.push(cur); cur = []; continue; }
+    const last = cur[cur.length - 1];
+    if (last && Math.abs(p[1] - last[1]) > 180) { if (cur.length > 1) lines.push(cur); cur = []; }
+    cur.push([p[0], p[1]]);
+  }
+  if (cur.length > 1) lines.push(cur);
+  const o: SatMapOverlay = { label: `${name} PASS`.slice(0, 24) };
+  if (lines.length) o.lines = lines;
+  if (now && now.lat != null && now.lon != null) {
+    const alt = now.altKm && now.altKm > 0 ? now.altKm : 600;
+    o.circles = [{ lat: now.lat, lon: now.lon, km: Math.round(6371 * Math.acos(6371 / (6371 + alt))) }];
+    o.points = [{ lat: now.lat, lon: now.lon, label: name }];
+  }
+  return o;
+}
+/** ★ The MAP key: a packet downlink, and only once a station with a position has been heard (no dead key). */
+export function satMapOffered(t: SatTx | undefined, stationsWithPos: number): boolean {
+  return !!t && txUse(t) === 'packet' && stationsWithPos > 0;
 }

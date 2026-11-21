@@ -65,6 +65,7 @@ import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS 
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
+import { parseSatTelemetry } from './satellites';   // ★ SATELLITE-BEST 1.3
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,6 +87,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
   | 'hfdl'    // ★ V12 HFDL — a VibeServer's aircraft datalink on the USB dial (vibe_hfdl_run.h): a line per message, hfdl_status
+  | 'fctlm'   // ★ V12 SATELLITE-BEST 1.2/1.3 — AO-73's FUNcube telemetry, attached by a SATELLITE pick: text lines, 0x03, fctlm_status (satellites.ts parseSatTelemetry)
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
@@ -213,6 +215,8 @@ function spotTime(ts: unknown): number {
 export interface DecoderCallbacks {
   onText:       (text: string) => void;
   onStatus:     (status: string) => void;
+  /** ★ SATELLITE-BEST 1.3: a FUNcube telemetry report (fctlm_status) — drawn in the SATELLITE box. */
+  onSatTelemetry?: (t: Partial<import('./satellites').SatTelemetry>) => void;
   /** 'idle' | 'sync' | 'rx' | 'active' — drives the decoder panel dot. */
   onDot:        (dot: 'idle' | 'sync' | 'rx' | 'active') => void;
   /** Image decoders (WEFAX/SSTV) — one scanline of pixel data. */
@@ -701,6 +705,12 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if ((m.type === 'fctlm_status' || m.type === 'sat_tlm') && m.data) {
+            // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts and a frame's values (sat_tlm also from aprs: APRS T#, SONATE-2) —
+            //   the SATELLITE box draws them (no decoder box of its own)
+            if (this.active !== 'fctlm' && !(m.type === 'sat_tlm' && this.active === 'aprs')) return;
+            const tl = parseSatTelemetry(m.data);
+            if (tl) { this.cb.onSatTelemetry?.(tl); if (this.active === 'fctlm') this.cb.onDot((tl.good ?? 0) > 0 || !!tl.values?.length ? 'active' : tl.sync ? 'sync' : 'idle'); }
           } else if (m.type === 'lrpt_status' && m.data) {
             if (this.active !== 'lrpt') return;
             const st = parseLrptStatus(m.data);
@@ -921,6 +931,7 @@ export class DecoderClient {
       case 'lrpt':  return { extension_name: 'lrpt', params: lrptAttachParams(this.lrptSymbolRate) };
       // ★ V12 VOR / ILS and 406 MHz beacons: no parameters (AUTO — the channel says VOR / localiser / glideslope).
       case 'vor':    return { extension_name: 'vor', params: {} };
+      case 'fctlm':  return { extension_name: 'fctlm', params: {} };   // ★ SATELLITE-BEST 1.2: AUTO (the server's pick set it up)
       case 'sarsat': return { extension_name: 'sarsat', params: {} };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
