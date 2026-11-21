@@ -7,7 +7,7 @@
  *   sources' public pages — nothing of his was copied.
  *
  * ★★★ THE SOURCES, AND THE MANNERS:
- *   · PSK Reporter's statistics page, https://www.pskreporter.info/cgi-bin/pskstats.pl — its "Top Monitors by reports
+ *   · PSK Reporter's statistics page, https://pskreporter.info/cgi-bin/pskstats.pl — its "Top Monitors by reports
  *     over last 24 hours" (var reportResult) and "Top Monitors by number of different countries reported"
  *     (var countryResult) tables: per band, the top 50 receivers, each {"callsign","day","week"}. The page is itself a
  *     cached page ("Cached at …"); one GET an hour.
@@ -23,7 +23,7 @@
  */
 
 export const RANKS_VERSION = 1;
-export const PSK_STATS_URL = 'https://www.pskreporter.info/cgi-bin/pskstats.pl';
+export const PSK_STATS_URL = 'https://pskreporter.info/cgi-bin/pskstats.pl';   // ★ www. answers 301 here since (seen 2026-11-21); redirects stay manual
 export const WSPR_LIVE_URL = 'https://db1.wspr.live/';
 export const UA = `VibeSDR-directory-ranks/${RANKS_VERSION} (+https://vibesdr.net)`;
 export const ROUND_MIN_SEC = 50 * 60;
