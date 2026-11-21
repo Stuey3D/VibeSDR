@@ -25,7 +25,6 @@ import * as esbuild from 'esbuild';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = process.env.VIBESERVER_BIN || '';
-if (!BIN || !fs.existsSync(BIN)) { console.log('   not run — set VIBESERVER_BIN'); process.exit(3); }
 const RATE = 2_400_000, PASS = 'resync-test-admin';
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -73,6 +72,45 @@ if (process.env.RESYNC_DBG) {
     send(d: string) { if (!/"type":"(ping|set_rate|sat_list)"/.test(String(d))) console.log(`      [send ${Date.now() % 100000}] ${String(d).slice(0, 160)}`); super.send(d); }
   };
 }
+// ── the WEB client (web/client/src/spectrum.ts): a whole-radio request inside a tune's echo window ──
+{
+  console.log('── the web client ──');
+  const g = globalThis as Record<string, unknown>;
+  g.window ??= globalThis;
+  g.location ??= { protocol: 'http:', host: 'x', search: '', href: 'http://x/' };
+  await esbuild.build({ entryPoints: [path.join(root, 'web/client/src/spectrum.ts')], bundle: true, format: 'esm', platform: 'neutral',
+    outfile: path.join(tmp, 'spectrum.mjs'), logLevel: 'error' });
+  const { SpectrumClient } = await import(pathToFileURL(path.join(tmp, 'spectrum.mjs')).href);
+  const sent: Array<Record<string, unknown>> = [];
+  const sc = new SpectrumClient('ws://x/ws', {} as never) as Record<string, any>;
+  sc._send = (m: Record<string, unknown>) => { sent.push(m); };
+  const cfg = (centre: number, vfo: number, mode: string) => sc._handleText(JSON.stringify({ type: 'config', centerFreq: centre, binCount: 1024,
+    binBandwidth: 2343.75, totalBandwidth: 2_400_000, maxBandwidth: 2_400_000, vfo, mode, shared: false }));
+  cfg(96_000_000, 96_000_000, 'wfm');
+  await sleep(1700);
+  for (const [what, enter, hz, mode] of [
+    ['DAB 11A', () => sc.dab(true, 26), 216_928_000, 'wfm'],
+    ['ADS-B', () => sc.adsb(true), 1_090_000_000, 'wfm'],
+    ['a SATELLITE pick', () => sc.satPick(25544, 0, true), 437_800_000, 'nfm'],
+  ] as Array<[string, () => void, number, string]>) {
+    if (what === 'ADS-B') sc.dab(false);
+    if (what === 'a SATELLITE pick') sc.adsb(false);
+    await sleep(1700);
+    sc.tune(97_000_000, 'wfm');       // ★ a person's tune …
+    enter();                           // ★ … and at once a request that hands the dial to the server
+    cfg(hz, hz, mode);                 // the server's config, sent once, inside the tune's 1.5 s echo window
+    ok(Math.abs(sc.frequency - hz) < 1, `web: a tune then ${what} at once — the READOUT is the server's dial (${sc.frequency})`);
+    await sleep(400);
+    ok(Math.abs(sc.view.centerHz - hz) < 1, `web: …and the view is the server's capture (${sc.view.centerHz})`);
+  }
+}
+if (!BIN || !fs.existsSync(BIN)) {
+  console.log('   the server half not run — set VIBESERVER_BIN');
+  console.log(`\n${pass} passed, ${fail} failed`);
+  fs.rmSync(tmp, { recursive: true, force: true });
+  process.exit(fail ? 1 : 3);
+}
+
 const mod = await import(pathToFileURL(path.join(tmp, 'app.mjs')).href);
 const Cls = mod.VibeServerClient ?? mod.default;
 

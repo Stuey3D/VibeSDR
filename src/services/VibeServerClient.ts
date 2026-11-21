@@ -332,6 +332,7 @@ export class VibeServerClient extends VibeServerWsClient {
     if (on && !this.avdataHeld) { this.avExit.entered(); this.cancelPacedTune(); }
     else if (!on) this.avExit.left(Date.now());
     this.avdataHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     this.sendSpectrum(on && band ? { type: 'avdata', on: 1, band } : { type: 'avdata', on: on ? 1 : 0 });
   }
   /* ── V12 RADIOSONDES (docs/v12/RS41.md) — the datalink's pattern: the server puts the radio on a 400–406 MHz band,
