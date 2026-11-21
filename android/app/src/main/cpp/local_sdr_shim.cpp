@@ -6772,6 +6772,20 @@ static std::atomic<bool>   g_gallerySaveLive{true};   // ★ keep a LISTENER's d
 static std::atomic<bool>   g_galleryPublic{true};     // ★ the gallery is everyone's to read unless the owner says not
 // ★ This server's position, for the FT8 summary's "furthest" (setReceiverPosition). NaN = none set.
 static std::atomic<double> g_bgLat{NAN}, g_bgLon{NAN};
+/** ★★ V12 beta90 THE STATION STORE (vibe_station_store.h, docs/v12/DIGI-MODES-MAP.md): every station this radio's
+ *  decoders hear — listeners' and background decoding's — kept by the day beside the gallery (RAM only when the owner
+ *  keeps no gallery), for the DIGI MODES MAP (/vibeserver/stations.json) and the PSK Reporter upload.
+ *  ★ The gallery is made FIRST so it outlives the store at exit (the store's last flush asks it for its directory). */
+static vibestations::Store& vsStations() {
+    static vibestations::Store& s = []() -> vibestations::Store& {
+        (void)vibe::gallery::shared();
+        auto& st = vibestations::shared();
+        st.configure([] { auto& g = vibe::gallery::shared(); return g.enabled() ? g.dir() : std::string(); },
+                     [] { return vibe::gallery::shared().limitBytes(); });
+        return st;
+    }();
+    return s;
+}
 
 // ── ★★★ THE IDLE DX SCANNER (V12, 2026-11-04 — vibe_dxscan.h, docs/v12/DX-SCANNER.md) ────────────────────────────────
 // The owner's settings for THIS radio (RadioConfig::dxScan, live on a save), and THIS radio's DX log — in memory, written
@@ -28650,6 +28664,42 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
             return;
+        } else if (reqLine.rfind("GET /vibeserver/stations.json", 0) == 0) {
+            /* ★★ V12 beta90 THE DIGI MODES MAP's stations (vibe_station_store.h): every station any radio on this machine
+             *  heard in digital spots / CW / PSK / RTTY — background decoding and listeners — ONE ENTRY PER CALL over
+             *  ?window=1h|24h|7d|30d|all (default 24h); ?since=<UTC s> = only the calls heard since (the map's live poll).
+             *  Callsigns, grids, modes, bands, SNRs and times only (what a station sends to be heard). The gallery's
+             *  privacy applies: a private gallery's stations are the owner's. CORS open, as the rest of the read API. */
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            const size_t sp = reqLine.find(' ', 4);
+            const std::string target = reqLine.substr(4, sp == std::string::npos ? std::string::npos : sp - 4);
+            const size_t qm = target.find('?');
+            const std::string query = qm == std::string::npos ? "" : target.substr(qm + 1);
+            auto qv = [&](const char* k) {
+                const std::string key = std::string(k) + "=";
+                size_t p = 0;
+                while ((p = query.find(key, p)) != std::string::npos) {
+                    if (p == 0 || query[p - 1] == '&') { const size_t e = query.find('&', p); return query.substr(p + key.size(), e == std::string::npos ? std::string::npos : e - p - key.size()); }
+                    p += key.size();
+                }
+                return std::string();
+            };
+            std::string body;
+            const char* status = "200 OK";
+            if (!g_galleryPublic.load() && !adminOkFor(reqLine, sock)) {
+                status = "403 Forbidden";
+                body = "{\"stations\":[],\"count\":0,\"error\":\"the owner has made this server's gallery private\"}";
+            } else {
+                std::string w;
+                for (char c : qv("window")) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) w += c;
+                const long long since = std::max(0LL, std::atoll(qv("since").c_str()));
+                body = vsStations().mapJson(vibestations::windowSec(w.substr(0, 4)), (int64_t)since, g_bgLat.load(), g_bgLon.load());
+            }
+            sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+            return;
         } else if (reqLine.rfind("GET /addon/hfdl/", 0) == 0) {
             /* ★★ V12 HFDL — THE HFDL MAP'S TWO ENDPOINTS (docs/v12/AVIATION.md §Decision): the clients' HFDL map
              *  (MapOverlay KIND 'hfdl', fetchAC / fetchGS) already reads this shape; served from this radio's aircraft table
@@ -31917,6 +31967,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const bool onB = watchDecBSplit(key, session);
         DecoderHost::Env e;
         e.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
+        // ★★ V12 beta90 THE STATION STORE (the DIGI MODES MAP, PSK Reporter): a listener's spots, labelled live. Never the
+        //    decoder-only sidecar's (it decodes a NETWORK radio for this phone's own app — not this server's stations).
+        if (!decoderOnly) { e.stations = &vsStations(); e.stationOrigin = vibestations::kLive; }
         // ★ The decoder-only sidecar decodes a network radio's audio for the app on this phone — it
         //   serves nobody else, so it is not a server decoder and takes no slot.
         e.slots = decoderOnly ? nullptr : &vsDecoderSlots();
@@ -35443,6 +35496,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         p.fftSize = n;
         p.slots = &vsDecoderSlots();
         p.store = vibe::gallery::shared().enabled() ? &vibe::gallery::shared() : nullptr;
+        p.stations = &vsStations();   // ★ V12 beta90 the DIGI MODES MAP's station store (background spots too)
         // ★★ The box's priority list (Stuart: listeners first, background in its own order) — beside the slots.
         bgReg_.open(vsDecoderSlotDir(), std::to_string((long long)::getpid()));
         p.registry = bgReg_.isOpen() ? &bgReg_ : nullptr;

@@ -35,6 +35,7 @@
 //     starve another listener's RTTY either.
 #pragma once
 #include "decoders/fsk_decoder.h"
+#include "vibe_station_store.h"
 #include "decoders/rtty_auto.h"
 #include "decoders/wefax_decoder.h"
 #include "decoders/sstv_decoder.h"
@@ -327,6 +328,12 @@ public:
         /** ★ V12 VOR / ILS: the server's place (lat, lon; false = not given) — the nearest published station on a channel,
          *  and the owner's check of how far a radial passes from here. Never sent to a listener as such. */
         std::function<bool(double&, double&)> position;
+        /** ★★ V12 beta90 THE STATION STORE (vibe_station_store.h — the DIGI MODES MAP and PSK Reporter): every spot this
+         *  host makes (the digital-spots engines, CW / PSK / RTTY skimmers and decoders) goes in, tagged `stationOrigin`
+         *  (vibestations::kLive / kBackground). Null = kept nowhere: the benchmark and the decoder-only sidecar, so a timing
+         *  run's or a test's spots never reach the map or PSK Reporter. */
+        vibestations::Store* stations = nullptr;
+        uint8_t stationOrigin = vibestations::kLive;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -1259,6 +1266,7 @@ private:
         o.spot = [this](const cw::Spot& sp, double rfHz) {
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, sp.wpm, sp.snrDb, sp.how);
+            toStations_("CW", sp.call, std::string(), (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000);
         };
         std::function<double(double)> rf;
         if (!skimmer) {
@@ -1287,6 +1295,7 @@ private:
         o.spot = [this](const psk::Spot& sp, double rfHz) {
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
+            toStations_(sp.mode.empty() ? std::string("PSK31") : sp.mode, sp.call, std::string(), (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000);
         };
         std::function<double(double)> rf;
         if (!skimmer) {
@@ -1314,6 +1323,7 @@ private:
         o.spot = [this](const rttysk::Spot& sp, double rfHz) {
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
+            toStations_("RTTY", sp.call, std::string(), (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000);
         };
         o.cpu = [this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); };
         o.log = [this](const std::string& l) { log(l); };
@@ -1490,6 +1500,8 @@ private:
         o.json = [this](const std::string& j) { broadcastText(j); };
         auto rfOf = env_.rfOfAudio; auto dial = env_.dialHz;
         std::function<double(double)> rf = [rfOf, dial](double a) { return rfOf ? rfOf(a) : (dial ? dial() : 0.0) + a; };
+        // ★ V12 beta90: JTTY's callers to the station store too (with the CQ's own grid when it came with it)
+        o.spot = [this](const jtty::Spot& sp, double rfHz) { toStations_("JTTY", sp.call, sp.grid, (int)std::lround(sp.snrDb), rfHz, 0); };
         jtty_.reset(new JttyRun(std::move(rf), std::move(o)));
         active_.store(true, std::memory_order_relaxed);
         log("decoder attached: JTTY");
@@ -1739,6 +1751,7 @@ private:
         const std::string c = safe(sp.call, 32), g = safe(sp.grid, 8), m = safe(sp.mode, 12);
         if (c.empty() || m.empty()) return;
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(m, c, g, sp.snr, rfHz); }
+        toStations_(m, c, g, sp.snr, rfHz, (int64_t)(ts / 1000));
         /* ★ V12 (2026-10-27): JTTY and PSK say what the station was doing ("CQ", "QSO", "DE", "TEST"), and every spot
          *  carries the call's country (our own prefix table — vibe_callsign_country.h), printable ASCII only. */
         const std::string how = safe(sp.how, 8);
@@ -1755,6 +1768,15 @@ private:
             // ★ V12 (R36S handheld "Align to FT8", 2026-11-05): WSJT-X's DT, additive — a client that does not read it ignores it.
             std::isfinite(sp.dt) ? (double)sp.dt : 0.0);
         if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1), GapSpots);
+    }
+    /** ★ V12 beta90: one spot into the station store (Env::stations — null = nowhere). The store validates the call and
+     *  the grid itself and costs a map insert; its PSK Reporter listeners run here, on the decode thread, queued by them. */
+    void toStations_(const std::string& mode, const std::string& call, const std::string& grid, int snr, double rfHz, int64_t utc) {
+        if (!env_.stations) return;
+        vibestations::Reception r;
+        r.call = call; r.grid = grid; r.mode = mode; r.band = bandFor(rfHz); r.snr = snr; r.rfHz = rfHz; r.utc = utc;
+        r.origin = env_.stationOrigin;
+        env_.stations->spot(r);
     }
     /** ★ Band's mode chips as JSON (spotsMtx_ held). */
     std::string statusJsonLocked_() {
