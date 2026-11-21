@@ -215,7 +215,7 @@ export class NdbMap {
       if (kit && await loadMapGLScripts(kit.base)) {
         if (my !== this.gen) return;
         try {
-          const vm = w.VibeMapGL.createNow(this.host, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero',
+          const vm = w.VibeMapGL.createNow(this.host, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero', scale: 'nautical',
             center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 6 : 1.5 });
           if (vm) {
             this.vm = vm;
@@ -237,7 +237,7 @@ export class NdbMap {
       const L = w.L;
       this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
       this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
-      if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero' });
+      if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero', scale: 'nautical' });
       mk(this.lmap);
     })().catch((e) => { console.error('[ndb] the map could not load', e); if (my === this.gen) this.note('The map did not finish loading — the list still updates.'); });
   }

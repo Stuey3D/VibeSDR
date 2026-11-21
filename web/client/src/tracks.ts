@@ -512,6 +512,9 @@ export interface TrackViewOpts {
   yieldGroups?: string[];
   aria?: (it: any) => string;
   onCard?: (key: string, el: HTMLElement) => void;
+  /** ★★ V12 beta90 the SCALE BAR (every map has one — vibemapgl.js / vibemap.js): true = NM under the km (the marine
+   *  and aviation maps). Default: NM for the 'marine' and 'aero' profiles, km alone otherwise. */
+  nautical?: boolean;
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -717,7 +720,7 @@ export class TrackView {
       if (my !== this.gen) return;
       try {
         const vm = w.VibeMapGL.createNow(holder, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail,
-                                                   ...(this.o.profile ? { profile: this.o.profile } : {}),
+                                                   ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind(),
                                                    center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 7 : 1.5 });
         if (vm) {
           this.vm = vm;
@@ -741,8 +744,13 @@ export class TrackView {
     if (my !== this.gen) return;
     // ★ the shared map data (coastlines, places) — as AdsbMap draws it under Leaflet
     if (!w.VibeMap) { try { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); } catch (e) { console.error('[tracks] vibemap', e); } }
-    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}) });
+    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind() });
     this.attach(this.lmap, L);
+  }
+  /** The scale bar's units: NM beside km on the sea and air maps. */
+  private scaleKind(): 'nautical' | 'metric' {
+    const n = this.o.nautical ?? (this.o.profile === 'marine' || this.o.profile === 'aero');
+    return n ? 'nautical' : 'metric';
   }
   private attach(map: any, L: any) {
     const w = window as any;

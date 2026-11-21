@@ -10163,7 +10163,7 @@ function avViewOpts() {
   return {
     icon: (it: any) => it._ic, label: (it: any) => it._lb || '', card: (it: any) => it._cd || '',
     labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
-    labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain',
+    labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain', nautical: true,   // ★ beta90 NM on the scale bar
     onToggle: (id: string, on: boolean) => {
       avLayers = { ...avLayers, [id]: on };
       try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }

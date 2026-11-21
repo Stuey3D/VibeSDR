@@ -166,7 +166,7 @@ function bootGPU() {
   try {
     const load = (path, kind) => fetch(path).then((r) => r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null).catch(() => null);
     vm = VibeMapGL.createNow(document.getElementById('m'), { style: GL.style, load, base: GL.base, rangeBase: GL.base, detail: GL.detail,
-      profile: 'spots', center: [first.lon, first.lat], zoom: (PINS.length === 1 ? 6 : 4) - 1 });
+      profile: 'spots', scale: 'nautical', center: [first.lon, first.lat], zoom: (PINS.length === 1 ? 6 : 4) - 1 });
     if (!vm) return false;
     L = VibeMapGLCompat.install(vm);
     vm.ready.catch((e) => console.error('GPU map: the style did not load', e));
@@ -191,7 +191,7 @@ function bootLeaflet() {
     L = window.L;
     if (!window.VibeMap) { const s = document.createElement('script'); s.textContent = VIBEMAP_SRC; document.head.appendChild(s); }
     draw();
-    window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'spots' });
+    window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'spots', scale: 'nautical' });
   };
   js.onerror = () => { document.getElementById('note').textContent = 'The map could not be loaded from this server.'; };
   document.head.appendChild(js);
