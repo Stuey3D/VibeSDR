@@ -58,6 +58,7 @@
 #include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
 #include "decoders/balloon_tx.h"     // ★ V12 balloons (the dec_balloon row) — our own transmitter
 #include "decoders/tones_tx.h"       // ★ V12 DTMF + 5-tone (the dec_tones row) — our own transmitter
+#include "vibe_fctlm_tx.h"           // ★ V12 beta90 FUNcube telemetry (the dec_fctlm row) — our own transmitter
 #include "vibe_lrpt_tx.h"             // ★ V12 METEOR-M LRPT (the dec_lrpt row) — our own transmitter
 #include "decoders/nav_tx.h"         // ★ V12 VOR / ILS (the dec_vor row) — our own transmitter
 #include "decoders/sarsat_tx.h"      // ★ V12 406 MHz beacons (the dec_sarsat row) — our own transmitter
@@ -794,6 +795,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
         { "dec_tones",    { "tones",  true,  true  } },   // ★ V12 DTMF + 5-tone: a listener's decoder (a slot)
         { "dec_lrpt",     { "lrpt",   true,  true  } },   // ★ V12 METEOR LRPT: a listener's decoder on an IQ slice (a slot)
+        { "dec_fctlm",    { "fctlm",  true,  true  } },   // ★ V12 beta90 FUNcube telemetry: a listener's decoder on USB audio (a slot)
         { "dec_vor",      { "vor",    true,  true  } },   // ★ V12 VOR / ILS: a listener's decoder on the channel IQ (a slot)
         { "dec_sarsat",   { "sarsat", true,  true  } },   // ★ V12 406 MHz beacons: a listener's decoder on the channel IQ (a slot)
         { "dec_ale",      { "ale",    true,  true  } },   // ★ V12 2G HF ALE: a listener's decoder (a slot)
@@ -919,6 +921,14 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     });
     run("dec_cw", "Decoder: CW", [&] {
         return hostAudioRow("dec_cw", "Decoder: CW", "cw", attach + "\"extension_name\":\"cw\"}", cwSignal("CQ CQ DE G4ABC G4ABC K   "), Count::Chars);
+    });
+    run("dec_fctlm", "Decoder: FUNcube telemetry", [&] {
+        // ★ V12 beta90: four frames of our own FUNcube transmitter (offset 150 Hz, Eb/N0 12 dB), counted as sat_tlm frames
+        std::vector<std::vector<uint8_t>> fr;
+        for (int i = 0; i < 4; ++i) fr.push_back(vibefc::tx::sampleFrame(1 + i, (uint32_t)i));
+        vibefc::tx::Cfg c; c.offsetHz = 150; c.ebn0Db = 12;
+        return hostAudioRow("dec_fctlm", "Decoder: FUNcube telemetry (BPSK 1200)", "fctlm", attach + "\"extension_name\":\"fctlm\"}",
+                            vibefc::tx::modulate(fr, c), Count::Json, "sat_tlm");
     });
     run("dec_cwskim", "Decoder: CW skimmer", [&] {
         return hostIqRow("dec_cwskim", "Decoder: CW skimmer (48 kHz)", "cwskim", attach + "\"extension_name\":\"cwskim\",\"width\":48000}",

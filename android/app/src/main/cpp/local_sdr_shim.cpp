@@ -42848,6 +42848,21 @@ std::string LocalSdrShim::backgroundCapsJson() {
     j += vsSpotBandsJson(spans);
     j += ",\"maxVfos\":" + std::to_string((int)vibe::bg::kMaxVfos) + ",\"maxProfiles\":" + std::to_string((int)vibe::bg::kMaxProfiles);
     j += ",\"decoderSlotsDefault\":" + std::to_string(vsDecoderDefaultMax());
+    /* ★★ V12 beta90 UNATTENDED SATELLITE PASSES: the downlinks a pass can keep (vibe::sat::passKeepable over the engine's
+     *  catalogue — the Setup page's SAT_PASS_DOWNLINKS is the same list, test-sat-engine §13), with the words to show. */
+    j += ",\"satPasses\":[";
+    first = true;
+    for (const auto& sd : satEngine().defs())
+        for (const auto& t : sd.tx) {
+            if (!vibe::sat::passKeepable(t)) continue;
+            std::string pr; const std::string d = vibe::sat::decoderOf(t, pr);
+            const std::string what = d == "lrpt" ? "weather pictures (LRPT)" : d == "sstv" ? "SSTV pictures on " + vibe::sat::fmtNum(t.hz / 1e6, 3) + " MHz"
+                                   : d == "fctlm" ? "FUNcube telemetry" : t.consumer == "ax25-9600" ? "9600 Bd telemetry" : "APRS packets";
+            j += std::string(first ? "" : ",") + "{\"norad\":" + std::to_string(sd.norad) + ",\"label\":\"" + vibe::sat::jsonEsc(t.label)
+               + "\",\"name\":\"" + vibe::sat::jsonEsc(sd.name) + "\",\"what\":\"" + vibe::sat::jsonEsc(what + (t.note.find("Germany") != std::string::npos ? " (Germany passes only)" : "")) + "\"}";
+            first = false;
+        }
+    j += "]";
     j += "}";
     return j;
 }

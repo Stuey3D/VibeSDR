@@ -500,6 +500,26 @@ try {
     } finally { S.stop(); mirror.close(); }
   }
 
+  // ── 9. ★★ beta90 UNATTENDED SATELLITE PASSES: nobody here, ISS overhead → the pass is picked (tune, Doppler, SSTV);
+  //       a listener arriving gives it up and gets the radio back where the pass found it ──
+  {
+    console.log(`── beta90 unattended pass, nobody here (${issLoc}) ──`);
+    const bg = JSON.stringify({ on: false, waitMin: 5, profiles: [], satPasses: { on: true, minEl: 0, birds: [{ norad: 25544, label: 'Voice / SSTV' }] } });
+    const S = await server('satpass', { loc: issLoc, radio: { bgDecode: bg }, freq: 437800000 });
+    try {
+      ok(await until(() => /\[sat\] unattended pass: ISS Voice \/ SSTV/.test(S.L()), 12000), 'with nobody here the ISS pass is picked by itself');
+      ok(/unattended pass: ISS Voice \/ SSTV \(max [0-9]+°, LOS in [0-9]+ s\) — 145\.800 MHz nfm, Doppler (TRACK|COAST|ARMED), decoder sstv/.test(S.L()),
+         `tuned to 145.800 NFM, Doppler locked, SSTV running (${(S.L().match(/unattended pass: [^\n]*/) || [''])[0]})`);
+      ok(/\[sat\] decoder sstv attached for the shared dial/.test(S.L()), 'the SSTV decoder on the shared host (its gallery copy is the ordinary one)');
+      await sleep(2500);
+      ok(!/unattended pass: .*ended/.test(S.L()), 'its own decoder does not count as somebody (the pass carries on)');
+      const sp = await sock(S, 'satpass01');
+      ok(await until(() => /unattended pass: ISS Voice \/ SSTV, max [0-9]+° — ended \(a listener arrived\)/.test(S.L()), 4000), 'a listener arriving gives the pass up');
+      ok(await until(() => lastOf(sp, 'config')?.vfo === 437800000, 4000), `…and gets the radio back where the pass found it (vfo ${lastOf(sp, 'config')?.vfo})`);
+      sp.close();
+    } finally { S.stop(); }
+  }
+
   // ── 8. ★★★ the R36S handheld: no satellites at all (Stuart, 2026-11-20) ──
   {
     console.log('── the handheld radio: no satellites ──');

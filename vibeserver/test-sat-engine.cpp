@@ -12,6 +12,7 @@
 // §6 nudges and deliberate tunes; refusals (no location, NO TIME, old elements, nothing near).
 // §7 the loop's lag sums: the SIMD build equals the scalar lane order exactly; cost.
 #include "vibe_sat_engine.h"
+#include "vibe_bgdecode_config.h"   // ★ beta90 §13: the unattended passes' setting
 
 #include <cmath>
 #include <cstdlib>
@@ -581,11 +582,48 @@ static void s12(const std::string& dir) {
     }
 }
 
+
+static void s13(const std::string& dir) {
+    std::printf("§13 beta90 unattended passes: the setting, the keepable downlinks (= the setup page's list), the pass in progress\n");
+    vibe::bg::Config c; std::string err;
+    CHECK(vibe::bg::parse("{\"on\":false,\"waitMin\":5,\"profiles\":[],\"satPasses\":{\"on\":true,\"minEl\":30,\"birds\":[{\"norad\":57166,\"label\":\"LRPT\"},{\"norad\":39444,\"label\":\"Telemetry\"}]}}", c, err)
+          && c.sat.on && c.sat.minEl == 30 && c.sat.birds.size() == 2 && c.sat.birds[1].label == "Telemetry" && !c.on, "parsed, its own switch (%s)", err.c_str());
+    const std::string back = vibe::bg::toJson(c);
+    CHECK(back.find("\"satPasses\":{\"on\":true,\"minEl\":30,\"birds\":[{\"norad\":57166,\"label\":\"LRPT\"},{\"norad\":39444,\"label\":\"Telemetry\"}]}") != std::string::npos, "written back (%s)", back.c_str());
+    vibe::bg::Config d;
+    CHECK(vibe::bg::parse("{\"on\":true,\"waitMin\":5,\"profiles\":[]}", d, err) && vibe::bg::toJson(d).find("satPasses") == std::string::npos, "absent when not set up (older settings read back unchanged)");
+    std::string many = "{\"satPasses\":{\"on\":true,\"minEl\":200,\"birds\":[";
+    for (int i = 0; i < 12; ++i) many += std::string(i ? "," : "") + "{\"norad\":" + std::to_string(1000 + i) + ",\"label\":\"x\"}";
+    many += ",{\"norad\":-4,\"label\":\"y\"},{\"norad\":5}]}}";
+    vibe::bg::Config m;
+    CHECK(vibe::bg::parse(many, m, err) && m.sat.birds.size() == vibe::bg::kMaxSatPassBirds && m.sat.minEl == 90, "bounded: ≤ 8 downlinks, elevation clamped, bad entries dropped");
+    // the keepable downlinks = the setup page's SAT_PASS_DOWNLINKS (by norad + label), no more, no fewer
+    const std::string page = readFile("android/app/src/main/cpp/vibe_setup_page.h");
+    const size_t a = page.find("const SAT_PASS_DOWNLINKS"), b = page.find("];", a);
+    CHECK(a != std::string::npos && b != std::string::npos, "the page's list found");
+    const std::string list = a != std::string::npos ? page.substr(a, b - a) : std::string();
+    int keep = 0, onPage = 0; bool all = true;
+    for (const auto& sd : curatedCatalogue())
+        for (const auto& t : sd.tx) {
+            if (!passKeepable(t)) continue;
+            ++keep;
+            const std::string want = "norad: " + std::to_string(sd.norad) + ", label: \"" + t.label + "\"";
+            if (list.find(want) == std::string::npos) { all = false; std::printf("   missing on the page: %s\n", want.c_str()); }
+        }
+    for (size_t p = list.find("norad:"); p != std::string::npos; p = list.find("norad:", p + 1)) ++onPage;
+    CHECK(all && keep == onPage, "every keepable downlink is on the page and nothing else (%d engine, %d page)", keep, onPage);
+    std::unique_ptr<Engine> e(makeEngine(dir, kIoLat, kIoLon));
+    CHECK(e->txIndex(57166, "LRPT") == 0 && e->txIndex(39444, "Telemetry") == 1 && e->txIndex(39444, "nope") < 0 && e->txIndex(1, "LRPT") < 0, "txIndex by label");
+    Pass p;
+    CHECK(e->passAt(44909, kRsTca, p) && p.aos < kRsTca && p.los > kRsTca && p.maxElDeg > 40, "passAt: RS-44 at TCA (max %.1f°)", p.maxElDeg);
+    CHECK(!e->passAt(44909, p.los + 60, p) || p.aos > kRsTca, "…and not after its LOS");
+}
+
 int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
     if (readFile(dir + "/celestrak-amateur-2026-11-19.json").empty()) { std::printf("data missing\n"); return 3; }
-    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir); s12(dir);
+    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir); s12(dir); s13(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
