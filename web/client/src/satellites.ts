@@ -454,7 +454,7 @@ export class SatPanel {
       const offer = satRemindOffered(this.list, r);
       const held = offer ? this.rem.find(this.srv(), r.sat.norad, r.i) : undefined;
       anyRemind ||= offer;
-      h += `<div class="sat-rw"><button class="sat-row"${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
+      h += `<div class="sat-rw"><button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
         + (r.grey ? ` aria-disabled="true" data-why="${esc(r.why)}" title="${esc(r.why)}"` : ` title="${esc((r.tx.note || r.tx.label) + ' — tune there' + (this.autoDoppler ? ' and correct the Doppler' : ''))}"`)
         + `><span class="sat-n">${esc(name)}</span><span class="sat-w">${esc(satWhenText(r, now))}</span>`
         + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`
@@ -513,8 +513,9 @@ export class SatPanel {
     this.sImg.hidden = !(big && imageKind);
     if (this.pictureDone && imageKind) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
     // packet: the APRS lines
-    this.sPk.hidden = use !== 'packet';
-    if (use === 'packet') this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
+    const pkt = use === 'packet' && this.picked?.decoder !== 'fctlm';   // ★ a telemetry downlink shows its values, not packet lines
+    this.sPk.hidden = !pkt;
+    if (pkt) this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
     // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
     const tl = this.picked?.decoder === 'fctlm';
     this.sTlm.hidden = !tl;

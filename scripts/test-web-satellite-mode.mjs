@@ -29,7 +29,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 // the window, bundled on its own (the shared src/services/satellites.ts inside), exposed as window.__Sat
-const bundle = (await esbuild.build({ stdin: { contents: "export { SatPanel } from './web/client/src/satellites.ts'; export { parseSatList } from './src/services/satellites.ts';", resolveDir: root, loader: 'ts' },
+const bundle = (await esbuild.build({ stdin: { contents: "export { SatPanel } from './web/client/src/satellites.ts'; export { parseSatList, parseSatTelemetry, parseSatTrack } from './src/services/satellites.ts';", resolveDir: root, loader: 'ts' },
   bundle: true, write: false, format: 'iife', globalName: '__Sat', platform: 'browser', target: 'es2020', logLevel: 'silent' })).outputFiles[0].text;
 
 // the built page, served plain (its sockets find nobody — the page sits at its connect screen, CSS and all)
@@ -95,7 +95,7 @@ try {
   await ev(`(() => { const s = document.getElementById('splash'); if (s) s.style.display = 'none'; return true; })()`);   // the connect screen sits on top
   await ev(`(() => { ${bundle}; window.__Sat = __Sat; return true; })()`);
   await ev(`(() => {
-    window.__sent = []; window.__lists = 0; window.__left = 0;
+    window.__sent = []; window.__lists = 0; window.__left = 0; window.__conn = true; window.__entered = 0; window.__stations = 0; window.__fake = null;
     const home = document.getElementById('decImgWrap').parentNode;
     window.__home = home;
     window.__p = new __Sat.SatPanel({
@@ -107,6 +107,14 @@ try {
       follow: (d) => window.__sent.push({ follow: d }),
       left: () => { window.__left++; },
       image: (slot) => { const w = document.getElementById('decImgWrap'); if (slot) { slot.appendChild(w); document.getElementById('decImage').classList.add('on'); } else home.appendChild(w); },
+      track: (norad, aos, los) => window.__sent.push({ track: norad, aos, los }),
+      rxName: () => 'Northampton',
+      serverKey: () => 'test-server',
+      connected: () => window.__conn,
+      enter: () => { window.__entered++; window.__p.show(); },
+      mapStations: () => window.__stations,
+      openMap: (o) => window.__sent.push({ map: o }),
+      now: () => window.__fake ?? Date.now(),
     });
     window.__p.setCap({ ok: true, why: '' });
     return true; })()`);
@@ -155,6 +163,18 @@ try {
   ok(box.list === false, 'the timetable folds away under the pick');
   const ink = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; })()`);
   ok(ink > 2000, `the half-globe is drawn (${ink} px inked)`);
+  ok((await ev('window.__sent')).some((m) => m.track === 25544), '1.7 the pass\'s path is asked once for the pick');
+  ok((await ev('window.__sent')).filter((m) => m.track === 25544).length === 1, '…once (not every second)');
+  // ★ 1.7 a path over the dome: the dotted orbit adds ink
+  const geo = Array.from({ length: 80 }, (_, k) => [62 - k * 0.5, -25 + k * 0.45, 420]);
+  await ev(`window.__p.onTrack(__Sat.parseSatTrack(${JSON.stringify({ type: 'sat_track', norad: 25544, aos: now - 200, los: now + 372, pts: [], geo })})); true`);
+  const ink2 = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; })()`);
+  ok(ink2 > ink + 150, `1.7 the dotted orbit is inked (${ink} → ${ink2} px)`);
+  // ★ 1.8 the receiver's dot is GREEN (#5BE36B) somewhere on the canvas
+  const green = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i+3] > 200 && Math.abs(d[i]-0x5B) < 12 && Math.abs(d[i+1]-0xE3) < 12 && Math.abs(d[i+2]-0x6B) < 12) n++; return n; })()`);
+  ok(green > 60, `1.8 the receiver's dot is green (${green} px of #5BE36B)`);
+  ok(await ev(`document.querySelectorAll('#satPanel .sat-rem').length === 0 && !document.querySelector('#satPanel .sat-lead')`), '1.6 an older server (no pickPrivate): no REMIND key anywhere');
+  ok(await ev(`document.querySelector('#satPanel [data-act="map"]').hidden`), '1.9 a voice pick: no MAP key');
   await shot('compact-desktop');
   await ev(`document.querySelector('#satPanel [data-act="doppler"]').click()`);
   ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"doppler","on":false}', 'AUTO DOPPLER off → op doppler false');
@@ -166,7 +186,8 @@ try {
   await ev(`[...document.querySelectorAll('#satPanel .sat-row')].find(b => /^METEOR/.test(b.textContent)).click()`);
   ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":57166,"tx":0,"doppler":true}', 'METEOR picked (doppler on again)');
   await ev(`window.__p.onPicked({ norad: 57166, tx: 0, decoder: 'lrpt' }); window.__p.status('METEOR · locked · 120 lines · 3 channels'); true`);
-  ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"follow":"lrpt"}', 'the page follows the server\'s decoder (lrpt)');
+  ok((await ev('window.__sent')).slice(-3).some((m) => JSON.stringify(m) === '{"follow":"lrpt"}'), 'the page follows the server\'s decoder (lrpt)');
+  ok((await ev('window.__sent')).slice(-1)[0].track === 57166, '…and asks for its pass\'s path (1.7)');
   // ★★ 11-21 (Stuart: the box took too much room) — an image pick opens SMALL, like any decoder box; the size key or the
   //    first picture makes it BIG
   ok(await ev(`!document.getElementById('satPanel').classList.contains('big') && document.querySelector('#satPanel .sat-img').hidden`), 'image pick → SMALL until a picture (no empty picture area)');
@@ -175,6 +196,7 @@ try {
   const big = JSON.parse(await ev(`JSON.stringify({ big: document.getElementById('satPanel').classList.contains('big'), img: !document.querySelector('#satPanel .sat-img').hidden, lent: !!document.querySelector('#satPanel .sat-img #decImage'), w: document.getElementById('satPanel').getBoundingClientRect().width, ih: document.querySelector('#satPanel #decImage').getBoundingClientRect().height })`));
   ok(big.big && big.img && big.lent, 'a picture starts → BIG, the decoder image canvas lent into it');
   ok(big.w > 600 && big.ih > 150, `bigger: ${Math.round(big.w)} px wide, picture ${Math.round(big.ih)} px tall`);
+  ok(/shaded: where it can be heard/.test(await ev(`document.querySelector('#satPanel [data-s="key"]').textContent`)) && await ev(`!document.querySelector('#satPanel [data-s="key"]').hidden`), '1.8 BIG: the one-line key under the globe');
   ok(/120 lines/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'the LRPT line in the box');
   await shot('big-desktop');
   await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);
@@ -200,6 +222,13 @@ try {
   ok(await ev(`!document.getElementById('satPanel').classList.contains('big') && !document.querySelector('#satPanel .sat-pk').hidden`), 'packet → COMPACT with its lines area');
   await ev(`window.__p.packet('RS0ISS>APRS: ARISS digipeater'); window.__p.packet('M0ABC-7>APRS,RS0ISS*: !5214.40N/00054.00W-'); true`);
   ok(/M0ABC-7.*\n?.*RS0ISS>APRS/s.test(await ev(`document.querySelector('#satPanel .sat-pk').innerText`)), 'the decoded lines, newest first');
+  ok(await ev(`document.querySelector('#satPanel [data-act="map"]').hidden`), '1.9 no station with a position yet: no MAP key (no dead key)');
+  await ev(`window.__stations = 1; window.__p.stationsChanged(); true`);
+  ok(await ev(`!document.querySelector('#satPanel [data-act="map"]').hidden`), '1.9 a station with a position heard: MAP in the header');
+  await ev(`document.querySelector('#satPanel [data-act="map"]').click(); true`);
+  const mp = (await ev('window.__sent')).slice(-1)[0].map;
+  ok(mp && mp.layer === 'aprs' && mp.via === 'via ISS' && mp.norad === 25544 && mp.footprint && Math.abs(mp.footprint.lat - 47) < 1e-6, `1.9 MAP → the DIGI MODES map's APRS layer, "via ISS", with the footprint (${JSON.stringify(mp && { layer: mp.layer, via: mp.via })})`);
+  await ev(`window.__stations = 0; true`);
   await shot('packet-desktop');
 
   console.log('— phone width, light');
@@ -242,6 +271,71 @@ try {
   ok(await ev(`document.getElementById('decImgWrap').parentNode === window.__home`), 'the image canvas is home');
   await ev(`window.__p.exit(); true`);
   ok((await ev('window.__sent')).filter((m) => m.op === 'drop').length === 1, 'leaving twice sends one drop');
+
+  console.log('— 1.6 REMIND (a fake clock)');
+  await desk(); await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+  const T0 = Date.now();
+  const t0 = Math.floor(T0 / 1000);
+  const so50Aos = now + 38 * 60 + 20, son2Aos = now + 3 * 3600;
+  const priv = (pp = true, over = {}) => { const l = list(over); l.source.pickPrivate = pp; l.sats = l.sats.map((x) => x.id === 'SO-50' ? { ...x, tx: [{ ...x.tx[0], reach: true, why: undefined }] } : x); return l; };
+  await ev(`window.__fake = ${T0}; window.__p.show(); window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(false))})); document.querySelector('#satPanel details').open = true; true`);
+  ok(await ev(`document.querySelectorAll('#satPanel .sat-rem').length === 0`), 'a shared dial (pickPrivate false): REMIND hidden, not greyed');
+  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(true))})); true`);
+  const rem = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .sat-rem')].map(b => b.dataset.norad + ':' + b.textContent))`));
+  ok(rem.length === 2 && rem.includes('27607:REMIND') && rem.includes('59112:REMIND'), `private: a REMIND key on each pass still to come, none on the up-now rows (${rem.join(', ')})`);
+  ok(/REMIND.*1.*2.*5.*10.*min before it rises/.test(await ev(`document.querySelector('#satPanel .sat-lead').textContent`)), 'the lead choice 1 / 2 / 5 / 10 min');
+  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').click(); true`);
+  ok(await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').textContent`) === 'REMINDING · 2 min' && await ev('window.__p.reminders().length') === 1, 'pressed: "REMINDING · 2 min", one held');
+  await shot('remind-list');
+  await ev(`document.querySelector('#satPanel [data-act="exit"]').click(); true`);
+  ok(await ev('window.__p.reminders().length') === 1, 'leaving the mode keeps it (this page still on this server)');
+  await ev(`window.__fake = ${(so50Aos - 121) * 1000}; window.__p.remTick(); true`);
+  ok(await ev(`document.getElementById('satRemind').hidden`), '2:01 before AOS: nothing yet');
+  await ev(`window.__fake = ${(so50Aos - 120) * 1000}; window.__p.remTick(); true`);
+  const toast = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
+  ok(/^SO-50 rises in 2:00 — LISTEN\?/.test(toast) && /LISTEN/.test(toast) && /DISMISS/.test(toast), `2:00 before AOS: the pop-up (${toast})`);
+  ok(await ev('window.__p.reminders().length') === 0, 'fired once (out of the book)');
+  await shot('remind-toast');
+  await ev(`document.querySelector('#satRemind [data-act="listen"]').click(); true`);
+  ok(await ev('window.__entered') === 1 && await ev('window.__p.active'), 'LISTEN enters SATELLITE');
+  ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":27607,"tx":0,"doppler":true}', 'LISTEN sends the ordinary pick');
+  ok(await ev(`document.getElementById('satRemind').hidden`), 'the pop-up goes');
+  // the re-check: shared by the time it fires
+  await ev(`window.__fake = ${T0}; window.__p.onPicked({ norad: 27607, tx: 0, decoder: '' }); document.querySelector('#satPanel details').open = true; true`);
+  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="59112"]').click(); true`);
+  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(false))})); window.__fake = ${(son2Aos - 120) * 1000}; window.__p.remTick(); true`);
+  const why = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
+  ok(/This radio is now shared — a pass cannot be picked for everyone/.test(why) && !(await ev(`!!document.querySelector('#satRemind [data-act="listen"]')`)), `can no longer be picked: says why, no LISTEN (${why})`);
+  await ev(`document.querySelector('#satRemind [data-act="dismiss"]').click(); true`);
+  ok(await ev(`document.getElementById('satRemind').hidden`), 'DISMISS');
+  // several at once — and "picking this ends SO-50"
+  const many = priv(true); many.sats = many.sats.concat([1, 2, 3, 4].map((k) => ({ id: 'B' + k, name: 'BIRD-' + k, norad: 90000 + k, note: '', age: 1, ageState: 'fresh', el: -20,
+    tx: [{ label: 'FM', hz: 145900000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice', band: 'U/v', modeName: 'Mode B' }], passes: [{ aos: now + 1200 + k, tca: now + 1500, los: now + 1800, maxEl: 40, aosAz: 0, losAz: 180 }] })));
+  await ev(`window.__fake = ${T0}; window.__p.onList(__Sat.parseSatList(${JSON.stringify(many)})); document.querySelector('#satPanel details').open = true; true`);
+  ok(/145\.900 MHz FM · Mode B · U\/v/.test(await ev(`document.querySelector('#satPanel .sat-row[data-norad="90001"]').textContent`)), '1.4 the row shows the mode label "Mode B · U/v"');
+  for (const k of [1, 2, 3, 4]) await ev(`document.querySelector('#satPanel .sat-rem[data-norad="${90000 + k}"]').click(); true`);
+  ok(await ev('window.__p.reminders().length') === 4, 'four held');
+  await ev(`window.__fake = ${(now + 1200 + 4 - 120) * 1000}; window.__p.remTick(); true`);
+  const st = JSON.parse(await ev(`JSON.stringify({ n: document.querySelectorAll('#satRemind .sat-toast').length, more: document.querySelector('#satRemind .sat-more')?.textContent, first: document.querySelector('#satRemind .sat-toast').textContent })`));
+  ok(st.n === 3 && st.more === '+1 more', `several: three shown, "+1 more" (${st.n}, ${st.more})`);
+  ok(/^BIRD-4/.test(st.first) && /picking this ends SO-50/.test(st.first), `newest on top; "picking this ends SO-50" (${st.first})`);
+  await shot('remind-stack');
+  for (let k = 0; k < 4; k++) await ev(`document.querySelector('#satRemind [data-act="dismiss"]')?.click(); true`);
+  // no connection at fire time: never fires
+  await ev(`window.__fake = ${T0}; document.querySelector('#satPanel .sat-rem[data-norad="90001"]').click(); window.__conn = false; window.__fake = ${(now + 1201 - 60) * 1000}; window.__p.remTick(); true`);
+  ok(await ev(`document.getElementById('satRemind').hidden && window.__p.reminders().length === 0`), 'no connection when it is due: dropped silently');
+  await ev(`window.__conn = true; window.__fake = ${T0}; window.__p.render(); document.querySelector('#satPanel .sat-rem[data-norad="90002"]').click(); window.__p.remindClear(); true`);
+  ok(await ev('window.__p.reminders().length') === 0, 'the session ending / leaving clears them');
+  // 1.3 telemetry in the box
+  const ao73 = priv(true); ao73.sats.push({ id: 'AO-73', name: 'AO-73', norad: 39444, note: '', age: 1, ageState: 'fresh', el: 20, inRangeFor: 400, lat: 50, lon: 0, rangeKm: 1500,
+    tx: [{ label: 'BPSK telemetry', hz: 145935000, mode: 'usb', loop: 'fll', reach: true, use: 'packet' }], passes: [{ aos: now - 100, tca: now + 100, los: now + 400, maxEl: 30, aosAz: 0, losAz: 180 }] });
+  await ev(`window.__fake = ${T0}; window.__p.onList(__Sat.parseSatList(${JSON.stringify(ao73)})); window.__p.onPicked({ norad: 39444, tx: 0, decoder: 'fctlm' }); true`);
+  ok(/TELEMETRY · waiting for a frame/.test(await ev(`document.querySelector('#satPanel .sat-tlm').textContent`)), '1.3 fctlm pick: the telemetry block waits for a frame');
+  ok(await ev(`document.querySelector('#satPanel .sat-pk').hidden`), '…and no empty packet lines under it');
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ frames: 3, good: 2, failed: 1, mode: 'SAFE MODE', values: [{ name: 'Battery', value: 8.21, unit: 'V' }, { name: 'PA temp', value: '0x3a2', raw: true }] })); true`);
+  const tl = await ev(`document.querySelector('#satPanel .sat-tlm').innerText`);
+  ok(/3 frames · 2 good · 1 failed · SAFE MODE/.test(tl) && /Battery 8\.21 V/.test(tl) && /PA temp 0x3a2 raw/.test(tl), `1.3 values with units, raw labelled (${tl.replace(/\n/g, ' / ')})`);
+  await shot('telemetry');
 } catch (e) { ok(false, `driver: ${e?.stack || e}`); }
 finally {
   clearTimeout(deadline);

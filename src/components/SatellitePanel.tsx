@@ -280,7 +280,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>}
                 </View>
               )}
-              {confirmed && use === 'packet' && (
+              {confirmed && use === 'packet' && !tlmDec && (
                 <View style={s.pk}>
                   {p.packets.length ? p.packets.slice(0, 12).map((l, i) => <Text key={i} style={s.mono} numberOfLines={2}>{l}</Text>)
                     : <Text style={s.detail}>no packets yet</Text>}
