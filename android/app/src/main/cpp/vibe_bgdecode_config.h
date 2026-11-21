@@ -105,6 +105,13 @@ inline const std::vector<DecoderDef>& decoders() {
         //    14.0655–14.0775 at 12 kHz — the PSK segment and its neighbours), a summary of the spots.
         { "psk-skim-6",   "PSK skimmer, 6 kHz (summary)",  "pskskim", "psk", "usb",     0,    0,   0,     false, false, 6000 },
         { "psk-skim-12",  "PSK skimmer, 12 kHz (summary)", "pskskim", "psk", "usb",     0,    0,   0,     false, false, 12000 },
+        // ★★ V12 beta90 RTTY SKIMMERS (Stuart 2026-11-21: per band, as CW's) — the listener's RTTY skimmer ("rttyskim",
+        //    vibe_rtty_skim_run.h: every RTTY signal in the window, each with its own settings) at the widths its VIEW
+        //    offers a listener (24 / 48 / 96 kHz; the host takes 12–96). The VFO is the window's centre, placed by band
+        //    (vibe_skim_bands.h: the band's digimode segment's bottom + width / 2 — 40 m R1 at 48 kHz = 7064).
+        { "rtty-skim-24", "RTTY skimmer, 24 kHz (summary)", "rttyskim", "rttyskim", "usb", 0,  0,   0,     false, false, 24000 },
+        { "rtty-skim-48", "RTTY skimmer, 48 kHz (summary)", "rttyskim", "rttyskim", "usb", 0,  0,   0,     false, false, 48000 },
+        { "rtty-skim-96", "RTTY skimmer, 96 kHz (summary)", "rttyskim", "rttyskim", "usb", 0,  0,   0,     false, false, 96000 },
         // ★★ V12 APRS (docs/v12/AIS-APRS.md): 1200 Bd on an NFM VFO (the region's channel), or HF 300 Bd on USB/LSB —
         //    kept as the day's packets + a station card. NRZI does not care which way round the tones are, so LSB is fine.
         { "aprs",         "APRS (1200 Bd, VHF)",          "aprs",   "aprs",  "nfm",     0,    0,   1200,  false, false, 0 },
@@ -152,8 +159,16 @@ inline double passbandHz(const Vfo& v) {
     if (d && d->widthHz > 0) return d->widthHz;     // ★ a skimmer's whole segment
     return v.mode == "nfm" ? 12500.0 : v.dec == "ft8" ? 3000.0 : 2700.0;
 }
-/** ★ A CW skimmer VFO (fed IQ, no demodulator). */
+/** ★ A skimmer VFO — CW, PSK or (V12 beta90) RTTY: fed IQ, no demodulator. */
 inline bool isSkimmer(const Vfo& v) { const DecoderDef* d = decoderDef(v.dec); return d && d->widthHz > 0; }
+/** ★★ V12 beta90 — which skimmer a VFO is, by its decoder (vibe_skim_bands.h Kind: "cw" / "rtty" / "psk"), or "" for
+ *  any other decoder. The band picker and its segments are chosen by this. */
+inline std::string skimKindOf(const std::string& dec) {
+    const DecoderDef* d = decoderDef(dec);
+    if (!d || !(d->widthHz > 0)) return "";
+    const std::string e = d->ext;
+    return e == "cwskim" ? "cw" : e == "rttyskim" ? "rtty" : e == "pskskim" ? "psk" : "";
+}
 /** ★ A Band digital-spots VFO (V12 2026-10-27): fed the band's IQ slices, no demodulator. */
 inline bool isBandSpots(const Vfo& v) { return v.dec == "spots-band"; }
 /** ★ An NDB skimmer VFO (V12 2026-10-27): fed one IQ slice over the NDB band, no demodulator, its frequency ignored. */

@@ -1315,6 +1315,16 @@ private:
         else active_.store(true, std::memory_order_relaxed);
         log(skimmer ? "decoder attached: CW skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: CW"));
     }
+    /** ★ One skimmer spot to PSK Reporter — the CW path's guards (a finite RF above 0, a NaN SNR as 0, the slot = now). */
+    static void noteReporter_(const std::string& mode, const std::string& call, double snrDb, double rfHz) {
+        if (!(std::isfinite(rfHz) && rfHz > 0)) return;
+        vibe::spotreport::Spot rs;
+        rs.mode = mode; rs.call = call; rs.rfHz = rfHz;
+        rs.snr = std::isfinite(snrDb) ? (int)std::lround(snrDb) : 0;
+        rs.slotUtc = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch()).count() / 1000.0;
+        vibe::spotreport::Reporter::shared().note(rs);
+    }
     /** ★★ PSK31/63 (V12, 2026-10-26): the listener's decoder ("psk", on their audio — the signal nearest "centre", the
      *  middle of their passband, is ONE SIGNAL's) or a SKIMMER ("pskskim", on IQ the caller cuts — "width" Hz, 4–48 kHz).
      *  It shares the CW skimmer's IQ path (wantsIq / iqWidthHz / skimmersRunning): one host runs one decoder at a time.
@@ -1330,6 +1340,9 @@ private:
         o.spot = [this](const psk::Spot& sp, double rfHz) {
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
+            // ★★ V12 beta90: PSK Reporter too (its own rules: the owner's switch + callsign, plausible calls only, each station
+            //    once a batch, call + band + mode once an hour) — "BPSK31"/"BPSK63" are its PSK31/PSK63 (adifMode).
+            noteReporter_(sp.mode.empty() ? std::string("PSK31") : sp.mode, sp.call, sp.snrDb, rfHz);
             toStations_(sp.mode.empty() ? std::string("PSK31") : sp.mode, sp.call, std::string(), (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000);
         };
         std::function<double(double)> rf;
@@ -1358,6 +1371,9 @@ private:
         o.spot = [this](const rttysk::Spot& sp, double rfHz) {
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
+            // ★★ V12 beta90 (Stuart: the per-band skimmers feed PSK Reporter 24/7): the listener's RTTY skimmer and background
+            //    decoding's, as ADIF RTTY, under the reporter's own rules.
+            noteReporter_("RTTY", sp.call, sp.snrDb, rfHz);
             toStations_("RTTY", sp.call, std::string(), (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000);
         };
         o.cpu = [this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); };

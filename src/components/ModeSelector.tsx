@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { skimBandAtDial, skimDial, skimOffLabel, type SkimBand, type SkimKind } from '../utils/skimBands';
 import { sortModes } from '../utils/modeOrder';
 import { scrollLane } from '../constants/popupTokens';
 import {
@@ -539,6 +540,10 @@ interface ModeSelectorProps {
     /** ★★ V12 the RTTY skimmer — RTTY's VIEW (ONE SIGNAL / SKIMMER over 24/48/96 kHz), only where `"rttyskim": true`. */
     rttySkimAvail?: boolean; rttySkim?: boolean; rttyWidth?: number;
     onRttyView?: (skim: boolean) => void; onRttyWidth?: (w: number) => void;
+    /** ★★ V12 beta90 the skimmers' BAND row (CW / PSK / RTTY, SKIMMER view): the bands whose window this radio can tune at
+     *  this width (utils/skimBands — the server's segments), and the tune a pick makes (segment bottom + width / 2). */
+    skimBandsFor?: (kind: SkimKind, width: number) => SkimBand[];
+    onSkimBand?: (hz: number) => void;
     /** ★★ V12 JTTY — only where `"jtty": true`; its settings are the announced calling frequencies THIS radio reaches. */
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
     /** ★★ V12 NCDXF beacons — only where `"ncdxf"` is offered; its settings are the beacon frequencies THIS radio reaches. */
@@ -1643,6 +1648,23 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!id) return null;
     if (id === 'transcribe') return txShown ? transcribeCallout : null;
     if (!dc || dc.decMode !== id) return null;
+    /* ★★ V12 beta90 BAND (Stuart 2026-11-21: "a band selection in the decoder box header and the normal tune buttons could
+     *  fine tune it"): a pick puts the window on the band's segment; tuned off its centre the row reads "40 m · tuned" (or
+     *  "—" on no band) — it never snaps back. Not drawn where no band's window fits. */
+    const skimBandRow = (kind: SkimKind, width: number) => {
+      const list = dc.skimBandsFor?.(kind, width) ?? [];
+      if (!list.length) return null;
+      const at = skimBandAtDial(list, width, dc.tunedHz ?? 0);
+      return (<>
+        <SubLabel label="BAND" />
+        <OptRow>
+          {list.map((b) => (
+            <SegBtn key={b.id} label={b.name} active={at.exact && at.band?.id === b.id} onPress={() => dc.onSkimBand?.(skimDial(b, width))} />
+          ))}
+        </OptRow>
+        {!at.exact && <Text style={capText}>{'Band: ' + skimOffLabel(at)}</Text>}
+      </>);
+    };
     switch (id) {
       /* ★★ V12 RTTY: the VIEW row first where this server has the skimmer (docs/v12/RTTY-SKIMMER.md) — ONE SIGNAL keeps
        *  the decoder's own settings under it; SKIMMER has only its WIDTH (every signal's settings are found for it). */
@@ -1656,6 +1678,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </OptRow>
           </>)}
           {dc.rttySkimAvail && dc.rttySkim ? (<>
+            {skimBandRow('rtty', dc.rttyWidth ?? CW_DEFAULT_WIDTH)}
             <SubLabel label="WIDTH" />
             <OptRow>{CW_WIDTHS.map((w) => (
               <SegBtn key={w} label={`${w / 1000} kHz`} active={(dc.rttyWidth ?? CW_DEFAULT_WIDTH) === w} onPress={() => dc.onRttyWidth?.(w)} />
@@ -1684,6 +1707,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </OptRow>
           </>)}
           {!!dc.cwSkim && (<>
+            {skimBandRow('cw', dc.cwWidth ?? CW_DEFAULT_WIDTH)}
             <SubLabel label="WIDTH" />
             <OptRow>{CW_WIDTHS.map((w) => (
               <SegBtn key={w} label={`${w / 1000} kHz`} active={(dc.cwWidth ?? CW_DEFAULT_WIDTH) === w} onPress={() => dc.onCwWidth?.(w)} />
@@ -1702,6 +1726,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </OptRow>
           </>)}
           {!!dc.pskSkim && (<>
+            {skimBandRow('psk', dc.pskWidth ?? PSK_DEFAULT_WIDTH)}
             <SubLabel label="SEGMENT" />
             <OptRow>{PSK_WIDTHS.map((w) => (
               <SegBtn key={w} label={`${w / 1000} kHz`} active={(dc.pskWidth ?? PSK_DEFAULT_WIDTH) === w} onPress={() => dc.onPskWidth?.(w)} />

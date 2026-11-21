@@ -463,6 +463,8 @@ export interface ServerOccupancy {
    *  segment with each one's own settings. False or absent (an older server, RTTY switched off, an Icom) = RTTY offers
    *  ONE SIGNAL only — no SKIMMER view that could not work. */
   rttyskim?: boolean;
+  /** ★ V12 beta90 the skimmers' bands — CW / RTTY / PSK segments for the server's IARU region (utils/skimBands parseSkimBands). */
+  skimBands?: unknown;
   jtty?: boolean;
   /** ★ V12 2026-11-16 the TIME decoder reads TDF (ALS162, 162 kHz phase code) on this server. Absent = an older one. */
   timeTdf?: boolean;

@@ -288,6 +288,12 @@ int main() {
         CHECK(rp.pendingCount() == 0 && sink.drain().empty(), "off: nothing is kept or sent");
         c.on = true; c.call = ""; rp.configure(c); rp.note(s); rp.flushNow();
         CHECK(rp.pendingCount() == 0 && sink.drain().empty(), "no callsign: nothing is kept or sent");
+        // ★ V12 beta90: an RTTY skimmer spot (the shape vibe_decoder_host.h noteReporter_ sends) — kept on, dropped off
+        c.call = "G4ABC"; c.on = true; rp.configure(c);
+        Spot rt; rt.mode = "RTTY"; rt.call = "DL1XYZ"; rt.snr = 14; rt.rfHz = 7043000; rt.slotUtc = now; rp.note(rt);
+        CHECK(rp.pendingCount() == 1, "an RTTY skimmer spot reaches the reporter when it is on");
+        c.on = false; rp.configure(c); Spot rt2 = rt; rt2.call = "G4XYZ"; rp.note(rt2);
+        CHECK(rp.pendingCount() == 0, "…and not when it is off");
     }
 
     std::printf("── WSPRnet (a local HTTP sink) ──\n");
@@ -378,6 +384,8 @@ int main() {
     CHECK(cleanHeardCall("g4abc") == "G4ABC" && cleanHeardCall("G4ABC-") == "G4ABC" && plausibleCall(cleanHeardCall("g4abc")), "a heard call is upper-cased and cut to A–Z 0–9 /");
     CHECK(adifMode("ft8") == "FT8" && adifMode("Q65-60A") == "Q65" && adifMode("FST4W-120") == "FST4W" && adifMode("FT2").empty() && adifMode("JTTY").empty(), "ADIF mode names; FT2 and JTTY have none");
     CHECK(adifMode("CW") == "CW" && adifMode("cw") == "CW", "CW is reported as ADIF CW (beta90: CW skimmer spots go to PSK Reporter)");
+    CHECK(adifMode("RTTY") == "RTTY" && adifMode("rtty") == "RTTY", "RTTY is reported as ADIF RTTY (beta90: RTTY skimmer spots go to PSK Reporter)");
+    CHECK(adifMode("BPSK31") == "PSK31" && adifMode("BPSK63") == "PSK63", "the PSK skimmer's BPSK31 / BPSK63 are PSK Reporter's PSK31 / PSK63");
     CHECK(cleanGrid("io91wm") == "IO91wm" && cleanGrid("RR73").empty() && cleanGrid("-12").empty() && cleanGrid("ZZ99").empty(), "grids: AA00aa only, never a report");
     CHECK(gridOf(51.5, -0.12) == "IO91wm", "grid from a position (London)");
     CHECK(plausibleCall("G4ABC") && plausibleCall("EA8/DF4UE") && !plausibleCall("CQ") && !plausibleCall("12345") && !plausibleCall("/G4ABC"), "callsign shape");

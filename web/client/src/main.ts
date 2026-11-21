@@ -16,6 +16,7 @@ import { initMenuCats, revealServerUnlock } from './menuCats';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { kickedSentence } from '../../../src/services/kickedText';
+import { parseSkimBands, skimPickable, skimBandAtDial, skimDial, skimOffLabel, type SkimBands, type SkimKind } from '../../../src/utils/skimBands';
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
@@ -980,6 +981,8 @@ async function loadAudioPolicy(httpBase: string) {
      *  radio gives IQ — absent on an older server, false on an Icom or where the owner blocked RTTY (AGENTS.md: no dead
      *  control). A SKIMMER left selected goes back to ONE SIGNAL. */
     rttySkimCap = j.rttyskim === true && j.skim !== false;
+    skimBandsCap = parseSkimBands(j.skimBands);   // ★ V12 beta90: the skimmers' band picker (absent on an older server: none)
+    skimBandSync();
     { const row = document.getElementById('rttyView')?.closest('.mrow') as HTMLElement | null;
       if (row) row.hidden = !rttySkimCap;
       if (!rttySkimCap && rttySkim) (document.querySelector('#rttyView [data-rttyview="one"]') as HTMLButtonElement | null)?.click(); }
@@ -13992,6 +13995,45 @@ let rttySkim = false;
 let rttyWidth = 48000;
 const rttyHist = new Map<number, string>();   // ★ each signal's whole text, joined from the list's windows (rttyJoin)
 let rttyCardId = 0;                            // the signal whose card is open (0 = none)
+/* ★★ V12 beta90 THE SKIMMERS' BAND PICKER (Stuart 2026-11-21: "cw/rtty skimmer could have a band selection in the decoder
+ *  box header and the normal tune buttons could fine tune it if needed"). BAND in the CW / PSK / RTTY settings, SKIMMER
+ *  view only: the server's segments (vibeserver.json skimBands — its region's IARU plan), the dial put at the bottom of
+ *  the band's segment + half the skimmer's CURRENT width (40 m CW 48 kHz → 7.024), through decTune as a row's tap is (the
+ *  same shared-dial and locked-window rules). The tune buttons still move it; the picker then reads "40 m · tuned" or "—",
+ *  never snapping back. Only bands whose whole window this radio can tune; none → the row is not drawn. */
+let skimBandsCap: SkimBands | null = null;
+/** May the decoder's VFO sit at `hz`? The page's own walls, side-effect free (clampTune's order: VFO B's window, the lock,
+ *  the owner's ranges, the radio's reach). */
+function skimCanTune(hz: number): boolean {
+  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && !spec.watchState.follow && spec.watchState.hi > spec.watchState.lo)
+    return hz >= spec.watchState.lo && hz <= spec.watchState.hi;
+  const win = lockedWindow();
+  if (win) return hz >= win[0] && hz <= win[1];
+  const ranges = allowedRanges() ?? tuneRanges();
+  if (!ranges) return hz >= MIN_TUNE_HZ && hz <= MAX_TUNE_HZ;
+  return ranges.some(([lo, hi]: [number, number]) => hz >= lo && hz <= hi);
+}
+function skimBandSync() {
+  const kinds: [SkimKind, boolean, number][] = [['cw', cwSkim, cwWidth], ['psk', pskSkim, pskWidth], ['rtty', rttySkim, rttyWidth]];
+  for (const [kind, on, width] of kinds) {
+    const row = document.getElementById(kind + 'BandRow') as HTMLElement | null;
+    const sel = document.getElementById(kind + 'Band') as HTMLSelectElement | null;
+    if (!row || !sel) continue;
+    const list = on && skimBandsCap ? skimPickable(skimBandsCap[kind], width, skimCanTune) : [];
+    row.hidden = !list.length;
+    if (!list.length) continue;
+    const dial = spec ? Math.round(vfoNow(spec.abOn ? decVfo : 'A').frequency) : 0;
+    const at = skimBandAtDial(list, width, dial);
+    const want = (at.exact ? '' : '<option value="">' + skimOffLabel(at) + '</option>')
+      + list.map((b) => `<option value="${b.id}">${b.name}</option>`).join('');
+    if (sel.dataset.html !== want) { sel.innerHTML = want; sel.dataset.html = want; }
+    sel.value = at.exact && at.band ? at.band.id : '';
+    sel.onchange = () => {
+      const b = list.find((x) => x.id === sel.value);
+      if (b && spec) { decTune(clampTune(skimDial(b, width))); renderFreq(); }
+    };
+  }
+}
 /** A keyboard-mode list decoder (CW, PSK or the RTTY skimmer) is open. */
 function kbOn(): boolean { return activeDec === 'cw' || activeDec === 'psk' || (activeDec === 'rtty' && rttySkim); }
 /** …and it is the SKIMMER view (its VFO is drawn as its segment). */
@@ -14821,8 +14863,10 @@ function initDecoders(host: string, auth: AuthState) {
     $('rttySettings').classList.toggle('skim', rttySkim);
     $('rttyWidthRow').hidden = !rttySkim;
     $('rttySkimHint').hidden = !rttySkim;
+    skimBandSync();
     $('rttySkimHint').innerHTML = `Every RTTY signal ${rttyWidth / 2000} kHz either side of your dial — each listed as soon as `
       + 'it is heard, then decoded once its speed, shift and polarity are found (they are written into its text). '
+      + 'Pick a <b>BAND</b> to put the window on its RTTY segment; the tune buttons still move it. '
       + 'Tap a row for the whole message.';
   };
   segButtons('rttyView', 'rttyview', (v) => {
@@ -14843,8 +14887,10 @@ function initDecoders(host: string, auth: AuthState) {
   // ★ CW: one signal ↔ skimmer, and the skimmer's segment — each a re-attach (a different decoder on the server).
   const cwHint = () => {
     $('cwWidthRow').hidden = !cwSkim;
+    skimBandSync();
     $('cwHint').innerHTML = cwSkim
       ? `Every CW signal ${cwWidth / 2000} kHz either side of your dial, decoded at once — the speed found for each. `
+        + 'Pick a <b>BAND</b> to put the window on its CW segment; the tune buttons still move it. '
         + 'A call heard calling twice is spotted. Tap a row to tune to it.'
       : 'Tune the signal in <b>CW</b> — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every '
         + 'CW signal inside it. Tap a row to tune to it.';
@@ -14858,9 +14904,10 @@ function initDecoders(host: string, auth: AuthState) {
   // ★ PSK: the same two views and the skimmer's segment.
   const pskHint = () => {
     $('pskWidthRow').hidden = !pskSkim;
+    skimBandSync();
     $('pskHint').innerHTML = pskSkim
-      ? `Every PSK31 and PSK63 signal ${pskWidth / 2000} kHz either side of your dial, decoded at once — tune the dial to `
-        + 'the middle of the PSK segment (e.g. <b>14.0715</b>). A call heard calling twice is spotted. Tap a row to tune to it.'
+      ? `Every PSK31 and PSK63 signal ${pskWidth / 2000} kHz either side of your dial, decoded at once — pick a <b>BAND</b> `
+        + 'to put the window on its PSK segment, or tune it yourself. A call heard calling twice is spotted. Tap a row to tune to it.'
       : 'Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>): every PSK31/63 signal in it is listed, '
         + 'and the one in the middle of the passband is decoded above. Tap a row to put it there.';
   };
@@ -21399,6 +21446,7 @@ function renderFreq() {
   updateMediaSession();
   const hz = Math.round(spec.frequency);
   if (isPanelOpen('decodersPanel')) decoderBandsDial(hz);   // ★ V12: re-dim the decoders as the dial moves
+  if (kbSkimOn()) skimBandSync();   // ★ V12 beta90: the skimmer's BAND picker follows the dial ("40 m · tuned" off its centre)
   if (activeDec === 'dsc') {   // ★ V12: the DSC keys follow the dial (the band's channels, the lit one, the TUNE offer)
     renderDscKeys();
     if (isPanelOpen('decodersPanel')) { const was = dscPanelSig; initDscChannels(); if (was !== dscPanelSig) placeOptions('dsc'); }

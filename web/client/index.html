@@ -5762,6 +5762,13 @@ select.btn { padding: 6px 8px; }
         <button class="btn" data-cwview="skim" title="Every CW signal across a segment centred on your dial">SKIMMER</button>
       </div>
     </div>
+    <!-- ★★ V12 beta90 BAND (Stuart 2026-11-21): the skimmer's window on a band — dial = the bottom of the band's CW segment
+         + half the segment width (the server's skimBands, its region's IARU plan); the tune buttons still fine-tune it.
+         Only bands this radio can tune at this width; not drawn where none fits. -->
+    <div class="mrow" id="cwBandRow" hidden>
+      <label>BAND</label>
+      <select id="cwBand" class="btn" aria-label="Band" title="Put the skimmer's window on a band's CW segment"></select>
+    </div>
     <div class="mrow" id="cwWidthRow" hidden>
       <label>SEGMENT</label>
       <div class="seg" id="cwWidth">
@@ -5783,6 +5790,13 @@ select.btn { padding: 6px 8px; }
         <button class="btn on" data-pskview="one" title="Your passband: every PSK signal in it listed, the one in the middle decoded">ONE SIGNAL</button>
         <button class="btn" data-pskview="skim" title="Every PSK signal across a segment centred on your dial">SKIMMER</button>
       </div>
+    </div>
+    <!-- ★★ V12 beta90 BAND (Stuart 2026-11-21): the skimmer's window on a band — dial = the bottom of the band's PSK segment
+         + half the segment width (the server's skimBands, its region's IARU plan); the tune buttons still fine-tune it.
+         Only bands this radio can tune at this width; not drawn where none fits. -->
+    <div class="mrow" id="pskBandRow" hidden>
+      <label>BAND</label>
+      <select id="pskBand" class="btn" aria-label="Band" title="Put the skimmer's window on a band's PSK segment"></select>
     </div>
     <div class="mrow" id="pskWidthRow" hidden>
       <label>SEGMENT</label>
@@ -5903,6 +5917,13 @@ select.btn { padding: 6px 8px; }
         <button class="btn on" data-rttyview="one" title="Your passband: one RTTY signal, with the settings below (AUTO finds them)">ONE SIGNAL</button>
         <button class="btn" data-rttyview="skim" title="Every RTTY signal across a segment centred on your dial, each with its own settings">SKIMMER</button>
       </div>
+    </div>
+    <!-- ★★ V12 beta90 BAND (Stuart 2026-11-21): the skimmer's window on a band — dial = the bottom of the band's RTTY segment
+         + half the segment width (the server's skimBands, its region's IARU plan); the tune buttons still fine-tune it.
+         Only bands this radio can tune at this width; not drawn where none fits. -->
+    <div class="mrow skimrow" id="rttyBandRow" hidden>
+      <label>BAND</label>
+      <select id="rttyBand" class="btn" aria-label="Band" title="Put the skimmer's window on a band's RTTY segment"></select>
     </div>
     <div class="mrow skimrow" id="rttyWidthRow" hidden>
       <label>SEGMENT</label>

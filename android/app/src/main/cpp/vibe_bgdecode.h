@@ -648,7 +648,7 @@ private:
     std::string where() const {
         if (cw_) {
             std::string m = meta_.mode; for (auto& c : m) c = (char)std::toupper((unsigned char)c);
-            const bool skim = meta_.decoder == "cwskim" || meta_.decoder == "pskskim";
+            const bool skim = meta_.decoder == "cwskim" || meta_.decoder == "pskskim" || meta_.decoder == "rttyskim";
             return label_ + " spots summary \xc2\xb7 " + gallery::freqText(meta_.freqHz)
                  + (skim ? " (the skimmer's centre)" : " " + m) + " \xc2\xb7 "
                  + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
@@ -1059,6 +1059,11 @@ public:
          *  shown not available, never run); `ndbReach` the part of the LF band this radio reaches (empty = all of it);
          *  `ndbWhyNot` non-empty = it may not run now, said on the VFO (the owner switched NDB off here; a listener's own
          *  NDB mode has the band — their skimmer keeps the gallery's NDB cards meanwhile, never two at once). */
+        /** ★★ V12 beta90 — a SKIMMER VFO (kind "cw" / "rtty" / "psk", skimKindOf): non-empty = it may not run here (the
+         *  owner switched that mode off, or the radio has no IQ), said on the VFO. `rttySkimWorkers` = the RTTY skimmer's
+         *  search workers (the listener's setting). Both may be empty (the tests). */
+        std::function<std::string(const std::string& kind)> skimWhyNot;
+        std::function<int()> rttySkimWorkers;
         std::function<std::shared_ptr<NdbFeed>(const NdbStart&)> ndbMake;
         std::function<bool(double& lo, double& hi)> ndbReach;
         std::function<std::string()> ndbWhyNot;
@@ -1175,6 +1180,16 @@ public:
                     m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
                     return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
+                // ★★ …and an RTTY skimmer's (V12 beta90), labelled RTTY: the same summary a listener's RTTY skimmer keeps
+                //    (meta.kind "rttyskim" — Ft8SummaryTap's keyboard-mode shape).
+                env.rttySkimSpotTap = [st, v, pi, la, lo, lo2, last2, ls, lc]() -> DecoderTapPtr {
+                    gallery::Meta m;
+                    m.kind = "rttyskim"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "rttyskim";
+                    m.profile = "Profile " + std::to_string(pi + 1);
+                    m.listenerOn = lo2;
+                    m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
+                    return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
+                };
                 // ★ FT8/FT4 on its dial — or, on a Band VFO, ONE card for the whole band (decoder "ft8band", the band's
                 //   centre as its frequency: the card's first line names the band, as a listener's Band card does).
                 const bool bandV = c->band; const double bandC = c->bandCentre;
@@ -1187,6 +1202,11 @@ public:
                     return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
             }
+            env.rttySkimWorkers = p_.rttySkimWorkers;
+            /* ★★ V12 beta90: a skimmer the owner has switched off here (CW / RTTY / PSK, Setup → Modes and decoders), or
+             *  that this radio cannot run (an Icom: one audio channel, no IQ), is shown paused with the reason — never
+             *  run behind the owner's back (AGENTS.md: no dead control, no hidden one either). */
+            if (c->skim && p_.skimWhyNot) { const std::string w = p_.skimWhyNot(skimKindOf(c->vfo.dec)); if (!w.empty()) c->blockWhy = w; }
             c->host = std::make_shared<DecoderHost>(env, "bg:" + std::to_string(i));
             chans_.push_back(std::move(c));
         }
