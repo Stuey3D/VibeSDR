@@ -226,6 +226,14 @@ receiver's dot gets a small label (the server's name, else RECEIVER) and the sat
 fainter than the coastlines so land reads first; BIG adds a one-line key under the globe ("dotted: this pass's orbit ·
 shaded: where it can be heard"). Labels avoid each other and the globe's edge (bird near the dot → label above).
 
+### 1.9 MAP for a packet satellite's stations (Stuart 2026-11-21) (S)
+A packet downlink (ISS 145.825 / SONATE-2 145.825 APRS digipeaters) gets a **MAP** key in the SATELLITE box's header, as the
+APRS decoder box has (web #aprsMapBtn / the app's APRS map): every station heard through the satellite with a position,
+the pass's dotted orbit and its footprint on the same map, so it is clear the stations were within the bird's reach;
+each station labelled "via ISS" / "via SONATE-2" (the digipeater in the path, vibe_sat_calls.h names it). Drawn only once a
+station with a position has been heard (no dead key). The stations also go to the server's APRS store, so the gallery's
+APRS map shows them afterwards. Web + app.
+
 ## PHASE 2 — make it a satellite station (after the beta lands)
 
 ### 2.1 Bigger catalogue from SatNOGS DB (M — directory + server)
