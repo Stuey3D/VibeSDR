@@ -102,7 +102,8 @@ export function rttyRateText(sg: CwSignal): string {
 /** The hint under the RTTY key's VIEW — the web's rttySkimHint. */
 export function rttySkimHintText(width: number): string {
   return `Every RTTY signal ${width / 2000} kHz either side of your dial, each with its own speed, shift and polarity `
-    + 'found for it — listed as soon as it is heard. Tap a row to read all it sent.';
+    + 'found for it — listed as soon as it is heard. Pick a BAND to put the window on its RTTY segment; the tune buttons '
+    + 'still move it. Tap a row to read all it sent.';
 }
 /** ★★ THE CARD'S WHOLE TEXT: each list carries a signal's last 160 characters only, so the app joins them — the new text
  *  from where it overlaps what is held (the longest tail of the old that starts the new). No overlap (a gap of more than
@@ -151,8 +152,8 @@ export function pskTuneFor(rfHz: number, mode: string, low: number, high: number
 /** The hint under the PSK key's settings — the web's pskHint, word for word (its bold dropped). */
 export function pskHintText(skimmer: boolean, width: number): string {
   return skimmer
-    ? `Every PSK31 and PSK63 signal ${width / 2000} kHz either side of your dial, decoded at once — tune the dial to `
-      + 'the middle of the PSK segment (e.g. 14.0715). A call heard calling twice is spotted. Tap a row to tune to it.'
+    ? `Every PSK31 and PSK63 signal ${width / 2000} kHz either side of your dial, decoded at once — pick a BAND `
+      + 'to put the window on its PSK segment, or tune it yourself. A call heard calling twice is spotted. Tap a row to tune to it.'
     : 'Tune USB with the PSK segment in your passband (e.g. 14.070): every PSK31/63 signal in it is listed, '
       + 'and the one in the middle of the passband is decoded above. Tap a row to put it there.';
 }
@@ -239,6 +240,7 @@ export function readAnchorRestore(anchors: readonly ReadAnchor[], contentTopOf: 
 export function cwHintText(skimmer: boolean, width: number): string {
   return skimmer
     ? `Every CW signal ${width / 2000} kHz either side of your dial, decoded at once — the speed found for each. `
+      + 'Pick a BAND to put the window on its CW segment; the tune buttons still move it. '
       + 'A call heard calling twice is spotted. Tap a row to tune to it.'
     : 'Tune the signal in CW — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every '
       + 'CW signal inside it. Tap a row to tune to it.';

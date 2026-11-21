@@ -156,6 +156,7 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
+import { parseSkimBands, skimPickable, type SkimBands, type SkimKind } from '../utils/skimBands';
 import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
          mergeRttyHistory, type CwList, type CwSpot } from '../services/cwList';
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
@@ -955,6 +956,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setCwCapable(o?.cw === true || !!dw.cw);
         setSkimCapable(o?.skim !== false);   // ★ V12 an Icom: CW / PSK are ONE SIGNAL only
         setRttySkimCapable(o?.rttyskim === true && o?.skim !== false);   // ★ V12 the RTTY skimmer — only where it can run
+        setSkimBands(parseSkimBands(o?.skimBands));   // ★ V12 beta90 the skimmers' BAND row (the server's segments, its region)
         setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal); setAleCapable(o?.ale === true || !!dw.ale);
         setHfdlCapable(o?.hfdl === true);   // ★ V12 HFDL: this VibeServer decodes it on the dial (and serves the HFDL MAP)
         setAvCap(o?.avdata);                // ★ V12 Aircraft datalink — absent where no band is reachable (no key at all)
@@ -2673,7 +2675,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ V12 false = this radio has no SKIMMER view (an Icom: `"skim": false`) — CW / PSK are ONE SIGNAL only. */
   const [skimCapable, setSkimCapable] = useState(true);
   const [pskCapable, setPskCapable] = useState(false);
-  const [rttySkimCapable, setRttySkimCapable] = useState(false);   // ★ V12 the RTTY skimmer ("rttyskim": true)
+  const [rttySkimCapable, setRttySkimCapable] = useState(false);
+  const [skimBands, setSkimBands] = useState<SkimBands | null>(null);   // ★ V12 beta90 (utils/skimBands — the server's, never a table here)   // ★ V12 the RTTY skimmer ("rttyskim": true)
   const [jttyCapable, setJttyCapable] = useState(false);
   const [ncdxfCapable, setNcdxfCapable] = useState(false);   // ★ V12 NCDXF beacons: this server tracks them
   const [balloonCapable, setBalloonCapable] = useState(false);   // ★ V12 balloons: this server decodes them
@@ -16528,6 +16531,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           pskSkim, pskWidth, onPskView, onPskWidth,
           rttySkimAvail: rttySkimCapable && !!(client.current as any)?.isVibe,   // ★ V12 the RTTY skimmer
           rttySkim: rttySkimOn, rttyWidth, onRttyView, onRttyWidth,
+          /* ★★ V12 beta90 THE SKIMMERS' BAND ROW (Stuart 2026-11-21): the bands whose whole window this radio can tune at the
+           *  skimmer's current width (canReach — the lock, the owner's ranges); a pick tunes the dial to the band's segment
+           *  bottom + width / 2 as any tune does (the tune buttons still fine-tune it). None fits → no row. */
+          skimBandsFor: (kind: SkimKind, width: number) => (skimBands ? skimPickable(skimBands[kind], width, canReach) : []),
+          onSkimBand: (hz: number) => { markInteract(); onTuneHz(hz); },
           jttyAvail: jttyCapable && !!(client.current as any)?.isVibe,
           jttyDials: jttyDialsReachable(canReach),
           onJttyDial: (hz: number) => { markInteract(); onTuneHz(hz, 'usb' as SDRMode); },

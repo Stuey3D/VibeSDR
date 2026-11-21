@@ -3530,6 +3530,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 page's card, the same words. Saved on the next Start, like its neighbours. */}
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PSK REPORTER</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
+              {/* ★ V12 beta90: which decoders report — the Setup page's #pskrWhat, the same words */}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
+                Reported: the digital spots (FT8, FT4, WSPR, JS8, Q65, FST4, MSK144 and the rest, one mode or a whole Band), the CW
+                decoder and CW skimmer, the RTTY skimmer, and the PSK decoder and PSK skimmer {'—'} whether a listener was running
+                them or Background Decoding was (its per-band skimmers report all day).
+              </Text>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
                   Send this server{'’'}s digital spots to PSK Reporter

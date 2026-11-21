@@ -994,6 +994,8 @@ if node scripts/check-android-settings-parity.mjs; then pass=$((pass+1)); else f
 # ★★ …and the model behind the phone's Background Decoding editor: the bgDecode JSON both ways, the window rules.
 if node --no-warnings scripts/test_rsp_card.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_bg_decode_model.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta90: the listener's skimmer BAND picker (src/utils/skimBands.ts — web decoder box + app ModeSelector)
+if node --no-warnings scripts/test_skim_bands_picker.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).
 if node --no-warnings scripts/test_mdns_browse.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ PER-SERVER CERTIFICATE PINS (tlsPin.ts, GitHub #52): the key, the fingerprint, what a certificate says, and which
@@ -2176,6 +2178,9 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-rtty-skimmer" ] && "$OUT/test
   VIBE_RTTY_CLIP="$OUT/rtty-clip.cu8" node scripts/test-server-rtty-skim.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_RTTY_CLIP="$OUT/rtty-clip.cu8" node scripts/test-web-rtty-skim.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 beta90: the skimmers' BAND picker in the decoder box (RTTY + CW skimmer, the dial at segment bottom + width/2)
+  VIBE_RTTY_CLIP="$OUT/rtty-clip.cu8" node scripts/test-web-skim-band.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/rtty-clip.cu8"
 else
