@@ -15,10 +15,10 @@ int main() {
     std::printf("config — PSK Reporter, WSPRnet, the DMR ID lookup\n");
     vsconfig::ServerConfig d;
     ok(!d.pskrOn && !d.wsprnetOn && !d.dmrIdLookup && d.pskrCall.empty(), "defaults: all OFF, no callsign");
-    d.pskrOn = true; d.pskrCall = "G4ABC"; d.pskrAntenna = "Wideband loop"; d.wsprnetOn = true; d.dmrIdLookup = true;
+    d.pskrOn = true; d.pskrCall = "G4ABC"; d.pskrAntenna = "Wideband loop"; d.wsprnetOn = true; d.wsprnetCall = "G4ABC"; d.dmrIdLookup = true;
     vsconfig::ServerConfig back; std::string err;
     ok(vsconfig::fromJson(vsconfig::toJson(d), back, err), "written and read back");
-    ok(back.pskrOn && back.pskrCall == "G4ABC" && back.pskrAntenna == "Wideband loop" && back.wsprnetOn && back.dmrIdLookup, "every key survives");
+    ok(back.pskrOn && back.pskrCall == "G4ABC" && back.pskrAntenna == "Wideband loop" && back.wsprnetOn && back.wsprnetCall == "G4ABC" && back.dmrIdLookup, "every key survives (and WSPRnet's own callsign)");
     const std::string old = R"({"configured": true, "name": "Loft", "radios": [{"serial":"00000001","driver":"rtlsdr","configured":true}]})";
     vsconfig::ServerConfig o;
     ok(vsconfig::fromJson(old, o, err) && !o.pskrOn && !o.wsprnetOn && !o.dmrIdLookup, "an older file: all OFF");

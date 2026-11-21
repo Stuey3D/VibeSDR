@@ -1192,10 +1192,10 @@ std::string spotHttpGet(const std::string& url) {
 std::string g_spotKeyApplied;   // ★ V12 beta90: what this process last applied (the config watch re-applies on a change)
 void applySpotReporting(const vsconfig::ServerConfig& c, const vsconfig::RadioConfig* mine) {
     const std::string grid = spotGridOf(c), ant = spotAntennaOf(c, mine);
-    const std::string key = std::string(c.pskrOn ? "1" : "0") + (c.wsprnetOn ? "1" : "0") + (c.dmrIdLookup ? "1" : "0") + "|" + c.pskrCall + "|" + grid + "|" + ant;
+    const std::string key = std::string(c.pskrOn ? "1" : "0") + (c.wsprnetOn ? "1" : "0") + (c.dmrIdLookup ? "1" : "0") + "|" + c.pskrCall + "|" + c.wsprnetCall + "|" + grid + "|" + ant;
     if (key == g_spotKeyApplied) return;
     g_spotKeyApplied = key;
-    vibe::LocalSdrShim::setSpotReporting(c.pskrOn, c.pskrCall, grid, ant, c.wsprnetOn);
+    vibe::LocalSdrShim::setSpotReporting(c.pskrOn, c.pskrCall, grid, ant, c.wsprnetOn, c.wsprnetCall);
     vibe::LocalSdrShim::setDmrIdLookup(c.dmrIdLookup, spotHttpGet);
 }
 std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)

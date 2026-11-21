@@ -277,7 +277,7 @@ inline const std::vector<Control>& controlTable() {
         { "decoderMax rttySkimWorkers",                  D_ANY,   0 },
         { "galleryMb galleryPublic gallerySaveLive",     D_ANY,   0 },
         // ★ V12 beta90 PSK Reporter + WSPRnet (every radio's digital spots); the DMR ID lookup only where DV ID can run
-        { "pskrOn pskrCall pskrAntenna wsprnetOn",       D_ANY,   0 },
+        { "pskrOn pskrCall pskrAntenna wsprnetOn wsprnetCall", D_ANY, 0 },
         { "dmrIdLookup",                                 D_RADIO, 0 },
         { "batteryPauseAt",                              D_ANY,   P_NOT_TV },
         { "place lat lon locFollow country locator",     D_ANY,   0 },
@@ -465,6 +465,7 @@ inline std::string pageConfig(const std::string& raw) {
     out.set("pskrCall", J::str(strOr(S("pskrCall"), "")));
     out.set("pskrAntenna", J::str(strOr(S("pskrAntenna"), "")));
     out.set("wsprnetOn", J::boolean(boolOr(S("wsprnetOn"), false)));
+    out.set("wsprnetCall", J::str(strOr(S("wsprnetCall"), "")));
     out.set("dmrIdLookup", J::boolean(boolOr(S("dmrIdLookup"), false)));
     out.set("batteryPauseAt", J::num(numOr(S("batteryPauseAt"), 0)));
     out.set("batteryResumeAt", J::num(numOr(S("batteryResumeAt"), 40)));
@@ -693,6 +694,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
     str(&b, "pskrCall", "pskrCall", 20);   // ★ the receiver's NAME (vibe_spot_report.h kMaxReceiverName)
     str(&b, "pskrAntenna", "pskrAntenna", 64);
     flag(&b, "wsprnetOn", "wsprnetOn");
+    str(&b, "wsprnetCall", "wsprnetCall", 15);   // ★ WSPRnet's own callsign (vibe_spot_report.h wsprCallOf)
     if (on("dmrIdLookup")) flag(&b, "dmrIdLookup", "dmrIdLookup");
     if (on("batteryPauseAt")) if (const J* v = b.get("batteryPauseAt"); v && v->t == J::Num) {
         double at = std::round(std::max(0.0, std::min(95.0, v->n)));

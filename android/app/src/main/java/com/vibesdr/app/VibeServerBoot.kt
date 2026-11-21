@@ -335,7 +335,7 @@ object VibeServerBoot {
             val placed = loc != null && loc.optString("mode") == "manual" && loc.has("lat") && loc.has("lon")
             VibeLocalSDR.setSpotReporting(cfg.b("pskrOn", false), cfg.s("pskrCall").trim(),
                 if (placed) loc!!.optDouble("lat") else Double.NaN, if (placed) loc!!.optDouble("lon") else Double.NaN,
-                cfg.s("pskrAntenna").trim(), cfg.s("antennaNames"), cfg.b("wsprnetOn", false))
+                cfg.s("pskrAntenna").trim(), cfg.s("antennaNames"), cfg.b("wsprnetOn", false), cfg.s("wsprnetCall").trim())
             VibeLocalSDR.setDmrIdLookup(cfg.b("dmrIdLookup", false))
         }
         run {

@@ -900,7 +900,7 @@ std::string toJson(const ServerConfig& c) {
     // ★★ V12 the gallery — machine-level, read below too.
     N("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — machine-level, see ServerConfig.
-    B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn);
+    B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);
     B("dmrIdLookup", c.dmrIdLookup);
     // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
     S("landingMessage", c.landingMessage);
@@ -998,9 +998,10 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     if (c.galleryMb < 0) c.galleryMb = 0;
     if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;
-    B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn);
+    B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);
     B("dmrIdLookup", c.dmrIdLookup);
     if (c.pskrCall.size() > 20) c.pskrCall.resize(20);   // ★ the receiver's name, ≤ 20 (vibe_spot_report.h)
+    if (c.wsprnetCall.size() > 15) c.wsprnetCall.resize(15);   // ★ WSPRnet's own callsign (vibe_spot_report.h wsprCallOf)
     if (c.pskrAntenna.size() > 64) c.pskrAntenna.resize(64);
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);

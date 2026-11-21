@@ -1726,13 +1726,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, ji
  *  The antenna: the owner's text, else the radio's one named port (antennaNames). */
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetSpotReporting(JNIEnv* env, jobject, jboolean on, jstring call, jdouble lat, jdouble lon,
-                                                       jstring antenna, jstring antennaNames, jboolean wsprnet) {
+                                                       jstring antenna, jstring antennaNames, jboolean wsprnet, jstring wsprCall) {
     const std::string grid = std::isfinite(lat) && std::isfinite(lon) ? vibe::spotreport::gridOf(lat, lon) : std::string();
     std::string ant = jstr(env, antenna);
     if (ant.empty()) { const auto n = vibe::portnames::parse(jstr(env, antennaNames)); if (n.size() == 1) ant = n[0].second; }
     // ★ jniHttpGet answers "" until VibeHttp is resolved (nativeInitRadioDns), whichever comes first
     vibe::LocalSdrShim::setSpotReportFetcher([](const std::string& u) { return jniHttpGet(u, "application/json"); });
-    vibe::LocalSdrShim::setSpotReporting(on == JNI_TRUE, jstr(env, call), grid, ant, wsprnet == JNI_TRUE);
+    vibe::LocalSdrShim::setSpotReporting(on == JNI_TRUE, jstr(env, call), grid, ant, wsprnet == JNI_TRUE, jstr(env, wsprCall));
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDmrIdLookup(JNIEnv*, jobject, jboolean on) {

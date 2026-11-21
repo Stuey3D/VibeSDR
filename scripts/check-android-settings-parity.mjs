@@ -71,6 +71,7 @@ const TABLE = [
   P(['pskrCall'], 'Receiver name (required)', 'pskrCall'),   // ★ 11-21: the receiver's NAME (any PSK Reporter name), not only a callsign
   P(['pskrAntenna'], 'Antenna (blank', 'pskrAntenna'),
   P(['wsprnetOn'], 'Also send WSPR spots to WSPRnet', 'wsprnetOn'),
+  P(['wsprnetCall'], 'Callsign for WSPRnet', 'wsprnetCall'),   // ★ 11-21 WSPRnet's own callsign
   P(['dmrIdLookup'], 'Show callsigns for DMR IDs', 'dmrIdLookup'),
   P(['uncompressed'], 'UNCOMPRESSED AUDIO', 'uncompressedAudio'),
   // ── RADIO ──

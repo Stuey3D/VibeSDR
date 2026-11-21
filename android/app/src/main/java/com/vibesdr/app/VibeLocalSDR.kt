@@ -398,11 +398,12 @@ object VibeLocalSDR {
     /** ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h): the owner's switch, the receiver callsign (required), the
      *  server's position (NaN = none; the grid is worked out from it), the antenna text ("" = the radio's port name from
      *  antennaNames), and the second switch "Also send WSPR spots to WSPRnet". Live. */
-    fun setSpotReporting(on: Boolean, callsign: String, lat: Double, lon: Double, antenna: String, antennaNames: String, wsprnet: Boolean) {
-        ensureLoaded(); nativeSetSpotReporting(on, callsign, lat, lon, antenna, antennaNames, wsprnet)
+    fun setSpotReporting(on: Boolean, callsign: String, lat: Double, lon: Double, antenna: String, antennaNames: String, wsprnet: Boolean,
+                         wsprCall: String = "") {   // ★ WSPRnet's own callsign ("" = the PSK Reporter name when it is a callsign)
+        ensureLoaded(); nativeSetSpotReporting(on, callsign, lat, lon, antenna, antennaNames, wsprnet, wsprCall)
     }
     private external fun nativeSetSpotReporting(on: Boolean, callsign: String, lat: Double, lon: Double, antenna: String,
-                                                antennaNames: String, wsprnet: Boolean)
+                                                antennaNames: String, wsprnet: Boolean, wsprCall: String)
     /** ★★ V12 beta90 DMR ID → CALLSIGN (vibe_dmr_id.h): look new DMR IDs up at RadioID.net (through VibeHttp). OFF by default. */
     fun setDmrIdLookup(on: Boolean) { ensureLoaded(); nativeSetDmrIdLookup(on) }
     private external fun nativeSetDmrIdLookup(on: Boolean)

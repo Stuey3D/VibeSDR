@@ -171,6 +171,8 @@ export type VibeServerConfig = {
   pskrCall?: string;
   pskrAntenna?: string;
   wsprnetOn?: boolean;
+  /** ★ WSPRnet's own callsign — '' = the PSK Reporter name when that is a callsign (vibe_spot_report.h wsprCallOf). */
+  wsprnetCall?: string;
   dmrIdLookup?: boolean;
   /** ★★ V12 VibeAGC for SDRplay — 0 automatic (on with the OpenRSP driver), 1 on, 2 off (RadioConfig::rspVibeAgc). */
   rspVibeAgc?: number;
@@ -397,9 +399,11 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,
     pskrOn: cfg.pskrOn === true,
-    pskrCall: (cfg.pskrCall ?? '').trim().toUpperCase().slice(0, 15),
+    // ★ the RECEIVER's name as typed — case kept, letters/digits/'/'/'-', ≤ 20 (vibe_spot_report.h cleanCall; Stuart 11-21)
+    pskrCall: (cfg.pskrCall ?? '').trim().replace(/[^A-Za-z0-9/-]/g, '').slice(0, 20),
     pskrAntenna: (cfg.pskrAntenna ?? '').trim().slice(0, 64),
     wsprnetOn: cfg.wsprnetOn === true,
+    wsprnetCall: (cfg.wsprnetCall ?? '').trim().toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 15),
     dmrIdLookup: cfg.dmrIdLookup === true,
     rspVibeAgc: cfg.rspVibeAgc === 1 || cfg.rspVibeAgc === 2 ? cfg.rspVibeAgc : 0,
     nbWide: cfg.nbWide === 0 || cfg.nbWide === 2 ? cfg.nbWide : 1,

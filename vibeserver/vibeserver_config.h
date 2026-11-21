@@ -978,6 +978,8 @@ struct ServerConfig {
     std::string pskrCall;
     std::string pskrAntenna;
     bool        wsprnetOn = false;
+    /** ★ WSPRnet's own callsign (Stuart 2026-11-21) — "" = the PSK Reporter name when that is a callsign. ≤ 15. */
+    std::string wsprnetCall;
     /** ★★ V12 beta90 DMR ID → CALLSIGN (vibe_dmr_id.h, docs/v12/DMR-ID.md): look each new DMR ID up once at RadioID.net
      *  for the DV ID box (amateur bands only). OFF by default — RadioID's policy asks approval for public-facing use. */
     bool        dmrIdLookup = false;

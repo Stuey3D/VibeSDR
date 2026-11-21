@@ -328,11 +328,24 @@ inline std::string wsprLine(const Spot& s, int sync10) {
     return b;
 }
 
+/** The callsign WSPRnet uploads go under: the owner's WSPRnet callsign, else the PSK Reporter name when that is a
+ *  callsign, else "" (nothing is sent to WSPRnet). Upper case, A–Z 0–9 / — the strict rule (cleanHeardCall). */
+inline std::string wsprCallOf(const std::string& wsprCall, const std::string& receiverName) {
+    const std::string w = cleanHeardCall(wsprCall);
+    if (!w.empty()) return plausibleCall(w) ? w : std::string();
+    const std::string r = cleanHeardCall(receiverName);
+    return receiverName.size() == r.size() && plausibleCall(r) ? r : std::string();   // ★ no '-' or other character dropped
+}
+
 // ══ THE REPORTER ═══════════════════════════════════════════════════════════════════════════════════════════════════
 struct Config {
     bool on = false;                ///< PSK Reporter (the owner's switch, OFF by default)
     bool wsprnet = false;           ///< ★ also WSPR spots to WSPRnet (a second switch, OFF by default; needs `on`)
-    std::string call;               ///< the receiver's callsign (required — nothing is sent without one)
+    std::string call;               ///< the receiver's NAME on PSK Reporter (required — nothing is sent without one)
+    /** ★★ WSPRnet's own callsign (Stuart 2026-11-21: "add a separate wsprnet one anyway just to be safe") — WSPRnet takes
+     *  a callsign, and the PSK Reporter name may be a name of the owner's own ("Stuey3D-VibeSDR"). "" = the PSK Reporter
+     *  name, but only when that is shaped like a callsign (wsprCallOf); else no WSPRnet upload, said in the status. */
+    std::string wsprCall;
     std::string grid;               ///< the server's grid (from its location)
     std::string antenna;            ///< free text; the owner's, else the radio's port name / antenna
     std::string software;           ///< "VibeServer <version>"
@@ -463,6 +476,7 @@ public:
     /** The owner's settings. ★ Off, or no callsign: nothing waits and nothing is sent. */
     void configure(Config c) {
         c.call = cleanCall(c.call);
+        c.wsprCall = cleanHeardCall(c.wsprCall);
         c.grid = cleanGrid(c.grid);
         c.antenna = cleanText(c.antenna);
         c.software = cleanText(c.software);
@@ -470,7 +484,7 @@ public:
         std::lock_guard<std::mutex> l(m_);
         const bool wasOn = active_();
         cfg_ = c;
-        if (!c.wsprnet || !active_()) wspr_.clear();
+        if (!c.wsprnet || !active_() || wsprCallOf(c.wsprCall, c.call).empty()) wspr_.clear();
         if (!active_()) { pending_.clear(); }
         if (active_() && !wasOn) { ranksDue_ = nowS() + 60 + (long)(rng_() % 240); }   // first ranking a few minutes in
         writeStatusLocked_();
@@ -503,7 +517,7 @@ public:
             }
         }
         // ★ WSPRnet takes every WSPR transmission (one a station per two-minute slot), when its switch is on
-        if (cfg_.wsprnet && mode == "WSPR" && s.dbm > -1000) {
+        if (cfg_.wsprnet && mode == "WSPR" && s.dbm > -1000 && !wsprCallOf(cfg_.wsprCall, cfg_.call).empty()) {
             const std::string wk = s.call + "|" + std::to_string((long long)s.slotUtc);
             if (wsprKeys_.insert(wk).second && wspr_.size() < kMaxWspr) wspr_.push_back(s);
         }
@@ -618,7 +632,8 @@ private:
             ++sent;
         }
         int wcode = -1; std::string werr; size_t wcount = 0;
-        if (cfg.wsprnet && !wl.empty() && !cfg.grid.empty()) {
+        const std::string wcall = wsprCallOf(cfg.wsprCall, cfg.call);
+        if (cfg.wsprnet && !wl.empty() && !cfg.grid.empty() && !wcall.empty()) {
             std::string file;
             for (const auto& s : wl) file += wsprLine(s, 5) + "\r\n";
             const std::string bnd = "----VibeServerWsprnet" + std::to_string(now);
@@ -628,7 +643,7 @@ private:
                 if (fname) body += std::string("; filename=\"") + fname + "\"\r\nContent-Type: text/plain";
                 body += "\r\n\r\n" + val + "\r\n";
             };
-            part("call", cfg.call, nullptr);
+            part("call", wcall, nullptr);
             part("grid", cfg.grid, nullptr);
             part("allmept", file, "ALL_MEPT.TXT");
             body += "--" + bnd + "--\r\n";
@@ -670,7 +685,12 @@ private:
         j += ",\"sentHour\":" + std::to_string(h) + ",\"lastSent\":" + std::to_string(lastSent_);
         j += ",\"lastError\":\"" + esc(lastError_) + "\",\"lastErrorAt\":" + std::to_string(lastErrorAt_);
         j += ",\"wsprHour\":" + std::to_string(w) + ",\"wsprLast\":" + std::to_string(wLast_);
-        j += ",\"wsprError\":\"" + esc(wError_) + "\",\"wsprErrorAt\":" + std::to_string(wErrorAt_);
+        const std::string wcallNow = wsprCallOf(cfg_.wsprCall, cfg_.call);
+        j += ",\"wsprCall\":\"" + esc(wcallNow) + "\"";
+        // ★ WSPRnet on with no callsign to send under: said, not silently skipped
+        const std::string wErrNow = active_() && cfg_.wsprnet && wcallNow.empty()
+            ? std::string("No callsign for WSPRnet: the PSK Reporter name is not a callsign — enter one for WSPRnet") : wError_;
+        j += ",\"wsprError\":\"" + esc(wErrNow) + "\",\"wsprErrorAt\":" + std::to_string(wErrorAt_);
         j += ",\"pending\":" + std::to_string(pending_.size()) + ",\"updated\":" + std::to_string(now) + "}";
         return j;
     }

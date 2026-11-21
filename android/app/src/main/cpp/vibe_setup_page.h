@@ -919,6 +919,10 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <span>Also send WSPR spots to WSPRnet</span></label>
       <div class="hint">WSPR spots only, uploaded with your callsign and grid (WSPRnet needs no account). With this on,
           this server also appears in WSPR's receiver rankings.</div>
+      <label id="wsprnetCallRow"><span class="lbl">Callsign for WSPRnet</span>
+        <input type="text" id="wsprnetCall" maxlength="15" placeholder="same as above" autocapitalize="characters" autocorrect="off" spellcheck="false" style="max-width:200px">
+        <div class="hint">WSPRnet takes a callsign. Leave it empty to use the PSK Reporter name above when that is a
+          callsign; fill it in when that name is one of your own (e.g. <b>G4ABC</b> here, <b>G4ABC-SDR</b> above).</div></label>
       <div class="hint" id="pskrStatus" style="color:var(--amber)"></div>
       <div class="hint">What is sent: each station heard (its callsign, its own grid if it sent one, mode, frequency,
           signal-to-noise, time), at most once every five minutes and the same station on the same band at most once an
@@ -7171,6 +7175,7 @@ function fill() {
     $("pskrCall").value = cfg.pskrCall || "";
     $("pskrAntenna").value = cfg.pskrAntenna || "";
     $("wsprnetOn").checked = cfg.wsprnetOn === true;
+    if ($("wsprnetCall")) $("wsprnetCall").value = cfg.wsprnetCall || "";
     $("dmrIdLookup").checked = cfg.dmrIdLookup === true;
     pskrSync();
     pskrStatusShow(cfg.spotReportStatus);
@@ -8592,7 +8597,7 @@ function stashServer() {
   cfg.gallerySaveLive = $("gallerySaveLive").checked;
   if ($("pskrOn")) {
     cfg.pskrOn = $("pskrOn").checked; cfg.pskrCall = pskrCallValue(); cfg.pskrAntenna = $("pskrAntenna").value.trim();
-    cfg.wsprnetOn = $("wsprnetOn").checked; cfg.dmrIdLookup = $("dmrIdLookup").checked;
+    cfg.wsprnetOn = $("wsprnetOn").checked; cfg.wsprnetCall = wsprnetCallValue(); cfg.dmrIdLookup = $("dmrIdLookup").checked;
   }
   cfg.dirList       = $("dirList").checked;
   cfg.tunnelResume  = $("tunnelResume").checked;
@@ -8637,6 +8642,7 @@ function collect() {
     pskrCall:         $("pskrOn") ? pskrCallValue() : "",
     pskrAntenna:      $("pskrAntenna") ? $("pskrAntenna").value.trim() : "",
     wsprnetOn:        $("wsprnetOn") ? $("wsprnetOn").checked : false,
+    wsprnetCall:      $("wsprnetCall") ? wsprnetCallValue() : "",
     dmrIdLookup:      $("dmrIdLookup") ? $("dmrIdLookup").checked : false,
     dirList:          $("dirList").checked,
     tunnelResume:     $("tunnelResume").checked,
@@ -10219,10 +10225,24 @@ function pskrCallValue() {
   // \u2605 the RECEIVER's name as typed (case kept; letters, digits, / and -, \u2264 20) \u2014 vibe_spot_report.h cleanCall
   return ($("pskrCall").value || "").trim().replace(/[^A-Za-z0-9\/-]/g, "").slice(0, 20);
 }
+/** WSPRnet's own callsign as typed: upper case, A\u2013Z 0\u2013/ (vibe_spot_report.h wsprCallOf). */
+function wsprnetCallValue() {
+  return $("wsprnetCall") ? ($("wsprnetCall").value || "").toUpperCase().replace(/[^A-Z0-9\/]/g, "").slice(0, 15) : "";
+}
+/** Shaped like a callsign (plausibleCall): 3\u201315 of A\u2013Z 0\u20139 /, a letter and a digit, nothing but those. */
+function wsprnetCallOk(s) {
+  return /^[A-Z0-9\/]{3,15}$/.test(s) && /[A-Z]/.test(s) && /[0-9]/.test(s) && !/^\/|\/$|\/\//.test(s);
+}
 function pskrStops() {
   if (!$("pskrOn") || !$("pskrOn").checked) return false;
   const c = pskrCallValue();
-  if (/^[A-Za-z0-9\/-]{3,20}$/.test(c) && /[A-Za-z]/.test(c)) return false;
+  if (/^[A-Za-z0-9\/-]{3,20}$/.test(c) && /[A-Za-z]/.test(c)) {
+    // \u2605 WSPRnet on: a callsign to send under \u2014 its own box, else the PSK Reporter name when that is one
+    if (!$("wsprnetOn").checked || wsprnetCallOk(wsprnetCallValue() || c.toUpperCase())) return false;
+    $("saveErr").textContent = "Not saved \u2014 WSPRnet needs a callsign: enter one under \u201cAlso send WSPR spots to WSPRnet\u201d, or switch that off.";
+    $("wsprnetCall").scrollIntoView({behavior: "smooth", block: "center"}); $("wsprnetCall").focus();
+    return true;
+  }
   $("saveErr").textContent = "Not saved \u2014 PSK Reporter needs a receiver name (your callsign, or e.g. G4ABC-SDR), or switch it off.";
   $("pskrCall").scrollIntoView({behavior: "smooth", block: "center"}); $("pskrCall").focus();
   return true;
@@ -10233,6 +10253,8 @@ function pskrSync() {
   if (!$("pskrOn")) return;
   const on = $("pskrOn").checked;
   $("wsprnetOn").disabled = !on;
+  // \u2605 WSPRnet's callsign only matters with WSPRnet on \u2014 shown with it, never a dead box
+  if ($("wsprnetCallRow")) $("wsprnetCallRow").hidden = !(on && $("wsprnetOn").checked);
   const loc = ($("locator").value || "").trim();
   let g = /^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?/.test(loc) ? loc.slice(0, loc.length >= 6 ? 6 : 4) : "";
   if (!g) {
@@ -10264,6 +10286,7 @@ function pskrStatusShow(st) {
 if ($("pskrOn")) {
   for (const id of ["pskrOn", "locator", "lat", "lon"]) $(id).addEventListener("input", pskrSync);
   $("pskrOn").addEventListener("change", pskrSync);
+  if ($("wsprnetOn")) $("wsprnetOn").addEventListener("change", pskrSync);
 }
 
 function dirReachStops() {

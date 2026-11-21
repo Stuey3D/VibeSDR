@@ -365,7 +365,8 @@ public:
     /** ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h, docs/v12/PSK-REPORTER.md): the owner's switch (OFF by default),
      *  the receiver's callsign (required — nothing is sent without one), the server's grid, the antenna text, and the
      *  second switch "Also send WSPR spots to WSPRnet". Live; starts the reporter's thread on first use. */
-    static void setSpotReporting(bool on, const std::string& callsign, const std::string& grid, const std::string& antenna, bool wsprnet);
+    static void setSpotReporting(bool on, const std::string& callsign, const std::string& grid, const std::string& antenna, bool wsprnet,
+                                 const std::string& wsprCall = std::string());   // ★ WSPRnet's own callsign ("" = the PSK Reporter name if a callsign)
     /** ★ Where this process writes its status line for the setup page (the runtime dir the radio processes share). */
     static void setSpotReportStatusDir(const std::string& dir);
     /** ★ The HTTPS GET the ranking uses (the daemon: curl; Android: VibeHttp). Unset = no ranking. */

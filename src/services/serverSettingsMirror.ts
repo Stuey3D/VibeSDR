@@ -58,6 +58,7 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'pskrCall',         storage: 'vs_pskrcall',        enc: 'str' },
   { native: 'pskrAntenna',      storage: 'vs_pskrantenna',     enc: 'str' },
   { native: 'wsprnetOn',        storage: 'vs_wsprneton',       enc: 'bool01' },
+  { native: 'wsprnetCall',      storage: 'vs_wsprnetcall',     enc: 'str' },
   { native: 'dmrIdLookup',      storage: 'vs_dmridlookup',     enc: 'bool01' },
   { native: 'batteryPauseAt',   storage: 'vs_batpause',        enc: 'num' },
   { native: 'webServer',        storage: 'vs_webserver',       enc: 'bool01' },

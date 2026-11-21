@@ -41048,9 +41048,10 @@ void LocalSdrShim::setRttySkimWorkers(int n) {
 }
 /* ★★ V12 beta90 PSK REPORTER — the owner's settings into the process's reporter (vibe_spot_report.h). The software id is
  *  "VibeServer <version>" (the page shows decodingSoftware on its statistics page); the version is this build's. */
-void LocalSdrShim::setSpotReporting(bool on, const std::string& callsign, const std::string& grid, const std::string& antenna, bool wsprnet) {
+void LocalSdrShim::setSpotReporting(bool on, const std::string& callsign, const std::string& grid, const std::string& antenna, bool wsprnet,
+                                    const std::string& wsprCall) {
     vibe::spotreport::Config c;
-    c.on = on; c.call = callsign; c.grid = grid; c.antenna = antenna; c.wsprnet = wsprnet;
+    c.on = on; c.call = callsign; c.grid = grid; c.antenna = antenna; c.wsprnet = wsprnet; c.wsprCall = wsprCall;
 #ifdef VIBESERVER_VERSION_STR
     c.software = std::string("VibeServer ") + VIBESERVER_VERSION_STR;
 #else
@@ -41060,7 +41061,7 @@ void LocalSdrShim::setSpotReporting(bool on, const std::string& callsign, const 
     const auto before = r.config();
     r.configure(c);
     const auto now = r.config();
-    if (before.on != now.on || before.call != now.call || before.wsprnet != now.wsprnet || before.grid != now.grid || before.antenna != now.antenna)
+    if (before.on != now.on || before.call != now.call || before.wsprnet != now.wsprnet || before.wsprCall != now.wsprCall || before.grid != now.grid || before.antenna != now.antenna)
         LOGI("PSK Reporter: %s%s%s%s", now.on && !now.call.empty() ? "on as " : "off",
              now.on && !now.call.empty() ? now.call.c_str() : (now.on ? " (no callsign — nothing is sent)" : ""),
              now.on && !now.call.empty() && now.grid.empty() ? " (no grid: set the server's location)" : "",

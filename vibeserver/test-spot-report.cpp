@@ -322,6 +322,16 @@ int main() {
         // the switch off: nothing goes to WSPRnet
         c.wsprnet = false; rp.configure(c); rp.note(w3); rp.flushNow();
         CHECK(http.got.size() == 3 && rp.wsprPendingCount() == 0, "WSPRnet switch off: no upload");
+        // ★★ WSPRnet's OWN callsign (Stuart 2026-11-21): the PSK Reporter name may be a name of his own
+        c.wsprnet = true; c.call = "Stuey3D-VibeSDR"; c.wsprCall = ""; rp.configure(c);
+        Spot w4 = w; w4.slotUtc += 1200; rp.note(w4);
+        CHECK(rp.wsprPendingCount() == 0 && rp.statusJson().find("No callsign for WSPRnet") != std::string::npos,
+              "a PSK Reporter name that is not a callsign and no WSPRnet callsign: nothing queued, said in the status");
+        c.wsprCall = "g4abc"; rp.configure(c); rp.note(w4); rp.flushNow();
+        CHECK(http.got.size() == 4 && http.got[3].find("name=\"call\"\r\n\r\nG4ABC\r\n") != std::string::npos
+              && http.got[3].find("Stuey3D") == std::string::npos, "WSPRnet goes under its own callsign (upper case), never the PSK Reporter name");
+        CHECK(rp.statusJson().find("\"wsprCall\":\"G4ABC\"") != std::string::npos && rp.statusJson().find("\"call\":\"Stuey3D-VibeSDR\"") != std::string::npos,
+              "the status names both: PSK Reporter's name and WSPRnet's callsign");
         sink.drain();
     }
 
@@ -362,6 +372,9 @@ int main() {
     CHECK(cleanCall("Stuey3D-VibeSDR") == "Stuey3D-VibeSDR", "the receiver's name keeps its case and '-'");
     CHECK(cleanCall(" G4ABC/P ") == "G4ABC/P" && cleanCall("WESSEX") == "WESSEX", "a callsign or a plain name (no digit) as typed");
     CHECK(cleanCall("ABCDEFGHIJKLMNOPQRSTUVWXYZ").size() == 20 && cleanCall("a b<c>") == "abc", "≤ 20, nothing outside letters, digits, / and -");
+    CHECK(wsprCallOf("", "G4ABC") == "G4ABC" && wsprCallOf("", "stuey3d") == "STUEY3D", "WSPRnet: empty = the PSK Reporter name when it is a callsign");
+    CHECK(wsprCallOf("", "Stuey3D-VibeSDR").empty() && wsprCallOf("", "WESSEX").empty(), "…never a name with '-' or no digit");
+    CHECK(wsprCallOf("m0xyz", "Stuey3D-VibeSDR") == "M0XYZ" && wsprCallOf("NOTACALL", "G4ABC").empty(), "its own callsign wins; a bad one sends nothing");
     CHECK(cleanHeardCall("g4abc") == "G4ABC" && cleanHeardCall("G4ABC-") == "G4ABC" && plausibleCall(cleanHeardCall("g4abc")), "a heard call is upper-cased and cut to A–Z 0–9 /");
     CHECK(adifMode("ft8") == "FT8" && adifMode("Q65-60A") == "Q65" && adifMode("FST4W-120") == "FST4W" && adifMode("FT2").empty() && adifMode("JTTY").empty(), "ADIF mode names; FT2 and JTTY have none");
     CHECK(adifMode("CW") == "CW" && adifMode("cw") == "CW", "CW is reported as ADIF CW (beta90: CW skimmer spots go to PSK Reporter)");

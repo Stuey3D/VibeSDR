@@ -376,7 +376,7 @@ const K = {
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
   /** ★★ V12 beta90 PSK Reporter (switch, receiver callsign, antenna text), "Also send WSPR spots to WSPRnet", and the
    *  DMR ID lookup (RadioID.net). Absent = off / empty. */
-  pskrOn: 'vs_pskron', pskrCall: 'vs_pskrcall', pskrAntenna: 'vs_pskrantenna', wsprnetOn: 'vs_wsprneton', dmrIdLookup: 'vs_dmridlookup',
+  pskrOn: 'vs_pskron', pskrCall: 'vs_pskrcall', pskrAntenna: 'vs_pskrantenna', wsprnetOn: 'vs_wsprneton', wsprnetCall: 'vs_wsprnetcall', dmrIdLookup: 'vs_dmridlookup',
   /** ★★ V12 VibeAGC for SDRplay (0 automatic, 1 on, 2 off). */
   rspVibeAgc: 'vs_rspvibeagc',
   /** ★ The wide impulse blanker (0 off, 1 auto below 30 MHz, 2 on). Absent = 1, the server's default. */
@@ -646,6 +646,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [pskrCall, setPskrCall] = useState('');
   const [pskrAntenna, setPskrAntenna] = useState('');
   const [wsprnetOn, setWsprnetOn] = useState(false);
+  /** ★ WSPRnet's own callsign (Stuart 2026-11-21) — '' = the PSK Reporter name when that is a callsign (vibe_spot_report.h wsprCallOf). */
+  const [wsprnetCall, setWsprnetCall] = useState('');
   const [dmrIdLookup, setDmrIdLookup] = useState(false);
   const [pskrStatus, setPskrStatus] = useState('');
   /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
@@ -1667,7 +1669,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
           // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = off
           setPskrOn(g(K.pskrOn) === '1'); setPskrCall(g(K.pskrCall) ?? ''); setPskrAntenna(g(K.pskrAntenna) ?? '');
-          setWsprnetOn(g(K.wsprnetOn) === '1'); setDmrIdLookup(g(K.dmrIdLookup) === '1');
+          setWsprnetOn(g(K.wsprnetOn) === '1'); setWsprnetCall(g(K.wsprnetCall) ?? ''); setDmrIdLookup(g(K.dmrIdLookup) === '1');
           { const rv = g(K.rspVibeAgc); if (rv === '1' || rv === '2' || rv === '0') setRspVibeAgc(Number(rv)); }
           { const nb = g(K.nbWide); if (nb === '0' || nb === '1' || nb === '2') setNbWide(Number(nb)); }
           { const rc = g(K.rsp); if (rc != null) setRspCard(readRspCard(rc)); }
@@ -2286,7 +2288,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
-    pskrOn, pskrCall, pskrAntenna, wsprnetOn, dmrIdLookup,   // ★★ V12 beta90
+    pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson,
     rspCard, ppbText,
   };
@@ -2343,7 +2345,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — VibeServerBoot applies them on every start
     pskrOn: live.current.pskrOn, pskrCall: live.current.pskrCall, pskrAntenna: live.current.pskrAntenna,
-    wsprnetOn: live.current.wsprnetOn, dmrIdLookup: live.current.dmrIdLookup,
+    wsprnetOn: live.current.wsprnetOn, wsprnetCall: live.current.wsprnetCall, dmrIdLookup: live.current.dmrIdLookup,
     // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
     rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
     nbWide: live.current.nbWide,   // ★ VibeServerBoot: setNbWide(cfg "nbWide"), auto when absent
@@ -2524,7 +2526,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
       [K.pskrOn, live.current.pskrOn ? '1' : '0'], [K.pskrCall, live.current.pskrCall], [K.pskrAntenna, live.current.pskrAntenna],
-      [K.wsprnetOn, live.current.wsprnetOn ? '1' : '0'], [K.dmrIdLookup, live.current.dmrIdLookup ? '1' : '0'],
+      [K.wsprnetOn, live.current.wsprnetOn ? '1' : '0'], [K.wsprnetCall, live.current.wsprnetCall], [K.dmrIdLookup, live.current.dmrIdLookup ? '1' : '0'],
       [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
       [K.rsp, JSON.stringify(live.current.rspCard)], [K.ppb, live.current.ppbText],
     ]);
@@ -3562,6 +3564,25 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   onValueChange={(v) => { setWsprnetOn(v); AsyncStorage.setItem(K.wsprnetOn, v ? '1' : '0'); }}
                   trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
               </View>
+              {pskrOn && wsprnetOn && (() => {
+                // ★ WSPRnet takes a callsign: its own box, else the PSK Reporter name when that is one (the server's rule)
+                const callOk = (s: string) => /^[A-Z0-9/]{3,15}$/.test(s) && /[A-Z]/.test(s) && /[0-9]/.test(s) && !/^\/|\/$|\/\//.test(s);
+                const usable = wsprnetCall ? callOk(wsprnetCall) : callOk(pskrCall.toUpperCase());
+                return (
+                  <>
+                    <TextInput
+                      value={wsprnetCall}
+                      onChangeText={(t) => { const v = t.toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 15); setWsprnetCall(v); AsyncStorage.setItem(K.wsprnetCall, v); }}
+                      placeholder="Callsign for WSPRnet (empty = same as above)" placeholderTextColor={C.placeholder} autoCapitalize="characters" autoCorrect={false}
+                      style={[styles.input, { color: C.text, borderColor: usable ? C.border : C.warn, fontFamily: F, marginTop: 8 }]} />
+                    <Text style={[styles.hint, { color: usable ? C.textDim : C.warn, fontFamily: F }]}>
+                      {usable
+                        ? 'WSPRnet takes a callsign. Empty uses the PSK Reporter name above when that is a callsign.'
+                        : 'WSPRnet needs a callsign \u2014 the name above is not one. Enter your callsign here, or nothing goes to WSPRnet.'}
+                    </Text>
+                  </>
+                );
+              })()}
               {!!pskrStatus && (
                 <Text style={[styles.hint, { color: C.text, fontFamily: F }]}>{pskrStatus}</Text>
               )}
