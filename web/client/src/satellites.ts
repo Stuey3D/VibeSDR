@@ -19,6 +19,9 @@
  *     {"op":"doppler"}; leaving the mode (EXIT, the key again, another whole-radio mode) sends {"op":"drop"}.
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import {
+  GLOBE_KEY_TEXT, GLOBE_RX_DOT, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
+  satRemindText, satRemindWhy, satTelemetryHead, satTelemetryLine, satTxDetail, satTxModeLabel, satViaText,
+  type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
   type SatPass,
@@ -39,6 +42,27 @@ export interface SatPanelDeps {
   left: () => void;
   /** Lend the decoder box's image canvas to `slot` (null = take it back). */
   image: (slot: HTMLElement | null) => void;
+  /** ★ 1.7 {"type":"sat_list","op":"track"} — the pass's path (its `geo` draws the dotted orbit). Free: changes nothing. */
+  track?: (norad: number, aos: number, los: number) => void;
+  /** ★ 1.8 the receiver dot's label — the server's name ('' = RECEIVER). */
+  rxName?: () => string;
+  /** ★ 1.6 REMIND: this page's server (the reminders' key) and whether its socket is up now (a reminder with no connection
+   *  never fires). */
+  serverKey?: () => string;
+  connected?: () => boolean;
+  /** ★ 1.6 LISTEN on a reminder: into SATELLITE the way the key goes in (leaving any other whole-radio mode). */
+  enter?: () => void;
+  /** ★ 1.9 the MAP key: how many stations with a position the packet decoder has heard; the ONE DIGI MODES map's opener. */
+  mapStations?: () => number;
+  openMap?: (o: SatMapOpen) => void;
+  /** the clock, ms (tests pass a fake one) */
+  now?: () => number;
+}
+/** ★ 1.9: what the MAP key hands the DIGI MODES map — its APRS layer, "via ISS", and the pass's orbit + footprint. */
+export interface SatMapOpen {
+  layer: 'aprs'; via: string; norad: number; name: string;
+  orbit: [number, number, number][] | null;
+  footprint: { lat: number; lon: number; altKm: number } | null;
 }
 
 const CSS = `
@@ -110,6 +134,29 @@ const CSS = `
 #satPanel .sat-q.q-good{background:rgba(255,176,0,.24)}
 #satPanel .sat-q.q-marginal{background:rgba(255,176,0,.10)}
 #satPanel .sat-q.q-poor{color:var(--text-dim)}
+/* ★★ 1.6 REMIND — the key beside each pass row (hidden where a pick would disturb anyone), the lead-time choice */
+#satPanel .sat-rw{display:flex;gap:6px;align-items:stretch}
+#satPanel .sat-rw .sat-row{flex:1 1 auto;min-width:0}
+#satPanel .sat-rem{flex:0 0 auto;align-self:center;font-size:11px !important;padding:2px 7px !important;min-height:30px;letter-spacing:.04em;white-space:nowrap}
+#satPanel .sat-lead{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px;font-size:12px}
+#satPanel .sat-lead button{min-height:26px;padding:1px 8px}
+#satPanel .sat-key{font-size:11px;text-align:center;margin-top:2px}
+#satPanel .sat-key[hidden]{display:none}
+#satPanel .sat-tlm{margin-top:6px;font:12px/1.35 ui-monospace,Menlo,monospace}
+#satPanel .sat-tlm[hidden]{display:none}
+#satPanel .sat-tlm .sat-tv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1px 12px;margin-top:3px}
+/* ★ the pop-ups: decoder-box styles, top of the window, newest on top, three at most ("+2 more") */
+#satRemind{position:fixed;z-index:60;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);
+  width:min(94vw,460px);display:flex;flex-direction:column;gap:6px;pointer-events:none}
+#satRemind[hidden]{display:none}
+#satRemind .sat-toast{pointer-events:auto;background:var(--ov-panel96,rgba(8,6,2,.96));color:var(--btn-text);border:1px solid var(--btn-border);
+  border-radius:10px;padding:8px 10px;font:13px/1.35 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+#satRemind .sat-toast .sat-tw{color:var(--text-dim);font-size:12px;margin-top:2px}
+#satRemind .sat-toast .sat-tb{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+#satRemind button{background:var(--btn-bg);color:var(--btn-text);border:1px solid var(--btn-border);border-radius:6px;padding:4px 10px;
+  font:inherit;cursor:pointer;min-height:32px}
+#satRemind button.on{background:var(--btn-active-bg);border-color:var(--btn-active-bdr);color:var(--btn-active-tx)}
+#satRemind .sat-more{pointer-events:auto;text-align:center;color:var(--text-dim);font:12px system-ui,sans-serif}
 /* ★ A phone: the box's own width, and SMALL leaves the waterfall above it to tune by */
 @media (max-width:760px){
   #satPanel{left:8px;right:8px;width:auto}
@@ -154,11 +201,26 @@ export class SatPanel {
   /** the size last chosen BY HAND — a new pick opens at it (an automatic grow for a picture is not carried over) */
   private handBig = false;
   private min = false;
+  /** ★ 1.7 the pick's pass path (the track reply), and which pass it was asked for (asked once per pick, again when the
+   *  next pass begins) */
+  private track: SatTrack | null = null;
+  private trackAsk: { norad: number; aos: number } | null = null;
+  /** ★ 1.3 the telemetry the pick's decoder last sent (fctlm) */
+  private tlm: SatTelemetry | null = null;
+  /** ★★ 1.6 REMIND — held in this page only (never stored, never on the server); the pop-ups that have fired */
+  private rem = new SatReminders();
+  private toasts: Array<{ r: SatReminder; why: string; shownAt: number }> = [];
+  private remTimer = 0;
+  private lead = 2;
+  private remEl: HTMLDivElement;
+  private now(): number { return (this.deps.now ? this.deps.now() : Date.now()) / 1000; }
+  private srv(): string { return this.deps.serverKey?.() || location.host || 'server'; }
   // the skeleton's slots — built once, filled every second (the lent image canvas must never be re-created)
   private sHead!: HTMLElement; private sHs!: HTMLElement; private sDot!: HTMLElement; private sWhy!: HTMLElement; private sBox!: HTMLElement; private sRo!: HTMLElement;
   private sName!: HTMLElement; private sHz!: HTMLElement; private sCd!: HTMLElement; private sState!: HTMLElement;
   private sGlobe!: HTMLCanvasElement; private sImg!: HTMLElement; private sPk!: HTMLElement; private sSync!: HTMLElement;
   private sList!: HTMLDetailsElement; private sRows!: HTMLElement; private sCredit!: HTMLElement;
+  private sKey!: HTMLElement; private sTlm!: HTMLElement; private sMap!: HTMLButtonElement;
 
   constructor(private deps: SatPanelDeps) {
     if (!document.getElementById('satPanelCss')) {
@@ -168,6 +230,7 @@ export class SatPanel {
     this.el.id = 'satPanel'; this.el.hidden = true;
     this.el.setAttribute('role', 'dialog'); this.el.setAttribute('aria-label', 'Satellite');
     this.el.innerHTML = `<div class="sat-h"><span class="sat-dot"></span><b>SATELLITE</b><span class="sat-hs" data-s="hs"></span>`
+      + `<button data-act="map" hidden title="The stations heard through this satellite, on the DIGI MODES map">MAP</button>`
       + `<button data-act="doppler" class="on" aria-pressed="true" title="AUTO DOPPLER: keep the satellite centred for the whole pass">AUTO DOPPLER</button>`
       + `<button data-act="size" class="sat-size" title="Bigger panel" aria-label="Bigger panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3"/></svg></button>`
       + `<button data-act="exit" title="Leave SATELLITE (the Doppler lock and the decoder stop)">EXIT</button>`
@@ -177,8 +240,9 @@ export class SatPanel {
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
       +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div>`
       +   `<div class="sat-cd" data-s="cd"></div><div class="sat-dim" data-s="state"></div></div>`
-      +   `<canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground"></canvas></div>`
-      + `<div class="sat-img" data-s="img" hidden></div><div class="sat-pk" data-s="pk" hidden></div></div>`
+      +   `<div><canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted"></canvas>`
+      +   `<div class="sat-key sat-dim" data-s="key" hidden></div></div></div>`
+      + `<div class="sat-img" data-s="img" hidden></div><div class="sat-pk" data-s="pk" hidden></div><div class="sat-tlm" data-s="tlm" hidden></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary><div data-s="rows"></div></details>`
       + `<div class="sat-dim sat-credit" data-s="credit"></div></div>`;
@@ -188,6 +252,13 @@ export class SatPanel {
     this.sWhy = q('why'); this.sBox = q('box'); this.sRo = q('ro'); this.sName = q('name'); this.sHz = q('hz'); this.sCd = q('cd');
     this.sState = q('state'); this.sGlobe = q<HTMLCanvasElement>('globe'); this.sImg = q('img'); this.sPk = q('pk'); this.sSync = q('sync');
     this.sList = q<HTMLDetailsElement>('list'); this.sRows = q('rows'); this.sCredit = q('credit');
+    this.sKey = q('key'); this.sTlm = q('tlm'); this.sMap = this.el.querySelector('[data-act="map"]') as HTMLButtonElement;
+    // ★ 1.6 the reminders' pop-ups — their own place at the top of the window (they fire with the mode off too)
+    this.remEl = document.createElement('div');
+    this.remEl.id = 'satRemind'; this.remEl.hidden = true; this.remEl.setAttribute('aria-live', 'polite');
+    document.body.appendChild(this.remEl);
+    this.remEl.addEventListener('click', (e) => this.onToastClick(e));
+    try { this.lead = satRemindLead(localStorage.getItem('vibe.satRemindLead')); } catch { /* private window: the default */ }
     // ★ fixed to the window at #decBox's anchor (--decBoxBottom: above the control card; the waterfall runs to the bottom)
     document.body.appendChild(this.el);
     this.el.addEventListener('click', (e) => this.onClick(e));
@@ -225,11 +296,13 @@ export class SatPanel {
   toggle() { this.on ? this.exit() : this.show(); }
   private clearPick() {
     this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
+    this.track = null; this.trackAsk = null; this.tlm = null;
     this.lend(false);
   }
   onList(l: SatList) {
     const wasFetching = this.list?.source?.fetching;
     this.list = l;
+    this.rem.refresh(this.srv(), l);   // ★ a new element set moves a reminder with its pass
     if (wasFetching && !l.source?.fetching) this.listAt = 0;
     if (this.open) this.render();
   }
@@ -244,7 +317,7 @@ export class SatPanel {
   onPicked(p: SatPicked) {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
-    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; if (this.big !== this.handBig) this.setBig(this.handBig, false); }
+    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); }
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t);
@@ -268,11 +341,25 @@ export class SatPanel {
     this.packets.unshift(line); if (this.packets.length > 30) this.packets.length = 30;
     if (this.open) this.paintPick();
   }
-  onTrack(_t: SatTrack) { /* ★ the old sky plot's track — SATELLITE draws the half-globe instead */ }
+  /** ★ 1.7 the pass's path: its `geo` is the dotted orbit (an older server sends none — no line). */
+  onTrack(t: SatTrack) {
+    if (!this.picked || t.norad !== this.picked.norad) return;
+    this.track = t;
+    if (this.open) this.paintPick();
+  }
+  /** ★ 1.3 the pick's telemetry (fctlm_status) */
+  telemetry(t: SatTelemetry | null) { if (!this.picked) return; this.tlm = t; if (this.open) this.paintPick(); }
+  /** ★ 1.9 the packet decoder heard a station with a position — the MAP key may appear */
+  stationsChanged() { if (this.open) this.paintPick(); }
+  /** ★ 1.6 Leaving the server / the session ending cancels every reminder for it (and its pop-ups). */
+  remindClear() { this.rem.clearServer(this.srv()); this.toasts = []; this.paintToasts(); this.remSchedule(); if (this.open) this.render(); }
+  /** the reminders held (tests, and the page's own checks) */
+  reminders(): SatReminder[] { return this.rem.all(); }
   readout(): SatReadout | null { return this.ro && this.ro.state !== 'OFF' ? this.ro : null; }
 
   private tick() {
     if (!this.open) return;
+    this.askTrack();
     if (Date.now() - this.listAt > satListEveryMs(this.list)) { this.deps.list(); this.listAt = Date.now(); }
     this.render();
   }
@@ -284,6 +371,13 @@ export class SatPanel {
     if (act === 'exit') { this.exit(); return; }
     if (act === 'min') { this.setMin(!this.min); return; }
     if (act === 'size') { this.setBig(!this.big, true); return; }
+    if (act === 'map') { this.openMap(); return; }
+    if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
+    if (act === 'lead') {
+      this.lead = satRemindLead(b.dataset.v);
+      try { localStorage.setItem('vibe.satRemindLead', String(this.lead)); } catch { /* not kept: fine */ }
+      this.remSchedule(); this.render(); return;
+    }
     if (act === 'doppler') {
       this.autoDoppler = !this.autoDoppler;
       if (this.picked) this.deps.doppler(this.autoDoppler);
@@ -329,7 +423,7 @@ export class SatPanel {
   }
 
   private render() {
-    const now = Date.now() / 1000;
+    const now = this.now();
     const cw = this.cap && !this.cap.ok ? this.cap.why : '';
     const dop = this.sHead.querySelector('[data-act="doppler"]') as HTMLButtonElement;
     dop.classList.toggle('on', this.autoDoppler); dop.setAttribute('aria-pressed', String(this.autoDoppler));
@@ -350,15 +444,25 @@ export class SatPanel {
     let h = '';
     if (!this.list) h = `<div class="sat-dim">Asking the server…</div>`;
     else if (!rows.length) h = `<div class="sat-dim">${esc(this.list.why || (this.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server'))}</div>`;
+    let anyRemind = false;
     for (const r of rows.slice(0, 40)) {
       const sel = (this.picked && this.picked.norad === r.sat.norad && this.picked.tx === r.i) || (this.pending && this.pending.norad === r.sat.norad && this.pending.tx === r.i);
       const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
       const inactive = r.tx.status === 'inactive' ? ' · INACTIVE' : '';
-      h += `<button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
+      // ★★ 1.6 REMIND — only where a pick disturbs nobody (the server's pickPrivate), on a hearable row with a pass to come;
+      //    hidden, not greyed, everywhere else
+      const offer = satRemindOffered(this.list, r);
+      const held = offer ? this.rem.find(this.srv(), r.sat.norad, r.i) : undefined;
+      anyRemind ||= offer;
+      h += `<div class="sat-rw"><button class="sat-row"${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
         + (r.grey ? ` aria-disabled="true" data-why="${esc(r.why)}" title="${esc(r.why)}"` : ` title="${esc((r.tx.note || r.tx.label) + ' — tune there' + (this.autoDoppler ? ' and correct the Doppler' : ''))}"`)
         + `><span class="sat-n">${esc(name)}</span><span class="sat-w">${esc(satWhenText(r, now))}</span>`
-        + `<span class="sat-f">${esc(txText(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`;
+        + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`
+        + (offer ? `<button class="sat-rem${held ? ' on' : ''}" data-act="remind" data-norad="${r.sat.norad}" data-tx="${r.i}" aria-pressed="${!!held}"`
+            + ` title="${held ? 'Cancel this reminder' : 'A pop-up shortly before this pass rises — while you are still connected to this server'}">${esc(satRemindKeyText(!!held, this.lead))}</button>` : '')
+        + `</div>`;
     }
+    if (anyRemind) h += `<div class="sat-lead sat-dim"><span>REMIND</span>${[1, 2, 5, 10].map((v) => `<button data-act="lead" data-v="${v}" class="${v === this.lead ? 'on' : ''}" aria-pressed="${v === this.lead}">${v}</button>`).join('')}<span>min before it rises · this page only</span></div>`;
     if (this.list?.time === 'system') h += `<div class="sat-dim">TIME: SYSTEM — this server's clock has not been checked against a time server</div>`;
     this.sRows.innerHTML = h;
     const summary = this.sList.querySelector('summary')!;
@@ -369,7 +473,7 @@ export class SatPanel {
 
   /** The pick's box: COMPACT (voice / packet) or BIG (image; ISS SSTV once a picture starts). */
   private paintPick() {
-    const now = Date.now() / 1000;
+    const now = this.now();
     const t = this.pickedTx();
     const sat = this.picked ? this.list?.sats.find(s => s.norad === this.picked!.norad) : undefined;
     const pend = this.pending ? this.list?.sats.find(s => s.norad === this.pending!.norad) : undefined;
@@ -396,12 +500,13 @@ export class SatPanel {
     const r = this.readout();
     const mine = r && r.norad === sat.norad ? r : null;
     this.sRo.classList.toggle('coast', mine?.state === 'COAST');
-    this.sName.textContent = `${sat.name} · ${t.label}`;
+    const ml = satTxModeLabel(t);
+    this.sName.textContent = `${sat.name} · ${t.label}${ml ? ' · ' + ml : ''}`;
     this.sHz.textContent = satHzText(satCorrectedHz(t, mine));
     this.sCd.textContent = satCountdownText(sat, now);
     const use = txUse(t);
     const lockWord = !this.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
-    const decWord = this.decLine || (use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : t.sstv ? 'listening — an SSTV picture opens here' : '');
+    const decWord = this.decLine || (this.picked?.decoder === 'fctlm' ? 'listening for telemetry' : use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : t.sstv ? 'listening — an SSTV picture opens here' : '');
     this.sState.textContent = [lockWord, decWord].filter(Boolean).join(' · ');
     // big: the decoder box's image canvas, lent to this window (the live preview, the finished picture at pass end)
     this.lend(big && imageKind);
@@ -410,40 +515,185 @@ export class SatPanel {
     // packet: the APRS lines
     this.sPk.hidden = use !== 'packet';
     if (use === 'packet') this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
+    // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
+    const tl = this.picked?.decoder === 'fctlm';
+    this.sTlm.hidden = !tl;
+    if (tl) this.sTlm.innerHTML = `<div>${esc(satTelemetryHead(this.tlm))}</div>`
+      + (this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : '');
+    // ★★ 1.9 the MAP key — a packet downlink, once a station with a position is heard (no dead key)
+    this.sMap.hidden = !satMapOffered(t, this.deps.mapStations?.() ?? 0) || !this.deps.openMap;
+    this.askTrack();
     this.drawGlobe(sat);
   }
 
-  /** ★ The half-globe: a 2D canvas (no WebGL, no tiles) — the dome, a 30° graticule, the receiver, the bird and its beam. */
-  private drawGlobe(sat: { lat?: number; lon?: number; rangeKm?: number; el?: number }) {
+  /** ★ 1.7 the pass's path — asked once per pick (the pass in progress, else the next) and again when the next begins. */
+  private askTrack() {
+    if (!this.picked || !this.deps.track) return;
+    const sat = this.list?.sats.find((x) => x.norad === this.picked!.norad);
+    if (!sat) return;
+    const row = satModeRows({ ...this.list!, sats: [sat] }, this.now())[0];
+    const p = row?.pass;
+    if (!p || (this.trackAsk && this.trackAsk.norad === sat.norad && this.trackAsk.aos === p.aos)) return;
+    this.trackAsk = { norad: sat.norad, aos: p.aos };
+    this.deps.track(sat.norad, p.aos, p.los);
+  }
+
+  /** ★ 1.9 the ONE DIGI MODES map, on its APRS layer, with this pass's orbit and footprint ("via ISS"). */
+  private openMap() {
+    const sat = this.picked ? this.list?.sats.find((x) => x.norad === this.picked!.norad) : undefined;
+    if (!sat || !this.deps.openMap) return;
+    const alt = satAltKm(sat.rangeKm, sat.el);
+    this.deps.openMap({
+      layer: 'aprs', via: satViaText(sat.name), norad: sat.norad, name: sat.name,
+      orbit: this.track && this.track.norad === sat.norad ? this.track.geo ?? null : null,
+      footprint: sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: alt ?? 600 } : null,
+    });
+  }
+
+  // ── ★★ 1.6 REMIND ─────────────────────────────────────────────────────────────────────────────────────────────────
+  private remindToggle(norad: number, tx: number) {
+    const srv = this.srv(), now = this.now();
+    const held = this.rem.find(srv, norad, tx);
+    if (held) { this.rem.cancel(held.key); this.remSchedule(); this.render(); return; }
+    const row = satModeRows(this.list, now).find((r) => r.sat.norad === norad && r.i === tx);
+    if (!row || !satRemindOffered(this.list, row)) return;
+    if (!this.rem.add(srv, row, now)) { this.refusal = 'Twenty reminders are held already — cancel one first'; this.render(); return; }
+    // ★ the browser's permission is asked on the first REMIND press, never on load
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* no notifications here */ }
+    this.remSchedule(); this.render();
+  }
+  /** the reminders' own clock: one second while any is held or any pop-up is up; none otherwise */
+  private remSchedule() {
+    const need = this.rem.size > 0 || this.toasts.length > 0;
+    if (need && !this.remTimer) this.remTimer = window.setInterval(() => this.remTick(), 1000);
+    if (!need && this.remTimer) { clearInterval(this.remTimer); this.remTimer = 0; }
+  }
+  /** Fire what is due (re-checked against the latest list), drop what is over, refresh the list shortly before. */
+  remTick() {
+    const now = this.now();
+    const connected = this.deps.connected ? this.deps.connected() : true;
+    // ★ a fresh list ~40 s before one fires (with the mode off nobody else is asking) — free, it changes nothing
+    if (connected && this.rem.nextIn(now, this.lead) < 40 && (now * 1000 - this.listAt) > 30000) { this.deps.list(); this.listAt = now * 1000; }
+    for (const r of this.rem.due(now, this.lead, connected)) {
+      const why = satRemindWhy(this.list, r);
+      this.toasts.unshift({ r, why, shownAt: now });
+      try {
+        if (!why && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          const n = new Notification('VibeSDR · satellite pass', { body: satRemindText(r, now), tag: r.key });
+          n.onclick = () => { try { window.focus(); } catch { /* */ } n.close(); };   // ★ focuses the tab: the pop-up is there; it never picks by itself
+        }
+      } catch { /* no notifications here */ }
+    }
+    this.toasts = this.toasts.filter((t) => now < t.r.los);   // ★ a pass that is over takes its pop-up with it
+    this.paintToasts();
+    this.remSchedule();
+    if (this.open) this.render();
+  }
+  private paintToasts() {
+    const now = this.now();
+    this.remEl.hidden = !this.toasts.length;
+    if (!this.toasts.length) { this.remEl.innerHTML = ''; return; }
+    const picked = this.picked;
+    const pickedName = picked ? this.list?.sats.find((x) => x.norad === picked.norad)?.name : undefined;
+    let h = '';
+    this.toasts.slice(0, 3).forEach((t) => {
+      const ends = t.why ? '' : satRemindEnds(picked, pickedName, t.r);
+      h += `<div class="sat-toast" role="alert" data-key="${esc(t.r.key)}"><div>${esc(t.why ? satRemindText(t.r, now).replace(/ — LISTEN\?$/, '') : satRemindText(t.r, now))}</div>`
+        + (t.why ? `<div class="sat-tw">${esc(t.why)}</div>` : ends ? `<div class="sat-tw">${esc(ends)}</div>` : '')
+        + `<div class="sat-tb">${t.why ? '' : `<button class="on" data-act="listen" data-key="${esc(t.r.key)}">LISTEN</button>`}`
+        + `<button data-act="dismiss" data-key="${esc(t.r.key)}">DISMISS</button></div></div>`;
+    });
+    if (this.toasts.length > 3) h += `<div class="sat-more">+${this.toasts.length - 3} more</div>`;
+    this.remEl.innerHTML = h;
+  }
+  private onToastClick(e: Event) {
+    const b = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null;
+    if (!b) return;
+    const i = this.toasts.findIndex((t) => t.r.key === b.dataset.key);
+    if (i < 0) return;
+    const t = this.toasts[i];
+    if (b.dataset.act === 'dismiss') { this.toasts.splice(i, 1); this.paintToasts(); this.remSchedule(); return; }
+    if (b.dataset.act !== 'listen') return;
+    // ★ re-checked at the tap too (the list may have moved on since it fired)
+    const why = satRemindWhy(this.list, t.r);
+    if (why) { t.why = why; this.paintToasts(); return; }
+    if (!this.on) { if (this.deps.enter) this.deps.enter(); else this.show(); }
+    if (!this.on) return;
+    if (this.picked && this.picked.norad === t.r.norad && this.picked.tx === t.r.tx) { this.toasts.splice(i, 1); this.paintToasts(); return; }
+    // ★★ the ORDINARY pick: ask-before-tuning holds it like a hand pick (false = held — the pop-up stays to try again)
+    if (this.deps.pick(t.r.norad, t.r.tx, this.autoDoppler)) {
+      this.pending = { norad: t.r.norad, tx: t.r.tx }; this.refusal = '';
+      this.toasts.splice(i, 1);
+    }
+    this.paintToasts(); this.remSchedule(); this.render();
+  }
+
+  /** ★ The half-globe: a 2D canvas (no WebGL, no tiles) — the dome, a 30° graticule (fainter than the land), the pass's
+   *  orbit DOTTED with its highest point ticked (1.7), the receiver's GREEN dot and the drawn bird with its beam (1.8), both
+   *  labelled; BIG adds a one-line key under it. */
+  private drawGlobe(sat: { norad?: number; name?: string; lat?: number; lon?: number; rangeKm?: number; el?: number }) {
     const cv = this.sGlobe, ctx = cv.getContext('2d');
     if (!ctx) return;
     const rx = this.deps.rxPos();
     cv.style.display = rx ? '' : 'none';
-    if (!rx) return;
+    if (!rx) { this.sKey.hidden = true; return; }
     const W = cv.width, H = cv.height;
-    const g = globeScene(W, H, rx, sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null);
+    const path = this.track && sat.norad != null && this.track.norad === sat.norad ? this.track.geo ?? null : null;
+    const g = globeScene(W, H, rx, sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, path);
+    // ★ scene units per CSS pixel — the dot, the lines and the words are sized on SCREEN, so they read at SMALL and BIG
+    const sc = W / Math.max(60, cv.clientWidth || (this.big ? 420 : 150));
     const css = getComputedStyle(this.el);
     const ink = css.color || '#ccc';
     const amber = css.getPropertyValue('--amber').trim() || '#ffb000';
+    const ground = css.backgroundColor || 'rgba(8,6,2,.96)';
     ctx.clearRect(0, 0, W, H);
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, W, g.cy); ctx.clip();
     ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, Math.PI, 2 * Math.PI);
     ctx.globalAlpha = 0.12; ctx.fillStyle = ink; ctx.fill();
     ctx.globalAlpha = 0.55; ctx.strokeStyle = ink; ctx.lineWidth = 2; ctx.stroke();
-    if (g.grid) { ctx.globalAlpha = 0.22; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.grid)); }
+    if (g.grid) { ctx.globalAlpha = 0.12; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.grid)); }   // ★ fainter than the land
     if (g.coast) { ctx.globalAlpha = 0.55; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.coast)); }   // ★ rough land (globeCoast.ts)
     if (g.foot) { ctx.globalAlpha = 0.28; ctx.fillStyle = amber; ctx.fill(new Path2D(g.foot)); }
     if (g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
+    // ★ 1.7 the orbit, dotted, and its highest point
+    if (g.orbit) {
+      ctx.globalAlpha = 0.85; ctx.strokeStyle = amber; ctx.lineWidth = 1.5 * sc; ctx.lineCap = 'round';
+      ctx.setLineDash([1.5 * sc, 4 * sc]); ctx.stroke(new Path2D(g.orbit)); ctx.setLineDash([]);
+      if (g.tcaTick) { ctx.lineWidth = 1.5 * sc; ctx.stroke(new Path2D(g.tcaTick)); }
+    }
     ctx.globalAlpha = 1;
-    if (g.rx) { ctx.fillStyle = ink; ctx.beginPath(); ctx.arc(g.rx.x, g.rx.y, 4, 0, 2 * Math.PI); ctx.fill(); }
-    if (g.sat) {
-      const { x, y } = g.sat;
-      ctx.fillStyle = amber; ctx.strokeStyle = amber; ctx.lineWidth = 2;
-      ctx.fillRect(x - 4, y - 4, 8, 8);
-      ctx.beginPath(); ctx.moveTo(x - 14, y); ctx.lineTo(x - 6, y); ctx.moveTo(x + 6, y); ctx.lineTo(x + 14, y); ctx.stroke();
-      ctx.fillRect(x - 20, y - 4, 6, 8); ctx.fillRect(x + 14, y - 4, 6, 8);
+    // ★ the receiver: green with a dark ring on every faceplate (never the dome's ink)
+    if (g.rx) {
+      ctx.beginPath(); ctx.arc(g.rx.x, g.rx.y, GLOBE_RX_DOT.r * sc, 0, 2 * Math.PI);
+      ctx.fillStyle = GLOBE_RX_DOT.fill; ctx.fill();
+      ctx.lineWidth = GLOBE_RX_DOT.ringW * sc; ctx.strokeStyle = GLOBE_RX_DOT.ring; ctx.stroke();
+    }
+    // ★ 1.8 the bird: tube, dish towards the Earth, panels along its heading (cells ruled)
+    if (g.bird) {
+      const b = g.bird;
+      ctx.lineJoin = 'round';
+      ctx.globalAlpha = 0.45; ctx.fillStyle = amber; ctx.fill(new Path2D(b.panels));
+      ctx.globalAlpha = 1; ctx.strokeStyle = amber; ctx.lineWidth = 1.2 * sc; ctx.stroke(new Path2D(b.panels));
+      ctx.lineWidth = 0.8 * sc; ctx.globalAlpha = 0.9; ctx.stroke(new Path2D(b.cells));
+      ctx.globalAlpha = 1; ctx.lineWidth = 1.6 * sc; ctx.stroke(new Path2D(b.boom));
+      ctx.fillStyle = amber; ctx.fill(new Path2D(b.body));
+      ctx.lineWidth = 1 * sc; ctx.strokeStyle = ground; ctx.stroke(new Path2D(b.body));
+      ctx.fillStyle = amber; ctx.fill(new Path2D(b.dish));
+    }
+    // ★ the labels: the receiver (the server's name, else RECEIVER) and the bird's name, kept off each other
+    const font = 10 * sc;
+    const L = globeLabels(g, this.deps.rxName?.() || '', sat.name, font);
+    ctx.font = `${font.toFixed(1)}px system-ui,sans-serif`; ctx.textBaseline = 'alphabetic';
+    for (const lb of [L.rx, L.sat]) {
+      if (!lb) continue;
+      ctx.textAlign = lb.anchor === 'start' ? 'left' : lb.anchor === 'end' ? 'right' : 'center';
+      ctx.globalAlpha = 0.9; ctx.lineWidth = 3 * sc; ctx.strokeStyle = ground; ctx.strokeText(lb.text, lb.x, lb.y);
+      ctx.globalAlpha = 1; ctx.fillStyle = ink; ctx.fillText(lb.text, lb.x, lb.y);
     }
     ctx.restore();
+    // ★ BIG: the one-line key (the dotted half only when there is an orbit to see)
+    const key = this.big ? (g.orbit ? GLOBE_KEY_TEXT : GLOBE_KEY_TEXT.replace(/^.*· /, '')) : '';
+    this.sKey.hidden = !key; if (this.sKey.textContent !== key) this.sKey.textContent = key;
   }
 }
