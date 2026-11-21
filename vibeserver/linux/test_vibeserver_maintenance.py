@@ -185,6 +185,12 @@ def run_action(action, stable_list=STABLE_INSTALLER, keyring=True, beta_on=False
         os.makedirs(maint)
         req = os.path.join(tmp, "maintenance.request")
         open(req, "w").write(action)
+        # ★ apt's download cache (2026-11-21): our packages and someone else's — only ours may go
+        arch = os.path.join(tmp, "archives")
+        os.makedirs(arch)
+        for f in ("vibeserver_11.0.10-3_arm64.deb", "vibeserver_12.0.0~beta1-1_arm64.deb",
+                  "vibeserver-mapdata-detail_4_all.deb", "chromium_156.0_arm64.deb"):
+            open(os.path.join(arch, f), "w").write("x")
         cmdline = os.path.join(tmp, "cmdline")
         open(cmdline, "w").write("console=tty1 root=PARTUUID=x\n")
         s = open(MAINT).read()
@@ -195,6 +201,7 @@ def run_action(action, stable_list=STABLE_INSTALLER, keyring=True, beta_on=False
               .replace("/etc/apt/sources.list.d/vibesdr.list", stable)
               .replace("/usr/share/keyrings/vibesdr.gpg", kr)
               .replace("/proc/cmdline", cmdline)
+              .replace("/var/cache/apt/archives", arch)
               .replace("/etc/vibeserver-pocket/enabled", os.path.join(tmp, "no-pocket"))
               .replace('dd if="$REQ" bs=32 count=1 iflag=nofollow,nonblock', 'head -c 32 "$REQ"'))
         ms = os.path.join(tmp, "maint.sh")
@@ -207,6 +214,7 @@ def run_action(action, stable_list=STABLE_INSTALLER, keyring=True, beta_on=False
             "offer": open(os.path.join(maint, "update-offer")).read() if os.path.exists(os.path.join(maint, "update-offer")) else None,
             "request_gone": not os.path.exists(req),
             "kr": kr,
+            "cache": sorted(os.listdir(arch)),
         }
         if os.environ.get("MAINT_DEBUG"):
             print(r.stdout, "----", calls, "----", files)
@@ -307,10 +315,20 @@ def action_tests():
     ok("ignoring unknown action 'beta-sideways'" in out and "apt" not in calls and "systemctl" not in calls, "an unknown name does nothing")
 
 
+def cache_tests():
+    # ★★★ Stuart's Pi 500 (2026-11-21): 460 cached vibeserver packages, 12 GB — apt-get keeps every download.
+    out, calls, files = run_action("update")
+    ok(files["cache"] == ["chromium_156.0_arm64.deb"], "update: our cached packages (vibeserver, the map pack) are cleared, another program's stays — %s" % files["cache"])
+    out, calls, files = run_action("update-all")
+    ok("apt-get -q -y autoclean" in calls, "update-all: the whole system's stale downloads are autocleaned")
+    out, calls, files = run_action("beta-on")
+    ok(len(files["cache"]) == 4, "an action that installs nothing leaves the cache alone")
+
 def main():
     print("vibeserver-maintenance — receive beta updates")
     pure_tests()
     action_tests()
+    cache_tests()
     print()
     if fails:
         print("%d of %d FAILED" % (fails, count))

@@ -129,7 +129,19 @@ apt_do() {
   fi
   DEBIAN_FRONTEND=noninteractive "$@"
 }
+# ★★★ OUR OWN DOWNLOADS, CLEARED AFTER EVERY INSTALL (Stuart's Pi 500, 2026-11-21: 97 % full — 460 cached vibeserver
+#     packages, 12 GB, every version since 3.0.0; the Pi 2 held 155, 9.1 GB). apt-get keeps each .deb it downloads in
+#     /var/cache/apt/archives for ever, and a beta a day plus test builds adds up — on the 8–16 GB cards our hosts run,
+#     that is the disk. Only OUR packages (vibeserver, the map packs), only once installed; anything else in the cache
+#     is the owner's business (update-all runs autoclean for the whole system, which only drops what the archive no
+#     longer offers). Through apt_do: on a sealed Portable the cache lives on the real root.
+tidy_own_downloads() {
+  apt_do /bin/sh -c 'rm -f /var/cache/apt/archives/vibeserver_*.deb /var/cache/apt/archives/vibeserver-mapdata*_*.deb' \
+    || log "(the downloaded packages could not be cleared — harmless, the next update tries again)"
+}
+
 after_install() {
+  tidy_own_downloads
   if [ "$OVERLAY" = 1 ]; then log "read-only root updated — rebooting so it takes effect"; sync; systemctl reboot; fi
 }
 
@@ -524,6 +536,8 @@ case "$action" in
                 apt_do apt-get -y \
                   -o Dpkg::Options::=--force-confdef \
                   -o Dpkg::Options::=--force-confold upgrade
+                # ★ …and the cache it leaves: autoclean drops only packages the archives no longer offer (11-21)
+                apt_do apt-get -q -y autoclean || true
                 pocket_converge
                 write_offer
                 after_install ;;
