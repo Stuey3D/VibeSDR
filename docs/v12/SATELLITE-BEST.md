@@ -310,11 +310,13 @@ test-sat-engine (`geo` present, bounded, agrees with `pts`).
    Background Decoding (setup page + app + Android remote setup); off until the owner picks a satellite. Optional
    capped recording stays an owner switch, off by default on a Pi.
 
+4. **Idle timeout during a pass: yes, as WEFAX** — a listener on a picked pass counts as active until LOS, so an owner's
+   IDLE timeout does not drop them. The hard and soft time limits still apply unchanged; this only touches idle timeouts,
+   where an owner has set one.
+
 ## Still open (my recommendation in brackets)
 1. 1.4 passband rule: any tune inside the passband keeps the lock (yes — otherwise FO-29's 100 kHz cannot be tuned).
 2. 1.6 REMIND ships in the phase-1 beta (yes).
-3. A listener on a picked pass who is not touching anything is not timed out as idle until LOS (still under the
-   server's soft time limit) — proposed, Stuart to confirm.
 
 ## Sources
 [1] https://status.amsat.org/ (reports 2026-11-16 → 21) · [2] AMSAT ANS-109/ANS-130 bulletins https://www.amsat.org/ans-130-amsat-news-service-weekly-bulletins/ ,
