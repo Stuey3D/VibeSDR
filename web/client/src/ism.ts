@@ -367,6 +367,10 @@ const CSS = `
   max-height: 44vh; display: flex; flex-direction: column; background: rgba(9, 6, 2, 0.94); border: 1px solid rgba(255, 176, 0, 0.35);
   border-radius: 10px; color: #ffb000; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: 0 6px 24px rgba(0,0,0,0.5); }
 #ismBox[hidden] { display: none; }
+/* ★★ BANDS OPEN = THE BOX AT ITS FULL HEIGHT (Stuart 2026-11-21, Safari: "ism box starts really tiny which makes choosing a
+ *  band hard"). The band list lies over the box and the box is as tall as what it holds — one device heard = two band
+ *  rows to scroll through. While the list is open the box takes its ceiling, 44vh. */
+#ismBox.bands { height: 44vh; }
 #ismHead { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid rgba(255, 176, 0, 0.18); flex-wrap: wrap; }
 #ismHead button, #ismChips button { font: inherit; font-size: 12px; letter-spacing: 1px; padding: 5px 9px; min-height: 30px; color: #ffb000;
   background: transparent; border: 1px solid rgba(255, 176, 0, 0.35); border-radius: 6px; cursor: pointer; }
@@ -507,6 +511,7 @@ export class IsmBox {
       + (b.region ? `<span class="ismBandRegion">${esc(b.region)}</span>` : '') + `</button>`).join('');
     const head = el.querySelector('#ismHead') as HTMLElement;
     bl.style.top = `${head.offsetHeight}px`;
+    el.classList.add('bands');   // ★ the box at its full height while choosing (see #ismBox.bands)
     bl.hidden = false;
     (el.querySelector('#ismBands') as HTMLElement).setAttribute('aria-expanded', 'true');
     const cur = bl.querySelector('.ismBandRow.cur') as HTMLElement | null;
@@ -515,6 +520,7 @@ export class IsmBox {
   closeBands() {
     if (!this.el) return;
     (this.el.querySelector('#ismBandList') as HTMLElement).hidden = true;
+    this.el.classList.remove('bands');
     (this.el.querySelector('#ismBands') as HTMLElement).setAttribute('aria-expanded', 'false');
   }
 

@@ -131,6 +131,9 @@ try {
                reg904: rows.find((r) => r.dataset.id === '904')?.querySelector('.ismBandRegion')?.textContent || '' }; })())`));
     ok(L.open && L.n >= 17 && L.cur.length === 1 && L.cur[0] === '904', `the list: ${L.n} bands, on ${L.cur}`);
     ok(/Europe/.test(L.reg433) && /USA/.test(L.reg904), `regions shown: 433 "${L.reg433}", 904 "${L.reg904}"`);
+    // ★★ 11-21 (Stuart: "ism box starts really tiny which makes choosing a band hard"): open, the box is at its full height
+    const H = JSON.parse(await ev(`JSON.stringify({ box: document.getElementById('ismBox').getBoundingClientRect().height, vh: innerHeight, list: document.getElementById('ismBandList').getBoundingClientRect().height })`));
+    ok(Math.abs(H.box - 0.44 * H.vh) < 4 && H.list > 0.3 * H.vh, `BANDS open: the box is 44vh (${Math.round(H.box)} of ${H.vh}px), the list ${Math.round(H.list)}px`);
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await sleep(900);
     await ev(`document.getElementById('ismBands').click()`); await ev(`document.getElementById('ismBands').click()`);   // reopen at the phone's size
