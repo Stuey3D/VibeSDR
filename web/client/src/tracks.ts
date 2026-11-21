@@ -467,6 +467,10 @@ function runSource(src: string) { const el = document.createElement('script'); e
 const MIN_KEY = 'vibesdr.trkListMin';
 
 export interface TrackViewOpts {
+  /** ★★ AUTO FIT, as ADS-B's (Stuart 2026-11-21, ISM mesh nodes: "the map needs the auto fit" … "i have to keep pressing
+   *  fit"): fitted when the map opens and again whenever a NEW item appears, until the user pans or zooms (wheel, drag,
+   *  the ± keys) — then the map is theirs; FIT fits and turns AUTO back on. A focus (a node's link) wins over it. */
+  fitOnOpen?: boolean;
   title: string;                 // "AIS" / "APRS"
   exitLabel: string;             // "EXIT AIS" / "CLOSE MAP"
   listTitle: string;             // "SHIPS" / "STATIONS"
@@ -566,7 +570,24 @@ export class TrackView {
     this.statEl = r.querySelector('.st') as HTMLElement;
     this.countEl = r.querySelector('.hd .n') as HTMLElement;
     (r.querySelector('.exit') as HTMLButtonElement).onclick = () => o.onExit();
-    (r.querySelector('.fit') as HTMLButtonElement).onclick = () => { try { this.layer?.fit(); } catch (e) { console.error('[tracks] fit', e); } };
+    (r.querySelector('.fit') as HTMLButtonElement).onclick = () => {
+      if (o.fitOnOpen) this.autoFit = true;   // ★ FIT = fit now and follow new items again
+      try { this.layer?.fit(); } catch (e) { console.error('[tracks] fit', e); }
+    };
+    if (o.fitOnOpen) {
+      // ★ the user takes the map: a wheel, a drag (moved > 6 px) or the ± keys end AUTO until FIT
+      let down: { x: number; y: number } | null = null;
+      const mine = (e: Event) => !this.list.contains(e.target as Node);
+      this.mapHost.addEventListener('wheel', (e) => { if (mine(e)) this.autoFit = false; }, { capture: true, passive: true });
+      this.mapHost.addEventListener('pointerdown', (e) => {
+        if (!mine(e)) return;
+        if ((e.target as HTMLElement).closest('.leaflet-control-zoom, .maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out')) { this.autoFit = false; return; }
+        down = { x: e.clientX, y: e.clientY };
+      }, { capture: true });
+      this.mapHost.addEventListener('pointermove', (e) => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { this.autoFit = false; down = null; } }, { capture: true });
+      const up = () => { down = null; };
+      this.mapHost.addEventListener('pointerup', up, { capture: true }); this.mapHost.addEventListener('pointercancel', up, { capture: true });
+    }
     for (const b of Array.from(r.querySelectorAll('[data-rng]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const id = b.dataset.rng || '';
@@ -659,10 +680,21 @@ export class TrackView {
   private select(k: string) { this.layer?.select(k || null); this.markSel(k); }
   private wantFocus = '';
   private refit = false;
+  /** ★ AUTO FIT (o.fitOnOpen): on while the user has not moved the map; `fitKeys` = the item keys last fitted. */
+  private autoFit = false;
+  private fitKeys = new Set<string>();
+  /** A new item while AUTO is on: fit again (the first items on open are the "new" ones). */
+  private autoFitCheck(items: any[]) {
+    if (!this.o.fitOnOpen || !this.autoFit || !this.layer || this.acLayer || !items.length) return;
+    let fresh = false;
+    for (const it of items) { const k = it && it.key; if (typeof k === 'string' && !this.fitKeys.has(k)) { this.fitKeys.add(k); fresh = true; } }
+    if (fresh) { try { this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); } }
+  }
   /** ★ The card again from its item (a fetched text arrived for it). */
   refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
+    this.refit = false; this.autoFit = false;   // ★ a focus (a node's link) is where the map should be — FIT brings AUTO back
     if (!this.layer) { this.wantFocus = key; return false; }
     const hex = this.acKeys.get(key);
     const ok = hex && this.acLayer ? !!this.acLayer.focus(hex) : !!this.layer.focus(key);
@@ -683,6 +715,7 @@ export class TrackView {
     this.rx = rx;
     if (this.open) return;
     this.root.hidden = false;
+    if (this.o.fitOnOpen) { this.autoFit = true; this.fitKeys.clear(); }   // ★ AUTO: fitted once its items are on the map
     // ★ the page under the map is not reachable while the map covers it (keyboard, a screen reader)
     this.inerted = [];
     for (const el of Array.from(document.body.children) as HTMLElement[]) {
@@ -793,7 +826,10 @@ export class TrackView {
         w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
       } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
     }
-    if (this.pending) { const p = this.pending; this.pending = null; this.feed(p); }
+    if (this.pending) {
+      const p = this.pending; this.pending = null; this.feed(p);
+      if (!this.wantFocus) this.autoFitCheck(p);
+    }
     this.watchAttrib();
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
@@ -846,6 +882,7 @@ export class TrackView {
       try { this.feed(items); } catch (e) { console.error('[tracks] layer.update', e); }
       // ★ a new time range: fit what it shows (the ADS-B layer fits its own aircraft — AUTO / FIT)
       if (this.refit && items.length && !this.acLayer) { this.refit = false; try { this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); } }
+      this.autoFitCheck(items);
       if (this.acLayer) this.placeAcObstacle();
     }
     else this.pending = items;

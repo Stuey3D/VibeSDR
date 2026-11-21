@@ -9703,7 +9703,7 @@ let ismMapRange = ismRangeOf(lsGet(ISM_RANGE_LIVE_KEY), true);
  *  it, selected, pulsing, its card open. Empty = the MAP key: every node, fitted. */
 function ismMapOpen(key = '') {
   if (!ismMapView) ismMapView = new TrackView({
-    title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(),
+    title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(), fitOnOpen: true,   // ★ 11-21 auto fit
     icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
     onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
@@ -10009,7 +10009,7 @@ async function ismGalMapOpen(it0: GalleryItem) {
   if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; }
   const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; };
   const t = `LoRa nodes heard · ${band ? band + ' MHz' : ''}`;
-  ismGalView = new TrackView({
+  ismGalView = new TrackView({ fitOnOpen: true,   // ★ 11-21 AUTO fit, as the live mesh map
     title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close,
     icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,

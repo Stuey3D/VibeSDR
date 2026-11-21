@@ -130,6 +130,11 @@ try {
   ok(await until(`!!${view} && ${view}.querySelectorAll('.trkRow').length >= ${FAKE.length}`, 10000), 'MAP opens with the nodes in its list');
   ok(await until(`document.querySelectorAll('.vtl-mk').length >= ${FAKE.length}`, 15000), `markers drawn: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
   await sleep(3500);   // tiles, the fit
+  // ★★ 11-21 AUTO FIT (Stuart: "the map needs the auto fit" / "i have to keep pressing fit"): every node in view on opening
+  const fitIn = JSON.parse(await ev(`JSON.stringify((() => { const h = ${view}.querySelector('.trkMapHost').getBoundingClientRect();
+    const ms = [...document.querySelectorAll('.vtl-mk:not(.vtl-gone) .vtl-ic')].map(i => i.getBoundingClientRect());
+    return { n: ms.length, out: ms.filter(r => r.right < h.left || r.left > h.right || r.bottom < h.top || r.top > h.bottom).length }; })())`));
+  ok(fitIn.n >= 7 && fitIn.out === 0, `AUTO FIT on opening: ${fitIn.n - fitIn.out} of ${fitIn.n} nodes in view`);
   const mk = JSON.parse(await ev(`JSON.stringify((() => { const m = [...document.querySelectorAll('.vtl-mk')]; return {
     rect: m.filter(x => x.querySelector('svg rect')).length, circ: m.filter(x => x.querySelector('svg > circle[r="9.5"]')).length,
     dashed: m.filter(x => x.querySelector('[stroke-dasharray]')).length, orange: m.filter(x => /#ff9f43/.test(x.innerHTML)).length,
