@@ -23,6 +23,9 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstdio>      // ★ the developer IQ capture (Dump)
+#include <cstdlib>     // getenv, atol
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <string>
@@ -54,6 +57,43 @@ public:
         std::function<void(const std::string&)> log;
     };
     explicit Run(Opts o) : o_(std::move(o)) {}
+
+    /* ★★ A DEVELOPER'S CAPTURE, NOT A FEATURE (Stuart 2026-11-21: "no point adding a recorder for users but for you to use
+     *  as a debug/test then it is fine"). With VIBE_LRPT_IQ_DUMP=<directory> in the server's environment, each pass's IQ
+     *  slice — exactly what this receiver is fed — goes to <dir>/lrpt-<unix>-<rate>.cf32 (interleaved float32 I,Q) with a
+     *  .txt beside it: one line a second "t_s doppler_Hz rate lock carrier sync frames bad" so a replay feeds the same
+     *  Doppler (tool-lrpt-replay.cpp). Capped (VIBE_LRPT_IQ_DUMP_MB, default 1536 MB) and written on the decode thread
+     *  (never the audio thread); unset = not even a file handle. Why it exists: a live Meteor-M2-3 pass at ~4–5 dB over the
+     *  floor stayed "listening" while the synthetic test decodes at Es/N0 4 dB — the live path needs replaying. */
+    struct Dump {
+        FILE* iq = nullptr; FILE* log = nullptr; bool tried = false; uint64_t bytes = 0, cap = 0; double lastLog = -1;
+        ~Dump() { if (iq) std::fclose(iq); if (log) std::fclose(log); }
+        template <class Rx>
+        void write(const std::complex<float>* x, int n, double rate, double dop, double t, const Rx& rx) {
+            if (!tried) {
+                tried = true;
+                const char* dir = std::getenv("VIBE_LRPT_IQ_DUMP");
+                if (!dir || !*dir) return;
+                const char* mb = std::getenv("VIBE_LRPT_IQ_DUMP_MB");
+                cap = uint64_t(mb && std::atol(mb) > 0 ? std::atol(mb) : 1536) * 1024 * 1024;
+                const std::string base = std::string(dir) + "/lrpt-" + std::to_string((long long)std::time(nullptr)) + "-" + std::to_string(int(rate));
+                iq = std::fopen((base + ".cf32").c_str(), "wb");
+                log = std::fopen((base + ".txt").c_str(), "w");
+                if (log) std::fprintf(log, "# lrpt IQ capture: rate %.1f S/s, float32 I,Q interleaved\n# t_s doppler_Hz rate lock carrier sync frames bad\n", rate);
+            }
+            if (!iq || bytes >= cap) return;
+            const size_t want = size_t(n) * sizeof(std::complex<float>);
+            bytes += std::fwrite(x, 1, want, iq);
+            if (log && t - lastLog >= 1.0) {
+                lastLog = t;
+                const auto st = rx.stats();
+                std::fprintf(log, "%.1f %.1f %.1f %d %d %d %llu %llu\n", t, dop, rate, int(std::lround(rx.lockMetric() * 100)),
+                             rx.demodLocked() ? 1 : 0, rx.syncLocked() ? 1 : 0, (unsigned long long)st.rsOk, (unsigned long long)st.rsFail);
+                std::fflush(log);
+            }
+            if (bytes >= cap) { std::fclose(iq); iq = nullptr; if (log) { std::fprintf(log, "# cap reached\n"); std::fflush(log); } }
+        }
+    };
     ~Run() { finish(true); }
 
     /** One IQ block from the host's queue (decode thread). */
@@ -68,7 +108,9 @@ public:
             if (rx_) { savePass(true); }
             rate_ = rate; newReceiver();
         }
-        if (o_.dopplerHz) rx_->setDopplerHz(o_.dopplerHz());
+        const double dop = o_.dopplerHz ? o_.dopplerHz() : 0.0;
+        if (o_.dopplerHz) rx_->setDopplerHz(dop);
+        dump_.write(iq, n, rate, dop, fedSec_, *rx_);   // ★ developer capture only (VIBE_LRPT_IQ_DUMP); nothing when unset
         rx_->feedIq(reinterpret_cast<const float*>(iq), size_t(n));
         fedSec_ += n / rate;
         // ── progressive preview: every new strip that has landed ──
@@ -91,6 +133,7 @@ public:
     const Receiver* receiver() const { return rx_.get(); }
 
 private:
+    Dump dump_;
     void newReceiver() {
         ReceiverConfig c; c.sampleRate = rate_; c.symbolRate = o_.symbolRate; c.mod = o_.mod; c.diff = o_.diff; c.interleaved = o_.interleaved; c.rateAuto = o_.rateAuto;
         rx_ = std::make_unique<Receiver>(c);
