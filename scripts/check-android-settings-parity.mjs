@@ -68,7 +68,7 @@ const TABLE = [
   P(['gallerySaveLive'], 'Keep listeners', 'gallerySaveLive'),
   // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — the screen's PSK REPORTER card, VibeServerBoot's keys
   P(['pskrOn'], 'Send this server', 'pskrOn'),
-  P(['pskrCall'], 'Your callsign (required)', 'pskrCall'),
+  P(['pskrCall'], 'Receiver name (required)', 'pskrCall'),   // ★ 11-21: the receiver's NAME (any PSK Reporter name), not only a callsign
   P(['pskrAntenna'], 'Antenna (blank', 'pskrAntenna'),
   P(['wsprnetOn'], 'Also send WSPR spots to WSPRnet', 'wsprnetOn'),
   P(['dmrIdLookup'], 'Show callsigns for DMR IDs', 'dmrIdLookup'),
