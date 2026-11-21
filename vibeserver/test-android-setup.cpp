@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
         "name":"Allotment Moto","advertise":true,"landingMessage":"Hello","landingLinkUrl":"https://example.org",
         "landingLinkLabel":"Club","uncompressedAudio":1,"trustedProxies":"10.0.0.0/8","oneRadioPerIp":false,
         "decoderMax":3,"galleryMb":250,"galleryPublic":false,"gallerySaveLive":true,"batteryPauseAt":15,"batteryResumeAt":35,
+        "pskrOn":true,"pskrCall":"G4ABC","pskrAntenna":"Discone on the mast","wsprnetOn":true,"dmrIdLookup":true,
         "radioLabel":"V4 on the mast","antenna":"Discone","maxUsers":4,"askBeforeTuning":true,"zoomSpectrum":false,
         "centerFreq":198000,"mode":"am","sessionLimitMin":30,"sessionLimitSoft":true,"idleKickMin":10,"nbWide":2,
         "vfoB":0,"idleGraceSec":120,"pin":"123456","adminPassword":"never-on-the-page","sampleRate":2400000
@@ -149,6 +150,7 @@ int main(int argc, char** argv) {
         "landingLinkLabel":"Club","uncompressedAudio":1,"trustedProxies":"10.0.0.0/8","oneRadioPerIp":false,
         "decoderMax":3,"rttySkimWorkers":2,"galleryMb":250,"galleryPublic":false,"gallerySaveLive":false,
         "batteryPauseAt":15,"batteryResumeAt":35,
+        "pskrOn":true,"pskrCall":"G4ABC","pskrAntenna":"Discone on the mast","wsprnetOn":true,"dmrIdLookup":true,
         "serverLocation":{"mode":"manual","lat":52.25,"lon":-0.9,"label":"Moulton","country":"GB","moving":true},
         "publicName":"Moulton V4","publicShareSec":86400,"webServer":true,"compressAudio":false,"advanced":true,
         "radioLabel":"V4 on the mast","antenna":"Discone","maxUsers":4,"askBeforeTuning":true,"zoomSpectrum":false,
@@ -350,6 +352,8 @@ int main(int argc, char** argv) {
             {"landingLinkLabel","landingLinkLabel"},{"uncompressed","uncompressed"},{"trustedProxies","trustedProxies"},
             {"maxRadiosPerIp","maxRadiosPerIp"},{"decoderMax","decoderMax"},{"rttySkimWorkers","rttySkimWorkers"},{"galleryMb","galleryMb"},
             {"galleryPublic","galleryPublic"},{"gallerySaveLive","gallerySaveLive"},{"batteryPauseAt","batteryPauseAt"},
+            // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup
+            {"pskrOn","pskrOn"},{"pskrCall","pskrCall"},{"pskrAntenna","pskrAntenna"},{"wsprnetOn","wsprnetOn"},{"dmrIdLookup","dmrIdLookup"},
             {"place","place"},{"lat","lat"},{"lon","lon"},{"locFollow","locFollow"},{"country","country"},{"locator","locator"},
             {"dirList","dirList"},{"dirName","dirName"},{"dirShareSec","dirShareSec"},
             {"androidWebServer","a:webServer"},{"androidCompress","a:compressAudio"},{"androidAdvanced","a:advanced"},

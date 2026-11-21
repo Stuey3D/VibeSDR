@@ -165,6 +165,13 @@ export type VibeServerConfig = {
   galleryMb?: number;
   galleryPublic?: boolean;
   gallerySaveLive?: boolean;
+  /** ★★ V12 beta90 PSK Reporter: the owner's switch (default off), the receiver callsign (required), the antenna text
+   *  ("" = the radio's port name), "Also send WSPR spots to WSPRnet" (default off); and the DMR ID lookup (default off). */
+  pskrOn?: boolean;
+  pskrCall?: string;
+  pskrAntenna?: string;
+  wsprnetOn?: boolean;
+  dmrIdLookup?: boolean;
   /** ★★ V12 VibeAGC for SDRplay — 0 automatic (on with the OpenRSP driver), 1 on, 2 off (RadioConfig::rspVibeAgc). */
   rspVibeAgc?: number;
   /** ★ The wide impulse blanker on the whole capture: 0 off, 1 auto below 30 MHz (default), 2 on (RadioConfig::nbWide). */
@@ -389,6 +396,11 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,
+    pskrOn: cfg.pskrOn === true,
+    pskrCall: (cfg.pskrCall ?? '').trim().toUpperCase().slice(0, 15),
+    pskrAntenna: (cfg.pskrAntenna ?? '').trim().slice(0, 64),
+    wsprnetOn: cfg.wsprnetOn === true,
+    dmrIdLookup: cfg.dmrIdLookup === true,
     rspVibeAgc: cfg.rspVibeAgc === 1 || cfg.rspVibeAgc === 2 ? cfg.rspVibeAgc : 0,
     nbWide: cfg.nbWide === 0 || cfg.nbWide === 2 ? cfg.nbWide : 1,
     ...rspConfigKeys(cfg.rsp ?? RSP_DEFAULTS),   // ★ definite on every start — VibeServerBoot.setRspFrontEnd

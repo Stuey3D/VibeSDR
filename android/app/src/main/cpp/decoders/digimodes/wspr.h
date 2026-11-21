@@ -23,6 +23,7 @@ public:
             s.snr = w.snr;                 // ★ the WSPRnet scale — what other receivers' reports of the station read
             s.audioHz = (float)w.audioHz; s.dt = w.dt;
             s.slotUtc = w.slotUtc;          // ★ the even minute it began (the spot's time)
+            s.dbm = w.dbm; s.drift = w.drift;   // ★ V12 beta90: what WSPRnet's upload carries
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };

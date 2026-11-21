@@ -23,6 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { ModeLabel } from './ModeIcon';
 import { withReadAuth } from '../services/vibeAuth';
+import { rankCard } from '../utils/spotRanks';   // ★ V12 beta90 this server's PSK Reporter / WSPR places
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
 import { langName } from '../services/transcriber';
@@ -143,6 +144,17 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
    *  pi500") — the web's standing row: on page 1 of ALL / DSC, MAP opens the SHIPPING MAP, DSC first. Only when the gallery
    *  holds a pinned DSC call (dscGalSummary; no dead control). */
   const [dscSum, setDscSum] = useState<string | null>(null);
+  /* ★★ V12 beta90 THIS SERVER'S RANKING (src/utils/spotRanks.ts): a standing card on page 1 of ALL while the owner has
+   *  PSK Reporter reporting on — the places the directory published for this receiver's callsign, source and age named.
+   *  Nothing to press (no dead control); absent when the server has nothing to say. */
+  const [rankC, setRankC] = useState<{ title: string; src: string } | null>(null);
+  useEffect(() => {
+    if (!visible || page !== 1 || kind !== '') { setRankC(null); return; }
+    let live = true;
+    fetch(withReadAuth(`${b}/vibeserver/gallery/ranks.json`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setRankC(rankCard(j, Date.now() / 1000)); }).catch(() => {});
+    return () => { live = false; };
+  }, [visible, kind, page, b, readAuth]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!visible || !onShipMap || page !== 1 || (kind !== '' && kind !== 'dsc')) { setDscSum(null); return; }
     let live = true;
@@ -297,7 +309,16 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
                     </View>
                   ) : null}
-                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) ? (<>
+                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) || rankC ? (<>
+                  {!!rankC && (
+                    <View accessible accessibilityLabel={`${rankC.title}. ${rankC.src}`} style={s.row}>
+                      <Text style={s.freq}>RANK</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.name}>{rankC.title}</Text>
+                        <Text style={s.dim}>{rankC.src}</Text>
+                      </View>
+                    </View>
+                  )}
                   {!!dscSum && !!onShipMap && (
                     <TouchableOpacity onPress={() => onShipMap('dsc', '')} accessibilityRole="button"
                                       accessibilityLabel={`${dscSum}. Show them on the shipping map`} style={s.row}>

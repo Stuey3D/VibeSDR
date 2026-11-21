@@ -104,6 +104,8 @@
 #include "win_dongles.h"  // ★ the offer, the one-prompt helper, the setup page's /vibeserver/windows/ routes
 #include "win_autostart.h"// ★ "Start VibeServer when Windows starts" — the boot task, the sign-in entry, the keeper
 #endif
+#include "vibe_port_names.h"   // ★ V12 beta90: a radio's port name as PSK Reporter's antenna text
+#include "vibe_spot_report.h"  // ★ V12 beta90: gridOf / cleanGrid for the receiver's locator
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
 #include "pocket.h"        // ★ the pocket image's hotspot + captive portal — inert without its marker
 #include "moveloc.h"       // ★ the nearest town as the server moves (owner's tick) — inert when off
@@ -1155,6 +1157,46 @@ namespace {
 /** ★★★ Every radio's serial on this machine — kept out of the gallery (LocalSdrShim::setGalleryRedact). */
 std::vector<std::string> gallerySerials(const vsconfig::ServerConfig& c) {
     std::vector<std::string> v; for (const auto& r : c.radios) if (!r.serial.empty()) v.push_back(r.serial); return v;
+}
+/* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md) — machine settings,
+ *  applied in every radio process from the saved file (as the gallery is). The receiver's grid is the server's own
+ *  location; the antenna text is the owner's, else THIS radio's port name, else its antenna description. */
+std::string spotGridOf(const vsconfig::ServerConfig& c) {
+    std::string g = vibe::spotreport::cleanGrid(c.locator.size() >= 6 ? c.locator.substr(0, 6) : c.locator);
+    if (g.empty() && !c.lat.empty() && !c.lon.empty()) g = vibe::spotreport::gridOf(std::atof(c.lat.c_str()), std::atof(c.lon.c_str()));
+    return g;
+}
+std::string spotAntennaOf(const vsconfig::ServerConfig& c, const vsconfig::RadioConfig* r) {
+    if (!c.pskrAntenna.empty()) return c.pskrAntenna;
+    if (!r) return "";
+    const auto names = vibe::portnames::parse(r->antennaNames);
+    if (!r->antennaPort.empty()) { const std::string n = vibe::portnames::nameFor(names, r->antennaPort); if (!n.empty()) return n; }
+    if (names.size() == 1) return names[0].second;
+    return r->antenna;
+}
+/** ★ An HTTPS GET for the ranking and the RadioID lookup: curl, no shell, no redirects followed, 20 s, the body capped
+ *  at 64 KB; "" unless it answered 200. The User-Agent names the software and the project's address (RadioID asks for
+ *  "a clear User-Agent and contact address" — the project's web address, never a person's). */
+std::string spotHttpGet(const std::string& url) {
+#ifdef VIBESERVER_VERSION_STR
+    const std::string ua = std::string("VibeServer/") + VIBESERVER_VERSION_STR + " (+https://vibesdr.net)";
+#else
+    const std::string ua = "VibeServer (+https://vibesdr.net)";
+#endif
+    std::string out;
+    const int rc = vibeproc::run({"curl", "-sS", "-f", "--compressed", "--max-time", "20", "--connect-timeout", "10",
+                                  "--max-filesize", "65536", "-A", ua, url}, &out);
+    if (rc != 0 || out.size() > 65536) return "";
+    return out;
+}
+std::string g_spotKeyApplied;   // ★ V12 beta90: what this process last applied (the config watch re-applies on a change)
+void applySpotReporting(const vsconfig::ServerConfig& c, const vsconfig::RadioConfig* mine) {
+    const std::string grid = spotGridOf(c), ant = spotAntennaOf(c, mine);
+    const std::string key = std::string(c.pskrOn ? "1" : "0") + (c.wsprnetOn ? "1" : "0") + (c.dmrIdLookup ? "1" : "0") + "|" + c.pskrCall + "|" + grid + "|" + ant;
+    if (key == g_spotKeyApplied) return;
+    g_spotKeyApplied = key;
+    vibe::LocalSdrShim::setSpotReporting(c.pskrOn, c.pskrCall, grid, ant, c.wsprnetOn);
+    vibe::LocalSdrShim::setDmrIdLookup(c.dmrIdLookup, spotHttpGet);
 }
 std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
 std::string g_dxLastApplied;   // ★★★ V12: …and the dxScan (the idle DX scanner)
@@ -3165,6 +3207,9 @@ int main(int argc, char** argv) {
             // ★★ V12 the satellite data's state for the owner (satcat.cpp): where from, when checked, and in words what
             //    went wrong and when VibeServer asks again
             if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, ",\"satStatus\":" + vssat::statusJson());
+            // ★★ V12 beta90 PSK Reporter / WSPRnet: "412 spots sent in the last hour, last 16:40" — every radio process's line
+            if (const auto at = j.rfind('}'); at != std::string::npos)
+                j.insert(at, ",\"spotReportStatus\":" + vibe::spotreport::aggregateStatus(handoffDir(), (long)std::time(nullptr)));
             /* ★★ V12 THE GALLERY'S DISK — the setup page shows the space LEFT beside the size the owner sets (Stuart:
              *  "showing the REMAINING disk/SD space beside it"), and what the gallery holds now. */
             {
@@ -3360,6 +3405,7 @@ int main(int argc, char** argv) {
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", next.galleryMb, next.galleryPublic, next.gallerySaveLive);
             LocalSdrShim::setGalleryRedact(gallerySerials(next));
+            applySpotReporting(next, nullptr);   // ★ V12 beta90 PSK Reporter: the front door's own process (the radios re-read the file)
             // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
             //    nothing until a restart — the same trap the gain settings fell into above, and
             //    an owner turning public listing OFF would have stayed listed for as long as the
@@ -5519,6 +5565,15 @@ int main(int argc, char** argv) {
             LocalSdrShim::setAircraftShareDir(handoffDir());
             LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
             LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
+            // ★★ V12 beta90 PSK REPORTER: this radio's spots under the machine's receiver callsign (a front door decodes
+            //    nothing, so it reports nothing — it reads the radios' status files for the setup page, and keeps the ranking for
+            //    the gallery it serves).
+            LocalSdrShim::setSpotReportFetcher(spotHttpGet);
+            if (!frontDoorOnly) {
+                LocalSdrShim::setSpotReportStatusDir(handoffDir());
+                vibe::spotreport::Reporter::shared().setRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
+                applySpotReporting(g_serverConfig, mine);
+            } else applySpotReporting(g_serverConfig, nullptr);   // ★ the front door SERVES the gallery: its ranking card
         }
         // ★ MACHINE-level, not per radio: the rule is about one visitor holding SEVERAL of this
         //   machine's radios, so it cannot be a property of any one of them.
@@ -6090,6 +6145,7 @@ int main(int argc, char** argv) {
                             if (mine && mine->driver == "icom" && !o.icomGiven)
                                 LocalSdrShim::instance().setIcomPowerOptions(mine->icomPowerOn, mine->icomAutoOff, mine->icomOffDelayMin);
                             LocalSdrShim::setGalleryRedact(gallerySerials(fresh));
+                            if (!frontDoorOnly) applySpotReporting(fresh, mine);   // ★ V12 beta90 PSK Reporter, live
                             const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");
                             if (gk != lastGallery) {
                                 if (!lastGallery.empty())

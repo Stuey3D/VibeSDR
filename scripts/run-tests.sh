@@ -385,6 +385,8 @@ deps_for() {
     test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ "Also give it a vibesdr.net address" (dirAlias) round-trips, and an older config keeps the alias.
     test-config-alias)  echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ V12 beta90 the PSK Reporter / WSPRnet / DMR ID lookup settings round-trip, OFF by default.
+    test-config-pskr)   echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
     test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
@@ -633,6 +635,9 @@ if node --no-warnings directory/scripts/test-fork.mjs; then pass=$((pass+1)); el
 # ★★★ "In use by another app" through the directory (2026-10-18): the listing carries it, a held radio is never FREE,
 #     and a radio whose process did not answer (503) does not borrow the door's 0 listeners and read FREE either.
 if node --no-warnings directory/scripts/test-in-use.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta90 the receiver rankings (directory/src/ranks.js): PSK Reporter's stats page + wspr.live, hourly, per-call lookup —
+#    a fake network, the real SQLite schema.
+if node --no-warnings directory/scripts/test-ranks.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE DIRECTORY PAGE (2026-10-13): this check existed but was never run here, so it failed for a month after the dial gained
 #    its second marker and nobody saw. The directory is what everyone meets first, with nothing to download.
 if node scripts/check-directory-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -900,6 +905,7 @@ if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fa
 if npx tsx scripts/test_packet.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 packet: AUTO / 1200 / 9600 / 300, FX.25, IL2P, the frame log (packet.ts)
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
 if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
+if npx tsx scripts/test_spot_ranks.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta90 the gallery's ranking card
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),

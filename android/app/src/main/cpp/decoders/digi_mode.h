@@ -50,6 +50,10 @@ struct Spot {
     /** ★ UTC (s) of the START of the slot this transmission was heard in — what WSJT-X's time column shows, and what the
      *  spot is stamped with (M7EIW: HH:MM:SS tells which transmission block it was). NaN = unknown: stamped now. */
     double slotUtc = NAN;
+    /** ★ V12 beta90 (WSPRnet's upload): WSPR's power as sent (dBm, -1000 = not a WSPR spot) and its drift (Hz over the
+     *  transmission). Every other mode leaves them. */
+    int    dbm = -1000;
+    float  drift = 0;
 };
 
 /** One running decoder of one mode on one dial. Made by ModeDef::make; owned by the host. */

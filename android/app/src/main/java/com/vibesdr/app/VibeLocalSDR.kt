@@ -395,6 +395,17 @@ object VibeLocalSDR {
     }
     private external fun nativeSetGallery(dir: String, limitMb: Double, publicRead: Boolean, saveLive: Boolean,
                                           label: String, serial: String)
+    /** ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h): the owner's switch, the receiver callsign (required), the
+     *  server's position (NaN = none; the grid is worked out from it), the antenna text ("" = the radio's port name from
+     *  antennaNames), and the second switch "Also send WSPR spots to WSPRnet". Live. */
+    fun setSpotReporting(on: Boolean, callsign: String, lat: Double, lon: Double, antenna: String, antennaNames: String, wsprnet: Boolean) {
+        ensureLoaded(); nativeSetSpotReporting(on, callsign, lat, lon, antenna, antennaNames, wsprnet)
+    }
+    private external fun nativeSetSpotReporting(on: Boolean, callsign: String, lat: Double, lon: Double, antenna: String,
+                                                antennaNames: String, wsprnet: Boolean)
+    /** ★★ V12 beta90 DMR ID → CALLSIGN (vibe_dmr_id.h): look new DMR IDs up at RadioID.net (through VibeHttp). OFF by default. */
+    fun setDmrIdLookup(on: Boolean) { ensureLoaded(); nativeSetDmrIdLookup(on) }
+    private external fun nativeSetDmrIdLookup(on: Boolean)
     /** ★★ V12 what the background-decoding editor may offer — the engine's own decoder table, ISM ids, Band list, slots. */
     fun backgroundCaps(): String { ensureLoaded(); return nativeBackgroundCaps() }
     private external fun nativeBackgroundCaps(): String

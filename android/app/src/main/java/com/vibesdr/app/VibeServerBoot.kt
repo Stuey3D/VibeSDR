@@ -327,6 +327,17 @@ object VibeServerBoot {
         VibeLocalSDR.setGallery(galleryDir(filesDir).absolutePath, cfg.n("galleryMb", 100.0).coerceAtLeast(0.0),
                                 cfg.b("galleryPublic", true), cfg.b("gallerySaveLive", true),
                                 cfg.s("radioLabel").trim().ifEmpty { lastUsbModel }, lastUsbSerial)
+        /* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (Server mode → PSK REPORTER) — the calls main.cpp makes
+         *  from the server's pskrOn / pskrCall / pskrAntenna / wsprnetOn / dmrIdLookup. Always a definite value: absent =
+         *  OFF. The grid comes from RECEIVER LOCATION (a manual place only); no place = no grid, said on the screen. */
+        run {
+            val loc = cfg.optJSONObject("serverLocation")
+            val placed = loc != null && loc.optString("mode") == "manual" && loc.has("lat") && loc.has("lon")
+            VibeLocalSDR.setSpotReporting(cfg.b("pskrOn", false), cfg.s("pskrCall").trim(),
+                if (placed) loc!!.optDouble("lat") else Double.NaN, if (placed) loc!!.optDouble("lon") else Double.NaN,
+                cfg.s("pskrAntenna").trim(), cfg.s("antennaNames"), cfg.b("wsprnetOn", false))
+            VibeLocalSDR.setDmrIdLookup(cfg.b("dmrIdLookup", false))
+        }
         run {
             val why = VibeLocalSDR.setBackgroundDecoding(cfg.s("bgDecode"))
             if (why.isNotEmpty()) Log.w(TAG, "background decoding not applied: $why")

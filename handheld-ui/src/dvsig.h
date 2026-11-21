@@ -26,6 +26,7 @@ struct DvsigState {
     bool amateur = false, ids = false;
     bool any = false;                 // the log has an entry
     std::string sys, kind, mode, from, to, via1, alias, text;
+    std::string srcCall, dstCall;   // ★ V12 beta90: RadioID's callsign for the source / a private call's destination
     bool open = false, enc = false;
     bool hasSlot = false, hasCc = false, hasRan = false, hasDg = false, hasSrc = false, hasDst = false, hasGrp = false, grp = false, hasGps = false;
     int slot = 0, cc = 0, ran = 0, dg = 0;
@@ -56,6 +57,9 @@ inline bool parseDvsig(const Json& m, DvsigState& st) {
             if (e["src"].kind == Json::Num && e["src"].n >= 0 && e["src"].n <= 16777215) { st.hasSrc = true; st.src = std::floor(e["src"].n + 0.5); }
             if (e["dst"].kind == Json::Num && e["dst"].n >= 0 && e["dst"].n <= 16777215) { st.hasDst = true; st.dst = std::floor(e["dst"].n + 0.5); }
             if (e["grp"].kind == Json::Bool) { st.hasGrp = true; st.grp = e["grp"].b; }
+            auto callOf = [](const Json& j) { std::string c = j.str(); if (c.size() < 3 || c.size() > 12) return std::string();
+                for (char ch : c) if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '/')) return std::string(); return c; };
+            st.srcCall = callOf(e["srcCall"]); st.dstCall = callOf(e["dstCall"]);
             st.from = m17Clean(e["from"], 16); st.to = m17Clean(e["to"], 16); st.via1 = m17Clean(e["via1"], 16);
             st.alias = m17Clean(e["alias"], 32); st.text = m17Clean(e["text"], 120);
             intIn(e["dg"], 0, 127, st.hasDg, st.dg); (void)v;
@@ -89,8 +93,10 @@ inline std::string dvsigWho(const DvsigState& e) {
     if (e.sys == "DMR" || e.sys == "NXDN" || e.sys == "dPMR") {
         if (!e.hasSrc && !e.hasDst) return "";
         std::string to;
-        if (e.hasDst) to = (e.hasGrp && !e.grp) || e.sys == "dPMR" ? m17d::num(e.dst) : "TG " + m17d::num(e.dst);
-        std::string s = e.hasSrc ? m17d::num(e.src) : std::string("\xe2\x80\xa6");
+        if (e.hasDst) to = (e.hasGrp && !e.grp) ? (!e.dstCall.empty() ? e.dstCall + " (" + m17d::num(e.dst) + ")" : m17d::num(e.dst))
+                         : e.sys == "dPMR" ? m17d::num(e.dst) : "TG " + m17d::num(e.dst);
+        std::string s = e.hasSrc ? (!e.srcCall.empty() && e.alias.empty() ? e.srcCall + " (" + m17d::num(e.src) + ")" : m17d::num(e.src))
+                                 : std::string("\xe2\x80\xa6");
         if (!to.empty()) s += arrow + to;
         return s;
     }

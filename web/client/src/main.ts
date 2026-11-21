@@ -234,6 +234,7 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
 // ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
+import { rankCard } from '../../../src/utils/spotRanks';   // ★ V12 beta90 the gallery's ranking card
 import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
@@ -18656,6 +18657,25 @@ async function renderGallery(page = galPage) {
         row.appendChild(f); row.appendChild(n); row.appendChild(mb);
         host.insertBefore(row, host.firstChild);
       });
+    }
+    /* ★★ V12 beta90 THIS SERVER'S RANKING (src/utils/spotRanks.ts, docs/v12/PSK-REPORTER.md): on page 1 of ALL, while the
+     *  owner reports to PSK Reporter — its places as the directory published them, the source and age named. A card to
+     *  read, nothing to press; the server answers {"on":false} otherwise and nothing is drawn. */
+    if (galKind === '' && galPage === 1) {
+      void fetch(galUrl('/vibeserver/gallery/ranks.json'), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((rj) => {
+        const card = rankCard(rj, Date.now() / 1000);
+        if (!card || host.querySelector('.galRank') || galKind !== '' || galPage !== 1 || !$('galView').hidden) return;
+        const row = document.createElement('div'); row.className = 'sres galRank'; row.tabIndex = 0;
+        row.setAttribute('aria-label', `${card.title}. ${card.src}`);
+        const f = document.createElement('span'); f.className = 'f'; f.textContent = 'RANK';
+        const n = document.createElement('span'); n.className = 'n';
+        n.appendChild(document.createTextNode(card.title));
+        n.appendChild(document.createElement('br'));
+        const src = document.createElement('span'); src.className = 'src'; src.textContent = card.src;
+        n.appendChild(src);
+        row.appendChild(f); row.appendChild(n);
+        host.insertBefore(row, host.firstChild);
+      }).catch(() => { /* an older server: no card */ });
     }
     if (paged && pages > 1) renderGalleryPager(pages);
   } catch {
