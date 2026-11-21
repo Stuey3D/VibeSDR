@@ -894,6 +894,46 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         or by a listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.</div>
     </div>
 
+      <!-- ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md). MACHINE-level:
+           every radio's digital spots, one receiver callsign. Beside the gallery (and named under Background Decoding on
+           the radio tab), because it is the same question — where what the decoders hear goes. OFF by default. -->
+      <div class="card" id="pskrCard">
+        <h2>PSK Reporter</h2>
+        <p class="why">Share what this server's decoders hear with PSK Reporter's map, so a station calling CQ can see that
+          it was heard here.</p>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="pskrOn" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span><b>Send this server's digital spots to PSK Reporter</b></span></label>
+      <label><span class="lbl">Your callsign (the receiver)</span>
+        <input type="text" id="pskrCall" maxlength="15" placeholder="e.g. G4ABC" autocapitalize="characters" style="max-width:200px">
+        <div class="hint">Required &mdash; nothing is sent without it. Spots are reported under this callsign, the
+          grid square from <b>Location</b> above (<span id="pskrGrid">set a location</span>) and the software
+          &ldquo;VibeServer&rdquo; with its version.</div></label>
+      <label><span class="lbl">Antenna</span>
+        <input type="text" id="pskrAntenna" maxlength="64" placeholder="each radio's own antenna name">
+        <div class="hint">Shown on PSK Reporter's map beside your callsign. Blank uses each radio's antenna port name
+          (or its antenna description).</div></label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="wsprnetOn" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Also send WSPR spots to WSPRnet</span></label>
+      <div class="hint">WSPR spots only, uploaded with your callsign and grid (WSPRnet needs no account). With this on,
+          this server also appears in WSPR's receiver rankings.</div>
+      <div class="hint" id="pskrStatus" style="color:var(--amber)"></div>
+      <div class="hint">What is sent: each station heard (its callsign, its own grid if it sent one, mode, frequency,
+          signal-to-noise, time), at most once every five minutes and the same station on the same band at most once an
+          hour, as PSK Reporter asks. <b>Nothing about your listeners is ever sent</b> &mdash; the spots come from the
+          decoders, whoever was tuned. With reporting on, the gallery shows this server's place in PSK Reporter's
+          rankings (and WSPR's), with where they came from and how old they are.</div>
+      <!-- ★ The DMR ID lookup lives here too: another "ask a public database about what we heard" switch. -->
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <input type="checkbox" id="dmrIdLookup" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span><b>Show callsigns for DMR IDs</b> (RadioID.net)</span></label>
+      <div class="hint">DMR sends numbers, not callsigns. With this on, the DV ID box looks each new number up once at
+          RadioID.net and shows &ldquo;G4ABC (2355254) &rarr; TG 2351&rdquo; &mdash; on the amateur bands only, as the DV ID
+          box always works. A talker alias, when the radio sends one, still comes first. RadioID.net asks that a public
+          service using its data has its approval: leave this off on a public server until that is given.</div>
+    </div>
+
       <div class="card">
         <h2>Audio</h2>
         <p class="why">How listeners receive sound, on every radio.</p>
@@ -2264,6 +2304,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <span><b>Background Decoding</b></span></label>
         <!-- ★ Stuart's headline (2026-10-22), above his own text, which stays as it is. -->
         <p class="why" style="margin-bottom:4px"><b>Background Decoding — make your radios work while the server is idle.</b></p>
+        <p class="hint" style="margin:0 0 4px">Digital spots it hears can also go to PSK Reporter &mdash; <b>Server</b> tab, <b>PSK Reporter</b>.</p>
         <p class="why">When the last user leaves the server after
           <select id="bgWait" style="width:auto;display:inline-block">
             <option value="1">1 minute</option><option value="2">2 minutes</option>
@@ -7101,6 +7142,16 @@ function fill() {
   $("galleryMb").value = String(cfg.galleryMb != null ? cfg.galleryMb : 100);
   $("galleryPublic").checked = cfg.galleryPublic !== false;
   $("gallerySaveLive").checked = cfg.gallerySaveLive !== false;
+  // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = OFF (what an older config means).
+  if ($("pskrOn")) {
+    $("pskrOn").checked = cfg.pskrOn === true;
+    $("pskrCall").value = cfg.pskrCall || "";
+    $("pskrAntenna").value = cfg.pskrAntenna || "";
+    $("wsprnetOn").checked = cfg.wsprnetOn === true;
+    $("dmrIdLookup").checked = cfg.dmrIdLookup === true;
+    pskrSync();
+    pskrStatusShow(cfg.spotReportStatus);
+  }
   (function () {
     var el = $("galleryDisk"); if (!el) return;
     var gb = function (b) { return b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB"; };
@@ -8453,6 +8504,10 @@ function stashServer() {
   cfg.galleryMb = Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0);
   cfg.galleryPublic = $("galleryPublic").checked;
   cfg.gallerySaveLive = $("gallerySaveLive").checked;
+  if ($("pskrOn")) {
+    cfg.pskrOn = $("pskrOn").checked; cfg.pskrCall = pskrCallValue(); cfg.pskrAntenna = $("pskrAntenna").value.trim();
+    cfg.wsprnetOn = $("wsprnetOn").checked; cfg.dmrIdLookup = $("dmrIdLookup").checked;
+  }
   cfg.dirList       = $("dirList").checked;
   cfg.tunnelResume  = $("tunnelResume").checked;
   cfg.dirName       = $("dirName").value.trim();
@@ -8491,6 +8546,12 @@ function collect() {
     galleryMb:        Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0),
     galleryPublic:    $("galleryPublic").checked,
     gallerySaveLive:  $("gallerySaveLive").checked,
+    // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (machine-level)
+    pskrOn:           $("pskrOn") ? $("pskrOn").checked : false,
+    pskrCall:         $("pskrOn") ? pskrCallValue() : "",
+    pskrAntenna:      $("pskrAntenna") ? $("pskrAntenna").value.trim() : "",
+    wsprnetOn:        $("wsprnetOn") ? $("wsprnetOn").checked : false,
+    dmrIdLookup:      $("dmrIdLookup") ? $("dmrIdLookup").checked : false,
     dirList:          $("dirList").checked,
     tunnelResume:     $("tunnelResume").checked,
     dirName:          $("dirName").value.trim(),
@@ -10013,6 +10074,7 @@ $("saveRadioBtn").onclick = async () => {
   if (!list.length) return;
   // ★ This posts the whole machine too (collect()), so the same address rule holds here.
   if (dirReachStops()) return;
+  if (pskrStops()) return;
   // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
   await hwPending;
@@ -10066,6 +10128,57 @@ $("saveRadioBtn").onclick = async () => {
 /** ★★ A LISTING WHOSE ADDRESS CANNOT WORK IS NOT SAVED (2026-11-12). Only while "List this server publicly" is on —
  *  an unlisted server never sends the address anywhere, so a half-typed one must not block an unrelated save. Says
  *  why where the owner is looking, and takes them to the box. true = stop. */
+/* ★★ V12 beta90 PSK REPORTER. The callsign is REQUIRED: a save with the switch on and no callsign is refused in words. */
+function pskrCallValue() {
+  return ($("pskrCall").value || "").toUpperCase().replace(/[^A-Z0-9\/]/g, "").slice(0, 15);
+}
+function pskrStops() {
+  if (!$("pskrOn") || !$("pskrOn").checked) return false;
+  const c = pskrCallValue();
+  if (/^[A-Z0-9\/]{3,15}$/.test(c) && /[0-9]/.test(c) && /[A-Z]/.test(c)) return false;
+  $("saveErr").textContent = "Not saved \u2014 PSK Reporter needs your callsign (the receiver's), or switch it off.";
+  $("pskrCall").scrollIntoView({behavior: "smooth", block: "center"}); $("pskrCall").focus();
+  return true;
+}
+/** The grid the reports will carry (the server's locator, else the latitude and longitude), and the WSPRnet switch only
+ *  with PSK Reporter on (it rides the same batches). */
+function pskrSync() {
+  if (!$("pskrOn")) return;
+  const on = $("pskrOn").checked;
+  $("wsprnetOn").disabled = !on;
+  const loc = ($("locator").value || "").trim();
+  let g = /^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?/.test(loc) ? loc.slice(0, loc.length >= 6 ? 6 : 4) : "";
+  if (!g) {
+    const la = parseFloat($("lat").value), lo = parseFloat($("lon").value);
+    if (isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180) {
+      const x = Math.min(359.9999, lo + 180), y = Math.min(179.9999, la + 90);
+      g = String.fromCharCode(65 + Math.floor(x / 20), 65 + Math.floor(y / 10)) + Math.floor((x % 20) / 2) + Math.floor(y % 10)
+        + String.fromCharCode(97 + Math.floor((x % 2) * 12), 97 + Math.floor((y % 1) * 24));
+    }
+  }
+  $("pskrGrid").textContent = g ? g : "set a location";
+}
+/** "412 spots sent in the last hour, last 16:40" — every radio's line, from the config's spotReportStatus. */
+function pskrStatusShow(st) {
+  const el = $("pskrStatus"); if (!el) return;
+  if (!st || !st.on) { el.textContent = ""; return; }
+  const hm = (t) => { const d = new Date(t * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
+  const parts = [];
+  parts.push((st.sentHour || 0) + (st.sentHour === 1 ? " spot" : " spots") + " sent to PSK Reporter in the last hour"
+    + (st.lastSent > 0 ? ", last " + hm(st.lastSent) : ", none yet (the first batch goes about five minutes after a start)"));
+  if (st.lastError) parts.push("PSK Reporter: " + st.lastError);
+  if (st.wsprnet) {
+    parts.push((st.wsprHour || 0) + " WSPR " + (st.wsprHour === 1 ? "spot" : "spots") + " sent to WSPRnet in the last hour"
+      + (st.wsprLast > 0 ? ", last " + hm(st.wsprLast) : ""));
+    if (st.wsprError) parts.push("WSPRnet: " + st.wsprError);
+  }
+  el.textContent = parts.join(" \u00b7 ");
+}
+if ($("pskrOn")) {
+  for (const id of ["pskrOn", "locator", "lat", "lon"]) $(id).addEventListener("input", pskrSync);
+  $("pskrOn").addEventListener("change", pskrSync);
+}
+
 function dirReachStops() {
   if (!$("dirList").checked) return false;
   const bad = dirReachProblem();
@@ -10080,6 +10193,7 @@ function dirReachStops() {
 $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
   if (dirReachStops()) return;
+  if (pskrStops()) return;
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
   // ★★★ WAIT FOR THE FORM TO BELONG TO THIS RADIO. stashRadio() refuses to read a form that is

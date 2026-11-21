@@ -66,6 +66,12 @@ const TABLE = [
   P(['galleryMb'], 'Gallery size', 'galleryMb'),
   P(['galleryPublic'], 'Everyone may see the gallery', 'galleryPublic'),
   P(['gallerySaveLive'], 'Keep listeners', 'gallerySaveLive'),
+  // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — the screen's PSK REPORTER card, VibeServerBoot's keys
+  P(['pskrOn'], 'Send this server', 'pskrOn'),
+  P(['pskrCall'], 'Your callsign (required)', 'pskrCall'),
+  P(['pskrAntenna'], 'Antenna (blank', 'pskrAntenna'),
+  P(['wsprnetOn'], 'Also send WSPR spots to WSPRnet', 'wsprnetOn'),
+  P(['dmrIdLookup'], 'Show callsigns for DMR IDs', 'dmrIdLookup'),
   P(['uncompressed'], 'UNCOMPRESSED AUDIO', 'uncompressedAudio'),
   // ── RADIO ──
   P(['radioName'], 'SDR DISPLAY NAME', 'radioLabel'),

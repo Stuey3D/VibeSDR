@@ -372,6 +372,9 @@ const K = {
   dxScan: 'vs_dxscan',
   /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
+  /** ★★ V12 beta90 PSK Reporter (switch, receiver callsign, antenna text), "Also send WSPR spots to WSPRnet", and the
+   *  DMR ID lookup (RadioID.net). Absent = off / empty. */
+  pskrOn: 'vs_pskron', pskrCall: 'vs_pskrcall', pskrAntenna: 'vs_pskrantenna', wsprnetOn: 'vs_wsprneton', dmrIdLookup: 'vs_dmridlookup',
   /** ★★ V12 VibeAGC for SDRplay (0 automatic, 1 on, 2 off). */
   rspVibeAgc: 'vs_rspvibeagc',
   /** ★ The wide impulse blanker (0 off, 1 auto below 30 MHz, 2 on). Absent = 1, the server's default. */
@@ -636,6 +639,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [galleryPublic, setGalleryPublic] = useState(true);
   const [gallerySaveLive, setGallerySaveLive] = useState(true);
   const [galDisk, setGalDisk] = useState<{ freeBytes: number; usedBytes: number } | null>(null);
+  /** ★★ V12 beta90 PSK REPORTER — off by default; the callsign is required (nothing is sent without one). */
+  const [pskrOn, setPskrOn] = useState(false);
+  const [pskrCall, setPskrCall] = useState('');
+  const [pskrAntenna, setPskrAntenna] = useState('');
+  const [wsprnetOn, setWsprnetOn] = useState(false);
+  const [dmrIdLookup, setDmrIdLookup] = useState(false);
+  const [pskrStatus, setPskrStatus] = useState('');
   /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
   const [rspVibeAgc, setRspVibeAgc] = useState(0);
   /** ★ The wide impulse blanker: 0 off, 1 auto (below 30 MHz — the Setup page's and the server's default), 2 on. */
@@ -1365,6 +1375,28 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★ The read is past its first few seconds — said plainly, never as an error. */
   const [prefsSlow, setPrefsSlow] = useState(false);
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
+  /* ★★ V12 beta90 the PSK Reporter status line ("412 spots sent in the last hour, last 16:40"), from the running server
+   *  (its read-only /vibeserver/gallery/spotreport.json), every minute while it runs with reporting on. */
+  useEffect(() => {
+    if (!running || !pskrOn) { setPskrStatus(''); return; }
+    let gone = false;
+    const hm = (t: number) => { const d = new Date(t * 1000); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+    const look = async () => {
+      try {
+        const r = await fetch(`http://127.0.0.1:${running.port}/vibeserver/gallery/spotreport.json`, { cache: 'no-store' });
+        const j = await r.json() as { on?: boolean; sentHour?: number; lastSent?: number; lastError?: string; wsprnet?: boolean; wsprHour?: number; wsprLast?: number; wsprError?: string };
+        if (gone) return;
+        if (!j.on) { setPskrStatus(pskrCall.trim() ? '' : 'Not sending: it needs your callsign.'); return; }
+        const p = [`${j.sentHour ?? 0} ${j.sentHour === 1 ? 'spot' : 'spots'} sent to PSK Reporter in the last hour` + ((j.lastSent ?? 0) > 0 ? `, last ${hm(j.lastSent!)}` : ', none yet')];
+        if (j.lastError) p.push(`PSK Reporter: ${j.lastError}`);
+        if (j.wsprnet) { p.push(`${j.wsprHour ?? 0} WSPR to WSPRnet` + ((j.wsprLast ?? 0) > 0 ? `, last ${hm(j.wsprLast!)}` : '')); if (j.wsprError) p.push(`WSPRnet: ${j.wsprError}`); }
+        setPskrStatus(p.join(' · '));
+      } catch { if (!gone) setPskrStatus(''); }
+    };
+    void look();
+    const t = setInterval(() => void look(), 60000);
+    return () => { gone = true; clearInterval(t); };
+  }, [running, pskrOn, pskrCall]);
   /* ★★ AN ICOM'S FACTS — read once while stopped (is the permission held? can this Android prove which input it
    *  records?), and every 3 s while serving (capture starting, Android routing it away, the engine's preflight). Only
    *  for an Icom: no other radio's screen makes this call. A reading identical to the last one changes nothing. */
@@ -1631,6 +1663,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
+          // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = off
+          setPskrOn(g(K.pskrOn) === '1'); setPskrCall(g(K.pskrCall) ?? ''); setPskrAntenna(g(K.pskrAntenna) ?? '');
+          setWsprnetOn(g(K.wsprnetOn) === '1'); setDmrIdLookup(g(K.dmrIdLookup) === '1');
           { const rv = g(K.rspVibeAgc); if (rv === '1' || rv === '2' || rv === '0') setRspVibeAgc(Number(rv)); }
           { const nb = g(K.nbWide); if (nb === '0' || nb === '1' || nb === '2') setNbWide(Number(nb)); }
           { const rc = g(K.rsp); if (rc != null) setRspCard(readRspCard(rc)); }
@@ -2249,6 +2284,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
+    pskrOn, pskrCall, pskrAntenna, wsprnetOn, dmrIdLookup,   // ★★ V12 beta90
     dxJson,
     rspCard, ppbText,
   };
@@ -2303,6 +2339,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★★ V12 the idle DX scanner (RadioConfig::dxScan) — VibeServerBoot applies it; the private DAB scan engine drops it
     dxScan: live.current.dxJson,
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
+    // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — VibeServerBoot applies them on every start
+    pskrOn: live.current.pskrOn, pskrCall: live.current.pskrCall, pskrAntenna: live.current.pskrAntenna,
+    wsprnetOn: live.current.wsprnetOn, dmrIdLookup: live.current.dmrIdLookup,
     // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
     rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
     nbWide: live.current.nbWide,   // ★ VibeServerBoot: setNbWide(cfg "nbWide"), auto when absent
@@ -2482,6 +2521,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
       [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
+      [K.pskrOn, live.current.pskrOn ? '1' : '0'], [K.pskrCall, live.current.pskrCall], [K.pskrAntenna, live.current.pskrAntenna],
+      [K.wsprnetOn, live.current.wsprnetOn ? '1' : '0'], [K.dmrIdLookup, live.current.dmrIdLookup ? '1' : '0'],
       [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
       [K.rsp, JSON.stringify(live.current.rspCard)], [K.ppb, live.current.ppbText],
     ]);
@@ -3481,6 +3522,65 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 Off: only background decoding is kept. Each item says whether it was decoded in the background or by a
                 listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.
               </Text>
+            </View>
+
+            {/* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md) — the Setup
+                page's card, the same words. Saved on the next Start, like its neighbours. */}
+            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PSK REPORTER</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Send this server{'’'}s digital spots to PSK Reporter
+                </Text>
+                <Switch value={pskrOn}
+                  onValueChange={(v) => { setPskrOn(v); AsyncStorage.setItem(K.pskrOn, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              <TextInput
+                value={pskrCall}
+                onChangeText={(t) => { const v = t.toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 15); setPskrCall(v); AsyncStorage.setItem(K.pskrCall, v); }}
+                placeholder="Your callsign (required), e.g. G4ABC" placeholderTextColor={C.placeholder} autoCapitalize="characters" autoCorrect={false}
+                style={[styles.input, { color: C.text, borderColor: pskrOn && !pskrCall ? C.warn : C.border, fontFamily: F }]} />
+              <TextInput
+                value={pskrAntenna}
+                onChangeText={(t) => { const v = t.slice(0, 64); setPskrAntenna(v); AsyncStorage.setItem(K.pskrAntenna, v); }}
+                placeholder="Antenna (blank = the radio's antenna name)" placeholderTextColor={C.placeholder}
+                style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F, marginTop: 8 }]} />
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                Each station the decoders hear {'—'} its callsign, its own grid if it sent one, mode, frequency,
+                signal-to-noise, time {'—'} reported under your callsign and the grid of RECEIVER LOCATION above, at most
+                once every five minutes. Nothing about your listeners is ever sent. With reporting on, the gallery shows
+                this server{'’'}s place in PSK Reporter{'’'}s rankings.
+              </Text>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: pskrOn ? C.text : C.textDim, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Also send WSPR spots to WSPRnet
+                </Text>
+                <Switch value={wsprnetOn} disabled={!pskrOn}
+                  onValueChange={(v) => { setWsprnetOn(v); AsyncStorage.setItem(K.wsprnetOn, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              {!!pskrStatus && (
+                <Text style={[styles.hint, { color: C.text, fontFamily: F }]}>{pskrStatus}</Text>
+              )}
+              {!isIcom && (
+                <>
+                  <View style={styles.rowBetween}>
+                    <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                      Show callsigns for DMR IDs (RadioID.net)
+                    </Text>
+                    <Switch value={dmrIdLookup}
+                      onValueChange={(v) => { setDmrIdLookup(v); AsyncStorage.setItem(K.dmrIdLookup, v ? '1' : '0'); }}
+                      trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                    DMR sends numbers, not callsigns. With this on, the DV ID box looks each new number up once at
+                    RadioID.net and shows {'“'}G4ABC (2355254) {'→'} TG 2351{'”'}, on the amateur bands only. A talker alias still
+                    comes first. RadioID.net asks that a public service using its data has its approval: leave this off on a
+                    public server until that is given.
+                  </Text>
+                </>
+              )}
             </View>
 
             {/* Web server. Turning this OFF means a browser gets nothing — only the

@@ -53,6 +53,12 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'galleryMb',        storage: 'vs_gallerymb',       enc: 'num' },
   { native: 'galleryPublic',    storage: 'vs_gallerypublic',   enc: 'bool01' },
   { native: 'gallerySaveLive',  storage: 'vs_gallerysavelive', enc: 'bool01' },
+  // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup
+  { native: 'pskrOn',           storage: 'vs_pskron',          enc: 'bool01' },
+  { native: 'pskrCall',         storage: 'vs_pskrcall',        enc: 'str' },
+  { native: 'pskrAntenna',      storage: 'vs_pskrantenna',     enc: 'str' },
+  { native: 'wsprnetOn',        storage: 'vs_wsprneton',       enc: 'bool01' },
+  { native: 'dmrIdLookup',      storage: 'vs_dmridlookup',     enc: 'bool01' },
   { native: 'batteryPauseAt',   storage: 'vs_batpause',        enc: 'num' },
   { native: 'webServer',        storage: 'vs_webserver',       enc: 'bool01' },
   { native: 'compressAudio',    storage: 'vs_compress',        enc: 'bool01' },

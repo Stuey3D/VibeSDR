@@ -28693,6 +28693,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 return std::string();
             };
+            /* ★★ V12 beta90 the PSK Reporter status line for the PHONE's server screen (one process there): counts and
+             *  times only — "412 spots sent in the last hour, last 16:40" — and the callsign PSK Reporter shows anyway. The
+             *  Linux setup page reads every radio's line through its config instead (main.cpp spotReportStatus). */
+            if (path == "/vibeserver/gallery/spotreport.json") {
+                reply("200 OK", "application/json", vibe::spotreport::Reporter::shared().statusJson());
+                return;
+            }
             auto& g = vibe::gallery::shared();
             if (!g_galleryPublic.load() && !adminOkFor(reqLine, sock)) {
                 reply("403 Forbidden", "application/json", "{\"items\":[],\"enabled\":false,\"error\":\"the owner has made this server's gallery private\"}");

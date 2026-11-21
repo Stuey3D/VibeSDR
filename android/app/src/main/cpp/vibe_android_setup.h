@@ -276,6 +276,9 @@ inline const std::vector<Control>& controlTable() {
         { "maxRadiosPerIp",                              D_ANY,   0 },
         { "decoderMax rttySkimWorkers",                  D_ANY,   0 },
         { "galleryMb galleryPublic gallerySaveLive",     D_ANY,   0 },
+        // ★ V12 beta90 PSK Reporter + WSPRnet (every radio's digital spots); the DMR ID lookup only where DV ID can run
+        { "pskrOn pskrCall pskrAntenna wsprnetOn",       D_ANY,   0 },
+        { "dmrIdLookup",                                 D_RADIO, 0 },
         { "batteryPauseAt",                              D_ANY,   P_NOT_TV },
         { "place lat lon locFollow country locator",     D_ANY,   0 },
         { "dirList dirName dirShareSec",                 D_ANY,   P_TUNNEL },
@@ -457,6 +460,12 @@ inline std::string pageConfig(const std::string& raw) {
     out.set("galleryMb", J::num(numOr(S("galleryMb"), 100)));
     out.set("galleryPublic", J::boolean(boolOr(S("galleryPublic"), true)));
     out.set("gallerySaveLive", J::boolean(boolOr(S("gallerySaveLive"), true)));
+    // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = OFF
+    out.set("pskrOn", J::boolean(boolOr(S("pskrOn"), false)));
+    out.set("pskrCall", J::str(strOr(S("pskrCall"), "")));
+    out.set("pskrAntenna", J::str(strOr(S("pskrAntenna"), "")));
+    out.set("wsprnetOn", J::boolean(boolOr(S("wsprnetOn"), false)));
+    out.set("dmrIdLookup", J::boolean(boolOr(S("dmrIdLookup"), false)));
     out.set("batteryPauseAt", J::num(numOr(S("batteryPauseAt"), 0)));
     out.set("batteryResumeAt", J::num(numOr(S("batteryResumeAt"), 40)));
     out.set("port", J::num(0));
@@ -679,6 +688,12 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
     num(&b, "galleryMb", "galleryMb", 0, 100000);
     flag(&b, "galleryPublic", "galleryPublic");
     flag(&b, "gallerySaveLive", "gallerySaveLive");
+    // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (the page refuses "on" without a callsign itself)
+    flag(&b, "pskrOn", "pskrOn");
+    str(&b, "pskrCall", "pskrCall", 15);
+    str(&b, "pskrAntenna", "pskrAntenna", 64);
+    flag(&b, "wsprnetOn", "wsprnetOn");
+    if (on("dmrIdLookup")) flag(&b, "dmrIdLookup", "dmrIdLookup");
     if (on("batteryPauseAt")) if (const J* v = b.get("batteryPauseAt"); v && v->t == J::Num) {
         double at = std::round(std::max(0.0, std::min(95.0, v->n)));
         p.set("batteryPauseAt", J::num(at));

@@ -13,6 +13,9 @@
 #include <thread>
 #include <vector>
 #include <rtl-sdr.h>
+#include <cmath>
+#include "vibe_spot_report.h"   // ★ V12 beta90 PSK Reporter (gridOf, the status line)
+#include "vibe_port_names.h"
 #include "local_sdr_shim.h"
 #include "sdrplay_source.h"   // ★ the RSP's Android USB hand-off
 #if VIBE_HAVE_ICOM
@@ -487,7 +490,10 @@ Java_com_vibesdr_app_VibeRemoteSetup_nativeEnable(JNIEnv* env, jclass cls, jbool
     if (want) {
         vibe::LocalSdrShim::setConfigHandlers(
             []() -> std::string {
-                const std::string page = vibe::androidsetup::pageConfig(jniRemoteGet());
+                std::string page = vibe::androidsetup::pageConfig(jniRemoteGet());
+                // ★★ V12 beta90 the PSK Reporter status line (this one process's), as the Linux page gets it
+                if (const auto at = page.rfind('}'); !page.empty() && at != std::string::npos)
+                    page.insert(at, ",\"spotReportStatus\":" + vibe::spotreport::Reporter::shared().statusJson());
                 return page.empty() ? std::string("{\"configured\":true,\"host\":\"android\",\"radios\":[]}") : page;
             },
             [](const std::string& body, std::string& err) -> bool {
@@ -1714,6 +1720,23 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetTuneLimits(JNIEnv* env, jobject,
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, jint max, jint lanMaxHz) {
     vibe::LocalSdrShim::setVibeServerRawIq((int)mode, (int)max, (int)lanMaxHz);
+}
+/* ★★ V12 beta90 PSK REPORTER / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md). The ranking and RadioID's
+ *  answers come through VibeHttp (jniHttpGet — resolved by nativeInitRadioDns on a Java thread); without it they are off.
+ *  The antenna: the owner's text, else the radio's one named port (antennaNames). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetSpotReporting(JNIEnv* env, jobject, jboolean on, jstring call, jdouble lat, jdouble lon,
+                                                       jstring antenna, jstring antennaNames, jboolean wsprnet) {
+    const std::string grid = std::isfinite(lat) && std::isfinite(lon) ? vibe::spotreport::gridOf(lat, lon) : std::string();
+    std::string ant = jstr(env, antenna);
+    if (ant.empty()) { const auto n = vibe::portnames::parse(jstr(env, antennaNames)); if (n.size() == 1) ant = n[0].second; }
+    // ★ jniHttpGet answers "" until VibeHttp is resolved (nativeInitRadioDns), whichever comes first
+    vibe::LocalSdrShim::setSpotReportFetcher([](const std::string& u) { return jniHttpGet(u, "application/json"); });
+    vibe::LocalSdrShim::setSpotReporting(on == JNI_TRUE, jstr(env, call), grid, ant, wsprnet == JNI_TRUE);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDmrIdLookup(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setDmrIdLookup(on == JNI_TRUE, [](const std::string& u) { return jniHttpGet(u, "application/json"); });
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetRttySkimWorkers(JNIEnv*, jobject, jint n) {

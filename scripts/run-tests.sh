@@ -385,6 +385,8 @@ deps_for() {
     test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ "Also give it a vibesdr.net address" (dirAlias) round-trips, and an older config keeps the alias.
     test-config-alias)  echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ V12 beta90 the PSK Reporter / WSPRnet / DMR ID lookup settings round-trip, OFF by default.
+    test-config-pskr)   echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
     test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;

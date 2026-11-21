@@ -42,7 +42,7 @@ object VibeHttp {
      */
     @JvmStatic
     fun get(url: String, accept: String): String = try {
-        val b = Request.Builder().url(url).header("User-Agent", "VibeServer")
+        val b = Request.Builder().url(url).header("User-Agent", "VibeServer (+https://vibesdr.net)")
         if (accept.isNotEmpty()) b.header("Accept", accept)
         http.newCall(b.build()).execute().use { r ->
             if (r.isSuccessful) (r.body?.string() ?: "") else ""
