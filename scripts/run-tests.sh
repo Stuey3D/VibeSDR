@@ -221,6 +221,9 @@ flags_for() {
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
     test-ais|test-aprs|test-ais-store|test-ais-binary|test-ax25hs) echo "-O2 -lpthread" ;;
+    # ★★ V12 beta90 THE STATION STORE (vibe_station_store.h — the DIGI MODES MAP + PSK Reporter): validation, RAM, the day
+    #    files, four processes flushing one day (fork), windows, the caps and pruning, subscribe(), cost. Header-only.
+    test-station-store) echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
