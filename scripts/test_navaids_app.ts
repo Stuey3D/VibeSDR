@@ -76,7 +76,7 @@ ok(modeIconFor('vor') === 'beacon' && modeIconFor('sarsat') === 'ship', 'glyphs'
 const web = readFileSync('web/client/src/main.ts', 'utf8'), html = readFileSync('web/client/index.html', 'utf8'), dec = readFileSync('web/client/src/decoders.ts', 'utf8');
 ok(/data-dec="vor" hidden/.test(html) && /data-dec="sarsat" hidden/.test(html) && /id="navCard"/.test(html), 'web: both keys (hidden until offered) and the card');
 ok(/vorCap = j\.vor === true \|\| !!decWhy\.vor/.test(web) && /sarsatCap = j\.sarsat === true \|\| !!decWhy\.sarsat/.test(web), 'web: offered only where vibeserver.json says so (greyed with why)');
-ok(/'vor', 'sarsat'\];/.test(web), 'web: both in the reach list');
+ok(/const REACH_DECODERS = \[[^\]]*'vor', 'sarsat'/.test(web), 'web: both in the reach list');   // ★ beta90: fctlm joined after them
 ok(/vor: 'vor'/.test(dec) && /sarsat: 'sarsat'/.test(dec) && /msg\.type === 'vor'/.test(dec) && /msg\.type === 'sarsat'/.test(dec), 'web: attach + status JSON');
 const app = readFileSync('src/screens/SDRScreen.tsx', 'utf8'), ms = readFileSync('src/components/ModeSelector.tsx', 'utf8'), dc = readFileSync('src/services/DecoderClient.ts', 'utf8');
 ok(/setVorCapable\(o\?\.vor === true \|\| !!dw\.vor\)/.test(app) && /setSarsatCapable\(o\?\.sarsat === true \|\| !!dw\.sarsat\)/.test(app), 'app: the capability, greyed with why');
