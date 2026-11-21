@@ -137,6 +137,10 @@ export function layoutDecoderBands(hz: number, reset = false): void {
     tabs.appendChild(t);
   }
 
+  /* ★★ V12 beta90: the open decoder's SETTINGS sit inside a key row (placeOptions) — park them home before the rows are
+   *  cleared, or `textContent = ''` takes them out of the page for good (found by test-web-skim-band: a BAND pick that
+   *  moved the dial onto another radio band left RTTY's settings gone, every getElementById('rttySettings') null). */
+  parkOptions();
   groups.textContent = '';
   for (const { group, ids } of DECODER_PLACES[cur]) {
     const els = ids.map(usable).filter((e): e is HTMLElement => !!e);
@@ -239,19 +243,23 @@ let openDec: string | null = null;
  * Put the selected decoder's settings on the row under its key (main.ts syncDecButtons calls this after it shows or hides
  * them). A key not on screen (another band tab is open) leaves its settings at home, under the groups, where they were.
  */
-export function placeOptions(dec: string | null): void {
-  openDec = dec;
+/** Every option panel home (in their own order, after the park), no tab drawn. */
+function parkOptions(): void {
   const park = document.getElementById('decPark');
   if (!park) return;
-  // every panel home first (in their own order, after the park), and no tab drawn
   let at: Element = park;
-  for (const pid of Object.values(OPTION_PANELS)) {
+  for (const pid of new Set(Object.values(OPTION_PANELS))) {
     const p = document.getElementById(pid);
     if (!p) continue;
     p.classList.remove('tabL', 'tabR');
     if (p.parentElement?.classList.contains('decKeys') || p.previousElementSibling !== at) at.after(p);
     at = p;
   }
+}
+export function placeOptions(dec: string | null): void {
+  openDec = dec;
+  if (!document.getElementById('decPark')) return;
+  parkOptions();
   const pid = dec ? OPTION_PANELS[dec] : undefined;
   const panel = pid ? document.getElementById(pid) : null;
   const key = dec ? document.querySelector<HTMLElement>(`#decGroups [data-dec="${dec}"]`) : null;

@@ -94,7 +94,7 @@ How it works:
 | `scripts/test-setup-bg-skim.mjs` | Setup page picker, Own centre, load/save, width change, fit, gates | 22/0 |
 | `scripts/test_bg_decode_model.ts` | Android screen model | 47/0 |
 | `scripts/test_skim_bands_picker.ts` | Listener picker logic | 11/0 |
-| `scripts/test-web-skim-band.mjs` | Real server and web page in headless Edge (`--mute-audio`) | see the commit |
+| `scripts/test-web-skim-band.mjs` | Real server and web page in headless Edge (`--mute-audio`): RTTY and CW SKIMMER BAND, rule-centre picks, "20 m · tuned" with no snap-back, ONE SIGNAL hides it | 15/0 |
 
 ## RESUME HERE
 

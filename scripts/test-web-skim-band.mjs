@@ -102,7 +102,7 @@ try {
     await sleep(600);
     await ev(`document.getElementById('freqPanel')?.classList.remove('open')`);
   };
-  const pick = async (kind, id) => { await ev(`(() => { const s = document.getElementById('${kind}Band'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change')); })()`); await sleep(800); };
+  const pick = async (kind, id) => { if (process.env.DBG) console.log('PICK', kind, id, await ev(`String(!!document.getElementById('rttySettings'))`)); await ev(`(() => { const s = document.getElementById('${kind}Band'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change')); })()`); await sleep(800); };
   const label = (kind) => ev(`(() => { const s = document.getElementById('${kind}Band'); return s.options[s.selectedIndex]?.textContent || ''; })()`);
 
   console.log('── RTTY › SKIMMER: BAND ──');
@@ -123,8 +123,9 @@ try {
   ok((await label('rtty')) === '20 m \u00b7 tuned', 'at 24 kHz the same dial is no longer the rule-centre: "20 m · tuned" (the dial is not moved by a width change)');
   await pick('rtty', '20m');
   ok((await dial()) === r20.lo + 12000, `…picking 20 m again at 24 kHz: ${(r20.lo + 12000) / 1e3} kHz (+ 12) — now ${await dial()}`);
-  await enter(String((r20.lo + 14000) / 1e3));
-  ok((await dial()) === r20.lo + 14000 && (await label('rtty')) === '20 m \u00b7 tuned', `fine-tuned with the frequency box to ${(r20.lo + 14000) / 1e3}: "${await label('rtty')}", no snap back`);
+  if (process.env.DBG) console.log('BEFORE-ENTER', await ev(`String(!!document.getElementById('rttySettings'))`));
+  await enter(((r20.lo + 14000) / 1e6).toFixed(4));   // the frequency box takes MHz
+  ok((await dial()) === r20.lo + 14000 && (await label('rtty')) === '20 m \u00b7 tuned', `fine-tuned with the frequency box to ${(r20.lo + 14000) / 1e3} kHz: "${await label('rtty')}", no snap back`);
   const s1 = await shot('skimband-rtty-desktop.png');
 
   console.log('── CW › SKIMMER: BAND ──');
