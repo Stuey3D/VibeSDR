@@ -36,6 +36,8 @@ export interface SatTx {
   band?: string;
   /** ★ SATELLITE-BEST 1.4: the catalogue's own name for the mode ("Mode A", "Mode B"), where it has one. */
   modeName?: string;
+  /** ★ beta90: the decoder a pick attaches (the server's word — the same as picked.decoder); '' = heard only. */
+  decoder?: SatPicked['decoder'];
 }
 export type SatUse = 'voice' | 'image' | 'packet';
 export interface SatPass { aos: number; tca: number; los: number; maxEl: number; aosAz: number; losAz: number }
@@ -64,10 +66,14 @@ export interface SatReadout {
 }
 export interface SatTrack {
   norad: number; aos: number; los: number; pts: [number, number][];
-  /** ★ SATELLITE-BEST 1.7: the sub-satellite points [lat, lon, altKm] over the pass (widened ~10 min each side by the
-   *  server), ≤ 120 — the dotted orbit on the half-globe. Absent from an older server: no line is drawn. */
-  geo?: [number, number, number][];
+  /** ★ SATELLITE-BEST 1.7: the sub-satellite points [lat, lon, altKm] over the pass (AOS − 10 min … LOS + 10 min, evenly
+   *  spaced in time), ≤ 120 — the dotted orbit on the half-globe; null where the server could not compute one (the pen
+   *  lifts). Absent from an older server: no line is drawn. */
+  geo?: GeoPt[];
+  /** the geo index of the pass's highest point (from the server's tca, geoT0, geoStep), when it says */
+  tcaIdx?: number;
 }
+export type GeoPt = [number, number, number] | null;
 
 const str = (v: unknown, max = 80): string | undefined =>
   typeof v === 'string' && v.length ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : undefined;
@@ -95,7 +101,8 @@ export function parseSatList(m: unknown): SatList | null {
                   use: t.use === 'voice' || t.use === 'image' || t.use === 'packet' ? t.use : undefined,
                   sstv: t.sstv === true ? true : undefined, why: str(t.why, 160),
                   band: typeof t.band === 'string' && /^[A-Za-z]{1,2}\/[A-Za-z]{1,2}$/.test(t.band) ? t.band : undefined,
-                  modeName: str(t.modeName, 24) });
+                  modeName: str(t.modeName, 24),
+                  decoder: t.decoder === 'lrpt' || t.decoder === 'sstv' || t.decoder === 'aprs' || t.decoder === 'cw' || t.decoder === 'fctlm' || t.decoder === '' ? t.decoder : undefined });
       }
     const passes: SatPass[] = [];
     if (Array.isArray(s.passes))
@@ -138,15 +145,21 @@ export function parseSatTrack(m: unknown): SatTrack | null {
   const pts: [number, number][] = [];
   for (const p of (o.pts as unknown[]).slice(0, 200))
     if (Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])) pts.push([Number(p[0]), Math.max(0, Math.min(90, Number(p[1])))]);
-  let geo: [number, number, number][] | undefined;
+  let geo: GeoPt[] | undefined, tcaIdx: number | undefined;
   if (Array.isArray(o.geo)) {
     geo = [];
+    // ★ a bad / null entry stays a gap (null) so geo[i] keeps its time (geoT0 + i·geoStep) and the pen lifts there
     for (const g of (o.geo as unknown[]).slice(0, 200))
-      if (Array.isArray(g) && isFinite(g[0]) && isFinite(g[1]) && Math.abs(Number(g[0])) <= 90 && Math.abs(Number(g[1])) <= 360)
-        geo.push([Number(g[0]), Number(g[1]), isFinite(g[2]) ? Math.max(0, Math.min(50000, Number(g[2]))) : 600]);
-    if (geo.length < 2) geo = undefined;
+      geo.push(Array.isArray(g) && isFinite(g[0]) && isFinite(g[1]) && Math.abs(Number(g[0])) <= 90 && Math.abs(Number(g[1])) <= 360
+        ? [Number(g[0]), Number(g[1]), isFinite(g[2]) ? Math.max(0, Math.min(50000, Number(g[2]))) : 600] : null);
+    if (geo.filter(Boolean).length < 2) geo = undefined;
+    const t0 = num(o.geoT0), st = num(o.geoStep), tca = num(o.tca);
+    if (geo && t0 != null && st != null && st > 0 && tca != null) {
+      const i = Math.round((tca - t0) / st);
+      if (i >= 0 && i < geo.length && geo[i]) tcaIdx = i;
+    }
   }
-  return { norad: num(o.norad) ?? 0, aos: num(o.aos) ?? 0, los: num(o.los) ?? 0, pts, ...(geo ? { geo } : {}) };
+  return { norad: num(o.norad) ?? 0, aos: num(o.aos) ?? 0, los: num(o.los) ?? 0, pts, ...(geo ? { geo } : {}), ...(tcaIdx != null ? { tcaIdx } : {}) };
 }
 
 /** hwinfo → the button: absent = no button at all (the radio reaches no listed downlink); else live or greyed. */
@@ -420,7 +433,8 @@ export function satBoxSize(t: SatTx | undefined, pictureRunning: boolean): 'comp
   return t.sstv && pictureRunning ? 'big' : 'compact';
 }
 /** The decoder a pick needs (the server attaches it; the client follows on its decoder socket to receive its frames). */
-export function satDecoderFor(t: SatTx): '' | 'lrpt' | 'sstv' | 'aprs' {
+export function satDecoderFor(t: SatTx): SatPicked['decoder'] {
+  if (t.decoder != null) return t.decoder;   // ★ beta90: the server says
   const u = txUse(t);
   return u === 'image' ? (t.mode === 'lrpt' || t.consumer === 'lrpt' ? 'lrpt' : 'sstv') : u === 'packet' ? 'aprs' : t.sstv ? 'sstv' : '';
 }
@@ -527,7 +541,7 @@ export function globeBird(p: { x: number; y: number }, u: [number, number], d: [
  *  no position (the scene still draws the dome and the receiver). `path` (1.7, the track reply's geo) = the pass's orbit,
  *  drawn at the same height, front side only, and the heading the bird's panels lie along. */
 export function globeScene(w: number, h: number, rx: { lat: number; lon: number }, sat: { lat: number; lon: number; altKm?: number } | null,
-                           path?: Array<[number, number, number]> | null): GlobeScene {
+                           path?: GeoPt[] | null, tcaIdx?: number): GlobeScene {
   // ★ headroom: the highest bird (1 + 0.35), its panels and the label over it stay inside
   const r = Math.max(10, Math.min(w * 0.46, (h - 30) / 1.38));
   const cx = w / 2, cy = h - 2;
@@ -558,18 +572,19 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
   };
   // ★ 1.7 the orbit: the pen lifts behind the globe and below the cut, as the coastlines'
   let orbit = '', tca: { x: number; y: number } | null = null, tcaTick = '';
-  const geo = path && path.length >= 2 ? path : null;
-  const gp = geo ? geo.map(([la, lo, a]) => lifted(la, lo, a)) : [];
+  const geo = path && path.filter(Boolean).length >= 2 ? path : null;
+  const gp = geo ? geo.map((p) => (p ? lifted(p[0], p[1], p[2]) : null)) : [];
   if (geo) {
     let pen = false;
-    for (const q of gp) { if (!q.vis) { pen = false; continue; } orbit += `${pen ? 'L' : 'M'}${f1(q.x)} ${f1(q.y)}`; pen = true; }
-    // the highest point of the pass = the one closest to the receiver
-    let best = 0, bestA = Infinity;
-    geo.forEach(([la, lo], i) => { const a = gcAngle(la, lo, rx.lat, rx.lon); if (a < bestA) { bestA = a; best = i; } });
-    const q = gp[best];
-    if (q.vis) {
+    for (const q of gp) { if (!q || !q.vis) { pen = false; continue; } orbit += `${pen ? 'L' : 'M'}${f1(q.x)} ${f1(q.y)}`; pen = true; }
+    // the highest point of the pass: the server's tca where it says, else the point closest to the receiver
+    let best = -1, bestA = Infinity;
+    if (tcaIdx != null && geo[tcaIdx]) best = tcaIdx;
+    else geo.forEach((p, i) => { if (!p) return; const a = gcAngle(p[0], p[1], rx.lat, rx.lon); if (a < bestA) { bestA = a; best = i; } });
+    const q = best >= 0 ? gp[best] : null;
+    if (q && q.vis) {
       tca = { x: q.x, y: q.y };
-      const a = gp[Math.max(0, best - 1)], b = gp[Math.min(gp.length - 1, best + 1)];
+      const a = gp[Math.max(0, best - 1)] ?? q, b = gp[Math.min(gp.length - 1, best + 1)] ?? q;
       const tx = b.x - a.x, ty = b.y - a.y, n = Math.hypot(tx, ty) || 1, nx = -ty / n, ny = tx / n, L = r * 0.045;
       tcaTick = `M${f1(q.x - nx * L)} ${f1(q.y - ny * L)}L${f1(q.x + nx * L)} ${f1(q.y + ny * L)}`;
     }
@@ -584,11 +599,10 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
       // ★ the heading: the screen direction from the path's point nearest the bird to the next one (level until a path)
       let u: [number, number] = [1, 0];
       if (geo) {
-        let near = 0, nA = Infinity;
-        geo.forEach(([la, lo], i) => { const a = gcAngle(la, lo, sat.lat, sat.lon); if (a < nA) { nA = a; near = i; } });
-        const a = gp[near === gp.length - 1 ? near - 1 : near], b = gp[near === gp.length - 1 ? near : near + 1];
-        const hx = b.x - a.x, hy = b.y - a.y, n = Math.hypot(hx, hy);
-        if (n > 1e-6) u = [hx / n, hy / n];
+        let near = -1, nA = Infinity;
+        geo.forEach((p, i) => { if (!p) return; const a = gcAngle(p[0], p[1], sat.lat, sat.lon); if (a < nA) { nA = a; near = i; } });
+        const a = near < 0 ? null : gp[near === gp.length - 1 ? near - 1 : near], b = near < 0 ? null : gp[near === gp.length - 1 ? near : near + 1];
+        if (a && b) { const hx = b.x - a.x, hy = b.y - a.y, n = Math.hypot(hx, hy); if (n > 1e-6) u = [hx / n, hy / n]; }
       }
       const dx = cx - sp.x, dy = cy - sp.y, dn = Math.hypot(dx, dy) || 1;
       bird = globeBird(sp, u, [dx / dn, dy / dn], r / 100);
@@ -809,37 +823,98 @@ export class SatReminders {
  * socket — frames, good / failed, the bird's mode, and named values with units; a channel with no published calibration
  * comes RAW, labelled "raw" (never a guessed conversion). Whitelisted ASCII / numbers only — cleaned again here. */
 export interface SatTlmValue { name: string; value: string; unit: string; raw: boolean }
-export interface SatTelemetry { frames: number; good: number; failed: number; mode: string; at: number; values: SatTlmValue[] }
-export function parseSatTelemetry(d: unknown): SatTelemetry | null {
+/** The box's telemetry: the decoder's counts (fctlm_status, once a second) and the last frame's values (sat_tlm — from
+ *  fctlm for AO-73, from aprs for APRS T# and SONATE-2), merged; a field a message does not carry keeps its last value. */
+export interface SatTelemetry {
+  frames?: number; good?: number; failed?: number; sync?: boolean; snrDb?: number;
+  sat: string; format: string; mode: string; at: number; values: SatTlmValue[];
+  /** the decoded payload, hex — behind the RAW switch */
+  hex: string;
+}
+/** {"type":"fctlm_status","data":{sync,frames,good,failed,afcHz,snrDb,…}} or {"type":"sat_tlm","data":{sat,format,t,mode,
+ *  values:[{k,name,v,unit,raw}],hex}} (docs/v12/SATELLITE-BEST.md "Contract additions") → one shape. */
+export function parseSatTelemetry(d: unknown): Partial<SatTelemetry> | null {
   const o = d as Record<string, unknown> | null;
   if (!o || typeof o !== 'object') return null;
-  const values: SatTlmValue[] = [];
-  if (Array.isArray(o.values))
+  const out: Partial<SatTelemetry> = {};
+  const cnt = (x: unknown) => { const k = num(x); return k != null && k >= 0 ? Math.floor(k) : undefined; };
+  if (cnt(o.frames) != null) out.frames = cnt(o.frames);
+  if (cnt(o.good) != null) out.good = cnt(o.good);
+  if (cnt(o.failed) != null) out.failed = cnt(o.failed);
+  if (typeof o.sync === 'boolean') out.sync = o.sync;
+  if (num(o.snrDb) != null) out.snrDb = num(o.snrDb);
+  if (str(o.sat, 24)) out.sat = str(o.sat, 24);
+  if (str(o.format, 24)) out.format = str(o.format, 24);
+  if (str(o.mode, 24)) out.mode = str(o.mode, 24);
+  const at = num(o.t) ?? num(o.at); if (at != null) out.at = at;
+  if (typeof o.hex === 'string') out.hex = o.hex.replace(/[^0-9a-fA-F]/g, '').slice(0, 512);
+  if (Array.isArray(o.values)) {
+    const values: SatTlmValue[] = [];
     for (const v0 of (o.values as unknown[]).slice(0, 64)) {
       const v = v0 as Record<string, unknown>;
-      const name = str(v?.name ?? v?.n, 32);
-      const val = v?.value ?? v?.v;
+      const name = str(v?.name ?? v?.n ?? v?.k, 32);
+      const val = v?.v ?? v?.value;
       if (!name || (typeof val !== 'number' && typeof val !== 'string')) continue;
       const value = typeof val === 'number' ? (isFinite(val) ? String(Math.round(val * 1000) / 1000) : '') : str(val, 24) ?? '';
       if (!value) continue;
-      values.push({ name, value, unit: str(v.unit ?? v.u, 8) ?? '', raw: v.raw === true });
+      const raw = v.raw === true;
+      values.push({ name, value, unit: raw ? '' : str(v.unit ?? v.u, 8) ?? '', raw });   // ★ raw: the count, no unit
     }
-  const n = (x: unknown) => { const k = num(x); return k != null && k >= 0 ? Math.floor(k) : 0; };
-  return { frames: n(o.frames), good: n(o.good), failed: n(o.failed), mode: str(o.mode, 24) ?? '', at: num(o.at) ?? 0, values };
+    out.values = values;
+  }
+  return out;
 }
-/** The block's first line: "TELEMETRY · 14 frames · 13 good · 1 failed · SAFE MODE". */
+/** A message merged into what the box shows (a status keeps the last frame's values; a frame keeps the counts). */
+export function satTelemetryMerge(prev: SatTelemetry | null, m: Partial<SatTelemetry> | null): SatTelemetry | null {
+  if (!m) return prev;
+  const base: SatTelemetry = prev ?? { sat: '', format: '', mode: '', at: 0, values: [], hex: '' };
+  const next = { ...base } as SatTelemetry;
+  for (const [k, v] of Object.entries(m)) if (v !== undefined) (next as unknown as Record<string, unknown>)[k] = v;
+  return next;
+}
+/** The block's first line: "TELEMETRY · 14 frames · 13 good · 1 failed · Safe" ("waiting for a frame" until one). */
 export function satTelemetryHead(t: SatTelemetry | null): string {
-  if (!t) return 'TELEMETRY · waiting for a frame';
-  const parts = ['TELEMETRY', `${t.frames} frame${t.frames === 1 ? '' : 's'}`, `${t.good} good`, `${t.failed} failed`];
+  if (!t || (t.frames == null && !t.values.length)) return t?.sync ? 'TELEMETRY · in sync — waiting for a good frame' : 'TELEMETRY · waiting for a frame';
+  const parts = ['TELEMETRY'];
+  if (t.frames != null) parts.push(`${t.frames} frame${t.frames === 1 ? '' : 's'}`, `${t.good ?? 0} good`, `${t.failed ?? 0} failed`);
   if (t.mode) parts.push(t.mode);
   return parts.join(' · ');
 }
-/** A value in words: "Battery 8.21 V" / "Reboots 14" / "PA temp 0x3a2 raw". */
+/** A value in words: "Battery voltage 8.13 V" / "Reboots 14" / "Battery temperature 143 raw". */
 export function satTelemetryLine(v: SatTlmValue): string { return `${v.name} ${v.value}${v.unit ? ' ' + v.unit : ''}${v.raw ? ' raw' : ''}`; }
+/** The RAW switch's text: the payload hex in groups of 4 bytes. */
+export function satTelemetryHex(t: SatTelemetry | null): string { return (t?.hex ?? '').replace(/(.{8})/g, '$1 ').trim(); }
 
 // ══ ★★ SATELLITE-BEST 1.9 — THE MAP KEY of a packet satellite ═══════════════════════════════════════════════════════════
 /** "via ISS" — the label stations heard through the bird carry on the DIGI MODES map's APRS layer. */
 export function satViaText(name: string | undefined): string { return name ? `via ${name}` : ''; }
+/** ★ What the DIGI MODES map draws over its APRS layer for the pass (the b90-maps DigiMapOverlay shape): the orbit's ground
+ *  track (split where it crosses the antimeridian or has a gap), the footprint around the bird now, and the bird itself. */
+export interface SatMapOverlay {
+  label: string;
+  lines?: [number, number][][];
+  circles?: { lat: number; lon: number; km: number }[];
+  points?: { lat: number; lon: number; label: string }[];
+}
+export function satMapOverlay(name: string, geo: GeoPt[] | null | undefined, now: { lat?: number; lon?: number; altKm?: number } | null): SatMapOverlay {
+  const lines: [number, number][][] = [];
+  let cur: [number, number][] = [];
+  for (const p of geo ?? []) {
+    if (!p) { if (cur.length > 1) lines.push(cur); cur = []; continue; }
+    const last = cur[cur.length - 1];
+    if (last && Math.abs(p[1] - last[1]) > 180) { if (cur.length > 1) lines.push(cur); cur = []; }
+    cur.push([p[0], p[1]]);
+  }
+  if (cur.length > 1) lines.push(cur);
+  const o: SatMapOverlay = { label: `${name} PASS`.slice(0, 24) };
+  if (lines.length) o.lines = lines;
+  if (now && now.lat != null && now.lon != null) {
+    const alt = now.altKm && now.altKm > 0 ? now.altKm : 600;
+    o.circles = [{ lat: now.lat, lon: now.lon, km: Math.round(6371 * Math.acos(6371 / (6371 + alt))) }];
+    o.points = [{ lat: now.lat, lon: now.lon, label: name }];
+  }
+  return o;
+}
 /** ★ The MAP key: a packet downlink, and only once a station with a position has been heard (no dead key). */
 export function satMapOffered(t: SatTx | undefined, stationsWithPos: number): boolean {
   return !!t && txUse(t) === 'packet' && stationsWithPos > 0;

@@ -227,7 +227,9 @@ try {
   ok(await ev(`!document.querySelector('#satPanel [data-act="map"]').hidden`), '1.9 a station with a position heard: MAP in the header');
   await ev(`document.querySelector('#satPanel [data-act="map"]').click(); true`);
   const mp = (await ev('window.__sent')).slice(-1)[0].map;
-  ok(mp && mp.layer === 'aprs' && mp.via === 'via ISS' && mp.norad === 25544 && mp.footprint && Math.abs(mp.footprint.lat - 47) < 1e-6, `1.9 MAP → the DIGI MODES map's APRS layer, "via ISS", with the footprint (${JSON.stringify(mp && { layer: mp.layer, via: mp.via })})`);
+  ok(mp && mp.layer === 'aprs' && mp.overlay?.label === 'ISS PASS' && mp.overlay.circles?.[0].lat === 47 && mp.overlay.points?.[0].label === 'ISS',
+     `1.9 MAP → the DIGI MODES map's APRS layer with the pass overlay: footprint + the bird (${JSON.stringify(mp && { layer: mp.layer, label: mp.overlay?.label })})`);
+  ok(mp.overlay.lines === undefined || Array.isArray(mp.overlay.lines), '…its orbit once the path has come');
   await ev(`window.__stations = 0; true`);
   await shot('packet-desktop');
 
@@ -332,9 +334,15 @@ try {
   await ev(`window.__fake = ${T0}; window.__p.onList(__Sat.parseSatList(${JSON.stringify(ao73)})); window.__p.onPicked({ norad: 39444, tx: 0, decoder: 'fctlm' }); true`);
   ok(/TELEMETRY · waiting for a frame/.test(await ev(`document.querySelector('#satPanel .sat-tlm').textContent`)), '1.3 fctlm pick: the telemetry block waits for a frame');
   ok(await ev(`document.querySelector('#satPanel .sat-pk').hidden`), '…and no empty packet lines under it');
-  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ frames: 3, good: 2, failed: 1, mode: 'SAFE MODE', values: [{ name: 'Battery', value: 8.21, unit: 'V' }, { name: 'PA temp', value: '0x3a2', raw: true }] })); true`);
+  // the server's two messages (docs/v12/SATELLITE-BEST.md Contract additions): fctlm_status counts, then a sat_tlm frame
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ sync: true, frames: 3, good: 2, failed: 1, afcHz: -20, snrDb: 6.5, centreHz: 1200, auto: true })); true`);
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ sat: 'AO-73', format: 'funcube-rt', t: 1763700000, mode: 'Safe', hex: '0a1b2c3d4e5f',
+    values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.21, unit: 'V' }, { k: 'pa.t', name: 'PA temp', v: 930, unit: 'C', raw: true }] })); true`);
   const tl = await ev(`document.querySelector('#satPanel .sat-tlm').innerText`);
-  ok(/3 frames · 2 good · 1 failed · SAFE MODE/.test(tl) && /Battery 8\.21 V/.test(tl) && /PA temp 0x3a2 raw/.test(tl), `1.3 values with units, raw labelled (${tl.replace(/\n/g, ' / ')})`);
+  ok(/3 frames · 2 good · 1 failed · Safe/.test(tl) && /Battery voltage 8\.21 V/.test(tl) && /PA temp 930 raw/.test(tl) && !/930 C/.test(tl), `1.3 values with units, raw labelled with no unit (${tl.replace(/\n/g, ' / ')})`);
+  await ev(`document.querySelector('#satPanel [data-act="tlmraw"]').click(); true`);
+  ok(/0a1b2c3d 4e5f/.test(await ev(`document.querySelector('#satPanel .sat-tlm').innerText`)), '1.3 RAW shows the frame\'s bytes');
+  await ev(`document.querySelector('#satPanel [data-act="tlmraw"]').click(); true`);
   await shot('telemetry');
 } catch (e) { ok(false, `driver: ${e?.stack || e}`); }
 finally {

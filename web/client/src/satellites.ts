@@ -20,8 +20,8 @@
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import {
   GLOBE_KEY_TEXT, GLOBE_RX_DOT, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
-  satRemindText, satRemindWhy, satTelemetryHead, satTelemetryLine, satTxDetail, satTxModeLabel, satViaText,
-  type SatReminder, type SatTelemetry,
+  satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satTxModeLabel,
+  satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
   type SatPass,
@@ -58,12 +58,9 @@ export interface SatPanelDeps {
   /** the clock, ms (tests pass a fake one) */
   now?: () => number;
 }
-/** ★ 1.9: what the MAP key hands the DIGI MODES map — its APRS layer, "via ISS", and the pass's orbit + footprint. */
-export interface SatMapOpen {
-  layer: 'aprs'; via: string; norad: number; name: string;
-  orbit: [number, number, number][] | null;
-  footprint: { lat: number; lon: number; altKm: number } | null;
-}
+/** ★ 1.9: what the MAP key hands the DIGI MODES map (b90-maps' DigiMapOpts shape) — its APRS layer, and an overlay of the
+ *  pass's orbit, footprint and the bird ("ISS PASS"); the stations carry "via ISS" from the server (aprs …sat). */
+export interface SatMapOpen { layer: 'aprs'; overlay: SatMapOverlay | null }
 
 const CSS = `
 /* ★★★ THE DECODER BOX's PLACE AND SHAPE (Stuart 2026-11-21: "the satellite decoder box needs to be the same as a standard
@@ -347,8 +344,9 @@ export class SatPanel {
     this.track = t;
     if (this.open) this.paintPick();
   }
-  /** ★ 1.3 the pick's telemetry (fctlm_status) */
-  telemetry(t: SatTelemetry | null) { if (!this.picked) return; this.tlm = t; if (this.open) this.paintPick(); }
+  /** ★ 1.3 the pick's telemetry (fctlm_status counts, sat_tlm values) — merged */
+  telemetry(t: Partial<SatTelemetry> | null) { if (!this.picked) return; this.tlm = satTelemetryMerge(this.tlm, t); if (this.open) this.paintPick(); }
+  private tlmRaw = false;
   /** ★ 1.9 the packet decoder heard a station with a position — the MAP key may appear */
   stationsChanged() { if (this.open) this.paintPick(); }
   /** ★ 1.6 Leaving the server / the session ending cancels every reminder for it (and its pop-ups). */
@@ -372,6 +370,7 @@ export class SatPanel {
     if (act === 'min') { this.setMin(!this.min); return; }
     if (act === 'size') { this.setBig(!this.big, true); return; }
     if (act === 'map') { this.openMap(); return; }
+    if (act === 'tlmraw') { this.tlmRaw = !this.tlmRaw; this.paintPick(); return; }
     if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
     if (act === 'lead') {
       this.lead = satRemindLead(b.dataset.v);
@@ -517,10 +516,14 @@ export class SatPanel {
     this.sPk.hidden = !pkt;
     if (pkt) this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
     // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
-    const tl = this.picked?.decoder === 'fctlm';
+    const tl = this.picked?.decoder === 'fctlm' || !!this.tlm?.values.length;
     this.sTlm.hidden = !tl;
-    if (tl) this.sTlm.innerHTML = `<div>${esc(satTelemetryHead(this.tlm))}</div>`
-      + (this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : '');
+    if (tl) {
+      const hex = satTelemetryHex(this.tlm);
+      this.sTlm.innerHTML = `<div>${esc(satTelemetryHead(this.tlm))}${hex ? ` <button data-act="tlmraw" class="${this.tlmRaw ? 'on' : ''}" aria-pressed="${this.tlmRaw}" title="The frame's bytes as received">RAW</button>` : ''}</div>`
+        + (this.tlmRaw && hex ? `<div class="sat-dim" style="word-break:break-all">${esc(hex)}</div>`
+          : this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : '');
+    }
     // ★★ 1.9 the MAP key — a packet downlink, once a station with a position is heard (no dead key)
     this.sMap.hidden = !satMapOffered(t, this.deps.mapStations?.() ?? 0) || !this.deps.openMap;
     this.askTrack();
@@ -543,11 +546,10 @@ export class SatPanel {
   private openMap() {
     const sat = this.picked ? this.list?.sats.find((x) => x.norad === this.picked!.norad) : undefined;
     if (!sat || !this.deps.openMap) return;
-    const alt = satAltKm(sat.rangeKm, sat.el);
     this.deps.openMap({
-      layer: 'aprs', via: satViaText(sat.name), norad: sat.norad, name: sat.name,
-      orbit: this.track && this.track.norad === sat.norad ? this.track.geo ?? null : null,
-      footprint: sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: alt ?? 600 } : null,
+      layer: 'aprs',
+      overlay: satMapOverlay(sat.name, this.track && this.track.norad === sat.norad ? this.track.geo : null,
+                             { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) }),
     });
   }
 
@@ -639,8 +641,8 @@ export class SatPanel {
     cv.style.display = rx ? '' : 'none';
     if (!rx) { this.sKey.hidden = true; return; }
     const W = cv.width, H = cv.height;
-    const path = this.track && sat.norad != null && this.track.norad === sat.norad ? this.track.geo ?? null : null;
-    const g = globeScene(W, H, rx, sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, path);
+    const mineT = this.track && sat.norad != null && this.track.norad === sat.norad ? this.track : null;
+    const g = globeScene(W, H, rx, sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, mineT?.geo ?? null, mineT?.tcaIdx);
     // ★ scene units per CSS pixel — the dot, the lines and the words are sized on SCREEN, so they read at SMALL and BIG
     const sc = W / Math.max(60, cv.clientWidth || (this.big ? 420 : 150));
     const css = getComputedStyle(this.el);

@@ -187,7 +187,7 @@ export interface DecoderCallbacks {
   onSitorStatus?: (data: unknown) => void;
   onHfdlStatus?: (data: unknown) => void;   // ★ V12 HFDL: {msgs, bursts, detections}
   onLrptStatus?: (data: unknown) => void;
-  onSatTlm?: (data: unknown) => void;   // ★ SATELLITE-BEST 1.3: fctlm_status (src/services/satellites.ts parseSatTelemetry)   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
+  onSatTlm?: (data: unknown) => void;   // ★ SATELLITE-BEST 1.3: fctlm_status / sat_tlm (src/services/satellites.ts parseSatTelemetry)   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
   onAleStatus?: (data: unknown) => void;   // ★ V12 2G HF ALE: {"words","offset","last"} while a transmission is read
@@ -539,8 +539,9 @@ export class DecoderClient {
       this.cb.onHellStatus?.(msg.data);
       return;
     }
-    if (msg.type === 'fctlm_status' && msg.data) {
-      if (this.mode !== 'fctlm') return;
+    if ((msg.type === 'fctlm_status' || msg.type === 'sat_tlm') && msg.data) {
+      // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts, and a frame's values (sat_tlm — also from aprs: APRS T#, SONATE-2)
+      if (this.mode !== 'fctlm' && !(msg.type === 'sat_tlm' && this.mode === 'aprs')) return;
       this.cb.onSatTlm?.(msg.data);
       return;
     }

@@ -216,7 +216,7 @@ export interface DecoderCallbacks {
   onText:       (text: string) => void;
   onStatus:     (status: string) => void;
   /** ★ SATELLITE-BEST 1.3: a FUNcube telemetry report (fctlm_status) — drawn in the SATELLITE box. */
-  onSatTelemetry?: (t: import('./satellites').SatTelemetry) => void;
+  onSatTelemetry?: (t: Partial<import('./satellites').SatTelemetry>) => void;
   /** 'idle' | 'sync' | 'rx' | 'active' — drives the decoder panel dot. */
   onDot:        (dot: 'idle' | 'sync' | 'rx' | 'active') => void;
   /** Image decoders (WEFAX/SSTV) — one scanline of pixel data. */
@@ -705,11 +705,12 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
-          } else if (m.type === 'fctlm_status' && m.data) {
-            // ★ SATELLITE-BEST 1.3: the telemetry values — the SATELLITE box draws them (no decoder box of its own)
-            if (this.active !== 'fctlm') return;
+          } else if ((m.type === 'fctlm_status' || m.type === 'sat_tlm') && m.data) {
+            // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts and a frame's values (sat_tlm also from aprs: APRS T#, SONATE-2) —
+            //   the SATELLITE box draws them (no decoder box of its own)
+            if (this.active !== 'fctlm' && !(m.type === 'sat_tlm' && this.active === 'aprs')) return;
             const tl = parseSatTelemetry(m.data);
-            if (tl) { this.cb.onSatTelemetry?.(tl); this.cb.onDot(tl.good > 0 ? 'active' : 'sync'); }
+            if (tl) { this.cb.onSatTelemetry?.(tl); if (this.active === 'fctlm') this.cb.onDot((tl.good ?? 0) > 0 || !!tl.values?.length ? 'active' : tl.sync ? 'sync' : 'idle'); }
           } else if (m.type === 'lrpt_status' && m.data) {
             if (this.active !== 'lrpt') return;
             const st = parseLrptStatus(m.data);

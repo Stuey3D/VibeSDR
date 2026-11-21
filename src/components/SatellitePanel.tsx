@@ -28,7 +28,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { scrollLane } from '../constants/popupTokens';
 import { GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
-         satTelemetryLine, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type SatReminder, type SatTelemetry,
+         satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          type SatInfo, type SatList, type SatPicked, type SatReadout } from '../services/satellites';
@@ -68,7 +68,9 @@ export interface SatellitePanelProps {
   /** BIG's ceiling: the status row (DecoderPanel's topSafe) */
   topSafe?: number;
   /** ★ 1.7 the pick's pass path (the track reply's geo) — the dotted orbit; null = none (an older server) */
-  orbit?: [number, number, number][] | null;
+  orbit?: GeoPt[] | null;
+  /** the orbit's highest point (the server's tca) as a geo index */
+  tcaIdx?: number;
   /** ★ 1.8 the receiver dot's label: the server's name ('' = RECEIVER) */
   rxName?: string;
   /** ★ 1.3 the pick's telemetry (fctlm) */
@@ -86,13 +88,13 @@ export interface SatellitePanelProps {
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg — the dotted orbit (1.7), the drawn bird, the green
  *  receiver dot and the labels (1.8); sizes on SCREEN (scene units per point from the laid-out width), so they read at
  *  SMALL and BIG alike. */
-function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, rxName }: {
+function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, rxName }: {
   rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string; ground: string; small?: boolean;
-  orbit?: [number, number, number][] | null; rxName?: string;
+  orbit?: GeoPt[] | null; tcaIdx?: number; rxName?: string;
 }) {
   const g = useMemo(() => globeScene(GLOBE_W, GLOBE_H, rx,
-    sat && sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, orbit ?? null),
-  [rx.lat, rx.lon, sat?.lat, sat?.lon, sat?.rangeKm, sat?.el, orbit]);   // eslint-disable-line react-hooks/exhaustive-deps
+    sat && sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, orbit ?? null, tcaIdx),
+  [rx.lat, rx.lon, sat?.lat, sat?.lon, sat?.rangeKm, sat?.el, orbit, tcaIdx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [wPx, setWPx] = useState(small ? GLOBE_SMALL_W : GLOBE_MAX_W);
   const sc = GLOBE_W / Math.max(60, wPx);
   const font = 10 * sc;
@@ -192,6 +194,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const [, setTick] = useState(0);
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
   const [listOpen, setListOpen] = useState(true);
+  const [tlmRaw, setTlmRaw] = useState(false);
   useEffect(() => { if (p.picked) setListOpen(false); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
   const greyed = !p.cap.ok;
@@ -209,7 +212,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const use = tx ? txUse(tx) : 'voice';
   const imageDec = p.picked?.decoder === 'lrpt' || p.picked?.decoder === 'sstv';
   const lockWord = !p.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
-  const tlmDec = p.picked?.decoder === 'fctlm';
+  const tlmDec = p.picked?.decoder === 'fctlm' || !!p.telemetry?.values.length;
+  const tlmHex = satTelemetryHex(p.telemetry ?? null);
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
   const decWord = !confirmed ? 'Tuning…'
     : tlmDec && !p.decLine ? 'listening for telemetry'
@@ -256,7 +260,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 {!!p.rxPos && (
                   <View style={!big ? undefined : { alignSelf: 'stretch' }}>
                     <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} ground={ground} small={!big}
-                               orbit={confirmed ? p.orbit : null} rxName={p.rxName} />
+                               orbit={confirmed ? p.orbit : null} tcaIdx={p.tcaIdx} rxName={p.rxName} />
                     {/* ★ BIG: the one-line key (the dotted half only when there is an orbit to see) */}
                     {big && <Text style={[s.detail, s.key]}>{confirmed && p.orbit ? GLOBE_KEY_TEXT : GLOBE_KEY_TEXT.replace(/^.*· /, '')}</Text>}
                   </View>
@@ -274,8 +278,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               {/* ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw") */}
               {confirmed && tlmDec && (
                 <View style={s.pk}>
-                  <Text style={s.mono}>{satTelemetryHead(p.telemetry ?? null)}</Text>
-                  {!!p.telemetry?.values.length && <View style={s.tlmGrid}>
+                  <View style={s.nameRow}>
+                    <Text style={[s.mono, { flexShrink: 1 }]}>{satTelemetryHead(p.telemetry ?? null)}</Text>
+                    {!!tlmHex && <DecoderKey label="RAW" active={tlmRaw} onPress={() => setTlmRaw((v) => !v)} accessibilityLabel="The frame's bytes as received" />}
+                  </View>
+                  {tlmRaw && !!tlmHex ? <Text style={s.mono} selectable>{tlmHex}</Text>
+                  : !!p.telemetry?.values.length && <View style={s.tlmGrid}>
                     {p.telemetry.values.map((v, i) => <Text key={i} style={[s.mono, s.tlmCell]} numberOfLines={1}>{satTelemetryLine(v)}</Text>)}
                   </View>}
                 </View>

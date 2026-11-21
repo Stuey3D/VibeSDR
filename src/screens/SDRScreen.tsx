@@ -72,8 +72,8 @@ import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy, satViaText,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx } from '../services/satellites';
+import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2735,7 +2735,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satPickedRef = useRef<SatPicked | null>(null); satPickedRef.current = satPicked;
   /* ★★ SATELLITE-BEST 1.7 the pick's pass path (the track reply's geo → the dotted orbit), asked once per pick and again
    *  when the next pass begins; 1.3 the pick's telemetry (fctlm) */
-  const [satOrbit, setSatOrbit] = useState<[number, number, number][] | null>(null);
+  const [satOrbit, setSatOrbit] = useState<{ geo: GeoPt[]; tcaIdx?: number } | null>(null);
   const satTrackAsk = useRef<{ norad: number; aos: number } | null>(null);
   const [satTlm, setSatTlm] = useState<SatTelemetry | null>(null);
   useEffect(() => {
@@ -6188,7 +6188,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       // ★ While RTTY AUTO's tuning guide is up it IS the status; the decoder's own state returns when it clears.
       onStatus: (s: string)  => { decStateText.current = s; if (!tuneHintText.current) queueDecoderStatus(s); },
-      onSatTelemetry: (t) => { if (satDecRef.current === 'fctlm') setSatTlm(t); },   // ★★ SATELLITE-BEST 1.3
+      onSatTelemetry: (t) => { if (satDecRef.current) setSatTlm((prev) => satTelemetryMerge(prev, t)); },   // ★★ SATELLITE-BEST 1.3 (fctlm; aprs T# / SONATE-2)
       onTuneHint: (audioHz: number) => {
         tuneHintText.current = tuneHintLabel(audioHz, String(client.current?.getStatus().mode ?? ''));
         queueDecoderStatus(tuneHintText.current || decStateText.current);
@@ -7830,7 +7830,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (satRemRef.current.size) { satRemRef.current.refresh(satSrvKeyRef.current, l); setSatRemN(satRemRef.current.size); }   // ★ 1.6 a new element set moves the reminder
       },
       /* ★ 1.7 the pick's pass path — its geo is the dotted orbit (an older server sends none: no line) */
-      onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current?.norad === t.norad) setSatOrbit(t.geo ?? null); },
+      onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current?.norad === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null); },
       onSat: (r) => {
         if (destroyed.current) return;
         // ★ an ending or a refusal says why in the SATELLITE box (a refused pick clears its "Tuning…") — no toast, no flashing
@@ -14395,7 +14395,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ SATELLITE-BEST 1.9 — THE ONE DIGI MODES MAP's opener (Stuart 11-21: APRS joins the digital spots in the VIEWS maps).
    *  ★ PLACEHOLDER until the b90-maps branch lands that map: today's APRS map (the same stations); the orbit, footprint and
    *  "via ISS" are for the DIGI MODES map's APRS layer — the coordinator repoints THIS ONE FUNCTION at merge. */
-  const openDigiModesMap = (o: { layer: 'aprs'; via?: string; norad?: number; orbit?: [number, number, number][] | null }) => {
+  const openDigiModesMap = (o: { layer: 'aprs'; overlay?: ReturnType<typeof satMapOverlay> | null }) => {
     void o;
     setAprsFocus(''); setAprsMapOpen(true);
   };
@@ -15843,14 +15843,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           packets={satDec === 'aprs' ? aprsLog.map((x) => x.line) : []}
           rxPos={serverPos ?? recvLoc ?? null}
           rxName={instanceName ?? ''}
-          orbit={satOrbit}
+          orbit={satOrbit?.geo ?? null} tcaIdx={satOrbit?.tcaIdx}
           telemetry={satTlm}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
           remindLead={satRemLead}
           onRemind={satRemToggle}
           onRemindLead={(v) => { setSatRemLead(v); AsyncStorage.setItem('vibe.satRemindLead', String(v)).catch(() => {}); }}
           mapOffered={satMapNow}
-          onMap={() => { markInteract(); openDigiModesMap({ layer: 'aprs', via: satViaText(satPickedSat?.name), norad: satPicked?.norad, orbit: satOrbit }); }}
+          onMap={() => { markInteract(); if (satPickedSat) openDigiModesMap({ layer: 'aprs', overlay: satMapOverlay(satPickedSat.name, satOrbit?.geo,
+            { lat: satPickedSat.lat, lon: satPickedSat.lon, altKm: satAltKm(satPickedSat.rangeKm, satPickedSat.el) }) }); }}
           imageRef={decoderImageRef}
           onPick={(norad, i) => {
             markInteract();

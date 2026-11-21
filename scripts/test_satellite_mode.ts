@@ -11,7 +11,7 @@ import {
   SAT_DROP_MSG, txUse, type SatTx,
   satBandLetter, satTxModeLabel, satTxDetail, satRemindOffered, satRemindKeyText, satRemindLead, SatReminders, SAT_REMIND_MAX, satRemindText,
   satRemindWhy, SAT_REMIND_SHARED_WHY, satRemindEnds, parseSatTelemetry, satTelemetryLine, satTelemetryHead, parseSatTrack, globeLabels,
-  globeLabelText, GLOBE_RX_DOT, GLOBE_KEY_TEXT, satMapOffered, satViaText,
+  globeLabelText, GLOBE_RX_DOT, GLOBE_KEY_TEXT, satMapOffered, satViaText, satTelemetryMerge, satTelemetryHex, satMapOverlay,
 } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -240,17 +240,32 @@ console.log('— 1.6 REMIND: the re-check as it fires');
   ok(satRemindEnds({ norad: 25544, tx: 0 }, 'ISS', r) === 'picking this ends ISS' && satRemindEnds(null, undefined, r) === '' && satRemindEnds({ norad: 27607, tx: 0 }, 'SO-50', r) === '', 'two at once: "picking this ends ISS"');
 }
 
-console.log('— 1.3 telemetry values');
+console.log('— 1.3 telemetry values (the server fctlm_status + sat_tlm)');
 {
-  const t = parseSatTelemetry({ frames: 14, good: 13, failed: 1, mode: 'SAFE MODE', values: [
-    { name: 'Battery', value: 8.2134, unit: 'V' }, { name: 'Reboots', value: 14 }, { name: 'PA temp', value: '0x3a2', raw: true },
-    { name: 'Bad', value: NaN }, { value: 3 }, { n: 'Short', v: 1.5, u: 'A' }] })!;
-  ok(t.frames === 14 && t.good === 13 && t.failed === 1 && t.mode === 'SAFE MODE', 'counts and mode');
-  ok(t.values.length === 4 && t.values.map(satTelemetryLine).join(' | ') === 'Battery 8.213 V | Reboots 14 | PA temp 0x3a2 raw | Short 1.5 A', `values with units, raw labelled: ${t.values.map(satTelemetryLine).join(' | ')}`);
-  ok(satTelemetryHead(t) === 'TELEMETRY · 14 frames · 13 good · 1 failed · SAFE MODE' && satTelemetryHead(null) === 'TELEMETRY · waiting for a frame', 'the head line');
-  ok(parseSatTelemetry(null) === null && parseSatTelemetry({ values: 'x' })!.values.length === 0, 'junk is safe');
+  const st = parseSatTelemetry({ sync: true, frames: 14, good: 13, failed: 1, afcHz: -12.5, snrDb: 7.5, centreHz: 1200, auto: true })!;
+  ok(st.frames === 14 && st.good === 13 && st.failed === 1 && st.sync === true && st.values === undefined, 'fctlm_status: the counts only');
+  const fr = parseSatTelemetry({ sat: 'AO-73', format: 'funcube-rt', t: 1763700000, frame: 'RT1', mode: 'Safe', hex: '0a1B2c3d4e5f60718293zz',
+    values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.1349, unit: 'V' }, { k: 'eps.tbat', name: 'Battery temperature', v: 143, unit: 'C', raw: true },
+             { k: 'x', name: 'Bad', v: NaN }, { k: 'y', v: 3 }, { name: 'Text', v: 'ON' }] })!;
+  ok(fr.frames === undefined && fr.sat === 'AO-73' && fr.mode === 'Safe' && fr.at === 1763700000, 'sat_tlm: the frame (no counts)');
+  ok(fr.values!.map(satTelemetryLine).join(' | ') === 'Battery voltage 8.135 V | Battery temperature 143 raw | y 3 | Text ON',
+     `values with units; raw = the count, labelled, no unit: ${fr.values!.map(satTelemetryLine).join(' | ')}`);
+  ok(fr.hex === '0a1B2c3d4e5f60718293', 'hex kept to hex digits');
+  let t = satTelemetryMerge(null, st);
+  ok(satTelemetryHead(t) === 'TELEMETRY · 14 frames · 13 good · 1 failed', `counts first (${satTelemetryHead(t)})`);
+  t = satTelemetryMerge(t, fr);
+  ok(t!.frames === 14 && t!.values.length === 4 && satTelemetryHead(t) === 'TELEMETRY · 14 frames · 13 good · 1 failed · Safe', 'a frame keeps the counts');
+  t = satTelemetryMerge(t, parseSatTelemetry({ frames: 15, good: 14, failed: 1 }));
+  ok(t!.frames === 15 && t!.values.length === 4, 'a status keeps the last frame\'s values');
+  ok(satTelemetryHex(t) === '0a1B2c3d 4e5f6071 8293', 'RAW: the bytes in groups');
+  ok(satTelemetryHead(null) === 'TELEMETRY · waiting for a frame' && satTelemetryHead(satTelemetryMerge(null, { sync: true })) === 'TELEMETRY · in sync — waiting for a good frame', 'waiting');
+  const aprsT = satTelemetryMerge(null, parseSatTelemetry({ sat: 'ISS', format: 'aprs-t', values: [{ k: 'a1', name: 'A1', v: 12 }] }));
+  ok(satTelemetryHead(aprsT) === 'TELEMETRY', 'an APRS T# frame: values, no counts');
+  ok(parseSatTelemetry(null) === null && parseSatTelemetry({ values: 'x' })!.values === undefined, 'junk is safe');
   ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 39444, tx: 0, decoder: 'fctlm' })?.decoder === 'fctlm'
      && parseSatPicked({ type: 'sat', state: 'picked', norad: 44909, tx: 1, decoder: 'cw' })?.decoder === 'cw', 'a pick may attach fctlm / cw (beta90)');
+  const lt = parseSatList({ ...raw, sats: [{ ...raw.sats[0], tx: [{ ...raw.sats[0].tx[0], decoder: 'fctlm' }, { ...raw.sats[0].tx[0], decoder: 'evil' }] }] })!;
+  ok(lt.sats[0].tx[0].decoder === 'fctlm' && lt.sats[0].tx[1].decoder === undefined && satDecoderFor(lt.sats[0].tx[0]) === 'fctlm', 'tx.decoder: the server\'s word first');
 }
 
 console.log('— 1.7 the orbit, dotted');
@@ -270,8 +285,15 @@ console.log('— 1.7 the orbit, dotted');
   const gf = globeScene(640, 300, rx, null, far);
   ok(gf.orbit === '' && gf.tca === null, 'the far side of the world is not drawn');
   ok(globeScene(640, 300, rx, null).orbit === '' && globeScene(640, 300, rx, null, null).tca === null, 'no path (an older server) → no line');
-  const tr = parseSatTrack({ type: 'sat_track', norad: 25544, aos: 1, los: 2, pts: [[0, 1]], geo: [[52, -1, 420], [53, -1, 421], [99, 0, 1], [54, 'x', 1]] })!;
-  ok(tr.geo?.length === 2 && tr.geo[1][2] === 421, 'geo parsed, bad points dropped');
+  const tr = parseSatTrack({ type: 'sat_track', norad: 25544, aos: 1, los: 2, pts: [[0, 1]], geo: [[52, -1, 420], [53, -1, 421], [99, 0, 1], null, [54, 'x', 1], [55, -1, 420]],
+    geoT0: 1000, geoStep: 10, tca: 1010 })!;
+  ok(tr.geo?.length === 6 && tr.geo[1]![2] === 421 && tr.geo[2] === null && tr.geo[3] === null && tr.geo[4] === null, 'geo parsed; null / bad entries stay gaps (index = time)');
+  ok(tr.tcaIdx === 1, 'the server\'s tca → its geo index');
+  const gapped = globeScene(640, 300, rx, null, [...over.slice(0, 20), null, ...over.slice(21)] as any);
+  ok((gapped.orbit.match(/M/g) || []).length === (g.orbit.match(/M/g) || []).length + 1, 'a null entry lifts the pen');
+  const gt = globeScene(640, 300, rx, null, over, 10);
+  const q10 = globeScene(640, 300, rx, { lat: over[10][0], lon: over[10][1], altKm: 420 }).sat!;
+  ok(!!gt.tca && Math.hypot(gt.tca.x - q10.x, gt.tca.y - q10.y) < 1, 'the tick goes where the server\'s tca says');
   ok(parseSatTrack({ type: 'sat_track', norad: 1, aos: 1, los: 2, pts: [] })!.geo === undefined, 'no geo → undefined');
   const big = { type: 'sat_track', norad: 1, aos: 1, los: 2, pts: [], geo: Array.from({ length: 500 }, (_, i) => [i / 10, 0, 400]) };
   ok(parseSatTrack(big)!.geo!.length === 200, 'bounded (200)');
@@ -330,6 +352,10 @@ console.log('— 1.8 labels');
 
 console.log('— 1.9 the MAP key');
 {
+  const ov = satMapOverlay('ISS', [[50, 170, 420], [51, 179, 420], [52, -179, 420], [53, -170, 420], null, [54, -160, 420], [55, -150, 420]], { lat: 51, lon: 0, altKm: 420 });
+  ok(ov.label === 'ISS PASS' && ov.lines?.length === 3 && ov.lines[0].length === 2 && ov.lines[1].length === 2, `the ground track split at the antimeridian and at a gap (${ov.lines?.map((l) => l.length).join('/')})`);
+  ok(!!ov.circles && Math.abs(ov.circles[0].km - 2250) < 60 && ov.points?.[0].label === 'ISS', `the footprint (${ov.circles?.[0].km} km) and the bird`);
+  ok(satMapOverlay('X', null, null).lines === undefined, 'no orbit yet: no line');
   ok(satMapOffered(l.sats[1].tx[2], 1) && !satMapOffered(l.sats[1].tx[2], 0), 'packet: only once a station with a position is heard');
   ok(!satMapOffered(l.sats[1].tx[0], 5) && !satMapOffered(undefined, 5), 'voice / nothing picked: no MAP');
   ok(satViaText('ISS') === 'via ISS' && satViaText('SONATE-2') === 'via SONATE-2', '"via ISS"');

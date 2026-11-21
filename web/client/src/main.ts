@@ -10387,7 +10387,7 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
  *  maps — DIGI MODES · AVIATION · SHIPPING). ★ PLACEHOLDER until the b90-maps branch lands that map: this opens today's APRS
  *  map (the same stations); the orbit, the footprint and the "via ISS" labels in `o` are for the DIGI MODES map's APRS layer
  *  — the coordinator repoints THIS ONE FUNCTION at merge. */
-function openDigiModesMap(o: { layer: 'aprs' } & Partial<SatMapOpen>) {
+function openDigiModesMap(o: SatMapOpen) {
   void o;
   aprsMapOpen();
 }
@@ -14625,7 +14625,7 @@ function initDecoders(host: string, auth: AuthState) {
       decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
-    onSatTlm: (d) => { if (satDec === 'fctlm' && activeDec === 'fctlm') satPanel?.telemetry(parseSatTelemetry(d)); },   // ★★ SATELLITE 1.3
+    onSatTlm: (d) => { if (satDec && activeDec === satDec) satPanel?.telemetry(parseSatTelemetry(d)); },   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);
