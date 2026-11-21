@@ -7666,12 +7666,26 @@ function bgSkimList(kind) {
   const sb = hw && hw.skimBands;
   return sb && Array.isArray(sb[kind]) && sb[kind].length ? sb[kind] : null;
 }
-function bgSkimCentre(b, width) { return b.lo + width / 2; }
-function bgSkimBandAt(kind, width, hz) {
-  const bl = bgSkimList(kind);
-  if (!bl || !(hz > 0)) return null;
-  return bl.filter(function (b) { return Math.abs(bgSkimCentre(b, width) - hz) < 1; })[0] || null;
+/* ★★ V12 beta90 follow-up — SEVERAL POINTS PER BAND (Stuart: "maybe list multiple centre points per band"): the SERVER
+ *  lists each band's windows at every width (b.points["24000"] — vibe_skim_bands.h points(): the segment's tiles from
+ *  the bottom, then the region's practice segments, labelled, e.g. "US RTTY"; 60 m "check your licence"). The page
+ *  computes nothing; only an older server without `points` gets the one rule-centre per band. */
+function bgSkimPoints(kind, width) {
+  const out = [];
+  (bgSkimList(kind) || []).forEach(function (b) {
+    const pts = b.points ? (b.points[String(width)] || []) : [{ hz: b.lo + width / 2 }];
+    pts.forEach(function (q) { out.push({ band: b, hz: q.hz, note: q.note || "" }); });
+  });
+  return out;
 }
+/** The listed point a stored centre is (to the hertz), or null — any other centre is the owner's own. */
+function bgSkimPointAt(kind, width, hz) {
+  if (!(hz > 0)) return null;
+  return bgSkimPoints(kind, width).filter(function (q) { return Math.abs(q.hz - hz) < 1; })[0] || null;
+}
+function bgKhz(hz) { return (hz / 1e3).toFixed(1).replace(/\.0$/, ""); }
+/** "7000–7024 kHz · US RTTY" — a point's window as its option reads. */
+function bgSkimPointLabel(q, width) { return bgKhz(q.hz - width / 2) + "\u2013" + bgKhz(q.hz + width / 2) + " kHz" + (q.note ? " \u00b7 " + q.note : ""); }
 /** Does a window of `width` at `hz` sit inside the capture (the server's save: half-window + 3 kHz − half the width)? */
 function bgSkimFits(hz, width, centre, rate) {
   if (!(centre > 0) || !(rate > 0)) return true;   // ★ no centre or rate yet: every band (the save checks)
@@ -7684,10 +7698,9 @@ function bgSkimOk(kind) {
   try { if (typeof modeBlockSet === "function" && modeBlockSet().has(kind)) return false; } catch (e) { /* no mode list */ }
   return true;
 }
-/** The first band whose window fits this capture (a new skimmer row lands there), or null. */
+/** The first point whose window fits this capture (a new skimmer row lands there), or null. */
 function bgSkimFirstFit(kind, width, centre, rate) {
-  const bl = bgSkimList(kind) || [];
-  return bl.filter(function (b) { return bgSkimFits(bgSkimCentre(b, width), width, centre, rate); })[0] || null;
+  return bgSkimPoints(kind, width).filter(function (q) { return bgSkimFits(q.hz, width, centre, rate); })[0] || null;
 }
 /** The line under a skimmer row: what its window covers, or why it cannot run. */
 function bgSkimHint(v, centre, rate) {
@@ -7697,14 +7710,15 @@ function bgSkimHint(v, centre, rate) {
   if (!bgSkimOk(d.skim)) return { bad: true, text: "The " + what + " skimmer cannot run on this radio" + (String((bgRadio || {}).driver || "") === "icom"
     ? " — an Icom gives one audio channel, and a skimmer needs the radio’s IQ." : " — " + what + " is switched off on it (Modes and decoders).") + " Choose another decoder or remove this VFO." };
   if (!(v.hz > 0)) return { bad: false, text: "Choose a band — or “Own centre…” to type the window’s centre." };
-  const lo = v.hz - d.width / 2, hi = v.hz + d.width / 2;
-  const b = bgSkimBandAt(d.skim, d.width, v.hz);
-  const span = (lo / 1e3).toFixed(1).replace(/\.0$/, "") + "–" + (hi / 1e3).toFixed(1).replace(/\.0$/, "") + " kHz";
+  const q = v.__own ? null : bgSkimPointAt(d.skim, d.width, v.hz);
+  const b = q ? q.band : null;
+  const span = bgKhz(v.hz - d.width / 2) + "–" + bgKhz(v.hz + d.width / 2) + " kHz";
   if (!bgSkimFits(v.hz, d.width, centre, rate))
     return { bad: true, text: (b ? b.name + " " + what + " " : "") + span + " is outside this radio’s window at this RF centre — "
-      + (b ? "choose a band it holds" : "type a centre nearer the RF centre") + ", or move the RF centre." };
-  return { bad: false, text: (b ? b.name + " " + what + " " : "Your own centre: ") + span + " — every " + what + " signal in it, one summary card an hour"
-    + (b ? " (the window starts at the bottom of the band’s " + what + " segment)." : ".") };
+      + (b ? "choose a window it holds" : "type a centre nearer the RF centre") + ", or move the RF centre." };
+  const why = !b ? "." : q.note === "check your licence" ? " \u2014 60 m is allocated country by country: check your licence."
+    : q.note ? " (" + q.note + ", outside the band plan\u2019s " + what + " segment)." : " (part of the band\u2019s " + what + " segment).";
+  return { bad: false, text: (b ? b.name + " " + what + " " : "Your own centre: ") + span + " — every " + what + " signal in it, one summary card an hour" + why };
 }
 /* ★★ The NDB band, as the server has it (vibe_bgdecode_config.h ndbSegment): what a skimmer VFO covers at a centre and a
  *  rate — inside the guard every background VFO keeps from the capture's edge — and the least worth a decoder slot. */
@@ -8298,18 +8312,25 @@ function bgRender() {
       if (sk) v.mode = "usb";
       let fi = null, bp = null, fillBands = null, sp = null, fillSkim = null;
       if (skBands) {
-        if (!(v.hz > 0) && !v.__own) { const f0 = bgSkimFirstFit(sk.skim, sk.width, centreNow(), bgRate); if (f0) v.hz = bgSkimCentre(f0, sk.width); }
-        sp = el("select", { class: "bgSkimPick", "aria-label": "Band", title: "The band — the window starts at the bottom of its " + { cw: "CW", rtty: "RTTY", psk: "PSK" }[sk.skim] + " segment" });
+        if (!(v.hz > 0) && !v.__own) { const f0 = bgSkimFirstFit(sk.skim, sk.width, centreNow(), bgRate); if (f0) v.hz = f0.hz; }
+        sp = el("select", { class: "bgSkimPick", "aria-label": "Band", title: "The band and window \u2014 each band\u2019s " + { cw: "CW", rtty: "RTTY", psk: "PSK" }[sk.skim] + " segment in windows of this width, from its bottom" });
+        /* ★★ V12 beta90 follow-up: the options GROUPED BY BAND (<optgroup>), each a window "7000–7024 kHz", a practice one
+         *  labelled ("7080–7104 kHz · US RTTY"); only windows this capture holds (and the row's own, said to be outside);
+         *  "Own centre…" last. The option's value is the window's centre. */
         fillSkim = function () {
           sp.innerHTML = "";
-          const cur = v.__own ? null : bgSkimBandAt(sk.skim, sk.width, v.hz);
-          const fitsB = function (b) { return bgSkimFits(bgSkimCentre(b, sk.width), sk.width, centreNow(), bgRate); };
-          const list = skBands.filter(function (b) { return fitsB(b) || (cur && b.id === cur.id); });
+          const cur = v.__own ? null : bgSkimPointAt(sk.skim, sk.width, v.hz);
+          const fitsQ = function (q) { return bgSkimFits(q.hz, sk.width, centreNow(), bgRate); };
+          const list = bgSkimPoints(sk.skim, sk.width).filter(function (q) { return fitsQ(q) || (cur && q.hz === cur.hz); });
           if (!cur && !(v.hz > 0) && !v.__own) sp.appendChild(el("option", { value: "" }, list.length ? "Choose a band…" : "No band in this window"));
-          list.forEach(function (b) { sp.appendChild(el("option", { value: b.id }, b.name + (fitsB(b) ? "" : " (outside this window)"))); });
+          let grp = null, gb = null;
+          list.forEach(function (q) {
+            if (q.band !== gb) { gb = q.band; grp = el("optgroup", { label: q.band.name }); sp.appendChild(grp); }
+            grp.appendChild(el("option", { value: String(q.hz) }, bgSkimPointLabel(q, sk.width) + (fitsQ(q) ? "" : " (outside this window)")));
+          });
           sp.appendChild(el("option", { value: "__own" }, "Own centre…"));
-          sp.value = cur ? cur.id : (v.hz > 0 || v.__own) ? "__own" : "";
-          if (sp.value === "__own") v.__own = true;   // ★ a stored centre that is no band's is the owner's own
+          sp.value = cur ? String(cur.hz) : (v.hz > 0 || v.__own) ? "__own" : "";
+          if (sp.value === "__own") v.__own = true;   // ★ a stored centre that is no listed window is the owner's own
         };
         fillSkim();
         repaints.push(fillSkim);
@@ -8375,9 +8396,8 @@ function bgRender() {
       repaints.push(paintHint);
       if (sp) sp.onchange = function () {
         if (sp.value === "__own") { v.__own = true; bgRender(); return; }   // ★ the box appears, holding the centre it had
-        const b = skBands.filter(function (x) { return x.id === sp.value; })[0];
         const wasOwn = !!v.__own;
-        v.__own = false; v.hz = b ? bgSkimCentre(b, sk.width) : 0;
+        v.__own = false; v.hz = parseFloat(sp.value) || 0;
         if (wasOwn) bgRender(); else { fillSkim(); paintHint(); }
       };
       if (bp) bp.onchange = function () {
@@ -8393,11 +8413,14 @@ function bgRender() {
         const nsk = bgSkimDef(v.dec), osk = bgSkimDef(was);
         if (nsk && bgSkimList(nsk.skim)) {
           v.mode = "usb";
-          const ob = osk && osk.skim === nsk.skim && !v.__own ? bgSkimBandAt(osk.skim, osk.width, v.hz) : null;
-          if (ob) v.hz = bgSkimCentre(ob, nsk.width);
+          // ★ the same band's window nearest the old one (40 m 24 kHz 7036 → 48 kHz 7024: 40 m has one window there)
+          const oq = osk && osk.skim === nsk.skim && !v.__own ? bgSkimPointAt(osk.skim, osk.width, v.hz) : null;
+          const nq = oq ? bgSkimPoints(nsk.skim, nsk.width).filter(function (q) { return q.band.id === oq.band.id; })
+                            .sort(function (a, b) { return Math.abs(a.hz - oq.hz) - Math.abs(b.hz - oq.hz); })[0] : null;
+          if (nq) v.hz = nq.hz;
           else if (!(osk && osk.skim === nsk.skim && v.__own)) {
             v.__own = false;
-            const f0 = bgSkimFirstFit(nsk.skim, nsk.width, centreNow(), bgRate); v.hz = f0 ? bgSkimCentre(f0, nsk.width) : 0;
+            const f0 = bgSkimFirstFit(nsk.skim, nsk.width, centreNow(), bgRate); v.hz = f0 ? f0.hz : 0;
           }
           bgRender(); return;
         }
