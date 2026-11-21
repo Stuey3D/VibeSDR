@@ -905,6 +905,7 @@ if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fa
 if npx tsx scripts/test_packet.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 packet: AUTO / 1200 / 9600 / 300, FX.25, IL2P, the frame log (packet.ts)
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
 if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
+if npx tsx scripts/test_spot_ranks.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta90 the gallery's ranking card
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
