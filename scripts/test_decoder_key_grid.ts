@@ -76,7 +76,8 @@ ok(/const advRdsLabel = 'ADV RDS'/.test(appSrc), 'ADV RDS (as on the web) — AD
 
 console.log('▶ VIEWS: every map and picture page is a uniform key, with a line glyph (no colour emoji)');
 ok(!/🗺|🖼/.test(appSrc), 'no 🗺 / 🖼 emoji left on a key in the app');
-ok(/viewKey\('map', 'MAP', 'map'/.test(appSrc), 'the spots MAP has the line map glyph');
+// ★ beta90: the spots MAP is the DIGI MODES map, its label from spotsControls (DIGI MODES) — the line glyph stays
+ok(/viewKey\('map', (?:spotsControls\.mapLabel \|\| )?'MAP', 'map'/.test(appSrc), 'the spots MAP has the line map glyph');
 ok(/viewKey\('owrxmap', 'MAP', 'map', owrxPages\.onMap/.test(appSrc) && /viewKey\('owrxfiles', 'FILES', 'files', owrxPages\.onFiles/.test(appSrc),
    "an OpenWebRX's MAP and FILES are VIEWS keys");
 ok(/\.\.\.serverMapKeys\.map\(/.test(appSrc) && /label: 'HFDL MAP'/.test(appSrc) && /label: 'DIGI MAP'/.test(appSrc) && /label: 'CW MAP'/.test(appSrc),
@@ -90,7 +91,8 @@ ok(/<KeyGrid items=\{viewItems\} grid=\{keyGrid\}/.test(appSrc), 'VIEWS is drawn
      'modeIcons has the map and picture glyphs (one table, both clients)');
   const html = readFileSync(new URL('../web/client/index.html', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
-  ok(/id="mapBtn"[^>]*>MAP<\/button>/.test(html) && !/&#128506;/.test(html), "the web's MAP lost its emoji");
+  // ★ beta90: VIEWS' map key is DIGI MODES (with AVIATION and SHIPPING beside it) — still no emoji
+  ok(/id="mapBtn"[^>]*>DIGI MODES<\/button>/.test(html) && !/&#128506;/.test(html), "the web's MAP (DIGI MODES) lost its emoji");
   ok(/getElementById\('mapBtn'\); if \(b\) addModeIcon\(b, 'map'\)/.test(main), '…and got the line glyph');
 }
 
@@ -139,7 +141,8 @@ ok(/<KeyGrid items=\{keys\} grid=\{keyGrid\} openId=\{openDec\} options=\{openOp
 ok(/VIEWS/.test(app) && /\{ id: 'gallery'/.test(app) && /\{ id: 'transcribe'/.test(app) && /\{ id: 'map'/.test(app), 'VIEWS holds MAP, GALLERY and TRANSCRIBE');
 ok(/placeOptions\(activeDec\)/.test(readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8')), 'the web places the selected decoder\'s settings under its key');
 const html = readFileSync(new URL('../web/client/index.html', import.meta.url), 'utf8');
-ok(/<h2>VIEWS<\/h2>[\s\S]{0,200}id="mapBtn"[\s\S]{0,400}id="galleryBtn"/.test(html), 'the web\'s VIEWS holds MAP and GALLERY');
+ok(/<h2>VIEWS<\/h2>[\s\S]{0,1200}id="mapBtn"[\s\S]{0,400}id="avMapBtn"[\s\S]{0,400}id="shipMapBtn"[\s\S]{0,600}id="galleryBtn"/.test(html),
+   'the web\'s VIEWS holds DIGI MODES, AVIATION, SHIPPING and GALLERY (beta90)');
 ok(!/<h2>DECODED SPOTS<\/h2>/.test(html), 'the web\'s DECODED SPOTS heading is gone');
 
 console.log(`test_decoder_key_grid: ${pass} passed, ${fail} failed`);
