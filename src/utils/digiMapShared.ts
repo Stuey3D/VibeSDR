@@ -60,6 +60,8 @@ export interface DigiAprsPoint {
   /** seconds since it was last heard */
   age: number;
   kind: string; symName: string; comment: string; status: string; km: number | null;
+  /** a weather station's report, as words ("12.3 °C · 81 % RH · wind 14 km/h SW · 1012.4 hPa"); '' when none */
+  wx: string;
   speed: number | null; course: number | null; alt: number | null;
   /** its symbol (tracks.ts aprsIcon — our own SVG) */
   svg: string;
@@ -71,6 +73,21 @@ export function digiSvgOk(s: unknown): string {
   return v.length < 4000 && /^<svg [^]*<\/svg>$/.test(v) && !/<script|<foreignObject|\son\w+\s*=|javascript:|href\s*=/i.test(v) ? v : '';
 }
 /** The APRS list's stations with a position → the map's points (newest first, at most 1000). */
+const C8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+/** ★ An APRS weather report as words — tracks.ts aprsCard's line (the same order and units). */
+export function digiAprsWx(w: any): string {
+  if (!w || typeof w !== 'object') return '';
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const parts: string[] = [];
+  const t = n(w.tempC), h = n(w.hum), ws = n(w.windKmh), wd = n(w.windDir), g = n(w.gustKmh), r = n(w.rain1hMm), p = n(w.hPa);
+  if (t != null) parts.push(`${t.toFixed(1)} °C`);
+  if (h != null) parts.push(`${Math.round(h)} % RH`);
+  if (ws != null) parts.push(`wind ${Math.round(ws)} km/h${wd != null && ws > 0 ? ' ' + C8[Math.round((((wd % 360) + 360) % 360) / 45) % 8] : ''}`);
+  if (g != null) parts.push(`gust ${Math.round(g)}`);
+  if (r != null && r > 0) parts.push(`rain ${r.toFixed(1)} mm/h`);
+  if (p != null) parts.push(`${p.toFixed(1)} hPa`);
+  return parts.join(' · ');
+}
 export function digiAprsPoints(stations: any[] | null | undefined, svgOf: (st: any) => string,
                                trailOf: (key: string) => [number, number][] | undefined, kmOf: (lat: number, lon: number) => number | null): DigiAprsPoint[] {
   if (!Array.isArray(stations)) return [];
@@ -83,7 +100,7 @@ export function digiAprsPoints(stations: any[] | null | undefined, svgOf: (st: a
     out.push({
       key: okTxt(st.key, 40), call: okTxt(st.name || st.from || st.key, 40), lat, lon, age: okNum(st.age, 0, 1e9) ?? 0,
       kind: okTxt(st.kind, 16), symName: okTxt(st.symName, 40), comment: okTxt(st.comment, 120), status: okTxt(st.status, 120),
-      km: kmOf(lat, lon), speed: okNum(st.speed, 0, 5000), course: okNum(st.course, 0, 360), alt: okNum(st.alt, -500, 100000),
+      km: kmOf(lat, lon), wx: okTxt(digiAprsWx(st.wx), 120), speed: okNum(st.speed, 0, 5000), course: okNum(st.course, 0, 360), alt: okNum(st.alt, -500, 100000),
       svg: digiSvgOk(svgOf(st)), trail,
     });
   }

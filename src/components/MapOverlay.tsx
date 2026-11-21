@@ -1834,6 +1834,7 @@ if(KIND==='digi'||KIND==='cw'){
                :L.circleMarker([a.lat,a.lon],{radius:7,color:RIM,weight:1.2,fillColor:'#88CCEE',fillOpacity:0.9,label:'A',labelColor:'#000000'});
       m.addTo(aprsGroup).bindPopup('<div style="font-size:14px;color:#88CCEE;letter-spacing:1px;">'+esc(a.call)+'</div>'
         +'<div style="margin-top:4px;font-size:12px;color:rgba(136,204,238,0.75);">'+esc(a.symName||'APRS')+(a.km!=null?' &bull; '+Math.round(a.km)+' km':'')+'</div>'
+        +(a.wx?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.75);">Weather: '+esc(a.wx)+'</div>':'')
         +(a.comment?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.6);">'+esc(a.comment)+'</div>':''),{maxWidth:220});
     });
     if(aprsWant){var f=aprsPts.find(function(x){return x.key===aprsWant||x.call===aprsWant;});if(f){aprsWant=null;map.setView([f.lat,f.lon],9);}}
@@ -1841,7 +1842,7 @@ if(KIND==='digi'||KIND==='cw'){
   window.__aprsPush=function(json,focus){try{var a=JSON.parse(json);if(!Array.isArray(a))return;
     aprsPts=a.filter(function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));}).slice(0,1000).map(function(x){
       return {key:String(x.key||'').slice(0,40),call:String(x.call||'').slice(0,40),lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),
-        symName:String(x.symName||'').slice(0,40),comment:String(x.comment||'').slice(0,120),km:x.km==null?null:Number(x.km),svg:x.svg,
+        symName:String(x.symName||'').slice(0,40),comment:String(x.comment||'').slice(0,120),wx:String(x.wx||'').slice(0,120),km:x.km==null?null:Number(x.km),svg:x.svg,
         trail:Array.isArray(x.trail)?x.trail.filter(function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));}).slice(-200):[]};});
     if(focus){aprsWant=String(focus).slice(0,40);aprsOn=true;}
     aprsDraw();}catch(e){console.error('aprs push',e);}};

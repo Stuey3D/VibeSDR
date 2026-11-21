@@ -2,7 +2,7 @@
 // `test-ais` / `test-aprs --write-clip` clips), in headless Edge with --mute-audio (tests are silent), at desktop and 390 px:
 //   AIS: the demodulator menu's AIS entry, the full-screen ship map and its list, ships drawn on the map, a row → its card,
 //        the list fitting a phone, EXIT AIS giving the dial back.
-//   APRS: the DECODERS button, the station rows, MAP → the station map with its markers, a station's card.
+//   APRS: the DECODERS button, the station rows, MAP → the DIGI MODES MAP window on its APRS layer (beta90): symbols, the weather card.
 // Screenshots to $TMPDIR/vibesdr-aisaprs-*.png.
 //   VIBESERVER_BIN=…/vibeserver VIBE_AIS_CLIP=…/a.cu8 VIBE_APRS_CLIP=…/b.cu8 node scripts/test-web-ais-aprs.mjs
 import net from 'node:net';
@@ -64,7 +64,7 @@ async function session(tag, clip, centre, freq, mode, run) {
     }
     ok(await until(`!document.getElementById('audioGate') || document.getElementById('audioGate').style.display === 'none' || !document.getElementById('audioGate').isConnected`, 8000), `${tag}: START RADIO pressed`);
     await sleep(2500);
-    await run({ ev, send, shot, until });
+    await run({ ev, send, shot, until, dbg });
   } catch (e) { ok(false, `${tag} driver: ${e}`); }
   finally {
     try { wsC?.close(); } catch {}
@@ -107,7 +107,7 @@ await session('ais', AIS, 162000000, 96100000, 'wfm', async ({ ev, send, shot, u
 });
 
 console.log('── the APRS decoder in the web client ──');
-await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot, until }) => {
+await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot, until, dbg }) => {
   ok(await ev(`(() => { const b = document.querySelector('#decodersPanel [data-dec="aprs"]'); return !!b && !b.hidden; })()`), 'the DECODERS panel offers APRS');
   await ev(`document.querySelector('#decodersPanel [data-dec="aprs"]').click()`);
   ok(await until(`document.getElementById('decTitle')?.textContent === 'APRS'`, 4000), 'the box is APRS');
@@ -115,18 +115,41 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
   ok(/See you at the club/.test(await ev(`document.getElementById('aprsMsgs')?.textContent`) || ''), 'the message is shown');
   ok(/G4ABC-9/.test(await ev(`document.getElementById('aprsLog')?.textContent`) || ''), 'the packet log');
   console.log('   screenshot', await shot('aprs-box'));
-  await ev(`document.getElementById('aprsMapBtn').click()`);
-  ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk').length >= 3`, 20000), `stations on the map: ${await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk').length`)}`);
-  await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow')].find(r => /MB7UH/.test(r.textContent))?.click()`);
-  ok(await until(`(() => { const c = document.querySelector('.trkView:not([hidden]) .vtl-card'); return c && !c.hidden && /Weather/.test(c.textContent) && /1012/.test(c.textContent); })()`, 6000),
-     `the weather station's card: ${await ev(`document.querySelector('.trkView:not([hidden]) .vtl-card')?.textContent?.slice(0, 160)`)}`);
-  console.log('   screenshot', await shot('aprs-map'));
+  // ★★★ beta90 APRS is a LAYER of the ONE DIGI MODES MAP (Stuart, 2026-11-21): MAP opens that map's window on its APRS
+  //     layer — the stations with their symbols and cards, the weather station's report on its card
+  const before = new Set((await fetch(`http://127.0.0.1:${dbg}/json/list`).then((r) => r.json())).map((t) => t.id));
+  await send('Runtime.evaluate', { expression: `document.getElementById('aprsMapBtn').click()`, userGesture: true });
+  let mapT = null;
+  for (let i = 0; i < 40 && !mapT; i++) { await sleep(250); mapT = (await fetch(`http://127.0.0.1:${dbg}/json/list`).then((r) => r.json())).find((t) => t.type === 'page' && !before.has(t.id)); }
+  ok(!!mapT, 'MAP opens the DIGI MODES MAP window');
+  if (mapT) {
+    const mws = new WebSocket(mapT.webSocketDebuggerUrl);
+    let mid = 0; const mp = new Map();
+    mws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && mp.has(m.id)) { mp.get(m.id)(m); mp.delete(m.id); } };
+    await Promise.race([new Promise((r) => { mws.onopen = r; }), sleep(5000)]);
+    const msend = (method, params = {}) => Promise.race([new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); }), sleep(10000).then(() => ({}))]);
+    const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
+    for (let i = 0; i < 40; i++) { if (await mev(`typeof aprs !== 'undefined' && aprs.length >= 3`)) break; await sleep(250); }
+    ok(/Digi Modes Map/.test(await mev(`document.title`) || ''), `…titled the Digi Modes Map (${await mev(`document.title`)})`);
+    ok(await mev(`show.aprs === true && show.spots === false`), 'opened on its APRS layer (the spots layer off until asked)');
+    ok((await mev(`aprs.length`)) >= 3, `stations on the map: ${await mev(`aprs.map(a => a.call).join(' ')`)}`);
+    ok(await mev(`aprs.filter(a => a.svg).length >= 3`), 'each drawn with its APRS symbol (our SVG)');
+    ok(/1012/.test(await mev(`(aprs.find(a => /MB7UH/.test(a.call)) || {}).wx || ''`) || ''), `the weather station's report: ${await mev(`(aprs.find(a => /MB7UH/.test(a.call)) || {}).wx`)}`);
+    ok(/Weather: .*1012/.test(await mev(`aprsCard(aprs.find(a => /MB7UH/.test(a.call)))`) || ''), 'its card says it');
+    ok(await mev(`(() => { const l = document.getElementById('layers'); return !l.hidden && [...l.querySelectorAll('button')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed')).join(',') === 'SPOTS=false,APRS=true'; })()`),
+       `the layer keys: ${await mev(`[...document.getElementById('layers').querySelectorAll('button')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed')).join(',')`)}`);
+    ok(/APRS/.test(await mev(`document.getElementById('legend').textContent`) || ''), 'the legend has APRS');
+    const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+    ok(/km/.test(sc || ''), `a scale bar (${sc})`);
+    const r = await msend('Page.captureScreenshot', { format: 'png' });
+    if (r.result) { const f = path.join(os.tmpdir(), 'vibesdr-aisaprs-aprs-map.png'); fs.writeFileSync(f, Buffer.from(r.result.data, 'base64')); console.log('   screenshot', f); }
+    mws.close();
+    await fetch(`http://127.0.0.1:${dbg}/json/close/${mapT.id}`).catch(() => {});
+  }
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1000);
   ok((await ev(`document.documentElement.scrollWidth`)) <= 390, 'no sideways scroll at 390 px');
   console.log('   screenshot', await shot('aprs-phone'));
-  await ev(`document.querySelector('.trkView:not([hidden]) .exit').click()`);
-  ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), 'CLOSE MAP goes back to the box');
 });
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

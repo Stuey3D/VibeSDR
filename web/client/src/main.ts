@@ -18074,7 +18074,7 @@ function cleanAprs(list) {
     key: okStr(a.key, /[<>&"'\`]/g, 40), call: okStr(a.call, /[<>&"'\`]/g, 40),
     lat: Math.max(-90, Math.min(90, okNum(a.lat))), lon: Math.max(-180, Math.min(180, okNum(a.lon))), age: okNum(a.age),
     kind: okStr(a.kind, /[^A-Za-z0-9 -]/g, 16), symName: okStr(a.symName, /[<>&"'\`]/g, 40),
-    comment: okStr(a.comment, /[<>&"'\`]/g, 120), status: okStr(a.status, /[<>&"'\`]/g, 120),
+    comment: okStr(a.comment, /[<>&"'\`]/g, 120), status: okStr(a.status, /[<>&"'\`]/g, 120), wx: okStr(a.wx, /[<>&"'\`]/g, 120),
     km: a.km == null ? null : Math.round(okNum(a.km)), speed: a.speed == null ? null : okNum(a.speed),
     course: a.course == null ? null : okNum(a.course), alt: a.alt == null ? null : okNum(a.alt), svg: okSvg(a.svg),
     trail: Array.isArray(a.trail) ? a.trail.slice(-200).filter((p) => Array.isArray(p) && isFinite(Number(p[0])) && isFinite(Number(p[1])))
@@ -18321,6 +18321,7 @@ function drawMarkers() {
 function aprsCard(a) {
   const ago = a.age < 90 ? Math.round(a.age) + ' s ago' : a.age < 5400 ? Math.round(a.age / 60) + ' min ago' : Math.round(a.age / 3600) + ' h ago';
   return '<div class="pop"><b>' + esc(a.call) + '</b>' + (a.symName ? ' · ' + esc(a.symName) : '') + '<br>' +
+    (a.wx ? 'Weather: ' + esc(a.wx) + '<br>' : '') +
     (a.comment ? esc(a.comment) + '<br>' : '') + (a.status ? esc(a.status) + '<br>' : '') +
     (a.speed != null ? esc(Math.round(a.speed)) + ' km/h' + (a.course != null ? ' · ' + esc(Math.round(a.course)) + '°' : '') + '<br>' : '') +
     (a.alt != null ? esc(Math.round(a.alt)) + ' m<br>' : '') +

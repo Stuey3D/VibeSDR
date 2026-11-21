@@ -318,6 +318,18 @@ try {
       ok(legend.map((x) => x.m).join(' ') === LEGEND && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
          `the legend lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
       ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
+      // ★★ beta90 THE DIGI MODES MAP: the server's station store answered (the window keys), one layer = no layer keys,
+      //    the scale bar, and the store itself holds the stations this listener's Band run heard (origin live)
+      ok(await mev(`(() => { const w = document.getElementById('wins'); return !!w && !w.hidden && [...w.querySelectorAll('button')].map(b => b.textContent).join(' ') === '1H 24H 7D 30D ALL'; })()`),
+         'beta90: the time window keys (1H 24H 7D 30D ALL) — the server keeps stations');
+      ok(await mev(`document.getElementById('layers').hidden === true`), 'beta90: one layer (no APRS here) draws no layer keys');
+      ok(/VibeSDR — Digi Modes Map/.test(await mev(`document.title`) || ''), 'beta90: titled Digi Modes Map');
+      const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+      ok(/km/.test(sc || ''), `beta90: a scale bar (${sc})`);
+      const st = await fetch(`http://127.0.0.1:${port}/vibeserver/stations.json?window=1h`).then((r) => r.json()).catch(() => null);
+      ok(st && st.total >= 3 && st.stations.every((x) => /^[A-Z0-9/]+$/.test(x.call) && (x.src & 2)), `beta90: /vibeserver/stations.json holds the stations heard, from a listener (${st && st.total} stations, src ${st && [...new Set(st.stations.map((x) => x.src))].join(',')})`);
+      const inc = await fetch(`http://127.0.0.1:${port}/vibeserver/stations.json?window=1h&since=${(st && st.now || 0) + 3600}`).then((r) => r.json()).catch(() => null);
+      ok(inc && inc.count === 0 && inc.total === st.total, `beta90: a live poll (since=) sends only what changed (${inc && inc.count} of ${inc && inc.total})`);
     }
     // ★ On the GPU map the letter rides the circle layer (vibemapgl-compat 'lc-circle-labels'); on the Leaflet fallback (no
     //   WebGL 2 in this headless browser) small DOM letters ride above the circles.
