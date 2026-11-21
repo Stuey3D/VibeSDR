@@ -46,6 +46,7 @@
 #include <string>
 #include <vector>
 
+#include "vibe_station_store.h"
 #include "vibe_navtex_stations.h"
 
 #include <dirent.h>
@@ -676,6 +677,7 @@ public:
         if (dir.empty()) return 0;
         uint64_t n = 0;
         for (const char* f : { "ais-ships.dat" }) { struct stat st{}; if (::stat(itemPath(dir, f).c_str(), &st) == 0 && S_ISREG(st.st_mode)) n += (uint64_t)st.st_size; }
+        n += vibestations::Store::bytesIn(dir);   // ★ V12 beta90 the station store's day files (a 16th of the space at most)
         return n;
     }
     /** Items the gallery holds now. */

@@ -177,6 +177,16 @@
     /* ★ A LOST GPU CONTEXT (backgrounded, memory pressure) is not a dead map: MapLibre restores its own
      *  resources on 'webglcontextrestored'. The host is told either way. */
     map.on('webglcontextlost', () => { if (o.onContextLost) o.onContextLost(); });
+    /* ★★ V12 beta90 A SCALE BAR ON EVERY MAP (Stuart, 2026-11-21). On by default — every host of this renderer gets one
+     *  without having to remember; `scale: false` for a map that must not have one, `scale: 'nautical'` (the marine
+     *  and aviation maps) puts NM under the km. `scalePosition`: 'bottom-left' unless the host's panels sit there. */
+    if (o.scale !== false && ml.ScaleControl) {
+      const pos = o.scalePosition || 'bottom-left';
+      try {
+        map.addControl(new ml.ScaleControl({ maxWidth: 110, unit: 'metric' }), pos);
+        if (o.scale === 'nautical') map.addControl(new ml.ScaleControl({ maxWidth: 110, unit: 'nautical' }), pos);
+      } catch (e) { console.error('vibemapgl: the scale bar could not be added', e); }
+    }
 
     let profile = o.profile || 'directory';
     const ready = (async () => {

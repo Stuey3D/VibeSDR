@@ -364,6 +364,41 @@
   /* ★ Injected once per document, not once per map: two maps on one page would otherwise stack
    *  identical sheets. An unasserted no-op is the bug class this file's palette comment warns
    *  about, so the guard is an explicit id rather than "probably already there". */
+  /* ★★ V12 beta90 A SCALE BAR ON EVERY MAP (Stuart, 2026-11-21) — the GPU map's twin (vibemapgl.js createNow): on by
+   *  default, `scale: false` for none, `scale: 'nautical'` adds NM under the km (marine + aviation), `scalePosition`.
+   *  Leaflet's own control draws the km; it has no nautical unit, so the NM bar is ours, measured the same way (the
+   *  distance across the bar's width at the map's vertical centre), rounded to 1-2-5 steps. */
+  function addScale(map, o) {
+    if (o.scale === false || !L.control || !L.control.scale) return;
+    const pos = (o.scalePosition || 'bottom-left').replace('-', '');
+    try {
+      L.control.scale({ metric: true, imperial: false, maxWidth: 110, position: pos }).addTo(map);
+      if (o.scale !== 'nautical' || !L.Control || !L.DomUtil) return;
+      const Nm = L.Control.extend({
+        options: { position: pos },
+        onAdd(m) {
+          const box = L.DomUtil.create('div', 'leaflet-control-scale');
+          const line = L.DomUtil.create('div', 'leaflet-control-scale-line', box);
+          const upd = () => {
+            const y = m.getSize().y / 2;
+            const metres = m.distance(m.containerPointToLatLng([0, y]), m.containerPointToLatLng([110, y]));
+            const nm = metres / 1852;
+            if (!(nm > 0) || !isFinite(nm)) return;
+            const p = Math.pow(10, Math.floor(Math.log10(nm)));
+            const d = nm / p;
+            const nice = (d >= 5 ? 5 : d >= 2 ? 2 : 1) * p;
+            line.style.width = Math.round(110 * nice / nm) + 'px';
+            line.textContent = (nice < 1 ? nice.toFixed(nice < 0.1 ? 2 : 1) : String(nice)) + ' NM';
+          };
+          m.on('move zoom resize', upd);
+          upd();
+          return box;
+        },
+      });
+      new Nm().addTo(map);
+    } catch (e) { console.error('vibemap: the scale bar could not be added', e); }
+  }
+
   function injectCss(doc) {
     if (doc.getElementById('vibemapCss')) return;
     const st = doc.createElement('style');
@@ -465,6 +500,7 @@
 
     // ★ The sea is a FILL now, not a tile, so the container's own background IS the ocean.
     map.getContainer().style.background = MAP_SEA;
+    addScale(map, o);
 
     /* ★ Painted in this order and never another: cover (what the ground is) -> urban (what was built
      *  on it) -> roads (what joins it). Each one is a correction to the one below, so a town in a

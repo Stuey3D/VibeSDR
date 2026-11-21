@@ -128,21 +128,35 @@ try {
     const tg = await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',')`);
     ok(/^VDL2,ACARS,ADS-B,ADS-C,AIRPORTS$/.test(tg || ''), `the layer keys: ${tg} (no HFDL: nothing heard there)`);
     ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].every(b => b.getAttribute('aria-pressed') === 'true')`), 'every layer on by default (AIRPORTS too)');
-    ok(await until(`document.querySelectorAll('.vtl-mk').length >= 5`, 15000), `aircraft on the map: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
+    // ★★ beta90 the aircraft are the ADS-B layer's (adsblayer.js): its controls, its rings, every aircraft drawn by it
+    const AC = `(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1)`;
+    ok(await until(`${AC} >= 2`, 15000), `beta90: aircraft drawn by the ADS-B layer: ${await ev(AC)}`);
+    ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,LABELS,⌖',
+       `beta90: the ADS-B map's controls on the aviation map (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`)})`);
+    ok(await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk[data-key^="a:"]').length === 0`), 'beta90: no aircraft drawn twice (the track layer has only the stations)');
+    const scale = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .maplibregl-ctrl-scale, .trkView:not([hidden]) .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+    ok(/km/.test(scale || '') && /nm|NM/.test(scale || ''), `beta90: the scale bar, km and NM (${scale})`);
+    // ★★ beta90 a datalink aircraft (no track, no speed): two fixes → it faces the bearing between them and GLIDES there
+    const glide = JSON.parse(await ev(`(() => { const L = window.__vibeAcLayer; const a = { hex: '~abc123', flight: 'TST1', lat: 51.0, lon: -1.0, alt_baro: 35000, sparse: true, seen_pos: 30 };
+      L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0 })]);
+      const s = L.shown().find(x => x.hex === '~abc123'); return JSON.stringify(s || null); })()`) || 'null');
+    ok(glide && Math.abs(glide.track - 90) < 2 && glide.gliding && glide.sparse, `beta90: a sparse aircraft faces east (${glide && glide.track?.toFixed(1)}°) and glides to its new fix (${glide && glide.gliding})`);
     // ★ beta88 the status line counts NOW: radio A's ADS-B is decoding, its three aircraft heard within the minute
     ok(await until(`/\\bADS-B 3\\b/.test(${V}?.querySelector('.st')?.textContent || '') && !/ADS-B:/.test(${V}?.querySelector('.st')?.textContent || '')`, 10000),
        `beta88: the status line counts ADS-B now (${await ev(`${V}?.querySelector('.st')?.textContent`)})`);
-    const mk0 = await ev(`document.querySelectorAll('.vtl-mk').length`);
+    await sleep(4000);   // ★ the next poll gives the layer the real list back (the test aircraft fades)
+    const mk0 = await ev(AC);
     ok(!/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(await ev(`document.body.innerHTML`) || ''), '★ never a message body on the page');
     // the card: which sources heard it
     await ev(`[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === 'a:4CA97B')?.click()`);
-    ok(await until(`/Heard on/.test(document.querySelector('.vtl-card')?.textContent || '') && /ADS-B/.test(document.querySelector('.vtl-card')?.textContent || '') && /VDL2/.test(document.querySelector('.vtl-card')?.textContent || '')`, 6000),
-       `the card names both sources: ${(await ev(`document.querySelector('.vtl-card')?.textContent`) || '').slice(0, 200)}`);
+    const CARD = `document.querySelector('.vsadsb-pop-dark')`;
+    ok(await until(`/Heard on/.test(${CARD}?.textContent || '') && /ADS-B/.test(${CARD}?.textContent || '') && /VDL2/.test(${CARD}?.textContent || '')`, 6000),
+       `the card (the ADS-B layer's) names both sources: ${(await ev(`${CARD}?.textContent`) || '').slice(0, 200)}`);
     // ADS-B off: 400F11 goes, 4CA97B stays
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'ADS-B').click()`);
     ok(await until(`!/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '')`, 6000), 'ADS-B off: 400F11 leaves the list');
     ok(/FR1234/.test(await rowsTxt()), '…4CA97B stays (VDL2 heard it too)');
-    ok(await until(`document.querySelectorAll('.vtl-mk').length < ${mk0}`, 6000), `…and the map (${mk0} → ${await ev(`document.querySelectorAll('.vtl-mk').length`)})`);
+    ok(await until(`${AC} < ${mk0}`, 6000), `…and the map (${mk0} → ${await ev(AC)})`);
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'ADS-B').click()`);
     // AIRPORTS off: the basemap profile
     ok(await ev(`(window.__vibeTrkProfile || 'aero') === 'aero'`), `AIRPORTS on: the 'aero' basemap (${await ev(`window.__vibeTrkProfile`)})`);
@@ -152,7 +166,7 @@ try {
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'AIRPORTS').click()`);
     ok(await until(`window.__vibeTrkProfile === 'aero'`, 4000), 'AIRPORTS back on: aero');
     const key = await ev(`${V}?.querySelector('.trkKey')?.textContent || ''`);
-    ok(/that many sources/.test(key) && /Airports and runways/.test(key) && /from ADS-B/.test(key), `the KEY: ${key.slice(0, 160)}`);
+    ok(/last two fixes/.test(key) && /Airports and runways/.test(key) && /datalink/.test(key), `the KEY (the ADS-B layer's tones): ${key.slice(0, 160)}`);
     console.log('   screenshot', await shot('desktop'));
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await sleep(1200);

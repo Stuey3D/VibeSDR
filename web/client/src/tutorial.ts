@@ -135,7 +135,11 @@ const STEPS: Step[] = [
         + 'are in this menu too; DATALINK opens the AVIATION MAP with the aircraft heard on the ACARS (131 MHz) or VDL2 (136 MHz) channels, '
         + 'the two bands in its top bar, and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
         + 'aircraft once, its card saying which sources heard it, with a layer key for each source, HFDL STATIONS and AIRPORTS (on until you switch '
-        + 'it off); ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft, and SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
+        + 'it off) \u2014 every aircraft drawn as on the ADS-B map: range rings, AUTO and FIT, each one gliding to its new position and pointing '
+        + 'the way it is going; ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft. VIEWS, at the foot of this menu, '
+        // ★★★ V12 beta90 (Stuart, 2026-11-21): VIEWS' three map keys — each only where this server has something for it
+        + 'holds the three maps: DIGI MODES (every station the digital modes, CW and APRS heard, background decoding and every listener, '
+        + 'over the last hour, day, week, month or all of it), AVIATION and SHIPPING \u2014 each only where this server has something for it. SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
         + '(serial, height, climb; pick one for its track), its bands in the top bar. '
         // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md) — replaced SAT and the METEOR LRPT decoder key, 2026-11-20
         + 'SATELLITE lists every satellite\u2019s passes (up now first, each rated EXCELLENT to POOR by how high it climbs, greyed where this receiver cannot hear it); tap one and the '

@@ -1032,6 +1032,8 @@ public:
         int         fftSize = 16384;
         DecoderSlots* slots = nullptr;
         gallery::Store* store = nullptr;
+        /** ★ V12 beta90: the station store every spot goes to (the DIGI MODES MAP, PSK Reporter); null = none (tests). */
+        vibestations::Store* stations = nullptr;
         BgRegistry* registry = nullptr;   ///< ★ the box's priority list (pause the lowest, resume the highest) — see BgRegistry
         double      lat = NAN, lon = NAN;  ///< ★ this server's position, for the FT8 summary's distances (NaN = none)
         std::function<void(const std::string&)> log;
@@ -1132,6 +1134,7 @@ public:
             // ★ An audio tone → RF by the VFO's sideband (DSC names the frequency it heard: 2185.8 USB + 1700 = 2187.5).
             const bool lsbV = c->vfo.mode == "lsb";
             env.rfOfAudio = [dialHz, lsbV](double a) { return lsbV ? dialHz - a : dialHz + a; };
+            env.stations = p_.stations; env.stationOrigin = vibestations::kBackground;
             if (p_.store) {
                 gallery::Store* st = p_.store;
                 const Vfo v = c->vfo; const int pi = p_.profileIdx;

@@ -57,9 +57,9 @@ import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel, type SatMapOpen } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx } from '../../../src/services/satellites';
-import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
+import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
@@ -136,7 +136,8 @@ import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
-import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
+import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
+import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type KnownSignal, type KnownAvail, type DxDialEntry, type SigTagEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
@@ -2286,7 +2287,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       const spotsOff = blockedModes.has('spots');
       const ss = document.getElementById('spotsSection');
       if (ss) ss.hidden = spotsOff;
-      $('mapBtn').hidden = spotsOff;   // ★ V12: the MAP is in VIEWS now, beside GALLERY — the same switch hides it
+      syncViewKeys();   // ★ V12 beta90: VIEWS' three map keys (DIGI MODES hides with spots unless APRS is here)
       if (isPanelOpen('decodersPanel')) queueMicrotask(sizeKeys);
       if (spotsOff && decoders?.spotsEnabled) {
         decoders.setSpots(false);
@@ -8951,7 +8952,6 @@ function dabUiOn() {
    *  old spots (Stuart, 2026-09-19, on the Sony). DAB takes the box whole: a running decoder is stopped
    *  (it would only be decoding the DAB audio), and the spot list, its filters and any SSTV/WEFAX image
    *  are put away. dabUiOff() brings the spot list back if it was on. */
-  if (activeDec === 'aprs') aprsView?.hide();
   if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
   $('spotList').classList.remove('on');
   $('spotFilters').classList.remove('show');
@@ -10041,7 +10041,7 @@ let aisOn = false;
 let aisReport: AisReport | null = null;
 let aisView: TrackView | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
-function trackViewUp(): boolean { return !!(aisView?.open || aprsView?.open); }
+function trackViewUp(): boolean { return !!aisView?.open; }
 function aisReadCap(j: any) {
   if (j?.ais === true) aisCap = { ok: true, why: '' };
   else if (j?.ais === false) {
@@ -10164,7 +10164,8 @@ function avViewOpts() {
   return {
     icon: (it: any) => it._ic, label: (it: any) => it._lb || '', card: (it: any) => it._cd || '',
     labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
-    labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain',
+    labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain', nautical: true,   // ★ beta90 NM on the scale bar
+    aircraft: true,   // ★★ beta90 every aircraft drawn by the ADS-B layer (rings, AUTO / FIT, the glide, heading from its fixes)
     onToggle: (id: string, on: boolean) => {
       avLayers = { ...avLayers, [id]: on };
       try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }
@@ -10184,7 +10185,7 @@ function avListHtml(c: ReturnType<typeof avCompose>, bodies: Map<string, string>
 }
 function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
   v.setToggles(c.toggles, avLayers as Record<string, boolean>);
-  v.setLegend(avLegendHtml(c.present));
+  v.setLegend(avLegendHtml(c.present, true));   // ★ beta90 the aircraft are the ADS-B layer's
   v.setProfile(c.profile);
 }
 function avUiOn() {
@@ -10384,14 +10385,6 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
   decoders.attach(decExt(d), decParams(d), decVfo);
   syncDecButtons();
 }
-/* ★★ SATELLITE-BEST 1.9 — THE ONE DIGI MODES MAP's opener (Stuart 11-21: APRS joins the digital spots in the three VIEWS
- *  maps — DIGI MODES · AVIATION · SHIPPING). ★ PLACEHOLDER until the b90-maps branch lands that map: this opens today's APRS
- *  map (the same stations); the orbit, the footprint and the "via ISS" labels in `o` are for the DIGI MODES map's APRS layer
- *  — the coordinator repoints THIS ONE FUNCTION at merge. */
-function openDigiModesMap(o: SatMapOpen) {
-  void o;
-  aprsMapOpen();
-}
 /** The decoder box's image canvas (#decImgWrap) lent to the SATELLITE window's big box, and home again (null). */
 let satImgHome: { parent: Node; next: Node | null } | null = null;
 function satLendImage(slot: HTMLElement | null) {
@@ -10440,25 +10433,25 @@ function onAvReport(r: AvReport | null) {
 
 /* ★★ APRS'S MAP (V12) — the APRS decoder box's MAP button opens the same full-screen map with the stations heard (their
  *  symbols, a tapped one's track and its card). Closing it goes back to the box; the decoder carries on either way. */
-let aprsView: TrackView | null = null;
 let aprsLast: AprsList | null = null;
 let aprsHz = 144.8e6;
 let aprsStatusExtra = '';   // ★ V12 "· 3 FX.25 · 1 IL2P · …" (packet.ts packetStatusExtra)
 const aprsTrails = new Map<string, [number, number][]>();
-function aprsMapOpen() {
-  if (!aprsView) aprsView = new TrackView({
-    title: 'APRS', exitLabel: 'CLOSE MAP', listTitle: 'STATIONS', onExit: () => aprsView?.hide(),
-    icon: aprsIcon, label: aprsName, card: (st) => aprsCard(st, myPos()),
-    trail: (key, done) => done(aprsTrails.get(key) ?? []),
-  });
-  aprsView.show(myPos());
-  aprsMapRender();
+/* ★★★ V12 beta90 (Stuart, 2026-11-21: "aprs map gets combined with the rest of the digispots"): the box's MAP and a
+ *  station row open the ONE DIGI MODES MAP on its APRS layer (openDigiModesMap — digiMap.ts), the stations with their
+ *  symbols, tracks and cards beside the digital spots. The list updates reach an open map through pushSpotsToMap. */
+function aprsMapOpen(focus = '') { openDigiModesMap({ layer: 'aprs', ...(focus ? { focus } : {}) }); }
+/** The APRS stations with a position, as the digi modes map draws them. */
+function aprsMapPoints() {
+  const me = myPos();
+  return digiAprsPoints(aprsLast?.stations, (st) => aprsIcon(st).html, (k) => aprsTrails.get(k),
+                        (la, lo) => (me ? Math.round(haversineKm(me, { lat: la, lon: lo })) : null));
 }
+/** ★ An APRS update: the open map follows (at most twice a second — a packet burst must not rebuild it per packet). */
+let aprsPushT: ReturnType<typeof setTimeout> | null = null;
 function aprsMapRender() {
-  if (!aprsView?.open) return;
-  const l = aprsLast;
-  const items = l ? l.stations.filter((st) => st.lat != null && st.lon != null && !st.killed) : [];
-  aprsView.update(items, l ? aprsRows(l, myPos()) : '', aprsStatus(l, aprsHz) + (l ? aprsStatusExtra : ''), l ? l.stations.length : 0, myPos());
+  if (!spotsMapWin || aprsPushT) return;
+  aprsPushT = setTimeout(() => { aprsPushT = null; pushSpotsToMap(); }, 500);
 }
 
 /** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
@@ -12943,7 +12936,7 @@ function togglePanel(id: string) {
   closePanels(false);
   if (!open) $(id).classList.add('open');
   // ★★ V12: the decoder panel opens on the band of the dial (HF / VHF / UHF), the far-off decoders dimmed
-  if (!open && id === 'decodersPanel') layoutDecoderBands(spec?.frequency ?? NaN, true);
+  if (!open && id === 'decodersPanel') { layoutDecoderBands(spec?.frequency ?? NaN, true); syncViewKeys(); viewsProbe(); }
 }
 
 /** ★★★ THE CONTROLLER GUIDE (padGuide.ts, 2026-10-19) — from the menu's CONTROLLER GUIDE key and from SELECT on a pad,
@@ -14757,6 +14750,8 @@ function initDecoders(host: string, auth: AuthState) {
   for (const b of Array.from(document.querySelectorAll('#galFilter [data-kind]')) as HTMLElement[]) addModeIcon(b, b.dataset.kind || '');
   for (const id of ['spotsBtn', 'spotsBandBtn']) { const b = document.getElementById(id); if (b) addModeIcon(b, 'spots'); }
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
+  { const b = document.getElementById('avMapBtn'); if (b) addModeIcon(b, 'aircraft'); }   // ★ beta90 VIEWS' AVIATION / SHIPPING keys
+  { const b = document.getElementById('shipMapBtn'); if (b) addModeIcon(b, 'ship'); }
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale';
@@ -14914,7 +14909,9 @@ function initDecoders(host: string, auth: AuthState) {
     }
   };
   spotsBandRender();
-  $('mapBtn').onclick = openSpotsMap;
+  $('mapBtn').onclick = () => openDigiModesMap({ layer: blockedModes.has('spots') ? 'aprs' : 'spots' });
+  $('avMapBtn').onclick = () => avMapOpen(adsbCap?.ok ? 'adsb' : hfdlCap && !avCap?.ok ? 'hfdl' : 'datalink');
+  $('shipMapBtn').onclick = () => { void navMapOpen(aisCap?.ok ? 'ships' : dscCap ? 'dsc' : 'navtex'); };
   $('sfMap').onclick = openSpotsMap;   // ★ the same map, from the spots box's header (syncSpotsMapKey)
   initGallery();   // ★★ V12: the GALLERY key in this menu — see initGallery
   initDxLog();     // ★★★ V12: the DX LOG key beside it — see initDxLog
@@ -15193,7 +15190,7 @@ function renderAprs() {
       + `<span class="a">${rb ? rb + ' km · ' : ''}${escapeHtml(aprsAgo(st.seen))}</span></div>`;
   }).join('');
   for (const el of Array.from(rows.querySelectorAll('.ar')) as HTMLElement[]) {
-    el.onclick = () => { aprsMapOpen(); aprsView?.focus(el.dataset.key || ''); };
+    el.onclick = () => aprsMapOpen(el.dataset.key || '');
     el.onkeydown = (e) => { if (e.key === 'Enter') el.click(); };
   }
   const msgs = l?.messages ?? [];
@@ -15221,7 +15218,6 @@ function aprsColourOf(st: { kind: string; sym: string; speed?: number }): string
 function stopDecoder() {
   try {
     if (activeDec === 'rds') spec?.rdsxLight(false);
-    if (activeDec === 'aprs') aprsView?.hide();
     decoders?.detach();
   } catch (e) { console.error('[decoders] stop', e); }
   activeDec = null;
@@ -15621,7 +15617,6 @@ function showDecBox(what: string) {
   $('aprsMapBtn').style.display = isAprs ? '' : 'none';
   $('hfdlMapBtn').style.display = what === 'hfdl' ? '' : 'none';
   if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
-  else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
   syncCwPlain();   // ★ V12 the EXPLAIN key: CW and RTTY
   const isDsc = what === 'dsc';
@@ -17585,6 +17580,30 @@ function renderSpots() {
   syncSpotsMapKey();
 }
 
+/* ★★★ V12 beta90 VIEWS' THREE MAP KEYS (Stuart, 2026-11-21): DIGI MODES · AVIATION · SHIPPING, each drawn only where this
+ *  server has something for it — a mode it offers, or what its other radios have kept (the shared aircraft table, the
+ *  ship store, the NAVTEX stations in the gallery: asked once when the panel opens). Never a key that opens an empty map
+ *  on a server that cannot fill it (AGENTS.md). */
+let viewsHave = { aircraft: false, ships: false };
+function syncViewKeys(): void {
+  const set = (id: string, on: boolean) => { const b = document.getElementById(id); if (b) b.hidden = !on; };
+  set('mapBtn', !blockedModes.has('spots') || (aprsCap && !blockedModes.has('aprs')));
+  const air = (!!adsbCap?.ok && !blockedModes.has('adsb')) || (!!avCap?.ok && !blockedModes.has('avdata')) || (hfdlCap && !blockedModes.has('hfdl'));
+  set('avMapBtn', air || viewsHave.aircraft);
+  const sea = (!!aisCap?.ok && !blockedModes.has('ais')) || (dscCap && !blockedModes.has('dsc'));
+  set('shipMapBtn', sea || viewsHave.ships);
+}
+let viewsProbed = 0;
+/** ★ What this server's OTHER radios kept (a two-radio server: one on ADS-B, this one on HF) — once a minute at most. */
+function viewsProbe(): void {
+  if (Date.now() - viewsProbed < 60_000) return;
+  viewsProbed = Date.now();
+  void avSharedFetch().then((got) => { if (got && got.aircraft.length) { viewsHave.aircraft = true; syncViewKeys(); } });
+  void navFetch('all').then((nr) => { if (nr && nr.stations.length) { viewsHave.ships = true; syncViewKeys(); } });
+  void fetch(galUrl('/vibeserver/gallery/ais-ships.json?limit=1'), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
+    .then((j) => { if (j && Number(j.total ?? j.count) > 0) { viewsHave.ships = true; syncViewKeys(); } }).catch(() => {});
+}
+
 /** ★★ V12 THE HEADER'S MAP KEY (Stuart, 2026-10-27: "the header needs a map button too"). Drawn while at least one spot
  *  the list shows (the filters applied, as the map applies them) has a grid that places it — the map's own test
  *  (spotsMapPoints: parse, then keep). Before the first located spot there is nothing to show, and a MAP that opens on
@@ -17724,7 +17743,7 @@ function pushSpotsToMap() {
     // ★★ NEVER '*': the window could have navigated somewhere else since it opened, and the spots
     //    would follow it there. '/' (and an http(s) origin, which is the same thing spelled out) means
     //    "only if it is still on this page's origin" — the popup is about:blank and inherits ours.
-    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints() },
+    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay },
                             /^https?:$/.test(location.protocol) ? location.origin : '/');
   } catch { spotsMapWin = null; }      // window went away mid-push
 }
@@ -17758,15 +17777,33 @@ function scheduleMapPrefetch(): void {
   }, 30_000);
 }
 
-function openSpotsMap() {
+/* ★★★ V12 beta90 THE DIGI MODES MAP (docs/v12/DIGI-MODES-MAP.md) — the spots map with LAYERS: SPOTS (this server's
+ *  station store — background decoding and every listener, over 1 H / 24 H / 7 D / 30 D / ALL, polled while it is open —
+ *  merged with this page's live spots) and APRS (the APRS box's stations), and a caller's OVERLAY (the satellite client's
+ *  pass). ONE opener for everything (digiMap.ts openDigiModesMap). Already open: it is told the layer and focus, and
+ *  brought forward — never a second window. */
+let digiOverlay: DigiMapOverlay | null = null;
+function digiMapWindowPref(): string { return digiWindowOf(prefs()['digiMapWindow']); }
+function openDigiModesMapImpl(o: DigiMapOpts = {}) {
+  digiOverlay = o.overlay === undefined ? digiOverlay : digiOverlayClean(o.overlay);
+  const layer = o.layer === 'aprs' ? 'aprs' : 'spots';
+  if (spotsMapWin && !spotsMapWin.closed) {
+    try {
+      spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay, layer, focus: o.focus || '' },
+                              /^https?:$/.test(location.protocol) ? location.origin : '/');
+      spotsMapWin.focus();
+      return;
+    } catch { spotsMapWin = null; }
+  }
   const w = window.open('', '_blank');
   if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
   spotsMapWin = w;
+  const win = o.window ? digiWindowOf(o.window) : digiMapWindowPref();
   // ★ The renderer source comes with the map, not with the page (see the import note at the top).
   //   Fetched even when the GPU map is on offer: the window falls back to it if MapLibre fails there.
   void Promise.all([probeMapGL(), loadVibemapSource()]).then(([kit, m]) => {
     if (w.closed) return;
-    w.document.write(spotsMapHtml(kit, m.VIBEMAP_JS));
+    w.document.write(spotsMapHtml(kit, m.VIBEMAP_JS, { layer, focus: o.focus || '', window: win }));
     w.document.close();
   }).catch((e) => {
     // ★ A dropped link while the map's code was on its way. Say so in the window that is open,
@@ -17779,9 +17816,22 @@ function openSpotsMap() {
   });
 }
 
-function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string): string {
+/** The old name: the spots map is the DIGI MODES MAP, on its SPOTS layer. */
+function openSpotsMap() { openDigiModesMap({ layer: 'spots' }); }
+/** ★ The map window says which time window its viewer picked: remembered for the next opening. */
+addEventListener('message', (ev) => {
+  if (!spotsMapWin || ev.source !== spotsMapWin || !ev.data || ev.data.type !== 'vibesdr-digimap-window') return;
+  savePref('digiMapWindow', digiWindowOf(ev.data.window));
+});
+setDigiModesMapOpener(openDigiModesMapImpl);
+
+function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: 'spots' | 'aprs'; focus: string; window: string } = { layer: 'spots', focus: '', window: '24h' }): string {
   const me = myPos();
   const pts = spotsMapPoints();
+  const aprsPts = aprsMapPoints();
+  // ★ This server's station store (vibe_station_store.h), absolute — the window is about:blank. readAuthUrl: a private
+  //   gallery's stations need the owner's read ticket, as the gallery's own requests do.
+  const srvUrl = /^https?:$/.test(location.protocol) ? new URL(galUrl('/vibeserver/stations.json'), location.href).href : '';
 
   // Closing tags assembled at runtime — a literal </script> or </style> here would
   // terminate the page's OWN inline <script> when the bundle is inlined.
@@ -17796,7 +17846,7 @@ function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string): string {
 <script src="${mapglVendor(kit.base, 'vibemapgl-compat.js')}">${ES}` : '';
   const safe = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
 
-  return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digital Spots Map</title>
+  return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digi Modes Map</title>
 ${glHead}
 <style>
   :root{--amber:#ffb833;--dim:rgba(255,160,0,0.45);--bg:rgba(8,6,2,0.94);
@@ -17847,12 +17897,26 @@ ${glHead}
   .maplibregl-ctrl-group{background:var(--bg);border:1px solid var(--bdr)}
   .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:.8}
   .maplibregl-ctrl-top-left{top:0;left:285px}
+  /* ★ beta90 the scale bar clear of the stats column (vibemapgl.js / vibemap.js draw it bottom-left) */
+  .maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:285px}
+  .maplibregl-ctrl-scale{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
+  #m .leaflet-control-scale-line{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
+  /* ★ beta90 the layers (SPOTS / APRS / a caller's overlay) and the time window */
+  #layers,#wins{display:inline-flex;gap:4px;align-items:center}
+  #wins button,#layers button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);
+    border-radius:4px;padding:2px 7px;cursor:pointer}
+  #wins button[aria-pressed="true"],#layers button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
+  #wins[hidden],#layers[hidden]{display:none}
+  @media (max-width:640px){#stats{width:200px}.maplibregl-ctrl-top-left{left:220px}.maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:220px}
+    #top{flex-wrap:wrap;gap:8px}}
   .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:var(--dim);font-size:9px}
   .maplibregl-ctrl-attrib a{color:var(--dim)}
 ${ST}
 <div id="wrap">
   <div id="top">
-    <span id="count">0</span><span style="color:var(--dim)">spots</span>
+    <span id="count">0</span><span style="color:var(--dim)" id="countWhat">stations</span>
+    <span id="layers" role="group" aria-label="Layers" hidden></span>
+    <span id="wins" role="group" aria-label="Time window" hidden></span>
     <label><input type="checkbox" id="tStats" checked>Stats</label>
     <label><input type="checkbox" id="tSummary" checked>Summary</label>
     <label><input type="checkbox" id="tLegend" checked>Legend</label>
@@ -17870,14 +17934,41 @@ ${ST}
 <script>
 // ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
 //    procedural code over a const, which is exactly why it could never update.
-let spots = ${safe(pts)};
+let spots = [];
+// ★★ beta90 THE DIGI MODES MAP's data: this page's LIVE spots (pushed by the opener), this server's STORED stations
+//    (polled from the station store — every radio, background decoding and listeners), APRS (pushed), an OVERLAY.
+let live = ${safe(pts)};
+let aprs = ${safe(aprsPts)};
+let overlay = ${safe(digiOverlay)};
+const SRV = ${safe(srvUrl)};
+const WINDOWS = ${safe(DIGI_WINDOWS)};
+let win = ${safe(open.window)};
+const FOCUS0 = ${safe(open.focus)};
+let show = { spots: ${safe(open.layer !== 'aprs')}, aprs: ${safe(open.layer === 'aprs')}, overlay: true };
+let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
+const STYLE = ${safe(DIGI_MODE_STYLE)};
 ${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (src/utils/spotTime.ts)
 const me = ${safe(me)};
 // ★ V12: the MODES' colours and letters (src/utils/digiModes.ts), for the legend and the BY MODE bars — the markers carry
 //   their own (spotsMapPoints). The rim keeps pale fills readable on a light map.
 const MODES = ${safe(spotModes.map((m) => ({ m, ...digiModeStyle(m) })))};
 const RIM = ${safe(DIGI_MARKER_RIM)};
-function modeColour(m) { for (const x of MODES) if (x.m === m) return x.colour; return null; }
+function modeColour(m) { for (const x of MODES) if (x.m === m) return x.colour; const st = styleOf(m); return st ? st.colour : null; }
+// ★ src/utils/digiModes.ts digiModeFamily / digiModeStyle, for a stored station of any mode (CW, RTTY … grey + a letter)
+const FAMS = Array.from(new Set(MODES.map((x) => x.m).concat(Object.keys(STYLE)))).map((x) => String(x).toUpperCase());
+function famOf(mode) {
+  const m = String(mode || '').toUpperCase();
+  if (FAMS.indexOf(m) >= 0) return m;
+  for (const k of FAMS) if (m.indexOf(k + '-') === 0 || (m.indexOf(k) === 0 && /^[0-9]+$/.test(m.slice(k.length)))) return k;
+  return m;
+}
+function styleOf(mode) {
+  const m = String(mode || '').toUpperCase();
+  if (STYLE[m]) return STYLE[m];
+  const f = famOf(m);
+  if (STYLE[f]) return STYLE[f];
+  return { colour: '#9E9E9E', ink: '#000000', letter: (m.match(/[A-Z0-9]/) || ['?'])[0] };
+}
 // ★ The GPU map's kit, from the page that opened this one: where /mapgl/ is, the style, and whether
 //   the detail pack is installed. null = the Leaflet map.
 const GL = ${kit ? safe(kit) : 'null'};
@@ -17930,7 +18021,144 @@ function cleanSpots(list) {
     };
   });
 }
-spots = cleanSpots(spots);
+live = cleanSpots(live);
+
+/* ★★ beta90 THE STORED STATIONS (vibe_station_store.h /vibeserver/stations.json): one entry per call over the window,
+ *  cleaned to the same allow-lists as a live spot. A station heard without a grid (CW, PSK, RTTY — no locator on air)
+ *  has no place on the map: it is counted ("heard without a locator"), never placed at a guessed spot. */
+function cleanStations(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const s of list.slice(0, 6000)) {
+    if (!s || typeof s !== 'object') continue;
+    const callsign = okStr(s.call, /[^A-Za-z0-9/\-]/g, 16);
+    if (!callsign) continue;
+    const mode = okStr(s.mode, /[^A-Za-z0-9+-]/g, 12);
+    const st = styleOf(mode);
+    const placed = s.lat != null && s.lon != null && isFinite(Number(s.lat)) && isFinite(Number(s.lon));
+    out.push({
+      callsign: callsign, grid: okStr(s.grid, /[^A-Za-z0-9]/g, 8), mode: mode, fam: famOf(mode),
+      band: okStr(s.band, /[^A-Za-z0-9]/g, 8), snr: okNum(s.snr), frequency: okNum(s.freq), timestamp: okNum(s.last) * 1000,
+      first: okNum(s.first) * 1000, count: Math.max(0, Math.round(okNum(s.count))), src: okNum(s.src),
+      modes: Array.isArray(s.modes) ? s.modes.slice(0, 8).map((m) => okStr(m, /[^A-Za-z0-9+-]/g, 12)) : [],
+      bands: Array.isArray(s.bands) ? s.bands.slice(0, 8).map((m) => okStr(m, /[^A-Za-z0-9]/g, 8)) : [],
+      lat: placed ? Math.max(-90, Math.min(90, okNum(s.lat))) : null, lon: placed ? Math.max(-180, Math.min(180, okNum(s.lon))) : null,
+      country: okStr(s.country, /[<>&"'\`]/g, 40), km: s.km == null ? null : Math.round(okNum(s.km)),
+      colour: okColour(st.colour), letter: okStr(st.letter, /[^A-Za-z0-9?]/g, 1), ink: okColour(st.ink), stored: true,
+    });
+  }
+  return out;
+}
+function winSec() { return win === '1h' ? 3600 : win === '24h' ? 86400 : win === '7d' ? 8 * 86400 : win === '30d' ? 31 * 86400 : 0; }
+/* ★ STORED + LIVE, each station once: the newer report wins the marker (its mode, band, SNR, time); a stored station
+ *  keeps its count and its modes. Live spots are this page's own, all recent, and honour the window too. */
+function mergeSpots() {
+  const by = new Map();
+  for (const s of stored.values()) by.set(s.callsign, s);
+  const nowMs = srvNow ? srvNow * 1000 : Date.now();
+  const w = winSec();
+  for (const s of live) {
+    if (w && s.timestamp && s.timestamp < nowMs - w * 1000) continue;
+    const o = by.get(s.callsign);
+    if (!o) { by.set(s.callsign, s); continue; }
+    if ((s.timestamp || 0) >= (o.timestamp || 0)) {
+      const m = Object.assign({}, o, s, { count: o.count, modes: o.modes, bands: o.bands, stored: true });
+      if (m.modes && m.modes.indexOf(s.mode) < 0 && m.modes.length < 8) m.modes = m.modes.concat([s.mode]);
+      by.set(s.callsign, m);
+    }
+  }
+  const all = Array.from(by.values());
+  unplaced = all.filter((s) => s.lat == null || s.lon == null).length;
+  spots = all.filter((s) => s.lat != null && s.lon != null);
+}
+mergeSpots();
+
+/* ★★ APRS (the box's stations, pushed by the opener) — cleaned again here, every field. The symbol is our own SVG
+ *  (tracks.ts aprsIcon); anything else in its place is dropped for the plain marker. */
+function okSvg(v) {
+  const x = String(v == null ? '' : v);
+  return x.length < 4000 && /^<svg [^]*<\\/svg>$/.test(x) && !/<script|<foreignObject|\\son\\w+\\s*=|javascript:|href\\s*=/i.test(x) ? x : '';
+}
+function cleanAprs(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 1000).filter((a) => a && typeof a === 'object' && isFinite(Number(a.lat)) && isFinite(Number(a.lon))).map((a) => ({
+    key: okStr(a.key, /[<>&"'\`]/g, 40), call: okStr(a.call, /[<>&"'\`]/g, 40),
+    lat: Math.max(-90, Math.min(90, okNum(a.lat))), lon: Math.max(-180, Math.min(180, okNum(a.lon))), age: okNum(a.age),
+    kind: okStr(a.kind, /[^A-Za-z0-9 -]/g, 16), symName: okStr(a.symName, /[<>&"'\`]/g, 40),
+    comment: okStr(a.comment, /[<>&"'\`]/g, 120), status: okStr(a.status, /[<>&"'\`]/g, 120), wx: okStr(a.wx, /[<>&"'\`]/g, 120),
+    km: a.km == null ? null : Math.round(okNum(a.km)), speed: a.speed == null ? null : okNum(a.speed),
+    course: a.course == null ? null : okNum(a.course), alt: a.alt == null ? null : okNum(a.alt), svg: okSvg(a.svg),
+    trail: Array.isArray(a.trail) ? a.trail.slice(-200).filter((p) => Array.isArray(p) && isFinite(Number(p[0])) && isFinite(Number(p[1])))
+      .map((p) => [Math.max(-90, Math.min(90, Number(p[0]))), Math.max(-180, Math.min(180, Number(p[1])))]) : [],
+  }));
+}
+aprs = cleanAprs(aprs);
+/* ★ A caller's OVERLAY (digiMap.ts DigiMapOverlay — the satellite client's pass): numbers and short labels only. */
+function cleanOverlay(o) {
+  if (!o || typeof o !== 'object') return null;
+  const ll = (p) => (Array.isArray(p) && isFinite(Number(p[0])) && isFinite(Number(p[1])) ? [Math.max(-90, Math.min(90, Number(p[0]))), Math.max(-540, Math.min(540, Number(p[1])))] : null);
+  const lines = Array.isArray(o.lines) ? o.lines.slice(0, 16).map((l) => (Array.isArray(l) ? l.slice(0, 2000).map(ll).filter(Boolean) : [])).filter((l) => l.length >= 2) : [];
+  const circles = Array.isArray(o.circles) ? o.circles.slice(0, 16).filter((c) => c && isFinite(Number(c.lat)) && isFinite(Number(c.lon)) && isFinite(Number(c.km)))
+    .map((c) => ({ lat: Number(c.lat), lon: Number(c.lon), km: Math.max(0, Math.min(20000, Number(c.km))) })) : [];
+  const points = Array.isArray(o.points) ? o.points.slice(0, 500).filter((p) => p && isFinite(Number(p.lat)) && isFinite(Number(p.lon)))
+    .map((p) => ({ lat: Number(p.lat), lon: Number(p.lon), label: okStr(p.label, /[<>&"'\`]/g, 32) })) : [];
+  if (!lines.length && !circles.length && !points.length) return null;
+  return { label: okStr(o.label, /[<>&"'\`]/g, 24) || 'OVERLAY', lines: lines, circles: circles, points: points,
+           colour: /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(String(o.colour || '')) ? String(o.colour) : '#88CCEE' };
+}
+overlay = cleanOverlay(overlay);
+
+/* ★★ THE STORE, POLLED WHILE THIS WINDOW IS OPEN: the whole window on opening and on a window change, then every 15 s
+ *  only the calls heard since (?since=), merged in — so the map keeps up with background decoding and every listener,
+ *  not just this page. An older server (no store) answers 404: no window control, this page's live spots only. */
+let polling = false, pollT = null;
+async function fetchStations(full) {
+  if (!SRV || polling) return;
+  polling = true;
+  try {
+    const q = (SRV.indexOf('?') >= 0 ? '&' : '?') + 'window=' + encodeURIComponent(win) + (!full && srvNow ? '&since=' + (srvNow - 30) : '');
+    const r = await fetch(SRV + q, { cache: 'no-store' });
+    if (!r.ok) { if (full) { srvOk = false; stored = new Map(); } return; }
+    const j = await r.json();
+    if (!j || j.off) { srvOk = false; stored = new Map(); return; }
+    srvOk = true;
+    if (full) stored = new Map();
+    for (const s of cleanStations(j.stations)) stored.set(s.callsign, s);
+    srvNow = okNum(j.now) || Math.round(Date.now() / 1000);
+    // ★ a live poll: the ones that aged out of a sliding window go
+    const w = winSec();
+    if (w) for (const [k, s] of stored) if (s.timestamp < (srvNow - w) * 1000) stored.delete(k);
+  } catch (e) { /* a dropped poll: the next one catches up */ }
+  finally { polling = false; mergeSpots(); paintChrome(); render(); }
+}
+function schedulePoll() {
+  clearTimeout(pollT);
+  pollT = setTimeout(() => { if (document.visibilityState === 'visible') fetchStations(false).then(schedulePoll); else schedulePoll(); }, 15000);
+}
+/* ★ THE CHROME: a layer key only for a layer that has something (or that the map was opened on — never a dead key; one
+ *  layer alone draws no keys), and the time window only where this server keeps stations. */
+function paintChrome() {
+  const lay = document.getElementById('layers');
+  const have = [];
+  if (show.spots || spots.length || srvOk) have.push(['spots', 'SPOTS']);
+  if (show.aprs || aprs.length) have.push(['aprs', 'APRS']);
+  if (overlay) have.push(['overlay', overlay.label]);
+  lay.hidden = have.length < 2;
+  lay.innerHTML = have.map((h) => '<button type="button" data-layer="' + esc(h[0]) + '" aria-pressed="' + (show[h[0]] ? 'true' : 'false') + '">' + esc(h[1]) + '</button>').join('');
+  for (const b of lay.querySelectorAll('button')) b.onclick = () => {
+    const k = b.dataset.layer; show[k] = !show[k]; paintChrome(); render();
+  };
+  const ws = document.getElementById('wins');
+  ws.hidden = !srvOk || !show.spots;
+  ws.innerHTML = WINDOWS.map((w) => '<button type="button" data-win="' + esc(w.id) + '" title="' + esc(w.words) + '" aria-pressed="' + (w.id === win ? 'true' : 'false') + '">' + esc(w.label) + '</button>').join('');
+  for (const b of ws.querySelectorAll('button')) b.onclick = () => {
+    if (b.dataset.win === win) return;
+    win = b.dataset.win;
+    try { if (window.opener) window.opener.postMessage({ type: 'vibesdr-digimap-window', window: win }, OPENER_ORIGIN); } catch (e) { /* the opener went */ }
+    paintChrome();
+    fetchStations(true);
+  };
+}
 
 /* ★★★ preferCanvas IS AN AUDIO FIX, WHICH IS NOT WHERE ANYONE WOULD LOOK FOR ONE. This map is a
  *     SAME-ORIGIN window.open, so it shares its main thread with the page that is playing the
@@ -17981,7 +18209,7 @@ function ensureVibeMap() {
  *    server of its own — all three from web/mapkit/vibemap.js via gen-vibemap-source.mjs. */
 
 // ★ Filled by boot below: the GPU adapter's L, or Leaflet's. Everything that draws waits for it.
-let L = null, map = null, spotLayer = null, vm = null;
+let L = null, map = null, spotLayer = null, aprsLayer = null, overlayLayer = null, vm = null;
 
 /* ★★★ THE GPU MAP FIRST — every file from the server that opened this window (GL.base). The
  *     adapter (vibemapgl-compat.js) answers the same L.map / circleMarker / circle / layerGroup
@@ -18044,6 +18272,9 @@ function setupMap() {
   map = L.map('m', { worldCopyJump: true, preferCanvas: true });
   if (!vm) map.setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
   spotLayer = L.layerGroup().addTo(map);
+  // ★ beta90 the other layers, each its own group so a toggle or a redraw touches only it
+  overlayLayer = L.layerGroup().addTo(map);
+  aprsLayer = L.layerGroup().addTo(map);
   if (me) {
     // ★ The receiver is the app's little house (Stuart, 2026-09-28), not a red dot — the same icon on
     //   every map, anchored at its doorstep.
@@ -18065,6 +18296,9 @@ function radius(snr) {
 function drawMarkers() {
   if (!spotLayer) return;                        // the map is still loading; render() runs again then
   spotLayer.clearLayers();
+  drawAprs();
+  drawOverlay();
+  if (!show.spots) return;
   for (const s of spots) {
     // ★★ V12: the MODE's colour, a dark rim, and (on the GPU map) the mode's LETTER inside — colour is never the only cue.
     L.circleMarker([s.lat, s.lon], {
@@ -18075,7 +18309,11 @@ function drawMarkers() {
       (s.country ? esc(s.country) + '<br>' : '') + esc(s.grid) +
       (s.km != null ? ' · ' + esc(s.km) + ' km' : '') + '<br>' +
       esc(s.mode) + ' · ' + esc(s.band) + ' · ' + (s.snr > 0 ? '+' : '') + esc(s.snr) + ' dB<br>' +
-      esc((s.frequency / 1e6).toFixed(3)) + ' MHz<br>' + esc(fmtSpotTime(s.timestamp)) + ' UTC</div>');
+      esc((s.frequency / 1e6).toFixed(3)) + ' MHz<br>' + esc(fmtSpotTime(s.timestamp)) + ' UTC' +
+      // ★ beta90 a stored station: how often, which modes and bands, since when (the window's)
+      (s.stored && s.count ? '<br>Heard ' + esc(s.count) + '×' + (s.modes && s.modes.length > 1 ? ' · ' + esc(s.modes.join(' ')) : '') +
+        (s.bands && s.bands.length > 1 ? ' · ' + esc(s.bands.join(' ')) : '') +
+        (s.first ? '<br>First ' + esc(new Date(s.first).toISOString().slice(0, 16).replace('T', ' ')) + ' UTC' : '') : '') + '</div>');
   }
   // ★★ THE LETTER ON THE LEAFLET FALLBACK (no WebGL 2): its canvas circles cannot carry text, so the newest 200 markers get
   //    a small non-interactive letter above them — a mode is never told by colour alone. Capped, because each is a DOM
@@ -18090,13 +18328,60 @@ function drawMarkers() {
     }
   }
 }
+/* ★★ beta90 APRS: each station its symbol (our own SVG) — or a cyan "A" where it has none — its track, and its card. */
+function aprsCard(a) {
+  const ago = a.age < 90 ? Math.round(a.age) + ' s ago' : a.age < 5400 ? Math.round(a.age / 60) + ' min ago' : Math.round(a.age / 3600) + ' h ago';
+  return '<div class="pop"><b>' + esc(a.call) + '</b>' + (a.symName ? ' · ' + esc(a.symName) : '') + '<br>' +
+    (a.wx ? 'Weather: ' + esc(a.wx) + '<br>' : '') +
+    (a.comment ? esc(a.comment) + '<br>' : '') + (a.status ? esc(a.status) + '<br>' : '') +
+    (a.speed != null ? esc(Math.round(a.speed)) + ' km/h' + (a.course != null ? ' · ' + esc(Math.round(a.course)) + '°' : '') + '<br>' : '') +
+    (a.alt != null ? esc(Math.round(a.alt)) + ' m<br>' : '') +
+    (a.km != null ? esc(a.km) + ' km · ' : '') + 'APRS · heard ' + esc(ago) + '</div>';
+}
+function drawAprs() {
+  if (!aprsLayer) return;
+  aprsLayer.clearLayers();
+  if (!show.aprs) return;
+  for (const a of aprs) {
+    if (a.trail && a.trail.length >= 2) L.polyline(a.trail, { color: '#88CCEE', weight: 1.5, opacity: 0.7 }).addTo(aprsLayer);
+    const m = a.svg
+      ? L.marker([a.lat, a.lon], { icon: L.divIcon({ html: a.svg, className: 'aprsMk', iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -10] }) })
+      : L.circleMarker([a.lat, a.lon], { radius: 7, color: RIM, weight: 1.2, fillColor: '#88CCEE', fillOpacity: 0.9, label: 'A', labelColor: '#000000' });
+    m.addTo(aprsLayer).bindPopup(aprsCard(a));
+  }
+}
+/* ★ A caller's overlay (the satellite client's pass): its track, footprint and points. */
+function drawOverlay() {
+  if (!overlayLayer) return;
+  overlayLayer.clearLayers();
+  if (!overlay || !show.overlay) return;
+  const c = overlay.colour;
+  for (const l of overlay.lines) L.polyline(l, { color: c, weight: 2, opacity: 0.85 }).addTo(overlayLayer);
+  for (const k of overlay.circles) L.circle([k.lat, k.lon], { radius: k.km * 1000, color: c, weight: 1.5, fill: true, fillColor: c, fillOpacity: 0.08 }).addTo(overlayLayer);
+  for (const p of overlay.points) L.circleMarker([p.lat, p.lon], { radius: 6, color: RIM, weight: 1.2, fillColor: c, fillOpacity: 0.95 })
+    .addTo(overlayLayer).bindPopup('<div class="pop"><b>' + esc(p.label) + '</b></div>');
+}
+/* ★ OPENED ON SOMETHING (an APRS station row, a call): centred on it, once it is there. */
+let focusKey = FOCUS0;
+function focusOnce() {
+  if (!focusKey || !map) return;
+  const a = aprs.find((x) => x.key === focusKey || x.call === focusKey);
+  const s = a ? null : spots.find((x) => x.callsign === focusKey);
+  const p = a || s;
+  if (!p) return;
+  focusKey = '';
+  fitted = true;
+  map.setView([p.lat, p.lon], 9);
+}
 // ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
 //     from wherever the user had panned or zoomed, every fifteen seconds as the next FT8 cycle
 //     lands — which would make live updating worse than the snapshot it replaces.
 let fitted = false;
 function fitOnce() {
+  focusOnce();
   if (fitted || !map) return;
-  const all = spots.map(s => [s.lat, s.lon]);
+  // ★ beta90 the layers shown (APRS opened on APRS fits its stations, not the world's spots)
+  const all = (show.spots ? spots.map(s => [s.lat, s.lon]) : []).concat(show.aprs ? aprs.map(a => [a.lat, a.lon]) : []);
   if (me) all.push([me.lat, me.lon]);
   if (all.length > 1) { map.fitBounds(all, { padding: [60, 60] }); fitted = true; }
 }
@@ -18129,9 +18414,12 @@ function barList(counts, colourFor, limit) {
 // ★ Everything below reads the spots list, so it all has to live in here to be re-runnable.
 // (No backticks in this comment: it sits inside a template literal and would end the string.)
 function render() {
-document.getElementById('count').textContent = String(spots.length);
-document.getElementById('empty').textContent = spots.length
-  ? '' : 'No spots with a grid yet — leave DIGITAL SPOTS running.';
+const shown = (show.spots ? spots.length : 0) + (show.aprs ? aprs.length : 0);
+document.getElementById('count').textContent = String(shown);
+document.getElementById('countWhat').textContent = shown === 1 ? 'station' : 'stations';
+document.getElementById('empty').textContent = shown ? ''
+  : show.aprs && !show.spots ? 'No APRS station with a position yet — leave the APRS decoder running.'
+  : 'No stations with a locator in ' + (WINDOWS.find((w) => w.id === win) || { words: 'this window' }).words + (srvOk ? '' : ' yet') + ' — leave DIGITAL SPOTS running.';
 drawMarkers();
 fitOnce();
 let html = '';
@@ -18170,8 +18458,15 @@ if (withKm.length) {
 html += '<div class="sect">TOP COUNTRIES</div>' + barList(tally(s => s.country), null, 10);
 html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.fam || s.mode), (m) => modeColour(m), 10);
 html += '<div class="sect">BY BAND</div>' + barList(tally(s => s.band), null, 12);
+if (show.aprs && aprs.length) {
+  const ak = aprs.filter((a) => a.km != null).sort((a, b) => b.km - a.km);
+  html += '<div class="sect">APRS</div><div class="row"><span>Stations</span><b>' + aprs.length + '</b></div>' +
+    (ak.length ? '<div class="row"><span>Farthest</span><b>' + esc(ak[0].km) + ' km</b></div><div class="sub">' + esc(ak[0].call) + '</div>' : '');
+}
 html += '<div class="sect">TOTALS</div>' +
-  '<div class="row"><span>Spots</span><b>' + spots.length + '</b></div>' +
+  (srvOk ? '<div class="sub">' + esc((WINDOWS.find((w) => w.id === win) || { words: '' }).words) + ' · background decoding and every listener</div>' : '') +
+  '<div class="row"><span>Stations</span><b>' + spots.length + '</b></div>' +
+  (unplaced ? '<div class="row"><span>Heard without a locator</span><b>' + unplaced + '</b></div>' : '') +
   '<div class="row"><span>Countries</span><b>' +
     new Set(spots.map(s => s.country).filter(Boolean)).size + '</b></div>' +
   '<div class="row"><span>Bands</span><b>' +
@@ -18202,7 +18497,10 @@ document.getElementById('legend').innerHTML =
   modeRows.map(x => '<div class="lrow" data-mode="' + esc(x.m) + '"><span class="sw mk" style="background:' + okColour(x.colour) +
     ';color:' + okColour(x.ink) + '">' + esc(x.letter) + '</span>' + esc(x.m) +
     '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(modeN[x.m] || 0) + '</span></div>').join('') +
-  '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Colour + letter = mode \u00b7 size = SNR</div>';
+  (aprs.length || show.aprs ? '<div class="lrow"><span class="sw mk" style="background:#88CCEE;color:#000">A</span>APRS (its symbol where it sends one)' +
+    '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(aprs.length) + '</span></div>' : '') +
+  (overlay ? '<div class="lrow"><span class="sw" style="background:' + okColour(overlay.colour) + '"></span>' + esc(overlay.label) + '</div>' : '') +
+  '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Colour + letter = mode · size = SNR</div>';
 
 // Summary strip — latest and rarest, as UberSDR shows along the bottom.
 const byTime = [...spots].sort((a, b) => b.timestamp - a.timestamp);
@@ -18213,7 +18511,9 @@ function cell(k, v, sub) {
   return '<div><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>' +
          (sub ? '<div class="k">' + esc(sub) + '</div>' : '') + '</div>';
 }
-document.getElementById('summary').innerHTML = spots.length
+document.getElementById('summary').innerHTML = !show.spots && show.aprs
+  ? cell('APRS', aprs.length + ' station' + (aprs.length === 1 ? '' : 's'), aprs.length ? 'newest ' + aprs[0].call : 'none with a position yet')
+  : spots.length
   ? cell('LATEST', (latest.country || latest.callsign) + ' · ' + latest.band,
          latest.callsign + ' · ' + latest.mode + ' · ' + latest.snr + 'dB') +
     (rarest ? cell('RAREST COUNTRY', rarest[0] + ' (' + rarest[1] + ')', '') : '') +
@@ -18229,9 +18529,21 @@ if (bootGPU()) { setupMap(); render(); } else bootLeaflet();
 addEventListener('message', (ev) => {
   if (!window.opener || ev.source !== window.opener || ev.origin !== OPENER_ORIGIN) return;
   if (!ev.data || ev.data.type !== 'vibesdr-spots') return;
-  spots = cleanSpots(ev.data.spots);
+  live = cleanSpots(ev.data.spots);
+  if ('aprs' in ev.data) aprs = cleanAprs(ev.data.aprs);
+  if ('overlay' in ev.data) overlay = cleanOverlay(ev.data.overlay);
+  // ★ opened again from somewhere else: that layer shown (and fitted), that station centred
+  if (ev.data.layer === 'aprs' || ev.data.layer === 'spots') {
+    const l = ev.data.layer;
+    if (!show[l]) { show[l] = true; fitted = false; }
+  }
+  if (typeof ev.data.focus === 'string' && ev.data.focus) focusKey = okStr(ev.data.focus, /[<>&"'\`]/g, 40);
+  mergeSpots();
+  paintChrome();
   render();
 });
+paintChrome();
+fetchStations(true).then(schedulePoll);
 
 // Clock + panel toggles
 function tick() {
@@ -18595,6 +18907,17 @@ async function renderGallery(page = galPage) {
         mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
         row.appendChild(mb);
       }
+      // ★★ V12 beta90 a digital-spots / CW / PSK / RTTY summary card: MAP opens the DIGI MODES MAP — every station kept, by
+      //    window (the card's own hour is inside 24 H; an older card's day is inside 7 D / 30 D)
+      if (it.k === 'ft8' || it.k === 'cw' || it.k === 'psk' || it.k === 'rttyskim') {
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        const age = Date.now() / 1000 - (Number(it.t) || 0);
+        const w = age < 86400 ? '24h' : age < 7 * 86400 ? '7d' : age < 30 * 86400 ? '30d' : 'all';
+        mb.title = 'The stations heard, on the DIGI MODES MAP'; mb.setAttribute('aria-label', `Show the stations heard on the digi modes map: ${it.title}`);
+        mb.onclick = (e) => { e.stopPropagation(); openDigiModesMap({ layer: 'spots', window: w }); };
+        mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+        row.appendChild(mb);
+      }
       // ★ V12 a day's "stations received" (LoRa / MeshCore nodes with positions): MAP, on the ISM map
       if (ismIsNodeCard(it)) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
@@ -18631,6 +18954,36 @@ async function renderGallery(page = galPage) {
         row.appendChild(f); row.appendChild(n); row.appendChild(mb);
         host.insertBefore(row, host.firstChild);
       });
+    }
+    /* ★★★ V12 beta90 THE DIGI MODES MAP in the gallery — a standing row on the first page of ALL and of the spots kinds:
+     *  every station this server's station store holds (background decoding and every listener), MAP opens it. Drawn
+     *  only when the store answers with a station (an older server, or one that heard nothing: no row). */
+    if ((galKind === '' || galKind === 'ft8' || galKind === 'cw' || galKind === 'psk' || galKind === 'rttyskim') && galPage === 1) {
+      const kindAt = galKind;
+      void fetch(galUrl('/vibeserver/stations.json?window=all&since=' + Math.floor(Date.now() / 1000 + 86400)), { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null)).then((j) => {
+          const total = Number(j?.total) || 0;
+          if (!total || j?.off || host.querySelector('.galDigi') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
+          const modes = Object.entries((j.byMode ?? {}) as Record<string, number>).filter(([m]) => /^[A-Z0-9+-]{1,12}$/.test(m))
+            .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([m, n]) => `${m} ${n}`).join(' · ');
+          const row = document.createElement('div'); row.className = 'sres galDigi'; row.tabIndex = 0; row.setAttribute('role', 'button');
+          const f = document.createElement('span'); f.className = 'f'; f.textContent = 'SPOTS';
+          const n = document.createElement('span'); n.className = 'n';
+          n.appendChild(document.createTextNode(`DIGI MODES MAP · ${total.toLocaleString('en-GB')} station${total === 1 ? '' : 's'} heard${modes ? ' · ' + modes : ''}`));
+          n.appendChild(document.createElement('br'));
+          const src = document.createElement('span'); src.className = 'src';
+          src.textContent = 'Every station the digital modes, CW, PSK and RTTY decoders heard, by the day — background decoding and every listener';
+          n.appendChild(src);
+          const go = () => openDigiModesMap({ layer: 'spots', window: 'all' });
+          const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.id = 'galDigiMap'; mb.textContent = 'MAP';
+          mb.title = 'Every station heard, on the DIGI MODES MAP'; mb.setAttribute('aria-label', 'Stations heard, on the digi modes map');
+          mb.onclick = (e) => { e.stopPropagation(); go(); };
+          mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+          row.onclick = go;
+          row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+          row.appendChild(f); row.appendChild(n); row.appendChild(mb);
+          host.insertBefore(row, host.firstChild);
+        }).catch(() => {});
     }
     /* ★★ beta88 THE DSC CALLS WITH A POSITION (Stuart, 2026-11-20: "i have no map button to view them from the gallery on
      *  the pi500") — NAVTEX's standing row's shape, on the first page of ALL or DSC: MAP opens the SHIPPING MAP, DSC first.

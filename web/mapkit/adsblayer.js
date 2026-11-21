@@ -63,6 +63,9 @@
   /** A correction bigger than this is not a correction, it is a different answer (a bad CPR decode, or
    *  an aircraft back after a gap): the icon fades across instead of sliding miles over the map. */
   const SNAP_NM = 5;
+  /** ★ V12 beta90 a datalink aircraft's glide (a.sparse): longer, so a 40 NM hop between fixes reads as flight, and the
+   *  hop past which it fades instead (a position that far from the last is a different answer). */
+  const SPARSE_GLIDE_MS = 3500, SPARSE_SNAP_NM = 400;
   /** ★ No animation for aircraft that were already there: the first batch, and everything that turns up
    *  in the first seconds after the mode starts (positions arrive over the first few CPR pairs). */
   const SETTLE_MS = 10000;
@@ -414,6 +417,9 @@
     if (onGround(a)) return 'ground';
     if (isMilitary(a)) return 'military';
     const age = Number(a.seen_pos) || 0;
+    /* ★★ V12 beta90 THE AVIATION MAP's datalink aircraft (a.sparse — ACARS, VDL2, HFDL, ADS-C: a fix minutes apart, not
+     *  twice a second): the same three tones on their own clock — under 2 min, under 10 min, older. */
+    if (a.sparse) return age < 120 ? 'fresh' : age < 600 ? 'aging' : 'stale';
     return age < 10 ? 'fresh' : age < 30 ? 'aging' : 'stale';
   }
 
@@ -891,6 +897,7 @@
       + legRow(TONE.fresh, '\u2708', 'Position under 10 s old')
       + legRow(TONE.aging, '\u2708', '10\u201330 s old')
       + legRow(TONE.stale, '\u2708', '30\u201360 s old (dropped at 60 s)')
+      + (opts.sparseLegend ? '<div class="r" style="opacity:.85">Datalink (ACARS \u00b7 VDL2 \u00b7 HFDL \u00b7 ADS-C): the same colours at under 2 min \u00b7 2\u201310 min \u00b7 older; facing the way it was going between its last two fixes</div>' : '')
       + legRow(TONE.ground, '\u2708', 'On the ground')
       + legRow(TONE.alert, '\u2708', 'Emergency')
       + legRow(TONE.military, '\u2708', 'Military')
@@ -1217,6 +1224,9 @@
       // ★ how far the server has followed it (vibe_adsb.h setPos) — the trail on the map is that path
       row('Tracked', num(a.tracked_nm) != null && a.tracked_nm >= 1 ? Math.round(a.tracked_nm) + ' NM' : '');
       if (!a.t) row('Type', CAT_NAME[String(a.category || '').toUpperCase()] || '');   // ★ the real type says more
+      /* ★ V12 beta90 the host's own lines (the AVIATION MAP: which sources heard it, the last message, the route) — text
+       *  only, escaped like every other row; at most 10. */
+      if (Array.isArray(a.rowsExtra)) for (const x of a.rowsExtra.slice(0, 10)) if (Array.isArray(x)) row(String(x[0] || '').slice(0, 24), String(x[1] == null ? '' : x[1]).slice(0, 200));
       const seen = num(a.seen);
       row('Heard', seen == null ? '' : seen < 2 ? 'just now' : Math.round(seen) + ' s ago');
       row('Signal', num(a.rssi) != null ? a.rssi.toFixed(1) + ' dBFS' + (num(a.messages) != null ? ' · ' + a.messages + ' msgs' : '') : '');
@@ -1465,6 +1475,14 @@
         const fix = { lat, lon, gs: num(raw.gs), track: num(raw.track) != null ? num(raw.track) : num(raw.mag_heading),
                       t: t - Math.max(0, Math.min(60, num(raw.seen_pos) || 0)) * 1000 };
         const same = s.fix && Math.abs(s.fix.lat - fix.lat) < 1e-7 && Math.abs(s.fix.lon - fix.lon) < 1e-7;
+        /* ★★ V12 beta90 FACING ITS WAY (Stuart, 2026-11-21): an aircraft that sends no track (ACARS, VDL2, HFDL, ADS-C) and has
+         *  two fixes points along the line between them — the bearing from the one before to this one (a hop under
+         *  0.05 NM says nothing: the last bearing stays). It never moves on that bearing: with no speed there is no dead
+         *  reckoning, only the glide to each new fix. */
+        if (fix.track == null && s.fix) {
+          if (!same && distNm(s.fix.lat, s.fix.lon, lat, lon) >= 0.05) fix.track = bearingDeg(s.fix.lat, s.fix.lon, lat, lon);
+          else fix.track = s.fix.track;
+        }
         if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
         if (!s.tr) s.tr = [];
         if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
@@ -1480,8 +1498,12 @@
         const pred = deadReckon(fix, t);
         const gap = distNm(shown.lat, shown.lon, pred.lat, pred.lon);
         s.fix = fix;
-        if (gap > SNAP_NM) { s.corr = null; s.disp = pred; s.shownAt = t; s.fadeIn = true; }
-        else s.corr = { dLat: shown.lat - pred.lat, dLon: wrapLon(shown.lon, pred.lon) - pred.lon, t0: t };
+        /* ★★ V12 beta90 A DATALINK AIRCRAFT GLIDES TO EACH NEW FIX (Stuart, 2026-11-21): minutes apart, its fixes are many
+         *  miles apart, so the SNAP rule (a big gap = a bad decode) would fade every move. It slides there instead, over
+         *  SPARSE_GLIDE_MS — up to SPARSE_SNAP_NM; past that it is a different answer and fades as ADS-B's does. */
+        const sparse = !!raw.sparse;
+        if (gap > (sparse ? SPARSE_SNAP_NM : SNAP_NM)) { s.corr = null; s.disp = pred; s.shownAt = t; s.fadeIn = true; }
+        else s.corr = { dLat: shown.lat - pred.lat, dLon: wrapLon(shown.lon, pred.lon) - pred.lon, t0: t, ms: sparse ? SPARSE_GLIDE_MS : GLIDE_MS };
       }
       if (anyPos) firstPosBatchSeen = true;
       for (const s of ac.values()) if (!seen.has(s.hex) && !s.goneAt) s.goneAt = t;
@@ -1515,7 +1537,7 @@
         if (!s.fix) continue;
         const p = deadReckon(s.fix, t);
         if (s.corr) {
-          const k = Math.min(1, (t - s.corr.t0) / GLIDE_MS);
+          const k = Math.min(1, (t - s.corr.t0) / (s.corr.ms || GLIDE_MS));
           const r = 1 - easeInOut(k);
           p.lat += s.corr.dLat * r; p.lon += s.corr.dLon * r;
           if (k >= 1) s.corr = null;
@@ -1659,6 +1681,13 @@
     /* ── public ─────────────────────────────────────────────────────────────────────────────── */
     const api = {
       update,
+      /** ★ V12 beta90 what is drawn (a test's view, read-only): each aircraft on the map — hex, where it is drawn, the way
+       *  it faces, whether a glide is under way. */
+      shown() {
+        const out = [];
+        for (const s of ac.values()) if (s.disp && !s.goneAt) out.push({ hex: s.hex, lat: s.disp.lat, lon: s.disp.lon, hdg: s.hdg, track: s.fix ? s.fix.track : null, gliding: !!s.corr, sparse: !!(s.a && s.a.sparse) });
+        return out;
+      },
       setReceiver(lat, lon) {
         const la = Number(lat), lo = Number(lon);
         rx = isFinite(la) && isFinite(lo) && !(la === 0 && lo === 0) && lat != null && lon != null ? { lat: la, lon: lo } : null;

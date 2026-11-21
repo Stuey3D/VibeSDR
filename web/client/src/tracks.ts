@@ -512,6 +512,13 @@ export interface TrackViewOpts {
   yieldGroups?: string[];
   aria?: (it: any) => string;
   onCard?: (key: string, el: HTMLElement) => void;
+  /** ★★ V12 beta90 the SCALE BAR (every map has one — vibemapgl.js / vibemap.js): true = NM under the km (the marine
+   *  and aviation maps). Default: NM for the 'marine' and 'aero' profiles, km alone otherwise. */
+  nautical?: boolean;
+  /** ★★★ V12 beta90 THE AVIATION MAP ON THE ADS-B MAP (Stuart, 2026-11-21): items carrying `_adsb` (aviationMap.ts
+   *  avPlaneAdsb) are drawn by the ADS-B layer (web/mapkit/adsblayer.js — silhouettes, tones, labels, range rings,
+   *  AUTO / FIT, the glide, its own cards); the rest (HFDL ground stations) by the track layer as before. */
+  aircraft?: boolean;
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -531,6 +538,9 @@ export class TrackView {
   private lastRows = '';
   private sel = '';
   private inerted: HTMLElement[] = [];
+  private acLayer: any = null;                       // ★ beta90 the ADS-B layer (aircraft:true)
+  private acKeys = new Map<string, string>();        // item key → its hex, and back
+  private acHex = new Map<string, string>();
 
   constructor(private o: TrackViewOpts) {
     addCss();
@@ -636,7 +646,8 @@ export class TrackView {
     const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
     if (!row) return;
     const k = row.dataset.key || '';
-    if (!this.layer?.focus(k)) this.note('Not on the map — no position heard yet.', 2500);
+    const hex = this.acKeys.get(k);
+    if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
   }
   private markSel(k: string) {
@@ -653,7 +664,8 @@ export class TrackView {
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
     if (!this.layer) { this.wantFocus = key; return false; }
-    const ok = !!this.layer.focus(key);
+    const hex = this.acKeys.get(key);
+    const ok = hex && this.acLayer ? !!this.acLayer.focus(hex) : !!this.layer.focus(key);
     if (ok) this.markSel(key);
     return ok;
   }
@@ -688,6 +700,8 @@ export class TrackView {
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
     this.gen++;
+    try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
+    this.acLayer = null; this.acKeys.clear(); this.acHex.clear();
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
     this.layer = null;
     try { this.vm?.destroy(); } catch (e) { console.error('[tracks] map destroy', e); }
@@ -707,6 +721,11 @@ export class TrackView {
     const { TRACK_LAYER_JS } = await import('./generated/trackLayerSource');
     if (my !== this.gen) return;
     if (!w.VibeTrackLayer) runSource(TRACK_LAYER_JS);
+    if (this.o.aircraft && !w.VibeAdsbLayer) {
+      const { ADSB_LAYER_JS } = await import('./generated/adsbLayerSource');
+      if (my !== this.gen) return;
+      if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);
+    }
     const holder = document.createElement('div');
     holder.style.cssText = 'position:absolute;inset:0';
     this.mapHost.insertBefore(holder, this.list);
@@ -717,7 +736,7 @@ export class TrackView {
       if (my !== this.gen) return;
       try {
         const vm = w.VibeMapGL.createNow(holder, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail,
-                                                   ...(this.o.profile ? { profile: this.o.profile } : {}),
+                                                   ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind(),
                                                    center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 7 : 1.5 });
         if (vm) {
           this.vm = vm;
@@ -741,8 +760,13 @@ export class TrackView {
     if (my !== this.gen) return;
     // ★ the shared map data (coastlines, places) — as AdsbMap draws it under Leaflet
     if (!w.VibeMap) { try { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); } catch (e) { console.error('[tracks] vibemap', e); } }
-    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}) });
+    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind() });
     this.attach(this.lmap, L);
+  }
+  /** The scale bar's units: NM beside km on the sea and air maps. */
+  private scaleKind(): 'nautical' | 'metric' {
+    const n = this.o.nautical ?? (this.o.profile === 'marine' || this.o.profile === 'aero');
+    return n ? 'nautical' : 'metric';
   }
   private attach(map: any, L: any) {
     const w = window as any;
@@ -755,7 +779,21 @@ export class TrackView {
       shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, yieldGroups: this.o.yieldGroups, aria: this.o.aria, onCard: this.o.onCard,
       onSelect: (k: string | null) => this.markSel(k || ''),
     });
-    if (this.pending) { this.layer.update(this.pending); this.pending = null; }
+    if (this.o.aircraft && w.VibeAdsbLayer) {
+      try {
+        let prefs: any = null;
+        try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || 'null'); } catch { /* private */ }
+        this.acLayer = w.VibeAdsbLayer.create(map, {
+          receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
+          onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
+          // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
+          onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
+        });
+        this.placeAcObstacle();
+        w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
+      } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
+    }
+    if (this.pending) { const p = this.pending; this.pending = null; this.feed(p); }
     this.watchAttrib();
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
@@ -779,12 +817,36 @@ export class TrackView {
   }
 
   /** Every report: the whole list (items with key/lat/lon), the rows' HTML, the status line, the count. */
+  /** ★ beta90 the items to their layers: aircraft (`_adsb`) to the ADS-B layer, the rest to the track layer. */
+  private feed(items: any[]) {
+    if (!this.acLayer) { this.layer.update(items); return; }
+    const rest: any[] = [], ac: any[] = [];
+    this.acKeys.clear(); this.acHex.clear();
+    for (const it of items) {
+      const a = it && it._adsb;
+      if (a && typeof a.hex === 'string') { ac.push(a); this.acKeys.set(it.key, a.hex); this.acHex.set(a.hex, it.key); }
+      else rest.push(it);
+    }
+    this.layer.update(rest);
+    try { this.acLayer.update(ac); } catch (e) { console.error('[tracks] aircraft update', e); }
+  }
+  /** The list's corner of the map — the ADS-B layer keeps aircraft (and its fit) clear of it. */
+  private placeAcObstacle() {
+    if (!this.acLayer?.setObstacle) return;
+    const r = this.list.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
+    try { this.acLayer.setObstacle(r.width > 0 && r.height > 0 ? { corner: r.left - m.left < m.width / 2 ? 'bottom-left' : 'bottom-right', w: r.width + 8, h: r.height + 8 } : null); }
+    catch (e) { console.error('[tracks] obstacle', e); }
+  }
   update(items: any[], rowsHtml: string, status: string, count: number, rx: LatLon | null, safety = '') {
-    if (rx && (!this.rx || rx.lat !== this.rx.lat || rx.lon !== this.rx.lon)) { this.rx = rx; try { this.layer?.setReceiver(rx.lat, rx.lon); } catch (e) { console.error('[tracks] rx', e); } }
+    if (rx && (!this.rx || rx.lat !== this.rx.lat || rx.lon !== this.rx.lon)) {
+      this.rx = rx;
+      try { this.layer?.setReceiver(rx.lat, rx.lon); this.acLayer?.setReceiver(rx.lat, rx.lon); } catch (e) { console.error('[tracks] rx', e); }
+    }
     if (this.layer) {
-      try { this.layer.update(items); } catch (e) { console.error('[tracks] layer.update', e); }
-      // ★ a new time range: fit what it shows
-      if (this.refit && items.length) { this.refit = false; try { this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); } }
+      try { this.feed(items); } catch (e) { console.error('[tracks] layer.update', e); }
+      // ★ a new time range: fit what it shows (the ADS-B layer fits its own aircraft — AUTO / FIT)
+      if (this.refit && items.length && !this.acLayer) { this.refit = false; try { this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); } }
+      if (this.acLayer) this.placeAcObstacle();
     }
     else this.pending = items;
     if (rowsHtml !== this.lastRows) {

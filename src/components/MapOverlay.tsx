@@ -183,6 +183,15 @@ interface MapOverlayProps {
   overlay?: React.ReactNode;
   /** ★★ V12 THE ONLY MODE: this map's mode is the receiver's only one — the note, and CLOSE MAP in place of its EXIT. */
   only?: string;
+  /** ★★ V12 beta90 THE DIGI MODES MAP (kind 'digi'): this server keeps stations (stations.json) — the age filter offers the
+   *  server's windows and tells onDigiWindow when it changes; the stations come in through `spots`. */
+  storeWindows?: boolean;
+  onDigiWindow?: (w: string) => void;
+  /** ★★ V12 beta90 APRS on the DIGI MODES MAP: the APRS box's stations (digiMap.ts DigiAprsPoint shape), and a key to open on. */
+  aprsPoints?: unknown[] | null;
+  aprsFocus?: string;
+  /** ★★ V12 beta90 a caller's overlay on the DIGI MODES MAP (digiMapShared.ts DigiMapOverlay — a satellite pass). */
+  digiOverlay?: unknown | null;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -195,7 +204,9 @@ function buildHtml(
           /** ★ V12 kind 'digi': the modes THIS server decodes (vibeserver.json spotModes) — the filter and the legend. */
           spotModes?: string[];
           /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") — the EXIT key becomes CLOSE MAP. */
-          only?: string },
+          only?: string;
+          /** ★★ V12 beta90 kind 'digi': the server keeps stations — its windows in the age filter. */
+          storeWindows?: boolean },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
@@ -206,6 +217,7 @@ function buildHtml(
    *  it cannot spot (a dead filter choice). Not said (UberSDR, on-device FT8): the style table's. */
   const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
   const legendModes: string[] = opts?.spotModes && opts.spotModes.length ? opts.spotModes : Object.keys(DIGI_MODE_STYLE);
+  const storeWindows = !!opts?.storeWindows;
   /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
    *  tiles from <documents>/mapgl/. The page's HFDL / spots code is unchanged — vibemapgl-compat.js
    *  answers its Leaflet calls with the GPU map underneath. Off (gl false) = today's Leaflet page. */
@@ -252,7 +264,7 @@ function buildHtml(
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
   const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
@@ -270,7 +282,7 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
-${isAdsb || isNdb ? `<script>${ADSB_LAYER_JS}</script>` : ''}
+${isAdsb || isNdb || kind === 'avdata' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
 ${isNdb ? `<script>${NDB_LAYER_JS}</script>` : ''}
 ${isTrk ? `<script>${TRACK_LAYER_JS}</script>` : ''}
 ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
@@ -527,8 +539,13 @@ ${isSpots ? `
 <div id="filters">
   <span class="flabel">FILTER</span>
   ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${legendModes.map((m) => `<option>${esc(m)}</option>`).join('')}</select>` : ''}
+  ${kind === 'digi' ? '<button type="button" id="fAprs" class="fkey" hidden title="APRS stations from the APRS decoder — tap to show or hide">APRS</button>' : ''}
   <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'].map((b) => `<option>${b}</option>`).join('')}</select>
-  <select id="fAge">${kind === 'digi'
+  <select id="fAge">${kind === 'digi' && storeWindows
+    /* ★★ V12 beta90 THE DIGI MODES MAP: this server keeps every station (background decoding and every listener) — the
+     *  window is the server's (stations.json), asked for by React Native when it changes (digiWindow) */
+    ? `<option value="2m">2 min</option><option value="15m">15 min</option><option value="1h">1 hour</option><option value="24h" selected>24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="ALL">All kept</option>`
+    : kind === 'digi'
     ? `<option value="ALL">All</option><option value="2m" selected>2 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option>`
     : `<option value="ALL">All</option><option value="15m" selected>15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="3h">3 hours</option>`}</select>
 </div>` : ''}
@@ -560,9 +577,12 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:#c58cff;"></span><span>digipeater / gateway</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Dashed ring = alternate symbol table</span></div>
       ` : kind === 'avdata' ? `
-      <div class="lg-sec">AIRCRAFT DATALINK (ACARS / VDL2)</div>
-      <div class="lg-row"><span class="lg-dot" style="background:#ffd34d;"></span><span>the last position an aircraft reported</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>ADS-C, FMS and airline position reports only &mdash; most messages carry none</span></div>
+      <div class="lg-sec">AVIATION MAP (ADS-B · ACARS · VDL2 · HFDL · ADS-C)</div>
+      <div class="lg-row"><span style="color:rgb(80,255,120)">&#9992;</span><span>a fresh position &mdash; under 10 s (ADS-B) or 2 min (datalink)</span></div>
+      <div class="lg-row"><span style="color:rgb(180,255,80)">&#9992;</span><span>ageing &mdash; 10&ndash;30 s (ADS-B) or 2&ndash;10 min (datalink)</span></div>
+      <div class="lg-row"><span style="color:rgb(255,190,40)">&#9992;</span><span>old &mdash; it has flown on</span></div>
+      <div class="lg-row"><span>&#10138;</span><span>pointing the way it is going: its track, or the line between its last two fixes; each new fix glides in</span></div>
+      <div class="lg-row"><span>&#9678;</span><span>RINGS in NM &middot; AUTO / FIT keep every aircraft in view &middot; the card says which sources heard it</span></div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       ` : kind === 'sondes' ? `
       <div class="lg-sec">RADIOSONDES (RS41 · DFM · M10 · M20)</div>
@@ -691,6 +711,7 @@ var GL_OK=${gl ? 1 : 0};
 var DETAIL_OK=${gl && opts?.detail ? 1 : 0};
 var VM_STYLE=${gl ? JSON.stringify(VIBEMAP_STYLE) : 'null'};
 var RX_LAT=${rxLat || 0}, RX_LON=${rxLon || 0};
+var STORE_WIN=${storeWindows ? 'true' : 'false'};   // ★ beta90 the DIGI MODES MAP's server windows
 // Maidenhead locator → square-centre lat/lon (on-device FT8 spots carry a grid,
 // not lat/lon). 4- or 6-char; returns null if invalid.
 function gridLL(g){
@@ -729,7 +750,9 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
-      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1});
+      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
+      /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
+      scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'nautical':'metric',scalePosition:'bottom-left'});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -977,7 +1000,10 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
   dataBase: 'mapdata/v1/',
   profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata') ? 'aero'
     // ★ sea maps show PORTS, not airports (Stuart, 2026-11-01: "we need the ports instead, so felixstowe dover etc")
-    : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots'
+    : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots',
+  // ★★ V12 beta90 the scale bar (vibemap.js attach) — NM under the km on the sea and air maps
+  scale: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'nautical' : 'metric',
+  scalePosition: 'bottom-left'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
  *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
@@ -1619,11 +1645,28 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     }catch(e){console.error('track layer could not start',e);trkLayer=null;}
     return trkLayer;
   }
+  /* ★★★ V12 beta90 THE AVIATION MAP ON THE ADS-B MAP (Stuart, 2026-11-21): an item with _adsb (aviationMap.ts avPlaneAdsb)
+   *  is drawn by the ADS-B layer — its silhouettes, tones, rings, AUTO / FIT, the glide to each new fix, the heading from
+   *  the last two fixes — the rest (HFDL ground stations) by the track layer. The web's TrackView aircraft:true. */
+  var acLayer=null,acHexKey={},acKeyHex={};
+  function acMake(){
+    if(acLayer||KIND!=='avdata'||!window.VibeAdsbLayer)return acLayer;
+    try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
+      onSelect:function(h){trkPost({t:'trkSel',key:h&&acHexKey[h]?acHexKey[h]:null});}});window.__acLayer=acLayer;}
+    catch(e){console.error('aircraft layer could not start',e);acLayer=null;}
+    return acLayer;
+  }
   window.__trkPush=function(json){
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
       cnt.textContent=String(a.length);
-      var l=trkMake();if(!l)return;l.update(a);
+      var l=trkMake();if(!l)return;
+      var ac=acMake();
+      if(ac){var rest=[],planes=[];acHexKey={};acKeyHex={};
+        for(var i=0;i<a.length;i++){var it=a[i],x=it&&it._adsb;
+          if(x&&typeof x.hex==='string'){planes.push(x);acHexKey[x.hex]=String(it.key);acKeyHex[String(it.key)]=x.hex;}else rest.push(it);}
+        l.update(rest);try{ac.update(planes);}catch(e){console.error('aircraft update',e);}}
+      else l.update(a);
       if(trkWantFocus){var k=trkWantFocus;trkWantFocus=null;setTimeout(function(){try{l.focus(k);}catch(e){}},80);}
     }catch(e){console.error('tracks: bad report',e);}
   };
@@ -1637,7 +1680,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   }catch(e){console.error('tracks profile',e);}};
   window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
-  window.__trkFocus=function(k){try{var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
+  window.__trkFocus=function(k){try{var hx=acKeyHex[String(k)];if(hx&&acLayer){acLayer.focus(hx);return;}
+    var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
   window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
   /* ★ V12 the NAVTEX cards: the text React Native fetched, TRANSLATE drawn when the phone can, and what it gave. Set as
    *  TEXT (textContent) — never parsed as HTML. */
@@ -1694,7 +1738,7 @@ if(KIND==='digi'||KIND==='cw'){
     if(fBand&&fBand.value!=='ALL'&&spotBand(s)!==fBand.value)return false;
     var fa=fAge?fAge.value:'ALL';
     if(fa!=='ALL'){
-      var ms={'2m':120000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'3h':10800000}[fa]||Infinity;
+      var ms={'2m':120000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'3h':10800000,'24h':86400000,'7d':8*86400000,'30d':31*86400000}[fa]||Infinity;
       if(Date.now()-s.t>ms)return false;
     }
     return true;
@@ -1772,6 +1816,54 @@ if(KIND==='digi'||KIND==='cw'){
     if(statsOpen)updateStats();
   }
   [fMode,fBand,fAge].forEach(function(el){if(el)el.onchange=rebuild;});
+  // ★ beta90 the server's window follows the age filter (React Native asks the station store for it)
+  if(fAge&&STORE_WIN)fAge.addEventListener('change',function(){var v=fAge.value;
+    var w=v==='ALL'?'all':(v==='24h'||v==='7d'||v==='30d')?v:'1h';
+    if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'digiWindow',w:w}));});
+  /* ★★★ V12 beta90 APRS ON THE DIGI MODES MAP (Stuart, 2026-11-21: "aprs map gets combined with the rest of the
+   *  digispots"): the APRS box's stations, pushed by React Native (__aprsPush) — each its own symbol (tracks.ts aprsIcon,
+   *  our SVG, checked again here), its track, its card — toggled by the APRS key in the filter row. */
+  var aprsGroup=L.layerGroup().addTo(map),aprsPts=[],aprsOn=true,aprsWant=null;
+  function aprsSvgOk(v){v=String(v||'');return v.length<4000&&/^<svg [^]*<.svg>$/.test(v)&&!/<scr[i]pt|<foreignObject|[\\s]on[\\w]+[\\s]*=|javascript:|href[\\s]*=/i.test(v)?v:'';}
+  function aprsDraw(){
+    aprsGroup.clearLayers();
+    var kb=document.getElementById('fAprs');if(kb){kb.hidden=!aprsPts.length;kb.textContent='APRS '+aprsPts.length;kb.classList.toggle('on',aprsOn);}
+    if(!aprsOn)return;
+    aprsPts.forEach(function(a){
+      if(a.trail&&a.trail.length>=2)L.polyline(a.trail,{color:'#88CCEE',weight:1.5,opacity:0.7}).addTo(aprsGroup);
+      var svg=aprsSvgOk(a.svg);
+      var m=svg?L.marker([a.lat,a.lon],{icon:L.divIcon({html:svg,className:'',iconSize:[22,22],iconAnchor:[11,11]})})
+               :L.circleMarker([a.lat,a.lon],{radius:7,color:RIM,weight:1.2,fillColor:'#88CCEE',fillOpacity:0.9,label:'A',labelColor:'#000000'});
+      m.addTo(aprsGroup).bindPopup('<div style="font-size:14px;color:#88CCEE;letter-spacing:1px;">'+esc(a.call)+'</div>'
+        +'<div style="margin-top:4px;font-size:12px;color:rgba(136,204,238,0.75);">'+esc(a.symName||'APRS')+(a.km!=null?' &bull; '+Math.round(a.km)+' km':'')+'</div>'
+        +(a.wx?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.75);">Weather: '+esc(a.wx)+'</div>':'')
+        +(a.comment?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.6);">'+esc(a.comment)+'</div>':''),{maxWidth:220});
+    });
+    if(aprsWant){var f=aprsPts.find(function(x){return x.key===aprsWant||x.call===aprsWant;});if(f){aprsWant=null;map.setView([f.lat,f.lon],9);}}
+  }
+  window.__aprsPush=function(json,focus){try{var a=JSON.parse(json);if(!Array.isArray(a))return;
+    aprsPts=a.filter(function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));}).slice(0,1000).map(function(x){
+      return {key:String(x.key||'').slice(0,40),call:String(x.call||'').slice(0,40),lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),
+        symName:String(x.symName||'').slice(0,40),comment:String(x.comment||'').slice(0,120),wx:String(x.wx||'').slice(0,120),km:x.km==null?null:Number(x.km),svg:x.svg,
+        trail:Array.isArray(x.trail)?x.trail.filter(function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));}).slice(-200):[]};});
+    if(focus){aprsWant=String(focus).slice(0,40);aprsOn=true;}
+    aprsDraw();}catch(e){console.error('aprs push',e);}};
+  var aprsKey=document.getElementById('fAprs');
+  if(aprsKey)aprsKey.addEventListener('click',function(){aprsOn=!aprsOn;aprsDraw();});
+  if(window.__pendingAprs){window.__aprsPush(window.__pendingAprs[0],window.__pendingAprs[1]);window.__pendingAprs=null;}
+  /* ★★ beta90 a caller's OVERLAY (openDigiModesMap's — a satellite pass: its ground track, footprint and points), already
+   *  cleaned by digiMapShared.ts digiOverlayClean; numbers and short labels only, checked again here. */
+  var ovGroup=L.layerGroup().addTo(map);
+  window.__digiOverlay=function(json){try{ovGroup.clearLayers();var o=JSON.parse(json);if(!o||typeof o!=='object')return;
+    var c=/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(String(o.colour||''))?String(o.colour):'#88CCEE';
+    var ok=function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));};
+    (Array.isArray(o.lines)?o.lines:[]).slice(0,16).forEach(function(l){var pts=(Array.isArray(l)?l:[]).filter(ok).slice(0,2000);if(pts.length>=2)L.polyline(pts,{color:c,weight:2,opacity:0.85}).addTo(ovGroup);});
+    (Array.isArray(o.circles)?o.circles:[]).slice(0,16).forEach(function(k){if(k&&isFinite(Number(k.lat))&&isFinite(Number(k.lon))&&isFinite(Number(k.km)))
+      L.circle([Number(k.lat),Number(k.lon)],{radius:Math.max(0,Math.min(20000,Number(k.km)))*1000,color:c,weight:1.5,fill:true,fillColor:c,fillOpacity:0.08}).addTo(ovGroup);});
+    (Array.isArray(o.points)?o.points:[]).slice(0,500).forEach(function(p){if(p&&isFinite(Number(p.lat))&&isFinite(Number(p.lon)))
+      L.circleMarker([Number(p.lat),Number(p.lon)],{radius:6,color:RIM,weight:1.2,fillColor:c,fillOpacity:0.95}).addTo(ovGroup).bindPopup('<div style="font-size:13px;color:'+c+'">'+esc(String(p.label||'').slice(0,32))+'</div>');});
+  }catch(e){console.error('digi overlay',e);}};
+  if(window.__pendingOverlay!=null){window.__digiOverlay(window.__pendingOverlay);window.__pendingOverlay=null;}
   setInterval(rebuild,30000); // age filter refresh + prune display
 
   // ── stats sheet (skin lsvSmapStats) ──
@@ -1933,7 +2025,8 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
+    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2015,10 +2108,10 @@ export default function MapOverlay(
   const html = useMemo(
     () => (kind && glOk !== null && (kind !== 'adsb' || adsbPrefsReady) && (kind !== 'ndb' || ndbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
-        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only }, ink) : ''),
+        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, storeWindows }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(','), only],
+    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(','), only, storeWindows],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *
@@ -2072,6 +2165,20 @@ export default function MapOverlay(
   };
   // Live updates push only the new ones.
   useEffect(() => { if (visible) pushSpots(spots); }, [local, visible, spots]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★ V12 beta90 APRS on the DIGI MODES MAP: the whole list each time (it replaces), double-encoded as the spots are. */
+  const pushAprs = () => {
+    if (kind !== 'digi' || !aprsPoints) return;
+    const lit = JSON.stringify(JSON.stringify(aprsPoints)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    const f = JSON.stringify(String(aprsFocus || '').slice(0, 40));
+    webRef.current?.injectJavaScript(`(window.__aprsPush?window.__aprsPush(${lit},${f}):(window.__pendingAprs=[${lit},${f}]));true;`);
+  };
+  useEffect(() => { if (visible) pushAprs(); }, [visible, aprsPoints, aprsFocus]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pushOverlay = () => {
+    if (kind !== 'digi') return;
+    const lit = JSON.stringify(JSON.stringify(digiOverlay ?? null)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    webRef.current?.injectJavaScript(`(window.__digiOverlay?window.__digiOverlay(${lit}):(window.__pendingOverlay=${lit}));true;`);
+  };
+  useEffect(() => { if (visible) pushOverlay(); }, [visible, digiOverlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ★ ADS-B: the whole table each report (about once a second) — it REPLACES, it does not accumulate (the server drops
    *  an aircraft after 60 s), so there is nothing to de-duplicate. Before the page's handler exists the latest is
@@ -2299,7 +2406,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current);
                              if (kind === 'ndb') ndbJs('__ndbListW', adsbListW.current);
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
@@ -2320,6 +2427,12 @@ export default function MapOverlay(
             if (m && (m as any).t === 'ndbSel') {
               const k = Number((m as any).key);
               ndbChoose(Number.isFinite(k) && k > 0 ? Math.floor(k) : 0, false);
+              return;
+            }
+            // ★ beta90 the DIGI MODES MAP's window changed (its age filter): React Native asks the station store for it
+            if (m && (m as any).t === 'digiWindow') {
+              const w = String((m as any).w ?? '');
+              if (/^(1h|24h|7d|30d|all)$/.test(w)) onDigiWindow?.(w);
               return;
             }
             if (m && (m as any).t === 'adsbSel') {

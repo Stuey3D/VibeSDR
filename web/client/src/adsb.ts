@@ -348,7 +348,7 @@ export class AdsbMap {
       if (my !== this.gen) return;
       try {
         const vm = w.VibeMapGL.createNow(this.host, {
-          style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero',
+          style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero', scale: 'nautical',
           center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 6 : 1.5,
         });
         if (vm) {
@@ -372,7 +372,7 @@ export class AdsbMap {
     const L = w.L;
     this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
     this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
-    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero' });
+    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero', scale: 'nautical' });
     this.attach(this.lmap);
   }
 

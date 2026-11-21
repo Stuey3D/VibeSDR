@@ -135,6 +135,9 @@ try {
   ok(await until(`${tg} === JSON.stringify(['STATIONS','WARNINGS','WEATHER','SHIPS','DSC','SEA AREAS'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row), SEA AREAS last: ${await ev(tg)}`);
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^(SOLENT TRADER|ISLAND FERRY|NAB PILOT):/.test(e.getAttribute('aria-label') || '')).length === 3`, 10000), 'the three stored ships on the map');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(e => /^DSC DISTRESS from MMSI 232001234/.test(e.getAttribute('aria-label') || '') && e.innerHTML.includes('SOS'))`, 5000), 'the DSC distress pin, with SOS');
+  // ★★ beta90 a scale bar on every map — NM beside km on the sea map (vibemapgl.js / vibemap.js, TrackView 'marine')
+  { const sc = await ev(`[...${view}.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+    ok(/km/.test(sc || '') && /nm|NM/.test(sc || ''), `beta90: the scale bar, km and NM (${sc})`); }
   const arrows = Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^Sea area/.test(e.getAttribute('aria-label') || '') && e.querySelector('.nvWind svg g[transform^="rotate("]')).length`));
   ok(arrows > 0, `the weather drawn as arrows (${arrows} sea areas)`);
   const rows = JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('.trkList .rows .sec')].map(s => s.textContent))`));
