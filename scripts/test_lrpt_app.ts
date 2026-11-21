@@ -18,6 +18,7 @@ ok(lrptStatusText(parseLrptStatus({ ...real, sync: false })) === '112 lines · c
 ok(lrptStatusText(parseLrptStatus({ carrier: true, mode: 'OQPSK', offsetHz: 812 })) === 'carrier found (OQPSK, +812 Hz) · looking for frames', 'carrier found');
 ok(lrptStatusText(parseLrptStatus({ sync: true, mode: 'QPSK', frames: 9, bad: 2 })) === 'QPSK locked · frames 9 (2 unreadable)', 'frames before any picture');
 ok(lrptStatusText(parseLrptStatus({})) === 'listening for a METEOR satellite', 'nothing yet');
+ok(lrptStatusText(parseLrptStatus({ on: true, lock: 73 })) === 'listening for a METEOR satellite · lock 73 % (80 % holds it)', 'a marginal pass says how close the lock is');
 ok(lrptStatusText(null) === 'waiting for a METEOR pass', 'no status at all');
 ok(lrptStatusText(parseLrptStatus({ why: 'the IQ slice runs at 50000 S/s — LRPT needs 1.8 to 8 times the symbol rate' })).startsWith('the IQ slice'), 'a reason is shown');
 // defensive: junk never throws, never shows NaN, bounds lengths

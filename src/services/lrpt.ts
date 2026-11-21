@@ -50,6 +50,10 @@ export function lrptStatusText(st: LrptStatus | null): string {
   }
   if (st.sync) return `${st.mode} locked · frames ${st.frames}${st.bad ? ` (${st.bad} unreadable)` : ''}`;
   if (st.carrier) return `carrier found (${st.mode}, ${st.offsetHz >= 0 ? '+' : ''}${st.offsetHz} Hz) · looking for frames`;
+  /* ★ How close the receiver is (Stuart 2026-11-21, Meteor-M2-3 visible ~4–5 dB over the floor, the box only "listening"):
+   *  the carrier loop's figure, ≈ 64 % on noise, 80 % counts as locked (vibe_lrpt_demod.h) — said, so a marginal pass
+   *  reads as marginal rather than as nothing. */
+  if (st.lock >= 50) return `listening for a METEOR satellite · lock ${st.lock} % (80 % holds it)`;
   return 'listening for a METEOR satellite';
 }
 
