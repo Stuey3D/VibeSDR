@@ -218,6 +218,9 @@ the next one; until a path arrives, panels level as today). Drawn as paths in gl
 and react-native-svg), the beam cone still from the dish, ~2× today's size so the shape reads at SMALL. Panel cells
 ruled, faceplate inks only (amber on default). Test: the panels' axis follows the path's heading; the dish faces the
 globe centre at every position on the dome.
+**The receiver's dot in a contrasting colour (Stuart 11-21: "can you make the receiver marker green or a different
+contrasting colour"):** green #5BE36B (the health pill's / the TRACK dot's), r 5 with a 1.5 px dark ring, on every
+faceplate — never the ink colour, which is the dome's and the coastlines'. Same in the web canvas and react-native-svg.
 **Labels (Stuart 11-21: "it took me a second or so to realise what the dots and lines were when i first saw them"):** the
 receiver's dot gets a small label (the server's name, else RECEIVER) and the satellite its name; the 30° grid is drawn
 fainter than the coastlines so land reads first; BIG adds a one-line key under the globe ("dotted: this pass's orbit ·
