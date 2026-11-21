@@ -89,6 +89,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
   // ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): weather-satellite pictures on 137 MHz, a listener's decoder on an IQ slice — as on the setup page
   { id: 'lrpt', label: 'METEOR weather satellite pictures (LRPT)' },
+  // ★ V12 beta90 FUNcube telemetry (AO-73, vibe_fctlm.h) — as on the setup page
+  { id: 'fctlm', label: 'FUNcube satellite telemetry (AO-73)' },
   // ★ V12 VOR / ILS and 406 MHz beacons (docs/v12/VOR-ILS.md, SARSAT.md) — the setup page's same two switches
   { id: 'vor', label: 'VOR bearing and ILS deviation' },
   { id: 'sarsat', label: '406 MHz distress beacons (COSPAS-SARSAT)' },

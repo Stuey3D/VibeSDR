@@ -153,7 +153,7 @@ try {
       sp.send({ type: 'sat_list' });
       await until(() => !!lastOf(sp, 'sat_list'), 4000);
       const l = lastOf(sp, 'sat_list');
-      ok(l && l.sats.length === 14 && l.located === true && l.time !== 'none', `the list: ${l?.sats?.length} birds (13 + the six-digit test bird), located ${l?.located}, time ${l?.time}`);
+      ok(l && l.sats.length === 15 && l.located === true && l.time !== 'none', `the list: ${l?.sats?.length} birds (14 + the six-digit test bird), located ${l?.located}, time ${l?.time}`);
       ok(l?.source && /CelesTrak/.test(l.source.orbits) && l.source.via === 'vibesdr.net' && Math.abs(Date.now() / 1000 - 2 * 3600 - l.source.fetched) < 120
          && /SatNOGS/.test(l.source.transmitters || ''), `the credit + the data's age: ${JSON.stringify(l?.source)}`);
       const six = l?.sats?.find((s) => s.norad === 101095);
@@ -346,6 +346,48 @@ try {
       p = lastPicked(sp);
       ok(p && p.decoder === '' && p.mode === 'usb' && p.hz === 435640000, `RS-44 transponder: USB at its centre, no decoder (${p?.mode} ${p?.hz})`);
       ok(/\[sat\] decoder aprs detached/.test(S.L()), 'the APRS decoder the previous pick started detached');
+      // ★★ beta90 1.4 THE PASSBAND RULE: a tune 20 kHz across RS-44's passband keeps the lock (the old 15 kHz rule ended it)
+      sp.txt.length = 0;
+      sp.send({ type: 'tune', frequency: 435660000, mode: 'usb' });
+      await sleep(800);
+      ok(!jsons(sp, 'sat').some((m) => m.state === 'OFF' && /Tuned away/.test(m.why || '')), 'a tune inside RS-44\'s passband keeps the lock');
+      sp.send({ type: 'tune', frequency: 435800000, mode: 'usb' });
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'OFF' && /Tuned away/.test(m.why || '')), 3000), 'a tune outside the passband ends it');
+      // ★★ beta90 1.1 / 1.2: a CW beacon decodes CW; AO-73's FUNcube telemetry 1200 Hz low in USB with fctlm; MO-122's Fox telemetry none
+      sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 1, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 44909 && lastPicked(sp)?.tx === 1, 4000), 'RS-44 beacon picked');
+      p = lastPicked(sp);
+      ok(p && p.decoder === 'cw' && p.mode === 'cw' && p.use === 'packet' && p.hz === 435605000, `RS-44 CW beacon: cw decoder (${p?.decoder} ${p?.mode} ${p?.use})`);
+      ok(/decoder attached: CW/.test(S.L()), 'the CW decoder runs');
+      sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 39444, 4000), 'AO-73 telemetry picked');
+      p = lastPicked(sp);
+      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145933800 && p.use === 'packet', `AO-73: fctlm, USB 1200 Hz low (${p?.decoder} ${p?.hz})`);
+      ok(/decoder attached: fctlm/.test(S.L()) && /\[sat\] decoder cw detached/.test(S.L()), 'fctlm runs; the CW the previous pick started detached');
+      sp.send({ type: 'sat', op: 'pick', norad: 60209, tx: 1, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 60209, 4000) && lastPicked(sp).decoder === '', `MO-122 Fox-format telemetry: no decoder (${lastPicked(sp)?.decoder})`);
+      sp.send({ type: 'sat', op: 'pick', norad: 7530, tx: 0, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 7530, 4000), 'AO-7 Mode B picked');
+      p = lastPicked(sp);
+      ok(p && p.band === 'U/v' && p.modeName === 'Mode B' && p.lo === 145925000 && p.hi === 145975000, `picked carries band / modeName / lo / hi (${p?.band} ${p?.modeName} ${p?.lo}–${p?.hi})`);
+      // the list's beta90 fields and the pass's ground track
+      sp.send({ type: 'sat_list' });
+      await until(() => jsons(sp, 'sat_list').length > 0, 3000);
+      const l9 = lastOf(sp, 'sat_list');
+      const ao7 = l9?.sats?.find((x) => x.id === 'AO-7');
+      ok(ao7 && ao7.tx[0].band === 'U/v' && ao7.tx[0].modeName === 'Mode B' && ao7.tx[3]?.decoder === 'cw' && ao7.tx[3]?.hz === 145977500, 'sat_list: AO-7 band, mode name, the Mode B CW beacon');
+      ok(typeof l9?.source?.pickPrivate === 'boolean', `source.pickPrivate ${l9?.source?.pickPrivate}`);
+      ok(l9?.sats?.some((x) => x.id === 'TO-108') && l9?.sats?.find((x) => x.id === 'SONATE-2')?.tx?.some((t) => t.hz === 145880000 && t.sstv && t.decoder === 'sstv'), 'TO-108 listed; SONATE-2 SSTV 145.880 with SSTV');
+      const ps = l9?.sats?.find((x) => x.id === 'ISS')?.passes?.[0];
+      if (ps) {
+        sp.send({ type: 'sat_list', op: 'track', norad: 25544, aos: ps.aos, los: ps.los });
+        ok(await until(() => !!lastOf(sp, 'sat_track'), 3000), 'sat_track answered');
+        const tr = lastOf(sp, 'sat_track');
+        ok(tr && Array.isArray(tr.geo) && tr.geo.length > 10 && tr.geo.length <= 120 && Math.abs(tr.geoT0 - (ps.aos - 600)) < 2 && Math.abs(tr.geoT1 - (ps.los + 600)) < 2
+           && tr.tca > ps.aos && tr.tca < ps.los && tr.geo.every((g) => g === null || (g.length === 3 && Math.abs(g[0]) <= 90 && g[2] > 200)),
+           `sat_track geo: ${tr?.geo?.length} points, ${tr?.geoT0}…${tr?.geoT1}, tca ${tr?.tca}`);
+        ok(Array.isArray(tr?.pts) && tr.pts.length > 2, 'pts kept beside it');
+      } else ok(false, 'an ISS pass to draw');
 
       // refusals
       sp.txt.length = 0;
@@ -456,6 +498,26 @@ try {
       ok(hits.length === 2, 'synced: an open asks nothing more');
       sp.close();
     } finally { S.stop(); mirror.close(); }
+  }
+
+  // ── 9. ★★ beta90 UNATTENDED SATELLITE PASSES: nobody here, ISS overhead → the pass is picked (tune, Doppler, SSTV);
+  //       a listener arriving gives it up and gets the radio back where the pass found it ──
+  {
+    console.log(`── beta90 unattended pass, nobody here (${issLoc}) ──`);
+    const bg = JSON.stringify({ on: false, waitMin: 5, profiles: [], satPasses: { on: true, minEl: 0, birds: [{ norad: 25544, label: 'Voice / SSTV' }] } });
+    const S = await server('satpass', { loc: issLoc, radio: { bgDecode: bg }, freq: 437800000 });
+    try {
+      ok(await until(() => /\[sat\] unattended pass: ISS Voice \/ SSTV/.test(S.L()), 12000), 'with nobody here the ISS pass is picked by itself');
+      ok(/unattended pass: ISS Voice \/ SSTV \(max [0-9]+°, LOS in [0-9]+ s\) — 145\.800 MHz nfm, Doppler (TRACK|COAST|ARMED), decoder sstv/.test(S.L()),
+         `tuned to 145.800 NFM, Doppler locked, SSTV running (${(S.L().match(/unattended pass: [^\n]*/) || [''])[0]})`);
+      ok(/\[sat\] decoder sstv attached for the shared dial/.test(S.L()), 'the SSTV decoder on the shared host (its gallery copy is the ordinary one)');
+      await sleep(2500);
+      ok(!/unattended pass: .*ended/.test(S.L()), 'its own decoder does not count as somebody (the pass carries on)');
+      const sp = await sock(S, 'satpass01');
+      ok(await until(() => /unattended pass: ISS Voice \/ SSTV, max [0-9]+° — ended \(a listener arrived\)/.test(S.L()), 4000), 'a listener arriving gives the pass up');
+      ok(await until(() => lastOf(sp, 'config')?.vfo === 437800000, 4000), `…and gets the radio back where the pass found it (vfo ${lastOf(sp, 'config')?.vfo})`);
+      sp.close();
+    } finally { S.stop(); }
   }
 
   // ── 8. ★★★ the R36S handheld: no satellites at all (Stuart, 2026-11-20) ──

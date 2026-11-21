@@ -1198,6 +1198,12 @@ add_executable(test-lrpt "${CMAKE_CURRENT_SOURCE_DIR}/test-lrpt.cpp")
 target_include_directories(test-lrpt PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
 target_compile_options(test-lrpt PRIVATE -O3)
 add_test(NAME lrpt COMMAND test-lrpt --quick)
+# ★★ V12 beta90 FUNcube BPSK 1200 telemetry (docs/v12/SATELLITE-BEST-SERVER.md): the AO-40 FEC from our own encoder, noise
+#    (no frame ever), the whole receiver from our own transmitter, SIMD against scalar, the values. Header-only.
+add_executable(test-fctlm "${CMAKE_CURRENT_SOURCE_DIR}/test-fctlm.cpp")
+target_include_directories(test-fctlm PRIVATE "${CPP_DIR}")
+target_compile_options(test-fctlm PRIVATE -O2)
+add_test(NAME fctlm COMMAND test-fctlm --quick)
 # ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): SGP4/SDP4 against the paper's verification set, OMM/TLE,
 #    the observer's view, Doppler and passes against Skyfield; the catalogue / TLE supply; the Doppler lock. Header-only.
 foreach(t sat-orbit sat-engine)

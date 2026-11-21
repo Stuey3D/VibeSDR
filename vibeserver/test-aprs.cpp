@@ -264,6 +264,67 @@ static void testRun() {
     CHECK(l.find("caf? ok") != std::string::npos, "Latin-1 replaced");
 }
 
+static void testViaSatellite() {
+    std::printf("── beta90 1.9 / 1.3: stations heard through a satellite, APRS telemetry ──\n");
+    std::vector<std::string> out;
+    std::vector<vibestation::Heard> heard;
+    double clock = 100;
+    vibeaprs::Run::Opts o;
+    o.json = [&](const std::string& j) { out.push_back(j); };
+    o.heard = [&](const vibestation::Heard& h) { heard.push_back(h); };
+    o.clock = [&] { return clock; };
+    vibeaprs::Run run(1200, o);
+    auto put = [&](const std::vector<uint8_t>& b) { vibeaprs::Frame f; f.bytes = b; run.onFrame(f); };
+    put(ui("EA4XYZ", 7, "APRS", {{"RS0ISS", true}, {"ARISS", false}}, "!4024.00N/00342.00W-via the space station"));
+    std::string l = run.listJson(false);
+    CHECK(l.find("\"sat\":\"ISS\"") != std::string::npos && l.find("\"via\":\"RS0ISS\"") != std::string::npos, "the station: sat ISS, via RS0ISS");
+    CHECK(!out.empty() && out[0].find("\"type\":\"aprs_packet\"") != std::string::npos && out[0].find("\"sat\":\"ISS\"") != std::string::npos, "aprs_packet carries sat");
+    CHECK(heard.size() == 1 && heard[0].line.find("via ISS (RS0ISS)") != std::string::npos, "the gallery line says via ISS: %s", heard.empty() ? "" : heard[0].line.c_str());
+    // a station heard direct carries no satellite
+    put(ui("G4ABC", 0, "APRS", {{"WIDE1-1", false}}, "!5130.00N/00010.00W>car"));
+    l = run.listJson(false);
+    CHECK(l.find("\"key\":\"G4ABC\"") != std::string::npos && l.find("G4ABC\",\"from\":\"G4ABC\",\"kind\":\"position\",\"sym") != std::string::npos
+          && heard.back().line.find("via ISS") == std::string::npos, "a direct station: no satellite");
+    // the pick's satellite names a frame whose path does not (SONATE-2's digipeater has no call in our table)
+    std::string pickSat = "SONATE-2";
+    vibeaprs::Run::Opts o2 = o; o2.satName = [&] { return pickSat; };
+    out.clear();
+    vibeaprs::Run run2(1200, o2);
+    auto put2 = [&](const std::vector<uint8_t>& b) { vibeaprs::Frame f; f.bytes = b; run2.onFrame(f); };
+    put2(ui("DL1ABC", 0, "APRS", {{"DP0SNX", true}}, "T#123,100,200,300,400,500,10101010"));
+    bool tlm = false;
+    for (auto& j : out) if (j.find("\"type\":\"sat_tlm\"") != std::string::npos) {
+        tlm = j.find("\"sat\":\"SONATE-2\"") != std::string::npos && j.find("\"format\":\"aprs-t\"") != std::string::npos && j.find("\"seq\":123") != std::string::npos
+           && j.find("{\"k\":\"a3\",\"name\":\"Analogue 3\",\"v\":300,\"raw\":true}") != std::string::npos && j.find("{\"k\":\"b2\",\"name\":\"Bit 2\",\"v\":0}") != std::string::npos;
+        if (!tlm) std::printf("   %s\n", j.c_str());
+    }
+    CHECK(tlm, "T# through a satellite → sat_tlm (analogue raw, bits exact)");
+    out.clear();
+    put(ui("M0TLM", 0, "APRS", {}, "T#001,1,2,3,4,5,00000000"));
+    bool none = true; for (auto& j : out) if (j.find("sat_tlm") != std::string::npos) none = false;
+    CHECK(none, "T# heard direct (no satellite): no sat_tlm");
+    // ★ SONATE-2's housekeeping: our own transfer frame (the mission's sheet) through the run
+    uint8_t hk[111] = {};
+    auto setBits = [&](int pos, int len, uint64_t v) { for (int i = 0; i < len; ++i) if ((v >> (len - 1 - i)) & 1) hk[(pos + i) >> 3] |= uint8_t(0x80 >> ((pos + i) & 7)); };
+    setBits(513, 8, 200);    // P5V1AV battery voltage: 0.020070588·200 = 4.014 V
+    setBits(259, 4, 3);      // OBMODE: NORMAL MODE
+    setBits(625, 8, 120);    // P5V1BT: −47.2389 + 0.548218·120 + 1.95267e-5·120² = 18.828 °C
+    const std::string tf = vibesonate2::encodeStdHk(hk, 1795600000u, 42);
+    out.clear();
+    put(ui("DP0SNX", 0, "CQ", {}, tf));
+    std::string tj;
+    for (auto& j : out) if (j.find("sonate2-ax25") != std::string::npos) tj = j;
+    CHECK(!tj.empty() && tj.find("\"sat\":\"SONATE-2\"") != std::string::npos && tj.find("\"seq\":42") != std::string::npos && tj.find("\"mode\":\"NORMAL MODE\"") != std::string::npos,
+          "SONATE-2 STD HK → sat_tlm (%zu bytes)", tj.size());
+    CHECK(tj.find("{\"k\":\"P5V1AV\",\"name\":\"PCU05V1 BATTERY VOLTAGE\",\"v\":4.014,\"unit\":\"V\"}") != std::string::npos, "battery voltage calibrated by the mission's own figure");
+    CHECK(tj.find("\"k\":\"P5V1BT\",\"name\":\"PCU05V1 BATTERY TEMP\",\"v\":18.828") != std::string::npos, "battery temperature by its polynomial");
+    CHECK(tj.find("\"k\":\"OBMODE\",\"name\":\"OBDH MODE\",\"v\":3,\"text\":\"NORMAL MODE\"") != std::string::npos, "an enumeration carries its words");
+    std::string bad = tf; bad[20] ^= 1;
+    out.clear(); put(ui("DP0SNX", 0, "CQ", {}, bad));
+    bool any = false; for (auto& j : out) if (j.find("sonate2-ax25") != std::string::npos) any = true;
+    CHECK(!any, "a frame whose CRC does not agree: nothing");
+}
+
 static void testCpu() {
     std::printf("── CPU ──\n");
     Res a = modemRun(1200, 20, 0, 40, 5);
@@ -354,6 +415,7 @@ int main(int argc, char** argv) {
     testModem();
     testNoise();
     testRun();
+    testViaSatellite();
     testCpu();
     std::printf("\ntest-aprs: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

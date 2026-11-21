@@ -63,5 +63,17 @@ ok(!bgReach('airspyhf', false, 0).ismOk && bgReach('airspyhf', false, 0).ndbOk, 
 ok(!bgReach('rtl', false, 0).ndbOk && bgReach('rtl', true, 0).ndbOk && bgReach('rtl', false, 0).aisOk, 'an RTL: NDB only with direct sampling');
 ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Icom: no whole-radio profiles');
 
+// ── ★ V12 beta90 unattended satellite passes (the Setup page's satPasses, its own switch) ──
+{
+  const m = parseBg('{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":30,"birds":[{"norad":57166,"label":"LRPT"},{"norad":-1,"label":"x"}]}}');
+  ok(m.sat.on && m.sat.minEl === 30 && m.sat.birds.length === 1 && m.sat.birds[0].label === 'LRPT', 'satPasses read; a bad entry dropped');
+  ok(collectBg(m) === '{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":30,"birds":[{"norad":57166,"label":"LRPT"}]}}', `stored with background off: ${collectBg(m)}`);
+  const e = parseBg('');
+  ok(!e.sat.on && e.sat.birds.length === 0 && collectBg(e) === '', 'untouched: nothing stored');
+  const c2 = parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}],"satPasses":[{"norad":57166,"label":"LRPT","name":"Meteor-M2-3","what":"weather pictures (LRPT)"}]}');
+  ok(!!c2 && c2.satPasses.length === 1 && c2.satPasses[0].name === 'Meteor-M2-3', 'the engine\'s keepable downlinks reach the editor');
+  ok(parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}]}')!.satPasses.length === 0, 'an older engine: none (the section is not drawn)');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

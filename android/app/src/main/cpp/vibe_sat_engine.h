@@ -52,8 +52,10 @@ struct Transmitter {
     double hz = 0, hiHz = 0;
     std::string mode;        // the demodulator the dial should be on: "nfm", "usb", "cw" — or a decoder's name
     std::string loop;        // "fll" | "none" | "costas" (brief §6.2)
-    std::string consumer;    // "" = listening; "lrpt", "ax25-9600", "ax25-1200", "bpsk-telemetry" = a decoder's
+    std::string consumer;    // "" = listening; "lrpt", "ax25-9600", "ax25-1200", "fc-bpsk" (FUNcube telemetry, decoded),
+                             // "fox-bpsk" (Fox-format telemetry — heard, NOT decoded) = a decoder's
     double baud = 0;
+    std::string modeName;    // ★ beta90 1.4: the catalogue's own name for a transponder ("Mode A", "Mode B"), else ""
     double upHz = 0, ctcss = 0;
     std::string note;
     std::string status;      // sats.json: "active" | "inactive" (SatNOGS DB's word) | "" (nobody said)
@@ -82,13 +84,15 @@ inline std::vector<SatDef> curatedCatalogue() {
         Transmitter t; t.label = label; t.hz = lo; t.hiHz = hi; t.mode = "usb"; t.loop = "none"; t.upHz = upLo; return t; };
     auto dig = [](const char* label, double hz, const char* mode, const char* consumer, double baud, const char* loop) {
         Transmitter t; t.label = label; t.hz = hz; t.mode = mode; t.consumer = consumer; t.baud = baud; t.loop = loop; return t; };
-    auto cw = [](const char* label, double hz) {
-        Transmitter t; t.label = label; t.hz = hz; t.mode = "cw"; t.loop = "none"; return t; };
+    auto cw = [](const char* label, double hz, const char* note = "") {
+        Transmitter t; t.label = label; t.hz = hz; t.mode = "cw"; t.loop = "none"; t.note = note; return t; };
+    auto named = [](Transmitter t, const char* modeName) { t.modeName = modeName; return t; };
     std::vector<SatDef> v;
     v.push_back({"ISS", "ISS", 25544, "amateur", "Crew contacts, events and the repeater when ARISS has it on",
                  {fm("FM repeater", 437800000, "Cross-band repeater, uplink 145.990 MHz (67 Hz)", 145990000, 67.0),
                   fm("Voice / SSTV", 145800000, "School contacts and SSTV events"),
-                  dig("APRS", 145825000, "nfm", "ax25-1200", 1200, "fll")}});
+                  dig("APRS", 145825000, "nfm", "ax25-1200", 1200, "fll"),
+                  fm("SSTV events", 437550000, "Recent ARISS SSTV events (Robot 36) were sent here")}});
     v.push_back({"SO-50", "SO-50 (SaudiSat-1C)", 27607, "amateur", "FM repeater; armed by a 74.4 Hz tone, 10 minute timer",
                  {fm("FM repeater", 436795000, "Uplink 145.850 MHz (67 Hz)", 145850000, 67.0)}});
     v.push_back({"AO-123", "AO-123 (ASRTU-1)", 61781, "amateur", "FM repeater",
@@ -100,16 +104,22 @@ inline std::vector<SatDef> curatedCatalogue() {
     v.push_back({"FO-29", "FO-29 (JAS-2)", 24278, "amateur", "Linear transponder on a schedule (power permitting)",
                  {lin("Transponder", 435800000, 435900000, 145900000), cw("CW beacon", 435795000)}});
     v.push_back({"AO-7", "AO-7", 7530, "amateur", "Sunlight only; mode A or B by its own timer",
-                 {lin("Mode B transponder", 145925000, 145975000, 432125000), lin("Mode A transponder", 29400000, 29500000, 145850000),
-                  cw("Beacon", 29502000)}});
+                 {named(lin("Mode B transponder", 145925000, 145975000, 432125000), "Mode B"),
+                  named(lin("Mode A transponder", 29400000, 29500000, 145850000), "Mode A"),
+                  named(cw("Mode A beacon", 29502000), "Mode A"),
+                  named(cw("Mode B beacon", 145977500, "AMSAT gives 145.9775 MHz; it has drifted to about 145.973"), "Mode B")}});
     v.push_back({"AO-73", "AO-73 (FUNcube-1)", 39444, "amateur", "Transponder in eclipse; telemetry in sunlight",
-                 {lin("Transponder", 145950000, 145970000, 435130000), dig("Telemetry", 145935000, "usb", "bpsk-telemetry", 1200, "none")}});
+                 {lin("Transponder", 145950000, 145970000, 435130000), dig("Telemetry", 145935000, "usb", "fc-bpsk", 1200, "none")}});
     v.push_back({"JO-97", "JO-97 (JY1Sat)", 43803, "amateur", "Linear transponder",
                  {lin("Transponder", 145855000, 145875000, 435100000)}});
     v.push_back({"MO-122", "MO-122 (MESAT1)", 60209, "amateur", "Linear transponder",
-                 {lin("Transponder", 435810000, 435840000, 145910000), dig("Telemetry", 435800000, "usb", "bpsk-telemetry", 1200, "none")}});
-    v.push_back({"SONATE-2", "SONATE-2", 59112, "amateur", "Telemetry and APRS",
-                 {dig("Telemetry", 437025000, "nfm", "ax25-9600", 9600, "none"), dig("APRS", 145825000, "nfm", "ax25-1200", 1200, "fll")}});
+                 {lin("Transponder", 435810000, 435840000, 145910000), dig("Telemetry", 435800000, "usb", "fox-bpsk", 1200, "none")}});
+    v.push_back({"SONATE-2", "SONATE-2", 59112, "amateur", "Telemetry, APRS and SSTV",
+                 {[&] { Transmitter t = dig("Telemetry", 437025000, "nfm", "ax25-9600", 9600, "none"); t.note = "Germany passes only"; return t; }(),
+                  dig("APRS", 145825000, "nfm", "ax25-1200", 1200, "fll"),
+                  fm("SSTV", 145880000, "Martin M1 pictures on the university's published schedule")}});
+    v.push_back({"TO-108", "TO-108 (CAS-6)", 44881, "amateur", "Linear transponder, inverting; on intermittently",
+                 {lin("Transponder", 145915000, 145935000, 435280000)}});
     v.push_back({"METEOR-M2-3", "Meteor-M2-3", 57166, "weather", "Weather images (LRPT); mode and frequency can change",
                  {dig("LRPT", 137900000, "lrpt", "lrpt", 72000, "costas")}});
     v.push_back({"METEOR-M2-4", "Meteor-M2-4", 59051, "weather", "Weather images (LRPT); mode and frequency can change",
@@ -172,6 +182,7 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
                 tr.label = t.str("label").substr(0, 48); tr.hz = t.num("downlink"); tr.hiHz = t.num("downlinkHigh");
                 tr.mode = t.str("mode"); tr.loop = t.str("loop"); tr.consumer = t.str("consumer"); tr.baud = t.num("baud");
                 tr.upHz = t.num("uplink"); tr.ctcss = t.num("ctcss"); tr.note = t.str("note").substr(0, 160); tr.status = t.str("status");
+                tr.modeName = t.str("modeName").substr(0, 24);
                 static const char* kModes[] = {"nfm", "usb", "lsb", "cw", "am", "lrpt"};
                 bool modeOk = false; for (auto m : kModes) if (tr.mode == m) modeOk = true;
                 const bool loopOk = tr.loop == "fll" || tr.loop == "none" || tr.loop == "costas";
@@ -209,12 +220,34 @@ inline bool sstvOf(const Transmitter& t) {
     };
     return has(t.label) || has(t.note);
 }
-/** "image" (a picture decoder: Meteor LRPT) · "packet" (AX.25 / APRS) · "voice" (listening: FM repeaters, linear
- *  transponders, CW beacons — and telemetry with no decoder of ours yet, which is heard, not decoded). */
+/** "image" (a picture decoder: Meteor LRPT) · "packet" (text lines: AX.25 / APRS, a CW beacon's decoded text (beta90
+ *  1.1), FUNcube telemetry (1.2)) · "voice" (listening: FM repeaters, linear transponders — and telemetry with no
+ *  decoder of ours, e.g. Fox-format "fox-bpsk", which is heard, not decoded). */
 inline const char* useOf(const Transmitter& t) {
     if (t.consumer == "lrpt" || t.mode == "lrpt") return "image";
     if (t.consumer.rfind("ax25", 0) == 0) return "packet";
+    if (t.consumer == "fc-bpsk") return "packet";
+    if (t.mode == "cw" && t.consumer.empty()) return "packet";
     return "voice";
+}
+/** ★ beta90 1.4: AMSAT's band letter for a frequency (A 10 m · V 2 m · U 70 cm · L 23 cm · S 13 cm · X 3 cm), or 0. */
+inline char bandLetter(double hz) {
+    if (hz >= 21.0e6 && hz <= 30.0e6) return 'A';
+    if (hz >= 144.0e6 && hz <= 148.0e6) return 'V';
+    if (hz >= 420.0e6 && hz <= 450.0e6) return 'U';
+    if (hz >= 1240.0e6 && hz <= 1300.0e6) return 'L';
+    if (hz >= 2300.0e6 && hz <= 2450.0e6) return 'S';
+    if (hz >= 10.0e9 && hz <= 10.5e9) return 'X';
+    return 0;
+}
+/** ★ beta90 1.4: "U/v" — uplink band UPPER case, downlink lower case (AMSAT's notation). "" when the downlink has no
+ *  uplink (a beacon, telemetry, a weather satellite) or either band has no letter. We only receive: it is how people
+ *  find the bird. */
+inline std::string bandOf(const Transmitter& t) {
+    if (!(t.upHz > 0)) return "";
+    const char u = bandLetter(t.upHz), d = bandLetter(t.hz);
+    if (!u || !d) return "";
+    return std::string(1, u) + "/" + std::string(1, (char)std::tolower((unsigned char)d));
 }
 /** The demodulator a downlink is listened with (a decoder's own mode → its carrier's) — the same answer as the clients'
  *  txListenMode (src/services/satellites.ts). */
@@ -222,14 +255,22 @@ inline std::string listenModeOf(const Transmitter& t) {
     if (t.mode == "nfm" || t.mode == "usb" || t.mode == "lsb" || t.mode == "cw" || t.mode == "am") return t.mode;
     return "nfm";   // ★ lrpt: the LRPT decoder cuts its own slice; NFM is its listening mode
 }
-/** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz). */
-inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre()); }
+/** ★ beta90 1.2: where the DIAL sits relative to the downlink for its decoder — FUNcube BPSK is listened 1200 Hz LOW in
+ *  USB, so the signal lands at 1200 Hz audio (the fctlm decoder's centre); everything else on the frequency itself. */
+inline double listenOffsetHz(const Transmitter& t) {
+    if (t.consumer == "fc-bpsk" && t.mode == "usb") return -1200.0;
+    return 0.0;
+}
+/** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz) — plus the decoder's
+ *  listening offset (listenOffsetHz). */
+inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre() + listenOffsetHz(t)); }
 /** The decoder a pick attaches and its attach parameters (the JSON body after the extension name, "" = none) — the
  *  same parameters the clients' own keys send, so a client that later attaches the same decoder JOINS it (DecoderHost
  *  start: the same ext + paramsOf = Joined, nothing restarted).
  *   · image / lrpt → "lrpt", AUTO modulation and coding, the symbol rate from the satellite's entry (72k / 80k)
  *   · packet → "aprs" at the downlink's baud ("packet":"1200" | "9600")
  *   · voice with sstv → "sstv" (auto-sync; it waits quietly between pictures)
+ *   · a CW beacon → "cw" · FUNcube telemetry (fc-bpsk) → "fctlm" (beta90)
  *   · voice → "" (nothing to decode). */
 inline std::string decoderOf(const Transmitter& t, std::string& params) {
     params.clear();
@@ -240,15 +281,27 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     }
     if (t.consumer == "ax25-9600") { params = "\"packet\":\"9600\",\"baud_rate\":1200"; return "aprs"; }
     if (t.consumer == "ax25-1200" || t.consumer.rfind("ax25", 0) == 0) { params = "\"packet\":\"1200\",\"baud_rate\":1200"; return "aprs"; }
+    if (t.consumer == "fc-bpsk") return "fctlm";                 // ★ beta90 1.2: FUNcube BPSK 1200, AUTO (no parameters)
+    if (t.mode == "cw" && t.consumer.empty()) return "cw";       // ★ beta90 1.1: the CW beacon, the listener's CW run
     if (sstvOf(t)) return "sstv";
     return "";
+}
+/** ★ beta90 UNATTENDED PASSES: the downlinks a pass can be KEPT from — the ones with a decoder whose output goes to the
+ *  gallery (pictures, packets, telemetry). A voice / transponder downlink has nothing to keep, so it is not offered. */
+inline bool passKeepable(const Transmitter& t) {
+    std::string p;
+    const std::string d = decoderOf(t, p);
+    return d == "lrpt" || d == "sstv" || d == "aprs" || d == "fctlm";
 }
 /** The attach message a pick hands the decoder host — the shape a client's audio_extension_attach has. */
 inline std::string decoderAttachMsg(const std::string& ext, const std::string& params) {
     return "{\"type\":\"audio_extension_attach\",\"extension_name\":\"" + ext + "\"" + (params.empty() ? "" : "," + params) + "}";
 }
 /** What sat_list says about the satellite DATA SUPPLY (item 10): the last good sync and a fetch in progress. */
-struct SupplyInfo { bool known = false; double synced = 0; bool fetching = false; };
+struct SupplyInfo {
+    bool known = false; double synced = 0; bool fetching = false;
+    int pickPrivate = -1;   // ★ beta90 1.6: 1 = a pick here disturbs nobody (single user / per-listener locked range), 0 = shared, -1 = not said
+};
 /** Why a downlink is greyed (the reach rule, in words) — "" = this radio receives it. */
 using ReachWhyFn = std::function<std::string(double lo, double hi)>;
 
@@ -414,8 +467,10 @@ public:
     static constexpr double kMatchHz = 12000.0;      // brief §8: a downlink within ±12 kHz of the dial
     static constexpr double kTrimClampHz = 2500.0;   // brief §4.2: ±2–3 kHz around the model
     static constexpr double kTrimSlewHzS = 100.0;    // the applied trim moves at most this fast: 4 Hz a 25 Hz tick
-    static constexpr double kEndTuneHz = 15000.0;    // brief §9: a tune further than this ends the lock
+    static constexpr double kEndTuneHz = 15000.0;    // brief §9: a tune further than this ends the lock (single channels)
+    static constexpr double kPassbandSlackHz = 3000.0;   // beta90 1.4: a passband's edge allowance beyond the Doppler
     static constexpr double kPassCacheSec = 300.0;
+    static constexpr double kGeoMarginSec = 600.0;   // beta90 1.7: the dotted path runs 10 min either side of the pass
     static constexpr double kLosHoldSec = 3.0;       // below the horizon this long = LOS (no flicker at the edge)
     static constexpr double kOrphanArmSec = 1800.0;  // brief §9 TRAP: an unattended arm more than 30 min from AOS goes
 
@@ -590,7 +645,7 @@ public:
         L.s = c.s; L.t = c.t; L.owner = owner; L.mode = mode; L.pass = c.pass; L.startedAt = clk.unix;
         L.lastMeasure = clk.unix;   // ★ TRACK, not COAST, for the first moment: nothing has been heard yet either way
         const Transmitter& t = defs_[c.s].tx[c.t];
-        L.nominal = t.hz;
+        L.nominal = t.hz + listenOffsetHz(t);   // ★ beta90: FUNcube BPSK's dial 1200 Hz low (its audio centre)
         if (t.passband()) {
             // ★ A linear transponder: the dial the listener is on stays where the signal is — the nominal is the
             //   satellite-frame frequency that puts the channel exactly there now (no jump on engagement).
@@ -611,13 +666,25 @@ public:
     }
     /** ★ A small tune while locked (brief §9: "small fine-tune nudges adjust trim rather than cancel") — the listener
      *  moved the dial by less than 15 kHz: the nominal follows their dial, the lock goes on. Returns false when the
-     *  move is a deliberate tune away (the caller ends the lock). */
+     *  move is a deliberate tune away (the caller ends the lock).
+     *  ★★ beta90 1.4 THE PASSBAND RULE (Stuart's "still open" 1, approved): on a linear transponder ANY tune that lands
+     *     inside the Doppler-shifted passband (lo − |shift| − kPassbandSlackHz … hi + |shift| + slack) re-bases the
+     *     lock there — FO-29's 100 kHz and RS-44's 60 kHz could not be tuned across under the 15 kHz rule. Only a tune
+     *     outside it ends the lock. The nominal is clamped to the passband (the satellite frame). */
     bool nudge(const std::string& key, double newDialHz) {
         std::lock_guard<std::mutex> lk(m_);
         auto it = locks_.find(key);
         if (it == locks_.end()) return false;
-        if (std::fabs(newDialHz - it->second.nominal) > kEndTuneHz) return false;
-        it->second.nominal = newDialHz;
+        Lock& L = it->second;
+        const Transmitter& t = defs_[L.s].tx[L.t];
+        if (t.passband()) {
+            const double edge = std::fabs(L.last.shiftHz) + std::fabs(L.last.modelHz - L.last.shiftHz) + kPassbandSlackHz;
+            if (newDialHz < t.hz - edge || newDialHz > t.hiHz + edge) return false;
+            L.nominal = std::max(t.hz, std::min(t.hiHz, newDialHz));
+            return true;
+        }
+        if (std::fabs(newDialHz - L.nominal) > kEndTuneHz) return false;
+        L.nominal = newDialHz;
         return true;
     }
     /** The closed loop's input: a residual (Hz, signal above channel centre = positive) measured with the gate open. */
@@ -664,6 +731,35 @@ public:
         }
         return false;
     }
+    /** ★ beta90 (Decided 4): the LOS of the pass `norad` is in now (AOS − kPassActiveLeadSec … LOS), else 0 — a
+     *  listener on a picked pass is not idle-timed-out until then (as WEFAX). */
+    double activeUntil(long long norad, double now) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!obs_.valid) return 0;
+        for (size_t i = 0; i < defs_.size(); ++i) {
+            if (defs_[i].norad != norad || !sats_[i].have) continue;
+            for (auto& p : passesLocked(i, now)) if (p.aos - kPassActiveLeadSec <= now && p.los > now) return p.los;
+        }
+        return 0;
+    }
+    static constexpr double kPassActiveLeadSec = 120.0;   // picked a couple of minutes before AOS: waiting counts
+    /** ★ beta90 unattended passes: the downlink of `norad` labelled `label` → its index (−1 = not listed now). */
+    int txIndex(long long norad, const std::string& label) const {
+        std::lock_guard<std::mutex> lk(m_);
+        for (const auto& d : defs_) if (d.norad == norad)
+            for (size_t k = 0; k < d.tx.size(); ++k) if (d.tx[k].label == label) return (int)k;
+        return -1;
+    }
+    /** ★ beta90: the pass of `norad` in progress at `now` (AOS ≤ now + lead, LOS > now) — false when none. */
+    bool passAt(long long norad, double now, Pass& out, double leadSec = 0) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!obs_.valid) return false;
+        for (size_t i = 0; i < defs_.size(); ++i) {
+            if (defs_[i].norad != norad || !sats_[i].have) continue;
+            for (auto& p : passesLocked(i, now)) if (p.aos - leadSec <= now && p.los > now) { out = p; return true; }
+        }
+        return false;
+    }
     /** ★ The brief's orphan rule: with nobody connected, an ARMED lock more than 30 minutes from its AOS goes. Returns
      *  the keys removed. Active locks run to LOS unattended. */
     std::vector<std::string> dropOrphanArms(const Clock& clk) {
@@ -700,6 +796,7 @@ public:
             if (meta_.orbitsAt > 0) j += ",\"fetched\":" + fmtNum(meta_.orbitsAt, 0);
             if (newest > 0) j += ",\"newestEpoch\":" + fmtNum(newest, 0);
             if (supply.known) j += ",\"synced\":" + fmtNum(supply.synced, 0) + ",\"fetching\":" + (supply.fetching ? "true" : "false");
+            if (supply.pickPrivate >= 0) j += std::string(",\"pickPrivate\":") + (supply.pickPrivate ? "true" : "false");
             j += "}";
         }
         j += ",\"sats\":[";
@@ -729,6 +826,13 @@ public:
                 if (!t.status.empty()) j += ",\"status\":\"" + t.status + "\"";
                 j += std::string(",\"use\":\"") + useOf(t) + "\"";
                 if (sstvOf(t)) j += ",\"sstv\":true";
+                {   // ★ beta90: the band label, the catalogue's mode name, the decoder a pick attaches
+                    const std::string b = bandOf(t);
+                    if (!b.empty()) j += ",\"band\":\"" + b + "\"";
+                    if (!t.modeName.empty()) j += ",\"modeName\":\"" + jsonEsc(t.modeName) + "\"";
+                    std::string prm;
+                    j += ",\"decoder\":\"" + decoderOf(t, prm) + "\"";
+                }
                 j += std::string(",\"reach\":") + (reach ? "true" : "false");
                 if (!reach) j += ",\"why\":\"" + jsonEsc(why) + "\"";
                 j += "}";
@@ -778,6 +882,38 @@ public:
             }
         }
         return j + "]";
+    }
+
+    /** ★ beta90 1.7: the pass's ground track for the half-globe — the sub-satellite point [lat, lon, altKm] from
+     *  AOS − 10 min to LOS + 10 min, ≤ 120 points evenly in time. Fills t0/t1/step; "" when unknown. Also the pass's
+     *  TCA (the highest point) if a cached pass overlaps [aos, los]. */
+    std::string geoJson(long long norad, double aos, double los, double& t0, double& t1, double& step, double& tca) {
+        std::lock_guard<std::mutex> lk(m_);
+        t0 = t1 = step = tca = 0;
+        if (!obs_.valid || !(los > aos) || los - aos > 6 * 3600) return "";
+        for (size_t i = 0; i < defs_.size(); ++i) {
+            if (defs_[i].norad != norad || !sats_[i].have) continue;
+            t0 = aos - kGeoMarginSec; t1 = los + kGeoMarginSec;
+            step = std::max(10.0, (t1 - t0) / 119.0);
+            std::string j = "[";
+            int n = 0;
+            for (double t = t0; t <= t1 + 0.01 && n < 120; t += step, ++n) {
+                Look L = look(sats_[i].sgp, obs_, std::min(t, t1));
+                if (n) j += ",";
+                if (!L.ok) { j += "null"; continue; }   // ★ keeps geo[i] at t0 + i·step
+                j += "[" + fmtNum(L.subLatDeg, 3) + "," + fmtNum(L.subLonDeg, 3) + "," + fmtNum(L.altKm, 0) + "]";
+            }
+            for (auto& p : sats_[i].passes) if (p.aos < los && p.los > aos) { tca = p.tca; break; }
+            if (tca <= 0) {   // ★ not cached: the highest sample of the window inside AOS…LOS
+                double best = -91;
+                for (double t = aos; t <= los; t += std::max(5.0, (los - aos) / 120.0)) {
+                    Look L = look(sats_[i].sgp, obs_, t);
+                    if (L.ok && L.elDeg > best) { best = L.elDeg; tca = t; }
+                }
+            }
+            return j + "]";
+        }
+        return "";
     }
 
     /** The per-listener readout (`{"type":"sat", …}`), from a Track. */

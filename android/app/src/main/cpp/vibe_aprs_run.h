@@ -19,11 +19,13 @@
 #include "vibe_aprs.h"
 #include "vibe_g3ruh.h"       // ★ V12 9600 Bd G3RUH (docs/v12/AX25-9600-FX25-IL2P.md)
 #include "vibe_sat_calls.h"
+#include "vibe_sonate2_tlm.h"   // ★ V12 beta90 SONATE-2 housekeeping
 #include "vibe_station_sink.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <deque>
 #include <functional>
@@ -63,6 +65,7 @@ struct Station {
     char symTable = '/', symCode = '/';
     double lat = NAN, lon = NAN, course = NAN, speedKn = NAN, altFt = NAN;
     std::string comment, status, micE, path, raw, line, via;
+    std::string sat;   ///< ★ V12 beta90 1.9: the satellite that carried it ("ISS", "SONATE-2") — vibe_sat_calls.h / the pick
     Weather wx;
     bool killed = false, messaging = false;
     double first = 0, last = 0, posAt = -1;
@@ -158,12 +161,14 @@ public:
         const std::string dk = addrText(ax.src) + "|" + ax.info;
         for (auto it = dupes_.begin(); it != dupes_.end();) { if (t - it->second > kDupeSec) it = dupes_.erase(it); else ++it; }
         Packet p = parsePacket(ax);
+        curSat_ = satOf_(ax);
         auto d = dupes_.find(dk);
         if (d != dupes_.end()) {
             ++dupes_n_;
-            // a digipeated copy: remember the path it came by, nothing else
+            // a digipeated copy: remember the path it came by (and the satellite that carried it), nothing else
             auto st = stations_.find(keyOf(p));
             if (st != stations_.end() && !p.path.empty() && p.path.find('*') != std::string::npos) st->second.via = viaOf(p.path);
+            if (st != stations_.end() && !curSat_.empty()) st->second.sat = curSat_;
             return;
         }
         dupes_[dk] = t;
@@ -209,6 +214,53 @@ public:
     uint64_t repaired() const { return repaired_; }
 
 private:
+    /** ★ V12 beta90 1.9: the satellite a frame came through — the SATELLITE pick's bird (asked per frame), a fixed name,
+     *  else a callsign we are sure of (vibe_sat_calls.h): the source, or a digipeater that marked it (H bit). "" = none. */
+    std::string satOf_(const Ax25& ax) const {
+        std::string n = o_.satName ? o_.satName() : std::string();
+        if (n.empty()) n = o_.sat;
+        if (n.empty()) n = vibesat::byCallsign(ax.src.call);
+        if (n.empty()) for (const Addr& dg : ax.digis) if (dg.h) { const std::string m = vibesat::byCallsign(dg.call); if (!m.empty()) n = m; }
+        return n;
+    }
+    /** ★ V12 beta90 1.3: APRS 1.0.1 telemetry "T#sss,a1,a2,a3,a4,a5,bbbbbbbb" heard through a satellite → sat_tlm. The
+     *  analogue values are RAW (their EQNS coefficients come in a separate message, not kept here); the 8 bits exact. */
+    void telemetry_(const Packet& p, const std::string& sat) {
+        if (!o_.json || sat.empty() || p.kind != "telemetry") return;
+        const std::string& t = p.raw;
+        const size_t at = t.find("T#");
+        if (at == std::string::npos) return;
+        std::vector<std::string> f;
+        std::string cur;
+        for (size_t i = at + 2; i < t.size() && f.size() < 7; ++i) {
+            const char c = t[i];
+            if (c == ',') { f.push_back(cur); cur.clear(); continue; }
+            if ((c >= '0' && c <= '9') || c == '.' || c == '-' || (f.size() == 0 && std::isalnum((unsigned char)c))) cur += c; else break;
+        }
+        if (f.size() < 7 && !cur.empty()) f.push_back(cur);
+        if (f.size() < 6) return;
+        std::string j = "{\"type\":\"sat_tlm\",\"data\":{\"sat\":\"" + jsonEsc(utf8Clean(sat)) + "\",\"format\":\"aprs-t\",\"from\":\""
+                      + jsonEsc(utf8Clean(p.from)) + "\",\"frame\":\"T#" + jsonEsc(f[0].substr(0, 8)) + "\"";
+        char* e = nullptr;
+        const long seq = std::strtol(f[0].c_str(), &e, 10);
+        if (e && *e == 0 && !f[0].empty()) j += ",\"seq\":" + std::to_string(seq);
+        j += ",\"values\":[";
+        bool first = true;
+        for (int i = 1; i <= 5 && i < (int)f.size(); ++i) {
+            char* e2 = nullptr; const double v = std::strtod(f[(size_t)i].c_str(), &e2);
+            if (!e2 || *e2 != 0 || f[(size_t)i].empty()) continue;
+            if (!first) j += ","; first = false;
+            j += "{\"k\":\"a" + std::to_string(i) + "\",\"name\":\"Analogue " + std::to_string(i) + "\",\"v\":" + fmt(v, v == std::floor(v) ? 0 : 3) + ",\"raw\":true}";
+        }
+        if (f.size() >= 7 && f[6].size() == 8)
+            for (int b = 0; b < 8; ++b) {
+                if (f[6][(size_t)b] != '0' && f[6][(size_t)b] != '1') break;
+                if (!first) j += ","; first = false;
+                j += "{\"k\":\"b" + std::to_string(b + 1) + "\",\"name\":\"Bit " + std::to_string(b + 1) + "\",\"v\":" + std::string(1, f[6][(size_t)b]) + "}";
+            }
+        j += "],\"hex\":\"\"}}";
+        o_.json(j);
+    }
     static bool binaryInfo_(const std::string& s) {
         for (unsigned char c : s) if ((c < 0x20 && c != '\r' && c != '\n' && c != '\t') || c == 0x7f) return true;
         return false;
@@ -242,6 +294,11 @@ private:
             e.text += (c >= 0x20 && c < 0x7f) ? char(c) : '.';
         }
         if (!aprs) ++other_;
+        // ★ V12 beta90 1.3: SONATE-2's housekeeping (DP0SNX, a CCSDS transfer frame) → named values (vibe_sonate2_tlm.h)
+        if (!aprs && o_.json && ax.src.call == "DP0SNX") {
+            const vibesonate2::Result r = vibesonate2::decode(ax.info, e.sat.empty() ? std::string("SONATE-2") : e.sat, tlmNow_());
+            if (!r.json.empty()) o_.json(r.json);
+        }
         log_.push_back(e);
         while (log_.size() > kLogMax) log_.pop_front();
         dirty_ = true;
@@ -269,6 +326,8 @@ private:
         if (e.aprs) o += ",\"aprs\":1";
         o += "}";
     }
+    /** The wall clock for sat_tlm's "t" (the run's own clock is for ages, and is a test seam). */
+    static double tlmNow_() { return (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }
     double now() const {
         if (o_.clock) return o_.clock();
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
@@ -298,6 +357,7 @@ private:
         ++s.count; s.last = t;
         s.from = p.from; s.name = p.name; s.raw = p.raw; s.path = p.path;
         if (!p.path.empty()) s.via = viaOf(p.path);
+        if (!curSat_.empty()) s.sat = curSat_;
         if (p.kind != "message" && p.kind != "ack" && p.kind != "bulletin") s.kind = s.kind.empty() || p.hasPos || p.kind == "weather" ? p.kind : s.kind;
         else if (s.kind.empty()) s.kind = "station";
         if (p.hasPos) {
@@ -325,14 +385,18 @@ private:
                           + "\",\"kind\":\"" + p.kind + "\",\"line\":\"" + jsonEsc(utf8Clean(s.line)) + "\",\"raw\":\"" + jsonEsc(utf8Clean(p.raw)) + "\"";
             if (p.hasPos) j += ",\"lat\":" + fmt(p.lat, 5) + ",\"lon\":" + fmt(p.lon, 5);
             if (!p.to.empty()) j += ",\"to\":\"" + jsonEsc(p.to) + "\",\"text\":\"" + jsonEsc(utf8Clean(p.text)) + "\"";
+            if (!s.sat.empty()) j += ",\"sat\":\"" + jsonEsc(utf8Clean(s.sat)) + "\"";
             o_.json(j + "}}");
         }
+        telemetry_(p, curSat_);
         if (o_.heard) {
             vibestation::Heard h;
             h.key = s.key; h.kind = p.kind; h.name = s.key; h.freqHz = o_.rfHz ? o_.rfHz() : 0;
             h.line = utf8Clean(s.line);
             if (p.hasPos) h.line += " \xc2\xb7 " + fmt(p.lat, 4) + " " + fmt(p.lon, 4);
-            if (!s.via.empty()) h.line += " \xc2\xb7 via " + s.via;
+            // ★ V12 beta90 1.9: "via ISS" — the satellite that carried it (with the digipeater's call when it differs)
+            if (!s.sat.empty()) h.line += " \xc2\xb7 via " + utf8Clean(s.sat) + (!s.via.empty() && s.via != s.sat ? " (" + s.via + ")" : std::string());
+            else if (!s.via.empty()) h.line += " \xc2\xb7 via " + s.via;
             o_.heard(h);
         }
     }
@@ -359,6 +423,7 @@ private:
         num("alt", s.altFt == s.altFt ? s.altFt * 0.3048 : NAN, 0);
         auto str = [&](const char* k, const std::string& v) { if (!v.empty()) { o += ",\""; o += k; o += "\":\"" + jsonEsc(utf8Clean(v)) + "\""; } };
         str("comment", s.comment); str("status", s.status); str("micE", s.micE); str("path", s.path); str("via", s.via); str("raw", s.raw);
+        str("sat", s.sat);   // ★ V12 beta90 1.9
         str("line", s.line);
         if (s.wx.any()) {
             o += ",\"wx\":{";
@@ -397,6 +462,7 @@ private:
     std::deque<Message> msgs_;
     uint64_t frames_ = 0, repaired_ = 0, dupes_n_ = 0;
     bool dirty_ = false;
+    std::string curSat_;   // ★ the frame being handled: its satellite (satOf_)
     double lastList_ = -10;
     std::chrono::steady_clock::time_point t0_ = std::chrono::steady_clock::now();
 };

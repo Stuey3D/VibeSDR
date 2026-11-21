@@ -296,6 +296,11 @@ flags_for() {
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
     test-sat-orbit|test-sat-engine) echo "-O2 -lpthread" ;;
+    # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
+    #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
+    test-fctlm)            echo "-O2" ;;
+    # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
+    test-sat-cw)           echo "-O2 -I $VDSP" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
@@ -307,6 +312,7 @@ deps_for() {
   case "$1" in
     test-wspr)          echo "android/app/src/main/cpp/decoders/digimodes/wspr_decoder.cpp $VDSP/third_party/pffft/pffft.c" ;;
     test-balloon)       echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;   # ★ the RTTY decoder the balloon bank runs
+    test-sat-cw)        echo "android/app/src/main/cpp/decoders/cw_skimmer.cpp $VDSP/third_party/pffft/pffft.c" ;;   # ★ beta90
     test-dxscan-fm)     echo "$VDSP/fft.cpp $VDSP/channelizer.cpp $VDSP/ddc.cpp $VDSP/stereo.cpp $VDSP/rds.cpp" ;;   # ★ kiss + pffft: cobjs_for
     test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
@@ -673,6 +679,9 @@ if node scripts/test-setup-adsb-landing.mjs; then pass=$((pass+1)); else fail=$(
 # ★★ V12 BACKGROUND DECODING's editor (2026-10-22): the page's real code — Nick's profile round-trips, decoders follow the
 #    demodulator, "add another profile" only under a timed one, delete, the dial hint.
 if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta90 UNATTENDED SATELLITE PASSES beside it: its own switch, saved inside the same setting as "satPasses",
+#    ticks by catalogue number + label, nothing stored untouched, hidden on an Icom, the locked-range note.
+if node scripts/test-setup-satpass.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and an ISM PROFILE (2026-10-25): offered only where ISM can run (not an HF+, an Icom, a locked radio, ISM blocked),
 #    only the bands the radio reaches; a band instead of a centre and VFOs; saved as {"ism":"433"} and read back.
 if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

@@ -23,7 +23,7 @@ import { meaningText } from '../constants/decoderTokens';
 import {
   type BgCaps, type BgModel, type BgProfile, type BgVfo, BG_DEMODS, BG_ISM_WORDS, BG_WAIT_CHOICES,
   bgBandHint, bgBandReach, bgDecoderSetsFreq, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
-  bgHalfWindow,
+  bgHalfWindow, BG_SAT_MIN_EL,
 } from '../services/bgDecode';
 
 type Props = {
@@ -314,6 +314,39 @@ export default function BackgroundDecodingSetup(p: Props) {
           && link('Want to add another background decoding profile?', () => set((m) => { m.profiles.push(bgNewProfile()); }))}
         {model.profiles.length === 0 && link('+ Add a profile', () => set((m) => { m.profiles.push(bgNewProfile()); }))}
         {!!p.problem && <Text style={badHint}>{p.problem}</Text>}
+      </>)}
+      {/* ★★ V12 beta90 UNATTENDED SATELLITE PASSES — its own switch beside Background Decoding (the Setup page's block,
+           the same words). The downlinks are the engine's (caps.satPasses); an older engine lists none → not drawn.
+           Not on a locked range in this version: said, not greyed. */}
+      {caps.satPasses && caps.satPasses.length > 0 && (<>
+        <View style={[st.row, { justifyContent: 'space-between', marginTop: 10 }]}>
+          <Text style={{ color: C.text, fontFamily: F, fontSize: 15, flex: 1 }}>Unattended satellite passes</Text>
+          <Switch value={model.sat.on} onValueChange={(v) => set((m) => { m.sat.on = v; })}
+            trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+        </View>
+        <Text style={hint}>When a satellite you tick below passes higher than</Text>
+        <View style={[st.row, { flexWrap: 'wrap' }]}>
+          {(BG_SAT_MIN_EL.includes(model.sat.minEl) ? BG_SAT_MIN_EL : [...BG_SAT_MIN_EL, model.sat.minEl].sort((a, b) => a - b)).map((e) =>
+            <React.Fragment key={e}>{key(e + '\u00b0', () => set((m) => { m.sat.minEl = e; }), model.sat.minEl === e, !model.sat.on)}</React.Fragment>)}
+        </View>
+        <Text style={hint}>and nobody is listening, the radio follows it {'—'} tuned, Doppler-corrected and decoding {'—'} and what it
+          decodes goes to the gallery. Background decoding pauses for the pass and carries on when the satellite has set. The
+          moment anybody connects, the pass is given up and the radio is theirs.</Text>
+        {caps.satPasses.map((d) => {
+          const on = model.sat.birds.some((b) => b.norad === d.norad && b.label === d.label);
+          return (
+            <View key={d.norad + ':' + d.label} style={[st.row, { justifyContent: 'space-between', paddingLeft: 12 }]}>
+              <Text style={{ color: model.sat.on ? C.text : C.textDim, fontFamily: F, fontSize: 13, flex: 1 }}>{d.name + ' \u00b7 ' + d.what}</Text>
+              <Switch value={on} disabled={!model.sat.on}
+                onValueChange={(v) => set((m) => {
+                  m.sat.birds = m.sat.birds.filter((b) => !(b.norad === d.norad && b.label === d.label));
+                  if (v) m.sat.birds.push({ norad: d.norad, label: d.label });
+                })}
+                trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+            </View>
+          );
+        })}
+        {locked && <Text style={hint}>This radio{'’'}s range is locked, so passes are not followed on it in this version (a pass has to move the radio).</Text>}
       </>)}
     </View>
   );

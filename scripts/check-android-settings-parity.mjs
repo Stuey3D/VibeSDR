@@ -109,6 +109,8 @@ const TABLE = [
   P(['idleGrace'], 'Power down the radio', 'idleGraceSec'),
   // ── ★★★ V12 BACKGROUND DECODING (the reason this test exists) ──
   P(['bgOn', 'bgWait', 'bgKeepInRange'], 'Background Decoding', 'bgDecode'),
+  // ★★ V12 beta90 unattended satellite passes — inside the same bgDecode JSON ("satPasses"), BackgroundDecodingSetup's own section
+  P(['spOn', 'spMinEl'], 'Unattended satellite passes', 'bgDecode'),
   // ★★★ V12 the idle DX scanner (components/DxScanSetup) — one JSON blob, RadioConfig::dxScan; Lite too (the same engine)
   P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxOirt', 'dxExt', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
   P(['rspVibeAgc'], 'VibeAGC (SDRplay)', 'rspVibeAgc'),

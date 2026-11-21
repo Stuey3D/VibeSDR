@@ -61,6 +61,9 @@
 - `{"type":"sat","op":"doppler","on":bool}` toggles the lock on the current pick; `{"type":"sat","op":"drop"}` = unlock +
   detach what pick attached. Leaving the SATELLITE mode sends drop.
 - The existing `sat lock/unlock` stays for old clients (one release), then goes.
+- ★ **beta90 additions** (band / modeName / decoder / pickPrivate in `sat_list`, `geo` in `sat_track`, lo / hi on
+  `picked`, the passband re-base rule, the `fctlm_status` and `sat_tlm` decoder frames, APRS `sat`, the unattended-passes
+  setting): `docs/v12/SATELLITE-BEST.md` → "Contract additions (beta90)". Server as built: `SATELLITE-BEST-SERVER.md`.
 
 ## What exists today (inventory 2026-11-20, v12 3bc309995)
 - **SAT key** (web mode menu + TUNES THE RADIO ITSELF; app ModeSelector wholeKeys; R36S sat_page.h): a picker with passes,

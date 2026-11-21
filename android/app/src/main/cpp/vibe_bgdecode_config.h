@@ -46,7 +46,21 @@ struct Profile {
     bool isAis() const { return ais && ism.empty(); }
     bool isWhole() const { return isIsm() || isAis(); }   ///< a whole-radio mode (ISM, AIS), not VFOs
 };
+/** ★★ V12 beta90 UNATTENDED SATELLITE PASSES (Stuart 2026-11-21, docs/v12/SATELLITE-BEST.md "Decided 3"): its OWN switch,
+ *  beside Background Decoding and carried in the same JSON (so every save path carries it). The owner picks the downlinks
+ *  (by catalogue number + the downlink's label — an index would shift when the catalogue grows); when one rises above
+ *  `minEl` with nobody here, the current background decode PAUSES, the pass is picked (tune + Doppler + its decoder, into
+ *  the gallery) and at LOS exactly the paused decode RESUMES. A listener arriving takes the radio, as ever. */
+struct SatPassBird { long long norad = 0; std::string label; };
+struct SatPasses {
+    bool on = false;
+    int minEl = 20;                       ///< degrees; a pass that peaks lower is not taken
+    std::vector<SatPassBird> birds;       ///< ≤ kMaxSatPassBirds
+    bool any() const { return on && !birds.empty(); }
+};
+constexpr size_t kMaxSatPassBirds = 8;
 struct Config {
+    SatPasses sat;                 ///< ★ V12 beta90 — independent of `on` below
     bool on = false;
     int  waitSec = 300;            ///< after the last listener leaves (the owner's, default 5 minutes)
     /** ★★ "Keep decoding stations still in range while listeners are on" (Stuart, 2026-10-22, default ON): when a listener
@@ -213,6 +227,18 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
     if (const auto* v = j.get("on")) out.on = v->kind == antswitch::Json::Bool && v->b;
     if (const auto* v = j.get("waitMin")) if (v->kind == antswitch::Json::Num) out.waitSec = (int)std::lround(v->n * 60.0);
     if (const auto* v = j.get("keepInRange")) if (v->kind == antswitch::Json::Bool) out.keepInRange = v->b;
+    if (const auto* sp = j.get("satPasses"); sp && sp->kind == antswitch::Json::Obj) {
+        if (const auto* v = sp->get("on")) out.sat.on = v->kind == antswitch::Json::Bool && v->b;
+        if (const auto* v = sp->get("minEl")) if (v->kind == antswitch::Json::Num) out.sat.minEl = std::max(0, std::min(90, (int)std::lround(v->n)));
+        if (const auto* bs = sp->get("birds"); bs && bs->kind == antswitch::Json::Arr)
+            for (const auto& bj : bs->a) {
+                if (bj.kind != antswitch::Json::Obj || out.sat.birds.size() >= kMaxSatPassBirds) continue;
+                SatPassBird b;
+                if (const auto* n = bj.get("norad")) if (n->kind == antswitch::Json::Num && n->n >= 1 && n->n <= 999999999.0) b.norad = (long long)n->n;
+                b.label = bj.str("label", "").substr(0, 48);
+                if (b.norad > 0 && !b.label.empty()) out.sat.birds.push_back(b);
+            }
+    }
     if (out.waitSec < 0) out.waitSec = 0;
     if (out.waitSec > 24 * 3600) out.waitSec = 24 * 3600;
     const auto* ps = j.get("profiles");
@@ -273,7 +299,17 @@ inline std::string toJson(const Config& c) {
         if (p.isAis()) o += ",\"ais\":true";   // ★ V12 2026-11-02: absent on every other profile
         o += "}";
     }
-    return o + "]}";
+    o += "]";
+    // ★ V12 beta90: absent unless the owner has set satellite passes up, so older settings read back unchanged
+    if (c.sat.on || !c.sat.birds.empty()) {
+        o += std::string(",\"satPasses\":{\"on\":") + (c.sat.on ? "true" : "false") + ",\"minEl\":" + std::to_string(c.sat.minEl) + ",\"birds\":[";
+        for (size_t i = 0; i < c.sat.birds.size(); ++i) {
+            std::snprintf(b, sizeof b, "%lld", c.sat.birds[i].norad);
+            o += std::string(i ? "," : "") + "{\"norad\":" + b + ",\"label\":\"" + gallery::jsonEsc(c.sat.birds[i].label) + "\"}";
+        }
+        o += "]}";
+    }
+    return o + "}";
 }
 
 /** Does profile p run at minute-of-day m (UTC)? [from, to) — wrapping midnight when from > to. */

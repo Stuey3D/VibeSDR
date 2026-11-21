@@ -47,6 +47,7 @@
 #include "vibe_psk_run.h"
 #include "vibe_rtty_skim_run.h"   // ★ V12 the RTTY skimmer — docs/v12/RTTY-SKIMMER.md
 #include "vibe_aprs_run.h"
+#include "vibe_fctlm.h"        // ★ V12 beta90 FUNcube BPSK 1200 telemetry (AO-73) — docs/v12/SATELLITE-BEST-SERVER.md
 #include "vibe_sat_engine.h"   // ★ V12 the satellite engine's decoder hook (the packet decoder's satellite name)    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_dsc_run.h"
 #include "vibe_sitora_run.h"
@@ -703,7 +704,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : lrpt_ ? "lrpt" : nav_ ? "vor" : sarsat_ ? "sarsat" : ale_ ? "ale" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : lrpt_ ? "lrpt" : fctlm_ ? "fctlm" : nav_ ? "vor" : sarsat_ ? "sarsat" : ale_ ? "ale" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -846,7 +847,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "lrpt" || e == "vor" || e == "sarsat" || e == "ale";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "lrpt" || e == "fctlm" || e == "vor" || e == "sarsat" || e == "ale";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -859,7 +860,7 @@ private:
         }
         for (const char* f : { "encoding", "framing", "station", "band", "mode", "standard", "modulation", "diff" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
-                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false", "\"dtmf\":false", "\"five\":false", "\"interleaved\":true" })
+                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false", "\"dtmf\":false", "\"five\":false", "\"interleaved\":true", "\"afc\":false", "\"invert\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
         return k;
     }
@@ -892,7 +893,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || lrpt_ || nav_ || sarsat_ || ale_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || lrpt_ || fctlm_ || nav_ || sarsat_ || ale_; }
     void clearLocked_() {
         // ★ LRPT hands the gallery its pass's pictures as it finishes, so it goes before the gallery's copy is closed
         if (lrpt_) lrpt_->finish(true);
@@ -910,6 +911,7 @@ private:
         psk_.reset();
         rttySkim_.reset();   // ★ joins its search workers
         lrpt_.reset();
+        fctlm_.reset();
         aprs_.reset();
         if (packetIq_.exchange(false)) packetIqRunning().fetch_sub(1);
         dsc_.reset();
@@ -1129,6 +1131,27 @@ private:
             return;
         } else if (ext == "lrpt") {
             buildLrptLocked_(msg);
+            return;
+        } else if (ext == "fctlm") {
+            /* ★★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_fctlm.h): the listener's USB audio, the signal near "centre"
+             *  (default 1200 Hz — where a SATELLITE pick puts it); "afc":false / "invert":true are the manual fallback
+             *  under AUTO. sat_tlm per good frame, fctlm_status once a second, a readable line to the gallery. */
+            vibebpsk::RxCfg c;
+            double v;
+            if (num(msg, "centre", v) && v >= 300 && v <= 2700) c.centreHz = v;
+            c.afc = msg.find("\"afc\":false") == std::string::npos;
+            const bool inv = msg.find("\"invert\":true") != std::string::npos;
+            vibefc::Run::Out o;
+            o.json = [this](const std::string& j) { broadcastText(j); };
+            o.line = [this](const std::string& l) { if (DecoderTapPtr t = tap()) t->text(l + "\n"); };
+            o.satName = [s = session_]() {
+                const vibe::sat::DecoderView dv = vibe::sat::decoderView(s);
+                return dv.state.empty() ? std::string() : dv.satName.substr(0, 40);
+            };
+            o.unixNow = [] { return (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); };
+            fctlm_.reset(new vibefc::Run(c, inv, std::move(o)));
+            active_.store(true, std::memory_order_relaxed);
+            log("decoder attached: fctlm (FUNcube BPSK 1200) centre " + std::to_string((int)c.centreHz) + " Hz" + (c.afc ? " AFC" : " no AFC") + (inv ? " inverted" : ""));
             return;
         } else if (ext == "aprs") {
             /* ★★ APRS (V12): 1200 Bd Bell 202 on an NFM channel (VHF), or "baud_rate":300 — HF packet on USB/LSB. Its frames
@@ -2039,6 +2062,11 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (fctlm_) {
+                fctlm_->feedAudio(data, count);   // ★ FUNcube telemetry: its frames and status are sent from inside
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (aprs_) {
                 // ★ APRS likewise: float audio in, JSON out from inside the run
                 aprs_->feedAudio(data, count);
@@ -2101,6 +2129,7 @@ private:
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
     std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
+    std::unique_ptr<vibefc::Run> fctlm_;      // ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_fctlm.h)
     std::unique_ptr<SitorARun> sitora_;       // ★ SITOR-A: the ARQ listener (buildSitoraLocked_)
     std::unique_ptr<HfdlRun> hfdl_;           // ★ HFDL: the aircraft datalink on the USB dial (buildHfdlLocked_)
     std::unique_ptr<SameDecoder> same_;       // ★ EAS / SAME (buildSameLocked_)

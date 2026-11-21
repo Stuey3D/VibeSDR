@@ -13,7 +13,12 @@
 
 export type BgVfo = { hz: number; mode: string; dec: string };
 export type BgProfile = { centre: number; from: string; to: string; vfos: BgVfo[]; ism?: string; ais?: boolean };
-export type BgModel = { on: boolean; waitMin: number; keepInRange: boolean; profiles: BgProfile[] };
+/** ★★ V12 beta90 UNATTENDED SATELLITE PASSES — its own switch, carried in the same JSON as "satPasses" (vibe::bg::SatPasses). */
+export type BgSatPasses = { on: boolean; minEl: number; birds: { norad: number; label: string }[] };
+export type BgModel = { on: boolean; waitMin: number; keepInRange: boolean; profiles: BgProfile[]; sat: BgSatPasses };
+/** One downlink an unattended pass can keep (backgroundCapsJson "satPasses" — the engine's passKeepable list). */
+export type BgSatDownlink = { norad: number; label: string; name: string; what: string };
+export const BG_SAT_MIN_EL = [10, 20, 30, 45];
 
 /** One decoder as the engine lists it (backgroundCapsJson "decoders"). */
 export type BgDecoderDef = { id: string; label: string; modes: string[]; tone: number; band?: boolean; ndb?: boolean };
@@ -26,6 +31,8 @@ export type BgCaps = {
   maxVfos: number;
   maxProfiles: number;
   decoderSlotsDefault: number;
+  /** ★ V12 beta90: the downlinks an unattended pass can keep (empty = an older engine: the section is not drawn). */
+  satPasses: BgSatDownlink[];
 };
 
 /** The editor's demodulators — only those some background decoder works on (the Setup page's BG_DEMODS). */
@@ -57,7 +64,7 @@ export const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB
 export const DSC_HF = [2187500, 4207500, 6312000, 8414500, 12577000, 16804500];
 export const DSC_VHF = 156525000;
 
-export const emptyBgModel = (): BgModel => ({ on: false, waitMin: 5, keepInRange: true, profiles: [] });
+export const emptyBgModel = (): BgModel => ({ on: false, waitMin: 5, keepInRange: true, profiles: [], sat: { on: false, minEl: 20, birds: [] } });
 export const bgNewProfile = (): BgProfile => ({ centre: 0, from: '00:00', to: '00:00', vfos: [{ hz: 0, mode: 'usb', dec: 'navtex' }] });
 
 /** Read a stored bgDecode string — the Setup page's bgLoad. An unreadable one is off with no profiles. */
@@ -69,6 +76,9 @@ export function parseBg(json: string | null | undefined): BgModel {
       m.on = !!j.on;
       m.waitMin = j.waitMin > 0 ? +j.waitMin : 5;
       m.keepInRange = j.keepInRange !== false;
+      const sp = j.satPasses && typeof j.satPasses === 'object' ? j.satPasses : null;
+      if (sp) m.sat = { on: !!sp.on, minEl: sp.minEl >= 0 ? +sp.minEl : 20,
+        birds: Array.isArray(sp.birds) ? sp.birds.filter((b: any) => b && +b.norad > 0 && typeof b.label === 'string').map((b: any) => ({ norad: +b.norad, label: String(b.label) })) : [] };
       m.profiles = Array.isArray(j.profiles) ? j.profiles.map((p: any): BgProfile => {
         const q: BgProfile = {
           centre: +p.centre || 0, from: p.from || '00:00', to: p.to || '00:00',
@@ -89,7 +99,8 @@ export function parseBg(json: string | null | undefined): BgModel {
 /** The string to store — the Setup page's bgCollect. Off with nothing set up stores nothing at all (''). */
 export function collectBg(m: BgModel): string {
   const anything = m.profiles.some((p) => p.ism || p.ais || p.centre > 0 || p.vfos.some((v) => v.hz > 0 || v.dec === 'ndb-skim'));
-  if (!m.on && !anything) return '';
+  const satAny = !!m.sat && (m.sat.on || m.sat.birds.length > 0);
+  if (!m.on && !anything && !satAny) return '';
   const out: any = { on: m.on, waitMin: m.waitMin, profiles: m.profiles.map((p) => {
     const q: any = { centre: p.centre, from: p.from, to: p.to, vfos: p.vfos.map((v) => ({ hz: v.hz, mode: v.mode, dec: v.dec })) };
     if (p.ism) q.ism = p.ism;
@@ -97,6 +108,7 @@ export function collectBg(m: BgModel): string {
     return q;
   }) };
   if (!m.keepInRange) out.keepInRange = false;   // ★ absent = on, as the engine reads it
+  if (satAny) out.satPasses = { on: m.sat.on, minEl: m.sat.minEl, birds: m.sat.birds };   // ★ V12 beta90, the Setup page's order
   return JSON.stringify(out);
 }
 
@@ -114,6 +126,8 @@ export function parseBgCaps(json: string | null | undefined): BgCaps | null {
       maxVfos: j.maxVfos > 0 ? j.maxVfos : 16,
       maxProfiles: j.maxProfiles > 0 ? j.maxProfiles : 4,
       decoderSlotsDefault: j.decoderSlotsDefault > 0 ? j.decoderSlotsDefault : 0,
+      satPasses: Array.isArray(j.satPasses) ? j.satPasses.filter((d: any) => d && +d.norad > 0 && typeof d.label === 'string')
+        .map((d: any) => ({ norad: +d.norad, label: String(d.label), name: String(d.name || d.norad), what: String(d.what || d.label) })) : [],
     };
   } catch { return null; }
 }

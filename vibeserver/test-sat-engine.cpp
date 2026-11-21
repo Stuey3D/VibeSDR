@@ -12,6 +12,7 @@
 // §6 nudges and deliberate tunes; refusals (no location, NO TIME, old elements, nothing near).
 // §7 the loop's lag sums: the SIMD build equals the scalar lane order exactly; cost.
 #include "vibe_sat_engine.h"
+#include "vibe_bgdecode_config.h"   // ★ beta90 §13: the unattended passes' setting
 
 #include <cmath>
 #include <cstdlib>
@@ -291,7 +292,7 @@ static void s9(const std::string& dir) {
         for (size_t k = 0; same && k < a.tx.size(); ++k) {
             const Transmitter &x = a.tx[k], &y = b.tx[k];
             same = x.label == y.label && x.hz == y.hz && x.hiHz == y.hiHz && x.mode == y.mode && x.loop == y.loop && x.consumer == y.consumer
-                && x.baud == y.baud && x.upHz == y.upHz && x.ctcss == y.ctcss && x.note == y.note;
+                && x.baud == y.baud && x.upHz == y.upHz && x.ctcss == y.ctcss && x.note == y.note && x.modeName == y.modeName;
             if (!same) std::printf("   differs: %s / %s\n", a.id.c_str(), x.label.c_str());
         }
         if (!same && i < d.size()) std::printf("   differs at %s\n", a.id.c_str());
@@ -432,9 +433,11 @@ static void s11(const std::string& dir) {
     const json::Value* met = findSat(l, "METEOR-M2-3");
     CHECK(txOf(met, 0) && txOf(met, 0)->str("use") == "image", "Meteor LRPT: image");
     const json::Value* rs = findSat(l, "RS-44");
-    CHECK(txOf(rs, 0) && txOf(rs, 0)->str("use") == "voice" && txOf(rs, 1) && txOf(rs, 1)->str("use") == "voice", "RS-44 transponder + beacon: voice");
+    CHECK(txOf(rs, 0) && txOf(rs, 0)->str("use") == "voice" && txOf(rs, 1) && txOf(rs, 1)->str("use") == "packet", "RS-44 transponder: voice; its CW beacon: packet (decoded text, beta90 1.1)");
     const json::Value* ao73 = findSat(l, "AO-73");
-    CHECK(txOf(ao73, 1) && txOf(ao73, 1)->str("use") == "voice" && !txOf(ao73, 1)->get("sstv"), "AO-73 BPSK telemetry: heard (no decoder of ours)");
+    CHECK(txOf(ao73, 1) && txOf(ao73, 1)->str("use") == "packet" && txOf(ao73, 1)->str("decoder") == "fctlm" && !txOf(ao73, 1)->get("sstv"), "AO-73 FUNcube telemetry: packet, fctlm (beta90 1.2)");
+    const json::Value* mo = findSat(l, "MO-122");
+    CHECK(txOf(mo, 1) && txOf(mo, 1)->str("use") == "voice" && txOf(mo, 1)->str("decoder").empty() && txOf(mo, 1)->str("consumer") == "fox-bpsk", "MO-122 Fox-format telemetry: heard, never offered the FUNcube decoder");
     const json::Value* so = findSat(l, "SONATE-2");
     CHECK(txOf(so, 0) && txOf(so, 0)->str("use") == "packet", "SONATE-2 9k6: packet");
     // below the horizon: no inRangeFor
@@ -461,7 +464,7 @@ static void s11(const std::string& dir) {
     CHECK(e->txAt(44909, 0, sd, tx) && tuneHzOf(tx) == 435640000 && listenModeOf(tx) == "usb" && decoderOf(tx, p).empty(), "RS-44 transponder: its centre in USB");
     CHECK(decoderAttachMsg("lrpt", "\"modulation\":\"auto\"") == "{\"type\":\"audio_extension_attach\",\"extension_name\":\"lrpt\",\"modulation\":\"auto\"}"
           && decoderAttachMsg("sstv", "") == "{\"type\":\"audio_extension_attach\",\"extension_name\":\"sstv\"}", "the attach message a socket would send");
-    CHECK(!e->txAt(25544, 3, sd, tx) && !e->txAt(25544, -1, sd, tx) && !e->txAt(1, 0, sd, tx), "no such downlink / bird: refused");
+    CHECK(!e->txAt(25544, 4, sd, tx) && !e->txAt(25544, -1, sd, tx) && !e->txAt(1, 0, sd, tx), "no such downlink / bird: refused");
 
     // ── the lock on exactly the picked downlink ──
     Track t = e->start("P1", "P1", 145825000, "nfm", Clock{kIssTca, true}, 25544, 2);
@@ -478,11 +481,149 @@ static void s11(const std::string& dir) {
     CHECK(!sstvOf(v), "…but only on an FM downlink");
 }
 
+
+static void s12(const std::string& dir) {
+    std::printf("§12 beta90: band labels, catalogue fixes, the passband rule, Mode A on an HF radio, the pass's ground track\n");
+    std::unique_ptr<Engine> e(makeEngine(dir, kIoLat, kIoLon));
+    SatDef sd; Transmitter tx; std::string p;
+    // 1.4 band labels (AMSAT notation) + the catalogue's mode names
+    CHECK(e->txAt(7530, 0, sd, tx) && bandOf(tx) == "U/v" && tx.modeName == "Mode B", "AO-7 Mode B: U/v (%s)", bandOf(tx).c_str());
+    CHECK(e->txAt(7530, 1, sd, tx) && bandOf(tx) == "V/a" && tx.modeName == "Mode A", "AO-7 Mode A: V/a (%s)", bandOf(tx).c_str());
+    CHECK(e->txAt(44909, 0, sd, tx) && bandOf(tx) == "V/u", "RS-44: V/u (%s)", bandOf(tx).c_str());
+    CHECK(e->txAt(25544, 0, sd, tx) && bandOf(tx) == "V/u", "ISS FM repeater (145.990 up, 437.800 down): V/u");
+    CHECK(e->txAt(44909, 1, sd, tx) && bandOf(tx).empty(), "a beacon (no uplink): no band");
+    // 1.5 catalogue fixes
+    CHECK(e->txAt(7530, 3, sd, tx) && tx.hz == 145977500 && tx.mode == "cw" && decoderOf(tx, p) == "cw", "AO-7 Mode B CW beacon 145.9775, CW decoded");
+    CHECK(e->txAt(7530, 2, sd, tx) && tx.hz == 29502000 && decoderOf(tx, p) == "cw" && std::string(useOf(tx)) == "packet", "AO-7 Mode A beacon 29.502: cw, packet");
+    bool sonSstv = false, issUhf = false;
+    for (int k = 0; k < 6; ++k) { if (e->txAt(59112, k, sd, tx) && tx.hz == 145880000 && sstvOf(tx) && decoderOf(tx, p) == "sstv") sonSstv = true;
+                                  if (e->txAt(25544, k, sd, tx) && tx.hz == 437550000 && sstvOf(tx) && decoderOf(tx, p) == "sstv") issUhf = true; }
+    CHECK(sonSstv, "SONATE-2 SSTV 145.880: the SSTV decoder attaches");
+    CHECK(issUhf, "ISS 437.550 SSTV events: the SSTV decoder attaches (145.800 kept)");
+    CHECK(e->txAt(25544, 1, sd, tx) && tx.hz == 145800000 && sstvOf(tx), "ISS 145.800 Voice / SSTV kept");
+    CHECK(e->txAt(44881, 0, sd, tx) && tx.passband() && tx.hz == 145915000 && tx.hiHz == 145935000 && bandOf(tx) == "U/v", "TO-108 (CAS-6) U/v 145.915–145.935");
+    CHECK(e->txAt(39444, 1, sd, tx) && tx.consumer == "fc-bpsk" && decoderOf(tx, p) == "fctlm" && p.empty(), "AO-73: fc-bpsk → fctlm AUTO");
+    CHECK(e->txAt(60209, 1, sd, tx) && tx.consumer == "fox-bpsk" && decoderOf(tx, p).empty(), "MO-122: fox-bpsk, no FUNcube decoder");
+    // the list's new fields
+    SupplyInfo sup; sup.known = true; sup.pickPrivate = 1;
+    json::Value l;
+    CHECK(json::parseValue(e->listJson(Clock{kRsTca, true}, ReachWhyFn([](double, double) { return std::string(); }), sup), l), "the list parses");
+    CHECK(l.get("source") && l.get("source")->get("pickPrivate") && l.get("source")->get("pickPrivate")->b, "source.pickPrivate true");
+    const json::Value* ao7 = findSat(l, "AO-7");
+    CHECK(txOf(ao7, 0) && txOf(ao7, 0)->str("band") == "U/v" && txOf(ao7, 0)->str("modeName") == "Mode B" && txOf(ao7, 0)->get("decoder")
+          && txOf(ao7, 0)->str("decoder").empty(), "sat_list: band, modeName, decoder:\"\" on a transponder");
+    CHECK(txOf(ao7, 2) && txOf(ao7, 2)->str("decoder") == "cw" && !txOf(ao7, 2)->get("band"), "sat_list: a beacon has decoder cw, no band");
+    sup.pickPrivate = 0;
+    CHECK(json::parseValue(e->listJson(Clock{kRsTca, true}, ReachWhyFn([](double, double) { return std::string(); }), sup), l)
+          && l.get("source")->get("pickPrivate") && !l.get("source")->get("pickPrivate")->b, "a shared dial: pickPrivate false");
+    sup.pickPrivate = -1;
+    CHECK(json::parseValue(e->listJson(Clock{kRsTca, true}, ReachWhyFn([](double, double) { return std::string(); }), sup), l)
+          && !l.get("source")->get("pickPrivate"), "not said: absent");
+    // 1.4 THE PASSBAND RULE: RS-44 (60 kHz) — a tune across the passband keeps the lock, outside ends it
+    const double t0 = kRsTca - 120;
+    Track t = e->start("PB", "o", 435640000, "usb", Clock{t0, true}, 44909, 0);
+    CHECK(t.state == LockState::Track, "RS-44 transponder locked");
+    e->tick("PB", Clock{t0 + 0.04, true});
+    CHECK(e->nudge("PB", 435665000), "a tune 25 kHz across the passband keeps the lock (the 15 kHz rule would have ended it)");
+    CHECK(e->tick("PB", Clock{t0 + 0.08, true}).nominalHz == 435665000, "…and re-bases it there");
+    CHECK(e->nudge("PB", 435612000), "back to the low edge: still kept");
+    CHECK(!e->nudge("PB", 435760000), "90 kHz above the top edge: the lock ends");
+    e->stop("PB");
+    t = e->start("PB", "o", 435605000, "cw", Clock{t0, true}, 44909, 1);
+    e->tick("PB", Clock{t0 + 0.04, true});
+    CHECK(e->nudge("PB", 435605500) && !e->nudge("PB", 435630000), "a single channel (the beacon) keeps the 15 kHz rule");
+    e->stop("PB");
+    // 1.4 AO-7 Mode A on an HF-only radio (an Airspy HF+ / an Icom HF rig: 0.5 kHz … 31 MHz)
+    auto hf = [](double lo, double hi) { return lo >= 500.0 && hi <= 31e6; };
+    CHECK(e->reaches(hf), "an HF-only radio reaches a listed downlink (AO-7 Mode A) — the SATELLITE key is offered");
+    CHECK(json::parseValue(e->listJson(Clock{kRsTca, true}, ReachWhyFn([hf](double lo, double hi) { return hf(lo, hi) ? std::string() : std::string("no"); }), SupplyInfo{}), l), "HF list parses");
+    ao7 = findSat(l, "AO-7");
+    CHECK(txOf(ao7, 1) && boolOf(txOf(ao7, 1), "reach") && txOf(ao7, 2) && boolOf(txOf(ao7, 2), "reach") && !boolOf(txOf(ao7, 0), "reach"),
+          "AO-7 Mode A + its beacon reachable on HF; Mode B greyed");
+    // 1.7 the pass's ground track
+    double aos = 0, los = 0;
+    {
+        const json::Value* rs = findSat(l, "RS-44");
+        const json::Value* ps = rs ? rs->get("passes") : nullptr;
+        if (ps && ps->t == json::Value::Arr && !ps->a.empty()) { aos = ps->a[0].num("aos"); los = ps->a[0].num("los"); }
+    }
+    CHECK(los > aos, "an RS-44 pass to draw");
+    double g0, g1, gs, tca;
+    const std::string geo = e->geoJson(44909, aos, los, g0, g1, gs, tca);
+    json::Value gv;
+    CHECK(!geo.empty() && json::parseValue(geo, gv) && gv.t == json::Value::Arr && gv.a.size() >= 60 && gv.a.size() <= 120, "geo: %zu points (≤ 120)", gv.a.size());
+    CHECK(std::fabs(g0 - (aos - 600)) < 1 && std::fabs(g1 - (los + 600)) < 1 && gs > 0, "geo window: AOS − 10 min … LOS + 10 min");
+    CHECK(tca > aos && tca < los, "tca inside the pass");
+    bool agree = !gv.a.empty();
+    for (size_t i = 0; i < gv.a.size() && agree; i += 17) {
+        const json::Value& pt = gv.a[i];
+        if (pt.t != json::Value::Arr || pt.a.size() != 3) { agree = false; break; }
+        const double alt = pt.a[2].n;
+        agree = std::fabs(pt.a[0].n) <= 90 && std::fabs(pt.a[1].n) <= 180 && alt > 300 && alt < 2000;
+    }
+    CHECK(agree, "every sampled point is a lat/lon/alt a LEO has");
+    // the point at TCA is the closest to the observer of the window (an overhead-ish pass runs near the dot)
+    {
+        size_t bi = 0; double bd = 1e18;
+        for (size_t i = 0; i < gv.a.size(); ++i) {
+            if (gv.a[i].t != json::Value::Arr) continue;
+            const double dla = gv.a[i].a[0].n - kIoLat, dlo = (gv.a[i].a[1].n - kIoLon) * std::cos(kIoLat * M_PI / 180);
+            const double d = dla * dla + dlo * dlo;
+            if (d < bd) { bd = d; bi = i; }
+        }
+        const double tAt = g0 + bi * gs;
+        CHECK(std::fabs(tAt - tca) <= gs * 1.5 + 30, "geo's nearest point to the receiver is at TCA (%.0f s off)", tAt - tca);
+    }
+    CHECK(e->geoJson(44909, aos, aos + 7 * 3600, g0, g1, gs, tca).empty() && e->geoJson(1, aos, los, g0, g1, gs, tca).empty(), "too long a window / an unknown bird: none");
+    // Decided 4: a pick counts as active from AOS − 2 min to LOS
+    {
+        const double u1 = e->activeUntil(44909, aos + 30), u2 = e->activeUntil(44909, aos - 60), u3 = e->activeUntil(44909, aos - 600);
+        CHECK(std::fabs(u1 - los) < 5 && std::fabs(u2 - los) < 5 && u3 == 0, "activeUntil: in the pass (and 2 min before AOS) (%.0f %.0f %.0f vs %.0f)", u1, u2, u3, los);
+    }
+}
+
+
+static void s13(const std::string& dir) {
+    std::printf("§13 beta90 unattended passes: the setting, the keepable downlinks (= the setup page's list), the pass in progress\n");
+    vibe::bg::Config c; std::string err;
+    CHECK(vibe::bg::parse("{\"on\":false,\"waitMin\":5,\"profiles\":[],\"satPasses\":{\"on\":true,\"minEl\":30,\"birds\":[{\"norad\":57166,\"label\":\"LRPT\"},{\"norad\":39444,\"label\":\"Telemetry\"}]}}", c, err)
+          && c.sat.on && c.sat.minEl == 30 && c.sat.birds.size() == 2 && c.sat.birds[1].label == "Telemetry" && !c.on, "parsed, its own switch (%s)", err.c_str());
+    const std::string back = vibe::bg::toJson(c);
+    CHECK(back.find("\"satPasses\":{\"on\":true,\"minEl\":30,\"birds\":[{\"norad\":57166,\"label\":\"LRPT\"},{\"norad\":39444,\"label\":\"Telemetry\"}]}") != std::string::npos, "written back (%s)", back.c_str());
+    vibe::bg::Config d;
+    CHECK(vibe::bg::parse("{\"on\":true,\"waitMin\":5,\"profiles\":[]}", d, err) && vibe::bg::toJson(d).find("satPasses") == std::string::npos, "absent when not set up (older settings read back unchanged)");
+    std::string many = "{\"satPasses\":{\"on\":true,\"minEl\":200,\"birds\":[";
+    for (int i = 0; i < 12; ++i) many += std::string(i ? "," : "") + "{\"norad\":" + std::to_string(1000 + i) + ",\"label\":\"x\"}";
+    many += ",{\"norad\":-4,\"label\":\"y\"},{\"norad\":5}]}}";
+    vibe::bg::Config m;
+    CHECK(vibe::bg::parse(many, m, err) && m.sat.birds.size() == vibe::bg::kMaxSatPassBirds && m.sat.minEl == 90, "bounded: ≤ 8 downlinks, elevation clamped, bad entries dropped");
+    // the keepable downlinks = the setup page's SAT_PASS_DOWNLINKS (by norad + label), no more, no fewer
+    const std::string page = readFile("android/app/src/main/cpp/vibe_setup_page.h");
+    const size_t a = page.find("const SAT_PASS_DOWNLINKS"), b = page.find("];", a);
+    CHECK(a != std::string::npos && b != std::string::npos, "the page's list found");
+    const std::string list = a != std::string::npos ? page.substr(a, b - a) : std::string();
+    int keep = 0, onPage = 0; bool all = true;
+    for (const auto& sd : curatedCatalogue())
+        for (const auto& t : sd.tx) {
+            if (!passKeepable(t)) continue;
+            ++keep;
+            const std::string want = "norad: " + std::to_string(sd.norad) + ", label: \"" + t.label + "\"";
+            if (list.find(want) == std::string::npos) { all = false; std::printf("   missing on the page: %s\n", want.c_str()); }
+        }
+    for (size_t p = list.find("norad:"); p != std::string::npos; p = list.find("norad:", p + 1)) ++onPage;
+    CHECK(all && keep == onPage, "every keepable downlink is on the page and nothing else (%d engine, %d page)", keep, onPage);
+    std::unique_ptr<Engine> e(makeEngine(dir, kIoLat, kIoLon));
+    CHECK(e->txIndex(57166, "LRPT") == 0 && e->txIndex(39444, "Telemetry") == 1 && e->txIndex(39444, "nope") < 0 && e->txIndex(1, "LRPT") < 0, "txIndex by label");
+    Pass p;
+    CHECK(e->passAt(44909, kRsTca, p) && p.aos < kRsTca && p.los > kRsTca && p.maxElDeg > 40, "passAt: RS-44 at TCA (max %.1f°)", p.maxElDeg);
+    CHECK(!e->passAt(44909, p.los + 60, p) || p.aos > kRsTca, "…and not after its LOS");
+}
+
 int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
     if (readFile(dir + "/celestrak-amateur-2026-11-19.json").empty()) { std::printf("data missing\n"); return 3; }
-    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir);
+    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir); s12(dir); s13(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
