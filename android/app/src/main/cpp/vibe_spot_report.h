@@ -216,6 +216,10 @@ inline std::vector<std::vector<uint8_t>> buildDatagrams(const Receiver& rx, cons
 inline std::string adifMode(const std::string& m) {
     std::string u; for (char c : m) u += (char)std::toupper((unsigned char)c);
     if (u == "CW") return "CW";   // ★ V12 beta90: CW skimmer / CW decoder spots (Stuart 2026-11-21)
+    if (u == "RTTY") return "RTTY";   // ★ V12 beta90: RTTY skimmer spots — the listener's and background's (Stuart 2026-11-21)
+    // ★ V12 beta90: the PSK skimmer names its spots BPSK31 / BPSK63 (decoders/psk_skimmer.h) — PSK Reporter's PSK31 / PSK63
+    if (u == "BPSK31") return "PSK31";
+    if (u == "BPSK63") return "PSK63";
     if (u == "FT8" || u == "FT4" || u == "JS8" || u == "WSPR" || u == "MSK144" || u == "PSK31" || u == "PSK63"
         || u == "FST4" || u == "FST4W" || u == "JT65" || u == "JT9") return u;
     if (u.rfind("Q65", 0) == 0) return "Q65";

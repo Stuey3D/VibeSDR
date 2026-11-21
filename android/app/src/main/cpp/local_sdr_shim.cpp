@@ -179,6 +179,7 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_bgdecode_ndb.h"      // ★★ V12: …its NDB skimmer VFO (the listener's NDB service, fed the runner's slice)
+#include "vibe_skim_bands.h"        // ★★ V12 beta90: the skimmers' per-band windows (CW / RTTY / PSK, per IARU region)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
@@ -1996,6 +1997,7 @@ static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band th
 static std::string vsNdbWhyNot();    // "" = NDB can run here now
 static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
 static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans);   // ,"spotBands":[…] (hwinfo + /hardware)
+static std::string vsSkimBandsJson(bool radio);   // ★ V12 beta90 ,"skimBands":{…} (hwinfo + /hardware + backgroundCapsJson)
 static std::string vsSpotsBandWhyNot();
 static int vsBandOverride(const std::string& mode);   // ★ V12 Band governor: the owner's +1 Always / −1 Off / 0 Auto
 static double vsBandBudgetUnits();                    // ★ …and the benchmark's budget in FT8 units (∞ = none)
@@ -27174,6 +27176,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  from these (an empty list = no Band decoder offered). Only hwinfo carried them, so the page never saw
                  *  them and a Band row asked for a typed frequency (Stuart, beta27). */
                 j += vsSpotBandsJson(vsSpotSpans());
+                j += vsSkimBandsJson(true);   // ★ V12 beta90 the background skimmer rows' band picker
                 std::map<int, std::string> heard;
                 { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx); dabEnsLoadLocked(); heard = g_dabEnsMem; }
                 j += ",\"dabBlocks\":[";
@@ -27190,6 +27193,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ THE DOOR OWNS NO RADIO, but the Band plan is the server's: every band some mode is on, for the setup
                  *  page's Band picker on a radio that is not running (as `bands` above) — the radio's save checks reach. */
                 j += vsSpotBandsJson(vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; }));
+                j += vsSkimBandsJson(false);
             }
             // ★★ AN ICOM's setup facts — model, CI-V address, baud, the preflight in plain words, the transport —
             //    are the same object hwinfo carries (one writer, radioCapsJsonCore), as `radio` here too.
@@ -35580,6 +35584,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  service fed the runner's slice, into the gallery as background's; only the part of the band this radio reaches;
          *  not while the owner has NDB switched off here, nor while a listener's own NDB mode has the band (their skimmer
          *  keeps the cards meanwhile — never two skimmers on the same beacons). */
+        /* ★★ V12 beta90 — A SKIMMER VFO (CW / RTTY / PSK) runs only where a listener's skimmer of that mode could: not where
+         *  the owner has switched the mode off here, not on an Icom (one audio channel, no IQ), not out of the radio's
+         *  reach (vsDecoderWhyNot — the same words the listener's greyed key shows). The RTTY skimmer's search workers
+         *  are the listener's setting. */
+        p.skimWhyNot = [](const std::string& kind) {
+            if (kind.empty()) return std::string();
+            if (vsModeBlocked(kind)) return std::string("the server owner has switched ") + (kind == "cw" ? "CW" : kind == "rtty" ? "RTTY" : "PSK") + " off on this receiver";
+            if (g_icomOn.load()) return std::string("an Icom gives one audio channel \xe2\x80\x94 a skimmer needs the radio\xe2\x80\x99s IQ");
+            return vsDecoderWhyNot(kind);
+        };
+        p.rttySkimWorkers = [] { return LocalSdrShim::rttySkimWorkers(); };
         p.ndbMake = vibe::bg::makeNdbFeedFactory(p.store);
         p.ndbReach = [](double& lo, double& hi) { return vsNdbReach(lo, hi); };
         p.ndbWhyNot = [] {
@@ -42914,6 +42929,22 @@ static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans) {
     return j;
 }
 
+/** ★★ V12 beta90 — THE SKIMMERS' BANDS (Stuart 2026-11-21: "cw skimmer and rtty skimmer should be per band"): each
+ *  amateur band's CW, RTTY and PSK segment for this server's IARU region (vibe_skim_bands.h, the published plans), as
+ *  `,"skimBands":{"region":R,"cw":[{id,name,lo,hi}…],"rtty":[…],"psk":[…]}`. Every page places a skimmer's window by the
+ *  one rule (centre = lo + width / 2). ONE WRITER for hwinfo (the listener's skimmer boxes), GET /vibeserver/hardware
+ *  (the Setup page's background rows) and backgroundCapsJson (the Android server screen). `radio`: only the segments
+ *  this radio can tune (its range and the owner's allow/block ranges, a locked range); false = the server's whole list
+ *  (the door, a stopped radio — the radio's save checks reach). */
+static std::string vsSkimBandsJson(bool radio) {
+    const int region = vibebands::defaultRegion();
+    if (!radio) return vibe::skimbands::skimBandsJson(region);
+    const vibebands::Ranges t = vsTunableRanges();
+    return vibe::skimbands::skimBandsJson(region, [&t](double lo, double hi) {
+        return t.empty() || (vibebands::allows(t, lo) && vibebands::allows(t, hi));
+    });
+}
+
 /* ★★ V12 2026-11-03 — WHAT A BACKGROUND-DECODING EDITOR MAY OFFER ON THIS SERVER, for the Android server screen
  *  (ServerModeScreen → BackgroundDecodingSetup). The Linux/Mac Setup page draws the same editor from its own copy of the
  *  decoder table; the phone's screen reads THIS one, so its decoders, their demodulators and tones, the ISM band ids, the
@@ -42942,6 +42973,9 @@ std::string LocalSdrShim::backgroundCapsJson() {
         char t[48]; std::snprintf(t, sizeof t, "],\"tone\":%.0f", d.toneHz); j += t;
         if (std::string(d.id) == "spots-band") j += ",\"band\":true";
         if (std::string(d.id) == "ndb-skim")   j += ",\"ndb\":true";
+        // ★ V12 beta90: a skimmer's width and kind — its row picks a BAND (skimBands), the window placed by the one rule
+        { const std::string sk = vibe::bg::skimKindOf(d.id);
+          if (!sk.empty()) { char w[64]; std::snprintf(w, sizeof w, ",\"width\":%.0f,\"skim\":\"%s\"", d.widthHz, sk.c_str()); j += w; } }
         j += "}";
     }
     j += "],\"ismBands\":[";
@@ -42949,8 +42983,10 @@ std::string LocalSdrShim::backgroundCapsJson() {
     for (const auto& b : vibeism::bands()) { j += std::string(first ? "\"" : ",\"") + b.id + "\""; first = false; }
     j += "]";
     std::vector<vibe::digi::Span> spans = vsSpotSpans();
+    const bool radioOpen = !spans.empty();
     if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; });
     j += vsSpotBandsJson(spans);
+    j += vsSkimBandsJson(radioOpen);   // ★ V12 beta90 the skimmers' band picker
     j += ",\"maxVfos\":" + std::to_string((int)vibe::bg::kMaxVfos) + ",\"maxProfiles\":" + std::to_string((int)vibe::bg::kMaxProfiles);
     j += ",\"decoderSlotsDefault\":" + std::to_string(vsDecoderDefaultMax());
     /* ★★ V12 beta90 UNATTENDED SATELLITE PASSES: the downlinks a pass can keep (vibe::sat::passKeepable over the engine's
@@ -43219,6 +43255,9 @@ static std::string vsTunableJson() {
             if (!why.empty()) j += ",\"spotsBandWhy\":\"" + dabEscape(why) + "\"";
             j += vsSpotBandsJson(spans);
         }
+        /* ★★ V12 beta90: the skimmers' bands (CW / RTTY / PSK segments for this server's region, only those this radio
+         *  tunes) — the listener's skimmer boxes put a BAND picker in their header, the window placed by the one rule. */
+        j += vsSkimBandsJson(true);
     }
     /* ★ SEPARATE FROM `dab`, because the two answer different questions and the setup page needs
      *  both: `dab` is "will this receiver do it", `dabDecoder` is "could any receiver on this

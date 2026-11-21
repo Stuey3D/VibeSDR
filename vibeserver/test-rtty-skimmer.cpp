@@ -356,6 +356,9 @@ static void hostPath() {
     env.rttySkimSpotTap = [tap] { return tap; };
     env.rttySkimWorkers = [] { return 2; };
     const int before = DecoderHost::skimmersRunning().load();
+    // ★ V12 beta90: PSK Reporter on — the listener's RTTY skimmer spots go to it as RTTY (nothing is sent: no batch is due)
+    vibe::spotreport::Config rc; rc.on = true; rc.call = "M0TST"; rc.pskHost = "127.0.0.1"; rc.pskPort = 9;
+    vibe::spotreport::Reporter::shared().configure(rc);
     {
         DecoderHost h(env, "t");
         h.addPeer(peer);
@@ -392,10 +395,13 @@ static void hostPath() {
         bool tapOk = false; { std::lock_guard<std::mutex> lk(tap->m); for (size_t i = 0; i < tap->calls.size(); ++i) tapOk |= tap->calls[i] == "G4ABC" && std::fabs(tap->rf[i] - (centre - 9000)) < 20; }
         ok(tapOk, "host: the gallery's summary tap hears G4ABC at its RF");
         ok(list.find("\"workers\":2") != std::string::npos, "host: the owner's worker count (2) is used");
+        ok(vibe::spotreport::Reporter::shared().pendingCount() >= 1, "host: its spots reached PSK Reporter (ADIF RTTY) — "
+           + std::to_string(vibe::spotreport::Reporter::shared().pendingCount()) + " waiting for the batch");
         h.stop();
         ok(DecoderHost::skimmersRunning().load() == before && !h.wantsIq(), "host: stopped — no longer counted, no IQ wanted");
     }
     ok(tap->finished.load() >= 1, "host: the summary tap is finished when it stops");
+    rc.on = false; vibe::spotreport::Reporter::shared().configure(rc);
 }
 
 static void textGate() {
