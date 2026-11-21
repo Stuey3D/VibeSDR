@@ -691,6 +691,8 @@ if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+
 # ★★ V12 2026-10-27: a Band digital-spots VFO in the editor — offered only where it can run, a BAND PICKER (only the bands the
 #    capture holds) in place of the frequency, the demodulator greyed out, saved and read back.
 if node scripts/test-setup-bg-band.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta90: the skimmers by band (CW / RTTY / PSK rows pick a band from skimBands, or "Own centre…")
+if node scripts/test-setup-bg-skim.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the NDB SKIMMER VFO (2026-10-27): offered only where the radio reaches LF (HF+, RSP, an RTL in direct sampling; the
 #    running radio's ndbHw first), never with NDB blocked, once a profile; frequency and demodulator greyed out; Stuart's
 #    Lenovo profile round-trips; an older {"ndb":true} profile loads as a VFO profile with the skimmer.

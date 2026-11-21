@@ -114,6 +114,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .bgVfo input:disabled,.bgVfo select:disabled{opacity:.4;cursor:not-allowed;filter:grayscale(1)}
   .bgVfo .bgFixedUnit{opacity:.4}
   .bgVfo select.bgBandPick{max-width:200px}
+  .bgVfo select.bgSkimPick{max-width:200px}
   .bgTimes{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
   .bgTimes input{width:auto}
   button.linkish{background:none;border:none;color:var(--amber);padding:4px 0;text-decoration:underline;cursor:pointer}
@@ -901,6 +902,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <h2>PSK Reporter</h2>
         <p class="why">Share what this server's decoders hear with PSK Reporter's map, so a station calling CQ can see that
           it was heard here.</p>
+        <p class="hint" id="pskrWhat">Reported: the digital spots (FT8, FT4, WSPR, JS8, Q65, FST4, MSK144 and the rest, one
+          mode or a whole Band), the CW decoder and CW skimmer, the RTTY skimmer, and the PSK decoder and PSK skimmer
+          &mdash; whether a listener was running them or Background Decoding was (its per-band skimmers report all day).</p>
       <label style="display:flex;gap:8px;align-items:center">
         <input type="checkbox" id="pskrOn" style="width:16px;height:16px;accent-color:var(--amber)">
         <span><b>Send this server's digital spots to PSK Reporter</b></span></label>
@@ -5769,13 +5773,15 @@ async function renderHw() {
   /* ★★ V12 2026-10-28: AND THE BAND DIGITAL-SPOTS LIST the same way — a Band VFO picks its band from it. The radio's own
    *  list (only the bands it reaches) when it answered; the server's whole list when it did not (the radio's save
    *  checks reach). */
-  if (!(hw && Array.isArray(hw.bands) && hw.bands.length) || !(hw && Array.isArray(hw.spotBands))) {
+  if (!(hw && Array.isArray(hw.bands) && hw.bands.length) || !(hw && Array.isArray(hw.spotBands)) || !(hw && hw.skimBands)) {
     try {
       const own = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json();
       if (own && Array.isArray(own.bands) && own.bands.length && !(hw && Array.isArray(hw.bands) && hw.bands.length))
         hw = Object.assign({}, hw || {}, { bands: own.bands });
       if (own && Array.isArray(own.spotBands) && own.spotBands.length && !(hw && Array.isArray(hw.spotBands)))
         hw = Object.assign({}, hw || {}, { spotBands: own.spotBands });
+      // ★ V12 beta90: and the skimmers' bands (a background skimmer row's band picker), the same way
+      if (own && own.skimBands && !(hw && hw.skimBands)) hw = Object.assign({}, hw || {}, { skimBands: own.skimBands });
     } catch (e) { /* the page still offers "All bands" */ }
   }
   if (hw && Array.isArray(hw.bands) && hw.bands.length)
@@ -7607,13 +7613,20 @@ const BG_DECODERS = [
   { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
   // ★★ V12 2026-10-25: CW SKIMMERS — every CW signal in a segment CENTRED on the VFO's frequency, kept as a summary of
   //    the spots (as FT8 is). "usb" because a VFO row has a demodulator; none runs for a skimmer (it is fed IQ).
-  { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
-  { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
-  { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
-  // ★★ V12 2026-10-26: PSK SKIMMERS — the same: every PSK31/63 signal in a segment centred on the VFO (14.0715 MHz
-  //    covers the 20 m PSK segment), a summary of the spots.
-  { id: "psk-skim-6",   label: "PSK skimmer, 6 kHz (summary)",  tone: 0,    modes: ["usb"] },
-  { id: "psk-skim-12",  label: "PSK skimmer, 12 kHz (summary)", tone: 0,    modes: ["usb"] },
+  // ★★ V12 beta90 (Stuart 2026-11-21: "per band rather than entering a centre frequency"): a skimmer row PICKS A BAND
+  //    (HW.skimBands, the server's segments for its region) and its window is placed by the server's one rule —
+  //    centre = segment bottom + width / 2 (40 m CW at 48 kHz = 7024) — with "Own centre…" for a typed one.
+  { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"], skim: "cw", width: 24000 },
+  { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"], skim: "cw", width: 48000 },
+  { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"], skim: "cw", width: 96000 },
+  // ★★ V12 2026-10-26: PSK SKIMMERS — the same: every PSK31/63 signal in its window, a summary of the spots.
+  { id: "psk-skim-6",   label: "PSK skimmer, 6 kHz (summary)",  tone: 0,    modes: ["usb"], skim: "psk", width: 6000 },
+  { id: "psk-skim-12",  label: "PSK skimmer, 12 kHz (summary)", tone: 0,    modes: ["usb"], skim: "psk", width: 12000 },
+  // ★★ V12 beta90: RTTY SKIMMERS — every RTTY signal in the window, each with its own settings (the listener's RTTY
+  //    skimmer), a summary of the spots. Offered only where the RTTY skimmer can run (bgSkimOk).
+  { id: "rtty-skim-24", label: "RTTY skimmer, 24 kHz (summary)", tone: 0,  modes: ["usb"], skim: "rtty", width: 24000 },
+  { id: "rtty-skim-48", label: "RTTY skimmer, 48 kHz (summary)", tone: 0,  modes: ["usb"], skim: "rtty", width: 48000 },
+  { id: "rtty-skim-96", label: "RTTY skimmer, 96 kHz (summary)", tone: 0,  modes: ["usb"], skim: "rtty", width: 96000 },
   // ★★ V12 APRS — VHF on an NFM VFO (144.800 / 144.390 …), HF 300 Bd on USB (10.1476 MHz)
   { id: "aprs",         label: "APRS (1200 Bd, VHF)",          tone: 0,    modes: ["nfm"] },
   { id: "aprs-hf",      label: "APRS HF (300 Bd)",             tone: 0,    modes: ["usb", "lsb"] },
@@ -7635,6 +7648,58 @@ const BG_DECODERS = [
 ];
 /** ★ V12 2026-10-27 (Stuart): a row whose DECODER sets the frequency — its frequency box and demodulator are greyed out. */
 function bgDecoderSetsFreq(dec) { return dec === "spots-band" || dec === "ndb-skim"; }
+/* ★★ V12 beta90 — THE SKIMMERS BY BAND (Stuart 2026-11-21: "cw skimmer and rtty skimmer should be per band rather than
+ *  entering a centre frequency", "48k should default to 7024 for 40m 96k 7048 etc so the bands cw allocation is fully
+ *  covered", and "background should have the band presets but with an option to set their own centre if needed").
+ *  The segments are the SERVER's (HW.skimBands — vibe_skim_bands.h, its region's IARU plan), the rule one line:
+ *  centre = segment bottom + width / 2. A stored centre that IS a band's centre loads as that band; any other loads as
+ *  the owner's own centre, its box filled. The save takes any centre inside the capture (no band required). */
+function bgSkimDef(dec) { return BG_DECODERS.filter(function (d) { return d.id === dec && d.skim; })[0] || null; }
+function bgSkimList(kind) {
+  const hw = typeof HW !== "undefined" ? HW : null;
+  const sb = hw && hw.skimBands;
+  return sb && Array.isArray(sb[kind]) && sb[kind].length ? sb[kind] : null;
+}
+function bgSkimCentre(b, width) { return b.lo + width / 2; }
+function bgSkimBandAt(kind, width, hz) {
+  const bl = bgSkimList(kind);
+  if (!bl || !(hz > 0)) return null;
+  return bl.filter(function (b) { return Math.abs(bgSkimCentre(b, width) - hz) < 1; })[0] || null;
+}
+/** Does a window of `width` at `hz` sit inside the capture (the server's save: half-window + 3 kHz − half the width)? */
+function bgSkimFits(hz, width, centre, rate) {
+  if (!(centre > 0) || !(rate > 0)) return true;   // ★ no centre or rate yet: every band (the save checks)
+  return Math.abs(hz - centre) <= bgHalfWindow(rate) + 3000 - width / 2;
+}
+/** May a skimmer of this kind run here? Not on an Icom (one audio channel, no IQ), not where the owner switched the mode off. */
+function bgSkimOk(kind) {
+  const r0 = bgRadio || {};
+  if (String(r0.driver || "") === "icom") return false;
+  try { if (typeof modeBlockSet === "function" && modeBlockSet().has(kind)) return false; } catch (e) { /* no mode list */ }
+  return true;
+}
+/** The first band whose window fits this capture (a new skimmer row lands there), or null. */
+function bgSkimFirstFit(kind, width, centre, rate) {
+  const bl = bgSkimList(kind) || [];
+  return bl.filter(function (b) { return bgSkimFits(bgSkimCentre(b, width), width, centre, rate); })[0] || null;
+}
+/** The line under a skimmer row: what its window covers, or why it cannot run. */
+function bgSkimHint(v, centre, rate) {
+  const d = bgSkimDef(v.dec);
+  if (!d) return { bad: false, text: "" };
+  const what = { cw: "CW", rtty: "RTTY", psk: "PSK" }[d.skim];
+  if (!bgSkimOk(d.skim)) return { bad: true, text: "The " + what + " skimmer cannot run on this radio" + (String((bgRadio || {}).driver || "") === "icom"
+    ? " — an Icom gives one audio channel, and a skimmer needs the radio’s IQ." : " — " + what + " is switched off on it (Modes and decoders).") + " Choose another decoder or remove this VFO." };
+  if (!(v.hz > 0)) return { bad: false, text: "Choose a band — or “Own centre…” to type the window’s centre." };
+  const lo = v.hz - d.width / 2, hi = v.hz + d.width / 2;
+  const b = bgSkimBandAt(d.skim, d.width, v.hz);
+  const span = (lo / 1e3).toFixed(1).replace(/\.0$/, "") + "–" + (hi / 1e3).toFixed(1).replace(/\.0$/, "") + " kHz";
+  if (!bgSkimFits(v.hz, d.width, centre, rate))
+    return { bad: true, text: (b ? b.name + " " + what + " " : "") + span + " is outside this radio’s window at this RF centre — "
+      + (b ? "choose a band it holds" : "type a centre nearer the RF centre") + ", or move the RF centre." };
+  return { bad: false, text: (b ? b.name + " " + what + " " : "Your own centre: ") + span + " — every " + what + " signal in it, one summary card an hour"
+    + (b ? " (the window starts at the bottom of the band’s " + what + " segment)." : ".") };
+}
 /* ★★ The NDB band, as the server has it (vibe_bgdecode_config.h ndbSegment): what a skimmer VFO covers at a centre and a
  *  rate — inside the guard every background VFO keeps from the capture's edge — and the least worth a decoder slot. */
 const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB_LEGACY_CENTRE = 362750;
@@ -8218,8 +8283,34 @@ function bgRender() {
       const fixed = bgDecoderSetsFreq(v.dec);
       if (fixed) v.mode = "usb";
       const bands = v.dec === "spots-band" ? bgBandList() : null;
-      let fi = null, bp = null, fillBands = null;
-      if (bands) {
+      /* ★★ V12 beta90: A SKIMMER ROW (CW / RTTY / PSK) PICKS ITS BAND — the server's segments (HW.skimBands), the window
+       *  at segment bottom + width / 2 — or "Own centre…", which shows the kHz box beside the picker. Only bands whose
+       *  window this capture holds (or the row's own band, said to be outside). A stored centre that is no band's loads
+       *  as the owner's own; picking a band replaces it. Where no band list arrived, the kHz box alone, as before. */
+      const sk = bgSkimDef(v.dec);
+      const skBands = sk ? bgSkimList(sk.skim) : null;
+      if (sk) v.mode = "usb";
+      let fi = null, bp = null, fillBands = null, sp = null, fillSkim = null;
+      if (skBands) {
+        if (!(v.hz > 0) && !v.__own) { const f0 = bgSkimFirstFit(sk.skim, sk.width, centreNow(), bgRate); if (f0) v.hz = bgSkimCentre(f0, sk.width); }
+        sp = el("select", { class: "bgSkimPick", "aria-label": "Band", title: "The band — the window starts at the bottom of its " + { cw: "CW", rtty: "RTTY", psk: "PSK" }[sk.skim] + " segment" });
+        fillSkim = function () {
+          sp.innerHTML = "";
+          const cur = v.__own ? null : bgSkimBandAt(sk.skim, sk.width, v.hz);
+          const fitsB = function (b) { return bgSkimFits(bgSkimCentre(b, sk.width), sk.width, centreNow(), bgRate); };
+          const list = skBands.filter(function (b) { return fitsB(b) || (cur && b.id === cur.id); });
+          if (!cur && !(v.hz > 0) && !v.__own) sp.appendChild(el("option", { value: "" }, list.length ? "Choose a band…" : "No band in this window"));
+          list.forEach(function (b) { sp.appendChild(el("option", { value: b.id }, b.name + (fitsB(b) ? "" : " (outside this window)"))); });
+          sp.appendChild(el("option", { value: "__own" }, "Own centre…"));
+          sp.value = cur ? cur.id : (v.hz > 0 || v.__own) ? "__own" : "";
+          if (sp.value === "__own") v.__own = true;   // ★ a stored centre that is no band's is the owner's own
+        };
+        fillSkim();
+        repaints.push(fillSkim);
+        row.appendChild(sp);
+      }
+      if (skBands && !(sp.value === "__own")) { /* the band names the window: no box */ }
+      else if (bands) {
         bp = el("select", { class: "bgBandPick", "aria-label": "Band", title: "The band — the decoder sets the frequency" });
         fillBands = function () {
           bp.innerHTML = "";
@@ -8241,10 +8332,11 @@ function bgRender() {
         row.appendChild(fi);
         row.appendChild(el("span", { class: v.dec === "ndb-skim" ? "bgFixedUnit" : "" }, "kHz"));
       }
+      if (fi && sk) { fi.classList.add("bgSkimOwn"); fi.placeholder = "centre"; fi.title = "The window’s centre — it covers half the width either side"; }
       const md = el("select", { class: "bgDemod" });
       for (const k in BG_DEMODS) { const o = el("option", { value: k }, BG_DEMODS[k]); md.appendChild(o); }
       md.value = v.mode; row.appendChild(md);
-      if (fixed) { md.disabled = true; md.title = "Set by the decoder — it is fed the radio’s IQ, no demodulator runs"; }
+      if (fixed || sk) { md.disabled = true; md.title = "Set by the decoder — it is fed the radio’s IQ, no demodulator runs"; }
       const dc = el("select", { class: "bgDec" });
       // ★ Only the decoders that make sense for this demodulator (Stuart) — refilled when the demodulator changes.
       const fillDec = function () {
@@ -8253,7 +8345,8 @@ function bgRender() {
         const bandOk = bgBandOk();
         // ★ The NDB skimmer only where this radio reaches LF, and once a profile (one covers every beacon it holds)
         const ndbOk = bgNdbOk() && !p.vfos.some(function (o) { return o !== v && o.dec === "ndb-skim"; });
-        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0 && (!d.band || bandOk || v.dec === d.id) && (!d.ndb || ndbOk || v.dec === d.id); });
+        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0 && (!d.band || bandOk || v.dec === d.id) && (!d.ndb || ndbOk || v.dec === d.id)
+          && (!d.skim || bgSkimOk(d.skim) || v.dec === d.id); });   // ★ V12 beta90: a skimmer only where it can run here
         fit.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
         if (!fit.some(function (d) { return d.id === v.dec; })) v.dec = fit.length ? fit[0].id : "";
         dc.value = v.dec;
@@ -8269,11 +8362,18 @@ function bgRender() {
       let bh = null;
       const paintHint = function () {
         if (!bh) return;
-        const h = v.dec === "ndb-skim" ? bgNdbHint(p, r0, locked) : bgBandHint(v, centreNow(), bgRate);
+        const h = v.dec === "ndb-skim" ? bgNdbHint(p, r0, locked) : sk ? bgSkimHint(v, centreNow(), bgRate) : bgBandHint(v, centreNow(), bgRate);
         bh.textContent = h.text;
         bh.style.color = h.bad ? "#ff8a7d" : "";
       };
       repaints.push(paintHint);
+      if (sp) sp.onchange = function () {
+        if (sp.value === "__own") { v.__own = true; bgRender(); return; }   // ★ the box appears, holding the centre it had
+        const b = skBands.filter(function (x) { return x.id === sp.value; })[0];
+        const wasOwn = !!v.__own;
+        v.__own = false; v.hz = b ? bgSkimCentre(b, sk.width) : 0;
+        if (wasOwn) bgRender(); else { fillSkim(); paintHint(); }
+      };
       if (bp) bp.onchange = function () {
         const b = bands.filter(function (x) { return x.id === bp.value; })[0];
         v.hz = b ? b.hz : 0;
@@ -8282,6 +8382,20 @@ function bgRender() {
       dc.onchange = function () {
         const was = v.dec;
         v.dec = dc.value;
+        /* ★★ V12 beta90: a row becoming a skimmer keeps its band at the new width (40 m CW 48 → 96 kHz: 7024 → 7048), an
+         *  owner's own centre stays theirs, and anything else lands on the first band this capture holds. */
+        const nsk = bgSkimDef(v.dec), osk = bgSkimDef(was);
+        if (nsk && bgSkimList(nsk.skim)) {
+          v.mode = "usb";
+          const ob = osk && osk.skim === nsk.skim && !v.__own ? bgSkimBandAt(osk.skim, osk.width, v.hz) : null;
+          if (ob) v.hz = bgSkimCentre(ob, nsk.width);
+          else if (!(osk && osk.skim === nsk.skim && v.__own)) {
+            v.__own = false;
+            const f0 = bgSkimFirstFit(nsk.skim, nsk.width, centreNow(), bgRate); v.hz = f0 ? bgSkimCentre(f0, nsk.width) : 0;
+          }
+          bgRender(); return;
+        }
+        if (osk) { v.__own = false; v.hz = 0; bgRender(); return; }   // ★ off a skimmer: its window centre means nothing now
         if (bgDecoderSetsFreq(v.dec)) {
           v.mode = "usb";
           if (v.dec === "ndb-skim") v.hz = 0;
@@ -8301,6 +8415,7 @@ function bgRender() {
       };
       card.appendChild(row);
       if (fixed) { bh = el("div", { class: "hint " + (v.dec === "ndb-skim" ? "bgNdbNote" : "bgBandNote") }); card.appendChild(bh); paintHint(); }
+      else if (sk) { bh = el("div", { class: "hint bgSkimNote" }); card.appendChild(bh); paintHint(); }
     });
     // ★ One radio: rows past the box's decoders are KEPT (a box that went from several radios back to one) but said
     //   plainly not to run; the server refuses a save with more, in words.
