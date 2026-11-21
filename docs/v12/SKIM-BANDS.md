@@ -116,13 +116,13 @@ How it works:
 
 | Test | What it covers | Result |
 |---|---|---|
-| `vibeserver/test-bg-skim.cpp` | Table and rule (7012/7024/7048, RTTY/PSK examples, region differences), capture fit, JSON and its tunable filter, config/parse/validate (own centre kept, out of window refused), switched-off gate, and end to end: synthetic 40 m RTTY (2 stations) at 250 kS/s → BgRunner → `rttyskim` → RTTY summary card, with both spots reaching PSK Reporter | 33/0 |
+| `vibeserver/test-bg-skim.cpp` | Table and rule (7012/7024/7048, RTTY/PSK examples, region differences), capture fit, JSON and its tunable filter, config/parse/validate (own centre kept, out of window refused), switched-off gate, and end to end: synthetic 40 m RTTY (2 stations) at 250 kS/s → BgRunner → `rttyskim` → RTTY summary card, with both spots reaching PSK Reporter | 44/0 |
 | `vibeserver/test-spot-report.cpp` | +RTTY / BPSK mapping; an RTTY spot is kept when reporting is on and dropped when off | 64/0 |
 | `vibeserver/test-rtty-skimmer.cpp` | Host path: the listener's RTTY skimmer spots reach the reporter | all passed |
-| `scripts/test-setup-bg-skim.mjs` | Setup page picker, Own centre, load/save, width change, fit, gates | 22/0 |
-| `scripts/test_bg_decode_model.ts` | Android screen model | 47/0 |
-| `scripts/test_skim_bands_picker.ts` | Listener picker logic | 11/0 |
-| `scripts/test-web-skim-band.mjs` | Real server and web page in headless Edge (`--mute-audio`): RTTY and CW SKIMMER BAND, rule-centre picks, "20 m · tuned" with no snap-back, ONE SIGNAL hides it | 15/0 |
+| `scripts/test-setup-bg-skim.mjs` | Setup page picker, Own centre, load/save, width change, fit, gates | 27/0 |
+| `scripts/test_bg_decode_model.ts` | Android screen model | 53/0 |
+| `scripts/test_skim_bands_picker.ts` | Listener picker logic | 15/0 |
+| `scripts/test-web-skim-band.mjs` | Real server and web page in headless Edge (`--mute-audio`): RTTY and CW SKIMMER BAND, rule-centre picks, "20 m · tuned" with no snap-back, ONE SIGNAL hides it; the band's windows select | 21/0 |
 
 ## RESUME HERE
 
