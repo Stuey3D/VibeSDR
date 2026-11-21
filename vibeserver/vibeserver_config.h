@@ -969,6 +969,18 @@ struct ServerConfig {
     int         galleryMb = 100;
     bool        galleryPublic = true;
     bool        gallerySaveLive = true;
+    /** ★★ V12 beta90 PSK REPORTER (android/app/src/main/cpp/vibe_spot_report.h, docs/v12/PSK-REPORTER.md) — MACHINE-level,
+     *  beside Background Decoding on the setup page: every radio's digital spots go to PSK Reporter under ONE receiver
+     *  callsign. OFF by default; nothing is sent without `pskrCall`. `pskrAntenna` is free text ("" = each radio's own
+     *  port name, else its antenna description). The grid is the server's own location (`locator`, else lat/lon).
+     *  `wsprnetOn`: the second switch, "Also send WSPR spots to WSPRnet" (WSPR spots only), OFF by default. */
+    bool        pskrOn = false;
+    std::string pskrCall;
+    std::string pskrAntenna;
+    bool        wsprnetOn = false;
+    /** ★★ V12 beta90 DMR ID → CALLSIGN (vibe_dmr_id.h, docs/v12/DMR-ID.md): look each new DMR ID up once at RadioID.net
+     *  for the DV ID box (amateur bands only). OFF by default — RadioID's policy asks approval for public-facing use. */
+    bool        dmrIdLookup = false;
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;

@@ -28698,6 +28698,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply("403 Forbidden", "application/json", "{\"items\":[],\"enabled\":false,\"error\":\"the owner has made this server's gallery private\"}");
                 return;
             }
+            /* ★★ V12 beta90 THIS SERVER'S RANKING (vibe_spot_report.h ranksJson; docs/v12/PSK-REPORTER.md): the gallery's
+             *  standing card — PSK Reporter's places (and WSPR's) for the owner's receiver callsign, as the directory
+             *  published them, with their source and age. {"on":false} unless reporting is on; the client draws nothing. */
+            if (path == "/vibeserver/gallery/ranks.json") {
+                reply("200 OK", "application/json", vibe::spotreport::Reporter::shared().ranksJson());
+                return;
+            }
             if (path == "/vibeserver/gallery.json") {
                 std::string kind;
                 // ★ Digits too (beta 4, the Lenovo): "ft8" was cut to "ft", so the FT8 tab matched nothing while ALL showed it.
