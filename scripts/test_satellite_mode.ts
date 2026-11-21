@@ -5,6 +5,7 @@
 // "No orbit data — why"), the box size by use, and the half-globe's projection.
 process.env.TZ = 'UTC';
 import {
+  satPassQuality, satPassText, satDopplerBadge,
   globeScene, hmIn, hhmm, mss, orthoXYZ, parseSatList, parseSatPicked, satAltKm, satBoxSize, satCorrectedHz, satCountdownText,
   satDecoderFor, satDopplerMsg, satHzText, satListEveryMs, satModeRows, satPacketBaud, satPickMsg, satSyncedText, satWhenText,
   SAT_DROP_MSG, txUse, type SatTx,
@@ -129,6 +130,24 @@ console.log('— the half-globe');
   ok(none.sat === null && none.rx != null, 'no position: the dome and the receiver');
   const all = [g.sat!, g.rx!];
   ok(all.every((p) => p.x >= 0 && p.x <= 240 && p.y >= 0 && p.y <= 120), 'everything inside the box');
+}
+
+console.log('— the pass rating and the readout badge (11-21)');
+{
+  ok(satPassQuality(75) === 'EXCELLENT' && satPassQuality(50) === 'EXCELLENT', '≥ 50° EXCELLENT');
+  ok(satPassQuality(49) === 'GOOD' && satPassQuality(30) === 'GOOD', '30–49° GOOD');
+  ok(satPassQuality(29) === 'MARGINAL' && satPassQuality(15) === 'MARGINAL', '15–29° MARGINAL');
+  ok(satPassQuality(11) === 'POOR', '< 15° POOR (Stuart\'s 11° METEOR)');
+  ok(satPassText({ aos: 0, tca: 0, los: 0, maxEl: 55.6, aosAz: 0, losAz: 0 }) === 'max 56° · EXCELLENT', 'the row text');
+  ok(satPassText(undefined) === '', 'no pass → no rating');
+  ok(satDopplerBadge(null) === null && satDopplerBadge({ state: 'OFF', time: 'ok' }) === null, 'no lock → no badge');
+  const armed = satDopplerBadge({ state: 'ARMED', name: 'ISS', time: 'ok' });
+  ok(!!armed && armed.dir === 0 && armed.dim, 'ARMED → the glyph alone, dim');
+  const up = satDopplerBadge({ state: 'TRACK', name: 'ISS', offset: 8123, time: 'ok' });
+  ok(!!up && up.dir === 1 && !up.dim && /approaching 8\.12 kHz/.test(up.label), `TRACK +8.1 kHz → ▲ (${up?.label})`);
+  const dn = satDopplerBadge({ state: 'COAST', name: 'ISS', offset: -3210, time: 'ok' });
+  ok(!!dn && dn.dir === -1 && dn.dim, 'COAST −3.2 kHz → ▼ dim');
+  ok(satDopplerBadge({ state: 'ENDED', name: 'ISS', time: 'ok' }) === null, 'ENDED → no badge');
 }
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nall ${pass} passed`);

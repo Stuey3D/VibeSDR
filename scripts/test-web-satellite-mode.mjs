@@ -167,11 +167,21 @@ try {
   ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":57166,"tx":0,"doppler":true}', 'METEOR picked (doppler on again)');
   await ev(`window.__p.onPicked({ norad: 57166, tx: 0, decoder: 'lrpt' }); window.__p.status('METEOR · locked · 120 lines · 3 channels'); true`);
   ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"follow":"lrpt"}', 'the page follows the server\'s decoder (lrpt)');
+  // ★★ 11-21 (Stuart: the box took too much room) — an image pick opens SMALL, like any decoder box; the size key or the
+  //    first picture makes it BIG
+  ok(await ev(`!document.getElementById('satPanel').classList.contains('big') && document.querySelector('#satPanel .sat-img').hidden`), 'image pick → SMALL until a picture (no empty picture area)');
+  ok(/it opens BIG/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)) || /120 lines/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'says where the picture will be');
+  await ev(`window.__p.pictureStart(); true`);
   const big = JSON.parse(await ev(`JSON.stringify({ big: document.getElementById('satPanel').classList.contains('big'), img: !document.querySelector('#satPanel .sat-img').hidden, lent: !!document.querySelector('#satPanel .sat-img #decImage'), w: document.getElementById('satPanel').getBoundingClientRect().width, ih: document.querySelector('#satPanel #decImage').getBoundingClientRect().height })`));
-  ok(big.big && big.img && big.lent, 'image → BIG, the decoder image canvas lent into it');
+  ok(big.big && big.img && big.lent, 'a picture starts → BIG, the decoder image canvas lent into it');
   ok(big.w > 600 && big.ih > 150, `bigger: ${Math.round(big.w)} px wide, picture ${Math.round(big.ih)} px tall`);
   ok(/120 lines/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'the LRPT line in the box');
   await shot('big-desktop');
+  await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);
+  ok(await ev(`!document.getElementById('satPanel').classList.contains('big') && document.querySelector('#satPanel .sat-img').hidden`), 'the size key → SMALL (the picture keeps drawing, out of sight)');
+  await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);
+  ok(await ev(`document.getElementById('satPanel').classList.contains('big') && !document.querySelector('#satPanel .sat-img').hidden`), '…and BIG again');
+  await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);   // SMALL by hand: the next pick opens SMALL
   await ev(`window.__p.pictureEnd(); true`);
   ok(/picture complete — saved to the gallery/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'pass end: the finished picture stays, "saved to the gallery"');
 
@@ -211,6 +221,19 @@ try {
   // the text on the window's own background is never the same colour as it (a light page must not hide it)
   const contrast = await ev(`(() => { const p = document.getElementById('satPanel'); const cs = getComputedStyle(p); return cs.color + ' on ' + cs.backgroundColor; })()`);
   ok(!/^(rgb\(0, 0, 0\)) on rgba?\(0, 0, 0/.test(contrast) && contrast.split(' on ')[0] !== contrast.split(' on ')[1], `the window's text and ground differ (${contrast})`);
+
+  console.log('— minimise, and the pass ratings');
+  await ev(`document.querySelector('#satPanel [data-act="min"]').click(); true`);
+  const mn = JSON.parse(await ev(`JSON.stringify({ min: document.getElementById('satPanel').classList.contains('min'), body: getComputedStyle(document.querySelector('#satPanel .sat-body')).display, hs: document.querySelector('#satPanel .sat-hs').textContent, h: document.getElementById('satPanel').getBoundingClientRect().height })`));
+  ok(mn.min && mn.body === 'none' && mn.h < 60, `– folds it to the header (${Math.round(mn.h)} px)`);
+  ok(/^ISS · UP/.test(mn.hs), `the folded header still says the pick: "${mn.hs}"`);
+  await ev(`document.querySelector('#satPanel [data-act="min"]').click(); true`);
+  ok(await ev(`!document.getElementById('satPanel').classList.contains('min')`), '□ restores it');
+  await ev(`document.querySelector('#satPanel details').open = true; true`); await sleep(1100);
+  const qs = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .sat-row:not(.grey) .sat-q')].map(e => e.className + '|' + e.textContent))`));
+  ok(qs.length >= 3 && qs.every(q => /^sat-q q-(excellent|good|marginal|poor)\|max \d+° · (EXCELLENT|GOOD|MARGINAL|POOR)$/.test(q)), `every hearable row rates its pass: ${qs.join(' / ')}`);
+  ok(await ev(`[...document.querySelectorAll('#satPanel .sat-row.grey')].every(b => !b.querySelector('.sat-q'))`), 'a greyed row is not rated');
+  await shot('ratings-desktop');
 
   console.log('— leaving the mode');
   await ev(`document.querySelector('#satPanel [data-act="exit"]').click()`);

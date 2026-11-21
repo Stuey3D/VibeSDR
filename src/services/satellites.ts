@@ -281,6 +281,8 @@ export interface SatRow {
   left?: number;
   /** the next pass (not up) */
   next?: SatPass;
+  /** ★ the pass this row is about — the one in progress while up, else the next (its maxEl rates it, satPassQuality) */
+  pass?: SatPass;
   /** greyed: this radio cannot hear it, or its orbit cannot be tracked — `why` says which */
   grey: boolean; why: string;
 }
@@ -295,7 +297,8 @@ export function satModeRows(l: SatList | null, nowSec: number): SatRow[] {
     const left = !up ? undefined : sat.inRangeFor ?? (cur ? cur.los - nowSec : undefined);
     const next = up ? undefined : sat.passes.find((p) => p.aos > nowSec);
     const key = up ? (left ?? 1e9) : next ? 1e10 + next.aos : 1e12;
-    return { sat, up, left, next, key };
+    const pass = up ? cur : next;
+    return { sat, up, left, next, pass, key };
   });
   birds.sort((a, b) => a.key - b.key || a.sat.name.localeCompare(b.sat.name));
   const out: SatRow[] = [];
@@ -303,7 +306,7 @@ export function satModeRows(l: SatList | null, nowSec: number): SatRow[] {
     const orbitWhy = b.sat.ageState === 'expired' || b.sat.ageState === 'none' ? ageText(b.sat) : '';
     b.sat.tx.forEach((tx, i) => {
       const why = !tx.reach ? (tx.why || 'out of this receiver’s range') : orbitWhy;
-      out.push({ sat: b.sat, tx, i, up: b.up, left: b.left, next: b.next, grey: !!why, why });
+      out.push({ sat: b.sat, tx, i, up: b.up, left: b.left, next: b.next, pass: b.pass, grey: !!why, why });
     });
   }
   return out;
@@ -333,6 +336,33 @@ export function satCountdownText(sat: SatInfo | undefined, nowSec: number): stri
   if (row.up) return row.left != null ? `In range for ${mss(row.left)}` : 'In range now';
   if (row.next) return `Next pass in ${hmIn(row.next.aos, nowSec)} · AOS ${hhmm(row.next.aos)} · max ${Math.round(row.next.maxEl)}°`;
   return 'No pass in the next day';
+}
+/* ★★ HOW GOOD THE PASS SHOULD BE (Stuart 2026-11-21: "on the satellite list are we able to determine if the pass is likely
+ *  to be strong or weak" — n2yo's table shades its passes). n2yo rates what the EYE sees (brightness, sunlit); for RADIO
+ *  the measure is the pass's HIGHEST ELEVATION: a high pass brings the bird closer (a LEO at 10° is ~3× further away than
+ *  overhead — ~10 dB more path loss) and lifts it clear of the trees, roofs and hills on the horizon, and it stays up
+ *  longer. Four levels, shaded like n2yo's legend. Nothing about the transmitter is known, so this is the geometry only. */
+export type SatPassQ = 'EXCELLENT' | 'GOOD' | 'MARGINAL' | 'POOR';
+export function satPassQuality(maxEl: number): SatPassQ {
+  return maxEl >= 50 ? 'EXCELLENT' : maxEl >= 30 ? 'GOOD' : maxEl >= 15 ? 'MARGINAL' : 'POOR';
+}
+/** The row's rating: "max 56° · EXCELLENT" ('' = no pass to rate). */
+export function satPassText(p: SatPass | undefined): string {
+  return p ? `max ${Math.round(p.maxEl)}° · ${satPassQuality(p.maxEl)}` : '';
+}
+/** ★★ THE FREQUENCY READOUT'S BADGE (Stuart 2026-11-21: "a simple auto doppler icon would be enough with an up or down
+ *  arrow" — the name, AOS and state are the SATELLITE box's; the readout got squished carrying them). null = no lock: no
+ *  badge. dir 1 = ▲ approaching (received high), -1 = ▼ receding, 0 = armed, waiting for the pass. dim = waiting, coasting
+ *  or on old orbits. `label` is for screen readers and the tooltip. */
+export interface SatDopBadge { dir: 1 | -1 | 0; dim: boolean; label: string }
+export function satDopplerBadge(r: SatReadout | null): SatDopBadge | null {
+  if (!r || r.state === 'OFF' || r.state === 'ENDED') return null;
+  const who = r.name ? ` · ${r.name}` : '';
+  if (r.state === 'ARMED') return { dir: 0, dim: true, label: `Auto Doppler armed${who}, waiting for the pass` };
+  const off = r.offset ?? 0;
+  const dir: 1 | -1 = off >= 0 ? 1 : -1;
+  const dim = r.state === 'COAST' || r.ageState === 'stale' || r.time === 'none';
+  return { dir, dim, label: `Auto Doppler ${satStateWord(r)}${who} · ${dir > 0 ? 'approaching' : 'receding'} ${Math.abs(off / 1000).toFixed(2)} kHz` };
 }
 /** ★ Spec item 10: "Orbits synced 16:08 · 2 h ago" / "Fetching orbit data…" / "No orbit data — why". '' = an older server
  *  that does not say (its credit line still shows). */

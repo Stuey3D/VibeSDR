@@ -655,6 +655,14 @@ body.padTuck #mVfoDial, body.padTuck #mZoomDial {
 #mChan { font-size: 0.62em; color: rgba(255,255,255,0.72); letter-spacing: 0.04em; white-space: nowrap;
          font-variant-numeric: tabular-nums; }
 #mChan[hidden] { display: none; }
+/* ★★ V12 SATELLITE: the Doppler badge beside the unit — the satellite glyph and ▲ / ▼, nothing else (the words are the
+   SATELLITE box's). Dim while armed / coasting. A fixed width so a ▲ ⇄ ▼ or armed ⇄ track never moves the digits. */
+#mSatDop { display: inline-flex; align-items: center; gap: 1px; margin-left: 0.35em; color: var(--amber, #ffb000);
+           width: 1.5em; vertical-align: middle; }
+#mSatDop[hidden] { display: none; }
+#mSatDop.dim { opacity: 0.5; }
+#mSatDop .mSatIco { width: 0.95em; height: 0.95em; flex: 0 0 auto; }
+#mSatDop .mSatArr { width: 0.5em; height: 0.5em; flex: 0 0 auto; }
 /* ★ V12 THE AM SYNC LINE — carrier lock and offset ("SYNC +3.2 Hz"), the width AUTO BW applied, a notch: the same
    small dimmed detail as the airband channel line, present only in the AM family. */
 #mAmSync { font-size: 0.62em; color: rgba(255,255,255,0.72); letter-spacing: 0.04em; white-space: nowrap;
@@ -4788,7 +4796,7 @@ select.btn { padding: 6px 8px; }
                frequency entry must have a padlock and advise it is locked due to DAB mode"). -->
           <span id="mFreqBox" role="button" tabindex="0"><span id="mFreqLock" hidden aria-hidden="true"><svg viewBox="0 0 10 13" width="9" height="12"
             fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1" y="5.5" width="8" height="6.5" rx="1"/><path
-            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span><span id="mChan" hidden></span><span id="mAmSync" hidden aria-live="off"></span></span>
+            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span><span id="mChan" hidden></span><span id="mSatDop" role="img" hidden></span><span id="mAmSync" hidden aria-live="off"></span></span>
           <span id="mMode" role="button" tabindex="0">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
              thing on a bar that runs to bright green, and the app already has a symbol for this

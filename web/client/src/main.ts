@@ -58,7 +58,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satCapFrom, satChanText, satStateWord, satPacketBaud, type SatPicked, type SatTx } from '../../../src/services/satellites';
+import { satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -20933,7 +20933,7 @@ let freqUnit: FreqUnit = 'mhz';
  * ★ Both parts are FIXED WIDTH per unit, because the island is sized by its contents — a readout
  *   that grows a digit moves every control with it (see #mFreq's reservation in index.html).
  */
-function cardFreqText(): { main: string; fine: string; unit: string; chan?: string } | null {
+function cardFreqText(): { main: string; fine: string; unit: string; chan?: string; satDop?: SatDopBadge | null } | null {
   if (!spec) return null;
   /* ★★ IN ISM THE READOUT IS THE BAND (Stuart, 2026-10-25): its centre as the figure and its name as the tag — the server's
    *  report says which, so a second listener sees the band whoever chose it. An exact frequency typed in ISM shows itself. */
@@ -20949,10 +20949,11 @@ function cardFreqText(): { main: string; fine: string; unit: string; chan?: stri
     return r && { ...r, chan: b ? `${b.name} BAND` : 'NO DIGITAL BAND' };
   }
   const hz = Math.round(spec.frequency);
-  /* ★★ V12 A SATELLITE DOPPLER LOCK: the digits stay on the NOMINAL (the server snapped the dial there) and the white text
-   *  beside them is "ISS · ▼ 3.21 kHz · TRACK" (brief §10) — the same slot the airband channel uses. */
-  { const ro = satPanel?.readout() ?? null; const t = satChanText(ro);
-    if (t) { const r = cardFreqPlain(hz); return r && { ...r, chan: `${t} \u00B7 ${satStateWord(ro)}` }; } }
+  /* ★★ V12 A SATELLITE DOPPLER LOCK: the digits stay on the NOMINAL (the server snapped the dial there) and beside them is
+   *  ONE badge — the satellite glyph and ▲ / ▼ (Stuart 2026-11-21; it was "ISS · ▼ 3.21 kHz · TRACK", which squeezed the
+   *  digits — the name, AOS and state are the SATELLITE box's). */
+  { const b = satDopplerBadge(satPanel?.readout() ?? null);
+    if (b) { const r = cardFreqPlain(hz); return r && { ...r, satDop: b }; } }
   // ★ An airband channel: its NAME is the figure, in MHz — see renderFreq.
   const ch = airChannelNow();
   if (ch && freqUnit === 'mhz') return { main: ch.name, fine: '', unit: 'MHz', chan: airChanTag(ch, true) };

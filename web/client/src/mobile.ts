@@ -21,6 +21,8 @@ import { QRZ_HOME, QRZ_SIGN_IN_NOTE } from '../../../src/utils/cwFormat';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 import { DRM_SEARCHING, drmBoxReading, type DrmQuality } from '../../../src/utils/drmQuality';
 import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
+import { modeIconSvg } from '../../../src/utils/modeIcons';
+import type { SatDopBadge } from '../../../src/services/satellites';
 import { modeLegend, isAmSync, AM_SYNC_NAME } from '../../../src/services/amSync';
 import { FREEDV_LABEL, FREEDV_NAME } from '../../../src/services/freedv';
 import { M17_NAME } from '../../../src/services/m17';
@@ -63,7 +65,7 @@ export type MobileDeps = {
    *  the readout, so the two always agree — a dial reading MHz while you type kHz is how people
    *  mis-tune by a factor of a thousand." */
   /** `chan`: the airband channel's small line (spacing / true frequency / name) — absent elsewhere. */
-  freqText: () => { main: string; fine: string; unit: string; chan?: string } | null;
+  freqText: () => { main: string; fine: string; unit: string; chan?: string; satDop?: SatDopBadge | null } | null;
   mode: () => string;
   /** Formatted step label for the step button, e.g. "1k". */
   stepLabel: () => string;
@@ -623,6 +625,23 @@ export function initMobileControls(deps: MobileDeps) {
     const chEl = document.getElementById('mChan');
     // ★ Write-on-change (4 Hz poll; the value almost never moves).
     if (chEl) { const h = !ft?.chan; if (chEl.hidden !== h) chEl.hidden = h; put(chEl, ft?.chan ?? ''); }
+    // ★★ V12 SATELLITE: a Doppler lock shows ONE small badge — the satellite glyph and ▲ / ▼ (Stuart 2026-11-21: the name,
+    //    AOS and state live in the SATELLITE box; carrying them here squeezed the digits). Rebuilt only when it changes.
+    const sdEl = document.getElementById('mSatDop');
+    if (sdEl) {
+      const b = ft?.satDop ?? null;
+      const key = b ? `${b.dir}${b.dim ? 'd' : ''}` : '';
+      if (sdEl.dataset.k !== key) {
+        sdEl.dataset.k = key; sdEl.hidden = !b;
+        sdEl.classList.toggle('dim', !!b?.dim);
+        const arrow = !b || b.dir === 0 ? '' : b.dir > 0
+          ? '<svg class="mSatArr" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1.5 9 8.5H1z" fill="currentColor"/></svg>'
+          : '<svg class="mSatArr" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 8.5 9 1.5H1z" fill="currentColor"/></svg>';
+        sdEl.innerHTML = b ? modeIconSvg('satellite', 'mSatIco') + arrow : '';
+      }
+      const lbl = ft?.satDop?.label ?? '';
+      if (sdEl.title !== lbl) { sdEl.title = lbl; sdEl.setAttribute('aria-label', lbl); }
+    }
     put($('mMode'), modeLegendWeb(deps.mode()));
     put($('mStep'), deps.stepLabel());
     // ★ The stereo light, mute, LOCK/FREE and the recorder are NOT polled here: main.ts has ONE

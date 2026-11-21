@@ -19,8 +19,9 @@
  *     {"op":"doppler"}; leaving the mode (EXIT, the key again, another whole-radio mode) sends {"op":"drop"}.
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import {
-  globeScene, satAltKm, satBoxSize, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
+  globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
+  type SatPass,
   type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
 
@@ -41,27 +42,51 @@ export interface SatPanelDeps {
 }
 
 const CSS = `
-#satPanel{position:fixed;z-index:60;right:12px;top:64px;width:min(440px,calc(100vw - 32px));max-height:calc(100vh - 96px);
-  overflow:auto;background:var(--pill-bg);color:var(--btn-text);border:1px solid var(--btn-border);border-radius:10px;
-  padding:10px 12px;font:13px/1.35 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);box-sizing:border-box}
-#satPanel.big{width:min(680px,calc(100vw - 32px))}
+/* ★★★ THE DECODER BOX's PLACE AND SHAPE (Stuart 2026-11-21: "the satellite decoder box needs to be the same as a standard
+   decoder box with the minimise and small/big buttons as right now on the phone you cant see the waterfall behind") —
+   #decBox's anchor (bottom-left, above the control card: --decBoxBottom), width, ceiling and header; – folds it to the
+   header, the size key swaps SMALL (room to tune) and BIG. */
+#satPanel{position:fixed;z-index:46;left:14px;bottom:var(--decBoxBottom,14px);width:min(94vw,max(46vw,380px),560px);
+  max-height:calc(100dvh - var(--decBoxBottom,14px) - 24px);display:flex;flex-direction:column;overflow:hidden;
+  background:var(--ov-panel96,rgba(8,6,2,.96));color:var(--btn-text);border:1px solid var(--btn-border);border-radius:10px;
+  font:13px/1.35 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.6);box-sizing:border-box;transition:bottom .15s ease-out}
+#satPanel.big{width:min(94vw,900px)}
 #satPanel[hidden]{display:none}
-#satPanel .sat-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-#satPanel .sat-h b{flex:1;letter-spacing:.08em}
+#satPanel .sat-h{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--bar-border,var(--btn-border));
+  font-size:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;flex-wrap:nowrap}
+#satPanel .sat-h::-webkit-scrollbar{display:none}
+#satPanel .sat-h > *{flex:0 0 auto}
+#satPanel .sat-h b{letter-spacing:.08em}
+#satPanel .sat-dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);opacity:.6}
+#satPanel .sat-dot.on{background:#5c5;opacity:1}
+#satPanel .sat-hs{flex:1 1 auto !important;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim);font-variant-numeric:tabular-nums}
+#satPanel .sat-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:8px 10px;max-height:40vh}
+#satPanel.big .sat-body{max-height:clamp(300px,72vh,900px)}
+#satPanel.min .sat-body{display:none}
+#satPanel.min .sat-h{border-bottom:0}
 #satPanel button{background:var(--btn-bg);color:var(--btn-text);border:1px solid var(--btn-border);border-radius:6px;padding:4px 9px;
   font:inherit;cursor:pointer;min-height:30px}
+#satPanel .sat-h button{padding:2px 8px;font-size:11px;min-height:26px}
 #satPanel button.on{background:var(--btn-active-bg);border-color:var(--btn-active-bdr);color:var(--btn-active-tx)}
 #satPanel button:disabled{opacity:.45;cursor:default}
+#satPanel .sat-size{padding:2px 5px !important;line-height:0}
+#satPanel .sat-size svg{width:11px;height:13px}
+#satPanel .sat-size svg rect,#satPanel .sat-size svg path{fill:none;stroke:currentColor;stroke-width:1.2;stroke-linecap:round}
+#satPanel.big .sat-size svg rect{y:3;height:10px}
+#satPanel.big .sat-size svg path{transform:rotate(180deg);transform-origin:6px 3px}
 #satPanel .sat-dim{color:var(--text-dim)}
-#satPanel .sat-why{color:var(--text-dim);margin:4px 0}
-#satPanel .sat-box{border:1px solid var(--btn-border);border-radius:8px;padding:8px;margin:6px 0}
+#satPanel .sat-why{color:var(--text-dim);margin:0 0 4px}
+#satPanel .sat-box{border:1px solid var(--btn-border);border-radius:8px;padding:8px;margin:0 0 6px}
 #satPanel .sat-box[hidden]{display:none}
-#satPanel .sat-ro{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;align-items:center}
+#satPanel .sat-ro{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;align-items:center}
+#satPanel.big .sat-ro{grid-template-columns:minmax(0,1fr)}
 #satPanel .sat-ro.coast .sat-big{opacity:.55}
 #satPanel .sat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #satPanel .sat-big{font-size:18px;font-variant-numeric:tabular-nums;margin:2px 0}
 #satPanel .sat-cd{font-variant-numeric:tabular-nums}
-#satPanel canvas.sat-globe{width:100%;max-width:420px;height:auto;aspect-ratio:640/300;display:block;margin:0 auto}   /* ★ its own row, the box's width (Stuart 11-20: it shows the pass at a glance) */
+/* ★ SMALL: the half-globe sits beside the words, small; BIG: its own row at the box's width (Stuart 11-20) */
+#satPanel canvas.sat-globe{width:150px;height:auto;aspect-ratio:640/300;display:block}
+#satPanel.big canvas.sat-globe{width:100%;max-width:420px;margin:0 auto}
 #satPanel .sat-img{margin-top:8px}
 #satPanel .sat-img[hidden]{display:none}
 #satPanel .sat-img #decImage{max-height:min(52vh,440px);object-fit:contain}
@@ -79,12 +104,30 @@ const CSS = `
 #satPanel .sat-row .sat-f{grid-column:1/-1;color:var(--text-dim);font-size:12px}
 #satPanel .sat-row.grey{opacity:.5;cursor:default}
 #satPanel .sat-row.up .sat-w{color:var(--amber)}
-@media (max-width:560px){
-  #satPanel,#satPanel.big{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:62vh}
+/* ★★ THE PASS's RATING, shaded like n2yo's legend (Stuart 11-21) — from the pass's highest elevation (satPassQuality) */
+#satPanel .sat-q{display:inline-block;padding:0 5px;border-radius:4px;margin-left:2px;font-variant-numeric:tabular-nums;color:var(--btn-text)}
+#satPanel .sat-q.q-excellent{background:rgba(255,176,0,.42)}
+#satPanel .sat-q.q-good{background:rgba(255,176,0,.24)}
+#satPanel .sat-q.q-marginal{background:rgba(255,176,0,.10)}
+#satPanel .sat-q.q-poor{color:var(--text-dim)}
+/* ★ A phone: the box's own width, and SMALL leaves the waterfall above it to tune by */
+@media (max-width:760px){
+  #satPanel{left:8px;right:8px;width:auto}
+  #satPanel.big{width:auto}
+  #satPanel .sat-body{max-height:min(30vh,240px)}
+  #satPanel.big .sat-body{max-height:min(62vh,560px)}
+  #satPanel canvas.sat-globe{width:120px}
 }
 `;
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as Record<string, string>)[c]);
+
+/** ★ The row's pass rating, shaded like n2yo's legend (satPassQuality: the pass's highest elevation). */
+function qualityHtml(p: SatPass | undefined): string {
+  if (!p) return '';
+  const q = satPassQuality(p.maxEl);
+  return ` · <span class="sat-q q-${q.toLowerCase()}" title="How well this pass should come in: the higher it climbs, the closer and clearer it is">${esc(satPassText(p))}</span>`;
+}
 
 export class SatPanel {
   private el: HTMLDivElement;
@@ -104,8 +147,15 @@ export class SatPanel {
   private decLine = '';
   private packets: string[] = [];
   private lent = false;
+  /** ★ SMALL / BIG (the size key) and minimised (–), as the decoder box. BIG is grown once when a picture starts, unless the
+   *  listener chose SMALL for this pick (`sized`). */
+  private big = false;
+  private sized = false;
+  /** the size last chosen BY HAND — a new pick opens at it (an automatic grow for a picture is not carried over) */
+  private handBig = false;
+  private min = false;
   // the skeleton's slots — built once, filled every second (the lent image canvas must never be re-created)
-  private sHead!: HTMLElement; private sWhy!: HTMLElement; private sBox!: HTMLElement; private sRo!: HTMLElement;
+  private sHead!: HTMLElement; private sHs!: HTMLElement; private sDot!: HTMLElement; private sWhy!: HTMLElement; private sBox!: HTMLElement; private sRo!: HTMLElement;
   private sName!: HTMLElement; private sHz!: HTMLElement; private sCd!: HTMLElement; private sState!: HTMLElement;
   private sGlobe!: HTMLCanvasElement; private sImg!: HTMLElement; private sPk!: HTMLElement; private sSync!: HTMLElement;
   private sList!: HTMLDetailsElement; private sRows!: HTMLElement; private sCredit!: HTMLElement;
@@ -117,9 +167,12 @@ export class SatPanel {
     this.el = document.createElement('div');
     this.el.id = 'satPanel'; this.el.hidden = true;
     this.el.setAttribute('role', 'dialog'); this.el.setAttribute('aria-label', 'Satellite');
-    this.el.innerHTML = `<div class="sat-h"><b>SATELLITE</b>`
+    this.el.innerHTML = `<div class="sat-h"><span class="sat-dot"></span><b>SATELLITE</b><span class="sat-hs" data-s="hs"></span>`
       + `<button data-act="doppler" class="on" aria-pressed="true" title="AUTO DOPPLER: keep the satellite centred for the whole pass">AUTO DOPPLER</button>`
-      + `<button data-act="exit" title="Leave SATELLITE (the Doppler lock and the decoder stop)">EXIT</button></div>`
+      + `<button data-act="size" class="sat-size" title="Bigger panel" aria-label="Bigger panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3"/></svg></button>`
+      + `<button data-act="exit" title="Leave SATELLITE (the Doppler lock and the decoder stop)">EXIT</button>`
+      + `<button data-act="min" title="Minimise" aria-label="Minimise">–</button></div>`
+      + `<div class="sat-body">`
       + `<div class="sat-why" data-s="why" hidden></div>`
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
       +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div>`
@@ -128,14 +181,18 @@ export class SatPanel {
       + `<div class="sat-img" data-s="img" hidden></div><div class="sat-pk" data-s="pk" hidden></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary><div data-s="rows"></div></details>`
-      + `<div class="sat-dim sat-credit" data-s="credit"></div>`;
+      + `<div class="sat-dim sat-credit" data-s="credit"></div></div>`;
     const q = <T extends HTMLElement>(n: string) => this.el.querySelector(`[data-s="${n}"]`) as T;
     this.sHead = this.el.querySelector('.sat-h') as HTMLElement;
+    this.sHs = q('hs'); this.sDot = this.el.querySelector('.sat-dot') as HTMLElement;
     this.sWhy = q('why'); this.sBox = q('box'); this.sRo = q('ro'); this.sName = q('name'); this.sHz = q('hz'); this.sCd = q('cd');
     this.sState = q('state'); this.sGlobe = q<HTMLCanvasElement>('globe'); this.sImg = q('img'); this.sPk = q('pk'); this.sSync = q('sync');
     this.sList = q<HTMLDetailsElement>('list'); this.sRows = q('rows'); this.sCredit = q('credit');
+    // ★ fixed to the window at #decBox's anchor (--decBoxBottom: above the control card; the waterfall runs to the bottom)
     document.body.appendChild(this.el);
     this.el.addEventListener('click', (e) => this.onClick(e));
+    // ★ a tap on the header's empty part folds / unfolds it, as the app's decoder header does
+    this.sHead.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('button')) this.setMin(!this.min); });
   }
 
   /** In the SATELLITE mode (its key lit). */
@@ -187,7 +244,7 @@ export class SatPanel {
   onPicked(p: SatPicked) {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
-    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; }
+    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; if (this.big !== this.handBig) this.setBig(this.handBig, false); }
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t);
@@ -197,7 +254,13 @@ export class SatPanel {
   /** The decoder's own words (LRPT's carrier / frames / lines, SSTV's mode, APRS listening). */
   status(text: string) { this.decLine = text; if (this.open) this.paintPick(); }
   /** A picture started (LRPT's preview, an ISS SSTV frame): the box grows to show it. */
-  pictureStart() { if (!this.picked) return; this.picture = true; this.pictureDone = false; if (this.open) this.render(); }
+  pictureStart() {
+    if (!this.picked) return;
+    this.picture = true; this.pictureDone = false;
+    if (!this.sized && !this.big) this.setBig(true, false);   // ★ grows to show it, once — unless SMALL was chosen for this pick
+    if (this.min) this.setMin(false);
+    if (this.open) this.render();
+  }
   pictureEnd() { if (!this.picked) return; this.pictureDone = true; if (this.open) this.paintPick(); }
   /** An APRS line heard on a packet downlink. */
   packet(line: string) {
@@ -219,6 +282,8 @@ export class SatPanel {
     if (!b || b.disabled) return;
     const act = b.dataset.act;
     if (act === 'exit') { this.exit(); return; }
+    if (act === 'min') { this.setMin(!this.min); return; }
+    if (act === 'size') { this.setBig(!this.big, true); return; }
     if (act === 'doppler') {
       this.autoDoppler = !this.autoDoppler;
       if (this.picked) this.deps.doppler(this.autoDoppler);
@@ -234,6 +299,29 @@ export class SatPanel {
     }
   }
 
+  private setMin(on: boolean) {
+    this.min = on; this.el.classList.toggle('min', on);
+    const b = this.sHead.querySelector('[data-act="min"]') as HTMLButtonElement;
+    b.textContent = on ? '□' : '–'; b.title = on ? 'Restore' : 'Minimise'; b.setAttribute('aria-label', b.title);
+    if (this.open) this.render();
+  }
+  private setBig(on: boolean, byHand: boolean) {
+    this.big = on; if (byHand) { this.sized = true; this.handBig = on; }
+    if (on && this.min) this.setMin(false);
+    this.el.classList.toggle('big', on);
+    const b = this.sHead.querySelector('[data-act="size"]') as HTMLButtonElement;
+    b.title = on ? 'Smaller panel' : 'Bigger panel'; b.setAttribute('aria-label', b.title);
+    if (this.open) this.render();
+  }
+  /** The header's own line — what the folded box still says: "Meteor-M2-3 · AOS 12:05 (in 0:09)" / "ISS · UP · 6:12 left". */
+  private headLine(now: number): string {
+    const sel = this.picked ?? this.pending;
+    const sat = sel ? this.list?.sats.find(s => s.norad === sel.norad) : undefined;
+    if (!sat) return '';
+    const row = satModeRows(this.list, now).find(r => r.sat.norad === sat.norad);
+    return row ? `${sat.name} · ${satWhenText(row, now)}` : sat.name;
+  }
+
   private lend(on: boolean) {
     if (on === this.lent) return;
     this.lent = on;
@@ -246,6 +334,11 @@ export class SatPanel {
     const dop = this.sHead.querySelector('[data-act="doppler"]') as HTMLButtonElement;
     dop.classList.toggle('on', this.autoDoppler); dop.setAttribute('aria-pressed', String(this.autoDoppler));
     dop.disabled = !!cw;
+    const live = this.readout();
+    this.sDot.classList.toggle('on', !!live && live.state === 'TRACK');
+    const hs = this.min ? this.headLine(now) : '';
+    if (this.sHs.textContent !== hs) this.sHs.textContent = hs;
+    if (this.min) return;   // ★ folded: the header is all there is to draw
     const why = cw || this.refusal || (this.ro?.state === 'OFF' ? this.ro.why ?? '' : '');
     this.sWhy.hidden = !why; this.sWhy.textContent = why;
     this.paintPick();
@@ -264,7 +357,7 @@ export class SatPanel {
       h += `<button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
         + (r.grey ? ` aria-disabled="true" data-why="${esc(r.why)}" title="${esc(r.why)}"` : ` title="${esc((r.tx.note || r.tx.label) + ' — tune there' + (this.autoDoppler ? ' and correct the Doppler' : ''))}"`)
         + `><span class="sat-n">${esc(name)}</span><span class="sat-w">${esc(satWhenText(r, now))}</span>`
-        + `<span class="sat-f">${esc(txText(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}</span></button>`;
+        + `<span class="sat-f">${esc(txText(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`;
     }
     if (this.list?.time === 'system') h += `<div class="sat-dim">TIME: SYSTEM — this server's clock has not been checked against a time server</div>`;
     this.sRows.innerHTML = h;
@@ -281,7 +374,6 @@ export class SatPanel {
     const sat = this.picked ? this.list?.sats.find(s => s.norad === this.picked!.norad) : undefined;
     const pend = this.pending ? this.list?.sats.find(s => s.norad === this.pending!.norad) : undefined;
     if (!t || !sat) {
-      this.el.classList.remove('big');
       this.lend(false);
       this.sBox.hidden = !pend;
       if (pend) {
@@ -295,8 +387,11 @@ export class SatPanel {
       }
       return;
     }
-    const big = satBoxSize(t, this.picture) === 'big';
-    this.el.classList.toggle('big', big);
+    // ★★ the box's size is the LISTENER's (SMALL / BIG), as any decoder box — a picture shows in BIG (pictureStart grows it
+    //    once); an image downlink only says where a picture will appear
+    const big = this.big;
+    // ★ the picture area only once a picture has started (or finished) — never an empty black frame (Stuart's 11-21 shot)
+    const imageKind = satBoxSize(t, true) === 'big' && (this.picture || this.pictureDone);
     this.sBox.hidden = false;
     const r = this.readout();
     const mine = r && r.norad === sat.norad ? r : null;
@@ -306,12 +401,12 @@ export class SatPanel {
     this.sCd.textContent = satCountdownText(sat, now);
     const use = txUse(t);
     const lockWord = !this.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
-    const decWord = this.decLine || (use === 'image' ? 'waiting for the picture' : use === 'packet' ? 'listening for packets' : t.sstv ? 'listening — an SSTV picture opens here' : '');
+    const decWord = this.decLine || (use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : t.sstv ? 'listening — an SSTV picture opens here' : '');
     this.sState.textContent = [lockWord, decWord].filter(Boolean).join(' · ');
     // big: the decoder box's image canvas, lent to this window (the live preview, the finished picture at pass end)
-    this.lend(big);
-    this.sImg.hidden = !big;
-    if (big && this.pictureDone) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
+    this.lend(big && imageKind);
+    this.sImg.hidden = !(big && imageKind);
+    if (this.pictureDone && imageKind) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
     // packet: the APRS lines
     this.sPk.hidden = use !== 'packet';
     if (use === 'packet') this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
