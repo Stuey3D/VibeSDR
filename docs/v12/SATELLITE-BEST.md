@@ -228,11 +228,12 @@ shaded: where it can be heard"). Labels avoid each other and the globe's edge (b
 
 ### 1.9 MAP for a packet satellite's stations (Stuart 2026-11-21) (S)
 A packet downlink (ISS 145.825 / SONATE-2 145.825 APRS digipeaters) gets a **MAP** key in the SATELLITE box's header, as the
-APRS decoder box has (web #aprsMapBtn / the app's APRS map): every station heard through the satellite with a position,
+APRS decoder box has — it opens the ONE DIGI MODES map (Stuart 11-21: the APRS map is combined with the digital spots in
+the three VIEWS maps: DIGI MODES · AVIATION · SHIPPING), on its APRS layer: every station heard through the satellite with a position,
 the pass's dotted orbit and its footprint on the same map, so it is clear the stations were within the bird's reach;
 each station labelled "via ISS" / "via SONATE-2" (the digipeater in the path, vibe_sat_calls.h names it). Drawn only once a
-station with a position has been heard (no dead key). The stations also go to the server's APRS store, so the gallery's
-APRS map shows them afterwards. Web + app.
+station with a position has been heard (no dead key). The stations also go to the server's APRS store, so the DIGI
+MODES map shows them afterwards. Web + app.
 
 ## PHASE 2 — make it a satellite station (after the beta lands)
 
