@@ -455,8 +455,10 @@ export interface GlobeBird {
   u: [number, number]; d: [number, number];
   /** where the beam leaves the dish (the rim's middle) */
   focus: { x: number; y: number };
-  /** half the bird's size across its widest (panel tip to panel tip), for labels to keep clear */
+  /** half the bird's size across its widest (panel tip to panel tip) */
   reach: number;
+  /** the drawing's bounding box on screen, for labels to keep clear */
+  box: { l: number; t: number; r: number; b: number };
 }
 export interface GlobeScene {
   w: number; h: number; cx: number; cy: number; r: number;
@@ -512,7 +514,13 @@ export function globeBird(p: { x: number; y: number }, u: [number, number], d: [
   }
   const boom = poly([at(-P0, u, 0, pu), at(-B0, u, 0, pu)], false) + poly([at(B0, u, 0, pu), at(P0, u, 0, pu)], false)
     + poly([at(base - 0.4 * k, d, 0, pd), at(base + DD * 0.8, d, 0, pd)], false);   // ★ the feed, in the bowl
-  return { body: poly(body), dish: poly(dish), panels, cells, boom, u, d, focus: { x: focus[0], y: focus[1] }, reach: P1 + PW };
+  const out = { body: poly(body), dish: poly(dish), panels, cells, boom };
+  const box = { l: Infinity, t: Infinity, r: -Infinity, b: -Infinity };
+  for (const m of Object.values(out).join(' ').matchAll(/(-?[\d.]+) (-?[\d.]+)/g)) {
+    const x = Number(m[1]), y = Number(m[2]);
+    box.l = Math.min(box.l, x); box.r = Math.max(box.r, x); box.t = Math.min(box.t, y); box.b = Math.max(box.b, y);
+  }
+  return { ...out, u, d, focus: { x: focus[0], y: focus[1] }, reach: P1 + PW, box };
 }
 /** ★ The whole half-globe as numbers + SVG paths (no tiles, nothing to download). The dome is the top half of the disc; the
  *  bird at radius 1 + its (exaggerated) height above its sub-point, hidden behind the globe or below the cut. `sat` null =
@@ -642,13 +650,14 @@ export function globeLabels(g: GlobeScene, rxName: string | undefined, satName: 
   let satL: GlobeLabel | null = null, birdBox: Box | null = null;
   const st = globeLabelText(satName, 16);
   if (g.sat && g.bird && st) {
-    const R = g.bird.reach;
-    birdBox = { l: g.sat.x - R, t: g.sat.y - R * 0.55, r: g.sat.x + R, b: g.sat.y + R * 0.55 };
+    const bb = g.bird.box;
+    birdBox = bb;
+    const gap = pad * 1.5 + 1;
     const tries: GlobeLabel[] = [
-      clampMid({ x: g.sat.x, y: g.sat.y - R * 0.55 - pad, anchor: 'middle', text: st }),       // above (the rule)
-      { x: g.sat.x + R + pad, y: g.sat.y + font * 0.35, anchor: 'start', text: st },            // right
-      { x: g.sat.x - R - pad, y: g.sat.y + font * 0.35, anchor: 'end', text: st },              // left
-      clampMid({ x: g.sat.x, y: g.sat.y + R * 0.55 + font, anchor: 'middle', text: st }),      // below
+      clampMid({ x: g.sat.x, y: bb.t - gap - font * 0.2, anchor: 'middle', text: st }),       // above (the rule)
+      { x: bb.r + gap, y: g.sat.y + font * 0.35, anchor: 'start', text: st },                 // right
+      { x: bb.l - gap, y: g.sat.y + font * 0.35, anchor: 'end', text: st },                   // left
+      clampMid({ x: g.sat.x, y: bb.b + gap + font * 0.85, anchor: 'middle', text: st }),      // below
     ];
     satL = tries.find((L) => inside(boxOf(L)) && !hit(boxOf(L), birdBox!)) ?? null;
   }
