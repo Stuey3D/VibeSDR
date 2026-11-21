@@ -141,15 +141,17 @@ function drawn(e: Emit[], since: number) {
 }
 
 async function check(label: string, A: ReturnType<typeof appClient>, srvFreq: () => number, wantHz: number, tolHz: number) {
-  // ★ 3 s: long enough for every settle and the stamp heal (1 s), short of anything a person would call "after a while"
-  await sleep(3000);
-  const since = Date.now() - 1000;
+  // ★ 3 s: long enough for every settle and the stamp heal (1 s), short of anything a person would call "after a while".
+  //   ★ ADS-B runs the waterfall at a crawl behind the map (recomputeEngineRate): its rows are read over 2 s, at least one.
+  const adsb = Math.abs(wantHz - 1090e6) < 1e6;
+  await sleep(adsb ? 4000 : 3000);
+  const since = Date.now() - (adsb ? 2000 : 1000);
   const d = drawn(A.emits, since);
   const st = A.c.status;
   const vfo = srvFreq();
   ok(Math.abs(vfo - wantHz) < tolHz, `${label}: the server's dial is where the mode put it (${(vfo / 1e6).toFixed(3)} MHz)`);
   ok(Math.abs(Number(st.frequency) - vfo) < 2000, `${label}: the READOUT is the server's dial (${(Number(st.frequency) / 1e6).toFixed(3)} vs ${(vfo / 1e6).toFixed(3)} MHz)`);
-  ok(d.rows > 3 && d.placed === d.rows, `${label}: rows arrive and every one is drawn in the view (${d.placed}/${d.rows})`);
+  ok(d.rows >= (adsb ? 1 : 4) && d.placed === d.rows, `${label}: rows arrive and every one is drawn in the view (${d.placed}/${d.rows})`);
   const l = d.last;
   ok(!!l && Math.abs(l.centerHz - Number(st.centerHz)) < 1 && Math.abs((l.trueCenterHz ?? 0) - Number(st.centerHz)) < 1,
      `${label}: the view is the server's capture (view ${(Number(l?.centerHz) / 1e6).toFixed(3)}, rows ${(Number(l?.trueCenterHz) / 1e6).toFixed(3)}, server ${(Number(st.centerHz) / 1e6).toFixed(3)} MHz)`);
@@ -186,6 +188,9 @@ try {
       ['DAB → ADS-B', () => A!.c.adsb(true), 1090e6],
       ['ADS-B → AIS', () => A!.c.ais(true), 162e6],
       ['AIS → DAB 11A', () => A!.c.dab(true, 26), 216.928e6],
+      ['DAB → normal', () => A!.c.dab(false), 0],
+      // ★ a person's tune and, inside its 1.5 s echo window, a whole-radio mode: the mode's dial must still be adopted
+      ['a tune, then DAB 11A 300 ms later', () => { A!.c.tune(97_000_000, 'wfm'); setTimeout(() => A!.c.dab(true, 26), 300); }, 216.928e6],
       ['DAB → normal', () => A!.c.dab(false), 0],
       ['ISM', () => A!.c.ism(true), 0],
       ['ISM → (exit) SATELLITE pick', () => { A!.c.ism(false); setTimeout(() => A!.c.satPick(iss!.norad, issTx, true), 400); }, 437.8e6],

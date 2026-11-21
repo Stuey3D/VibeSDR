@@ -1577,6 +1577,8 @@ export abstract class VibeServerWsClient {
   /** True once a radio has announced itself on this client — so a LATER hwinfo means we came
    *  back, rather than arrived. */
   private hadSession = false;
+  /** ★ This socket has had its hwinfo — the returning-socket re-assert runs on the first one only (see the hwinfo handler). */
+  private hwinfoThisSocket = false;
   /** ★ Set on socket open; the first `config` decides whether to restore our view or adopt the
    *  server's. See _restoreViewOnConfig. */
   private viewRestorePending = false;
@@ -1638,6 +1640,12 @@ export abstract class VibeServerWsClient {
   /** When this client last tuned itself — so the server's echo of our own tune is not mistaken
    *  for another listener moving a shared dial. */
   private lastLocalTuneAt = 0;
+  /** ★★★ A WHOLE-RADIO MODE (DAB, ADS-B, ISM, NDB, AIS, sondes) or a SATELLITE pick / drop HANDS THE DIAL TO THE SERVER —
+   *  the request is the person's, the frequency that follows is the server's. So the 1.5 s echo window of a tune just
+   *  before it must not swallow the config that carries it: that config is sent ONCE, on the change, and a skipped one
+   *  left the readout on the old dial for good (Stuart, 2026-11-21: 1090000 kHz in NFM after ADS-B; 216928 in SATELLITE
+   *  after DAB). Called by VibeServerClient as each such request is sent. */
+  protected serverTakesDial() { this.lastLocalTuneAt = 0; }
   private lastLocalModeAt = 0;
   /** When this client last moved the passband itself — the same guard, for the room's passband. */
   private lastLocalBwAt = 0;
@@ -1805,6 +1813,7 @@ export abstract class VibeServerWsClient {
     // that catches a reopen into a reaped session.
     this.wsOpenedAt      = Date.now();
     this.framesThisSocket = 0;
+    this.hwinfoThisSocket = false;   // ★ the returning-socket re-assert is once per socket — see the hwinfo handler
     this.pingSentAt      = 0;
     this._armWatchdog();
 
@@ -3092,8 +3101,19 @@ export abstract class VibeServerWsClient {
        *  and a resume re-asserting our stale frequency would retune a stranger's transceiver (or, under
        *  the owner lock, earn a refusal on every return from the background). One physical receiver,
        *  so it is a shared dial even with one listener allowed. */
+      /* ★★★ ONCE PER RETURNING SOCKET — NOT ON EVERY hwinfo (Stuart, 2026-11-21, beta89: EXIT ADS-B, pick a SATELLITE, and
+       *  the spectrum was blank and the readout still said the old frequency until one tune click). `hadSession` is true
+       *  from the first hwinfo on, and hwinfo arrives on EVERY retune — the note above says so — so on a dial that is not
+       *  shared this re-asserted our own frequency each time the SERVER moved the radio: leaving ADS-B, a satellite pick,
+       *  DAB, ISM, AIS. That tune stamped lastLocalTuneAt, so the config that carried the server's new dial landed inside
+       *  our 1.5 s echo window and was never adopted (it is sent once, on the change); and the view was hauled back to
+       *  the old centre while the VFO sat 340 MHz away. A one-listener radio is not a dial nobody else moves: the server
+       *  moves it for every whole-radio mode. What this block exists for — a socket that came back — is answered by the
+       *  first hwinfo of that socket, so that is the only one it reads. */
+      const firstOnSocket = !this.hwinfoThisSocket;
+      this.hwinfoThisSocket = true;
       const icomNow = isIcom(msg.radio);
-      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial && !icomNow) {
+      if (firstOnSocket && this.hadSession && this.status.frequency > 0 && !this.sharedDial && !icomNow) {
         this.tune(this.status.frequency, this.status.mode, { recenter: true });
       } else if (this.hadSession && this.sharedDial) {
         this.dbg('shared dial — not re-asserting our tune on this hwinfo; the room owns the dial');
@@ -3606,7 +3626,10 @@ export abstract class VibeServerWsClient {
        *  hauled it back to 96.1, and both waterfalls emptied while the RDS followed the station nobody could
        *  see. The server says as much in its own config: "a joiner must adopt it rather than impose one".
        *  ★★ So here we adopt: fall through to the lines below, which take the server's centre as ours. */
-      if (unsolicitedChange && !this.sharedDial) {
+      /* ★★ …NOR WHILE A WHOLE-RADIO MODE HOLDS THE RADIO: the server put the capture there (1090 MHz, the multiplex, the
+       *  ISM band) and refuses our view meanwhile, so re-asserting the old one only argues — adopt it, as on a shared dial. */
+      const wholeHeld = this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld;
+      if (unsolicitedChange && !this.sharedDial && !wholeHeld) {
         this.dbg(`unsolicited config (centre ${this.status.centerHz} bb ${this.status.binBandwidth}) — re-asserting view`);
         this._sendView(Math.round(v.centerHz), v.binBandwidth);
         return;
