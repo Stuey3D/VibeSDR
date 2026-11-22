@@ -1651,7 +1651,10 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   var acLayer=null,acHexKey={},acKeyHex={};
   function acMake(){
     if(acLayer||KIND!=='avdata'||!window.VibeAdsbLayer)return acLayer;
+    /* ★ beta91 the owner's logos / silhouettes on this server, as on the ADS-B map (adsbMake) — the datalink's aircraft carry
+     *  the same keys now (vibe_aircraft_info.h) */
     try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
+      imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')},
       onSelect:function(h){trkPost({t:'trkSel',key:h&&acHexKey[h]?acHexKey[h]:null});}});window.__acLayer=acLayer;}
     catch(e){console.error('aircraft layer could not start',e);acLayer=null;}
     return acLayer;

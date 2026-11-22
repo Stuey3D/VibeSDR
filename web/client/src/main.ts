@@ -10170,6 +10170,7 @@ function avViewOpts() {
     labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
     labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain', nautical: true,   // ★ beta90 NM on the scale bar
     aircraft: true,   // ★★ beta90 every aircraft drawn by the ADS-B layer (rings, AUTO / FIT, the glide, heading from its fixes)
+    imageBase: adsbImageBase() || null,   // ★ beta91 the owner's logos / silhouettes — every source's aircraft carries the keys now
     onToggle: (id: string, on: boolean) => {
       avLayers = { ...avLayers, [id]: on };
       try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }
