@@ -68,7 +68,7 @@ function ws(port, pathq) {
       const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
       if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
       if (op === 0x2 && !st.dropBin) st.bin.push(Buffer.from(p));
-      if (op === 0x1) st.txt.push(p.toString());
+      if (op === 0x1) { st.txt.push(p.toString()); (st.txtAt || (st.txtAt = [])).push(Date.now()); }
     }
   });
   st.send = (o) => {
@@ -129,6 +129,23 @@ function checkSpots(spots, label) {
   const bad = spots.filter((x) => !STATIONS.some(([, c]) => c === x.data.callsign));
   ok(bad.length === 0, `${label}: no false spots ${bad.map((x) => x.data.callsign).join(' ')}`);
 }
+/** ★ beta91: on a miss, each missing station's mode chip as it changed (from the digital_spots_status frames), with the
+ *  test's seconds since Band was asked for — "shed", "idle" or "light" at the moment its over came tells a governor
+ *  decision from a decoder miss. Needs the frames' arrival times: L.dx.txtAt (ws() records them). */
+function chipHistory(L, t0) {
+  const missing = STATIONS.filter(([, c]) => !jsons(L.dx, 'digital_spot').some((x) => x.data.callsign === c));
+  const fam = (m) => (m === 'PSK31' ? 'PSK' : m);
+  for (const [mode, call] of missing) {
+    const seq = []; let last = '';
+    L.dx.txt.forEach((t, i) => {
+      if (!t.includes('"type":"digital_spots_status"')) return;
+      const m = (JSON.parse(t).data.modes || []).find((x) => x.mode === fam(mode));
+      const w = m ? `${m.state}${m.live !== undefined ? '/' + m.live : ''}` : 'absent';
+      if (w !== last) { seq.push(`${(((L.dx.txtAt || [])[i] || t0) - t0) / 1000}s ${w}`); last = w; }
+    });
+    console.log(`   · ${call} (${mode}) missed — its chip: ${seq.join(' → ') || 'no status frames'}`);
+  }
+}
 const allSpotted = (L) => () => STATIONS.every(([, c]) => jsons(L.dx, 'digital_spot').some((x) => x.data.callsign === c));
 
 try {
@@ -146,7 +163,10 @@ try {
       ok(st && (st.spotBands || []).map((b) => b.id).join(' ').startsWith('160m 80m') /* ★ WSPR's 2200 m / 630 m lie below this radio */, `bands in step order: ${st && (st.spotBands || []).map((b) => b.id).join(' ')}`);
       const L = await listener(S.port, 'spone001', CENTRE, 'usb');
       L.dx.send({ type: 'subscribe_digital_spots', scope: 'band' });
-      ok(await until(allSpotted(L), 50000), `every station spotted within 50 s (${jsons(L.dx, 'digital_spot').map((x) => x.data.mode + ' ' + x.data.callsign).join(', ')})`);
+      const t0 = Date.now();
+      const all1 = await until(allSpotted(L), 50000);
+      ok(all1, `every station spotted within 50 s (${jsons(L.dx, 'digital_spot').map((x) => x.data.mode + ' ' + x.data.callsign).join(', ')})`);
+      if (!all1) chipHistory(L, t0);   // ★ beta91: a miss says what the missing station's mode was doing meanwhile
       await sleep(1500);
       checkSpots(jsons(L.dx, 'digital_spot'), 'one-pipeline Band');
       // ★★ V12 governor: the mode chips, and JTTY/PSK saying what the station was doing (+ every spot's country)
@@ -253,7 +273,9 @@ try {
     } finally { S.stop(); }
   }
 } finally {
-  fs.rmSync(tmp, { recursive: true, force: true });   // ★ the 29 MB clip and the servers' folders
+  // ★ VIBE_SPOTS_KEEP=1: the servers' folders (their logs) are kept for a look after a miss; the 29 MB clips still go
+  if (process.env.VIBE_SPOTS_KEEP) { for (const f of ['20m.cu8', '40m.cu8']) fs.rmSync(path.join(tmp, f), { force: true }); console.log(`   kept: ${tmp}`); }
+  else fs.rmSync(tmp, { recursive: true, force: true });   // ★ the 29 MB clip and the servers' folders
 }
 console.log(`\n${fail ? '✗' : '✓'} test-server-spots: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -47,7 +47,43 @@ struct Sig {
     int idleBefore = 32, idleAfter = 32;
     double clockPpm = 0;         // the transmitter's symbol clock error
     double cubic = 0;            // ★ an overdriven transmitter: the envelope becomes a − cubic·a³ (third-order IMD)
+    bool qpsk = false;           // ★ beta91: QPSK31/63 — the bits through the spec's K=5 code (qpskShift), each a phase SHIFT
+    bool qpskLsb = false;        //   …sent on the other sideband (±90 the other way round)
 };
+
+/** ★ QPSK (the published PSK31 specification's table, G3PLX): the phase shift in quarter turns (0 none, 1 +90, 2 180,
+ *  3 −90) for the last five bits, the newest in bit 0. Written out from the spec's table — the decoder's own table is
+ *  generated from the polynomials 0x19 / 0x17, and the tests check the two agree on all 32. */
+inline int qpskShift(unsigned r) {
+    // rows 00000 … 11111 (left bit first = bit 4 the oldest)
+    static const int16_t kDeg[32] = {
+        180, 90, -90, 0, -90, 0, 180, 90,      // 00000 00001 00010 00011 00100 00101 00110 00111
+        0, -90, 90, 180, 90, 180, 0, -90,      // 01000 01001 01010 01011 01100 01101 01110 01111
+        90, 180, 0, -90, 0, -90, 90, 180,      // 10000 10001 10010 10011 10100 10101 10110 10111
+        -90, 0, 180, 90, 180, 90, -90, 0 };    // 11000 11001 11010 11011 11100 11101 11110 11111
+    const int d = kDeg[r & 31];
+    return d == 0 ? 0 : d == 90 ? 1 : d == 180 ? 2 : 3;
+}
+
+/** ★ QPSK's complex baseband: each symbol a phasor turned by its shift, a cosine crossfade between neighbours (G3PLX's
+ *  shaping — a reversal passes through zero, a ±90 dips to 0.71). */
+inline std::vector<cf> envelopeQ(const std::vector<int>& b, double baud, double rate, bool lsb, double clockPpm = 0) {
+    const double T = 1.0 / (baud * (1 + clockPpm * 1e-6));
+    std::vector<cf> d(b.size() + 2, cf(0, 0));
+    cf cur(1, 0); unsigned r = 0;
+    const cf rot[4] = { cf(1, 0), cf(0, lsb ? -1.0f : 1.0f), cf(-1, 0), cf(0, lsb ? 1.0f : -1.0f) };
+    for (size_t k = 0; k < b.size(); ++k) { r = ((r << 1) | (unsigned)b[k]) & 31u; cur *= rot[qpskShift(r)]; d[k + 1] = cur; }
+    const size_t n = (size_t)((double)(b.size() + 1) * T * rate);
+    std::vector<cf> e(n);
+    for (size_t i = 0; i < n; ++i) {
+        const double t = (double)i / rate / T;
+        const size_t k = (size_t)t; const double tau = t - (double)k;
+        const float w = (float)(0.5 * (1 + std::cos(M_PI * tau)));
+        const cf a = k < d.size() ? d[k] : cf(0, 0), c = k + 1 < d.size() ? d[k + 1] : cf(0, 0);
+        e[i] = a * w + c * (1.0f - w);
+    }
+    return e;
+}
 /** ★ The IMD a cubic of `k` gives on the idle (two tones at ±baud/2), from the envelope itself — the bench's reference:
  *  cos(πt/T) − k·cos³ = (1 − ¾k)·cos − ¼k·cos(3πt/T), so the products sit at ¼k ÷ (1 − ¾k) of the tones. */
 inline double cubicImdDb(double k) { return k <= 0 ? -200.0 : 20.0 * std::log10(0.25 * k / (1.0 - 0.75 * k)); }
@@ -78,21 +114,27 @@ inline void synth(std::vector<Sig>& sigs, double rate, bool complexOut, double s
     if (complexOut) iq.assign(n, cf(0, 0)); else re.assign(n, 0.0f);
     const double bw = complexOut ? rate : rate / 2;
     for (auto& s : sigs) {
-        auto env = envelope(bits(s.text, s.idleBefore, s.idleAfter), s.baud, rate, s.clockPpm);
+        std::vector<float> env; std::vector<cf> envq;
+        if (s.qpsk) envq = envelopeQ(bits(s.text, s.idleBefore, s.idleAfter), s.baud, rate, s.qpskLsb, s.clockPpm);
+        else env = envelope(bits(s.text, s.idleBefore, s.idleAfter), s.baud, rate, s.clockPpm);
         if (s.cubic > 0) for (auto& v : env) v = (float)(v - s.cubic * v * v * v);
-        double ms = 0; for (float v : env) ms += v * v; ms /= std::max<size_t>(1, env.size());
+        double ms = 0;
+        if (s.qpsk) { for (const cf& v : envq) ms += std::norm(v); ms /= std::max<size_t>(1, envq.size()); }
+        else { for (float v : env) ms += v * v; ms /= std::max<size_t>(1, env.size()); }
+        const size_t envN = s.qpsk ? envq.size() : env.size();
         // mean power so that P / (noise in 2500 Hz) = snr
         const double p = std::pow(10.0, s.snrDb / 10.0) * 2500.0 / bw;
         const double amp = s.amp * (complexOut ? std::sqrt(p / ms) : std::sqrt(2 * p / ms));
         double ph = rng.uni() * 2 * M_PI;
         const size_t s0 = (size_t)(s.startSec * rate);
-        for (size_t i = 0; i < env.size() && s0 + i < n; ++i) {
+        for (size_t i = 0; i < envN && s0 + i < n; ++i) {
             const double f = s.hz + s.driftHzPerSec * ((double)i / rate);
             ph += 2 * M_PI * f / rate;
             if (ph > 2 * M_PI) ph -= 2 * M_PI;
-            const double a = amp * env[i];
-            if (complexOut) iq[s0 + i] += cf((float)(a * std::cos(ph)), (float)(a * std::sin(ph)));
-            else re[s0 + i] += (float)(a * std::cos(ph));
+            const cf e = s.qpsk ? envq[i] * (float)amp : cf((float)(amp * env[i]), 0.0f);
+            const cf v = e * cf((float)std::cos(ph), (float)std::sin(ph));
+            if (complexOut) iq[s0 + i] += v;
+            else re[s0 + i] += v.real();
         }
     }
     const double sg = complexOut ? std::sqrt(0.5) : 1.0;

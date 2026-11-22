@@ -78,7 +78,7 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'loraaprs', label: 'LoRa APRS (amateur trackers and iGates, 433.775 MHz)', parent: 'lora' },
   { id: 'meshcom', label: 'MeshCom (amateur mesh, 433.175 MHz)', parent: 'lora' },
   { id: 'fanet', label: 'FANET (paragliders and gliders, 868.2 MHz)', parent: 'lora' },
-  { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK31/63 decoder and skimmer' },
+  { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK decoder and skimmer (PSK31/63/125, QPSK31/63)' },
   { id: 'dsc', label: 'DSC' }, { id: 'sitora', label: 'SITOR-A' },
   { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
   // ★ V12 HFDL (docs/v12/AVIATION.md): aircraft on HF, a listener's decoder on the USB dial — as on the setup page

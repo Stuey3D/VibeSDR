@@ -21,8 +21,10 @@ Built and tested (synthetic signals only — see "What was tested how"). Open:
    cut (it takes effect at the next Band start or band change).
 3. Stuart's Pi 500: once this is live, its 4 CW skimmer VFOs and the RTTY skimmer VFO on bands its Band VFOs cover can go
    (the Setup page now says so on each); 13 VFOs → 8, inside its 8 slots. Nothing was migrated — his call.
-4. PSK125 / QPSK31 / QPSK63: **not built** — `psk::Skimmer` demodulates BPSK31 and BPSK63 only. Adding them is a new
-   demodulator lane (QPSK needs its Viterbi), a separate job.
+4. PSK125 / QPSK31 / QPSK63: **built** (branch `b91-psk2`, see "PSK125 and QPSK31 / QPSK63" below) — synthetic signals
+   only. Wanted from the coordinator: a live look for real PSK125 / QPSK on air (rare; 20 m 14.070–14.073 evenings, and
+   contest weekends), and that PSK Reporter shows them under PSK125 / QPSK31 / QPSK63.
+5. The test-server-spots edge: **found and fixed in the PSK skimmer** (below). Re-run counts are in the section.
 
 ## ★★ The test-server-spots regression and its fix (beta91, after the first merge)
 
@@ -62,6 +64,103 @@ were ~1 run in 4. The baseline was 9/9 here and the coordinator's. **Still open:
 shows the clip's PSK31 is phase-sensitive in the baseline as well (`test-band-slice real` on the clip rotated 4–8 s:
 no PSK31 within 45 s; spotted by 150 s), so the 50 s check sits on an edge.
 
+### ★★★ The cause, found (b91-psk2): a tentative carrier that has gone was HELD OFF
+
+The PSK31 miss is the PSK skimmer's, not the spotter's. The clip's G4PSK sends one 5 s CQ (0.5–5.5 s) in every 15 s
+loop. When the engine first hears that CQ part-way through, the channel it opens cannot confirm (too little text), and the
+skimmer's rule for a tentative carrier was: probe 12 s, then drop it **and hold its frequency off for 20 s** — a rule for
+a carrier that STAYS and will not decode (a birdie, RTTY, a data signal). A station that simply stopped was treated the
+same, so its next CQ, 15 s later, began inside the 32 s of probe + hold-off and was missed as well; the one after that
+is at 45 s and beyond. Measured offline (scratch `phase.cpp`: psk::Skimmer on the clip's CQ joined at each of 30 start
+phases of the 15 s loop, 12 kHz audio): **11 of 30 phases first spotted after 45 s or never at 0 dB, 14 of 30 at −8 dB**
+(the old engine) — exactly the 1.5–6.5 s band the offline harness had shown.
+
+So the server path does not "dodge" anything on the baseline: whether G4PSK makes the 50 s is decided by WHEN the
+audio spotter's PSK engine first hears the clip relative to its 15 s loop — when the gate floor is ready and the window
+lit (4 s periods, 2 s of held lead-in), and whether the governor sheds PSK (priority 70, the lowest) for a stretch and
+lets it back in mid-CQ. Anything that moves Band's early seconds by a second or two (the IQ chips' slices and threads,
+the extra slice's replan, CPU from other work on the Mac) moves that moment, and about one start in five lands on the
+bad stretch. The fix makes the engine indifferent to the moment instead of tuning the moment:
+
+- **`psk_skimmer.cpp` `markHeard` / `housekeeping`: a tentative channel whose carrier has GONE is dropped at once and NOT
+  held off.** Gone = this transform's windowed power over ±6 bins (≈ ±18 Hz) under +3 dB on the floor for `kGoneSec`
+  (1.5 s). Not the carrier finder's 1 s average: after a strong over (+17 dB in the clip) that took ≈ 5 s to fall.
+  The 12 s probe + 20 s hold-off still applies to a carrier that stays.
+- Result, the same offline sweep: **0 of 30 late at 0 dB and at −8 dB**; worst first spot 34.7 s (0 dB), 35.1 s (−8 dB).
+  test-psk unchanged (all its pins pass, the forced-open noise runs still 0 characters).
+
+**Re-runs (Mac shared with other agents, one at a time, nice):** before the fix (the branch's start, cdc0e22bb's skimmer)
+test-server-spots **5/6** (run 5 missed G4PSK in the one-pipeline Band — the edge reproduced); with the fix **4/4**
+test-server-spots (55/0 each) and **2/2** test-web-spots (70/0 each). Each run took ≈ 11 min on the loaded Mac, so the
+≥ 10 / ≥ 5 the brief asked for were NOT reached in the time-box — the coordinator's run owes the rest.
+
+The FT2 (IU8AAA) half of the old misses is not explained by this. The test now prints, on a miss, the missing station's
+mode chip as it changed (`chipHistory`: e.g. "FT2 … 21s shed → 36s light"), so the next one says whether the governor
+shed it (a slot skip cutting the budget) or the decoder missed it.
+
+## PSK125 and QPSK31 / QPSK63 (beta91, b91-psk2)
+
+Stuart (2026-11-22): PSK125, QPSK31 and QPSK63 in the band decode's wide PSK chip AND the ordinary PSK decoder. One
+change does both: they are new **lanes** in `psk::Skimmer` (`decoders/psk_skimmer.cpp`), the engine behind the listener's
+PSK decoder (ONE SIGNAL and SKIMMER), Band's PSK chip (`digimodes/psk.h`) and PSKW (`digimodes/pskw.h`).
+
+- **PSK125** = BPSK at 125 baud, Varicode as PSK31: a BPSK lane at 125 Bd (3 channel samples a symbol at ≈ 375 Hz — enough;
+  CER 0.8–2.7 % at 0 / −5 dB in 2.5 kHz).
+- **QPSK31 / QPSK63** (from the published PSK31 specification, G3PLX; no program's source used): the last five Varicode
+  bits choose the phase SHIFT (0, +90, −90, 180); the table is the rate-½ K=5 convolutional code with generator
+  polynomials 0x19 / 0x17, (a,b) = (0,0) 180, (1,0) 0, (1,1) +90, (0,1) −90 — idle (all zeros) is continuous reversals,
+  as BPSK. The decoder generates its table from the polynomials; the test synth (`benchsynth/psk_synth.h qpskShift`) has
+  the spec's 32 rows written out, and test-psk checks they agree. A QPSK lane: the same matched filter and timing as its
+  BPSK sibling (its filter output is copied, not recomputed), a fourth-power Costas loop, EVM against the nearest of four
+  points, differential detection d = s_k·s*_{k−1}, and a **16-state soft-decision Viterbi** (branch metric = d's
+  correlation with the branch's shift, traceback 25 symbols). **Both sidebands**: two Viterbis run (±90 read either way);
+  the one whose best path gains more speaks (QPSK on the other sideband decodes, CER 0.9 %). Cost: 32 add-compare-selects
+  + a 25-step traceback a symbol, ≤ 62.5 symbols a second — microseconds; no SIMD is worth it at that rate (the
+  per-sample loops it rides on — the FFT, mask, NCO, matched filter — are SIMD and unchanged).
+- **Telling BPSK from QPSK, both ways** (`kindOk`): BPSK's two points are two of QPSK's four, so a BPSK signal reads clean
+  on a QPSK lane too (cleaner at a weak copy: noise has four points to fall near — an EVM comparison alone picked QPSK
+  for weak PSK63). But a QPSK signal can NEVER read clean on a BPSK lane: half its symbols sit on BPSK's error axis, so
+  that lane's Es/N0 cannot pass ≈ 3 dB. QPSK = the BPSK sibling under 3 dB, the QPSK lane 3 dB cleaner, and ≥ 15 % of
+  shifts ±90. (A four-point loop's minor-axis share was tried first and dropped: on weak BPSK the noisy loop wandered.)
+- Lanes of different speeds are compared over the **same time** (32 symbols of PSK31 = 1 s; 128 of PSK125), and a lane
+  may take the lead only after ≈ 1.5 s — 32 PSK125 symbols are a quarter of a second, and that lane read best on noise
+  for that reason alone (weak PSK63 lost its copy to lead flips before this).
+- A QPSK-led channel's frequency comes from z⁴ (squaring leaves QPSK's data on; worse, a run of +90 shifts squares to a
+  line baud/2 off the carrier, and a channel moved onto it garbled "good morning" every time). A character a QPSK lane
+  decoded while it was not yet the signal's reader is held as noise (its points read clean to the lenient EVM).
+- Spot modes: `PSK31 PSK63 PSK125 QPSK31 QPSK63` (`digimodes/psk.h spotModeOf`); Es/N0 → 2500 Hz: −19 / −16 / −13 dB.
+  PSK Reporter (`vibe_spot_report.h adifMode`): PSK125, QPSK31, QPSK63 — ADIF submodes of PSK. The signals list carries
+  `"baud":125` and `"qpsk":true`; web (`decoders.ts`, `main.ts`) and app (`cwList.ts pskRowMode`, `CwView`) rows say
+  PSK125 / QPSK31 / QPSK63; the map, legend and MODE filter take them as the PSK family (`digiModes.ts`).
+
+**Tested how (synthetic only, the spec's transmitter in `psk_synth.h`)** — test-psk (all pass): the 32-row table;
+CER per mode at two levels, audio and IQ, 3 draws (PSK125 0 / −5 dB: 2.5 / 2.7 % audio, 0.8 / 2.7 % IQ; QPSK31 −5 /
+−8 dB: 3.5 / 4.1 %, 2.7 / 1.0 %; QPSK63 0 / −8 dB: 12.2 / 11.6 %, 7.0 / 25.5 % — QPSK63's CER is mostly the first
+characters before the lane takes the lead); LSB QPSK31 0.9 %; **the mode never mistaken**: 5 modes × 3 levels (+10, −2,
+−8 dB) × audio/IQ = 30 runs, 30 heard, **0 listed as another mode** (and a wider scratch sweep, 5 modes × 5 levels × 2 × 4
+draws: 0 wrong); noise: the existing 10 min / forced-open pins with all five lanes on — **0 characters, 0 spots**; a
+QPSK63 and a PSK125 CQ spotted as QPSK63 / BPSK125; BPSK31/63's existing CER pins unchanged.
+
+**CPU (M5 Pro)**: busy 3 kHz (8 PSK31/63 signals, 12 kHz audio) 0.02 → 0.03 % of a core (×1.7); a 48 kHz PSKW window,
+noise 0.12 % either way, busy (19 signals of the five modes, +10 dB) 0.160 → 0.220 % (×1.38) — PSKW's `costVsFt8`
+3.3 → 4.5. Per tentative carrier 5 lanes instead of 2 (≈ 2.5× the per-channel work, which is small beside the shared
+FFT); memory ≈ 10 KB more per tracked carrier (≤ 128 carriers: ≈ 1.3 MB at most).
+
+### Stuart's decisions (2026-11-22, after the first report)
+
+1. **Strong signals fixed** — one station is one channel and one spot at any level. The FLL's weight had grown with the
+   signal level (at +20–30 dB it walked the channel ±2 Hz and lost the copy); PSK125's lane could lead a strong PSK31;
+   Es/N0 stopped at the EVM's own 22–25 dB floor (past 14 dB the spectrum now says it); a gone signal was listed where its
+   AFC wandered; a near-duplicate (within 0.6 baud of a confirmed station, or QPSK's baud/4 data line) could confirm.
+   test-psk: **40/40** (five modes × 0/+10/+20/+30 dB × audio/IQ) one channel, one spot, right mode, worst 0.32 Hz, 1.9 dB.
+2. QPSK63's weak start: left as it is.
+3. **CPU**: Band PSK `costVsFt8` 0.6 → 1.0 (×1.7), PSKW 3.3 → 4.5. And **one budget**: the CW / RTTY / PSKW spotter had
+   no budget at all (only the pause rule) — it now has the audio spotter's cap less what the slotted modes have committed
+   (`Spotter::setBudgetOthers`), so a weak box sheds the chips by the governor before it is overloaded. test-digi-spots:
+   a 3-unit (Pi 2-class) box with the slotted modes committing 2 — before, 2 + 2.25 committed (over); now 2 + 0.8, PSKW and
+   RTTY shed. The listener's own PSK decoder is measured by the benchmark's `dec_psk` / `dec_pskskim` rows, which run the
+   real engine (so its five lanes are in the figures the slots come from).
+
 ## Design
 
 ### IQ modes (their own registry and their own spotter, since the fix above)
@@ -76,7 +175,7 @@ Three are registered last in `decoders/digi_modes.cpp`:
 |---|---|---|---|---|
 | **CW** | `digimodes/cw.h` — `cw::Skimmer` (the CW skimmer VFO's engine) | the band's CW segment | 120 (first) | 1 (first) |
 | **RTTY** | `digimodes/rtty.h` — `rttysk::Skimmer` + one search worker | the RTTY / narrow-band digimode segment | 110 | 2 |
-| **PSKW** | `digimodes/pskw.h` — `psk::Skimmer` (PSK31 + PSK63) | the SAME segment as RTTY | 105 | 3 (last) |
+| **PSKW** | `digimodes/pskw.h` — `psk::Skimmer` (PSK31, PSK63, PSK125, QPSK31, QPSK63 — beta91) | the SAME segment as RTTY | 105 | 3 (last) |
 
 The windows come from `vibe_skim_bands.h` (`bandWindows`) for the server's IARU region (`skimbands::bandRegion()`, kept
 in step with the band plan's region by `LocalSdrShim::setBandRegion` and set from `Env::region` at Band start), plus the

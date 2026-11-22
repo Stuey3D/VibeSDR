@@ -78,10 +78,13 @@ const hintFromHtml = (id: string) => {
   eq('idle: CW one signal', kbIdleText(false, false), 'listening — tune a CW signal into the passband');
   ok('the idle lines are the web\'s', main.includes("'listening — every PSK signal in your passband appears here; the one in the middle is decoded above'"));
 
-  // The wire: decoders.ts reads baud > 40 as 63 and keeps IMD; a spot's mode BPSK63 or BPSK31.
+  // The wire: decoders.ts reads baud > 100 as 125, > 40 as 63, qpsk, and keeps IMD; a spot's mode one of the five.
   const l = parseCwSignals({ skimmer: true, signals: [
     { id: 1, hz: 14_071_000, audio: 0, baud: 62.5, imd: -24, snr: 9, q: 'high', active: true, last: 1, first: 1, call: 'G4ABC', country: 'England', text: 'cq cq' },
     { id: 2, hz: 14_071_300, audio: 0, baud: 31.25, snr: 4, q: 'weird', active: false, text: 7 },
+    { id: 3, hz: 14_071_600, audio: 0, baud: 125, snr: 8, q: 'high', active: true, text: 'cq' },              // ★ beta91 PSK125
+    { id: 4, hz: 14_071_900, audio: 0, baud: 31, qpsk: true, snr: 8, q: 'high', active: true, text: 'cq' },   // ★ beta91 QPSK31
+    { id: 5, hz: 14_072_200, audio: 0, baud: 63, qpsk: 'yes', snr: 8, q: 'high', active: true, text: 'cq' },  // ★ not a boolean: BPSK
   ] }, true)!;
   eq('PSK63 read as 63', l.signals[0].baud, 63);
   eq('PSK31 read as 31', l.signals[1].baud, 31);
@@ -90,15 +93,23 @@ const hintFromHtml = (id: string) => {
   eq('a non-string text is empty', l.signals[1].text, '');
   eq('a CW list carries no baud', parseCwSignals({ signals: [{ id: 1 }] })!.signals[0].baud, undefined);
   eq('rate column PSK', kbRateText(l.signals[0]), 'PSK63');
+  eq('PSK125 read as 125', l.signals[2].baud, 125);
+  eq('rate column PSK125', kbRateText(l.signals[2]), 'PSK125');
+  eq('rate column QPSK31', kbRateText(l.signals[3]), 'QPSK31');
+  eq('a qpsk that is not true is BPSK', kbRateText(l.signals[4]), 'PSK63');
   eq('rate column CW', kbRateText({ wpm: 18.4 }), '18 wpm');
   eq('spot BPSK63', parseCwSpot({ callsign: 'G4ABC', mode: 'BPSK63' }, 5, true)!.mode, 'BPSK63');
-  eq('spot of an unknown mode is BPSK31', parseCwSpot({ callsign: 'G4ABC', mode: 'QPSK31' }, 5, true)!.mode, 'BPSK31');
+  for (const m of ['BPSK125', 'QPSK31', 'QPSK63']) eq(`spot ${m}`, parseCwSpot({ callsign: 'G4ABC', mode: m }, 5, true)!.mode, m);
+  eq('spot of an unknown mode is BPSK31', parseCwSpot({ callsign: 'G4ABC', mode: 'QPSK250' }, 5, true)!.mode, 'BPSK31');
+  eq('spot rate column QPSK63', kbSpotRateText({ mode: 'QPSK63', wpm: 0 }), 'QPSK63');
+  eq('spot rate column PSK125', kbSpotRateText({ mode: 'BPSK125', wpm: 0 }), 'PSK125');
   eq('spot rate column', kbSpotRateText({ mode: 'BPSK31', wpm: 0 }), 'PSK31');
   eq('a CW spot has no mode', parseCwSpot({ callsign: 'G4ABC' }, 5)!.mode, undefined);
   // The web's decoders.ts: the same rule (baud > 40 → 63), cut out and checked to be there.
   const dec = readFileSync(new URL('../web/client/src/decoders.ts', import.meta.url), 'utf8');
-  ok('decoders.ts reads baud > 40 as 63', dec.includes("baud: num(x?.baud) > 40 ? 63 : 31, imd: num(x?.imd)"));
-  ok('decoders.ts spot mode rule', dec.includes("mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31'"));
+  ok('decoders.ts reads baud > 100 as 125, > 40 as 63, and qpsk', dec.includes("baud: num(x?.baud) > 100 ? 125 : num(x?.baud) > 40 ? 63 : 31, imd: num(x?.imd), qpsk: x?.qpsk === true"));
+  ok('decoders.ts spot mode rule', dec.includes("mode: ['BPSK63', 'BPSK125', 'QPSK31', 'QPSK63'].includes(d.mode) ? d.mode : 'BPSK31'"));
+  ok('the web\'s row shows QPSK / PSK and the baud', main.includes("${sg.qpsk ? 'QPSK' : 'PSK'}${sg.baud}"));
   ok('the web attaches PSK with centre / width', main.includes("if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };"));
 }
 

@@ -20,6 +20,8 @@
 #include "vibe_decoder_host.h"
 #include "vibe_bgdecode.h"
 #include "../tools/psk-bench/psk_synth.h"
+#include "decoders/digimodes/psk.h"   // ★ beta91: spotModeOf / es0To2500Db
+#include "vibe_spot_report.h"         // ★ beta91: adifMode
 
 #include <atomic>
 #include <chrono>
@@ -75,6 +77,24 @@ static double meanCer(bool iq, double baud, double snr, int draws) {
 }
 static std::string pct(double x) { char b[32]; std::snprintf(b, sizeof b, "%.1f %%", x * 100); return b; }
 
+// ── ★ V12 beta91: PSK125, QPSK31, QPSK63 ──────────────────────────────────────────────────────────────────────────────
+/** One signal of any of the five modes: its CER, and the modes the signals list called whatever it heard near it. */
+struct ModeRun { double cer = 1; std::set<std::string> modes; size_t far = 0; std::vector<psk::Spot> spots; };
+static ModeRun modeRun(bool iq, double baud, bool qpsk, double snr, double hz, uint64_t seed, bool lsb = false,
+                       const std::string& text = std::string(kQso[0]) + kQso[1]) {
+    const double rate = iq ? 48000 : 12000;
+    Rng rng(seed);
+    Sig s; s.hz = hz; s.baud = baud; s.qpsk = qpsk; s.qpskLsb = lsb; s.snrDb = snr; s.text = text; s.startSec = 3.0;
+    std::vector<Sig> v{ s }; std::vector<cf> x; std::vector<float> r;
+    synth(v, rate, iq, duration(s) + 3.0, rng, x, r);
+    psk::Skimmer sk(cfgFor(iq, rate));
+    const Run res = run(sk, x, r);
+    ModeRun m; m.cer = cer(s.text, near(res, hz, 40)); m.spots = res.spots;
+    for (const psk::SignalView& sv : sk.signals()) { if (std::fabs(sv.offsetHz - hz) < 40) m.modes.insert(sv.mode); else ++m.far; }
+    return m;
+}
+static std::string modesOf(const ModeRun& m) { std::string o; for (auto& x : m.modes) o += (o.empty() ? "" : "+") + x; return o.empty() ? "none" : o; }
+
 struct Peer : DecoderPeer {
     std::mutex m; std::vector<std::vector<uint8_t>> bin; std::vector<std::string> txt;
     bool open() const override { return true; }
@@ -110,7 +130,7 @@ static std::string slurpTxt(const std::string& dir) {
 }
 
 int main() {
-    std::printf("PSK31/63 [%s]\n", psk::Skimmer::simdName());
+    std::printf("PSK31/63/125, QPSK31/63 [%s]\n", psk::Skimmer::simdName());
     // ── Varicode ──
     {
         std::set<std::string> seen; std::map<size_t, int> byLen; bool shape = true;
@@ -149,6 +169,112 @@ int main() {
         ok(i12 < 0.10, "PSK31 IQ −12 dB: CER " + pct(i12) + " (< 10 %)");
         const double p5 = meanCer(false, 62.5, -5, 3), q5 = meanCer(true, 62.5, -5, 3);
         ok(p5 < 0.09 && q5 < 0.09, "PSK63 −5 dB: CER audio " + pct(p5) + ", IQ " + pct(q5) + " (< 9 %)");
+    }
+    // ── ★★ V12 beta91: PSK125, QPSK31 and QPSK63 ──
+    {
+        // the QPSK table: the published spec's 32 rows (psk_synth.h, written out from it) are the K=5 code with the
+        // generator polynomials 0x19 / 0x17 — (a,b) = (0,0) 180, (1,0) 0, (1,1) +90, (0,1) −90 (the decoder's own table
+        // is generated from the polynomials; that it decodes the spec's transmitter below is the other half)
+        bool tab = true;
+        for (unsigned r = 0; r < 32; ++r) {
+            const int a = __builtin_popcount(r & 0x19u) & 1, b = __builtin_popcount(r & 0x17u) & 1;
+            const int q = a == b ? (a ? 1 : 2) : (a ? 0 : 3);
+            tab &= psksynth::qpskShift(r) == q;
+        }
+        ok(tab && psksynth::qpskShift(0) == 2, "QPSK: the spec's 32-row table is the K=5 code 0x19 / 0x17, and idle (00000) is a reversal");
+        struct M { const char* name; double baud; bool q; double snrA, limA, snrB, limB; };
+        const M ms[] = { { "BPSK125", 125, false, 0, 0.04, -5, 0.09 }, { "QPSK31", 31.25, true, -5, 0.08, -8, 0.10 },
+                         { "QPSK63", 62.5, true, 0, 0.15, -8, 0.30 } };
+        for (const M& m : ms)
+            for (bool iq : { false, true }) {
+                double ca = 0, cb = 0; bool modeOk = true; std::string seen;
+                for (int k = 0; k < 3; ++k) {
+                    const double hz = iq ? 1700 + 311 * k : 1000 + 37 * k;
+                    const ModeRun a = modeRun(iq, m.baud, m.q, m.snrA, hz, 31 + k), b = modeRun(iq, m.baud, m.q, m.snrB, hz, 41 + k);
+                    ca += a.cer / 3; cb += b.cer / 3;
+                    for (const ModeRun* r : { &a, &b }) { modeOk &= r->modes.size() <= 1 && (r->modes.empty() || *r->modes.begin() == m.name); if (r->modes.size() && *r->modes.begin() != m.name) seen += modesOf(*r) + " "; }
+                }
+                char t[64]; std::snprintf(t, sizeof t, "%+.0f dB %s, %+.0f dB %s", m.snrA, pct(ca).c_str(), m.snrB, pct(cb).c_str());
+                ok(ca < m.limA && cb < m.limB, std::string(m.name) + (iq ? " IQ" : " audio") + ": CER " + t);
+                ok(modeOk, std::string("…every one listed as ") + m.name + ", never another mode" + (seen.empty() ? "" : " (got " + seen + ")"));
+            }
+        // ★ the other sideband: QPSK's ±90 read the other way round (both senses run; the better one speaks)
+        double lsb = 0; for (int k = 0; k < 2; ++k) lsb += modeRun(false, 31.25, true, -5, 1300 + 50 * k, 51 + k, true).cer / 2;
+        ok(lsb < 0.08, "QPSK31 sent on the other sideband (LSB): CER " + pct(lsb));
+        // ★★ NEVER THE WRONG KIND, BOTH WAYS: each of the five modes at a strong, a middling and a weak copy is listed as
+        //    itself only — BPSK never as QPSK (its two points are two of QPSK's four), QPSK never as BPSK, nor a baud
+        //    as another
+        const M all[] = { { "BPSK31", 31.25, false, 0, 0, 0, 0 }, { "BPSK63", 62.5, false, 0, 0, 0, 0 }, { "BPSK125", 125, false, 0, 0, 0, 0 },
+                          { "QPSK31", 31.25, true, 0, 0, 0, 0 }, { "QPSK63", 62.5, true, 0, 0, 0, 0 } };
+        int wrong = 0, heard = 0; std::string bad;
+        for (const M& m : all)
+            for (double snr : { 10.0, -2.0, -8.0 })
+                for (bool iq : { false, true }) {
+                    const ModeRun r = modeRun(iq, m.baud, m.q, snr, iq ? 2100 : 1400, 61 + (int)snr + (iq ? 7 : 0));
+                    heard += !r.modes.empty();
+                    for (auto& x : r.modes) if (x != m.name) { ++wrong; bad += std::string(m.name) + "→" + x + " "; }
+                }
+        ok(wrong == 0, "★ the mode is never mistaken: 5 modes × 3 levels × audio/IQ, 0 listed as another (" + std::to_string(heard) + "/30 heard)" + (bad.empty() ? "" : " — " + bad));
+        ok(heard >= 28, "…and (nearly) every one of them was heard: " + std::to_string(heard) + "/30");
+        // spots carry the lane's mode; the spots engines and PSK Reporter name them PSK125 / QPSK31 / QPSK63
+        const std::string cq = "cq cq cq de g4abc g4abc g4abc pse k\ncq cq de g4abc g4abc k\n";
+        const ModeRun q63 = modeRun(true, 62.5, true, 0, 1900, 71, false, cq), p125 = modeRun(false, 125, false, 0, 1500, 72, false, cq + cq);
+        ok(!q63.spots.empty() && q63.spots[0].mode == "QPSK63" && q63.spots[0].call == "G4ABC", "a QPSK63 CQ is spotted as QPSK63 (" + (q63.spots.empty() ? std::string("none") : q63.spots[0].mode) + ")");
+        ok(!p125.spots.empty() && p125.spots[0].mode == "BPSK125", "a PSK125 CQ is spotted as BPSK125 (" + (p125.spots.empty() ? std::string("none") : p125.spots[0].mode) + ")");
+        ok(digi::spotModeOf("BPSK31") == "PSK31" && digi::spotModeOf("BPSK125") == "PSK125" && digi::spotModeOf("QPSK63") == "QPSK63"
+           && digi::es0To2500Db("BPSK125") == 13.0f && digi::es0To2500Db("QPSK63") == 16.0f && digi::es0To2500Db("QPSK31") == 19.0f,
+           "Band's spot modes PSK31 / PSK125 / QPSK63, and each one's Es/N0 → 2500 Hz (19 / 16 / 13 dB)");
+        ok(vibe::spotreport::adifMode("BPSK125") == "PSK125" && vibe::spotreport::adifMode("QPSK31") == "QPSK31" && vibe::spotreport::adifMode("QPSK63") == "QPSK63"
+           && vibe::spotreport::adifMode("PSK125") == "PSK125" && vibe::spotreport::adifMode("BPSK63") == "PSK63",
+           "PSK Reporter gets the ADIF names: PSK125, QPSK31, QPSK63 (and PSK63 as before)");
+    }
+    // ── ★★ V12 beta91: A STRONG STATION IS ONE CHANNEL, ONE SPOT, AT ITS FREQUENCY AND ITS LEVEL (Stuart: "no duplicate
+    //    channels/spots for one station at any SNR"). +20–30 dB used to walk the channel ±2 Hz (the FLL's weight grew with
+    //    the level), drop the copy or open a second channel, and the shown Es/N0 stopped at the EVM's own ≈ 22–25 dB floor.
+    {
+        const std::string text = std::string("cq cq cq de g4abc g4abc g4abc pse k\n") + kQso[1] + "cq cq cq de g4abc g4abc g4abc pse k\n";
+        struct M { const char* name; double baud; bool q; };
+        const M all[] = { { "BPSK31", 31.25, false }, { "BPSK63", 62.5, false }, { "BPSK125", 125, false }, { "QPSK31", 31.25, true }, { "QPSK63", 62.5, true } };
+        int runs = 0, good = 0; double worstHz = 0, worstDb = 0; std::string bad;
+        for (const M& m : all)
+            for (bool iq : { false, true })
+                for (double snr : { 0.0, 10.0, 20.0, 30.0 }) {
+                    const double rate = iq ? 48000 : 12000, hz = iq ? 1700 : 1000;
+                    Rng rng(81); Sig s; s.hz = hz; s.baud = m.baud; s.qpsk = m.q; s.snrDb = snr; s.text = text; s.startSec = 2;
+                    std::vector<Sig> v{ s }; std::vector<cf> x; std::vector<float> re; synth(v, rate, iq, duration(s) + 4, rng, x, re);
+                    psk::Skimmer sk(cfgFor(iq, rate));
+                    const Run r = run(sk, x, re);
+                    int near = 0, spots = 0; double f = 0, es = 0; std::string md;
+                    for (const psk::SignalView& sv : sk.signals()) if (std::fabs(sv.offsetHz - hz) < 200) { ++near; f = sv.offsetHz - hz; es = sv.snrDb; md = sv.mode; }
+                    for (const psk::Spot& sp : r.spots) spots += sp.call == "G4ABC";
+                    const double want = snr + 10 * std::log10(2500 / m.baud);
+                    const bool okRun = near == 1 && spots == 1 && md == m.name && std::fabs(f) < 1.0 && std::fabs(es - want) < 3.0;
+                    ++runs; good += okRun;
+                    if (near == 1) { worstHz = std::max(worstHz, std::fabs(f)); worstDb = std::max(worstDb, std::fabs(es - want)); }
+                    if (!okRun) { char b[160]; std::snprintf(b, sizeof b, " %s %s %+.0f: %d ch %d spot %.1f Hz %.1f/%.1f dB;", m.name, iq ? "iq" : "au", snr, near, spots, f, es, want); bad += b; }
+                }
+        char b[200]; std::snprintf(b, sizeof b, "★ 0 … +30 dB, five modes, audio and IQ: %d/%d one channel, one spot, the right mode, within 1 Hz (worst %.2f) and 3 dB of its Es/N0 (worst %.1f)", good, runs, worstHz, worstDb);
+        ok(good == runs, b + bad);
+    }
+    // ── ★ the cost of the three new lanes (a busy 3 kHz: 8 PSK31/63 signals, 60 s of 12 kHz audio) ──
+    {
+        Rng rng(77); std::vector<Sig> v;
+        for (int i = 0; i < 8; ++i) { Sig s; s.baud = i % 3 == 2 ? 62.5 : 31.25; s.hz = 500 + 330 * i; s.snrDb = -2; s.text = qso() + qso(); s.startSec = 0.5 * i; v.push_back(s); }
+        std::vector<cf> x; std::vector<float> r; synth(v, 12000, false, 60, rng, x, r);
+        auto cost = [&](bool all) {
+            psk::Skimmer::Config c = cfgFor(false, 12000); c.psk125 = c.qpsk31 = c.qpsk63 = all;
+            double best = 1e9;
+            for (int rep = 0; rep < 3; ++rep) {
+                psk::Skimmer sk(c);
+                const auto t0 = std::chrono::steady_clock::now();
+                for (size_t i = 0; i < r.size(); i += 1024) sk.feedReal(r.data() + i, (int)std::min<size_t>(1024, r.size() - i));
+                best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+            }
+            return best;
+        };
+        const double two = cost(false), five = cost(true);
+        char b[200]; std::snprintf(b, sizeof b, "five lanes cost %.2f %% of a core on a busy 3 kHz (two lanes %.2f %%): ×%.2f — bounded (< ×3)", 100 * five / 60, 100 * two / 60, five / two);
+        ok(five / two < 3.0, b);
     }
     // ── offsets, drift, clock ──
     {

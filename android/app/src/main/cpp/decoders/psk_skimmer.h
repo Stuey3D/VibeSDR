@@ -1,4 +1,4 @@
-// decoders/psk_skimmer.h — PSK31 / PSK63 (BPSK, Varicode): ONE transform over a band, a demodulator only where a
+// decoders/psk_skimmer.h — PSK31 / PSK63 / PSK125 (BPSK) and QPSK31 / QPSK63 (beta91), Varicode: ONE transform over a band, a demodulator only where a
 // carrier is — the listener's PSK decoder and a skimmer, from one light engine (V12, 2026-10-26).
 //
 // ★★ BUILT FROM THE PUBLISHED DESCRIPTION (G3PLX's PSK31 papers): 31.25 baud (PSK63: 62.5), binary phase shift keying
@@ -43,7 +43,7 @@ struct Spot {
     double offsetHz = 0;   ///< from the segment's centre (IQ) or the audio frequency (real input)
     float  snrDb = 0;      ///< Es/N0 — signal over noise in the symbol rate's bandwidth (see SignalView::snrDb)
     std::string how;       ///< "CQ", "TEST" or "DE"
-    std::string mode;      ///< "BPSK31" / "BPSK63"
+    std::string mode;      ///< "BPSK31" / "BPSK63" / "BPSK125" / "QPSK31" / "QPSK63" (beta91: the last three)
     int64_t utcMs = 0;
     int     signalId = 0;
 };
@@ -52,7 +52,9 @@ struct Spot {
 struct SignalView {
     int     id = 0;
     double  offsetHz = 0;
-    int     baud = 31;     ///< 31 (PSK31) or 63 (PSK63)
+    int     baud = 31;     ///< 31 (PSK31 / QPSK31), 63 (PSK63 / QPSK63) or 125 (PSK125)
+    bool    qpsk = false;  ///< ★ beta91: QPSK (the convolutional code, Viterbi-decoded) — else BPSK
+    std::string mode = "BPSK31";   ///< as Spot::mode
     float   snrDb = 0;     ///< ★ Es/N0 from the constellation (signal over noise in a bandwidth equal to the baud rate);
                            ///<   PSK31 copies cleanly from ≈ +7 dB, which is ≈ −12 dB in 2.5 kHz (subtract 19 dB; PSK63 16)
     float   imdDb = 0;     ///< ★ IMD as G3PLX defines it (the 3rd-order products of the idle's two tones over the tones,
@@ -76,6 +78,9 @@ public:
         double loHz = 200, hiHz = 3600;   ///< the offsets searched (IQ: e.g. -6000..+6000)
         int    maxSignals = 32;       ///< channels at once (tentative ones included)
         bool   psk31 = true, psk63 = true;
+        /** ★ beta91: PSK125 (BPSK at 125 baud) and QPSK31 / QPSK63 (the PSK31 spec's rate-½ K=5 code, Viterbi-decoded) —
+         *  a lane each on every tentative carrier; the clean one with text wins, as between PSK31 and PSK63. */
+        bool   psk125 = true, qpsk31 = true, qpsk63 = true;
         int    keepGoneSec = 600;     ///< how long a signal that has gone stays in signals()
         int    respotSec = 600;
         int    spotRepeats = 2;

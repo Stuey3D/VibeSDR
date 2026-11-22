@@ -14142,14 +14142,14 @@ function renderCwRows(rows: HTMLElement, l: typeof cwLast) {
     r.innerHTML =
       `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
       `<span class="c${sg.call ? '' : ' none'}">${sg.call ? callHtml(sg.call, escapeHtml) : '—'}</span>` +
-      `<span class="w">${psk ? `PSK${sg.baud}` : cwWpmText(sg)}</span>` +
+      `<span class="w">${psk ? `${sg.qpsk ? 'QPSK' : 'PSK'}${sg.baud}` : cwWpmText(sg)}</span>` +
       `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
       `<span class="q ${sg.q}">${sg.q}</span>` +
       `<span class="a">${sg.active ? cwAge(sg.last) : cwAge(sg.last)}</span>` +
       `<span class="tx"><bdi>${escapeHtml(cwRead(sg.text.trim()))}</bdi></span>`;
     wireQrz(r);
     r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)}${sg.hz > 0 ? ' kHz' : ''} · `
-            + (psk ? `BPSK${sg.baud} · Es/N0 ${Math.round(sg.snr)} dB (in the baud rate's bandwidth) · `
+            + (psk ? `${sg.qpsk ? 'QPSK' : 'BPSK'}${sg.baud} · Es/N0 ${Math.round(sg.snr)} dB (in the baud rate's bandwidth) · `
                      + (sg.imd ? `IMD ${Math.round(sg.imd)} dB · ` : '')
                    : `${cwWpmText(sg).toUpperCase()} · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · `) + `${sg.q} · `
             + `${sg.active ? 'heard' : 'last heard'} ${cwAge(sg.last)} ago — tap to tune`;
@@ -14938,9 +14938,9 @@ function initDecoders(host: string, auth: AuthState) {
     $('pskWidthRow').hidden = !pskSkim;
     skimBandSync();
     $('pskHint').innerHTML = pskSkim
-      ? `Every PSK31 and PSK63 signal ${pskWidth / 2000} kHz either side of your dial, decoded at once — pick a <b>BAND</b> `
+      ? `Every PSK31, PSK63, PSK125, QPSK31 and QPSK63 signal ${pskWidth / 2000} kHz either side of your dial, decoded at once — pick a <b>BAND</b> `
         + 'to put the window on its PSK segment, or tune it yourself. A call heard calling twice is spotted. Tap a row to tune to it.'
-      : 'Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>): every PSK31/63 signal in it is listed, '
+      : 'Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>): every PSK31/63/125 and QPSK31/63 signal in it is listed, '
         + 'and the one in the middle of the passband is decoded above. Tap a row to put it there.';
   };
   segButtons('pskView', 'pskview', (v) => {

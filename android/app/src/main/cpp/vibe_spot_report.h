@@ -223,6 +223,9 @@ inline std::string adifMode(const std::string& m) {
     // ★ V12 beta90: the PSK skimmer names its spots BPSK31 / BPSK63 (decoders/psk_skimmer.h) — PSK Reporter's PSK31 / PSK63
     if (u == "BPSK31") return "PSK31";
     if (u == "BPSK63") return "PSK63";
+    // ★ V12 beta91: PSK125 and QPSK31 / QPSK63 — ADIF submodes of PSK, the names PSK Reporter files them under
+    if (u == "BPSK125") return "PSK125";
+    if (u == "PSK125" || u == "QPSK31" || u == "QPSK63") return u;
     if (u == "FT8" || u == "FT4" || u == "JS8" || u == "WSPR" || u == "MSK144" || u == "PSK31" || u == "PSK63"
         || u == "FST4" || u == "FST4W" || u == "JT65" || u == "JT9") return u;
     if (u.rfind("Q65", 0) == 0) return "Q65";

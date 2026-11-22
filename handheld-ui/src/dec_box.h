@@ -286,7 +286,7 @@ inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
             decRowBg(c, rr, g.active);
             std::string spd;
             if (jtty || rtty) spd = std::to_string((int)g.snr) + " dB";
-            else if (psk) spd = (g.baud == 63 ? "BPSK63 " : "BPSK31 ") + std::to_string((int)g.snr) + " dB";
+            else if (psk) spd = std::string(g.qpsk ? "QPSK" : "BPSK") + std::to_string((int)g.baud) + " " + std::to_string((int)g.snr) + " dB";   // ★ beta91: + BPSK125, QPSK31/63
             else {
                 const int lo = (int)std::lround(std::min(g.wpmLo, g.wpmHi)), hi = (int)std::lround(std::max(g.wpmLo, g.wpmHi));
                 spd = g.wpmLo > 0 && g.wpmHi > 0 && lo != hi ? std::to_string(lo) + "–" + std::to_string(hi) + " wpm" : std::to_string((int)std::lround(g.wpm)) + " wpm";
