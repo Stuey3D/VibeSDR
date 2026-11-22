@@ -138,7 +138,7 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
-import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
+import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, spotsListModes, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type KnownSignal, type KnownAvail, type DxDialEntry, type SigTagEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
@@ -13017,7 +13017,7 @@ function spotsReadCap(j: any) {
       .filter(Boolean).slice(0, 16);
     if (m.length) spotModes = m;
   }
-  SF_MODES = ['ALL', ...spotModes];
+  SF_MODES = ['ALL', ...spotsListModes(spotModes)];   // ★ V12 beta91: not PSKW (its spots are PSK's)
   const bands = readSpotBands(j?.spotBands);
   if ((j?.spotsBand === true || j?.spotsBand === false) && bands.length) {
     const why = typeof j.spotsBandWhy === 'string' ? j.spotsBandWhy.trim().slice(0, 200) : '';
@@ -18019,7 +18019,7 @@ ${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (s
 const me = ${safe(me)};
 // ★ V12: the MODES' colours and letters (src/utils/digiModes.ts), for the legend and the BY MODE bars — the markers carry
 //   their own (spotsMapPoints). The rim keeps pale fills readable on a light map.
-const MODES = ${safe(spotModes.map((m) => ({ m, ...digiModeStyle(m) })))};
+const MODES = ${safe(spotsListModes(spotModes).map((m) => ({ m, ...digiModeStyle(m) })))};
 const RIM = ${safe(DIGI_MARKER_RIM)};
 function modeColour(m) { for (const x of MODES) if (x.m === m) return x.colour; const st = styleOf(m); return st ? st.colour : null; }
 // ★ src/utils/digiModes.ts digiModeFamily / digiModeStyle, for a stored station of any mode (CW, RTTY … grey + a letter)

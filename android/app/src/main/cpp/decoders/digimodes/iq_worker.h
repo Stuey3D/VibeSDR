@@ -6,7 +6,7 @@
 //    on the box and push the slotted modes' audio late. Here the decode thread only COPIES the block into a bounded queue
 //    (processIq returns at once); the worker decodes at the decoders' LAG rung (vibeDecoderLagThread — one notch below
 //    FT8's workers: on a single core, what gives way is the stage built to give way).
-// ★ BOUNDED. At most kMaxBacklogSec of input waits; past that the newest block is dropped and counted (drop, never wait —
+// ★ BOUNDED. At most kMaxBacklogSec (2 s) of input waits; past that the newest block is dropped and counted (drop, never wait —
 //   the decode thread is never held up). The backlog is what Band's pause rule reads (backlogSec): an engine that cannot
 //   keep up is the first thing paused, before any slotted mode loses a slot.
 // ★ CPU. The worker's own thread clock around each decode, reported through Engine::onCpu (the host's health figure).
@@ -30,7 +30,7 @@ namespace digi {
 class IqWorkerEngine : public Engine {
 public:
     using cf32 = std::complex<float>;
-    static constexpr double kMaxBacklogSec = 3.0;
+    static constexpr double kMaxBacklogSec = 2.0;   // ★ the pause rule acts at 1.5 s; ≤ 2.4 MB at a 150 kHz slice
 
     IqWorkerEngine(double loHz, double hiHz) : lo_(loHz), hi_(hiHz) {}
     ~IqWorkerEngine() override { stopWorker(); }

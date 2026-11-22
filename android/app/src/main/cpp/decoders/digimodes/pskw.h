@@ -11,7 +11,7 @@
 //    its window whether or not this one is on, shed or paused.
 // ★ PSK125 and QPSK31/63: psk::Skimmer demodulates BPSK31 and BPSK63 only; those are not built (no new demodulator for this
 //   chip — said in the doc). Spot modes are "PSK31" / "PSK63", ADIF PSK31 / PSK63 as the original's.
-// ★ Shed and paused LAST of the three IQ chips (CW, then RTTY, then this): it is the cheapest of them.
+// ★ Shed and paused LAST of the three IQ chips (CW, then RTTY, then this) — Stuart's order.
 #pragma once
 #include "iq_worker.h"
 #include "../psk_skimmer.h"
@@ -86,8 +86,9 @@ inline ModeDef vibeDigiMode_pskw() {
     m.single = false;
     m.slotSec = 0;
     m.sampleRate = 0;
-    m.costVsFt8 = 0.5;               // ★ per 48 kHz of window — measured, BAND-SKIM-CW-RTTY.md
-    m.lightCostVsFt8 = 0.5;
+    // ★ per 48 kHz of window (at least half) — MEASURED (BAND-SKIM-CW-RTTY.md): 0.276 % at 48 kHz with 19 signals vs FT8's 0.083 %
+    m.costVsFt8 = 3.3;
+    m.lightCostVsFt8 = 3.3;
     m.priority = 105;                // ★ shed after CW (120) and RTTY (110), before every audio mode
     m.pauseRank = 3;                 // ★ paused last of the three
     m.gateSec = 4.0;

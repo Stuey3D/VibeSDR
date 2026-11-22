@@ -466,9 +466,10 @@ static void cwRttyChips() {
     // ★ the owner's toggles (Band, mode by mode: "spotsband-cw" / "spotsband-rtty")
     const SkimRun o = runSkim(true, false, "skimoff", [](const std::string& m) { return (m == "CW" || m == "RTTY" || m == "PSKW") ? -1 : 0; });
     int on = 0; for (const auto& h : o.heard) if (h.mode == "CW" || h.mode == "RTTY" || h.call == "G4PSK") ++on;
-    ok(on == 0 && o.status.find("CW 7.0200 off") != std::string::npos && o.status.find("RTTY 7.0450 off") != std::string::npos
+    // ★ CW's own slice is not even cut when its chip is off (it has no run at all); RTTY and PSKW ride the main slice: "off"
+    ok(on == 0 && o.status.find("CW 7.0200") == std::string::npos && o.status.find("RTTY 7.0450 off") != std::string::npos
        && o.status.find("PSKW 7.0450 off") != std::string::npos,
-       "switched off by the owner: CW, RTTY and wide PSK show \"off\" and spot nothing");
+       "switched off by the owner: CW not run at all (its slice not cut), RTTY and wide PSK \"off\", nothing spotted");
     rc.on = false; rp.configure(rc); rp.setUdp(nullptr);
 }
 
@@ -541,6 +542,18 @@ static void livePath() {
     ok(peer->count("\"callsign\":\"G4IRX\"", "\"mode\":\"FT8\"") > 0, "…and FT8 G4IRX as ever");
     host->stopSpots();
     host->shutdown();
+    // ★ the owner switched the three chips off for Band: their slice is not cut at all (the DSP thread's extract and a
+    //   one-pipeline radio's front-end decimation are given back) — only JTTY's extra slice is asked for
+    DecoderHost::Env e2 = env;
+    e2.bandOverride = [](const std::string& m) { return (m == "CW" || m == "RTTY" || m == "PSKW") ? -1 : 0; };
+    auto h2 = std::make_shared<DecoderHost>(e2, "live-test-off");
+    h2->startSpots(DecoderHost::SpotScope::Band);
+    ExtraSlice x2[kMaxExtraSlices];
+    const int n2 = h2->iqExtraSlices(x2);
+    ok(n2 == nx - 1, "CW, RTTY and PSKW switched off for Band: their slice is not cut (" + std::to_string(nx) + " extra slices → " + std::to_string(n2) + ")");
+    const std::string st2 = h2->spotsStatusJson();
+    ok(st2.find("{\"mode\":\"CW\",\"state\":\"off\"") != std::string::npos, "…and its chip says \"off\" (the owner's), never \"out\"");
+    h2->shutdown();
 }
 
 /** ★ Old configs load unchanged: a profile with a Band VFO and standalone CW / RTTY skimmer VFOs (beta90's shape). */

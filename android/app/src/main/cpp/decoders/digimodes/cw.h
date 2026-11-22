@@ -73,8 +73,10 @@ inline ModeDef vibeDigiMode_cw() {
     m.single = false;                // ★ Band only (a listener's own CW decoder is DECODERS → CW)
     m.slotSec = 0;                   // ★ free-running
     m.sampleRate = 0;                // ★ no audio: the slice's own IQ
-    m.costVsFt8 = 1.0;               // ★ per 48 kHz of window — measured, BAND-SKIM-CW-RTTY.md
-    m.lightCostVsFt8 = 1.0;
+    // ★ per 48 kHz of window (at least half that: a 10 kHz window costs half a 48's) — MEASURED on the M5 Pro
+    //   (chip bench, BAND-SKIM-CW-RTTY.md): 0.136 % of a core at 48 kHz against one FT8 engine's 0.083 %
+    m.costVsFt8 = 1.6;
+    m.lightCostVsFt8 = 1.6;
     m.priority = 120;                // ★ shed before every slotted and audio mode (they never lose a slot to it)…
     m.pauseRank = 1;                 // ★ …and the FIRST paused when the band decode falls behind (Stuart: "CW then RTTY")
     m.gateSec = 4.0;

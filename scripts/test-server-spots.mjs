@@ -32,8 +32,10 @@ const STATIONS = [['FT8', 'G4ABC', 14074600], ['FT8', 'DL1XYZ', 14075450], ['FT8
 const TOL = { FT2: 21, JTTY: 5, PSK31: 6 };   // ★ RF to a quarter of the tone step: FT2's tones are 41.7 Hz apart
 // ★ 2026-10-31: FST4 + FST4W (9daa458f9), Q65 (133c9f34a) and MSK144 (f8e691200) joined the registry. Every mode is in
 //   spotModes; 20 m carries the ones with a 20 m dial — FST4W beside WSPR (Q65, MSK144 and FST4 have none here).
-const MODES = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK","FST4W","FST4","Q65","MSK144"]';
-const MODES_20M = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK","FST4W"]';
+// ★ V12 beta91: the band decode's CW, RTTY and wide-PSK chips (IQ modes — BAND-SKIM-CW-RTTY.md) register last; on 20 m
+//   (Region 1) they share one extra slice, 13.992–14.107 MHz, listed after the main slice's modes.
+const MODES = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK","FST4W","FST4","Q65","MSK144","CW","RTTY","PSKW"]';
+const MODES_20M = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK","FST4W","CW","RTTY","PSKW"]';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-spots-'));
 const CLIP = path.join(tmp, '20m.cu8');
 execFileSync(DIGI, ['clip', CLIP, String(RATE), String(CENTRE)], { stdio: 'ignore' });

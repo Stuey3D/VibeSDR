@@ -39,10 +39,12 @@ const STYLE = { FT8: { colour: '#E69F00', letter: '8' }, FT4: { colour: '#56B4E9
                 JTTY: { colour: '#FFFFFF', letter: 'T' }, PSK: { colour: '#AA3377', letter: 'P' },   // ★ V12 2026-10-27
                 // ★ 2026-10-31: FST4/FST4W (9daa458f9), Q65 (133c9f34a), MSK144 (f8e691200) — src/utils/digiModes.ts
                 FST4W: { colour: '#D55E00', letter: 'w' }, FST4: { colour: '#D55E00', letter: 'F' },
-                Q65: { colour: '#0072B2', letter: 'Q' }, MSK144: { colour: '#BBBBBB', letter: 'M' } };
+                Q65: { colour: '#0072B2', letter: 'Q' }, MSK144: { colour: '#BBBBBB', letter: 'M' },
+                // ★ V12 beta91: the band decode's CW, RTTY and wide-PSK chips (PSKW is a chip only — not in the legend)
+                CW: { colour: '#44AA99', letter: 'C' }, RTTY: { colour: '#999933', letter: 'R' }, PSKW: { colour: '#AA3377', letter: 'p' } };
 // ★ The chips are 20 m's modes (FST4W beside WSPR); the legend is every mode the server lists, in its order.
-const CHIPS_20M = 8;
-const LEGEND = 'FT8 FT4 FT2 JS8 WSPR JTTY PSK FST4W FST4 Q65 MSK144';
+const CHIPS_20M = 11;   // ★ beta91: + CW, RTTY, PSKW (20 m's CW/RTTY extra slice)
+const LEGEND = 'FT8 FT4 FT2 JS8 WSPR JTTY PSK FST4W FST4 Q65 MSK144 CW RTTY';
 const styleOf = (m) => STYLE[m] || STYLE[String(m).replace(/[0-9]+$/, '')];   // ★ PSK31 / PSK63 → PSK
 const styleSrc = fs.readFileSync(path.join(root, 'src/utils/digiModes.ts'), 'utf8');
 for (const [m, s] of Object.entries(STYLE)) if (!styleSrc.includes(`${m}: `) || !styleSrc.includes(`colour: '${s.colour}'`)) { console.log(`   FAIL the test's ${m} style is not digiModes.ts's`); process.exit(1); }

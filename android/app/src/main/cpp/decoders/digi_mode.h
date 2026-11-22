@@ -135,7 +135,7 @@ struct ModeDef {
     /** ★★ V12 beta91 — AN IQ MODE (BAND-SKIM-CW-RTTY.md): Band only, no tuner, no audio. Its engine reads a WINDOW of RF
      *  (`windows`: per band id, {loHz, hiHz} — the CW segment of the owner's IARU region, the RTTY / narrow-band digimode
      *  segment) straight off whichever Band slice holds it. `dials` / the published table are not used (dialsOf is empty for
-     *  it, so every audio-mode reader ignores it), nor are audioLoHz / audioHiHz. `costVsFt8` is per 48 kHz of window. */
+     *  it, so every audio-mode reader ignores it), nor are audioLoHz / audioHiHz. `costVsFt8` is per 48 kHz of window (never under half). */
     bool iq = false;
     std::function<std::vector<std::pair<double, double>>(const std::string& bandId)> windows;
     std::function<std::unique_ptr<Engine>(double loHz, double hiHz)> makeWin;

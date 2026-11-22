@@ -8,7 +8,7 @@
  *   `spotBands` (what Band steps through — only bands THIS radio reaches; absent = no Band key, AGENTS.md) and `spotsBand`
  *   true / false + `spotsBandWhy` (greyed with the reason — the owner's switch or the benchmark's default; never hidden).
  */
-import { readSpotBands, spotBandAt, digiModeFamily, type SpotBand } from '../utils/digiModes';
+import { readSpotBands, spotBandAt, digiModeFamily, spotsListModes, type SpotBand } from '../utils/digiModes';
 
 export interface SpotsBandCap { ok: boolean; why: string; bands: SpotBand[] }
 
@@ -32,7 +32,7 @@ export function parseSpotsBandCap(j: any): SpotsBandCap | undefined {
 /** ★ The MODE filter's choices: ALL, then the server's modes (FT8 and FT4 on an older one) — never a fixed list (a key for
  *  a mode this server does not decode would be dead). */
 export function spotFilterModes(spotModes: readonly string[] | undefined): string[] {
-  return ['ALL', ...(spotModes && spotModes.length ? spotModes : SPOT_MODES_DEFAULT)];
+  return ['ALL', ...spotsListModes(spotModes && spotModes.length ? spotModes : SPOT_MODES_DEFAULT)];   // ★ beta91: not PSKW
 }
 /** Does a spot pass the MODE filter — by FAMILY (PSK31 / PSK63 → PSK), as the web's filteredSpots. */
 export function spotModeMatches(spotMode: string, filter: string, spotModes: readonly string[] | undefined): boolean {

@@ -101,8 +101,9 @@ inline ModeDef vibeDigiMode_rtty() {
     m.single = false;                // ★ Band only (a listener's own RTTY decoder is DECODERS → RTTY)
     m.slotSec = 0;
     m.sampleRate = 0;
-    m.costVsFt8 = 1.0;               // ★ per 48 kHz of window — measured, BAND-SKIM-CW-RTTY.md
-    m.lightCostVsFt8 = 1.0;
+    // ★ per 48 kHz of window (at least half) — MEASURED (BAND-SKIM-CW-RTTY.md): 0.331 % at 48 kHz with 19 signals vs FT8's 0.083 %
+    m.costVsFt8 = 4.0;
+    m.lightCostVsFt8 = 4.0;
     m.priority = 110;                // ★ shed after CW, before every audio mode
     m.pauseRank = 2;                 // ★ paused after CW when the band decode falls behind
     m.gateSec = 4.0;

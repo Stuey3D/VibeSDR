@@ -208,7 +208,9 @@ void Spotter::plan() {
         Run r; r.def = kv.second.m; r.dial = kv.second.w.dial;
         try { r.eng = kv.second.m->makeWin(kv.second.w.loHz, kv.second.w.hiHz); } catch (const std::exception&) { continue; }
         if (!r.eng) continue;
-        const double widthK = (kv.second.w.hiHz - kv.second.w.loHz) / 48000.0;
+        // ★ costVsFt8 is per 48 kHz of window, and never under half of it (a skimmer's FFT and floor cost something on any
+        //   width: the chip bench's 10 kHz windows cost half a 48's — BAND-SKIM-CW-RTTY.md)
+        const double widthK = std::max(0.5, (kv.second.w.hiHz - kv.second.w.loHz) / 48000.0);
         r.cost = kv.second.m->costVsFt8 * widthK; r.lightC = kv.second.m->lightCost() * widthK;
         wire(r);
         r.gate.reset(new Gate());

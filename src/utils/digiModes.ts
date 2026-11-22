@@ -41,6 +41,15 @@ export const DIGI_MODE_STYLE: Record<string, DigiModeStyle> = {
   PSKW:   { colour: '#AA3377', ink: '#FFFFFF', letter: 'p' },   // PSK's purple, its own letter (the same family)
 };
 
+/** ★ V12 beta91: modes that are a Band CHIP only — their spots carry another family's name (wide PSK's spots say PSK31 /
+ *  PSK63, PSK's family). Kept out of the MODE filter and the map legend (a choice there would match nothing), kept in
+ *  the chips and the owner's per-mode Band switches. */
+export const DIGI_CHIP_ONLY: readonly string[] = ['PSKW'];
+/** The server's modes as the spots LIST and MAP offer them: without the chip-only ones. */
+export function spotsListModes(modes: readonly string[]): string[] {
+  return modes.filter((m) => !DIGI_CHIP_ONLY.includes(String(m).toUpperCase()));
+}
+
 /** The marker rim: dark, so a pale fill reads on a light map and every fill stands off a dark one. */
 export const DIGI_MARKER_RIM = '#1A1A1A';
 

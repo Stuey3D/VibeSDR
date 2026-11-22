@@ -473,6 +473,7 @@ public:
         spotsOn_ = true;
         if (scope == SpotScope::Band) {
             bandWidth_.store(bandWidthFor(dial ? dial() : 0.0), std::memory_order_relaxed);   // ★ a socket thread: no channel lock held
+            bandWidthDial_.store(dial ? dial() : -1.0, std::memory_order_relaxed);   // ★ beta91: the chips name the band before the first block
             setExtras_(dial ? dial() : 0.0);
             if (!bandIq_.exchange(true)) skimmersRunning().fetch_add(1);
         } else {
@@ -1871,7 +1872,10 @@ private:
                     for (const auto& m : sts) if (m.mode == name) have = true;
                     if (have) continue;
                     char b[160];
-                    std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"state\":\"out\",\"dials\":0,\"idle\":0,\"shed\":0,\"live\":0}", first ? "" : ",", name.c_str());
+                    // ★ V12 beta91: switched off by the owner (its slice is then not cut at all) says "off", not "out"
+                    const bool own = (env_.bandOverride && env_.bandOverride(name) < 0) || (env_.spotModeOff && env_.spotModeOff(name));
+                    std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"state\":\"%s\",\"dials\":0,\"idle\":0,\"shed\":0,\"live\":0}", first ? "" : ",", name.c_str(),
+                                  own ? "off" : "out");
                     j += b; first = false;
                 }
         }
@@ -2226,7 +2230,11 @@ private:
     std::atomic<int> nExtras_{0};                // ★ Band's extra slices (iqExtraSlices) — set with bandWidth_
     std::atomic<double> exC_[kMaxExtraSlices], exW_[kMaxExtraSlices];
     void setExtras_(double dialHz) {
-        const std::vector<ExtraSlice> e = bandExtraSlices(dialHz);
+        // ★ V12 beta91: an extra slice whose every mode the owner switched off for Band (or off altogether) is not cut
+        auto ov = env_.bandOverride; auto off = env_.spotModeOff;
+        const std::vector<ExtraSlice> e = bandExtraSlices(dialHz, [ov, off](const std::string& m) {
+            return (ov && ov(m) < 0) || (off && off(m));
+        });
         nExtras_.store(0, std::memory_order_release);
         for (size_t k = 0; k < e.size() && (int)k < kMaxExtraSlices; ++k) { exC_[k].store(e[k].centreHz); exW_[k].store(e[k].widthHz); }
         nExtras_.store((int)std::min<size_t>(e.size(), kMaxExtraSlices), std::memory_order_release);
