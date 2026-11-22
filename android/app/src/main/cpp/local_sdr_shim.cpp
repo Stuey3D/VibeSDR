@@ -1998,6 +1998,7 @@ static std::string vsNdbWhyNot();    // "" = NDB can run here now
 static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
 static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans);   // ,"spotBands":[…] (hwinfo + /hardware)
 static std::string vsSkimBandsJson(bool radio);   // ★ V12 beta90 ,"skimBands":{…} (hwinfo + /hardware + backgroundCapsJson)
+static std::string vsWefaxStationsJson(bool radio);   // ★ V12 2026-11-22 ,"wefaxStations":[…] (/hardware + backgroundCapsJson)
 static std::string vsSpotsBandWhyNot();
 static int vsBandOverride(const std::string& mode);   // ★ V12 Band governor: the owner's +1 Always / −1 Off / 0 Auto
 static double vsBandBudgetUnits();                    // ★ …and the benchmark's budget in FT8 units (∞ = none)
@@ -27177,6 +27178,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  them and a Band row asked for a typed frequency (Stuart, beta27). */
                 j += vsSpotBandsJson(vsSpotSpans());
                 j += vsSkimBandsJson(true);   // ★ V12 beta90 the background skimmer rows' band picker
+                j += vsWefaxStationsJson(true);   // ★ V12 2026-11-22 the WEFAX stations row's ticks (what this radio reaches)
                 std::map<int, std::string> heard;
                 { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx); dabEnsLoadLocked(); heard = g_dabEnsMem; }
                 j += ",\"dabBlocks\":[";
@@ -27194,6 +27196,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  page's Band picker on a radio that is not running (as `bands` above) — the radio's save checks reach. */
                 j += vsSpotBandsJson(vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; }));
                 j += vsSkimBandsJson(false);
+                j += vsWefaxStationsJson(false);   // ★ the whole list (the radio's save checks its window)
             }
             // ★★ AN ICOM's setup facts — model, CI-V address, baud, the preflight in plain words, the transport —
             //    are the same object hwinfo carries (one writer, radioCapsJsonCore), as `radio` here too.
@@ -35619,6 +35622,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (vibe::bg::ndbSegment(centre, sampleRate, nlo, nhi)) { lo = std::max(lo, nhi - half); hi = std::min(hi, nlo + half); }
                 continue;
             }
+            // ★ V12 2026-11-22: a WEFAX stations VFO has no frequency of its own — the move must keep each of its ticked
+            //   frequencies that the owner's centre holds inside the window (the rest were not decoding there anyway)
+            if (vibe::bg::isFaxStations(v)) {
+                for (double f : v.fax) {
+                    if (!vibe::bg::faxInWindow(f, centre, sampleRate)) continue;
+                    const double d = vibe::wefaxst::dialOf(f);
+                    lo = std::max(lo, d - half); hi = std::min(hi, d + half);
+                }
+                continue;
+            }
             double at = v.hz, w = 0;
             vibe::bg::BandSpan sp;
             if (vibe::bg::isBandSpots(v) && vibe::bg::bandSpan(v.hz, sp)) { at = sp.centreHz; w = std::max(sp.centreHz - sp.loHz, sp.hiHz - sp.centreHz); any = true; }
@@ -35791,6 +35804,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (const auto& v : cfg.profiles[(size_t)idx].vfos) {
             // ★ V12: an NDB skimmer is "in" when the window holds enough of the NDB band (the runner's own rule)
             if (vibe::bg::isNdbSkim(v)) { double lo = 0, hi = 0; if (vibe::bg::ndbSegment(c, sampleRate, lo, hi)) return true; continue; }
+            // ★ V12 2026-11-22: a WEFAX stations VFO is "in" when any ticked frequency is (the runner's own rule)
+            if (vibe::bg::isFaxStations(v)) { for (double f : v.fax) if (vibe::bg::faxInWindow(f, c, sampleRate)) return true; continue; }
             if (std::fabs(v.hz - c) <= half) return true;
         }
         return false;
@@ -42946,6 +42961,18 @@ static std::string vsSkimBandsJson(bool radio) {
     });
 }
 
+/** ★★ V12 2026-11-22 — THE WEFAX STATIONS a background "WEFAX stations" VFO may tick (vibe_wefax_stations.h, the NWS
+ *  worldwide schedule): ONE WRITER for GET /vibeserver/hardware (the Setup page) and backgroundCapsJson (the Android server
+ *  screen). `radio`: only frequencies this radio can tune (its range, the owner's allow/block ranges, a locked range —
+ *  the reach gate's rule: never offer one that cannot work); false = the whole list (the door, a stopped radio). */
+static std::string vsWefaxStationsJson(bool radio) {
+    if (!radio) return vibe::wefaxst::stationsJson(nullptr);
+    const vibebands::Ranges t = vsTunableRanges();
+    return vibe::wefaxst::stationsJson([&t](double lo, double hi) {
+        return t.empty() || (vibebands::allows(t, lo) && vibebands::allows(t, hi));
+    });
+}
+
 /* ★★ V12 2026-11-03 — WHAT A BACKGROUND-DECODING EDITOR MAY OFFER ON THIS SERVER, for the Android server screen
  *  (ServerModeScreen → BackgroundDecodingSetup). The Linux/Mac Setup page draws the same editor from its own copy of the
  *  decoder table; the phone's screen reads THIS one, so its decoders, their demodulators and tones, the ISM band ids, the
@@ -42974,6 +43001,7 @@ std::string LocalSdrShim::backgroundCapsJson() {
         char t[48]; std::snprintf(t, sizeof t, "],\"tone\":%.0f", d.toneHz); j += t;
         if (std::string(d.id) == "spots-band") j += ",\"band\":true";
         if (std::string(d.id) == "ndb-skim")   j += ",\"ndb\":true";
+        if (std::string(d.id) == "wefax-stations") j += ",\"fax\":true";   // ★ V12 2026-11-22: its row ticks stations (wefaxStations)
         // ★ V12 beta90: a skimmer's width and kind — its row picks a BAND (skimBands), the window placed by the one rule
         { const std::string sk = vibe::bg::skimKindOf(d.id);
           if (!sk.empty()) { char w[64]; std::snprintf(w, sizeof w, ",\"width\":%.0f,\"skim\":\"%s\"", d.widthHz, sk.c_str()); j += w; } }
@@ -42988,6 +43016,7 @@ std::string LocalSdrShim::backgroundCapsJson() {
     if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; });
     j += vsSpotBandsJson(spans);
     j += vsSkimBandsJson(radioOpen);   // ★ V12 beta90 the skimmers' band picker
+    j += vsWefaxStationsJson(radioOpen);   // ★ V12 2026-11-22 the WEFAX stations row's ticks
     j += ",\"maxVfos\":" + std::to_string((int)vibe::bg::kMaxVfos) + ",\"maxProfiles\":" + std::to_string((int)vibe::bg::kMaxProfiles);
     j += ",\"decoderSlotsDefault\":" + std::to_string(vsDecoderDefaultMax());
     /* ★★ V12 beta90 UNATTENDED SATELLITE PASSES: the downlinks a pass can keep (vibe::sat::passKeepable over the engine's
