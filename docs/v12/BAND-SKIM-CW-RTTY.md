@@ -55,6 +55,13 @@ skipped slots (`Spotter::setSkipped`). Kept from the bisect:
 - the DC rule ignores IQ-only slices;
 - the IQ chips start 20 s into a Band run (`kIqStartSec`), restarted on a band step.
 
+**Results on the final build** (c94f2fafd: the IQ chips in their own spotter with no second gate, and their threads in
+the idle class), quiet Mac, load 1–2.5: test-web-spots **5/5** (70/0 each, the WSPR chip check included);
+test-server-spots **4/5** (the fifth missed the one-pipeline PSK31 / FT2 again). Before the separate spotter, the misses
+were ~1 run in 4. The baseline was 9/9 here and the coordinator's. **Still open:** the last ~1 in 5. The offline harness
+shows the clip's PSK31 is phase-sensitive in the baseline as well (`test-band-slice real` on the clip rotated 4–8 s:
+no PSK31 within 45 s; spotted by 150 s), so the 50 s check sits on an edge.
+
 ## Design
 
 ### IQ modes (their own registry and their own spotter, since the fix above)
