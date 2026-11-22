@@ -1174,7 +1174,43 @@ export class AudioPlayer {
     if (!this.gain || !this.ctx) return;
     if (this.streamDest) this.gain.connect(this.streamDest);
     else this.gain.connect(this.ctx.destination);
+    this._syncPresence();
   }
+
+  /* ★★★ A MUTED TAB STILL "PLAYS" (docs/v12/WEB-KEEPALIVE.md). WebKit decides whether a hidden page is AUDIBLE — and so
+   *  whether its timers get the gentle 1 s alignment or the increasing one, and whether the process may App Nap — from
+   *  the Web Audio destination's SILENT FLAG, not from what reaches the speaker: DefaultAudioDestinationNode::render
+   *  calls setIsSilent(bus.isSilent()), and a GainNode at 0 ZEROES its bus (GainNode::process), so the MUTE (setMuted,
+   *  the silent-decoder rule for APRS / METEOR LRPT, the wheel at 0) turned this page silent to the browser the moment
+   *  it was pressed. A ConstantSourceNode with a non-zero offset clears the flag (ConstantSourceNode::process).
+   *  So while MUTED, one constant of 2^-15 (one 16-bit step, −90 dBFS, and DC — no speaker reproduces it) goes to the
+   *  output beside the gain: never audible, the page still "playing". ★ The Safari path through the MediaStream element
+   *  is judged on the element (playing, volume > 0, not muted — HTMLMediaElement::computeCanProduceAudio), which the
+   *  gain never touched; this covers the Web Audio destination path (Chromium, Firefox, #nomediastream).
+   *  ★★ NOT while QUIET (setQuiet — ADS-B, ISM, AIS, NDB, datalink, sondes): there the output is let go ON PURPOSE (the
+   *     AirPods followed a page "playing" silence, Stuart 2026-10-25), and a running output is exactly that. Those modes
+   *     are kept alive by the heartbeats (keepAlive.ts, the audio Worker's ping), which need no audio at all. */
+  private presence: ConstantSourceNode | null = null;
+  private static readonly PRESENCE_LEVEL = 1 / 32768;
+  private _syncPresence() {
+    const ctx = this.ctx;
+    const want = !!ctx && !!this.gain && this._muted && !this._quiet && typeof ConstantSourceNode !== 'undefined';
+    if (want && !this.presence) {
+      try {
+        const c = ctx!.createConstantSource();
+        c.offset.value = AudioPlayer.PRESENCE_LEVEL;
+        c.connect(this.streamDest ?? ctx!.destination);
+        c.start();
+        this.presence = c;
+      } catch { this.presence = null; }
+    } else if (!want && this.presence) {
+      const c = this.presence; this.presence = null;
+      try { c.stop(); } catch { /* never started */ }
+      try { c.disconnect(); } catch { /* gone */ }
+    }
+  }
+  /** Is the inaudible presence running (tests, debugState)? */
+  get presenceOn(): boolean { return !!this.presence; }
 
   /** The element the OS media controls attach to (null if unavailable). */
   get element(): HTMLAudioElement | null { return this.omEl ?? this.mediaEl; }
@@ -3020,6 +3056,7 @@ export class AudioPlayer {
     if (this.speakerMode) this.onSpeaker?.({ level: m ? 0 : this._volume });
     if (this.gain) this.gain.gain.value = m ? 0 : this._volume;
     if (this.omEl) this.omEl.muted = m;
+    this._syncPresence();
   }
   get muted() { return this._muted; }
 
@@ -3040,7 +3077,9 @@ export class AudioPlayer {
       try { this.omEl?.pause(); } catch { /* gone */ }
       try { this.anchorEl?.pause(); } catch { /* gone */ }
       if (this.ctx && this.ctx.state === 'running') void this.ctx.suspend().catch(() => {});
+      this._syncPresence();
     } else {
+      this._syncPresence();
       if (this.anchorEl && this.anchorEl.paused) void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
       void this.resume();
     }
@@ -3061,6 +3100,7 @@ export class AudioPlayer {
     this._stopAnchor();
     this.streamDest = null;
     if (this.sp) { this.sp.onaudioprocess = null; this.sp.disconnect(); this.sp = null; }
+    if (this.presence) { try { this.presence.stop(); this.presence.disconnect(); } catch { /* gone */ } this.presence = null; }
     this.ctx?.close();
     this.ctx = null;
     this.node = null;
