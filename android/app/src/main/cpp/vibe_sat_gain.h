@@ -128,12 +128,15 @@ struct In {
     int    clipRun = 0;                   // consecutive seconds on the rail (the radio's own hard-overload counter)
     double floorDb = NAN;                 // the band's floor now
     double ownFloorDb = NAN;              // the radio's own floor on the same scale, NaN = unknown
-    const std::vector<int>* gains = nullptr;
+    const std::vector<int>* gains = nullptr;   // ★ a gain TABLE (the RTL's list) — or null: a continuous gain (the RSP's)
     int    curIdx = 0, ceilIdx = 0;
+    double gainDb = NAN;                  // continuous mode only: the gain now, for the log
+    double roomUpDb = 1e9;                // continuous mode only: how much more gain the radio has (owner's caps)
 };
 struct Out {
     enum Kind { None, Set, ClipCut } kind = None;
-    int idx = -1;
+    int idx = -1;                         // table mode: the index to write
+    double deltaDb = 0.0;                 // the change wanted, dB (+ = more gain) — both modes; continuous mode acts on it
     std::string log;
 };
 
@@ -155,7 +158,9 @@ public:
 
     Out tick(const In& in) {
         Out o;
-        if (ph_ == Phase::Off || !in.gains || in.gains->empty()) return o;
+        if (ph_ == Phase::Off) return o;
+        if (!in.gains) return tickContinuous(in);
+        if (in.gains->empty()) return o;
         const std::vector<int>& g = *in.gains;
         const int cur = std::clamp(in.curIdx, 0, (int)g.size() - 1);
         const double gainDb = g[(size_t)cur] / 10.0;
@@ -168,7 +173,7 @@ public:
                               "down %.1f dB to %.1f dB; %s", what_.c_str(), in.clipPct, in.clipRun,
                               (g[(size_t)cur] - g[(size_t)to]) / 10.0, g[(size_t)to] / 10.0,
                               ph_ == Phase::Measure ? "measuring again from there" : "still held (clips only)");
-                o.kind = Out::ClipCut; o.idx = to; o.log = b; ++cuts_;
+                o.kind = Out::ClipCut; o.idx = to; o.deltaDb = (g[(size_t)to] - g[(size_t)cur]) / 10.0; o.log = b; ++cuts_;
                 if (ph_ == Phase::Measure) startWindow(in.now);
                 return o;
             }
@@ -191,9 +196,12 @@ public:
                       "(clips only)", what_.c_str(), c.idx == cur ? "stays at" : "set to", g[(size_t)c.idx] / 10.0,
                       peakMax_, in.now - t0_, gainDb, c.predictedPk, r_.targetPk, r_.railDbfs - r_.targetPk, c.limit, fl);
         o.log = b; ++sets_;
-        if (c.idx != cur) { o.kind = Out::Set; o.idx = c.idx; }
+        if (c.idx != cur) { o.kind = Out::Set; o.idx = c.idx; o.deltaDb = (g[(size_t)c.idx] - g[(size_t)cur]) / 10.0; }
+        last_ = c;
         return o;
     }
+    /** The last SET's choice (table mode) — for the shim's readout. */
+    const Choice& lastChoice() const { return last_; }
 
 private:
     Radio r_;
@@ -201,6 +209,38 @@ private:
     std::string what_;
     double t0_ = 0, peakMax_ = -99.0, floorSum_ = 0; int floorN_ = 0, n_ = 0;
     unsigned sets_ = 0, cuts_ = 0;
+    Choice last_;
+    /** ★ The same three phases on a CONTINUOUS gain (the RSP: the shim turns deltaDb into an IF reduction and, by
+     *  VibeAGC's own rule, an RF rung — rspPlace). Clips are shed exactly as the table mode sheds them. */
+    Out tickContinuous(const In& in) {
+        Out o;
+        char b[400];
+        if (in.clipRun >= kClipRunSec) {
+            const double shed = std::max(1.0, vibeagc::grossOverloadShedDb(std::max(0.0, in.peak - r_.targetPk), in.clipPct));
+            std::snprintf(b, sizeof b, "satellite pass (%s): the converter is on the rail (%.3f %% of samples, %d s) — "
+                          "down %.1f dB from %.1f dB; %s", what_.c_str(), in.clipPct, in.clipRun, shed, in.gainDb,
+                          ph_ == Phase::Measure ? "measuring again from there" : "still held (clips only)");
+            o.kind = Out::ClipCut; o.deltaDb = -shed; o.log = b; ++cuts_;
+            if (ph_ == Phase::Measure) startWindow(in.now);
+            return o;
+        }
+        if (ph_ == Phase::Hold) return o;
+        peakMax_ = std::max(peakMax_, in.peak);
+        ++n_;
+        if (in.now - t0_ < r_.measureSec || n_ < 2) return o;
+        ph_ = Phase::Hold;
+        double d = r_.targetPk - peakMax_;
+        const char* lim = "headroom";
+        if (d > in.roomUpDb) { d = std::max(0.0, in.roomUpDb); lim = "ceiling"; }
+        if (std::fabs(d) < 1.0) d = 0.0;                     // ★ inside a decibel: leave it, a write would be a jolt for nothing
+        std::snprintf(b, sizeof b, "satellite pass (%s): gain %s %+.1f dB from %.1f dB — peak %.1f dBFS over %.0f s, "
+                      "%.1f dBFS predicted (set point %.0f dBFS, %.0f dB under the rail; decided by %s); held for the pass "
+                      "(clips only)", what_.c_str(), d == 0.0 ? "stays —" : "changed", d, in.gainDb, peakMax_, in.now - t0_,
+                      peakMax_ + d, r_.targetPk, r_.railDbfs - r_.targetPk, lim);
+        o.log = b; ++sets_;
+        if (d != 0.0) { o.kind = Out::Set; o.deltaDb = d; }
+        return o;
+    }
     void startWindow(double now) { t0_ = now; peakMax_ = -99.0; floorSum_ = 0; floorN_ = 0; n_ = 0; }
 };
 

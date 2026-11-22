@@ -168,6 +168,39 @@ int main() {
         ok(o.kind == Out::Set && o.idx < in.curIdx && h.phase() == Phase::Hold, "...and sets again for what the sky brought");
     }
 
+    printf("\nThe hold — SDRplay (continuous gain)\n");
+    {
+        const Radio S = rspRadio();
+        Hold h(S);
+        In in; in.gainDb = 9.0; in.roomUpDb = 30.0;          // gains == nullptr: continuous
+        h.begin(0.0, "METEOR-M2 4 LRPT");
+        Out o;
+        for (double t = 0; t <= 4.0; t += 1.0) { in.now = t; in.peak = (t == 2.0) ? -22.0 : -24.0; o = h.tick(in); }
+        ok(h.phase() == Phase::Hold && o.kind == Out::Set && std::fabs(o.deltaDb - 12.0) < 1e-9,
+           "peak -22 dBFS loudest: +12 dB to the -10 dBFS set point");
+        printf("        %s\n", o.log.c_str());
+        // the RSP turns it into IF 47 -> 35, then VibeAGC's rung rule: 35 + 6.3 <= 46 → RF in, IF 41
+        const RspPlace p = rspPlace(3, (int)std::ceil(47 - o.deltaDb), 20, 0, 10, true, 6.3, 6.3);
+        ok(p.lna == 2 && p.gr == 41, "...IF 47 -> 35, and the room takes one rung of RF: LNA 3 -> 2, IF 41");
+        int moves = 0;
+        for (int s2 = 0; s2 < 600; ++s2) {
+            in.now = 5.0 + s2; in.peak = (s2 % 9 == 0) ? -2.0 : -12.0; in.clipRun = (s2 % 17 == 0) ? 1 : 0; in.clipPct = in.clipRun ? 0.01 : 0;
+            if (h.tick(in).kind != Out::None) ++moves;
+        }
+        ok(moves == 0, "ten minutes of hot windows and single clipped seconds: nothing moves");
+        in.clipRun = 2; in.clipPct = 0.5; in.peak = 0.0; in.now = 700.0;
+        o = h.tick(in);
+        ok(o.kind == Out::ClipCut && std::fabs(o.deltaDb + 10.0) < 1e-9, "two seconds clipping: down 10 dB (peak over the set point)");
+        const RspPlace q = rspPlace(2, 57 + 10, 20, 0, 10, true, 6.3, 6.3);
+        ok(q.lna == 3 && q.gr == 59, "...at IF 57 the IF cannot take 10 dB: one rung of RF out, IF 59 (rail)");
+        in.roomUpDb = 3.0; Hold c(S); c.begin(0.0, "x"); in.clipRun = 0; in.clipPct = 0;
+        for (double t = 0; t <= 4.0; t += 1.0) { in.now = t; in.peak = -40.0; o = c.tick(in); }
+        ok(o.kind == Out::Set && std::fabs(o.deltaDb - 3.0) < 1e-9, "only 3 dB of gain left under the owner's caps: +3, not +30");
+        Hold z(S); z.begin(0.0, "x"); in.roomUpDb = 30;
+        for (double t = 0; t <= 4.0; t += 1.0) { in.now = t; in.peak = -10.4; o = z.tick(in); }
+        ok(o.kind == Out::None && o.log.find("stays") != std::string::npos, "within a decibel of the set point: no write");
+    }
+
     printf("\nWhen a pass is on (Watch)\n");
     {
         Watch w;
