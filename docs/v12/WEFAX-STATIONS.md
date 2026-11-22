@@ -5,66 +5,54 @@ Branch `b91-wefax`, which comes off v12-experimental at b9b0419db.
 ## RESUME HERE
 
 - **Done and tested.** All five parts are built and committed on the branch:
-  1. Whether background WEFAX misses chart starts: it does not, on the recordings so far (see below).
+  1. Whether background WEFAX misses chart starts: it did, for a chart that fades in after its start tone and phasing
+     (Northwood 10:00 UTC on 11-22). Fixed in the decoder, with tests and the recording's numbers (see below).
   2. A listener's noise strips are no longer kept in the gallery.
   3. Each background WEFAX VFO writes an hourly log line.
   4. A "WEFAX stations" VFO runs several stations in one decoder slot.
   5. A VFO that is idle gives way to a listener before one that is part-way through a chart.
 - **Still open: a live check on a real server.** The coordinator needs to install a build on Stuart's Pi 500 and read the
   hourly `wefax:` lines from Export logs for VFO 8 (4608.1 USB). Those lines will say whether the Pi 500's RSP1B at 4.6 MHz
-  hears Northwood at all. The decoder, and the whole background chain, catch real starts off Stuart's RX888.
+  hears Northwood at all. The decoder, and the whole background chain, catch real starts off Stuart's RX888, and now a
+  chart that fades in too.
 - **The web admin page.** I changed `web/client/src/adminBg.ts` but did not regenerate `vibe_web_page.h`. That happens in
   the coordinator's `node scripts/build-web.mjs`.
 
-## 1. Does background WEFAX miss real chart starts? Not on the recordings
+## 1. Does background WEFAX miss real chart starts? YES — when a chart fades in; fixed
 
-**What happened on the Pi 500.** Background VFO 8 is 4608.1 kHz USB, which is Northwood GYA on 4610.0, on the RSP1B. In
-about 8 hours it logged no `wefax:` line and saved no chart. Over the same days, Stuart's UberSDR (RX888) WEFAX addon
-archived:
+Stuart's Pi 500 (RSP1B, background VFO 8 = 4608.1 USB = Northwood GYA 4610.0): ~8 h, no `wefax:` line, no chart saved.
+His UberSDR (RX888) WEFAX addon archived only 4 Northwood 4610 starts in 2 days but DDK 7880 every 10–25 min.
 
-- only 4 Northwood 4610 chart starts in 2 days. On 20 to 22 November they were 11-20 08:12, 11-20 16:47, 11-21 11:24,
-  11-21 14:00, 11-22 08:00 and 11-22 08:48;
-- DDK 7880 every 10 to 25 minutes, in a daily pattern: 07:17, 07:43, 08:04, 08:17, (09:45), 10:29, 10:50, 11:11, 11:35,
-  12:56 …
+Recorded from the addon's live audio previews (12 kHz s16 → 48 kHz with ffmpeg) and replayed two ways:
+`tools/wefax-bench/wefax_wav <wav> <out> 120 0 1900 bg` (the decoder alone, background options, prints its Stats) and
+`tools/wefax-bench/wefax_bg_runner <wav> <galleryDir> <dialHz> [stations]` — the **whole background path**: the audio put
+back on the air as USB IQ, a real BgRunner (channeliser → RxPipeline USB 48 kHz → DecoderHost WEFAX, auto_start/auto_stop
+→ gallery tap).
 
-**How it was tested.** I recorded the addon's live audio previews. The files are 12 kHz s16, which I re-wrapped to 48 kHz
-with ffmpeg. I replayed them two ways:
-
-- `tools/wefax-bench/wefax_wav <wav> <out> 120 0 1900 bg` runs the decoder alone with the background options
-  (`auto_start`/`auto_stop`, as `attachMsg` sends them). It prints the decoder's Stats.
-- `tools/wefax-bench/wefax_bg_runner <wav> <galleryDir> <dialHz> [stations]` runs the **whole background path**. The audio
-  is put back on the air as USB IQ (40 kHz below a 240 kS/s capture's centre). From there it goes through the BgRunner
-  channeliser, the RxPipeline USB demodulator at 48 kHz, the DecoderHost WEFAX and the gallery tap. With `stations` it runs
-  as a WEFAX stations VFO instead.
-
-| Recording (UTC) | What was on air | Decoder alone, background options | Whole background path |
+| Recording (UTC, 2026-11-22) | On air | Before the fix (background options) | After |
 |---|---|---|---|
-| DDK 7880, 09:26–10:00 (11-22) | Noise, then a chart start at 09:44:37 | **Start tone on 7 of 10 lines** at 1117.4 s; phasing 38/38 used; North Sea SST chart, 1448 lines | **Same start** at 1117.5 s, phasing 38/38, the chart saved (1809×1450, partial only because the recording ended). 0 IQ dropped |
-| DDK 7880, 16:37 (10-05, kept FLAC) | Start tone, phasing, long tone, ice chart | Start at 133.9 s, phasing 38/38, 1532-line chart | — |
-| Northwood 4610, 16:37 (10-05, kept FLAC) | Joined part-way through a chart, then its stop tone | Stop tone at 567.9 s. No start: the chart began before the recording. Correct | — |
-| Northwood 4610, 09:26 → (11-22) | Dead air (noise) through 10:04, including the top of the hour | Best start tone 2/10, best phasing 0/20, 0 begun. Correct on noise | — |
+| DDK 7880 09:26–10:00 | noise, start tone 09:44:37, North Sea SST chart | **caught**: start 7/10, phasing 38/38, 1448 lines (decoder alone and whole path) | same; as a WEFAX stations VFO too ("Pinneberg (DWD) 7880.0 kHz") |
+| Northwood 4610 09:26–10:34 | dead air; **a chart that faded in ~2½ min after it began** (~10:03, no start tone, no phasing), stop tone 10:11:09; then a full chart with start tone 10:11:58 → stop 10:23:10 | the 10:00 chart: **missed** (best start 2/10, phasing 0/20, nothing drawn); the 10:12 chart caught | 10:00 chart saved **PARTIAL 1809×882**; 10:12 chart complete 1809×1291; two false starts (09:36, 09:54 — a few lines of vertical stripes) begun, ended after 3 min of noise, dropped by the gallery |
+| DDK 7880 / Northwood 4610, 2026-10-05 FLACs | start tone + chart / joined part-way to a stop tone | DDK caught; Northwood joined part-way: nothing | DDK caught; Northwood: begun out of the noise at 2.9 s, saved to its stop tone (1122 lines, partial) |
+| 5 h of other modes (2026-10-05 FLACs: NAVTEX 2 h, FT8 1 h, SSTV 1 h 45, MSF, DCF77) | no WEFAX | 0 begun | **0 begun** |
 
-**What the recordings show.** On real off-air audio from the RX888, the background options catch the start tone and the
-phasing, through the decoder alone and through the whole background chain. Nothing in the server's background path loses
-the start.
+**The addon for the same period** (its own archive, read once): DDK 09:45:05→10:05:16 (we: start tone 09:44:37);
+Northwood 10:12:07→10:23:18, 1261 lines (we: 10:11:58→10:23:10, 1291); the 10:00 Northwood chart is not in its archive
+either (its channel read `decoding:false` at 10:11). So a chart whose start the receiver never heard was invisible to both.
 
-So the Pi 500's eight silent hours are one of these:
+**Why it was missed (two faults in `decoders/wefax_decoder.cpp`):** waiting in the background (`auto_start`, nothing begun)
+the decoder never measured the chart/noise verdict (`corrAvg` was updated only on lines being drawn), so (1) a chart that
+fades in after its start tone and phasing could never begin, and (2) the 2026-11-15 ★★★ "a chart after the stop tone is a
+new chart" rule could never fire in background at all. **Fix:** an idle background decoder measures the verdict every line
+(`resampleLine`/`updateCorr`, split out of `decodeImageLine`); chart-like lines out of the noise begin a chart (never on a
+tone's own lines — a start tone's 300 Hz stripes read as chart lines a line before it fires); a chart begun on the verdict
+alone (no tone, no phasing — out of the noise or after a stop tone) ends after `IDLE_END_LINES` = 360 lines (3 min) of
+noise, so a false start never draws noise until a stop tone that never comes; the gallery keeps such a chart only at
+600+ lines and marks it **PARTIAL** (its top is missing). Listener decoding (no `auto_start`) is untouched.
 
-1. **No usable signal at the Pi 500's RSP1B on 4.6 MHz.** Northwood transmitted very little in those days: the addon's own
-   archive has 6 starts in 3 days. A start needs ≥ 7 of 10 lines with the 300 Hz tone above 3.5.
-2. **The VFO was paused for listeners when the starts came.** It is the lowest-ranked VFO, so it was the first one paused.
-   Part 5 fixes that only when it is part-way through a chart; when it is idle it still gives way first.
-3. Something on that box I could not reproduce here.
-
-**The next step is the hourly line (part 3).** It now says, per hour: the audio level, lines read, the best start-tone run
-and the strongest tone line, and the best toneless-phasing agreement. That tells (1) from (3) the next time it happens.
-
-**Comparison with the UberSDR addon's archive for the same period:**
-
-- DDK 7880: our start is at 09:44:37. The addon's listing showed no 09:4x DDK item yet when I checked at 10:04; it files a
-  chart only when it is saved.
-- Northwood 4610: there was no chart on the air at 10:00. The addon recorded noise from 08:48 to 09:31 as one 3600-line
-  item. We recorded the same noise and started nothing, as the background rule intends.
+**What this means for the Pi 500:** at least part of its silence is this fault — Northwood fades in and out at 4.6 MHz,
+and any chart whose start was faded was invisible. The rest may be signal (the RSP1B and its antenna vs the RX888) or the
+VFO being paused for listeners; the new hourly line (part 3) tells them apart from Export logs. **Needs a live check.**
 
 ## 2. A listener's noise strips (`vibe_bgdecode.h` GalleryImageTap)
 
@@ -165,8 +153,8 @@ to its end. It stops counting after 30 minutes.
 
 | Suite | Result | New |
 |---|---|---|
-| test-wefax-phasing | 27/0 | unchanged (the decoder's output did not change) |
-| test-bgdecode | 240/0 | listener strips, the hourly line, WEFAX stations (two charts at once in one slot, retune) |
+| test-wefax-phasing | 33/0 (+6) | background: a chart out of the noise (the Northwood numbers), after a stop tone, not on a start tone's stripes, a false start ended after 360 lines, 10 min of noise begins none |
+| test-bgdecode | 243/0 | listener strips, the hourly line, WEFAX stations (two charts at once in one slot, retune) |
 | test-bg-priority | 46/0 (+10) | the registry's busy field; a listener pauses the idle RTTY VFO and not the mid-chart WEFAX |
 | test-setup-bg-wefax.mjs | 17/0 | new |
 | test_bg_decode_model.ts | 64/0 (+11) | the app model |
