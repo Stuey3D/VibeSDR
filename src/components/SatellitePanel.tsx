@@ -267,7 +267,9 @@ export default function SatellitePanel(p: SatellitePanelProps) {
       </DecoderHeader>
       {!minimised && (greyed || !!p.why) && <Text style={s.note}>{greyed ? p.cap.why : p.why}</Text>}
       {!minimised && <DecoderBody>
-        <ScrollView style={big ? { height: bodyH } : { maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
+        {/* ★ beta91 (Stuart 11-22, a screenshot: BIG with the list folded and nothing decoded yet, half the box empty) the box
+             holds its full BIG height only while a picture is on show; otherwise it fits what is in it, up to that height */}
+        <ScrollView style={big && showPic ? { height: bodyH } : { maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
           {!!sel && !!sat && !!tx && (
             <View style={s.box}>
               <View style={[big ? s.ro : s.roSmall, mine?.state === 'COAST' && s.coast]}
