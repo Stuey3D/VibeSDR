@@ -60,11 +60,17 @@ struct SimRsp {
     double fadeDb = 0;                  // applied to every signal
     unsigned windows = 0;
     unsigned long long k = 0;
+    /* ★ beta91: something AFTER the LNA that it does not attenuate (input-referred like ptot − red), −300 = none. The
+     *  Lenovo RSP1A on MW (11-20 → 11-22): at state 6 the peak sat at −23.3 dBFS with IF 37 for hours, and the RF never
+     *  came back — at state 2 the same band reads −21 with IF 48, so the stations are ~38 dB under what the rung table
+     *  predicts at state 6: this term is what holds the ADC there. */
+    double internal = -300.0;
     static constexpr double kG = 92.0;  // peak = Ptot + kG - red - gr + 3 (programme peak) — Band II calibration
     double ptot() const { double s = 0; for (double p : sigs) s += std::pow(10.0, (p + fadeDb) / 10.0); return 10.0 * std::log10(s + 1e-30); }
     double rawPeak() const {
         static const double w[] = {0.0, 0.9, -0.7, 1.2, -1.0, 0.4, -1.3, 0.8, 0.2, -0.4, 1.0, -0.2};
-        return ptot() + kG - red[lna] - gr + w[k % 12];
+        const double front = 10.0 * std::log10(std::pow(10.0, (ptot() - red[lna]) / 10.0) + std::pow(10.0, internal / 10.0));
+        return front + kG - gr + w[k % 12];
     }
     // ★ the converter's own noise peaks (~-72 dBFS) are the floor of what the peak can read
     double peak() const { return std::min(10.0 * std::log10(std::pow(10.0, rawPeak() / 10.0) + std::pow(10.0, -7.2)), 0.0); }
@@ -544,9 +550,127 @@ static void caseR() {
     ok(vagcRailDir(20, 0, 10, 0, 20, &fm, 100, -40.0) == 0, "IF at its floor at full RF gain: not a rail");
 }
 
+
+/* ══ ★★ beta91 (Stuart 11-22, "sdrplay agc is a matter of urgency … should be quick like it was") ══════════════════ */
+/** Run `secs` of the loop from where `agc` is, against `r`; returns the time the peak first sat within ±5 of target for
+ *  1 s (−1 = never) and fills the LNA moves. `retuneAt` < 0 = no retune; otherwise noteRetune(t, big) at that time. */
+template <class F>
+static double runFrom(VibeAgcRsp& agc, SimRsp& r, double t0, double secs, F script, int* lnaMoves, bool verbose) {
+    double onSince = -1, firstOn = -1;
+    std::vector<bool> seen(r.red.size(), true);
+    for (double t = t0; t < t0 + secs; t += 0.1) {
+        script(t, r);
+        ++r.k; ++r.windows;
+        VagcIn in; in.now = t; in.windows = r.windows; in.peak = r.peak(); in.clipPct = r.clip();
+        in.nStates = (int)r.red.size(); in.band = r.band;
+        for (size_t q = 0; q < r.red.size(); ++q) in.learnedRed[q] = r.red[q];
+        if (std::fabs(in.peak - agc.profile().targetPk) <= 5.0) { if (onSince < 0) onSince = t; if (firstOn < 0 && t - onSince >= 1.0) firstOn = onSince - t0; }
+        else onSince = -1;
+        const VagcOut o = agc.tick(in);
+        if (o.write) {
+            if (o.lna != r.lna && lnaMoves) ++*lnaMoves;
+            if (verbose) std::printf("      t=%5.1f  %s\n", t, o.why);
+            r.lna = o.lna; r.gr = o.gr;
+        }
+    }
+    (void)seen;
+    return firstOn;
+}
+
+static void caseM() {
+    std::printf("\n── M  MW entered FROM ABOVE (out of DAB, LNA 6, IF 37) with the Lenovo's LNA-proof component ──\n");
+    // the band: strong MW locals (ptot −56: at state 2 / IF 48 the peak reads −21, as on the Lenovo 23:45)
+    auto mk = [] { SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 6; r.gr = 37; r.sigs = {-57.0, -62.0, -70.0}; r.wanted = -70.0;
+                   r.internal = -81.0; return r; };
+    {   // the OLD path: a retune that is not a band change (as it was) — parked at full attenuation
+        SimRsp r = mk(); VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr);
+        int moves = 0; runFrom(agc, r, 0, 60, [](double, SimRsp&) {}, &moves, false);
+        std::printf("   -> without the start: LNA %d, IF %d, peak %.1f after 60 s\n", r.lna, r.gr, r.peak());
+        ok(r.lna == 6, "(the fault, reproduced: without a band-change start the RF never comes back from state 6)");
+    }
+    SimRsp r = mk(); VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr);
+    agc.noteRetune(0.0, true);   // DAB left / a new band
+    int moves = 0; const double on = runFrom(agc, r, 0, 60, [](double, SimRsp&) {}, &moves, true);
+    std::printf("   -> LNA %d, IF %d, peak %.1f dBFS; on target after %.1f s; %d LNA moves\n", r.lna, r.gr, r.peak(), on, moves);
+    ok(r.lna <= 3 && r.lna >= 1, fmt("the RF comes back: LNA state %.0f (the Lenovo settles at 2 arriving from 40 m)", r.lna));
+    ok(r.gr <= 52, fmt("the IF inside its window (%.0f)", r.gr));
+    ok(on >= 0 && on <= 6.0, fmt("on target within 6 s (%.1f s)", on));
+    ok(moves <= 3, "a handful of LNA moves, no hunting");
+}
+
+static void caseN() {
+    std::printf("\n── N  MW → 40 m on an RSP1A (ONE LNA band under 60 MHz): quick, not ~45 s ──\n");
+    ok(vagcBigRetune(648e3, 7.1e6, 3e6), "648 kHz → 7.1 MHz at 3 MS/s is a big retune (leaves the capture)");
+    ok(!vagcBigRetune(7.074e6, 7.1e6, 3e6), "7.074 → 7.100 MHz is not (inside the capture)");
+    ok(!vagcBigRetune(0, 7.1e6, 3e6), "the first tune (no previous centre) is not");
+    ok(vagcHfStartState(0) == 3, "an RSP1A under 60 MHz starts from state 3 (18 dB; 37/42/61 are attenuation)");
+    // settled on MW at state 6 (the stuck state), then 40 m: the band 28 dB under target there (the 23:43 log)
+    // ★ the 40 m level from where the Lenovo SETTLED (LNA 2, IF 41, −21 dBFS at 23:44) — the LNA 6 reading is the one
+    //   that does not scale, so it is not the band's level
+    SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 6; r.gr = 37; r.sigs = {-64.0, -69.0, -78.0}; r.wanted = -90.0;
+    {   // the OLD path: not a band change → the steady-state crawl
+        SimRsp o = r; VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(o.lna, o.gr);
+        // let acquisition end first (as on a settled MW listen), with the level held on target by an MW world
+        SimRsp mw = o; mw.sigs = {-57.0, -62.0}; mw.internal = -81.0; runFrom(agc, mw, 0, 45, [](double, SimRsp&) {}, nullptr, false);
+        o.lna = mw.lna; o.gr = mw.gr; o.windows = mw.windows; agc.noteRetune(45.0, false);
+        int moves = 0; const double on = runFrom(agc, o, 45.0, 90, [](double, SimRsp&) {}, &moves, false);
+        std::printf("   -> as before (no band change): on target after %.1f s, LNA %d\n", on, o.lna);
+        ok(on < 0 || on > 20.0, fmt("(the fault, reproduced: the steady-state pace takes over 20 s — %.1f)", on));
+    }
+    VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr);
+    SimRsp mw = r; mw.sigs = {-57.0, -62.0}; mw.internal = -81.0; runFrom(agc, mw, 0, 45, [](double, SimRsp&) {}, nullptr, false);
+    r.lna = mw.lna; r.gr = mw.gr; r.windows = mw.windows;
+    agc.noteRetune(45.0, vagcBigRetune(648e3, 7.1e6, 3e6));
+    int moves = 0; const double on = runFrom(agc, r, 45.0, 60, [](double, SimRsp&) {}, &moves, true);
+    int bestS; r.oracle(&bestS);
+    std::printf("   -> LNA %d, IF %d, peak %.1f; on target after %.1f s; %d LNA moves (oracle LNA %d)\n", r.lna, r.gr, r.peak(), on, moves, bestS);
+    ok(on >= 0 && on <= 8.0, fmt("on target within 8 s of the retune (%.1f s)", on));
+    // ★ the oracle ignores the IF window (an RF rung comes out above IF 52 — Stuart's rule), so it would park at LNA 0 / IF
+    //   53; the loop's answer is the Lenovo's own on 40 m at 23:44: LNA 2, IF 41
+    ok(r.lna <= 3 && r.gr <= 52, fmt("settles where the Lenovo did on 40 m: LNA %.0f (2 on air), IF %.0f (41 on air)", r.lna, r.gr));
+    (void)bestS;
+}
+
+static void caseO() {
+    std::printf("\n── O  the start is for HF / MW only, and never fights overload ──\n");
+    {   // Band II (FM broadcast) on a band change: no jump — its own rules as before
+        SimRsp r; r.band = 1; r.red = ladder(1); r.lna = 8; r.gr = 40; r.sigs = {-30.0, -33.0}; r.wanted = -50.0;
+        VibeAgcRsp agc; agc.setProfile(VagcBand::FmBroadcast); agc.adopt(r.lna, r.gr); agc.noteRetune(0.0, true);
+        SimRsp before = r; int moves = 0; runFrom(agc, r, 0, 3, [](double, SimRsp&) {}, &moves, false);
+        ok(moves == 0 || r.lna >= before.lna - 1, "FM broadcast: no start jump (at most one ordinary rung in 3 s)");
+    }
+    {   // a band so strong that state 3 overloads: the start is taken, then the RF comes straight back out
+        SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 6; r.gr = 30; r.sigs = {-12.0, -20.0}; r.wanted = -60.0;
+        VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr); agc.noteRetune(0.0, true);
+        int clipW = 0; std::vector<bool> seen(r.red.size(), true);
+        for (double t = 0; t < 30; t += 0.1) {
+            ++r.k; ++r.windows; VagcIn in; in.now = t; in.windows = r.windows; in.peak = r.peak(); in.clipPct = r.clip();
+            in.nStates = 7; in.band = 0; for (size_t q = 0; q < r.red.size(); ++q) in.learnedRed[q] = r.red[q];
+            if (in.clipPct > 0) ++clipW;
+            const VagcOut o = agc.tick(in);
+            if (o.write) { std::printf("      t=%5.1f  %s\n", t, o.why); r.lna = o.lna; r.gr = o.gr; }
+        }
+        std::printf("   -> LNA %d, IF %d, peak %.1f, %d clipped windows\n", r.lna, r.gr, r.peak(), clipW);
+        ok(r.lna >= 4, fmt("a strong band (already over target at state 6): no RF added (LNA %.0f)", r.lna));
+        ok(clipW <= 5, fmt("at most 0.5 s clipped (%.0f windows)", clipW));
+        ok(r.peak() < -10.0 && r.gr <= 59, "and the level is held");
+    }
+    {   // the owner's RF cap is a floor the start respects
+        SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 6; r.gr = 37; r.sigs = {-57.0}; r.wanted = -70.0; r.internal = -81.0;
+        VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr); agc.noteRetune(0.0, true);
+        ++r.k; ++r.windows; ++r.windows; ++r.windows;
+        for (int i = 0; i < 5; ++i) {
+            VagcIn in; in.now = 0.1 * i; in.windows = r.windows + (unsigned)i; in.peak = r.peak(); in.nStates = 7; in.band = 0; in.lnaFloor = 5;
+            const VagcOut o = agc.tick(in);
+            if (o.write) { r.lna = o.lna; r.gr = o.gr; }
+        }
+        ok(r.lna >= 5, fmt("the owner's RF cap (lowest state 5) is kept (LNA %.0f)", r.lna));
+    }
+}
+
 int main() {
     std::printf("VibeAGC for SDRplay — closed loop and sound\n");
-    caseA(); caseB(); caseC(); caseD(); caseE(); caseF(); caseG(); caseT(); caseH();
+    caseA(); caseB(); caseC(); caseD(); caseE(); caseF(); caseG(); caseT(); caseH(); caseM(); caseN(); caseO();
     snd::caseI(); snd::caseJ(); snd::caseK(); caseR();
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

@@ -5864,7 +5864,8 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     }
     const int band = SdrplaySource::lnaBandId(centreHz);
     if (centreHz != st.lastCentre || dab != st.lastDab || dabBlock != st.lastDabBlk || rate != st.lastRate) {
-        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab);
+        // ★ beta91: a retune out of the capture is a new band to the AGC too (vagcBigRetune — MW → 40 m on an RSP1A)
+        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab || vibersp::vagcBigRetune(st.lastCentre, centreHz, rate));
         st.lastCentre = centreHz; st.lastDab = dab; st.lastDabBlk = dabBlock; st.lastRate = rate; st.lastBand = band;
     }
     // ── the landed test, 1 s after an LNA write: the API's own gainVals.curr must have moved ──

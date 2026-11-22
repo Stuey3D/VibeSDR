@@ -126,6 +126,28 @@ inline double vagcPriorRed(int band, int state) {
     return t[state];
 }
 
+/** ★★ beta91 (Stuart 11-22: "sdrplay agc is a matter of urgency … should be quick like it was"). A retune that leaves
+ *  the capture — the new centre more than half the sample rate from the old — is a NEW BAND to the AGC even where the
+ *  RSP's LNA band does not change: an RSP1A has ONE LNA band under 60 MHz, so MW → 40 m was "no band change", the loop
+ *  stayed in its steady-state pace and took ~45 s (IF 2 dB/s, a rung per 10 s dwell) to bring the RF up from MW's state.
+ *  `oldHz` 0 = no previous centre (the first tune): not a band change by this rule. */
+inline bool vagcBigRetune(double oldHz, double newHz, double rateHz) {
+    return oldHz > 0 && newHz > 0 && rateHz > 0 && std::fabs(newHz - oldHz) > rateHz * 0.5;
+}
+/** ★★ beta91 THE STATE A NEW HF / MW BAND STARTS FROM: the highest LNA state whose reduction is ≤ 18 dB (an RSP1A under
+ *  60 MHz: state 3 of 0..6). The states past it are 37, 42 and 61 dB — attenuator territory. Arriving in a band from
+ *  one of those (DAB, Band II, a strong band) the add rule (room for the WHOLE rung + kAddMarginDb in the IF) never
+ *  fired on MW: at state 6 the ADC peak there does not scale with the RF (Lenovo RSP1A 11-20 → 11-22: −23.3 dBFS, IF
+ *  37, for hours — something the LNA does not attenuate holds it), so the IF never had room for the 19 dB rung and MW
+ *  sat at FULL attenuation ("no rf gain at all") on every visit from above, while arriving from 40 m it settled at
+ *  LNA 2, IF 48. Starting from here, the protective rules (load, clip, swamped — fast, and never held back by this
+ *  start) take RF out if the band needs it, and the add rule brings it up the small 6 dB rungs. */
+inline int vagcHfStartState(int band) {
+    int st = 0;
+    for (int s = 0; s < 28; ++s) { if (vagcPriorRed(band, s) <= 18.0 + 1e-9) st = s; else break; }
+    return st;
+}
+
 /* ── WHAT THE SHIM HANDS IN, AND WHAT IT GETS BACK ──────────────────────────────────────────────────── */
 struct VagcIn {
     double now = 0.0;          // seconds, monotonic
@@ -204,7 +226,7 @@ public:
          *   load judgement begun on the last block must not complete on this one (Lenovo, DAB rapid-step repro 10-30: an
          *   LNA cut 40 ms after a hop, on a dwell that had run through the block before). The overload ceiling is kept. */
         loadedSince_ = roomSince_ = -1;
-        if (bandChanged) { forgetJudgements(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; }
+        if (bandChanged) { forgetJudgements(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; startPending_ = true; }
     }
     int lna() const { return lna_; }
     int gr()  const { return gr_; }
@@ -278,6 +300,26 @@ public:
         if (roomForRung && !clipping) { if (roomSince_ < 0) roomSince_ = in.now; } else roomSince_ = -1;
         if (ceilingState_ >= 0 && in.now - ceilingAt_ > kCeilingSec) ceilingState_ = -1;   // ★ decays
 
+        // ── 0. ★ beta91 A NEW HF / MW BAND STARTS FROM vagcHfStartState, not from an attenuator state ──
+        if (startPending_) {
+            const bool hf = band_ == VagcBand::AmMw || band_ == VagcBand::HfSsb;
+            const int to = std::max(in.lnaFloor, vagcHfStartState(in.band));
+            /* ★ only into a band that is QUIET at this attenuation — at or under the target with the IF free to counter-
+             *   step (≤ grHigh − kAddMarginDb). A band already on target here is a strong one: no RF is added to it. */
+            const bool quietHere = atk <= p_.targetPk && gr_ <= p_.grHigh - kAddMarginDb;
+            if (!hf || !in.rfOwned || clipping || lna_ <= to || !acquiring_ || !quietHere) startPending_ = false;
+            else if (lnaAllowed(in.now)) {
+                startPending_ = false;
+                const double rung = rungDbFor(in, to, lna_);              // the gain those rungs add
+                const int grTo = clampGr((int)std::lround(gr_ + rung));   // counter-stepped as far as the IF allows
+                std::snprintf(o.why, sizeof o.why, "a new band — RF gain state %d -> %d (%.1f dB; the states past it "
+                              "are attenuation), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
+                              lna_, to, rung, gr_, grTo, atk);
+                o.act = kActAddRoom;
+                emit(o, in, to, grTo, +rung, 0);   // ★ direction 0: a load cut straight after it is NOT held back
+                return o;
+            }
+        }
         // ── 1. RF OUT: protection first ──
         if (in.rfOwned && lna_ + 1 < in.nStates && lnaAllowed(in.now)) {
             const bool swamped = gr_ >= kGrMax && atk > p_.attackPk;      // IF has nothing left and still hot
@@ -395,6 +437,7 @@ private:
     double loadedSince_ = -1, roomSince_ = -1;
     int ceilingState_ = -1; double ceilingAt_ = -1e9;
     bool acquiring_ = true; double acqStart_ = -1, inBandSince_ = -1;
+    bool startPending_ = false;                            // ★ beta91 a band change: start HF / MW from vagcHfStartState
     std::deque<double> writeTimes_;
     unsigned writes_ = 0, ifWrites_ = 0, lnaWrites_ = 0; int maxPerSec_ = 0;
 
