@@ -216,7 +216,7 @@ static void testBounds() {
     vs::Store s([] { return g_now; }, false);
     s.configure([d] { return d; }, [] { return 100ull << 20; });
     int refused = 0;
-    for (uint32_t i = 0; i < vs::kDayCap + 500; ++i) {
+    for (uint32_t i = 0; i < vs::dayCap() + 500; ++i) {
         char c[16]; std::snprintf(c, sizeof c, "K%uA%c%c", i % 10, 'A' + (i / 10) % 26, 'A' + (i / 260) % 26);
         std::string call = c; call += (char)('A' + (i / 6760) % 26);
         if (!s.spot(rx(call.c_str(), "FN42", "FT8", "20m", -10, g_now - 10))) ++refused;
@@ -224,16 +224,16 @@ static void testBounds() {
     s.flush();
     const std::string path = s.dayPath(vs::dayOf(g_now));
     CHECK(refused == 500, "the RAM table refuses past the day's cap (%d)", refused);
-    CHECK(fsize(path) <= vs::kHeader + (uint64_t)vs::kDayCap * vs::kRecSize, "the day's file ≤ 196 KB (%llu)", (unsigned long long)fsize(path));
+    CHECK(fsize(path) <= vs::kHeader + (uint64_t)vs::dayCap() * vs::kRecSize, "the day's file ≤ 196 KB (%llu)", (unsigned long long)fsize(path));
     // a second process's new stations: dropped on disk, counted
     vs::Store b([] { return g_now; }, false);
     b.configure([d] { return d; }, [] { return 100ull << 20; });
     b.spot(rx("ZL1ZZZ", "RF70", "FT8", "20m", -10, g_now - 5));
     b.flush();
-    CHECK(fsize(path) == vs::kHeader + (uint64_t)vs::kDayCap * vs::kRecSize, "still full, never past the cap");
+    CHECK(fsize(path) == vs::kHeader + (uint64_t)vs::dayCap() * vs::kRecSize, "still full, never past the cap");
     std::vector<vs::Station> v; uint32_t dropped = 0;
     vs::readDay(path, vs::dayOf(g_now), v, &dropped);
-    CHECK(v.size() == vs::kDayCap && dropped == 1, "the header counts the dropped one (%u)", dropped);
+    CHECK(v.size() == vs::dayCap() && dropped == 1, "the header counts the dropped one (%u)", dropped);
     const std::string j = s.mapJson(vs::kDaySec, 0, NAN, NAN, 1000);
     CHECK(num(j, "count") == 1000 && num(j, "truncated") == 1, "maxOut caps the answer");
     // pruning: a gallery of 16 MB → a 1 MB budget; 10 full days (~1.9 MB) prune down
@@ -242,7 +242,7 @@ static void testBounds() {
         const int64_t then = vs::dayOf(T0) - day * vs::kDaySec + 3600;
         vs::Store o([then] { return then; }, false);
         o.configure([d] { return d; }, [] { return 16ull << 20; });
-        for (uint32_t i = 0; i < vs::kDayCap; ++i) { char c[16]; std::snprintf(c, sizeof c, "W%uA%c%c", i % 10, 'A' + (i / 10) % 26, 'A' + (i / 260) % 26); o.spot(rx(c, "", "CW", "40m", 5, then)); }
+        for (uint32_t i = 0; i < vs::dayCap(); ++i) { char c[16]; std::snprintf(c, sizeof c, "W%uA%c%c", i % 10, 'A' + (i / 10) % 26, 'A' + (i / 260) % 26); o.spot(rx(c, "", "CW", "40m", 5, then)); }
         o.flush();
     }
     CHECK(vs::Store::bytesIn(d) <= vs::budgetFor(16ull << 20), "pruned to the budget (%llu ≤ %llu)", (unsigned long long)vs::Store::bytesIn(d), (unsigned long long)vs::budgetFor(16ull << 20));
@@ -289,7 +289,7 @@ static void testCost() {
     const auto t1 = std::chrono::steady_clock::now();
     s.flush();
     const double fms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
-    std::printf("   flush of %u rows: %.1f ms\n", vs::kDayCap, fms);
+    std::printf("   flush of %u rows: %.1f ms\n", vs::dayCap(), fms);
     const auto t2 = std::chrono::steady_clock::now();
     const std::string j = s.mapJson(30 * vs::kDaySec, 0, 51.5, -1.0);
     const double mms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t2).count();
@@ -315,6 +315,12 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::printf("test-station-store — the station store for the DIGI MODES MAP\n");
+    // ★★ beta91: the cap follows the machine's memory (Stuart's Pi 500 filled 3072 by mid-morning and refused 49,331 spots)
+    CHECK(vs::dayCapForRam(256ull << 20) == 3072 && vs::dayCapForRam(512ull << 20) == 3072, "256/512 MB boards keep 3072 rows a day");
+    CHECK(vs::dayCapForRam(1ull << 30) == 8192 && vs::dayCapForRam(2ull << 30) == 16384, "1 GB → 8192, 2 GB → 16384");
+    CHECK(vs::dayCapForRam(8ull << 30) == 32768, "a Pi 500's 8 GB → 32768 rows (2 MB a day)");
+    CHECK(vs::dayCap() >= 3072, "this machine's cap (%u)", vs::dayCap());
+    vs::setDayCapForTest(3072);   // the bounds tests below model the smallest boards
     testValidation();
     testRamOnly();
     testDisk();

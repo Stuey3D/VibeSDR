@@ -8,7 +8,7 @@
 //
 // ── The file: <gallery>/stations/YYYYMMDD.dat (one per UTC day) ─────────────────────────────────────────────────────
 //   header (64 B) · records (n × 64 B, fixed size, appended)
-//   ★★ BOUNDED BY CONSTRUCTION: at most kDayCap (3072) rows a day = 196 672 B — a busy 20 m day at night is ~1500 calls.
+//   ★★ BOUNDED BY CONSTRUCTION: at most dayCap() rows a day (3072–32768 by the machine's memory, 196 KB–2 MB) — see dayCapForRam.
 //      A full day refuses new rows (counted in the header's `dropped`) and keeps updating the ones it has.
 //      Days are pruned oldest first: at most kKeepDays files and never more than budgetFor(gallery size) bytes
 //      (a 16th of the owner's gallery space, 1–64 MB), counted inside the gallery's size (vibe_gallery.h sideBytes).
@@ -58,8 +58,29 @@ enum Origin : uint8_t { kBackground = 1, kLive = 2, kSatellite = 4 };
 
 static constexpr uint32_t kMagic = 0x31545356;     // "VST1"
 static constexpr uint32_t kRecSize = 64, kHeader = 64;
-static constexpr uint32_t kDayCap = 3072;          ///< rows a day (196 KB on disk)
-static constexpr size_t kRamCap = kDayCap;         ///< rows a day held in RAM by one process
+/** ★★★ ROWS A DAY, BY THE MACHINE'S MEMORY (V12 beta91, 2026-11-22). A row is one call on one band in one mode. The cap
+ *  was a flat 3072 ("a busy 20 m day at night is ~1500 calls") — but a Band VFO on four bands with every mode is many
+ *  times that: Stuart's Pi 500 filled its day by mid-morning on 2026-11-22 and REFUSED 49,331 spots after it, so the map
+ *  showed 70 stations for an hour in which PSK Reporter was sent 769 ("the numbers of spots in our map is very low").
+ *  ★ Sized by physical memory, because today's rows live in each radio process's RAM (~250 B a row with its strings):
+ *    ≥ 4 GB → 32768 rows (2 MB a day on disk) · ≥ 2 GB → 16384 · ≥ 1 GB → 8192 · less → 3072 (the 256/512 MB boards keep
+ *    the old cap). Disk stays bounded by the budget (budgetFor) and kKeepDays — older days are pruned first.
+ *  ★ A day file written under a larger cap is read up to this machine's cap (readDay) — never past it. */
+inline uint32_t dayCapForRam(uint64_t ramBytes) {
+    const uint64_t g = 1ull << 30;
+    return ramBytes >= 4 * g ? 32768u : ramBytes >= 2 * g ? 16384u : ramBytes >= g ? 8192u : 3072u;
+}
+inline uint32_t& dayCapRef() {
+    static uint32_t cap = [] {
+        const long pages = ::sysconf(_SC_PHYS_PAGES), page = ::sysconf(_SC_PAGESIZE);
+        return dayCapForRam(pages > 0 && page > 0 ? (uint64_t)pages * (uint64_t)page : 0);
+    }();
+    return cap;
+}
+/** Rows a day on disk and in one process's RAM (dayCapForRam). */
+inline uint32_t dayCap() { return dayCapRef(); }
+/** Tests only: pin the cap (the machine running them is not the one being modelled). */
+inline void setDayCapForTest(uint32_t n) { dayCapRef() = n; }
 static constexpr int kKeepDays = 400;
 static constexpr size_t kMaxOut = 5000;            ///< calls in one map answer
 static constexpr int kFlushSec = 20;
@@ -220,7 +241,7 @@ inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& 
     Hdr h{};
     bool ok = ::pread(fd, &h, sizeof h, 0) == (ssize_t)sizeof h && h.magic == kMagic && h.recSize == kRecSize;
     if (ok) {
-        const uint32_t n = std::min(h.n, kDayCap);
+        const uint32_t n = std::min(h.n, dayCap());
         std::vector<Rec> recs(n);
         const ssize_t want = (ssize_t)(n * sizeof(Rec));
         ok = n == 0 || ::pread(fd, recs.data(), (size_t)want, kHeader) == want;
@@ -299,7 +320,7 @@ public:
             const std::string k = keyOf(r.call, r.mode, r.band);
             auto it = t.rows.find(k);
             if (it == t.rows.end()) {
-                if (t.rows.size() >= kRamCap) { ++t.droppedRam; return false; }
+                if (t.rows.size() >= dayCap()) { ++t.droppedRam; return false; }
                 Row row;
                 row.s.call = r.call; row.s.mode = r.mode; row.s.band = r.band; row.s.day = day; row.s.first = r.utc;
                 it = t.rows.emplace(k, std::move(row)).first;
@@ -585,7 +606,7 @@ private:
         if (::pread(fd, &h, sizeof h, 0) != (ssize_t)sizeof h || h.magic != kMagic || h.recSize != kRecSize) {
             h = Hdr{}; h.magic = kMagic; h.recSize = kRecSize; h.n = 0; h.day = day;
         }
-        h.n = std::min(h.n, kDayCap);
+        h.n = std::min(h.n, dayCap());
         std::vector<Rec> recs(h.n);
         if (h.n && ::pread(fd, recs.data(), h.n * sizeof(Rec), kHeader) != (ssize_t)(h.n * sizeof(Rec))) { recs.clear(); h.n = 0; }
         std::unordered_map<std::string, uint32_t> idx;
@@ -597,7 +618,7 @@ private:
             uint32_t at;
             if (f != idx.end()) { at = f->second; s = fromRec(recs[at], day); mergeInto(s, j->s, j->delta); }
             else {
-                if (h.n >= kDayCap) { ++h.dropped; continue; }
+                if (h.n >= dayCap()) { ++h.dropped; continue; }
                 at = h.n++;
                 s = j->s; s.count = j->delta;
                 recs.push_back(Rec{});
