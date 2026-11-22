@@ -1,12 +1,13 @@
 {
-  "_comment": "V12 SATELLITE ENGINE — the curated birds sats.json is built from (docs/v12/SATELLITE-ENGINE.md §6). Checked 2026-11-19 against AMSAT's live FM and Live Linear Satellites pages, CelesTrak's amateur + weather groups and SatNOGS. The server's built-in copy for a first boot offline is curatedCatalogue() in android/app/src/main/cpp/vibe_sat_engine.h — test-sat-engine §9 fails if the two drift. 'follow': 'mode' = SatNOGS may move this downlink (Meteor's frequency and mode change on orbit, brief §6.2 TRAP). Catalogue numbers are plain integers up to 9 digits (OMM), never 5-digit TLE fields.",
+  "_comment": "V12 SATELLITE ENGINE — the curated birds sats.json is built from (docs/v12/SATELLITE-ENGINE.md §6). Checked 2026-11-19 (beta90 additions 2026-11-21: AO-7 Mode B beacon + mode names, ISS 437.550 SSTV events, SONATE-2 SSTV 145.880, TO-108, AO-73 fc-bpsk / MO-122 fox-bpsk — docs/v12/SATELLITE-BEST.md 1.5) against AMSAT's live FM and Live Linear Satellites pages, CelesTrak's amateur + weather groups and SatNOGS. The server's built-in copy for a first boot offline is curatedCatalogue() in android/app/src/main/cpp/vibe_sat_engine.h — test-sat-engine §9 fails if the two drift. 'follow': 'mode' = SatNOGS may move this downlink (Meteor's frequency and mode change on orbit, brief §6.2 TRAP). Catalogue numbers are plain integers up to 9 digits (OMM), never 5-digit TLE fields.",
   "groups": ["amateur", "weather"],
   "satellites": [
     { "id": "ISS", "name": "ISS", "norad": 25544, "group": "amateur", "note": "Crew contacts, events and the repeater when ARISS has it on",
       "transmitters": [
         { "label": "FM repeater", "downlink": 437800000, "mode": "nfm", "loop": "fll", "uplink": 145990000, "ctcss": 67.0, "note": "Cross-band repeater, uplink 145.990 MHz (67 Hz)" },
         { "label": "Voice / SSTV", "downlink": 145800000, "mode": "nfm", "loop": "fll", "note": "School contacts and SSTV events" },
-        { "label": "APRS", "downlink": 145825000, "mode": "nfm", "loop": "fll", "consumer": "ax25-1200", "baud": 1200 } ] },
+        { "label": "APRS", "downlink": 145825000, "mode": "nfm", "loop": "fll", "consumer": "ax25-1200", "baud": 1200 },
+        { "label": "SSTV events", "downlink": 437550000, "mode": "nfm", "loop": "fll", "note": "Recent ARISS SSTV events (Robot 36) were sent here" } ] },
     { "id": "SO-50", "name": "SO-50 (SaudiSat-1C)", "norad": 27607, "group": "amateur", "note": "FM repeater; armed by a 74.4 Hz tone, 10 minute timer",
       "transmitters": [
         { "label": "FM repeater", "downlink": 436795000, "mode": "nfm", "loop": "fll", "uplink": 145850000, "ctcss": 67.0, "note": "Uplink 145.850 MHz (67 Hz)" } ] },
@@ -26,24 +27,29 @@
         { "label": "CW beacon", "downlink": 435795000, "mode": "cw", "loop": "none" } ] },
     { "id": "AO-7", "name": "AO-7", "norad": 7530, "group": "amateur", "note": "Sunlight only; mode A or B by its own timer",
       "transmitters": [
-        { "label": "Mode B transponder", "downlink": 145925000, "downlinkHigh": 145975000, "mode": "usb", "loop": "none", "uplink": 432125000 },
-        { "label": "Mode A transponder", "downlink": 29400000, "downlinkHigh": 29500000, "mode": "usb", "loop": "none", "uplink": 145850000 },
-        { "label": "Beacon", "downlink": 29502000, "mode": "cw", "loop": "none" } ] },
+        { "label": "Mode B transponder", "downlink": 145925000, "downlinkHigh": 145975000, "mode": "usb", "loop": "none", "uplink": 432125000, "modeName": "Mode B" },
+        { "label": "Mode A transponder", "downlink": 29400000, "downlinkHigh": 29500000, "mode": "usb", "loop": "none", "uplink": 145850000, "modeName": "Mode A" },
+        { "label": "Mode A beacon", "downlink": 29502000, "mode": "cw", "loop": "none", "modeName": "Mode A" },
+        { "label": "Mode B beacon", "downlink": 145977500, "mode": "cw", "loop": "none", "note": "AMSAT gives 145.9775 MHz; it has drifted to about 145.973", "modeName": "Mode B" } ] },
     { "id": "AO-73", "name": "AO-73 (FUNcube-1)", "norad": 39444, "group": "amateur", "note": "Transponder in eclipse; telemetry in sunlight",
       "transmitters": [
         { "label": "Transponder", "downlink": 145950000, "downlinkHigh": 145970000, "mode": "usb", "loop": "none", "uplink": 435130000 },
-        { "label": "Telemetry", "downlink": 145935000, "mode": "usb", "loop": "none", "consumer": "bpsk-telemetry", "baud": 1200 } ] },
+        { "label": "Telemetry", "downlink": 145935000, "mode": "usb", "loop": "none", "consumer": "fc-bpsk", "baud": 1200 } ] },
     { "id": "JO-97", "name": "JO-97 (JY1Sat)", "norad": 43803, "group": "amateur", "note": "Linear transponder",
       "transmitters": [
         { "label": "Transponder", "downlink": 145855000, "downlinkHigh": 145875000, "mode": "usb", "loop": "none", "uplink": 435100000 } ] },
     { "id": "MO-122", "name": "MO-122 (MESAT1)", "norad": 60209, "group": "amateur", "note": "Linear transponder",
       "transmitters": [
         { "label": "Transponder", "downlink": 435810000, "downlinkHigh": 435840000, "mode": "usb", "loop": "none", "uplink": 145910000 },
-        { "label": "Telemetry", "downlink": 435800000, "mode": "usb", "loop": "none", "consumer": "bpsk-telemetry", "baud": 1200 } ] },
-    { "id": "SONATE-2", "name": "SONATE-2", "norad": 59112, "group": "amateur", "note": "Telemetry and APRS",
+        { "label": "Telemetry", "downlink": 435800000, "mode": "usb", "loop": "none", "consumer": "fox-bpsk", "baud": 1200 } ] },
+    { "id": "SONATE-2", "name": "SONATE-2", "norad": 59112, "group": "amateur", "note": "Telemetry, APRS and SSTV",
       "transmitters": [
-        { "label": "Telemetry", "downlink": 437025000, "mode": "nfm", "loop": "none", "consumer": "ax25-9600", "baud": 9600 },
-        { "label": "APRS", "downlink": 145825000, "mode": "nfm", "loop": "fll", "consumer": "ax25-1200", "baud": 1200 } ] },
+        { "label": "Telemetry", "downlink": 437025000, "mode": "nfm", "loop": "none", "consumer": "ax25-9600", "baud": 9600, "note": "Germany passes only" },
+        { "label": "APRS", "downlink": 145825000, "mode": "nfm", "loop": "fll", "consumer": "ax25-1200", "baud": 1200 },
+        { "label": "SSTV", "downlink": 145880000, "mode": "nfm", "loop": "fll", "note": "Martin M1 pictures on the university's published schedule" } ] },
+    { "id": "TO-108", "name": "TO-108 (CAS-6)", "norad": 44881, "group": "amateur", "note": "Linear transponder, inverting; on intermittently",
+      "transmitters": [
+        { "label": "Transponder", "downlink": 145915000, "downlinkHigh": 145935000, "mode": "usb", "loop": "none", "uplink": 435280000 } ] },
     { "id": "METEOR-M2-3", "name": "Meteor-M2-3", "norad": 57166, "group": "weather", "note": "Weather images (LRPT); mode and frequency can change",
       "transmitters": [
         { "label": "LRPT", "downlink": 137900000, "mode": "lrpt", "loop": "costas", "consumer": "lrpt", "baud": 72000, "follow": "mode" } ] },
