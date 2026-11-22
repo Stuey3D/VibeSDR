@@ -752,7 +752,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
       profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
-      scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'nautical':'metric',scalePosition:'bottom-left'});
+      scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'nautical':'metric',scalePosition:'${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -1003,7 +1003,10 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
     : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots',
   // ★★ V12 beta90 the scale bar (vibemap.js attach) — NM under the km on the sea and air maps
   scale: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'nautical' : 'metric',
-  scalePosition: 'bottom-left'
+  /* ★ beta91 (Stuart 11-22: "map scale is behind the aircraft list box") the bottom-left corner is the live list's
+   *  (AdsbLiveList / NdbLiveList / TrackLiveList, React Native over this page): there the scale sits bottom-right with the
+   *  zoom keys */
+  scalePosition: '${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
  *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
