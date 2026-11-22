@@ -39,7 +39,7 @@ const subs = new Set<Sub>();
 function onTick() {
   const now = performance.now();
   for (const s of Array.from(subs)) {
-    if (now < s.next) continue;
+    if (now < s.next - TICK_MS / 2) continue;   // ★ half a tick early is on time — else a 5 s beat drifts to 6 s on a 1 s clock
     // ★ the next due time from NOW, not from the missed one: a tick that came late (a busy main thread) sends one
     //   heartbeat, not a burst of the ones it missed
     s.next = now + s.every;

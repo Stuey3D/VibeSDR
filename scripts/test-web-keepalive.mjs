@@ -143,7 +143,7 @@ try {
     }
     ok(dead === 0, `${tag}: the server never released the session for silence (${dead}×)`);
     ok(opens0 === opens1, `${tag}: no socket reopened (${opens0} → ${opens1})`);
-    ok(pings.length >= Math.floor(HIDE_S / 5) - 2 && gap < 10000, `${tag}: pings kept going while hidden (${pings.length}, gap ≤ ${(gap / 1000).toFixed(1)} s)`);
+    ok(pings.length >= Math.floor(HIDE_S / 6) && gap < 10000, `${tag}: pings kept going while hidden (${pings.length}, gap ≤ ${(gap / 1000).toFixed(1)} s)`);
     const st = await ev(`(() => { const t = document.body.innerText; return /reconnecting|connection lost|not connected/i.test(t) ? 'says: ' + (t.match(/[^\\n]*(reconnecting|connection lost|not connected)[^\\n]*/i) || [''])[0] : 'ok'; })()`);
     ok(st === 'ok', `${tag}: shown again, the page says nothing about a lost connection (${st})`);
   }
@@ -152,6 +152,7 @@ try {
   await hiddenRun('NFM, speaker MUTED', async () => {
     await ev(`window.__vibeAudio && (window.__vibeAudio.muted = true)`);
     ok(await ev(`!!window.__vibeAudio && window.__vibeAudio.muted === true`), 'NFM: the speaker muted (gain 0)');
+    if (!EXPECT_DROP) ok(await ev(`window.__vibeAudio.presenceOn === true`), 'NFM muted: the inaudible presence runs (the page still "plays")');
   });
   await hiddenRun('ISM, nothing to hear', async () => {
     await ev(`document.getElementById('mMode')?.click()`);
@@ -160,6 +161,7 @@ try {
     const has = await until(`!!${sel}`, 6000);
     if (has) await ev(`${sel}.click()`);
     ok(has && await until(`!!window.__vibeAudio && window.__vibeAudio.quiet === true`, 8000), 'ISM: on, the audio output held quiet');
+    if (!EXPECT_DROP) ok(await ev(`window.__vibeAudio.presenceOn === false`), 'ISM quiet: NO presence — the output stays let go (the AirPods rule)');
   });
 } catch (e) { ok(false, `driver: ${e?.stack || e}`); }
 finally {
