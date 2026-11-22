@@ -68,6 +68,12 @@ long parseRetryAfter(const std::string& v, std::time_t now);
 
 constexpr const char* kUrl = "https://vibeserver.vibesdr.net/api/sats";
 constexpr long kCheckSec = 24 * 3600;          // daily, like EiBi (the mirror rebuilds every 6 h; elements < 3 d = fresh)
+/* ★★ beta91 AS CURRENT AS WE CAN (Stuart 11-22): the mirror stalled ~25 h, a server synced from it during the stall
+ *  and then sat on that copy for its full day — orbits ~45 h old by the next sync. When the data a sync brings (or a 304
+ *  confirms) is already older than kStaleDataSec — the mirror's OLDEST group's CelesTrak fetch — the next check comes
+ *  after kStaleRecheckSec, not a day. A healthy mirror is never that old (it rebuilds every 6 h), so nothing changes then. */
+constexpr long kStaleDataSec = 12 * 3600;
+constexpr long kStaleRecheckSec = 6 * 3600;
 constexpr long kCheckJitterSec = 4 * 3600;     // ★ per machine, stable: a fleet does not check in at the same hour
 constexpr long kMinAttemptSec = 3600;          // never more often than this from one machine, success or not
 constexpr long kBackoffSec = 3600;             // after a failure, doubling to a day

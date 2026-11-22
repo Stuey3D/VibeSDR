@@ -66,6 +66,7 @@ void ensureDir() { ::mkdir(g_dir.c_str(), 0755); ::mkdir(satDir().c_str(), 0755)
 /** The shared state: one "key value" a line. */
 struct State {
     long long checked = 0, attempt = 0, until = 0; int fails = 0, code = 0; long seed = -1;
+    int stale = 0;   // ★ beta91 the copy was already older than kStaleDataSec when last checked: re-check after kStaleRecheckSec
     std::string etag, lastmod, msg;
 };
 State readState() {
@@ -84,6 +85,7 @@ State readState() {
         else if (k == "fails") s.fails = std::atoi(v.c_str());
         else if (k == "code") s.code = std::atoi(v.c_str());
         else if (k == "seed") s.seed = std::atol(v.c_str());
+        else if (k == "stale") s.stale = std::atoi(v.c_str());
         else if (k == "etag") s.etag = v;
         else if (k == "lastmod") s.lastmod = v;
         else if (k == "msg") s.msg = v;
@@ -101,8 +103,8 @@ void writeState(const State& s) {
     const std::string tmp = statePath() + ".tmp." + std::to_string((long)::getpid());
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return;
-    std::fprintf(f, "checked %lld\nattempt %lld\nuntil %lld\nfails %d\ncode %d\nseed %ld\netag %s\nlastmod %s\nmsg %s\n",
-                 s.checked, s.attempt, s.until, s.fails, s.code, s.seed, oneLine(s.etag).c_str(), oneLine(s.lastmod).c_str(),
+    std::fprintf(f, "checked %lld\nattempt %lld\nuntil %lld\nfails %d\ncode %d\nseed %ld\nstale %d\netag %s\nlastmod %s\nmsg %s\n",
+                 s.checked, s.attempt, s.until, s.fails, s.code, s.seed, s.stale, oneLine(s.etag).c_str(), oneLine(s.lastmod).c_str(),
                  oneLine(s.msg).c_str());
     std::fflush(f);
     ::fsync(fileno(f));
@@ -185,6 +187,26 @@ void curlFetch(const Request& rq, Response& rs) {
     std::remove(hdr.c_str());
 }
 
+/** ★ beta91 how old the mirror's data is: now − the OLDEST group's CelesTrak fetch ("orbits":{"amateur":{"fetched":
+ *  "2026-11-22T16:23:52.000Z"},…}). -1 = not stated (an old mirror, a hand-made file): never called stale. */
+long long dataAgeSec(const std::string& body, std::time_t now) {
+    const size_t o = body.find("\"orbits\"");
+    if (o == std::string::npos) return -1;
+    const size_t end = body.find("\"satellites\"", o);
+    long long oldest = 0;
+    for (size_t at = body.find("\"fetched\":\"", o); at != std::string::npos && (end == std::string::npos || at < end);
+         at = body.find("\"fetched\":\"", at + 1)) {
+        std::tm tm{}; int Y, M, D, h, m, sec;
+        if (std::sscanf(body.c_str() + at + 11, "%4d-%2d-%2dT%2d:%2d:%2d", &Y, &M, &D, &h, &m, &sec) != 6) continue;
+        tm.tm_year = Y - 1900; tm.tm_mon = M - 1; tm.tm_mday = D; tm.tm_hour = h; tm.tm_min = m; tm.tm_sec = sec;
+        const long long t = (long long)timegm(&tm);
+        if (t > 0 && (oldest == 0 || t < oldest)) oldest = t;
+    }
+    return oldest > 0 ? (long long)now - oldest : -1;
+}
+/** The wait after a good check: a day (less this machine's offset), or kStaleRecheckSec while the copy was old. */
+long dueAfterCheck(const State& s) { return s.stale ? kStaleRecheckSec : kCheckSec - (s.seed >= 0 ? s.seed : 0); }
+
 bool eligible(State& s, std::time_t now, bool haveCopy) {
     // ★ a time in the FUTURE beyond any hold we write = a clock that jumped back (an RTC-less Pi): not honoured
     const long long maxAhead = 86400 + kResumeJitterSec + 60;
@@ -193,7 +215,8 @@ bool eligible(State& s, std::time_t now, bool haveCopy) {
     if (s.attempt > 0 && s.attempt <= now && now - s.attempt < (haveCopy ? kMinAttemptSec : kNoCopyMinAttemptSec)) return false;
     if (s.attempt > now && s.attempt - now < 86400) return false;
     if (!haveCopy) return true;
-    const long due = kCheckSec - seedOf(s);
+    seedOf(s);
+    const long due = dueAfterCheck(s);
     return s.checked <= 0 || s.checked > now || now - s.checked >= due;
 }
 
@@ -320,6 +343,7 @@ int refresh(std::string& err) {
     if (rs.code == 304 && haveCopy) {
         std::remove(rq.dest.c_str());
         s.checked = now; s.fails = 0; s.code = 304; s.until = 0; s.msg.clear();
+        { std::string cur; s.stale = readCapped(copyPath(), cur) && dataAgeSec(cur, now) > kStaleDataSec ? 1 : 0; }
         writeState(s);
         return 0;
     }
@@ -344,6 +368,7 @@ int refresh(std::string& err) {
     }
     s.checked = now; s.fails = 0; s.code = 200; s.until = 0; s.msg.clear();
     s.etag = rs.etag; s.lastmod = rs.lastModified;
+    s.stale = dataAgeSec(body, now) > kStaleDataSec ? 1 : 0;
     writeState(s);
     g_loadedMtime = mtimeOf(copyPath());
     if (g_publish) g_publish(body);
@@ -367,7 +392,7 @@ std::string statusJson() {
     const long long m = mtimeOf(copyPath());
     long long next = 0;
     if (s.until > now) next = s.until;
-    else if (m) next = std::max<long long>(s.checked + kCheckSec - (s.seed >= 0 ? s.seed : 0), s.attempt + kMinAttemptSec);
+    else if (m) next = std::max<long long>(s.checked + dueAfterCheck(s), s.attempt + kMinAttemptSec);
     std::string e;
     for (char c : s.msg) { if (c == '"' || c == '\\') e += '\\'; if ((unsigned char)c >= 0x20) e += c; }
     return std::string("{\"source\":\"vibesdr.net\",\"url\":\"") + kUrl + "\",\"have\":" + (m ? "true" : "false")

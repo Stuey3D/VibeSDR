@@ -41,8 +41,13 @@ static long long stateNum(const std::string& st, const char* k) {
     const size_t a = s.find(key);
     return a == std::string::npos ? -1 : std::atoll(s.c_str() + a + key.size());
 }
+static long g_dataAge = 3600;   // ★ beta91 how old the fake mirror's orbits are when it answers (its "fetched" times)
 static std::string satsBody() {
     std::string b = readFile("vibeserver/testdata-sat/sats-2026-11-19.json");
+    char iso[40]; const std::time_t t = g_now - g_dataAge; std::tm tm{}; gmtime_r(&t, &tm);
+    std::strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%S.000Z", &tm);
+    for (size_t at = b.find("2026-11-19T18:00:00.000Z"); at != std::string::npos; at = b.find("2026-11-19T18:00:00.000Z", at + 1))
+        if (at < b.find("\"satellites\"")) b.replace(at, 24, iso);
     return b;
 }
 static long g_retryAfter = 0;   // ★ the fake mirror's Retry-After (s), 0 = none
@@ -272,6 +277,35 @@ int main() {
         CHECK(!vssat::kick() && g_calls == 2, "synced: an open asks nothing (the daily cadence rules)");
         std::system((std::string("rm -rf '") + d4 + "'").c_str());
         vssat::setDir(dir); g_dir = dir;
+    }
+
+    // ★★ beta91 AS CURRENT AS WE CAN (Stuart 11-22): data already old when it arrives → re-check in 6 h, not a day
+    {
+        char t5[] = "/tmp/test-satcat-stale-XXXXXX";
+        const char* d5 = mkdtemp(t5);
+        vssat::setDir(d5); g_dir = d5;
+        g_mode = "ok"; g_calls = 0; g_rand = 0; g_retryAfter = 0; g_dataAge = 21 * 3600;   // the mirror stalled: 21 h old
+        std::string err;
+        CHECK(vssat::refresh(err) == 1 && stateNum(readFile(g_dir + "/sat/sync-state"), "stale") == 1, "a 200 with orbits 21 h old: kept, marked old");
+        g_now += 5 * 3600 + 3500;
+        CHECK(!vssat::needsRefresh(), "5 h 58 min later: not yet");
+        g_now += 200;
+        CHECK(vssat::needsRefresh(), "6 h later: due again (not a day)");
+        g_dataAge = 3600;   // the mirror caught up
+        CHECK(vssat::refresh(err) == 1 && stateNum(readFile(g_dir + "/sat/sync-state"), "stale") == 0, "fresh data (1 h old): no longer old");
+        g_now += 6 * 3600 + 60;
+        CHECK(!vssat::needsRefresh(), "fresh: back to the daily cadence (not due 6 h later)");
+        g_now += 18 * 3600;
+        CHECK(vssat::needsRefresh(), "...due a day after (less this machine's offset, here 0)");
+        // a 304 while the copy is old: still old, so still 6 h
+        g_dataAge = 15 * 3600; CHECK(vssat::refresh(err) == 1, "a copy 15 h old arrives");
+        g_mode = "304"; g_now += 6 * 3600 + 60;
+        CHECK(vssat::needsRefresh() && vssat::refresh(err) == 0 && stateNum(readFile(g_dir + "/sat/sync-state"), "code") == 304
+              && stateNum(readFile(g_dir + "/sat/sync-state"), "stale") == 1, "6 h on, a 304: the copy is now 21 h old, still marked old");
+        g_now += 6 * 3600 + 60;
+        CHECK(vssat::needsRefresh(), "...so asked again 6 h after that");
+        std::system((std::string("rm -rf '") + d5 + "'").c_str());
+        vssat::setDir(dir); g_dir = dir; g_mode = "ok"; g_dataAge = 3600;
     }
 
     std::string cmd = std::string("rm -rf '") + dir + "'";
