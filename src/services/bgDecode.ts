@@ -13,7 +13,9 @@
 
 /** ★ `own` (V12 beta90, never stored): a skimmer row the owner has set to "Own centre…" — the kHz box beside the picker. */
 import { parseSkimBands as parseSkimBandsU, skimAllPoints, skimPointAt, skimPointLabel, type SkimBand, type SkimBands, type SkimPoint } from '../utils/skimBands.ts';
-export type BgVfo = { hz: number; mode: string; dec: string; own?: boolean };
+export type BgVfo = { hz: number; mode: string; dec: string; own?: boolean;
+  /** ★ V12 2026-11-22: a "WEFAX stations" row's ticked frequencies (centre Hz) — stored as "fax"; only that row has it. */
+  fax?: number[] };
 export type BgProfile = { centre: number; from: string; to: string; vfos: BgVfo[]; ism?: string; ais?: boolean };
 /** ★★ V12 beta90 UNATTENDED SATELLITE PASSES — its own switch, carried in the same JSON as "satPasses" (vibe::bg::SatPasses). */
 export type BgSatPasses = { on: boolean; minEl: number; birds: { norad: number; label: string }[] };
@@ -24,6 +26,8 @@ export const BG_SAT_MIN_EL = [10, 20, 30, 45];
 
 /** One decoder as the engine lists it (backgroundCapsJson "decoders"). */
 export type BgDecoderDef = { id: string; label: string; modes: string[]; tone: number; band?: boolean; ndb?: boolean;
+  /** ★ V12 2026-11-22: the WEFAX stations decoder — its row ticks caps.wefaxStations. */
+  fax?: boolean;
   /** ★ V12 beta90: a skimmer's kind and window width (Hz) — its row picks a BAND from caps.skimBands. */
   skim?: BgSkimKind; width?: number };
 export type BgSkimKind = 'cw' | 'rtty' | 'psk';
@@ -43,7 +47,13 @@ export type BgCaps = {
   decoderSlotsDefault: number;
   /** ★ V12 beta90: the downlinks an unattended pass can keep (empty = an older engine: the section is not drawn). */
   satPasses: BgSatDownlink[];
+  /** ★ V12 2026-11-22: the WEFAX stations the engine offers (vibe_wefax_stations.h — only what the radio tunes). */
+  wefaxStations: BgWefaxStation[];
 };
+/** One WEFAX station as the engine lists it (backgroundCapsJson / GET /vibeserver/hardware "wefaxStations"). */
+export type BgWefaxStation = { id: string; call: string; name: string; country: string; freqs: number[] };
+/** ★ At most this many ticks on one WEFAX stations row (the engine's kMaxFaxFreqs — it refuses more, in words). */
+export const BG_FAX_MAX = 8;
 
 /** The editor's demodulators — only those some background decoder works on (the Setup page's BG_DEMODS). */
 export const BG_DEMODS: Record<string, string> = { usb: 'USB', lsb: 'LSB', nfm: 'NFM' };
@@ -92,8 +102,10 @@ export function parseBg(json: string | null | undefined): BgModel {
       m.profiles = Array.isArray(j.profiles) ? j.profiles.map((p: any): BgProfile => {
         const q: BgProfile = {
           centre: +p.centre || 0, from: p.from || '00:00', to: p.to || '00:00',
-          vfos: (Array.isArray(p.vfos) ? p.vfos : []).map((v: any) => ({
-            hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : 'usb', dec: v.dec || 'navtex' })),
+          vfos: (Array.isArray(p.vfos) ? p.vfos : []).map((v: any) => {
+            const o: BgVfo = { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : 'usb', dec: v.dec || 'navtex' };
+            if (Array.isArray(v.fax)) o.fax = v.fax.map(Number).filter((x: number) => x > 0);   // ★ a WEFAX stations row's ticks
+            return o; }),
         };
         if (typeof p.ism === 'string' && p.ism) { q.ism = p.ism; q.centre = 0; q.vfos = []; }
         else if (p.ais === true) { q.ais = true; q.centre = 0; q.vfos = []; }
@@ -108,11 +120,11 @@ export function parseBg(json: string | null | undefined): BgModel {
 
 /** The string to store — the Setup page's bgCollect. Off with nothing set up stores nothing at all (''). */
 export function collectBg(m: BgModel): string {
-  const anything = m.profiles.some((p) => p.ism || p.ais || p.centre > 0 || p.vfos.some((v) => v.hz > 0 || v.dec === 'ndb-skim'));
+  const anything = m.profiles.some((p) => p.ism || p.ais || p.centre > 0 || p.vfos.some((v) => v.hz > 0 || v.dec === 'ndb-skim' || v.dec === 'wefax-stations'));
   const satAny = !!m.sat && (m.sat.on || m.sat.birds.length > 0);
   if (!m.on && !anything && !satAny) return '';
   const out: any = { on: m.on, waitMin: m.waitMin, profiles: m.profiles.map((p) => {
-    const q: any = { centre: p.centre, from: p.from, to: p.to, vfos: p.vfos.map((v) => ({ hz: v.hz, mode: v.mode, dec: v.dec })) };
+    const q: any = { centre: p.centre, from: p.from, to: p.to, vfos: p.vfos.map((v) => (v.fax ? { hz: v.hz, mode: v.mode, dec: v.dec, fax: v.fax } : { hz: v.hz, mode: v.mode, dec: v.dec })) };
     if (p.ism) q.ism = p.ism;
     if (p.ais) q.ais = true;
     return q;
@@ -130,7 +142,7 @@ export function parseBgCaps(json: string | null | undefined): BgCaps | null {
     return {
       decoders: j.decoders.filter((d: any) => d && typeof d.id === 'string').map((d: any) => ({
         id: d.id, label: String(d.label || d.id), modes: Array.isArray(d.modes) ? d.modes : ['usb'], tone: +d.tone || 0,
-        band: !!d.band, ndb: !!d.ndb,
+        band: !!d.band, ndb: !!d.ndb, ...(d.fax ? { fax: true } : {}),
         ...(d.skim === 'cw' || d.skim === 'rtty' || d.skim === 'psk' ? { skim: d.skim as BgSkimKind, width: +d.width || 0 } : {}) })),
       ismBands: Array.isArray(j.ismBands) ? j.ismBands.map(String) : [],
       spotBands: Array.isArray(j.spotBands) ? j.spotBands : [],
@@ -140,6 +152,9 @@ export function parseBgCaps(json: string | null | undefined): BgCaps | null {
       decoderSlotsDefault: j.decoderSlotsDefault > 0 ? j.decoderSlotsDefault : 0,
       satPasses: Array.isArray(j.satPasses) ? j.satPasses.filter((d: any) => d && +d.norad > 0 && typeof d.label === 'string')
         .map((d: any) => ({ norad: +d.norad, label: String(d.label), name: String(d.name || d.norad), what: String(d.what || d.label) })) : [],
+      wefaxStations: Array.isArray(j.wefaxStations) ? j.wefaxStations.filter((x: any) => x && typeof x.id === 'string' && Array.isArray(x.freqs))
+        .map((x: any) => ({ id: x.id, call: String(x.call || ''), name: String(x.name || x.id), country: String(x.country || ''),
+                            freqs: x.freqs.map(Number).filter((f: number) => f > 0) })).filter((x: BgWefaxStation) => x.freqs.length > 0) : [],
     };
   } catch { return null; }
 }
@@ -196,7 +211,27 @@ export function bgSkimDecoderChange(v: BgVfo, from: BgDecoderDef | undefined, to
 }
 
 /** ★ A row whose DECODER sets the frequency — its frequency and demodulator are greyed out (Stuart, 2026-10-27). */
-export const bgDecoderSetsFreq = (dec: string) => dec === 'spots-band' || dec === 'ndb-skim';
+export const bgDecoderSetsFreq = (dec: string) => dec === 'spots-band' || dec === 'ndb-skim' || dec === 'wefax-stations';
+/* ★★ V12 2026-11-22 — WEFAX STATIONS (the Setup page's bgFax* — the same rule and words). A ticked frequency (centre Hz) is
+ *  inside the window when its USB dial, 1.9 kHz below, is. */
+export const bgFaxIn = (hz: number, centre: number, rate: number) => !(centre > 0) || !(rate > 0) || Math.abs(hz - 1900 - centre) <= bgHalfWindow(rate);
+export const bgFaxKhz = (hz: number) => { const k = hz / 1e3; return Math.abs(k * 10 - Math.round(k * 10)) < 1e-6 ? k.toFixed(1) : k.toFixed(2); };
+/** The frequencies this window holds, in the engine's order, at most BG_FAX_MAX — a row's ticks when it becomes WEFAX stations. */
+export function bgFaxDefault(stations: BgWefaxStation[], centre: number, rate: number): number[] {
+  const out: number[] = [];
+  for (const st of stations) for (const hz of st.freqs) if (out.length < BG_FAX_MAX && bgFaxIn(hz, centre, rate) && !out.includes(hz)) out.push(hz);
+  return out;
+}
+/** The line under a WEFAX stations row. */
+export function bgFaxHint(stations: BgWefaxStation[], fax: number[] | undefined, centre: number, rate: number): { bad: boolean; text: string } {
+  if (!stations.length) return { bad: true, text: 'This radio reaches none of the WEFAX stations\u2019 frequencies \u2014 choose another decoder or remove this VFO.' };
+  const f = fax || [];
+  if (!f.length) return { bad: true, text: 'Tick the stations\u2019 frequencies to decode \u2014 those inside this radio\u2019s window run at once, in one decoder slot.' };
+  const n = f.filter((hz) => bgFaxIn(hz, centre, rate)).length;
+  if (!n) return { bad: true, text: 'None of the ticked frequencies is inside this radio\u2019s window at this RF centre \u2014 move the RF centre nearer them, or tick ones near it.' };
+  return { bad: false, text: `Decodes ${n} of the ${f.length} ticked in one decoder slot${n < f.length ? ' (the rest are outside this window)' : ''}`
+    + ' \u2014 each chart is its own gallery item, named by station and frequency. The dial is 1.9 kHz below each, on USB.' };
+}
 /** The half-window every background VFO must sit inside, kept clear of the capture's edge (vibe::bg::halfWindowHz). */
 export const bgHalfWindow = (rate: number) => (rate > 0 ? rate / 2 - Math.min(50000, rate * 0.15) - 3000 : 0);
 

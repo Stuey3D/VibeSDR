@@ -15,6 +15,7 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -218,9 +219,79 @@ static void inRange() {
     ok(sl.inUse() == 0, "stopped: every slot back");
 }
 
+// ── ★★ a picture part-way through is not the first to give way (2026-11-22) ────────────────────────────────────
+static void midChart() {
+    std::printf("── the registry: a VFO mid-picture is passed over while an idle one runs ──\n");
+    {
+        const std::string dir = tmpDir("busy");
+        bg::BgRegistry a, b; a.open(dir, "A"); b.open(dir, "B");
+        a.publishState(std::vector<bg::BgRegistry::Pub>{ {1, true, false}, {2, true, true} });   // A's rank 2 is mid-chart
+        b.publishState(std::vector<bg::BgRegistry::Pub>{ {1, true, false} });
+        int r = 0;
+        ok(bg::BgRegistry::victim(dir, &r) == "A" && r == 1, "★ A's rank 2 is mid-chart: the lowest IDLE one gives way (rank 1, A has more running)");
+        a.publishState(std::vector<bg::BgRegistry::Pub>{ {1, false, false}, {2, true, true} });
+        b.publishState(std::vector<bg::BgRegistry::Pub>{ {1, false, false} });
+        ok(bg::BgRegistry::victim(dir, &r) == "A" && r == 2, "...and when every running VFO is mid-picture, the lowest of them goes");
+        a.publish({ {1, true}, {2, true} });   // the two-field form (an older process) reads as not busy
+        ok(bg::BgRegistry::victim(dir, &r) == "A" && r == 2, "an older process's \"<rank> <running>\" lines read as idle");
+    }
+    std::printf("── a runner: a listener pauses the idle VFO, not the WEFAX VFO part-way through a chart ──\n");
+    const std::string dir = tmpDir("midchart");
+    gallery::Store s; s.setDir(tmpDir("midchart-gal"));
+    FileSlots sl(dir, [] { return 2; }), lis(dir, [] { return 2; });
+    bg::BgRegistry reg; reg.open(dir, "M");
+    const double fs = 250000, centre = 4600000;
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.sampleRate = fs; p.centreHz = centre; p.fftSize = 8192; p.slots = &sl; p.store = &s; p.registry = &reg;
+    p.profile.centreHz = centre;
+    p.profile.vfos = { bg::Vfo{4582000, "usb", "rtty-weather"}, bg::Vfo{4608100, "usb", "wefax"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    ok(r.decodersRunning() == 2 && sl.inUse() == 2, "RTTY (rank 1) and WEFAX (rank 2) take both slots");
+    // the WEFAX carrier 4610.0 kHz: black 1500 Hz / white 2300 Hz above the 4608.1 dial — a start tone, then phasing
+    std::vector<vibedsp::cf32> iq; double ph = 0;
+    auto audioHz = [](double g) { return 1500.0 + 800.0 * g; };
+    auto put = [&](double g) {
+        ph += 2 * M_PI * (4608100.0 + audioHz(g) - centre) / fs; if (ph > M_PI) ph -= 2 * M_PI;
+        iq.push_back(vibedsp::cf32((float)(0.05 * std::cos(ph)), (float)(0.05 * std::sin(ph))));
+        if (iq.size() == 8192) {
+            while (r.queuedForTest() > 60000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            r.feedIq(iq.data(), (int)iq.size()); iq.clear();
+        }
+    };
+    const int spl = (int)(fs / 2);   // 120 LPM
+    for (int k = 0; k < 12 * spl; k++) put((((long)k * 600) / (long)fs) & 1 ? 1.0 : 0.0);    // 6 s of start tone (300 Hz)
+    for (int l = 0; l < 30; l++) for (int i = 0; i < spl; i++) put(i >= spl / 2 && i < spl / 2 + spl / 20 ? 1.0 : 0.0);   // phasing
+    for (int l = 0; l < 120; l++) for (int i = 0; i < spl; i++) put(((i / 900) & 1) ? 0.85 : 0.15);   // the chart begins
+    if (!iq.empty()) { r.feedIq(iq.data(), (int)iq.size()); iq.clear(); }
+    ok(waitFor([&] { r.slotTickForTest(); for (auto& e : bg::BgRegistry::all(dir)) if (e.rank == 2 && e.busy) return true; return false; }, 15000),
+       "★ the WEFAX VFO heard its start tone: published as part-way through a chart");
+    waitFor([&] { return r.queuedForTest() == 0; }, 10000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));   // ★ its decoder catches up with the chart's lines
+    int t1 = -1;
+    if (bg::BgRegistry::makeRoomForListener(lis, dir)) t1 = lis.claim();
+    ok(t1 >= 0 && runningRank(dir, "M", 2) && !runningRank(dir, "M", 1),
+       "★ a listener: the IDLE RTTY VFO (rank 1) gives way — the WEFAX VFO, mid-chart, decodes on");
+    ok(logged("VFO 1 (4582.0 kHz RTTY 50 Bd 450 Hz (weather)) paused"), "logged: VFO 1 … paused");
+    int t2 = -1;
+    if (bg::BgRegistry::makeRoomForListener(lis, dir)) t2 = lis.claim();
+    ok(t2 >= 0 && !runningRank(dir, "M", 2), "a second listener: only the mid-chart VFO is left running, so it goes");
+    const std::string wl = s.listJson("wefax", 10);
+    ok(wl.find("\"partial\":true") != std::string::npos && wl.find("\"hz\":4608100") != std::string::npos,
+       "...and its chart so far is saved, partial: " + wl.substr(0, 160));
+    if (t1 >= 0) lis.release(t1);
+    if (t2 >= 0) lis.release(t2);
+    r.stop();
+    ok(sl.inUse() == 0, "stopped: every slot back");
+}
+
 int main() {
     inRange();
     priority();
+    midChart();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

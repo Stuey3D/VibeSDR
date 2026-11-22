@@ -5,6 +5,7 @@ import {
   parseBg, collectBg, parseBgCaps, bgNewProfile, bgHalfWindow, bgNdbSegment, bgNdbHint, bgBandReach, bgBandHint,
   bgDscWatch, bgLocal, bgTime, bgReach, bgDecoderSetsFreq, type BgSpotBand,
   bgSkimPoints, bgSkimPointAt, bgSkimPointLabel, bgSkimFits, bgSkimFirstFit, bgSkimHint, bgSkimDecoderChange, parseSkimBands, type BgVfo,
+  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX,
 } from '../src/services/bgDecode.ts';
 
 let pass = 0, fail = 0;
@@ -124,6 +125,24 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
   ok(n.hz === 7052000, 'NAVTEX → RTTY skimmer 24 kHz lands on 40 m, 7052 (the first window that fits)');
   ok(JSON.parse(collectBg({ ...parseBg(''), on: true, profiles: [{ centre: 7000000, from: '00:00', to: '00:00', vfos: [o] }] })).profiles[0].vfos[0].own === undefined,
      '"own" is the editor\'s, never stored');
+}
+
+// ── ★★ V12 2026-11-22 WEFAX stations (the Setup page's rules and words, test-setup-bg-wefax.mjs) ──
+{
+  const fx = '{"on":true,"waitMin":5,"profiles":[{"centre":6000000,"from":"00:00","to":"00:00","vfos":[{"hz":0,"mode":"usb","dec":"wefax-stations","fax":[4610000,7880000]},{"hz":4608100,"mode":"usb","dec":"wefax"}]}]}';
+  ok(collectBg(parseBg(fx)) === fx, '★ a WEFAX stations row round-trips byte for byte ("fax" on that row only)');
+  ok(collectBg(parseBg('{"on":false,"profiles":[{"centre":0,"vfos":[{"hz":0,"mode":"usb","dec":"wefax-stations","fax":[4610000]}]}]}')) !== '', 'a stations row alone counts as something set up (its hz is 0)');
+  ok(bgDecoderSetsFreq('wefax-stations'), 'its row has no frequency of its own');
+  const caps = parseBgCaps('{"decoders":[{"id":"wefax","label":"WEFAX (120 LPM)","modes":["usb"],"tone":1900},{"id":"wefax-stations","label":"WEFAX stations (several in one slot)","modes":["usb"],"tone":1900,"fax":true}],'
+    + '"wefaxStations":[{"id":"gya","call":"GYA","name":"Northwood","country":"United Kingdom","freqs":[2618500,4610000,8040000,11086500]},{"id":"dwd","call":"DDH3 / DDK3 / DDK6","name":"Pinneberg (DWD)","country":"Germany","freqs":[3855000,7880000,13882500]}]}')!;
+  ok(caps.decoders[1].fax === true && caps.wefaxStations.length === 2 && caps.wefaxStations[0].freqs[1] === 4610000, 'the engine\'s caps carry the decoder (fax) and the stations');
+  ok(parseBgCaps('{"decoders":[{"id":"navtex","modes":["usb"]}]}')!.wefaxStations.length === 0, 'an older engine: no stations (the decoder is not offered)');
+  ok(bgFaxIn(4610000, 4400000, 2000000) && !bgFaxIn(8040000, 4400000, 2000000), '4610 is inside a 2 MS/s window at 4.4 MHz, 8040 is not');
+  ok(bgFaxDefault(caps.wefaxStations, 4400000, 2000000).join() === '4610000,3855000', 'a row becoming WEFAX stations ticks what the window holds: 4610, 3855');
+  ok(bgFaxKhz(4610000) === '4610.0' && bgFaxKhz(12629250) === '12629.25', 'kHz as the schedule writes it');
+  ok(bgFaxHint(caps.wefaxStations, [4610000, 8040000], 4400000, 2000000).text.startsWith('Decodes 1 of the 2 ticked in one decoder slot (the rest are outside this window)'), 'its line');
+  ok(bgFaxHint(caps.wefaxStations, [8040000], 4400000, 2000000).bad && bgFaxHint([], [4610000], 4400000, 2000000).bad, 'none in the window, or no station reachable: said in red');
+  ok(BG_FAX_MAX === 8, 'at most 8 ticks (the engine\'s kMaxFaxFreqs)');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

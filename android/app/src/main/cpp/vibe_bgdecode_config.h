@@ -5,6 +5,7 @@
 #include "vibe_antswitch.h"      // ★ the strict little JSON reader — reused, not re-written
 #include "vibe_gallery.h"        // jsonEsc
 #include "vibe_ism_bands.h"      // ★ an ISM profile names one of these bands
+#include "vibe_wefax_stations.h" // ★ a "WEFAX stations" VFO ticks frequencies from this list
 
 #include <algorithm>
 #include <cctype>
@@ -22,7 +23,14 @@ struct Vfo {
     double      hz = 0;            ///< the DIAL (carrier) — what a listener would type
     std::string mode = "usb";      ///< "usb" | "lsb"
     std::string dec = "navtex";    ///< see kDecoders
+    /** ★★ V12 2026-11-22 — a "WEFAX stations" VFO (dec "wefax-stations"): the stations' frequencies the owner ticked
+     *  (centre Hz, vibe_wefax_stations.h). Its `hz` means nothing (0); every ticked frequency inside the capture runs a
+     *  WEFAX decoder of its own, all in the VFO's ONE decoder slot. Stored as "fax":[4610000,7880000]; absent otherwise. */
+    std::vector<double> fax;
 };
+/** ★ At most this many frequencies on one "WEFAX stations" VFO: each is a demodulator and a WEFAX decoder (bounded: a
+ *  chart in progress is ≤ 5.4 MB in its gallery copy), so 8 is ≤ ~50 MB in the worst case of eight charts at once. */
+constexpr size_t kMaxFaxFreqs = 8;
 struct Profile {
     double centreHz = 500000;
     int    fromMin = 0, toMin = 0; ///< UTC minutes of the day; equal = all day
@@ -136,6 +144,11 @@ inline const std::vector<DecoderDef>& decoders() {
         //    ★ ITS FREQUENCY MEANS NOTHING — the decoder sets it (ndbSegment): the setup page greys the box out and the row
         //      stores hz 0. "usb" only because a VFO row has a demodulator — none runs (it is fed IQ).
         { "ndb-skim",     "NDB skimmer (summary)",        "",       "ndb",   "usb",     0,    0,   0,     false, false, 0 },
+        // ★★ V12 2026-11-22 — WEFAX STATIONS (Stuart: "i'd also like the other wefax frequencies covered"): the owner ticks
+        //    stations' frequencies (vibe_wefax_stations.h, the NWS worldwide schedule) and every ticked one inside the
+        //    capture runs its own WEFAX demodulator and decoder — all in ONE decoder slot, each chart its own gallery item
+        //    named by station and frequency. Its row's frequency means nothing (hz 0); the dial of each is 1.9 kHz below.
+        { "wefax-stations", "WEFAX stations (several in one slot)", "wefax", "wefax", "usb", 1900, 0, 0,  false, false, 0 },
     };
     return d;
 }
@@ -173,6 +186,8 @@ inline std::string skimKindOf(const std::string& dec) {
 inline bool isBandSpots(const Vfo& v) { return v.dec == "spots-band"; }
 /** ★ An NDB skimmer VFO (V12 2026-10-27): fed one IQ slice over the NDB band, no demodulator, its frequency ignored. */
 inline bool isNdbSkim(const Vfo& v) { return v.dec == "ndb-skim"; }
+/** ★★ A "WEFAX stations" VFO (V12 2026-11-22): a WEFAX decoder per ticked frequency (Vfo::fax), one slot, hz ignored. */
+inline bool isFaxStations(const Vfo& v) { return v.dec == "wefax-stations"; }
 /** ★★ THE NDB BAND, as the listener's NDB mode has it (vibe_ndb_service.h kBandLoHz / kBandHiHz / kMinSpanHz — the runner
  *  static_asserts they agree; this header is read by the daemon's save path without the decoder). */
 constexpr double kNdbBandLoHz = 190e3, kNdbBandHiHz = 535e3, kNdbMinSpanHz = 100e3;
@@ -209,7 +224,7 @@ inline std::string attachMsg(const Vfo& v) {
                       d->toneHz, d->shift, d->baud, inv ? "true" : "false");
     // ★ WEFAX unattended: wait for the START TONE and end on the STOP TONE, so every chart is one item with its
     //   phasing and header bar — never a run-on strip (the UberSDR lesson, docs/v12/DECODERS-GALLERY.md).
-    else if (id == "wefax")
+    else if (id == "wefax" || id == "wefax-stations")
         std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
                       "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
     else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
@@ -276,6 +291,9 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
                     if (const auto* h = vj.get("hz")) if (h->kind == antswitch::Json::Num) v.hz = h->n;
                     v.mode = vj.str("mode", "usb");
                     v.dec  = vj.str("dec", "navtex");
+                    if (const auto* fx = vj.get("fax"); fx && fx->kind == antswitch::Json::Arr)
+                        for (const auto& fj : fx->a)
+                            if (fj.kind == antswitch::Json::Num && std::isfinite(fj.n) && fj.n > 0 && v.fax.size() < 64) v.fax.push_back(fj.n);
                     p.vfos.push_back(v);
                 }
             /* ★★ BACKWARD COMPATIBILITY (V12 2026-10-27): a profile saved while NDB was a whole-radio profile kind
@@ -306,7 +324,13 @@ inline std::string toJson(const Config& c) {
             const auto& v = p.vfos[k];
             if (k) o += ',';
             std::snprintf(b, sizeof b, "%.0f", v.hz);
-            o += std::string("{\"hz\":") + b + ",\"mode\":\"" + gallery::jsonEsc(v.mode) + "\",\"dec\":\"" + gallery::jsonEsc(v.dec) + "\"}";
+            o += std::string("{\"hz\":") + b + ",\"mode\":\"" + gallery::jsonEsc(v.mode) + "\",\"dec\":\"" + gallery::jsonEsc(v.dec) + "\"";
+            if (!v.fax.empty()) {   // ★ a WEFAX stations VFO's ticks — absent on every other row
+                o += ",\"fax\":[";
+                for (size_t q = 0; q < v.fax.size(); q++) { std::snprintf(b, sizeof b, "%.0f", v.fax[q]); o += (q ? "," : "") + std::string(b); }
+                o += "]";
+            }
+            o += "}";
         }
         o += "]";
         // ★ V12 2026-10-25: absent on an ordinary profile, so older settings read back unchanged (the page's own order)
@@ -341,6 +365,11 @@ inline int activeProfile(const Config& c, int m) {
 /** ★ How far either side of the RF centre a VFO may sit at `rate` — the SAME guard retune() keeps from the edge of the
  *  capture (rate/2 − min(50 kHz, 15 %)), less a passband's worth (3 kHz) so the whole signal is inside. */
 inline double halfWindowHz(double rate) { return rate / 2.0 - std::min(50000.0, rate * 0.15) - 3000.0; }
+/** ★ Is a ticked WEFAX frequency (centre Hz) inside the capture at `centre`/`rate`? Its USB dial must be, by the SAME rule
+ *  as any background VFO's dial (halfWindowHz keeps a passband clear of the edge). */
+inline bool faxInWindow(double faxHz, double centre, double rate) {
+    return rate <= 0 || std::fabs(wefaxst::dialOf(faxHz) - centre) <= halfWindowHz(rate);
+}
 
 /** ★★ WHAT AN NDB SKIMMER VFO COVERS: as much of 190–535 kHz as the capture at `centre` and `rate` holds — inside the same
  *  guard every background VFO keeps from the capture's edge (halfWindowHz), clipped to what the radio reaches
@@ -438,6 +467,33 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
                                   vn.c_str(), kNdbMinSpanHz / 1e3, rate / 1e3, khz(centre).c_str(), std::max(0.0, centre - half) / 1e3, (centre + half) / 1e3,
                                   hi > lo ? (std::string(", only ") + khz(hi - lo) + " of the band").c_str() : ", none of the band",
                                   lockCentre > 0 ? "On a locked radio the lock must cover the band." : "Move the RF centre nearer the band (e.g. 362.75 kHz), or remove the NDB skimmer.");
+                    err = b; return false;
+                }
+                continue;
+            }
+            /* ★★ A WEFAX STATIONS VFO (V12 2026-11-22): no frequency of its own — its ticks. At least one, at most
+             *  kMaxFaxFreqs, each from the station list (never a typed number), none twice, and at least one inside the
+             *  capture (the rest wait: a ticked frequency outside it is simply not decoded while the radio is elsewhere). */
+            if (isFaxStations(v)) {
+                if (v.mode != "usb") { err = vn + ": WEFAX stations run on USB"; return false; }
+                if (v.fax.empty()) { err = vn + ": tick at least one WEFAX station frequency"; return false; }
+                if (v.fax.size() > kMaxFaxFreqs) {
+                    err = vn + ": " + std::to_string(v.fax.size()) + " WEFAX frequencies ticked \xe2\x80\x94 one VFO runs at most "
+                        + std::to_string(kMaxFaxFreqs) + ". Untick " + std::to_string(v.fax.size() - kMaxFaxFreqs) + ", or add a second WEFAX stations VFO.";
+                    return false;
+                }
+                int inWin = 0;
+                for (size_t q = 0; q < v.fax.size(); q++) {
+                    if (!wefaxst::known(v.fax[q])) { err = vn + ": " + khz(v.fax[q]) + " is not a WEFAX station frequency in the list"; return false; }
+                    for (size_t r = 0; r < q; r++) if (wefaxst::sameHz(v.fax[q], v.fax[r])) { err = vn + ": " + khz(v.fax[q]) + " is ticked twice"; return false; }
+                    if (faxInWindow(v.fax[q], centre, rate)) ++inWin;
+                }
+                if (rate > 0 && inWin == 0) {
+                    char b[360];
+                    const double half = halfWindowHz(rate);
+                    std::snprintf(b, sizeof b, "%s: none of the ticked WEFAX frequencies is inside this radio's window \xe2\x80\x94 at %.0f kS/s around %s it sees "
+                                  "%.1f\xe2\x80\x93%.1f kHz. %s", vn.c_str(), rate / 1e3, khz(centre).c_str(), std::max(0.0, centre - half) / 1e3, (centre + half) / 1e3,
+                                  lockCentre > 0 ? "On a locked radio they must sit inside it." : "Move the RF centre nearer them, or tick frequencies near it.");
                     err = b; return false;
                 }
                 continue;

@@ -237,11 +237,24 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
  *    stop; SSTV 0x07 start(u32 w, u32 h) · 0x01 line(u32 y, u32 w, rgb) · 0x02 mode name · 0x05 complete. A redraw
  *    re-sends lines by index, so they simply replace.
  *  ★ Bounded: a chart is at most kMaxLines lines (~5 MB grey); past that it is saved and a new one begun. Too few lines
- *    to be a picture (noise that tripped a start tone) are not kept. */
+ *    to be a picture (noise that tripped a start tone) are not kept.
+ *  ★★ A LISTENER'S WEFAX IS KEPT ONLY IF IT WAS A CHART (Stuart 2026-11-22: "lots of dead wefax false starts"). A
+ *    listener's decoder free-runs (no auto_start — it draws whatever is on the dial), so tuning round with WEFAX open
+ *    left a 58–100-line strip of noise in the gallery at every retune. Now a listener's strip is kept only if a START
+ *    TONE or PHASING was seen for it (0x02 start, or 0x04 phase 1 start tone / 2 phasing), or it ran kChartLines (600
+ *    lines = 5 minutes at 120 LPM — a chart joined part-way, with no start of its own) — otherwise it is dropped
+ *    silently.
+ *  ★★ …AND A BACKGROUND CHART BEGUN WITHOUT EITHER (2026-11-22): waiting in the background, the decoder now also begins a
+ *    chart that comes OUT OF THE NOISE (Northwood faded in 2½ minutes into a chart — wefax_decoder.cpp), or after a stop
+ *    tone with no start tone. Such a chart is missing its top, so it is held to the same 600 lines and, kept, is marked
+ *    PARTIAL. A background 0x02 counts as a start when the decoder's last phase report was a start tone or phasing (1/2;
+ *    the start tone is reported before its START fires) — or when none has come (an older decoder). */
 class GalleryImageTap : public DecoderTap {
 public:
-    static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096;
-    GalleryImageTap(gallery::Store& store, gallery::Meta meta) : store_(store), meta_(std::move(meta)) { sstv_ = meta_.kind == "sstv"; }
+    static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096, kChartLines = 600;
+    GalleryImageTap(gallery::Store& store, gallery::Meta meta) : store_(store), meta_(std::move(meta)) {
+        sstv_ = meta_.kind == "sstv"; listener_ = meta_.origin != "background";
+    }
     ~GalleryImageTap() override { finish(true); }
     void frame(const uint8_t* d, size_t n) override {
         if (n < 1) return;
@@ -250,15 +263,17 @@ public:
         auto u32 = [&](size_t o) { return (uint32_t)d[o] << 24 | (uint32_t)d[o + 1] << 16 | (uint32_t)d[o + 2] << 8 | d[o + 3]; };
         const uint8_t op = d[0];
         if (!sstv_) {
-            if (op == 0x02 && n == 1) { save(true); begin(0, 0); return; }
+            if (op == 0x02 && n == 1) { save(true); begin(0, 0); marked_ = listener_ || lastPhase_ < 0 || lastPhase_ == 1 || lastPhase_ == 2; return; }
             if (op == 0x03 && n == 1) { save(false); return; }
+            // ★ 0x04 <phase>: a start tone (1) or phasing (2) heard — whatever is drawn next belongs to a real chart
+            if (op == 0x04 && n == 2) { lastPhase_ = d[1]; if (d[1] == 1 || d[1] == 2) { if (open_) marked_ = true; else pendingMark_ = true; } return; }
             if (op == 0x01 && n >= 9) {
                 const uint32_t ln = u32(1), w = u32(5);
                 if (w == 0 || w > kMaxWidth || n < 9 + (size_t)w) return;
                 if (!open_) begin(0, 0);
                 if (w_ == 0) w_ = w;
                 if (w != w_) return;
-                if (ln >= kMaxLines) { save(true); begin(0, 0); w_ = w; }
+                if (ln >= kMaxLines) { save(true); begin(0, 0); w_ = w; marked_ = true; }   // ★ the rest of a long chart
                 const uint32_t row = ln >= kMaxLines ? ln % kMaxLines : ln;
                 put(row, d + 9, w);
             }
@@ -280,10 +295,14 @@ public:
         save(true);
     }
     size_t saved() const { std::lock_guard<std::mutex> lk(m_); return saved_; }
+    size_t savedCount() const override { return saved(); }
+    /** ★ Listener strips dropped (no start tone, no phasing, under kChartLines) — for the tests. */
+    size_t dropped() const { std::lock_guard<std::mutex> lk(m_); return dropped_; }
 
 private:
     void begin(uint32_t w, uint32_t h) {
         open_ = true; px_.clear(); lines_ = 0; maxRow_ = 0; started_ = gallery::nowUtc();
+        marked_ = pendingMark_; pendingMark_ = false;
         w_ = w > kMaxWidth ? 0 : w; h_ = h > 2000 ? 0 : h;
         if (sstv_ && w_ && h_) px_.assign((size_t)w_ * h_ * 3, 0);
     }
@@ -300,6 +319,10 @@ private:
         open_ = false;
         const uint32_t minLines = sstv_ ? 16 : 50;
         if (w_ == 0 || lines_ < minLines || maxRow_ == 0) { px_.clear(); return; }
+        // ★★ a WEFAX strip with no start tone, no phasing and under 5 minutes: noise from tuning round (a listener's), or a
+        //    background chart out of the noise too short to be worth keeping — dropped. A background one kept is PARTIAL.
+        if (!sstv_ && !marked_ && lines_ < kChartLines) { px_.clear(); ++dropped_; return; }
+        if (!sstv_ && !listener_ && !marked_) partial = true;
         const int ch = sstv_ ? 3 : 1;
         const uint32_t h = sstv_ ? (partial ? maxRow_ : h_) : maxRow_;
         px_.resize((size_t)w_ * h * ch, 255);
@@ -309,7 +332,8 @@ private:
         gallery::Meta m = meta_;
         m.utc = started_;
         m.partial = partial;
-        m.title = (sstv_ ? "SSTV" + (mode_.empty() ? std::string() : " \xc2\xb7 " + mode_) : std::string("WEFAX chart"))
+        m.title = (sstv_ ? "SSTV" + (mode_.empty() ? std::string() : " \xc2\xb7 " + mode_)
+                         : meta_.station.empty() ? std::string("WEFAX chart") : "WEFAX \xc2\xb7 " + meta_.station)
                 + " \xc2\xb7 " + std::to_string(w_) + "\xc3\x97" + std::to_string(h);
         if (!store_.add(m, "png", png).empty()) ++saved_;
     }
@@ -317,6 +341,9 @@ private:
     gallery::Meta meta_;
     mutable std::mutex m_;
     bool sstv_ = false, open_ = false, done_ = false;
+    bool listener_ = false, marked_ = false, pendingMark_ = false;   // ★ a listener's tap; this chart had a start tone / phasing
+    int lastPhase_ = -1;                                              // ★ the decoder's last 0x04 phase report (-1 none yet)
+    size_t dropped_ = 0;
     uint32_t w_ = 0, h_ = 0, lines_ = 0, maxRow_ = 0;
     std::vector<uint8_t> px_;
     std::string mode_;
@@ -884,7 +911,10 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
  *    half a second. Appends, so two listeners at once pause two VFOs, not one twice. */
 class BgRegistry {
 public:
-    struct Entry { std::string id; int rank = 0; bool running = false; };
+    /** ★ `busy` (2026-11-22): a picture decoder part-way through a chart — paused for a listener only when nothing idle is
+     *  running (the state line's optional third field; an older process writes two, read as not busy). */
+    struct Entry { std::string id; int rank = 0; bool running = false; bool busy = false; };
+    struct Pub { int rank = 0; bool running = false; bool busy = false; };
     BgRegistry() = default;
     ~BgRegistry() { close(); }
     BgRegistry(const BgRegistry&) = delete;
@@ -909,10 +939,15 @@ public:
     const std::string& id() const { return id_; }
     /** This radio's VFOs, rank and running/paused. */
     void publish(const std::vector<std::pair<int, bool>>& v) {
+        std::vector<Pub> p; for (auto& e : v) p.push_back({ e.first, e.second, false });
+        publishState(p);
+    }
+    /** …and whether each is part-way through a picture ("<rank> <running> <busy>"). */
+    void publishState(const std::vector<Pub>& v) {
         std::lock_guard<std::mutex> lk(m_);
         if (fd_ < 0) return;
         std::string b;
-        for (auto& e : v) b += std::to_string(e.first) + (e.second ? " 1\n" : " 0\n");
+        for (auto& e : v) b += std::to_string(e.rank) + (e.running ? " 1" : " 0") + (e.busy ? " 1\n" : "\n");
         if (b == last_) return;
         last_ = b;
         if (::ftruncate(fd_, 0) == 0 && !b.empty()) (void)!::pwrite(fd_, b.data(), b.size(), 0);
@@ -943,22 +978,33 @@ public:
             const ssize_t got = alive ? ::pread(fd, b, sizeof b - 1, 0) : 0;
             ::close(fd);
             if (got <= 0) continue;
-            const char* q = b;
-            int rank = 0, run = 0, used = 0;
-            while (std::sscanf(q, "%d %d\n%n", &rank, &run, &used) == 2 && used > 0) { out.push_back({ id, rank, run == 1 }); q += used; }
+            // ★ a line a VFO: "<rank> <running>" or "<rank> <running> <busy>"
+            for (const char* q = b; *q; ) {
+                const char* e = std::strchr(q, '\n');
+                const std::string line(q, e ? (size_t)(e - q) : std::strlen(q));
+                int rank = 0, run = 0, busy = 0;
+                const int k = std::sscanf(line.c_str(), "%d %d %d", &rank, &run, &busy);
+                if (k < 2) break;
+                out.push_back({ id, rank, run == 1, k >= 3 && busy == 1 });
+                if (!e) break;
+                q = e + 1;
+            }
         }
         ::closedir(d);
         return out;
     }
     /** ★ The radio whose background gives way: the lowest-ranked RUNNING VFO box-wide; a tie, the radio running the most.
      *  "" = no background decoder is running anywhere. */
+    /** ★★ (2026-11-22) A VFO part-way through a picture (busy) is passed over while an idle one is running anywhere: a
+     *  chart is 10–25 minutes and is lost from where it was cut; an idle VFO loses nothing. */
     static std::string victim(const std::string& dir, int* rankOut = nullptr) {
         const auto v = all(dir);
         std::map<std::string, int> running;
-        for (auto& e : v) if (e.running) running[e.id]++;
+        bool idle = false;
+        for (auto& e : v) if (e.running) { running[e.id]++; if (!e.busy) idle = true; }
         std::string id; int rank = 0;
         for (auto& e : v) {
-            if (!e.running) continue;
+            if (!e.running || (idle && e.busy)) continue;
             if (id.empty() || e.rank > rank || (e.rank == rank && running[e.id] > running[id])) { id = e.id; rank = e.rank; }
         }
         if (rankOut) *rankOut = rank;
@@ -1067,6 +1113,8 @@ public:
         std::function<std::shared_ptr<NdbFeed>(const NdbStart&)> ndbMake;
         std::function<bool(double& lo, double& hi)> ndbReach;
         std::function<std::string()> ndbWhyNot;
+        /** ★ The WEFAX VFOs' hourly log line's "hour" (DecoderHost::Env::wefaxHourSecs) — a test shortens it. */
+        double wefaxHourSecs = 3600.0;
     };
     BgRunner() = default;
     ~BgRunner() { stop(false); }
@@ -1105,6 +1153,15 @@ public:
              *  NDB tap cuts it (vibe_wide_tap.h), to the host's skimmer (Params::ndbMake). */
             c->ndb = isNdbSkim(c->vfo);
             if (c->ndb && !p_.ndbMake) c->blockWhy = "the NDB skimmer is not available on this server";
+            /* ★★ A WEFAX STATIONS VFO (V12 2026-11-22): a channel per ticked frequency — its own slice, USB demodulator and
+             *  WEFAX decoder (vibe_wefax_stations.h) — and ONE decoder slot for the lot (claimed by startFax). */
+            c->fax = isFaxStations(c->vfo);
+            if (c->fax) {
+                buildFax(*c, (int)i);
+                place(*c);
+                chans_.push_back(std::move(c));
+                continue;
+            }
             const double need = c->skim ? passbandHz(c->vfo) / 0.92 : std::max(passbandHz(c->vfo) * 2.5, 24000.0);
             int b = 64;
             while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
@@ -1127,6 +1184,8 @@ public:
             DecoderHost::Env env;
             env.log = p_.log;
             env.slots = p_.slots;
+            // ★★ a WEFAX VFO says what it heard every hour (the decoder's evidence — "no signal" vs "missed the start")
+            if (c->vfo.dec == "wefax") { env.wefaxHourly = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + upperMode(c->vfo.mode) + ")"; env.wefaxHourSecs = p_.wefaxHourSecs; }
             // ★ A Band VFO's "dial" is its span's centre: the host sizes the slice and finds the band's extra slices by it.
             const double dialHz = c->band ? c->bandCentre : c->vfo.hz;
             env.dialHz = [dialHz] { return dialHz; };
@@ -1248,6 +1307,7 @@ public:
                 place(*c);
                 if (was && !c->inWindow) { if (c->decoding) { pauseOne(*c, "left the radio's window"); } ++left; }
                 if (!was && c->inWindow) ++back;
+                if (c->fax && c->decoding) syncFax(*c);   // ★ its frequencies that left the window stop, those that came in start
             }
         }
         if (back) lastResume_ = {};    // ★ come back promptly (the next slotTick)
@@ -1265,7 +1325,7 @@ public:
         { std::lock_guard<std::mutex> lk(qm_); run_.store(false); q_.clear(); qSamples_ = 0; }
         qcv_.notify_all();
         if (th_.joinable()) th_.join();
-        for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); }
+        for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
         chans_.clear();
         if (p_.registry) p_.registry->publish({});
         if (was && sayIt) say("background decoding stopped");
@@ -1320,7 +1380,9 @@ public:
         for (auto& c : chans_) {
             uint64_t ndbNs = 0;
             if (c->ndb) { std::lock_guard<std::mutex> nl(c->ndbM); ndbNs = c->ndbCpuDone + (c->ndbFeed ? c->ndbFeed->cpuNs() : 0); }
-            cur.vfo.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0) + ndbNs);
+            uint64_t faxNs = 0;
+            for (auto& sb : c->subs) faxNs += sb->host->cpuNs();
+            cur.vfo.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0) + ndbNs + faxNs);
         }
         if (!cpu_.empty() && cpu_.back().vfo.size() != cur.vfo.size()) cpu_.clear();   // ★ a restart: new VFOs
         if (cpu_.empty() || now - cpu_.back().t >= std::chrono::milliseconds(1500)) cpu_.push_back(cur);
@@ -1358,6 +1420,8 @@ public:
                // ★ V12: an NDB skimmer names the part of the band it covers and how it is doing ("12 beacons identified of 41 carriers")
                + (c.ndb ? ",\"ndbLo\":" + std::to_string((long long)std::llround(c.ndbLo)) + ",\"ndbHi\":" + std::to_string((long long)std::llround(c.ndbHi))
                           + ",\"ndb\":\"" + gallery::jsonEsc(nf ? nf->brief() : std::string()) + "\"" : std::string())
+               // ★ V12 2026-11-22: a WEFAX stations VFO lists its frequencies — decoding, waiting (out of the window) or mid-chart
+               + (c.fax ? ",\"fax\":" + faxJson(c) : std::string())
                // ★ FT8/FT4: the summary's running count, so a quiet card is not read as "no decodes"
                + (d && !c.ndb && (!*d->ext || d->widthHz > 0) ?",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
                                 + ",\"countries\":" + std::to_string((unsigned long long)c.liveCountries->load(std::memory_order_relaxed)) : std::string())
@@ -1396,6 +1460,20 @@ private:
         int ndbSlot = -1;
         uint64_t ndbCpuDone = 0, ndbDropDone = 0, ndbLastDrop = 0;   // ★ stopped feeds' CPU and drops, so the counters only rise
         std::shared_ptr<NdbFeed> feed() { std::lock_guard<std::mutex> lk(ndbM); return ndbFeed; }
+        // ★★ V12 2026-11-22: a WEFAX stations VFO — a channel per ticked frequency, and the one decoder slot it holds.
+        struct FaxSub {
+            double centreHz = 0, dialHz = 0;     // ★ the station's assigned (centre) frequency, and its USB dial 1.9 kHz below
+            std::string label;                   // "Northwood GYA 4610.0 kHz"
+            int bins = 0, centreBin = 0; double rate = 0;
+            std::vector<cf32> slice;
+            vibedsp::Channelizer::ExtractCtx ectx;
+            std::unique_ptr<vibedsp::RxPipeline> rx;
+            std::shared_ptr<DecoderHost> host;
+            bool inWindow = false, running = false;
+        };
+        bool fax = false;
+        std::vector<std::unique_ptr<FaxSub>> subs;
+        int faxSlot = -1, faxRunning = -1;
         double sliceRf = 0;                          // ★ the RF frequency at the centre of this VFO's slice
         bool decoding = false;
         bool inWindow = true;    // ★ inside what the radio captures now (a listener's dial may have moved it away)
@@ -1412,6 +1490,7 @@ private:
     void place(Chan& c) {
         const double binHz = p_.sampleRate / (double)p_.fftSize;
         if (c.ndb) { placeNdb(c, binHz); return; }
+        if (c.fax) { placeFax(c, binHz); return; }
         const double at = c.band ? c.bandCentre : c.vfo.hz;
         const double off = at - p_.centreHz - p_.hwOffsetHz;
         c.inWindow = std::fabs(at - p_.centreHz) <= halfWindowHz(p_.sampleRate);
@@ -1448,6 +1527,122 @@ private:
         const bool moved = std::fabs(lo - c.ndbLo) > 1 || std::fabs(hi - c.ndbHi) > 1;
         c.ndbLo = lo; c.ndbHi = hi;
         if (moved) if (auto f = c.feed()) f->aim(p_.centreHz + p_.hwOffsetHz, lo, hi);
+    }
+    /** ★★ A WEFAX stations VFO's channels (V12 2026-11-22): one per ticked frequency, each exactly what a single WEFAX VFO
+     *  is — its slice off the shared FFT, a USB demodulator at 48 kHz, a DecoderHost running "wefax" with the background
+     *  options — but holding NO slot of its own (the VFO holds one for all) and keeping no joiner's replay (noReplay). Each
+     *  chart goes to the gallery as its own item, titled by station and frequency, filed at that frequency's dial. */
+    void buildFax(Chan& c, int i) {
+        for (double f : c.vfo.fax) {
+            if (c.subs.size() >= kMaxFaxFreqs) break;
+            auto sb = std::make_unique<Chan::FaxSub>();
+            sb->centreHz = f; sb->dialHz = wefaxst::dialOf(f); sb->label = wefaxst::label(f);
+            const double need = std::max(2700.0 * 2.5, 24000.0);
+            int b = 64;
+            while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
+            sb->bins = std::min(b, p_.fftSize);
+            sb->rate = p_.sampleRate * (double)sb->bins / (double)p_.fftSize;
+            sb->slice.assign((size_t)sb->bins, cf32{0.0f, 0.0f});
+            sb->rx.reset(new vibedsp::RxPipeline());
+            vibedsp::RxPipeline::Callbacks cb{};
+            cb.ctx = sb.get();
+            cb.audio = &BgRunner::faxAudioCb;
+            { const std::string lb = "background VFO " + std::to_string(i + 1) + " (" + sb->label + ")";
+              sb->rx->setLogLabel([lb] { return lb; }); }
+            sb->rx->start(sb->rate, 1024, 10.0, 48000, cb);
+            sb->rx->setRdsEnabled(false);
+            DecoderHost::Env env;
+            env.log = p_.log;
+            env.slots = nullptr;                 // ★ the VFO's one slot covers every channel
+            env.noReplay = true;
+            const double dial = sb->dialHz;
+            env.dialHz = [dial] { return dial; };
+            env.rfOfAudio = [dial](double a) { return dial + a; };
+            env.wefaxHourly = "background VFO " + std::to_string(i + 1) + " (" + sb->label + ")";
+            env.wefaxHourSecs = p_.wefaxHourSecs;
+            if (p_.store) {
+                gallery::Store* st = p_.store;
+                const int pi = p_.profileIdx;
+                auto lo_ = listenerOnFlag_;
+                const double la0 = p_.lat, lo0 = p_.lon;
+                auto last = c.lastItem;
+                const std::string station = sb->label;
+                env.tap = [st, dial, pi, lo_, la0, lo0, last, station](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+                    gallery::Meta m;
+                    m.kind = galleryKindFor(ext, msg);
+                    if (m.kind.empty()) return nullptr;
+                    m.origin = "background"; m.freqHz = dial; m.mode = "usb"; m.decoder = "wefax";
+                    m.profile = "Profile " + std::to_string(pi + 1);
+                    m.listenerOn = lo_; m.lat = la0; m.lon = lo0; m.lastItemAt = last;
+                    m.station = station;
+                    return makeGalleryTap(*st, m);
+                };
+            }
+            sb->host = std::make_shared<DecoderHost>(env, "bg:" + std::to_string(i) + ":" + wefaxst::khzText(f));
+            c.subs.push_back(std::move(sb));
+        }
+        if (c.subs.empty()) c.blockWhy = "no WEFAX station frequency is ticked";
+    }
+    static void faxAudioCb(void* ctx, const float* pcm, int frames, int ch, int) {
+        auto* sb = (Chan::FaxSub*)ctx;
+        if (sb && sb->host && frames > 0) sb->host->feed(pcm, frames, ch == 2 ? 2 : 1);
+    }
+    /** Cut each channel against the current centre; the VFO is in the window when any of its frequencies is. */
+    void placeFax(Chan& c, double binHz) {
+        bool any = false;
+        for (auto& sb : c.subs) {
+            sb->inWindow = faxInWindow(sb->centreHz, p_.centreHz, p_.sampleRate);
+            const double off = sb->dialHz - p_.centreHz - p_.hwOffsetHz;
+            sb->centreBin = (int)std::lround(off / binHz);
+            const double resid = off - sb->centreBin * binHz;
+            sb->rx->setTune(resid, vibedsp::RxPipeline::Mode::SSB_USB, 2700.0);
+            any = any || sb->inWindow;
+        }
+        c.inWindow = any;
+    }
+    /** ★ Start a WEFAX stations VFO: ONE decoder slot, then a decoder on every ticked frequency inside the window. */
+    void startFax(Chan& c) {
+        c.decoding = false;
+        const int tok = p_.slots ? p_.slots->claim() : 0;
+        if (tok < 0) { c.pauseWhy = "waiting for a decoder slot (listeners come first)"; return; }
+        c.faxSlot = p_.slots ? tok : -1;
+        c.decoding = true;
+        c.pauseWhy.clear();
+        syncFax(c);
+    }
+    /** Each channel running exactly when the VFO runs and its frequency is inside the window. */
+    void syncFax(Chan& c) {
+        int n = 0;
+        for (auto& sb : c.subs) {
+            const bool want = c.decoding && sb->inWindow;
+            if (want && !sb->running) {
+                sb->rx->noteInputGap();
+                const auto r = sb->host->start("wefax", attachMsg(c.vfo));
+                sb->running = r == DecoderHost::Start::Ok || r == DecoderHost::Start::Joined;
+            } else if (!want && sb->running) { sb->host->stop(); sb->running = false; }
+            if (sb->running) ++n;
+        }
+        if (c.decoding && n != c.faxRunning) {
+            c.faxRunning = n;
+            say("background decoding: VFO " + name(c) + " \xe2\x80\x94 decoding " + std::to_string(n) + " of " + std::to_string(c.subs.size())
+                + " WEFAX frequencies (the rest are outside the radio's window)");
+        }
+    }
+    /** Stop every channel (each tap writes its chart so far, partial) and give the slot back. */
+    void stopFax(Chan& c) {
+        for (auto& sb : c.subs) if (sb->running) { sb->host->stop(); sb->running = false; }
+        c.faxRunning = -1;
+        if (c.faxSlot >= 0) { if (p_.slots) p_.slots->release(c.faxSlot); c.faxSlot = -1; }
+    }
+    std::string faxJson(const Chan& c) const {
+        std::string j = "[";
+        for (size_t k = 0; k < c.subs.size(); k++) {
+            const auto& sb = *c.subs[k];
+            char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", sb.centreHz);
+            j += std::string(k ? "," : "") + "{\"hz\":" + hz + ",\"label\":\"" + gallery::jsonEsc(sb.label) + "\",\"state\":\""
+               + (sb.running ? (sb.host->midPicture() ? "chart" : "running") : sb.inWindow ? "paused" : "out") + "\"}";
+        }
+        return j + "]";
     }
     /** ★ Start an NDB skimmer VFO: a decoder slot, then its decoder (Params::ndbMake). */
     void startNdb(Chan& c) {
@@ -1503,6 +1698,7 @@ private:
     void startOne(Chan& c) {
         const DecoderDef* d = decoderDef(c.vfo.dec);
         if (c.ndb) { if (c.blockWhy.empty()) startNdb(c); return; }
+        if (c.fax) { if (c.blockWhy.empty()) startFax(c); return; }
         if (!d || !c.host || !c.blockWhy.empty()) return;
         // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder — and a Band
         //   VFO the same spotter in Band scope (every mode on the band, behind the governor).
@@ -1517,12 +1713,14 @@ private:
     void pauseOne(Chan& c, const std::string& why = "a listener needed a decoder slot") {
         if (!c.decoding) return;
         if (c.ndb) stopNdb(c);
+        else if (c.fax) stopFax(c);
         else if (!c.host) return;
         else { c.host->stop(); c.host->stopSpots(); }
         c.decoding = false;
         c.pauseWhy = why;
         say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
     }
+    static std::string upperMode(std::string m) { for (auto& ch : m) ch = (char)std::toupper((unsigned char)ch); return m; }
     std::string name(const Chan& c) const {
         const DecoderDef* d = decoderDef(c.vfo.dec);
         // ★ An NDB skimmer has no frequency of its own: it is named by the part of the band it covers
@@ -1530,13 +1728,27 @@ private:
             char b[96]; std::snprintf(b, sizeof b, "%.0f\xe2\x80\x93%.0f kHz", c.ndbLo / 1e3, c.ndbHi / 1e3);
             return std::to_string(c.index + 1) + " (" + (c.ndbHi > c.ndbLo ? std::string(b) : std::string("the NDB band")) + " " + (d ? d->label : "?") + ")";
         }
+        if (c.fax) return std::to_string(c.index + 1) + " (WEFAX stations: " + std::to_string(c.subs.size()) + " frequenc" + (c.subs.size() == 1 ? "y" : "ies") + ")";
         return std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + " " + (d ? d->label : "?") + ")";
     }
     void publish() {
         if (!p_.registry) return;
-        std::vector<std::pair<int, bool>> v;
-        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty()) v.push_back({ c->index + 1, c->decoding });   // ★ out of the window (or switched off here) = not waiting
-        p_.registry->publish(v);
+        std::vector<BgRegistry::Pub> v;
+        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty()) v.push_back({ c->index + 1, c->decoding, c->decoding && busy(*c) });   // ★ out of the window (or switched off here) = not waiting
+        p_.registry->publishState(v);
+    }
+    /** ★★ Part-way through a picture (a WEFAX chart, an SSTV frame) — see DecoderHost::midPicture. */
+    bool busy(const Chan& c) const {
+        if (c.fax) { for (auto& sb : c.subs) if (sb->running && sb->host->midPicture()) return true; return false; }
+        return c.host && c.host->midPicture();
+    }
+    /** ★★ WHICH VFO GIVES WAY (2026-11-22): rows are in rank order, so the last running is the lowest — but a picture
+     *  decoder part-way through a chart is passed over while an idle VFO is running: the chart would be cut (saved
+     *  partial) where an idle VFO loses nothing. Only when every running VFO is mid-picture does the lowest of them go. */
+    Chan* pausePick() {
+        Chan* low = nullptr; Chan* idle = nullptr;
+        for (auto& c : chans_) if (c->decoding) { low = c.get(); if (!busy(*c)) idle = c.get(); }
+        return idle ? idle : low;
     }
     /** ★★ The slot housekeeping, on the worker thread twice a second: listeners' pause requests first (lowest rank
      *  first), then — every 3 s, `force` for a test — the highest-ranked paused VFO back when a slot is free and nobody
@@ -1546,8 +1758,7 @@ private:
         bool changed = false;
         // ★★ The channel budget (a locked radio's free user slots): over it, the lowest running VFO gives up its channel.
         while (runningCount() > budget()) {
-            Chan* low = nullptr;
-            for (auto& c : chans_) if (c->decoding) low = c.get();
+            Chan* low = pausePick();
             if (!low) break;
             pauseOne(*low, "a listener took this radio's last user slot"); changed = true;
         }
@@ -1561,8 +1772,7 @@ private:
             if (!ndbWhy.empty()) { pauseOne(*c, ndbWhy); changed = true; }
         }
         for (int n = p_.registry ? p_.registry->takeDrops() : 0; n > 0; --n) {
-            Chan* low = nullptr;
-            for (auto& c : chans_) if (c->decoding) low = c.get();       // ★ rows are in rank order: the last running is the lowest
+            Chan* low = pausePick();                                      // ★ the lowest-ranked idle one (see pausePick)
             if (!low) break;
             pauseOne(*low); changed = true;
         }
@@ -1582,6 +1792,7 @@ private:
                 const int best = p_.registry ? BgRegistry::bestPaused(p_.registry->dir()) : 0;
                 if (best && c->index + 1 > best) break;             // ★ a higher-ranked VFO on another radio is waiting
                 if (c->rx) c->rx->noteInputGap();                   // ★ its channel was not fed while paused
+                for (auto& sb : c->subs) sb->rx->noteInputGap();
                 startOne(*c);
                 if (!c->decoding) break;
                 say("background decoding: VFO " + name(*c) + " resumed");
@@ -1589,7 +1800,7 @@ private:
                 break;                                               // ★ one at a time — the box is re-read next round
             }
         }
-        if (changed) publish();
+        publish();   // ★ every tick: a picture starting or ending changes who gives way (a no-op when nothing changed)
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
     void loop() {
@@ -1638,7 +1849,7 @@ private:
             }
             if (now - lastYieldCheck > std::chrono::milliseconds(500)) { lastYieldCheck = now; slotTick(); }
             if (buf.empty()) continue;
-            if (gap) for (auto& c : chans_) if (c->rx) c->rx->noteInputGap();
+            if (gap) for (auto& c : chans_) { if (c->rx) c->rx->noteInputGap(); for (auto& sb : c->subs) sb->rx->noteInputGap(); }
             std::lock_guard<std::mutex> cl(chanMtx_);
             // ★ V12: a hole this queue dropped is BRIDGED in every Band VFO's engines (zeros of exactly its length, as the
             //   listener's tap does — DecoderHost::feedIq with no samples), so a slot with a hole in it still completes.
@@ -1660,6 +1871,14 @@ private:
                     if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
                     const uint64_t a = vibeThreadCpuNs();
                     if (c->band) feedBand(*c, bins, bi, utc);
+                    else if (c->fax) {
+                        // ★ V12: each ticked WEFAX frequency inside the window — its own cut and demodulator, as a VFO's
+                        for (auto& sb : c->subs) {
+                            if (!sb->running) continue;
+                            const int got = chan_->extract(bins, sb->centreBin, sb->bins, sb->slice.data(), sb->ectx, bi);
+                            if (got > 0) sb->rx->feed(sb->slice.data(), got);
+                        }
+                    }
                     else if (c->ndb) {
                         // ★ V12: the NDB skimmer's slice — the same cut and taper as the listener's NDB tap, to its own queue
                         const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);

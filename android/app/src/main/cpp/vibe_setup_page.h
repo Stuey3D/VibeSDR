@@ -5779,7 +5779,7 @@ async function renderHw() {
   /* ★★ V12 2026-10-28: AND THE BAND DIGITAL-SPOTS LIST the same way — a Band VFO picks its band from it. The radio's own
    *  list (only the bands it reaches) when it answered; the server's whole list when it did not (the radio's save
    *  checks reach). */
-  if (!(hw && Array.isArray(hw.bands) && hw.bands.length) || !(hw && Array.isArray(hw.spotBands)) || !(hw && hw.skimBands)) {
+  if (!(hw && Array.isArray(hw.bands) && hw.bands.length) || !(hw && Array.isArray(hw.spotBands)) || !(hw && hw.skimBands) || !(hw && Array.isArray(hw.wefaxStations))) {
     try {
       const own = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json();
       if (own && Array.isArray(own.bands) && own.bands.length && !(hw && Array.isArray(hw.bands) && hw.bands.length))
@@ -5788,6 +5788,8 @@ async function renderHw() {
         hw = Object.assign({}, hw || {}, { spotBands: own.spotBands });
       // ★ V12 beta90: and the skimmers' bands (a background skimmer row's band picker), the same way
       if (own && own.skimBands && !(hw && hw.skimBands)) hw = Object.assign({}, hw || {}, { skimBands: own.skimBands });
+      // ★ V12 2026-11-22: …and the WEFAX stations (the door's whole list, for a radio that did not answer — its save checks the window)
+      if (own && Array.isArray(own.wefaxStations) && !(hw && Array.isArray(hw.wefaxStations))) hw = Object.assign({}, hw || {}, { wefaxStations: own.wefaxStations });
     } catch (e) { /* the page still offers "All bands" */ }
   }
   if (hw && Array.isArray(hw.bands) && hw.bands.length)
@@ -7652,9 +7654,34 @@ const BG_DECODERS = [
   //    frequency and demodulator are greyed out (the decoder sets them), and it stores hz 0. Offered only where this radio
   //    reaches LF (bgNdbOk) — never as a dead control on an RTL without direct sampling, a HackRF, an Airspy R2 or an Icom.
   { id: "ndb-skim",     label: "NDB skimmer (summary)",        tone: 0,    modes: ["usb"], ndb: true },
+  // ★★ V12 2026-11-22 — WEFAX STATIONS (Stuart: "i'd also like the other wefax frequencies covered"): the owner TICKS the
+  //    stations' frequencies (the SERVER's list, HW.wefaxStations — vibe_wefax_stations.h, only what this radio tunes) and
+  //    every ticked one inside the window runs its own WEFAX decoder, all in ONE decoder slot. Its row has no frequency box.
+  { id: "wefax-stations", label: "WEFAX stations (several in one slot)", tone: 1900, modes: ["usb"], fax: true },
 ];
 /** ★ V12 2026-10-27 (Stuart): a row whose DECODER sets the frequency — its frequency box and demodulator are greyed out. */
-function bgDecoderSetsFreq(dec) { return dec === "spots-band" || dec === "ndb-skim"; }
+function bgDecoderSetsFreq(dec) { return dec === "spots-band" || dec === "ndb-skim" || dec === "wefax-stations"; }
+/* ★★ V12 2026-11-22 — THE WEFAX STATIONS a "WEFAX stations" row ticks: the server's list (GET /vibeserver/hardware
+ *  "wefaxStations": [{id, call, name, country, freqs:[centre Hz…]}] — only frequencies this radio tunes), never a copy of
+ *  our own. null = none arrived (an older server, or a radio that reaches none): the decoder is not offered. */
+const BG_FAX_MAX = 8;
+function bgFaxList() {
+  const hw = typeof HW !== "undefined" ? HW : null;
+  return hw && Array.isArray(hw.wefaxStations) && hw.wefaxStations.length ? hw.wefaxStations : null;
+}
+/** A ticked frequency (centre Hz) is inside the window when its USB dial, 1.9 kHz below, is — the server's rule. */
+function bgFaxIn(hz, centre, rate) { return !(centre > 0) || !(rate > 0) || Math.abs(hz - 1900 - centre) <= bgHalfWindow(rate); }
+function bgFaxKhz(hz) { const k = hz / 1e3; return Math.abs(k * 10 - Math.round(k * 10)) < 1e-6 ? k.toFixed(1) : k.toFixed(2); }
+/** The line under a WEFAX stations row: how many of its ticks this window holds, or why it cannot run. */
+function bgFaxHint(v, centre, rate) {
+  if (!bgFaxList()) return { bad: true, text: "This radio reaches none of the WEFAX stations’ frequencies — choose another decoder or remove this VFO." };
+  const f = v.fax || [];
+  if (!f.length) return { bad: true, text: "Tick the stations’ frequencies to decode — those inside this radio’s window run at once, in one decoder slot." };
+  const n = f.filter(function (hz) { return bgFaxIn(hz, centre, rate); }).length;
+  if (!n) return { bad: true, text: "None of the ticked frequencies is inside this radio’s window at this RF centre — move the RF centre nearer them, or tick ones near it." };
+  return { bad: false, text: "Decodes " + n + " of the " + f.length + " ticked in one decoder slot" + (n < f.length ? " (the rest are outside this window)" : "")
+    + " — each chart is its own gallery item, named by station and frequency. The dial is 1.9 kHz below each, on USB." };
+}
 /* ★★ V12 beta90 — THE SKIMMERS BY BAND (Stuart 2026-11-21: "cw skimmer and rtty skimmer should be per band rather than
  *  entering a centre frequency", "48k should default to 7024 for 40m 96k 7048 etc so the bands cw allocation is fully
  *  covered", and "background should have the band presets but with an option to set their own centre if needed").
@@ -7986,7 +8013,10 @@ function bgLoad(r) {
       bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
         const q = { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
                  vfos: (Array.isArray(p.vfos) ? p.vfos : []).map(function (v) {
-                   return { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" }; }) };
+                   const o = { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" };
+                   // ★ V12 2026-11-22: a WEFAX stations row's ticks (centre Hz) — only that row carries them
+                   if (Array.isArray(v.fax)) o.fax = v.fax.map(Number).filter(function (x) { return x > 0; });
+                   return o; }) };
         // ★ only an ISM profile carries "ism" — an ordinary one saves back exactly as it came
         if (typeof p.ism === "string" && p.ism) { q.ism = p.ism; q.centre = 0; q.vfos = []; }
         // ★ V12 2026-11-02: only an AIS profile carries "ais"
@@ -8122,7 +8152,7 @@ function bgCollect() {
   if ($("spMinEl")) spModel.minEl = parseInt($("spMinEl").value, 10) || 20;
   const spAny = spModel.on || spModel.birds.length > 0;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
-  if (!spAny && !bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim"; }); })) return "";
+  if (!spAny && !bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim" || v.dec === "wefax-stations"; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
@@ -8373,6 +8403,9 @@ function bgRender() {
         fillBands();
         repaints.push(fillBands);
         row.appendChild(bp);
+      } else if (v.dec === "wefax-stations") {
+        v.hz = 0;   // ★ no frequency of its own — its ticks, below the row
+        row.appendChild(el("span", { class: "bgFixedUnit", title: "Set by the ticks below \u2014 each station frequency\u2019s dial is 1.9 kHz below it, on USB" }, "stations below"));
       } else {
         fi = el("input", { type: "number", step: "0.1", min: "0", placeholder: fixed && v.dec === "ndb-skim" ? "auto" : "517.5", class: "bgFreq" });
         fi.value = v.hz > 0 && v.dec !== "ndb-skim" ? String(v.hz / 1e3) : "";
@@ -8394,7 +8427,8 @@ function bgRender() {
         // ★ The NDB skimmer only where this radio reaches LF, and once a profile (one covers every beacon it holds)
         const ndbOk = bgNdbOk() && !p.vfos.some(function (o) { return o !== v && o.dec === "ndb-skim"; });
         const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0 && (!d.band || bandOk || v.dec === d.id) && (!d.ndb || ndbOk || v.dec === d.id)
-          && (!d.skim || bgSkimOk(d.skim) || v.dec === d.id); });   // ★ V12 beta90: a skimmer only where it can run here
+          && (!d.skim || bgSkimOk(d.skim) || v.dec === d.id)    // ★ V12 beta90: a skimmer only where it can run here
+          && (!d.fax || bgFaxList() || v.dec === d.id); });     // ★ WEFAX stations only where this radio reaches one
         fit.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
         if (!fit.some(function (d) { return d.id === v.dec; })) v.dec = fit.length ? fit[0].id : "";
         dc.value = v.dec;
@@ -8410,7 +8444,8 @@ function bgRender() {
       let bh = null;
       const paintHint = function () {
         if (!bh) return;
-        const h = v.dec === "ndb-skim" ? bgNdbHint(p, r0, locked) : sk ? bgSkimHint(v, centreNow(), bgRate) : bgBandHint(v, centreNow(), bgRate);
+        const h = v.dec === "ndb-skim" ? bgNdbHint(p, r0, locked) : v.dec === "wefax-stations" ? bgFaxHint(v, centreNow(), bgRate)
+                : sk ? bgSkimHint(v, centreNow(), bgRate) : bgBandHint(v, centreNow(), bgRate);
         // ★★ V12 beta91: a skimmer VFO whose band a Band VFO in this profile now skims too — said, never changed for them
         const cov = sk ? bgSkimCoveredBy(p, v, sk) : null;
         bh.textContent = h.text + (cov ? "\n" + cov : "");
@@ -8432,6 +8467,8 @@ function bgRender() {
       dc.onchange = function () {
         const was = v.dec;
         v.dec = dc.value;
+        if (v.dec !== "wefax-stations" && v.fax) delete v.fax;   // ★ ticks belong to a WEFAX stations row only
+        if (was === "wefax-stations" && v.dec !== was && !bgDecoderSetsFreq(v.dec)) { bgRender(); return; }   // ★ its frequency box comes back
         /* ★★ V12 beta90: a row becoming a skimmer keeps its band at the new width (40 m CW 48 → 96 kHz: 7024 → 7048), an
          *  owner's own centre stays theirs, and anything else lands on the first band this capture holds. */
         const nsk = bgSkimDef(v.dec), osk = bgSkimDef(was);
@@ -8452,6 +8489,15 @@ function bgRender() {
         if (bgDecoderSetsFreq(v.dec)) {
           v.mode = "usb";
           if (v.dec === "ndb-skim") v.hz = 0;
+          // ★ a row becoming WEFAX stations starts with the frequencies this window holds ticked (at most BG_FAX_MAX)
+          if (v.dec === "wefax-stations") {
+            v.hz = 0;
+            if (!Array.isArray(v.fax) || !v.fax.length) {
+              v.fax = [];
+              (bgFaxList() || []).forEach(function (st) { st.freqs.forEach(function (hz) {
+                if (v.fax.length < BG_FAX_MAX && bgFaxIn(hz, centreNow(), bgRate) && v.fax.indexOf(hz) < 0) v.fax.push(hz); }); });
+            }
+          }
           // ★ a row becoming Band lands on the first band this capture holds (never on a stray NAVTEX frequency)
           if (v.dec === "spots-band") {
             const bl = bgBandList();
@@ -8467,7 +8513,43 @@ function bgRender() {
         if (was !== v.dec && (bgDecoderSetsFreq(was) || bgDecoderSetsFreq(v.dec))) bgRender();
       };
       card.appendChild(row);
-      if (fixed) { bh = el("div", { class: "hint " + (v.dec === "ndb-skim" ? "bgNdbNote" : "bgBandNote") }); card.appendChild(bh); paintHint(); }
+      if (fixed) { bh = el("div", { class: "hint " + (v.dec === "ndb-skim" ? "bgNdbNote" : v.dec === "wefax-stations" ? "bgFaxNote" : "bgBandNote") }); card.appendChild(bh); paintHint(); }
+      /* ★★ V12 2026-11-22: a WEFAX stations row's TICKS — every station the server lists for this radio, its frequencies
+       *  as boxes; one outside this window is said to be ("outside this window" — it is decoded only when the radio is
+       *  there); at BG_FAX_MAX ticked, the rest are greyed until one is unticked (the server refuses more, in words). */
+      if (v.dec === "wefax-stations") {
+        const fl = bgFaxList() || [];
+        if (!Array.isArray(v.fax)) v.fax = [];
+        const fb = el("div", { class: "bgFaxTicks", style: "margin:4px 0 8px 24px" });
+        const boxes = [];
+        const paintTicks = function () {
+          boxes.forEach(function (b) {
+            b.c.checked = v.fax.indexOf(b.hz) >= 0;
+            b.c.disabled = !b.c.checked && v.fax.length >= BG_FAX_MAX;
+            b.t.textContent = bgFaxKhz(b.hz) + (bgFaxIn(b.hz, centreNow(), bgRate) ? "" : " (outside this window)");
+          });
+        };
+        fl.forEach(function (st) {
+          const line = el("div", { class: "bgFaxStation", style: "display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin:2px 0" });
+          line.appendChild(el("span", { style: "min-width:220px" }, st.name + " " + st.call + " \u00b7 " + st.country));
+          st.freqs.forEach(function (hz) {
+            const l = el("label", { class: "bgFaxFreq", style: "display:flex;gap:4px;align-items:center" });
+            const c = el("input", { type: "checkbox", class: "bgFaxTick", value: String(hz), style: "width:16px;height:16px;accent-color:var(--amber)" });
+            const t = el("span", null, "");
+            c.onchange = function () {
+              v.fax = v.fax.filter(function (x) { return x !== hz; });
+              if (c.checked && v.fax.length < BG_FAX_MAX) v.fax.push(hz);
+              paintTicks(); paintHint();
+            };
+            boxes.push({ hz: hz, c: c, t: t });
+            l.appendChild(c); l.appendChild(t); line.appendChild(l);
+          });
+          fb.appendChild(line);
+        });
+        paintTicks();
+        repaints.push(paintTicks);
+        card.appendChild(fb);
+      }
       else if (sk) { bh = el("div", { class: "hint bgSkimNote" }); card.appendChild(bh); paintHint(); }
     });
     // ★ One radio: rows past the box's decoders are KEPT (a box that went from several radios back to one) but said

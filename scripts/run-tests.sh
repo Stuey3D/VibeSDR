@@ -994,6 +994,10 @@ if node scripts/check-android-settings-parity.mjs; then pass=$((pass+1)); else f
 # ★★ …and the model behind the phone's Background Decoding editor: the bgDecode JSON both ways, the window rules.
 if node --no-warnings scripts/test_rsp_card.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_bg_decode_model.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 2026-11-22 WEFAX STATIONS: the Setup page's ticks (the server's list, 8 at most, "fax":[Hz…] byte for byte), and the
+#    clients' WEFAX hints held to the server's one list (vibe_wefax_stations.h — decoderBands, knownSignals, wefaxAlign).
+if node scripts/test-setup-bg-wefax.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wefax_stations.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta90: the listener's skimmer BAND picker (src/utils/skimBands.ts — web decoder box + app ModeSelector)
 if node --no-warnings scripts/test_skim_bands_picker.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).

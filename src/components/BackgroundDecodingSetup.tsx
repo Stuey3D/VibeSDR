@@ -22,7 +22,7 @@ import TextInput from './TvTextInput';
 import { meaningText } from '../constants/decoderTokens';
 import {
   type BgCaps, type BgModel, type BgProfile, type BgVfo, BG_DEMODS, BG_ISM_WORDS, BG_WAIT_CHOICES,
-  bgBandHint, bgBandReach, bgDecoderSetsFreq, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
+  bgBandHint, bgBandReach, bgDecoderSetsFreq, bgFaxHint, bgFaxIn, bgFaxKhz, bgFaxDefault, BG_FAX_MAX, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
   bgHalfWindow, BG_SAT_MIN_EL, bgSkimPointAt, bgSkimPoints, bgSkimPointLabel, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
 } from '../services/bgDecode';
 
@@ -89,7 +89,8 @@ export default function BackgroundDecodingSetup(p: Props) {
     d.modes.includes(v.mode)
     && (!d.band || p.bandOk || v.dec === d.id)
     && (!d.ndb || (p.ndbOk && !pr.vfos.some((o) => o !== v && o.dec === 'ndb-skim')) || v.dec === d.id)
-    && (!d.skim || p.skimOk(d.skim) || v.dec === d.id));   // ★ V12 beta90: a skimmer only where it can run here
+    && (!d.skim || p.skimOk(d.skim) || v.dec === d.id)    // ★ V12 beta90: a skimmer only where it can run here
+    && (!d.fax || caps.wefaxStations.length > 0 || v.dec === d.id));   // ★ WEFAX stations only where this radio reaches one
   const decLabel = (id: string) => caps.decoders.find((d) => d.id === id)?.label ?? id;
 
   const vfoRow = (pr: BgProfile, pi: number, v: BgVfo, vi: number) => {
@@ -113,7 +114,9 @@ export default function BackgroundDecodingSetup(p: Props) {
       if (!a.length || a[a.length - 1].name !== q.band.name) a.push({ name: q.band.name, pts: [] });
       a[a.length - 1].pts.push(q); return a;
     }, []);
+    const fax = v.dec === 'wefax-stations';
     const h = v.dec === 'ndb-skim' ? bgNdbHint(p.ndbOk, p.ndbBlocked, centre, p.rate, locked)
+            : fax ? bgFaxHint(caps.wefaxStations, v.fax, centre, p.rate)
             : v.dec === 'spots-band' ? bgBandHint(p.bandOk, caps.spotBands, v.hz, centre, p.rate)
             : sk && skBands ? bgSkimHint(sk, p.skimOk(sk.skim!), p.driver === 'icom', skBands, v.hz, own, centre, p.rate) : null;
     const setV = (f: (v2: BgVfo, pr2: BgProfile) => void) => set((m) => f(m.profiles[pi].vfos[vi], m.profiles[pi]));
@@ -126,7 +129,7 @@ export default function BackgroundDecodingSetup(p: Props) {
             {key('▼', () => setS((m) => { const a = m.profiles[pi].vfos; const x = a.splice(vi, 1)[0]; a.splice(vi + 1, 0, x); }), false, vi === pr.vfos.length - 1)}
           </>)}
           <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>VFO {vi + 1}</Text>
-          {!bands && (!skBands || own) && (
+          {!bands && !fax && (!skBands || own) && (
             <View style={[st.row, { flexShrink: 1 }]}>
               <TextInput editable={v.dec !== 'ndb-skim'}
                 defaultValue={v.hz > 0 && v.dec !== 'ndb-skim' ? String(v.hz / 1e3) : ''}
@@ -146,6 +149,19 @@ export default function BackgroundDecodingSetup(p: Props) {
                 () => setV((x) => { x.hz = b.hz; }), bgSpotBand(bands, v.hz)?.id === b.id)}</React.Fragment>)}
           </View>
         )}
+        {fax && caps.wefaxStations.map((stn) => (
+          /* ★★ V12 2026-11-22: a WEFAX stations row TICKS the engine's stations' frequencies — one outside this window is
+           *  said to be; at BG_FAX_MAX ticked the rest are greyed (the engine refuses more, in words) */
+          <View key={stn.id} style={[st.row, { flexWrap: 'wrap' }]}>
+            <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12, minWidth: 120 }}>{stn.name} {stn.call}</Text>
+            {stn.freqs.map((hz) => {
+              const on = !!v.fax && v.fax.includes(hz);
+              return <React.Fragment key={hz}>{key(bgFaxKhz(hz) + (bgFaxIn(hz, centre, p.rate) ? '' : ' (outside this window)'),
+                () => setV((x) => { const f = (x.fax || []).filter((q) => q !== hz); if (!on && f.length < BG_FAX_MAX) f.push(hz); x.fax = f; }),
+                on, !on && (v.fax || []).length >= BG_FAX_MAX)}</React.Fragment>;
+            })}
+          </View>
+        ))}
         {skBands && (<>
           {skGroups.map((g) => (
             <View key={g.name} style={[st.row, { flexWrap: 'wrap' }]}>
@@ -175,6 +191,9 @@ export default function BackgroundDecodingSetup(p: Props) {
                   const from = caps.decoders.find((q) => q.id === x.dec);
                   x.dec = d.id;
                   bgSkimDecoderChange(x, from, d, caps.skimBands, centre, p.rate);
+                  // ★ V12 2026-11-22: ticks belong to a WEFAX stations row only; one starts with what this window holds
+                  if (d.id === 'wefax-stations') { x.hz = 0; if (!x.fax || !x.fax.length) x.fax = bgFaxDefault(caps.wefaxStations, centre, p.rate); }
+                  else delete x.fax;
                   if (bgDecoderSetsFreq(d.id)) {
                     x.mode = 'usb';
                     if (d.id === 'ndb-skim') x.hz = 0;
