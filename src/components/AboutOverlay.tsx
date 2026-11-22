@@ -61,6 +61,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    radio should not be there".
   // ★★ V12 beta91 2026-11-22 — METEOR LRPT IS A SILENT DECODER, as APRS and Band are (src/services/silentDecoder.ts).
   { v: 'V12 (experimental)', detail: 'METEOR LRPT MUTES THE SPEAKER \u2014 while METEOR LRPT is decoding (a METEOR-M picked in SATELLITE) the speaker is muted, as it is for APRS and Band digital spots, and it comes back exactly as it was when LRPT stops or you leave SATELLITE; you can still unmute it meanwhile. With VFO B on, only the VFO decoding the satellite leaves the mix and the other plays on. In the app and on the web page.' },
+  // ★★ V12 beta91 2026-11-22 — SATELLITE: WHICH WAY IT IS GOING (Stuart, mid-way through a METEOR-M2 4 pass: "i dont know if
+  //    its going over the north pole or going down over europe/africa"). Arrows on the half-globe's dotted orbit, in time
+  //    order from the server's track; "heading north / south" beside the countdown only where the latitude change is certain.
+  { v: 'V12 (experimental)', detail: 'SATELLITE: WHICH WAY IT IS GOING. The half-globe\u2019s dotted orbit now carries small arrows pointing the way the satellite travels, one just ahead of it, so a pass you join halfway through shows at a glance whether it is heading up over the pole or down over Europe and Africa; while it is in range the countdown also says \u201cheading north\u201d or \u201cheading south\u201d (not near the top or bottom of the orbit, where it is turning), and BIG\u2019s key names the arrows. On a VibeServer, in the app and on the web page.' },
   // ★★★ V12 beta91 2026-11-22 — THE BAND DECODE SKIMS CW, RTTY AND PSK (docs/v12/BAND-SKIM-CW-RTTY.md): three more chips in
   //     the SAME Band run and decoder slot, a listener's Band and a Band background VFO alike. Server-side; the chips and
   //     their Band toggles come from the server's lists, so the note names where they show.
