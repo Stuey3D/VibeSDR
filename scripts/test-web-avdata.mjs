@@ -93,7 +93,10 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   ok(/VDL2 136\.\d+ MHz · \d+ aircraft/.test(await ev(`document.querySelector('.trkView:not([hidden])')?.textContent`) || ''), 'the status names the band and the count');
   // ★ V12 2026-11-16 the ACARS applications: three of the clip's aircraft report a position (FMS, label 16, ADS-C) — on the
   //   map, with the altitude and the fix in the row; G-EZWK's OOOI OUT with its airports; still no message text
-  ok(await until(`document.querySelectorAll('.vtl-mk').length >= 3`, 15000), `aircraft on the map: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
+  // ★ beta90 (c31cc4566): the aviation map's aircraft are drawn by the ADS-B layer (window.__vibeAcLayer), not as track-layer
+  //   markers (.vtl-mk is the HFDL ground stations now) — counted the way test-web-avmap does
+  const AC = `(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1)`;
+  ok(await until(`${AC} >= 3`, 15000), `aircraft on the map: ${await ev(AC)}`);
   const rows2 = await ev(`document.querySelector('.trkView:not([hidden]) .rows')?.textContent`) || '';
   ok(/37,000 ft · fix 21:20:00 UTC · FMS/.test(rows2), 'the FMS row: altitude, the fix time, the source');
   ok(/36,000 ft · fix at :20:34 past the hour · ADS-C/.test(rows2), 'the ADS-C row: the time past the hour');

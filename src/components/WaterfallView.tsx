@@ -3150,7 +3150,9 @@ function WaterfallView({
    *  working"): while the satellite's Doppler moves the needle off the dial, a thin dashed line stays on the dial — the
    *  satellite's published frequency — so the gap between the two IS the Doppler, and it closes and swaps sides at TCA.
    *  Drawn only while there is an offset to show (a whole pixel or more); the web page draws the same (waterfall.ts). */
-  const nominalX = !needleHidden && needleOffsetHz !== 0 && tuneHz > 0 ? hzToX(tuneHz) : NaN;
+  //    Placed by needleGeometry like the needle and the second VFO (one placement rule, the same hide rules — test_ism_app).
+  const nominalX = useMemo(() => needleGeometry({ hidden: needleHidden || needleOffsetHz === 0, bwHz, tuneHz, filterLow: 0, filterHigh: 0,
+    width, pxPerHz, hzToX })?.nX ?? NaN, [needleHidden, needleOffsetHz, bwHz, tuneHz, width, pxPerHz, hzToX]);
   const nominalPath = useMemo(() => {
     if (!(nominalX >= 0 && nominalX <= width) || !needle || Math.abs(needle.nX - nominalX) < 1) return null;
     const pth = Skia.Path.Make(); pth.moveTo(Math.round(nominalX) + 0.5, BAND_H); pth.lineTo(Math.round(nominalX) + 0.5, height); return pth;

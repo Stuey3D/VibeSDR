@@ -129,7 +129,9 @@ async function server(clip, centre, args, tag, radioExtra = {}, envExtra = {}) {
     ok(lines.length >= 3 && /mode nfm/.test(last) && /squelch on/.test(last) && /dial 144800000 Hz/.test(last) && !/listener gone/.test(last),
        `a line a second with the listener's state (${lines.length}): ${last}`);
     const fed = Number((last.split(' ')[1]) || 0);
-    ok(fed > 5, `the audio fed to the decoder: ${fed} s`);
+    // ★ the test detaches as soon as every station is listed, so this is "decode time + 0.8 s" — a floor that proves a running
+    //   feed (several of the .txt's once-a-second lines), not a race against how fast the four stations decode (4.07 s, 11-22)
+    ok(fed > 2, `the audio fed to the decoder: ${fed} s`);
     if (REPLAY && fs.existsSync(REPLAY) && txt) {
       const r = spawnSync(REPLAY, [path.join(capDir, txt), '--quiet'], { encoding: 'utf8', timeout: 120000 });
       const raws = (r.stdout || '').split('\n').filter((l) => l.startsWith('APRS  ')).map((l) => l.slice(6));
