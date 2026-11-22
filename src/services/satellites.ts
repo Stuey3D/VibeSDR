@@ -230,7 +230,9 @@ export function pickerRows(l: SatList | null, nowSec: number): Array<{ sat: SatI
   const rows = l.sats.map(sat => {
     const reach = sat.tx.filter(t => t.reach);
     const next = sat.passes.find(p => p.los > nowSec);
-    return { sat, up: (sat.el ?? -90) >= 0, next, reach };
+    // ★ beta91: the pass times decide "up" (the elevation is the last sat_list's snapshot) — as satModeRows
+    const up = sat.passes.length ? sat.passes.some(p => p.aos <= nowSec && p.los > nowSec) : (sat.el ?? -90) >= 0;
+    return { sat, up, next, reach };
   }).filter(r => r.reach.length > 0);
   rows.sort((a, b) => (a.up !== b.up ? (a.up ? -1 : 1) : a.up ? (b.sat.el ?? 0) - (a.sat.el ?? 0) : (a.next?.aos ?? Infinity) - (b.next?.aos ?? Infinity)));
   return rows;
@@ -331,8 +333,13 @@ export function satModeRows(l: SatList | null, nowSec: number): SatRow[] {
   if (!l) return [];
   const birds = l.sats.map((sat) => {
     const cur = sat.passes.find((p) => p.aos <= nowSec && p.los > nowSec);
-    const up = sat.inRangeFor != null ? sat.inRangeFor > 0 : (sat.el ?? -90) >= 0;
-    const left = !up ? undefined : sat.inRangeFor ?? (cur ? cur.los - nowSec : undefined);
+    /* ★★ beta91 (Stuart 2026-11-22: "when it transitions from next pass in 0:00 to the pass actually running it has a 30
+     *  second or so window where it shows the next pass instead"): the PASS TIMES decide, against this second's clock —
+     *  the server's inRangeFor / el are a SNAPSHOT from its last sat_list (tens of seconds old), so at AOS it still said
+     *  "not up", the pass now running was skipped (aos > now is false) and the row showed the FOLLOWING pass; at LOS the
+     *  same snapshot kept it "up" past its end. The snapshot is used only when the server sent no passes. */
+    const up = sat.passes.length ? !!cur : sat.inRangeFor != null ? sat.inRangeFor > 0 : (sat.el ?? -90) >= 0;
+    const left = !up ? undefined : cur ? cur.los - nowSec : sat.inRangeFor;
     const next = up ? undefined : sat.passes.find((p) => p.aos > nowSec);
     const key = up ? (left ?? 1e9) : next ? 1e10 + next.aos : 1e12;
     const pass = up ? cur : next;

@@ -69,6 +69,19 @@ ok(rows.length === 7, 'nothing left out (every downlink listed)');
   ok(r2[0].sat.id === 'ISS' && r2[0].left === 372 && r2[3].sat.id === 'METEOR-M2-3' && r2[3].left === 595, 'an older server: remaining from the current pass');
 }
 ok(satModeRows(null, now).length === 0, 'no list, no rows');
+{ // ★ beta91 the AOS / LOS edges follow the PASS TIMES, not the last sat_list's snapshot (Stuart: "a 30 second or so window
+  //   where it shows the next pass instead")
+  const so = l.sats.find((x) => x.id === 'SO-50')!;
+  const p0 = so.passes[0];
+  const stale = parseSatList({ ...raw, sats: raw.sats.map((x: any) => x.id === 'SO-50' ? { ...x, inRangeFor: undefined, el: -3 } : x) })!;
+  const at = (t: number) => satModeRows(stale, t).find((r) => r.sat.id === 'SO-50')!;
+  const a1 = at(p0.aos + 5);
+  ok(a1.up && a1.left === p0.los - (p0.aos + 5) && a1.pass?.aos === p0.aos, `5 s after AOS with a snapshot still saying "not up": UP, this pass, ${a1.left} s left`);
+  ok(!at(p0.aos - 5).up && at(p0.aos - 5).next?.aos === p0.aos, '5 s before AOS: the next pass is this one');
+  const after = parseSatList({ ...raw, sats: raw.sats.map((x: any) => x.id === 'SO-50' ? { ...x, inRangeFor: 200, el: 12 } : x) })!;
+  const l1 = satModeRows(after, p0.los + 5).find((r) => r.sat.id === 'SO-50')!;
+  ok(!l1.up, '5 s after LOS with a snapshot still saying "up": not up');
+}
 
 console.log('— greying');
 const iss2 = rows.find((r) => r.sat.id === 'ISS' && r.i === 2)!;
