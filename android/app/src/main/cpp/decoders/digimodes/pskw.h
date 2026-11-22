@@ -87,8 +87,9 @@ inline ModeDef vibeDigiMode_pskw() {
     m.slotSec = 0;
     m.sampleRate = 0;
     // ★ per 48 kHz of window (at least half) — MEASURED (BAND-SKIM-CW-RTTY.md): 0.276 % at 48 kHz with 19 signals vs FT8's 0.083 %
-    m.costVsFt8 = 3.3;
-    m.lightCostVsFt8 = 3.3;
+    //   (3.3) with two lanes; beta91's five lanes cost ×1.38 on a busy window (0.160 → 0.220 %, noise unchanged): 4.5
+    m.costVsFt8 = 4.5;
+    m.lightCostVsFt8 = 4.5;
     m.priority = 105;                // ★ shed after CW (120) and RTTY (110), before every audio mode
     m.pauseRank = 3;                 // ★ paused last of the three
     m.gateSec = 4.0;
