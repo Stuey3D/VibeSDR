@@ -4,7 +4,8 @@
 //   · the IPFIX encoder, BYTE FOR BYTE against the complete example datagram on https://pskreporter.info/pskdev.html
 //     (and its "later in the session" datagram without the descriptors), using the page's own descriptors
 //   · our production descriptors, decoded back by an independent little IPFIX reader written here
-//   · one record per callsign per batch, the same call + band + mode not again for an hour, a new band at once
+//   · one record per callsign per batch (batches ≥ 5 min apart), the same call + band + mode again in the NEXT batch
+//     (beta91: the page's five-minute limit, not its hourly ideal), never within kRepeatSec of its last report; a new band at once
 //   · a batch every 5 minutes from the reporter's start (+ 0–60 s), never sooner; descriptors in the first three
 //     datagrams, then once an hour; the sequence counts data records; a full batch splits under 1400 bytes
 //   · off, or no callsign, or a mode with no ADIF name, or a non-callsign: nothing is sent
@@ -243,9 +244,9 @@ int main() {
         bool dlGrid = false; for (auto& r : d.tx) if (r[0] == "DL1XYZ" && r[5] == "JO62") dlGrid = true;
         CHECK(dlGrid, "the locator a later decode carried is kept");
         CHECK(d.rx.size() == 1 && d.rx[0][0] == "Stuey3D-VibeSDR" && d.rx[0][1] == "IO91wm" && d.rx[0][3] == "Wideband loop", "the receiver record names the owner's call, the grid and the antenna");
-        // the same station on the same band in the next hour: not again; on another band: at once
-        now += 400; s.call = "DL1XYZ"; s.rfHz = 14075700; rp.note(s);
-        CHECK(rp.pendingCount() == 0, "the same call + band + mode within the hour is not reported again");
+        // the same station on the same band two minutes later: not again; on another band: at once
+        now += 120; s.call = "DL1XYZ"; s.rfHz = 14075700; rp.note(s);
+        CHECK(rp.pendingCount() == 0, "the same call + band + mode within kRepeatSec of its report is not reported again");
         s.rfHz = 7075600; rp.note(s);
         CHECK(rp.pendingCount() == 1, "the same call on a NEW band is reported (the page's 'change')");
         const long second = rp.nextFlushAt();
@@ -256,6 +257,10 @@ int main() {
         CHECK(d.ok && d.templateSets == 2 && d.tx.size() == 1 && d.tx[0][1] == "7075600", "the second datagram (still within the first three: descriptors again)");
         CHECK(src1 == src2 && src1 != 0, "the same UDP source port for every datagram");
         CHECK(d.seq == 3, "the sequence counts data records (1 receiver + 2 senders before this one)");
+        // ★★ beta91 the five-minute rule: still heard on 20 m in the next batch period → reported again (it was an hour)
+        s.call = "DL1XYZ"; s.rfHz = 14075700; rp.note(s);
+        CHECK(rp.pendingCount() == 1, "the same station still heard ≥ 5 min after its report is reported again in the next batch");
+        CHECK(kRepeatSec < kBatchSec, "the repeat window is shorter than the batch spacing, so a steady station is in every batch");
         // the third and the fourth
         for (int k = 0; k < 2; ++k) {
             now = rp.nextFlushAt(); s.call = k ? "K1ABC" : "N1DQ"; rp.note(s); rp.tick();

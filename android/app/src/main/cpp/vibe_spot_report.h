@@ -12,8 +12,11 @@
 //
 // ★★★ THE PAGE'S RULES ARE THE DESIGN:
 //   · "each callsign should be reported no more than once per five minute period. Ideally … only once per hour if it has
-//     not 'changed' … A change might be a move to a different band" → one record per callsign per batch, and the same
-//     callsign + band + mode not again for an hour.
+//     not 'changed' … A change might be a move to a different band" → one record per callsign per batch, batches at least
+//     five minutes apart — so never more than once in five minutes. ★★ V12 beta91 (Stuart 2026-11-22: "5 minute rule
+//     otherwise we cannot compete with numbers"): a station still heard is reported again in the NEXT batch (the page's
+//     limit), not only after an hour (its "ideally") — the hourly rule sent ~770 an hour from four bands where a
+//     five-minute skimmer sent ~19,000 from eleven, and PSK Reporter's rankings count reports.
 //   · "no more than one [datagram] every five minutes (unless the packet becomes full)" and "Timed sends … must not be
 //     synchronized to the system clock … based on when the program started" → a batch every 5 minutes from when the
 //     reporter started, plus a random 0–60 s, never on the clock's minute; a full datagram splits into several.
@@ -363,7 +366,11 @@ struct Config {
 
 constexpr int kBatchSec = 300;              ///< "no more than one every five minutes"
 constexpr int kStartJitterSec = 60;         ///< + a random 0–60 s from start, then 0–30 s each batch
-constexpr int kRepeatSec = 3600;            ///< the same call + band + mode again only after an hour
+/** ★ The same call + band + mode again once this long has passed since its last report. 240 s, not 300: batches are
+ *  300–330 s apart and carry a call at most once, so the five-minute limit holds by the batches themselves; a 300 s
+ *  window would miss the next batch whenever it fell a few seconds early against the last report, and report every
+ *  OTHER batch. */
+constexpr int kRepeatSec = 240;
 constexpr int kTemplateEverySec = 3600;
 constexpr size_t kMaxPending = 2000;        ///< callsigns waiting for the next batch (a 5-minute batch is far smaller)
 constexpr size_t kMaxRecent = 8192;         ///< the once-an-hour memory (pruned every batch)
@@ -507,7 +514,7 @@ public:
         s.grid = cleanGrid(s.grid);
         if (!(s.slotUtc > 0)) s.slotUtc = (double)nowS();
         const std::string band = bandOf(s.rfHz);
-        // ★ once an hour per call + band + mode (the page's "a change might be a move to a different band")
+        // ★ once per batch per call (≥ five minutes), and per call + band + mode not within kRepeatSec of its last report
         const std::string rk = s.call + "|" + band + "|" + mode;
         auto it = recent_.find(rk);
         const bool repeat = it != recent_.end() && nowS() - it->second < kRepeatSec;
