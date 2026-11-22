@@ -2054,8 +2054,10 @@ private:
                         else {
                         spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
                                          b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz, b.slice);
-                        if (iqSpotter_) iqSpotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
-                                                           b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz, b.slice);
+                        /* ★ beta91: the CW / RTTY / PSKW spotter gets NO bins — no activity gate of its own (a 40–100 kHz CW or
+                         *  RTTY window is never empty on an open band, and its skimmer is the detector), so the decode
+                         *  thread does not measure every slice a second time; the governor and the pause rule still apply. */
+                        if (iqSpotter_) iqSpotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc, nullptr, 0, b.binHz, b.slice);
                         maybeSendStatusLocked_(b.utc);
                         bandDiagLocked_(b);
                         }
