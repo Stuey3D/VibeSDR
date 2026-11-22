@@ -115,6 +115,7 @@ try {
       mapStations: () => window.__stations,
       openMap: (o) => window.__sent.push({ map: o }),
       now: () => window.__fake ?? Date.now(),
+      galleryGet: (p) => (window.__galGet ? window.__galGet(p) : Promise.resolve(null)),   // ★★ beta91 the saved passes
     });
     window.__p.setCap({ ok: true, why: '' });
     return true; })()`);
@@ -365,6 +366,73 @@ try {
   ok(/0a1b2c3d 4e5f/.test(await ev(`document.querySelector('#satPanel .sat-tlm').innerText`)), '1.3 RAW shows the frame\'s bytes');
   await ev(`document.querySelector('#satPanel [data-act="tlmraw"]').click(); true`);
   await shot('telemetry');
+
+  // ★★ beta91 TELEMETRY CHARTS — THIS PASS from the live frames, LAST PASSES from the gallery. The frames and the gallery's
+  //    files are scripts/fixtures/fctlm/ (the server's own writer on SYNTHETIC readings — not on-air data).
+  console.log('— beta91 telemetry charts');
+  const FIX = path.join(root, 'scripts/fixtures/fctlm');
+  const fx = (n) => fs.readFileSync(path.join(FIX, `pass-${n}.csv`), 'utf8');
+  const framesOf = (csv) => {
+    const L = csv.split('\n').filter((l) => l && !l.startsWith('#'));
+    const head = L[0].split(',');
+    return L.slice(1).map((l) => { const c = l.split(','); return { sat: 'AO-73', format: 'funcube-rt', t: Number(c[1]), mode: c[4],
+      values: head.slice(7).map((h, k) => { const m = /^(.*?) \[(.*)\]$/.exec(h); return { k: `c${k}`, name: m ? m[1] : h, v: Number(c[7 + k]), ...(m && m[2] === 'raw' ? { raw: true } : m ? { unit: m[2] } : {}) }; }) }; });
+  };
+  const galItems = [1, 2, 3].map((n) => { const t = Number(fx(n).split('\n').find((l) => /^\d{4}-/.test(l)).split(',')[1]);
+    return { f: `p${n}.csv`, k: 'fctlm', t, title: `AO-73 telemetry · pass ${n} UTC · x frames` }; });
+  await ev(`window.__galFiles = ${JSON.stringify({ 'p1.csv': fx(1), 'p2.csv': fx(2), 'p3.csv': fx(3) })}; window.__galAsks = [];
+    window.__galGet = async (p) => { window.__galAsks.push(p); await new Promise((r) => setTimeout(r, 5));
+      if (p.startsWith('/vibeserver/gallery.json')) return JSON.stringify({ items: ${JSON.stringify(galItems)} });
+      return window.__galFiles[decodeURIComponent(p.replace('/vibeserver/gallery/file/', ''))] ?? null; }; true`);
+  // a new pass on the air: the box's history starts again (a fresh pick), then the frames of pass 3 arrive
+  await ev(`window.__p.onPicked({ norad: 39444, tx: 0, decoder: 'fctlm' }); true`);
+  for (const fr of framesOf(fx(3))) await ev(`window.__p.telemetry(__Sat.parseSatTelemetry(${JSON.stringify(fr)})); true`);
+  ok(!!(await ev(`!!document.querySelector('#satPanel [data-act="tlmcharts"]')`)), 'CHARTS beside RAW');
+  await ev(`document.querySelector('#satPanel [data-act="tlmcharts"]').click(); true`);
+  ok(await until(`/LAST 3 PASSES/.test(document.querySelector('#satPanel .sat-tlm').textContent)`, 5000), 'the last passes come from the gallery: LAST 3 PASSES');
+  const ch = JSON.parse(await ev(`JSON.stringify((() => { const t = document.querySelector('#satPanel .sat-tlm'); const c = [...t.querySelectorAll('.tlm-c')];
+    return { n: c.length, first: c[0]?.querySelector('.tlm-n')?.textContent, firstV: c[0]?.querySelector('.tlm-v')?.textContent,
+      heads: [...t.querySelectorAll('.tlm-h')].map((h) => h.textContent), more: t.querySelector('[data-act="tlmall"]')?.textContent,
+      lines: t.querySelectorAll('path.tlm-l').length, bands: t.querySelectorAll('path.tlm-b').length, label: c[0]?.getAttribute('aria-label'),
+      text: t.innerText }; })())`));
+  ok(ch.n === 16 && ch.lines === 16 && ch.bands === 8, `8 charts this pass + 8 across passes, a line each, the across ones banded (${ch.n}/${ch.lines}/${ch.bands})`);
+  ok(ch.first === 'Battery voltage' && /^\d+ raw$/.test(ch.firstV || ''), `the power system first, raw labelled, no unit (${ch.first} ${ch.firstV})`);
+  ok(/^THIS PASS · 24 frames · 17:2\d–17:2\d UTC$/.test(ch.heads[0] || ''), `this pass's head (${ch.heads[0]})`);
+  ok(/^\+ \d+ MORE CHANNELS$/.test(ch.more || ''), `the rest behind one key (${ch.more})`);
+  ok(/Battery voltage, raw: 24 readings, \d+–\d+ raw, latest \d+ raw/.test(ch.label || ''), `each chart says itself (${ch.label})`);
+  ok(!/Reboot count/.test(ch.text) && /raw = sent uncalibrated/.test(ch.text), 'counts are not charted; what raw means is said');
+  const asks = await ev(`JSON.stringify(window.__galAsks)`);
+  ok(JSON.parse(asks).length === 4 && /kind=fctlm/.test(asks), `one list + one file a pass, one at a time (${JSON.parse(asks).length} asks)`);
+  // the geometry inside its boxes
+  const tgeo = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .tlm svg')].every((s) => { const b = s.getBBox(); return b.x >= -0.5 && b.y >= -0.5 && b.x + b.width <= s.width.baseVal.value + 0.5 && b.y + b.height <= s.height.baseVal.value + 0.5; }))`));
+  ok(tgeo === true, 'every line and band inside its chart');
+  await shot('charts-desktop');
+  await ev(`[...document.querySelectorAll('#satPanel .tlm-h')].pop().scrollIntoView({ block: 'start' }); true`); await sleep(150);
+  await shot('charts-desktop-across');
+  await ev(`document.querySelector('#satPanel [data-act="tlmall"]').click(); true`);
+  const all = await ev(`document.querySelectorAll('#satPanel .tlm-c').length`);
+  ok(all > 16 && all % 2 === 0, `+ MORE: every analogue channel, both sections (${all} charts)`);
+  await ev(`document.querySelector('#satPanel [data-act="tlmall"]').click(); true`);
+  // a new frame repaints this pass (25 frames); the across set is not fetched again
+  const one = framesOf(fx(3)).slice(-1)[0]; one.t += 5;
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry(${JSON.stringify(one)})); true`);
+  ok(/THIS PASS · 25 frames/.test(await ev(`document.querySelector('#satPanel .sat-tlm').textContent`)) && JSON.parse(await ev(`JSON.stringify(window.__galAsks)`)).length === 4,
+     'a new frame joins this pass; the gallery is not asked again');
+  await phone(); await sleep(400);
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry(${JSON.stringify({ ...one, t: one.t + 5 })})); true`); await sleep(100);
+  f = await fits(); ok(fitOk(f), `390 px with the charts: fits, no sideways scroll (${JSON.stringify(f)})`);
+  const pc = await ev(`getComputedStyle(document.querySelector('#satPanel .tlm-g')).gridTemplateColumns.split(' ').length`);
+  ok(pc === 2, `390 px: two charts a row (${pc})`);
+  await shot('charts-phone-light');
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }); await sleep(300);
+  await shot('charts-phone-dark');
+  const tink = await ev(`(() => { const l = document.querySelector('#satPanel path.tlm-l'); const n = document.querySelector('#satPanel .tlm-n'); return getComputedStyle(l).stroke + ' | ' + getComputedStyle(n).color + ' | ' + getComputedStyle(document.getElementById('satPanel')).backgroundColor; })()`);
+  ok(!/none/.test(tink.split(' | ')[0]) && tink.split(' | ')[1] !== tink.split(' | ')[2], `the line has the page's hue and the names a readable ink (${tink})`);
+  // no gallery: this pass still drawn, the across head says why
+  await ev(`window.__galGet = null; document.querySelector('#satPanel [data-act="tlmcharts"]').click(); document.querySelector('#satPanel [data-act="tlmcharts"]').click(); true`);
+  ok(await until(`/LAST PASSES · none saved/.test(document.querySelector('#satPanel .sat-tlm').textContent) && document.querySelectorAll('#satPanel .tlm-c').length === 8`, 3000),
+     'no gallery (or an empty one): this pass drawn, "none saved in the gallery yet"');
+  await desk();
 } catch (e) { ok(false, `driver: ${e?.stack || e}`); }
 finally {
   clearTimeout(deadline);

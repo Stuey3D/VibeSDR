@@ -403,7 +403,12 @@ public:
      *  more than one — HELD OPEN (never evicted) until close(). "" when there is none (the caller creates it). */
     /** `anyOrigin` (ISM's daily log and summary, 2026-10-25: "one file per UTC day per band"): background decoding and
      *  a listener write into the SAME day's item, so its origin is not part of what finds it. */
-    std::string adoptSlot(const Meta& m, bool anyOrigin = false) {
+    /** `anyWriter` (V12 beta91, FUNcube's day log and pass files — Stuart: "all radios on same server should feed the same
+     *  log for the satellite, it is the same satellite after all"): nor the profile, nor the dial, nor the RADIO — every
+     *  radio process on the box, background or listener, writes into the same item; the slot alone (which names the
+     *  satellite and the day / pass) finds it. Implies anyOrigin. The caller serialises find-or-create across processes. */
+    std::string adoptSlot(const Meta& m, bool anyOrigin = false, bool anyWriter = false) {
+        if (anyWriter) anyOrigin = true;
         if (m.slot.empty()) return "";
         std::string dir, radio;
         { std::lock_guard<std::mutex> lk(m_); dir = dir_; radio = radio_; }
@@ -420,8 +425,8 @@ public:
                 const Row& r = cache_.rows[i];
                 if ((r.flags & (kDead | kSlot)) != kSlot || !lineAt(fd, r, l)) continue;
                 if (lineStr(l, "s") == jsonEsc(m.slot) && lineStr(l, "k") == jsonEsc(m.kind) && (anyOrigin || lineStr(l, "o") == jsonEsc(m.origin))
-                    && lineNum(l, "hz") == std::strtod(hz, nullptr) && lineStr(l, "p") == jsonEsc(printable(m.profile, 40))
-                    && lineStr(l, "r") == jsonEsc(radio)) { found = lineStr(l, "f"); break; }
+                    && (anyWriter || (lineNum(l, "hz") == std::strtod(hz, nullptr) && lineStr(l, "p") == jsonEsc(printable(m.profile, 40))
+                                      && lineStr(l, "r") == jsonEsc(radio)))) { found = lineStr(l, "f"); break; }
             }
             if (fd >= 0) ::close(fd);
             struct stat st{};
@@ -662,6 +667,7 @@ public:
         const size_t dot = name.rfind('.');
         const std::string ext = dot == std::string::npos ? "" : name.substr(dot + 1);
         ctype = ext == "txt" ? "text/plain; charset=utf-8" : ext == "png" ? "image/png" : ext == "jpg" ? "image/jpeg" : ext == "json" ? "application/json"
+              : ext == "csv" ? "text/csv; charset=utf-8"   // ★ V12 beta91 FUNcube telemetry, a CSV per pass
               : "application/octet-stream";
         return true;
     }

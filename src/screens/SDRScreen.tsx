@@ -263,7 +263,7 @@ import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
-import GalleryOverlay from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
+import GalleryOverlay, { galleryReader } from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
 import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
@@ -2748,6 +2748,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satOrbit, setSatOrbit] = useState<{ geo: GeoPt[]; tcaIdx?: number } | null>(null);
   const satTrackAsk = useRef<{ norad: number; aos: number } | null>(null);
   const [satTlm, setSatTlm] = useState<SatTelemetry | null>(null);
+  // ★★ beta91 TELEMETRY CHARTS: the SATELLITE box reads the gallery's saved passes through this
+  const satGalleryGet = useMemo(() => (connectBase ? galleryReader(connectBase, radioAuthSuffix || route.params.authSuffix || '') : null),
+                                [connectBase, radioAuthSuffix, route.params.authSuffix]);
   useEffect(() => {
     if (!satPicked) { satTrackAsk.current = null; setSatOrbit(null); return; }
     const sat = satList?.sats.find((x) => x.norad === satPicked.norad);
@@ -15943,6 +15946,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           rxName={instanceName ?? ''}
           orbit={satOrbit?.geo ?? null} tcaIdx={satOrbit?.tcaIdx}
           telemetry={satTlm}
+          galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
           remindLead={satRemLead}
           onRemind={satRemToggle}

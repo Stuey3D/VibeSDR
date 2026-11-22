@@ -110,6 +110,8 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
+import { tlmLoadPasses, tlmParseCsv, tlmSatOfTitle, type TlmPass } from '../../../src/utils/tlmCharts';   // ★★ beta91 TELEMETRY CHARTS
+import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds } from '../../../src/utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
@@ -10377,6 +10379,7 @@ function satPanelGet(): SatPanel | null {
       enter: () => { if (!satPanel?.active) toggleSatMode(); },      // ★ 1.6 LISTEN goes in as the key does
       mapStations: () => (satDec === 'aprs' && aprsLast ? aprsLast.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0),
       openMap: (o) => openDigiModesMap(o),                           // ★ 1.9
+      galleryGet: galleryText,                                       // ★★ beta91 TELEMETRY CHARTS: the saved passes
     });
     satPanel.setCap(satCap);
   }
@@ -18920,6 +18923,35 @@ interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; 
                         lv?: number; plat?: number; plon?: number }
 let galKind = '';
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
+/** ★★ beta91 TELEMETRY CHARTS: a gallery path → its text, or null (not there / no gallery). */
+async function galleryText(path: string): Promise<string | null> {
+  try { const r = await fetch(galUrl(path), { cache: 'no-store' }); return r.ok ? await r.text() : null; } catch { return null; }
+}
+/* ★★ beta91 a FUNcube pass item (its .csv, vibe_fctlm_gallery.h) opens as its charts — the pass, and the passes up to it —
+ *  in #galCharts (made here, beside #galText); DOWNLOAD still saves the CSV. */
+let galTlmSeq = 0;
+function galChartsEl(): HTMLElement {
+  let el = document.getElementById('galCharts');
+  if (!el) {
+    el = document.createElement('div'); el.id = 'galCharts'; el.hidden = true;
+    $('galText').parentElement!.insertBefore(el, $('galText'));
+    tlmEnsureCss();
+  }
+  return el;
+}
+function galShowTlm(it: GalleryItem, body: string): boolean {
+  const pass = tlmParseCsv(body);
+  if (!pass) return false;
+  const el = galChartsEl();
+  const seq = ++galTlmSeq;
+  let across: TlmPass[] | null = null, all = false;
+  const paint = () => { el.innerHTML = tlmChartsHtml({ pass, live: false, across, width: el.clientWidth || $('galView').clientWidth || 320, all }); };
+  el.onclick = (e) => { if ((e.target as HTMLElement).closest('[data-act="tlmall"]')) { all = !all; paint(); } };
+  $('galText').hidden = true; el.hidden = false;
+  paint();
+  void tlmLoadPasses(galleryText, tlmSatOfTitle(it.title), it.t).then((x) => { if (seq === galTlmSeq) { across = x; paint(); } });
+  return true;
+}
 function galWhen(t: number): string {
   const d = new Date(t * 1000);
   const p2 = (n: number) => String(n).padStart(2, '0');
@@ -19191,14 +19223,17 @@ async function openGalleryItem(it: GalleryItem) {
   const img = $('galImg') as HTMLImageElement;
   if (/\.(png|jpg)$/i.test(it.f)) {   // ★ V12 balloons: SSDV pictures are JPEGs
     $('galText').hidden = true; img.hidden = false; img.src = url;
+    galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
     return;
   }
   img.hidden = true; img.removeAttribute('src'); $('galText').hidden = false;
+  galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
   $('galText').textContent = 'Loading…';
   try {
     const r = await fetch(url, { cache: 'no-store' });
     const body = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
     $('galText').textContent = body;
+    if (r.ok && it.k === 'fctlm' && /\.csv$/i.test(it.f) && galShowTlm(it, body)) return;   // ★★ beta91 charts, not a CSV wall
     if (r.ok) void galTranslateSetup(it, body);
   } catch { $('galText').textContent = 'Could not reach the server.'; }
 }

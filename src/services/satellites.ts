@@ -17,6 +17,7 @@
  *    channel actually is relative to it — the waterfall marker goes there (marker TRAP), bookmarks store the nominal.
  * ★ No flashing anywhere: COAST only dims the readout.
  */
+import { tlmLivePush, type TlmLiveFrame } from '../utils/tlmCharts';
 import { GLOBE_COAST } from './globeCoast';
 
 export type SatLockState = 'OFF' | 'ARMED' | 'TRACK' | 'COAST' | 'ENDED';
@@ -969,6 +970,8 @@ export interface SatTelemetry {
   sat: string; format: string; mode: string; at: number; values: SatTlmValue[];
   /** the decoded payload, hex — behind the RAW switch */
   hex: string;
+  /** ★★ beta91 TELEMETRY CHARTS: every frame of this pick, oldest first (bounded — src/utils/tlmCharts.ts) */
+  hist?: TlmLiveFrame[];
 }
 /** {"type":"fctlm_status","data":{sync,frames,good,failed,afcHz,snrDb,…}} or {"type":"sat_tlm","data":{sat,format,t,mode,
  *  values:[{k,name,v,unit,raw}],hex}} (docs/v12/SATELLITE-BEST.md "Contract additions") → one shape. */
@@ -1009,6 +1012,8 @@ export function satTelemetryMerge(prev: SatTelemetry | null, m: Partial<SatTelem
   const base: SatTelemetry = prev ?? { sat: '', format: '', mode: '', at: 0, values: [], hex: '' };
   const next = { ...base } as SatTelemetry;
   for (const [k, v] of Object.entries(m)) if (v !== undefined) (next as unknown as Record<string, unknown>)[k] = v;
+  // ★★ beta91 a frame (values + its time) joins the pick's history — the THIS PASS charts
+  if (m.values?.length && m.at) next.hist = tlmLivePush(base.hist, { t: m.at, values: m.values });
   return next;
 }
 /** The block's first line: "TELEMETRY · 14 frames · 13 good · 1 failed · Safe" ("waiting for a frame" until one). */

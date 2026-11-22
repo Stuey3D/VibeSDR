@@ -271,6 +271,9 @@ struct DecoderTap {
     /** ★ V12 LRPT: one finished picture of a pass (a standard PNG, full size) — `name` says which ("channel 2 near-IR",
      *  "RGB 221 false colour"); `partial` = the decoder stopped before the pass ended. */
     virtual void picture(const std::string& /*name*/, const std::string& /*png*/, int /*w*/, int /*h*/, bool /*partial*/) {}
+    /** ★★ V12 beta91 TELEMETRY CHARTS: one good FUNcube frame, parsed, with its time and pass (vibe_fctlm_gallery.h —
+     *  the per-pass CSV and the day's log). */
+    virtual void satTlm(const vibefc::Decoded& /*frame*/, const vibefc::TlmCtx& /*ctx*/) {}
     /** ★ Items this tap has written to the gallery so far (a picture tap counts its pictures; 0 = it does not count) —
      *  the background WEFAX VFO's hourly log line reads it ("charts saved"). */
     virtual size_t savedCount() const { return 0; }
@@ -1259,6 +1262,14 @@ private:
                 return dv.state.empty() ? std::string() : dv.satName.substr(0, 40);
             };
             o.unixNow = [] { return (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); };
+            // ★★ beta91 TELEMETRY CHARTS: each frame, parsed, to the gallery's per-pass CSV (the pass from the satellite lock)
+            o.record = [this](const vibefc::Decoded& d, const vibefc::TlmCtx& cx) { if (DecoderTapPtr t = tap()) t->satTlm(d, cx); };
+            o.pass = [s = session_](vibefc::TlmCtx& cx) {
+                const vibe::sat::DecoderView dv = vibe::sat::decoderView(s);
+                if (dv.state.empty()) return;
+                cx.aos = dv.aos; cx.los = dv.los;
+                if (dv.on) cx.elDeg = dv.elDeg;
+            };
             fctlm_.reset(new vibefc::Run(c, inv, std::move(o)));
             active_.store(true, std::memory_order_relaxed);
             log("decoder attached: fctlm (FUNcube BPSK 1200) centre " + std::to_string((int)c.centreHz) + " Hz" + (c.afc ? " AFC" : " no AFC") + (inv ? " inverted" : ""));

@@ -36,6 +36,7 @@
 #include "vibe_gallery.h"
 #include "vibe_station_log.h"      // ★ V12 APRS: the day's packets + the station card (StationTap)
 #include "vibe_dsc_gallery.h"
+#include "vibe_fctlm_gallery.h"   // ★ V12 beta91 FUNcube telemetry: a CSV per pass + the day's log (TELEMETRY CHARTS)
 #include "vibe_png.h"
 #include "vibe_callsign_country.h"
 #include "vibedsp/vibedsp.h"
@@ -225,7 +226,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "sitora") return "sitora";  // ★ V12 SITOR-A: the link's text, as an RTTY run (both stations, labelled)
     if (ext == "balloon") return "balloon"; // ★ V12 balloons: the reports as a run, and each SSDV picture as a .jpg
     if (ext == "lrpt") return "lrpt";      // ★ V12 METEOR-M LRPT: each pass's channels and composite as PNGs
-    if (ext == "fctlm") return "fctlm";    // ★ V12 beta90 FUNcube telemetry: a line a frame, as an RTTY run
+    if (ext == "fctlm") return "fctlm";    // ★ V12 beta90 FUNcube telemetry — beta91: a CSV per pass + the day's log (vibe_fctlm_gallery.h)
     return "";
 }
 
@@ -888,7 +889,8 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
     if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta, std::move(dial));
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "balloon") return std::make_shared<BalloonGalleryTap>(st, meta, std::move(dial));
-    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora" || meta.kind == "fctlm") {
+    if (meta.kind == "fctlm") return std::make_shared<FcTlmGalleryTap>(st, meta);   // ★ beta91: per-pass CSV + the day's log
+    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
         return t;

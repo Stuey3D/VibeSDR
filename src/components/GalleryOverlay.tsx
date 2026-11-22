@@ -23,6 +23,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { ModeLabel } from './ModeIcon';
 import { withReadAuth } from '../services/vibeAuth';
+import TlmCharts from './TlmCharts';   // ★★ beta91 TELEMETRY CHARTS: a FUNcube pass item is shown as its charts
+import { tlmLoadPasses, tlmParseCsv, tlmSatOfTitle, type TlmPass } from '../utils/tlmCharts';
 import { rankCard } from '../utils/spotRanks';   // ★ V12 beta90 this server's PSK Reporter / WSPR places
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
@@ -61,7 +63,20 @@ const KINDS: { id: string; label: string }[] = [
   { id: 'sitora', label: 'SITOR-A' },
   // ★★ V12 balloons: the reports as a run, and each SSDV picture (a .jpg) — vibe_bgdecode.h BalloonGalleryTap
   { id: 'balloon', label: 'BALLOONS' },
+  // ★★ V12 beta91 FUNcube telemetry: a .csv per pass (shown as charts) and the day's log (vibe_fctlm_gallery.h)
+  { id: 'fctlm', label: 'FUNCUBE' },
 ];
+/** ★★ beta91 a FUNcube pass item (its CSV) — drawn as charts, not as text */
+export const isTlmPass = (it: { k: string; f: string }) => it.k === 'fctlm' && /\.csv$/i.test(it.f);
+/** ★★ beta91 TELEMETRY CHARTS: a server's gallery as a reader — a path ("/vibeserver/gallery.json?…") → its text, or
+ *  null (not there / no gallery). The SATELLITE box's LAST PASSES and a pass item read through it. */
+export function galleryReader(base: string, readAuth = ''): (path: string) => Promise<string | null> {
+  const b = base.replace(/\/+$/, '');
+  return async (path: string) => {
+    try { const r = await fetch(withReadAuth(`${b}${path}`, readAuth), { cache: 'no-store' } as any); return r.ok ? await r.text() : null; }
+    catch { return null; }
+  };
+}
 const p2 = (n: number) => String(n).padStart(2, '0');
 export function galleryWhen(t: number): string {
   const d = new Date(t * 1000);
@@ -95,6 +110,16 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const [open, setOpen] = useState<GalleryItem | null>(null);
   const [text, setText] = useState('');
   const [textOk, setTextOk] = useState(false);
+  // ★★ beta91 the open pass item's charts: its own pass, and the passes up to it
+  const [tlmAcross, setTlmAcross] = useState<TlmPass[] | null>(null);
+  const tlmPass = useMemo(() => (open && isTlmPass(open) && textOk ? tlmParseCsv(text) : null), [open, text, textOk]);
+  useEffect(() => {
+    setTlmAcross(null);
+    if (!open || !isTlmPass(open)) return;
+    let live = true;
+    void tlmLoadPasses(galleryReader(b, readAuth), tlmSatOfTitle(open.title), open.t).then((x) => { if (live) setTlmAcross(x); });
+    return () => { live = false; };
+  }, [open, b, readAuth]);
   // ★ TRANSLATE: the plan (what is sent, from what, into what), the result, which is shown, and what to say.
   const [trPlan, setTrPlan] = useState<GalleryTrPlan | null>(null);
   const [trText, setTrText] = useState<string | null>(null);
@@ -250,7 +275,12 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                  + galleryOriginWords(open)
                  + (open.partial ? ' · PARTIAL' : '')}
               </Text>
-              {isImage(open) ? (
+              {isTlmPass(open) && tlmPass ? (
+                <ScrollView style={s.textBox} contentContainerStyle={scrollLane}>
+                  <TlmCharts pass={tlmPass} live={false} across={tlmAcross}
+                             ink={{ text: pt.ink.text, muted: pt.ink.textDim, line: pt.gold.readout, grid: pt.ink.divider }} />
+                </ScrollView>
+              ) : isImage(open) ? (
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={[scrollLane, { alignItems: 'center' }]} maximumZoomScale={4}>
                   <Image source={{ uri: fileUrl(open) }} style={s.image} resizeMode="contain" />
                 </ScrollView>

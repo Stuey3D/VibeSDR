@@ -130,6 +130,7 @@ inline int decodeFrame(const int8_t* soft, uint8_t* data256, int* orderOut = nul
 struct Value { std::string key, name, unit; double v = 0; bool raw = false; };
 struct Decoded {
     int satId = 0, frameType = 0;
+    int rsFixed = 0;        ///< RS bytes corrected in this frame (the run fills it in)
     std::string frameName, mode;
     long long seq = -1;
     std::vector<Value> values;
@@ -300,6 +301,14 @@ private:
     int hold_ = 0;
 };
 
+// ── ★★ V12 beta91: where and when a frame was heard (the gallery's per-pass log) ────────────────────────────────
+struct TlmCtx {
+    std::string sat;          ///< "AO-73"
+    double unix = 0;          ///< the frame's time (the server's corrected clock), seconds
+    double aos = 0, los = 0;  ///< the pass (the satellite engine's), 0 = not known (a hand-tuned listener)
+    double elDeg = NAN;       ///< the bird's elevation now, NaN = not known
+};
+
 // ── The run inside a decoder host ───────────────────────────────────────────────────────────────────────────────
 /** ★ 48 kHz listener audio in (USB, the signal near `centre` Hz); `sat_tlm` per good frame, `fctlm_status` once a
  *  second, a readable gallery line per frame. All on the host's decode thread (never the audio thread). */
@@ -310,6 +319,11 @@ public:
         std::function<void(const std::string&)> line;   ///< a readable line (the gallery's day log)
         std::function<std::string()> satName;           ///< the pick's satellite ("" = AO-73)
         std::function<double()> unixNow;                ///< the server's corrected clock
+        /** ★★ V12 beta91 TELEMETRY CHARTS: every good frame, parsed, for the gallery's per-pass CSV and day log
+         *  (vibe_fctlm_gallery.h). Optional. */
+        std::function<void(const Decoded&, const TlmCtx&)> record;
+        /** ★ beta91: the pass the frame belongs to (the satellite engine's AOS / LOS and elevation now) — 0 = not known. */
+        std::function<void(TlmCtx&)> pass;
     };
     Run(const vibebpsk::Rx::Cfg& cfg, bool invert, Out o) : rx_(cfg), inv_(invert), o_(std::move(o)) {
         rx_.onSymbol = [this](float s) { fr_.push(inv_ ? -s : s); };
@@ -343,6 +357,12 @@ private:
         if (sat.empty()) sat = "AO-73";
         const double now = o_.unixNow ? o_.unixNow() : 0.0;
         if (o_.json) o_.json(tlmJson(p, d, kDataBytes, sat, now));
+        if (o_.record) {
+            TlmCtx c; c.sat = sat; c.unix = now;
+            if (o_.pass) o_.pass(c);
+            Decoded q = p; q.rsFixed = fixed;
+            o_.record(q, c);
+        }
         if (o_.line) {
             std::string l = sat + " telemetry " + p.frameName + " \xc2\xb7 seq " + std::to_string(p.seq) + " \xc2\xb7 " + p.mode
                           + " \xc2\xb7 battery " + num(p.values.size() > 4 ? p.values[4].v : 0) + " (raw) \xc2\xb7 RS fixed " + std::to_string(fixed);
