@@ -4000,7 +4000,7 @@ function renderFrame(frameTs: number) {
   /* ★★ V12 SATELLITE DOPPLER — THE MARKER GOES WHERE THE CHANNEL IS (brief §10 TRAP): the dial shows the nominal, the
    *  channel sits up to ±10 kHz off it, and a marker on the nominal would sit beside the trace looking broken. Between
    *  the readouts (twice a second) the offset moves on at the readout's own rate, so the needle glides, never steps. */
-  wf.vfoHz = spec.frequency + satMarkerOffset();
+  { const so = satMarkerOffset(); wf.vfoHz = spec.frequency + so; wf.nominalHz = so !== 0 ? spec.frequency : 0; }   // ★ beta91 + the nominal line
   recBufCheck();   // ★ V12 record buffer's retune rule — a string compare when nothing moved, nothing at all when Off
   vfoRecBufCheck();   // ★★★ …and each VFO's own, while A/B records per VFO
   guard('web-render', 'overlays', updateViewOverlays);

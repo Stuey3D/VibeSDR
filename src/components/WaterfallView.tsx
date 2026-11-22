@@ -69,6 +69,7 @@ import {
   type SkFont,
   Group,
   Text as SkText,
+  DashPathEffect,
   useTypeface,
 } from '@shopify/react-native-skia';
 import {
@@ -3145,7 +3146,21 @@ function WaterfallView({
     ? needleGeometry({ bwHz, tuneHz: secondVfo.hz, filterLow: secondVfo.filterLow, filterHigh: secondVfo.filterHigh, width, pxPerHz, hzToX })
     : null), [secondVfo, needleHidden, bwHz, width, pxPerHz, hzToX]);
   const secondCol = secondVfo ? (secondVfo.parked ? '#8a8a8a' : secondVfo.color) : '#000';
+  /* ★★ beta91 THE NOMINAL LINE (Stuart 11-22: "there is no nominal signal line in the app so you cant see the doppler
+   *  working"): while the satellite's Doppler moves the needle off the dial, a thin dashed line stays on the dial — the
+   *  satellite's published frequency — so the gap between the two IS the Doppler, and it closes and swaps sides at TCA.
+   *  Drawn only while there is an offset to show (a whole pixel or more); the web page draws the same (waterfall.ts). */
+  const nominalX = !needleHidden && needleOffsetHz !== 0 && tuneHz > 0 ? hzToX(tuneHz) : NaN;
+  const nominalPath = useMemo(() => {
+    if (!(nominalX >= 0 && nominalX <= width) || !needle || Math.abs(needle.nX - nominalX) < 1) return null;
+    const pth = Skia.Path.Make(); pth.moveTo(Math.round(nominalX) + 0.5, BAND_H); pth.lineTo(Math.round(nominalX) + 0.5, height); return pth;
+  }, [nominalX, width, height, needle]);
   const needleEls = useMemo(() => (<>
+      {nominalPath && (
+        <Path path={nominalPath} style="stroke" strokeWidth={1} color={hexRgba(needleColor, 0.7)}>
+          <DashPathEffect intervals={[6, 5]} />
+        </Path>
+      )}
       {/* ── ★★ V12 VFO A/B: the other VFO, UNDER the tuned one — passband, edges, a crisp needle ── */}
       {second && (
         <Group opacity={secondOpacity}>
@@ -3234,7 +3249,7 @@ function WaterfallView({
       )}
       </Group>
   </>), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost,
-      wallOverlay, centerMarker, centerMarkerColor, second, secondCol, secondOpacity, mainOpacity]);
+      wallOverlay, centerMarker, centerMarkerColor, second, secondCol, secondOpacity, mainOpacity, nominalPath]);
   const needleCanvas = useMemo(() => (Platform.OS === 'android' ? null : (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>{needleEls}</Canvas>
   )), [width, height, needleEls]);

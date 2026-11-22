@@ -256,6 +256,9 @@ export class Waterfall {
 
   /** VFO marker position, Hz (the needle). */
   vfoHz = 0;
+  /** ★★ beta91 the satellite's NOMINAL frequency while Doppler moves the needle off it (0 = none): a thin dashed line, so
+   *  the gap to the needle shows the Doppler (Stuart 11-22, the app's same line: WaterfallView nominalPath). */
+  nominalHz = 0;
   /** ★ ISM: there is no listening passband on a band capture — the needle and its LISTEN label are not drawn. */
   vfoHidden = false;
   /** ★★ V12 THE PASSBAND IS A WHOLE CHANNEL (src/utils/wideVfo.ts — DAB's 1.536 MHz block), set by main.ts renderFrame with
@@ -1405,6 +1408,14 @@ export class Waterfall {
     // ★★ V12: the other VFO first, so the selected one is drawn over it where they meet.
     const v2 = this.vfo2;
     if (v2 && v2.hz) this._drawNeedle(ctx, W, H, v2.hz, v2.lo, v2.hi, v2.col, v2.label, v2.alpha, false, v2.parked, 2);
+    if (this.nominalHz > 0) {   // ★ beta91 under the needle: the dial's own frequency, dashed, only once it is a pixel off
+      const x = Math.round(this.hzToX(this.nominalHz, W)) + 0.5;
+      if (x >= 0 && x <= W && Math.abs(x - this.hzToX(this.vfoHz, W)) >= 1) {
+        ctx.save(); ctx.setLineDash([6, 5]); ctx.lineWidth = 1; ctx.globalAlpha = 0.7;
+        ctx.strokeStyle = this.vfoLiveColor || this.vfoColor;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); ctx.restore();
+      }
+    }
     this._drawNeedle(ctx, W, H, this.vfoHz, this.filterLow, this.filterHigh, this.vfoLiveColor || this.vfoColor,
                      this.liveLabel(), this.vfoLiveAlpha, true, false, 0);
     this._drawTuned(ctx, W, H);
