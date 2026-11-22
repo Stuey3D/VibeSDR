@@ -302,7 +302,7 @@ flags_for() {
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
-    test-sat-orbit|test-sat-engine) echo "-O2 -lpthread" ;;
+    test-sat-orbit|test-sat-engine|test-sat-labels) echo "-O2 -lpthread" ;;   # ★ beta91 test-sat-labels: the waterfall's satellite labels
     # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
     #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
     test-fctlm)            echo "-O2" ;;
@@ -960,6 +960,9 @@ if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)
 if npx tsx scripts/test_silent_decoder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 satellite engine, the clients' half (src/services/satellites.ts): parsing, the readout words, the picker rows, the cap
 if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta91 SATELLITE LABELS on the waterfall (knownSignals.ts parseSatLabels / satLabelSignals): the message checked, one
+#    text ("ISS FM", "ORBCOMM FM114"), Doppler-shifted marks, ORBCOMM merged on the band and never a decoder, the layout.
+if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 SATELLITE MODE, the clients' pure half: the timetable's order + greying, the words, the box size, the half-globe
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
@@ -1950,6 +1953,11 @@ node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta91 SATELLITE LABELS on the waterfall, end to end: a server under the ISS on 2 m (not SATELLITE mode) sends sat_labels
+#    (Doppler-shifted, its capture only, moving), the page draws "ISS Voice/SSTV" in sky blue (headless Edge, --mute-audio),
+#    ORBCOMM never in sat_list, the owner's "satlabels" switch and no location send nothing named. Needs VIBESERVER_BIN.
+node --max-old-space-size=512 scripts/test-web-sat-labels.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ WHOLE-RADIO MODES HAND BACK THE SERVER'S GEOMETRY (Stuart 11-21, beta89: blank spectrum + the old readout after ADS-B →
 #     SATELLITE, 1090000 kHz in NFM, 216928 in SATELLITE): the app's REAL client against a real server through ADS-B / DAB /

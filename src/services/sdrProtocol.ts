@@ -668,6 +668,9 @@ export interface SDRCallbacks {
   /** ★★ V12 SIGNAL TAGS (vibe_varatag.h): the server's `sigtags` message, raw — knownSignals.ts parseSigTags checks it.
    *  The VARA HF tag only: identified from its shape, never decoded. A VibeServer only. */
   onSigTags?: (msg: unknown) => void;
+  /** ★★ beta91 SATELLITE LABELS (vibe_sat_engine.h skyLabels): the server's `sat_labels` message, raw — knownSignals.ts
+   *  parseSatLabels checks it. The birds in range in this radio's capture, Doppler-shifted. A VibeServer only. */
+  onSatLabels?: (msg: unknown) => void;
   /** ★ The RADIO's centre and the owner's locked centre (0 = not locked), off hwinfo. The one
    *  figure the walls and the RF-centre marker must be drawn from — the view centre is not it. */
   onRfCentre?: (rfHz: number, lockedHz: number) => void;

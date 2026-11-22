@@ -2993,6 +2993,11 @@ export abstract class VibeServerWsClient {
       this.callbacks.onSigTags?.(msg);
       return;
     }
+    // ★★ beta91 satellites in range, named on the waterfall (vibe_sat_engine.h skyLabels)
+    if (msg.type === 'sat_labels') {
+      this.callbacks.onSatLabels?.(msg);
+      return;
+    }
     if (msg.type === 'ovl') {
       this.callbacks.onOverload?.({
         gainTenthDb: Number(msg.gain) || 0,

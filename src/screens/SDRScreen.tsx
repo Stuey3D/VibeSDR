@@ -299,7 +299,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type SigTagEntry } from '../utils/knownSignals';
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type SigTagEntry, parseSatLabels, satLabelSignals, withSatLabels, SATLABEL_STALE_MS, type SatLabelEntry } from '../utils/knownSignals';
 import { dabBlockSignals, dabMuxNames, dabFreshGrades, type DabBlockGrade } from '../utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
@@ -7636,6 +7636,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           return key(cur) === key(tags) ? cur : tags;
         });
       },
+      // ★★ beta91 satellites in range (knownSignals.ts satLabelSignals): kept only when what is drawn changes
+      onSatLabels: (m: unknown) => {
+        if (destroyed.current) return;
+        const es = parseSatLabels(m);
+        satLabelsAtRef.current = Date.now();
+        setSatLabels((cur) => {
+          const key = (t: SatLabelEntry[]) => t.map((x) => `${x.norad}:${x.tx}:${x.hz}`).join(',');
+          return key(cur) === key(es) ? cur : es;
+        });
+      },
       onLightning: (rate, ago) => {
         if (destroyed.current) return;
         const next = rate > 0 ? { rate, ago } : null;
@@ -12591,6 +12601,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     const t = setInterval(() => { if (Date.now() - sigTagsAtRef.current > SIGTAG_STALE_MS) setSigTags([]); }, 5000);
     return () => clearInterval(t);
   }, [sigTags]);
+  /* ★★★ beta91 SATELLITE LABELS (vibe_sat_engine.h skyLabels — Stuart, 2026-11-22: "we dont even need to be in satellite
+   *  mode either"): the last `sat_labels` message — the birds in range in this radio's capture, Doppler-shifted, every 4 s
+   *  while one is up — dropped SATLABEL_STALE_MS after the last message. Drawn with the other labels (SIGNAL LABELS).
+   *  ORBCOMM is a name only, never decoded. */
+  const [satLabels, setSatLabels] = useState<SatLabelEntry[]>([]);
+  const satLabelsAtRef = useRef(0);
+  useEffect(() => {
+    if (!satLabels.length) return;
+    const t = setInterval(() => { if (Date.now() - satLabelsAtRef.current > SATLABEL_STALE_MS) setSatLabels([]); }, 5000);
+    return () => clearInterval(t);
+  }, [satLabels]);
   const [dxDialClock, setDxDialClock] = useState(0);
   useEffect(() => {
     setDxDial(null);
@@ -12638,8 +12659,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     : dxDialSigs.length ? knownSignalList(knownBase.eibi, knownBase.bms, dxDialSigs) : knownBase.list),
     [knownBase, dxDialSigs]);
   // ★★ V12 + the server's signal tags (the VARA HF tag — "VARA HF (proprietary — not decoded)"), clear of every label above
-  const knownSignals = useMemo(() => (!knownWithDx || !sigTags.length ? knownWithDx
+  const knownWithTags = useMemo(() => (!knownWithDx || !sigTags.length ? knownWithDx
     : withSigTags(knownWithDx, sigTagSignals(sigTags, knownWithDx))), [knownWithDx, sigTags]);
+  // ★★ beta91 + the satellites in range, at their Doppler-shifted frequency (the same list the web client draws)
+  const knownSignals = useMemo(() => (!knownWithTags || !satLabels.length ? knownWithTags
+    : withSatLabels(knownWithTags, satLabelSignals(satLabels))), [knownWithTags, satLabels]);
 
   /* ★★ V12 DAB BLOCK LABELS AND THE BLOCK SWAPPER (utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s
    *  showing all of Band III: "add the spectrum labels to show the blocks and, if in the memory, show the MUX name next to

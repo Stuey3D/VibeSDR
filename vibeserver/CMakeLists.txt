@@ -1206,7 +1206,7 @@ target_compile_options(test-fctlm PRIVATE -O2)
 add_test(NAME fctlm COMMAND test-fctlm --quick)
 # ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): SGP4/SDP4 against the paper's verification set, OMM/TLE,
 #    the observer's view, Doppler and passes against Skyfield; the catalogue / TLE supply; the Doppler lock. Header-only.
-foreach(t sat-orbit sat-engine)
+foreach(t sat-orbit sat-engine sat-labels)   # ★ beta91 sat-labels: satellite labels on the waterfall (docs/v12/SAT-LABELS.md)
   add_executable(test-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-${t}.cpp")
   target_include_directories(test-${t} PRIVATE "${CPP_DIR}")
   target_compile_options(test-${t} PRIVATE -O2)

@@ -508,6 +508,9 @@ export interface SpectrumCallbacks {
   /** ★★ V12 signal tags (vibe_varatag.h): what the server identified from a signal's shape — the raw message, checked by
    *  knownSignals.ts parseSigTags. The VARA HF tag only for now (identify only — never decoded). */
   onSigTags?: (msg: unknown) => void;
+  /** ★★ beta91 satellite labels (vibe_sat_engine.h skyLabels): the birds in range in this radio's capture, Doppler-shifted —
+   *  the raw message, checked by knownSignals.ts parseSatLabels. */
+  onSatLabels?: (msg: unknown) => void;
   /** The server's radio was unplugged (false) or came back (true). */
   /** ★ `inUse` = the server KNOWS another program has the radio (inUseElsewhere); `radioName` names it. */
   onDevice?: (present: boolean, reason?: string, inUse?: boolean, radioName?: string) => void;
@@ -1843,6 +1846,10 @@ export class SpectrumClient {
       // ★★ V12 signal tags — ITS OWN CASE (see the lx note above): the VARA HF tag, identify only (vibe_varatag.h)
       case 'sigtags':
         this.cb.onSigTags?.(msg);
+        break;
+      // ★★ beta91 satellite labels — ITS OWN CASE (a message type means a CASE)
+      case 'sat_labels':
+        this.cb.onSatLabels?.(msg);
         break;
       case 'iqout':
         this.cb.onIqOut?.({ on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined, host: typeof msg.host === 'string' ? msg.host : undefined,

@@ -57,6 +57,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals (MSF, DCF77, TDF, WWV/WWVB, RWM, JJY)' },
   // ★★ V12 the VARA HF tag (vibe_varatag.h) — identify only; VARA is proprietary and never decoded
   { id: 'varatag', label: 'VARA HF tag on the spectrum (identify only \u2014 VARA is proprietary and never decoded)' },
+  // ★★ beta91 satellite labels on the waterfall (vibe_sat_engine.h skyLabels) — names only; ORBCOMM is never decoded
+  { id: 'satlabels', label: 'Satellite labels on the waterfall (names only \u2014 ORBCOMM is never decoded)' },
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Band: a whole band at once', parent: 'spots' },

@@ -86,6 +86,13 @@ int main() {
     static_assert(vssat::kBackoffSec >= vssat::kHoldFloorSec, "the first back-off is above the floor");
     static_assert(vssat::kResumeJitterSec >= 3600, "a fleet's return spread over at least an hour");
 
+    {   // ★★ beta91: a sats.json with ORBCOMM's label-only birds (mode "label") passes the same dry parse
+        std::vector<vibe::sat::SatDef> d; std::vector<vibe::sat::Elements> e; std::vector<bool> h; vibe::sat::SatsMeta m; std::string why;
+        vibe::sat::LabelSet ls;
+        const std::string orb = readFile("vibeserver/testdata-sat/sats-orbcomm-SYNTHETIC-2026-11-22.json");
+        CHECK(vibe::sat::parseSats(orb, d, e, h, m, why) && !d.empty(), "beta91: the validator accepts a sats.json with ORBCOMM label birds (%s)", why.c_str());
+        CHECK(vibe::sat::parseSats(orb, d, e, h, m, why, &ls) && ls.defs.size() == 8, "…and the engine's parse sets them apart (%zu)", ls.defs.size());
+    }
     std::printf("§1 first start, no copy\n");
     CHECK(vssat::loadFromCache() == 0 && g_published == 0, "nothing cached");
     CHECK(vssat::needsRefresh(), "no copy → ask");
