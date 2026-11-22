@@ -11803,6 +11803,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = avCompose(avOn ? avReport : null, avShared, avOn ? 'datalink' : avMapFocus, avLayers, trkRx, 'app');
     return {
       items: c.items, rows: c.rows, status: c.status, empty: AV_EMPTY, trail: () => Promise.resolve([] as [number, number][]),
+      credit: c.credit,   // ★ beta91 the Mictronics ODC-By line at the list's foot while a row shows the aircraft data
       toggles: c.toggles, toggled: avLayers as Record<string, boolean>, profile: c.profile,
       onToggle: (id: string, on: boolean) => setAvLayers((l) => { const n = { ...l, [id]: on }; AsyncStorage.setItem('lsv_av_map_layers', JSON.stringify(n)).catch(() => {}); return n; }),
     };

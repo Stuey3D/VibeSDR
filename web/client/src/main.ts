@@ -50,7 +50,7 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
 import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
-         type AvLayers, type AvFocus, type SharedAircraft } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
+         type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
@@ -10193,8 +10193,10 @@ function avListHtml(c: ReturnType<typeof avCompose>, bodies: Map<string, string>
   const row = (x: (typeof c.rows)[number]) => trkRowHtml(x).replace('</small></span>', `</small>${bodies.get(x.key) ? `<small class="avText">${escapeHtml(bodies.get(x.key) as string)}</small>` : ''}</span>`);
   const live = c.rows.filter((r) => liveKeys.has(r.key)), rest = c.rows.filter((r) => !liveKeys.has(r.key));
   const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
-  if (!live.length) return rest.map(row).join('');
-  return sec('THIS RADIO — HEARD NOW') + live.map(row).join('') + (rest.length ? sec('OTHER SOURCES ON THIS SERVER') + rest.map(row).join('') : '');
+  // ★★ beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the aircraft data (the card's words)
+  const credit = c.credit ? `<div class="avCredit">${avCreditHtml()}</div>` : '';
+  if (!live.length) return rest.map(row).join('') + credit;
+  return sec('THIS RADIO — HEARD NOW') + live.map(row).join('') + (rest.length ? sec('OTHER SOURCES ON THIS SERVER') + rest.map(row).join('') : '') + credit;
 }
 function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
   v.setToggles(c.toggles, avLayers as Record<string, boolean>);

@@ -4,7 +4,7 @@
 // its sources is on, the basemap profile, the items / rows / card / KEY, and never a message body.
 //   npx tsx scripts/test_aviation_map.ts
 import { avLayersOf, avLayersPresent, avToggles, avOn, avProfile, sharedSanitise, avMerge, avHave, avVisible, avPlaneItems, avPlaneRows,
-         avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, avNowRule, avAdsbNote, AV_ADSB_NOW_SEC, avPlaneAdsb,
+         avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, avNowRule, avAdsbNote, AV_ADSB_NOW_SEC, avPlaneAdsb, avShowsData, avCreditHtml, AV_DATA_CREDIT,
          type AvHave } from '../src/services/aviationMap';
 import { parseAvReport } from '../src/services/aviation';
 
@@ -189,6 +189,13 @@ console.log('── beta91: the ADS-B aircraft data on every source (vibe_aircra
   const c91 = avCompose(null, t91, 'datalink', avLayersOf(null), null, 'web');
   const it = c91.items.find((x: any) => x._adsb?.hex === '4ca2d6') as any;
   yes('avCompose hands the layer the data', it && it._adsb.op === 'RYR' && it._adsb.t === 'B738');
+  // ★★ the ODC-By notice on the list: while any row shows the aircraft data, never otherwise
+  yes('the list carries the notice while a row shows the data', c91.credit === true && avShowsData([v]) && avShowsData([{ ...plain, type: 'A320' }]));
+  yes('…not when no row does (registrations the datalink heard itself)', !avShowsData([plain]) && avCompose(null, sharedSanitise({ now: 1, aircraft: [{ key: 'r:GABCD', reg: 'G-ABCD', lat: 51, lon: 0, posSrc: 'ACARS', src: ['ACARS'], srcAge: { ACARS: 1 }, age: 1, n: 1 }], stations: [] }), 'datalink', avLayersOf(null), null).credit === false);
+  const ch = avCreditHtml();
+  yes('the card\'s words and links', ch.includes('href="https://opendatacommons.org/licenses/by/1-0/"') && ch.includes('href="https://github.com/Mictronics/aircraft-database"')
+      && ch.includes('contains information from Mictronics aircraft database, which is made available under the') && ch.includes('VRS standing data</a> (CC0)'));
+  yes('the RN words are the same text', `${AV_DATA_CREDIT.lead}${AV_DATA_CREDIT.mic}${AV_DATA_CREDIT.mid}${AV_DATA_CREDIT.odc}`.length > 60 && ch.includes(AV_DATA_CREDIT.mid));
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

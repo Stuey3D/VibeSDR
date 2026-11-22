@@ -451,6 +451,8 @@ const CSS = `
 .trkCard .v{color:#e3eaf1;word-break:break-word}
 .trkCard .raw{margin-top:6px;padding:5px 6px;background:#0d151c;border-radius:4px;color:#9fb0c2;font-size:11px;word-break:break-all}
 .trkView .flag{font-size:14px}
+.trkView .avCredit{padding:6px 10px 8px;font:10px/1.35 ui-monospace,Menlo,monospace;color:#8a9aaa;border-top:1px solid #151f29}
+.trkView .avCredit a{color:#9ccfff}
 .trkView .cc{font:700 10px/1 ui-monospace,monospace;background:#2a3a4a;border-radius:3px;padding:1px 3px}
 @media (max-width:520px){
   .trkList{left:6px;right:6px;width:auto;max-height:34%}

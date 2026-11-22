@@ -162,6 +162,8 @@ interface MapOverlayProps {
   /** ★ kinds 'ais' / 'aprs': the items on the map (each with its icon, label and card — tracks.ts aisItems / aprsItems),
    *  the live list's rows, its status line and empty text, and the AIS safety strip. */
   trk?: { items: TrackItem[]; rows: TrackRow[]; status: string; empty: string; safety?: string[];
+          /** ★ V12 beta91 the aviation map: a row shows the aircraft data — the list carries its ODC-By notice */
+          credit?: boolean;
           /** One item's track for its card: [lat, lon] oldest first ([] = none). */
           trail: (key: string) => Promise<[number, number][]>;
           /** Find this item when the map opens (a row tapped in the APRS box); '' = none. */
@@ -2586,7 +2588,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty} credit={!!trk.credit}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
