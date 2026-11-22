@@ -18014,6 +18014,9 @@ let win = ${safe(open.window)};
 const FOCUS0 = ${safe(open.focus)};
 let show = { spots: ${safe(open.layer !== 'aprs')}, aprs: ${safe(open.layer === 'aprs')}, overlay: true };
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
+/* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
+ *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
+let decodesToday = -1, notKeptToday = 0, srvTotal = 0, srvTrunc = false;
 const STYLE = ${safe(DIGI_MODE_STYLE)};
 ${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (src/utils/spotTime.ts)
 const me = ${safe(me)};
@@ -18210,6 +18213,9 @@ async function fetchStations(full) {
     if (full) stored = new Map();
     for (const s of cleanStations(j.stations)) stored.set(s.callsign, s);
     srvNow = okNum(j.now) || Math.round(Date.now() / 1000);
+    if (j.decodesToday != null) decodesToday = Math.max(0, Math.round(okNum(j.decodesToday)));
+    notKeptToday = Math.max(0, Math.round(okNum(j.notKeptToday)));
+    if (full) { srvTotal = Math.max(0, Math.round(okNum(j.total))); srvTrunc = okNum(j.truncated) > 0; }
     // ★ a live poll: the ones that aged out of a sliding window go
     const w = winSec();
     if (w) for (const [k, s] of stored) if (s.timestamp < (srvNow - w) * 1000) stored.delete(k);
@@ -18550,8 +18556,11 @@ if (show.aprs && aprs.length) {
 }
 html += '<div class="sect">TOTALS</div>' +
   (srvOk ? '<div class="sub">' + esc((WINDOWS.find((w) => w.id === win) || { words: '' }).words) + ' · background decoding and every listener</div>' : '') +
-  '<div class="row"><span>Stations</span><b>' + spots.length + '</b></div>' +
-  (unplaced ? '<div class="row"><span>Heard without a locator</span><b>' + unplaced + '</b></div>' : '') +
+  '<div class="row"><span>Stations</span><b>' + spots.length.toLocaleString('en-GB') + '</b></div>' +
+  (srvOk && srvTrunc && srvTotal > stored.size ? '<div class="sub">the newest ' + stored.size.toLocaleString('en-GB') + ' of ' + srvTotal.toLocaleString('en-GB') + ' in this window are drawn</div>' : '') +
+  (unplaced ? '<div class="row"><span>Heard without a locator</span><b>' + unplaced.toLocaleString('en-GB') + '</b></div>' : '') +
+  (srvOk && decodesToday >= 0 ? '<div class="row"><span>Decodes today (UTC)</span><b>' + decodesToday.toLocaleString('en-GB') + '</b></div>' : '') +
+  (srvOk && notKeptToday > 0 ? '<div class="row"><span>Not kept today</span><b>' + notKeptToday.toLocaleString('en-GB') + '</b></div><div class="sub">the day\u2019s list was full \u2014 these were decoded (and sent to PSK Reporter when it is on) but are not on the map</div>' : '') +
   '<div class="row"><span>Countries</span><b>' +
     new Set(spots.map(s => s.country).filter(Boolean)).size + '</b></div>' +
   '<div class="row"><span>Bands</span><b>' +

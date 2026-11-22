@@ -236,6 +236,19 @@ static void testBounds() {
     CHECK(v.size() == vs::dayCap() && dropped == 1, "the header counts the dropped one (%u)", dropped);
     const std::string j = s.mapJson(vs::kDaySec, 0, NAN, NAN, 1000);
     CHECK(num(j, "count") == 1000 && num(j, "truncated") == 1, "maxOut caps the answer");
+    // ★★ beta91: every reception today is counted, kept or not — 3072 kept + 500 refused in RAM + 1 refused on disk
+    {
+        uint32_t ds = 0; std::vector<vs::Station> w; vs::readDay(path, vs::dayOf(g_now), w, nullptr, &ds);
+        CHECK(ds == 501, "the header counts the refused RECEPTIONS, RAM and disk (%u)", ds);
+        CHECK(num(j, "notKeptToday") == 501, "the map says how many were not kept (%ld)", num(j, "notKeptToday"));
+        CHECK(num(j, "decodesToday") == (double)vs::dayCap() + 501, "…and every decode today, kept or not (%ld)", num(j, "decodesToday"));
+        s.spot(rx("K1NEW", "FN42", "FT8", "20m", -10, g_now - 1));   // one more refused, not yet flushed: counted at once
+        const std::string j2 = s.mapJson(vs::kDaySec, 0, NAN, NAN, 1000);
+        CHECK(num(j2, "notKeptToday") == 502 && num(j2, "decodesToday") == (double)vs::dayCap() + 502, "an unflushed refusal counts too");
+        s.flush();
+        const std::string j3 = s.mapJson(vs::kDaySec, 0, NAN, NAN, 1000);
+        CHECK(num(j3, "notKeptToday") == 502, "…once, after its flush (%ld)", num(j3, "notKeptToday"));
+    }
     // pruning: a gallery of 16 MB → a 1 MB budget; 10 full days (~1.9 MB) prune down
     rmDir(d); ::mkdir(d.c_str(), 0755);
     for (int day = 10; day >= 1; --day) {

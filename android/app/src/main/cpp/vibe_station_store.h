@@ -195,7 +195,9 @@ struct Rec {
     int8_t best, lastSnr; uint8_t origins, ver;
     uint8_t pad[4];
 };
-struct Hdr { uint32_t magic, recSize, n, dropped; int64_t day; uint8_t pad[40]; };
+/** `dropped`: new rows refused (one per call a flush could not add); `droppedSpots` (beta91, 0 in older files): the
+ *  RECEPTIONS those rows carried, from every radio's RAM and disk refusals — so a full day still counts every decode. */
+struct Hdr { uint32_t magic, recSize, n, dropped; int64_t day; uint32_t droppedSpots; uint8_t pad[36]; };
 #pragma pack(pop)
 static_assert(sizeof(Rec) == kRecSize, "Rec is 64 bytes");
 static_assert(sizeof(Hdr) == kHeader, "Hdr is 64 bytes");
@@ -234,7 +236,7 @@ inline void mergeInto(Station& into, const Station& d, uint32_t deltaCount) {
 }
 
 /** One day's file, read whole under a shared lock. False when it does not exist or is not ours. */
-inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& out, uint32_t* dropped = nullptr) {
+inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& out, uint32_t* dropped = nullptr, uint32_t* droppedSpots = nullptr) {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
     ::flock(fd, LOCK_SH);
@@ -247,6 +249,7 @@ inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& 
         ok = n == 0 || ::pread(fd, recs.data(), (size_t)want, kHeader) == want;
         if (ok) { out.reserve(out.size() + n); for (const auto& r : recs) out.push_back(fromRec(r, day)); }
         if (dropped) *dropped = h.dropped;
+        if (droppedSpots) *droppedSpots = h.droppedSpots;
     }
     ::flock(fd, LOCK_UN);
     ::close(fd);
@@ -386,7 +389,13 @@ public:
         by.reserve(256);
         size_t rowsRead = 0;
         // today (and its unflushed rows) first: it is what changes, and the newest win the cap
-        { std::vector<Station> v; dayRows_(today, v); rowsRead += v.size(); for (const auto& s : v) if (s.last >= since) aggregate(by, s, maxOut); }
+        uint64_t decodesToday = 0, notKeptToday = 0;
+        {
+            std::vector<Station> v; uint32_t ds = 0; dayRows_(today, v, &ds); rowsRead += v.size();
+            for (const auto& s : v) { decodesToday += s.count; if (s.last >= since) aggregate(by, s, maxOut); }
+            notKeptToday = refusedOn_(today, ds);
+            decodesToday += notKeptToday;
+        }
         if (since < today) pastDays_(since, today, by, maxOut, rowsRead);
         // ★ newest first, then the cap
         std::vector<const MapRow*> rows;
@@ -400,6 +409,10 @@ public:
         o += "{\"now\":" + std::to_string((long long)t) + ",\"window\":" + std::to_string((long long)window)
            + ",\"since\":" + std::to_string((long long)since) + ",\"total\":" + std::to_string(by.size())
            + ",\"count\":" + std::to_string(rows.size()) + ",\"truncated\":" + (by.size() >= maxOut ? "1" : "0")
+           // ★★ beta91 (Stuart: "at least get the reported totals right"): every reception today (UTC), kept or not, and
+           //    how many of them the day's full list could not keep — the map says both, never a silently short count.
+           + ",\"decodesToday\":" + std::to_string((unsigned long long)decodesToday)
+           + ",\"notKeptToday\":" + std::to_string((unsigned long long)notKeptToday)
            + ",\"byMode\":{";
         bool first = true;
         for (const auto& kv : byMode) { if (!first) o += ','; first = false; o += "\"" + kv.first + "\":" + std::to_string(kv.second); }
@@ -458,7 +471,7 @@ private:
     struct Job { int64_t day; std::string key; Station s; uint32_t delta; };
     struct Table {
         std::unordered_map<std::string, Row> rows;
-        uint32_t droppedRam = 0;
+        uint32_t droppedRam = 0, droppedRamFlushed = 0;   ///< receptions refused in RAM (the day's rows full), and how many are on disk
         bool clean() const { for (const auto& kv : rows) if (kv.second.dirty) return false; return true; }
     };
     int64_t now() const { return clock_ ? clock_() : (int64_t)std::time(nullptr); }
@@ -472,10 +485,19 @@ private:
     uint64_t limit_() const { std::lock_guard<std::mutex> lk(cfgMtx_); return limitFn_ ? limitFn_() : 0; }
     std::string storeDir_() const { const std::string g = galleryDir_(); return g.empty() ? std::string() : g + "/stations"; }
 
-    /** One day's rows: the file (every radio's flushed rows) with this process's unflushed part laid over it. */
-    void dayRows_(int64_t day, std::vector<Station>& out) const {
+    /** Receptions refused on `day` (its rows full): the file's count, from every radio, plus this process's not yet flushed. */
+    uint64_t refusedOn_(int64_t day, uint32_t onDisk) const {
+        uint64_t n = onDisk;
         const std::string dir = storeDir_();
-        if (!dir.empty()) readDay(dir + "/" + dayName(day), day, out);
+        std::lock_guard<std::mutex> lk(m_);
+        auto t = days_.find(day);
+        if (t != days_.end()) n += dir.empty() ? t->second.droppedRam : t->second.droppedRam - t->second.droppedRamFlushed;
+        return n;
+    }
+    /** One day's rows: the file (every radio's flushed rows) with this process's unflushed part laid over it. */
+    void dayRows_(int64_t day, std::vector<Station>& out, uint32_t* droppedSpots = nullptr) const {
+        const std::string dir = storeDir_();
+        if (!dir.empty()) readDay(dir + "/" + dayName(day), day, out, nullptr, droppedSpots);
         std::lock_guard<std::mutex> lk(m_);
         auto t = days_.find(day);
         if (t == days_.end()) return;
@@ -566,8 +588,15 @@ private:
         haveDir_.store(!dir.empty());
         if (dir.empty()) return;
         std::vector<Job> jobs;
+        std::map<int64_t, uint32_t> refused;   // ★ receptions this process refused in RAM since the last flush, per day
         {
             std::lock_guard<std::mutex> lk(m_);
+            for (auto& d : days_) {
+                if (d.second.droppedRam > d.second.droppedRamFlushed) {
+                    refused[d.first] = d.second.droppedRam - d.second.droppedRamFlushed;
+                    d.second.droppedRamFlushed = d.second.droppedRam;
+                }
+            }
             for (auto& d : days_)
                 for (auto& kv : d.second.rows) {
                     Row& r = kv.second;
@@ -576,12 +605,17 @@ private:
                     r.flushed = r.s.count; r.dirty = false;   // ★ optimistic: put back below if the write fails
                 }
         }
-        if (jobs.empty()) return;
+        if (jobs.empty() && refused.empty()) return;
         ::mkdir(dir.c_str(), 0755);
         std::map<int64_t, std::vector<const Job*>> byDay;
         for (const auto& j : jobs) byDay[j.day].push_back(&j);
+        for (const auto& r : refused) byDay[r.first];   // a day with only refusals still records them
         std::vector<const Job*> failed;
-        for (auto& dj : byDay) if (!writeDay_(dir + "/" + dayName(dj.first), dj.first, dj.second)) failed.insert(failed.end(), dj.second.begin(), dj.second.end());
+        for (auto& dj : byDay) {
+            auto rf = refused.find(dj.first);
+            if (!writeDay_(dir + "/" + dayName(dj.first), dj.first, dj.second, rf == refused.end() ? 0 : rf->second))
+                failed.insert(failed.end(), dj.second.begin(), dj.second.end());
+        }
         if (!failed.empty()) {
             std::lock_guard<std::mutex> lk(m_);
             for (const Job* j : failed) {
@@ -597,7 +631,7 @@ private:
         }
         prune_(dir);
     }
-    bool writeDay_(const std::string& path, int64_t day, const std::vector<const Job*>& jobs) {
+    bool writeDay_(const std::string& path, int64_t day, const std::vector<const Job*>& jobs, uint32_t refusedSpots = 0) {
         const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (fd < 0) return false;
         ::flock(fd, LOCK_EX);
@@ -618,7 +652,7 @@ private:
             uint32_t at;
             if (f != idx.end()) { at = f->second; s = fromRec(recs[at], day); mergeInto(s, j->s, j->delta); }
             else {
-                if (h.n >= dayCap()) { ++h.dropped; continue; }
+                if (h.n >= dayCap()) { ++h.dropped; h.droppedSpots += j->delta; continue; }
                 at = h.n++;
                 s = j->s; s.count = j->delta;
                 recs.push_back(Rec{});
@@ -627,6 +661,7 @@ private:
             recs[at] = toRec(s);
             if (::pwrite(fd, &recs[at], sizeof(Rec), kHeader + (off_t)at * kRecSize) != (ssize_t)sizeof(Rec)) ok = false;
         }
+        h.droppedSpots += refusedSpots;
         if (::pwrite(fd, &h, sizeof h, 0) != (ssize_t)sizeof h) ok = false;
         ::flock(fd, LOCK_UN);
         ::close(fd);
