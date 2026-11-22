@@ -89,6 +89,11 @@ bad stretch. The fix makes the engine indifferent to the moment instead of tunin
 - Result, the same offline sweep: **0 of 30 late at 0 dB and at −8 dB**; worst first spot 34.7 s (0 dB), 35.1 s (−8 dB).
   test-psk unchanged (all its pins pass, the forced-open noise runs still 0 characters).
 
+**Re-runs (Mac shared with other agents, one at a time, nice):** before the fix (the branch's start, cdc0e22bb's skimmer)
+test-server-spots **5/6** (run 5 missed G4PSK in the one-pipeline Band — the edge reproduced); with the fix **4/4**
+test-server-spots (55/0 each) and **2/2** test-web-spots (70/0 each). Each run took ≈ 11 min on the loaded Mac, so the
+≥ 10 / ≥ 5 the brief asked for were NOT reached in the time-box — the coordinator's run owes the rest.
+
 The FT2 (IU8AAA) half of the old misses is not explained by this. The test now prints, on a miss, the missing station's
 mode chip as it changed (`chipHistory`: e.g. "FT2 … 21s shed → 36s light"), so the next one says whether the governor
 shed it (a slot skip cutting the budget) or the decoder missed it.
