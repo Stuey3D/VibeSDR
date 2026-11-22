@@ -228,6 +228,34 @@ int main() {
            && vibe::spotreport::adifMode("PSK125") == "PSK125" && vibe::spotreport::adifMode("BPSK63") == "PSK63",
            "PSK Reporter gets the ADIF names: PSK125, QPSK31, QPSK63 (and PSK63 as before)");
     }
+    // ── ★★ V12 beta91: A STRONG STATION IS ONE CHANNEL, ONE SPOT, AT ITS FREQUENCY AND ITS LEVEL (Stuart: "no duplicate
+    //    channels/spots for one station at any SNR"). +20–30 dB used to walk the channel ±2 Hz (the FLL's weight grew with
+    //    the level), drop the copy or open a second channel, and the shown Es/N0 stopped at the EVM's own ≈ 22–25 dB floor.
+    {
+        const std::string text = std::string("cq cq cq de g4abc g4abc g4abc pse k\n") + kQso[1] + "cq cq cq de g4abc g4abc g4abc pse k\n";
+        struct M { const char* name; double baud; bool q; };
+        const M all[] = { { "BPSK31", 31.25, false }, { "BPSK63", 62.5, false }, { "BPSK125", 125, false }, { "QPSK31", 31.25, true }, { "QPSK63", 62.5, true } };
+        int runs = 0, good = 0; double worstHz = 0, worstDb = 0; std::string bad;
+        for (const M& m : all)
+            for (bool iq : { false, true })
+                for (double snr : { 0.0, 10.0, 20.0, 30.0 }) {
+                    const double rate = iq ? 48000 : 12000, hz = iq ? 1700 : 1000;
+                    Rng rng(81); Sig s; s.hz = hz; s.baud = m.baud; s.qpsk = m.q; s.snrDb = snr; s.text = text; s.startSec = 2;
+                    std::vector<Sig> v{ s }; std::vector<cf> x; std::vector<float> re; synth(v, rate, iq, duration(s) + 4, rng, x, re);
+                    psk::Skimmer sk(cfgFor(iq, rate));
+                    const Run r = run(sk, x, re);
+                    int near = 0, spots = 0; double f = 0, es = 0; std::string md;
+                    for (const psk::SignalView& sv : sk.signals()) if (std::fabs(sv.offsetHz - hz) < 200) { ++near; f = sv.offsetHz - hz; es = sv.snrDb; md = sv.mode; }
+                    for (const psk::Spot& sp : r.spots) spots += sp.call == "G4ABC";
+                    const double want = snr + 10 * std::log10(2500 / m.baud);
+                    const bool okRun = near == 1 && spots == 1 && md == m.name && std::fabs(f) < 1.0 && std::fabs(es - want) < 3.0;
+                    ++runs; good += okRun;
+                    if (near == 1) { worstHz = std::max(worstHz, std::fabs(f)); worstDb = std::max(worstDb, std::fabs(es - want)); }
+                    if (!okRun) { char b[160]; std::snprintf(b, sizeof b, " %s %s %+.0f: %d ch %d spot %.1f Hz %.1f/%.1f dB;", m.name, iq ? "iq" : "au", snr, near, spots, f, es, want); bad += b; }
+                }
+        char b[200]; std::snprintf(b, sizeof b, "★ 0 … +30 dB, five modes, audio and IQ: %d/%d one channel, one spot, the right mode, within 1 Hz (worst %.2f) and 3 dB of its Es/N0 (worst %.1f)", good, runs, worstHz, worstDb);
+        ok(good == runs, b + bad);
+    }
     // ── ★ the cost of the three new lanes (a busy 3 kHz: 8 PSK31/63 signals, 60 s of 12 kHz audio) ──
     {
         Rng rng(77); std::vector<Sig> v;

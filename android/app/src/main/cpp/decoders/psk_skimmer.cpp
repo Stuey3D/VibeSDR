@@ -453,7 +453,9 @@ struct Sig {
     Lane lane[kMaxLanes];
     int lead = 0;             // the lane that steers the AFC and whose text is shown
     double bornSec = 0, lastGoodSec = 0, confirmedSec = 0, bornHz = 0;
-    double heardSec = 0;      // ★ beta91: the last hop its carrier stood over the floor (housekeeping: a tentative that went)
+    double heardSec = 0;
+    double fcGood = 0;        // ★ beta91: the carrier when last heard well (the list's frequency once it has gone)
+    float snrNow = -99;       // ★ beta91: Es/N0 as last measured while heard well (esN0)      // ★ beta91: the last hop its carrier stood over the floor (housekeeping: a tentative that went)
     double t0 = -1;           // ★ input time (s) of this channel's first output sample
     bool ghost = false;
     bool catchup = true;      // ★ run over the kept transforms before its first live hop
@@ -643,6 +645,31 @@ struct Skimmer::Impl {
      *  carrier finder's 1 s average — a strong signal's took ≈ 5 s to fall back after its over ended (+17 dB in the
      *  test clip), and the channel was held off before it noticed. One hop is noisy, but ≈ 26 degrees of freedom put
      *  noise 3.6 σ under the bar, and a weak PSK31 (−12 dB in 2.5 kHz) stands ≈ 6 dB over it. */
+    /** ★★ beta91: THE Es/N0 SHOWN. The constellation's EVM is the measure (it is the signal's own, untouched by a
+     *  neighbour), but it has a floor of its own — the loops' jitter and the equaliser's leftover ISI — at ≈ 22–25 dB: a
+     *  +30 dB PSK31 (Es/N0 49) read 25. Past 15 dB EVM the SPECTRUM says it instead: the 1 s average's excess over the
+     *  floor across ±1 baud of the carrier (the pulse's main lobe), as SNR in 2500 Hz, + 10·log10(2500 / baud). A broad
+     *  signal scales with the window exactly as noise does, so no window correction. The larger of the two. */
+    float esN0(const Sig& g, const Lane& l) const {
+        if (l.snrL < 14.0f) return l.snrL;
+        const int c = (int)std::lround(g.fc / binHz) - kLo, w = (int)std::ceil(l.baud / binHz);
+        if (c - w < 0 || c + w >= nS) return l.snrL;
+        // ★ the noise from BESIDE the signal (the floor 2–4 baud + 94 Hz out on either side, its lower quarter): next to
+        //   a +30 dB signal the floor's own blocks carry its skirts and read it 5–15 dB weak. Not the minimum: that is
+        //   biased low, and a weak signal read 10 dB strong (its shown value is a peak, so one high reading stuck)
+        float side[512]; int ns = 0;
+        for (int sd : { -1, 1 })
+            for (int i = 2 * w; i <= 4 * w + 32 && ns < 512; ++i) { const int k = c + sd * i; if (k >= 0 && k < nS) side[ns++] = floorV[(size_t)k]; }
+        if (ns < 8) return l.snrL;
+        std::nth_element(side, side + ns / 4, side + ns);
+        const float fl = side[ns / 4];
+        double ex = 0;
+        for (int i = -w; i <= w; ++i) ex += std::max(0.0f, Fa[(size_t)(c + i)] - fl);
+        if (!(ex > 0) || !(fl > 0)) return l.snrL;
+        const double snr2500 = 10.0 * std::log10(ex / (fl * 2500.0 / binHz));
+        return std::max(l.snrL, (float)(snr2500 + 10.0 * std::log10(2500.0 / l.baud)));
+    }
+
     void markHeard() {
         const double now = nowSec();
         for (auto& gp : sigs) {
@@ -874,6 +901,14 @@ struct Skimmer::Impl {
         for (int k = -span; k <= span; ++k) {
             const float v = pw[(size_t)(k + span)];
             if (v < 0.4f * bv || v < 12.0f * med || std::abs(k - best) * res / 2.0 < 8.0) continue;
+            // ★ beta91: QPSK's data squares to lines at baud/4 either side of its carrier (a run of ±90 shifts) — not a
+            //   station: one spawned there confirmed garbage 7.4 Hz from a weak QPSK63 (a duplicate of it)
+            {
+                const double sep = std::abs(k - best) * res / 2.0;
+                bool art = false;
+                for (double qb : { 31.25, 62.5 }) art |= std::fabs(sep - qb / 4.0) < 1.5;
+                if (art) continue;
+            }
             if (k > -span && pw[(size_t)(k - 1 + span)] > v) continue;
             if (k < span && pw[(size_t)(k + 1 + span)] >= v) continue;
             const double hz = g.fc - df + k * res / 2.0 + (std::fabs(df) > 0.4 ? 0.0 : 0.0);
@@ -1017,8 +1052,11 @@ struct Skimmer::Impl {
             //   carrier (the Costas loop's ω is folded in too), so the matched filter sits on the signal.
             const cf d2 = l.qpsk ? (d * d) * (d * d) : d * d;
             const float m2 = std::abs(d2);
-            // ★ scaled to |d| either way (BPSK exactly as before: d²/√|d²|)
-            if (m2 > 0) l.fll += 0.0625f * (d2 / (l.qpsk ? std::pow(m2, 0.75f) : std::sqrt(m2)) - l.fll);
+            // ★★ UNIT phasors (beta91): |fll| is then the coherence the step below is weighted by — 1 on a clean signal,
+            //    ≈ 0.25 on noise — WHATEVER THE LEVEL. It was d²/√|d²| (magnitude |d|, the signal's level squared), so the
+            //    weight grew with the signal: on a +20–30 dB PSK31 the FLL slammed its ±0.1 Hz limit every symbol, walked
+            //    the channel ±2 Hz, the EVM fell to ≈ 0 dB and the signal was never confirmed (or read 6 dB, off by Hz).
+            if (m2 > 0) l.fll += 0.0625f * (d2 / m2 - l.fll);
             if (li == g.lead) {
                 const double ferr = std::arg(l.fll) / ((l.qpsk ? 4.0 : 2.0) * kTwoPi * l.T);
                 const double fromPll = l.omega / (kTwoPi * l.T);
@@ -1164,7 +1202,14 @@ struct Skimmer::Impl {
         //    BPSK lane is never clean: its ±90 points sit on the BPSK error axis.)
         return sc;
     }
-    float laneScore(const Sig& g, const Lane& l) const { return laneScore(l) - (kindOk(g, l) ? 0.0f : 10.0f); }
+    /** ★ A lane reading a SLOWER signal (PSK125's lane on PSK31: four of its symbols to one) sees runs of "no change"
+     *  longer than any Varicode character holds — the carrier test confirm() uses. Such a lane can never lead: on a
+     *  strong PSK31 (+20–30 dB) its oversampled constellation read cleaner than PSK31's own, it took the lead, and the
+     *  signal was never confirmed at all. */
+    static bool carrierLike(const Lane& l) { return l.longOnesN > 0 && l.sym < l.longOnes[(l.longOnesN - 1) % 8] + 256; }
+    float laneScore(const Sig& g, const Lane& l) const {
+        return laneScore(l) - (kindOk(g, l) ? 0.0f : 10.0f) - (carrierLike(l) ? 10.0f : 0.0f);
+    }
     void decideLead(Sig& g) {
 #ifdef PSK_DEBUG
         const int lead0 = g.lead; struct LeadLog { const Sig* g; int l0; ~LeadLog() { if (g->lead != l0 && std::getenv("PSK_LEAD")) std::fprintf(stderr, "  lead %.1f Hz: %s -> %s\n", g->fc, g->lane[l0].name, g->lane[g->lead].name); } } ll{ &g, lead0 };
@@ -1223,7 +1268,9 @@ struct Skimmer::Impl {
         //   last values above kKeepDb — is not what the list says (real 20 m: copy perfect, the row said "poor 3 dB")
         if (L.snrL >= kKeepDb) {
             g.lastGoodSec = now;
-            g.snrShown = std::max(L.snrL, g.snrShown - 0.1f);
+            g.fcGood = g.fc;          // ★ beta91: a gone signal is listed where it WAS (its AFC wanders on the noise after)
+            g.snrNow = esN0(g, L);
+            g.snrShown = std::max(g.snrNow, g.snrShown - 0.1f);
             g.qShown = std::max(0.0f, std::min(1.0f, (g.snrShown - 4.0f) / 12.0f));
         }
         if (!g.confirmed) {
@@ -1281,6 +1328,20 @@ struct Skimmer::Impl {
     void confirm(Sig& g) {
         // ★ two channels the loops pulled onto one carrier: only the first is ever confirmed (housekeeping drops the other)
         for (auto& o : sigs) if (o.get() != &g && o->confirmed && std::fabs(o->fc - g.fc) < 6.0) return;
+        /* ★★ beta91: ONE STATION, ONE CHANNEL. A channel within 0.6 baud of another whose lead reads it 3 dB cleaner is on
+         *  that station's skirt or a line of its data (QPSK: baud/4 off), not a station of its own — two real PSK
+         *  signals cannot sit that close and both be read. Nor is one within 0.6 baud of a station ALREADY confirmed,
+         *  however clean (a weak QPSK63 had its double confirmed 7 Hz off at the same Es/N0). Not confirmed; housekeeping
+         *  drops it as a ghost. */
+        {
+            const Lane& me = g.lane[g.lead];
+            const float myQ = recentQ(me, laneSpan(me));
+            for (auto& o : sigs) {
+                if (o.get() == &g) continue;
+                const Lane& ol = o->lane[o->lead];
+                if (std::fabs(o->fc - g.fc) < 0.6 * std::min(me.baud, ol.baud) && (o->confirmed || recentQ(ol, laneSpan(ol)) >= myQ + 3.0f)) { g.ghost = true; ++ghosts; return; }
+            }
+        }
         g.confirmed = true; g.confirmedSec = nowSec();
 #ifdef PSK_DEBUG
         std::fprintf(stderr, "[%.2f] confirmed %.2f Hz lane %d snr %.1f held %zu dipx %.2f z %.2f\n", nowSec(), g.fc, g.lead, g.lane[g.lead].snrL, g.lane[g.lead].heldQ.size(), g.lane[g.lead].ones7, g.lane[g.lead].zeroFrac);
@@ -1351,7 +1412,7 @@ struct Skimmer::Impl {
         if (it != g.spotted.end() && now - it->second < cfg.respotSec) return;
         g.spotted[call] = now; g.call = call;
         if (owner->onSpot) {
-            Spot sp; sp.call = call; sp.offsetHz = g.fc; sp.snrDb = g.lane[g.lead].snrL; sp.how = how;
+            Spot sp; sp.call = call; sp.offsetHz = g.fc; sp.snrDb = g.snrNow > -50 ? g.snrNow : g.lane[g.lead].snrL; sp.how = how;
             sp.mode = g.lane[g.lead].name; sp.utcMs = nowMs(); sp.signalId = g.id;
             owner->onSpot(sp);
         }
@@ -1402,7 +1463,8 @@ struct Skimmer::Impl {
 
     SignalView view(const Sig& g) const {
         SignalView v;
-        v.id = g.id; v.offsetHz = g.fc; v.active = g.active;
+        v.id = g.id; v.active = g.active;
+        v.offsetHz = g.fcGood != 0 ? g.fcGood : g.fc;   // ★ where it was last heard well (the AFC wanders on a pause's noise)
         const Lane& l = g.lane[g.lead];
         v.baud = l.baud > 100 ? 125 : l.baud > 40 ? 63 : 31; v.qpsk = l.qpsk; v.mode = l.name; v.snrDb = g.snrShown; v.quality = g.qShown; v.imdDb = l.imdDb;
         v.firstMs = g.firstMs; v.lastMs = g.lastMs; v.call = g.call; v.text = g.text; v.chars = g.chars;
