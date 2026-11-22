@@ -102,7 +102,8 @@ flags_for() {
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
     test-watch|test-watch-cost) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ V12 VFO A/B (vibe_watch.h)
     test-am-sync)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★ V12 SAM / ECSS / AM stereo / AM auto bandwidth (amsync.cpp)
-    test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
+    test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;
+    test-aprs-onair)       echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ APRS off air through the real NFM chain (docs/v12/APRS-ON-AIR-2.md)   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
     # ★★ V12 FreeDV as a mode (vibe_freedv.h): codec2's own transmitter → noise → our modem host and the real USB chain.
     #    NOT RUN (exit 3) without libcodec2 (apt install libcodec2-1.2 / brew install codec2) — it is dlopen'd, never linked.
     test-freedv)           echo "-O2 -I $VDSP -I $KISS $RADE_FLAGS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
@@ -344,7 +345,7 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c $RADE_LIBS" ;;
     test-dvsig)           echo "$VDSP/resampler.cpp $VDSP/ddc.cpp" ;;
-    test-auto-bw|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-auto-bw|test-m17|test-aprs-onair) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -1970,6 +1971,12 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
   VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-ais-aprs.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-web-ais-aprs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ 2026-11-22 APRS AUTO on a listener's own VFO with the squelch closed, and the developer decoder capture
+  #    (VIBE_DEC_AUDIO_DUMP) written by the real server and replayed by tool-dec-replay (docs/v12/APRS-ON-AIR-2.md)
+  cobj="$(cobjs_for test-dec-dump)" && g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for test-dec-dump) -o "$OUT/tool-dec-replay" \
+      "$SRC/tool-dec-replay.cpp" $(deps_for test-dec-dump) $cobj 2>"$OUT/tool-dec-replay.buildlog" || echo '   (tool-dec-replay did not build — the replay half is not run)'
+  VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" VIBE_DEC_REPLAY_BIN="$OUT/tool-dec-replay" node scripts/test-server-aprs-capture.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 2026-11-10: a listener's manual gain / AUTO reaches EVERY listener's readout (hwinfo agc + gainNow)
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-gain-readout.mjs; rc=$?
