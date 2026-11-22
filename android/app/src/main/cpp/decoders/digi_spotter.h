@@ -75,6 +75,13 @@ public:
     /** ★ The benchmark's budget for this machine, in FT8 units (∞ = none). */
     void setBudgetCap(double units) { std::lock_guard<std::mutex> lk(statMtx_); budget_.setCap(units); }
     double budgetUnits() const { std::lock_guard<std::mutex> lk(statMtx_); return budget_.units(); }
+    /** ★★ V12 beta91: ONE BUDGET FOR TWO SPOTTERS. The units another spotter has committed now (its live runs) — the
+     *  CW / RTTY / PSKW spotter is given the audio one's, so the chips get only what the slotted modes leave: on a weak
+     *  box (a Pi 2's few units) PSKW, RTTY and CW are shed before the box is overloaded, never on top of a full
+     *  budget. Null = this spotter has the whole budget. Set before the first block. */
+    void setBudgetOthers(std::function<double()> f) { std::lock_guard<std::mutex> lk(statMtx_); others_ = std::move(f); }
+    /** The units this spotter's live runs commit now (for another spotter's setBudgetOthers). */
+    double committedUnits() const { std::lock_guard<std::mutex> lk(statMtx_); return unitsInUse(); }
     /** ★★ V12 beta91 BAND'S PAUSE RULE (docs/v12/BAND-SKIM-CW-RTTY.md): how far behind the capture the band decode is, in
      *  seconds (the host's queue of slice IQ not yet decoded). With the IQ engines' own backlogs and the slotted modes'
      *  skipped slots it decides when the CONTINUOUS modes (ModeDef::pauseRank — CW first, then RTTY) pause and resume.
@@ -243,6 +250,7 @@ private:
     uint64_t pauseSkips_ = 0;
     double bandStartUtc_ = NAN;          // ★ the capture time of this run's first block (kIqStartSec)
 
+    std::function<double()> others_;      // ★ beta91: another spotter's committed units (setBudgetOthers) — statMtx_
     mutable std::mutex statMtx_;          // ★ the stats readers are on other threads; the engine set changes here
     uint64_t retiredSkips_ = 0, retiredDecodes_ = 0;
 };

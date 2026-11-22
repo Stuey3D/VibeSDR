@@ -398,7 +398,10 @@ RunState Spotter::ask(Run& who, bool wants) {
             g.wants = &r == &who ? wants : (g.committed || (g.ov == Override::Always && r.gate->st != Gate::Paused));
             in.push_back(g); rs.push_back(&r);
         }
-    const std::vector<RunState> out = govern(in, budget_.units(), loadedNow_);
+    // ★ beta91: what another spotter (the audio one, for the CW / RTTY / PSKW chips) has committed is not ours to spend
+    double units = budget_.units();
+    if (others_ && std::isfinite(units)) units = std::max(0.0, units - others_());
+    const std::vector<RunState> out = govern(in, units, loadedNow_);
     RunState mine = RunState::Idle;
     for (size_t i = 0; i < rs.size(); ++i) {
         Run& r = *rs[i];

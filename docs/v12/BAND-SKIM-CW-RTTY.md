@@ -146,6 +146,21 @@ noise 0.12 % either way, busy (19 signals of the five modes, +10 dB) 0.160 → 0
 3.3 → 4.5. Per tentative carrier 5 lanes instead of 2 (≈ 2.5× the per-channel work, which is small beside the shared
 FFT); memory ≈ 10 KB more per tracked carrier (≤ 128 carriers: ≈ 1.3 MB at most).
 
+### Stuart's decisions (2026-11-22, after the first report)
+
+1. **Strong signals fixed** — one station is one channel and one spot at any level. The FLL's weight had grown with the
+   signal level (at +20–30 dB it walked the channel ±2 Hz and lost the copy); PSK125's lane could lead a strong PSK31;
+   Es/N0 stopped at the EVM's own 22–25 dB floor (past 14 dB the spectrum now says it); a gone signal was listed where its
+   AFC wandered; a near-duplicate (within 0.6 baud of a confirmed station, or QPSK's baud/4 data line) could confirm.
+   test-psk: **40/40** (five modes × 0/+10/+20/+30 dB × audio/IQ) one channel, one spot, right mode, worst 0.32 Hz, 1.9 dB.
+2. QPSK63's weak start: left as it is.
+3. **CPU**: Band PSK `costVsFt8` 0.6 → 1.0 (×1.7), PSKW 3.3 → 4.5. And **one budget**: the CW / RTTY / PSKW spotter had
+   no budget at all (only the pause rule) — it now has the audio spotter's cap less what the slotted modes have committed
+   (`Spotter::setBudgetOthers`), so a weak box sheds the chips by the governor before it is overloaded. test-digi-spots:
+   a 3-unit (Pi 2-class) box with the slotted modes committing 2 — before, 2 + 2.25 committed (over); now 2 + 0.8, PSKW and
+   RTTY shed. The listener's own PSK decoder is measured by the benchmark's `dec_psk` / `dec_pskskim` rows, which run the
+   real engine (so its five lanes are in the figures the slots come from).
+
 ## Design
 
 ### IQ modes (their own registry and their own spotter, since the fix above)

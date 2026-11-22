@@ -504,6 +504,12 @@ public:
                     [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
                     [dial] { return dial ? dial() : 0.0; }, loaded));
                 if (ovf) iqSpotter_->setOverrides(ovf);
+                /* ★★ beta91 (Stuart: "make sure the box is not overloaded"): the SAME budget as the audio spotter, less what
+                 *  the slotted modes have committed — so on a weak box the chips (PSKW first, then RTTY, then CW: their
+                 *  priorities 105 / 110 / 120) are shed by the governor before they add to a full load, as well as paused
+                 *  by the pause rule once the decode falls behind. */
+                iqSpotter_->setBudgetCap(std::isfinite(u) && u > 0 ? u : INFINITY);
+                { digi::Spotter* audio = spotter_.get(); iqSpotter_->setBudgetOthers([audio] { return audio->committedUnits(); }); }
                 /* ★★ THE PAUSE RULE (BAND-SKIM-CW-RTTY.md): behind = the slice IQ queued for this decode thread and not yet
                  *  decoded, or a slotted mode skipping a slot. CW then RTTY then PSKW pause first; the log says so. */
                 iqSpotter_->setBehind([this] { return queuedIqSec(); });

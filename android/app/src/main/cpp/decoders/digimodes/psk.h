@@ -10,8 +10,8 @@
 //   skimmer, so noise and FT8's crowd spot nothing (docs/v12/PSK.md: 0 characters in 10 min of noise, 0 on FT8/RTTY).
 // ★ SNR: the skimmer measures Es/N0 (signal over noise in the baud rate's bandwidth); a spot carries WSJT-X's 2500 Hz
 //   convention like every other mode's: −19 dB for PSK31, −16 dB for PSK63.
-// ★ COST: one FFT per hop over the passband and a demodulator per carrier — ≈ 0.03 % of an M5 core on a busy 3 kHz
-//   (≈ 0.6 of one FT8 engine). No lighter setting.
+// ★ COST: one FFT per hop over the passband and a demodulator per carrier (five lanes since beta91 — ×1.7) — ≈ 0.03 % of
+//   an M5 core on a busy 3 kHz (≈ 1.0 of one FT8 engine; 0.6 with two lanes). No lighter setting.
 #pragma once
 #include "../digi_mode.h"
 #include "../psk_skimmer.h"
@@ -76,8 +76,9 @@ inline ModeDef vibeDigiMode_psk() {
     m.slotSec = 0;                   // ★ free-running
     m.sampleRate = 12000;
     m.audioLoHz = 150; m.audioHiHz = 3650;   // ★ the skimmer searches 200–3600 Hz; ±50 Hz more so its edges are flat
-    m.costVsFt8 = 0.6;
-    m.lightCostVsFt8 = 0.6;
+    // ★ beta91: ×1.7 for the five lanes (test-psk: a busy 3 kHz 0.02 → 0.03 % of an M5 core) — 0.6 → 1.0
+    m.costVsFt8 = 1.0;
+    m.lightCostVsFt8 = 1.0;
     m.priority = 70;                 // ★ the governor's order: last of the modes built today (spots only)
     m.gateSec = 4.0;
     m.make = [] { return std::unique_ptr<Engine>(new PskEngine()); };

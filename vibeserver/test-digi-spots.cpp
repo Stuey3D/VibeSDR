@@ -1255,6 +1255,48 @@ int main(int argc, char** argv) {
         ok(sp2.pauseLevel() == 1, "a slotted mode SKIPPED a slot (nothing queued): CW pauses so it gets the CPU back");
     }
 
+    std::printf("── ★ V12 beta91: ONE BUDGET — a weak box sheds the CW / RTTY / PSKW chips before it is overloaded ──\n");
+    {
+        const digi::ModeDef* psk = digi::modeByName("PSK");
+        ok(psk && psk->costVsFt8 >= 0.99 && psk->lightCost() >= 0.99, "Band PSK's governor cost is the five lanes' (×1.7 → 1.0 FT8 unit, was 0.6)");
+        const digi::ModeDef* realPskw = nullptr; const digi::ModeDef* realRtty = nullptr; const digi::ModeDef* realCw = nullptr;
+        for (const auto& m : digi::iqModes()) { if (m.name == "PSKW") realPskw = &m; if (m.name == "RTTY") realRtty = &m; if (m.name == "CW") realCw = &m; }
+        ok(realPskw && realPskw->costVsFt8 >= 4.4, "PSKW's governor cost is the five lanes' (4.5 per 48 kHz, was 3.3)");
+        struct Nop : digi::Engine { void process(const float*, int, double) override {} void processIq(const std::complex<float>*, int, double, double, double) override {} };
+        auto chip = [](const digi::ModeDef& real, double lo, double hi) {
+            digi::ModeDef m = real;   // ★ the real cost, priority and pause rank; a do-nothing engine on a 20 kHz window
+            m.windows = [lo, hi](const std::string& b) { return b == "20m" ? std::vector<std::pair<double, double>>{ { lo, hi } } : std::vector<std::pair<double, double>>{}; };
+            m.makeWin = [](double, double) { return std::unique_ptr<digi::Engine>(new Nop()); };
+            return m;
+        };
+        // a Pi 2-class budget: 3 FT8 units; the slotted modes commit 2 of them (an FT8-like engine at 2/2)
+        auto run = [&](bool share, std::string& states, double& audioU, double& iqU) {
+            std::vector<digi::ModeDef> am = { countingMode("FT8B", 14074000, "20m", 15, 10, 2, 2, std::make_shared<CountShared>()) };
+            std::vector<digi::ModeDef> im = { chip(*realCw, 14010000, 14030000), chip(*realRtty, 14040000, 14060000), chip(*realPskw, 14060000, 14080000) };
+            digi::Spotter audio(digi::Spotter::Scope::Band, am, nullptr, nullptr, nullptr), iq(digi::Spotter::Scope::Band, im, nullptr, nullptr, nullptr);
+            audio.setBudgetCap(3); iq.setBudgetCap(3); iq.setBehind([] { return 0.0; });
+            if (share) iq.setBudgetOthers([&audio] { return audio.committedUnits(); });
+            const double rate = 96000, centre = 14040000, utc0 = 1800000000.0;
+            std::vector<cf32> z(960, cf32(0, 0));
+            for (double t = 0; t < 40; t += 0.01) {
+                audio.feedIq(z.data(), 960, rate, centre, utc0 + t + 0.01, nullptr, 0, 0, 0);
+                iq.feedIq(z.data(), 960, rate, centre, utc0 + t + 0.01, nullptr, 0, 0, 0);
+            }
+            states.clear();
+            for (auto& x : iq.status()) states += x.mode + " " + digi::stateWord(x.state) + ", ";
+            audioU = audio.committedUnits(); iqU = iq.committedUnits();
+        };
+        std::string st0, st1; double a0, i0, a1, i1;
+        run(false, st0, a0, i0); run(true, st1, a1, i1);
+        char b[300];
+        std::snprintf(b, sizeof b, "before (each spotter the whole budget): %.2f + %.2f units committed on a 3-unit box — over (%s)", a0, i0, st0.c_str());
+        ok(a0 + i0 > 3.0 + 1e-9, b);
+        std::snprintf(b, sizeof b, "★ one budget: %.2f + %.2f ≤ 3 units — never over (%s)", a1, i1, st1.c_str());
+        ok(a1 + i1 <= 3.0 + 1e-9 && a1 >= 2.0 - 1e-9, b);
+        ok(st1.find("PSKW shed") != std::string::npos && st1.find("RTTY shed") != std::string::npos,
+           "…the chips that do not fit what is left are SHED, PSKW and RTTY (" + st1 + ")");
+    }
+
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
