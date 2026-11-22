@@ -120,9 +120,35 @@ bool getBool(const std::string& s, const std::string& key, bool& out) {
  *
  *  Returns false only when the key is absent or the array is malformed; an EMPTY array is a
  *  perfectly good answer and means "this machine serves no radios". */
+/** ★★ beta91 THE KEY AT THIS OBJECT's OWN LEVEL — never one inside a nested object. GET /vibeserver/config folds read-only
+ *  status in (spotReportStatus since 11-21 carries its OWN "radios" list, ahead of the real one), and a caller that sends
+ *  the GET body back — test-bg-decode does, as any script might — had its radios replaced by the status rows (no serial)
+ *  and saved with NO RADIOS. Strings are skipped; depth counts { and [. npos when absent at depth 1. */
+size_t findTopKey(const std::string& s, const std::string& key) {
+    if (t_keysAsked) t_keysAsked->insert(key);
+    const std::string pat = "\"" + key + "\"";
+    int depth = 0;
+    for (size_t i = 0; i < s.size(); i++) {
+        const char c = s[i];
+        if (c == '"') {
+            if (depth == 1 && s.compare(i, pat.size(), pat) == 0) {
+                size_t j = i + pat.size();
+                while (j < s.size() && isspace((unsigned char)s[j])) j++;
+                if (j < s.size() && s[j] == ':') return j + 1;
+            }
+            for (i++; i < s.size() && s[i] != '"'; i++) if (s[i] == '\\') i++;   // skip the string
+            continue;
+        }
+        if (c == '{' || c == '[') depth++;
+        else if (c == '}' || c == ']') depth--;
+    }
+    return std::string::npos;
+}
+
 bool getObjectArray(const std::string& s, const std::string& key,
                     std::vector<std::string>& out) {
-    size_t p = findKey(s, key);
+    size_t p = findTopKey(s, key);
+    if (p == std::string::npos && s.find('{') == std::string::npos) p = findKey(s, key);   // not an object: as before
     if (p == std::string::npos) return false;
     while (p < s.size() && isspace((unsigned char)s[p])) p++;
     if (p >= s.size() || s[p] != '[') return false;

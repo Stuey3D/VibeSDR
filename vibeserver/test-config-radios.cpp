@@ -958,6 +958,27 @@ int main() {
         ok(!none.landingAdsb && !none.adsbKeepRunning, "★ never default on");
     }
 
+    // ★★ beta91 a GET body sent back whole: spotReportStatus (read-only status, folded into GET /vibeserver/config) carries
+    //    its OWN "radios" list AHEAD of the real one — the radios must come from the top level, never the status rows
+    {
+        const std::string back = R"({"name":"Round trip","adminPass":"Test123",)"
+            R"("spotReportStatus":{"on":false,"radios":[{"on":false,"label":"Test radio","grid":"IO92nh"}]},)"
+            R"("dirStatus":{"running":false,"error":""},)"
+            R"("radios":[{"serial":"rt-1","label":"Test radio","enabled":true,"configured":true,"users":4}]})";
+        ServerConfig s; std::string err;
+        ok(fromJson(back, s, err), "a GET body sent back loads", err);
+        ok(s.radios.size() == 1 && s.radios[0].serial == "rt-1", "★ its radio is the REAL one, not the status row",
+           std::to_string(s.radios.size()) + (s.radios.empty() ? "" : " " + s.radios[0].serial));
+        const std::string onlyStatus = R"({"name":"x","spotReportStatus":{"radios":[{"label":"A"}]}})";
+        ServerConfig s2; std::string e2;
+        (void)fromJson(onlyStatus, s2, e2);
+        bool took = false; for (const auto& r : s2.radios) if (r.label == "A") took = true;
+        ok(!took, "no top-level radios: the status rows are never taken as radios (an old file's one-radio migration may still apply)");
+        const std::string inStr = R"({"name":"a "radios": [] trick","radios":[{"serial":"rt-2","enabled":true,"configured":true}]})";
+        ServerConfig s3; std::string e3;
+        ok(fromJson(inStr, s3, e3) && s3.radios.size() == 1 && s3.radios[0].serial == "rt-2", "a key-like text inside a string is skipped");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;
