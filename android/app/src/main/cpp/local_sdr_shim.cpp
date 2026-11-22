@@ -32081,7 +32081,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             };
         }
         /* ★ DEVELOPER CAPTURE ONLY (vibe_dec_dump.h, VIBE_DEC_AUDIO_DUMP — docs/v12/APRS-ON-AIR-2.md): the words the
-         *  capture's .txt carries once a second — what this host's audio went through. Built only while the variable is set;
+         *  capture's .txt carries once a second — what this host's audio went through. The applied tuner gain each second
+         *  (VibeAGC's steps show as it changing line to line), its target, and the overload backoff's step count. Built only while the variable is set;
          *  asked on the decode thread with no host lock held (clientMtx is a leaf here, as dialHz takes it). */
         if (vibedec::DecDump::enabled()) {
             auto dial = e.dialHz;
@@ -32101,10 +32102,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
                 char b[512];
-                std::snprintf(b, sizeof b, "dial %.0f Hz mode %s bw %.0f Hz chan %.0f S/s squelch %s %.1f dB level %.1f dB nfm %s deemph %s gain %.1f dB agc %s%s%s",
+                std::snprintf(b, sizeof b, "dial %.0f Hz mode %s bw %.0f Hz chan %.0f S/s squelch %s %.1f dB level %.1f dB nfm %s deemph %s gain %.1f dB target %.1f dB agc %s ovl-steps %d%s%s",
                               dial ? dial() : 0.0, md.c_str(), bw, chRate, sq ? "on" : "off", sqDb, lvl, voice ? "voice" : "all",
                               tau < 0 ? "default" : tau == 0 ? "off" : (std::to_string((int)std::lround(tau * 1e6)) + "us").c_str(),
-                              lastGainTenthDb / 10.0, g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? "vibeagc" : "off",
+                              lastGainTenthDb / 10.0, g_gainTarget.load(std::memory_order_relaxed) / 10.0,
+                              g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? "vibeagc" : "off", g_ovlSteps.load(std::memory_order_relaxed),
                               g_rtlDigitalAgc.load(std::memory_order_relaxed) ? " rtl-digital-agc" : "", found ? "" : " (listener gone)");
                 return std::string(b);
             };

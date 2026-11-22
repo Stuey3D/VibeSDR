@@ -110,8 +110,9 @@ public:
     }
     /** 300, 1200, 9600 — or 0 for AUTO (1200 + 9600). */
     int baud() const { return baud_; }
-    /** ★ V12: this run wants the listener's CHANNEL IQ (9600), not the audio. */
-    bool wantsIq() const { return g3_ != nullptr; }
+    /** ★ V12: this run wants the listener's CHANNEL IQ — 9600 (G3RUH), and ★ 2026-11-22 1200 Bd's own narrow FM
+     *  discriminator beside the listener's audio (narrow1200_). Not 300 Bd HF (SSB audio, no FM to discriminate). */
+    bool wantsIq() const { return g3_ != nullptr || baud_ == 1200; }
 
     /** 48 kHz audio from the decoder thread (at 9600: FM-discriminator audio — a flat, wide one only; a normal NFM
      *  listener's audio is filtered too narrow for 9600 and the host feeds the channel IQ instead). */
@@ -119,14 +120,15 @@ public:
         // ★ 9600 reads the audio only where no channel IQ comes (a test, a WAV of a radio's data port): once the host
         //   hands it IQ, the listener's narrow NFM audio would only cost CPU.
         if (g3_ && !iqFed_) g3_->feedAudio(x, n, 48000, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
-        if (afsk_) afsk_->feed(x, n, [&](const Frame& f) { onFrame(f); });
+        if (afsk_) afsk_->feed(x, n, [&](const Frame& f) { offer1200_(f, audioT_); });
+        audioT_ += n / 48000.0;
         tickList_();
     }
-    /** ★ V12 9600: the listener's channel IQ (dial at DC) at `rate` Hz. */
+    /** ★ V12 9600 (and ★ 1200's narrow path): the listener's channel IQ (dial at DC) at `rate` Hz. */
     void feedIq(const std::complex<float>* x, int n, double rate) {
-        if (!g3_) return;
-        iqFed_ = true;
-        g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
+        if (n <= 0 || !(rate > 0)) return;
+        if (g3_) { iqFed_ = true; g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); }); }
+        if (baud_ == 0 || baud_ == 1200) narrow1200_(x, n, rate);
         tickList_();
         // ★ VIBE_PKT_LOG=1: what the 9600 receiver sees, every 5 s, to stderr — the first thing to look at on a live capture
         static const bool dbg = std::getenv("VIBE_PKT_LOG") != nullptr;
@@ -142,6 +144,11 @@ public:
         }
     }
     double afcHz() const { return g3_ ? g3_->afcHz() : 0; }
+    /** ★ 1200 Bd frames each path brought FIRST (the other path's copy is dropped): the listener's audio, the narrow IQ. */
+    uint64_t framesFromAudio() const { return fromAudio_; }
+    uint64_t framesFromNarrow() const { return fromNarrow_; }
+    /** ★★ THE NARROW PATH'S FILTER: ±kNarrowHz around the dial (docs/v12/APRS-ON-AIR-2.md). */
+    static constexpr double kNarrowHz = 5000;
     /** ★ For tests and the offline tool: one frame, as the demodulator hands it over. */
     void onFrame(const Frame& f) {
         if (f.fec == vibepkt::kFx25) ++fx25_; else if (f.fec == vibepkt::kIl2p) ++il2p_;
@@ -448,6 +455,57 @@ private:
         }
         o += "}";
     }
+
+    /* ★★★ 1200 Bd FROM ITS OWN NARROW DISCRIMINATOR (2026-11-22, docs/v12/APRS-ON-AIR-2.md). A weak packet is lost at the
+     *  FM THRESHOLD — the discriminator breaks into clicks when the carrier is not ~9 dB over the noise IN ITS FILTER — so
+     *  the filter's width decides which packets survive: on test-aprs-onair at 8 dB CNR (in 12.5 kHz) a 10 kHz filter
+     *  gave 43 of 48, the listener's 12.5 kHz 31, 16 kHz 11. The listener's audio is THEIR choice (their filter, Voice,
+     *  de-emphasis) and stays a path; this one is the decoder's own: the channel IQ through a FIR to ±5 kHz (Bell 202 at
+     *  a normal ±3 kHz deviation fits), an ideal discriminator, the same AfskDemod. A frame both paths find is counted
+     *  once (offer1200_: the same bytes within 3 s of signal time). Costs one complex FIR at the channel rate and a second
+     *  demodulator — ~0.1 % of an M5 core. */
+    void narrow1200_(const std::complex<float>* x, int n, double rate) {
+        if (rate < 4 * kNarrowHz) return;   // a channel too narrow to hold it: the audio path alone
+        if (!afskIq_ || std::fabs(rate - nbRate_) > 0.5) {
+            nbRate_ = rate;
+            nbLp_ = vibedsp::designLowpass(kNarrowHz / rate, 2000.0 / rate);
+            std::reverse(nbLp_.begin(), nbLp_.end());
+            nbI_.assign(nbLp_.size() * 2, 0.f); nbQ_.assign(nbLp_.size() * 2, 0.f); nbHp_ = 0; nbPrev_ = { 1, 0 };
+            afskIq_.reset(new AfskDemod(rate, 1200, false, o_.fx25, o_.il2p));
+        }
+        const int K = int(nbLp_.size());
+        nbOut_.resize(size_t(n));
+        for (int i = 0; i < n; ++i) {
+            nbI_[size_t(nbHp_)] = x[i].real(); nbI_[size_t(nbHp_ + K)] = x[i].real();
+            nbQ_[size_t(nbHp_)] = x[i].imag(); nbQ_[size_t(nbHp_ + K)] = x[i].imag();
+            nbHp_ = (nbHp_ + 1) % K;
+            const std::complex<float> z(vibedsp::dotReal(&nbI_[size_t(nbHp_)], nbLp_.data(), K), vibedsp::dotReal(&nbQ_[size_t(nbHp_)], nbLp_.data(), K));
+            const std::complex<float> d = z * std::conj(nbPrev_);
+            nbOut_[size_t(i)] = (d.real() != 0 || d.imag() != 0) ? std::atan2(d.imag(), d.real()) : 0.f;
+            if (std::norm(z) > 0) nbPrev_ = z;
+        }
+        afskIq_->feed(nbOut_.data(), n, [&](const Frame& f) { offer1200_(f, iqT_, true); });
+        iqT_ += n / rate;
+    }
+    /** ★ One 1200 Bd frame from either path: the second copy of the same bytes within 3 s (signal time) is dropped. */
+    void offer1200_(const Frame& f, double t, bool narrow = false) {
+        uint32_t h = 2166136261u;
+        for (uint8_t c : f.bytes) h = (h ^ c) * 16777619u;
+        for (const auto& r : seen1200_) if (r.h == h && std::fabs(r.t - t) < 3.0 && r.narrow != narrow) return;
+        seen1200_[seenP_] = { h, t, narrow }; seenP_ = (seenP_ + 1) % kSeen;
+        ++(narrow ? fromNarrow_ : fromAudio_);
+        onFrame(f);
+    }
+    struct Seen { uint32_t h = 0; double t = -100; bool narrow = false; };
+    static constexpr int kSeen = 16;
+    Seen seen1200_[kSeen];
+    int seenP_ = 0;
+    double audioT_ = 0, iqT_ = 0, nbRate_ = 0;
+    uint64_t fromAudio_ = 0, fromNarrow_ = 0;
+    std::unique_ptr<AfskDemod> afskIq_;
+    std::vector<float> nbLp_, nbI_, nbQ_, nbOut_;
+    int nbHp_ = 0;
+    std::complex<float> nbPrev_{1, 0};
 
     int baud_;
     Opts o_;

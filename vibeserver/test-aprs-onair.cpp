@@ -105,17 +105,21 @@ static void noteJson(const std::string& j, Heard& h) {
 }
 
 /** The server's chain: RxPipeline NFM → audio (+ channel IQ) → Run AUTO. */
-static Heard viaPipeline(const Cfg& c, const std::vector<cf>& iq, double fs, double off) {
-    Heard h;
+/** `audioOnly` (out): what the listener's AUDIO alone gave — a 1200 Bd run fed the audio and never the IQ (the decoder as
+ *  it was before its narrow path, 2026-11-22). */
+static Heard viaPipeline(const Cfg& c, const std::vector<cf>& iq, double fs, double off, Heard* audioOnly = nullptr) {
+    Heard h, ha;
     vibeaprs::Run::Opts o; o.json = [&](const std::string& j) { noteJson(j, h); };
     vibeaprs::Run run(0, std::move(o));
-    struct Ctx { vibeaprs::Run* r; } ctx{&run};
+    vibeaprs::Run::Opts oa; oa.json = [&](const std::string& j) { noteJson(j, ha); };
+    vibeaprs::Run runA(1200, std::move(oa));
+    struct Ctx { vibeaprs::Run* r; vibeaprs::Run* a; } ctx{&run, &runA};
     vibedsp::RxPipeline::Callbacks cb; cb.ctx = &ctx;
     cb.audio = [](void* x, const float* pcm, int frames, int ch, int) {
         auto* p = static_cast<Ctx*>(x);
-        if (ch == 1) { p->r->feedAudio(pcm, frames); return; }
+        if (ch == 1) { p->r->feedAudio(pcm, frames); p->a->feedAudio(pcm, frames); return; }
         std::vector<float> m; m.resize(size_t(frames)); for (int i = 0; i < frames; ++i) m[size_t(i)] = pcm[2 * i];
-        p->r->feedAudio(m.data(), frames);
+        p->r->feedAudio(m.data(), frames); p->a->feedAudio(m.data(), frames);
     };
     cb.iq = [](void* x, const vibedsp::cf32* z, int k, double rate) { static_cast<Ctx*>(x)->r->feedIq(reinterpret_cast<const std::complex<float>*>(z), k, rate); };
     vibedsp::RxPipeline p; p.setMeasureThread(false);
@@ -126,6 +130,7 @@ static Heard viaPipeline(const Cfg& c, const std::vector<cf>& iq, double fs, dou
     const int blk = int(fs / 50);
     for (size_t i = 0; i + size_t(blk) <= iq.size(); i += size_t(blk)) p.feed(reinterpret_cast<const vibedsp::cf32*>(iq.data() + i), blk);
     p.stop();
+    if (audioOnly) *audioOnly = ha;
     return h;
 }
 
@@ -160,15 +165,17 @@ static std::string desc(const Cfg& c) {
                   c.gainStep != 1 ? " +gain step" : "");
     return b;
 }
-struct Row { int pipe = 0, ref = 0, wrong = 0; };
+struct Row { int pipe = 0, audio = 0, ref = 0, wrong = 0; };
 static Row run1(const Cfg& c, bool ref, bool print = true) {
     const double fs = 240000, off = 37000;
     const std::vector<cf> iq = makeIq(c, fs, off);
     Row r;
-    const Heard a = viaPipeline(c, iq, fs, off);
-    r.pipe = int(a.got.size()); r.wrong = a.wrong;
+    Heard ao;
+    const Heard a = viaPipeline(c, iq, fs, off, &ao);
+    r.pipe = int(a.got.size()); r.audio = int(ao.got.size()); r.wrong = a.wrong + ao.wrong;
     if (ref) { const Heard b = viaReference(iq, fs, off); r.ref = int(b.got.size()); r.wrong += b.wrong; }
-    if (print) std::printf("   %-78s  server %2d/%d%s\n", desc(c).c_str(), r.pipe, c.packets, ref ? (" · reference " + std::to_string(r.ref) + "/" + std::to_string(c.packets)).c_str() : "");
+    if (print) std::printf("   %-78s  server %2d/%d (audio alone %2d)%s%s\n", desc(c).c_str(), r.pipe, c.packets, r.audio,
+                           ref ? (" · reference " + std::to_string(r.ref) + "/" + std::to_string(c.packets)).c_str() : "", r.wrong ? " WRONG FRAMES" : "");
     return r;
 }
 
@@ -191,6 +198,8 @@ int main(int argc, char** argv) {
         { Cfg c; c.gainStep = 2; c.tiltDb = 5; run1(c, true); }
         { Cfg c; c.gainStep = 0.5; c.tiltDb = 5; run1(c, true); }
         for (double bw : { 10000.0, 16000.0 }) { Cfg c; c.bw = bw; c.tiltDb = 5; c.devHz = 4000; run1(c, true); }
+        std::printf("── at the threshold: the IF filter's width (CNR always in 12.5 kHz) ──\n");
+        for (double cnr : { 8.0, 9.0 }) for (double bw : { 9000.0, 10000.0, 12500.0, 16000.0 }) { Cfg c; c.cnrDb = cnr; c.bw = bw; c.tiltDb = 5; c.packets = 48; c.seed = 77 + uint64_t(cnr); run1(c, false); }
     } else {
         std::printf("── the server's chain off air (synthetic keyed FM in noise, 24 packets a row) ──\n");
         Cfg c; c.cnrDb = 12; c.tiltDb = 5;
@@ -203,6 +212,19 @@ int main(int argc, char** argv) {
         check(r.pipe >= 22, "a 6 dB gain step in every packet's middle costs nothing (" + std::to_string(r.pipe) + ")");
         c.gainStep = 1; c.flags = 15; r = run1(c, false);
         check(r.pipe >= 22, "a short TXDELAY (15 flags, 100 ms) after FM hiss: ≥ 22 (" + std::to_string(r.pipe) + ")");
+        std::printf("── at the FM threshold: the decoder's own narrow path (2026-11-22) ──\n");
+        Cfg t; t.cnrDb = 8; t.tiltDb = 5; t.packets = 48; t.seed = 85;
+        r = run1(t, false);
+        check(r.pipe >= r.audio + 6 && r.pipe >= 38 && r.wrong == 0,
+              "CNR 8 dB, the listener on 12.5 kHz: the narrow path adds ≥ 6 (" + std::to_string(r.pipe) + " vs audio alone " + std::to_string(r.audio) + ")");
+        t.bw = 16000; r = run1(t, false);
+        check(r.pipe >= r.audio + 15 && r.pipe >= 38, "…the listener on 16 kHz: the decoder no longer pays for it (" + std::to_string(r.pipe) + " vs " + std::to_string(r.audio) + ")");
+        t.bw = 12500; t.voice = true; t.tiltDb = -5; t.cnrDb = 11; r = run1(t, false);
+        check(r.pipe >= r.audio && r.pipe >= 44, "a flat TX heard de-emphasised through VOICE at 11 dB (the 11-10 case): " + std::to_string(r.pipe) + " vs " + std::to_string(r.audio));
+        t = Cfg(); t.cnrDb = 12; t.devHz = 5000; t.tiltDb = 5; r = run1(t, false);
+        check(r.pipe >= 22 && r.pipe >= r.audio, "an over-deviating tracker (±5 kHz) still decodes (" + std::to_string(r.pipe) + ")");
+        t = Cfg(); t.cnrDb = -100; t.packets = 40; r = run1(t, false);
+        check(r.pipe == 0 && r.wrong == 0, "no carrier at all (FM hiss, ~60 s, both paths): no frames (" + std::to_string(r.pipe) + ", wrong " + std::to_string(r.wrong) + ")");
     }
     std::printf("   (%.1f s)\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
     std::printf("\ntest-aprs-onair: %d passed, %d failed\n", g_pass, g_fail);
