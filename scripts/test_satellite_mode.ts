@@ -5,6 +5,7 @@
 // "No orbit data — why"), the box size by use, and the half-globe's projection.
 process.env.TZ = 'UTC';
 import {
+  globeLandInk,
   satPassQuality, satPassText, satDopplerBadge,
   globeScene, hmIn, hhmm, mss, orthoXYZ, parseSatList, parseSatPicked, satAltKm, satBoxSize, satCorrectedHz, satCountdownText,
   satDecoderFor, satDopplerMsg, satHzText, satListEveryMs, satModeRows, satPacketBaud, satPickMsg, satSyncedText, satWhenText,
@@ -433,6 +434,14 @@ console.log('— 1.9 the MAP key');
   ok(satMapOffered(l.sats[1].tx[2], 1) && !satMapOffered(l.sats[1].tx[2], 0), 'packet: only once a station with a position is heard');
   ok(!satMapOffered(l.sats[1].tx[0], 5) && !satMapOffered(undefined, 5), 'voice / nothing picked: no MAP');
   ok(satViaText('ISS') === 'via ISS' && satViaText('SONATE-2') === 'via SONATE-2', '"via ISS"');
+}
+
+// ★ beta91 the land is neutral, never the faceplate's hue (Stuart 11-22: the outlines vanished into the blue beam)
+{
+  ok(globeLandInk('rgba(8,6,2,.96)') === '#ffffff', 'land on the dark default ground: white');
+  ok(globeLandInk('rgb(10, 18, 40)') === '#ffffff', 'land on a dark blue faceplate: white');
+  ok(globeLandInk('#f4f1e8') === '#1a1a1a' && globeLandInk('rgb(240,240,240)') === '#1a1a1a', 'land on a light faceplate: near-black');
+  ok(globeLandInk('') === '#ffffff' && globeLandInk('transparent') === '#ffffff', 'unknown ground: the dark answer');
 }
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nall ${pass} passed`);

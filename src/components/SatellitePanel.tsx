@@ -27,7 +27,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { scrollLane } from '../constants/popupTokens';
-import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
+import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -88,7 +88,7 @@ export interface SatellitePanelProps {
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg — the dotted orbit (1.7), the drawn bird, the green
  *  receiver dot and the labels (1.8); sizes on SCREEN (scene units per point from the laid-out width), so they read at
  *  SMALL and BIG alike. */
-function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, rxName }: {
+function HalfGlobeView({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, rxName }: {
   rx: { lat: number; lon: number }; sat: SatInfo | undefined; ink: string; beam: string; ground: string; small?: boolean;
   orbit?: GeoPt[] | null; tcaIdx?: number; rxName?: string;
 }) {
@@ -100,6 +100,7 @@ function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, r
   const font = 10 * sc;
   const L = globeLabels(g, rxName, sat?.name, font);
   const arrowD = g.arrows.length ? globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc) : '';
+  const birdInk = globeLandInk(ground);
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
     <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}
@@ -108,7 +109,7 @@ function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, r
          accessibilityLabel="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted with arrows for its direction">
       <Path d={dome} fill={ink} fillOpacity={0.12} stroke={ink} strokeOpacity={0.55} strokeWidth={2} />
       {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.12} strokeWidth={1} />}
-      {!!g.coast && <Path d={g.coast} fill="none" stroke={ink} strokeOpacity={0.55} strokeWidth={1} />}
+      {!!g.coast && <Path d={g.coast} fill="none" stroke={globeLandInk(ground)} strokeOpacity={0.7} strokeWidth={1} />}
       {!!g.foot && <Path d={g.foot} fill={beam} fillOpacity={0.28} />}
       {!!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
       {!!g.orbit && <Path d={g.orbit} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round"
@@ -120,12 +121,13 @@ function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, r
         <Path d={arrowD} fill="none" stroke={beam} strokeWidth={1.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
       </>}
       {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={GLOBE_RX_DOT.r * sc} fill={GLOBE_RX_DOT.fill} stroke={GLOBE_RX_DOT.ring} strokeWidth={GLOBE_RX_DOT.ringW * sc} />}
+      {/* ★ beta91 the bird is neutral like the land, so it stands off the beam (Stuart 11-22) */}
       {!!g.bird && <>
-        <Path d={g.bird.panels} fill={beam} fillOpacity={0.45} stroke={beam} strokeWidth={1.2 * sc} strokeLinejoin="round" />
-        <Path d={g.bird.cells} fill="none" stroke={beam} strokeOpacity={0.9} strokeWidth={0.8 * sc} />
-        <Path d={g.bird.boom} fill="none" stroke={beam} strokeWidth={1.6 * sc} strokeLinecap="round" />
-        <Path d={g.bird.body} fill={beam} stroke={ground} strokeWidth={1 * sc} strokeLinejoin="round" />
-        <Path d={g.bird.dish} fill={beam} />
+        <Path d={g.bird.panels} fill={birdInk} fillOpacity={0.45} stroke={birdInk} strokeWidth={1.2 * sc} strokeLinejoin="round" />
+        <Path d={g.bird.cells} fill="none" stroke={birdInk} strokeOpacity={0.9} strokeWidth={0.8 * sc} />
+        <Path d={g.bird.boom} fill="none" stroke={birdInk} strokeWidth={1.6 * sc} strokeLinecap="round" />
+        <Path d={g.bird.body} fill={birdInk} stroke={ground} strokeWidth={1 * sc} strokeLinejoin="round" />
+        <Path d={g.bird.dish} fill={birdInk} />
       </>}
       {[L.rx, L.sat].map((lb, i) => lb && (
         <React.Fragment key={i}>
@@ -139,6 +141,16 @@ function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, r
     </View>
   );
 }
+/** ★★ beta91 (Stuart 11-22: stutters with the satellite box open) the panel re-renders every second for its countdowns;
+ *  the half-globe — a long coastline path handed to the native SVG each time — is redrawn only when it would look
+ *  different: the bird moved ~0.1° (every second or two in a pass), a new orbit, a new size or colour. */
+const r1 = (v: number | undefined) => (v == null ? '' : v.toFixed(1));
+const HalfGlobe = React.memo(HalfGlobeView, (a, b) =>
+  a.rx.lat === b.rx.lat && a.rx.lon === b.rx.lon && a.ink === b.ink && a.beam === b.beam && a.ground === b.ground
+  && a.small === b.small && a.orbit === b.orbit && a.tcaIdx === b.tcaIdx && a.rxName === b.rxName
+  && a.sat?.norad === b.sat?.norad && a.sat?.name === b.sat?.name && r1(a.sat?.lat) === r1(b.sat?.lat) && r1(a.sat?.lon) === r1(b.sat?.lon)
+  && Math.round((a.sat?.rangeKm ?? 0) / 20) === Math.round((b.sat?.rangeKm ?? 0) / 20) && r1(a.sat?.el) === r1(b.sat?.el));
+
 
 /* ★★★ SATELLITE-BEST 1.6 — THE REMIND BANNER (Stuart 11-21: in-app banner only, no OS notification module). Each fired
  *  reminder its own banner, newest on top, three at most ("+2 more"); LISTEN enters SATELLITE and picks through the

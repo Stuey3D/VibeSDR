@@ -742,6 +742,25 @@ export interface GlobeLabel { x: number; y: number; anchor: 'start' | 'middle' |
 /** ★ The receiver dot's look on every faceplate (Stuart 11-21: "make the receiver marker green or a different contrasting
  *  colour") — the health pill's / the TRACK dot's green, never the dome's ink; r and ring in CSS px (renderers scale). */
 export const GLOBE_RX_DOT = { fill: '#5BE36B', ring: 'rgba(0,0,0,0.85)', r: 5, ringW: 1.5 } as const;
+
+/** ★★ beta91 THE LAND IS NEUTRAL, NOT THE FACEPLATE's INK (Stuart 11-22, a screenshot on the blue faceplate: "the country
+ *  outlines should be white or a different colour to the signal beam so that it is easier to see"). The beam, the
+ *  footprint, the orbit and the bird are the faceplate's accent; on a blue or amber faceplate the ink is the same hue,
+ *  so the coastlines vanished into the footprint. Land is drawn white on a dark window, near-black on a light one —
+ *  judged from the window's ground colour (any CSS rgb()/rgba()/#hex; unknown → the dark answer, the default faceplates). */
+export function globeLandInk(ground: string): string {
+  let r = 0, g = 0, b = 0;
+  const m = /rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/i.exec(ground || '');
+  const h = /^#([0-9a-f]{3}|[0-9a-f]{6})\b/i.exec((ground || '').trim());
+  if (m) { r = +m[1]; g = +m[2]; b = +m[3]; }
+  else if (h) {
+    const x = h[1].length === 3 ? h[1].split('').map((c) => c + c).join('') : h[1];
+    r = parseInt(x.slice(0, 2), 16); g = parseInt(x.slice(2, 4), 16); b = parseInt(x.slice(4, 6), 16);
+  }
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return lum > 0.5 ? '#1a1a1a' : '#ffffff';
+}
+
 export const GLOBE_KEY_TEXT = 'dotted: this pass’s orbit · arrows: its direction · shaded: where it can be heard';
 export function globeLabelText(s: string | undefined, max = 18): string {
   const t = (s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();

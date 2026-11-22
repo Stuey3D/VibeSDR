@@ -19,7 +19,7 @@
  *     {"op":"doppler"}; leaving the mode (EXIT, the key again, another whole-radio mode) sends {"op":"drop"}.
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import {
-  GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
+  GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
   satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
@@ -208,6 +208,9 @@ export class SatPanel {
   private rem = new SatReminders();
   private toasts: Array<{ r: SatReminder; why: string; shownAt: number }> = [];
   private remTimer = 0;
+  private rowsKey = '';                    // ★ the timetable's markup with the countdowns left out — see render()
+  private rowWhen: HTMLElement[] = [];     // ★ each row's countdown, written in place between rebuilds
+  private globeKey = '';                   // ★ what the half-globe last drew — see drawGlobe()
   private lead = 2;
   private remEl: HTMLDivElement;
   private now(): number { return (this.deps.now ? this.deps.now() : Date.now()) / 1000; }
@@ -444,6 +447,7 @@ export class SatPanel {
     if (!this.list) h = `<div class="sat-dim">Asking the server…</div>`;
     else if (!rows.length) h = `<div class="sat-dim">${esc(this.list.why || (this.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server'))}</div>`;
     let anyRemind = false;
+    const whens: string[] = [];
     for (const r of rows.slice(0, 40)) {
       const sel = (this.picked && this.picked.norad === r.sat.norad && this.picked.tx === r.i) || (this.pending && this.pending.norad === r.sat.norad && this.pending.tx === r.i);
       const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
@@ -455,7 +459,7 @@ export class SatPanel {
       anyRemind ||= offer;
       h += `<div class="sat-rw"><button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
         + (r.grey ? ` aria-disabled="true" data-why="${esc(r.why)}" title="${esc(r.why)}"` : ` title="${esc((r.tx.note || r.tx.label) + ' — tune there' + (this.autoDoppler ? ' and correct the Doppler' : ''))}"`)
-        + `><span class="sat-n">${esc(name)}</span><span class="sat-w">${esc(satWhenText(r, now))}</span>`
+        + `><span class="sat-n">${esc(name)}</span><span class="sat-w">\u0000${whens.push(satWhenText(r, now)) - 1}\u0000</span>`
         + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`
         + (offer ? `<button class="sat-rem${held ? ' on' : ''}" data-act="remind" data-norad="${r.sat.norad}" data-tx="${r.i}" aria-pressed="${!!held}"`
             + ` title="${held ? 'Cancel this reminder' : 'A pop-up shortly before this pass rises — while you are still connected to this server'}">${esc(satRemindKeyText(!!held, this.lead))}</button>` : '')
@@ -463,9 +467,20 @@ export class SatPanel {
     }
     if (anyRemind) h += `<div class="sat-lead sat-dim"><span>REMIND</span>${[1, 2, 5, 10].map((v) => `<button data-act="lead" data-v="${v}" class="${v === this.lead ? 'on' : ''}" aria-pressed="${v === this.lead}">${v}</button>`).join('')}<span>min before it rises · this page only</span></div>`;
     if (this.list?.time === 'system') h += `<div class="sat-dim">TIME: SYSTEM — this server's clock has not been checked against a time server</div>`;
-    this.sRows.innerHTML = h;
+    /* ★★ beta91 (Stuart, Safari: "i think the satellite box is causing the stutters on the waterfall"): the timetable was
+     *  REBUILT every second — up to 40 rows of buttons parsed, styled and laid out on the thread that draws the waterfall,
+     *  for a change of one countdown digit. Now the rows are rebuilt only when something but the countdowns changed (a
+     *  pass rising, a pick, a reminder, the list); otherwise only each countdown's text is written. */
+    if (h !== this.rowsKey) {
+      this.rowsKey = h;
+      this.sRows.innerHTML = h.replace(/\u0000(\d+)\u0000/g, (_m, i) => esc(whens[Number(i)]));
+      this.rowWhen = Array.from(this.sRows.querySelectorAll<HTMLElement>('.sat-w'));
+    } else {
+      whens.forEach((w, i) => { const el = this.rowWhen[i]; if (el && el.textContent !== w) el.textContent = w; });
+    }
     const summary = this.sList.querySelector('summary')!;
-    summary.textContent = this.picked ? 'ALL SATELLITES' : 'SATELLITES';
+    const sumText = this.picked ? 'ALL SATELLITES' : 'SATELLITES';
+    if (summary.textContent !== sumText) summary.textContent = sumText;
     const credit = satCreditText(this.list, now), txc = satTxCreditText(this.list);
     this.sCredit.textContent = credit ? credit + (txc ? ' · ' + txc : '') : '';
   }
@@ -644,6 +659,15 @@ export class SatPanel {
     cv.style.display = rx ? '' : 'none';
     if (!rx) { this.sKey.hidden = true; return; }
     const W = cv.width, H = cv.height;
+    /* ★★ beta91 drawn only when the picture would change: the bird moves ~0.1° in under 2 s, so this is a redraw every
+     *  second or two instead of a full repaint (and a forced style read) every second; a resize, a new path, a new name
+     *  or BIG / SMALL redraw at once. */
+    const gk = [W, H, this.big ? 1 : 0, rx.lat.toFixed(3), rx.lon.toFixed(3), sat.norad ?? '', sat.name ?? '',
+      sat.lat != null ? sat.lat.toFixed(1) : '', sat.lon != null ? sat.lon.toFixed(1) : '', sat.rangeKm != null ? Math.round(sat.rangeKm / 20) : '',
+      this.track ? `${this.track.norad}:${this.track.tcaIdx ?? ''}:${this.track.geo?.length ?? 0}:${this.track.geo?.[0]?.[0] ?? ''}` : '',
+      this.deps.rxName?.() || ''].join('|');
+    if (gk === this.globeKey) return;
+    this.globeKey = gk;
     const mineT = this.track && sat.norad != null && this.track.norad === sat.norad ? this.track : null;
     const g = globeScene(W, H, rx, sat.lat != null && sat.lon != null ? { lat: sat.lat, lon: sat.lon, altKm: satAltKm(sat.rangeKm, sat.el) } : null, mineT?.geo ?? null, mineT?.tcaIdx);
     // ★ scene units per CSS pixel — the dot, the lines and the words are sized on SCREEN, so they read at SMALL and BIG
@@ -659,7 +683,8 @@ export class SatPanel {
     ctx.globalAlpha = 0.12; ctx.fillStyle = ink; ctx.fill();
     ctx.globalAlpha = 0.55; ctx.strokeStyle = ink; ctx.lineWidth = 2; ctx.stroke();
     if (g.grid) { ctx.globalAlpha = 0.12; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.grid)); }   // ★ fainter than the land
-    if (g.coast) { ctx.globalAlpha = 0.55; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.coast)); }   // ★ rough land (globeCoast.ts)
+    // ★ rough land (globeCoast.ts) — beta91 neutral, never the faceplate's hue, so it reads through the beam (globeLandInk)
+    if (g.coast) { ctx.globalAlpha = 0.7; ctx.lineWidth = 1; ctx.strokeStyle = globeLandInk(ground); ctx.stroke(new Path2D(g.coast)); ctx.strokeStyle = ink; }
     if (g.foot) { ctx.globalAlpha = 0.28; ctx.fillStyle = amber; ctx.fill(new Path2D(g.foot)); }
     if (g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
     // ★ 1.7 the orbit, dotted, and its highest point
@@ -685,14 +710,15 @@ export class SatPanel {
     // ★ 1.8 the bird: tube, dish towards the Earth, panels along its heading (cells ruled)
     if (g.bird) {
       const b = g.bird;
+      const bird = globeLandInk(ground);   // ★ beta91 the bird is neutral too, so it stands off the beam (Stuart 11-22)
       ctx.lineJoin = 'round';
-      ctx.globalAlpha = 0.45; ctx.fillStyle = amber; ctx.fill(new Path2D(b.panels));
-      ctx.globalAlpha = 1; ctx.strokeStyle = amber; ctx.lineWidth = 1.2 * sc; ctx.stroke(new Path2D(b.panels));
+      ctx.globalAlpha = 0.45; ctx.fillStyle = bird; ctx.fill(new Path2D(b.panels));
+      ctx.globalAlpha = 1; ctx.strokeStyle = bird; ctx.lineWidth = 1.2 * sc; ctx.stroke(new Path2D(b.panels));
       ctx.lineWidth = 0.8 * sc; ctx.globalAlpha = 0.9; ctx.stroke(new Path2D(b.cells));
       ctx.globalAlpha = 1; ctx.lineWidth = 1.6 * sc; ctx.stroke(new Path2D(b.boom));
-      ctx.fillStyle = amber; ctx.fill(new Path2D(b.body));
+      ctx.fillStyle = bird; ctx.fill(new Path2D(b.body));
       ctx.lineWidth = 1 * sc; ctx.strokeStyle = ground; ctx.stroke(new Path2D(b.body));
-      ctx.fillStyle = amber; ctx.fill(new Path2D(b.dish));
+      ctx.fillStyle = bird; ctx.fill(new Path2D(b.dish));
     }
     // ★ the labels: the receiver (the server's name, else RECEIVER) and the bird's name, kept off each other
     const font = 10 * sc;

@@ -140,7 +140,18 @@ try {
   ok(rows.length === 6, `every downlink listed (${rows.length})`);
   ok(/^ISS · FM repeater/.test(rows[0].t) && /^METEOR-M2 3/.test(rows[3].t) && /^SO-50/.test(rows[4].t) && /^SONATE-2/.test(rows[5].t),
      `up now SHORTEST remaining first (ISS 6:12 before METEOR 9:55), then AOS: ${rows.map((r) => r.t.split('·')[0].trim()).join(' / ')}`);
-  ok(/UP · 6:1\d left/.test(rows[0].t) && /UP · 9:5\d left/.test(rows[3].t), `"UP · 6:12 left": ${rows[0].t.match(/UP · [\d:]+ left/)}`);
+  // ★ beta91 the time left counts down to the pass's LOS (the AOS-glitch fix, satModeRows) — the page has run a few seconds
+  ok(/UP · 6:[01]\d left/.test(rows[0].t) && /UP · 9:[45]\d left/.test(rows[3].t), `"UP · 6:12 left" (counting down): ${rows[0].t.match(/UP · [\d:]+ left/)}`);
+  /* ★★ beta91 (Stuart, Safari: stutters with the box open) the timetable is NOT rebuilt every second: the same row
+   *  elements a tick later, their countdowns rewritten in place */
+  {
+    await ev(`window.__rowMark = document.querySelector('#satPanel .sat-row'); window.__rowMark.dataset.mark = '1'; true`);
+    const t0 = await ev(`document.querySelector('#satPanel .sat-row .sat-w').textContent`);
+    await new Promise((r) => setTimeout(r, 2300));
+    const kept = await ev(`document.querySelector('#satPanel .sat-row') === window.__rowMark`);
+    const t1 = await ev(`document.querySelector('#satPanel .sat-row .sat-w').textContent`);
+    ok(kept && t0 !== t1, `beta91 the rows are kept between ticks, only the countdown changes (${t0} → ${t1})`);
+  }
   ok(/AOS \d\d:\d\d \(in 0:38\)/.test(rows[4].t), `"AOS 16:42 (in 0:38)": ${rows[4].t.match(/AOS .*?\)/)}`);
   ok(rows[4].grey && rows[4].dis === 'true' && /locked to 130–170 MHz/.test(rows[4].t), 'out of reach: GREYED with its why');
   ok(rows.filter((r) => r.grey).length === 1, 'only that one greyed');
@@ -210,7 +221,8 @@ try {
   ok(await ev(`document.getElementById('satPanel').classList.contains('big') && !document.querySelector('#satPanel .sat-img').hidden`), '…and BIG again');
   await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);   // SMALL by hand: the next pick opens SMALL
   await ev(`window.__p.pictureEnd(); true`);
-  ok(/picture complete — saved to the gallery/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'pass end: the finished picture stays, "saved to the gallery"');
+  // ★ beta91 on LRPT the decoder's own line is the live state and wins over the words (Stuart's Meteor-M2-4 pass 11-22)
+  ok(/120 lines/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'pass end (LRPT): the LRPT line stays — it says a filed pass itself');
 
   console.log('— ISS 145.800 (sstv): compact, big on a picture');
   await ev(`document.querySelector('#satPanel details').open = true; true`);
