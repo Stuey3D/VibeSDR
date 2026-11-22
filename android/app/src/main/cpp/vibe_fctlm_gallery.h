@@ -22,14 +22,17 @@
 //      channel set starts a new file too, and so does kPassMaxBytes ("part 2") — none grows for ever.
 //  • THE DAY — ONE .txt item per satellite per UTC day, a line a frame, whoever was decoding (Stuart 11-22: a background
 //    profile's pass and a listener's pick of the same satellite write into the SAME day's log — Store::adoptSlot with
-//    anyWriter: the slot "day-YYYYMMDD-<sat>" and the radio find it, never the profile, the origin or the dial):
+//    anyWriter — and every RADIO on the server too: the slot "day-YYYYMMDD-<sat>" alone finds it, never the radio, the
+//    profile, the origin or the dial):
 //        14:02:16  AO-73  WO1 · seq 123456 · Sunlight · battery 1234 raw · el 23° · RS fixed 0
 //    Titled "AO-73 telemetry log · 22 Nov · 180 frames" — the count is the FILE's lines after each append, so two writers
 //    keep it right; a restart reads the day back and counts on.
 //    ★★ TWO WRITERS, ONE FILE, NO HALF LINES: every tap in the process writing a satellite's day shares ONE DayFile (below),
 //       which holds the lines and writes them — whole lines only, ONE O_APPEND write under the gallery's exclusive flock
-//       (Store::append). Finding-or-creating the day's item is serialised (Registry::dayItemMutex). A PASS is shared the same
-//       way (PassFile): a background decode and a listener's pick of the same pass make ONE .csv, each frame once.
+//       (Store::append). A PASS is shared the same way (PassFile): a background decode and a listener's pick of the same
+//       pass make ONE .csv, each frame once. ★★★ AND ACROSS RADIO PROCESSES (Stuart 11-22: "all radios on same server
+//       should feed the same log for the satellite"): see FcLock below — flock, slot lookup without the radio, dedupe
+//       against the file's own rows.
 //
 // ★★ NEVER A WRITE PER FRAME (the RTTY rule, a Pi 2's SD card): both are held in RAM and appended once a minute or 8 KB,
 //    when a pass ends, at a UTC midnight and when the decoder stops. A 12-minute AO-73 pass is ~150 frames ≈ 60 KB of
@@ -42,7 +45,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cerrno>
+#include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -50,6 +56,10 @@
 #include <set>
 #include <string>
 #include <vector>
+
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 namespace vibe {
 namespace bg {
@@ -176,14 +186,12 @@ public:
         days_.push_back(d);
         return d;
     }
-    /** ★ Finding-or-creating a day log's item, one at a time in the process (two must never both create one). */
-    std::mutex& dayItemMutex() { return dayItem_; }
 private:
     void prune() {
         passes_.erase(std::remove_if(passes_.begin(), passes_.end(), [](const std::weak_ptr<PassFile>& w) { return w.expired(); }), passes_.end());
         days_.erase(std::remove_if(days_.begin(), days_.end(), [](const std::weak_ptr<DayFile>& w) { return w.expired(); }), days_.end());
     }
-    std::mutex m_, dayItem_;
+    std::mutex m_;
     std::vector<std::weak_ptr<PassFile>> passes_;
     std::vector<std::weak_ptr<DayFile>> days_;
 };
@@ -225,18 +233,125 @@ inline std::string passHead(const PassFile& p) {
     return h + p.header;
 }
 /** @return true when it CREATED an item. */
+// ── ★★★ ACROSS PROCESSES (Stuart: "all radios on same server should feed the same log for the satellite, it is the same
+//     satellite after all"). Every radio is its own process (vibeserver@<serial>), all on ONE gallery directory. So a
+//     flush, in ANY process, runs under an exclusive flock on <gallery>/.fctlm.lock (released by the kernel if a process
+//     dies), and inside it: find the item by its SLOT alone (Store::adoptSlot anyWriter — no radio, profile, origin or
+//     dial), read the frames it already holds (the CSV's seq column / the log's "seq N"), drop ours that are there,
+//     append the rest as whole lines in one O_APPEND write, and count the file for the title. Two processes therefore
+//     make ONE item, each frame ONCE, and nothing interleaves. The flock also serialises threads in one process (each
+//     flush opens its own descriptor). Cost: one read of a ≤ 256 KB pass file / a day log once a minute. ──────────────
+struct FcLock {
+    int fd = -1;
+    explicit FcLock(const std::string& dir) {
+        if (dir.empty()) return;
+        fd = ::open((dir + "/.fctlm.lock").c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (fd >= 0) while (::flock(fd, LOCK_EX) != 0 && errno == EINTR) {}
+    }
+    ~FcLock() { if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } }
+    FcLock(const FcLock&) = delete; FcLock& operator=(const FcLock&) = delete;
+};
+/** A CSV row's frame key: its seq column (the 4th), else -1 - its unix time; LLONG_MIN = not a row. */
+inline long long csvKey(const std::string& l) {
+    if (l.empty() || l[0] == '#' || !std::isdigit((unsigned char)l[0])) return LLONG_MIN;
+    size_t c1 = l.find(','), c2 = c1 == std::string::npos ? c1 : l.find(',', c1 + 1), c3 = c2 == std::string::npos ? c2 : l.find(',', c2 + 1),
+           c4 = c3 == std::string::npos ? c3 : l.find(',', c3 + 1);
+    if (c4 == std::string::npos) return LLONG_MIN;
+    if (c4 > c3 + 1) return std::strtoll(l.c_str() + c3 + 1, nullptr, 10);
+    return -1 - std::strtoll(l.c_str() + c1 + 1, nullptr, 10);
+}
+/** A day-log line's frame key ("… · seq 123 · …"), LLONG_MIN = not a frame line. */
+inline long long dayKey(const std::string& l) {
+    if (l.size() < 10 || l[2] != ':' || l[5] != ':') return LLONG_MIN;
+    const size_t p = l.find(" seq ");
+    return p == std::string::npos ? LLONG_MIN : std::strtoll(l.c_str() + p + 5, nullptr, 10);
+}
+/** `fresh`'s lines whose key is not in `body` (keyed by `key`); counts what the file then holds. */
+template <class K>
+inline std::string unseen(const std::string& body, const std::string& fresh, K key, long& total, double* maxEl = nullptr) {
+    std::set<long long> have; total = 0;
+    auto eachLine = [](const std::string& s, auto fn) { size_t p = 0; while (p < s.size()) { size_t e = s.find('\n', p); if (e == std::string::npos) e = s.size(); fn(s.substr(p, e - p)); p = e + 1; } };
+    eachLine(body, [&](const std::string& l) {
+        const long long k = key(l); if (k == LLONG_MIN) return;
+        if (have.insert(k).second) ++total;
+        if (maxEl) { size_t c = 0; for (int i = 0; i < 5 && c != std::string::npos; ++i) c = l.find(',', c + (i ? 1 : 0)); if (c != std::string::npos) { char* e; const double v = std::strtod(l.c_str() + c + 1, &e); if (e != l.c_str() + c + 1 && v > *maxEl) *maxEl = v; } }
+    });
+    std::string out;
+    eachLine(fresh, [&](const std::string& l) {
+        const long long k = key(l);
+        if (k != LLONG_MIN && !have.insert(k).second) return;   // ★ another process wrote this frame
+        if (k != LLONG_MIN) ++total;
+        if (maxEl) { size_t c = 0; for (int i = 0; i < 5 && c != std::string::npos; ++i) c = l.find(',', c + (i ? 1 : 0)); if (c != std::string::npos) { char* e; const double v = std::strtod(l.c_str() + c + 1, &e); if (e != l.c_str() + c + 1 && v > *maxEl) *maxEl = v; } }
+        out += l + "\n";
+    });
+    return out;
+}
+/** The pass's slot: "pass-<sat>-<AOS minute>" (or, with no AOS, "pass-<sat>-t<start minute>") — found by every process.
+ *  Failing that, a pass of the satellite on disk whose last row is within kPassGapSec is joined (one radio knowing the
+ *  AOS and another not), unless both know the AOS and it differs. */
+inline std::string passSlot(const PassFile& p) {
+    return "pass-" + satToken(p.sat) + "-" + (p.aos > 0 ? std::to_string((long long)std::llround(p.aos / 60.0))
+                                                        : "t" + std::to_string((long long)(p.start / 60)))
+         + (p.part > 1 ? "-p" + std::to_string(p.part) : std::string());
+}
+inline std::string recentPassOnDisk(gallery::Store& st, const std::string& sat, int64_t t, double aos) {
+    const std::vector<std::string> all = st.names("fctlm");
+    const std::string pre = "pass-" + satToken(sat) + "-";
+    int looked = 0;
+    for (size_t i = all.size(); i-- > 0 && looked < 24;) {
+        const std::string& n = all[i];
+        if (n.size() < 4 || n.compare(n.size() - 4, 4, ".csv") != 0) continue;
+        ++looked;
+        const std::string slot = st.field(n, "s");
+        if (slot.rfind(pre, 0) != 0) continue;
+        if (slot.find("-p", pre.size()) != std::string::npos) continue;   // ★ a later part is found by its own slot
+        // ★ both know the AOS and they differ: another pass
+        if (aos > 0 && slot.size() > pre.size() && std::isdigit((unsigned char)slot[pre.size()])
+            && std::llabs(std::strtoll(slot.c_str() + pre.size(), nullptr, 10) - (long long)std::llround(aos / 60.0)) > 2) continue;
+        std::string body; if (!st.readItem(n, body)) continue;
+        const size_t e = body.find_last_not_of('\n'); if (e == std::string::npos) continue;
+        const size_t b = body.rfind('\n', e);
+        const std::string last = body.substr(b == std::string::npos ? 0 : b + 1, e - (b == std::string::npos ? 0 : b + 1) + 1);
+        const size_t c1 = last.find(',');
+        if (c1 == std::string::npos) continue;
+        const long long lt = std::strtoll(last.c_str() + c1 + 1, nullptr, 10);
+        if (lt > 0 && t - lt <= kPassGapSec && t + kPassGapSec >= lt) return n;
+    }
+    return "";
+}
+/** @return true when it CREATED an item. Caller holds p.m. */
 inline bool flushPass(PassFile& p, int64_t t) {
     p.lastFlush = t;
     if (p.rows.empty()) return false;
     gallery::Store& st = *p.store;
-    const gallery::Meta m = passMeta(p);
-    bool made = false;
-    if (!p.name.empty() && st.append(p.name, p.rows)) st.retag(p.name, m);
-    else {
-        if (!p.name.empty()) st.close(p.name);
-        p.name = st.create(m, "csv", passHead(p) + p.rows);
-        made = !p.name.empty();
+    FcLock fl(st.dir());
+    gallery::Meta m = passMeta(p);
+    m.slot = passSlot(p);
+    if (p.name.empty()) {
+        p.name = st.adoptSlot(m, /*anyOrigin=*/true, /*anyWriter=*/true);   // ★ another radio's file for this pass
+        // ★ one radio knows the AOS and another does not (a hand-tuned listener): the pass on disk whose last frame is recent
+        if (p.name.empty() && p.part == 1) p.name = recentPassOnDisk(st, p.sat, t, p.aos);
     }
+    bool made = false;
+    std::string body;
+    if (!p.name.empty() && st.readItem(p.name, body)) {
+        long total = 0; double mx = p.maxEl;
+        const std::string add = unseen(body, p.rows, csvKey, total, &mx);
+        if ((add.empty() || st.append(p.name, add))) {
+            p.partFrames = (int)total; p.maxEl = mx;
+            m = passMeta(p); { const std::string own = st.field(p.name, "s"); m.slot = own.empty() ? passSlot(p) : own; }
+            st.retag(p.name, m);
+            p.rows.clear();
+            return false;
+        }
+        st.close(p.name);   // ★ gone (evicted / cleared): a new one below
+    }
+    long total = 0; double mx = p.maxEl;
+    const std::string rows = unseen(std::string(), p.rows, csvKey, total, &mx);
+    p.partFrames = (int)total; p.maxEl = mx;
+    m = passMeta(p); m.slot = passSlot(p);
+    p.name = st.create(m, "csv", passHead(p) + rows);
+    made = !p.name.empty();
     p.rows.clear();
     return made;
 }
@@ -257,25 +372,30 @@ inline bool flushDay(DayFile& d, int64_t now) {
     if (d.pending.empty()) return false;
     gallery::Store& st = *d.store;
     const int64_t at = std::max<int64_t>(d.day * 86400, std::min<int64_t>(now, d.day * 86400 + 86399));
-    std::lock_guard<std::mutex> dl(Registry::get().dayItemMutex());
-    // ★ ONE log per satellite per day on this radio: the slot finds it, never the profile, origin or dial (anyWriter)
+    FcLock fl(st.dir());   // ★ every process and thread: find-or-create, dedupe and append, one at a time
+    // ★ ONE log per satellite per day on this SERVER: the slot alone finds it — never the radio, profile, origin or dial
     if (d.name.empty()) d.name = st.adoptSlot(dayMeta(d, at), /*anyOrigin=*/true, /*anyWriter=*/true);
-    bool made = false;
-    if (!d.name.empty() && st.append(d.name, d.pending)) {
-        std::string body;   // ★ the count is the FILE's (a restart's earlier lines included)
-        d.frames = st.readItem(d.name, body) ? countLines(body) : d.frames + countLines(d.pending);
-        st.retag(d.name, dayMeta(d, at));
-    } else {
-        if (!d.name.empty()) st.close(d.name);
-        d.frames = countLines(d.pending);
-        const std::string head = d.sat + " \xc2\xb7 FUNcube telemetry \xc2\xb7 " + gallery::utcStamp(at, "%Y-%m-%d") + " (UTC)\n"
-            + "One line a good frame, every pass this server decoded (background passes and listeners alike, each frame once). "
-              "Each pass's every channel is its own .csv item. raw = sent uncalibrated (no published calibration).\n\n";
-        d.name = st.create(dayMeta(d, at), "txt", head + d.pending);
-        made = !d.name.empty();
+    std::string body;
+    if (!d.name.empty() && st.readItem(d.name, body)) {
+        long total = 0;
+        const std::string add = unseen(body, d.pending, dayKey, total);
+        if (add.empty() || st.append(d.name, add)) {
+            d.frames = total;   // ★ the count is the FILE's (other radios' and a restart's lines included)
+            st.retag(d.name, dayMeta(d, at));
+            d.pending.clear();
+            return false;
+        }
+        st.close(d.name);
     }
+    long total = 0;
+    const std::string lines = unseen(std::string(), d.pending, dayKey, total);
+    d.frames = total;
+    const std::string head = d.sat + " \xc2\xb7 FUNcube telemetry \xc2\xb7 " + gallery::utcStamp(at, "%Y-%m-%d") + " (UTC)\n"
+        + "One line a good frame, every pass this server decoded (every radio, background passes and listeners alike, each frame once). "
+          "Each pass's every channel is its own .csv item. raw = sent uncalibrated (no published calibration).\n\n";
+    d.name = st.create(dayMeta(d, at), "txt", head + lines);
     d.pending.clear();
-    return made;
+    return !d.name.empty();
 }
 
 } // namespace fctlmlog

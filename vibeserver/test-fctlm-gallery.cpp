@@ -12,12 +12,16 @@
 //       dial) write ONE day log — both alive at once, no half lines, the count right, a restart finds it.
 //       §4c: the SAME pass decoded by both at once (one knowing the AOS, one not; each missing frames) = ONE .csv and one
 //       day log, every frame once (the union, no doubles).
+//       §4d: TWO RADIO PROCESSES (fork: each its own Store on the shared gallery, its own radio label) decoding the same
+//       pass at once — one CSV, one day log, one index item each, every frame once, no torn lines.
 //    §5 BOUNDED: a pass past 256 KB goes on in "part 2"; no file passes the cap by more than one flush.
 //    §6 SERVED: a .csv resolves as text/csv.
 #include "vibe_fctlm_tx.h"
 #include "vibe_fctlm_gallery.h"
 
 #include <dirent.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <cmath>
 #include <cstdio>
@@ -258,6 +262,70 @@ static void s4c() {
     rmDir(dir);
 }
 
+static void s4d() {
+    std::printf("§4d EVERY RADIO ON THE SERVER, ONE LOG (Stuart: \"it is the same satellite after all\"): two radio PROCESSES\n");
+    const std::string dir = tmpDir("procs");
+    { gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20); }
+    const int N = 120;   // 10 minutes of frames
+    int heard = 0; for (int i = 0; i < N; ++i) heard += (i % 7 != 3) || (i % 5 != 1);
+    pid_t kids[2];
+    for (int k = 0; k < 2; ++k) {
+        kids[k] = fork();
+        if (kids[k] == 0) {   // ★ a radio worker: its own Store on the shared gallery, its own label, origin, profile, dial
+            gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20); st.setRadioLabel(k ? "RTL-SDR" : "RSP1B");
+            gallery::Meta m = meta();
+            if (k) { m.origin = "live"; m.profile = ""; m.freqHz = 145.9338e6; }
+            int64_t now = T0;
+            {
+                bg::FcTlmGalleryTap tap(st, m, [&] { return now; });
+                vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = k ? 0.0 : (double)T0; c.los = k ? 0.0 : (double)T0 + 700;
+                for (int i = 0; i < N; ++i) {
+                    now = T0 + 5 * i; c.unix = (double)now;
+                    if (k == 0 ? (i % 7 != 3) : (i % 5 != 1)) tap.satTlm(frame(1 + i % 24, 9000 + i), c);
+                    tap.tick();
+                    ::usleep(1500);   // ★ the two processes' flushes interleave in real time
+                }
+                tap.finish(false);
+            }
+            ::_exit(0);
+        }
+    }
+    int okKids = 0;
+    for (int k = 0; k < 2; ++k) { int stt = 0; ::waitpid(kids[k], &stt, 0); okKids += WIFEXITED(stt) && WEXITSTATUS(stt) == 0; }
+    CHECK(okKids == 2, "both radio processes ran");
+    gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
+    auto csv = itemsOf(st, ".csv"), txt = itemsOf(st, ".txt");
+    CHECK(csv.size() == 1 && txt.size() == 1, "the gallery index: ONE pass item and ONE day log (got %zu + %zu)", csv.size(), txt.size());
+    CHECK(st.names("fctlm").size() == 2, "…and nothing else listed (%zu items)", st.names("fctlm").size());
+    std::string b; if (!csv.empty()) st.readItem(csv[0], b);
+    auto L = lines(b);
+    std::set<std::string> seqs; int rows = 0, torn = 0, hdrCols = 0;
+    for (auto& l : L) {
+        if (l.rfind("utc,", 0) == 0) hdrCols = cols(l);
+        if (l.rfind("2026-", 0) != 0) continue;
+        ++rows; if (hdrCols && cols(l) != hdrCols) ++torn;
+        std::vector<std::string> c; std::stringstream ss(l); std::string x; while (std::getline(ss, x, ',')) c.push_back(x);
+        if (c.size() > 3) seqs.insert(c[3]);
+    }
+    CHECK(rows == heard && (int)seqs.size() == heard, "the pass: each frame once, the union of both radios (%d of %d; %d rows)", (int)seqs.size(), heard, rows);
+    CHECK(torn == 0 && hdrCols > 7, "no torn rows (%d)", torn);
+    CHECK(!csv.empty() && st.field(csv[0], "title").find(std::to_string(heard) + " frames") != std::string::npos, "its title counts them: %s",
+          csv.empty() ? "" : st.field(csv[0], "title").c_str());
+    std::string d; if (!txt.empty()) st.readItem(txt[0], d);
+    int lines_ = 0, badL = 0; std::set<long long> dseq;
+    for (auto& l : lines(d)) {
+        if (l.size() > 8 && l[2] == ':' && l[5] == ':') {
+            ++lines_;
+            if (l.compare(8, 9, "  AO-73  ") != 0 || l.find("RS fixed 0") == std::string::npos) ++badL;
+            const size_t p = l.find(" seq "); if (p != std::string::npos) dseq.insert(std::strtoll(l.c_str() + p + 5, nullptr, 10));
+        }
+    }
+    CHECK(lines_ == heard && (int)dseq.size() == heard && badL == 0, "the day log: each frame once, whole lines (%d lines, %zu frames, %d bad)", lines_, dseq.size(), badL);
+    CHECK(!txt.empty() && st.field(txt[0], "title") == "AO-73 telemetry log \xc2\xb7 22 Nov \xc2\xb7 " + std::to_string(heard) + " frames",
+          "its title: %s", txt.empty() ? "" : st.field(txt[0], "title").c_str());
+    rmDir(dir);
+}
+
 static void s5() {
     std::printf("§5 bounded\n");
     const std::string dir = tmpDir("cap");
@@ -324,6 +392,7 @@ int main(int argc, char** argv) {
     s3_s4();
     s4b();
     s4c();
+    s4d();
     s5();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
