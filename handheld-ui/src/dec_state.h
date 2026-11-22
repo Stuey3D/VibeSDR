@@ -368,6 +368,7 @@ private:
  *  ★ RTTY: `set` false = listed, its settings not found yet ("RTTY detected — waiting for parameter detection");
  *    `settings` = "45 baud / 170 Hz / Reverse" once found (also written into its text by the server). */
 struct DecSig { double id = 0, hz = 0, audio = 0, wpm = 0, wpmLo = 0, wpmHi = 0, snr = 0, baud = 0, imd = 0, last = 0, frames = 0, shift = 0;
+    bool qpsk = false;   // ★ V12 beta91 PSK: QPSK31 / QPSK63
                 std::string q, call, country, text, raw, settings; bool active = false, set = true; };   // raw = text as the server sent it
 /** A call heard identifying itself (cw_spot / psk_spot / jtty_spot). */
 struct DecCall { std::string call, country, how, mode; double hz = 0, snr = 0, wpm = 0, at = 0; };
@@ -1018,7 +1019,8 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             g.id = x["id"].num(0); g.hz = x["hz"].num(0); g.audio = x["audio"].num(0); g.wpm = x["wpm"].num(0); g.snr = x["snr"].num(0);
             g.wpmLo = x["wpmLo"].num(0); g.wpmHi = x["wpmHi"].num(0); g.q = x["q"].str(); g.active = x["active"].boolean(); g.last = x["last"].num(0);
             g.call = decClip(x["call"].str(), 16); g.country = decClip(x["country"].str(), 40); g.text = decClip(x["text"].str(), 160);
-            g.baud = psk ? (x["baud"].num(0) > 40 ? 63 : 31) : rtty ? x["baud"].num(0) : 0; g.imd = x["imd"].num(0);
+            g.baud = psk ? (x["baud"].num(0) > 100 ? 125 : x["baud"].num(0) > 40 ? 63 : 31) : rtty ? x["baud"].num(0) : 0; g.imd = x["imd"].num(0);
+            if (psk) g.qpsk = x["qpsk"].boolean();   // ★ V12 beta91: QPSK31 / QPSK63 (baud 125 = PSK125)
             if (rtty) { g.set = x["set"].boolean(); g.shift = x["shift"].num(0); g.settings = decClip(x["settings"].str(), 40); }
             any = any || g.active;
             u.sigs.push_back(std::move(g));
