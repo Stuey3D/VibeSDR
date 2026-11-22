@@ -163,6 +163,9 @@ struct Meta {
      *  ("plat"/"plon"); NaN = none. And how urgent it is ("lv": 3 distress, 2 urgency, 1 safety; -1 = not said). */
     double pinLat = NAN, pinLon = NAN;
     int level = -1;
+    /** ★ V12 2026-11-22: the STATION a picture came from ("Northwood GYA 4610.0 kHz" — a WEFAX-stations VFO's channel),
+     *  put in its title by the picture tap. Not written to the index on its own. Empty = none. */
+    std::string station;
 };
 /** What a download name may hold (Meta::dlName). Anything else is dropped. */
 inline std::string downloadSafe(const std::string& s) {

@@ -346,6 +346,9 @@ public:
         std::string wefaxHourly;
         /** ★ Seconds in a WEFAX "hour" — 3600; a test shortens it. A run stopped after ≥ a twelfth of it says its part-hour. */
         double wefaxHourSecs = 3600.0;
+        /** ★ No joiner can ever attach (a background WEFAX-stations channel): the picture in progress is not copied for one
+         *  (up to kReplayMax, 4 MB, a decoder) — memory bounded to the gallery's own copy. */
+        bool noReplay = false;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -1008,8 +1011,14 @@ private:
         // ★ Read from an atomic, not name_: SSTV calls this from its own video thread.
         const int kind = imageKind_.load(std::memory_order_relaxed);
         if (kind == 0) return;
-        std::lock_guard<std::mutex> rl(replayMtx_);
         const bool starts = (kind == 1 && n == 1 && d[0] == 0x02) || (kind == 2 && n >= 9 && d[0] == 0x07);
+        // ★ No joiner will ever ask (a WEFAX-stations channel): only whether a picture is in progress is kept — no 4 MB copy
+        if (env_.noReplay) {
+            if (starts) pictureSince_.store(steadySecs(), std::memory_order_relaxed);
+            if ((kind == 1 && n == 1 && d[0] == 0x03) || (kind == 2 && d[0] == 0x05)) pictureSince_.store(0.0, std::memory_order_relaxed);
+            return;
+        }
+        std::lock_guard<std::mutex> rl(replayMtx_);
         if (starts) { archiveLocked_(kind); replay_.clear(); replayBytes_ = 0; replayDoneSeq_ = 0; }
         // ★ WEFAX 0x03 "transmission complete", SSTV 0x05 "image complete": the picture is finished — stamped now, so a
         //   listener who left AFTER it finished is not sent it again

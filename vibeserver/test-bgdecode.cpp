@@ -934,6 +934,102 @@ static void wefaxHourly() {
     }
 }
 
+// ── 10. ★★ WEFAX STATIONS: several stations' frequencies in ONE decoder slot (Stuart 2026-11-22) ─────────────────
+static void wefaxStations() {
+    std::printf("── WEFAX stations: the list, the save, the runner (two charts at once, one slot) ──\n");
+    namespace ws = wefaxst;
+    ok(ws::known(4610000) && ws::known(7880000) && ws::known(13882500) && ws::known(2618500) && ws::known(11086500),
+       "Northwood 2618.5 / 4610 / 11086.5 and DWD 7880 / 13882.5 kHz are in the list");
+    ok(ws::label(4610000) == "Northwood GYA 4610.0 kHz" && ws::label(17146400) == "New Orleans NMG / Valpara\xc3\xadso CBV 17146.4 kHz",
+       "labels: " + ws::label(4610000) + " · " + ws::label(17146400));
+    ok(std::fabs(ws::dialOf(4610000) - 4608100) < 0.5, "the dial is 1.9 kHz below (4610.0 → 4608.1 USB)");
+    ok(!ws::known(5807000), "Wellington ZKLF (stopped 2023) is not offered");
+    const std::string hfOnly = ws::stationsJson([](double lo, double hi) { return lo >= 3000000 && hi <= 9000000; });
+    ok(hfOnly.find("\"id\":\"gya\"") != std::string::npos && hfOnly.find("[4610000,8040000]") != std::string::npos
+       && hfOnly.find("2618500") == std::string::npos && hfOnly.find("\"id\":\"kvm70\"") == std::string::npos,
+       "★ the JSON offers only what the radio reaches (3–9 MHz: Northwood 4610 + 8040, no 2618.5, no Honolulu)");
+
+    bg::Config c; c.on = true; bg::Profile p; p.centreHz = 4250000;
+    bg::Vfo v; v.hz = 0; v.mode = "usb"; v.dec = "wefax-stations"; v.fax = { 4235000, 4317900, 4346000 };
+    p.vfos = { v }; c.profiles = { p };
+    std::string err;
+    ok(bg::validate(c, 250000, err), "a WEFAX stations VFO, NMF 4235 + NMG 4317.9 + NMC 4346, centre 4250 at 250 kS/s: saved (" + err + ")");
+    bg::Config back; ok(bg::parse(bg::toJson(c), back, err) && back.profiles[0].vfos[0].fax.size() == 3 && back.profiles[0].vfos[0].fax[1] == 4317900,
+       "its ticks round-trip: " + bg::toJson(c).substr(0, 140));
+    ok(bg::toJson(c).find("\"fax\":[4235000,4317900,4346000]") != std::string::npos, "...stored as \"fax\":[Hz…]");
+    auto refused = [&](std::vector<double> f, double centre, const std::string& says) {
+        bg::Config k = c; k.profiles[0].vfos[0].fax = f; k.profiles[0].centreHz = centre;
+        std::string e; const bool r = !bg::validate(k, 250000, e) && e.find(says) != std::string::npos;
+        ok(r, "refused, in words: " + e); };
+    refused({}, 4250000, "tick at least one WEFAX station frequency");
+    refused({ 4235000, 4236000 }, 4250000, "4236.0 kHz is not a WEFAX station frequency in the list");
+    refused({ 4235000, 4235000 }, 4250000, "ticked twice");
+    refused({ 8040000 }, 4250000, "none of the ticked WEFAX frequencies is inside this radio's window");
+    refused({ 2618500, 3855000, 4610000, 7880000, 8040000, 11086500, 13882500, 4235000, 6340500 }, 4250000, "one VFO runs at most 8");
+    { bg::Config k = c; k.profiles[0].vfos[0].mode = "lsb"; std::string e; ok(!bg::validate(k, 250000, e) && e.find("run on USB") != std::string::npos, "LSB refused: " + e); }
+    ok(bg::attachMsg(v).find("\"auto_start\":true") != std::string::npos, "each channel starts on its start tone, as a WEFAX VFO does");
+
+    // ── the runner: two charts on two stations at once, one slot ──
+    const std::string dir = tmpDir("faxst");
+    FileSlots sl(dir, [] { return 4; });
+    gallery::Store gs; gs.setDir(tmpDir("faxst-gal"));
+    std::vector<std::string> logs; std::mutex lm;
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> g(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    const double fs = 250000, centre = 4250000;
+    bg::BgRunner r;
+    bg::BgRunner::Params rp; rp.sampleRate = fs; rp.centreHz = centre; rp.fftSize = 8192; rp.slots = &sl; rp.store = &gs;
+    rp.profile = p; rp.log = [&](const std::string& t) { std::lock_guard<std::mutex> g(lm); logs.push_back(t); };
+    r.start(rp);
+    ok(r.decodersRunning() == 1 && sl.inUse() == 1, "★ ONE decoder slot for the VFO (" + std::to_string(sl.inUse()) + " in use)");
+    ok(logged("decoding 2 of 3 WEFAX frequencies"), "logged: decoding 2 of 3 (NMC 4346 is outside the window)");
+    // two fax transmitters: NMF a chart of vertical bars, NMG one of finer bars — each start tone, phasing, chart, stop tone
+    struct Tx { double centre; int period; double ph = 0; };
+    Tx tx[2] = { { 4235000, 900 }, { 4317900, 300 } };
+    const int spl = (int)(fs / 2);
+    std::vector<vibedsp::cf32> iq;
+    auto gray = [&](const Tx& t, long k) -> double {   // what transmitter t sends at sample k
+        const long line = k / spl, i = k % spl;
+        if (line < 10) return ((k * 600) / (long)fs) & 1 ? 1.0 : 0.0;                    // start tone
+        if (line < 50) return i >= spl / 3 && i < spl / 3 + spl / 20 ? 1.0 : 0.0;          // phasing
+        if (line < 170) return ((i / t.period) & 1) ? 0.85 : 0.15;                         // the chart
+        if (line < 180) return ((k * 900) / (long)fs) & 1 ? 1.0 : 0.0;                     // stop tone
+        return -1;                                                                          // off air
+    };
+    for (long k = 0; k < 190L * spl; k++) {
+        vibedsp::cf32 x(0, 0);
+        for (auto& t : tx) {
+            const double g = gray(t, k);
+            if (g < 0) continue;
+            t.ph += 2 * M_PI * (t.centre - 1900 + 1500 + 800 * g - centre) / fs; if (t.ph > M_PI) t.ph -= 2 * M_PI; if (t.ph < -M_PI) t.ph += 2 * M_PI;
+            x += vibedsp::cf32((float)(0.04 * std::cos(t.ph)), (float)(0.04 * std::sin(t.ph)));
+        }
+        iq.push_back(x);
+        if (iq.size() == 8192) {
+            while (r.queuedForTest() > 60000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            r.feedIq(iq.data(), (int)iq.size()); iq.clear();
+        }
+    }
+    if (!iq.empty()) r.feedIq(iq.data(), (int)iq.size());
+    for (int t = 0; t < 200 && r.queuedForTest() > 0; t++) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+    const std::string st = r.statusJson();
+    ok(st.find("\"fax\":[{\"hz\":4235000,\"label\":\"Boston NMF 4235.0 kHz\"") != std::string::npos && st.find("\"state\":\"out\"") != std::string::npos,
+       "★ the admin line lists each frequency and its state: " + st.substr(st.find("\"fax\""), 260));
+    const std::string wl = gs.listJson("wefax", 10);
+    ok(wl.find("WEFAX \xc2\xb7 Boston NMF 4235.0 kHz \xc2\xb7 1809\xc3\x97") != std::string::npos && wl.find("\"hz\":4233100") != std::string::npos,
+       "★ NMF's chart: its own item, titled by station and frequency, filed at its dial 4233.1");
+    ok(wl.find("WEFAX \xc2\xb7 New Orleans NMG 4317.9 kHz \xc2\xb7 1809\xc3\x97") != std::string::npos && wl.find("\"hz\":4316000") != std::string::npos,
+       "★ NMG's chart, at the same time, in the same slot: its own item (" + wl.substr(0, 300) + ")");
+    ok(wl.find("\"partial\":true") == std::string::npos, "...both ended on their stop tones (not partial)");
+    r.retarget(4330000, 0, false);
+    { const std::string s2 = r.statusJson();
+      ok(r.decodersRunning() == 1 && sl.inUse() == 1 && s2.find("{\"hz\":4235000,\"label\":\"Boston NMF 4235.0 kHz\",\"state\":\"out\"}") != std::string::npos
+         && s2.find("{\"hz\":4346000,\"label\":\"Point Reyes NMC 4346.0 kHz\",\"state\":\"running\"}") != std::string::npos,
+         "★ the radio moves to 4330: still one slot — NMF stops (out of the window), NMC starts"); }
+    r.stop();
+    ok(sl.inUse() == 0, "stopped: the slot back");
+}
+
 int main() {
     config();
     phase2();
@@ -946,6 +1042,7 @@ int main() {
     hostTap();
     gapMidMessage();
     wefaxHourly();
+    wefaxStations();
     navtexStations();
     runner();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
