@@ -8,6 +8,9 @@
 #include "vibe_adsb_service.h"
 #include "vibe_adsb_data_update.h"
 #include "vibe_adsb_images_install.h"
+#include "vibe_aircraft_info.h"   // ★ V12 beta91 the same data for the aviation map's datalink rows
+#include <chrono>
+#include <thread>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -216,6 +219,86 @@ static void testService(const std::string& dir) {
     CHECK(!has(s.infoAll(), "4ca2d6"), "an aircraft that left is forgotten");
 }
 
+
+/* ★★ V12 beta91 THE AVIATION MAP's DATALINK ROWS GET THE ADS-B AIRCRAFT DATA (vibe_aircraft_info.h; Stuart, 2026-11-22:
+ *  "our adsb logos and silhouettes could apply to vdl2 acars hfdl cant it, they are the same aircraft after all"). */
+static vibeavshare::Row dlRow(uint32_t icao, const char* reg, const char* flight, int src = vibeavshare::kVdl2) {
+    vibeavshare::Row w; w.used = true; w.icao = icao; w.reg = reg; w.flight = flight;
+    w.srcMask = uint8_t(1u << src); w.lastMs = w.firstMs = w.srcMs[src] = vibeavshare::wallMs();
+    return w;
+}
+static std::string rowJson(const vibeavshare::Row& w) {
+    return vibeavshare::toJson({w}, {}, vibeavshare::wallMs(), nullptr, nullptr, -1, false, vibeavinfo::extraFn());
+}
+static void testDatalinkInfo(const std::string& dir) {
+    std::printf("the aviation map's datalink rows: the same aircraft data (vibe_aircraft_info.h)\n");
+    Db::get().setDir(dir); Db::get().refresh(true);
+    vibeavinfo::Cache& c = vibeavinfo::Cache::get();
+    c.setAsync(false); c.clear();
+    // a VDL2-only aircraft (its AVLC address, no callsign yet): nothing on the first poll — queued, never looked up here
+    vibeavshare::Row v = dlRow(0x4CA2D6, "", "");
+    const std::string j0 = rowJson(v);
+    CHECK(!has(j0, "\"reg\"") && !has(j0, "\"type\"") && c.waiting() == 1, "first poll: queued, nothing yet: %s", j0.c_str());
+    rowJson(v);
+    CHECK(c.waiting() == 1, "asked twice, queued once (%zu)", c.waiting());
+    CHECK(c.runPending() == 1, "one lookup");
+    const std::string j1 = rowJson(v);
+    CHECK(has(j1, "\"reg\":\"EI-DLJ\"") && has(j1, "\"type\":\"B738\"") && has(j1, "\"desc\":\"BOEING 737-800\""), "VDL2-only gets r / t: %s", j1.c_str());
+    CHECK(has(j1, "\"country\":\"IE\"") && has(j1, "\"countryName\":\"Ireland\"") && has(j1, "\"src\":[\"VDL2\"]"), "and its country: %s", j1.c_str());
+    CHECK(!has(j1, "\"r\":") && !has(j1, "\"t\":"), "the row's own names (reg / type), not r / t twice: %s", j1.c_str());
+    CHECK(c.waiting() == 0 && c.lookups() == 1, "an answer is not looked up again (%llu)", (unsigned long long)c.lookups());
+    // the flight arrives (an ICAO callsign, HFDL's form): the operator, its badge key
+    v.flight = "RYR8CK";
+    const std::string j2a = rowJson(v);
+    CHECK(has(j2a, "\"reg\":\"EI-DLJ\"") && c.waiting() == 1, "a new flight: the old answer stands, re-queued: %s", j2a.c_str());
+    c.runPending();
+    const std::string j2 = rowJson(v);
+    CHECK(has(j2, "\"op\":\"RYR\"") && has(j2, "\"opName\":\"Ryanair\""), "the operator from the flight: %s", j2.c_str());
+    // ★ an ACARS flight ID is IATA-coded ("U21" = easyJet 1): the operator AND the route, by the ADS-B path's rule
+    vibeavshare::Row a = dlRow(0, "", "U21", vibeavshare::kAcars);
+    rowJson(a); c.runPending();
+    const std::string j3 = rowJson(a);
+    CHECK(has(j3, "\"key\":\"f:U21\"") && has(j3, "\"op\":\"EZY\"") && has(j3, "\"route\":{\"from\":\"EHAM\""), "IATA flight → EZY + route: %s", j3.c_str());
+    a.from = "EGKK"; a.to = "LEMD";
+    const std::string j3b = rowJson(a);
+    CHECK(!has(j3b, "\"route\"") && has(j3b, "\"from\":\"EGKK\""), "the row's own airports win over the database route: %s", j3b.c_str());
+    // the row's own registration (ACARS heard it) is never overwritten by the database's
+    vibeavshare::Row r = dlRow(0x4CA2D6, "EI-XYZ", "RYR8CK", vibeavshare::kAcars);
+    rowJson(r); c.runPending();
+    const std::string j4 = rowJson(r);
+    CHECK(has(j4, "\"reg\":\"EI-XYZ\"") && !has(j4, "EI-DLJ") && has(j4, "\"type\":\"B738\""), "the row's registration wins: %s", j4.c_str());
+    // military by address alone (an HFDL logon), the Mictronics flag
+    vibeavshare::Row m = dlRow(0xAE1234, "", "", vibeavshare::kHfdl);
+    rowJson(m); c.runPending();
+    const std::string j5 = rowJson(m);
+    CHECK(has(j5, "\"mil\":1") && has(j5, "\"country\":\"US\"") && has(j5, "\"reg\":\"03-3123\""), "military HFDL logon: %s", j5.c_str());
+    // an address the data does not know: no registration, type or operator, nothing invented, no crash
+    vibeavshare::Row u = dlRow(0x000001, "", "", vibeavshare::kVdl2);
+    rowJson(u); c.runPending();
+    const std::string j6 = rowJson(u);
+    CHECK(!has(j6, "\"reg\"") && !has(j6, "\"type\"") && !has(j6, "\"op\"") && !has(j6, "\"mil\"") && has(j6, "\"key\":\"000001\""), "unknown address: nothing: %s", j6.c_str());
+    // a registration alone: the data has no index by registration — nothing queued
+    const size_t before = c.waiting();
+    rowJson(dlRow(0, "G-ABCD", "", vibeavshare::kAcars));
+    CHECK(c.waiting() == before, "a registration-only row is not queued");
+    // ★★ bounded: the queue at kMax, the answers at kMax (the least recently asked go)
+    c.clear();
+    for (uint32_t k = 0; k < vibeavinfo::kMax + 300; ++k) rowJson(dlRow(0x500000 + k, "", ""));
+    CHECK(c.waiting() == vibeavinfo::kMax, "the queue stops at kMax (%zu)", c.waiting());
+    c.runPending();
+    for (uint32_t k = 0; k < vibeavinfo::kMax + 300; ++k) rowJson(dlRow(0x500000 + k, "", ""));
+    c.runPending();
+    CHECK(c.size() <= vibeavinfo::kMax && c.size() >= vibeavinfo::kMax / 2, "the answers stop at kMax (%zu)", c.size());
+    // the real thing: the worker thread (decoder priority) answers without runPending — within a deadline
+    c.clear(); c.setAsync(true);
+    vibeavshare::Row t = dlRow(0x400F01, "", "BAW1", vibeavshare::kHfdl);
+    rowJson(t);
+    std::string jt;
+    for (int k = 0; k < 200; ++k) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); jt = rowJson(t); if (has(jt, "\"type\"")) break; }
+    CHECK(has(jt, "\"reg\":\"G-XLEA\"") && has(jt, "\"type\":\"A388\"") && has(jt, "\"op\":\"BAW\"") && has(jt, "\"route\":{"), "the worker thread answers: %s", jt.c_str());
+    c.setAsync(false); c.clear();
+}
+
 static void testImages(const std::string& dir) {
     std::printf("owner logos: the index, traversal, the zip installer\n");
     Images& im = Db::images();
@@ -388,6 +471,7 @@ int main() {
     const std::string d = tmpDir("db");
     testBuildAndLookup(d);
     testService(d);
+    testDatalinkInfo(d);
     const std::string im = tmpDir("img");
     testImages(im);
     const std::string up = tmpDir("upd");
