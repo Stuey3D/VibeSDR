@@ -224,7 +224,7 @@ public:
         mf_.configure(sps_, c.rrcAlpha);
         loopGains(c.carrierBw, cA_, cB_);
         loopGains(c.timingBw, tA_, tB_);
-        hold_ = false;
+        hold_ = false; haveGood_ = false; goodFreq_ = 0;
         tau_ = double(mf_.half()); nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f;
         acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0; acqPow_.clear(); acqLooks_ = 0;
         lockAcc_ = 0; lockN_ = 0; lockMetric_ = 0; locked_ = false;
@@ -234,8 +234,15 @@ public:
     void setDopplerHz(double hz) { doppler_.store(hz, std::memory_order_relaxed); }
     /** ★ Frames are DECODING (Reed–Solomon passing): never re-acquire (at Es/N0 ≈ 3 dB the constellation lock metric dips
      *  under its threshold while frames still decode, and a re-acquisition then moved the NCO under a working loop). */
-    void setHold(bool h) { hold_ = h; if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; } }
+    void setHold(bool h) {
+        hold_ = h;
+        if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; goodFreq_ = freq_; haveGood_ = true; }
+    }
     uint64_t acquisitions() const { return acqHits_; }
+    /** ★ diagnostics: where the leash holds the loop (Hz, before the feed-forward), and whether it is on. */
+    double leashHz() const { return goodFreq_ * cfg_.sampleRate / (2 * M_PI); }
+    bool leashed() const { return haveGood_; }
+    bool holding() const { return hold_; }
     /** ★ diagnostics: the last acquisition decision's line, × the mean bin (≈ 1–4 on noise). */
     float acqLine() const { return acqLine_; }
 
@@ -280,7 +287,7 @@ public:
     }
 
     bool locked() const { return locked_; }
-    /** Es/N0 (linear) from the last 2048 symbols' moments (0 on noise). */
+    /** Es/N0 (linear) from the last 2048 symbols' moments — SIGNED (≈ 0 ± a little on noise; average it). */
     double esn0() const { return esn0_; }
     double lockMetric() const { return lockMetric_; }
     double carrierHz() const { return freq_ * cfg_.sampleRate / (2 * M_PI) + doppler_.load(std::memory_order_relaxed); }
@@ -308,6 +315,7 @@ private:
      *    decoding (the old "only while the lock detector says unlocked" never re-ran on OQPSK, whose lock metric sits
      *    at 0.72–0.78 on a decoding signal, under the 0.80 bar). */
     static constexpr double kAcqMinHz = 60;
+    static constexpr double kLeashHz = 150;
     void acqPush(std::complex<float> y) {
         if (acqDue_ > 0) { acqDue_--; return; }
         // ★ x⁴ by hand: std::complex's operator* goes through the C99 NaN-checking multiply (__mulsc3) without -ffast-math
@@ -333,6 +341,7 @@ private:
                 freq_ += 2 * M_PI * resid / cfg_.sampleRate;
                 const double lim = 2 * M_PI * 0.2 * cfg_.symbolRate / cfg_.sampleRate;
                 if (freq_ > lim) freq_ = lim; else if (freq_ < -lim) freq_ = -lim;
+                if (haveGood_) goodFreq_ = freq_;   // ★ a line found is evidence: the leash moves with it
                 acqHits_++;
             }
         }
@@ -382,6 +391,16 @@ private:
         freq_ += cB_ * e / sps_;   // ★ reaches the phasor's step at the next 64-sample boundary
         const double lim = 2 * M_PI * 0.2 * cfg_.symbolRate / cfg_.sampleRate;
         if (freq_ > lim) freq_ = lim; else if (freq_ < -lim) freq_ = -lim;
+        /* ★★ THE LEASH (2026-11-22, the live pass): with the satellite engine's Doppler fed forward, what the loop holds is
+         *  the RADIO's own frequency error (−3.34 kHz on that pass, constant to ±3 Hz for 20 s) — it does not move. But in a
+         *  fade the loop's integrator random-walks on noise (it sat 2.3 kHz off by 590 s), and the x⁴ line of a signal
+         *  3 dB over the noise is too weak to bring it back. So once frames have decoded, and while the feed-forward is
+         *  on, the loop stays within kLeashHz of where it was decoding. No feed-forward = no leash (the Doppler itself is
+         *  then in the loop and moves up to 65 Hz/s). */
+        if (haveGood_ && !hold_ && doppler_.load(std::memory_order_relaxed) != 0.0) {
+            const double w = 2 * M_PI * kLeashHz / cfg_.sampleRate;
+            if (freq_ > goodFreq_ + w) freq_ = goodFreq_ + w; else if (freq_ < goodFreq_ - w) freq_ = goodFreq_ - w;
+        }
         // ── lock detector: 1 − E(|I|−|Q|)² / E(I²+Q²) — 1.0 locked and clean, ≈0.64 unlocked or on noise ──
         const float d = std::fabs(I) - std::fabs(Q);
         lockAcc_ += double(d * d) / double(r * r);
@@ -393,9 +412,12 @@ private:
             /* ★★ THE SIGNAL READING: Es/N0 by the M2M4 moments of the symbol points (Pauluzzi & Beaulieu, 2000) —
              *  S = √(2·M2² − M4), N = M2 − S. Blind to the carrier's phase, so it reads the signal before the loop has
              *  locked, and pure complex noise gives 2·M2² = M4 → S = 0 → 0. */
+            /*  ★ SIGNED: on noise 2·M2² − M4 is as often below 0 as above, and keeping the sign (S = ±√|k|) lets an
+             *  average of these read 0 there instead of a small positive bias. */
             const double M2 = m2_ / 2048.0, M4 = m4_ / 2048.0, k = 2 * M2 * M2 - M4;
-            const double S = k > 0 ? std::sqrt(k) : 0.0, N = M2 - S;
+            const double S = k >= 0 ? std::sqrt(k) : -std::sqrt(-k), N = M2 - S;
             esn0_ = N > 1e-30 ? S / N : 1e3;
+            if (esn0_ > 1e3) esn0_ = 1e3;
             m2_ = m4_ = 0;
         }
     }
@@ -417,6 +439,7 @@ private:
     std::atomic<double> doppler_{0.0};
     float pow_ = 1.f, agc_ = 1.f, agcG_ = 1.f; double amp_ = 0;
     std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; float acqLine_ = 0; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
+    double goodFreq_ = 0; bool haveGood_ = false;
     double lockAcc_ = 0, lockMetric_ = 0, m2_ = 0, m4_ = 0, esn0_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
 };
 

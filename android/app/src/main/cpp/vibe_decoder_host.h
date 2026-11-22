@@ -331,6 +331,9 @@ public:
          *  published frequency) — the feed-forward for vibelrpt::Run (docs/v12/LRPT.md §Interface). Empty = none: the
          *  receiver acquires and tracks the Doppler itself, or the engine moves the dial. */
         std::function<double()> satDopplerHz;
+        /** ★★ beta91 LRPT: is this listener's satellite above the horizon (1), not (0), or is there no pick (−1)? Tests;
+         *  empty = the satellite engine's decoderView. With an override the rate comes from the attach only. */
+        std::function<int()> satInRange;
         /** ★ V12 VOR / ILS: the server's place (lat, lon; false = not given) — the nearest published station on a channel,
          *  and the owner's check of how far a radial passes from here. Never sent to a listener as such. */
         std::function<bool(double&, double&)> position;
@@ -1478,6 +1481,15 @@ private:
         else {
             const std::string sess = session_;
             o.dopplerHz = [sess] { const vibe::sat::DecoderView v = vibe::sat::decoderView(sess); return v.on ? v.modelHz : 0.0; };
+        }
+        /* ★★ beta91 (the live Meteor-M2-4 pass, 2026-11-22): the pick also says WHICH rate (a client key attaches with
+         *  none, and AUTO spent the pass's best 13 s on 80k) and whether the satellite is still up (the pass ends at its
+         *  setting, never on a gap in the frames — vibe_lrpt_run.h passOver). Asked once a second; an Env override wins. */
+        if (env_.satInRange) o.satInRange = env_.satInRange;
+        else {
+            const std::string sess = session_;
+            o.satInRange = [sess] { return vibe::sat::inRangeOf(vibe::sat::decoderView(sess)); };
+            o.satSymbolRate = [sess] { return vibe::sat::lrptSymbolRateOf(vibe::sat::decoderView(sess)); };
         }
         o.pictures = [this](const std::vector<vibelrpt::Picture>& ps, bool partial) {
             if (DecoderTapPtr t = tap()) for (const auto& p : ps) t->picture(p.name, p.png, p.w, p.h, partial);

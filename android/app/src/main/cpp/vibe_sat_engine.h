@@ -1082,4 +1082,23 @@ inline bool dopplerNow(long long norad, double hz, double unixUtc, double& doppl
     return engine().dopplerFor(norad, hz, unixUtc, dopplerHz, rateHzS, elDeg);
 }
 
+/** ★★ The LRPT decoder's two questions of a pick (beta91, the live Meteor-M2-4 pass 2026-11-22): the symbol rate the
+ *  satellite's entry names (72000 / 80000; 0 = no pick, not an LRPT downlink, or the entry says nothing) — so AUTO does
+ *  not spend the pass trying the other rate — and whether the satellite is above the horizon (1 TRACK / COAST, 0 armed
+ *  for a later pass or ENDED, −1 no pick at all: a hand-tuned dial). */
+inline double lrptSymbolRateOf(const DecoderView& v) {
+    if (v.norad == 0) return 0;
+    for (const SatDef& d : engine().defs()) {
+        if (d.norad != v.norad) continue;
+        for (const Transmitter& t : d.tx)
+            if ((t.consumer == "lrpt" || t.mode == "lrpt") && t.baud > 0 && (v.downlinkHz <= 0 || std::fabs(t.hz - v.downlinkHz) < 20000))
+                return t.baud >= 76000 ? 80000 : 72000;
+    }
+    return 0;
+}
+inline int inRangeOf(const DecoderView& v) {
+    if (v.state.empty() || v.state == "OFF") return -1;
+    return v.on ? 1 : 0;
+}
+
 }}  // namespace vibe::sat

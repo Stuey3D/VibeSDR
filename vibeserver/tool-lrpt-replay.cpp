@@ -6,6 +6,11 @@
 //    QPSK at Es/N0 4 dB: the live path must be replayed to find the difference.
 //
 //   tool-lrpt-replay <capture.cf32> [capture.txt]      replay; prints the decoder's status once a second
+//        [--rate 72000|80000]  pin the symbol rate (default AUTO over both, what a client key sends)
+//        [--engine]            answer as the satellite engine does for a pick: the entry's rate (72k), "in range" while
+//                              the logged feed-forward is on
+//        [--no-doppler]        ignore the logged feed-forward    [--from S] [--to S]  a stretch of the capture
+//        [--png PREFIX]        write each saved pass's first picture   [--cadu]  one line per CADU (ASM, Viterbi, RS)
 //   tool-lrpt-replay --selftest <dir>                   synthesise a pass (Es/N0 4 dB, Doppler ramp), capture it through
 //                                                       Run::Dump exactly as the server would, replay it, check frames
 //
@@ -47,6 +52,9 @@ struct ReplayOpts {
     double from = 0, to = 1e9;  ///< seconds of the capture to feed
     std::string png;            ///< write the pass's composite (or first channel) here
     bool cadu = false;          ///< print every CADU: time, ASM score, ambiguity, Viterbi metric, the four RS words
+    /** ★ act as the satellite engine would for a pick: the rate (72k) from the entry, and "in range" while the logged
+     *  feed-forward is non-zero (the engine feeds Doppler only while it tracks: TRACK / COAST). */
+    bool engine = false;
 };
 ReplayOpts gOpt;
 
@@ -66,12 +74,17 @@ unsigned long long replay(const std::string& cf32, const std::string& txt, bool 
     if (gOpt.symbolRate > 0) { o.symbolRate = gOpt.symbolRate >= 76000 ? 80000 : 72000; o.interleaved = o.symbolRate == 80000; }
     if (gOpt.noDoppler) o.dopplerHz = [] { return 0.0; }; else
     o.dopplerHz = [&] { auto it = dl.at.upper_bound(long(tNow)); if (it == dl.at.begin()) return dl.at.empty() ? 0.0 : dl.at.begin()->second; --it; return it->second; };
+    if (gOpt.engine) {
+        o.satSymbolRate = [] { return 72000.0; };
+        o.satInRange = [&] { auto it = dl.at.upper_bound(long(tNow)); if (it == dl.at.begin()) return -1; --it; return it->second != 0.0 ? 1 : 0; };
+    }
     std::string last;
     const Receiver* rxNow = nullptr;
     o.json = [&](const std::string& j) {
         last = j;
-        if (verbose) std::printf("%7.1f s  esn0 %+5.1f dB acq %llu  %s\n", tNow, rxNow ? 10 * std::log10(std::max(1e-3, rxNow->esn0())) : -99.0,
-                                 rxNow ? (unsigned long long)rxNow->acquisitions() : 0ull, j.c_str());
+        if (verbose) std::printf("%7.1f s  esn0 %+5.1f dB acq %llu leash %d %+.0f hold %d chains %zu  %s\n", tNow, rxNow ? 10 * std::log10(std::max(1e-3, rxNow->esn0())) : -99.0,
+                                 rxNow ? (unsigned long long)rxNow->acquisitions() : 0ull, rxNow ? int(rxNow->leadDemod().leashed()) : 0,
+                                 rxNow ? rxNow->leadDemod().leashHz() : 0.0, rxNow ? int(rxNow->leadDemod().holding()) : 0, rxNow ? rxNow->chains() : size_t(0), j.c_str());
     };
     unsigned long long frames = 0;
     o.log = [&](const std::string& l) { if (verbose) std::printf("%7.1f s  %s\n", tNow, l.c_str()); };
@@ -157,9 +170,10 @@ int main(int argc, char** argv) {
         else if (a == "--to") gOpt.to = std::atof(val().c_str());
         else if (a == "--png") gOpt.png = val();
         else if (a == "--cadu") gOpt.cadu = true;
+        else if (a == "--engine") gOpt.engine = true;
         else pos.push_back(a);
     }
-    if (pos.empty()) { std::fprintf(stderr, "usage: %s <capture.cf32> [capture.txt] [--rate 72000|80000] [--no-doppler] [--from s] [--to s] [--png prefix] | --selftest <dir>\n", argv[0]); return 2; }
+    if (pos.empty()) { std::fprintf(stderr, "usage: %s <capture.cf32> [capture.txt] [--rate 72000|80000] [--no-doppler] [--from s] [--to s] [--png prefix] [--cadu] [--engine] | --selftest <dir>\n", argv[0]); return 2; }
     const std::string cf32 = pos[0];
     const std::string txt = pos.size() >= 2 ? pos[1] : cf32.substr(0, cf32.size() - 5) + ".txt";
     return replay(cf32, txt, true) > 0 ? 0 : 1;

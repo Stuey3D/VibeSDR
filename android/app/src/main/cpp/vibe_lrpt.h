@@ -46,6 +46,7 @@ public:
 
     void push(const int8_t* s, size_t n) {
         buf_.insert(buf_.end(), s, s + n);
+        softSinceGood_ += n;
         process();
     }
     /** ★★ THE DIFFERENTIAL PATH: `s` is the differentially decoded stream (the ASM search runs on it, as before) and `raw`
@@ -54,6 +55,7 @@ public:
     void push(const int8_t* s, const int8_t* raw, size_t n) {
         buf_.insert(buf_.end(), s, s + n);
         raw_.insert(raw_.end(), raw, raw + n);
+        softSinceGood_ += n;
         joint_ = true;
         process();
     }
@@ -61,7 +63,11 @@ public:
     bool locked() const { return locked_; }
     /** ★ Reed–Solomon passed within the last 8 CADUs — the only proof the carrier is really locked (an ASM can be "found"
      *  with the carrier 400 Hz out at Es/N0 3 dB; holding the acquisition on that kept it out for the whole run). */
-    bool decoding() const { return sinceGood_ < 8; }
+    /* ★★★ COUNTED IN SOFT VALUES ARRIVING, NOT IN CADUs TRIED (2026-11-22, the live pass's "never relocked"). It counted
+     *  failed decodes — and once the ASM was lost there were none, so it stayed "decoding" for ever after the last good
+     *  frame: the demodulator held its acquisition off (setHold) for the rest of the pass and the loop wandered 2–3 kHz
+     *  away in the fade. Now: within 8 CADUs' worth of soft values of the last good frame, however they were spent. */
+    bool decoding() const { return softSinceGood_ < uint64_t(8) * uint64_t(kCaduSoft); }
     /** ★ Test seam: each CADU's ASM score, ambiguity, Viterbi metric and the four RS words' results. */
     std::function<void(int, int, int, const int*)> caduDiag;
     void reset() { base_ += buf_.size(); buf_.clear(); raw_.clear(); locked_ = false; scan_ = 0; misses_ = 0; }
@@ -214,8 +220,8 @@ private:
         st_.cadus++;
         uint8_t* f = cadu + kAsmBytes;
         if (caduDiag) caduDiag(syncScore(windowAt(p), x_), x_, st_.lastVit, pw);
-        if (e < 0) { st_.rsFail++; sinceGood_++; return; }
-        sinceGood_ = 0;
+        if (e < 0) { st_.rsFail++; return; }
+        softSinceGood_ = 0;
         st_.rsOk++; st_.rsFixed += uint64_t(e);
         fn_(f, e);
     }
@@ -229,7 +235,7 @@ private:
     int rel_ = 1;                ///< the two accumulated streams' relative sign
     size_t scan_ = 0, pos_ = 0;
     int x_ = 0, misses_ = 0;
-    uint64_t sinceGood_ = 1000;
+    uint64_t softSinceGood_ = uint64_t(1) << 40;
     bool locked_ = false;
     Stats st_;
 };
@@ -341,6 +347,7 @@ struct ReceiverConfig {
 class Receiver {
 public:
     static constexpr double kModeSwapSec = 8.0;
+    static constexpr double kMarkerSec = 4.0;        ///< the 80k group without a marker this long moves on
     static constexpr double kPeriodMs = 1232.0;      ///< MSU-MR: eight lines every 1.232 s
     /** ★ AUTO's contest: both modulations run until one has this many good frames; the one with more stays. */
     static constexpr uint64_t kContestFrames = 12;
@@ -388,11 +395,36 @@ public:
             }
         }
         // ── AUTO: the next group while nothing has decoded ──
-        if (groups_.size() > 1 && !anyFrame_ && samples_ - swapAt_ > uint64_t(groups_[gi_].dwellSec * cfg_.sampleRate)) {
-            swapAt_ = samples_;
-            applyGroup((gi_ + 1) % groups_.size());
+        /* ★★ THE 80k GROUP LEAVES EARLY WHEN ITS MARKERS NEVER APPEAR (2026-11-22). Its dwell is 24 s because the
+         *  deinterleaver takes 16 s to fill — but the 0x27 marker every 80 bits is found BEFORE the deinterleaver, within
+         *  a second of the carrier. A 72k signal never shows one, and on the live Meteor-M2-4 pass the 80k group's 24 s
+         *  sat on the strongest 13 s of it (470–483 s: the replay with AUTO got 8 frames, 72k pinned 20). Without a marker
+         *  in kMarkerSec it moves on; with one it stays the full dwell. */
+        if (groups_.size() > 1 && !anyFrame_) {
+            const Group& g = groups_[gi_];
+            bool marker = false;
+            for (auto& ch : chains_) if (ch->front && ch->front->synced()) marker = true;
+            const double dwell = g.interleaved && !marker && !markerSeen_ ? kMarkerSec : g.dwellSec;
+            if (marker) markerSeen_ = true;
+            if (samples_ - swapAt_ > uint64_t(dwell * cfg_.sampleRate)) {
+                swapAt_ = samples_; markerSeen_ = false;
+                applyGroup((gi_ + 1) % groups_.size());
+            }
         }
     }
+    /** ★★ The satellite engine knows the satellite (its entry names 72k or 80k): AUTO's walk stops on that rate. Ignored
+     *  once a frame has decoded (the signal has spoken) or when no group has that rate. */
+    void preferRate(double sym) {
+        if (groups_.size() < 2 || anyFrame_ || !(sym > 0)) return;
+        for (size_t i = 0; i < groups_.size(); i++) if (std::fabs(groups_[i].sym - sym) < 1000) {
+            Group g = groups_[i];
+            groups_.assign(1, g);
+            if (i != gi_) applyGroup(0); else gi_ = 0;
+            return;
+        }
+    }
+    /** How many rates AUTO is still walking (1 = settled or pinned). */
+    size_t rateGroups() const { return groups_.size(); }
     /** Feed soft symbols directly (an archived .s file, or the client-assisted stage): the first chain's path. */
     void feedSoft(const int8_t* s, size_t n) { if (!chains_.empty()) chainSoft(*chains_.front(), s, n); }
 
@@ -412,8 +444,10 @@ public:
     }
     bool demodLocked() const { return lead().demod->locked(); }
     double lockMetric() const { return lead().demod->lockMetric(); }
-    /** Es/N0 (linear) the lead demodulator measures (0 on noise). */
+    /** Es/N0 (linear) the lead demodulator measures — signed, ≈ 0 on noise (average it). */
     double esn0() const { return lead().demod->esn0(); }
+    /** ★ diagnostics: the lead demodulator itself. */
+    const Demod& leadDemod() const { return *lead().demod; }
     /** ★ diagnostics: how often the lead demodulator's x⁴ acquisition has set its NCO. */
     uint64_t acquisitions() const { return lead().demod->acquisitions(); }
     bool syncLocked() const { for (auto& ch : chains_) for (auto& p : ch->paths) if (p.sync && p.sync->locked()) return true; return false; }
@@ -563,7 +597,7 @@ private:
     std::unique_ptr<PacketAssembler> asm_;
     std::vector<int8_t> soft_, deint_, tmp_;
     uint64_t samples_ = 0, swapAt_ = 0;
-    bool anyFrame_ = false;
+    bool anyFrame_ = false, markerSeen_ = false;
     bool haveCtr_ = false; uint32_t lastCtr_ = 0;
     uint64_t rsOkTotal_ = 0, fixedTotal_ = 0, cadusBase_ = 0, rsFailBase_ = 0;
     std::map<int, Channel> ch_;
