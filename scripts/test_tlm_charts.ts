@@ -116,6 +116,14 @@ console.log('§7 the gallery\'s passes');
   ok(tlmPassItems(items, 'AO-73').map((x) => x.f).join() === 'a.csv,b.csv', 'AO-73\'s pass CSVs, newest first (not the day log, not another satellite)');
   ok(tlmPassItems(items, 'AO-73', 10, 200).map((x) => x.f).join() === 'b.csv', 'upTo: the passes up to the one open');
   ok(tlmPassItems(items, 'AO-73', 1).length === 1, 'limit');
+  // ★ Stuart 11-22 "only one chart needed regardless of background or user listened": a background profile's passes and a
+  //   listener's picks are ONE history — never filtered by origin or profile
+  const mixed = [
+    { f: 'bg1.csv', k: 'fctlm', t: 100, o: 'background', p: 'Profile 1', title: 'AO-73 telemetry · pass 10:00 UTC · 20 frames' },
+    { f: 'lv1.csv', k: 'fctlm', t: 200, o: 'live', p: '', title: 'AO-73 telemetry · pass 11:40 UTC · 18 frames' },
+    { f: 'bg2.csv', k: 'fctlm', t: 300, o: 'background', p: 'Night', title: 'AO-73 telemetry · pass 13:20 UTC · 22 frames' },
+  ];
+  ok(tlmPassItems(mixed, 'AO-73').map((x) => x.f).join() === 'bg2.csv,lv1.csv,bg1.csv', 'background and listener passes: one history, in time order');
   ok(tlmSatOfTitle(items[0].title) === 'AO-73' && tlmSatOfTitle('AO-73 (FUNcube-1) telemetry · pass 1') === 'AO-73 (FUNcube-1)', 'the satellite from a title');
 }
 
@@ -140,6 +148,18 @@ console.log('§7 the gallery\'s passes');
   const got = await tlmLoadPasses(get, 'AO-73');
   ok(got.length === 3 && got[0].start === p1.start && got[2].start === p3.start, 'three passes, oldest first (the evicted one skipped)');
   ok(most === 1, 'never more than one request at a time');
+  {   // ★ mixed sources chart as ONE series: a point per pass whoever decoded it
+    const mixedList = { items: [
+      { f: 'p1.csv', k: 'fctlm', o: 'background', p: 'Profile 1', t: p1.start, title: 'AO-73 telemetry · pass 14:02 UTC · 24 frames' },
+      { f: 'p2.csv', k: 'fctlm', o: 'live', p: '', t: p2.start, title: 'AO-73 telemetry · pass 15:42 UTC · 18 frames' },
+      { f: 'p3.csv', k: 'fctlm', o: 'background', p: 'Night', t: p3.start, title: 'AO-73 telemetry · pass 17:22 UTC · 24 frames' },
+    ] };
+    const g2 = async (path: string) => path.startsWith('/vibeserver/gallery.json') ? JSON.stringify(mixedList)
+      : files[decodeURIComponent(path.replace('/vibeserver/gallery/file/', ''))] ?? null;
+    const mp = await tlmLoadPasses(g2, 'AO-73');
+    const a = tlmAcross(mp, 'Battery voltage');
+    ok(mp.length === 3 && a.t.length === 3 && a.mean.every((x) => x != null), 'background + listener passes chart as ONE series (3 points)');
+  }
   const upTo = await tlmLoadPasses(get, 'AO-73', p2.start);
   ok(upTo.length === 2 && upTo[1].start === p2.start, 'up to an open pass');
   ok((await tlmLoadPasses(async () => null, 'AO-73')).length === 0, 'no gallery → no passes, no throw');

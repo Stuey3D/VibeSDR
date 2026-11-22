@@ -43,7 +43,8 @@ for (const n of [1, 2, 3]) {
   const t = firstUnix(body), frames = body.split('\n').filter((l) => /^\d{4}-/.test(l)).length;
   const f = `${new Date(t * 1000).toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-')}-fctlm-145935k0-${(0xa00 + n).toString(16)}.csv`;
   fs.writeFileSync(path.join(gdir, f), body);
-  const it = { f, k: 'fctlm', o: 'background', t, hz: 145935000, m: 'usb', d: 'fctlm', p: 'Profile 1', r: 'Test radio',
+  // ★ pass 2 was a LISTENER's pick (another origin, no profile): the history is still one series (Stuart 11-22)
+  const it = { f, k: 'fctlm', o: n === 2 ? 'live' : 'background', t, hz: 145935000, m: 'usb', d: 'fctlm', p: n === 2 ? '' : 'Profile 1', r: 'Test radio',
                title: `AO-73 telemetry · pass ${hm(t)} UTC · ${frames} frames · max el 45°`, dn: `AO-73 telemetry ${new Date(t * 1000).toISOString().slice(0, 10)} ${hm(t).replace(':', '')} UTC.csv` };
   items.push(it); index += JSON.stringify(it) + '\n';
 }
@@ -112,7 +113,7 @@ try {
   // open the MIDDLE pass (15:42): its charts, and the passes up to it (2)
   await ev(`[...document.querySelectorAll('#galList .sres[role=button]')].find(r => /pass 15:42/.test(r.textContent)).click(); true`);
   ok(await until(`!!document.getElementById('galCharts') && !document.getElementById('galCharts').hidden && /LAST 2 PASSES/.test(document.getElementById('galCharts').textContent)`, 8000),
-     'a pass opens as its charts, with the passes up to it from the gallery (LAST 2 PASSES)');
+     'a pass opens as its charts, with the passes up to it from the gallery (LAST 2 PASSES — a background one and a listener\'s)');
   const st = JSON.parse(await ev(`JSON.stringify({ text: document.getElementById('galText').hidden, n: document.querySelectorAll('#galCharts .tlm-c').length,
     head: document.querySelector('#galCharts .tlm-h')?.textContent, dl: document.getElementById('galDl').getAttribute('download'),
     lines: [...document.querySelectorAll('#galCharts path.tlm-l')].map(p => (p.getAttribute('d').match(/M/g) || []).length) })`));

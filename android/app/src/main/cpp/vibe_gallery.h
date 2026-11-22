@@ -403,7 +403,11 @@ public:
      *  more than one — HELD OPEN (never evicted) until close(). "" when there is none (the caller creates it). */
     /** `anyOrigin` (ISM's daily log and summary, 2026-10-25: "one file per UTC day per band"): background decoding and
      *  a listener write into the SAME day's item, so its origin is not part of what finds it. */
-    std::string adoptSlot(const Meta& m, bool anyOrigin = false) {
+    /** `anyWriter` (V12 beta91, FUNcube's day log — Stuart: ONE log per satellite per UTC day): nor the profile, nor the
+     *  dial — a background profile's pass and a listener's pick of the same satellite write into the same item; the slot
+     *  (which names the day and the satellite) and this radio find it. Implies anyOrigin. */
+    std::string adoptSlot(const Meta& m, bool anyOrigin = false, bool anyWriter = false) {
+        if (anyWriter) anyOrigin = true;
         if (m.slot.empty()) return "";
         std::string dir, radio;
         { std::lock_guard<std::mutex> lk(m_); dir = dir_; radio = radio_; }
@@ -420,7 +424,7 @@ public:
                 const Row& r = cache_.rows[i];
                 if ((r.flags & (kDead | kSlot)) != kSlot || !lineAt(fd, r, l)) continue;
                 if (lineStr(l, "s") == jsonEsc(m.slot) && lineStr(l, "k") == jsonEsc(m.kind) && (anyOrigin || lineStr(l, "o") == jsonEsc(m.origin))
-                    && lineNum(l, "hz") == std::strtod(hz, nullptr) && lineStr(l, "p") == jsonEsc(printable(m.profile, 40))
+                    && (anyWriter || (lineNum(l, "hz") == std::strtod(hz, nullptr) && lineStr(l, "p") == jsonEsc(printable(m.profile, 40))))
                     && lineStr(l, "r") == jsonEsc(radio)) { found = lineStr(l, "f"); break; }
             }
             if (fd >= 0) ::close(fd);

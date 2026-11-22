@@ -1,5 +1,5 @@
 AO-73 · FUNcube telemetry · 2026-11-22 (UTC)
-One line a good frame, every pass this server decoded. Each pass's every channel is its own .csv item. raw = sent uncalibrated (no published calibration).
+One line a good frame, every pass this server decoded (background passes and listeners alike, each frame once). Each pass's every channel is its own .csv item. raw = sent uncalibrated (no published calibration).
 
 14:02:30  AO-73  WO1 · seq 4000 · Eclipse · battery 1433 raw · el 5° · RS fixed 0
 14:02:35  AO-73  WO2 · seq 4001 · Eclipse · battery 1431 raw · el 10° · RS fixed 0

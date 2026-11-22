@@ -8,7 +8,10 @@
 //    §2 NEVER A WRITE PER FRAME: nothing on disk inside the first minute; then ONE append a minute; finish() writes the rest.
 //    §3 PASSES: a new AOS = a new file; no AOS known = a gap over 20 minutes; another satellite = another file.
 //    §4 THE DAY'S LOG: one .txt per satellite per UTC day, a line a frame, across passes; a restart adopts it and counts on;
-//       midnight starts the next day's.
+//       midnight starts the next day's. §4b: a background profile's pass and a listener's pick (another origin, profile and
+//       dial) write ONE day log — both alive at once, no half lines, the count right, a restart finds it.
+//       §4c: the SAME pass decoded by both at once (one knowing the AOS, one not; each missing frames) = ONE .csv and one
+//       day log, every frame once (the union, no doubles).
 //    §5 BOUNDED: a pass past 256 KB goes on in "part 2"; no file passes the cap by more than one flush.
 //    §6 SERVED: a .csv resolves as text/csv.
 #include "vibe_fctlm_tx.h"
@@ -21,6 +24,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -117,9 +121,10 @@ static void s3_s4() {
     const std::string dir = tmpDir("day");
     gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
     Clock ck;
+    uint32_t seq = 2000;   // ★ the satellite's own counter: one a frame, never repeated (a frame's identity)
     auto run = [&](bg::FcTlmGalleryTap& tap, const char* sat, double aos, int64_t start, int n) {
         vibefc::TlmCtx c; c.sat = sat; c.aos = aos; c.los = aos > 0 ? aos + 700 : 0;
-        for (int i = 0; i < n; ++i) { ck.t = start + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(1 + i % 24, 2000 + i), c); }
+        for (int i = 0; i < n; ++i) { ck.t = start + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(1 + i % 24, seq++), c); }
     };
     {
         bg::FcTlmGalleryTap tap(st, meta(), [&] { return ck.t; });
@@ -163,6 +168,93 @@ static void s3_s4() {
     }
     CHECK(itemsOf(st, ".txt").size() == 3, "a pass over UTC midnight: the next day's log begins (got %zu)", itemsOf(st, ".txt").size());
     CHECK(itemsOf(st, ".csv").size() == 7, "…but the pass stays ONE file (got %zu)", itemsOf(st, ".csv").size());
+    rmDir(dir);
+}
+
+static void s4b() {
+    std::printf("§4b ONE day log for every writer (Stuart 11-22): a background profile's pass + a listener's pick\n");
+    const std::string dir = tmpDir("two");
+    gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
+    Clock ck;
+    gallery::Meta live = meta(); live.origin = "live"; live.profile = ""; live.freqHz = 145.9338e6;   // another dial, no profile
+    int bgN = 0, lvN = 0;
+    {
+        // both alive at once, both holding frames before either has written (they must not make two files)
+        bg::FcTlmGalleryTap bgTap(st, meta(), [&] { return ck.t; });
+        bg::FcTlmGalleryTap lvTap(st, live, [&] { return ck.t; });
+        vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = (double)T0; c.los = (double)T0 + 700;
+        for (int i = 0; i < 60; ++i) {   // 5 minutes, alternate frames, flushes interleaving every minute
+            ck.t = T0 + 5 * i; c.unix = (double)ck.t;
+            if (i % 2) { bgTap.satTlm(frame(1 + i % 24, 5000 + i), c); ++bgN; } else { lvTap.satTlm(frame(1 + i % 24, 6000 + i), c); ++lvN; }
+        }
+        bgTap.finish(false);
+        CHECK(bgTap.dayName() == lvTap.dayName() || lvTap.dayName().empty() || bgTap.dayName().empty(), "both taps hold the same day item");
+        lvTap.finish(false);
+    }
+    auto txt = itemsOf(st, ".txt");
+    CHECK(txt.size() == 1, "ONE day log for both writers, whatever their profile, origin or dial (got %zu)", txt.size());
+    std::string body; if (!txt.empty()) st.readItem(txt[0], body);
+    auto L = lines(body);
+    int frames = 0, bad = 0, fromBg = 0, fromLv = 0;
+    for (size_t i = 3; i < L.size(); ++i) {
+        const std::string& l = L[i];
+        const bool ok = l.size() > 20 && l[2] == ':' && l[5] == ':' && l.compare(8, 9, "  AO-73  ") == 0 && l.find("RS fixed 0") != std::string::npos;
+        if (ok) { ++frames; if (l.find("seq 5") != std::string::npos) ++fromBg; if (l.find("seq 6") != std::string::npos) ++fromLv; } else ++bad;
+    }
+    CHECK(frames == 60 && fromBg == bgN && fromLv == lvN, "every frame of both, once (%d = %d background + %d listener)", frames, fromBg, fromLv);
+    CHECK(bad == 0, "no half or merged lines (%d malformed)", bad);
+    const std::string title = txt.empty() ? "" : st.field(txt[0], "title");
+    CHECK(title == "AO-73 telemetry log \xc2\xb7 22 Nov \xc2\xb7 60 frames", "the title counts both writers' frames: %s", title.c_str());
+    CHECK(itemsOf(st, ".csv").size() == 1, "…and the pass they share is ONE CSV (got %zu)", itemsOf(st, ".csv").size());
+    { auto c = itemsOf(st, ".csv"); std::string b; if (!c.empty()) st.readItem(c[0], b);
+      int rows = 0; for (auto& l : lines(b)) rows += l.rfind("2026-", 0) == 0;
+      CHECK(rows == 60 && (c.empty() ? "" : st.field(c[0], "title")).find("60 frames") != std::string::npos, "with both writers' 60 frames (%d rows)", rows); }
+    // a restart (a listener, later) finds the same day's log and counts on
+    {
+        bg::FcTlmGalleryTap tap(st, live, [&] { return ck.t; });
+        vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = (double)T0 + 6000;
+        for (int i = 0; i < 4; ++i) { ck.t = T0 + 6000 + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(1, 7000 + i), c); }
+        tap.finish(false);
+    }
+    txt = itemsOf(st, ".txt");
+    CHECK(txt.size() == 1 && st.field(txt[0], "title") == "AO-73 telemetry log \xc2\xb7 22 Nov \xc2\xb7 64 frames",
+          "a restart appends to the same day and counts on (%s)", txt.empty() ? "" : st.field(txt[0], "title").c_str());
+    rmDir(dir);
+}
+
+static void s4c() {
+    std::printf("§4c THE SAME PASS FROM TWO SOURCES (Stuart: \"only one chart needed\"): one file, each frame once\n");
+    const std::string dir = tmpDir("same");
+    gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
+    Clock ck;
+    gallery::Meta live = meta(); live.origin = "live"; live.profile = ""; live.freqHz = 145.9338e6;
+    int heard = 0;   // frames at least one of them decoded (i = 31 neither did)
+    for (int i = 0; i < 40; ++i) heard += (i % 7 != 3) || (i % 5 != 1);
+    {
+        bg::FcTlmGalleryTap bgTap(st, meta(), [&] { return ck.t; });
+        bg::FcTlmGalleryTap lvTap(st, live, [&] { return ck.t; });
+        vibefc::TlmCtx cb; cb.sat = "AO-73"; cb.aos = (double)T0; cb.los = (double)T0 + 700;
+        vibefc::TlmCtx cl = cb; cl.aos = 0; cl.los = 0;   // ★ the listener's lock does not know the AOS: joins by time
+        for (int i = 0; i < 40; ++i) {
+            ck.t = T0 + 5 * i;
+            const vibefc::Decoded d = frame(1 + i % 24, 8000 + i);
+            cb.unix = (double)ck.t; cl.unix = (double)ck.t + (i % 3 == 0 ? 1 : 0);   // a second apart sometimes
+            if (i % 7 != 3) bgTap.satTlm(d, cb);     // ★ each misses a few the other heard
+            if (i % 5 != 1) lvTap.satTlm(d, cl);
+        }
+        lvTap.finish(false);
+        bgTap.finish(false);
+    }
+    auto csv = itemsOf(st, ".csv");
+    CHECK(csv.size() == 1, "ONE pass file for the two decoders (got %zu)", csv.size());
+    std::string b; if (!csv.empty()) st.readItem(csv[0], b);
+    std::set<std::string> seqs; int rows = 0;
+    for (auto& l : lines(b)) if (l.rfind("2026-", 0) == 0) { ++rows; std::vector<std::string> c; std::stringstream ss(l); std::string x; while (std::getline(ss, x, ',')) c.push_back(x); if (c.size() > 3) seqs.insert(c[3]); }
+    CHECK(rows == heard && (int)seqs.size() == heard, "each frame once — the union of both (%d), no doubles (%d rows, %zu frames)", heard, rows, seqs.size());
+    CHECK(!csv.empty() && st.field(csv[0], "title").find(std::to_string(heard) + " frames") != std::string::npos, "the title counts them: %s", csv.empty() ? "" : st.field(csv[0], "title").c_str());
+    auto txt = itemsOf(st, ".txt");
+    std::string body; if (!txt.empty()) st.readItem(txt[0], body);
+    CHECK(txt.size() == 1 && count(body, "  AO-73  ") == heard, "the day log: one, each frame once (%d lines)", count(body, "  AO-73  "));
     rmDir(dir);
 }
 
@@ -230,6 +322,8 @@ int main(int argc, char** argv) {
     std::printf("test-fctlm-gallery — FUNcube telemetry in the gallery (fixture frames, fake clock)\n");
     s1_s2();
     s3_s4();
+    s4b();
+    s4c();
     s5();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

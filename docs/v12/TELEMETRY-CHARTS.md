@@ -40,8 +40,19 @@ utc,unix,frame,seq,mode,elevation [deg],rs fixed,Photo voltage 1 [raw],…,Reboo
 - A new pass: a new AOS from the satellite lock; with none (a hand-tuned listener) a gap over 20 min; another satellite;
   another channel set. Past 256 KB, `part 2` (a real pass is ~60 KB).
 
-**The day** — one `.txt` per satellite per UTC day (`Store::adoptSlot`, slot `day-YYYYMMDD-<sat>`, any origin):
-`14:02:16  AO-73  WO1 · seq 123456 · Sunlight · battery 1234 raw · el 23° · RS fixed 0`. A restart adopts and counts on.
+**The day** — ONE `.txt` per satellite per UTC day on a radio, whoever decoded (Stuart 11-22): `Store::adoptSlot(…,
+anyWriter)` finds it by the slot `day-YYYYMMDD-<sat>` and the radio only — never the profile, origin or dial.
+`14:02:16  AO-73  WO1 · seq 123456 · Sunlight · battery 1234 raw · el 23° · RS fixed 0`. Its title's count is the
+file's lines after each append; a restart adopts and counts on.
+
+**★★★ One pass, one day, whoever decodes it** (Stuart 11-22: "only one chart needed regardless of background or user
+listened"). A background VFO and a listener's SATELLITE pick may decode the same pass at once (two decoder hosts in one
+process). They share ONE `PassFile` (found by satellite + AOS within 2 min; with no AOS on one side, a frame within 20 min
+of the pass's last) and ONE `DayFile` (satellite + UTC day) through `fctlmlog::Registry`: one `.csv`, one log, each
+frame ONCE — keyed by the frame's sequence number (the satellite's own counter), else its time. Whichever tap flushes
+writes; the last tap to leave writes the rest and closes the file. Appends are whole lines in one `O_APPEND` write under
+the gallery's exclusive flock, so nothing interleaves; finding-or-creating a day item is serialised in the process.
+Different radios are different processes (and their radio label is part of the day lookup), so they never share.
 
 **Never a write per frame**: both held in RAM, appended once a minute or 8 KB, at a pass's end, midnight and the
 decoder's stop. The owner's gallery space bounds the whole (oldest first). `.csv` is served as `text/csv`.
@@ -62,11 +73,13 @@ decoder's stop. The owner's gallery space bounds the whole (oldest first). `.csv
 
 ## Tests (all synthetic)
 
-- `vibeserver/test-fctlm-gallery.cpp` 29/0 — the CSV shape and values, no write before a minute, pass splitting (AOS,
-  gap, satellite), the day log across taps / restart / midnight, the 256 KB part, text/csv. Built through run-tests.sh's
+- `vibeserver/test-fctlm-gallery.cpp` 41/0 — the CSV shape and values, no write before a minute, pass splitting (AOS,
+  gap, satellite), the day log across taps / restart / midnight, the 256 KB part, text/csv; §4b a background profile and
+  a listener (other origin, profile, dial) alive at once → one day log, no malformed lines, count right, restart finds
+  it; §4c the SAME pass from both (one with AOS, one without, each missing frames) → one CSV and one log, each frame once. Built through run-tests.sh's
   decoder-host group (it needs the host's sources; not a CMake target, like test-lrpt-host). `--write-fixture <dir>`
   regenerates `scripts/fixtures/fctlm/`.
-- `scripts/test_tlm_charts.ts` 45/0 — parsing, order, live history, geometry, across, gallery items, the loader.
+- `scripts/test_tlm_charts.ts` 47/0 (background + listener passes = one history, one series) — parsing, order, live history, geometry, across, gallery items, the loader.
 - `scripts/test-web-satellite-mode.mjs` 109/0 (+13) — CHARTS in the web box, LAST 3 PASSES from a fake gallery,
   + MORE, a new frame, 390 px, dark, no gallery.
 - `scripts/test-web-fctlm-gallery.mjs` 16/0 — a vibeserver built from this branch serving the fixture passes + the built
@@ -81,5 +94,5 @@ decoder's stop. The owner's gallery space bounds the whole (oldest first). `.csv
   `+ N MORE`. Right eight?
 - All analogue channels are **raw** (FUNcube publishes no calibration). If AMSAT-UK's Dashboard calibrations are
   wanted, they would need a source we may use.
-- The day log is per satellite AND per background profile (a listener's pick and a background pass with a different
-  profile name get separate day logs) — the adoptSlot key includes the profile.
+- ANSWERED 11-22: values list stays the default (CHARTS one tap away); the first eight are fine; ONE day log per
+  satellite per day and ONE pass file / chart whoever decoded (built as above).
