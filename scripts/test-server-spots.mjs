@@ -253,7 +253,9 @@ try {
     } finally { S.stop(); }
   }
 } finally {
-  fs.rmSync(tmp, { recursive: true, force: true });   // ★ the 29 MB clip and the servers' folders
+  // ★ VIBE_SPOTS_KEEP=1: the servers' folders (their logs) are kept for a look after a miss; the 29 MB clips still go
+  if (process.env.VIBE_SPOTS_KEEP) { for (const f of ['20m.cu8', '40m.cu8']) fs.rmSync(path.join(tmp, f), { force: true }); console.log(`   kept: ${tmp}`); }
+  else fs.rmSync(tmp, { recursive: true, force: true });   // ★ the 29 MB clip and the servers' folders
 }
 console.log(`\n${fail ? '✗' : '✓'} test-server-spots: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

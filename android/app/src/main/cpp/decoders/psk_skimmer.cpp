@@ -255,6 +255,9 @@ constexpr float kCharDbHeld = 2.0f;     // …and what was held while it was ten
 constexpr float kKeepDb = 2.0f;         // the long (≈ 1 s) EVM average below which, for kLostSec, a signal has gone
 constexpr double kLostSec = 6.0;
 constexpr double kProbeSec = 12.0;      // a tentative carrier that has not confirmed in this long is dropped
+constexpr float kQuadQpsk = 0.15f;      // ★ beta91: a QPSK lane needs at least this share of ±90 shifts (QPSK text ≈ ½)
+constexpr float kBpskOnQpskDb = 3.0f;   //   …its BPSK sibling's Es/N0 under this (half of QPSK is on BPSK's error axis)
+constexpr float kQpskOverDb = 3.0f;     //   …and the QPSK lane's this much cleaner (kindOk)
 constexpr int kCommitSyms = 12;         // ★ symbols a character must be FOLLOWED by before it is committed
 // ★ The loops, per symbol (measured on the bench — scripts/test-psk.sh): symbol timing from the envelope's baud-rate
 //   component averaged over 16 symbols, nudged 12 % toward it a symbol; the Costas loop critically damped-ish (k2 large
@@ -264,9 +267,74 @@ constexpr float kCostas1 = 0.20f, kCostas2 = 0.02f;
 
 struct PendingChar { int c; uint64_t sym0, sym1; };
 
+// ── QPSK31 / QPSK63 (beta91): the rate-½ K=5 convolutional code and its Viterbi decoder ───────────────────────────────
+// ★★ FROM THE PUBLISHED SPECIFICATION (G3PLX, the PSK31 spec's QPSK table): the last FIVE Varicode bits (the newest on the
+//    right) choose the phase SHIFT from the previous symbol — 0, +90, −90 or 180 degrees. The table is the code with the
+//    generator polynomials 0x19 and 0x17: a = parity(r & 0x19), b = parity(r & 0x17), and (a,b) = (0,0) 180, (1,0) 0,
+//    (1,1) +90, (0,1) −90. All zeros (the idle) is continuous reversals, exactly as BPSK — so a QPSK station idles as a
+//    BPSK one does. The tests check all 32 rows against the published table. Nothing here was copied from any program.
+// ★ A shift as a unit phasor's (re, im): 180 = (−1, 0), 0 = (1, 0), +90 = (0, 1), −90 = (0, −1).
+struct QpskCode {
+    int8_t re[32], im[32];
+    QpskCode() {
+        auto par = [](unsigned v) { v ^= v >> 4; v ^= v >> 2; v ^= v >> 1; return (int)(v & 1); };
+        for (unsigned r = 0; r < 32; ++r) {
+            const int a = par(r & 0x19u), b = par(r & 0x17u);
+            re[r] = (int8_t)(a == b ? (a ? 0 : -1) : (a ? 1 : 0));
+            im[r] = (int8_t)(a == b ? (a ? 1 : 0) : (a ? 0 : -1));
+        }
+    }
+};
+const QpskCode& qpskCode() { static const QpskCode q; return q; }
+/** ★★ THE VITERBI DECODER: 16 states (the last four bits), soft decisions — each branch scored by how well the received
+ *  differential phasor d = s_k·s*_{k−1} (normalised) lines up with the shift that branch would have sent: Re(d) for 0,
+ *  −Re(d) for 180, ±Im(d) for ±90. Survivors traced back kVitDepth symbols (five constraint lengths) for each bit out.
+ *  ★ COST, BOUNDED: 32 add-compare-selects and a 25-step traceback per symbol — at ≤ 62.5 symbols a second that is a few
+ *  microseconds a second per lane; no SIMD is worth it at this rate (the per-sample loops it rides on already are). */
+constexpr int kVitDepth = 25;
+struct Viterbi {
+    float pm[16] = {};
+    uint16_t dec[32] = {};    // ★ per step: bit s set = state s's survivor came from the predecessor with the old bit 1
+    uint64_t n = 0;
+    float lastInc = 0;        // the best path's gain on the last step (how well this sense fits)
+    /** One symbol. `dr, di` = d normalised; `flip` reads ±90 the other way round (the other sideband). Returns the bit
+     *  kVitDepth symbols back, or −1 while the traceback is still filling. */
+    int step(float dr, float di, bool flip) {
+        const QpskCode& q = qpskCode();
+        if (flip) di = -di;
+        float np[16]; uint16_t d = 0; float best = -1e30f; int bs = 0;
+        for (int ns = 0; ns < 16; ++ns) {
+            const int p0 = ns >> 1, p1 = (ns >> 1) | 8;
+            const int r0 = ns, r1 = 16 | ns;
+            const float m0 = pm[p0] + q.re[r0] * dr + q.im[r0] * di;
+            const float m1 = pm[p1] + q.re[r1] * dr + q.im[r1] * di;
+            if (m1 > m0) { np[ns] = m1; d |= (uint16_t)(1u << ns); } else np[ns] = m0;
+            if (np[ns] > best) { best = np[ns]; bs = ns; }
+        }
+        float oldBest = pm[0]; for (int k = 1; k < 16; ++k) oldBest = std::max(oldBest, pm[k]);
+        lastInc = best - oldBest;
+        for (int k = 0; k < 16; ++k) pm[k] = np[k] - best;   // ★ renormalised every step: nothing grows
+        dec[n % 32] = d; ++n;
+        if (n < (uint64_t)kVitDepth) return -1;
+        int st = bs;
+        for (int k = 0; k < kVitDepth - 1; ++k) {
+            const uint16_t dd = dec[(n - 1 - (uint64_t)k) % 32];
+            st = (st >> 1) | (((dd >> st) & 1) ? 8 : 0);
+        }
+        return st & 1;   // ★ the input bit of the step kVitDepth − 1 symbols before the newest
+    }
+};
+
 struct Lane {
     double baud = 31.25, sps = 12, T = 0.032;
     int L = 25;
+    bool qpsk = false;                  // ★ beta91: QPSK31 / QPSK63 (the Viterbi below) — else BPSK
+    const char* name = "BPSK31";        // ★ the mode as spotted: BPSK31 BPSK63 BPSK125 QPSK31 QPSK63
+    Viterbi vit[2];                     // ★ QPSK: both senses (USB and LSB read ±90 the other way); the better one speaks
+    int sense = 0; float senseAcc = 0;
+    // ★★ THE SHARE OF ±90 SHIFTS (≈ 128 symbols), every lane: BPSK sends none (noise makes a few % at a weak copy);
+    //    QPSK text roughly half. It is what keeps a BPSK signal off a QPSK lane and a QPSK one off a BPSK lane.
+    float quad = 0;
     float h[kMaxTaps] = {};
     // timing (square-law: the envelope's baud-rate component)
     std::vector<float> yr, yi;          // this block's filter outputs
@@ -337,8 +405,9 @@ struct Lane {
     // IMD — the idle's two tones (±baud/2) and their third-order products (±3·baud/2), measured on a clean idle
     float imdDb = 0; int imdN = 0; double imdLin = 0, imdDue = -1;
 
-    void init(double b, double fs) {
-        baud = b; T = 1.0 / b; sps = fs / b;
+    void init(double b, double fs, bool q = false) {
+        baud = b; T = 1.0 / b; sps = fs / b; qpsk = q;
+        name = q ? (b > 40 ? "QPSK63" : "QPSK31") : (b > 100 ? "BPSK125" : b > 40 ? "BPSK63" : "BPSK31");
         L = std::min(kMaxTaps, (int)std::lround(2 * sps) + 1);
         float sum = 0;
         for (int i = 0; i < L; ++i) { h[i] = (float)(0.5 - 0.5 * std::cos(kTwoPi * (i + 1) / (L + 1))); sum += h[i]; }
@@ -379,7 +448,8 @@ struct Sig {
     double ncoPh = 0;
     std::vector<float> xr, xi;   // the channel's samples: kMaxTaps−1 of history, then this block's kOut
     int nLanes = 0;
-    Lane lane[2];
+    static constexpr int kMaxLanes = 5;   // ★ beta91: BPSK31, BPSK63, BPSK125, QPSK31, QPSK63
+    Lane lane[kMaxLanes];
     int lead = 0;             // the lane that steers the AFC and whose text is shown
     double bornSec = 0, lastGoodSec = 0, confirmedSec = 0, bornHz = 0;
     double t0 = -1;           // ★ input time (s) of this channel's first output sample
@@ -617,6 +687,9 @@ struct Skimmer::Impl {
         g->nLanes = 0;
         if (cfg.psk31) g->lane[g->nLanes++].init(31.25, fsCh);
         if (cfg.psk63) g->lane[g->nLanes++].init(62.5, fsCh);
+        if (cfg.psk125) g->lane[g->nLanes++].init(125.0, fsCh);
+        if (cfg.qpsk31) g->lane[g->nLanes++].init(31.25, fsCh, true);
+        if (cfg.qpsk63) g->lane[g->nLanes++].init(62.5, fsCh, true);
         for (int i = 0; i < g->nLanes; ++i) { g->lane[i].yr.assign(kOut, 0); g->lane[i].yi.assign(kOut, 0); }
         g->bornSec = nowSec(); g->lastGoodSec = g->bornSec;
         // ★ Phi: the LO phase at this channel's first output of the NEXT hop — see runChannel.
@@ -662,9 +735,15 @@ struct Skimmer::Impl {
         // ★ each lane: its matched filter over the block, then symbols
         for (int li = 0; li < g.nLanes; ++li) {
             Lane& l = g.lane[li];
-            const int off = kMaxTaps - l.L;
-            firBlock(g.xr.data() + off, kOut, l.h, l.L, l.yr.data());
-            firBlock(g.xi.data() + off, kOut, l.h, l.L, l.yi.data());
+            // ★ a QPSK lane has its BPSK sibling's filter (same baud): its outputs are copied, not filtered again
+            int same = -1;
+            for (int lj = 0; lj < li && same < 0; ++lj) if (g.lane[lj].L == l.L && g.lane[lj].baud == l.baud) same = lj;
+            if (same >= 0) { l.yr = g.lane[same].yr; l.yi = g.lane[same].yi; }
+            else {
+                const int off = kMaxTaps - l.L;
+                firBlock(g.xr.data() + off, kOut, l.h, l.L, l.yr.data());
+                firBlock(g.xi.data() + off, kOut, l.h, l.L, l.yi.data());
+            }
             runLane(g, li);
         }
         // ★ keep the block for the line search and IMD
@@ -687,13 +766,47 @@ struct Skimmer::Impl {
      *  second line near by is a second signal (two PSK31 stations 31 Hz apart). */
     void lineSearch(Sig& g) {
         ++g.linesDone;
+        // ★ a QPSK lane leading: the FOURTH power only — QPSK's own data can square to a line (a run of +90 shifts is a
+        //   180-degree turn a symbol of z², a line baud/2 off the carrier), and a channel moved onto it loses the copy
+        if (g.lane[g.lead].qpsk) { lineSearchPow(g, 4); return; }
+        if (lineSearchPow(g, 2)) return;
+        // ★★ beta91 QPSK: squaring leaves QPSK's data on (its four points square to two) — no line. The FOURTH power takes
+        //    it off: a line at 4·Δf. Asked only when the square found none and a QPSK lane is listening.
+        bool q = false; for (int li = 0; li < g.nLanes; ++li) q |= g.lane[li].qpsk;
+        if (q) lineSearchPow(g, 4);
+    }
+    /** The line of z^p (p = 2 or 4) — true when one was found (and the channel moved onto it if it was off). */
+    bool lineSearchPow(Sig& g, int p) {
         for (int i = 0; i < kLine; ++i) {
             const cf z = g.zr[(g.zn + (size_t)i) % kLine];
-            const cf z2 = z * z * lwin[(size_t)i];
-            lin[2 * i] = z2.real(); lin[2 * i + 1] = z2.imag();
+            cf zp = z * z; if (p == 4) zp = zp * zp;
+            zp *= lwin[(size_t)i];
+            lin[2 * i] = zp.real(); lin[2 * i + 1] = zp.imag();
         }
         pffft_transform_ordered(line, lin, lout, lwork, PFFFT_FORWARD);
-        const double res = fsCh / kLine;              // Hz per bin of 2·Δf
+        const double res = fsCh / kLine;              // Hz per bin of p·Δf
+        if (p == 4) {
+            // ★ ±4 Hz of Δf first (a channel on its carrier stays there), else the strongest within ±20 Hz — no neighbours
+            auto P4 = [&](int k) { const int b = (k % kLine + kLine) % kLine; return lout[2 * b] * lout[2 * b] + lout[2 * b + 1] * lout[2 * b + 1]; };
+            const int span = std::min(kLine / 2 - 2, (int)std::ceil(80.0 / res));
+            std::vector<float> sorted; sorted.reserve((size_t)(2 * span + 1));
+            for (int k = -span; k <= span; ++k) sorted.push_back(P4(k));
+            std::nth_element(sorted.begin(), sorted.begin() + (long)sorted.size() / 2, sorted.end());
+            const float med = std::max(1e-30f, sorted[sorted.size() / 2]);
+            int best = 0; float bv = 0;
+            const int centre = (int)std::ceil(16.0 / res);
+            for (int k = -centre; k <= centre; ++k) if (P4(k) > bv) { bv = P4(k); best = k; }
+            if (bv < 12.0f * med) { bv = 0; for (int k = -span; k <= span; ++k) if (P4(k) > bv) { bv = P4(k); best = k; } }
+            if (bv < 12.0f * med) return false;
+            const float a = P4(best - 1), b = P4(best), c = P4(best + 1);
+            const double den = a - 2 * b + c;
+            const double df = (best + (den < 0 ? 0.5 * (a - c) / den : 0.0)) * res / 4.0;
+            if (std::fabs(df) > 0.4) {
+                g.fc += df;
+                for (int li = 0; li < g.nLanes; ++li) { Lane& l = g.lane[li]; l.omega = 0; l.fll = cf(0, 0); if (!g.confirmed) l.locked = false; }
+            }
+            return true;
+        }
         const int span = (int)std::ceil(80.0 / res);   // ±40 Hz of Δf
         auto P = [&](int k) { const int b = (k % kLine + kLine) % kLine; return lout[2 * b] * lout[2 * b] + lout[2 * b + 1] * lout[2 * b + 1]; };
         std::vector<float> pw((size_t)(2 * span + 1));
@@ -711,7 +824,7 @@ struct Skimmer::Impl {
             bv = 0;
             for (int k = -near; k <= near; ++k) if (pw[(size_t)(k + span)] > bv) { bv = pw[(size_t)(k + span)]; best = k; }
         }
-        if (bv < 12.0f * med) return;                 // ★ no line: noise, or not BPSK — leave the channel where it is
+        if (bv < 12.0f * med) return false;           // ★ no line: noise, or not BPSK — leave the channel where it is
         const float a = P(best - 1), b = P(best), c = P(best + 1);
         const double den = a - 2 * b + c;
         const double frac = den < 0 ? 0.5 * (a - c) / den : 0.0;
@@ -728,7 +841,7 @@ struct Skimmer::Impl {
             }
         }
         // ★ another carrier near by
-        if ((int)sigs.size() >= cfg.maxSignals) return;
+        if ((int)sigs.size() >= cfg.maxSignals) return true;
         for (int k = -span; k <= span; ++k) {
             const float v = pw[(size_t)(k + span)];
             if (v < 0.4f * bv || v < 12.0f * med || std::abs(k - best) * res / 2.0 < 8.0) continue;
@@ -744,6 +857,7 @@ struct Skimmer::Impl {
             for (auto& h : holdOff) if (std::fabs(h.first - hz) < 6.0) { taken = true; break; }
             if (!taken) { pendingAdd.push_back(hz); }
         }
+        return true;
     }
 
     // ── a lane: symbol timing, the Costas loop, detection, Varicode ──
@@ -817,10 +931,17 @@ struct Skimmer::Impl {
         ++l.sym;
         // ★ Costas loop (BPSK): rotate by θ, the phase error is atan(b/a) whichever side a is; second order so a residual
         //   frequency offset leaves no standing phase error.
-        if (!l.locked) { l.theta = std::arg(s * s) * 0.5f; l.locked = true; }
+        // ★ beta91 QPSK: the fourth-power loop (four points: the phase error is arg(r⁴)/4) on the same axes
+        if (!l.locked) { l.theta = l.qpsk ? std::arg((s * s) * (s * s)) * 0.25f : std::arg(s * s) * 0.5f; l.locked = true; }
         const cf r = s * cf(std::cos(l.theta), -std::sin(l.theta));
-        const float a = r.real(), b = r.imag();
-        const float pe = std::atan(b / (std::fabs(a) > 1e-20f ? a : 1e-20f));
+        float a = r.real(), b = r.imag();
+        float pe;
+        if (l.qpsk) {
+            const cf r2 = r * r, r4 = r2 * r2;
+            pe = 0.25f * std::atan2(r4.imag(), r4.real());
+            // ★ the EVM against the NEAREST of the four points: the major axis is the symbol, the minor its error
+            if (std::fabs(b) > std::fabs(a)) std::swap(a, b);
+        } else pe = std::atan(b / (std::fabs(a) > 1e-20f ? a : 1e-20f));
         // ★ k2 small and ω bounded (±0.25 rad a symbol ≈ ±1.2 Hz on PSK31): the FLL below does the frequency; a big ω
         //   here is the loop wandering in noise before it has locked (seen: 0.4–0.8 rad for ten seconds at −11 dB).
         l.theta = wrapPi(l.theta + l.omega + kCostas1 * pe);
@@ -844,16 +965,33 @@ struct Skimmer::Impl {
 #endif
         // ★ the bit: coherent decisions, differentially decoded (a ONE is no reversal)
         int bit = 1;
+        int vbit = -1;        // ★ QPSK: the Viterbi's bit (kVitDepth − 1 symbols old), or −1
+        bool rev = false, same = false;   // ★ this symbol a reversal / no change (the dip measure; QPSK's ±90 are neither)
         if (l.havePrev) {
             const cf d = s * std::conj(l.prev);
-            bit = ((a >= 0) == (l.prevA >= 0)) ? 1 : 0;
-            // ★ FLL: d² has the data removed; its phase is 4π·Δf·T — slowly re-centres the channel on the carrier
-            //   (the Costas loop's ω is folded in too), so the matched filter sits on the signal.
-            const cf d2 = d * d;
+            const bool q90 = std::fabs(d.imag()) > std::fabs(d.real());
+            l.quad += (1.0f / 128.0f) * ((q90 ? 1.0f : 0.0f) - l.quad);
+            if (l.qpsk) {
+                rev = !q90 && d.real() < 0; same = !q90 && d.real() >= 0;
+                const float nrm = 1.0f / std::max(1e-30f, std::abs(s) * std::abs(l.prev));
+                const float dr = d.real() * nrm, di = d.imag() * nrm;
+                const int b0 = l.vit[0].step(dr, di, false), b1 = l.vit[1].step(dr, di, true);
+                // ★ the sense whose best path gains more, averaged (≈ 20 symbols), with a margin to change
+                l.senseAcc += 0.05f * ((l.vit[0].lastInc - l.vit[1].lastInc) - l.senseAcc);
+                if (l.sense == 0 && l.senseAcc < -0.15f) l.sense = 1; else if (l.sense == 1 && l.senseAcc > 0.15f) l.sense = 0;
+                vbit = l.sense ? b1 : b0;
+            } else {
+                bit = ((a >= 0) == (l.prevA >= 0)) ? 1 : 0;
+                rev = bit == 0; same = bit == 1;
+            }
+            // ★ FLL: d² has the data removed (QPSK: d⁴); its phase is 4π·Δf·T (8π) — slowly re-centres the channel on the
+            //   carrier (the Costas loop's ω is folded in too), so the matched filter sits on the signal.
+            const cf d2 = l.qpsk ? (d * d) * (d * d) : d * d;
             const float m2 = std::abs(d2);
-            if (m2 > 0) l.fll += 0.0625f * (d2 / std::sqrt(m2) - l.fll);
+            // ★ scaled to |d| either way (BPSK exactly as before: d²/√|d²|)
+            if (m2 > 0) l.fll += 0.0625f * (d2 / (l.qpsk ? std::pow(m2, 0.75f) : std::sqrt(m2)) - l.fll);
             if (li == g.lead) {
-                const double ferr = std::arg(l.fll) / (2.0 * kTwoPi * l.T);
+                const double ferr = std::arg(l.fll) / ((l.qpsk ? 4.0 : 2.0) * kTwoPi * l.T);
                 const double fromPll = l.omega / (kTwoPi * l.T);
                 const bool young = l.sym < 96;
                 // ★★ Two estimators, one owner each: the FLL moves the channel; the Costas loop's ω is handed to the
@@ -868,17 +1006,23 @@ struct Skimmer::Impl {
                 l.omega -= (float)(kTwoPi * stepP * l.T);
             }
         }
-        if (l.havePrev && l.As > 0) {
+        if (l.havePrev && l.As > 0 && (rev || same)) {
             const float r = std::min(2.0f, boundary / l.As);
-            if (bit == 0) l.dip += 0.03125f * (r * r - l.dip); else l.flat += 0.03125f * (r * r - l.flat);
+            if (rev) l.dip += 0.03125f * (r * r - l.dip); else l.flat += 0.03125f * (r * r - l.flat);
         }
-        l.bitRing[l.sym % 128] = (uint8_t)bit;
+        // ★ the ghost test's decision: BPSK its bit; QPSK the shift's quadrant (0 none, 1 +90, 2 reversal, 3 −90)
+        if (l.qpsk) {
+            const cf d = l.havePrev ? s * std::conj(l.prev) : cf(1, 0);
+            l.bitRing[l.sym % 128] = (uint8_t)(std::fabs(d.imag()) > std::fabs(d.real()) ? (d.imag() > 0 ? 1 : 3) : (d.real() < 0 ? 2 : 0));
+        } else l.bitRing[l.sym % 128] = (uint8_t)bit;
         l.tRing[l.sym % 128] = g.t0 + (l.tNext - l.sps - (l.L - 1) / 2.0) / fsCh;
-        l.prev = s; l.prevA = a; l.havePrev = true;
-        varicodeBit(g, li, bit);
+        l.prev = s; l.prevA = r.real(); l.havePrev = true;
+        if (!l.qpsk) varicodeBit(g, li, bit, l.sym);
+        else if (vbit >= 0) varicodeBit(g, li, vbit, l.sym - (uint64_t)(kVitDepth - 1));   // ★ the bit's own symbol
     }
 
-    void varicodeBit(Sig& g, int li, int bit) {
+    /** One Varicode bit; `at` = the symbol it was sent on (QPSK's come out of the Viterbi kVitDepth − 1 symbols late). */
+    void varicodeBit(Sig& g, int li, int bit, uint64_t at) {
         Lane& l = g.lane[li];
         l.zeroFrac += (1.0f / 128.0f) * ((bit == 0 ? 1.0f : 0.0f) - l.zeroFrac);
         l.ones7 *= (1.0f - 1.0f / 256.0f);
@@ -886,20 +1030,20 @@ struct Skimmer::Impl {
             if (l.onesRun >= 7) l.ones7 += std::min(64, l.onesRun) / 256.0f;
             ++l.zeroRun; l.onesRun = 0;
             // ★ an idle long enough to measure IMD on: done after the block is in the ring (runChannel)
-            if (l.zeroRun >= 20 && l.zeroRun % 8 == 4) l.imdDue = l.tNext - l.sps - (l.L - 1) / 2.0;
+            if (!l.qpsk && l.zeroRun >= 20 && l.zeroRun % 8 == 4) l.imdDue = l.tNext - l.sps - (l.L - 1) / 2.0;
         }
         else {
             l.zeroRun = 0;
-            if (++l.onesRun == 12) l.longOnes[(l.longOnesN++) % 8] = l.sym;
+            if (++l.onesRun == 12) l.longOnes[(l.longOnesN++) % 8] = at;
         }
-        if (l.len == 0 && bit == 1) l.codeSym0 = l.sym;
+        if (l.len == 0 && bit == 1) l.codeSym0 = at;
         l.cur = (l.cur << 1) | (uint32_t)bit; ++l.len;
         if (l.len >= 2 && (l.cur & 3u) == 0) {
             const uint32_t code = l.cur >> 2; const int clen = l.len - 2;
             if (clen > 0) {
                 const int c = clen <= 10 ? varicodeChar(code) : -1;
                 if (c >= 0) {
-                    l.pend.push_back({ c, l.codeSym0, l.sym });
+                    l.pend.push_back({ c, l.codeSym0, at });
                     ++l.decoded;
                     const bool gc = goodChar(c);
                     if (gc) ++l.good;
@@ -955,22 +1099,61 @@ struct Skimmer::Impl {
     }
     /** ★ Which lane reads this signal: a clean constellation AND characters coming out of it. A PSK31 signal read at
      *  62.5 Bd is half clean (every other sample is a PSK31 symbol centre) but never makes a "00", so no characters. */
+    /** ★ Symbols in one second of PSK31 (32) at this lane's baud: lanes of different speeds are compared over the SAME
+     *  time — 32 PSK125 symbols are a quarter of a second, and its lane read best on noise for that reason alone. */
+    static int laneSpan(const Lane& l) { return std::min(kRing - 16, (int)std::lround(32.0 * l.baud / 31.25)); }
+    /** ★★ beta91: IS THIS LANE'S KIND (BPSK / QPSK) THE SIGNAL'S? A BPSK signal's two points are two of QPSK's four, so
+     *  it reads clean on a QPSK lane as well (cleaner, at a weak copy: noise has four points to fall near). A QPSK signal
+     *  on a BPSK lane NEVER reads clean: half its symbols sit on the BPSK error axis, so that lane's Es/N0 cannot pass
+     *  ≈ 3 dB however strong the signal (and a BPSK signal too weak to read 3 dB there cannot be confirmed anyway). So:
+     *  QPSK = its BPSK sibling under kBpskOnQpskDb, the QPSK lane kQpskOverDb cleaner, and ±90 shifts being sent.
+     *  (A four-point loop's minor-axis share was tried: on weak BPSK its noisy loop wandered and called it QPSK.)
+     *  Without a sibling the shifts alone decide; a BPSK lane without a QPSK sibling is always its kind. */
+    bool kindOk(const Sig& g, const Lane& l) const {
+        const Lane* q = l.qpsk ? &l : nullptr;
+        const Lane* b = l.qpsk ? nullptr : &l;
+        for (int k = 0; k < g.nLanes; ++k) {
+            const Lane& o = g.lane[k];
+            if (o.baud != l.baud || &o == &l) continue;
+            if (o.qpsk && !q) q = &o;
+            if (!o.qpsk && !b) b = &o;
+        }
+        if (!q) return true;
+        const int n = 2 * laneSpan(*q);
+        if (q->sym < (uint64_t)n) return !l.qpsk;
+        bool isQ = q->quad >= kQuadQpsk;
+        if (isQ && b) { const float qb = recentQ(*b, n), qq = recentQ(*q, n); isQ = qb < kBpskOnQpskDb && qq >= qb + kQpskOverDb; }
+        return l.qpsk == isQ;
+    }
     float laneScore(const Lane& l) const {
-        float sc = recentQ(l, 32);
+        float sc = recentQ(l, laneSpan(l));
         int n = 0, gsum = 0;
         for (uint8_t v : l.recentGood) { ++n; gsum += v; }
         sc += n >= 4 ? 3.0f * ((float)gsum / (float)n) : -3.0f;
+        // ★★ beta91: a QPSK lane leads only on a signal that SENDS ±90 — a BPSK signal's two points are two of QPSK's four,
+        //    so its constellation reads clean on a QPSK lane too; only the shifts tell them apart. (A QPSK signal on a
+        //    BPSK lane is never clean: its ±90 points sit on the BPSK error axis.)
         return sc;
     }
+    float laneScore(const Sig& g, const Lane& l) const { return laneScore(l) - (kindOk(g, l) ? 0.0f : 10.0f); }
     void decideLead(Sig& g) {
+#ifdef PSK_DEBUG
+        const int lead0 = g.lead; struct LeadLog { const Sig* g; int l0; ~LeadLog() { if (g->lead != l0 && std::getenv("PSK_LEAD")) std::fprintf(stderr, "  lead %.1f Hz: %s -> %s\n", g->fc, g->lane[l0].name, g->lane[g->lead].name); } } ll{ &g, lead0 };
+#endif
         // ★ fixed once the signal is confirmed: its mode is known, and a signal that has stopped must not turn into
         //   "PSK63" because the other lane reads its noise a shade better
         if (g.nLanes < 2 || g.confirmed) return;
-        const int other = 1 - g.lead;
-        // ★ a clear margin to switch, so two near-equal lanes do not swap every hop
-        if (g.lane[other].sym > 48 && laneScore(g.lane[other]) > laneScore(g.lane[g.lead]) + 2.5f) {
+        // ★ a clear margin to switch, so two near-equal lanes do not swap every hop (the best of the others)
+        int other = -1; float os = -1e30f;
+        for (int li = 0; li < g.nLanes; ++li) {
+            if (li == g.lead || g.lane[li].sym <= (uint64_t)(3 * laneSpan(g.lane[li]) / 2)) continue;   // ★ ≈ 1.5 s heard
+            const float sc = laneScore(g, g.lane[li]);
+            if (sc > os) { os = sc; other = li; }
+        }
+        if (other >= 0 && os > laneScore(g, g.lane[g.lead]) + 2.5f) {
+            const int was = g.lead;
             g.lead = other;
-            g.lane[other].fll = g.lane[1 - other].fll;
+            if (g.lane[other].qpsk == g.lane[was].qpsk) g.lane[other].fll = g.lane[was].fll;   // ★ d² and d⁴ do not mix
         }
     }
 
@@ -993,6 +1176,10 @@ struct Skimmer::Impl {
                 if (!g.confirmed) {
                     // ★ tentative: every lane holds its OWN characters with their quality (a lead that changes lane must
                     //   not leave its text interleaved — a 20 m QSO went unconfirmed that way); confirm() decides
+                    // ★★ beta91 QPSK: a character a QPSK lane decoded while it was not yet the signal's reader (not the lead,
+                    //    or not yet proven QPSK — the channel was steered by a BPSK lane's loops, its sense not settled) is
+                    //    held as noise: its points read clean to the lenient four-point EVM while the text was garbage.
+                    if (l.qpsk && (li != g.lead || !kindOk(g, l))) cq = std::min(cq, -2.0f);
                     l.heldQ.push_back({ (char)pc.c, cq });
                     if (l.heldQ.size() > 400) l.heldQ.erase(l.heldQ.begin(), l.heldQ.begin() + 100);
                     continue;
@@ -1016,7 +1203,9 @@ struct Skimmer::Impl {
             for (auto& h : L.heldQ) if (h.second >= kCharDb) { ++strict; letters += isLetter((unsigned char)h.first); }
             const bool carrier = L.longOnesN > 0 && L.sym < L.longOnes[(L.longOnesN - 1) % 8] + 256;
             const bool texture = L.zeroFrac > 0.25f && L.zeroFrac < 0.75f && L.snrL >= kConfirmDb - 2.0f && L.ones7 < 0.06f;
-            const bool plausible = !carrier && texture && L.textureOk() && L.recentGood.size() >= 8 && gsum * 100 >= 85 * (int)L.recentGood.size();
+            // ★ beta91: the shifts must be the lane's own kind (laneScore) — QPSK ±90 sent, BPSK none
+ 
+            const bool plausible = kindOk(g, L) && !carrier && texture && L.textureOk() && L.recentGood.size() >= 8 && gsum * 100 >= 85 * (int)L.recentGood.size();
             // ★ …and what WOULD be shown must have text's texture too (the held characters at the strict bar)
             std::string shown; for (auto& hq : L.heldQ) if (hq.second >= kCharDb) shown.push_back(hq.first);
             if (shown.size() > 48) shown.erase(0, shown.size() - 48);
@@ -1134,7 +1323,7 @@ struct Skimmer::Impl {
         g.spotted[call] = now; g.call = call;
         if (owner->onSpot) {
             Spot sp; sp.call = call; sp.offsetHz = g.fc; sp.snrDb = g.lane[g.lead].snrL; sp.how = how;
-            sp.mode = g.lane[g.lead].baud > 40 ? "BPSK63" : "BPSK31"; sp.utcMs = nowMs(); sp.signalId = g.id;
+            sp.mode = g.lane[g.lead].name; sp.utcMs = nowMs(); sp.signalId = g.id;
             owner->onSpot(sp);
         }
     }
@@ -1178,7 +1367,7 @@ struct Skimmer::Impl {
         SignalView v;
         v.id = g.id; v.offsetHz = g.fc; v.active = g.active;
         const Lane& l = g.lane[g.lead];
-        v.baud = l.baud > 40 ? 63 : 31; v.snrDb = g.snrShown; v.quality = g.qShown; v.imdDb = l.imdDb;
+        v.baud = l.baud > 100 ? 125 : l.baud > 40 ? 63 : 31; v.qpsk = l.qpsk; v.mode = l.name; v.snrDb = g.snrShown; v.quality = g.qShown; v.imdDb = l.imdDb;
         v.firstMs = g.firstMs; v.lastMs = g.lastMs; v.call = g.call; v.text = g.text; v.chars = g.chars;
         if (v.text.size() > 300) v.text.erase(0, v.text.size() - 300);
         return v;
