@@ -1,10 +1,11 @@
-// decoders/digimodes/psk.h — PSK31 / PSK63 SPOTS as a digital-spots mode (decoders/digi_mode.h): our own psk::Skimmer
+// decoders/digimodes/psk.h — PSK31 / PSK63 / PSK125 / QPSK31 / QPSK63 SPOTS as a digital-spots mode (decoders/digi_mode.h): our own psk::Skimmer
 // (decoders/psk_skimmer.h, docs/v12/PSK.md) behind the Engine interface. V12, 2026-10-27.
 //
 // ★★ SPOTS ONLY. The skimmer reads every PSK31 and PSK63 signal in the passband; here only its SPOTS are used — a
 //    callsign heard identifying itself twice ("CQ CQ DE G4ABC G4ABC K", "TEST G4ABC", "… DE G4ABC") — never the text.
 //    The listener's own PSK decoder (DECODERS → PSK) is where the text is read. The spot's mode is the lane that
-//    decoded it, "PSK31" or "PSK63" (ModeDef::name "PSK" is the family: one engine, one map colour and letter).
+//    decoded it, "PSK31", "PSK63", "PSK125", "QPSK31" or "QPSK63" (beta91: the last three) — ModeDef::name "PSK" is the
+//    family: one engine, one map colour and letter.
 // ★ Free-running (no slots): every block goes straight in. Text and spots are gated on decoded-text quality inside the
 //   skimmer, so noise and FT8's crowd spot nothing (docs/v12/PSK.md: 0 characters in 10 min of noise, 0 on FT8/RTTY).
 // ★ SNR: the skimmer measures Es/N0 (signal over noise in the baud rate's bandwidth); a spot carries WSJT-X's 2500 Hz
@@ -17,9 +18,23 @@
 
 #include <cmath>
 #include <memory>
+#include <string>
 
 namespace vibe {
 namespace digi {
+
+/** ★ The skimmer's lane name → the spot's (PSK Reporter's / ADIF's) mode: BPSK31 → PSK31, BPSK63 → PSK63, BPSK125 →
+ *  PSK125; QPSK31 and QPSK63 as they are (beta91). */
+inline std::string spotModeOf(const std::string& lane) {
+    if (lane.rfind("BPSK", 0) == 0) return lane.substr(1);
+    if (lane == "QPSK31" || lane == "QPSK63") return lane;
+    return "PSK31";
+}
+/** ★ Es/N0 (the skimmer's, in the baud rate's bandwidth) to WSJT-X's 2500 Hz: 10·log10(2500 / baud) — 19 dB for 31.25
+ *  baud, 16 for 62.5, 13 for 125. */
+inline float es0To2500Db(const std::string& lane) {
+    return lane.find("125") != std::string::npos ? 13.0f : lane.find("63") != std::string::npos ? 16.0f : 19.0f;
+}
 
 class PskEngine : public Engine {
 public:
@@ -29,12 +44,11 @@ public:
         d_.reset(new psk::Skimmer(c));
         d_->onSpot = [this](const psk::Spot& p) {
             if (!onSpot || p.call.empty()) return;
-            const bool p63 = p.mode == "BPSK63";
             Spot s;
-            s.mode = p63 ? "PSK63" : "PSK31";
+            s.mode = spotModeOf(p.mode);
             s.call = p.call; s.how = p.how;
             s.text = p.how + " " + p.call;
-            s.snr = (int)std::lround(p.snrDb - (p63 ? 16.0f : 19.0f));   // ★ Es/N0 → dB in 2500 Hz
+            s.snr = (int)std::lround(p.snrDb - es0To2500Db(p.mode));   // ★ Es/N0 → dB in 2500 Hz
             s.audioHz = (float)p.offsetHz;
             s.slotUtc = p.utcMs / 1000.0;
             onSpot(s);

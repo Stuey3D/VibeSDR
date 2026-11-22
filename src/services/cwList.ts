@@ -23,7 +23,9 @@ export interface CwSignal {
    *  server; utils/cwFormat cwWpmText draws "17–21 wpm"). */
   wpmLo?: number; wpmHi?: number;
   /** ★ V12 PSK only: 31 or 63, and the IMD (dB, 0 = not measured). One list draws both decoders (the web's rule). */
-  baud?: 31 | 63; imd?: number;
+  baud?: 31 | 63 | 125; imd?: number;
+  /** ★ V12 beta91 PSK only: QPSK31 / QPSK63 (else BPSK — PSK31, PSK63, PSK125). */
+  qpsk?: boolean;
   /** ★ V12 RTTY skimmer only (rtty_signals): the shift heard (listed at once), and — once `set` — the settings found for
    *  this signal ("45 baud / 170 Hz / Reverse"; they are inside `text` too, and scroll away with it). */
   rtty?: RttyRowInfo;
@@ -34,7 +36,7 @@ export interface CwSpot {
   callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number;
   /** ★ V12 (2026-10-29): the speed as a range, as the signal rows (absent from an older server). */
   wpmLo?: number; wpmHi?: number;
-  /** ★ V12 PSK only: 'BPSK31' | 'BPSK63' (shown as PSK31 / PSK63 where CW shows its speed). */
+  /** ★ V12 PSK only: PSK_MODES (BPSK31 … QPSK63 — shown as PSK31 … QPSK63 where CW shows its speed). */
   mode?: string;
 }
 
@@ -67,13 +69,18 @@ export function parseCwSignals(d: any, psk = false, rtty = false): CwList | null
       active: x?.active === true, last: num(x?.last), first: num(x?.first),
       call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
       ...(psk ? {} : cwWpmRangeOf(x)),
-      ...(psk ? { baud: (num(x?.baud) > 40 ? 63 : 31) as 31 | 63, imd: num(x?.imd) } : {}),
+      ...(psk ? { baud: (num(x?.baud) > 100 ? 125 : num(x?.baud) > 40 ? 63 : 31) as 31 | 63 | 125, imd: num(x?.imd), qpsk: x?.qpsk === true } : {}),
       ...(rtty ? { rtty: { set: x?.set === true, shift: num(x?.shift), baud: num(x?.baud), reverse: x?.reverse === true,
                            settings: str(x?.settings, 40) } } : {}),
     })),
   };
 }
 
+/** ★ V12 beta91: a PSK spot's mode as the server names it (BPSK31 BPSK63 BPSK125 QPSK31 QPSK63); anything else BPSK31. */
+export const PSK_MODES = ['BPSK31', 'BPSK63', 'BPSK125', 'QPSK31', 'QPSK63'] as const;
+export function pskModeOf(m: unknown): string { return typeof m === 'string' && (PSK_MODES as readonly string[]).includes(m) ? m : 'BPSK31'; }
+/** ★ A PSK row's mode where CW shows its speed: PSK31, PSK63, PSK125, QPSK31, QPSK63. */
+export function pskRowMode(sg: { baud?: number; qpsk?: boolean }): string { return `${sg.qpsk ? 'QPSK' : 'PSK'}${sg.baud ?? 31}`; }
 /** A spot from the wire; null without a callsign. `now` stands in for a missing timestamp. ★ `psk`: a psk_spot. */
 export function parseCwSpot(d: any, now: number, psk = false, rtty = false): CwSpot | null {
   if (!d || typeof d.callsign !== 'string' || !d.callsign) return null;
@@ -82,7 +89,7 @@ export function parseCwSpot(d: any, now: number, psk = false, rtty = false): CwS
     wpm: Number(d.wpm) || 0, snr: Number(d.snr) || 0, how: String(d.how || '').slice(0, 8),
     country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || now,
     ...(psk ? {} : cwWpmRangeOf(d)),
-    ...(psk ? { mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31' } : {}),
+    ...(psk ? { mode: pskModeOf(d.mode) } : {}),
     ...(rtty ? { mode: typeof d.mode === 'string' && d.mode.startsWith('RTTY') ? d.mode.slice(0, 16) : 'RTTY' } : {}),
   };
 }
@@ -152,9 +159,9 @@ export function pskTuneFor(rfHz: number, mode: string, low: number, high: number
 /** The hint under the PSK key's settings — the web's pskHint, word for word (its bold dropped). */
 export function pskHintText(skimmer: boolean, width: number): string {
   return skimmer
-    ? `Every PSK31 and PSK63 signal ${width / 2000} kHz either side of your dial, decoded at once — pick a BAND `
+    ? `Every PSK31, PSK63, PSK125, QPSK31 and QPSK63 signal ${width / 2000} kHz either side of your dial, decoded at once — pick a BAND `
       + 'to put the window on its PSK segment, or tune it yourself. A call heard calling twice is spotted. Tap a row to tune to it.'
-    : 'Tune USB with the PSK segment in your passband (e.g. 14.070): every PSK31/63 signal in it is listed, '
+    : 'Tune USB with the PSK segment in your passband (e.g. 14.070): every PSK31/63/125 and QPSK31/63 signal in it is listed, '
       + 'and the one in the middle of the passband is decoded above. Tap a row to put it there.';
 }
 /** The list's idle line — the web's renderCw, both decoders. */
@@ -165,8 +172,8 @@ export function kbIdleText(psk: boolean, skimmer: boolean): string {
              : 'listening — tune a CW signal into the passband';
 }
 /** A row's speed column: "PSK31" for PSK, "18 wpm" for CW. A spot's: its mode (BPSK→PSK) or its speed. */
-export function kbRateText(sg: { baud?: number; wpm: number; wpmLo?: number; wpmHi?: number }): string {
-  return sg.baud !== undefined ? `PSK${sg.baud}` : cwWpmText(sg);
+export function kbRateText(sg: { baud?: number; qpsk?: boolean; wpm: number; wpmLo?: number; wpmHi?: number }): string {
+  return sg.baud !== undefined ? pskRowMode(sg) : cwWpmText(sg);
 }
 export function kbSpotRateText(s: { mode?: string; wpm: number; wpmLo?: number; wpmHi?: number }): string {
   return s.mode ? s.mode.replace('BPSK', 'PSK') : cwWpmText(s);

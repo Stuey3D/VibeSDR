@@ -107,5 +107,9 @@ ok(digiModeStyle('PSK31') === DIGI_MODE_STYLE.PSK && digiModeStyle('psk63') === 
 ok(digiModeFamily('PSK63', ['FT8', 'PSK']) === 'PSK' && digiModeFamily('Q65-60A', ['Q65']) === 'Q65' && digiModeFamily('FT8', ['FT8', 'FT4']) === 'FT8'
    && digiModeFamily('FST4W', ['FST4', 'FST4W']) === 'FST4W' && digiModeFamily('FT4', ['FT8']) === 'FT4',
    'a spot\'s family for the mode filter: PSK63 → PSK, Q65-60A → Q65, FST4W stays FST4W (not FST4), an unknown stays itself');
+// ★ V12 beta91: PSK125, QPSK31 and QPSK63 are the PSK family's (style, legend row, filter key) — QPSK only where PSK is one
+ok(digiModeStyle('PSK125') === DIGI_MODE_STYLE.PSK && digiModeStyle('QPSK31') === DIGI_MODE_STYLE.PSK && digiModeStyle('qpsk63') === DIGI_MODE_STYLE.PSK
+   && digiModeFamily('QPSK63', ['FT8', 'PSK']) === 'PSK' && digiModeFamily('PSK125', ['PSK']) === 'PSK' && digiModeFamily('QPSK31', ['FT8']) === 'QPSK31',
+   'PSK125 / QPSK31 / QPSK63 spots take PSK\'s style and family (QPSK stays itself where PSK is not a family)');
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

@@ -1,19 +1,20 @@
-// decoders/digimodes/pskw.h — WIDE PSK: PSK31 / PSK63 across the band's whole narrow-band digimode segment, as a Band chip
+// decoders/digimodes/pskw.h — WIDE PSK: PSK31 / PSK63 / PSK125 / QPSK31 / QPSK63 across the band's whole narrow-band digimode segment, as a Band chip
 // (V12 beta91, docs/v12/BAND-SKIM-CW-RTTY.md). Stuart (2026-11-22, his first PSK63): "he wants more of it".
 //
 // ★★ The original PSK chip (psk.h) reads 200–3600 Hz above the conventional PSK31 dial (7040, 14070 …): where PSK31 is
 //    called, and where it runs with the tuners like every audio mode. This chip reads the SAME segment the RTTY chip does
 //    (vibe_skim_bands.h, the owner's IARU region — 40 m R1 7040–7050, 20 m 14070–14099) straight off the slice, so a PSK31
 //    or PSK63 QSO anywhere in it is spotted. Engine: the PSK skimmer's own psk::Skimmer (one FFT per hop across the
-//    window, two lanes per carrier — PSK31 and PSK63 — the clean one wins), on its own worker (iq_worker.h).
+//    window, five lanes per carrier — PSK31, PSK63, PSK125, QPSK31, QPSK63 — the clean one wins), on its own worker.
 // ★★ NO DOUBLE SPOTS: the original PSK chip's windows (every published PSK dial + 150 … 3650 Hz that falls inside this
 //    window) are LEFT TO IT — a station heard there by this engine is not spotted again. Both chips run; the original keeps
 //    its window whether or not this one is on, shed or paused.
-// ★ PSK125 and QPSK31/63: psk::Skimmer demodulates BPSK31 and BPSK63 only; those are not built (no new demodulator for this
-//   chip — said in the doc). Spot modes are "PSK31" / "PSK63", ADIF PSK31 / PSK63 as the original's.
+// ★ beta91: PSK125, QPSK31 and QPSK63 too — psk::Skimmer's lanes (a QPSK lane Viterbi-decodes the PSK31 spec's K=5
+//   code); spot modes PSK31 / PSK63 / PSK125 / QPSK31 / QPSK63, the ADIF names PSK Reporter takes (psk.h spotModeOf).
 // ★ Shed and paused LAST of the three IQ chips (CW, then RTTY, then this) — Stuart's order.
 #pragma once
 #include "iq_worker.h"
+#include "psk.h"
 #include "../psk_skimmer.h"
 #include "../digi_bands.h"
 #include "../../vibe_skim_bands.h"
@@ -55,12 +56,11 @@ protected:
                 if (!onSpot || p.call.empty()) return;
                 const double rf = centre_ + p.offsetHz;
                 for (const auto& s : skip_) if (rf >= s.first && rf <= s.second) return;   // ★ the original chip's
-                const bool p63 = p.mode == "BPSK63";
                 Spot s;
-                s.mode = p63 ? "PSK63" : "PSK31";
+                s.mode = spotModeOf(p.mode);
                 s.call = p.call; s.how = p.how;
                 s.text = p.how + " " + p.call;
-                s.snr = (int)std::lround(p.snrDb - (p63 ? 16.0f : 19.0f));   // ★ Es/N0 → dB in 2500 Hz, as psk.h
+                s.snr = (int)std::lround(p.snrDb - es0To2500Db(p.mode));   // ★ Es/N0 → dB in 2500 Hz, as psk.h
                 s.rfHz = rf;
                 s.slotUtc = p.utcMs / 1000.0;
                 onSpot(s);
@@ -81,7 +81,7 @@ private:
 
 inline ModeDef vibeDigiMode_pskw() {
     ModeDef m;
-    m.name = "PSKW";                 // ★ "wide PSK" — the chip and its toggle ("spotsband-pskw"); spots say PSK31 / PSK63
+    m.name = "PSKW";                 // ★ "wide PSK" — the chip and its toggle ("spotsband-pskw"); spots say PSK31 … QPSK63
     m.iq = true;
     m.single = false;
     m.slotSec = 0;

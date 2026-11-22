@@ -36,7 +36,7 @@
  *     {"type":"cw_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,wpm,snr,q,active,last,first,call,country,text}]}}
  *     {"type":"cw_spot","data":{callsign,frequency,audio,wpm,snr,how,country,timestamp}}
  *
- *   PSK31/63 ('psk' on the listener's audio — the signal nearest `centre` is ONE SIGNAL's —, 'pskskim' on IQ — V12,
+ *   PSK31/63/125 and QPSK31/63 (beta91) ('psk' on the listener's audio — the signal nearest `centre` is ONE SIGNAL's —, 'pskskim' on IQ — V12,
  *   vibe_psk_run.h): CW's frames exactly, the list and spot named psk_ and carrying the mode instead of a speed
  *     {"type":"psk_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,baud,snr,imd,q,active,last,first,call,country,text}]}}
  *     {"type":"psk_spot","data":{callsign,frequency,audio,mode,snr,how,country,timestamp}}
@@ -92,7 +92,7 @@ export interface CwSignal {
   /** ★ V12 (2026-10-29): the speed as a range (absent from an older server) — src/utils/cwFormat cwWpmText. */
   wpmLo?: number; wpmHi?: number;
   /** ★ PSK only: 31 or 63, and the IMD (dB, 0 = not measured). One list draws both decoders. */
-  baud?: number; imd?: number;
+  baud?: number; imd?: number; qpsk?: boolean;   // ★ beta91: qpsk = QPSK31 / QPSK63
   /** ★ RTTY skimmer only: its settings once found (set false = still waiting for parameter detection). */
   rtty?: { set: boolean; shift: number; baud: number; reverse: boolean; settings: string };
 }
@@ -467,7 +467,7 @@ export class DecoderClient {
           active: x?.active === true, last: num(x?.last), first: num(x?.first),
           call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
           ...(psk || rtty ? {} : cwWpmRangeOf(x)),
-          ...(psk ? { baud: num(x?.baud) > 40 ? 63 : 31, imd: num(x?.imd) } : {}),
+          ...(psk ? { baud: num(x?.baud) > 100 ? 125 : num(x?.baud) > 40 ? 63 : 31, imd: num(x?.imd), qpsk: x?.qpsk === true } : {}),   // ★ beta91: PSK125, QPSK31/63
           ...(rtty ? { rtty: { set: x?.set === true, shift: num(x?.shift), baud: num(x?.baud), reverse: x?.reverse === true,
                                settings: str(x?.settings, 40) } } : {}),
         })),
@@ -575,7 +575,7 @@ export class DecoderClient {
         wpm: Number(d.wpm) || 0, snr: Number(d.snr) || 0, how: String(d.how || '').slice(0, 8),
         country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || Date.now(),
         ...(psk || rtty ? {} : cwWpmRangeOf(d)),
-        ...(psk ? { mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31' } : {}),
+        ...(psk ? { mode: ['BPSK63', 'BPSK125', 'QPSK31', 'QPSK63'].includes(d.mode) ? d.mode : 'BPSK31' } : {}),   // ★ beta91: + PSK125, QPSK31/63
         ...(rtty ? { mode: typeof d.mode === 'string' ? d.mode.replace(/[^0-9A-Za-z /.]/g, '').slice(0, 16) || 'RTTY' : 'RTTY' } : {}),
       });
       return;

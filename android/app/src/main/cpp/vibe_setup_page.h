@@ -3647,7 +3647,7 @@ const BLOCKABLE = [
    *  decoder across a wider slice, and the server enforces both with "cw" (cwskim → cw). */
   { id: "cw",     label: "CW decoder and skimmer" },
   /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch (pskskim → psk). */
-  { id: "psk",    label: "PSK31/63 decoder and skimmer" },
+  { id: "psk",    label: "PSK decoder and skimmer (PSK31/63/125, QPSK31/63)" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
   /* ★ V12 SITOR-A (2026-10-29) — the maritime ARQ teleprinter (AMTOR mode A), both stations of a link. */

@@ -215,9 +215,10 @@ private:
             if (n >= 60) break;
             if (n) j += ',';
             ++n;
-            std::snprintf(b, sizeof b, "{\"id\":%d,\"hz\":%.0f,\"audio\":%.0f,\"baud\":%d,\"snr\":%.0f,\"imd\":%.0f,\"q\":\"%s\",\"active\":%s,"
+            // ★ beta91: "qpsk" — QPSK31 / QPSK63 (with "baud" 31 / 63); "baud" 125 is PSK125
+            std::snprintf(b, sizeof b, "{\"id\":%d,\"hz\":%.0f,\"audio\":%.0f,\"baud\":%d,\"qpsk\":%s,\"snr\":%.0f,\"imd\":%.0f,\"q\":\"%s\",\"active\":%s,"
                           "\"last\":%lld,\"first\":%lld,",
-                          s.id, rfOf(s.id, s.offsetHz), skim_ ? 0.0 : s.offsetHz, s.baud, s.snrDb, s.imdDb, psk::qualityWord(s.quality),
+                          s.id, rfOf(s.id, s.offsetHz), skim_ ? 0.0 : s.offsetHz, s.baud, s.qpsk ? "true" : "false", s.snrDb, s.imdDb, psk::qualityWord(s.quality),
                           s.active ? "true" : "false", (long long)s.lastMs, (long long)s.firstMs);
             j += b;
             j += "\"call\":\"" + jsonText(s.call, 16) + "\",\"country\":\""

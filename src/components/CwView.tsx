@@ -23,7 +23,7 @@ import { plainEnglish } from '../utils/cwVocab';
 import { cwHasWpmRange, qrzCallUrl } from '../utils/cwFormat';
 import { openWebPage } from '../utils/openWebPage';
 import {
-  CW_Q_COLOURS, cwAge, cwFreqText, cwSnrText, kbIdleText, kbRateText, kbSpotRateText,
+  CW_Q_COLOURS, cwAge, cwFreqText, cwSnrText, kbIdleText, kbRateText, kbSpotRateText, pskRowMode,
   rttyRateText, rttyRowText, RTTY_WAITING, sortCwSignals, type CwList, type CwSignal, type CwSpot,
 } from '../services/cwList';
 
@@ -158,7 +158,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
           <TouchableOpacity key={`s${sg.id}`} activeOpacity={0.6}
             onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
             accessibilityLabel={`${sg.call || 'unidentified'} ${cwFreqText(sg.hz, sg.audio)}${sg.hz > 0 ? ' kilohertz' : ''}, `
-              + `${rtty ? (sg.rtty?.set ? sg.rtty.settings : RTTY_WAITING) : sg.baud !== undefined ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} words a minute`}, ${cwSnrText(sg.snr)}, `
+              + `${rtty ? (sg.rtty?.set ? sg.rtty.settings : RTTY_WAITING) : sg.baud !== undefined ? pskRowMode(sg) : `${Math.round(sg.wpm)} words a minute`}, ${cwSnrText(sg.snr)}, `
               + `${sg.q} confidence — ${rtty ? 'tap to read all it sent' : 'tap to tune'}`}
             style={[cs.row, { borderBottomColor: tk.divider }, primary && { backgroundColor: tk.selectedBg }, ring(i),
                     !sg.active && cs.gone]}

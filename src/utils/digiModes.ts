@@ -56,8 +56,10 @@ export const DIGI_MARKER_RIM = '#1A1A1A';
 /** ★ The FAMILY a spot's mode belongs to, among `families` (the server's spotModes, or the style table): "PSK31" and
  *  "PSK63" → "PSK", "Q65-60A" → "Q65", "FT8" → "FT8". Unknown → the mode itself (upper case). */
 export function digiModeFamily(mode: string, families: readonly string[] = Object.keys(DIGI_MODE_STYLE)): string {
-  const m = String(mode || '').toUpperCase();
+  const m0 = String(mode || '').toUpperCase();
   const fam = families.map((f) => String(f).toUpperCase());
+  // ★ V12 beta91: QPSK31 / QPSK63 are the PSK family's too (one engine, one colour and letter, one filter key)
+  const m = /^QPSK[0-9]+$/.test(m0) && fam.includes('PSK') ? m0.slice(1) : m0;
   if (fam.includes(m)) return m;
   const hit = fam.find((k) => m.startsWith(k + '-') || (m.startsWith(k) && /^[0-9]+$/.test(m.slice(k.length))));
   return hit ?? m;
