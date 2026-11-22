@@ -102,7 +102,8 @@ flags_for() {
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
     test-watch|test-watch-cost) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ V12 VFO A/B (vibe_watch.h)
     test-am-sync)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★ V12 SAM / ECSS / AM stereo / AM auto bandwidth (amsync.cpp)
-    test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
+    test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;
+    test-aprs-onair)       echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ APRS off air through the real NFM chain (docs/v12/APRS-ON-AIR-2.md)   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
     # ★★ V12 FreeDV as a mode (vibe_freedv.h): codec2's own transmitter → noise → our modem host and the real USB chain.
     #    NOT RUN (exit 3) without libcodec2 (apt install libcodec2-1.2 / brew install codec2) — it is dlopen'd, never linked.
     test-freedv)           echo "-O2 -I $VDSP -I $KISS $RADE_FLAGS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
@@ -122,7 +123,7 @@ flags_for() {
     test-fir-simd)         echo "-O3 -ffp-contract=fast -I $VDSP" ;;
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
-    test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    test-decoder-hosts|test-dec-dump) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;   # ★ test-dec-dump: the decoder capture + replay (docs/v12/APRS-ON-AIR-2.md)
     # ★ V12 METEOR LRPT (beta91): optimised as ctest builds it (-O3 there) — unoptimised the suite took 42 s, and the
     #   live-pass cases (a 35 s fade through the server's Run, twice) would double that.
     test-lrpt)             echo "-O2" ;;
@@ -347,7 +348,7 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c $RADE_LIBS" ;;
     test-dvsig)           echo "$VDSP/resampler.cpp $VDSP/ddc.cpp" ;;
-    test-auto-bw|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-auto-bw|test-m17|test-aprs-onair) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -483,7 +484,7 @@ deps_for() {
     test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
     test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
                               android/app/src/main/cpp/decoders/auto_notch.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/rds.cpp $VDSP/stereo.cpp $RADE_LIBS" ;;
-    test-decoder-hosts|test-digi-spots) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hosts|test-digi-spots|test-dec-dump) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp $VDSP/resampler.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc + resampler: the host carries APRS and 9600 packet (V12)
@@ -514,7 +515,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
+    test-decoder-hosts|test-dec-dump|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -1973,6 +1974,12 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
   VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-ais-aprs.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-web-ais-aprs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ 2026-11-22 APRS AUTO on a listener's own VFO with the squelch closed, and the developer decoder capture
+  #    (VIBE_DEC_AUDIO_DUMP) written by the real server and replayed by tool-dec-replay (docs/v12/APRS-ON-AIR-2.md)
+  cobj="$(cobjs_for test-dec-dump)" && g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for test-dec-dump) -o "$OUT/tool-dec-replay" \
+      "$SRC/tool-dec-replay.cpp" $(deps_for test-dec-dump) $cobj 2>"$OUT/tool-dec-replay.buildlog" || echo '   (tool-dec-replay did not build — the replay half is not run)'
+  VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" VIBE_DEC_REPLAY_BIN="$OUT/tool-dec-replay" node scripts/test-server-aprs-capture.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 2026-11-10: a listener's manual gain / AUTO reaches EVERY listener's readout (hwinfo agc + gainNow)
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-gain-readout.mjs; rc=$?

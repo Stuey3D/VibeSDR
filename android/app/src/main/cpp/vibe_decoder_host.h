@@ -49,6 +49,7 @@
 #include "vibe_psk_run.h"
 #include "vibe_rtty_skim_run.h"   // ★ V12 the RTTY skimmer — docs/v12/RTTY-SKIMMER.md
 #include "vibe_aprs_run.h"
+#include "vibe_dec_dump.h"   // ★ the developer capture of what a decoder is fed (VIBE_DEC_AUDIO_DUMP; off when unset)
 #include "vibe_fctlm.h"        // ★ V12 beta90 FUNcube BPSK 1200 telemetry (AO-73) — docs/v12/SATELLITE-BEST-SERVER.md
 #include "vibe_sat_engine.h"   // ★ V12 the satellite engine's decoder hook (the packet decoder's satellite name)    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_dsc_run.h"
@@ -353,6 +354,10 @@ public:
         /** ★ No joiner can ever attach (a background WEFAX-stations channel): the picture in progress is not copied for one
          *  (up to kReplayMax, 4 MB, a decoder) — memory bounded to the gallery's own copy. */
         bool noReplay = false;
+        /** ★ DEVELOPER CAPTURE ONLY (vibe_dec_dump.h, VIBE_DEC_AUDIO_DUMP): the server's words for what this host's audio
+         *  went through — dial, mode, IF filter, squelch, gain … — asked once a second on the decode thread with no host
+         *  lock held, and only while a capture runs. Empty = the capture's lines carry the queue figures alone. */
+        std::function<std::string()> dumpState;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -421,6 +426,11 @@ public:
                     clearLocked_(); startKey_.clear(); name_.clear();
                     log(std::string("decoder attach failed: ") + ex.what());
                     return Start::Refused;
+                }
+                // ★ the developer capture (VIBE_DEC_AUDIO_DUMP): a new file set for this attach; nothing at all when unset
+                if (vibedec::DecDump::enabled()) {
+                    auto d = std::make_shared<vibedec::DecDump>(ext, msg, session_);
+                    std::lock_guard<std::mutex> dl(dumpMtx_); dump_ = std::move(d);
                 }
                 // ★★ PAGING NEVER REACHES THE GALLERY (Stuart's spec): no tap for it at all
                 if (env_.tap && ext != "paging") { DecoderTapPtr t = env_.tap(ext, msg); std::lock_guard<std::mutex> tl(tapMtx_); tap_ = std::move(t); }
@@ -957,6 +967,7 @@ private:
         fctlm_.reset();
         aprs_.reset();
         if (packetIq_.exchange(false)) packetIqRunning().fetch_sub(1);
+        { std::lock_guard<std::mutex> dl(dumpMtx_); dump_.reset(); }   // ★ the capture closes with its decoder
         dsc_.reset();
         sitora_.reset();
         hfdl_.reset();
@@ -2003,6 +2014,7 @@ private:
                 qc_.pop_front();
                 qcSec_ = std::max(0.0, qcSec_ - (double)b.v.size() / b.rate);
                 lk.unlock();
+                if (std::shared_ptr<vibedec::DecDump> d = dumpNow_()) d->iq(b.v.data(), (int)b.v.size(), b.rate);   // ★ VIBE_DEC_AUDIO_DUMP only
                 const uint64_t c0 = vibeThreadCpuNs();
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
@@ -2068,11 +2080,28 @@ private:
             lk.unlock();
             const uint64_t c0 = vibeThreadCpuNs();
             decUtc_ = utc;   // ★ V12 the block's capture UTC, for a decoder on a UTC schedule (NCDXF)
+            if (std::shared_ptr<vibedec::DecDump> d = dumpNow_()) dumpAudio_(*d, v.data(), (int)v.size());   // ★ VIBE_DEC_AUDIO_DUMP only
             decode_(v.data(), (int)v.size());
             spots_(v.data(), (int)v.size(), utc);
             cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
             lk.lock();
         }
+    }
+    /** ★ The running capture, or null (one relaxed check when VIBE_DEC_AUDIO_DUMP is unset: the static string). */
+    std::shared_ptr<vibedec::DecDump> dumpNow_() {
+        if (!vibedec::DecDump::enabled()) return nullptr;
+        std::lock_guard<std::mutex> dl(dumpMtx_);
+        return dump_;
+    }
+    /** The audio block into the capture, and once a second its line: the queue's figures and the server's state words.
+     *  Decode thread, no host lock held (Env::dumpState may take the shim's client lock). */
+    void dumpAudio_(vibedec::DecDump& d, const float* x, int n) {
+        d.audio(x, n);
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (t - dumpTickAt_ < 1.0) return;
+        dumpTickAt_ = t;
+        double qs = 0; { std::lock_guard<std::mutex> ql(qM_); qs = (double)qFrames_ / 48000.0; }
+        d.tick(t, qs, dropped_.load(std::memory_order_relaxed), env_.dumpState ? env_.dumpState() : std::string());
     }
     void stopQueue_() {
         replayStop_.store(true);
@@ -2398,6 +2427,10 @@ private:
     std::thread qThread_;
     std::atomic<uint64_t> fed_{0}, dropped_{0};
     std::atomic<uint64_t> cpuNs_{0};
+    // ★ the developer capture (vibe_dec_dump.h): its own leaf lock — taken under decMtx_ (start, clear) or alone (loop_)
+    std::mutex dumpMtx_;
+    std::shared_ptr<vibedec::DecDump> dump_;
+    double dumpTickAt_ = 0;   // decode thread only
     std::atomic<int>      fskState_{-1};
 };
 
