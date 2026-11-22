@@ -32080,6 +32080,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return dial + a;
             };
         }
+        /* ★ DEVELOPER CAPTURE ONLY (vibe_dec_dump.h, VIBE_DEC_AUDIO_DUMP — docs/v12/APRS-ON-AIR-2.md): the words the
+         *  capture's .txt carries once a second — what this host's audio went through. Built only while the variable is set;
+         *  asked on the decode thread with no host lock held (clientMtx is a leaf here, as dialHz takes it). */
+        if (vibedec::DecDump::enabled()) {
+            auto dial = e.dialHz;
+            e.dumpState = [this, session, dial, modeOf] {
+                const std::string md = modeOf();
+                double bw = -1, chRate = 0, tau = -1; bool sq = false, voice = g_nfmVoiceShared.load(), found = session.empty();
+                float sqDb = 0, lvl = 0;
+                if (session.empty()) { sq = squelchOn.load(); sqDb = squelchDb.load(); lvl = channelDb.load(); }
+                else {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    for (auto& kv : clientDsp) {
+                        const auto& c = kv.second;
+                        if (!c || c->session != session) continue;
+                        bw = c->bwHz; chRate = c->chanRate; tau = c->deempTau; voice = c->nfmVoice.load();
+                        sq = c->squelchOn.load(); sqDb = c->squelchDb.load(); lvl = c->sigChanDb.load(); found = true;
+                        break;
+                    }
+                }
+                char b[512];
+                std::snprintf(b, sizeof b, "dial %.0f Hz mode %s bw %.0f Hz chan %.0f S/s squelch %s %.1f dB level %.1f dB nfm %s deemph %s gain %.1f dB agc %s%s%s",
+                              dial ? dial() : 0.0, md.c_str(), bw, chRate, sq ? "on" : "off", sqDb, lvl, voice ? "voice" : "all",
+                              tau < 0 ? "default" : tau == 0 ? "off" : (std::to_string((int)std::lround(tau * 1e6)) + "us").c_str(),
+                              lastGainTenthDb / 10.0, g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? "vibeagc" : "off",
+                              g_rtlDigitalAgc.load(std::memory_order_relaxed) ? " rtl-digital-agc" : "", found ? "" : " (listener gone)");
+                return std::string(b);
+            };
+        }
         /* ★★ V12: A LISTENER'S DECODES GO TO THE GALLERY TOO (Stuart, 2026-10-22: "decodes from a listener who manually
          *  ran a decoder are saved to the gallery too"), labelled live — unless the owner switched that off, or this is
          *  the decoder-only sidecar decoding a NETWORK radio for this phone's own app. The dial is followed: a listener

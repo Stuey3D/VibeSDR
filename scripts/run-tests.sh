@@ -122,7 +122,7 @@ flags_for() {
     test-fir-simd)         echo "-O3 -ffp-contract=fast -I $VDSP" ;;
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
-    test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    test-decoder-hosts|test-dec-dump) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;   # ★ test-dec-dump: the decoder capture + replay (docs/v12/APRS-ON-AIR-2.md)
     # ★★★ V12 PAGING's gate (vibe_paging_gate.h): built in, as the desktop VibeServer now is for the R36S — and still dormant
     #     outside the Android app / the handheld's radio process.
     test-paging-gate)      echo "-O2 -DVIBE_PAGING=1 -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
@@ -480,7 +480,7 @@ deps_for() {
     test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
     test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
                               android/app/src/main/cpp/decoders/auto_notch.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/rds.cpp $VDSP/stereo.cpp $RADE_LIBS" ;;
-    test-decoder-hosts|test-digi-spots) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hosts|test-digi-spots|test-dec-dump) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp $VDSP/resampler.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc + resampler: the host carries APRS and 9600 packet (V12)
@@ -511,7 +511,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
+    test-decoder-hosts|test-dec-dump|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
