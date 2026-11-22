@@ -1318,6 +1318,12 @@ add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
 target_include_directories(test-agc-rules PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-agc-rules)
 add_test(NAME agc-rules COMMAND test-agc-rules)
+# ★★★ V12 beta91 THE SATELLITE-PASS GAIN PROFILE (vibe_sat_gain.h): the setter on each radio's table, the hold against
+#     the 2026-11-22 METEOR pass's own inputs, a genuine clip still stepping down, and the ordinary gain resuming. Pure, silent.
+add_executable(test-sat-gain "${CMAKE_CURRENT_SOURCE_DIR}/test-sat-gain.cpp")
+target_include_directories(test-sat-gain PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-sat-gain)
+add_test(NAME sat-gain COMMAND test-sat-gain)
 add_executable(test-agc-record "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-record.cpp")
 target_include_directories(test-agc-record PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-agc-record)

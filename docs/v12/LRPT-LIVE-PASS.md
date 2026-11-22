@@ -101,9 +101,69 @@ while the contest runs (LRPT.md §Cost), for longer.
 - The web page's embedded copy (`vibe_web_page.h`) is **not rebuilt** on this branch — the coordinator's
   `build-web.mjs` at merge.
 
+## SATELLITE GAIN — the pass holds the gain (branch `b91-satgain`, 2026-11-22)
+
+**What cut the pass at 510 s.** The Pi 500's V4 was on VibeAGC. During the decode it stepped the gain 9 times in 10
+minutes — "converter hot" with the peak nowhere near the rail, "still chasing what the front end is making", "clean for
+8 s — gain back up" — and at 14:28:20.5 UTC "that 1.4 dB cut took 4.3 dB off the neighbourhood — still spraying, going
+down again … gain 32.8 dB": the 5.6 dB step in the recording, the satellite under the floor after it. Every one of
+those rules was written for a broadcast listener (a strong station, intermodulation round it). On a satellite each is a
+level jolt under a demodulator tracking a weak signal.
+
+**What it does now** (`android/app/src/main/cpp/vibe_sat_gain.h`, wired in `local_sdr_shim.cpp`):
+
+1. **When.** `satGainWatchTick` (housekeeping, every 2 s, just before `overloadTick`) holds the gain while a satellite
+   picture / telemetry decoder runs on a pass: an unattended pass's decoder, a pick's decoder (`lrpt`, `sstv`, `fctlm`,
+   `aprs` — not a CW beacon or a voice downlink) while its host still runs the very decoder the pick started, or LRPT /
+   FUNcube telemetry started by hand. A terrestrial APRS or SSTV run is not a pass and changes nothing.
+   **Ends** when the decoder stops, the pick goes, or at **LOS** (from the orbit). A pick armed before the rise is held
+   from the start and **measured again at AOS**; after LOS the radio is ordinary until the next AOS on the same pick.
+2. **Measure** — 4 s of the converter's headroom at the gain the radio is at (the loudest second; nothing moves unless
+   the converter is already on the rail, which is shed at once and the window restarted).
+3. **Set** — one write: the highest gain whose predicted peak sits at the radio's set point (RTL −8 dBFS = 8 dB under
+   the rail; RSP −10 dBFS), never above the owner's ceiling. Logged with the numbers, e.g.
+   `satellite pass (METEOR-M2 4 LRPT): gain set to 42.1 dB — peak -13.2 dBFS over 4 s at 37.2 dB, -8.3 dB predicted (set point -8 dBFS, 8 dB under the rail; decided by headroom) … held for the pass (clips only)`.
+4. **Hold** — no climb, no spur chasing, no "converter hot". **Only genuine clipping** (the radios' own hard-overload
+   test: two consecutive seconds on the rail) steps it down, sized as the ordinary loop sizes an overload (gross rail =
+   ≥ 18 dB in one move).
+5. **Resume** — the ordinary loop re-learns the channel from where the pass left the gain (`agcChannelForget`; on an RSP
+   VibeAGC adopts the gain and acquires).
+
+**Per radio** (AGENTS.md: each radio its own gain model):
+
+| Radio | What the pass does |
+|---|---|
+| RTL-SDR (USB and rtl_tcp), VibeAGC on | full profile in `overloadTick`, ahead of every broadcast rule; same writer and `ovl` announce as the loop |
+| SDRplay, VibeAGC (default under OpenRSP) | full profile in `vsRspSatTick`: IF placed from the 0.1 s ADC windows, the RF stage by VibeAGC's own rung rule (one rung in only with room for the whole rung + 6 dB; one out when the IF cannot shed enough); VibeAGC's tick waits |
+| SDRplay, the API's IF AGC + our RF walker (official service) | the RF walker is held for the pass; SDRplay's own IF AGC keeps running (smooth, inside their API, and what answers an overload there) |
+| Airspy R2/Mini, HF+, USRP | **unchanged**: the server drives no automatic gain loop on them (their AGC is the chip's own, or the owner's preset), and there is no ADC-peak measurement on those paths to set from. The setter itself handles the Airspy's 22-preset table (tested) — wiring it needs a peak measurement first |
+| Manual gain anywhere | untouched — a gain the owner typed is already fixed |
+| DAB's own override | untouched (a pass cannot run in DAB) |
+
+**Trade-offs, plainly.**
+- A strong terrestrial signal that appears mid-pass (a pager, a transmitter keying up) can still force a step down — the
+  one move the hold allows, because a railing converter destroys the satellite too.
+- The measurement costs **4 s** at the start (and at AOS); the gain the radio was at stands meanwhile.
+- A fixed gain cannot follow a band that gets louder or quieter during the pass: it trades tracking for stillness. The
+  margin (8 dB on the RTL against VibeAGC's adaptive −6 dBFS) is the price.
+- On a radio with several listeners (per-VFO), one listener's satellite pick holds the gain for everybody on that radio
+  — the radio has one gain, and the satellite is its most fragile consumer.
+- **The radio's own noise floor is not known on any radio yet**, so headroom decides. The setter already takes it
+  (`ownFloorDb`): with it, no more gain is taken than lifts the band's floor 10 dB over the radio's own (tested). Needs a
+  terminated-input / lowest-gain floor measurement per radio — not built.
+- The waterfall is never frozen: the one write is an ordinary gain write and §7's spectrum compensation follows it.
+
+**Tests.** `vibeserver/test-sat-gain.cpp` (ctest `sat-gain`): the setter on the RTL table, the RSP IF + LNA and the
+Airspy presets; the hold fed the 2026-11-22 inputs (hot −1.6 dBFS seconds, −30 dBFS seconds, a ±5 dB wandering floor,
+single-second rails) for 600 s — **no cut, no climb**; a genuine clip still cuts (and a gross one sheds ≥ 18 dB), and it
+does not climb back afterwards; AOS re-measure; Watch's Begin / AOS / LOS / End.
+
 ## RESUME HERE
 
 1. Merge `b91-lrptfix`; rebuild the web page; one live pass with the capture on (`VIBE_LRPT_IQ_DUMP`) — replay it with
    `tool-lrpt-replay <cf32> --engine --png <prefix>` and compare frames with this table.
-2. If passes still drop out mid-pass, look first at the server's gain changes during the pass (the 510 s step here).
+2. ★ The 510 s gain step is explained and handled on `b91-satgain` (SATELLITE GAIN above): merge it, then on a live pass
+   grep the server log for `satellite pass` / `satellite decode` — expect one "gain set to" line after ~4 s (and one at
+   AOS for an armed pick), no "converter hot" / "spraying" / "clean for" lines until "satellite pass over", and the
+   gain resuming after LOS. If a pass still drops out, look for a `on the rail` clip cut at that moment.
 3. Optional: a modulation field in the satellite entries (above); an 80k pass on air (still synthetic-only).

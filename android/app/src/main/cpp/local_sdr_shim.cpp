@@ -59,6 +59,7 @@
 #include "vibe_rsp_vibeagc.h"   // ★★★ VibeAGC for SDRplay — the combined IF + RF loop (2026-10-30)
 #include "vibe_sdrplay_lib.h"   // ★ whose driver: OpenRSP or SDRplay's own — VibeAGC's default follows it
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
+#include "vibe_sat_gain.h"    // ★ V12 beta91 the satellite-pass gain profile — measure, set once, hold (clips only)
 #include "vibe_agc_record.h"  // ★ the bounded in-memory VibeAGC record + flap counters (2026-10-20)
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
 
@@ -3646,6 +3647,20 @@ static int vsOvlBadHold() {
 }
 static constexpr double kAgcReconfigSec = 10.0;   // a cut this soon after a forget is provisional
 
+/* ══ ★★★ V12 beta91 THE SATELLITE-PASS GAIN PROFILE (vibe_sat_gain.h, docs/v12/LRPT-LIVE-PASS.md "SATELLITE GAIN") ══════
+ *  Stuart's Pi 500 V4, METEOR-M2 4, 2026-11-22: VibeAGC stepped 9 times in 10 minutes during the LRPT decode, and one
+ *  "still spraying, going down again" cut (5.6 dB, 14:28:20.5 UTC) sank the satellite into the noise. While a satellite
+ *  picture / telemetry decoder runs on a pass the radio's automatic gain is MEASURED, SET ONCE and HELD — only genuine
+ *  clipping steps it down — and the ordinary loop resumes when the decoder stops, the pick goes, or at LOS.
+ *  ★ Published by the housekeeping (satGainWatchTick, which owns the vibesatgain::Watch); read by each radio's own loop
+ *    (overloadTick for an RTL, vsRspSatTick for an RSP), each with its own vibesatgain::Hold. g_satGainSeq bumps on every
+ *    Begin / AOS so a loop knows to measure again. */
+static std::atomic<bool> g_satGainOn{false};
+static std::atomic<int>  g_satGainSeq{0};
+static std::mutex        g_satGainWhatMtx;
+static std::string       g_satGainWhat;          // "METEOR-M2 4 LRPT" — for the logs
+static std::string vsSatGainWhat() { std::lock_guard<std::mutex> lk(g_satGainWhatMtx); return g_satGainWhat; }
+
 /* ══ LIGHTNING (SFERICS) — a badge, not an instrument ═══════════════════════════════════════════
  * ★★★ MEASURED BEFORE IT WAS WRITTEN, on Stuart's V4L at Northampton on 2026-08-27 while a storm
  *     sat 25-40 km west. Three runs over the MW window (2.1 MHz centred 648 kHz): 28-33 strikes
@@ -5945,6 +5960,89 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
         g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
     }
+    return true;
+}
+
+/** ★★★ V12 beta91 THE SATELLITE-PASS GAIN PROFILE ON AN RSP (vibe_sat_gain.h, continuous mode) — VibeAGC's own loop
+ *  stands aside for the pass: the ADC peak is gathered over the measurement window from the same 0.1 s windows
+ *  VibeAGC steers by, ONE write places the IF (and, by VibeAGC's own rung rule, the RF stage — rspPlace), and from then
+ *  only two consecutive seconds with clipping windows (each second: two or more windows on the rail or the API's
+ *  corroborated overload) move it, down. The writes go through the same smoother notice and the same Update(Tuner_Gr)
+ *  as VibeAGC's. At the end VibeAGC adopts the gain the pass left and acquires from there.
+ *  @return true while the pass owns the gain — the caller skips VibeAGC's own tick. */
+static bool vsRspSatTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, double centreHz) {
+    static vibesatgain::Hold hold(vibesatgain::rspRadio());
+    static int seen = -1;
+    static double secFrom = 0, lastAt = 0, settleUntil = 0, pkMax = -99.0, clipPctMax = 0.0;
+    static unsigned lastWin = 0;
+    static int clipWins = 0, wins = 0, clipRun = 0;
+    auto& st = g_rspVagc;
+    const double now = vibersp::monoNowSec();
+    if (!g_satGainOn.load(std::memory_order_relaxed)) {
+        if (hold.active()) {
+            hold.end();
+            st.agc.adopt(sdrp->currentLnaState(), sdrp->currentIfGr());
+            LOGI("VibeAGC (RSP): satellite pass over — the automatic gain resumes from LNA %d, IF %d dB (%u set, %u clip cut%s)",
+                 sdrp->currentLnaState(), sdrp->currentIfGr(), hold.sets(), hold.cuts(), hold.cuts() == 1 ? "" : "s");
+        }
+        return false;
+    }
+    const int seq = g_satGainSeq.load(std::memory_order_relaxed);
+    const bool gap = hold.active() && now - lastAt > 5.0;   // ★ VibeAGC was not running (manual gain, a reopen): stale
+    lastAt = now;
+    auto resetSecond = [&] { pkMax = -99.0; clipPctMax = 0.0; clipWins = wins = 0; };
+    if (seq != seen || !hold.active() || gap) {
+        const bool first = !hold.active();
+        seen = seq;
+        if (first) hold.begin(now, vsSatGainWhat()); else hold.remeasure(now);
+        secFrom = now; resetSecond(); clipRun = 0; lastWin = sdrp->adcWindows(); settleUntil = now + 0.25;
+        LOGI("VibeAGC (RSP): satellite decode (%s) — gain held at LNA %d, IF %d dB (clips only); %s headroom for %.0f s",
+             hold.what().c_str(), sdrp->currentLnaState(), sdrp->currentIfGr(), first ? "measuring" : "measuring again —",
+             hold.radio().measureSec);
+        return true;
+    }
+    const unsigned w = sdrp->adcWindows();
+    if (w != lastWin) {
+        lastWin = w;
+        if (now >= settleUntil) {   // ★ the windows straddling our own write are not evidence
+            const double pk = sdrp->adcPeakDbfs();
+            if (std::isfinite(pk) && pk > -98.0) { pkMax = std::max(pkMax, pk); ++wins; }
+            const double cp = sdrp->adcClipPct();
+            if (cp > 0.0 || sdrp->overloadReal()) { ++clipWins; clipPctMax = std::max(clipPctMax, cp); }
+        }
+    }
+    if (now - secFrom < 1.0) return true;
+    secFrom = now;
+    if (wins == 0) { resetSecond(); return true; }   // ★ no fresh window this second: nothing to judge
+    clipRun = clipWins >= 2 ? clipRun + 1 : 0;
+    const int lna = sdrp->currentLnaState(), gr = sdrp->currentIfGr(), nStates = std::max(1, sdrp->lnaStateCount());
+    int grFloor = vibesatgain::kRspGrMin;
+    { const int f = LocalSdrShim::ifGrFloorAt(centreHz); if (f >= 20) grFloor = f; }
+    vibersp::VagcIn lad;                       // ★ the learned ladder, exactly as VibeAGC sizes its rungs
+    lad.band = SdrplaySource::lnaBandId(centreHz); lad.nStates = nStates;
+    for (int q = 0; q < std::min(28, nStates); ++q) { const float g = sdrp->lnaGainDb(q); if (std::isfinite(g)) lad.learnedRed[q] = -(double)g; }
+    const double rungUp = vibersp::VibeAgcRsp::rungDbFor(lad, lna - 1, lna), rungDown = vibersp::VibeAgcRsp::rungDbFor(lad, lna, lna + 1);
+    vibesatgain::In in;
+    in.now = now; in.peak = pkMax; in.clipPct = clipPctMax; in.clipRun = clipRun;
+    in.gains = nullptr; in.gainDb = sdrp->systemGainDb();
+    in.roomUpDb = (gr - grFloor) + (rfOwned && lna - 1 >= lnaFloor ? rungUp : 0.0);
+    resetSecond();
+    const vibesatgain::Out o = hold.tick(in);
+    if (!o.log.empty()) LOGI("VibeAGC (RSP): %s", o.log.c_str());
+    if (o.kind == vibesatgain::Out::None) return true;
+    if (o.kind == vibesatgain::Out::ClipCut) clipRun = 0;
+    const int grWant = o.deltaDb > 0 ? gr - (int)std::floor(o.deltaDb) : gr + (int)std::ceil(-o.deltaDb);
+    const vibesatgain::RspPlace pl = vibesatgain::rspPlace(lna, grWant, grFloor, lnaFloor, nStates, rfOwned, rungUp, rungDown);
+    if (pl.lna == lna && pl.gr == gr) { LOGI("VibeAGC (RSP): satellite pass — LNA %d, IF %d dB is already as far as it goes", lna, gr); return true; }
+    const double ifDb = -(double)(pl.gr - gr);
+    if (pl.lnaChanged) { vagcPostKnown(true, pl.lna < lna ? rungUp : -rungDown, ifDb); noteHwMoved(); }
+    else if (std::fabs(ifDb) < vibedsp::GainStepSmoother::kKnownDirectDb) vagcPostKnown(false, ifDb, 0.0);
+    else noteOwnGainWrite();
+    LOGI("VibeAGC (RSP): satellite pass — LNA %d -> %d, IF %d -> %d dB", lna, pl.lna, gr, pl.gr);
+    if (!sdrp->setGainPair(pl.lna, pl.gr)) { LOGI("VibeAGC (RSP): satellite pass — the write was not sent"); st.missTimes.push_back(now); return true; }
+    st.writeTimes.push_back(now);
+    vsRspVagcPrune(st.writeTimes, now);
+    settleUntil = now + 0.25;
     return true;
 }
 
@@ -11566,6 +11664,70 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         for (auto& k : gone) satDetachPick(k);
     }
+    /** ★★★ V12 beta91 THE SATELLITE-PASS GAIN PROFILE — is a satellite picture / telemetry decoder running on a pass, and
+     *  is the satellite up? (vibe_sat_gain.h Watch.) Every 2 s on the housekeeping thread, just before overloadTick; it
+     *  publishes g_satGainOn / g_satGainSeq and each radio's own loop does the measuring, setting and holding.
+     *  Counted: an unattended pass's decoder, a pick's decoder (lrpt · sstv · fctlm · aprs — the ones a pick attaches for
+     *  pictures, telemetry and packets; never a CW beacon or a voice downlink) while its host still runs the very decoder
+     *  the pick started, and LRPT / FUNcube telemetry started by hand (satellite-only decoders, no orbit to ask: held while
+     *  they run). A listener's own APRS or SSTV on a terrestrial frequency is not a pass and changes nothing. */
+    vibesatgain::Watch satGainWatch_;
+    void satGainWatchTick() {
+        if (frontDoorOnly || decoderOnly || stopping.load()) return;
+        auto satDec = [](const std::string& d) { return d == "lrpt" || d == "sstv" || d == "fctlm" || d == "aprs"; };
+        bool running = false; std::string key, what; long long norad = 0;
+        {   // 1. an unattended pass (its decoder on the shared host)
+            std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+            if (satPass_.on && satDec(satPass_.decoder) && !satPass_.decoderKey.empty()) {
+                std::shared_ptr<DecoderHost> h = decoders_.shared();
+                if (h && h->startKey() == satPass_.decoderKey) {
+                    running = true; norad = satPass_.norad; key = "pass:" + std::to_string(norad) + ":" + std::to_string(satPass_.tx);
+                    what = satPass_.name + " " + satPass_.label + " (unattended pass)";
+                }
+            }
+        }
+        if (!running) {   // 2. a listener's pick, while its host still runs what the pick attached
+            std::vector<SatPick> picks;
+            { std::lock_guard<std::mutex> lk(satPickMtx_); for (auto& kv : satPicks_) picks.push_back(kv.second); }
+            for (const auto& pk : picks) {
+                if (!satDec(pk.decoder) || pk.decoderKey.empty()) continue;
+                std::shared_ptr<DecoderHost> h = pk.perVfo ? decoders_.find(pk.owner) : decoders_.shared();
+                if (!h || h->startKey() != pk.decoderKey) continue;
+                running = true; norad = pk.norad; key = "pick:" + std::to_string(pk.norad) + ":" + std::to_string(pk.tx);
+                vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
+                what = satEngine().txAt(pk.norad, pk.tx, sd, tx) ? sd.name + " " + tx.label : "satellite " + std::to_string(pk.norad);
+                break;
+            }
+        }
+        if (!running) {   // 3. LRPT / FUNcube telemetry started by hand — satellite-only decoders
+            for (auto& kv : decoders_.all()) {
+                const std::string k = kv.second ? kv.second->kind() : std::string();
+                if (k == "lrpt" || k == "fctlm") { running = true; key = k; what = k == "lrpt" ? "METEOR LRPT" : "FUNcube telemetry"; break; }
+            }
+        }
+        bool knowsSky = false, up = false;
+        if (running && norad > 0 && satEngine().haveObserver()) {
+            knowsSky = true;
+            vibe::sat::Pass ps;
+            up = satEngine().passAt(norad, satClock().unix, ps);
+        }
+        const vibesatgain::Watch::Ev ev = satGainWatch_.step(running, key, knowsSky, up);
+        if (ev == vibesatgain::Watch::None) return;
+        if (ev == vibesatgain::Watch::End) {
+            const std::string was = vsSatGainWhat();
+            g_satGainOn.store(false);
+            LOGI("[sat] satellite gain: %s %s — the radio's automatic gain resumes", was.c_str(),
+                 running ? "has set (LOS)" : "is over (the decoder stopped or the pick went)");
+            return;
+        }
+        { std::lock_guard<std::mutex> lk(g_satGainWhatMtx); g_satGainWhat = what; }
+        g_satGainOn.store(true);
+        g_satGainSeq.fetch_add(1);
+        LOGI("[sat] satellite gain: %s — %s", what.c_str(),
+             ev == vibesatgain::Watch::Begin ? (knowsSky && !up ? "armed before the rise: measuring headroom now and again at AOS, then holding (clips only)"
+                                                                 : "a pass starts: measuring headroom, then holding the gain (clips only)")
+                                             : "AOS: the satellite is up — measuring headroom again");
+    }
     /** ★ A shared-dial tune or mode change while locked (brief §9): a nudge under 15 kHz moves the nominal and keeps the
      *  lock; a deliberate tune, a mode change, a bookmark ends it — the dial goes where the person asked, no freeze. */
     void satSharedTuneCheck(const std::string& type, const std::string& msg) {
@@ -14849,6 +15011,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (g_rspVagcActive.load(std::memory_order_relaxed)) {
                     const int capPosV = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
                     const int floorV  = capPosV >= 0 ? std::max(0, sdrp->lnaStateCount() - 1 - capPosV) : 0;
+                    // ★★★ V12 beta91 a satellite pass owns the gain while it runs (vsRspSatTick) — VibeAGC's own tick waits
+                    if (!vsRspSatTick(sdrp.get(), floorV, g_vibeAgcRspOn.load(std::memory_order_relaxed) != 0 && !vsRspRfFixedHere(),
+                                      rtlCenter.load() + hwOffsetHz()))
                     // ★★ V12 RF loop off where the owner has fixed the RF gain: VibeAGC keeps to the IF (vsRspRfFixedHere)
                     vsRspVagcTick(sdrp.get(), floorV, g_vibeAgcRspOn.load(std::memory_order_relaxed) != 0 && !vsRspRfFixedHere(), mode,
                                   g_dabMode.load(std::memory_order_relaxed), g_dabChannel.load(std::memory_order_relaxed),
@@ -15498,7 +15663,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         }
                     }
                 }
-                if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
+                /* ★★★ V12 beta91 A SATELLITE PASS HOLDS THE RF STAGE on this arrangement (the API's IF AGC + our RF walker,
+                 *  the default under the official SDRplay service). The IF AGC is SDRplay's own, inside their API, and
+                 *  keeps running — it is smooth and it is what answers an overload here; only our LNA walk, which steps
+                 *  a whole rung at a time, stands still until the pass is over. (Under OpenRSP VibeAGC owns both stages
+                 *  and the full measure / set / hold profile runs: vsRspSatTick.) */
+                static bool satRfHeldSaid = false;
+                const bool satRfHeld = g_satGainOn.load(std::memory_order_relaxed);
+                if (satRfHeld != satRfHeldSaid) {
+                    satRfHeldSaid = satRfHeld;
+                    LOGI("RSP RF AGC: %s", satRfHeld ? "satellite pass — the RF gain state is held (the API's IF AGC still runs)"
+                                                     : "satellite pass over — the RF walker resumes");
+                }
+                if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone && !satRfHeld)
                     vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted && !dabIfHeld);   // ★ in DAB the tick reads the converter and runs regardless
             }
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
@@ -38941,6 +39118,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     idle park, which releases the device outright), so it is the proven home for
                 //     work that is allowed to take milliseconds. 2 s also matches the detector's
                 //     own two-second dwell — there is nothing to react to faster than that.
+                satGainWatchTick();                         // ★★★ V12 beta91: a satellite pass holds the gain — before the loop reads it
                 LocalSdrShim::instance().overloadTick();
                 LocalSdrShim::instance().agcRecordTick();   // ★ the second snapshot of this 2 s cycle
                 LocalSdrShim::instance().autoBandwidthTick();
@@ -46323,6 +46501,109 @@ void LocalSdrShim::overloadTick() {
          *  be judged early. */
         const bool forget = g_gainSettleIsForget.load(std::memory_order_relaxed);
         if (tnow < until && !(acq && !forget && tnow >= until - 1.0)) return;
+    }
+
+    /* ══ ★★★ V12 beta91 A SATELLITE PASS: MEASURE, SET ONCE, HOLD (vibe_sat_gain.h; g_satGainOn from satGainWatchTick) ══
+     *  Everything below this block was written for a broadcast listener — "converter hot" below the rail, the spraying
+     *  and runaway verdicts, "clean for N s — gain back up". On a satellite each of those is a level jolt under a
+     *  demodulator tracking a weak signal (the Pi 500's METEOR pass, 2026-11-22: 9 steps in 10 minutes, the last one
+     *  lost the picture). While a pass is on, none of it runs: the headroom is measured for a few seconds, ONE gain is
+     *  written, and from then only two seconds on the rail (the hard-overload test, g_adcClipRun) moves it — down.
+     *  ★ Same writer as the loop below (queueHwGain, the same announce), so the slider, the readout and the AGC record
+     *    show every move with its reason. The waterfall is untouched: §7's spectrum compensation follows a gain write
+     *    exactly as it follows the loop's own.
+     *  ★ When it ends the loop re-learns the channel (agcChannelForget): nothing judged before the pass is judged after. */
+    {
+        static vibesatgain::Hold satHold(vibesatgain::rtlRadio());
+        static int satSeen = -1;
+        static double satLastAt = 0.0;
+        const double tnow = Impl::nowSecs();
+        const bool satWant = g_satGainOn.load(std::memory_order_relaxed);
+        if (!satWant && satHold.active()) {
+            satHold.end();
+            LOGI("satellite pass over — VibeAGC resumes from %.1f dB (%u set, %u clip cut%s during the pass)",
+                 p->lastGainTenthDb / 10.0, satHold.sets(), satHold.cuts(), satHold.cuts() == 1 ? "" : "s");
+            agcChannelForget("satellite pass over — the automatic gain resumes");
+            return;
+        }
+        if (satWant) {
+            const int seq = g_satGainSeq.load(std::memory_order_relaxed);
+            // ★ a gap (the owner had manual gain, a whole-radio mode, a released radio): what was measured is stale
+            const bool gap = satHold.active() && tnow - satLastAt > 8.0;
+            satLastAt = tnow;
+            if (seq != satSeen || !satHold.active() || gap) {
+                const bool first = !satHold.active();
+                satSeen = seq;
+                if (first) satHold.begin(tnow, vsSatGainWhat()); else satHold.remeasure(tnow);
+                // ★ nothing the broadcast loop had on trial may be judged across the pass
+                g_climbAt.store(0.0, std::memory_order_relaxed);
+                g_dropAt.store(0.0, std::memory_order_relaxed);
+                g_wantDown.store(false, std::memory_order_relaxed);
+                g_agcFastCut.store(0, std::memory_order_relaxed);
+                g_adcPeakHoldReset.store(true, std::memory_order_relaxed);   // ★ the window's peak starts here
+                LOGI("satellite decode (%s) — gain held at %.1f dB (clips only); %s headroom for %.0f s",
+                     satHold.what().c_str(), p->lastGainTenthDb / 10.0, first ? "measuring" : "measuring again —",
+                     satHold.radio().measureSec);
+                return;
+            }
+            static std::vector<int> satGains;
+            int cur = 0, tgtIdx = 0;
+            {
+                VIBE_HW_LOCK();
+                const bool tcpSrc = p->useTcp() && p->tcpHasGain();
+                if ((!p->dev && !tcpSrc) || p->radioReleased.load()) return;
+                if (tcpSrc) satGains = p->tcpGains;
+                else if (satGains.empty()) {
+                    const int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+                    if (n > 1) { satGains.resize((size_t)n); rtlsdr_get_tuner_gains(p->dev, satGains.data()); }
+                }
+                if (satGains.size() <= 1) return;
+                const int n = (int)satGains.size();
+                for (int i = 0; i < n; i++) if (satGains[(size_t)i] <= target) tgtIdx = i;
+                cur = std::clamp(tgtIdx - g_ovlSteps.load(std::memory_order_relaxed), 0, tgtIdx);
+            }
+            vibesatgain::In in;
+            in.now = tnow;
+            in.peak = std::max(g_adcPeakDbfs.load(std::memory_order_relaxed), g_adcPeakHeldDbfs.load(std::memory_order_relaxed));
+            in.clipPct = g_adcClipPct.load(std::memory_order_relaxed);
+            in.clipRun = g_adcClipRun.load(std::memory_order_relaxed);
+            in.floorDb = p->iqFloorDb.load();
+            in.ownFloorDb = NAN;   // ★ not known on an RTL yet (no terminated-input measurement) — headroom decides
+            in.gains = &satGains; in.curIdx = cur; in.ceilIdx = tgtIdx;
+            const vibesatgain::Out o = satHold.tick(in);
+            if (!o.log.empty()) LOGI("%s", o.log.c_str());
+            if (o.kind == vibesatgain::Out::None || o.idx < 0 || o.idx == cur) return;
+            const int idx = o.idx, want = tgtIdx - idx, from = satGains[(size_t)cur], applied = satGains[(size_t)idx];
+            {
+                VIBE_HW_LOCK();
+                if (p->radioReleased.load()) return;
+                g_digGainTarget.store(1.0f, std::memory_order_relaxed);
+                g_ovlSteps.store(want, std::memory_order_relaxed);
+                g_ovlLastChangeAt.store(tnow, std::memory_order_relaxed);
+                g_ovlLastDir.store(idx < cur ? -1 : 1, std::memory_order_relaxed);
+                agcSettleAfterGain(tnow);
+                p->lastGainTenthDb = applied;
+                if (idx < cur) g_adcClipRun.store(0, std::memory_order_relaxed);
+                else           g_adcCleanRun.store(0, std::memory_order_relaxed);
+                g_adcPeakHoldReset.store(true, std::memory_order_relaxed);
+            }
+            g_agcRecord.gain(agcWallNow(), vibeagc::GainSrc::Loop, from, applied,
+                             o.kind == vibesatgain::Out::ClipCut ? "satellite pass: adc on the rail" : "satellite pass: set from headroom");
+            p->queueHwGain(applied);
+            const std::string m = std::string("{\"type\":\"ovl\",\"steps\":") + std::to_string(want)
+                                + ",\"dir\":" + (idx < cur ? "-1" : "1")
+                                + ",\"gain\":" + std::to_string(applied)
+                                + ",\"agc\":1"
+                                + ",\"digitalAgc\":" + (g_rtlDigitalAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                                + ",\"adcPeak\":" + std::to_string((int)llround(g_adcPeakDbfs.load(std::memory_order_relaxed)))
+                                + "}";
+            if (!g_agcQuietAnnounce)
+                for (auto& pr : p->allSpecPeers()) {
+                    p->sendHwInfo(pr.sock);
+                    if (pr.sock && pr.sock->isOpen()) p->sendText(pr.sock, m);
+                }
+            return;
+        }
     }
     const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
     const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
