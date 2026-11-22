@@ -135,7 +135,7 @@ level jolt under a demodulator tracking a weak signal.
 |---|---|
 | RTL-SDR (USB and rtl_tcp), VibeAGC on | full profile in `overloadTick`, ahead of every broadcast rule; same writer and `ovl` announce as the loop |
 | SDRplay, VibeAGC (default under OpenRSP) | full profile in `vsRspSatTick`: IF placed from the 0.1 s ADC windows, the RF stage by VibeAGC's own rung rule (one rung in only with room for the whole rung + 6 dB; one out when the IF cannot shed enough); VibeAGC's tick waits |
-| SDRplay, the API's IF AGC + our RF walker (official service) | the RF walker is held for the pass; SDRplay's own IF AGC keeps running (smooth, inside their API, and what answers an overload there) |
+| SDRplay, the API's IF AGC + our RF walker (official service) | the RF walker is held for the pass; SDRplay's own IF AGC keeps running (smooth, inside their API, and what answers an overload there), aimed for the pass at −22 dBFS average (the −10 peak less ~12 dB peak-to-average; `rspApiPassSetPoint`), or the owner's own target if they chose a lower one; their target is put back at the end (Stuart 11-22) |
 | Airspy R2/Mini, HF+, USRP | **unchanged**: the server drives no automatic gain loop on them (their AGC is the chip's own, or the owner's preset), and there is no ADC-peak measurement on those paths to set from. The setter itself handles the Airspy's 22-preset table (tested) — wiring it needs a peak measurement first |
 | Manual gain anywhere | untouched — a gain the owner typed is already fixed |
 | DAB's own override | untouched (a pass cannot run in DAB) |

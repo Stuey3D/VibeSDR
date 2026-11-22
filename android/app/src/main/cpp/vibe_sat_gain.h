@@ -61,6 +61,21 @@ constexpr int    kClipRunSec   = 2;      // ★ the radios' own hard-overload te
 inline Radio rtlRadio() { return {"RTL-SDR", 0.0, -8.0, kMeasureSec}; }   // ★ 8 dB under the rail: VibeAGC aims −6 adaptively
 inline Radio rspRadio() { return {"SDRplay", 0.0, -10.0, kMeasureSec}; }  // ★ its loop aims −20; a fixed pass can sit higher
 
+/* ── THE SDRplay OFFICIAL-API ARRANGEMENT ─────────────────────────────────────────────────────────────────────
+ * ★★ Under SDRplay's own service the IF stage is SDRplay's IF AGC (inside their API), not ours, so the measure / set /
+ *    hold profile cannot run on it. What a pass CAN do is aim that AGC at the same operating point (Stuart 11-22: "SDRplays
+ *    own software should have the ifagc target set accordingly"). The API's loop steers an AVERAGE (its setPoint_dBfs) and
+ *    cannot see peaks; a pass's capture is noise-like, about 12 dB peak-to-average, so the −10 dBFS PEAK the OpenRSP
+ *    profile sets is an average set point of −22. (DAB's −40 is the same reasoning for OFDM plus its strong neighbours.)
+ * ★ An owner who chose a LOWER target (more headroom — strong locals) keeps theirs: a pass never raises it past what they
+ *   typed. −999 = the owner never chose one. Put back exactly at the end of the pass. */
+constexpr int kRspApiPeakToAvgDb = 12;
+constexpr int kRspApiSetPointDbfs = -10 - kRspApiPeakToAvgDb;   // −22
+inline int rspApiPassSetPoint(int ownerSetPoint) {
+    if (ownerSetPoint == -999) return kRspApiSetPointDbfs;
+    return ownerSetPoint < kRspApiSetPointDbfs ? ownerSetPoint : kRspApiSetPointDbfs;
+}
+
 /* ── THE SETTER ──────────────────────────────────────────────────────────────────────────────────────────── */
 struct Choice {
     int    idx = 0;                 // into the ascending gain table

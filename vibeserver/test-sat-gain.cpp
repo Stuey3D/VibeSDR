@@ -226,6 +226,15 @@ int main() {
         ok(w.step(false, "", false, false) == Watch::End, "...ends when it stops");
     }
 
+    printf("\nThe official SDRplay API: the IF AGC's set point for a pass\n");
+    {
+        ok(rspApiPassSetPoint(-999) == -22, "owner never chose one: -22 dBFS average (the -10 peak, 12 dB peak-to-average)");
+        ok(rspApiPassSetPoint(-30) == -30, "owner CHOSE -30 (more headroom than -22): kept — only the unset default is raised");
+        ok(rspApiPassSetPoint(-15) == -22, "owner above it: lowered to -22 for the pass");
+        ok(rspApiPassSetPoint(-45) == -45, "owner chose MORE headroom (-45): kept, a pass never raises it");
+        ok(rspApiPassSetPoint(-22) == -22, "owner exactly at it: unchanged");
+    }
+
     printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }

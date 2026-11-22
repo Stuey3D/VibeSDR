@@ -15674,6 +15674,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     satRfHeldSaid = satRfHeld;
                     LOGI("RSP RF AGC: %s", satRfHeld ? "satellite pass — the RF gain state is held (the API's IF AGC still runs)"
                                                      : "satellite pass over — the RF walker resumes");
+                    /* ★★ AND THE API's IF AGC AIMS AT THE PASS's OPERATING POINT (vibesatgain::rspApiPassSetPoint, Stuart
+                     *    11-22). Written to the radio only, never to the owner's saved target (g_dsp.rspAgcSet), so the
+                     *    end of the pass — or a restart mid-pass — puts back exactly what they chose (−30 if nothing). */
+                    if (sdrpAgcWanted) {
+                        const int owner = vsDesiredAgcSet();
+                        const int want = satRfHeld ? vibesatgain::rspApiPassSetPoint(owner) : (owner > -999 ? owner : -30);
+                        if (want != sdrp->ifAgcSetPointDbfs()) {
+                            LOGI("RSP IF AGC: %s — target %d -> %d dBFS", satRfHeld ? "satellite pass" : "satellite pass over",
+                                 sdrp->ifAgcSetPointDbfs(), want);
+                            sdrp->setIfAgcSetPoint(want);
+                        }
+                    }
                 }
                 if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone && !satRfHeld)
                     vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted && !dabIfHeld);   // ★ in DAB the tick reads the converter and runs regardless
