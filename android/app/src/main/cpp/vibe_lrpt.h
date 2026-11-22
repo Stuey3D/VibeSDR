@@ -330,6 +330,10 @@ public:
     }
     bool demodLocked() const { return lead().demod->locked(); }
     double lockMetric() const { return lead().demod->lockMetric(); }
+    /** Es/N0 (linear) the lead demodulator measures (0 on noise). */
+    double esn0() const { return lead().demod->esn0(); }
+    /** ★ diagnostics: how often the lead demodulator's x⁴ acquisition has set its NCO. */
+    uint64_t acquisitions() const { return lead().demod->acquisitions(); }
     bool syncLocked() const { for (auto& ch : chains_) for (auto& p : ch->paths) if (p.sync && p.sync->locked()) return true; return false; }
     bool decoding() const { for (auto& ch : chains_) if (ch->decoding()) return true; return false; }
     const char* modeName() const { return lead().oqpsk ? "OQPSK" : "QPSK"; }

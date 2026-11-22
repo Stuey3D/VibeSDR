@@ -280,6 +280,8 @@ public:
     }
 
     bool locked() const { return locked_; }
+    /** Es/N0 (linear) from the last 2048 symbols' moments (0 on noise). */
+    double esn0() const { return esn0_; }
     double lockMetric() const { return lockMetric_; }
     double carrierHz() const { return freq_ * cfg_.sampleRate / (2 * M_PI) + doppler_.load(std::memory_order_relaxed); }
     const DemodConfig& config() const { return cfg_; }
@@ -366,10 +368,18 @@ private:
         // ── lock detector: 1 − E(|I|−|Q|)² / E(I²+Q²) — 1.0 locked and clean, ≈0.64 unlocked or on noise ──
         const float d = std::fabs(I) - std::fabs(Q);
         lockAcc_ += double(d * d) / double(r * r);
+        { const double p2 = double(I) * I + double(Q) * Q; m2_ += p2; m4_ += p2 * p2; }
         if (++lockN_ == 2048) {
             lockMetric_ = 1.0 - lockAcc_ / 2048.0;
             lockAcc_ = 0; lockN_ = 0;
             locked_ = lockMetric_ > 0.80;
+            /* ★★ THE SIGNAL READING: Es/N0 by the M2M4 moments of the symbol points (Pauluzzi & Beaulieu, 2000) —
+             *  S = √(2·M2² − M4), N = M2 − S. Blind to the carrier's phase, so it reads the signal before the loop has
+             *  locked, and pure complex noise gives 2·M2² = M4 → S = 0 → 0. */
+            const double M2 = m2_ / 2048.0, M4 = m4_ / 2048.0, k = 2 * M2 * M2 - M4;
+            const double S = k > 0 ? std::sqrt(k) : 0.0, N = M2 - S;
+            esn0_ = N > 1e-30 ? S / N : 1e3;
+            m2_ = m4_ = 0;
         }
     }
     void emit(float I, float Q, std::vector<int8_t>& out) {
@@ -390,7 +400,7 @@ private:
     std::atomic<double> doppler_{0.0};
     float pow_ = 1.f, agc_ = 1.f, agcG_ = 1.f; double amp_ = 0;
     std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
-    double lockAcc_ = 0, lockMetric_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
+    double lockAcc_ = 0, lockMetric_ = 0, m2_ = 0, m4_ = 0, esn0_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
 };
 
 } // namespace vibelrpt

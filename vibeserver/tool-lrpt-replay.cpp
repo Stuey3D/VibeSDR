@@ -40,6 +40,16 @@ DopLog readLog(const std::string& path) {
     return d;
 }
 
+/** Replay options (developer knobs: what the server would have done with a different attach or no engine). */
+struct ReplayOpts {
+    double symbolRate = 0;      ///< 0 = AUTO over 72k / 80k (what the clients send); 72000 / 80000 = pinned
+    bool noDoppler = false;     ///< ignore the logged feed-forward (the receiver acquires and tracks alone)
+    double from = 0, to = 1e9;  ///< seconds of the capture to feed
+    std::string png;            ///< write the pass's composite (or first channel) here
+    bool cadu = false;          ///< print every CADU: time, ASM score, ambiguity, Viterbi metric, the four RS words
+};
+ReplayOpts gOpt;
+
 /** Feed a capture through a Run; returns good frames. Prints the status line once a second when `verbose`. */
 unsigned long long replay(const std::string& cf32, const std::string& txt, bool verbose) {
     DopLog dl = readLog(txt);
@@ -52,21 +62,46 @@ unsigned long long replay(const std::string& cf32, const std::string& txt, bool 
     if (!f) { std::fprintf(stderr, "cannot open %s\n", cf32.c_str()); return 0; }
     double tNow = 0;
     Run::Opts o;
-    o.rateAuto = true;
+    o.rateAuto = !(gOpt.symbolRate > 0);
+    if (gOpt.symbolRate > 0) { o.symbolRate = gOpt.symbolRate >= 76000 ? 80000 : 72000; o.interleaved = o.symbolRate == 80000; }
+    if (gOpt.noDoppler) o.dopplerHz = [] { return 0.0; }; else
     o.dopplerHz = [&] { auto it = dl.at.upper_bound(long(tNow)); if (it == dl.at.begin()) return dl.at.empty() ? 0.0 : dl.at.begin()->second; --it; return it->second; };
     std::string last;
-    o.json = [&](const std::string& j) { last = j; if (verbose) std::printf("%7.1f s  %s\n", tNow, j.c_str()); };
+    const Receiver* rxNow = nullptr;
+    o.json = [&](const std::string& j) {
+        last = j;
+        if (verbose) std::printf("%7.1f s  esn0 %+5.1f dB  %s\n", tNow, rxNow ? 10 * std::log10(std::max(1e-3, rxNow->esn0())) : -99.0, j.c_str());
+    };
     unsigned long long frames = 0;
+    o.log = [&](const std::string& l) { if (verbose) std::printf("%7.1f s  %s\n", tNow, l.c_str()); };
+    o.pictures = [&](const std::vector<Picture>& ps, bool partial) {
+        std::printf("%7.1f s  pictures%s:", tNow, partial ? " (partial)" : "");
+        for (const auto& p : ps) std::printf(" [%s %dx%d]", p.name.c_str(), p.w, p.h);
+        std::printf("\n");
+        if (!gOpt.png.empty() && !ps.empty()) {
+            static int k = 0;
+            const std::string path = gOpt.png + "-" + std::to_string(k++) + ".png";
+            if (FILE* pf = std::fopen(path.c_str(), "wb")) { std::fwrite(ps.front().png.data(), 1, ps.front().png.size(), pf); std::fclose(pf); std::printf("          wrote %s\n", path.c_str()); }
+        }
+    };
+    if (gOpt.cadu) o.made = [&](Receiver& rx) {
+        rx.setCaduDiag([&](int sc, int x, int vit, const int* pw) {
+            std::printf("%8.2f cadu asm %2d x %d vit %4d rs %d %d %d %d\n", tNow, sc, x, vit, pw[0], pw[1], pw[2], pw[3]);
+        });
+    };
     {
         Run run(o);
         const int blk = int(dl.rate / 20);
         std::vector<std::complex<float>> buf((size_t)blk);
         size_t got;
-        while ((got = std::fread(buf.data(), sizeof(std::complex<float>), buf.size(), f)) > 0) {
+        if (gOpt.from > 0) { fseeko(f, off_t(std::llround(gOpt.from * dl.rate)) * off_t(sizeof(std::complex<float>)), SEEK_SET); tNow = gOpt.from; }
+        while (tNow < gOpt.to && (got = std::fread(buf.data(), sizeof(std::complex<float>), buf.size(), f)) > 0) {
             run.feedIq(buf.data(), int(got), dl.rate, 0);
+            rxNow = run.receiver();
             tNow += got / dl.rate;
         }
         if (const Receiver* rx = run.receiver()) frames = rx->stats().rsOk;
+        run.finish(false);
     }
     std::fclose(f);
     std::printf("replayed %.1f s at %.0f S/s: %llu good frames\n", tNow, dl.rate, frames);
@@ -111,8 +146,20 @@ int selftest(const std::string& dir) {
 
 int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[1], "--selftest") == 0) return selftest(argv[2]);
-    if (argc < 2) { std::fprintf(stderr, "usage: %s <capture.cf32> [capture.txt] | --selftest <dir>\n", argv[0]); return 2; }
-    const std::string cf32 = argv[1];
-    const std::string txt = argc >= 3 ? argv[2] : cf32.substr(0, cf32.size() - 5) + ".txt";
+    std::vector<std::string> pos;
+    for (int i = 1; i < argc; i++) {
+        const std::string a = argv[i];
+        auto val = [&] { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
+        if (a == "--rate") gOpt.symbolRate = std::atof(val().c_str());
+        else if (a == "--no-doppler") gOpt.noDoppler = true;
+        else if (a == "--from") gOpt.from = std::atof(val().c_str());
+        else if (a == "--to") gOpt.to = std::atof(val().c_str());
+        else if (a == "--png") gOpt.png = val();
+        else if (a == "--cadu") gOpt.cadu = true;
+        else pos.push_back(a);
+    }
+    if (pos.empty()) { std::fprintf(stderr, "usage: %s <capture.cf32> [capture.txt] [--rate 72000|80000] [--no-doppler] [--from s] [--to s] [--png prefix] | --selftest <dir>\n", argv[0]); return 2; }
+    const std::string cf32 = pos[0];
+    const std::string txt = pos.size() >= 2 ? pos[1] : cf32.substr(0, cf32.size() - 5) + ".txt";
     return replay(cf32, txt, true) > 0 ? 0 : 1;
 }

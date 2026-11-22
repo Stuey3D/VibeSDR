@@ -55,6 +55,7 @@ public:
         /** The pass's pictures (full size) — the gallery's copy. `partial` = cut off by a stop, not the pass ending. */
         std::function<void(const std::vector<Picture>&, bool partial)> pictures;
         std::function<void(const std::string&)> log;
+        std::function<void(Receiver&)> made;                             ///< ★ test seam: each new receiver (diagnostics)
     };
     explicit Run(Opts o) : o_(std::move(o)) {}
 
@@ -137,6 +138,7 @@ private:
     void newReceiver() {
         ReceiverConfig c; c.sampleRate = rate_; c.symbolRate = o_.symbolRate; c.mod = o_.mod; c.diff = o_.diff; c.interleaved = o_.interleaved; c.rateAuto = o_.rateAuto;
         rx_ = std::make_unique<Receiver>(c);
+        if (o_.made) o_.made(*rx_);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
         if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
                            + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
