@@ -27,6 +27,7 @@
 #pragma once
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <vector>
@@ -50,7 +51,7 @@ inline const std::vector<Station>& stations() {
     static const std::vector<Station> s = {
         // Europe
         { "gya",   "GYA",            "Northwood",            "United Kingdom", { 2618.5, 4610.0, 8040.0, 11086.5 } },
-        { "dwd",   "DDH3 / DDK3 / DDK6", "Hamburg-Pinneberg (DWD)", "Germany", { 3855.0, 7880.0, 13882.5 } },
+        { "dwd",   "DDH3 / DDK3 / DDK6", "Pinneberg (DWD)",  "Germany", { 3855.0, 7880.0, 13882.5 } },
         { "svj4",  "SVJ4",           "Athens",               "Greece",         { 4482.9, 8106.9 } },
         { "rbw",   "RBW",            "Murmansk",             "Russia",         { 5336.0, 6445.5, 7908.8, 10130.0 } },
         // North America
@@ -100,7 +101,9 @@ inline std::string khzText(double hz) {
  *  frequency: "New Orleans NMG / Valparaíso CBV 17146.4 kHz"). */
 inline std::string label(double centreHz) {
     std::string s;
-    for (const Station* st : stationsOn(centreHz)) s += (s.empty() ? "" : " / ") + std::string(st->name) + " " + st->call;
+    // ★ a station whose call sign differs by frequency (DWD's DDH3 / DDK3 / DDK6) is named without it
+    for (const Station* st : stationsOn(centreHz))
+        s += (s.empty() ? "" : " / ") + std::string(st->name) + (std::strchr(st->call, '/') ? std::string() : " " + std::string(st->call));
     return (s.empty() ? std::string("WEFAX") : s) + " " + khzText(centreHz) + " kHz";
 }
 

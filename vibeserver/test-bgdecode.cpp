@@ -940,8 +940,9 @@ static void wefaxStations() {
     namespace ws = wefaxst;
     ok(ws::known(4610000) && ws::known(7880000) && ws::known(13882500) && ws::known(2618500) && ws::known(11086500),
        "Northwood 2618.5 / 4610 / 11086.5 and DWD 7880 / 13882.5 kHz are in the list");
-    ok(ws::label(4610000) == "Northwood GYA 4610.0 kHz" && ws::label(17146400) == "New Orleans NMG / Valpara\xc3\xadso CBV 17146.4 kHz",
-       "labels: " + ws::label(4610000) + " · " + ws::label(17146400));
+    ok(ws::label(4610000) == "Northwood GYA 4610.0 kHz" && ws::label(17146400) == "New Orleans NMG / Valpara\xc3\xadso CBV 17146.4 kHz"
+       && ws::label(7880000) == "Pinneberg (DWD) 7880.0 kHz",
+       "labels: " + ws::label(4610000) + " · " + ws::label(17146400) + " · " + ws::label(7880000) + " (a call sign per frequency is left out)");
     ok(std::fabs(ws::dialOf(4610000) - 4608100) < 0.5, "the dial is 1.9 kHz below (4610.0 → 4608.1 USB)");
     ok(!ws::known(5807000), "Wellington ZKLF (stopped 2023) is not offered");
     const std::string hfOnly = ws::stationsJson([](double lo, double hi) { return lo >= 3000000 && hi <= 9000000; });

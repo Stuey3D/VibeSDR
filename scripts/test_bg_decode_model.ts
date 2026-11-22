@@ -134,7 +134,7 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
   ok(collectBg(parseBg('{"on":false,"profiles":[{"centre":0,"vfos":[{"hz":0,"mode":"usb","dec":"wefax-stations","fax":[4610000]}]}]}')) !== '', 'a stations row alone counts as something set up (its hz is 0)');
   ok(bgDecoderSetsFreq('wefax-stations'), 'its row has no frequency of its own');
   const caps = parseBgCaps('{"decoders":[{"id":"wefax","label":"WEFAX (120 LPM)","modes":["usb"],"tone":1900},{"id":"wefax-stations","label":"WEFAX stations (several in one slot)","modes":["usb"],"tone":1900,"fax":true}],'
-    + '"wefaxStations":[{"id":"gya","call":"GYA","name":"Northwood","country":"United Kingdom","freqs":[2618500,4610000,8040000,11086500]},{"id":"dwd","call":"DDH3 / DDK3 / DDK6","name":"Hamburg-Pinneberg (DWD)","country":"Germany","freqs":[3855000,7880000,13882500]}]}')!;
+    + '"wefaxStations":[{"id":"gya","call":"GYA","name":"Northwood","country":"United Kingdom","freqs":[2618500,4610000,8040000,11086500]},{"id":"dwd","call":"DDH3 / DDK3 / DDK6","name":"Pinneberg (DWD)","country":"Germany","freqs":[3855000,7880000,13882500]}]}')!;
   ok(caps.decoders[1].fax === true && caps.wefaxStations.length === 2 && caps.wefaxStations[0].freqs[1] === 4610000, 'the engine\'s caps carry the decoder (fax) and the stations');
   ok(parseBgCaps('{"decoders":[{"id":"navtex","modes":["usb"]}]}')!.wefaxStations.length === 0, 'an older engine: no stations (the decoder is not offered)');
   ok(bgFaxIn(4610000, 4400000, 2000000) && !bgFaxIn(8040000, 4400000, 2000000), '4610 is inside a 2 MS/s window at 4.4 MHz, 8040 is not');

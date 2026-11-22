@@ -42,7 +42,7 @@ const note = () => box.all().find((e) => e.attrs.class === 'hint bgFaxNote');
 // the server's list as GET /vibeserver/hardware sends it for an HF radio (vibe_wefax_stations.h stationsJson)
 const STATIONS = [
   { id: 'gya', call: 'GYA', name: 'Northwood', country: 'United Kingdom', freqs: [2618500, 4610000, 8040000, 11086500] },
-  { id: 'dwd', call: 'DDH3 / DDK3 / DDK6', name: 'Hamburg-Pinneberg (DWD)', country: 'Germany', freqs: [3855000, 7880000, 13882500] },
+  { id: 'dwd', call: 'DDH3 / DDK3 / DDK6', name: 'Pinneberg (DWD)', country: 'Germany', freqs: [3855000, 7880000, 13882500] },
   { id: 'nmf', call: 'NMF', name: 'Boston', country: 'USA', freqs: [4235000, 6340500, 9110000, 12750000] },
 ];
 const P = { on: true, waitMin: 5, profiles: [{ centre: 6000000, from: '00:00', to: '00:00',
