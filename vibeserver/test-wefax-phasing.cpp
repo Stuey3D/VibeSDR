@@ -162,14 +162,19 @@ struct Tx {
         }
     }
     void noise(double sec) { s.noise((int)(sec * FS)); }
+    // ★ receiver noise as a real SSB passband gives it — a new grey every 24 samples (~2 kHz), not every sample: per-sample
+    //   white noise averages out over the decoder's 8-pixel blocks and reads FLAT (the steady-tone rule holds the verdict)
+    void rxNoise(double sec) { std::uniform_real_distribution<double> u(0, 1); double v = 0.5; for (int k = 0; k < (int)(sec * FS); k++) { if (k % 24 == 0) v = u(s.rng); s.tone(v); } }
 };
 struct Pictures { int starts = 0; std::vector<int> firstLine, lines; std::vector<std::vector<double>> colSum; bool backwards = false; std::string diag; };
-static Pictures decode(const std::vector<int16_t>& a) {
-    WefaxDecoder::Config cfg; cfg.lpm = 120; cfg.usePhasing = true; cfg.autoStart = false; cfg.autoStop = false;
+static Pictures decode(const std::vector<int16_t>& a, bool background = false) {
+    // ★ background: the options an unattended WEFAX VFO runs with (vibe_bgdecode_config.h attachMsg — auto_start + auto_stop)
+    WefaxDecoder::Config cfg; cfg.lpm = 120; cfg.usePhasing = true; cfg.autoStart = background; cfg.autoStop = background;
     WefaxDecoder dec(FS, cfg);
     Pictures p; p.firstLine.push_back(-1); p.lines.push_back(0); p.colSum.emplace_back(dec.width(), 0.0);
     int last = -1;
     dec.onDiag = [&](const std::string& m) { if (getenv("WEFAX_TEST_VERBOSE")) std::printf("      %s\n", m.c_str()); p.diag += m + " | "; };
+    dec.onPhase = [&](int ph) { if (getenv("WEFAX_TEST_VERBOSE")) std::printf("      phase %d\n", ph); };
     dec.onStart = [&]() { p.starts++; p.firstLine.push_back(-1); p.lines.push_back(0); p.colSum.emplace_back(dec.width(), 0.0); last = -1; };
     dec.onLine = [&](uint32_t ln, uint32_t w, const uint8_t* px) {
         if ((int)ln <= last) p.backwards = true;   // a client would start a new picture here
@@ -292,6 +297,34 @@ int main() {
       Tx t(37); t.noise(600);
       auto p = decode(t.s.out);
       check(p.starts == 0, "ten minutes of noise starts no chart"); }
+    // ── ★★★ WAITING IN THE BACKGROUND: A CHART OUT OF THE NOISE (2026-11-22) ──────────────────────────────────────────
+    // Northwood 4610 off Stuart's RX888 at 10:00 UTC: noise, then a chart faded in ~2½ minutes after it began — no start
+    // tone (best 2 of 10), no phasing (0 of 20) — and its stop tone at 10:11:09. Waiting for a start, the background decoder
+    // drew nothing (wefax_wav bg: "0 begun"). The numbers here are that recording's: ~70 s of noise before, a 940-line chart
+    // (≈ 1250 sent less the 2½ minutes lost), the stop tone. Measured on the recording after the fix: begun at 2246.4 s,
+    // 880 lines, ended on the stop tone; 5 h of other modes and noise (NAVTEX 2 h, FT8 1 h, SSTV 1 h 45, MSF, DCF77): 0 begun.
+    { Tx t(41); t.noise(70); t.chart(940); t.stopTone(); t.noise(20);
+      auto p = decode(t.s.out, true);
+      std::printf("   .. background, a chart that fades in with no start tone or phasing: %d START(s), %d lines\n", p.starts, p.lines.back());
+      check(p.starts == 1 && p.lines.back() >= 900, "★★ background: a chart out of the noise (no start tone, no phasing) is begun and drawn ("
+            + std::to_string(p.lines.back()) + " of 940 lines)");
+      check(p.diag.find("a chart out of the noise") != std::string::npos && p.diag.find("stop tone on") != std::string::npos, "…said why in the log, and ended on its stop tone"); }
+    { Tx t(42); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(300); t.stopTone(); t.noise(30); t.chart(300);
+      auto p = decode(t.s.out, true);
+      std::printf("   .. background, chart, stop tone, chart with no start tone or phasing: %d START(s), last %d lines\n", p.starts, p.lines.back());
+      check(p.starts == 2 && p.lines.back() >= 280, "★ background: a chart after the stop tone is a new chart too (the rule never fired in background before: "
+            "the chart/noise verdict was only measured on lines being drawn)"); }
+    { Tx t(43); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(300);
+      auto p = decode(t.s.out, true);
+      check(p.starts == 1 && p.diag.find("out of the noise") == std::string::npos, "background: a start tone's own 300 Hz stripes never begin a chart out of the noise first"); }
+    { // a false start — 100 lines of something that runs down the page, then noise: begun, and ended after 3 minutes of noise
+      Tx t(44); t.rxNoise(30); t.chart(100); t.rxNoise(240);
+      auto p = decode(t.s.out, true);
+      check(p.starts == 1 && p.diag.find("has been noise for 360 lines") != std::string::npos,
+            "★ background: a chart out of the noise that goes back to noise is ended after 360 lines (never drawn on until a stop tone)"); }
+    { Tx t(45); t.noise(300); t.rxNoise(300);
+      auto p = decode(t.s.out, true);
+      check(p.starts == 0, "★ background: ten minutes of noise (white, then a receiver's) begins no chart"); }
     std::printf(fails ? "\n%d FAILED\n" : "\nall good\n", fails);
     return fails ? 1 : 0;
 }

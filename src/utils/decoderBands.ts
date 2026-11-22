@@ -141,12 +141,18 @@ const HFDL: readonly Range[] = [
   kHz(2850, 3155), kHz(3400, 3500), kHz(4650, 4750), kHz(5450, 5730), kHz(6525, 6765), kHz(8815, 9040),
   kHz(10005, 10100), kHz(11175, 11400), kHz(13200, 13360), kHz(15010, 15100), kHz(17900, 18030), kHz(21924, 22000),
 ];
-/** Major HF WEFAX stations' carriers (kHz): Northwood, DWD Pinneberg, NOAA Boston / Pt Reyes / New Orleans / Kodiak /
- *  Honolulu, JMH Tokyo, Charleville, Wellington, Kyodo. ±4 kHz covers the USB dial 1.9 kHz below. */
+/** ★★ The HF WEFAX stations' centre frequencies (kHz) — EXACTLY the server's list (android/app/src/main/cpp/
+ *  vibe_wefax_stations.h, from the NWS "Worldwide Marine Radiofacsimile Broadcast Schedules"): Northwood, DWD, Athens,
+ *  Murmansk, Boston, New Orleans, Point Reyes, Kodiak, Sydney NS, Honolulu, Charleville, Wiluna, Tokyo, Kagoshima,
+ *  Seoul, Bangkok, Guangzhou, Valparaíso, Punta Arenas. scripts/test_wefax_stations.ts fails if the two drift.
+ *  (Wellington ZKLF stopped in 2023, and Kyodo is press, not weather — neither is listed.) ±4 kHz covers the USB dial
+ *  1.9 kHz below. */
 const WEFAX_KHZ = [
-  2618.5, 4610, 8040, 11086.5, 3855, 7880, 13882.5, 4235, 6340.5, 9110, 12750, 4346, 8682, 12786, 17151.2, 22527,
-  4317.9, 8503.9, 12789.9, 17146.4, 2054, 4298, 8459, 12412.5, 9982.5, 11090, 16135, 3622.5, 7795, 13988.5,
-  5100, 11030, 13920, 20469, 5807, 9459, 13550.5, 16340.1, 16971, 17069.6, 22542,
+  2618.5, 4610, 8040, 11086.5, 3855, 7880, 13882.5, 4482.9, 8106.9, 5336, 6445.5, 7908.8, 10130, 4235, 6340.5, 9110,
+  12750, 4317.9, 8503.9, 12789.9, 17146.4, 4346, 8682, 12786, 17151.2, 22527, 2054, 4298, 8459, 12412.5, 4416,
+  6915.1, 9982.5, 11090, 16135, 2628, 5100, 11030, 13920, 20469, 5755, 7535, 10555, 15615, 18060, 3622.5, 7795,
+  13988.5, 4274, 8658, 13074, 16907.5, 22559.6, 3585, 5857.5, 7433.5, 9165, 13570, 7396.9, 4199.75, 8412.5, 12629.25,
+  16826.25, 4228, 8677, 17146.4, 4322, 8696,
 ];
 /** Standard time signals (Hz) — the stations DecoderClient's timeStationFor names (MSF/WWVB, DCF77, RWM, WWV). */
 export const TIME_SIGNAL_HZ: readonly number[] = [

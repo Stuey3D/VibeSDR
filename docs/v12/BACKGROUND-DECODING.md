@@ -554,3 +554,4 @@ The live test uses two test-only environment variables:
 - **The FT8 summary**: a crash loses the hour in progress (its card is written when the hour closes or the run ends);
   the last-10 card is at most a minute behind.
 - **The cross-radio slot yield** is covered by its code paths, but the live test runs a single process.
+- **WEFAX stations (V12 2026-11-22):** several WEFAX frequencies in one decoder slot, the hourly WEFAX line, listener strips and who gives way — see [WEFAX-STATIONS.md](WEFAX-STATIONS.md).
