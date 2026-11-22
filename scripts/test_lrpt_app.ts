@@ -14,11 +14,16 @@ const real = { on: true, carrier: false, sync: true, mode: 'QPSK', diff: 0, symb
 const st = parseLrptStatus(real);
 ok(!!st && st.frames === 47 && st.lines === 112 && st.channels.length === 3, 'a real status parses');
 ok(lrptStatusText(st) === '112 lines · channels 1, 2, 5 · 47 frames', `the line during a pass: ${lrptStatusText(st)}`);
-ok(lrptStatusText(parseLrptStatus({ ...real, sync: false })) === '112 lines · channels 1, 2, 5 · 47 frames · signal lost', 'signal lost is said');
+ok(lrptStatusText(parseLrptStatus({ ...real, sync: false })) === '112 lines · channels 1, 2, 5 · 47 frames · between frames, still listening', 'a gap in the frames is said as a gap (an older server: no reading)');
+ok(lrptStatusText(parseLrptStatus({ ...real, sync: false, snrDb: 3.24, needDb: 5 })) === '112 lines · channels 1, 2, 5 · 47 frames · between frames, still listening · signal +3.2 dB over the noise (needs about +5)', 'beta91: the gap with the signal reading');
 ok(lrptStatusText(parseLrptStatus({ carrier: true, mode: 'OQPSK', offsetHz: 812 })) === 'carrier found (OQPSK, +812 Hz) · looking for frames', 'carrier found');
 ok(lrptStatusText(parseLrptStatus({ sync: true, mode: 'QPSK', frames: 9, bad: 2 })) === 'QPSK locked · frames 9 (2 unreadable)', 'frames before any picture');
 ok(lrptStatusText(parseLrptStatus({})) === 'listening for a METEOR satellite', 'nothing yet');
-ok(lrptStatusText(parseLrptStatus({ on: true, lock: 73 })) === 'listening for a METEOR satellite · lock 73 % (80 % holds it)', 'a marginal pass says how close the lock is');
+ok(lrptStatusText(parseLrptStatus({ on: true, lock: 73 })) === 'listening for a METEOR satellite', 'beta91: the lock % is never shown (an older server sends only that)');
+ok(lrptStatusText(parseLrptStatus({ on: true, lock: 64, snrDb: 0.1, needDb: 5 })) === 'listening for a METEOR satellite · signal +0.1 dB over the noise (needs about +5)', 'beta91: noise reads about 0 dB, and what decoding needs');
+ok(lrptStatusText(parseLrptStatus({ on: true, snrDb: 4.26, needDb: 5, saved: 1 })) === 'last pass saved to the gallery · listening for a METEOR satellite · signal +4.3 dB over the noise (needs about +5)', 'beta91: after a pass is filed the LIVE state shows, never a stale "picture complete"');
+ok(lrptStatusText(parseLrptStatus({ on: true, snrDb: -0.4 })).includes('signal −0.4 dB'), 'a reading under the noise is signed');
+{ const j = parseLrptStatus({ snrDb: 'x', needDb: Infinity, saved: -3, inRange: 7 }); ok(!!j && j.snrDb === undefined && j.needDb === undefined && j.saved === 0 && j.inRange === 1, 'beta91 fields bounded'); }
 ok(lrptStatusText(null) === 'waiting for a METEOR pass', 'no status at all');
 ok(lrptStatusText(parseLrptStatus({ why: 'the IQ slice runs at 50000 S/s — LRPT needs 1.8 to 8 times the symbol rate' })).startsWith('the IQ slice'), 'a reason is shown');
 // defensive: junk never throws, never shows NaN, bounds lengths

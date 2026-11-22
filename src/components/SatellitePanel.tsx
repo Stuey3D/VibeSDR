@@ -223,7 +223,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
   const decWord = !confirmed ? 'Tuning…'
     : tlmDec && !p.decLine ? 'listening for telemetry'
-    : p.pictureDone && imageDec ? 'picture complete — saved to the gallery'
+    // ★★ beta91: LRPT's own line is the live state (it says a filed pass itself) — never a stale "picture complete"
+    : p.pictureDone && imageDec && !(p.picked?.decoder === 'lrpt' && p.decLine) ? 'picture complete — saved to the gallery'
     : p.decLine || (use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : tx?.sstv ? 'listening — an SSTV picture opens here' : '');
   // the folded header still says the pick: "ISS · UP · 6:12 left"
   const selRow = sat ? rows.find((r) => r.sat.norad === sat.norad) : undefined;

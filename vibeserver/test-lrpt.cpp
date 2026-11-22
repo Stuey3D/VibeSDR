@@ -6,6 +6,7 @@
 //   test-lrpt --quick         the same, shorter
 //   test-lrpt --wav F [DIR] [--rate-auto] [--qpsk|--oqpsk] [--80k] [--noise R]   decode a 16-bit IQ .wav recording; PNGs into DIR
 #include "vibe_lrpt.h"
+#include "vibe_lrpt_run.h"
 #include "vibe_lrpt_tx.h"
 
 #include <algorithm>
@@ -315,6 +316,96 @@ static void testNoise(bool quick) {
     std::printf("  random-bit QPSK 15 s (carrier locked %d): RS ok %llu, pictures 0\n", rx.demodLocked(), (unsigned long long)rx.stats().rsOk);
 }
 
+
+/* ★★★ THE LIVE PASS'S FAILURE MODES (2026-11-22, Stuart's Meteor-M2-4 pass — docs/v12/LRPT-LIVE-PASS.md; the recording
+ *  itself stays out of git). What that pass had, rebuilt synthetically: OQPSK + differential at 72k in a 300 kS/s slice,
+ *  the radio 3.34 kHz off (constant), the satellite's Doppler sliding −25 Hz/s near the top of the pass and fed forward by
+ *  the satellite engine, and Es/N0 3–6 dB. */
+namespace livepass {
+constexpr double kResid = -3340, kDop0 = 585, kRate = -25;
+/** One stretch of the pass: `periods` scan periods starting `t0` seconds in, VCDU counters from `ctr0`. */
+std::vector<float> stretch(double t0, int periods, uint32_t ctr0, double es, double fs, uint32_t seed, uint32_t ms0) {
+    tx::TxConfig t; t.sampleRate = fs; t.oqpsk = true; t.diff = true; t.esn0Db = es; t.seed = seed; t.startMs = ms0;
+    t.carrierHz = kResid + kDop0 + kRate * t0; t.dopplerRateHzS = kRate;
+    auto v = tx::buildVcdus(t, periods);
+    for (size_t i = 0; i < v.size(); i++) { const uint32_t c = ctr0 + uint32_t(i); v[i][2] = uint8_t(c >> 16); v[i][3] = uint8_t(c >> 8); v[i][4] = uint8_t(c); }
+    return tx::modulate(t, tx::codeBits(t, v));
+}
+/** The per-sample noise σ the transmitter uses for Es/N0 `es` (vibe_lrpt_tx.h modulate). */
+double sigmaFor(double es, double fs) { return std::sqrt(fs / 72000.0 / std::pow(10.0, es / 10.0) / 2); }
+}
+
+static void testLivePass(bool quick) {
+    using namespace livepass;
+    std::printf("The live pass (Meteor-M2-4, 2026-11-22): OQPSK + differential, −3.34 kHz, −25 Hz/s fed forward\n");
+    // ── 1. sensitivity where that pass was: the joint differential decode + acquisition on the matched filter ──
+    for (double es : {3.0, 3.5, 5.0}) {
+        if (quick && es == 3.0) continue;
+        uint64_t blocks = 0; const int P = 8;
+        for (uint32_t seed = 1; seed <= 2; seed++) {
+            const auto iq = stretch(0, P, 100, es, 300000, seed, 43352840);
+            ReceiverConfig rc; rc.sampleRate = 300000; rc.mod = ReceiverConfig::Oqpsk;
+            Receiver rx(rc);
+            const size_t blk = 15000; double tt = -0.5;
+            for (size_t at = 0; at < iq.size() / 2; at += blk) {
+                const size_t n = std::min(blk, iq.size() / 2 - at);
+                rx.setDopplerHz(kDop0 + kRate * tt); rx.feedIq(&iq[at * 2], n); tt += n / 300000.0;
+            }
+            blocks += rx.stats().blocks;
+        }
+        const uint64_t want = uint64_t(2 * P * 3 * kMcuPerLine);
+        std::printf("  Es/N0 %.1f dB: %llu of %llu picture blocks (%.0f %%)\n", es, (unsigned long long)blocks, (unsigned long long)want, 100.0 * double(blocks) / double(want));
+        // ★ before beta91: 0 % at 3.5 dB and at 4 dB (the soft differential decode + the raw-slice acquisition)
+        if (es >= 3.5) CHECK(blocks >= want * 6 / 10, "live-pass shape at Es/N0 %.1f: blocks %llu of %llu", es, (unsigned long long)blocks, (unsigned long long)want);
+    }
+    // ── 2. a fade and the recovery, through the server's Run: frames, 20 s of nothing, frames again ──
+    //    ★ before beta91: the frames never came back (FrameSync::decoding() stayed true after the ASM was lost, so the
+    //      acquisition was held off and the loop wandered in the fade) — and a "pass over" cut the picture in two.
+    struct Case { const char* what; int inRange; double gapSec; int wantSaves; };
+    const Case cases[] = {
+        { "in range (the engine tracks it), 35 s of nothing: one picture across the gap", 1, 35, 1 },
+        { "no pick, 35 s of nothing: the pass ends, a second picture after", -1, 35, 2 },
+    };
+    for (const Case& c : cases) {
+        if (quick && c.inRange < 0) continue;
+        const double fs = 150000;
+        const int P = 6;
+        const auto a = stretch(0, P, 100, 5.0, fs, 3, 43352840);
+        const double tB = a.size() / 2 / fs + c.gapSec;
+        const uint32_t ctrB = 100 + 200, msB = 43352840 + uint32_t(std::lround(tB / 1.232)) * 1232;
+        const auto b = stretch(tB, P, ctrB, 5.0, fs, 4, msB);
+        double tNow = -0.5;
+        int saves = 0, partial = 0; uint64_t framesB = 0, framesA = 0;
+        Run::Opts o; o.symbolRate = 72000; o.mod = ReceiverConfig::Oqpsk;
+        o.dopplerHz = [&] { return kDop0 + kRate * tNow; };
+        o.satInRange = [&] { return c.inRange; };
+        o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; } };
+        {
+            Run run(o);
+            const size_t blk = size_t(fs / 20);
+            auto feed = [&](const float* x, size_t n) {
+                for (size_t at = 0; at < n; at += blk) {
+                    const size_t m = std::min(blk, n - at);
+                    run.feedIq(reinterpret_cast<const std::complex<float>*>(x + at * 2), int(m), fs, 0);
+                    tNow += m / fs;
+                }
+            };
+            feed(a.data(), a.size() / 2);
+            framesA = run.receiver() ? run.receiver()->stats().rsOk : 0;
+            std::mt19937 rng(77); std::normal_distribution<float> g(0, float(sigmaFor(5.0, fs)));
+            std::vector<float> noise(size_t(fs / 20) * 2);
+            for (double t = 0; t < c.gapSec; t += 0.05) { for (auto& v : noise) v = g(rng); feed(noise.data(), noise.size() / 2); }
+            const uint64_t before = run.receiver() ? run.receiver()->stats().rsOk : 0;
+            feed(b.data(), b.size() / 2);
+            framesB = (run.receiver() ? run.receiver()->stats().rsOk : 0) - (c.inRange < 0 ? 0 : before);
+            run.finish(true);
+        }
+        std::printf("  %s: frames before %llu, after %llu, pictures filed %d (%d partial)\n", c.what, (unsigned long long)framesA, (unsigned long long)framesB, saves, partial);
+        CHECK(framesA >= 12 && framesB >= 12, "%s: frames before %llu after %llu", c.what, (unsigned long long)framesA, (unsigned long long)framesB);
+        CHECK(saves == c.wantSaves, "%s: %d pictures filed, want %d", c.what, saves, c.wantSaves);
+    }
+}
+
 int main(int argc, char** argv) {
     ReceiverConfig c;
     for (int i = 1; i < argc; i++) {
@@ -338,6 +429,7 @@ int main(int argc, char** argv) {
     testSyncAndInterleave();
     testChain(quick);
     testNoise(quick);
+    testLivePass(quick);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

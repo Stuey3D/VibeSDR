@@ -510,7 +510,10 @@ export class SatPanel {
     // big: the decoder box's image canvas, lent to this window (the live preview, the finished picture at pass end)
     this.lend(big && imageKind);
     this.sImg.hidden = !(big && imageKind);
-    if (this.pictureDone && imageKind) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
+    /* ★★ beta91 (Stuart's Meteor-M2-4 pass 2026-11-22: "picture complete — saved to the gallery" for minutes while the
+     *  satellite was still strong and the receiver hunting again): LRPT's own line is the LIVE state and says a filed pass
+     *  itself ("last pass saved to the gallery · …", src/services/lrpt.ts) — so it wins. SSTV keeps the words. */
+    if (this.pictureDone && imageKind && !(this.picked?.decoder === 'lrpt' && this.decLine)) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
     // packet: the APRS lines
     const pkt = use === 'packet' && this.picked?.decoder !== 'fctlm';   // ★ a telemetry downlink shows its values, not packet lines
     this.sPk.hidden = !pkt;
