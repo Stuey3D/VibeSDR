@@ -23,6 +23,7 @@
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
+#include "decoders/ft8_deep_auto.h"   // ★ V12 beta91 the dig-deeper green line, one number
 #include "decoders/digi_spotter.h"   // ★ V12: the Band spots row
 #include "decoders/digi_bands.h"
 extern "C" {
@@ -148,16 +149,22 @@ inline std::vector<int16_t> ft8Band(int n, double seconds) {
 /** ★★ V12: a busy BAND as Band spots receives it — the IQ slice of `span` at `rate`, every registered mode's dial in it
  *  carrying `perDial` real transmissions of its own (FT8-family modes are encoded by ft8_lib: FT8 at 6.25 Hz / 0.16 s,
  *  FT4 at 20.833 Hz / 0.048 s), plus noise. Modes ft8_lib cannot encode are left quiet: their engine still searches. */
-inline std::vector<std::complex<float>> busyBandSlice(const digi::Span& span, double rate, double seconds, int perDial) {
+/*  ★ V12 beta91 (the dig-deeper row): `weakPerDial` more stations a dial near the decode threshold (−15 … −21 dB in
+ *  2500 Hz, between the strong ones) — what the second look, a-priori decoding and the deep tier spend on — and `slots`
+ *  15 s periods each sending the same messages again (the deep tier's repeats). The defaults are the Band row's band. */
+inline std::vector<std::complex<float>> busyBandSlice(const digi::Span& span, double rate, double seconds, int perDial,
+                                                      int weakPerDial = 0, int slots = 1) {
     std::vector<std::complex<float>> x((size_t)(rate * seconds), std::complex<float>(0, 0));
-    auto put = [&](double offHz, double startSec, const uint8_t* tones, int nn, double sym) {
+    auto put = [&](double offHz, double startSec, const uint8_t* tones, int nn, double sym, double amp = 0.01) {
         double ph = 0; const size_t s0 = (size_t)(startSec * rate), ns = (size_t)std::llround(sym * rate);
         for (int k = 0; k < nn; ++k) for (size_t j = 0; j < ns; ++j) {
             const size_t i = s0 + (size_t)k * ns + j; if (i >= x.size()) return;
             ph += 2 * M_PI * (offHz + tones[k] / sym) / rate;
-            x[i] += std::complex<float>((float)(0.01 * std::cos(ph)), (float)(0.01 * std::sin(ph)));
+            x[i] += std::complex<float>((float)(amp * std::cos(ph)), (float)(amp * std::sin(ph)));
         }
     };
+    // ★ the noise below is uniform ±0.015 on I and Q: 1.5e-4 over `rate`, so this much in 2500 Hz
+    const double n2500 = 2.0 * (0.03 * 0.03 / 12.0) * 2500.0 / rate;
     int seq = 0;
     for (const auto& m : digi::modes()) {
         const bool ft4 = m.name == "FT4";
@@ -172,7 +179,20 @@ inline std::vector<std::complex<float>> busyBandSlice(const digi::Span& span, do
                 uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN];
                 if (ft4) ft4_encode(mm.payload, tones); else ft8_encode(mm.payload, tones);
                 const double f = d + 300.0 + k * (3000.0 / std::max(1, perDial)) - span.centreHz;
-                put(f, 0.5, tones, ft4 ? FT4_NN : FT8_NN, ft4 ? 0.048 : 0.16);
+                for (int sl = 0; sl < slots; ++sl) put(f, 0.5 + 15.0 * sl, tones, ft4 ? FT4_NN : FT8_NN, ft4 ? 0.048 : 0.16);
+            }
+            for (int k = 0; k < weakPerDial; ++k, ++seq) {
+                char msg[32];
+                std::snprintf(msg, sizeof msg, "G4%c%c%c M0%c%c%c -1%d", 'A' + (seq / 676) % 26, 'A' + (seq / 26) % 26, 'A' + seq % 26,
+                              'A' + (seq / 26) % 26, 'A' + seq % 26, 'A' + (seq / 676) % 26, seq % 10);
+                ftx_message_t mm; ftx_message_init(&mm);
+                if (ftx_message_encode(&mm, nullptr, msg) != FTX_MESSAGE_RC_OK) continue;
+                uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN];
+                if (ft4) ft4_encode(mm.payload, tones); else ft8_encode(mm.payload, tones);
+                const double snr = -15.0 - (k % 7) - (ft4 ? -4.0 : 0.0);
+                const double f = d + 300.0 + (k + 0.5) * (3000.0 / std::max(1, weakPerDial)) - span.centreHz;
+                for (int sl = 0; sl < slots; ++sl)
+                    put(f, 0.5 + 15.0 * sl, tones, ft4 ? FT4_NN : FT8_NN, ft4 ? 0.048 : 0.16, std::sqrt(n2500 * std::pow(10.0, snr / 10.0)));
             }
         }
     }
@@ -206,13 +226,13 @@ inline double timeIt(double audioSeconds, Feed feed, Settle settle) {
     return audioSeconds > 0 ? 100.0 * used / audioSeconds : -1;
 }
 /** Wait until this process stops spending CPU (a decoder thread has finished), at most `capSec`. */
-inline void settleCpu(double capSec) {
+inline void settleCpu(double capSec, double quietSec = 0.005) {
     const auto t0 = std::chrono::steady_clock::now();
     double last = processCpu(); int quiet = 0;
     while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < capSec) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const double now = processCpu();
-        quiet = (now - last) < 0.005 ? quiet + 1 : 0;
+        quiet = (now - last) < quietSec ? quiet + 1 : 0;
         last = now;
         if (quiet >= 3) break;
     }
@@ -232,6 +252,54 @@ inline bool rowSkipped(const std::string& id) { const auto& f = rowSkipFn(); ret
  *        with an RSP has for cutting blocks);
  *   -1 = unset: both, the filter bank's whole ladder to 56 MS/s (bench-server and the tests, as before). */
 inline int& dabCutMode() { static int v = -1; return v; }
+
+/** ★★ V12 beta91 the dig-deeper row's green line (vibe_benchmark.h gradeFor): a whole band at full depth with the tier on,
+ *  inside a QUARTER of one core. Measured on an M5 core: 0.97 %. By the Pi 2 build's instruction counts that is ~50 % of a
+ *  Pi 2 core (off), and a few % on a Pi 500 or an i5-11300H (on) — docs/v12/FTX-SENSITIVITY.md § Deep tier. */
+constexpr double kDeepGreenPct = 25.0;
+static_assert(kDeepGreenPct == ft8deep::kGreenPct, "the dig-deeper green line is one number: decoders/ft8_deep_auto.h");
+/** ★★ V12 beta91 THE DIG-DEEPER ROW (dec_ft8deep): the Band row's busiest band — 15 strong + 15 weak stations a dial, two
+ *  slots so repeats exist — at full depth with the tier on, no load. `baselineCore` (the shim's idle probe, which runs
+ *  while the radio's own DSP does): the fraction of a core this process was already using, taken off the figure.
+ *  Empty label = no band to measure. The owner's switch is put back as it was found. */
+inline Row ft8DeepRow(double baselineCore = 0.0) {
+    Row out; out.id = "dec_ft8deep";
+    const double t0 = rowClock();
+    const digi::Span* best = nullptr; digi::Span keep; size_t most = 0;
+    for (const auto& b : digi::bands()) {
+        digi::Span sp = digi::spanOf(b, digi::modes());
+        if (sp.ok && sp.modes.size() > most) { most = sp.modes.size(); keep = sp; best = &keep; }
+    }
+    if (!best) return out;
+    std::atomic<int> got{0};
+    const double rate = 96000.0, slot0 = std::floor(vibeUtcNow() / 15.0) * 15.0;
+    const auto x = busyBandSlice(*best, rate, 30.5, 15, 15, 2);
+    const double base = std::max(0.0, baselineCore);
+    const double quiet = 0.005 + 0.05 * base;   // ★ "quiet" = back to the baseline
+    const bool wasDeep = Ft8Decoder::deepTier().exchange(true);
+    const double c0 = processCpu(), w0 = rowClock();
+    {
+        digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
+                         [&](const digi::Spot&, double) { got.fetch_add(1); }, nullptr, [] { return false; });
+        size_t fed = 0; bool mid = false;
+        for (size_t o = 0; o < x.size(); o += 2048) {
+            const int n = (int)std::min<size_t>(2048, x.size() - o);
+            fed += (size_t)n;
+            sp.feedIq(&x[o], n, rate, best->centreHz, slot0 + (double)fed / rate);
+            // ★ the first slot's decode must finish before the second slot's window completes, or the engine skips it
+            //   (as live: a decode still running when the next window is ready)
+            if (!mid && (double)fed >= 16.0 * rate) { mid = true; settleCpu(30.0, quiet); }
+        }
+        settleCpu(30.0, quiet);
+    }
+    const double used = processCpu() - c0 - base * (rowClock() - w0);
+    Ft8Decoder::deepTier().store(wasDeep);
+    out.label = std::string("Decoder: FT8 / FT4 dig deeper (Band, ") + best->band->name + ", full depth)";
+    out.pct = std::max(0.0, 100.0 * used / 30.0);
+    out.decoded = got.load();
+    out.ms = (int)std::lround(1000.0 * (rowClock() - t0));
+    return out;
+}
 
 /** Every decoder row. `seconds` scales the text/image rows; FT8 always runs one whole slot pair. */
 inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(const std::string&)>& step) {
@@ -343,6 +411,29 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
             rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
         }
     }
+    }
+    {
+        /* ★★ V12 beta91 FT8 / FT4 "DIG DEEPER" (Ft8Decoder::deepTier, docs/v12/FTX-SENSITIVITY.md § Deep tier) — its own row
+         *  because it is its own DEFAULT, the inverted rule "lora+all" has (vibe_benchmark_more.h ruleFor): GREEN ticks the
+         *  owner's "ft8+deep" ON on a fresh setup, anything else leaves it off with the figure beside it — offered, never
+         *  hidden. ★ What it measures is the heaviest thing the tier ever rides on: the Band row's busiest band with NO load
+         *  (every mode at full depth, the pass gate free) and the tier on. A box that carries THAT inside a core's green
+         *  budget has CPU to spare for it everywhere else (one dial's spots, a listener's FT8 decoder).
+         *  ★ Not run where Band at ONE pass already measured below green (a Pi 2): full depth costs more than one pass, so
+         *    the answer is known — and the run would be the benchmark's longest row on its slowest box. */
+        if (!rowSkipped("dec_ft8deep")) {
+            const Row* band = nullptr;
+            for (const Row& r : rows) if (r.id == "dec_ft8band") band = &r;
+            if (band && !(band->pct >= 0 && band->pct < 70.0)) {
+                char why[160];
+                std::snprintf(why, sizeof why, "Decoder: FT8 / FT4 dig deeper (not run: Band at one pass measured %.0f%%)", band->pct);
+                rows.push_back({ "dec_ft8deep", why, -1.0 });
+            } else {
+                if (step) step("Decoder: FT8 / FT4 dig deeper");
+                Row r = ft8DeepRow();
+                if (!r.label.empty()) rows.push_back(r);
+            }
+        }
     }
     {
         /* ★★ V12 LoRa (vibe_lora_service.h): ISM mode's 868 default channels (LoRaWAN 868.1/.3/.5 at SF7-12, Meshtastic

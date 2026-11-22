@@ -360,6 +360,13 @@ inline Result runListener(const std::string& id, const std::string& label, doubl
 }
 
 inline const char* grade(double pct) { return pct < 0 ? "none" : pct < 70 ? "green" : pct <= 85 ? "amber" : "red"; }
+/** ★★ V12 beta91 a row with its own green line: the dig-deeper row (benchdec::kDeepGreenPct) — the tier rides on top of
+ *  everything else a box carries, so it is "plentiful" only well inside a core. Above its line it is amber up to the usual
+ *  green line and red past it. Every other row: grade(). */
+inline const char* gradeFor(const std::string& id, double pct) {
+    if (id == "dec_ft8deep" && pct >= 0) return pct < benchdec::kDeepGreenPct ? "green" : pct < 70 ? "amber" : "red";
+    return grade(pct);
+}
 } // namespace benchdetail
 } // namespace vibe
 #include "vibe_benchmark_wide.h"   // ★ V12 the wide capture rates, measured (2026-11-03)
@@ -403,7 +410,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     benchdec::rowSkipFn() = [&hw](const std::string& id) { return !benchhw::gateRow(hw, id).run; };
     struct SkipReset { ~SkipReset() { benchdec::rowSkipFn() = nullptr; benchdec::dabCutMode() = -1; } } skipReset;
     // The decoder rows' own ids, for the "not run" list (their runners skip them silently — the list is said here).
-    for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora",
+    for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_ft8deep", "dec_lora",
                             "dec_rttyauto", "dec_cw", "dec_cwskim", "dec_psk", "dec_pskskim", "dec_jtty", "dec_sitora", "dec_dsc",
                             "dec_same", "dec_selcal", "dec_mfsk", "dec_ale", "dec_hell", "dec_aprs", "dec_aprs9600", "dec_paging", "dec_ndb", "dec_ais",
                             "dec_ism", "dec_wmbus", "dec_lora_all", "dec_tone", "dec_nr", "dec_notch", "dec_dxscan", "dec_freedv", "dec_rade", "dec_m17", "dec_dvsig", "dab", "adsb" })
@@ -712,7 +719,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             r.decoded = d.decoded; r.ms = d.ms; r.threads = d.threads;
             res.push_back(r);
             const benchdec::RowRule rule = benchdec::ruleFor(d.id);
-            const std::string g = grade(d.pct);
+            const std::string g = gradeFor(d.id, d.pct);
             /* ★★ THE DECODER LIMIT'S YARDSTICK: the heaviest decoder SLOT that measured green — what a full house of
              *  decoders can actually be made of on this box. Band spots, LoRa and the whole-radio modes are not slots;
              *  a slot that is not green is off by default (its switch) or, alone, more than the green budget already. */
@@ -791,7 +798,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     for (size_t i = 0; i < res.size(); ++i) {
         char b[320];
         snprintf(b, sizeof b, "%s{\"id\":\"%s\",\"label\":\"%s\",\"rate\":%.0f,\"pct\":%.1f,\"grade\":\"%s\",\"thread\":\"%s\",",
-                 i ? "," : "", res[i].id.c_str(), res[i].label.c_str(), res[i].rate, res[i].pct, grade(res[i].pct),
+                 i ? "," : "", res[i].id.c_str(), res[i].label.c_str(), res[i].rate, res[i].pct, gradeFor(res[i].id, res[i].pct),
                  res[i].hottest.c_str());
         j += b;
         if (res[i].decoded >= 0) j += "\"decoded\":" + std::to_string(res[i].decoded) + ",";

@@ -186,6 +186,8 @@ Band mode runs one engine per dial: FT8 + FT4 + FT2 on 20 m adds about 2.9 MB.
 
 ## What remains
 
+- ★ V12 beta91: the deep tier (above) closes part of this — on a busy 40 m evening +5 % matched decodes; what is left is
+  mostly overlapping signals, not weak ones.
 - **The last 3-5 % of calls.** jt9 -d 3 still finds ~7 % more decodes and ~5 % more calls, at 140× the CPU.
   On the misses: most are near misses BP could not finish; more candidates (`minScore` 7) gave +0.8 % for +37 % CPU
   and was not taken.
@@ -198,6 +200,139 @@ Band mode runs one engine per dial: FT8 + FT4 + FT2 on 20 m adds about 2.9 MB.
 - **JS8's AP** (its own message format) is not done; JS8 uses the second look and OSD only.
 - **FT2's SNR** is checked against only two senders (STUEY3D's PSKReporter reports, 07:34 UTC; the 17:59 recording
   had none we both decoded): median −1 dB, so its −6 dB stands until a busier FT2 hour is recorded.
+
+## Deep tier — "dig deeper" (V12 beta91, 2026-11-22)
+
+Stuart, 2026-11-22: *"yes please as it may benefit the lenovo and the pi500 too"*. Branch `b91-ft8deep`. Own code from the
+protocol paper's AP idea; WSJT-X was not read for this work.
+
+### RESUME HERE
+
+- ★★★ **AUTOMATIC (Stuart, 2026-11-22: "should be automatic and simply enable when the cpu has headroom with a benchmark
+  driven toggle in the settings with the rest of the digital modes, no user facing toggles").** The rule is one header,
+  `decoders/ft8_deep_auto.h`, read by the shim (`vsFt8DeepApply`, every minute and on every mode-list change), the setup
+  page (`ft8DeepAuto`) and the app (`ft8DeepAutoFrom`):
+  1. the owner's word wins: `ft8+deep` (on) / `ft8-deep` (off) in the radio's mode list — ticking or unticking the box under
+     Digital spots writes one; "Back to automatic" removes both;
+  2. else the stored benchmark: its `dec_ft8deep` row below 25 % of a core; a beta90-or-older benchmark (no such row): its
+     Band row × 1.25 below 25 % (decided at start-up, no re-run needed); a Band row listed as not run = off;
+  3. no benchmark at all: the shim measures `benchdec::ft8DeepRow` ONCE itself — its own idle thread, three minutes after
+     start, only while the process is under 40 % of a core (that baseline is taken off the figure) — and keeps the figure
+     in `bookmarks-<radio>.ft8deep.txt` beside the radio's bookmarks. Off until then.
+  The benchmark never writes the owner's word (it only shows the automatic answer). Listeners see nothing
+  (scripts/test-ft8-deep-owner-only.mjs); the tier still runs only on slots with time to spare.
+- **Built and wired:** decoder (`Ft8Decoder::deepTier()`, `FtxApBook::Rep`, `Ft8SlotDecoder::repeatDetect`), the owner's
+  box (setup page and Android ServerModeScreen, under Digital spots, with its hint and the automatic answer), the shim's
+  decision and idle probe, the benchmark row `dec_ft8deep` (`benchdec::ft8DeepRow`) with its own green line
+  (`benchdec::kDeepGreenPct` = `ft8deep::kGreenPct` = 25 %, `gradeFor`), the beta91 About line.
+- **Tests:** test-ft8-deep-auto (fresh / upgraded / current benchmark / owner override), test-ft8-deep-owner-only.mjs,
+  test-ftx-sensitivity § 8, test-bench-decoders (the row).
+- **Not done:** the R36S's native UI has no owner decoder switches, so nothing to add there; JS8 has no deep tier.
+  A web client listener sees nothing new (the tier is server-side).
+- **To check live (coordinator):** after upgrading, the Lenovo / Pi 500 log "FT8 dig deeper: on (from the benchmark)" from
+  their existing benchmarks' Band rows; the Pi 2 "off". Compare an evening's PSK Reporter spot count off and on (the owner's
+  box) to confirm the gain live.
+
+### What it adds (on top of full depth, on spare CPU only)
+
+| Lever | What | FT8 | FT4 / FT2 |
+|---|---|---|---|
+| **Repeats** (new) | Every standard message heard without AP in the last minute (FT8 4 slots, FT4 8, FT2 16; ≤ 256) is kept with its frequency and whole 174-bit codeword. A candidate within ±2 tones of one is held against it — z = Σ±L/√ΣL² ≥ 5 over all 174 bits and ≤ 20 of the 97 CRC+parity bits disagreeing (the sign-off test, P ≈ 1e-8 for a wrong codeword) — before the AP hypotheses. No BP: a detection, not a decode. | yes | yes |
+| AP hypotheses decoded | 8 a near miss (full depth: 3) | yes | yes |
+| Second-look gate | 8 Costas hits of 21 (full depth: 10) | yes | no (8 of 16 doubled FT4's CPU for +1 %) |
+
+The tier runs only where full depth runs (not loaded, the pass gate free): a loaded slot decodes exactly as before.
+The repeat book learns whenever the switch is on, so it is ready when the CPU is. A repeat detection never feeds the book.
+
+### Results — same audio, before and after
+
+Real recordings, Stuart's UberSDR (RX888), "matched" = message for message against the UberSDR decoder stream recorded
+beside the WAV (`score_ref.py`); CPU one M5 core.
+
+| Recording | full depth: matched / calls / ms a slot | **dig deeper** | gain | not in the reference |
+|---|---|---|---|---|
+| FT8 40 m 22 Nov 18:06 (61 slots, ref 3,598) | 2,705 / 299 / 28.0 | **2,852 / 302 / 33.8** | **+5.4 %** | 37 → 38 |
+| FT8 80 m 22 Nov 18:06 (61 slots, ref 2,561) | 2,058 / 213 / 21.1 | **2,139 / 215 / 22.1** | **+3.9 %** | 26 → 29 |
+| FT4 40 m 22 Nov 18:16 (123 slots, ref 837) | 784 / 54 / 5.3 | **799 / 55 / 5.8** | **+1.9 %** | 31 → 44 |
+| FT8 40 m 5 Oct 19:08 (239 slots, no reference) | 10,713 decodes / 612 senders / 24.2 | **11,243 / 619 / 28.1** | **+4.9 %** | — |
+
+Repeat detections were 250 of the 40 m run's 2,890 decodes (some replace what AP found before). FT4's extra
+not-in-the-reference decodes were inspected: stations calling on their own cadence at their own frequency (EW8DU calling
+DL1KMD every second slot, two stations on DL1KMD's frequency at once) — consistent with real repeats the reference could
+not separate, but not provable without a second reference. The 5 Oct hour's 530 new decodes: every one carries calls the
+hour heard, bar three with plausible grids for their calls.
+
+Synthetic (`ftx_sweep`, 200 signals an SNR, each message heard a minute before at its frequency): the 50 % point moves
+FT8 −21.0 → −22.1 dB, FT4 −16.3 → −17.3, FT2 −13.1 → −14.2. Without anything heard before, the tier changes little
+(AP hypotheses and the gate only).
+
+### False decodes
+
+- Noise, a full book (400 calls, half in pairs, + 256 repeats at random frequencies), every candidate down to sync score
+  0, 300 a pass, second look down to 6 Costas hits, AP and repeats on every candidate: FT8 480 slots 0, FT4 960 slots 0,
+  FT2 1,920 slots 0 (as live: no OSD for FT2).
+- **Siblings** — the worst case for a repeat: every signal's sibling (the same calls, the last field one step away: report
+  ±1 dB, the next grid square, RR73 ↔ 73) put in the book at its frequency, repeats tried on every candidate however far
+  BP was, FT8 −24 … −10 dB: 0 siblings claimed; FT4, FT2 the same (test-ftx-sensitivity § 8).
+- The one false decode of all the stress runs came from a lever NOT taken: OSD pairs over 60 bits, FT2
+  ("<...> 5NDK/V66VMD").
+
+### Measured and not taken
+
+| Lever | Gain (real 40 m) | Cost |
+|---|---|---|
+| OSD pairs over 60 bits | +0.4 % | +2 ms a slot; the stress runs' only false decode |
+| A fourth pass | +0.9 % (40 m), +0.4 % (80 m) | +15 %, +29 % CPU |
+| minScore 7 | +0.3 % | +15 % CPU; a hex telemetry decode nobody else heard |
+| 200 / 250 candidates, AP near-miss 26 / 30, repeats tried to BP 60, the gate at 7 | ≤ +0.3 % each | up to +20 % |
+| FT4/FT2 second look at 8 of 16 | +1 % | ×2 FT4 CPU |
+
+What is left of the gap on a busy 40 m evening (746 reference decodes we did not match) is mostly NOT weak: 300+ of
+them at a reference SNR of −15 dB or better, concentrated at 1000-1500 Hz where the band is densest — overlapping
+signals, the subtraction's territory, not the detector's. 211 were repeats of a message we also missed the first time.
+
+### AUTO: which boxes get it (automatic; the owner can override)
+
+The row `dec_ft8deep` decodes the Band row's busiest band (20 m: every FT8/FT4 dial, 15 strong + 15 weak stations a
+dial, two slots so repeats exist) with no load and the tier on. **On below 25 % of one core** (not the usual 70: the
+tier rides on top of everything else the box carries). Not run where Band at one pass already measured below green. An
+older benchmark without the row decides from its Band row × 1.25; none at all, the server measures the row itself once.
+
+| Box | the row (estimated from the M5's) | default |
+|---|---|---|
+| M5 (measured) | 0.97 % | on |
+| Lenovo i5-11300H | ~2 % (≈ 2× an M5 core) | **on** |
+| Pi 500 (Cortex-A76 2.4 GHz) | ~3-4 % (≈ 3.5×) | **on** |
+| Pi 4 (A72 1.5 GHz) | ~10 % | on |
+| Pi 3 / Zero 2 W (A53) | ~25-30 % | off (borderline) |
+| **Pi 2 (A7 900 MHz)** | ~50 % (≈ 50×: below) | **off** |
+
+**The Pi 2 build** (armhf, qemu instruction counter, `tools/ft8-bench/qemu/run.sh`), the busy 40 m of 22 Nov, 10 slots:
+
+| | instructions | decodes |
+|---|---|---|
+| one pass (a loaded server) | 1,415 M | 289 |
+| full depth | 7,718 M | 467 |
+| **dig deeper** | **9,204 M (+19 %)** | **485 (+3.9 %)** |
+
+≈ 920 M instructions a slot: at a Cortex-A7's ~0.6 instructions a cycle, ~1.7 s of a 900 MHz core every 15 s for one FT8
+dial — ~50× the M5's 33.8 ms, so the row reads ~50 % there: amber against its 25 % line, OFF.
+
+In the live decoder the tier is also gated slot by slot exactly as full depth is (`passAllowed`: not loaded, passes inside
+40 % of the time before the next slot), so even an owner who ticks it on a Pi 2 only gets it on slots with time to spare.
+
+### Reproducing
+
+```
+OUT=/tmp/fb bash tools/ft8-bench/build.sh
+F="--passes 3 --osd 24 --osd2 40 --fine 1 --stall 3 --changed 1 --ap 1"
+/tmp/fb/ft8_wav REC.wav START_UTC $F [--deep] > ours.txt           # --deep = what runDecode adds (FT8's gate only for FT8)
+python3 tools/ft8-bench/ref/score_ref.py FT8 skimmer_40m_FT8 uber_sse.txt START_UTC 930 ours.txt
+/tmp/fb/ftx_sweep --snr -24:-18:1 --slots 20 --sigs 10 $F --deep --repseed 1        # heard before
+/tmp/fb/ftx_sweep --snr -24:-10:2 --slots 20 --sigs 10 $F --deep --repseed 2 --repnear 99   # siblings: every decode of one is FALSE
+/tmp/fb/ftx_sweep --noise 480 $F --aptable 400 --deep --reptable 256 --repnear 99 --apnear 99 --minscore 0 --cands 300 --finesync 6
+```
+The 22 Nov recordings are in `~/VibeSDR-test-audio/ft8/b91/` (WAV, start_utc in the .log, UberSDR stream beside them).
 
 ## Spot SNR scale (2026-10-26)
 

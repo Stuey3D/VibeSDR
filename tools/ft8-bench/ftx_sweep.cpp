@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <ctime>
 #include <map>
@@ -93,6 +94,21 @@ static std::string randMsg(std::mt19937& rng) {
     default: return a + " " + b + " 73";
     }
 }
+/** The message one step away in its last field (see --repseed 2). */
+static std::string sibling(const std::string& m) {
+    const size_t sp = m.rfind(' ');
+    std::string head = m.substr(0, sp + 1), last = m.substr(sp + 1);
+    if (last == "RR73") return head + "73";
+    if (last == "73" || last == "RRR") return head + "RR73";
+    if (last.size() == 4 && std::isalpha((unsigned char)last[0]) && std::isalpha((unsigned char)last[1])) {
+        last[3] = (char)('0' + (last[3] - '0' + 1) % 10); return head + last;
+    }
+    const bool r = last[0] == 'R';
+    int v = std::atoi(last.c_str() + (r ? 1 : 0));
+    v = v >= 29 ? v - 1 : v + 1;
+    char b[8]; std::snprintf(b, sizeof b, "%s%+03d", r ? "R" : "", v);
+    return head + b;
+}
 static std::string text(const ftx_message_t& m0) {
     ftx_message_t m = m0; char t[64] = {}; ftx_message_offsets_t o;
     if (ftx_message_decode(&m, nullptr, t, &o) != FTX_MESSAGE_RC_OK) return "?";
@@ -102,9 +118,15 @@ static std::string text(const ftx_message_t& m0) {
 int main(int argc, char** argv) {
     FtxMode mode = FtxMode::FT8;
     bool useAp = false, apSeed = false; int apTable = 0;
+    /* ★ beta91 repeats: --repseed 1 = every signal sent was heard before at its frequency (what repeat detection can
+     *  assume); 2 = its SIBLING was (the same calls, the last field one step away: report ±1 dB, grid square next door,
+     *  RR73 ↔ 73) — the worst case for a false repeat, every decode of a sibling is FALSE. --reptable N (noise): N random
+     *  messages as heard at random frequencies. */
+    int repSeed = 0, repTable = 0;
     std::string wavDir;   // ★ also write every slot as a WAV (jt9's name and length) + truth.txt: the SAME audio for a reference decoder
     double snrA = -24, snrB = -14, snrStep = 1; int slots = 20, sigs = 10, noiseSlots = 0; unsigned seed = 1; bool verbose = false;
     Ft8SlotOptions o; o.maxPasses = 1; o.osdMaxErrors = 0;
+    bool deepSync = false;   // ★ --deep: the second look's lower gate is FT8's only (Ft8Decoder::runDecode)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -128,10 +150,17 @@ int main(int argc, char** argv) {
         else if (a == "--apnear") o.apMaxBpErr = std::atoi(nxt().c_str());
         else if (a == "--changed") o.onlyChanged = std::atoi(nxt().c_str()) != 0;
         else if (a == "--finesync") o.fineMinSync = std::atoi(nxt().c_str());
+        else if (a == "--apk") o.apMaxCands = std::atoi(nxt().c_str());
+        else if (a == "--rep") o.apRepeat = std::atoi(nxt().c_str()) != 0;           // ★ beta91 deep tier
+        else if (a == "--repnear") o.apRepeatMaxBpErr = std::atoi(nxt().c_str());
+        else if (a == "--deep") { o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; deepSync = true; }   // ★ as runDecode
+        else if (a == "--repseed") repSeed = std::atoi(nxt().c_str());
+        else if (a == "--reptable") repTable = std::atoi(nxt().c_str());
         else if (a == "--wavdir") wavDir = nxt();
         else if (a == "-v") verbose = true;
         else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
+    if (deepSync && mode == FtxMode::FT8 && o.fineMinSync == 0) o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
     const bool ft4 = mode != FtxMode::FT8;
     const int nn = ft4 ? FT4_NN : FT8_NN;
     const double T = mode == FtxMode::FT2 ? kFt2SymbolPeriod : ft4 ? 0.048 : 0.16;
@@ -151,6 +180,7 @@ int main(int argc, char** argv) {
     const char* name = mode == FtxMode::FT2 ? "FT2" : ft4 ? "FT4" : "FT8";
     // ★ a book as a busy band fills one: apTable random calls, half of them in pairs (the noise test's worst case)
     for (int i = 0; i < apTable; ++i) { const std::string a = randCall(rng); if (i % 2) book.seed(a, randCall(rng)); else book.seed(a); }
+    for (int i = 0; i < repTable; ++i) book.seedRepeat(randMsg(rng), (float)(200.0 + 2800.0 * U(rng)));
 
     int fineHits = 0, apHits = 0;
     auto runSlot = [&](std::vector<float>& x, const std::set<std::string>& truth, int& hit, int& fals, double& ms) {
@@ -199,6 +229,8 @@ int main(int argc, char** argv) {
                 gfskAdd(x, tones, nn, nsps, bt, hz, dtNom + dt, amp, 2 * M_PI * U(rng));
                 truth.insert(text(m));
                 ++sent;
+                if (repSeed == 1) book.seedRepeat(msg, (float)hz);
+                if (repSeed == 2) book.seedRepeat(sibling(msg), (float)hz);
                 if (apSeed) {   // ★ the calls as if heard earlier (their CQ, their last over): what AP can assume
                     char c1[16] = {}, c2[16] = {}, ex[16] = {}; ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
                     if (ftx_message_decode_std(&m, nullptr, c1, c2, ex, ft) == FTX_MESSAGE_RC_OK) {

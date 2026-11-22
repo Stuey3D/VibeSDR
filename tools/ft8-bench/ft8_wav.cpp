@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     int repeat = 1;      // ★ decode the recording this many times (a profiler's sample needs a longer run)
     bool ft4 = false, ft2 = false; double lead = NAN, len = 0, from = 0, to = 1e18;
     Ft8SlotOptions o;
+    bool deepSync = false;   // ★ --deep: the second look's lower gate is FT8's only (Ft8Decoder::runDecode)
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::atof(argv[++i]) : 0.0; };
@@ -97,11 +98,15 @@ int main(int argc, char** argv) {
         else if (a == "--osdnear") o.fineOsdMaxBpErr = (int)nxt();
         else if (a == "--apnear") o.apMaxBpErr = (int)nxt();
         else if (a == "--finesync") o.fineMinSync = (int)nxt();
+        else if (a == "--rep") o.apRepeat = (int)nxt() != 0;          // ★ beta91 deep tier: repeat detection
+        else if (a == "--repnear") o.apRepeatMaxBpErr = (int)nxt();
+        else if (a == "--deep") { o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; deepSync = true; }   // ★ as runDecode
         else if (a == "--lead") lead = nxt();
         else if (a == "--len") len = nxt();
         else if (a == "--from") from = nxt();
         else if (a == "--to") to = nxt();
     }
+    if (deepSync && !ft4 && o.fineMinSync == 0) o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
     Ft8SlotDecoder dec(rate, ft2 ? FtxMode::FT2 : ft4 ? FtxMode::FT4 : FtxMode::FT8);
     FtxApBook book(ft4, ft2 ? 160 : ft4 ? 80 : 40);    // ten minutes of slots
     if (useAp) o.ap = &book;
@@ -126,7 +131,7 @@ int main(int argc, char** argv) {
             ftx_message_t m = r.msg;
             ftx_message_offsets_t offs;
             if (ftx_message_decode(&m, &g_if, text, &offs) != FTX_MESSAGE_RC_OK) std::snprintf(text, sizeof text, "?");
-            std::printf("D %.1f %d%s%s %d %.2f %.1f %s\n", S, r.pass, r.fine ? "f" : "", r.osd ? "o" : r.ap ? (r.ap == 1 ? "a1" : r.ap == 2 ? "a2" : r.ap == 3 ? "a3" : r.ap == 4 ? "a4" : "a5") : "", r.snr, r.dt + (lead - Ft8SlotDecoder::leadSec(ft4)), r.hz, text);
+            std::printf("D %.1f %d%s%s %d %.2f %.1f %s\n", S, r.pass, r.fine ? "f" : "", r.osd ? "o" : r.ap ? (r.ap == 1 ? "a1" : r.ap == 2 ? "a2" : r.ap == 3 ? "a3" : r.ap == 4 ? "a4" : r.ap == 5 ? "a5" : "a6") : "", r.snr, r.dt + (lead - Ft8SlotDecoder::leadSec(ft4)), r.hz, text);
         }
         std::printf("S %.1f %d %.2f %.2f %.2f %d %d %d\n", S, st.passes, st.passMs[0], st.passMs[1], st.passMs[2],
                     st.passDecodes[0], st.passDecodes[1], st.passDecodes[2]);

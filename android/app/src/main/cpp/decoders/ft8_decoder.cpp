@@ -381,6 +381,7 @@ void FtxApBook::beginSlot() {
     const size_t n0 = calls_.size(), p0 = pairs_.size();
     calls_.erase(std::remove_if(calls_.begin(), calls_.end(), [&](const Call& c) { return slot_ - c.last > maxAge_; }), calls_.end());
     pairs_.erase(std::remove_if(pairs_.begin(), pairs_.end(), [&](const Pair& p) { return slot_ - p.last > maxAge_; }), pairs_.end());
+    reps_.erase(std::remove_if(reps_.begin(), reps_.end(), [&](const Rep& r) { return slot_ - r.slot > repAge_; }), reps_.end());
     if (calls_.size() != n0 || pairs_.size() != p0) dirty_ = true;
 }
 
@@ -393,11 +394,41 @@ void FtxApBook::seed(const std::string& call, const std::string& partner) {
     pairs_.push_back(p); dirty_ = true;
 }
 
-void FtxApBook::heard(const ftx_message_t& msg) {
+bool FtxApBook::seedRepeat(const std::string& text, float hz) {
+    ftx_message_t m; ftx_message_init(&m);
+    if (ftx_message_encode(&m, nullptr, text.c_str()) != FTX_MESSAGE_RC_OK || ftx_message_get_i3(&m) != 1) return false;
+    heard(m, hz);
+    return true;
+}
+
+void FtxApBook::heard(const ftx_message_t& msg, float hz) {
     if (ftx_message_get_i3(&msg) != 1) return;
     char to[16] = {}, de[16] = {}, ex[16] = {};
     ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
     if (ftx_message_decode_std(&msg, nullptr, to, de, ex, ft) != FTX_MESSAGE_RC_OK) return;
+    if (hz >= 0) {
+        /* ★★ A REPEAT HYPOTHESIS (the deep tier): the whole codeword, built once here — 77 bits (FT4/FT2 scrambled, as
+         *  sent), the CRC, the 83 parity bits. The same message heard again at the same frequency only refreshes it. */
+        Rep r{}; r.hz = hz; r.slot = slot_;
+        uint8_t p10[10] = {}, a91[FTX_LDPC_K_BYTES] = {};
+        for (int b = 0; b < 10; ++b) p10[b] = ft4_ ? (uint8_t)(msg.payload[b] ^ kFT4_XOR_sequence[b]) : msg.payload[b];
+        p10[9] &= 0xF8;
+        ftx_add_crc(p10, a91);
+        const Bits174* g = generatorRows();
+        for (int b = 0; b < FTX_LDPC_K; ++b)
+            if ((a91[b / 8] >> (7 - b % 8)) & 1) { r.cw[0] ^= g[b].w[0]; r.cw[1] ^= g[b].w[1]; r.cw[2] ^= g[b].w[2]; }
+        bool fresh = true;
+        for (Rep& q : reps_)
+            if (q.cw[0] == r.cw[0] && q.cw[1] == r.cw[1] && q.cw[2] == r.cw[2] && std::fabs(q.hz - hz) < 1.0f) { q.slot = slot_; q.hz = hz; fresh = false; break; }
+        if (fresh) {
+            if (reps_.size() >= kMaxRepeats) {                   // ★ full: the oldest makes way
+                size_t o = 0;
+                for (size_t k = 1; k < reps_.size(); ++k) if (reps_[k].slot < reps_[o].slot) o = k;
+                reps_.erase(reps_.begin() + (long)o);
+            }
+            reps_.push_back(r);
+        }
+    }
     const bool deOk = plausibleCall(de), toOk = plausibleCall(to);
     if (deOk) touchCall(de);
     if (toOk) touchCall(to);
@@ -878,6 +909,18 @@ bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double 
             if (e >= 0) { a91ToMessage(a91, msg); viaOsd = true; ++st.fineDecodes[pass - 1]; return true; }
         }
     }
+    /* ★★ V12 beta91 THE DEEP TIER: a repeat of a message heard on this frequency in the last minute, DETECTED on the
+     *  two-symbol set then the three-symbol (repeatDetect). Before the hypotheses below: one or two codewords to hold up,
+     *  no BP, and a whole codeword is the strongest assumption there is. */
+    if (o.ap && o.apTry && o.apRepeat && bestErr <= (o.apRepeatMaxBpErr > 0 ? o.apRepeatMaxBpErr : kRepMaxBpErr)) {
+        ++st.repTried[pass - 1];
+        for (int k : { 1, 2 }) {
+            if (repeatDetect(L[k], (float)M.f0, o, msg)) {
+                apKind = 6; viaOsd = false; ++st.repDecodes[pass - 1]; ++st.apDecodes[pass - 1]; ++st.fineDecodes[pass - 1];
+                return true;
+            }
+        }
+    }
     /* ★ A-priori decoding: near misses only (BP came within kApMaxBpErr checks), on the two-symbol set (the one that
      *  decodes most often), then the three-symbol. */
     if (o.ap && o.apTry && bestErr <= (o.apMaxBpErr > 0 ? o.apMaxBpErr : kApMaxBpErr)) {
@@ -947,6 +990,42 @@ bool apCheck(const float* L, const FtxApBook::Hyp& h0, const Bits174& cw, const 
     default: return true;
     }
 }
+}
+
+/* ★★ V12 beta91 REPEAT DETECTION (the deep tier). Each repeat hypothesis within ±kRepeatTones of this candidate is a whole
+ *  codeword: z = Σ ±L / √Σ L² over all 174 bits (≈ N(0,1) for a wrong codeword) must reach kRepMinZ, and the 97 bits
+ *  that are not the message (CRC + parity) may disagree with the hard decisions at most kRepMaxErr times (a wrong
+ *  codeword: ~48; P(≤ 20) ≈ 1e-8) — the sign-off's test (kApFullMaxFree / kApFullMinZ), which has never let a false
+ *  one through on noise. The message was a decode already (every guard passed then), so nothing new can be invented:
+ *  the worst a false detection could say is "this station sent that again". Best z wins. */
+bool Ft8SlotDecoder::repeatDetect(const float* L, float f0, const Ft8SlotOptions& o, ftx_message_t& msg) {
+    const std::vector<FtxApBook::Rep>& R = o.ap->repeats();
+    if (R.empty()) return false;
+    const float win = kRepeatTones / mon_.symbol_period;
+    const int64_t now = o.ap->slotNo();
+    double q = 0;
+    for (int j = 0; j < FTX_LDPC_N; ++j) q += (double)L[j] * L[j];
+    if (!(q > 0)) return false;
+    const double iq = 1.0 / std::sqrt(q);
+    int bestI = -1; double bestZ = kRepMinZ;
+    for (size_t i = 0; i < R.size(); ++i) {
+        const FtxApBook::Rep& r = R[i];
+        if (r.slot == now || std::fabs(r.hz - f0) > win) continue;      // this slot's own decodes are not repeats
+        double sc = 0; int fe = 0;
+        for (int j = 0; j < FTX_LDPC_N; ++j) {
+            const bool bj = (r.cw[j >> 6] >> (j & 63)) & 1;
+            sc += bj ? L[j] : -L[j];
+            if (j >= 77) fe += (L[j] > 0) != bj;
+        }
+        const double z = sc * iq;
+        if (fe <= kRepMaxErr && z >= bestZ) { bestZ = z; bestI = (int)i; }
+    }
+    if (bestI < 0) return false;
+    const FtxApBook::Rep& r = R[(size_t)bestI];
+    uint8_t a91[FTX_LDPC_K_BYTES] = {};
+    for (int k = 0; k < FTX_LDPC_K; ++k) if ((r.cw[k >> 6] >> (k & 63)) & 1) a91[k / 8] |= (uint8_t)(0x80u >> (k % 8));
+    a91ToMessage(a91, msg);
+    return true;
 }
 
 bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_message_t& msg, int& kind) {
@@ -1183,7 +1262,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             r.fine = viaFine;
             r.ap = apKind;
             out.push_back(r);
-            if (o.ap && !apKind) o.ap->heard(msg);     // ★ only what was heard without assumptions teaches the book
+            if (o.ap && !apKind) o.ap->heard(msg, (o.apRepeat || o.apRepeatLearn) ? hz : -1.0f);     // ★ only what was heard without assumptions teaches the book
             decodedStart_.push_back(startSample);
             s.start = startSample; s.f0 = hz; s.snr = r.snr;
             if (r.snr >= o.subtractMinSnr) subs.push_back(s);
@@ -1340,6 +1419,17 @@ void Ft8Decoder::runDecode() {
     o.osdPairSpan = deep ? kOsdPairSpan : 0;
     o.ap = &apBook_;
     o.apTry = deep;
+    /* ★★ V12 beta91 THE DEEP TIER — the owner's "Dig deeper" (deepTier(), set from Setup; the benchmark ticks it on a
+     *  fresh setup only where it measured green). Only ever on top of full depth: a loaded slot, or one the pass gate
+     *  holds to one pass, decodes exactly as before. The repeat book learns whenever the switch is on, so it is ready
+     *  the moment the CPU is. */
+    const bool deepOn = deepTier().load(std::memory_order_relaxed);
+    o.apRepeatLearn = deepOn;
+    if (deep && deepOn) {
+        o.apRepeat = true;
+        o.apMaxCands = kDeepApCands;
+        if (mode_ == FtxMode::FT8) o.fineMinSync = kDeepFineMinSync;   // ★ FT8 only: FT4's 8 of 16 doubled its CPU for +1 %
+    }
     o.mayRunPass = [&](int, double elapsedMs, double lastMs) {
         const bool loaded = loadProbe ? loadProbe() : false;
         return passAllowed(slotPeriod * 1000.0, lagMs, elapsedMs, lastMs, loaded);

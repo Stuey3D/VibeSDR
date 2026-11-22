@@ -2502,7 +2502,7 @@ function dabOwnRender() {
  *  that row was not run here. scripts/test-setup-bench-stale.mjs checks this list against the benchmark's own ids. */
 const BENCH_KNOWN_ROWS = [
   ["dec_rtty", "RTTY"], ["dec_navtex", "NAVTEX"], ["dec_wefax", "WEFAX"], ["dec_sstv", "SSTV"], ["dec_time", "Time signals"],
-  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
+  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_ft8deep", "FT8 / FT4 dig deeper"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
@@ -2604,6 +2604,7 @@ function renderBench(j) {
   adv.innerHTML = bits.join("<br>");
   adv.classList.toggle("hide", !bits.length);
   benchApplyDefaults();
+  ft8DeepRefresh();   // ★ V12 beta91 dig deeper: automatic, from this benchmark
 }
 
 /** ★ A "not run" row's name, from its id — the row never ran, so it has no label of its own. */
@@ -2877,6 +2878,8 @@ function benchApplyDefaults() {
       benchNote(lallBox, "LoRa on every channel is off: it measured " + Math.round(lall.pct) + "% of a core here at its busiest thread. Tick it to use it anyway \u2014 the default channels decode either way.");
     }
   }
+  // ★★ V12 beta91 FT8 / FT4 DIG DEEPER is AUTOMATIC (ft8DeepAuto): nothing is written here — the box shows what the server
+  //    decides from this benchmark until the owner makes a choice of their own (ft8DeepRefresh, from renderBench).
   // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
   //    keeps it, it is what makes a shared receiver worth zooming into. Every radio, because the box is one box.
   //    Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
@@ -3558,6 +3561,45 @@ function bandLabel(entry) {
  *  token that is IN the CSV when ticked ("lora+all" — the "spotsband+wspr" convention); `node` moves an existing control
  *  of the page under its parent (DAB's label scan, Band's mode-by-mode list). The digital-spots modes are added under
  *  "spots" from the server's own list (spotModes) — `spots-<mode>` off. */
+/* ★ V12 beta91 FT8 / FT4 dig deeper — what it does and costs. ONE TEXT, TWO READERS: ServerModeScreen.tsx FT8_DEEP_HINT. */
+/* ★★ V12 beta91 dig deeper is AUTOMATIC (Stuart 2026-11-22: "should be automatic and simply enable when the cpu has
+ *  headroom with a benchmark driven toggle in the settings with the rest of the digital modes, no user facing toggles").
+ *  The same rule as the server's (decoders/ft8_deep_auto.h): the benchmark's dig-deeper row below 25 % of a core, or an
+ *  older benchmark's Band row x 1.25 below it; no benchmark: the server measures itself once, at idle. The owner's tick
+ *  is "ft8+deep", untick "ft8-deep"; "Back to automatic" removes both. Listeners never see it. */
+function ft8DeepAuto() {   // → true / false, or null = the server measures it itself
+  const rows = (BENCH && BENCH.rows) || [];
+  const d = rows.find(r => r.id === "dec_ft8deep"), b = rows.find(r => r.id === "dec_ft8band");
+  if (d && Number(d.pct) >= 0) return Number(d.pct) < 25;
+  if (b && typeof b.pct === "number") return b.pct >= 0 && b.pct * 1.25 < 25;
+  const nr = (BENCH && BENCH.notRun) || [];
+  if (d || nr.some(x => x && (x.id === "dec_ft8band" || x.id === "dec_ft8deep"))) return false;
+  return null;
+}
+function ft8DeepOwner() { const s = modeOwnerSet(); return s.has("ft8+deep") ? 1 : s.has("ft8-deep") ? -1 : 0; }
+function ft8DeepHint() {
+  const own = ft8DeepOwner(), a = ft8DeepAuto();
+  return esc(FT8_DEEP_HINT) + " " + (own
+    ? (own > 0 ? "On" : "Off") + " \u2014 your choice. " + '<a href="#" id="ft8DeepAutoLink">Back to automatic</a>'
+    : "Automatic: " + (a === null ? "this server measures itself once, when it is idle, and decides"
+                                  : (a ? "on" : "off") + " \u2014 from this box\u2019s benchmark") + ".");
+}
+function ft8DeepRefresh() {
+  const box = document.querySelector('input[data-mode="ft8+deep"]'), h = $("ft8DeepHint");
+  if (box && !ft8DeepOwner()) box.checked = ft8DeepAuto() === true;
+  if (h) h.innerHTML = ft8DeepHint();
+  const l = $("ft8DeepAutoLink");
+  if (l) l.onclick = (e) => {
+    e.preventDefault();
+    const set = modeOwnerSet(); set.delete("ft8+deep"); set.delete("ft8-deep");
+    radio().blockedModes = [...set].join(",");
+    modeBlockSummary(); ft8DeepRefresh();
+  };
+}
+const FT8_DEEP_HINT = "More FT8, FT4 and FT2 decodes from the same audio \u2014 weak repeats of messages heard in the last minute, "
+  + "and more of the stations that only just failed \u2014 for up to about a fifth more decoding work. It is automatic and only ever runs while this "
+  + "server has CPU to spare; a busy server decodes as it does without it. Every FT8 / FT4 decode on this radio uses it: the "
+  + "spots, Band and a listener's decoder.";
 /* ★★ V12 the message-text opt-in's notice (DECODER-RESEARCH.md §4.3). ONE TEXT, TWO READERS: ServerModeScreen.tsx. */
 const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless "
   + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
@@ -3631,6 +3673,10 @@ const BLOCKABLE = [
    *  it below green (benchApplyDefaults) — the owner can always tick it back. Under it: Band's own mode-by-mode word. */
   { id: "spotsband", label: "Band: a whole band at once", parent: "spots" },
   { id: "bandModes", parent: "spotsband", node: "bandModeWrap" },
+  /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier, docs/v12/FTX-SENSITIVITY.md § Deep tier) — AUTOMATIC
+   *  (ft8DeepAuto, the server's decoders/ft8_deep_auto.h); ticking or unticking is the owner's own choice ("ft8+deep" /
+   *  "ft8-deep"), which always wins. The owner's settings only — listeners never see it. No reach gate: FT8 is everywhere. */
+  { id: "ft8+deep", label: "FT8 / FT4: dig deeper", parent: "spots", on: true },
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
   { id: "ism",    label: "ISM sensors and meters" },
@@ -4092,7 +4138,8 @@ function modeBlockRender() {
      *  package (Stuart, 2026-09-11). A tick box that cannot deliver is the fault AGENTS.md names:
      *  branch on what the machine has, or leave it out. */
     const dead = m.id === "dab" && !DAB_DECODER;
-    const ticked = m.on ? modeOwnerSet().has(m.id) : !off.has(m.id);
+    const ticked = m.id === "ft8+deep" ? (ft8DeepOwner() > 0 || (!ft8DeepOwner() && ft8DeepAuto() === true))
+                 : m.on ? modeOwnerSet().has(m.id) : !off.has(m.id);
     // ★★ V12 a region default: the reason beside the switch, said whichever way the owner has set it
     const rd = !m.on && REGION_DEFAULTS[m.id];
     return `<label class="row modeBox" style="gap:6px;flex:0 0 auto;align-items:center`
@@ -4109,6 +4156,8 @@ function modeBlockRender() {
     let h = box(m);
     if (m.id === "lora+all") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="loraAllHint" style="margin:2px 0 0 24px">`
                                 + loraAllHint() + `</div></div>`;
+    if (m.id === "ft8+deep") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="ft8DeepHint" style="margin:2px 0 0 24px">`
+                                + ft8DeepHint() + `</div></div>`;
     if (m.id === "avdata+text") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdataTextHint" style="margin:2px 0 0 24px">`
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
@@ -4149,6 +4198,12 @@ function modeBlockRender() {
       // ★★ V12 a REGION-DEFAULT switch (SAME outside the Americas, DAB in them): the owner's tick is recorded either
       //    way — "+id" on, "id" off — so their choice is never overwritten by the default.
       const id = el.dataset.mode;
+      if (id === "ft8+deep") {   // ★ V12 beta91: the owner's own choice, either way, wins over automatic
+        set.delete("ft8+deep"); set.delete("ft8-deep"); set.add(el.checked ? "ft8+deep" : "ft8-deep");
+        radio().blockedModes = [...set].join(",");
+        modeBlockSummary(); ft8DeepRefresh();
+        return;
+      }
       if (el.dataset.on) { if (el.checked) set.add(id); else set.delete(id); }
       else if (el.checked) { set.delete(id); if (REGION_DEFAULTS[id]) set.add("+" + id); }
       else { set.delete("+" + id); set.add(id); }
@@ -4158,6 +4213,7 @@ function modeBlockRender() {
     });
   });
   modeTreeGrey();
+  ft8DeepRefresh();
 }
 
 /** ★★ A PARENT OFF GREYS ITS OPTIONS, WITH THE REASON — never hides them (Stuart: never hide controls). Updated in place
@@ -4534,7 +4590,7 @@ function modeBlockSummary() {
   const isOn = id => tree.some(m => m.id === id && m.on);
   // ★★ V12 a switch this radio cannot use is not drawn, so it is not named here either (its saved value is kept)
   const drawn = id => { const m = tree.find(x => x.id === id); return !m || modeCapShown(tree, m); };
-  const off = all.filter(id => !/^spotsband[+-]/.test(id) && !isOn(id) && drawn(id));
+  const off = all.filter(id => !/^spotsband[+-]/.test(id) && id !== "ft8-deep" && !isOn(id) && drawn(id));
   const name = (id) => (tree.find(m => m.id === id) || { label: id }).label;
   const band = all.filter(id => /^spotsband[+-]/.test(id))
     .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
@@ -4544,6 +4600,7 @@ function modeBlockSummary() {
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
+    + (ft8DeepOwner() ? ` FT8 / FT4 dig deeper: ${ft8DeepOwner() > 0 ? "on" : "off"} (your choice).` : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
     + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
     + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")
