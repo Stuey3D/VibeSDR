@@ -9797,9 +9797,17 @@ function navCardFill(_key: string, el: HTMLElement) {
                          const t = await r.text(); if (navTexts.size > 200) navTexts.clear(); navTexts.set(f, t); show(t, true); })
     .catch(() => show('Could not reach the server.', false));
 }
-function trkRowHtml(x: { key: string; colour: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
+/** ★ beta91 a row's flag (TrackRow.flag, a regional-indicator pair): Windows' emoji font draws the pair as two plain
+ *  letters, so there it is the ISO code in a box (tracks.ts flagHtml's rule); '' for anything else. */
+function trkFlagHtml(flag: string | undefined): string {
+  const cps = [...String(flag || '')].map((c) => c.codePointAt(0) ?? 0);
+  if (cps.length !== 2 || cps.some((c) => c < 0x1F1E6 || c > 0x1F1FF)) return '';
+  const iso = String.fromCharCode(...cps.map((c) => c - 0x1F1E6 + 65));
+  return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
+}
+function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
   return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
+    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
     + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
