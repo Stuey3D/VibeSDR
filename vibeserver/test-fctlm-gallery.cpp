@@ -16,6 +16,7 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -187,7 +188,45 @@ static void s5() {
     rmDir(dir);
 }
 
-int main() {
+/** ★ `--write-fixture <dir>`: three passes of SYNTHETIC readings (the sample frame with its analogue values swung along a
+ *  pass — a battery sagging, panels warming) written exactly as the server writes them, for the clients' chart tests
+ *  (scripts/fixtures/fctlm/). Not on-air data. */
+static int writeFixture(const std::string& out) {
+    const std::string dir = tmpDir("fix");
+    gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
+    Clock ck;
+    {
+        bg::FcTlmGalleryTap tap(st, meta(), [&] { return ck.t; });
+        for (int p = 0; p < 3; ++p) {
+            const int64_t aos = T0 + p * 6000;
+            vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = (double)aos; c.los = (double)aos + 660;
+            for (int i = 0; i < 24; ++i) {
+                if (p == 1 && i >= 10 && i < 16) continue;   // a fade: six frames lost mid-pass
+                ck.t = aos + 30 + 5 * i; c.unix = (double)ck.t; c.elDeg = 5 + 40 * std::sin(3.14159 * i / 23.0);
+                vibefc::Decoded d = frame(1 + i % 24, 4000 + p * 100 + i);
+                for (size_t k = 0; k < d.values.size(); ++k)
+                    if (d.values[k].raw) d.values[k].v = std::round(d.values[k].v + (k % 5 + 1) * 3 * std::sin(0.25 * i + k) - p * (k % 3));
+                tap.satTlm(d, c);
+            }
+        }
+        tap.finish(false);
+    }
+    ::mkdir(out.c_str(), 0755);
+    int n = 0;
+    for (auto& f : st.names("fctlm")) {
+        std::string body; st.readItem(f, body);
+        const bool csv = f.size() > 4 && f.compare(f.size() - 4, 4, ".csv") == 0;
+        const std::string name = csv ? "pass-" + std::to_string(++n) + ".csv" : "day.txt";
+        std::ofstream o(out + "/" + name, std::ios::binary);
+        if (!(o << body)) { std::printf("could not write %s/%s (does the folder exist?)\n", out.c_str(), name.c_str()); rmDir(dir); return 1; }
+        std::printf("wrote %s/%s · %s\n", out.c_str(), name.c_str(), st.field(f, "title").c_str());
+    }
+    rmDir(dir);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--write-fixture") return writeFixture(argv[2]);
     std::printf("test-fctlm-gallery — FUNcube telemetry in the gallery (fixture frames, fake clock)\n");
     s1_s2();
     s3_s4();
