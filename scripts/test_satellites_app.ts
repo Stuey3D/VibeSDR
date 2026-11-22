@@ -5,7 +5,7 @@
 // geometry. Shapes captured from the real server (scripts/test-server-sat.mjs, 2026-11-19).
 import {
   ageText, clockIn, parseSatList, parseSatReadout, parseSatTrack, pickerRows, satCapFrom, satChanText, satStateWord,
-  satStatusLine, skyPath, skySvg, skyXY, txListenMode, txText, txTuneHz, satCreditText, satTxCreditText,
+  satStatusLine, skyPath, skySvg, skyXY, txListenMode, txText, txTuneHz, satCreditText, satTxCreditText, satUplinkText,
 } from '../src/services/satellites';
 
 let fail = 0;
@@ -55,7 +55,14 @@ ok(!!list && list.sats.length === 4 && list.located && list.time === 'ok', 'the 
 const rows = pickerRows(list, now);
 ok(rows.map(x => x.sat.id).join(',') === 'ISS,SO-50,RS-44', `rows: up first, then by AOS; unreachable birds out (${rows.map(x => x.sat.id).join(',')})`);
 ok(rows[0].reach.length === 1, 'only the downlinks this radio hears are offered');
-ok(txText(list!.sats[1].tx[0]) === '435.610–435.670 MHz USB' && txText(list!.sats[0].tx[0]) === '437.800 MHz FM', 'downlinks in words');
+ok(txText(list!.sats[1].tx[0]) === '435.610–435.670 MHz USB' && txText(list!.sats[0].tx[0]) === 'Downlink 437.800 MHz FM · Uplink 145.990 MHz · 67 Hz tone', `downlinks in words (beta91: and the uplink) — ${txText(list!.sats[0].tx[0])}`);
+// ★ beta91 which is which (Stuart 11-22): a downlink with an uplink names both; a beacon stays its bare frequency
+ok(txText({ label: '', hz: 437800000, mode: 'nfm', loop: 'fll', reach: true, upHz: 145990000, ctcss: 67 }) === 'Downlink 437.800 MHz FM · Uplink 145.990 MHz · 67 Hz tone',
+   `FM repeater: ${txText({ label: '', hz: 437800000, mode: 'nfm', loop: 'fll', reach: true, upHz: 145990000, ctcss: 67 })}`);
+ok(txText({ label: '', hz: 435610000, hiHz: 435670000, mode: 'usb', loop: 'none', reach: true, upHz: 145935000 }) === 'Downlink 435.610–435.670 MHz USB · Uplink 145.935–145.995 MHz',
+   'a linear transponder: both passbands');
+ok(txText({ label: '', hz: 137900000, mode: 'lrpt', loop: 'costas', reach: true }) === '137.900 MHz LRPT' && satUplinkText({ label: '', hz: 1, mode: 'nfm', loop: 'fll', reach: true }) === '',
+   'no uplink: the bare downlink, no "Uplink"');
 ok(txTuneHz(list!.sats[1].tx[0]) === 435640000 && txTuneHz(list!.sats[0].tx[0]) === 437800000, 'TRACK tunes a passband to its middle');
 ok(txListenMode({ label: '', hz: 1, mode: 'lrpt', loop: 'costas', reach: true }) === 'nfm' && txListenMode(list!.sats[1].tx[0]) === 'usb', 'the listening mode');
 ok(ageText(list!.sats[3]) === 'orbit data 20 days old — too old to track' && ageText(list!.sats[0]) === '', 'element age in words');

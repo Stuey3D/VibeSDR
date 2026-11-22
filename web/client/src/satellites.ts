@@ -20,7 +20,7 @@
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import {
   GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
-  satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satTxModeLabel,
+  satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -217,6 +217,7 @@ export class SatPanel {
   private srv(): string { return this.deps.serverKey?.() || location.host || 'server'; }
   // the skeleton's slots — built once, filled every second (the lent image canvas must never be re-created)
   private sHead!: HTMLElement; private sHs!: HTMLElement; private sDot!: HTMLElement; private sWhy!: HTMLElement; private sBox!: HTMLElement; private sRo!: HTMLElement;
+  private sUp!: HTMLElement;   // ★ beta91 "Downlink · Up 145.990 MHz · 67 Hz tone" under the big (downlink) frequency
   private sName!: HTMLElement; private sHz!: HTMLElement; private sCd!: HTMLElement; private sState!: HTMLElement;
   private sGlobe!: HTMLCanvasElement; private sImg!: HTMLElement; private sPk!: HTMLElement; private sSync!: HTMLElement;
   private sList!: HTMLDetailsElement; private sRows!: HTMLElement; private sCredit!: HTMLElement;
@@ -238,7 +239,7 @@ export class SatPanel {
       + `<div class="sat-body">`
       + `<div class="sat-why" data-s="why" hidden></div>`
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
-      +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div>`
+      +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div><div class="sat-dim" data-s="up" hidden></div>`
       +   `<div class="sat-cd" data-s="cd"></div><div class="sat-dim" data-s="state"></div></div>`
       +   `<div><canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted with arrows for its direction"></canvas>`
       +   `<div class="sat-key sat-dim" data-s="key" hidden></div></div></div>`
@@ -249,7 +250,7 @@ export class SatPanel {
     const q = <T extends HTMLElement>(n: string) => this.el.querySelector(`[data-s="${n}"]`) as T;
     this.sHead = this.el.querySelector('.sat-h') as HTMLElement;
     this.sHs = q('hs'); this.sDot = this.el.querySelector('.sat-dot') as HTMLElement;
-    this.sWhy = q('why'); this.sBox = q('box'); this.sRo = q('ro'); this.sName = q('name'); this.sHz = q('hz'); this.sCd = q('cd');
+    this.sWhy = q('why'); this.sBox = q('box'); this.sRo = q('ro'); this.sName = q('name'); this.sHz = q('hz'); this.sUp = q('up'); this.sCd = q('cd');
     this.sState = q('state'); this.sGlobe = q<HTMLCanvasElement>('globe'); this.sImg = q('img'); this.sPk = q('pk'); this.sSync = q('sync');
     this.sList = q<HTMLDetailsElement>('list'); this.sRows = q('rows'); this.sCredit = q('credit');
     this.sKey = q('key'); this.sTlm = q('tlm'); this.sMap = this.el.querySelector('[data-act="map"]') as HTMLButtonElement;
@@ -498,6 +499,7 @@ export class SatPanel {
         const pt = pend.tx[this.pending!.tx];
         this.sName.textContent = `${pend.name}${pt ? ' · ' + pt.label : ''}`;
         this.sHz.textContent = pt ? satHzText(satCorrectedHz(pt, null)) : '';
+        { const up = pt ? satUplinkText(pt) : ''; const txt = up ? `${up} · the frequency above is the downlink` : ''; this.sUp.hidden = !txt; this.sUp.textContent = txt; }
         this.sCd.textContent = satCountdownText(pend, now);
         this.sState.textContent = 'Tuning…';
         this.sImg.hidden = true; this.sPk.hidden = true;
@@ -517,6 +519,7 @@ export class SatPanel {
     const ml = satTxModeLabel(t);
     this.sName.textContent = `${sat.name} · ${t.label}${ml ? ' · ' + ml : ''}`;
     this.sHz.textContent = satHzText(satCorrectedHz(t, mine));
+    { const up = satUplinkText(t); const txt = up ? `${up} · the frequency above is the downlink` : ''; this.sUp.hidden = !txt; if (this.sUp.textContent !== txt) this.sUp.textContent = txt; }
     this.sCd.textContent = satCountdownText(sat, now, this.track && this.track.norad === sat.norad ? this.track.geo : null);
     const use = txUse(t);
     const lockWord = !this.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';

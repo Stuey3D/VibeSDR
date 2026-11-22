@@ -29,7 +29,7 @@ import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanva
 import { scrollLane } from '../constants/popupTokens';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
-         globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
+         globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          type SatInfo, type SatList, type SatPicked, type SatReadout } from '../services/satellites';
 
@@ -277,6 +277,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 <View style={s.txtCol}>
                   <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}${satTxModeLabel(tx) ? ' · ' + satTxModeLabel(tx) : ''}`}</Text>
                   <Text style={s.big}>{satHzText(satCorrectedHz(tx, mine))}</Text>
+                  {/* ★ beta91 which frequency is which: the big one is the downlink; the uplink (where to call) under it */}
+                  {!!satUplinkText(tx) && <Text style={s.detail}>{`${satUplinkText(tx)} · the frequency above is the downlink`}</Text>}
                   <Text style={s.txt}>{countdown}</Text>
                   {!!stateLine && <Text style={s.detail}>{stateLine}</Text>}
                 </View>

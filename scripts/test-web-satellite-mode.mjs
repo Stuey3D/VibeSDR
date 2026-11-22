@@ -50,7 +50,7 @@ const list = (over = {}) => ({
     { id: 'METEOR-M2-3', name: 'METEOR-M2 3', norad: 57166, note: '', age: 0.4, ageState: 'fresh', el: 31, az: 10, rangeKm: 1450, lat: 58, lon: 3, inRangeFor: 595,
       tx: [{ label: 'LRPT', hz: 137900000, mode: 'lrpt', loop: 'costas', reach: true, use: 'image' }], passes: [{ aos: now - 300, tca: now + 100, los: now + 595, maxEl: 62, aosAz: 0, losAz: 180 }] },
     { id: 'ISS', name: 'ISS', norad: 25544, note: '', age: 0.2, ageState: 'fresh', el: 14, az: 220, rangeKm: 1700, lat: 47, lon: -9, inRangeFor: 372,
-      tx: [{ label: 'FM repeater', hz: 437800000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice' },
+      tx: [{ label: 'FM repeater', hz: 437800000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice', upHz: 145990000, ctcss: 67 },
            { label: 'Voice / SSTV', hz: 145800000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice', sstv: true },
            { label: 'APRS', hz: 145825000, mode: 'ax25-1200', loop: 'fll', reach: true, use: 'packet' }],
       passes: [{ aos: now - 200, tca: now + 80, los: now + 372, maxEl: 40, aosAz: 230, losAz: 60 }] },
@@ -170,6 +170,10 @@ try {
   ok(!box.big && box.img, 'voice → COMPACT (no picture area)');
   ok(box.hz === '437.791 88 MHz', `the corrected frequency (437.800 − 8.123 kHz): ${box.hz}`);
   ok(/^In range for 6:\d\d$/.test(box.cd), `the countdown: ${box.cd}`);
+  {   // ★ beta91 which is which: the uplink under the big (downlink) frequency
+    const up = await ev(`(() => { const e = document.querySelector('#satPanel [data-s="up"]'); return e && !e.hidden ? e.textContent : ''; })()`);
+    ok(up === 'Uplink 145.990 MHz · 67 Hz tone · the frequency above is the downlink', `beta91 the box names the uplink: ${up}`);
+  }
   ok(/^TRACK/.test(box.st), `the lock's word: ${box.st}`);
   ok(box.list === false, 'the timetable folds away under the pick');
   const ink = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; })()`);

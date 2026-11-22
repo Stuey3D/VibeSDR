@@ -207,7 +207,20 @@ export function clockIn(t: number | undefined, nowSec: number): string {
 export function txText(t: SatTx): string {
   const mhz = (hz: number) => (hz / 1e6).toFixed(3);
   const mode = t.mode === 'nfm' ? 'FM' : t.mode.toUpperCase();
-  return t.hiHz ? `${mhz(t.hz)}–${mhz(t.hiHz)} MHz ${mode}` : `${mhz(t.hz)} MHz ${mode}`;
+  const down = t.hiHz ? `${mhz(t.hz)}–${mhz(t.hiHz)} MHz ${mode}` : `${mhz(t.hz)} MHz ${mode}`;
+  // ★ beta91 (Stuart 11-22: "can we show which is the uplink and which is the downlink"): a downlink with an uplink says
+  //   which is which; a beacon / telemetry / weather downlink has nothing to tell apart and stays the bare frequency
+  const up = satUplinkText(t);
+  return up ? `Downlink ${down} · ${up}` : down;
+}
+/** ★ beta91 the uplink in words — "Uplink 145.990 MHz · 67 Hz tone", a transponder's "Uplink 145.900–145.960 MHz" — or ''.
+ *  (We only receive: it is said so people who transmit know where to call; never a control.) */
+export function satUplinkText(t: SatTx): string {
+  if (!(t.upHz && t.upHz > 0)) return '';
+  const mhz = (hz: number) => (hz / 1e6).toFixed(3);
+  const span = t.hiHz && t.hiHz > t.hz ? t.hiHz - t.hz : 0;
+  const up = span ? `${mhz(t.upHz)}–${mhz(t.upHz + span)} MHz` : `${mhz(t.upHz)} MHz`;
+  return `Uplink ${up}${t.ctcss && t.ctcss > 0 ? ` · ${Number(t.ctcss.toFixed(1))} Hz tone` : ''}`;
 }
 /** Where the picker's TRACK button tunes: a single channel's frequency, a passband's centre. */
 export function txTuneHz(t: SatTx): number { return t.hiHz ? Math.round((t.hz + t.hiHz) / 2) : t.hz; }
