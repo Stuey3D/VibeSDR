@@ -662,6 +662,7 @@ public:
         const size_t dot = name.rfind('.');
         const std::string ext = dot == std::string::npos ? "" : name.substr(dot + 1);
         ctype = ext == "txt" ? "text/plain; charset=utf-8" : ext == "png" ? "image/png" : ext == "jpg" ? "image/jpeg" : ext == "json" ? "application/json"
+              : ext == "csv" ? "text/csv; charset=utf-8"   // ★ V12 beta91 FUNcube telemetry, a CSV per pass
               : "application/octet-stream";
         return true;
     }
