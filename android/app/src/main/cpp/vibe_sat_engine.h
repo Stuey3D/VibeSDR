@@ -61,6 +61,9 @@ struct Transmitter {
     std::string status;      // sats.json: "active" | "inactive" (SatNOGS DB's word) | "" (nobody said)
     bool passband() const { return hiHz > hz; }
     double centre() const { return passband() ? 0.5 * (hz + hiHz) : hz; }
+    /** ★★ beta91 SATELLITE LABELS: mode "label" = a downlink that is only ever NAMED on the waterfall (ORBCOMM — commercial
+     *  messaging): never offered in SATELLITE mode, never locked, never decoded. */
+    bool labelOnly() const { return mode == "label"; }
 };
 struct SatDef {
     std::string id, name;
@@ -137,18 +140,30 @@ struct SatsMeta {
 };
 inline double isoToUnix(const std::string& s) { double jd = 0; return parseIsoUtc(s, jd) ? unixFromJd(jd) : 0.0; }
 
+/** ★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md): the LABEL-ONLY birds of a sats.json — kept apart from the list
+ *  (Engine::labelDefs_), so nothing that offers, locks or decodes a satellite ever sees them. */
+struct LabelSet {
+    std::vector<SatDef> defs; std::vector<Elements> els; std::vector<bool> have;
+    void clear() { defs.clear(); els.clear(); have.clear(); }
+};
+
 /** ★★ sats.json (vibesdr.net's mirror, docs/v12/SATELLITE-ENGINE.md §6.2) → the list, the element sets, the credit.
  *  Strict: an unknown format, no satellites, a bad id / catalogue number / frequency / mode = refused (false) and the
  *  caller keeps what it has. A transmitter with an unknown mode or loop is skipped, not the whole bird.
  *  ★ Catalogue numbers are integers 1 … 999 999 999 (six digits are normal now) — never a 5-digit TLE field. */
+/*  ★★ beta91: a bird marked "labelOnly", or whose every downlink is mode "label", goes to `labels` (when given — the
+ *  validators pass none and just check it); a "label" downlink on an ordinary bird is dropped. A server before beta91
+ *  skips "label" (an unknown mode), so such a bird has no usable downlink there and is not offered. ≤ 200 birds in all
+ *  (the old servers' limit — the mirror keeps under it). */
 inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::vector<Elements>& els, std::vector<bool>& haveEl,
-                      SatsMeta& meta, std::string& err) {
+                      SatsMeta& meta, std::string& err, LabelSet* labels = nullptr) {
     json::Value doc;
     if (text.size() > 4u * 1024 * 1024 || !json::parseValue(text, doc) || doc.t != json::Value::Obj) { err = "not JSON"; return false; }
     if (doc.num("format") != 1) { err = "an unknown sats.json format"; return false; }
     const json::Value* sats = doc.get("satellites");
     if (!sats || sats->t != json::Value::Arr || sats->a.empty() || sats->a.size() > 200) { err = "no satellites"; return false; }
     defs.clear(); els.clear(); haveEl.clear();
+    if (labels) labels->clear();
     meta = SatsMeta{};
     meta.fromMirror = true;
     meta.generated = isoToUnix(doc.str("generated"));
@@ -183,7 +198,7 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
                 tr.mode = t.str("mode"); tr.loop = t.str("loop"); tr.consumer = t.str("consumer"); tr.baud = t.num("baud");
                 tr.upHz = t.num("uplink"); tr.ctcss = t.num("ctcss"); tr.note = t.str("note").substr(0, 160); tr.status = t.str("status");
                 tr.modeName = t.str("modeName").substr(0, 24);
-                static const char* kModes[] = {"nfm", "usb", "lsb", "cw", "am", "lrpt"};
+                static const char* kModes[] = {"nfm", "usb", "lsb", "cw", "am", "lrpt", "label"};
                 bool modeOk = false; for (auto m : kModes) if (tr.mode == m) modeOk = true;
                 const bool loopOk = tr.loop == "fll" || tr.loop == "none" || tr.loop == "costas";
                 if (!modeOk || !loopOk || !(tr.hz >= 1e6 && tr.hz <= 1e10) || (tr.hiHz != 0 && !(tr.hiHz > tr.hz && tr.hiHz - tr.hz <= 2e6))) continue;
@@ -192,11 +207,24 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
                 if (tr.label.empty()) tr.label = tr.mode;
                 d.tx.push_back(tr);
             }
+        // ★★ beta91: label-only birds apart; a stray "label" downlink on an ordinary bird is not listened to
+        bool allLabel = !d.tx.empty();
+        for (auto& t : d.tx) if (!t.labelOnly()) allLabel = false;
+        const json::Value* lo = x.get("labelOnly");
+        const bool labelBird = allLabel || (lo && lo->t == json::Value::Bool && lo->b);
+        if (labelBird) {
+            d.tx.erase(std::remove_if(d.tx.begin(), d.tx.end(), [](const Transmitter& t) { return !t.labelOnly(); }), d.tx.end());
+            for (auto& t : d.tx) { t.loop = "none"; t.consumer.clear(); t.upHz = 0; t.ctcss = 0; }   // ★ a name, nothing else
+        } else d.tx.erase(std::remove_if(d.tx.begin(), d.tx.end(), [](const Transmitter& t) { return t.labelOnly(); }), d.tx.end());
         if (d.tx.empty()) continue;   // nothing to listen to: not offered
         Elements e; bool have = false;
         if (const json::Value* omm = x.get("omm"); omm && omm->t == json::Value::Obj) {
             std::string e2;
             have = fromOmm(omm->flat(), e, e2) && e.norad == d.norad;
+        }
+        if (labelBird) {
+            if (labels && labels->defs.size() < 200) { labels->defs.push_back(std::move(d)); labels->els.push_back(e); labels->have.push_back(have); }
+            continue;
         }
         defs.push_back(std::move(d)); els.push_back(e); haveEl.push_back(have);
     }
@@ -445,6 +473,18 @@ inline const char* lockName(LockState s) {
  *  FT8 uses, never the raw system clock). */
 struct Clock { double unix = 0; bool measured = false; };
 
+/** ★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md): one downlink of a bird above the horizon, where it is RECEIVED
+ *  now (the published frequency + Doppler) — what the waterfall names. */
+struct SkyLabel {
+    std::string id, name, tx, mode;   // mode: the listening demodulator ("nfm" for a label-only or LRPT downlink)
+    long long norad = 0;
+    double hz = 0;                    // received centre (a passband's centre)
+    double loHz = 0, hiHz = 0;        // a passband's received edges (0 = a single channel)
+    double rateHzS = 0;               // the Doppler's rate here (Hz/s) — a client may carry the mark between messages
+    double elDeg = 0;
+    bool labelOnly = false;           // ORBCOMM-style: a name only (never offered, locked or decoded)
+};
+
 /** What a lock is doing right now — what the caller applies (shiftHz) and what the clients draw. */
 struct Track {
     LockState state = LockState::Off;
@@ -481,6 +521,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         obs_.set(lat, lon, altM);
         for (auto& s : sats_) s.passesAt = 0;
+        skyAt_ = 0;
     }
     bool haveObserver() const { std::lock_guard<std::mutex> lk(m_); return obs_.valid; }
     /** ★★ sats.json (vibesdr.net's mirror) → the LIST and the element sets, replacing the built-in list. Returns how
@@ -489,8 +530,18 @@ public:
      *  (by catalogue number and label) or ends when the new list no longer has them. */
     int loadSats(const std::string& text, std::string* errOut = nullptr) {
         std::vector<SatDef> defs; std::vector<Elements> els; std::vector<bool> have; SatsMeta meta; std::string err;
-        if (!parseSats(text, defs, els, have, meta, err)) { if (errOut) *errOut = err; return -1; }
+        LabelSet labels;
+        if (!parseSats(text, defs, els, have, meta, err, &labels)) { if (errOut) *errOut = err; return -1; }
         std::lock_guard<std::mutex> lk(m_);
+        {   // ★★ beta91 the label-only birds: their own rows, never in defs_ (nothing that offers or locks sees them)
+            std::vector<SatRow> lr(labels.defs.size());
+            for (size_t i = 0; i < labels.defs.size(); ++i) {
+                Sgp4 sg;
+                if (labels.have[i] && sg.init(labels.els[i])) { lr[i].have = true; lr[i].el = labels.els[i]; lr[i].sgp = sg; }
+            }
+            labelDefs_ = std::move(labels.defs); labelSats_ = std::move(lr);
+            skyAt_ = 0;
+        }
         std::vector<SatRow> rows(defs.size());
         for (size_t i = 0; i < defs.size(); ++i) {
             const SatRow* old = nullptr;
@@ -514,6 +565,68 @@ public:
         defs_ = std::move(defs); sats_ = std::move(rows); meta_ = meta;
         int n = 0; for (auto& r : sats_) if (r.have) ++n;
         return n;
+    }
+    /** ★ beta91: how many label-only birds are held (and how many have elements). */
+    int labelCount(int* withElements = nullptr) const {
+        std::lock_guard<std::mutex> lk(m_);
+        int n = 0; for (auto& r : labelSats_) if (r.have) ++n;
+        if (withElements) *withElements = n;
+        return (int)labelDefs_.size();
+    }
+
+    // ── ★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md — Stuart 2026-11-22: "we dont even need to be in satellite
+    //    mode either, i could simply be listening to 2m band and if it appears we can label it") ──
+    static constexpr double kSkyEverySec = 4.0;      // the sky is looked at once in this long, whoever asks
+    static constexpr size_t kSkyLabelMax = 24;       // the most labels one message carries (highest birds first)
+    /** Every listed downlink (and every label-only bird's) of a bird ABOVE THE HORIZON whose received signal falls in
+     *  [lo, hi] Hz — at its Doppler-shifted frequency. Highest elevation first, ≤ `max`. Nothing without a location,
+     *  without a trustworthy clock ("none"), or for a bird whose elements are expired. A downlink SatNOGS marks
+     *  inactive is not named (it is not there to see).
+     *  ★ COST: one look per bird (and one 1 s ahead for the rate) every kSkyEverySec, shared by every caller — ~100
+     *    birds = ~200 SGP4 steps (0.3 µs each on the M5, test-sat-orbit §4); between refreshes a call only filters. */
+    std::vector<SkyLabel> skyLabels(const Clock& clk, double lo, double hi, size_t max = kSkyLabelMax) {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<SkyLabel> out;
+        if (!obs_.valid || !(hi > lo) || timeStateLocked(clk) == "none") return out;
+        if (skyAt_ <= 0 || std::fabs(clk.unix - skyAt_) >= kSkyEverySec) refreshSkyLocked(clk);
+        for (const SkyBird& b : sky_) {
+            const SatDef& d = b.label ? labelDefs_[b.i] : defs_[b.i];
+            for (const Transmitter& t : d.tx) {
+                if (t.status == "inactive") continue;
+                const double c = t.centre();
+                const double dop = -c * (b.rrKmS * 1000.0) / kC;
+                SkyLabel L;
+                L.id = d.id; L.name = d.name; L.tx = t.label; L.norad = d.norad; L.labelOnly = b.label; L.elDeg = b.elDeg;
+                L.mode = b.label ? "nfm" : listenModeOf(t);
+                L.hz = c + dop;
+                L.rateHzS = -c * (b.rrRateKmS2 * 1000.0) / kC;
+                if (t.passband()) {
+                    L.loHz = t.hz - t.hz * (b.rrKmS * 1000.0) / kC;
+                    L.hiHz = t.hiHz - t.hiHz * (b.rrKmS * 1000.0) / kC;
+                    if (L.hiHz < lo || L.loHz > hi) continue;
+                } else if (L.hz < lo || L.hz > hi) continue;
+                out.push_back(std::move(L));
+            }
+        }
+        std::stable_sort(out.begin(), out.end(), [](const SkyLabel& a, const SkyLabel& b) { return a.elDeg > b.elDeg; });
+        if (out.size() > max) out.resize(max);
+        return out;
+    }
+    /** The wire message: {"type":"sat_labels","v":1,"t":unix,"sats":[{"id","n","norad","tx","hz","lo"?,"hi"?,"r","el","m","b"?}]}
+     *  (`b`:true = label-only). An empty list is a valid message (the client clears). */
+    static std::string skyLabelsJson(const std::vector<SkyLabel>& v, double unixNow) {
+        std::string j = "{\"type\":\"sat_labels\",\"v\":1,\"t\":" + fmtNum(unixNow, 0) + ",\"sats\":[";
+        for (size_t k = 0; k < v.size(); ++k) {
+            const SkyLabel& L = v[k];
+            if (k) j += ",";
+            j += "{\"id\":\"" + jsonEsc(L.id) + "\",\"n\":\"" + jsonEsc(L.name) + "\",\"norad\":" + std::to_string(L.norad)
+               + ",\"tx\":\"" + jsonEsc(L.tx) + "\",\"hz\":" + fmtNum(L.hz, 0);
+            if (L.hiHz > L.loHz) j += ",\"lo\":" + fmtNum(L.loHz, 0) + ",\"hi\":" + fmtNum(L.hiHz, 0);
+            j += ",\"r\":" + fmtNum(L.rateHzS, 1) + ",\"el\":" + fmtNum(L.elDeg, 1) + ",\"m\":\"" + jsonEsc(L.mode) + "\"";
+            if (L.labelOnly) j += ",\"b\":true";
+            j += "}";
+        }
+        return j + "]}";
     }
     SatsMeta meta() const { std::lock_guard<std::mutex> lk(m_); return meta_; }
     /** CelesTrak OMM JSON (one group) → element sets for the listed birds. Returns how many listed birds it updated;
@@ -1027,7 +1140,32 @@ private:
         return out;
     }
 
+    /** ★ beta91: one bird above the horizon at skyAt_ — its range rate and that rate's change (for the Doppler's rate). */
+    struct SkyBird { bool label = false; size_t i = 0; double elDeg = 0, rrKmS = 0, rrRateKmS2 = 0; };
+    void refreshSkyLocked(const Clock& clk) {
+        sky_.clear();
+        skyAt_ = clk.unix;
+        auto scan = [&](std::vector<SatRow>& rows, bool label) {
+            for (size_t i = 0; i < rows.size(); ++i) {
+                SatRow& r = rows[i];
+                if (!r.have) continue;
+                const Age a = ageOf((clk.unix - r.el.epochUnix()) / 86400.0);
+                if (a == Age::Expired || a == Age::None) continue;
+                Look now = look(r.sgp, obs_, clk.unix);
+                if (!now.ok || now.elDeg < 0) continue;
+                Look ahead = look(r.sgp, obs_, clk.unix + 1.0);
+                sky_.push_back({label, i, now.elDeg, now.rangeRateKmS, ahead.ok ? ahead.rangeRateKmS - now.rangeRateKmS : 0.0});
+            }
+        };
+        scan(sats_, false);
+        scan(labelSats_, true);
+    }
+
     mutable std::mutex m_;
+    std::vector<SatDef> labelDefs_;   // ★★ beta91 label-only birds (ORBCOMM) — never offered, locked or decoded
+    std::vector<SatRow> labelSats_;
+    std::vector<SkyBird> sky_;
+    double skyAt_ = 0;
     std::vector<SatDef> defs_;
     std::vector<SatRow> sats_;
     SatsMeta meta_;
