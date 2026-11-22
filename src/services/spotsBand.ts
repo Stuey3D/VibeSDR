@@ -8,7 +8,7 @@
  *   `spotBands` (what Band steps through — only bands THIS radio reaches; absent = no Band key, AGENTS.md) and `spotsBand`
  *   true / false + `spotsBandWhy` (greyed with the reason — the owner's switch or the benchmark's default; never hidden).
  */
-import { readSpotBands, spotBandAt, digiModeFamily, type SpotBand } from '../utils/digiModes';
+import { readSpotBands, spotBandAt, digiModeFamily, spotsListModes, type SpotBand } from '../utils/digiModes';
 
 export interface SpotsBandCap { ok: boolean; why: string; bands: SpotBand[] }
 
@@ -32,7 +32,7 @@ export function parseSpotsBandCap(j: any): SpotsBandCap | undefined {
 /** ★ The MODE filter's choices: ALL, then the server's modes (FT8 and FT4 on an older one) — never a fixed list (a key for
  *  a mode this server does not decode would be dead). */
 export function spotFilterModes(spotModes: readonly string[] | undefined): string[] {
-  return ['ALL', ...(spotModes && spotModes.length ? spotModes : SPOT_MODES_DEFAULT)];
+  return ['ALL', ...spotsListModes(spotModes && spotModes.length ? spotModes : SPOT_MODES_DEFAULT)];   // ★ beta91: not PSKW
 }
 /** Does a spot pass the MODE filter — by FAMILY (PSK31 / PSK63 → PSK), as the web's filteredSpots. */
 export function spotModeMatches(spotMode: string, filter: string, spotModes: readonly string[] | undefined): boolean {
@@ -61,9 +61,9 @@ export function spotsBandHint(cap: SpotsBandCap): string {
  *  something in it and the box has the CPU (decoders/digi_governor.h) — so the header says, per mode, what it is doing.
  *  {"type":"digital_spots_status","data":{scope:"band",modes:[{mode,state,dials,idle,shed,live}],budget}} — when a state
  *  changes and every 15 s. */
-export type SpotModeStateName = 'active' | 'light' | 'idle' | 'shed' | 'off' | 'out';
+export type SpotModeStateName = 'active' | 'light' | 'idle' | 'shed' | 'off' | 'out' | 'paused';
 export interface SpotModeState { mode: string; state: SpotModeStateName; dials: number; idle: number; shed: number; live: number }
-const STATES: readonly string[] = ['active', 'light', 'idle', 'shed', 'off', 'out'];   // ★ 'out': its slice is beyond the capture
+const STATES: readonly string[] = ['active', 'light', 'idle', 'shed', 'off', 'out', 'paused'];   // ★ 'out': its slice is beyond the capture · 'paused' (beta91)
 /** The status frame's modes, checked as the web's decoders.ts: a state not in the five is dropped, at most 16. null = not one. */
 export function parseSpotsStatus(d: any): SpotModeState[] | null {
   if (!d || !Array.isArray(d.modes)) return null;
@@ -77,6 +77,8 @@ export const SPOT_STATE_WORDS: Record<SpotModeStateName, string> = {
   active: 'decoding', light: 'decoding, one pass — the server is busy', idle: 'nothing in its window just now — not decoded',
   shed: 'signals there, but over this server\'s CPU budget — not decoded', off: 'switched off for Band by the server owner',
   out: 'its dial is further from this band\'s others than this radio\'s capture reaches — not decoded here',
+  // ★ V12 beta91: CW, RTTY and wide PSK (continuous) pause first when the server's band decode falls behind
+  paused: 'paused — the band decode fell behind the radio, so the continuous modes wait and the slotted ones keep their slots',
 };
 /** A chip's spoken / long text: "FT8: decoding" (+ " (3 periods shed)"). */
 export function spotChipText(m: SpotModeState): string {

@@ -403,7 +403,8 @@ int main(int argc, char** argv) {
         ok(w && w->slotSec == 120.0 && w->sampleRate == 12000 && w->audioLoHz <= 1380 && w->audioHiHz >= 1620 && w->singleDialTolHz > 0,
            "WSPR is registered (digimodes/wspr.h): 120 s slots, 12 kHz, its 200 Hz sub-band, Single only at its dials");
         bool made = true;
-        for (const auto& m : ms) { auto e = m.make(); made = made && e != nullptr; }
+        // ★ V12 beta91: an IQ mode (CW, RTTY) is made for a window (makeWin), never without one
+        for (const auto& m : ms) { auto e = m.iq ? (m.makeWin ? m.makeWin(7000000, 7040000) : nullptr) : m.make(); made = made && e != nullptr; }
         ok(made, "every registered mode makes an engine");
     }
 
@@ -1179,6 +1180,79 @@ int main(int argc, char** argv) {
         std::printf("    Single (FT8+FT4 engines on the 14.074 passband): %.3f %% of one core, %d spots\n", single, nS);
         std::printf("    Band 20 m (FT8 on 14.074, FT4 on 14.080, from a 75 kHz slice): %.3f %% of one core, %d spots\n", band, nB);
         std::printf("    of which the two tuners: %.3f %% (%.3f %% per dial)\n", tuners, tuners / 2);
+    }
+
+    std::printf("── ★ V12 beta91: Band's PAUSE RULE — the continuous IQ modes pause (CW first, then RTTY) when the decode falls behind ──\n");
+    {
+        struct IqCount : digi::Engine {
+            std::shared_ptr<std::atomic<uint64_t>> n;
+            void process(const float*, int, double) override {}
+            void processIq(const std::complex<float>*, int k, double, double, double) override { n->fetch_add((uint64_t)k); }
+        };
+        auto iqMode = [](const char* name, int rank, int prio, double lo, double hi, std::shared_ptr<std::atomic<uint64_t>> n) {
+            digi::ModeDef m; m.name = name; m.iq = true; m.single = false; m.slotSec = 0; m.sampleRate = 0; m.priority = prio; m.pauseRank = rank;
+            m.costVsFt8 = 0.5; m.gateSec = 4;
+            m.windows = [lo, hi](const std::string& b) { return b == "20m" ? std::vector<std::pair<double, double>>{ { lo, hi } } : std::vector<std::pair<double, double>>{}; };
+            m.makeWin = [n](double, double) { auto e = new IqCount(); e->n = n; return std::unique_ptr<digi::Engine>(e); };
+            m.make = [] { return std::unique_ptr<digi::Engine>(); };
+            return m;
+        };
+        auto cs = std::make_shared<CountShared>();
+        auto nCw = std::make_shared<std::atomic<uint64_t>>(0), nRt = std::make_shared<std::atomic<uint64_t>>(0);
+        std::vector<digi::ModeDef> ms = { countingMode("FT8X", 14074000, "20m", 15, 10, 1, 1, cs),
+                                          iqMode("CWX", 1, 120, 14010000, 14030000, nCw), iqMode("RTX", 2, 110, 14040000, 14050000, nRt) };
+        digi::Spotter sp(digi::Spotter::Scope::Band, ms, nullptr, nullptr, nullptr);
+        double behind = 0; std::vector<std::string> logs;
+        sp.setBehind([&] { return behind; });
+        sp.setLog([&](const std::string& l) { logs.push_back(l); });
+        const double rate = 96000, centre = 14040000, utc0 = 1800000000.0;
+        std::vector<cf32> z(960, cf32(0, 0));
+        double t = 0;
+        auto run = [&](double secs) { for (double end = t + secs; t < end; t += 0.01) sp.feedIq(z.data(), 960, rate, centre, utc0 + t + 0.01, nullptr, 0, 0, 0); };
+        auto st = [&](const char* m) { for (auto& x : sp.status()) if (x.mode == m) return std::string(digi::stateWord(x.state)); return std::string("-"); };
+        run(10);
+        ok(sp.pauseLevel() == 0 && st("CWX") == "active" && st("RTX") == "active" && nCw->load() > 0 && nRt->load() > 0,
+           "caught up: both continuous modes decode (" + st("CWX") + ", " + st("RTX") + ")");
+        behind = 3.0;
+        run(2.5);
+        const uint64_t cw0 = nCw->load();
+        ok(sp.pauseLevel() == 1 && st("CWX") == "paused" && st("RTX") == "active", "3 s behind: CW pauses FIRST (" + st("CWX") + "), RTTY still runs");
+        run(6);
+        ok(sp.pauseLevel() == 2 && st("RTX") == "paused", "still behind 5 s later: RTTY pauses too (" + st("RTX") + ")");
+        const uint64_t rt0 = nRt->load(), ft0 = cs->total;
+        run(10);
+        ok(nCw->load() == cw0 && nRt->load() == rt0, "paused: neither is fed at all");
+        ok(cs->total > ft0 && st("FT8X") != "paused", "the slotted mode is never paused — it keeps being fed");
+        bool said = false; for (auto& l : logs) if (l.find("CWX paused \xe2\x80\x94 the CPU is behind") != std::string::npos) said = true;
+        ok(said, "the log says it plainly: \"" + (logs.empty() ? std::string() : logs[0]) + "\"");
+        behind = 0;
+        run(20);
+        ok(sp.pauseLevel() == 2, "caught up for 20 s: still paused (it waits for 30 s of calm)");
+        run(15);
+        ok(sp.pauseLevel() == 1 && st("RTX") != "paused" && st("CWX") == "paused", "30 s caught up: RTTY resumes first (" + st("RTX") + "), CW still paused");
+        run(35);
+        ok(sp.pauseLevel() == 0 && st("CWX") != "paused" && nCw->load() > cw0, "another 30 s: CW resumes and is fed again");
+        bool back = false; for (auto& l : logs) if (l.find("CWX resumed") != std::string::npos) back = true;
+        ok(back, "…and the log says so");
+        // ★ a skipped slot pauses CW too (no queue at all)
+        behind = 0;
+        struct SkipShared { std::atomic<uint64_t> n{0}; };
+        auto sk = std::make_shared<SkipShared>();
+        digi::ModeDef sm = countingMode("FT8S", 14074000, "20m", 15, 10, 1, 1, std::make_shared<CountShared>());
+        { auto mk = sm.make; sm.make = [mk, sk] {
+            struct W : digi::Engine { std::unique_ptr<digi::Engine> in; std::shared_ptr<SkipShared> s;
+                void process(const float* a, int n, double u) override { in->process(a, n, u); }
+                uint64_t slotsSkipped() const override { return s->n.load(); } };
+            auto w = new W(); w->in = mk(); w->s = sk; return std::unique_ptr<digi::Engine>(w); }; }
+        std::vector<digi::ModeDef> ms2 = { sm, iqMode("CWX", 1, 120, 14010000, 14030000, nCw) };
+        digi::Spotter sp2(digi::Spotter::Scope::Band, ms2, nullptr, nullptr, nullptr);
+        sp2.setBehind([&] { return 0.0; });
+        double t2 = 0;
+        auto run2 = [&](double secs) { for (double end = t2 + secs; t2 < end; t2 += 0.01) sp2.feedIq(z.data(), 960, rate, centre, utc0 + t2 + 0.01, nullptr, 0, 0, 0); };
+        run2(8);
+        sk->n = 1;
+        run2(2);
+        ok(sp2.pauseLevel() == 1, "a slotted mode SKIPPED a slot (nothing queued): CW pauses so it gets the CPU back");
     }
 
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);

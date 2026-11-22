@@ -13,6 +13,7 @@
 #include "decoders/digi_bands.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -33,10 +34,16 @@ inline int bandSliceBins(double sampleRate, int fftSize, double widthHz) {
 
 /** ★ One extra slice: its RF centre and the flat width it needs. */
 struct ExtraSlice { double centreHz = 0, widthHz = 0; };
-constexpr int kMaxExtraSlices = 3;
+/** ★ V12 beta91: 3 → 8 — the band's CW and RTTY windows (digi::addIqWindows) are extra slices too: 10 m carries FT4's,
+ *  WSPR's and PSK's clusters plus a CW and two RTTY windows. Each is one more extract of the same forward FFT (one small
+ *  inverse FFT a block), cut only when the capture holds it. */
+constexpr int kMaxExtraSlices = 8;
 
-/** The extra slices a Band run on `dialHz` wants (the band's clusters beyond its main one — digi::Span::extras). */
-inline std::vector<ExtraSlice> bandExtraSlices(double dialHz) {
+/** The extra slices a Band run on `dialHz` wants (the band's clusters beyond its main one — digi::Span::extras).
+ *  ★ V12 beta91 `modeOff`: a mode the owner switched off for Band — an extra slice whose EVERY mode is off is not cut at
+ *  all (the CW / RTTY / wide-PSK windows' own slices: switching those chips off gives the DSP thread back their extract,
+ *  and on a one-pipeline radio the tap's front end its decimation). Null = every slice (the DC rule, the tests). */
+inline std::vector<ExtraSlice> bandExtraSlices(double dialHz, const std::function<bool(const std::string&)>& modeOff = nullptr) {
     std::vector<ExtraSlice> o;
     const digi::Band* b = digi::bandAt(dialHz);
     if (!b) return o;
@@ -44,6 +51,7 @@ inline std::vector<ExtraSlice> bandExtraSlices(double dialHz) {
     if (!sp.ok) return o;
     for (const digi::SubSpan& e : sp.extras) {
         if ((int)o.size() >= kMaxExtraSlices) break;
+        if (modeOff) { bool any = false; for (const std::string& m : e.modes) if (!modeOff(m)) any = true; if (!any) continue; }
         o.push_back({ e.centreHz, e.widthHz() });
     }
     return o;
@@ -119,6 +127,10 @@ inline std::vector<BandDcPassband> bandDcPassbands(double dialHz) {
     std::vector<BandDcPassband> o;
     const vibe::digi::Band* b = vibe::digi::bandAt(dialHz);
     if (!b) return o;
+    /* ★ V12 beta91: the CW / RTTY windows (IQ modes) are NOT passbands here — their SLICES are kept clear like any other
+     *  (bandDcSlices), but where a narrow capture has no room the DC may fall inside a 40–100 kHz skimmer window: a steady
+     *  carrier, which neither skimmer decodes (CW needs keying, RTTY two tones taking turns). Forbidding them made a
+     *  300 kS/s capture's DC land on FT8's neighbours instead (test-band-dc, 15 m / 10 m). */
     for (const vibe::digi::ModeDef& m : vibe::digi::modes())
         for (double d : vibe::digi::dialsOf(m, b->id)) o.push_back({ d + m.audioLoHz, d + m.audioHiHz, m.name });
     return o;

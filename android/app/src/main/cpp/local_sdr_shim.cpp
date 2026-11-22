@@ -42245,6 +42245,7 @@ const char* LocalSdrShim::stopStage() { return g_vsStopStage.load(); }
 
 void LocalSdrShim::setBandRegion(int region, bool known) {
     vibebands::defaultRegion() = (region >= 1 && region <= 3) ? region : 1;
+    vibe::skimbands::bandRegion().store(vibebands::defaultRegion());   // ★ V12 beta91: the band decode's CW / RTTY windows
     LOGI("band plan: ITU region %d%s", vibebands::defaultRegion(), known ? "" : " (position not given)");
     /* ★★ V12 the region defaults of the owner's decoder switches (SAME off outside Region 2, DAB off in Region 2) — ONLY
      *  from a position the owner gave. vibebands falls back to Region 1 for its band plan; a default switch-off must not

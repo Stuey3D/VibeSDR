@@ -45,7 +45,7 @@ namespace vibe {
 namespace digi {
 
 /** What a mode is doing this period — the spots box header's chips and the admin line. */
-enum class RunState : uint8_t { Off, Idle, Shed, Light, Full };
+enum class RunState : uint8_t { Off, Idle, Shed, Light, Full, Paused };
 inline const char* stateWord(RunState s) {
     switch (s) {
         case RunState::Off:   return "off";     // the owner switched it off for Band
@@ -53,6 +53,7 @@ inline const char* stateWord(RunState s) {
         case RunState::Shed:  return "shed";    // something there, over budget: not decoded (counted, the health pill)
         case RunState::Light: return "light";   // decoding, one pass
         case RunState::Full:  return "active";  // decoding at full depth
+        case RunState::Paused: return "paused"; // ★ V12 beta91: a continuous mode (CW, RTTY) paused — the decode fell behind
     }
     return "idle";
 }

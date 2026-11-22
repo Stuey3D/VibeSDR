@@ -3534,8 +3534,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             <View style={[styles.card, { borderColor: C.border }]}>
               {/* ★ V12 beta90: which decoders report — the Setup page's #pskrWhat, the same words */}
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
-                Reported: the digital spots (FT8, FT4, WSPR, JS8, Q65, FST4, MSK144 and the rest, one mode or a whole Band), the CW
-                decoder and CW skimmer, the RTTY skimmer, and the PSK decoder and PSK skimmer {'—'} whether a listener was running
+                Reported: the digital spots (FT8, FT4, WSPR, JS8, Q65, FST4, MSK144 and the rest, one mode or a whole Band {'—'} a
+                Band also skims the band{'\u2019'}s CW, RTTY and PSK segments), the CW decoder and CW skimmer, the RTTY skimmer, and the
+                PSK decoder and PSK skimmer {'—'} whether a listener was running
                 them or Background Decoding was (its per-band skimmers report all day).
               </Text>
               <View style={styles.rowBetween}>

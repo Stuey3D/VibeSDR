@@ -28,7 +28,7 @@
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle } from '../utils/digiModes';
+import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle, spotsListModes } from '../utils/digiModes';
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
@@ -216,7 +216,7 @@ function buildHtml(
   /* ★ V12: the spots map's filter and legend list the modes THIS server decodes (vibeserver.json spotModes) — never a mode
    *  it cannot spot (a dead filter choice). Not said (UberSDR, on-device FT8): the style table's. */
   const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-  const legendModes: string[] = opts?.spotModes && opts.spotModes.length ? opts.spotModes : Object.keys(DIGI_MODE_STYLE);
+  const legendModes: string[] = spotsListModes(opts?.spotModes && opts.spotModes.length ? opts.spotModes : Object.keys(DIGI_MODE_STYLE));   // ★ beta91: not PSKW
   const storeWindows = !!opts?.storeWindows;
   /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
    *  tiles from <documents>/mapgl/. The page's HFDL / spots code is unchanged — vibemapgl-compat.js

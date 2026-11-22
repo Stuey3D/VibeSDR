@@ -10,7 +10,7 @@ import {
   parseSpotModes, parseSpotsBandCap, spotFilterModes, spotModeMatches, spotsTitleText, spotsBandHint, parseSpotsStatus,
   SPOT_STATE_WORDS, spotChipText,
 } from '../src/services/spotsBand';
-import { digiModeFamily, readSpotBands, spotBandAt } from '../src/utils/digiModes';
+import { digiModeFamily, readSpotBands, spotBandAt, spotsListModes } from '../src/utils/digiModes';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -35,13 +35,15 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
 {
   const body = cut(/function spotsReadCap\(j: any\) \{\n([\s\S]*?)\n  if \(!spotBandCap && bandSpots\)/, 'spotsReadCap');
   if (body) {
-    const webRead = new Function('readSpotBands', `return function (j) { let spotModes = ['FT8', 'FT4']; let SF_MODES; let spotBandCap = null;\n${body
-      .replace(/: string\[\]/g, '').replace(/\(x: unknown\)/g, '(x)').replace(/\(x: string\)/g, '(x)')}\n return { spotModes, SF_MODES, spotBandCap }; };`)(readSpotBands) as
+    const webRead = new Function('readSpotBands', 'spotsListModes', `return function (j) { let spotModes = ['FT8', 'FT4']; let SF_MODES; let spotBandCap = null;\n${body
+      .replace(/: string\[\]/g, '').replace(/\(x: unknown\)/g, '(x)').replace(/\(x: string\)/g, '(x)')}\n return { spotModes, SF_MODES, spotBandCap }; };`)(readSpotBands, spotsListModes) as
       (j: any) => { spotModes: string[]; SF_MODES: string[]; spotBandCap: any };
     const bodies = [
       {}, { spotModes: [] }, { spotModes: ['FT8', 'FT4', 'FT2', 'JS8', 'WSPR', 'JTTY', 'PSK'] }, { spotModes: ['FT8', 7, 'Q65<x>', ''] },
       { spotModes: ['FT8'], spotsBand: true, spotBands: BANDS }, { spotsBand: false, spotsBandWhy: '  the owner switched Band off ', spotBands: BANDS },
       { spotsBand: false, spotBands: BANDS }, { spotsBand: true, spotBands: [] }, { spotsBand: 'yes', spotBands: BANDS },
+      // ★ V12 beta91: the band decode's CW, RTTY and PSKW chips — PSKW (wide PSK, its spots are PSK's) is no filter choice
+      { spotModes: ['FT8', 'FT4', 'PSK', 'MSK144', 'CW', 'RTTY', 'PSKW'] },
     ];
     for (const j of bodies) {
       const w = webRead(J(j));
@@ -83,7 +85,7 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
 
 // ── 4. The governor's status frame and its words ──
 {
-  const body = cut(/(const ok = \['active', 'light', 'idle', 'shed', 'off', 'out'\];[^\n]*\n[\s\S]*?shed: n\(m\.shed\), live: n\(m\.live\) \}\)\);)/, 'digital_spots_status parse');
+  const body = cut(/(const ok = \['active', 'light', 'idle', 'shed', 'off', 'out', 'paused'\];[^\n]*\n[\s\S]*?shed: n\(m\.shed\), live: n\(m\.live\) \}\)\);)/, 'digital_spots_status parse');
   if (body) {
     const web = new Function('msg', `${body.replace(/: unknown/g, '').replace(/\(m: any\)/g, '(m)')}\n return modes;`) as (msg: any) => unknown;
     const data = { scope: 'band', budget: 20, modes: [
@@ -107,5 +109,7 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
        new Function('m', 'SPOT_STATE_WORDS', `return ${ct};`)(m, SPOT_STATE_WORDS));
 }
 
+eq('beta91: PSKW is a chip only — not a MODE filter choice; CW and RTTY are', spotFilterModes(['FT8', 'CW', 'RTTY', 'PSKW']), ['ALL', 'FT8', 'CW', 'RTTY']);
+eq('beta91: the "paused" chip state parses', parseSpotsStatus({ modes: [{ mode: 'CW', state: 'paused' }] })?.[0]?.state, 'paused');
 console.log(`test_spots_band_app: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
