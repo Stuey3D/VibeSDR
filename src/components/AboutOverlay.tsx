@@ -59,6 +59,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta91 2026-11-22 — THE AIRCRAFT DATA FOR EVERY SOURCE (docs/v12/AVIATION.md §Aircraft data for every source;
+  //     Stuart: "our adsb logos and silhouettes could apply to vdl2 acars hfdl cant it, they are the same aircraft after all").
+  //     Server-side lookup (vibe_aircraft_info.h) + the aviation map's clients. Logos only where the owner installed a pack.
+  { v: 'V12 (experimental)', detail: 'THE AVIATION MAP KNOWS EVERY AIRCRAFT, NOT ONLY ADS-B ONES — an aircraft heard only on VDL2, ACARS, HFDL or ADS-C now gets the same details an ADS-B aircraft does: its registration and type (so the map draws its type’s silhouette), the operator’s badge and name, the country’s flag and MIL for a military aircraft, the operator’s logo where this server’s owner has added logos, and the filed route where the aircraft did not send its own airports. They show on the map, on its card and in the AIRCRAFT list, on the web page and in the app. The operator comes from the flight number when the aircraft data does not know the address — an ACARS “EI0154” is Aer Lingus; where more than one airline uses the two-letter code (BA, LH, U2), the aircraft itself decides — its own operator record, the airline that files that flight number, the airline of its country — and it names one only when they agree. The AIRCRAFT list carries the aircraft data’s licence notice at its foot. A new aircraft’s details arrive a few seconds after it does.' },
   // ★★★ V12 beta91 2026-11-22 — METEOR LRPT ON A REAL PASS (docs/v12/LRPT-LIVE-PASS.md): Stuart's Meteor-M2-4 pass replayed
   //     — decoding the differential code with the Viterbi, acquisition on the matched filter, the relock fix, the satellite's
   //     own rate, the pass held open while it is up, the signal reading. Numbers are the replay's (10 frames → 60).

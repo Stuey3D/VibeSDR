@@ -17,6 +17,7 @@
 //    body: the table never holds one (the owner's opt-in body stays on the DATALINK list, on the owner's own socket).
 import { esc, rangeBearing, compass8, ago, heardAgo, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { avFix, avRoute, type AvAircraft, type AvReport } from './aviation';
+import { cleanAdsbInfo, flagEmoji, routeShort, ADSB_DATA_CREDIT, adsbCreditHtml, type AdsbInfo, type AdsbRoute } from './adsbInfo';
 
 export const AVIATION_TITLE = 'AVIATION MAP';
 
@@ -96,6 +97,11 @@ export interface AvPlane {
   /** ★ beta88: the position is an ADS-B fix older than AV_ADSB_NOW_SEC — drawn faded, shown as "last seen HH:MM UTC",
    *  never as a live fix (no track, no speed). */
   lastSeen?: string;
+  /** ★★ V12 beta91 WHAT THE AIRCRAFT IS — the ADS-B aircraft data (vibe_aircraft_info.h), for EVERY source: a VDL2 /
+   *  ACARS / HFDL-only aircraft too (Stuart, 2026-11-22: "they are the same aircraft after all"). The server's names
+   *  (op, opName, logo, sil, country, countryName, mil, desc, route …), cleaned by adsbInfo.ts cleanAdsbInfo; the row's
+   *  own reg / type stay in `reg` / `type`. */
+  info?: AdsbInfo;
 }
 export interface AvStation { id: number; name: string; lat: number; lon: number; khz: number; age: number }
 /** ★ beta88 the server's ADS-B state (vibe_aircraft_share.h toJson). `live` null = an older server that cannot say. */
@@ -108,6 +114,13 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' && isFini
 const regKey = (r: string) => r.replace(/[.\- ]/g, '').toUpperCase();
 const fltKey = (f: string) => f.replace(/[. ]/g, '').toUpperCase();
 
+/** ★ beta91 the aircraft data the server attached to a row (the ADS-B names; r / t are the row's reg / type) — undefined
+ *  when it sent none (an older server, an address the data does not know). */
+function avInfoOf(a: unknown): AdsbInfo | undefined {
+  const i = cleanAdsbInfo(a);
+  delete i.r; delete i.t;
+  return Object.keys(i).length ? i : undefined;
+}
 /** ★ GET /vibeserver/aircraft.json — parsed defensively (the server is not trusted to be well formed). */
 export function sharedSanitise(j: any): SharedAircraft | null {
   if (!j || typeof j !== 'object' || !Array.isArray(j.aircraft)) return null;
@@ -129,6 +142,7 @@ export function sharedSanitise(j: any): SharedAircraft | null {
       from: icao4(a.from) && icao4(a.to) ? icao4(a.from) : undefined, to: icao4(a.from) && icao4(a.to) ? icao4(a.to) : undefined,
       label: str(a.label, 3), labelName: str(a.labelName, 60), app: str(a.app, 7), via: str(a.via, 40),
       src, srcAge, age: Math.max(0, num(a.age) ?? 0), n: Math.max(0, num(a.n) ?? 0),
+      info: avInfoOf(a),
     });
   }
   const stations: AvStation[] = [];
@@ -175,6 +189,7 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
       if (a != null && (hit.srcAge[n] == null || a < hit.srcAge[n])) hit.srcAge[n] = a;
     }
     hit.icao = hit.icao || s.icao; hit.reg = hit.reg || s.reg; hit.flight = hit.flight || s.flight; hit.type = hit.type || s.type;
+    if (s.info) hit.info = { ...s.info, ...(hit.info ?? {}) };   // ★ beta91 the aircraft data (the live row has none)
     if (!hit.from && s.from) { hit.from = s.from; hit.to = s.to; }
     if (s.lat != null && (hit.lat == null || (s.posAge ?? 1e9) < (hit.posAge ?? 1e9))) {
       hit.lat = s.lat; hit.lon = s.lon; hit.alt = s.alt; hit.trk = s.trk; hit.gs = s.gs; hit.ground = s.ground; hit.posSrc = s.posSrc; hit.posAge = s.posAge; hit.posTime = s.posTime;
@@ -283,6 +298,10 @@ export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' =
  *   · rowsExtra: the AVIATION MAP's own card lines (heard on, route, the last message) — text, escaped by the layer. */
 export interface AvAdsbShape {
   hex: string; flight?: string; r?: string; t?: string; lat: number; lon: number;
+  /** ★★ beta91 the ADS-B aircraft data's names, for every source — the layer's type silhouette (t), operator badge (op),
+   *  the owner's logo / silhouette keys (logo, sil), the flag (country), MIL (mil), the card's lines (desc, opName, route) */
+  desc?: string; wtc?: string; eng?: string; species?: string; country?: string; countryName?: string; mil?: 1;
+  op?: string; opName?: string; logo?: string; sil?: string; route?: AdsbRoute;
   alt_baro?: number | 'ground'; gs?: number; track?: number; seen_pos?: number; seen?: number;
   sparse?: boolean; rowsExtra?: [string, string][];
 }
@@ -303,7 +322,10 @@ export function avPlaneAdsb(p: AvPlane): AvAdsbShape | null {
   if (p.app) rows.push(['Application', p.app]);
   if (p.via) rows.push(['Via', p.via]);
   const sparse = p.posSrc !== 'ADS-B' || !!p.lastSeen;
+  // ★ beta91: the route the datalink heard (rows above) wins; the database's only where the aircraft said none
+  const { r: _r, t: _t, route, ...info } = p.info ?? {};
   return {
+    ...info, ...(route && !(p.from && p.to) ? { route } : {}),
     hex: icao || stableHex(p.key), flight: p.flight, r: p.reg, t: p.type, lat: p.lat, lon: p.lon,
     alt_baro: p.ground ? 'ground' : p.alt, gs: p.gs, track: p.trk,
     // ★ a "last seen" ADS-B fix is old by construction: drawn stale, never as live
@@ -322,10 +344,13 @@ export function avPlaneItems(planes: AvPlane[], rx: LatLon | null, wrap: 'web' |
 export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
   return planes.slice(0, 2048).map((p) => {
     const rb = rx && p.lat != null && p.lon != null ? rangeBearing(rx, p.lat, p.lon) : null;
-    const who = [p.reg && p.reg !== avName(p) ? p.reg : '', p.icao && p.icao !== avName(p) ? p.icao : '', p.type ?? ''].filter(Boolean).join(' · ');
+    // ★ beta91 the operator and the flag for every source (the ADS-B list's own: opName, else the badge code)
+    const who = [p.reg && p.reg !== avName(p) ? p.reg : '', p.icao && p.icao !== avName(p) ? p.icao : '', p.type ?? '',
+                 p.info?.opName || p.info?.op || '', p.info?.mil ? 'MIL' : ''].filter(Boolean).join(' · ');
+    const dbRoute = !(p.from && p.to) ? routeShort(p.info?.route) : '';
     return {
-      key: `a:${p.key}`, colour: avColour(p), flag: '', name: avName(p),
-      second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft),
+      key: `a:${p.key}`, colour: avColour(p), flag: flagEmoji(p.info?.country), name: avName(p),
+      second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft) || dbRoute,
                p.lastSeen ? `ADS-B last seen ${p.lastSeen} UTC` : avFix({ ...p, posSrc: p.posApp ?? p.posSrc } as unknown as AvAircraft), p.labelName ?? ''].filter(Boolean).join(' · '),
       sp: p.alt != null ? (p.ground ? 'GND' : `FL${String(Math.max(0, Math.round(p.alt / 100))).padStart(3, '0')}`) : '', trend: 0 as const,
       range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : p.lat == null ? 'no position' : '',
@@ -398,6 +423,16 @@ export function avLegendHtml(present: AvLayerId[], adsbWay = false): string {
   return avLegendRows(present, adsbWay).map(([g, w]) => `<div class="kr">${g}<span>${esc(w)}</span></div>`).join('');
 }
 
+/** ★★ V12 beta91 THE ODC-By NOTICE ON THE LIST (Stuart, 2026-11-22). ODC-By 1.0 §4.3: the notice goes with the produced
+ *  work wherever the Mictronics fields show — the ADS-B layer's card carries it (adsblayer.js `credit`); the AIRCRAFT list
+ *  shows registrations, types and operators from the same data, so it carries it too, as one small line at its foot.
+ *  The card's own words and links (kept in step with web/mapkit/adsblayer.js). Shown while any row shows the data: a type
+ *  (the datalink never sends one — it is the data's) or the aircraft data the server attached. */
+export const AV_DATA_CREDIT = ADSB_DATA_CREDIT;
+export const avCreditHtml = adsbCreditHtml;
+export function avShowsData(planes: AvPlane[]): boolean {
+  return planes.some((p) => !!p.type || !!(p.info && Object.keys(p.info).length));
+}
 /** ★★ ONE COMPOSITION for both clients: the items, the list's rows (sections when several layers), the status line. */
 export function avCompose(live: AvReport | null, shared: SharedAircraft | null, focus: AvFocus, layers: AvLayers, rx: LatLon | null, wrap: 'web' | 'app' = 'web') {
   const { planes, adsbGone } = avNowRule(avMerge(live, shared), shared);   // ★ beta88 ADS-B only while heard
@@ -407,5 +442,6 @@ export function avCompose(live: AvReport | null, shared: SharedAircraft | null, 
   const items: TrackItem[] = [...avPlaneItems(shown, rx, wrap)];
   if (avOn('stations', present, layers)) items.push(...avStationItems(stations, wrap));
   const note = avAdsbNote(planes, shared?.adsb, adsbGone, focus);
-  return { planes: shown, items, rows: avPlaneRows(shown, rx), status: avMapStatus(shown, note), present, toggles: avToggles(present), profile: avProfile(present, layers) };
+  return { planes: shown, items, rows: avPlaneRows(shown, rx), status: avMapStatus(shown, note), present, toggles: avToggles(present), profile: avProfile(present, layers),
+           credit: avShowsData(shown) };
 }

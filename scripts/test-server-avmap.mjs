@@ -121,6 +121,16 @@ try {
   const dl = rows(tA, '3C6548');
   ok(dl.length === 1 && dl[0].src.includes('VDL2') && dl[0].src.includes('ADS-C') && dl[0].posSrc === 'ADS-C' && Math.abs(dl[0].lat - 51.75) < 1e-3,
      `3C6548 (VDL2 only, an ADS-C report): ${JSON.stringify(dl)}`);
+  // ★★ beta91 THE AIRCRAFT DATA ON EVERY SOURCE (vibe_aircraft_info.h): 3C6548, heard only on VDL2, gets what the ADS-B data
+  //    knows of its address — here the starter's code blocks (no download in a test): Germany. The first poll queues it,
+  //    the worker answers by the next. And the other radio's endpoint (its own cache) too.
+  let dlI = null, dlJ = null, baI = null;
+  ok(await until(async () => { dlI = rows(await table(A), '3C6548')[0]; return dlI?.country === 'DE' && dlI.countryName === 'Germany'; }, 10000),
+     `beta91: VDL2-only 3C6548 carries the ADS-B data's country: ${JSON.stringify(dlI)}`);
+  ok(await until(async () => { dlJ = rows(await table(B), '3C6548')[0]; return dlJ?.country === 'DE'; }, 10000), `beta91: …on B's endpoint too: ${JSON.stringify(dlJ)}`);
+  ok(await until(async () => { baI = rows(await table(A), '400F11')[0]; return baI?.op === 'BAW' && /British/i.test(baI.opName || ''); }, 10000),
+     `beta91: an ADS-B row gets the operator on the aviation map too (BAW117 → BAW): ${JSON.stringify(baI)}`);
+  ok(!('r' in (dlI || {})) && !('t' in (dlI || {})), 'beta91: the row\'s names (reg / type), never r / t twice');
   // ★ beta88 the ADS-B state: radio A is decoding ADS-B now
   ok(tA?.j?.adsbLive === 1 && tA.j.adsbNow >= 3 && tA.j.adsbWin === 60 && tB?.j?.adsbLive === 1,
      `beta88: adsbLive 1 on both radios' endpoints, adsbNow ${tA?.j?.adsbNow} (≥ 3), window ${tA?.j?.adsbWin} s`);

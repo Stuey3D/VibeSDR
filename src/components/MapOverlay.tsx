@@ -162,6 +162,8 @@ interface MapOverlayProps {
   /** ★ kinds 'ais' / 'aprs': the items on the map (each with its icon, label and card — tracks.ts aisItems / aprsItems),
    *  the live list's rows, its status line and empty text, and the AIS safety strip. */
   trk?: { items: TrackItem[]; rows: TrackRow[]; status: string; empty: string; safety?: string[];
+          /** ★ V12 beta91 the aviation map: a row shows the aircraft data — the list carries its ODC-By notice */
+          credit?: boolean;
           /** One item's track for its card: [lat, lon] oldest first ([] = none). */
           trail: (key: string) => Promise<[number, number][]>;
           /** Find this item when the map opens (a row tapped in the APRS box); '' = none. */
@@ -1654,7 +1656,10 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   var acLayer=null,acHexKey={},acKeyHex={};
   function acMake(){
     if(acLayer||KIND!=='avdata'||!window.VibeAdsbLayer)return acLayer;
+    /* ★ beta91 the owner's logos / silhouettes on this server, as on the ADS-B map (adsbMake) — the datalink's aircraft carry
+     *  the same keys now (vibe_aircraft_info.h) */
     try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
+      imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')},
       onSelect:function(h){trkPost({t:'trkSel',key:h&&acHexKey[h]?acHexKey[h]:null});}});window.__acLayer=acLayer;}
     catch(e){console.error('aircraft layer could not start',e);acLayer=null;}
     return acLayer;
@@ -2586,7 +2591,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty} credit={!!trk.credit}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}

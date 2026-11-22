@@ -4,7 +4,7 @@
 // its sources is on, the basemap profile, the items / rows / card / KEY, and never a message body.
 //   npx tsx scripts/test_aviation_map.ts
 import { avLayersOf, avLayersPresent, avToggles, avOn, avProfile, sharedSanitise, avMerge, avHave, avVisible, avPlaneItems, avPlaneRows,
-         avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, avNowRule, avAdsbNote, AV_ADSB_NOW_SEC,
+         avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, avNowRule, avAdsbNote, AV_ADSB_NOW_SEC, avPlaneAdsb, avShowsData, avCreditHtml, AV_DATA_CREDIT,
          type AvHave } from '../src/services/aviationMap';
 import { parseAvReport } from '../src/services/aviation';
 
@@ -152,6 +152,51 @@ eq('a datalink-only server that never had ADS-B: no ADS-B words at all', avAdsbN
 eq('ADS-B aircraft on the map: no note', avAdsbNote(r1.planes, live1.adsb, 322, 'datalink'), '');
 yes('the input rows are not changed by the rule', avMerge(null, live1).length === 327 && live1.aircraft[326].src.includes('ADS-B'));
 yes('the KEY explains "last seen"', avLegendRows(['adsb', 'airports']).some((r) => /last seen/.test(r[1])));
+
+console.log('── beta91: the ADS-B aircraft data on every source (vibe_aircraft_info.h) ──');
+{
+  // the server's beta91 row: VDL2 only, the ADS-B data's names beside the row's own (vibe_aircraft_share.h toJson + Extra)
+  const t91 = sharedSanitise({ now: 1800000000, aircraft: [
+    { key: '4CA2D6', icao: '4CA2D6', reg: 'EI-DLJ', type: 'B738', flight: 'RYR8CK', desc: 'BOEING 737-800', wtc: 'M', country: 'IE', countryName: 'Ireland',
+      op: 'RYR', opName: 'Ryanair', logo: 'RYR', sil: 'B738', lat: 53.2, lon: -6.1, posSrc: 'VDL2', posAge: 30, src: ['VDL2'], srcAge: { VDL2: 30 }, age: 30, n: 4 },
+    { key: 'f:U21', flight: 'U21', op: 'EZY', opName: 'easyJet', route: { from: 'EHAM', to: 'EGKK', fromIata: 'AMS', toIata: 'LGW', plausible: true },
+      lat: 52.0, lon: 2.0, posSrc: 'ACARS', posAge: 60, src: ['ACARS'], srcAge: { ACARS: 60 }, age: 60, n: 1 },
+    { key: 'AE1234', icao: 'AE1234', reg: '03-3123', country: 'US', mil: 1, op: '<b>', logo: '../../x', lat: 50, lon: -20, posSrc: 'HFDL', posAge: 100,
+      src: ['HFDL'], srcAge: { HFDL: 100 }, age: 100, n: 1 },
+    { key: 'r:GABCD', reg: 'G-ABCD', src: ['ACARS'], srcAge: { ACARS: 5 }, age: 5, n: 1 },
+  ], stations: [] })!;
+  const [v, a, m, plain] = t91.aircraft;
+  eq('the info is kept (r / t stay the row\'s reg / type)', v.info, { desc: 'BOEING 737-800', wtc: 'M', country: 'IE', countryName: 'Ireland', op: 'RYR', opName: 'Ryanair', logo: 'RYR', sil: 'B738' });
+  eq('a hostile operator badge and a traversal logo key are dropped; mil kept', m.info, { country: 'US', mil: 1 });
+  eq('a row the server sent no data for has none', plain.info, undefined);
+  const sv = avPlaneAdsb(v)!;
+  eq('VDL2-only → the ADS-B layer gets t (its silhouette), r, op (the badge), logo / sil keys, the flag', [sv.hex, sv.r, sv.t, sv.op, sv.opName, sv.logo, sv.sil, sv.country, sv.desc],
+     ['4ca2d6', 'EI-DLJ', 'B738', 'RYR', 'Ryanair', 'RYR', 'B738', 'IE', 'BOEING 737-800']);
+  yes('…and stays a datalink (sparse) aircraft', sv.sparse === true);
+  const sa = avPlaneAdsb(a)!;
+  eq('an ACARS flight-only aircraft: the operator and the database route (it named no airports)', [sa.op, sa.route?.from, sa.route?.to], ['EZY', 'EHAM', 'EGKK']);
+  const sa2 = avPlaneAdsb({ ...a, from: 'EGLL', to: 'LEMD' })!;
+  yes('…the datalink\'s own airports win: no database route', sa2.route === undefined && sa2.rowsExtra!.some(([k, val]) => k === 'Route' && val === 'EGLL → LEMD'));
+  eq('military over HFDL: mil for the layer\'s MIL tone', avPlaneAdsb(m)!.mil, 1);
+  const rows = avPlaneRows([v, a, m], null);
+  yes('the list: the flag, the operator, the type', rows[0].flag === '🇮🇪' && /Ryanair/.test(rows[0].second) && /B738/.test(rows[0].second));
+  yes('the list: the database route where the aircraft named none', /AMS → LGW/.test(rows[1].second) && /easyJet/.test(rows[1].second));
+  yes('the list: MIL', /\bMIL\b/.test(rows[2].second) && rows[2].flag === '🇺🇸');
+  // the live DATALINK row (no data) joined with the table's row: the table's data carried over
+  const live = parseAvReport({ type: 'avdata', aircraft: [{ icao: '4CA2D6', flight: 'RYR8CK', via: 'VDL2 136.975', age: 2, n: 1 }] });
+  const merged = avMerge(live, t91).find((p) => p.icao === '4CA2D6')!;
+  eq('the live row + the table: the aircraft data comes with the table', [merged.live, merged.info?.op, merged.reg, merged.type], [true, 'RYR', 'EI-DLJ', 'B738']);
+  const c91 = avCompose(null, t91, 'datalink', avLayersOf(null), null, 'web');
+  const it = c91.items.find((x: any) => x._adsb?.hex === '4ca2d6') as any;
+  yes('avCompose hands the layer the data', it && it._adsb.op === 'RYR' && it._adsb.t === 'B738');
+  // ★★ the ODC-By notice on the list: while any row shows the aircraft data, never otherwise
+  yes('the list carries the notice while a row shows the data', c91.credit === true && avShowsData([v]) && avShowsData([{ ...plain, type: 'A320' }]));
+  yes('…not when no row does (registrations the datalink heard itself)', !avShowsData([plain]) && avCompose(null, sharedSanitise({ now: 1, aircraft: [{ key: 'r:GABCD', reg: 'G-ABCD', lat: 51, lon: 0, posSrc: 'ACARS', src: ['ACARS'], srcAge: { ACARS: 1 }, age: 1, n: 1 }], stations: [] }), 'datalink', avLayersOf(null), null).credit === false);
+  const ch = avCreditHtml();
+  yes('the card\'s words and links', ch.includes('href="https://opendatacommons.org/licenses/by/1-0/"') && ch.includes('href="https://github.com/Mictronics/aircraft-database"')
+      && ch.includes('contains information from Mictronics aircraft database, which is made available under the') && ch.includes('VRS standing data</a> (CC0)'));
+  yes('the RN words are the same text', `${AV_DATA_CREDIT.lead}${AV_DATA_CREDIT.mic}${AV_DATA_CREDIT.mid}${AV_DATA_CREDIT.odc}`.length > 60 && ch.includes(AV_DATA_CREDIT.mid));
+}
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

@@ -50,7 +50,7 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
 import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
-         type AvLayers, type AvFocus, type SharedAircraft } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
+         type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
@@ -9797,9 +9797,17 @@ function navCardFill(_key: string, el: HTMLElement) {
                          const t = await r.text(); if (navTexts.size > 200) navTexts.clear(); navTexts.set(f, t); show(t, true); })
     .catch(() => show('Could not reach the server.', false));
 }
-function trkRowHtml(x: { key: string; colour: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
+/** ★ beta91 a row's flag (TrackRow.flag, a regional-indicator pair): Windows' emoji font draws the pair as two plain
+ *  letters, so there it is the ISO code in a box (tracks.ts flagHtml's rule); '' for anything else. */
+function trkFlagHtml(flag: string | undefined): string {
+  const cps = [...String(flag || '')].map((c) => c.codePointAt(0) ?? 0);
+  if (cps.length !== 2 || cps.some((c) => c < 0x1F1E6 || c > 0x1F1FF)) return '';
+  const iso = String.fromCharCode(...cps.map((c) => c - 0x1F1E6 + 65));
+  return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
+}
+function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
   return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
+    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
     + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
@@ -10170,6 +10178,7 @@ function avViewOpts() {
     labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
     labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain', nautical: true,   // ★ beta90 NM on the scale bar
     aircraft: true,   // ★★ beta90 every aircraft drawn by the ADS-B layer (rings, AUTO / FIT, the glide, heading from its fixes)
+    imageBase: adsbImageBase() || null,   // ★ beta91 the owner's logos / silhouettes — every source's aircraft carries the keys now
     onToggle: (id: string, on: boolean) => {
       avLayers = { ...avLayers, [id]: on };
       try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }
@@ -10184,8 +10193,10 @@ function avListHtml(c: ReturnType<typeof avCompose>, bodies: Map<string, string>
   const row = (x: (typeof c.rows)[number]) => trkRowHtml(x).replace('</small></span>', `</small>${bodies.get(x.key) ? `<small class="avText">${escapeHtml(bodies.get(x.key) as string)}</small>` : ''}</span>`);
   const live = c.rows.filter((r) => liveKeys.has(r.key)), rest = c.rows.filter((r) => !liveKeys.has(r.key));
   const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
-  if (!live.length) return rest.map(row).join('');
-  return sec('THIS RADIO — HEARD NOW') + live.map(row).join('') + (rest.length ? sec('OTHER SOURCES ON THIS SERVER') + rest.map(row).join('') : '');
+  // ★★ beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the aircraft data (the card's words)
+  const credit = c.credit ? `<div class="avCredit">${avCreditHtml()}</div>` : '';
+  if (!live.length) return rest.map(row).join('') + credit;
+  return sec('THIS RADIO — HEARD NOW') + live.map(row).join('') + (rest.length ? sec('OTHER SOURCES ON THIS SERVER') + rest.map(row).join('') : '') + credit;
 }
 function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
   v.setToggles(c.toggles, avLayers as Record<string, boolean>);

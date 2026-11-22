@@ -107,6 +107,27 @@ export class AdsbInfoStore {
   get size() { return this.m.size; }
 }
 
+/** ★★ V12 beta91 THE ODC-By NOTICE ON THE LISTS (Stuart, 2026-11-22). ODC-By 1.0 §4.3: the notice goes with the produced
+ *  work wherever the Mictronics fields show. The ADS-B layer's card carries it (web/mapkit/adsblayer.js `credit` — these are
+ *  its words and links, kept in step); the ADS-B map's live list and the aviation map's AIRCRAFT list show registrations,
+ *  types and operators from the same data, so each carries it too: one small line at the list's foot, while a row shows it. */
+export const ADSB_DATA_CREDIT = {
+  lead: 'Aircraft data: ', mic: 'Mictronics', micUrl: 'https://github.com/Mictronics/aircraft-database',
+  mid: ' (contains information from Mictronics aircraft database, which is made available under the ',
+  odc: 'ODC Attribution License', odcUrl: 'https://opendatacommons.org/licenses/by/1-0/',
+  tail: ') \u00b7 ', vrs: 'VRS standing data', vrsUrl: 'https://github.com/vradarserver/standing-data', end: ' (CC0)',
+} as const;
+/** The same line as HTML (the web's lists; links open a new tab). */
+export function adsbCreditHtml(): string {
+  const e = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const c = ADSB_DATA_CREDIT, a = (u: string, t: string) => `<a href="${e(u)}" target="_blank" rel="noopener">${e(t)}</a>`;
+  return `${e(c.lead)}${a(c.micUrl, c.mic)}${e(c.mid)}${a(c.odcUrl, c.odc)}${e(c.tail)}${a(c.vrsUrl, c.vrs)}${e(c.end)}`;
+}
+/** ★ Does any aircraft of an ADS-B report show the aircraft data (merged adsb_info fields)? */
+export function adsbShowsData(list: ReadonlyArray<AdsbInfo | null | undefined>): boolean {
+  return list.some((a) => !!a && !!(a.r || a.t || a.desc || a.op || a.opName || a.route));
+}
+
 /** A flag from an ISO alpha-2 code (regional-indicator emoji); '' for anything else. */
 export function flagEmoji(iso: unknown): string {
   const c = String(iso ?? '').toUpperCase();

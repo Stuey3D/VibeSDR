@@ -131,6 +131,13 @@ try {
     // ★★ beta90 the aircraft are the ADS-B layer's (adsblayer.js): its controls, its rings, every aircraft drawn by it
     const AC = `(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1)`;
     ok(await until(`${AC} >= 2`, 15000), `beta90: aircraft drawn by the ADS-B layer: ${await ev(AC)}`);
+    // ★★ beta91 the ADS-B aircraft data on every source (vibe_aircraft_info.h): the VDL2-only 3C6548 carries its country's
+    //    flag; 4CA97B's row names its operator (from its flight — the starter tables, no download in a test)
+    const rowTxt = (k) => `[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === '${k}')?.textContent || ''`;
+    ok(await until(`/\u{1F1E9}\u{1F1EA}|\bDE\b/u.test(${rowTxt('a:3C6548')})`, 15000), `beta91: VDL2-only 3C6548's row has Germany's flag (${await ev(rowTxt('a:3C6548'))})`);
+    ok(await until(`/Ryanair/.test(${rowTxt('a:4CA97B')})`, 15000), `beta91: 4CA97B's row names its operator (${await ev(rowTxt('a:4CA97B'))})`);
+    ok(await until(`/Mictronics/.test(${V}?.querySelector('.rows .avCredit')?.textContent || '') && !!${V}?.querySelector('.rows .avCredit a[href="https://opendatacommons.org/licenses/by/1-0/"]')`, 6000),
+       `beta91: the ODC-By notice at the list's foot (${await ev(`${V}?.querySelector('.rows .avCredit')?.textContent`)})`);
     ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,LABELS,⌖',
        `beta90: the ADS-B map's controls on the aviation map (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`)})`);
     ok(await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk[data-key^="a:"]').length === 0`), 'beta90: no aircraft drawn twice (the track layer has only the stations)');

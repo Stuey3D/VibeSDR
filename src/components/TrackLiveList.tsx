@@ -20,6 +20,7 @@ import { DECODER_FONT } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H, EDGE } from '../services/adsbList';
 import type { TrackRow } from '../services/tracks';
+import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
 
 /** ★ The status line and each safety line under the header. */
 const STATUS_H = 20;
@@ -54,6 +55,9 @@ export interface TrackLiveListProps {
   toggles?: Array<{ id: string; label: string; words: string }>;
   toggled?: Record<string, boolean>;
   onToggle?: (id: string, on: boolean) => void;
+  /** ★★ V12 beta91 the aviation map: a row shows the Mictronics aircraft data — ODC-By 1.0 §4.3's notice, one small line at
+   *  the list's foot (the ADS-B layer's card words and links: aviationMap.ts AV_DATA_CREDIT). */
+  credit?: boolean;
 }
 const RANGE_H = 30;
 
@@ -76,7 +80,8 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const innerH = p.areaH - p.insets.top - p.insets.bottom;
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
-  const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0);
+  const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
+    + (p.credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
   const shown = Math.max(1, Math.min(fit, p.rows.length || 1));
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
@@ -124,6 +129,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
             )}
           </ScrollView>
         )}
+        {open && !!p.credit && <AircraftDataCredit ink={p.ink} />}
       </View>
     </NavCtx.Provider>
   );

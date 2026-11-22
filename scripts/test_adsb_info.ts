@@ -5,7 +5,7 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-const { cleanAdsbInfo, AdsbInfoStore, adsbInfoLine, routeShort, flagEmoji } = await import('../src/services/adsbInfo.ts');
+const { cleanAdsbInfo, AdsbInfoStore, adsbInfoLine, routeShort, flagEmoji, adsbShowsData, adsbCreditHtml, ADSB_DATA_CREDIT } = await import('../src/services/adsbInfo.ts');
 
 let pass = 0, fail = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -67,11 +67,21 @@ eq('flag', [flagEmoji('IE'), flagEmoji('I'), flagEmoji(null)], ['\u{1F1EE}\u{1F1
   ok('type · route · registration on the second line', html.includes('B738 · ACE → BHX · EI-DLJ'));
   ok('server-military row is military', /data-hex="3f0001"/.test(html) && html.indexOf('3f0001') < html.indexOf('4ca2d6') && html.includes('adsbRow mil'));
   ok('no data: hex on the second line as before', html.includes('<small>400123</small>'));
+  // ★★ beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the data — never otherwise
+  ok('the notice at the foot of the list', html.endsWith('(CC0)</div>') && html.includes('<div class="adsbCredit">Aircraft data: <a href="https://github.com/Mictronics/aircraft-database"')
+     && html.includes('href="https://opendatacommons.org/licenses/by/1-0/"') && html.lastIndexOf('adsbRow') < html.indexOf('adsbCredit'));
+  const bare: string = mod.adsbListHtml({ aircraft: [{ hex: '400123', flight: 'TEST1' }] }, null, '');
+  ok('no row shows the data → no notice', !bare.includes('adsbCredit'));
   const noLogo: string = mod.adsbListHtml(report, null, '');
   ok('no image base: the ICAO code as a badge', noLogo.includes('<span class="op">RYR</span> B738'));
   const evil: string = mod.adsbListHtml({ aircraft: [{ hex: '400999', ...cleanAdsbInfo({ r: '"><script>x</script>', op: 'ABC' }) }] }, null, '');
   ok('escaped', !evil.includes('<script>'));
 }
+
+// ── beta91 the notice's rule and words (adsbInfo.ts — the ADS-B list, the aviation list and the layer card's text) ──
+ok('shows data: a registration / type / operator', adsbShowsData([{ r: 'G-ABCD' }]) && adsbShowsData([null, { op: 'RYR' }]) && !adsbShowsData([{}, null]));
+ok('the card\'s words', adsbCreditHtml().includes('contains information from Mictronics aircraft database, which is made available under the ')
+   && adsbCreditHtml().includes('VRS standing data</a> (CC0)') && ADSB_DATA_CREDIT.odcUrl === 'https://opendatacommons.org/licenses/by/1-0/');
 
 console.log(`test_adsb_info: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

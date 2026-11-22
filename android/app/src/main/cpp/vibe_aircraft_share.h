@@ -418,10 +418,19 @@ inline bool adsbHeardNow(const Row& w, int64_t adsbLiveMs, int64_t nowMs) {
  *  ADS-B now), "adsbLast" (seconds since one last was; -1 never), "adsbNow" (aircraft ADS-B heard in the last kAdsbNowSec
  *  — the count the map shows), "adsbOff" (the owner switched ADS-B off). The rows stay the hour: the datalink needs it, and
  *  the clients apply the same now-rule (aviationMap.ts avNowRule). */
+/** ★★ V12 beta91 WHAT EACH AIRCRAFT IS, FOR EVERY SOURCE (Stuart, 2026-11-22: "our adsb logos and silhouettes could apply
+ *  to vdl2 acars hfdl cant it, they are the same aircraft after all"). `extra` (vibe_aircraft_info.h's Cache::extra —
+ *  passed in, so this header stands alone) fills, for one row, what the aircraft data says: the registration / type
+ *  where the row has none, `fields` — the ADS-B aircraft data's own JSON members (op, opName, logo, sil, country,
+ *  countryName, mil, desc, wtc, eng, species), pre-formatted as ",\"op\":\"RYR\",…" — and `route` (the ADS-B route
+ *  object) used only where the row has no airports of its own. ★ A map lookup, never a table read: the network thread
+ *  must not wait on the aircraft data. */
+struct Extra { std::string reg, type, fields, route; };
+using ExtraFn = std::function<void(const Row&, Extra&)>;
 inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHeard>& gs, int64_t nowMs,
                           const std::function<std::string(const std::string&)>& labelName = nullptr,
                           const std::function<bool(int, std::string&, double&, double&)>& gsInfo = nullptr,
-                          int64_t adsbLiveMs = -1, bool adsbOff = false) {
+                          int64_t adsbLiveMs = -1, bool adsbOff = false, const ExtraFn& extra = nullptr) {
     char b[256];
     std::snprintf(b, sizeof b, "{\"now\":%lld,\"count\":%zu", (long long)(nowMs / 1000), rows.size());
     std::string o = b;
@@ -442,7 +451,11 @@ inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHear
         else std::snprintf(b, sizeof b, "\"key\":\"f:%s\"", jsonEsc(flightKey(w.flight)).c_str());
         o += b;
         auto str = [&](const char* k, const std::string& v) { if (!v.empty()) { o += ",\""; o += k; o += "\":\""; o += jsonEsc(v); o += '"'; } };
-        str("reg", w.reg); str("flight", w.flight); str("type", w.type);
+        Extra ex;
+        if (extra) extra(w, ex);
+        str("reg", w.reg.empty() ? ex.reg : w.reg); str("flight", w.flight); str("type", w.type.empty() ? ex.type : w.type);
+        o += ex.fields;
+        if (w.from.empty() && !ex.route.empty()) { o += ",\"route\":"; o += ex.route; }
         if (w.flags & 1) {
             std::snprintf(b, sizeof b, ",\"lat\":%.5f,\"lon\":%.5f,\"posAge\":%lld", w.lat, w.lon, (long long)std::max<int64_t>(0, (nowMs - w.posMs) / 1000));
             o += b;

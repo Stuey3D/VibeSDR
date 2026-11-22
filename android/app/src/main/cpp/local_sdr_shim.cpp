@@ -146,6 +146,7 @@
 #include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_ais_service.h"   // ★★ V12 AIS (both VHF channels, M.1371) — our own decoder, docs/v12/AIS-APRS.md
 #include "vibe_avi_service.h"   // ★★ V12 AIRCRAFT DATALINK (ACARS, VDL2; HFDL via the decoder host) — docs/v12/AVIATION.md
+#include "vibe_aircraft_info.h"  // ★★ V12 beta91 the ADS-B aircraft data for every aviation-map row (VDL2 / ACARS / HFDL too)
 #include "vibe_avi_mode.h"
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
 #include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
@@ -28907,7 +28908,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     [](int id, std::string& name, double& lat, double& lon) {
                         for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
                         return false;
-                    }, adsbLiveMs, vsModeBlocked("adsb"));
+                    }, adsbLiveMs, vsModeBlocked("adsb"),
+                    // ★★ V12 beta91 the ADS-B aircraft data for EVERY row — a VDL2 / ACARS / HFDL-only aircraft's type,
+                    //    operator, logo, country (vibe_aircraft_info.h: a cache read here; the lookups on its own
+                    //    decoder-priority thread, never this one)
+                    vibeavinfo::extraFn());
             }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "

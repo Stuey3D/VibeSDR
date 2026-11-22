@@ -451,6 +451,8 @@ const CSS = `
 .trkCard .v{color:#e3eaf1;word-break:break-word}
 .trkCard .raw{margin-top:6px;padding:5px 6px;background:#0d151c;border-radius:4px;color:#9fb0c2;font-size:11px;word-break:break-all}
 .trkView .flag{font-size:14px}
+.trkView .avCredit{padding:6px 10px 8px;font:10px/1.35 ui-monospace,Menlo,monospace;color:#8a9aaa;border-top:1px solid #151f29}
+.trkView .avCredit a{color:#9ccfff}
 .trkView .cc{font:700 10px/1 ui-monospace,monospace;background:#2a3a4a;border-radius:3px;padding:1px 3px}
 @media (max-width:520px){
   .trkList{left:6px;right:6px;width:auto;max-height:34%}
@@ -523,6 +525,9 @@ export interface TrackViewOpts {
    *  avPlaneAdsb) are drawn by the ADS-B layer (web/mapkit/adsblayer.js — silhouettes, tones, labels, range rings,
    *  AUTO / FIT, the glide, its own cards); the rest (HFDL ground stations) by the track layer as before. */
   aircraft?: boolean;
+  /** ★ beta91 (aircraft:true) where this server serves the owner's logos and silhouettes ("…/adsb/", adsb.ts adsbImageBase);
+   *  null / absent = none. Every source's aircraft carries the ADS-B data's keys (vibe_aircraft_info.h). */
+  imageBase?: string | null;
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -818,6 +823,7 @@ export class TrackView {
         try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || 'null'); } catch { /* private */ }
         this.acLayer = w.VibeAdsbLayer.create(map, {
           receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
+          imageBase: this.o.imageBase ?? null,
           onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
           // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
           onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
