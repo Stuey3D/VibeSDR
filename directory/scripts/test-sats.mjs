@@ -39,6 +39,8 @@ const csvAmateur = readFileSync(new URL('vibeserver/testdata-sat/celestrak-amate
 // weather: built from the JSON fixture, columns in a DIFFERENT order (header-named parsing)
 const wj = JSON.parse(readFileSync(new URL('vibeserver/testdata-sat/celestrak-weather-2026-11-19.json', root), 'utf8'));
 const wcols = ['NORAD_CAT_ID', 'OBJECT_NAME', 'EPOCH', 'MEAN_MOTION', 'ECCENTRICITY', 'INCLINATION', 'RA_OF_ASC_NODE', 'ARG_OF_PERICENTER', 'MEAN_ANOMALY', 'BSTAR', 'MEAN_MOTION_DOT', 'MEAN_MOTION_DDOT', 'EPHEMERIS_TYPE', 'OBJECT_ID'];
+// ★ beta91: ORBCOMM (a label-only group) — a SYNTHETIC fixture (plausible ORBCOMM orbits, not CelesTrak's data)
+const csvOrbcomm = readFileSync(new URL('vibeserver/testdata-sat/celestrak-orbcomm-SYNTHETIC-2026-11-22.csv', root), 'utf8');
 const csvWeather = [wcols.join(','), ...wj.map((o) => wcols.map((c) => { const v = String(o[c] ?? ''); return v.includes(',') ? `"${v}"` : v; }).join(','))].join('\r\n') + '\r\n';
 
 // ── the fake network ────────────────────────────────────────────────────────────────────────────────────────────
@@ -48,6 +50,11 @@ const satnogsBody = JSON.stringify([
   { norad_cat_id: 57166, description: 'LRPT', alive: true, status: 'active', mode: 'LRPT', baud: 72000, downlink_low: 137100000, type: 'Transmitter' },
   { norad_cat_id: 27607, description: 'FM', alive: false, status: 'inactive', mode: 'FM', downlink_low: 436795000, type: 'Transceiver' },
   { norad_cat_id: 25544, description: 'FM', alive: true, status: 'active', mode: 'FM', downlink_low: 437800000, type: 'Transceiver' },
+  // ★ beta91 ORBCOMM: FM108 one alive channel · FM109 dead · FM110 two alive channels (band) · the rest unlisted (band)
+  { norad_cat_id: 41179, description: 'Telemetry', alive: true, status: 'active', mode: 'FM', downlink_low: 137713000 },
+  { norad_cat_id: 41180, description: 'Telemetry', alive: false, status: 'inactive', mode: 'FM', downlink_low: 137287500 },
+  { norad_cat_id: 41181, description: 'Telemetry', alive: true, status: 'active', mode: 'FM', downlink_low: 137287500 },
+  { norad_cat_id: 41181, description: 'Telemetry 2', alive: true, status: 'active', mode: 'FM', downlink_low: 137800000 },
   { norad_cat_id: 99999, description: 'other', alive: true, status: 'active', mode: 'FM', downlink_low: 145000000 },
 ]);
 async function fakeFetch(url, opt) {
@@ -58,6 +65,7 @@ async function fakeFetch(url, opt) {
   }
   if (url.includes('GROUP=amateur')) return new Response(csvAmateur, { status: 200 });
   if (url.includes('GROUP=weather')) return new Response(csvWeather, { status: 200 });
+  if (url.includes('GROUP=orbcomm')) return new Response(csvOrbcomm, { status: 200 });
   if (url.includes('satnogs')) return new Response(satnogsBody, { status: 200 });
   return new Response('not found', { status: 404 });
 }
@@ -87,15 +95,29 @@ console.log('§2 the first round — CSV, compression, User-Agent, once per upda
 {
   log = [];
   const r = await run();
-  ok(r.updated.join() === 'amateur,weather' && r.built, `both groups fetched, sats.json built (${JSON.stringify(r)})`);
+  ok(r.updated.join() === 'amateur,weather,orbcomm' && r.built, `every group fetched (the label-only orbcomm LAST), sats.json built (${JSON.stringify(r)})`);
   ok(log.filter((x) => x.url.includes('celestrak')).every((x) => /FORMAT=csv$/.test(x.url)) && !log.some((x) => /FORMAT=tle/i.test(x.url)), 'FORMAT=csv, never tle');
   ok(log[0].opt.headers['accept-encoding'].includes('gzip') && log[0].opt.headers['accept-encoding'].includes('br'), 'gzip + brotli asked');
   ok(/^VibeSDR-sats-mirror\/\d+ \(\+https:\/\/vibesdr\.net\)$/.test(log[0].opt.headers['user-agent']), 'a clear User-Agent, no personal data');
   ok(log[0].opt.redirect === 'manual', 'redirects are not followed silently');
   ok(log.some((x) => x.url.includes('satnogs')), 'SatNOGS asked on the first round');
   const d = await satsDoc();
-  ok(d.format === 1 && d.satellites.length === curated.satellites.length && /CelesTrak/.test(d.attribution.orbits) && /CC BY-SA/.test(d.attribution.transmitters), 'sats.json: every curated bird, attribution for CelesTrak + SatNOGS');
-  ok(d.satellites.filter((s) => s.omm).length === curated.satellites.length, 'every curated bird has elements');
+  const cur = d.satellites.filter((s) => !s.labelOnly);
+  ok(d.format === 1 && cur.length === curated.satellites.length && /CelesTrak/.test(d.attribution.orbits) && /CC BY-SA/.test(d.attribution.transmitters), 'sats.json: every curated bird, attribution for CelesTrak + SatNOGS');
+  ok(cur.filter((s) => s.omm).length === curated.satellites.length, 'every curated bird has elements');
+  // ★★ beta91 SATELLITE LABELS: the ORBCOMM birds, label-only
+  const orb = d.satellites.filter((s) => s.labelOnly);
+  ok(orb.length === 8 && orb.every((s) => s.group === 'orbcomm' && s.omm && s.transmitters.length === 1 && s.transmitters[0].mode === 'label'),
+     `ORBCOMM: 8 of the fixture's 9 birds, label-only, elements inline (${orb.map((s) => s.id).join(' ')})`);
+  ok(!orb.some((s) => s.norad === 41180), 'FM109 — every SatNOGS listing not alive — is left out (no label beats a wrong one)');
+  const fm108 = orb.find((s) => s.norad === 41179), fm110 = orb.find((s) => s.norad === 41181), fm36 = orb.find((s) => s.norad === 25984);
+  ok(fm108.id === 'ORBCOMM-FM108' && fm108.name === 'ORBCOMM FM108' && fm108.transmitters[0].downlink === 137713000 && !('downlinkHigh' in fm108.transmitters[0]),
+     'FM108: SatNOGS lists one alive channel — its own 137.713 MHz');
+  ok(fm110.transmitters[0].downlink === 137200000 && fm110.transmitters[0].downlinkHigh === 137800000 && fm36.transmitters[0].downlinkHigh === 137800000,
+     'FM110 (two channels) and FM36 (unlisted): the whole 137.2–137.8 MHz band');
+  ok(d.orbits.amateur && d.orbits.weather && !d.orbits.orbcomm && d.labelOrbits && d.labelOrbits.orbcomm,
+     'the orbit data\'s age stays the main groups\' (orbcomm\'s fetch is under labelOrbits)');
+  ok(d.satellites.length <= M.SATS_JSON_MAX && new Set(d.satellites.map((s) => s.id)).size === d.satellites.length, 'within every server\'s 200-bird limit; ids unique');
   const m3 = d.satellites.find((s) => s.id === 'METEOR-M2-3'), so50 = d.satellites.find((s) => s.id === 'SO-50');
   ok(m3.transmitters[0].downlink === 137100000 && so50.transmitters[0].status === 'inactive', 'SatNOGS moved Meteor-M2-3 (follow: mode) and marked SO-50 inactive');
   ok(d.satellites.find((s) => s.id === 'ISS').transmitters[0].status === 'active' && !('status' in d.satellites.find((s) => s.id === 'RS-44').transmitters[0]), 'active where SatNOGS agrees; nothing claimed where it says nothing');
@@ -140,7 +162,7 @@ console.log('§4 a network failure / timeout = overload');
   ok(/could not be reached for the amateur group \(timed out\) — treated as overload/.test(s.lastError), s.lastError);
   now = s.holdUntil + 1; plan = {}; log = [];
   const r2 = await run();
-  ok(r2.updated.length === 2 && (await state()).fails === 0 && (await state()).lastError === '', 'recovers; the failures and the message clear');
+  ok(r2.updated.length === 3 && (await state()).fails === 0 && (await state()).lastError === '', 'recovers; the failures and the message clear');
 }
 
 console.log('§5 403 — a long hold');
@@ -167,7 +189,7 @@ console.log('§6 404 — dead until a software update');
   ok(s.dead[M.gpUrl('weather')] === M.MIRROR_VERSION && /answered 404 for the weather group — that address is no longer served/.test(s.lastError), s.lastError);
   now = s.holdUntil + 1; log = []; plan = {};
   const r = await run();
-  ok(!log.some((x) => x.url.includes('GROUP=weather')) && r.updated.join() === 'amateur', 'the dead URL is never asked again (amateur still is)');
+  ok(!log.some((x) => x.url.includes('GROUP=weather')) && r.updated.join() === 'amateur,orbcomm', 'the dead URL is never asked again (amateur and orbcomm still are)');
   const d = await satsDoc();
   ok(d.satellites.find((x) => x.id === 'METEOR-M2-4').omm, 'the weather birds keep their last good elements');
   // a software update (MIRROR_VERSION) clears it
@@ -250,9 +272,8 @@ console.log('§9 a FIRST round that CelesTrak refuses publishes nothing (the liv
   ok(b2 && Object.keys(b2.orbits).length > 0 && b2.satellites.some((x) => x.omm), `after the hold, a good round publishes WITH orbits (${b2 ? Object.keys(b2.orbits).join(', ') : 'none'})`);
 }
 
-console.log('§10 THE SCHEDULE (Stuart 2026-11-20): no / old copy 15 min → 30 min → 1 h → hourly; fresh copy every 6 h');
-{
-  const mk = () => {
+/** A fresh database (schema + migrations) behind the D1 shim. */
+const mk = () => {
     const d = new DatabaseSync(':memory:');
     d.exec(readFileSync(new URL('schema.sql', dir), 'utf8'));
     for (const f of readdirSync(new URL('migrations/', dir)).filter((f) => f.endsWith('.sql')).sort()) {
@@ -261,7 +282,9 @@ console.log('§10 THE SCHEDULE (Stuart 2026-11-20): no / old copy 15 min → 30 
     const st = (sql, args = []) => ({ bind: (...x) => st(sql, x), first: async () => d.prepare(sql).get(...args) ?? null,
       all: async () => ({ results: d.prepare(sql).all(...args) }), run: async () => { const r = d.prepare(sql).run(...args); return { meta: { changes: r.changes } }; } });
     return { DB: { prepare: (sql) => st(sql) } };
-  };
+};
+console.log('§10 THE SCHEDULE (Stuart 2026-11-20): no / old copy 15 min → 30 min → 1 h → hourly; fresh copy every 6 h');
+{
   const e = mk();
   const state = async () => M.loadState(e);
   let t = 2_000_000_000;
@@ -305,6 +328,25 @@ console.log('§10 THE SCHEDULE (Stuart 2026-11-20): no / old copy 15 min → 30 
   // a Worker killed mid-round: the provisional 15-min hold still holds, whatever the ladder says
   const dying = { ...legacy, lastRound: 1795190000, holdUntil: 1795190000 + 900 };
   ok(M.holdInForce(dying, 1795190000 + 300) === 1795190000 + 900, 'a round that died mid-way still waits its 15 min (the policy floor)');
+}
+
+console.log('§11 beta91 label groups: a failure there costs the main groups nothing; the helpers');
+{
+  const e = mk(); plan = { 'GROUP=orbcomm': { status: 503 } }; log = [];
+  const r = await M.runMirror(e, { fetch: fakeFetch, now: 1795600000, curated });
+  const s = await M.loadState(e);
+  ok(r.updated.join() === 'amateur,weather' && r.stopped === '503 overloaded' && !log.some((x) => x.url.includes('satnogs')),
+     'a 503 on orbcomm (asked last) stops the round as any group does — amateur + weather already fetched');
+  ok(M.holdInForce(s, 1795600000) - 1795600000 >= M.HOLD_5XX_MIN_SEC, 'and the hold is the policy\'s (≥ 15 min)');
+  const d = JSON.parse(JSON.parse((await e.DB.prepare("SELECT v FROM sat_mirror WHERE k='sats'").first()).v).body);
+  ok(d.satellites.filter((x) => !x.labelOnly).length === curated.satellites.length && !d.satellites.some((x) => x.labelOnly),
+     'sats.json is still built from the main groups (no ORBCOMM yet)');
+  plan = {};
+  ok(M.constellationId('ORBCOMM', 'ORBCOMM FM108', 1) === 'ORBCOMM-FM108' && M.constellationId('ORBCOMM', '  ', 41179) === 'ORBCOMM-41179'
+     && M.constellationId('X', 'A'.repeat(40), 1).length === 32, 'ids: letters, digits and dashes, ≤ 32');
+  ok(M.satnogsChannel(1, []).state === 'band' && M.satnogsChannel(1, [{ norad: 1, low: 145e6, alive: false }]).state === 'band',
+     'no 137 MHz listing: the band (a listing elsewhere says nothing)');
+  ok(M.roundGroups({ groups: ['a', 'b'], labelGroups: ['b', 'c'] }).join() === 'a,b,c', 'round order: main groups, then label groups once');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

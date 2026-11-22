@@ -1,6 +1,13 @@
 {
   "_comment": "V12 SATELLITE ENGINE — the curated birds sats.json is built from (docs/v12/SATELLITE-ENGINE.md §6). Checked 2026-11-19 (beta90 additions 2026-11-21: AO-7 Mode B beacon + mode names, ISS 437.550 SSTV events, SONATE-2 SSTV 145.880, TO-108, AO-73 fc-bpsk / MO-122 fox-bpsk — docs/v12/SATELLITE-BEST.md 1.5) against AMSAT's live FM and Live Linear Satellites pages, CelesTrak's amateur + weather groups and SatNOGS. The server's built-in copy for a first boot offline is curatedCatalogue() in android/app/src/main/cpp/vibe_sat_engine.h — test-sat-engine §9 fails if the two drift. 'follow': 'mode' = SatNOGS may move this downlink (Meteor's frequency and mode change on orbit, brief §6.2 TRAP). Catalogue numbers are plain integers up to 9 digits (OMM), never 5-digit TLE fields.",
   "groups": ["amateur", "weather"],
+  "_labelGroups": "★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md): CelesTrak groups whose birds are LABEL-ONLY — named on the waterfall at their Doppler-shifted downlink, never offered in SATELLITE mode, never decoded (ORBCOMM is commercial messaging: a label, nothing else). Asked AFTER the main groups in the same round (one more URL; the same stop-on-non-200 rules), and their fetch time is kept apart (labelOrbits) so the orbit data's age is the main groups'. Every bird of the group up to `max`; the transmitter's mode is 'label', which a server older than beta91 skips (a bird with no usable downlink is not offered).",
+  "labelGroups": ["orbcomm"],
+  "constellations": [
+    { "group": "orbcomm", "prefix": "ORBCOMM", "max": 60,
+      "note": "ORBCOMM — commercial data messaging (identify only, never decoded)",
+      "transmitter": { "label": "ORBCOMM", "downlink": 137200000, "downlinkHigh": 137800000, "mode": "label", "loop": "none",
+                       "note": "ORBCOMM subscriber downlinks sit in 137.2–137.8 MHz and the satellites change channel; a bird's own channel is used only where SatNOGS DB lists exactly one alive downlink for it" } } ],
   "satellites": [
     { "id": "ISS", "name": "ISS", "norad": 25544, "group": "amateur", "note": "Crew contacts, events and the repeater when ARISS has it on",
       "transmitters": [

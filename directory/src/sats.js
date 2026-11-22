@@ -51,6 +51,13 @@ export const HOLD_403_SEC = 24 * 3600;           // a block, then doubling to a 
 export const MAX_GROUP_BYTES = 2 * 1024 * 1024;
 export const UA = `VibeSDR-sats-mirror/${MIRROR_VERSION} (+https://vibesdr.net)`;
 const TIMEOUT_MS = 30000;
+/* ★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md — Stuart 2026-11-22): curated.labelGroups are CelesTrak groups whose
+ *  birds are LABEL-ONLY (ORBCOMM — commercial messaging: named on the waterfall, never offered in SATELLITE mode, never
+ *  decoded). They are asked AFTER the main groups in the same round — one more URL, the same rules (a non-200 stops the
+ *  round there; the main groups already fetched this round are kept). Their birds come from curated.constellations. */
+export const LABEL_SAT_MAX = 60;                 // label-only birds a constellation may add
+export const LABEL_GROUP_ROWS = 200;             // rows of a label group's copy kept (CelesTrak's orbcomm group is ~70)
+export const SATS_JSON_MAX = 200;                // ★★ every server's parseSats refuses a sats.json with more birds
 
 // ── CSV (RFC 4180: quoted fields, "" inside quotes) ────────────────────────────────────────────────────────────────
 export function parseCsv(text, maxRows = 20000) {
@@ -259,8 +266,9 @@ export async function runMirror(env, deps) {
   await putKv(env, 'state', s, now);
 
   const want = new Set(curated.satellites.map((x) => noradOf(x.norad)));
+  const labelGroups = new Set(curated.labelGroups || []);
   let changed = false, stopped = false;
-  for (const g of curated.groups) {
+  for (const g of roundGroups(curated)) {
     let url = gpUrl(g);
     for (let hop = 0; s.moved[url] && hop < 4; hop++) url = s.moved[url];
     if (s.dead[url]) continue;                     // ★ a 404'd / unfollowable URL: not until a software update
@@ -290,12 +298,15 @@ export async function runMirror(env, deps) {
       stopped = true;
       break;
     }
-    const mine = omm.filter((o) => want.has(o.NORAD_CAT_ID));
+    // ★ a label group keeps its constellation's birds (by name prefix), bounded; a main group only the curated birds
+    const mine = labelGroups.has(g) ? constellationRows(curated, g, omm) : omm.filter((o) => want.has(o.NORAD_CAT_ID));
     await putKv(env, `omm:${g}`, { fetched: now, url, count: omm.length, omm: mine }, now);
     summary.updated.push(g);
     changed = true;
   }
 
+  // ★ beta91: SatNOGS is asked about the label-only birds too — whether each is alive, and its channel (satnogsChannel)
+  for (const g of labelGroups) { const c = await getKv(env, `omm:${g}`); if (c) for (const o of c.omm) want.add(o.NORAD_CAT_ID); }
   // SatNOGS, daily, the same rules (its own hold; a CelesTrak stop this round skips it too)
   if (!stopped && now >= s.satnogs.holdUntil && now - (s.satnogs.at || 0) >= SATNOGS_EVERY_SEC && !s.dead[SATNOGS_URL]) {
     summary.asked.push(SATNOGS_URL);
@@ -340,6 +351,38 @@ export function satnogsFor(tx, norad, list) {
   return { status: 'inactive' };
 }
 
+/** ★ beta91: every group a round asks — the main groups first, the label-only ones after (a failure there cannot cost
+ *  the main groups their round's fetch). */
+export function roundGroups(curated) { return [...curated.groups, ...(curated.labelGroups || []).filter((g) => !curated.groups.includes(g))]; }
+
+/** ★ beta91: a label group's rows worth keeping — its constellation's birds (OBJECT_NAME starts with the prefix), at most
+ *  LABEL_GROUP_ROWS, by catalogue number. */
+export function constellationRows(curated, group, omm) {
+  const c = (curated.constellations || []).find((x) => x.group === group);
+  const pre = c && c.prefix ? String(c.prefix).toUpperCase() : '';
+  return omm.filter((o) => !pre || String(o.OBJECT_NAME || '').toUpperCase().startsWith(pre))
+            .sort((a, b) => a.NORAD_CAT_ID - b.NORAD_CAT_ID).slice(0, LABEL_GROUP_ROWS);
+}
+
+/** ★ beta91: a sats.json id from a CelesTrak name — "ORBCOMM FM108" → "ORBCOMM-FM108" (letters, digits, '-'; ≤ 32, the
+ *  servers' rule), else the prefix and the catalogue number. */
+export function constellationId(prefix, name, norad) {
+  const id = String(name || '').toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/, '');
+  return id || `${String(prefix || 'SAT').toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 16)}-${norad}`;
+}
+
+/** ★★ beta91: what SatNOGS DB says about a label-only bird's 137–138 MHz downlink. ORBCOMM satellites change channel,
+ *  so a bird's own frequency is used only when SatNOGS lists exactly ONE alive, active one for it ('channel'); every
+ *  listing marked not alive = 'dead' (the bird is left out — no label is better than a wrong one); anything else, or no
+ *  listing at all = 'band' (the bird is named over the whole band). */
+export function satnogsChannel(norad, list, lo = 137e6, hi = 138e6) {
+  const mine = (list || []).filter((t) => t.norad === norad && t.low >= lo && t.low <= hi);
+  if (!mine.length) return { state: 'band' };
+  if (mine.every((t) => t.alive === false)) return { state: 'dead' };
+  const f = [...new Set(mine.filter((t) => t.alive && t.status === 'active').map((t) => t.low))];
+  return f.length === 1 ? { state: 'channel', downlink: f[0] } : { state: 'band' };
+}
+
 /** sats.json from the curated list and the good copies. */
 export async function rebuild(env, curated, now) {
   const groups = {};
@@ -372,6 +415,30 @@ export async function rebuild(env, curated, now) {
     if (byNorad.has(norad)) out.omm = byNorad.get(norad);
     return out;
   });
+  // ★★ beta91 the label-only birds (constellations), after the curated ones, never past SATS_JSON_MAX in all
+  const labelOrbits = {};
+  const ids = new Set(sats.map((x) => x.id));
+  for (const c of curated.constellations || []) {
+    const cp = await getKv(env, `omm:${c.group}`);
+    if (!cp) continue;
+    labelOrbits[c.group] = { fetched: new Date(cp.fetched * 1000).toISOString() };
+    let n = 0;
+    for (const o of cp.omm) {
+      if (n >= Math.min(c.max || LABEL_SAT_MAX, LABEL_SAT_MAX) || sats.length >= SATS_JSON_MAX) break;
+      const norad = noradOf(o.NORAD_CAT_ID);
+      if (!norad || sats.some((x) => x.norad === norad)) continue;
+      const w = sn ? satnogsChannel(norad, sn.tx) : { state: 'band' };
+      if (w.state === 'dead') continue;
+      const tx = { ...c.transmitter };
+      if (w.state === 'channel') { tx.downlink = w.downlink; delete tx.downlinkHigh; }
+      let id = constellationId(c.prefix, o.OBJECT_NAME, norad);
+      if (ids.has(id)) id = `${id.slice(0, 22)}-${norad}`;
+      ids.add(id);
+      sats.push({ id, name: String(o.OBJECT_NAME || id).slice(0, 64), norad, group: c.group, note: c.note || '', labelOnly: true,
+                  transmitters: [tx], omm: o });
+      n++;
+    }
+  }
   const doc = {
     format: 1,
     generated: new Date(now * 1000).toISOString(),
@@ -381,6 +448,7 @@ export async function rebuild(env, curated, now) {
     },
     licence: sn ? 'Transmitter data CC BY-SA 4.0 (SatNOGS DB)' : '',
     orbits: groups,
+    ...(Object.keys(labelOrbits).length ? { labelOrbits } : {}),
     satellites: sats,
   };
   const body = JSON.stringify(doc);
@@ -415,6 +483,6 @@ export async function serveSatsStatus(env) {
                 dead: Object.keys(s.dead), moved: s.moved, satnogs: s.satnogs, groups: {},
                 // ★ the last rounds, newest first, times as UTC text for a person (and `at` for a script)
                 history: (s.history || []).map((h) => ({ ...h, when: new Date(h.at * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' })) };
-  for (const g of ['amateur', 'weather']) { const c = await getKv(env, `omm:${g}`); if (c) out.groups[g] = { fetched: c.fetched, count: c.count, url: c.url }; }
+  for (const g of ['amateur', 'weather', 'orbcomm']) { const c = await getKv(env, `omm:${g}`); if (c) out.groups[g] = { fetched: c.fetched, count: c.count, url: c.url }; }
   return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
