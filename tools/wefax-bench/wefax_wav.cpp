@@ -5,7 +5,10 @@
 //
 //   ffmpeg -i rec.wav -ar 48000 -ac 1 -c:a pcm_s16le rec48.wav
 //   c++ -O2 -std=c++17 -I android/app/src/main/cpp tools/wefax-bench/wefax_wav.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp -o wefax_wav
-//   ./wefax_wav rec48.wav outprefix [lpm=120] [skipSeconds=0] [carrierHz=1900]
+//   ./wefax_wav rec48.wav outprefix [lpm=120] [skipSeconds=0] [carrierHz=1900] [app|bg]
+//
+// `bg` replays with the BACKGROUND options (vibe_bgdecode_config.h: auto_start + auto_stop on — waits for a start tone
+// or a toneless phasing, ends on the stop tone), as an unattended WEFAX VFO runs it. Default `app`.
 //
 // skipSeconds drops the start of the recording: the "late join" variant (no start tone, no phasing).
 #include "decoders/wefax_decoder.h"
@@ -17,11 +20,12 @@
 using namespace vibe;
 
 int main(int argc, char** argv) {
-    if (argc < 3) { fprintf(stderr, "usage: wefax_wav in48k.wav outprefix [lpm] [skipSeconds]\n"); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: wefax_wav in48k.wav outprefix [lpm] [skipSeconds] [carrierHz] [app|bg]\n"); return 2; }
     FILE* f = fopen(argv[1], "rb"); if (!f) { perror("open"); return 1; }
     int lpm = argc > 3 ? atoi(argv[3]) : 120;
     double skipS = argc > 4 ? atof(argv[4]) : 0;
     double carrier = argc > 5 ? atof(argv[5]) : 1900.0;   // only for an off-centre recording; the app always sends 1900
+    const bool bg = argc > 6 && !strcmp(argv[6], "bg");
     // Minimal RIFF walk: find fmt + data.
     char id[4]; uint32_t sz; uint8_t hdr[12]; fread(hdr, 1, 12, f);
     int rate = 0, chans = 1; long dataLen = 0;
@@ -35,7 +39,7 @@ int main(int argc, char** argv) {
     std::vector<int16_t> pcm(dataLen / 2); pcm.resize(fread(pcm.data(), 2, pcm.size(), f)); fclose(f);
     size_t start = (size_t)(skipS * rate); if (start > pcm.size()) start = pcm.size();
 
-    WefaxDecoder::Config cfg; cfg.lpm = lpm; cfg.usePhasing = true; cfg.autoStart = false; cfg.autoStop = false; cfg.carrier = carrier;
+    WefaxDecoder::Config cfg; cfg.lpm = lpm; cfg.usePhasing = true; cfg.autoStart = bg; cfg.autoStop = bg; cfg.carrier = carrier;
     WefaxDecoder d(rate, cfg);
     std::vector<std::vector<uint8_t>> img; int chart = 0; size_t pos = start;
     auto t = [&]() { return (double)pos / rate; };
