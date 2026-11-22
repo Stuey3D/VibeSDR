@@ -6,6 +6,7 @@
 // JSON frames on /ws/dxcluster so the existing VibeSDR digital-spots list shows
 // local decodes (same mechanism as the UberSDR server skimmer feed).
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -103,15 +104,25 @@ int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[12]);
 class FtxApBook {
 public:
     /** `ft4` = the frame is scrambled (FT4/FT2); `maxAgeSlots` = how long a call is remembered. */
-    FtxApBook(bool ft4, int maxAgeSlots) : ft4_(ft4), maxAge_(maxAgeSlots) {}
+    FtxApBook(bool ft4, int maxAgeSlots) : ft4_(ft4), maxAge_(maxAgeSlots), repAge_(std::max(2, maxAgeSlots / 10)) {}
     /** A new slot is being decoded (ages the book). */
     void beginSlot();
-    /** A message decoded WITHOUT a-priori help. */
-    void heard(const ftx_message_t& msg);
+    /** A message decoded WITHOUT a-priori help; `hz` = its tone 0 (≥ 0 also keeps it as a REPEAT hypothesis). */
+    void heard(const ftx_message_t& msg, float hz = -1.0f);
+    /* ★★ V12 beta91 THE DEEP TIER: REPEATS. A station that is not answered sends the same message again — a CQ with the
+     *  same grid, a call with the same report — on the same audio frequency, two slots later. Every standard message
+     *  heard without assumptions in the last minute is kept with its frequency and WHOLE CODEWORD (all 174 bits known),
+     *  so a weak repeat of it is DETECTED, not decoded: its codeword is held against the candidate's bits, as a sign-off
+     *  is (Ft8SlotDecoder::repeatDetect). The protocol paper's AP idea taken to its end for a receiver: the expected
+     *  message is a message we already heard. Only near the frequency it was heard on (kRepeatTones), so one or two
+     *  hypotheses a candidate, not hundreds. */
+    struct Rep { uint64_t cw[3]; float hz; int64_t slot; };
+    const std::vector<Rep>& repeats() const { return reps_; }
+    int64_t slotNo() const { return slot_; }
     struct Hyp {
         uint64_t mask[2] = {0, 0}, val[2] = {0, 0};   // over codeword bits 0..76 (bit i: word i/64, bit i%64)
         int nbits = 0;
-        uint8_t kind = 0;                              // 1 CQ, 2 call1, 3 call2, 4 pair, 5 sign-off
+        uint8_t kind = 0;                              // 1 CQ, 2 call1, 3 call2, 4 pair, 5 sign-off, 6 repeat
     };
     /** What the hypotheses are made of, rebuilt when the book changed: the CQ field's bits, i3's, the three sign-off
      *  tails' (bits 58..73: "RR73", "73", "RRR" — the same whatever the calls), and per call its bits as the first
@@ -129,6 +140,8 @@ public:
     int calls() const { return (int)calls_.size(); }
     /** For the tests and the bench: put a call (and optionally its partner) in as if heard. */
     void seed(const std::string& call, const std::string& partner = std::string());
+    /** For the tests and the bench: `text` as if heard at `hz` (a repeat hypothesis, and its calls). */
+    bool seedRepeat(const std::string& text, float hz);
     static bool bitsOf(const char* text, bool ft4, uint64_t out[2]);   // a message's 77 codeword bits
 private:
     struct Call { std::string call; uint64_t c1[2], c2[2]; int64_t last; };
@@ -138,6 +151,9 @@ private:
     bool ft4_;
     int  maxAge_;
     int64_t slot_ = 0;
+    std::vector<Rep> reps_;        // ★ bounded: kMaxRepeats, the last minute only (repAge_)
+    int repAge_ = 4;
+    static constexpr size_t kMaxRepeats = 256;
     std::vector<Call> calls_;
     std::vector<Pair> pairs_;
     Index idx_;
@@ -202,6 +218,10 @@ struct Ft8SlotOptions {
     int apMaxCands = 0;              ///< hypotheses decoded per candidate after screening (0 = the default, 3)
     int apOsdPairSpan = -1;          ///< OSD pair span for AP trials (-1 = osdPairSpan)
     int apMaxBpErr = 0;
+    /* ★★ V12 beta91 THE DEEP TIER ("Dig deeper", docs/v12/FTX-SENSITIVITY.md § Deep tier). Off = the full depth exactly. */
+    bool apRepeat = false;           ///< detect repeats of what this dial heard in the last minute (FtxApBook::Rep)
+    int  apRepeatMaxBpErr = 0;       ///< … for candidates BP took this close (0 = the default, kRepMaxBpErr)
+    bool apRepeatLearn = false;      ///< keep repeats in the book even on a slot that does not detect them (loaded)
     int fineOsdMaxBpErr = 0;         ///< the second look's OSD only after BP came this close (0 = the default)              ///< a near miss for AP: BP within this many checks (0 = the default; tests raise it)
 };
 struct Ft8SlotStats {
@@ -221,6 +241,8 @@ struct Ft8SlotStats {
     int    skipped[3] = {0, 0, 0};      ///< candidates passed over: tried last pass, nothing changed near them
     int    apTried[3] = {0, 0, 0};      ///< near misses that went to a-priori decoding
     int    apDecodes[3] = {0, 0, 0};    ///< … and decoded
+    int    repTried[3] = {0, 0, 0};     ///< candidates held against a repeat hypothesis (the deep tier)
+    int    repDecodes[3] = {0, 0, 0};   ///< … and detected
 };
 
 /** One slot, decoded synchronously: what the worker thread runs, and what the bench and the tests drive directly.
@@ -254,6 +276,7 @@ private:
     bool fineDecode(const float* audio, int n, double start, double f0, const Ft8SlotOptions& o, ftx_message_t& msg,
                     bool& viaOsd, int& apKind, double& startOut, double& f0Out, Ft8SlotStats& st, int pass);
     bool apDecode(const float* llr, const Ft8SlotOptions& o, ftx_message_t& msg, int& kind);
+    bool repeatDetect(const float* llr, float f0, const Ft8SlotOptions& o, ftx_message_t& msg);
     bool a91ToMessage(const uint8_t* a91, ftx_message_t& msg) const;
 
     FtxMode mode_;
@@ -285,6 +308,10 @@ private:
     static constexpr int kApBpIters = 25;
     static constexpr float kApOsdMinZ = 4.0f;       // OSD for an AP trial only at this screening z (real 40 m: 88 % of
                                                     // its AP-OSD decodes, 36 % of its AP-OSD calls)
+    static constexpr float kRepeatTones = 2.0f;     // a repeat is looked for within ±2 tones of where it was heard
+    static constexpr int kRepMaxBpErr = 40;         // repeats are tried on candidates BP took this close
+    static constexpr int kRepMaxErr = 20;           // a repeat: at most this many of its 97 parity bits may disagree
+    static constexpr float kRepMinZ = 5.0f;         // … and its whole-codeword correlation at least this
     static constexpr int kApFullMaxFree = 20;       // a sign-off: at most this many of its 97 other bits may disagree
     static constexpr float kApFullMinZ = 5.0f;      // … and its whole-codeword correlation at least this
     static constexpr double kApMaxFreeErrFrac = 0.30;   // hard disagreements allowed on the bits not assumed          // BP stops after this many iterations without a new best
@@ -362,6 +389,16 @@ public:
     static constexpr double kPassBudget = 0.40;
     static constexpr int    kOsdMaxErrors = 24;
     static constexpr int    kOsdPairSpan = 40;    ///< OSD's pairs of flips among the 40 least reliable bits (spare CPU)
+    /* ★★ V12 beta91 THE DEEP TIER ("Dig deeper" — Setup → Modes and decoders → FT8: an option under it). On top of full
+     *  depth, on spare CPU only: repeats detected (FtxApBook::Rep), eight AP hypotheses a near miss decoded (not three),
+     *  the second look for a candidate with 8 Costas hits (not 10). ✗ Measured and NOT taken: OSD pairs over 60 bits (+0.4 %
+     *  real, and the only false decode of the stress runs — FT2, an OSD codeword), minScore 7 (+0.3 %, +15 % CPU, a hex
+     *  telemetry decode nobody else heard), 200 candidates (none).
+     *  Measured in docs/v12/FTX-SENSITIVITY.md § Deep tier. The owner's switch sets `deepTier` (one for the server: FT8,
+     *  FT4 and FT2 engines alike, Band mode's too); the benchmark ticks it on a fresh setup only where it measured green. */
+    static constexpr int    kDeepApCands = 8;
+    static constexpr int    kDeepFineMinSync = 8;
+    static std::atomic<bool>& deepTier() { static std::atomic<bool> on{false}; return on; }
     static constexpr int    kBpStall = 3;         ///< the waterfall's BP gives up after 3 iterations without progress
     static bool passAllowed(double slotMs, double lagMs, double elapsedMs, double lastPassMs, bool loaded) {
         if (loaded) return false;

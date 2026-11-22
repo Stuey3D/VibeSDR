@@ -11,12 +11,16 @@
 //   5. pure noise, every candidate down to the weakest sync tried, a full book of 400 calls: no decode at all;
 //   6. (VIBE_TEST_AUDIO) a real 40 m FT8 recording: far more decodes than the old full depth, at about its CPU;
 //   7. (VIBE_TEST_AUDIO) spot SNRs on STUEY3D's scale: median difference within ±1.5 dB (FT8, FT4), ±3.5 (FT2, few).
+//   8. V12 beta91 THE DEEP TIER ("dig deeper"): off by default and off = full depth exactly; the repeat book is bounded and
+//      forgets; a repeat heard before decodes ~1 dB lower; a SIBLING heard before (the same calls, the last field one step
+//      away) is never claimed; noise with a full repeat book and every candidate tried: no decode at all.
 #include "decoders/ft8_decoder.h"
 #include "decoders/ftx_fine.h"
 #include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <map>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -104,8 +108,11 @@ static Ft8SlotOptions newFull(FtxApBook* ap) {
 }
 
 /** Decode `slots` synthetic slots at `snr` (fixed seed per SNR), `sigs` signals each; counts true and FALSE decodes. */
+static std::string sibling(const std::string& m);
+/** `repSeed` (beta91): 1 = each signal's own message is put in o.ap's repeat book at its frequency first (heard before),
+ *  2 = its SIBLING is (sibling(): every decode of a sibling is FALSE). */
 static void band(const Geo& g, double snr, int slots, int sigs, Ft8SlotOptions o, int& hit, int& sent, int& fals,
-                 FtxApBook* seedBook = nullptr, double* msOut = nullptr) {
+                 FtxApBook* seedBook = nullptr, double* msOut = nullptr, int repSeed = 0) {
     Ft8SlotDecoder dec(kFs, g.mode);
     const int W = dec.windowSamples();
     std::mt19937 rng(7000u + (unsigned)std::lround((snr + 100) * 10) + (unsigned)g.mode * 100000u);
@@ -128,6 +135,7 @@ static void band(const Geo& g, double snr, int slots, int sigs, Ft8SlotOptions o
             const double dt = g.dtLo + (g.dtHi - g.dtLo) * U(rng);
             gfskAdd(x, tones, g.nn, g.nsps, g.bt, hz, g.dtNom + dt, std::sqrt(2 * n2500 * std::pow(10.0, snr / 10)), 2 * M_PI * U(rng));
             truth.insert(text(m)); ++sent;
+            if (repSeed && o.ap) o.ap->seedRepeat(repSeed == 1 ? msg : sibling(msg), (float)hz);
             if (seedBook) {
                 char c1[16] = {}, c2[16] = {}, ex[16] = {}; ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
                 if (ftx_message_decode_std(&m, nullptr, c1, c2, ex, ft) == FTX_MESSAGE_RC_OK) {
@@ -148,6 +156,27 @@ static void band(const Geo& g, double snr, int slots, int sigs, Ft8SlotOptions o
         }
     }
     if (msOut) *msOut = ms / slots;
+}
+
+/** The message one step away in its last field: report ±1 dB, the next grid square, RR73 ↔ 73 (as ftx_sweep --repseed 2). */
+static std::string sibling(const std::string& m) {
+    const size_t sp = m.rfind(' ');
+    std::string head = m.substr(0, sp + 1), last = m.substr(sp + 1);
+    if (last == "RR73") return head + "73";
+    if (last == "73" || last == "RRR") return head + "RR73";
+    if (last.size() == 4 && std::isalpha((unsigned char)last[0]) && std::isalpha((unsigned char)last[1])) {
+        last[3] = (char)('0' + (last[3] - '0' + 1) % 10); return head + last;
+    }
+    const bool r = last[0] == 'R';
+    int v = std::atoi(last.c_str() + (r ? 1 : 0));
+    v = v >= 29 ? v - 1 : v + 1;
+    char b[8]; std::snprintf(b, sizeof b, "%s%+03d", r ? "R" : "", v);
+    return head + b;
+}
+static Ft8SlotOptions deepFull(FtxApBook* ap) {   // ★ what Ft8Decoder::runDecode adds with deepTier() on spare CPU
+    Ft8SlotOptions o = newFull(ap);
+    o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
+    return o;
 }
 
 static bool readWav(const std::string& path, std::vector<int16_t>& out, int& rate) {
@@ -470,6 +499,107 @@ int main() {
                 std::snprintf(b, sizeof b, "FT2 20m: ours - STUEY3D's (PSKReporter) median %+d dB over %d senders — a small sample, so within +-3.5", med, n);
                 ok(std::abs(med) <= 3, b);
             }
+        }
+    }
+    std::printf("8. V12 beta91 the deep tier (dig deeper): repeats, more AP hypotheses, a lower second-look gate\n");
+    {
+        ok(!Ft8Decoder::deepTier().load() && !Ft8SlotOptions{}.apRepeat && !Ft8SlotOptions{}.apRepeatLearn,
+           "off by default: the switch, and every slot option it sets");
+        // the book: stored with its frequency, refreshed not duplicated, forgotten after a minute, bounded
+        FtxApBook b(false, 40);    // ★ the live FT8 book: ten minutes; repeats for a tenth of that (4 slots)
+        b.beginSlot();
+        ok(b.seedRepeat("CQ G4ABC IO91", 1000.0f) && b.seedRepeat("CQ G4ABC IO91", 1000.4f) && b.repeats().size() == 1,
+           "a message heard twice at its frequency is one repeat hypothesis");
+        b.seedRepeat("CQ G4ABC IO91", 1500.0f);
+        ok(b.repeats().size() == 2, "...the same message at another frequency is another (a second station, or a move)");
+        for (int i = 0; i < 4; ++i) b.beginSlot();
+        ok(b.repeats().size() == 2, "kept for four FT8 slots (a minute)");
+        b.beginSlot();
+        ok(b.repeats().empty(), "...and forgotten after that");
+        std::mt19937 r2(99);
+        for (int i = 0; i < 1000; ++i) b.seedRepeat(randMsg(r2), (float)(200 + i));
+        ok(b.repeats().size() <= 256, "bounded: " + std::to_string(b.repeats().size()) + " repeats kept of 1000 heard (at most 256)");
+        {   // the codeword: a whole-codeword hypothesis is exactly the message's 174 bits
+            ftx_message_t m; ftx_message_init(&m); ftx_message_encode(&m, nullptr, "K1ABC G4XYZ R-07");
+            FtxApBook c(false, 40); c.beginSlot(); c.heard(m, 700.0f);
+            // ★ the codeword back from ft8_encode's tones: the 58 data symbols, Gray-decoded, three bits each MSB first
+            uint8_t tones[FT8_NN]; ft8_encode(m.payload, tones);
+            bool cwb[FTX_LDPC_N]; int j = 0;
+            for (int k = 0; k < FT8_NN; ++k) {
+                if (k < 7 || (k >= 36 && k < 43) || k >= 72) continue;
+                int v = 0; while (v < 8 && kFT8_Gray_map[v] != tones[k]) ++v;
+                for (int q = 2; q >= 0; --q) cwb[j++] = ((v >> q) & 1) != 0;
+            }
+            bool same = c.repeats().size() == 1 && j == FTX_LDPC_N;
+            for (int i = 0; i < FTX_LDPC_N && same; ++i) same = (((c.repeats()[0].cw[i >> 6] >> (i & 63)) & 1) != 0) == cwb[i];
+            ok(same, "a repeat hypothesis is the message's whole codeword (ft8_lib's own encoder agrees, all 174 bits)");
+        }
+        // off = full depth exactly: learning repeats changes nothing in what is decoded
+        {
+            const Geo g = geo(FtxMode::FT8);
+            FtxApBook a1(false, 1 << 30), a2(false, 1 << 30);
+            Ft8SlotOptions o1 = newFull(&a1), o2 = newFull(&a2); o2.apRepeatLearn = true;
+            int h1, n1, f1, h2, n2, f2;
+            band(g, -21.0, 8, 10, o1, h1, n1, f1);
+            band(g, -21.0, 8, 10, o2, h2, n2, f2);
+            ok(h1 == h2 && f1 == 0 && f2 == 0, "with the tier off, a book that learns repeats decodes exactly what full depth does ("
+               + std::to_string(h1) + " = " + std::to_string(h2) + ")");
+        }
+        struct C { FtxMode md; double snr; int sigs; } cs[] = { { FtxMode::FT8, -22.0, 10 }, { FtxMode::FT4, -17.0, 10 }, { FtxMode::FT2, -14.0, 6 } };
+        for (const C& c : cs) {
+            const Geo g = geo(c.md);
+            FtxApBook a0(c.md != FtxMode::FT8, 1 << 30), a1(c.md != FtxMode::FT8, 1 << 30);
+            Ft8SlotOptions o0 = newFull(&a0), o1 = deepFull(&a1);
+            if (c.md == FtxMode::FT2) { o0.osdMaxErrors = o1.osdMaxErrors = 0; }   // ★ as the live decoder runs FT2
+            int h0, n0, f0, h1, n1, f1;
+            band(g, c.snr, 12, c.sigs, o0, h0, n0, f0);
+            band(g, c.snr, 12, c.sigs, o1, h1, n1, f1, nullptr, nullptr, 1);
+            char t[200];
+            std::snprintf(t, sizeof t, "%s at %+.0f dB, each message heard a minute before: full depth %d/%d, dig deeper %d/%d, false %d / %d",
+                          g.name, c.snr, h0, n0, h1, n1, f0, f1);
+            ok(h1 >= 2 * h0 && h1 >= n1 / 3 && f0 == 0 && f1 == 0, t);
+        }
+        // ★★ the worst case for a false repeat: the SAME calls heard a minute ago with the last field one step away, tried on
+        //    every candidate however far BP was. A detection of the sibling would be a message the station did not send.
+        for (FtxMode md : { FtxMode::FT8, FtxMode::FT4, FtxMode::FT2 }) {
+            const Geo g = geo(md);
+            int fTot = 0, hTot = 0, nTot = 0;
+            for (double snr : { -24.0, -21.0, -18.0, -14.0, -8.0 }) {
+                FtxApBook a(md != FtxMode::FT8, 1 << 30);
+                Ft8SlotOptions o = deepFull(&a); o.apRepeatMaxBpErr = 200;
+                if (md == FtxMode::FT2) o.osdMaxErrors = 0;
+                const double sh = md == FtxMode::FT8 ? 0 : md == FtxMode::FT4 ? 5 : 8;
+                int h, n, f;
+                band(g, snr + sh, 6, 10, o, h, n, f, nullptr, nullptr, 2);
+                fTot += f; hTot += h; nTot += n;
+            }
+            ok(fTot == 0, std::string(g.name) + ": every message's sibling heard before, 5 SNRs: " + std::to_string(hTot) + "/"
+               + std::to_string(nTot) + " decoded, " + std::to_string(fTot) + " siblings claimed (must be 0)");
+        }
+        // noise, a full book (400 calls, 256 repeats at random frequencies), every candidate tried, AP and repeats on all
+        for (FtxMode md : { FtxMode::FT8, FtxMode::FT4, FtxMode::FT2 }) {
+            const Geo g = geo(md);
+            FtxApBook book(md != FtxMode::FT8, 1 << 30);
+            std::uniform_real_distribution<double> U(0, 1);
+            for (int i = 0; i < 400; ++i) { const std::string a = randCall(rng); if (i % 2) book.seed(a, randCall(rng)); else book.seed(a); }
+            for (int i = 0; i < 256; ++i) book.seedRepeat(randMsg(rng), (float)(200.0 + 2800.0 * U(rng)));
+            Ft8SlotOptions o = deepFull(&book);
+            o.minScore = 0; o.maxCandidates = 300; o.fineMinSync = 6; o.apMaxBpErr = 200; o.apRepeatMaxBpErr = 200;
+            if (md == FtxMode::FT2) o.osdMaxErrors = 0;
+            Ft8SlotDecoder dec(kFs, md);
+            const int W = dec.windowSamples();
+            std::normal_distribution<double> N(0, kSigma);
+            const int slots = md == FtxMode::FT8 ? 24 : 40;
+            int got = 0;
+            for (int sl = 0; sl < slots; ++sl) {
+                std::vector<float> x((size_t)W);
+                for (float& v : x) v = (float)N(rng);
+                std::vector<Ft8Result> res; Ft8SlotStats st;
+                dec.decode(x.data(), W, o, res, st);
+                for (const Ft8Result& r : res) { ++got; std::printf("     FALSE %s: \"%s\" (ap %d)\n", g.name, text(r.msg).c_str(), r.ap); }
+            }
+            ok(got == 0, std::string(g.name) + " dig deeper: " + std::to_string(slots) + " slots of noise, 256 repeats + 400 calls, "
+               + std::to_string(got) + " decodes");
         }
     }
     std::printf(fails ? "\n%d FAILURE(S)\n" : "\nALL PASS (0 failures)\n", fails);
