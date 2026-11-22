@@ -148,7 +148,10 @@ struct ModeDef {
 
 /** The registered modes, in registration order (FT8 first). Built once, never changed after — read freely. */
 const std::vector<ModeDef>& modes();
-const std::vector<ModeDef>& iqModesBx();   // BISECT (temporary)
+/** ★ V12 beta91: the IQ modes (CW, RTTY, PSKW — the band decode's skimmer chips), kept out of modes(). */
+const std::vector<ModeDef>& iqModes();
+/** modes() then iqModes() — for the readers that list every chip (the server's spotModes, the spans' extras). */
+const std::vector<ModeDef>& allModes();
 /** A registered mode by name (case-insensitive), or null. */
 const ModeDef* modeByName(const std::string& name);
 

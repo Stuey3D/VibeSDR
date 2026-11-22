@@ -10,7 +10,6 @@
 
 namespace vibe {
 namespace digi {
-static bool bx(const char* n) { const char* e = std::getenv(n); return e && *e == '1'; }   // BISECT (temporary)
 
 Spotter::Spotter(Scope scope, const std::vector<ModeDef>& ms, Emit emit, std::function<double()> dialHz,
                  std::function<bool()> loaded)
@@ -150,9 +149,8 @@ void Spotter::plan() {
          *  margin, moving FT8 … PSK onto a slice that exists only for the skimmers: a fresh tuner mid-slot, and the
          *  audio modes' fate tied to the skimmers' slice (switched off → not cut; beyond a narrow capture). So every audio
          *  dial sits where it did before the band-skim change (test-web-spots once lost 20 m's PSK31 after the merge). */
-        static const bool noMain = bx("VIBE_BX_NOMAIN");
         for (auto& sk : slices_) {
-            if (noMain || sk.second.id != 0) continue;
+            if (sk.second.id != 0) continue;
             int n = 0;
             for (auto& md : kv.second) if (DigiTuner::margin(md.second, md.first->audioLoHz, md.first->audioHiHz, sk.second.rate, sk.second.centre) >= 0) ++n;
             if (n == (int)kv.second.size() && n > 0) { best = sk.first; bestN = n; }
@@ -168,8 +166,7 @@ void Spotter::plan() {
      *  apart from the dials (negative: the window's centre and the mode's index), one run per window, no tuner. */
     struct IqWant { long long slice = 0; const ModeDef* m = nullptr; Window w; };
     std::map<long long, IqWant> iqWant;
-    static const bool noIq = bx("VIBE_BX_NOIQ");
-    for (size_t mi = 0; mi < modes_.size() && !noIq; ++mi) {
+    for (size_t mi = 0; mi < modes_.size(); ++mi) {
         const ModeDef& m = modes_[mi];
         if (!m.iq || !m.makeWin) continue;
         for (const Band& b : bands())
@@ -237,7 +234,6 @@ void Spotter::plan() {
 
 void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
                      const float* binPow, int nb, double binHz, int sliceId) {
-    static const bool noId = bx("VIBE_BX_NOID"); if (noId) sliceId = -1;
     if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
     if (!x) { feedGap(n, rate, centreHz, captureUtc); return; }   // ★ a null block: a gap of n samples (see feedGap)
     if (!std::isfinite(bandStartUtc_) && std::isfinite(captureUtc)) bandStartUtc_ = captureUtc;
@@ -265,11 +261,7 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
         if (j != it && (moved || captureUtc - j->second.lastUtc > kSliceGoneSec)) { j = slices_.erase(j); replan = true; }
         else ++j;
     }
-    if (replan) {
-        static const bool dbg = bx("VIBE_BX_LOG");   // BISECT (temporary)
-        if (dbg && log_) { char b[200]; std::snprintf(b, sizeof b, "BX replan: slice id %d centre %.1f rate %.0f utc %.3f, %zu slices", sliceId, centreHz, rate, captureUtc, slices_.size()); log_(b); }
-        plan();
-    }
+    if (replan) plan();
     // ── the activity gate's measure: the slice's own bins (no transform here) ──
     /* ★ 0 = no bins (no gate: every window counts as occupied) · 1 = bins, the floor still warming up (hold, open only
      *  what must run) · 2 = gated. */
@@ -284,8 +276,7 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
          *  opened an empty window for the whole period (test-web-spots "WSPR idle", test-server-spots "WSPR's empty window
          *  was never decoded" — intermittent, before the band-skim change too). The slotted modes' short periods are left
          *  as they were (they judge afresh every slot). */
-        static const bool noForget = bx("VIBE_BX_NOFORGET");
-        if (!noForget && S.floor.ready() && !S.wasReady) {
+        if (S.floor.ready() && !S.wasReady) {
             S.wasReady = true;
             for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs)
                 if (r.gate && gatePeriod(*r.def) > 15.0) r.gate->meter.restart();
@@ -419,8 +410,7 @@ RunState Spotter::ask(Run& who, bool wants) {
         } else if (out[i] == RunState::Shed) {
             // ★ a higher-priority mode needs the room: a free-running mode stops now (nothing is lost but its next
             //   seconds); a slotted one finishes the slot whose audio it already has, light, and is shed at its next.
-            if (r.def->slotSec <= 0) { r.gate->st = Gate::Shed; ++r.gate->shedN; setState(*r.gate, RunState::Shed); stopFeeding(r);
-                static const bool dbg = bx("VIBE_BX_LOG"); if (dbg && log_) log_("BX shed-other " + r.def->name + " asked by " + who.def->name + " budget " + std::to_string(budget_.units())); }
+            if (r.def->slotSec <= 0) { r.gate->st = Gate::Shed; ++r.gate->shedN; setState(*r.gate, RunState::Shed); stopFeeding(r); }
             else r.light->store(true, std::memory_order_relaxed);
         }
     }
@@ -502,8 +492,6 @@ void Spotter::newPeriod(Run& r, int64_t per, int gated) {
     const bool wasLive = g.st == Gate::Live;
     g.st = Gate::Pending;                                   // ★ not committed while the governor is asked
     const RunState d = ask(r, wants);
-    { static const bool dbg = bx("VIBE_BX_LOG");
-      if (dbg && log_ && (r.def->name == "PSK" || r.def->name == "FT2")) { char b[200]; std::snprintf(b, sizeof b, "BX period %s per %lld gated %d wants %d wasLive %d -> %s budget %.1f hang %d", r.def->name.c_str(), (long long)per, gated, (int)wants, (int)wasLive, stateWord(d), budget_.units(), g.hang); log_(b); } }
     if (d == RunState::Light || d == RunState::Full) {
         r.light->store(d == RunState::Light, std::memory_order_relaxed);
         if (wasLive) { g.st = Gate::Live; g.buf.clear(); g.marks.clear(); }
@@ -545,8 +533,6 @@ void Spotter::route(Run& r, const float* a, int k, double utc, int gated, Slice&
             g.saw = true;
             std::lock_guard<std::mutex> lk(statMtx_);
             const RunState d = ask(r, true);
-            { static const bool dbg = bx("VIBE_BX_LOG");
-              if (dbg && log_ && (r.def->name == "PSK" || r.def->name == "FT2")) { char b[160]; std::snprintf(b, sizeof b, "BX lit %s utc %.2f -> %s held %zu", r.def->name.c_str(), utc, stateWord(d), g.buf.size()); log_(b); } }
             if (d == RunState::Light || d == RunState::Full) {
                 r.light->store(d == RunState::Light, std::memory_order_relaxed);
                 goLive(r); setState(g, d);
@@ -609,7 +595,6 @@ void Spotter::routeIq(Run& r, const cf32* x, int n, double rate, double centreHz
  *   • Caught up (under kResumeBehindSec, no skip) for kResumeCalmSec: the last one paused resumes — RTTY, then CW.
  *   The log says so plainly each time. */
 void Spotter::pauseTick(double utc) {
-    static const bool noPause = bx("VIBE_BX_NOPAUSE"); if (noPause) return;
     if (!std::isfinite(utc) || utc - pauseCheck_ < 1.0) return;
     pauseCheck_ = utc;
     int maxRank = 0;
@@ -622,7 +607,7 @@ void Spotter::pauseTick(double utc) {
     if (maxRank == 0) { pauseLevel_ = 0; return; }
     const double ext = behind_ ? behind_() : 0.0;
     const double b = std::max(ext, backlog);
-    const uint64_t sk = skippedLocked();
+    const uint64_t sk = skippedHook_ ? skippedHook_() : skippedLocked();
     const bool skipped = sk > pauseSkips_;
     pauseSkips_ = sk;
     auto names = [&](int rank) {

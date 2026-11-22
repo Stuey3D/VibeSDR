@@ -92,7 +92,7 @@ inline ModeDef vibeDigiMode_pskw() {
     m.priority = 105;                // ★ shed after CW (120) and RTTY (110), before every audio mode
     m.pauseRank = 3;                 // ★ paused last of the three
     m.gateSec = 4.0;
-    m.windows = [](const std::string& band) { { const char* e = std::getenv("VIBE_BX_NOWIN"); if (e && *e == '1') return std::vector<std::pair<double, double>>(); } return skimbands::bandWindows(skimbands::Kind::Rtty, skimbands::bandRegion().load(), band); };
+    m.windows = [](const std::string& band) { return skimbands::bandWindows(skimbands::Kind::Rtty, skimbands::bandRegion().load(), band); };
     m.makeWin = [](double lo, double hi) { return std::unique_ptr<Engine>(new PskWideEngine(lo, hi, PskWideEngine::originalWindows(lo, hi))); };
     m.make = [] { return std::unique_ptr<Engine>(); };
     return m;

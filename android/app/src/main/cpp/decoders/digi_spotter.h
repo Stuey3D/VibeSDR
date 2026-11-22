@@ -85,6 +85,9 @@ public:
     /** ★ CPU (ns) the engines' own threads spent (an IQ engine's worker) — the host adds it to its health figure. Set before
      *  the first block. */
     void setCpu(std::function<void(uint64_t)> f) { cpuHook_ = std::move(f); }
+    /** ★ Another spotter's skipped slots (monotonic) for the pause rule — the CW / RTTY / PSKW spotter reads the audio
+     *  one's, so a slotted mode skipping a slot pauses the chips. Null = this spotter's own. Set before the first block. */
+    void setSkipped(std::function<uint64_t()> f) { std::lock_guard<std::mutex> lk(statMtx_); skippedHook_ = std::move(f); }
     /** ★ How many continuous modes are paused now (0 none, 1 CW, 2 CW and RTTY) — tests, the admin line. */
     int pauseLevel() const { std::lock_guard<std::mutex> lk(statMtx_); return pauseLevel_; }
     static constexpr double kPauseBehindSec = 1.5;   ///< behind by more than this (or a skipped slot): pause the next mode
@@ -234,6 +237,7 @@ private:
     std::function<double()> behind_;
     std::function<void(const std::string&)> log_;
     std::function<void(uint64_t)> cpuHook_;
+    std::function<uint64_t()> skippedHook_;
     int pauseLevel_ = 0;
     double pauseAt_ = -1e300, calmSince_ = NAN, pauseCheck_ = -1e300;
     uint64_t pauseSkips_ = 0;

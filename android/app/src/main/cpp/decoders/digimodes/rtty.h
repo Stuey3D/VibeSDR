@@ -107,7 +107,7 @@ inline ModeDef vibeDigiMode_rtty() {
     m.priority = 110;                // ★ shed after CW, before every audio mode
     m.pauseRank = 2;                 // ★ paused after CW when the band decode falls behind
     m.gateSec = 4.0;
-    m.windows = [](const std::string& band) { { const char* e = std::getenv("VIBE_BX_NOWIN"); if (e && *e == '1') return std::vector<std::pair<double, double>>(); } return skimbands::bandWindows(skimbands::Kind::Rtty, skimbands::bandRegion().load(), band); };
+    m.windows = [](const std::string& band) { return skimbands::bandWindows(skimbands::Kind::Rtty, skimbands::bandRegion().load(), band); };
     m.makeWin = [](double lo, double hi) { return std::unique_ptr<Engine>(new RttyBandEngine(lo, hi)); };
     m.make = [] { return std::unique_ptr<Engine>(); };
     return m;

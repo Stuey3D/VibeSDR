@@ -462,32 +462,50 @@ public:
         if (env_.region) { const int rg = env_.region(); if (rg >= 1 && rg <= 3) skimbands::bandRegion().store(rg); }
         std::vector<digi::ModeDef> ms;   // ★ the modes the owner has not switched off (the Spotter keeps its own copy)
         for (const auto& m : digi::modes()) if (!(env_.spotModeOff && env_.spotModeOff(m.name))) ms.push_back(m);
-        { const char* e = std::getenv("VIBE_BX_SPLIT"); if (e && *e == '1') for (const auto& m : digi::iqModesBx()) ms.push_back(m); }   // BISECT
         spotter_.reset(new digi::Spotter(scope, ms,
             [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
             [dial] { return dial ? dial() : 0.0; }, loaded));
+        iqSpotter_.reset();
         if (scope == SpotScope::Band) {
+            std::function<digi::Override(const std::string&)> ovf;
             if (env_.bandOverride) {
                 auto ov = env_.bandOverride;
-                spotter_->setOverrides([ov](const std::string& m) {
+                ovf = [ov](const std::string& m) {
                     const int v = ov(m);
                     return v > 0 ? digi::Override::Always : v < 0 ? digi::Override::Off : digi::Override::Auto;
-                });
+                };
+                spotter_->setOverrides(ovf);
             }
             const double u = env_.bandBudgetUnits ? env_.bandBudgetUnits() : NAN;
             spotter_->setBudgetCap(std::isfinite(u) && u > 0 ? u : INFINITY);
-            /* ★★ V12 beta91 THE PAUSE RULE (BAND-SKIM-CW-RTTY.md): behind = the slice IQ queued for this decode thread and
-             *  not yet decoded. CW then RTTY pause first when it grows (the slotted modes keep their slots); the log says so. */
-            spotter_->setBehind([this] { return queuedIqSec(); });
-            spotter_->setLog([this](const std::string& l) { log(l); });
-            spotter_->setCpu([this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); });
+            /* ★★★ V12 beta91 — THE CW / RTTY / WIDE-PSK CHIPS RUN IN A SPOTTER OF THEIR OWN (iqSpotter_), fed the same
+             *  slices. The audio spotter above is then exactly what it was before the band-skim change — same modes, same
+             *  plan, same gate, same governor. With the IQ modes inside it (even with no window, no run), test-server-spots
+             *  missed its one-pipeline PSK31 / FT2 in ~1 run in 4; with them out of it, never (BAND-SKIM-CW-RTTY.md, the
+             *  bisect). The chips' own registry is digi::iqModes(); the server's lists name them (digi::allModes).
+             *  ★ Their pause rule reads the decode thread's queue AND the slotted modes' skipped slots (the audio spotter's). */
+            std::vector<digi::ModeDef> iq;
+            for (const auto& m : digi::iqModes()) if (!(env_.spotModeOff && env_.spotModeOff(m.name))) iq.push_back(m);
+            if (!iq.empty()) {
+                iqSpotter_.reset(new digi::Spotter(scope, iq,
+                    [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
+                    [dial] { return dial ? dial() : 0.0; }, loaded));
+                if (ovf) iqSpotter_->setOverrides(ovf);
+                /* ★★ THE PAUSE RULE (BAND-SKIM-CW-RTTY.md): behind = the slice IQ queued for this decode thread and not yet
+                 *  decoded, or a slotted mode skipping a slot. CW then RTTY then PSKW pause first; the log says so. */
+                iqSpotter_->setBehind([this] { return queuedIqSec(); });
+                digi::Spotter* audio = spotter_.get();
+                iqSpotter_->setSkipped([audio] { return audio->slotsSkipped(); });
+                iqSpotter_->setLog([this](const std::string& l) { log(l); });
+                iqSpotter_->setCpu([this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); });
+            }
             statusSent_ = ~0ull; statusAt_ = 0;
         }
         if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(scope == SpotScope::Band); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
         spotsOn_ = true;
         if (scope == SpotScope::Band) {
             bandWidth_.store(bandWidthFor(dial ? dial() : 0.0), std::memory_order_relaxed);   // ★ a socket thread: no channel lock held
-            { const char* e = std::getenv("VIBE_BX_NODIAL"); if (!(e && *e == '1')) bandWidthDial_.store(dial ? dial() : -1.0, std::memory_order_relaxed); }   // ★ beta91: the chips name the band before the first block
+            bandWidthDial_.store(dial ? dial() : -1.0, std::memory_order_relaxed);   // ★ beta91: the chips name the band before the first block
             setExtras_(dial ? dial() : 0.0);
             if (!bandIq_.exchange(true)) skimmersRunning().fetch_add(1);
         } else {
@@ -526,7 +544,10 @@ public:
     /** What the spotter runs now ("FT8 14.0740, FT4 14.0800"), for the admin page. */
     std::string spotsDescribe() {
         std::lock_guard<std::mutex> lk(spotsMtx_);
-        return spotter_ ? spotter_->describe() : std::string();
+        if (!spotter_) return std::string();
+        std::string d = spotter_->describe();
+        if (iqSpotter_) { const std::string q = iqSpotter_->describe(); if (!q.empty()) d = q + (d.empty() ? "" : ", ") + d; }
+        return d;
     }
     /** ★ The IQ width Band mode wants for a dial: the registered modes' span of the band it is on, wide enough either side
      *  of the dial to hold it all (a dial typed off-centre still decodes the whole band). Off any band: 24 kHz. */
@@ -1912,7 +1933,8 @@ private:
     std::string statusJsonLocked_() {
         std::string j = "{\"type\":\"digital_spots_status\",\"data\":{\"scope\":\"band\",\"modes\":[";
         bool first = true;
-        const std::vector<digi::Spotter::ModeStatus> sts = spotter_->status();
+        std::vector<digi::Spotter::ModeStatus> sts = spotter_->status();
+        if (iqSpotter_) for (auto& m : iqSpotter_->status()) sts.push_back(m);   // ★ beta91: the CW / RTTY / PSKW chips
         for (const auto& m : sts) {
             char b[200];
             std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"state\":\"%s\",\"dials\":%d,\"idle\":%llu,\"shed\":%llu,\"live\":%llu}",
@@ -1924,7 +1946,7 @@ private:
          *  (a narrow capture: an extra slice 153 kHz off on 6 m) — is a chip too, "out", never silently missing. */
         {
             const digi::Band* bd = digi::bandAt(bandWidthDial_.load(std::memory_order_relaxed));
-            const digi::Span sp = bd ? digi::spanOf(*bd, digi::modes()) : digi::Span();
+            const digi::Span sp = bd ? digi::spanOf(*bd, digi::allModes()) : digi::Span();   // ★ beta91: the IQ chips too
             if (sp.ok)
                 for (const std::string& name : sp.allModes()) {
                     bool have = false;
@@ -1946,7 +1968,7 @@ private:
     /** ★ Send the chips when a mode's state changed (at most once a second) and every 15 s regardless (a window opened
      *  late sees them). spotsMtx_ held, on the decode thread. */
     void maybeSendStatusLocked_(double utc) {
-        const uint64_t seq = spotter_->statusSeq();
+        const uint64_t seq = spotter_->statusSeq() + (iqSpotter_ ? iqSpotter_->statusSeq() * 1000003ull : 0);
         if (seq == statusSent_ ? utc - statusAt_ < 15.0 : utc - statusAt_ < 1.0) return;
         statusSent_ = seq; statusAt_ = utc;
         broadcastText(statusJsonLocked_(), -1);   // ★ re-sent every 15 s — not kept for a returning listener
@@ -1956,8 +1978,8 @@ private:
         spotsOn_ = false;
         spotsActive_.store(false, std::memory_order_relaxed);
         if (bandIq_.exchange(false)) skimmersRunning().fetch_sub(1);
-        { const char* e = std::getenv("VIBE_BX_LOG"); if (e && *e == '1' && spotter_) { char b[200]; std::snprintf(b, sizeof b, "BX stop: IQ blocks dropped %llu, bridged %.2f s, slots skipped %llu, lag max %.2f", (unsigned long long)iqBlocksDropped(), spotter_->usBridged() / 1e6, (unsigned long long)spotter_->slotsSkipped(), diagLagMax_); log(b); } }   // BISECT
         if (spotter_) { spotSkipBase_ += spotter_->slotsSkipped(); spotShedBase_ += spotter_->periodsShed(); }
+        iqSpotter_.reset();          // ★ beta91: the CW / RTTY / PSKW engines first (they read the audio spotter's skips)
         spotter_.reset();            // ★ joins the engines' workers (an FT8 decode in progress is aborted, not waited for)
         if (finishTap) { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(spotTap_); } if (t) t->finish(true); }
     }
@@ -2032,6 +2054,8 @@ private:
                         else {
                         spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
                                          b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz, b.slice);
+                        if (iqSpotter_) iqSpotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
+                                                           b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz, b.slice);
                         maybeSendStatusLocked_(b.utc);
                         bandDiagLocked_(b);
                         }
@@ -2297,6 +2321,7 @@ private:
 
     std::mutex spotsMtx_;
     std::unique_ptr<digi::Spotter> spotter_;   // ★ the digital-spots run (Single or Band) — see startSpots
+    std::unique_ptr<digi::Spotter> iqSpotter_; // ★ V12 beta91: Band's CW / RTTY / wide-PSK chips, a spotter of their own
     bool  spotsOn_ = false;
     std::atomic<bool> spotsActive_{false};      // ★ Single: wants the listener's audio
     std::atomic<bool> bandIq_{false};           // ★ Band: wants the band's IQ slice (wantsIq)
@@ -2368,7 +2393,9 @@ private:
         if (b.utc - diagAt_ < 60.0) return;
         std::string spots, chips;
         { std::lock_guard<std::mutex> dl(diagMtx_); for (auto& kv : diagSpots_) spots += " " + kv.first + " " + std::to_string(kv.second); diagSpots_.clear(); }
-        for (const auto& m : spotter_->status()) {
+        std::vector<digi::Spotter::ModeStatus> stAll = spotter_->status();
+        if (iqSpotter_) for (auto& m : iqSpotter_->status()) stAll.push_back(m);
+        for (const auto& m : stAll) {
             chips += " " + m.mode + ":" + digi::stateWord(m.state);
             // ★ V12 beta91: the CW / RTTY chips' own threads, % of one core over the minute (what they cost on this box)
             if (m.iq) {

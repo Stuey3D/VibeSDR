@@ -47,7 +47,7 @@ inline std::vector<ExtraSlice> bandExtraSlices(double dialHz, const std::functio
     std::vector<ExtraSlice> o;
     const digi::Band* b = digi::bandAt(dialHz);
     if (!b) return o;
-    const digi::Span sp = digi::spanOf(*b, digi::modes());
+    const digi::Span sp = digi::spanOf(*b, digi::allModes());   // ★ beta91: the CW / RTTY / wide-PSK windows' slices too
     if (!sp.ok) return o;
     for (const digi::SubSpan& e : sp.extras) {
         if ((int)o.size() >= kMaxExtraSlices) break;

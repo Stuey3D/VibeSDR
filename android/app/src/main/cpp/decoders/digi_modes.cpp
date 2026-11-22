@@ -98,24 +98,17 @@ const std::vector<ModeDef>& modes() {
 #ifdef VIBE_DIGI_HAVE_MSK144
         ADD(vibeDigiMode_msk144());
 #endif
-        // ★★ V12 beta91 — the band's CW and RTTY skimmers and wide PSK as three more chips (IQ modes: windows, not dials — Band only;
-        //    docs/v12/BAND-SKIM-CW-RTTY.md). Last: shed and paused first, shown last.
-        const char* bxr = std::getenv("VIBE_BX_NOREG"); if (bxr && *bxr == '1') return v;   // BISECT (temporary)
-#ifdef VIBE_DIGI_HAVE_CW
-        ADD(vibeDigiMode_cw());
-#endif
-#ifdef VIBE_DIGI_HAVE_RTTY
-        ADD(vibeDigiMode_rtty());
-#endif
-#ifdef VIBE_DIGI_HAVE_PSKW
-        ADD(vibeDigiMode_pskw());       // ★ PSK31/63 across the RTTY chip's segment, beside the original PSK window
-#endif
         return v;
     }();
     return all;
 }
 
-const std::vector<ModeDef>& iqModesBx() {   // BISECT (temporary)
+/* ★★ V12 beta91 — THE IQ MODES (the band decode's CW, RTTY and wide-PSK chips: windows, not dials — Band only;
+ *  docs/v12/BAND-SKIM-CW-RTTY.md), a registry of their own. modes() is the AUDIO registry every other reader walks (the
+ *  benchmark's rows, Single, the Band budget's units, the spans' sizes); these join a Band run and the server's lists only
+ *  where they are wired (DecoderHost::startSpots, bandExtraSlices, the chips, spotModes / spotBands). Last: shed and
+ *  paused first, shown last. */
+const std::vector<ModeDef>& iqModes() {
     static const std::vector<ModeDef> v = [] {
         std::vector<ModeDef> o;
 #ifdef VIBE_DIGI_HAVE_CW
@@ -132,13 +125,24 @@ const std::vector<ModeDef>& iqModesBx() {   // BISECT (temporary)
     return v;
 }
 
+const std::vector<ModeDef>& allModes() {
+    static const std::vector<ModeDef> v = [] {
+        std::vector<ModeDef> o = modes();
+        for (const ModeDef& m : iqModes()) o.push_back(m);
+        return o;
+    }();
+    return v;
+}
+
 const ModeDef* modeByName(const std::string& name) {
-    for (const ModeDef& m : modes()) {
-        if (m.name.size() != name.size()) continue;
-        bool eq = true;
-        for (size_t i = 0; i < name.size() && eq; ++i) eq = std::toupper((unsigned char)m.name[i]) == std::toupper((unsigned char)name[i]);
-        if (eq) return &m;
-    }
+    auto eq = [&](const std::string& n) {
+        if (n.size() != name.size()) return false;
+        for (size_t i = 0; i < name.size(); ++i) if (std::toupper((unsigned char)n[i]) != std::toupper((unsigned char)name[i])) return false;
+        return true;
+    };
+    // ★ the audio registry's own entries first (callers compare pointers into modes()), then the IQ modes'
+    for (const ModeDef& m : modes()) if (eq(m.name)) return &m;
+    for (const ModeDef& m : iqModes()) if (eq(m.name)) return &m;
     return nullptr;
 }
 
