@@ -1183,7 +1183,7 @@ export class SpectrumClient {
       this.stopPing = heartbeat(5000, () => {
         if (this.ws !== ws) return;
         this.lastPingAt = performance.now();
-        this._send({ type: 'ping' });
+        this._send({ type: 'ping', ka: 1 });   // ★ beta91 ka:1 = an automatic keep-alive: liveness, not presence (the idle prompt)
       });
       this.aliveTickAt = performance.now();
       // ★★ THE WATCHDOG. A ping every 5s and a frame rate of at least a few per second mean a

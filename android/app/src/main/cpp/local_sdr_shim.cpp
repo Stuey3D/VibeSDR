@@ -22219,11 +22219,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    ★ Deliberately not filtered to admin-only commands: tuning, zooming and changing
         //      mode are all evidence that somebody is there, and re-locking an admin who is
         //      plainly using the receiver would be a bug wearing a security feature's clothes.
-        touchAdmin(sock);
-        // ★★ AND THE LISTENER'S OWN IDLE CLOCK, for the optional idle disconnect on a SHARED
-        //    receiver. Same evidence, same reasoning as the line above — and any message at all
-        //    clears a "still listening?" prompt, so answering it is simply using the radio.
-        if (auto c = dspFor(sock)) { c->lastAsk = Impl::nowSecs(); c->idleAskAt = 0; }
+        /* ★★★ beta91 — AN AUTOMATIC KEEP-ALIVE IS NOT A PERSON (Stuart 2026-11-22: "we need to honour it"). The web page
+         *  pings every 5 s from a worker clock (keepAlive.ts) and its audio worker every 10 s — to stay ALIVE (the dead-
+         *  session rule counts any text frame, unchanged). Counted as presence too, those pings meant "STILL LISTENING?"
+         *  could never fire for a web listener and an admin was never re-locked. They now carry "ka":1 and stamp
+         *  neither clock; every other message — a tune, a zoom, the prompt's own answer (a plain ping, sent only on a
+         *  person's tap, as every older client and the apps send it) — still does. An open decoder still counts as use
+         *  (the idle sweep's decodingSessions). Older clients send no "ka": unchanged for them. */
+        const bool keepAliveOnly = type == "ping" && msg.find("\"ka\":1") != std::string::npos;
+        if (!keepAliveOnly) {
+            touchAdmin(sock);
+            // ★★ AND THE LISTENER'S OWN IDLE CLOCK, for the optional idle disconnect on a SHARED
+            //    receiver. Same evidence, same reasoning as the line above — and any message at all
+            //    clears a "still listening?" prompt, so answering it is simply using the radio.
+            if (auto c = dspFor(sock)) { c->lastAsk = Impl::nowSecs(); c->idleAskAt = 0; }
+        }
         // ★★ V12 VFO A/B — the listener's watch channels, on every kind of radio (handleWatch).
         if (type == "watch") { handleWatch(sock, msg); return; }
 #if defined(__linux__) && !defined(__ANDROID__)

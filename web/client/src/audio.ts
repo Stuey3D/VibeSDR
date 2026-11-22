@@ -497,7 +497,7 @@ function open() {
  *  socket and needs the main thread to run; this one needs nothing but this worker, whose timers a hidden tab does not
  *  throttle. Every 10 s, text {"type":"ping"}: the server answers {"type":"pong"}, which the handler above ignores. */
 setInterval(() => {
-  if (ws && ws.readyState === 1 && !closedByUs) { try { ws.send('{"type":"ping"}'); } catch (err) { /* closing */ } }
+  if (ws && ws.readyState === 1 && !closedByUs) { try { ws.send('{"type":"ping","ka":1}'); } catch (err) { /* closing */ } }
 }, 10000);
 
 self.onmessage = (e) => {
