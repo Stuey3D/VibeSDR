@@ -13,14 +13,14 @@
  *   rule: it is part of the map). The decoder font.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H, EDGE } from '../services/adsbList';
 import type { TrackRow } from '../services/tracks';
-import { AV_DATA_CREDIT } from '../services/aviationMap';
+import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
 
 /** ★ The status line and each safety line under the header. */
 const STATUS_H = 20;
@@ -60,7 +60,6 @@ export interface TrackLiveListProps {
   credit?: boolean;
 }
 const RANGE_H = 30;
-const CREDIT_H = 26;   // ★ two lines of 9 px text
 
 export default function TrackLiveList(p: TrackLiveListProps) {
   const [open, setOpen] = useState(true);
@@ -82,7 +81,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
   const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
-    + (p.credit && open ? CREDIT_H : 0);
+    + (p.credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
   const shown = Math.max(1, Math.min(fit, p.rows.length || 1));
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
@@ -130,26 +129,13 @@ export default function TrackLiveList(p: TrackLiveListProps) {
             )}
           </ScrollView>
         )}
-        {open && !!p.credit && <Credit s={s} />}
+        {open && !!p.credit && <AircraftDataCredit ink={p.ink} />}
       </View>
     </NavCtx.Provider>
   );
 }
 
 type S = ReturnType<typeof makeStyles>;
-
-/** ★ beta91 the ODC-By notice (aviationMap.ts AV_DATA_CREDIT). Links by touch; a pad / screen reader reads the words. */
-function Credit({ s }: { s: S }) {
-  const c = AV_DATA_CREDIT;
-  const link = (t: string, u: string) => (
-    <Text style={s.crLink} accessibilityRole="link" onPress={() => { Linking.openURL(u).catch(() => {}); }}>{t}</Text>
-  );
-  return (
-    <Text style={s.credit} numberOfLines={2} accessibilityLabel={`${c.lead}${c.mic}${c.mid}${c.odc}${c.tail}${c.vrs}${c.end}`}>
-      {c.lead}{link(c.mic, c.micUrl)}{c.mid}{link(c.odc, c.odcUrl)}{c.tail}{link(c.vrs, c.vrsUrl)}{c.end}
-    </Text>
-  );
-}
 
 function HeadKey({ s, open, onPress, title, count, placed }: {
   s: S; open: boolean; onPress: () => void; title: string; count: number; placed: number;
@@ -255,9 +241,6 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   sp:     { width: 62 },
   rng:    { width: 62, lineHeight: 13 },
   dim:    { color: `rgba(${ink.x},0.50)` },
-  credit: { height: CREDIT_H, paddingHorizontal: 10, paddingTop: 2, fontFamily: F, fontSize: 9, lineHeight: 11.5,
-            color: `rgba(${ink.x},0.55)`, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: `rgba(${ink.k},0.18)` },
-  crLink: { color: `rgba(${ink.kt},0.85)`, textDecorationLine: 'underline' },
   up:     { color: '#6dd36d' },
   dn:     { color: '#ff8a6b' },
   ranges: { height: RANGE_H, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8,

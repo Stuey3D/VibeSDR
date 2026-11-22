@@ -24,6 +24,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import type { Aircraft } from '../services/SDRBackend';
+import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
 import { adsbListRows, adsbListRowsFit, adsbListWidth, parseListOpen, adsbChips, LIST_HEAD_H, LIST_ROW_H, EDGE,
          type AdsbListRow, type AdsbChip, type AdsbChipSrc } from '../services/adsbList';
 import { adsbGainStep, type AdsbGainView } from '../services/adsbTypes';
@@ -89,9 +90,12 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
   const g = p.gain ?? null;
   const chipRow = chips.length > 0 || !!g;
   const cardH = g && gainOpen ? GAIN_CARD_H : 0;
-  const fit = adsbListRowsFit(innerH - (chipRow ? CHIP_ROW_H : 0) - cardH);   // ★ the chips' row takes a row's room
+  /* ★★ V12 beta91 ODC-By 1.0 §4.3: while a row shows the server's aircraft data (its second line, the operator badge) the
+   *  Mictronics notice sits at the list's foot (AircraftDataCredit — the card's words), counted in the list's size */
+  const creditH = p.aircraft.some((a) => !!(a.info || a.op)) ? AIRCRAFT_CREDIT_H : 0;
+  const fit = adsbListRowsFit(innerH - (chipRow ? CHIP_ROW_H : 0) - cardH - creditH);   // ★ the chips' row takes a row's room
   const shown = Math.max(1, Math.min(fit, rows.length || 1));
-  const height = LIST_HEAD_H + (chipRow ? CHIP_ROW_H : 0) + cardH + shown * LIST_ROW_H;
+  const height = LIST_HEAD_H + (chipRow ? CHIP_ROW_H : 0) + cardH + creditH + shown * LIST_ROW_H;
   const gainStep = (dir: -1 | 1) => {
     if (!g || !p.gainSteps) return;
     const now = Date.now();
@@ -153,6 +157,7 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
             )}
           </ScrollView>
         )}
+        {open && creditH > 0 && <AircraftDataCredit ink={p.ink} />}
       </View>
     </NavCtx.Provider>
   );

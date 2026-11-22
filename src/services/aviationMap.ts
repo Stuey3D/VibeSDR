@@ -17,7 +17,7 @@
 //    body: the table never holds one (the owner's opt-in body stays on the DATALINK list, on the owner's own socket).
 import { esc, rangeBearing, compass8, ago, heardAgo, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { avFix, avRoute, type AvAircraft, type AvReport } from './aviation';
-import { cleanAdsbInfo, flagEmoji, routeShort, type AdsbInfo, type AdsbRoute } from './adsbInfo';
+import { cleanAdsbInfo, flagEmoji, routeShort, ADSB_DATA_CREDIT, adsbCreditHtml, type AdsbInfo, type AdsbRoute } from './adsbInfo';
 
 export const AVIATION_TITLE = 'AVIATION MAP';
 
@@ -428,21 +428,11 @@ export function avLegendHtml(present: AvLayerId[], adsbWay = false): string {
  *  shows registrations, types and operators from the same data, so it carries it too, as one small line at its foot.
  *  The card's own words and links (kept in step with web/mapkit/adsblayer.js). Shown while any row shows the data: a type
  *  (the datalink never sends one — it is the data's) or the aircraft data the server attached. */
-export const AV_DATA_CREDIT = {
-  lead: 'Aircraft data: ', mic: 'Mictronics', micUrl: 'https://github.com/Mictronics/aircraft-database',
-  mid: ' (contains information from Mictronics aircraft database, which is made available under the ',
-  odc: 'ODC Attribution License', odcUrl: 'https://opendatacommons.org/licenses/by/1-0/',
-  tail: ') \u00b7 ', vrs: 'VRS standing data', vrsUrl: 'https://github.com/vradarserver/standing-data', end: ' (CC0)',
-} as const;
+export const AV_DATA_CREDIT = ADSB_DATA_CREDIT;
+export const avCreditHtml = adsbCreditHtml;
 export function avShowsData(planes: AvPlane[]): boolean {
   return planes.some((p) => !!p.type || !!(p.info && Object.keys(p.info).length));
 }
-/** The same line as HTML (the web's list; links open a new tab). */
-export function avCreditHtml(): string {
-  const c = AV_DATA_CREDIT, a = (u: string, t: string) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>`;
-  return `${esc(c.lead)}${a(c.micUrl, c.mic)}${esc(c.mid)}${a(c.odcUrl, c.odc)}${esc(c.tail)}${a(c.vrsUrl, c.vrs)}${esc(c.end)}`;
-}
-
 /** ★★ ONE COMPOSITION for both clients: the items, the list's rows (sections when several layers), the status line. */
 export function avCompose(live: AvReport | null, shared: SharedAircraft | null, focus: AvFocus, layers: AvLayers, rx: LatLon | null, wrap: 'web' | 'app' = 'web') {
   const { planes, adsbGone } = avNowRule(avMerge(live, shared), shared);   // ★ beta88 ADS-B only while heard

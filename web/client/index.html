@@ -1435,6 +1435,9 @@ body.adsbMap #srvHealth { right: 0 !important; }
 .adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
 #adsbList { max-height: 259px; max-height: min(7 * 37px, 38vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
   border-top: 1px solid rgba(255, 160, 0, 0.14); scrollbar-width: thin; scrollbar-color: rgba(255, 160, 0, 0.35) transparent; }
+/* ★ V12 beta91 the Mictronics ODC-By notice at the list's foot (adsbInfo.ts ADSB_DATA_CREDIT — the card's words) */
+#adsbList .adsbCredit { padding: 6px 8px 4px; font: 10px/1.35 ui-monospace, Menlo, monospace; color: rgba(255, 184, 51, 0.55); border-top: 1px solid rgba(255, 160, 0, 0.14); }
+#adsbList .adsbCredit a { color: rgba(255, 184, 51, 0.92); }
 #adsbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0 10px; align-items: center;
   padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
 #adsbList .adsbRow:hover, #adsbList .adsbRow:focus-visible { background: var(--btn-active-bg); }

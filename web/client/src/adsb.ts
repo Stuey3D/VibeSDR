@@ -15,7 +15,7 @@ import type { AdsbAircraft, AdsbReport } from './spectrum';
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
-import { flagEmoji, adsbInfoLine } from '../../../src/services/adsbInfo';
+import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
 
 export type LatLon = { lat: number; lon: number };
 
@@ -284,7 +284,9 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
       + `<span class="rng">${where}${tracked}</span>`
       + '</div>';
-  }).join('');
+  }).join('')
+    // ★★ V12 beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the aircraft data (the card's words)
+    + (adsbShowsData(rows.map((x) => x.a as AdsbInfo)) ? `<div class="adsbCredit">${adsbCreditHtml()}</div>` : '');
 }
 
 /* ══ THE MAP ══════════════════════════════════════════════════════════════════════════════════════
