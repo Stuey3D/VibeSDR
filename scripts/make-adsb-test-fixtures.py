@@ -25,7 +25,9 @@ with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT, pax_headers=
     tar_add(t, root + 'LICENSE', open(vrs_lic, 'rb').read())
     tar_add(t, root + 'README.md', b'# Standing Data\n')
     tar_add(t, root + 'airlines/schema-01/airlines.csv', bom + b'Code,Name,ICAO,IATA,PositioningFlightPattern,CharterFlightPattern\n'
-            b'BAW,British Airways,BAW,BA,,\nEZY,easyJet,EZY,U2,,\nRYR,Ryanair,RYR,FR,,\nAAA,"Quoted, Airline",AAA,ZZ,,\nBBB,Other ZZ,BBB,ZZ,,\n')
+            b'BAW,British Airways,BAW,BA,,\nEZY,easyJet,EZY,U2,,\nRYR,Ryanair,RYR,FR,,\nAAA,"Quoted, Airline",AAA,ZZ,,\nBBB,Other ZZ,BBB,ZZ,,\n'
+            # ★ beta91 SHARED IATA CODES (as on the real data: BA, LH and U2 are each held by more than one airline)
+            b'BAX,Bahamas Test Air,BAX,BA,,\nEZS,easyJet Switzerland,EZS,U2,,\nDLH,Lufthansa,DLH,LH,,\nGEC,Lufthansa Cargo,GEC,LH,,\n')
     tar_add(t, root + 'airports/schema-01/E/EG.csv', bom + b'Code,Name,ICAO,IATA,Location,CountryISO2,Latitude,Longitude,AltitudeFeet\n'
             b'EGLL,London Heathrow Airport,EGLL,LHR,London,GB,51.4706,-0.461941,83\nEGKK,London Gatwick Airport,EGKK,LGW,London,GB,51.148102,-0.190278,202\n'
             b'EGSS,London Stansted Airport,EGSS,STN,London,GB,51.885,0.235,348\n')
@@ -35,12 +37,13 @@ with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT, pax_headers=
             b'KJFK,John F Kennedy International Airport,KJFK,JFK,New York,US,40.639801,-73.7789,13\n')
     tar_add(t, root + 'routes/schema-01/B/BAW-all.csv', bom + b'Callsign,Code,Number,AirlineCode,AirportCodes\n'
             b'BAW1,BAW,1,BAW,EGLL-KJFK\nBAW12A,BAW,12A,BAW,EGKK-EHAM-EGSS\n')
-    tar_add(t, root + 'routes/schema-01/E/EZY-all.csv', bom + b'Callsign,Code,Number,AirlineCode,AirportCodes\nEZY1,EZY,1,EZY,EHAM-EGSS\n')
+    tar_add(t, root + 'routes/schema-01/E/EZY-all.csv', bom + b'Callsign,Code,Number,AirlineCode,AirportCodes\nEZY1,EZY,1,EZY,EHAM-EGSS\nEZY2468,EZY,2468,EZY,EGLL-EHAM\n')
+    tar_add(t, root + 'routes/schema-01/E/EZS-all.csv', bom + b'Callsign,Code,Number,AirlineCode,AirportCodes\nEZS99,EZS,99,EZS,EHAM-EGSS\n')
     tar_add(t, root + 'model-type/schema-01/B.csv', bom + b'ICAO,Manufacturer,Model,Engines,EngineTypeCode,EnginePlacementCode,SpeciesCode,WakeTurbulenceCode,IsActive\n'
             b'B738,Boeing,737-800,2,J,,L,M,1\nB77W,Boeing,777-300ER,2,J,,L,H,1\n')
     tar_add(t, root + 'code-blocks/schema-01/code-blocks.csv', bom + b'Start,Finish,Count,Bitmask,SignificantBitmask,IsMilitary,CountryISO2\n'
-            b'400000,43FFFF,262144,400000,FC0000,0,GB\n43C000,43FFFF,16384,43C000,FFC000,1,GB\n400040,40007F,64,400040,FFFFC0,0,KY\nAE0000,AFFFFF,131072,AE0000,FE0000,1,US\n')
-    tar_add(t, root + 'countries/schema-01/countries.csv', bom + b'ISO,Name\nGB,United Kingdom\nKY,Cayman Islands\nUS,United States\nNL,Netherlands\nIE,Ireland\n')
+            b'400000,43FFFF,262144,400000,FC0000,0,GB\n43C000,43FFFF,16384,43C000,FFC000,1,GB\n400040,40007F,64,400040,FFFFC0,0,KY\nAE0000,AFFFFF,131072,AE0000,FE0000,1,US\n3C0000,3FFFFF,262144,3C0000,FC0000,0,DE\n')
+    tar_add(t, root + 'countries/schema-01/countries.csv', bom + b'ISO,Name\nGB,United Kingdom\nKY,Cayman Islands\nUS,United States\nNL,Netherlands\nIE,Ireland\nDE,Germany\n')
     tar_add(t, root + 'aircraft/schema-01/4/40.csv', bom + b'ICAO,Registration,ModelICAO,Manufacturer,Model,ManufacturerAndModel,IsPrivateOperator,Operator,AirlineCode,SerialNumber,YearBuilt\n'
             b'400ABC,G-PRIV,C172,Cessna,172,Cessna 172,1,Jane Bloggs,,1,1990\n400ABD,G-COMP,B738,Boeing,737,Boeing 737,0,Acme Charter Ltd,,2,2001\n')
 import gzip
@@ -52,9 +55,12 @@ with zipfile.ZipFile(zb, 'w', zipfile.ZIP_DEFLATED) as z:
     z.writestr('LICENSE', open(mic_lic, 'rb').read())
     z.writestr('dbversion.json', '{"version":527}')
     z.writestr('types.json', json.dumps({'B738': ['BOEING 737-800', 'L2J', 'M'], 'A388': ['AIRBUS A-380-800', 'L4J', 'H'], 'C17': ['BOEING C-17 Globemaster 3', 'L4J', 'H']}))
-    z.writestr('operators.json', json.dumps({'BAW': ['British Airways', 'United Kingdom', 'SPEEDBIRD'], 'RYR': ['Ryanair', 'Ireland', 'RYANAIR'], 'LONGKEY': ['x', 'y', 'z']}))
+    z.writestr('operators.json', json.dumps({'BAW': ['British Airways', 'United Kingdom', 'SPEEDBIRD'], 'RYR': ['Ryanair', 'Ireland', 'RYANAIR'],
+        'EZY': ['easyJet', 'United Kingdom', 'EASY'], 'EZS': ['easyJet Switzerland', 'Switzerland', 'TOPSWISS'],
+        'BAX': ['Bahamas Test Air', 'Bahamas', 'BAHTEST'], 'DLH': ['Lufthansa', 'Germany', 'LUFTHANSA'], 'GEC': ['Lufthansa Cargo', 'Germany', 'LUFTHANSA CARGO'], 'LONGKEY': ['x', 'y', 'z']}))
     ac = {'4CA2D6': ['EI-DLJ', 'B738', '00'], '400F01': ['G-XLEA', 'A388', '00'], 'AE1234': ['03-3123', 'C17', '10'],
-          '4CA2D7': ['EI-\\"Q"', 'B738', '00', 'desc'], '400ABD': ['', '', '00']}
+          '4CA2D7': ['EI-\\"Q"', 'B738', '00', 'desc'], '400ABD': ['', '', '00'],
+          '406B90': ['G-EZWK', 'B738', '00']}   # ★ beta91 an easyJet aircraft (the shared-U2 test)
     for i in range(1200):
         ac['%06X' % (0x500000 + i)] = ['T-%04d' % i, 'B738', '00']
     z.writestr('aircrafts.json', json.dumps(ac))

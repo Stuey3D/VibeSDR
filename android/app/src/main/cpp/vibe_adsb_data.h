@@ -517,6 +517,24 @@ public:
             else if (!al.empty() && operatorLocked(al, name)) { i.op = al; i.opName = name; }
             else i.opName = vrs().str(rd32(r + 16));
         }
+        // ★★ V12 beta91 A SHARED IATA CODE (Stuart, 2026-11-22): an ACARS / VDL2 flight ID is IATA-coded ("BA0117",
+        //    "LH4567", "U22468") and on the VRS data BA, LH and U2 are each held by more than one airline, so the
+        //    unambiguous map above names none. The aircraft itself decides — never a guess between two:
+        //     · the address's own operator (the VRS overlay, above) wins where it is one of the code's airlines;
+        //     · else sharedIataLocked: the airlines with a filed route for that flight number, and the airlines of the
+        //       aircraft's own country (its address block) — named only when the evidence points at ONE and nothing
+        //       contradicts it.
+        if (flight && code.size() == 2) {
+            const std::vector<std::string> cand = iataAllLocked(code);
+            if (cand.size() > 1) {
+                if (!i.op.empty()) { if (std::find(cand.begin(), cand.end(), i.op) != cand.end()) code = i.op; }
+                else {
+                    const std::string x = sharedIataLocked(cand, number, i);
+                    std::string name;
+                    if (!x.empty() && operatorLocked(x, name)) { i.op = x; i.opName = name; code = x; }
+                }
+            }
+        }
         if (flight) routeLocked(code + number, i);
     }
 
@@ -643,6 +661,48 @@ private:
             if (i.eng.empty() && r[12]) i.eng = std::string(1, char(r[12])) + (r[13] ? std::string(1, char(r[13])) : "");
             if (i.wtc.empty() && r[15]) i.wtc = std::string(1, char(r[15]));
         }
+    }
+
+    /** ★ beta91 every airline (three-letter ICAO code) that holds this IATA code — AIRL is small (a few thousand). */
+    std::vector<std::string> iataAllLocked(const std::string& ia) const {
+        std::vector<std::string> out;
+        char k[4]; key4(ia, k);
+        const Vad::Sec a = vrs().sec(fourcc("AIRL"));
+        for (size_t n = 0; n < a.count(kAirlRec); ++n) {
+            const uint8_t* r = a.p + n * kAirlRec;
+            if (std::memcmp(r + 8, k, 4) != 0) continue;
+            const std::string icao = unkey(r + 4);
+            if (icao.size() == 3 && std::find(out.begin(), out.end(), icao) == out.end()) out.push_back(icao);
+            if (out.size() >= 16) break;
+        }
+        return out;
+    }
+    /** ★★ beta91 which of a shared IATA code's airlines flies THIS aircraft, from two independent clues:
+     *   R — the airlines with a filed route for this flight number (VRS routes: "BAW117" exists, "BAX117" does not);
+     *   C — the airlines whose country (the Mictronics operators table) is the aircraft's own (its address block).
+     *  One in R and not contradicted by C (C unknown, or it holds that one too) → it; none in R and ONE in C → it;
+     *  several in R → the one C also names, if exactly one. Anything else → "" (a wrong airline is worse than none). */
+    std::string sharedIataLocked(const std::vector<std::string>& cand, const std::string& number, const Info& i) const {
+        std::vector<std::string> R, C;
+        for (const auto& c : cand) {
+            Info t; routeLocked(c + number, t);
+            if (t.route.size() >= 2) R.push_back(c);
+        }
+        const bool cKnown = !i.countryName.empty() && mic_.ok();
+        if (cKnown) for (const auto& c : cand) {
+            char k[4]; key4(c, k);
+            const uint8_t* r = mic_.find(fourcc("OPER"), kOperRec, k, 4);
+            if (!r) continue;
+            const std::string oc = mic_.str(rd32(r + 8));
+            if (oc.size() == i.countryName.size() && std::equal(oc.begin(), oc.end(), i.countryName.begin(),
+                    [](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); })) C.push_back(c);
+        }
+        auto inC = [&](const std::string& x) { return std::find(C.begin(), C.end(), x) != C.end(); };
+        if (R.size() == 1) return (!C.empty() && !inC(R[0])) ? std::string() : R[0];
+        if (R.empty()) return C.size() == 1 ? C[0] : std::string();
+        std::string one;
+        for (const auto& x : R) if (inC(x)) { if (!one.empty()) return {}; one = x; }
+        return one;
     }
 
     std::string iataLocked(const std::string& ia) const {
