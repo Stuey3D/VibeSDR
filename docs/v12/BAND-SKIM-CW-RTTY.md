@@ -194,6 +194,8 @@ All synthetic (no real radio, no server of Stuart's touched), built with `script
 - **test_digi_modes all passed** (CW / RTTY / PSKW fills), **test_spots_band_app 46/0** (the web's and app's 'paused'
   state and words agree; PSKW not a filter choice). The web bundle builds (esbuild); `digiModes.ts` / `spotsBand.ts`
   type-check.
-- **Updated but not run here** (need a built vibeserver + Edge): `scripts/test-server-spots.mjs` (spotModes and 20 m's
-  modes now end CW, RTTY, PSKW) and `scripts/test-web-spots.mjs` (11 chips on 20 m; the legend gains CW and RTTY).
+- **test-server-spots 55/0** against this branch's vibeserver binary (built via the lock) and fake-rtl-tcp: spotModes and
+  20 m's modes now end CW, RTTY, PSKW; the chips arrive.
+- **Updated but not run here**: `scripts/test-web-spots.mjs` (11 chips on 20 m; the legend gains CW and RTTY) — it needs
+  the web page rebuilt into `vibe_web_page.h` (scripts/build-web.mjs, the coordinator's step before a release) and Edge.
 - CPU: the scratch chip bench above (M5 Pro).
