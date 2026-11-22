@@ -59,6 +59,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta91 2026-11-22 — TELEMETRY CHARTS (docs/v12/TELEMETRY-CHARTS.md, Stuart: "especially for those who background
+  //     decode it every pass"): FUNcube saved per pass (.csv) + a day log, charts in the SATELLITE box and the gallery.
+  //     Built and tested on synthetic frames only — say so until a real pass has been charted.
+  { v: 'V12 (experimental)', detail: 'FUNCUBE TELEMETRY, SAVED AND CHARTED. Every AO-73 (FUNcube-1) pass the server decodes — picked in SATELLITE or decoded in the background while nobody listens — is now kept in the gallery: a spreadsheet file (.csv) per pass with every channel the satellite sends, a row a frame with its time, and one readable log a day. In SATELLITE, CHARTS beside RAW in the telemetry block draws a small chart for each reading — battery, solar panels, currents and temperatures first — over THIS PASS, and under it the LAST 10 PASSES the gallery holds (each pass’s average, its range shaded), so background passes build a history you can see. In the gallery, FUNCUBE lists them and a pass opens as its charts (DOWNLOAD still saves the .csv). FUNcube publishes no calibration for these readings, so they are shown as sent and labelled “raw”, never as volts or degrees. Needs a VibeServer that has it; in the app and on the web page.' },
   // ★★★ V12 beta91 2026-11-22 — METEOR LRPT ON A REAL PASS (docs/v12/LRPT-LIVE-PASS.md): Stuart's Meteor-M2-4 pass replayed
   //     — decoding the differential code with the Viterbi, acquisition on the matched filter, the relock fix, the satellite's
   //     own rate, the pass held open while it is up, the signal reading. Numbers are the replay's (10 frames → 60).
