@@ -69,8 +69,9 @@ decoder's stop. The owner's gallery space bounds the whole (oldest first). `.csv
 - `scripts/test_tlm_charts.ts` 45/0 — parsing, order, live history, geometry, across, gallery items, the loader.
 - `scripts/test-web-satellite-mode.mjs` 109/0 (+13) — CHARTS in the web box, LAST 3 PASSES from a fake gallery,
   + MORE, a new frame, 390 px, dark, no gallery.
-- `scripts/test-web-fctlm-gallery.mjs` — a real vibeserver serving the fixtures + the built page (see the report for its
-  count).
+- `scripts/test-web-fctlm-gallery.mjs` 16/0 — a vibeserver built from this branch serving the fixture passes + the built
+  page: text/csv and the download name, FUNCUBE, a pass as its charts with LAST 2 / LAST 3 PASSES, the day log as text,
+  390 px. (`--write-fixture` output was diffed against the committed fixtures: identical.)
 
 ## Decisions for Stuart
 
