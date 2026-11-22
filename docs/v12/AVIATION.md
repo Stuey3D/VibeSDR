@@ -272,6 +272,37 @@ minutes apart) and the map drew and counted every row as live; only 4 had been h
   test-web-avmap 34/0 (6 new: "ADS-B 3" while radio A decodes; radio A leaves → the in-use words, BAW117 gone, 4CA97B kept
   with "ADS-B last seen"), test-web-avdata 22/0, test_aviation_app all passed. Not verified on the Pi 500 itself.
 
+## Aircraft data for every source (beta91, 2026-11-22, branch `b91-avinfo`)
+
+Stuart: *"our adsb logos and silhouettes could apply to vdl2 acars hfdl cant it, they are the same aircraft after all"*.
+Until now only the ADS-B decoder looked aircraft up (`vibe_adsb_service.h enrich`), so a row ADS-B never heard showed just
+its address; one also heard on ADS-B had a registration and type only because ADS-B put them in the shared table.
+
+- **Server** (`vibe_aircraft_info.h`, new): `GET /vibeserver/aircraft.json` passes `vibeavinfo::extraFn()` to
+  `vibeavshare::toJson` (new `Extra` hook). For each row it READS a cache (per row key — the address, else `r:REG`, else
+  `f:FLIGHT`) and queues a miss; ONE detached worker at decoder priority (`vibe-avinfo`) does the lookup — the ADS-B path's
+  own calls on the ADS-B tables (no copy): `Db::lookupHex` (address), `Db::lookupCallsign` (operator from the flight's
+  airline prefix, IATA ACARS IDs too — "U21" → EZY; the VRS overlay's operator by address), `Db::judge` (the leg, where the
+  row has a position), `Db::resolveImages` (the owner's logo / silhouette keys). Redone when the row's flight or
+  registration changes, on a first position (for the leg), or after an hour (the weekly data update). Bounded: kCap (1024)
+  answers, least-recently-asked evicted; kCap waiting. A registration-only row is not looked up (no index by registration).
+  ★ A row's FIRST poll goes without — the next (3 s later) has it.
+- **JSON** (each row, when known): the ADS-B aircraft data's own names — `desc wtc eng species country countryName mil op
+  opName logo sil` and `route{…}` (only where the row has no `from`/`to` of its own). `reg` / `type` are filled from the data
+  only where the row has none (the datalink's own registration wins).
+- **Clients** (`aviationMap.ts`): `sharedSanitise` keeps them as `AvPlane.info` (adsbInfo.ts `cleanAdsbInfo` — the ADS-B
+  sanitiser, its patterns); `avMerge` carries them onto the live DATALINK row; `avPlaneAdsb` hands them to the ADS-B layer
+  (t → the type silhouette, op → the badge, logo / sil, the flag, MIL, the card's operator and route); `avPlaneRows` puts the
+  flag, operator and MIL in the AIRCRAFT list. The aviation layer now gets `imageBase` (app MapOverlay `acMake`, web
+  TrackView `imageBase` from `adsbImageBase()`), so the owner's logos show as on the ADS-B map. ODC-By: the layer's card
+  carries the Mictronics notice whenever these fields show (unchanged).
+- **Tests:** `test-adsb-data` 318/318 (§ the aviation map's datalink rows, new: a VDL2-only 4CA2D6 → EI-DLJ / B738 / IE; a
+  callsign arriving → RYR; an IATA ACARS flight "U21" → EZY + route, the row's own airports win; the row's registration wins;
+  a military HFDL logon; an unknown address → nothing; registration-only not queued; the queue and the answers stop at kCap;
+  the worker thread answers within 2 s); `test-aircraft-share` 54/0 (unchanged, the hook is optional); `test_aviation_map`
+  85/0 (13 new: parsing, hostile keys dropped, the layer shape, the database route vs the datalink's, list flag / operator /
+  MIL, the live row joined). Fixtures only — **not yet seen on air**.
+
 ## On air 2026-11-16 (daytime, 16:38–16:56 UTC)
 
 Recordings (not in git): `~/VibeSDR-test-audio/aviation/2026-11-16/`, each with `.log` (the session) and `.decoded.txt`
@@ -420,6 +451,10 @@ owner's switch, `/addon/hfdl/*`), `test-web-avdata.mjs` 15/0 (headless Edge `--m
 test-server-ais-aprs 36/0 and test-server-decoder-reach 35/0 unchanged. **Nothing was run on air.**
 
 ## RESUME HERE
+
+**2026-11-22, branch `b91-avinfo` (beta91):** the aircraft data for every source (§Aircraft data for every source) — server,
+web and app wired, fixtures only. Owed: an on-air look on a server with the Mictronics data downloaded (a VDL2-only row
+gaining type / operator a few seconds after it appears; the owner's logos on the aviation map's card); the app on a device.
 
 **2026-11-16, branch `v12-avmap` (from `v12-experimental` 8e28d5250), not merged, not pushed:** the shared aircraft table
 (§The shared table), the AVIATION MAP (§The aviation map), and the on-air run (§On air 2026-11-16) — step 1's recordings
