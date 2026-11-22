@@ -142,7 +142,7 @@ import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayCle
 import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, spotsListModes, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type KnownSignal, type KnownAvail, type DxDialEntry, type SigTagEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type KnownSignal, type KnownAvail, type DxDialEntry, type SigTagEntry, parseSatLabels, satLabelSignals, withSatLabels, SATLABEL_STALE_MS, type SatLabelEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
 import { dabBlockSignals, dabMuxNames, dabWideView, dabBlockHit, dabBlockHint, parseDabBlockQ, dabFreshGrades, type DabBlockGrade } from '../../../src/utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, inPassband, TUNED_SETTLE_MS, type Passband, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
@@ -2041,6 +2041,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onFmScan: (m: unknown) => { const s = parseFmScan(m); if (s) scanLockSet(s.running && s.lock, s.done, s.total); },
     onDxLogOk: (ok: boolean) => { dxLogOk = ok; dxLogSyncBtn(); },   // ★★★ V12 the DX LOG key beside GALLERY
     onSigTags: (msg: unknown) => { sigTagsReceived(msg); },   // ★★ V12 the VARA HF tag (identify only — vibe_varatag.h)
+    onSatLabels: (msg: unknown) => { satLabelsReceived(msg); },   // ★★ beta91 satellites in range, named on the waterfall
     onDab: (d: DabState) => {
       if (!d) {
         /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
@@ -19295,6 +19296,7 @@ function dxLogSyncBtn() {
   dxAlertsArm();
   dxDialArm();   // ★★ V12 the DX catches on the dial (each connect: this server's own, or none)
   sigTagsClear();   // ★★ V12 the signal tags are this server's own — the next sigtags message brings them back
+  satLabelsClear();   // ★★ beta91 likewise the satellites in range (the next sat_labels message)
 }
 function dxAlertsOn(): boolean { try { return localStorage.getItem(DX_ALERT_KEY) === '1'; } catch { return false; } }
 function dxAlertSeqKey(): string { return `${DX_ALERT_SEEN}:${currentHost}`; }
@@ -19625,7 +19627,9 @@ function applyKnownSignals() {
                              [...getBookmarks(), ...getServerBookmarks()].map(b => b.frequency));
   const withDx = dxDialList.length ? knownSignalList(eibi, bms, dxDialList) : base;
   // ★★ V12 + the server's signal tags (the VARA HF tag — identify only), clear of every label above
-  wf.knownSignals = sigTagEntries.length ? withSigTags(withDx, sigTagSignals(sigTagEntries, withDx)) : withDx;
+  const withTags = sigTagEntries.length ? withSigTags(withDx, sigTagSignals(sigTagEntries, withDx)) : withDx;
+  // ★★ beta91 + the satellites in range (sat_labels), at their Doppler-shifted frequency
+  wf.knownSignals = satLabelEntries.length ? withSatLabels(withTags, satLabelSignals(satLabelEntries)) : withTags;
   wf.knownGen++;
   if (hadDx || dxDialList.length) dabBlocksSync();
 }
@@ -19650,6 +19654,27 @@ function sigTagsReceived(msg: unknown) {
 }
 /** A new server (or none): its tags are not this one's. */
 function sigTagsClear() { if (sigTagEntries.length) { sigTagEntries = []; sigTagSig = ''; applyKnownSignals(); } }
+/* ★★★ beta91 SATELLITE LABELS (knownSignals.ts satLabelSignals, vibe_sat_engine.h skyLabels — Stuart, 2026-11-22: "we
+ *     dont even need to be in satellite mode either"): the server's `sat_labels` — every bird above the horizon whose
+ *     downlink is in this radio's capture, Doppler-shifted, every 4 s while one is up (the mark moves with each). Dropped
+ *     SATLABEL_STALE_MS after the last message; a new server clears them. Drawn only while the labels are on (SIGNAL
+ *     LABELS). ORBCOMM is a name only — never decoded. */
+let satLabelEntries: SatLabelEntry[] = [];
+let satLabelsAt = 0, satLabelSig = '';
+let satLabelStaleTimer: number | null = null;
+function satLabelsReceived(msg: unknown) {
+  const es = parseSatLabels(msg);
+  satLabelsAt = Date.now();
+  const sig = es.map(e => `${e.norad}:${e.tx}:${e.hz}`).join(',');
+  if (satLabelStaleTimer == null && es.length)
+    satLabelStaleTimer = window.setInterval(() => {
+      if (satLabelEntries.length && Date.now() - satLabelsAt > SATLABEL_STALE_MS) { satLabelEntries = []; satLabelSig = ''; applyKnownSignals(); }
+    }, 5000);
+  if (sig === satLabelSig) return;
+  satLabelSig = sig; satLabelEntries = es;
+  if (knownLabelsOn) applyKnownSignals();
+}
+function satLabelsClear() { if (satLabelEntries.length) { satLabelEntries = []; satLabelSig = ''; applyKnownSignals(); } }
 /* ★★★ V12 DX CATCHES ON THE DIAL (knownSignals.ts dxDialSignals — Stuart, 2026-11-16: "show DX catches on the dial as
  *     signal labels too, marked as sporadic"). The server's own list — GET /vibeserver/dxlog.json?dial=1: real DX
  *     catches heard this week, one a channel, compact, ≤ 100 (an older server sends its ordinary page, filtered here by

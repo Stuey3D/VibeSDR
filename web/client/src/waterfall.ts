@@ -58,7 +58,7 @@ import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type Row
 import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour, stampTimeLabel }
   from '../../../src/utils/wfStamps.ts';
 import { tickStep, fmtTick } from './freqScale';
-import { labelLayout, labelStems, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, type KnownSignal, type PlacedLabel, type BlockedBox }
+import { labelLayout, labelStems, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, SAT_LABEL_COLOUR, isSatLabel, knownLabelColour, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 import { tunedPick, tunedLabelX, vfoLabelLayout, utcMinutes, type Passband, type TunedRow, type TunedPick, type VfoLabelPlan, type VfoBlockedBox } from '../../../src/utils/tunedStation.ts';
 import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
@@ -1888,7 +1888,7 @@ export class Waterfall {
       const stems = labelStems(ps, rowTop, 13 * dpr, 8 * dpr, vb ? [vb] : [], 1 * dpr, 2 * dpr);
       for (let i = 0; i < ps.length; i++) {
         const st = stems[i], s = ps[i].sig;
-        ctx.fillStyle = isDxLabel(s) ? DX_LABEL_COLOUR : KNOWN_LABEL_COLOUR;   // ★★ V12 a DX catch: its own colour, line and all
+        ctx.fillStyle = knownLabelColour(s);   // ★★ V12 a DX catch / ★★ beta91 a satellite: its own colour, line and all
         ctx.globalAlpha = 0.8;
         ctx.fillRect(st.x, Math.min(st.y0, st.y1), tickW, Math.max(1, Math.abs(st.y1 - st.y0)));
         if (s.lo != null && s.hi != null && showSpec) {
@@ -1902,7 +1902,7 @@ export class Waterfall {
       const p = this.knownPlaced[pi], hi = isHi(pi);
       const y = this.markerLabelY(H, p.row);
       const boxTop = this.markerLabelY(H, p.row + (p.span ?? 1) - 1) - 9 * dpr, boxBot = y + 4 * dpr;
-      ctx.fillStyle = hi ? hiCol : isDxLabel(p.sig) && !isDabBlockSignal(p.sig) ? DX_LABEL_COLOUR : KNOWN_LABEL_COLOUR;
+      ctx.fillStyle = hi ? hiCol : isDxLabel(p.sig) && !isDabBlockSignal(p.sig) ? DX_LABEL_COLOUR : isSatLabel(p.sig) ? SAT_LABEL_COLOUR : KNOWN_LABEL_COLOUR;
       ctx.globalAlpha = 0.8;
       // the tick: from the box down to the spectrum's floor, or beside the box on the waterfall
       const t0 = boxTop, t1 = showSpec ? specH : boxBot;
@@ -1930,7 +1930,7 @@ export class Waterfall {
       // ★★ V12 A DX CATCH (knownSignals.ts dxDialSignals — Stuart, 2026-11-16): ITALIC, in its own colour; on a DAB block
       //    named only by one, just the name line under the block
       const dx = isDxLabel(s), dxBlock = dx && isDabBlockSignal(s);
-      const base = hi ? hiCol : dx && !dxBlock ? DX_LABEL_COLOUR : KNOWN_LABEL_COLOUR;
+      const base = hi ? hiCol : dx && !dxBlock ? DX_LABEL_COLOUR : isSatLabel(s) ? SAT_LABEL_COLOUR : KNOWN_LABEL_COLOUR;   // ★★ beta91 a satellite: sky blue
       const dxLine = (li: number) => dx && (!dxBlock || li >= 1);
       const setLine = (li: number) => {
         const d = dxLine(li);

@@ -1954,6 +1954,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta91 SATELLITE LABELS on the waterfall, end to end: a server under the ISS on 2 m (not SATELLITE mode) sends sat_labels
+#    (Doppler-shifted, its capture only, moving), the page draws "ISS Voice/SSTV" in sky blue (headless Edge, --mute-audio),
+#    ORBCOMM never in sat_list, the owner's "satlabels" switch and no location send nothing named. Needs VIBESERVER_BIN.
+node --max-old-space-size=512 scripts/test-web-sat-labels.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ WHOLE-RADIO MODES HAND BACK THE SERVER'S GEOMETRY (Stuart 11-21, beta89: blank spectrum + the old readout after ADS-B →
 #     SATELLITE, 1090000 kHz in NFM, 216928 in SATELLITE): the app's REAL client against a real server through ADS-B / DAB /
 #     AIS / ISM / SATELLITE and back, shared dial and one-listener radio — readout = the server's dial, every row drawn in a

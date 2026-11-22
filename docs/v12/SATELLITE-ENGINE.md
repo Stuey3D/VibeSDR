@@ -559,3 +559,6 @@ change on orbit: read `consumer`/`downlinkHz` from the view, never hard-code 137
 - An owner switch for satellites on the setup page (none now: one button, no settings, and no decoder CPU to protect)?
 - Curated list entries flagged uncertain: PO-101 (scheduled), AO-7 (sunlight only), FO-29 (power-permitting), Meteor-M2-4's
   LRPT frequency/mode — keep, or show only birds confirmed in the last month?
+
+## beta91: SATELLITE LABELS ON THE WATERFALL
+Every bird above the horizon is named on the ordinary waterfall at its Doppler-shifted downlink (Engine::skyLabels, the `sat_labels` message), SATELLITE mode or not; ORBCOMM label-only birds come from the mirror. See docs/v12/SAT-LABELS.md.

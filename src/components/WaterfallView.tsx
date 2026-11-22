@@ -94,7 +94,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, isTagLabel, VARA_TAG_HINT, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, isTagLabel, VARA_TAG_HINT, isSatLabel, satLabelHint, SAT_LABEL_COLOUR, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
@@ -3460,9 +3460,9 @@ function WaterfallView({
           return (
             <React.Fragment key={'kt' + i + ':' + s.hz}>
               <View pointerEvents="none" style={[styles.knownTick, { left: st.x, top: Math.min(st.y0, st.y1), height: Math.max(1, Math.abs(st.y1 - st.y0)) },
-                                                 isDxLabel(s) && styles.knownDxTick]} />
+                                                 isDxLabel(s) && styles.knownDxTick, isSatLabel(s) && styles.knownSatTick]} />
               {bx1 - bx0 >= 3 && specShow && specH > 40 && (
-                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: wfTop - 2 }]} />
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: wfTop - 2 }, isSatLabel(s) && styles.knownSatTick]} />
               )}
             </React.Fragment>
           );
@@ -3476,10 +3476,10 @@ function WaterfallView({
           return (
             <React.Fragment key={'kt' + i + ':' + s.hz}>
               <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
-                                                 isDxLabel(s) && !isDabBlockSignal(s) && styles.knownDxTick,
+                                                 isDxLabel(s) && !isDabBlockSignal(s) && styles.knownDxTick, isSatLabel(s) && styles.knownSatTick,
                                                  hi && { backgroundColor: stampCol, opacity: 1 }]} />
               {bx1 - bx0 >= 3 && (
-                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }, isSatLabel(s) && styles.knownSatTick]} />
               )}
             </React.Fragment>
           );
@@ -3502,7 +3502,7 @@ function WaterfallView({
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
               {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot (all of Band III on a wide DAB view). */}
-              <View pointerEvents="none" accessible accessibilityLabel={(isTagLabel(s) ? VARA_TAG_HINT : dx && !dab ? dxDialHint(s, nowS) : s.label.replace(' · ', ', ').replace(' — ', ', '))
+              <View pointerEvents="none" accessible accessibilityLabel={(isTagLabel(s) ? VARA_TAG_HINT : isSatLabel(s) ? satLabelHint(s) : dx && !dab ? dxDialHint(s, nowS) : s.label.replace(' · ', ', ').replace(' — ', ', '))
                                                                          + (dab && dx ? '. ' + dxDialHint(s, nowS) : '')
                                                                          + (dab?.grade ? '. ' + dabGradeText(dab.grade, nowS) : '')}
                     accessibilityRole={tapLabel ? 'button' : undefined}
@@ -3520,7 +3520,7 @@ function WaterfallView({
                 {p.lines ? p.lines.map((t, li) => (
                   <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, dxLine(li) && styles.knownDxText, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
                 )) : (
-                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, dxLine(0) && styles.knownDxText, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, dxLine(0) && styles.knownDxText, isSatLabel(s) && styles.knownSatText, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
                 )}
               </View>
             </React.Fragment>
@@ -3708,6 +3708,9 @@ const styles = StyleSheet.create({
   // ★★ V12 a DX catch's text and line (knownSignals.ts DX_LABEL_COLOUR): its own colour, slanted as italic
   knownDxText: { color: DX_LABEL_COLOUR, transform: [{ skewX: '-12deg' }] },
   knownDxTick: { backgroundColor: DX_LABEL_COLOUR },
+  // ★★ beta91 a satellite in range (knownSignals.ts SAT_LABEL_COLOUR): sky blue, text and line
+  knownSatText: { color: SAT_LABEL_COLOUR },
+  knownSatTick: { backgroundColor: SAT_LABEL_COLOUR },
   // ★★ V12 the tuned station's label (utils/tunedStation.ts) — the scale stamps' dark band and halo, in the stamp colour
   tunedBox: { position: 'absolute', height: 14, paddingHorizontal: 4, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center' },
   // ★★ …and a signal label that names the tuned station: its size, the tuned colour (set inline) and the same dark halo
