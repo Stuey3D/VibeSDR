@@ -144,6 +144,17 @@ void Spotter::plan() {
             }
             if (n > bestN || (n == bestN && mm > bestM)) { best = sk.first; bestN = n; bestM = mm; }
         }
+        /* ★★ V12 beta91: a dial the MAIN slice (the host's id 0) holds whole stays on it — the CW / RTTY / wide-PSK slices
+         *  overlap the main one on several bands (20 m's 13.992–14.107 covers its whole cluster) and would otherwise win on
+         *  margin, moving FT8 … PSK onto a slice that exists only for the skimmers: a fresh tuner mid-slot, and the
+         *  audio modes' fate tied to the skimmers' slice (switched off → not cut; beyond a narrow capture). So every audio
+         *  dial sits where it did before the band-skim change (test-web-spots once lost 20 m's PSK31 after the merge). */
+        for (auto& sk : slices_) {
+            if (sk.second.id != 0) continue;
+            int n = 0;
+            for (auto& md : kv.second) if (DigiTuner::margin(md.second, md.first->audioLoHz, md.first->audioHiHz, sk.second.rate, sk.second.centre) >= 0) ++n;
+            if (n == (int)kv.second.size() && n > 0) { best = sk.first; bestN = n; }
+        }
         if (bestN <= 0) continue;
         Want& w = want[kv.first];
         w.slice = best;
@@ -256,6 +267,17 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
         if (nb != S.gNb || std::fabs(binHz - S.gBinHz) > 1e-6 || std::fabs(centreHz - S.gCentre) > 0.5) placeWindows(key, S, nb, binHz, centreHz);
         S.floor.block(binPow, nb, std::max(1, (int)std::lround(0.5 * rate / n)));   // ★ the median every half second
         for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
+        /* ★ V12 beta91: when this slice's floor first becomes ready, a LONG period's window (over 15 s — WSPR's and FST4W's
+         *  120 s) forgets what it measured while the floor warmed up. A slice is (re)made when Band starts and the tuner
+         *  moves its DC off the slices — exactly when the capture carries the retune's transient; kept in a 120 s mean it
+         *  opened an empty window for the whole period (test-web-spots "WSPR idle", test-server-spots "WSPR's empty window
+         *  was never decoded" — intermittent, before the band-skim change too). The slotted modes' short periods are left
+         *  as they were (they judge afresh every slot). */
+        if (S.floor.ready() && !S.wasReady) {
+            S.wasReady = true;
+            for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs)
+                if (r.gate && gatePeriod(*r.def) > 15.0) r.gate->meter.restart();
+        }
         gated = S.floor.ready() ? 2 : 1;
         ++S.blocks;
     }
