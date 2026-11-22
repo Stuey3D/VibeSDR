@@ -278,11 +278,20 @@ console.log('§10 THE SCHEDULE (Stuart 2026-11-20): no / old copy 15 min → 30 
   ok(!good.stopped && s.lastGoodAt === t && s.fastFails === 0, 'a good round: lastGoodAt set, the ladder reset');
   t += 3600; ok((await go(0)).stopped === 'recent', 'fresh copy: 1 h later no round');
   t += 5 * 3600; ok(!(await go(0)).stopped, 'fresh copy: 6 h later a round');
-  // fresh copy fails every 6 h; the fourth failure is 24 h after the last good one
+  // fresh copy fails at 6 h; the second failure is 12 h after the last good one (beta91: 12 h, was 24 h)
   const good0 = t; const fh = [];
-  for (let i = 0; i < 4; i++) { t += 6 * 3600; await go(503); s = await state(); fh.push((M.holdInForce(s, t) - t) / 60); }
-  ok(fh.slice(0, 3).every((m) => m === 360), `fresh copy: a failed round waits 6 h (${fh.slice(0, 3).join(', ')} min)`);
-  ok(t - good0 === 24 * 3600 && fh[3] === 15, `24 h of failed 6-hourly rounds: the copy is old — back to 15 min (${fh[3]} min)`);
+  for (let i = 0; i < 2; i++) { t += 6 * 3600; await go(503); s = await state(); fh.push((M.holdInForce(s, t) - t) / 60); }
+  ok(fh[0] === 360, `fresh copy: a failed round waits 6 h (${fh[0]} min)`);
+  ok(t - good0 === 12 * 3600 && fh[1] === 15, `12 h of failed 6-hourly rounds: the copy is old — back to 15 min (${fh[1]} min)`);
+  // ★ the history says what happened, newest first
+  {
+    const st = await (await M.serveSatsStatus(e)).json();
+    ok(Array.isArray(st.history) && st.history.length >= 3 && st.history[0].outcome === 'overloaded' && st.history[0].code === 503
+       && st.history[0].group === 'amateur' && / UTC$/.test(st.history[0].when) && st.history.some((h) => h.outcome === 'good'),
+       `the status page keeps the rounds: ${st.history.slice(0, 3).map((h) => h.when + ' ' + h.outcome).join(' · ')}`);
+    const big = { history: [] }; for (let i = 0; i < 50; i++) M.noteHistory(big, { at: i, outcome: 'good' });
+    ok(big.history.length === M.HISTORY_MAX && big.history[0].at === 49, `capped at ${M.HISTORY_MAX}, newest first`);
+  }
   t = M.holdInForce(s, t); await go(503); s = await state();
   ok(M.holdInForce(s, t) - t === 1800, '…then 30 min');
   // 403 is never the ladder

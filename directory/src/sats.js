@@ -37,7 +37,12 @@ export const CT_BASE = 'https://celestrak.org/NORAD/elements/gp.php';
 export const SATNOGS_URL = 'https://db.satnogs.org/api/transmitters/?format=json';
 export const REFRESH_SEC = 6 * 3600;             // a fresh good copy is refreshed every 6 h (CelesTrak updates every 2 h)
 export const REFRESH_SLACK_SEC = 5 * 60;         // the 15-min cron's tick lands a little either side of the 6 h
-export const STALE_SEC = 24 * 3600;              // no good round for a day: the copy is OLD → the fast ladder
+/* ★★ 12 h, not a day (Stuart 11-22: "we want the data to be as current as we can"). At 24 h one failed round on
+ *  11-21 ~21:40 UTC meant three more 6-hour waits — 25 h with no fresh copy, and servers synced mid-stall kept it for
+ *  their day. Now: one failed 6-hourly round, then the fast ladder (15 min → 30 min → hourly, the policy's floor kept).
+ *  The same 12 h a server uses to ask again sooner (vibeserver/satcat.h kStaleDataSec). */
+export const STALE_SEC = 12 * 3600;              // no good round for 12 h: the copy is OLD → the fast ladder
+export const HISTORY_MAX = 30;                   // ★ the last rounds' outcomes kept for /api/sats/status (a stall explained)
 export const FAST_LADDER = [15 * 60, 30 * 60, 3600];   // no / old copy: after a failure, then hourly
 export const SATNOGS_EVERY_SEC = 20 * 3600;      // "daily"
 export const HOLD_5XX_MIN_SEC = 15 * 60;         // ★★★ the policy's floor — nothing may hold less after a 5xx
@@ -142,7 +147,7 @@ async function putKv(env, k, v, now) {
 }
 function freshState() {
   return { version: MIRROR_VERSION, holdUntil: 0, fails: 0, f403: 0, lastRound: 0, lastCode: 200, lastError: '', lastErrorAt: 0,
-           lastGoodAt: 0, fastFails: 0,
+           lastGoodAt: 0, fastFails: 0, history: [],
            dead: {}, moved: {}, satnogs: { holdUntil: 0, fails: 0, at: 0, lastCode: 200, lastError: '' } };
 }
 export async function loadState(env) {
@@ -217,6 +222,11 @@ async function get(fetchFn, url) {
 }
 
 /** Records a failure. ★ Called FIRST after a non-200 — before any other work — so the hold is on disk. */
+/** ★ One line in the round history (newest first, HISTORY_MAX kept): { at, source, outcome, code, group, message }. */
+export function noteHistory(s, entry) {
+  s.history = [entry, ...(Array.isArray(s.history) ? s.history : [])].slice(0, HISTORY_MAX);
+}
+
 async function fail(env, s, now, source, code, kind, hold, group, extra) {
   const tgt = source === 'satnogs' ? s.satnogs : s;
   tgt.holdUntil = now + hold;
@@ -225,6 +235,7 @@ async function fail(env, s, now, source, code, kind, hold, group, extra) {
   tgt.lastCode = code;
   tgt.lastError = describe(source, code, kind, group, tgt.holdUntil, extra);
   tgt.lastErrorAt = now;
+  noteHistory(s, { at: now, source, outcome: kind, code, group: group || '', message: tgt.lastError });
   await putKv(env, 'state', s, now);
   console.error(JSON.stringify({ sats_mirror: source, code, kind, group: group || '', message: tgt.lastError }));
 }
@@ -306,7 +317,10 @@ export async function runMirror(env, deps) {
     }
   }
 
-  if (!stopped) { s.holdUntil = 0; s.fails = 0; s.f403 = 0; s.lastCode = 200; s.lastError = ''; s.lastGoodAt = now; s.fastFails = 0; }
+  if (!stopped) {
+    s.holdUntil = 0; s.fails = 0; s.f403 = 0; s.lastCode = 200; s.lastError = ''; s.lastGoodAt = now; s.fastFails = 0;
+    noteHistory(s, { at: now, source: 'celestrak', outcome: 'good', code: 200, group: summary.updated.join(' '), message: '' });
+  }
   await putKv(env, 'state', s, now);
   if (changed || !(await getKv(env, 'sats'))) summary.built = await rebuild(env, curated, now);
   return summary;
@@ -398,7 +412,9 @@ export async function serveSatsStatus(env) {
   const now = Math.floor(Date.now() / 1000);
   const out = { holdUntil: holdInForce(s, now), mode: freshCopy(s, now) ? 'fresh: every 6 h' : 'no / old copy: 15 min → 30 min → 1 h → hourly',
                 lastGoodAt: s.lastGoodAt, fastFails: s.fastFails, lastRound: s.lastRound, lastCode: s.lastCode, lastError: s.lastError, lastErrorAt: s.lastErrorAt,
-                dead: Object.keys(s.dead), moved: s.moved, satnogs: s.satnogs, groups: {} };
+                dead: Object.keys(s.dead), moved: s.moved, satnogs: s.satnogs, groups: {},
+                // ★ the last rounds, newest first, times as UTC text for a person (and `at` for a script)
+                history: (s.history || []).map((h) => ({ ...h, when: new Date(h.at * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' })) };
   for (const g of ['amateur', 'weather']) { const c = await getKv(env, `omm:${g}`); if (c) out.groups[g] = { fetched: c.fetched, count: c.count, url: c.url }; }
   return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
