@@ -103,6 +103,8 @@ try {
   await sleep(4000);
   await ev(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()) && x.offsetParent); if (b) b.click(); return !!b; })()`);
   for (let i = 0; i < 40 && !(await ev(`!!document.getElementById('galleryBtn').onclick`)); i++) await sleep(250);
+  // ★ the screenshots show the gallery, not the connect screen over it (no audio is started: tests are silent)
+  await ev(`(() => { for (const id of ['splash', 'audioGate']) { const s = document.getElementById(id); if (s) s.style.display = 'none'; } return true; })()`);
   await ev(`document.getElementById('galleryBtn').click(); true`);
   ok(await until(`!!document.querySelector('#galFilter [data-kind="fctlm"]')`), 'a FUNCUBE filter key');
   await ev(`document.querySelector('#galFilter [data-kind="fctlm"]').click(); true`);
