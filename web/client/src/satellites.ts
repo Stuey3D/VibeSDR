@@ -18,6 +18,8 @@
  *     decoder in one step, under the shared-dial contract (spectrum.ts asks before tuning). AUTO DOPPLER sends
  *     {"op":"doppler"}; leaving the mode (EXIT, the key again, another whole-radio mode) sends {"op":"drop"}.
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
+import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
+import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import {
   GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
   satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satTxModeLabel,
@@ -57,6 +59,8 @@ export interface SatPanelDeps {
   openMap?: (o: SatMapOpen) => void;
   /** the clock, ms (tests pass a fake one) */
   now?: () => number;
+  /** ★★ beta91 TELEMETRY CHARTS: the server's gallery, read (a path → its text, null = not there) — LAST PASSES */
+  galleryGet?: (path: string) => Promise<string | null>;
 }
 /** ★ 1.9: what the MAP key hands the DIGI MODES map (b90-maps' DigiMapOpts shape) — its APRS layer, and an overlay of the
  *  pass's orbit, footprint and the bird ("ISS PASS"); the stations carry "via ISS" from the server (aprs …sat). */
@@ -141,6 +145,7 @@ const CSS = `
 #satPanel .sat-key[hidden]{display:none}
 #satPanel .sat-tlm{margin-top:6px;font:12px/1.35 ui-monospace,Menlo,monospace}
 #satPanel .sat-tlm[hidden]{display:none}
+#satPanel .sat-tlm .sat-tk{display:inline-flex;gap:6px;margin-left:6px}
 #satPanel .sat-tlm .sat-tv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1px 12px;margin-top:3px}
 /* ★ the pop-ups: decoder-box styles, top of the window, newest on top, three at most ("+2 more") */
 #satRemind{position:fixed;z-index:60;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);
@@ -225,6 +230,7 @@ export class SatPanel {
   constructor(private deps: SatPanelDeps) {
     if (!document.getElementById('satPanelCss')) {
       const st = document.createElement('style'); st.id = 'satPanelCss'; st.textContent = CSS; document.head.appendChild(st);
+      tlmEnsureCss();   // ★★ beta91 TELEMETRY CHARTS
     }
     this.el = document.createElement('div');
     this.el.id = 'satPanel'; this.el.hidden = true;
@@ -317,7 +323,7 @@ export class SatPanel {
   onPicked(p: SatPicked) {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
-    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); }
+    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t);
@@ -348,8 +354,27 @@ export class SatPanel {
     if (this.open) this.paintPick();
   }
   /** ★ 1.3 the pick's telemetry (fctlm_status counts, sat_tlm values) — merged */
-  telemetry(t: Partial<SatTelemetry> | null) { if (!this.picked) return; this.tlm = satTelemetryMerge(this.tlm, t); if (this.open) this.paintPick(); }
+  telemetry(t: Partial<SatTelemetry> | null) {
+    if (!this.picked) return;
+    const was = this.tlm?.sat || '';
+    this.tlm = satTelemetryMerge(this.tlm, t);
+    if (this.tlmCharts && (this.tlm?.sat || '') !== was) this.tlmLoad();   // ★ beta91 the satellite's own passes, once it names itself
+    if (this.open) this.paintPick();
+  }
   private tlmRaw = false;
+  // ★★ beta91 TELEMETRY CHARTS: CHARTS beside RAW — this pass (the live frames), the last passes (the gallery, read on opening)
+  private tlmCharts = false;
+  private tlmAll = false;
+  private tlmAcross: TlmPass[] | null = null;
+  private tlmAcrossNote = '';
+  private tlmLoadSeq = 0;
+  private tlmLoad() {
+    const seq = ++this.tlmLoadSeq;
+    this.tlmAcross = null; this.tlmAcrossNote = '';
+    if (!this.deps.galleryGet) { this.tlmAcrossNote = 'LAST PASSES · this server has no gallery to read'; return; }
+    tlmLoadPasses(this.deps.galleryGet, this.tlm?.sat || '').then((x) => { if (seq === this.tlmLoadSeq) { this.tlmAcross = x; if (this.open) this.paintPick(); } })
+      .catch(() => { if (seq === this.tlmLoadSeq) { this.tlmAcrossNote = 'LAST PASSES · the gallery could not be read'; if (this.open) this.paintPick(); } });
+  }
   /** ★ 1.9 the packet decoder heard a station with a position — the MAP key may appear */
   stationsChanged() { if (this.open) this.paintPick(); }
   /** ★ 1.6 Leaving the server / the session ending cancels every reminder for it (and its pop-ups). */
@@ -373,7 +398,9 @@ export class SatPanel {
     if (act === 'min') { this.setMin(!this.min); return; }
     if (act === 'size') { this.setBig(!this.big, true); return; }
     if (act === 'map') { this.openMap(); return; }
-    if (act === 'tlmraw') { this.tlmRaw = !this.tlmRaw; this.paintPick(); return; }
+    if (act === 'tlmraw') { this.tlmRaw = !this.tlmRaw; if (this.tlmRaw) this.tlmCharts = false; this.paintPick(); return; }
+    if (act === 'tlmcharts') { this.tlmCharts = !this.tlmCharts; if (this.tlmCharts) { this.tlmRaw = false; this.tlmLoad(); } this.paintPick(); return; }
+    if (act === 'tlmall') { this.tlmAll = !this.tlmAll; this.paintPick(); return; }
     if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
     if (act === 'lead') {
       this.lead = satRemindLead(b.dataset.v);
@@ -538,8 +565,12 @@ export class SatPanel {
     this.sTlm.hidden = !tl;
     if (tl) {
       const hex = satTelemetryHex(this.tlm);
-      this.sTlm.innerHTML = `<div>${esc(satTelemetryHead(this.tlm))}${hex ? ` <button data-act="tlmraw" class="${this.tlmRaw ? 'on' : ''}" aria-pressed="${this.tlmRaw}" title="The frame's bytes as received">RAW</button>` : ''}</div>`
-        + (this.tlmRaw && hex ? `<div class="sat-dim" style="word-break:break-all">${esc(hex)}</div>`
+      this.sTlm.innerHTML = `<div>${esc(satTelemetryHead(this.tlm))}<span class="sat-tk">`
+        + `<button data-act="tlmcharts" class="${this.tlmCharts ? 'on' : ''}" aria-pressed="${this.tlmCharts}" title="Telemetry charts: this pass, and the last passes saved in the gallery">CHARTS</button>`
+        + `${hex ? `<button data-act="tlmraw" class="${this.tlmRaw ? 'on' : ''}" aria-pressed="${this.tlmRaw}" title="The frame's bytes as received">RAW</button>` : ''}</span></div>`
+        + (this.tlmCharts ? tlmChartsHtml({ pass: tlmLivePass(this.tlm?.hist, this.tlm?.sat || ''), live: true, across: this.tlmAcross,
+                                            acrossNote: this.tlmAcrossNote, width: this.sTlm.clientWidth || 300, all: this.tlmAll })
+          : this.tlmRaw && hex ? `<div class="sat-dim" style="word-break:break-all">${esc(hex)}</div>`
           : this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : '');
     }
     // ★★ 1.9 the MAP key — a packet downlink, once a station with a position is heard (no dead key)

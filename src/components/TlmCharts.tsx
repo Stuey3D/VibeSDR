@@ -11,35 +11,35 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
-import { tlmAcross, tlmAcrossHead, tlmChartOrder, tlmHm, tlmDay, tlmPassHead, tlmSpark, tlmValueText, TLM_FIRST,
+import { tlmAcross, tlmAcrossHead, tlmChartOrder, tlmPassHead, tlmRangeText, tlmSpark, tlmValueText, TLM_FIRST,
          type TlmChannel, type TlmPass } from '../utils/tlmCharts';
 
 export interface TlmChartsInk { text: string; muted: string; line: string; grid: string; font?: string }
 
 const CH_H = 34;
 
-function Cell({ ch, t, v, w, ink, band, foot }: {
+function Cell({ ch, t, v, w, ink, band }: {
   ch: TlmChannel; t: number[]; v: (number | null)[]; w: number; ink: TlmChartsInk;
-  band?: { lo: (number | null)[]; hi: (number | null)[] }; foot: string;
+  band?: { lo: (number | null)[]; hi: (number | null)[] };
 }) {
   const sp = useMemo(() => tlmSpark(t, v, w, CH_H, 3, band ? Infinity : undefined, band?.lo, band?.hi), [t, v, w, band]);
-  const range = sp.n ? `${tlmValueText(Math.min(...(band?.lo ?? v).filter((x): x is number => x != null)), ch)} – ${tlmValueText(Math.max(...(band?.hi ?? v).filter((x): x is number => x != null)), ch)}` : '';
+  const range = sp.n ? tlmRangeText(band?.lo ?? v, ch, band?.hi) : '';
   const s = styles;
   const f = ink.font ? { fontFamily: ink.font } : null;
   return (
     <View style={{ width: w }} accessible
           accessibilityLabel={`${ch.name}${ch.raw ? ', raw' : ''}: ${sp.n} ${band ? 'passes' : 'readings'}${range ? `, ${range}` : ''}, latest ${tlmValueText(sp.lastV, ch)}`}>
-      <View style={s.top}>
-        <Text style={[s.name, f, { color: ink.muted }]} numberOfLines={1}>{ch.name}</Text>
-        <Text style={[s.val, f, { color: ink.text }]} numberOfLines={1}>{tlmValueText(sp.lastV, ch)}</Text>
-      </View>
+      <Text style={[s.name, f, { color: ink.text }]} numberOfLines={1}>{ch.name}</Text>
       <Svg width={w} height={CH_H}>
         <Line x1={0} y1={CH_H - 0.5} x2={w} y2={CH_H - 0.5} stroke={ink.grid} strokeWidth={1} />
         {!!sp.band && <Path d={sp.band} fill={ink.line} fillOpacity={0.16} stroke="none" />}
         {!!sp.line && <Path d={sp.line} stroke={ink.line} strokeWidth={1.5} fill="none" strokeLinejoin="round" strokeLinecap="round" />}
         {!!sp.last && <Circle cx={sp.last.x} cy={sp.last.y} r={2.5} fill={ink.line} />}
       </Svg>
-      <Text style={[s.foot, f, { color: ink.muted }]} numberOfLines={1}>{range ? `${range} · ${foot}` : foot}</Text>
+      <View style={s.top}>
+        <Text style={[s.val, f, { color: ink.text }]} numberOfLines={1}>{tlmValueText(sp.lastV, ch)}</Text>
+        <Text style={[s.foot, f, { color: ink.muted }]} numberOfLines={1}>{range}</Text>
+      </View>
     </View>
   );
 }
@@ -65,15 +65,12 @@ export default function TlmCharts({ pass, live, across, acrossNote, ink }: {
   const onLayout = (e: LayoutChangeEvent) => { const x = Math.round(e.nativeEvent.layout.width); if (Math.abs(x - w) > 1) setW(x); };
   const acrossData = useMemo(() => (across ?? []).length
     ? shown.map((i) => ({ ch: ref!.channels[i], a: tlmAcross(across!, ref!.channels[i].name) })) : [], [across, shown, ref]);
-  const span = across && across.length
-    ? `${tlmDay(across[0].start)} ${tlmHm(across[0].start)} → ${tlmDay(across[across.length - 1].start)} ${tlmHm(across[across.length - 1].start)}` : '';
-  const passFoot = pass && pass.t.length ? `${tlmHm(pass.t[0])}–${tlmHm(pass.t[pass.t.length - 1])} UTC` : '';
   return (
     <View onLayout={onLayout} style={styles.wrap}>
       <Text style={[styles.head, f, { color: ink.text }]}>{tlmPassHead(pass, live)}</Text>
       {cw > 0 && !!pass && pass.t.length > 0 && (
         <View style={[styles.grid, { columnGap: gap }]}>
-          {shown.map((i) => <Cell key={`p${i}`} ch={pass.channels[i]} t={pass.t} v={pass.v[i]} w={cw} ink={ink} foot={passFoot} />)}
+          {shown.map((i) => <Cell key={`p${i}`} ch={pass.channels[i]} t={pass.t} v={pass.v[i]} w={cw} ink={ink} />)}
         </View>
       )}
       {order.length > TLM_FIRST && (
@@ -81,11 +78,11 @@ export default function TlmCharts({ pass, live, across, acrossNote, ink }: {
           <Text style={[styles.moreText, f, { color: ink.text }]}>{all ? '− FEWER CHANNELS' : `+ ${order.length - TLM_FIRST} MORE CHANNELS`}</Text>
         </Pressable>
       )}
-      <Text style={[styles.head, f, { color: ink.text, marginTop: 8 }]}>{across == null ? (acrossNote || 'LAST PASSES · loading from the gallery…') : tlmAcrossHead(across.length)}</Text>
+      <Text style={[styles.head, f, { color: ink.text, marginTop: 8 }]}>{across == null ? (acrossNote || 'LAST PASSES · loading from the gallery…') : tlmAcrossHead(across.length, across)}</Text>
       {cw > 0 && acrossData.length > 0 && (
         <View style={[styles.grid, { columnGap: gap }]}>
           {acrossData.map(({ ch, a }, k) => (
-            <Cell key={`a${k}`} ch={ch} t={a.t} v={a.mean} band={{ lo: a.min, hi: a.max }} w={cw} ink={ink} foot={span} />
+            <Cell key={`a${k}`} ch={ch} t={a.t} v={a.mean} band={{ lo: a.min, hi: a.max }} w={cw} ink={ink} />
           ))}
         </View>
       )}
@@ -98,10 +95,10 @@ const styles = StyleSheet.create({
   wrap:  { gap: 4, marginTop: 4 },
   head:  { fontSize: 11, letterSpacing: 1 },
   grid:  { flexDirection: 'row', flexWrap: 'wrap', rowGap: 8 },
-  top:   { flexDirection: 'row', justifyContent: 'space-between', gap: 6 },
-  name:  { fontSize: 10, flexShrink: 1 },
+  top:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 6, marginTop: 1 },
+  name:  { fontSize: 10 },
   val:   { fontSize: 11, fontVariant: ['tabular-nums'] },
-  foot:  { fontSize: 9, fontVariant: ['tabular-nums'], marginTop: 1 },
+  foot:  { fontSize: 9, fontVariant: ['tabular-nums'], flexShrink: 1 },
   more:  { paddingVertical: 6, minHeight: 32, justifyContent: 'center' },
   moreText: { fontSize: 11, letterSpacing: 1 },
   note:  { fontSize: 9, marginTop: 4 },

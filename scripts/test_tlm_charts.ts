@@ -66,6 +66,8 @@ console.log('§4 the live history');
   let h: TlmLiveFrame[] = [];
   for (let i = 0; i < TLM_LIVE_MAX + 50; i++) h = tlmLivePush(h, { t: i + 1, values: [{ name: 'a', value: String(i), unit: '', raw: true }] });
   ok(h.length === TLM_LIVE_MAX && h[0].t === 51, `bounded at ${TLM_LIVE_MAX} frames, the oldest dropped`);
+  const nx = tlmLivePush(h, { t: h[h.length - 1].t + 3600, values: [{ name: 'a', value: '1', unit: '', raw: true }] });
+  ok(nx.length === 1, 'the next pass on the same pick (an hour on) begins THIS PASS again');
   ok(tlmLivePush(h, { t: h[h.length - 1].t, values: [{ name: 'a', value: '9', unit: '', raw: true }] }).length === TLM_LIVE_MAX, 'the same frame twice is one');
 }
 

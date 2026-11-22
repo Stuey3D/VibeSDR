@@ -26,6 +26,8 @@ export interface TlmLiveFrame { t: number; values: { name: string; value: string
 
 export const TLM_MAX_ROWS = 2000;
 export const TLM_LIVE_MAX = 720;
+/** The live box's pass: frames further apart begin a new one (vibe_fctlm_gallery.h kPassGapSec — the same 20 minutes). */
+export const TLM_PASS_GAP_SEC = 20 * 60;
 export const TLM_PASSES = 10;
 /** Channels shown before "+ N MORE". */
 export const TLM_FIRST = 8;
@@ -96,8 +98,10 @@ export function tlmLivePass(frames: TlmLiveFrame[] | undefined, sat = ''): TlmPa
 
 /** The history the live box keeps: a frame with values and a time appended, oldest dropped past TLM_LIVE_MAX. */
 export function tlmLivePush(hist: TlmLiveFrame[] | undefined, f: TlmLiveFrame | null): TlmLiveFrame[] {
-  const h = hist ? hist.slice() : [];
+  let h = hist ? hist.slice() : [];
   if (!f || !f.values.length || !(f.t > 0)) return h;
+  // ★ a frame long after the last (the next pass on the same pick, hours on) begins THIS PASS again — the server's rule
+  if (h.length && Math.abs(f.t - h[h.length - 1].t) > TLM_PASS_GAP_SEC) h = [];
   if (h.length && h[h.length - 1].t === f.t) h[h.length - 1] = f; else h.push(f);
   return h.length > TLM_LIVE_MAX ? h.slice(h.length - TLM_LIVE_MAX) : h;
 }
@@ -122,6 +126,14 @@ export function tlmValueText(x: number | null | undefined, c: TlmChannel): strin
   const s = Math.abs(x) >= 100 || Number.isInteger(x) ? String(Math.round(x)) : String(Math.round(x * 100) / 100);
   return c.raw ? `${s} raw` : c.unit ? `${s} ${c.unit}` : s;
 }
+/** A chart's range in words: "1427–1457 raw" · "8.1–8.3 V" · "" when there is none. */
+export function tlmRangeText(vals: (number | null)[], c: TlmChannel, hiVals?: (number | null)[]): string {
+  const ok = (a: (number | null)[]) => a.filter((x): x is number => x != null && isFinite(x));
+  const lo = ok(vals), hi = ok(hiVals ?? vals);
+  if (!lo.length || !hi.length) return '';
+  const a = tlmValueText(Math.min(...lo), { name: '', unit: '', raw: false }), b = tlmValueText(Math.max(...hi), c);
+  return `${a}\u2013${b}`;
+}
 /** "14:02" UTC */
 export function tlmHm(t: number): string {
   const d = new Date(t * 1000);
@@ -138,8 +150,10 @@ export function tlmPassHead(p: TlmPass | null, live: boolean): string {
   const n = p.t.length;
   return `${live ? 'THIS PASS' : 'THE PASS'} · ${n} frame${n === 1 ? '' : 's'} · ${tlmHm(p.t[0])}–${tlmHm(p.t[n - 1])} UTC`;
 }
-export function tlmAcrossHead(n: number): string {
-  return n ? `LAST ${n} PASS${n === 1 ? '' : 'ES'} · each pass's mean, its range shaded` : 'LAST PASSES · none saved in the gallery yet';
+export function tlmAcrossHead(n: number, passes?: TlmPass[]): string {
+  if (!n) return 'LAST PASSES · none saved in the gallery yet';
+  const span = passes && passes.length ? ` · ${tlmDay(passes[0].start)} ${tlmHm(passes[0].start)} \u2192 ${tlmDay(passes[passes.length - 1].start)} ${tlmHm(passes[passes.length - 1].start)} UTC` : '';
+  return `LAST ${n} PASS${n === 1 ? '' : 'ES'}${span} · each pass's mean, its range shaded`;
 }
 
 // ── Geometry ───────────────────────────────────────────────────────────────────────────────────────────────────
