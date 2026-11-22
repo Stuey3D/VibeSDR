@@ -114,9 +114,27 @@ ping; not separately tested.
 
 Results: see the "Numbers" section (filled from the runs on 2026-11-22).
 
-## Numbers
+## Numbers (2026-11-22, M5 Pro, headless Edge, nice 10)
 
-(filled below)
+`test-web-keepalive.mjs`, 100 s hidden per spell, main-thread timers aligned to 60 s:
+
+| page | spell | spectrum pings leaving the page | largest gap | server "no application message" | sockets reopened |
+|---|---|---|---|---|---|
+| OLD (v12-experimental 691508071) — control, `EXPECT_DROP=1` | NFM muted | 2 | 54.6 s | **4** | yes (2 → 3) |
+| OLD — control | ISM (quiet) | 2 | 60.0 s | **2** | yes (3 → 5) |
+| NEW | NFM muted | 20 | 5.0 s | 0 | no |
+| NEW | ISM (quiet) | 20 | 5.0 s | 0 | no |
+
+Control 5/0 (the harness reproduces Stuart's fault exactly: released for silence, then reconnected); new 13/0, with
+the presence running while muted and NOT while quiet. (A first new run counted 17 pings with 6 s gaps — the 5 s beat
+drifting on the 1 s worker clock; fixed by treating half a tick early as on time.)
+
+`soak-web-satellite.mjs`, 4 min, VISIBLE, old page (before the change — measuring, not testing the fix): SATELLITE
+window, ISS picked with AUTO DOPPLER, ALL SATELLITES unfolded (27 rows), 2× DPR: **longest task 0 ms** (no task over
+the 50 ms long-task threshold in any 30 s sample), worst main-thread timer lateness 2 ms, ping gaps 5.0 s, **JS heap
+4.6 → 7.6 MB** (5.8–10.8 MB over the run, collected back), DOM nodes 5 932 → 6 769 (bounded, 7 6xx peak), 631
+listeners flat, no reconnect, 0 releases. ★ In Chromium the satellite window neither blocks nor leaks; the 1.2 GB
+Safari WebContent is not this page's JS heap (see the live check).
 
 ## Live check for Stuart (Safari, Pi 500)
 
@@ -133,3 +151,19 @@ A hidden tab asks for 5 fps, so the time it was away draws as a thinner band of 
 would do: on `visibilitychange` → visible, mark the boundary on the waterfall with one dim rule and a small "away 2:14"
 label in the scale-stamp layer (the same layer the time stamps use), so the band is explained rather than hidden. Not
 stretching rows to fake the missing time — that would draw signals that were never received.
+
+## Also run (unchanged behaviour)
+
+- `test-web-bad-messages.mjs` (mock server, malformed traffic on both sockets, the audio Worker path): all passed.
+- `test-web-vfo-ab.mjs` (real server): 86 passed, 0 failed.
+- `tsc --strict` on `keepAlive.ts`: clean.
+
+## Noticed, not changed (for Stuart / the coordinator)
+
+- The server stamps the listener's IDLE clock (`lastAsk`) and the admin re-lock clock (`touchAdmin`) on **every**
+  control message, ping included (`handleControl`, local_sdr_shim.cpp). So a page that pings — which every web page
+  already did every 5 s while visible — never reaches the "STILL LISTENING?" prompt from the pings' side. Pre-existing;
+  the Worker pings only keep doing in a hidden tab what the page always did. If the idle prompt is meant to catch a
+  forgotten tab, `ping` should not stamp `lastAsk` — a server change, left for a decision.
+- Residual risk: macOS App Nap coalescing the Worker's timer in a hidden, silent Safari tab. 25 s of slack against the
+  30 s rule; the live check is the proof.
