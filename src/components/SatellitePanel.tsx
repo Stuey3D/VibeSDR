@@ -26,6 +26,8 @@ import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
+import TlmCharts from './TlmCharts';
+import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
@@ -75,6 +77,9 @@ export interface SatellitePanelProps {
   rxName?: string;
   /** ★ 1.3 the pick's telemetry (fctlm) */
   telemetry?: SatTelemetry | null;
+  /** ★★ beta91 TELEMETRY CHARTS: the server's gallery, read (a path → its text, null = not there) — the LAST PASSES
+   *  charts; absent = no gallery to read (the CHARTS key still draws this pass) */
+  galleryGet?: ((path: string) => Promise<string | null>) | null;
   /** ★★ 1.6 REMIND — held in this app session only; `held` = the reminder on that downlink, if any */
   remindHeld?: (norad: number, tx: number) => boolean;
   remindLead?: number;
@@ -213,6 +218,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
   const [listOpen, setListOpen] = useState(true);
   const [tlmRaw, setTlmRaw] = useState(false);
+  // ★★ beta91 TELEMETRY CHARTS — this pass from the live frames, the last passes from the gallery (read when CHARTS opens)
+  const [tlmCharts, setTlmCharts] = useState(false);
+  const [tlmAcross, setTlmAcross] = useState<TlmPass[] | null>(null);
+  const [tlmAcrossNote, setTlmAcrossNote] = useState('');
   useEffect(() => { if (p.picked) setListOpen(false); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
   const greyed = !p.cap.ok;
@@ -232,6 +241,18 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const lockWord = !p.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
   const tlmDec = p.picked?.decoder === 'fctlm' || !!p.telemetry?.values.length;
   const tlmHex = satTelemetryHex(p.telemetry ?? null);
+  const tlmSat = p.telemetry?.sat || '';
+  const tlmLive = useMemo(() => tlmLivePass(p.telemetry?.hist, tlmSat), [p.telemetry?.hist, tlmSat]);
+  const galleryGet = p.galleryGet;
+  useEffect(() => {
+    if (!tlmCharts) return;
+    if (!galleryGet) { setTlmAcross(null); setTlmAcrossNote('LAST PASSES · this server has no gallery to read'); return; }
+    let live = true;
+    setTlmAcross(null); setTlmAcrossNote('');
+    tlmLoadPasses(galleryGet, tlmSat).then((x) => { if (live) setTlmAcross(x); })
+      .catch(() => { if (live) setTlmAcrossNote('LAST PASSES · the gallery could not be read'); });
+    return () => { live = false; };
+  }, [tlmCharts, galleryGet, tlmSat, p.picked?.norad]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
   const decWord = !confirmed ? 'Tuning…'
     : tlmDec && !p.decLine ? 'listening for telemetry'
@@ -303,9 +324,16 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 <View style={s.pk}>
                   <View style={s.nameRow}>
                     <Text style={[s.mono, { flexShrink: 1 }]}>{satTelemetryHead(p.telemetry ?? null)}</Text>
-                    {!!tlmHex && <DecoderKey label="RAW" active={tlmRaw} onPress={() => setTlmRaw((v) => !v)} accessibilityLabel="The frame's bytes as received" />}
+                    <View style={s.keys}>
+                      {/* ★★ beta91 CHARTS: this pass and the last passes, a small chart a channel (TlmCharts) */}
+                      <DecoderKey label="CHARTS" active={tlmCharts} onPress={() => { setTlmCharts((v) => !v); setTlmRaw(false); }}
+                                  accessibilityLabel="Telemetry charts: this pass, and the last passes saved in the gallery" />
+                      {!!tlmHex && <DecoderKey label="RAW" active={tlmRaw} onPress={() => { setTlmRaw((v) => !v); setTlmCharts(false); }} accessibilityLabel="The frame's bytes as received" />}
+                    </View>
                   </View>
-                  {tlmRaw && !!tlmHex ? <Text style={s.mono} selectable>{tlmHex}</Text>
+                  {tlmCharts ? <TlmCharts pass={tlmLive} live across={tlmAcross} acrossNote={tlmAcrossNote}
+                                          ink={{ text: tk.value, muted: tk.muted, line: tk.accent, grid: tk.border, font: F }} />
+                  : tlmRaw && !!tlmHex ? <Text style={s.mono} selectable>{tlmHex}</Text>
                   : !!p.telemetry?.values.length && <View style={s.tlmGrid}>
                     {p.telemetry.values.map((v, i) => <Text key={i} style={[s.mono, s.tlmCell]} numberOfLines={1}>{satTelemetryLine(v)}</Text>)}
                   </View>}
@@ -402,6 +430,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   detailNp:{ fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted },
   key:     { textAlign: 'center', marginTop: 2 },
   tlmGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
+  keys:    { flexDirection: 'row', gap: 6 },
   tlmCell: { minWidth: 140 },
   remWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', gap: 6, zIndex: 60 },
   remToast:{ width: '94%', maxWidth: 460, padding: 10, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border,
