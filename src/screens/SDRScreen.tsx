@@ -174,6 +174,7 @@ import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, sh
          type ShipLayers, type ShipLayerId, type ShipFocus, type StoredShips, type DscPin } from '../services/shippingMap';
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
 import { PAGING_LAW_NOTICE, pagingRecSilent, pagingMutedBanner } from '../services/paging';   // ★ V12 PAGE: the law, REC silent
+import { SilentMute, isSilentDecoder, silentMutedBanner } from '../services/silentDecoder';   // ★★ APRS + METEOR LRPT mute (one rule, web and app)
 import { sessionChoice, setSessionChoice } from '../services/decoderSession';   // ★★★ AUTO first; manual for the session only
 import { fullModeName } from '../services/autoModes';   // ★★★ AUTO's fallback rows (RTTY's pattern)
 import { hzReachable } from '../utils/tuneWindow';
@@ -5580,9 +5581,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  restarts the audio unmuted (every native start clears its mute) — the second branch mutes it again. A crash needs
    *  nothing: the mute is not stored, and the next start is unmuted. Same shape as Band's mute (preBandMuteRef). */
   const prePagingMuteRef = useRef<boolean | null>(null);
-  /* ★★ APRS IS SILENT TOO (Stuart, 2026-11-10: "we need to make APRS a silent decoder") — packets are a screech nobody
-   *  listens to. The same derived mute as paging's; the web page and the R36S mute APRS the same way. */
-  const pagingOn = activeDecoder === 'paging' || activeDecoder === 'aprs';
+  const pagingOn = activeDecoder === 'paging';
   useEffect(() => {
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
     if (pagingOn) {
@@ -5590,8 +5589,29 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!isMuted) { VM?.setMuted?.(true); setIsMuted(true); }
     } else if (prePagingMuteRef.current !== null) {
       const back = prePagingMuteRef.current; prePagingMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
+      isMutedRef.current = back;   // ★ PAGE straight to APRS / LRPT: the silent decoder saves THIS, not the PAGE mute
     }
   }, [pagingOn, isMuted]);
+  /* ★★ APRS AND METEOR LRPT ARE SILENT DECODERS (Stuart, 2026-11-10: "we need to make APRS a silent decoder"; 2026-11-22:
+   *  "i guess for meteor lrpt the audio needs muting too") — packets are a screech and an LRPT downlink a hiss of data.
+   *  Band's rule, in ONE copy shared with the web page (services/silentDecoder.ts): muted on the way in, put back exactly
+   *  as it was on the way out; a listener who unmutes meanwhile may (it is their speaker — unlike PAGE's, this banner is a
+   *  key); with VFO B on only the VFO it decodes on (decVfo) leaves the mix, and B coming or going moves the mute. LRPT
+   *  picked in SATELLITE is the same activeDecoder (satFollow → openDecoder). A reconnect brings the audio back unmuted
+   *  (every native start clears its mute), so a speaker unmuted by anything but the listener is muted again. The mute is
+   *  the native mute IN PLACE on a VibeServer (external 'resume' mode) — the stream is never stopped. */
+  const [silentMute] = useState(() => new SilentMute());
+  const silentOn = isSilentDecoder(activeDecoder);
+  useEffect(() => {
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    silentMute.sync({ open: silentOn, abOn, vfo: decVfo, speakerMuted: isMutedRef.current, reassert: true }, {
+      setSpeaker: (m) => { VM?.setMuted?.(m); setIsMuted(m); isMutedRef.current = m; },
+      setVfoMute: (v, m) => { abClient()?.abSetMute?.(v, m); },
+    });
+  }, [silentOn, abOn, decVfo, isMuted, abClient, silentMute]);
+  useEffect(() => () => {
+    silentMute.release({ setSpeaker: (m) => (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(m) });
+  }, [silentMute]);
   /* ★★ NFM AUDIO GOES TO ALL WHILE APRS IS OPEN (Stuart, 2026-11-10: "when APRS is open the NFM needs to switch to all
    *  and then switch back to voice afterwards"). Voice's steep 300 Hz–3 kHz edges delay 2200 Hz more than 1200 Hz and
    *  smear the bits (100 synthetic packets, 11 dB, space tone 6 dB down: ALL 70, VOICE 18). APRS is silent, so the
@@ -7294,6 +7314,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setIsMuted(false);
         return;
       }
+      if (!e.muted) silentMute.listenerUnmuted();   // ★★ APRS / LRPT: the listener's unmute stands (silentDecoder.ts)
       setIsMuted(!!e.muted);
       // OWRX: pause releases the lock-screen controls (native) and disconnects —
       // there's no play-to-reconnect because an OWRX reconnect resets the server
@@ -15404,14 +15425,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           once — a control whose every use is a no-op is not offered). Closing PAGE puts the audio back as it was. */}
       {isLocal && isMuted && pagingOn && !dataSaverOff && !reconnectFailedUi && (
         <View style={[styles.mutedBanner, { top: insets.top + 46 }]} pointerEvents="none">
-          <Text style={styles.mutedBannerText}>{activeDecoder === 'aprs' ? '🔇 AUDIO MUTED WHILE APRS RUNS' : pagingMutedBanner(isRecording)}</Text>
+          <Text style={styles.mutedBannerText}>{pagingMutedBanner(isRecording)}</Text>
         </View>
       )}
+      {/* ★★ APRS / METEOR LRPT: the banner names the decoder and stays a key — the listener may unmute (silentDecoder.ts) */}
       {isLocal && isMuted && !pagingOn && !dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           ref={screenNavRef('mutedBanner', unmute)}
           onPress={unmute} activeOpacity={0.85}>
-          <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED — TAP TO UNMUTE</Text>
+          <Text style={styles.mutedBannerText}>{isSilentDecoder(activeDecoder) && silentMute.holdsSpeaker ? silentMutedBanner(activeDecoder) : '🔇 AUDIO MUTED — TAP TO UNMUTE'}</Text>
         </TouchableOpacity>
       )}
 

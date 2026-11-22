@@ -19,6 +19,7 @@ import { kickedSentence } from '../../../src/services/kickedText';
 import { parseSkimBands, skimPickable, skimBandAtDial, skimOffLabel, skimPointLabel, type SkimBands, type SkimKind } from '../../../src/utils/skimBands';
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
+import { SilentMute, isSilentDecoder } from '../../../src/services/silentDecoder.ts';   // ★★ APRS + METEOR LRPT mute (one rule, web and app)
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
@@ -2221,7 +2222,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *  server's default (Voice), possibly before the restored Raw has landed — saving that
          *  report as the pref (setToggleTo's prefKey) would quietly forget the choice. So the
          *  remembered value wins: re-stated if the server disagrees, and shown. Only a CLICK saves. */
-        const want = nfmVoiceWant();   // ★★ the listener's choice — or ALL while APRS has it (aprsSilentSync)
+        const want = nfmVoiceWant();   // ★★ the listener's choice — or ALL while APRS has it (silentDecoderSync)
         if (typeof want === 'boolean' && want !== s.nfmVoice) spec?.setNfmVoice(want);
         setToggleTo('nfmVoiceBtn', typeof want === 'boolean' ? want : s.nfmVoice, undefined,
                     (on) => on ? 'VOICE' : 'RAW');
@@ -13068,11 +13069,14 @@ function bandMuteFollowAB() {
     if (audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
   }
 }
-/* ★★ APRS IS A SILENT DECODER (Stuart, 2026-11-10: "we need to make APRS a silent decoder"). Packets are a screech nobody
- *  listens to — Band's rule exactly: the speaker muted while APRS is open and put back as it was when it closes (a
- *  listener who unmutes meanwhile may); with VFO B on, only the VFO APRS decodes is taken out of the mix. Called from
- *  syncDecButtons (every decoder change) and when B comes or goes. The app and the R36S do the same. */
-let aprsMutedFrom: boolean | null = null;
+/* ★★ APRS AND METEOR LRPT ARE SILENT DECODERS (Stuart, 2026-11-10: "we need to make APRS a silent decoder"; 2026-11-22:
+ *  "i guess for meteor lrpt the audio needs muting too"). Packets are a screech and an LRPT downlink a hiss of data — Band's
+ *  rule exactly, in ONE copy shared with the app (src/services/silentDecoder.ts): the speaker muted while one is open and
+ *  put back as it was when it closes (a listener who unmutes meanwhile may); with VFO B on, only the VFO it decodes on is
+ *  taken out of the mix. LRPT started from the SATELLITE window (satFollow) is the same activeDec. The client's own mute
+ *  (setMuted — the gain), never setQuiet: the stream keeps a background Safari tab alive. Called from syncDecButtons
+ *  (every decoder change) and when B comes or goes. The app does the same; the R36S has no LRPT key and mutes APRS. */
+const silentMute = new SilentMute();
 /* ★★ …AND NFM AUDIO GOES TO ALL WHILE APRS IS OPEN (Stuart, 2026-11-10: "when APRS is open the NFM needs to switch to all
  *  and then switch back to voice afterwards"). Voice's steep 300 Hz–3 kHz edges delay 2200 Hz more than 1200 Hz and smear
  *  the bits: on 100 synthetic packets at 11 dB with the space tone 6 dB down, ALL decoded 70 and VOICE 18. Silent, so the
@@ -13083,21 +13087,18 @@ let aprsWasOpen = false;
 /** What NFM audio should be: ALL while APRS holds it, else the listener's saved choice (undefined = the server's). */
 function nfmVoiceWant(): boolean | undefined { const p = prefs().nfmVoice; return aprsNfmRaw ? false : typeof p === 'boolean' ? p : undefined; }
 function nfmVoiceShow(on: boolean) { const b = document.getElementById('nfmVoiceBtn'); if (b) { b.classList.toggle('on', on); b.textContent = on ? 'VOICE' : 'RAW'; } }
-let aprsMutedV: 'A' | 'B' | null = null;
-function aprsSilentSync() {
-  const want = activeDec === 'aprs' && !!spec;
-  const wantV = want && !!spec?.abOn ? decVfo : null;
-  if (aprsMutedV && aprsMutedV !== wantV) { const v = aprsMutedV; aprsMutedV = null; if (spec?.abOn) spec.setAbMute(v, false); }
-  if (wantV && aprsMutedV !== wantV) { aprsMutedV = wantV; spec!.setAbMute(wantV, true); }
+function silentDecoderSync() {
+  silentMute.sync({ open: isSilentDecoder(activeDec) && !!spec, abOn: !!spec?.abOn, vfo: decVfo, speakerMuted: audio ? audio.muted : null }, {
+    setSpeaker: (m) => { setMuted(m); updateMediaSession(); },
+    setVfoMute: (v, m) => { spec?.setAbMute(v, m); },
+  });
+  const want = activeDec === 'aprs' && !!spec;   // ★ NFM ALL is APRS's alone (LRPT is not NFM)
   if (want !== aprsWasOpen) {   // ★ on APRS opening or closing only — a press in between stands
     aprsWasOpen = want;
     const was = aprsNfmRaw;
     aprsNfmRaw = want;
     if (nfmVoiceKnown && (want || was)) { const v = nfmVoiceWant() ?? true; spec?.setNfmVoice(v); nfmVoiceShow(v); }
   }
-  const wantSpk = want && !wantV;
-  if (wantSpk && aprsMutedFrom === null && audio) { aprsMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
-  else if (!wantSpk && aprsMutedFrom !== null) { setMuted(aprsMutedFrom); aprsMutedFrom = null; updateMediaSession(); }
 }
 function bandSpotsUi(on: boolean) {
   const was = bandSpots;
@@ -15599,7 +15600,7 @@ function decWhyPaint() {
 }
 
 function syncDecButtons() {
-  decStep('aprsSilentSync', aprsSilentSync);   // ★★ APRS is a silent decoder
+  decStep('silentDecoderSync', silentDecoderSync);   // ★★ APRS and METEOR LRPT are silent decoders
   decStep('syncCwPlain', syncCwPlain);         // ★ V12 the CW box's PLAIN key follows the decoder (CW only)
   decStep('decWhyPaint', decWhyPaint);
   decStep('keys lit', () => {
@@ -23370,7 +23371,7 @@ function abOnWatch(note?: string) {
   abPaint();
   sqlRowsPaint();
   bandMuteFollowAB();
-  aprsSilentSync();   // ★★ B came or went: APRS's mute moves between the speaker and its VFO
+  silentDecoderSync();   // ★★ B came or went: a silent decoder's mute moves between the speaker and its VFO
   vfoRecOnWatch();   // ★★★ per-VFO recording: the REC B row, the streams, B going away
   if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
 }
