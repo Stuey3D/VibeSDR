@@ -60,6 +60,7 @@
 #endif
 
 #include <cctype>
+#include <cstdlib>
 
 namespace vibe {
 namespace digi {
@@ -99,6 +100,7 @@ const std::vector<ModeDef>& modes() {
 #endif
         // ★★ V12 beta91 — the band's CW and RTTY skimmers and wide PSK as three more chips (IQ modes: windows, not dials — Band only;
         //    docs/v12/BAND-SKIM-CW-RTTY.md). Last: shed and paused first, shown last.
+        const char* bxr = std::getenv("VIBE_BX_NOREG"); if (bxr && *bxr == '1') return v;   // BISECT (temporary)
 #ifdef VIBE_DIGI_HAVE_CW
         ADD(vibeDigiMode_cw());
 #endif
@@ -111,6 +113,23 @@ const std::vector<ModeDef>& modes() {
         return v;
     }();
     return all;
+}
+
+const std::vector<ModeDef>& iqModesBx() {   // BISECT (temporary)
+    static const std::vector<ModeDef> v = [] {
+        std::vector<ModeDef> o;
+#ifdef VIBE_DIGI_HAVE_CW
+        o.push_back(vibeDigiMode_cw());
+#endif
+#ifdef VIBE_DIGI_HAVE_RTTY
+        o.push_back(vibeDigiMode_rtty());
+#endif
+#ifdef VIBE_DIGI_HAVE_PSKW
+        o.push_back(vibeDigiMode_pskw());
+#endif
+        return o;
+    }();
+    return v;
 }
 
 const ModeDef* modeByName(const std::string& name) {

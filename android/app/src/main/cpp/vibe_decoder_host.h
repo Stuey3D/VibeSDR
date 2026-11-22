@@ -462,6 +462,7 @@ public:
         if (env_.region) { const int rg = env_.region(); if (rg >= 1 && rg <= 3) skimbands::bandRegion().store(rg); }
         std::vector<digi::ModeDef> ms;   // ★ the modes the owner has not switched off (the Spotter keeps its own copy)
         for (const auto& m : digi::modes()) if (!(env_.spotModeOff && env_.spotModeOff(m.name))) ms.push_back(m);
+        { const char* e = std::getenv("VIBE_BX_SPLIT"); if (e && *e == '1') for (const auto& m : digi::iqModesBx()) ms.push_back(m); }   // BISECT
         spotter_.reset(new digi::Spotter(scope, ms,
             [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
             [dial] { return dial ? dial() : 0.0; }, loaded));
@@ -486,7 +487,7 @@ public:
         spotsOn_ = true;
         if (scope == SpotScope::Band) {
             bandWidth_.store(bandWidthFor(dial ? dial() : 0.0), std::memory_order_relaxed);   // ★ a socket thread: no channel lock held
-            bandWidthDial_.store(dial ? dial() : -1.0, std::memory_order_relaxed);   // ★ beta91: the chips name the band before the first block
+            { const char* e = std::getenv("VIBE_BX_NODIAL"); if (!(e && *e == '1')) bandWidthDial_.store(dial ? dial() : -1.0, std::memory_order_relaxed); }   // ★ beta91: the chips name the band before the first block
             setExtras_(dial ? dial() : 0.0);
             if (!bandIq_.exchange(true)) skimmersRunning().fetch_add(1);
         } else {
@@ -1955,6 +1956,7 @@ private:
         spotsOn_ = false;
         spotsActive_.store(false, std::memory_order_relaxed);
         if (bandIq_.exchange(false)) skimmersRunning().fetch_sub(1);
+        { const char* e = std::getenv("VIBE_BX_LOG"); if (e && *e == '1' && spotter_) { char b[200]; std::snprintf(b, sizeof b, "BX stop: IQ blocks dropped %llu, bridged %.2f s, slots skipped %llu, lag max %.2f", (unsigned long long)iqBlocksDropped(), spotter_->usBridged() / 1e6, (unsigned long long)spotter_->slotsSkipped(), diagLagMax_); log(b); } }   // BISECT
         if (spotter_) { spotSkipBase_ += spotter_->slotsSkipped(); spotShedBase_ += spotter_->periodsShed(); }
         spotter_.reset();            // ★ joins the engines' workers (an FT8 decode in progress is aborted, not waited for)
         if (finishTap) { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(spotTap_); } if (t) t->finish(true); }
@@ -2307,9 +2309,22 @@ private:
         const std::vector<ExtraSlice> e = bandExtraSlices(dialHz, [ov, off](const std::string& m) {
             return (ov && ov(m) < 0) || (off && off(m));
         });
-        nExtras_.store(0, std::memory_order_release);
-        for (size_t k = 0; k < e.size() && (int)k < kMaxExtraSlices; ++k) { exC_[k].store(e[k].centreHz); exW_[k].store(e[k].widthHz); }
-        nExtras_.store((int)std::min<size_t>(e.size(), kMaxExtraSlices), std::memory_order_release);
+        /* ★★ V12 beta91 — NEVER REWRITTEN WHEN NOTHING CHANGED. This runs on the decode thread whenever the main slice's
+         *  centre moves — and the DSP thread reads the extras every block (iqExtraSlices) to aim the slices. Rewriting them
+         *  published a moment of NO extras (nExtras_ 0 while the values were refilled); a one-pipeline radio's tap then
+         *  re-planned its front end without them (another decimation, another centre), the main slice's centre moved, this
+         *  ran again — a loop that remade the slices and restarted the activity gate's floor every few blocks. It needs an
+         *  extra slice to show, so it began with the CW / RTTY / wide-PSK slice on 20 m (test-server-spots: FT2 and PSK31
+         *  missed their first loops, 3 of 7 runs). Now: unchanged extras are left alone; changed ones are written values
+         *  first, count last (a reader sees the old set or the new, never none). */
+        const int n = (int)std::min<size_t>(e.size(), kMaxExtraSlices);
+        bool same = n == nExtras_.load(std::memory_order_acquire);
+        for (int k = 0; same && k < n; ++k)
+            same = exC_[k].load(std::memory_order_relaxed) == e[(size_t)k].centreHz && exW_[k].load(std::memory_order_relaxed) == e[(size_t)k].widthHz;
+        if (same) return;
+        if (n < nExtras_.load(std::memory_order_relaxed)) nExtras_.store(n, std::memory_order_release);   // ★ shrink first
+        for (int k = 0; k < n; ++k) { exC_[k].store(e[(size_t)k].centreHz, std::memory_order_relaxed); exW_[k].store(e[(size_t)k].widthHz, std::memory_order_relaxed); }
+        nExtras_.store(n, std::memory_order_release);
     }
     uint64_t spotSkipBase_ = 0;
     uint64_t spotShedBase_ = 0;                  // ★ Band periods shed by runs already stopped (spotPeriodsShed is monotonic)

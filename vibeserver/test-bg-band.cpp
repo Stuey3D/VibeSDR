@@ -516,8 +516,11 @@ static void livePath() {
     vibedsp::Channelizer ch(fft);
     const int chunk = 16384;
     const auto w0 = std::chrono::steady_clock::now();
+    // ★ the 32 s fed TWICE (64 s of capture): the continuous modes start kIqStartSec (20 s) into a Band run
+    for (int pass = 0; pass < 2; ++pass)
     for (size_t o = 0; o < cap.size(); o += (size_t)chunk) {
         const int n = (int)std::min<size_t>((size_t)chunk, cap.size() - o);
+        const size_t base = (size_t)pass * cap.size();
         ch.feed(&cap[o], n, [&](const cf32* b, int) {
             const double utc = utc0 + (double)((ch.blockIndex() + 1) * (long long)ch.hop()) / fs;
             for (size_t i = 0; i < sls.size(); ++i) {
@@ -529,7 +532,7 @@ static void livePath() {
                 if (got > 0) host->feedIq(sl.buf.data(), got, sl.rate, sl.centre, sl.pw.data(), sl.bins, binHz, utc, (int)i);
             }
         });
-        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)(o + (size_t)n) / fs / 4.0 * 1e6)));
+        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)(base + o + (size_t)n) / fs / 4.0 * 1e6)));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(4000));
     const std::string st = host->spotsStatusJson();

@@ -91,6 +91,7 @@ public:
     static constexpr double kPauseStepSec = 5.0;     ///< …at most one more every this long
     static constexpr double kResumeCalmSec = 30.0;   ///< caught up (under kResumeBehindSec) this long: resume the last paused
     static constexpr double kResumeBehindSec = 0.3;
+    static constexpr double kIqStartSec = 20.0;      ///< ★ the continuous (IQ) modes are fed only this long after Band starts
 
     /** ★ One mode's state in Band, for the spots box header ("FT8 active · WSPR idle · JTTY shed") and the admin page. */
     struct ModeStatus {
@@ -236,6 +237,7 @@ private:
     int pauseLevel_ = 0;
     double pauseAt_ = -1e300, calmSince_ = NAN, pauseCheck_ = -1e300;
     uint64_t pauseSkips_ = 0;
+    double bandStartUtc_ = NAN;          // ★ the capture time of this run's first block (kIqStartSec)
 
     mutable std::mutex statMtx_;          // ★ the stats readers are on other threads; the engine set changes here
     uint64_t retiredSkips_ = 0, retiredDecodes_ = 0;

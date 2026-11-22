@@ -148,6 +148,7 @@ struct ModeDef {
 
 /** The registered modes, in registration order (FT8 first). Built once, never changed after — read freely. */
 const std::vector<ModeDef>& modes();
+const std::vector<ModeDef>& iqModesBx();   // BISECT (temporary)
 /** A registered mode by name (case-insensitive), or null. */
 const ModeDef* modeByName(const std::string& name);
 
