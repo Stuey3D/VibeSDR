@@ -22,7 +22,10 @@ const git = (...a) => spawnSync('git', ['-C', root, ...a], { encoding: 'utf8', m
 const C = 'android/app/src/main/cpp/';
 
 console.log(`── 1. source, against ${BASE} ──`);
-const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f)).map((f) => C + f);
+/* ★ beta91 vibe_sat_gain.h is the SATELLITE-PASS profile (new file, 11-22): it acts only while g_satGainOn (a satellite
+ *  decoder on a pick / unattended pass), never in DAB; reviewed with its own test (test-sat-gain). The three DAB-path gain
+ *  files are still held to BASE byte for byte. */
+const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f) && f !== 'vibe_sat_gain.h').map((f) => C + f);
 const agcDiff = git('diff', BASE, '--', ...agcFiles);
 ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged (${agcFiles.length} files: ${agcFiles.map((f) => path.basename(f)).join(', ')})`);
 /* ★ The shim's gain/AGC lines are judged from SHIM_BASE: f026471cd is the end of the SDRplay AGC lock work (Stuart,
@@ -30,7 +33,10 @@ ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged 
  *  Those lines are the RSP's own gain controls for every mode, reviewed and tested there (test-rsp-agc-lock.mjs); they
  *  are not DAB's standard path, whose AGC sources are still held to BASE above. Phase 1 added no such line (this check
  *  passed against BASE before that work). */
-const SHIM_BASE = process.env.SHIM_BASE || 'f026471cd';
+/* ★ beta91: moved to ba9afd6ca (the satellite-pass gain merge, 11-22). The lines it added are the satellite profile's
+ *  own writes (vsRspSatTick, the RTL block — both gated on g_satGainOn) and one READ of the gain in the APRS developer
+ *  dump's header (b91-aprsdbg) — none on DAB's standard path, whose AGC sources are still held to BASE above. */
+const SHIM_BASE = process.env.SHIM_BASE || 'ba9afd6ca';
 const shim = git('diff', '-U0', SHIM_BASE, '--', C + 'local_sdr_shim.cpp').split('\n');
 const gainish = /setGain|setTunerGain|g_gain|dabSeedGain|vibeAgc|Agc\(|agc_|rtlAgc|gainSteps|setLna|setIfGain/;
 ok(!shim.some((l) => l.startsWith('-') && !l.startsWith('---') && gainish.test(l)), 'the shim removes no line that touches the gain or AGC');
