@@ -304,10 +304,18 @@ its address; one also heard on ADS-B had a registration and type only because AD
   MIL, the live row joined); `test-server-avmap` 22/0 (4 new — two real radio processes: VDL2-only 3C6548 → DE on both
   endpoints, BAW117 → BAW); `test-web-avmap` 40/0 (2 new — headless Edge `--mute-audio`: 3C6548's row has 🇩🇪, 4CA97B's
   names Ryanair; the web rows now draw the flag). Fixtures and synthetic clips only — **not yet seen on air**.
-- ★ **Known limit (the ADS-B path's rule, unchanged):** an IATA flight ID only names an operator when ONE airline holds that
-  IATA code — on the VRS data BA, LH and U2 are shared, so an ACARS "BA0117" / "LH4567" / "U22468" names none (EI, FR, AF,
-  KL do). ADS-B never noticed: its callsigns are ICAO ("BAW117"). Decision owed: prefer the airline the aircraft's own
-  registration country or the VRS overlay points at when the code is shared.
+- ★★ **Shared IATA codes (Stuart approved, 2026-11-22):** BA, LH and U2 are each held by more than one airline on the VRS
+  data, so the unambiguous IATA map names none. `Db::lookupCallsign` now lets the aircraft decide (`iataAllLocked`,
+  `sharedIataLocked`): the address's own VRS-overlay operator wins where it is one of the code's airlines; else R = the
+  airlines with a filed route for that flight number, C = the airlines (Mictronics operators' country) of the aircraft's own
+  country (its address block). One in R not contradicted by C, or none in R and exactly one in C, or the single R∩C — else
+  none (never a guess between two). ADS-B benefits too. Fixtures: BAX / EZS / DLH / GEC share BA / U2 / LH. test-adsb-data
+  327/327: BA0117 on G-XLEA → BAW; U22468 on G-EZWK → EZY + route; LH4567 on a German address → none (both German, no route);
+  BA0117 with no address → none; the route and the country disagreeing → none. ★ The country clue needs the Mictronics
+  download and the route clue the VRS routes (the weekly update) — on the starter alone a shared code still names none.
+- ★★ **The ODC-By notice on the AIRCRAFT list:** the card's words and links (`AV_DATA_CREDIT` / `avCreditHtml`) as one small
+  line at the list's foot while any row shows the aircraft data (`avShowsData`: a type, or data the server attached) — app
+  `TrackLiveList credit`, web `.avCredit`. The ADS-B map's own live list (AdsbLiveList) has no such line (unchanged).
 
 ## On air 2026-11-16 (daytime, 16:38–16:56 UTC)
 
