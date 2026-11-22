@@ -1210,7 +1210,7 @@ int main(int argc, char** argv) {
         double t = 0;
         auto run = [&](double secs) { for (double end = t + secs; t < end; t += 0.01) sp.feedIq(z.data(), 960, rate, centre, utc0 + t + 0.01, nullptr, 0, 0, 0); };
         auto st = [&](const char* m) { for (auto& x : sp.status()) if (x.mode == m) return std::string(digi::stateWord(x.state)); return std::string("-"); };
-        run(10);
+        run(25);   // ★ the continuous modes are fed only after kIqStartSec (20 s) of the run
         ok(sp.pauseLevel() == 0 && st("CWX") == "active" && st("RTX") == "active" && nCw->load() > 0 && nRt->load() > 0,
            "caught up: both continuous modes decode (" + st("CWX") + ", " + st("RTX") + ")");
         behind = 3.0;
@@ -1249,7 +1249,7 @@ int main(int argc, char** argv) {
         sp2.setBehind([&] { return 0.0; });
         double t2 = 0;
         auto run2 = [&](double secs) { for (double end = t2 + secs; t2 < end; t2 += 0.01) sp2.feedIq(z.data(), 960, rate, centre, utc0 + t2 + 0.01, nullptr, 0, 0, 0); };
-        run2(8);
+        run2(23);
         sk->n = 1;
         run2(2);
         ok(sp2.pauseLevel() == 1, "a slotted mode SKIPPED a slot (nothing queued): CW pauses so it gets the CPU back");

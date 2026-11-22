@@ -65,7 +65,7 @@ protected:
     }
 private:
     void searcher() {
-        vibeDecoderLagThread("vibe-bandrttys");
+        vibeIdleThread("vibe-bandrttys"); vibe::vibeFlushDenormals();   // ★ the IDLE class, as the feeder (iq_worker.h)
         for (;;) {
             std::shared_ptr<rttysk::Skimmer> s;
             {

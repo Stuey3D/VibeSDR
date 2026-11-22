@@ -24,9 +24,47 @@ Built and tested (synthetic signals only — see "What was tested how"). Open:
 4. PSK125 / QPSK31 / QPSK63: **not built** — `psk::Skimmer` demodulates BPSK31 and BPSK63 only. Adding them is a new
    demodulator lane (QPSK needs its Viterbi), a separate job.
 
+## ★★ The test-server-spots regression and its fix (beta91, after the first merge)
+
+After the merge, `scripts/test-server-spots.mjs` missed the 20 m clip's PSK31 (G4PSK) or FT2 (IU8AAA) in the
+**one-pipeline Band** check in about 1 run in 3 (coordinator: 3 of 7; baseline b9b0419db 5 of 5). Bisected with
+temporary run-time switches, ≥4 runs each (one at a time, `nice`):
+
+| variant | one-pipeline misses |
+|---|---|
+| baseline b9b0419db | 0 / 4 (and 0 / 5 the coordinator's) |
+| everything as merged | 1 / 4 |
+| IQ runs off, the slice-id rule, main-slice rule, warm-up forget, DC rule, pause rule, start delay off (each and all) | still 1 in 4 |
+| chips switched off by the owner (no IQ extra slice, the tap back to ÷8) | 1 / 5 |
+| IQ modes registered but with **no windows** (no runs, no slices) | 2 / 4 |
+| IQ modes **not registered at all** | **0 / 10** |
+| IQ modes out of the registry but inside the Band spotter | 1 / 6 |
+
+So the misses came from the IQ ModeDefs being **in the audio modes' spotter (and registry)** at all, not from their
+CPU, their slices or the tap. The exact path inside the spotter was not pinned down. What is known: the clip's PSK31
+CQ is phase-sensitive in the offline harness for the baseline too (starting 4–8 s into the 15 s loop it is first spotted
+after 45 s, not within it), so the 50 s check sits on an edge that small changes in the spotter tip.
+
+**The fix keeps the audio path exactly as it was.** `digi::modes()` is the audio registry again, unchanged.
+`digi::iqModes()` holds CW, RTTY and PSKW, and `digi::allModes()` is both, used only where the chips are listed or
+sliced: the spotModes / spotBands JSON, `bandExtraSlices`, and the status chips. The chips run in a **spotter of their
+own** (`DecoderHost::iqSpotter_`), fed the same slices. The audio spotter is therefore the baseline's, and its modes,
+plan, gate and governor are untouched. The IQ spotter's pause rule reads the decode queue and the audio spotter's
+skipped slots (`Spotter::setSkipped`). Kept from the bisect:
+- `setExtras_` never publishes a transient "no extras";
+- the DC rule ignores IQ-only slices;
+- the IQ chips start 20 s into a Band run (`kIqStartSec`), restarted on a band step.
+
+**Results on the final build** (c94f2fafd: the IQ chips in their own spotter with no second gate, and their threads in
+the idle class), quiet Mac, load 1–2.5: test-web-spots **5/5** (70/0 each, the WSPR chip check included);
+test-server-spots **4/5** (the fifth missed the one-pipeline PSK31 / FT2 again). Before the separate spotter, the misses
+were ~1 run in 4. The baseline was 9/9 here and the coordinator's. **Still open:** the last ~1 in 5. The offline harness
+shows the clip's PSK31 is phase-sensitive in the baseline as well (`test-band-slice real` on the clip rotated 4–8 s:
+no PSK31 within 45 s; spotted by 150 s), so the 50 s check sits on an edge.
+
 ## Design
 
-### IQ modes in the mode registry
+### IQ modes (their own registry and their own spotter, since the fix above)
 `decoders/digi_mode.h` gains **IQ modes** (`ModeDef::iq`): Band only, no tuner, no audio. Instead of dials an IQ mode has
 **windows** of RF per band (`ModeDef::windows`), and its engine (`makeWin(lo, hi)`) is fed the complex IQ of whichever
 Band slice holds the window (`Engine::processIq`). `dialsOf()` is empty for an IQ mode, so every audio-mode reader (the

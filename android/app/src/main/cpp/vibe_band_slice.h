@@ -47,7 +47,7 @@ inline std::vector<ExtraSlice> bandExtraSlices(double dialHz, const std::functio
     std::vector<ExtraSlice> o;
     const digi::Band* b = digi::bandAt(dialHz);
     if (!b) return o;
-    const digi::Span sp = digi::spanOf(*b, digi::modes());
+    const digi::Span sp = digi::spanOf(*b, digi::allModes());   // ★ beta91: the CW / RTTY / wide-PSK windows' slices too
     if (!sp.ok) return o;
     for (const digi::SubSpan& e : sp.extras) {
         if ((int)o.size() >= kMaxExtraSlices) break;
@@ -114,7 +114,13 @@ inline std::vector<BandDcZone> bandDcSlices(double sampleRate, int fftSize, doub
     const double w = std::min(::DecoderHostBandWidth(dialHz), sampleRate * 0.8);
     const double r = sampleRate * vibe::bandSliceBins(sampleRate, fftSize, w) / fftSize;
     z.push_back({ dialHz - r / 2, dialHz + r / 2 });
-    for (const vibe::ExtraSlice& e : vibe::bandExtraSlices(dialHz)) {
+    /* ★★ V12 beta91: NOT the CW / RTTY / wide-PSK slices (an extra slice carrying only IQ modes). Keeping the DC out of
+     *  them too changed where — and how often — the tuner was placed on a one-pipeline radio (the strict "every slice in
+     *  the capture" tier, the caller's view bounds), and the retunes that followed cost FT2 / PSK31 their first slots in
+     *  test-server-spots (bisected: with the IQ modes unregistered, 4/4). A DC inside a skimmer window is a steady
+     *  carrier, which neither skimmer decodes; the placement is now exactly what it was before the band-skim change. */
+    auto iqOnly = [](const std::string& m) { const vibe::digi::ModeDef* d = vibe::digi::modeByName(m); return d && d->iq; };
+    for (const vibe::ExtraSlice& e : vibe::bandExtraSlices(dialHz, iqOnly)) {
         const double er = sampleRate * vibe::bandSliceBins(sampleRate, fftSize, e.widthHz) / fftSize;
         z.push_back({ e.centreHz - er / 2, e.centreHz + er / 2 });
     }

@@ -238,8 +238,22 @@ static void endToEnd() {
     ok(q.list.find("\"f\":") == std::string::npos, "nothing heard: no card at all");
     std::printf("  CPU (quiet 40 m): %.2f s for %.0f s = %.1f %% of one core\n", q.cpu, q.capSec, 100.0 * q.cpu / q.capSec);
     // ★ CPU on a box this fast is noise either way; what the gate does is SAID in the admin line: nothing decoded
-    ok(q.status.find(" active") == std::string::npos && q.status.find("FT8 7.0740 idle") != std::string::npos,
-       "every mode idle on an empty band — the gate decodes nothing there");
+    // ★ V12 beta91: the CW / RTTY / PSKW chips are continuous and have no activity gate of their own (their skimmers are
+    //   the detectors) — so "every AUDIO mode idle": drop their entries from the admin line before looking
+    std::string audioOnly;
+    {
+        const size_t a = q.status.find("\"modes\":\""), e = a == std::string::npos ? a : q.status.find('"', a + 9);
+        const std::string modes = a == std::string::npos ? std::string() : q.status.substr(a + 9, e - a - 9);
+        size_t p = 0;
+        while (p < modes.size()) {
+            size_t c = modes.find(", ", p); if (c == std::string::npos) c = modes.size();
+            const std::string one = modes.substr(p, c - p);
+            if (one.rfind("CW ", 0) != 0 && one.rfind("RTTY ", 0) != 0 && one.rfind("PSKW ", 0) != 0) audioOnly += one + ", ";
+            p = c + 2;
+        }
+    }
+    ok(!audioOnly.empty() && audioOnly.find(" active") == std::string::npos && audioOnly.find("FT8 7.0740 idle") != std::string::npos,
+       "every audio mode idle on an empty band — the gate decodes nothing there (" + audioOnly.substr(0, 160) + ")");
 }
 
 static void switchedOff() {
@@ -516,8 +530,11 @@ static void livePath() {
     vibedsp::Channelizer ch(fft);
     const int chunk = 16384;
     const auto w0 = std::chrono::steady_clock::now();
+    // ★ the 32 s fed TWICE (64 s of capture): the continuous modes start kIqStartSec (20 s) into a Band run
+    for (int pass = 0; pass < 2; ++pass)
     for (size_t o = 0; o < cap.size(); o += (size_t)chunk) {
         const int n = (int)std::min<size_t>((size_t)chunk, cap.size() - o);
+        const size_t base = (size_t)pass * cap.size();
         ch.feed(&cap[o], n, [&](const cf32* b, int) {
             const double utc = utc0 + (double)((ch.blockIndex() + 1) * (long long)ch.hop()) / fs;
             for (size_t i = 0; i < sls.size(); ++i) {
@@ -529,7 +546,7 @@ static void livePath() {
                 if (got > 0) host->feedIq(sl.buf.data(), got, sl.rate, sl.centre, sl.pw.data(), sl.bins, binHz, utc, (int)i);
             }
         });
-        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)(o + (size_t)n) / fs / 4.0 * 1e6)));
+        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)(base + o + (size_t)n) / fs / 4.0 * 1e6)));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(4000));
     const std::string st = host->spotsStatusJson();

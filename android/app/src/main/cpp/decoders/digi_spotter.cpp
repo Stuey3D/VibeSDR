@@ -236,6 +236,7 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
                      const float* binPow, int nb, double binHz, int sliceId) {
     if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
     if (!x) { feedGap(n, rate, centreHz, captureUtc); return; }   // ★ a null block: a gap of n samples (see feedGap)
+    if (!std::isfinite(bandStartUtc_) && std::isfinite(captureUtc)) bandStartUtc_ = captureUtc;
     const long long key = std::llround(centreHz);
     bool replan = false;
     auto it = slices_.find(key);
@@ -255,6 +256,8 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
         const bool byId = sliceId >= 0 && j->second.id >= 0;
         const bool moved = replan && j != it && (byId ? j->second.id == sliceId
                                                       : std::fabs(j->second.rate - rate) < 0.5 && std::fabs(j->second.centre - centreHz) < 0.25 * rate);
+        // ★ beta91: the main slice jumping away (a band step) starts the continuous modes' delay again (kIqStartSec)
+        if (moved && sliceId == 0 && std::fabs(j->second.centre - centreHz) > 100000.0) bandStartUtc_ = captureUtc;
         if (j != it && (moved || captureUtc - j->second.lastUtc > kSliceGoneSec)) { j = slices_.erase(j); replan = true; }
         else ++j;
     }
@@ -546,6 +549,12 @@ void Spotter::route(Run& r, const float* a, int k, double utc, int gated, Slice&
  *  its own queue only while it is live (a CW or RTTY skimmer that misses the first seconds of a station loses nothing —
  *  a spot needs its call heard twice). ─────────────────────────────────────────────────────────────────────────────── */
 void Spotter::routeIq(Run& r, const cf32* x, int n, double rate, double centreHz, double utc, int gated, Slice& sl) {
+    /* ★★ V12 beta91: THE CONTINUOUS MODES START LATE. For the first kIqStartSec of a Band run (Band started, a band
+     *  step) the CW / RTTY / wide-PSK engines are not fed at all: that is when the slotted modes' tuners, engines and gate
+     *  floors are settling and the tuner is being moved off the DC — and the skimmers' own start (their transforms, their
+     *  first seconds of searching) landing on top of it cost FT2 and PSK31 their first loops in test-server-spots
+     *  (intermittently; the slotted modes' first slots are exactly what Band start is judged by). */
+    if (!(utc - bandStartUtc_ >= kIqStartSec)) return;
     Gate& g = *r.gate;
     const double P = gatePeriod(*r.def);
     const int64_t per = (int64_t)std::floor((utc - n / rate) / P + 1e-9);
@@ -598,7 +607,7 @@ void Spotter::pauseTick(double utc) {
     if (maxRank == 0) { pauseLevel_ = 0; return; }
     const double ext = behind_ ? behind_() : 0.0;
     const double b = std::max(ext, backlog);
-    const uint64_t sk = skippedLocked();
+    const uint64_t sk = skippedHook_ ? skippedHook_() : skippedLocked();
     const bool skipped = sk > pauseSkips_;
     pauseSkips_ = sk;
     auto names = [&](int rank) {

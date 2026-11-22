@@ -27393,7 +27393,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             } else {
                 /* ★ THE DOOR OWNS NO RADIO, but the Band plan is the server's: every band some mode is on, for the setup
                  *  page's Band picker on a radio that is not running (as `bands` above) — the radio's save checks reach. */
-                j += vsSpotBandsJson(vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; }));
+                j += vsSpotBandsJson(vibe::digi::reachableSpans(vibe::digi::allModes(), [](double, double) { return true; }));
                 j += vsSkimBandsJson(false);
                 j += vsWefaxStationsJson(false);   // ★ the whole list (the radio's save checks its window)
             }
@@ -43004,7 +43004,7 @@ static std::vector<vibe::digi::Span> vsSpotSpans() {
      *  coverage when the owner pinned the centre but not the rate, so a radio locked to FM still listed every HF band. */
     const vibereach::Reach rr = vsDecoderReach();
     const vibebands::Ranges t = rr.locked ? rr.ranges : vsTunableRanges();
-    return vibe::digi::reachableSpans(vibe::digi::modes(), [&](double lo, double hi) {
+    return vibe::digi::reachableSpans(vibe::digi::allModes(), [&](double lo, double hi) {
         for (const auto& x : t) if (double(x.lo) <= lo && double(x.hi) >= hi) return true;
         return false;
     });
@@ -43245,7 +43245,7 @@ std::string LocalSdrShim::backgroundCapsJson() {
     j += "]";
     std::vector<vibe::digi::Span> spans = vsSpotSpans();
     const bool radioOpen = !spans.empty();
-    if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; });
+    if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::allModes(), [](double, double) { return true; });
     j += vsSpotBandsJson(spans);
     j += vsSkimBandsJson(radioOpen);   // ★ V12 beta90 the skimmers' band picker
     j += vsWefaxStationsJson(radioOpen);   // ★ V12 2026-11-22 the WEFAX stations row's ticks
@@ -43508,7 +43508,7 @@ static std::string vsTunableJson() {
     {
         j += ",\"spotModes\":[";
         bool first = true;
-        for (const auto& m : vibe::digi::modes()) { j += std::string(first ? "" : ",") + "\"" + m.name + "\""; first = false; }
+        for (const auto& m : vibe::digi::allModes()) { j += std::string(first ? "" : ",") + "\"" + m.name + "\""; first = false; }   // ★ beta91: + CW, RTTY, PSKW
         j += "]";
         const auto spans = vsSpotSpans();
         if (!spans.empty()) {
