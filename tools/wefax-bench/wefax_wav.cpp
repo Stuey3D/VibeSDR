@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <string>
 #include <vector>
 using namespace vibe;
@@ -59,5 +60,12 @@ int main(int argc, char** argv) {
     const size_t CH = 4800;
     for (; pos < pcm.size(); pos += CH) d.process(pcm.data() + pos, (int)std::min(CH, pcm.size() - pos));
     flush();
+    {   // ★ what the background VFO's hourly line would say about this recording (WefaxDecoder::Stats)
+        const auto st = d.takeStats();
+        printf("stats: %llu lines, audio %.1f dBFS rms, best start tone %d/10 (strongest line %.1f), best stop %d/10, best phasing look %d/20, "
+               "%d begun, %d stops, phasing %d used %d rejected\n", (unsigned long long)st.lines,
+               st.samples ? 10 * log10(st.sumSq / st.samples + 1e-12) : -120.0, st.bestStartHits, st.bestStartLevel, st.bestStopHits,
+               st.bestLookAgree, st.starts, st.stops, st.phasedUsed, st.phasedRejected);
+    }
     return 0;
 }
