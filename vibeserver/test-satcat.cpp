@@ -42,12 +42,14 @@ static long long stateNum(const std::string& st, const char* k) {
     return a == std::string::npos ? -1 : std::atoll(s.c_str() + a + key.size());
 }
 static long g_dataAge = 3600;   // ★ beta91 how old the fake mirror's orbits are when it answers (its "fetched" times)
+static bool g_noOrbitTimes = false;   // ★ an older mirror's copy: no "orbits" block, so its age is unknown
 static std::string satsBody() {
     std::string b = readFile("vibeserver/testdata-sat/sats-2026-11-19.json");
     char iso[40]; const std::time_t t = g_now - g_dataAge; std::tm tm{}; gmtime_r(&t, &tm);
     std::strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%S.000Z", &tm);
     for (size_t at = b.find("2026-11-19T18:00:00.000Z"); at != std::string::npos; at = b.find("2026-11-19T18:00:00.000Z", at + 1))
         if (at < b.find("\"satellites\"")) b.replace(at, 24, iso);
+    if (g_noOrbitTimes) for (size_t o = b.find("\"orbits\""); o != std::string::npos; o = b.find("\"orbits\"", o + 8)) b.replace(o, 8, "\"orbitz\"");
     return b;
 }
 static long g_retryAfter = 0;   // ★ the fake mirror's Retry-After (s), 0 = none
@@ -110,10 +112,23 @@ int main() {
     CHECK(seed >= 0 && seed < vssat::kCheckJitterSec, "this machine's offset chosen and kept (%lld s)", seed);
     g_now += 3 * 3600;
     CHECK(!vssat::needsRefresh(), "3 h later: no ask");
-    g_now += 24 * 3600 - 3 * 3600 - seed - 60;
-    CHECK(!vssat::needsRefresh(), "a minute before its daily time: no ask");
+    // ★ beta91: a copy whose orbits pass 12 h old is re-checked then (the mirror rebuilds every 6 h), not at its daily time
+    g_now += 12 * 3600 - 3 * 3600 - g_dataAge - 60;
+    CHECK(!vssat::needsRefresh(), "a minute before its orbits are 12 h old: no ask");
     g_now += 120;
-    CHECK(vssat::needsRefresh(), "its daily time: ask");
+    CHECK(vssat::needsRefresh(), "its orbits 12 h old: ask (not wait the day)");
+    {   // ★ a copy that does not say how old its orbits are (an older mirror): the daily time, less this machine's offset
+        g_noOrbitTimes = true; std::string e2;
+        CHECK(vssat::refresh(e2) == 1, "a copy with no orbit times arrives");
+        g_now += 24 * 3600 - seed - 60;
+        CHECK(!vssat::needsRefresh(), "no orbit times: a minute before its daily time, no ask");
+        g_now += 120;
+        CHECK(vssat::needsRefresh(), "no orbit times: its daily time, ask");
+        g_noOrbitTimes = false;
+        CHECK(vssat::refresh(e2) == 1, "(a copy with orbit times again)");
+        g_now += 12 * 3600;   // ...and its orbits past 12 h old, so §3 starts due, as before
+        CHECK(vssat::needsRefresh(), "(due again)");
+    }
 
     std::printf("§3 a conditional GET → 304\n");
     g_mode = "304"; g_calls = 0; g_published = 0;
@@ -304,6 +319,24 @@ int main() {
         CHECK(!vssat::needsRefresh(), "fresh: back to the daily cadence (not due 6 h later)");
         g_now += 18 * 3600;
         CHECK(vssat::needsRefresh(), "...due a day after (less this machine's offset, here 0)");
+        // ★ beta91 (Stuart 11-22, "orbits are 31h old"): "old" is judged from the copy NOW, not only the stored flag
+        g_dataAge = 3600; CHECK(vssat::refresh(err) == 1 && stateNum(readFile(g_dir + "/sat/sync-state"), "stale") == 0, "a fresh copy (1 h old) arrives");
+        g_now += 10 * 3600 + 3000;
+        CHECK(!vssat::needsRefresh(), "10 h 50 min on (the data 11 h 50 min old): not old yet, not due");
+        g_now += 1200;
+        CHECK(vssat::needsRefresh(), "the copy passes 12 h old: due (6 h since the check has long gone), not a day after");
+        {   // a state file written by an OLDER server: no `stale` line at all, the copy's data 31 h old, checked 1 h ago
+            g_dataAge = 30 * 3600; CHECK(vssat::refresh(err) == 1, "a copy 30 h old arrives");
+            std::string st = readFile(g_dir + "/sat/sync-state"), out;
+            for (size_t a = 0; a < st.size();) { size_t e = st.find('\n', a); if (e == std::string::npos) e = st.size();
+                const std::string ln = st.substr(a, e - a); if (ln.rfind("stale", 0) != 0) out += ln + "\n"; a = e + 1; }
+            { FILE* f = std::fopen((g_dir + "/sat/sync-state").c_str(), "w"); std::fputs(out.c_str(), f); std::fclose(f); }
+            CHECK(readFile(g_dir + "/sat/sync-state").find("stale") == std::string::npos, "(the state file now has no stale line, as beta90 wrote it)");
+            g_now += 3600;
+            CHECK(!vssat::needsRefresh(), "1 h after that check: not yet (the 6 h recheck still applies)");
+            g_now += 5 * 3600 + 60;
+            CHECK(vssat::needsRefresh(), "★ an older server's state file, the copy 36 h old: due 6 h after the check, not a day");
+        }
         // a 304 while the copy is old: still old, so still 6 h
         g_dataAge = 15 * 3600; CHECK(vssat::refresh(err) == 1, "a copy 15 h old arrives");
         g_mode = "304"; g_now += 6 * 3600 + 60;

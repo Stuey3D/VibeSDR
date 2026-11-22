@@ -216,6 +216,12 @@ bool eligible(State& s, std::time_t now, bool haveCopy) {
     if (s.attempt > now && s.attempt - now < 86400) return false;
     if (!haveCopy) return true;
     seedOf(s);
+    /* ★★ beta91 "old" is judged NOW, from the copy itself, not only from the flag the last check stored (Stuart 11-22,
+     *  "orbits are 31h old"): a state file written by an older server has no `stale` line, so the Pi 500's copy — fetched
+     *  at 12:20 while the mirror was itself stalled, data from 21 Nov 16:08 — read as fresh and waited a day. And a copy
+     *  that was fresh when checked becomes old with time: once it passes kStaleDataSec it is re-checked kStaleRecheckSec
+     *  after the last check (a 304 costs the mirror nothing). */
+    if (!s.stale) { std::string cur; if (readCapped(copyPath(), cur) && dataAgeSec(cur, now) > kStaleDataSec) s.stale = 1; }
     const long due = dueAfterCheck(s);
     return s.checked <= 0 || s.checked > now || now - s.checked >= due;
 }
