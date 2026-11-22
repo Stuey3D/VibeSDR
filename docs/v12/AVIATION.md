@@ -301,7 +301,13 @@ its address; one also heard on ADS-B had a registration and type only because AD
   a military HFDL logon; an unknown address → nothing; registration-only not queued; the queue and the answers stop at kCap;
   the worker thread answers within 2 s); `test-aircraft-share` 54/0 (unchanged, the hook is optional); `test_aviation_map`
   85/0 (13 new: parsing, hostile keys dropped, the layer shape, the database route vs the datalink's, list flag / operator /
-  MIL, the live row joined). Fixtures only — **not yet seen on air**.
+  MIL, the live row joined); `test-server-avmap` 22/0 (4 new — two real radio processes: VDL2-only 3C6548 → DE on both
+  endpoints, BAW117 → BAW); `test-web-avmap` 40/0 (2 new — headless Edge `--mute-audio`: 3C6548's row has 🇩🇪, 4CA97B's
+  names Ryanair; the web rows now draw the flag). Fixtures and synthetic clips only — **not yet seen on air**.
+- ★ **Known limit (the ADS-B path's rule, unchanged):** an IATA flight ID only names an operator when ONE airline holds that
+  IATA code — on the VRS data BA, LH and U2 are shared, so an ACARS "BA0117" / "LH4567" / "U22468" names none (EI, FR, AF,
+  KL do). ADS-B never noticed: its callsigns are ICAO ("BAW117"). Decision owed: prefer the airline the aircraft's own
+  registration country or the VRS overlay points at when the code is shared.
 
 ## On air 2026-11-16 (daytime, 16:38–16:56 UTC)
 
