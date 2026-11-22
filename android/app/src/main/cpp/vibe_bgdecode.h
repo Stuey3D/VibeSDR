@@ -237,11 +237,19 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
  *    stop; SSTV 0x07 start(u32 w, u32 h) · 0x01 line(u32 y, u32 w, rgb) · 0x02 mode name · 0x05 complete. A redraw
  *    re-sends lines by index, so they simply replace.
  *  ★ Bounded: a chart is at most kMaxLines lines (~5 MB grey); past that it is saved and a new one begun. Too few lines
- *    to be a picture (noise that tripped a start tone) are not kept. */
+ *    to be a picture (noise that tripped a start tone) are not kept.
+ *  ★★ A LISTENER'S WEFAX IS KEPT ONLY IF IT WAS A CHART (Stuart 2026-11-22: "lots of dead wefax false starts"). A
+ *    listener's decoder free-runs (no auto_start — it draws whatever is on the dial), so tuning round with WEFAX open
+ *    left a 58–100-line strip of noise in the gallery at every retune. Now a listener's strip is kept only if a START
+ *    TONE or PHASING was seen for it (0x02 start, or 0x04 phase 1 start tone / 2 phasing), or it ran kChartLines (600
+ *    lines = 5 minutes at 120 LPM — a chart joined part-way, with no start of its own) — otherwise it is dropped
+ *    silently. Background WEFAX is unchanged: it only draws after a start tone or phasing anyway (auto_start). */
 class GalleryImageTap : public DecoderTap {
 public:
-    static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096;
-    GalleryImageTap(gallery::Store& store, gallery::Meta meta) : store_(store), meta_(std::move(meta)) { sstv_ = meta_.kind == "sstv"; }
+    static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096, kChartLines = 600;
+    GalleryImageTap(gallery::Store& store, gallery::Meta meta) : store_(store), meta_(std::move(meta)) {
+        sstv_ = meta_.kind == "sstv"; listener_ = meta_.origin != "background";
+    }
     ~GalleryImageTap() override { finish(true); }
     void frame(const uint8_t* d, size_t n) override {
         if (n < 1) return;
@@ -250,15 +258,17 @@ public:
         auto u32 = [&](size_t o) { return (uint32_t)d[o] << 24 | (uint32_t)d[o + 1] << 16 | (uint32_t)d[o + 2] << 8 | d[o + 3]; };
         const uint8_t op = d[0];
         if (!sstv_) {
-            if (op == 0x02 && n == 1) { save(true); begin(0, 0); return; }
+            if (op == 0x02 && n == 1) { save(true); begin(0, 0); marked_ = true; return; }
             if (op == 0x03 && n == 1) { save(false); return; }
+            // ★ 0x04 <phase>: a start tone (1) or phasing (2) heard — whatever is drawn next belongs to a real chart
+            if (op == 0x04 && n == 2) { if (d[1] == 1 || d[1] == 2) { if (open_) marked_ = true; else pendingMark_ = true; } return; }
             if (op == 0x01 && n >= 9) {
                 const uint32_t ln = u32(1), w = u32(5);
                 if (w == 0 || w > kMaxWidth || n < 9 + (size_t)w) return;
                 if (!open_) begin(0, 0);
                 if (w_ == 0) w_ = w;
                 if (w != w_) return;
-                if (ln >= kMaxLines) { save(true); begin(0, 0); w_ = w; }
+                if (ln >= kMaxLines) { save(true); begin(0, 0); w_ = w; marked_ = true; }   // ★ the rest of a long chart
                 const uint32_t row = ln >= kMaxLines ? ln % kMaxLines : ln;
                 put(row, d + 9, w);
             }
@@ -280,10 +290,14 @@ public:
         save(true);
     }
     size_t saved() const { std::lock_guard<std::mutex> lk(m_); return saved_; }
+    size_t savedCount() const override { return saved(); }
+    /** ★ Listener strips dropped (no start tone, no phasing, under kChartLines) — for the tests. */
+    size_t dropped() const { std::lock_guard<std::mutex> lk(m_); return dropped_; }
 
 private:
     void begin(uint32_t w, uint32_t h) {
         open_ = true; px_.clear(); lines_ = 0; maxRow_ = 0; started_ = gallery::nowUtc();
+        marked_ = pendingMark_; pendingMark_ = false;
         w_ = w > kMaxWidth ? 0 : w; h_ = h > 2000 ? 0 : h;
         if (sstv_ && w_ && h_) px_.assign((size_t)w_ * h_ * 3, 0);
     }
@@ -300,6 +314,8 @@ private:
         open_ = false;
         const uint32_t minLines = sstv_ ? 16 : 50;
         if (w_ == 0 || lines_ < minLines || maxRow_ == 0) { px_.clear(); return; }
+        // ★★ a listener's WEFAX strip with no start tone, no phasing and under 5 minutes: noise from tuning round — dropped
+        if (!sstv_ && listener_ && !marked_ && lines_ < kChartLines) { px_.clear(); ++dropped_; return; }
         const int ch = sstv_ ? 3 : 1;
         const uint32_t h = sstv_ ? (partial ? maxRow_ : h_) : maxRow_;
         px_.resize((size_t)w_ * h * ch, 255);
@@ -317,6 +333,8 @@ private:
     gallery::Meta meta_;
     mutable std::mutex m_;
     bool sstv_ = false, open_ = false, done_ = false;
+    bool listener_ = false, marked_ = false, pendingMark_ = false;   // ★ a listener's tap; this chart had a start tone / phasing
+    size_t dropped_ = 0;
     uint32_t w_ = 0, h_ = 0, lines_ = 0, maxRow_ = 0;
     std::vector<uint8_t> px_;
     std::string mode_;

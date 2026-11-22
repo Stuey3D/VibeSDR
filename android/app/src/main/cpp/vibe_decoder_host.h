@@ -269,6 +269,9 @@ struct DecoderTap {
     /** ★ V12 LRPT: one finished picture of a pass (a standard PNG, full size) — `name` says which ("channel 2 near-IR",
      *  "RGB 221 false colour"); `partial` = the decoder stopped before the pass ended. */
     virtual void picture(const std::string& /*name*/, const std::string& /*png*/, int /*w*/, int /*h*/, bool /*partial*/) {}
+    /** ★ Items this tap has written to the gallery so far (a picture tap counts its pictures; 0 = it does not count) —
+     *  the background WEFAX VFO's hourly log line reads it ("charts saved"). */
+    virtual size_t savedCount() const { return 0; }
 };
 using DecoderTapPtr = std::shared_ptr<DecoderTap>;
 

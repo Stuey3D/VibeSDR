@@ -607,6 +607,40 @@ static void phase2() {
         std::FILE* o = std::fopen((std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/bgdec-wefax.png").c_str(), "wb");
         if (o) { std::fwrite(png.data(), 1, png.size(), o); std::fclose(o); }
     }
+    std::printf("── ★★ a LISTENER's WEFAX: kept only with a start tone / phasing, or 600 lines (Stuart: \"dead wefax false starts\") ──\n");
+    {
+        gallery::Store ls; ls.setDir(tmpDir("lpics"));
+        gallery::Meta lm = m; lm.origin = "live"; lm.profile.clear();
+        auto count = [&](gallery::Store& st) { int n = 0; const std::string l = st.listJson("wefax", 50);
+            for (size_t at = 0; (at = l.find("\"f\":", at)) != std::string::npos; at++) n++; return n; };
+        auto feed = [&](const DecoderTapPtr& t, uint32_t lines) { for (uint32_t i = 0; i < lines; i++) { auto f = wline(i, 1809, (uint8_t)(i * 7)); t->frame(f.data(), f.size()); } };
+        const uint8_t st = 0x02, phasing[2] = { 0x04, 2 }, tone[2] = { 0x04, 1 }, standby[2] = { 0x04, 0 }, image[2] = { 0x04, 3 };
+        auto a = bg::makeGalleryTap(ls, lm);                      // tuned onto noise with WEFAX open, then retuned
+        a->frame(standby, 2); feed(a, 80); a->frame(image, 2); feed(a, 20); a->finish(true);
+        const auto* ga = dynamic_cast<bg::GalleryImageTap*>(a.get());
+        ok(count(ls) == 0 && ga && ga->dropped() == 1, "★ 100 lines of noise, no start tone, no phasing: dropped silently (" + std::to_string(count(ls)) + " kept)");
+        auto b = bg::makeGalleryTap(ls, lm);                      // a start tone, then 120 lines, then the listener left
+        b->frame(&st, 1); feed(b, 120); b->finish(true);
+        ok(count(ls) == 1, "★ a start tone, then 120 lines: kept (partial)");
+        auto c = bg::makeGalleryTap(ls, lm);                      // no start tone caught, but its phasing was
+        c->frame(phasing, 2); feed(c, 90); c->finish(true);
+        auto c2 = bg::makeGalleryTap(ls, lm);                     // …or only its start tone's phase report
+        feed(c2, 10); c2->frame(tone, 2); feed(c2, 70); c2->finish(true);
+        ok(count(ls) == 3, "★ phasing seen (no 0x02), 90 lines — and a start tone seen part-way, 80 lines: both kept");
+        auto d = bg::makeGalleryTap(ls, lm);                      // joined a chart part-way: no start of its own, but long
+        feed(d, 650); d->finish(true);
+        ok(count(ls) == 4, "★ a chart joined part-way: no start tone or phasing, but 650 lines (≥ 600, 5 min at 120 LPM): kept");
+        auto e = bg::makeGalleryTap(ls, lm);                      // 599 lines and no start: still noise by the rule
+        feed(e, 599); e->finish(true);
+        ok(count(ls) == 4, "...and 599 lines with neither: dropped");
+        auto f = bg::makeGalleryTap(ls, lm);                      // a chart with a start, then the next one's start tone
+        f->frame(&st, 1); feed(f, 200); f->frame(&st, 1); feed(f, 60); f->frame(standby, 2); f->finish(true);
+        ok(count(ls) == 6, "★ two charts each after its own start tone: both kept (the second 60 lines, partial)");
+        gallery::Meta bm = m; gallery::Store bs; bs.setDir(tmpDir("bpics"));
+        auto g = bg::makeGalleryTap(bs, bm);                      // background: unchanged — 80 lines with no start are kept
+        feed(g, 80); g->finish(true);
+        ok(count(bs) == 1, "background WEFAX unchanged: 80 lines kept as before (it draws only after a start tone or phasing)");
+    }
     {
         gallery::Meta sm = m; sm.kind = "sstv"; sm.decoder = "sstv"; sm.freqHz = 14230000;
         auto t = bg::makeGalleryTap(s, sm);
