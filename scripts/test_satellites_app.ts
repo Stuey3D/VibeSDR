@@ -80,6 +80,9 @@ ok(satCapFrom({ doppler: 1, dopplerWhy: 'NO SAT DATA — the satellite orbit dat
   ok(!!l && l.sats[0].norad === 101095 && l.sats[0].tx[0].status === 'inactive', 'six digits and a SatNOGS status parsed');
   ok(satCreditText(l, now) === 'Orbits: CelesTrak · 5 h old', `credit: ${satCreditText(l, now)}`);
   ok(satTxCreditText(l) === 'Transmitters: SatNOGS DB (CC BY-SA 4.0)', 'SatNOGS credited where used');
+  ok(satCreditText({ ...l!, source: { ...l!.source!, fetched: now - 26 * 3600 } }, now) === 'Orbits: CelesTrak · 26 h old \u2014 late (normally under 12 h)',
+     `beta91 a synced copy over 12 h old says late: ${satCreditText({ ...l!, source: { ...l!.source!, fetched: now - 26 * 3600 } }, now)}`);
+  ok(!/late/.test(satCreditText({ ...l!, source: { ...l!.source!, fetched: now - 11 * 3600 } }, now)), '…11 h is not late');
   ok(satCreditText({ ...l!, source: { orbits: 'Orbits: CelesTrak', via: 'built-in', newestEpoch: now - 3 * 86400 } }, now) === 'Orbits: CelesTrak · 3 days old', 'the built-in list: the newest epoch\'s age');
   ok(satCreditText({ ...l!, source: undefined }, now) === '' && satTxCreditText(null) === '', 'nothing to credit = nothing shown');
   const r6 = parseSatReadout({ type: 'sat', state: 'ARMED', norad: 123456789, name: 'Nine', time: 'ok' });

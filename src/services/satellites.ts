@@ -267,6 +267,8 @@ export function skySvg(track: SatTrack | null, now?: { az?: number; el?: number 
 
 /** ★ The picker's credit line (CelesTrak's data is theirs — say so, with its age): "Orbits: CelesTrak · 5 h old".
  *  The age is from the mirror's CelesTrak fetch, else the newest element set's epoch. '' = nothing to credit yet. */
+/** A synced orbit copy older than this is LATE (the mirror's 6-hourly round + a server's 6-h re-ask). */
+export const SAT_LATE_H = 12;
 export function satCreditText(l: SatList | null, nowSec: number): string {
   if (!l?.source?.orbits) return '';
   const short = /CelesTrak/i.test(l.source.orbits) ? 'Orbits: CelesTrak' : l.source.orbits;
@@ -274,7 +276,11 @@ export function satCreditText(l: SatList | null, nowSec: number): string {
   if (at == null || !(at > 0)) return short;
   const h = Math.max(0, (nowSec - at) / 3600);
   const age = h < 1 ? 'under an hour old' : h < 48 ? `${Math.round(h)} h old` : `${Math.round(h / 24)} days old`;
-  return `${short} · ${age}`;
+  /* ★ beta91 LATE, said (Stuart 11-22: "it says the orbits are 26h old"): the mirror refreshes every 6 h and a server
+   *  asks again within 6 h once its copy passes 12 h, so a synced copy over 12 h old is late — say so, not only the age.
+   *  Only for a synced copy (`fetched`): the built-in list is old by nature and says its age alone. */
+  const late = l.source.fetched != null && h >= SAT_LATE_H ? ' \u2014 late (normally under 12 h)' : '';
+  return `${short} · ${age}${late}`;
 }
 /** The SatNOGS credit, only when the transmitter data used it (CC BY-SA 4.0 asks for attribution). */
 export function satTxCreditText(l: SatList | null): string {
