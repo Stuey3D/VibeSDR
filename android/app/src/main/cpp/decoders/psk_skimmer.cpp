@@ -254,6 +254,7 @@ constexpr float kCharDbLive = 1.0f;     // …and to be shown, once the signal i
 constexpr float kCharDbHeld = 2.0f;     // …and what was held while it was tentative (its loops were still settling)
 constexpr float kKeepDb = 2.0f;         // the long (≈ 1 s) EVM average below which, for kLostSec, a signal has gone
 constexpr double kLostSec = 6.0;
+constexpr double kGoneSec = 1.5;        // ★ beta91: a tentative carrier with nothing over the floor this long has gone
 constexpr double kProbeSec = 12.0;      // a tentative carrier that has not confirmed in this long is dropped
 constexpr float kQuadQpsk = 0.15f;      // ★ beta91: a QPSK lane needs at least this share of ±90 shifts (QPSK text ≈ ½)
 constexpr float kBpskOnQpskDb = 3.0f;   //   …its BPSK sibling's Es/N0 under this (half of QPSK is on BPSK's error axis)
@@ -452,6 +453,7 @@ struct Sig {
     Lane lane[kMaxLanes];
     int lead = 0;             // the lane that steers the AFC and whose text is shown
     double bornSec = 0, lastGoodSec = 0, confirmedSec = 0, bornHz = 0;
+    double heardSec = 0;      // ★ beta91: the last hop its carrier stood over the floor (housekeeping: a tentative that went)
     double t0 = -1;           // ★ input time (s) of this channel's first output sample
     bool ghost = false;
     bool catchup = true;      // ★ run over the kept transforms before its first live hop
@@ -581,6 +583,7 @@ struct Skimmer::Impl {
         const float aF = std::max(0.15f, 1.0f / (float)hopsDone), aS = std::max(0.03f, 1.0f / (float)hopsDone);
         binPass(xs.data(), Fa.data(), Sa.data(), nS, aF, aS);
         updateFloor();
+        markHeard();
         if (hopsDone >= 10) findCarriers();
         // ★★ A NEW CHANNEL STARTS IN THE PAST: the last kHist transforms are kept, and a channel opened this hop is run
         //    over them first — ≈ 1 s of the signal that the carrier finder's own average took to notice (a PSK63 CQ
@@ -634,6 +637,32 @@ struct Skimmer::Impl {
     }
 
     double hzOfS(double s) const { return (kLo + s) * binHz; }
+
+    /** ★ beta91: each tentative channel whose carrier still stands over the floor THIS HOP is marked heard: the
+     *  windowed power of this transform alone over ±6 bins (≈ ±18 Hz) at least 3 dB over the floor there. Not the
+     *  carrier finder's 1 s average — a strong signal's took ≈ 5 s to fall back after its over ended (+17 dB in the
+     *  test clip), and the channel was held off before it noticed. One hop is noisy, but ≈ 26 degrees of freedom put
+     *  noise 3.6 σ under the bar, and a weak PSK31 (−12 dB in 2.5 kHz) stands ≈ 6 dB over it. */
+    void markHeard() {
+        const double now = nowSec();
+        for (auto& gp : sigs) {
+            Sig& g = *gp;
+            if (g.confirmed) continue;
+            const int c = (int)std::lround(g.fc / binHz) - kLo;
+            if (c - 6 < 0 || c + 6 >= nS) { g.heardSec = now; continue; }
+            double sum = 0, fl = 0;
+            for (int i = -6; i <= 6; ++i) {
+                const float* x = xs.data() + 2 * (size_t)(c + i);   // ★ xs[s+1] is searched bin s (binPass's layout)
+                const float re = 0.5f * x[2] - 0.25f * (x[0] + x[4]), im = 0.5f * x[3] - 0.25f * (x[1] + x[5]);
+                sum += re * re + im * im; fl += floorV[(size_t)(c + i)];
+            }
+            const double ex = sum / std::max(1e-30, fl) - 1.0;
+            if (ex >= 1.0) g.heardSec = now;
+#ifdef PSK_DEBUG
+            if (std::getenv("PSK_HEARD")) std::fprintf(stderr, "  heard? [%.2f] %.1f Hz excess %.2f\n", now, g.fc, ex);
+#endif
+        }
+    }
 
     void findCarriers() {
         if ((int)sigs.size() >= cfg.maxSignals) return;
@@ -691,7 +720,7 @@ struct Skimmer::Impl {
         if (cfg.qpsk31) g->lane[g->nLanes++].init(31.25, fsCh, true);
         if (cfg.qpsk63) g->lane[g->nLanes++].init(62.5, fsCh, true);
         for (int i = 0; i < g->nLanes; ++i) { g->lane[i].yr.assign(kOut, 0); g->lane[i].yi.assign(kOut, 0); }
-        g->bornSec = nowSec(); g->lastGoodSec = g->bornSec;
+        g->bornSec = nowSec(); g->lastGoodSec = g->bornSec; g->heardSec = g->bornSec;
         // ★ Phi: the LO phase at this channel's first output of the NEXT hop — see runChannel.
         g->Phi = 0;
 #ifdef PSK_DEBUG
@@ -1333,7 +1362,15 @@ struct Skimmer::Impl {
         for (size_t i = 0; i < sigs.size(); ) {
             Sig& g = *sigs[i];
             bool drop = false;
-            if (!g.confirmed && (g.ghost || now - g.bornSec > kProbeSec)) { drop = true; ++dropped; holdOff.push_back({ g.fc, now + 20.0 }); }
+            /* ★★★ beta91: A TENTATIVE WHOSE CARRIER HAS GONE goes at once, and is NOT held off. The hold-off is for a carrier
+             *  that stays and will not decode (a birdie, RTTY, a data signal); a station joined part-way through an over —
+             *  too little of it heard to confirm — that then stops is neither. Held off, its NEXT over (a CQ every 15 s)
+             *  started inside the 12 s probe + 20 s hold-off and was missed too: joined 1.5–6.5 s into the 20 m clip's
+             *  15 s loop, the PSK31 CQ was first spotted after 45–110 s or never (test-server-spots' one-pipeline Band
+             *  missed G4PSK ~1 run in 5 on exactly this — BAND-SKIM-CW-RTTY.md). Gone = nothing over the floor at its
+             *  frequency for kGoneSec; its next over opens a fresh channel, run over the kept transforms from its start. */
+            if (!g.confirmed && !g.ghost && now - g.heardSec > kGoneSec && now - g.bornSec > kGoneSec) { drop = true; ++dropped; }
+            else if (!g.confirmed && (g.ghost || now - g.bornSec > kProbeSec)) { drop = true; ++dropped; holdOff.push_back({ g.fc, now + 20.0 }); }
             if (g.confirmed && now - g.lastGoodSec > kLostSec) drop = true;
             // ★ two channels that AFC'd onto one carrier: the confirmed one stays, else the older, else the first; the
             //   one that goes holds its birthplace off (a strong signal's spectral shoulders would make it again)
