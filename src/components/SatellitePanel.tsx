@@ -27,7 +27,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { scrollLane } from '../constants/popupTokens';
-import { GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
+import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -99,12 +99,13 @@ function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, r
   const sc = GLOBE_W / Math.max(60, wPx);
   const font = 10 * sc;
   const L = globeLabels(g, rxName, sat?.name, font);
+  const arrowD = g.arrows.length ? globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc) : '';
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
     <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}
           onLayout={(e) => { const w = e.nativeEvent.layout.width; if (w > 0 && Math.abs(w - wPx) > 1) setWPx(w); }}>
     <Svg width="100%" height="100%" viewBox={`0 0 ${GLOBE_W} ${GLOBE_H}`}
-         accessibilityLabel="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted">
+         accessibilityLabel="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted with arrows for its direction">
       <Path d={dome} fill={ink} fillOpacity={0.12} stroke={ink} strokeOpacity={0.55} strokeWidth={2} />
       {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.12} strokeWidth={1} />}
       {!!g.coast && <Path d={g.coast} fill="none" stroke={ink} strokeOpacity={0.55} strokeWidth={1} />}
@@ -113,6 +114,11 @@ function HalfGlobe({ rx, sat, ink, beam, ground, small = false, orbit, tcaIdx, r
       {!!g.orbit && <Path d={g.orbit} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round"
                           strokeDasharray={`${(1.5 * sc).toFixed(1)} ${(4 * sc).toFixed(1)}`} />}
       {!!g.tcaTick && <Path d={g.tcaTick} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round" />}
+      {/* ★ beta91 which way it travels: open chevrons along increasing time, haloed in the ground so they read over the land */}
+      {g.arrows.length > 0 && <>
+        <Path d={arrowD} fill="none" stroke={ground} strokeOpacity={0.8} strokeWidth={3.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
+        <Path d={arrowD} fill="none" stroke={beam} strokeWidth={1.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
+      </>}
       {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={GLOBE_RX_DOT.r * sc} fill={GLOBE_RX_DOT.fill} stroke={GLOBE_RX_DOT.ring} strokeWidth={GLOBE_RX_DOT.ringW * sc} />}
       {!!g.bird && <>
         <Path d={g.bird.panels} fill={beam} fillOpacity={0.45} stroke={beam} strokeWidth={1.2 * sc} strokeLinejoin="round" />
@@ -223,6 +229,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const selRow = sat ? rows.find((r) => r.sat.norad === sat.norad) : undefined;
   const headLine = minimised && sat ? (selRow ? `${sat.name} · ${satWhenText(selRow, now)}` : sat.name) : '';
   const stateLine = [confirmed ? lockWord : '', decWord].filter(Boolean).join(' · ');
+  // ★ beta91 "In range for 4:12 · heading south" — from the pick's track (time order), only where certain
+  const countdown = satCountdownText(sat, now, confirmed ? p.orbit : null);
 
   return (
     <DecoderShell bottom={p.bottomOffset} maxWidth={SAT_MAX_W}>
@@ -250,11 +258,11 @@ export default function SatellitePanel(p: SatellitePanelProps) {
           {!!sel && !!sat && !!tx && (
             <View style={s.box}>
               <View style={[big ? s.ro : s.roSmall, mine?.state === 'COAST' && s.coast]}
-                    accessibilityLabel={`${sat.name} ${tx.label}, ${satHzText(satCorrectedHz(tx, mine))}, ${satCountdownText(sat, now)}`}>
+                    accessibilityLabel={`${sat.name} ${tx.label}, ${satHzText(satCorrectedHz(tx, mine))}, ${countdown}`}>
                 <View style={s.txtCol}>
                   <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}${satTxModeLabel(tx) ? ' · ' + satTxModeLabel(tx) : ''}`}</Text>
                   <Text style={s.big}>{satHzText(satCorrectedHz(tx, mine))}</Text>
-                  <Text style={s.txt}>{satCountdownText(sat, now)}</Text>
+                  <Text style={s.txt}>{countdown}</Text>
                   {!!stateLine && <Text style={s.detail}>{stateLine}</Text>}
                 </View>
                 {!!p.rxPos && (

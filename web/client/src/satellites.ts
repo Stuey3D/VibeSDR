@@ -19,7 +19,7 @@
  *     {"op":"doppler"}; leaving the mode (EXIT, the key again, another whole-radio mode) sends {"op":"drop"}.
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import {
-  GLOBE_KEY_TEXT, GLOBE_RX_DOT, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
+  GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
   satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
@@ -237,7 +237,7 @@ export class SatPanel {
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
       +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div>`
       +   `<div class="sat-cd" data-s="cd"></div><div class="sat-dim" data-s="state"></div></div>`
-      +   `<div><canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted"></canvas>`
+      +   `<div><canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted with arrows for its direction"></canvas>`
       +   `<div class="sat-key sat-dim" data-s="key" hidden></div></div></div>`
       + `<div class="sat-img" data-s="img" hidden></div><div class="sat-pk" data-s="pk" hidden></div><div class="sat-tlm" data-s="tlm" hidden></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
@@ -502,7 +502,7 @@ export class SatPanel {
     const ml = satTxModeLabel(t);
     this.sName.textContent = `${sat.name} · ${t.label}${ml ? ' · ' + ml : ''}`;
     this.sHz.textContent = satHzText(satCorrectedHz(t, mine));
-    this.sCd.textContent = satCountdownText(sat, now);
+    this.sCd.textContent = satCountdownText(sat, now, this.track && this.track.norad === sat.norad ? this.track.geo : null);
     const use = txUse(t);
     const lockWord = !this.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
     const decWord = this.decLine || (this.picked?.decoder === 'fctlm' ? 'listening for telemetry' : use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : t.sstv ? 'listening — an SSTV picture opens here' : '');
@@ -664,6 +664,13 @@ export class SatPanel {
       ctx.globalAlpha = 0.85; ctx.strokeStyle = amber; ctx.lineWidth = 1.5 * sc; ctx.lineCap = 'round';
       ctx.setLineDash([1.5 * sc, 4 * sc]); ctx.stroke(new Path2D(g.orbit)); ctx.setLineDash([]);
       if (g.tcaTick) { ctx.lineWidth = 1.5 * sc; ctx.stroke(new Path2D(g.tcaTick)); }
+      // ★ beta91 which way it travels: open chevrons along increasing time, haloed in the ground so they read over the land
+      if (g.arrows.length) {
+        const ar = new Path2D(globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc));
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = 0.8; ctx.strokeStyle = ground; ctx.lineWidth = 3.6 * sc; ctx.stroke(ar);
+        ctx.globalAlpha = 1; ctx.strokeStyle = amber; ctx.lineWidth = 1.6 * sc; ctx.stroke(ar);
+      }
     }
     ctx.globalAlpha = 1;
     // ★ the receiver: green with a dark ring on every faceplate (never the dome's ink)

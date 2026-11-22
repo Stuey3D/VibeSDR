@@ -170,6 +170,9 @@ try {
   await ev(`window.__p.onTrack(__Sat.parseSatTrack(${JSON.stringify({ type: 'sat_track', norad: 25544, aos: now - 200, los: now + 372, pts: [], geo })})); true`);
   const ink2 = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; })()`);
   ok(ink2 > ink + 150, `1.7 the dotted orbit is inked (${ink} → ${ink2} px)`);
+  // ★ beta91 the direction: the path runs north → south in time, the bird (47 N, 9 W) is on it — the countdown says so
+  const cdH = await ev(`document.querySelector('#satPanel [data-s="cd"]').textContent`);
+  ok(/^In range for 6:\d\d · heading south$/.test(cdH), `beta91 the countdown says which way: ${cdH}`);
   // ★ 1.8 the receiver's dot is GREEN (#5BE36B) somewhere on the canvas
   const green = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i+3] > 200 && Math.abs(d[i]-0x5B) < 12 && Math.abs(d[i+1]-0xE3) < 12 && Math.abs(d[i+2]-0x6B) < 12) n++; return n; })()`);
   ok(green > 60, `1.8 the receiver's dot is green (${green} px of #5BE36B)`);
@@ -197,6 +200,8 @@ try {
   ok(big.big && big.img && big.lent, 'a picture starts → BIG, the decoder image canvas lent into it');
   ok(big.w > 600 && big.ih > 150, `bigger: ${Math.round(big.w)} px wide, picture ${Math.round(big.ih)} px tall`);
   ok(/shaded: where it can be heard/.test(await ev(`document.querySelector('#satPanel [data-s="key"]').textContent`)) && await ev(`!document.querySelector('#satPanel [data-s="key"]').hidden`), '1.8 BIG: the one-line key under the globe');
+  await ev(`window.__p.onTrack(__Sat.parseSatTrack(${JSON.stringify({ type: 'sat_track', norad: 57166, aos: now - 300, los: now + 595, pts: [], geo })})); true`);
+  ok(/dotted: this pass.s orbit · arrows: its direction · shaded/.test(await ev(`document.querySelector('#satPanel [data-s="key"]').textContent`)), 'beta91 BIG with an orbit: the key names the arrows');
   ok(/120 lines/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'the LRPT line in the box');
   await shot('big-desktop');
   await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);

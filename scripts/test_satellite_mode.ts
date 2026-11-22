@@ -11,7 +11,7 @@ import {
   SAT_DROP_MSG, txUse, type SatTx,
   satBandLetter, satTxModeLabel, satTxDetail, satRemindOffered, satRemindKeyText, satRemindLead, SatReminders, SAT_REMIND_MAX, satRemindText,
   satRemindWhy, SAT_REMIND_SHARED_WHY, satRemindEnds, parseSatTelemetry, satTelemetryLine, satTelemetryHead, parseSatTrack, globeLabels,
-  globeLabelText, GLOBE_RX_DOT, GLOBE_KEY_TEXT, satMapOffered, satViaText, satTelemetryMerge, satTelemetryHex, satMapOverlay,
+  globeLabelText, GLOBE_RX_DOT, GLOBE_KEY_TEXT, globeArrowPath, GLOBE_ARROW_PX, satHeadingText, satMapOffered, satViaText, satTelemetryMerge, satTelemetryHex, satMapOverlay,
 } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -329,6 +329,66 @@ console.log('— 1.8 the drawn bird');
   ok(GLOBE_RX_DOT.fill === '#5BE36B' && GLOBE_RX_DOT.r === 5 && GLOBE_RX_DOT.ringW === 1.5, 'the receiver dot: green #5BE36B, r 5, 1.5 px dark ring');
 }
 
+console.log('— beta91 the orbit\'s direction (arrows)');
+{
+  const rx = { lat: 52.2, lon: -0.9 };
+  // a descending (north → south) pass over the receiver, in time order, as the server sends it (geo[0] = AOS − 10 min)
+  const south: [number, number, number][] = []; for (let k = 0; k <= 80; k++) south.push([75 - k * 0.6, 10 - k * 0.15, 820]);
+  const north = [...south].reverse();
+  const screen = (p: [number, number, number]) => globeScene(640, 300, rx, { lat: p[0], lon: p[1], altKm: p[2] }).sat;
+  // does arrow `a` point the way increasing time goes? (the screen step from its geo point to the next)
+  const along = (path: [number, number, number][], a: { i: number; ux: number; uy: number }) => {
+    const j = Math.floor(a.i), p = screen(path[j]), q = screen(path[Math.min(path.length - 1, j + 1)]);
+    if (!p || !q) return false;
+    const hx = q.x - p.x, hy = q.y - p.y; return (a.ux * hx + a.uy * hy) / Math.hypot(hx, hy) > 0.99;
+  };
+  const gs = globeScene(640, 300, rx, null, south), gn = globeScene(640, 300, rx, null, north);
+  ok(gs.arrows.length >= 2 && gs.arrows.length <= 3, `chevrons spread along the visible orbit (${gs.arrows.length})`);
+  ok(gs.arrows.every((a) => along(south, a)) && gn.arrows.every((a) => along(north, a)), 'every chevron points along increasing time');
+  ok(gs.arrows.every((a) => a.uy > 0.5) && gn.arrows.every((a) => a.uy < -0.5), 'a southbound pass points DOWN the dome (towards the receiver\'s south), a northbound one UP');
+  ok(gs.arrows.every((a, k) => k === 0 || a.i > gs.arrows[k - 1].i), 'in time order along the path');
+  // the bird mid-pass: one chevron just ahead of it, clear of its panels, and forward in time
+  const mid = south[50];
+  const gb = globeScene(640, 300, rx, { lat: mid[0], lon: mid[1], altKm: mid[2] }, south);
+  const ah = gb.arrows.find((a) => a.ahead);
+  const dB = ah && gb.sat ? Math.hypot(ah.x - gb.sat.x, ah.y - gb.sat.y) : 0;
+  ok(!!ah && ah.i > 50 && along(south, ah), `one chevron just AHEAD of the bird (geo ${ah ? ah.i.toFixed(1) : '?'} > 50)`);
+  ok(!!gb.bird && dB > gb.bird.reach && dB < gb.bird.reach + gb.r * 0.12, `…clear of its panels but close (${dB.toFixed(0)} px, reach ${gb.bird ? gb.bird.reach.toFixed(0) : '?'})`);
+  ok(gb.arrows.filter((a) => !a.ahead).every((a) => Math.hypot(a.x - gb.sat!.x, a.y - gb.sat!.y) > gb.bird!.reach), 'no chevron under the bird');
+  const gbN = globeScene(640, 300, rx, { lat: mid[0], lon: mid[1], altKm: mid[2] }, north);
+  const ahN = gbN.arrows.find((a) => a.ahead);
+  ok(!!ahN && ahN.uy < 0 && ah!.uy > 0, 'the same place, the other way round → the ahead chevron flips');
+  ok(gb.arrows.filter((a) => a.ahead).length === 1, 'only one ahead chevron');
+  // the bird near the top of the visible line, heading off it: no room ahead, still a chevron somewhere clear of it
+  const top = globeScene(640, 300, rx, { lat: south[40][0], lon: south[40][1], altKm: 820 }, north);
+  ok(top.arrows.length >= 1 && top.arrows.every((a) => along(north, a) && Math.hypot(a.x - top.sat!.x, a.y - top.sat!.y) > top.bird!.reach), `the way is shown even when the bird hides the middle (${top.arrows.length})`);
+  // the end of the visible pass: no ahead chevron past the edge
+  const last = south[80];
+  const ge = globeScene(640, 300, rx, { lat: last[0], lon: last[1], altKm: last[2] }, south);
+  ok(!ge.arrows.some((a) => a.ahead), 'the bird at the end of its path → no ahead chevron');
+  // an older server (no geo) / the far side: none
+  ok(globeScene(640, 300, rx, { lat: 50, lon: 0, altKm: 420 }).arrows.length === 0 && globeScene(640, 300, rx, null, null).arrows.length === 0, 'an older server\'s reply without geo → no arrows');
+  const far: [number, number, number][] = []; for (let k = 0; k < 40; k++) far.push([-50 + k, 170, 420]);
+  ok(globeScene(640, 300, rx, null, far).arrows.length === 0, 'the far side of the world → no arrows');
+  const parsedOld = parseSatTrack({ type: 'sat_track', norad: 1, aos: 1, los: 2, pts: [] })!;
+  ok(globeScene(640, 300, rx, { lat: 50, lon: 0, altKm: 420 }, parsedOld.geo).arrows.length === 0, 'a parsed old track reply → no arrows');
+  // the path: open chevrons (M/L, no Z — stroked, never filled like the beam), tip ahead of the point
+  const d = globeArrowPath(gs.arrows, GLOBE_ARROW_PX * 4);
+  ok(/^[ML0-9 .\-]+$/.test(d) && !d.includes('Z') && (d.match(/M/g) || []).length === gs.arrows.length, 'globeArrowPath: one open M/L chevron per arrow');
+  const one = globeArrowPath([{ x: 100, y: 100, ux: 0, uy: 1, i: 0 }], 10);
+  ok(one === 'M94.0 95.0L100.0 105.0L106.0 95.0', `a downward chevron's tip is below its wings (${one})`);
+  ok(globeArrowPath([], 10) === '', 'no arrows → no path');
+  // the words
+  ok(satHeadingText(south, mid[0], mid[1]) === 'heading south' && satHeadingText(north, mid[0], mid[1]) === 'heading north', 'heading south / north from the latitude change');
+  ok(satHeadingText(null, 50, 0) === '' && satHeadingText(south, -40, 120) === '', 'no path, or the bird far from it → no words');
+  const turn: [number, number, number][] = []; for (let k = 0; k <= 40; k++) turn.push([81 - Math.abs(k - 20) * 0.01, -40 + k * 4, 820]);
+  ok(satHeadingText(turn, 81, 40) === '', 'at the top of the orbit (the turn) → not said');
+  const upSat = { ...raw.sats[0], lat: mid[0], lon: mid[1] } as any;
+  const parsed = parseSatList({ ...raw, sats: [upSat] })!.sats[0];
+  ok(/^In range for 9:55 · heading south$/.test(satCountdownText(parsed, now, south)), `the countdown says it (${satCountdownText(parsed, now, south)})`);
+  ok(satCountdownText(parsed, now) === 'In range for 9:55' && satCountdownText(parsed, now, null) === 'In range for 9:55', 'no track → the countdown as before');
+}
+
 console.log('— 1.8 labels');
 {
   const rx = { lat: 52.2, lon: -0.9 };
@@ -347,7 +407,8 @@ console.log('— 1.8 labels');
   ok(!!Ln.sat && Ln.sat.y < gn.sat!.y, 'a bird near the dot → its label above it');
   const an = box(Ln.rx!, 22), cn = box(Ln.sat!, 22);
   ok(!(an.l < cn.r && cn.l < an.r && an.t < cn.b && cn.t < an.b), '…and the receiver\'s label stays clear of it');
-  ok(/dotted: this pass.s orbit · shaded: where it can be heard/.test(GLOBE_KEY_TEXT), 'BIG\'s one-line key');
+  ok(/dotted: this pass.s orbit · arrows: its direction · shaded: where it can be heard/.test(GLOBE_KEY_TEXT), 'BIG\'s one-line key (arrows: its direction)');
+  ok(GLOBE_KEY_TEXT.replace(/^.*· /, '') === 'shaded: where it can be heard', 'no orbit → the key keeps only the shaded half');
 }
 
 console.log('— 1.9 the MAP key');

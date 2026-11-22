@@ -368,10 +368,14 @@ export function satWhenText(r: Pick<SatRow, 'up' | 'left' | 'next'>, nowSec: num
   return 'No pass in the next day';
 }
 /** The compact box's countdown: "In range for 9:55" while up, else "Next pass in 0:38 · AOS 16:42 · max 56°". */
-export function satCountdownText(sat: SatInfo | undefined, nowSec: number): string {
+/** `geo` (beta91, the pick's track path, time order) adds "· heading north / south" while the bird is up, where certain. */
+export function satCountdownText(sat: SatInfo | undefined, nowSec: number, geo?: GeoPt[] | null): string {
   if (!sat) return '';
   const row = satModeRows({ time: 'ok', located: true, now: nowSec, sats: [{ ...sat, tx: [{ label: '-', hz: 1, mode: 'nfm', loop: 'none', reach: true }] }] }, nowSec)[0];
-  if (row.up) return row.left != null ? `In range for ${mss(row.left)}` : 'In range now';
+  if (row.up) {
+    const hd = satHeadingText(geo, sat.lat, sat.lon);
+    return (row.left != null ? `In range for ${mss(row.left)}` : 'In range now') + (hd ? ` · ${hd}` : '');
+  }
   if (row.next) return `Next pass in ${hmIn(row.next.aos, nowSec)} · AOS ${hhmm(row.next.aos)} · max ${Math.round(row.next.maxEl)}°`;
   return 'No pass in the next day';
 }
@@ -489,8 +493,42 @@ export interface GlobeScene {
   /** ★ 1.7: the highest point of the pass (closest to the receiver) and its small tick; null = not on the visible side */
   tca: { x: number; y: number } | null;
   tcaTick: string;
+  /** ★ beta91: WHICH WAY the bird travels (Stuart 11-22: "i only caught it halfway through i dont know if its going over the
+   *  north pole or going down over europe/africa") — chevrons on the visible orbit pointing along increasing time (geo[0]
+   *  is the earliest: the server samples AOS − 10 min → LOS + 10 min). [] = no path (an older server) or none visible. The
+   *  renderers draw them with globeArrowPath at a size on SCREEN. */
+  arrows: GlobeArrow[];
   /** ★ 1.8: the bird's drawing (null = no bird to draw) */
   bird: GlobeBird | null;
+}
+/** ★ beta91: one direction chevron — at (x, y) in scene px, pointing along the unit vector (ux, uy); `i` = where on the
+ *  path it sits as a fractional geo index (so a later arrow has a larger i); `ahead` = the one just in front of the bird. */
+export interface GlobeArrow { x: number; y: number; ux: number; uy: number; i: number; ahead?: boolean }
+/** ★ beta91: the chevrons as one open M/L path (stroked, never filled — a filled shape would read as the beam); `size` =
+ *  the chevron's length in scene units (the renderers pass a few CSS px × their scale). */
+/** the chevron's length in CSS px / points (× the renderer's scene-per-pixel scale) */
+export const GLOBE_ARROW_PX = 7;
+export function globeArrowPath(arrows: GlobeArrow[], size: number): string {
+  let d = '';
+  for (const a of arrows) {
+    const px = -a.uy, py = a.ux, h = size / 2;
+    const tx = a.x + a.ux * h, ty = a.y + a.uy * h, bx = a.x - a.ux * h, by = a.y - a.uy * h;
+    d += `M${f1(bx + px * size * 0.6)} ${f1(by + py * size * 0.6)}L${f1(tx)} ${f1(ty)}L${f1(bx - px * size * 0.6)} ${f1(by - py * size * 0.6)}`;
+  }
+  return d;
+}
+/** ★ beta91: "heading north" / "heading south" — from the sign of the sub-satellite latitude's change at the geo point
+ *  nearest the bird now (geo in time order). '' where it is not certain: no path, the bird not near it (> 5°), or near the
+ *  turn at the top / bottom of the orbit (< 0.3° change across the neighbouring points). */
+export function satHeadingText(geo: GeoPt[] | null | undefined, lat: number | undefined, lon: number | undefined): string {
+  if (!geo || lat == null || lon == null) return '';
+  let near = -1, nA = Infinity;
+  geo.forEach((p, i) => { if (!p) return; const a = gcAngle(p[0], p[1], lat, lon); if (a < nA) { nA = a; near = i; } });
+  if (near < 0 || nA > 5 * DEG) return '';
+  const a = geo[near - 1] ?? geo[near], b = geo[near + 1] ?? geo[near];
+  if (!a || !b || a === b) return '';
+  const dl = b[0] - a[0];
+  return Math.abs(dl) < 0.3 ? '' : dl > 0 ? 'heading north' : 'heading south';
 }
 /** How far above the globe a height is drawn (× the radius): exaggerated so 400 km is not a hair above the ground. */
 export function globeLift(altKm: number | undefined): number {
@@ -630,7 +668,63 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
       }
     }
   }
-  return { w, h, cx, cy, r, grid, coast, rx: rxPt, sat: satPt, beam, foot, orbit, tca, tcaTick, bird };
+  const arrows = geo ? globeArrows(gp, r, satPt, bird ? bird.reach : 0, tca) : [];
+  return { w, h, cx, cy, r, grid, coast, rx: rxPt, sat: satPt, beam, foot, orbit, tca, tcaTick, arrows, bird };
+}
+
+/** ★ beta91: where the direction chevrons go on the visible orbit `gp` (screen points in time order; null / !vis = pen up):
+ *  one just ahead of the bird (clear of its panels), and 1–3 spread along the visible line — kept off the bird, the
+ *  ahead-chevron and the highest point's tick, so nothing is drawn on top of another mark. */
+function globeArrows(gp: Array<{ x: number; y: number; vis: boolean } | null>, r: number, sat: { x: number; y: number } | null,
+                     reach: number, tca: { x: number; y: number } | null): GlobeArrow[] {
+  const segs: Array<{ i: number; a: { x: number; y: number }; b: { x: number; y: number }; len: number; at: number }> = [];
+  let T = 0;
+  for (let i = 0; i + 1 < gp.length; i++) {
+    const a = gp[i], b = gp[i + 1];
+    if (!a || !b || !a.vis || !b.vis) continue;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-6) continue;
+    segs.push({ i, a, b, len, at: T }); T += len;
+  }
+  if (!segs.length || T < r * 0.15) return [];
+  const mk = (sg: typeof segs[number], t: number, ahead?: boolean): GlobeArrow => {
+    const ux = (sg.b.x - sg.a.x) / sg.len, uy = (sg.b.y - sg.a.y) / sg.len;
+    return { x: sg.a.x + (sg.b.x - sg.a.x) * t, y: sg.a.y + (sg.b.y - sg.a.y) * t, ux, uy, i: sg.i + t, ...(ahead ? { ahead: true } : {}) };
+  };
+  const out: GlobeArrow[] = [];
+  const clearOfBird = reach + r * 0.05;
+  if (sat) {
+    // the segment the bird is on (its nearest), then forward to the first point a bird's reach away
+    let s0 = -1, best = Infinity, t0 = 0;
+    segs.forEach((sg, k) => {
+      const vx = sg.b.x - sg.a.x, vy = sg.b.y - sg.a.y, t = Math.max(0, Math.min(1, ((sat.x - sg.a.x) * vx + (sat.y - sg.a.y) * vy) / (sg.len * sg.len)));
+      const d = Math.hypot(sg.a.x + vx * t - sat.x, sg.a.y + vy * t - sat.y);
+      if (d < best) { best = d; s0 = k; t0 = t; }
+    });
+    if (s0 >= 0 && best < r * 0.1) {
+      const far = (sg: typeof segs[number], t: number) => Math.hypot(sg.a.x + (sg.b.x - sg.a.x) * t - sat.x, sg.a.y + (sg.b.y - sg.a.y) * t - sat.y);
+      for (let k = s0; k < segs.length; k++) {
+        const sg = segs[k];
+        if (k > s0 && segs[k - 1].i + 1 !== sg.i) break;   // ★ the pen lifted (behind the globe / below the cut): none past it
+        const tS = k === s0 ? t0 : 0;   // ★ on the bird's own segment, start AT the bird (never behind it)
+        if (far(sg, 1) < clearOfBird) continue;
+        let lo = tS, hi = 1;
+        if (far(sg, tS) >= clearOfBird) hi = tS;
+        else for (let it = 0; it < 16; it++) { const m = (lo + hi) / 2; if (far(sg, m) < clearOfBird) lo = m; else hi = m; }
+        out.push(mk(sg, hi, true));
+        break;
+      }
+    }
+  }
+  const at = (L: number) => { const sg = segs.find((q) => L <= q.at + q.len) ?? segs[segs.length - 1]; return mk(sg, Math.max(0, Math.min(1, (L - sg.at) / sg.len))); };
+  const fits = (a: GlobeArrow) => !(sat && Math.hypot(a.x - sat.x, a.y - sat.y) < clearOfBird)
+    && !(tca && Math.hypot(a.x - tca.x, a.y - tca.y) < r * 0.06) && !out.some((o) => Math.hypot(a.x - o.x, a.y - o.y) < r * 0.2);
+  const n = Math.max(1, Math.min(3, Math.round(T / (r * 0.25))));
+  for (let k = 0; k < n; k++) { const a = at((T * (k + 0.5)) / n); if (fits(a)) out.push(a); }
+  // ★ every mark was under the bird (it sits mid-line): one more where the line is clear of it, so the way is always shown
+  if (!out.length) for (let k = 1; k < 24; k++) { const a = at((T * k) / 24); if (fits(a)) { out.push(a); break; } }
+  out.sort((a, b) => a.i - b.i);
+  return out;
 }
 
 /* ★★ SATELLITE-BEST 1.8 — LABELS (Stuart 11-21: "it took me a second or so to realise what the dots and lines were when i
@@ -641,7 +735,7 @@ export interface GlobeLabel { x: number; y: number; anchor: 'start' | 'middle' |
 /** ★ The receiver dot's look on every faceplate (Stuart 11-21: "make the receiver marker green or a different contrasting
  *  colour") — the health pill's / the TRACK dot's green, never the dome's ink; r and ring in CSS px (renderers scale). */
 export const GLOBE_RX_DOT = { fill: '#5BE36B', ring: 'rgba(0,0,0,0.85)', r: 5, ringW: 1.5 } as const;
-export const GLOBE_KEY_TEXT = 'dotted: this pass’s orbit · shaded: where it can be heard';
+export const GLOBE_KEY_TEXT = 'dotted: this pass’s orbit · arrows: its direction · shaded: where it can be heard';
 export function globeLabelText(s: string | undefined, max = 18): string {
   const t = (s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
   return t.length > max ? t.slice(0, max - 1) + '…' : t;
