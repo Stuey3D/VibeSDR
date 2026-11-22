@@ -1784,8 +1784,8 @@ if(KIND==='digi'||KIND==='cw'){
   function upsert(s){
     if(!passes(s))return;
     var k=key(s);
-    if(markers[k]){markers[k].setStyle(style(s)).setLatLng([s.lat,s.lon]);markers[k].setPopupContent(popup(s));}
-    else{markers[k]=L.circleMarker([s.lat,s.lon],style(s)).bindPopup(popup(s),{maxWidth:200}).addTo(map);}
+    if(markers[k]){markers[k].setStyle(style(s)).setLatLng([s.plat,s.plon]);markers[k].setPopupContent(popup(s));}
+    else{markers[k]=L.circleMarker([s.plat,s.plon],style(s)).bindPopup(popup(s),{maxWidth:200}).addTo(map);}
   }
   function updateCount(){cnt.textContent=Object.keys(markers).length;}
   /* ★★ THE LETTER ON THE LEAFLET FALLBACK (2026-10-27, as the web client's drawMarkers): Leaflet's canvas circles carry
@@ -1802,7 +1802,7 @@ if(KIND==='digi'||KIND==='cw'){
     shown.forEach(function(s){
       var ms=modeStyle(s.mode), ink=/^#[0-9a-fA-F]{3,8}$/.test(String(ms.ink))?ms.ink:'#000000';
       if(!ms.letter)return;
-      letters.push(L.marker([s.lat,s.lon],{interactive:false,keyboard:false,icon:L.divIcon({className:'mkl',iconSize:[12,12],
+      letters.push(L.marker([s.plat,s.plon],{interactive:false,keyboard:false,icon:L.divIcon({className:'mkl',iconSize:[12,12],
         html:'<b style="color:'+ink+'">'+esc(ms.letter)+'</b>'})}).addTo(map));
     });
   }
@@ -1917,13 +1917,24 @@ if(KIND==='digi'||KIND==='cw'){
   stSheet.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   stSheet.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});
 
+  /* ★★ SPREAD ACROSS THE SQUARE (as the web map's placeIn, Stuart 2026-11-22: "too neat and gridlike"): a 4-character
+   *  locator is a 2-degree by 1-degree square, so every station in it stacked on its centre. Each is drawn at a point
+   *  inside its own square fixed by its callsign; distances and stats stay on the centre. 6 characters: drawn as given. */
+  function placeIn(g,c,lat,lon){
+    if(g.length!==4)return[lat,lon];
+    var h=2166136261;
+    for(var i=0;i<c.length;i++){h^=c.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}
+    var u=(h&0xffff)/65536,v=(h>>>16)/65536;
+    return[lat+(v-0.5)*0.9,lon+(u-0.5)*1.8];
+  }
   function norm(d,cw){
     var lat=d.latitude, lon=d.longitude;
     // On-device FT8 spots (Local/Kiwi) carry a Maidenhead grid instead of lat/lon.
     if((lat==null||lon==null)&&d.grid){var ll=gridLL(d.grid);if(ll){lat=ll.lat;lon=ll.lon;}}
     if(lat==null||lon==null)return null;
+    var pp=placeIn(String(d.grid||''),String(cw?(d.dx_call||''):(d.callsign||'')),lat,lon);
     return{
-      lat:lat, lon:lon,
+      lat:lat, lon:lon, plat:pp[0], plon:pp[1],
       mode:cw?'CW':String(d.mode||'').toUpperCase(),
       band:String(d.band||''),
       call:String(cw?(d.dx_call||''):(d.callsign||'')),
@@ -1941,7 +1952,7 @@ if(KIND==='digi'||KIND==='cw'){
     if(!lastSpot)return;
     var m=markers[key(lastSpot)];
     try{
-      map.flyTo([lastSpot.lat,lastSpot.lon],Math.max(map.getZoom(),4),{animate:true,duration:0.8});
+      map.flyTo([lastSpot.plat,lastSpot.plon],Math.max(map.getZoom(),4),{animate:true,duration:0.8});
       if(m&&m.openPopup)m.openPopup();
     }catch(e){console.error('spots: could not show the spot from the pill',e);}
   });

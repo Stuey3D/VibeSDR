@@ -18136,6 +18136,23 @@ function mergeSpots() {
   const all = Array.from(by.values());
   unplaced = all.filter((s) => s.lat == null || s.lon == null).length;
   spots = all.filter((s) => s.lat != null && s.lon != null);
+  for (const s of spots) { const q = placeIn(s); s.plat = q[0]; s.plon = q[1]; }
+}
+/* ★★ SPREAD ACROSS THE SQUARE, NOT STACKED ON ITS CENTRE (Stuart 2026-11-22: "our map seems rather too neat and
+ *  gridlike compared to what we send to pskr"). FT8/FT4/JS8 send a 4-character locator — a square 2° of longitude by 1°
+ *  of latitude, ~140 × 110 km here — so every station in IO91 landed on ONE point and Europe drew as a lattice of
+ *  stacked markers. Each is now drawn at a point INSIDE its own square, fixed by its callsign (the same call is always
+ *  in the same place, a reload does not shuffle the map), never outside it: the square is all the station told us, and
+ *  the popup still names it. A 6-character locator (WSPR, some JS8) is already ~9 × 5 km and is drawn where it says.
+ *  Distances, bearings and the stats stay on the square's centre — only the marker moves. */
+function placeIn(s) {
+  const g = String(s.grid || '');
+  if (g.length !== 4) return [s.lat, s.lon];
+  let h = 2166136261;
+  const c = String(s.callsign || '');
+  for (let i = 0; i < c.length; i++) { h ^= c.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  const u = (h & 0xffff) / 65536, v = (h >>> 16) / 65536;
+  return [s.lat + (v - 0.5) * 0.9, s.lon + (u - 0.5) * 1.8];   // inside the 1° × 2° square, a 5 % margin each side
 }
 mergeSpots();
 
@@ -18367,7 +18384,7 @@ function drawMarkers() {
   if (!show.spots) return;
   for (const s of spots) {
     // ★★ V12: the MODE's colour, a dark rim, and (on the GPU map) the mode's LETTER inside — colour is never the only cue.
-    L.circleMarker([s.lat, s.lon], {
+    L.circleMarker([s.plat, s.plon], {
       radius: Math.max(6.5, radius(s.snr)), color: RIM, weight: 1.2,
       fillColor: s.colour, fillOpacity: 0.9, label: s.letter, labelColor: s.ink,
     }).addTo(spotLayer).bindPopup(
@@ -18389,7 +18406,7 @@ function drawMarkers() {
     const recent = spots.slice().sort((a, b) => b.timestamp - a.timestamp).slice(0, 200);
     for (const s of recent) {
       if (!s.letter) continue;
-      L.marker([s.lat, s.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'mkl', iconSize: [12, 12],
+      L.marker([s.plat, s.plon], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'mkl', iconSize: [12, 12],
         html: '<b style="color:' + okColour(s.ink) + '">' + esc(s.letter) + '</b>' }) }).addTo(spotLayer);
     }
   }
@@ -18437,7 +18454,7 @@ function focusOnce() {
   if (!p) return;
   focusKey = '';
   fitted = true;
-  map.setView([p.lat, p.lon], 9);
+  map.setView(s ? [s.plat, s.plon] : [p.lat, p.lon], 9);   // ★ a station: where its marker is drawn
 }
 // ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
 //     from wherever the user had panned or zoomed, every fifteen seconds as the next FT8 cycle
@@ -18447,7 +18464,7 @@ function fitOnce() {
   focusOnce();
   if (fitted || !map) return;
   // ★ beta90 the layers shown (APRS opened on APRS fits its stations, not the world's spots)
-  const all = (show.spots ? spots.map(s => [s.lat, s.lon]) : []).concat(show.aprs ? aprs.map(a => [a.lat, a.lon]) : []);
+  const all = (show.spots ? spots.map(s => [s.plat, s.plon]) : []).concat(show.aprs ? aprs.map(a => [a.lat, a.lon]) : []);
   if (me) all.push([me.lat, me.lon]);
   if (all.length > 1) { map.fitBounds(all, { padding: [60, 60] }); fitted = true; }
 }
