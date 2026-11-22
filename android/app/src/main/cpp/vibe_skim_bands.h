@@ -34,7 +34,9 @@
 //    • PRACTICE segments outside the plan where activity really sits, for the region where it matters, tiled by the SAME
 //      rule and labelled (kPractice — each with its source).
 #pragma once
+#include <atomic>
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -148,6 +150,30 @@ inline std::vector<Point> points(Kind kind, int region, const Seg& s, double wid
 /** The widths each skimmer offers (the decoder host's and the clients' options) — the JSON carries points for these. */
 inline std::vector<double> widths(Kind k) {
     return k == Kind::Psk ? std::vector<double>{ 6000, 12000, 24000 } : std::vector<double>{ 24000, 48000, 96000 };
+}
+
+/** ★★ V12 beta91 — THE BAND DECODE'S CW AND RTTY CHIPS (docs/v12/BAND-SKIM-CW-RTTY.md). The IARU region the server's
+ *  band plan is in (vibebands::ituRegion — 1, 2 or 3), for the windows below. Set by the decoder host when a Band run
+ *  starts (Env::region); one server, one region. Default Region 1. */
+inline std::atomic<int>& bandRegion() { static std::atomic<int> r{1}; return r; }
+/** ★ The widest one Band CW / RTTY window may be: a segment wider than this is split into equal parts (80 m CW 70 kHz is
+ *  one; 6 m CW 100 kHz is two of 50; 10 m RTTY 120 kHz two of 60). Each part is one engine on one slice. */
+constexpr double kBandWindowMaxHz = 96000.0;
+/** ★★ The RF windows a Band run's CW (Kind::Cw) or RTTY (Kind::Rtty) chip reads on band `id` in `region`: the band's whole
+ *  segment for that mode, then the region's practice segments for it (Region 2's US RTTY on 40 m), each split as above.
+ *  Empty where the band has no such segment (6 m RTTY, 2200 m … and every VHF band but 6 m for CW). */
+inline std::vector<std::pair<double, double>> bandWindows(Kind kind, int region, const std::string& id) {
+    std::vector<std::pair<double, double>> out;
+    auto add = [&](double lo, double hi) {
+        if (!(hi > lo)) return;
+        const int n = std::max(1, (int)std::ceil((hi - lo) / kBandWindowMaxHz - 1e-9));
+        const double w = (hi - lo) / n;
+        for (int k = 0; k < n; ++k) out.push_back({ lo + k * w, lo + (k + 1) * w });
+    };
+    if (const Seg* s = segment(kind, region, id)) add(s->loHz, s->hiHz);
+    for (const auto& p : practice())
+        if (p.kind == kind && p.region == region && id == p.band) add(p.loHz, p.hiHz);
+    return out;
 }
 
 /** ★★ THE RULE: the window starts at the segment's bottom and is `widthHz` wide. */

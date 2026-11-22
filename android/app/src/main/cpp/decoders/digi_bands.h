@@ -167,8 +167,23 @@ inline bool sameName(const std::string& a, const char* b) {
 /** A mode's dials on one band: its own (ModeDef::dials) if it lists any, else the published table by name. */
 inline std::vector<double> dialsOf(const ModeDef& m, const std::string& band) {
     std::vector<double> out;
+    if (m.iq) return out;   // ★ V12 beta91: an IQ mode has WINDOWS, not dials (windowsOf) — audio readers skip it
     if (!m.dials.empty()) { for (auto& d : m.dials) if (d.first == band) out.push_back(d.second); return out; }
     for (const Dial& d : publishedDials()) if (sameName(m.name, d.mode) && band == d.band) out.push_back(d.hz);
+    return out;
+}
+
+/** ★★ V12 beta91: one stretch of RF a mode reads on a band — an audio mode's passband above one of its dials (dial +
+ *  audioLoHz … audioHiHz), or an IQ mode's window (ModeDef::windows). `dial` is the key the spotter runs it under: the dial
+ *  for an audio mode, the window's centre for an IQ one. */
+struct Window { double dial = 0, loHz = 0, hiHz = 0; };
+inline std::vector<Window> windowsOf(const ModeDef& m, const std::string& band) {
+    std::vector<Window> out;
+    if (m.iq) {
+        if (m.windows) for (const auto& w : m.windows(band)) if (w.second > w.first) out.push_back({ 0.5 * (w.first + w.second), w.first, w.second });
+        return out;
+    }
+    for (double d : dialsOf(m, band)) out.push_back({ d, d + m.audioLoHz, d + m.audioHiHz });
     return out;
 }
 
@@ -224,6 +239,53 @@ struct Span {
         return o;
     }
 };
+/** ★★ V12 beta91 (docs/v12/BAND-SKIM-CW-RTTY.md): THE IQ MODES' WINDOWS JOIN A BAND'S SLICES — the CW skimmer on the
+ *  band's CW segment, the RTTY skimmer on its narrow-band digimode segment (vibe_skim_bands.h, the owner's IARU region).
+ *  Done AFTER the audio modes' cluster and extras, and never moving them: a window wholly inside the main span or an
+ *  existing extra rides that slice; the rest are grouped (lowest first) into slices of their own, each as wide as
+ *  kMaxIqSpanHz at most. So every band's audio slices — and everything tested on them — are exactly as before. */
+constexpr double kMaxIqSpanHz = 100000.0;
+inline void addIqWindows(Span& s, const Band& b, const std::vector<ModeDef>& ms) {
+    struct W { size_t mode; double lo, hi; };
+    std::vector<W> rest;
+    auto addName = [](std::vector<std::string>& v, const std::string& n) { for (const auto& x : v) if (x == n) return; v.push_back(n); };
+    for (size_t k = 0; k < ms.size(); ++k) {
+        if (!ms[k].iq) continue;
+        for (const Window& w : windowsOf(ms[k], b.id)) {
+            if (w.loHz >= s.loHz && w.hiHz <= s.hiHz) { addName(s.modes, ms[k].name); continue; }
+            bool placed = false;
+            for (SubSpan& e : s.extras)
+                if (w.loHz >= e.loHz + kSpanGuardHz && w.hiHz <= e.hiHz - kSpanGuardHz) { addName(e.modes, ms[k].name); placed = true; break; }
+            if (!placed) rest.push_back({ k, w.loHz, w.hiHz });
+        }
+    }
+    std::sort(rest.begin(), rest.end(), [](const W& x, const W& y) { return x.lo < y.lo; });
+    std::vector<bool> used(rest.size(), false);
+    for (size_t g = 0; g < rest.size(); ++g) {
+        if (used[g]) continue;
+        double lo = rest[g].lo, hi = rest[g].hi;
+        std::vector<size_t> members{ g }; used[g] = true;
+        for (size_t h = g + 1; h < rest.size(); ++h) {
+            if (used[h]) continue;
+            const double nlo = std::min(lo, rest[h].lo), nhi = std::max(hi, rest[h].hi);
+            if (nhi - nlo + 2 * kSpanGuardHz > kMaxIqSpanHz) continue;
+            lo = nlo; hi = nhi; used[h] = true; members.push_back(h);
+        }
+        SubSpan e;
+        e.centreHz = std::round((lo + hi) / 2.0 / 100.0) * 100.0;
+        /* ★ The slice is cut for this width by bandSliceBins, which already sizes it so the width is its FLAT part (an
+         *  engine reads only the flat ±0.4325 of a slice's rate) — so the width is the windows' extent, a guard and a
+         *  kilohertz for the slice's centre landing on a bin, not inflated again (the audio extras' ÷0.865 would double a
+         *  96 kHz CW slice's transform for nothing). */
+        const double ext = std::max(e.centreHz - lo, hi - e.centreHz) + kSpanGuardHz + 1000.0;
+        const double half = std::max(kMinSliceHz / 2.0, ext);
+        e.loHz = e.centreHz - half; e.hiHz = e.centreHz + half;
+        for (size_t i : members) addName(e.modes, ms[rest[i].mode].name);
+        for (size_t i : members) addName(s.outside, ms[rest[i].mode].name);
+        s.extras.push_back(e);
+    }
+}
+
 inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
     Span s; s.band = &b;
     struct Iv { size_t mode; double lo, hi; };
@@ -293,6 +355,7 @@ inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
     // ★ The rounding moved the centre by < 50 Hz: widen the side it moved away from, so the span stays symmetrical.
     const double half = std::max(s.centreHz - s.loHz, s.hiHz - s.centreHz);
     s.loHz = s.centreHz - half; s.hiHz = s.centreHz + half;
+    addIqWindows(s, b, ms);
     return s;
 }
 /** Every band some registered mode is on, in step order, kept only where `reaches(lo, hi)` says the radio can tune the

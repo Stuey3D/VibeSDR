@@ -121,7 +121,7 @@ static void throughSlices(digi::Spotter& sp, const std::vector<cf32>& cap, doubl
                 s.buf.resize((size_t)s.bins); s.pw.resize((size_t)s.bins);
                 const int got = ch.extract(b, s.cb, s.bins, s.buf.data(), s.ctx, ch.blockIndex(), kBandTaperDiv);
                 digi::slicePower(b, fft, s.cb, s.bins, s.pw.data());
-                if (got > 0) sp.feedIq(s.buf.data(), got, s.rate, s.centre, utc, s.pw.data(), s.bins, binHz);
+                if (got > 0) sp.feedIq(s.buf.data(), got, s.rate, s.centre, utc, s.pw.data(), s.bins, binHz, (int)i);   // ★ the slice's id, as the host passes it
             }
         });
         if ((o / (size_t)chunk) % 8 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));   // ★ the engines' workers
@@ -272,7 +272,7 @@ static int runReal(int argc, char** argv) {
                 const double slot = std::floor(utc / 15.0);
                 if (slot != lastStallSlot && utc - slot * 15.0 > 0.3) { lastStallSlot = slot; std::this_thread::sleep_for(std::chrono::microseconds((int64_t)(stallMs * 1000))); }
             }
-            sp.feedIq(s, k, r, c, oldStamp ? (live ? clk() : utc) : utc, p, nb, bh);
+            sp.feedIq(s, k, r, c, oldStamp ? (live ? clk() : utc) : utc, p, nb, bh, slice);
         };
         if (!chan) {
             tap.start(WideTap::BandSink(sink));
@@ -564,7 +564,9 @@ int main(int argc, char** argv) {
         for (const auto& d : digi::modes()) for (double f : digi::dialsOf(d, "40m")) { in.push_back({ f + d.audioLoHz }); in.push_back({ f + d.audioHiHz }); }
         double worstIn = 0, bestIn = -300; int D = 0;
         tapToneRun(fs, hw, dial, in, &D);
-        ok(D == 16, "the front end decimates 2.048 MS/s by " + std::to_string(D) + " (to 128 kS/s, a 2048-point channeliser)");
+        // ★ V12 beta91: 40 m's CW window (7000–7040, its own extra slice) widens what the tap must keep from 7.038–7.104 to
+        //   6.997–7.104 MHz, so the front end halves once fewer (16 → 8: 256 kS/s, a 4096-point channeliser) — BAND-SKIM-CW-RTTY.md
+        ok(D == 8, "the front end decimates 2.048 MS/s by " + std::to_string(D) + " (to 256 kS/s, a 4096-point channeliser — the CW window included)");
         bool all = true;
         for (const TapTone& t : in) { if (!std::isfinite(t.levelDb)) all = false; else { worstIn = std::min(worstIn, t.levelDb); bestIn = std::max(bestIn, t.levelDb); } }
         ok(all && worstIn > -0.5 && bestIn < 0.5, "every 40 m mode's passband edge comes through the decimated tap within 0.5 dB (" + std::to_string(worstIn) + " … " + std::to_string(bestIn) + " dB)");

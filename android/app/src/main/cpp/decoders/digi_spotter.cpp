@@ -71,8 +71,14 @@ void Spotter::wire(Run& r) {
         if (o.mode.empty()) o.mode = name;
         // ★ Single: the listener's dial NOW (USB) + the audio offset, as ever. Band: this engine's own dial.
         const double base = single ? (dialHz_ ? dialHz_() : 0.0) : dial;
-        emit_(o, base + o.audioHz);
+        // ★ V12 beta91: an IQ mode knows the RF itself (it reads a window, not audio above a dial)
+        emit_(o, std::isfinite(o.rfHz) ? o.rfHz : base + o.audioHz);
     };
+    if (!r.cpu) r.cpu = std::make_shared<std::atomic<uint64_t>>(0);
+    {
+        auto cpu = r.cpu;
+        r.eng->onCpu = [this, cpu](uint64_t ns) { cpu->fetch_add(ns, std::memory_order_relaxed); if (cpuHook_) cpuHook_(ns); };
+    }
     if (!r.light) r.light = std::make_shared<std::atomic<bool>>(false);
     if (single) { r.eng->loaded = loaded_; return; }
     // ★ Band: the governor's depth OR the server's load — either says "one pass".
@@ -145,10 +151,29 @@ void Spotter::plan() {
         for (auto& md : kv.second)
             if (DigiTuner::fits(md.second, md.first->audioLoHz, md.first->audioHiHz, S.rate, S.centre)) w.modes.push_back(md);
     }
+    /* ★★ V12 beta91 — THE IQ MODES (CW, RTTY): each WINDOW on the slice whose flat part holds it with the most room. Keyed
+     *  apart from the dials (negative: the window's centre and the mode's index), one run per window, no tuner. */
+    struct IqWant { long long slice = 0; const ModeDef* m = nullptr; Window w; };
+    std::map<long long, IqWant> iqWant;
+    for (size_t mi = 0; mi < modes_.size(); ++mi) {
+        const ModeDef& m = modes_[mi];
+        if (!m.iq || !m.makeWin) continue;
+        for (const Band& b : bands())
+            for (const Window& w : windowsOf(m, b.id)) {
+                long long best = 0; double bestM = -1;
+                for (auto& sk : slices_) {
+                    const double g = DigiTuner::margin(w.loHz, 0.0f, (float)(w.hiHz - w.loHz), sk.second.rate, sk.second.centre);
+                    if (g >= 0 && g > bestM) { bestM = g; best = sk.first; }
+                }
+                if (bestM < 0) continue;
+                IqWant& iw = iqWant[-(std::llround(w.dial) * 32 + (long long)mi)];
+                iw.slice = best; iw.m = &m; iw.w = w;
+            }
+    }
     std::lock_guard<std::mutex> lk(statMtx_);
     // Drop channels whose dial left every slice (their engines' counts are kept).
     for (auto it = chans_.begin(); it != chans_.end();) {
-        if (want.count(it->first)) { ++it; continue; }
+        if (want.count(it->first) || iqWant.count(it->first)) { ++it; continue; }
         for (Run& r : it->second.runs) {
             retiredSkips_ += r.eng->slotsSkipped(); retiredDecodes_ += r.eng->slotsDecoded();
             if (r.gate) { retiredIdle_ += r.gate->idleN; retiredShed_ += r.gate->shedN; }
@@ -176,12 +201,26 @@ void Spotter::plan() {
             c.runs.push_back(std::move(r));
         }
     }
+    for (auto& kv : iqWant) {
+        Chan& c = chans_[kv.first];
+        c.slice = kv.second.slice;            // ★ a window that moved to another slice keeps its engine (it re-reads the offsets)
+        if (!c.runs.empty()) continue;
+        Run r; r.def = kv.second.m; r.dial = kv.second.w.dial;
+        try { r.eng = kv.second.m->makeWin(kv.second.w.loHz, kv.second.w.hiHz); } catch (const std::exception&) { continue; }
+        if (!r.eng) continue;
+        const double widthK = (kv.second.w.hiHz - kv.second.w.loHz) / 48000.0;
+        r.cost = kv.second.m->costVsFt8 * widthK; r.lightC = kv.second.m->lightCost() * widthK;
+        wire(r);
+        r.gate.reset(new Gate());
+        r.gate->loHz = kv.second.w.loHz; r.gate->hiHz = kv.second.w.hiHz;
+        c.runs.push_back(std::move(r));
+    }
     for (auto& sk : slices_) sk.second.gNb = 0;   // ★ the windows are placed again on each slice's next block with bins
     statusSeq_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
-                     const float* binPow, int nb, double binHz) {
+                     const float* binPow, int nb, double binHz, int sliceId) {
     if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
     if (!x) { feedGap(n, rate, centreHz, captureUtc); return; }   // ★ a null block: a gap of n samples (see feedGap)
     const long long key = std::llround(centreHz);
@@ -195,10 +234,14 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     }
     Slice& S = it->second;
     S.lastUtc = captureUtc;
+    S.id = sliceId;
     for (auto j = slices_.begin(); j != slices_.end();) {
         /* ★ A slice no longer fed has gone; and a NEW slice at the same rate within a quarter of it of an old one is that
-         *  slice MOVED (a fine retune) — the old one goes at once, so its dials keep their engines and lose no audio. */
-        const bool moved = replan && j != it && std::fabs(j->second.rate - rate) < 0.5 && std::fabs(j->second.centre - centreHz) < 0.25 * rate;
+         *  slice MOVED (a fine retune) — the old one goes at once, so its dials keep their engines and lose no audio.
+         *  ★ V12 beta91: with ids, the same id is the same slice moved, and another id never is. */
+        const bool byId = sliceId >= 0 && j->second.id >= 0;
+        const bool moved = replan && j != it && (byId ? j->second.id == sliceId
+                                                      : std::fabs(j->second.rate - rate) < 0.5 && std::fabs(j->second.centre - centreHz) < 0.25 * rate);
         if (j != it && (moved || captureUtc - j->second.lastUtc > kSliceGoneSec)) { j = slices_.erase(j); replan = true; }
         else ++j;
     }
@@ -218,6 +261,7 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
         std::lock_guard<std::mutex> lk(statMtx_);
         loadedNow_ = loaded_ ? loaded_() : false;
         budget_.tick(captureUtc, skippedLocked(), unitsInUse());
+        pauseTick(captureUtc);
     }
     S.endUtc = captureUtc; S.lastGated = gated;
     feedChans(key, S, x, n, rate, centreHz, captureUtc, gated);
@@ -237,16 +281,20 @@ void Spotter::feedGap(int n, double rate, double centreHz, double captureUtc) {
         done += k;
         const double t = captureUtc - (double)(n - done) / rate;   // ★ the stamp of this piece's last sample
         S.lastUtc = t; S.endUtc = t;
-        feedChans(key, S, zeros_.data(), k, rate, centreHz, t, S.lastGated);
+        feedChans(key, S, zeros_.data(), k, rate, centreHz, t, S.lastGated, true);
     }
     S.bridged += (uint64_t)n;
     bridgedTotal_.fetch_add((uint64_t)std::llround(1e6 * n / rate), std::memory_order_relaxed);
 }
 
-void Spotter::feedChans(long long key, Slice& S, const cf32* x, int n, double rate, double centreHz, double captureUtc, int gated) {
+void Spotter::feedChans(long long key, Slice& S, const cf32* x, int n, double rate, double centreHz, double captureUtc, int gated, bool gap) {
     for (auto& kv : chans_) {
         Chan& c = kv.second;
         if (c.slice != key) continue;
+        if (!c.tuner) {   // ★ V12 beta91: an IQ mode's window — the slice itself (a bridged gap is not decoded: zeros spot nothing)
+            if (!gap) for (Run& r : c.runs) routeIq(r, x, n, rate, centreHz, captureUtc, gated, S);
+            continue;
+        }
         /* ★ A dial whose every engine is OFF or SHED needs no audio at all: its tuner is skipped too (measured on the Pi 2
          *  build, the tuners are ≈ a fifth of Band's work — docs/v12/DIGITAL-SPOTS.md). The period clock still turns. */
         bool anyWants = false;
@@ -300,7 +348,7 @@ double Spotter::unitsInUse() const {
     double u = 0;
     for (auto& kv : chans_)
         for (const Run& r : kv.second.runs)
-            if (r.gate && r.gate->st == Gate::Live) u += r.gate->rs == RunState::Full ? r.def->costVsFt8 : r.def->lightCost();
+            if (r.gate && r.gate->st == Gate::Live) u += r.gate->rs == RunState::Full ? r.runCost() : r.runLight();
     return u;
 }
 
@@ -317,10 +365,10 @@ RunState Spotter::ask(Run& who, bool wants) {
     for (auto& kv : chans_)
         for (Run& r : kv.second.runs) {
             if (!r.gate) continue;
-            GovIn g; g.priority = r.def->priority; g.cost = r.def->costVsFt8; g.light = r.def->lightCost();
+            GovIn g; g.priority = r.def->priority; g.cost = r.runCost(); g.light = r.runLight();
             g.ov = override_ ? override_(r.def->name) : Override::Auto;
             g.committed = r.gate->st == Gate::Live;
-            g.wants = &r == &who ? wants : (g.committed || g.ov == Override::Always);
+            g.wants = &r == &who ? wants : (g.committed || (g.ov == Override::Always && r.gate->st != Gate::Paused));
             in.push_back(g); rs.push_back(&r);
         }
     const std::vector<RunState> out = govern(in, budget_.units(), loadedNow_);
@@ -335,7 +383,7 @@ RunState Spotter::ask(Run& who, bool wants) {
         } else if (out[i] == RunState::Shed) {
             // ★ a higher-priority mode needs the room: a free-running mode stops now (nothing is lost but its next
             //   seconds); a slotted one finishes the slot whose audio it already has, light, and is shed at its next.
-            if (r.def->slotSec <= 0) { r.gate->st = Gate::Shed; ++r.gate->shedN; setState(*r.gate, RunState::Shed); }
+            if (r.def->slotSec <= 0) { r.gate->st = Gate::Shed; ++r.gate->shedN; setState(*r.gate, RunState::Shed); stopFeeding(r); }
             else r.light->store(true, std::memory_order_relaxed);
         }
     }
@@ -402,7 +450,15 @@ void Spotter::newPeriod(Run& r, int64_t per, int gated) {
     }
     const Override ov = override_ ? override_(r.def->name) : Override::Auto;
     if (ov == Override::Off) {
+        if (g.st == Gate::Live) stopFeeding(r);
         g.st = Gate::Off; g.buf.clear(); g.marks.clear(); setState(g, RunState::Off);
+        return;
+    }
+    /* ★★ V12 beta91: a continuous mode PAUSED because the band decode is behind (pauseTick) stays paused, whatever the
+     *  owner's Always — the slotted modes must not lose a slot to it, and a listener's audio comes before all of it. */
+    if (pausedNow(r)) {
+        if (g.st == Gate::Live) stopFeeding(r);
+        g.st = Gate::Paused; g.buf.clear(); g.marks.clear(); setState(g, RunState::Paused);
         return;
     }
     const bool wants = gated == 0 || ov == Override::Always || g.hang > 0;
@@ -415,8 +471,10 @@ void Spotter::newPeriod(Run& r, int64_t per, int gated) {
         else goLive(r);
         setState(g, d);
     } else if (d == RunState::Shed) {
+        if (wasLive) stopFeeding(r);
         g.st = Gate::Shed; ++g.shedN; setState(g, RunState::Shed);
     } else {
+        if (wasLive) stopFeeding(r);
         setState(g, RunState::Idle);                        // ★ Pending: held until the window lights up
     }
 }
@@ -436,6 +494,7 @@ void Spotter::route(Run& r, const float* a, int k, double utc, int gated, Slice&
             if (gated == 0) g.saw = true;
             return;
         case Gate::Off:
+        case Gate::Paused:
             return;
         case Gate::Shed:
             hold(g, a, k, utc, marginOf(*r.def));           // ★ only the lead-in for the next period
@@ -459,6 +518,105 @@ void Spotter::route(Run& r, const float* a, int k, double utc, int gated, Slice&
     }
 }
 
+/* ── V12 beta91: AN IQ MODE'S WINDOW — the same gate and governor, but nothing is HELD: the engine copies the slice into
+ *  its own queue only while it is live (a CW or RTTY skimmer that misses the first seconds of a station loses nothing —
+ *  a spot needs its call heard twice). ─────────────────────────────────────────────────────────────────────────────── */
+void Spotter::routeIq(Run& r, const cf32* x, int n, double rate, double centreHz, double utc, int gated, Slice& sl) {
+    Gate& g = *r.gate;
+    const double P = gatePeriod(*r.def);
+    const int64_t per = (int64_t)std::floor((utc - n / rate) / P + 1e-9);
+    if (per != g.per) newPeriod(r, per, gated);
+    switch (g.st) {
+        case Gate::Live:
+            r.eng->processIq(x, n, rate, centreHz, utc); g.fedUtc = utc;
+            if (!g.saw && gated == 2 && (sl.blocks & 7) == 0 && g.meter.occupied(sl.floor.floor())) g.saw = true;
+            if (gated == 0) g.saw = true;
+            return;
+        case Gate::Pending: {
+            const bool lit = gated == 0 || (gated == 2 && (sl.blocks & 7) == 0 && g.meter.occupied(sl.floor.floor()));
+            if (!lit) return;
+            g.saw = true;
+            std::lock_guard<std::mutex> lk(statMtx_);
+            const RunState d = ask(r, true);
+            if (d == RunState::Light || d == RunState::Full) {
+                r.light->store(d == RunState::Light, std::memory_order_relaxed);
+                g.st = Gate::Live; setState(g, d);
+                r.eng->processIq(x, n, rate, centreHz, utc); g.fedUtc = utc;
+            } else if (d == RunState::Shed) {
+                g.st = Gate::Shed; ++g.shedN; setState(g, RunState::Shed);
+            }
+            return;
+        }
+        default:
+            return;
+    }
+}
+
+/* ★★ V12 beta91 — BAND'S PAUSE RULE (statMtx_ held, once a second of capture). Stuart: "CW and RTTY are continuous, unlike
+ *  the slotted FT8 family, so if the band decode falls behind the capture … the CW then RTTY chips are paused FIRST so the
+ *  FT8/FT4/WSPR chips never lose slots, and they resume when it catches up".
+ *   • BEHIND = the most of: the host's queue of slice IQ not yet decoded (setBehind), and every live IQ engine's own
+ *     backlog; or a slotted engine SKIPPED a slot since the last look.
+ *   • Behind by more than kPauseBehindSec (or a skip): the next mode in pause order (ModeDef::pauseRank — CW 1, RTTY 2)
+ *     pauses, at most one every kPauseStepSec, and its queue is dropped at once.
+ *   • Caught up (under kResumeBehindSec, no skip) for kResumeCalmSec: the last one paused resumes — RTTY, then CW.
+ *   The log says so plainly each time. */
+void Spotter::pauseTick(double utc) {
+    if (!std::isfinite(utc) || utc - pauseCheck_ < 1.0) return;
+    pauseCheck_ = utc;
+    int maxRank = 0;
+    double backlog = 0;
+    for (auto& kv : chans_)
+        for (const Run& r : kv.second.runs) {
+            maxRank = std::max(maxRank, r.def->pauseRank);
+            if (r.def->iq && r.gate && r.gate->st == Gate::Live) backlog = std::max(backlog, r.eng->backlogSec());
+        }
+    if (maxRank == 0) { pauseLevel_ = 0; return; }
+    const double ext = behind_ ? behind_() : 0.0;
+    const double b = std::max(ext, backlog);
+    const uint64_t sk = skippedLocked();
+    const bool skipped = sk > pauseSkips_;
+    pauseSkips_ = sk;
+    auto names = [&](int rank) {
+        std::string o;
+        for (const ModeDef& m : modes_) if (m.pauseRank == rank) o += (o.empty() ? "" : "/") + m.name;
+        return o;
+    };
+    if ((b > kPauseBehindSec || skipped) && pauseLevel_ < maxRank) {
+        calmSince_ = NAN;
+        if (utc - pauseAt_ < kPauseStepSec) return;
+        ++pauseLevel_; pauseAt_ = utc;
+        for (auto& kv : chans_)
+            for (Run& r : kv.second.runs)
+                if (r.gate && pausedNow(r) && r.gate->st != Gate::Paused) {
+                    if (r.gate->st == Gate::Live) stopFeeding(r);
+                    r.gate->st = Gate::Paused; r.gate->buf.clear(); r.gate->marks.clear();
+                    setState(*r.gate, RunState::Paused);
+                }
+        if (log_) {
+            char why[160];
+            if (skipped && !(b > kPauseBehindSec)) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
+            else std::snprintf(why, sizeof why, "the decode is %.1f s behind the capture", b);
+            log_("Band: " + names(pauseLevel_) + " paused â the CPU is behind (" + why + "); the slotted modes keep their slots");
+        }
+        return;
+    }
+    if (b > kPauseBehindSec || skipped) { calmSince_ = NAN; return; }
+    if (pauseLevel_ == 0) return;
+    if (b >= kResumeBehindSec) { calmSince_ = NAN; return; }
+    if (!std::isfinite(calmSince_)) { calmSince_ = utc; return; }
+    if (utc - calmSince_ < kResumeCalmSec || utc - pauseAt_ < kResumeCalmSec) return;
+    const std::string back = names(pauseLevel_);
+    --pauseLevel_; pauseAt_ = utc; calmSince_ = utc;
+    for (auto& kv : chans_)
+        for (Run& r : kv.second.runs)
+            if (r.gate && r.gate->st == Gate::Paused && !pausedNow(r)) {
+                r.gate->st = Gate::Pending; r.gate->per = INT64_MIN;   // ★ judged afresh at its next block
+                setState(*r.gate, RunState::Idle);
+            }
+    if (log_) log_("Band: " + back + " resumed â the decode has caught up");
+}
+
 uint64_t Spotter::periodsShed() const {
     std::lock_guard<std::mutex> lk(statMtx_);
     uint64_t n = retiredShed_;
@@ -475,7 +633,7 @@ std::vector<Spotter::ModeStatus> Spotter::status() const {
     std::lock_guard<std::mutex> lk(statMtx_);
     std::vector<ModeStatus> out;
     auto rank = [](RunState s) { switch (s) { case RunState::Full: return 4; case RunState::Light: return 3; case RunState::Shed: return 2;
-                                              case RunState::Idle: return 1; default: return 0; } };
+                                              case RunState::Paused: return 2; case RunState::Idle: return 1; default: return 0; } };
     for (const ModeDef& m : modes_) {
         ModeStatus st; st.mode = m.name; bool any = false;
         for (auto& kv : chans_)
@@ -484,6 +642,8 @@ std::vector<Spotter::ModeStatus> Spotter::status() const {
                 if (!any || rank(r.gate->rs) > rank(st.state)) st.state = r.gate->rs;
                 any = true; ++st.dials;
                 st.idle += r.gate->idleN; st.shed += r.gate->shedN; st.live += r.gate->liveN;
+                if (r.cpu) st.cpuNs += r.cpu->load(std::memory_order_relaxed);
+                st.iq = m.iq;
             }
         if (any) out.push_back(st);
     }

@@ -46,6 +46,15 @@
 #define VIBE_DIGI_HAVE_MSK144 1
 #endif
 
+#if __has_include("digimodes/cw.h")
+#include "digimodes/cw.h"
+#define VIBE_DIGI_HAVE_CW 1
+#endif
+#if __has_include("digimodes/rtty.h")
+#include "digimodes/rtty.h"
+#define VIBE_DIGI_HAVE_RTTY 1
+#endif
+
 #include <cctype>
 
 namespace vibe {
@@ -83,6 +92,14 @@ const std::vector<ModeDef>& modes() {
 #endif
 #ifdef VIBE_DIGI_HAVE_MSK144
         ADD(vibeDigiMode_msk144());
+#endif
+        // ★★ V12 beta91 — the band's CW and RTTY skimmers as two more chips (IQ modes: windows, not dials — Band only;
+        //    docs/v12/BAND-SKIM-CW-RTTY.md). Last: shed and paused first, shown last.
+#ifdef VIBE_DIGI_HAVE_CW
+        ADD(vibeDigiMode_cw());
+#endif
+#ifdef VIBE_DIGI_HAVE_RTTY
+        ADD(vibeDigiMode_rtty());
 #endif
         return v;
     }();

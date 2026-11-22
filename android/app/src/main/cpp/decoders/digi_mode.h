@@ -26,6 +26,7 @@
 //   actually decoded.
 #pragma once
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -54,6 +55,9 @@ struct Spot {
      *  transmission). Every other mode leaves them. */
     int    dbm = -1000;
     float  drift = 0;
+    /** ★★ V12 beta91 (BAND-SKIM-CW-RTTY.md): the spot's RF frequency (Hz) when the engine knows it itself — an IQ mode
+     *  (ModeDef::iq: the CW and RTTY skimmers in Band) reads a whole segment, not audio above a dial. NaN = dial + audioHz. */
+    double rfHz = NAN;
 };
 
 /** One running decoder of one mode on one dial. Made by ModeDef::make; owned by the host. */
@@ -69,8 +73,21 @@ public:
     /** Slots decoded so far (tests, the admin page). */
     virtual uint64_t slotsDecoded() const { return 0; }
 
+    /** ★★ V12 beta91 — an IQ MODE's input (ModeDef::iq): `n` complex samples of the Band slice its window sits in, at
+     *  `rate` Hz centred on RF `centreHz`, the last captured at `captureUtc`. The decode thread calls it; an IQ engine copies
+     *  and returns at once (its own worker decodes — the hottest-thread rule). Audio engines never see it. */
+    virtual void processIq(const std::complex<float>* x, int n, double rate, double centreHz, double captureUtc) {
+        (void)x; (void)n; (void)rate; (void)centreHz; (void)captureUtc;
+    }
+    /** ★ Seconds of input queued and not yet decoded (an IQ engine's own backlog) — Band's pause rule reads it. */
+    virtual double backlogSec() const { return 0.0; }
+    /** ★ The run stopped being fed (shed, paused, off): drop whatever is queued — it is stale by the time it would be read. */
+    virtual void idle() {}
+
     /** Set by the host before audio flows. May be called from any thread. */
     std::function<void(const Spot&)> onSpot;
+    /** ★ V12 beta91: CPU (ns) an engine's OWN threads spent, reported as it goes (the host adds it to its health figure). */
+    std::function<void(uint64_t ns)> onCpu;
     /** ★ The server's load, asked before any OPTIONAL extra work (a second decode pass, OSD): true = loaded, do the
      *  cheapest decode. Empty = never loaded. */
     std::function<bool()> loaded;
@@ -115,6 +132,16 @@ struct ModeDef {
      *  period only on 6 m and 2 m). The spotter prefers it to `make` when set. `variantAt` says which set-up a dial gets,
      *  so Single remakes the engine only when the listener's dial moves to a dial that needs a different one. */
     std::function<std::unique_ptr<Engine>(double dialHz)> makeAt;
+    /** ★★ V12 beta91 — AN IQ MODE (BAND-SKIM-CW-RTTY.md): Band only, no tuner, no audio. Its engine reads a WINDOW of RF
+     *  (`windows`: per band id, {loHz, hiHz} — the CW segment of the owner's IARU region, the RTTY / narrow-band digimode
+     *  segment) straight off whichever Band slice holds it. `dials` / the published table are not used (dialsOf is empty for
+     *  it, so every audio-mode reader ignores it), nor are audioLoHz / audioHiHz. `costVsFt8` is per 48 kHz of window. */
+    bool iq = false;
+    std::function<std::vector<std::pair<double, double>>(const std::string& bandId)> windows;
+    std::function<std::unique_ptr<Engine>(double loHz, double hiHz)> makeWin;
+    /** ★★ BAND'S PAUSE ORDER (V12 beta91, Stuart: "CW then RTTY paused first"): > 0 = a CONTINUOUS mode that is PAUSED
+     *  when the band decode falls behind the capture, rank 1 first, so the slotted modes never lose a slot; 0 = never. */
+    int pauseRank = 0;
     std::function<int(double dialHz)> variantAt;
     std::unique_ptr<Engine> makeFor(double dialHz) const { return makeAt ? makeAt(dialHz) : make(); }
 };

@@ -403,7 +403,8 @@ int main(int argc, char** argv) {
         ok(w && w->slotSec == 120.0 && w->sampleRate == 12000 && w->audioLoHz <= 1380 && w->audioHiHz >= 1620 && w->singleDialTolHz > 0,
            "WSPR is registered (digimodes/wspr.h): 120 s slots, 12 kHz, its 200 Hz sub-band, Single only at its dials");
         bool made = true;
-        for (const auto& m : ms) { auto e = m.make(); made = made && e != nullptr; }
+        // ★ V12 beta91: an IQ mode (CW, RTTY) is made for a window (makeWin), never without one
+        for (const auto& m : ms) { auto e = m.iq ? (m.makeWin ? m.makeWin(7000000, 7040000) : nullptr) : m.make(); made = made && e != nullptr; }
         ok(made, "every registered mode makes an engine");
     }
 

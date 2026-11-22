@@ -44,6 +44,7 @@
 #include "decoders/digi_spotter.h"   // ★ V12: digital spots — Single (the listener's audio) or Band (a band's IQ slice)
 #include "decoders/digi_bands.h"
 #include "vibe_band_slice.h"   // ★ V12: Band's slice sizing and its extra slices
+#include "vibe_skim_bands.h"   // ★ V12 beta91: the band decode's CW / RTTY windows follow the server's IARU region
 #include "vibe_cw_run.h"
 #include "vibe_psk_run.h"
 #include "vibe_rtty_skim_run.h"   // ★ V12 the RTTY skimmer — docs/v12/RTTY-SKIMMER.md
@@ -444,6 +445,8 @@ public:
             return queued() > 48000 || queuedIqSec() > 1.0;
         };
         auto dial = env_.dialHz;
+        // ★ V12 beta91: the region the CW / RTTY chips' windows come from (Env::region; the shim keeps it in step anyway)
+        if (env_.region) { const int rg = env_.region(); if (rg >= 1 && rg <= 3) skimbands::bandRegion().store(rg); }
         std::vector<digi::ModeDef> ms;   // ★ the modes the owner has not switched off (the Spotter keeps its own copy)
         for (const auto& m : digi::modes()) if (!(env_.spotModeOff && env_.spotModeOff(m.name))) ms.push_back(m);
         spotter_.reset(new digi::Spotter(scope, ms,
@@ -459,6 +462,11 @@ public:
             }
             const double u = env_.bandBudgetUnits ? env_.bandBudgetUnits() : NAN;
             spotter_->setBudgetCap(std::isfinite(u) && u > 0 ? u : INFINITY);
+            /* ★★ V12 beta91 THE PAUSE RULE (BAND-SKIM-CW-RTTY.md): behind = the slice IQ queued for this decode thread and
+             *  not yet decoded. CW then RTTY pause first when it grows (the slotted modes keep their slots); the log says so. */
+            spotter_->setBehind([this] { return queuedIqSec(); });
+            spotter_->setLog([this](const std::string& l) { log(l); });
+            spotter_->setCpu([this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); });
             statusSent_ = ~0ull; statusAt_ = 0;
         }
         if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(scope == SpotScope::Band); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
@@ -1959,7 +1967,7 @@ private:
                         if (b.gapN > 0) { spotter_->feedGap(b.gapN, b.rate, b.centre, b.utc); }
                         else {
                         spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
-                                         b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz);
+                                         b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz, b.slice);
                         maybeSendStatusLocked_(b.utc);
                         bandDiagLocked_(b);
                         }
@@ -2252,6 +2260,7 @@ private:
      *  and the chips. One line a minute, decode thread, spotsMtx_ held. */
     std::mutex diagMtx_;
     std::map<std::string, int> diagSpots_;
+    std::map<std::string, uint64_t> diagCpu_;   // ★ V12 beta91: each IQ chip's engine CPU at the last minute line
     double diagAt_ = 0, diagMain_ = 0, diagExtra_ = 0, diagLagMin_ = 1e9, diagLagMax_ = -1e9;
     double diagCentre_ = 0, diagRate_ = 0;
     uint64_t diagDrop0_ = 0, diagSlots0_ = 0, diagSkip0_ = 0, diagBridge0_ = 0;
@@ -2264,7 +2273,15 @@ private:
         if (b.utc - diagAt_ < 60.0) return;
         std::string spots, chips;
         { std::lock_guard<std::mutex> dl(diagMtx_); for (auto& kv : diagSpots_) spots += " " + kv.first + " " + std::to_string(kv.second); diagSpots_.clear(); }
-        for (const auto& m : spotter_->status()) chips += " " + m.mode + ":" + digi::stateWord(m.state);
+        for (const auto& m : spotter_->status()) {
+            chips += " " + m.mode + ":" + digi::stateWord(m.state);
+            // ★ V12 beta91: the CW / RTTY chips' own threads, % of one core over the minute (what they cost on this box)
+            if (m.iq) {
+                const uint64_t was = diagCpu_[m.mode]; diagCpu_[m.mode] = m.cpuNs;
+                const double span = b.utc - diagAt_;
+                if (span > 0 && m.cpuNs >= was) { char c[32]; std::snprintf(c, sizeof c, "(%.1f%%)", 100.0 * (double)(m.cpuNs - was) / 1e9 / span); chips += c; }
+            }
+        }
         char line[640];
         std::snprintf(line, sizeof line,
                       "Band decode, last %.0f s of capture: main slice %.1f s fed (%.0f S/s at %.4f MHz), extra slices %.1f s; "

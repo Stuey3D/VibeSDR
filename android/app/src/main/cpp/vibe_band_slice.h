@@ -33,7 +33,10 @@ inline int bandSliceBins(double sampleRate, int fftSize, double widthHz) {
 
 /** ★ One extra slice: its RF centre and the flat width it needs. */
 struct ExtraSlice { double centreHz = 0, widthHz = 0; };
-constexpr int kMaxExtraSlices = 3;
+/** ★ V12 beta91: 3 → 8 — the band's CW and RTTY windows (digi::addIqWindows) are extra slices too: 10 m carries FT4's,
+ *  WSPR's and PSK's clusters plus a CW and two RTTY windows. Each is one more extract of the same forward FFT (one small
+ *  inverse FFT a block), cut only when the capture holds it. */
+constexpr int kMaxExtraSlices = 8;
 
 /** The extra slices a Band run on `dialHz` wants (the band's clusters beyond its main one — digi::Span::extras). */
 inline std::vector<ExtraSlice> bandExtraSlices(double dialHz) {
@@ -119,6 +122,10 @@ inline std::vector<BandDcPassband> bandDcPassbands(double dialHz) {
     std::vector<BandDcPassband> o;
     const vibe::digi::Band* b = vibe::digi::bandAt(dialHz);
     if (!b) return o;
+    /* ★ V12 beta91: the CW / RTTY windows (IQ modes) are NOT passbands here — their SLICES are kept clear like any other
+     *  (bandDcSlices), but where a narrow capture has no room the DC may fall inside a 40–100 kHz skimmer window: a steady
+     *  carrier, which neither skimmer decodes (CW needs keying, RTTY two tones taking turns). Forbidding them made a
+     *  300 kS/s capture's DC land on FT8's neighbours instead (test-band-dc, 15 m / 10 m). */
     for (const vibe::digi::ModeDef& m : vibe::digi::modes())
         for (double d : vibe::digi::dialsOf(m, b->id)) o.push_back({ d + m.audioLoHz, d + m.audioHiHz, m.name });
     return o;

@@ -64,14 +64,33 @@ public:
     /** Band: one block of the slice — `n` samples at `rate`, centred on RF `centreHz`, the last captured at `captureUtc`.
      *  ★ `binPow`/`nb`/`binHz`: the slice's FFT bins' power for this block (digi_activity.h slicePower — lowest frequency
      *  first, bin nb/2 at `centreHz`), for the activity gate. Null = no gate (every window counts as occupied). */
+    /** ★ V12 beta91 `sliceId`: which of the host's slices this is (0 main, 1… extras), when the caller knows — a slice
+     *  MOVED (a fine retune) is then recognised by its id, never mistaken for a neighbouring slice at the same rate (a band
+     *  with CW and RTTY windows has slices side by side). −1 = by place and rate, as before. */
     void feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
-                const float* binPow = nullptr, int nb = 0, double binHz = 0);
+                const float* binPow = nullptr, int nb = 0, double binHz = 0, int sliceId = -1);
 
     /** ★ The owner's word per mode (Always / Off / Auto), asked at each gate period's start. Null = Auto for all. */
     void setOverrides(std::function<Override(const std::string& mode)> f) { std::lock_guard<std::mutex> lk(statMtx_); override_ = std::move(f); }
     /** ★ The benchmark's budget for this machine, in FT8 units (∞ = none). */
     void setBudgetCap(double units) { std::lock_guard<std::mutex> lk(statMtx_); budget_.setCap(units); }
     double budgetUnits() const { std::lock_guard<std::mutex> lk(statMtx_); return budget_.units(); }
+    /** ★★ V12 beta91 BAND'S PAUSE RULE (docs/v12/BAND-SKIM-CW-RTTY.md): how far behind the capture the band decode is, in
+     *  seconds (the host's queue of slice IQ not yet decoded). With the IQ engines' own backlogs and the slotted modes'
+     *  skipped slots it decides when the CONTINUOUS modes (ModeDef::pauseRank — CW first, then RTTY) pause and resume.
+     *  Null = only the engines' backlogs and the skipped slots. Set before the first block. */
+    void setBehind(std::function<double()> f) { std::lock_guard<std::mutex> lk(statMtx_); behind_ = std::move(f); }
+    /** ★ A line for the server's log when a mode pauses or resumes ("Band: CW paused — the CPU is behind …"). */
+    void setLog(std::function<void(const std::string&)> f) { std::lock_guard<std::mutex> lk(statMtx_); log_ = std::move(f); }
+    /** ★ CPU (ns) the engines' own threads spent (an IQ engine's worker) — the host adds it to its health figure. Set before
+     *  the first block. */
+    void setCpu(std::function<void(uint64_t)> f) { cpuHook_ = std::move(f); }
+    /** ★ How many continuous modes are paused now (0 none, 1 CW, 2 CW and RTTY) — tests, the admin line. */
+    int pauseLevel() const { std::lock_guard<std::mutex> lk(statMtx_); return pauseLevel_; }
+    static constexpr double kPauseBehindSec = 1.5;   ///< behind by more than this (or a skipped slot): pause the next mode
+    static constexpr double kPauseStepSec = 5.0;     ///< …at most one more every this long
+    static constexpr double kResumeCalmSec = 30.0;   ///< caught up (under kResumeBehindSec) this long: resume the last paused
+    static constexpr double kResumeBehindSec = 0.3;
 
     /** ★ One mode's state in Band, for the spots box header ("FT8 active · WSPR idle · JTTY shed") and the admin page. */
     struct ModeStatus {
@@ -79,6 +98,8 @@ public:
         RunState state = RunState::Idle;
         int dials = 0;
         uint64_t idle = 0, shed = 0, live = 0;   ///< gate periods: dropped empty · dropped over budget · decoded
+        uint64_t cpuNs = 0;                      ///< ★ V12 beta91: CPU of the engines' OWN threads (the IQ modes' workers)
+        bool iq = false;                         ///< ★ an IQ mode (CW, RTTY): its windows, not dials
     };
     std::vector<ModeStatus> status() const;
     /** Bumped whenever a mode's state changes (the host sends the header's chips again). */
@@ -121,7 +142,7 @@ private:
     struct Gate {
         WindowMeter meter;
         int64_t per = INT64_MIN;             // the gate period now (floor(utc / period))
-        enum St : uint8_t { Pending, Live, Shed, Off } st = Pending;
+        enum St : uint8_t { Pending, Live, Shed, Off, Paused } st = Pending;
         RunState rs = RunState::Idle;        // the governor's last word, for status()
         bool saw = false;                    // the window lit up this period
         int  hang = 0;                       // periods still to start live (the window was busy lately)
@@ -137,6 +158,10 @@ private:
         std::unique_ptr<Engine> eng;
         std::shared_ptr<std::atomic<bool>> light;   // ★ the governor's depth: true = told it is loaded (one pass)
         std::unique_ptr<Gate> gate;                 // Band only
+        double cost = -1, lightC = -1;              // ★ an IQ run's own cost (costVsFt8 per 48 kHz × its width); < 0 = the mode's
+        std::shared_ptr<std::atomic<uint64_t>> cpu; // ★ its engine's own threads' CPU (ns)
+        double runCost() const { return cost >= 0 ? cost : def->costVsFt8; }
+        double runLight() const { return lightC >= 0 ? lightC : def->lightCost(); }
     };
     struct Chan {                     // ★ one tuner, and every engine on its dial
         std::unique_ptr<DigiTuner> tuner;
@@ -154,10 +179,15 @@ private:
         double endUtc = NAN;          // ★ the capture time of the last sample fed (gap bridging)
         int lastGated = 0;            // ★ the gate's state on the last real block (a bridged gap keeps it)
         uint64_t bridged = 0;         // ★ samples of zeros put into gaps
+        int id = -1;                  // ★ the caller's slice id (feedIq's sliceId), −1 = not given
     };
     static constexpr double kSliceGoneSec = 3.0;
     std::vector<cf32> zeros_;
-    void feedChans(long long key, Slice& S, const cf32* x, int n, double rate, double centreHz, double captureUtc, int gated);
+    void feedChans(long long key, Slice& S, const cf32* x, int n, double rate, double centreHz, double captureUtc, int gated, bool gap = false);
+    void routeIq(Run& r, const cf32* x, int n, double rate, double centreHz, double utc, int gated, Slice& s);
+    void pauseTick(double utc);                  // statMtx_ held
+    bool pausedNow(const Run& r) const { return r.def->pauseRank > 0 && r.def->pauseRank <= pauseLevel_; }
+    void stopFeeding(Run& r) { if (r.def->iq && r.eng) r.eng->idle(); }
     void plan();
     void planSingle(double dialHz);
     void wire(Run& r);
@@ -197,6 +227,14 @@ private:
     std::atomic<uint64_t> statusSeq_{0};
     std::atomic<uint64_t> bridgedTotal_{0};
     uint64_t retiredIdle_ = 0, retiredShed_ = 0;
+
+    // ── the pause rule (V12 beta91) — statMtx_ ──
+    std::function<double()> behind_;
+    std::function<void(const std::string&)> log_;
+    std::function<void(uint64_t)> cpuHook_;
+    int pauseLevel_ = 0;
+    double pauseAt_ = -1e300, calmSince_ = NAN, pauseCheck_ = -1e300;
+    uint64_t pauseSkips_ = 0;
 
     mutable std::mutex statMtx_;          // ★ the stats readers are on other threads; the engine set changes here
     uint64_t retiredSkips_ = 0, retiredDecodes_ = 0;
