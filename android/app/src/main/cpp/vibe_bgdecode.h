@@ -902,7 +902,10 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
  *    half a second. Appends, so two listeners at once pause two VFOs, not one twice. */
 class BgRegistry {
 public:
-    struct Entry { std::string id; int rank = 0; bool running = false; };
+    /** ★ `busy` (2026-11-22): a picture decoder part-way through a chart — paused for a listener only when nothing idle is
+     *  running (the state line's optional third field; an older process writes two, read as not busy). */
+    struct Entry { std::string id; int rank = 0; bool running = false; bool busy = false; };
+    struct Pub { int rank = 0; bool running = false; bool busy = false; };
     BgRegistry() = default;
     ~BgRegistry() { close(); }
     BgRegistry(const BgRegistry&) = delete;
@@ -927,10 +930,15 @@ public:
     const std::string& id() const { return id_; }
     /** This radio's VFOs, rank and running/paused. */
     void publish(const std::vector<std::pair<int, bool>>& v) {
+        std::vector<Pub> p; for (auto& e : v) p.push_back({ e.first, e.second, false });
+        publishState(p);
+    }
+    /** …and whether each is part-way through a picture ("<rank> <running> <busy>"). */
+    void publishState(const std::vector<Pub>& v) {
         std::lock_guard<std::mutex> lk(m_);
         if (fd_ < 0) return;
         std::string b;
-        for (auto& e : v) b += std::to_string(e.first) + (e.second ? " 1\n" : " 0\n");
+        for (auto& e : v) b += std::to_string(e.rank) + (e.running ? " 1" : " 0") + (e.busy ? " 1\n" : "\n");
         if (b == last_) return;
         last_ = b;
         if (::ftruncate(fd_, 0) == 0 && !b.empty()) (void)!::pwrite(fd_, b.data(), b.size(), 0);
@@ -961,22 +969,33 @@ public:
             const ssize_t got = alive ? ::pread(fd, b, sizeof b - 1, 0) : 0;
             ::close(fd);
             if (got <= 0) continue;
-            const char* q = b;
-            int rank = 0, run = 0, used = 0;
-            while (std::sscanf(q, "%d %d\n%n", &rank, &run, &used) == 2 && used > 0) { out.push_back({ id, rank, run == 1 }); q += used; }
+            // ★ a line a VFO: "<rank> <running>" or "<rank> <running> <busy>"
+            for (const char* q = b; *q; ) {
+                const char* e = std::strchr(q, '\n');
+                const std::string line(q, e ? (size_t)(e - q) : std::strlen(q));
+                int rank = 0, run = 0, busy = 0;
+                const int k = std::sscanf(line.c_str(), "%d %d %d", &rank, &run, &busy);
+                if (k < 2) break;
+                out.push_back({ id, rank, run == 1, k >= 3 && busy == 1 });
+                if (!e) break;
+                q = e + 1;
+            }
         }
         ::closedir(d);
         return out;
     }
     /** ★ The radio whose background gives way: the lowest-ranked RUNNING VFO box-wide; a tie, the radio running the most.
      *  "" = no background decoder is running anywhere. */
+    /** ★★ (2026-11-22) A VFO part-way through a picture (busy) is passed over while an idle one is running anywhere: a
+     *  chart is 10–25 minutes and is lost from where it was cut; an idle VFO loses nothing. */
     static std::string victim(const std::string& dir, int* rankOut = nullptr) {
         const auto v = all(dir);
         std::map<std::string, int> running;
-        for (auto& e : v) if (e.running) running[e.id]++;
+        bool idle = false;
+        for (auto& e : v) if (e.running) { running[e.id]++; if (!e.busy) idle = true; }
         std::string id; int rank = 0;
         for (auto& e : v) {
-            if (!e.running) continue;
+            if (!e.running || (idle && e.busy)) continue;
             if (id.empty() || e.rank > rank || (e.rank == rank && running[e.id] > running[id])) { id = e.id; rank = e.rank; }
         }
         if (rankOut) *rankOut = rank;
@@ -1557,9 +1576,19 @@ private:
     }
     void publish() {
         if (!p_.registry) return;
-        std::vector<std::pair<int, bool>> v;
-        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty()) v.push_back({ c->index + 1, c->decoding });   // ★ out of the window (or switched off here) = not waiting
-        p_.registry->publish(v);
+        std::vector<BgRegistry::Pub> v;
+        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty()) v.push_back({ c->index + 1, c->decoding, c->decoding && busy(*c) });   // ★ out of the window (or switched off here) = not waiting
+        p_.registry->publishState(v);
+    }
+    /** ★★ Part-way through a picture (a WEFAX chart, an SSTV frame) — see DecoderHost::midPicture. */
+    bool busy(const Chan& c) const { return c.host && c.host->midPicture(); }
+    /** ★★ WHICH VFO GIVES WAY (2026-11-22): rows are in rank order, so the last running is the lowest — but a picture
+     *  decoder part-way through a chart is passed over while an idle VFO is running: the chart would be cut (saved
+     *  partial) where an idle VFO loses nothing. Only when every running VFO is mid-picture does the lowest of them go. */
+    Chan* pausePick() {
+        Chan* low = nullptr; Chan* idle = nullptr;
+        for (auto& c : chans_) if (c->decoding) { low = c.get(); if (!busy(*c)) idle = c.get(); }
+        return idle ? idle : low;
     }
     /** ★★ The slot housekeeping, on the worker thread twice a second: listeners' pause requests first (lowest rank
      *  first), then — every 3 s, `force` for a test — the highest-ranked paused VFO back when a slot is free and nobody
@@ -1569,8 +1598,7 @@ private:
         bool changed = false;
         // ★★ The channel budget (a locked radio's free user slots): over it, the lowest running VFO gives up its channel.
         while (runningCount() > budget()) {
-            Chan* low = nullptr;
-            for (auto& c : chans_) if (c->decoding) low = c.get();
+            Chan* low = pausePick();
             if (!low) break;
             pauseOne(*low, "a listener took this radio's last user slot"); changed = true;
         }
@@ -1584,8 +1612,7 @@ private:
             if (!ndbWhy.empty()) { pauseOne(*c, ndbWhy); changed = true; }
         }
         for (int n = p_.registry ? p_.registry->takeDrops() : 0; n > 0; --n) {
-            Chan* low = nullptr;
-            for (auto& c : chans_) if (c->decoding) low = c.get();       // ★ rows are in rank order: the last running is the lowest
+            Chan* low = pausePick();                                      // ★ the lowest-ranked idle one (see pausePick)
             if (!low) break;
             pauseOne(*low); changed = true;
         }
@@ -1612,7 +1639,7 @@ private:
                 break;                                               // ★ one at a time — the box is re-read next round
             }
         }
-        if (changed) publish();
+        publish();   // ★ every tick: a picture starting or ending changes who gives way (a no-op when nothing changed)
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
     void loop() {

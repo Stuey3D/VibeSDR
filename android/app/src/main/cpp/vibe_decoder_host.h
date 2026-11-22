@@ -710,6 +710,15 @@ public:
     uint64_t cpuNs() const { return cpuNs_.load(std::memory_order_relaxed); }
     /** ★ The FSK decoder's state as it last said (0 no signal, 1–2 hunting, 3 locked — the 0x03 op); -1 = none running. */
     int fskState() const { return fskState_.load(std::memory_order_relaxed); }
+    /** ★★ A PICTURE PART-WAY THROUGH (WEFAX between its start and its stop tone, SSTV between its VIS and its end) — so
+     *  background decoding pauses an idle VFO for a listener before one in the middle of a chart (2026-11-22). A picture
+     *  whose end never came stops counting after kPictureStaleS (a WEFAX chart is ≤ 25 min at 120 LPM: the gallery's
+     *  3000-line cap). Lock-free. */
+    static constexpr double kPictureStaleS = 1800.0;
+    bool midPicture() const {
+        const double t = pictureSince_.load(std::memory_order_relaxed);
+        return t > 0 && steadySecs() - t < kPictureStaleS;
+    }
     /** Frames waiting for the decode thread — a feeder that must NOT lose audio (a test, the
      *  benchmark) paces itself on this; the server never does, it drops. */
     size_t queued() { std::lock_guard<std::mutex> lk(qM_); return qFrames_; }
@@ -955,6 +964,7 @@ private:
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
         imageKind_.store(0, std::memory_order_relaxed);
+        pictureSince_.store(0.0, std::memory_order_relaxed);
         { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; replayDoneSeq_ = 0; done_.clear(); doneBytes_ = 0; }
         gapClear(GapDecoder);   // ★ a new run — see the gap log
     }
@@ -1005,6 +1015,9 @@ private:
         //   listener who left AFTER it finished is not sent it again
         const bool ends = (kind == 1 && n == 1 && d[0] == 0x03) || (kind == 2 && d[0] == 0x05);
         if (ends) { std::lock_guard<std::mutex> gl(gapMtx_); replayDoneSeq_ = ++gapSeq_; }
+        // ★ mid-picture (midPicture): from its start to its end
+        if (starts) pictureSince_.store(steadySecs(), std::memory_order_relaxed);
+        if (ends) pictureSince_.store(0.0, std::memory_order_relaxed);
         if (replayBytes_ + n > kReplayMax && !ends) return;   // ★ the end marker always goes in (it is a byte or two)
         replay_.emplace_back(d, d + n);
         replayBytes_ += n;
@@ -2249,6 +2262,7 @@ private:
     int   textSlot_ = -1;
     std::atomic<bool> active_{false};
     std::atomic<int>  imageKind_{0};          // 0 none · 1 WEFAX · 2 SSTV — what record() keeps
+    std::atomic<double> pictureSince_{0.0};   // ★ steadySecs() the picture in progress began; 0 = none (midPicture)
     std::mutex textMtx_;
     std::string textBuf_, morse_;
     std::vector<NavtexRx::Counts> nvCounts_;   // ★ NAVTEX per-message FEC counts, sent after the text (0x07)
