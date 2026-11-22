@@ -492,6 +492,14 @@ function open() {
   };
 }
 
+/* ★★★ A HEARTBEAT FROM THIS THREAD TOO (docs/v12/WEB-KEEPALIVE.md). The server keeps a proto >= 1 session only while
+ *  an APPLICATION message arrives on ANY of its sockets within 30 s (kAppLivenessMs). The page's ping rides the spectrum
+ *  socket and needs the main thread to run; this one needs nothing but this worker, whose timers a hidden tab does not
+ *  throttle. Every 10 s, text {"type":"ping"}: the server answers {"type":"pong"}, which the handler above ignores. */
+setInterval(() => {
+  if (ws && ws.readyState === 1 && !closedByUs) { try { ws.send('{"type":"ping"}'); } catch (err) { /* closing */ } }
+}, 10000);
+
 self.onmessage = (e) => {
   const d = e.data || {};
   if (d.type === 'init')      { sink = d.sinkPort || null; rawOpus = !!d.rawOpus; url = d.url; open(); }

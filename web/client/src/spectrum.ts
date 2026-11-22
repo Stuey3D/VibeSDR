@@ -28,6 +28,7 @@ import { parseAvReport, type AvReport } from '../../../src/services/aviation';  
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, satPickMsg, satDopplerMsg, SAT_DROP_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack } from '../../../src/services/satellites';   // ★ V12 satellites
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
+import { heartbeat } from './keepAlive';   // ★★★ the ping on a worker's clock — a hidden tab's timers are throttled (WEB-KEEPALIVE.md)
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
 import { clampBalance } from '../../../src/services/dualMix';
@@ -1096,7 +1097,8 @@ export class SpectrumClient {
    *  dial — Stuart, 2026-11-21). The app's VibeServerWsClient.serverTakesDial, the same rule. */
   private serverTakesDial() { this.lastLocalTuneAt = -Infinity; }
   private lastSendAt = -Infinity;
-  private pingTimer: number | null = null;
+  /** ★★★ The 5 s ping's stop() — it runs on keepAlive.ts's WORKER clock, not window.setInterval (WEB-KEEPALIVE.md). */
+  private stopPing: (() => void) | null = null;
   private lastPingAt = 0;
   /* ★★★ TUNES ON THE WIRE ARE PACED BY THE SERVER'S LOAD (src/services/tunePace.ts — the app's rule, one
    *  file). Stuart, 2026-10-05: "if the server's CPU is reporting that it is struggling we need to slow
@@ -1173,10 +1175,17 @@ export class SpectrumClient {
       if (this.mode === 'm17') this._send(m17StatusMessage());   // ★ V12 M17 likewise
       if (this.mode === 'dvsig') this._send(dvsigStatusMessage());   // ★ V12 DV ID likewise
       this.lastRxAt = performance.now();
-      this.pingTimer = window.setInterval(() => {
+      /* ★★★ THE PING IS THE SESSION'S LIFE, NOT JUST THE RTT READOUT. The server releases a proto ≥ 1 session that sends
+       *  no application message for 30 s (kAppLivenessMs), and in a hidden, silent tab window.setInterval fell to about
+       *  once a MINUTE (Safari's increasing hidden-page alignment, Chromium's intensive throttling) — Stuart's Pi 500,
+       *  2026-11-22: frozen and reconnected once a minute behind Discord. The worker's clock is not throttled that way. */
+      this.stopPing?.();
+      this.stopPing = heartbeat(5000, () => {
+        if (this.ws !== ws) return;
         this.lastPingAt = performance.now();
         this._send({ type: 'ping' });
-      }, 5000);
+      });
+      this.aliveTickAt = performance.now();
       // ★★ THE WATCHDOG. A ping every 5s and a frame rate of at least a few per second mean a
       //    silence of RX_DEAD_MS cannot be normal — so treat it as dead and close, which drops
       //    into the reconnect path that already exists and is already careful about refusals.
@@ -1184,7 +1193,14 @@ export class SpectrumClient {
       //    happens after a drop (status, timers, the busy check) is written once, in onclose.
       this.aliveTimer = window.setInterval(() => {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-        if (performance.now() - this.lastRxAt < SpectrumClient.RX_DEAD_MS) return;
+        /* ★★ A LATE WATCHDOG IS THE PAGE ASLEEP, NOT THE SOCKET DEAD. In a throttled tab this 2 s check can come round
+         *  a minute late, or first after the page was suspended — ahead of the frames that queued meanwhile — and a
+         *  silence measured across a gap in which THIS PAGE ran nothing says nothing about the socket. So a check that
+         *  comes more than 5 s after the one before only re-arms: the silence is measured from here, and the next on-time check decides. */
+        const n = performance.now(), gap = n - this.aliveTickAt;
+        this.aliveTickAt = n;
+        if (gap > SpectrumClient.ALIVE_LATE_MS) { this.lastRxAt = Math.max(this.lastRxAt, n - SpectrumClient.ALIVE_LATE_MS); return; }
+        if (n - this.lastRxAt < SpectrumClient.RX_DEAD_MS) return;
         this.cb.onStatus?.('error', 'no data — reconnecting');
         try { this.ws.close(); } catch { /* already going */ }
       }, 2000);
@@ -1233,7 +1249,7 @@ export class SpectrumClient {
   }
 
   private _stopTimers() {
-    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    if (this.stopPing) { this.stopPing(); this.stopPing = null; }
     if (this.aliveTimer) { clearInterval(this.aliveTimer); this.aliveTimer = null; }
     if (this.sendTimer) { clearTimeout(this.sendTimer); this.sendTimer = null; }
   }
@@ -1242,6 +1258,9 @@ export class SpectrumClient {
    *  not mistaken for a dead socket, short enough that a listener who reaches for the dial gets
    *  it back before they give up and refresh the page — which is what they did instead. */
   private static readonly RX_DEAD_MS = 15000;
+  /** The watchdog ticks every 2 s; one later than this ran in a page that was throttled or suspended (see above). */
+  private static readonly ALIVE_LATE_MS = 5000;
+  private aliveTickAt = 0;
 
   /** Send an arbitrary control message. Used for radio-specific controls (RSP gain, notches)
    *  that have no place in the shared tune/gain vocabulary. */
