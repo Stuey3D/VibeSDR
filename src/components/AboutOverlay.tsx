@@ -59,6 +59,8 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta91 2026-11-22 — METEOR LRPT IS A SILENT DECODER, as APRS and Band are (src/services/silentDecoder.ts).
+  { v: 'V12 (experimental)', detail: 'METEOR LRPT MUTES THE SPEAKER \u2014 while a METEOR-M picture is being decoded (picked in SATELLITE) the speaker is muted, as it is for APRS and Band digital spots, and it comes back exactly as it was when the pass ends or you leave; you can still unmute it meanwhile. With VFO B on, only the VFO decoding the satellite leaves the mix and the other plays on. In the app and on the web page.' },
   // ★★★ V12 beta91 2026-11-22 — THE BAND DECODE SKIMS CW, RTTY AND PSK (docs/v12/BAND-SKIM-CW-RTTY.md): three more chips in
   //     the SAME Band run and decoder slot, a listener's Band and a Band background VFO alike. Server-side; the chips and
   //     their Band toggles come from the server's lists, so the note names where they show.
