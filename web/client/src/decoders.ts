@@ -29,7 +29,7 @@
  *
  *   FT8 / FT4 (text frame)
  *     {"type":"digital_spot","data":{mode,callsign,snr,frequency,band,grid,how,country,timestamp}}
- *     {"type":"digital_spots_status","data":{scope:"band",modes:[{mode,state,dials,idle,shed,live}],budget}}   (V12 Band governor)
+ *     {"type":"digital_spots_status","data":{scope:"band",modes:[{mode,state,dials,idle,shed,live}],budget}}   (V12 Band governor; beta91: CW, RTTY, PSKW chips and the 'paused' state)
  *
  *   CW ('cw' on the listener's audio, 'cwskim' on a segment of IQ around the dial — V12, vibe_cw_run.h)
  *     0x01 text (as RTTY — the primary signal, 'cw' only) · 0x03 | u8 state (0 nothing, 1 carriers, 3 decoding)
@@ -127,7 +127,7 @@ export interface Spot {
 export interface TimeSync { station: string; utcMs: number; hostMs: number; rxDelayMs: number }
 
 /** ★ V12 BAND GOVERNOR: one mode's state in Band (the spots box header's chips — {"type":"digital_spots_status"}). */
-export interface SpotModeState { mode: string; state: 'active' | 'light' | 'idle' | 'shed' | 'off' | 'out'; dials: number; idle: number; shed: number; live: number }
+export interface SpotModeState { mode: string; state: 'active' | 'light' | 'idle' | 'shed' | 'off' | 'out' | 'paused'; dials: number; idle: number; shed: number; live: number }
 export interface SpotsStatus { scope: 'band'; modes: SpotModeState[]; budget: number | null }
 
 export interface DecoderCallbacks {
@@ -606,7 +606,7 @@ export class DecoderClient {
     }
     if (msg.type === 'digital_spots_status' && msg.data && Array.isArray(msg.data.modes)) {
       // ★ Off the server, so bounded and checked: a state not in the five is dropped, names kept to a mode's alphabet.
-      const ok = ['active', 'light', 'idle', 'shed', 'off', 'out'];   // ★ 'out': its slice is beyond this radio's capture
+      const ok = ['active', 'light', 'idle', 'shed', 'off', 'out', 'paused'];   // ★ 'out': its slice is beyond this radio's capture · ★ V12 beta91 'paused': CW / RTTY / wide PSK waiting while the decode is behind
       const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
       const modes = msg.data.modes.slice(0, 16).filter((m: any) => m && typeof m.mode === 'string' && ok.includes(m.state))
         .map((m: any) => ({ mode: m.mode.replace(/[^0-9A-Za-z+-]/g, '').slice(0, 12), state: m.state, dials: n(m.dials), idle: n(m.idle), shed: n(m.shed), live: n(m.live) }));

@@ -14,6 +14,11 @@
 //     takes no slot, and a NAVTEX VFO beside it still runs.
 // ★ Silent: nothing is played.
 #include "vibe_bgdecode.h"
+#include "decoders/cw_skimmer.h"
+#include "decoders/rtty_skimmer.h"
+#include "vibe_station_store.h"
+#include "vibe_spot_report.h"
+#include "benchsynth/psk_synth.h"
 extern "C" {
 #include "ft8/message.h"
 #include "ft8/encode.h"
@@ -60,6 +65,70 @@ static void addFt8(std::vector<cf32>& x, double fs, double offHz, double startSe
             ph += 2 * M_PI * (offHz + tones[k] * spacing) / fs;
             x[i] += cf32((float)(amp * std::cos(ph)), (float)(amp * std::sin(ph)));
         }
+}
+
+// ── ★★ V12 beta91: CW and RTTY inside a band slice (docs/v12/BAND-SKIM-CW-RTTY.md) ────────────────────────────────────
+/** Keyed CW (ITU-R M.1677 timing, 5 ms raised-cosine edges) at `offHz` from the capture's centre, `text` repeated from
+ *  `startSec` to the end. Amplitude from `snrDb` in 2500 Hz over noise of `sigma` per rail. */
+static void addCw(std::vector<cf32>& x, double fs, double offHz, double startSec, const std::string& text, double wpm, double snrDb, double sigma) {
+    const double unit = 1.2 / wpm;
+    std::vector<std::pair<bool, double>> el;   // on/off, seconds
+    for (char ch : text) {
+        if (ch == ' ') { el.push_back({ false, 4 * unit }); continue; }   // + the 3 after the letter = 7
+        const std::string code = cw::morseCode(std::string(1, ch));
+        for (size_t i = 0; i < code.size(); ++i) { el.push_back({ true, (code[i] == '-' ? 3 : 1) * unit }); el.push_back({ false, unit }); }
+        el.push_back({ false, 2 * unit });
+    }
+    const double amp = std::sqrt(std::pow(10.0, snrDb / 10.0) * 2 * sigma * sigma / fs * 2500.0);
+    const double edge = 0.005;
+    size_t i = (size_t)(startSec * fs);
+    double ph = 0;
+    while (i < x.size()) {
+        for (auto& e : el) {
+            const size_t n = (size_t)(e.second * fs);
+            for (size_t k = 0; k < n && i < x.size(); ++k, ++i) {
+                ph += 2 * M_PI * offHz / fs; if (ph > M_PI) ph -= 2 * M_PI;
+                if (!e.first) continue;
+                const double t = k / fs, tt = (n - k) / fs;
+                const double g = t < edge ? 0.5 - 0.5 * std::cos(M_PI * t / edge) : tt < edge ? 0.5 - 0.5 * std::cos(M_PI * tt / edge) : 1.0;
+                x[i] += cf32((float)(amp * g * std::cos(ph)), (float)(amp * g * std::sin(ph)));
+            }
+            if (i >= x.size()) break;
+        }
+    }
+}
+/** RTTY (ITA2, start + 5 data + 1.5 stop, mark above space — normal) centred `offHz`, `text` repeated from `startSec`. */
+static void addRtty(std::vector<cf32>& x, double fs, double offHz, double startSec, const std::string& text, double baud, double shift,
+                    double snrDb, double sigma) {
+    std::vector<uint8_t> h;   // half bits
+    auto frame = [&](int code) { h.push_back(0); h.push_back(0); for (int b = 0; b < 5; ++b) { const uint8_t v = (code >> b) & 1; h.push_back(v); h.push_back(v); } for (int k = 0; k < 3; ++k) h.push_back(1); };
+    for (int k = 0; k < 20; ++k) h.push_back(1);
+    bool figs = false; frame(31);
+    for (char c : text) { bool f = figs; const int code = rttysk::ita2Code(c, f); if (code < 0) continue; if (f != figs) { frame(f ? 27 : 31); figs = f; } frame(code); }
+    const double amp = std::sqrt(std::pow(10.0, snrDb / 10.0) * 2 * sigma * sigma / fs * 2500.0);
+    const double hb = 1.0 / (2 * baud);
+    double ph = 0, t = 0;
+    for (size_t i = (size_t)(startSec * fs); i < x.size(); ++i) {
+        int k = (int)(t / hb);
+        if (k >= (int)h.size()) { t -= h.size() * hb; k = 0; }
+        const double f = offHz + (h[(size_t)k] ? shift / 2 : -shift / 2);
+        ph += 2 * M_PI * f / fs; if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
+        x[i] += cf32((float)(amp * std::cos(ph)), (float)(amp * std::sin(ph)));
+        t += 1.0 / fs;
+    }
+}
+
+/** BPSK (G3PLX's PSK31 / PSK63: Varicode, a zero a cosine-shaped reversal) at `offHz`, `text` once from `startSec`. */
+static void addPsk(std::vector<cf32>& x, double fs, double offHz, double startSec, const std::string& text, double baud, double snrDb, double sigma) {
+    const auto env = psksynth::envelope(psksynth::bits(text), baud, fs);
+    double ms = 0; for (float v : env) ms += v * v; ms /= std::max<size_t>(1, env.size());
+    const double amp = std::sqrt(std::pow(10.0, snrDb / 10.0) * 2 * sigma * sigma / fs * 2500.0 / ms);
+    double ph = 0;
+    const size_t s0 = (size_t)(startSec * fs);
+    for (size_t i = 0; i < env.size() && s0 + i < x.size(); ++i) {
+        ph += 2 * M_PI * offHz / fs; if (ph > M_PI) ph -= 2 * M_PI;
+        x[s0 + i] += cf32((float)(amp * env[i] * std::cos(ph)), (float)(amp * env[i] * std::sin(ph)));
+    }
 }
 
 static void config() {
@@ -243,9 +312,255 @@ static void cost() {
     ok(band < 60.0, "a quiet band's Band VFO stays well inside one core at 2.4 MS/s on this machine");
 }
 
+/** ★★ V12 beta91 — the 40 m capture the CW / RTTY tests share: noise, plus (when `signals`) G4CWX calling on CW at
+ *  7012.3 kHz, G4RTY calling on RTTY (45.45 Bd / 170 Hz) centred 7045.0 kHz, and FT8 G4IRX on 7.074 + 1200 Hz — or, with
+ *  `crowd`, only things that must spot NOTHING on CW or RTTY: four FT8 stations inside the RTTY window, a steady carrier
+ *  and randomly keyed CW (no callsign) in the CW window. */
+static std::vector<cf32> capture40(double fs, double centre, double secs, bool signals, bool crowd, double utc0) {
+    (void)utc0;
+    std::vector<cf32> cap((size_t)(secs * fs));
+    const float sigma = 0.01f;
+    std::mt19937 g(17); std::normal_distribution<float> n(0.0f, sigma);
+    for (auto& v : cap) v = cf32(n(g), n(g));
+    if (signals) {
+        addCw(cap, fs, 7012300 - centre, 0.7, "CQ CQ DE G4CWX G4CWX K   ", 26, 6, sigma);
+        addRtty(cap, fs, 7045000 - centre, 0.4, "CQ CQ DE G4RTY G4RTY PSE K\n", 45.45, 170, 12, sigma);
+        // ★ PSK63 at 7046.3 kHz — OUTSIDE the original PSK chip's window (7040.15–7043.65): only wide PSK can hear it
+        addPsk(cap, fs, 7046300 - centre, 0.6, "CQ CQ DE G4PSK G4PSK K  CQ CQ DE G4PSK G4PSK K  CQ CQ DE G4PSK G4PSK K  ", 62.5, 5, sigma);
+        const double amp = std::sqrt(std::pow(10.0, -8 / 10.0) * 2 * sigma * sigma / fs * 2500.0);
+        addFt8(cap, fs, 74000 + 1200, 0.5, ft8Tones("CQ G4IRX IO91"), amp);
+        addFt8(cap, fs, 74000 + 1200, 15.5, ft8Tones("CQ G4IRX IO91"), amp);
+    }
+    if (crowd) {
+        const double amp = std::sqrt(std::pow(10.0, 0 / 10.0) * 2 * sigma * sigma / fs * 2500.0);
+        const char* msgs[] = { "CQ G4AAA IO91", "CQ DL1BBB JO62", "CQ F5CCC JN18", "CQ EA4DDD IN80" };
+        for (int k = 0; k < 4; ++k) for (double t0 : { 0.5, 15.5 }) addFt8(cap, fs, 41500 + 2000.0 * k - (centre - 7000000), t0, ft8Tones(msgs[k]), amp);
+        // a steady carrier and randomly keyed CW (no callsign) in the CW window
+        const double ca = std::sqrt(std::pow(10.0, 10 / 10.0) * 2 * sigma * sigma / fs * 2500.0);
+        std::uniform_real_distribution<double> u(0, 1);
+        double ph1 = 0, ph2 = 0, next = 0.06; bool on = true;
+        for (size_t i = 0; i < cap.size(); ++i) {
+            const double t = i / fs;
+            if (t >= next) { on = !on; next = t + 0.05 * (on ? (u(g) < 0.5 ? 1 : 3) : (u(g) < 0.6 ? 1 : 3)); }
+            ph1 += 2 * M_PI * (7030000 - centre) / fs; ph2 += 2 * M_PI * (7025000 - centre) / fs;
+            cap[i] += cf32((float)(ca * std::cos(ph1)), (float)(ca * std::sin(ph1)));
+            if (on) cap[i] += cf32((float)(ca * std::cos(ph2)), (float)(ca * std::sin(ph2)));
+        }
+    }
+    return cap;
+}
+
+struct Heard { std::string mode, call; double rf; };
+/** BgRunner, one 40 m Band VFO, the capture above; what the stations store heard, the reporter's datagrams, the status. */
+struct SkimRun { std::vector<Heard> heard; std::string status, body, list; int running = 0, slotsDuring = 0; std::vector<std::string> logs; double cpu = 0; };
+static SkimRun runSkim(bool signals, bool crowd, const char* tag, std::function<int(const std::string&)> ov = nullptr) {
+    SkimRun out;
+    gallery::Store gs; gs.setDir(tmpDir(tag));
+    vibestations::Store st(nullptr, false);
+    std::mutex hm;
+    const int sub = st.subscribe([&](const vibestations::Reception& r) { std::lock_guard<std::mutex> lk(hm); out.heard.push_back({ r.mode, r.call, r.rfHz }); });
+    FileSlots slots("", [] { return 4; });
+    const double fs = 250000, centre = 7000000;
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.fftSize = 8192; p.slots = &slots; p.store = &gs; p.stations = &st;
+    p.lat = 52.29; p.lon = -0.85;
+    p.profile.centreHz = centre;
+    p.profile.vfos = { bg::Vfo{7074000, "usb", "spots-band"} };
+    if (ov) p.bandOverride = ov;
+    std::mutex lm;
+    p.log = [&](const std::string& l) { std::lock_guard<std::mutex> lk(lm); out.logs.push_back(l); };
+    r.start(p);
+    out.running = r.decodersRunning();
+    const double utc0 = std::floor(1793000000.0 / 15.0) * 15.0, secs = 32.0;
+    const auto cap = capture40(fs, centre, secs, signals, crowd, utc0);
+    const double c0 = cpuSecs();
+    const size_t chunk = 16384;
+    const auto w0 = std::chrono::steady_clock::now();
+    // ★ the 32 s are fed TWICE (64 s of capture, the stamps running on) so Band's minute line is written once
+    size_t fed = 0;
+    for (int pass = 0; pass < 2; ++pass)
+    for (size_t o = 0; o < cap.size(); o += chunk) {
+        const int k = (int)std::min(chunk, cap.size() - o);
+        fed += (size_t)k;
+        r.feedIq(&cap[o], k, utc0 + (double)fed / fs);
+        // ★ paced at 4× real time: the CW / RTTY workers keep up (a live radio is 1×), the runner's queue never drops
+        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)fed / fs / 4.0 * 1e6)));
+        if (pass == 0 && !out.slotsDuring && o >= cap.size() / 2) out.slotsDuring = slots.inUse();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+    out.status = r.statusJson();
+    r.stop();
+    out.cpu = cpuSecs() - c0;
+    st.unsubscribe(sub);
+    const std::string list = gs.listJson("ft8", 20), first = gallery::lineStr(list, "f");
+    out.list = list;
+    std::string path, ct;
+    if (!first.empty() && gs.resolve(first, path, ct)) {
+        FILE* f = std::fopen(path.c_str(), "r"); char b[512]; size_t k;
+        while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) out.body.append(b, k);
+        if (f) std::fclose(f);
+    }
+    return out;
+}
+static const Heard* find(const std::vector<Heard>& v, const char* mode, const char* call) {
+    for (const auto& h : v) if (h.mode == mode && h.call == call) return &h;
+    return nullptr;
+}
+
+static void cwRttyChips() {
+    std::printf("\n── ★ V12 beta91: CW and RTTY chips inside the 40 m Band VFO (one slot), 250 kS/s centred 7.000 MHz ──\n");
+    vibe::skimbands::bandRegion().store(1);
+    // ★ PSK Reporter on (a test sink — nothing leaves the machine): what the band's CW and RTTY spots become there
+    auto& rp = vibe::spotreport::Reporter::shared();
+    std::mutex um; std::string dgrams;
+    rp.setUdp([&](const std::string&, int, const std::vector<uint8_t>& b, std::string&) { std::lock_guard<std::mutex> lk(um); dgrams.append((const char*)b.data(), b.size()); return true; });
+    vibe::spotreport::Config rc; rc.on = true; rc.call = "G0TST"; rc.grid = "IO92"; rc.pskHost = "127.0.0.1"; rp.configure(rc);
+
+    const SkimRun a = runSkim(true, false, "skim");
+    ok(a.running == 1 && a.slotsDuring == 1, "ONE decoder slot for the whole band — CW and RTTY ride the Band VFO's (" + std::to_string(a.slotsDuring) + " in use mid-run)");
+    ok(a.status.find("CW 7.0200") != std::string::npos && a.status.find("RTTY 7.0450") != std::string::npos,
+       "the admin line lists the CW window (7.000–7.040, centre 7.0200) and the RTTY window (7.040–7.050, centre 7.0450)");
+    const Heard* c = find(a.heard, "CW", "G4CWX");
+    const Heard* t = find(a.heard, "RTTY", "G4RTY");
+    const Heard* f8 = find(a.heard, "FT8", "G4IRX");
+    char b[200];
+    std::snprintf(b, sizeof b, "CW: G4CWX spotted at %.1f Hz (sent at 7012300) — mode CW, into the stations store", c ? c->rf : 0.0);
+    ok(c && std::fabs(c->rf - 7012300) < 60, b);
+    std::snprintf(b, sizeof b, "RTTY: G4RTY spotted at %.1f Hz (centred 7045000) — mode RTTY", t ? t->rf : 0.0);
+    ok(t && std::fabs(t->rf - 7045000) < 60, b);
+    ok(f8 != nullptr, "FT8 G4IRX on 7.074 still decoded beside them");
+    const Heard* p63 = find(a.heard, "PSK63", "G4PSK");
+    std::snprintf(b, sizeof b, "wide PSK: G4PSK on PSK63 at %.1f Hz (sent at 7046300, outside the old 3.5 kHz PSK window) — mode PSK63", p63 ? p63->rf : 0.0);
+    ok(p63 && std::fabs(p63->rf - 7046300) < 30, b);
+    ok(a.status.find("PSKW 7.0450") != std::string::npos, "the admin line lists wide PSK on the RTTY segment's window");
+    int others = 0; std::string what;
+    for (const auto& h : a.heard) if (h.call != "G4CWX" && h.call != "G4RTY" && h.call != "G4IRX" && h.call != "G4PSK") { ++others; what += " " + h.mode + ":" + h.call; }
+    ok(others == 0, "nothing else spotted (no false CW / RTTY calls)" + what);
+    {
+        const size_t l = a.body.find("Spots heard:");
+        const std::string line = l == std::string::npos ? std::string() : a.body.substr(l, a.body.find('\n', l) - l);
+        ok(line.find("CW ") != std::string::npos && line.find("RTTY ") != std::string::npos && line.find("PSK63 ") != std::string::npos,
+           "the band's ONE summary card counts them by mode: " + line);
+    }
+    rp.flushNow();
+    std::string d; { std::lock_guard<std::mutex> lk(um); d = dgrams; }
+    ok(d.find("G4CWX") != std::string::npos && d.find(std::string("\x02" "CW", 3)) != std::string::npos,
+       "PSK Reporter: G4CWX sent with ADIF mode \"CW\"");
+    ok(d.find("G4RTY") != std::string::npos && d.find(std::string("\x04" "RTTY", 5)) != std::string::npos,
+       "PSK Reporter: G4RTY sent with ADIF mode \"RTTY\"");
+    ok(d.find("G4PSK") != std::string::npos && d.find(std::string("\x05" "PSK63", 6)) != std::string::npos,
+       "PSK Reporter: G4PSK sent with mode \"PSK63\"");
+    bool chipsLine = false;
+    for (const auto& l : a.logs) if (l.find("chips:") != std::string::npos && l.find(" CW:") != std::string::npos && l.find(" RTTY:") != std::string::npos) chipsLine = true;
+    ok(chipsLine, "the minute line's \"chips:\" names CW and RTTY");
+    std::printf("  CPU (40 m, CW + RTTY + FT8 heard, 4x real time): %.2f s for 64 s = %.1f %% of one core, whole process\n", a.cpu, 100.0 * a.cpu / 64.0);
+
+    const SkimRun q = runSkim(false, false, "skimq");
+    int qn = 0; for (const auto& h : q.heard) if (h.mode == "CW" || h.mode == "RTTY" || h.mode.rfind("PSK", 0) == 0) ++qn;
+    ok(qn == 0, "noise only: no CW, RTTY or PSK spot (" + std::to_string(qn) + ")");
+    const SkimRun k = runSkim(false, true, "skimc");
+    int kn = 0; std::string kw; for (const auto& h : k.heard) if (h.mode == "CW" || h.mode == "RTTY" || h.mode.rfind("PSK", 0) == 0) { ++kn; kw += " " + h.mode + ":" + h.call; }
+    ok(kn == 0, "an FT8 crowd inside the RTTY / wide-PSK window, a steady carrier and call-less keyed CW in the CW window: no CW, RTTY or PSK spot" + kw);
+
+    // ★ the owner's toggles (Band, mode by mode: "spotsband-cw" / "spotsband-rtty")
+    const SkimRun o = runSkim(true, false, "skimoff", [](const std::string& m) { return (m == "CW" || m == "RTTY" || m == "PSKW") ? -1 : 0; });
+    int on = 0; for (const auto& h : o.heard) if (h.mode == "CW" || h.mode == "RTTY" || h.call == "G4PSK") ++on;
+    ok(on == 0 && o.status.find("CW 7.0200 off") != std::string::npos && o.status.find("RTTY 7.0450 off") != std::string::npos
+       && o.status.find("PSKW 7.0450 off") != std::string::npos,
+       "switched off by the owner: CW, RTTY and wide PSK show \"off\" and spot nothing");
+    rc.on = false; rp.configure(rc); rp.setUdp(nullptr);
+}
+
+/** ★★ THE LIVE PATH (Stuart: "the CW and RTTY chips must work in a LISTENER's live full-band digital-spots decode too"):
+ *  a listener's DecoderHost in Band, fed the way the server's per-listener extract feeds it — the main slice on the dial
+ *  and every extra slice the host asks for (iqExtraSlices), each with its id and bins — and the decoder socket's frames. */
+struct LivePeer : DecoderPeer {
+    std::mutex m; std::vector<std::string> txt;
+    bool open() const override { return true; }
+    void binary(const uint8_t*, size_t) override {}
+    void text(const std::string& t) override { std::lock_guard<std::mutex> lk(m); txt.push_back(t); }
+    int count(const std::string& a, const std::string& b) { std::lock_guard<std::mutex> lk(m); int n = 0; for (auto& t : txt) n += t.find(a) != std::string::npos && t.find(b) != std::string::npos; return n; }
+    std::string last(const std::string& a) { std::lock_guard<std::mutex> lk(m); for (auto it = txt.rbegin(); it != txt.rend(); ++it) if (it->find(a) != std::string::npos) return *it; return ""; }
+};
+static void livePath() {
+    std::printf("\n── ★ the LIVE path: a listener's Band (DecoderHost) on 40 m — CW, RTTY and wide PSK spots and chips on the decoder socket ──\n");
+    vibe::skimbands::bandRegion().store(1);
+    const double fs = 250000, hw = 7000000; const int fft = 8192;
+    const double dial = digi::spanOf(*digi::bandById("40m"), digi::modes()).centreHz;
+    DecoderHost::Env env;
+    env.dialHz = [dial] { return dial; };
+    std::vector<std::string> logs; std::mutex lm;
+    env.log = [&](const std::string& l) { std::lock_guard<std::mutex> lk(lm); logs.push_back(l); };
+    auto host = std::make_shared<DecoderHost>(env, "live-test");
+    auto peer = std::make_shared<LivePeer>();
+    host->addPeer(peer);
+    ok(host->startSpots(DecoderHost::SpotScope::Band) == DecoderHost::Start::Ok, "a listener starts Band on 40 m (one spots slot)");
+    ExtraSlice xs[kMaxExtraSlices];
+    const int nx = host->iqExtraSlices(xs);
+    bool cwX = false; for (int k = 0; k < nx; ++k) if (xs[k].centreHz - xs[k].widthHz / 2 < 7000500 && xs[k].centreHz + xs[k].widthHz / 2 > 7039500) cwX = true;
+    ok(nx >= 2 && cwX, "the host asks for its extra slices — JTTY's and the CW window's (7000–7040) among " + std::to_string(nx));
+    const double binHz = fs / fft;
+    struct Sl { int bins, cb; double rate, centre; std::vector<cf32> buf; std::vector<float> pw; vibedsp::Channelizer::ExtractCtx ctx; };
+    std::vector<Sl> sls;
+    { Sl m; m.bins = bandSliceBins(fs, fft, std::min(host->iqWidthHz(), fs * 0.8)); m.cb = (int)std::lround((dial - hw) / binHz);
+      m.rate = fs * m.bins / fft; m.centre = hw + m.cb * binHz; sls.push_back(std::move(m)); }
+    for (int k = 0; k < nx; ++k) {
+        Sl x; x.bins = bandSliceBins(fs, fft, xs[k].widthHz); x.cb = (int)std::lround((xs[k].centreHz - hw) / binHz);
+        x.rate = fs * x.bins / fft; x.centre = hw + x.cb * binHz;
+        sls.push_back(std::move(x));
+    }
+    const double utc0 = std::floor(1793000000.0 / 15.0) * 15.0, secs = 32.0;
+    const auto cap = capture40(fs, hw, secs, true, false, utc0);
+    vibedsp::Channelizer ch(fft);
+    const int chunk = 16384;
+    const auto w0 = std::chrono::steady_clock::now();
+    for (size_t o = 0; o < cap.size(); o += (size_t)chunk) {
+        const int n = (int)std::min<size_t>((size_t)chunk, cap.size() - o);
+        ch.feed(&cap[o], n, [&](const cf32* b, int) {
+            const double utc = utc0 + (double)((ch.blockIndex() + 1) * (long long)ch.hop()) / fs;
+            for (size_t i = 0; i < sls.size(); ++i) {
+                Sl& sl = sls[i];
+                if (!captureHolds(fs, hw, sl.centre, sl.rate)) continue;
+                sl.buf.resize((size_t)sl.bins); sl.pw.resize((size_t)sl.bins);
+                const int got = ch.extract(b, sl.cb, sl.bins, sl.buf.data(), sl.ctx, ch.blockIndex(), kBandTaperDiv);
+                digi::slicePower(b, fft, sl.cb, sl.bins, sl.pw.data());
+                if (got > 0) host->feedIq(sl.buf.data(), got, sl.rate, sl.centre, sl.pw.data(), sl.bins, binHz, utc, (int)i);
+            }
+        });
+        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)(o + (size_t)n) / fs / 4.0 * 1e6)));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+    const std::string st = host->spotsStatusJson();
+    ok(st.find("\"mode\":\"CW\"") != std::string::npos && st.find("\"mode\":\"RTTY\"") != std::string::npos && st.find("\"mode\":\"PSKW\"") != std::string::npos,
+       "the chips (digital_spots_status) carry CW, RTTY and PSKW beside FT8 …: " + st.substr(0, 420));
+    ok(peer->count("\"type\":\"digital_spots_status\"", "\"mode\":\"CW\"") > 0, "…and the decoder socket was sent them");
+    ok(peer->count("\"mode\":\"CW\",\"callsign\":\"G4CWX\"", "digital_spot") > 0, "a digital_spot frame: CW G4CWX — " + peer->last("G4CWX").substr(0, 240));
+    ok(peer->count("\"mode\":\"RTTY\",\"callsign\":\"G4RTY\"", "digital_spot") > 0, "a digital_spot frame: RTTY G4RTY — " + peer->last("G4RTY").substr(0, 240));
+    ok(peer->count("\"mode\":\"PSK63\",\"callsign\":\"G4PSK\"", "digital_spot") > 0, "a digital_spot frame: PSK63 G4PSK (wide PSK) — " + peer->last("G4PSK").substr(0, 240));
+    ok(peer->count("\"callsign\":\"G4IRX\"", "\"mode\":\"FT8\"") > 0, "…and FT8 G4IRX as ever");
+    host->stopSpots();
+    host->shutdown();
+}
+
+/** ★ Old configs load unchanged: a profile with a Band VFO and standalone CW / RTTY skimmer VFOs (beta90's shape). */
+static void oldConfigs() {
+    std::printf("\n── old configs load unchanged ──\n");
+    bg::installBandSpan();
+    const char* js = R"({"on":true,"profiles":[{"centre":7050000,"vfos":[{"hz":7074000,"mode":"usb","dec":"spots-band"},{"hz":7024000,"mode":"usb","dec":"cw-skim-48"},{"hz":7064000,"mode":"usb","dec":"rtty-skim-48"}]}]})";
+    bg::Config c; std::string err;
+    ok(bg::parse(js, c, err) && c.profiles.size() == 1 && c.profiles[0].vfos.size() == 3, "a beta90 profile (Band + CW skimmer + RTTY skimmer) parses (" + err + ")");
+    bg::Config c2; std::string err2;
+    ok(bg::parse(bg::toJson(c), c2, err2) && bg::toJson(c2) == bg::toJson(c), "…and writes back the same, nothing migrated");
+    ok(bg::validate(c, 2400000, err), "…and is valid at 2.4 MS/s (" + err + ")");
+}
+
 int main() {
     config();
+    oldConfigs();
     endToEnd();
+    cwRttyChips();
+    livePath();
     switchedOff();
     if (!std::getenv("VIBE_BG_BAND_NO_COST")) cost();
     std::printf("\n%d passed, %d failed\n", passes, fails);

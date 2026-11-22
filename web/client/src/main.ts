@@ -13122,6 +13122,8 @@ const SPOT_STATE_WORDS: Record<string, string> = {
   active: 'decoding', light: 'decoding, one pass — the server is busy', idle: 'nothing in its window just now — not decoded',
   shed: 'signals there, but over this server\'s CPU budget — not decoded', off: 'switched off for Band by the server owner',
   out: 'its dial is further from this band\'s others than this radio\'s capture reaches — not decoded here',
+  // ★ V12 beta91: CW, RTTY and wide PSK (continuous) pause first when the server's band decode falls behind
+  paused: 'paused — the band decode fell behind the radio, so the continuous modes wait and the slotted ones keep their slots',
 };
 function renderSpotModeChips() {
   const host = document.getElementById('spotModeChips');

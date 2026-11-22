@@ -695,7 +695,7 @@ inline void decFetchCaps(int port) {
             if (!g.id.empty() && g.id.size() <= 24 && !g.label.empty() && g.label.size() <= 24 && g.group.size() <= 16 && u.pagingModes.size() < 16) u.pagingModes.push_back(g);
         }
         u.spotModes.clear();
-        for (auto& m : j["spotModes"].a) if (!m.str().empty() && u.spotModes.size() < 12) u.spotModes.push_back(m.str().substr(0, 12));
+        for (auto& m : j["spotModes"].a) if (!m.str().empty() && u.spotModes.size() < 16) u.spotModes.push_back(m.str().substr(0, 12));   // ★ beta91: 14 modes (CW, RTTY, PSKW)
         u.capFetched = true;
     }).detach();
 }

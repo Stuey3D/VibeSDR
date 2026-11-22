@@ -597,7 +597,7 @@ void Spotter::pauseTick(double utc) {
             char why[160];
             if (skipped && !(b > kPauseBehindSec)) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
             else std::snprintf(why, sizeof why, "the decode is %.1f s behind the capture", b);
-            log_("Band: " + names(pauseLevel_) + " paused â the CPU is behind (" + why + "); the slotted modes keep their slots");
+            log_("Band: " + names(pauseLevel_) + " paused \xe2\x80\x94 the CPU is behind (" + why + "); the slotted modes keep their slots");
         }
         return;
     }
@@ -614,7 +614,7 @@ void Spotter::pauseTick(double utc) {
                 r.gate->st = Gate::Pending; r.gate->per = INT64_MIN;   // ★ judged afresh at its next block
                 setState(*r.gate, RunState::Idle);
             }
-    if (log_) log_("Band: " + back + " resumed â the decode has caught up");
+    if (log_) log_("Band: " + back + " resumed \xe2\x80\x94 the decode has caught up");
 }
 
 uint64_t Spotter::periodsShed() const {

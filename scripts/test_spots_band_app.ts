@@ -83,7 +83,7 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
 
 // ── 4. The governor's status frame and its words ──
 {
-  const body = cut(/(const ok = \['active', 'light', 'idle', 'shed', 'off', 'out'\];[^\n]*\n[\s\S]*?shed: n\(m\.shed\), live: n\(m\.live\) \}\)\);)/, 'digital_spots_status parse');
+  const body = cut(/(const ok = \['active', 'light', 'idle', 'shed', 'off', 'out', 'paused'\];[^\n]*\n[\s\S]*?shed: n\(m\.shed\), live: n\(m\.live\) \}\)\);)/, 'digital_spots_status parse');
   if (body) {
     const web = new Function('msg', `${body.replace(/: unknown/g, '').replace(/\(m: any\)/g, '(m)')}\n return modes;`) as (msg: any) => unknown;
     const data = { scope: 'band', budget: 20, modes: [

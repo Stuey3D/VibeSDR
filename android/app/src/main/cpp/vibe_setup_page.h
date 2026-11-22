@@ -903,7 +903,8 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <p class="why">Share what this server's decoders hear with PSK Reporter's map, so a station calling CQ can see that
           it was heard here.</p>
         <p class="hint" id="pskrWhat">Reported: the digital spots (FT8, FT4, WSPR, JS8, Q65, FST4, MSK144 and the rest, one
-          mode or a whole Band), the CW decoder and CW skimmer, the RTTY skimmer, and the PSK decoder and PSK skimmer
+          mode or a whole Band &mdash; a Band also skims the band's CW, RTTY and PSK segments), the CW decoder and CW skimmer,
+          the RTTY skimmer, and the PSK decoder and PSK skimmer
           &mdash; whether a listener was running them or Background Decoding was (its per-band skimmers report all day).</p>
       <label style="display:flex;gap:8px;align-items:center">
         <input type="checkbox" id="pskrOn" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -7755,6 +7756,27 @@ function bgBandOk() {
   return true;
 }
 /** The band a Band VFO's frequency names, from the radio's own list (HW.spotBands) — or null. */
+/* ★★ V12 beta91 (docs/v12/BAND-SKIM-CW-RTTY.md): THE BAND VFO NOW SKIMS CW, RTTY AND WIDE PSK. A standalone skimmer VFO
+ *  (cw / rtty / psk) on a band that a Band VFO in the SAME profile decodes — its chip among the band's modes
+ *  (HW.spotBands[].modes: CW, RTTY, PSKW) and not switched off for Band by the owner — gets one line saying so: the Band
+ *  VFO covers it, and this VFO can be removed to free a decoder slot. Nothing is migrated: the owner decides (a listener
+ *  watching one CW stretch live, or an owner who wants the skimmer's own card, keeps it). "" = nothing to say. */
+function bgSkimCoveredBy(p, v, sk) {
+  if (!p || !v || !sk || !(v.hz > 0)) return "";
+  const chip = { cw: "CW", rtty: "RTTY", psk: "PSKW" }[sk.skim];
+  const band = bgSpotBand(v.hz);
+  if (!chip || !band || !Array.isArray(band.modes) || band.modes.indexOf(chip) < 0) return "";
+  try { if (typeof modeOwnerSet === "function" && modeOwnerSet().has("spotsband-" + chip.toLowerCase())) return ""; } catch (e) { /* no mode list */ }
+  for (let k = 0; k < p.vfos.length; k++) {
+    const o = p.vfos[k];
+    if (o === v || o.dec !== "spots-band") continue;
+    const ob = bgSpotBand(o.hz);
+    if (ob && ob.id === band.id)
+      return "VFO " + (k + 1) + " (Band, " + band.name + ") now skims " + (chip === "PSKW" ? "PSK31/PSK63 across the digimode segment" : chip)
+        + " on this band too \u2014 this VFO can be removed to free a decoder slot.";
+  }
+  return "";
+}
 function bgSpotBand(hz) {
   const hw = typeof HW !== "undefined" ? HW : null;
   if (!hw || !Array.isArray(hw.spotBands) || !(hz > 0)) return null;
@@ -8389,7 +8411,10 @@ function bgRender() {
       const paintHint = function () {
         if (!bh) return;
         const h = v.dec === "ndb-skim" ? bgNdbHint(p, r0, locked) : sk ? bgSkimHint(v, centreNow(), bgRate) : bgBandHint(v, centreNow(), bgRate);
-        bh.textContent = h.text;
+        // ★★ V12 beta91: a skimmer VFO whose band a Band VFO in this profile now skims too — said, never changed for them
+        const cov = sk ? bgSkimCoveredBy(p, v, sk) : null;
+        bh.textContent = h.text + (cov ? "\n" + cov : "");
+        bh.style.whiteSpace = cov ? "pre-line" : "";
         bh.style.color = h.bad ? "#ff8a7d" : "";
       };
       repaints.push(paintHint);

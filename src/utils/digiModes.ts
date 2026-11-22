@@ -33,6 +33,12 @@ export const DIGI_MODE_STYLE: Record<string, DigiModeStyle> = {
    *  and PSK Paul Tol's purple #AA3377 (ΔE ≥ 16 from all, nearest FST4's vermillion; it reads 3:1 on the dark map). */
   JTTY:   { colour: '#FFFFFF', ink: '#000000', letter: 'T' },   // white
   PSK:    { colour: '#AA3377', ink: '#FFFFFF', letter: 'P' },   // purple (Tol) — PSK31 and PSK63 alike
+  /* ★ V12 beta91 (docs/v12/BAND-SKIM-CW-RTTY.md): the band decode's CW and RTTY chips, and WIDE PSK (PSKW — its spots
+   *  say PSK31 / PSK63, so on the map and in the list they are PSK's; only its chip uses this). From Paul Tol's muted
+   *  set, ≥ ΔE 10 from every fill (scripts/test_digi_modes.ts), and each with its own letter. */
+  CW:     { colour: '#44AA99', ink: '#000000', letter: 'C' },   // teal (Tol)
+  RTTY:   { colour: '#999933', ink: '#000000', letter: 'R' },   // olive (Tol)
+  PSKW:   { colour: '#AA3377', ink: '#FFFFFF', letter: 'p' },   // PSK's purple, its own letter (the same family)
 };
 
 /** The marker rim: dark, so a pale fill reads on a light map and every fill stands off a dark one. */

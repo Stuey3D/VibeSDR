@@ -118,6 +118,32 @@ ok(!decSel(rows()[0]).children.some((o) => /skim-/.test(o.value) && o.value !== 
 api = mk(null);
 api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(P40) });
 ok(!skimSel(rows()[0]) && freqIn(rows()[0]) && freqIn(rows()[0]).value === '7036', 'no skimBands: the typed centre box, as before');
+// ★★ V12 beta91: the Band VFO now skims CW, RTTY and wide PSK — a skimmer VFO on a band a Band VFO in the same profile
+//    covers gets ONE LINE saying it can be removed to free a slot; nothing is migrated (the profile saves back unchanged).
+{
+  const SPOT = [{ id: '40m', name: '40 m', hz: 7060600, lo: 7039600, hi: 7081600, bandLo: 7000000, bandHi: 7300000,
+                  modes: ['FT8', 'FT4', 'FT2', 'JS8', 'WSPR', 'PSK', 'FST4W', 'RTTY', 'JTTY', 'CW', 'PSKW'] },
+                { id: '20m', name: '20 m', hz: 14083700, lo: 14069900, hi: 14097500, bandLo: 14000000, bandHi: 14350000, modes: ['FT8', 'CW', 'RTTY', 'PSKW'] }];
+  api = mk({ skimBands: SKIM, spotBands: SPOT });
+  const PB = { on: true, waitMin: 5, profiles: [{ centre: 7050000, from: '00:00', to: '00:00',
+    vfos: [{ hz: 7060600, mode: 'usb', dec: 'spots-band' }, { hz: 7024000, mode: 'usb', dec: 'cw-skim-48' },
+           { hz: 7064000, mode: 'usb', dec: 'rtty-skim-48' }, { hz: 7046000, mode: 'usb', dec: 'psk-skim-12' }] }] };
+  api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(PB) });
+  const n = (i) => (skimNote(i) ? skimNote(i).textContent : '');
+  ok(/VFO 1 \(Band, 40 m\) now skims CW on this band too — this VFO can be removed to free a decoder slot\./.test(n(0)), 'a 40 m CW skimmer beside a 40 m Band VFO: one line says the Band VFO covers it — ' + n(0));
+  ok(/now skims RTTY on this band too/.test(n(1)), '…the RTTY skimmer the same — ' + n(1));
+  ok(/now skims PSK31\/PSK63 across the digimode segment on this band too/.test(n(2)), '…and the PSK skimmer (wide PSK) — ' + n(2));
+  ok(!/licen[cs]e/i.test(n(0) + n(1) + n(2)), 'no licence wording anywhere (receive only)');
+  ok(api.bgCollect() === JSON.stringify(PB), 'nothing is migrated: the profile saves back byte for byte');
+  const P20 = { on: true, waitMin: 5, profiles: [{ centre: 7050000, from: '00:00', to: '00:00',
+    vfos: [{ hz: 14083700, mode: 'usb', dec: 'spots-band' }, { hz: 7024000, mode: 'usb', dec: 'cw-skim-48' }] }] };
+  api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(P20) });
+  ok(!/can be removed/.test(n(0)), 'a 40 m CW skimmer beside a 20 m Band VFO: nothing said (another band)');
+  api = mk({ skimBands: SKIM, spotBands: [{ ...SPOT[0], modes: ['FT8', 'FT4'] }] });
+  api.bgLoad({ driver: 'sdrplay', rate: 2400000, bgDecode: JSON.stringify(PB) });
+  ok(!/can be removed/.test(n(0)), 'an older server whose Band lists no CW chip: nothing said');
+  api = mk({ skimBands: SKIM });
+}
 // GET /vibeserver/hardware and hwinfo carry it; the page takes the door's
 {
   const shim = fs.readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8');
