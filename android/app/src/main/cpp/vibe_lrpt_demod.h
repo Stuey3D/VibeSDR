@@ -236,6 +236,8 @@ public:
      *  under its threshold while frames still decode, and a re-acquisition then moved the NCO under a working loop). */
     void setHold(bool h) { hold_ = h; if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; } }
     uint64_t acquisitions() const { return acqHits_; }
+    /** ★ diagnostics: the last acquisition decision's line, × the mean bin (≈ 1–4 on noise). */
+    float acqLine() const { return acqLine_; }
 
     /** Feed `n` complex samples (interleaved float I, Q); appends soft pairs (I, Q, I, Q …) to `out`. */
     void feed(const float* iq, size_t n, std::vector<int8_t>& out) {
@@ -249,8 +251,6 @@ public:
             // ★ the gain itself every 64 samples (a 1/√ per sample was a Pi 2's worth of work for a 10⁻⁴ follower)
             if ((nIn_ & 63) == 0) agcG_ = pow_ > 1e-20f ? 1.f / std::sqrt(pow_) : 1.f;
             xr *= agcG_; xi *= agcG_;
-            // ── acquisition buffer (x⁴), only while unlocked ──
-            if (!locked_ && !hold_) acqPush(xr, xi);
             // ── NCO ──
             /* ★★ THE NCO IS A ROTATING PHASOR, NOT A sin/cos A SAMPLE. The step e^{−jw} is remade only when the loop or
              *  the Doppler moves w; the step is remade from w every 64 samples and the phasor renormalised with it (float drift
@@ -289,14 +289,29 @@ public:
 
 private:
     static constexpr size_t kAcqN = 8192;
-    static constexpr int kAcqLooks = 4;
+    static constexpr int kAcqLooks = 6;
     static void loopGains(double bnT, double& a, double& b) {
         const double z = 0.707, th = bnT / (z + 0.25 / z), d = 1 + 2 * z * th + th * th;
         a = 4 * z * th / d; b = 4 * th * th / d;
     }
-    void acqPush(float xr, float xi) {
+    /* ★★★ ACQUISITION ON THE MATCHED FILTER'S POINTS, NOT ON THE RAW SLICE (2026-11-22, the live Meteor-M2-4 pass).
+     *  The x⁴ line's strength goes as the FOURTH power of the SNR at its input, and the raw slice is 300 kHz wide around
+     *  a 115 kHz signal — 6 dB more noise than the signal's own band at a 300 kS/s slice. On the raw slice the line was
+     *  missed below Es/N0 ≈ 4.5 dB (synthetic OQPSK, −3.3 kHz off: no acquisition in 4 s at 3.5 dB; on the pass it
+     *  fired only once the signal reached ≈ 4.5 dB). Here it is the root-raised-cosine output at two points a symbol
+     *  (144 k a second at 72k: the line at 4·Δf stays inside ±72 kHz for Δf up to ±18 kHz, more than the loop's limit)
+     *  with the NCO — Doppler feed-forward and the loop — already applied, so the line sits at 4 × what is LEFT and
+     *  stands still when the engine's Doppler is right. Six 8192-point looks (≈ 0.34 s), a line 6× the mean bin (on
+     *  noise the largest of 8192 six-look bins passes 6× about once in 10⁶ decisions), ±1 bin power-weighted.
+     *  ★ A CORRECTION, NOT A RESET: what is found is added to the NCO, and only when it is more than kAcqMinHz — a loop
+     *    that already has the carrier sees its line at 0 and is left alone, so this can run whenever frames are not
+     *    decoding (the old "only while the lock detector says unlocked" never re-ran on OQPSK, whose lock metric sits
+     *    at 0.72–0.78 on a decoding signal, under the 0.80 bar). */
+    static constexpr double kAcqMinHz = 60;
+    void acqPush(std::complex<float> y) {
         if (acqDue_ > 0) { acqDue_--; return; }
         // ★ x⁴ by hand: std::complex's operator* goes through the C99 NaN-checking multiply (__mulsc3) without -ffast-math
+        const float xr = y.real(), xi = y.imag();
         const float ar = xr * xr - xi * xi, ai = 2.f * xr * xi;
         acq_.push_back(std::complex<float>(ar * ar - ai * ai, 2.f * ar * ai));
         if (acq_.size() < kAcqN) return;
@@ -305,25 +320,27 @@ private:
         for (size_t i = 0; i < kAcqN; i++) acqPow_[i] += std::norm(acq_[i]);
         acq_.clear();
         if (++acqLooks_ < kAcqLooks) return;
-        /* ★★ FOUR LOOKS AVERAGED, THEN A LINE 8× THE MEAN BIN. One 4096-point look needed the line 20× the mean and
-         *  missed a 500 Hz offset at Es/N0 3 dB (the 4th power costs the line ~4× its SNR); the loop then never pulled in.
-         *  The average of four looks has a quarter of the variance, so a lower bar is safe: on noise the largest of 8192
-         *  four-look bins passes 8× about once in 10¹⁰. ±1 bin around the peak, power-weighted, for a sub-bin estimate. */
         size_t best = 0; float bp = 0, sum = 0;
         for (size_t i = 0; i < kAcqN; i++) { sum += acqPow_[i]; if (acqPow_[i] > bp) { bp = acqPow_[i]; best = i; } }
-        if (bp > 8.f * sum / float(kAcqN)) {
+        acqLine_ = sum > 0 ? bp / (sum / float(kAcqN)) : 0;
+        if (bp > 6.f * sum / float(kAcqN)) {
             const float l = acqPow_[(best + kAcqN - 1) % kAcqN], r = acqPow_[(best + 1) % kAcqN];
             double bin = double(best) + double(r - l) / double(l + bp + r);
             if (bin >= kAcqN / 2) bin -= double(kAcqN);
-            const double f4 = bin * cfg_.sampleRate / double(kAcqN);
-            const double dop = doppler_.load(std::memory_order_relaxed);
-            freq_ = 2 * M_PI * (f4 / 4.0 - dop) / cfg_.sampleRate;
-            acqHits_++;
+            const double pointRate = 2.0 * cfg_.symbolRate;
+            const double resid = bin * pointRate / double(kAcqN) / 4.0;     // Hz still on the points
+            if (std::fabs(resid) > kAcqMinHz) {
+                freq_ += 2 * M_PI * resid / cfg_.sampleRate;
+                const double lim = 2 * M_PI * 0.2 * cfg_.symbolRate / cfg_.sampleRate;
+                if (freq_ > lim) freq_ = lim; else if (freq_ < -lim) freq_ = -lim;
+                acqHits_++;
+            }
         }
         acqPow_.assign(kAcqN, 0.f); acqLooks_ = 0;
-        acqDue_ = size_t(cfg_.sampleRate * 0.25);           // ★ four decisions a second at most
+        acqDue_ = size_t(2.0 * cfg_.symbolRate * 0.25);    // ★ a 0.25 s rest between decisions (the cost on a Pi)
     }
     void onPoint(std::complex<float> y, std::vector<int8_t>& out) {
+        if (!hold_) acqPush(y);
         if (half_ == 1) { mid_ = y; half_ = 0; return; }
         half_ = 1;
         const std::complex<float> sym = y;
@@ -399,7 +416,7 @@ private:
     double nr_ = 1, ni_ = 0, stepW_ = 1e9, stepC_ = 1, stepS_ = 0;   ///< the NCO phasor and its per-sample step
     std::atomic<double> doppler_{0.0};
     float pow_ = 1.f, agc_ = 1.f, agcG_ = 1.f; double amp_ = 0;
-    std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
+    std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; float acqLine_ = 0; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
     double lockAcc_ = 0, lockMetric_ = 0, m2_ = 0, m4_ = 0, esn0_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
 };
 

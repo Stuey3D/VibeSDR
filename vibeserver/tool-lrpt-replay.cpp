@@ -70,7 +70,8 @@ unsigned long long replay(const std::string& cf32, const std::string& txt, bool 
     const Receiver* rxNow = nullptr;
     o.json = [&](const std::string& j) {
         last = j;
-        if (verbose) std::printf("%7.1f s  esn0 %+5.1f dB  %s\n", tNow, rxNow ? 10 * std::log10(std::max(1e-3, rxNow->esn0())) : -99.0, j.c_str());
+        if (verbose) std::printf("%7.1f s  esn0 %+5.1f dB acq %llu  %s\n", tNow, rxNow ? 10 * std::log10(std::max(1e-3, rxNow->esn0())) : -99.0,
+                                 rxNow ? (unsigned long long)rxNow->acquisitions() : 0ull, j.c_str());
     };
     unsigned long long frames = 0;
     o.log = [&](const std::string& l) { if (verbose) std::printf("%7.1f s  %s\n", tNow, l.c_str()); };

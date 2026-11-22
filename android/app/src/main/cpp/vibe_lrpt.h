@@ -48,6 +48,15 @@ public:
         buf_.insert(buf_.end(), s, s + n);
         process();
     }
+    /** ★★ THE DIFFERENTIAL PATH: `s` is the differentially decoded stream (the ASM search runs on it, as before) and `raw`
+     *  the same soft values BEFORE that decoding — the CADU is Viterbi-decoded from `raw` (see decodeAt). Both are pairs
+     *  in the demodulator's order, the same length. */
+    void push(const int8_t* s, const int8_t* raw, size_t n) {
+        buf_.insert(buf_.end(), s, s + n);
+        raw_.insert(raw_.end(), raw, raw + n);
+        joint_ = true;
+        process();
+    }
     Stats& stats() { return st_; }
     bool locked() const { return locked_; }
     /** ★ Reed–Solomon passed within the last 8 CADUs — the only proof the carrier is really locked (an ASM can be "found"
@@ -55,7 +64,7 @@ public:
     bool decoding() const { return sinceGood_ < 8; }
     /** ★ Test seam: each CADU's ASM score, ambiguity, Viterbi metric and the four RS words' results. */
     std::function<void(int, int, int, const int*)> caduDiag;
-    void reset() { buf_.clear(); locked_ = false; scan_ = 0; misses_ = 0; }
+    void reset() { base_ += buf_.size(); buf_.clear(); raw_.clear(); locked_ = false; scan_ = 0; misses_ = 0; }
 
 private:
     static constexpr int kLead = 128, kTail = 128;               // soft bits each side (64 Viterbi steps)
@@ -82,7 +91,7 @@ private:
                 if (!found) {
                     // keep the last kLead+64 bits for the next call
                     const size_t keep = std::min(buf_.size(), size_t(kLead + 64));
-                    buf_.erase(buf_.begin(), buf_.end() - long(keep));
+                    drop(buf_.size() - keep);
                     scan_ = keep >= 64 ? keep - 64 + 1 : 0;
                     if (scan_ > buf_.size()) scan_ = 0;
                     return;
@@ -105,13 +114,20 @@ private:
             else pos_ = want;                                   // flywheel: RS judges it
             // trim: keep kLead bits before the next position
             const size_t cut = pos_ > size_t(kLead) ? pos_ - size_t(kLead) : 0;
-            buf_.erase(buf_.begin(), buf_.begin() + long(cut));
+            drop(cut);
             pos_ -= cut;
             scan_ = locked_ ? 0 : pos_;
         }
     }
-    void decodeAt(size_t p) {
-        const int nSoft = kLead + kCaduSoft + kTail;
+    /** Drop the oldest `k` soft values (both streams), keeping the absolute index of buf_[0]. */
+    void drop(size_t k) {
+        if (k == 0) return;
+        buf_.erase(buf_.begin(), buf_.begin() + long(k));
+        if (joint_) raw_.erase(raw_.begin(), raw_.begin() + long(std::min(k, raw_.size())));
+        base_ += k;
+    }
+    /** The plain path: the transformed soft stream around p. */
+    void softPlain(size_t p, int nSoft) {
         soft_.assign(size_t(nSoft), 0);
         const long start = long(p) - kLead;
         for (int i = 0; i + 1 < nSoft; i += 2) {
@@ -121,19 +137,82 @@ private:
             soft_[size_t(i)] = int8_t(std::max(-127, std::min(127, oa)));
             soft_[size_t(i + 1)] = int8_t(std::max(-127, std::min(127, ob)));
         }
-        bits_.resize(kCaduBits);
-        st_.lastVit = vit_.decode(soft_.data(), nSoft / 2, kLead / 2, kCaduBits, bits_.data());
-        uint8_t cadu[kCaduBytes];
+    }
+    /* ★★★ THE DIFFERENTIAL CODE DECODED WITH THE CONVOLUTIONAL CODE, NOT BEFORE IT (2026-11-22, the live Meteor-M2-4 pass).
+     *  Decoding the differential code on the soft values first (the product of each value and the last) multiplies two
+     *  noisy numbers: at the Es/N0 a pass is decoded at (4–5 dB) that costs the Viterbi about 1.5 dB, and a synthetic
+     *  OQPSK + differential signal needed Es/N0 5 dB where plain QPSK decodes at 3. The way round it is plain algebra:
+     *  the differential encoder is an accumulator on each coded stream (a_n = a_{n−1} ⊕ c_n, ⊕ 1 on the first), and
+     *  an accumulator COMMUTES with the convolutional code (both linear): g ∗ (u / (1+D)) = (g ∗ u) / (1+D). So the
+     *  transmitted streams ARE the same K=7 code of the accumulated data u′ = u / (1+D) — up to sign patterns — and the
+     *  ordinary 64-state Viterbi decodes u′ from the RAW soft values with nothing multiplied; u = u′ ⊕ u′ delayed by one
+     *  (a hard XOR of the decoded bits: an error burst stays one burst). Same cost as the plain path.
+     *  ★ The signs, in ±1 terms (bit 1 = +): the diff-decoded value the ASM search used is D = R_n·R_{n−1} on the first
+     *  stream and −R_n·R_{n−1} on the second, and the sync's transform x_ makes each Viterbi input G_e = σ_e·D_{src(e)}.
+     *  With τ = σ_e (first stream) or −σ_e (second), G_n = τ·R_n·R_{n−1}, and the accumulated value P with
+     *  P_n·P_{n−1} = −G_n (the XOR of the accumulator) is P_n = κ·R_n when τ = −1 and κ·(−1)ⁿ·R_n when τ = +1 (n = the
+     *  value's place along its stream). κ is a constant per stream: flipping BOTH is u′ → ¬u′, which the final XOR
+     *  removes, so only their relative sign matters — kRel_, tried both ways when Reed–Solomon fails and kept when it
+     *  passes (on a real pass it is found on the first frame and never changes). */
+    void softJoint(size_t p, int nSoft, int rel) {
+        soft_.assign(size_t(nSoft), 0);
+        int src[2], sg[2];
+        { int oa, ob; applyX(x_, 1, 2, oa, ob); src[0] = std::abs(oa) - 1; sg[0] = oa > 0 ? 1 : -1; src[1] = std::abs(ob) - 1; sg[1] = ob > 0 ? 1 : -1; }
+        const long start = long(p) - kLead;
+        for (int i = 0; i + 1 < nSoft; i += 2) {
+            const long a = start + i;
+            if (a < 0 || size_t(a + 1) >= raw_.size()) continue;
+            for (int e = 0; e < 2; e++) {
+                const long li = a + src[e];
+                const uint64_t abs = base_ + uint64_t(li);
+                const int tau = (abs & 1) ? -sg[e] : sg[e];
+                int v = raw_[size_t(li)];
+                if (tau > 0 && ((abs >> 1) & 1)) v = -v;
+                if (e == 1 && rel < 0) v = -v;
+                soft_[size_t(i + e)] = int8_t(std::max(-127, std::min(127, v)));
+            }
+        }
+    }
+    int tryDecode(uint8_t* cadu, int* pw) {
+        const int nSoft = kLead + kCaduSoft + kTail;
+        if (!joint_) {
+            bits_.resize(kCaduBits);
+            st_.lastVit = vit_.decode(soft_.data(), nSoft / 2, kLead / 2, kCaduBits, bits_.data());
+        } else {
+            // one bit before the CADU too: u = u′ ⊕ u′ delayed
+            acc_.resize(kCaduBits + 1); bits_.resize(kCaduBits);
+            st_.lastVit = vit_.decode(soft_.data(), nSoft / 2, kLead / 2 - 1, kCaduBits + 1, acc_.data());
+            for (int i = 0; i < kCaduBits; i++) bits_[size_t(i)] = uint8_t(acc_[size_t(i + 1)] ^ acc_[size_t(i)]);
+        }
         for (int i = 0; i < kCaduBytes; i++) {
             uint8_t b = 0;
             for (int j = 0; j < 8; j++) b = uint8_t((b << 1) | bits_[size_t(i * 8 + j)]);
             cadu[i] = b;
         }
-        st_.cadus++;
         uint8_t* f = cadu + kAsmBytes;
         derandomise(f);
+        return rsFrame(f, pw);
+    }
+    void decodeAt(size_t p) {
+        const int nSoft = kLead + kCaduSoft + kTail;
+        uint8_t cadu[kCaduBytes];
         int pw[4];
-        const int e = rsFrame(f, pw);
+        int e;
+        if (!joint_) { softPlain(p, nSoft); e = tryDecode(cadu, pw); }
+        else {
+            softJoint(p, nSoft, rel_);
+            e = tryDecode(cadu, pw);
+            if (e < 0) {   // ★ the other relative sign (once per lock in practice)
+                uint8_t c2[kCaduBytes]; int pw2[4];
+                const int vit = st_.lastVit;
+                softJoint(p, nSoft, -rel_);
+                const int e2 = tryDecode(c2, pw2);
+                if (e2 >= 0) { rel_ = -rel_; e = e2; std::memcpy(cadu, c2, sizeof cadu); std::memcpy(pw, pw2, sizeof pw); }
+                else st_.lastVit = vit;
+            }
+        }
+        st_.cadus++;
+        uint8_t* f = cadu + kAsmBytes;
         if (caduDiag) caduDiag(syncScore(windowAt(p), x_), x_, st_.lastVit, pw);
         if (e < 0) { st_.rsFail++; sinceGood_++; return; }
         sinceGood_ = 0;
@@ -143,8 +222,11 @@ private:
 
     VcduFn fn_;
     Viterbi vit_;
-    std::vector<int8_t> buf_, soft_;
-    std::vector<uint8_t> bits_;
+    std::vector<int8_t> buf_, raw_, soft_;
+    std::vector<uint8_t> bits_, acc_;
+    uint64_t base_ = 0;          ///< absolute index of buf_[0] (the stream a value belongs to and its place along it)
+    bool joint_ = false;         ///< the differential path: decode from raw_ (softJoint)
+    int rel_ = 1;                ///< the two accumulated streams' relative sign
     size_t scan_ = 0, pos_ = 0;
     int x_ = 0, misses_ = 0;
     uint64_t sinceGood_ = 1000;
@@ -410,7 +492,7 @@ private:
         for (int k = 0; k < 2; k++) {
             Path& p = ch.paths[k];
             if (!p.sync || (ch.winner >= 0 && ch.winner != k)) continue;
-            if (p.diff) { tmp_.assign(src, src + len); p.dd.run(tmp_.data(), tmp_.size()); p.sync->push(tmp_.data(), tmp_.size()); }
+            if (p.diff) { tmp_.assign(src, src + len); p.dd.run(tmp_.data(), tmp_.size()); p.sync->push(tmp_.data(), src, tmp_.size()); }
             else p.sync->push(src, len);
         }
     }
