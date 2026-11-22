@@ -18,6 +18,9 @@ export interface BgVfo {
   /** ★ V12 2026-10-27: an NDB skimmer VFO — the part of the band it covers (no frequency of its own) and how it is doing
    *  ("12 beacons identified of 41 carriers"). */
   ndbLo?: number; ndbHi?: number; ndb?: string;
+  /** ★ V12 2026-11-22: a WEFAX stations VFO — each ticked frequency, its station and state (running / chart: part-way
+   *  through one / paused / out: outside the radio's window). */
+  fax?: { hz: number; label: string; state: 'running' | 'chart' | 'paused' | 'out' }[];
 }
 export interface BgStatus {
   state: 'off' | 'idle' | 'waiting' | 'running' | 'listener' | 'paused' | 'busy' | 'blocked';
@@ -63,6 +66,20 @@ export function bgVfoLine(v: BgVfo): string {
     else {
       p.push('running');
       p.push(v.ndb || 'nothing yet');
+      const c = pctShort(v.cpuPct);
+      if (c) p.push(c);
+    }
+    return p.join(' · ');
+  }
+  // ★ V12 2026-11-22: "WEFAX stations · running · Northwood GYA 4610.0 kHz receiving a chart, DWD 7880.0 kHz standing by, 8040.0 out of range · 0.4 %"
+  if (Array.isArray(v.fax)) {
+    const p = ['WEFAX stations'];
+    if (v.state === 'out') p.push('out of range (none of its frequencies is in the window)');
+    else if (v.state === 'paused') p.push(`paused (${v.why || 'a listener needed the decoder slot'})`);
+    else {
+      p.push(`running, one decoder slot`);
+      p.push(v.fax.map((f) => `${f.label} ${f.state === 'chart' ? 'receiving a chart' : f.state === 'running' ? 'standing by' : f.state === 'out' ? 'out of range' : 'paused'}`).join(', '));
+      p.push(v.last ? `last chart ${hhmm(v.last)}` : 'no chart yet');
       const c = pctShort(v.cpuPct);
       if (c) p.push(c);
     }

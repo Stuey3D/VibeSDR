@@ -55,5 +55,14 @@ ok(bgLines({ state: 'waiting', profiles: 1, profile: 1, startsIn: 60, ism: { ban
 const blk = bgLines({ state: 'blocked', profiles: 1, profile: 1, why: 'the server owner has switched ISM off on this receiver', retryIn: 50, ism: { band: '433', name: '433.92 MHz ISM' } })!;
 ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u2014 the server owner has switched ISM off on this receiver') && blk.head.includes('50 s'), `ISM blocked, warned: ${blk.head}`);
 
+// ★ V12 2026-11-22: a WEFAX stations VFO — its frequencies and what each is doing, one slot
+{
+  const fx = bgVfoLine({ hz: 0, dec: 'wefax-stations', label: 'WEFAX stations (several in one slot)', state: 'running', last: 0, cpuPct: 0.4,
+    fax: [{ hz: 4610000, label: 'Northwood GYA 4610.0 kHz', state: 'chart' }, { hz: 7880000, label: 'Hamburg-Pinneberg (DWD) DDH3 / DDK3 / DDK6 7880.0 kHz', state: 'running' },
+          { hz: 8040000, label: 'Northwood GYA 8040.0 kHz', state: 'out' }] });
+  ok(fx === 'WEFAX stations · running, one decoder slot · Northwood GYA 4610.0 kHz receiving a chart, Hamburg-Pinneberg (DWD) DDH3 / DDK3 / DDK6 7880.0 kHz standing by, Northwood GYA 8040.0 kHz out of range · no chart yet · 0.4 %', `WEFAX stations: ${fx}`);
+  ok(bgVfoLine({ hz: 0, dec: 'wefax-stations', label: '', state: 'paused', why: 'a listener needed a decoder slot', fax: [] }) === 'WEFAX stations · paused (a listener needed a decoder slot)', 'WEFAX stations paused');
+}
+
 console.log(`admin bg: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
