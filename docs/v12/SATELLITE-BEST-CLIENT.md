@@ -28,6 +28,32 @@ The plan and its decisions are `docs/v12/SATELLITE-BEST.md` (items 1.3, 1.4, 1.6
     in react-native-svg's types.
   - No live pass. First real check (an ISS / AO-73 / SONATE-2 pass with REMIND set) is the coordinator's / Stuart's.
 
+## beta91 — the orbit's direction (branch `b91-satarrow`)
+Stuart 11-22, joining a METEOR-M2 4 pass halfway: "i dont know if its going over the north pole or going down over
+europe/africa". **RESUME HERE (beta91):** built and tested, web + app; not seen on a device or a live pass yet.
+- **Which end is earlier:** `geoJson` (`android/app/src/main/cpp/vibe_sat_engine.h`) samples `t0 = AOS − 10 min` upwards in
+  `step` — `geo[0]` is the earliest, `geo[i]` = `geoT0 + i·geoStep` (nulls keep the index). The client keeps the points.
+- **Arrows:** `globeScene` returns `arrows: GlobeArrow[]` (`x, y, ux, uy` in scene px, `i` = fractional geo index,
+  `ahead` = the one just in front of the bird) from the screen points it already projects — no path-string parsing. One
+  ahead of the bird (first point a bird's reach + 0.05 r away, forward from the bird's own spot on the line, never past a
+  pen lift), then 1–3 spread along the visible line (≈ one per 0.25 r), dropped when under the bird, on the TCA tick
+  (0.06 r) or within 0.2 r of another; if every one was under the bird, one more where the line is clear. None without
+  geo (an older server) or with nothing visible. `globeArrowPath(arrows, size)` draws them as OPEN chevrons (M/L only,
+  stroked, never filled — a filled shape would read as the beam); both renderers use `GLOBE_ARROW_PX` (7) × their scale,
+  a 3.6 px halo in the window's ground then 1.6 px in the orbit's colour.
+- **Words:** `satHeadingText(geo, lat, lon)` → "heading north" / "heading south" from the latitude change across the geo
+  points either side of the one nearest the bird; '' if no path, the bird > 5° from it, or < 0.3° change (the turn at the
+  top / bottom of the orbit). `satCountdownText(sat, now, geo)` appends it while the bird is up: "In range for 6:12 ·
+  heading south".
+- **Key:** `GLOBE_KEY_TEXT` = "dotted: this pass’s orbit · arrows: its direction · shaded: where it can be heard"; with
+  no orbit the clients still cut it to the shaded half.
+- **Tests:** `test_satellite_mode.ts` 180/0 (+23: arrows along increasing time both ways, south points down the dome and
+  north up, in time order, the ahead one ahead + clear of the panels + flips with the direction, only one, shown when the
+  bird hides the middle, none at the path's end, none without geo / for a parsed old reply / on the far side, the path
+  shape, the words, the turn, the countdown, the key); `test-web-satellite-mode.mjs` 92/0 (+2: the countdown says
+  "heading south" on a real track, BIG's key names the arrows); `test_satellites_app.ts` all passed. `vibe_web_page.h`
+  rebuilt for the web test and reverted. App type-checked (SatellitePanel), not run on a device.
+
 ## What each item does (web `web/client/src/satellites.ts`, app `src/components/SatellitePanel.tsx` + `SDRScreen.tsx`,
 ## shared words/geometry `src/services/satellites.ts`)
 - **1.6 REMIND** (`SatReminders`, `satRemindOffered/Why/Text/Ends`): a REMIND key beside each pass row, drawn ONLY when
