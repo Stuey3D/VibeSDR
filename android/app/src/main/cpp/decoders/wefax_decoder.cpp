@@ -66,6 +66,11 @@ WefaxDecoder::WefaxDecoder(int sampleRate, const Config& cfg)
 }
 
 void WefaxDecoder::process(const int16_t* samps, int count) {
+    {   // ★ the hourly line's audio level (Stats) — one multiply-add a sample
+        double sq = 0; int pk = stats_.peak;
+        for (int k = 0; k < count; k++) { const int v = samps[k]; sq += (double)v * v; const int a = v < 0 ? -v : v; if (a > pk) pk = a; }
+        stats_.sumSq += sq / (32768.0 * 32768.0); stats_.samples += (uint64_t)(count > 0 ? count : 0); stats_.peak = pk;
+    }
     int i = 0;
     if (skip > 0) {
         int s = std::min(skip, count);
@@ -123,6 +128,7 @@ WefaxDecoder::HeaderType WefaxDecoder::detectLineType(const uint8_t* buf, int le
     const double threshold = TONE_LEVEL;
     double startDet = fourierTransformSub(buf, len, startIOC576Frequency) / (double)len;
     double stopDet  = fourierTransformSub(buf, len, stopFrequency) / (double)len;
+    lastStartDet = startDet;
 #ifdef WEFAX_DIAG_TONES
     if (onDiag) { char m[96]; std::snprintf(m, sizeof m, "tone? start %.2f stop %.2f", startDet, stopDet); onDiag(m); }
 #endif
@@ -260,6 +266,12 @@ void WefaxDecoder::decodeFaxLine() {
     toneRingPos = (toneRingPos + 1) % TONE_WINDOW;
     int startHits = 0, stopHits = 0;
     for (int i = 0; i < TONE_WINDOW; i++) { startHits += toneRing[i] == HeaderStart; stopHits += toneRing[i] == HeaderStop; }
+    stats_.lines++;
+    if (!skipHeaderDetection) {
+        stats_.bestStartHits = std::max(stats_.bestStartHits, startHits);
+        stats_.bestStopHits = std::max(stats_.bestStopHits, stopHits);
+        stats_.bestStartLevel = std::max(stats_.bestStartLevel, lastStartDet);
+    }
     if (startHits <= TONE_CLEAR) startLatched = false;
     if (stopHits <= TONE_CLEAR) stopLatched = false;
     if (!skipHeaderDetection && startHits >= TONE_HITS && !startLatched) {
@@ -272,6 +284,7 @@ void WefaxDecoder::decodeFaxLine() {
         if (autoStart && !autoStarted) autoStarted = true;
         chartOver = false; chartLines = 0;
         std::fill(lookRing, lookRing + LOOK_WINDOW, -1);
+        stats_.starts++;
         if (onDiag) onDiag("start tone on " + std::to_string(startHits) + " of the last " + std::to_string(TONE_WINDOW)
                            + " lines — new chart, phasing window open (" + std::to_string(phasingLines) + " lines)");
         if (onStart) onStart();
@@ -281,6 +294,7 @@ void WefaxDecoder::decodeFaxLine() {
         chartOver = true;   // ★ the chart is over: whatever chart follows is a NEW one, start tone or not
         if (autoStop) autoStopped = true;
         if (autoStart && autoStarted) autoStarted = false;
+        stats_.stops++;
         if (onDiag) onDiag("stop tone on " + std::to_string(stopHits) + " of the last " + std::to_string(TONE_WINDOW) + " lines");
         if (onStop) onStop();
     }
@@ -324,12 +338,13 @@ void WefaxDecoder::decodeFaxLine() {
         if (!skipHeaderDetection && !windowOpen && lineType == HeaderImage) lookAt = phasingLook();
         lookRing[lookPos] = lookAt;
         lookPos = (lookPos + 1) % LOOK_WINDOW;
-        if (lookAt >= 0 && (chartOver || chartLines >= MIN_CHART_LINES)) {
+        if (lookAt >= 0) {
             const int tol = std::max(1, (int)std::lround(samplesPerLine * LOOK_TOL));
             int agree = 0;
             for (int i = 0; i < LOOK_WINDOW; i++)
                 if (lookRing[i] >= 0) { int d = std::abs(lookRing[i] - lookAt) % samplesPerLine; if (std::min(d, samplesPerLine - d) <= tol) agree++; }
-            if (agree >= LOOK_HITS)
+            stats_.bestLookAgree = std::max(stats_.bestLookAgree, agree);   // ★ the hourly line: how close a toneless start came
+            if (agree >= LOOK_HITS && (chartOver || chartLines >= MIN_CHART_LINES))
                 beginChart("phasing without a start tone (" + std::to_string(agree) + " of the last " + std::to_string(LOOK_WINDOW)
                            + " lines" + (chartOver ? ", after the stop tone" : ", " + std::to_string(chartLines) + " lines into the old chart") + ")",
                            true, lookAt);
@@ -413,7 +428,7 @@ void WefaxDecoder::decodeFaxLine() {
                               rejected ? "REJECTED (fewer than a third agree), chart left unphased" : "used");
                 onDiag(m);
             }
-            if (rejected) phasingSkipData = 0;
+            if (rejected) { phasingSkipData = 0; stats_.phasedRejected++; } else stats_.phasedUsed++;
         }
     }
 
@@ -460,6 +475,7 @@ void WefaxDecoder::beginChart(const std::string& why, bool openPhasing, int curP
     std::fill(lookRing, lookRing + LOOK_WINDOW, -1);
     autoStopped = false;
     if (autoStart) autoStarted = true;
+    stats_.starts++;
     if (onDiag) onDiag(why + " — new chart" + (usePhasing && phasingLinesLeft > 0 ? ", phasing window open" : ""));
     if (onStart) onStart();
 }

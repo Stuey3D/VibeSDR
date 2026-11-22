@@ -1085,6 +1085,8 @@ public:
         std::function<std::shared_ptr<NdbFeed>(const NdbStart&)> ndbMake;
         std::function<bool(double& lo, double& hi)> ndbReach;
         std::function<std::string()> ndbWhyNot;
+        /** ★ The WEFAX VFOs' hourly log line's "hour" (DecoderHost::Env::wefaxHourSecs) — a test shortens it. */
+        double wefaxHourSecs = 3600.0;
     };
     BgRunner() = default;
     ~BgRunner() { stop(false); }
@@ -1145,6 +1147,8 @@ public:
             DecoderHost::Env env;
             env.log = p_.log;
             env.slots = p_.slots;
+            // ★★ a WEFAX VFO says what it heard every hour (the decoder's evidence — "no signal" vs "missed the start")
+            if (c->vfo.dec == "wefax") { env.wefaxHourly = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + upperMode(c->vfo.mode) + ")"; env.wefaxHourSecs = p_.wefaxHourSecs; }
             // ★ A Band VFO's "dial" is its span's centre: the host sizes the slice and finds the band's extra slices by it.
             const double dialHz = c->band ? c->bandCentre : c->vfo.hz;
             env.dialHz = [dialHz] { return dialHz; };
@@ -1541,6 +1545,7 @@ private:
         c.pauseWhy = why;
         say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
     }
+    static std::string upperMode(std::string m) { for (auto& ch : m) ch = (char)std::toupper((unsigned char)ch); return m; }
     std::string name(const Chan& c) const {
         const DecoderDef* d = decoderDef(c.vfo.dec);
         // ★ An NDB skimmer has no frequency of its own: it is named by the part of the band it covers

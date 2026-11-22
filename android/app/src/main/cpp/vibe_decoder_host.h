@@ -339,6 +339,13 @@ public:
          *  run's or a test's spots never reach the map or PSK Reporter. */
         vibestations::Store* stations = nullptr;
         uint8_t stationOrigin = vibestations::kLive;
+        /** ★★ A BACKGROUND WEFAX VFO's name for its HOURLY LOG LINE ("background VFO 8 (4608.1 kHz USB)") — what the decoder
+         *  heard in the hour: the audio level, lines read, the best start-tone / phasing evidence, charts begun and saved
+         *  (2026-11-22: 8 h on the Pi 500 with no `wefax:` line, and "no signal" could not be told from "missed the start").
+         *  Empty = no hourly line (a listener's WEFAX, the benchmark, the tests that do not ask). */
+        std::string wefaxHourly;
+        /** ★ Seconds in a WEFAX "hour" — 3600; a test shortens it. A run stopped after ≥ a twelfth of it says its part-hour. */
+        double wefaxHourSecs = 3600.0;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -909,7 +916,9 @@ private:
         if (lrpt_) lrpt_->finish(true);
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
-          if (t) t->finish(running_()); }
+          if (t) t->finish(running_());
+          if (wefax_) wefaxHourLocked_(true, t ? t->savedCount() : 0); }   // ★ the part-hour, with the chart just written
+        wefaxHourAt_ = {};
         delete fsk_;   fsk_ = nullptr;
         delete rttyAuto_; rttyAuto_ = nullptr;
         fskState_.store(-1, std::memory_order_relaxed);
@@ -950,6 +959,30 @@ private:
         gapClear(GapDecoder);   // ★ a new run — see the gap log
     }
     void log(const std::string& s) { if (env_.log) env_.log(s); }
+    /** ★★ THE HOURLY WEFAX LINE (Env::wefaxHourly) — decMtx_ held. `ending`: the run is stopping (paused for a listener,
+     *  moved out of the window, the profile changed): the part-hour is said if it was at least a twelfth of an hour.
+     *  `savedNow`: the gallery tap's count of charts written this run. */
+    void wefaxHourLocked_(bool ending, size_t savedNow) {
+        if (!wefax_ || env_.wefaxHourly.empty() || wefaxHourAt_ == std::chrono::steady_clock::time_point{}) return;
+        const auto now = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(now - wefaxHourAt_).count();
+        const WefaxDecoder::Stats st = wefax_->takeStats();
+        const size_t saved = savedNow >= wefaxSavedBase_ ? savedNow - wefaxSavedBase_ : savedNow;
+        wefaxHourAt_ = now; wefaxSavedBase_ = savedNow;
+        if (ending && secs < env_.wefaxHourSecs / 12.0) return;
+        auto db = [](double p) { return p > 1e-12 ? 10.0 * std::log10(p) : -120.0; };
+        const double rms = st.samples ? db(st.sumSq / (double)st.samples) : -120.0;
+        const double pk = st.peak > 0 ? 20.0 * std::log10(st.peak / 32768.0) : -120.0;
+        char b[640];
+        std::snprintf(b, sizeof b, "wefax: %s on %s: audio %.1f dBFS rms (peak %.1f); %llu lines read; start tone at best %d of %d lines "
+                      "(%d start a chart; strongest line %.1f, a tone line reads over 3.5), stop tone at best %d of %d; phasing at best "
+                      "%d of %d lines agreeing (%d start a chart without a tone); %d chart(s) begun, %zu saved; phasing %d used, %d rejected",
+                      ending ? "the part-hour before it stopped" : "the last hour", (env_.wefaxHourly + (ending ? " (" + std::to_string((int)std::lround(secs / 60.0)) + " min)" : std::string())).c_str(),
+                      rms, pk, (unsigned long long)st.lines, st.bestStartHits, WefaxDecoder::kToneWindow(), WefaxDecoder::kToneHits(), st.bestStartLevel,
+                      st.bestStopHits, WefaxDecoder::kToneWindow(), st.bestLookAgree, WefaxDecoder::kLookWindow(), WefaxDecoder::kLookHits(),
+                      st.starts, saved, st.phasedUsed, st.phasedRejected);
+        log(b);
+    }
     std::vector<DecoderPeerPtr> snapshotPeers() {
         std::lock_guard<std::mutex> lk(peerMtx_);
         prunePeersLocked();
@@ -2119,7 +2152,18 @@ private:
                 const int s = (int)std::lround(data[i] * 32767.0f);
                 mono[(size_t)i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
             }
-            if (wefax_) { wefax_->process(mono.data(), count); return; }
+            if (wefax_) {
+                wefax_->process(mono.data(), count);
+                if (!env_.wefaxHourly.empty()) {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (wefaxHourAt_ == std::chrono::steady_clock::time_point{}) { wefaxHourAt_ = now; wefaxSavedBase_ = 0; }
+                    else if (std::chrono::duration<double>(now - wefaxHourAt_).count() >= env_.wefaxHourSecs) {
+                        DecoderTapPtr t = tap();
+                        wefaxHourLocked_(false, t ? t->savedCount() : 0);
+                    }
+                }
+                return;
+            }
             // ★★★ FALL THROUGH TO THE TEXT FLUSH — the time decoder's minutes ride the RTTY text
             //     channel, drained below (an early return once decoded perfectly and sent nothing).
             if (time_) time_->process(mono.data(), count);
@@ -2166,6 +2210,8 @@ private:
     FskDecoder*   fsk_   = nullptr;
     RttyAuto*     rttyAuto_ = nullptr;   // ★ RTTY with "auto":true — finds shift, baud and polarity itself
     WefaxDecoder* wefax_ = nullptr;
+    std::chrono::steady_clock::time_point wefaxHourAt_{};   // ★ the hourly WEFAX line: this hour began (decMtx_)
+    size_t wefaxSavedBase_ = 0;                             // …and the tap's saved count then
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)

@@ -45,6 +45,28 @@ public:
 
     int width() const { return imageWidth; }
 
+    /** ★★ WHAT THE DECODER HEARD, for the background WEFAX VFO's HOURLY LOG LINE (2026-11-22: 8 h on Stuart's Pi 500 with
+     *  not one `wefax:` line, and no way to tell "no signal" from "missed the start"). Counted on the decode thread as it
+     *  goes — a few adds a line, one multiply-add a sample — and handed over (and reset) by takeStats(). */
+    struct Stats {
+        uint64_t samples = 0;            ///< audio samples in
+        double   sumSq = 0;              ///< Σ x² (x in −1…1) — the audio level
+        int      peak = 0;               ///< largest |sample| (int16)
+        uint64_t lines = 0;              ///< lines read (whatever they held)
+        int      bestStartHits = 0;      ///< most start-tone lines in any TONE_WINDOW (a START needs TONE_HITS)
+        int      bestStopHits = 0;       ///< …and stop-tone lines
+        double   bestStartLevel = 0;     ///< highest per-line start-tone reading (a tone line reads > TONE_LEVEL)
+        int      bestLookAgree = 0;      ///< most phasing-like lines agreeing in any LOOK_WINDOW (a toneless start needs LOOK_HITS)
+        int      starts = 0;             ///< charts begun (start tone, toneless phasing, a chart after the stop tone)
+        int      stops = 0;              ///< stop tones
+        int      phasedUsed = 0, phasedRejected = 0;   ///< phasing verdicts
+    };
+    Stats takeStats() { Stats s = stats_; stats_ = Stats{}; return s; }
+    static constexpr int kToneWindow() { return TONE_WINDOW; }
+    static constexpr int kToneHits() { return TONE_HITS; }
+    static constexpr int kLookWindow() { return LOOK_WINDOW; }
+    static constexpr int kLookHits() { return LOOK_HITS; }
+
     std::function<void(uint32_t lineNo, uint32_t width, const uint8_t* px)> onLine;
     std::function<void()> onStart;
     std::function<void()> onStop;
@@ -143,6 +165,8 @@ private:
     static constexpr double LOOK_PULSE_MIN = 0.015, LOOK_PULSE_MAX = 0.08;   // the bright part's share of the line
     static constexpr double LOOK_REST_SPREAD = 0.35;          // the rest's segments' spread, share of the contrast
     static constexpr int MIN_CHART_LINES = 120;               // a chart this young cannot be followed by another's phasing
+    Stats stats_;
+    double lastStartDet = 0;                                  // this line's start-tone reading (detectLineType)
     int  lookRing[LOOK_WINDOW];                               // pulse position of each recent line, −1 not phasing-like
     int  lookPos = 0;
     int  lookBin[LOOK_BINS];

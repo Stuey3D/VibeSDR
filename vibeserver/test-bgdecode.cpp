@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <random>
 #include <string>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -867,6 +868,72 @@ static void ft8Validation() {
     }
 }
 
+// ── 9. ★★ the background WEFAX VFO's HOURLY LINE — what it heard, so "no signal" and "missed the start" differ ─────
+/** Fax audio at 48 kHz: black 1500 Hz, white 2300 Hz (the decoder's carrier 1900 ± 400). */
+struct FaxSynth {
+    std::vector<float> out; double ph = 0; std::mt19937 rng{7};
+    void v(double g) { ph += 2 * M_PI * (1500.0 + 800.0 * g) / 48000.0; out.push_back((float)(0.35 * std::sin(ph))); }
+    void noise(int n) { std::uniform_real_distribution<double> u(0, 1); for (int i = 0; i < n; i++) v(u(rng)); }
+    void startTone(int lines) { for (int k = 0; k < lines * 24000; k++) v(((k * 600) / 48000) & 1 ? 1.0 : 0.0); }
+    void phasing(int lines) { for (int l = 0; l < lines; l++) for (int i = 0; i < 24000; i++) v(i >= 12000 && i < 13200 ? 1.0 : 0.0); }
+    void chart(int lines) { for (int l = 0; l < lines; l++) for (int i = 0; i < 24000; i++) v(((i / 900) & 1) ? 0.85 : 0.15); }
+};
+static void wefaxHourly() {
+    std::printf("── ★★ the background WEFAX VFO's hourly log line ──\n");
+    gallery::Store gs; gs.setDir(tmpDir("wfhour"));
+    auto run = [&gs](const FaxSynth& a, double hourSecs, std::vector<std::string>& lines) {
+        std::mutex lm;
+        DecoderHost::Env env;
+        env.tap = [&gs](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+            gallery::Meta m; m.kind = bg::galleryKindFor(ext, msg); m.origin = "background"; m.freqHz = 4608100; m.mode = "usb"; m.decoder = "wefax";
+            return bg::makeGalleryTap(gs, m); };
+        env.dialHz = [] { return 4608100.0; };
+        env.wefaxHourly = "background VFO 8 (4608.1 kHz USB)";
+        env.wefaxHourSecs = hourSecs;
+        env.log = [&](const std::string& l) { if (l.rfind("wefax: ", 0) == 0 && l.find("VFO 8") != std::string::npos) { std::lock_guard<std::mutex> g(lm); lines.push_back(l); } };
+        auto h = std::make_shared<DecoderHost>(env, "bg:7");
+        h->start("wefax", "{\"lpm\":120,\"image_width\":1809,\"carrier\":1900,\"deviation\":400,\"auto_start\":true,\"auto_stop\":true}");
+        for (size_t i = 0; i < a.out.size(); i += 4800) {
+            h->feed(&a.out[i], (int)std::min<size_t>(4800, a.out.size() - i));
+            while (h->queued() > 48000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        while (h->queued() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        h->stop();
+    };
+    auto field = [](const std::string& l, const std::string& before) { const size_t at = l.find(before); return at == std::string::npos ? -1 : std::atoi(l.c_str() + at + before.size()); };
+    {   // noise only: lines read, no start, best tone well short
+        FaxSynth a; a.noise(48000 * 90);
+        std::vector<std::string> L; run(a, 2.4, L);
+        int lines = 0, best = 0; bool begun = false;
+        for (auto& l : L) { const size_t at = l.find(" lines read"); size_t b = at; while (b > 0 && std::isdigit((unsigned char)l[b - 1])) --b;
+                            lines += std::atoi(l.c_str() + b); best = std::max(best, field(l, "start tone at best "));
+                            if (l.find("0 chart(s) begun, 0 saved") == std::string::npos) begun = true; }
+        ok(!L.empty() && L.back().find("the part-hour before it stopped on background VFO 8 (4608.1 kHz USB)") != std::string::npos,
+           "★ a stopped run says its part-hour: " + (L.empty() ? std::string("(none)") : L.back()));
+        ok(!L.empty() && L.back().find("dBFS rms (peak") != std::string::npos && lines == 180,
+           "...with the audio level and every line read, across its lines (90 s = 180: " + std::to_string(lines) + ")");
+        ok(!L.empty() && best < 7 && !begun, "...and on noise: the start tone at best " + std::to_string(best) + " of 10 (7 start a chart), no chart begun");
+    }
+    {   // a chart with its start tone, phasing and stop tone — every "hour" (0.4 s of wall clock here) has its line
+        FaxSynth a; a.noise(48000 * 20); a.startTone(10); a.phasing(40); a.chart(300); a.startTone(0);
+        for (int k = 0; k < 10 * 24000; k++) a.v(((k * 900) / 48000) & 1 ? 1.0 : 0.0);   // the stop tone (450 Hz)
+        a.noise(48000 * 20);
+        std::vector<std::string> L; run(a, 0.4, L);
+        auto before = [](const std::string& l, const std::string& what) {   // the number just before `what`
+            const size_t at = l.find(what); if (at == std::string::npos || at == 0) return -1;
+            size_t b = at; while (b > 0 && std::isdigit((unsigned char)l[b - 1])) --b; return b == at ? -1 : std::atoi(l.c_str() + b); };
+        int begun = 0, bestStart = 0, used = 0;
+        for (auto& l : L) { begun += std::max(0, before(l, " chart(s) begun")); bestStart = std::max(bestStart, field(l, "start tone at best "));
+                            used += std::max(0, before(l, " used, ")); }
+        std::string all; for (auto& l : L) all += "\n      " + l;
+        ok(L.size() >= 2, "★ hourly lines while it runs, then the part-hour (" + std::to_string(L.size()) + " lines):" + all.substr(0, 900));
+        int saved = 0; for (auto& l : L) saved += std::max(0, before(l, " saved; "));
+        ok(bestStart >= 7 && begun == 1 && used == 1 && saved == 1, "★ the chart: start tone at best ≥ 7 of 10 (" + std::to_string(bestStart) + "), 1 chart begun ("
+           + std::to_string(begun) + "), its phasing used, 1 saved on its stop tone (" + std::to_string(saved) + ")");
+    }
+}
+
 int main() {
     config();
     phase2();
@@ -878,6 +945,7 @@ int main() {
     galleryPages();
     hostTap();
     gapMidMessage();
+    wefaxHourly();
     navtexStations();
     runner();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
