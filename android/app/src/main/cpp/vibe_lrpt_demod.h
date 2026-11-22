@@ -11,8 +11,10 @@
 //     rest). Without either, the x⁴ acquisition still finds a carrier anywhere in ±Fs/8 — Doppler at 137 MHz is
 //     ±3.1 kHz — it just takes the loop a moment longer each time it slips.
 //
-// ★★ Acquisition is an FFT of the 4th power (QPSK's four phases fold to one line at 4·Δf), re-run only while the lock
-//    detector says unlocked; once locked the second-order Costas loop carries the slow Doppler slope (≤ 65 Hz/s).
+// ★★ Acquisition is an FFT of the 4th power (QPSK's four phases fold to one line at 4·Δf) of the MATCHED FILTER's points
+//    (beta91 — not the raw slice), a correction to the NCO whenever frames are not decoding; the second-order Costas loop
+//    carries the slow Doppler slope (≤ 65 Hz/s), and once frames have decoded with a feed-forward on, a leash keeps it
+//    near where it decoded (docs/v12/LRPT-LIVE-PASS.md).
 //
 // ★ SIMD: the matched filter (the only hot loop — 21–40 taps at the input rate) is NEON / SSE2 / scalar with the SAME
 //   four-lane partial sums and the same final addition order, so all three give bit-identical floats. The interpolator,
@@ -224,7 +226,7 @@ public:
         mf_.configure(sps_, c.rrcAlpha);
         loopGains(c.carrierBw, cA_, cB_);
         loopGains(c.timingBw, tA_, tB_);
-        hold_ = false;
+        hold_ = false; haveGood_ = false; goodFreq_ = 0;
         tau_ = double(mf_.half()); nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f;
         acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0; acqPow_.clear(); acqLooks_ = 0;
         lockAcc_ = 0; lockN_ = 0; lockMetric_ = 0; locked_ = false;
@@ -234,8 +236,17 @@ public:
     void setDopplerHz(double hz) { doppler_.store(hz, std::memory_order_relaxed); }
     /** ★ Frames are DECODING (Reed–Solomon passing): never re-acquire (at Es/N0 ≈ 3 dB the constellation lock metric dips
      *  under its threshold while frames still decode, and a re-acquisition then moved the NCO under a working loop). */
-    void setHold(bool h) { hold_ = h; if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; } }
+    void setHold(bool h) {
+        hold_ = h;
+        if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; goodFreq_ = freq_; haveGood_ = true; }
+    }
     uint64_t acquisitions() const { return acqHits_; }
+    /** ★ diagnostics: where the leash holds the loop (Hz, before the feed-forward), and whether it is on. */
+    double leashHz() const { return goodFreq_ * cfg_.sampleRate / (2 * M_PI); }
+    bool leashed() const { return haveGood_; }
+    bool holding() const { return hold_; }
+    /** ★ diagnostics: the last acquisition decision's line, × the mean bin (≈ 1–4 on noise). */
+    float acqLine() const { return acqLine_; }
 
     /** Feed `n` complex samples (interleaved float I, Q); appends soft pairs (I, Q, I, Q …) to `out`. */
     void feed(const float* iq, size_t n, std::vector<int8_t>& out) {
@@ -249,8 +260,6 @@ public:
             // ★ the gain itself every 64 samples (a 1/√ per sample was a Pi 2's worth of work for a 10⁻⁴ follower)
             if ((nIn_ & 63) == 0) agcG_ = pow_ > 1e-20f ? 1.f / std::sqrt(pow_) : 1.f;
             xr *= agcG_; xi *= agcG_;
-            // ── acquisition buffer (x⁴), only while unlocked ──
-            if (!locked_ && !hold_) acqPush(xr, xi);
             // ── NCO ──
             /* ★★ THE NCO IS A ROTATING PHASOR, NOT A sin/cos A SAMPLE. The step e^{−jw} is remade only when the loop or
              *  the Doppler moves w; the step is remade from w every 64 samples and the phasor renormalised with it (float drift
@@ -280,6 +289,8 @@ public:
     }
 
     bool locked() const { return locked_; }
+    /** Es/N0 (linear) from the last 2048 symbols' moments — SIGNED (≈ 0 ± a little on noise; average it). */
+    double esn0() const { return esn0_; }
     double lockMetric() const { return lockMetric_; }
     double carrierHz() const { return freq_ * cfg_.sampleRate / (2 * M_PI) + doppler_.load(std::memory_order_relaxed); }
     const DemodConfig& config() const { return cfg_; }
@@ -287,14 +298,30 @@ public:
 
 private:
     static constexpr size_t kAcqN = 8192;
-    static constexpr int kAcqLooks = 4;
+    static constexpr int kAcqLooks = 6;
     static void loopGains(double bnT, double& a, double& b) {
         const double z = 0.707, th = bnT / (z + 0.25 / z), d = 1 + 2 * z * th + th * th;
         a = 4 * z * th / d; b = 4 * th * th / d;
     }
-    void acqPush(float xr, float xi) {
+    /* ★★★ ACQUISITION ON THE MATCHED FILTER'S POINTS, NOT ON THE RAW SLICE (2026-11-22, the live Meteor-M2-4 pass).
+     *  The x⁴ line's strength goes as the FOURTH power of the SNR at its input, and the raw slice is 300 kHz wide around
+     *  a 115 kHz signal — 6 dB more noise than the signal's own band at a 300 kS/s slice. On the raw slice the line was
+     *  missed below Es/N0 ≈ 4.5 dB (synthetic OQPSK, −3.3 kHz off: no acquisition in 4 s at 3.5 dB; on the pass it
+     *  fired only once the signal reached ≈ 4.5 dB). Here it is the root-raised-cosine output at two points a symbol
+     *  (144 k a second at 72k: the line at 4·Δf stays inside ±72 kHz for Δf up to ±18 kHz, more than the loop's limit)
+     *  with the NCO — Doppler feed-forward and the loop — already applied, so the line sits at 4 × what is LEFT and
+     *  stands still when the engine's Doppler is right. Six 8192-point looks (≈ 0.34 s), a line 6× the mean bin (on
+     *  noise the largest of 8192 six-look bins passes 6× about once in 10⁶ decisions), ±1 bin power-weighted.
+     *  ★ A CORRECTION, NOT A RESET: what is found is added to the NCO, and only when it is more than kAcqMinHz — a loop
+     *    that already has the carrier sees its line at 0 and is left alone, so this can run whenever frames are not
+     *    decoding (the old "only while the lock detector says unlocked" never re-ran on OQPSK, whose lock metric sits
+     *    at 0.72–0.78 on a decoding signal, under the 0.80 bar). */
+    static constexpr double kAcqMinHz = 60;
+    static constexpr double kLeashHz = 150;
+    void acqPush(std::complex<float> y) {
         if (acqDue_ > 0) { acqDue_--; return; }
         // ★ x⁴ by hand: std::complex's operator* goes through the C99 NaN-checking multiply (__mulsc3) without -ffast-math
+        const float xr = y.real(), xi = y.imag();
         const float ar = xr * xr - xi * xi, ai = 2.f * xr * xi;
         acq_.push_back(std::complex<float>(ar * ar - ai * ai, 2.f * ar * ai));
         if (acq_.size() < kAcqN) return;
@@ -303,25 +330,28 @@ private:
         for (size_t i = 0; i < kAcqN; i++) acqPow_[i] += std::norm(acq_[i]);
         acq_.clear();
         if (++acqLooks_ < kAcqLooks) return;
-        /* ★★ FOUR LOOKS AVERAGED, THEN A LINE 8× THE MEAN BIN. One 4096-point look needed the line 20× the mean and
-         *  missed a 500 Hz offset at Es/N0 3 dB (the 4th power costs the line ~4× its SNR); the loop then never pulled in.
-         *  The average of four looks has a quarter of the variance, so a lower bar is safe: on noise the largest of 8192
-         *  four-look bins passes 8× about once in 10¹⁰. ±1 bin around the peak, power-weighted, for a sub-bin estimate. */
         size_t best = 0; float bp = 0, sum = 0;
         for (size_t i = 0; i < kAcqN; i++) { sum += acqPow_[i]; if (acqPow_[i] > bp) { bp = acqPow_[i]; best = i; } }
-        if (bp > 8.f * sum / float(kAcqN)) {
+        acqLine_ = sum > 0 ? bp / (sum / float(kAcqN)) : 0;
+        if (bp > 6.f * sum / float(kAcqN)) {
             const float l = acqPow_[(best + kAcqN - 1) % kAcqN], r = acqPow_[(best + 1) % kAcqN];
             double bin = double(best) + double(r - l) / double(l + bp + r);
             if (bin >= kAcqN / 2) bin -= double(kAcqN);
-            const double f4 = bin * cfg_.sampleRate / double(kAcqN);
-            const double dop = doppler_.load(std::memory_order_relaxed);
-            freq_ = 2 * M_PI * (f4 / 4.0 - dop) / cfg_.sampleRate;
-            acqHits_++;
+            const double pointRate = 2.0 * cfg_.symbolRate;
+            const double resid = bin * pointRate / double(kAcqN) / 4.0;     // Hz still on the points
+            if (std::fabs(resid) > kAcqMinHz) {
+                freq_ += 2 * M_PI * resid / cfg_.sampleRate;
+                const double lim = 2 * M_PI * 0.2 * cfg_.symbolRate / cfg_.sampleRate;
+                if (freq_ > lim) freq_ = lim; else if (freq_ < -lim) freq_ = -lim;
+                if (haveGood_) goodFreq_ = freq_;   // ★ a line found is evidence: the leash moves with it
+                acqHits_++;
+            }
         }
         acqPow_.assign(kAcqN, 0.f); acqLooks_ = 0;
-        acqDue_ = size_t(cfg_.sampleRate * 0.25);           // ★ four decisions a second at most
+        acqDue_ = size_t(2.0 * cfg_.symbolRate * 0.25);    // ★ a 0.25 s rest between decisions (the cost on a Pi)
     }
     void onPoint(std::complex<float> y, std::vector<int8_t>& out) {
+        if (!hold_) acqPush(y);
         if (half_ == 1) { mid_ = y; half_ = 0; return; }
         half_ = 1;
         const std::complex<float> sym = y;
@@ -363,13 +393,34 @@ private:
         freq_ += cB_ * e / sps_;   // ★ reaches the phasor's step at the next 64-sample boundary
         const double lim = 2 * M_PI * 0.2 * cfg_.symbolRate / cfg_.sampleRate;
         if (freq_ > lim) freq_ = lim; else if (freq_ < -lim) freq_ = -lim;
+        /* ★★ THE LEASH (2026-11-22, the live pass): with the satellite engine's Doppler fed forward, what the loop holds is
+         *  the RADIO's own frequency error (−3.34 kHz on that pass, constant to ±3 Hz for 20 s) — it does not move. But in a
+         *  fade the loop's integrator random-walks on noise (it sat 2.3 kHz off by 590 s), and the x⁴ line of a signal
+         *  3 dB over the noise is too weak to bring it back. So once frames have decoded, and while the feed-forward is
+         *  on, the loop stays within kLeashHz of where it was decoding. No feed-forward = no leash (the Doppler itself is
+         *  then in the loop and moves up to 65 Hz/s). */
+        if (haveGood_ && !hold_ && doppler_.load(std::memory_order_relaxed) != 0.0) {
+            const double w = 2 * M_PI * kLeashHz / cfg_.sampleRate;
+            if (freq_ > goodFreq_ + w) freq_ = goodFreq_ + w; else if (freq_ < goodFreq_ - w) freq_ = goodFreq_ - w;
+        }
         // ── lock detector: 1 − E(|I|−|Q|)² / E(I²+Q²) — 1.0 locked and clean, ≈0.64 unlocked or on noise ──
         const float d = std::fabs(I) - std::fabs(Q);
         lockAcc_ += double(d * d) / double(r * r);
+        { const double p2 = double(I) * I + double(Q) * Q; m2_ += p2; m4_ += p2 * p2; }
         if (++lockN_ == 2048) {
             lockMetric_ = 1.0 - lockAcc_ / 2048.0;
             lockAcc_ = 0; lockN_ = 0;
             locked_ = lockMetric_ > 0.80;
+            /* ★★ THE SIGNAL READING: Es/N0 by the M2M4 moments of the symbol points (Pauluzzi & Beaulieu, 2000) —
+             *  S = √(2·M2² − M4), N = M2 − S. Blind to the carrier's phase, so it reads the signal before the loop has
+             *  locked, and pure complex noise gives 2·M2² = M4 → S = 0 → 0. */
+            /*  ★ SIGNED: on noise 2·M2² − M4 is as often below 0 as above, and keeping the sign (S = ±√|k|) lets an
+             *  average of these read 0 there instead of a small positive bias. */
+            const double M2 = m2_ / 2048.0, M4 = m4_ / 2048.0, k = 2 * M2 * M2 - M4;
+            const double S = k >= 0 ? std::sqrt(k) : -std::sqrt(-k), N = M2 - S;
+            esn0_ = N > 1e-30 ? S / N : 1e3;
+            if (esn0_ > 1e3) esn0_ = 1e3;
+            m2_ = m4_ = 0;
         }
     }
     void emit(float I, float Q, std::vector<int8_t>& out) {
@@ -389,8 +440,9 @@ private:
     double nr_ = 1, ni_ = 0, stepW_ = 1e9, stepC_ = 1, stepS_ = 0;   ///< the NCO phasor and its per-sample step
     std::atomic<double> doppler_{0.0};
     float pow_ = 1.f, agc_ = 1.f, agcG_ = 1.f; double amp_ = 0;
-    std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
-    double lockAcc_ = 0, lockMetric_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
+    std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; float acqLine_ = 0; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
+    double goodFreq_ = 0; bool haveGood_ = false;
+    double lockAcc_ = 0, lockMetric_ = 0, m2_ = 0, m4_ = 0, esn0_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
 };
 
 } // namespace vibelrpt

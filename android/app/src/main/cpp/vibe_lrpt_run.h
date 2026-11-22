@@ -15,8 +15,8 @@
 // ★★ WHAT CLIENTS SEE: the SSTV picture frames (vibe_decoder_host.h: 0x07 start w h · 0x01 line y w rgb · 0x05 complete),
 //    a QUARTER-SIZE colour preview (392 px wide; the composite when channels 1 and 2 are live, else the first live channel
 //    as grey) growing a strip at a time, plus {"type":"lrpt_status","data":{…}} once a second. WHAT THE GALLERY KEEPS: the
-//    full-size PNGs — every live channel and the composite — when the pass ends (30 s without a frame after pictures)
-//    or the decoder stops (then marked partial).
+//    full-size PNGs — every live channel and the composite — when the pass ends (the satellite engine says it has set;
+//    with no engine, 30 s with neither a frame nor a signal — passOver()) or the decoder stops (then marked partial).
 #pragma once
 
 #include <algorithm>
@@ -38,7 +38,13 @@ namespace vibelrpt {
 class Run {
 public:
     static constexpr double kSliceWidthHz = 140000;    ///< flat width asked for: 72k × 1.6 = 115 kHz occupied, + Doppler
-    static constexpr double kPassEndSec = 30;          ///< no frame this long after pictures = the pass is over
+    static constexpr double kPassEndSec = 30;          ///< no frame AND no signal this long (nobody knows the pass) = over
+    static constexpr double kSetSec = 5;               ///< the engine says the satellite has set: frames stopped this long = over
+    /** ★ The signal reading's floor for "the satellite is still there": (S+N)/N in dB (noise reads ≈ 0). */
+    static constexpr double kQuietDb = 1.5;
+    /** ★★ What the reading must reach to decode: (S+N)/N ≈ +5 dB = Es/N0 ≈ 3.2 dB (synthetic OQPSK + differential at
+     *  300 kS/s: Es/N0 3 dB 48 %, 3.5 dB 79 %, 4 dB 90 % of frames; the live Meteor-M2-4 pass decoded from Es/N0 ≈ 3). */
+    static constexpr double kNeedDb = 5.0;
     static constexpr int kPreviewW = kLineWidth / 4;   ///< 392
     static constexpr int kPreviewRowsPerStrip = 2;
     static constexpr int kPreviewMaxH = kMaxStrips * kPreviewRowsPerStrip;   ///< 1600
@@ -52,9 +58,16 @@ public:
         std::function<void(const std::string&)> json;                    ///< text frames (lrpt_status)
         std::function<void(const uint8_t*, size_t)> frame;               ///< binary picture frames
         std::function<double()> dopplerHz;                               ///< the satellite engine's feed-forward; null = none
+        /** ★ The satellite engine's pick: its LRPT symbol rate (72000 / 80000), 0 = not known. Asked once a second while
+         *  AUTO is still walking the rates (Receiver::preferRate). */
+        std::function<double()> satSymbolRate;
+        /** ★★ Is the satellite above the horizon? 1 = in range (the engine tracks it), 0 = not (below the horizon / the pass
+         *  ended), −1 = nobody knows (no pick: a hand-tuned dial). Asked once a second. See passOver(). */
+        std::function<int()> satInRange;
         /** The pass's pictures (full size) — the gallery's copy. `partial` = cut off by a stop, not the pass ending. */
         std::function<void(const std::vector<Picture>&, bool partial)> pictures;
         std::function<void(const std::string&)> log;
+        std::function<void(Receiver&)> made;                             ///< ★ test seam: each new receiver (diagnostics)
     };
     explicit Run(Opts o) : o_(std::move(o)) {}
 
@@ -118,11 +131,34 @@ public:
         // ★ at most once a second: the version moves with every packet, and each preview resends its last strips
         if (seenVersion_ != previewVersion_ && fedSec_ - lastPreview_ >= 1.0) { previewVersion_ = seenVersion_; lastPreview_ = fedSec_; preview(); }
         if (fedSec_ - lastStatus_ >= 1.0) { lastStatus_ = fedSec_; status(""); }
-        if (havePictures_ && fedSec_ - lastFrameSec_ > kPassEndSec) {
-            if (o_.log) o_.log("lrpt: pass over (no frame for 30 s) \xe2\x80\x94 pictures to the gallery");
+        // ── the signal reading: the demodulator's Es/N0, averaged over the second (see status) ──
+        snrAcc_ += rx_->esn0(); snrN_++;
+        if (fedSec_ - lastAsk_ >= 1.0) {
+            lastAsk_ = fedSec_;
+            if (o_.satInRange) inRange_ = o_.satInRange();
+            if (o_.rateAuto && o_.satSymbolRate && rx_->rateGroups() > 1) rx_->preferRate(o_.satSymbolRate());
+            if (snrDb_ > kQuietDb) lastSignalSec_ = fedSec_;
+        }
+        if (havePictures_ && passOver()) {
+            if (o_.log) o_.log(inRange_ == 0 ? "lrpt: the satellite has set \xe2\x80\x94 the pass's pictures to the gallery"
+                                             : "lrpt: pass over (no frame and no signal for 30 s) \xe2\x80\x94 pictures to the gallery");
             savePass(false);
+            saved_++;
             newReceiver();
         }
+    }
+    /* ★★★ WHEN A PASS IS OVER (2026-11-22, Stuart's Meteor-M2-4 pass: "pass over (no frame for 30 s)" at 517 s with
+     *  eight minutes of it to come, then a fresh receiver and a second picture). A gap in the frames is a gap in the
+     *  PICTURE — a fade, a gain step, the aerial's null overhead — not the end of the pass:
+     *   · the satellite engine says it is in range (TRACK / COAST)  → never over; keep the picture open, keep hunting;
+     *   · the engine says it has set (ENDED, or the pass is not on) → over once frames have stopped for kSetSec;
+     *   · nobody knows (a hand-tuned dial)                          → over after kPassEndSec with no frame AND no
+     *     signal: while the receiver still measures the satellite (kQuietDb over the noise) the pass goes on. */
+    bool passOver() const {
+        const double sinceFrame = fedSec_ - lastFrameSec_;
+        if (inRange_ == 1) return false;
+        if (inRange_ == 0) return sinceFrame > kSetSec;
+        return sinceFrame > kPassEndSec && fedSec_ - lastSignalSec_ > kPassEndSec;
     }
     /** The decoder stops (a replace, the listener leaving, a shutdown): keep what the pass got, marked partial. */
     void finish(bool interrupted) {
@@ -137,7 +173,9 @@ private:
     void newReceiver() {
         ReceiverConfig c; c.sampleRate = rate_; c.symbolRate = o_.symbolRate; c.mod = o_.mod; c.diff = o_.diff; c.interleaved = o_.interleaved; c.rateAuto = o_.rateAuto;
         rx_ = std::make_unique<Receiver>(c);
+        if (o_.made) o_.made(*rx_);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
+        lastSignalSec_ = fedSec_; snrAcc_ = 0; snrN_ = 0;
         if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
                            + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
     }
@@ -196,8 +234,12 @@ private:
         }
     }
     void status(const std::string& why) {
+        // ★ the second's average of the demodulator's Es/N0 → (S+N)/N in dB: what the waterfall shows over its floor at
+        //   the top of the signal's hump, and ≈ 0 on noise (the estimate is signed, so the average sits at 0 there)
+        if (snrN_ > 0) { const double es = snrAcc_ / snrN_; snrDb_ = 10 * std::log10(std::max(1.0, 1.0 + es)); snrAcc_ = 0; snrN_ = 0; }
         if (!o_.json) return;
         std::string j = "{\"type\":\"lrpt_status\",\"data\":{\"on\":true";
+        { char b[96]; std::snprintf(b, sizeof b, ",\"snrDb\":%.1f,\"needDb\":%.1f,\"saved\":%d,\"inRange\":%d", snrDb_, kNeedDb, saved_, inRange_); j += b; }
         if (rx_) {
             const Stats s = rx_->stats();
             int s0, s1; rx_->stripRange(s0, s1);
@@ -219,6 +261,7 @@ private:
     Opts o_;
     std::unique_ptr<Receiver> rx_;
     double rate_ = 0, fedSec_ = 0, lastStatus_ = -1, lastFrameSec_ = 0;
+    double snrAcc_ = 0, snrDb_ = 0, lastAsk_ = -1, lastSignalSec_ = 0; int snrN_ = 0, inRange_ = -1, saved_ = 0;
     uint64_t seenVersion_ = 0, previewVersion_ = 0;
     double lastPreview_ = -1;
     bool havePictures_ = false, previewOpen_ = false, done_ = false, rateWarned_ = false;

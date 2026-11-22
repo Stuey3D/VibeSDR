@@ -9,7 +9,13 @@ export interface LrptStatus {
   mode: string;          // "QPSK" | "OQPSK" (AUTO alternates until frames decode)
   diff: number;          // -1 not yet known, 0 plain, 1 differentially coded
   symbolRate: number;
-  lock: number;          // constellation lock, 0–100 (≈ 64 on noise, ≥ 80 locked)
+  lock: number;          // constellation lock, 0–100 (≈ 64 on noise) — a developer figure, not shown
+  /** ★★ beta91: the signal over the noise, dB — (S+N)/N from the demodulator's own Es/N0, what the waterfall shows over
+   *  its floor at the top of the signal; ≈ 0 on noise. undefined from an older server. */
+  snrDb?: number;
+  needDb?: number;       // what it takes to decode (≈ +5 dB)
+  saved: number;         // passes filed to the gallery since the decoder started
+  inRange: number;       // the satellite engine: 1 above the horizon, 0 not, −1 no pick
   offsetHz: number;      // the carrier's offset from the dial (the Doppler left over)
   frames: number;        // frames that passed Reed–Solomon
   bad: number;           // frames that did not
@@ -30,6 +36,10 @@ export function parseLrptStatus(d: unknown): LrptStatus | null {
     diff: n('diff'),
     symbolRate: n('symbolRate'),
     lock: n('lock'),
+    snrDb: typeof o.snrDb === 'number' && isFinite(o.snrDb) ? Math.max(-9.9, Math.min(60, o.snrDb)) : undefined,
+    needDb: typeof o.needDb === 'number' && isFinite(o.needDb) ? Math.max(0, Math.min(30, o.needDb)) : undefined,
+    saved: Math.max(0, Math.round(n('saved'))),
+    inRange: typeof o.inRange === 'number' ? Math.max(-1, Math.min(1, Math.round(o.inRange))) : -1,
     offsetHz: n('offsetHz'),
     frames: Math.max(0, Math.round(n('frames'))),
     bad: Math.max(0, Math.round(n('bad'))),
@@ -40,21 +50,34 @@ export function parseLrptStatus(d: unknown): LrptStatus | null {
   };
 }
 
-/** The decoder box's status line. */
+/** "signal +3.2 dB over the noise (needs about +5)" — empty from an older server that does not measure it. */
+export function lrptSignalText(st: LrptStatus | null): string {
+  if (!st || st.snrDb === undefined) return '';
+  const v = st.snrDb, need = st.needDb ?? 5;
+  return `signal ${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)} dB over the noise (needs about +${need.toFixed(0)})`;
+}
+
+/** The decoder box's status line — and the SATELLITE window's, so it is always the LIVE state (a pass filed earlier is
+ *  said as such, never left standing as "picture complete" while the receiver hunts again). */
 export function lrptStatusText(st: LrptStatus | null): string {
   if (!st) return 'waiting for a METEOR pass';
   if (st.why) return st.why;
+  const sig = lrptSignalText(st);
   if (st.lines > 0) {
     const ch = st.channels.length ? ` · channels ${st.channels.map((c) => c.split(' ')[0]).join(', ')}` : '';
-    return `${st.lines} lines${ch} · ${st.frames} frames${st.sync ? '' : ' · signal lost'}`;
+    /* ★★ beta91: a gap in the frames is a gap in the picture, not its end (the server keeps the pass open while the
+     *  satellite is up) — so "signal lost" says what the receiver is doing about it. */
+    return `${st.lines} lines${ch} · ${st.frames} frames${st.sync ? '' : ` · between frames, still listening${sig ? ' · ' + sig : ''}`}`;
   }
-  if (st.sync) return `${st.mode} locked · frames ${st.frames}${st.bad ? ` (${st.bad} unreadable)` : ''}`;
-  if (st.carrier) return `carrier found (${st.mode}, ${st.offsetHz >= 0 ? '+' : ''}${st.offsetHz} Hz) · looking for frames`;
-  /* ★ How close the receiver is (Stuart 2026-11-21, Meteor-M2-3 visible ~4–5 dB over the floor, the box only "listening"):
-   *  the carrier loop's figure, ≈ 64 % on noise, 80 % counts as locked (vibe_lrpt_demod.h) — said, so a marginal pass
-   *  reads as marginal rather than as nothing. */
-  if (st.lock >= 50) return `listening for a METEOR satellite · lock ${st.lock} % (80 % holds it)`;
-  return 'listening for a METEOR satellite';
+  const filed = st.saved > 0 ? 'last pass saved to the gallery · ' : '';
+  if (st.sync) return `${filed}${st.mode} locked · frames ${st.frames}${st.bad ? ` (${st.bad} unreadable)` : ''}`;
+  /* ★★ beta91 (Stuart's Meteor-M2-4 pass, 2026-11-22): the old "lock N % (80 % holds it)" was a constellation figure
+   *  that sat at 64 % on noise and never reached 80 on a decoding OQPSK signal. Now the signal over the noise, as the
+   *  waterfall shows it at the top of the signal (≈ 0 on noise), and what decoding needs — something a listener can act
+   *  on (a better aerial, a higher pass). */
+  if (sig) return `${filed}listening for a METEOR satellite · ${sig}`;
+  if (st.carrier) return `${filed}carrier found (${st.mode}, ${st.offsetHz >= 0 ? '+' : ''}${st.offsetHz} Hz) · looking for frames`;
+  return `${filed}listening for a METEOR satellite`;
 }
 
 export const LRPT_HINT =

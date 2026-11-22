@@ -123,6 +123,9 @@ flags_for() {
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★ V12 METEOR LRPT (beta91): optimised as ctest builds it (-O3 there) — unoptimised the suite took 42 s, and the
+    #   live-pass cases (a 35 s fade through the server's Run, twice) would double that.
+    test-lrpt)             echo "-O2" ;;
     # ★★★ V12 PAGING's gate (vibe_paging_gate.h): built in, as the desktop VibeServer now is for the R36S — and still dormant
     #     outside the Android app / the handheld's radio process.
     test-paging-gate)      echo "-O2 -DVIBE_PAGING=1 -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
