@@ -4,8 +4,8 @@
 // ★★ WHY ITS OWN THREAD (memory: "split heavy multi-channel decoders across cores — hottest-thread scoring"). Band's decode
 //    thread already carries every tuner and the gate; a 40–96 kHz CW or RTTY skimmer on it would make it the hottest thread
 //    on the box and push the slotted modes' audio late. Here the decode thread only COPIES the block into a bounded queue
-//    (processIq returns at once); the worker decodes at the decoders' LAG rung (vibeDecoderLagThread — one notch below
-//    FT8's workers: on a single core, what gives way is the stage built to give way).
+//    (processIq returns at once); the worker decodes in the IDLE class (vibeIdleThread — below every decoder: only on CPU
+//    nothing else wants; starved, it falls behind and the pause rule pauses it).
 // ★ BOUNDED. At most kMaxBacklogSec (2 s) of input waits; past that the newest block is dropped and counted (drop, never wait —
 //   the decode thread is never held up). The backlog is what Band's pause rule reads (backlogSec): an engine that cannot
 //   keep up is the first thing paused, before any slotted mode loses a slot.
@@ -84,7 +84,11 @@ protected:
 private:
     struct Block { std::vector<cf32> v; double rate = 0, centre = 0, utc = 0; };
     void run(const char* name) {
-        vibeDecoderLagThread(name);
+        /* ★★ V12 beta91: the IDLE class (Linux SCHED_IDLE, macOS BACKGROUND, Windows IDLE) — below every decoder: the
+         *  chips run only on CPU nothing else wants. Measured: at the decoders' lag rung they competed with the band
+         *  decode's own thread for the same cores, and test-server-spots / test-web-spots lost 20 m's PSK31 and FT2 in a
+         *  run in three on a loaded Mac. Starved, their queue fills and the pause rule pauses them, CW first. */
+        vibeIdleThread(name); vibe::vibeFlushDenormals();
         for (;;) {
             Block b;
             {
