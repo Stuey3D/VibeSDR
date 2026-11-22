@@ -90,6 +90,9 @@ private:
     int phasingLook();
     void beginChart(const std::string& why, bool openPhasing, int curPos);
     void decodeImageLine();
+    void resampleLine();   // this demod line → imgData (slot imageLine & 1)
+    void updateCorr();     // the chart/noise verdict (corrAvg) from it and the line before
+    void emitLine();       // blend, auto-level, onLine
 
     // Config
     int lpm, imageWidth, bandwidth;
@@ -167,6 +170,11 @@ private:
     static constexpr int MIN_CHART_LINES = 120;               // a chart this young cannot be followed by another's phasing
     Stats stats_;
     double lastStartDet = 0;                                  // this line's start-tone reading (detectLineType)
+    /* ★★★ A chart out of the noise while waiting in the background (see decodeFaxLine): begun on the chart/noise verdict,
+     *  ended after IDLE_END_LINES (3 minutes) of standing by. */
+    static constexpr int IDLE_END_LINES = 360;
+    bool fromNoise = false;
+    int  idleRun = 0;
     int  lookRing[LOOK_WINDOW];                               // pulse position of each recent line, −1 not phasing-like
     int  lookPos = 0;
     int  lookBin[LOOK_BINS];

@@ -638,9 +638,21 @@ static void phase2() {
         f->frame(&st, 1); feed(f, 200); f->frame(&st, 1); feed(f, 60); f->frame(standby, 2); f->finish(true);
         ok(count(ls) == 6, "★ two charts each after its own start tone: both kept (the second 60 lines, partial)");
         gallery::Meta bm = m; gallery::Store bs; bs.setDir(tmpDir("bpics"));
-        auto g = bg::makeGalleryTap(bs, bm);                      // background: unchanged — 80 lines with no start are kept
-        feed(g, 80); g->finish(true);
-        ok(count(bs) == 1, "background WEFAX unchanged: 80 lines kept as before (it draws only after a start tone or phasing)");
+        auto g = bg::makeGalleryTap(bs, bm);                      // background: a start tone (reported, then its START), 80 lines
+        g->frame(standby, 2); g->frame(tone, 2); g->frame(&st, 1); feed(g, 80); g->finish(true);
+        ok(count(bs) == 1, "background: a chart begun on its start tone, cut at 80 lines — kept, as before");
+        // ★★ a background chart begun OUT OF THE NOISE (no start tone, no phasing: the last report was 'standing by')
+        auto h = bg::makeGalleryTap(bs, bm);
+        h->frame(standby, 2); h->frame(&st, 1); h->frame(image, 2); feed(h, 300); h->frame(standby, 2); const uint8_t sp = 0x03; h->frame(&sp, 1);
+        ok(count(bs) == 1, "★ background, a chart out of the noise that ran 300 lines: dropped (a false start, or too little of a chart)");
+        auto k = bg::makeGalleryTap(bs, bm);
+        k->frame(standby, 2); k->frame(&st, 1); k->frame(image, 2); feed(k, 700); k->frame(&sp, 1); k->finish(false);
+        const std::string bl = bs.listJson("wefax", 10);
+        ok(count(bs) == 2 && bl.find("1809\xc3\x97" "700") != std::string::npos && bl.find("\"partial\":true") != std::string::npos,
+           "★ …one that ran 700 lines to its stop tone: kept, marked PARTIAL (its top is missing)");
+        auto q = bg::makeGalleryTap(bs, bm);
+        q->frame(standby, 2); q->frame(&st, 1); q->frame(phasing, 2); feed(q, 120); q->frame(&sp, 1); q->finish(false);
+        ok(count(bs) == 3, "…and one whose phasing came after its START (toneless phasing): a chart, kept whole");
     }
     {
         gallery::Meta sm = m; sm.kind = "sstv"; sm.decoder = "sstv"; sm.freqHz = 14230000;

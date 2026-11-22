@@ -243,7 +243,12 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
  *    left a 58–100-line strip of noise in the gallery at every retune. Now a listener's strip is kept only if a START
  *    TONE or PHASING was seen for it (0x02 start, or 0x04 phase 1 start tone / 2 phasing), or it ran kChartLines (600
  *    lines = 5 minutes at 120 LPM — a chart joined part-way, with no start of its own) — otherwise it is dropped
- *    silently. Background WEFAX is unchanged: it only draws after a start tone or phasing anyway (auto_start). */
+ *    silently.
+ *  ★★ …AND A BACKGROUND CHART BEGUN WITHOUT EITHER (2026-11-22): waiting in the background, the decoder now also begins a
+ *    chart that comes OUT OF THE NOISE (Northwood faded in 2½ minutes into a chart — wefax_decoder.cpp), or after a stop
+ *    tone with no start tone. Such a chart is missing its top, so it is held to the same 600 lines and, kept, is marked
+ *    PARTIAL. A background 0x02 counts as a start when the decoder's last phase report was a start tone or phasing (1/2;
+ *    the start tone is reported before its START fires) — or when none has come (an older decoder). */
 class GalleryImageTap : public DecoderTap {
 public:
     static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096, kChartLines = 600;
@@ -258,10 +263,10 @@ public:
         auto u32 = [&](size_t o) { return (uint32_t)d[o] << 24 | (uint32_t)d[o + 1] << 16 | (uint32_t)d[o + 2] << 8 | d[o + 3]; };
         const uint8_t op = d[0];
         if (!sstv_) {
-            if (op == 0x02 && n == 1) { save(true); begin(0, 0); marked_ = true; return; }
+            if (op == 0x02 && n == 1) { save(true); begin(0, 0); marked_ = listener_ || lastPhase_ < 0 || lastPhase_ == 1 || lastPhase_ == 2; return; }
             if (op == 0x03 && n == 1) { save(false); return; }
             // ★ 0x04 <phase>: a start tone (1) or phasing (2) heard — whatever is drawn next belongs to a real chart
-            if (op == 0x04 && n == 2) { if (d[1] == 1 || d[1] == 2) { if (open_) marked_ = true; else pendingMark_ = true; } return; }
+            if (op == 0x04 && n == 2) { lastPhase_ = d[1]; if (d[1] == 1 || d[1] == 2) { if (open_) marked_ = true; else pendingMark_ = true; } return; }
             if (op == 0x01 && n >= 9) {
                 const uint32_t ln = u32(1), w = u32(5);
                 if (w == 0 || w > kMaxWidth || n < 9 + (size_t)w) return;
@@ -314,8 +319,10 @@ private:
         open_ = false;
         const uint32_t minLines = sstv_ ? 16 : 50;
         if (w_ == 0 || lines_ < minLines || maxRow_ == 0) { px_.clear(); return; }
-        // ★★ a listener's WEFAX strip with no start tone, no phasing and under 5 minutes: noise from tuning round — dropped
-        if (!sstv_ && listener_ && !marked_ && lines_ < kChartLines) { px_.clear(); ++dropped_; return; }
+        // ★★ a WEFAX strip with no start tone, no phasing and under 5 minutes: noise from tuning round (a listener's), or a
+        //    background chart out of the noise too short to be worth keeping — dropped. A background one kept is PARTIAL.
+        if (!sstv_ && !marked_ && lines_ < kChartLines) { px_.clear(); ++dropped_; return; }
+        if (!sstv_ && !listener_ && !marked_) partial = true;
         const int ch = sstv_ ? 3 : 1;
         const uint32_t h = sstv_ ? (partial ? maxRow_ : h_) : maxRow_;
         px_.resize((size_t)w_ * h * ch, 255);
@@ -335,6 +342,7 @@ private:
     mutable std::mutex m_;
     bool sstv_ = false, open_ = false, done_ = false;
     bool listener_ = false, marked_ = false, pendingMark_ = false;   // ★ a listener's tap; this chart had a start tone / phasing
+    int lastPhase_ = -1;                                              // ★ the decoder's last 0x04 phase report (-1 none yet)
     size_t dropped_ = 0;
     uint32_t w_ = 0, h_ = 0, lines_ = 0, maxRow_ = 0;
     std::vector<uint8_t> px_;
