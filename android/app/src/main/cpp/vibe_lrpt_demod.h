@@ -11,8 +11,10 @@
 //     rest). Without either, the x⁴ acquisition still finds a carrier anywhere in ±Fs/8 — Doppler at 137 MHz is
 //     ±3.1 kHz — it just takes the loop a moment longer each time it slips.
 //
-// ★★ Acquisition is an FFT of the 4th power (QPSK's four phases fold to one line at 4·Δf), re-run only while the lock
-//    detector says unlocked; once locked the second-order Costas loop carries the slow Doppler slope (≤ 65 Hz/s).
+// ★★ Acquisition is an FFT of the 4th power (QPSK's four phases fold to one line at 4·Δf) of the MATCHED FILTER's points
+//    (beta91 — not the raw slice), a correction to the NCO whenever frames are not decoding; the second-order Costas loop
+//    carries the slow Doppler slope (≤ 65 Hz/s), and once frames have decoded with a feed-forward on, a leash keeps it
+//    near where it decoded (docs/v12/LRPT-LIVE-PASS.md).
 //
 // ★ SIMD: the matched filter (the only hot loop — 21–40 taps at the input rate) is NEON / SSE2 / scalar with the SAME
 //   four-lane partial sums and the same final addition order, so all three give bit-identical floats. The interpolator,

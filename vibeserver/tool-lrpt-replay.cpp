@@ -114,7 +114,15 @@ unsigned long long replay(const std::string& cf32, const std::string& txt, bool 
             rxNow = run.receiver();
             tNow += got / dl.rate;
         }
-        if (const Receiver* rx = run.receiver()) frames = rx->stats().rsOk;
+        if (const Receiver* rx = run.receiver()) {
+            frames = rx->stats().rsOk;
+            // ★ how much of the picture has data: strips (8 lines) with any block, per live channel
+            for (int a : rx->liveApids()) {
+                const Channel& ch = rx->channels().at(a);
+                int with = 0; for (int s = 0; s < ch.strips(); s++) { bool any = false; for (int c = 0; c < kMcuPerLine && !any; c++) any = ch.has(s, c); if (any) with++; }
+                std::printf("channel %s: %d lines with picture (%d strips), %llu blocks\n", channelName(a), with * 8, with, (unsigned long long)ch.goodBlocks());
+            }
+        }
         run.finish(false);
     }
     std::fclose(f);

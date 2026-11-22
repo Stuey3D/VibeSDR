@@ -140,6 +140,9 @@ AUTO's contest doubles the demodulator (≈ +55 %) for the first ~12 frames only
 
 ## RESUME HERE
 
+0. **beta91: a real Meteor-M2-4 pass was captured and replayed — see `LRPT-LIVE-PASS.md`** (OQPSK + differential at
+   72k confirmed on air; the receiver's sensitivity, relock, rate choice and pass end were fixed against it). Item 1 below
+   is done for 72k OQPSK; the 80k mode is still untested on air.
 1. **A real N2-3 / N2-4 pass** (OQPSK, differential; and the 80k mode if one of them is in it). Needs a 137 MHz aerial and
    a radio with 0 listeners — **the coordinator's capture**: 150–250 kS/s complex around 137.1 or 137.9 MHz for a whole
    pass (check sats.json / SatNOGS for which is live), then `test-lrpt --wav` (16-bit stereo WAV) or add a `.cu8` reader.
