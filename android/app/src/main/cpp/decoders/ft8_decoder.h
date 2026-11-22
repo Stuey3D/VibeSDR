@@ -391,7 +391,8 @@ public:
     static constexpr int    kOsdPairSpan = 40;    ///< OSD's pairs of flips among the 40 least reliable bits (spare CPU)
     /* ★★ V12 beta91 THE DEEP TIER ("Dig deeper" — Setup → Modes and decoders → FT8: an option under it). On top of full
      *  depth, on spare CPU only: repeats detected (FtxApBook::Rep), eight AP hypotheses a near miss decoded (not three),
-     *  the second look for a candidate with 8 Costas hits (not 10). ✗ Measured and NOT taken: OSD pairs over 60 bits (+0.4 %
+     *  the second look for an FT8 candidate with 8 Costas hits of 21 (not 10; FT4/FT2 keep 10 of 16 — 8 there doubled
+     *  FT4's CPU on real 40 m for +1 % decodes). ✗ Measured and NOT taken: OSD pairs over 60 bits (+0.4 %
      *  real, and the only false decode of the stress runs — FT2, an OSD codeword), minScore 7 (+0.3 %, +15 % CPU, a hex
      *  telemetry decode nobody else heard), 200 candidates (none).
      *  Measured in docs/v12/FTX-SENSITIVITY.md § Deep tier. The owner's switch sets `deepTier` (one for the server: FT8,

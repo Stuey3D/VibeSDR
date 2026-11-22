@@ -1428,7 +1428,7 @@ void Ft8Decoder::runDecode() {
     if (deep && deepOn) {
         o.apRepeat = true;
         o.apMaxCands = kDeepApCands;
-        o.fineMinSync = kDeepFineMinSync;
+        if (mode_ == FtxMode::FT8) o.fineMinSync = kDeepFineMinSync;   // ★ FT8 only: FT4's 8 of 16 doubled its CPU for +1 %
     }
     o.mayRunPass = [&](int, double elapsedMs, double lastMs) {
         const bool loaded = loadProbe ? loadProbe() : false;

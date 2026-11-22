@@ -126,6 +126,7 @@ int main(int argc, char** argv) {
     std::string wavDir;   // ★ also write every slot as a WAV (jt9's name and length) + truth.txt: the SAME audio for a reference decoder
     double snrA = -24, snrB = -14, snrStep = 1; int slots = 20, sigs = 10, noiseSlots = 0; unsigned seed = 1; bool verbose = false;
     Ft8SlotOptions o; o.maxPasses = 1; o.osdMaxErrors = 0;
+    bool deepSync = false;   // ★ --deep: the second look's lower gate is FT8's only (Ft8Decoder::runDecode)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -152,13 +153,14 @@ int main(int argc, char** argv) {
         else if (a == "--apk") o.apMaxCands = std::atoi(nxt().c_str());
         else if (a == "--rep") o.apRepeat = std::atoi(nxt().c_str()) != 0;           // ★ beta91 deep tier
         else if (a == "--repnear") o.apRepeatMaxBpErr = std::atoi(nxt().c_str());
-        else if (a == "--deep") { o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; o.fineMinSync = Ft8Decoder::kDeepFineMinSync; }
+        else if (a == "--deep") { o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; deepSync = true; }   // ★ as runDecode
         else if (a == "--repseed") repSeed = std::atoi(nxt().c_str());
         else if (a == "--reptable") repTable = std::atoi(nxt().c_str());
         else if (a == "--wavdir") wavDir = nxt();
         else if (a == "-v") verbose = true;
         else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
+    if (deepSync && mode == FtxMode::FT8 && o.fineMinSync == 0) o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
     const bool ft4 = mode != FtxMode::FT8;
     const int nn = ft4 ? FT4_NN : FT8_NN;
     const double T = mode == FtxMode::FT2 ? kFt2SymbolPeriod : ft4 ? 0.048 : 0.16;

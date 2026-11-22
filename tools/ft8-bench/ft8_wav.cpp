@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     int repeat = 1;      // ★ decode the recording this many times (a profiler's sample needs a longer run)
     bool ft4 = false, ft2 = false; double lead = NAN, len = 0, from = 0, to = 1e18;
     Ft8SlotOptions o;
+    bool deepSync = false;   // ★ --deep: the second look's lower gate is FT8's only (Ft8Decoder::runDecode)
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::atof(argv[++i]) : 0.0; };
@@ -99,12 +100,13 @@ int main(int argc, char** argv) {
         else if (a == "--finesync") o.fineMinSync = (int)nxt();
         else if (a == "--rep") o.apRepeat = (int)nxt() != 0;          // ★ beta91 deep tier: repeat detection
         else if (a == "--repnear") o.apRepeatMaxBpErr = (int)nxt();
-        else if (a == "--deep") { o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; o.fineMinSync = Ft8Decoder::kDeepFineMinSync; }
+        else if (a == "--deep") { o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; deepSync = true; }   // ★ as runDecode
         else if (a == "--lead") lead = nxt();
         else if (a == "--len") len = nxt();
         else if (a == "--from") from = nxt();
         else if (a == "--to") to = nxt();
     }
+    if (deepSync && !ft4 && o.fineMinSync == 0) o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
     Ft8SlotDecoder dec(rate, ft2 ? FtxMode::FT2 : ft4 ? FtxMode::FT4 : FtxMode::FT8);
     FtxApBook book(ft4, ft2 ? 160 : ft4 ? 80 : 40);    // ten minutes of slots
     if (useAp) o.ap = &book;

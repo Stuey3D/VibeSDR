@@ -173,9 +173,10 @@ static std::string sibling(const std::string& m) {
     char b[8]; std::snprintf(b, sizeof b, "%s%+03d", r ? "R" : "", v);
     return head + b;
 }
-static Ft8SlotOptions deepFull(FtxApBook* ap) {   // ★ what Ft8Decoder::runDecode adds with deepTier() on spare CPU
+static Ft8SlotOptions deepFull(FtxApBook* ap, FtxMode md = FtxMode::FT8) {   // ★ what Ft8Decoder::runDecode adds with deepTier() on spare CPU
     Ft8SlotOptions o = newFull(ap);
-    o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands; o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
+    o.apRepeat = true; o.apMaxCands = Ft8Decoder::kDeepApCands;
+    if (md == FtxMode::FT8) o.fineMinSync = Ft8Decoder::kDeepFineMinSync;
     return o;
 }
 
@@ -549,7 +550,7 @@ int main() {
         for (const C& c : cs) {
             const Geo g = geo(c.md);
             FtxApBook a0(c.md != FtxMode::FT8, 1 << 30), a1(c.md != FtxMode::FT8, 1 << 30);
-            Ft8SlotOptions o0 = newFull(&a0), o1 = deepFull(&a1);
+            Ft8SlotOptions o0 = newFull(&a0), o1 = deepFull(&a1, c.md);
             if (c.md == FtxMode::FT2) { o0.osdMaxErrors = o1.osdMaxErrors = 0; }   // ★ as the live decoder runs FT2
             int h0, n0, f0, h1, n1, f1;
             band(g, c.snr, 12, c.sigs, o0, h0, n0, f0);
@@ -566,7 +567,7 @@ int main() {
             int fTot = 0, hTot = 0, nTot = 0;
             for (double snr : { -24.0, -21.0, -18.0, -14.0, -8.0 }) {
                 FtxApBook a(md != FtxMode::FT8, 1 << 30);
-                Ft8SlotOptions o = deepFull(&a); o.apRepeatMaxBpErr = 200;
+                Ft8SlotOptions o = deepFull(&a, md); o.apRepeatMaxBpErr = 200;
                 if (md == FtxMode::FT2) o.osdMaxErrors = 0;
                 const double sh = md == FtxMode::FT8 ? 0 : md == FtxMode::FT4 ? 5 : 8;
                 int h, n, f;
@@ -583,7 +584,7 @@ int main() {
             std::uniform_real_distribution<double> U(0, 1);
             for (int i = 0; i < 400; ++i) { const std::string a = randCall(rng); if (i % 2) book.seed(a, randCall(rng)); else book.seed(a); }
             for (int i = 0; i < 256; ++i) book.seedRepeat(randMsg(rng), (float)(200.0 + 2800.0 * U(rng)));
-            Ft8SlotOptions o = deepFull(&book);
+            Ft8SlotOptions o = deepFull(&book, md);
             o.minScore = 0; o.maxCandidates = 300; o.fineMinSync = 6; o.apMaxBpErr = 200; o.apRepeatMaxBpErr = 200;
             if (md == FtxMode::FT2) o.osdMaxErrors = 0;
             Ft8SlotDecoder dec(kFs, md);
