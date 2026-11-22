@@ -64,7 +64,7 @@ export interface KnownSignal {
   dialHz: number; mode: string;
   /** Higher wins a collision (PRIO_*). */
   prio: number;
-  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx' | 'tag';   // 'dab' = a Band III block (dabBlockView.ts); 'tag' = the server identified its shape (sigTagSignals)
+  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx' | 'tag' | 'sat';   // 'sat' = a satellite in range (beta91 satLabelSignals)   // 'dab' = a Band III block (dabBlockView.ts); 'tag' = the server identified its shape (sigTagSignals)
   /** The decoder's settings for this signal, where they are published (curated entries only). */
   preset?: KnownPreset;
   /** ★★ V12 a DX CATCH from the server's DX Log (dxDialSignals) — drawn ITALIC in DX_LABEL_COLOUR. On a wide DAB view a
@@ -73,6 +73,9 @@ export interface KnownSignal {
   /** ★★ V12 a SIGNAL TAG — the server identified the signal from its spectrum shape alone (vibe_varatag.h): its kind and
    *  the server's confidence. Display and tune only; never a decoder (VARA is proprietary and never decoded). */
   tag?: { kind: 'vara'; conf: number };
+  /** ★★ beta91 a SATELLITE IN RANGE (satLabelSignals): the birds it names (one, or a label-only constellation's several
+   *  merged), the highest one's elevation, and whether it is a name only (ORBCOMM — never decoded). */
+  sat?: { names: string[]; tx: string; el: number; labelOnly: boolean };
 }
 /** What a DX label carries beyond its text: when it was last heard (unix s), its name, and its DAB block (DAB only). */
 export interface DxDialMark {
@@ -541,6 +544,127 @@ export function sigTagSignals(tags: readonly SigTagEntry[] | null | undefined, o
 export function isTagLabel(s: KnownSignal | null | undefined): boolean {
   return !!s && s.src === 'tag';
 }
+// ── ★★ beta91 SATELLITE LABELS (vibe_sat_engine.h skyLabels, docs/v12/SAT-LABELS.md) ─────────────────────────────────
+/* ★★★ STUART (2026-11-22): every satellite in range whose downlink falls in the waterfall is named there — "Meteor-M2-4
+ *     LRPT", "ISS FM", "ORBCOMM FM114" — at its DOPPLER-SHIFTED frequency, following the drift, gone at LOS. NOT only in
+ *     SATELLITE mode: "i could simply be listening to 2m band and if it appears we can label it".
+ *  ★ The server works it out (it has the orbits, the location and a checked clock) and sends, on the spectrum socket,
+ *    `{"type":"sat_labels","v":1,"t":unix,"sats":[{"id","n","norad","tx","hz","lo"?,"hi"?,"r","el","m","b"?}]}` every 4 s
+ *    while a bird is up in the radio's capture, and an empty list once when the last one sets. The client keeps those in
+ *    its own view (signalsInView) and forgets them SATLABEL_STALE_MS after the last message.
+ *  ★★ IDENTIFY ONLY for a label-only bird (`b`: ORBCOMM — commercial data messaging): a name, never a decoder. Several
+ *     ORBCOMM birds on the band at once are ONE label ("ORBCOMM FM114 +2") over the band. A tap only tunes there.
+ *  ★ Switched with the other signal labels (Display settings' SIGNAL LABELS); the owner's "satlabels" stops the server. */
+/** Satellite labels' colour: a pale sky blue — not the bookmarks' lilac, the DX lemon, the VFO's red or DAB's pink. */
+export const SAT_LABEL_COLOUR = '#a8d8ff';
+/** A satellite downlink's priority: below the curated table, above every bookmark; a label-only bird's, EiBi's. */
+export const PRIO_SAT = 5;
+/** Satellite labels not refreshed for this long are dropped (ms) — the server sends every 4 s while one is up. */
+export const SATLABEL_STALE_MS = 15_000;
+/** The most a message may carry (the server's kSkyLabelMax). */
+export const SATLABEL_MAX = 24;
+/** One downlink as the server sends it. */
+export interface SatLabelEntry { id: string; n: string; norad: number; tx: string; hz: number; lo?: number; hi?: number; r: number; el: number; m: string; b: boolean }
+const SAT_MODES = new Set(['nfm', 'usb', 'lsb', 'cw', 'am']);
+/** A `sat_labels` message, checked: finite, 1 MHz – 10 GHz, a band ≤ 2 MHz wide, names trimmed, at most SATLABEL_MAX. */
+export function parseSatLabels(msg: unknown): SatLabelEntry[] {
+  const sats = (msg && typeof msg === 'object' ? (msg as { sats?: unknown }).sats : null);
+  if (!Array.isArray(sats)) return [];
+  const out: SatLabelEntry[] = [];
+  for (const x of sats.slice(0, SATLABEL_MAX)) {
+    if (!x || typeof x !== 'object') continue;
+    const o = x as Record<string, unknown>;
+    const hz = Number(o.hz), r = Number(o.r), el = Number(o.el), norad = Number(o.norad);
+    const n = String(o.n ?? '').trim().slice(0, 48), tx = String(o.tx ?? '').trim().slice(0, 32);
+    if (!(hz >= 1e6 && hz <= 1e10) || !n) continue;
+    const e: SatLabelEntry = { id: String(o.id ?? '').slice(0, 32), n, norad: Number.isFinite(norad) ? norad : 0, tx, hz: Math.round(hz),
+                               r: Number.isFinite(r) ? r : 0, el: Number.isFinite(el) ? el : 0,
+                               m: SAT_MODES.has(String(o.m)) ? String(o.m) : 'nfm', b: o.b === true };
+    const lo = Number(o.lo), hi = Number(o.hi);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo && hi - lo <= 2.1e6 && hz >= lo - 1 && hz <= hi + 1) { e.lo = Math.round(lo); e.hi = Math.round(hi); }
+    out.push(e);
+  }
+  return out;
+}
+/** ★ The name a label uses: the catalogue's name without its long form ("SO-50 (SaudiSat-1C)" → "SO-50"). */
+export function satShortName(name: string): string {
+  return name.replace(/\s*\(.*\)\s*$/, '').trim() || name.trim();
+}
+/** ★ The downlink in a word or two: "FM repeater" → "FM", a transponder → "linear", a beacon → "beacon",
+ *  "SSTV events" → "SSTV"; everything else as the catalogue says it ("LRPT", "APRS", "Telemetry"). */
+export function satTxWord(tx: string): string {
+  const t = tx.trim();
+  if (/repeater/i.test(t)) return 'FM';
+  if (/transponder/i.test(t)) return 'linear';
+  if (/beacon/i.test(t)) return 'beacon';
+  if (/^sstv events?$/i.test(t)) return 'SSTV';
+  if (/^voice \/ sstv$/i.test(t)) return 'Voice/SSTV';
+  return t;
+}
+/** ★ ONE TEXT, every reader: "ISS FM", "Meteor-M2-4 LRPT", "ORBCOMM FM114" (the downlink's word left out when the name
+ *  already says it — a label-only bird's downlink is its constellation's name). */
+export function satLabelText(name: string, tx: string): string {
+  const n = satShortName(name), w = satTxWord(tx);
+  if (!w || n.toLowerCase().includes(w.toLowerCase())) return n;
+  return `${n} ${w}`;
+}
+/** The constellation a label-only bird belongs to — its name's first word ("ORBCOMM FM114" → "ORBCOMM"). */
+const satFamily = (name: string) => name.trim().split(/\s+/)[0].toUpperCase();
+/**
+ * The server's entries as labels. `ageS` = seconds since the message (each mark carried along its Doppler rate, at most
+ * 8 s of it). Sorted by hz. Label-only birds over a BAND (no channel of their own) are merged per constellation into one
+ * label over the band, named after the highest ("ORBCOMM FM114 +2").
+ */
+export function satLabelSignals(entries: readonly SatLabelEntry[] | null | undefined, ageS = 0): KnownSignal[] {
+  if (!entries || !entries.length) return [];
+  const dt = Math.max(0, Math.min(8, ageS));
+  const out: KnownSignal[] = [];
+  const bands = new Map<string, SatLabelEntry[]>();
+  for (const e of entries) {
+    if (e.b && e.lo != null && e.hi != null) {
+      const k = satFamily(e.n);
+      const g = bands.get(k); if (g) g.push(e); else bands.set(k, [e]);
+      continue;
+    }
+    const move = e.r * dt;
+    const hz = Math.round(e.hz + move);
+    const s: KnownSignal = { hz, label: satLabelText(e.n, e.tx), dec: '', dialHz: hz, mode: e.m,
+                             prio: e.b ? PRIO_EIBI : PRIO_SAT, src: 'sat', sat: { names: [e.n], tx: e.tx, el: e.el, labelOnly: e.b } };
+    if (e.lo != null && e.hi != null) { s.lo = Math.round(e.lo + move); s.hi = Math.round(e.hi + move); }
+    out.push(s);
+  }
+  for (const g of bands.values()) {
+    g.sort((a, b) => b.el - a.el);
+    const top = g[0], move = top.r * dt;
+    const hz = Math.round(top.hz + move);
+    out.push({ hz, lo: Math.round(top.lo! + move), hi: Math.round(top.hi! + move),
+               label: satLabelText(top.n, top.tx) + (g.length > 1 ? ` +${g.length - 1}` : ''), dec: '', dialHz: hz, mode: 'nfm',
+               prio: PRIO_EIBI, src: 'sat', sat: { names: g.map((x) => x.n), tx: top.tx, el: top.el, labelOnly: true } });
+  }
+  return out.sort((a, b) => a.hz - b.hz);
+}
+/** True for a satellite label. */
+export function isSatLabel(s: KnownSignal | null | undefined): boolean {
+  return !!s && s.src === 'sat';
+}
+/** What a hover or a screen reader says: who, which downlink, how high, and — for a label-only bird — that it is named only. */
+export function satLabelHint(s: KnownSignal): string {
+  const m = s.sat;
+  if (!m) return s.label;
+  const up = `${Math.round(m.el)}° up`;
+  if (m.labelOnly) return `${m.names.join(', ')} — commercial data messaging, named only (never decoded); ${up}; Doppler-shifted`;
+  return `${m.names[0]} — ${m.tx}, ${up}; at its Doppler-shifted frequency now`;
+}
+/** Labels plus satellites, one sorted list. */
+export function withSatLabels(list: readonly KnownSignal[], sats: readonly KnownSignal[]): KnownSignal[] {
+  if (!sats.length) return list as KnownSignal[];
+  return [...list, ...sats].sort((a, b) => a.hz - b.hz);
+}
+/** ★ A label's colour, line and text alike: a DX catch's lemon, a satellite's sky blue, else the labels' lilac. */
+export function knownLabelColour(s: KnownSignal | null | undefined): string {
+  return s && s.dx ? DX_LABEL_COLOUR : s && s.src === 'sat' ? SAT_LABEL_COLOUR : KNOWN_LABEL_COLOUR;
+}
+
 /** Labels plus tags, one sorted list (tags already cleared by sigTagSignals). */
 export function withSigTags(list: readonly KnownSignal[], tags: readonly KnownSignal[]): KnownSignal[] {
   if (!tags.length) return list as KnownSignal[];

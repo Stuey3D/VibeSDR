@@ -960,6 +960,9 @@ if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)
 if npx tsx scripts/test_silent_decoder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 satellite engine, the clients' half (src/services/satellites.ts): parsing, the readout words, the picker rows, the cap
 if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta91 SATELLITE LABELS on the waterfall (knownSignals.ts parseSatLabels / satLabelSignals): the message checked, one
+#    text ("ISS FM", "ORBCOMM FM114"), Doppler-shifted marks, ORBCOMM merged on the band and never a decoder, the layout.
+if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 SATELLITE MODE, the clients' pure half: the timetable's order + greying, the words, the box size, the half-globe
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).

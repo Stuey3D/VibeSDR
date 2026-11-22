@@ -13315,7 +13315,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ Its own mutex: the DAB tick sends under g_dabReportMtx and must not take clientMtx in the middle. */
     /** ★ adc / lx per socket: what was last sent and when — sent again only on a change or after 2 s (see the frame
      *  loop). Erased with the socket. */
-    struct TeleLast { std::string msg[3]; double at[3] = { 0, 0, 0 }; };   // ★ [2] = sigtags (the VARA HF tag)
+    struct TeleLast { std::string msg[4]; double at[4] = { 0, 0, 0, 0 }; };   // ★ [2] = sigtags (the VARA HF tag), [3] = sat_labels (beta91)
     std::mutex teleMtx;
     std::map<net::Socket*, TeleLast> teleLast;
     bool teleDue(net::Socket* s, int k, const char* m, double periodS = 2.0) {
@@ -13585,7 +13585,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     that says the front end is clipping almost never arrived.
      *  ★ The enum note above adc already warned "NOT Out::Sig" — the separation was understood and
      *    then undone by a third message quietly reusing the class. One class, one quantity. */
-    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx, Wide, Tags };   // ★ Wide: the full-capture row (SPWB); Tags: sigtags (V12)
+    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx, Wide, Tags, SatLabels };   // ★ Wide: the full-capture row (SPWB); Tags: sigtags (V12); SatLabels: sat_labels (beta91)
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -13792,7 +13792,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
         //   discard the pending gain telemetry, which is a different quantity that has not changed.
         if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::Adc
-            || cls == Out::RspStat || cls == Out::Lx || cls == Out::Wide || cls == Out::Tags) {
+            || cls == Out::RspStat || cls == Out::Lx || cls == Out::Wide || cls == Out::Tags || cls == Out::SatLabels) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
                 if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
@@ -15994,6 +15994,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     decoder feed, and now the meter). See [[clients_differ_which_socket]].
                 const double binHz = sampleRate / (double)bins;
                 const float floorDb = iqFloorDb.load();
+                /* ★★ beta91 SATELLITE LABELS (vibe_sat_engine.h skyLabels, docs/v12/SAT-LABELS.md — Stuart 2026-11-22): every
+                 *  bird above the horizon whose downlink is received inside THIS radio's capture, at its Doppler-shifted
+                 *  frequency — on the ordinary waterfall, SATELLITE mode or not. Once per radio (the capture is the same for
+                 *  every listener; each client keeps the ones in its own view), rebuilt every 4 s (the engine looks at the
+                 *  sky once in that long for every caller: ~8 µs for 22 birds on the M5). Gated: a location, the owner's
+                 *  switch "satlabels" (re-read with it), and someone listening. Off / nothing up → the empty message, sent
+                 *  once so a client clears. IDENTIFY ONLY: ORBCOMM is named, never decoded. */
+                static double satLblAt = -1e18; static std::string satLblMsg;
+                {
+                    const double nowL = Impl::nowSecs();
+                    if (nowL - satLblAt >= vibe::sat::Engine::kSkyEverySec) {
+                        satLblAt = nowL;
+                        const double cL = rtlCenter.load() + hwOffsetHz();
+                        const bool want = !vsModeBlocked("satlabels") && satEngine().haveObserver()
+                                          && s_listenersCached.load(std::memory_order_relaxed) > 0;
+                        const vibe::sat::Clock clk = satClock();
+                        const auto lbl = want ? satEngine().skyLabels(clk, cL - sampleRate / 2, cL + sampleRate / 2)
+                                              : std::vector<vibe::sat::SkyLabel>{};
+                        satLblMsg = vibe::sat::Engine::skyLabelsJson(lbl, clk.unix);
+                    }
+                }
+                const bool satLblEmpty = satLblMsg.find("\"sats\":[]") != std::string::npos;
                 for (auto& p : peers) {
                     float mine = peak;                       // shared VFO — the fallback
                     if (const auto& c = p.dsp) {
@@ -16142,6 +16164,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         const std::string vt = g_varaTag.json();
                         const bool vtEmpty = vt == vibe::varatag::Tagger::kEmpty;
                         if (teleDue(p.sock.get(), 2, vt.c_str(), vtEmpty ? 1e18 : 10.0)) sendText(p.sock, vt, Out::Tags);
+                    }
+                    /* ★★ beta91 satellite labels: on change (every 4 s while a bird is up — its Doppler moves), the empty
+                     *  set once. The message's own time `t` changes every rebuild, so an unchanged empty set is compared
+                     *  without it (teleDue on a fixed text). Its own class (Out::SatLabels). */
+                    if (!satLblMsg.empty()) {
+                        if (satLblEmpty) { if (teleDue(p.sock.get(), 3, "{\"sats\":[]}", 1e18)) sendText(p.sock, satLblMsg, Out::SatLabels); }
+                        else if (teleDue(p.sock.get(), 3, satLblMsg.c_str(), 1e18)) sendText(p.sock, satLblMsg, Out::SatLabels);
                     }
                 }
                 // ★ The pocketed channels (see `specless`): the same measurement, nobody to send it

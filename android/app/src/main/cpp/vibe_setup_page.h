@@ -3619,6 +3619,9 @@ const BLOCKABLE = [
   /* ★★ V12 the VARA HF tag (vibe_varatag.h, docs/v12/VARA-TAG.md): a label on the spectrum over a VARA-shaped HF signal —
    *  identify only. VARA is proprietary and is NEVER decoded; this switch only stops the server looking for its shape. */
   { id: "varatag", label: "VARA HF tag on the spectrum (identify only \u2014 VARA is proprietary and never decoded)" },
+  /* ★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md): satellites in range named on the waterfall at their Doppler-shifted
+   *  downlink (ORBCOMM too — named only, never decoded). This switch stops the server sending them. */
+  { id: "satlabels", label: "Satellite labels on the waterfall (names only \u2014 ORBCOMM is never decoded)" },
   /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). Under it: each spots mode (spotModes), then Band. */
