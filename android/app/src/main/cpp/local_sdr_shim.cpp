@@ -42439,9 +42439,15 @@ void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz) {
 }
 /** ★ Modes and decoders the owner has switched off on this receiver — see g_vsBlockedModesCsv. */
 void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
-    std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
-    g_vsBlockedModesOwner = csv;
-    g_vsBlockedModesCsv = vibereach::effectiveBlocked(csv, g_vsRegionKnown);
+    {
+        std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+        g_vsBlockedModesOwner = csv;
+        g_vsBlockedModesCsv = vibereach::effectiveBlocked(csv, g_vsRegionKnown);
+    }
+    /* ★★ V12 beta91 FT8 / FT4 "dig deeper" — the owner's "ft8+deep" (Setup → Modes and decoders → Digital spots), IN the
+     *  list when ticked. One switch for every FT8 / FT4 / FT2 engine this radio runs (a dial's spots, Band's, a listener's
+     *  decoder); each reads it at its next slot, and still only digs deeper on spare CPU (Ft8Decoder::runDecode). */
+    vibe::Ft8Decoder::deepTier().store(vsModeBlocked("ft8+deep"), std::memory_order_relaxed);
 }
 
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }

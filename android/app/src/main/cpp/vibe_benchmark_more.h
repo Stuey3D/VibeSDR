@@ -789,6 +789,9 @@ inline RowRule ruleFor(const std::string& id) {
          *  switch — GREEN ticks it ON on a fresh setup, anything else leaves it off with the figure beside it (both readers'
          *  own rule, as Band and Advanced RDS have). Never primary: it never switches anything off. */
         { "dec_lora_all", { "lora+all", false, false } },
+        /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier): the owner's "ft8+deep", an option under Digital spots.
+         *  Inverted like lora+all — GREEN ticks it ON on a fresh setup, anything else leaves it off (both readers' own rule). */
+        { "dec_ft8deep",  { "ft8+deep", false, false } },
         { "dec_cw",       { "cw",     true,  true  } }, { "dec_cwskim",   { "cw",     false, true  } },
         { "dec_psk",      { "psk",    true,  true  } }, { "dec_pskskim",  { "psk",    false, true  } },
         { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder

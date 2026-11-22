@@ -2502,7 +2502,7 @@ function dabOwnRender() {
  *  that row was not run here. scripts/test-setup-bench-stale.mjs checks this list against the benchmark's own ids. */
 const BENCH_KNOWN_ROWS = [
   ["dec_rtty", "RTTY"], ["dec_navtex", "NAVTEX"], ["dec_wefax", "WEFAX"], ["dec_sstv", "SSTV"], ["dec_time", "Time signals"],
-  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
+  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_ft8deep", "FT8 / FT4 dig deeper"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
@@ -2875,6 +2875,20 @@ function benchApplyDefaults() {
     } else {
       if (lallBox.checked) { lallBox.checked = false; lallBox.dispatchEvent(new Event("change")); }
       benchNote(lallBox, "LoRa on every channel is off: it measured " + Math.round(lall.pct) + "% of a core here at its busiest thread. Tick it to use it anyway \u2014 the default channels decode either way.");
+    }
+  }
+  // ★★ V12 beta91 FT8 / FT4 DIG DEEPER ("ft8+deep", under Digital spots) — inverted like LoRa on every channel: a GREEN
+  //    dec_ft8deep ticks it ON on a fresh setup; anything else leaves it off with the figure beside it. Never hidden. Same
+  //    rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
+  const deep = row("dec_ft8deep");
+  const deepBox = document.querySelector('input[data-mode="ft8+deep"]');
+  if (deep && deep.grade !== "none" && deepBox) {
+    if (deep.grade === "green") {
+      if (!deepBox.checked) { deepBox.checked = true; deepBox.dispatchEvent(new Event("change")); }
+      benchNote(deepBox, "FT8 / FT4 dig deeper is on: a whole band at full depth with it measured " + Math.round(deep.pct) + "% of a core here, so it was turned on.");
+    } else {
+      if (deepBox.checked) { deepBox.checked = false; deepBox.dispatchEvent(new Event("change")); }
+      benchNote(deepBox, "FT8 / FT4 dig deeper is off: a whole band at full depth with it measured " + Math.round(deep.pct) + "% of a core here. Tick it to use it anyway.");
     }
   }
   // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
@@ -3558,6 +3572,11 @@ function bandLabel(entry) {
  *  token that is IN the CSV when ticked ("lora+all" — the "spotsband+wspr" convention); `node` moves an existing control
  *  of the page under its parent (DAB's label scan, Band's mode-by-mode list). The digital-spots modes are added under
  *  "spots" from the server's own list (spotModes) — `spots-<mode>` off. */
+/* ★ V12 beta91 FT8 / FT4 dig deeper — what it does and costs. ONE TEXT, TWO READERS: ServerModeScreen.tsx FT8_DEEP_HINT. */
+const FT8_DEEP_HINT = "More FT8, FT4 and FT2 decodes from the same audio \u2014 weak repeats of messages heard in the last minute, "
+  + "and more of the stations that only just failed \u2014 for up to about a fifth more decoding work. It only ever runs while this "
+  + "server has CPU to spare; a busy server decodes as it does without it. Every FT8 / FT4 decode on this radio uses it: the "
+  + "spots, Band and a listener's decoder.";
 /* ★★ V12 the message-text opt-in's notice (DECODER-RESEARCH.md §4.3). ONE TEXT, TWO READERS: ServerModeScreen.tsx. */
 const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless "
   + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
@@ -3628,6 +3647,10 @@ const BLOCKABLE = [
    *  it below green (benchApplyDefaults) — the owner can always tick it back. Under it: Band's own mode-by-mode word. */
   { id: "spotsband", label: "Band: a whole band at once", parent: "spots" },
   { id: "bandModes", parent: "spotsband", node: "bandModeWrap" },
+  /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier, docs/v12/FTX-SENSITIVITY.md § Deep tier) — "ft8+deep", IN
+   *  the CSV when ticked. More decodes from the same audio on spare CPU only; the benchmark's dec_ft8deep row ticks it on a
+   *  fresh setup where it measured green (benchApplyDefaults) — offered, never hidden. Every radio has FT8, so no reach gate. */
+  { id: "ft8+deep", label: "FT8 / FT4: dig deeper", parent: "spots", on: true },
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
   { id: "ism",    label: "ISM sensors and meters" },
@@ -4106,6 +4129,8 @@ function modeBlockRender() {
     let h = box(m);
     if (m.id === "lora+all") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="loraAllHint" style="margin:2px 0 0 24px">`
                                 + loraAllHint() + `</div></div>`;
+    if (m.id === "ft8+deep") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="ft8DeepHint" style="margin:2px 0 0 24px">`
+                                + esc(FT8_DEEP_HINT) + `</div></div>`;
     if (m.id === "avdata+text") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdataTextHint" style="margin:2px 0 0 24px">`
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
@@ -4541,6 +4566,7 @@ function modeBlockSummary() {
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
+    + (all.includes("ft8+deep") ? " FT8 / FT4 dig deeper on spare CPU." : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
     + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
     + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")

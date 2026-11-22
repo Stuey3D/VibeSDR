@@ -63,6 +63,9 @@ const BLOCKABLE: ModeEntry[] = [
   /* ★★ V12 THE BAND GOVERNOR, MODE BY MODE (decoders/digi_governor.h) — the setup page's bandModes node: Auto / Always /
    *  Off per mode, stored in this same CSV ("spotsband-psk" off in Band, "spotsband+wspr" always). Under Band. */
   { id: 'bandModes', label: '', parent: 'spotsband', node: 'bandModes' },
+  /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier) — "ft8+deep", IN the CSV when on. The benchmark's
+   *  dec_ft8deep row turns it on where it measured green (applyBench) — offered, never hidden. As on the setup page. */
+  { id: 'ft8+deep', label: 'FT8 / FT4: dig deeper', parent: 'spots', on: true },
   /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark times each one and starts a
    *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
    *  could not switch it back on from this screen (Stuart: "never hide any controls"). */
@@ -116,6 +119,11 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'sondes', label: 'Radiosondes (RS41, DFM, M10, M20 weather balloons)' },
 ];
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h AVDATA_TEXT_NOTICE. */
+/* ★ V12 beta91 FT8 / FT4 dig deeper — ONE TEXT, TWO READERS: vibe_setup_page.h FT8_DEEP_HINT. */
+const FT8_DEEP_HINT = 'More FT8, FT4 and FT2 decodes from the same audio \u2014 weak repeats of messages heard in the last minute, '
+  + 'and more of the stations that only just failed \u2014 for up to about a fifth more decoding work. It only ever runs while this '
+  + 'server has CPU to spare; a busy server decodes as it does without it. Every FT8 / FT4 decode on this radio uses it: the '
+  + 'spots, Band and a listener\u2019s decoder.';
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
   + 'Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law '
   + 'where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.';
@@ -741,6 +749,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     if (zoom && zoom.grade === 'red' && zoomSpec) {
       setZoomSpec(false); AsyncStorage.setItem(K.zoomSpectrum, '0');
       notes.push(`Keep the spectrum sharp is off — zooming in measured ${Math.round(zoom.pct)}% of a core here. Switch it on to use it anyway.`);
+    }
+    /* ★★ V12 beta91 FT8 / FT4 DIG DEEPER ("ft8+deep", under Digital spots) — inverted like LoRa on every channel, as
+     *  vibe_setup_page.h benchApplyDefaults: GREEN dec_ft8deep turns it ON, anything else leaves it off with the figure. */
+    const deep = row('dec_ft8deep');
+    if (deep && deep.grade !== 'none') {
+      const has = new RegExp('(^|,)ft8\\+deep(,|$)').test(bm);
+      if (deep.grade === 'green') {
+        if (!has) { bm = bm ? bm + ',ft8+deep' : 'ft8+deep'; setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`FT8 / FT4 dig deeper is on — a whole band at full depth with it measured ${Math.round(deep.pct)}% of a core here, so it was turned on.`);
+      } else {
+        if (has) { bm = bm.split(',').filter((t: string) => t !== 'ft8+deep').join(','); setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`FT8 / FT4 dig deeper is off — a whole band at full depth with it measured ${Math.round(deep.pct)}% of a core here. Switch it on to use it anyway.`);
+      }
     }
     /* ★★ V12 LoRa ON EVERY CHANNEL ("lora+all", under LoRa) — the one INVERTED rule, as vibe_setup_page.h
      *  benchApplyDefaults: GREEN dec_lora_all ticks it ON, anything else leaves it off with the figure. Never hidden. */
@@ -5134,6 +5155,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                           LoRaWAN 868.1, 868.3 and 868.5; on 433 MHz Meshtastic LongFast and MeshCore), plus as many more of the
                           band plan's channels as the benchmark says this phone can afford. On, it listens on every channel the
                           capture holds.
+                        </Text>
+                      </View>
+                    ) : m.id === 'ft8+deep' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>
+                          {FT8_DEEP_HINT}
                         </Text>
                       </View>
                     ) : m.id === 'avdata+text' ? (

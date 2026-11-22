@@ -259,7 +259,7 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_aprs9600") return Need::Pkt9600;
     if (id == "dec_paging") return Need::Paging;
     if (id == "dec_ism" || id == "dec_wmbus" || id == "dec_lora" || id == "dec_lora_all") return Need::Ism;
-    if (id == "dec_ft8" || id == "dec_ft8band" || is("spot_")) return Need::Spots;
+    if (id == "dec_ft8" || id == "dec_ft8band" || id == "dec_ft8deep" || is("spot_")) return Need::Spots;
     // ★ HF-only decoders: RTTY (and AUTO), WEFAX, the CW / PSK skimmers (HF bands), JTTY, SITOR-A, DSC (the MF/HF row),
     //   SELCAL (HF aviation), MFSK / Olivia / Contestia / THOR / DominoEX / MT63, ALE, Feld Hell. A listener's CW, PSK31 and SSTV run on any band.
     if (id == "dec_rtty" || id == "dec_rttyauto" || id == "dec_wefax" || id == "dec_cwskim" || id == "dec_pskskim"

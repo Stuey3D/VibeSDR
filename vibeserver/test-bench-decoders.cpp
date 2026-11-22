@@ -34,6 +34,20 @@ int main() {
         ok(r && r->pct > 0.0 && r->pct < 400.0, std::string(id) + (r ? ": " + std::to_string(r->pct).substr(0, 5) + " % of a core — " + r->label : ": missing"));
     }
     for (auto& x : rows) if (x.id == "dec_ft8") ok(x.decoded >= 15, "the FT8 row DECODES its busy band (" + std::to_string(x.decoded) + " of 20), so it times the LDPC work, not just the search");
+    // ★★ V12 beta91 FT8 / FT4 dig deeper: its own row (it sets "ft8+deep"'s default) — the same busy band at full depth
+    //    with the tier on, so it must cost at least what Band at one pass does and decode at least as much; or, where
+    //    Band at one pass was not green, not run with that reason (the answer is known). The switch is put back after.
+    { const Row* d = nullptr; const Row* b = nullptr;
+      for (auto& x : rows) { if (x.id == "dec_ft8deep") d = &x; if (x.id == "dec_ft8band") b = &x; }
+      const bool bandGreen = b && b->pct >= 0 && b->pct < 70.0;
+      if (bandGreen)
+          ok(d && d->pct >= 0.9 * b->pct && d->pct < 800.0 && d->decoded >= b->decoded, std::string("dec_ft8deep: ")
+             + (d ? std::to_string(d->pct).substr(0, 5) + " % of a core (Band at one pass " + std::to_string(b->pct).substr(0, 5) + " %), "
+             + std::to_string(d->decoded) + " spots (" + std::to_string(b->decoded) + ") — " + d->label : "missing"));
+      else
+          ok(d && d->pct < 0 && d->label.find("not run") != std::string::npos, std::string("dec_ft8deep not run where Band was not green: ")
+             + (d ? d->label : "missing"));
+      ok(!vibe::Ft8Decoder::deepTier().load(), "the benchmark puts the owner's dig-deeper switch back as it found it (off)"); }
     // ★★ V12: Band spots' own row — it sets Band's default (off where not green), so it must measure a REAL busy band.
     { const Row* b = nullptr; for (auto& x : rows) if (x.id == "dec_ft8band") b = &x;
       ok(b && b->pct > 0.0 && b->pct < 400.0 && b->decoded >= 20, std::string("dec_ft8band: ") + (b ? std::to_string(b->pct).substr(0, 5) + " % of a core, "
@@ -107,6 +121,8 @@ int main() {
     ok(!ruleFor("spot_q65").primary && ruleFor("spot_q65").slot, "a digital-spots mode is a slot, flagged but never switched off");
     ok(std::string(ruleFor("dec_lora_all").sw) == "lora+all" && !ruleFor("dec_lora_all").primary && !ruleFor("dec_lora_all").slot,
        "dec_lora_all names the owner's \"lora+all\", never switches anything off and is no slot (the readers tick it ON when green)");
+    ok(std::string(ruleFor("dec_ft8deep").sw) == "ft8+deep" && !ruleFor("dec_ft8deep").primary && !ruleFor("dec_ft8deep").slot,
+       "dec_ft8deep names the owner's \"ft8+deep\", never switches anything off and is no slot (the readers tick it ON when green)");
     ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");
     // ★★ V12 DAB own station: its row sets N (the dabStations block, vibe_dab_own.h nFromBench) and nothing else
     ok(std::string(ruleFor("dec_dab_station").sw).empty() && !ruleFor("dec_dab_station").primary && !ruleFor("dec_dab_station").slot,
