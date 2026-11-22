@@ -208,14 +208,30 @@ protocol paper's AP idea; WSJT-X was not read for this work.
 
 ### RESUME HERE
 
+- ★★★ **AUTOMATIC (Stuart, 2026-11-22: "should be automatic and simply enable when the cpu has headroom with a benchmark
+  driven toggle in the settings with the rest of the digital modes, no user facing toggles").** The rule is one header,
+  `decoders/ft8_deep_auto.h`, read by the shim (`vsFt8DeepApply`, every minute and on every mode-list change), the setup
+  page (`ft8DeepAuto`) and the app (`ft8DeepAutoFrom`):
+  1. the owner's word wins: `ft8+deep` (on) / `ft8-deep` (off) in the radio's mode list — ticking or unticking the box under
+     Digital spots writes one; "Back to automatic" removes both;
+  2. else the stored benchmark: its `dec_ft8deep` row below 25 % of a core; a beta90-or-older benchmark (no such row): its
+     Band row × 1.25 below 25 % (decided at start-up, no re-run needed); a Band row listed as not run = off;
+  3. no benchmark at all: the shim measures `benchdec::ft8DeepRow` ONCE itself — its own idle thread, three minutes after
+     start, only while the process is under 40 % of a core (that baseline is taken off the figure) — and keeps the figure
+     in `bookmarks-<radio>.ft8deep.txt` beside the radio's bookmarks. Off until then.
+  The benchmark never writes the owner's word (it only shows the automatic answer). Listeners see nothing
+  (scripts/test-ft8-deep-owner-only.mjs); the tier still runs only on slots with time to spare.
 - **Built and wired:** decoder (`Ft8Decoder::deepTier()`, `FtxApBook::Rep`, `Ft8SlotDecoder::repeatDetect`), the owner's
-  switch `ft8+deep` (setup page and Android ServerModeScreen, under Digital spots, with its hint), the shim
-  (`setVibeServerBlockedModes` sets `deepTier`), the benchmark row `dec_ft8deep` with its own green line
-  (`benchdec::kDeepGreenPct` = 25 %, `gradeFor`) and the inverted default rule (green ticks it on), the beta91 About line.
+  box (setup page and Android ServerModeScreen, under Digital spots, with its hint and the automatic answer), the shim's
+  decision and idle probe, the benchmark row `dec_ft8deep` (`benchdec::ft8DeepRow`) with its own green line
+  (`benchdec::kDeepGreenPct` = `ft8deep::kGreenPct` = 25 %, `gradeFor`), the beta91 About line.
+- **Tests:** test-ft8-deep-auto (fresh / upgraded / current benchmark / owner override), test-ft8-deep-owner-only.mjs,
+  test-ftx-sensitivity § 8, test-bench-decoders (the row).
 - **Not done:** the R36S's native UI has no owner decoder switches, so nothing to add there; JS8 has no deep tier.
   A web client listener sees nothing new (the tier is server-side).
-- **To check live (coordinator):** on the Lenovo / Pi 500, re-run the benchmark (or tick the box) and compare an evening's
-  PSK Reporter spot count with the switch off and on. A server set up before beta91 keeps the switch OFF until then.
+- **To check live (coordinator):** after upgrading, the Lenovo / Pi 500 log "FT8 dig deeper: on (from the benchmark)" from
+  their existing benchmarks' Band rows; the Pi 2 "off". Compare an evening's PSK Reporter spot count off and on (the owner's
+  box) to confirm the gain live.
 
 ### What it adds (on top of full depth, on spare CPU only)
 
@@ -275,11 +291,12 @@ What is left of the gap on a busy 40 m evening (746 reference decodes we did not
 them at a reference SNR of −15 dB or better, concentrated at 1000-1500 Hz where the band is densest — overlapping
 signals, the subtraction's territory, not the detector's. 211 were repeats of a message we also missed the first time.
 
-### AUTO: which boxes get it (the benchmark sets the default, never hides)
+### AUTO: which boxes get it (automatic; the owner can override)
 
 The row `dec_ft8deep` decodes the Band row's busiest band (20 m: every FT8/FT4 dial, 15 strong + 15 weak stations a
-dial, two slots so repeats exist) with no load and the tier on. **Green below 25 % of one core** (not the usual 70: the
-tier rides on top of everything else the box carries). Not run where Band at one pass already measured below green.
+dial, two slots so repeats exist) with no load and the tier on. **On below 25 % of one core** (not the usual 70: the
+tier rides on top of everything else the box carries). Not run where Band at one pass already measured below green. An
+older benchmark without the row decides from its Band row × 1.25; none at all, the server measures the row itself once.
 
 | Box | the row (estimated from the M5's) | default |
 |---|---|---|

@@ -63,8 +63,8 @@ const BLOCKABLE: ModeEntry[] = [
   /* ★★ V12 THE BAND GOVERNOR, MODE BY MODE (decoders/digi_governor.h) — the setup page's bandModes node: Auto / Always /
    *  Off per mode, stored in this same CSV ("spotsband-psk" off in Band, "spotsband+wspr" always). Under Band. */
   { id: 'bandModes', label: '', parent: 'spotsband', node: 'bandModes' },
-  /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier) — "ft8+deep", IN the CSV when on. The benchmark's
-   *  dec_ft8deep row turns it on where it measured green (applyBench) — offered, never hidden. As on the setup page. */
+  /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier) — AUTOMATIC (ft8DeepAutoFrom); a press is the owner's
+   *  own choice ("ft8+deep" / "ft8-deep"), which always wins. As on the setup page. Owner settings only. */
   { id: 'ft8+deep', label: 'FT8 / FT4: dig deeper', parent: 'spots', on: true },
   /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark times each one and starts a
    *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
@@ -121,9 +121,20 @@ const BLOCKABLE: ModeEntry[] = [
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h AVDATA_TEXT_NOTICE. */
 /* ★ V12 beta91 FT8 / FT4 dig deeper — ONE TEXT, TWO READERS: vibe_setup_page.h FT8_DEEP_HINT. */
 const FT8_DEEP_HINT = 'More FT8, FT4 and FT2 decodes from the same audio \u2014 weak repeats of messages heard in the last minute, '
-  + 'and more of the stations that only just failed \u2014 for up to about a fifth more decoding work. It only ever runs while this '
+  + 'and more of the stations that only just failed \u2014 for up to about a fifth more decoding work. It is automatic and only ever runs while this '
   + 'server has CPU to spare; a busy server decodes as it does without it. Every FT8 / FT4 decode on this radio uses it: the '
   + 'spots, Band and a listener\u2019s decoder.';
+/** ★★ V12 beta91 dig deeper is AUTOMATIC — the same rule as the server's decoders/ft8_deep_auto.h and the setup page's
+ *  ft8DeepAuto: the benchmark's dig-deeper row below 25 % of a core, or an older benchmark's Band row x 1.25 below it;
+ *  null = no benchmark here (the server measures itself once, at idle). The owner's own choice ("ft8+deep" on,
+ *  "ft8-deep" off) always wins. The owner's settings only — listeners never see it. */
+function ft8DeepAutoFrom(rows: any[]): boolean | null {
+  const d = rows.find((r) => r && r.id === 'dec_ft8deep'), b = rows.find((r) => r && r.id === 'dec_ft8band');
+  if (d && Number(d.pct) >= 0) return Number(d.pct) < 25;
+  if (b && typeof b.pct === 'number') return b.pct >= 0 && b.pct * 1.25 < 25;
+  if (d) return false;
+  return null;
+}
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
   + 'Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law '
   + 'where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.';
@@ -750,19 +761,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       setZoomSpec(false); AsyncStorage.setItem(K.zoomSpectrum, '0');
       notes.push(`Keep the spectrum sharp is off — zooming in measured ${Math.round(zoom.pct)}% of a core here. Switch it on to use it anyway.`);
     }
-    /* ★★ V12 beta91 FT8 / FT4 DIG DEEPER ("ft8+deep", under Digital spots) — inverted like LoRa on every channel, as
-     *  vibe_setup_page.h benchApplyDefaults: GREEN dec_ft8deep turns it ON, anything else leaves it off with the figure. */
-    const deep = row('dec_ft8deep');
-    if (deep && deep.grade !== 'none') {
-      const has = new RegExp('(^|,)ft8\\+deep(,|$)').test(bm);
-      if (deep.grade === 'green') {
-        if (!has) { bm = bm ? bm + ',ft8+deep' : 'ft8+deep'; setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
-        notes.push(`FT8 / FT4 dig deeper is on — a whole band at full depth with it measured ${Math.round(deep.pct)}% of a core here, so it was turned on.`);
-      } else {
-        if (has) { bm = bm.split(',').filter((t: string) => t !== 'ft8+deep').join(','); setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
-        notes.push(`FT8 / FT4 dig deeper is off — a whole band at full depth with it measured ${Math.round(deep.pct)}% of a core here. Switch it on to use it anyway.`);
-      }
-    }
+    // ★★ V12 beta91 FT8 / FT4 dig deeper is AUTOMATIC (ft8DeepAutoFrom): nothing is written here — the chip shows it.
     /* ★★ V12 LoRa ON EVERY CHANNEL ("lora+all", under LoRa) — the one INVERTED rule, as vibe_setup_page.h
      *  benchApplyDefaults: GREEN dec_lora_all ticks it ON, anything else leaves it off with the figure. Never hidden. */
     const lall = row('dec_lora_all');
@@ -5042,7 +5041,17 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   const off = new Set([...own].filter((t) => t[0] !== '+'));
                   for (const id of Object.keys(regionDefaults)) if (regionOff(id)) off.add(id);
                   const kids = (id: string) => tree.filter((m) => m.parent === id);
+                  const deepOwn = own.has('ft8+deep') ? 1 : own.has('ft8-deep') ? -1 : 0;
+                  const deepAuto = ft8DeepAutoFrom(benchRows);
+                  const deepOn = deepOwn > 0 || (!deepOwn && deepAuto === true);
+                  const setDeep = (to: 'on' | 'off' | 'auto') => {
+                    const set = new Set(own); set.delete('ft8+deep'); set.delete('ft8-deep');
+                    if (to !== 'auto') set.add(to === 'on' ? 'ft8+deep' : 'ft8-deep');
+                    const v = [...set].join(',');
+                    setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
+                  };
                   const toggle = (m: ModeEntry) => {
+                    if (m.id === 'ft8+deep') { setDeep(deepOn ? 'off' : 'on'); return; }   // ★ the owner's own choice wins
                     const set = new Set(own);
                     // ★ CHECKED means OFFERED (the CSV lists what is OFF) — except a "+" option, IN the CSV when on.
                     //   Turning one off removes that token and nothing else.
@@ -5062,7 +5071,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     } else if (m.id === 'dab' && wasOff) setDabLandNote('');
                   };
                   const chip = (m: ModeEntry, inert: ModeEntry | null) => {
-                    const isOff = m.on ? !off.has(m.id) : off.has(m.id);
+                    const isOff = m.id === 'ft8+deep' ? !deepOn : m.on ? !off.has(m.id) : off.has(m.id);
                     return (
                       <TouchableOpacity key={m.id} disabled={!!inert} onPress={() => toggle(m)}
                         accessibilityLabel={inert ? `${m.label}: ${inert.label} is off` : m.label}
@@ -5161,8 +5170,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>
-                          {FT8_DEEP_HINT}
+                          {FT8_DEEP_HINT}{' '}
+                          {deepOwn ? `${deepOwn > 0 ? 'On' : 'Off'} \u2014 your choice.`
+                            : `Automatic: ${deepAuto === null ? 'this server measures itself once, when it is idle, and decides'
+                              : `${deepAuto ? 'on' : 'off'} \u2014 from this phone\u2019s benchmark`}.`}
                         </Text>
+                        {deepOwn !== 0 && (
+                          <TouchableOpacity onPress={() => setDeep('auto')} accessibilityLabel="Dig deeper: back to automatic">
+                            <Text style={[styles.hint, { color: C.keyAct, fontFamily: F }]}>Back to automatic</Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     ) : m.id === 'avdata+text' ? (
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>

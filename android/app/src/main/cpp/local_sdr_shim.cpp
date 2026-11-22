@@ -128,6 +128,7 @@
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
+#include "decoders/ft8_deep_auto.h"   // ★ V12 beta91 dig deeper: automatic, the owner's word wins
 #include "vibe_wide_row.h"      // ★ V12 the full-capture row (SPWB v2)
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
@@ -42437,6 +42438,81 @@ void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz) {
     g_vsRawIqMax.store(std::max(0, maxUsers), std::memory_order_relaxed);
     g_vsRawIqLanMaxHz.store(std::max(0, lanMaxHz), std::memory_order_relaxed);
 }
+/* ★★★ V12 beta91 FT8 / FT4 DIG DEEPER IS AUTOMATIC (decoders/ft8_deep_auto.h; Stuart 2026-11-22: "should be automatic and
+ *  simply enable when the cpu has headroom … no user facing toggles"). The owner's "ft8+deep" / "ft8-deep" wins; otherwise
+ *  the stored benchmark decides (its dig-deeper row, or — a benchmark from beta90 or before — its Band row); with no
+ *  benchmark at all this radio's process measures the dig-deeper row ONCE by itself: off-thread, at the lowest priority,
+ *  only after three minutes up and while the process is quiet, and keeps the figure beside the radio's bookmarks
+ *  ("bookmarks-x.ft8deep.txt") so a restart does not measure again. Off until something decides. Re-read every minute,
+ *  so a benchmark run later takes over at once. Listeners never see any of it. */
+static std::mutex g_ft8DeepMtx;
+static double g_ft8DeepProbePct = -1;          // ★ this radio's own measurement (−1 = none)
+static bool g_ft8DeepProbeLoaded = false;      // the file beside the bookmarks has been read
+static std::atomic<bool> g_ft8DeepNeedProbe{false};
+static std::string vsFt8DeepProbeFile() {
+    std::string bm;
+    { std::lock_guard<std::mutex> lk(g_bmMtx); bm = g_bmPath; }
+    if (bm.empty()) return std::string();
+    const size_t slash = bm.find_last_of('/'), dot = bm.find_last_of('.');
+    return (dot != std::string::npos && (slash == std::string::npos || dot > slash) ? bm.substr(0, dot) : bm) + ".ft8deep.txt";
+}
+static void vsFt8DeepApply() {
+    const vibe::ft8deep::Choice owner = vibe::ft8deep::ownerChoice(vsModeBlocked("ft8+deep"), vsModeBlocked("ft8-deep"));
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> lk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    const std::string bench = getFn ? getFn() : std::string();
+    double probe;
+    {
+        std::lock_guard<std::mutex> lk(g_ft8DeepMtx);
+        if (!g_ft8DeepProbeLoaded) {
+            const std::string f = vsFt8DeepProbeFile();
+            if (!f.empty()) {
+                g_ft8DeepProbeLoaded = true;
+                if (FILE* fp = std::fopen(f.c_str(), "r")) { double v = -1; if (std::fscanf(fp, "%lf", &v) == 1 && v >= 0) g_ft8DeepProbePct = v; std::fclose(fp); }
+            }
+        }
+        probe = g_ft8DeepProbePct;
+    }
+    bool need = false;
+    const bool on = vibe::ft8deep::decide(owner, bench, probe, need);
+    if (vibe::Ft8Decoder::deepTier().exchange(on, std::memory_order_relaxed) != on)
+        LOGI("FT8 dig deeper: %s (%s)", on ? "on" : "off",
+             owner != vibe::ft8deep::Choice::Auto ? "the owner's choice" : !need && vibe::ft8deep::fromBench(bench) != vibe::ft8deep::Verdict::Probe
+             ? "from the benchmark" : probe >= 0 ? "measured here" : "not measured yet");
+    g_ft8DeepNeedProbe.store(need);
+}
+static void vsFt8DeepWatch() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::thread([] {
+            vibeIdleThread("vibe-ft8deep");
+            const auto up = std::chrono::steady_clock::now();
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(60));
+                vsFt8DeepApply();
+                if (!g_ft8DeepNeedProbe.load()) continue;
+                if (std::chrono::steady_clock::now() - up < std::chrono::minutes(3)) continue;
+                if (vsFt8DeepProbeFile().empty()) continue;            // ★ nowhere to keep the answer: not yet
+                // ★ quiet = this process under 40 % of a core over 10 s (the radio's own DSP included)
+                const double c0 = vibe::benchdec::processCpu();
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+                const double base = (vibe::benchdec::processCpu() - c0) / 10.0;
+                if (base > 0.40) continue;
+                const vibe::benchdec::Row r = vibe::benchdec::ft8DeepRow(base);
+                if (r.label.empty()) { std::lock_guard<std::mutex> lk(g_ft8DeepMtx); g_ft8DeepProbePct = 999; continue; }
+                {
+                    std::lock_guard<std::mutex> lk(g_ft8DeepMtx);
+                    g_ft8DeepProbePct = r.pct;
+                    const std::string f = vsFt8DeepProbeFile();
+                    if (FILE* fp = std::fopen(f.c_str(), "w")) { std::fprintf(fp, "%.2f\n", r.pct); std::fclose(fp); }
+                }
+                LOGI("FT8 dig deeper: measured here, %.1f %% of a core (on below %.0f %%)", r.pct, vibe::ft8deep::kGreenPct);
+                vsFt8DeepApply();
+            }
+        }).detach();
+    });
+}
+
 /** ★ Modes and decoders the owner has switched off on this receiver — see g_vsBlockedModesCsv. */
 void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
     {
@@ -42444,10 +42520,11 @@ void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
         g_vsBlockedModesOwner = csv;
         g_vsBlockedModesCsv = vibereach::effectiveBlocked(csv, g_vsRegionKnown);
     }
-    /* ★★ V12 beta91 FT8 / FT4 "dig deeper" — the owner's "ft8+deep" (Setup → Modes and decoders → Digital spots), IN the
-     *  list when ticked. One switch for every FT8 / FT4 / FT2 engine this radio runs (a dial's spots, Band's, a listener's
-     *  decoder); each reads it at its next slot, and still only digs deeper on spare CPU (Ft8Decoder::runDecode). */
-    vibe::Ft8Decoder::deepTier().store(vsModeBlocked("ft8+deep"), std::memory_order_relaxed);
+    /* ★★ V12 beta91 FT8 / FT4 "dig deeper": automatic, the owner's "ft8+deep" / "ft8-deep" wins (vsFt8DeepApply). One
+     *  answer for every FT8 / FT4 / FT2 engine this radio runs; each reads it at its next slot, and still only digs deeper
+     *  on spare CPU (Ft8Decoder::runDecode). */
+    vsFt8DeepApply();
+    vsFt8DeepWatch();
 }
 
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }

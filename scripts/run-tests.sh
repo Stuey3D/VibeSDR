@@ -975,6 +975,8 @@ if node scripts/test-spots-band-default.mjs; then pass=$((pass+1)); else fail=$(
 # ★★ …and EVERY decoder's default (2026-10-31): the server's defaultOff list applied by both readers, every switch it can
 #    name on both setup screens (vibe_benchmark_more.h ruleFor).
 if node scripts/test-bench-defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta91 FT8 / FT4 dig deeper: automatic, one owner control, nothing a listener sees (decoders/ft8_deep_auto.h)
+if node scripts/test-ft8-deep-owner-only.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 (2026-11-20): the same benchmark in LOCAL HARDWARE (Android) — a plain verdict per thing this radio can do here,
 #    no dead rows, pause + resume around the run, the engine's own-radio exception (src/services/localBench.ts).
 if node scripts/test-local-bench.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

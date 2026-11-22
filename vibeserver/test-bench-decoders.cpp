@@ -122,7 +122,7 @@ int main() {
     ok(std::string(ruleFor("dec_lora_all").sw) == "lora+all" && !ruleFor("dec_lora_all").primary && !ruleFor("dec_lora_all").slot,
        "dec_lora_all names the owner's \"lora+all\", never switches anything off and is no slot (the readers tick it ON when green)");
     ok(std::string(ruleFor("dec_ft8deep").sw) == "ft8+deep" && !ruleFor("dec_ft8deep").primary && !ruleFor("dec_ft8deep").slot,
-       "dec_ft8deep names the owner's \"ft8+deep\", never switches anything off and is no slot (the readers tick it ON when green)");
+       "dec_ft8deep names the owner's \"ft8+deep\", never switches anything off and is no slot (the server decides from it, ft8_deep_auto.h)");
     ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");
     // ★★ V12 DAB own station: its row sets N (the dabStations block, vibe_dab_own.h nFromBench) and nothing else
     ok(std::string(ruleFor("dec_dab_station").sw).empty() && !ruleFor("dec_dab_station").primary && !ruleFor("dec_dab_station").slot,

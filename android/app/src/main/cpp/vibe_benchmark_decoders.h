@@ -23,6 +23,7 @@
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
+#include "decoders/ft8_deep_auto.h"   // ★ V12 beta91 the dig-deeper green line, one number
 #include "decoders/digi_spotter.h"   // ★ V12: the Band spots row
 #include "decoders/digi_bands.h"
 extern "C" {
@@ -225,13 +226,13 @@ inline double timeIt(double audioSeconds, Feed feed, Settle settle) {
     return audioSeconds > 0 ? 100.0 * used / audioSeconds : -1;
 }
 /** Wait until this process stops spending CPU (a decoder thread has finished), at most `capSec`. */
-inline void settleCpu(double capSec) {
+inline void settleCpu(double capSec, double quietSec = 0.005) {
     const auto t0 = std::chrono::steady_clock::now();
     double last = processCpu(); int quiet = 0;
     while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < capSec) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const double now = processCpu();
-        quiet = (now - last) < 0.005 ? quiet + 1 : 0;
+        quiet = (now - last) < quietSec ? quiet + 1 : 0;
         last = now;
         if (quiet >= 3) break;
     }
@@ -252,11 +253,55 @@ inline bool rowSkipped(const std::string& id) { const auto& f = rowSkipFn(); ret
  *   -1 = unset: both, the filter bank's whole ladder to 56 MS/s (bench-server and the tests, as before). */
 inline int& dabCutMode() { static int v = -1; return v; }
 
-/** Every decoder row. `seconds` scales the text/image rows; FT8 always runs one whole slot pair. */
 /** ★★ V12 beta91 the dig-deeper row's green line (vibe_benchmark.h gradeFor): a whole band at full depth with the tier on,
- *  inside a QUARTER of one core. Measured on an M5 core: 0.97 %. By the Pi 2 build's instruction counts that is ~70 % of a
+ *  inside a QUARTER of one core. Measured on an M5 core: 0.97 %. By the Pi 2 build's instruction counts that is ~50 % of a
  *  Pi 2 core (off), and a few % on a Pi 500 or an i5-11300H (on) — docs/v12/FTX-SENSITIVITY.md § Deep tier. */
 constexpr double kDeepGreenPct = 25.0;
+static_assert(kDeepGreenPct == ft8deep::kGreenPct, "the dig-deeper green line is one number: decoders/ft8_deep_auto.h");
+/** ★★ V12 beta91 THE DIG-DEEPER ROW (dec_ft8deep): the Band row's busiest band — 15 strong + 15 weak stations a dial, two
+ *  slots so repeats exist — at full depth with the tier on, no load. `baselineCore` (the shim's idle probe, which runs
+ *  while the radio's own DSP does): the fraction of a core this process was already using, taken off the figure.
+ *  Empty label = no band to measure. The owner's switch is put back as it was found. */
+inline Row ft8DeepRow(double baselineCore = 0.0) {
+    Row out; out.id = "dec_ft8deep";
+    const double t0 = rowClock();
+    const digi::Span* best = nullptr; digi::Span keep; size_t most = 0;
+    for (const auto& b : digi::bands()) {
+        digi::Span sp = digi::spanOf(b, digi::modes());
+        if (sp.ok && sp.modes.size() > most) { most = sp.modes.size(); keep = sp; best = &keep; }
+    }
+    if (!best) return out;
+    std::atomic<int> got{0};
+    const double rate = 96000.0, slot0 = std::floor(vibeUtcNow() / 15.0) * 15.0;
+    const auto x = busyBandSlice(*best, rate, 30.5, 15, 15, 2);
+    const double base = std::max(0.0, baselineCore);
+    const double quiet = 0.005 + 0.05 * base;   // ★ "quiet" = back to the baseline
+    const bool wasDeep = Ft8Decoder::deepTier().exchange(true);
+    const double c0 = processCpu(), w0 = rowClock();
+    {
+        digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
+                         [&](const digi::Spot&, double) { got.fetch_add(1); }, nullptr, [] { return false; });
+        size_t fed = 0; bool mid = false;
+        for (size_t o = 0; o < x.size(); o += 2048) {
+            const int n = (int)std::min<size_t>(2048, x.size() - o);
+            fed += (size_t)n;
+            sp.feedIq(&x[o], n, rate, best->centreHz, slot0 + (double)fed / rate);
+            // ★ the first slot's decode must finish before the second slot's window completes, or the engine skips it
+            //   (as live: a decode still running when the next window is ready)
+            if (!mid && (double)fed >= 16.0 * rate) { mid = true; settleCpu(30.0, quiet); }
+        }
+        settleCpu(30.0, quiet);
+    }
+    const double used = processCpu() - c0 - base * (rowClock() - w0);
+    Ft8Decoder::deepTier().store(wasDeep);
+    out.label = std::string("Decoder: FT8 / FT4 dig deeper (Band, ") + best->band->name + ", full depth)";
+    out.pct = std::max(0.0, 100.0 * used / 30.0);
+    out.decoded = got.load();
+    out.ms = (int)std::lround(1000.0 * (rowClock() - t0));
+    return out;
+}
+
+/** Every decoder row. `seconds` scales the text/image rows; FT8 always runs one whole slot pair. */
 inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(const std::string&)>& step) {
     std::vector<Row> rows;
     double t0 = rowClock();
@@ -384,37 +429,9 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
                 std::snprintf(why, sizeof why, "Decoder: FT8 / FT4 dig deeper (not run: Band at one pass measured %.0f%%)", band->pct);
                 rows.push_back({ "dec_ft8deep", why, -1.0 });
             } else {
-                t0 = rowClock(); if (step) step("Decoder: FT8 / FT4 dig deeper");
-                const digi::Span* best = nullptr; digi::Span keep; size_t most = 0;
-                for (const auto& b : digi::bands()) {
-                    digi::Span sp = digi::spanOf(b, digi::modes());
-                    if (sp.ok && sp.modes.size() > most) { most = sp.modes.size(); keep = sp; best = &keep; }
-                }
-                if (best) {
-                    double pct = -1; std::atomic<int> got{0};
-                    // ★ two slots (repeats), 15 strong + 15 weak stations a dial: what the tier actually spends on
-                    const double rate = 96000.0, slot0 = std::floor(vibeUtcNow() / 15.0) * 15.0;
-                    const auto x = busyBandSlice(*best, rate, 30.5, 15, 15, 2);
-                    const bool wasDeep = Ft8Decoder::deepTier().exchange(true);
-                    {
-                        digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
-                                         [&](const digi::Spot&, double) { got.fetch_add(1); }, nullptr, [] { return false; });
-                        size_t fed = 0; bool mid = false;
-                        pct = timeIt(30.0, [&] {
-                            for (size_t o = 0; o < x.size(); o += 2048) {
-                                const int n = (int)std::min<size_t>(2048, x.size() - o);
-                                fed += (size_t)n;
-                                sp.feedIq(&x[o], n, rate, best->centreHz, slot0 + (double)fed / rate);
-                                // ★ the first slot's decode must finish before the second slot's window completes, or the
-                                //   engine skips it (as live: a decode still running when the next window is ready)
-                                if (!mid && (double)fed >= 16.0 * rate) { mid = true; settleCpu(30.0); }
-                            }
-                        }, [] { settleCpu(30.0); });
-                    }
-                    Ft8Decoder::deepTier().store(wasDeep);
-                    rows.push_back({ "dec_ft8deep", std::string("Decoder: FT8 / FT4 dig deeper (Band, ") + best->band->name + ", full depth)", pct, got.load() });
-                    rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
-                }
+                if (step) step("Decoder: FT8 / FT4 dig deeper");
+                Row r = ft8DeepRow();
+                if (!r.label.empty()) rows.push_back(r);
             }
         }
     }
