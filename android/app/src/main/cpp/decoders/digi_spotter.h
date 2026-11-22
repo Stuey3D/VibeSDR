@@ -180,6 +180,7 @@ private:
         int lastGated = 0;            // ★ the gate's state on the last real block (a bridged gap keeps it)
         uint64_t bridged = 0;         // ★ samples of zeros put into gaps
         int id = -1;                  // ★ the caller's slice id (feedIq's sliceId), −1 = not given
+        bool wasReady = false;        // ★ its floor has been ready (the long windows forget the warm-up once)
     };
     static constexpr double kSliceGoneSec = 3.0;
     std::vector<cf32> zeros_;

@@ -266,12 +266,18 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     if (binPow && nb > 8 && binHz > 0) {
         if (nb != S.gNb || std::fabs(binHz - S.gBinHz) > 1e-6 || std::fabs(centreHz - S.gCentre) > 0.5) placeWindows(key, S, nb, binHz, centreHz);
         S.floor.block(binPow, nb, std::max(1, (int)std::lround(0.5 * rate / n)));   // ★ the median every half second
-        /* ★ V12 beta91: the windows are measured only once this slice's floor is ready. A slice is (re)made when Band
-         *  starts and the tuner moves its DC off the slices, when the slices move — exactly when the capture carries the
-         *  retune's transient; measured then, it stood in a long period's mean (WSPR's 120 s) and opened an empty window
-         *  for the whole period (test-server-spots / test-web-spots: "WSPR's empty window was never decoded", intermittent). */
-        if (S.floor.ready())
-            for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
+        for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
+        /* ★ V12 beta91: when this slice's floor first becomes ready, a LONG period's window (over 15 s — WSPR's and FST4W's
+         *  120 s) forgets what it measured while the floor warmed up. A slice is (re)made when Band starts and the tuner
+         *  moves its DC off the slices — exactly when the capture carries the retune's transient; kept in a 120 s mean it
+         *  opened an empty window for the whole period (test-web-spots "WSPR idle", test-server-spots "WSPR's empty window
+         *  was never decoded" — intermittent, before the band-skim change too). The slotted modes' short periods are left
+         *  as they were (they judge afresh every slot). */
+        if (S.floor.ready() && !S.wasReady) {
+            S.wasReady = true;
+            for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs)
+                if (r.gate && gatePeriod(*r.def) > 15.0) r.gate->meter.restart();
+        }
         gated = S.floor.ready() ? 2 : 1;
         ++S.blocks;
     }
