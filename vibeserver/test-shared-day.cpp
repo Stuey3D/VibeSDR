@@ -61,8 +61,13 @@ static void testHelpers() {
     const std::string tail = "AIS · head\n\n12:00:05  ship A at 50N\n12:00:30  ship B\n";
     const auto k = sh::newLines(tail, { "12:00:06  ship A at 50N", "12:00:40  ship A at 50N", "12:00:31  ship B", "12:00:55  ship B",
                                          "12:01:00  ship C", "12:01:02  ship C", "no time here" });
-    ok(k == std::vector<bool>({ false, true, false, true, true, false, true }),
-       "the same text within 20 s is one reception (tail and batch); later is new; untimed lines kept");
+    ok(k == std::vector<bool>({ false, true, false, true, true, true, true }),
+       "the same text within 20 s of another radio's line is one reception; later is new; one batch never dedupes itself; untimed kept");
+    const std::vector<std::string> own = { "12:00:05  ship A at 50N" };
+    ok(sh::newLines(tail, { "12:00:06  ship A at 50N" }, 20, &own) == std::vector<bool>({ true }),
+       "a line THIS radio wrote is not another radio's: a real repeat is kept");
+    ok(sh::newLines("12:00:05  x\n12:00:07  x\n", { "12:00:06  x", "12:00:08  x", "12:00:09  x" }) == std::vector<bool>({ false, false, true }),
+       "each line of the tail answers for one of ours (two polls both radios heard = two lines)");
     size_t gone = 0;
     const std::string d = sh::dedupeLines(tail, "12:00:04  ship A at 50N\n12:02:00  ship D\n", 20, &gone);
     ok(d == "12:02:00  ship D\n" && gone == 1, "dedupeLines: " + d);

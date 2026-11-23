@@ -446,6 +446,11 @@ public:
         std::string l;
         return liveLine(name, l) ? lineStr(l, key) : "";
     }
+    /** ★ beta92 a numeric field of an item's index line ("t", "hz"); 0 if absent. */
+    double fieldNum(const std::string& name, const char* key) const {
+        std::string l;
+        return liveLine(name, l) ? lineNum(l, key) : 0;
+    }
     /** ★ An item's index line rewritten from `m` where it stands — its file untouched (ISM's daily log, whose origin
      *  becomes "both" the first time the other side writes into it). False when it is gone. One line appended. */
     bool retag(const std::string& name, const Meta& m) {

@@ -138,14 +138,19 @@ private:
         }
         std::string tail;
         std::vector<bool> keep;
+        const int64_t t = now();
+        own_.prune(t);
+        const std::vector<std::string> own = own_.list();
+        auto remember = [&] { for (size_t i = 0; i < texts.size(); i++) if (keep[i]) own_.add(texts[i], t); };
         if (!logName_.empty() && sh::readTail(store_, logName_, tail)) {
-            keep = sh::newLines(tail, texts);
+            keep = sh::newLines(tail, texts, sh::kDedupeSec, &own);
             std::string add;
             for (size_t i = 0; i < texts.size(); i++) if (keep[i]) { add += texts[i]; add += '\n'; }
-            if (add.empty() || store_.append(logName_, add)) { store_.retag(logName_, logMeta()); return keep; }
+            if (add.empty() || store_.append(logName_, add)) { store_.retag(logName_, logMeta()); remember(); return keep; }
             store_.close(logName_); logName_.clear();
         }
         keep = sh::newLines(std::string(), texts);
+        remember();
         std::string body;
         for (size_t i = 0; i < texts.size(); i++) if (keep[i]) { body += texts[i]; body += '\n'; }
         const std::string head = o_.label + " \xc2\xb7 " + date(day_) + " (UTC) \xc2\xb7 every radio on this server, each message once\n\n";
@@ -260,6 +265,7 @@ private:
     Options o_;
     std::mutex m_;
     std::vector<Pending> pending_;
+    vibe::gallery::sharedday::OwnLines own_;   ///< ★ the lines this radio wrote lately (never taken for another radio's)
     std::set<std::string> seen_;
     size_t bufBytes_ = 0;
     std::string logName_, cardName_;
