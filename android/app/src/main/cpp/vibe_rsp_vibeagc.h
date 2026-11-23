@@ -88,7 +88,11 @@ inline VagcProfile vagcProfile(VagcBand b) {
     switch (b) {
         case VagcBand::FmBroadcast: return {"FM broadcast", -20.0, 4.0, 2.0, -6.0, 52.0, 1.5, 8.0, false, 0, 0};
         case VagcBand::Dab:         return {"DAB",          -20.0, 6.0, 10.0, -6.0, 55.0, 1.5, 8.0, true, -34.0, -8.0};
-        case VagcBand::AmMw:        return {"AM/MW",        -20.0, 5.0, 2.0, -6.0, 52.0, 2.0, 10.0, false, 0, 0};
+        /* ★ beta91 AM/MW's load line is 57, not 52 (Stuart 11-22: MW "should be 1 out of 6 usually", i.e. LNA 5): MW at
+         *   night is the strongest band the RSP sees, and on the Lenovo LNA 5 holds the peak with IF 56 — at 52 the load
+         *   rule cut it to state 6 (no RF at all), from where a 19 dB rung can never come back. 57 leaves the 59 rail's
+         *   swamped / clip protection exactly as it was. */
+        case VagcBand::AmMw:        return {"AM/MW",        -20.0, 5.0, 2.0, -6.0, 57.0, 2.0, 10.0, false, 0, 0};
         case VagcBand::HfSsb:       return {"HF SSB/CW",    -20.0, 5.0, 2.0, -6.0, 52.0, 2.0, 10.0, false, 0, 0};
         case VagcBand::Nfm:         return {"VHF/UHF NFM",  -20.0, 4.0, 2.0, -6.0, 52.0, 1.5, 8.0, false, 0, 0};
     }
@@ -147,6 +151,14 @@ inline int vagcHfStartState(int band) {
     for (int s = 0; s < 28; ++s) { if (vagcPriorRed(band, s) <= 18.0 + 1e-9) st = s; else break; }
     return st;
 }
+/** ★ The start state: HF (SSB/CW, and AM above 1.8 MHz) from vagcHfStartState; LW / MW from ONE rung in from full attenuation (Stuart:
+ *  MW is "1 out of 6 usually" — strong at night; the lower states compress there: on the Lenovo LNA 1–2 read about the
+ *  same peak as LNA 5, the front end no longer scaling). -1 = no start for this profile. */
+inline int vagcStartState(VagcBand b, int band, int nStates, double centreHz) {
+    if (b == VagcBand::AmMw && centreHz > 0 && centreHz < 1.8e6) return std::max(0, nStates - 2);   // LW / MW
+    if (b == VagcBand::HfSsb || b == VagcBand::AmMw) return vagcHfStartState(band);                // HF, SW broadcast
+    return -1;
+}
 
 /* ── WHAT THE SHIM HANDS IN, AND WHAT IT GETS BACK ──────────────────────────────────────────────────── */
 struct VagcIn {
@@ -160,6 +172,7 @@ struct VagcIn {
     bool   rfOwned = true;     // false = the owner runs the LNA by hand; we keep to the IF
     int    grFloor = 20;       // the owner's IF cap as the least reduction allowed (20 = no cap)
     int    band = 1;           // SdrplaySource::lnaBandId
+    double centreHz = 0.0;     // ★ beta91 the capture's centre (0 = unknown) — LW/MW starts one rung in, HF from state 3
     double learnedRed[28];     // learned LNA reduction per state in this band, any common offset; NaN unknown
     VagcIn() { for (double& d : learnedRed) d = NAN; }
 };
@@ -302,18 +315,21 @@ public:
 
         // ── 0. ★ beta91 A NEW HF / MW BAND STARTS FROM vagcHfStartState, not from an attenuator state ──
         if (startPending_) {
-            const bool hf = band_ == VagcBand::AmMw || band_ == VagcBand::HfSsb;
-            const int to = std::max(in.lnaFloor, vagcHfStartState(in.band));
+            const int st = vagcStartState(band_, in.band, in.nStates, in.centreHz);
+            const int to = std::max(in.lnaFloor, st);
             /* ★ only into a band that is QUIET at this attenuation — at or under the target with the IF free to counter-
-             *   step (≤ grHigh − kAddMarginDb). A band already on target here is a strong one: no RF is added to it. */
+             *   step (≤ grHigh − kAddMarginDb). A band already on target here is a strong one: no RF is added to it.
+             * ★★ STAYS ARMED for the whole acquisition (live, Lenovo 11-23 00:19): the first window after the retune still
+             *   read DAB's level, and then the shim put the LNA back to "where the carrier had it" (6) — a start judged
+             *   once and dropped never saw the band it was for. */
             const bool quietHere = atk <= p_.targetPk && gr_ <= p_.grHigh - kAddMarginDb;
-            if (!hf || !in.rfOwned || clipping || lna_ <= to || !acquiring_ || !quietHere) startPending_ = false;
-            else if (lnaAllowed(in.now)) {
+            if (st < 0 || !in.rfOwned || !acquiring_) startPending_ = false;
+            else if (lna_ > to && quietHere && !clipping && lnaAllowed(in.now)) {
                 startPending_ = false;
                 const double rung = rungDbFor(in, to, lna_);              // the gain those rungs add
                 const int grTo = clampGr((int)std::lround(gr_ + rung));   // counter-stepped as far as the IF allows
-                std::snprintf(o.why, sizeof o.why, "a new band — RF gain state %d -> %d (%.1f dB; the states past it "
-                              "are attenuation), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
+                std::snprintf(o.why, sizeof o.why, "a new band — RF gain state %d -> %d (%.1f dB; where this band "
+                              "starts), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
                               lna_, to, rung, gr_, grTo, atk);
                 o.act = kActAddRoom;
                 emit(o, in, to, grTo, +rung, 0);   // ★ direction 0: a load cut straight after it is NOT held back
