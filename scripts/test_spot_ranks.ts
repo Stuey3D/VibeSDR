@@ -26,6 +26,8 @@ ok(rankCard({ ...j, ranks: { call: 'G4ABC', psk: { bands: { 'All': { reports: 1 
     'web: the ranking card on ALL, DIGITAL SPOTS, CW and PSK');
   ok(/!\['', 'ft8', 'cw', 'psk'\]\.includes\(kind\)\) \{ setRankC\(null\)/.test(app), 'app: the same kinds');
 }
+// ★ beta92: the owner typed the call in mixed case; the directory answers in capitals — the card still shows
+ok(rankCard({ ...j, call: 'g4AbC', ranks: { ...j.ranks, call: 'G4ABC' } }, now)?.title.startsWith('G4ABC · PSK Reporter') === true, 'a mixed-case callsign matches the directory\'s capitals');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

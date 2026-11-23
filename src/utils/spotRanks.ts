@@ -36,7 +36,9 @@ function best<T>(bands: Record<string, T> | undefined, pick: (x: T) => unknown):
 
 /** The card's two lines, or null when there is nothing to show (reporting off, not ranked, an answer for another call). */
 export function rankCard(j: RanksAnswer | null | undefined, nowSec: number): { title: string; src: string } | null {
-  if (!j || j.on !== true || !j.ranks || !j.call || (j.ranks.call && j.ranks.call !== j.call)) return null;
+  // ★ beta92: callsigns compare WITHOUT case — the directory (like PSK Reporter) keeps them in capitals, an owner may type
+  //   "Stuey3D-VibeSDR": an exact compare dropped every such card (Stuart 11-23, "not seeing it here either").
+  if (!j || j.on !== true || !j.ranks || !j.call || (j.ranks.call && j.ranks.call.toUpperCase() !== j.call.toUpperCase())) return null;
   const parts: string[] = [], srcs: string[] = [];
   const psk = j.ranks.psk;
   if (psk && psk.bands) {
@@ -59,5 +61,5 @@ export function rankCard(j: RanksAnswer | null | undefined, nowSec: number): { t
     }
   }
   if (!parts.length) return null;
-  return { title: `${j.call} · ${parts.join(' · ')}`, src: srcs.join(' · ') };
+  return { title: `${j.call.toUpperCase()} · ${parts.join(' · ')}`, src: srcs.join(' · ') };
 }
