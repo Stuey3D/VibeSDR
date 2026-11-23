@@ -206,7 +206,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
    *  Nothing to press (no dead control); absent when the server has nothing to say. */
   const [rankC, setRankC] = useState<{ title: string; src: string } | null>(null);
   useEffect(() => {
-    if (!visible || page !== 1 || kind !== '') { setRankC(null); return; }
+    if (!visible || page !== 1 || !['', 'ft8', 'cw', 'psk'].includes(kind)) { setRankC(null); return; }   // ★ beta92: ALL + the spot kinds (Stuart 11-23)
     let live = true;
     fetch(withReadAuth(`${b}/vibeserver/gallery/ranks.json`, readAuth), { cache: 'no-store' } as any)
       .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setRankC(rankCard(j, Date.now() / 1000)); }).catch(() => {});

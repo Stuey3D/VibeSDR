@@ -17,5 +17,15 @@ ok(rankCard({ ...j, ranks: { call: 'G4ABC', psk: null, wspr: null } }, now) === 
 const onlyW = rankCard({ ...j, ranks: { call: 'G4ABC', psk: null, wspr: j.ranks.wspr } }, now)!;
 ok(onlyW.title === 'G4ABC · WSPR: No. 3 on 40 m (431 stations heard)' && !onlyW.src.includes('PSK'), 'WSPR only (the WSPRnet switch on, not in PSK Reporter’s top 50)');
 ok(rankCard({ ...j, ranks: { call: 'G4ABC', psk: { bands: { 'All': { reports: 1 }, '40m': { reports: -3 } } } } }, now) === null, 'no band name, a nonsense place: ignored');
+// ★ beta92 (Stuart 11-23: in the top on 60 m / 80 m "but no mention of it on the server itself" — he was on DIGITAL SPOTS):
+//   the card shows on ALL and on the spot kinds the ranking is about, in the app and on the web page.
+{
+  const web = require('node:fs').readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  const app = require('node:fs').readFileSync(new URL('../src/components/GalleryOverlay.tsx', import.meta.url), 'utf8');
+  ok(/const RANK_KINDS = \['', 'ft8', 'cw', 'psk'\];/.test(web) && /if \(RANK_KINDS\.includes\(galKind\) && galPage === 1\)/.test(web),
+    'web: the ranking card on ALL, DIGITAL SPOTS, CW and PSK');
+  ok(/!\['', 'ft8', 'cw', 'psk'\]\.includes\(kind\)\) \{ setRankC\(null\)/.test(app), 'app: the same kinds');
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+

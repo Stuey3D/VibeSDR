@@ -19231,6 +19231,8 @@ interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; 
                         /** ★ V12 beta92 the radio(s) that heard it ("a1b2c3d4[,…]"; absent = unknown — vibe_log_radio.h). */
                         ri?: string }
 let galKind = '';
+/** ★ beta92 the gallery kinds that show this server's PSK Reporter / WSPR ranking card (ALL + the spot kinds). */
+const RANK_KINDS = ['', 'ft8', 'cw', 'psk'];
 /* ★★ V12 beta92 THE RADIO FILTER (src/utils/logRadio.ts, docs/v12/LOG-RADIO-FILTER.md): the gallery stays one per server;
  *  a row of radio chips — ALL RADIOS · each radio by its name — appears only when the list holds items from two or more
  *  radios, and asks the server for that radio's items (radio=, a view: nothing is split or deleted). */
@@ -19526,10 +19528,12 @@ async function renderGallery(page = galPage) {
     /* ★★ V12 beta90 THIS SERVER'S RANKING (src/utils/spotRanks.ts, docs/v12/PSK-REPORTER.md): on page 1 of ALL, while the
      *  owner reports to PSK Reporter — its places as the directory published them, the source and age named. A card to
      *  read, nothing to press; the server answers {"on":false} otherwise and nothing is drawn. */
-    if (galKind === '' && galPage === 1) {
+    // ★ beta92 (Stuart 11-23: top for 60 m / 80 m on PSK Reporter "but no mention of it on the server itself" — he was on
+    //   DIGITAL SPOTS): the card shows on ALL and on the spot kinds the ranking is about (DIGITAL SPOTS, CW, PSK).
+    if (RANK_KINDS.includes(galKind) && galPage === 1) {
       void fetch(galUrl('/vibeserver/gallery/ranks.json'), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((rj) => {
         const card = rankCard(rj, Date.now() / 1000);
-        if (!card || host.querySelector('.galRank') || galKind !== '' || galPage !== 1 || !$('galView').hidden) return;
+        if (!card || host.querySelector('.galRank') || !RANK_KINDS.includes(galKind) || galPage !== 1 || !$('galView').hidden) return;
         const row = document.createElement('div'); row.className = 'sres galRank'; row.tabIndex = 0;
         row.setAttribute('aria-label', `${card.title}. ${card.src}`);
         const f = document.createElement('span'); f.className = 'f'; f.textContent = 'RANK';
