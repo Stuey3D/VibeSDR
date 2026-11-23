@@ -5864,8 +5864,12 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     }
     const int band = SdrplaySource::lnaBandId(centreHz);
     if (centreHz != st.lastCentre || dab != st.lastDab || dabBlock != st.lastDabBlk || rate != st.lastRate) {
-        // ★ beta91: a retune out of the capture is a new band to the AGC too (vagcBigRetune — MW → 40 m on an RSP1A)
-        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab || vibersp::vagcBigRetune(st.lastCentre, centreHz, rate));
+        // ★ beta91: a retune out of the capture is a new band to the AGC too (vagcBigRetune — MW → 40 m on an RSP1A).
+        // ★★ beta92: NOT while DAB is on — a block hop (1.712 MHz) is always more than half DAB's 2.048 MS/s capture, so
+        //   the rule made every hop a band change (judgements forgotten, acquiring). DAB keeps beta90's hop handling
+        //   byte for byte (the standard-path guard, Stuart's hard rule 11-16); entering or leaving DAB still counts.
+        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab ||
+                               (!dab && !st.lastDab && vibersp::vagcBigRetune(st.lastCentre, centreHz, rate)));
         st.lastCentre = centreHz; st.lastDab = dab; st.lastDabBlk = dabBlock; st.lastRate = rate; st.lastBand = band;
     }
     // ── the landed test, 1 s after an LNA write: the API's own gainVals.curr must have moved ──
