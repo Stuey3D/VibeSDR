@@ -28981,8 +28981,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const long long since = std::max(0LL, std::atoll(qv("since").c_str()));
                 // ★★ V12 beta92 ?radio=<id> — the calls one radio heard (a VIEW of the one server-wide store; untagged rows
                 //    from older files always pass). [0-9a-z] only, ≤ 16 (vibe_log_radio.h validId); anything else = all.
-                std::string rad;
-                for (char c : qv("radio")) if (((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) && rad.size() < 16) rad += c;
+                std::string rad = qv("radio");
+                if (!vibe::logradio::validId(rad)) rad.clear();   // ★ all of it or none: a filtered-down junk value is not an id
                 body = vsStations().mapJson(vibestations::windowSec(w.substr(0, 4)), (int64_t)since, g_bgLat.load(), g_bgLon.load(),
                                             vibestations::kMaxOut, rad);
             }
@@ -29067,8 +29067,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (limit > 100) limit = 100;
                 } else if (limit <= 0 || limit > 1000) limit = 300;
                 // ★★ V12 beta92 ?radio=<id> — one radio's items (+ the untagged): a VIEW; the gallery stays one per server
-                std::string rad;
-                for (char c : qv("radio")) if (((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) && rad.size() < 16) rad += c;
+                std::string rad = qv("radio");
+                if (!vibe::logradio::validId(rad)) rad.clear();   // ★ all of it or none: a filtered-down junk value is not an id
                 std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset, rad);
                 // ★ Plus whether this server keeps anything at all — a client shows "this server keeps no gallery" honestly.
                 j.insert(1, std::string("\"enabled\":") + (g.enabled() ? "true" : "false") + ",");

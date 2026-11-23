@@ -59,6 +59,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta92 2026-11-23 — THE LOGS' RADIO FILTER (docs/v12/LOG-RADIO-FILTER.md; vibe_log_radio.h, src/utils/logRadio.ts).
+  //     Stuart 2026-11-22: logs stay one per server, only the DX Log per radio — "in the logs themselves we could filter by
+  //     sdr if multiple picked up the same signal". Gallery chips + the DIGI MODES MAP; web and app.
+  { v: 'V12 (experimental)', detail: 'WHICH RADIO HEARD IT — on a server with more than one radio, the GALLERY and the DIGI MODES MAP now remember which of its radios heard each thing, and let you filter by radio. Every radio still feeds the same one log (a NAVTEX message, a spot or a satellite’s day log is the same whichever radio heard it); filtering is only a view, and nothing is split or deleted. In the GALLERY a row of radio keys — ALL RADIOS, then each radio by its name, with how many items it holds — appears under the decoder keys when that list holds items from two or more radios; on the DIGI MODES MAP the keys sit beside the time window (in the app, a radio picker in the filter row). Something two radios heard says so (“Heard by HF loop and VHF discone”) and shows under both. Anything kept before this update has no radio recorded and shows under every radio. A server with one radio shows no radio keys at all. The DX Log stays per radio, as it always was — it is there to compare radios and aerials.' },
   // ★★★ V12 beta91 2026-11-22 — THE AIRCRAFT DATA FOR EVERY SOURCE (docs/v12/AVIATION.md §Aircraft data for every source;
   //     Stuart: "our adsb logos and silhouettes could apply to vdl2 acars hfdl cant it, they are the same aircraft after all").
   //     Server-side lookup (vibe_aircraft_info.h) + the aviation map's clients. Logos only where the owner installed a pack.
