@@ -1287,7 +1287,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'spotsband': return { id, node: bandInWhole ? spotsBandKey() : null };
       default: return { id, node: null };
     }
-  }).filter(k => !!k.node);
+  }).filter(k => !!k.node) as { id: string; node: React.ReactNode }[];
+  if (scanShown && decoderControls) wholeKeys.push({ id: 'scanner', node: scannerKey() });
+  /* ★★ beta92 THE SCANNER TUNES THE RADIO ITSELF (Stuart 11-23 — a tester could not find it: it sat on its own under the
+   *  band groups, after AMATEUR). Last in the row; its own availability rule as before (hidden on a shared tuner). */
   /* ★★ V12 THE BAND GROUPS — one renderer per id (utils/decoderBands names them), so a decoder placed in two bands (DSC,
    *  CW, APRS, SSTV, DIGITAL SPOTS) is the same key in each. null = not on this radio / not allowed here (the rules above,
    *  unchanged — a locked range still hides ADS-B and the rest). */
@@ -2329,10 +2332,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </View>
               );
             })}
-            {/* ★ SCANNER — a tool, not a decoder of one band: under every tab. (GALLERY and TRANSCRIBE moved to VIEWS.) */}
-            {scanShown && (
-              <KeyGrid items={[{ id: 'scanner', node: scannerKey() }]} grid={keyGrid} shade={optShade} recess={optRecess} style={{ marginTop: 10 }} />
-            )}
+            {/* ★ beta92 SCANNER moved into TUNES THE RADIO ITSELF (wholeKeys). (GALLERY and TRANSCRIBE are in VIEWS.) */}
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
             {ndbShown && ndbWhyLine}
