@@ -61,7 +61,7 @@ function unregistered(file: string): string[] {
 const BASELINE: Record<string, number> = {
   'src/components/AboutOverlay.tsx': 0,
   'src/components/ChatDrawer.tsx': 0,
-  'src/components/DecoderPanel.tsx': 4,         // decoder spot rows etc. (SHOULD)
+  'src/components/DecoderPanel.tsx': 3,         // header run arrows + the popup's options; the spot rows joined beta92 (spotsNav)
   'src/components/FreqModal.tsx': 12,           // bookmarks-pane extras: magic key, DAB rows, EiBi, sync, delete, import (SHOULD)
   'src/components/LocalHardwarePanel.tsx': 32,  // to be rebuilt on usePanelNav (SHOULD); 35 → 32 when slot(() => …) — the panel's own D-pad bank — was recognised (11-18)
   'src/components/MenuSheet.tsx': 9,            // sideways selector nudges, sub-page back row, drop-downs (SHOULD)

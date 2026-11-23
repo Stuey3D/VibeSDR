@@ -284,6 +284,8 @@ function move(dir: Dir) {
   // ★★ A ROW KEEPS LEFT / RIGHT ([data-navrow] — WEFAX's MARGIN · SLANT · AUTO · RAW, 2026-11-15): sideways from a key
   //    in a row goes to the next key IN THAT ROW while there is one, never up to a header key that happens to score
   //    nearer (SLANT's LEFT landed on SAVE). Off the row's end the whole page is the route again. Opt-in.
+  const edge = listEdge(dir, cur, list);
+  if (edge) { highlight(edge); return; }
   const row = cur && (dir === 'left' || dir === 'right') ? cur.closest<HTMLElement>('[data-navrow]') : null;
   const inRow = row ? list.filter((e) => row.contains(e)) : [];
   const j = row ? pickNext(from, inRow.map((e) => navBox(e, from, dir, fromWide)), dir) : -1;
@@ -403,11 +405,38 @@ function back() {
   if (adjusting && current) { adjusting = false; current.classList.remove('gpAdjust'); return; }
   // ★ LAYERS IN ORDER: what opened AFTER the box took the D-pad (a header key's menu) closes first; then the box lets
   //   go; only then what was already up before it (the first-visit tour, which stays on screen while you use the radio).
+  // ★★★ beta92 A LIST INSIDE THE BOX ([data-navlist] — the spots list): back from ANY row goes to the box's header keys in
+  //    ONE press, however deep in a list of hundreds; back again lets go of the box (Stuart, 2026-11-23).
+  if (grabbed && backStack.length <= grabDepth && listBack()) return;
   if (grabbed && backStack.length <= grabDepth) { release(); return; }
   const top = backStack.pop();
   if (top) { const to = top(); highlight(to instanceof HTMLElement && visible(to) ? to : null); return; }
   if (grabbed) { release(); return; }
   if (hooks?.back()) highlight(null);
+}
+
+/** [data-navlist]: the highlight is on one of its rows → onto the first key of the header its value names. */
+function listBack(): boolean {
+  const list = current?.closest<HTMLElement>('[data-navlist]');
+  if (!grabbed || !list || !grabbed.contains(list)) return false;
+  const head = list.dataset.navlist ? grabbed.querySelector<HTMLElement>(list.dataset.navlist) : null;
+  const key = head ? candidates(grabbed).find((el) => head.contains(el)) : undefined;
+  if (!key) return false;
+  highlight(key);
+  return true;
+}
+/** [data-navlist]: up from its FIRST row is the header (never a key that merely scores nearer, never a wrap); down from
+ *  the header is its TOP row (the newest spot), wherever the list was scrolled to — never a row left deep in it. */
+function listEdge(dir: Dir, cur: HTMLElement | null, list: HTMLElement[]): HTMLElement | null {
+  if ((dir !== 'up' && dir !== 'down') || !cur || !grabbed) return null;
+  for (const box of grabbed.querySelectorAll<HTMLElement>('[data-navlist]')) {
+    const head = box.dataset.navlist ? grabbed.querySelector<HTMLElement>(box.dataset.navlist) : null;
+    const first = list.find((el) => box.contains(el));
+    if (!head || !first) continue;
+    if (dir === 'up' && cur === first) return list.find((el) => head.contains(el)) || null;
+    if (dir === 'down' && head.contains(cur)) return first;
+  }
+  return null;
 }
 
 /** One action, from whichever device. */

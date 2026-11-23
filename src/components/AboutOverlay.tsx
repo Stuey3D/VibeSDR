@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta92 2026-11-23 — THE SPOTS LIST BY CONTROLLER (Stuart: "make the spots navigatable by controller but make it
+  //     so that you dont have to scroll a list of hundreds to get to the header buttons or to the control deck").
+  //     src/utils/spotsNav.ts (app), web/client/src/padList.ts + gamepad.ts [data-navlist] (web).
+  //     scripts/test_spots_nav.ts, scripts/test-web-spots-nav.mjs.
+  { v: 'V12 (experimental)', detail: 'THE SPOTS LIST WORKS WITH A CONTROLLER, KEYBOARD OR TV REMOTE — in the digital spots and band skimmer box, every row, including the band skimmer’s “waiting for callsign” rows, can now be highlighted and pressed to tune to it, as a tap does; before, the rows could only be tapped. Press the box to go in and the highlight lands on the newest spot at the top. However far down a long list you are, BACK takes you straight to the box’s header controls in one press, and BACK again hands the controls back to the rest of the screen and the control deck; up from the top row reaches the header too, and down from the header always starts at the top. New spots arriving no longer move the highlight: it stays on the spot you were on. The callsign’s QRZ.com link is still a tap. The same in the browser.' },
   // ★★★ V12 beta92 2026-11-23 — BACKGROUND DECODING TAKES THE BACK SEAT (Stuart's Pi 500 V4L: raw IQ out at 250 kHz on a
   //     satellite pick with an in-range background profile — audio breaking up, "IQ overrun", the IQ consumer at 57 of 500
   //     KB/s; "they need to take the back seat"). vibe_thread.h vibeBackgroundThread, RxPipeline::setBackground, BgRunner::

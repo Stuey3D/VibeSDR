@@ -1429,6 +1429,11 @@ if npx tsx scripts/test_lan_hop.ts; then pass=$((pass+1)); else fail=$((fail+1))
 # ★★★ NAV COVERAGE (controller audit, 2026-10-20): a touchable on a pad-driven surface with no nav registration fails
 #     once its file passes its baseline — the next silent skip fails here instead of on Stuart's sofa.
 if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta92 THE SPOTS LIST BY PAD / KEYBOARD (Stuart, 2026-11-23): BACK from any row is the header in one press, ↑ on the
+#     first row too, enter tunes, new spots never move the highlight — the app's rules, then the web page's in Edge (muted).
+if npx tsx scripts/test_spots_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+node scripts/test-web-spots-nav.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE SERVER LIST'S FOCUS RULES (controller audit group H): Back from the list position, Enter = tap on directory rows.
 if npx tsx scripts/test_picker_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ BACK FROM A RADIO LANDS WHERE YOU LEFT (Stuart, 2026-10-27): the server list's place carried across a VibeServer's

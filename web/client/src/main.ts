@@ -79,6 +79,7 @@ import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeL
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
 import { initGamepad, pushBack, padAdjuster, activePadLayout, padRehighlight, driveInput, onDriveInput } from './gamepad';
+import { padListRow, padListRebuild } from './padList';
 import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
@@ -17774,6 +17775,11 @@ function renderSpots() {
 function renderSpotsRows() {
   const host = $('spotList');
   host.classList.toggle('expanded', spotsExpanded);
+  // ★★★ beta92 the pad's highlight stays on its spot across the rebuild (padList.ts)
+  padListRebuild(host, () => renderSpotsRowsInto(host));
+  syncSpotsMapKey();
+}
+function renderSpotsRowsInto(host: HTMLElement) {
   host.innerHTML = '';
 
   /* ★★★ beta92 THE BAND SKIMMER — "WAITING FOR CALLSIGN" (Stuart, 2026-11-23: "in the ALL-modes view a CW row shows its
@@ -17828,6 +17834,7 @@ function renderSpotsRows() {
           + (skimSig ? bandSkimTextHtml(skimSig) : '')
         : '');
     wireQrz(row);   // ★ V12: the callsign opens its QRZ.COM page — its own click, not the row's tune
+    padListRow(row);   // ★★★ beta92 one pad stop: enter tunes (padList.ts)
     row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
     row.onclick = () => {
       spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true, retarget: true });
@@ -17835,7 +17842,6 @@ function renderSpotsRows() {
     };
     host.appendChild(row);
   }
-  syncSpotsMapKey();
 }
 /** ★★ beta92 an expanded CW / RTTY row's message line: its text in the signal's confidence colour (the CW skimmer's rule),
  *  through EXPLAIN when that is on. */
@@ -17862,6 +17868,7 @@ function bandSkimWaitRow(sg: BandSkimSignal): HTMLElement {
     `<span class="km">${escapeHtml(rate)}</span>` +
     (spotsExpanded ? bandSkimTextHtml(sg) : '');
   row.title = `${sg.mode} · ${(sg.hz / 1e3).toFixed(2)} kHz · ${BAND_SKIM_WAITING} — tap to tune`;
+  padListRow(row);
   row.onclick = () => {
     spec?.tune(clampTune(sg.hz), 'usb', { recenter: true, retarget: true });
     renderFreq();

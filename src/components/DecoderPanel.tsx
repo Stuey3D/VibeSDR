@@ -12,7 +12,8 @@
  */
 
 import { plainEnglish } from '../utils/cwVocab';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { spotRowKey, skimWaitKey, spotsNavKey, spotsNavFollow, type SpotsZone } from '../utils/spotsNav';
 import { digiModeStyle } from '../utils/digiModes';
 import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import {
@@ -204,9 +205,11 @@ function fmtSpotTimeSec(t: number): string {
 
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
 // render, and unchanged rows skip re-render entirely when new spots flush in.
-const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded, skimText, skimColour }: {
+const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded, skimText, skimColour, hl }: {
   s: SpotRow; isCW: boolean; font: string; callColor: string; expanded: boolean;
   onTuneHz?: (hz: number) => void;
+  /** ★★★ beta92 the pad / keyboard / remote highlight (utils/spotsNav): the focus tint, as DAB's rows draw it. */
+  hl?: string;
   /** ★★ beta92 a CW / RTTY spot in the BAND SKIMMER: its signal's message (expanded only) and its confidence colour. */
   skimText?: string; skimColour?: string;
 }) {
@@ -221,7 +224,7 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
   // that the message is what tells you whether you are seeing a CQ, a signal report, or a QSO in
   // progress. Distance answers "how far"; the message answers "what is happening".
   return (
-    <TouchableOpacity style={expanded ? dp.spotRowTall : dp.spotRow}
+    <TouchableOpacity style={[expanded ? dp.spotRowTall : dp.spotRow, hl ? { backgroundColor: hl } : null]}
       onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
       <View style={dp.spotLine}>
         <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
@@ -276,14 +279,16 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
 /** ★★★ beta92 A BAND SKIMMER SIGNAL WITH NO CALLSIGN YET (Stuart, 2026-11-23: "a CW row shows its FREQUENCY and 'waiting
  *  for callsign' when no call has been detected yet"): its frequency where a spot has its time, its mode in its colour,
  *  SNR, "waiting for callsign", its speed (CW) or settings (RTTY); EXPANDED, what it is sending. A tap tunes it. */
-const SkimWaitRow = React.memo(function SkimWaitRow({ sg, font, expanded, plain, onTuneHz }: {
+const SkimWaitRow = React.memo(function SkimWaitRow({ sg, font, expanded, plain, onTuneHz, hl }: {
   sg: BandSkimSignal; font: string; expanded: boolean; plain: boolean; onTuneHz?: (hz: number) => void;
+  /** ★★★ beta92 the pad / keyboard / remote highlight, as SpotRowView's. */
+  hl?: string;
 }) {
   const dp = useDecoderStyles(makeDp);
   const rate = sg.mode === 'CW' ? cwWpmText(sg) : (sg.set ? sg.settings.replace(/ baud \/ /, '/').replace(/ Hz/, '') : '');
   const t = bandSkimText(sg), wait = sg.mode === 'RTTY' && !sg.set;
   return (
-    <TouchableOpacity style={expanded ? dp.spotRowTall : dp.spotRow} onPress={() => onTuneHz?.(sg.hz)} activeOpacity={0.6}
+    <TouchableOpacity style={[expanded ? dp.spotRowTall : dp.spotRow, hl ? { backgroundColor: hl } : null]} onPress={() => onTuneHz?.(sg.hz)} activeOpacity={0.6}
       accessibilityLabel={`${sg.mode} at ${(sg.hz / 1e3).toFixed(2)} kilohertz, ${BAND_SKIM_WAITING}`}>
       <View style={dp.spotLine}>
         <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>{(sg.hz / 1e3).toFixed(2)}</Text>
@@ -469,18 +474,6 @@ export default function DecoderPanel({
 
   /* ★★ beta92 EXPLAIN / RAW (the CW box's key, remembered on this device) reads the band skimmer's CW / RTTY text too. */
   const [cwPlain, setCwPlain] = useState(false);
-  const renderSpot = useCallback(({ item }: { item: SpotRow }) => {
-    // ★★ beta92 a CW / RTTY spot in the band skimmer: EXPANDED, the message its signal is sending
-    const sg = spotsExpanded && bandSkim ? bandSkimSignalFor(bandSkim, { mode: item.mode, callsign: item.call, frequency: item.freqHz }) : null;
-    const t = sg ? bandSkimText(sg) : '';
-    return (
-      <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
-                   callColor={tk.accent}
-                   onTuneHz={onTuneHz} expanded={spotsExpanded}
-                   skimText={sg ? ((cwPlain && sg.set ? plainEnglish(t) : t) || '\u2026') : undefined}
-                   skimColour={sg && sg.set ? CW_Q_COLOURS[sg.q] : undefined} />
-    );
-  }, [spotsKind, onTuneHz, spotsExpanded, tk.accent, bandSkim, cwPlain]);
   /* ★★ beta92 "waiting for callsign" rows — the band skimmer's signals with no call yet, at the top, the MODE filter applied. */
   const skimPending = React.useMemo(() => (isSpotsMode && spotsKind === 'digi' && bandSkim
     ? bandSkimPending(bandSkim, sfMode, spots.map((p) => ({ mode: p.mode, callsign: p.call, frequency: p.freqHz, timestamp: p.time }))) : []),
@@ -887,14 +880,36 @@ export default function DecoderPanel({
       hdrScroll.current?.scrollTo({ x: l.x + l.width - runW + 12, animated: true });
   }, [kbZone, hdrIdx, runW, runX]);
 
-  // The list this box is showing, if any. ADS-B and spots have nothing to select — Stuart:
+  // The list this box is showing, if any. ADS-B has nothing to select (spots did not either, until beta92) — Stuart:
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
   // Enter does nothing rather than pretending to.
   // ★ CW's rows (signals, then spots) are selectable too: Enter tunes to the one highlighted.
   // ★ DSC: the box's channel keys (and a TUNE offer) come first, then the calls
-  const listLen = isDabMode ? dabProgrammes.length : (isCw || isJtty) ? cwRows.length : isDsc ? (dsc!.keys?.length ?? 0) + dsc!.calls.length
+  // ★★★ beta92 THE SPOTS LIST IS A LIST (utils/spotsNav — Stuart, 2026-11-23): the band skimmer's "waiting for callsign"
+  //   rows first (drawn above the spots), then the spots, each by its KEY — the highlight follows its spot when a burst
+  //   prepends rows, so it is held by key (spotKeyRef) and its index re-found (spotsNavFollow).
+  const spotKeys = React.useMemo(() => (isSpotsMode
+    ? [...skimPending.map(skimWaitKey), ...visibleSpots.map(spotRowKey)] : []), [isSpotsMode, skimPending, visibleSpots]);
+  const listLen = isDabMode ? dabProgrammes.length : isSpotsMode ? spotKeys.length
+                : (isCw || isJtty) ? cwRows.length : isDsc ? (dsc!.keys?.length ?? 0) + dsc!.calls.length
                 : isAprs ? aprs!.rows.length
                 : isScanner ? Math.max(1, scanNav.current.len) : 0;
+  /** The highlighted spot's key while the list has the highlight, else null (what the rows draw). */
+  const spotHlKey = isSpotsMode && kbZone === 'list' ? (spotKeys[listIdx] ?? null) : null;
+  const spotHlTint = focusC.tint(0.16);   // a string: renderSpot keeps its identity across the box's text updates
+  const renderSpot = useCallback(({ item }: { item: SpotRow }) => {
+    // ★★ beta92 a CW / RTTY spot in the band skimmer: EXPANDED, the message its signal is sending
+    const sg = spotsExpanded && bandSkim ? bandSkimSignalFor(bandSkim, { mode: item.mode, callsign: item.call, frequency: item.freqHz }) : null;
+    const t = sg ? bandSkimText(sg) : '';
+    return (
+      <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
+                   callColor={tk.accent}
+                   onTuneHz={onTuneHz} expanded={spotsExpanded}
+                   skimText={sg ? ((cwPlain && sg.set ? plainEnglish(t) : t) || '\u2026') : undefined}
+                   skimColour={sg && sg.set ? CW_Q_COLOURS[sg.q] : undefined}
+                   hl={spotHlKey !== null && spotRowKey(item) === spotHlKey ? spotHlTint : undefined} />
+    );
+  }, [spotsKind, onTuneHz, spotsExpanded, tk.accent, bandSkim, cwPlain, spotHlKey, spotHlTint]);
 
   // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
   // keyboard three times over in this work. It announces itself once and then gets out of the
@@ -978,6 +993,21 @@ export default function DecoderPanel({
       setAdjMode('summary');
       return true;
     }
+    // ★★★ beta92 THE SPOTS LIST (utils/spotsNav): ↑ on the first row and BACK from ANY row go to the header keys in one
+    //   press, BACK from the header lets go of the box, ↓ from the header lands on the TOP row, ENTER tunes the row.
+    //   Only while there are rows; an empty list keeps the old "↑↓ scroll the body" below.
+    if (isSpotsModeRef.current && spotKeysRef.current.length > 0 && kbZoneRef.current !== 'popup'
+        && (k === 'Back' || k === 'ArrowUp' || k === 'ArrowDown' || (k === 'Enter' && kbZoneRef.current === 'list'))) {
+      const from = kbZoneRef.current as SpotsZone;
+      const st = spotsNavKey({ zone: from, idx: listIdxRef.current, key: spotKeyRef.current }, k, spotKeysRef.current);
+      if (!st.nav) { leave(); return true; }
+      if (st.nav.zone === 'header' && from === 'list') setHdrIdx(0);   // the header's first key, as on the web
+      spotKeyRef.current = st.nav.key;
+      setKbZone(st.nav.zone);
+      setListIdx(st.nav.idx);
+      if (st.tune !== undefined) tuneSpotRef.current(st.tune);
+      return true;
+    }
     if (k === 'Back') {
       // Deepest first: close the speed popup before anything else, without changing it.
       if (kbZoneRef.current === 'popup') { popCloseRef.current(); return true; }
@@ -1035,6 +1065,7 @@ export default function DecoderPanel({
     captureRegion('decoder');
     setKbZone('list');
     setListIdx(0);
+    spotKeyRef.current = spotKeysRef.current[0] ?? null;   // ★ beta92 spots: the TOP row, the newest
     announce();
   }, [announce]);
 
@@ -1070,6 +1101,49 @@ export default function DecoderPanel({
     : isAprs ? (i: number) => { const r = aprs!.rows[i]; if (r && aprs!.onMap) aprs!.onMap(r.key); }
     : null;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
+  // ★★★ beta92 the spots list (utils/spotsNav): its keys, the highlighted row's key, and ENTER = the row's own tap.
+  const isSpotsModeRef = useRef(isSpotsMode); isSpotsModeRef.current = isSpotsMode;
+  const spotKeysRef = useRef(spotKeys); spotKeysRef.current = spotKeys;
+  const spotKeyRef = useRef<string | null>(null);
+  const tuneSpotRef = useRef((i: number) => {});
+  tuneSpotRef.current = (i: number) => {
+    const np = skimPending.length;
+    if (i < np) { onTuneHz?.(skimPending[i].hz); return; }
+    const sp = visibleSpots[i - np];
+    if (sp && sp.freqHz) onTuneHz?.(sp.freqHz);
+  };
+  // ★ NEW SPOTS NEVER MOVE THE HIGHLIGHT OFF ITS SPOT: on every new list its index is found again by key (a burst
+  //   prepends, so the index changes and the spot does not); a spot that has left the list pins it to the same place.
+  //   A layout effect, so the row drawn lit is never one frame of the wrong spot.
+  useLayoutEffect(() => {
+    if (!isSpotsMode || kbZone !== 'list' || !spotKeys.length) return;
+    const nav = spotsNavFollow({ zone: 'list', idx: listIdxRef.current, key: spotKeyRef.current }, spotKeys);
+    spotKeyRef.current = nav.key;
+    if (nav.idx !== listIdxRef.current) setListIdx(nav.idx);
+  }, [spotKeys]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ★ THE HIGHLIGHTED ROW IS ON SCREEN: a skimmer row by the y it reported, a spot by scrollToIndex — only when it is
+  //   not already fully in view, so walking rows that are on screen never jolts the list.
+  const skimY = useRef<number[]>([]);
+  const spotsInView = useRef<Set<number>>(new Set());
+  const onSpotsViewable = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
+    spotsInView.current = new Set(viewableItems.map((v) => v.index ?? -1));
+  }).current;
+  const spotsViewConfig = useRef({ itemVisiblePercentThreshold: 90 }).current;
+  useEffect(() => {
+    if (spotHlKey === null) return;
+    const np = skimPending.length;
+    const sv = spotsRef.current;
+    if (!sv) return;
+    if (listIdx < np) { sv.scrollToOffset?.({ offset: Math.max(0, (skimY.current[listIdx] ?? 0) - 24), animated: false }); return; }
+    const i = listIdx - np;
+    if (spotsInView.current.has(i)) return;
+    try { sv.scrollToIndex?.({ index: i, viewPosition: 0.3, animated: false }); } catch { /* not laid out yet: onScrollToIndexFailed */ }
+  }, [spotHlKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const onSpotsScrollFail = useCallback((info: { index: number; averageItemLength: number }) => {
+    // ★ No getItemLayout (rows change height with EXPAND): go near it by the average, then once more when drawn.
+    spotsRef.current?.scrollToOffset?.({ offset: Math.max(0, info.averageItemLength * info.index), animated: false });
+    setTimeout(() => { try { spotsRef.current?.scrollToIndex?.({ index: info.index, viewPosition: 0.3, animated: false }); } catch { /* gone */ } }, 60);
+  }, []);
   const isScannerRef = useRef(isScanner); isScannerRef.current = isScanner;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
   const autoOwnRef = useRef(autoOwn); autoOwnRef.current = autoOwn;
@@ -1270,6 +1344,9 @@ export default function DecoderPanel({
               // ★ Always says what the keys do HERE (one scheme, 2026-10-18): arrows move, Enter presses,
               // backspace (or escape) leaves — the popup first, then the box.
               ? (kbZone === 'popup' ? 'enter to set · backspace to cancel'
+                 // ★★★ beta92 spots: BACK from a row is the header, BACK from the header is out (utils/spotsNav)
+                 : isSpotsMode && listLen > 0 ? (kbZone === 'header' ? 'enter to press · ↓ for the list · backspace to leave'
+                                                 : 'enter to tune · ↑ at the top or backspace for the controls')
                  : kbZone === 'header' ? 'enter to press · ↑↓ for the list · backspace to leave'
                  : listLen > 0        ? 'enter to select · ←→ for controls · backspace to leave'
                  : 'scroll with ↑↓ · ←→ for controls · backspace to leave')
@@ -1824,7 +1901,7 @@ export default function DecoderPanel({
             // every index shifts — with the index in the key, every existing row got a new
             // identity, the whole list was treated as new, and the scroll position went with
             // it. On UberSDR a burst is every band at once, which is why it looked violent.
-            keyExtractor={(sp: SpotRow) => `${sp.time}-${sp.call}-${sp.freqHz}`}
+            keyExtractor={spotRowKey}
             // ★ And this is the property built for exactly this: content added ABOVE must not
             // move what you are looking at. Within 40px of the top it still follows the live
             // feed, so sitting at the top behaves as before — it is only reading further down
@@ -1844,11 +1921,18 @@ export default function DecoderPanel({
             removeClippedSubviews={false}
             // A stable key per spot rather than one including the index, so a row keeps its
             // identity across the re-render that expanding causes.
-            extraData={[spotsExpanded, bandSkim, cwPlain]}
+            extraData={[spotsExpanded, bandSkim, cwPlain, spotHlKey]}
+            // ★★★ beta92 the pad / keyboard highlight is kept on screen (see onSpotsViewable)
+            onViewableItemsChanged={onSpotsViewable}
+            viewabilityConfig={spotsViewConfig}
+            onScrollToIndexFailed={onSpotsScrollFail}
             ListHeaderComponent={skimPending.length ? (
               <View>
-                {skimPending.map((sg) => (
-                  <SkimWaitRow key={`skw-${sg.mode}${sg.id}`} sg={sg} font={FONT} expanded={spotsExpanded} plain={cwPlain} onTuneHz={onTuneHz} />
+                {skimPending.map((sg, si) => (
+                  <View key={skimWaitKey(sg)} onLayout={(e) => { skimY.current[si] = e.nativeEvent.layout.y; }}>
+                    <SkimWaitRow sg={sg} font={FONT} expanded={spotsExpanded} plain={cwPlain} onTuneHz={onTuneHz}
+                                 hl={spotHlKey !== null && skimWaitKey(sg) === spotHlKey ? spotHlTint : undefined} />
+                  </View>
                 ))}
               </View>
             ) : null}
