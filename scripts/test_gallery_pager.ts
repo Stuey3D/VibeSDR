@@ -1,5 +1,6 @@
 // test_gallery_pager.ts — the gallery's pages (src/utils/galleryPager.ts, V12 beta 4).
-import { galleryPageCount, galleryClampPage, galleryPageQuery, galleryPagerSlots, galleryPageLabel, GALLERY_PAGE, galleryCount, galleryFooter }
+import { galleryPageCount, galleryClampPage, galleryPageQuery, galleryPagerSlots, galleryPageLabel, GALLERY_PAGE, galleryCount, galleryFooter,
+  GALLERY_RANGES, galleryRangeOf, galleryRangeQuery, galleryRangePhrase, galleryKnowsRange, galleryRangeFooter }
   from '../src/utils/galleryPager.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
@@ -29,5 +30,15 @@ eq(galleryFooter({ ...J, total: 0 }, 'sstv', 'SSTV', mb), '0 SSTV items · 0 B �
 eq(galleryFooter({ count: 5000, usedBytes: 10171187, total: 77 }, 'navtex', 'NAVTEX', mb), '77 NAVTEX items — 5,000 items on this server · 9.7 MB. Times are UTC.',
   'an older server (no "kinds"): the filter\'s total, no size');
 eq(galleryFooter({ count: 300, usedBytes: 1024 }, 'navtex', 'NAVTEX', mb), '300 items on this server · 1 KB. Times are UTC.', 'a server with no pages: the whole only');
+// ★★ beta92 THE TIME RANGE (Stuart 11-23): the maps' keys, since= to the server, the footer honest about the range
+eq(GALLERY_RANGES.map((r) => r.label), ['1 H', '24 H', '7 DAYS', '30 DAYS', 'ALL'], 'the maps\' keys');
+eq([galleryRangeOf(null), galleryRangeOf('junk'), galleryRangeOf('7d')], ['all', 'all', '7d'], 'remembered, or ALL');
+eq([galleryRangeQuery('1h'), galleryRangeQuery('30d'), galleryRangeQuery('all'), galleryRangeQuery('x')], ['&since=3600', '&since=2592000', '&since=0', '&since=0'], 'since=');
+ok(galleryRangePhrase('24h') === 'in the last 24 hours' && galleryRangePhrase('all') === '', 'phrases');
+ok(galleryKnowsRange({ since: 0 }) && !galleryKnowsRange({}), 'a server that knows since= says so');
+eq(galleryRangeFooter({ ...J, total: 12, since: 86400 }, 'wefax', 'WEFAX', '24h', mb), '12 WEFAX items in the last 24 hours — 5,000 items on this server · 9.7 MB. Times are UTC.', 'a kind in a range');
+eq(galleryRangeFooter({ ...J, total: 1, since: 3600 }, '', 'ALL', '1h', mb), '1 item in the last hour — 5,000 items on this server · 9.7 MB. Times are UTC.', 'ALL kinds in a range');
+eq(galleryRangeFooter({ ...J, since: 0 }, 'navtex', 'NAVTEX', 'all', mb), galleryFooter(J, 'navtex', 'NAVTEX', mb), 'ALL: the plain footer');
+eq(galleryRangeFooter(J, 'navtex', 'NAVTEX', '24h', mb), galleryFooter(J, 'navtex', 'NAVTEX', mb), 'an older server (no since): never claims the range');
 console.log(`gallery pager: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

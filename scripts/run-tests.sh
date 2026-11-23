@@ -1567,6 +1567,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── the gallery in pages (end to end, headless) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gallery-pages.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta92 THE GALLERY'S TIME RANGE (Stuart 11-23): gallery.json?since= (page + total narrow, count/kinds whole, old
+#    requests unchanged); the REAL built page: 1 H · 24 H · 7 DAYS · 30 DAYS · ALL, page 1 on a change, the footer names
+#    the range, remembered across a reload, the keyboard, 390 px. ~25 s, silent.
+printf '\n\033[1m── the gallery time range (end to end, headless) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gallery-range.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta91 TELEMETRY CHARTS in the gallery: a pass .csv served as text/csv with its download name; the REAL built page:
 #    the FUNCUBE filter, a pass opened as its charts + the passes up to it, the day log as text, 390 px. ~20 s, silent.
 printf '\n\033[1m── FUNcube telemetry in the gallery (end to end, headless) ──\033[0m\n'

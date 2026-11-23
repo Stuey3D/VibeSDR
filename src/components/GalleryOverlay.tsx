@@ -26,7 +26,10 @@ import { withReadAuth } from '../services/vibeAuth';
 import TlmCharts from './TlmCharts';   // ★★ beta91 TELEMETRY CHARTS: a FUNcube pass item is shown as its charts
 import { tlmLoadPasses, tlmParseCsv, tlmSatOfTitle, type TlmPass } from '../utils/tlmCharts';
 import { rankCard } from '../utils/spotRanks';   // ★ V12 beta90 this server's PSK Reporter / WSPR places
-import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
+import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots,
+         GALLERY_RANGES, GALLERY_RANGE_KEY, galleryRangeOf, galleryRangeQuery, galleryRangePhrase, galleryKnowsRange, galleryRangeFooter }
+  from '../utils/galleryPager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
 import { logRadioChoices, keepRadioPick, radioQuery, heardByText, radioChipLabel, type LogRadio } from '../utils/logRadio';   // ★ beta92
 import { langName } from '../services/transcriber';
@@ -109,11 +112,25 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
    *  server; the chips ALL RADIOS · each radio by name appear only when the list holds items from 2+ radios. A view. */
   const [radio, setRadio] = useState('');
   const [radios, setRadios] = useState<LogRadio[] | null>(null);
+  /* ★★ V12 beta92 THE TIME RANGE (Stuart, 2026-11-23: "the gallery needs some sorting last hour last day last week last
+   *  month buttons"): the maps' keys 1 H · 24 H · 7 DAYS · 30 DAYS · ALL, sent as since= (a view). Remembered on this
+   *  device (AsyncStorage); default ALL. Drawn only when the server says it knows since= — never dead keys. */
+  const [range, setRange] = useState('all');
+  const [rangeOk, setRangeOk] = useState(false);
+  const [rangeLoaded, setRangeLoaded] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(GALLERY_RANGE_KEY).then((v) => setRange(galleryRangeOf(v))).catch(() => {}).finally(() => setRangeLoaded(true));
+  }, []);
+  const pickRange = (id: string) => {
+    setRange(id); setPage(1);
+    AsyncStorage.setItem(GALLERY_RANGE_KEY, id).catch(() => {});
+  };
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [items, setItems] = useState<GalleryItem[] | null>(null);
   const listRef = React.useRef<FlatList<GalleryItem>>(null);
   const [note, setNote] = useState('');
+  const [rangeShown, setRangeShown] = useState('all');   // ★ beta92 the range the shown list was answered for
   const [open, setOpen] = useState<GalleryItem | null>(null);
   const [text, setText] = useState('');
   const [textOk, setTextOk] = useState(false);
@@ -139,8 +156,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const load = useCallback(async () => {
     setItems(null); setNote('');
     try {
-      let r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?${galleryPageQuery(page, kind)}${radioQuery(radio)}`, readAuth), { cache: 'no-store' } as any);
+      let r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?${galleryPageQuery(page, kind)}${radioQuery(radio)}${galleryRangeQuery(range)}`, readAuth), { cache: 'no-store' } as any);
       let j = await r.json();
+      setRangeOk(r.ok && galleryKnowsRange(j || {}));
       {   // ★ beta92 the radio chips: a pick no longer offered (one radio left in this kind) falls back to ALL
         const choices = logRadioChoices(j?.radios);
         setRadios(choices);
@@ -162,11 +180,12 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
       // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
       setNote(j.enabled === false ? 'This server keeps no gallery.'
-        : galleryFooter(j, kind, KINDS.find((k) => k.id === kind)?.label || kind.toUpperCase(), size));
+        : galleryRangeFooter(j, kind, KINDS.find((k) => k.id === kind)?.label || kind.toUpperCase(), range, size));
+      setRangeShown(j.since ? range : 'all');
     } catch { setItems([]); setNote(pagesRef.current > 1 ? 'That page did not load — try again, or pick another page.' : 'This server has no gallery (it may need updating).'); }
-  }, [b, kind, page, readAuth, radio]);
+  }, [b, kind, page, readAuth, radio, range]);
   // ★ Loaded on opening, a filter and a page — NOT on BACK from an item (the list under it is still there).
-  useEffect(() => { if (visible) void load(); }, [visible, load]);
+  useEffect(() => { if (visible && rangeLoaded) void load(); }, [visible, load, rangeLoaded]);
   useEffect(() => { if (!visible) { setOpen(null); setPage(1); setRadio(''); } }, [visible]);
 
   // ★ the NAVTEX stations row: asked once per opening, on page 1 of ALL / NAVTEX
@@ -340,6 +359,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                   ))}
                 </View>
               )}
+              {rangeOk && (
+                <View style={s.range} accessibilityRole="toolbar" accessibilityLabel="Show what was kept in the last…">
+                  {GALLERY_RANGES.map((x, i) => (
+                    <TouchableOpacity key={x.id} onPress={() => pickRange(x.id)}
+                                      accessibilityRole="button" accessibilityState={{ selected: range === x.id }} accessibilityLabel={x.words}
+                                      style={[s.key, s.rangeKey, i === 0 && s.rangeFirst, i === GALLERY_RANGES.length - 1 && s.rangeLast,
+                                              range === x.id && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
+                      <Text style={[s.keyText, range === x.id && { color: pt.ink.selected }]}>{x.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
               {items == null ? <ActivityIndicator style={{ marginTop: 24 }} /> : (
                 <FlatList ref={listRef} data={items} keyExtractor={(it) => it.f} contentContainerStyle={scrollLane}
                   ListFooterComponent={pages > 1 ? (
@@ -398,7 +429,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                     </TouchableOpacity>
                   )}
                   </>) : null}
-                  ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
+                  ListEmptyComponent={<Text style={s.dim}>{galleryRangePhrase(rangeShown)
+                    ? `Nothing ${kind ? 'from this decoder ' : ''}kept ${galleryRangePhrase(rangeShown)} — try a longer range.`
+                    : kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
                     <TouchableOpacity onPress={() => { void show(it); }} accessibilityRole="button"
                                       style={[s.row, (it.lv ?? 0) >= 2 && { borderLeftWidth: 3, borderLeftColor: (it.lv ?? 0) >= 3 ? '#FF4B4B' : '#FF8A3D', paddingLeft: 6 },
@@ -451,6 +484,11 @@ function makeStyles(pt: PopupTokens) {
     key: { borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginRight: 6, marginBottom: 6 },
     keyText: { color: pt.ink.key, fontSize: 13, letterSpacing: 1 },
     filters: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 6 },
+    // ★ beta92 the time range: the maps' segmented keys (one joined row)
+    range: { flexDirection: 'row', marginBottom: 6 },
+    rangeKey: { borderRadius: 0, marginRight: 0, marginLeft: -1, marginBottom: 0, paddingHorizontal: 8 },
+    rangeFirst: { borderTopLeftRadius: 6, borderBottomLeftRadius: 6, marginLeft: 0 },
+    rangeLast: { borderTopRightRadius: 6, borderBottomRightRadius: 6 },
     row: { flexDirection: 'row', paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: pt.ink.divider },
     freq: { color: pt.gold.readout, width: 92, fontVariant: ['tabular-nums'] },
     name: { color: pt.ink.text, fontSize: 14 },

@@ -112,7 +112,9 @@ import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
 import { tlmLoadPasses, tlmParseCsv, tlmSatOfTitle, type TlmPass } from '../../../src/utils/tlmCharts';   // ★★ beta91 TELEMETRY CHARTS
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
-import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds } from '../../../src/utils/galleryPager';
+import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds,
+         GALLERY_RANGES, GALLERY_RANGE_KEY, GALLERY_RANGE_HINT, galleryRangeOf, galleryRangeQuery, galleryRangePhrase, galleryKnowsRange,
+         galleryRangeFooter } from '../../../src/utils/galleryPager';
 import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, radioChipLabel, type LogRadio } from '../../../src/utils/logRadio';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
@@ -19110,6 +19112,38 @@ function renderGalRadioRow(choices: LogRadio[] | null) {
   mk('', 'ALL RADIOS');
   for (const c of choices) mk(c.id, radioChipLabel(c));
 }
+/* ★★ V12 beta92 THE TIME RANGE (Stuart, 2026-11-23: "the gallery needs some sorting last hour last day last week last
+ *  month buttons"): the maps' keys — 1 H · 24 H · 7 DAYS · 30 DAYS · ALL — asking the server for since= (a view: the
+ *  page and its total narrow; nothing is deleted). Remembered in this browser; default ALL. Drawn only when the server
+ *  says it knows since= ("since" in its answer) — an older server would ignore it, and keys that change nothing are dead. */
+let galRange = galleryRangeOf((() => { try { return localStorage.getItem(GALLERY_RANGE_KEY); } catch { return null; } })());
+let galRangeOk = false;
+function renderGalRange(ok: boolean) {
+  const row = $('galRange');
+  galRangeOk = ok;
+  row.hidden = !ok;
+  row.title = GALLERY_RANGE_HINT;
+  if (row.childElementCount) {
+    for (const b of Array.from(row.children) as HTMLElement[]) {
+      const on = b.dataset.rng === galRange;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    return;
+  }
+  for (const x of GALLERY_RANGES) {
+    const b = document.createElement('button'); b.type = 'button'; b.dataset.rng = x.id;
+    b.className = 'btn' + (galRange === x.id ? ' on' : ''); b.textContent = x.label;
+    b.setAttribute('aria-pressed', galRange === x.id ? 'true' : 'false'); b.setAttribute('aria-label', x.words); b.title = x.words;
+    b.onclick = () => {
+      galRange = x.id;
+      try { localStorage.setItem(GALLERY_RANGE_KEY, x.id); } catch { /* private browsing */ }
+      galPage = 1; galScroll = 0; galOpenedRow = -1;   // ★ a new range starts at its newest page
+      renderGalRange(true);
+      void renderGallery(1);
+    };
+    row.appendChild(b);
+  }
+}
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
 /** ★★ beta91 TELEMETRY CHARTS: a gallery path → its text, or null (not there / no gallery). */
 async function galleryText(path: string): Promise<string | null> {
@@ -19166,10 +19200,11 @@ async function renderGallery(page = galPage) {
   host.innerHTML = '<div class="sres"><span class="n">Loading…</span></div>';
   pager.hidden = true;
   try {
-    let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}${radioQuery(galRadio)}`), { cache: 'no-store' });
+    let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}${radioQuery(galRadio)}${galleryRangeQuery(galRange)}`), { cache: 'no-store' });
     type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds;
-                radios?: LogRadio[] };
+                radios?: LogRadio[]; since?: number };
     let j = await r.json() as GJ;
+    renderGalRange(r.ok && galleryKnowsRange(j));
     {   // ★ beta92 the radio chips: only with items from 2+ radios; a pick no longer offered falls back to ALL
       const choices = logRadioChoices(j.radios);
       const kept = keepRadioPick(galRadio, choices);
@@ -19195,11 +19230,13 @@ async function renderGallery(page = galPage) {
     // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
     const chip = galKind ? $('galFilter').querySelector(`[data-kind="${galKind}"]`) : null;
     note.textContent = j.enabled === false ? 'This server keeps no gallery.'
-      : galleryFooter(j, galKind, (chip?.textContent || galKind).trim(), formatSize, items.length);
+      : galleryRangeFooter(j, galKind, (chip?.textContent || galKind).trim(), galRange, formatSize, items.length);
     if (!items.length) {
       const row = document.createElement('div'); row.className = 'sres';
       const n = document.createElement('span'); n.className = 'n';
-      n.textContent = galKind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.';
+      const rangeWords = j.since ? galleryRangePhrase(galRange) : '';
+      n.textContent = rangeWords ? `Nothing ${galKind ? 'from this decoder ' : ''}kept ${rangeWords} — try a longer range.`
+        : galKind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.';
       row.appendChild(n); host.appendChild(row);
       if (paged && pages > 1) renderGalleryPager(pages);   // ★ an emptied page still offers the way back
       return;
@@ -19400,6 +19437,7 @@ function renderGalleryPager(pages: number) {
 function galleryBack() {
   if (!$('galList').childElementCount) { void renderGallery(); return; }
   $('galView').hidden = true; $('galList').hidden = false; $('galFilter').hidden = false;
+  $('galRadio').hidden = !galRadios; $('galRange').hidden = !galRangeOk;   // ★ beta92 the filters back with the list
   $('galPager').hidden = $('galPager').childElementCount === 0;
   $('galleryPanel').scrollTop = galScroll;
   const row = $('galList').children[galOpenedRow] as HTMLElement | undefined;
@@ -19411,7 +19449,7 @@ async function openGalleryItem(it: GalleryItem) {
   ($('galDl') as HTMLAnchorElement).download = it.dn || it.f;   // ★ "ISM 433.92 2026-10-25.txt" where the item names one
   $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)}${it.m ? ` ${it.m.toUpperCase()}` : ''} · ${galWhen(it.t)}`
     + ` · ${galOriginWords(it)}`;
-  $('galList').hidden = true; $('galFilter').hidden = true; $('galRadio').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
+  $('galList').hidden = true; $('galFilter').hidden = true; $('galRadio').hidden = true; $('galRange').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
   $('galleryPanel').scrollTop = 0;
   $('galBack').focus({ preventScroll: true });
   galTrReset();

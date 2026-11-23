@@ -585,7 +585,17 @@ public:
     /** ★★ beta92 `radio` — one radio's id (vibe_log_radio.h): only the items it heard, plus every item with no radio
      *  (older builds' — unknown, shown under every radio); "total" is then that view's. "" = every item. The answer's
      *  "radios" lists the radios the list (this kind) holds, named as the machine names them, with their counts. */
-    std::string listJson(const std::string& kind, size_t limit, long offset = -1, const std::string& radio = std::string()) const {
+    /** ★★ beta92 `sinceSec` — THE TIME RANGE (Stuart, 2026-11-23: "last hour last day last week last month"): only the
+     *  items whose time ("t", UTC seconds) is within the last `sinceSec` seconds; 0 = every item (the old request,
+     *  answered exactly as before). It narrows the page AND "total" (the view's count, kind + radio + range), and the
+     *  answer says "since". ★ "kinds" stays the WHOLE store's (it is the footer's storage line: count and bytes kept),
+     *  and "radios" stays the kind's whole list — so the radio chips never vanish because one hour was quiet. A row
+     *  with no time (t 0) shows only under ALL. Kept 400 days at most, as the other since= params (more = all). */
+    std::string listJson(const std::string& kind, size_t limit, long offset = -1, const std::string& radio = std::string(),
+                         long sinceSec = 0) const {
+        if (sinceSec < 0 || sinceSec > 400L * 86400) sinceSec = 0;
+        const int64_t cutoff = sinceSec ? nowUtc() - sinceSec : 0;
+        auto inRange = [cutoff](const Row& r) { return !cutoff || (r.t && (int64_t)r.t >= cutoff); };
         const std::string dir = this->dir();
         std::string items, kinds, radios = "[]";
         uint64_t used = 0, indexBytes = 0; size_t total = 0, matched = 0;
@@ -607,18 +617,21 @@ public:
                 }
                 {
                     std::vector<uint64_t> per(c.rids.size(), 0);
-                    uint64_t unknown = 0; size_t inView = 0;
+                    uint64_t unknown = 0; size_t inView = 0, inTime = 0;
                     for (size_t i = c.firstLive; want != -1 && i < c.rows.size(); i++) {
                         const Row& r = c.rows[i];
                         if ((r.flags & kDead) || (want >= 0 && r.kind != want)) continue;
                         if (!r.radios) ++unknown;
                         for (size_t b = 0; b < per.size(); b++) if ((r.radios >> b) & 1u) ++per[b];
-                        if (rfilter && (!r.radios || (r.radios & rbit))) ++inView;
+                        const bool timeOk = inRange(r);
+                        if (rfilter && timeOk && (!r.radios || (r.radios & rbit))) ++inView;
+                        if (timeOk) ++inTime;
                     }
                     std::vector<std::pair<std::string, uint64_t>> counts;
                     for (size_t b = 0; b < per.size(); b++) counts.push_back({ c.rids[b], per[b] });
                     radios = vibe::logradio::radiosJson(counts, unknown);
                     if (rfilter) matched = inView;
+                    else if (cutoff) matched = inTime;
                 }
                 for (size_t k = 0; k < c.kinds.size(); k++) {
                     if (!c.kindN[k]) continue;
@@ -633,6 +646,7 @@ public:
                     const Row& r = c.rows[i];
                     if ((r.flags & kDead) || (want >= 0 && r.kind != want)) continue;
                     if (rfilter && r.radios && !(r.radios & rbit)) continue;   // ★ beta92 the radio filter (a view)
+                    if (!inRange(r)) continue;                                  // ★ beta92 the time range (a view)
                     if (skip) { --skip; continue; }
                     if (!lineAt(fd, r, l)) continue;
                     const std::string f = lineStr(l, "f");
@@ -650,7 +664,8 @@ public:
         std::string j = "{\"items\":[" + items + "],\"count\":" + std::to_string(total) + ",\"usedBytes\":"
              + std::to_string((unsigned long long)used) + ",\"limitBytes\":" + std::to_string((unsigned long long)limitBytes())
              + ",\"indexBytes\":" + std::to_string((unsigned long long)indexBytes) + ",\"kinds\":{" + kinds + "}"
-             + ",\"radios\":" + radios + (vibe::logradio::validId(radio) ? ",\"radio\":\"" + radio + "\"" : std::string());
+             + ",\"radios\":" + radios + (vibe::logradio::validId(radio) ? ",\"radio\":\"" + radio + "\"" : std::string())
+             + (sinceSec ? ",\"since\":" + std::to_string(sinceSec) : std::string());
         if (offset >= 0) j += ",\"total\":" + std::to_string(matched) + ",\"offset\":" + std::to_string(offset);
         return j + "}";
     }
@@ -921,8 +936,10 @@ private:
     /** ★ 16 bytes an item: where its CURRENT line is in index.jsonl, a hash of its name (a match is always confirmed by
      *  reading the line), its kind, its bytes. Never the line itself.
      *  ★ beta92: + `radios` — which radios heard it, as bits of THIS process's Cache::rids (never written anywhere; 0 =
-     *    unknown). 20 bytes an item now: 200,000 items = 4 MB of table, was 3.2. */
-    struct Row { uint32_t h = 0, off = 0, bytes = 0; uint16_t len = 0; uint8_t kind = 0, flags = 0; uint32_t radios = 0; };
+     *    unknown). 20 bytes an item now: 200,000 items = 4 MB of table, was 3.2.
+     *  ★ beta92: + `t` — the item's time ("t", UTC seconds; 0 = none), for the gallery's time range (listJson sinceSec).
+     *    24 bytes an item: 200,000 items = 4.8 MB. uint32 seconds hold until 2106. */
+    struct Row { uint32_t h = 0, off = 0, bytes = 0; uint16_t len = 0; uint8_t kind = 0, flags = 0; uint32_t radios = 0, t = 0; };
     struct Cache {
         std::string dir;
         bool valid = false;
@@ -1058,6 +1075,7 @@ private:
         n.kind = kindId(k); n.flags = l.find(",\"s\":\"") == std::string::npos ? 0 : kSlot;
         n.bytes = (uint32_t)std::min<uint64_t>((uint64_t)st.st_size, 0xffffffffu);
         n.radios = radioBits(l);
+        { const double t = lineNum(l, "t"); n.t = t > 0 && t < 4294967295.0 ? (uint32_t)t : 0; }   // ★ beta92 the time range
         if (prev >= 0 && re == 1) {                       // ★ the item's new line, where it stands
             Row& r = c.rows[(size_t)prev];
             c.used -= r.bytes; c.kindN[r.kind]--; c.kindB[r.kind] -= r.bytes; c.liveIdx -= (uint64_t)r.len + 1;

@@ -59,6 +59,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta92 2026-11-23 — THE GALLERY'S TIME RANGE (Stuart: "the gallery needs some sorting last hour last day last
+  //     week last month buttons"). gallery.json?since= (vibe_gallery.h listJson), src/utils/galleryPager.ts GALLERY_RANGES.
+  { v: 'V12 (experimental)', detail: 'THE GALLERY BY TIME — under the decoder keys, the same time keys as the maps: 1 H · 24 H · 7 DAYS · 30 DAYS · ALL. Pick one and the gallery lists only what was kept in that time, newest first, in pages as before, and the line at the bottom says so (“12 WEFAX items in the last 24 hours — 5,000 items on this server”). It works with the decoder keys and the radio keys, a new choice starts at page 1, and your choice is remembered on this phone or in this browser. ALL is everything still in the gallery, as before. Nothing is deleted — it is only a view. Needs a VibeServer that has it (the keys only appear on one that does); in the app and on the web page.' },
   // ★★★ V12 beta92 2026-11-23 — GALLERY WEFAX CHARTS FINISHED LIKE THE LIVE VIEW (Stuart: "background wefax is not applying our
   //     auto align and margin or contrast tweaks like they do for users"). vibe_wefax_finish.h — a port of wefaxAlign.ts +
   //     wefaxCrisp.ts, held to them pixel for pixel by test-wefax-finish. Server-side: the gallery shows the server's PNG.
