@@ -15,6 +15,8 @@
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "vibe_bgdecode.h"
 
 #include <cmath>
@@ -712,6 +714,46 @@ static void phase2() {
     }
 }
 
+// ── 7c. ★★ V12 beta92: the last-10 card is ONE PER SERVER — two radios (forked processes) on 1840 kHz ──────────────────
+static void ft8SharedLast10() {
+    std::printf("── beta92: two radios, one last-10 card (each transmission counted once) ──\n");
+    const std::string dir = tmpDir("ft8shared");
+    static const char* const ids[2] = { "aa11bb22", "cc33dd44" };
+    const int64_t T0 = 1792778400 + 5 * 60;
+    std::vector<pid_t> kids;
+    for (int p = 0; p < 2; ++p) {
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            logradio::setMine(ids[p]);
+            gallery::Store s; s.setDir(dir); s.setLimitBytes(50ull << 20); s.setRadioLabel(p ? "RTL" : "RSP1A");
+            gallery::Meta m; m.kind = "ft8"; m.origin = p ? "live" : "background"; m.freqHz = 1840000; m.mode = "usb"; m.decoder = "ft8";
+            m.profile = p ? "" : "Profile 1";
+            int64_t T = T0 + p;   // ★ the same slot's decodes, a second apart
+            bg::Ft8SummaryTap t(s, m, 52.3125, -0.875, [&] { return T; });
+            t.spot(false, "G4IRX", "IO92", -5, 1840500);       // ★ both radios decode G4IRX and DL1ABC
+            t.spot(false, "DL1ABC", "JO31", -12, 1841000);
+            t.spot(false, p ? "VK2XYZ" : "EA4XYZ", p ? "QF56" : "IN80", -15, 1841200);   // ★ and one each
+            T += 61; t.tick();
+            T += 30; t.spot(false, "G4IRX", "IO92", -6, 1840500);   // ★ G4IRX's next transmission, both again
+            T += 61; t.tick();
+            std::_Exit(0);
+        }
+        kids.push_back(pid);
+    }
+    for (pid_t k : kids) { int stt = 0; ::waitpid(k, &stt, 0); }
+    logradio::setMine("");
+    gallery::Store r; r.setDir(dir); r.setLimitBytes(50ull << 20);
+    int cards = 0; std::string name, title;
+    for (const auto& n : r.names("ft8")) if (r.field(n, "s").rfind("last10", 0) == 0) { ++cards; name = n; title = r.field(n, "title"); }
+    ok(cards == 1, "ONE last-10 card for the server (" + std::to_string(cards) + ")");
+    ok(title.find("5 spots") != std::string::npos && title.find("4 countries") != std::string::npos,
+       "each transmission once: G4IRX ×2, DL1ABC, EA4XYZ, VK2XYZ = 5 spots, 4 countries (" + title + ")");
+    const std::string ri = r.field(name, "ri");
+    ok(ri.find(ids[0]) != std::string::npos && ri.find(ids[1]) != std::string::npos, "the card lists both radios (" + ri + ")");
+    std::string body; r.readItem(name, body);
+    ok(body.find("every radio on this server") != std::string::npos, "it says it is every radio's");
+}
+
 // ── 7b. ★★ 2026-10-23: the FT8 summary = a standing LAST 10 MINUTES card + one card per UTC HOUR ──────────────────────
 static void ft8Periodic() {
     std::printf("── FT8 summary: the last 10 minutes (one card, rewritten atomically) + an hourly record ──\n");
@@ -735,7 +777,7 @@ static void ft8Periodic() {
     const std::string roll = t.rollingName();
     ok(count() == 1 && !roll.empty() && list().find("FT8 last 10 min \xc2\xb7 3 spots \xc2\xb7 3 countries") != std::string::npos,
        "★ after a minute: ONE card, \"FT8 last 10 min · 3 spots · 3 countries\"");
-    ok(list().find("\"s\":\"last10\"") != std::string::npos, "the card is the VFO's standing last10 slot");
+    ok(list().find("\"s\":\"last10-ft8-1840\"") != std::string::npos, "the card is the server's standing last10 slot for this kind and dial (beta92)");
     const unsigned long long i1 = ino(roll);
     T += 5; t.spot(true, "OH2XX", "KP20", -8, 1842000);       // 18:06:06
     t.tick();
@@ -1047,6 +1089,7 @@ int main() {
     config();
     phase2();
     ft8Periodic();
+    ft8SharedLast10();
     ft8Validation();
     sideband();
     navtexAsm();

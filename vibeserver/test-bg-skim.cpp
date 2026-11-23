@@ -199,8 +199,11 @@ static void endToEnd() {
         while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) body.append(b, k);
         if (f) std::fclose(f);
     }
-    ok(body.find("RTTY spots summary") != std::string::npos && body.find("background decoding (Profile 1)") != std::string::npos
-       && body.find("the skimmer's centre") != std::string::npos, "the gallery holds the RTTY summary card, labelled background, named by the skimmer's centre");
+    // ★ beta92: the newest card may be the server's last-10 card, which says "every radio on this server" (the hourly card
+    //   names the background run)
+    ok(body.find("RTTY spots summary") != std::string::npos
+       && (body.find("background decoding (Profile 1)") != std::string::npos || body.find("every radio on this server") != std::string::npos)
+       && body.find("the skimmer's centre") != std::string::npos, "the gallery holds the RTTY summary card, labelled (background / every radio), named by the skimmer's centre");
     ok(body.find("2 from 2 stations") != std::string::npos && body.find("England") != std::string::npos && body.find("Germany") != std::string::npos,
        "both stations heard — G4ABC (England, normal) and DL1XYZ (Germany, reverse)");
     std::printf("%s\n", body.substr(0, 800).c_str());

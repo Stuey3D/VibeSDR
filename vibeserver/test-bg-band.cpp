@@ -224,8 +224,10 @@ static void endToEnd() {
        "the admin line names the band and what the governor runs: " + a.status.substr(0, 400));
     ok(a.status.find("\"spots\":") != std::string::npos, "…with the run's live spot count");
     ok(a.list.find("\"d\":\"ft8band\"") != std::string::npos || a.list.find("ft8band") != std::string::npos, "the gallery holds a Band summary (decoder ft8band)");
-    ok(a.body.find("Digital spots summary \xc2\xb7 Band 40 m \xc2\xb7 background decoding (Profile 1)") != std::string::npos,
-       "the card's first line: \"Digital spots summary · Band 40 m · background decoding (Profile 1)\"");
+    // ★ beta92: the last-10 card is the server's ("every radio on this server"); the hourly card names the background run
+    ok(a.body.find("Digital spots summary \xc2\xb7 Band 40 m \xc2\xb7 background decoding (Profile 1)") != std::string::npos
+       || a.body.find("Digital spots summary \xc2\xb7 Band 40 m \xc2\xb7 every radio on this server") != std::string::npos,
+       "the card's first line: \"Digital spots summary · Band 40 m · background decoding (Profile 1)\" (or, the last-10 card, every radio)");
     ok(a.body.find("Japan") != std::string::npos && a.body.find("JA1ABC") != std::string::npos, "JA1ABC heard — the furthest, Japan");
     ok(a.body.find("England") != std::string::npos || a.body.find("United Kingdom") != std::string::npos, "G4IRX heard too");
     ok(a.dropped == 0, "no IQ dropped at this pace");
