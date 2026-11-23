@@ -23,6 +23,10 @@
 // ── Read: mapJson() → the map's JSON — ONE ENTRY PER CALL over a window (1 h · 24 h · 7 d · 30 d · all) ─────────────
 //   ★ Bounded: at most kMaxOut calls (newest days first), each file read with one pread under a shared lock, the
 //     aggregation of the days before today cached (they no longer change) so a live poll every 15 s re-reads one file.
+// ★★ V12 beta92 WHICH RADIO HEARD IT (vibe_log_radio.h, docs/v12/LOG-RADIO-FILTER.md): each row's `radios` — a 32-bit
+//    mask in what were the record's 4 pad bytes (0 in every older file = unknown, shown under every radio), bit n = line n
+//    of <gallery>/radios.idx. Merged by OR under the same flock as the counts, so a station two radios heard lists both.
+//    The file stays one per day for the whole machine — the mask only lets the map FILTER by radio.
 // ⚖ What is in it: callsigns, Maidenhead grids, modes, bands, SNRs and times — what an amateur station sends to be heard
 //   by everyone, the same fields every public spotting network shows. No message text.
 #pragma once
@@ -50,6 +54,7 @@
 #include <unistd.h>
 
 #include "vibe_callsign_country.h"
+#include "vibe_log_radio.h"
 #include "vibe_thread.h"
 
 namespace vibestations {
@@ -104,6 +109,7 @@ struct Station {
     uint32_t count = 0;
     int64_t first = 0, last = 0;
     uint8_t origins = 0;
+    uint32_t radios = 0;      ///< ★ beta92: which radios heard it (bit n = radios.idx line n); 0 = unknown (older file)
     int64_t day = 0;          ///< the UTC day (seconds at 00:00)
 };
 
@@ -193,7 +199,7 @@ struct Rec {
     char call[16]; char grid[8]; char mode[8]; char band[8];
     uint32_t first, last, count, freqHz;
     int8_t best, lastSnr; uint8_t origins, ver;
-    uint8_t pad[4];
+    uint32_t radios;          ///< ★ beta92 (was pad[4], always written 0): the radios mask — 0 = unknown
 };
 /** `dropped`: new rows refused (one per call a flush could not add); `droppedSpots` (beta91, 0 in older files): the
  *  RECEPTIONS those rows carried, from every radio's RAM and disk refusals — so a full day still counts every decode. */
@@ -211,7 +217,7 @@ inline Station fromRec(const Rec& r, int64_t day) {
     Station s;
     s.call = getStr(r.call, 16); s.grid = getStr(r.grid, 8); s.mode = getStr(r.mode, 8); s.band = getStr(r.band, 8);
     s.first = r.first; s.last = r.last; s.count = r.count; s.freqHz = r.freqHz;
-    s.bestSnr = r.best; s.lastSnr = r.lastSnr; s.origins = r.origins; s.day = day;
+    s.bestSnr = r.best; s.lastSnr = r.lastSnr; s.origins = r.origins; s.radios = r.radios; s.day = day;
     return s;
 }
 inline Rec toRec(const Station& s) {
@@ -219,7 +225,7 @@ inline Rec toRec(const Station& s) {
     putStr(r.call, 16, s.call); putStr(r.grid, 8, s.grid); putStr(r.mode, 8, s.mode); putStr(r.band, 8, s.band);
     r.first = (uint32_t)std::max<int64_t>(0, s.first); r.last = (uint32_t)std::max<int64_t>(0, s.last);
     r.count = s.count; r.freqHz = (uint32_t)std::max(0.0, std::min(4.0e9, s.freqHz));
-    r.best = clampSnr(s.bestSnr); r.lastSnr = clampSnr(s.lastSnr); r.origins = s.origins; r.ver = 1;
+    r.best = clampSnr(s.bestSnr); r.lastSnr = clampSnr(s.lastSnr); r.origins = s.origins; r.ver = 1; r.radios = s.radios;
     return r;
 }
 /** Merge `d` (carrying `deltaCount` new receptions) into `into`: counts add, every other field is idempotent. */
@@ -233,6 +239,7 @@ inline void mergeInto(Station& into, const Station& d, uint32_t deltaCount) {
     } else if (into.grid.empty() && !d.grid.empty()) into.grid = d.grid;
     into.bestSnr = std::max(into.bestSnr, d.bestSnr);
     into.origins |= d.origins;
+    into.radios |= d.radios;   // ★ beta92: every radio that heard it
 }
 
 /** One day's file, read whole under a shared lock. False when it does not exist or is not ours. */
@@ -264,6 +271,7 @@ struct MapRow {
     int bestSnr = -99, lastSnr = 0;
     int64_t first = 0, last = 0, gridAt = 0;
     uint8_t origins = 0;
+    uint32_t radios = 0;                     ///< ★ beta92: OR of the rows' masks
     std::vector<std::string> modes, bands;   ///< ≤ 8 each
 };
 inline void aggregate(std::unordered_map<std::string, MapRow>& by, const Station& s, size_t cap) {
@@ -280,6 +288,7 @@ inline void aggregate(std::unordered_map<std::string, MapRow>& by, const Station
     if (!s.grid.empty() && s.last >= a.gridAt) { a.grid = s.grid; a.gridAt = s.last; }
     a.bestSnr = std::max(a.bestSnr, s.bestSnr);
     a.origins |= s.origins;
+    a.radios |= s.radios;
     if (!s.mode.empty() && a.modes.size() < 8 && std::find(a.modes.begin(), a.modes.end(), s.mode) == a.modes.end()) a.modes.push_back(s.mode);
     if (!s.band.empty() && a.bands.size() < 8 && std::find(a.bands.begin(), a.bands.end(), s.band) == a.bands.end()) a.bands.push_back(s.band);
 }
@@ -331,7 +340,7 @@ public:
             }
             Station& s = it->second.s;
             Station d; d.first = r.utc; d.last = r.utc; d.grid = r.grid; d.lastSnr = r.snr; d.bestSnr = r.snr;
-            d.freqHz = r.rfHz; d.origins = r.origin;
+            d.freqHz = r.rfHz; d.origins = r.origin; d.radios = myMask_.load();
             mergeInto(s, d, 1);
             it->second.dirty = true;
             ++spots_;
@@ -379,7 +388,10 @@ public:
 
     /** ★ THE MAP'S ANSWER. `window`: seconds back (0 = all); `changedSince`: only calls heard at or after it (a live
      *  poll), 0 = every call in the window. `lat`/`lon`: this server (NaN = unknown) for "km". */
-    std::string mapJson(int64_t window, int64_t changedSince, double lat, double lon, size_t maxOut = kMaxOut) const {
+    /** `radio` (beta92): only the calls that radio heard (its id; rows with no tag — older files — always pass); "" = all.
+     *  The answer's "radios" lists every radio the window holds, with its name, so a client can offer the filter. */
+    std::string mapJson(int64_t window, int64_t changedSince, double lat, double lon, size_t maxOut = kMaxOut,
+                        const std::string& radio = std::string()) const {
         const int64_t t = now(), today = dayOf(t);
         if (!enabled_.load()) return "{\"now\":" + std::to_string((long long)t) + ",\"count\":0,\"stations\":[],\"off\":1}";
         // ★ 7 days and longer start at a day boundary: the day files are the unit (and the days before today are cached).
@@ -397,13 +409,31 @@ public:
             decodesToday += notKeptToday;
         }
         if (since < today) pastDays_(since, today, by, maxOut, rowsRead);
+        // ★★ beta92 the radios: the registry once per answer; per-radio counts over the whole window (the filter's choices)
+        const std::vector<std::string> reg = vibe::logradio::readRegistry(galleryDir_());
+        uint32_t want = 0; bool filtering = false;
+        if (vibe::logradio::validId(radio)) {
+            filtering = true;
+            for (size_t b = 0; b < reg.size(); b++) if (reg[b] == radio) want |= 1u << b;
+        }
+        std::vector<std::pair<std::string, uint64_t>> perRadio;
+        uint64_t untagged = 0;
+        for (const auto& kv : by) {
+            const uint32_t m = kv.second.radios & (reg.size() >= 32 ? 0xffffffffu : ((1u << reg.size()) - 1u));
+            if (!m) { ++untagged; continue; }
+            for (const auto& id : vibe::logradio::idsOf(reg, m)) {
+                auto it = std::find_if(perRadio.begin(), perRadio.end(), [&](const std::pair<std::string, uint64_t>& p) { return p.first == id; });
+                if (it == perRadio.end()) perRadio.push_back({ id, 1 }); else ++it->second;
+            }
+        }
+        auto passes = [&](const MapRow& a) { return !filtering || !a.radios || (a.radios & want); };
         // ★ newest first, then the cap
         std::vector<const MapRow*> rows;
         rows.reserve(by.size());
-        for (const auto& kv : by) if (kv.second.last >= changedSince) rows.push_back(&kv.second);
+        for (const auto& kv : by) if (kv.second.last >= changedSince && passes(kv.second)) rows.push_back(&kv.second);
         std::sort(rows.begin(), rows.end(), [](const MapRow* a, const MapRow* b) { return a->last != b->last ? a->last > b->last : a->call < b->call; });
         std::map<std::string, unsigned> byMode;
-        for (const auto& kv : by) byMode[kv.second.mode]++;
+        for (const auto& kv : by) if (passes(kv.second)) byMode[kv.second.mode]++;
         std::string o;
         o.reserve(256 + rows.size() * 200);
         o += "{\"now\":" + std::to_string((long long)t) + ",\"window\":" + std::to_string((long long)window)
@@ -413,6 +443,8 @@ public:
            //    how many of them the day's full list could not keep — the map says both, never a silently short count.
            + ",\"decodesToday\":" + std::to_string((unsigned long long)decodesToday)
            + ",\"notKeptToday\":" + std::to_string((unsigned long long)notKeptToday)
+           + ",\"radios\":" + vibe::logradio::radiosJson(perRadio, untagged)
+           + (filtering ? ",\"radio\":\"" + radio + "\"" : std::string())
            + ",\"byMode\":{";
         bool first = true;
         for (const auto& kv : byMode) { if (!first) o += ','; first = false; o += "\"" + kv.first + "\":" + std::to_string(kv.second); }
@@ -438,6 +470,14 @@ public:
             o.append(b, std::min((size_t)n, sizeof b - 1));
             if (placed) { n = std::snprintf(b, sizeof b, ",\"lat\":%.4f,\"lon\":%.4f", la, lo); o.append(b, (size_t)n); }
             if (std::isfinite(km)) { n = std::snprintf(b, sizeof b, ",\"km\":%.0f", km); o.append(b, (size_t)n); }
+            if (a->radios) {   // ★ beta92: who heard it — absent = unknown (an older file)
+                const std::vector<std::string> ids = vibe::logradio::idsOf(reg, a->radios);
+                if (!ids.empty()) {
+                    o += ",\"radios\":[";
+                    for (size_t i = 0; i < ids.size(); i++) { if (i) o += ','; o += "\"" + ids[i] + "\""; }
+                    o += ']';
+                }
+            }
             o += '}';
             first = false;
         }
@@ -507,9 +547,10 @@ private:
         for (const auto& kv : t->second.rows) {
             const Row& r = kv.second;
             const uint32_t delta = dir.empty() ? r.s.count : r.s.count - std::min(r.s.count, r.flushed);
+            Station mineS = r.s; mineS.radios |= myMask_.load();
             auto f = idx.find(kv.first);
-            if (f != idx.end()) mergeInto(out[f->second], r.s, delta);
-            else if (delta > 0 || dir.empty()) { Station s = r.s; s.count = delta; out.push_back(std::move(s)); }
+            if (f != idx.end()) mergeInto(out[f->second], mineS, delta);
+            else if (delta > 0 || dir.empty()) { mineS.count = delta; out.push_back(std::move(mineS)); }
         }
     }
     /** The days before today, aggregated per call — cached while none of their files changed. */
@@ -559,11 +600,22 @@ private:
             if (a.grid.empty() && !p.grid.empty()) { a.grid = p.grid; a.gridAt = p.gridAt; }
             a.bestSnr = std::max(a.bestSnr, p.bestSnr);
             a.origins |= p.origins;
+            a.radios |= p.radios;
             for (const auto& m : p.modes) if (a.modes.size() < 8 && std::find(a.modes.begin(), a.modes.end(), m) == a.modes.end()) a.modes.push_back(m);
             for (const auto& m : p.bands) if (a.bands.size() < 8 && std::find(a.bands.begin(), a.bands.end(), m) == a.bands.end()) a.bands.push_back(m);
         }
     }
 
+    /** ★ beta92: this process's bit in <gallery>/radios.idx (vibe_log_radio.h), asked at flush — the gallery can move. */
+    void resolveRadio_() {
+        const std::string id = vibe::logradio::mine(), g = galleryDir_();
+        if (id.empty() || g.empty()) { myMask_.store(0); return; }
+        const std::string key = g + "|" + id;
+        if (key == radioKey_ && myMask_.load()) return;
+        const int bit = vibe::logradio::bitFor(g, id);
+        myMask_.store(bit >= 0 ? (1u << bit) : 0u);
+        radioKey_ = key;
+    }
     void startFlusher_() {
         if (!flusher_) return;
         std::lock_guard<std::mutex> lk(thMtx_);
@@ -587,6 +639,8 @@ private:
         const std::string dir = storeDir_();
         haveDir_.store(!dir.empty());
         if (dir.empty()) return;
+        resolveRadio_();
+        const uint32_t mask = myMask_.load();
         std::vector<Job> jobs;
         std::map<int64_t, uint32_t> refused;   // ★ receptions this process refused in RAM since the last flush, per day
         {
@@ -602,6 +656,7 @@ private:
                     Row& r = kv.second;
                     if (!r.dirty) continue;
                     jobs.push_back({ d.first, kv.first, r.s, r.s.count - std::min(r.s.count, r.flushed) });
+                    jobs.back().s.radios |= mask;   // ★ beta92: a row spotted before the bit was known still says who heard it
                     r.flushed = r.s.count; r.dirty = false;   // ★ optimistic: put back below if the write fails
                 }
         }
@@ -716,6 +771,8 @@ private:
     mutable std::string cacheSig_;
     mutable std::unordered_map<std::string, MapRow> cache_;
     mutable std::atomic<size_t> lastRowsRead_{ 0 };
+    std::atomic<uint32_t> myMask_{ 0 };   ///< ★ beta92: this radio's bit (0 = unknown / not yet resolved)
+    std::string radioKey_;                ///< the gallery + id the bit was resolved for (flush thread only, under flushMtx_)
 };
 
 /** The process's store. */
