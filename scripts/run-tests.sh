@@ -228,6 +228,9 @@ flags_for() {
     # ★★ V12 beta90 THE STATION STORE (vibe_station_store.h — the DIGI MODES MAP + PSK Reporter): validation, RAM, the day
     #    files, four processes flushing one day (fork), windows, the caps and pruning, subscribe(), cost. Header-only.
     test-station-store) echo "-O2 -lpthread" ;;
+    # ★★ V12 beta92 WHICH RADIO HEARD IT (vibe_log_radio.h + the gallery's "ri"): the registry, two processes (fork) on one
+    #    gallery with two radio ids, a shared item listing both, listJson radio= (a view), old lines = unknown. ~0.1 s.
+    test-log-radio)    echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;

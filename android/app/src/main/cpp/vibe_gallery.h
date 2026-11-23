@@ -25,6 +25,10 @@
 // ── Read-only over HTTP, and path-traversal-proof ─────────────────────────────────────────────────────────────
 //  ★★★ A name from the network is only ever looked up: it must be [A-Za-z0-9._-] with no leading dot, AND it must be in
 //      the index, AND it is opened O_NOFOLLOW. Three independent refusals; any one of them stops "../config.json".
+//  ★★ V12 beta92 WHICH RADIO HEARD IT (vibe_log_radio.h, docs/v12/LOG-RADIO-FILTER.md): every index line this build
+//     writes carries "ri":"<radio id>[,…]" — the writer's id, and on a shared item (FUNcube's day log, every radio's) each
+//     radio that rewrote it, unioned. The gallery stays ONE for the machine; listJson takes radio= as a VIEW and answers
+//     "radios" (the radios the list holds, named). A line with no "ri" (older builds) = unknown, shown under every radio.
 //  ★ No location beyond what the decoders printed (a NAVTEX message names its own sea area); the server's own position
 //    is never written into an item.
 #pragma once
@@ -326,7 +330,7 @@ public:
         Lock fl(dir);
         const std::string name = newName(m, ext);
         if (!writeFile(itemPath(dir, name), body, false)) return "";
-        appendIndex(dir, m, name, radio);
+        appendIndex(dir, m, name, radio, vibe::logradio::mine());
         evictLocked(dir, limit, std::set<std::string>{ name });
         return name;
     }
@@ -338,7 +342,7 @@ public:
         Lock fl(dir);
         const std::string name = newName(m, ext);
         if (!writeFile(itemPath(dir, name), first, false)) return "";
-        appendIndex(dir, m, name, radio);
+        appendIndex(dir, m, name, radio, vibe::logradio::mine());
         { std::lock_guard<std::mutex> lk(m_); open_.insert(name); }
         evictLocked(dir, limit, openNames());
         return name;
@@ -378,12 +382,14 @@ public:
         if (dir.empty() || limit == 0) return false;
         Lock fl(dir);
         bool listed;
-        { std::lock_guard<std::mutex> ck(cacheMtx_); listed = refresh(dir) && findLive(dir, name, true) >= 0; }
+        std::string ri;   // ★ beta92: the radios its current line names, and this one
+        { std::lock_guard<std::mutex> ck(cacheMtx_); listed = refresh(dir) && liveRadiosLocked(dir, name, ri); }
         struct stat st{};
         if (!listed || ::stat(itemPath(dir, name).c_str(), &st) != 0) return false;
+        ri = vibe::logradio::unionIds(ri, vibe::logradio::mine());
         const std::string tmpf = tempPath(dir, name);
         if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), itemPath(dir, name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
-        appendLine(dir, indexLine(m, name, radio, toNewest ? 2 : 1));
+        appendLine(dir, indexLine(m, name, radio, toNewest ? 2 : 1, ri));
         if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
         evictLocked(dir, limit, openNames());
         return true;
@@ -448,8 +454,9 @@ public:
         { std::lock_guard<std::mutex> lk(m_); dir = dir_; radio = radio_; }
         if (dir.empty()) return false;
         Lock fl(dir);
-        { std::lock_guard<std::mutex> ck(cacheMtx_); if (!refresh(dir) || findLive(dir, name, true) < 0) return false; }
-        return appendLine(dir, indexLine(m, name, radio, 1));
+        std::string ri;
+        { std::lock_guard<std::mutex> ck(cacheMtx_); if (!refresh(dir) || !liveRadiosLocked(dir, name, ri)) return false; }
+        return appendLine(dir, indexLine(m, name, radio, 1, vibe::logradio::unionIds(ri, vibe::logradio::mine())));
     }
     /** ★ The items a writer in THIS process holds open (create / adoptSlot, until close) — a migration leaves them be. */
     std::set<std::string> heldOpen() const { return openNames(); }
@@ -570,9 +577,12 @@ public:
      *  ★★ 2026-11-01: "kinds" — each kind's count and bytes ({"navtex":{"n":1234,"b":2202009},…}), so the footer can say
      *  "1,234 NAVTEX items · 2.1 MB — 5,000 items on this server · 9.7 MB". From the table, no extra file scan.
      *  ★ From the compact table (Cache): the page costs a pread() and a stat() per item SHOWN, never one per item kept. */
-    std::string listJson(const std::string& kind, size_t limit, long offset = -1) const {
+    /** ★★ beta92 `radio` — one radio's id (vibe_log_radio.h): only the items it heard, plus every item with no radio
+     *  (older builds' — unknown, shown under every radio); "total" is then that view's. "" = every item. The answer's
+     *  "radios" lists the radios the list (this kind) holds, named as the machine names them, with their counts. */
+    std::string listJson(const std::string& kind, size_t limit, long offset = -1, const std::string& radio = std::string()) const {
         const std::string dir = this->dir();
-        std::string items, kinds;
+        std::string items, kinds, radios = "[]";
         uint64_t used = 0, indexBytes = 0; size_t total = 0, matched = 0;
         if (!dir.empty()) {
             Lock fl(dir, /*shared=*/true);
@@ -584,6 +594,27 @@ public:
                 int want = -2;                                                // -2 = all
                 if (!kind.empty()) { want = -1; for (size_t k = 0; k < c.kinds.size(); k++) if (c.kinds[k] == kind) want = (int)k; }
                 matched = want == -2 ? c.live : want < 0 ? 0 : c.kindN[(size_t)want];
+                // ★ beta92 the radios this view holds (from the table — no file read), and the filter's bit
+                uint32_t rbit = 0; bool rfilter = false;
+                if (vibe::logradio::validId(radio)) {
+                    rfilter = true;
+                    for (size_t b = 0; b < c.rids.size(); b++) if (c.rids[b] == radio) rbit = 1u << b;
+                }
+                {
+                    std::vector<uint64_t> per(c.rids.size(), 0);
+                    uint64_t unknown = 0; size_t inView = 0;
+                    for (size_t i = c.firstLive; want != -1 && i < c.rows.size(); i++) {
+                        const Row& r = c.rows[i];
+                        if ((r.flags & kDead) || (want >= 0 && r.kind != want)) continue;
+                        if (!r.radios) ++unknown;
+                        for (size_t b = 0; b < per.size(); b++) if ((r.radios >> b) & 1u) ++per[b];
+                        if (rfilter && (!r.radios || (r.radios & rbit))) ++inView;
+                    }
+                    std::vector<std::pair<std::string, uint64_t>> counts;
+                    for (size_t b = 0; b < per.size(); b++) counts.push_back({ c.rids[b], per[b] });
+                    radios = vibe::logradio::radiosJson(counts, unknown);
+                    if (rfilter) matched = inView;
+                }
                 for (size_t k = 0; k < c.kinds.size(); k++) {
                     if (!c.kindN[k]) continue;
                     if (!kinds.empty()) kinds += ',';
@@ -596,6 +627,7 @@ public:
                 for (size_t i = c.rows.size(); fd >= 0 && limit > 0 && i-- > c.firstLive;) {
                     const Row& r = c.rows[i];
                     if ((r.flags & kDead) || (want >= 0 && r.kind != want)) continue;
+                    if (rfilter && r.radios && !(r.radios & rbit)) continue;   // ★ beta92 the radio filter (a view)
                     if (skip) { --skip; continue; }
                     if (!lineAt(fd, r, l)) continue;
                     const std::string f = lineStr(l, "f");
@@ -612,7 +644,8 @@ public:
         }
         std::string j = "{\"items\":[" + items + "],\"count\":" + std::to_string(total) + ",\"usedBytes\":"
              + std::to_string((unsigned long long)used) + ",\"limitBytes\":" + std::to_string((unsigned long long)limitBytes())
-             + ",\"indexBytes\":" + std::to_string((unsigned long long)indexBytes) + ",\"kinds\":{" + kinds + "}";
+             + ",\"indexBytes\":" + std::to_string((unsigned long long)indexBytes) + ",\"kinds\":{" + kinds + "}"
+             + ",\"radios\":" + radios + (vibe::logradio::validId(radio) ? ",\"radio\":\"" + radio + "\"" : std::string());
         if (offset >= 0) j += ",\"total\":" + std::to_string(matched) + ",\"offset\":" + std::to_string(offset);
         return j + "}";
     }
@@ -824,9 +857,21 @@ private:
         }
         return writeFile(p, l, true) || writeFile(p, l, false);
     }
-    static void appendIndex(const std::string& dir, const Meta& m, const std::string& name, const std::string& radio) {
+    static void appendIndex(const std::string& dir, const Meta& m, const std::string& name, const std::string& radio,
+                            const std::string& ri = std::string()) {
         if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
-        appendLine(dir, indexLine(m, name, radio));
+        appendLine(dir, indexLine(m, name, radio, 0, ri));
+    }
+    /** ★ beta92: is `name` live, and the radios ("ri") its current line names. Caller holds the lock and cacheMtx_. */
+    bool liveRadiosLocked(const std::string& dir, const std::string& name, std::string& ri) const {
+        ri.clear();
+        const long i = findLive(dir, name, true);
+        if (i < 0) return false;
+        const int fd = openIndex(dir);
+        std::string l;
+        if (fd >= 0 && lineAt(fd, cache_.rows[(size_t)i], l)) ri = lineStr(l, "ri");
+        if (fd >= 0) ::close(fd);
+        return true;
     }
     static std::string pinText(const Meta& m) {
         if (!std::isfinite(m.pinLat) || !std::isfinite(m.pinLon) || std::fabs(m.pinLat) > 90 || std::fabs(m.pinLon) > 180) return "";
@@ -835,7 +880,9 @@ private:
     }
     /** `re`: 0 = a new item; 1 = the item's new line where it stands; 2 = …and it moves to the newest. ★ Always LAST in
      *  the line, so stripRe() can take it off what is served. */
-    static std::string indexLine(const Meta& m, const std::string& name, const std::string& radio, int re = 0) {
+    /** `ri` (beta92): the radio ids that heard it, "a1b2c3d4[,…]" (vibe_log_radio.h) — "" writes none (unknown). */
+    static std::string indexLine(const Meta& m, const std::string& name, const std::string& radio, int re = 0,
+                                 const std::string& ri = std::string()) {
         char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", m.freqHz);
         std::string l = "{\"f\":\"" + jsonEsc(name) + "\",\"k\":\"" + jsonEsc(m.kind) + "\",\"o\":\"" + jsonEsc(m.origin)
             + "\",\"t\":" + std::to_string((long long)(m.utc ? m.utc : nowUtc())) + ",\"hz\":" + hz
@@ -845,6 +892,7 @@ private:
             + (m.slot.empty() ? std::string() : ",\"s\":\"" + jsonEsc(m.slot) + "\"")
             + (m.dlName.empty() ? std::string() : ",\"dn\":\"" + jsonEsc(downloadSafe(m.dlName)) + "\"")
             + pinText(m) + (m.level >= 0 ? ",\"lv\":" + std::to_string(m.level) : std::string())
+            + [&ri] { const std::string r = vibe::logradio::joinIds(vibe::logradio::splitIds(ri)); return r.empty() ? std::string() : ",\"ri\":\"" + r + "\""; }()
             + (re ? ",\"re\":" + std::to_string(re) : std::string()) + "}\n";
         return l;
     }
@@ -857,8 +905,10 @@ private:
     // ── the compact table ─────────────────────────────────────────────────────────────────────────────────────────
     enum : uint8_t { kDead = 1, kSlot = 2 };
     /** ★ 16 bytes an item: where its CURRENT line is in index.jsonl, a hash of its name (a match is always confirmed by
-     *  reading the line), its kind, its bytes. Never the line itself. */
-    struct Row { uint32_t h = 0, off = 0, bytes = 0; uint16_t len = 0; uint8_t kind = 0, flags = 0; };
+     *  reading the line), its kind, its bytes. Never the line itself.
+     *  ★ beta92: + `radios` — which radios heard it, as bits of THIS process's Cache::rids (never written anywhere; 0 =
+     *    unknown). 20 bytes an item now: 200,000 items = 4 MB of table, was 3.2. */
+    struct Row { uint32_t h = 0, off = 0, bytes = 0; uint16_t len = 0; uint8_t kind = 0, flags = 0; uint32_t radios = 0; };
     struct Cache {
         std::string dir;
         bool valid = false;
@@ -870,7 +920,22 @@ private:
         uint64_t liveIdx = 0;                  ///< bytes of the live items' current lines; parsed − liveIdx = dead lines
         uint64_t used = 0;
         std::vector<std::string> kinds; std::vector<size_t> kindN; std::vector<uint64_t> kindB;
+        std::vector<std::string> rids;         ///< ★ beta92: radio ids seen in the index, bit n = rids[n] (≤ 32)
     };
+    /** ★ beta92: a line's "ri" → this table's bits (new ids get the next bit; past 32 they read as unknown). */
+    uint32_t radioBits(const std::string& l) const {
+        const size_t p = l.find(",\"ri\":\"");
+        if (p == std::string::npos) return 0;
+        Cache& c = cache_;
+        uint32_t m = 0;
+        for (const auto& id : vibe::logradio::splitIds(lineStr(l, "ri"))) {
+            size_t b = 0;
+            while (b < c.rids.size() && c.rids[b] != id) ++b;
+            if (b == c.rids.size()) { if (c.rids.size() >= vibe::logradio::kMaxRadios) continue; c.rids.push_back(id); }
+            m |= 1u << b;
+        }
+        return m;
+    }
     static uint32_t nameHash(const std::string& s) {
         uint32_t h = 2166136261u;
         for (unsigned char c : s) { h ^= c; h *= 16777619u; }
@@ -978,6 +1043,7 @@ private:
         Row n; n.h = nameHash(f); n.off = (uint32_t)off; n.len = (uint16_t)l.size();
         n.kind = kindId(k); n.flags = l.find(",\"s\":\"") == std::string::npos ? 0 : kSlot;
         n.bytes = (uint32_t)std::min<uint64_t>((uint64_t)st.st_size, 0xffffffffu);
+        n.radios = radioBits(l);
         if (prev >= 0 && re == 1) {                       // ★ the item's new line, where it stands
             Row& r = c.rows[(size_t)prev];
             c.used -= r.bytes; c.kindN[r.kind]--; c.kindB[r.kind] -= r.bytes; c.liveIdx -= (uint64_t)r.len + 1;
