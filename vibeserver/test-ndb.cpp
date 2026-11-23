@@ -10,6 +10,8 @@
 #include "ndb_synth.h"
 
 #include <cstdio>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <dirent.h>
 #include <set>
@@ -297,6 +299,55 @@ int main(int argc, char** argv) {
             ndbgal::DayLog d(st, o);
             ok(d.beacons() == 2, "a restart reads the day's two beacons back");
         }
+        std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
+    }
+
+    // ★★ V12 beta92 ONE DAY CARD PER SERVER: two radios (forked processes) hear WOD (each at its own SNR) and one beacon each
+    std::printf("\n── beta92: two radios, one day's heard log ──\n");
+    {
+        char t[256]; std::snprintf(t, sizeof t, "%s/ndbshared-XXXXXX", std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+        const std::string dir = mkdtemp(t) ? t : "/tmp";
+        static const char* const ids[2] = { "aa11bb22", "cc33dd44" };
+        const int64_t c0 = 1793000000;
+        std::vector<pid_t> kids;
+        for (int p = 0; p < 2; ++p) {
+            const pid_t pid = ::fork();
+            if (pid == 0) {
+                logradio::setMine(ids[p]);
+                gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20); st.setRadioLabel(p ? "Airspy" : "RSP1A");
+                int64_t clk = c0 + p * 30;
+                ndbgal::DayLog::Options o; o.origin = p ? "live" : "background"; o.profile = p ? "" : "Profile 2";
+                o.havePos = true; o.lat = 52.29; o.lon = -0.85; o.clock = [&] { return clk; };
+                {
+                    ndbgal::DayLog d(st, o);
+                    vibendb::HeardBeacon h; h.ident = "WOD"; h.hz = 351999; h.snrDb = p ? 31 : 26; h.listed = true; h.name = "Woodley"; h.cc = "GB";
+                    h.lat = 51.4528; h.lon = -0.8789; h.km = 94; h.deg = 181;
+                    d.heard(h, clk);
+                    vibendb::HeardBeacon e; e.ident = p ? "EME" : "KER"; e.hz = p ? 353499 : 334000; e.snrDb = 12;
+                    d.heard(e, clk);
+                    clk += 120; d.tick();
+                    d.finish();
+                }
+                std::_Exit(0);
+            }
+            kids.push_back(pid);
+        }
+        for (pid_t k : kids) { int stt = 0; ::waitpid(k, &stt, 0); }
+        logradio::setMine("");
+        gallery::Store r; r.setDir(dir); r.setLimitBytes(50ull << 20);
+        int cards = 0, maps = 0; std::string card, cardN;
+        for (const auto& n : r.names("ndb")) {
+            const std::string sl = r.field(n, "s");
+            if (sl.rfind("ndbsum-", 0) == 0) { ++cards; cardN = n; r.readItem(n, card); }
+            if (sl.rfind("ndbmap-", 0) == 0) ++maps;
+        }
+        ok(cards == 1 && maps <= 1, "ONE heard log for the server (" + std::to_string(cards) + " cards, " + std::to_string(maps) + " maps)");
+        size_t wod = 0; for (size_t at = 0; (at = card.find("WOD \xc2\xb7", at)) != std::string::npos; ++at) ++wod;
+        ok(wod == 1 && card.find("31 dB") != std::string::npos, "WOD, heard by both, once — at the better radio's SNR (31 dB)");
+        ok(card.find("KER") != std::string::npos && card.find("EME") != std::string::npos && card.find("3 beacons identified") != std::string::npos,
+           "each radio's own beacon is on it: 3 beacons");
+        const std::string ri = r.field(cardN, "ri");
+        ok(ri.find(ids[0]) != std::string::npos && ri.find(ids[1]) != std::string::npos, "the card lists both radios (" + ri + ")");
         std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
     }
 
