@@ -120,7 +120,7 @@ eq('the home page', QRZ_HOME, 'https://www.qrz.com');
   ok(`plain: an RTTY CQ ("${p}")`, /test pattern/.test(p) && /G4ABC/.test(p) && /contest/.test(p));
   ok('plain: QTC and NNNN', /messages/.test(plainEnglish('QTC 62/10')) && /end of message/.test(plainEnglish('73 NNNN')));
   const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
-  ok('web: EXPLAIN is CW\'s and RTTY\'s', /function explainHere\(\): boolean \{ return activeDec === 'cw' \|\| activeDec === 'rtty'; \}/.test(web)
+  ok('web: EXPLAIN is CW\'s and RTTY\'s (and the band skimmer\'s CW / RTTY, beta92)', /function explainHere\(\): boolean \{ return activeDec === 'cw' \|\| activeDec === 'rtty' \|\| bandSkimShown\(\); \}/.test(web)
      && /cwRead\(sg\.text\.trim\(\)\) : RTTY_WAITING/.test(web) && /pre\.textContent = cwRead\(/.test(web));
   const panel = readFileSync(new URL('../src/components/DecoderPanel.tsx', import.meta.url), 'utf8');
   ok('app: the EXPLAIN key on RTTY too, and its one-signal text read through plainEnglish',

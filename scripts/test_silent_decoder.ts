@@ -128,8 +128,9 @@ ok(/setSpeaker: \(m\) => \{ setMuted\(m\); updateMediaSession\(\); \}/.test(webF
 ok(/decStep\('silentDecoderSync', silentDecoderSync\)/.test(web), 'web: every decoder change runs it (syncDecButtons)');
 ok(/silentDecoderSync\(\);\s+\/\/ ★★ B came or went/.test(web.slice(web.indexOf('function abOnWatch('))), 'web: B coming or going runs it');
 ok(!/aprsSilentSync|aprsMutedFrom|aprsMutedV/.test(web), 'web: no second (APRS-only) copy left');
-const satF = web.slice(web.indexOf('function satFollow('), web.indexOf('function satFollow(') + 900);
-ok(/activeDec = d;/.test(satF) && /syncDecButtons\(\);/.test(satF), 'web: a SATELLITE pick sets activeDec and syncs (LRPT mutes from there)');
+// ★ the whole function (beta92 grew it: the pick's passband, the CW-beacon skimmer, the server's params)
+const satF = web.slice(web.indexOf('function satFollow('), web.indexOf('\n}\n', web.indexOf('function satFollow(')));
+ok(/activeDec = (?:d|satDecKey\(d\)[^;]*);/.test(satF) && /syncDecButtons\(\);/.test(satF), 'web: a SATELLITE pick sets activeDec and syncs (LRPT mutes from there)');
 ok(/from '\.\.\/services\/silentDecoder'/.test(app), 'app imports the shared rule');
 ok(/const silentOn = isSilentDecoder\(activeDecoder\);/.test(app)
    && /silentMute\.sync\(\{ open: silentOn, abOn, vfo: decVfo, speakerMuted: isMutedRef\.current, reassert: true \}/.test(app),
