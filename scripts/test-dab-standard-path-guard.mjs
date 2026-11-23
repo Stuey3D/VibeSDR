@@ -25,7 +25,13 @@ console.log(`── 1. source, against ${BASE} ──`);
 /* ★ beta91 vibe_sat_gain.h is the SATELLITE-PASS profile (new file, 11-22): it acts only while g_satGainOn (a satellite
  *  decoder on a pick / unattended pass), never in DAB; reviewed with its own test (test-sat-gain). The three DAB-path gain
  *  files are still held to BASE byte for byte. */
-const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f) && f !== 'vibe_sat_gain.h').map((f) => C + f);
+/* ★★ beta92 (Stuart 11-23: "dab needs to work as it did before … it doesnt matter the amount of gain writes but we need to
+ *  avoid flapping … if the agc can get a decent level and make fine adjustments that is ok … aim for the highest mer lowest
+ *  errors like we do now"): vibe_rsp_vibeagc.h (VibeAGC for SDRplay — the MW/HF measured step and re-checks, none of which
+ *  acts in DAB) is held to DAB's BEHAVIOUR instead of its bytes — test-rsp-vibeagc case V (no flapping, at most one RF step
+ *  after settling, the level in DAB's band ≥ 95 %) and cases C / E, whose every gain write was shown identical on dc95053aa
+ *  and today's code. The RTL's gain files (vibe_agc_record.h, vibe_agc_rules.h) stay byte for byte. */
+const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f) && f !== 'vibe_sat_gain.h' && f !== 'vibe_rsp_vibeagc.h').map((f) => C + f);
 const agcDiff = git('diff', BASE, '--', ...agcFiles);
 ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged (${agcFiles.length} files: ${agcFiles.map((f) => path.basename(f)).join(', ')})`);
 /* ★ The shim's gain/AGC lines are judged from SHIM_BASE: f026471cd is the end of the SDRplay AGC lock work (Stuart,

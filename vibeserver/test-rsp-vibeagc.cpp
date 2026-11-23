@@ -212,6 +212,51 @@ static void caseC() {
     ok(s.writes <= 6, "settled in a handful of writes");
 }
 
+/* ★★★ V — DAB MUST NOT FLAP (Stuart 11-23: "it doesnt matter the amount of gain writes but we need to avoid flapping as that
+ *  is what killed the dab on the b210 when its agc was on. if the agc can get a decent level and make fine adjustments that
+ *  is ok"). THE DAB GUARD (scripts/test-dab-standard-path-guard.mjs) holds vibe_rsp_vibeagc.h to THIS, not byte for byte:
+ *  ten minutes on a multiplex with the ordinary ±2 dB wobble, a slow ±6 dB fade and a block hop — no IF step reversed within
+ *  3 s (the IF alone — an RF step with its counter-step is one deliberate move), at most one RF step after settling (the
+ *  hop to a weaker multiplex earns one), the level inside DAB's band ≥ 95 % of the time. The REAL aim is the highest MER and
+ *  fewest errors (Stuart: "aim for the highest mer lowest errors like we do now") — a simulation cannot measure MER, so it
+ *  guards what costs MER; the live check on an RSP measures it. Same result on the 11-16 code (dc95053aa) and today's. */
+static void caseV() {
+    std::printf("\n── V  DAB: no flapping — 10 min, ±2 dB wobble, a ±6 dB fade, a block hop ──\n");
+    SimRsp r; r.band = 1; r.red = ladder(1); r.lna = 5; r.gr = 40;
+    r.sigs = {-48.0, -60.0}; r.wanted = -48.0;
+    std::mt19937 rng(92);
+    std::uniform_real_distribution<double> wob(-2.0, 2.0);
+    VibeAgcRsp agc; agc.setProfile(VagcBand::Dab); agc.adopt(r.lna, r.gr);
+    std::vector<bool> seen(r.red.size(), false);
+    double lastIfAt = -1e9; int lastIfDir = 0, flaps = 0, lnaAfter = 0, writes = 0; long inBand = 0, total = 0;
+    for (double t = 0; t < 600; t += 0.1) {
+        if (std::fabs(t - 300.0) < 0.05) { r.sigs = {-55.0, -63.0}; agc.noteRetune(t, false); }   // ★ a block hop, 7 dB weaker
+        r.fadeDb = 6.0 * std::sin(2.0 * M_PI * t / 60.0) + wob(rng);
+        ++r.k; ++r.windows;
+        VagcIn in; in.now = t; in.windows = r.windows; in.peak = r.peak(); in.clipPct = r.clip(); in.nStates = 10; in.band = 1;
+        for (size_t q = 0; q < seen.size(); ++q) if (seen[q]) in.learnedRed[q] = r.red[q];
+        const VagcOut o = agc.tick(in);
+        if (o.write) {
+            ++writes;
+            if (o.lna != r.lna) { if (t > 30) ++lnaAfter; seen[(size_t)o.lna] = true; }
+            // ★ flapping is the IF swinging back and forth on its own — an RF step with its IF counter-step is one move
+            if (o.gr != r.gr && o.lna == r.lna) {
+                const int dir = o.gr > r.gr ? 1 : -1;
+                if (lastIfDir && dir != lastIfDir && t - lastIfAt < 3.0) ++flaps;
+                lastIfDir = dir; lastIfAt = t;
+            }
+            r.lna = o.lna; r.gr = o.gr;
+        }
+        if (t > 30) { ++total; const double pk = r.peak(); if (pk > -34.0 && pk < -8.0) ++inBand; }
+    }
+    const double frac = total ? 100.0 * (double)inBand / (double)total : 0.0;
+    std::printf("   -> %d writes in 10 min, %d IF reversals inside 3 s, %d RF steps after settling, level in band %.1f %% of the time\n",
+                writes, flaps, lnaAfter, frac);
+    ok(flaps == 0, "no flapping: no IF step reversed within 3 s");
+    ok(lnaAfter <= 1, fmt("at most one RF step after settling (%.0f)", lnaAfter));
+    ok(frac >= 95.0, fmt("a decent level: inside DAB's band %.1f %% of the time (≥ 95)", frac));
+}
+
 static void caseD() {
     std::printf("\n── D  a strong signal appears at 40 s (+30 dB) and goes at 100 s ──\n");
     SimRsp r; r.band = 1; r.red = ladder(1); r.lna = 0; r.gr = 40;
@@ -660,7 +705,7 @@ static void caseS() {
 int main() {
     std::printf("VibeAGC for SDRplay — closed loop and sound\n");
     caseA(); caseB(); caseC(); caseD(); caseE(); caseF(); caseG(); caseT(); caseH();
-    snd::caseI(); snd::caseJ(); snd::caseK(); caseR(); caseS();
+    snd::caseI(); snd::caseJ(); snd::caseK(); caseR(); caseS(); caseV();
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }
