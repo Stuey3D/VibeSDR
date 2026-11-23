@@ -5960,8 +5960,13 @@ function sqlChannelKey(): string {
   return `${Math.round(a.frequency)}|${a.mode}|${a.bandwidthLow}|${a.bandwidthHigh}`;
 }
 
+/** ★★ beta92 (Stuart 11-23: "squelch needs to be ignored when in things like ism/dab/acars/adsb etc anything that isnt
+ *  audio"): the server applies no gate in these (local_sdr_shim.cpp vsNoAudioMode); auto squelch pauses with them and
+ *  reseeds on the next analogue mode. A function: the flags are declared further down. */
+function sqlNoAudioMode(): boolean { return dabOn || adsbOn || ismOn || aisOn || avOn || sdOn || ndbOn; }
 function autoSquelchTick() {
   if (!sqlAuto || !srvSigValid) return;
+  if (sqlNoAudioMode()) { sqlSeedKey = ''; return; }   // ★ paused; the blank key reseeds when an analogue mode resumes
   /* ★★ NOTICED HERE, NOT WIRED INTO EVERY CALLER. There are five `spec.tune()` sites plus the
    *  server's own retunes on a shared dial, and hanging a reseed on each is the "one rule, many
    *  readers" fault — the one that gets missed is the bug. Comparing the channel we SEEDED at
@@ -6147,6 +6152,7 @@ function sqlBDb(): number { return spec ? spec.sqlDbOf('B') : SQL_OFF; }
 function applySquelchB(db: number) { spec?.setSquelchVfo('B', db); }
 function autoSquelchTickB() {
   if (!sqlBAuto || !spec?.abOn || !Number.isFinite(srvChanBDb)) return;
+  if (sqlNoAudioMode()) return;   // ★ beta92 no squelch in a mode with nothing to listen to (see sqlNoAudioMode)
   const key = sqlBKey();
   const near = sqlBNear.key === key && performance.now() - sqlBNear.at < 1000 ? sqlBNear.excess : NaN;
   const want = sqlBTrack.tick(srvChanBDb, key, near, sqlAutoMargin, performance.now(), sqlScaleMax);

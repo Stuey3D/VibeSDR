@@ -991,6 +991,16 @@ static vibeavi::Service    g_av(vibeavi::sharedTracker());
  *  (vibe_rs41_service.h). The tune keys step the bands. No rate change. */
 static std::atomic<bool>   g_sdMode{false};
 static vibers41::Service   g_sd;
+/** ★★ beta92 A WHOLE-RADIO MODE WITH NOTHING TO LISTEN TO (Stuart 11-23: "squelch needs to be ignored when in things like
+ *  ism/dab/acars/adsb etc anything that isnt audio"): DAB (a decoded service, 11-21), ADS-B, ISM, AIS, the aircraft
+ *  datalink, radiosondes and the NDB skimmer. No squelch gate applies while one is on — the listener's, the shared dial's
+ *  or a VFO's; the setting is kept for the next analogue mode. SATELLITE is not here (its FM and SSB are audio). */
+static inline bool vsNoAudioMode() {
+    return g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
+        || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed)
+        || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)
+        || g_ndbMode.load(std::memory_order_relaxed);
+}
 /* ★★★ NO `dab` REPORT MAY FOLLOW `dab_off` (2026-10-05). The twice-a-second report is built and sent
  *  on the DSP thread; DAB is ended on a socket thread. Nothing ordered the two, so a report the DSP
  *  thread had already decided to send could reach the client AFTER `dab_off` — and a client that
@@ -12113,7 +12123,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  decoded digital service is not judged by the passband's power — the gate muted a multiplex that was playing. The
          *  clients already take the squelch line off the meter in both (mobile.ts paintDab). The setting is kept, not cleared:
          *  it applies again the moment the listener is back on an analogue mode. */
-        const bool squelched = !c->drmOn.load(std::memory_order_relaxed) && c->squelchOn.load(std::memory_order_relaxed)
+        const bool squelched = !c->drmOn.load(std::memory_order_relaxed) && !vsNoAudioMode() && c->squelchOn.load(std::memory_order_relaxed)
                             && c->sigChanDb.load(std::memory_order_relaxed) < c->squelchDb.load(std::memory_order_relaxed);
         // ★★ V12 VFO A/B: VFO A (gated by its own squelch) and the watch channels (each gated by ITS squelch) into one
         //    L/R stream — lower frequency left, higher right (vibe_watch.h). The ordinary path below once the pan is home.
@@ -20708,7 +20718,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (it != sockSession.end()) {
                         auto q = sessionSquelch.find(it->second);
                         // ★★ never in DAB — see the note at the listener's own gate (onClientAudio)
-                        if (q != sessionSquelch.end() && q->second.on && level < q->second.db && !g_dabMode.load(std::memory_order_relaxed)) closed = true;
+                        if (q != sessionSquelch.end() && q->second.on && level < q->second.db && !vsNoAudioMode()) closed = true;
                     }
                 }
                 (closed ? muted : open).push_back(sk);
@@ -21079,7 +21089,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
         // FFT) is below threshold. Applied AFTER the decoders so they see raw audio.
-        if (!g_dabMode.load(std::memory_order_relaxed) && squelchOn.load() && channelDb.load() < squelchDb.load()) {   // ★ never in DAB (sessionSquelch note)
+        if (!vsNoAudioMode() && squelchOn.load() && channelDb.load() < squelchDb.load()) {   // ★ never in DAB, ISM, ADS-B… (vsNoAudioMode)
             for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
         }
 
@@ -34214,7 +34224,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (it == sockSession.end()) { rest.push_back(sk); continue; }
                 bySess[it->second].push_back(sk);
                 auto q = sessionSquelch.find(it->second);
-                sqlShut[it->second] = q != sessionSquelch.end() && q->second.on && level < q->second.db && !g_dabMode.load(std::memory_order_relaxed);
+                sqlShut[it->second] = q != sessionSquelch.end() && q->second.on && level < q->second.db && !vsNoAudioMode();
             }
         }
         const bool mono = audioForceMono.load();
