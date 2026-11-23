@@ -29,12 +29,43 @@ Not done (open — each one line in the report):
   the NAVTEX *messages* in the gallery do (their items are tagged), so the gallery's filter covers NAVTEX; the two map
   stores would need their own fields (`vibe_navtex_map.h` folds gallery lines, so it could read `"ri"` cheaply; the ship
   store's fixed records have no spare bytes checked).
-- Existing per-radio day items: ISM, DSC, NDB, AIS/APRS day logs and the FT8 "last 10 minutes" card are found again by
-  `Store::adoptSlot` **with the radio label in the match** (only FUNcube's uses `anyWriter`). So two radios on the same
-  band write two day items, each tagged with its radio — the filter works on them, but they are not merged into one
-  server-wide item. Making them `anyWriter` needs each writer to re-read the shared item's state under a cross-process
-  lock (as `vibe_fctlm_gallery.h` FcLock does) — a per-decoder change, not done here. **Decision for Stuart.**
+- **ISM stays per radio (decision for Stuart).** Its private devices (TPMS, key fobs, remotes) are named by a SipHash under a
+  salt drawn fresh in each PROCESS and never stored (the privacy rule, `vibe_ism_service.h`). Two radio processes therefore
+  give the same car different nicknames, and could give two different cars the same "TPMS #2" — merged into one card, that
+  breaks the rule that "TPMS #2" never means two cars, and a private device heard by both would be counted twice. A
+  server-wide ISM day needs ONE nickname space for the machine: e.g. the salt shared through the runtime directory (tmpfs,
+  0600, gone at reboot) or a front-door nickname service. Each ISM item IS tagged with its radio, so the filter works on it.
+- Hourly summary cards (FT8 / CW / PSK / RTTY / NDB) and NDB's own last-10 card stay the run's own (an hour is written
+  once, when it closes). The day items and the FT8-family last-10 card are server-wide (below).
 - The R36S native UI (one radio) and the watch: nothing to do (one radio = no filter).
+
+## Shared day items — one per server (beta92, the coordinator's follow-up)
+
+Stuart's rule (2026-11-22): every decoder log is one per server, only the DX Log per radio. `android/app/src/main/cpp/
+vibe_gallery_shared.h` gives the writers what FUNcube's day log (`vibe_fctlm_gallery.h` FcLock) already had:
+
+- **Lock** — flock on `<gallery>/.shared.lock`; every find-or-create, dedupe, append, merge and rewrite of a shared item is
+  inside it (taken before the gallery's own `.lock`, which Store takes inside each call).
+- **adopt()** — the item by its SLOT alone (`adoptSlot` anyWriter): never the radio, profile, origin or dial.
+- **Dedupe** — a day log line is `HH:MM:SS  <text>`. A line is the same reception as ANOTHER radio's when the file's tail
+  (last 256 KB) holds the same text within 20 s; each tail line answers for one of ours. `OwnLines` remembers what this
+  process wrote in the last 3 minutes, so a radio's own genuine repeat (a coast station polling a ship twice) is never
+  taken for the other radio's copy, and one batch never dedupes itself.
+- **State** — a summary card's rows in `<gallery>/.shared/<slot>.state` (tab-separated text), merged under the Lock and the
+  card drawn from it. Pruned two days after its last write; counted in the gallery's space (`sideBytes`).
+- After an append the item is retagged, so its `"ri"` gains this radio.
+
+| Decoder | What is one per server now | How |
+|---|---|---|
+| AIS / APRS (`vibe_station_log.h` DayLog) | the day's log per channel (and its parts) + the summary card | log lines deduped; the card's rows (count of DISTINCT messages, first, last) in the shared state |
+| DSC (`vibe_dsc_gallery.h`) | the day's log per DSC frequency; a distress / urgency / pinned item | log deduped, title counts from the FILE; an alert another radio saved within 2 min (same title) is one item, retagged |
+| NDB (`vibe_ndb_gallery.h`) | the day's heard log + map | each card write reads the card (every radio's beacons) and merges ours over it: first heard earliest, latest details, best SNR |
+| FT8 / CW / PSK / RTTY (`vibe_bgdecode.h` Ft8SummaryTap) | the "last 10 minutes" card, per kind and dial | slot `last10-<kind>-<kHz>`; a shared 10-minute window of every radio's spots — a spot another process already has (same call + mode within 10 s) is the same transmission |
+| NAVTEX map (`vibe_navtex_map.h`) | — (already server-wide) | per station `radios` (from its messages' `ri`) + the answer's `radios` list |
+| AIS ship store (`vibe_ais_store.h`) | — (already server-wide) | `uint32_t radios` in the last 4 of the 512-byte record (zero before); per ship `radios` + the answer's list |
+
+Old per-radio items stay as they are. The old FT8 `last10` slot is not adopted (the new slot has the kind and dial);
+today's newest per-radio AIS/APRS/DSC/NDB item IS adopted by slot and becomes the shared one.
 
 ## How it works
 
@@ -94,6 +125,12 @@ All on the Mac (M5 Pro), synthetic data only — no radio, no server of Stuart's
 | `vibeserver/test-log-radio.cpp` (new, in run-tests.sh) | the helpers (ids, split/union, ≤ 8), the registry (torn line), two **forked processes** on one gallery (NAVTEX each + a shared FUNcube item via `adoptSlot` anyWriter + `replace`) → the shared item lists both; `listJson` names + counts per kind, `radio=` + paging, junk / unknown ids; an **old line** with no `ri` = unknown, shown under both; retag/rewrite keep radios; one radio → one listed | 28 / 0 |
 | `scripts/test_log_radio.ts` (in run-tests.sh) | the client rule: when offered, what passes, the pick kept/dropped, the query, "Heard by" | 17 / 0 |
 | `scripts/test-web-log-radio.mjs` | a real `vibeserver` (this tree) + the real built page in **headless Edge, `--mute-audio`**: the API (names, counts, filters, the shared item, junk dropped, stations.json radios); the gallery's chip row appears with 2 radios and filters (VHF: 6 rows, none of HF's); **no row for FT8** (one radio) and the pick falls back to ALL; the DIGI MODES MAP window's keys and filter | 21 / 0 |
+| `vibeserver/test-shared-day.cpp` (new, in run-tests.sh) | the dedupe helpers (another radio's line within 20 s; own repeats kept; one tail line per ours); two forked radios on one AIS day: ONE log + ONE card, the shared message once, each radio's own, both in `ri`, the card's counts the server's | 12 / 0 |
+| `test-dsc` (+ section) | two forked radios on 2187.5 kHz (different dial, origin, profile), the same distress alert: one log, the alert once in it, ONE distress item, both radios in `ri`, "3 calls · 1 distress" | all passed |
+| `test-ndb` (+ section) | two forked radios: WOD heard by both (different SNR) + one beacon each: one card, WOD once at the better SNR, 3 beacons, both in `ri` | 104 / 0 |
+| `test-bgdecode` (+ `ft8SharedLast10`) | two forked radios on 1840 kHz: ONE last-10 card, 5 spots / 4 countries (two decoded by both, one each, a repeat), both in `ri`, "every radio on this server" | all passed |
+| `test-navtex-map` (+ section) | a station heard by both radios lists both, one by one, an untagged one none; the named list | 62 / 0 |
+| `test-ais-store` (4-process test + radio ids) | the shared coast lists all four radios, each radio's own ships only it; JSON names them; an old record is unknown | 58 / 0 |
 | regressions | test-gallery-store (all pass), test-fctlm-gallery 49/0, test-ism-gallery 57/0, test-navtex-map 58/0, test-ndb-gallery-clean (pass), test-dsc (pass) | pass |
 | `npx tsc --noEmit -p .` | the app + web | 45 errors before and after, all pre-existing in `handheld-ui/test/*` — none new |
 
