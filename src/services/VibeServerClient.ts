@@ -33,7 +33,7 @@ import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the pass
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
 import { parseSondeReport } from './sondes';   // ★ V12 radiosondes (RS41)
-import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, satPickMsg, satDopplerMsg, SAT_DROP_MSG } from './satellites';   // ★ V12 satellites
+import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG } from './satellites';   // ★ V12 satellites
 import { parseDabScan, parseFmScan } from './dabBandScan';
 import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
@@ -368,6 +368,10 @@ export class VibeServerClient extends VibeServerWsClient {
   }
   satDoppler(on: boolean) { this.sendSpectrum(satDopplerMsg(on)); }
   satDrop() { this.serverTakesDial(); this.sendSpectrum({ ...SAT_DROP_MSG }); }
+  /** ★★★ beta92 OPEN IN VFO B: another downlink of the picked bird on THIS listener's VFO B (it moves nobody's dial — no
+   *  ask-before-tuning; the server checks the window, the slots and VFO B's own rules). Off = VFO B's usual off. */
+  satVfoB(norad: number, tx: number) { this.sendSpectrum(satVfoBMsg(norad, tx)); }
+  satVfoBOff() { this.sendSpectrum({ ...SAT_VFOB_OFF_MSG }); }
   /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
   aisTrail(mmsi: number) {
     if (Number.isInteger(mmsi) && mmsi > 0) this.sendSpectrum({ type: 'ais_trail', mmsi });
@@ -617,6 +621,7 @@ export class VibeServerClient extends VibeServerWsClient {
         const r = parseSatReadout(msg); if (r) this.callbacks.onSat?.(r); return true;
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.callbacks.onSatTrack?.(t); return true; }
+      case 'sat_vfob': { const b = parseSatVfoB(msg); if (b) this.callbacks.onSatVfoB?.(b); return true; }   // ★★★ beta92 OPEN IN VFO B
       case 'ais_off':
         this.aisExit.offConfirmed(Date.now());
         if (this.aisHeld) holdNativeHealing(VibeServerClient.AIS_HOLD_MS, 'server reports AIS off');

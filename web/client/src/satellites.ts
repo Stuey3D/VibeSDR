@@ -26,8 +26,9 @@ import {
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
+  satCwTail, satDecView, satDecWord, satTextAppend, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY, type SatVfoB,
   type SatPass,
-  type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
+  type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
 
 export interface SatPanelDeps {
@@ -61,6 +62,8 @@ export interface SatPanelDeps {
   now?: () => number;
   /** ★★ beta91 TELEMETRY CHARTS: the server's gallery, read (a path → its text, null = not there) — LAST PASSES */
   galleryGet?: (path: string) => Promise<string | null>;
+  /** ★★★ beta92 OPEN IN VFO B — {"type":"sat_vfob",norad,tx} (main.ts follows B's decoder on a second decoder socket) */
+  vfobOpen?: (norad: number, tx: number) => void;
 }
 /** ★ 1.9: what the MAP key hands the DIGI MODES map (b90-maps' DigiMapOpts shape) — its APRS layer, and an overlay of the
  *  pass's orbit, footprint and the bird ("ISS PASS"); the stations carry "via ISS" from the server (aprs …sat). */
@@ -115,6 +118,17 @@ const CSS = `
 #satPanel .sat-img{margin-top:8px}
 #satPanel .sat-img[hidden]{display:none}
 #satPanel .sat-img #decImage{max-height:min(52vh,440px);object-fit:contain}
+/* ★★★ beta92 OPEN IN VFO B — the key(s) under the readout, B's line, and the line switch (a line is tappable only while
+   both lines have a decoder view; the one shown is lit) */
+#satPanel .sat-vb{display:flex;flex-direction:column;gap:4px;margin-top:4px}
+#satPanel .sat-vb[hidden]{display:none}
+#satPanel .sat-vb button.sat-vbk{align-self:flex-start;font-size:11px;padding:2px 8px;min-height:28px;letter-spacing:.04em}
+#satPanel .sat-ln{border-radius:6px;padding:2px 6px;margin:0 -6px}
+#satPanel .sat-ln.sw{cursor:pointer;border:1px solid transparent}
+#satPanel .sat-ln.sw.on{border-color:var(--btn-active-bdr);background:var(--btn-active-bg);color:var(--btn-active-tx)}
+#satPanel .sat-cw{margin-top:6px;white-space:pre-wrap;word-break:break-word;font:12px/1.35 ui-monospace,Menlo,monospace;max-height:6.8em;overflow:auto}
+#satPanel .sat-cw[hidden]{display:none}
+#satPanel .sat-bimg canvas{display:block;width:100%;max-height:min(52vh,440px);object-fit:contain;image-rendering:auto}
 #satPanel .sat-pk{margin-top:6px;max-height:9.5em;overflow:auto;font:12px/1.35 ui-monospace,Menlo,monospace}
 #satPanel .sat-pk[hidden]{display:none}
 #satPanel .sat-sync{margin:4px 0}
@@ -227,6 +241,15 @@ export class SatPanel {
   private sGlobe!: HTMLCanvasElement; private sImg!: HTMLElement; private sPk!: HTMLElement; private sSync!: HTMLElement;
   private sList!: HTMLDetailsElement; private sRows!: HTMLElement; private sCredit!: HTMLElement;
   private sKey!: HTMLElement; private sTlm!: HTMLElement; private sMap!: HTMLButtonElement;
+  // ★★★ beta92 OPEN IN VFO B — the keys / B's line, A's CW text, B's picture
+  private sVb!: HTMLElement; private sCw!: HTMLElement; private sBImg!: HTMLElement; private bCanvas!: HTMLCanvasElement;
+  private vbKey = '';
+  /** the server's word on VFO B for this pick (on) — null = none open */
+  private vfob: SatVfoB | null = null;
+  /** which line's decoder the area shows while the switch exists (satViewSwitch) */
+  private view: 'A' | 'B' = 'A';
+  private aText = '';                       // ★ fix beta92: a CW beacon on A shows its decoded text
+  private bText = ''; private bPackets: string[] = []; private bStatus = ''; private bPicture = false; private bPictureDone = false;
 
   constructor(private deps: SatPanelDeps) {
     if (!document.getElementById('satPanelCss')) {
@@ -246,10 +269,11 @@ export class SatPanel {
       + `<div class="sat-why" data-s="why" hidden></div>`
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
       +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div><div class="sat-dim" data-s="up" hidden></div>`
-      +   `<div class="sat-cd" data-s="cd"></div><div class="sat-dim" data-s="state"></div></div>`
+      +   `<div class="sat-cd" data-s="cd"></div><div class="sat-dim sat-ln" data-s="state"></div><div class="sat-vb" data-s="vb" hidden></div></div>`
       +   `<div><canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted with arrows for its direction"></canvas>`
       +   `<div class="sat-key sat-dim" data-s="key" hidden></div></div></div>`
-      + `<div class="sat-img" data-s="img" hidden></div><div class="sat-pk" data-s="pk" hidden></div><div class="sat-tlm" data-s="tlm" hidden></div></div>`
+      + `<div class="sat-img" data-s="img" hidden></div><div class="sat-cw" data-s="cw" hidden></div><div class="sat-pk" data-s="pk" hidden></div><div class="sat-tlm" data-s="tlm" hidden></div>`
+      + `<div class="sat-img sat-bimg" data-s="bimg" hidden><canvas width="320" height="256" aria-label="The picture VFO B is receiving"></canvas></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary><div data-s="rows"></div></details>`
       + `<div class="sat-dim sat-credit" data-s="credit"></div></div>`;
@@ -260,6 +284,7 @@ export class SatPanel {
     this.sState = q('state'); this.sGlobe = q<HTMLCanvasElement>('globe'); this.sImg = q('img'); this.sPk = q('pk'); this.sSync = q('sync');
     this.sList = q<HTMLDetailsElement>('list'); this.sRows = q('rows'); this.sCredit = q('credit');
     this.sKey = q('key'); this.sTlm = q('tlm'); this.sMap = this.el.querySelector('[data-act="map"]') as HTMLButtonElement;
+    this.sVb = q('vb'); this.sCw = q('cw'); this.sBImg = q('bimg'); this.bCanvas = this.sBImg.querySelector('canvas') as HTMLCanvasElement;
     // ★ 1.6 the reminders' pop-ups — their own place at the top of the window (they fire with the mode off too)
     this.remEl = document.createElement('div');
     this.remEl.id = 'satRemind'; this.remEl.hidden = true; this.remEl.setAttribute('aria-live', 'polite');
@@ -304,8 +329,67 @@ export class SatPanel {
   private clearPick() {
     this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
     this.track = null; this.trackAsk = null; this.tlm = null;
+    this.aText = ''; this.vfobClear();
     this.lend(false);
   }
+  private vfobClear() {
+    this.vfob = null; this.view = 'A'; this.bText = ''; this.bPackets = []; this.bStatus = ''; this.bPicture = false; this.bPictureDone = false;
+  }
+  // ── ★★★ beta92 OPEN IN VFO B ────────────────────────────────────────────────────────────────────────────────────
+  /** {"type":"sat_vfob"} — B on another downlink of the pick (on), a refusal (says why), or B gone (the line goes). */
+  onVfoB(b: SatVfoB) {
+    if (b.on) {
+      if (!this.picked || b.norad !== this.picked.norad) return;
+      const fresh = !this.vfob || this.vfob.tx !== b.tx;
+      if (fresh) { this.bText = ''; this.bPackets = []; this.bStatus = ''; this.bPicture = false; this.bPictureDone = false; }
+      this.vfob = b; this.refusal = '';
+      if (fresh && satDecView(b.decoder)) this.view = 'B';   // ★ the line just opened is the one shown (a tap on A goes back)
+    } else if (b.refused) {
+      this.refusal = b.why || 'VFO B could not be opened on that downlink';
+    } else {
+      this.vfobClear();
+    }
+    if (this.open) this.render();
+  }
+  /** the VFO B downlink open now (tests, main.ts) */
+  vfobNow(): SatVfoB | null { return this.vfob; }
+  /** which line's decoder the box shows (tests) */
+  viewNow(): 'A' | 'B' { return satViewShown(this.picked?.decoder, this.vfob, this.view); }
+  /** A CW beacon's decoded characters on VFO A (the pick's own CW decoder). */
+  cwText(t: string) { if (this.picked?.decoder !== 'cw') return; this.aText = satTextAppend(this.aText, t); if (this.open) this.paintPick(); }
+  /** VFO B's decoder: its text (CW, telemetry lines), its own status words, its packet lines, its picture. */
+  bTextAdd(t: string) { if (!this.vfob) return; this.bText = satTextAppend(this.bText, t); if (this.open) this.paintPick(); }
+  bState(text: string) { if (!this.vfob) return; this.bStatus = text; if (this.open) this.paintPick(); }
+  bPacket(line: string) { if (!this.vfob) return; this.bPackets.unshift(line); if (this.bPackets.length > 30) this.bPackets.length = 30; if (this.open) this.paintPick(); }
+  bImageStart(w: number, h: number) {
+    if (!this.vfob) return;
+    const c = this.bCanvas;
+    c.width = Math.max(16, Math.min(2048, w || 320)); c.height = Math.max(16, Math.min(2048, h || 256));
+    c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+    this.bPicture = true; this.bPictureDone = false;
+    if (this.viewNow() === 'B' && !this.sized && !this.big) this.setBig(true, false);   // ★ grows to show it, as A's picture does
+    if (this.open) this.render();
+  }
+  bImageLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
+    if (!this.vfob || w <= 0 || y < 0) return;
+    const c = this.bCanvas, ctx = c.getContext('2d');
+    if (!ctx) return;
+    if (c.width !== w) { c.width = Math.min(2048, w); }
+    if (y >= c.height) {   // ★ grows with the picture (a size it did not say)
+      const keep = ctx.getImageData(0, 0, c.width, c.height);
+      c.height = Math.min(2048, Math.max(y + 1, c.height * 2)); ctx.putImageData(keep, 0, 0);
+    }
+    const n = Math.min(w, c.width), row = ctx.createImageData(n, 1);
+    for (let x = 0; x < n; x++) {
+      const o = x * 4;
+      if (rgb) { row.data[o] = px[x * 3] ?? 0; row.data[o + 1] = px[x * 3 + 1] ?? 0; row.data[o + 2] = px[x * 3 + 2] ?? 0; }
+      else { const v = px[x] ?? 0; row.data[o] = v; row.data[o + 1] = v; row.data[o + 2] = v; }
+      row.data[o + 3] = 255;
+    }
+    ctx.putImageData(row, 0, y);
+    if (!this.bPicture) { this.bPicture = true; if (this.open) this.render(); }
+  }
+  bImageDone() { if (!this.vfob) return; this.bPictureDone = true; if (this.open) this.paintPick(); }
   onList(l: SatList) {
     const wasFetching = this.list?.source?.fetching;
     this.list = l;
@@ -324,7 +408,7 @@ export class SatPanel {
   onPicked(p: SatPicked) {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
-    if (changed) { this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
+    if (changed) { this.aText = ''; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t);
@@ -392,6 +476,9 @@ export class SatPanel {
   }
 
   private onClick(e: Event) {
+    // ★★★ beta92 the line switch — a tap on A's or B's line chooses which decoder the box shows (only while it exists)
+    const ln = (e.target as HTMLElement).closest('[data-act="view"]') as HTMLElement | null;
+    if (ln && ln.classList.contains('sw')) { this.view = ln.dataset.v === 'B' ? 'B' : 'A'; this.paintPick(); return; }
     const b = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null;
     if (!b || b.disabled) return;
     const act = b.dataset.act;
@@ -399,6 +486,7 @@ export class SatPanel {
     if (act === 'min') { this.setMin(!this.min); return; }
     if (act === 'size') { this.setBig(!this.big, true); return; }
     if (act === 'map') { this.openMap(); return; }
+    if (act === 'vfob') { if (this.picked && this.deps.vfobOpen) { this.refusal = ''; this.deps.vfobOpen(this.picked.norad, Number(b.dataset.tx)); } return; }
     if (act === 'tlmraw') { this.tlmRaw = !this.tlmRaw; if (this.tlmRaw) this.tlmCharts = false; this.paintPick(); return; }
     if (act === 'tlmcharts') { this.tlmCharts = !this.tlmCharts; if (this.tlmCharts) { this.tlmRaw = false; this.tlmLoad(); } this.paintPick(); return; }
     if (act === 'tlmall') { this.tlmAll = !this.tlmAll; this.paintPick(); return; }
@@ -550,21 +638,36 @@ export class SatPanel {
     this.sCd.textContent = satCountdownText(sat, now, this.track && this.track.norad === sat.norad ? this.track.geo : null);
     const use = txUse(t);
     const lockWord = !this.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
-    const decWord = this.decLine || (this.picked?.decoder === 'fctlm' ? 'listening for telemetry' : use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : t.sstv ? 'listening — an SSTV picture opens here' : '');
-    this.sState.textContent = [lockWord, decWord].filter(Boolean).join(' · ');
+    // ★ beta92: a CW beacon says its CW decoder is listening for the beacon (it said "listening for packets") — satDecWord
+    const decWord = this.decLine || satDecWord(this.picked?.decoder, use, t.sstv, big);
+    // ★★★ beta92 OPEN IN VFO B — B's line and the line switch; with no B this is exactly the one-downlink box
+    const vb = this.vfob && this.vfob.on ? this.vfob : null;
+    const sw = satViewSwitch(this.picked?.decoder, vb);
+    const shown = satViewShown(this.picked?.decoder, vb, this.view);
+    const aLine = [lockWord, decWord].filter(Boolean).join(' · ');
+    const aText = sw ? `VFO A · ${aLine || t.label}` : aLine;
+    if (this.sState.textContent !== aText) this.sState.textContent = aText;
+    this.sState.classList.toggle('sw', sw); this.sState.classList.toggle('on', sw && shown === 'A');
+    if (sw) { this.sState.dataset.act = 'view'; this.sState.dataset.v = 'A'; this.sState.setAttribute('role', 'button'); this.sState.title = 'Show VFO A\'s decoder in the box'; }
+    else { delete this.sState.dataset.act; this.sState.removeAttribute('role'); this.sState.removeAttribute('title'); }
+    const showA = shown === 'A';
     // big: the decoder box's image canvas, lent to this window (the live preview, the finished picture at pass end)
-    this.lend(big && imageKind);
-    this.sImg.hidden = !(big && imageKind);
+    this.lend(big && imageKind && showA);
+    this.sImg.hidden = !(big && imageKind && showA);
+    // ★ beta92 A CW beacon's decoded text, as CW shows it elsewhere (the last few lines)
+    const cwA = showA && this.picked?.decoder === 'cw';
+    this.sCw.hidden = !cwA;
+    if (cwA) { const ct = satCwTail(this.aText) || 'no characters yet'; if (this.sCw.textContent !== ct) this.sCw.textContent = ct; }
     /* ★★ beta91 (Stuart's Meteor-M2-4 pass 2026-11-22: "picture complete — saved to the gallery" for minutes while the
      *  satellite was still strong and the receiver hunting again): LRPT's own line is the LIVE state and says a filed pass
      *  itself ("last pass saved to the gallery · …", src/services/lrpt.ts) — so it wins. SSTV keeps the words. */
     if (this.pictureDone && imageKind && !(this.picked?.decoder === 'lrpt' && this.decLine)) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
     // packet: the APRS lines
-    const pkt = use === 'packet' && this.picked?.decoder !== 'fctlm';   // ★ a telemetry downlink shows its values, not packet lines
+    const pkt = showA && use === 'packet' && this.picked?.decoder !== 'fctlm' && this.picked?.decoder !== 'cw';   // ★ telemetry shows values; CW its text
     this.sPk.hidden = !pkt;
     if (pkt) this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
     // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
-    const tl = this.picked?.decoder === 'fctlm' || !!this.tlm?.values.length;
+    const tl = showA && (this.picked?.decoder === 'fctlm' || !!this.tlm?.values.length);
     this.sTlm.hidden = !tl;
     if (tl) {
       const hex = satTelemetryHex(this.tlm);
@@ -578,8 +681,42 @@ export class SatPanel {
     }
     // ★★ 1.9 the MAP key — a packet downlink, once a station with a position is heard (no dead key)
     this.sMap.hidden = !satMapOffered(t, this.deps.mapStations?.() ?? 0) || !this.deps.openMap;
+    // ★★★ beta92 after A's area: B's line, and B's area when B's line is the one shown (A's parts are hidden then)
+    this.paintVfoB(sat, mine, big, sw, shown);
     this.askTrack();
     this.drawGlobe(sat);
+  }
+
+  /** ★★★ beta92 the VFO B part of the box: OPEN IN VFO B key(s) for the downlinks the server offered, B's line once it is
+   *  open (its frequency with the Doppler, its decoder's words), and — when B's line is the one shown — B's decoder area. */
+  private paintVfoB(sat: SatInfo, r: SatReadout | null, big: boolean, sw: boolean, shown: 'A' | 'B') {
+    const vb = this.vfob && this.vfob.on ? this.vfob : null;
+    const offers = this.deps.vfobOpen ? satVfoBOffers(this.picked, sat, vb) : [];
+    let h = '';
+    if (vb) {
+      const tb = sat.tx[vb.tx];
+      const word = this.bStatus || (vb.decoderWhy ? `decoder: ${vb.decoderWhy}` : satDecWord(vb.decoder, vb.use ?? (tb ? txUse(tb) : 'voice'), tb?.sstv, big));
+      const line = [satVfoBLine(vb, tb?.label, r), word].filter(Boolean).join(' · ');
+      h += sw ? `<div class="sat-dim sat-ln sw${shown === 'B' ? ' on' : ''}" data-act="view" data-v="B" role="button" title="Show VFO B's decoder in the box">${esc(line)}</div>`
+              : `<div class="sat-dim sat-ln">${esc(line)}</div>`;
+    }
+    for (const o of offers)
+      h += `<button class="sat-vbk" data-act="vfob" data-tx="${o.i}" title="${esc(`${o.tx.label} on VFO B, with its decoder and the same Doppler correction — close it with VFO A/B on the frequency card`)}">${esc(`${SAT_VFOB_KEY} · ${o.tx.label}`)}</button>`;
+    if (h !== this.vbKey) { this.vbKey = h; this.sVb.innerHTML = h; }
+    this.sVb.hidden = !h;
+    // B's decoder area (only while B's line is the one shown)
+    const showB = !!vb && shown === 'B';
+    const v = showB ? satDecView(vb!.decoder) : '';
+    this.sBImg.hidden = !(v === 'image' && big && (this.bPicture || this.bPictureDone));
+    if (v === 'text' || v === 'telemetry') {
+      this.sCw.hidden = false;
+      const ct = satCwTail(this.bText, v === 'telemetry' ? 6 : 4) || (v === 'text' ? 'no characters yet' : 'no frames yet');
+      if (this.sCw.textContent !== ct) this.sCw.textContent = ct;
+    }
+    if (v === 'packet') {
+      this.sPk.hidden = false;
+      this.sPk.innerHTML = this.bPackets.length ? this.bPackets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
+    }
   }
 
   /** ★ 1.7 the pass's path — asked once per pick (the pass in progress, else the next) and again when the next begins. */
