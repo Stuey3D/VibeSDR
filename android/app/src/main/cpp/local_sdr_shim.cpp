@@ -33679,10 +33679,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const auto wd = ch->wanted();
                 const auto g = ch->gate();
                 snprintf(b, sizeof b, "%s{\"id\":%d,\"freq\":%.0f,\"mode\":\"%s\",\"bw\":%.0f,\"sqlOn\":%s,\"sql\":%.1f,"
-                                      "\"open\":%s,\"since\":%.0f,\"lvl\":%.1f,\"parked\":%s,\"mute\":%s}",
+                                      "\"open\":%s,\"since\":%.0f,\"lvl\":%.1f,\"parked\":%s,\"mute\":%s,\"shift\":%.1f}",
                          first ? "" : ",", ch->id(), wd.hz, jsonEscape(wd.mode).c_str(), wd.bwHz, g.on ? "true" : "false",
                          (double)g.db, g.open ? "true" : "false", g.changedAt, (double)ch->levelDb(), ch->parked() ? "true" : "false",
-                         ch->muted() ? "true" : "false");
+                         ch->muted() ? "true" : "false", ch->shiftHz());   // ★★ beta92 shift: a satellite VFO B's Doppler (0 otherwise)
                 j += b; first = false;
             }
             j += "]";

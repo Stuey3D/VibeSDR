@@ -11,6 +11,7 @@
 // §5 a linear transponder (RS-44): model only, no jump on engagement, the loop ignored.
 // §6 nudges and deliberate tunes; refusals (no location, NO TIME, old elements, nothing near).
 // §7 the loop's lag sums: the SIMD build equals the scalar lane order exactly; cost.
+// §14 beta92 OPEN IN VFO B: A's shift × fB / fA equals the model's Doppler at B's frequency (RS-44 beacon, ISS APRS).
 #include "vibe_sat_engine.h"
 #include "vibe_bgdecode_config.h"   // ★ beta90 §13: the unattended passes' setting
 
@@ -619,11 +620,39 @@ static void s13(const std::string& dir) {
     CHECK(!e->passAt(44909, p.los + 60, p) || p.aos > kRsTca, "…and not after its LOS");
 }
 
+/** ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): VFO B takes A's shift × fB / fA. That is exactly the model's Doppler
+ *  at B's own frequency (a Doppler shift is proportional to the frequency), over a whole RS-44 pass with A on the
+ *  transponder and B on the CW beacon, and over an ISS pass with A on 145.800 and B on 145.825 — and the beacon stays
+ *  inside the swing the server allows for when it offers the key (2.7e-5·f + the trim clamp). */
+static void s14(const std::string& dir) {
+    std::printf("§14 beta92 VFO B: A's shift × fB / fA = the model at B's frequency\n");
+    struct Case { const char* name; long long norad; double aDial; const char* mode; double bHz; double t0, t1; double lat, lon; };
+    const Case cs[] = { {"RS-44 transponder + CW beacon", 44909, 435640000, "usb", 435605000, kRsTca - 300, kRsTca + 300, kIoLat, kIoLon},
+                        {"ISS 145.800 + APRS 145.825", 25544, 145800000, "nfm", 145825000, kIssAos + 20, kIssTca + 200, kSaoLat, kSaoLon} };
+    for (const Case& c : cs) {
+        std::unique_ptr<Engine> e(makeEngine(dir, c.lat, c.lon));
+        Track t = e->start("B", "o", c.aDial, c.mode, Clock{c.t0, true}, c.norad);
+        CHECK(t.state == LockState::Track, "%s: A locks (%s)", c.name, lockName(t.state));
+        double worst = 0, peak = 0;
+        for (double tt = c.t0; tt < c.t1; tt += 1.0) {
+            Track x = e->tick("B", Clock{tt, true});
+            if (x.state != LockState::Track) continue;
+            const double b = x.shiftHz * c.bHz / x.nominalHz;   // ★ the server's satVfoBShiftNow
+            double m = 0, r = 0;
+            e->dopplerFor(c.norad, c.bHz, tt, m, r);
+            worst = std::max(worst, std::fabs(b - (m + x.trimHz * c.bHz / x.nominalHz)));
+            peak = std::max(peak, std::fabs(b));
+        }
+        CHECK(worst < 0.5, "%s: B's scaled shift = the model at %.3f MHz (worst %.3f Hz)", c.name, c.bHz / 1e6, worst);
+        CHECK(peak > 1000 && peak < c.bHz * 2.7e-5, "%s: a real Doppler, inside the offer's swing (peak %.0f Hz < %.0f)", c.name, peak, c.bHz * 2.7e-5);
+    }
+}
+
 int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
     if (readFile(dir + "/celestrak-amateur-2026-11-19.json").empty()) { std::printf("data missing\n"); return 3; }
-    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir); s12(dir); s13(dir);
+    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir); s12(dir); s13(dir); s14(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
