@@ -5864,8 +5864,7 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     }
     const int band = SdrplaySource::lnaBandId(centreHz);
     if (centreHz != st.lastCentre || dab != st.lastDab || dabBlock != st.lastDabBlk || rate != st.lastRate) {
-        // ★ beta91: a retune out of the capture is a new band to the AGC too (vagcBigRetune — MW → 40 m on an RSP1A)
-        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab || vibersp::vagcBigRetune(st.lastCentre, centreHz, rate));
+        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab);
         st.lastCentre = centreHz; st.lastDab = dab; st.lastDabBlk = dabBlock; st.lastRate = rate; st.lastBand = band;
     }
     // ── the landed test, 1 s after an LNA write: the API's own gainVals.curr must have moved ──
@@ -5926,7 +5925,7 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     vibersp::VagcIn in;
     in.now = now; in.windows = sdrp->adcWindows(); in.peak = sdrp->adcPeakDbfs(); in.clipPct = sdrp->adcClipPct();
     in.overload = sdrp->overloadReal(); in.nStates = std::max(1, sdrp->lnaStateCount()); in.lnaFloor = lnaFloor;
-    in.rfOwned = rfOwned; in.band = band; in.centreHz = centreHz;   // ★ beta91 LW/MW starts one rung in (vagcStartState)
+    in.rfOwned = rfOwned; in.band = band;
     { const int f = LocalSdrShim::ifGrFloorAt(centreHz); if (f >= 20) in.grFloor = f; }   // ★ the owner's IF cap holds here too
     for (int q = 0; q < std::min(28, in.nStates); ++q) {
         const float g = sdrp->lnaGainDb(q);
@@ -5943,6 +5942,7 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
              in.peak, st.agc.acquiring() ? " (acquiring)" : "");
         st.minuteFrom = now; st.wAtMinute = st.agc.writes(); st.ifAtMinute = st.agc.ifWrites(); st.lnaAtMinute = st.agc.lnaWrites();
     }
+    if (o.note[0]) LOGI("VibeAGC (RSP): %s", o.note);
     if (!o.write) return false;
     // ── tell the smoother, then write ONE Update ──
     if (o.lnaChanged) vagcPostKnown(true, o.expectDb - o.ifDb, o.ifDb);          // the rung (approximate) + the IF (exact)

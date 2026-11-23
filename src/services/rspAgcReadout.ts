@@ -50,13 +50,14 @@ export const CLEAR_MS = 10_000;    // …and until the cause has been gone this 
 /** VibeAGC's states (rspstat `vst`). */
 export const VST_OFF = 0, VST_SETTLING = 1, VST_HOLDING = 2, VST_CUT = 3, VST_ADD = 4, VST_HANDED_BACK = 5;
 
-/** rspstat `vrs` in words — vibe_rsp_vibeagc.h VagcAct (1-7) and the shim's trip codes (11-14). Append only. */
+/** rspstat `vrs` in words — vibe_rsp_vibeagc.h VagcAct (1-8) and the shim's trip codes (11-14). Append only. */
 export function vagcReasonText(code: number | undefined): string {
   switch (code) {
     case 1: return 'the IF was at its 59 dB rail and the converter still hot';
     case 2: return 'the converter was clipping with the IF nearly spent';
     case 3: return 'the IF reduction sat over the front-end load line';
     case 4: return 'the IF had room for a whole rung';
+    case 8: return 'one rung from full attenuation, to measure the level';
     case 11: return 'the SDRplay API reported a device failure';
     case 12: return 'the RSP service stopped answering';
     case 13: return 'the driver rejected 3 gain writes';
