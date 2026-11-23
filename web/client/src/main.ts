@@ -60,7 +60,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
-import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
+import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -10433,20 +10433,31 @@ function satPanelGet(): SatPanel | null {
  *  choice with the same attach a decoder key sends (the same decoder: the server keeps it running). The decoder box itself
  *  stays shut: the SATELLITE window is the box (its image canvas is lent there, satLendImage). '' = none (voice). */
 let satDec: SatPicked['decoder'] = '';
+/** ★★ beta92 the decoder key a pick's decoder runs under: a skimmed CW beacon ('cwskim') is CW's (the skimmer is CW's). */
+const satDecKey = (d: SatPicked['decoder']) => (d === 'cwskim' ? 'cw' : d);
+let satBeaconOn = false;   // ★★ beta92 the cwskim attach is the pick's (not the CW key's own skimmer setting)
 function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
-  if (satDec && activeDec === satDec && d !== satDec) stopDecoder();
+  if (satDec && activeDec === satDecKey(satDec) && d !== satDec) stopDecoder();
   satDec = d;
-  if (!d || !t || !decoders) return;
-  if (activeDec === d) return;
+  if (!d || !t || !decoders) { satBeaconOn = false; return; }
+  if (activeDec === satDecKey(d) && (d !== 'cwskim' || satBeaconOn)) return;
   if (activeDec) stopDecoder();
   if (d === 'aprs') { packetMode = satPacketBaud(t); aprsBaud = 1200; aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; }
   decVfo = 'A';
-  activeDec = d;
+  activeDec = satDecKey(d) as Exclude<typeof activeDec, null>;
   decTuneHint = '';
   if (d === 'lrpt' || d === 'sstv') { clearDecImage(''); $('decImage').classList.add('on'); }
   // ★ beta92: a CW beacon is the server's ONE-SIGNAL CW decoder — never the skimmer the CW key may be set to (that
   //   would replace the pick's decoder with another one)
+  satBeaconOn = d === 'cwskim';
   if (d === 'cw') decoders.attach('cw', {}, decVfo);
+  /* ★★ beta92 a CW beacon is SKIMMED: the server's 24 kHz CW skimmer centred on the corrected prediction — the same attach,
+   *  so this JOINS it — and the audio passband centred on the prediction, ±3 kHz (the server set the same edges), so the
+   *  beacon is heard either side of a figure a few kHz out. */
+  else if (d === 'cwskim') {
+    decoders.attach('cwskim', { width: SAT_BEACON_SKIM_HZ }, decVfo);
+    spec?.setBandwidth(-SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_AUDIO_HALF_HZ);
+  }
   else decoders.attach(decExt(d), decParams(d), decVfo);
   syncDecButtons();
 }
@@ -10475,7 +10486,11 @@ function satVfoBDecoder(b: SatVfoB | null) {
   const panel = () => satPanel;
   const dc = new DecoderClient(decHostAuth.host, decHostAuth.auth, {
     onText: (t: string) => panel()?.bTextAdd(t),
-    onState: (st: number) => { if (b.decoder === 'cw') panel()?.bState(st >= 3 ? 'CW decoder reading the beacon' : st ? 'CW decoder: a signal — syncing' : ''); },
+    onState: (st: number) => {
+      if (b.decoder === 'cw') panel()?.bState(st >= 3 ? 'CW decoder reading the beacon' : st ? 'CW decoder: a signal — syncing' : '');
+      if (b.decoder === 'cwskim') panel()?.bState(st >= 3 ? 'CW skimmer reading the beacon' : st ? 'CW skimmer: a signal — syncing' : '');   // ★★ beta92
+    },
+    onCwSignals: (l) => panel()?.bBeaconList(l),   // ★★ beta92 a beacon on VFO B is skimmed too
     onStatus: (t: string) => panel()?.bState(t),
     onSstvMode: (name: string) => panel()?.bState(`SSTV · ${name}`),
     onImageStart: (w: number, h: number) => panel()?.bImageStart(w, h),
@@ -14824,6 +14839,8 @@ function initDecoders(host: string, auth: AuthState) {
     },
     //   (PSK's arrive here too, with its mode — decoders.ts; one list box serves both)
     onCwSignals: (list) => {
+      // ★★ beta92 a skimmed CW beacon picked in SATELLITE: its signals in the box, nearest the prediction first
+      if (satDec === 'cwskim' && activeDec === 'cw') satPanel?.beaconList(list);
       if (!kbOn()) return;
       // ★ the RTTY skimmer: each signal's window joined onto its history, for the card
       if (activeDec === 'rtty') for (const s of list.signals) if (s.rtty?.set && s.text) rttyHist.set(s.id, rttyJoin(rttyHist.get(s.id) ?? '', s.text));

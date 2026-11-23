@@ -359,6 +359,34 @@ int main() {
         ok(DecoderHost::skimmersRunning().load() == before && !h.wantsIq(), "stopped: no longer counted, no longer wants IQ");
         h.shutdown();
     }
+    // ── ★★ beta92 a SATELLITE CW BEACON: the host AIMED (setIqAim) — the slice cut 2 kHz off the aim, the beacon 2 kHz below it ──
+    {
+        DecoderHost::Env e;
+        DecoderHost h(e, "s3");
+        auto p = std::make_shared<Peer>(); h.addPeer(p);
+        ok(h.start("cwskim", "{\"type\":\"audio_extension_attach\",\"extension_name\":\"cwskim\",\"width\":24000}") == DecoderHost::Start::Ok
+           && std::fabs(h.iqWidthHz() - 24000) < 1, "a beacon pick's attach: cwskim, 24 kHz");
+        const double cut = 435609000.0, aim = 435607000.0;   // the slice's whole-bin centre; the corrected prediction
+        h.setIqAim(aim);
+        ok(h.iqAim() == aim, "setIqAim holds the corrected frequency");
+        Rng rng(78); std::vector<Tone> ts;
+        Keying k; k.wpm = 22; std::string s; for (int r = 0; r < 4; ++r) s += "CQ DE G4ABC G4ABC K  ";
+        Tone t; t.hz = (aim - 2000.0) - cut; t.snrDb = 6; t.env = keyEnvelope(s, k, 37500, rng); ts.push_back(t);
+        std::vector<cf> iq; std::vector<float> re; synth(ts, 37500, true, t.env.size() / 37500.0, rng, iq, re);
+        for (size_t i = 0; i < iq.size(); i += 2048) {
+            h.feedIq(iq.data() + i, (int)std::min<size_t>(2048, iq.size() - i), 37500, cut);
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        for (int w = 0; w < 300 && p->count("G4ABC") == 0; ++w) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        h.feedIq(iq.data(), 256, 37500, cut);
+        for (int w = 0; w < 100 && p->count("\"aim\":true") == 0; ++w) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        ok(p->count("\"aim\":true") >= 1 && p->count("\"centre\":435607000") >= 1, "the list is centred on the aim and says so (\"aim\":true)");
+        ok(p->count("\"frequency\":435605000") >= 1 || p->count("\"hz\":435605000") >= 1, "the beacon is placed 2 kHz below the prediction (435.605 000)");
+        h.setIqAim(0);
+        ok(h.iqAim() == 0, "the lock's end clears the aim");
+        h.stop(); h.shutdown();
+    }
     // ── the gallery's CW summary ──
     {
         gallery::Store st; const std::string dir = tmpDir("gal"); st.setDir(dir);

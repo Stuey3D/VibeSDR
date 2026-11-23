@@ -107,6 +107,9 @@ ok(satCapFrom({ doppler: 1, dopplerWhy: 'NO SAT DATA — the satellite orbit dat
   ok(!!evil && evil.decoder === '' && (evil.label || '').length <= 60 && !/\u0000/.test(evil.label || '') && String(evil.params.a).length === 24, 'bounded: an unknown decoder is none, text cut, controls out');
   const p = parseSatPicked(JSON.parse('{"type":"sat","state":"picked","shared":true,"norad":44909,"tx":0,"decoder":"","doppler":true,"hz":435640000,"mode":"usb","use":"voice","name":"RS-44","label":"Transponder","lo":435610000,"hi":435670000,"band":"V/u","vfob":[1],"time":"ok"}'));
   ok(JSON.stringify(p?.vfob) === '[1]', 'picked with vfob (the real server) parsed');
+  // ★★ beta92 a beacon is SKIMMED: B's attach parameters carry the skimmer's width (the app's B socket joins with them)
+  const bs = parseSatVfoB(JSON.parse('{"type":"sat_vfob","on":true,"norad":44909,"tx":1,"hz":435605000,"mode":"cw","use":"packet","label":"CW beacon","decoder":"cwskim","params":{"width":24000},"shift":-5041.5}'));
+  ok(!!bs && bs.decoder === 'cwskim' && bs.params.width === 24000, 'sat_vfob with the CW skimmer (beta92, the real server) parsed — decoder cwskim, width 24000');
 }
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');

@@ -67,8 +67,31 @@ public:
         after();
     }
     /** A skimmer's IQ: `rate` Hz, centred on `centreRfHz`. A different rate rebuilds the engine (a radio rate change). */
-    void feedIq(const cf32* x, int n, double rate, double centreRfHz) {
+    /** ★★ beta92 `aimRfHz` (> 0): a SATELLITE lock's corrected frequency (DecoderHost::setIqAim). The slice is cut on whole
+     *  bins near it; the difference is mixed out here with a phase-continuous oscillator, so the segment is centred EXACTLY
+     *  on the aim and moves with the Doppler — a beacon keeps one offset from the prediction all pass (no 146 Hz steps, no
+     *  drift through the window). While aimed, a signal's RF is the aim + its offset (it rides with the pass), never pinned
+     *  where it was first heard. An aim further than a quarter of the slice's rate from its centre is not used. */
+    void feedIq(const cf32* x, int n, double rate, double centreRfHz, double aimRfHz = 0) {
         if (!skim_ || n <= 0 || !(rate > 0)) return;
+        const bool aimed = aimRfHz > 0 && std::isfinite(aimRfHz) && std::fabs(aimRfHz - centreRfHz) < rate * 0.25;
+        if (aimed) {
+            const double d = aimRfHz - centreRfHz;
+            if (mix_.size() < (size_t)n) mix_.resize((size_t)n);
+            // ★ a phasor stepped by multiplication (cheap), its phase carried between blocks, renormalised every block
+            const double w = -2.0 * 3.14159265358979323846 * d / rate;
+            const std::complex<double> step(std::cos(w), std::sin(w));
+            std::complex<double> ph = mixPh_;
+            for (int i = 0; i < n; ++i) {
+                mix_[(size_t)i] = cf32((float)(x[i].real() * ph.real() - x[i].imag() * ph.imag()),
+                                       (float)(x[i].real() * ph.imag() + x[i].imag() * ph.real()));
+                ph *= step;
+            }
+            mixPh_ = ph / std::abs(ph);
+            x = mix_.data();
+            centreRfHz = aimRfHz;
+        }
+        aimed_ = aimed;
         if (!sk_ || std::fabs(rate - rate_) > 0.5) {
             cw::Skimmer::Config c;
             c.rate = rate; c.complexIn = true;
@@ -87,6 +110,7 @@ public:
         //    tune to it) keeps the list, and each signal already known keeps the RF it was heard at (pinned_); only
         //    signals found after the move are placed against the new centre.
             if (std::fabs(centreRfHz - centre_) >= std::min(width_, rate * 0.94) / 2.0) { build(cfg_); lastListAt_ = 0; }
+            else if (aimed) { pinned_.clear(); }   // ★ beta92 following a satellite: the signals ride with the window
             else {
                 const auto now = sk_->signals(true);
                 std::unordered_map<int, double> keep;   // ★ only signals still listed: the map cannot grow without end
@@ -200,6 +224,9 @@ private:
         std::string j = std::string("{\"type\":\"cw_signals\",\"data\":{\"skimmer\":") + (skim_ ? "true" : "false");
         char b[256];
         if (skim_) { std::snprintf(b, sizeof b, ",\"centre\":%.0f,\"width\":%.0f", centre_, searchedHz()); j += b; }
+        // ★★ beta92 "aim": the segment is centred on a satellite lock's corrected frequency (each signal's hz − centre is
+        //    its offset from the prediction — the SATELLITE box shows it)
+        if (skim_ && aimed_) j += ",\"aim\":true";
         std::snprintf(b, sizeof b, ",\"primary\":%d,\"signals\":[", skim_ ? 0 : primary_); j += b;
         int n = 0;
         for (auto& s : v) {
@@ -231,6 +258,9 @@ private:
     double rate_ = 0, centre_ = 0;
     cw::Skimmer::Config cfg_;
     std::unordered_map<int, double> pinned_;   // id → RF heard at, for signals found before a small move
+    std::vector<cf32> mix_;                    // ★ beta92 the aimed block (feedIq's mix)
+    std::complex<double> mixPh_{1.0, 0.0};
+    bool aimed_ = false;
     int primary_ = 0, challenger_ = 0; double primaryOff_ = 0; int64_t challengeAt_ = 0;
     std::string pend_, lastList_;
     int64_t lastTick_ = 0, lastListAt_ = 0;

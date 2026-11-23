@@ -34,6 +34,7 @@ import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowP
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          satCwTail, satDecView, satDecWord, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY,
+         satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList,
          type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB } from '../services/satellites';
 
 const SAT_MAX_W = 760;
@@ -91,6 +92,10 @@ export interface SatellitePanelProps {
   onMap?: () => void;
   /** ★ beta92 a CW beacon picked on A: its decoded characters (the pick's own CW decoder) */
   cwText?: string;
+  /** ★★ beta92 a SKIMMED CW beacon ('cwskim'): the skimmer's list on A and on B — shown nearest the prediction first, each
+   *  with its offset from it (satBeaconText) */
+  beacon?: SatBeaconList | null;
+  bBeacon?: SatBeaconList | null;
   /** ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server's word on B (on), what B's decoder has said (its text,
    *  packet lines, own status, a picture started), the canvas B's picture draws on, and the key's press. */
   vfob?: SatVfoB | null;
@@ -371,6 +376,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               {confirmed && showA && p.picked?.decoder === 'cw' && (
                 <View style={s.pk}><Text style={s.mono} selectable>{satCwTail(p.cwText ?? '') || 'no characters yet'}</Text></View>
               )}
+              {/* ★★ beta92 a skimmed beacon: the signals in its 24 kHz, nearest the prediction first, each with its offset */}
+              {confirmed && showA && p.picked?.decoder === 'cwskim' && (
+                <View style={s.pk}><Text style={s.mono} selectable>{satBeaconText(p.beacon) || SAT_BEACON_EMPTY}</Text></View>
+              )}
               {confirmed && showA && tlmDec && (
                 <View style={s.pk}>
                   <View style={s.nameRow}>
@@ -390,7 +399,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>}
                 </View>
               )}
-              {confirmed && showA && use === 'packet' && !tlmDec && p.picked?.decoder !== 'cw' && (
+              {confirmed && showA && use === 'packet' && !tlmDec && satDecView(p.picked?.decoder) !== 'text' && (
                 <View style={s.pk}>
                   {p.packets.length ? p.packets.slice(0, 12).map((l, i) => <Text key={i} style={s.mono} numberOfLines={2}>{l}</Text>)
                     : <Text style={s.detail}>no packets yet</Text>}
@@ -406,7 +415,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 </View>
               )}
               {(bView === 'text' || bView === 'telemetry') && (
-                <View style={s.pk}><Text style={s.mono} selectable>{satCwTail(p.bText ?? '', bView === 'telemetry' ? 6 : 4) || (bView === 'text' ? 'no characters yet' : 'no frames yet')}</Text></View>
+                <View style={s.pk}><Text style={s.mono} selectable>{vb?.decoder === 'cwskim' ? satBeaconText(p.bBeacon) || SAT_BEACON_EMPTY
+                  : satCwTail(p.bText ?? '', bView === 'telemetry' ? 6 : 4) || (bView === 'text' ? 'no characters yet' : 'no frames yet')}</Text></View>
               )}
               {bView === 'packet' && (
                 <View style={s.pk}>

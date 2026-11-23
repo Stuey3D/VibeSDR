@@ -292,13 +292,19 @@ inline double listenOffsetHz(const Transmitter& t) {
 /** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz) — plus the decoder's
  *  listening offset (listenOffsetHz). */
 inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre() + listenOffsetHz(t)); }
+/** ★★ beta92: the CW skimmer's window for a satellite CW beacon (Hz) — wide enough for a prediction a few kHz out at UHF. */
+constexpr double kBeaconSkimHz = 24000.0;
+/** ★★ beta92: half the CW passband a beacon pick listens with, centred on the prediction (so ±3 kHz is heard). */
+constexpr double kBeaconAudioHalfHz = 3000.0;
+/** ★★ beta92: a downlink whose pick runs the CW skimmer over kBeaconSkimHz (a satellite CW beacon). */
+inline bool beaconSkimmed(const Transmitter& t) { return t.mode == "cw" && t.consumer.empty(); }
 /** The decoder a pick attaches and its attach parameters (the JSON body after the extension name, "" = none) — the
  *  same parameters the clients' own keys send, so a client that later attaches the same decoder JOINS it (DecoderHost
  *  start: the same ext + paramsOf = Joined, nothing restarted).
  *   · image / lrpt → "lrpt", AUTO modulation and coding, the symbol rate from the satellite's entry (72k / 80k)
  *   · packet → "aprs" at the downlink's baud ("packet":"1200" | "9600")
  *   · voice with sstv → "sstv" (auto-sync; it waits quietly between pictures)
- *   · a CW beacon → "cw" · FUNcube telemetry (fc-bpsk) → "fctlm" (beta90)
+ *   · a CW beacon → "cwskim" over 24 kHz (beta92; beta90–91 ran "cw") · FUNcube telemetry (fc-bpsk) → "fctlm" (beta90)
  *   · voice → "" (nothing to decode). */
 inline std::string decoderOf(const Transmitter& t, std::string& params) {
     params.clear();
@@ -310,7 +316,12 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     if (t.consumer == "ax25-9600") { params = "\"packet\":\"9600\",\"baud_rate\":1200"; return "aprs"; }
     if (t.consumer == "ax25-1200" || t.consumer.rfind("ax25", 0) == 0) { params = "\"packet\":\"1200\",\"baud_rate\":1200"; return "aprs"; }
     if (t.consumer == "fc-bpsk") return "fctlm";                 // ★ beta90 1.2: FUNcube BPSK 1200, AUTO (no parameters)
-    if (t.mode == "cw" && t.consumer.empty()) return "cw";       // ★ beta90 1.1: the CW beacon, the listener's CW run
+    /* ★★ beta92 THE CW BEACON IS SKIMMED (Stuart 11-23, RS-44 on the Pi 500's RTL-SDR V4: the beacon sat ~2 kHz below the
+     *  prediction — catalogue figure, dongle error, orbit age — outside the one-signal CW passband, and nothing decoded:
+     *  "treat it like the cw skimmer and have a wider filter of say 24k"). The CW SKIMMER over kBeaconSkimHz of IQ centred
+     *  on the Doppler-corrected prediction (the host's IQ aim, DecoderHost::setIqAim — the window follows the pass), so a
+     *  beacon a few kHz off the figure is still read, and its offset from the prediction is shown. */
+    if (beaconSkimmed(t)) { params ="\"width\":" + std::to_string((int)kBeaconSkimHz); return "cwskim"; }
     if (sstvOf(t)) return "sstv";
     return "";
 }

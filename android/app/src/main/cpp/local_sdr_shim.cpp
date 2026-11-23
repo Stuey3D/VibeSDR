@@ -9901,6 +9901,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<cf32> bandX[vibe::kMaxExtraSlices];
         vibedsp::Channelizer::ExtractCtx bandXctx[vibe::kMaxExtraSlices];
         std::vector<float> bandXpw;
+        double aimHz = 0;   // ★★ beta92 the centre held while the host is aimed (vibe::skimAimCentre); 0 = not aimed
     };
     struct WatchSet {
         std::string session;
@@ -11287,6 +11288,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  false: the listener is tuning away themselves — their own tune follows, and a config now would fight it. */
     void satEndListener(const std::shared_ptr<ClientDsp>& c, const std::string& why, bool freezeAndTell) {
         satEngine().stop(c->session);
+        if (auto h = decoders_.find(c->session)) h->setIqAim(0);   // ★★ beta92 a skimmer goes back to the dial
         {
             std::lock_guard<std::mutex> lk(c->mtx);
             if (freezeAndTell) c->vfoHz = std::round(c->vfoHz + c->satShiftHz);
@@ -11328,6 +11330,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     void satEndShared(const std::string& why, bool freezeAndTell) {
         satEngine().stop(kSatShared);
+        if (auto h = decoders_.shared()) h->setIqAim(0);   // ★★ beta92 a skimmer goes back to the dial
         const double actual = audioFreq.load() + satSharedShift_.load();
         satSharedShift_.store(0.0);
         satSharedSent_.clear();
@@ -11362,6 +11365,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         satSharedShift_.store(moving ? t.shiftHz : 0.0);
                         if (useIcom()) { if (moving) satIcomStep(t.nominalHz + t.shiftHz); }
                         else satApplyShared();
+                        // ★★ beta92 the room's skimmer (a CW beacon pick) centred on the corrected frequency (setIqAim)
+                        if (auto h = decoders_.shared(); h && !useIcom()) h->setIqAim(audioFreq.load() + (moving ? t.shiftHz : 0.0));
                         // ★ the readout twice a second, at once on a state change (TRACK ↔ COAST, ARMED → TRACK)
                         const std::string st = vibe::sat::lockName(t.state);
                         if (st != satSharedSent_ || mono - satSharedSentAt_ >= 0.5) {
@@ -11376,10 +11381,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         std::lock_guard<std::mutex> lk(clientMtx);
                         for (auto& kv : clientDsp) if (kv.second && kv.second->session == key) { c = kv.second; break; }
                     }
-                    if (!c) { satEngine().stop(key); continue; }   // ★ the listener's channel has gone: so has their lock
+                    if (!c) { satEngine().stop(key); if (auto h = decoders_.find(key)) h->setIqAim(0); continue; }   // ★ the listener's channel has gone: so has their lock
                     if (t.state == vibe::sat::LockState::Ended) { satEndListener(c, t.why, true); continue; }
-                    { std::lock_guard<std::mutex> lk(c->mtx); c->satShiftHz = moving ? t.shiftHz : 0.0; }
+                    double aimHz;
+                    { std::lock_guard<std::mutex> lk(c->mtx); c->satShiftHz = moving ? t.shiftHz : 0.0; aimHz = c->vfoHz + c->satShiftHz; }
                     satApplyClient(c.get());
+                    // ★★ beta92 this listener's skimmer (a CW beacon pick) centred on where the channel IS (setIqAim)
+                    if (auto h = decoders_.find(c->session)) h->setIqAim(aimHz);
                     const std::string st = vibe::sat::lockName(t.state);
                     bool send = false;
                     { std::lock_guard<std::mutex> lk(c->mtx);
@@ -11392,7 +11400,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 satVfoBTick();   // ★★ beta92 each satellite VFO B follows its pick's lock (A's shift × fB / fA)
                 // ★ brief §9 TRAP: nobody here — an arm more than 30 min from its AOS goes (active locks run to LOS)
                 if (specListenerCount() == 0)
-                    for (const auto& k : satEngine().dropOrphanArms(clk)) if (k == kSatShared) satSharedShift_.store(0.0);
+                    for (const auto& k : satEngine().dropOrphanArms(clk)) {
+                        if (auto h = k == kSatShared ? decoders_.shared() : decoders_.find(k)) h->setIqAim(0);   // ★★ beta92
+                        if (k == kSatShared) satSharedShift_.store(0.0);
+                    }
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
             }
         }).detach();
@@ -11541,6 +11552,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void satQuietUnlock(const std::string& key, const std::shared_ptr<ClientDsp>& me) {
         if (!satEngine().active(key)) return;
         satEngine().stop(key);
+        if (auto h = key == kSatShared ? decoders_.shared() : decoders_.find(key)) h->setIqAim(0);   // ★★ beta92
         if (key == kSatShared) { satSharedShift_.store(0.0); return; }
         if (me) { std::lock_guard<std::mutex> lk(me->mtx); me->satShiftHz = 0; me->satOn = false; me->satSent.clear(); }
     }
@@ -11619,6 +11631,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             satRefuse(sock, "pick", "Another whole-radio mode has the receiver \xe2\x80\x94 leave it first, then pick again");
             return;
         }
+        // ★★ beta92 a CW BEACON's audio: a passband CENTRED on the prediction, ±3 kHz — the beacon is heard either side of
+        //    a figure a few kHz out (the skimmer reads 24 kHz of it). The ordinary bandwidth frame: the room's sliders follow
+        //    on a shared dial (config carries the edges); the clients set the same edges as they follow the pick.
+        if (vibe::sat::beaconSkimmed(tx))
+            handleControl(sock, "{\"type\":\"bandwidth\",\"bandwidthLow\":" + vibe::sat::fmtNum(-vibe::sat::kBeaconAudioHalfHz, 0)
+                                + ",\"bandwidthHigh\":" + vibe::sat::fmtNum(vibe::sat::kBeaconAudioHalfHz, 0) + "}");
         // 3. the Doppler lock on exactly this downlink (refusals are told in the usual `sat` words; the pick stands)
         if (doppler) satLockOp(sock, "lock", (long long)nv, (int)tv);
         // 4. the decoder
@@ -11803,6 +11821,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             decoderWhy = satAttachB(sess, ext, params, e.decoderKey);
             if (decoderWhy.empty()) e.decoder = ext;
         }
+        if (auto h = decoders_.find(watchDecBKey(sess))) h->setIqAim(hz + e.shiftHz);   // ★★ beta92 (the tracker keeps it)
         { std::lock_guard<std::mutex> lk(satVfoBMtx_); satVfoB_[sess] = e; }
         satEnsureTracker();
         LOGI("[sat] %.8s opened %s %s in VFO B (%.3f MHz %s, shift %+.1f Hz, decoder %s)", sess.c_str(), sd.name.c_str(), tx.label.c_str(),
@@ -11845,6 +11864,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void satVfoBGone(const std::string& sess, const std::string& why) {
         SatVfoB e;
         { std::lock_guard<std::mutex> lk(satVfoBMtx_); auto it = satVfoB_.find(sess); if (it == satVfoB_.end()) return; e = it->second; satVfoB_.erase(it); }
+        if (auto h = decoders_.find(watchDecBKey(sess))) h->setIqAim(0);   // ★★ beta92
         satVfoBStopDecoder(sess, e);
         LOGI("[sat] %.8s: VFO B off the satellite (%s)", sess.c_str(), why.c_str());
         watchTell(sess, "{\"type\":\"sat_vfob\",\"on\":false,\"norad\":" + std::to_string(e.norad) + ",\"tx\":" + std::to_string(e.tx)
@@ -11868,6 +11888,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (std::shared_ptr<WatchSet> w = watchFind(kv.first)) { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == 1) ch = c; }
             if (!ch) continue;   // ★ gone: watchRemove told it already, or the sweep forgets it
             const double s = satVfoBShiftNow(kv.second.pickKey, kv.second.norad, kv.second.nominalHz, kv.second.shiftHz);
+            // ★★ beta92 B's skimmer (a CW beacon in VFO B) centred on B's corrected frequency, as A's (setIqAim)
+            if (auto h = decoders_.find(watchDecBKey(kv.first))) h->setIqAim(kv.second.nominalHz + s);
             if (s == kv.second.shiftHz) continue;
             ch->setShiftHz(s);
             std::lock_guard<std::mutex> lk(satVfoBMtx_);
@@ -34101,6 +34123,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g.sampleRate = sampleRate; g.hwCentreHz = rtlCenter.load() + hwOffsetHz(); g.wantCentreHz = bHz;
         g.widthHz = std::min(h->iqWidthHz(), sampleRate * 0.8); g.fftSize = fftSize;
         g.bins = h->wantsBins();
+        // ★★ beta92 a satellite VFO B aims its skimmer (satVfoBTick): cut near the corrected frequency, re-planned seldom
+        if (const double aim = h->iqAim(); aim > 0 && !g.bins)
+            g.wantCentreHz = vibe::skimAimCentre(w->skimB.aimHz, aim, sampleRate * vibe::bandSliceBins(sampleRate, fftSize, g.widthHz) / (double)fftSize, g.widthHz);
+        else w->skimB.aimHz = 0;
         g.band = true;
         vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
         g.nExtras = h->iqExtraSlices(xs);
@@ -34443,6 +34469,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12 (2026-10-27): sized for the slice's FLAT part, cut with a sixteenth's roll-off (vibe_band_slice.h —
         //    it was sized for 4 % and cut with a quarter: 40 m's ends sat 2–3 dB down at 960 kS/s, JTTY 17 dB).
         const int b = vibe::bandSliceBins(sampleRate, fftSize, w);
+        // ★★ beta92 a satellite lock aims the skimmer (not Band): the slice is cut near the corrected frequency, not the dial
+        if (const double aim = h->iqAim(); aim > 0 && !h->wantsBins()) {
+            const double bh = sampleRate / (double)fftSize;
+            cb = (int)std::lround((vibe::skimAimCentre(sc.aimHz, aim, sampleRate * (double)b / (double)fftSize, w) - rtlCenter.load() - hwOffsetHz()) / bh);
+        } else sc.aimHz = 0;
         if ((int)sc.skimSlice.size() != b) sc.skimSlice.assign((size_t)b, cf32{0.0f, 0.0f});
         const int gs = chan_->extract(bins, cb, b, sc.skimSlice.data(), sc.sctx, blockIndex, vibe::kBandTaperDiv);
         const double binHz = sampleRate / (double)fftSize;
@@ -35952,6 +35983,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.requestStereoReport();
     }
 
+    double skimAimShared_ = 0;   // ★★ beta92 the shared skimmer's held cut while aimed (skimAimCentre) — DSP thread only
     void skimTapFeed(const cf32* iq, int n) {
         const bool want = DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0 && decoders_.sharedWantsIq();
         if (!want) {
@@ -35972,6 +36004,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g.sampleRate = sampleRate; g.hwCentreHz = rtlCenter.load() + hwOffsetHz(); g.wantCentreHz = audioFreq.load();
         g.widthHz = h ? std::min(h->iqWidthHz(), sampleRate * 0.8) : 0; g.fftSize = fftSize;
         g.bins = h && h->wantsBins();   // ★ Band spots' activity gate: the slice's bins' power with each block
+        // ★★ beta92 the room's satellite lock aims the skimmer: cut near the corrected frequency, re-planned seldom (skimAimCentre)
+        if (const double aim = h ? h->iqAim() : 0.0; aim > 0 && !g.bins)
+            g.wantCentreHz = vibe::skimAimCentre(skimAimShared_, aim, sampleRate * vibe::bandSliceBins(sampleRate, fftSize, g.widthHz) / (double)fftSize, g.widthHz);
+        else skimAimShared_ = 0;
         g.band = true;                  // ★ the flat-part sizing (vibe_band_slice.h) — the CW/PSK skimmers share it
         if (h) {
             vibe::ExtraSlice xs[vibe::kMaxExtraSlices];

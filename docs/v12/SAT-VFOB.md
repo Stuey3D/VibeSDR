@@ -143,3 +143,16 @@ personal receiver) plus the CW decoder.
 - Should leaving SATELLITE keep VFO B (as an ordinary VFO B) instead of closing it? Built: it closes.
 - A close key for B in the box as well as VFO A/B on the frequency card? Built: no (the box kept minimal).
 - On opening B, which decoder does the box show first? Built: B's (the one just asked for); a tap on A's line goes back.
+
+## Later in beta92: a CW beacon is SKIMMED (A and B)
+
+Stuart's RS-44 pass 2026-11-23 (Pi 500, RTL-SDR V4): the beacon sat ~2 kHz below the prediction, outside the one-signal CW
+passband, and nothing decoded. A beacon pick (`vibe::sat::decoderOf`) now attaches **`cwskim`, width 24000** — on A and
+on B alike, since B's decoder comes from the same `decoderOf` and VFO B's skimmer plumbing already existed
+(`feedWatchFromBins` / `watchSkimTapB` → `feedSkimFromBins`). The window is centred on the Doppler-CORRECTED prediction
+and follows it: the tracker sets `DecoderHost::setIqAim` (A: dial + shift; B: B's nominal + B's shift; the room's dial:
+dial + shift), the shim cuts the slice on whole bins near the aim (`vibe::skimAimCentre`, held until the aim drifts ≤ 3 kHz),
+and `CwRun::feedIq` mixes the remainder out phase-continuously, so a beacon keeps one offset from the prediction all pass.
+The list says `"aim":true`; the box shows `−2.1 kHz · RS44 RS44 BEACON …`, nearest the prediction first
+(`satBeaconText`). The audio passband for the pick is ±3 kHz centred on the prediction. The B line's words for a skimmed
+beacon are "CW skimmer listening 24 kHz around the beacon" (the `cw` wording above stays for an older server).

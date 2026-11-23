@@ -609,6 +609,13 @@ public:
         if (bandIq_.load(std::memory_order_relaxed)) w = std::max(w, bandWidth_.load(std::memory_order_relaxed));
         return w;
     }
+    /** ★★ beta92 THE SATELLITE LOCK'S AIM: the Doppler-corrected frequency this host's VFO is listening on now (the
+     *  tracker sets it 25 times a second while a lock runs; 0 = no lock). The shim cuts the skimmer's slice near it
+     *  (whole bins, moved only when the aim has drifted — SkimCut::aimHz) and the CW skimmer turns the rest out with a
+     *  phase-continuous mix, so its window is centred on the corrected beacon frequency all pass and a signal keeps one
+     *  offset from the prediction (vibe_cw_run.h feedIq). Atomic: set on the tracker thread, read on the DSP thread. */
+    void setIqAim(double hz) { iqAim_.store(std::isfinite(hz) && hz > 0 ? hz : 0.0, std::memory_order_relaxed); }
+    double iqAim() const { return iqAim_.load(std::memory_order_relaxed); }
     /** ★ Band spots wants the slice's FFT bins' power with each block (its activity gate — digi_activity.h). Cheap. */
     bool wantsBins() const { return bandIq_.load(std::memory_order_relaxed); }
     /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed().
@@ -620,7 +627,7 @@ public:
                 const float* binPow = nullptr, int nb = 0, double binHz = 0, double captureUtc = NAN, int slice = 0) {
         if (n <= 0 || !wantsIq() || !(rate > 0)) return;
         if (slice > 0 && !bandIq_.load(std::memory_order_relaxed)) return;
-        IqBlock b; b.rate = rate; b.centre = centreRfHz; b.slice = slice;
+        IqBlock b; b.rate = rate; b.centre = centreRfHz; b.slice = slice; b.aim = iqAim_.load(std::memory_order_relaxed);
         // ★ V12 2026-10-27: a NULL block is a GAP the tap dropped — `n` samples to bridge with zeros (Spotter::feedGap)
         if (!iq) { if (!bandIq_.load(std::memory_order_relaxed)) return; b.gapN = n; binPow = nullptr; }
         else b.v.assign(iq, iq + n);
@@ -2106,7 +2113,7 @@ private:
                 const uint64_t c0 = vibeThreadCpuNs();
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
-                    if (b.gapN == 0 && b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.aim);
                     if (b.gapN == 0 && b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && rttySkim_) rttySkim_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
@@ -2384,7 +2391,8 @@ private:
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
-    DecoderTapPtr cwTap_;                     // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
+    std::atomic<double> iqAim_{0.0};          // ★★ beta92 the satellite lock's corrected frequency (setIqAim) — 0 = none
+    DecoderTapPtr cwTap_;                    // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
     std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     std::unique_ptr<RttySkimRun> rttySkim_;   // ★ the RTTY skimmer (buildRttySkimLocked_) — shares cwIq_/cwWidth_, owns its workers
     std::unique_ptr<vibelrpt::Run> lrpt_;      // ★ V12 METEOR-M LRPT (buildLrptLocked_) — shares cwIq_/cwWidth_
@@ -2456,7 +2464,7 @@ private:
     std::deque<std::vector<float>> q_;
     std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
     struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; int slice = 0;
-                     int gapN = 0; };   // ★ gapN > 0: no samples, a gap of that many to bridge
+                     int gapN = 0; double aim = 0; };   // ★ aim: setIqAim's frequency when the block was cut (0 = none)   // ★ gapN > 0: no samples, a gap of that many to bridge
     /* ★★ BAND'S MINUTE LINE (V12 2026-10-27, for the Pi 2's "every chip light, nothing decoded"): what the decode thread was
      *  fed (seconds of each slice per minute of capture — 60 means it kept up), how far behind the capture it ran (now −
      *  the block's capture UTC: FT8 cuts its slots by that stamp), what was dropped, slots decoded / skipped, spots per mode

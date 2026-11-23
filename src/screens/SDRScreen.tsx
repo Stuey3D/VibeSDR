@@ -77,7 +77,7 @@ import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft d
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2761,12 +2761,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satBStatus, setSatBStatus] = useState('');
   const [satBPicture, setSatBPicture] = useState(false);
   const [satCwText, setSatCwText] = useState('');
+  /** ★★ beta92 a CW beacon is SKIMMED (24 kHz around the corrected prediction): the skimmer's list, on A and on B */
+  const [satBeacon, setSatBeacon] = useState<CwList | null>(null);
+  const [satBBeacon, setSatBBeacon] = useState<CwList | null>(null);
   const satBImageRef = useRef<DecoderImageHandle | null>(null);
   const satDecB = useRef<{ dc: DecoderClient; key: string } | null>(null);
   /** made below, once the decoder socket's base and proof are known; reached from the spectrum client's callbacks */
   const satVfoBDecoderRef = useRef<(b: SatVfoB | null) => void>(() => {});
   const satVfoBReset = useCallback(() => {
-    setSatVfoB(null); setSatBText(''); setSatBPackets([]); setSatBStatus(''); setSatBPicture(false);
+    setSatVfoB(null); setSatBText(''); setSatBPackets([]); setSatBStatus(''); setSatBPicture(false); setSatBBeacon(null);
     satVfoBDecoderRef.current(null);
   }, []);
   // ★★ beta91 TELEMETRY CHARTS: the SATELLITE box reads the gallery's saved passes through this
@@ -6306,6 +6309,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
       onCwSignals: (l) => {
+        // ★★ beta92 a skimmed CW beacon picked in SATELLITE: its signals in the box, nearest the prediction first
+        if (satOnRef.current && satDecRef.current === 'cwskim' && activeDecRef.current === 'cw') setSatBeacon(l);
         // ★ V12 PSK's list arrives here too (DecoderClient parses psk_signals into the same shape, with its mode)
         if (activeDecRef.current !== 'cw' && activeDecRef.current !== 'psk' && activeDecRef.current !== 'rtty') return;
         if (activeDecRef.current === 'rtty') { rttyHistRef.current = mergeRttyHistory(rttyHistRef.current, l.signals); setRttyHist(rttyHistRef.current); }
@@ -6453,10 +6458,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       onImageDone: () => satBImageRef.current?.imageDone(),
       onAprsPacket: (d) => { const pk = aprsPacketSanitise(d); if (pk && !destroyed.current) setSatBPackets((prev) => [pk.line || pk.raw, ...prev].slice(0, 30)); },
       onError: (m: string) => { if (!destroyed.current) setSatBStatus(m); },
+      onCwSignals: (l) => { if (!destroyed.current && b.decoder === 'cwskim') setSatBBeacon(l); },   // ★★ beta92 a beacon on B is skimmed too
     }, password, decoderAuth);
     dc.vfo = 'B';
     if (b.decoder === 'aprs') dc.aprsParams = b.params as Record<string, number | string>;
-    dc.start(b.decoder);
+    // ★★ beta92 a skimmed beacon: CW's skimmer at the server's width (the same attach — it JOINS B's run)
+    if (b.decoder === 'cwskim') { dc.cwSkim = true; dc.cwWidth = typeof b.params.width === 'number' ? b.params.width : SAT_BEACON_SKIM_HZ; dc.start('cw'); }
+    else dc.start(b.decoder);
     satDecB.current = { dc, key };
   };
 
@@ -6917,8 +6925,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (type === 'cw' && decoderClient.current) {
       // ★ beta92 a CW beacon picked in SATELLITE is the server's ONE-SIGNAL CW decoder — never the skimmer the CW key may be
       //   set to (that would replace the pick's decoder with another one)
-      decoderClient.current.cwSkim = cwSkimRef.current && !(satOnRef.current && satDecRef.current === 'cw');
-      decoderClient.current.cwWidth = cwWidthRef.current;
+      // ★★ beta92 …and a SKIMMED beacon ('cwskim') is the server's 24 kHz skimmer around the prediction — the same attach
+      const satBeaconPick = satOnRef.current && satDecRef.current === 'cwskim';
+      decoderClient.current.cwSkim = satBeaconPick || (cwSkimRef.current && !(satOnRef.current && satDecRef.current === 'cw'));
+      decoderClient.current.cwWidth = satBeaconPick ? SAT_BEACON_SKIM_HZ : cwWidthRef.current;
       setDecoderStatus(cwSkimRef.current ? 'listening across the segment…' : 'listening…');
     }
     // ★ V12 PSK: the skimmer's segment, or ONE SIGNAL's cursor — the middle of the listener's passband now (the web's
@@ -6985,8 +6995,19 @@ export default function SDRScreen({ route, navigation }: Props) {
     const was = satDecRef.current;
     satDecRef.current = d; setSatDec(d);
     if (d !== was) setSatTlm(null);
-    if (was && activeDecRef.current === was && d !== was) closeDecoder();
+    // ★★ beta92 a skimmed CW beacon runs under CW's key (the skimmer is CW's): 'cwskim' → the 'cw' decoder, skimming
+    const key = satDecoderKey;
+    if (d !== was) setSatBeacon(null);
+    if (was && activeDecRef.current === key(was) && d !== was) closeDecoder();
     if (!d || !t) return;
+    if (activeDecRef.current === key(d) && d === was) return;
+    if (d === 'cwskim') {
+      // the audio passband centred on the prediction, ±3 kHz — the beacon heard either side (the server set the same edges)
+      client.current?.setBandwidth(-SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_AUDIO_HALF_HZ);
+      stopSpots();
+      openDecoder('cw');
+      return;
+    }
     if (activeDecRef.current === d) return;
     if (d === 'aprs') { packetModeRef.current = satPacketBaud(t); aprsBaudRef.current = 1200; }   // ★ the downlink's baud, this pick only
     stopSpots();
@@ -15106,7 +15127,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* ★ The decoder box leaves on a rotation and fades back in after it (RotateFade). */}
       <RotateFade>
-      {isLandscape && !isTablet && ((activeDecoder !== null && !(satOn && satDec && activeDecoder === satDec)) || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
+      {isLandscape && !isTablet && ((activeDecoder !== null && !(satOn && satDec && activeDecoder === satDecoderKey(satDec))) || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
         // ★★ CLEAR THE VTS BAR — the third time this exact collision has been fixed. VTSBar also
         // sits at `pillBottom + 8` (see its render below), so this banner was drawn straight ON TOP
         // of the live-station bar, with the station name bleeding out at both ends
@@ -15122,7 +15143,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Decoder" onClose={dismissDecoderPanel}>
         <DecoderPanel
           /* ★★★ SATELLITE owns the decoder it follows: its box is the view, so the decoder box stays shut for it */
-          activeDecoder={satOn && satDec && activeDecoder === satDec ? null : activeDecoder}
+          activeDecoder={satOn && satDec && activeDecoder === satDecoderKey(satDec) ? null : activeDecoder}
           onNavtexMap={!IS_APPLE_TV && navAvail ? () => { markInteract(); navFromGallery.current = false; setNavMapOpen(true); } : null}
           tunedHz={status.frequency}
           receiverPos={serverPos ?? recvLoc}
@@ -16059,7 +16080,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onMap={() => { markInteract(); if (satPickedSat) openDigiModesMap({ layer: 'aprs', overlay: satMapOverlay(satPickedSat.name, satOrbit?.geo,
             { lat: satPickedSat.lat, lon: satPickedSat.lon, altKm: satAltKm(satPickedSat.rangeKm, satPickedSat.el) }) }); }}
           imageRef={decoderImageRef}
-          cwText={satCwText}
+          cwText={satCwText} beacon={satBeacon} bBeacon={satBBeacon}
           vfob={satVfoB} bText={satBText} bPackets={satBPackets} bStatus={satBStatus} bPicture={satBPicture} bImageRef={satBImageRef}
           onVfoB={(norad, i) => {   // ★★★ beta92 OPEN IN VFO B — moves nobody's dial (no ask-before-tuning)
             markInteract();

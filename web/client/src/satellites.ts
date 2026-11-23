@@ -27,6 +27,7 @@ import {
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
   satCwTail, satDecView, satDecWord, satTextAppend, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY, type SatVfoB,
+  satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList,
   type SatPass,
   type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
@@ -254,6 +255,8 @@ export class SatPanel {
   /** which line's decoder the area shows while the switch exists (satViewSwitch) */
   private view: 'A' | 'B' = 'A';
   private aText = '';                       // ★ fix beta92: a CW beacon on A shows its decoded text
+  /** ★★ beta92 a CW beacon's skimmer list (A, and B when B is on a beacon) — the box shows it nearest the prediction first */
+  private aBeacon: SatBeaconList | null = null; private bBeacon: SatBeaconList | null = null;
   private bText = ''; private bPackets: string[] = []; private bStatus = ''; private bPicture = false; private bPictureDone = false;
 
   constructor(private deps: SatPanelDeps) {
@@ -334,11 +337,11 @@ export class SatPanel {
   private clearPick() {
     this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
     this.track = null; this.trackAsk = null; this.tlm = null;
-    this.aText = ''; this.vfobClear();
+    this.aText = ''; this.aBeacon = null; this.vfobClear();
     this.lend(false);
   }
   private vfobClear() {
-    this.vfob = null; this.view = 'A'; this.bText = ''; this.bPackets = []; this.bStatus = ''; this.bPicture = false; this.bPictureDone = false;
+    this.vfob = null; this.view = 'A'; this.bText = ''; this.bBeacon = null; this.bPackets = []; this.bStatus = ''; this.bPicture = false; this.bPictureDone = false;
   }
   // ── ★★★ beta92 OPEN IN VFO B ────────────────────────────────────────────────────────────────────────────────────
   /** {"type":"sat_vfob"} — B on another downlink of the pick (on), a refusal (says why), or B gone (the line goes). */
@@ -346,7 +349,7 @@ export class SatPanel {
     if (b.on) {
       if (!this.picked || b.norad !== this.picked.norad) return;
       const fresh = !this.vfob || this.vfob.tx !== b.tx;
-      if (fresh) { this.bText = ''; this.bPackets = []; this.bStatus = ''; this.bPicture = false; this.bPictureDone = false; }
+      if (fresh) { this.bText = ''; this.bBeacon = null; this.bPackets = []; this.bStatus = ''; this.bPicture = false; this.bPictureDone = false; }
       this.vfob = b; this.refusal = '';
       if (fresh && satDecView(b.decoder)) this.view = 'B';   // ★ the line just opened is the one shown (a tap on A goes back)
     } else if (b.refused) {
@@ -362,6 +365,12 @@ export class SatPanel {
   viewNow(): 'A' | 'B' { return satViewShown(this.picked?.decoder, this.vfob, this.view); }
   /** A CW beacon's decoded characters on VFO A (the pick's own CW decoder). */
   cwText(t: string) { if (this.picked?.decoder !== 'cw') return; this.aText = satTextAppend(this.aText, t); if (this.open) this.paintPick(); }
+  /** ★★ beta92 a CW beacon's skimmer list on VFO A (the pick's 24 kHz CW skimmer). */
+  beaconList(l: SatBeaconList) { if (this.picked?.decoder !== 'cwskim') return; this.aBeacon = l; if (this.open) this.paintPick(); }
+  /** …and on VFO B (a beacon opened in VFO B runs the same skimmer on B). */
+  bBeaconList(l: SatBeaconList) { if (!this.vfob || this.vfob.decoder !== 'cwskim') return; this.bBeacon = l; if (this.open) this.paintPick(); }
+  /** the A beacon area's text now (tests) */
+  beaconTextNow(): string { return satBeaconText(this.aBeacon); }
   /** VFO B's decoder: its text (CW, telemetry lines), its own status words, its packet lines, its picture. */
   bTextAdd(t: string) { if (!this.vfob) return; this.bText = satTextAppend(this.bText, t); if (this.open) this.paintPick(); }
   bState(text: string) { if (!this.vfob) return; this.bStatus = text; if (this.open) this.paintPick(); }
@@ -413,7 +422,7 @@ export class SatPanel {
   onPicked(p: SatPicked) {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
-    if (changed) { this.aText = ''; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
+    if (changed) { this.aText = ''; this.aBeacon = null; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t);
@@ -660,15 +669,19 @@ export class SatPanel {
     this.lend(big && imageKind && showA);
     this.sImg.hidden = !(big && imageKind && showA);
     // ★ beta92 A CW beacon's decoded text, as CW shows it elsewhere (the last few lines)
-    const cwA = showA && this.picked?.decoder === 'cw';
+    //   ★★ beta92 a skimmed beacon (cwskim): the signals in its 24 kHz, nearest the prediction first, each with its offset
+    const cwA = showA && satDecView(this.picked?.decoder) === 'text';
     this.sCw.hidden = !cwA;
-    if (cwA) { const ct = satCwTail(this.aText) || 'no characters yet'; if (this.sCw.textContent !== ct) this.sCw.textContent = ct; }
+    if (cwA) {
+      const ct = this.picked?.decoder === 'cwskim' ? satBeaconText(this.aBeacon) || SAT_BEACON_EMPTY : satCwTail(this.aText) || 'no characters yet';
+      if (this.sCw.textContent !== ct) this.sCw.textContent = ct;
+    }
     /* ★★ beta91 (Stuart's Meteor-M2-4 pass 2026-11-22: "picture complete — saved to the gallery" for minutes while the
      *  satellite was still strong and the receiver hunting again): LRPT's own line is the LIVE state and says a filed pass
      *  itself ("last pass saved to the gallery · …", src/services/lrpt.ts) — so it wins. SSTV keeps the words. */
     if (this.pictureDone && imageKind && !(this.picked?.decoder === 'lrpt' && this.decLine)) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
     // packet: the APRS lines
-    const pkt = showA && use === 'packet' && this.picked?.decoder !== 'fctlm' && this.picked?.decoder !== 'cw';   // ★ telemetry shows values; CW its text
+    const pkt = showA && use === 'packet' && this.picked?.decoder !== 'fctlm' && satDecView(this.picked?.decoder) !== 'text';   // ★ telemetry shows values; CW its text
     this.sPk.hidden = !pkt;
     if (pkt) this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
     // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
@@ -715,7 +728,8 @@ export class SatPanel {
     this.sBImg.hidden = !(v === 'image' && big && (this.bPicture || this.bPictureDone));
     if (v === 'text' || v === 'telemetry') {
       this.sCw.hidden = false;
-      const ct = satCwTail(this.bText, v === 'telemetry' ? 6 : 4) || (v === 'text' ? 'no characters yet' : 'no frames yet');
+      const ct = vb!.decoder === 'cwskim' ? satBeaconText(this.bBeacon) || SAT_BEACON_EMPTY
+        : satCwTail(this.bText, v === 'telemetry' ? 6 : 4) || (v === 'text' ? 'no characters yet' : 'no frames yet');
       if (this.sCw.textContent !== ct) this.sCw.textContent = ct;
     }
     if (v === 'packet') {

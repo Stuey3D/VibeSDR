@@ -498,6 +498,39 @@ try {
   await ev(`window.__p.cwText('VVV DE RS44'); true`);
   ok(await ev(`document.querySelector('#satPanel .sat-cw').textContent`) === 'VVV DE RS44', 'its decoded text, as CW shows it');
 
+  // ★★ beta92 a SKIMMED beacon (cwskim — Stuart's RS-44 pass 11-23, the beacon ~2 kHz below the prediction): the box lists
+  //    the skimmer's signals in its 24 kHz, nearest the prediction first, each with its offset from it
+  console.log('— beta92 a SKIMMED CW beacon (the CW skimmer over 24 kHz around the prediction)');
+  await ev(`window.__p.onPicked({ norad: 44909, tx: 1, decoder: 'cwskim', vfob: [0] }); window.__p.onReadout({ state: 'TRACK', name: 'RS-44', norad: 44909, tx: 'CW beacon', nominal: 435605000, offset: 4010, rate: -40, time: 'ok' }); true`);
+  const skSt = await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`);
+  ok(/CW skimmer listening 24 kHz around the beacon/.test(skSt) && !/packets/.test(skSt), `a skimmed beacon says its skimmer listens 24 kHz around it ("${skSt}")`);
+  ok(await ev(`document.querySelector('#satPanel .sat-pk').hidden && document.querySelector('#satPanel .sat-cw').textContent === 'no CW in the 24 kHz around the beacon yet'`),
+     'nothing read yet: says so (no "no packets yet")');
+  await ev(`window.__p.beaconList({ centre: 435609010, signals: [
+    { hz: 435613500, text: 'CQ DE G4ABC', active: true, wpm: 24 },
+    { hz: 435606910, text: 'RS44 RS44 BEACON TLM 123', active: true, wpm: 20 },
+    { hz: 435609200, text: '', active: true },
+    { hz: 435609360, text: 'E E', active: false } ] }); true`);
+  const bt = await ev(`document.querySelector('#satPanel .sat-cw').textContent`);
+  ok(bt === '+350 Hz \u00b7 E E\n\u22122.1 kHz \u00b7 RS44 RS44 BEACON TLM 123\n+4.5 kHz \u00b7 CQ DE G4ABC', `nearest the prediction first, each with its offset (${JSON.stringify(bt)})`);
+  ok(!/435609200/.test(bt) && bt.split('\n').length === 3, 'a carrier with no text yet is not listed');
+  await ev(`window.__p.cwText('IGNORED'); true`);
+  ok(await ev(`document.querySelector('#satPanel .sat-cw').textContent`) === bt, 'one-signal CW text is not the skimmed beacon\'s');
+  await shot('beacon-skim-desktop');
+  await phone(); await sleep(400);
+  { const f2 = await fits(); ok(fitOk(f2), `390 px with a skimmed beacon: fits, no sideways scroll (${JSON.stringify(f2)})`); }
+  await shot('beacon-skim-phone');
+  await desk(); await sleep(200);
+  // …and a beacon opened in VFO B is skimmed too: B's area lists ITS window
+  await ev(`window.__p.onPicked({ norad: 44909, tx: 0, decoder: '', vfob: [1] }); window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: true, norad: 44909, tx: 1, hz: 435605000, mode: 'cw', use: 'packet', label: 'CW beacon', decoder: 'cwskim', params: { width: 24000 }, shift: -4744.6 })); true`);
+  const vbs = await ev(`document.querySelector('#satPanel .sat-vb .sat-ln')?.textContent || ''`);
+  ok(/CW skimmer listening 24 kHz around the beacon$/.test(vbs), `B's line: "${vbs}"`);
+  ok(await ev(`window.__p.vfobNow()?.params?.width === 24000`), 'B carries the skimmer\'s width (its socket joins with it)');
+  await ev(`window.__p.bBeaconList({ centre: 435600255, signals: [{ hz: 435598050, text: 'RS44 BEACON', active: true }] }); true`);
+  const bb = await ev(`document.querySelector('#satPanel .sat-cw').hidden ? '' : document.querySelector('#satPanel .sat-cw').textContent`);
+  ok(bb === '\u22122.2 kHz \u00b7 RS44 BEACON', `B's area: its skimmer's signal and offset (${JSON.stringify(bb)})`);
+  await ev(`window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: false, norad: 44909, tx: 1, why: 'VFO B was switched off' })); true`);
+
   console.log('— beta92 the line switch: ISS 145.800 SSTV on A + 145.825 APRS on B');
   await ev(`window.__p.onPicked({ norad: 25544, tx: 1, decoder: 'sstv', vfob: [2] }); window.__p.onReadout({ state: 'TRACK', name: 'ISS', norad: 25544, tx: 'Voice / SSTV', nominal: 145800000, offset: 2210, rate: -40, time: 'ok' }); true`);
   ok(await ev(`document.querySelector('#satPanel [data-act="vfob"]')?.textContent`) === 'OPEN IN VFO B · APRS', 'APRS offered');

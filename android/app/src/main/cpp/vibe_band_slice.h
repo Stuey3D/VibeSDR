@@ -32,6 +32,17 @@ inline int bandSliceBins(double sampleRate, int fftSize, double widthHz) {
     return std::min(b, fftSize);
 }
 
+/** ★★ beta92 SATELLITE CW BEACON: where a skimmer's slice is cut while its host is AIMED (DecoderHost::setIqAim — a
+ *  satellite lock's corrected frequency). `held` keeps the cut until the aim has drifted further than the slice's spare
+ *  flat width allows (at most 3 kHz), then it jumps to the aim — so a pass moves it a handful of times, not every bin (a
+ *  re-cut is a phase step; a one-pipeline radio's WideTap re-plans on it). CwRun mixes the remainder out exactly.
+ *  `sliceRate` = the slice's rate (bandSliceBins × the bin width); `widthHz` = the skimmer's window. */
+inline double skimAimCentre(double& held, double aim, double sliceRate, double widthHz) {
+    const double slack = std::min(3000.0, std::max(0.0, sliceRate * kBandFlatFrac / 2.0 - widthHz / 2.0));
+    if (!(held > 0) || std::fabs(aim - held) > slack) held = aim;
+    return held;
+}
+
 /** ★ One extra slice: its RF centre and the flat width it needs. */
 struct ExtraSlice { double centreHz = 0, widthHz = 0; };
 /** ★ V12 beta91: 3 → 8 — the band's CW and RTTY windows (digi::addIqWindows) are extra slices too: 10 m carries FT4's,

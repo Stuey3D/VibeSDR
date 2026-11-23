@@ -363,13 +363,16 @@ try {
       sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 1, doppler: true });
       ok(await until(() => lastPicked(sp)?.norad === 44909 && lastPicked(sp)?.tx === 1, 4000), 'RS-44 beacon picked');
       p = lastPicked(sp);
-      ok(p && p.decoder === 'cw' && p.mode === 'cw' && p.use === 'packet' && p.hz === 435605000, `RS-44 CW beacon: cw decoder (${p?.decoder} ${p?.mode} ${p?.use})`);
-      ok(/decoder attached: CW/.test(S.L()), 'the CW decoder runs');
+      // ★★ beta92 the beacon is SKIMMED: the CW skimmer over 24 kHz, the audio passband centred ±3 kHz
+      ok(p && p.decoder === 'cwskim' && p.mode === 'cw' && p.use === 'packet' && p.hz === 435605000, `RS-44 CW beacon: the CW skimmer (${p?.decoder} ${p?.mode} ${p?.use})`);
+      ok(/decoder attached: CW skimmer, 24 kHz/.test(S.L()) && /\[sat\] decoder cwskim attached for the shared dial/.test(S.L()), 'the CW skimmer runs over 24 kHz (the pick\'s)');
+      ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === -3000 && lastOf(sp, 'config')?.bandwidthHigh === 3000, 3000),
+         `the audio passband centred on the beacon, ±3 kHz (config ${lastOf(sp, 'config')?.bandwidthLow}…${lastOf(sp, 'config')?.bandwidthHigh})`);
       sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: true });
       ok(await until(() => lastPicked(sp)?.norad === 39444, 4000), 'AO-73 telemetry picked');
       p = lastPicked(sp);
       ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145933800 && p.use === 'packet', `AO-73: fctlm, USB 1200 Hz low (${p?.decoder} ${p?.hz})`);
-      ok(/decoder attached: fctlm/.test(S.L()) && /\[sat\] decoder cw detached/.test(S.L()), 'fctlm runs; the CW the previous pick started detached');
+      ok(/decoder attached: fctlm/.test(S.L()) && /\[sat\] decoder cwskim detached/.test(S.L()), 'fctlm runs; the CW skimmer the previous pick started detached');
       sp.send({ type: 'sat', op: 'pick', norad: 60209, tx: 1, doppler: true });
       ok(await until(() => lastPicked(sp)?.norad === 60209, 4000) && lastPicked(sp).decoder === '', `MO-122 Fox-format telemetry: no decoder (${lastPicked(sp)?.decoder})`);
       sp.send({ type: 'sat', op: 'pick', norad: 7530, tx: 0, doppler: true });
@@ -381,7 +384,7 @@ try {
       await until(() => jsons(sp, 'sat_list').length > 0, 3000);
       const l9 = lastOf(sp, 'sat_list');
       const ao7 = l9?.sats?.find((x) => x.id === 'AO-7');
-      ok(ao7 && ao7.tx[0].band === 'U/v' && ao7.tx[0].modeName === 'Mode B' && ao7.tx[3]?.decoder === 'cw' && ao7.tx[3]?.hz === 145977500, 'sat_list: AO-7 band, mode name, the Mode B CW beacon');
+      ok(ao7 && ao7.tx[0].band === 'U/v' && ao7.tx[0].modeName === 'Mode B' && ao7.tx[3]?.decoder === 'cwskim' && ao7.tx[3]?.hz === 145977500, 'sat_list: AO-7 band, mode name, the Mode B CW beacon');
       ok(typeof l9?.source?.pickPrivate === 'boolean', `source.pickPrivate ${l9?.source?.pickPrivate}`);
       ok(l9?.sats?.some((x) => x.id === 'TO-108') && l9?.sats?.find((x) => x.id === 'SONATE-2')?.tx?.some((t) => t.hz === 145880000 && t.sstv && t.decoder === 'sstv'), 'TO-108 listed; SONATE-2 SSTV 145.880 with SSTV');
       const ps = l9?.sats?.find((x) => x.id === 'ISS')?.passes?.[0];
@@ -562,10 +565,10 @@ try {
       sp.send({ type: 'sat_vfob', norad: 44909, tx: 1 });
       ok(await until(() => lastVfob(sp)?.on === true, 4000), `sat_vfob on: ${JSON.stringify(lastVfob(sp))}`);
       const vb = lastVfob(sp);
-      ok(vb && vb.decoder === 'cw' && vb.mode === 'cw' && vb.hz === 435605000 && vb.use === 'packet' && vb.label === 'CW beacon' && typeof vb.params === 'object',
-         `B: ${vb?.label} ${vb?.hz} ${vb?.mode}, decoder ${vb?.decoder}`);
+      ok(vb && vb.decoder === 'cwskim' && vb.mode === 'cw' && vb.hz === 435605000 && vb.use === 'packet' && vb.label === 'CW beacon' && vb.params?.width === 24000,
+         `B: ${vb?.label} ${vb?.hz} ${vb?.mode}, decoder ${vb?.decoder} ${JSON.stringify(vb?.params)} (beta92: the 24 kHz CW skimmer)`);
       ok(await until(() => chanB(sp)?.freq === 435605000 && chanB(sp)?.mode === 'cw', 3000), `VFO B on 435.605 CW (${JSON.stringify(chanB(sp))?.slice(0, 120)})`);
-      ok(/\[sat\] decoder cw attached on VFO B/.test(S.L()) && /decoder attached: CW/.test(S.L()), 'the CW decoder attached on the VFO B host');
+      ok(/\[sat\] decoder cwskim attached on VFO B/.test(S.L()) && /decoder attached: CW skimmer, 24 kHz/.test(S.L()), 'the CW skimmer (24 kHz) attached on the VFO B host');
       await sleep(500);
       ok(lastOf(sp, 'config')?.vfo === dialA || !jsons(sp, 'config').some((c) => c.vfo !== dialA), `VFO A's dial untouched (${dialA})`);
       // ★ the Doppler: B's shift = A's offset × fB / A's nominal, sampled together (the 25 Hz tracker; the readout at 2 Hz)
@@ -582,16 +585,26 @@ try {
       ok(samples >= 4 && worst < 6, `B's shift follows A's × fB/fA (${samples} samples, worst ${worst.toFixed(1)} Hz past the rate allowance, |shift| up to ${maxShift.toFixed(0)} Hz)`);
       ok(maxShift > 20, `a real Doppler on B (|shift| ${maxShift.toFixed(0)} Hz)`);
       const cpuAB = await cpuOver(S.pid, 6000);
-      console.log(`   info the whole server, fake rtl_tcp 2.4 MS/s, A on RS-44's transponder (USB, Doppler) + B on its beacon (CW decoder, Doppler): ${cpuAB.toFixed(1)} % of a core`);
+      console.log(`   info the whole server, fake rtl_tcp 2.4 MS/s, A on RS-44's transponder (USB, Doppler) + B on its beacon (the 24 kHz CW skimmer, Doppler): ${cpuAB.toFixed(1)} % of a core`);
       // the decoder socket of the box's B line JOINS the decoder (no restart)
       const dxb = ws(S.port, '/ws/dxcluster?user_session_id=satvb0001');
       await until(() => dxb.open, 3000);
       await sleep(300);
       const cwStarts = (S.L().match(/decoder attached: CW/g) || []).length;
-      dxb.send({ type: 'audio_extension_attach', extension_name: 'cw', ...vb.params, vfo: 'B' });
+      dxb.send({ type: 'audio_extension_attach', extension_name: vb.decoder, ...vb.params, vfo: 'B' });
       ok(await until(() => dxb.txt.some((t) => t.includes('"audio_extension_attached","vfo":"B"')), 3000), 'the B socket attached on VFO B');
       await sleep(300);
-      ok((S.L().match(/decoder attached: CW/g) || []).length === cwStarts, 'it joined the open\'s CW decoder (not restarted)');
+      ok((S.L().match(/decoder attached: CW/g) || []).length === cwStarts, 'it joined the open\'s CW skimmer (not restarted)');
+      // ★★ beta92 B's skimmer window is centred on B's CORRECTED frequency (nominal + B's shift) and moves with it
+      {
+        const cwl = () => jsons(dxb, 'cw_signals').map((m) => m.data).filter((d) => d && d.aim === true);
+        ok(await until(() => cwl().length >= 2, 5000), `B's skimmer list says it is aimed ("aim":true, ${cwl().length} lists)`);
+        const d = cwl().slice(-1)[0], c = chanB(sp);
+        const want = 435605000 + (c?.shift ?? 0);
+        ok(d && c && Math.abs(d.centre - want) < 60, `B's 24 kHz window centred on 435.605 + B's Doppler (${d?.centre} vs ${want.toFixed(0)}, shift ${c?.shift?.toFixed?.(1)} Hz)`);
+        const cs = cwl().map((x) => x.centre);
+        ok(new Set(cs).size >= 2 || Math.abs((c?.shift ?? 0)) < 1, `…and it moves with the pass (${cs.slice(-4).join(', ')})`);
+      }
       // refusals
       sp.txt.length = 0;
       sp.send({ type: 'sat_vfob', norad: 44909, tx: 0 });
@@ -603,7 +616,7 @@ try {
       sp.txt.length = 0; dxb.txt.length = 0;
       sp.send({ type: 'watch', id: 1, off: true });
       ok(await until(() => lastVfob(sp)?.on === false && !lastVfob(sp)?.refused, 3000), `VFO B off → sat_vfob on:false (${lastVfob(sp)?.why})`);
-      ok(/\[sat\] decoder cw on VFO B detached/.test(S.L()), 'its CW decoder stopped');
+      ok(/\[sat\] decoder cwskim on VFO B detached/.test(S.L()), 'its CW skimmer stopped');
       await sleep(400);
       ok(!dxb.txt.some((t) => t.includes('decoder_refused')), 'quietly: no "start it again" refusal on the B socket');
       ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && m.tx === 'Transponder'), 3000) && jsons(sp, 'sat').every((m) => m.state !== 'OFF'), 'A\'s lock on the transponder stands');
@@ -618,6 +631,25 @@ try {
       ok(await until(() => lastVfob(sp)?.on === false && /pick changed/.test(lastVfob(sp)?.why || ''), 3000), `a new pick closes B (${lastVfob(sp)?.why})`);
       p = lastPicked(sp);
       ok(await until(() => lastPicked(sp)?.tx === 1, 3000) && JSON.stringify(lastPicked(sp)?.vfob) === '[0]', `beacon picked: the transponder offered the other way (${JSON.stringify(lastPicked(sp)?.vfob)})`);
+      // ★★ beta92 the beacon on A: the 24 kHz skimmer centred on the Doppler-CORRECTED prediction (the lock's nominal + shift),
+      //    following it — read through a decoder socket that joins the pick's skimmer; the passband ±3 kHz around it
+      {
+        ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === -3000 && lastOf(sp, 'config')?.bandwidthHigh === 3000, 3000), 'the beacon pick\'s passband: ±3 kHz, centred');
+        const dxa = ws(S.port, '/ws/dxcluster?user_session_id=satvb0001');
+        await until(() => dxa.open, 3000); await sleep(300);
+        const n0 = (S.L().match(/decoder attached: CW skimmer/g) || []).length;
+        dxa.send({ type: 'audio_extension_attach', extension_name: 'cwskim', width: 24000 });
+        const cwl = () => jsons(dxa, 'cw_signals').map((m) => m.data).filter((d) => d && d.aim === true);
+        ok(await until(() => cwl().length >= 2, 5000), `A's skimmer list says it is aimed (${cwl().length} lists)`);
+        ok((S.L().match(/decoder attached: CW skimmer/g) || []).length === n0, 'the socket JOINED the pick\'s skimmer (not restarted)');
+        const d = cwl().slice(-1)[0];
+        const r = jsons(sp, 'sat').filter((m) => m.state === 'TRACK' || m.state === 'COAST').slice(-1)[0];
+        const want = r ? r.nominal + (r.offset ?? 0) : NaN;
+        ok(d && r && Math.abs(d.centre - want) < Math.abs(r.rate || 0) * 1.5 + 60,
+           `A's window centred on the corrected prediction (${d?.centre} vs ${want.toFixed?.(0)} = ${r?.nominal} ${r?.offset >= 0 ? '+' : ''}${r?.offset?.toFixed?.(0)} Hz)`);
+        ok(Math.abs((d?.centre ?? 0) - 435605000) > 20 || Math.abs(r?.offset ?? 0) < 20, `…not the dial's nominal 435.605 000 (offset ${r?.offset?.toFixed?.(0)} Hz)`);
+        dxa.close();
+      }
       sp.send({ type: 'sat_vfob', norad: 44909, tx: 0 });
       ok(await until(() => lastVfob(sp)?.on === true && lastVfob(sp)?.decoder === '' && lastVfob(sp)?.mode === 'usb', 3000), 'the transponder in VFO B: USB, nothing to decode');
       sp.txt.length = 0;

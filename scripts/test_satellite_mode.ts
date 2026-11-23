@@ -15,6 +15,7 @@ import {
   globeLabelText, GLOBE_RX_DOT, GLOBE_KEY_TEXT, globeArrowPath, GLOBE_ARROW_PX, satHeadingText, satMapOffered, satViaText, satTelemetryMerge, satTelemetryHex, satMapOverlay,
   parseSatVfoB, satVfoBMsg, SAT_VFOB_OFF_MSG, SAT_VFOB_KEY, satVfoBOffers, satVfoBHz, satDecView, satViewSwitch, satViewShown, satDecWord, satVfoBLine,
   satCwTail, satTextAppend, type SatInfo,
+  satBeaconRows, satBeaconText, satOffText, satDecoderKey, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_EMPTY,
 } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -488,6 +489,31 @@ console.log('— 1.9 the MAP key');
   ok(satVfoBLine(on!, 'CW beacon', { state: 'TRACK', nominal: 435640000, offset: -4745, time: 'ok' }) === `VFO B · CW beacon · ${satHzText(satVfoBHz(435605000, { state: 'TRACK', nominal: 435640000, offset: -4745, time: 'ok' }))}`, 'B\'s line');
   ok(satCwTail('VVV\nDE RS44\r\n\nRS44 K\n') === 'VVV\nDE RS44\nRS44 K' && satCwTail('a\nb\nc\nd\ne\nf', 4) === 'c\nd\ne\nf', 'the CW text: the last lines');
   ok(satTextAppend('x'.repeat(1999), 'yy').length === 1600 && satTextAppend('ab', 'c') === 'abc', 'the text kept bounded');
+
+  // ★★ beta92 a SKIMMED CW beacon (Stuart's RS-44 pass 11-23: the beacon ~2 kHz below the prediction, outside the
+  //    one-signal passband): the server's 'cwskim' over 24 kHz, the box's list nearest the prediction first with offsets
+  const pks = parseSatPicked({ type: 'sat', state: 'picked', norad: 44909, tx: 1, decoder: 'cwskim' });
+  ok(pks?.decoder === 'cwskim', 'picked: decoder cwskim parsed');
+  ok(parseSatList({ type: 'sat_list', sats: [{ id: 'RS-44', name: 'RS-44', norad: 44909, tx: [{ label: 'CW beacon', hz: 435605000, mode: 'cw', decoder: 'cwskim' }] }] })?.sats[0]?.tx[0]?.decoder === 'cwskim',
+     'sat_list: a beacon\'s decoder cwskim kept');
+  ok(satDecView('cwskim') === 'text' && satDecoderKey('cwskim') === 'cw' && satDecoderKey('aprs') === 'aprs', 'a skimmed beacon shows text, under CW\'s key');
+  ok(satDecWord('cwskim', 'packet', false, false) === 'CW skimmer listening 24 kHz around the beacon' && satDecWord('cw', 'packet', false, false) === 'CW decoder listening for the beacon',
+     'its words: the skimmer listening 24 kHz around the beacon (the one-signal words unchanged for an older server)');
+  ok(SAT_BEACON_SKIM_HZ === 24000 && SAT_BEACON_AUDIO_HALF_HZ === 3000, 'the window 24 kHz, the audio ±3 kHz (the server\'s figures)');
+  ok(satOffText(-2100) === '\u22122.1 kHz' && satOffText(350) === '+350 Hz' && satOffText(0.3) === '0 Hz' && satOffText(4490) === '+4.5 kHz' && satOffText(-999) === '\u2212999 Hz',
+     'offsets: "−2.1 kHz", "+350 Hz", "0 Hz"');
+  const bl = { centre: 435609010, signals: [
+    { hz: 435613500, text: 'CQ DE G4ABC', active: true }, { hz: 435606910, text: 'RS44  RS44 BEACON', active: true, wpm: 20.4 },
+    { hz: 435609200, text: '  ', active: true }, { hz: 435609360, text: 'E E', active: false } ] };
+  const rows = satBeaconRows(bl);
+  ok(rows.map((r) => Math.round(r.off)).join(',') === '350,-2100,4490' && rows[1].text === 'RS44 RS44 BEACON' && rows[1].wpm === 20,
+     `nearest the prediction first, no text = not listed (${rows.map((r) => Math.round(r.off)).join(',')})`);
+  ok(satBeaconText(bl) === '+350 Hz \u00b7 E E\n\u22122.1 kHz \u00b7 RS44 RS44 BEACON\n+4.5 kHz \u00b7 CQ DE G4ABC', 'the box\'s lines');
+  ok(satBeaconText({ centre: 1, signals: [{ hz: 2, text: 'X'.repeat(100) }] }).endsWith('X'.repeat(63)) && satBeaconText({ centre: 1, signals: [{ hz: 2, text: 'X'.repeat(100) }] }).includes('\u2026'),
+     'a long text: its latest 63 characters');
+  ok(satBeaconText(null) === '' && satBeaconText({ centre: 0, signals: bl.signals }) === '' && SAT_BEACON_EMPTY === 'no CW in the 24 kHz around the beacon yet',
+     'no list / no centre: nothing (the box says so)');
+  ok(satBeaconRows(bl, 2).length === 2, 'at most N rows');
 }
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nall ${pass} passed`);

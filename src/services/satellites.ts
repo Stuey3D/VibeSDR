@@ -103,7 +103,7 @@ export function parseSatList(m: unknown): SatList | null {
                   sstv: t.sstv === true ? true : undefined, why: str(t.why, 160),
                   band: typeof t.band === 'string' && /^[A-Za-z]{1,2}\/[A-Za-z]{1,2}$/.test(t.band) ? t.band : undefined,
                   modeName: str(t.modeName, 24),
-                  decoder: t.decoder === 'lrpt' || t.decoder === 'sstv' || t.decoder === 'aprs' || t.decoder === 'cw' || t.decoder === 'fctlm' || t.decoder === '' ? t.decoder : undefined });
+                  decoder: t.decoder === 'lrpt' || t.decoder === 'sstv' || t.decoder === 'aprs' || t.decoder === 'cw' || t.decoder === 'cwskim' || t.decoder === 'fctlm' || t.decoder === '' ? t.decoder : undefined });
       }
     const passes: SatPass[] = [];
     if (Array.isArray(s.passes))
@@ -319,13 +319,15 @@ export function txUse(t: SatTx): SatUse {
 
 /** {"type":"sat","state":"picked",norad,tx,decoder} — the server's answer to a pick (a refusal comes as OFF + why). */
 export interface SatPicked {
-  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'fctlm';
+  /** ★★ beta92 a CW beacon is 'cwskim' (the CW skimmer over 24 kHz centred on the corrected prediction); 'cw' = an older
+   *  server's one-signal CW decoder. */
+  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm';
   /** ★★ beta92 OPEN IN VFO B: the other downlinks of this bird THIS listener may open in VFO B now (the server decides:
    *  inside the capture with their Doppler, VFO B allowed here). Absent = none (or an older server: no key). */
   vfob?: number[];
 }
 const satDecoderName = (d: unknown): SatPicked['decoder'] =>
-  d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'fctlm' ? d : '';
+  d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' ? d : '';
 export function parseSatPicked(m: unknown): SatPicked | null {
   const o = m as Record<string, unknown> | null;
   if (!o || o.type !== 'sat' || o.state !== 'picked') return null;
@@ -392,7 +394,7 @@ export function satVfoBHz(nominalB: number, r: SatReadout | null): number {
 /** What a decoder shows in the box's decoder area: a picture, text (CW), packet lines, telemetry values — '' = nothing. */
 export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry';
 export function satDecView(d: SatPicked['decoder'] | undefined): SatDecView {
-  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : '';
+  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : '';
 }
 /** ★ The line switch exists only while B is open AND both lines have a decoder view (Stuart: "when switching between the
  *  lines all it does is change what is shown in the decoder box"). */
@@ -409,6 +411,7 @@ export function satViewShown(aDec: SatPicked['decoder'] | undefined, b: SatVfoB 
 export function satDecWord(decoder: SatPicked['decoder'] | undefined, use: SatUse, sstv: boolean | undefined, big: boolean): string {
   if (decoder === 'fctlm') return 'listening for telemetry';
   if (decoder === 'cw') return 'CW decoder listening for the beacon';
+  if (decoder === 'cwskim') return SAT_BEACON_WORD;
   if (use === 'image') return big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG';
   if (use === 'packet') return 'listening for packets';
   if (sstv) return 'listening — an SSTV picture opens here';
@@ -423,6 +426,44 @@ export function satVfoBLine(b: SatVfoB, label: string | undefined, r: SatReadout
 export function satCwTail(text: string, lines = 4): string {
   const t = text.replace(/\r/g, '').split('\n').filter((l) => l.trim().length).slice(-lines).join('\n');
   return t.length > 400 ? t.slice(-400) : t;
+}
+// ══ ★★ beta92 THE CW BEACON IS SKIMMED (Stuart, RS-44 on 2026-11-23: the beacon sat ~2 kHz below the prediction, outside
+//     the one-signal CW passband — "treat it like the cw skimmer and have a wider filter of say 24k"). The server runs the CW
+//     skimmer over 24 kHz centred on the Doppler-corrected prediction; the box lists what it reads, NEAREST THE PREDICTION
+//     FIRST, each with its offset from it — the offset is worth knowing in itself (catalogue figure, dongle error, orbit age).
+/** The skimmer's window around a beacon (Hz) — the server's kBeaconSkimHz. */
+export const SAT_BEACON_SKIM_HZ = 24000;
+/** Half the CW passband a beacon pick listens with, centred on the prediction (Hz) — the server's kBeaconAudioHalfHz. */
+export const SAT_BEACON_AUDIO_HALF_HZ = 3000;
+/** What a beacon's skimmer is doing before it has read anything. */
+export const SAT_BEACON_WORD = 'CW skimmer listening 24 kHz around the beacon';
+export const SAT_BEACON_EMPTY = 'no CW in the 24 kHz around the beacon yet';
+/** The skimmer's list as both clients parse it (decoders.ts / DecoderClient: cw_signals). `centre` = the prediction while
+ *  the window is aimed (a signal's hz − centre is its offset from it). */
+export interface SatBeaconList { centre: number; signals: { hz: number; text: string; active?: boolean; wpm?: number; snr?: number }[] }
+/** The client decoder key a pick's decoder runs under — a skimmed beacon ('cwskim') is CW's key, skimming. */
+export function satDecoderKey(d: SatPicked['decoder']): Exclude<SatPicked['decoder'], 'cwskim'> { return d === 'cwskim' ? 'cw' : d; }
+/** "−2.1 kHz" · "+350 Hz" · "0 Hz" — a signal's offset from the prediction (a true minus sign). */
+export function satOffText(hz: number): string {
+  if (!Number.isFinite(hz)) return '';
+  const r = Math.round(hz);
+  if (Math.abs(r) < 1) return '0 Hz';
+  const sign = r < 0 ? '\u2212' : '+';
+  const a = Math.abs(r);
+  return a < 1000 ? `${sign}${a} Hz` : `${sign}${(a / 1000).toFixed(1)} kHz`;
+}
+/** The rows the box shows: signals with text, nearest the prediction first, each its offset and its latest text. */
+export function satBeaconRows(l: SatBeaconList | null | undefined, max = 4): { off: number; text: string; active: boolean; wpm?: number }[] {
+  if (!l || !Number.isFinite(l.centre) || l.centre <= 0) return [];
+  return l.signals
+    .filter((x) => Number.isFinite(x.hz) && x.hz > 0 && x.text.trim().length > 0)
+    .map((x) => ({ off: x.hz - l.centre, text: x.text.replace(/\s+/g, ' ').trim(), active: x.active === true, wpm: x.wpm && x.wpm > 0 ? Math.round(x.wpm) : undefined }))
+    .sort((a, b) => Math.abs(a.off) - Math.abs(b.off))
+    .slice(0, max);
+}
+/** The box's text: one line a signal — "−2.1 kHz · RS44 RS44 BEACON …" (the last 64 characters it read). */
+export function satBeaconText(l: SatBeaconList | null | undefined, max = 4): string {
+  return satBeaconRows(l, max).map((r) => `${satOffText(r.off)} · ${r.text.length > 64 ? '\u2026' + r.text.slice(-63) : r.text}`).join('\n');
 }
 /** Text appended to a CW tail, kept bounded (a pass of beacon is a few hundred characters). */
 export function satTextAppend(prev: string, add: string): string {

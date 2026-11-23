@@ -494,8 +494,8 @@ static void s12(const std::string& dir) {
     CHECK(e->txAt(25544, 0, sd, tx) && bandOf(tx) == "V/u", "ISS FM repeater (145.990 up, 437.800 down): V/u");
     CHECK(e->txAt(44909, 1, sd, tx) && bandOf(tx).empty(), "a beacon (no uplink): no band");
     // 1.5 catalogue fixes
-    CHECK(e->txAt(7530, 3, sd, tx) && tx.hz == 145977500 && tx.mode == "cw" && decoderOf(tx, p) == "cw", "AO-7 Mode B CW beacon 145.9775, CW decoded");
-    CHECK(e->txAt(7530, 2, sd, tx) && tx.hz == 29502000 && decoderOf(tx, p) == "cw" && std::string(useOf(tx)) == "packet", "AO-7 Mode A beacon 29.502: cw, packet");
+    CHECK(e->txAt(7530, 3, sd, tx) && tx.hz == 145977500 && tx.mode == "cw" && decoderOf(tx, p) == "cwskim", "AO-7 Mode B CW beacon 145.9775, CW decoded (beta92: the skimmer)");
+    CHECK(e->txAt(7530, 2, sd, tx) && tx.hz == 29502000 && decoderOf(tx, p) == "cwskim" && std::string(useOf(tx)) == "packet", "AO-7 Mode A beacon 29.502: cwskim, packet");
     bool sonSstv = false, issUhf = false;
     for (int k = 0; k < 6; ++k) { if (e->txAt(59112, k, sd, tx) && tx.hz == 145880000 && sstvOf(tx) && decoderOf(tx, p) == "sstv") sonSstv = true;
                                   if (e->txAt(25544, k, sd, tx) && tx.hz == 437550000 && sstvOf(tx) && decoderOf(tx, p) == "sstv") issUhf = true; }
@@ -505,6 +505,13 @@ static void s12(const std::string& dir) {
     CHECK(e->txAt(44881, 0, sd, tx) && tx.passband() && tx.hz == 145915000 && tx.hiHz == 145935000 && bandOf(tx) == "U/v", "TO-108 (CAS-6) U/v 145.915–145.935");
     CHECK(e->txAt(39444, 1, sd, tx) && tx.consumer == "fc-bpsk" && decoderOf(tx, p) == "fctlm" && p.empty(), "AO-73: fc-bpsk → fctlm AUTO");
     CHECK(e->txAt(60209, 1, sd, tx) && tx.consumer == "fox-bpsk" && decoderOf(tx, p).empty(), "MO-122: fox-bpsk, no FUNcube decoder");
+    // ★★ beta92 a CW beacon pick runs the CW SKIMMER over 24 kHz (Stuart's RS-44 pass 11-23: the beacon ~2 kHz off the figure)
+    CHECK(e->txAt(44909, 1, sd, tx) && tx.mode == "cw" && beaconSkimmed(tx) && decoderOf(tx, p) == "cwskim" && p == "\"width\":24000"
+          && tuneHzOf(tx) == 435605000 && listenModeOf(tx) == "cw", "RS-44 CW beacon: cwskim, width 24000, tuned on the beacon itself (%s)", p.c_str());
+    CHECK(decoderAttachMsg("cwskim", p) == "{\"type\":\"audio_extension_attach\",\"extension_name\":\"cwskim\",\"width\":24000}",
+          "its attach is the CW key's own skimmer attach at 24 kHz — a client attaching the same JOINS it");
+    CHECK(kBeaconAudioHalfHz == 3000 && kBeaconSkimHz == 24000, "the beacon's audio: ±3 kHz centred; its skimmer: 24 kHz");
+    CHECK(!passKeepable(tx), "a CW beacon is still not an unattended-pass downlink");
     // the list's new fields
     SupplyInfo sup; sup.known = true; sup.pickPrivate = 1;
     json::Value l;
@@ -513,7 +520,7 @@ static void s12(const std::string& dir) {
     const json::Value* ao7 = findSat(l, "AO-7");
     CHECK(txOf(ao7, 0) && txOf(ao7, 0)->str("band") == "U/v" && txOf(ao7, 0)->str("modeName") == "Mode B" && txOf(ao7, 0)->get("decoder")
           && txOf(ao7, 0)->str("decoder").empty(), "sat_list: band, modeName, decoder:\"\" on a transponder");
-    CHECK(txOf(ao7, 2) && txOf(ao7, 2)->str("decoder") == "cw" && !txOf(ao7, 2)->get("band"), "sat_list: a beacon has decoder cw, no band");
+    CHECK(txOf(ao7, 2) && txOf(ao7, 2)->str("decoder") == "cwskim" && !txOf(ao7, 2)->get("band"), "sat_list: a beacon has decoder cwskim (beta92), no band");
     sup.pickPrivate = 0;
     CHECK(json::parseValue(e->listJson(Clock{kRsTca, true}, ReachWhyFn([](double, double) { return std::string(); }), sup), l)
           && l.get("source")->get("pickPrivate") && !l.get("source")->get("pickPrivate")->b, "a shared dial: pickPrivate false");
