@@ -8002,6 +8002,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); }
           return pk;
         });
+        /* ★★ beta92 LRPT at the symbol rate the server attached it with, so the app JOINS the pick's run instead of
+         *  restarting it in AUTO under another key — which hid the pick from the server's satellite watch, so no gain
+         *  re-measure at AOS (Stuart's METEOR-M2 4 pass, 11-23). */
+        if (decoderClient.current) {
+          const sr = Number(pk.params?.symbol_rate);
+          decoderClient.current.lrptSymbolRate = pk.decoder === 'lrpt' && Number.isFinite(sr) && sr > 0 ? sr : 0;
+        }
         satFollowRef.current(pk.decoder, satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx] ?? null);
       },
       /* ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick (on), a refusal (says why), or B gone */

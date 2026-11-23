@@ -662,7 +662,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         // ★ Zero-IF with a bandwidth wide enough for the whole FM MPX. RDS rides at 57 kHz,
         // so anything narrower than ~200 kHz would remove the very thing this device was
         // fetched to receive — and it would do so silently, looking like a decode failure.
-        ch->tunerParams.bwType = (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(sampleRateHz);
+        ch->tunerParams.bwType = (sdrplay_api_Bw_MHzT)ifBwKHzFor(sampleRateHz, false);   // ★ beta92 a pass keeps its narrower filter
         // ★★ ZERO-IF IS ONLY LEGAL AT 2 MHz AND ABOVE. Below that the RSP needs a LOW-IF
         // mode with its own bandwidth pairings, so the rate is raised to the minimum rather
         // than asking for a configuration the hardware will refuse or silently mangle.
@@ -889,8 +889,7 @@ void SdrplaySource::setSampleRate(double hz) {
     if (impl_->params->rxChannelA) {
         auto* ch = impl_->params->rxChannelA;
         // ★ The IF bandwidth must follow the rate, or a wider span arrives already filtered.
-        ch->tunerParams.bwType = decim ? sdrplay_api_BW_5_000
-                                       : (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(hz);
+        ch->tunerParams.bwType = (sdrplay_api_Bw_MHzT)ifBwKHzFor(hz, decim);   // ★ beta92 (a pass's narrower filter kept)
         ch->ctrlParams.decimation.enable           = decim ? 1 : 0;
         ch->ctrlParams.decimation.decimationFactor = decim ? 2 : 1;
         ch->ctrlParams.decimation.wideBandSignal   = decim ? 1 : 0;
@@ -1137,6 +1136,28 @@ void SdrplaySource::setGainTenthDb(int tenthDb) {
     if (open_)
         gainUpdate("setGainTenthDb", impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+}
+
+/* ★★ V12 beta92 A SATELLITE PASS's IF FILTER (vibe_sat_if.h; the shim's vsRspSatIf). Only ever NARROWER than the rate's
+ *  own filter, and never under DAB decimation (its 5 MHz is part of that arrangement). */
+int SdrplaySource::ifBwKHzFor(double fs, bool decim) const {
+    if (decim) return 5000;
+    const int rate = bandwidthKHzForRate(fs);
+    return ifBwOverrideKHz_ > 0 && ifBwOverrideKHz_ < rate ? ifBwOverrideKHz_ : rate;
+}
+int SdrplaySource::ifBandwidthKHzNow() const {
+    const double fs = curRate_ > 0 ? curRate_ : 2000000.0;
+    return ifBwKHzFor(fs, dabDecim_ && fs > 2040000.0 && fs < 2060000.0);
+}
+void SdrplaySource::setIfBandwidthOverrideKHz(int khz) {
+    if (khz != 0 && khz != 200 && khz != 300 && khz != 600 && khz != 1536) return;   // ★ the API's narrow filters only
+    if (khz == ifBwOverrideKHz_) return;
+    ifBwOverrideKHz_ = khz;
+    if (!open_ || !impl_->params || !impl_->params->rxChannelA) return;
+    const double fs = curRate_ > 0 ? curRate_ : 2000000.0;
+    const bool decim = dabDecim_ && fs > 2040000.0 && fs < 2060000.0;
+    impl_->params->rxChannelA->tunerParams.bwType = (sdrplay_api_Bw_MHzT)ifBwKHzFor(fs, decim);
+    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Tuner_BwType, sdrplay_api_Update_Ext1_None);
 }
 
 int SdrplaySource::bandwidthKHzForRate(double fs) {
@@ -2134,6 +2155,9 @@ int SdrplaySource::currentLnaState() const { return 0; }
 int  SdrplaySource::ifAgcSetPointDbfs() const { return -30; }   // ★ no-SDRplay stub (Android/iOS link)
 void SdrplaySource::restartIfAgc(int) {}
 int SdrplaySource::bandwidthKHzForRate(double) { return 0; }
+int SdrplaySource::ifBwKHzFor(double, bool) const { return 0; }
+int SdrplaySource::ifBandwidthKHzNow() const { return 0; }
+void SdrplaySource::setIfBandwidthOverrideKHz(int) {}
 }  // namespace vibe
 
 #endif

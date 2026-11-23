@@ -141,6 +141,14 @@ public:
      *  RSP1A's converter at 14 bits; 8.192 would not. Stuart's ask, 2026-09-15, for 10D. */
     void setDabDecimation(bool on) { dabDecim_ = on; }
     bool dabDecimation() const { return dabDecim_; }
+    /** ★★ V12 beta92 A SATELLITE PASS's IF FILTER (vibe_sat_if.h): a NARROWER analogue filter than the rate's own
+     *  (bandwidthKHzForRate) while a pass is on — 200 / 300 / 600 kHz around a downlink and its Doppler. 0 = the rate's
+     *  own, as ever. Kept here so a re-open or a rate change keeps it; never wider than the rate's, never under DAB
+     *  decimation. Sent at once as Update(Tuner_BwType) — the official API and OpenRSP both take it while streaming. */
+    void setIfBandwidthOverrideKHz(int khz);
+    int  ifBandwidthOverrideKHz() const { return ifBwOverrideKHz_; }
+    /** The analogue IF filter the radio is set to now, kHz. */
+    int  ifBandwidthKHzNow() const;
     /** < 0 = the API's own AGC. Otherwise mapped onto LNA state + IF gain; see the .cpp. */
     void setGainTenthDb(int tenthDb);
     /** Bias-T for an active antenna or LNA at the mast. */
@@ -485,6 +493,9 @@ private:
     std::atomic<bool> apiFailed_{false};
     std::atomic<bool> serviceDead_{false};
     bool dabDecim_ = false;
+    int  ifBwOverrideKHz_ = 0;   // ★ beta92 a satellite pass's narrower IF filter (0 = the rate's)
+    /** The filter for `fs`: the pass's narrower one where it applies, else the rate's own. */
+    int  ifBwKHzFor(double fs, bool decim) const;
     /** ★ The chosen port, kept HERE so it survives a re-Init: reopen() and the stall watchdog both
      *  rebuild the device parameters from defaults, and a selection that lived only in the API's
      *  struct would quietly revert to A on every recovery. Empty = never chosen / no ports. */

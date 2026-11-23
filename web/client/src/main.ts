@@ -10426,7 +10426,7 @@ function satPanelGet(): SatPanel | null {
       doppler: (on) => spec?.satDoppler(on),
       drop: () => spec?.satDrop(),
       rxPos: () => myPos(),
-      follow: (d, t) => satFollow(d, t),
+      follow: (d, t, prm) => satFollow(d, t, prm),
       left: () => { satFollow('', null); satVfoBDecoder(null); },
       image: (slot) => satLendImage(slot),
       track: (norad, aos, los) => spec?.satTrack(norad, aos, los),   // ★ 1.7 the pass's path (geo → the dotted orbit)
@@ -10451,7 +10451,7 @@ let satDec: SatPicked['decoder'] = '';
 /** ★★ beta92 the decoder key a pick's decoder runs under: a skimmed CW beacon ('cwskim') is CW's (the skimmer is CW's). */
 const satDecKey = (d: SatPicked['decoder']) => (d === 'cwskim' ? 'cw' : d);
 let satBeaconOn = false;   // ★★ beta92 the cwskim attach is the pick's (not the CW key's own skimmer setting)
-function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
+function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string, unknown>) {
   if (satDec && activeDec === satDecKey(satDec) && d !== satDec) stopDecoder();
   satDec = d;
   if (!d || !t || !decoders) { satBeaconOn = false; return; }
@@ -10473,7 +10473,8 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
     decoders.attach('cwskim', { width: SAT_BEACON_SKIM_HZ }, decVfo);
     spec?.setBandwidth(-SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_AUDIO_HALF_HZ);
   }
-  else decoders.attach(decExt(d), decParams(d), decVfo);
+  // ★★ beta92 the server's own parameters when it sent them (the pick's symbol rate): this JOINS its run, never restarts it
+  else decoders.attach(decExt(d), prm ? (prm as DecoderParams) : decParams(d), decVfo);
   syncDecButtons();
 }
 /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its

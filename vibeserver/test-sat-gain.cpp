@@ -256,6 +256,55 @@ int main() {
         ok(w.step(false, "", false, false) == Watch::End, "...ends when it stops");
     }
 
+    printf("\n★★ beta92 THE AOS RE-MEASURE (Stuart's METEOR-M2 4 pass, Pi 500, 2026-11-23): a pick armed before the rise\n");
+    {
+        // The pick attached LRPT with the satellite's symbol rate; the page FOLLOWING the pick re-attached it with none
+        // (AUTO), so the host restarted it under another key. Same decoder: still the pick's.
+        const std::string pickKey = "lrpt|-,-,-,-,-,-,-,-,-,-,-,-,-,-,72000.000000,";
+        const std::string pageKey = "lrpt|-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,";
+        ok(pickStillRuns("lrpt", pickKey, pickKey), "the host runs exactly what the pick attached: the pick's");
+        ok(pickStillRuns("lrpt", pickKey, pageKey), "★ the page re-attached LRPT with its own parameters: still the pick's");
+        ok(!pickStillRuns("lrpt", pickKey, "sstv|-,"), "the listener replaced it with another decoder: not the pick's");
+        ok(!pickStillRuns("lrpt", pickKey, ""), "nothing running: not the pick's");
+        ok(!pickStillRuns("", "", pickKey), "a pick with no decoder: never");
+        ok(extOfKey(pageKey) == "lrpt" && extOfKey("cwskim") == "cwskim", "the decoder named before the '|'");
+
+        // ★ THE FEED AS IT WAS: once the key differed the pick did not count, the watch fell through to "LRPT started by
+        //   hand" (key "lrpt", no orbit to ask) — a key change = Begin, and then NO AOS EVER.
+        Watch old;
+        ok(old.step(true, "pick:57166:0", true, false) == Watch::Begin, "(as it was) 13:46 the pick, armed before the rise: Begin");
+        ok(old.step(true, "lrpt", false, false) == Watch::Begin, "(as it was) the page re-attaches: 'LRPT by hand', Begin again");
+        bool sawAos = false;
+        for (int i = 0; i < 5; ++i) sawAos |= old.step(true, "lrpt", false, i >= 2) == Watch::Aos;
+        ok(!sawAos, "(as it was) 13:58 the rise: never seen — no re-measure (the bug)");
+
+        // ★ THE FEED NOW: the pick still counts, the key and the sky stay — AOS is seen
+        Watch now;
+        auto feed = [&](const std::string& hostKey, bool up) {
+            const bool running = pickStillRuns("lrpt", pickKey, hostKey);
+            return now.step(running, running ? "pick:57166:0" : "", true, up);
+        };
+        ok(feed(pickKey, false) == Watch::Begin, "13:46 the pick, armed before the rise: Begin (measure while waiting)");
+        ok(feed(pageKey, false) == Watch::None, "the page re-attaches LRPT: nothing (the same pass)");
+        ok(feed(pageKey, false) == Watch::None, "...waiting for the rise: nothing");
+        ok(feed(pageKey, true) == Watch::Aos, "★ 13:58 AOS: Aos — the hold measures again");
+        ok(feed(pageKey, true) == Watch::None, "...the pass: held");
+        ok(feed(pageKey, false) == Watch::End, "LOS: End");
+    }
+    {   // the hold re-measures on Aos (remeasure keeps it active, starts a fresh window)
+        Hold h(rtlRadio());
+        h.begin(0.0, "METEOR-M2 4 LRPT");
+        In in; in.gains = &rtl; in.curIdx = idxOf(rtl, 144); in.ceilIdx = top; in.floorDb = -60.0;
+        for (int s = 1; s <= 5; ++s) { in.now = s; in.peak = -13.5; h.tick(in); }
+        ok(h.phase() == Phase::Hold && rtl[(size_t)h.lastChoice().idx] == 197, "behind the 1000 kHz IF: -13.5 dBFS at 14.4 dB -> 19.7 dB");
+        h.remeasure(6.0);
+        ok(h.phase() == Phase::Measure, "AOS / the IF narrowed: measuring again");
+        in.curIdx = idxOf(rtl, 197);
+        Out last;
+        for (int s = 7; s <= 11; ++s) { in.now = s; in.peak = -21.3; const Out o = h.tick(in); if (!o.log.empty()) last = o; }
+        ok(last.kind == Out::Set && rtl[(size_t)last.idx] == 328, "behind 350 kHz: -21.3 dBFS at 19.7 dB -> 32.8 dB (Stuart's re-pick, 728 lines)");
+    }
+
     printf("\nThe official SDRplay API: the IF AGC's set point for a pass\n");
     {
         ok(rspApiPassSetPoint(-999) == -22, "owner never chose one: -22 dBFS average (the -10 peak, 12 dB peak-to-average)");

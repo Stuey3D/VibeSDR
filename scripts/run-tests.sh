@@ -315,7 +315,7 @@ flags_for() {
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
-    test-sat-orbit|test-sat-engine|test-sat-labels) echo "-O2 -lpthread" ;;   # ★ beta91 test-sat-labels: the waterfall's satellite labels
+    test-sat-orbit|test-sat-engine|test-sat-labels|test-sat-if) echo "-O2 -lpthread" ;;   # ★ beta91 test-sat-labels: the waterfall's satellite labels
     # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
     #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
     test-fctlm)            echo "-O2" ;;

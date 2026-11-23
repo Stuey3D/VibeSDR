@@ -723,6 +723,85 @@ try {
     } finally { S.stop(); }
   }
 
+  // ── 11. ★★★ beta92 THE PASS's IF FILTER + THE AOS RE-MEASURE (Stuart's METEOR-M2 4 pass, Pi 500, 2026-11-23) ──
+  //   A server placed AHEAD of ISS along its track, so ISS is below the horizon at the pick and rises a minute later.
+  //   The pick (APRS, Doppler on) narrows the tuner's IF filter to the narrowest that holds the downlink + its Doppler
+  //   BEFORE the gain hold measures; a page re-attaching the pick's decoder with its OWN parameters (the web page's LRPT
+  //   follow did exactly that) no longer hides the pick; AOS re-measures; the drop gives the filter back.
+  {
+    console.log('── ★★ beta92 the pass\'s IF filter + the AOS re-measure ──');
+    const R = 6371.0, rad = Math.PI / 180;
+    const issAt = async (S, sp) => { sp.txt.length = 0; sp.send({ type: 'sat_list' }); await until(() => !!lastOf(sp, 'sat_list'), 4000); return lastOf(sp, 'sat_list')?.sats?.find((s) => s.id === 'ISS'); };
+    let loc = '', aheadKm = 0;
+    {
+      const S = await server('satahead');
+      try {
+        const sp = await sock(S, 'satahd001');
+        const a = await issAt(S, sp); await sleep(6000); const b = await issAt(S, sp);
+        if (a && b) {
+          // the bearing a → b, then 2,250 km (ISS's horizon at 420 km) + ~75 s of ground track (7.16 km/s) ahead of b
+          const [p1, l1, p2, l2] = [a.lat * rad, a.lon * rad, b.lat * rad, b.lon * rad];
+          const th = Math.atan2(Math.sin(l2 - l1) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(l2 - l1));
+          aheadKm = 2250 + 7.16 * 75; const d = aheadKm / R;
+          const p3 = Math.asin(Math.sin(p2) * Math.cos(d) + Math.cos(p2) * Math.sin(d) * Math.cos(th));
+          const l3 = l2 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p2), Math.cos(d) - Math.sin(p2) * Math.sin(p3));
+          loc = locator(Math.max(-80, Math.min(80, p3 / rad)), ((l3 / rad + 540) % 360) - 180);
+        }
+        sp.close();
+      } finally { S.stop(); }
+    }
+    ok(/^[A-R]{2}\d\d[a-x]{2}$/.test(loc), `a place ${Math.round(aheadKm)} km ahead of ISS: ${loc}`);
+    const S = await server('satifn', { loc, freq: 145825000 });
+    try {
+      const sp = await sock(S, 'satifn001');
+      sp.send({ type: 'gain', auto: true });   // ★ VibeAGC on: the pass's gain hold runs inside it
+      const iss = await issAt(S, sp);
+      const now = Date.now() / 1000, aos = iss?.passes?.[0]?.aos ?? 0;
+      ok(iss && iss.el < 0 && aos - now > 5 && aos - now < 240, `ISS below the horizon, AOS in ${Math.round(aos - now)} s (el ${iss?.el?.toFixed(1)})`);
+      const bw0 = await until(() => !!lastOf(sp, 'hwinfo'), 3000) ? lastOf(sp, 'hwinfo').tunerBw : -1;
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 2, doppler: true });
+      ok(await until(() => lastPicked(sp)?.decoder === 'aprs', 4000), `ISS APRS picked (decoder ${lastPicked(sp)?.decoder})`);
+      const pk = lastPicked(sp);
+      ok(pk?.params && pk.params.packet === '1200' && pk.params.baud_rate === 1200, `★ picked carries the decoder's own parameters ${JSON.stringify(pk?.params)}`);
+      ok(await until(() => /armed before the rise/.test(S.L()), 5000), 'the gain watch: armed before the rise');
+      ok(await until(() => /satellite pass: IF filter \d+ -> 350 kHz \(ISS APRS 20 kHz \+ Doppler/.test(S.L()), 5000),
+         `★ the IF filter narrowed for the pass: ${(S.L().match(/satellite pass: IF filter[^\n]*/) || [''])[0]}`);
+      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 350000, 3000), `hwinfo: tunerBw ${lastOf(sp, 'hwinfo')?.tunerBw} (was ${bw0})`);
+      ok(await until(() => /satellite decode \(ISS APRS\) — gain held at -?[\d.]+ dB \(clips only\); measuring headroom/.test(S.L()), 6000),
+         `the gain hold measures: ${(S.L().match(/satellite decode \(ISS APRS\)[^\n]*/) || [''])[0]}`);
+      {
+        const L = S.L(), iIf = L.search(/satellite pass: IF filter \d+ -> 350 kHz/), iMeasure = L.search(/satellite decode \(ISS APRS\) — gain held/);
+        ok(iIf >= 0 && iMeasure > iIf, '★ the filter narrowed BEFORE the hold measured (the measurement is behind it)');
+      }
+      // ★ the page follows the pick with its OWN parameters (as the web page's LRPT follow did): the host restarts the
+      //   decoder under another key — the pick must still count (it used to stop counting: no AOS, or the pass "over")
+      const dx = ws(S.port, '/ws/dxcluster?user_session_id=satifn001');
+      await until(() => dx.open, 3000);
+      await sleep(300);
+      dx.send({ type: 'audio_extension_attach', extension_name: 'aprs', params: { packet: '1200', baud_rate: 1200, bits: 7 } });
+      await until(() => dx.txt.some((t) => t.includes('audio_extension_attached')), 3000);
+      const mark = S.L().length;
+      await sleep(4500);
+      ok(!/satellite gain: [^\n]*(is over|has set)/.test(S.L().slice(mark)) && !/satellite pass over/.test(S.L().slice(mark)),
+         '★ re-attached with other parameters: still the pick\'s pass (no "over")');
+      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 350000, 1000), 'the filter stays at 350 kHz');
+      // ★ AOS — the hold measures again
+      const wait = Math.max(0, aos - Date.now() / 1000) * 1000 + 15000;
+      ok(await until(() => /satellite gain: ISS APRS — AOS: the satellite is up/.test(S.L()), wait), `★ AOS seen (waited up to ${Math.round(wait / 1000)} s)`);
+      ok(await until(() => { const L = S.L(); const i = L.search(/satellite gain: ISS APRS — AOS/); return i >= 0 && /measuring again —/.test(L.slice(i)); }, 6000),
+         '★ AOS: the gain hold measures again');
+      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 350000, 1000), 'the filter held through AOS');
+      // the drop: the filter goes back to following the view
+      sp.send({ type: 'sat', op: 'drop' });
+      ok(await until(() => /satellite pass over: IF filter 350 -> \d+ kHz \(follows the view again\)/.test(S.L()), 5000),
+         `★ the drop gives the filter back: ${(S.L().match(/satellite pass over: IF filter[^\n]*/) || [''])[0]}`);
+      ok(await until(() => (lastOf(sp, 'hwinfo')?.tunerBw ?? 0) > 350000, 3000), `hwinfo: tunerBw ${lastOf(sp, 'hwinfo')?.tunerBw} after the pass`);
+      dx.close();
+      sp.close();
+    } finally { S.stop(); }
+  }
+
   // ── 8. ★★★ the R36S handheld: no satellites at all (Stuart, 2026-11-20) ──
   {
     console.log('── the handheld radio: no satellites ──');

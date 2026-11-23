@@ -325,6 +325,10 @@ export interface SatPicked {
   /** ★★ beta92 OPEN IN VFO B: the other downlinks of this bird THIS listener may open in VFO B now (the server decides:
    *  inside the capture with their Doppler, VFO B allowed here). Absent = none (or an older server: no key). */
   vfob?: number[];
+  /** ★★ beta92 the parameters the server attached the decoder with — a page following the pick attaches exactly these, so
+   *  it JOINS the pick's run instead of restarting it under another key (the AOS bug: the server's satellite watch then
+   *  lost the pick and never saw the rise). Absent = an older server: the page's own defaults. */
+  params?: Record<string, unknown>;
 }
 const satDecoderName = (d: unknown): SatPicked['decoder'] =>
   d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' ? d : '';
@@ -339,6 +343,7 @@ export function parseSatPicked(m: unknown): SatPicked | null {
     const v = (o.vfob as unknown[]).map(num).filter((x): x is number => x != null && x >= 0).map(Math.floor).filter((x, i, a) => x !== p.tx && a.indexOf(x) === i).slice(0, 16);
     if (v.length) p.vfob = v;
   }
+  if (p.decoder && o.params && typeof o.params === 'object' && !Array.isArray(o.params)) p.params = o.params as Record<string, unknown>;
   return p;
 }
 

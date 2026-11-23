@@ -151,6 +151,7 @@
 #include "vibe_avi_mode.h"
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
 #include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
+#include "vibe_sat_if.h"         // ★★ V12 beta92 the satellite pass's IF filter — the narrowest that holds the signal + its Doppler
 /** ★★ V12 the one satellite engine of this process (curated birds, element sets, the server's sky, every lock). */
 static vibe::sat::Engine& satEngine() { return vibe::sat::engine(); }   // ★ the header's singleton: decoders reach it too
 /** ★ The engine reads the corrected UTC FT8 reads (brief §5), and whether SNTP has measured it. */
@@ -3672,6 +3673,32 @@ static std::atomic<int>  g_satGainSeq{0};
 static std::mutex        g_satGainWhatMtx;
 static std::string       g_satGainWhat;          // "METEOR-M2 4 LRPT" — for the logs
 static std::string vsSatGainWhat() { std::lock_guard<std::mutex> lk(g_satGainWhatMtx); return g_satGainWhat; }
+/* ══ ★★★ V12 beta92 THE SATELLITE PASS'S IF FILTER (vibe_sat_if.h — Stuart 11-23, METEOR-M2 4 on the Pi 500's V4) ═════════
+ *  While a satellite pick (the room's, a listener's own, an unattended pass) is on — from the pick, or from AOS after an
+ *  earlier LOS, to LOS / the pick going — the tuner's IF filter is the narrowest that holds every picked downlink and its
+ *  whole Doppler swing (vibesatif::halfNeeded around the tuner's centre). Published by the housekeeping (satIfTick);
+ *  applied by applyAutoIf (an RTL) and by the RSP's own thread (vsRspSatIf). The REGIONS, not a width: the width
+ *  depends on where the tuner sits, and each radio rounds it to its own filters. Empty = no pass. */
+static std::mutex                       g_satIfMtx;
+static std::vector<vibesatif::Region>   g_satIfRegions;
+static std::atomic<bool>                g_satIfOn{false};
+static std::atomic<bool>                g_satIfWas{false};   // applyAutoIf last decided a pass's width (for the end's log)
+static std::vector<vibesatif::Region> vsSatIfRegions() { std::lock_guard<std::mutex> lk(g_satIfMtx); return g_satIfRegions; }
+/** "LRPT 150 kHz + Doppler ±6.2 kHz" (and the others) — for the logs. */
+static std::string vsSatIfWhy(const std::vector<vibesatif::Region>& rs) {
+    std::string w;
+    for (const auto& r : rs) { if (!w.empty()) w += "; "; w += r.why; }
+    return w;
+}
+/** ★ A pass's gain hold measures behind the filter it has: a change of filter is a change of headroom, so the hold
+ *  measures again (the RTL's overloadTick and the RSP's vsRspSatTick both re-measure on a new g_satGainSeq). */
+static void vsSatIfChanged(int fromHz, int toHz) {
+    // ★ not as a pass ENDS (its filter going back is the end of the hold too, not a reason to measure)
+    if (!g_satGainOn.load(std::memory_order_relaxed) || !g_satIfOn.load(std::memory_order_relaxed) || fromHz == toHz) return;
+    g_satGainSeq.fetch_add(1);
+    LOGI("satellite pass: the IF filter changed (%d -> %d kHz) \xe2\x80\x94 the gain hold measures the headroom again",
+         fromHz / 1000, toHz / 1000);
+}
 
 /* ══ LIGHTNING (SFERICS) — a badge, not an instrument ═══════════════════════════════════════════
  * ★★★ MEASURED BEFORE IT WAS WRITTEN, on Stuart's V4L at Northampton on 2026-08-27 while a storm
@@ -5985,6 +6012,28 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
  *  corroborated overload) move it, down. The writes go through the same smoother notice and the same Update(Tuner_Gr)
  *  as VibeAGC's. At the end VibeAGC adopts the gain the pass left and acquires from there.
  *  @return true while the pass owns the gain — the caller skips VibeAGC's own tick. */
+/** ★★★ V12 beta92 A SATELLITE PASS NARROWS THE RSP's IF FILTER TOO (vibe_sat_if.h). The RSP is zero-IF and its analogue
+ *  filter is normally the rate's own (bandwidthKHzForRate: 1536 kHz at 2 MS/s); a pass picks the narrowest of the API's
+ *  200 / 300 / 600 kHz that still holds every picked downlink and its Doppler around the tuner (rfHz), and gives it back
+ *  at the end. The RSP has no listener-facing IF control, so there is no hand-set width to yield to. A change makes the
+ *  pass's gain hold measure again (vsSatIfChanged), exactly as on an RTL. Runs on the RSP's own thread. */
+static void vsRspSatIf(SdrplaySource* sdrp, double rfHz, double rate) {
+    if (!sdrp) return;
+    int want = 0;   // kHz, 0 = the rate's own
+    std::vector<vibesatif::Region> rs;
+    if (g_satIfOn.load(std::memory_order_relaxed)) rs = vsSatIfRegions();
+    const int rateK = SdrplaySource::bandwidthKHzForRate(rate);
+    if (!rs.empty() && !sdrp->dabDecimation())
+        want = vibesatif::narrowestRung(2.0 * vibesatif::halfNeeded(rs, rfHz), vibesatif::rspRungs(), rateK * 1000.0) / 1000;
+    const int had = sdrp->ifBandwidthOverrideKHz();
+    if (want == had) return;
+    const int from = sdrp->ifBandwidthKHzNow();
+    sdrp->setIfBandwidthOverrideKHz(want);
+    const int to = sdrp->ifBandwidthKHzNow();
+    if (want > 0) LOGI("satellite pass: IF filter %d -> %d kHz (%s)", from, to, vsSatIfWhy(rs).c_str());
+    else          LOGI("satellite pass over: IF filter %d -> %d kHz (the sample rate's own again)", from, to);
+    vsSatIfChanged(from * 1000, to * 1000);
+}
 static bool vsRspSatTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, double centreHz) {
     static vibesatgain::Hold hold(vibesatgain::rspRadio());
     static int seen = -1;
@@ -8757,6 +8806,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    "so minor anyway, you'd have to be rapidly zooming in and out continuously for it to
          *    be a big issue", and the capped range makes the moves smaller besides. */
         double half = rxBwHz * 0.5;
+        /* ══ ★★★ V12 beta92 A SATELLITE PASS: THE PASS'S WIDTH, NOT THE VIEW'S (vibe_sat_if.h, g_satIfRegions) ══════════════
+         *  The narrowest filter that holds every picked downlink and its whole Doppler swing, measured from the TUNER's
+         *  centre (where the filter is): 2 × (|signal − tuner| + occupied/2 + Doppler). WHY HERE: this is the one place an
+         *  automatic width is decided — every zoom, tune, rate change and Auto press comes through it — so while a pass is
+         *  on, the view cannot pull the filter anywhere (Stuart's 13:46 pick measured behind the 1000 kHz the view had set;
+         *  his zoom later found 9 dB). And because it lives inside AUTO, everything Auto already yields to still wins: a
+         *  width set BY HAND (tunerBwAuto off — returned above), DAB and the whole-radio modes, an owner's locked window,
+         *  an owner's fixed width for the band, and a full-rate IQ stream (which opens it wide below).
+         *  ★ A shared dial: the room is on the satellite — the pick owns the radio, as it owns the dial. A per-listener
+         *    radio: the pass's width is the PICKER's view; everybody else's view still counts as before (the filter is the
+         *    radio's, and a pick is not a reason to blank another listener's band). */
+        // ★ an RTL's tuner filter (USB, or rtl_tcp's): the RSP's own is set on its thread (vsRspSatIf)
+        const bool satRtl = dev != nullptr || useTcp();
+        const std::vector<vibesatif::Region> satRs = satRtl && g_satIfOn.load(std::memory_order_relaxed) ? vsSatIfRegions()
+                                                                                                        : std::vector<vibesatif::Region>{};
+        const bool satPass = !satRs.empty();
+        if (satPass) {
+            half = std::max(half, vibesatif::halfNeeded(satRs, rf));
+            if (!vsSharedDial())
+                for (auto& pr : allSpecPeers()) {
+                    auto c = dspFor(pr.sock);
+                    if (!c || c->viewSpanHz <= 0) continue;
+                    bool picker = false;
+                    for (const auto& r : satRs) if (!r.owner.empty() && r.owner == c->session) picker = true;
+                    if (picker) continue;
+                    double rlo = 0, rhi = 0; ifRegion(c->viewCentreHz, c->viewSpanHz, audioFreq.load(), rlo, rhi);
+                    half = std::max(half, 0.5 * (rhi - rlo) + ifShift(audioFreq.load(), true));
+                }
+        } else
         {
             const double span = displaySpan() / zoomFactor.load();
             /* ★★★ V12 beta25 — OFF A SHARED DIAL THE WIDTH FOLLOWS THE SIZE OF WHAT MUST FIT, NOT WHERE IT SITS: the view and
@@ -9005,11 +9083,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              * ★ `cur == 0` means "wider than the capture", so its effective width IS the capture.
              *   The ladder is ~1.4x per rung, so one rung-step is the smallest move worth a
              *   synchronous transfer on the bus carrying the IQ. */
-            if (want != cur) {
+            // ★★ beta92 not in a pass: the pass's width is decided once and held, so there is no flip-flop to damp — and
+            //    the deadband would keep the filter a rung wider than the pass needs (700 → 500 sits right on 1.4×).
+            if (want != cur && !satPass) {
                 const double curEff  = (cur  == 0) ? (double)sampleRate : (double)cur;
                 const double wantEff = (want == 0) ? (double)sampleRate : (double)want;
                 if (wantEff < curEff && wantEff > curEff / 1.4) want = cur;
             }
+            /* ★★ beta92 SAID PLAINLY, both ways: "satellite pass: IF filter 1000 -> 350 kHz (LRPT 150 kHz + Doppler ±6.2 kHz)",
+             *  and at the end "satellite pass over: IF filter 350 -> 1000 kHz (follows the view again)". */
+            const bool satStarted = satPass && !g_satIfWas.exchange(satPass);
+            const bool satEnded = !satPass && g_satIfWas.exchange(false);
+            if (want != cur && satPass)
+                LOGI("satellite pass: IF filter %d -> %d kHz (%s)", cur / 1000, want / 1000, vsSatIfWhy(satRs).c_str());
+            else if (satStarted)
+                LOGI("satellite pass: IF filter stays at %d kHz (%s)", cur / 1000, vsSatIfWhy(satRs).c_str());
+            else if (satEnded)
+                LOGI("satellite pass over: IF filter %d -> %d kHz (follows the view again)", cur / 1000, want / 1000);
             if (want != cur) {
                 // ★★★ ONLY WIDENING ARMS THE CUT. Narrowing takes energy AWAY, which can never
                 //     overload anything — the AGC's ordinary climb handles it, and arming here
@@ -9018,7 +9108,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     than the capture", i.e. the widest setting there is, so it counts as a
                 //     widening from any real number.
                 const bool widened = (want == 0 && cur != 0) || (cur != 0 && want > cur);
-                if (widened) {
+                /* ★★ beta92 …but not under a satellite pass's gain hold: the hold owns the gain, and a change of filter makes it
+                 *  MEASURE AGAIN instead (vsSatIfChanged, from setTunerBandwidth) — a forget and a fast cut here would be the very
+                 *  jolt the hold exists to prevent. The ordinary loop re-learns the channel when the pass ends. */
+                if (widened && !g_satGainOn.load(std::memory_order_relaxed)) {
                     // ★★ FORGET THE LEARNED MARGIN TOO. That margin was learned against a
                     //    filtered converter; keeping it would let the loop climb straight back
                     //    into the level we are about to leave.
@@ -11548,6 +11641,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (tx.passband()) m += ",\"lo\":" + vibe::sat::fmtNum(tx.hz, 0) + ",\"hi\":" + vibe::sat::fmtNum(tx.hiHz, 0);
             if (const std::string b = vibe::sat::bandOf(tx); !b.empty()) m += ",\"band\":\"" + b + "\"";
             if (!tx.modeName.empty()) m += ",\"modeName\":\"" + vibe::sat::jsonEsc(tx.modeName) + "\"";
+            /* ★★ beta92 the decoder's attach parameters, so a page following the pick attaches EXACTLY them and JOINS the
+             *  pick's run — the web page's LRPT follow sent no symbol rate, the host restarted the decoder under another key,
+             *  and the satellite watch lost the pick (the AOS bug, vibesatgain::pickStillRuns). */
+            std::string dp;
+            if (!p.decoder.empty() && vibe::sat::decoderOf(tx, dp) == p.decoder) m += ",\"params\":{" + dp + "}";
         }
         if (!decoderWhy.empty()) m += ",\"decoderWhy\":\"" + vibe::sat::jsonEsc(decoderWhy) + "\"";
         const std::string tail = ",\"time\":\"" + satEngine().timeState(satClock()) + "\"}";
@@ -11607,7 +11705,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it == satPicks_.end()) return; p = it->second; satPicks_.erase(it); }
         if (p.decoderKey.empty()) return;
         std::shared_ptr<DecoderHost> host = p.perVfo ? decoders_.find(p.owner) : decoders_.shared();
-        if (!host || host->startKey() != p.decoderKey) return;
+        // ★ beta92: the pick's decoder as the page re-attached it (same decoder, its own parameters) is still the pick's
+        if (!host || !vibesatgain::pickStillRuns(p.decoder, p.decoderKey, host->startKey())) return;
         host->stop();
         navWideSync();
         LOGI("[sat] decoder %s detached (SATELLITE drop)", p.decoder.c_str());
@@ -11926,9 +12025,69 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  pictures, telemetry and packets; never a CW beacon or a voice downlink) while its host still runs the very decoder
      *  the pick started, and LRPT / FUNcube telemetry started by hand (satellite-only decoders, no orbit to ask: held while
      *  they run). A listener's own APRS or SSTV on a terrestrial frequency is not a pass and changes nothing. */
+    /** ★★★ V12 beta92 THE SATELLITE PASS's IF FILTER (vibe_sat_if.h) — which downlinks the tuner's filter must hold now.
+     *  Every pick (the room's and each listener's own, with or without a decoder — an ISS voice pick narrows it too) and
+     *  an unattended pass, each with its own Watch (the gain profile's): on from the pick (armed before the rise
+     *  included — the gain is measured then, and must be measured behind the narrow filter), off after LOS until the next
+     *  AOS on the same pick, off when the pick goes. Published as g_satIfRegions; an RTL takes it in applyAutoIf (called
+     *  here, every tick while a pass is on, so the width follows wherever the tuner has been placed), an RSP on its own
+     *  thread. Runs BEFORE the gain watch on the same tick, so a pass's first measurement is already behind it. */
+    std::map<std::string, vibesatgain::Watch> satIfWatch_;
+    void satIfTick() {
+        std::vector<vibesatif::Region> rs;
+        std::set<std::string> live;
+        const bool sky = satEngine().haveObserver();
+        const double nowU = satClock().unix;
+        auto consider = [&](const std::string& key, long long norad, int txi, const std::string& owner, double demodBw) {
+            vibe::sat::SatDef sd; vibe::sat::Transmitter t;
+            if (!satEngine().txAt(norad, txi, sd, t)) return;
+            live.insert(key);
+            vibe::sat::Pass ps;
+            const bool up = sky && satEngine().passAt(norad, nowU, ps);
+            vibesatgain::Watch& w = satIfWatch_[key];
+            w.step(true, key, sky, up);
+            if (!w.on()) return;
+            vibesatif::Region r = vibesatif::regionOf(t, demodBw);
+            r.owner = owner;
+            r.why = sd.name + " " + r.why;
+            rs.push_back(r);
+        };
+        {
+            std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+            if (satPass_.on) consider("pass:" + std::to_string(satPass_.norad) + ":" + std::to_string(satPass_.tx), satPass_.norad, satPass_.tx, "", rxBwHz);
+        }
+        std::vector<std::pair<std::string, SatPick>> picks;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); for (auto& kv : satPicks_) picks.push_back(kv); }
+        for (const auto& kv : picks) {
+            const bool room = kv.first == kSatShared;
+            consider("pick:" + kv.first + ":" + std::to_string(kv.second.norad) + ":" + std::to_string(kv.second.tx),
+                     kv.second.norad, kv.second.tx, room ? std::string() : kv.second.owner, room ? rxBwHz : 0.0);
+        }
+        for (auto it = satIfWatch_.begin(); it != satIfWatch_.end();) it = live.count(it->first) ? std::next(it) : satIfWatch_.erase(it);
+        bool changed;
+        {
+            std::lock_guard<std::mutex> lk(g_satIfMtx);
+            changed = rs.size() != g_satIfRegions.size();
+            for (size_t i = 0; !changed && i < rs.size(); ++i)
+                changed = rs[i].centreHz != g_satIfRegions[i].centreHz || rs[i].halfHz != g_satIfRegions[i].halfHz || rs[i].owner != g_satIfRegions[i].owner;
+            if (changed) g_satIfRegions = rs;
+        }
+        const bool wasOn = g_satIfOn.exchange(!rs.empty());
+        if (!wasOn && !rs.empty() && g_vsLockedCentre.load() > 0.0)
+            LOGI("satellite pass: the IF filter is left as it is \xe2\x80\x94 the owner has locked this receiver's range (%s)", vsSatIfWhy(rs).c_str());
+        else if (!wasOn && !rs.empty() && (dev || useTcp()) && !g_tunerBwAuto.load(std::memory_order_relaxed))
+            LOGI("satellite pass: the IF filter stays at %d kHz \xe2\x80\x94 it was set by hand (%s)",
+                 g_tunerBwHz.load(std::memory_order_relaxed) / 1000, vsSatIfWhy(rs).c_str());
+        if (wasOn && rs.empty() && (dev || useTcp()) && !g_tunerBwAuto.load(std::memory_order_relaxed)) {
+            g_satIfWas.store(false);
+            LOGI("satellite pass over: the IF filter stays at %d kHz (set by hand)", g_tunerBwHz.load(std::memory_order_relaxed) / 1000);
+        }
+        if (changed || !rs.empty()) applyAutoIf();
+    }
     vibesatgain::Watch satGainWatch_;
     void satGainWatchTick() {
         if (frontDoorOnly || decoderOnly || stopping.load()) return;
+        satIfTick();   // ★★ beta92 the pass's IF filter first — the gain is measured behind it
         auto satDec = [](const std::string& d) { return d == "lrpt" || d == "sstv" || d == "fctlm" || d == "aprs"; };
         bool running = false; std::string key, what; long long norad = 0;
         {   // 1. an unattended pass (its decoder on the shared host)
@@ -11947,7 +12106,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (const auto& pk : picks) {
                 if (!satDec(pk.decoder) || pk.decoderKey.empty()) continue;
                 std::shared_ptr<DecoderHost> h = pk.perVfo ? decoders_.find(pk.owner) : decoders_.shared();
-                if (!h || h->startKey() != pk.decoderKey) continue;
+                // ★★★ beta92 the same DECODER, not the same key: the page following the pick re-attaches it (the AOS bug —
+                //     vibesatgain::pickStillRuns says how it hid the rise)
+                if (!h || !vibesatgain::pickStillRuns(pk.decoder, pk.decoderKey, h->startKey())) continue;
                 running = true; norad = pk.norad; key = "pick:" + std::to_string(pk.norad) + ":" + std::to_string(pk.tx);
                 vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
                 what = satEngine().txAt(pk.norad, pk.tx, sd, tx) ? sd.name + " " + tx.label : "satellite " + std::to_string(pk.norad);
@@ -15241,6 +15402,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sfericHold(10.0);
                 LOGI("AGC lock: no admin signed in \xe2\x80\x94 the IF AGC is back on");
             }
+            // ★★★ V12 beta92 a satellite pass narrows the RSP's IF filter (before the pass's gain hold measures behind it)
+            vsRspSatIf(sdrp.get(), rtlCenter.load() + hwOffsetHz(), sampleRate);
             {
                 static bool vagcWasActive = false;
                 const bool manualPending = (savedAgc0 == 0 || neverTouched) && sdrpAgcKick < 6
@@ -46594,7 +46757,9 @@ void LocalSdrShim::setTunerBandwidth(int hz) {
      *     the previous setting while looking authoritative, which is worse than drawing nothing.
      *  ★ It is also the right home for it on its own terms: this global is "the filter we want",
      *    and it is what the re-assertion after every retune and rate change reads. */
-    g_tunerBwHz.store(hz, std::memory_order_relaxed);
+    const int was = g_tunerBwHz.exchange(hz, std::memory_order_relaxed);
+    // ★★ beta92 a pass's gain hold measures again behind the new filter (whoever changed it) — on an RTL, whose filter this is
+    if (p->dev || p->useTcp()) vsSatIfChanged(was, hz);
     { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingTunerBw = hz; }
     p->hwWrCv.notify_one();
 }

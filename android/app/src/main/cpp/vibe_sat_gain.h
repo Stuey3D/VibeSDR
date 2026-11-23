@@ -13,7 +13,8 @@
  *
  * ★★★ THE PROFILE, in three phases (Hold below; the shim feeds it and performs what it returns):
  *   1. MEASURE — when a satellite picture / telemetry decoder starts on a pick (and again at AOS if the pick was armed
- *      before the rise): kMeasureSec of the converter's own headroom at the gain the radio is at. Nothing moves, except
+ *      before the rise, and again whenever the tuner's IF filter changes during the pass — beta92: a narrower filter
+ *      is more headroom, vibe_sat_if.h): kMeasureSec of the converter's own headroom at the gain the radio is at. Nothing moves, except
  *      that a converter ALREADY ON THE RAIL is shed at once (a clipped peak measures nothing) and the window restarts.
  *   2. SET — ONE write: the highest gain whose predicted peak stays the radio's margin below the rail (chooseGain), or —
  *      where the radio's own noise floor is known — no higher than lifts the band's floor kFloorLiftDb above it (more
@@ -308,6 +309,22 @@ private:
     std::string key_;
     void reset() { on_ = losSeen_ = wasUp_ = haveSky_ = false; key_.clear(); }
 };
+
+/** ★★★ beta92 THE AOS RE-MEASURE THAT NEVER CAME (Stuart's METEOR-M2 4 pass, Pi 500, 2026-11-23 13:58). Is a pick's
+ *  decoder still running on its host? `pickKey` = the DecoderHost start key the pick attached with (ext|params),
+ *  `hostKey` = what the host runs now.
+ *  ✗ It was `hostKey == pickKey`. The pick attaches LRPT with the satellite's own symbol rate ("symbol_rate":72000);
+ *    the listener's page then FOLLOWS the pick on its decoder socket — and both clients attached LRPT with no symbol
+ *    rate (AUTO), so the host restarted the decoder under a different key. From that moment the pick no longer counted;
+ *    the satellite watch fell through to "LRPT started by hand" — which has NO ORBIT TO ASK — and so it never saw the
+ *    rise. Measured at the pick (13:46), never again at AOS, gain left at the figure the wide IF had forced.
+ *  ★ The same DECODER on the pick's host is the pick's, whoever re-attached it and with whatever parameters: the
+ *    decoder named before the '|' of the key. A listener who replaced it with a different decoder has ended it. */
+inline std::string extOfKey(const std::string& key) { const size_t i = key.find('|'); return i == std::string::npos ? key : key.substr(0, i); }
+inline bool pickStillRuns(const std::string& pickDecoder, const std::string& pickKey, const std::string& hostKey) {
+    if (pickDecoder.empty() || pickKey.empty() || hostKey.empty()) return false;
+    return hostKey == pickKey || extOfKey(hostKey) == pickDecoder;
+}
 
 /* ── THE RSP: TWO STAGES ─────────────────────────────────────────────────────────────────────────────────── */
 /** ★ An RSP has no gain table: an LNA state (0 = most RF gain) and an IF reduction gRdB (20-59, less = more gain).

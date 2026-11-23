@@ -57,6 +57,11 @@ ok(parseSatList({ ...raw, sats: [{ ...raw.sats[0], inRangeFor: -4, tx: [{ ...raw
 console.log('— the pick reply and the requests');
 ok(JSON.stringify(parseSatPicked({ type: 'sat', state: 'picked', norad: 57166, tx: 0, decoder: 'lrpt' })) === '{"norad":57166,"tx":0,"decoder":"lrpt"}', 'picked lrpt');
 ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 25544, tx: 0, decoder: '' })?.decoder === '', 'picked, no decoder');
+// ★★ beta92 the decoder's own attach parameters (the page JOINS the pick's run with them — the AOS bug)
+ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 57166, tx: 0, decoder: 'lrpt', params: { modulation: 'auto', diff: 'auto', symbol_rate: 72000 } })?.params?.symbol_rate === 72000,
+   'picked lrpt carries its params (symbol_rate 72000)');
+ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 25544, tx: 0, decoder: '', params: { x: 1 } })?.params === undefined, 'no decoder: no params');
+ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 57166, tx: 0, decoder: 'lrpt', params: [1] })?.params === undefined, 'params not an object: ignored');
 ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 25544, tx: 0, decoder: 'evil' })?.decoder === '', 'an unknown decoder reads as none');
 ok(parseSatPicked({ type: 'sat', state: 'TRACK', norad: 1 }) === null && parseSatPicked({ type: 'sat', state: 'picked' }) === null, 'not a pick');
 ok(JSON.stringify(satPickMsg(25544, 1, true)) === '{"type":"sat","op":"pick","norad":25544,"tx":1,"doppler":true}', 'op pick');
