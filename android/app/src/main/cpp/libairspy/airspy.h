@@ -103,6 +103,9 @@ typedef struct {
 	int sample_count;
 	uint64_t dropped_samples;
 	enum airspy_sample_type sample_type;
+	/* ★ VibeSDR patch — the raw 12-bit ADC over this buffer (airspy_vibe_set_adc_stats); vibe_adc_total 0 = not scanned */
+	uint16_t vibe_adc_min, vibe_adc_max;
+	uint32_t vibe_adc_rails, vibe_adc_total;
 } airspy_transfer_t, airspy_transfer;
 
 typedef struct {
@@ -126,6 +129,8 @@ extern ADDAPI int ADDCALL airspy_init(void);
 #define AIRSPY_THREAD_USB      0   /* libusb event handling: completes and resubmits the transfers */
 #define AIRSPY_THREAD_CONSUMER 1   /* converts each buffer and runs the sample callback */
 extern ADDAPI void ADDCALL airspy_set_thread_hook(void (*hook)(int role));
+/* ★★★ VibeSDR patch — scan every `every`th buffer's raw ADC samples (min, max, rails); 0 = off. See airspy.c. */
+extern ADDAPI void ADDCALL airspy_vibe_set_adc_stats(struct airspy_device* device, uint32_t every);
 /* airspy_exit() deprecated */
 extern ADDAPI int ADDCALL airspy_exit(void);
 

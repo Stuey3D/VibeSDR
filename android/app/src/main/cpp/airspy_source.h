@@ -12,10 +12,12 @@
 //
 // ★★ UPSTREAM ALREADY HAS THE ANDROID DOOR. libairspyhf had to be patched to add an fd entry
 // point; libairspy ships airspy_open_fd() on libusb_wrap_sys_device(), so it needed no door.
-// ★ It is NO LONGER UNMODIFIED (2026-09-30): two marked VibeSDR patches — a deeper raw ring
+// ★ It is NO LONGER UNMODIFIED (2026-09-30): marked VibeSDR patches — a deeper raw ring
 //   (RAW_BUFFER_COUNT 8 -> 16) and airspy_set_thread_hook(), so its two streaming threads take the
 //   IQ priority instead of the default. Both exist because the library DROPS USB buffers when its
-//   consumer is late, and ours was starved under load. See the notes in airspy.c.
+//   consumer is late, and ours was starved under load. And (V12 beta92) airspy_vibe_set_adc_stats():
+//   the RAW converter's min / max / rail count, which the float IQ cannot give (the satellite gain
+//   hold). See the notes in airspy.c.
 //
 // Shape, against the other sources:
 //   1. Samples arrive as INTERLEAVED COMPLEX FLOAT (AIRSPY_SAMPLE_FLOAT32_IQ), already the
@@ -31,8 +33,10 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
+#include "vibe_sat_gain_airspy.h"   // ★ V12 beta92 the satellite gain hold's state + raw-ADC meter (pure, header-only)
 
 struct airspy_device;
 
@@ -157,6 +161,20 @@ public:
     void setPacking(bool on);
     bool packing() const { return packing_; }
 
+    /* ── ★★★ V12 beta92 THE SATELLITE-PASS GAIN HOLD (vibe_sat_gain_airspy.h) ─────────────────────────────
+     *  gainState / restoreGainState: the WHOLE gain state, read and put back exactly — mode, both remembered preset
+     *  positions, the slider figure, the three stages (−1 = never set, kept as −1) and both AGC switches — so a pass
+     *  hands the owner back precisely what they had. restoreGainState writes the radio once (applyGainMode).
+     *  setAdcStats: the raw converter's statistics (the VibeSDR libairspy patch airspy_vibe_set_adc_stats, one buffer
+     *  in four), on only while a pass is held; every call with on = true starts the meter afresh after a 0.25 s settle.
+     *  takeAdc: the whole seconds measured since the last take. */
+    vibesatgain::AirspyState gainState() const;
+    void restoreGainState(const vibesatgain::AirspyState& st);
+    void setAdcStats(bool on, double now = 0);
+    vibesatgain::AdcTake takeAdc();
+    /** The library's consumer thread: one scanned buffer's raw figures. */
+    void noteAdc(uint16_t lo, uint16_t hi, uint32_t rails, uint32_t total);
+
     /** ★ Drop buffers without stopping the stream, for the idle saver — the same contract as
      *  AirspyHfSource / HackRfSource::setPaused. Stopping and restarting is what re-states every
      *  setting (applyAll) and costs a settle; the idle saver only wants the DSP quiet. */
@@ -216,6 +234,9 @@ private:
     std::atomic<bool>   paused_{false};
     std::atomic<double> lastRx_{0.0};   // steady-clock seconds of the last buffer; 0 = never
     std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, usbDropPending_{0};   // see noteUsbDropped()
+    std::mutex adcMtx_;                    // ★ beta92: the consumer thread adds, the gain thread takes
+    vibesatgain::AdcMeter adc_;
+    uint32_t adcEvery_ = 0;                // 0 = the raw meter is off (re-stated onto a reopened handle by applyAll)
 };
 
 } // namespace vibe

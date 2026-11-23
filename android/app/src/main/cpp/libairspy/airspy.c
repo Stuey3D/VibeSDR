@@ -116,6 +116,9 @@ typedef struct airspy_device
 	iqconverter_int16_t *cnv_i;
 	void* ctx;
 	enum airspy_sample_type sample_type;
+	/* ★ VibeSDR patch — the raw ADC's statistics (airspy_vibe_set_adc_stats): every Nth buffer, 0 = off */
+	volatile uint32_t vibe_adc_every;
+	uint32_t vibe_adc_n;
 } airspy_device_t;
 
 static const uint16_t airspy_usb_vid = 0x1d50;
@@ -362,6 +365,36 @@ void ADDCALL airspy_set_thread_hook(void (*hook)(int role))
 	g_airspy_thread_hook = hook;
 }
 
+/* ★★★ VibeSDR patch: THE RAW ADC's STATISTICS, MEASURED BEFORE THE IQ CONVERTER (V12 beta92, the satellite gain hold).
+ *  The float IQ this library hands out has been through the fs/4 shift and the half-band filter, so its peak is NOT the
+ *  converter's: a full-scale sine comes out at 0.5 (−6 dB) and clipped noise at about 0.87 — no figure there means "on the
+ *  rail". The 12-bit samples here, before conversion, do: 0 and 4095 are the rails. With airspy_vibe_set_adc_stats(dev, n)
+ *  every nth buffer is scanned (n = 4 is the RTL path's one-in-four, vibe_sat_gain_airspy.h) and the four figures ride
+ *  out on that buffer's airspy_transfer (vibe_adc_total > 0); 0 (the default) = not even a branch's worth of cost, and
+ *  upstream behaviour exactly. One pass, integer only: the consumer thread already reads every sample to convert it. */
+void ADDCALL airspy_vibe_set_adc_stats(struct airspy_device* device, uint32_t every)
+{
+	if (device) { device->vibe_adc_every = every; device->vibe_adc_n = 0; }
+}
+
+static void vibe_adc_scan(const uint16_t* s, int count, airspy_transfer_t* t)
+{
+	uint16_t lo = 4095, hi = 0;
+	uint32_t rails = 0;
+	int i;
+	for (i = 0; i < count; i++)
+	{
+		const uint16_t v = (uint16_t)(s[i] & 0x0fff);
+		if (v < lo) lo = v;
+		if (v > hi) hi = v;
+		rails += (v == 0 || v == 4095) ? 1u : 0u;
+	}
+	t->vibe_adc_min = lo;
+	t->vibe_adc_max = hi;
+	t->vibe_adc_rails = rails;
+	t->vibe_adc_total = (uint32_t)count;
+}
+
 static void* consumer_threadproc(void *arg)
 {
 	int sample_count;
@@ -411,6 +444,15 @@ static void* consumer_threadproc(void *arg)
 		else
 		{
 			sample_count = device->buffer_size / 2;
+		}
+
+		/* ★ VibeSDR — the raw ADC's statistics, before anything converts the samples (see airspy_vibe_set_adc_stats) */
+		transfer.vibe_adc_total = 0;
+		if (device->vibe_adc_every && device->sample_type != AIRSPY_SAMPLE_RAW
+		    && ++device->vibe_adc_n >= device->vibe_adc_every)
+		{
+			device->vibe_adc_n = 0;
+			vibe_adc_scan(input_samples, sample_count, &transfer);
 		}
 
 		switch (device->sample_type)
