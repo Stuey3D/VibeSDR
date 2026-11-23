@@ -220,11 +220,15 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const bigH = winH > 950 ? Math.min(availH, winH * 0.62) : availH;
   const bigUseful = bigH >= smallFit + 40;
   const [bigPick, setBigPick] = useState(false);
+  const [listOpen, setListOpen] = useState(true);   // ★ beta92 declared before bodyH: SMALL grows while the list is open
   const [minimised, setMinimised] = useState(false);
   const handBig = useRef(false);
   const sized = useRef(false);
   const big = bigPick && bigUseful;
-  const bodyH = Math.round(big ? bigH : Math.min(availH, smallFit));
+  /* ★ beta92 (Stuart 11-23: "in small mode when opening the satellite list the box needs to expand a little so you can see
+   *  the list"): SMALL grows by about five rows while ALL SATELLITES is open under a pick — never past the space there is. */
+  const LIST_EXTRA_H = 180;
+  const bodyH = Math.round(big ? bigH : Math.min(availH, smallFit + (listOpen && p.picked ? LIST_EXTRA_H : 0)));
   const setBigByHand = (on: boolean) => { handBig.current = on; sized.current = true; setBigPick(on); if (on) setMinimised(false); };
   // a new pick opens at the size last chosen by hand
   useEffect(() => { sized.current = false; setBigPick(handBig.current); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -233,7 +237,6 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   // ★ the countdowns tick on between lists
   const [, setTick] = useState(0);
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
-  const [listOpen, setListOpen] = useState(true);
   const [tlmRaw, setTlmRaw] = useState(false);
   // ★★ beta91 TELEMETRY CHARTS — this pass from the live frames, the last passes from the gallery (read when CHARTS opens)
   const [tlmCharts, setTlmCharts] = useState(false);
