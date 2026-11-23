@@ -88,11 +88,7 @@ inline VagcProfile vagcProfile(VagcBand b) {
     switch (b) {
         case VagcBand::FmBroadcast: return {"FM broadcast", -20.0, 4.0, 2.0, -6.0, 52.0, 1.5, 8.0, false, 0, 0};
         case VagcBand::Dab:         return {"DAB",          -20.0, 6.0, 10.0, -6.0, 55.0, 1.5, 8.0, true, -34.0, -8.0};
-        /* ★ beta91 AM/MW's load line is 57, not 52 (Stuart 11-22: MW "should be 1 out of 6 usually", i.e. LNA 5): MW at
-         *   night is the strongest band the RSP sees, and on the Lenovo LNA 5 holds the peak with IF 56 — at 52 the load
-         *   rule cut it to state 6 (no RF at all), from where a 19 dB rung can never come back. 57 leaves the 59 rail's
-         *   swamped / clip protection exactly as it was. */
-        case VagcBand::AmMw:        return {"AM/MW",        -20.0, 5.0, 2.0, -6.0, 57.0, 2.0, 10.0, false, 0, 0};
+        case VagcBand::AmMw:        return {"AM/MW",        -20.0, 5.0, 2.0, -6.0, 52.0, 2.0, 10.0, false, 0, 0};
         case VagcBand::HfSsb:       return {"HF SSB/CW",    -20.0, 5.0, 2.0, -6.0, 52.0, 2.0, 10.0, false, 0, 0};
         case VagcBand::Nfm:         return {"VHF/UHF NFM",  -20.0, 4.0, 2.0, -6.0, 52.0, 1.5, 8.0, false, 0, 0};
     }
@@ -130,36 +126,6 @@ inline double vagcPriorRed(int band, int state) {
     return t[state];
 }
 
-/** ★★ beta91 (Stuart 11-22: "sdrplay agc is a matter of urgency … should be quick like it was"). A retune that leaves
- *  the capture — the new centre more than half the sample rate from the old — is a NEW BAND to the AGC even where the
- *  RSP's LNA band does not change: an RSP1A has ONE LNA band under 60 MHz, so MW → 40 m was "no band change", the loop
- *  stayed in its steady-state pace and took ~45 s (IF 2 dB/s, a rung per 10 s dwell) to bring the RF up from MW's state.
- *  `oldHz` 0 = no previous centre (the first tune): not a band change by this rule. */
-inline bool vagcBigRetune(double oldHz, double newHz, double rateHz) {
-    return oldHz > 0 && newHz > 0 && rateHz > 0 && std::fabs(newHz - oldHz) > rateHz * 0.5;
-}
-/** ★★ beta91 THE STATE A NEW HF / MW BAND STARTS FROM: the highest LNA state whose reduction is ≤ 18 dB (an RSP1A under
- *  60 MHz: state 3 of 0..6). The states past it are 37, 42 and 61 dB — attenuator territory. Arriving in a band from
- *  one of those (DAB, Band II, a strong band) the add rule (room for the WHOLE rung + kAddMarginDb in the IF) never
- *  fired on MW: at state 6 the ADC peak there does not scale with the RF (Lenovo RSP1A 11-20 → 11-22: −23.3 dBFS, IF
- *  37, for hours — something the LNA does not attenuate holds it), so the IF never had room for the 19 dB rung and MW
- *  sat at FULL attenuation ("no rf gain at all") on every visit from above, while arriving from 40 m it settled at
- *  LNA 2, IF 48. Starting from here, the protective rules (load, clip, swamped — fast, and never held back by this
- *  start) take RF out if the band needs it, and the add rule brings it up the small 6 dB rungs. */
-inline int vagcHfStartState(int band) {
-    int st = 0;
-    for (int s = 0; s < 28; ++s) { if (vagcPriorRed(band, s) <= 18.0 + 1e-9) st = s; else break; }
-    return st;
-}
-/** ★ The start state: HF (SSB/CW, and AM above 1.8 MHz) from vagcHfStartState; LW / MW from ONE rung in from full attenuation (Stuart:
- *  MW is "1 out of 6 usually" — strong at night; the lower states compress there: on the Lenovo LNA 1–2 read about the
- *  same peak as LNA 5, the front end no longer scaling). -1 = no start for this profile. */
-inline int vagcStartState(VagcBand b, int band, int nStates, double centreHz) {
-    if (b == VagcBand::AmMw && centreHz > 0 && centreHz < 1.8e6) return std::max(0, nStates - 2);   // LW / MW
-    if (b == VagcBand::HfSsb || b == VagcBand::AmMw) return vagcHfStartState(band);                // HF, SW broadcast
-    return -1;
-}
-
 /* ── WHAT THE SHIM HANDS IN, AND WHAT IT GETS BACK ──────────────────────────────────────────────────── */
 struct VagcIn {
     double now = 0.0;          // seconds, monotonic
@@ -172,7 +138,6 @@ struct VagcIn {
     bool   rfOwned = true;     // false = the owner runs the LNA by hand; we keep to the IF
     int    grFloor = 20;       // the owner's IF cap as the least reduction allowed (20 = no cap)
     int    band = 1;           // SdrplaySource::lnaBandId
-    double centreHz = 0.0;     // ★ beta91 the capture's centre (0 = unknown) — LW/MW starts one rung in, HF from state 3
     double learnedRed[28];     // learned LNA reduction per state in this band, any common offset; NaN unknown
     VagcIn() { for (double& d : learnedRed) d = NAN; }
 };
@@ -186,6 +151,7 @@ struct VagcOut {
     char   why[200] = {0};
     /* ★ WHY, as a number — for the live readout (rspstat `vrs`), which has no room for the sentence above. */
     int    act = 0;            // VagcAct
+    char   note[200] = {0};    // ★ beta92 a judgement with no write (the measured step's verdict) — the shim logs it
 };
 
 /* ★★ THE READOUT'S REASON CODES (rspstat `vrs`, 2026-10-30). Stuart: "do we get to see a readout of what the AGC is
@@ -201,6 +167,7 @@ enum VagcAct : int {
     kActIfDown     = 5,   // IF: too hot, less gain
     kActIfUp       = 6,   // IF: quiet, more gain
     kActIfDab      = 7,   // IF: DAB, the level left the freeze band
+    kActAddMeasure = 8,   // RF in: one rung from full attenuation, to measure whether the level is the antenna's
 };
 
 /* ── THE LOOP ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -227,7 +194,8 @@ public:
     }
     const VagcProfile& profile() const { return p_; }
     /** The gain the radio is at (ours — call once at take-over, and after anything else wrote it). Starts ACQUIRING. */
-    void adopt(int lna, int gr) { lna_ = lna; gr_ = std::clamp(gr, kGrMin, kGrMax); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; }
+    void adopt(int lna, int gr) { lna_ = lna; gr_ = std::clamp(gr, kGrMin, kGrMax); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1;
+                                  forgetMeasure(); }
     /** ★ True until the level has first sat on target for kAcqSettleSec (or kAcqMaxSec has passed) after a take-over or a
      *  band change. While acquiring, gain comes UP briskly — the cold start from minimum RF on a weak band took ~100 s at
      *  the steady-state pace (measured, case B) — and everything else is unchanged: attack, budgets, hysteresis. */
@@ -239,7 +207,7 @@ public:
          *   load judgement begun on the last block must not complete on this one (Lenovo, DAB rapid-step repro 10-30: an
          *   LNA cut 40 ms after a hop, on a dwell that had run through the block before). The overload ceiling is kept. */
         loadedSince_ = roomSince_ = -1;
-        if (bandChanged) { forgetJudgements(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; startPending_ = true; }
+        if (bandChanged) { forgetJudgements(); forgetMeasure(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; }
     }
     int lna() const { return lna_; }
     int gr()  const { return gr_; }
@@ -299,6 +267,22 @@ public:
         }
         const double addDwell = acquiring_ ? kAcqAddDwellSec : p_.rfAddDwellSec;
 
+        /* ── ★★ beta92 THE MEASURED STEP'S VERDICT (Stuart 11-23: "we cannot assume the rf gain") ──
+         *  After the one rung taken from full attenuation (section 1b), the level either moved as an antenna signal does
+         *  — by the rung less the IF counter-step — or it fell by the counter-step alone: the level was the radio's own
+         *  floor, not the antenna. The two outcomes are a whole rung apart; half a rung decides. An antenna signal hands
+         *  back to the ordinary rules (which cut it again if it loads the front end); the radio's own floor means the next
+         *  rung is measured the same way. */
+        if (measuring_ && hist_.size() >= 3) {
+            measuring_ = false;
+            const double moved = atk - measPk_;
+            const bool antenna = moved >= measExpect_ - measRung_ * 0.5;
+            measureNext_ = !antenna;
+            std::snprintf(o.note, sizeof o.note, "measured RF step: the level moved %+.1f dB (an antenna signal %+.1f, the "
+                          "radio's own floor %+.1f) — %s", moved, measExpect_, measExpect_ - measRung_,
+                          antenna ? "the antenna's; the ordinary rules carry on" : "the radio's own floor; the next rung is measured too");
+        }
+
         // ── the front-end judgements, on OUR gRdB ──
         /* ★★ gRdB is the load meter ONLY while the IF is actually holding the target. Just after a take-over it sits at
          *    its parking 59 with the level well under target, walking down — measured on the Lenovo 10-30: the load rule
@@ -313,29 +297,6 @@ public:
         if (roomForRung && !clipping) { if (roomSince_ < 0) roomSince_ = in.now; } else roomSince_ = -1;
         if (ceilingState_ >= 0 && in.now - ceilingAt_ > kCeilingSec) ceilingState_ = -1;   // ★ decays
 
-        // ── 0. ★ beta91 A NEW HF / MW BAND STARTS FROM vagcHfStartState, not from an attenuator state ──
-        if (startPending_) {
-            const int st = vagcStartState(band_, in.band, in.nStates, in.centreHz);
-            const int to = std::max(in.lnaFloor, st);
-            /* ★ only into a band that is QUIET at this attenuation — at or under the target with the IF free to counter-
-             *   step (≤ grHigh − kAddMarginDb). A band already on target here is a strong one: no RF is added to it.
-             * ★★ STAYS ARMED for the whole acquisition (live, Lenovo 11-23 00:19): the first window after the retune still
-             *   read DAB's level, and then the shim put the LNA back to "where the carrier had it" (6) — a start judged
-             *   once and dropped never saw the band it was for. */
-            const bool quietHere = atk <= p_.targetPk && gr_ <= p_.grHigh - kAddMarginDb;
-            if (st < 0 || !in.rfOwned || !acquiring_) startPending_ = false;
-            else if (lna_ > to && quietHere && !clipping && lnaAllowed(in.now)) {
-                startPending_ = false;
-                const double rung = rungDbFor(in, to, lna_);              // the gain those rungs add
-                const int grTo = clampGr((int)std::lround(gr_ + rung));   // counter-stepped as far as the IF allows
-                std::snprintf(o.why, sizeof o.why, "a new band — RF gain state %d -> %d (%.1f dB; where this band "
-                              "starts), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
-                              lna_, to, rung, gr_, grTo, atk);
-                o.act = kActAddRoom;
-                emit(o, in, to, grTo, +rung, 0);   // ★ direction 0: a load cut straight after it is NOT held back
-                return o;
-            }
-        }
         // ── 1. RF OUT: protection first ──
         if (in.rfOwned && lna_ + 1 < in.nStates && lnaAllowed(in.now)) {
             const bool swamped = gr_ >= kGrMax && atk > p_.attackPk;      // IF has nothing left and still hot
@@ -365,6 +326,33 @@ public:
                 emit(o, in, to, grTo, -rung, -1);
                 return o;
             }
+        }
+        /* ── 1b. ★★ beta92 RF IN BY MEASUREMENT, FROM FULL ATTENUATION (Stuart 11-23, after the 11-20 → 11-22 MW park) ──
+         *  The add rule (2) PREDICTS the level after a rung and demands IF room for all of it. At the band's most
+         *  attenuated state that prediction can be wrong: the level read there may be the radio's own floor, not the
+         *  antenna (Lenovo RSP1A on MW, arriving from FM at LNA 6: −23.3 dBFS at IF 37 for hours, about what LNA 2 reads
+         *  with IF 48), so the level sat "on target", the room never came and the RF stayed at full attenuation. So there —
+         *  and only there, or on the rung after a step that measured the radio's floor — one rung is TAKEN and the result
+         *  measured. Nothing about the radio or the band is assumed. Never in DAB (its IF freezes on purpose), never where
+         *  this loop itself cut to the bottom (that rung loaded the front end — no hunting), never into a recent overload
+         *  or straight after a clip. */
+        if (in.rfOwned && !p_.ifFreeze && !measuring_ && !cutToBottom_ && (lna_ == in.nStates - 1 || measureNext_)
+            && lna_ - 1 >= in.lnaFloor && lnaAllowed(in.now) && haveSecond && !roomForRung && !clipping
+            && std::fabs(atk - p_.targetPk) <= p_.deadDb && dec < p_.targetPk + p_.deadDb
+            && !(ceilingState_ >= 0 && lna_ - 1 <= ceilingState_)
+            && !(lastLnaDir_ < 0 && in.now - lastLnaAt_ < kReverseSec)
+            && in.now - lastClipAt_ > addDwell) {
+            const int to = lna_ - 1;
+            const double rung = rungDbFor(in, to, lna_);
+            const int grTo = clampGr((int)std::lround(gr_ + rung));
+            measuring_ = true; measPk_ = atk; measRung_ = rung; measExpect_ = rung - (grTo - gr_);
+            std::snprintf(o.why, sizeof o.why, "%s, level on target — one RF rung to measure it: state %d -> %d (rung "
+                          "%.1f dB), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
+                          lna_ == in.nStates - 1 ? "RF at full attenuation" : "the last rung read the radio's own floor",
+                          lna_, to, rung, gr_, grTo, atk);
+            o.act = kActAddMeasure;
+            emit(o, in, to, grTo, +rung, 0);   // ★ direction 0: a load cut straight after it is not held back
+            return o;
         }
         // ── 2. RF IN: only with room for the whole rung, sustained, and not into a recent overload ──
         if (in.rfOwned && lna_ - 1 >= in.lnaFloor && lnaAllowed(in.now) && haveSecond
@@ -453,7 +441,10 @@ private:
     double loadedSince_ = -1, roomSince_ = -1;
     int ceilingState_ = -1; double ceilingAt_ = -1e9;
     bool acquiring_ = true; double acqStart_ = -1, inBandSince_ = -1;
-    bool startPending_ = false;                            // ★ beta91 a band change: start HF / MW from vagcHfStartState
+    // ★ beta92 the measured step (1b): in flight, its before-level and expectations; the next rung measured too; this
+    //   loop cut to the bottom itself (no measuring there until a band change or an outside write)
+    bool measuring_ = false, measureNext_ = false, cutToBottom_ = false; double measPk_ = 0, measRung_ = 0, measExpect_ = 0;
+    void forgetMeasure() { measuring_ = measureNext_ = cutToBottom_ = false; }
     std::deque<double> writeTimes_;
     unsigned writes_ = 0, ifWrites_ = 0, lnaWrites_ = 0; int maxPerSec_ = 0;
 
@@ -474,6 +465,9 @@ private:
         o.ifDb = -(double)(gr - gr_);
         o.expectDb = o.lnaChanged ? (expectDb + o.ifDb) : o.ifDb;
         if (o.lnaChanged) { lastLnaAt_ = in.now; lastLnaDir_ = lnaDir; lastLnaAct_ = o.act; ++lnaWrites_; roomSince_ = -1; loadedSince_ = -1; }
+        // ★ only an antenna verdict or a CUT ends the measuring — an ordinary add on a small rung (5 → 4 on an RSP1A, 5 dB)
+        //   can still leave the RF under the radio's own floor, and the next big rung must be measured too
+        if (o.lnaChanged && lnaDir < 0) { measureNext_ = false; measuring_ = false; if (lna == in.nStates - 1) cutToBottom_ = true; }
         if (gr != gr_) { lastIfAt_ = in.now; ++ifWrites_; }
         if (o.lnaChanged && gr == gr_) lastIfAt_ = std::max(lastIfAt_, in.now - kIfMinSec + 0.25);
         lna_ = lna; gr_ = gr; ++writes_;
