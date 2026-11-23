@@ -228,6 +228,9 @@ flags_for() {
     # ★★ V12 beta90 THE STATION STORE (vibe_station_store.h — the DIGI MODES MAP + PSK Reporter): validation, RAM, the day
     #    files, four processes flushing one day (fork), windows, the caps and pruning, subscribe(), cost. Header-only.
     test-station-store) echo "-O2 -lpthread" ;;
+    # ★★ V12 beta92 THE FALSE-DECODE FILTER (vibe_callsign_entity.h, docs/v12/DIGI-MAP-FILTER.md): the ITU series table, 166
+    #    real call + grid pairs (every continent, islands, Antarctic bases, /MM /P), Stuart's Pi 500 false decodes, cost.
+    test-callsign-entity) echo "-O2" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
