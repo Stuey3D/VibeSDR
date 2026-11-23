@@ -2356,6 +2356,13 @@ printf '\n\033[1m── stop during a DAB start (end to end) ──\033[0m\n'
 node scripts/test-server-stop-during-dab.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ beta92 THE 8-SECOND SHUTDOWN HANG (docs/v12/SHUTDOWN-HANG.md; the Lenovo, 12 times in 3 days): SIGTERM 0.3–2.5 s after
+#     start, after running with a listener, and with a static destructor that never returns (VIBE_TEST_EXIT_WEDGE) — each
+#     exits in well under 3 s without the watchdog. Same VIBESERVER_BIN rule. ~40 s.
+printf '\n\033[1m── a quick stop, however soon after start (end to end) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-quick-stop.mjs 1; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ A RADIO THAT FALLS OVER AT A RATE A MODE BOOSTED IT TO (vibe_rate_guard.h, 2026-10-24): a fake rtl_tcp that stops
 #     at 2.4 MS/s — ADS-B left, the radio back at its base rate, the switch persisted off; then a planted crash marker
 #     found at start, recorded, cleared. Same VIBESERVER_BIN rule. ~30 s.
