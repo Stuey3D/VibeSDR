@@ -8,12 +8,16 @@
 // ★ A station heard without a locator (CW, PSK, RTTY) has no place on the map and is not drawn — never placed at a guess.
 // ★ Every field came off the air: cut to allow-lists here, as the web's map window does (main.ts cleanStations).
 import type { SpotRow } from './DecoderClient';
+import { entryRadios, logRadioChoices, type LogRadio } from '../utils/logRadio';
 
 export interface StoredStation {
   call: string; grid: string; mode: string; band: string; freq: number; count: number; snr: number; lastSnr: number;
   first: number; last: number; src: number; modes: string[]; bands: string[]; country: string; lat?: number; lon?: number; km?: number;
+  /** ★ beta92 which radio(s) heard it (ids; [] = unknown — kept before beta92) */
+  radios: string[];
 }
-export interface StoredStations { now: number; total: number; truncated: boolean; off: boolean; stations: StoredStation[] }
+/** `radios` (beta92): the radio filter's choices — null unless the window holds stations from 2+ radios (logRadio.ts). */
+export interface StoredStations { now: number; total: number; truncated: boolean; off: boolean; stations: StoredStation[]; radios: LogRadio[] | null }
 
 /** The windows the map offers, in the page's age select (the server's own words). */
 export const DIGI_STORE_WINDOWS: Array<{ id: string; label: string }> = [
@@ -29,7 +33,7 @@ const okNum = (v: unknown): number => { const n = Number(v); return v == null ||
 
 export function digiStationsSanitise(j: any): StoredStations | null {
   if (!j || typeof j !== 'object') return null;
-  if (j.off) return { now: okNum(j.now), total: 0, truncated: false, off: true, stations: [] };
+  if (j.off) return { now: okNum(j.now), total: 0, truncated: false, off: true, stations: [], radios: null };
   if (!Array.isArray(j.stations)) return null;
   const stations: StoredStation[] = [];
   for (const s of j.stations.slice(0, 6000)) {
@@ -46,9 +50,11 @@ export function digiStationsSanitise(j: any): StoredStations | null {
       country: okStr(s.country, /[<>&"'`\\]/g, 40),
       ...(placed ? { lat: Math.max(-90, Math.min(90, Number(s.lat))), lon: Math.max(-180, Math.min(180, Number(s.lon))) } : {}),
       ...(s.km != null && Number.isFinite(Number(s.km)) ? { km: Math.round(Number(s.km)) } : {}),
+      radios: entryRadios(s.radios).slice(0, 8),
     });
   }
-  return { now: okNum(j.now), total: Math.max(0, Math.round(okNum(j.total))), truncated: j.truncated === 1, off: false, stations };
+  return { now: okNum(j.now), total: Math.max(0, Math.round(okNum(j.total))), truncated: j.truncated === 1, off: false, stations,
+           radios: logRadioChoices(j.radios) };
 }
 
 /** ★ A live poll (since=) merged into what is held: changed calls replace theirs; a sliding window drops the aged ones. */
@@ -66,7 +72,7 @@ export function digiStationRows(held: Map<string, StoredStation>): SpotRow[] {
   for (const s of held.values()) {
     if (!s.grid) continue;
     out.push({ kind: 'digi', time: s.last * 1000, mode: s.mode, band: s.band, call: s.call, snr: s.snr, freqHz: s.freq,
-               grid: s.grid, country: s.country, ...(s.km != null ? { distKm: s.km } : {}) });
+               grid: s.grid, country: s.country, ...(s.km != null ? { distKm: s.km } : {}), ...(s.radios.length ? { radios: s.radios } : {}) });
   }
   return out;
 }

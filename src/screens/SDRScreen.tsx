@@ -19,6 +19,7 @@ import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 import { digiStationsSanitise, digiStationsMerge, digiStationRows, type StoredStation } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
+import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the logs' radio filter
 import { digiAprsPoints, digiOverlayClean, type DigiMapOverlay } from '../utils/digiMapShared';
 import { setDigiModesMapOpener, openDigiModesMap } from '../services/digiModesMap';
 import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, sondeRanges, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
@@ -11826,6 +11827,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  picks (stations.json, polled every 15 s while it is open, only what changed since), and the APRS box's stations. */
   const [digiWin, setDigiWin] = useState('24h');
   const [digiStore, setDigiStore] = useState<Map<string, StoredStation>>(() => new Map());
+  /** ★★ beta92 the radio filter's choices on the DIGI MODES MAP (logRadio.ts — 2+ radios hold stations, else null). */
+  const [digiRadios, setDigiRadios] = useState<LogRadio[] | null>(null);
   const [digiAprsOn, setDigiAprsOn] = useState(false);
   const [digiOverlay, setDigiOverlay] = useState<DigiMapOverlay | null>(null);
   /* ★★★ THE ONE OPENER (services/digiModesMap.ts — the satellite client and anything else call it): the layer, a station
@@ -11852,7 +11855,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/stations.json?${q}`, radioAuthSuffix || route.params.authSuffix || ''),
                               { cache: 'no-store' } as any);
         const j = r.ok ? digiStationsSanitise(await r.json()) : null;
-        if (live && j && !j.off) { held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); }
+        if (live && j && !j.off) { held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); setDigiRadios(j.radios); }
       } catch { /* the next poll */ }
       if (live) t = setTimeout(() => { void go(); }, 15000);
     };
@@ -17170,6 +17173,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         aprsPoints={digiAprs}
         aprsFocus={aprsFocus}
         digiOverlay={digiOverlay}
+        digiRadios={digiStorePolling ? digiRadios : null}
         onPickCity={() => setCityPickerOpen(true)}
         onClose={() => { setLocalMapOpen(false); setDigiAprsOn(false); setDigiOverlay(null); }}
         disconnected={serverLost || serverBusy || connTimedOut}

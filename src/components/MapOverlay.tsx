@@ -29,6 +29,7 @@
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle, spotsListModes } from '../utils/digiModes';
+import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the digi map's radio filter
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
@@ -194,6 +195,9 @@ interface MapOverlayProps {
   aprsFocus?: string;
   /** ★★ V12 beta90 a caller's overlay on the DIGI MODES MAP (digiMapShared.ts DigiMapOverlay — a satellite pass). */
   digiOverlay?: unknown | null;
+  /** ★★ V12 beta92 THE RADIO FILTER on the DIGI MODES MAP (src/utils/logRadio.ts): the server's radios that hold stations
+   *  in the window — null (fewer than two) draws no control. A view: a station with no radio shows under every radio. */
+  digiRadios?: LogRadio[] | null;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -542,6 +546,7 @@ ${isSpots ? `
   <span class="flabel">FILTER</span>
   ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${legendModes.map((m) => `<option>${esc(m)}</option>`).join('')}</select>` : ''}
   ${kind === 'digi' ? '<button type="button" id="fAprs" class="fkey" hidden title="APRS stations from the APRS decoder — tap to show or hide">APRS</button>' : ''}
+  ${kind === 'digi' ? '<select id="fRadio" hidden aria-label="Radio" title="Which of this server\'s radios heard it"></select>' : ''}
   <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'].map((b) => `<option>${b}</option>`).join('')}</select>
   <select id="fAge">${kind === 'digi' && storeWindows
     /* ★★ V12 beta90 THE DIGI MODES MAP: this server keeps every station (background decoding and every listener) — the
@@ -1719,7 +1724,7 @@ if(KIND==='digi'||KIND==='cw'){
    *  that is all we keep: the newest report per station replaces its older one. Memory now grows with
    *  the number of distinct stations heard, not with time, and the markers are GPU circles. */
   var spots=[], byKey={}, markers={};
-  var fMode=document.getElementById('fMode'), fBand=document.getElementById('fBand'), fAge=document.getElementById('fAge');
+  var fMode=document.getElementById('fMode'), fBand=document.getElementById('fBand'), fAge=document.getElementById('fAge'), fRadio=document.getElementById('fRadio');
 
   // skin BAND_COLOUR — markers coloured by band, sized by SNR
   var BAND_COLOUR={'2200m':'#9b30d9','630m':'#c71585','160m':'#e8001e','80m':'#ff5500','60m':'#ff8c00',
@@ -1743,6 +1748,8 @@ if(KIND==='digi'||KIND==='cw'){
   }
   function passes(s){
     if(!isCW&&fMode&&fMode.value!=='ALL'&&famOf(s.mode,FAMS)!==String(fMode.value).toUpperCase())return false;
+    // ★ beta92 the radio filter: a station another radio heard is hidden; one with no radio (unknown) always shows
+    if(fRadio&&fRadio.value&&s.radios&&s.radios.length&&s.radios.indexOf(fRadio.value)<0)return false;
     if(fBand&&fBand.value!=='ALL'&&spotBand(s)!==fBand.value)return false;
     var fa=fAge?fAge.value:'ALL';
     if(fa!=='ALL'){
@@ -1823,7 +1830,18 @@ if(KIND==='digi'||KIND==='cw'){
     queueLetters();
     if(statsOpen)updateStats();
   }
-  [fMode,fBand,fAge].forEach(function(el){if(el)el.onchange=rebuild;});
+  [fMode,fBand,fAge,fRadio].forEach(function(el){if(el)el.onchange=rebuild;});
+  /* ★★ beta92 THE RADIO FILTER's choices, pushed by React Native (logRadio.ts logRadioChoices — two or more radios, or
+   *  none: the select hides and shows everything). The pick survives a push while that radio is still offered. */
+  window.__radiosPush=function(json){try{var a=JSON.parse(json);if(!fRadio)return;
+    var keep=fRadio.value||'';
+    var ok=Array.isArray(a)?a.filter(function(r){return r&&/^[0-9a-z]{1,16}$/.test(String(r.id||''));}).slice(0,32):[];
+    if(ok.length<2){fRadio.hidden=true;fRadio.innerHTML='';if(keep)rebuild();return;}
+    fRadio.innerHTML='<option value="">All radios</option>'+ok.map(function(r){return '<option value="'+esc(r.id)+'">'+esc(String(r.name||r.id).slice(0,60))+'</option>';}).join('');
+    fRadio.value=ok.some(function(r){return r.id===keep;})?keep:'';
+    fRadio.hidden=false;
+    if(fRadio.value!==keep)rebuild();}catch(e){console.error('radios push',e);}};
+  if(window.__pendingRadios){window.__radiosPush(window.__pendingRadios);window.__pendingRadios=null;}
   // ★ beta90 the server's window follows the age filter (React Native asks the station store for it)
   if(fAge&&STORE_WIN)fAge.addEventListener('change',function(){var v=fAge.value;
     var w=v==='ALL'?'all':(v==='24h'||v==='7d'||v==='30d')?v:'1h';
@@ -1950,7 +1968,8 @@ if(KIND==='digi'||KIND==='cw'){
       wpm:typeof d.wpm==='number'?d.wpm:undefined,
       freq:d.frequency, country:String(d.country||''),
       distKm:(function(){var v=parseFloat(d.distance_km);return isNaN(v)?(lat!=null?distKm(lat,lon):0):v;})(),
-      t:(function(ts){var x=new Date(ts).getTime();return isNaN(x)?Date.now():x;})(cw?d.time:d.timestamp)
+      t:(function(ts){var x=new Date(ts).getTime();return isNaN(x)?Date.now():x;})(cw?d.time:d.timestamp),
+      radios:Array.isArray(d.radios)?d.radios.slice(0,8).map(String).filter(function(x){return /^[0-9a-z]{1,16}$/.test(x);}):[]
     };
   }
   /* ★ THE PILL IS A WAY TO THE SPOT (Stuart, 2026-09-28: it showed a hand cursor and did nothing, as the
@@ -2038,14 +2057,14 @@ function spotToData(s: SpotRow) {
   return {
     grid: s.grid, mode: s.mode, band: s.band, callsign: s.call,
     snr: s.snr, frequency: s.freqHz, distance_km: s.distKm, timestamp: s.time,
-    country: s.country,
+    country: s.country, ...(s.radios?.length ? { radios: s.radios } : {}),
   };
 }
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
-    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay }:
+    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay, digiRadios }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2192,6 +2211,13 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`(window.__aprsPush?window.__aprsPush(${lit},${f}):(window.__pendingAprs=[${lit},${f}]));true;`);
   };
   useEffect(() => { if (visible) pushAprs(); }, [visible, aprsPoints, aprsFocus]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★ V12 beta92 the radio filter's choices (logRadio.ts): null → [] (the select hides). Double-encoded as the spots are. */
+  const radiosKey = JSON.stringify(digiRadios ?? []);
+  useEffect(() => {
+    if (!visible || kind !== 'digi') return;
+    const lit = JSON.stringify(radiosKey).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    webRef.current?.injectJavaScript(`(window.__radiosPush?window.__radiosPush(${lit}):(window.__pendingRadios=${lit}));true;`);
+  }, [visible, kind, radiosKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const pushOverlay = () => {
     if (kind !== 'digi') return;
     const lit = JSON.stringify(JSON.stringify(digiOverlay ?? null)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');

@@ -1242,6 +1242,8 @@ if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); 
 #    server's readers through scripts/gen-navtex-stations.mjs — stale output fails here. The rule's cases are in
 #    test_navtex.ts above and vibeserver/test-bgdecode.cpp.
 if node --no-warnings scripts/test_gallery_pager.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_pager.ts"; fi
+# ★★ V12 beta92 the logs' RADIO filter rule (src/utils/logRadio.ts) — when it is offered, what passes it
+if node --no-warnings scripts/test_log_radio.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_log_radio.ts"; fi
 # ★ The gallery's TRANSLATE (2026-10-23): which lines are sent, the source language and its hint, the layout kept.
 if node --no-warnings scripts/test_gallery_translate.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_translate.ts"; fi
 if node --no-warnings scripts/test_admin_bg.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_admin_bg.ts"; fi
