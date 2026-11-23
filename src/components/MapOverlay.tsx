@@ -88,7 +88,9 @@ import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/ship
 import { seaLegendRows } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
-import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's HH:MM:SS UTC (the slot's start)
+import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
+import { DIGI_FIT_JS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
+import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend rows   // ★ the spot card's HH:MM:SS UTC (the slot's start)
 
 /* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
  *  profile (airports, runways), the same receiver marker, chrome and transitions — so opening it feels like
@@ -462,6 +464,14 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px;}
   /* ★ The mode letter on the LEAFLET FALLBACK spots map (no WebGL 2 / no GPU pack) — see drawLetters. As the web's .mkl. */
   .mkl{pointer-events:none}
+  /* ★★ beta92 THE APRS SYMBOL on the digi map, its CALLSIGN under it from zoom 8 (body.aprsLb): white on a dark halo, so it
+   *  reads on the dark map and the satellite imagery alike. Not a target — the symbol is. */
+  .apk{position:relative;width:28px;height:28px}
+  .apk svg{display:block}
+  .apk .apl{display:none;position:absolute;top:29px;left:50%;transform:translateX(-50%);white-space:nowrap;pointer-events:none;
+    font:bold 11px/1.15 ui-monospace,Menlo,monospace;letter-spacing:0.5px;color:#ffffff;padding:1px 3px;border-radius:3px;
+    background:rgba(8,10,12,0.62);text-shadow:0 0 2px #000,0 1px 2px #000}
+  body.aprsLb .apk .apl{display:block}
   .mkl b{display:block;width:12px;height:12px;font:bold 9px/12px ui-monospace,Menlo,monospace;text-align:center}
   .lg-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;}
   .lg-mk{width:15px;height:15px;font:bold 9px/15px monospace;text-align:center;box-shadow:0 0 0 1.2px ${DIGI_MARKER_RIM};}
@@ -538,6 +548,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   <div id="title">${TITLE}${opts?.only ? `<br><span style="font-size:10px;letter-spacing:1px;opacity:0.75">${esc(opts.only)}</span>` : ''}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
   ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : kind === 'avdata' ? 'aircraft' : 'station'} on the map">FIT</button>` : ''}
+  ${isSpots ? '<button id="snap" class="digifit" title="Fit every station the filters show">FIT</button>' : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
@@ -581,8 +592,9 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:#4fa3ff;"></span><span>moving</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:#39d0d8;"></span><span>weather</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:#ffad42;"></span><span>object / item</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:#c58cff;"></span><span>digipeater / gateway</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>Dashed ring = alternate symbol table</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#c58cff;border-radius:3px;"></span><span>digipeater / gateway (square)</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Dashed rim = alternate symbol table</span></div>
+      <div class="lg-row"><span>?</span><span>A character = a symbol not drawn here</span></div>
       ` : kind === 'avdata' ? `
       <div class="lg-sec">AVIATION MAP (ADS-B · ACARS · VDL2 · HFDL · ADS-C)</div>
       <div class="lg-row"><span style="color:rgb(80,255,120)">&#9992;</span><span>a fresh position &mdash; under 10 s (ADS-B) or 2 min (datalink)</span></div>
@@ -650,6 +662,8 @@ ${isSpots ? `
       <div class="lg-sec">MODE</div>
       ${legendModes.map((m) => { const st = digiModeStyle(m); return `<div class="lg-row"><span class="lg-dot lg-mk" style="background:${st.colour};color:${st.ink};">${esc(st.letter)}</span><span>${esc(m)}</span></div>`; }).join('')}
       <div class="lg-row"><span>Colour + letter = mode</span></div>
+      <div class="lg-sec">APRS (the APRS key)</div>
+      ${APRS_LEGEND.map((r) => `<div class="lg-row"><span style="display:inline-flex;width:20px;height:20px">${aprsLegendIcon(r, 20).html}</span><span>${esc(r.words)}</span></div>`).join('')}
       <div class="lg-sec">SNR / SIZE</div>
       <div class="lg-row"><span class="lg-dot" style="width:14px;height:14px;background:rgba(255,255,255,0.5);box-shadow:0 0 6px 3px rgba(255,255,255,0.4);"></span><span>Strong (&ge;0 dB)</span></div>
       <div class="lg-row"><span class="lg-dot" style="width:9px;height:9px;background:rgba(255,255,255,0.5);"></span><span>Medium (-20 to 0)</span></div>
@@ -1858,8 +1872,9 @@ if(KIND==='digi'||KIND==='cw'){
     aprsPts.forEach(function(a){
       if(a.trail&&a.trail.length>=2)L.polyline(a.trail,{color:'#88CCEE',weight:1.5,opacity:0.7}).addTo(aprsGroup);
       var svg=aprsSvgOk(a.svg);
-      var m=svg?L.marker([a.lat,a.lon],{icon:L.divIcon({html:svg,className:'',iconSize:[22,22],iconAnchor:[11,11]})})
-               :L.circleMarker([a.lat,a.lon],{radius:7,color:RIM,weight:1.2,fillColor:'#88CCEE',fillOpacity:0.9,label:'A',labelColor:'#000000'});
+      // ★★ beta92 the symbol at 28 px (src/utils/aprsSymbols.ts), its callsign under it from zoom 8 (aprsLabels)
+      var m=svg?L.marker([a.lat,a.lon],{icon:L.divIcon({html:'<div class="apk">'+svg+'<span class="apl">'+esc(a.call)+'</span></div>',className:'',iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-13]})})
+               :L.circleMarker([a.lat,a.lon],{radius:9,color:RIM,weight:1.5,fillColor:'#88CCEE',fillOpacity:0.95,label:'A',labelColor:'#000000'});
       m.addTo(aprsGroup).bindPopup('<div style="font-size:14px;color:#88CCEE;letter-spacing:1px;">'+esc(a.call)+'</div>'
         +'<div style="margin-top:4px;font-size:12px;color:rgba(136,204,238,0.75);">'+esc(a.symName||'APRS')+(a.km!=null?' &bull; '+Math.round(a.km)+' km':'')+'</div>'
         +(a.wx?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.75);">Weather: '+esc(a.wx)+'</div>':'')
@@ -1876,6 +1891,16 @@ if(KIND==='digi'||KIND==='cw'){
     aprsDraw();}catch(e){console.error('aprs push',e);}};
   var aprsKey=document.getElementById('fAprs');
   if(aprsKey)aprsKey.addEventListener('click',function(){aprsOn=!aprsOn;aprsDraw();});
+  function aprsLabels(){try{document.body.classList.toggle('aprsLb',map.getZoom()>=8);}catch(e){}}
+  map.on('zoomend',aprsLabels);aprsLabels();
+  /* ★★ beta92 THE FIT KEY (Stuart 11-23: "spots map could do with the auto fit button too") — the AIS / APRS maps' FIT,
+   *  in the same place: every station the filters SHOW (a spot with a marker — mode, band, age, radio — and the APRS
+   *  stations while their key is on), padded, never past zoom DIGI_FIT_MAX_ZOOM. src/utils/digiMapShared.ts DIGI_FIT_JS. */
+  ${DIGI_FIT_JS}
+  var digiFitBtn=document.getElementById('snap');
+  if(digiFitBtn)digiFitBtn.addEventListener('click',function(){
+    digiFitApply(map,L,digiFitView(digiShownPoints(spots,function(s){return !!markers[key(s)];},aprsPts,aprsOn)));
+  });
   if(window.__pendingAprs){window.__aprsPush(window.__pendingAprs[0],window.__pendingAprs[1]);window.__pendingAprs=null;}
   /* ★★ beta90 a caller's OVERLAY (openDigiModesMap's — a satellite pass: its ground track, footprint and points), already
    *  cleaned by digiMapShared.ts digiOverlayClean; numbers and short labels only, checked again here. */

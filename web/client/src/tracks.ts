@@ -15,6 +15,7 @@ import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
 import { flagEmoji } from '../../../src/services/adsbInfo';
+import { aprsColour, aprsIcon as aprsSymIcon } from '../../../src/utils/aprsSymbols';
 
 export type LatLon = { lat: number; lon: number };
 
@@ -282,50 +283,10 @@ export function aisRows(r: AisReport, rx: LatLon | null): string {
 }
 
 // ── APRS: icons, rows, cards ──────────────────────────────────────────────────────────────────────────────────────
-/** ★ OUR OWN SYMBOL SET (drawn here — no third-party artwork): the APRS 1.0.1 symbol CODE picks a glyph, the table and
- *  any overlay character are shown as the spec says (the alternate table's overlay letter or digit on the badge). A code
- *  we have no glyph for is the symbol character itself on the badge, so nothing is ever blank. */
-const APRS_GLYPH: Record<string, string> = {
-  car: 'M2.5 9.5 L4.2 5.5 H11.8 L13.5 9.5 V12 H2.5 Z M4.5 12.5 a1.4 1.4 0 1 0 0.01 0 M11.5 12.5 a1.4 1.4 0 1 0 0.01 0',
-  truck: 'M1.5 5 H9.5 V11.5 H1.5 Z M9.5 7 H12.5 L14.5 9.5 V11.5 H9.5 Z M4 12.3 a1.3 1.3 0 1 0 0.01 0 M12 12.3 a1.3 1.3 0 1 0 0.01 0',
-  house: 'M8 2 L14.5 8 H12.5 V14 H3.5 V8 H1.5 Z',
-  star: 'M8 1.5 L9.9 6 L14.7 6.3 L11 9.4 L12.2 14 L8 11.4 L3.8 14 L5 9.4 L1.3 6.3 L6.1 6 Z',
-  diamond: 'M8 1.5 L14.5 8 L8 14.5 L1.5 8 Z',
-  cloud: 'M4.2 12.5 A2.8 2.8 0 0 1 4.6 6.9 A3.8 3.8 0 0 1 11.6 6.4 A3 3 0 0 1 12 12.5 Z',
-  balloon: 'M8 1.5 a4.6 4.6 0 1 1 -0.01 0 Z M8 10.7 L7 13 H9 Z',
-  plane: 'M8 1 L9.2 6 L14.5 8.7 V10 L9.2 8.6 L8.9 12.3 L10.4 13.6 V14.6 L8 14 L5.6 14.6 V13.6 L7.1 12.3 L6.8 8.6 L1.5 10 V8.7 L6.8 6 Z',
-  heli: 'M2 3.5 H14 M8 3.5 V5.5 M4.5 6.5 H10 a2.8 2.8 0 0 1 0 5.6 H6 Z M10.5 9 H15 M14.5 7.5 V10.5',
-  boat: 'M1.5 9.5 H14.5 L12.5 13.5 H3.5 Z M8 2 V9.5 M8 2.5 L12.5 8.5 H8',
-  person: 'M8 1.8 a1.9 1.9 0 1 1 -0.01 0 Z M5.2 6.2 H10.8 L10 10.2 H9.2 V14.2 H6.8 V10.2 H6 Z',
-  bike: 'M4 11 a2.6 2.6 0 1 0 0.01 0 M12 11 a2.6 2.6 0 1 0 0.01 0 M4 11 L7 6 H10 L12 11 M7 6 L8.5 11 L10 6',
-  antenna: 'M8 4 V14.5 M4.5 14.5 H11.5 M4.8 7.2 L8 4 L11.2 7.2 M2.8 4.5 a6 6 0 0 1 2 -2.5 M13.2 4.5 a6 6 0 0 0 -2 -2.5',
-};
-const APRS_CODE_GLYPH: Record<string, string> = {
-  '>': 'car', 'j': 'car', 'k': 'truck', 'u': 'truck', 'v': 'truck', 'R': 'truck', 'U': 'truck', 'a': 'truck', 'f': 'truck',
-  '-': 'house', 'K': 'house', 'H': 'house', '#': 'star', '&': 'diamond', '_': 'cloud', 'O': 'balloon', '^': 'plane',
-  "'": 'plane', 'X': 'heli', 's': 'boat', 'Y': 'boat', 'C': 'boat', '[': 'person', 'b': 'bike', '<': 'bike', 'r': 'antenna',
-  'y': 'antenna', 'n': 'star',
-};
-export function aprsColour(s: AprsStation): string {
-  if (s.kind === 'weather' || s.sym[1] === '_') return '#39d0d8';
-  if (s.kind === 'object' || s.kind === 'item') return '#ffad42';
-  if (s.sym[1] === '#' || s.sym[1] === '&' || s.sym[1] === 'r') return '#c58cff';
-  if (s.speed != null && s.speed >= 2) return '#4fa3ff';
-  return '#59c26b';
-}
-export function aprsIcon(s: AprsStation): { html: string; w: number; h: number } {
-  const col = aprsColour(s);
-  const code = s.sym[1] || '/', table = s.sym[0] || '/';
-  const g = APRS_GLYPH[APRS_CODE_GLYPH[code] || ''];
-  const overlay = table !== '/' && table !== '\\' && /[0-9A-Z]/.test(table) ? table : '';
-  const line = (APRS_CODE_GLYPH[code] === 'heli' || APRS_CODE_GLYPH[code] === 'bike' || APRS_CODE_GLYPH[code] === 'antenna');
-  const inner = g
-    ? `<path d="${g}" transform="translate(3 3)" fill="${line ? 'none' : '#0b1014'}" stroke="#0b1014" stroke-width="${line ? 1.5 : 0.4}" stroke-linejoin="round" stroke-linecap="round"/>`
-    : `<text x="11" y="15" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" font-weight="700" fill="#0b1014">${esc(code)}</text>`;
-  const ov = overlay ? `<text x="17.5" y="21" text-anchor="middle" font-family="ui-monospace,monospace" font-size="8" font-weight="800" fill="#fff" stroke="#0b1014" stroke-width="2" paint-order="stroke">${esc(overlay)}</text>` : '';
-  const ring = table === '\\' ? ' stroke-dasharray="3 1.6"' : '';
-  return { w: 22, h: 22, html: `<svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="10" fill="${col}" stroke="#0b1014" stroke-width="1.4"${ring}/>${inner}${ov}</svg>` };
-}
+/** ★★ beta92 THE SYMBOLS ARE ONE SET for the app and the web page — src/utils/aprsSymbols.ts (28 px, a square badge for
+ *  digipeaters / gateways, solid glyphs with cut details, a light halo for the satellite map; our own drawings). */
+export { aprsColour };
+export function aprsIcon(s: AprsStation): { html: string; w: number; h: number } { return aprsSymIcon(s); }
 export function aprsName(s: AprsStation): string { return s.name || s.from || s.key; }
 const altTrend = new Map<string, { alt: number; t: number; d: number }>();
 /** ★ ▲/▼ for a station that reports its altitude (a balloon climbing, a hill-walker coming down): against the last report. */

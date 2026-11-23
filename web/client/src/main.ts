@@ -145,6 +145,8 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
+import { DIGI_FIT_JS } from '../../../src/utils/digiMapShared';   // ★ beta92 the digi map's FIT key (the app's same code)
+import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../../../src/utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend
 import { bandSkimTitle, bandSkimPassband, bandSkimLabels, withSkimLabels, bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../../../src/services/bandSkim';   // ★★ beta92 the BAND SKIMMER
 import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, spotsListModes, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
@@ -18203,6 +18205,17 @@ ${glHead}
     border-radius:4px;padding:2px 7px;cursor:pointer}
   #wins button[aria-pressed="true"],#layers button[aria-pressed="true"],#rads button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
   #wins[hidden],#layers[hidden],#rads[hidden]{display:none}
+  /* ★★ beta92 FIT — every station the layers / window / radio show (the app's FIT key, DIGI_FIT_JS) */
+  #fitBtn{font:inherit;font-size:11px;letter-spacing:1px;color:var(--amber);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 9px;cursor:pointer}
+  #fitBtn:hover{border-color:var(--amber)}
+  /* ★★ beta92 an APRS symbol (src/utils/aprsSymbols.ts, 28 px) and its callsign under it from zoom 8 (body.aprsLb) */
+  .apk{position:relative;width:28px;height:28px}
+  .apk svg{display:block}
+  .apk .apl{display:none;position:absolute;top:29px;left:50%;transform:translateX(-50%);white-space:nowrap;pointer-events:none;
+    font:bold 11px/1.15 ui-monospace,Menlo,monospace;letter-spacing:.5px;color:#fff;padding:1px 3px;border-radius:3px;
+    background:rgba(8,10,12,0.62);text-shadow:0 0 2px #000,0 1px 2px #000}
+  body.aprsLb .apk .apl{display:block}
+  .lrow .asym{display:inline-flex;width:16px;height:16px;flex:0 0 16px}
   @media (max-width:640px){#stats{width:200px}.maplibregl-ctrl-top-left{left:220px}.maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:220px}
     #top{flex-wrap:wrap;gap:8px}}
   .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:var(--dim);font-size:9px}
@@ -18214,6 +18227,7 @@ ${ST}
     <span id="layers" role="group" aria-label="Layers" hidden></span>
     <span id="wins" role="group" aria-label="Time window" hidden></span>
     <span id="rads" role="group" aria-label="Radio" hidden></span>
+    <button type="button" id="fitBtn" title="Fit every station shown on the map">FIT</button>
     <label><input type="checkbox" id="tStats" checked>Stats</label>
     <label><input type="checkbox" id="tSummary" checked>Summary</label>
     <label><input type="checkbox" id="tLegend" checked>Legend</label>
@@ -18241,6 +18255,7 @@ const SRV = ${safe(srvUrl)};
 const WINDOWS = ${safe(DIGI_WINDOWS)};
 let win = ${safe(open.window)};
 const FOCUS0 = ${safe(open.focus)};
+const APRS_LEG = ${safe(APRS_LEGEND.map((r) => ({ svg: aprsLegendIcon(r, 16).html, words: r.words })))};
 let show = { spots: ${safe(open.layer !== 'aprs')}, aprs: ${safe(open.layer === 'aprs')}, overlay: true };
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
@@ -18634,6 +18649,7 @@ function setupMap() {
   // ★ beta90 the other layers, each its own group so a toggle or a redraw touches only it
   overlayLayer = L.layerGroup().addTo(map);
   aprsLayer = L.layerGroup().addTo(map);
+  map.on('zoomend', aprsLabels); aprsLabels();
   if (me) {
     // ★ The receiver is the app's little house (Stuart, 2026-09-28), not a red dot — the same icon on
     //   every map, anchored at its doorstep.
@@ -18704,9 +18720,11 @@ function drawAprs() {
   if (!show.aprs) return;
   for (const a of aprs) {
     if (a.trail && a.trail.length >= 2) L.polyline(a.trail, { color: '#88CCEE', weight: 1.5, opacity: 0.7 }).addTo(aprsLayer);
+    // ★★ beta92 the symbol at 28 px (src/utils/aprsSymbols.ts), its callsign under it from zoom 8 (aprsLabels)
     const m = a.svg
-      ? L.marker([a.lat, a.lon], { icon: L.divIcon({ html: a.svg, className: 'aprsMk', iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -10] }) })
-      : L.circleMarker([a.lat, a.lon], { radius: 7, color: RIM, weight: 1.2, fillColor: '#88CCEE', fillOpacity: 0.9, label: 'A', labelColor: '#000000' });
+      ? L.marker([a.lat, a.lon], { icon: L.divIcon({ html: '<div class="apk">' + a.svg + '<span class="apl">' + esc(a.call) + '</span></div>',
+          className: 'aprsMk', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -13] }) })
+      : L.circleMarker([a.lat, a.lon], { radius: 9, color: RIM, weight: 1.5, fillColor: '#88CCEE', fillOpacity: 0.95, label: 'A', labelColor: '#000000' });
     m.addTo(aprsLayer).bindPopup(aprsCard(a));
   }
 }
@@ -18721,6 +18739,16 @@ function drawOverlay() {
   for (const p of overlay.points) L.circleMarker([p.lat, p.lon], { radius: 6, color: RIM, weight: 1.2, fillColor: c, fillOpacity: 0.95 })
     .addTo(overlayLayer).bindPopup('<div class="pop"><b>' + esc(p.label) + '</b></div>');
 }
+function aprsLabels() { try { document.body.classList.toggle('aprsLb', map.getZoom() >= 8); } catch (e) { /* no map yet */ } }
+/* ★★ beta92 THE FIT KEY (Stuart 11-23: "spots map could do with the auto fit button too") — the app's same code
+ *  (src/utils/digiMapShared.ts DIGI_FIT_JS): every station the layers, the window and the radio filter SHOW, padded,
+ *  never past zoom DIGI_FIT_MAX_ZOOM. Spots are already the filtered list (mergeSpots); APRS while its layer is on. */
+${DIGI_FIT_JS}
+document.getElementById('fitBtn').addEventListener('click', () => {
+  if (!map) return;
+  fitted = true;
+  digiFitApply(map, L, digiFitView(digiShownPoints(show.spots ? spots : [], () => true, aprs, show.aprs)));
+});
 /* ★ OPENED ON SOMETHING (an APRS station row, a call): centred on it, once it is there. */
 let focusKey = FOCUS0;
 function focusOnce() {
@@ -18862,7 +18890,9 @@ document.getElementById('legend').innerHTML =
     ';color:' + okColour(x.ink) + '">' + esc(x.letter) + '</span>' + esc(x.m) +
     '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(modeN[x.m] || 0) + '</span></div>').join('') +
   (aprs.length || show.aprs ? '<div class="lrow"><span class="sw mk" style="background:#88CCEE;color:#000">A</span>APRS (its symbol where it sends one)' +
-    '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(aprs.length) + '</span></div>' : '') +
+    '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(aprs.length) + '</span></div>' +
+    // ★★ beta92 the symbols most heard, in our drawings (src/utils/aprsSymbols.ts APRS_LEGEND)
+    (show.aprs ? APRS_LEG.map((r) => '<div class="lrow"><span class="asym">' + okSvg(r.svg) + '</span>' + esc(r.words) + '</div>').join('') : '') : '') +
   (overlay ? '<div class="lrow"><span class="sw" style="background:' + okColour(overlay.colour) + '"></span>' + esc(overlay.label) + '</div>' : '') +
   '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Colour + letter = mode · size = SNR</div>';
 

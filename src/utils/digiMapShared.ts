@@ -107,3 +107,39 @@ export function digiAprsPoints(stations: any[] | null | undefined, svgOf: (st: a
   out.sort((a, b) => a.age - b.age);
   return out.slice(0, 1000);
 }
+
+/* ★★ beta92 THE FIT KEY (Stuart, 2026-11-23: "spots map could do with the auto fit button too") — the AIS / APRS / ISM
+ *  maps' FIT, on the digi modes map: it frames every station the filters SHOW (the mode, band, time and radio filters,
+ *  the APRS key), not every station kept, and nothing else (not the receiver, not a satellite pass's overlay). Padded,
+ *  and never past DIGI_FIT_MAX_ZOOM — one station (or a few in one town) is a regional view, not a street.
+ *  ★ AS A STRING because both map pages are their own documents (the app's WebView — MapOverlay.tsx — and the web's
+ *  window — main.ts spotsMapHtml) and embed it as is; scripts/test_digi_map.ts runs this very text. Plain ES5, no
+ *  backticks and no backslashes (it sits inside the pages' template literals). */
+export const DIGI_FIT_MAX_ZOOM = 9;
+export const DIGI_FIT_JS = `
+function digiShownPoints(spots,isShown,aprs,aprsOn){
+  var p=[];
+  (spots||[]).forEach(function(s){if(s&&isShown(s))p.push([Number(s.plat),Number(s.plon)]);});
+  if(aprsOn)(aprs||[]).forEach(function(a){if(a)p.push([Number(a.lat),Number(a.lon)]);});
+  return p;
+}
+function digiFitView(pts){
+  var la0=91,la1=-91,lo0=181,lo1=-181,n=0;
+  (pts||[]).forEach(function(p){
+    if(!p)return;var la=Number(p[0]),lo=Number(p[1]);
+    if(!isFinite(la)||!isFinite(lo)||la<-90||la>90||lo<-180||lo>180)return;
+    n++;if(la<la0)la0=la;if(la>la1)la1=la;if(lo<lo0)lo0=lo;if(lo>lo1)lo1=lo;
+  });
+  if(!n)return null;
+  if(la1-la0<1e-6&&lo1-lo0<1e-6)return{center:[la0,lo0],zoom:${DIGI_FIT_MAX_ZOOM}};
+  return{bounds:[[la0,lo0],[la1,lo1]],padding:[40,40],maxZoom:${DIGI_FIT_MAX_ZOOM}};
+}
+function digiFitApply(map,L,v){
+  if(!map||!v)return false;
+  try{
+    if(v.center)map.setView(v.center,v.zoom);
+    else map.fitBounds(L.latLngBounds(v.bounds),{padding:v.padding,maxZoom:v.maxZoom});
+    return true;
+  }catch(e){console.error('digi fit',e);return false;}
+}
+`;

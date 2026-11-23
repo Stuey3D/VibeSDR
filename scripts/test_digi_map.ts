@@ -9,6 +9,11 @@
 import { digiStationsSanitise, digiStationsMerge, digiStationRows, digiWindowSec } from '../src/services/digiStations';
 import { digiOverlayClean, digiAprsPoints, digiSvgOk, digiAprsWx, digiWindowOf } from '../src/utils/digiMapShared';
 import { avPlaneAdsb, type AvPlane } from '../src/services/aviationMap';
+import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../src/utils/digiMapShared';
+import { aprsIcon, aprsGlyphOf, aprsIsInfra, APRS_GLYPHS, APRS_CODE_GLYPH, APRS_LEGEND, APRS_ICON_PX } from '../src/utils/aprsSymbols';
+import { aprsIcon as appAprsIcon } from '../src/services/tracks';
+import { aprsIcon as webAprsIcon } from '../web/client/src/tracks';
+import { readFileSync } from 'node:fs';
 
 let fail = 0, pass = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (c) pass++; else fail++; };
@@ -75,6 +80,61 @@ ok(avPlaneAdsb({ ...base, lat: undefined, lon: undefined }) === null, 'no positi
 ok(avPlaneAdsb({ ...base, ground: true })!.alt_baro === 'ground', 'on the ground');
 const ls = avPlaneAdsb({ ...base, lastSeen: '12:00', posAge: 90 })!;
 ok(ls.sparse === true && (ls.seen_pos ?? 0) > 600, 'an ADS-B "last seen" fix is drawn old, never live');
+
+console.log('── beta92 APRS symbols: clear, our own, a fallback ──');
+{
+  const common: [string, string][] = [['/>', 'car'], ['/-', 'house'], ['/#', 'digi'], ['/&', 'gateway'], ['/_', 'weather'], ['/[', 'person'],
+    ['/k', 'truck'], ['/Y', 'yacht'], ['/s', 'boat'], ['/O', 'balloon'], ['/^', 'plane'], ["/'", 'plane'], ['/X', 'heli'], ['/b', 'bike'],
+    ['/v', 'truck'], ['/j', 'car'], ['/u', 'truck'], ['/R', 'truck'], ['/r', 'antenna'], ['/=', 'train'], ['/;', 'tent'], ['/n', 'node'],
+    ['\\#', 'digi'], ['I&', 'gateway'], ['\\-', 'house'], ['\\>', 'car'], ['\\_', 'weather']];
+  for (const [sym, want] of common) ok(aprsGlyphOf(sym) === want && !!APRS_GLYPHS[want], `${sym} → ${want}`);
+  ok(Object.values(APRS_CODE_GLYPH).every((g) => !!APRS_GLYPHS[g]), 'every mapped code has a drawing');
+  ok(aprsGlyphOf('\\O') === '' && aprsGlyphOf('\\^') === '', 'the alternate table means something else for most codes — the character, not a guess');
+  ok(aprsGlyphOf('/!') === '' && aprsGlyphOf('/$') === '', 'an undrawn code has no glyph');
+  const fb = aprsIcon({ kind: 'position', sym: '/$' }).html;
+  ok(/<text[^>]*font-size="15"[^>]*>\$<\/text>/.test(fb), 'the fallback is the symbol character itself, large, on the badge');
+  ok(/>&lt;<\/text>/.test(aprsIcon({ kind: 'position', sym: '\\<' }).html), 'a fallback character is escaped');
+  const house = aprsIcon({ kind: 'position', sym: '/-' }), digi = aprsIcon({ kind: 'position', sym: '/#' });
+  ok(house.w === APRS_ICON_PX && house.h === 28 && APRS_ICON_PX >= 28, `large enough to read (${house.w} px, was 22)`);
+  ok(/<circle cx="14" cy="14" r="11.5"/.test(house.html) && /<rect /.test(digi.html) && !/<rect /.test(house.html),
+    'a digipeater is a SQUARE badge, a house a CIRCLE — told apart by shape as well as glyph');
+  ok(aprsIsInfra('/#') && aprsIsInfra('I&') && aprsIsInfra('/r') && !aprsIsInfra('/-') && !aprsIsInfra('/>'), 'the network\'s furniture is square');
+  ok(/stroke="rgba\(255,255,255,0.85\)"/.test(house.html) && /stroke="#0b1014"/.test(house.html), 'a light halo and a dark rim: contrast on the dark map and the satellite map');
+  ok(/stroke-dasharray/.test(aprsIcon({ kind: 'position', sym: '\\#' }).html) && !/stroke-dasharray/.test(digi.html), 'the alternate table keeps its dashed rim');
+  ok(/>I<\/text>/.test(aprsIcon({ kind: 'position', sym: 'I&' }).html), 'an overlay character in its tag');
+  for (const [sym] of common) ok(digiSvgOk(aprsIcon({ kind: 'position', sym }).html) !== '', `${sym} passes the map pages' SVG check`);
+  ok(APRS_LEGEND.length >= 8 && APRS_LEGEND.every((r) => digiSvgOk(aprsIcon(r, 16).html) !== ''), 'the legend rows draw');
+  const st = { key: 'x', from: 'G4ABC', kind: 'position', sym: '/>', speed: 40 } as any;
+  ok(appAprsIcon(st).html === webAprsIcon(st).html && appAprsIcon(st).html === aprsIcon(st).html, 'the app and the web page draw from the one set');
+}
+
+console.log('── beta92 the FIT key: the filtered stations only ──');
+{
+  const fns = new Function(DIGI_FIT_JS + '\nreturn { digiShownPoints, digiFitView, digiFitApply };')() as {
+    digiShownPoints: (sp: any[], isShown: (s: any) => boolean, ap: any[], on: boolean) => [number, number][];
+    digiFitView: (p: any[]) => any; digiFitApply: (m: any, L: any, v: any) => boolean };
+  const spots = [{ call: 'A', mode: 'FT8', plat: 50, plon: -2 }, { call: 'B', mode: 'CW', plat: -30, plon: 150 }, { call: 'C', mode: 'FT8', plat: 52, plon: 1 }];
+  const aprsP = [{ lat: 51, lon: 0 }];
+  const ft8 = (s: any) => s.mode === 'FT8';
+  const pts = fns.digiShownPoints(spots, ft8, aprsP, false);
+  ok(pts.length === 2 && !pts.some((p) => p[0] === -30), `only the stations the filter shows (${JSON.stringify(pts)})`);
+  ok(fns.digiShownPoints(spots, ft8, aprsP, true).length === 3, 'APRS counted while its key is on');
+  const v = fns.digiFitView(pts);
+  ok(v && JSON.stringify(v.bounds) === '[[50,-2],[52,1]]' && v.maxZoom === DIGI_FIT_MAX_ZOOM && v.padding[0] >= 30, `bounds over them, padded, capped (${JSON.stringify(v)})`);
+  const one = fns.digiFitView([[51.5, -0.1], [51.5, -0.1]]);
+  ok(one && one.center && one.zoom === DIGI_FIT_MAX_ZOOM && DIGI_FIT_MAX_ZOOM <= 10, `one station: a regional view, not a street (zoom ${one?.zoom})`);
+  ok(fns.digiFitView([]) === null && fns.digiFitView([[NaN, 1], [95, 0], ['x', 2]]) === null, 'nothing shown (or nothing sane): no move');
+  const calls: any[] = [];
+  const fakeMap = { setView: (c: any, z: any) => calls.push(['setView', c, z]), fitBounds: (b: any, o: any) => calls.push(['fitBounds', b, o]) };
+  const fakeL = { latLngBounds: (b: any) => ({ b }) };
+  fns.digiFitApply(fakeMap, fakeL, v); fns.digiFitApply(fakeMap, fakeL, one);
+  ok(calls[0][0] === 'fitBounds' && calls[0][2].maxZoom === DIGI_FIT_MAX_ZOOM && calls[1][0] === 'setView', 'applied: fitBounds with the cap, setView for one');
+  ok(!/[`\\]/.test(DIGI_FIT_JS), 'no backtick or backslash (it is embedded in the pages\' template literals)');
+  const app = readFileSync('src/components/MapOverlay.tsx', 'utf8'), web = readFileSync('web/client/src/main.ts', 'utf8');
+  ok(/isSpots \? '<button id="snap" class="digifit"[^']*>FIT<\/button>'/.test(app), 'the app\'s spots maps: FIT in the top bar, where the AIS / APRS maps have it');
+  ok(/digiShownPoints\(spots,function\(s\)\{return !!markers\[key\(s\)\];\},aprsPts,aprsOn\)/.test(app), 'the app fits the spots with a marker (the ones the filters pass) and APRS while on');
+  ok(/<button type="button" id="fitBtn"[^>]*>FIT<\/button>/.test(web) && /digiShownPoints\(show\.spots \? spots : \[\]/.test(web), 'the web page: FIT in its top bar, over the layers shown');
+}
 
 console.log(`\n${fail ? 'FAILED' : 'all passed'} — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
