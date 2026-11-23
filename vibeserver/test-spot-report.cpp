@@ -229,8 +229,9 @@ int main() {
         s.call = "EA1AA"; s.grid = "IN53"; s.rfHz = 14074900; rp.note(s);
         Spot ft2 = s; ft2.mode = "FT2"; ft2.call = "F4XYZ"; rp.note(ft2);                  // no ADIF name
         Spot junk = s; junk.call = "CQ"; rp.note(junk); junk.call = "12345"; rp.note(junk); // not callsigns
+        junk.call = "132XQA"; junk.grid = "PC46"; rp.note(junk); junk.call = "1H7IJH"; rp.note(junk);   // ★ beta92: no administration
         Spot hfar = s; hfar.call = "W1AW"; hfar.rfHz = 0; rp.note(hfar);
-        CHECK(rp.pendingCount() == 2, "one record per callsign per batch; FT2, non-callsigns and no frequency dropped");
+        CHECK(rp.pendingCount() == 2, "one record per callsign per batch; FT2, non-callsigns, false decodes (132XQA) and no frequency dropped");
         const long first = rp.nextFlushAt();
         CHECK(first - now >= kBatchSec && first - now <= kBatchSec + kStartJitterSec, "the first batch 5 minutes from start, + 0–60 s");
         now += 299; rp.tick();

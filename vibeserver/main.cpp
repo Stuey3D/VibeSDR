@@ -210,6 +210,25 @@ void armShutdownWatchdog() {
     }).detach();
 }
 
+/* ★★★ beta92 THE 8-SECOND SHUTDOWN HANG (docs/v12/SHUTDOWN-HANG.md; Stuart's Lenovo, beta90 + beta91, 12 times in 3 days):
+ *  a radio told to stop logged "local SDR stopped" — the orderly stop DONE — and then sat until the watchdog: "stuck at:
+ *  (before or after the radio's stop)", its main thread in a futex, UHD's "libusb_event" thread still polling. That is
+ *  `return 0` from main → exit() → the STATIC DESTRUCTORS and every loaded library's finalisers, run on the main thread
+ *  while the process's other threads still run. Ours join threads (the station store's flusher, PSK Reporter, the
+ *  aircraft share, the DMR lookup), and the libraries' are not ours at all: UHD's libusb session joins its event thread,
+ *  SDRplay's API takes a system-wide lock (this file already records it hanging there), boost tears down its own.
+ *  Any one waiting on a thread that is busy or wedged holds the exit — and one second into a radio's life (the radio
+ *  reconcile restarting it) is when threads are still starting and libraries still initialising.
+ *  ★★ So after the orderly stop, the PROCESS ENDS HERE: nothing a destructor would do is still needed — the stop saved
+ *     what matters (the spectrogram before it, the decoders' days, the station store's rows, the config on disk) and
+ *     the kernel closes every file and USB handle. Only the stdio buffers are flushed (the journal's last lines).
+ *  ★ Not for a front door that started radios itself (no service manager): its atexit reap must run. */
+[[noreturn]] static void endProcessAfterStop(int code) {
+    std::fflush(stdout);
+    std::fflush(stderr);
+    _exit(code);
+}
+
 struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
     bool        useUsb  = true;          // default: drive the dongle directly
@@ -904,6 +923,16 @@ static std::vector<pid_t> g_radioKids;
 static std::vector<std::string> g_radioKidSerials;
 static std::mutex g_radioKidsMtx;
 #endif
+/** ★ beta92: this process started no radio processes (a radio, or a front door under a service manager) — its exit
+ *  needs no reap, so it may end without exit()'s destructors (endProcessAfterStop). Read on the main thread at the
+ *  end, after every writer of the list (start-up, the supervisor) has finished. */
+static bool noRadioKids() {
+#ifdef _WIN32
+    std::lock_guard<std::mutex> lk(g_radioKidsMtx);
+#endif
+    for (pid_t p : g_radioKids) if (p > 0) return false;
+    return true;
+}
 
 /** ★★★ ASK NICELY, THEN INSIST. A radio process that will not go leaves the SDR claimed and the
  *      terminal full of its DSP log — precisely what tgcfabian hit: Ctrl-C returned his shell while
@@ -2214,6 +2243,15 @@ static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
 
 int main(int argc, char** argv) {
     g_argv = argv;
+    /* ★ TEST-ONLY (scripts/test-server-quick-stop.mjs, docs/v12/SHUTDOWN-HANG.md): an object whose destructor never
+     *   returns, made first so it is destroyed LAST at exit — the shape of a library's finaliser that blocks (UHD's libusb
+     *   session joining its "libusb_event" thread, SDRplay's API taking its system-wide lock). The process must still
+     *   end promptly after its orderly stop: nothing after "local SDR stopped" may depend on a static destructor. */
+    if (const char* e = std::getenv("VIBE_TEST_EXIT_WEDGE"); e && *e == '1') {
+        struct ExitWedge { ~ExitWedge() { for (;;) std::this_thread::sleep_for(std::chrono::seconds(60)); } };
+        static ExitWedge wedge;
+        (void)wedge;
+    }
 #ifdef _WIN32
     /* ★★ WINDOWS, BEFORE ANYTHING ELSE: Winsock up (no socket works without it), and the console told the
      *    log is UTF-8 — every line carries an em dash or a ★, which the default OEM code page prints as
@@ -6338,6 +6376,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "VibeServer: could not restart myself (%s) — "
                                      "start it again with: vibeserver --serve\n", strerror(errno));
             }
+            if (noRadioKids()) endProcessAfterStop(0);   // ★★★ beta92: no static destructors after the stop — see there
             return 0;
         }
     }
@@ -6361,5 +6400,6 @@ int main(int argc, char** argv) {
     //     the libusb abort every stop of the Pi 2's radio took (see stopLocked, 2026-10-05).
     LocalSdrShim::noteProcessExiting();
     shim.stop();
+    if (noRadioKids()) endProcessAfterStop(0);   // ★★★ beta92: the process ends with its stop — see endProcessAfterStop
     return 0;
 }

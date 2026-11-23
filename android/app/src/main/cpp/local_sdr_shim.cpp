@@ -6881,8 +6881,10 @@ static std::atomic<double> g_bgLat{NAN}, g_bgLon{NAN};
  *  decoders hear — listeners' and background decoding's — kept by the day beside the gallery (RAM only when the owner
  *  keeps no gallery), for the DIGI MODES MAP (/vibeserver/stations.json) and the PSK Reporter upload.
  *  ★ The gallery is made FIRST so it outlives the store at exit (the store's last flush asks it for its directory). */
+static std::atomic<bool> g_vsStationsMade{false};   ///< ★ beta92: vsStations() was made — the stop flushes it (no exit-time destructor)
 static vibestations::Store& vsStations() {
     static vibestations::Store& s = []() -> vibestations::Store& {
+        g_vsStationsMade.store(true);
         (void)vibe::gallery::shared();
         auto& st = vibestations::shared();
         st.configure([] { auto& g = vibe::gallery::shared(); return g.enabled() ? g.dir() : std::string(); },
@@ -46144,6 +46146,11 @@ void LocalSdrShim::stopLocked() {
     g_av.stop();    // ★ …and the aircraft datalink's thread
     g_sd.stop();    // ★ …and the sondes'
     impl->decoders_.shutdownAll();
+    /* ★★★ beta92 THE STATION STORE'S LAST ROWS ARE WRITTEN BY THE STOP (docs/v12/SHUTDOWN-HANG.md): its final flush used to
+     *  be its static destructor at exit — and the standalone server now ends without running those (main.cpp
+     *  endProcessAfterStop: a library's finaliser held the Lenovo's exit for 8 s). Every decoder is down by here, so
+     *  nothing more arrives; on an in-process stop (Android, the Mac app) it is simply an early flush. */
+    if (g_vsStationsMade.load()) { STOP_STAGE("the station store's last flush"); vsStations().flush(); }
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }
     // ★ The accept and hand-off threads and every connection handler were joined near the TOP, before

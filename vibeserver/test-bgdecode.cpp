@@ -693,9 +693,9 @@ static void phase2() {
         t.spot(false, "DL2XYZ", "JN58", -9, 14075500);
         t.spot(true, "VK2XYZ", "QF56", -20, 14081000);
         t.spot(false, "G4IRX", "IO92", 3, 14074500);
-        t.spot(false, "Q0QQQ", "RR73", 0, 14074600);
+        t.spot(false, "Q0QQQ", "RR73", 0, 14074600);        // ★ beta92: Q is allocated to nobody — a false decode, not a spot
         const std::string txt = t.text(gallery::nowUtc());
-        ok(txt.find("Spots heard:       9 (FT8 8, FT4 1) from 5 stations") != std::string::npos, "spots heard, by mode, and stations");
+        ok(txt.find("Spots heard:       8 (FT8 7, FT4 1) from 4 stations") != std::string::npos, "spots heard, by mode, and stations (Q0QQQ set aside)");
         ok(txt.find("Countries:         3") != std::string::npos, "3 countries (an unknown prefix is not one)");
         ok(txt.find("Furthest:          VK2XYZ (Australia, QF56)") != std::string::npos && txt.find(" km") != std::string::npos, "★ furthest: VK2XYZ, Australia, with km from this server");
         ok(txt.find("Most frequent:     Germany (6 spots)") != std::string::npos, "most frequent country: Germany");
@@ -703,7 +703,7 @@ static void phase2() {
         std::printf("%s", txt.c_str());
         t.finish(true);
         const std::string fl = s.listJson("ft8", 10);
-        ok(fl.find(" UTC \xc2\xb7 9 spots \xc2\xb7 3 countries \xc2\xb7 furthest Australia") != std::string::npos
+        ok(fl.find(" UTC \xc2\xb7 8 spots \xc2\xb7 3 countries \xc2\xb7 furthest Australia") != std::string::npos
            && fl.find("FT8+FT4 last 10 min to ") != std::string::npos,
            "★ the run's end: its hour so far (partial) and the last 10 minutes, both titled with the headline — and the modes heard (V12: \"FT8+FT4\")");
         size_t n0 = 0; for (size_t at = 0; (at = fl.find("\"f\":", at)) != std::string::npos; at++) n0++;
@@ -912,10 +912,12 @@ static void ft8Validation() {
         t.spotText(false, "CQ DX K1ABC FN42");
         t.spotText(false, "G4ABC K1ABC RR73");
         t.spot(false, "Q1ABC", "QG00", -20, 1840500);       // ★ a call no country table knows (Q is unallocated), far away
+        t.spot(false, "7Q8FAZ", "OB45", -20, 1840500);      // ★ beta92: a Malawi call at -74.5° (Stuart's Pi 500) — kept, unplaced
         t.spotText(false, "junk junk junk");
-        ok(m.liveSpots->load() == 4, "4 spots, all real callsigns (" + std::to_string(m.liveSpots->load()) + ")");
+        ok(m.liveSpots->load() == 4, "4 spots, all real callsigns — Q1ABC is set aside as a false decode (beta92) (" + std::to_string(m.liveSpots->load()) + ")");
         const std::string txt = t.text(gallery::nowUtc());
-        ok(txt.find("from 3 stations") != std::string::npos, "3 stations (G4ABC, K1ABC, Q1ABC)");
+        ok(txt.find("from 3 stations") != std::string::npos, "3 stations (G4ABC, K1ABC, 7Q8FAZ)");
+        ok(txt.find("Malawi") == std::string::npos || txt.find("Furthest:          K1ABC") != std::string::npos, "★ beta92: 7Q8FAZ's impossible grid is never the furthest");
         ok(txt.find("Furthest:          K1ABC") != std::string::npos && txt.find("country unknown") == std::string::npos
            && txt.find("DE (") == std::string::npos && txt.find("AA00") == std::string::npos,
            "★ the furthest is K1ABC (FN42) — never DE/AA00, never a station whose country is unknown:\n" + txt.substr(0, 400));
