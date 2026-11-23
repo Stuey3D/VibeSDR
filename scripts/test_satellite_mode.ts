@@ -99,7 +99,12 @@ ok(satWhenText(rows[0], now) === 'UP · 6:12 left', `UP · 6:12 left (${satWhenT
 ok(satWhenText(rows.find((r) => r.sat.id === 'SO-50')!, now) === 'AOS 16:42 (in 0:38)', `AOS 16:42 (in 0:38) (${satWhenText(rows.find((r) => r.sat.id === 'SO-50')!, now)})`);
 ok(satWhenText(rows.find((r) => r.sat.id === 'RS-44')!, now) === 'AOS 17:14 (in 1:10)', 'over an hour: h:mm');
 ok(satWhenText(ao7, now) === 'No pass in the next day', 'no pass');
-ok(satCountdownText(l.sats[0], now) === 'In range for 9:55', `compact countdown, up (${satCountdownText(l.sats[0], now)})`);
+ok(satCountdownText(l.sats[0], now) === 'In range for 9:55 · highest in 2:28 (60°)', `compact countdown, up — with the time to its highest (${satCountdownText(l.sats[0], now)})`);
+{ // ★ beta92 (Stuart 11-23: "peak position in 5:45"): at its highest, then past it
+  const p0 = l.sats[0].passes![0];
+  ok(/· at its highest \(60°\)$/.test(satCountdownText(l.sats[0], p0.tca + 5)), `at the highest point (${satCountdownText(l.sats[0], p0.tca + 5)})`);
+  ok(/· past its highest \(60°\)$/.test(satCountdownText(l.sats[0], p0.tca + 120)), `past it (${satCountdownText(l.sats[0], p0.tca + 120)})`);
+}
 ok(satCountdownText(l.sats[2], now) === 'Next pass in 0:38 · AOS 16:42 · max 56°', `compact countdown, next (${satCountdownText(l.sats[2], now)})`);
 ok(satCountdownText(l.sats[4], now) === 'No pass in the next day' && satCountdownText(undefined, now) === '', 'compact countdown, none');
 ok(hhmm(now) === '16:04' && hmIn(now + 59, now) === '0:00' && hmIn(now + 12 * 3600 + 5 * 60, now) === '12:05', 'hh:mm / h:mm');
@@ -401,8 +406,8 @@ console.log('— beta91 the orbit\'s direction (arrows)');
   ok(satHeadingText(turn, 81, 40) === '', 'at the top of the orbit (the turn) → not said');
   const upSat = { ...raw.sats[0], lat: mid[0], lon: mid[1] } as any;
   const parsed = parseSatList({ ...raw, sats: [upSat] })!.sats[0];
-  ok(/^In range for 9:55 · heading south$/.test(satCountdownText(parsed, now, south)), `the countdown says it (${satCountdownText(parsed, now, south)})`);
-  ok(satCountdownText(parsed, now) === 'In range for 9:55' && satCountdownText(parsed, now, null) === 'In range for 9:55', 'no track → the countdown as before');
+  ok(/^In range for 9:55 · highest in 2:28 \(60°\) · heading south$/.test(satCountdownText(parsed, now, south)), `the countdown says it (${satCountdownText(parsed, now, south)})`);
+  ok(satCountdownText(parsed, now) === 'In range for 9:55 · highest in 2:28 (60°)' && satCountdownText(parsed, now, null) === 'In range for 9:55 · highest in 2:28 (60°)', 'no track → no heading');
 }
 
 console.log('— 1.8 labels');

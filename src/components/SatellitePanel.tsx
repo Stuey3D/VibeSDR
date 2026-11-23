@@ -361,7 +361,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                    not lost before the box grows), shown only BIG */}
               {confirmed && imageDec && (
                 <View style={showPic && showA ? s.img : s.hidden}>
-                  <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))}
+                  <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))} fullWidth
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>
@@ -400,7 +400,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                    open (so a picture's first lines are not lost), shown only BIG. */}
               {!!vb && satDecView(vb.decoder) === 'image' && !!p.bImageRef && (
                 <View style={showBPic ? s.img : s.hidden}>
-                  <DecoderImageCanvas ref={p.bImageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))}
+                  <DecoderImageCanvas ref={p.bImageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))} fullWidth
                     decoderName={vb.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>

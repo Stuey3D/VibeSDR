@@ -173,7 +173,7 @@ try {
   const box = JSON.parse(await ev(`JSON.stringify({ big: document.getElementById('satPanel').classList.contains('big'), hz: document.querySelector('#satPanel [data-s="hz"]').textContent, cd: document.querySelector('#satPanel [data-s="cd"]').textContent, img: document.querySelector('#satPanel .sat-img').hidden, st: document.querySelector('#satPanel [data-s="state"]').textContent, list: document.querySelector('#satPanel details').open })`));
   ok(!box.big && box.img, 'voice → COMPACT (no picture area)');
   ok(box.hz === '437.791 88 MHz', `the corrected frequency (437.800 − 8.123 kHz): ${box.hz}`);
-  ok(/^In range for 6:\d\d$/.test(box.cd), `the countdown: ${box.cd}`);
+  ok(/^In range for 6:\d\d · highest in 1:\d\d \(40°\)$/.test(box.cd), `the countdown, with the time to its highest (beta92): ${box.cd}`);
   {   // ★ beta91 which is which: the uplink under the big (downlink) frequency
     const up = await ev(`(() => { const e = document.querySelector('#satPanel [data-s="up"]'); return e && !e.hidden ? e.textContent : ''; })()`);
     ok(up === 'Uplink 145.990 MHz · 67 Hz tone · the frequency above is the downlink', `beta91 the box names the uplink: ${up}`);
@@ -191,7 +191,7 @@ try {
   ok(ink2 > ink + 150, `1.7 the dotted orbit is inked (${ink} → ${ink2} px)`);
   // ★ beta91 the direction: the path runs north → south in time, the bird (47 N, 9 W) is on it — the countdown says so
   const cdH = await ev(`document.querySelector('#satPanel [data-s="cd"]').textContent`);
-  ok(/^In range for 6:\d\d · heading south$/.test(cdH), `beta91 the countdown says which way: ${cdH}`);
+  ok(/^In range for 6:\d\d · highest in 1:\d\d \(40°\) · heading south$/.test(cdH), `beta91 the countdown says which way: ${cdH}`);
   // ★ 1.8 the receiver's dot is GREEN (#5BE36B) somewhere on the canvas
   const green = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i+3] > 200 && Math.abs(d[i]-0x5B) < 12 && Math.abs(d[i+1]-0xE3) < 12 && Math.abs(d[i+2]-0x6B) < 12) n++; return n; })()`);
   ok(green > 60, `1.8 the receiver's dot is green (${green} px of #5BE36B)`);
@@ -222,6 +222,15 @@ try {
   await ev(`window.__p.onTrack(__Sat.parseSatTrack(${JSON.stringify({ type: 'sat_track', norad: 57166, aos: now - 300, los: now + 595, pts: [], geo })})); true`);
   ok(/dotted: this pass.s orbit · arrows: its direction · shaded/.test(await ev(`document.querySelector('#satPanel [data-s="key"]').textContent`)), 'beta91 BIG with an orbit: the key names the arrows');
   ok(/120 lines/.test(await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`)), 'the LRPT line in the box');
+  // ★★ beta92 (Stuart 11-23: "any chance of making the lines drawn full width of the box?"): a pass grows TALL — the
+  //    picture stays the box's full width and the box scrolls, instead of shrinking to fit 440 px
+  const fw = JSON.parse(await ev(`(() => { const c = document.getElementById('decImage'), x = c.getContext('2d'); const img = x.getImageData(0, 0, 392, 300);
+    c.height = 1600; x.putImageData(img, 0, 0); x.fillStyle = '#556'; x.fillRect(0, 300, 392, 1300);
+    const w = document.querySelector('#satPanel #decImgWrap'), r = c.getBoundingClientRect(), wr = w.getBoundingClientRect();
+    return JSON.stringify({ iw: r.width, ww: wr.width, ih: r.height, wh: wr.height, sh: w.scrollHeight }); })()`));
+  ok(Math.abs(fw.iw - fw.ww) <= 2, `a 1600-line pass is drawn at the box's full width (${Math.round(fw.iw)} of ${Math.round(fw.ww)} px)`);
+  ok(fw.wh <= 445 && fw.sh > fw.wh + 400, `…and the box scrolls (${Math.round(fw.wh)} px tall, ${Math.round(fw.sh)} px of picture)`);
+  await ev(`(() => { const c = document.getElementById('decImage'), x = c.getContext('2d'); const img = x.getImageData(0, 0, 392, 300); c.height = 300; x.putImageData(img, 0, 0); return true; })()`);
   await shot('big-desktop');
   await ev(`document.querySelector('#satPanel [data-act="size"]').click(); true`);
   ok(await ev(`!document.getElementById('satPanel').classList.contains('big') && document.querySelector('#satPanel .sat-img').hidden`), 'the size key → SMALL (the picture keeps drawing, out of sight)');

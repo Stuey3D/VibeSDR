@@ -117,7 +117,12 @@ const CSS = `
 #satPanel.big canvas.sat-globe{width:100%;max-width:420px;margin:0 auto}
 #satPanel .sat-img{margin-top:8px}
 #satPanel .sat-img[hidden]{display:none}
-#satPanel .sat-img #decImage{max-height:min(52vh,440px);object-fit:contain}
+/* ★★ beta92 (Stuart 11-23, a Meteor pass: "any chance of making the lines drawn full width of the box? i didnt even notice it
+   drawing as it was that small"): the picture is drawn at the box's FULL WIDTH and the box scrolls — it was fitted whole
+   into 440 px, so an LRPT pass (it grows down for 15 minutes) shrank to a sliver as it grew. The newest lines stay in
+   view while the box is at its foot (main.ts satLendImage); scroll up and it stays where you put it. */
+#satPanel .sat-img #decImgWrap{max-height:min(52vh,440px);overflow:auto}
+#satPanel .sat-img #decImage{max-height:none;height:auto;object-fit:fill}
 /* ★★★ beta92 OPEN IN VFO B — the key(s) under the readout, B's line, and the line switch (a line is tappable only while
    both lines have a decoder view; the one shown is lit) */
 #satPanel .sat-vb{display:flex;flex-direction:column;gap:4px;margin-top:4px}

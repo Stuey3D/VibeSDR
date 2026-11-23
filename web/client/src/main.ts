@@ -10497,10 +10497,23 @@ function satLendImage(slot: HTMLElement | null) {
     if (!satImgHome && wrap.parentNode) satImgHome = { parent: wrap.parentNode, next: wrap.nextSibling };
     slot.appendChild(wrap);
     $('decImage').classList.add('on');
+    satImgFollowStart(wrap);
+    wrap.scrollTop = wrap.scrollHeight;
   } else if (satImgHome) {
     satImgHome.parent.insertBefore(wrap, satImgHome.next);
     satImgHome = null;
   }
+}
+/* ★★ beta92 the satellite box draws the picture at full width and scrolls (satellites.ts CSS): while the box is at its
+ *  foot, each new strip keeps the newest lines in view; scrolled up, it is left alone. One observer, set up once; it acts
+ *  only while the wrapper is lent to the satellite box. */
+let satImgFollow = true, satImgFollowOn = false;
+function satImgFollowStart(wrap: HTMLElement) {
+  if (satImgFollowOn) return;
+  satImgFollowOn = true;
+  wrap.addEventListener('scroll', () => { satImgFollow = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 24; }, { passive: true });
+  if (typeof ResizeObserver === 'undefined') return;
+  new ResizeObserver(() => { if (satImgFollow && wrap.closest('#satPanel')) wrap.scrollTop = wrap.scrollHeight; }).observe($('decImage'));
 }
 /** Leave SATELLITE (another whole-radio mode is starting) — the drop is sent, the decoder stops. */
 function satModeOff() { if (satPanel?.active) satPanel.exit(); }

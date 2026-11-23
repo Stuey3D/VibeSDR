@@ -502,7 +502,13 @@ export function satCountdownText(sat: SatInfo | undefined, nowSec: number, geo?:
   const row = satModeRows({ time: 'ok', located: true, now: nowSec, sats: [{ ...sat, tx: [{ label: '-', hz: 1, mode: 'nfm', loop: 'none', reach: true }] }] }, nowSec)[0];
   if (row.up) {
     const hd = satHeadingText(geo, sat.lat, sat.lon);
-    return (row.left != null ? `In range for ${mss(row.left)}` : 'In range now') + (hd ? ` · ${hd}` : '');
+    /* ★ beta92 (Stuart 11-23: "can we also show the peak position time so in range for 10:15 peak position in 5:45"):
+     *  the time to the pass's HIGHEST point (TCA — the strongest part of the pass), with how high; past it, said so. */
+    const p = (sat.passes ?? []).find((q) => q.aos <= nowSec && nowSec <= q.los);
+    const peak = !p || !(p.tca > 0) ? ''
+      : p.tca - nowSec >= 1 ? `highest in ${mss(p.tca - nowSec)} (${Math.round(p.maxEl)}°)`
+      : nowSec - p.tca < 30 ? `at its highest (${Math.round(p.maxEl)}°)` : `past its highest (${Math.round(p.maxEl)}°)`;
+    return [row.left != null ? `In range for ${mss(row.left)}` : 'In range now', peak, hd].filter(Boolean).join(' · ');
   }
   if (row.next) return `Next pass in ${hmIn(row.next.aos, nowSec)} · AOS ${hhmm(row.next.aos)} · max ${Math.round(row.next.maxEl)}°`;
   return 'No pass in the next day';

@@ -103,6 +103,11 @@ export interface DecoderImageCanvasProps {
   /** ★ The listener's zoom over FIT (1 = the whole width in the box). The header's − / + (DecoderPanel). */
   zoom?: number;
   maxHeight: number;
+  /** ★★ beta92 the SATELLITE box (Stuart 11-23, a Meteor pass: "any chance of making the lines drawn full width of the box?
+   *  i didnt even notice it drawing as it was that small"): the picture at the box's FULL WIDTH, scrolling within
+   *  maxHeight, the newest lines kept in view while it is scrolled to the foot. An LRPT pass grows down for 15 minutes,
+   *  so fitting it whole shrank it to a sliver. The decoder box keeps fitting whole (Stuart 10-04). */
+  fullWidth?: boolean;
   /** Header info string updates: "1809x500", "prev — 1809x842", … */
   onInfo:    (info: string) => void;
   onStatus:  (status: string) => void;
@@ -192,11 +197,14 @@ function mkBuf(w: number, h: number): PixBuf {
 }
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
-  function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
+  function DecoderImageCanvas({ maxHeight, fullWidth = false, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
                                autoMargin = false, autoSlant = true, stationSlant = 0, stationFormat, onAutoAlign,
                                alignPreview, onAlignDrag, raw = false, onNewChart }, ref) {
     const rawRef = useRef(raw);
     rawRef.current = raw;
+    // ★ beta92 fullWidth: the outer scroller, and whether it is at the foot (then each new strip keeps the newest in view)
+    const vScrollRef = useRef<ScrollView>(null);
+    const followRef = useRef(true);
     const alignRef = useRef<WefaxAlign>(align ?? WEFAX_ALIGN_ZERO);
     alignRef.current = align ?? WEFAX_ALIGN_ZERO;
     const autoRef = useRef(autoMargin);
@@ -583,7 +591,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
      *  zoom and pan as needed, but by default the whole image is shown correctly". Every picture — the WEFAX roll
      *  included — fits WHOLE by default; as a chart grows it scales down to stay whole, and the header's − / +
      *  magnifies from there with panning both ways. */
-    const fitsWhole = true;
+    const fitsWhole = !fullWidth;
     const wScale = dispDims.w > 0 ? panelW / dispDims.w : 1;
     const hScale = dispDims.h > 0 ? maxHeight / dispDims.h : 1;
     // ★★★ NEVER MAGNIFY PAST THE SOURCE BY MORE THAN THIS. An SSTV frame is 320x240 — on a Mac
@@ -603,7 +611,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     // ★★★ AND THE BOX TAKES WHAT THE IMAGE NEEDS, NOT WHAT IT IS ALLOWED. maxHeight is a CEILING;
     // using it as the height left a fixed-size frame floating in a vast black box on a big screen.
     // WEFAX keeps the full ceiling because it grows without limit and genuinely wants the room.
-    const boxH = fitsWhole ? Math.min(maxHeight, drawH) : maxHeight;
+    const boxH = fitsWhole || fullWidth ? Math.min(maxHeight, drawH) : maxHeight;
 
     /* ★★★ ALIGN BY DRAGGING (Stuart, 2026-10-06: the ◀ ▶ keys were "really hard to press and are finicky and cannot
      *  be held … Simpler way of doing this is on the ALIGN button have an overlay pop up over the chart <----------->
@@ -650,6 +658,10 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       <View>
       <ScrollView style={{ height: aligning ? Math.max(boxH, Math.min(maxHeight, ALIGN_MIN_H)) : boxH, maxHeight }}
                   showsVerticalScrollIndicator
+                  ref={vScrollRef}
+                  scrollEventThrottle={100}
+                  onScroll={fullWidth ? (e) => { const n = e.nativeEvent; followRef.current = n.contentOffset.y + n.layoutMeasurement.height >= n.contentSize.height - 24; } : undefined}
+                  onContentSizeChange={fullWidth ? () => { if (followRef.current) vScrollRef.current?.scrollToEnd({ animated: false }); } : undefined}
                   onLayout={(e) => { const w = Math.floor(e.nativeEvent.layout.width); setBoxW((p) => (p === w ? p : w)); }}
                   /* ★ scroll lane: a picture, centred, no controls in it */>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
