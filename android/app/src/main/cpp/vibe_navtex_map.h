@@ -17,7 +17,9 @@
 //   Lenovo's 4 500 messages).
 #pragma once
 #include "vibe_navtex_stations.h"
+#include "vibe_log_radio.h"   // ★ beta92 which radio heard each station
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -189,6 +191,9 @@ struct Agg {
     uint64_t outright = 0;                             ///< messages whose label named this station outright
     std::map<std::string, uint64_t> ev;                ///< ★ how the others were placed: text / series / link / run / neighbour / dx / night
     uint64_t inSlot = 0;                               ///< messages saved inside the letter's transmit slot (slotFits)
+    /** ★ beta92 the radios whose messages it came from (the items' "ri", vibe_log_radio.h — ≤ 8; none = unknown) */
+    std::set<std::string> radios;
+    uint64_t untagged = 0;                             ///< its messages with no radio (older items)
 };
 /** ★★ THE NAVTEX SCHEDULE (IMO NAVTEX Manual / ITU-R M.540; NGA Pub. 117 lists the same plan): each letter transmits for
  *  10 minutes every 4 hours — A at 00:00, 04:00 … B at 00:10 … X at 03:50 UTC. The gallery's time is when the message
@@ -456,6 +461,15 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     if (!a.n) { a.st = st; a.cands = cands; a.conf = conf; a.b1 = ti.b1; a.name = st->name; a.iso = st->iso; a.country = st->country; a.first = (int64_t)t; }
     else if (conf == "confident") a.conf = "confident";                    // ★ any confident copy settles it
     a.n++;
+    {   // ★ beta92 who heard it: the message's radios, from its index line
+        const size_t rp = line.find("\"ri\":\"");
+        if (rp == std::string::npos) a.untagged++;
+        else {
+            const size_t q = line.find('"', rp + 6);
+            for (const auto& id : vibe::logradio::splitIds(line.substr(rp + 6, q == std::string::npos ? 0 : q - rp - 6)))
+                if (a.radios.size() < vibe::logradio::kMaxIdsPerEntry) a.radios.insert(id);
+        }
+    }
     if (conf == "confident" && !ti.textNamed) a.outright++;
     if (!why.empty()) a.ev[why]++;
     if (slotFits(ti.b1, (int64_t)t)) a.inSlot++;
@@ -533,6 +547,8 @@ inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t sin
         for (auto& e : a.ev) home->ev[e.first] += e.second;
         home->first = std::min(home->first, a.first); home->last = std::max(home->last, a.last);
         for (auto& i : a.ids) home->ids.insert(i);
+        for (auto& rid : a.radios) if (home->radios.size() < vibe::logradio::kMaxIdsPerEntry) home->radios.insert(rid);
+        home->untagged += a.untagged;
         for (auto& s2 : a.subj) home->subj[s2.first] += s2.second;
         for (auto& r : a.recent) home->recent.push_back(r);
         std::sort(home->recent.begin(), home->recent.end(), [](const Recent& x, const Recent& y) { return x.t > y.t; });
@@ -579,6 +595,10 @@ inline std::string toJson(const Result& r, double rxLat, double rxLon, int64_t n
                   (unsigned long long)r.messages, (unsigned long long)r.unplaced, (unsigned long long)r.byRun, (long long)r.oldest);
     o += b;
     bool firstS = true;
+    // ★★ beta92 THE RADIOS (vibe_log_radio.h): per station "radios" (absent = only older, untagged messages), and the
+    //    answer's own "radios" list — the radios its stations came from, named — appended at the end
+    std::vector<std::pair<std::string, uint64_t>> perRadio;
+    uint64_t untaggedSt = 0;
     for (const Agg& a : r.stations) {
         if (!firstS) o += ','; firstS = false;
         std::snprintf(b, sizeof b, "{\"b1\":\"%c\",\"lat\":%.3f,\"lon\":%.3f,\"first\":%lld,\"last\":%lld,\"n\":%llu,\"uniq\":%zu,\"night\":%llu,\"folded\":%llu,",
@@ -586,6 +606,16 @@ inline std::string toJson(const Result& r, double rxLat, double rxLon, int64_t n
                       (unsigned long long)a.folded);
         o += b;
         o += "\"name\":\"" + jesc(a.name) + "\",\"iso\":\"" + jesc(a.iso) + "\",\"country\":\"" + jesc(a.country) + "\",\"conf\":\"" + a.conf + "\"";
+        if (!a.radios.empty()) {
+            o += ",\"radios\":[";
+            bool fr = true;
+            for (const auto& id : a.radios) {
+                if (!fr) o += ','; fr = false; o += "\"" + id + "\"";
+                auto it = std::find_if(perRadio.begin(), perRadio.end(), [&](const std::pair<std::string, uint64_t>& p) { return p.first == id; });
+                if (it == perRadio.end()) perRadio.push_back({ id, 1 }); else ++it->second;
+            }
+            o += "]";
+        } else ++untaggedSt;
         if (std::isfinite(rxLat)) { std::snprintf(b, sizeof b, ",\"km\":%.0f", navtex::km(rxLat, rxLon, a.st->lat, a.st->lon)); o += b; }
         o += ",\"khz\":[";
         bool f1 = true; for (double k : a.khz) { if (!f1) o += ','; f1 = false; std::snprintf(b, sizeof b, "%g", k); o += b; }
@@ -635,7 +665,7 @@ inline std::string toJson(const Result& r, double rxLat, double rxLon, int64_t n
         }
         o += "]}";
     }
-    return o + "]}";
+    return o + "],\"radios\":" + vibe::logradio::radiosJson(perRadio, untaggedSt) + "}";
 }
 
 } // namespace navmap

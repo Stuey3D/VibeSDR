@@ -207,6 +207,27 @@ int main(int argc, char** argv) {
         const std::string j = navmap::toJson(res, LA, LO, 1793560000);
         ok(j.find("\"stations\":[") != std::string::npos && j.find("\"rx\":{\"lat\":52.3020") != std::string::npos && j.size() < 200000, "the JSON: stations, the receiver, bounded (" + std::to_string(j.size()) + " B)");
     }
+    std::printf("── beta92 the radios: which radio heard each station ──\n");
+    {
+        auto tagged = [](std::string l, const char* ri) { if (*ri) l.insert(l.size() - 1, std::string(",\"ri\":\"") + ri + "\""); return l; };
+        const int64_t t0 = 1793500000;
+        std::vector<std::string> lines = {
+            tagged(line("G \xc2\xb7 Cullercoats, United Kingdom \xc2\xb7 Nav warning \xc2\xb7 #98", 518000, t0), "aa11bb22"),
+            tagged(line("G \xc2\xb7 Cullercoats, United Kingdom \xc2\xb7 Nav warning \xc2\xb7 #99", 518000, t0 + 60), "cc33dd44"),
+            tagged(line("O \xc2\xb7 Portpatrick, United Kingdom \xc2\xb7 Met warning \xc2\xb7 #01", 518000, t0 + 120), "aa11bb22"),
+            line("E \xc2\xb7 Niton, United Kingdom \xc2\xb7 Nav warning \xc2\xb7 #10", 518000, t0 + 180) };
+        logradio::setMachineRadios([] { return std::vector<logradio::Named>{ { "aa11bb22", "HF loop" }, { "cc33dd44", "Wire" } }; });
+        const navmap::Result r = navmap::scan([&](const std::function<void(const std::string&)>& fn) { for (auto& l : lines) fn(l); }, LA, LO, 0);
+        const std::string j = navmap::toJson(r, LA, LO, t0 + 600);
+        auto stationOf = [&](const char* name) { const size_t p = j.find(std::string("\"name\":\"") + name); if (p == std::string::npos) return std::string();
+                                                 const size_t b = j.rfind("{\"b1\"", p); return j.substr(b, j.find("\"recent\"", p) - b); };
+        ok(stationOf("Cullercoats").find("\"radios\":[\"aa11bb22\",\"cc33dd44\"]") != std::string::npos, "Cullercoats, heard by both radios, lists both");
+        ok(stationOf("Portpatrick").find("\"radios\":[\"aa11bb22\"]") != std::string::npos, "Portpatrick lists its one radio");
+        ok(!stationOf("Niton").empty() && stationOf("Niton").find("\"radios\"") == std::string::npos, "Niton (an older, untagged message) has none: unknown");
+        ok(j.find("\"radios\":[{\"id\":\"aa11bb22\",\"name\":\"HF loop\",\"n\":2},{\"id\":\"cc33dd44\",\"name\":\"Wire\",\"n\":1}],\"radioUnknown\":1}") != std::string::npos,
+           "the answer names the radios and their stations: " + j.substr(j.size() > 160 ? j.size() - 160 : 0));
+        logradio::setMachineRadios(nullptr);
+    }
     std::printf("── through the Store's live view (append-only index: replacements and removals) ──\n");
     {
         char tmpl[256]; std::snprintf(tmpl, sizeof tmpl, "%s/navmap-store-XXXXXX", std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
