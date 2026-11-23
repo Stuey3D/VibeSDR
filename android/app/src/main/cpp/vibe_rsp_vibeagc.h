@@ -88,7 +88,10 @@ inline VagcProfile vagcProfile(VagcBand b) {
     switch (b) {
         case VagcBand::FmBroadcast: return {"FM broadcast", -20.0, 4.0, 2.0, -6.0, 52.0, 1.5, 8.0, false, 0, 0};
         case VagcBand::Dab:         return {"DAB",          -20.0, 6.0, 10.0, -6.0, 55.0, 1.5, 8.0, true, -34.0, -8.0};
-        case VagcBand::AmMw:        return {"AM/MW",        -20.0, 5.0, 2.0, -6.0, 52.0, 2.0, 10.0, false, 0, 0};
+        /* ★ beta92 AM/MW's load line is 57 (live, the Lenovo RSP1A 11-23: MW clean at RF 1 / IF 52 and RF 2 / IF 55, SNR 49-51
+         *   dB, no overload — at 52 the load rule cut RF 2 → 3 → 4, and RF 4 on MW is the radio's own floor, SNR 30 → 23 dB at
+         *   RF 5 / 6). The 59 rail's swamped / clip protection is unchanged. */
+        case VagcBand::AmMw:        return {"AM/MW",        -20.0, 5.0, 2.0, -6.0, 57.0, 2.0, 10.0, false, 0, 0};
         case VagcBand::HfSsb:       return {"HF SSB/CW",    -20.0, 5.0, 2.0, -6.0, 52.0, 2.0, 10.0, false, 0, 0};
         case VagcBand::Nfm:         return {"VHF/UHF NFM",  -20.0, 4.0, 2.0, -6.0, 52.0, 1.5, 8.0, false, 0, 0};
     }
@@ -185,6 +188,7 @@ public:
     static constexpr double kAcqSettleSec   = 3.0, kAcqMaxSec = 40.0;   // acquisition: on target this long, or give up
     static constexpr double kAcqAddDwellSec = 2.0;    // …and a rung goes back after this much room, not 8-10 s
     static constexpr double kAcqIfStepDb    = 6.0;    // …and the IF climbs in up to 6 dB (the smoother measures those)
+    static constexpr double kRecheckSec     = 600.0;  // ★ beta92 an attenuated RF that has not moved this long is re-measured
     static constexpr int    kGrMin = 20, kGrMax = 59;
 
     void setProfile(VagcBand b) {
@@ -278,9 +282,14 @@ public:
             const double moved = atk - measPk_;
             const bool antenna = moved >= measExpect_ - measRung_ * 0.5;
             measureNext_ = !antenna;
+            // ★ a periodic re-check that read the aerial on a band with no IF room for it: straight back (revertPending_)
+            if (antenna && periodic_ && gr_ > p_.grHigh - kAddMarginDb) revertPending_ = true;
             std::snprintf(o.note, sizeof o.note, "measured RF step: the level moved %+.1f dB (an antenna signal %+.1f, the "
                           "radio's own floor %+.1f) — %s", moved, measExpect_, measExpect_ - measRung_,
-                          antenna ? "the antenna's; the ordinary rules carry on" : "the radio's own floor; the next rung is measured too");
+                          !antenna ? "the radio's own floor; the next rung is measured too"
+                          : revertPending_ ? "the antenna's, and the band needs the attenuation — back to it"
+                          : "the antenna's; the ordinary rules carry on");
+            periodic_ = false;
         }
 
         // ── the front-end judgements, on OUR gRdB ──
@@ -353,6 +362,48 @@ public:
             o.act = kActAddMeasure;
             emit(o, in, to, grTo, +rung, 0);   // ★ direction 0: a load cut straight after it is not held back
             return o;
+        }
+        /* ── 1c. ★★ beta92 THE RE-CHECK (Stuart 11-23: "it needs to constantly monitor and adjust especially when background
+         *  decoding is working" — the Lenovo sat at LNA 5 / IF 56 for EIGHT HOURS overnight, zero writes, NAVTEX lost): an
+         *  attenuated RF that has not moved for kRecheckSec, with no IF room for the next rung and the level on target, is
+         *  measured again — one rung (1b's step). The radio's own floor: kept, and the next rung is measured. The aerial, on
+         *  a band with no IF room for it: back at once (revertPending_), and the next re-check is kRecheckSec away. So the
+         *  worst case is two RF moves every ten minutes on a band that truly needs its attenuation. AM/MW, HF and NFM only —
+         *  FM broadcast (stereo pops) and DAB (held as it was) never re-check. */
+        if (revertPending_ && lnaAllowed(in.now)) {
+            revertPending_ = false;
+            const int to = measFrom_, grTo = clampGr(measGrFrom_);
+            const double rung = rungDbFor(in, lna_, to);
+            std::snprintf(o.why, sizeof o.why, "re-check: the band needs its attenuation — RF gain state %d -> %d, IF %d -> %d dB "
+                          "(next re-check in %.0f min)", lna_, to, gr_, grTo, kRecheckSec / 60.0);
+            o.act = kActCutLoad;
+            emit(o, in, to, grTo, -rung, 0);
+            recheckAt_ = in.now + kRecheckSec;
+            return o;
+        }
+        {
+            if (recheckAt_ <= 0) recheckAt_ = in.now + kRecheckSec;
+            const bool recheckProfile = band_ == VagcBand::AmMw || band_ == VagcBand::HfSsb || band_ == VagcBand::Nfm;
+            if (in.rfOwned && !p_.ifFreeze && recheckProfile && !measuring_ && !revertPending_ && in.now >= recheckAt_
+                && in.now - lastLnaAt_ >= kRecheckSec && lna_ - 1 >= in.lnaFloor && lnaAllowed(in.now) && haveSecond
+                && !roomForRung && !clipping && std::fabs(atk - p_.targetPk) <= p_.deadDb && dec < p_.targetPk + p_.deadDb
+                && !(ceilingState_ >= 0 && lna_ - 1 <= ceilingState_) && in.now - lastClipAt_ > addDwell) {
+                const int to = lna_ - 1;
+                const double rung = rungDbFor(in, to, lna_);
+                const int grTo = clampGr((int)std::lround(gr_ + rung));
+                measuring_ = true; periodic_ = true; measFrom_ = lna_; measGrFrom_ = gr_;
+                measPk_ = atk; measRung_ = rung; measExpect_ = rung - (grTo - gr_);
+                recheckAt_ = in.now + kRecheckSec;
+                char since[40];
+                if (lastLnaAt_ < 0) std::snprintf(since, sizeof since, "since the start");
+                else std::snprintf(since, sizeof since, "for %.0f min", (in.now - lastLnaAt_) / 60.0);
+                std::snprintf(o.why, sizeof o.why, "re-check: RF unmoved %s with no IF room — one RF rung to measure "
+                              "it: state %d -> %d (rung %.1f dB), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
+                              since, lna_, to, rung, gr_, grTo, atk);
+                o.act = kActAddMeasure;
+                emit(o, in, to, grTo, +rung, 0);
+                return o;
+            }
         }
         // ── 2. RF IN: only with room for the whole rung, sustained, and not into a recent overload ──
         if (in.rfOwned && lna_ - 1 >= in.lnaFloor && lnaAllowed(in.now) && haveSecond
@@ -444,7 +495,9 @@ private:
     // ★ beta92 the measured step (1b): in flight, its before-level and expectations; the next rung measured too; this
     //   loop cut to the bottom itself (no measuring there until a band change or an outside write)
     bool measuring_ = false, measureNext_ = false, cutToBottom_ = false; double measPk_ = 0, measRung_ = 0, measExpect_ = 0;
-    void forgetMeasure() { measuring_ = measureNext_ = cutToBottom_ = false; }
+    // ★ beta92 the re-check (1c): when it may next run, whether the step in flight is one, where it came from, a revert owed
+    double recheckAt_ = 0; bool periodic_ = false, revertPending_ = false; int measFrom_ = 0, measGrFrom_ = 59;
+    void forgetMeasure() { measuring_ = measureNext_ = cutToBottom_ = periodic_ = revertPending_ = false; recheckAt_ = 0; }
     std::deque<double> writeTimes_;
     unsigned writes_ = 0, ifWrites_ = 0, lnaWrites_ = 0; int maxPerSec_ = 0;
 

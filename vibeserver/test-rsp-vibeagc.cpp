@@ -299,7 +299,8 @@ static void caseG() {
     SimRsp r; r.band = 0; r.red = ladder(0); r.red[4] = r.red[3] + 25.0; r.red[5] = r.red[4] + 5; r.red[6] = r.red[5] + 19;
     // at state 3 the IF needs 54 (over the 52 load line): one cut, sized by the prior (19), lands 6 dB short
     r.lna = 3; r.gr = 54; r.sigs = {-40.0}; r.wanted = -60.0;
-    const LoopStats s = runLoop(r, VagcBand::AmMw, 180, [](double, SimRsp&) {}, true, true);
+    // ★ beta92 HF SSB/CW (load line 52) — AM/MW's is 57 since beta92 (live, the Lenovo), where IF 54 is not over it; the mechanism is the same
+    const LoopStats s = runLoop(r, VagcBand::HfSsb, 180, [](double, SimRsp&) {}, true, true);
     std::printf("   -> final LNA %d IF %d, %d LNA moves, %d reversals\n", s.finalLna, s.finalGr, s.lnaMoves, s.reversals);
     ok(s.lnaMoves >= 1 && s.finalLna == 4, "the cut through the big rung is taken");
     ok(s.reversals == 0, "and not undone: the rung, learned at 25 dB, leaves no room to come back (no hunting)");
@@ -605,6 +606,31 @@ static void caseS() {
                     r.lna, r.gr, ro.measures, ro.floorVerdicts, ro.lnaMoves);
         ok(ro.measures == 1 && ro.floorVerdicts == 0, "one measured step, read as the antenna's");
         ok(ro.lnaMoves <= 2, fmt("at most the step and one cut back in 4 minutes (%.0f moves) — no hunting", ro.lnaMoves));
+    }
+    {   // ★ beta92 THE RE-CHECK — the Lenovo 11-23: after a reboot LNA 5 / IF 56, the radio's own floor, 8 h with zero writes
+        // the floor as the Lenovo read it: on target (-22.8 dBFS) at LNA 5 / IF 56 — so no rule had any reason to move
+        SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 5; r.gr = 56; r.sigs = {-50.0, -55.0, -62.0}; r.internal = -61.5;   // as on the Lenovo: about IF 55-57 at RF 2
+        r.wanted = -95.0;
+        VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr);
+        const RunOut a = runFrom(agc, r, 0, 590, [](double, SimRsp&) {}, false);
+        ok(a.lnaMoves == 0 && r.lna == 5, "stuck at LNA 5 on the floor: nothing moves for the first 10 minutes (as before)");
+        const RunOut b = runFrom(agc, r, 590, 300, [](double, SimRsp&) {}, true);
+        std::printf("   -> after the re-check: LNA %d, IF %d, peak %.1f; %d measured, %d floor verdicts\n", r.lna, r.gr, r.peak(), b.measures, b.floorVerdicts);
+        ok(r.lna <= 3 && r.ptot() - r.red[r.lna] > r.internal, fmt("the re-check finds the floor and the RF comes in (LNA %.0f)", r.lna));
+    }
+    {   // a strong band that NEEDS its attenuation: a re-check every 10 min, straight back each time — never left high
+        SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 4; r.gr = 50; r.sigs = {-28.0, -33.0}; r.wanted = -60.0;
+        VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr);
+        const RunOut ro = runFrom(agc, r, 0, 1290, [](double, SimRsp&) {}, true);
+        std::printf("   -> strong, 21.5 min: LNA %d, IF %d; %d measured, %d LNA moves\n", r.lna, r.gr, ro.measures, ro.lnaMoves);
+        ok(ro.measures <= 2 && ro.lnaMoves <= 4, fmt("at most two re-checks and their returns in 21.5 min (%.0f moves)", ro.lnaMoves));
+        ok(r.lna == 4, fmt("…and it ends where the band needs it (LNA %.0f)", r.lna));
+    }
+    {   // FM broadcast never re-checks (an RF step is a stereo pop)
+        SimRsp r; r.band = 1; r.red = ladder(1); r.lna = 5; r.gr = 50; r.sigs = {-28.0}; r.wanted = -60.0;
+        VibeAgcRsp agc; agc.setProfile(VagcBand::FmBroadcast); agc.adopt(r.lna, r.gr);
+        const RunOut ro = runFrom(agc, r, 0, 1300, [](double, SimRsp&) {}, false);
+        ok(ro.measures == 0, "FM broadcast: no re-check in 21 min");
     }
     {   // DAB: never (its IF freezes on purpose; the standard DAB path is held as it was)
         SimRsp r; r.band = 1; r.red = ladder(1); r.lna = 9; r.gr = 37; r.sigs = {-57.0}; r.internal = -81.0; r.wanted = -80.0;
