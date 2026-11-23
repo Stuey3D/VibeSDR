@@ -720,6 +720,15 @@ public:
         uint64_t n = 0;
         for (const char* f : { "ais-ships.dat" }) { struct stat st{}; if (::stat(itemPath(dir, f).c_str(), &st) == 0 && S_ISREG(st.st_mode)) n += (uint64_t)st.st_size; }
         n += vibestations::Store::bytesIn(dir);   // ★ V12 beta90 the station store's day files (a 16th of the space at most)
+        // ★ V12 beta92 the shared day items' card states (vibe_gallery_shared.h, <dir>/.shared/*.state)
+        if (DIR* dp = ::opendir((dir + "/.shared").c_str())) {
+            while (dirent* e = ::readdir(dp)) {
+                if (e->d_name[0] == '.') continue;
+                struct stat st{};
+                if (::stat((dir + "/.shared/" + e->d_name).c_str(), &st) == 0 && S_ISREG(st.st_mode)) n += (uint64_t)st.st_size;
+            }
+            ::closedir(dp);
+        }
         return n;
     }
     /** Items the gallery holds now. */
