@@ -29033,7 +29033,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("rtl serial change requested by %s — %s", sock->peerAddress().c_str(), msg.c_str());
             sock->close(); return;
         // ── ★★ V12: THE GALLERY, READ-ONLY (vibe_gallery.h) ─────────────────────────────────────────────────────
-        // GET /vibeserver/gallery.json[?kind=navtex&limit=200] — the items, newest first.
+        // GET /vibeserver/gallery.json[?kind=navtex&limit=200&since=86400] — the items, newest first (since= beta92: the last N seconds).
         // GET /vibeserver/gallery/file/<name>[?download=1]      — one item, inline (a .txt shown in the page) or saved.
         // ★★★ A name is only ever LOOKED UP (Store::resolve: the safe alphabet, listed in the index, opened O_NOFOLLOW).
         // ★ Everyone's to read (Stuart) unless the owner switched it off — then the owner, with the password, still can.
@@ -29312,9 +29312,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★★ V12 beta92 ?radio=<id> — one radio's items (+ the untagged): a VIEW; the gallery stays one per server
                 std::string rad = qv("radio");
                 if (!vibe::logradio::validId(rad)) rad.clear();   // ★ all of it or none: a filtered-down junk value is not an id
-                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset, rad);
+                // ★★ V12 beta92 ?since=<seconds back> — THE TIME RANGE (1 H · 24 H · 7 DAYS · 30 DAYS · ALL): a view; 0 /
+                //    absent = every item (the old request, unchanged); past 400 days = all, as the other since= params.
+                long since = std::max(0L, std::atol(qv("since").c_str()));
+                if (since > 400L * 86400) since = 0;
+                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset, rad, since);
                 // ★ Plus whether this server keeps anything at all — a client shows "this server keeps no gallery" honestly.
                 j.insert(1, std::string("\"enabled\":") + (g.enabled() ? "true" : "false") + ",");
+                // ★ beta92 a client that asked since= (even 0 = ALL) is told this server knows it — it draws the range keys
+                //   only then (an older server ignores since=, and keys that change nothing are dead controls).
+                if (!since && !qv("since").empty()) j.insert(1, "\"since\":0,");
                 reply("200 OK", "application/json", j);
                 return;
             }

@@ -2138,6 +2138,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #galPager .gap { color: var(--unit); padding: 0 2px; }
 #galPager .lab { color: var(--unit); font-size: 11px; margin-left: auto; }
 #galPager .btn:disabled { opacity: 0.35; }
+/* ★★ beta92 THE TIME RANGE — the maps' segmented keys (tracks.ts .rng): 1 H · 24 H · 7 DAYS · 30 DAYS · ALL */
+#galRange { gap: 0; flex-wrap: nowrap; }
+#galRange[hidden] { display: none; }
+#galRange .btn { border-radius: 0; margin-left: -1px; padding: 6px 8px; white-space: nowrap; }
+#galRange .btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+#galRange .btn:last-child { border-radius: 0 6px 6px 0; }
 #galList .sres .n { white-space: normal; }
 #galList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
                 border-radius: 4px; padding: 0 4px; margin-left: 4px; }
@@ -6102,6 +6108,9 @@ select.btn { padding: 6px 8px; }
   <!-- ★★ V12 beta92 THE RADIO FILTER (main.ts renderGalRadioRow): ALL RADIOS · each radio by name — drawn only when this
        list holds items from two or more of the server's radios. A view: the gallery stays one per server. -->
   <div class="btnRow" id="galRadio" role="group" aria-label="Filter by radio" hidden></div>
+  <!-- ★★ V12 beta92 THE TIME RANGE (main.ts renderGalRange; Stuart: "last hour last day last week last month"): the maps'
+       keys, remembered in this browser; drawn only when the server says it knows since= (no dead keys on an older one). -->
+  <div class="btnRow" id="galRange" role="group" aria-label="Show what was kept in the last…" hidden></div>
   <div id="galList"></div>
   <!-- ★ V12 beta 4: pages (main.ts renderGalleryPager) — "‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14". -->
   <div class="btnRow" id="galPager" hidden></div>

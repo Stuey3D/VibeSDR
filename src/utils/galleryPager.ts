@@ -67,3 +67,50 @@ export function galleryFooter(
   const part = `${galleryCount(n)} ${label} item${n === 1 ? '' : 's'}${k || j.kinds ? ` · ${size(k ? k.b : 0)}` : ''}`;
   return `${part} — ${whole}. Times are UTC.`;
 }
+
+// ── The time range (beta92, Stuart 2026-11-23: "the gallery needs some sorting last hour last day last week last
+//    month buttons") ──────────────────────────────────────────────────────────────────────────────────────────────────
+// ★ The same keys, words and look as the maps' time filter (ISM_RANGES: 1 H · 24 H · 7 DAYS · 30 DAYS · ALL). The server
+//   narrows the page and its "total" (gallery.json?since=<seconds back>, vibe_gallery.h listJson); "count" and "kinds"
+//   stay the whole store's. A server that knows since= says "since" in its answer; an older one does not, and then no
+//   keys are drawn (keys that change nothing are dead controls). Remembered per browser / app; default ALL.
+export const GALLERY_RANGES = [
+  { id: '1h', label: '1 H', words: 'Kept in the last hour', since: 3600, phrase: 'in the last hour' },
+  { id: '24h', label: '24 H', words: 'Kept in the last 24 hours', since: 86400, phrase: 'in the last 24 hours' },
+  { id: '7d', label: '7 DAYS', words: 'Kept in the last 7 days', since: 7 * 86400, phrase: 'in the last 7 days' },
+  { id: '30d', label: '30 DAYS', words: 'Kept in the last 30 days', since: 30 * 86400, phrase: 'in the last 30 days' },
+  { id: 'all', label: 'ALL', words: 'Everything still in the gallery', since: 0, phrase: '' },
+] as const;
+export const GALLERY_RANGE_KEY = 'vibesdr.galleryRange';
+export const GALLERY_RANGE_HINT = 'ALL is everything still in the gallery — the oldest go when it is full.';
+
+/** A remembered choice, or ALL. */
+export function galleryRangeOf(saved: string | null | undefined): string {
+  return GALLERY_RANGES.some((r) => r.id === saved) ? (saved as string) : 'all';
+}
+/** The query's part for a range: "&since=86400"; ALL asks "&since=0" (so the server can say it knows the filter). */
+export function galleryRangeQuery(range: string): string {
+  const r = GALLERY_RANGES.find((x) => x.id === range);
+  return `&since=${r ? r.since : 0}`;
+}
+/** "in the last 24 hours" ('' for ALL / unknown). */
+export function galleryRangePhrase(range: string): string {
+  return GALLERY_RANGES.find((x) => x.id === range)?.phrase ?? '';
+}
+/** Did the server honour the range? (An answer with "since" = it knows the filter.) */
+export function galleryKnowsRange(j: { since?: unknown }): boolean { return typeof j.since === 'number'; }
+
+/** The footer under a range: the view's own count, then the whole gallery —
+ *  "12 WEFAX items in the last 24 hours — 5,000 items on this server · 9.7 MB. Times are UTC."
+ *  ALL (or a server that did not apply it): the plain footer. */
+export function galleryRangeFooter(
+  j: { count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds; since?: unknown },
+  kind: string, label: string, range: string, size: (bytes: number) => string, shown = 0,
+): string {
+  const phrase = galleryRangePhrase(range);
+  if (!phrase || !j.since || typeof j.total !== 'number') return galleryFooter(j, kind, label, size, shown);
+  const all = j.count ?? shown;
+  const whole = `${galleryCount(all)} item${all === 1 ? '' : 's'} on this server · ${size(j.usedBytes || 0)}`;
+  const n = j.total;
+  return `${galleryCount(n)} ${kind ? label + ' ' : ''}item${n === 1 ? '' : 's'} ${phrase} — ${whole}. Times are UTC.`;
+}

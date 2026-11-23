@@ -11,6 +11,9 @@
 //     nothing is deleted); the shared item shows under both; "total" is the view's; a junk radio= is ignored.
 //  4. OLD LINES (no "ri", an older build) read as unknown and show under every radio; a one-radio gallery lists one
 //     radio (the clients then draw no filter); retag / rewrite keep the radios.
+//  5. ★★ THE TIME RANGE (listJson sinceSec, Stuart 2026-11-23 "last hour last day last week last month"): items at
+//     now−30 min, −5 h, −3 d, −20 d, −60 d → 1 H / 24 H / 7 DAYS / 30 DAYS / ALL show 1 / 2 / 3 / 4 / 5; pages and "total"
+//     follow; with kind= and radio=; "kinds" stays the whole store's; an old request is answered byte for byte as before.
 #include "vibe_gallery.h"
 
 #include <cstdio>
@@ -159,11 +162,67 @@ static void testOneRadio() {
     rmTree(d);
 }
 
+static void testTimeRange() {
+    std::printf("── the time range (since=) ──\n");
+    namespace lr = logradio;
+    const std::string d = tmpDir("since");
+    lr::setMine("aa11bb22");
+    gallery::Store s; s.setDir(d);
+    const int64_t now = gallery::nowUtc();
+    const long back[5] = { 1800, 5 * 3600, 3 * 86400, 20 * 86400, 60 * 86400 };
+    for (int i = 4; i >= 0; i--) {   // oldest first, as a gallery fills
+        gallery::Meta m = meta("navtex", i); m.utc = now - back[i];
+        s.add(m, "txt", "ZCZC " + std::to_string(i) + "\nNNNN\n");
+        gallery::Meta w = meta("wefax", i); w.utc = now - back[i];
+        s.add(w, "txt", "chart " + std::to_string(i) + "\n");
+    }
+    lr::setMine("cc33dd44");
+    { gallery::Meta m = meta("navtex", 9); m.utc = now - 600; s.add(m, "txt", "ZCZC other radio\nNNNN\n"); }
+    lr::setMine("");
+    const long ranges[5] = { 3600, 86400, 7 * 86400, 30 * 86400, 0 };
+    const long wantNav[5] = { 2, 3, 4, 5, 6 };   // + the other radio's, 10 min ago
+    const char* names[5] = { "1 H", "24 H", "7 DAYS", "30 DAYS", "ALL" };
+    for (int r = 0; r < 5; r++) {
+        const std::string j = s.listJson("navtex", 25, 0, "", ranges[r]);
+        ok(num(j, "total") == wantNav[r] && (long)countOf(j, "\"f\":") == wantNav[r],
+           std::string("NAVTEX ") + names[r] + ": " + std::to_string(wantNav[r]) + " (" + std::to_string(num(j, "total")) + ")");
+        ok(num(s.listJson("", 25, 0, "", ranges[r]), "total") == wantNav[r] + (r + 1), std::string("ALL kinds ") + names[r]);
+        ok(num(s.listJson("navtex", 25, 0, "aa11bb22", ranges[r]), "total") == r + 1, std::string("radio aa11bb22 ") + names[r]);
+    }
+    const std::string day = s.listJson("navtex", 25, 0, "", 86400);
+    ok(day.find("\"since\":86400") != std::string::npos, "the answer says the range");
+    ok(num(day, "count") == 11 && day.find("\"navtex\":{\"n\":6,") != std::string::npos && day.find("\"wefax\":{\"n\":5,") != std::string::npos,
+       "\"count\" and \"kinds\" stay the whole store's");
+    ok(day.find("\"id\":\"aa11bb22\"") != std::string::npos && day.find("\"n\":5}") != std::string::npos,
+       "\"radios\" stays the kind's whole list (the chips never vanish in a quiet hour): " + day.substr(day.find("\"radios\"")));
+    // pages in a range: 30 DAYS of ALL kinds = 9, pages of 4 → 4 + 4 + 1
+    const std::string p3 = s.listJson("", 4, 8, "", 30 * 86400);
+    ok(countOf(p3, "\"f\":") == 1 && num(p3, "total") == 9, "a ranged PAGE: page 3 of 30 DAYS holds the 9th");
+    ok(num(s.listJson("", 4, 0, "", 3600), "total") == 3, "1 H over ALL kinds: the two NAVTEX and the WEFAX");
+    // old requests: exactly as before
+    ok(s.listJson("navtex", 25, 0, "", 0) == s.listJson("navtex", 25, 0), "since 0 = the old request, byte for byte");
+    ok(s.listJson("", 300, -1, "", 0) == s.listJson("", 300), "the oldest request (no offset) unchanged");
+    ok(s.listJson("", 25, 0, "", 401L * 86400) == s.listJson("", 25, 0), "past 400 days = all");
+    ok(s.listJson("", 25, 0, "", -5) == s.listJson("", 25, 0), "a negative range = all");
+    ok(s.listJson("", 300, -1).find("\"since\"") == std::string::npos, "no range: no \"since\" in the answer");
+    // an old line with no "t" shows under ALL only
+    {
+        FILE* f = std::fopen((d + "/old-not.txt").c_str(), "w"); std::fputs("x\n", f); std::fclose(f);
+        f = std::fopen((d + "/index.jsonl").c_str(), "a");
+        std::fputs("{\"f\":\"old-not.txt\",\"k\":\"navtex\",\"o\":\"background\",\"hz\":518000,\"m\":\"usb\",\"d\":\"navtex\",\"p\":\"\",\"r\":\"Pi\",\"title\":\"no time\"}\n", f);
+        std::fclose(f);
+    }
+    ok(num(s.listJson("navtex", 25, 0), "total") == 7 && num(s.listJson("navtex", 25, 0, "", 30 * 86400), "total") == 5,
+       "a line with no time: under ALL, never in a range");
+    rmTree(d);
+}
+
 int main() {
     std::printf("test-log-radio — which radio heard each gallery entry (beta92)\n");
     testHelpers();
     testTwoProcesses();
     testOneRadio();
+    testTimeRange();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
