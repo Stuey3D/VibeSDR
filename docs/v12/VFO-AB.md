@@ -64,6 +64,10 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
   back. So the two-server mix never carries an A/B pair: the earlier fold of a panned A/B pair to mono in one server's
   ear is gone (each server's own audio is still folded to mono — WFM stereo — before it is placed in its ear).
 
+- **SATELLITE's OPEN IN VFO B (beta92)** puts this same VFO B on another downlink of the picked satellite, with its
+  decoder on B's host and the pass's Doppler applied to B's oscillator (`WatchChannel::setShiftHz`; the watch state's
+  `shift`) — docs/v12/SAT-VFOB.md.
+
 ## Owner
 
 - **Setup page → "Let listeners use VFO A/B"** (config `vfoB`, per radio: 1 default, 0 off). Android: the same key in

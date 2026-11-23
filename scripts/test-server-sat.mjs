@@ -121,7 +121,7 @@ async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 4
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
   const L = () => { try { return fs.readFileSync(path.join(dir, 'server.log'), 'utf8'); } catch { return ''; } };
-  return { port, dir, status, L, stop: () => { try { srv.kill('SIGTERM'); } catch {} try { rtl.kill('SIGTERM'); } catch {} try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { port, dir, status, L, pid: srv.pid, stop: () => { try { srv.kill('SIGTERM'); } catch {} try { rtl.kill('SIGTERM'); } catch {} try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
 }
 const sock = async (S, id) => { const sp = ws(S.port, `/ws/user-spectrum?user_session_id=${id}&bins=256&proto=1`); await until(() => sp.open, 3000); await sleep(800); return sp; };
 
@@ -531,6 +531,13 @@ try {
   const vfobOf = (sp) => jsons(sp, 'sat_vfob');
   const lastVfob = (sp) => vfobOf(sp).slice(-1)[0] || null;
   const chanB = (sp) => (lastOf(sp, 'watch')?.chans || []).find((c) => c.id === 1) || null;
+  /** the server process's CPU over `ms` (% of one core), from ps's cumulative cputime — information, not a check */
+  const cpuOver = async (pid, ms) => {
+    const { execFileSync } = await import('node:child_process');
+    const t = () => { const v = execFileSync('ps', ['-o', 'cputime=', '-p', String(pid)]).toString().trim().split(/[:.]/).map(Number);
+      return v.length === 4 ? v[0] * 3600 + v[1] * 60 + v[2] + v[3] / 100 : v.length === 3 ? v[0] * 60 + v[1] + v[2] / 100 : 0; };
+    const a = t(); await sleep(ms); return ((t() - a) / (ms / 1000)) * 100;
+  };
   {
     console.log(`── OPEN IN VFO B: RS-44 transponder + its CW beacon, shared dial (${rsLoc || 'no RS-44 position'}) ──`);
     const S = await server('satvfob', { loc: rsLoc || issLoc });
@@ -574,6 +581,8 @@ try {
       }
       ok(samples >= 4 && worst < 6, `B's shift follows A's × fB/fA (${samples} samples, worst ${worst.toFixed(1)} Hz past the rate allowance, |shift| up to ${maxShift.toFixed(0)} Hz)`);
       ok(maxShift > 20, `a real Doppler on B (|shift| ${maxShift.toFixed(0)} Hz)`);
+      const cpuAB = await cpuOver(S.pid, 6000);
+      console.log(`   info the whole server, fake rtl_tcp 2.4 MS/s, A on RS-44's transponder (USB, Doppler) + B on its beacon (CW decoder, Doppler): ${cpuAB.toFixed(1)} % of a core`);
       // the decoder socket of the box's B line JOINS the decoder (no restart)
       const dxb = ws(S.port, '/ws/dxcluster?user_session_id=satvb0001');
       await until(() => dxb.open, 3000);
@@ -599,6 +608,8 @@ try {
       ok(!dxb.txt.some((t) => t.includes('decoder_refused')), 'quietly: no "start it again" refusal on the B socket');
       ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && m.tx === 'Transponder'), 3000) && jsons(sp, 'sat').every((m) => m.state !== 'OFF'), 'A\'s lock on the transponder stands');
       dxb.close();
+      const cpuA = await cpuOver(S.pid, 6000);
+      console.log(`   info …and with VFO B off (A alone): ${cpuA.toFixed(1)} % of a core`);
       // a new pick closes it; so does the drop
       sp.send({ type: 'sat_vfob', norad: 44909, tx: 1 });
       await until(() => lastVfob(sp)?.on === true, 3000);
