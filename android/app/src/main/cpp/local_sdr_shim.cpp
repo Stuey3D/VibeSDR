@@ -3571,6 +3571,9 @@ static std::atomic<unsigned long long> g_chanDrops{0};
 /** ★★ HOLES THAT REACHED THE DSP, from any cause (a radio library's drop, our own overrun), each
  *  now signalled to the RDS decoder and the instrument — see IqBuf. Should track usbDrops + iqDrops. */
 static std::atomic<unsigned long long> g_iqGaps{0};
+/** ★★★ beta92: raw IQ out blocks dropped because that stream's own writer or consumer was behind (IqOut::raw, half a
+ *  second). The stream's loss, never the radio's — iqDrops/iqGaps are the radio's. Reported as iqOutDrops. */
+static std::atomic<unsigned long long> g_iqOutDrops{0};
 // ★★★ A HANDFUL OF RAILED SAMPLES IN A SECOND IS NOISE, NOT AN OVERLOAD. At 2.4 MSPS a second is
 //     4.8 million bytes; an impulse — a thermostat, a switching supply, a car — rails a few of
 //     them and means nothing. Treating ANY rail as clipping had two consequences, and the second
@@ -9889,17 +9892,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::atomic<bool> run{true};
         std::thread acceptTh;
+        /* ★★★ beta92 — THE TAP ONLY COPIES; THE WRITER DOES THE WORK (Pi 500 V4L, 2026-11-23). The rotation (full
+         *  rate), the de-interleave, two rational resamplers, the 8-bit normaliser and the conversion all ran on the
+         *  thread that TAPPED the stream — vibe-demod on a one-listener radio (and through its 4-block hand-off, the DSP
+         *  thread behind it), vibe-dsp itself at full rate, the listener's own thread on a per-VFO radio — every block,
+         *  in front of that listener's audio. Now the tap copies the complex block into `raw` and returns; vibe-iqout
+         *  (the network rung) converts and sends. A consumer that stops reading — or a writer that falls behind — costs
+         *  its OWN stream: past half a second queued the oldest block goes, counted (drops, g_iqOutDrops in
+         *  vibeserver.json), never the radio's time. */
+        struct RawBlk { std::vector<cf32> v; int rate = 0; double rotHz = 0.0; };
         std::mutex qm; std::condition_variable qcv;
-        std::deque<std::vector<uint8_t>> q; size_t qBytes = 0;
+        std::deque<RawBlk> raw; size_t rawSamples = 0;   // under qm
+        std::atomic<long long> drops{0};         // blocks this stream dropped (its writer/consumer behind)
         std::thread writeTh;
         std::atomic<double> lastReadAt{0};       // last time the consumer took bytes
         std::atomic<long long> bytesSent{0};
         int inRate = 0;                          // the DDC rate the resamplers were built for
-        float lvl = 1.0f;                        // ★ the 8-bit normaliser's gain (see iqTapInto)
+        float lvl = 1.0f;                        // ★ the 8-bit normaliser's gain (see iqConvert) — writer thread only
         std::unique_ptr<vibedsp::RationalResampler> ri, rq;
         std::vector<float> fi, fq, oi, oq;
-        vibedsp::IqCleaner rot;                  // ★ full rate: the offset rotation only
-        std::vector<cf32>  rotBuf;
+        vibedsp::IqCleaner rot;                  // ★ full rate: the offset rotation only (writer thread — iqConvert)
+        double rotAt = 0.0; int rotRate = 0;     // ★ what `rot` was configured for
+        std::vector<uint8_t> out;                // ★ the frame being sent (writer thread)
     };
 
     /* ★★★ WHAT THIS LISTENER ACTUALLY DID — the visit VERDICT, for the connection log.
@@ -21533,7 +21547,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ The priority order (vibe_thread.h): the spectrum worker is SPECTRUM, the demod worker AUDIO,
             //   and the Advanced RDS instrument (MpxMeasure, "vibe-mpx") a DECODER — it measures, nobody
             //   hears it, and it drops its own work rather than delay anything above it.
-            if (std::strcmp(name, "vibe-spec") == 0) vibeSpectrumThread(name);
+            // ★★★ beta92: a BACKGROUND pipeline's workers (RxPipeline::setBackground — vibe-bgdemod, vibe-bgspec) take the
+            //     background rung. They fell through to vibeAudioThread below: every background VFO's demodulator ran
+            //     at the listener's own audio priority.
+            if (std::strncmp(name, "vibe-bg", 7) == 0) vibeBackgroundThread(name);
+            else if (std::strcmp(name, "vibe-spec") == 0) vibeSpectrumThread(name);
             else if (std::strcmp(name, "vibe-mpx") == 0) vibeDecoderThread(name);
             else vibeAudioThread(name);
         };
@@ -28852,6 +28870,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                        : -1.0))
                              + ",\"chanDrops\":" + std::to_string(g_chanDrops.load(std::memory_order_relaxed))
                              + ",\"iqGaps\":" + std::to_string(g_iqGaps.load(std::memory_order_relaxed))
+                             + ",\"iqOutDrops\":" + std::to_string(g_iqOutDrops.load(std::memory_order_relaxed))
                              // ★★★ HOW THE LIMIT BEHAVES, or a client cannot describe it honestly.
                              //     Absent means HARD, so every older client and server reads right.
                              + (g_vsSessionLimitSoft.load()
@@ -32216,18 +32235,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
     void iqWriteLoop(const std::shared_ptr<IqOut>& iq) {
-        vibeAudioThread("vibe-iqout");          // ★ a stream with a clock: same priority as audio
+        /* ★★★ beta92: THE NETWORK RUNG (vibeNetThread, -20), not the audio one. It carries a stream with a clock to a
+         *  consumer — Network > Audio > Spectrum > Decoders — and since beta92 it also does the stream's conversion
+         *  (iqConvert), so it must not share its rung with the very chain it was moved off. */
+        vibeNetThread("vibe-iqout");
+        vibe::vibeFlushDenormals();
         while (iq->run.load()) {
-            std::vector<uint8_t> frame;
+            IqOut::RawBlk blk;
             {
                 std::unique_lock<std::mutex> lk(iq->qm);
-                iq->qcv.wait_for(lk, std::chrono::milliseconds(200), [&]{ return !iq->q.empty() || !iq->run.load(); });
+                iq->qcv.wait_for(lk, std::chrono::milliseconds(200), [&]{ return !iq->raw.empty() || !iq->run.load(); });
                 if (!iq->run.load()) break;
-                if (iq->q.empty()) continue;
-                frame = std::move(iq->q.front()); iq->q.pop_front(); iq->qBytes -= frame.size();
+                if (iq->raw.empty()) continue;
+                blk = std::move(iq->raw.front()); iq->raw.pop_front(); iq->rawSamples -= blk.v.size();
             }
             auto [conn, isWs] = iq->current();
             if (!conn || !conn->isOpen()) continue;
+            const std::vector<uint8_t>& frame = iqConvert(iq, blk);
+            if (frame.empty()) continue;
             int r;
             if (isWs) { sendWs(conn, 0x2, frame.data(), frame.size(), Out::Audio); r = (int)frame.size(); }
             else        r = conn->send(frame.data(), frame.size());
@@ -32389,18 +32414,49 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(iqDirectMtx); iq = iqDirect; }
         if (iq && iq->full) iqTapInto(iq, x, n, (int)std::lround(rateHz));
     }
+    /** ★★★ beta92 — THE TAP: a copy into this stream's own queue and nothing else (see IqOut::RawBlk). On the DSP thread
+     *  (full rate), vibe-demod (direct) or a listener's thread (per-VFO). Never waits on the consumer: past half a second
+     *  of input queued, the OLDEST block goes and is counted. */
     void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
         if (!iq || n <= 0 || !iq->hasConsumer()) return;
         // ★★★ V12 PAGING: not a sample of IQ leaves while a paging receiver runs (vibe_paging_gate.h; the stream is
         //     closed by iqOffForPaging — this covers the moment in between)
         if (!vibe::pagingAllowsIqOut(DecoderHost::pagingRunning().load(std::memory_order_relaxed))) return;
         if (inRate <= 0) return;
-        // ★ Full rate: rotate the capture down by the hardware offset on a COPY (the pipeline
-        //   still needs the original), so the consumer's centre is exact. See requestConsumerCentre.
-        if (iq->full && hwOffsetHz() != 0.0) {
-            iq->rotBuf.assign(in, in + n);
-            iq->rot.process(iq->rotBuf.data(), n);
-            in = iq->rotBuf.data();
+        IqOut::RawBlk blk;
+        blk.v.assign(in, in + n);
+        blk.rate = inRate;
+        blk.rotHz = iq->full ? hwOffsetHz() : 0.0;
+        {
+            std::lock_guard<std::mutex> lk(iq->qm);
+            // ★ half a second of input, and never more than 1 Mi samples (8 MB) whatever the rate — a full-rate stream off a
+            //   wide radio must not hold a quarter of a 512 MB box (memory rule: every path bounded)
+            const size_t cap = std::max<size_t>((size_t)n, std::min<size_t>((size_t)(inRate / 2), (size_t)1 << 20));
+            while (iq->rawSamples + (size_t)n > cap && !iq->raw.empty()) {
+                iq->rawSamples -= iq->raw.front().v.size(); iq->raw.pop_front();
+                iq->drops.fetch_add(1, std::memory_order_relaxed);
+                g_iqOutDrops.fetch_add(1, std::memory_order_relaxed);
+            }
+            iq->rawSamples += (size_t)n; iq->raw.push_back(std::move(blk));
+        }
+        iq->qcv.notify_one();
+    }
+    /** ★★★ beta92 — the stream's conversion, on its WRITER thread only: rotation (full rate), resampling to the consumer's
+     *  rate, the slow 8-bit normaliser, u8. Returns the frame to send (empty = nothing this block). */
+    const std::vector<uint8_t>& iqConvert(const std::shared_ptr<IqOut>& iq, IqOut::RawBlk& blk) {
+        const int n = (int)blk.v.size(), inRate = blk.rate;
+        iq->out.clear();
+        if (n <= 0 || inRate <= 0) return iq->out;
+        const cf32* in = blk.v.data();
+        // ★ Full rate: rotate the capture down by the hardware offset (on the tap's copy — the pipeline
+        //   keeps the original), so the consumer's centre is exact. See requestConsumerCentre.
+        if (iq->full && blk.rotHz != 0.0) {
+            if (iq->rotAt != blk.rotHz || iq->rotRate != inRate) {   // ★ configured here, on the one thread that uses it
+                iq->rot.configure((double)inRate); iq->rot.setDc(false); iq->rot.setImbalance(false);
+                iq->rot.setRotation(blk.rotHz);                       // ★ +offset: the signal at −15 kHz lands on 0
+                iq->rotAt = blk.rotHz; iq->rotRate = inRate;
+            }
+            iq->rot.process(blk.v.data(), n);                         // ★ the block is the writer's own copy now
         }
         const bool same = inRate == iq->rate;    // ★ full rate: nothing to resample
         if (!same && (iq->inRate != inRate || !iq->ri)) {
@@ -32422,8 +32478,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int nq = iq->rq->process(iq->fq.data(), n, iq->oq.data());
             m = std::min(ni, nq);
         }
-        if (m <= 0) return;
-        std::vector<uint8_t> out((size_t)m * 2);
+        if (m <= 0) return iq->out;
+        iq->out.resize((size_t)m * 2);
         /* ★★★ UNITY — THE LEVEL THE SERVER'S OWN DEMODULATORS SEE. Two guesses preceded this:
          *  ×4 put 70 % of a strong FM station on the rails; 1/g_digGain (the ADC's own level)
          *  put Radio Caroline at S9+30 into the bottom two bits — RMS 2–3 LSB of 127, measured on
@@ -32449,13 +32505,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else                      iq->lvl = std::max(want, iq->lvl * std::exp(-0.3454f * secs));
             iq->lvl = std::min(1000.0f, std::max(1.0f, iq->lvl));
         }
-        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data(), iq->lvl);
-        std::lock_guard<std::mutex> lk(iq->qm);
-        // ★ A consumer that stops reading must not grow us without bound: keep ~1 s, drop the oldest.
-        const size_t kMax = (size_t)iq->rate * 2;
-        while (iq->qBytes + out.size() > kMax && !iq->q.empty()) { iq->qBytes -= iq->q.front().size(); iq->q.pop_front(); }
-        iq->qBytes += out.size(); iq->q.push_back(std::move(out));
-        iq->qcv.notify_one();
+        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, iq->out.data(), iq->lvl);
+        return iq->out;
     }
     void iqStop(ClientDsp* c) {
         std::shared_ptr<IqOut> iq;
@@ -32499,7 +32550,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (iq->acceptTh.joinable()) iq->acceptTh.join();
         if (iq->writeTh.joinable())  iq->writeTh.join();
         g_vsRawIqActive.fetch_sub(1);
-        LOGI("raw IQ out: off (%lld bytes sent%s)", (long long)iq->bytesSent.load(), iq->pub ? ", public" : "");
+        LOGI("raw IQ out: off (%lld bytes sent, %lld blocks dropped behind its consumer%s)", (long long)iq->bytesSent.load(),
+             (long long)iq->drops.load(), iq->pub ? ", public" : "");
     }
     void iqStopFor(const std::shared_ptr<net::Socket>& sock) {
         std::shared_ptr<ClientDsp> c;
@@ -32613,8 +32665,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ The window IS the capture: put the physical centre on the listener's dial so the
             //   consumer's first read is what the web client shows, until it sets its own.
             requestConsumerCentre(audioFreq.load());
-            iq->rot.configure(sampleRate); iq->rot.setDc(false); iq->rot.setImbalance(false);
-            iq->rot.setRotation(hwOffsetHz());   // ★ +offset: the signal at −15 kHz lands on 0
+            // ★ The offset rotation is configured by the writer (iqConvert) from each block's own rotHz (beta92).
             applyAutoIf();                       // ★ and open the tuner's IF filter right up
         }
         else if (c) clientRetune(c.get());          // ★ widen the channel to the IQ rate (chanBinsFor above)

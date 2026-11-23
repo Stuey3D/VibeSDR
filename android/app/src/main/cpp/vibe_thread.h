@@ -51,6 +51,7 @@
       constexpr int kDecoder   = 10;
       constexpr int kDecoderLag = 12;  // a decoder's later stage that may lag its own first stage (vibe-ism2, vibe-ism3)
       constexpr int kBulk      = 15;
+      constexpr int kBackground = 19;  // the owner's BACKGROUND decoding — nobody is waiting on it (vibeBackgroundThread)
   }
 
   inline void vibeThreadName(const char* name) { prctl(PR_SET_NAME, name); }
@@ -83,7 +84,7 @@
    *  one rung BELOW the audio chain and one ABOVE the spectrum work that feeds it:
    *     audio send -20  ≥  IQ input -20  >  audio chain (DSP, demod, DAB, encode) -19
    *     >  waterfall/control send -10  >  spectrum -5  >  default 0  >  decoders 10  >  a decoder's later stages 12
-   *     >  bulk HTTP 15
+   *     >  bulk HTTP 15  >  background decoding 19 (vibeBackgroundThread, beta92)
    *  ★★ WHY THE WATERFALL'S SEND STEPS DOWN: on a multi-radio server every radio is its own process,
    *     and nice is compared across all of them. One radio's DSP must not lose to another radio's
    *     waterfall — but it must never beat another radio's AUDIO send either, which is the rule
@@ -137,6 +138,17 @@
    *  ★★ NOT for the admin API or anything that takes clientMtx/modeMtx: a low-priority thread that
    *     holds a lock the DSP needs is priority inversion, which is worse than the contention. */
   inline void vibeBulkThread(const char* name)     { vibeNiceThread_(name, vibeprio::kBulk); }
+  /* ★★★ BACKGROUND DECODING — THE BACK SEAT (beta92, 2026-11-23, the Pi 500's V4L). The owner's background profiles
+   *  (vibe_bgdecode.h) decode for NOBODY who is here: their channeliser (vibe-bgdsp), each VFO's demodulator (vibe-bgdemod
+   *  — an RxPipeline worker, which used to take workerInit's AUDIO rung, -19, level with the listener's own DSP) and
+   *  each VFO's decoder (vibe-bgdec) sit BELOW everything a person is waiting for, listener decoders and bulk HTTP
+   *  included: nice 19, the lowest CFS weight there is (15 against the DSP's ~70 000). They drop when behind (their
+   *  queues are bounded, oldest out, counted) — a decoder behind loses a message, never a listener's sound or IQ.
+   *  ★★ NOT SCHED_IDLE (unlike vibeIdleThread): these threads take locks a listener's threads also take — the gallery,
+   *     the spot log, the decoder slots — and a SCHED_IDLE holder on a busy box can be left off the CPU indefinitely
+   *     with the lock held. nice 19 still runs, just last; the DSP thread itself never waits on them at all (it
+   *     try-locks their queue and drops — BgRunner::feedIq). */
+  inline void vibeBackgroundThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kBackground); }
   /* ★★ IDLE — BELOW THE WHOLE ORDER, BELOW BULK HTTP (2026-11-20, the NAVTEX warm-up, vibe_navtex_warm.h). Work that
    *  nobody waits for at all — an index kept built in case somebody opens a map — runs only on a core nobody else wants:
    *  SCHED_IDLE for this thread (no privilege needed to step down to it), nice 19 as well (Android, or a kernel that
@@ -224,6 +236,13 @@
       pthread_setname_np(name);
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
+  // ★ Background decoding (see the Linux note): the decoders' class at its lowest relative priority — below every
+  //   listener decoder and bulk HTTP, but not BACKGROUND (that class also throttles I/O and parks on the slowest cores).
+  inline void vibeBackgroundThread(const char* name) {
+      pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
+      pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, -15);
+  }
   // ★ Idle (see the Linux note): BACKGROUND, the class macOS runs only when nothing else wants the core.
   inline void vibeIdleThread(const char* name) {
       pthread_setname_np(name);
@@ -269,6 +288,7 @@
   inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_BELOW_NORMAL); }
   inline void vibeBulkThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
   inline void vibeIdleThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_IDLE); }
+  inline void vibeBackgroundThread(const char* name) { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
   inline void vibeIqThread(const char* name) {
       vibe::vibeFlushDenormals();
       vibeWinName_(name);
@@ -289,5 +309,6 @@
   inline void vibeAudioDecodeThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeBulkThread(const char*) {}
   inline void vibeIdleThread(const char*) {}
+  inline void vibeBackgroundThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeIqThread(const char*) { vibe::vibeFlushDenormals(); }
 #endif

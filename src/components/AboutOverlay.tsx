@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta92 2026-11-23 — BACKGROUND DECODING TAKES THE BACK SEAT (Stuart's Pi 500 V4L: raw IQ out at 250 kHz on a
+  //     satellite pick with an in-range background profile — audio breaking up, "IQ overrun", the IQ consumer at 57 of 500
+  //     KB/s; "they need to take the back seat"). vibe_thread.h vibeBackgroundThread, RxPipeline::setBackground, BgRunner::
+  //     feedIq try-lock, IqOut's tap/writer split. scripts/test-server-iq-priority.mjs.
+  { v: 'V12 (experimental)', detail: 'BACKGROUND DECODING GIVES WAY TO THE PERSON LISTENING — when an owner’s background-decoding VFOs carry on in range while somebody listens, every part of them now runs below everything that person is waiting for: their audio, their waterfall, raw IQ out and their own decoders. Before, each background VFO’s demodulator ran at the same priority as the listener’s own audio, so a busy profile could break up the listener’s sound and starve raw IQ out — on a Pi 500, IQ out at 250 kHz delivered barely a tenth of its stream. Background decoding now drops what it cannot keep up with, and the radio never waits for it. Raw IQ out also does its conversion to 8-bit on its own sending thread instead of in the listener’s audio chain, and the server’s status now counts any blocks the IQ stream itself had to drop (when the program reading it falls behind) separately from the radio’s. VibeServer.' },
   // ★★★ V12 beta92 2026-11-23 — THE BAND SKIMMER (Stuart, the Lenovo RSP1A: "digi band should be called Band Skimmer as it
   //     covers cw which is analogue"; CW / RTTY readable when expanded, marked on the waterfall, the VFO the skimmer's
   //     width). Server: the band_skim frame (vibe_decoder_host.h skimJsonLocked_); both clients: src/services/bandSkim.ts.

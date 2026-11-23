@@ -101,9 +101,10 @@ void RxPipeline::startDemodThread_() {
     demodOn_ = true;
     demodThread_ = std::thread([this] {
         vibe::vibeFlushDenormals();   // ★ ours, whatever the host's workerInit does — see vibe_denormals.h
-        if (workerInit()) workerInit()("vibe-demod");
+        const char* wname = background_ ? "vibe-bgdemod" : "vibe-demod";   // ★ setBackground: the background rung
+        if (workerInit()) workerInit()(wname);
 #if defined(__linux__)
-        else pthread_setname_np(pthread_self(), "vibe-demod");
+        else pthread_setname_np(pthread_self(), wname);
 #endif
         std::unique_lock<std::mutex> lk(demodM_);
         for (;;) {
@@ -182,9 +183,10 @@ void RxPipeline::startSpecThread_() {
     specThreadOn_ = true;
     specThread_ = std::thread([this] {
         vibe::vibeFlushDenormals();
-        if (workerInit()) workerInit()("vibe-spec");
+        const char* wname = background_ ? "vibe-bgspec" : "vibe-spec";   // ★ setBackground: the background rung
+        if (workerInit()) workerInit()(wname);
 #if defined(__linux__)
-        else pthread_setname_np(pthread_self(), "vibe-spec");
+        else pthread_setname_np(pthread_self(), wname);
 #endif
         const float scale = 1.0f / (float)((double)fftSize_ * (double)fftSize_);
         std::unique_lock<std::mutex> lk(specM_);

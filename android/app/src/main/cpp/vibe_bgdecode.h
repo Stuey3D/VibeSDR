@@ -27,6 +27,13 @@
 //    second; the oldest is dropped, never waited for); the channels run on a thread of their own at decoder priority,
 //    and each decoder host on its own decode thread as for a listener. A Pi 2 that cannot keep up loses samples here,
 //    never audio anywhere else — and while this runs there is, by construction, nobody listening.
+// ★★★ beta92 — BELOW THE DECODERS, AND NOT ONLY "NOBODY LISTENING" (Pi 500 V4L, 2026-11-23). "Keep decoding in range"
+//     runs these VFOs WITH a listener on, and the rung above was not what they had: each VFO's demodulator is an
+//     RxPipeline whose worker (VIBE_DSP_THREADS=1, every multi-core server) took workerInit's AUDIO rung, -19 — level
+//     with the listener's own DSP, demod and raw IQ out. A listener turning raw IQ out on at 250 kHz on a satellite pick
+//     got broken audio, "IQ overrun — the DSP thread was blocked" and the IQ stream at 11 % of its rate. Now every
+//     thread here is the BACKGROUND rung (vibe_thread.h vibeBackgroundThread: vibe-bgdsp, vibe-bgdemod, vibe-bgdec,
+//     vibe-bgndb), below listener decoders, and feedIq never waits even for the queue's lock.
 #pragma once
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
 #include "vibe_bgdecode_band.h"     // ★ V12: a Band digital-spots VFO's span (installBandSpan)
@@ -1264,6 +1271,7 @@ public:
                 // ★ its name in its own log lines ("[pilot] …"), fixed for the VFO's life
                 { const std::string lb = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + c->vfo.mode + ")";
                   c->rx->setLogLabel([lb] { return lb; }); }
+                c->rx->setBackground(true);   // ★★★ beta92: its demodulator thread takes the background rung (vibe-bgdemod)
                 c->rx->start(c->rate, 1024, 10.0, 48000, cb);
                 c->rx->setRdsEnabled(false);
             }
@@ -1362,7 +1370,7 @@ public:
         startDecoders();
         publish();
         run_.store(true);
-        { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; gapSamples_ = 0; }
+        { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; gapSamples_ = 0; missed_.store(0); }
         th_ = std::thread([this] { loop(); });
         running_.store(true);
         int inWin = 0; for (auto& c : chans_) if (c->inWindow) ++inWin;
@@ -1432,25 +1440,42 @@ public:
     /** ★ V12 2026-10-27: `captureUtc` — when the chunk's LAST sample was captured, stamped HERE on the DSP thread (NaN =
      *  now): a Band VFO's FT8/WSPR slots are cut by it, never by when this thread got round to the block (the queue may
      *  hold half a second). A test passes its own clock. */
+    /** ★★★ beta92 — AND NEVER WAITS FOR THE LOCK EITHER. The worker runs at the background rung (vibe-bgdsp, nice 19):
+     *  on a box its own VFOs keep busy it can be preempted in the instant it holds qm_ to pop a chunk, and a lock_guard
+     *  here then parked the DSP thread behind the lowest-priority thread in the process — priority inversion, the radio
+     *  waiting on background decoding. So the DSP thread TRY-locks: busy = this chunk is not taken (counted in dropped_
+     *  and busyDrops_, and bridged as a hole before the next chunk that is, exactly like an oldest-dropped one). Background
+     *  decoding loses 32 ms; the listener loses nothing. */
     void feedIq(const cf32* iq, int n, double captureUtc = NAN) {
         if (!running_.load(std::memory_order_relaxed) || n <= 0) return;
         QItem it; it.v.assign(iq, iq + n);
         it.utc = std::isfinite(captureUtc) ? captureUtc : vibeUtcNow();
         {
-            std::lock_guard<std::mutex> lk(qm_);
+            std::unique_lock<std::mutex> lk(qm_, std::try_to_lock);
+            if (!lk.owns_lock()) {
+                missed_.fetch_add((size_t)n, std::memory_order_relaxed);
+                dropped_.fetch_add((uint64_t)n, std::memory_order_relaxed);
+                busyDrops_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            it.missBefore = missed_.exchange(0, std::memory_order_relaxed);   // ★ the hole sits just before THIS chunk
             q_.push_back(std::move(it));
             qSamples_ += (size_t)n;
             const size_t cap = (size_t)std::max(65536.0, p_.sampleRate * 0.5);
             while (qSamples_ > cap && q_.size() > 1) {
                 qSamples_ -= q_.front().v.size();
                 dropped_.fetch_add(q_.front().v.size(), std::memory_order_relaxed);
-                gapSamples_ += q_.front().v.size();   // ★ the oldest go — so the hole is just before the new front
+                gapSamples_ += q_.front().v.size() + q_.front().missBefore;   // ★ the oldest go — so the hole is just before the new front
                 q_.pop_front();
                 gap_ = true;
             }
         }
         qcv_.notify_one();
     }
+    /** ★ Test seam (beta92): hold the worker's queue lock, as the worker does for an instant when it pops a chunk. */
+    std::unique_lock<std::mutex> holdQueueForTest() { return std::unique_lock<std::mutex>(qm_); }
+    /** ★ beta92: chunks the DSP thread did not hand over because the worker held the queue at that instant (test seam). */
+    uint64_t busyDrops() const { return busyDrops_.load(std::memory_order_relaxed); }
 
     /** ★★ V12 beta 4 — THE ADMIN PAGE'S LINE (admin only; LocalSdrShim::adminStatusJson). Per VFO: running / paused (and
      *  why) / out of the radio's window, the decoder's lock, the last item written, and its CPU as % of ONE core,
@@ -1636,6 +1661,7 @@ private:
             cb.audio = &BgRunner::faxAudioCb;
             { const std::string lb = "background VFO " + std::to_string(i + 1) + " (" + sb->label + ")";
               sb->rx->setLogLabel([lb] { return lb; }); }
+            sb->rx->setBackground(true);     // ★★★ beta92: the background rung, as every background VFO's
             sb->rx->start(sb->rate, 1024, 10.0, 48000, cb);
             sb->rx->setRdsEnabled(false);
             DecoderHost::Env env;
@@ -1765,7 +1791,19 @@ private:
     int runningCount() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     static void audioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (Chan*)ctx;
+        testBurn(frames);
         if (c && c->host && frames > 0) c->host->feed(pcm, frames, ch == 2 ? 2 : 1);
+    }
+    /** ★ TEST-ONLY (scripts/test-server-iq-priority.mjs, beta92): VIBESERVER_BG_TEST_BURN=k makes every background VFO's
+     *  demodulator thread (vibe-bgdemod — this callback's thread) spin k × each audio block's duration, so a profile
+     *  SATURATES the cores the way a busy one does on a Pi — the condition under which the listener's chain and raw IQ
+     *  out must still keep real time. Unset (every real server): one relaxed branch. */
+    static void testBurn(int frames) {
+        static const double k = [] { const char* e = std::getenv("VIBESERVER_BG_TEST_BURN"); return e ? std::atof(e) : 0.0; }();
+        if (!(k > 0.0) || frames <= 0) return;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(k * frames / 48000.0);
+        volatile double x = 0.0;
+        while (std::chrono::steady_clock::now() < until) x = x + 1.0;
     }
     /** ★ From the top of the list down: background takes any free slots, in its own priority order. */
     void startDecoders() {
@@ -1891,7 +1929,7 @@ private:
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
     void loop() {
-        vibeDecoderThread("vibe-bgdsp");
+        vibeBackgroundThread("vibe-bgdsp");   // ★★★ beta92: the back seat — below listener decoders (vibe_thread.h)
         auto lastYieldCheck = std::chrono::steady_clock::now();
         for (;;) {
             std::vector<cf32> buf; bool gap = false; double bufUtc = 0; size_t gapN = 0;
@@ -1900,8 +1938,9 @@ private:
                 qcv_.wait_for(lk, std::chrono::milliseconds(500), [this] { return !q_.empty() || !run_.load(); });
                 if (!run_.load()) return;
                 if (!q_.empty()) {
+                    const size_t miss = q_.front().missBefore;   // ★ beta92: chunks feedIq could not hand over (busy)
                     buf = std::move(q_.front().v); bufUtc = q_.front().utc; q_.pop_front(); qSamples_ -= buf.size();
-                    gap = std::exchange(gap_, false); gapN = std::exchange(gapSamples_, (size_t)0);
+                    gap = std::exchange(gap_, false) || miss > 0; gapN = std::exchange(gapSamples_, (size_t)0) + miss;
                 }
             }
             const auto now = std::chrono::steady_clock::now();
@@ -2046,7 +2085,9 @@ private:
     std::thread th_;
     std::mutex qm_;
     std::condition_variable qcv_;
-    struct QItem { std::vector<cf32> v; double utc = 0; };
+    struct QItem { std::vector<cf32> v; double utc = 0; size_t missBefore = 0; };   // ★ missBefore: see feedIq (beta92)
+    std::atomic<size_t> missed_{0};          // ★ beta92: samples feedIq could not hand over since the last one it did
+    std::atomic<uint64_t> busyDrops_{0};
     std::deque<QItem> q_;
     size_t qSamples_ = 0;
     size_t gapSamples_ = 0;               // ★ dropped since the worker last took a chunk (bridged for Band VFOs)
