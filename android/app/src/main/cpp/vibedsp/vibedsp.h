@@ -3265,6 +3265,14 @@ public:
      *  ★ Any tune/rebuild request drains the worker first — see the top of feed().
      *  ★ Also seeded by VIBE_DEMOD_THREAD=1 (or VIBE_DSP_THREADS=1 for every split) at start(). */
     void setDemodThread(bool on) { demodThreadWant_ = on; }
+    /** ★★★ A BACKGROUND PIPELINE (beta92, 2026-11-23) — an owner's background-decoding VFO, which nobody here is
+     *  listening to. Its worker threads are named vibe-bgdemod / vibe-bgspec instead of vibe-demod / vibe-spec, and a
+     *  host's workerInit() ranks them by that name: the background rung, not the audio one. Before this every
+     *  background VFO's demodulator took the AUDIO priority a listener's chain takes (workerInit saw "vibe-demod"), so
+     *  a profile of busy VFOs competed level with the listener's DSP, demod and raw IQ out (Pi 500 V4L, beta91: audio
+     *  breaking up, "IQ overrun" every 2 s, raw IQ out at 11 % of its rate). Set before start(). */
+    void setBackground(bool on) { background_ = on; }
+    bool background() const { return background_; }
     /** ★ The Advanced RDS instrument (MpxMeasure) on its own `vibe-mpx` thread — the default — or
      *  inline on the feeding thread (tests: deterministic). See the class note on MpxMeasure. */
     void setMeasureThread(bool on) { meas_.setThreaded(on); }
@@ -3610,6 +3618,7 @@ private:
     // ── the optional demod worker — see setDemodThread ──
     static constexpr int kDemodQ = 4;        // channel blocks in flight
     bool demodThreadWant_ = false, demodOn_ = false;
+    bool background_ = false;                // ★ setBackground: the workers' names (and so their rung)
     std::thread demodThread_;
     std::mutex  demodM_;
     std::condition_variable demodCv_, demodIdleCv_;

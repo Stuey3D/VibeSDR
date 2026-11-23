@@ -78,6 +78,7 @@ int main() {
     const Rank dec   = on([] { vibeDecoderThread("vibe-decode"); });
     const Rank lag   = on([] { vibeDecoderLagThread("vibe-ism2"); });
     const Rank bulk  = on([] { vibeBulkThread("vibe-bulk"); });
+    const Rank bgd   = on([] { vibeBackgroundThread("vibe-bgdemod"); });   // ★ beta92: background decoding
     std::printf("  process nice %d · vibeTx %d · vibeTx-audio %d · vibeTx-wf %d · vibe-dsp %d · vibe-rtl %d · vibe-spec %d"
                 " · vibe-decode %d · vibe-bulk %d\n",
                 base, net.nice, sendA.nice, sendW.nice, audio.nice, iq.nice, spec.nice, dec.nice, bulk.nice);
@@ -93,6 +94,11 @@ int main() {
     ok(lag.nice == std::max(base, vibeprio::kDecoderLag), "a decoder's later stage at nice " + std::to_string(vibeprio::kDecoderLag) + " (" + std::to_string(lag.nice) + ")");
     ok(lag.nice >= dec.nice && bulk.nice >= lag.nice, "decoders not below their later stages, those not below bulk");
     ok(bulk.nice == std::max(base, vibeprio::kBulk), "bulk HTTP at nice " + std::to_string(vibeprio::kBulk) + " (" + std::to_string(bulk.nice) + ")");
+    // ★★★ beta92: background decoding (vibe-bgdsp, vibe-bgdemod, vibe-bgdec) is the bottom of the ladder — below the
+    //     listeners' decoders and bulk HTTP. Raising nice needs no privilege, so this holds on every box.
+    ok(bgd.nice == std::max(base, vibeprio::kBackground) && bgd.nice == bgd.procNice,
+       "★★★ background decoding at nice " + std::to_string(vibeprio::kBackground) + " (" + std::to_string(bgd.nice) + ")");
+    ok(bgd.nice >= bulk.nice && bgd.nice >= dec.nice, "background decoding not above bulk HTTP or the listeners' decoders");
     // ★ Started niced (`nice ctest`, base 10), spectrum and decoders both sit AT the base, so only the order that can
     //   still differ is checked — a niced runner is not a fault in the ladder.
     if (base < vibeprio::kDecoder) ok(dec.nice > spec.nice && bulk.nice > dec.nice, "bulk below decoders below spectrum");
@@ -158,6 +164,11 @@ int main() {
     ok(sendW >= spec, "waterfall send ≥ spectrum");
     ok(spec > dec, "spectrum > decoders");
     ok(lag == dec, "a decoder's later stage in the decoders' class (a lower priority within it)");
+    {   // ★★★ beta92: background decoding — the decoders' class at its lowest relative priority
+        qos_class_t q = QOS_CLASS_UNSPECIFIED; int rel = 0;
+        std::thread([&] { vibeBackgroundThread("vibe-bgdemod"); pthread_get_qos_class_np(pthread_self(), &q, &rel); }).join();
+        ok(q == QOS_CLASS_UTILITY && rel == -15 && dec >= q, std::string("★★★ background decoding at UTILITY -15, below every listener's thread (") + nm(q) + " " + std::to_string(rel) + ")");
+    }
     std::printf("\n%s (%d failed)\n", fails ? "FAILED" : "all ok", fails);
     return fails ? 1 : 0;
 }

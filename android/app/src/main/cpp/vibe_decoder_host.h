@@ -2159,7 +2159,10 @@ private:
 
     // ── the decode thread ──
     void loop_() {
-        vibeDecoderThread("vibe-decode");
+        // ★★★ beta92: a BACKGROUND VFO's host (BgRunner keys them "bg:<n>") decodes for nobody here — the back seat,
+        //     below every listener's decoder (vibe_thread.h vibeBackgroundThread). A listener's host keeps the decoders' rung.
+        if (session_.rfind("bg:", 0) == 0) vibeBackgroundThread("vibe-bgdec");
+        else vibeDecoderThread("vibe-decode");
         std::unique_lock<std::mutex> lk(qM_);
         for (;;) {
             qCv_.wait(lk, [this] { return !q_.empty() || !qi_.empty() || !qc_.empty() || qStop_; });

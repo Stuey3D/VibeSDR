@@ -538,9 +538,9 @@ private:
         if (sink_) { for (const auto& h : toSink) sink_->heard(h, nowS); sink_->tick(); }
     }
 
-    /** ★ The fed thread (startFed): slices off the runner's queue, decoded here at decoder priority. */
+    /** ★ The fed thread (startFed): slices off the runner's queue, decoded here at the BACKGROUND rung (beta92). */
     void fedLoop() {
-        vibeDecoderThread("vibe-bgndb");
+        vibeBackgroundThread("vibe-bgndb");   // ★★★ beta92: background decoding's NDB skimmer takes the back seat
         for (;;) {
             FedBlock b;
             {

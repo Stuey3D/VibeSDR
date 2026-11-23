@@ -8,6 +8,15 @@
 //     middle of is SAVED (partial), and it resumes when the slot frees, the highest-ranked paused one first;
 //   · two radios (two runners, two registries, one slot directory — as two processes see it).
 #include "vibe_bgdecode.h"
+#include "vibe_thread.h"
+
+#include <cerrno>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <sys/resource.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -288,7 +297,75 @@ static void midChart() {
     ok(sl.inUse() == 0, "stopped: every slot back");
 }
 
+// ── 9. the back seat (beta92, Pi 500 V4L 2026-11-23): background decoding never delays the listener's chain ────────
+static void backSeat() {
+    std::printf("── the back seat: background threads at the lowest rung, the DSP thread never waits on them ──\n");
+    {   // ★ the rung itself, read back from the thread
+        int got = -999; std::string what;
+        std::thread([&] {
+            vibeBackgroundThread("vibe-bgtest");
+#if defined(__linux__) || defined(__ANDROID__)
+            errno = 0; got = getpriority(PRIO_PROCESS, 0); what = "nice " + std::to_string(got);
+#elif defined(__APPLE__)
+            qos_class_t q = QOS_CLASS_UNSPECIFIED; int rel = 0; pthread_get_qos_class_np(pthread_self(), &q, &rel);
+            got = (q == QOS_CLASS_UTILITY && rel == -15) ? 19 : -1; what = "QoS " + std::to_string((int)q) + " rel " + std::to_string(rel);
+#else
+            got = 19; what = "(no priorities on this platform)";
+#endif
+        }).join();
+        ok(got == 19, "★★★ vibeBackgroundThread: the lowest rung (" + what + ") — below the decoders' 10 and bulk HTTP's 15");
+    }
+    {   // ★ a background pipeline's workers are NAMED for the background rung; a listener's are not
+        static std::mutex nm; static std::vector<std::string> names;
+        auto prev = vibedsp::RxPipeline::workerInit();
+        vibedsp::RxPipeline::workerInit() = [](const char* n) { std::lock_guard<std::mutex> lk(nm); names.push_back(n); };
+        setenv("VIBE_DSP_THREADS", "1", 1);
+        vibedsp::RxPipeline bgRx, lisRx;
+        vibedsp::RxPipeline::Callbacks cb{};
+        cb.audio = [](void*, const float*, int, int, int) {};
+        bgRx.setBackground(true);
+        bgRx.start(48000, 1024, 10.0, 48000, cb);
+        lisRx.start(48000, 1024, 10.0, 48000, cb);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        bgRx.stop(); lisRx.stop();
+        vibedsp::RxPipeline::workerInit() = prev;
+        bool bgd = false, lis = false;
+        { std::lock_guard<std::mutex> lk(nm); for (auto& n : names) { if (n == "vibe-bgdemod") bgd = true; if (n == "vibe-demod") lis = true; } }
+        ok(bgd, "★★★ a background VFO's demodulator thread is vibe-bgdemod (the host ranks it background — it was vibe-demod, AUDIO, -19)");
+        ok(lis, "...and a listener's is still vibe-demod (the audio rung)");
+    }
+    {   // ★ feedIq while the worker holds its queue: returns at once, the chunk dropped and counted, the hole bridged
+        const std::string dir = tmpDir("seat");
+        FileSlots sl(dir, [] { return 8; });
+        bg::BgRegistry reg; reg.open(dir, "S");
+        bg::BgRunner r;
+        bg::BgRunner::Params p; p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sl; p.registry = &reg;
+        p.profile.centreHz = 500000;
+        p.profile.vfos = { bg::Vfo{489500, "usb", "navtex"} };
+        p.log = [](const std::string&) {};
+        r.start(p);
+        std::vector<vibedsp::cf32> blk(8000, vibedsp::cf32{0.01f, 0.0f});
+        const uint64_t d0 = r.droppedSamples(), b0 = r.busyDrops();
+        double worstMs = 0;
+        {
+            auto held = r.holdQueueForTest();          // ★ the worker, preempted in the instant it pops a chunk
+            for (int i = 0; i < 20; i++) {
+                const auto t0 = std::chrono::steady_clock::now();
+                r.feedIq(blk.data(), (int)blk.size());
+                worstMs = std::max(worstMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+        }
+        ok(worstMs < 5.0, "★★★ the DSP thread's feed never waited on the held queue (worst " + std::to_string(worstMs) + " ms for 20 chunks)");
+        ok(r.busyDrops() - b0 == 20 && r.droppedSamples() - d0 == 20 * 8000, "★★ background decoding dropped those chunks, counted ("
+           + std::to_string(r.busyDrops() - b0) + " chunks, " + std::to_string(r.droppedSamples() - d0) + " samples)");
+        r.feedIq(blk.data(), (int)blk.size());
+        ok(waitFor([&] { return r.queuedForTest() == 0; }, 3000), "...and the next chunk is taken as normal once the queue is free");
+        r.stop();
+    }
+}
+
 int main() {
+    backSeat();
     inRange();
     priority();
     midChart();
