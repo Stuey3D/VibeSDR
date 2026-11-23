@@ -9,6 +9,7 @@
  *   true / false + `spotsBandWhy` (greyed with the reason — the owner's switch or the benchmark's default; never hidden).
  */
 import { readSpotBands, spotBandAt, digiModeFamily, spotsListModes, type SpotBand } from '../utils/digiModes';
+import { bandSkimTitle } from './bandSkim';   // ★★ beta92 the BAND SKIMMER's title
 
 export interface SpotsBandCap { ok: boolean; why: string; bands: SpotBand[] }
 
@@ -26,7 +27,7 @@ export function parseSpotsBandCap(j: any): SpotsBandCap | undefined {
   const bands = readSpotBands(j?.spotBands);
   if ((j?.spotsBand !== true && j?.spotsBand !== false) || !bands.length) return undefined;
   const why = typeof j.spotsBandWhy === 'string' ? j.spotsBandWhy.trim().slice(0, 200) : '';
-  return { ok: j.spotsBand === true, why: j.spotsBand === true ? '' : (why || 'Band spots are not available on this receiver'), bands };
+  return { ok: j.spotsBand === true, why: j.spotsBand === true ? '' : (why || 'The band skimmer is not available on this receiver'), bands };
 }
 
 /** ★ The MODE filter's choices: ALL, then the server's modes (FT8 and FT4 on an older one) — never a fixed list (a key for
@@ -40,12 +41,12 @@ export function spotModeMatches(spotMode: string, filter: string, spotModes: rea
   return digiModeFamily(spotMode, spotModes && spotModes.length ? spotModes : SPOT_MODES_DEFAULT) === filter.toUpperCase();
 }
 
-/** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, more modes) · "DIGITAL SPOTS · 20 M
- *  BAND" (Band) — the web's spotsTitle. */
+/** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, more modes) · "BAND SKIMMER · 20 M"
+ *  (Band — beta92) — the web's spotsTitle. */
 export function spotsTitleText(band: boolean, cap: SpotsBandCap | undefined, dialHz: number, spotModes: readonly string[] | undefined): string {
   if (band && cap) {
     const b = spotBandAt(cap.bands, dialHz);
-    return b ? `DIGITAL SPOTS · ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS · BAND';
+    return bandSkimTitle(b ? b.name : null);   // ★★ beta92 "BAND SKIMMER · 20 M" (it reads CW, which is not digital)
   }
   const m = spotModes && spotModes.length ? spotModes : SPOT_MODES_DEFAULT;
   return m.length > 0 && m.length <= 2 ? m.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
@@ -53,7 +54,7 @@ export function spotsTitleText(band: boolean, cap: SpotsBandCap | undefined, dia
 
 /** The Band key's line when it cannot run, and its tooltip-equivalent when it can (the web's spotsBandRender). */
 export function spotsBandHint(cap: SpotsBandCap): string {
-  return cap.ok ? 'A whole band\'s digital frequencies at once — every mode on its own dial ('
+  return cap.ok ? 'A whole band at once — every digital mode on its own dial, and its CW and RTTY skimmed ('
     + cap.bands.map((x) => x.name).join(', ') + ')' : cap.why;
 }
 

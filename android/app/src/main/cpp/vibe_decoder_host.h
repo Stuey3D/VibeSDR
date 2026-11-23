@@ -522,6 +522,7 @@ public:
                 iqSpotter_->setCpu([this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); });
             }
             statusSent_ = ~0ull; statusAt_ = 0;
+            skimSent_.clear(); skimAt_ = 0;   // ★ beta92: the band skimmer's frame starts again with the run
         }
         if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(scope == SpotScope::Band); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
         spotsOn_ = true;
@@ -562,6 +563,12 @@ public:
         std::lock_guard<std::mutex> lk(spotsMtx_);
         if (!spotter_ || spotter_->scope() != SpotScope::Band) return "";
         return statusJsonLocked_();
+    }
+    /** ★★ beta92 BAND SKIMMER: the {"type":"band_skim"} frame now (tests) — "" when Band is not running. */
+    std::string spotsSkimJson() {
+        std::lock_guard<std::mutex> lk(spotsMtx_);
+        if (!spotter_ || spotter_->scope() != SpotScope::Band) return "";
+        return skimJsonLocked_();
     }
     /** What the spotter runs now ("FT8 14.0740, FT4 14.0800"), for the admin page. */
     std::string spotsDescribe() {
@@ -2043,6 +2050,71 @@ private:
         statusSent_ = seq; statusAt_ = utc;
         broadcastText(statusJsonLocked_(), -1);   // ★ re-sent every 15 s — not kept for a returning listener
     }
+    /** ★★★ beta92 THE BAND SKIMMER'S FRAME (Stuart, 2026-11-23, the Lenovo RSP1A): the band box shows the CW and RTTY
+     *  signals the band decode follows — a CW row with its frequency and "waiting for callsign" before a call is read, and
+     *  under EXPAND its decoded text "like we do in the cw skimmer, same for rtty"; the waterfall marks them, and the VFO
+     *  is drawn to the windows' width. One frame, ADDITIVE (a client that does not know it ignores it; a server without it
+     *  leaves those clients exactly as before):
+     *    {"type":"band_skim","data":{"windows":[{"mode","lo","hi","state"}],
+     *                                "signals":[{"mode","id","hz","snr","wpm","wpmLo","wpmHi","q","active","set","last",
+     *                                            "call","country","settings","text"}]}}
+     *  ★ BOUNDED: ≤ kSkimRowsMax rows per window and ≤ 80 in all, text ≤ 120 characters, printable ASCII only (decoded
+     *    text comes off the air — the RDS lesson). Built on the decode thread from each engine's own once-a-second
+     *    snapshot (SkimRow), so no decoder state is read across threads. spotsMtx_ held. */
+    std::string skimJsonLocked_() {
+        std::vector<digi::Spotter::SkimWindow> wins;
+        std::vector<digi::SkimRow> rows;
+        if (iqSpotter_) iqSpotter_->skim(wins, rows);
+        auto clean = [](const std::string& in, size_t cap) {
+            std::string o;
+            for (char ch : in) {
+                unsigned char u = (unsigned char)ch;
+                if (u == '\n' || u == '\r' || u == '\t') u = ' ';
+                if (u >= 0x20 && u < 0x7f && u != '"' && u != '\\') o.push_back((char)u);
+            }
+            if (o.size() > cap) o.erase(0, o.size() - cap);
+            return o;
+        };
+        std::string j = "{\"type\":\"band_skim\",\"data\":{\"windows\":[";
+        char b[320];
+        bool first = true;
+        for (const auto& w : wins) {
+            if (w.mode != "CW" && w.mode != "RTTY") continue;   // ★ the readable skimmers (PSKW's wide PSK spots as before)
+            std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"lo\":%.0f,\"hi\":%.0f,\"state\":\"%s\"}", first ? "" : ",",
+                          w.mode == "CW" ? "CW" : "RTTY", w.loHz, w.hiHz, digi::stateWord(w.state));
+            j += b; first = false;
+        }
+        j += "],\"signals\":[";
+        first = true;
+        int n = 0;
+        for (const auto& r : rows) {
+            if (r.mode != "CW" && r.mode != "RTTY") continue;
+            if (n >= 80) break;
+            ++n;
+            const bool cwRow = r.mode == "CW";
+            const char* q = cwRow ? cw::qualityWord(r.quality) : rttysk::qualityWord(r.quality);
+            std::snprintf(b, sizeof b,
+                "%s{\"mode\":\"%s\",\"id\":%d,\"hz\":%.0f,\"snr\":%.0f,\"wpm\":%.0f,\"wpmLo\":%d,\"wpmHi\":%d,\"q\":\"%s\","
+                "\"active\":%s,\"set\":%s,\"last\":%lld,",
+                first ? "" : ",", cwRow ? "CW" : "RTTY", r.id, r.hz, std::isfinite(r.snr) ? (double)r.snr : 0.0,
+                std::isfinite(r.wpm) ? (double)r.wpm : 0.0, r.wpmLo, r.wpmHi, q ? q : "poor",
+                r.active ? "true" : "false", r.set ? "true" : "false", (long long)r.lastMs);
+            j += b; first = false;
+            j += "\"call\":\"" + clean(r.call, 16) + "\",\"country\":\""
+               + clean(r.call.empty() ? std::string() : callsign::country(r.call), 40)
+               + "\",\"settings\":\"" + clean(r.settings, 40) + "\",\"text\":\"" + clean(r.text, digi::kSkimTextMax) + "\"}";
+        }
+        return j + "]}}";
+    }
+    /** ★ Send it when it changed, at most once a second, and every 15 s regardless (a box opened late). spotsMtx_ held. */
+    void maybeSendSkimLocked_(double utc) {
+        if (!iqSpotter_) return;
+        if (utc - skimAt_ < 1.0 && utc >= skimAt_) return;
+        std::string j = skimJsonLocked_();
+        if (j == skimSent_ && utc - skimAt_ < 15.0) return;
+        skimSent_.swap(j); skimAt_ = utc;
+        broadcastText(skimSent_, -1);
+    }
     /** Stop the run (spotsMtx_ held). `finishTap`: a real stop, not a scope change — the gallery's summary is written. */
     void stopSpotterLocked_(bool finishTap) {
         spotsOn_ = false;
@@ -2130,6 +2202,7 @@ private:
                          *  thread does not measure every slice a second time; the governor and the pause rule still apply. */
                         if (iqSpotter_) iqSpotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc, nullptr, 0, b.binHz, b.slice);
                         maybeSendStatusLocked_(b.utc);
+                        maybeSendSkimLocked_(b.utc);   // ★ beta92 the band skimmer's readable rows, windows and marks
                         bandDiagLocked_(b);
                         }
                         // ★ The slice is centred on the dial: the next blocks are cut to the span of the band it is on now
@@ -2445,6 +2518,8 @@ private:
     uint64_t spotSkipBase_ = 0;
     uint64_t spotShedBase_ = 0;                  // ★ Band periods shed by runs already stopped (spotPeriodsShed is monotonic)
     uint64_t statusSent_ = ~0ull;                // ★ the spotter's statusSeq last sent (spotsMtx_)
+    std::string skimSent_;                       // ★ beta92 the band_skim frame last sent (spotsMtx_)
+    double   skimAt_ = 0;                        //   and when (capture UTC)
     double   statusAt_ = 0;                      //   and when (capture UTC)                 // ★ skipped slots of runs already stopped (spotSlotsSkipped is monotonic)
     int   spotsSlot_ = -1;
 

@@ -1,3 +1,4 @@
+import { BAND_SKIM_KEY } from '../services/bandSkim';   // ★★ beta92 the band skimmer's key
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { skimBandAtDial, skimOffLabel, skimPointLabel, type SkimBand, type SkimKind, type SkimPoint } from '../utils/skimBands';
 import { sortModes } from '../utils/modeOrder';
@@ -197,7 +198,9 @@ const KEY_GAP = 7;
  *  would look weird"). Every key is the widest legend's size, and DIGITAL SPOTS (104 pt) held phones to two a row:
  *  DIGI SPOTS (80) — and Band, which was then the widest at SPOTS: BAND (88), says DIGI BAND (73) beside it. */
 const SPOTS_LEGEND = 'DIGI SPOTS';
-const BAND_LEGEND = 'DIGI BAND';
+/* ★★ beta92 BAND SKIM (Stuart, 2026-11-23: "digi band should be called Band Skimmer as it covers cw which is analogue") —
+ *  the compact key, DIGI BAND's width (services/bandSkim.ts BAND_SKIM_KEY; the box's title says BAND SKIMMER in full). */
+const BAND_LEGEND = BAND_SKIM_KEY;
 /** An UberSDR's own maps, as VIEWS keys: the map's kind (onServerMap), its legend and its glyph (utils/modeIcons). */
 const SERVER_MAPS: ReadonlyArray<{ kind: 'hfdl' | 'digi' | 'cw'; label: string; icon: string; a11y: string }> = [
   { kind: 'hfdl', label: 'HFDL MAP', icon: 'hfdl', a11y: 'HFDL map — aircraft heard over HF data link' },
@@ -1241,7 +1244,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                  style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>HFDL MAP</ModeLabel>
     </TouchableOpacity>)}</NavItem>
   );
-  /** ★ DIGITAL SPOTS: BAND — a whole band's digital frequencies at once; the tune keys then step BANDS. It moves the radio
+  /** ★ THE BAND SKIMMER (once DIGITAL SPOTS: BAND) — a whole band's digital frequencies at once, its CW and RTTY too; the tune keys then step BANDS. It moves the radio
    *  itself, so it is a TUNES THE RADIO ITSELF key. Greyed with its reason where the owner has it off (never hidden). */
   const spotsBandKey = () => {
     const b = spotsControls!.band!;
@@ -1250,7 +1253,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         <MetalKey navRef={nr} focused={nf} label={BAND_LEGEND} active={b.on} pip onPress={b.onPress} iconId="spotsband" stack={stackIco}
           style={!b.ok ? { opacity: 0.45 } : undefined} />
       ) : (
-      <TouchableOpacity ref={nr as any} accessibilityLabel={b.ok ? `Digital spots, band mode. ${b.hint}` : `Band spots, unavailable: ${b.hint}`}
+      <TouchableOpacity ref={nr as any} accessibilityLabel={b.ok ? `Band skimmer. ${b.hint}` : `Band skimmer, unavailable: ${b.hint}`}
         accessibilityState={{ selected: b.on }}
         style={[st.btn, { borderColor: b.on ? dec : t.btnBorder, paddingVertical: icoPad },
                 b.on && { backgroundColor: decBg },
@@ -1265,7 +1268,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /** Band's reason when it cannot run (the web's #spotsBandWhy), or what it covers — under whichever row holds the key. */
   const spotsBandCaption = () => (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-      {spotsControls!.band!.ok ? spotsControls!.band!.hint : `Band spots unavailable — ${spotsControls!.band!.hint}`}
+      {spotsControls!.band!.ok ? spotsControls!.band!.hint : `Band skimmer unavailable — ${spotsControls!.band!.hint}`}
     </Text>
   );
   /* ★★★ TUNES THE RADIO ITSELF (Stuart, 2026-10-28: "any decoders that trigger their own view Digital Spots (Full Band) DAB

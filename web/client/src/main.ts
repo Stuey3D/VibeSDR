@@ -142,6 +142,7 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
+import { bandSkimTitle, bandSkimPassband, bandSkimLabels, withSkimLabels, bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../../../src/services/bandSkim';   // ★★ beta92 the BAND SKIMMER
 import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, spotsListModes, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
@@ -4021,7 +4022,8 @@ function renderFrame(frameTs: number) {
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (V12, 2026-10-26) — the extra-wide passband the server cuts and every
    *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
    *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
-  const bp = bandHere() && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;   // ★ the Band VFO's needle only
+  // ★★ beta92 …widened to the band skimmer's CW / RTTY windows ("the vfo needs to show the width of the skimmer too")
+  const bp = bandHere() && spotBandCap ? bandSkimPassband(bandPassband(spotBandCap.bands, spec.frequency), bandSkim, spec.frequency) : null;   // ★ the Band VFO's needle only
   /* ★★ V12 …AND A WHOLE-CHANNEL MODE'S VFO IS ITS CHANNEL (src/utils/wideVfo.ts; Stuart, 2026-11-12, a B210 on a 7 MHz span
    *  with 7D's multiplex filling 1.5 MHz under a 200 kHz passband: "we need an extra wide VFO for things like DAB"). DAB's
    *  1.536 MHz block about the block's centre, labelled "DAB 7D · 194.064M"; ADS-B's and AIS's are in the same table (their
@@ -13137,6 +13139,24 @@ const spots: Spot[] = [];
  *  Band button, AGENTS.md) and `spotsBand` true / false + `spotsBandWhy` (greyed with the reason — the owner's switch or
  *  the benchmark's default; never hidden). */
 let spotModes: string[] = ['FT8', 'FT4'];
+/* ★★★ beta92 THE BAND SKIMMER (src/services/bandSkim.ts — Stuart, 2026-11-23): the server's band_skim frame — the CW / RTTY
+ *  windows being skimmed (the VFO is drawn to hold them), the signals followed (a row with its frequency and "waiting for
+ *  callsign" until a call is read; EXPAND reads their text; the waterfall marks them). null = none yet / an older server:
+ *  the box is exactly what it was. Cleared when Band stops. */
+let bandSkim: BandSkim | null = null;
+/** The band skimmer's box is the one showing (its rows, EXPLAIN, the marks follow it). */
+function bandSkimShown(): boolean { return bandSpots && $('decBox').classList.contains('open') && $('spotList').classList.contains('on'); }
+function bandSkimReceived(sk: BandSkim) {
+  if (!bandSpots) return;
+  bandSkim = sk;
+  renderSpots();
+  applyKnownSignals();   // ★ the marks on the waterfall
+}
+function bandSkimClear() {
+  if (!bandSkim) return;
+  bandSkim = null;
+  applyKnownSignals();
+}
 let spotBandCap: { ok: boolean; why: string; bands: SpotBand[] } | null = null;
 let bandSpots = false;
 function spotsReadCap(j: any) {
@@ -13149,7 +13169,7 @@ function spotsReadCap(j: any) {
   const bands = readSpotBands(j?.spotBands);
   if ((j?.spotsBand === true || j?.spotsBand === false) && bands.length) {
     const why = typeof j.spotsBandWhy === 'string' ? j.spotsBandWhy.trim().slice(0, 200) : '';
-    spotBandCap = { ok: j.spotsBand === true, why: j.spotsBand === true ? '' : (why || 'Band spots are not available on this receiver'), bands };
+    spotBandCap = { ok: j.spotsBand === true, why: j.spotsBand === true ? '' : (why || 'The band skimmer is not available on this receiver'), bands };
   } else spotBandCap = null;
   if (!spotBandCap && bandSpots) bandSpotsUi(false);
   spotsBandRender();
@@ -13162,7 +13182,7 @@ function spotsBandRender() {
   b.classList.toggle('dis', !!spotBandCap && !spotBandCap.ok);
   b.classList.toggle('on', bandSpots);
   b.title = spotBandCap && !spotBandCap.ok ? spotBandCap.why
-    : 'A whole band\'s digital frequencies at once — every mode on its own dial'
+    : 'The BAND SKIMMER: a whole band at once — every digital mode on its own dial, and its CW and RTTY skimmed'
       + (spotBandCap ? ' (' + spotBandCap.bands.map((x) => x.name).join(', ') + ')' : '');
   const w = document.getElementById('spotsBandWhy');
   if (w) { w.hidden = !spotBandCap || spotBandCap.ok || b.hidden; w.textContent = spotBandCap && !spotBandCap.ok ? spotBandCap.why : ''; }
@@ -13233,8 +13253,9 @@ function bandSpotsUi(on: boolean) {
   if (bandSpots && !was) bandMuteEnter();
   else if (!bandSpots && was) bandMuteLeave();
   sqlRowsPaint();   // ★★ V12: the DEC tag follows the spots onto (and off) their VFO
-  if (!bandSpots) { spotModeStates = []; bandSpotsPending = null; }
+  if (!bandSpots) { spotModeStates = []; bandSpotsPending = null; bandSkimClear(); }
   renderSpotModeChips();
+  syncCwPlain();   // ★★ beta92 EXPLAIN / RAW is the band skimmer's too (its CW and RTTY text)
   spotsBandRender();
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
   renderFreq();
@@ -13288,11 +13309,12 @@ function renderSpotModeChips() {
 }
 
 /** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, a server with more: FT2, JS8 …
- *  decode on whichever of their dials the listener is on) · "DIGITAL SPOTS · 20 m BAND" (Band). */
+ *  decode on whichever of their dials the listener is on) · "BAND SKIMMER · 20 M" (Band — beta92, Stuart: "digi band
+ *  should be called Band Skimmer as it covers cw which is analogue"). */
 function spotsTitle(): string {
   if (bandSpots && spotBandCap && spec) {
     const b = spotBandAt(spotBandCap.bands, vfoNow(spotsVfo).frequency);   // ★ the VFO Band runs on
-    return b ? `DIGITAL SPOTS \u00b7 ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS \u00b7 BAND';
+    return bandSkimTitle(b ? b.name : null);   // ★★ beta92 "BAND SKIMMER · 40 M" (it reads CW, which is not digital)
   }
   return spotModes.length > 0 && spotModes.length <= 2 ? spotModes.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
 }
@@ -14070,12 +14092,12 @@ function cwRead(t: string): string { return cwPlainOn && explainHere() ? plainEn
 /** ★★ V12 (2026-11-14) EXPLAIN is CW's AND RTTY's — RTTY uses the same codes (Stuart: "the same CW translator needs to
  *  be added as RTTY seems to use the same abbreviation codes as CW"): ONE dictionary (src/utils/cwVocab), one key, one
  *  setting — the one-signal text, the skimmer's rows and its card. */
-function explainHere(): boolean { return activeDec === 'cw' || activeDec === 'rtty'; }
+function explainHere(): boolean { return activeDec === 'cw' || activeDec === 'rtty' || bandSkimShown(); }   // ★★ beta92 + the band skimmer's CW / RTTY
 /** The PLAIN key, the box's class and ONE SIGNAL's plain text, to the current state. */
 function syncCwPlain() {
   const key = document.getElementById('cwPlain');
   const cw = explainHere();
-  const what = activeDec === 'rtty' ? 'RTTY' : 'CW';
+  const what = bandSkimShown() && activeDec !== 'cw' && activeDec !== 'rtty' ? 'CW and RTTY' : activeDec === 'rtty' ? 'RTTY' : 'CW';
   // ★ EXPLAIN ↔ RAW: the legend names what a press does (Stuart, 2026-10-30) — never lit, the legend carries the state.
   if (key) {
     key.style.display = cw ? '' : 'none'; key.setAttribute('aria-pressed', String(cwPlainOn));
@@ -14106,6 +14128,7 @@ function toggleCwPlain() {
   syncCwPlain();
   renderCw();
   renderRttyCard();
+  if (bandSpots) renderSpots();   // ★★ beta92 the band skimmer's rows read through it too
 }
 /* ★★ PSK31/63 (V12, 2026-10-26) — the server's own (decoders/psk_skimmer.h), CW's two views exactly: ONE SIGNAL decodes
  *  the passband ('psk' — the signal nearest the middle of it is the box's, a PSK program's cursor) and lists every PSK
@@ -14684,6 +14707,7 @@ function initDecoders(host: string, auth: AuthState) {
     onSstvMode: (name) => { $('decStatus').textContent = name; if (satDec === 'sstv' && activeDec === 'sstv') satPanel?.status(`SSTV · ${name}`); },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpotsStatus: (st) => { if (!bandSpots) return; spotModeStates = st.modes; renderSpotModeChips(); },
+    onBandSkim: (sk) => bandSkimReceived(sk),   // ★★ beta92 the band skimmer's CW / RTTY rows, windows and marks
     onTimeSync: (t) => { if (isHandheld()) noteTimeSync(t); },
     onSpot: (sp) => {
       if (isHandheld()) hhNoteSpot(sp);
@@ -17725,9 +17749,19 @@ function resetDecImages() {
 let spotsExpanded = false;
 
 function renderSpots() {
+  // ★★ beta92 the band skimmer's rows are rebuilt every second — the row being read stays where it is (keepReadingPlace)
+  keepReadingPlace(bandSpots ? document.getElementById('decBody') : null, renderSpotsRows);
+}
+function renderSpotsRows() {
   const host = $('spotList');
   host.classList.toggle('expanded', spotsExpanded);
   host.innerHTML = '';
+
+  /* ★★★ beta92 THE BAND SKIMMER — "WAITING FOR CALLSIGN" (Stuart, 2026-11-23: "in the ALL-modes view a CW row shows its
+   *  FREQUENCY and 'waiting for callsign' when no call has been detected yet"). Every CW / RTTY signal being followed with
+   *  no call yet, at the top (they are live now), lowest frequency first; EXPANDED, what it is sending. Once a call is read
+   *  the server spots it and it is an ordinary row below. The MODE filter applies (ALL, CW, RTTY). */
+  if (bandSpots) for (const sg of bandSkimPending(bandSkim, SF_MODES[sfMode] ?? 'ALL', spots)) host.appendChild(bandSkimWaitRow(sg));
 
   // Newest per callsign+band — a station calling CQ every cycle would otherwise
   // fill the whole list with itself.
@@ -17745,8 +17779,11 @@ function renderSpots() {
     const bearing = spotsExpanded ? spotBearingDeg(sp.grid) : null;
     const row = document.createElement('div');
     row.className = 'sres spot';
+    row.dataset.ra = 'sp-' + sp.callsign + '|' + sp.band;
     // The app's columns: time · band · snr · call · country · distance.
     const ms = digiModeStyle(sp.mode);
+    // ★★ beta92 a CW / RTTY spot in the band skimmer: EXPANDED, the message its signal is sending (as the CW skimmer shows)
+    const skimSig = spotsExpanded && bandSpots ? bandSkimSignalFor(bandSkim, sp) : null;
     row.innerHTML =
       `<span class="t">${fmtSpotTime(sp.timestamp)}</span>` +
       // ★ V12: the MODE, in its map colour and letter (src/utils/digiModes.ts) — Band mode lists several at once.
@@ -17760,15 +17797,16 @@ function renderSpots() {
       // joined with · and any missing piece simply DROPS OUT — a report or a 73 carries no locator,
       // so the row must not leave a gap where the grid would have been. (The app's rule, verbatim.)
       (spotsExpanded
-        // ★★ NO MESSAGE HERE, and it is not an omission we can fix in the client: the server's
-        // spot payload is {mode,callsign,snr,frequency,band,grid,timestamp} — it never sends the
-        // decoded text, so the app's "CQ RA3Y KO73" line has no equivalent on the wire. Adding
-        // `msg` to digital_spot is a SERVER change; until then this shows what exists.
+        // ★★ NO MESSAGE HERE for the slotted modes: the server's spot payload is {mode,callsign,snr,frequency,band,grid,
+        // timestamp} — it never sends the decoded text. ★★ beta92: a CW / RTTY spot's text comes from the band_skim frame
+        // (its signal's last 120 characters), drawn on its own line below.
         ? `<span class="sdetail">${escapeHtml([
             sp.mode, sp.grid,
             bearing != null ? `${Math.round(bearing)}°` : '',
             fmtSpotTimeSec(sp.timestamp),
+            skimSig ? `${(skimSig.hz / 1e3).toFixed(2)} kHz` : '',
           ].filter(Boolean).join(' · '))}</span>`
+          + (skimSig ? bandSkimTextHtml(skimSig) : '')
         : '');
     wireQrz(row);   // ★ V12: the callsign opens its QRZ.COM page — its own click, not the row's tune
     row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
@@ -17779,6 +17817,37 @@ function renderSpots() {
     host.appendChild(row);
   }
   syncSpotsMapKey();
+}
+/** ★★ beta92 an expanded CW / RTTY row's message line: its text in the signal's confidence colour (the CW skimmer's rule),
+ *  through EXPLAIN when that is on. */
+function bandSkimTextHtml(sg: BandSkimSignal): string {
+  const t = bandSkimText(sg);
+  const wait = sg.mode === 'RTTY' && !sg.set;
+  return `<span class="sskim q-${sg.q}${wait ? ' wait' : ''}"><bdi>${escapeHtml(wait ? t : cwRead(t) || '…')}</bdi></span>`;
+}
+/** ★★ beta92 a band skimmer signal with no callsign yet: its FREQUENCY where a spot has its time, its mode, band and SNR,
+ *  "waiting for callsign", its speed (CW) or settings (RTTY); EXPANDED, its text. A tap tunes it, as a spot's does. */
+function bandSkimWaitRow(sg: BandSkimSignal): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'sres spot skimwait';
+  row.dataset.ra = 'skw-' + sg.mode + sg.id;
+  const ms = digiModeStyle(sg.mode);
+  const band = spotBandCap ? (spotBandAt(spotBandCap.bands, sg.hz)?.name ?? '') : '';
+  const rate = sg.mode === 'CW' ? cwWpmText(sg) : (sg.set ? sg.settings.replace(/ baud \/ /, '/').replace(/ Hz/, '') : '');
+  row.innerHTML =
+    `<span class="t f">${(sg.hz / 1e3).toFixed(2)}</span>` +
+    `<span class="mode" style="color:${ms.colour}"><i style="background:${ms.colour};color:${ms.ink}">${escapeHtml(ms.letter)}</i>${escapeHtml(sg.mode)}</span>` +
+    `<span class="band">${escapeHtml(band)}</span>` +
+    `<span class="snr ${sg.snr >= 0 ? 'pos' : 'neg'}">${Math.round(sg.snr)}</span>` +
+    `<span class="call wait">${BAND_SKIM_WAITING}</span>` +
+    `<span class="km">${escapeHtml(rate)}</span>` +
+    (spotsExpanded ? bandSkimTextHtml(sg) : '');
+  row.title = `${sg.mode} · ${(sg.hz / 1e3).toFixed(2)} kHz · ${BAND_SKIM_WAITING} — tap to tune`;
+  row.onclick = () => {
+    spec?.tune(clampTune(sg.hz), 'usb', { recenter: true, retarget: true });
+    renderFreq();
+  };
+  return row;
 }
 
 /* ★★★ V12 beta90 VIEWS' THREE MAP KEYS (Stuart, 2026-11-21): DIGI MODES · AVIATION · SHIPPING, each drawn only where this
@@ -19856,7 +19925,11 @@ function slider(
 let knownLabelsOn = true;
 function applyKnownSignals() {
   if (!wf) return;
-  if (!knownLabelsOn) { wf.knownSignals = null; wf.knownGen++; if (dxDialList.length) { dxDialList = []; dabBlocksSync(); } return; }
+  /* ★★ beta92 THE BAND SKIMMER'S MARKS (Stuart: "show where CW has been detected on the waterfall, like the real CW
+   *  skimmer"): every CW / RTTY signal it follows, by callsign (or its mode until one is read), in its mode's colour —
+   *  while Band runs, whether or not SIGNAL LABELS is on (they are the decoder's own output, as its list is). */
+  const marks = bandSpots ? bandSkimLabels(bandSkim) : [];
+  if (!knownLabelsOn) { wf.knownSignals = marks.length ? marks : null; wf.knownGen++; if (dxDialList.length) { dxDialList = []; dabBlocksSync(); } return; }
   const d = new Date();
   // ★★ + this browser's own bookmarks, the server owner's saved ones and the FM names it learnt from RDS (GET /bookmarks
   //    carries "manual" and "nameSrc" — knownSignals.ts bookmarkSignals); the schedule's broadcast rows never.
@@ -19871,7 +19944,7 @@ function applyKnownSignals() {
   // ★★ V12 + the server's signal tags (the VARA HF tag — identify only), clear of every label above
   const withTags = sigTagEntries.length ? withSigTags(withDx, sigTagSignals(sigTagEntries, withDx)) : withDx;
   // ★★ beta91 + the satellites in range (sat_labels), at their Doppler-shifted frequency
-  wf.knownSignals = satLabelEntries.length ? withSatLabels(withTags, satLabelSignals(satLabelEntries)) : withTags;
+  wf.knownSignals = withSkimLabels(satLabelEntries.length ? withSatLabels(withTags, satLabelSignals(satLabelEntries)) : withTags, marks);
   wf.knownGen++;
   if (hadDx || dxDialList.length) dabBlocksSync();
 }

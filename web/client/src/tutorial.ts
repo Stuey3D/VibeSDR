@@ -77,7 +77,7 @@ const STEPS: Step[] = [
             + 'and zooms with − and +. Each tune '
             + 'moves the dial by the amount shown on the step button [[@mStep]] — press it to change the step. '
             + (onIcom() ? 'Zoom steps the Icom\u2019s own scope span, one setting at a time.' : '')
-            + ' In DAB, ISM and DIGI BAND, tuning steps one multiplex or band instead.'
+            + ' In DAB, ISM and BAND SKIM, tuning steps one multiplex or band instead.'
             + (abOffered()
               ? ' The step button\u2019s menu also turns on VFO A/B: a second VFO on the same radio, heard at the same '
                 + 'time — the lower frequency in your left ear, the higher in your right. A tap of START (or \u25B3 with '
@@ -90,7 +90,7 @@ const STEPS: Step[] = [
             + 'radio\u2019s scope, so it cannot zoom finer than the radio shows.'
           : 'Use [[−]] and [[+]] to zoom the spectrum and waterfall.')
         // ★★ V12 hop keys (2026-11-03): in DAB, ISM and DIGI BAND the arrows step blocks / bands — say what the labels mean.
-        + ' In DAB, ISM and DIGI BAND, [[‹]] and [[›]] step one multiplex or band instead: each names the one it goes to, '
+        + ' In DAB, ISM and BAND SKIM, [[‹]] and [[›]] step one multiplex or band instead: each names the one it goes to, '
         + 'and the one you are on is shown above the radio sign between them.'
         // ★★ V12 VFO A/B — WHERE IT IS (AGENTS.md copy rule): switched on in the step button's menu, switched between with
         //    the A/B key that then sits between ‹ and ›, the ears by frequency.
@@ -128,7 +128,7 @@ const STEPS: Step[] = [
         + 'talker alias and, on the amateur bands, a position for the MAP); off the amateur bands it says only that a system was '
         + 'heard, with its colour code and slot. Analogue FM on the same channel still plays. '
         + 'In DECODERS… there, the modes that tune the radio themselves and open '
-        + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, SATELLITE, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
+        + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, SATELLITE, BAND SKIM) come first, under TUNES THE RADIO ITSELF — they '
         // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md) — where the server allows it, a pick is the listener's alone
         + 'are in this menu too; DAB\u2019s station list marks \u25B6 2 beside a station two listeners are hearing, and where the '
         + 'server gives each listener their own station a pick changes only what you hear (the multiplex stays shared); they '

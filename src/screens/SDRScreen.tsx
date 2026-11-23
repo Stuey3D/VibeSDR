@@ -190,6 +190,7 @@ import { dvsigOffered, dvsigLine, DVSIG_LABEL, DVSIG_NAME, type DvState } from '
 import DvsigPanel from '../components/DvsigPanel';   // ★ V12 the DV ID box
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
+import { bandSkimPassband, bandSkimLabels, withSkimLabels, type BandSkim } from '../services/bandSkim';   // ★★ beta92 the BAND SKIMMER
 import { landingSpotBand, bandPassband } from '../utils/digiModes';
 import { wideVfoPassband, wideVfoLabel, type WideVfoMode } from '../utils/wideVfo';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
@@ -2891,6 +2892,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ Band muting — see preBandMuteRef; the effect sits below VFO A/B's state (round 3: with B on it mutes VFO A, not the speaker)
   const spotsBandOnRef = useRef(false);
   const [spotModeStates, setSpotModeStates] = useState<SpotModeState[]>([]);
+  /** ★★ beta92 THE BAND SKIMMER's band_skim frame (services/bandSkim.ts): its CW / RTTY windows (the VFO's width), the
+   *  signals followed ("waiting for callsign" rows, EXPAND's text, the waterfall marks). null = not Band / an older server. */
+  const [bandSkim, setBandSkim] = useState<BandSkim | null>(null);
   /** Band's step, set where tuning lives (below) — true when it took the gesture. A ref: the gestures are built earlier. */
   const bandSpotsStepRef = useRef<(dir: number) => boolean>(() => false);
   /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
@@ -6336,6 +6340,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         markDecodeOutput();
       },
       onSpotsStatus: (st) => { if (spotsBandOnRef.current) setSpotModeStates(st); },
+      onBandSkim: (sk) => { if (spotsBandOnRef.current) setBandSkim(sk); },   // ★★ beta92 the band skimmer's rows and marks
       // ★ V12 APRS: the list (its tracks kept for the map's cards) and each new packet (the web's onAprsList / onAprsPacket)
       onAprsList: (d) => {
         if (activeDecRef.current !== 'aprs') return;
@@ -7037,7 +7042,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     decoderClient.current?.stopSpots();
     spotsKindRef.current = null;
     setSpotsKind(null);
-    spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
+    spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]); setBandSkim(null);
     stopSpotFlush();
   }, [stopSpotFlush]);
   /** ★★ V12 THE HFDL MAP. An UberSDR's add-on decodes every HFDL channel itself; a VibeServer decodes the listener's OWN
@@ -7109,7 +7114,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onSpotsToggle = useCallback((k: SpotsKind) => {
     // ★ V12: from Band, DIGITAL SPOTS switches to Single — one subscribe, the server keeps the slot (the web's spotsBtn)
     if (k === 'digi' && spotsKindRef.current === 'digi' && spotsBandOnRef.current) {
-      spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
+      spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]); setBandSkim(null);
       decoderClient.current?.startSpots('digi', 'single');
       return;
     }
@@ -7263,7 +7268,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const skimDrawnW = activeDecoder === 'psk' ? pskWidth : activeDecoder === 'rtty' ? rttyWidth : cwWidth;
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
   // ★★ VFO A/B: drawn on the needle of the VFO Band runs on only (with the other VFO tuned, `status` is that one's)
-  const bandDrawn = spotsBandOn && spotsBandCap && (!abOn || abActive === spotsVfo) ? bandPassband(spotsBandCap.bands, status.frequency) : null;
+  // ★★ beta92 …widened to the band skimmer's CW / RTTY windows (Stuart: "the vfo needs to show the width of the skimmer too")
+  const bandDrawn = spotsBandOn && spotsBandCap && (!abOn || abActive === spotsVfo) ? bandSkimPassband(bandPassband(spotsBandCap.bands, status.frequency), bandSkim, status.frequency) : null;
   /* ★★ V12 A WHOLE-CHANNEL MODE'S VFO IS ITS CHANNEL (utils/wideVfo.ts; Stuart, 2026-11-12: "we need an extra wide VFO for
    *  things like DAB") — DAB's 1.536 MHz block about its centre, ADS-B's ~2 MHz, AIS's two channels. Drawn only, never
    *  sent: the server's DAB / ADS-B / AIS pipelines and the listener's own filter are untouched. */
@@ -11292,7 +11298,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const cap = spotsBandCapRef.current;
     if (!cap) return;
     markInteract();
-    if (!cap.ok) { appAlert('Band spots unavailable', cap.why); return; }
+    if (!cap.ok) { appAlert('Band skimmer unavailable', cap.why); return; }
     /* ★★ From DAB (ADS-B, ISM, NDB, AIS) a press is "take me to a band", even with Band already lit — the radio is not on
      *  one, so stopping Band there would answer the wrong question. A held mode's dial never counts as a band. */
     const held = dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current;
@@ -11307,7 +11313,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       const v = abStartVfo();
       spotsVfoRef.current = v; setSpotsVfo(v);
       spotsKindRef.current = 'digi'; setSpotsKind('digi');
-      spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]);
+      spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]); setBandSkim(null);
       decoderClient.current?.startSpots('digi', 'band', v);
       // ★★ Always onto the band's place, as the web does — see spotsBandBtn in web/client/src/main.ts (Stuart, beta22).
       bandSpotsGo(b.hz, b.id);
@@ -12790,8 +12796,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const knownWithTags = useMemo(() => (!knownWithDx || !sigTags.length ? knownWithDx
     : withSigTags(knownWithDx, sigTagSignals(sigTags, knownWithDx))), [knownWithDx, sigTags]);
   // ★★ beta91 + the satellites in range, at their Doppler-shifted frequency (the same list the web client draws)
-  const knownSignals = useMemo(() => (!knownWithTags || !satLabels.length ? knownWithTags
+  const knownWithSats = useMemo(() => (!knownWithTags || !satLabels.length ? knownWithTags
     : withSatLabels(knownWithTags, satLabelSignals(satLabels))), [knownWithTags, satLabels]);
+  /* ★★ beta92 + THE BAND SKIMMER'S MARKS (Stuart: "show where CW has been detected on the waterfall, like the real CW
+   *  skimmer"): every CW / RTTY signal it follows, by call (or mode until one is read), in its mode's colour — while Band
+   *  runs, whether or not the signal labels are on (the decoder's own output, as its list is). The web's applyKnownSignals. */
+  const knownSignals = useMemo(() => withSkimLabels(knownWithSats, spotsBandOn ? bandSkimLabels(bandSkim) : []),
+    [knownWithSats, spotsBandOn, bandSkim]);
 
   /* ★★ V12 DAB BLOCK LABELS AND THE BLOCK SWAPPER (utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s
    *  showing all of Band III: "add the spectrum labels to show the blocks and, if in the memory, show the MUX name next to
@@ -15228,6 +15239,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           spotModes={spotModesSrv}
           spotsTitle={spotsKind === 'digi' && (spotModesSrv || spotsBandOn) ? spotsTitleText(spotsBandOn, spotsBandCap, status.frequency, spotModesSrv) : undefined}
           spotModeStates={spotsBandOn ? spotModeStates : undefined}
+          bandSkim={spotsBandOn ? bandSkim : null}   /* ★★ beta92 the band skimmer's CW / RTTY rows */
           /* ★★ V12 THE SCANNER — the decoder box's body while SCANNER is the decoder (ScannerPanel). */
           scanner={activeDecoder === 'scanner' ? {
             ctl: scanner.ctl, rev: scanner.rev, meterMode: signalMode, onSource: onScanSource,

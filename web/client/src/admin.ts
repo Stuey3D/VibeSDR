@@ -1865,7 +1865,7 @@ async function refresh() {
       if (d && note) {
         const running = Array.isArray(d.running) ? d.running : [];
         // ★ V12: Band spots named as such (spotsScope "band"), Single as the FT8 it always was.
-        const what = running.map((r: any) => [r.decoder, r.spots ? (r.spotsScope === 'band' ? 'Band spots' : 'FT8') : ''].filter(Boolean).join(' + ')).filter(Boolean);
+        const what = running.map((r: any) => [r.decoder, r.spots ? (r.spotsScope === 'band' ? 'Band skimmer' : 'FT8') : ''].filter(Boolean).join(' + ')).filter(Boolean);
         note.textContent = `${d.inUse ?? 0} of ${d.max} in use on this machine`
           + (what.length ? ` (${what.join(', ')})` : '')
           + ` — ${d.set > 0 ? 'your limit' : `automatic for this hardware (${d.default})`}. `

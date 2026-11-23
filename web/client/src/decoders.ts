@@ -30,6 +30,7 @@
  *   FT8 / FT4 (text frame)
  *     {"type":"digital_spot","data":{mode,callsign,snr,frequency,band,grid,how,country,timestamp}}
  *     {"type":"digital_spots_status","data":{scope:"band",modes:[{mode,state,dials,idle,shed,live}],budget}}   (V12 Band governor; beta91: CW, RTTY, PSKW chips and the 'paused' state)
+ *     {"type":"band_skim","data":{windows:[{mode,lo,hi,state}],signals:[{mode,id,hz,snr,wpm,q,active,set,last,call,country,settings,text}]}}   (★★ beta92 BAND SKIMMER — src/services/bandSkim.ts)
  *
  *   CW ('cw' on the listener's audio, 'cwskim' on a segment of IQ around the dial — V12, vibe_cw_run.h)
  *     0x01 text (as RTTY — the primary signal, 'cw' only) · 0x03 | u8 state (0 nothing, 1 carriers, 3 decoding)
@@ -81,6 +82,7 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
+import { parseBandSkim, type BandSkim } from '../../../src/services/bandSkim';   // ★★ beta92 the band skimmer's readable rows
 
 export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | null;
 
@@ -157,6 +159,8 @@ export interface DecoderCallbacks {
   onTimeSync?: (t: TimeSync) => void;
   /** ★ V12: Band's per-mode state (active / light / idle / shed / off), when it changes and every 15 s. */
   onSpotsStatus?: (st: SpotsStatus) => void;
+  /** ★★ beta92 BAND SKIMMER: the CW / RTTY windows and the signals they follow (≤ once a second while Band runs). */
+  onBandSkim?: (sk: BandSkim) => void;
   /** ★ CW: the signals being decoded (at most once a second, only when changed). */
   onCwSignals?: (list: CwList) => void;
   /** ★ CW: a callsign heard identifying itself. */
@@ -612,6 +616,13 @@ export class DecoderClient {
         .map((m: any) => ({ mode: m.mode.replace(/[^0-9A-Za-z+-]/g, '').slice(0, 12), state: m.state, dials: n(m.dials), idle: n(m.idle), shed: n(m.shed), live: n(m.live) }));
       const b = msg.data.budget;
       this.cb.onSpotsStatus?.({ scope: 'band', modes, budget: typeof b === 'number' && Number.isFinite(b) ? b : null });
+      return;
+    }
+    // ★★ beta92 THE BAND SKIMMER's CW / RTTY rows, windows and marks (src/services/bandSkim.ts — checked there)
+    if (msg.type === 'band_skim' && msg.data) {
+      if (!this.spotsOn) return;
+      const sk = parseBandSkim(msg.data);
+      if (sk) this.cb.onBandSkim?.(sk);
     }
   }
 

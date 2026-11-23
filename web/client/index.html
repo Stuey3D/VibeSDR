@@ -3703,6 +3703,23 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 #spotList .call { color: var(--freq); letter-spacing: 1px; }
 #spotList .cty { color: var(--text-dim); }
 #spotList .km { color: var(--unit); text-align: right; font-variant-numeric: tabular-nums; }
+/* ★★★ beta92 THE BAND SKIMMER (main.ts bandSkimWaitRow / bandSkimTextHtml — Stuart 2026-11-23): a CW / RTTY signal heard
+   with no callsign yet shows its FREQUENCY where a spot has its time and "waiting for callsign" across call + country;
+   EXPANDED, every CW / RTTY row reads its message on a line of its own, WRAPPED (to be read, not scanned), in its
+   signal's confidence colour — the CW skimmer's colours (red poor, orange low, amber medium, green high). */
+#spotList .sres.spot.skimwait .t { color: var(--freq); }
+#spotList .sres.spot.skimwait .call.wait { grid-column: span 2; color: var(--text-dim); font-style: italic; letter-spacing: 0; }
+#spotList .sres.spot.skimwait .km { white-space: nowrap; }
+#spotList .sskim { grid-column: 1 / -1; font-size: 12px; line-height: 1.35; white-space: normal; overflow-wrap: anywhere;
+                   font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); }
+#spotList .sskim.q-high { color: #5BE36B; }
+#spotList .sskim.q-medium { color: #E8C547; }
+#spotList .sskim.q-low { color: #FF8A3D; }
+#spotList .sskim.q-poor { color: #FF4B4B; }
+#spotList .sskim.wait { color: var(--text-dim); font-style: italic; font-family: inherit; }
+@container decbox (max-width: 400px) {
+  #spotList .sskim { flex: 1 1 100%; }
+}
 
 /* Recordings. */
 #recsList .sres { flex-wrap: wrap; }
@@ -4413,7 +4430,7 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="sfBand" title="Band filter">ALL</button>
       <button class="btn" id="sfAge" title="Age filter">AGE</button>
       <!-- ★ EXPAND / COLLAPSE, as the app has: one line to scan, two to read. -->
-      <button class="btn" id="sfExpand" title="Show grid, bearing and exact time">EXPAND</button>
+      <button class="btn" id="sfExpand" title="Show grid, bearing and exact time — and, in the band skimmer, what each CW and RTTY station is sending">EXPAND</button>
       <!-- ★★ V12 MAP, IN THE HEADER (Stuart, 2026-10-27: "the header needs a map button too"). The listed stations on the
            spots map — openSpotsMap, the same window as the decoders panel's MAP. Drawn only while a listed spot has a
            grid that places it (main.ts syncSpotsMapKey): a map with nothing on it is a dead control (AGENTS.md). -->
@@ -5674,7 +5691,7 @@ select.btn { padding: 6px 8px; }
          Band is shown only where this radio reaches a band; greyed with the server's reason where the owner has it off. -->
     <div class="btnRow" id="spotsPark">
       <button class="btn" id="spotsBtn" title="The digital modes at your dial (FT8 and FT4 on your passband)">DIGITAL SPOTS: SINGLE MODE</button>
-      <button class="btn" id="spotsBandBtn" title="A whole band's digital frequencies at once — every mode on its own dial" hidden>DIGITAL SPOTS: BAND</button>
+      <button class="btn" id="spotsBandBtn" title="The BAND SKIMMER: a whole band at once — every digital mode on its own dial, and its CW and RTTY skimmed" hidden>BAND SKIMMER</button>
     </div>
     <div class="lbl wrap" id="spotsBandWhy" style="margin-top:6px" hidden></div>
     <div class="lbl wrap" style="margin-top:6px">

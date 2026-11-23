@@ -263,7 +263,7 @@ export function bgBandReach(b: BgSpotBand, centre: number, rate: number): boolea
 }
 /** The line under a Band VFO — the Setup page's bgBandHint. */
 export function bgBandHint(bandOk: boolean, bands: BgSpotBand[], hz: number, centre: number, rate: number): { bad: boolean; text: string } {
-  if (!bandOk) return { bad: true, text: 'Band digital spots are switched off on this radio (Modes and decoders) — choose another decoder or switch Band back on.' };
+  if (!bandOk) return { bad: true, text: 'The band skimmer is switched off on this radio (Modes and decoders) — choose another decoder or switch it back on.' };
   if (!bands.length) return { bad: false, text: 'The server’s band list has not arrived — enter the band’s FT8 dial (7074 for 40 m, 14074 for 20 m). Every digital mode on it is decoded into one summary card an hour.' };
   const b = bgSpotBand(bands, hz);
   if (!b) return { bad: false, text: bands.some((x) => bgBandReach(x, centre, rate))

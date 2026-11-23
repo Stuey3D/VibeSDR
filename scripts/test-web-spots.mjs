@@ -1,7 +1,7 @@
 // test-web-spots.mjs — V12 DIGITAL SPOTS IN THE WEB CLIENT, through a real vibeserver and the REAL built web page
 // (2026-10-26). A fake rtl_tcp replays the UTC-anchored 20 m clip (`test-digi-spots clip`: FT8, FT4, FT2 and JS8 stations
 // on their own dials, and since 2026-10-27 a JTTY CQ and a PSK31 CQ); the server's dial is 20 m's Band centre. Headless Edge then:
-//   • both buttons are offered — DIGITAL SPOTS: SINGLE MODE and DIGITAL SPOTS: BAND (vibeserver.json lists 20 m);
+//   • both buttons are offered — DIGITAL SPOTS: SINGLE MODE and BAND SKIMMER (beta92; once DIGITAL SPOTS: BAND) (vibeserver.json lists 20 m);
 //   • BAND: the readout names the band ("20 m BAND"), the box title says so, and spots arrive in the list with a MODE
 //     column in each mode's colour and letter — FT8, FT4, FT2 and JS8 from their own dials;
 //   • the tuning arrow steps BANDS (20 m → 17 m: the dial moves to 17 m's centre, the readout follows) and back;
@@ -144,14 +144,17 @@ try {
   await sleep(300);
 
   console.log('── the two buttons ──');
-  ok(await until(`!document.getElementById('spotsBandBtn').hidden`, 8000), 'DIGITAL SPOTS: BAND is offered (this radio reaches 20 m)');
+  ok(await until(`!document.getElementById('spotsBandBtn').hidden`, 8000), 'the BAND SKIMMER is offered (this radio reaches 20 m)');
+  // ★★ beta92 (Stuart: "digi band should be called Band Skimmer as it covers cw which is analogue")
+  ok(/BAND SKIM/.test(await ev(`document.getElementById('spotsBandBtn').textContent`)) && !/DIGI|DIGITAL/.test(await ev(`document.getElementById('spotsBandBtn').textContent`)),
+     `its key says BAND SKIM(MER), never DIGI(TAL): "${await ev(`document.getElementById('spotsBandBtn').textContent.trim()`)}"`);
   ok(await ev(`document.getElementById('spotsBtn').textContent.trim()`) === 'DIGITAL SPOTS: SINGLE MODE', 'the old button is DIGITAL SPOTS: SINGLE MODE');
   ok(!(await ev(`document.getElementById('spotsBandBtn').classList.contains('dis')`)), 'Band is not greyed (the owner has it on)');
 
   console.log('── BAND ──');
   await ev(`document.getElementById('spotsBandBtn').click()`);
   ok(await until(`document.getElementById('spotsBandBtn').classList.contains('on') && !document.getElementById('spotsBtn').classList.contains('on')`, 3000), 'BAND lit, SINGLE MODE not');
-  ok(await until(`/20 M BAND/.test(document.getElementById('decTitle').textContent)`, 3000), `the box title: "${await ev(`document.getElementById('decTitle').textContent`)}"`);
+  ok(await until(`/^BAND SKIMMER \u00b7 20 M$/.test(document.getElementById('decTitle').textContent)`, 3000), `the box title: "${await ev(`document.getElementById('decTitle').textContent`)}"`);
   ok(await until(`/20 m BAND/.test((document.getElementById('mChan')||{}).textContent||'')`, 5000), `the readout names the band: "${await chan()}"`);
   ok(await until(`['FT8', 'FT4', 'FT2', 'JS8', 'JTTY', 'PSK31'].every(md => [...document.querySelectorAll('#spotList .sres.spot .mode')].some(m => m.textContent.includes(md)))`, 60000),
      `spots of all SIX modes on the air listed (JTTY and PSK31 among them) (${await ev(`[...document.querySelectorAll('#spotList .sres.spot')].map(r => r.querySelector('.mode').textContent + ' ' + r.querySelector('.call').textContent).join(', ')`)})`);

@@ -62,6 +62,20 @@ protected:
             const int64_t cap = (int64_t)std::llround(captureUtc * 1000.0), now = sk_->nowMs();
             if (!anchored_ || cap < now || cap - now > 1000) { sk_->setStartUtcMs(cap); anchored_ = true; }
         }
+        /* ★★ beta92 BAND SKIMMER: once a second, the signals listed — "RTTY detected" before their settings are found,
+         *  then their text (its last 120 characters), as the RTTY skimmer's own list (vibe_rtty_skim_run.h). */
+        if (rowsDue(sk_->nowMs())) {
+            std::vector<SkimRow> rows;
+            for (const rttysk::SignalView& v : sk_->signals(true)) {
+                if ((int)rows.size() >= kSkimRowsMax) break;
+                SkimRow r;
+                r.mode = "RTTY"; r.id = v.id; r.hz = centre_ + v.offsetHz; r.snr = v.snrDb; r.quality = v.quality;
+                r.active = v.active; r.set = v.set; r.lastMs = v.lastMs; r.call = v.call; r.settings = v.settings;
+                r.text = v.text.size() > kSkimTextMax ? v.text.substr(v.text.size() - kSkimTextMax) : v.text;
+                rows.push_back(std::move(r));
+            }
+            publishRows(std::move(rows));
+        }
     }
 private:
     void searcher() {

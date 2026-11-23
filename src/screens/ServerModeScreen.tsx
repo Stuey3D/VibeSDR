@@ -61,7 +61,7 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'satlabels', label: 'Satellite labels on the waterfall (names only \u2014 ORBCOMM is never decoded)' },
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
-  { id: 'spotsband', label: 'Band: a whole band at once', parent: 'spots' },
+  { id: 'spotsband', label: 'Band skimmer: a whole band at once', parent: 'spots' },
   /* ★★ V12 THE BAND GOVERNOR, MODE BY MODE (decoders/digi_governor.h) — the setup page's bandModes node: Auto / Always /
    *  Off per mode, stored in this same CSV ("spotsband-psk" off in Band, "spotsband+wspr" always). Under Band. */
   { id: 'bandModes', label: '', parent: 'spotsband', node: 'bandModes' },
@@ -754,7 +754,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     if (band && band.grade !== 'green' && band.grade !== 'none' && !/(^|,)spotsband(,|$)/.test(bm)) {
       bm = bm ? bm + ',spotsband' : 'spotsband';
       setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
-      notes.push(`Digital spots: Band is off — a busy band measured ${Math.round(band.pct)}% of a core here. Switch it on to offer it anyway.`);
+      notes.push(`The band skimmer is off — a busy band measured ${Math.round(band.pct)}% of a core here. Switch it on to offer it anyway.`);
     }
     /* ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29) — the same rule as vibe_setup_page.h benchApplyDefaults: ON unless the
      *  box measured RED carrying it beside WFM stereo. The owner can switch it back on. */
@@ -5123,7 +5123,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       return (
                         <View key={m.id} style={{ flexBasis: '100%', gap: 6, opacity: inert ? 0.45 : 1 }}>
                           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
-                            Digital spots: Band, mode by mode. Band reads every mode on a band at once. To keep that affordable
+                            Band skimmer, mode by mode. The band skimmer reads every mode on a band at once. To keep that affordable
                             it decodes a mode only while its window has something in it, drops depth (extra passes) before it
                             drops a mode, and when the CPU is short it drops the least-used modes first. Auto lets it decide.
                             Always decodes the mode every period, even when its window looks empty and even over budget. Off

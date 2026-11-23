@@ -26,7 +26,7 @@ let wholeKeys: () => WholeRadioKey[] = () => [];
 /** main.ts hands over its keys once (the same toggles and caps as the mode menu's). */
 export function setWholeRadioKeys(fn: () => WholeRadioKey[]): void { wholeKeys = fn; }
 
-/** The section above the tabs: ADS-B · AIS · DAB · ISM · NDB, then DIGITAL SPOTS: BAND (the spots section's own node,
+/** The section above the tabs: ADS-B · AIS · DAB · ISM · NDB, then the BAND SKIMMER (the spots section's own node,
  *  moved in while that section is shown, with its reason line). Never dimmed — they tune the radio themselves. */
 function layoutWholeRadio(): void {
   const sec = document.getElementById('wholeRadioSec');
@@ -48,7 +48,7 @@ function layoutWholeRadio(): void {
   const spotsShown = !document.getElementById('spotsSection')?.hidden;
   const park = document.getElementById('spotsPark');
   if (band && why) {
-    // ★ In TUNES THE RADIO ITSELF it says DIGI BAND (the app's legend — the full "DIGITAL SPOTS: BAND" was the widest
+    // ★ In TUNES THE RADIO ITSELF it says BAND SKIM (the app's legend — the full name (once "DIGITAL SPOTS: BAND") was the widest
     //   key on the panel and halved every row); back in its own section it says it in full.
     if (spotsShown) { row.appendChild(band); sec.appendChild(why); bandLabel(band, true); }
     else if (park) { park.appendChild(band); park.after(why); bandLabel(band, false); }
@@ -92,7 +92,9 @@ function paintDim(): void {
  *  ★★ DIGI SPOTS / DIGI BAND (Stuart, 2026-10-29: "dont want super big buttons if we can help it"): every key is the widest
  *  legend's size, and DIGITAL SPOTS — then SPOTS: BAND — held a phone to two keys a row. */
 export const SPOTS_KEY_LABEL = 'DIGI SPOTS';
-export const BAND_KEY_LABEL = 'DIGI BAND';
+/* ★★ beta92 BAND SKIM (Stuart, 2026-11-23: "digi band should be called Band Skimmer as it covers cw which is analogue"):
+ *  BAND SKIMMER in full in its own section, BAND SKIM in a group (the same width as DIGI BAND — phones keep three a row). */
+export const BAND_KEY_LABEL = 'BAND SKIM';
 function spotsLabel(el: HTMLElement, inGroup: boolean): void {
   const t = Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim());
   if (t) t.textContent = inGroup ? SPOTS_KEY_LABEL : 'DIGITAL SPOTS: SINGLE MODE';
@@ -100,7 +102,7 @@ function spotsLabel(el: HTMLElement, inGroup: boolean): void {
 
 function bandLabel(el: HTMLElement, inWhole: boolean): void {
   const t = Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim());
-  if (t) t.textContent = inWhole ? BAND_KEY_LABEL : 'DIGITAL SPOTS: BAND';
+  if (t) t.textContent = inWhole ? BAND_KEY_LABEL : 'BAND SKIMMER';
 }
 
 /**

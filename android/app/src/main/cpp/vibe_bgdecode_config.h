@@ -136,7 +136,7 @@ inline const std::vector<DecoderDef>& decoders() {
         //    Band mode (decoders/digi_spotter.h) with its CPU governor — kept as ONE summary for the band, as FT8's is.
         //    The frequency only NAMES the band (7074 = 40 m): the slice is cut where the band's modes are (bandSpan).
         //    "usb" only because a VFO row has a demodulator — none runs (it is fed IQ, as a skimmer is).
-        { "spots-band",   "Digital spots: Band (summary)", "",      "ft8",   "usb",     0,    0,   0,     false, false, 0 },
+        { "spots-band",   "Band skimmer (summary)", "",      "ft8",   "usb",     0,    0,   0,     false, false, 0 },
         // ★★ V12 2026-10-27 — THE NDB SKIMMER (Stuart: NDB "must just run beside them" — the Lenovo's RSP at 1200 kHz,
         //    3 MS/s, with NAVTEX 489.5 + 517.5 and 160 m FT8). Every beacon in as much of the LF beacon band (190–535 kHz)
         //    as the profile's capture holds: the listener's own NDB skimmer on ONE IQ slice of the runner's channeliser,

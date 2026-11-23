@@ -336,3 +336,34 @@ All synthetic (no real radio, no server of Stuart's touched), built with `script
 - **Updated but not run here**: `scripts/test-web-spots.mjs` (11 chips on 20 m; the legend gains CW and RTTY) — it needs
   the web page rebuilt into `vibe_web_page.h` (scripts/build-web.mjs, the coordinator's step before a release) and Edge.
 - CPU: the scratch chip bench above (M5 Pro).
+
+## beta92 — the BAND SKIMMER (Stuart, 2026-11-23, the Lenovo RSP1A)
+
+"digi band should be called Band Skimmer as it covers cw which is analogue." Every word a person reads now says BAND
+SKIMMER (BAND SKIM on the compact key in a decoder group; "Band skimmer (summary)" on the Setup page's background VFO;
+"The band skimmer is not available …" in the refusals). The wire is untouched: scope `band`, `spotsband`, `spots-band`,
+`ft8band`, `digital_spot` — older servers and clients still talk.
+
+**The band_skim frame** (`vibe_decoder_host.h` `skimJsonLocked_`, on the decoder socket while Band runs; additive):
+
+    {"type":"band_skim","data":{"windows":[{"mode":"CW","lo":7000000,"hi":7040000,"state":"active"}, …],
+                                "signals":[{"mode","id","hz","snr","wpm","wpmLo","wpmHi","q","active","set","last",
+                                            "call","country","settings","text"}, …]}}
+
+- Each IQ engine (`digimodes/cw.h`, `rtty.h`) copies its skimmer's `signals()` into a `SkimRow` snapshot once a second
+  of stream time, on its OWN worker thread, under its own lock (`iq_worker.h` `rowsDue` / `publishRows`) — the decode
+  thread never reads decoder state. ≤ 40 rows per window, text ≤ 120 characters (the CW skimmer's own row).
+- `Spotter::skim` lists each CW / RTTY window (RF edges, state) and the rows of the windows still decoding (a paused,
+  shed or switched-off window's last rows are not shown as live).
+- The host sends it at most once a second, only when it changed (and every 15 s regardless); ≤ 80 rows; printable ASCII,
+  RTTY's line breaks as spaces. Typical frame on a test band: under 1 KB.
+
+**The clients** (`src/services/bandSkim.ts`, one rule for web and app — `scripts/test_band_skim.ts`):
+- a signal with no call yet is a row of its own: its frequency, "waiting for callsign" (never two rows for a station
+  already spotted within 150 Hz in the last 10 min);
+- EXPAND reads each CW / RTTY row's text in its confidence colours; EXPLAIN / RAW is in the band box's header;
+- the waterfall marks each signal heard (the signal-label layer, `src: 'skim'`, by call or mode, teal CW / olive RTTY),
+  while Band runs, whether or not SIGNAL LABELS is on; a tap tunes it;
+- the Band VFO is drawn over the band's span widened to the CW / RTTY windows (40 m: down to 7000 kHz).
+- An older server sends no frame: the list, the marks and the VFO are exactly as before.
+- End to end: `scripts/test-web-band-skim.mjs` (the CW bench clip on 40 m); server: `test-bg-band` "band_skim".

@@ -1974,7 +1974,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           leave it.</b> There is no EXIT DAB for them; you can still leave it when signed in as admin.</div>
         <!-- ★★ V12 BAND GOVERNOR (decoders/digi_governor.h): the owner's word per mode in "Digital spots: Band". -->
         <div id="bandModeWrap" class="hide" style="margin-top:12px">
-          <div class="hint"><b>Digital spots: Band, mode by mode.</b> Band reads every mode on a band at once. To keep that
+          <div class="hint"><b>Band skimmer, mode by mode.</b> The band skimmer reads every mode on a band at once. To keep that
             affordable it decodes a mode only while its window has something in it, drops depth (extra passes) before it
             drops a mode, and when the CPU is short it drops the least-used modes first (FT8, FT4, WSPR, JS8, FT2, JTTY,
             PSK, newer modes last). <b>Auto</b> lets it decide. <b>Always</b> decodes the mode every period, even when its
@@ -2502,7 +2502,7 @@ function dabOwnRender() {
  *  that row was not run here. scripts/test-setup-bench-stale.mjs checks this list against the benchmark's own ids. */
 const BENCH_KNOWN_ROWS = [
   ["dec_rtty", "RTTY"], ["dec_navtex", "NAVTEX"], ["dec_wefax", "WEFAX"], ["dec_sstv", "SSTV"], ["dec_time", "Time signals"],
-  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_ft8deep", "FT8 / FT4 dig deeper"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
+  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band skimmer"], ["dec_ft8deep", "FT8 / FT4 dig deeper"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
@@ -2861,7 +2861,7 @@ function benchApplyDefaults() {
   if (band && band.grade !== "green" && band.grade !== "none" && bandBox && bandBox.checked) {
     bandBox.checked = false;
     bandBox.dispatchEvent(new Event("change"));
-    benchNote(bandBox, "Digital spots: Band is off: a busy band measured " + Math.round(band.pct) + "% of a core here. Tick it to offer it anyway.");
+    benchNote(bandBox, "The band skimmer is off: a busy band measured " + Math.round(band.pct) + "% of a core here. Tick it to offer it anyway.");
   }
   // ★★ V12 LoRa ON EVERY CHANNEL ("lora+all", an option under LoRa) — the one INVERTED rule: a GREEN dec_lora_all ticks it
   //    ON on a fresh setup; anything else leaves it off with the figure beside it. The benchmark SETS THE DEFAULT, NEVER
@@ -3671,7 +3671,7 @@ const BLOCKABLE = [
   /* ★★ V12 (2026-10-26): Band spots — a whole band's digital frequencies at once, every mode on its own dial. Off here, a
    *  listener sees the Band button greyed with the reason (never hidden). The benchmark unticks it on a box that measured
    *  it below green (benchApplyDefaults) — the owner can always tick it back. Under it: Band's own mode-by-mode word. */
-  { id: "spotsband", label: "Band: a whole band at once", parent: "spots" },
+  { id: "spotsband", label: "Band skimmer: a whole band at once", parent: "spots" },
   { id: "bandModes", parent: "spotsband", node: "bandModeWrap" },
   /* ★★ V12 beta91 FT8 / FT4 "dig deeper" (Ft8Decoder::deepTier, docs/v12/FTX-SENSITIVITY.md § Deep tier) — AUTOMATIC
    *  (ft8DeepAuto, the server's decoders/ft8_deep_auto.h); ticking or unticking is the owner's own choice ("ft8+deep" /
@@ -4598,7 +4598,7 @@ function modeBlockSummary() {
   el.textContent = (off.length
     ? `Switched off: ${off.map(id => name(id) + (modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
     : "Everything this radio can do is offered.")
-    + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
+    + (band.length ? ` Band skimmer: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
     + (ft8DeepOwner() ? ` FT8 / FT4 dig deeper: ${ft8DeepOwner() > 0 ? "on" : "off"} (your choice).` : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
@@ -7708,7 +7708,7 @@ const BG_DECODERS = [
   // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"): every digital mode on the band
   //    the VFO's frequency is in (7074 = 40 m), the listener's own Band mode behind its CPU governor, ONE summary card
   //    for the band. Offered only where this radio has a band at all and Band is not switched off here (bgBandOk).
-  { id: "spots-band",   label: "Digital spots: Band (summary)", tone: 0,   modes: ["usb"], band: true },
+  { id: "spots-band",   label: "Band skimmer (summary)", tone: 0,   modes: ["usb"], band: true },
   // ★★ V12 2026-10-27 — THE NDB SKIMMER (Stuart: it runs BESIDE the other VFOs on the same capture — his Lenovo RSP at
   //    1200 kHz / 3 MS/s holds 190–535 kHz whole). Every beacon in as much of the band as the RF centre holds; its row's
   //    frequency and demodulator are greyed out (the decoder sets them), and it stores hz 0. Offered only where this radio
@@ -7887,7 +7887,7 @@ function bgBandReach(b, centre, rate) {
 }
 /** The line under a Band VFO: what it decodes there, or why it cannot. */
 function bgBandHint(v, centre, rate) {
-  if (!bgBandOk()) return { bad: true, text: "Band digital spots are switched off on this radio (Modes and decoders) \u2014 choose another decoder or switch Band back on." };
+  if (!bgBandOk()) return { bad: true, text: "The band skimmer is switched off on this radio (Modes and decoders) \u2014 choose another decoder or switch it back on." };
   const bl = bgBandList();
   if (bl) {
     const b = bgSpotBand(v.hz);

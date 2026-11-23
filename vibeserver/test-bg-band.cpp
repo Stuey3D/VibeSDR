@@ -132,10 +132,10 @@ static void addPsk(std::vector<cf32>& x, double fs, double offHz, double startSe
 }
 
 static void config() {
-    std::printf("── the config: \"Digital spots: Band (summary)\" ──\n");
+    std::printf("── the config: \"Band skimmer (summary)\" ──\n");
     bg::installBandSpan();
     const bg::DecoderDef* d = bg::decoderDef("spots-band");
-    ok(d && std::string(d->label) == "Digital spots: Band (summary)", "the decoder is listed");
+    ok(d && std::string(d->label) == "Band skimmer (summary)", "the decoder is listed");
     ok(bg::decoderFitsDemod("spots-band", "usb") && !bg::decoderFitsDemod("spots-band", "lsb") && !bg::decoderFitsDemod("spots-band", "nfm"),
        "offered on a USB row only (a VFO row has a demodulator; none runs — it is fed IQ)");
     bg::BandSpan sp;
@@ -267,13 +267,13 @@ static void switchedOff() {
     p.profileIdx = 0; p.sampleRate = 2400000; p.centreHz = 6500000; p.fftSize = 65536; p.slots = &slots; p.store = &s;
     p.profile.centreHz = 6500000;
     p.profile.vfos = { bg::Vfo{7074000, "usb", "spots-band"}, bg::Vfo{6000000, "usb", "navtex"} };
-    p.bandWhyNot = [] { return std::string("the server owner has switched Band spots off on this receiver (Setup \xe2\x86\x92 Modes and decoders)"); };
+    p.bandWhyNot = [] { return std::string("the server owner has switched the band skimmer off on this receiver (Setup \xe2\x86\x92 Modes and decoders)"); };
     std::vector<std::string> logs; std::mutex lm;
     p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
     r.start(p);
     ok(r.decodersRunning() == 1 && slots.inUse() == 1, "one decoder (NAVTEX), one slot");
     const std::string st = r.statusJson();
-    ok(st.find("\"state\":\"paused\"") != std::string::npos && st.find("switched Band spots off") != std::string::npos, "the Band VFO: paused, with why");
+    ok(st.find("\"state\":\"paused\"") != std::string::npos && st.find("switched the band skimmer off") != std::string::npos, "the Band VFO: paused, with why");
     r.slotTickForTest();
     ok(r.decodersRunning() == 1, "…and the slot housekeeping never starts it behind the owner's back");
     bool said = false; { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find("not started") != std::string::npos) said = true; }
@@ -559,7 +559,29 @@ static void livePath() {
     ok(peer->count("\"mode\":\"RTTY\",\"callsign\":\"G4RTY\"", "digital_spot") > 0, "a digital_spot frame: RTTY G4RTY — " + peer->last("G4RTY").substr(0, 240));
     ok(peer->count("\"mode\":\"PSK63\",\"callsign\":\"G4PSK\"", "digital_spot") > 0, "a digital_spot frame: PSK63 G4PSK (wide PSK) — " + peer->last("G4PSK").substr(0, 240));
     ok(peer->count("\"callsign\":\"G4IRX\"", "\"mode\":\"FT8\"") > 0, "…and FT8 G4IRX as ever");
+    /* ★★ beta92 THE BAND SKIMMER'S FRAME (Stuart 2026-11-23): the CW and RTTY windows being skimmed (the VFO's width), and
+     *  each signal followed with its frequency, call and readable text (EXPAND, the waterfall marks) — bounded. */
+    {
+        const std::string sk = host->spotsSkimJson();
+        ok(sk.rfind("{\"type\":\"band_skim\",\"data\":{\"windows\":[", 0) == 0, "band_skim: the frame's shape — " + sk.substr(0, 160));
+        ok(sk.find("{\"mode\":\"CW\",\"lo\":7000000,\"hi\":7040000") != std::string::npos, "band_skim: 40 m's CW window, 7000–7040 kHz (the VFO's width)");
+        ok(sk.find("{\"mode\":\"RTTY\",\"lo\":") != std::string::npos, "band_skim: and its RTTY window");
+        const size_t cw = sk.find("\"mode\":\"CW\",\"id\":");
+        ok(cw != std::string::npos, "band_skim: a CW signal followed");
+        const size_t g4 = sk.find("\"call\":\"G4CWX\"");
+        ok(g4 != std::string::npos, "band_skim: …with its call, G4CWX");
+        const size_t tx = g4 == std::string::npos ? std::string::npos : sk.find("\"text\":\"", g4);
+        const std::string txt = tx == std::string::npos ? "" : sk.substr(tx + 8, sk.find('"', tx + 8) - tx - 8);
+        ok(txt.find("G4CWX") != std::string::npos && txt.size() <= 120, "band_skim: …and its decoded text, readable, ≤ 120 characters: \"" + txt + "\"");
+        ok(sk.find("\"mode\":\"RTTY\",\"id\":") != std::string::npos && sk.find("\"call\":\"G4RTY\"") != std::string::npos,
+           "band_skim: an RTTY signal followed, with its call G4RTY");
+        ok(sk.find('\n') == std::string::npos && sk.find('\r') == std::string::npos, "band_skim: no raw newline in the frame (RTTY text's lines are spaces)");
+        ok(sk.size() < 80 * 420 + 2000, "band_skim: bounded (" + std::to_string(sk.size()) + " bytes)");
+        ok(peer->count("\"type\":\"band_skim\"", "\"windows\"") > 0, "band_skim: …and the decoder socket was sent it");
+        ok(peer->count("\"type\":\"band_skim\"", "G4CWX") > 0, "band_skim: …with the CW signal in it");
+    }
     host->stopSpots();
+    ok(host->spotsSkimJson().empty(), "band_skim: nothing once Band stops");
     host->shutdown();
     // ★ the owner switched the three chips off for Band: their slice is not cut at all (the DSP thread's extract and a
     //   one-pipeline radio's front-end decimation are given back) — only JTTY's extra slice is asked for

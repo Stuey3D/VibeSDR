@@ -1902,7 +1902,7 @@ export class Waterfall {
       const p = this.knownPlaced[pi], hi = isHi(pi);
       const y = this.markerLabelY(H, p.row);
       const boxTop = this.markerLabelY(H, p.row + (p.span ?? 1) - 1) - 9 * dpr, boxBot = y + 4 * dpr;
-      ctx.fillStyle = hi ? hiCol : isDxLabel(p.sig) && !isDabBlockSignal(p.sig) ? DX_LABEL_COLOUR : isSatLabel(p.sig) ? SAT_LABEL_COLOUR : KNOWN_LABEL_COLOUR;
+      ctx.fillStyle = hi ? hiCol : isDxLabel(p.sig) && !isDabBlockSignal(p.sig) ? DX_LABEL_COLOUR : isSatLabel(p.sig) || p.sig.skim ? knownLabelColour(p.sig) : KNOWN_LABEL_COLOUR;   // ★★ beta92 a band skimmer mark: its mode's colour
       ctx.globalAlpha = 0.8;
       // the tick: from the box down to the spectrum's floor, or beside the box on the waterfall
       const t0 = boxTop, t1 = showSpec ? specH : boxBot;
@@ -1930,7 +1930,7 @@ export class Waterfall {
       // ★★ V12 A DX CATCH (knownSignals.ts dxDialSignals — Stuart, 2026-11-16): ITALIC, in its own colour; on a DAB block
       //    named only by one, just the name line under the block
       const dx = isDxLabel(s), dxBlock = dx && isDabBlockSignal(s);
-      const base = hi ? hiCol : dx && !dxBlock ? DX_LABEL_COLOUR : isSatLabel(s) ? SAT_LABEL_COLOUR : KNOWN_LABEL_COLOUR;   // ★★ beta91 a satellite: sky blue
+      const base = hi ? hiCol : dx && !dxBlock ? DX_LABEL_COLOUR : isSatLabel(s) || s.skim ? knownLabelColour(s) : KNOWN_LABEL_COLOUR;   // ★★ beta91 a satellite: sky blue
       const dxLine = (li: number) => dx && (!dxBlock || li >= 1);
       const setLine = (li: number) => {
         const d = dxLine(li);

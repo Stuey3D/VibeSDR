@@ -37,10 +37,10 @@ ok(bgVfoLine({ hz: 7025000, dec: 'cwskim', label: 'CW skimmer, 48 kHz (summary)'
 ok(bgVfoLine({ hz: 14071500, dec: 'pskskim', label: 'PSK skimmer, 12 kHz (summary)', state: 'running', spots: 9, countries: 5, cpuPct: 0.1 })
    === '14071.5 PSK skimmer \u00b7 running \u00b7 9 spots, 5 countries so far \u00b7 0.1 %', 'PSK skimmer live count');
 // ★ V12 2026-10-27: a Band digital-spots VFO, named for its band
-ok(bgVfoLine({ hz: 7074000, dec: 'spots-band', label: 'Digital spots: Band (summary)', band: '40 m', state: 'running', spots: 212, countries: 31, cpuPct: 2.1 })
-   === '7074.0 Digital spots: Band 40 m \u00b7 running \u00b7 212 spots, 31 countries so far \u00b7 2.1 %', 'Band VFO live count');
-ok(bgVfoLine({ hz: 7074000, dec: 'spots-band', label: 'Digital spots: Band (summary)', band: '40 m', state: 'paused', why: 'the server owner has switched Band spots off on this receiver' })
-   .includes('paused (the server owner has switched Band spots off'), 'Band VFO switched off here: paused, with why');
+ok(bgVfoLine({ hz: 7074000, dec: 'spots-band', label: 'Band skimmer (summary)', band: '40 m', state: 'running', spots: 212, countries: 31, cpuPct: 2.1 })
+   === '7074.0 Band skimmer 40 m \u00b7 running \u00b7 212 spots, 31 countries so far \u00b7 2.1 %', 'Band VFO live count');
+ok(bgVfoLine({ hz: 7074000, dec: 'spots-band', label: 'Band skimmer (summary)', band: '40 m', state: 'paused', why: 'the server owner has switched the band skimmer off on this receiver' })
+   .includes('paused (the server owner has switched the band skimmer off'), 'Band VFO switched off here: paused, with why');
 // ★ V12 2026-10-27: an NDB skimmer VFO — no frequency of its own, the part of the band it covers and its beacons
 ok(bgVfoLine({ hz: 0, dec: 'ndb-skim', label: 'NDB skimmer (summary)', ndbLo: 190000, ndbHi: 535000, ndb: '12 beacons identified of 41 carriers', state: 'running', cpuPct: 3.2 })
    === 'NDB skimmer 190–535 kHz · running · 12 beacons identified of 41 carriers · 3.2 %', 'NDB skimmer VFO line');

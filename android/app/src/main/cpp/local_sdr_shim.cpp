@@ -32893,7 +32893,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const std::string why = vsSpotSpans().empty() ? std::string("this radio cannot tune to a band the digital modes use")
                                                                   : vsSpotsBandWhyNot();
                     LOGI("digital spots (band) refused — %s", why.c_str());
-                    sendDecoderRefusal(sock, "spots", "ft8band", "blocked", "Band spots are not available: " + why + ".");
+                    sendDecoderRefusal(sock, "spots", "ft8band", "blocked", "The band skimmer is not available: " + why + ".");
                 } else if (wantsB(payload)) {
                     // ★★★ SPOTS ON VFO B (Single on B's audio; Band on B's slice of the band, B's dial) — see watchDecBKey.
                     std::shared_ptr<DecoderHost> hb = takeHostB();
@@ -43398,7 +43398,7 @@ static std::vector<vibe::digi::Span> vsSpotSpans() {
  *  DISABLED WITH ITS REASON, as ADS-B and ISM are. */
 static std::string vsSpotsBandWhyNot() {
     if (vsModeBlocked("spots")) return "the server owner has switched digital spots off on this receiver";
-    if (vsModeBlocked("spotsband")) return "the server owner has switched Band spots off on this receiver (Setup \xe2\x86\x92 Modes and decoders)";
+    if (vsModeBlocked("spotsband")) return "the server owner has switched the band skimmer off on this receiver (Setup \xe2\x86\x92 Modes and decoders)";
     return {};
 }
 
@@ -44218,13 +44218,13 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
             /* ★★ V12: the digital-spots engines skip a SLOT when the last one is still decoding (never wait) — that is
              *  them being too heavy for this box, even with no audio dropped. Band mode runs several at once. */
             if (hst->spotsOn())
-                watch.note("spots:" + kv.first, hst->spotsScope() == "band" ? "Digital spots: Band" : "Digital spots",
+                watch.note("spots:" + kv.first, hst->spotsScope() == "band" ? "Band skimmer" : "Digital spots",
                            hst->spotSlotsSkipped(), nowMs);
             /* ★★ V12 Band governor: a mode SHED over budget (something in its window, not decoded) is this box being too
              *  light for everything on the band — named as such, once a minute, beside the slots skipped. Windows left
              *  idle because they were EMPTY are the gate working, not a fault, and are not counted here. */
             if (hst->spotsOn() && hst->spotsScope() == "band")
-                watch.note("spotshed:" + kv.first, "Digital spots: Band (modes shed)", hst->spotPeriodsShed(), nowMs);
+                watch.note("spotshed:" + kv.first, "Band skimmer (modes shed)", hst->spotPeriodsShed(), nowMs);
         }
         /* ★★ V12 (2026-10-27, Stuart's Pi 2): the one-pipeline radio's slice tap (vibe_wide_tap.h) drops the radio's IQ when
          *  it falls half a second behind — Band then loses whole slots without a single "slot skipped". Named here too. */

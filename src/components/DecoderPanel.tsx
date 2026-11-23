@@ -55,6 +55,9 @@ import type { CwList, CwSpot } from '../services/cwList';
 import type { JttySignal, JttySpot } from '../services/jtty';
 import type { DscCall } from '../services/dsc';
 import { spotFilterModes, spotModeMatches, spotChipText, type SpotModeState } from '../services/spotsBand';
+import { bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../services/bandSkim';   // ★★ beta92 the BAND SKIMMER
+import { CW_Q_COLOURS } from '../services/cwList';
+import { cwWpmText } from '../utils/cwFormat';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
          DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
@@ -144,6 +147,8 @@ export interface DecoderPanelProps {
   /** ★ V12 BAND: the title while Band runs ("DIGITAL SPOTS · 20 M BAND") and the governor's per-mode chips. */
   spotsTitle?:     string;
   spotModeStates?: SpotModeState[];
+  /** ★★ beta92 THE BAND SKIMMER's CW / RTTY rows (services/bandSkim.ts) — null = not Band, or an older server. */
+  bandSkim?: BandSkim | null;
   /** ★ V12 APRS (VibeServer): the station rows, messages and packets for the APRS view (AprsView), and MAP — the station
    *  map, on a station when a key is given (null where there is no map: Apple TV). Set only while APRS is the decoder. */
   aprs?:           { rows: AprsBoxRow[]; messages: string[]; log: { t: number; line: string }[]; baud: 1200 | 300;
@@ -199,9 +204,11 @@ function fmtSpotTimeSec(t: number): string {
 
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
 // render, and unchanged rows skip re-render entirely when new spots flush in.
-const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded }: {
+const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded, skimText, skimColour }: {
   s: SpotRow; isCW: boolean; font: string; callColor: string; expanded: boolean;
   onTuneHz?: (hz: number) => void;
+  /** ★★ beta92 a CW / RTTY spot in the BAND SKIMMER: its signal's message (expanded only) and its confidence colour. */
+  skimText?: string; skimColour?: string;
 }) {
   const dp = useDecoderStyles(makeDp);
   // Line 1: Time · Call · Band · Mode · SNR · Country · Distance.
@@ -255,6 +262,39 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
             s.bearing != null ? `${Math.round(s.bearing)}°` : undefined,
             fmtSpotTimeSec(s.time),
           ].filter(Boolean).join(' · ')}
+        </Text>
+      )}
+      {/* ★★ beta92 BAND SKIMMER (Stuart: "when expanded we should also be able to read the cw message like we do in the
+          cw skimmer, same for rtty"): the message, WRAPPED, in its signal's confidence colour (the CW skimmer's). */}
+      {expanded && !!skimText && (
+        <Text style={[dp.skimText, { fontFamily: font }, skimColour ? { color: skimColour } : null]}>{skimText}</Text>
+      )}
+    </TouchableOpacity>
+  );
+});
+
+/** ★★★ beta92 A BAND SKIMMER SIGNAL WITH NO CALLSIGN YET (Stuart, 2026-11-23: "a CW row shows its FREQUENCY and 'waiting
+ *  for callsign' when no call has been detected yet"): its frequency where a spot has its time, its mode in its colour,
+ *  SNR, "waiting for callsign", its speed (CW) or settings (RTTY); EXPANDED, what it is sending. A tap tunes it. */
+const SkimWaitRow = React.memo(function SkimWaitRow({ sg, font, expanded, plain, onTuneHz }: {
+  sg: BandSkimSignal; font: string; expanded: boolean; plain: boolean; onTuneHz?: (hz: number) => void;
+}) {
+  const dp = useDecoderStyles(makeDp);
+  const rate = sg.mode === 'CW' ? cwWpmText(sg) : (sg.set ? sg.settings.replace(/ baud \/ /, '/').replace(/ Hz/, '') : '');
+  const t = bandSkimText(sg), wait = sg.mode === 'RTTY' && !sg.set;
+  return (
+    <TouchableOpacity style={expanded ? dp.spotRowTall : dp.spotRow} onPress={() => onTuneHz?.(sg.hz)} activeOpacity={0.6}
+      accessibilityLabel={`${sg.mode} at ${(sg.hz / 1e3).toFixed(2)} kilohertz, ${BAND_SKIM_WAITING}`}>
+      <View style={dp.spotLine}>
+        <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>{(sg.hz / 1e3).toFixed(2)}</Text>
+        <Text style={[dp.spotCell, dp.skimWait, { fontFamily: font }]} numberOfLines={1}>{BAND_SKIM_WAITING}</Text>
+        <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font, color: digiModeStyle(sg.mode).colour }]}>{sg.mode}</Text>
+        <Text style={[dp.spotCell, dp.spotSnr, sg.snr >= 0 ? dp.snrOk : dp.snrLow, { fontFamily: font }]}>{Math.round(sg.snr)}</Text>
+        <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>{rate}</Text>
+      </View>
+      {expanded && (
+        <Text style={[dp.skimText, { fontFamily: font }, wait ? dp.skimWaitText : { color: CW_Q_COLOURS[sg.q] }]}>
+          {wait ? t : (plain ? plainEnglish(t) : t) || '\u2026'}
         </Text>
       )}
     </TouchableOpacity>
@@ -324,7 +364,7 @@ export default function DecoderPanel({
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, rtty = null, jtty = null, ncdxf = null, balloon = null, dsc = null, aprs = null, scanner = null,
-  spotModes, spotsTitle, spotModeStates,
+  spotModes, spotsTitle, spotModeStates, bandSkim = null,
 }: DecoderPanelProps) {
   const sfModes = React.useMemo(() => spotFilterModes(spotModes ?? SF_MODES_UBERSDR), [spotModes]);
   /* ★ V12: CW and PSK share one list view (the web's #cwList) — whichever is the decoder fills it. */
@@ -427,11 +467,24 @@ export default function DecoderPanel({
   // ★ a filter for a mode this server no longer lists falls back to ALL (never a filter that hides everything)
   useEffect(() => { if (!sfModes.includes(sfMode)) setSfMode('ALL'); }, [sfModes, sfMode]);
 
-  const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
-    <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
-                 callColor={tk.accent}
-                 onTuneHz={onTuneHz} expanded={spotsExpanded} />
-  ), [spotsKind, onTuneHz, spotsExpanded, tk.accent]);
+  /* ★★ beta92 EXPLAIN / RAW (the CW box's key, remembered on this device) reads the band skimmer's CW / RTTY text too. */
+  const [cwPlain, setCwPlain] = useState(false);
+  const renderSpot = useCallback(({ item }: { item: SpotRow }) => {
+    // ★★ beta92 a CW / RTTY spot in the band skimmer: EXPANDED, the message its signal is sending
+    const sg = spotsExpanded && bandSkim ? bandSkimSignalFor(bandSkim, { mode: item.mode, callsign: item.call, frequency: item.freqHz }) : null;
+    const t = sg ? bandSkimText(sg) : '';
+    return (
+      <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
+                   callColor={tk.accent}
+                   onTuneHz={onTuneHz} expanded={spotsExpanded}
+                   skimText={sg ? ((cwPlain && sg.set ? plainEnglish(t) : t) || '\u2026') : undefined}
+                   skimColour={sg && sg.set ? CW_Q_COLOURS[sg.q] : undefined} />
+    );
+  }, [spotsKind, onTuneHz, spotsExpanded, tk.accent, bandSkim, cwPlain]);
+  /* ★★ beta92 "waiting for callsign" rows — the band skimmer's signals with no call yet, at the top, the MODE filter applied. */
+  const skimPending = React.useMemo(() => (isSpotsMode && spotsKind === 'digi' && bandSkim
+    ? bandSkimPending(bandSkim, sfMode, spots.map((p) => ({ mode: p.mode, callsign: p.call, frequency: p.freqHz, timestamp: p.time }))) : []),
+    [isSpotsMode, spotsKind, bandSkim, sfMode, spots]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -474,7 +527,6 @@ export default function DecoderPanel({
    *  same setting, the same dictionary — RTTY's one-signal text, and the RTTY skimmer's rows and card. */
   const isCwOnly = (isCw && activeDecoder === 'cw') || activeDecoder === 'rtty';
   const what = activeDecoder === 'rtty' ? 'RTTY' : 'CW';
-  const [cwPlain, setCwPlain] = useState(false);
   useEffect(() => {
     AsyncStorage.getItem(CW_PLAIN_KEY).then((v: string | null) => { if (v === '1') setCwPlain(true); }).catch(() => {});
   }, []);
@@ -1331,9 +1383,9 @@ export default function DecoderPanel({
           {/* ★★ V12 EXPLAIN ↔ RAW — CW in plain English (see cwPlain). Beside CLR. The legend names what a press DOES
            *  (Stuart, 2026-10-30: it "changes to RAW to switch back to RAW cw"); not TRANSLATE (reads as another
            *  language) nor DECODE (reads as a decoder like RTTY). Never lit — the legend carries the state. */}
-          {isCwOnly && (
+          {(isCwOnly || (isSpotsMode && !!bandSkim)) && (   /* ★★ beta92 + the band skimmer's CW / RTTY text */
             <HBtn run hitSlop={6}
-              accessibilityLabel={cwPlain ? `Show the ${what} as sent` : `Explain the ${what} in plain English`}
+              accessibilityLabel={cwPlain ? `Show the ${isCwOnly ? what : 'CW and RTTY'} as sent` : `Explain the ${isCwOnly ? what : 'CW and RTTY'} in plain English`}
               accessibilityState={{ selected: cwPlain }}
               onPress={(e: any) => { e?.stopPropagation(); toggleCwPlain(); }}>
               <DecoderKeyLabel>{cwPlain ? 'RAW' : 'EXPLAIN'}</DecoderKeyLabel>
@@ -1792,8 +1844,15 @@ export default function DecoderPanel({
             removeClippedSubviews={false}
             // A stable key per spot rather than one including the index, so a row keeps its
             // identity across the re-render that expanding causes.
-            extraData={spotsExpanded}
-            ListEmptyComponent={
+            extraData={[spotsExpanded, bandSkim, cwPlain]}
+            ListHeaderComponent={skimPending.length ? (
+              <View>
+                {skimPending.map((sg) => (
+                  <SkimWaitRow key={`skw-${sg.mode}${sg.id}`} sg={sg} font={FONT} expanded={spotsExpanded} plain={cwPlain} onTuneHz={onTuneHz} />
+                ))}
+              </View>
+            ) : null}
+            ListEmptyComponent={skimPending.length ? null :
               <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
                 waiting for spots…
               </Text>
@@ -1898,6 +1957,10 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   spotDetail:  { fontSize: 11, letterSpacing: 0.2, color: T.muted,
                  marginLeft: 44, marginTop: 3 },
   spotEmpty:   { padding: 12, textAlign: 'center' },
+  // ★★ beta92 the band skimmer: "waiting for callsign" (dim, italic — not a call) and an expanded row's message (wrapped)
+  skimWait:    { flex: 1, minWidth: 0, color: T.muted, fontStyle: 'italic', fontSize: 11 },
+  skimText:    { fontSize: 12, lineHeight: 16, marginLeft: 44, marginTop: 3, color: T.value },
+  skimWaitText: { color: T.muted, fontStyle: 'italic' },
   /* ★ NAVTEX's title line: what the message is on the left, how it arrived on the right; wraps rather than
    *  clipping on the SE. A hairline under it, as the list rows have. */
   nvHead:      { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10, rowGap: 2,

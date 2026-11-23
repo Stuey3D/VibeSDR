@@ -1,6 +1,6 @@
 // test-setup-bg-band.mjs — the setup page's background-decoding editor with a BAND DIGITAL-SPOTS VFO (V12, 2026-10-27),
 // its REAL code against a DOM stand-in (the harness of test-setup-bg-ism.mjs). Stuart: "Also full band digital modes
-// too." A VFO row offers "Digital spots: Band (summary)" on USB only where this radio can run it (not on an Icom, not with
+// too." A VFO row offers "Band skimmer (summary)" (beta92; once "Digital spots: Band (summary)") on USB only where this radio can run it (not on an Icom, not with
 // digital spots or Band switched off here, not where the radio reaches no band); choosing it says which band and what is
 // decoded there, or why it cannot run; it saves as {"dec":"spots-band"} and reads back.
 // ★★ 2026-10-27 (Stuart): the decoder sets the frequency — a BAND PICKER (only the bands the profile's capture holds) in
@@ -54,7 +54,7 @@ const LENOVO = { on: true, waitMin: 5, profiles: [{ centre: 1000000, from: '00:0
 let api = mk(HW);
 api.bgLoad({ driver: 'sdrplay', bgDecode: JSON.stringify(LENOVO) });
 ok(vfoRows().length === 2, 'the Lenovo-style profile: NAVTEX + 160 m FT8, two rows');
-ok(decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), 'a USB row offers "Digital spots: Band (summary)"');
+ok(decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), 'a USB row offers "Band skimmer (summary)"');
 ok(api.bgCollect() === JSON.stringify(LENOVO), 'an ordinary profile still saves back byte for byte');
 modeSel(vfoRows()[1]).value = 'lsb'; modeSel(vfoRows()[1]).onchange();
 ok(!decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), '…but not on LSB (no demodulator runs; Band is USB dials)');

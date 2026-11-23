@@ -60,6 +60,27 @@ struct Spot {
     double rfHz = NAN;
 };
 
+/** ★★ V12 beta92 BAND SKIMMER (Stuart 2026-11-23: "when expanded we should also be able to read the cw message like we
+ *  do in the cw skimmer, same for rtty"): one signal an IQ engine (CW, RTTY) is following, as the band box lists it —
+ *  heard before a callsign is ("waiting for callsign"), its recent text, where it is. Plain data, BOUNDED by the engine
+ *  (≤ kSkimRowsMax rows, ≤ kSkimTextMax characters each) — the host sends it as the band_skim frame. */
+struct SkimRow {
+    std::string mode;          ///< "CW" / "RTTY"
+    int     id = 0;            ///< the engine's own signal id (unique within one engine)
+    double  hz = 0;            ///< RF (Hz)
+    float   snr = 0;           ///< as the standalone skimmer reports it (CW: its 47 Hz bin; RTTY: the tones over the floor)
+    float   wpm = 0; int wpmLo = 0, wpmHi = 0;   ///< CW only
+    float   quality = 0;       ///< 0..1
+    bool    active = false;    ///< still heard (false = recently gone)
+    bool    set = true;        ///< RTTY: its settings found (false = "RTTY detected — waiting for its settings")
+    int64_t lastMs = 0;
+    std::string call;          ///< "" until a callsign is read
+    std::string settings;      ///< RTTY: "45 baud / 170 Hz" once set
+    std::string text;          ///< the last kSkimTextMax characters decoded on it
+};
+constexpr int kSkimRowsMax = 40;        ///< per engine (window)
+constexpr size_t kSkimTextMax = 120;    ///< the standalone CW skimmer's own row length (vibe_cw_run.h)
+
 /** One running decoder of one mode on one dial. Made by ModeDef::make; owned by the host. */
 class Engine {
 public:
@@ -83,6 +104,9 @@ public:
     virtual double backlogSec() const { return 0.0; }
     /** ★ The run stopped being fed (shed, paused, off): drop whatever is queued — it is stale by the time it would be read. */
     virtual void idle() {}
+    /** ★★ beta92: the signals an IQ engine follows now (the BAND SKIMMER's readable rows) — appended to `out`. Any thread;
+     *  an engine copies its last snapshot under its own lock (never the decoder's live state). Audio engines add none. */
+    virtual void skimRows(std::vector<SkimRow>& out) const { (void)out; }
 
     /** Set by the host before audio flows. May be called from any thread. */
     std::function<void(const Spot&)> onSpot;

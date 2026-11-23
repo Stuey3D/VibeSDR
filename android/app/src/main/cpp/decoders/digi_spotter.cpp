@@ -686,6 +686,19 @@ std::vector<Spotter::ModeStatus> Spotter::status() const {
     return out;
 }
 
+void Spotter::skim(std::vector<SkimWindow>& wins, std::vector<SkimRow>& rows) const {
+    std::lock_guard<std::mutex> lk(statMtx_);
+    for (auto& kv : chans_)
+        for (const Run& r : kv.second.runs) {
+            if (!r.def->iq || !r.gate || !r.eng) continue;
+            SkimWindow w; w.mode = r.def->name; w.loHz = r.gate->loHz; w.hiHz = r.gate->hiHz; w.state = r.gate->rs;
+            wins.push_back(w);
+            // ★ the engine's own snapshot (its lock, never its decoder's live state) — only while it decodes: a paused, shed
+            //   or switched-off window's last rows would read as signals still being followed
+            if (w.state != RunState::Off && w.state != RunState::Shed && w.state != RunState::Paused) r.eng->skimRows(rows);
+        }
+}
+
 uint64_t Spotter::slotsSkipped() const {
     std::lock_guard<std::mutex> lk(statMtx_);
     uint64_t n = retiredSkips_;

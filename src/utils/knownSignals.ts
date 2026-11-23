@@ -64,7 +64,7 @@ export interface KnownSignal {
   dialHz: number; mode: string;
   /** Higher wins a collision (PRIO_*). */
   prio: number;
-  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx' | 'tag' | 'sat';   // 'sat' = a satellite in range (beta91 satLabelSignals)   // 'dab' = a Band III block (dabBlockView.ts); 'tag' = the server identified its shape (sigTagSignals)
+  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx' | 'tag' | 'sat' | 'skim';   // 'skim' = beta92 a band skimmer CW / RTTY signal (services/bandSkim.ts)   // 'sat' = a satellite in range (beta91 satLabelSignals)   // 'dab' = a Band III block (dabBlockView.ts); 'tag' = the server identified its shape (sigTagSignals)
   /** The decoder's settings for this signal, where they are published (curated entries only). */
   preset?: KnownPreset;
   /** ★★ V12 a DX CATCH from the server's DX Log (dxDialSignals) — drawn ITALIC in DX_LABEL_COLOUR. On a wide DAB view a
@@ -76,6 +76,8 @@ export interface KnownSignal {
   /** ★★ beta91 a SATELLITE IN RANGE (satLabelSignals): the birds it names (one, or a label-only constellation's several
    *  merged), the highest one's elevation, and whether it is a name only (ORBCOMM — never decoded). */
   sat?: { names: string[]; tx: string; el: number; labelOnly: boolean };
+  /** ★★ beta92 a BAND SKIMMER signal (services/bandSkim.ts bandSkimLabels): its mode and the callsign read ("" = not yet). */
+  skim?: { mode: 'CW' | 'RTTY'; call: string };
 }
 /** What a DX label carries beyond its text: when it was last heard (unix s), its name, and its DAB block (DAB only). */
 export interface DxDialMark {
@@ -662,8 +664,10 @@ export function withSatLabels(list: readonly KnownSignal[], sats: readonly Known
 }
 /** ★ A label's colour, line and text alike: a DX catch's lemon, a satellite's sky blue, else the labels' lilac. */
 export function knownLabelColour(s: KnownSignal | null | undefined): string {
-  return s && s.dx ? DX_LABEL_COLOUR : s && s.src === 'sat' ? SAT_LABEL_COLOUR : KNOWN_LABEL_COLOUR;
+  return s && s.dx ? DX_LABEL_COLOUR : s && s.src === 'sat' ? SAT_LABEL_COLOUR : s && s.skim ? SKIM_LABEL_COLOUR[s.skim.mode] : KNOWN_LABEL_COLOUR;
 }
+/** ★★ beta92 a band skimmer mark's colour: its mode's (digiModes.ts — teal CW, olive RTTY; kept equal by test_band_skim). */
+export const SKIM_LABEL_COLOUR: Readonly<Record<'CW' | 'RTTY', string>> = { CW: '#44AA99', RTTY: '#999933' };
 
 /** Labels plus tags, one sorted list (tags already cleared by sigTagSignals). */
 export function withSigTags(list: readonly KnownSignal[], tags: readonly KnownSignal[]): KnownSignal[] {

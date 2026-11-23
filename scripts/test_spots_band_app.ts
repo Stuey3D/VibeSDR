@@ -5,6 +5,7 @@
  *
  * Run: npx tsx scripts/test_spots_band_app.ts   (run-tests.sh does)
  */
+import { bandSkimTitle } from '../src/services/bandSkim.ts';
 import { readFileSync } from 'node:fs';
 import {
   parseSpotModes, parseSpotsBandCap, spotFilterModes, spotModeMatches, spotsTitleText, spotsBandHint, parseSpotsStatus,
@@ -69,7 +70,8 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
   const body = cut(/function spotsTitle\(\): string \{\n([\s\S]*?)\n\}/, 'spotsTitle');
   if (body) {
     // ★ aaa2060e3: Band is the VFO it runs on (vfoNow(spotsVfo)) — here VFO A, whose status is `spec`.
-    const web = new Function('spotBandAt', `return function (bandSpots, spotBandCap, spec, spotModes) {\n const spotsVfo = 'A', vfoNow = () => spec;\n${body}\n};`)(spotBandAt) as
+    // ★★ beta92: the web's Band title is bandSkimTitle's (services/bandSkim.ts) — handed in as the page has it
+    const web = new Function('spotBandAt', 'bandSkimTitle', `return function (bandSpots, spotBandCap, spec, spotModes) {\n const spotsVfo = 'A', vfoNow = () => spec;\n${body}\n};`)(spotBandAt, bandSkimTitle) as
       (b: boolean, cap: any, spec: any, modes: string[]) => string;
     const cap = parseSpotsBandCap({ spotsBand: true, spotBands: BANDS })!;
     for (const [band, hz, modes] of [[true, 14_074_000, ['FT8']], [true, 10_136_000, ['FT8']], [false, 14_074_000, ['FT8', 'FT4']],
@@ -77,9 +79,10 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
       eq(`title band=${band} ${hz} ${modes.join('+')}`, spotsTitleText(band, cap, hz, [...modes]), web(band, cap, { frequency: hz }, [...modes]));
     }
     eq('title of an older server (no list)', spotsTitleText(false, undefined, 0, undefined), 'FT8 / FT4 SPOTS');
+    eq('beta92: Band says BAND SKIMMER and the band', spotsTitleText(true, cap, 14_074_000, ['FT8']), 'BAND SKIMMER \u00b7 20 M');
   }
   const cap = parseSpotsBandCap({ spotsBand: true, spotBands: BANDS })!;
-  eq('band hint (what it covers)', spotsBandHint(cap), 'A whole band\'s digital frequencies at once — every mode on its own dial (40 m, 20 m)');
+  eq('band hint (what it covers)', spotsBandHint(cap), 'A whole band at once — every digital mode on its own dial, and its CW and RTTY skimmed (40 m, 20 m)');
   eq('band hint (why not)', spotsBandHint(parseSpotsBandCap({ spotsBand: false, spotsBandWhy: 'too heavy for this box', spotBands: BANDS })!), 'too heavy for this box');
 }
 

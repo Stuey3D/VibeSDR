@@ -59,6 +59,22 @@ protected:
             //   capture clock is a second away, or earlier (a stamp is late, never early)
             if (!anchored_ || cap < now || cap - now > 1000) { sk_->setStartUtcMs(cap); anchored_ = true; }
         }
+        /* ★★ beta92 BAND SKIMMER (Stuart: "when expanded we should also be able to read the cw message like we do in the
+         *  cw skimmer"): once a second, the signals the skimmer follows — callsign or not ("waiting for callsign"), each
+         *  with its last 120 characters, exactly what the CW skimmer's own list carries (vibe_cw_run.h sendList). */
+        if (rowsDue(sk_->nowMs())) {
+            std::vector<SkimRow> rows;
+            for (const cw::SignalView& v : sk_->signals(true)) {
+                if ((int)rows.size() >= kSkimRowsMax) break;
+                SkimRow r;
+                r.mode = "CW"; r.id = v.id; r.hz = centre_ + v.offsetHz; r.snr = v.snrDb;
+                r.wpm = v.wpm; r.wpmLo = v.wpmLo; r.wpmHi = v.wpmHi; r.quality = v.quality;
+                r.active = v.active; r.lastMs = v.lastMs; r.call = v.call;
+                r.text = v.text.size() > kSkimTextMax ? v.text.substr(v.text.size() - kSkimTextMax) : v.text;
+                rows.push_back(std::move(r));
+            }
+            publishRows(std::move(rows));
+        }
     }
 private:
     std::unique_ptr<cw::Skimmer> sk_;

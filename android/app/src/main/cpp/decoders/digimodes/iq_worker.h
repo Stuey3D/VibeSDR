@@ -61,6 +61,11 @@ public:
     uint64_t blocksDecoded() const { return decoded_.load(std::memory_order_relaxed); }
     double loHz() const { return lo_; }
     double hiHz() const { return hi_; }
+    /** ★★ beta92 BAND SKIMMER: the last snapshot of the signals this engine follows (publishRows), copied under its lock. */
+    void skimRows(std::vector<SkimRow>& out) const override {
+        std::lock_guard<std::mutex> lk(rowsM_);
+        out.insert(out.end(), rows_.begin(), rows_.end());
+    }
 
 protected:
     /** The worker's work: one block, in order. Never concurrently with itself. */
@@ -80,8 +85,23 @@ protected:
         return 0;
     }
     const double lo_, hi_;
+    /** ★★ beta92: is a fresh row snapshot due? Once a second of STREAM time (a block's worth of the skimmer's own clock),
+     *  or at once when the clock went back (a fresh skimmer). A copy of ≤ kSkimRowsMax short rows a second. Worker thread. */
+    bool rowsDue(int64_t streamMs) {
+        if (streamMs - rowsStream_ < 1000 && streamMs >= rowsStream_) return false;
+        rowsStream_ = streamMs;
+        return true;
+    }
+    /** ★★ beta92: the new snapshot (already bounded: ≤ kSkimRowsMax rows, text ≤ kSkimTextMax). Worker thread. */
+    void publishRows(std::vector<SkimRow>&& rows) {
+        std::lock_guard<std::mutex> lk(rowsM_);
+        rows_.swap(rows);
+    }
 
 private:
+    mutable std::mutex rowsM_;
+    std::vector<SkimRow> rows_;
+    int64_t rowsStream_ = INT64_MIN / 2;
     struct Block { std::vector<cf32> v; double rate = 0, centre = 0, utc = 0; };
     void run(const char* name) {
         /* ★★ V12 beta91: the IDLE class (Linux SCHED_IDLE, macOS BACKGROUND, Windows IDLE) — below every decoder: the

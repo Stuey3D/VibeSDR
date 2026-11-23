@@ -65,6 +65,7 @@ import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS 
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
+import { parseBandSkim, type BandSkim } from './bandSkim';
 import { parseSatTelemetry } from './satellites';   // ★ SATELLITE-BEST 1.3
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -251,6 +252,8 @@ export interface DecoderCallbacks {
   onDscCall?:     (call: DscCall) => void;
   /** ★ V12 BAND GOVERNOR: Band's per-mode state (active / light / idle / shed / off), when it changes and every 15 s. */
   onSpotsStatus?: (modes: SpotModeState[]) => void;
+  /** ★★ beta92 BAND SKIMMER: the CW / RTTY windows and the signals they follow (≤ once a second while Band runs). */
+  onBandSkim?: (sk: BandSkim) => void;
   /** ★ V12 APRS (VibeServer): the station list (every 2 s when it changed; at once, with tracks, to a joiner) and each new
    *  packet — as the server sent them; src/services/tracks.ts aprsSanitise / aprsPacketSanitise check them. */
   onAprsList?:   (data: unknown) => void;
@@ -689,6 +692,11 @@ export class DecoderClient {
             if (!this.spotsBandScope) return;
             const st = parseSpotsStatus(m.data);
             if (st) this.cb.onSpotsStatus?.(st);
+          } else if (m.type === 'band_skim' && m.data) {
+            // ★★ beta92 THE BAND SKIMMER's CW / RTTY rows, windows and marks (services/bandSkim.ts) — only while OUR Band runs
+            if (!this.spotsBandScope) return;
+            const sk = parseBandSkim(m.data);
+            if (sk) this.cb.onBandSkim?.(sk);
           } else if (m.type === 'psk_signals' && m.data) {
             // ★ V12 PSK: CW's list exactly, with the mode and IMD — the one list view draws both (the web's rule).
             if (this.active !== 'psk') return;

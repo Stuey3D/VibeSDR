@@ -56,7 +56,7 @@ export function bgVfoLine(v: BgVfo): string {
   //   skimmer sends spots too, and is "CW skimmer" (V12 2026-10-25) — it read "FT8" until then.
   //   And a PSK skimmer (2026-10-26) is "PSK skimmer".
   // ★ V12 2026-10-27: a Band digital-spots VFO is "Digital spots: Band 40 m" (every mode on the band, one summary).
-  const name = v.dec === 'spots-band' ? `Digital spots: Band${v.band ? ' ' + v.band : ''}` : v.dec === 'cwskim' ? 'CW skimmer' : v.dec === 'pskskim' ? 'PSK skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
+  const name = v.dec === 'spots-band' ? `Band skimmer${v.band ? ' ' + v.band : ''}` : v.dec === 'cwskim' ? 'CW skimmer' : v.dec === 'pskskim' ? 'PSK skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
   // ★ V12 2026-10-27: an NDB skimmer has no frequency — "NDB skimmer 190–535 kHz · running · 12 beacons identified of 41 carriers"
   if (v.dec === 'ndb-skim') {
     const span = (v.ndbHi ?? 0) > (v.ndbLo ?? 0) ? ` ${((v.ndbLo ?? 0) / 1000).toFixed(0)}–${((v.ndbHi ?? 0) / 1000).toFixed(0)} kHz` : '';

@@ -927,6 +927,9 @@ if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$(
 # ★★ V12 APP PARITY 2: the app's digital spots — the server's mode list, Band mode's capability and title, the governor's chips —
 #    against the web's own code cut out of main.ts / decoders.ts.
 if npx tsx scripts/test_spots_band_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta92 THE BAND SKIMMER (src/services/bandSkim.ts): its name, the band_skim frame (and an older server's), the VFO's
+#    width, the waterfall marks, "waiting for callsign" and the expanded CW / RTTY text — one rule for the web and the app.
+if npx tsx scripts/test_band_skim.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 APP PARITY 2: the app's DRM box against the web's drmRender (the same words in the same order), the sanitiser,
 #    the capability (vibeserver.json modes lists "drm").
 if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -2063,6 +2066,10 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   VIBE_CW_CLIP="$OUT/cw-clip.cu8" node scripts/test-server-cw.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_CW_CLIP="$OUT/cw-clip.cu8" node scripts/test-web-cw.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 beta92 THE BAND SKIMMER on 40 m over the same clip: "waiting for callsign", EXPAND's CW text, EXPLAIN, the
+  #    waterfall marks and the VFO drawn to the CW window (test-web-band-skim)
+  VIBE_CW_CLIP="$OUT/cw-clip.cu8" node scripts/test-web-band-skim.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/cw-clip.cu8"
 else

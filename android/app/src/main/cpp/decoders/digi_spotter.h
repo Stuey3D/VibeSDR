@@ -113,6 +113,11 @@ public:
         bool iq = false;                         ///< ★ an IQ mode (CW, RTTY): its windows, not dials
     };
     std::vector<ModeStatus> status() const;
+    /** ★★ beta92 BAND SKIMMER: one IQ window being skimmed now (CW / RTTY) — RF edges and its run's state — and the
+     *  signals its engine follows (SkimRow, bounded by the engine). For the band_skim frame: the clients draw the windows
+     *  as the VFO's width and mark the signals on the waterfall. Any thread (statMtx_). */
+    struct SkimWindow { std::string mode; double loHz = 0, hiHz = 0; RunState state = RunState::Idle; };
+    void skim(std::vector<SkimWindow>& wins, std::vector<SkimRow>& rows) const;
     /** Bumped whenever a mode's state changes (the host sends the header's chips again). */
     uint64_t statusSeq() const { return statusSeq_.load(std::memory_order_relaxed); }
     /** Periods SHED (something there, over budget) — monotonic: the health pill's BehindWatch reads it. */

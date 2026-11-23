@@ -262,13 +262,13 @@ try {
     const S = await server(['--freq', String(CENTRE), '--mode', 'usb', '--users', '1'], 'off', { blockedModes: 'spotsband' });
     try {
       const st = await S.status();
-      ok(st && st.spotsBand === false && /switched Band spots off/.test(st.spotsBandWhy || ''), `greyed with its reason: "${st && st.spotsBandWhy}"`);
+      ok(st && st.spotsBand === false && /switched the band skimmer off/.test(st.spotsBandWhy || ''), `greyed with its reason: "${st && st.spotsBandWhy}"`);
       ok(st && (st.spotBands || []).length > 0, 'the bands are still listed (the button is shown greyed, never hidden)');
       const L = await listener(S.port, 'spoff001', CENTRE, 'usb');
       L.dx.send({ type: 'subscribe_digital_spots', scope: 'band' });
       ok(await until(() => jsons(L.dx, 'decoder_refused').length > 0, 5000), 'a Band subscribe is refused');
       const r = jsons(L.dx, 'decoder_refused')[0];
-      ok(r && r.what === 'spots' && /Band spots are not available/.test(r.message), `…in words: "${r && r.message}"`);
+      ok(r && r.what === 'spots' && /The band skimmer is not available/.test(r.message), `…in words: "${r && r.message}"`);
       for (const k of ['spec', 'aud', 'dx']) L[k].close();
     } finally { S.stop(); }
   }
