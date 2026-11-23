@@ -89,7 +89,10 @@ import { seaLegendRows } from '../services/seaAreas';   // ★ V12 2026-11-02 th
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
-import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
+import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM, DIGI_WINDOWS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
+import { DIGI_STATS_JS, DIGI_WIDE_PX, digiPanelsOf, type DigiPanelsShown } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
+import DigiMapKeys from './DigiMapKeys';
+import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the window and panel keys (the pad reaches them)
 /* ★★★ beta92 ONE AUTO FIT FOR EVERY MAP (Stuart 11-23: "all maps to have an auto fit that gently glides the zoom in and out
  *  like the adsb maps") — the ADS-B map's camera, shared: src/utils/mapAutoFit.ts. Every kind but HFDL (its SNAP follows
  *  the latest flight) and ADS-B (the reference, its own AUTO key). */
@@ -204,6 +207,10 @@ interface MapOverlayProps {
   /** ★★ V12 beta92 THE RADIO FILTER on the DIGI MODES MAP (src/utils/logRadio.ts): the server's radios that hold stations
    *  in the window — null (fewer than two) draws no control. A view: a station with no radio shows under every radio. */
   digiRadios?: LogRadio[] | null;
+  /** ★★ beta92 the window the map opened on (its 1H · 24H · 7D · 30D · ALL keys), where the server keeps stations. */
+  digiWindow?: string;
+  /** ★★ beta92 the station store's own counts for the TOTALS (digiStations.ts DigiTotals) — null on a server with no store. */
+  digiTotals?: DigiTotals | null;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -528,6 +535,59 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .st-bar{height:3px;background:rgba(${T.x},0.12);border-radius:2px;margin:2px 0 6px;}
   .st-bf{height:3px;background:rgba(${T.x},0.65);border-radius:2px;transition:width 0.4s;}
   ${isTrk ? TRACK_CARD_CSS : ''}
+  ${kind === 'digi' ? `
+  /* ★★★ beta92 THE DIGI MODES MAP's PANELS — the web's STATS / LEGEND / SUMMARY (src/utils/digiMapStats.ts writes them; the web's
+     class names, styled here in the map's colours). LAYOUT FOLLOWS THE WINDOW (body.dwide at ${DIGI_WIDE_PX} px and over): wide =
+     beside the map as the web's (stats down the left, legend top-right, summary along the bottom); narrow = the stats a sheet
+     over the bottom half (the map stays above it), the legend a corner card, the summary a strip — each behind its key
+     (DigiMapKeys, React Native, top-left; --dkh is its height). */
+  #legend.dgoff{display:none;}
+  .dpan{position:absolute;z-index:1100;display:none;box-sizing:border-box;background:rgba(6,9,6,0.92);border:1px solid rgba(${T.k},0.30);
+    border-radius:8px;color:rgba(${T.x},0.85);font-size:12px;letter-spacing:0.4px;overflow-y:auto;overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
+    scrollbar-width:thin;scrollbar-color:rgba(${T.k},0.50) transparent;}
+  .dpan.on{display:block;}
+  .dpan::-webkit-scrollbar{width:4px;}
+  .dpan::-webkit-scrollbar-thumb{background:rgba(${T.k},0.45);border-radius:2px;}
+  .dpan .sect{font-size:10px;letter-spacing:1.5px;color:rgba(${T.x},0.50);margin:10px 0 6px;border-top:1px solid rgba(${T.k},0.15);padding-top:8px;}
+  .dpan .dc>.sect:first-child{border-top:none;margin-top:0;padding-top:0;}
+  .dpan .row{display:flex;justify-content:space-between;gap:8px;margin:3px 0;font-size:12px;}
+  .dpan .row b{color:rgba(${T.x},1);}
+  .dpan .bar{height:3px;background:rgba(${T.x},0.12);border-radius:2px;margin:2px 0 5px;}
+  .dpan .bar i{display:block;height:3px;border-radius:2px;background:rgba(${T.x},0.75);}
+  .dpan .sub{font-size:10.5px;color:rgba(${T.x},0.50);margin:-2px 0 6px;}
+  .dpan .rose{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 8px;}
+  .dpan .rose div{font-size:11px;}
+  .dpan .rose .n{color:rgba(${T.x},0.50);}
+  .dpan .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:12px;}
+  .dpan .lrow .rx{display:inline-flex;width:12px;height:12px;}
+  .dpan .lrow .lc{margin-left:auto;padding-left:10px;color:rgba(${T.x},0.50);}
+  .dpan .lrow.foot{color:rgba(${T.x},0.50);font-size:10px;margin-top:4px;}
+  .dpan .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px;}
+  .dpan .sw.mk{width:15px;height:15px;flex:0 0 15px;box-shadow:0 0 0 1.2px ${DIGI_MARKER_RIM};font:bold 9px/15px monospace;text-align:center;}
+  .dpan .asym{display:inline-flex;width:16px;height:16px;flex:0 0 16px;}
+  .dpan .asym svg{width:16px;height:16px;}
+  #dsum .dc{display:flex;gap:22px;white-space:nowrap;}
+  #dsum .k{color:rgba(${T.x},0.50);font-size:10px;letter-spacing:1px;}
+  #dsum .v{color:rgba(${T.x},1);}
+  .dx{position:sticky;top:0;float:right;margin:0 0 4px 8px;background:rgba(${T.k},0.12);border:1px solid rgba(${T.k},0.35);border-radius:8px;
+    color:rgba(${T.kt},0.85);font-family:inherit;font-size:12px;letter-spacing:1px;padding:3px 9px;cursor:pointer;z-index:2;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+  body.dwide .dx{display:none;}
+  body.dwide #dstats{top:calc(var(--dkh,40px) + 16px);left:max(10px,env(safe-area-inset-left));bottom:max(10px,env(safe-area-inset-bottom));width:280px;padding:10px 12px;}
+  body.dwide #dleg{top:10px;right:max(10px,env(safe-area-inset-right));max-height:calc(100% - 190px);padding:8px 10px;}
+  body.dwide #dsum{bottom:max(10px,env(safe-area-inset-bottom));left:10px;right:56px;margin:0 auto;width:fit-content;max-width:calc(100% - 76px);padding:8px 14px;overflow-x:auto;}
+  body.dwide.dstOn #dsum{left:302px;max-width:calc(100% - 368px);}
+  body.dwide.dstOn .maplibregl-ctrl-bottom-left,body.dwide.dstOn .leaflet-bottom.leaflet-left{left:292px;}
+  body:not(.dwide) #dstats{left:0;right:0;bottom:0;height:50%;border-radius:12px 12px 0 0;border-bottom:none;background:rgba(6,9,6,0.97);
+    padding:10px max(14px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));}
+  body:not(.dwide) #dleg{top:calc(var(--dkh,40px) + 16px);right:max(8px,env(safe-area-inset-right));max-height:calc(50% - var(--dkh,40px) - 28px);padding:8px 10px;}
+  body:not(.dwide) #dsum{left:max(8px,env(safe-area-inset-left));right:calc(52px + env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));padding:7px 10px;}
+  body:not(.dwide) #dsum .dc{flex-wrap:wrap;gap:6px 16px;white-space:normal;}
+  body:not(.dwide).dstOn #dsum{bottom:calc(50% + 6px);}
+  body.dsumOn #toast{bottom:calc(var(--dsh,0px) + 6px);}
+  body.dsumOn:not(.dwide) .maplibregl-ctrl-bottom-left,body.dsumOn:not(.dwide) .leaflet-bottom.leaflet-left{bottom:var(--dsh,0px);}
+  ` : ''}
   ${isAdsb || isNdb || isTrk ? `
   /* ★★ ADS-B (and V12 NDB, AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
      legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
@@ -581,7 +641,7 @@ ${isSpots ? `
 <div id="map">
   <div id="lmap"></div>
   ${isAdsb ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
-  <div id="legend">
+  <div id="legend"${kind === 'digi' ? ' class="dgoff"' : ''}>
     <div id="legbtn" title="Legend">&#9432;</div>
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
@@ -702,11 +762,15 @@ ${isSpots ? `
       <div class="scroll-arrow scroll-arrow-dn" id="arr-dn">&#9660;</div>
     </div>
   </div>
-  ${isSpots ? `
+  ${kind === 'digi' ? `
+  <div class="dpan" id="dstats"><button type="button" class="dx" data-p="stats" aria-label="Hide the statistics">&#10005;</button><div class="dc"></div></div>
+  <div class="dpan" id="dleg"><button type="button" class="dx" data-p="legend" aria-label="Hide the legend">&#10005;</button><div class="dc"></div></div>
+  <div class="dpan" id="dsum"><div class="dc"></div></div>` : ''}
+  ${kind === 'cw' ? `
   <div id="statsbtnwrap"><div id="statsbtn" title="Stats">&#128202;</div></div>
   <div id="stsheet">
     <button class="st-close" id="stclose">&#10005; CLOSE</button>
-    <div class="st-title">${kind === 'digi' ? 'DIGITAL' : 'CW'} SPOTS &mdash; STATISTICS</div>
+    <div class="st-title">CW SPOTS &mdash; STATISTICS</div>
     <div class="st-grid">
       <div class="st-card">
         <div class="st-sect">RANGE</div>
@@ -723,11 +787,7 @@ ${isSpots ? `
         <div class="st-sect">SPOTS BY BAND</div>
         <div id="s-bands"></div>
       </div>
-      ${kind === 'digi' ? `
-      <div class="st-card">
-        <div class="st-sect">SPOTS BY MODE</div>
-        <div id="s-modes"></div>
-      </div>` : ''}
+
     </div>
   </div>` : ''}
   <div id="toast"></div>
@@ -1875,6 +1935,7 @@ if(KIND==='digi'||KIND==='cw'){
     queueLetters();
     if(statsOpen)updateStats();
     if(digiFit)digiFit.poke();
+    dQueue();
   }
   [fMode,fBand,fAge,fRadio].forEach(function(el){if(el)el.onchange=rebuild;});
   /* ★★ beta92 THE RADIO FILTER's choices, pushed by React Native (logRadio.ts logRadioChoices — two or more radios, or
@@ -1914,6 +1975,7 @@ if(KIND==='digi'||KIND==='cw'){
     });
     if(aprsWant){var f=aprsPts.find(function(x){return x.key===aprsWant||x.call===aprsWant;});if(f){aprsWant=null;if(digiFit)digiFit.pause();map.setView([f.lat,f.lon],9);}}
     if(digiFit)digiFit.poke();
+    if(typeof dQueue==='function')dQueue();
   }
   window.__aprsPush=function(json,focus){try{var a=JSON.parse(json);if(!Array.isArray(a))return;
     aprsPts=a.filter(function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));}).slice(0,1000).map(function(x){
@@ -1941,8 +2003,9 @@ if(KIND==='digi'||KIND==='cw'){
   /* ★★ beta90 a caller's OVERLAY (openDigiModesMap's — a satellite pass: its ground track, footprint and points), already
    *  cleaned by digiMapShared.ts digiOverlayClean; numbers and short labels only, checked again here. */
   var ovGroup=L.layerGroup().addTo(map);
-  window.__digiOverlay=function(json){try{ovGroup.clearLayers();var o=JSON.parse(json);if(!o||typeof o!=='object')return;
+  window.__digiOverlay=function(json){try{ovGroup.clearLayers();dOverlay=null;dQueue();var o=JSON.parse(json);if(!o||typeof o!=='object')return;
     var c=/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(String(o.colour||''))?String(o.colour):'#88CCEE';
+    dOverlay={label:String(o.label||'OVERLAY').slice(0,24),colour:c};
     var ok=function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));};
     (Array.isArray(o.lines)?o.lines:[]).slice(0,16).forEach(function(l){var pts=(Array.isArray(l)?l:[]).filter(ok).slice(0,2000);if(pts.length>=2)L.polyline(pts,{color:c,weight:2,opacity:0.85}).addTo(ovGroup);});
     (Array.isArray(o.circles)?o.circles:[]).slice(0,16).forEach(function(k){if(k&&isFinite(Number(k.lat))&&isFinite(Number(k.lon))&&isFinite(Number(k.km)))
@@ -1992,6 +2055,7 @@ if(KIND==='digi'||KIND==='cw'){
       setH('s-modes',Object.keys(mm).sort(function(a,b){return mm[b]-mm[a];}).map(function(m){return barRow(m,mm[m],mx);}).join('')||'&mdash;');
     }
   }
+  if(stSheet){
   document.getElementById('statsbtn').addEventListener('click',function(e){
     e.stopPropagation();
     statsOpen=!statsOpen;
@@ -2003,6 +2067,72 @@ if(KIND==='digi'||KIND==='cw'){
   });
   stSheet.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   stSheet.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});
+  }
+
+  /* ★★★ beta92 THE DIGI MODES MAP's STATS / LEGEND / SUMMARY — src/utils/digiMapStats.ts, the web's own code (the numbers
+   *  AND the words), over the stations the filters SHOW. Which panels are shown is React Native's (DigiMapKeys, __digiPanels);
+   *  the store's counts come in as __digiTotals; redrawn at most every 0.4 s, never per spot. */
+  ${kind === 'digi' ? DIGI_STATS_JS : ''}
+  var dPan={stats:false,summary:false,legend:false},dTot=null,dT=null,dOverlay=null;
+  var dEls={stats:document.getElementById('dstats'),legend:document.getElementById('dleg'),summary:document.getElementById('dsum')};
+  var DWIN=${JSON.stringify(DIGI_WINDOWS.map((w) => ({ id: w.id, words: w.words })))};
+  var APRS_LEG=${kind === 'digi' ? JSON.stringify(APRS_LEGEND.map((r) => ({ svg: aprsLegendIcon(r, 16).html, words: r.words }))).replace(/</g, '\\u003c') : '[]'};
+  var FAMALL=FAMS.concat(Object.keys(MODE_STYLE).map(function(k){return k.toUpperCase();}).filter(function(k){return FAMS.indexOf(k)<0;}));
+  var MODES_LEG=FAMS.map(function(m){var st=modeStyle(m);return {m:m,colour:st.colour,ink:st.ink,letter:st.letter};});
+  function dWide(){document.body.classList.toggle('dwide',window.innerWidth>=${DIGI_WIDE_PX});}
+  function dWinWords(){var v=fAge?String(fAge.value).toLowerCase():'';for(var i=0;i<DWIN.length;i++)if(DWIN[i].id===v)return DWIN[i].words;return '';}
+  function dItems(){return spots.filter(passes).map(function(s){return {call:s.call,grid:s.grid||'',country:s.country,band:spotBand(s)||'',mode:s.mode,
+    fam:famOf(s.mode,FAMALL),snr:(typeof s.snr==='number'&&isFinite(s.snr))?s.snr:null,km:(s.distKm==null||!isFinite(s.distKm))?null:Math.round(s.distKm),
+    lat:s.lat,lon:s.lon,t:s.t};});}
+  function dLayout(){
+    if(isCW||!dEls.stats)return;
+    dWide();
+    ['stats','legend','summary'].forEach(function(k){dEls[k].classList.toggle('on',!!dPan[k]);});
+    document.body.classList.toggle('dstOn',!!dPan.stats);
+    document.body.classList.toggle('dsumOn',!!dPan.summary);
+    document.body.style.setProperty('--dsh',(dPan.summary?dEls.summary.offsetHeight+12:0)+'px');
+  }
+  function dRender(){
+    dT=null;
+    if(isCW||!dEls.stats)return;
+    if(!dPan.stats&&!dPan.legend&&!dPan.summary){dLayout();return;}
+    try{
+      var st=digiStats(dItems(),(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null);
+      var ak=aprsOn?aprsPts.filter(function(a){return a.km!=null&&isFinite(a.km);}).sort(function(a,b){return b.km-a.km;}):[];
+      var t=dTot||{}, pick=fRadio&&!fRadio.hidden?fRadio.value:'', u=t.unplaced||{};
+      var un=pick?((u.by&&u.by[pick])||0)+(u.none||0):(u.all||0);
+      var pan=digiStatsHtml(st,{modes:MODES_LEG,modeColour:function(m){return modeStyle(m).colour;},
+        rx:(RX_LAT||RX_LON)?RX_SVG.replace('width="22" height="22"','width="12" height="12"'):'',
+        aprs:{n:aprsPts.length,on:aprsOn&&aprsPts.length>0,far:ak.length?{km:Math.round(ak[0].km),call:ak[0].call}:null,leg:APRS_LEG,only:false,newest:''},
+        svgOk:aprsSvgOk,overlay:dOverlay,
+        tot:{srvOk:!!t.srvOk,winWords:dWinWords(),drawn:t.drawn||0,total:t.total||0,trunc:!!t.trunc,unplaced:un,
+             decodesToday:typeof t.decodesToday==='number'?t.decodesToday:-1,falseToday:t.falseToday||0,notKeptToday:t.notKeptToday||0,spotsSent:t.spotsSent||0}});
+      dEls.stats.querySelector('.dc').innerHTML=pan.stats;
+      dEls.legend.querySelector('.dc').innerHTML=pan.legend;
+      dEls.summary.querySelector('.dc').innerHTML=pan.summary;
+    }catch(e){console.error('digi stats',e);}
+    dLayout();
+  }
+  function dQueue(){if(!isCW&&!dT)dT=setTimeout(dRender,400);}
+  window.__digiPanels=function(json){try{var o=JSON.parse(json);dPan={stats:!!o.stats,summary:!!o.summary,legend:!!o.legend};}catch(e){}dRender();};
+  window.__digiTotals=function(json){try{dTot=JSON.parse(json);}catch(e){dTot=null;}dQueue();};
+  window.__digiKeysH=function(h){document.body.style.setProperty('--dkh',(Number(h)||0)+'px');};
+  /* the window keys (DigiMapKeys): the age filter follows (the server's answer comes in through the spots) */
+  window.__digiWin=function(w){if(!fAge)return;var v=String(w)==='all'?'ALL':String(w);
+    for(var i=0;i<fAge.options.length;i++)if(fAge.options[i].value===v){if(fAge.value!==v){fAge.value=v;rebuild();}return;}};
+  if(!isCW){
+    if(fAge&&STORE_WIN)fAge.hidden=true;   // ★ the 1H · 24H · 7D · 30D · ALL keys replace it
+    Object.keys(dEls).forEach(function(k){var el=dEls[k];if(!el)return;
+      el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+      el.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});});
+    Array.prototype.forEach.call(document.querySelectorAll('.dx'),function(b){b.addEventListener('click',function(e){
+      e.stopPropagation();var k=b.getAttribute('data-p');dPan[k]=false;dLayout();
+      if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'digiPanel',id:k,on:false}));});});
+    var dTop=function(){var m=document.getElementById('map');if(m&&window.ReactNativeWebView)
+      window.ReactNativeWebView.postMessage(JSON.stringify({t:'digiTop',y:Math.round(m.getBoundingClientRect().top)}));};
+    window.addEventListener('resize',function(){dWide();dTop();dQueue();});
+    dWide();setTimeout(dTop,50);
+  }
 
   /* ★★ SPREAD ACROSS THE SQUARE (as the web map's placeIn, Stuart 2026-11-22: "too neat and gridlike"): a 4-character
    *  locator is a 2-degree by 1-degree square, so every station in it stacked on its centre. Each is drawn at a point
@@ -2021,7 +2151,7 @@ if(KIND==='digi'||KIND==='cw'){
     if(lat==null||lon==null)return null;
     var pp=placeIn(String(d.grid||''),String(cw?(d.dx_call||''):(d.callsign||'')),lat,lon);
     return{
-      lat:lat, lon:lon, plat:pp[0], plon:pp[1],
+      lat:lat, lon:lon, plat:pp[0], plon:pp[1], grid:String(d.grid||'').slice(0,8),
       mode:cw?'CW':String(d.mode||'').toUpperCase(),
       band:String(d.band||''),
       call:String(cw?(d.dx_call||''):(d.callsign||'')),
@@ -2069,6 +2199,7 @@ if(KIND==='digi'||KIND==='cw'){
     queueLetters();
     showSpotToast(s);
     if(statsOpen)updateStats();
+    dQueue();
   }
   function connect(){
     // Server validates this UUID against the registered /connection session —
@@ -2125,7 +2256,7 @@ function spotToData(s: SpotRow) {
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
-    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay, digiRadios }:
+    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay, digiRadios, digiWindow, digiTotals }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2286,6 +2417,45 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`(window.__digiOverlay?window.__digiOverlay(${lit}):(window.__pendingOverlay=${lit}));true;`);
   };
   useEffect(() => { if (visible) pushOverlay(); }, [visible, digiOverlay]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta92 THE DIGI MODES MAP's PANELS (STATS · SUMMARY · LEGEND) and its WINDOW KEYS — DigiMapKeys draws the keys (the pad
+   *  reaches them), the page draws the panels (digiMapStats.ts, the web's code). LAYOUT FOLLOWS THE WINDOW: wide (≥ DIGI_WIDE_PX)
+   *  opens with all three beside the map as the web's; narrow with the summary strip only. Remembered per device, for each. */
+  const digiWide = winW >= DIGI_WIDE_PX;
+  const panelsKey = digiWide ? 'lsv_digi_panels_wide' : 'lsv_digi_panels_narrow';
+  const [digiPanels, setDigiPanels] = useState<DigiPanelsShown>(() => digiPanelsOf(null, digiWide));
+  useEffect(() => {
+    if (kind !== 'digi') return;
+    let dead = false;
+    setDigiPanels(digiPanelsOf(null, digiWide));
+    AsyncStorage.getItem(panelsKey).then((v) => { if (!dead) setDigiPanels(digiPanelsOf(v, digiWide)); }).catch(() => {});
+    return () => { dead = true; };
+  }, [kind, panelsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setDigiPanel = (id: keyof DigiPanelsShown, on: boolean) => setDigiPanels((p0) => {
+    const n = { ...p0, [id]: on };
+    AsyncStorage.setItem(panelsKey, JSON.stringify(n)).catch(() => {});
+    return n;
+  });
+  const pushPanels = () => {
+    if (kind !== 'digi') return;
+    webRef.current?.injectJavaScript(`window.__digiPanels&&window.__digiPanels(${JSON.stringify(JSON.stringify(digiPanels))});true;`);
+  };
+  useEffect(() => { if (visible) pushPanels(); }, [visible, digiPanels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const totalsKey = JSON.stringify(digiTotals ?? null);
+  const pushTotals = () => {
+    if (kind !== 'digi') return;
+    webRef.current?.injectJavaScript(`window.__digiTotals&&window.__digiTotals(${JSON.stringify(totalsKey)});true;`);
+  };
+  useEffect(() => { if (visible) pushTotals(); }, [visible, totalsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [digiWinShown, setDigiWinShown] = useState(digiWindow || '24h');
+  useEffect(() => { if (digiWindow) setDigiWinShown(digiWindow); }, [digiWindow]);
+  const pushWin = (w: string) => {
+    if (kind !== 'digi' || !storeWindows) return;
+    webRef.current?.injectJavaScript(`window.__digiWin&&window.__digiWin(${JSON.stringify(w)});true;`);
+  };
+  useEffect(() => { if (visible) pushWin(digiWinShown); }, [visible, digiWinShown, storeWindows]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [digiMapTop, setDigiMapTop] = useState(0);
+  const [digiKeysH, setDigiKeysH] = useState(0);
+  useEffect(() => { if (visible && kind === 'digi') webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }, [visible, kind, digiKeysH]);
 
   /* ★ ADS-B: the whole table each report (about once a second) — it REPLACES, it does not accumulate (the server drops
    *  an aircraft after 60 s), so there is nothing to de-duplicate. Before the page's handler exists the latest is
@@ -2514,6 +2684,8 @@ export default function MapOverlay(
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
+                             if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
+                                                    webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
                              if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current);
                              if (kind === 'ndb') ndbJs('__ndbListW', adsbListW.current);
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
@@ -2548,6 +2720,16 @@ export default function MapOverlay(
               return;
             }
             // ★ beta90 the DIGI MODES MAP's window changed (its age filter): React Native asks the station store for it
+            if (m && (m as any).t === 'digiPanel') {   // ★ beta92 a panel's ✕ (narrow windows)
+              const id = String((m as any).id ?? '');
+              if (id === 'stats' || id === 'summary' || id === 'legend') setDigiPanel(id, (m as any).on === true);
+              return;
+            }
+            if (m && (m as any).t === 'digiTop') {
+              const y = Number((m as any).y);
+              if (Number.isFinite(y) && y >= 0 && y < 400) setDigiMapTop(Math.round(y));
+              return;
+            }
             if (m && (m as any).t === 'digiWindow') {
               const w = String((m as any).w ?? '');
               if (/^(1h|24h|7d|30d|all)$/.test(w)) onDigiWindow?.(w);
@@ -2688,6 +2870,12 @@ export default function MapOverlay(
                        onFootprint={(w) => { adsbListW.current = w; ndbJs('__ndbListW', w); }}
                        ink={ink} areaW={winW} areaH={winH}
                        insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
+        )}
+        {/* ★★ beta92 THE DIGI MODES MAP's keys — the window and the panels, over the map's top-left (DigiMapKeys). */}
+        {kind === 'digi' && !!pageUri && !packError && digiMapTop > 0 && (
+          <DigiMapKeys top={digiMapTop} left={safeInsets?.left ?? 0} windows={!!storeWindows} win={digiWinShown}
+                       onWin={(w) => { setDigiWinShown(w); pushWin(w); onDigiWindow?.(w); }}
+                       shown={digiPanels} onPanel={setDigiPanel} onHeight={setDigiKeysH} ink={ink} />
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (

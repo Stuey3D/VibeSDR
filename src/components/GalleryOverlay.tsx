@@ -38,6 +38,7 @@ import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type
 import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
 import { navSanitise, type NavReport } from '../services/navtexMap';
 import { dscGalSummary, dscPinsFromGallery, DSC_GAL_WORDS } from '../services/shippingMap';   // ★ beta88 the DSC row
+import { digiGalCard, digiGalQuery, digiGalItemWindow, DIGI_GAL_KINDS } from '../utils/digiMapShared';   // ★ beta92 the DIGI MODES MAP row (the web's words)
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -93,7 +94,7 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap, onShipMap }: {
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap, onShipMap, onDigiMap }: {
   /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
   visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
   /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
@@ -105,6 +106,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   /** ★★ V12 2026-11-02 THE SHIPPING MAP from a row: a DSC call's pinned position (DSC first, on that call) or an AIS day
    *  (the ships first). The keys are shippingMap.ts's (a gallery DSC pin is "d:g:<file>"). */
   onShipMap?: ((focus: 'dsc' | 'ships', key: string) => void) | null;
+  /** ★★ beta92 THE DIGI MODES MAP from the gallery (the web's SPOTS row and a spots card's MAP): the window to open on. Absent
+   *  where there is no map (Apple TV): no key. */
+  onDigiMap?: ((window: string) => void) | null;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -207,6 +211,17 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
    *  PSK Reporter reporting on — the places the directory published for this receiver's callsign, source and age named.
    *  Nothing to press (no dead control); absent when the server has nothing to say. */
   const [rankC, setRankC] = useState<{ title: string; src: string } | null>(null);
+  /* ★★ beta92 THE DIGI MODES MAP ROW (Stuart 11-23: the web's ALL page has "SPOTS · DIGI MODES MAP · 5,000 stations heard ·
+   *  FT8 4175 · …" with MAP, the app had none): page 1 of ALL and the spot kinds, the radio filter's pick, the web's words
+   *  (digiMapShared.ts digiGalCard). No row where the store has nothing (never a dead MAP key). */
+  const [digiC, setDigiC] = useState<{ title: string; src: string } | null>(null);
+  useEffect(() => {
+    if (!visible || !onDigiMap || page !== 1 || !(kind === '' || DIGI_GAL_KINDS.includes(kind))) { setDigiC(null); return; }
+    let live = true;
+    fetch(withReadAuth(`${b}${digiGalQuery(Date.now() / 1000)}${radioQuery(radio)}`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setDigiC(digiGalCard(j)); }).catch(() => {});
+    return () => { live = false; };
+  }, [visible, kind, page, b, readAuth, radio, !!onDigiMap]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!visible || page !== 1 || !['', 'ft8', 'cw', 'psk'].includes(kind)) { setRankC(null); return; }   // ★ beta92: ALL + the spot kinds (Stuart 11-23)
     let live = true;
@@ -397,7 +412,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
                     </View>
                   ) : null}
-                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) || rankC ? (<>
+                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) || rankC || (digiC && onDigiMap) ? (<>
+                  {!!digiC && !!onDigiMap && (
+                    <TouchableOpacity onPress={() => onDigiMap('all')} accessibilityRole="button"
+                                      accessibilityLabel={`${digiC.title}. Show them on the digi modes map`} style={s.row}>
+                      <Text style={s.freq}>SPOTS</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.name}>{digiC.title}</Text>
+                        <Text style={s.dim}>{digiC.src}</Text>
+                      </View>
+                      <View style={[s.key, s.mapKey]}><Text style={s.keyText}>MAP</Text></View>
+                    </TouchableOpacity>
+                  )}
                   {!!rankC && (
                     <View accessible accessibilityLabel={`${rankC.title}. ${rankC.src}`} style={s.row}>
                       <Text style={s.freq}>RANK</Text>
@@ -456,6 +482,12 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       {!!onShipMap && it.k === 'ais' && (
                         <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel="Show the ships on the shipping map"
                                           onPress={() => onShipMap('ships', '')}>
+                          <Text style={s.keyText}>MAP</Text>
+                        </TouchableOpacity>
+                      )}
+                      {!!onDigiMap && DIGI_GAL_KINDS.includes(it.k) && (
+                        <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show the stations heard on the digi modes map: ${it.title}`}
+                                          onPress={() => onDigiMap(digiGalItemWindow(it.t, Date.now() / 1000))}>
                           <Text style={s.keyText}>MAP</Text>
                         </TouchableOpacity>
                       )}

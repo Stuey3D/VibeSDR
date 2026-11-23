@@ -6,7 +6,8 @@
 //   · src/services/aviationMap.ts avPlaneAdsb — an AvPlane in the ADS-B layer's shape (ICAO hex, a stable '~' address
 //     otherwise, sparse = a datalink position, the card's own lines).
 //   npx tsx scripts/test_digi_map.ts
-import { digiStationsSanitise, digiStationsMerge, digiStationRows, digiWindowSec } from '../src/services/digiStations';
+import { digiStationsSanitise, digiStationsMerge, digiStationRows, digiWindowSec, digiTotalsOf } from '../src/services/digiStations';
+import { digiGalCard, digiGalItemWindow, digiGalQuery } from '../src/utils/digiMapShared';
 import { digiOverlayClean, digiAprsPoints, digiSvgOk, digiAprsWx, digiWindowOf } from '../src/utils/digiMapShared';
 import { avPlaneAdsb, type AvPlane } from '../src/services/aviationMap';
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../src/utils/digiMapShared';
@@ -131,6 +132,27 @@ console.log('── beta92 the FIT key: the filtered stations only, and the rece
   ok(/<button type="button" id="fitBtn"[^>]*>FIT<\/button>/.test(web) && /points: \(\) => digiShownPoints\(show\.spots \? spots : \[\], \(\) => true, aprs, show\.aprs\),\s*receiver: \(\) => me, button: document\.getElementById\('fitBtn'\)/.test(web),
      'the web page: FIT in its top bar is the AUTO FIT, over the layers shown AND the receiver');
   ok(!/digiFitApply|digiFitView|map\.fitBounds\(all/.test(app + web.slice(web.indexOf('function spotsMapHtml'))), 'no one-shot fit left on either digi map');
+}
+
+console.log('── beta92 the gallery row and the map\'s TOTALS ──');
+{
+  const card = digiGalCard({ total: 5000, byMode: { FT8: 4175, WSPR: 286, 'x<y': 9, FT4: 300, CW: 239 } })!;
+  ok(!!card && card.title === 'DIGI MODES MAP · 5,000 stations heard · FT8 4175 · FT4 300 · WSPR 286 · CW 239', `the web's words (${card?.title})`);
+  ok(digiGalCard({ total: 0 }) === null && digiGalCard({ off: 1, total: 9 }) === null && digiGalCard(null) === null, 'nothing heard / store off / no answer: no row (no dead MAP key)');
+  ok(digiGalCard({ total: 1 })!.title === 'DIGI MODES MAP · 1 station heard', 'one station: singular');
+  const now = 1795000000;
+  ok(digiGalItemWindow(now - 3600, now) === '24h' && digiGalItemWindow(now - 3 * 86400, now) === '7d' && digiGalItemWindow(now - 20 * 86400, now) === '30d'
+     && digiGalItemWindow(now - 90 * 86400, now) === 'all', 'a spots card opens the window holding its day');
+  ok(/window=all&since=1795086400$/.test(digiGalQuery(now)), 'the row asks for the totals only (since tomorrow)');
+  const g = readFileSync('src/components/GalleryOverlay.tsx', 'utf8');
+  ok(/digiGalCard\(j\)/.test(g) && /onDigiMap\('all'\)/.test(g) && /DIGI_GAL_KINDS\.includes\(it\.k\)/.test(g), 'the app\'s gallery: the row (ALL page 1) and a spots card\'s MAP');
+  const sc = digiStationsSanitise({ now: 5, total: 2, truncated: 1, decodesToday: 1234, notKeptToday: 3, falseToday: '2', spotsSent: 15000,
+    stations: [{ call: 'G4ABC', grid: 'IO91', lat: 51, lon: 0, radios: ['a1'] }, { call: 'DL1ABC', grid: '', radios: ['a1', 'b2'] }, { call: 'F5XYZ' }] })!;
+  ok(sc.counts?.decodesToday === 1234 && sc.counts?.falseToday === 2 && sc.counts?.spotsSent === 15000, 'the day\'s counts are kept');
+  ok(digiStationsSanitise({ stations: [] })!.counts?.decodesToday === -1, 'an older server: decodes today unknown (-1), not 0');
+  const tt = digiTotalsOf(digiStationsMerge(new Map(), sc, true, 'all'), sc.counts, { total: 9, trunc: true });
+  ok(tt.drawn === 3 && tt.total === 9 && tt.trunc && tt.unplaced.all === 2 && tt.unplaced.none === 1 && tt.unplaced.by.a1 === 1 && tt.unplaced.by.b2 === 1,
+     `unplaced by radio (${JSON.stringify(tt.unplaced)})`);
 }
 
 console.log(`\n${fail ? 'FAILED' : 'all passed'} — ${pass} passed, ${fail} failed`);

@@ -145,7 +145,9 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
-import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';   // ★ beta92 the digi map's FIT key (the app's same code)
+import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';
+import { DIGI_STATS_JS } from '../../../src/utils/digiMapStats';
+import { digiGalCard, digiGalQuery, digiGalItemWindow } from '../../../src/utils/digiMapShared';   // ★ beta92 the gallery's digi map row (the app's same words)   // ★ beta92 the digi map's stats / legend / summary (the app's same code)   // ★ beta92 the digi map's FIT key (the app's same code)
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★★★ beta92 ONE auto fit for every map — the ADS-B map's glide
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../../../src/utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend
 import { bandSkimTitle, bandSkimPassband, bandSkimLabels, withSkimLabels, bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../../../src/services/bandSkim';   // ★★ beta92 the BAND SKIMMER
@@ -18181,9 +18183,12 @@ ${glHead}
   .bar i{display:block;height:3px;border-radius:2px;background:var(--amber)}
   .sub{font-size:9px;color:var(--dim);margin:-2px 0 6px}
   /* Compass rose — 8 bearings, like UberSDR's. */
-  #rose{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 8px}
-  #rose div{font-size:10px}
-  #rose .n{color:var(--dim)}
+  .rose{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 8px}
+  .rose div{font-size:10px}
+  .rose .n{color:var(--dim)}
+  .lrow .rx{display:inline-flex;width:12px;height:12px}
+  .lrow .lc{margin-left:auto;padding-left:8px;color:var(--dim)}
+  .lrow.foot{color:var(--dim);font-size:9px;margin-top:4px}
   /* Legend — right. */
   #legend{top:10px;right:10px;padding:8px 10px;min-width:110px}
   .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:11px}
@@ -18792,28 +18797,12 @@ function fitOnce() {
 }
 
 // ── Stats ────────────────────────────────────────────────────────────────────
-function bearing(a, b) {
-  const toR = (d) => d * Math.PI / 180, toD = (r) => r * 180 / Math.PI;
-  const dLon = toR(b.lon - a.lon);
-  const y = Math.sin(dLon) * Math.cos(toR(b.lat));
-  const x = Math.cos(toR(a.lat)) * Math.sin(toR(b.lat)) -
-            Math.sin(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.cos(dLon);
-  return (toD(Math.atan2(y, x)) + 360) % 360;
-}
-const DIRS = ['N','NE','E','SE','S','SW','W','NW'];
-function tally(fn) {
-  const o = {};
-  for (const s of spots) { const k = fn(s); if (k) o[k] = (o[k] || 0) + 1; }
-  return o;
-}
-function barList(counts, colourFor, limit) {
-  const e = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit || 8);
-  if (!e.length) return '<div class="sub">Nothing yet</div>';
-  const max = e[0][1];
-  return e.map(([k, n]) =>
-    '<div class="row"><span>' + esc(k) + '</span><b>' + esc(n) + '</b></div>' +
-    '<div class="bar"><i style="width:' + Math.round(n / max * 100) + '%' +
-    (colourFor && colourFor(k) ? ';background:' + okColour(colourFor(k)) : '') + '"></i></div>').join('');
+/* ★★★ beta92 THE NUMBERS AND THE PANELS ARE src/utils/digiMapStats.ts (DIGI_STATS_JS) — the app's map runs the same text,
+ *  so the two cannot drift (Stuart 11-23: the app's map "is missing stuff"). This page maps its spots to the items. */
+${DIGI_STATS_JS}
+function statItems() {
+  return spots.map((s) => ({ call: s.callsign, grid: s.grid, country: s.country, band: s.band, mode: s.mode, fam: s.fam || s.mode,
+    snr: s.snr, km: s.km, lat: s.lat, lon: s.lon, t: s.timestamp }));
 }
 
 // ★ Everything below reads the spots list, so it all has to live in here to be re-runnable.
@@ -18827,115 +18816,20 @@ document.getElementById('empty').textContent = shown ? ''
   : 'No stations with a locator in ' + (WINDOWS.find((w) => w.id === win) || { words: 'this window' }).words + (srvOk ? '' : ' yet') + ' — leave DIGITAL SPOTS running.';
 drawMarkers();
 fitOnce();
-let html = '';
-const withKm = spots.filter(s => s.km != null).sort((a, b) => a.km - b.km);
-
-// Distance buckets — UberSDR's four bands, as percentages of the total.
-if (withKm.length) {
-  const max = withKm[withKm.length - 1].km, min = withKm[0].km;
-  const step = Math.max(1, (max - min) / 4);
-  html += '<div class="sect">DISTANCE</div>';
-  for (let i = 0; i < 4; i++) {
-    const lo = Math.round(min + i * step), hi = Math.round(min + (i + 1) * step);
-    const n = withKm.filter(s => s.km >= lo && (i === 3 ? s.km <= hi : s.km < hi)).length;
-    const pct = Math.round(n / withKm.length * 100);
-    html += '<div class="row"><span>' + lo + '–' + hi + ' km</span><b>' + n + ' (' + pct + '%)</b></div>' +
-            '<div class="bar"><i style="width:' + pct + '%"></i></div>';
-  }
-
-  html += '<div class="sect">BEARING</div><div id="roseWrap"></div>';
-}
-
-if (withKm.length) {
-  const c = withKm[0], f = withKm[withKm.length - 1];
-  html += '<div class="sect">RANGE</div>' +
-    '<div class="row"><span>Closest</span><b>' + esc(c.km) + ' km</b></div>' +
-    '<div class="sub">' + esc(c.callsign) + ' (' + esc(c.grid) + ') · ' + esc(c.country || '') +
-    ' · ' + esc(c.band) + ' · ' + esc(c.snr) + 'dB</div>' +
-    '<div class="row"><span>Farthest</span><b>' + esc(f.km) + ' km</b></div>' +
-    '<div class="sub">' + esc(f.callsign) + ' (' + esc(f.grid) + ') · ' + esc(f.country || '') +
-    ' · ' + esc(f.band) + ' · ' + esc(f.snr) + 'dB</div>';
-} else if (spots.length) {
-  html += '<div class="sect">RANGE</div><div class="sub">' +
-    'No receiver location published — distances unavailable.</div>';
-}
-
-html += '<div class="sect">TOP COUNTRIES</div>' + barList(tally(s => s.country), null, 10);
-html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.fam || s.mode), (m) => modeColour(m), 10);
-html += '<div class="sect">BY BAND</div>' + barList(tally(s => s.band), null, 12);
-if (show.aprs && aprs.length) {
-  const ak = aprs.filter((a) => a.km != null).sort((a, b) => b.km - a.km);
-  html += '<div class="sect">APRS</div><div class="row"><span>Stations</span><b>' + aprs.length + '</b></div>' +
-    (ak.length ? '<div class="row"><span>Farthest</span><b>' + esc(ak[0].km) + ' km</b></div><div class="sub">' + esc(ak[0].call) + '</div>' : '');
-}
-html += '<div class="sect">TOTALS</div>' +
-  (srvOk ? '<div class="sub">' + esc((WINDOWS.find((w) => w.id === win) || { words: '' }).words) + ' · background decoding and every listener</div>' : '') +
-  '<div class="row"><span>Stations</span><b>' + spots.length.toLocaleString('en-GB') + '</b></div>' +
-  (srvOk && srvTrunc && srvTotal > stored.size ? '<div class="sub">the newest ' + stored.size.toLocaleString('en-GB') + ' of ' + srvTotal.toLocaleString('en-GB') + ' in this window are drawn</div>' : '') +
-  (unplaced ? '<div class="row"><span>Heard without a locator</span><b>' + unplaced.toLocaleString('en-GB') + '</b></div>' : '') +
-  (srvOk && decodesToday >= 0 ? '<div class="row"><span>Decodes today (UTC)</span><b>' + decodesToday.toLocaleString('en-GB') + '</b></div>' : '') +
-  (srvOk && falseToday > 0 ? '<div class="row"><span>Set aside as false decodes</span><b>' + falseToday.toLocaleString('en-GB') + '</b></div><div class="sub">today (UTC): calls no country was allocated \u2014 decoded out of noise, never kept or reported. A real call at a locator its country cannot be at is kept, without the locator.</div>' : '') +
-  (srvOk && notKeptToday > 0 ? '<div class="row"><span>Not kept today</span><b>' + notKeptToday.toLocaleString('en-GB') + '</b></div><div class="sub">the day\u2019s list was full \u2014 these were decoded (and sent to PSK Reporter when it is on) but are not on the map</div>' : '') +
-  '<div class="row"><span>Countries</span><b>' +
-    new Set(spots.map(s => s.country).filter(Boolean)).size + '</b></div>' +
-  '<div class="row"><span>Bands</span><b>' +
-    new Set(spots.map(s => s.band)).size + '</b></div>';
-document.getElementById('stats').innerHTML = html;
-
-// Bearing rose — only meaningful with a receiver position.
-if (me && withKm.length) {
-  const counts = new Array(8).fill(0);
-  for (const s of spots) {
-    const b = bearing(me, s);
-    counts[Math.round(b / 45) % 8]++;
-  }
-  const tot = counts.reduce((a, b) => a + b, 0) || 1;
-  document.getElementById('roseWrap').innerHTML =
-    '<div id="rose">' + DIRS.map((d, i) =>
-      '<div><span class="n">' + d + '</span> <b>' + counts[i] + '</b><br>' +
-      '<span class="n">' + Math.round(counts[i] / tot * 100) + '%</span></div>').join('') +
-    '</div>';
-}
-
-// Legend — ★ V12: by MODE (every mode this server decodes, with its count), each swatch carrying the marker's letter.
-const modeN = tally(s => s.fam || s.mode);   // ★ by family: PSK31 and PSK63 are PSK's row
-const modeRows = MODES.slice();
-for (const m of Object.keys(modeN)) if (!modeRows.some(x => x.m === m)) modeRows.push({ m: m, colour: '#9E9E9E', ink: '#000000', letter: m.charAt(0) });
-document.getElementById('legend').innerHTML =
-  (me ? '<div class="lrow"><span style="display:inline-flex;width:12px;height:12px">' + RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') + '</span>Receiver</div>' : '') +
-  modeRows.map(x => '<div class="lrow" data-mode="' + esc(x.m) + '"><span class="sw mk" style="background:' + okColour(x.colour) +
-    ';color:' + okColour(x.ink) + '">' + esc(x.letter) + '</span>' + esc(x.m) +
-    '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(modeN[x.m] || 0) + '</span></div>').join('') +
-  (aprs.length || show.aprs ? '<div class="lrow"><span class="sw mk" style="background:#88CCEE;color:#000">A</span>APRS (its symbol where it sends one)' +
-    '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(aprs.length) + '</span></div>' +
-    // ★★ beta92 the symbols most heard, in our drawings (src/utils/aprsSymbols.ts APRS_LEGEND)
-    (show.aprs ? APRS_LEG.map((r) => '<div class="lrow"><span class="asym">' + okSvg(r.svg) + '</span>' + esc(r.words) + '</div>').join('') : '') : '') +
-  (overlay ? '<div class="lrow"><span class="sw" style="background:' + okColour(overlay.colour) + '"></span>' + esc(overlay.label) + '</div>' : '') +
-  '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Colour + letter = mode · size = SNR</div>';
-
-// Summary strip — latest and rarest, as UberSDR shows along the bottom.
-const byTime = [...spots].sort((a, b) => b.timestamp - a.timestamp);
-const cCounts = tally(s => s.country);
-const rarest = Object.entries(cCounts).sort((a, b) => a[1] - b[1])[0];
-const latest = byTime[0];
-function cell(k, v, sub) {
-  return '<div><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>' +
-         (sub ? '<div class="k">' + esc(sub) + '</div>' : '') + '</div>';
-}
-document.getElementById('summary').innerHTML = !show.spots && show.aprs
-  ? cell('APRS', aprs.length + ' station' + (aprs.length === 1 ? '' : 's'), aprs.length ? 'newest ' + aprs[0].call : 'none with a position yet')
-  : spots.length
-  ? cell('LATEST', (latest.country || latest.callsign) + ' · ' + latest.band,
-         latest.callsign + ' · ' + latest.mode + ' · ' + latest.snr + 'dB') +
-    (rarest ? cell('RAREST COUNTRY', rarest[0] + ' (' + rarest[1] + ')', '') : '') +
-    /* ★★ beta92 (Stuart 11-23: "it needs to say something like 15000 spots from 3200 transmitters"): a point is a
-     *  TRANSMITTER; a SPOT is a report sent to PSK Reporter over the window (the figure its own pages count). With no
-     *  reports sent (the owner's switch off) the card says transmitters only. */
-    (spotsSent > 0
-      ? cell('SPOTS', spotsSent.toLocaleString('en-GB'), 'from ' + spots.length.toLocaleString('en-GB') + ' transmitters · ' +
-             new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries')
-      : cell('TRANSMITTERS', spots.length.toLocaleString('en-GB'), new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries'))
-  : cell('WAITING', 'no spots yet', '');
+const st = digiStats(statItems(), me);
+const ak = aprs.filter((a) => a.km != null).sort((a, b) => b.km - a.km);
+const pan = digiStatsHtml(st, {
+  modes: MODES, modeColour: modeColour,
+  rx: me ? RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') : '',
+  aprs: { n: aprs.length, on: show.aprs, far: ak.length ? { km: ak[0].km, call: ak[0].call } : null, leg: APRS_LEG,
+          only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '' },
+  svgOk: okSvg, overlay: overlay,
+  tot: { srvOk: srvOk, winWords: (WINDOWS.find((w) => w.id === win) || { words: '' }).words, drawn: stored.size, total: srvTotal, trunc: srvTrunc,
+         unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent },
+});
+document.getElementById('stats').innerHTML = pan.stats;
+document.getElementById('legend').innerHTML = pan.legend;
+document.getElementById('summary').innerHTML = pan.summary;
 
 }
 render();                                        // the statistics at once, map or no map
@@ -19425,8 +19319,7 @@ async function renderGallery(page = galPage) {
       //    window (the card's own hour is inside 24 H; an older card's day is inside 7 D / 30 D)
       if (it.k === 'ft8' || it.k === 'cw' || it.k === 'psk' || it.k === 'rttyskim') {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
-        const age = Date.now() / 1000 - (Number(it.t) || 0);
-        const w = age < 86400 ? '24h' : age < 7 * 86400 ? '7d' : age < 30 * 86400 ? '30d' : 'all';
+        const w = digiGalItemWindow(it.t, Date.now() / 1000);
         mb.title = 'The stations heard, on the DIGI MODES MAP'; mb.setAttribute('aria-label', `Show the stations heard on the digi modes map: ${it.title}`);
         mb.onclick = (e) => { e.stopPropagation(); openDigiModesMap({ layer: 'spots', window: w }); };
         mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
@@ -19474,19 +19367,17 @@ async function renderGallery(page = galPage) {
      *  only when the store answers with a station (an older server, or one that heard nothing: no row). */
     if ((galKind === '' || galKind === 'ft8' || galKind === 'cw' || galKind === 'psk' || galKind === 'rttyskim') && galPage === 1) {
       const kindAt = galKind;
-      void fetch(galUrl('/vibeserver/stations.json?window=all&since=' + Math.floor(Date.now() / 1000 + 86400) + radioQuery(galRadio)), { cache: 'no-store' })
+      void fetch(galUrl(digiGalQuery(Date.now() / 1000) + radioQuery(galRadio)), { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null)).then((j) => {
-          const total = Number(j?.total) || 0;
-          if (!total || j?.off || host.querySelector('.galDigi') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
-          const modes = Object.entries((j.byMode ?? {}) as Record<string, number>).filter(([m]) => /^[A-Z0-9+-]{1,12}$/.test(m))
-            .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([m, n]) => `${m} ${n}`).join(' · ');
+          const card = digiGalCard(j);   // ★ beta92 src/utils/digiMapShared.ts — the app's gallery says the same
+          if (!card || host.querySelector('.galDigi') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
           const row = document.createElement('div'); row.className = 'sres galDigi'; row.tabIndex = 0; row.setAttribute('role', 'button');
           const f = document.createElement('span'); f.className = 'f'; f.textContent = 'SPOTS';
           const n = document.createElement('span'); n.className = 'n';
-          n.appendChild(document.createTextNode(`DIGI MODES MAP · ${total.toLocaleString('en-GB')} station${total === 1 ? '' : 's'} heard${modes ? ' · ' + modes : ''}`));
+          n.appendChild(document.createTextNode(card.title));
           n.appendChild(document.createElement('br'));
           const src = document.createElement('span'); src.className = 'src';
-          src.textContent = 'Every station the digital modes, CW, PSK and RTTY decoders heard, by the day — background decoding and every listener';
+          src.textContent = card.src;
           n.appendChild(src);
           const go = () => openDigiModesMap({ layer: 'spots', window: 'all' });
           const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.id = 'galDigiMap'; mb.textContent = 'MAP';

@@ -17,7 +17,32 @@ export interface StoredStation {
   radios: string[];
 }
 /** `radios` (beta92): the radio filter's choices — null unless the window holds stations from 2+ radios (logRadio.ts). */
-export interface StoredStations { now: number; total: number; truncated: boolean; off: boolean; stations: StoredStation[]; radios: LogRadio[] | null }
+export interface StoredStations { now: number; total: number; truncated: boolean; off: boolean; stations: StoredStation[]; radios: LogRadio[] | null;
+  /** ★ beta92 the server's own day counts (the web's TOTALS): absent from an older server */
+  counts?: DigiStoreCounts }
+/** ★★ beta92 the store's counts for the digi map's TOTALS (the web map window's decodesToday / notKeptToday / falseToday /
+ *  spotsSent — main.ts fetchStations). decodesToday -1 = the server does not say. */
+export interface DigiStoreCounts { decodesToday: number; notKeptToday: number; falseToday: number; spotsSent: number }
+/** ★★ beta92 THE STORE'S COUNTS on the digi map's TOTALS, as the map page reads them (MapOverlay __digiTotals): the window's
+ *  whole count and how many were drawn (the newest N of M), the day's counts, and the stations heard without a locator —
+ *  by radio, so the radio filter's pick counts its own (a station with no radio counts under every radio, as on the map). */
+export interface DigiTotals {
+  srvOk: boolean; total: number; drawn: number; trunc: boolean;
+  decodesToday: number; falseToday: number; notKeptToday: number; spotsSent: number;
+  unplaced: { all: number; none: number; by: Record<string, number> };
+}
+export function digiTotalsOf(held: Map<string, StoredStation>, counts: DigiStoreCounts | undefined, whole: { total: number; trunc: boolean }): DigiTotals {
+  const unplaced = { all: 0, none: 0, by: {} as Record<string, number> };
+  for (const st of held.values()) {
+    if (st.lat != null && st.lon != null) continue;   // ★ the web's rule: placed = the server gave it a position
+    unplaced.all++;
+    if (!st.radios.length) unplaced.none++;
+    for (const r of st.radios) unplaced.by[r] = (unplaced.by[r] || 0) + 1;
+  }
+  return { srvOk: true, total: whole.total, drawn: held.size, trunc: whole.trunc,
+           decodesToday: counts ? counts.decodesToday : -1, falseToday: counts?.falseToday ?? 0, notKeptToday: counts?.notKeptToday ?? 0,
+           spotsSent: counts?.spotsSent ?? 0, unplaced };
+}
 
 /** The windows the map offers, in the page's age select (the server's own words). */
 export const DIGI_STORE_WINDOWS: Array<{ id: string; label: string }> = [
@@ -54,7 +79,10 @@ export function digiStationsSanitise(j: any): StoredStations | null {
     });
   }
   return { now: okNum(j.now), total: Math.max(0, Math.round(okNum(j.total))), truncated: j.truncated === 1, off: false, stations,
-           radios: logRadioChoices(j.radios) };
+           radios: logRadioChoices(j.radios),
+           counts: { decodesToday: j.decodesToday != null && Number.isFinite(Number(j.decodesToday)) ? Math.max(0, Math.round(Number(j.decodesToday))) : -1,
+                     notKeptToday: Math.max(0, Math.round(okNum(j.notKeptToday))), falseToday: Math.max(0, Math.round(okNum(j.falseToday))),
+                     spotsSent: Math.max(0, Math.round(okNum(j.spotsSent))) } };
 }
 
 /** ★ A live poll (since=) merged into what is held: changed calls replace theirs; a sliding window drops the aged ones. */

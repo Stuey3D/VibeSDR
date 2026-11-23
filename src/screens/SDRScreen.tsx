@@ -18,7 +18,7 @@ import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type 
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
-import { digiStationsSanitise, digiStationsMerge, digiStationRows, type StoredStation } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
+import { digiStationsSanitise, digiStationsMerge, digiStationRows, digiTotalsOf, type StoredStation, type DigiTotals } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
 import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the logs' radio filter
 import { digiAprsPoints, digiOverlayClean, type DigiMapOverlay } from '../utils/digiMapShared';
 import { setDigiModesMapOpener, openDigiModesMap } from '../services/digiModesMap';
@@ -11986,6 +11986,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  picks (stations.json, polled every 15 s while it is open, only what changed since), and the APRS box's stations. */
   const [digiWin, setDigiWin] = useState('24h');
   const [digiStore, setDigiStore] = useState<Map<string, StoredStation>>(() => new Map());
+  /** ★★ beta92 the store's counts for the map's TOTALS (digiStations.ts digiTotalsOf — the web map window's). */
+  const [digiTotals, setDigiTotals] = useState<DigiTotals | null>(null);
   /** ★★ beta92 the radio filter's choices on the DIGI MODES MAP (logRadio.ts — 2+ radios hold stations, else null). */
   const [digiRadios, setDigiRadios] = useState<LogRadio[] | null>(null);
   const [digiAprsOn, setDigiAprsOn] = useState(false);
@@ -12008,13 +12010,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!digiStorePolling) return;
     let live = true, t: ReturnType<typeof setTimeout> | null = null, since = 0, held = new Map<string, StoredStation>();
+    let whole = { total: 0, trunc: false };   // ★ beta92 the window's whole count, from its full answer (the web's srvTotal)
+    setDigiTotals(null);
     const go = async () => {
       try {
         const q = `window=${digiWin}${since ? `&since=${since - 30}` : ''}`;
         const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/stations.json?${q}`, radioAuthSuffix || route.params.authSuffix || ''),
                               { cache: 'no-store' } as any);
         const j = r.ok ? digiStationsSanitise(await r.json()) : null;
-        if (live && j && !j.off) { held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); setDigiRadios(j.radios); }
+        if (live && j && !j.off) {
+          if (!since) whole = { total: j.total, trunc: j.truncated };
+          held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); setDigiRadios(j.radios);
+          setDigiTotals(digiTotalsOf(held, j.counts, whole));
+        }
       } catch { /* the next poll */ }
       if (live) t = setTimeout(() => { void go(); }, 15000);
     };
@@ -16571,6 +16579,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onNodesMap={IS_APPLE_TV ? null : (title, nodes, rx, refresh) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx, refresh }); }}
         onNavtexMap={IS_APPLE_TV ? null : () => { setGalleryOpen(false); openShipMap('navtex', '', true); }}
         onShipMap={IS_APPLE_TV ? null : (focus, key) => { setGalleryOpen(false); openShipMap(focus, key, true); }}
+        onDigiMap={IS_APPLE_TV || IS_TV ? null : (w) => { setGalleryOpen(false); openDigiModesMap({ layer: 'spots', window: w }); }}   /* ★ beta92 the web's SPOTS row */
       />
       <RecordingsOverlay
         visible={recordingsOpen}
@@ -17347,6 +17356,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         aprsFocus={aprsFocus}
         digiOverlay={digiOverlay}
         digiRadios={digiStorePolling ? digiRadios : null}
+        digiWindow={digiWin}
+        digiTotals={digiStorePolling ? digiTotals : null}
         onPickCity={() => setCityPickerOpen(true)}
         onClose={() => { setLocalMapOpen(false); setDigiAprsOn(false); setDigiOverlay(null); }}
         disconnected={serverLost || serverBusy || connTimedOut}

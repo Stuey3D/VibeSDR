@@ -966,6 +966,7 @@ if npx tsx scripts/test_aviation_app.ts; then pass=$((pass+1)); else fail=$((fai
 if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta90 THE DIGI MODES MAP's client halves: stations.json cleaned + merged, the overlay, APRS points, avPlaneAdsb.
 if npx tsx scripts/test_digi_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_digi_map_stats.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ beta92 the digi map's stats / legend / summary, shared app + web
 # ★★★ V12 beta92 ONE AUTO FIT FOR EVERY MAP (src/utils/mapAutoFit.ts): ADS-B's glide / hysteresis / framing, the receiver in
 #   view, the key's on / paused / off, and every map host wired to it.
 if npx tsx scripts/test_map_autofit.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

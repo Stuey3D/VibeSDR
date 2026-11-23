@@ -125,3 +125,28 @@ function digiShownPoints(spots,isShown,aprs,aprsOn){
   return p;
 }
 `;
+
+/* ★★ beta92 THE GALLERY'S DIGI MODES MAP ROW, one copy for the web gallery (main.ts) and the app's (GalleryOverlay):
+ *  "SPOTS · DIGI MODES MAP · 5,000 stations heard · FT8 4175 · WSPR 286 · …" with MAP, on page 1 of ALL and the spot
+ *  kinds, from stations.json?window=all (its total and byMode). null = no row (an older server, the store off, nothing
+ *  heard) — never a dead MAP key. */
+export const DIGI_GAL_KINDS: readonly string[] = ['ft8', 'cw', 'psk', 'rttyskim'];
+export const DIGI_GAL_SRC = 'Every station the digital modes, CW, PSK and RTTY decoders heard, by the day — background decoding and every listener';
+export function digiGalCard(j: unknown): { title: string; src: string } | null {
+  const x = j as any;
+  if (!x || typeof x !== 'object' || x.off) return null;
+  const total = Math.max(0, Math.round(Number(x.total) || 0));
+  if (!total) return null;
+  const by = x.byMode && typeof x.byMode === 'object' ? x.byMode as Record<string, unknown> : {};
+  const modes = Object.entries(by).filter(([m, n]) => /^[A-Z0-9+-]{1,12}$/.test(m) && Number.isFinite(Number(n)))
+    .map(([m, n]) => [m, Math.round(Number(n))] as [string, number])
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, 6).map(([m, n]) => `${m} ${n}`).join(' · ');
+  return { title: `DIGI MODES MAP · ${total.toLocaleString('en-GB')} station${total === 1 ? '' : 's'} heard${modes ? ' · ' + modes : ''}`, src: DIGI_GAL_SRC };
+}
+/** The stations.json question the row asks: every window, nothing new since tomorrow (the totals only, no stations). */
+export function digiGalQuery(nowSec: number): string { return `/vibeserver/stations.json?window=all&since=${Math.floor(nowSec + 86400)}`; }
+/** A spots summary card's MAP opens the window that holds its day (the card's hour is inside 24 H; older inside 7 D / 30 D). */
+export function digiGalItemWindow(t: number, nowSec: number): string {
+  const age = nowSec - (Number(t) || 0);
+  return age < 86400 ? '24h' : age < 7 * 86400 ? '7d' : age < 30 * 86400 ? '30d' : 'all';
+}
