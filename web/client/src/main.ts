@@ -18032,7 +18032,7 @@ let show = { spots: ${safe(open.layer !== 'aprs')}, aprs: ${safe(open.layer === 
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
  *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
-let decodesToday = -1, notKeptToday = 0, srvTotal = 0, srvTrunc = false;
+let decodesToday = -1, notKeptToday = 0, falseToday = 0, srvTotal = 0, srvTrunc = false;
 const STYLE = ${safe(DIGI_MODE_STYLE)};
 ${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (src/utils/spotTime.ts)
 const me = ${safe(me)};
@@ -18231,6 +18231,7 @@ async function fetchStations(full) {
     srvNow = okNum(j.now) || Math.round(Date.now() / 1000);
     if (j.decodesToday != null) decodesToday = Math.max(0, Math.round(okNum(j.decodesToday)));
     notKeptToday = Math.max(0, Math.round(okNum(j.notKeptToday)));
+    falseToday = Math.max(0, Math.round(okNum(j.falseToday)));   // ★ beta92: false decodes the server set aside (DIGI-MAP-FILTER.md)
     if (full) { srvTotal = Math.max(0, Math.round(okNum(j.total))); srvTrunc = okNum(j.truncated) > 0; }
     // ★ a live poll: the ones that aged out of a sliding window go
     const w = winSec();
@@ -18576,6 +18577,7 @@ html += '<div class="sect">TOTALS</div>' +
   (srvOk && srvTrunc && srvTotal > stored.size ? '<div class="sub">the newest ' + stored.size.toLocaleString('en-GB') + ' of ' + srvTotal.toLocaleString('en-GB') + ' in this window are drawn</div>' : '') +
   (unplaced ? '<div class="row"><span>Heard without a locator</span><b>' + unplaced.toLocaleString('en-GB') + '</b></div>' : '') +
   (srvOk && decodesToday >= 0 ? '<div class="row"><span>Decodes today (UTC)</span><b>' + decodesToday.toLocaleString('en-GB') + '</b></div>' : '') +
+  (srvOk && falseToday > 0 ? '<div class="row"><span>Set aside as false decodes</span><b>' + falseToday.toLocaleString('en-GB') + '</b></div><div class="sub">today (UTC): calls no country was allocated \u2014 decoded out of noise, never kept or reported. A real call at a locator its country cannot be at is kept, without the locator.</div>' : '') +
   (srvOk && notKeptToday > 0 ? '<div class="row"><span>Not kept today</span><b>' + notKeptToday.toLocaleString('en-GB') + '</b></div><div class="sub">the day\u2019s list was full \u2014 these were decoded (and sent to PSK Reporter when it is on) but are not on the map</div>' : '') +
   '<div class="row"><span>Countries</span><b>' +
     new Set(spots.map(s => s.country).filter(Boolean)).size + '</b></div>' +

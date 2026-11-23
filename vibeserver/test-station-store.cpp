@@ -9,6 +9,10 @@
 //  5. Days and windows: 1 h / 24 h / 7 d / 30 d / all; a spot yesterday is in 24 h, not in 1 h; changedSince = live poll.
 //  6. BOUNDED: kDayCap rows a day (196 KB), the rest counted dropped; maxOut calls in an answer; days pruned to the budget.
 //  7. subscribe(): every accepted reception, newToday once per call+mode+band; unsubscribe stops it; forEachSince.
+//  9. ★ beta92 THE FALSE-DECODE FILTER (vibe_callsign_entity.h, docs/v12/DIGI-MAP-FILTER.md): Stuart's Pi 500 false
+//     decodes — no administration → never kept, counted "falseToday"; an impossible grid → kept, unplaced, counted
+//     "unlocatedToday"; across a flush and a second process; a day file written BEFORE the filter (ver 1) is cleaned on
+//     read and on its next write.
 //  8. Cost: spots per second into the RAM table; a flush of a full day; a 30-day map answer (cached past days).
 //  `--write <galleryDir>` writes a small fixture (today's stations) for the web/app map tests and exits.
 #include "vibe_station_store.h"
@@ -284,6 +288,88 @@ static void testSubscribe() {
     CHECK(s.mapJson(3600, 0, NAN, NAN).find("\"off\":1") != std::string::npos, "switched off: the map says so");
 }
 
+static void testFilter() {
+    std::printf("── the false-decode filter (beta92) ──\n");
+    const std::string d = tmpDir("filter");
+    g_now = T0 + 3600;
+    vs::Store a([] { return g_now; }, false), b([] { return g_now; }, false);
+    for (auto* s : { &a, &b }) s->configure([d] { return d; }, [] { return 100ull << 20; });
+    std::vector<vs::Reception> heard;
+    a.subscribe([&](const vs::Reception& r) { heard.push_back(r); });
+    // Stuart's Pi 500 map, 2026-11-22
+    CHECK(!a.spot(rx("132XQA", "PC46", "FT8", "20m", -20, g_now - 60, vs::kBackground)), "132XQA is not a station");
+    CHECK(!a.spot(rx("1H7IJH", "EB72", "FT8", "20m", -20, g_now - 60, vs::kBackground)), "1H7IJH is not a station");
+    CHECK(a.spot(rx("7Q8FAZ", "OB45", "FT8", "20m", -20, g_now - 50, vs::kBackground)), "7Q8FAZ is kept…");
+    CHECK(a.spot(rx("YE9HMP", "PC24", "FT8", "20m", -20, g_now - 50, vs::kBackground)), "YE9HMP is kept…");
+    CHECK(b.spot(rx("N6LCO", "OC08", "FT8", "20m", -20, g_now - 40, vs::kBackground)), "N6LCO is kept…");
+    CHECK(b.spot(rx("FQ2HMC", "PD93", "FT8", "20m", -20, g_now - 40, vs::kBackground)), "FQ2HMC is kept…");
+    // real ones, untouched
+    CHECK(a.spot(rx("VK0EK", "MD66", "FT8", "20m", -18, g_now - 30)) && a.spot(rx("KC4AAA", "RB32", "FT8", "20m", -18, g_now - 30)), "Heard Island and McMurdo");
+    CHECK(b.spot(rx("3Y0J", "JD15", "FT8", "20m", -18, g_now - 30)) && b.spot(rx("G4ABC/MM", "GG00", "FT8", "20m", -18, g_now - 30)), "Bouvet and a /MM mid-ocean");
+    CHECK(heard.size() == 4, "the PSK Reporter hook hears only the kept (%zu)", heard.size());
+    CHECK(heard.size() >= 2 && heard[0].call == "7Q8FAZ" && heard[0].grid.empty() && heard[1].grid.empty(), "…and without the impossible grid");
+    auto rowOf = [](const std::string& j, const char* call) {
+        const size_t g = j.find(std::string("\"call\":\"") + call + "\"");
+        return g == std::string::npos ? std::string() : j.substr(g, j.find('}', g) - g);
+    };
+    auto checkMap = [&](const std::string& j, const char* when) {
+        CHECK(j.find("132XQA") == std::string::npos && j.find("1H7IJH") == std::string::npos, "%s: no false call on the map", when);
+        for (const char* c : { "7Q8FAZ", "YE9HMP", "N6LCO", "FQ2HMC" }) {
+            const std::string r = rowOf(j, c);
+            CHECK(!r.empty() && r.find("\"grid\":\"\"") != std::string::npos && r.find("\"lat\"") == std::string::npos, "%s: %s kept, unplaced: %s", when, c, r.c_str());
+        }
+        for (const char* c : { "VK0EK", "KC4AAA", "3Y0J", "G4ABC/MM" }) CHECK(rowOf(j, c).find("\"lat\"") != std::string::npos, "%s: %s placed", when, c);
+        CHECK(rowOf(j, "7Q8FAZ").find("\"country\":\"Malawi\"") != std::string::npos, "%s: the country", when);
+        CHECK(rowOf(j, "3Y0J").find("\"country\":\"Norway\"") != std::string::npos, "%s: a country the display table lacks, from the ITU table", when);
+    };
+    std::string j = a.mapJson(vs::kDaySec, 0, NAN, NAN);   // a's RAM + nothing on disk yet (b's rows not visible: unflushed)
+    CHECK(num(j, "falseToday") == 2 && num(j, "unlocatedToday") == 2, "unflushed counts: false %ld, unlocated %ld", num(j, "falseToday"), num(j, "unlocatedToday"));
+    a.flush(); b.flush();
+    vs::Store r([] { return g_now; }, false);
+    r.configure([d] { return d; }, [] { return 100ull << 20; });
+    j = r.mapJson(vs::kDaySec, 0, NAN, NAN);
+    checkMap(j, "after the flush");
+    CHECK(num(j, "falseToday") == 2 && num(j, "unlocatedToday") == 4, "on disk, both radios: false %ld, unlocated %ld", num(j, "falseToday"), num(j, "unlocatedToday"));
+    CHECK(num(j, "total") == 8 && num(j, "decodesToday") == 8, "8 stations, 8 decodes (the false ones are not decodes of anyone): %ld / %ld", num(j, "total"), num(j, "decodesToday"));
+    // ★ a day file written BEFORE the filter (ver 1 rows, beta90/91): cleaned on read, and on its next write
+    {
+        const int64_t day = vs::dayOf(g_now) - vs::kDaySec;
+        const std::string path = d + "/stations/" + vs::dayName(day);
+        vs::Hdr h{}; h.magic = vs::kMagic; h.recSize = vs::kRecSize; h.day = day;
+        std::vector<vs::Rec> recs;
+        auto old = [&](const char* call, const char* grid) {
+            vs::Station s; s.call = call; s.grid = grid; s.mode = "FT8"; s.band = "20m"; s.count = 3; s.first = day + 100; s.last = day + 200;
+            vs::Rec rr = vs::toRec(s); rr.ver = 1; recs.push_back(rr);
+        };
+        old("132XQA", "PC46"); old("1H7IJH", "EB72"); old("7Q8FAZ", "OB45"); old("YE9HMP", "PC24"); old("N6LCO", "OC08"); old("FQ2HMC", "PD93");
+        old("DL1ABC", "JO62"); old("ZL1ABC", "RF73");
+        h.n = (uint32_t)recs.size();
+        FILE* f = std::fopen(path.c_str(), "wb");
+        std::fwrite(&h, sizeof h, 1, f); std::fwrite(recs.data(), sizeof(vs::Rec), recs.size(), f); std::fclose(f);
+        std::vector<vs::Station> v;
+        CHECK(vs::readDay(path, day, v) && v.size() == 6, "an old file reads 6 of its 8 rows (%zu)", v.size());
+        vs::Store o([] { return g_now; }, false);
+        o.configure([d] { return d; }, [] { return 100ull << 20; });
+        const std::string jw = o.mapJson(2 * vs::kDaySec, 0, NAN, NAN);
+        CHECK(jw.find("132XQA") == std::string::npos && rowOf(jw, "DL1ABC").find("\"lat\"") != std::string::npos, "the 48 h map: old false rows gone, real ones placed");
+        CHECK(rowOf(jw, "N6LCO").find("\"lat\"") == std::string::npos, "the 48 h map: N6LCO unplaced on both days: %s", rowOf(jw, "N6LCO").c_str());
+        // its next write (a late spot for yesterday from a radio) keeps the old row's grid off
+        const int64_t keep = g_now; g_now = day + vs::kDaySec - 10;
+        vs::Store late([] { return g_now; }, false);
+        late.configure([d] { return d; }, [] { return 100ull << 20; });
+        late.spot(rx("N6LCO", "", "FT8", "20m", -10, day + 300));
+        late.flush();
+        g_now = keep;
+        std::vector<vs::Rec> raw(8); vs::Hdr h2{};
+        f = std::fopen(path.c_str(), "rb"); CHECK(f && std::fread(&h2, sizeof h2, 1, f) == 1 && std::fread(raw.data(), sizeof(vs::Rec), 8, f) == 8, "re-read");
+        if (f) std::fclose(f);
+        bool found = false;
+        for (const auto& rr : raw) if (std::string(rr.call) == "N6LCO") { found = true; CHECK(rr.grid[0] == 0 && rr.ver == 2 && rr.count == 4, "rewritten row: grid dropped, ver 2, count 4 (%s, %u, %u)", rr.grid, rr.ver, rr.count); }
+        CHECK(found, "N6LCO row on disk");
+    }
+    rmDir(d);
+}
+
 static void testCost() {
     std::printf("── cost ──\n");
     const std::string d = tmpDir("cost");
@@ -341,6 +427,7 @@ int main(int argc, char** argv) {
     testWindows();
     testBounds();
     testSubscribe();
+    testFilter();
     testCost();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

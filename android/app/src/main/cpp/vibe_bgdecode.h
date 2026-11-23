@@ -610,7 +610,11 @@ public:
         if (cw_) return;
         // ★★ beta 4: only a real CALLSIGN is a spot, and only a real grid is its position (ft8IsCallsign / ft8IsGrid).
         if (!ft8IsCallsign(call)) return;
-        add(mode.empty() ? std::string("FT8") : mode, call, ft8IsGrid(gridIn) ? gridIn : std::string(), rfHz, 0);
+        // ★★ beta92 the false-decode filter (vibe_callsign_entity.h): no administration = no spot; an impossible grid = none
+        const std::string g = ft8IsGrid(gridIn) ? gridIn : std::string();
+        const vibe::callentity::Verdict v = vibe::callentity::judge(call, g);
+        if (v == vibe::callentity::kNoEntity) return;
+        add(mode.empty() ? std::string("FT8") : mode, call, v == vibe::callentity::kImplausible ? std::string() : g, rfHz, 0);
     }
     /** The pre-V12 form (FT8 or FT4) — the tests and spotText. */
     void spot(bool ft4, const std::string& call, const std::string& gridIn, int snr, double rfHz) {
@@ -619,7 +623,7 @@ public:
     /** ★ A CW spot — the call was already checked by the skimmer (cw::isCallsign); CW carries no grid. */
     void cwSpot(const std::string& call, double rfHz, float wpm, float snrDb, const std::string& how) override {
         (void)snrDb; (void)how;
-        if (!cw_ || !ft8IsCallsign(call)) return;
+        if (!cw_ || !ft8IsCallsign(call) || vibe::callentity::judge(call, "") == vibe::callentity::kNoEntity) return;
         add("CW", call, std::string(), rfHz, wpm);
     }
     void add(const std::string& mode, const std::string& call, const std::string& grid, double rfHz, double wpm) {

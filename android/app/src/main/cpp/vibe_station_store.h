@@ -50,6 +50,7 @@
 #include <unistd.h>
 
 #include "vibe_callsign_country.h"
+#include "vibe_callsign_entity.h"
 #include "vibe_thread.h"
 
 namespace vibestations {
@@ -105,6 +106,7 @@ struct Station {
     int64_t first = 0, last = 0;
     uint8_t origins = 0;
     int64_t day = 0;          ///< the UTC day (seconds at 00:00)
+    uint8_t ver = 2;          ///< the record's version: 2 = judged by vibe_callsign_entity.h on the way in (beta92)
 };
 
 // ── validation (allow-lists: every field came off the air) ─────────────────────────────────────────────────────────
@@ -197,7 +199,10 @@ struct Rec {
 };
 /** `dropped`: new rows refused (one per call a flush could not add); `droppedSpots` (beta91, 0 in older files): the
  *  RECEPTIONS those rows carried, from every radio's RAM and disk refusals — so a full day still counts every decode. */
-struct Hdr { uint32_t magic, recSize, n, dropped; int64_t day; uint32_t droppedSpots; uint8_t pad[36]; };
+/** ★ beta92 (0 in older files): `falseSpots` — receptions set aside as FALSE DECODES (a call no administration was
+ *  allocated, vibe_callsign_entity.h); `unlocSpots` — receptions whose grid was dropped as impossible for the call
+ *  (kept as stations "heard without a locator"). */
+struct Hdr { uint32_t magic, recSize, n, dropped; int64_t day; uint32_t droppedSpots, falseSpots, unlocSpots; uint8_t pad[28]; };
 #pragma pack(pop)
 static_assert(sizeof(Rec) == kRecSize, "Rec is 64 bytes");
 static_assert(sizeof(Hdr) == kHeader, "Hdr is 64 bytes");
@@ -211,7 +216,7 @@ inline Station fromRec(const Rec& r, int64_t day) {
     Station s;
     s.call = getStr(r.call, 16); s.grid = getStr(r.grid, 8); s.mode = getStr(r.mode, 8); s.band = getStr(r.band, 8);
     s.first = r.first; s.last = r.last; s.count = r.count; s.freqHz = r.freqHz;
-    s.bestSnr = r.best; s.lastSnr = r.lastSnr; s.origins = r.origins; s.day = day;
+    s.bestSnr = r.best; s.lastSnr = r.lastSnr; s.origins = r.origins; s.day = day; s.ver = r.ver;
     return s;
 }
 inline Rec toRec(const Station& s) {
@@ -219,7 +224,7 @@ inline Rec toRec(const Station& s) {
     putStr(r.call, 16, s.call); putStr(r.grid, 8, s.grid); putStr(r.mode, 8, s.mode); putStr(r.band, 8, s.band);
     r.first = (uint32_t)std::max<int64_t>(0, s.first); r.last = (uint32_t)std::max<int64_t>(0, s.last);
     r.count = s.count; r.freqHz = (uint32_t)std::max(0.0, std::min(4.0e9, s.freqHz));
-    r.best = clampSnr(s.bestSnr); r.lastSnr = clampSnr(s.lastSnr); r.origins = s.origins; r.ver = 1;
+    r.best = clampSnr(s.bestSnr); r.lastSnr = clampSnr(s.lastSnr); r.origins = s.origins; r.ver = 2;
     return r;
 }
 /** Merge `d` (carrying `deltaCount` new receptions) into `into`: counts add, every other field is idempotent. */
@@ -235,8 +240,22 @@ inline void mergeInto(Station& into, const Station& d, uint32_t deltaCount) {
     into.origins |= d.origins;
 }
 
+/** ★★ beta92 THE FALSE-DECODE FILTER on a row written before it existed (ver < 2): false = not a station (no
+ *  administration has its prefix — drop the row); an impossible grid is cleared (the station stays, unplaced).
+ *  Rows written since were judged on the way in (spot()) and are left alone — no per-read cost on new files. */
+inline bool sanitise(Station& s) {
+    if (s.ver >= 2) return true;
+    const vibe::callentity::Verdict v = vibe::callentity::judge(s.call, s.grid);
+    if (v == vibe::callentity::kNoEntity) return false;
+    if (v == vibe::callentity::kImplausible) s.grid.clear();
+    s.ver = 2;
+    return true;
+}
+
 /** One day's file, read whole under a shared lock. False when it does not exist or is not ours. */
-inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& out, uint32_t* dropped = nullptr, uint32_t* droppedSpots = nullptr) {
+/** `counts` (beta92): the header's droppedSpots, falseSpots, unlocSpots. Rows written before the filter are sanitised. */
+inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& out, uint32_t* dropped = nullptr, uint32_t* droppedSpots = nullptr,
+                    uint32_t* counts = nullptr) {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
     ::flock(fd, LOCK_SH);
@@ -247,9 +266,10 @@ inline bool readDay(const std::string& path, int64_t day, std::vector<Station>& 
         std::vector<Rec> recs(n);
         const ssize_t want = (ssize_t)(n * sizeof(Rec));
         ok = n == 0 || ::pread(fd, recs.data(), (size_t)want, kHeader) == want;
-        if (ok) { out.reserve(out.size() + n); for (const auto& r : recs) out.push_back(fromRec(r, day)); }
+        if (ok) { out.reserve(out.size() + n); for (const auto& r : recs) { Station s = fromRec(r, day); if (sanitise(s)) out.push_back(std::move(s)); } }
         if (dropped) *dropped = h.dropped;
         if (droppedSpots) *droppedSpots = h.droppedSpots;
+        if (counts) { counts[0] = h.droppedSpots; counts[1] = h.falseSpots; counts[2] = h.unlocSpots; }
     }
     ::flock(fd, LOCK_UN);
     ::close(fd);
@@ -284,6 +304,9 @@ inline void aggregate(std::unordered_map<std::string, MapRow>& by, const Station
     if (!s.band.empty() && a.bands.size() < 8 && std::find(a.bands.begin(), a.bands.end(), s.band) == a.bands.end()) a.bands.push_back(s.band);
 }
 
+/** Receptions counted per day, not kept as heard: [0] refused (the day full), [1] false decodes, [2] grids dropped. */
+struct Counts { uint32_t n[3] = { 0, 0, 0 }; };
+
 class Store {
 public:
     using Listener = std::function<void(const Reception&)>;
@@ -313,6 +336,11 @@ public:
         r.grid = validGrid(r.grid, &grid) ? grid : std::string();
         r.mode = cleanMode(r.mode);
         if (r.mode.empty()) return false;
+        /* ★★★ beta92 THE FALSE-DECODE FILTER (vibe_callsign_entity.h, docs/v12/DIGI-MAP-FILTER.md — Stuart's Pi 500 map
+         *  drew "132XQA", "7Q8FAZ" at -74.5° …): a call no administration was allocated is NOT A STATION — counted, never
+         *  kept, never reported; a grid the call's administration cannot be at is DROPPED — the station stays, unplaced. */
+        const vibe::callentity::Verdict verdict = vibe::callentity::judge(r.call, r.grid);
+        if (verdict == vibe::callentity::kImplausible) r.grid.clear();
         r.band = cleanWord(r.band, 7, false);
         const int64_t now = this->now();
         if (r.utc <= 0 || r.utc > now + 300 || r.utc < now - 2 * kDaySec) r.utc = now;
@@ -320,10 +348,12 @@ public:
             std::lock_guard<std::mutex> lk(m_);
             const int64_t day = dayOf(r.utc);
             Table& t = days_[day];
+            if (verdict == vibe::callentity::kNoEntity) { ++t.ram[1]; return false; }
+            if (verdict == vibe::callentity::kImplausible) ++t.ram[2];
             const std::string k = keyOf(r.call, r.mode, r.band);
             auto it = t.rows.find(k);
             if (it == t.rows.end()) {
-                if (t.rows.size() >= dayCap()) { ++t.droppedRam; return false; }
+                if (t.rows.size() >= dayCap()) { ++t.ram[0]; return false; }
                 Row row;
                 row.s.call = r.call; row.s.mode = r.mode; row.s.band = r.band; row.s.day = day; row.s.first = r.utc;
                 it = t.rows.emplace(k, std::move(row)).first;
@@ -389,11 +419,13 @@ public:
         by.reserve(256);
         size_t rowsRead = 0;
         // today (and its unflushed rows) first: it is what changes, and the newest win the cap
-        uint64_t decodesToday = 0, notKeptToday = 0;
+        uint64_t decodesToday = 0, notKeptToday = 0, falseToday = 0, unlocToday = 0;
         {
-            std::vector<Station> v; uint32_t ds = 0; dayRows_(today, v, &ds); rowsRead += v.size();
+            std::vector<Station> v; uint32_t cs[3] = { 0, 0, 0 }; dayRows_(today, v, cs); rowsRead += v.size();
             for (const auto& s : v) { decodesToday += s.count; if (s.last >= since) aggregate(by, s, maxOut); }
-            notKeptToday = refusedOn_(today, ds);
+            notKeptToday = refusedOn_(today, cs[0], 0);
+            falseToday = refusedOn_(today, cs[1], 1);   // ★ beta92: set aside as false decodes (not in decodesToday)
+            unlocToday = refusedOn_(today, cs[2], 2);   // ★ beta92: kept, their impossible grid dropped (in decodesToday)
             decodesToday += notKeptToday;
         }
         if (since < today) pastDays_(since, today, by, maxOut, rowsRead);
@@ -413,6 +445,9 @@ public:
            //    how many of them the day's full list could not keep — the map says both, never a silently short count.
            + ",\"decodesToday\":" + std::to_string((unsigned long long)decodesToday)
            + ",\"notKeptToday\":" + std::to_string((unsigned long long)notKeptToday)
+           // ★★ beta92 the false-decode filter (docs/v12/DIGI-MAP-FILTER.md): what it set aside today, said, never silent
+           + ",\"falseToday\":" + std::to_string((unsigned long long)falseToday)
+           + ",\"unlocatedToday\":" + std::to_string((unsigned long long)unlocToday)
            + ",\"byMode\":{";
         bool first = true;
         for (const auto& kv : byMode) { if (!first) o += ','; first = false; o += "\"" + kv.first + "\":" + std::to_string(kv.second); }
@@ -425,7 +460,9 @@ public:
             double km = NAN;
             if (placed && std::isfinite(lat) && std::isfinite(lon)) km = gcKm(lat, lon, la, lo);
             std::string ctry;
-            for (char ch : vibe::callsign::country(a->call)) { const unsigned char u = (unsigned char)ch; if (u >= 0x20 && u < 0x7f && u != '"' && u != '\\' && ctry.size() < 40) ctry += ch; }
+            std::string named = vibe::callsign::country(a->call);
+            if (named.empty()) named = vibe::callentity::nameOf(a->call);   // ★ beta92: the ITU table names the rest (9N, ZD7, V3 …)
+            for (char ch : named) { const unsigned char u = (unsigned char)ch; if (u >= 0x20 && u < 0x7f && u != '"' && u != '\\' && ctry.size() < 40) ctry += ch; }
             std::string modes, bands;
             for (const auto& m : a->modes) { if (!modes.empty()) modes += ','; modes += "\"" + m + "\""; }
             for (const auto& m : a->bands) { if (!bands.empty()) bands += ','; bands += "\"" + m + "\""; }
@@ -471,7 +508,9 @@ private:
     struct Job { int64_t day; std::string key; Station s; uint32_t delta; };
     struct Table {
         std::unordered_map<std::string, Row> rows;
-        uint32_t droppedRam = 0, droppedRamFlushed = 0;   ///< receptions refused in RAM (the day's rows full), and how many are on disk
+        /** Receptions this process did not keep as heard, and how many of each are on disk: [0] refused (the day's rows
+         *  full), [1] ★ beta92 set aside as false decodes, [2] ★ beta92 kept with their impossible grid dropped. */
+        uint32_t ram[3] = { 0, 0, 0 }, ramFlushed[3] = { 0, 0, 0 };
         bool clean() const { for (const auto& kv : rows) if (kv.second.dirty) return false; return true; }
     };
     int64_t now() const { return clock_ ? clock_() : (int64_t)std::time(nullptr); }
@@ -485,19 +524,20 @@ private:
     uint64_t limit_() const { std::lock_guard<std::mutex> lk(cfgMtx_); return limitFn_ ? limitFn_() : 0; }
     std::string storeDir_() const { const std::string g = galleryDir_(); return g.empty() ? std::string() : g + "/stations"; }
 
-    /** Receptions refused on `day` (its rows full): the file's count, from every radio, plus this process's not yet flushed. */
-    uint64_t refusedOn_(int64_t day, uint32_t onDisk) const {
+    /** Receptions counted on `day` in counter `which` (Table::ram): the file's count, from every radio, plus this
+     *  process's not yet flushed. */
+    uint64_t refusedOn_(int64_t day, uint32_t onDisk, int which) const {
         uint64_t n = onDisk;
         const std::string dir = storeDir_();
         std::lock_guard<std::mutex> lk(m_);
         auto t = days_.find(day);
-        if (t != days_.end()) n += dir.empty() ? t->second.droppedRam : t->second.droppedRam - t->second.droppedRamFlushed;
+        if (t != days_.end()) n += dir.empty() ? t->second.ram[which] : t->second.ram[which] - t->second.ramFlushed[which];
         return n;
     }
     /** One day's rows: the file (every radio's flushed rows) with this process's unflushed part laid over it. */
-    void dayRows_(int64_t day, std::vector<Station>& out, uint32_t* droppedSpots = nullptr) const {
+    void dayRows_(int64_t day, std::vector<Station>& out, uint32_t* counts = nullptr) const {
         const std::string dir = storeDir_();
-        if (!dir.empty()) readDay(dir + "/" + dayName(day), day, out, nullptr, droppedSpots);
+        if (!dir.empty()) readDay(dir + "/" + dayName(day), day, out, nullptr, nullptr, counts);
         std::lock_guard<std::mutex> lk(m_);
         auto t = days_.find(day);
         if (t == days_.end()) return;
@@ -588,14 +628,15 @@ private:
         haveDir_.store(!dir.empty());
         if (dir.empty()) return;
         std::vector<Job> jobs;
-        std::map<int64_t, uint32_t> refused;   // ★ receptions this process refused in RAM since the last flush, per day
+        std::map<int64_t, Counts> refused;   // ★ receptions this process counted in RAM since the last flush, per day
         {
             std::lock_guard<std::mutex> lk(m_);
             for (auto& d : days_) {
-                if (d.second.droppedRam > d.second.droppedRamFlushed) {
-                    refused[d.first] = d.second.droppedRam - d.second.droppedRamFlushed;
-                    d.second.droppedRamFlushed = d.second.droppedRam;
-                }
+                for (int w = 0; w < 3; ++w)
+                    if (d.second.ram[w] > d.second.ramFlushed[w]) {
+                        refused[d.first].n[w] = d.second.ram[w] - d.second.ramFlushed[w];
+                        d.second.ramFlushed[w] = d.second.ram[w];
+                    }
             }
             for (auto& d : days_)
                 for (auto& kv : d.second.rows) {
@@ -613,7 +654,7 @@ private:
         std::vector<const Job*> failed;
         for (auto& dj : byDay) {
             auto rf = refused.find(dj.first);
-            if (!writeDay_(dir + "/" + dayName(dj.first), dj.first, dj.second, rf == refused.end() ? 0 : rf->second))
+            if (!writeDay_(dir + "/" + dayName(dj.first), dj.first, dj.second, rf == refused.end() ? Counts{} : rf->second))
                 failed.insert(failed.end(), dj.second.begin(), dj.second.end());
         }
         if (!failed.empty()) {
@@ -631,7 +672,7 @@ private:
         }
         prune_(dir);
     }
-    bool writeDay_(const std::string& path, int64_t day, const std::vector<const Job*>& jobs, uint32_t refusedSpots = 0) {
+    bool writeDay_(const std::string& path, int64_t day, const std::vector<const Job*>& jobs, Counts refusedSpots = Counts{}) {
         const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (fd < 0) return false;
         ::flock(fd, LOCK_EX);
@@ -650,7 +691,7 @@ private:
             auto f = idx.find(j->key);
             Station s;
             uint32_t at;
-            if (f != idx.end()) { at = f->second; s = fromRec(recs[at], day); mergeInto(s, j->s, j->delta); }
+            if (f != idx.end()) { at = f->second; s = fromRec(recs[at], day); sanitise(s); mergeInto(s, j->s, j->delta); }
             else {
                 if (h.n >= dayCap()) { ++h.dropped; h.droppedSpots += j->delta; continue; }
                 at = h.n++;
@@ -661,7 +702,7 @@ private:
             recs[at] = toRec(s);
             if (::pwrite(fd, &recs[at], sizeof(Rec), kHeader + (off_t)at * kRecSize) != (ssize_t)sizeof(Rec)) ok = false;
         }
-        h.droppedSpots += refusedSpots;
+        h.droppedSpots += refusedSpots.n[0]; h.falseSpots += refusedSpots.n[1]; h.unlocSpots += refusedSpots.n[2];
         if (::pwrite(fd, &h, sizeof h, 0) != (ssize_t)sizeof h) ok = false;
         ::flock(fd, LOCK_UN);
         ::close(fd);

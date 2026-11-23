@@ -66,6 +66,8 @@
 #include <unistd.h>
 #include <dirent.h>
 
+#include "vibe_callsign_entity.h"   // ★ beta92 the false-decode filter (docs/v12/DIGI-MAP-FILTER.md)
+
 namespace vibe {
 namespace spotreport {
 
@@ -515,6 +517,13 @@ public:
         const std::string mode = adifMode(s.mode);
         if (mode.empty() || !plausibleCall(s.call) || !(s.rfHz > 0) || s.rfHz >= 4294967295.0) return;
         s.grid = cleanGrid(s.grid);
+        /* ★★ beta92 THE FALSE-DECODE FILTER (vibe_callsign_entity.h): a call no administration was allocated is never
+         *  reported; a grid the call's administration cannot be at goes without it (the station is still reported). */
+        {
+            const vibe::callentity::Verdict v = vibe::callentity::judge(s.call, s.grid);
+            if (v == vibe::callentity::kNoEntity) return;
+            if (v == vibe::callentity::kImplausible) s.grid.clear();
+        }
         if (!(s.slotUtc > 0)) s.slotUtc = (double)nowS();
         const std::string band = bandOf(s.rfHz);
         // ★ once per batch per call (≥ five minutes), and per call + band + mode not within kRepeatSec of its last report

@@ -1928,8 +1928,19 @@ private:
             }
             return o;
         };
-        const std::string c = safe(sp.call, 32), g = safe(sp.grid, 8), m = safe(sp.mode, 12);
+        const std::string c = safe(sp.call, 32), m = safe(sp.mode, 12);
+        std::string g = safe(sp.grid, 8);
         if (c.empty() || m.empty()) return;
+        /* ★★★ beta92 THE FALSE-DECODE FILTER (vibe_callsign_entity.h, docs/v12/DIGI-MAP-FILTER.md — Stuart's Pi 500 map
+         *  drew "132XQA" and "7Q8FAZ" at -74.5°): a call no administration was allocated is not a spot — the store counts
+         *  it (falseToday) and nothing else sees it (summary, PSK Reporter, the listener's list and live map); a grid the
+         *  call's administration cannot be at is dropped here, so no list or map places it. Hashed "<…>" calls and
+         *  free text never reach here (the engines spot only calls). */
+        {
+            const vibe::callentity::Verdict v = vibe::callentity::judge(c, g);
+            if (v == vibe::callentity::kNoEntity) { toStations_(m, c, g, sp.snr, rfHz, (int64_t)(ts / 1000)); return; }
+            if (v == vibe::callentity::kImplausible) g.clear();
+        }
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(m, c, g, sp.snr, rfHz); }
         /* ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h, docs/v12/PSK-REPORTER.md): every spot this server decodes — a
          *  listener's run or background decoding — goes to the process's reporter, which drops it at once unless the owner
