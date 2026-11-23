@@ -2213,6 +2213,15 @@ static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
 
 int main(int argc, char** argv) {
     g_argv = argv;
+    /* ★ TEST-ONLY (scripts/test-server-quick-stop.mjs, docs/v12/SHUTDOWN-HANG.md): an object whose destructor never
+     *   returns, made first so it is destroyed LAST at exit — the shape of a library's finaliser that blocks (UHD's libusb
+     *   session joining its "libusb_event" thread, SDRplay's API taking its system-wide lock). The process must still
+     *   end promptly after its orderly stop: nothing after "local SDR stopped" may depend on a static destructor. */
+    if (const char* e = std::getenv("VIBE_TEST_EXIT_WEDGE"); e && *e == '1') {
+        struct ExitWedge { ~ExitWedge() { for (;;) std::this_thread::sleep_for(std::chrono::seconds(60)); } };
+        static ExitWedge wedge;
+        (void)wedge;
+    }
 #ifdef _WIN32
     /* ★★ WINDOWS, BEFORE ANYTHING ELSE: Winsock up (no socket works without it), and the console told the
      *    log is UTF-8 — every line carries an em dash or a ★, which the default OEM code page prints as
