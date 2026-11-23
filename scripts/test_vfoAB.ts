@@ -403,6 +403,48 @@ console.log('── round 3: mutes, each VFO\'s squelch by name, B\'s auto squel
   ok(nk === -78, `a new channel (key): reseeded there (${nk})`);
   ok(new SqlAutoTrack().tick(NaN, 'k', 0, 12, 0) === null, 'no level: nothing sent');
 }
+{
+  // ★★ beta92 THE SEED LOCK (Stuart 11-23: "set itself below the noise and stayed open … a few times"): the first reading's
+  //    neighbour estimate is 15 dB low (a stale view), the channel is EMPTY noise at -100. Before: the seed at -115 opened the
+  //    gate, the baseline could not rise while open, open for good. Now: it rises while the gate has never shut, and shuts.
+  const tr = new SqlAutoTrack();
+  let now = 0;
+  const step = (chan: number, ex: number) => { now += 50; return tr.tick(chan, 'k', ex, 12, now); };
+  step(-100, 15);                                   // the bad first seed: base -115, threshold -103 → open
+  ok(tr.sent === -999, `a seed 15 dB low opens the gate at once (${tr.sent})`);
+  let shutAt = -1;
+  for (let i = 0; i < 200 && shutAt < 0; i++) { step(-100, 0); if (tr.sent !== -999) shutAt = now; }
+  ok(shutAt > 0 && shutAt <= 6000, `…but the baseline climbs out and the gate shuts on the empty channel (${shutAt} ms)`);
+  ok(tr.base > -108 && tr.base <= -100, `the baseline climbed out of the bad seed, under the noise (${tr.base.toFixed(1)})`);
+  ok(tr.shown > -100, `the threshold sits above the channel's noise (${tr.shown.toFixed(1)})`);
+  // and once it has shut, a real over does not drag it up (the old rule)
+  const b0 = tr.base;
+  for (let i = 0; i < 100; i++) step(-70, 30);
+  ok(tr.base <= -97 && tr.base >= b0 - 0.5, `after it has shut once, a long over does not drag the baseline towards the signal — it stays with the noise (${b0.toFixed(1)} → ${tr.base.toFixed(1)})`);
+}
+{
+  // ★★ beta92 THE AGC MOVES THE FLOOR (Stuart 11-23: "the agc either keeping it shut or opening it fully"): settled shut
+  //    on noise at -100, then the gain steps UP 15 dB — channel noise AND neighbours at -85. Before: open for good (the
+  //    baseline could not rise while open). Now: the neighbour floor drags it up and the gate shuts again.
+  const tr = new SqlAutoTrack();
+  let now = 0;
+  const step = (chan: number, ex: number) => { now += 50; return tr.tick(chan, 'k', ex, 12, now); };
+  for (let i = 0; i < 60; i++) step(-100, 0);
+  ok(tr.sent === -88, `settled shut on the noise (${tr.sent})`);
+  let reshut = -1; const t0 = now;
+  for (let i = 0; i < 200 && reshut < 0; i++) { step(-85, 0); if (tr.sent !== -999 && i > 0) reshut = now - t0; }
+  ok(reshut > 0 && reshut <= 5000, `the gain steps up 15 dB: the gate shuts again on the noise (${reshut} ms)`);
+  ok(tr.shown > -85, `…the threshold now above the new noise (${tr.shown.toFixed(1)})`);
+  // a real signal still opens it at the new gain
+  ok(step(-55, 30) === -999, 'a signal at the new gain still opens it');
+}
+{
+  // a real station already on the channel when auto is switched on: the neighbour ceiling keeps it open
+  const tr = new SqlAutoTrack();
+  let now = 0;
+  for (let i = 0; i < 200; i++) { now += 50; tr.tick(-70, 'k', 30, 12, now); }
+  ok(tr.sent === -999, `switched on during a station: still open after 10 s — the ceiling holds the baseline at the noise (${tr.base.toFixed(1)})`);
+}
 console.log('── decode on either VFO ──');
 {
   ok(parseWatch({ type: 'watch', max: 1, decB: true, chans: [] })!.decB === true && parseWatch({ type: 'watch', max: 1, chans: [] })!.decB === false

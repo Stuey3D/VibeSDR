@@ -123,7 +123,7 @@ import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, gallery
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
-import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
+import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../../../src/services/squelchNeighbours';
 import { SqlAutoTrack } from '../../../src/utils/sqlAutoTrack';
 import { VS_SQL_OFF, vsSqlOn, vsSqlRestore } from '../../../src/services/vibeSquelch';
 
@@ -5912,6 +5912,7 @@ const SQL_AUTO_HYST_DB = 3;
  *    the gate itself is the server's, and this is the only lever the client has over it. */
 const SQL_AUTO_HANG_MS = 700;
 let sqlOpenAt = 0;
+let sqlEverShut = false;   // ★ beta92 the gate has shut since the seed (the seed lock — squelchNeighbours.ts SQL_AUTO_SEED_RISE)
 /* ★ `sig` arrives at a MEASURED 20/s (not the 10/s first assumed), so the constants below are in
  *  units of 1/20 s — worth stating, because every time constant here depends on it. */
 
@@ -5967,7 +5968,7 @@ function autoSquelchTick() {
    *  against the channel we are judging now covers every path, including the ones nobody has
    *  written yet. */
   const key = sqlChannelKey();
-  if (key !== sqlSeedKey) { sqlSeedKey = key; sqlFloorEwma = NaN; sqlNearRef = NaN; }
+  if (key !== sqlSeedKey) { sqlSeedKey = key; sqlFloorEwma = NaN; sqlNearRef = NaN; sqlEverShut = false; }
   /* ★★★ THE REFERENCE THE SIGNAL CANNOT BE IN. What `chan` would read if this channel were empty:
    *  the channel figure minus how far the channel stands above its empty neighbours on the view.
    *  It is right the instant you tune — including tuning ONTO a voice, which is exactly the case that
@@ -6009,7 +6010,7 @@ function autoSquelchTick() {
    *  ★ The lesson is the ordering, not the NaN: a sentinel that means "not known yet" has to be
    *    resolved before the first reader, or every reader needs to know about it. */
   const openish = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
-  const a = srvChanADb < sqlFloorEwma ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
+  const a = srvChanADb < sqlFloorEwma ? SQL_AUTO_FALL : (openish ? (sqlEverShut ? 0 : SQL_AUTO_SEED_RISE) : SQL_AUTO_RISE);
   sqlFloorEwma = Number.isFinite(sqlFloorEwma) ? sqlFloorEwma + (srvChanADb - sqlFloorEwma) * a
                                                : srvChanADb;
   /* ★★ AND IT IS A CEILING. The tracker is kept exactly as measured and tuned — the neighbours only
@@ -6018,9 +6019,13 @@ function autoSquelchTick() {
    *  wrong until the carrier drops. */
   if (Number.isFinite(sqlNearRef) && sqlFloorEwma > sqlNearRef + SQL_NEAR_CEIL_DB)
     sqlFloorEwma = sqlNearRef + SQL_NEAR_CEIL_DB;
+  // ★★ beta92 and a floor: the baseline follows the AGC both ways (squelchNeighbours.ts SQL_NEAR_FLOOR_DB)
+  if (Number.isFinite(sqlNearRef) && sqlFloorEwma < sqlNearRef - SQL_NEAR_FLOOR_DB)
+    sqlFloorEwma = sqlNearRef - SQL_NEAR_FLOOR_DB;
   const decide = sqlFloorEwma + sqlAutoMargin - (openish ? SQL_AUTO_HYST_DB : 0);
   if (srvChanADb >= decide) sqlOpenAt = nowMs;
   const gateOpen = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
+  if (!gateOpen) sqlEverShut = true;
   /* ★★★ WHAT THE RED LINE SHOWS IS THE SETTING, NOT WHAT IS MOMENTARILY APPLIED. During a hang the
    *  applied threshold is at the bottom of the scale (that is how the gate is held open), so drawing
    *  the line from it would slam it to the far left every time somebody spoke — an indicator that
@@ -6055,7 +6060,7 @@ function setSquelchAuto(on: boolean, persist = true) {
   sqlAuto = on;
   if (persist) savePref('squelchAuto', on);
   if (on) {
-    sqlFloorEwma = NaN; sqlNearRef = NaN; sqlSeedKey = sqlChannelKey();   // seed from the CURRENT channel
+    sqlFloorEwma = NaN; sqlNearRef = NaN; sqlEverShut = false; sqlSeedKey = sqlChannelKey();   // seed from the CURRENT channel
     autoSquelchTick();
   } else {
     const p = prefs();

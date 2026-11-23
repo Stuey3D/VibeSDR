@@ -27,7 +27,7 @@ import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode, ICOM_SCOPE_FLOOR_DB,
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
-import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
+import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlEffective, vsSqlRestore } from '../services/vibeSquelch';
 import { SqlAutoTrack } from '../utils/sqlAutoTrack';
 import { APP_PROTO } from '../constants/version';
@@ -4395,7 +4395,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** The tracker's whole state. In a ref because the per-frame emit runs inside socket callbacks
    *  created once — a state closure there would be stale from the second frame onwards.
    *  `base` NaN = "take the next sample as the truth", the seed the toggle and every reseed use. */
-  const sqlAutoTrk = useRef({ base: NaN, key: '', openAt: 0, shown: NaN, sentOpen: false, sentDb: NaN, near: NaN });
+  const sqlAutoTrk = useRef({ base: NaN, key: '', openAt: 0, shown: NaN, sentOpen: false, sentDb: NaN, near: NaN, everShut: false });
   /** The manual threshold, in its backend's own native unit, captured the moment auto was switched
    *  ON — because from then on the live state IS the automatic value, so there is nothing else left
    *  to restore from. NaN = nothing remembered (auto has never been on this session). */
@@ -9136,7 +9136,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             const aSl = abRows && abActiveRef.current === 'B' && abNow?.other ? abNow.other : null;
             const key = aSl ? `${Math.round(aSl.frequency)}|${aSl.mode}|${aSl.bandwidthLow}|${aSl.bandwidthHigh}`
               : `${Math.round(s.frequency)}|${s.mode}|${s.bandwidthLow}|${s.bandwidthHigh}`;
-            if (key !== trk.key) { trk.key = key; trk.base = NaN; trk.near = NaN; }
+            if (key !== trk.key) { trk.key = key; trk.base = NaN; trk.near = NaN; trk.everShut = false; }
             /* ★★★ THE REFERENCE THE SIGNAL CANNOT BE IN — squelchNeighbours.ts, shared with the web
              *  client. What `autoChan` would read if this channel were empty: the channel figure minus
              *  how far the channel stands above its empty neighbours on the view. Unit-free, so the
@@ -9160,7 +9160,8 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  squelch never engaged at all. `base` NaN makes the `<` false, so the seed branch
              *  runs first and every reader below sees a number. */
             const openish = (nowMs - trk.openAt) < SQL_AUTO_HANG_MS;
-            const a = autoChan < trk.base ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
+            // ★ beta92 the seed lock: while the gate has never shut since the seed, an open gate is no evidence of a signal
+            const a = autoChan < trk.base ? SQL_AUTO_FALL : (openish ? (trk.everShut ? 0 : SQL_AUTO_SEED_RISE) : SQL_AUTO_RISE);
             /* ★★★ THE BASELINE ONLY RISES WHILE THE GATE IS SHUT (that is the `openish ? 0`).
              *  Falling towards a new low is always believed — the channel genuinely got quieter —
              *  but a rise is only believed while we think we are listening to NOISE. Otherwise a
@@ -9170,9 +9171,12 @@ export default function SDRScreen({ route, navigation }: Props) {
             // ★★ And a ceiling: the tracker is kept as tuned; the neighbours only stop it believing a
             //    level the empty channels beside it do not have.
             if (Number.isFinite(trk.near) && trk.base > trk.near + SQL_NEAR_CEIL_DB) trk.base = trk.near + SQL_NEAR_CEIL_DB;
+            // ★★ beta92 and a floor: the baseline follows the AGC both ways (squelchNeighbours.ts SQL_NEAR_FLOOR_DB)
+            if (Number.isFinite(trk.near) && trk.base < trk.near - SQL_NEAR_FLOOR_DB) trk.base = trk.near - SQL_NEAR_FLOOR_DB;
             const decide = trk.base + sqlAutoMarginRef.current - (openish ? SQL_AUTO_HYST_DB : 0);
             if (autoChan >= decide) trk.openAt = nowMs;
             const gateOpen = (nowMs - trk.openAt) < SQL_AUTO_HANG_MS;
+            if (!gateOpen) trk.everShut = true;
             trk.shown = decide;
             /* ★★★ TWO THRESHOLDS, AND THE HANG MUST HOLD THE GATE GENUINELY OPEN. Merely lowering
              *  the threshold by the hysteresis did NOTHING, and a recording proved it: 37 closures
@@ -11030,7 +11034,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Seed from the CURRENT channel: base NaN = "take the next sample as the truth", and the
       //   blank key makes the next frame reseed whatever we are actually tuned to.
       const t = sqlAutoTrk.current;
-      t.base = NaN; t.key = ''; t.openAt = 0; t.shown = NaN; t.sentOpen = false; t.sentDb = NaN; t.near = NaN;
+      t.base = NaN; t.key = ''; t.openAt = 0; t.shown = NaN; t.sentOpen = false; t.sentDb = NaN; t.near = NaN; t.everShut = false;
     } else {
       const m = sqlManualRef.current;
       // ★ The per-backend "off" sentinels, for a session where nothing manual was ever set.

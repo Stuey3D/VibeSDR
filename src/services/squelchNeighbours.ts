@@ -68,6 +68,13 @@ export function channelExcessDb(
  *   The channel's own noise can legitimately read a little above its neighbours (the VFO sits near
  *   the tuner's DC offset, and the neighbour figure is a low percentile); beyond this it is a signal. */
 export const SQL_NEAR_CEIL_DB = 3;
+/** ★★ beta92 …AND A FLOOR (Stuart 11-23: "the auto squelch should always learn and adapt as ive seen the agc either keeping
+ *   it shut or opening it fully"). The empty neighbours move with every gain change exactly as the channel's own noise does,
+ *   and a signal on the channel cannot be in them — so the baseline is held within [near − FLOOR, near + CEIL] at all
+ *   times. An AGC step up drags it up with the noise (no gate stuck open); a step down drags it down (no gate stuck shut). */
+export const SQL_NEAR_FLOOR_DB = 3;
+/** ★★ beta92 THE SEED LOCK — see src/utils/sqlAutoTrack.ts SQL_AUTO_SEED_RISE (the three copies share this value). */
+export const SQL_AUTO_SEED_RISE = 0.05;
 /** ★ The reference is smoothed before it caps anything: frame to frame it wobbles by the noise's own
  *   spread, and capping on every dip would drag the baseline down into the noise and chatter. ~1 s. */
 export const SQL_NEAR_SMOOTH = 0.1;
