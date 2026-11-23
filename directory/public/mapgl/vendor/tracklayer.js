@@ -43,6 +43,8 @@
  *     rings (an area in parts), drawn from minZoom, 'sig' standing for the geometry when comparing (no re-stringify).
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
  *   layer.focus(key) · layer.select(key | null) · layer.fit() · layer.setReceiver(lat, lon) · layer.refreshCard() · layer.destroy()
+ *   ★ beta92 layer.points() — [[lat, lon], …] of what was heard (the shared AUTO FIT's input) · opts.firstFit:false — no
+ *     immediate first fit (the host's auto fit frames it)
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
 (function (global) {
   'use strict';
@@ -428,7 +430,9 @@
       /* ★★ V12 2026-11-04 THE FIRST VIEW FITS WHAT WAS HEARD (Stuart: "the maritime map starts zoomed in on the server
        *  location when it should default to FIT"). The sea areas (_nofit) arrive first, and counting them as items fitted
        *  the receiver alone: one point, setView(…, 10) — the server's doorstep. Now the first fit waits for a heard item. */
-      if (!fitted && heardCount() > 0) { fitted = true; fit(); }
+      /* ★★ beta92 a host that runs the shared AUTO FIT (src/utils/mapAutoFit.ts — the ADS-B map's glide) passes
+       *  firstFit:false: the first framing is the auto fit's, not this immediate one. */
+      if (!fitted && heardCount() > 0) { fitted = true; if (opts.firstFit !== false) fit(); }
       syncArcs();
       syncShapes();
       declutterSoon();
@@ -516,6 +520,8 @@
       if (pts.length === 1) { if (!rx || heardCount() > 0) map.setView(pts[0], 10); return; }
       try { map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 12 }); } catch (err) { console.error('[tracklayer] fit', err); }
     }
+    /** ★ beta92 what the shared AUTO FIT frames: every item heard and still on the map, not the chart (_nofit). */
+    function points() { var pts = []; items.forEach(function (e) { if (!e.gone && !(e.item && e.item._nofit)) pts.push([e.lat, e.lon]); }); return pts; }
     function setReceiver(lat, lon) {
       if (!(isFinite(lat) && isFinite(lon))) return;
       rx = { lat: lat, lon: lon };
@@ -541,7 +547,7 @@
       try { map.off('movestart', nogOn); map.off('zoomstart', nogOn); map.off('moveend', nogOff); map.off('zoomend', nogOff); map.off('zoomend', zoomed); map.off('moveend', declutterSoon); } catch (err) { /* gone */ }
       if (card.parentNode) card.parentNode.removeChild(card);
     }
-    return { update: update, select: function (k) { select(k == null ? null : String(k), false); }, focus: focus, fit: fit,
+    return { update: update, select: function (k) { select(k == null ? null : String(k), false); }, focus: focus, fit: fit, points: points, receiver: function () { return rx; },
              setReceiver: setReceiver, destroy: destroy, selected: function () { return sel; },
              refreshCard: function () { cardHtml = ''; renderCard(); }, cardEl: function () { return cardBody; } };
   }

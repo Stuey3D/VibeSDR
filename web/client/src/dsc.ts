@@ -15,6 +15,7 @@
  *   is on (distress + routine, ITU-R M.541) and, when the dial sits ON an assigned frequency, a one-tap TUNE … USB.
  */
 import { mapglVendor, type MapGLKit } from './mapgl';
+import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { DSC_DISTRESS, dscTuneFor as sharedTuneFor, dscCentreFor } from '../../../src/utils/dscChannels';
 export { DSC_DISTRESS, DSC_ROUTINE, DSC_ALL, dscBandOf, dscBandLabel, dscBandChannels, dscChannelOn, dscChannelsForDial,
          dscReachable, dscTuneOffer, dscKeyTitle, dscDialText, type DscBand, type DscChannel } from '../../../src/utils/dscChannels';
@@ -146,8 +147,12 @@ ${glHead}
   #note{position:absolute;z-index:1000;left:10px;bottom:10px;max-width:min(560px,calc(100% - 40px));background:rgba(8,6,2,0.94);
     border:1px solid rgba(255,160,0,0.30);border-radius:8px;padding:8px 10px;line-height:1.4}
   .pop{font:12px ui-monospace,Menlo,monospace;max-width:320px;white-space:normal}
+  /* ★ beta92 the FIT key — the shared auto fit's AUTO key (src/utils/mapAutoFit.ts): on, striped when paused, off */
+  #fitBtn{position:absolute;z-index:1000;right:10px;top:10px;font:inherit;font-size:11px;letter-spacing:1px;color:#ffb833;
+    background:rgba(8,6,2,0.94);border:1px solid rgba(255,160,0,0.30);border-radius:6px;padding:6px 12px;cursor:pointer}
+  #fitBtn.on{border-color:#ffb833;background:rgba(255,160,0,0.16)}
 </style>
-<div id="m"></div><div id="note"></div>
+<div id="m"></div><div id="note"></div><button type="button" id="fitBtn">FIT</button>
 <script>
 const PINS = ${safe(clean)};
 const me = ${safe(me)};
@@ -192,10 +197,21 @@ function bootLeaflet() {
     if (!window.VibeMap) { const s = document.createElement('script'); s.textContent = VIBEMAP_SRC; document.head.appendChild(s); }
     draw();
     window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'spots', scale: 'nautical' });
+    autoFit();
   };
   js.onerror = () => { document.getElementById('note').textContent = 'The map could not be loaded from this server.'; };
   document.head.appendChild(js);
 }
-if (bootGPU()) draw(); else bootLeaflet();
+/* ★★★ beta92 THE AUTO FIT (src/utils/mapAutoFit.ts — the ADS-B map's glide): every pin and the receiver in view */
+${MAP_AUTOFIT_JS}
+function autoFit() {
+  if (!map || !window.VibeAutoFit) return;
+  try {
+    const af = window.VibeAutoFit.attach(map, { points: () => PINS.map((p) => [p.lat, p.lon]), receiver: () => me,
+                                                button: document.getElementById('fitBtn'), what: 'position' });
+    af.poke();
+  } catch (e) { console.error('auto fit', e); }
+}
+if (bootGPU()) { draw(); autoFit(); } else bootLeaflet();
 ${ES}`;
 }

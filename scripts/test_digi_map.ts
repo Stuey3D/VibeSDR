@@ -111,32 +111,26 @@ console.log('── beta92 APRS symbols: clear, our own, a fallback ──');
   ok(appAprsIcon(st).html === webAprsIcon(st).html && appAprsIcon(st).html === aprsIcon(st).html, 'the app and the web page draw from the one set');
 }
 
-console.log('── beta92 the FIT key: the filtered stations only ──');
+console.log('── beta92 the FIT key: the filtered stations only, and the receiver (the shared auto fit) ──');
 {
-  const fns = new Function(DIGI_FIT_JS + '\nreturn { digiShownPoints, digiFitView, digiFitApply };')() as {
-    digiShownPoints: (sp: any[], isShown: (s: any) => boolean, ap: any[], on: boolean) => [number, number][];
-    digiFitView: (p: any[]) => any; digiFitApply: (m: any, L: any, v: any) => boolean };
+  const fns = new Function(DIGI_FIT_JS + '\nreturn { digiShownPoints };')() as {
+    digiShownPoints: (sp: any[], isShown: (s: any) => boolean, ap: any[], on: boolean) => [number, number][] };
   const spots = [{ call: 'A', mode: 'FT8', plat: 50, plon: -2 }, { call: 'B', mode: 'CW', plat: -30, plon: 150 }, { call: 'C', mode: 'FT8', plat: 52, plon: 1 }];
   const aprsP = [{ lat: 51, lon: 0 }];
   const ft8 = (s: any) => s.mode === 'FT8';
   const pts = fns.digiShownPoints(spots, ft8, aprsP, false);
   ok(pts.length === 2 && !pts.some((p) => p[0] === -30), `only the stations the filter shows (${JSON.stringify(pts)})`);
   ok(fns.digiShownPoints(spots, ft8, aprsP, true).length === 3, 'APRS counted while its key is on');
-  const v = fns.digiFitView(pts);
-  ok(v && JSON.stringify(v.bounds) === '[[50,-2],[52,1]]' && v.maxZoom === DIGI_FIT_MAX_ZOOM && v.padding[0] >= 30, `bounds over them, padded, capped (${JSON.stringify(v)})`);
-  const one = fns.digiFitView([[51.5, -0.1], [51.5, -0.1]]);
-  ok(one && one.center && one.zoom === DIGI_FIT_MAX_ZOOM && DIGI_FIT_MAX_ZOOM <= 10, `one station: a regional view, not a street (zoom ${one?.zoom})`);
-  ok(fns.digiFitView([]) === null && fns.digiFitView([[NaN, 1], [95, 0], ['x', 2]]) === null, 'nothing shown (or nothing sane): no move');
-  const calls: any[] = [];
-  const fakeMap = { setView: (c: any, z: any) => calls.push(['setView', c, z]), fitBounds: (b: any, o: any) => calls.push(['fitBounds', b, o]) };
-  const fakeL = { latLngBounds: (b: any) => ({ b }) };
-  fns.digiFitApply(fakeMap, fakeL, v); fns.digiFitApply(fakeMap, fakeL, one);
-  ok(calls[0][0] === 'fitBounds' && calls[0][2].maxZoom === DIGI_FIT_MAX_ZOOM && calls[1][0] === 'setView', 'applied: fitBounds with the cap, setView for one');
+  ok(DIGI_FIT_MAX_ZOOM <= 10, `one station: a regional view, not a street (cap ${DIGI_FIT_MAX_ZOOM})`);
   ok(!/[`\\]/.test(DIGI_FIT_JS), 'no backtick or backslash (it is embedded in the pages\' template literals)');
   const app = readFileSync('src/components/MapOverlay.tsx', 'utf8'), web = readFileSync('web/client/src/main.ts', 'utf8');
   ok(/isSpots \? '<button id="snap" class="digifit"[^']*>FIT<\/button>'/.test(app), 'the app\'s spots maps: FIT in the top bar, where the AIS / APRS maps have it');
-  ok(/digiShownPoints\(spots,function\(s\)\{return !!markers\[key\(s\)\];\},aprsPts,aprsOn\)/.test(app), 'the app fits the spots with a marker (the ones the filters pass) and APRS while on');
-  ok(/<button type="button" id="fitBtn"[^>]*>FIT<\/button>/.test(web) && /digiShownPoints\(show\.spots \? spots : \[\]/.test(web), 'the web page: FIT in its top bar, over the layers shown');
+  ok(/VibeAutoFit\.attach\(map,\{\s*points:function\(\)\{return digiShownPoints\(spots,function\(s\)\{return !!markers\[key\(s\)\];\},aprsPts,aprsOn\);\},\s*receiver:function\(\)\{return \(RX_LAT\|\|RX_LON\)\?\{lat:RX_LAT,lon:RX_LON\}:null;\}/.test(app),
+     'the app: the AUTO FIT over the spots with a marker, APRS while on, AND the receiver');
+  ok(/button:document\.getElementById\('snap'\),what:'station shown',maxZoom:\$\{DIGI_FIT_MAX_ZOOM\}/.test(app), 'the app: the FIT key is its key, capped at DIGI_FIT_MAX_ZOOM');
+  ok(/<button type="button" id="fitBtn"[^>]*>FIT<\/button>/.test(web) && /points: \(\) => digiShownPoints\(show\.spots \? spots : \[\], \(\) => true, aprs, show\.aprs\),\s*receiver: \(\) => me, button: document\.getElementById\('fitBtn'\)/.test(web),
+     'the web page: FIT in its top bar is the AUTO FIT, over the layers shown AND the receiver');
+  ok(!/digiFitApply|digiFitView|map\.fitBounds\(all/.test(app + web.slice(web.indexOf('function spotsMapHtml'))), 'no one-shot fit left on either digi map');
 }
 
 console.log(`\n${fail ? 'FAILED' : 'all passed'} — ${pass} passed, ${fail} failed`);

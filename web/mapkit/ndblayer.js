@@ -15,6 +15,10 @@
  *   layer.update(beacons, unheard)   beacons: [{key, ident, label, lat, lon, bars 0-3, stale, kind: match|near|cand|sus (a hollow dashed ring)}], unheard: [{lat, lon, ident}]
  *   layer.select(key) · layer.focus(key) → bool · layer.setReceiver(lat, lon) · layer.setPrefs({...}) · layer.fit()
  *   layer.destroy()
+ * ★★★ beta92 THE AUTO FIT IS THE SHARED ONE (src/utils/mapAutoFit.ts, VibeAutoFit — the ADS-B map's glide, hysteresis and
+ *     pause-on-touch) when the host has loaded it: opts.fitButton (the web's FIT key) shows on / paused / off, and
+ *     opts.onFitState({on, paused}) tells a host whose key lives elsewhere (the app's React Native chip). layer.fitKey()
+ *     = a tap on that key. Without VibeAutoFit the old immediate fit is kept.
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
 (function (global) {
   'use strict';
@@ -199,6 +203,14 @@
       if (force) userMoved = false;
       drawRings();
     }
+    /* ★★★ beta92 the shared AUTO FIT (see the header) — the beacons heard (not stale) and the receiver */
+    const AF = global.VibeAutoFit || null;
+    let af = null;
+    try {
+      if (AF) af = AF.attach(gl || lm, { points: () => beacons.filter((b) => !b.stale).map((b) => [b.lat, b.lon]), receiver: () => rx,
+                                         on: prefs.autofit !== false, button: opts.fitButton || null, what: 'beacon heard',
+                                         onState: (st) => { prefs.autofit = st.on; if (typeof opts.onFitState === 'function') opts.onFitState(st); } });
+    } catch (e) { console.error('ndblayer: auto fit', e); af = null; }
     function select(k, fromMap) {
       sel = k || '';
       draw();
@@ -221,22 +233,33 @@
         unheard = Array.isArray(uh) ? uh.filter((u) => isFinite(u.lat) && isFinite(u.lon)) : [];
         draw();
         const key = beacons.filter((b) => !b.stale).map((b) => b.key).sort().join(',');
-        if (prefs.autofit && !userMoved && key !== fittedKey) { fittedKey = key; fit(false); }
+        if (af) af.poke();
+        else if (prefs.autofit && !userMoved && key !== fittedKey) { fittedKey = key; fit(false); }
       },
       select(k) { select(k, false); },
       focus(k) {
         const b = beacons.find((x) => x.key === k);
         if (!b) return false;
         select(k, false);
+        if (af) af.pause();   // ★ a beacon chosen is where the person wants the map (ADS-B's focus)
         if (gl) gl.easeTo({ center: [b.lon, b.lat], duration: 400 }); else lm.panTo([b.lat, b.lon]);
         userMoved = true;
         return true;
       },
       setReceiver(lat, lon) { if (isFinite(lat) && isFinite(lon)) { rx = { lat: +lat, lon: +lon }; draw(); drawRings(); } },
-      setPrefs(p) { Object.assign(prefs, p || {}); if (p && p.autofit) { userMoved = false; fittedKey = ''; } draw(); drawRings(); },
-      fit() { fit(true); },
+      setPrefs(p) {
+        Object.assign(prefs, p || {});
+        if (af && p && typeof p.autofit === 'boolean') af.set(p.autofit);
+        else if (p && p.autofit) { userMoved = false; fittedKey = ''; }
+        draw(); drawRings();
+      },
+      fit() { if (af) af.fitNow(); else fit(true); },
+      /** ★ beta92 a tap on the host's FIT key — ADS-B's AUTO: paused → resume, on → off, off → on */
+      fitKey() { if (af) af.key(); else fit(true); },
+      fitState() { return af ? af.state() : { on: !!prefs.autofit, paused: userMoved }; },
       destroy() {
         destroyed = true;
+        if (af) af.destroy();
         try {
           if (gl) {
             gl.off('click', onClick); gl.off('moveend', onMoveEnd); gl.off('dragstart', onUserMove); gl.off('zoomstart', onUserMove);

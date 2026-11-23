@@ -89,7 +89,11 @@ import { seaLegendRows } from '../services/seaAreas';   // ★ V12 2026-11-02 th
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
-import { DIGI_FIT_JS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
+import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
+/* ★★★ beta92 ONE AUTO FIT FOR EVERY MAP (Stuart 11-23: "all maps to have an auto fit that gently glides the zoom in and out
+ *  like the adsb maps") — the ADS-B map's camera, shared: src/utils/mapAutoFit.ts. Every kind but HFDL (its SNAP follows
+ *  the latest flight) and ADS-B (the reference, its own AUTO key). */
+import { MAP_AUTOFIT_JS } from '../utils/mapAutoFit';
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend rows   // ★ the spot card's HH:MM:SS UTC (the slot's start)
 
 /* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
@@ -204,6 +208,11 @@ interface MapOverlayProps {
 
 // ── HTML document builder ─────────────────────────────────────────────────────
 
+/** ★ beta92 what a track map's auto fit keeps in view, in its FIT key's words ("every ship and the receiver"). */
+function trkWhat(kind: MapKind): string {
+  return kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : 'station';
+}
+
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
   opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string;
@@ -291,6 +300,7 @@ function buildHtml(
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
 ${isAdsb || isNdb || kind === 'avdata' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
+${!isHfdl && !isAdsb ? `<script>${MAP_AUTOFIT_JS}</script>` : ''}
 ${isNdb ? `<script>${NDB_LAYER_JS}</script>` : ''}
 ${isTrk ? `<script>${TRACK_LAYER_JS}</script>` : ''}
 ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
@@ -547,8 +557,9 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}${opts?.only ? `<br><span style="font-size:10px;letter-spacing:1px;opacity:0.75">${esc(opts.only)}</span>` : ''}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
-  ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : kind === 'avdata' ? 'aircraft' : 'station'} on the map">FIT</button>` : ''}
-  ${isSpots ? '<button id="snap" class="digifit" title="Fit every station the filters show">FIT</button>' : ''}
+  ${/* ★ beta92 the shared AUTO FIT's key (trkFitMake). Not on the aviation map: the ADS-B layer's own AUTO / FIT frame it. */ ''}
+  ${isTrk && kind !== 'avdata' ? `<button id="snap" class="trkfit" title="Auto fit: every ${trkWhat(kind)} and the receiver">FIT</button>` : ''}
+  ${isSpots ? '<button id="snap" class="digifit" title="Auto fit: every station the filters show and the receiver">FIT</button>' : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
@@ -1611,6 +1622,8 @@ if(KIND==='ndb'){
       ndbLayer=VibeNdbLayer.create(GLVM||map,{
         receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,
         theme:'dark',prefs:NDB_PREFS||undefined,
+        // ★ beta92 the shared auto fit's state (on · paused by a touch · off) for React Native's FIT chip
+        onFitState:function(st){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'ndbFit',on:!!(st&&st.on),paused:!!(st&&st.paused)}));},
         onSelect:function(k){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'ndbSel',key:k||null}));}
       });
     }catch(e){console.error('NDB layer could not start',e);ndbLayer=null;}
@@ -1625,7 +1638,9 @@ if(KIND==='ndb'){
   };
   window.__ndbFocus=function(k){try{var L3=ndbMake();if(L3)L3.focus(String(k));}catch(e){console.error('NDB focus',e);}};
   window.__ndbSelect=function(k){try{var L3=ndbMake();if(L3)L3.select(String(k||''));}catch(e){console.error('NDB select',e);}};
-  window.__ndbPrefs=function(p){try{var L4=ndbMake();if(L4){L4.setPrefs(p);if(p&&p.autofit)L4.fit();}}catch(e){console.error('NDB prefs',e);}};
+  window.__ndbPrefs=function(p){try{var L4=ndbMake();if(L4)L4.setPrefs(p);}catch(e){console.error('NDB prefs',e);}};
+  /* ★ beta92 the FIT chip tapped — ADS-B's AUTO key: paused → resume, on → off, off → on (ndblayer fitKey) */
+  window.__ndbFitKey=function(){try{var L4=ndbMake();if(L4)L4.fitKey();}catch(e){console.error('NDB fit',e);}};
   window.__ndbListW=function(w){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
   if(window.__pendingNdb){window.__ndbPush(window.__pendingNdb);window.__pendingNdb=null;}
 }
@@ -1664,10 +1679,23 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
           setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
         },
-        onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});}
+        onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});},
+        firstFit:(KIND==='avdata'||!window.VibeAutoFit)?undefined:false   // ★ beta92 the shared auto fit frames it (trkFitMake)
       });
     }catch(e){console.error('track layer could not start',e);trkLayer=null;}
     return trkLayer;
+  }
+  /* ★★★ beta92 THE AUTO FIT (src/utils/mapAutoFit.ts — the ADS-B map's): every item heard and the receiver, glided to as
+   *  they come and go; the FIT key is its AUTO key (on · paused by a touch · off). Not on the aviation map: its aircraft
+   *  are the ADS-B layer's, whose own AUTO / FIT keys frame them. */
+  var trkFit=null;
+  function trkFitMake(){
+    if(trkFit||KIND==='avdata'||!window.VibeAutoFit)return trkFit;
+    var l=trkMake();if(!l)return null;
+    try{trkFit=VibeAutoFit.attach(map,{points:function(){return l.points();},receiver:function(){return l.receiver();},
+      button:document.getElementById('snap'),what:${JSON.stringify(trkWhat(kind))}});}
+    catch(e){console.error('auto fit could not start',e);trkFit=null;}
+    return trkFit;
   }
   /* ★★★ V12 beta90 THE AVIATION MAP ON THE ADS-B MAP (Stuart, 2026-11-21): an item with _adsb (aviationMap.ts avPlaneAdsb)
    *  is drawn by the ADS-B layer — its silhouettes, tones, rings, AUTO / FIT, the glide to each new fix, the heading from
@@ -1694,10 +1722,12 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
           if(x&&typeof x.hex==='string'){planes.push(x);acHexKey[x.hex]=String(it.key);acKeyHex[String(it.key)]=x.hex;}else rest.push(it);}
         l.update(rest);try{ac.update(planes);}catch(e){console.error('aircraft update',e);}}
       else l.update(a);
-      if(trkWantFocus){var k=trkWantFocus;trkWantFocus=null;setTimeout(function(){try{l.focus(k);}catch(e){}},80);}
+      var af=trkFitMake();
+      if(trkWantFocus){var k=trkWantFocus;trkWantFocus=null;if(af)af.pause();setTimeout(function(){try{l.focus(k);}catch(e){}},80);}
+      else if(af)af.poke();
     }catch(e){console.error('tracks: bad report',e);}
   };
-  window.__trkFit=function(){try{var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
+  window.__trkFit=function(){try{var af=trkFitMake();if(af){af.fitNow();return;}var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
   /* ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap profile, live. A map pack that predates 'aero-plain'
    *  says no — then the airport layers are switched by name. */
   window.__trkProfile=function(name){try{
@@ -1708,7 +1738,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
   window.__trkFocus=function(k){try{var hx=acKeyHex[String(k)];if(hx&&acLayer){acLayer.focus(hx);return;}
-    var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
+    var l=trkMake();var af=trkFitMake();if(af)af.pause();   // ★ a row chosen is where the person wants the map (ADS-B's focus)
+    if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
   window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
   /* ★ V12 the NAVTEX cards: the text React Native fetched, TRANSLATE drawn when the phone can, and what it gave. Set as
    *  TEXT (textContent) — never parsed as HTML. */
@@ -1724,8 +1755,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     if(!t){if(n)n.remove();return;}
     if(!n){n=document.createElement('div');n.id='trkNote';n.style.cssText='position:absolute;left:50%;top:56px;transform:translateX(-50%);background:rgba(10,14,20,.9);color:#dfe7ef;padding:6px 10px;border-radius:6px;z-index:950;font:12px ui-monospace,Menlo,monospace;pointer-events:none';document.body.appendChild(n);}
     n.textContent=String(t);};
-  var fitBtn=document.getElementById('snap');
-  if(fitBtn)fitBtn.addEventListener('click',function(){try{var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}});
+  trkFitMake();   // ★ the FIT key is the auto fit's from the start (on), even before the first report
   if(window.__pendingTrk){window.__trkPush(window.__pendingTrk);window.__pendingTrk=null;}
 }
 
@@ -1738,6 +1768,7 @@ if(KIND==='digi'||KIND==='cw'){
    *  that is all we keep: the newest report per station replaces its older one. Memory now grows with
    *  the number of distinct stations heard, not with time, and the markers are GPU circles. */
   var spots=[], byKey={}, markers={};
+  var digiFit=null;   // ★ beta92 the shared auto fit (attached below, beside the FIT key)
   var fMode=document.getElementById('fMode'), fBand=document.getElementById('fBand'), fAge=document.getElementById('fAge'), fRadio=document.getElementById('fRadio');
 
   // skin BAND_COLOUR — markers coloured by band, sized by SNR
@@ -1843,6 +1874,7 @@ if(KIND==='digi'||KIND==='cw'){
     updateCount();
     queueLetters();
     if(statsOpen)updateStats();
+    if(digiFit)digiFit.poke();
   }
   [fMode,fBand,fAge,fRadio].forEach(function(el){if(el)el.onchange=rebuild;});
   /* ★★ beta92 THE RADIO FILTER's choices, pushed by React Native (logRadio.ts logRadioChoices — two or more radios, or
@@ -1880,7 +1912,8 @@ if(KIND==='digi'||KIND==='cw'){
         +(a.wx?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.75);">Weather: '+esc(a.wx)+'</div>':'')
         +(a.comment?'<div style="margin-top:3px;font-size:12px;color:rgba(136,204,238,0.6);">'+esc(a.comment)+'</div>':''),{maxWidth:220});
     });
-    if(aprsWant){var f=aprsPts.find(function(x){return x.key===aprsWant||x.call===aprsWant;});if(f){aprsWant=null;map.setView([f.lat,f.lon],9);}}
+    if(aprsWant){var f=aprsPts.find(function(x){return x.key===aprsWant||x.call===aprsWant;});if(f){aprsWant=null;if(digiFit)digiFit.pause();map.setView([f.lat,f.lon],9);}}
+    if(digiFit)digiFit.poke();
   }
   window.__aprsPush=function(json,focus){try{var a=JSON.parse(json);if(!Array.isArray(a))return;
     aprsPts=a.filter(function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));}).slice(0,1000).map(function(x){
@@ -1897,10 +1930,13 @@ if(KIND==='digi'||KIND==='cw'){
    *  in the same place: every station the filters SHOW (a spot with a marker — mode, band, age, radio — and the APRS
    *  stations while their key is on), padded, never past zoom DIGI_FIT_MAX_ZOOM. src/utils/digiMapShared.ts DIGI_FIT_JS. */
   ${DIGI_FIT_JS}
-  var digiFitBtn=document.getElementById('snap');
-  if(digiFitBtn)digiFitBtn.addEventListener('click',function(){
-    digiFitApply(map,L,digiFitView(digiShownPoints(spots,function(s){return !!markers[key(s)];},aprsPts,aprsOn)));
-  });
+  /* ★★★ beta92 …and AUTO, as the ADS-B map's (src/utils/mapAutoFit.ts): it glides to every station shown AND the receiver
+   *  (Stuart 11-23: "include the receiver"), keeps doing so as stations come and go, pauses when the map is moved by
+   *  hand; the FIT key is its AUTO key. Never past DIGI_FIT_MAX_ZOOM. */
+  digiFit=window.VibeAutoFit?VibeAutoFit.attach(map,{
+    points:function(){return digiShownPoints(spots,function(s){return !!markers[key(s)];},aprsPts,aprsOn);},
+    receiver:function(){return (RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null;},
+    button:document.getElementById('snap'),what:'station shown',maxZoom:${DIGI_FIT_MAX_ZOOM}}):null;
   if(window.__pendingAprs){window.__aprsPush(window.__pendingAprs[0],window.__pendingAprs[1]);window.__pendingAprs=null;}
   /* ★★ beta90 a caller's OVERLAY (openDigiModesMap's — a satellite pass: its ground track, footprint and points), already
    *  cleaned by digiMapShared.ts digiOverlayClean; numbers and short labels only, checked again here. */
@@ -2157,6 +2193,7 @@ export default function MapOverlay(
   /* ★★ V12 NDB: its toggles (RINGS · UNHEARD · FIT) are remembered per device the same way — read once before the page
    *  is built and passed IN; a change goes to the layer by injection and to storage, never back into the page's source. */
   const [ndbPrefs, setNdbPrefs] = useState<NdbMapPrefs | null>(null);
+  const [ndbFitPaused, setNdbFitPaused] = useState(false);   // ★ beta92 the auto fit paused by a touch (the chip striped)
   const ndbPrefsAtBuild = useRef<NdbMapPrefs | null>(null);
   useEffect(() => {
     if (kind !== 'ndb' || ndbPrefs) return;
@@ -2494,6 +2531,17 @@ export default function MapOverlay(
             /* ★ The ADS-B layer's toggles changed — remember them for this device (see adsbPrefsRef). Re-parsed, so
              *  only three booleans ever reach storage whatever the page sent. */
             // ★ V12 NDB: a marker tapped (or the selection cleared) — the list's row and the card follow
+            // ★ beta92 the NDB auto fit's state — the FIT chip's look (on / paused), and `on` remembered as the pref
+            if (m && (m as any).t === 'ndbFit') {
+              const on = (m as any).on === true, paused = (m as any).paused === true;
+              setNdbFitPaused(on && paused);
+              if (ndbPrefs && ndbPrefs.autofit !== on) {
+                const next = { ...ndbPrefs, autofit: on };
+                setNdbPrefs(next);
+                AsyncStorage.setItem(NDB_PREFS_KEY, JSON.stringify(next)).catch(() => {});
+              }
+              return;
+            }
             if (m && (m as any).t === 'ndbSel') {
               const k = Number((m as any).key);
               ndbChoose(Number.isFinite(k) && k > 0 ? Math.floor(k) : 0, false);
@@ -2636,6 +2684,7 @@ export default function MapOverlay(
         {kind === 'ndb' && !!pageUri && !packError && !!ndb && (
           <NdbLiveList ndb={ndb} selected={ndbSel} onSelect={(id) => ndbChoose(id, true)}
                        prefs={ndbPrefs ?? parseNdbMapPrefs(null)} onPrefs={ndbSetPrefs}
+                       onFitKey={() => ndbJs('__ndbFitKey', 1)} fitPaused={ndbFitPaused}
                        onFootprint={(w) => { adsbListW.current = w; ndbJs('__ndbListW', w); }}
                        ink={ink} areaW={winW} areaH={winH}
                        insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />

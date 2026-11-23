@@ -145,7 +145,8 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
-import { DIGI_FIT_JS } from '../../../src/utils/digiMapShared';   // ★ beta92 the digi map's FIT key (the app's same code)
+import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';   // ★ beta92 the digi map's FIT key (the app's same code)
+import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★★★ beta92 ONE auto fit for every map — the ADS-B map's glide
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../../../src/utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend
 import { bandSkimTitle, bandSkimPassband, bandSkimLabels, withSkimLabels, bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../../../src/services/bandSkim';   // ★★ beta92 the BAND SKIMMER
 import { DIGI_MARKER_RIM, DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, spotsListModes, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
@@ -18208,6 +18209,7 @@ ${glHead}
   /* ★★ beta92 FIT — every station the layers / window / radio show (the app's FIT key, DIGI_FIT_JS) */
   #fitBtn{font:inherit;font-size:11px;letter-spacing:1px;color:var(--amber);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 9px;cursor:pointer}
   #fitBtn:hover{border-color:var(--amber)}
+  #fitBtn.on{border-color:var(--amber);background:rgba(255,160,0,0.14)}
   /* ★★ beta92 an APRS symbol (src/utils/aprsSymbols.ts, 28 px) and its callsign under it from zoom 8 (body.aprsLb) */
   .apk{position:relative;width:28px;height:28px}
   .apk svg{display:block}
@@ -18227,7 +18229,7 @@ ${ST}
     <span id="layers" role="group" aria-label="Layers" hidden></span>
     <span id="wins" role="group" aria-label="Time window" hidden></span>
     <span id="rads" role="group" aria-label="Radio" hidden></span>
-    <button type="button" id="fitBtn" title="Fit every station shown on the map">FIT</button>
+    <button type="button" id="fitBtn" title="Auto fit: every station shown and the receiver">FIT</button>
     <label><input type="checkbox" id="tStats" checked>Stats</label>
     <label><input type="checkbox" id="tSummary" checked>Summary</label>
     <label><input type="checkbox" id="tLegend" checked>Legend</label>
@@ -18744,11 +18746,20 @@ function aprsLabels() { try { document.body.classList.toggle('aprsLb', map.getZo
  *  (src/utils/digiMapShared.ts DIGI_FIT_JS): every station the layers, the window and the radio filter SHOW, padded,
  *  never past zoom DIGI_FIT_MAX_ZOOM. Spots are already the filtered list (mergeSpots); APRS while its layer is on. */
 ${DIGI_FIT_JS}
-document.getElementById('fitBtn').addEventListener('click', () => {
-  if (!map) return;
-  fitted = true;
-  digiFitApply(map, L, digiFitView(digiShownPoints(show.spots ? spots : [], () => true, aprs, show.aprs)));
-});
+/* ★★★ beta92 …and AUTO, as the ADS-B map's (src/utils/mapAutoFit.ts, the app's same code): it glides to every station
+ *  shown AND the receiver (Stuart 11-23: "include the receiver"), keeps doing so as stations come and go, and pauses when
+ *  the map is moved by hand; the FIT key is its AUTO key (on, striped when paused, off). Never past DIGI_FIT_MAX_ZOOM. */
+${MAP_AUTOFIT_JS}
+let digiFit = null, refitWanted = false;
+function digiFitMake() {
+  if (digiFit || !map || !window.VibeAutoFit) return digiFit;
+  try {
+    digiFit = window.VibeAutoFit.attach(map, {
+      points: () => digiShownPoints(show.spots ? spots : [], () => true, aprs, show.aprs),
+      receiver: () => me, button: document.getElementById('fitBtn'), what: 'station shown', maxZoom: ${DIGI_FIT_MAX_ZOOM} });
+  } catch (e) { console.error('auto fit', e); digiFit = null; }
+  return digiFit;
+}
 /* ★ OPENED ON SOMETHING (an APRS station row, a call): centred on it, once it is there. */
 let focusKey = FOCUS0;
 function focusOnce() {
@@ -18759,19 +18770,19 @@ function focusOnce() {
   if (!p) return;
   focusKey = '';
   fitted = true;
+  if (digiFit) digiFit.pause();   // ★ a station chosen is where the person wants the map (ADS-B's focus)
   map.setView(s ? [s.plat, s.plon] : [p.lat, p.lon], 9);   // ★ a station: where its marker is drawn
 }
-// ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
-//     from wherever the user had panned or zoomed, every fifteen seconds as the next FT8 cycle
-//     lands — which would make live updating worse than the snapshot it replaces.
+// ★★★ beta92 NO LONGER "FIT ONCE": re-fitting on every update used to yank the map from under the user every FT8 cycle,
+//     so it fitted once. The shared AUTO FIT (digiFitMake) keeps the map framed WITHOUT that: its hysteresis moves only
+//     when a station leaves the view (out) or the view has been too wide for 4 s (in), with a 2.2 s glide — and any
+//     move by hand pauses it until FIT. (fitted only gates the focus now.)
 let fitted = false;
 function fitOnce() {
+  const af = digiFitMake();
   focusOnce();
-  if (fitted || !map) return;
-  // ★ beta90 the layers shown (APRS opened on APRS fits its stations, not the world's spots)
-  const all = (show.spots ? spots.map(s => [s.plat, s.plon]) : []).concat(show.aprs ? aprs.map(a => [a.lat, a.lon]) : []);
-  if (me) all.push([me.lat, me.lon]);
-  if (all.length > 1) { map.fitBounds(all, { padding: [60, 60] }); fitted = true; }
+  // ★ the auto fit does the framing (its first view, then its glides); a layer opened again = FIT
+  if (af) { if (refitWanted) { refitWanted = false; af.fitNow(); } else af.poke(); }
 }
 
 // ── Stats ────────────────────────────────────────────────────────────────────
@@ -18935,7 +18946,7 @@ addEventListener('message', (ev) => {
   // ★ opened again from somewhere else: that layer shown (and fitted), that station centred
   if (ev.data.layer === 'aprs' || ev.data.layer === 'spots') {
     const l = ev.data.layer;
-    if (!show[l]) { show[l] = true; fitted = false; }
+    if (!show[l]) { show[l] = true; fitted = false; refitWanted = true; }
   }
   if (typeof ev.data.focus === 'string' && ev.data.focus) focusKey = okStr(ev.data.focus, /[<>&"'\`]/g, 40);
   mergeSpots();

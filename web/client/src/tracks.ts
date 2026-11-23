@@ -14,6 +14,7 @@
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
+import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
 import { aprsColour, aprsIcon as aprsSymIcon } from '../../../src/utils/aprsSymbols';
 
@@ -430,9 +431,9 @@ function runSource(src: string) { const el = document.createElement('script'); e
 const MIN_KEY = 'vibesdr.trkListMin';
 
 export interface TrackViewOpts {
-  /** ★★ AUTO FIT, as ADS-B's (Stuart 2026-11-21, ISM mesh nodes: "the map needs the auto fit" … "i have to keep pressing
-   *  fit"): fitted when the map opens and again whenever a NEW item appears, until the user pans or zooms (wheel, drag,
-   *  the ± keys) — then the map is theirs; FIT fits and turns AUTO back on. A focus (a node's link) wins over it. */
+  /** ★★ AUTO FIT (Stuart 2026-11-21, ISM: "the map needs the auto fit"; 2026-11-23, every map: "an auto fit that gently
+   *  glides the zoom in and out like the adsb maps"). ✗ No longer an option: since beta92 EVERY track view runs the shared
+   *  auto fit (src/utils/mapAutoFit.ts — the ADS-B map's camera) and its FIT key is the AUTO key. Kept so callers compile. */
   fitOnOpen?: boolean;
   title: string;                 // "AIS" / "APRS"
   exitLabel: string;             // "EXIT AIS" / "CLOSE MAP"
@@ -536,24 +537,9 @@ export class TrackView {
     this.statEl = r.querySelector('.st') as HTMLElement;
     this.countEl = r.querySelector('.hd .n') as HTMLElement;
     (r.querySelector('.exit') as HTMLButtonElement).onclick = () => o.onExit();
-    (r.querySelector('.fit') as HTMLButtonElement).onclick = () => {
-      if (o.fitOnOpen) this.autoFit = true;   // ★ FIT = fit now and follow new items again
-      try { this.layer?.fit(); } catch (e) { console.error('[tracks] fit', e); }
-    };
-    if (o.fitOnOpen) {
-      // ★ the user takes the map: a wheel, a drag (moved > 6 px) or the ± keys end AUTO until FIT
-      let down: { x: number; y: number } | null = null;
-      const mine = (e: Event) => !this.list.contains(e.target as Node);
-      this.mapHost.addEventListener('wheel', (e) => { if (mine(e)) this.autoFit = false; }, { capture: true, passive: true });
-      this.mapHost.addEventListener('pointerdown', (e) => {
-        if (!mine(e)) return;
-        if ((e.target as HTMLElement).closest('.leaflet-control-zoom, .maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out')) { this.autoFit = false; return; }
-        down = { x: e.clientX, y: e.clientY };
-      }, { capture: true });
-      this.mapHost.addEventListener('pointermove', (e) => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { this.autoFit = false; down = null; } }, { capture: true });
-      const up = () => { down = null; };
-      this.mapHost.addEventListener('pointerup', up, { capture: true }); this.mapHost.addEventListener('pointercancel', up, { capture: true });
-    }
+    /* ★★★ beta92 the .fit key is the shared AUTO FIT's (attach → VibeAutoFit.attach, button): on · paused by a touch ·
+     *  off, as the ADS-B map's AUTO key. Its click is the auto fit's own. */
+    this.fitBtn = r.querySelector('.fit') as HTMLButtonElement;
     for (const b of Array.from(r.querySelectorAll('[data-rng]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const id = b.dataset.rng || '';
@@ -646,21 +632,18 @@ export class TrackView {
   private select(k: string) { this.layer?.select(k || null); this.markSel(k); }
   private wantFocus = '';
   private refit = false;
-  /** ★ AUTO FIT (o.fitOnOpen): on while the user has not moved the map; `fitKeys` = the item keys last fitted. */
-  private autoFit = false;
-  private fitKeys = new Set<string>();
-  /** A new item while AUTO is on: fit again (the first items on open are the "new" ones). */
-  private autoFitCheck(items: any[]) {
-    if (!this.o.fitOnOpen || !this.autoFit || !this.layer || this.acLayer || !items.length) return;
-    let fresh = false;
-    for (const it of items) { const k = it && it.key; if (typeof k === 'string' && !this.fitKeys.has(k)) { this.fitKeys.add(k); fresh = true; } }
-    if (fresh) { try { this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); } }
-  }
+  /** ★★★ beta92 THE AUTO FIT (src/utils/mapAutoFit.ts): one per map shown, made in attach, gone in hide. Not on the aviation
+   *  map's aircraft view — the ADS-B layer frames its aircraft with its own AUTO / FIT keys. */
+  private af: any = null;
+  private fitBtn: HTMLButtonElement;
+  /** The items changed: the auto fit considers a move (its hysteresis decides; a 1 s tick does the rest). */
+  private autoFitCheck(_items?: any[]) { try { this.af?.poke(); } catch (e) { console.error('[tracks] auto fit', e); } }
   /** ★ The card again from its item (a fetched text arrived for it). */
   refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
-    this.refit = false; this.autoFit = false;   // ★ a focus (a node's link) is where the map should be — FIT brings AUTO back
+    this.refit = false;
+    try { this.af?.pause(); } catch { /* none */ }   // ★ a focus (a node's link) is where the map should be — FIT brings AUTO back
     if (!this.layer) { this.wantFocus = key; return false; }
     const hex = this.acKeys.get(key);
     const ok = hex && this.acLayer ? !!this.acLayer.focus(hex) : !!this.layer.focus(key);
@@ -681,7 +664,6 @@ export class TrackView {
     this.rx = rx;
     if (this.open) return;
     this.root.hidden = false;
-    if (this.o.fitOnOpen) { this.autoFit = true; this.fitKeys.clear(); }   // ★ AUTO: fitted once its items are on the map
     // ★ the page under the map is not reachable while the map covers it (keyboard, a screen reader)
     this.inerted = [];
     for (const el of Array.from(document.body.children) as HTMLElement[]) {
@@ -699,6 +681,8 @@ export class TrackView {
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
     this.gen++;
+    try { this.af?.destroy(); } catch (e) { console.error('[tracks] auto fit destroy', e); }
+    this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
     this.acLayer = null; this.acKeys.clear(); this.acHex.clear();
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
@@ -720,6 +704,7 @@ export class TrackView {
     const { TRACK_LAYER_JS } = await import('./generated/trackLayerSource');
     if (my !== this.gen) return;
     if (!w.VibeTrackLayer) runSource(TRACK_LAYER_JS);
+    if (!w.VibeAutoFit) runSource(MAP_AUTOFIT_JS);
     if (this.o.aircraft && !w.VibeAdsbLayer) {
       const { ADSB_LAYER_JS } = await import('./generated/adsbLayerSource');
       if (my !== this.gen) return;
@@ -777,6 +762,8 @@ export class TrackView {
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,
       shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, yieldGroups: this.o.yieldGroups, aria: this.o.aria, onCard: this.o.onCard,
       onSelect: (k: string | null) => this.markSel(k || ''),
+      // ★ beta92 the first framing is the auto fit's (a glide's rules), not an immediate fitBounds — unless it is absent
+      firstFit: this.o.aircraft || !w.VibeAutoFit ? undefined : false,
     });
     if (this.o.aircraft && w.VibeAdsbLayer) {
       try {
@@ -792,6 +779,22 @@ export class TrackView {
         this.placeAcObstacle();
         w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
       } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
+    }
+    /* ★★★ beta92 THE AUTO FIT — every item heard and the receiver, clear of the list's corner; the FIT key is its AUTO key.
+     *  On the aviation map the ADS-B layer frames the aircraft (its own AUTO / FIT), so the key is hidden there. */
+    this.fitBtn.hidden = !!this.acLayer;
+    if (!this.acLayer && w.VibeAutoFit) {
+      const layer = this.layer;
+      try {
+        this.af = w.VibeAutoFit.attach(map, {
+          points: () => layer.points(), receiver: () => layer.receiver(), button: this.fitBtn,
+          what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
+          obstacle: () => {
+            const r = this.list.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 ? { corner: r.left - m.left < m.width / 2 ? 'bottom-left' : 'bottom-right', w: r.width + 8, h: r.height + 8 } : null;
+          },
+        });
+      } catch (e) { console.error('[tracks] auto fit', e); this.af = null; }
     }
     if (this.pending) {
       const p = this.pending; this.pending = null; this.feed(p);
@@ -848,7 +851,10 @@ export class TrackView {
     if (this.layer) {
       try { this.feed(items); } catch (e) { console.error('[tracks] layer.update', e); }
       // ★ a new time range: fit what it shows (the ADS-B layer fits its own aircraft — AUTO / FIT)
-      if (this.refit && items.length && !this.acLayer) { this.refit = false; try { this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); } }
+      if (this.refit && items.length && !this.acLayer) {
+        this.refit = false;
+        try { if (this.af) this.af.fitNow(); else this.layer.fit(); } catch (e) { console.error('[tracks] fit', e); }
+      }
       this.autoFitCheck(items);
       if (this.acLayer) this.placeAcObstacle();
     }

@@ -66,6 +66,9 @@ type Dlg = '' | 'log' | 'find' | 'stats';
 export default function NdbLiveList(p: {
   ndb: NdbOverlay; selected: number; onSelect: (id: number) => void;
   prefs: NdbMapPrefs; onPrefs: (p: Partial<NdbMapPrefs>) => void;
+  /** ★ beta92 THE AUTO FIT's key (src/utils/mapAutoFit.ts — the ADS-B map's AUTO): a tap is the map's to decide (paused →
+   *  resume, on → off, off → on); `fitPaused` = a touch paused it (the chip dashed, as ADS-B's AUTO is striped). */
+  onFitKey: () => void; fitPaused: boolean;
   onFootprint?: (w: number) => void;
   ink: { x: string; k: string; kt: string }; areaW: number; areaH: number;
   insets: { top: number; bottom: number; left: number; right: number };
@@ -120,7 +123,10 @@ export default function NdbLiveList(p: {
                   <Chip s={s} label="RINGS" on={p.prefs.rings} a11y="Range rings in nautical miles" onPress={() => p.onPrefs({ rings: !p.prefs.rings })} />
                   <Chip s={s} label="UNHEARD" on={p.prefs.unheard} a11y="The published beacons not heard, faint"
                         onPress={() => { const v = !p.prefs.unheard; if (v) p.ndb.onFind(''); p.onPrefs({ unheard: v }); }} />
-                  <Chip s={s} label="FIT" on={p.prefs.autofit} a11y="Fit the map to the beacons heard" onPress={() => p.onPrefs({ autofit: true })} />
+                  <Chip s={s} label="FIT" on={p.prefs.autofit && !p.fitPaused} paused={p.prefs.autofit && p.fitPaused}
+                        a11y={!p.prefs.autofit ? 'Auto fit is off — keep every beacon heard and the receiver in view'
+                          : p.fitPaused ? 'Auto fit paused because you moved the map — resume' : 'Auto fit on — turn it off'}
+                        onPress={p.onFitKey} />
                   <Chip s={s} label="HEARD LOG" on={false} a11y="Every beacon identified today" onPress={() => setDlg('log')} />
                   <Chip s={s} label="FIND NDB" on={false} a11y="Find a published beacon" onPress={() => { p.ndb.onFind(''); setDlg('find'); }} />
                   <Chip s={s} label="STATS" on={false} a11y="Reception statistics" onPress={() => { p.ndb.onStats(); setDlg('stats'); }} />
@@ -171,11 +177,11 @@ function Key({ s, style, onPress, a11y, children }: { s: S; style: any; onPress:
     </TouchableOpacity>
   );
 }
-function Chip({ s, label, on, onPress, a11y }: { s: S; label: string; on: boolean; onPress: () => void; a11y: string }) {
+function Chip({ s, label, on, onPress, a11y, paused }: { s: S; label: string; on: boolean; onPress: () => void; a11y: string; paused?: boolean }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
   return (
-    <TouchableOpacity ref={viewRef as never} style={[s.chip, on && s.chipOn]} onPress={onPress} activeOpacity={0.7}
+    <TouchableOpacity ref={viewRef as never} style={[s.chip, on && s.chipOn, paused && s.chipPaused]} onPress={onPress} activeOpacity={0.7}
                       accessibilityRole="button" accessibilityLabel={a11y} accessibilityState={{ selected: on }}>
       <Text style={[s.chipTxt, on && s.chipTxtOn]}>{label}</Text>
       <NavRing on={focused} color={ring} radius={7} />
@@ -487,6 +493,7 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => ({ inkX: ink.x
   chip:   { height: 22, justifyContent: 'center', paddingHorizontal: 7, borderRadius: 7, borderWidth: 1,
             borderColor: `rgba(${ink.k},0.30)`, backgroundColor: `rgba(${ink.k},0.06)` },
   chipOn: { borderColor: `rgba(${ink.k},0.70)`, backgroundColor: `rgba(${ink.k},0.16)` },
+  chipPaused: { borderStyle: 'dashed', borderColor: `rgba(${ink.k},0.65)` },
   chipTxt:{ fontFamily: F, fontSize: 11, color: `rgba(${ink.kt},0.88)`, fontVariant: ['tabular-nums'], letterSpacing: 0.5 },
   chipTxtOn: { color: `rgba(${ink.kt},1)` },
   chipKey:{ fontSize: 9.5, letterSpacing: 1.2, color: `rgba(${ink.kt},0.60)` },

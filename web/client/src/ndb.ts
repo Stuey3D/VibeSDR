@@ -17,6 +17,7 @@
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
+import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 
 export interface NdbDb { k: 'match' | 'near' | 'cand'; ident: string; name: string; cc: string; hz: number; lat: number; lon: number; km: number; brg: number; own?: boolean }
 /** ★★ V12 2026-11-04 — the server's "Suspected …" clue for a beacon heard but not in the published list (vibe_ndb_suspect.h):
@@ -193,6 +194,8 @@ export class NdbMap {
   layer: any = null;
   private pending: (() => void) | null = null;
   onSelect: ((key: string | null) => void) | null = null;
+  /** ★ beta92 the shared auto fit's state (on · paused by a touch · off) — the FIT key's look and the remembered pref. */
+  onFitState: ((st: { on: boolean; paused: boolean }) => void) | null = null;
   constructor(private host: HTMLElement, private note: (t: string) => void) {}
   open(rx: { lat: number; lon: number } | null, prefs: Record<string, boolean>) {
     if (this.layer) return;
@@ -205,11 +208,13 @@ export class NdbMap {
       const { NDB_LAYER_JS } = await import('./generated/ndbLayerSource');
       if (my !== this.gen) return;
       if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);   // ★ the rings are ADS-B's (VibeAdsbLayer.shared)
+      if (!w.VibeAutoFit) runSource(MAP_AUTOFIT_JS);    // ★ beta92 before the layer: it frames with the shared auto fit
       if (!w.VibeNdbLayer) runSource(NDB_LAYER_JS);
       if (!w.VibeNdbLayer) { this.note('The beacon layer did not load — the list still updates.'); return; }
       const mk = (map: any) => {
         this.layer = w.VibeNdbLayer.create(map, { receiver: rx, theme: 'dark', prefs,
-          onSelect: (k: string | null) => { try { this.onSelect?.(k); } catch (e) { console.error('[ndb] onSelect', e); } } });
+          onSelect: (k: string | null) => { try { this.onSelect?.(k); } catch (e) { console.error('[ndb] onSelect', e); } },
+          onFitState: (st: { on: boolean; paused: boolean }) => { try { this.onFitState?.(st); } catch (e) { console.error('[ndb] fit state', e); } } });
         const p = this.pending; this.pending = null; p?.();
       };
       if (kit && await loadMapGLScripts(kit.base)) {
@@ -283,7 +288,8 @@ export class NdbView {
     if (top > 0) document.documentElement.style.setProperty('--adsbTopH', `${Math.round(top)}px`);
     $('ndbExit').onclick = () => this.h.onExit();
     $('ndbLiveHead').onclick = () => this.setMin(!$('ndbLive').classList.contains('min'));
-    $('ndbFit').onclick = () => { this.prefs.autofit = true; this.savePrefs(); this.map?.with((l) => { l.setPrefs({ autofit: true }); l.fit(); }); this.syncToggles(); };
+    // ★★ beta92 FIT is the shared auto fit's AUTO key (ADS-B's): paused → resume, on → off, off → on — the layer decides
+    $('ndbFit').onclick = () => { this.map?.with((l) => l.fitKey()); };
     $('ndbRings').onclick = () => { this.prefs.rings = !this.prefs.rings; this.savePrefs(); this.map?.with((l) => l.setPrefs({ rings: this.prefs.rings })); this.syncToggles(); };
     $('ndbUnheard').onclick = () => { this.prefs.unheard = !this.prefs.unheard; this.savePrefs(); if (this.prefs.unheard) this.h.find(''); this.map?.with((l) => l.setPrefs({ unheard: this.prefs.unheard })); this.syncToggles(); };
     $('ndbLogBtn').onclick = () => this.openLog();
@@ -292,6 +298,11 @@ export class NdbView {
     this.syncToggles();
     this.map = new NdbMap($('ndbMapHost'), (t) => this.note(t));
     this.map.onSelect = (k) => this.select(k ? Number(k) : 0, false);
+    this.map.onFitState = (st) => {
+      this.fitPaused = st.on && st.paused;
+      if (this.prefs.autofit !== st.on) { this.prefs.autofit = st.on; this.savePrefs(); }
+      this.syncToggles();
+    };
     this.map.open(this.h.myPos(), this.prefs);
     this.h.find('');   // ★ the published beacons for the faint "unheard" markers
     this.render();
@@ -308,11 +319,17 @@ export class NdbView {
     this.last = null; this.tracks.clear(); this.seenSeq = 0; this.sel = 0;
     this.note('');
   }
+  private fitPaused = false;
   private savePrefs() { try { localStorage.setItem(PREF, JSON.stringify(this.prefs)); } catch { /* private window */ } }
   private syncToggles() {
     $('ndbRings').classList.toggle('on', this.prefs.rings);
     $('ndbUnheard').classList.toggle('on', this.prefs.unheard);
-    $('ndbFit').classList.toggle('on', this.prefs.autofit);
+    const fit = $('ndbFit');
+    fit.classList.add('vaf-key');
+    fit.classList.toggle('on', this.prefs.autofit && !this.fitPaused);
+    fit.classList.toggle('paused', this.prefs.autofit && this.fitPaused);
+    fit.title = !this.prefs.autofit ? 'Auto fit is off — tap to keep every beacon heard and the receiver in view'
+      : this.fitPaused ? 'Auto fit paused because you moved the map — tap to resume' : 'Auto fit on — tap to turn it off';
   }
   private setMin(min: boolean, save = true) {
     $('ndbLive').classList.toggle('min', min);
