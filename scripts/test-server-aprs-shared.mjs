@@ -80,9 +80,9 @@ function heard(dx) {
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-aprs-shared-'));
-const clip = (name, cnr, nbOff = 0, nbDb = 0) => {
+const clip = (name, cnr, nbOff = 0, nbDb = 0, dev = 3000, err = 0, tilt = 5) => {
   const f = path.join(tmp, `${name}.cu8`);
-  const r = spawnSync(GEN, ['--write-clip', f, String(RATE), String(cnr), String(N), String(nbOff), String(nbDb)], { encoding: 'utf8' });
+  const r = spawnSync(GEN, ['--write-clip', f, String(RATE), String(cnr), String(N), String(nbOff), String(nbDb), String(dev), String(err), String(tilt)], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`test-aprs-onair --write-clip failed: ${r.stderr}`);
   return f;
 };
@@ -239,6 +239,75 @@ const neighbour = clip('neighbour', 15, 60000, 30);
     ok(/\[sat\] decoder (aprs|sstv) attached for the shared dial/.test(lg), 'the picks attached their decoders (the sequence really ran)');
     L.close();
   } finally { S.stop(); }
+}
+
+/* ★★★ beta92 APRS FROM IQ (Stuart 11-23: "surely aprs needs to be iq based and bypass the nfm processing completely").
+ *  An OVER-DEVIATED tracker (±6 kHz, flat) 1.5 kHz OFF 144.800 at CNR 10 dB. Before beta92 the decoder read the listener's
+ *  NFM audio and their channel cut to ±6.25 kHz: test-aprs-onair's same row gives it next to nothing (its "before beta92"
+ *  column); now its own tap, AFC and filters take it whatever the listener has set. */
+const overdev = clip('overdev', 10, 0, 0, 6000, 1500, 0);
+for (const [tag, users, locked, what] of [['odshared', 4, false, 'shared dial'], ['odown', 4, true, "a listener's own VFO"], ['odone', 1, false, 'one listener (users 1)']]) {
+  console.log(`── G. over-deviated (±6 kHz), 1.5 kHz off, CNR 10 dB — ${what}, the listener on NFM 12.5 kHz ──`);
+  const S = await server(overdev, tag, { users, locked });
+  try {
+    const L = await listener(S, `aprs${tag}01`);
+    L.sp.send({ type: 'tune', frequency: DIAL, mode: 'nfm' }); await sleep(400);
+    L.dx.send(ATTACH);
+    await judge(L.dx, `${what}, over-deviated + off tune`);
+    L.close();
+  } finally { S.stop(); }
+}
+{
+  console.log("── H. the same signal, the listener's passband cut to ±3 kHz (their choice must not reach the decoder) ──");
+  const S = await server(overdev, 'odnarrow', { users: 4 });
+  try {
+    const L = await listener(S, 'aprsodn01');
+    L.sp.send({ type: 'tune', frequency: DIAL, mode: 'nfm' }); await sleep(400);
+    L.sp.send({ type: 'bandwidth', bandwidthLow: -3000, bandwidthHigh: 3000 }); await sleep(400);
+    L.dx.send(ATTACH);
+    await judge(L.dx, 'passband ±3 kHz');
+    L.close();
+  } finally { S.stop(); }
+}
+{
+  /* ★★ The XCover, 11-23 (relayed by the owner): after a satellite APRS pick, an SSTV pick and leaving SATELLITE, APRS by
+   *  hand "decoded poorly" until a fresh AUTO attach. At the MARGIN (over-deviated ±5 kHz, 1 kHz off, CNR 9 dB) the
+   *  satellite sequence then a hand attach must decode what a fresh AUTO attach does — nothing of the pick (passband,
+   *  Doppler, satellite name, baud) carried into the decoder. Both hand attaches are tried: AUTO (the fixed clients), and
+   *  the "1200" the old clients sent after a pick (it reads the same IQ receiver). */
+  const marginal = clip('marginal', 9, 0, 0, 5000, 1000, 0);
+  const counts = {};
+  for (const [tag, seq, attach] of [['mfresh', false, ATTACH], ['msat', true, ATTACH], ['msat1200', true, { ...ATTACH, packet: '1200', fx25: 1, il2p: 1 }]]) {
+    console.log(`── I. marginal (±5 kHz, 1 kHz off, 9 dB): ${seq ? 'the satellite sequence, then' : 'a fresh'} ${attach.packet.toUpperCase()} attach ──`);
+    const S = await server(marginal, tag, { users: 4, sats: true });
+    try {
+      const L = await listener(S, `aprs${tag}01`);
+      if (seq) {
+        const picked = () => jsons(L.sp, 'sat').filter((m) => m.state === 'picked').length;
+        let n0 = picked();
+        L.sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 2, doppler: true });
+        ok(await until(() => picked() > n0, 5000), 'ISS APRS picked');
+        await sleep(1500);
+        n0 = picked();
+        L.sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1, doppler: true });
+        ok(await until(() => picked() > n0, 5000), 'ISS SSTV picked');
+        await sleep(1500);
+        L.sp.send({ type: 'sat', op: 'drop' });
+        await sleep(1000);
+      }
+      L.sp.send({ type: 'tune', frequency: DIAL, mode: 'nfm' }); await sleep(600);
+      L.dx.send(attach);
+      // one whole pass of the clip (10 packets, ~22 s)
+      await until(() => heard(L.dx).got.size >= N, 32000);
+      const h = heard(L.dx);
+      counts[tag] = h.got.size;
+      ok(h.wrong === 0, `${h.got.size} of ${N} packets, no wrong frames`);
+      L.close();
+    } finally { S.stop(); }
+  }
+  ok(counts.mfresh >= N - 2, `a fresh AUTO attach at the margin: ${counts.mfresh} of ${N}`);
+  ok(counts.msat >= counts.mfresh - 1, `after the satellite sequence, AUTO by hand: ${counts.msat} (fresh ${counts.mfresh})`);
+  ok(counts.msat1200 >= counts.mfresh - 1, `after the satellite sequence, the old clients' "1200": ${counts.msat1200} (fresh ${counts.mfresh})`);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

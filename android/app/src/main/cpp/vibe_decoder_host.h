@@ -700,11 +700,19 @@ public:
     static std::atomic<int>& navIqRunning() { static std::atomic<int> n{0}; return n; }
     /** ★ VOR runs here: its channel must hold the 9.96 ± 0.5 kHz subcarrier (the one pipeline widens it — navWideSync). */
     bool wantsWideChannel() { std::lock_guard<std::mutex> lk(decMtx_); return (bool)nav_; }
+    /** ★★ beta92: a packet run here wants the pipeline's DECODER TAP (RxPipeline::setDecoderTap(vibeaprs::Run::kTapHz)) —
+     *  the shim sets it on this host's pipeline while this holds (pktTapSync). One relaxed load. */
+    bool wantsPacketTap() const { return packetIq_.load(std::memory_order_relaxed); }
     /** Hand paging `n` samples of the listener's channel IQ (post-NCO, dial at DC, cut to the passband) at `rate` Hz.
      *  Copies and returns at once, as feed() — the DSP thread never decodes. Two seconds behind and the oldest goes. */
-    void feedChannelIq(const std::complex<float>* iq, int n, double rate) {
+    /* ★★ beta92 `wide`: the pipeline's DECODER TAP (RxPipeline::setDecoderTap — ±12 kHz, cut before the listener's channel
+     *  filter), for packet alone; paging / VOR / 406 MHz keep the listener's channel. Packet reads the tap whenever one has
+     *  come within the last second, else the channel (a path with no tap). */
+    void feedChannelIq(const std::complex<float>* iq, int n, double rate, bool wide = false) {
         if (n <= 0 || !iq || !(rate > 0) || !wantsChannelIq()) return;
-        IqBlock b; b.rate = rate; b.v.assign(iq, iq + n);
+        if (wide && !packetIq_.load(std::memory_order_relaxed)) return;
+        if (wide) wideAt_.store(nowMs_(), std::memory_order_relaxed);
+        IqBlock b; b.rate = rate; b.v.assign(iq, iq + n); b.wide = wide;
         fed_.fetch_add((uint64_t)n, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lk(qM_);
@@ -2172,17 +2180,25 @@ private:
                 qc_.pop_front();
                 qcSec_ = std::max(0.0, qcSec_ - (double)b.v.size() / b.rate);
                 lk.unlock();
-                if (std::shared_ptr<vibedec::DecDump> d = dumpNow_()) d->iq(b.v.data(), (int)b.v.size(), b.rate);   // ★ VIBE_DEC_AUDIO_DUMP only
+                // ★ VIBE_DEC_AUDIO_DUMP only — ★ beta92: while the decoder tap runs, ITS blocks (one rate in the file)
+                { const int64_t w = wideAt_.load(std::memory_order_relaxed);
+                  if (b.wide || !(w > 0 && nowMs_() - w < 2000))
+                      if (std::shared_ptr<vibedec::DecDump> d = dumpNow_()) d->iq(b.v.data(), (int)b.v.size(), b.rate); }
                 const uint64_t c0 = vibeThreadCpuNs();
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
 #if defined(VIBE_PAGING)
-                    if (paging_) paging_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
+                    if (paging_ && !b.wide) paging_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
 #endif
-                    // ★ V12 9600 packet: the same channel IQ (vibe_aprs_run.h feedIq)
-                    if (aprs_ && aprs_->wantsIq()) aprs_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
+                    // ★ V12 packet (1200 + 9600): ★★ beta92 the DECODER TAP (b.wide), or — only where no tap has come for
+                    //   two seconds — the listener's channel
+                    if (aprs_ && aprs_->wantsIq()) {
+                        const int64_t w = wideAt_.load(std::memory_order_relaxed);
+                        const bool tapLive = w > 0 && nowMs_() - w < 2000;
+                        if (b.wide || !tapLive) aprs_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
+                    }
                 }
-                {   // ★ V12 VOR / ILS and 406 MHz beacons: their lines and state are sent from inside
+                if (!b.wide) {   // ★ V12 VOR / ILS and 406 MHz beacons: their lines and state are sent from inside
                     std::lock_guard<std::mutex> dl(decMtx_);
                     if (nav_) nav_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
                     if (sarsat_) sarsat_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
@@ -2466,6 +2482,8 @@ private:
     std::unique_ptr<PagingRun> paging_;       // ★ PAGING: fed the channel IQ (feedChannelIq) — Android local hardware only
 #endif
     std::atomic<bool> packetIq_{false};       // ★ V12 9600 / AUTO packet runs: the shim hands this host its channel IQ too
+    std::atomic<int64_t> wideAt_{0};           // ★ beta92 when the last decoder-tap block came (nowMs_; 0 = never)
+    static int64_t nowMs_() { return 1 + std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
     std::atomic<bool> pagingIq_{false};       // ★ paging runs: the shim hands this host its channel IQ (wantsChannelIq)
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::unique_ptr<NcdxfRun> ncdxf_;         // ★ V12 NCDXF beacons (buildNcdxfLocked_)
@@ -2554,7 +2572,7 @@ private:
     std::deque<std::vector<float>> q_;
     std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
     struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; int slice = 0;
-                     int gapN = 0; double aim = 0; };   // ★ aim: setIqAim's frequency when the block was cut (0 = none)   // ★ gapN > 0: no samples, a gap of that many to bridge
+                     int gapN = 0; double aim = 0; bool wide = false; };   // ★ beta92 wide: the decoder tap (feedChannelIq)   // ★ aim: setIqAim's frequency when the block was cut (0 = none)   // ★ gapN > 0: no samples, a gap of that many to bridge
     /* ★★ BAND'S MINUTE LINE (V12 2026-10-27, for the Pi 2's "every chip light, nothing decoded"): what the decode thread was
      *  fed (seconds of each slice per minute of capture — 60 means it kept up), how far behind the capture it ran (now −
      *  the block's capture UTC: FT8 cuts its slots by that stamp), what was dropped, slots decoded / skipped, spots per mode
@@ -2698,6 +2716,34 @@ public:
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_); h = shared_; }
         if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★★ beta92 THE DECODER TAP (RxPipeline::setDecoderTap → Callbacks::decIq): a listener's, and the one pipeline's.
+     *  One relaxed load when no packet decoder reads IQ anywhere in this process. */
+    void feedDecTapSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::packetIqRunning().load(std::memory_order_relaxed) <= 0 || !anyPer_.load(std::memory_order_relaxed)) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_);
+          auto it = bySession_.find(session);
+          if (it != bySession_.end()) h = it->second; }
+        if (h) h->feedChannelIq(iq, n, rate, true);
+    }
+    void feedDecTapShared(const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::packetIqRunning().load(std::memory_order_relaxed) <= 0) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_); h = shared_; }
+        if (h) h->feedChannelIq(iq, n, rate, true);
+    }
+    /** ★★ beta92: does this listener's own host (or the one pipeline's) run packet on IQ — so its pipeline wants the tap? */
+    bool sessionWantsPacketTap(const std::string& session) {
+        if (DecoderHost::packetIqRunning().load(std::memory_order_relaxed) <= 0) return false;
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = bySession_.find(session);
+        return it != bySession_.end() && it->second && it->second->wantsPacketTap();
+    }
+    bool sharedWantsPacketTap() {
+        if (DecoderHost::packetIqRunning().load(std::memory_order_relaxed) <= 0) return false;
+        std::lock_guard<std::mutex> lk(m_);
+        return shared_ && shared_->wantsPacketTap();
     }
     /** ★ Does the one pipeline's host run VOR (which needs its channel 25 kHz wide)? */
     bool sharedWantsWide() {

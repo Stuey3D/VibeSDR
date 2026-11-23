@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta92 2026-11-23 — APRS FROM IQ (Stuart: "surely aprs needs to be iq based and bypass the nfm processing
+  //     completely then it can work the best it can"). RxPipeline::setDecoderTap (pipeline.cpp), vibe_aprs_run.h iq1200_,
+  //     DecoderHost::feedChannelIq wide, the shim's pktTapSync; satPacketRef / satPacketMode (the pick's baud kept apart).
+  //     vibeserver/test-aprs-onair.cpp (--iq-sweep, --audio-check, --cf32), scripts/test-server-aprs-shared.mjs G–I.
+  { v: 'V12 (experimental)', detail: 'APRS HEARS WEAKER AND OFF-FREQUENCY TRACKERS — the APRS decoder now has its own receiver. It used to listen to your NFM audio, so it heard the packets through your filter, your Voice/All choice and your de-emphasis, and a tracker that is over-deviated (many are: some swing ±5–6 kHz) or a kHz or two off 144.800 had its signal clipped and was lost near the noise. It now takes the radio’s signal itself, before your filter, follows a tracker that is off frequency by up to ±3 kHz, and listens through three widths at once, so a quiet, normal tracker and a loud, wide one are both heard at their best. In our tests at the edge of the noise (8–10 dB) it decodes about twice as many packets as before, and trackers 2 kHz off frequency or deviating ±6 kHz that were missed almost entirely now come through. Whatever you set for listening — width, mode, squelch, mute — no longer changes what APRS decodes. 9600 Bd packet reads the same wider signal. Also fixed: after a satellite APRS pick, opening APRS by hand later kept the satellite’s 1200 Bd setting instead of your own choice (normally AUTO); the pick’s setting now stays with the pick. VibeServer, the app and the web page.' },
   // ★★★ V12 beta92 2026-11-23 — THE SPOTS LIST BY CONTROLLER (Stuart: "make the spots navigatable by controller but make it
   //     so that you dont have to scroll a list of hundreds to get to the header buttons or to the control deck").
   //     src/utils/spotsNav.ts (app), web/client/src/padList.ts + gamepad.ts [data-navlist] (web).

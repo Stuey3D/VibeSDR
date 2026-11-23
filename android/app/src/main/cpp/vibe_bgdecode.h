@@ -1256,7 +1256,11 @@ public:
                 chans_.push_back(std::move(c));
                 continue;
             }
-            const double need = c->skim ? passbandHz(c->vfo) / 0.92 : std::max(passbandHz(c->vfo) * 2.5, 24000.0);
+            // ★★ beta92 an APRS VFO's decoder reads its pipeline's DECODER TAP (±12 kHz, before the VFO's NFM filter —
+            //    vibe_aprs_run.h iq1200_): its slice holds ±16 kHz flat, as a listener's does (clientRetune)
+            const bool pktTap = c->vfo.dec == "aprs" && c->vfo.mode == "nfm";
+            double need = c->skim ? passbandHz(c->vfo) / 0.92 : std::max(passbandHz(c->vfo) * 2.5, 24000.0);
+            if (pktTap) need = std::max(need, 40000.0);
             int b = 64;
             while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
             c->bins = std::min(b, p_.fftSize);
@@ -1268,12 +1272,14 @@ public:
                 vibedsp::RxPipeline::Callbacks cb{};
                 cb.ctx = c.get();
                 cb.audio = &BgRunner::audioCb;
+                if (pktTap) cb.decIq = &BgRunner::decIqCb;
                 // ★ its name in its own log lines ("[pilot] …"), fixed for the VFO's life
                 { const std::string lb = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + c->vfo.mode + ")";
                   c->rx->setLogLabel([lb] { return lb; }); }
                 c->rx->setBackground(true);   // ★★★ beta92: its demodulator thread takes the background rung (vibe-bgdemod)
                 c->rx->start(c->rate, 1024, 10.0, 48000, cb);
                 c->rx->setRdsEnabled(false);
+                if (pktTap) c->rx->setDecoderTap(vibeaprs::Run::kTapHz);
             }
             place(*c);
             DecoderHost::Env env;
@@ -1789,6 +1795,11 @@ private:
     /** ★ The channels the budget allows now (a locked radio's free user slots); a large number when there is none. */
     int budget() const { return p_.channelBudget ? std::max(0, p_.channelBudget()) : 1 << 20; }
     int runningCount() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
+    /** ★★ beta92 an APRS VFO's decoder tap → its host's packet decoder (DecoderHost::feedChannelIq, wide). */
+    static void decIqCb(void* ctx, const cf32* x, int n, double rate) {
+        auto* c = (Chan*)ctx;
+        if (c && c->host) c->host->feedChannelIq(reinterpret_cast<const std::complex<float>*>(x), n, rate, true);
+    }
     static void audioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (Chan*)ctx;
         testBurn(frames);
