@@ -2033,6 +2033,13 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
       "$SRC/tool-dec-replay.cpp" $(deps_for test-dec-dump) $cobj 2>"$OUT/tool-dec-replay.buildlog" || echo '   (tool-dec-replay did not build — the replay half is not run)'
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" VIBE_DEC_REPLAY_BIN="$OUT/tool-dec-replay" node scripts/test-server-aprs-capture.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ 2026-11-23 APRS on the ONE-PIPELINE receiver (users 1, a shared dial with a mirror, a strong neighbour 60 kHz up,
+  #    the app's silent mute with the DX scanner due) and a listener's own VFO, keyed off-air packets, the clients' AUTO
+  #    attach — the clips written by test-aprs-onair --write-clip
+  if [ -x "$OUT/test-aprs-onair" ]; then
+    VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-aprs-shared.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  else notrun=$((notrun+1)); echo '   (test-server-aprs-shared not run — test-aprs-onair did not build)'; fi
   # ★★ V12 2026-11-10: a listener's manual gain / AUTO reaches EVERY listener's readout (hwinfo agc + gainNow)
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-gain-readout.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

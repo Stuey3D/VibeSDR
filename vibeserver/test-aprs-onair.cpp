@@ -11,6 +11,7 @@
 #include "vibe_aprs_run.h"
 #include "vibedsp/vibedsp.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -50,6 +51,8 @@ struct Cfg {
     double gainStep = 1;     ///< ×amplitude half-way through every packet (an RTL AGC / gain step)
     int packets = 24;
     uint64_t seed = 1;
+    double nbOffHz = 0;      ///< ★ a STRONG NEIGHBOUR this far from the channel (0 = none): an NFM carrier, always on
+    double nbDb = 0;         ///< …its power over the packets' carrier
 };
 
 /** The capture: 240 kS/s, the station 37 kHz above its centre, keyed only for each packet (and 30 ms of tail). */
@@ -91,6 +94,14 @@ static std::vector<cf> makeIq(const Cfg& c, double fs, double off) {
         const double p = 2 * M_PI * (off + c.errHz) * i / fs;
         const float g = (c.gainStep != 1 && stepped) ? float(c.gainStep) : 1.f;
         iq[size_t(i)] = (cf(Iu[size_t(i)], Qu[size_t(i)]) * cf(float(std::cos(p)), float(std::sin(p))) + cf(nd(rng), nd(rng))) * g;
+    }
+    if (c.nbOffHz != 0) {   // ★ the neighbour: ±2.5 kHz of FM at a 400 Hz tone, nbDb over the packets' carrier, never keyed off
+        const float a = float(std::pow(10.0, c.nbDb / 20));
+        double ph = 0;
+        for (int i = 0; i < n; ++i) {
+            ph += 2 * M_PI * (off + c.nbOffHz + 2500 * std::sin(2 * M_PI * 400.0 * i / fs)) / fs;
+            iq[size_t(i)] += a * cf(float(std::cos(ph)), float(std::sin(ph)));
+        }
     }
     return iq;
 }
@@ -162,7 +173,7 @@ static std::string desc(const Cfg& c) {
     char b[200];
     std::snprintf(b, sizeof b, "CNR %4.1f dB dev %.1fk TX %s TXD %d %s de-emph %s bw %.1fk%s%s", c.cnrDb, c.devHz / 1000, c.tiltDb > 0 ? "pre-emph" : c.tiltDb < 0 ? "de-emph" : "flat",
                   c.flags, c.voice ? "VOICE" : "ALL  ", c.tau > 0 ? "50us" : "off ", c.bw / 1000, c.errHz != 0 ? (" off " + std::to_string((int)c.errHz)).c_str() : "",
-                  c.gainStep != 1 ? " +gain step" : "");
+                  c.gainStep != 1 ? " +gain step" : (c.nbOffHz != 0 ? (" +neighbour " + std::to_string(int(c.nbOffHz / 1000)) + "k " + std::to_string(int(c.nbDb)) + " dB").c_str() : ""));
     return b;
 }
 struct Row { int pipe = 0, audio = 0, ref = 0, wrong = 0; };
@@ -179,8 +190,106 @@ static Row run1(const Cfg& c, bool ref, bool print = true) {
     return r;
 }
 
+
+/** ★ `test-aprs-onair --cu8 FILE RATE [voice|all] [tau_us]`: a REAL capture (rtl_sdr u8 IQ; an rtl_tcp "RTL0" header is
+ *  skipped; centred on the channel) through the same chain — up-sampled to 240 kS/s and put 37 kHz off the pipeline's
+ *  centre, as makeIq's — and through the reference; every packet each heard is printed (2026-11-23, the shared-dial hunt). */
+static int decodeCu8(const char* path, double rate, bool voice, double tau) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::fprintf(stderr, "cannot open %s\n", path); return 1; }
+    std::vector<uint8_t> u;
+    { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) u.insert(u.end(), b, b + k); }
+    std::fclose(f);
+    const size_t o = (u.size() >= 12 && std::memcmp(u.data(), "RTL0", 4) == 0) ? 12 : 0;
+    std::vector<float> I, Q;
+    for (size_t i = o; i + 1 < u.size(); i += 2) { I.push_back((u[i] - 127.5f) / 127.5f); Q.push_back((u[i + 1] - 127.5f) / 127.5f); }
+    const double fs = 240000, off = 37000;
+    vibedsp::RationalResampler ri(rate, fs), rq(rate, fs);
+    std::vector<float> Iu(size_t(ri.maxOut(int(I.size())))), Qu(Iu.size());
+    const int n = ri.process(I.data(), int(I.size()), Iu.data());
+    rq.process(Q.data(), int(Q.size()), Qu.data());
+    std::vector<cf> iq(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) { const double p = 2 * M_PI * off * i / fs; iq[size_t(i)] = cf(Iu[size_t(i)], Qu[size_t(i)]) * cf(float(std::cos(p)), float(std::sin(p))); }
+    std::printf("%s: %.1f s at %.0f S/s\n", path, double(I.size()) / rate, rate);
+    std::vector<std::string> pipe, aud, ref;
+    auto grab = [](std::vector<std::string>& v) { return [&v](const std::string& j) {
+        if (j.find("\"type\":\"aprs_packet\"") == std::string::npos) return;
+        const size_t a = j.find("\"raw\":\""); if (a == std::string::npos) return;
+        const size_t b = j.find("\",\"", a + 7); v.push_back(j.substr(a + 7, b == std::string::npos ? std::string::npos : b - a - 7)); }; };
+    {
+        vibeaprs::Run::Opts oo; oo.json = grab(pipe); vibeaprs::Run run(0, std::move(oo));
+        vibeaprs::Run::Opts oa; oa.json = grab(aud); vibeaprs::Run runA(1200, std::move(oa));
+        struct Ctx { vibeaprs::Run* r; vibeaprs::Run* a; } ctx{&run, &runA};
+        vibedsp::RxPipeline::Callbacks cb; cb.ctx = &ctx;
+        cb.audio = [](void* x, const float* pcm, int frames, int ch, int) {
+            auto* p = static_cast<Ctx*>(x);
+            std::vector<float> m(static_cast<size_t>(frames)); for (int i = 0; i < frames; ++i) m[size_t(i)] = pcm[size_t(i) * size_t(ch)];
+            p->r->feedAudio(m.data(), frames); p->a->feedAudio(m.data(), frames);
+        };
+        cb.iq = [](void* x, const vibedsp::cf32* z, int k, double r) { static_cast<Ctx*>(x)->r->feedIq(reinterpret_cast<const std::complex<float>*>(z), k, r); };
+        vibedsp::RxPipeline p; p.setMeasureThread(false);
+        p.setDeemphasis(tau); p.setNfmVoice(voice);
+        p.start(fs, 1024, 20.0, 48000, cb);
+        p.setTune(off, vibedsp::RxPipeline::Mode::NFM, 12500);
+        const int blk = int(fs / 50);
+        for (size_t i = 0; i + size_t(blk) <= iq.size(); i += size_t(blk)) p.feed(reinterpret_cast<const vibedsp::cf32*>(iq.data() + i), blk);
+        p.stop();
+        std::printf("── the server's chain, AUTO (%s, de-emphasis %.0f us): %zu packets (a 1200 run on the audio alone: %zu; first from narrow %llu, audio %llu) ──\n",
+                    voice ? "VOICE" : "ALL", tau * 1e6, pipe.size(), aud.size(), (unsigned long long)run.framesFromNarrow(), (unsigned long long)run.framesFromAudio());
+        for (auto& s : pipe) std::printf("   %s\n", s.c_str());
+    }
+    {
+        vibeaprs::Run::Opts o2; o2.json = grab(ref); vibeaprs::Run run(1200, std::move(o2));
+        const std::vector<float> lp = vibedsp::designLowpass(8000.0 / fs, 4000.0 / fs);
+        const int K = int(lp.size()), D = int(std::lround(fs / 48000));
+        std::vector<cf> ring(static_cast<size_t>(K)); int rp = 0; cf prev(1, 0); std::vector<float> out;
+        for (size_t i = 0; i < iq.size(); ++i) {
+            const double p = -2 * M_PI * off * double(i) / fs;
+            ring[size_t(rp)] = iq[i] * cf(float(std::cos(p)), float(std::sin(p))); rp = (rp + 1) % K;
+            if (i % size_t(D)) continue;
+            cf y(0, 0); for (int k = 0; k < K; ++k) y += ring[size_t((rp + k) % K)] * lp[size_t(k)];
+            out.push_back(std::arg(y * std::conj(prev)) * float(48000.0 / (2 * M_PI * 6250.0))); prev = y;
+            if (out.size() == 960) { run.feedAudio(out.data(), int(out.size())); out.clear(); }
+        }
+        std::printf("── the reference (±8 kHz FIR, ideal discriminator): %zu packets ──\n", ref.size());
+        for (auto& s : ref) std::printf("   %s\n", s.c_str());
+    }
+    return 0;
+}
+
+
+/** ★ `test-aprs-onair --write-clip FILE RATE CNR [packets]`: the same keyed, pre-emphasised Bell 202 FM in noise (CNR in
+ *  12.5 kHz) as u8 IQ at RATE, centred on the channel — for a REAL server fed by fake-rtl-tcp (--hf FILE --hf-centre
+ *  144800000): scripts/test-server-aprs-shared.mjs. The packets are "on-air test #NNN" (noteJson). */
+static int writeClip(const char* path, double rate, double cnr, int packets, double nbOff, double nbDb) {
+    Cfg c; c.cnrDb = cnr; c.tiltDb = 5; c.packets = packets; c.seed = 7; c.nbOffHz = nbOff; c.nbDb = nbDb;
+    const std::vector<cf> iq = makeIq(c, rate, 0);
+    double pk = 0; for (const cf& z : iq) pk = std::max(pk, double(std::max(std::fabs(z.real()), std::fabs(z.imag()))));
+    const double g = 120.0 / (pk > 0 ? pk : 1);
+    std::vector<uint8_t> u(iq.size() * 2);
+    for (size_t i = 0; i < iq.size(); ++i) {
+        u[2 * i] = uint8_t(std::lround(std::clamp(127.5 + iq[i].real() * g, 0.0, 255.0)));
+        u[2 * i + 1] = uint8_t(std::lround(std::clamp(127.5 + iq[i].imag() * g, 0.0, 255.0)));
+    }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(u.data(), 1, u.size(), f); std::fclose(f);
+    std::fprintf(stderr, "wrote %s: %.1f s at %.0f S/s, %d packets at CNR %.1f dB\n", path, double(iq.size()) / rate, rate, packets, cnr);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 5 && std::strcmp(argv[1], "--write-clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc >= 6 ? std::atoi(argv[5]) : 24,
+                                                                                         argc >= 7 ? std::atof(argv[6]) : 0, argc >= 8 ? std::atof(argv[7]) : 0);
+    if (argc >= 4 && std::strcmp(argv[1], "--cu8") == 0)
+        return decodeCu8(argv[2], std::atof(argv[3]), argc >= 5 && std::strcmp(argv[4], "voice") == 0, argc >= 6 ? std::atof(argv[5]) * 1e-6 : 50e-6);
     const bool sweep = argc > 1 && std::strcmp(argv[1], "--sweep") == 0;
+    if (argc > 1 && std::strcmp(argv[1], "--neighbour") == 0) {   // ★ the 11-23 hunt: a strong signal 60 kHz up
+        for (double db : { 0.0, 20.0, 30.0, 40.0 }) { Cfg c; c.cnrDb = 15; c.tiltDb = 5; c.nbOffHz = db > 0 ? 60000 : 0; c.nbDb = db; run1(c, true); }
+        // ★ the Lenovo dump's bursts (11-23): 5–8 dB CNR in 12.5 kHz, flat, OVER-deviated (±4.5–5 kHz, ~14 kHz occupied)
+        for (double dev : { 3000.0, 4700.0 }) for (double cnr : { 6.0, 8.0, 10.0 }) { Cfg c; c.cnrDb = cnr; c.devHz = dev; c.tiltDb = 0; c.packets = 24; c.seed = 11; run1(c, true); }
+        return 0;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     if (sweep) {
         std::printf("── the sweep: the server's chain against the reference, the same IQ ──\n");
