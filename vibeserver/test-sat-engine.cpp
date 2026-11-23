@@ -503,8 +503,13 @@ static void s12(const std::string& dir) {
     CHECK(issUhf, "ISS 437.550 SSTV events: the SSTV decoder attaches (145.800 kept)");
     CHECK(e->txAt(25544, 1, sd, tx) && tx.hz == 145800000 && sstvOf(tx), "ISS 145.800 Voice / SSTV kept");
     CHECK(e->txAt(44881, 0, sd, tx) && tx.passband() && tx.hz == 145915000 && tx.hiHz == 145935000 && bandOf(tx) == "U/v", "TO-108 (CAS-6) U/v 145.915–145.935");
-    CHECK(e->txAt(39444, 1, sd, tx) && tx.consumer == "fc-bpsk" && decoderOf(tx, p) == "fctlm" && p.empty(), "AO-73: fc-bpsk → fctlm AUTO");
-    CHECK(e->txAt(60209, 1, sd, tx) && tx.consumer == "fox-bpsk" && decoderOf(tx, p).empty(), "MO-122: fox-bpsk, no FUNcube decoder");
+    // ★★★ beta92 THE WIDE TELEMETRY PICK (Stuart 11-23: AO-73 1.3 kHz above the prediction, 0 frames at the 1200 Hz centre)
+    CHECK(e->txAt(39444, 1, sd, tx) && tx.consumer == "fc-bpsk" && tlmWide(tx) && decoderOf(tx, p) == "fctlm"
+          && p == "\"centre\":3800,\"afc_range\":2600", "AO-73: fc-bpsk → fctlm at centre 3800, hunting ±2600 (%s)", p.c_str());
+    CHECK(tuneHzOf(tx) == 145935000 - 3800 && listenModeOf(tx) == "usb" && kTlmAudioLoHz == 100 && kTlmAudioHiHz == 7600,
+          "…the dial 3800 Hz below the downlink, USB 100–7600 Hz (%.0f)", tuneHzOf(tx));
+    CHECK(e->txAt(60209, 1, sd, tx) && tx.consumer == "fox-bpsk" && decoderOf(tx, p).empty() && !tlmWide(tx) && listenOffsetHz(tx) == 0,
+          "MO-122: fox-bpsk, no FUNcube decoder (and so not the wide telemetry pick)");
     // ★★ beta92 a CW beacon pick runs the CW SKIMMER over 24 kHz (Stuart's RS-44 pass 11-23: the beacon ~2 kHz off the figure)
     CHECK(e->txAt(44909, 1, sd, tx) && tx.mode == "cw" && beaconSkimmed(tx) && decoderOf(tx, p) == "cwskim" && p == "\"width\":24000"
           && tuneHzOf(tx) == 435605000 && listenModeOf(tx) == "cw", "RS-44 CW beacon: cwskim, width 24000, tuned on the beacon itself (%s)", p.c_str());
@@ -540,7 +545,41 @@ static void s12(const std::string& dir) {
     t = e->start("PB", "o", 435605000, "cw", Clock{t0, true}, 44909, 1);
     e->tick("PB", Clock{t0 + 0.04, true});
     CHECK(e->nudge("PB", 435605500) && !e->nudge("PB", 435630000), "a single channel (the beacon) keeps the 15 kHz rule");
+    {   // ★★★ beta92 a voice / beacon lock takes NO decoder trim
+        double ap = 0, tg = 0;
+        e->start("PB", "o", 435605000, "cw", Clock{t0, true}, 44909, 1);
+        CHECK(!e->decoderTrim("PB", ap, tg) && !e->setDecoderTrim("PB", 500), "a CW beacon's lock refuses a decoder's trim");
+    }
     e->stop("PB");
+    {   // ★★★ beta92 THE DECODER'S TRIM on AO-73's telemetry: clamped, slewed at kDecTrimSlewHzS, in the shift; a nudge keeps it
+        json::Value al;
+        CHECK(json::parseValue(e->listJson(Clock{kRsTca, true}, ReachWhyFn([](double, double) { return std::string(); }), SupplyInfo{}), al), "list for AO-73");
+        const json::Value* ao = findSat(al, "AO-73");
+        const json::Value* ps = ao ? ao->get("passes") : nullptr;
+        double aAos = 0, aLos = 0;
+        if (ps && ps->t == json::Value::Arr && !ps->a.empty()) { aAos = ps->a[0].num("aos"); aLos = ps->a[0].num("los"); }
+        CHECK(aLos > aAos + 120, "an AO-73 pass (%.0f s)", aLos - aAos);
+        const double ta = aAos + 60;
+        Track tt = e->start("TL", "o", 145931200, "usb", Clock{ta, true}, 39444, 1);
+        CHECK(tt.state == LockState::Track && tt.nominalHz == 145935000 - kTlmCentreHz, "AO-73 telemetry locked, the nominal at downlink − 3800 (%.0f)", tt.nominalHz);
+        double ap = -1, tg = -1;
+        CHECK(e->decoderTrim("TL", ap, tg) && ap == 0 && tg == 0, "the decoder's trim: 0, nothing asked");
+        CHECK(e->setDecoderTrim("TL", 1300) && e->decoderTrim("TL", ap, tg) && tg == 1300 && ap == 0, "asked +1300: the target set, the channel not moved yet");
+        double tc = ta;
+        Track a1 = e->tick("TL", Clock{tc += 0.04, true});
+        a1 = e->tick("TL", Clock{tc += 1.0, true});
+        CHECK(std::fabs(a1.trimHz - Engine::kDecTrimSlewHzS * 1.04) < 1e-3 && std::fabs(a1.shiftHz - (a1.modelHz + a1.trimHz)) < 1e-6,
+              "slewed: %.1f Hz after 1.04 s (%.0f Hz/s), in the shift", a1.trimHz, Engine::kDecTrimSlewHzS);
+        for (int i = 0; i < 40; ++i) a1 = e->tick("TL", Clock{tc += 1.0, true});
+        CHECK(a1.trimHz == 1300 && e->decoderTrim("TL", ap, tg) && ap == 1300, "…arrives at +1300 and stays");
+        CHECK(e->selected("TL").trimHz == 1300, "the hook for decoders (selected → DecoderView.trimHz) carries it");
+        CHECK(e->nudge("TL", 145931900), "a 700 Hz hand nudge keeps the lock (the pick stays)");
+        a1 = e->tick("TL", Clock{tc += 0.04, true});
+        CHECK(a1.nominalHz == 145931900 && a1.trimHz == 1300, "…the nominal follows the dial, the trim is kept");
+        e->setDecoderTrim("TL", 9000);
+        CHECK(e->decoderTrim("TL", ap, tg) && tg == Engine::kTrimClampHz, "clamped to ±%.0f Hz", Engine::kTrimClampHz);
+        e->stop("TL");
+    }
     // 1.4 AO-7 Mode A on an HF-only radio (an Airspy HF+ / an Icom HF rig: 0.5 kHz … 31 MHz)
     auto hf = [](double lo, double hi) { return lo >= 500.0 && hi <= 31e6; };
     CHECK(e->reaches(hf), "an HF-only radio reaches a listed downlink (AO-7 Mode A) — the SATELLITE key is offered");

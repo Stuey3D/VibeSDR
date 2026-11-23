@@ -309,6 +309,55 @@ struct TlmCtx {
     double elDeg = NAN;       ///< the bird's elevation now, NaN = not known
 };
 
+// ── ★★★ beta92 DRIFT FOLLOW: the locked decoder steers the satellite lock's trim ─────────────────────────────────────
+/** Stuart 11-23: "a wider usb passband and audio correction too that way it compensates for transmitter drift too".
+ *  Once frames decode, the decoder knows where the signal really is (its AFC: afcHz() from the centre); the lock's trim
+ *  (vibe::sat::Engine::setDecoderTrim) moves the CHANNEL by that much, so the signal goes back to the centre and the
+ *  search keeps its whole ±range for whatever comes next (drift, an old element set, a pass's far end).
+ *  ★★ THE HAND-OFF — when the trim moves the channel by X, the decoder sees its signal move by −X. They must never
+ *     chase each other, so this asks in DISCRETE MOVES, never continuously:
+ *      · only while locked (good frames in the last 10 s);
+ *      · never while a move is under way (the trim not yet at its target) — the engine slews it at 50 Hz/s and the
+ *        Costas loop follows that ramp (the first NCO takes each 20 Hz from it, phase-continuous);
+ *      · after a move has arrived, kSettleSec, then a fresh window of kWindowSec of estimates that agree within
+ *        kSteadyHz — an estimate taken while the channel moved (or before the audio carrying the move reached the
+ *        decoder: the pipeline's latency is unknown) is never used;
+ *      · only when the steady offset is over kStartHz (the hysteresis — inside it nothing moves at all);
+ *      · the move is the whole measured offset (gain 1): the next one starts again from a measurement, so there is no
+ *        integrator to wind up and nothing to ring.
+ *  A slow drift (300 Hz a minute) is thus followed in steps of ~kStartHz; a fixed error (1.3 kHz) in one move. */
+struct TrimFollow {
+    static constexpr double kStartHz = 120.0;   ///< the hysteresis: closer to the centre than this, no move
+    static constexpr double kSteadyHz = 40.0;   ///< the window's estimates agree within this (max − min)
+    static constexpr double kWindowSec = 3.0;   ///< steady for this long (≥ 3 estimates, one a second)
+    static constexpr double kSettleSec = 2.0;   ///< after a move arrives, before estimates count again
+    /** One estimate (once a second): `t` the audio clock (s), `locked` frames decoding, `offHz` the decoder's offset
+     *  from its centre, `applied` / `target` the lock's trim (`ok` false = no lock that takes one). Returns the new
+     *  trim target to ask for, or NaN = nothing to do. */
+    double step(double t, bool locked, double offHz, bool ok, double applied, double target) {
+        if (!ok || !locked || !std::isfinite(offHz)) { win_.clear(); return NAN; }
+        if (std::fabs(applied - target) > 1.0) { win_.clear(); arrived_ = -1; return NAN; }   // a move under way
+        if (arrived_ < 0) arrived_ = t;
+        if (t - arrived_ < kSettleSec) { win_.clear(); return NAN; }
+        win_.push_back({t, offHz});
+        while (!win_.empty() && t - win_.front().first > kWindowSec + 0.01) win_.pop_front();
+        if (win_.size() < 3 || t - win_.front().first < kWindowSec - 1.01) return NAN;
+        double lo = 1e9, hi = -1e9, sum = 0;
+        for (auto& e : win_) { lo = std::min(lo, e.second); hi = std::max(hi, e.second); sum += e.second; }
+        if (hi - lo > kSteadyHz) return NAN;
+        const double mean = sum / (double)win_.size();
+        if (std::fabs(mean) < kStartHz) return NAN;
+        win_.clear(); arrived_ = -1;
+        ++moves_;
+        return applied + mean;
+    }
+    int moves() const { return moves_; }
+private:
+    std::deque<std::pair<double, double>> win_;
+    double arrived_ = -1;
+    int moves_ = 0;
+};
+
 // ── The run inside a decoder host ───────────────────────────────────────────────────────────────────────────────
 /** ★ 48 kHz listener audio in (USB, the signal near `centre` Hz); `sat_tlm` per good frame, `fctlm_status` once a
  *  second, a readable gallery line per frame. All on the host's decode thread (never the audio thread). */
@@ -324,6 +373,13 @@ public:
         std::function<void(const Decoded&, const TlmCtx&)> record;
         /** ★ beta91: the pass the frame belongs to (the satellite engine's AOS / LOS and elevation now) — 0 = not known. */
         std::function<void(TlmCtx&)> pass;
+        /** ★★★ beta92 DRIFT FOLLOW (TrimFollow): the satellite lock's trim now (false = no lock that takes a decoder's
+         *  trim — a hand-started decoder, a voice downlink), and the move to ask for. Both optional: without them the
+         *  decoder only listens. */
+        std::function<bool(double& applied, double& target)> trimNow;
+        std::function<void(double target)> trimTo;
+        /** A line for the server's log (the follow's moves). Optional. */
+        std::function<void(const std::string&)> log;
     };
     Run(const vibebpsk::Rx::Cfg& cfg, bool invert, Out o) : rx_(cfg), inv_(invert), o_(std::move(o)) {
         rx_.onSymbol = [this](float s) { fr_.push(inv_ ? -s : s); };
@@ -335,8 +391,9 @@ public:
         //   first frame, so without good() > 0 a fresh run thought itself locked for its first 10 s and never found a
         //   signal more than the Costas loop's ~60 Hz off (the benchmark row decoded 0; 20 ms blocks lost frames).
         rx_.setLocked(fr_.good() > 0 && fr_.sinceGood() < 12000);
-        if (rx_.samples() - lastStatus_ >= 48000) { lastStatus_ = rx_.samples(); status(); }
+        if (rx_.samples() - lastStatus_ >= 48000) { lastStatus_ = rx_.samples(); follow(); status(); }
     }
+    const TrimFollow& follower() const { return follow_; }
     std::string statusJson() const {
         char b[320];
         std::snprintf(b, sizeof b, "{\"type\":\"fctlm_status\",\"data\":{\"sync\":%s,\"frames\":%llu,\"good\":%llu,\"failed\":%llu,"
@@ -351,6 +408,27 @@ public:
     vibebpsk::Rx& rxMut() { return rx_; }
 private:
     void status() { if (o_.json) o_.json(statusJson()); }
+    /** ★★★ beta92 once a second: the locked decoder's offset → the lock's trim (TrimFollow says when and how far). */
+    void follow() {
+        if (!o_.trimNow || !o_.trimTo) return;
+        double applied = 0, target = 0;
+        const bool ok = o_.trimNow(applied, target);
+        const bool locked = fr_.good() > 0 && fr_.sinceGood() < 12000;
+        const double t = (double)rx_.samples() / 48000.0;
+        const double want = follow_.step(t, locked, rx_.afcHz(), ok, applied, target);
+        if (!std::isfinite(want)) return;
+        o_.trimTo(want);
+        // ★ the log says where the satellite is against the prediction — once, then when that moves by 250 Hz or more
+        if (o_.log && (!std::isfinite(logged_) || std::fabs(want - logged_) >= 250.0)) {
+            logged_ = want;
+            std::string sat = o_.satName ? o_.satName() : std::string();
+            if (sat.empty()) sat = "AO-73";
+            char b[200];
+            std::snprintf(b, sizeof b, "satellite pass: %s telemetry is %.1f kHz %s the prediction \xe2\x80\x94 following it (trim %+.0f Hz)",
+                          sat.c_str(), std::fabs(want) / 1000.0, want >= 0 ? "above" : "below", want);
+            o_.log(b);
+        }
+    }
     void frame(const uint8_t* d, int fixed, int form) {
         const Decoded p = parse(d);
         std::string sat = o_.satName ? o_.satName() : std::string();
@@ -377,6 +455,8 @@ private:
     bool inv_;
     Out o_;
     uint64_t lastStatus_ = 0;
+    TrimFollow follow_;
+    double logged_ = NAN;
 };
 
 } // namespace vibefc

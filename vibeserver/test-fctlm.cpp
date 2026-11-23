@@ -7,9 +7,16 @@
 //   §5 SIMD against scalar: bit-identical symbols
 //   §6 the telemetry values (raw where the document gives no calibration) and the sat_tlm JSON
 //   §7 cost
+//   §8 ★★★ beta92 THE WIDE SEARCH + DRIFT FOLLOW (Stuart 11-23, AO-73 1.2–1.4 kHz above the prediction: 0 frames). The
+//      satellite channel modelled end to end: our transmitter at the prediction + an error, the pick's dial
+//      (downlink − centre, + the lock's trim, applied 0.3 s late as the pipeline would), a USB demodulator's 0..bw
+//      passband — the OLD pick (1200 Hz centre, ±900 Hz hunt, 2.65 kHz USB) against the NEW one (3800 Hz, ±2600 Hz,
+//      7.5 kHz), and the trim the locked decoder steers (vibefc::TrimFollow) converging without ringing.
+//   §9 ★ noise at the wide range: no frame, and the follow never moves the trim
 // Silent: no audio device. `--quick` shortens §3/§4.
 #include "vibe_fctlm_tx.h"
 #include "vibe_sat_orbit.h"   // its json:: parser (for the §6 checks)
+#include "vibe_sat_engine.h"  // ★ beta92 the pick's numbers (kTlmCentreHz …) and the trim's clamp and slew
 
 #include <chrono>
 #include <cstdio>
@@ -203,9 +210,170 @@ static void s7() {
     CHECK(sec / aud < 0.05, "under 5 %% of a core here");
 }
 
+// ── §8 / §9 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The pick's listening setup (old or new). */
+struct Pick { double centre, range, bw; const char* name; };
+static const Pick kOld{1200, 900, 2650, "OLD 1200 Hz / ±900 Hz / 2.65 kHz USB"};
+static const Pick kNew{vibe::sat::kTlmCentreHz, vibe::sat::kTlmAfcHz, vibe::sat::kTlmAudioHiHz - vibe::sat::kTlmAudioLoHz, "NEW 3800 Hz / ±2600 Hz / 7.5 kHz USB"};
+/** A USB demodulator with a 0..bw passband: x (real, the "RF" at 48 kHz) × e^{−jφ_LO}, then only 0..bw kept (a complex
+ *  band-pass: shift by −bw/2, low-pass at bw/2, shift back) — what the server's SsbDemod does. The LO's frequency is
+ *  set per block (the dial + the trim): phase-continuous. */
+struct UsbChannel {
+    double rate = 48000, bw = 2650, ph = 0, ph2 = 0;
+    std::vector<float> h; vibebpsk::Ring r;
+    explicit UsbChannel(double bwHz) : bw(bwHz) { h = vibebpsk::lowpass(128, bw / 2, rate); r.init(h.size()); }
+    void run(const float* x, float* y, int n, double loHz) {
+        const double w = 2 * M_PI * loHz / rate, w2 = 2 * M_PI * (bw / 2) / rate;
+        for (int i = 0; i < n; ++i) {
+            // down by the LO and by bw/2 (the passband's middle to DC), low-pass, back up by bw/2, the real part
+            const double a = ph + ph2;
+            r.push(float(x[i] * std::cos(a)), float(-x[i] * std::sin(a)));
+            const float zr = vibebpsk::dot(r.wr(), h.data(), h.size()), zi = vibebpsk::dot(r.wi(), h.data(), h.size());
+            y[i] = 2.0f * float(zr * std::cos(ph2) - zi * std::sin(ph2));
+            ph += w; ph2 += w2;
+            if (ph > M_PI) ph -= 2 * M_PI;
+            if (ph2 > M_PI) ph2 -= 2 * M_PI;
+        }
+    }
+};
+/** The satellite engine's trim, as Engine::tick moves a telemetry pick's (kDecTrimSlewHzS, clamped to kTrimClampHz). */
+struct TrimModel {
+    double applied = 0, target = 0;
+    void tick(double dt) { const double st = vibe::sat::Engine::kDecTrimSlewHzS * dt; applied += std::max(-st, std::min(st, target - applied)); }
+    void ask(double t) { target = std::max(-vibe::sat::Engine::kTrimClampHz, std::min(vibe::sat::Engine::kTrimClampHz, t)); }
+};
+struct PassResult {
+    int good = 0, moves = 0, reversals = 0; double afc = 0, trim = 0, errEnd = 0, maxOver = 0, lastMv = 0; std::string log;
+    std::vector<double> offs;   // the signal against the channel's centre, once a second
+};
+static constexpr double kPredHz = 12000;   // the prediction, as an "RF" tone in the 48 kHz test signal
+/** One pass: frames sent at kPredHz + errHz (+ driftHzS·t), heard through the pick `pk`. `follow`: the locked decoder
+ *  steers the trim (the new pick's behaviour); otherwise the channel stays on the prediction. */
+static PassResult pass(const Pick& pk, double errHz, double driftHzS, int nFrames, bool follow, double ebn0 = 14, uint32_t seed = 5) {
+    std::vector<std::vector<uint8_t>> fr;
+    for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(1 + i % 24, 2000 + (uint32_t)i));
+    tx::Cfg tc; tc.carrierHz = kPredHz; tc.offsetHz = errHz; tc.rampHzS = driftHzS; tc.ebn0Db = ebn0; tc.seed = seed;
+    const std::vector<float> rf = tx::modulate(fr, tc);
+    UsbChannel ch(pk.bw);
+    TrimModel tm;
+    vibebpsk::Rx::Cfg rc; rc.centreHz = pk.centre; rc.afcRangeHz = pk.range;
+    PassResult res;
+    Run::Out o{};
+    if (follow) {
+        o.trimNow = [&](double& a, double& t) { a = tm.applied; t = tm.target; return true; };
+        o.trimTo = [&](double t) {
+            const double was = tm.target;
+            tm.ask(t);
+            const double mv = tm.target - was;
+            if (res.lastMv != 0 && mv != 0 && (mv > 0) != (res.lastMv > 0)) ++res.reversals;
+            if (mv != 0) res.lastMv = mv;
+            ++res.moves;
+        };
+        o.log = [&](const std::string& l) { if (res.log.empty()) res.log = l; };
+        o.satName = [] { return std::string("AO-73"); };
+    }
+    Run run(rc, false, std::move(o));
+    const int blk = 960;   // the server's 20 ms blocks
+    const int lagBlk = 15; // ★ the trim reaches the audio 0.3 s after the engine applies it (the pipeline)
+    std::deque<double> hist(lagBlk + 1, 0.0);
+    std::vector<float> a(blk);
+    for (size_t i = 0; i < rf.size(); i += blk) {
+        const int n = (int)std::min<size_t>(blk, rf.size() - i);
+        tm.tick(n / 48000.0);
+        hist.push_back(tm.applied); hist.pop_front();
+        const double lo = kPredHz - pk.centre + hist.front();   // the dial (downlink − centre) + the trim (late)
+        ch.run(rf.data() + i, a.data(), n, lo);
+        const uint64_t before = run.rx().samples() / 48000;
+        run.feedAudio(a.data(), n);
+        if (run.rx().samples() / 48000 != before) {
+            const double t = (double)(i + n) / 48000.0;
+            const double truth = errHz + driftHzS * t;          // the signal against the prediction
+            res.offs.push_back(truth - hist.front());           // …against the channel's centre
+            if (follow) res.maxOver = std::max(res.maxOver, (errHz >= 0 ? 1 : -1) * (hist.front() - truth));
+        }
+    }
+    res.good = (int)run.framer().good(); res.afc = run.rx().afcHz(); res.trim = tm.applied;
+    const double tEnd = rf.size() / 48000.0;
+    res.errEnd = errHz + driftHzS * tEnd - tm.applied;
+    return res;
+}
+
+static void s8() {
+    std::printf("§8 ★★★ the wide search and the drift follow (beta92 — AO-73 1.3 kHz above the prediction)\n");
+    const int nf = g_quick ? 12 : 24;
+    struct Case { double err, drift; const char* what; };
+    const Case cases[] = { {1300, 0, "+1.3 kHz (Stuart's 11-23 pass)"}, {-2000, 0, "−2.0 kHz"} };
+    for (const Case& c : cases) {
+        PassResult o = pass(kOld, c.err, c.drift, nf, false);
+        CHECK(o.good == 0, "%s on the %s pick: %d / %d frames", c.what, kOld.name, o.good, nf);
+        PassResult w = pass(kNew, c.err, c.drift, nf, false);
+        CHECK(w.good >= nf - 2, "%s on the %s pick, no follow: %d / %d frames (AFC %+.0f Hz)", c.what, kNew.name, w.good, nf, w.afc);
+        PassResult f = pass(kNew, c.err, c.drift, nf, true);
+        CHECK(f.good >= nf - 2, "%s, following: %d / %d frames", c.what, f.good, nf);
+        CHECK(std::fabs(f.trim - c.err) < 120 && std::fabs(f.errEnd) < 120,
+              "  the trim converged: %+.0f Hz (the error %+.0f) — the signal ends %+.0f Hz from the centre (decoder AFC %+.0f)",
+              f.trim, c.err, f.errEnd, f.afc);
+        CHECK(f.moves >= 1 && f.moves <= 3 && f.reversals == 0 && f.maxOver < 120,
+              "  no ringing: %d move(s), %d reversal(s), overshoot %.0f Hz", f.moves, f.reversals, f.maxOver);
+        if (!f.log.empty()) std::printf("     log: %s\n", f.log.c_str());
+    }
+    {   // ★ the wide hunt costs no weak-signal margin: the old pick ON its centre against the new one 1.3 kHz out, following
+        std::printf("     weak signals (Eb/N0): the old pick with the signal ON its centre | the new one 1.3 kHz out, following\n");
+        int newAt6 = 0;
+        for (double eb : {8.0, 6.0, 5.0, 4.0}) {
+            PassResult a0 = pass(kOld, 0, 0, nf, false, eb, (uint32_t)(eb * 7));
+            PassResult b0 = pass(kNew, 1300, 0, nf, true, eb, (uint32_t)(eb * 7));
+            std::printf("     Eb/N0 %3.1f dB: %2d / %d | %2d / %d\n", eb, a0.good, nf, b0.good, nf);
+            if (eb == 6.0) newAt6 = b0.good;
+        }
+        CHECK(newAt6 >= nf * 3 / 4, "Eb/N0 6 dB, 1.3 kHz out, wide + following: %d / %d frames", newAt6, nf);
+    }
+    {   // the passband alone was not the fix: the old ±900 Hz hunt in a wide passband still cannot reach +1.3 kHz
+        PassResult n0 = pass(Pick{1200, 900, 7500, "1200 / ±900 / 7.5 kHz"}, 1300, 0, nf, false);
+        CHECK(n0.good == 0, "+1.3 kHz, the passband widened but the old ±900 Hz hunt: %d / %d (the range was the other half)", n0.good, nf);
+    }
+    {   // ★ a slow drift: 300 Hz a minute from +1.3 kHz — the follow keeps it near the centre
+        const int nd = g_quick ? 30 : 48;   // 2.5 / 4 minutes
+        PassResult d = pass(kNew, 1300, 5.0, nd, true);
+        double worst = 0;
+        for (size_t i = d.offs.size() / 3; i < d.offs.size(); ++i) worst = std::max(worst, std::fabs(d.offs[i]));
+        CHECK(d.good >= nd - 3, "+1.3 kHz drifting 300 Hz/min (%.1f min, ends %+.0f Hz off the prediction), following: %d / %d frames",
+              nd * 5.0 / 60.0, 1300 + 5.0 * nd * 5.0, d.good, nd);
+        CHECK(worst < 300 && std::fabs(d.errEnd) < 250 && d.reversals == 0,
+              "  the signal held within %.0f Hz of the centre after the first minute (%d moves, %d reversals, ends %+.0f Hz)",
+              worst, d.moves, d.reversals, d.errEnd);
+        PassResult nd0 = pass(kNew, 1300, 5.0, nd, false);
+        std::printf("     (without the follow: %d / %d frames, the signal ends %+.0f Hz from the centre)\n", nd0.good, nd, nd0.errEnd);
+    }
+}
+
+static void s9() {
+    std::printf("§9 ★ noise at the wide range: no frame, the trim never moves\n");
+    std::mt19937 rng(23);
+    std::normal_distribution<double> g(0, 1);
+    vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = vibe::sat::kTlmAfcHz;
+    int frames = 0, asks = 0;
+    Run::Out o{ [&](const std::string& j) { if (j.find("sat_tlm") != std::string::npos) ++frames; }, nullptr, nullptr, nullptr };
+    o.trimNow = [](double& a, double& t) { a = 0; t = 0; return true; };
+    o.trimTo = [&](double) { ++asks; };
+    Run run(c, false, std::move(o));
+    const int secs = g_quick ? 120 : 600;
+    UsbChannel ch(kNew.bw);
+    std::vector<float> w(960), a(960);
+    for (int s = 0; s < secs * 50; ++s) {
+        for (auto& v : w) v = float(0.1 * g(rng));
+        ch.run(w.data(), a.data(), 960, 9000);
+        run.feedAudio(a.data(), 960);
+    }
+    CHECK(frames == 0 && asks == 0, "%d s of white noise through the 7.5 kHz passband and the ±2600 Hz hunt: %d frames, %d trim requests (%llu syncs refused)",
+          secs, frames, asks, (unsigned long long)run.framer().syncs());
+    vibebpsk::Rx rx(c);
+    CHECK(rx.afcRangeHz() == vibe::sat::kTlmAfcHz, "the wide receiver's range: %.0f Hz", rx.afcRangeHz());
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--quick") g_quick = true;
-    s1(); s2(); s3(); s4(); s5(); s6(); s7();
+    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

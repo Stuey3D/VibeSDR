@@ -64,6 +64,9 @@ export interface SatReadout {
   id?: string; name?: string; norad?: number; tx?: string; loop?: string; consumer?: string;
   nominal?: number; offset?: number; rate?: number; trim?: number; az?: number; el?: number;
   aos?: number; los?: number; maxEl?: number; age?: number; ageState?: string; time: string;
+  /** ★★★ beta92 the PICK went with this ending (a tune past the lock's reach, a mode change): its decoder is detached on
+   *  the server — the box must stop showing it (it said "TRACK · attached" for a pick that had gone, Stuart 11-23). */
+  pickGone?: boolean;
 }
 export interface SatTrack {
   norad: number; aos: number; los: number; pts: [number, number][];
@@ -137,6 +140,7 @@ export function parseSatReadout(m: unknown): SatReadout | null {
     tx: str(o.tx, 40), loop: str(o.loop, 8), consumer: str(o.consumer, 20), nominal: num(o.nominal), offset: num(o.offset),
     rate: num(o.rate), trim: num(o.trim), az: num(o.az), el: num(o.el), aos: num(o.aos), los: num(o.los), maxEl: num(o.maxEl),
     age: num(o.age), ageState: str(o.ageState, 10), time: str(o.time, 8) ?? 'ok',
+    ...(o.pickGone === true ? { pickGone: true } : {}),
   };
 }
 
@@ -329,6 +333,9 @@ export interface SatPicked {
    *  it JOINS the pick's run instead of restarting it under another key (the AOS bug: the server's satellite watch then
    *  lost the pick and never saw the rise). Absent = an older server: the page's own defaults. */
   params?: Record<string, unknown>;
+  /** ★★★ beta92 the audio passband the server set for this pick (Hz, USB edges) — BPSK telemetry's 100–7600 Hz, the
+   *  decoder's centre (3800) in the middle. The client shows and keeps exactly it. Absent = the pick set none. */
+  audio?: { lo: number; hi: number };
 }
 const satDecoderName = (d: unknown): SatPicked['decoder'] =>
   d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' ? d : '';
@@ -344,6 +351,9 @@ export function parseSatPicked(m: unknown): SatPicked | null {
     if (v.length) p.vfob = v;
   }
   if (p.decoder && o.params && typeof o.params === 'object' && !Array.isArray(o.params)) p.params = o.params as Record<string, unknown>;
+  { const a = o.audio as Record<string, unknown> | null | undefined;
+    const lo = a ? num(a.lo) : undefined, hi = a ? num(a.hi) : undefined;
+    if (lo != null && hi != null && hi > lo && hi - lo <= 12000) p.audio = { lo, hi }; }
   return p;
 }
 
@@ -438,6 +448,9 @@ export function satCwTail(text: string, lines = 4): string {
 //     FIRST, each with its offset from it — the offset is worth knowing in itself (catalogue figure, dongle error, orbit age).
 /** The skimmer's window around a beacon (Hz) — the server's kBeaconSkimHz. */
 export const SAT_BEACON_SKIM_HZ = 24000;
+/** ★★★ beta92 the decoder status words that are not the decoder's state ("attached" is the socket's) — never shown as the
+ *  SATELLITE box's decoder line (the box said "TRACK · attached"); the box's own word (satDecWord) stands instead. */
+export const satDecLineShown = (s: string | undefined | null): string => (s && s !== 'attached' ? s : '');
 /** Half the CW passband a beacon pick listens with, centred on the prediction (Hz) — the server's kBeaconAudioHalfHz. */
 export const SAT_BEACON_AUDIO_HALF_HZ = 3000;
 /** What a beacon's skimmer is doing before it has read anything. */

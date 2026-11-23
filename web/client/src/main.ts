@@ -10426,7 +10426,8 @@ function satPanelGet(): SatPanel | null {
       doppler: (on) => spec?.satDoppler(on),
       drop: () => spec?.satDrop(),
       rxPos: () => myPos(),
-      follow: (d, t, prm) => satFollow(d, t, prm),
+      follow: (d, t, prm, audio) => satFollow(d, t, prm, audio),
+      pickGone: () => satFollow('', null),                           // ★★★ beta92 the server dropped the pick (tuned away)
       left: () => { satFollow('', null); satVfoBDecoder(null); },
       image: (slot) => satLendImage(slot),
       track: (norad, aos, los) => spec?.satTrack(norad, aos, los),   // ★ 1.7 the pass's path (geo → the dotted orbit)
@@ -10451,7 +10452,11 @@ let satDec: SatPicked['decoder'] = '';
 /** ★★ beta92 the decoder key a pick's decoder runs under: a skimmed CW beacon ('cwskim') is CW's (the skimmer is CW's). */
 const satDecKey = (d: SatPicked['decoder']) => (d === 'cwskim' ? 'cw' : d);
 let satBeaconOn = false;   // ★★ beta92 the cwskim attach is the pick's (not the CW key's own skimmer setting)
-function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string, unknown>) {
+function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string, unknown>, audio?: SatPicked['audio']) {
+  /* ★★★ beta92 THE PICK'S OWN PASSBAND (BPSK telemetry: 100–7600 Hz USB, the decoder's centre 3800 in the middle — the
+   *  signal and ±2.5 kHz of prediction error fit). The server set it; the page shows and keeps exactly it, every time the
+   *  pick is confirmed (a config that put the mode's default back would otherwise stand). */
+  if (d && t && audio) spec?.setBandwidth(audio.lo, audio.hi);
   if (satDec && activeDec === satDecKey(satDec) && d !== satDec) stopDecoder();
   satDec = d;
   if (!d || !t || !decoders) { satBeaconOn = false; return; }

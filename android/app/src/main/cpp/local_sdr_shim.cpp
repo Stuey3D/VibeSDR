@@ -11391,8 +11391,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** End this listener's lock. `freezeAndTell`: LOS / the button — the dial moves to where the channel IS (brief §9:
      *  never snap back, a jump of kilohertz would lose the station) and the listener is sent the config that says so.
      *  false: the listener is tuning away themselves — their own tune follows, and a config now would fight it. */
-    void satEndListener(const std::shared_ptr<ClientDsp>& c, const std::string& why, bool freezeAndTell) {
+    /*  ★★★ beta92 `dropPick`: a deliberate tune away or a mode change ends the PICK too (its decoder detached) and the OFF
+     *  says so ("pickGone":true) — before, the lock ended and the pick's decoder ran on, so the box kept a pick the
+     *  dial had left (Stuart 11-23). A nudge inside the lock's reach never comes here (Engine::nudge keeps it). */
+    void satEndListener(const std::shared_ptr<ClientDsp>& c, const std::string& why, bool freezeAndTell, bool dropPick = false) {
         satEngine().stop(c->session);
+        const bool pickGone = dropPick && satHasPick(c->session);
+        if (pickGone) satDetachPick(c->session, "the dial left it");
         if (auto h = decoders_.find(c->session)) h->setIqAim(0);   // ★★ beta92 a skimmer goes back to the dial
         {
             std::lock_guard<std::mutex> lk(c->mtx);
@@ -11404,7 +11409,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<net::Socket> sk; { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
         if (sk && sk->isOpen()) {
             if (freezeAndTell) sendConfig(sk);   // ★ only when the SERVER moved the dial — never under the listener's own tune
-            sendText(sk, "{\"type\":\"sat\",\"state\":\"OFF\",\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\"ok\"}");
+            sendText(sk, "{\"type\":\"sat\",\"state\":\"OFF\",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"" + (pickGone ? ",\"pickGone\":true" : "")
+                         + ",\"time\":\"ok\"}");
         }
     }
     /** ★ The shared dial's shift, added in vfoOffsetNow() — so EVERY shared retune (rx.setTune(vfoOffsetNow(), …)) carries
@@ -11433,8 +11439,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         (void)targetHz;
 #endif
     }
-    void satEndShared(const std::string& why, bool freezeAndTell) {
+    void satEndShared(const std::string& why, bool freezeAndTell, bool dropPick = false) {   // dropPick: as satEndListener
         satEngine().stop(kSatShared);
+        const bool pickGone = dropPick && satHasPick(kSatShared);
+        if (pickGone) satDetachPick(kSatShared, "the dial left it");
         if (auto h = decoders_.shared()) h->setIqAim(0);   // ★★ beta92 a skimmer goes back to the dial
         const double actual = audioFreq.load() + satSharedShift_.load();
         satSharedShift_.store(0.0);
@@ -11445,7 +11453,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (vsSharedDial()) broadcastConfig();
             else for (auto& k : allSpecClients()) if (k && k->isOpen()) sendConfig(k);   // ★ a one-listener radio: tell them too
         }
-        const std::string m = "{\"type\":\"sat\",\"state\":\"OFF\",\"shared\":true,\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\"ok\"}";
+        const std::string m = "{\"type\":\"sat\",\"state\":\"OFF\",\"shared\":true,\"why\":\"" + vibe::sat::jsonEsc(why) + "\""
+                            + (pickGone ? ",\"pickGone\":true" : "") + ",\"time\":\"ok\"}";
         for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m);
     }
     /** ★ The 25 Hz tracker. One thread for the process, started on the first lock, ~0 when there is none (a 200 ms
@@ -11646,6 +11655,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  and the satellite watch lost the pick (the AOS bug, vibesatgain::pickStillRuns). */
             std::string dp;
             if (!p.decoder.empty() && vibe::sat::decoderOf(tx, dp) == p.decoder) m += ",\"params\":{" + dp + "}";
+            /* ★★★ beta92 the audio passband the pick set (a telemetry pick's 100–7600 Hz), so a client shows and keeps
+             *  exactly it — it is the server's, not a default the client should put back. */
+            if (vibe::sat::tlmWide(tx))
+                m += ",\"audio\":{\"lo\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioLoHz, 0) + ",\"hi\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioHiHz, 0) + "}";
         }
         if (!decoderWhy.empty()) m += ",\"decoderWhy\":\"" + vibe::sat::jsonEsc(decoderWhy) + "\"";
         const std::string tail = ",\"time\":\"" + satEngine().timeState(satClock()) + "\"}";
@@ -11698,7 +11711,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** Forget `key`'s pick and detach what it attached — only while that host still runs the very decoder the pick
      *  started (the listener may have replaced it with their own since: then it is theirs, and stays). */
-    void satDetachPick(const std::string& key) {
+    bool satHasPick(const std::string& key) { std::lock_guard<std::mutex> lk(satPickMtx_); return satPicks_.count(key) != 0; }
+    void satDetachPick(const std::string& key, const char* why) {
         // ★★ beta92: a VFO B opened on another downlink of this pick closes with it (a new pick, the drop, the listener gone)
         satVfoBCloseFor(key, "The satellite pick changed \xe2\x80\x94 VFO B closed");
         SatPick p;
@@ -11709,7 +11723,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!host || !vibesatgain::pickStillRuns(p.decoder, p.decoderKey, host->startKey())) return;
         host->stop();
         navWideSync();
-        LOGI("[sat] decoder %s detached (SATELLITE drop)", p.decoder.c_str());
+        LOGI("[sat] decoder %s detached (SATELLITE drop: %s)", p.decoder.c_str(), why);   // ★ beta92 which drop, in words
     }
     /** {"type":"sat","op":"pick","norad":N,"tx":i,"doppler":true|false} — tune to the downlink, lock the Doppler (when
      *  asked; AUTO DOPPLER defaults ON, so an absent "doppler" is on), attach the decoder its use needs. ONE step. */
@@ -11727,7 +11741,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!satPickKey(sock, key, session, me)) return;
         // 1. what an earlier pick left: its lock (quietly — this pick moves the dial itself) and its decoder
         satQuietUnlock(key, me);
-        satDetachPick(key);
+        satDetachPick(key, "a new pick");
         // 2. ★ the tune — the listener's own tune frame through the ordinary handler (handleControl), so every rule a tune
         //    has (the locked window, band defaults on a person's tune, the shared dial's config to the room, the RDS
         //    owner …) applies unchanged. The gate this frame would meet has already been met by this `sat` frame.
@@ -11748,6 +11762,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (vibe::sat::beaconSkimmed(tx))
             handleControl(sock, "{\"type\":\"bandwidth\",\"bandwidthLow\":" + vibe::sat::fmtNum(-vibe::sat::kBeaconAudioHalfHz, 0)
                                 + ",\"bandwidthHigh\":" + vibe::sat::fmtNum(vibe::sat::kBeaconAudioHalfHz, 0) + "}");
+        // ★★★ beta92 BPSK TELEMETRY's audio: 100–7600 Hz USB with the decoder's centre (3800) in the middle — the signal and
+        //    ±2.5 kHz of prediction error fit (vibe_sat_engine.h kTlmCentreHz). The same ordinary bandwidth frame.
+        if (vibe::sat::tlmWide(tx))
+            handleControl(sock, "{\"type\":\"bandwidth\",\"bandwidthLow\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioLoHz, 0)
+                                + ",\"bandwidthHigh\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioHiHz, 0) + "}");
         // 3. the Doppler lock on exactly this downlink (refusals are told in the usual `sat` words; the pick stands)
         if (doppler) satLockOp(sock, "lock", (long long)nv, (int)tv);
         // 4. the decoder
@@ -11786,7 +11805,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (key == kSatShared) satEndShared("Satellite mode left", true);
             else satEndListener(me, "Satellite mode left", true);
         } else satRefuse(sock, "drop", "");
-        satDetachPick(key);
+        satDetachPick(key, "the listener left SATELLITE");
     }
     /** ★ Housekeeping (the house thread): a listener's pick goes when they have gone for good (no socket, not held) —
      *  its decoder with it; the room's pick goes when nobody at all is left. The lock has its own rules (LOS / the
@@ -11802,7 +11821,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!sessionHasSocketLocked(kv.second.owner) && !isHeldLocked(kv.second.owner)) gone.push_back(kv.first);
             }
         }
-        for (auto& k : gone) satDetachPick(k);
+        for (auto& k : gone) satDetachPick(k, "the listener has gone");
         satVfoBSweep();   // ★★ beta92: a satellite VFO B whose channel has gone (its listener left) is forgotten
     }
 
@@ -11913,7 +11932,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // 1. ★ the ordinary VFO B — every rule handleWatch has (the window, FM broadcast, the slots); never moves a shared dial
         const double hz = vibe::sat::tuneHzOf(tx);
         const std::string md = vibe::sat::listenModeOf(tx);
-        handleWatch(sock, "{\"type\":\"watch\",\"id\":1,\"frequency\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\"}");
+        // ★★★ beta92 BPSK telemetry on B listens on the same wide passband as on A (its decoder's centre is 3800 Hz)
+        const std::string bwB = vibe::sat::tlmWide(tx) ? ",\"bandwidthLow\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioLoHz, 0)
+                                                         + ",\"bandwidthHigh\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioHiHz, 0) : std::string();
+        handleWatch(sock, "{\"type\":\"watch\",\"id\":1,\"frequency\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\"" + bwB + "}");
         double bh = 0; std::string bm;
         std::shared_ptr<vibewatch::WatchChannel> ch;
         if (std::shared_ptr<WatchSet> w = watchFind(sess)) { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == 1) ch = c; }
@@ -12149,10 +12171,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void satSharedTuneCheck(const std::string& type, const std::string& msg) {
         const std::string m = jsonStr(msg, "mode");
         std::string cur; { std::lock_guard<std::recursive_mutex> lk(modeMtx); cur = this->mode; }
-        if (!m.empty() && m != cur) { satEndShared("Mode changed \xe2\x80\x94 Doppler correction ended", false); return; }
+        if (!m.empty() && m != cur) { satEndShared("Mode changed \xe2\x80\x94 Doppler correction ended", false, true); return; }
         double v = 0;
+        // ★★★ beta92 a NUDGE keeps the pick whole: the lock follows the dial (Engine::nudge), and the pick's decoder and the
+        //     pass's gain hold are untouched — only a tune past the lock's reach (or a mode change) drops the pick too
         if (type == "tune" && jsonNum(msg, "frequency", v) && v > 0 && !satEngine().nudge(kSatShared, v))
-            satEndShared("Tuned away \xe2\x80\x94 Doppler correction ended", false);
+            satEndShared("Tuned away \xe2\x80\x94 Doppler correction ended", false, true);
     }
 
     /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
@@ -22971,9 +22995,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  mode change or a deliberate tune ends it, and the dial goes where they asked (no freeze, no config). */
                 if (me->satOn) {
                     double tv = 0;
-                    if (!m.empty() && m != me->mode) satEndListener(me, "Mode changed \xe2\x80\x94 Doppler correction ended", false);
+                    // ★★★ beta92 a nudge keeps the pick whole (lock, decoder, gain hold); a tune away or a mode change drops it too
+                    if (!m.empty() && m != me->mode) satEndListener(me, "Mode changed \xe2\x80\x94 Doppler correction ended", false, true);
                     else if (jsonNum(msg, "frequency", tv) && tv > 0 && !satEngine().nudge(me->session, tv))
-                        satEndListener(me, "Tuned away \xe2\x80\x94 Doppler correction ended", false);
+                        satEndListener(me, "Tuned away \xe2\x80\x94 Doppler correction ended", false, true);
                 }
                 if (!m.empty() && m != me->mode) { me->satMaxShiftHz = 0;   // ★ the channel is rebuilt anyway: back to its own size
                                                    me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;

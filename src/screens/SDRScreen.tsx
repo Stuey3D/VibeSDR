@@ -77,7 +77,7 @@ import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft d
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -7991,6 +7991,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (r.state === 'OFF' && r.why && satOnRef.current && (satPendingRef.current || (satRoRef.current && satRoRef.current.state !== 'OFF'))
             && !/^(Tuned away|Mode changed)/.test(r.why)) setSatWhy(r.why);
         if (r.state === 'OFF' && r.why && satPendingRef.current) { satPendingRef.current = null; setSatPending(null); }
+        /* ★★★ beta92 THE PICK WENT WITH THE LOCK (a tune past its reach, a mode change — the server detached its decoder):
+         *  the box stops showing it (it said "TRACK · attached" for a pick that had gone, Stuart 11-23) and says why. */
+        if (r.pickGone && satOnRef.current && satPickedRef.current) {
+          setSatPicked(null); setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset();
+          satFollowRef.current('', null);
+          setSatWhy(r.why || 'The satellite pick ended');
+        }
         satRoRef.current = r;
         setSatRo(r.state === 'OFF' && !r.why ? null : r);
       },
@@ -8008,7 +8015,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (decoderClient.current) {
           const sr = Number(pk.params?.symbol_rate);
           decoderClient.current.lrptSymbolRate = pk.decoder === 'lrpt' && Number.isFinite(sr) && sr > 0 ? sr : 0;
+          // ★★★ beta92 FUNcube telemetry at the pick's own centre and hunt (the wide telemetry pick) — JOINS its run
+          decoderClient.current.fctlmParams = pk.decoder === 'fctlm' && pk.params ? pk.params : null;
         }
+        /* ★★★ beta92 THE PICK'S OWN PASSBAND (BPSK telemetry: 100–7600 Hz USB, the decoder's centre in the middle) — the
+         *  server set it; the app shows and keeps exactly it each time the pick is confirmed. */
+        if (pk.audio) client.current?.setBandwidth(pk.audio.lo, pk.audio.hi);
         satFollowRef.current(pk.decoder, satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx] ?? null);
       },
       /* ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick (on), a refusal (says why), or B gone */
@@ -16088,7 +16100,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           list={satList} readout={satRo} cap={satCap} autoDoppler={satAutoDoppler}
           picked={satPicked} pending={satPending} why={satWhy}
           picture={satPicture} pictureDone={satPictureDone}
-          decLine={satDec && activeDecoder === satDec ? decoderStatus : ''}
+          decLine={satDec && activeDecoder === satDec ? satDecLineShown(decoderStatus) : ''}
           packets={satDec === 'aprs' ? aprsLog.map((x) => x.line) : []}
           rxPos={serverPos ?? recvLoc ?? null}
           rxName={instanceName ?? ''}

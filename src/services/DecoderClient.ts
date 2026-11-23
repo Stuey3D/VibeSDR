@@ -361,6 +361,10 @@ export class DecoderClient {
   tonesSet: TonesOptions = { ...TONES_DEFAULTS };
   /** ★ V12 METEOR LRPT: the satellite's symbol rate (sats.json — 72000, or 80000 for the 80k mode); 0 = AUTO (both tried). */
   lrptSymbolRate = 0;
+  /** ★★★ beta92 FUNcube telemetry: the parameters the SATELLITE pick attached it with ("centre":3800,"afc_range":2600 — the
+   *  wide telemetry pick), so the app JOINS the server's run instead of restarting it at the old 1200 Hz centre. null = an
+   *  older server's pick (no parameters: AUTO). */
+  fctlmParams: Record<string, unknown> | null = null;
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
   /** ★ V12 VOR / ILS: the server's last status (radial / deviation, ident, station). */
@@ -941,7 +945,7 @@ export class DecoderClient {
       case 'lrpt':  return { extension_name: 'lrpt', params: lrptAttachParams(this.lrptSymbolRate) };
       // ★ V12 VOR / ILS and 406 MHz beacons: no parameters (AUTO — the channel says VOR / localiser / glideslope).
       case 'vor':    return { extension_name: 'vor', params: {} };
-      case 'fctlm':  return { extension_name: 'fctlm', params: {} };   // ★ SATELLITE-BEST 1.2: AUTO (the server's pick set it up)
+      case 'fctlm':  return { extension_name: 'fctlm', params: { ...(this.fctlmParams ?? {}) } };   // ★ SATELLITE-BEST 1.2: the pick's own (beta92: wide)
       case 'sarsat': return { extension_name: 'sarsat', params: {} };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };

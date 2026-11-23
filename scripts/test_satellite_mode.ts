@@ -16,6 +16,7 @@ import {
   parseSatVfoB, satVfoBMsg, SAT_VFOB_OFF_MSG, SAT_VFOB_KEY, satVfoBOffers, satVfoBHz, satDecView, satViewSwitch, satViewShown, satDecWord, satVfoBLine,
   satCwTail, satTextAppend, type SatInfo,
   satBeaconRows, satBeaconText, satOffText, satDecoderKey, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_EMPTY,
+  parseSatReadout, satDecLineShown,
 } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -519,6 +520,22 @@ console.log('— 1.9 the MAP key');
   ok(satBeaconText(null) === '' && satBeaconText({ centre: 0, signals: bl.signals }) === '' && SAT_BEACON_EMPTY === 'no CW in the 24 kHz around the beacon yet',
      'no list / no centre: nothing (the box says so)');
   ok(satBeaconRows(bl, 2).length === 2, 'at most N rows');
+}
+
+console.log('— ★★★ beta92 the wide telemetry pick: its passband, its parameters, the pick that goes with the lock');
+{
+  const p = parseSatPicked({ type: 'sat', state: 'picked', norad: 39444, tx: 1, decoder: 'fctlm', params: { centre: 3800, afc_range: 2600 }, audio: { lo: 100, hi: 7600 } });
+  ok(!!p && p.params?.centre === 3800 && p.params?.afc_range === 2600, 'picked fctlm carries the wide centre and hunt (3800, ±2600)');
+  ok(!!p && p.audio?.lo === 100 && p.audio?.hi === 7600, 'picked carries the passband the server set (100–7600 Hz)');
+  ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 39444, tx: 1, decoder: 'fctlm' })?.audio === undefined, 'an older server: no passband (the client keeps its own)');
+  ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 39444, tx: 1, decoder: 'fctlm', audio: { lo: 0, hi: 500000 } })?.audio === undefined
+     && parseSatPicked({ type: 'sat', state: 'picked', norad: 39444, tx: 1, decoder: 'fctlm', audio: { lo: 7600, hi: 100 } })?.audio === undefined,
+     'a passband wider than USB can be (12 kHz) or upside down: ignored');
+  const g = parseSatReadout({ type: 'sat', state: 'OFF', why: 'Tuned away — Doppler correction ended', pickGone: true, time: 'ok' });
+  ok(!!g && g.state === 'OFF' && g.pickGone === true, 'an ending that took the pick says pickGone');
+  ok(parseSatReadout({ type: 'sat', state: 'OFF', why: 'Below the horizon', time: 'ok' })?.pickGone === undefined, 'LOS keeps the pick (no pickGone)');
+  ok(satDecLineShown('attached') === '' && satDecLineShown('') === '' && satDecLineShown(null) === '' && satDecLineShown('SSTV · Robot 36') === 'SSTV · Robot 36',
+     '"attached" is never the box\'s decoder line (it said "TRACK · attached"); a real status is');
 }
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nall ${pass} passed`);

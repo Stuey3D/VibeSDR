@@ -371,8 +371,29 @@ try {
       sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: true });
       ok(await until(() => lastPicked(sp)?.norad === 39444, 4000), 'AO-73 telemetry picked');
       p = lastPicked(sp);
-      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145933800 && p.use === 'packet', `AO-73: fctlm, USB 1200 Hz low (${p?.decoder} ${p?.hz})`);
-      ok(/decoder attached: fctlm/.test(S.L()) && /\[sat\] decoder cwskim detached/.test(S.L()), 'fctlm runs; the CW skimmer the previous pick started detached');
+      // ★★★ beta92 THE WIDE TELEMETRY PICK (Stuart 11-23: AO-73 1.3 kHz above the prediction, 0 frames at the 1200 Hz centre)
+      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145931200 && p.use === 'packet', `AO-73: fctlm, USB 3800 Hz low (${p?.decoder} ${p?.hz})`);
+      ok(p?.params?.centre === 3800 && p?.params?.afc_range === 2600, `★ picked carries fctlm's wide centre and hunt ${JSON.stringify(p?.params)}`);
+      ok(p?.audio?.lo === 100 && p?.audio?.hi === 7600, `★ picked carries the passband it set ${JSON.stringify(p?.audio)}`);
+      ok(/decoder attached: fctlm \(FUNcube BPSK 1200\) centre 3800 Hz AFC .{1,2}2600 Hz/.test(S.L()) && /\[sat\] decoder cwskim detached/.test(S.L()),
+         'fctlm runs at 3800 Hz, hunting ±2600 Hz; the CW skimmer the previous pick started detached');
+      ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === 100 && lastOf(sp, 'config')?.bandwidthHigh === 7600, 3000),
+         `the audio passband 100–7600 Hz USB (config ${lastOf(sp, 'config')?.bandwidthLow}…${lastOf(sp, 'config')?.bandwidthHigh})`);
+      // ★★★ beta92 A HAND NUDGE KEEPS THE PICK (11-23: a 700 Hz nudge dropped it, the box still said TRACK · attached)
+      {
+        const before = S.L().length;
+        sp.txt.length = 0;
+        sp.send({ type: 'tune', frequency: 145931900, mode: 'usb' });
+        await sleep(900);
+        const after = S.L().slice(before);
+        ok(!jsons(sp, 'sat').some((m) => m.state === 'OFF') && !/decoder fctlm detached/.test(after) && !/Doppler lock ended/.test(after),
+           `a 700 Hz nudge keeps the pick: no OFF, the lock and fctlm kept (${jsons(sp, 'sat').slice(-2).map((m) => m.state).join(' ')})`);
+        sp.txt.length = 0;
+        sp.send({ type: 'tune', frequency: 145990000, mode: 'usb' });
+        ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'OFF' && /Tuned away/.test(m.why || '') && m.pickGone === true), 3000),
+           'a tune 58 kHz away ends the lock AND the pick: OFF with pickGone');
+        ok(await until(() => /\[sat\] decoder fctlm detached \(SATELLITE drop: the dial left it\)/.test(S.L()), 2000), '…its decoder detached, the drop said why');
+      }
       sp.send({ type: 'sat', op: 'pick', norad: 60209, tx: 1, doppler: true });
       ok(await until(() => lastPicked(sp)?.norad === 60209, 4000) && lastPicked(sp).decoder === '', `MO-122 Fox-format telemetry: no decoder (${lastPicked(sp)?.decoder})`);
       sp.send({ type: 'sat', op: 'pick', norad: 7530, tx: 0, doppler: true });

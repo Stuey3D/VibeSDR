@@ -4,9 +4,16 @@
 // Gardner timing. Soft symbols (real, ±1 nominal) out; the framer (vibe_fctlm.h) resolves the phase ambiguity and the
 // differential code with the sync vector — this file assumes neither.
 //
-// ★★ Where it listens: the pick tunes a FUNcube downlink 1200 Hz LOW in USB (vibe_sat_engine.h listenOffsetHz), so
+// ★★ Where it listened to beta91: the pick tuned a FUNcube downlink 1200 Hz LOW in USB (vibe_sat_engine.h listenOffsetHz), so
 //    the signal sits at ~1200 Hz audio; Doppler is taken out by the satellite lock, the residual (clock error, an old
-//    element set) by the AFC (±900 Hz) and the Costas loop. Manual fallback: "centre" (300–2700 Hz), "afc":false.
+//    element set) by the AFC (±900 Hz) and the Costas loop. Manual fallback: "centre" (300–7000 Hz), "afc":false.
+// ★★★ beta92 THE WIDE SEARCH (Stuart 11-23, AO-73 on the Pi 500's RTL-SDR V4: the bird sat 1.2–1.4 kHz ABOVE the
+//    Doppler-corrected prediction all pass — 2.4 kHz audio, outside the ±900 Hz hunt and half cut by the 2.7 kHz USB
+//    edge: 0 frames). A satellite pick now listens at a 3800 Hz centre in a 100–7600 Hz passband with afcRangeHz 2600
+//    (vibe_sat_engine.h kTlmCentreHz / kTlmAfcHz). A wider range changes three things here, and nothing at the default:
+//      · the first low-pass opens to range + 0.75 × baud (the signal 2.6 kHz off still passes it whole);
+//      · the decimation drops so the squared signal's line (2Δf, up to 5.2 kHz) stays under Nyquist (48 k / 4 = 12 k);
+//      · the hunt's window, the first NCO's clamp and the Costas hand-off use the range, not 900.
 // ★★ SIMD: the two FIRs' dot products are NEON / SSE2 / scalar with the same four-lane partial sums and the same final
 //    order (and no fused multiply-add) → bit-identical output on every path (test-fctlm checks it).
 // ★ Cost (est. before measuring): 48 kS/s × a complex mix + 9.6 kS/s × 2 × 96 taps + 9.6 kS/s × 2 × 32 taps ≈ 3 M
@@ -122,7 +129,8 @@ struct RxCfg {
     double rate = 48000;      ///< input audio rate (an integer multiple of 8 × baud is best: 48 k / 9.6 k = 5)
     double baud = 1200;
     double centreHz = 1200;   ///< where in the audio the signal is expected
-    bool afc = true;          ///< the coarse hunt (±900 Hz); off = the Costas loop alone (±~60 Hz)
+    bool afc = true;          ///< the coarse hunt (±afcRangeHz); off = the Costas loop alone (±~60 Hz)
+    double afcRangeHz = 900;  ///< ★ beta92: the hunt's reach around the centre (a satellite pick: 2600, kTlmAfcHz)
 };
 
 class Rx {
@@ -133,10 +141,14 @@ public:
     bool forceScalar = false;     ///< test seam (SIMD vs scalar)
 
     explicit Rx(const Cfg& c = RxCfg()) : c_(c) {
+        range_ = std::max(100.0, std::min(4000.0, c_.afcRangeHz));
         dec_ = std::max(1, (int)std::lround(c_.rate / (8.0 * c_.baud)));
+        // ★ beta92: the squared signal's line sits at 2Δf — at a wide range it must stay under the second rate's Nyquist
+        //   (with 10 % to spare). The default (±900: 1.98 kHz needed, 9.6 k given) is untouched.
+        if (c_.rate / dec_ < 2.2 * 2.0 * range_) dec_ = std::max(1, (int)std::floor(c_.rate / (2.2 * 2.0 * range_)));
         fs2_ = c_.rate / dec_;
         sps_ = fs2_ / c_.baud;
-        h1_ = lowpass(96, 1600.0, c_.rate);
+        h1_ = lowpass(96, std::max(1600.0, range_ + 0.75 * c_.baud), c_.rate);
         h2_ = lowpass(32, 0.62 * c_.baud, fs2_);
         r1_.init(h1_.size()); r2_.init(h2_.size());
         coarse_ = 0;
@@ -146,6 +158,7 @@ public:
         sq_.reserve(kFft);
     }
     double afcHz() const { return coarse_ + w2_ * fs2_ / (2 * M_PI); }
+    double afcRangeHz() const { return range_; }
     double centreHz() const { return c_.centreHz; }
     bool afcOn() const { return c_.afc; }
     double snrDb() const { return 10.0 * std::log10(std::max(1e-6, (double)sigPow_) / std::max(1e-6, (double)noisePow_)); }
@@ -211,9 +224,9 @@ private:
         w2_ = std::max(-wMax, std::min(wMax, w2_));
         // ★ a Doppler ramp walks the loop's frequency off: past 20 Hz it is handed to the first NCO (phase-continuous —
         //   the rotator carries on from where it is — and the total frequency is unchanged), so the loop never meets its
-        //   clamp. The first NCO's own range is the AFC's (±900 Hz around the centre).
+        //   clamp. The first NCO's own range is the AFC's (±afcRangeHz around the centre).
         const double w2Hz = w2_ * fs2_ / (2 * M_PI);
-        if (std::fabs(w2Hz) > 20.0 && std::fabs(coarse_ + w2Hz) <= 900.0) { coarse_ += w2Hz; w2_ = 0; setNco1(); }
+        if (std::fabs(w2Hz) > 20.0 && std::fabs(coarse_ + w2Hz) <= range_) { coarse_ += w2Hz; w2_ = 0; setNco1(); }
         sigPow_ = sigPow_ * 0.99f + sr * sr * 0.01f;
         noisePow_ = noisePow_ * 0.99f + si * si * 0.01f;
         if (onSymbol) onSymbol(sr);
@@ -238,7 +251,7 @@ private:
         for (size_t i = 0; i < a.size(); ++i) a[i] *= (float)(0.5 - 0.5 * std::cos(2 * M_PI * i / (a.size() - 1)));
         fft(a);
         const double binHz = fs2_ / (double)kFft;
-        const int maxBin = (int)(2 * 900.0 / binHz);
+        const int maxBin = std::min((int)kFft / 2 - 2, (int)(2 * range_ / binHz));
         double best = 0, sum = 0; int bi = 0, cnt = 0;
         for (int k = -maxBin; k <= maxBin; ++k) {
             const double m = std::norm(a[(size_t)((k + (int)kFft) % (int)kFft)]);
@@ -263,7 +276,7 @@ private:
         const double df = 0.5 * (bi + std::max(-0.5, std::min(0.5, d))) * binHz;   // Δf = (line)/2
         const double resid = df + w2_ * fs2_ / (2 * M_PI);
         if (std::fabs(resid) < 8.0) return;   // already there
-        coarse_ = std::max(-900.0, std::min(900.0, coarse_ + df));
+        coarse_ = std::max(-range_, std::min(range_, coarse_ + df));
         w2_ = 0; p2_ = 0;
         setNco1();
         huntHold_ = n2_ + (uint64_t)(kHoldSec * fs2_);   // ★ found: let the Costas loop and the framer work
@@ -271,7 +284,7 @@ private:
 
     Cfg c_;
     int dec_ = 5, phase1_ = 0;
-    double fs2_ = 9600, sps_ = 8;
+    double fs2_ = 9600, sps_ = 8, range_ = 900;
     std::vector<float> h1_, h2_;
     Ring r1_, r2_;
     float cr_ = 1, ci_ = 0, dr_ = 1, di_ = 0;

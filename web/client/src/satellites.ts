@@ -41,7 +41,10 @@ export interface SatPanelDeps {
   /** The receiver's position (the server's location), for the half-globe — null = no globe. */
   rxPos: () => { lat: number; lon: number } | null;
   /** The server attached `decoder` for this pick: main.ts follows it on its decoder socket (to receive its frames). '' = none. */
-  follow: (decoder: SatPicked['decoder'], tx: SatTx, params?: Record<string, unknown>) => void;
+  follow: (decoder: SatPicked['decoder'], tx: SatTx, params?: Record<string, unknown>, audio?: SatPicked['audio']) => void;
+  /** ★★★ beta92 the pick went on the server (a tune past the lock's reach, a mode change): main.ts stops following its
+   *  decoder. The mode stays on (the list is there to pick again). */
+  pickGone?: () => void;
   /** The mode was left: main.ts stops the followed decoder and takes its image canvas back. */
   left: () => void;
   /** Lend the decoder box's image canvas to `slot` (null = take it back). */
@@ -415,6 +418,15 @@ export class SatPanel {
   readoutAt = 0;
   onReadout(r: SatReadout) {
     this.ro = r.state === 'OFF' && !r.why ? null : r; this.readoutAt = performance.now();
+    /* ★★★ beta92 THE PICK WENT WITH THE LOCK (a tune past its reach, a mode change — the server detached its decoder): the
+     *  box stops showing it. It said "TRACK · attached" for a pick that had gone (Stuart 11-23). Why, in its words. */
+    if (r.pickGone && this.picked) {
+      this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
+      this.track = null; this.trackAsk = null; this.tlm = null; this.aText = ''; this.aBeacon = null; this.vfobClear(); this.lend(false);
+      this.refusal = r.why || 'The satellite pick ended';
+      this.deps.pickGone?.();
+      this.sList.open = true;
+    }
     if (r.state === 'OFF' && r.why && this.pending) { this.refusal = r.why; this.pending = null; }   // ★ a refused pick says why
     if (this.open) this.render();
   }
@@ -425,7 +437,7 @@ export class SatPanel {
     if (changed) { this.aText = ''; this.aBeacon = null; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
-    if (t) this.deps.follow(p.decoder, t, p.params);   // ★★ beta92 the server's own parameters: the page JOINS its run
+    if (t) this.deps.follow(p.decoder, t, p.params, p.audio);   // ★★ beta92 the server's own parameters (and passband): the page JOINS its run
     this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again)
     this.render();
   }

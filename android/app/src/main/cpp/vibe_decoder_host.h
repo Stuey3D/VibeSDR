@@ -951,7 +951,7 @@ private:
     static std::string paramsOf(const std::string& msg) {
         std::string k;
         for (const char* f : { "center_frequency", "shift", "baud_rate", "lpm", "image_width", "carrier",
-                               "deviation", "bandwidth", "width", "centre", "bits", "reverse", "horus_baud", "horus_spacing", "symbol_rate" }) {
+                               "deviation", "bandwidth", "width", "centre", "bits", "reverse", "horus_baud", "horus_spacing", "symbol_rate", "afc_range" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
         for (const char* f : { "encoding", "framing", "station", "band", "mode", "standard", "modulation", "diff" }) { k += str(msg, f); k += ','; }
@@ -1267,11 +1267,15 @@ private:
             return;
         } else if (ext == "fctlm") {
             /* ★★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_fctlm.h): the listener's USB audio, the signal near "centre"
-             *  (default 1200 Hz — where a SATELLITE pick puts it); "afc":false / "invert":true are the manual fallback
-             *  under AUTO. sat_tlm per good frame, fctlm_status once a second, a readable line to the gallery. */
+             *  (default 1200 Hz); "afc":false / "invert":true are the manual fallback under AUTO. sat_tlm per good frame,
+             *  fctlm_status once a second, a readable line to the gallery.
+             *  ★★★ beta92 a SATELLITE pick attaches it WIDE — "centre":3800,"afc_range":2600 on a 100–7600 Hz passband
+             *  (vibe_sat_engine.h kTlmCentreHz) — and, once frames decode, it steers the pick's Doppler trim to where the
+             *  signal really is (vibefc::TrimFollow → Engine::setDecoderTrim). */
             vibebpsk::RxCfg c;
             double v;
-            if (num(msg, "centre", v) && v >= 300 && v <= 2700) c.centreHz = v;
+            if (num(msg, "centre", v) && v >= 300 && v <= 7000) c.centreHz = v;
+            if (num(msg, "afc_range", v) && v >= 100 && v <= 3000) c.afcRangeHz = v;
             c.afc = msg.find("\"afc\":false") == std::string::npos;
             const bool inv = msg.find("\"invert\":true") != std::string::npos;
             vibefc::Run::Out o;
@@ -1290,9 +1294,17 @@ private:
                 cx.aos = dv.aos; cx.los = dv.los;
                 if (dv.on) cx.elDeg = dv.elDeg;
             };
+            // ★★★ beta92 DRIFT FOLLOW: this listener's lock (else the shared dial's), and only a telemetry downlink's
+            //     (Engine::decoderTrim refuses any other) — a hand-started decoder on a voice lock steers nothing
+            auto lockKey = [s = session_]() {
+                return !s.empty() && vibe::sat::engine().active(s) ? s : std::string(vibe::sat::kSharedKey);
+            };
+            o.trimNow = [lockKey](double& applied, double& target) { return vibe::sat::engine().decoderTrim(lockKey(), applied, target); };
+            o.trimTo = [lockKey](double target) { vibe::sat::engine().setDecoderTrim(lockKey(), target); };
+            o.log = [this](const std::string& l) { log(l); };
             fctlm_.reset(new vibefc::Run(c, inv, std::move(o)));
             active_.store(true, std::memory_order_relaxed);
-            log("decoder attached: fctlm (FUNcube BPSK 1200) centre " + std::to_string((int)c.centreHz) + " Hz" + (c.afc ? " AFC" : " no AFC") + (inv ? " inverted" : ""));
+            log("decoder attached: fctlm (FUNcube BPSK 1200) centre " + std::to_string((int)c.centreHz) + " Hz" + (c.afc ? " AFC Â±" + std::to_string((int)c.afcRangeHz) + " Hz" : " no AFC") + (inv ? " inverted" : ""));
             return;
         } else if (ext == "aprs") {
             /* ★★ APRS (V12): 1200 Bd Bell 202 on an NFM channel (VHF), or "baud_rate":300 — HF packet on USB/LSB. Its frames

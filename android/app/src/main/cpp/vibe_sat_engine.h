@@ -283,10 +283,26 @@ inline std::string listenModeOf(const Transmitter& t) {
     if (t.mode == "nfm" || t.mode == "usb" || t.mode == "lsb" || t.mode == "cw" || t.mode == "am") return t.mode;
     return "nfm";   // ★ lrpt: the LRPT decoder cuts its own slice; NFM is its listening mode
 }
-/** ★ beta90 1.2: where the DIAL sits relative to the downlink for its decoder — FUNcube BPSK is listened 1200 Hz LOW in
- *  USB, so the signal lands at 1200 Hz audio (the fctlm decoder's centre); everything else on the frequency itself. */
+/* ★★★ beta92 SATELLITE TELEMETRY LISTENS WIDE (Stuart 11-23, AO-73 on the Pi 500's RTL-SDR V4: the bird sat 1.2–1.4 kHz
+ *  ABOVE the Doppler-corrected prediction all pass — a dongle's ppm, the listed figure or the transmitter's own drift —
+ *  so at the old 1200 Hz centre it landed at ~2.4 kHz audio: outside the decoder's ±900 Hz hunt, and its top cut by the
+ *  2.7 kHz USB edge. 0 frames on a strong signal). A BPSK telemetry pick now listens in a 100–7600 Hz USB passband
+ *  with the decoder's centre in the middle (3800 Hz) and its hunt ±2600 Hz — the signal's own ±0.9 kHz plus ±2.5 kHz
+ *  of prediction error fits. The dial sits kTlmCentreHz below the downlink. Once the decoder is locked, its measured
+ *  offset becomes the lock's TRIM (Engine::setDecoderTrim), so the channel follows the real signal back to the centre
+ *  ("a wider usb passband and audio correction too that way it compensates for transmitter drift too"). */
+constexpr double kTlmCentreHz = 3800.0;   ///< the decoder's audio centre on a telemetry pick
+constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt either side (vibebpsk::RxCfg::afcRangeHz)
+constexpr double kTlmAudioLoHz = 100.0;   ///< the USB passband a telemetry pick listens with (the clients' edges)
+constexpr double kTlmAudioHiHz = 7600.0;
+/** ★★ beta92: a downlink whose pick runs the BPSK telemetry decoder on the wide passband (FUNcube "fc-bpsk" — the one
+ *  BPSK telemetry format we decode; Fox "fox-bpsk" is heard, not decoded, so it keeps the voice passband). */
+inline bool tlmWide(const Transmitter& t) { return t.consumer == "fc-bpsk" && t.mode == "usb"; }
+/** ★ beta90 1.2: where the DIAL sits relative to the downlink for its decoder — FUNcube BPSK is listened kTlmCentreHz
+ *  LOW in USB (beta90–91: 1200 Hz), so the signal lands at the fctlm decoder's centre; everything else on the
+ *  frequency itself. */
 inline double listenOffsetHz(const Transmitter& t) {
-    if (t.consumer == "fc-bpsk" && t.mode == "usb") return -1200.0;
+    if (tlmWide(t)) return -kTlmCentreHz;
     return 0.0;
 }
 /** Where a pick tunes: a single channel's frequency, a passband's centre (the clients' txTuneHz) — plus the decoder's
@@ -315,7 +331,11 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     }
     if (t.consumer == "ax25-9600") { params = "\"packet\":\"9600\",\"baud_rate\":1200"; return "aprs"; }
     if (t.consumer == "ax25-1200" || t.consumer.rfind("ax25", 0) == 0) { params = "\"packet\":\"1200\",\"baud_rate\":1200"; return "aprs"; }
-    if (t.consumer == "fc-bpsk") return "fctlm";                 // ★ beta90 1.2: FUNcube BPSK 1200, AUTO (no parameters)
+    // ★ beta90 1.2: FUNcube BPSK 1200, AUTO. ★★ beta92 its centre and hunt on the wide passband (kTlmCentreHz, kTlmAfcHz)
+    if (t.consumer == "fc-bpsk") {
+        if (tlmWide(t)) params = "\"centre\":" + std::to_string((int)kTlmCentreHz) + ",\"afc_range\":" + std::to_string((int)kTlmAfcHz);
+        return "fctlm";
+    }
     /* ★★ beta92 THE CW BEACON IS SKIMMED (Stuart 11-23, RS-44 on the Pi 500's RTL-SDR V4: the beacon sat ~2 kHz below the
      *  prediction — catalogue figure, dongle error, orbit age — outside the one-signal CW passband, and nothing decoded:
      *  "treat it like the cw skimmer and have a wider filter of say 24k"). The CW SKIMMER over kBeaconSkimHz of IQ centred
@@ -518,6 +538,9 @@ public:
     static constexpr double kMatchHz = 12000.0;      // brief §8: a downlink within ±12 kHz of the dial
     static constexpr double kTrimClampHz = 2500.0;   // brief §4.2: ±2–3 kHz around the model
     static constexpr double kTrimSlewHzS = 100.0;    // the applied trim moves at most this fast: 4 Hz a 25 Hz tick
+    /** ★★ beta92 a telemetry decoder's trim (setDecoderTrim) moves slower still: 2 Hz a tick — a ramp its Costas loop
+     *  follows with a degree or two of phase error, so a frame being read is not lost while the channel moves. */
+    static constexpr double kDecTrimSlewHzS = 50.0;
     static constexpr double kEndTuneHz = 15000.0;    // brief §9: a tune further than this ends the lock (single channels)
     static constexpr double kPassbandSlackHz = 3000.0;   // beta90 1.4: a passband's edge allowance beyond the Doppler
     static constexpr double kPassCacheSec = 300.0;
@@ -826,6 +849,30 @@ public:
         L.trimTarget = std::max(-kTrimClampHz, std::min(kTrimClampHz, L.trim + 0.5 * hz));
         L.trimRate = std::max(-50.0, std::min(50.0, L.trimRate + 0.08 * hz));
         L.lastMeasure = now;
+    }
+    /** ★★★ beta92 THE DECODER'S TRIM — a BPSK telemetry pick (tlmWide) whose decoder is locked says where the signal
+     *  really is; the lock's trim takes it there (the channel follows the satellite's real frequency: ppm, the listed
+     *  figure, transmitter drift). Only on such a downlink, only while TRACK / COAST. The trim is clamped to
+     *  ±kTrimClampHz and slewed at kDecTrimSlewHzS by tick(). The POLICY (when to ask, how far) is the decoder's
+     *  (vibefc::TrimFollow): it asks only once the trim has arrived and its own estimate is steady, so the two never
+     *  chase each other. `applied` is the trim in the channel now, `target` where it is going. */
+    bool decoderTrim(const std::string& key, double& applied, double& target) const {
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = locks_.find(key);
+        if (it == locks_.end()) return false;
+        const Lock& L = it->second;
+        if (!tlmWide(defs_[L.s].tx[L.t]) || (L.state != LockState::Track && L.state != LockState::Coast)) return false;
+        applied = L.trim; target = L.trimTarget;
+        return true;
+    }
+    bool setDecoderTrim(const std::string& key, double targetHz) {
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = locks_.find(key);
+        if (it == locks_.end() || !std::isfinite(targetHz)) return false;
+        Lock& L = it->second;
+        if (!tlmWide(defs_[L.s].tx[L.t]) || (L.state != LockState::Track && L.state != LockState::Coast)) return false;
+        L.trimTarget = std::max(-kTrimClampHz, std::min(kTrimClampHz, targetHz));
+        return true;
     }
     /** This tick's state for `key` — what to apply and what to show. ★ Call at the tracker's rate (25 Hz); it advances
      *  the slew-limited trim, the ARMED → TRACK step at AOS and LOS. */
@@ -1139,6 +1186,11 @@ private:
                     const double step = kTrimSlewHzS * dt;
                     L.trim += std::max(-step, std::min(step, L.trimTarget - L.trim));
                 }
+                // ★★ beta92 a telemetry decoder's trim (setDecoderTrim): no loop of the engine's own — slewed only
+                if (L.state == LockState::Track && !fll && tlmWide(tx)) {
+                    const double step = kDecTrimSlewHzS * dt;
+                    L.trim += std::max(-step, std::min(step, L.trimTarget - L.trim));
+                }
                 out.modelHz = m; out.trimHz = L.trim; out.shiftHz = m + L.trim;
             } else {
                 // ★ ENDED (LOS): frozen where it was — the caller moves the dial there (brief §9: never snap back)
@@ -1206,6 +1258,7 @@ struct DecoderView {
     std::string satId, satName, txLabel, consumer, loop;   // consumer: "lrpt", "ax25-9600", "ax25-1200", "bpsk-telemetry", ""
     double downlinkHz = 0;           // the nominal (the dial)
     double inChannelHz = 0;          // the shift the channel already carries (see above)
+    double trimHz = 0;               // ★ beta92: the part of inChannelHz that is the trim (a loop's, or a decoder's)
     double modelHz = 0, rateHzS = 0; // the model's Doppler at downlinkHz now, and its rate
     double elDeg = -90, azDeg = 0, rangeKm = 0;
     double aos = 0, los = 0;         // the pass (UTC Unix seconds)
@@ -1221,7 +1274,7 @@ inline DecoderView decoderView(const std::string& session) {
     v.state = lockName(t.state);
     v.on = t.state == LockState::Track || t.state == LockState::Coast;
     v.norad = t.norad; v.satId = t.satId; v.satName = t.satName; v.txLabel = t.txLabel; v.consumer = t.consumer; v.loop = t.loop;
-    v.downlinkHz = t.nominalHz; v.inChannelHz = v.on ? t.shiftHz : 0.0; v.modelHz = t.modelHz; v.rateHzS = t.rateHzS;
+    v.downlinkHz = t.nominalHz; v.inChannelHz = v.on ? t.shiftHz : 0.0; v.trimHz = v.on ? t.trimHz : 0.0; v.modelHz = t.modelHz; v.rateHzS = t.rateHzS;
     v.elDeg = t.elDeg; v.azDeg = t.azDeg; v.rangeKm = t.rangeKm; v.aos = t.aos; v.los = t.los; v.ageDays = t.ageDays;
     return v;
 }

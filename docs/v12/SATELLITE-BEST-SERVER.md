@@ -40,9 +40,15 @@ is what the server does, as built, and how it was tested.
   first NCO past 20 Hz so a Doppler ramp never meets a clamp, Gardner on linear interpolation; NEON / SSE2 / scalar dot
   products, bit-identical), vibe_fctlm.h (the 80×65 de-interleaver and 65-bit sync, four sync forms, both coder orders,
   vibe_lrpt_fec.h's Viterbi + RS(255,223) + PN with the 95-byte shortening — a frame is trusted only when both RS words
-  decode AND the padding is still zero). A FUNcube pick tunes **1200 Hz low in USB** (`listenOffsetHz`) so the signal
-  sits at the decoder's centre; the lock's nominal carries the same offset. Manual fallback on attach: `centre`, `afc`,
-  `invert`. Off the audio thread (the host's decode thread). Owner switch `fctlm` (setup page + ServerModeScreen),
+  decode AND the padding is still zero). A FUNcube pick tunes **3800 Hz low in USB** (`listenOffsetHz`, beta92 — it
+  was 1200 Hz to beta91) in a **100–7600 Hz** passband, and attaches fctlm with `"centre":3800,"afc_range":2600`, so a
+  signal ±2.5 kHz off the prediction is found (Stuart's AO-73 pass 11-23 sat +1.3 kHz: 0 frames at the old 1200 Hz /
+  ±900 Hz / 2.7 kHz). The lock's nominal carries the same offset. **Drift follow (beta92):** once frames decode, the
+  decoder's offset is handed to the lock's trim (`Engine::setDecoderTrim`, slewed at 50 Hz/s, clamped ±2.5 kHz) in
+  discrete moves — only when the previous move has arrived, the estimate has been steady for 3 s and is > 120 Hz off
+  (`vibefc::TrimFollow`) — so the channel follows the real signal and the two loops never chase each other. A nudge
+  inside the lock's reach keeps the whole pick; a tune away or a mode change ends the pick too (`"pickGone":true`).
+  Manual fallback on attach: `centre` (300–7000), `afc`, `afc_range` (100–3000), `invert`. Off the audio thread (the host's decode thread). Owner switch `fctlm` (setup page + ServerModeScreen),
   reach entry 145.935 MHz, hwinfo cap, gallery run "FUNcube telemetry", benchmark row `dec_fctlm`.
 - **1.3 Values** — FUNcube-1 real-time telemetry (all 58 fields of the as-flown document; the document publishes NO
   calibration, so every analogue channel is `raw:true`; counts / flags / sequence exact; mode Safe / Eclipse /
