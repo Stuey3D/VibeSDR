@@ -60,6 +60,8 @@ export interface IsmPanelProps {
    *  ★ `key`: a node's position link in the list (Stuart, 2026-11-01: "make the coordinates clickable") — the map opens on
    *  that node, selected, its card open. Undefined = the MAP key (every node, fitted). */
   onMap?: ((key?: string) => void) | null;
+  /** ★ beta92 the gallery holds nodes of this band heard in the last 24 h — MAP is offered for them too. */
+  remembered?: boolean;
   /** The receiver's position (range and bearing in a node's detail). */
   rx?: { lat: number; lon: number } | null;
 }
@@ -101,7 +103,7 @@ export default function IsmPanel(p: IsmPanelProps) {
   const r = p.report && arrived ? ismAged(p.report, Math.floor((Date.now() - arrived) / 1000)) : p.report;
   const rows = ismRows(r, filter);
   const msgLines = filter === 'msgs' ? ismMsgLines(r, p.bands) : [];
-  const canMap = !!p.onMap && !p.error && !!r && r.devices.some(ismOnMap);
+  const canMap = !!p.onMap && !p.error && !!r && (!!p.remembered || r.devices.some(ismOnMap));
   // ★ a row with a detail: a meter, or a LoRa row (a node / a LoRaWAN device)
   const detailOf = (d: IsmDevice): string[] => (d.kind === 'meter' ? ismMeterDetail(d) : LORA_KINDS.includes(d.kind) ? ismLoraDetail(d, p.rx ?? null) : []);
   const rowsRef = useRef(rows);

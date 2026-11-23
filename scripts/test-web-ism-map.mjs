@@ -68,6 +68,7 @@ const FAKE = [
 const INJECT = `(() => {
   const FAKE = ${JSON.stringify(FAKE)};
   window.__fakeAdd = (n) => FAKE.push(n);   // ★ the live-push case: a node heard while the map is open
+  window.__fakeClear = () => { FAKE.length = 0; };   // ★ beta92: nothing heard live — only what the gallery remembers
   const tweak = (e) => {
     if (typeof e.data !== 'string' || e.data.indexOf('"type":"ism"') < 0) return e;
     try { const j = JSON.parse(e.data); if (j.type !== 'ism') return e;
@@ -205,6 +206,26 @@ try {
   await key('Enter', 'Enter');
   ok(await until(`!!${view} && /Benson/.test((document.querySelector('.vtl-card:not([hidden])') || {}).textContent || '')`, 10000), 'Enter on the focused link opens the map on Benson');
   ok(!/NEVER-ON-THE-MAP/.test(await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`)), '…and its card has no message');
+  await ev(`${view}.querySelector('.exit').click()`);
+  await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000);
+
+  /* ★★ beta92 (Stuart 11-23: "when i close out of ism i will loose them all … maybe expire them after 24h"): the live
+   *  map also draws the band's nodes the gallery heard in the last 24 h. Here nothing more is heard live (the fakes
+   *  gone, as after leaving ISM and coming back): MAP is still offered, and the seeded card's nodes are on it, each with
+   *  the gallery's first / last heard. */
+  console.log('── nothing heard live: the last 24 h from the gallery ──');
+  await ev(`window.__fakeClear()`);
+  await sleep(3000);
+  ok(await until(`!document.getElementById('ismMap').hidden`, 8000), 'MAP is offered for the remembered nodes');
+  await ev(`document.getElementById('ismMap').click()`);
+  ok(await until(`!!${view} && document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length >= 8`, 10000),
+     `the remembered nodes are on the map (${await ev(`document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length`)})`);
+  const remRows = await ev(`${view}.querySelector('.rows').textContent`);
+  ok(/Benson/.test(remRows) && /Moulton Rptr|Wellingborough Rptr/.test(remRows), `…and in its list: ${remRows.slice(0, 100)}`);
+  await ev(`[...document.querySelectorAll('.vtl-mk')].find(m => /Benson/.test(m.textContent))?.click()`);
+  await sleep(800);
+  ok(/first heard \d\d:\d\d · last heard \d\d:\d\d UTC/.test(await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`)),
+     'a remembered node\'s card: first / last heard, from the gallery');
   await ev(`${view}.querySelector('.exit').click()`);
   await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000);
 

@@ -555,8 +555,9 @@ export class IsmBox {
   }
   get visible() { return !!this.el && !this.el.hidden; }
 
-  /** A report. `can`: more than one band to choose from (BANDS drawn). */
-  update(r: IsmReport, can: boolean) {
+  /** A report. `can`: more than one band to choose from (BANDS drawn). `remembered`: ★ beta92 the gallery holds nodes of
+   *  this band heard in the last 24 h (main.ts ismStoredLoad) — MAP is drawn for them too. */
+  update(r: IsmReport, can: boolean, remembered = false) {
     const el = this.mount();
     if (r !== this.last) this.at = Date.now();
     this.last = r; this.bandsCan = can;
@@ -564,7 +565,7 @@ export class IsmBox {
     (el.querySelector('#ismStat') as HTMLElement).textContent = ismStatus(r);
     (el.querySelector('#ismBands') as HTMLButtonElement).hidden = !can;
     if (!can) this.closeBands();
-    (el.querySelector('#ismMap') as HTMLButtonElement).hidden = !r.devices.some(ismOnMap);
+    (el.querySelector('#ismMap') as HTMLButtonElement).hidden = !(remembered || r.devices.some(ismOnMap));
     this.place();
     this.drawList();
   }

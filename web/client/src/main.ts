@@ -9686,7 +9686,8 @@ function onIsmReport(r: IsmReport | null) {
   if (!ismOn) ismUiOn();   // ★ somebody else put the receiver in ISM (or we joined it)
   audio?.holdHealing(8000);   // ★ nothing to hear on a band: the server sends no audio (as in ADS-B)
   const n = ismNeighbours();
-  ismBox?.update(r, !!(n.prev || n.next));   // ★ beta72: BANDS while there is another band
+  ismBox?.update(r, !!(n.prev || n.next), ismStoredBand === r.band && ismStored.length > 0);   // ★ beta72: BANDS while there is another band
+  if (r.band && r.band !== ismStoredBand && !ismStoredBusy) void ismStoredLoad();   // ★ beta92 this band's remembered nodes
   ismMapRender();
   // ★ V12: the band the arrows show lets go to the server's once it names ours, the hold runs out, or a third band shows
   //   somebody else moved the dial — never mid-burst (see ismStepperFor).
@@ -9710,7 +9711,9 @@ let ismMapRange = ismRangeOf(lsGet(ISM_RANGE_LIVE_KEY), true);
 function ismMapOpen(key = '') {
   if (!ismMapView) ismMapView = new TrackView({
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(), fitOnOpen: true,   // ★ 11-21 auto fit
-    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
+    icon: ismMapIcon, label: ismMapLabel, labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
+    // ★ beta92 a node remembered from the gallery (no longer in this ISM session) gets the gallery's card: first / last heard
+    card: (d) => ('first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos()) : ismMapCard(d, myPos())),
     ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
     onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
   });
@@ -9722,6 +9725,36 @@ function ismMapOpen(key = '') {
   ismMapView.show(myPos());
   ismMapRender();
   if (key) ismMapView.focus(key);
+  void ismStoredLoad();
+  if (ismStoredTimer) clearInterval(ismStoredTimer);
+  ismStoredTimer = setInterval(() => { if (!ismMapView?.open) { if (ismStoredTimer) clearInterval(ismStoredTimer); ismStoredTimer = null; return; } void ismStoredLoad(); }, 60_000);
+}
+/* ★★ beta92 THE LIVE MESH MAP REMEMBERS (Stuart 11-23: "is it worth making a log of the meshcore etc repeaters as when i
+ *  close out of ism i will loose them all … maybe expire them after 24h"). The log already exists — the band's
+ *  "stations received" day cards in the gallery (vibe_ism_gallery.h), written while ISM runs live or in the background.
+ *  The live map now draws, beside what this session has heard, every node those cards heard in the LAST 24 HOURS
+ *  (today's and yesterday's cards, merged): leave ISM and come back, and the repeaters are still there, each with its
+ *  first / last heard. Older than 24 h: gone from this map (the gallery's own MAP keeps the days). Refetched each minute
+ *  while open (the card is rewritten at most once a minute). A server keeping no gallery: the live ones only, as before. */
+let ismStored: IsmGalNode[] = [];
+let ismStoredBand = '';
+let ismStoredTimer: ReturnType<typeof setInterval> | null = null;
+const ISM_STORED_SEC = 24 * 3600;
+let ismStoredBusy = false;
+async function ismStoredLoad() {
+  const band = ismReport?.band || '';
+  if (!band || ismStoredBusy) return;
+  ismStoredBusy = true;
+  try { await ismStoredLoad_(band); } finally { ismStoredBusy = false; }
+}
+async function ismStoredLoad_(band: string) {
+  const now = Math.floor(Date.now() / 1000);
+  const cards = (await ismGalCards(band)).filter((c) => c.t >= Math.floor((now - ISM_STORED_SEC) / 86400) * 86400);
+  const per: IsmGalNode[][] = [];
+  for (const c of cards.slice(0, 2)) { const p = await ismGalFetch(c); if (p) per.push(p.nodes); }   // ★ one at a time: a live server
+  ismStored = ismGalMerge(per, now).filter((n) => n.last >= now - ISM_STORED_SEC);
+  ismStoredBand = band;
+  ismMapRender();
 }
 /* ★★ V12 2026-11-01 THE NAVTEX MAP — THE STATIONS RECEIVED (Stuart: "it would be cool to be able to open a map and see
  *  which navtex stations you've received"). The server folds this gallery's NAVTEX messages per station (vibe_navtex_map.h);
@@ -10043,7 +10076,14 @@ async function ismGalMapOpen(it0: GalleryItem) {
 function ismMapRender() {
   if (!ismMapView?.open) return;
   const r0 = ismReport;
-  const r = r0 ? { ...r0, devices: ismInRange(r0.devices, ismMapRange) } : null;   // ★ the time filter
+  // ★ beta92 the remembered nodes (ismStoredLoad) that this session has not heard itself — a live one always wins
+  //   (matched on the node id as the card keeps it — its first 16 characters — or on the name, either one)
+  const liveIds = new Set<string>();
+  for (const d of r0?.devices ?? []) { if (d.node) liveIds.add(`${d.kind}|n|${d.node.slice(0, 16)}`); if (d.name) liveIds.add(`${d.kind}|m|${d.name}`); }
+  const stored = r0 && r0.band === ismStoredBand
+    ? ismStored.filter((n) => !(n.node && liveIds.has(`${n.kind}|n|${n.node.slice(0, 16)}`)) && !(n.name && liveIds.has(`${n.kind}|m|${n.name}`)))
+    : [];
+  const r = r0 ? { ...r0, devices: ismInRange([...r0.devices, ...stored], ismMapRange) } : null;   // ★ the time filter
   const items = r ? r.devices.filter(ismOnMap) : [];
   ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
 }

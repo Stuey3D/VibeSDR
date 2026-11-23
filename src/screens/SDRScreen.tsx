@@ -84,7 +84,8 @@ import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSu
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../services/navtexWarn';
 import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
 import { ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
-         ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode } from '../services/ism';
+         ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode,
+         ismIsNodeCard, ismNodeCardBand, ismNodesParse, ismGalMerge, ismGalCard } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
 // ★ V12 held session: the "VibeSDR paused" note (docs/v12/BACKGROUND-DECODING.md, "The held session")
@@ -3077,6 +3078,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     const t = setInterval(() => { void f().then((n) => { if (n) setIsmGal((g) => (g && g.refresh === f ? { ...g, nodes: n } : g)); }); }, 60_000);
     return () => clearInterval(t);
   }, [ismGal?.refresh]);
+  /* ★★ beta92 THE LIVE MESH MAP REMEMBERS (Stuart 11-23: "when i close out of ism i will loose them all … maybe expire them
+   *  after 24h"; the web's ismStoredLoad). The band's "stations received" day cards in the gallery (today's and yesterday's,
+   *  merged) give every node heard in the LAST 24 H; the live map draws those this session has not heard itself, each with
+   *  the gallery's first / last heard, and ISM's MAP is offered for them. Loaded on entering ISM / a band change, and each
+   *  minute while the map is open. No gallery on the server: the live ones only, as before. */
+  const [ismStored, setIsmStored] = useState<{ band: string; nodes: IsmGalNode[] } | null>(null);
+  const ismStoredBusy = useRef(false);
+  const ismBand = ismReport?.band || '';
+  const loadIsmStored = useCallback(async (band: string) => {
+    if (!band || !satGalleryGet || ismStoredBusy.current) return;
+    ismStoredBusy.current = true;
+    try {
+      const now = Math.floor(Date.now() / 1000), from = Math.floor((now - 24 * 3600) / 86400) * 86400;
+      const lj = await satGalleryGet('/vibeserver/gallery.json?kind=ism&limit=1000');
+      let items: Array<{ s?: string; t: number; f: string }> = [];
+      try { items = lj ? (JSON.parse(lj).items ?? []) : []; } catch { items = []; }
+      const cards = items.filter((c) => ismIsNodeCard(c) && ismNodeCardBand(c.s) === band && c.t >= from).sort((a, b) => b.t - a.t).slice(0, 2);
+      const per: IsmGalNode[][] = [];
+      for (const c of cards) {   // ★ one at a time: a live server
+        const body = await satGalleryGet(`/vibeserver/gallery/file/${encodeURIComponent(c.f)}`);
+        if (body) per.push(ismNodesParse(body, c.t, now).nodes);
+      }
+      setIsmStored({ band, nodes: ismGalMerge(per, now).filter((n) => n.last >= now - 24 * 3600) });
+    } catch { /* keep what we had */ } finally { ismStoredBusy.current = false; }
+  }, [satGalleryGet]);
+  useEffect(() => { if (ismOn && ismBand && ismStored?.band !== ismBand) void loadIsmStored(ismBand); }, [ismOn, ismBand]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!ismMapOpen || !ismOn || !ismBand) return;
+    void loadIsmStored(ismBand);
+    const t = setInterval(() => { void loadIsmStored(ismBand); }, 60_000);
+    return () => clearInterval(t);
+  }, [ismMapOpen, ismOn, ismBand, loadIsmStored]);
+  const ismRemembered = !!ismStored && ismStored.band === ismBand && ismStored.nodes.length > 0;
   const [aprsFocus, setAprsFocus] = useState('');
   /** ★ V12 DSC: the box's MAP — the positions sent, on the track layer (MapOverlay 'dsc'), opened on the call pressed. */
   const [dscMapOpen, setDscMapOpen] = useState(false);
@@ -11830,14 +11864,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   const ismTrk = useMemo(() => {
     // ★ a link to a node outside the chosen range shows 24 h, so the node asked for is there
     const range = ismFocus && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === ismFocus), ismRange).length ? '24h' : ismRange;
-    const r = ismReport ? { ...ismReport, devices: ismInRange(ismReport.devices, range) } : null;
+    // ★ beta92 the remembered nodes this session has not heard itself (node id as the card keeps it, or the name) — live wins
+    const liveIds = new Set<string>();
+    for (const d of ismReport?.devices ?? []) { if (d.node) liveIds.add(`${d.kind}|n|${d.node.slice(0, 16)}`); if (d.name) liveIds.add(`${d.kind}|m|${d.name}`); }
+    const stored = ismReport && ismStored && ismStored.band === ismReport.band
+      ? ismStored.nodes.filter((n) => !(n.node && liveIds.has(`${n.kind}|n|${n.node.slice(0, 16)}`)) && !(n.name && liveIds.has(`${n.kind}|m|${n.name}`)))
+      : [];
+    const storedBy = new Map(stored.map((n) => [n.key, n]));
+    const r = ismReport ? { ...ismReport, devices: ismInRange([...ismReport.devices, ...stored], range) } : null;
     return {
-      items: ismMapItems(r, trkRx), rows: ismMapRows(r, trkRx), status: ismMapStatus(r, trkRx),
+      items: ismMapItems(r, trkRx).map((it) => { const n = storedBy.get(it.key); return n ? { ...it, _cd: ismGalCard(n, trkRx) } : it; }),
+      rows: ismMapRows(r, trkRx), status: ismMapStatus(r, trkRx),
       empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
       ranges: ISM_LIVE_RANGES, range, rangeHint: ISM_RANGE_HINT_LIVE,
       onRange: (id: string) => { setIsmRange(id); setIsmFocus(''); AsyncStorage.setItem('lsv_ism_map_range', id).catch(() => {}); },
     };
-  }, [ismReport, trkRx?.lat, trkRx?.lon, ismFocus, ismRange]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ V12 the SONDES map: the sondes at their last position, a chosen one's track from the newest report (no request). */
   const sdTrk = useMemo(() => ({
     items: sondeTrackItems(sdReport), rows: sondeTrackRows(sdReport, trkRx), status: sondeStatus(sdReport), empty: sondeEmpty(sdReport),
@@ -16113,6 +16155,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="ISM" onClose={() => setIsmBoxOpen(false)}>
         <IsmPanel
           report={ismReport}
+          remembered={ismRemembered}
           error={ismError}
           on={ismOn}
           onExit={exitIsm}
