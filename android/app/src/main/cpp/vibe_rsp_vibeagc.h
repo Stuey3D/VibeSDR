@@ -129,6 +129,12 @@ inline double vagcPriorRed(int band, int state) {
     return t[state];
 }
 
+/** ★ beta92 A retune that leaves the capture: the new centre more than half the sample rate from the old. `oldHz` 0 = the
+ *  first tune (not one). Used ONLY to start a fast acquisition (noteRetune leftCapture) — never as a band change. */
+inline bool vagcBigRetune(double oldHz, double newHz, double rateHz) {
+    return oldHz > 0 && newHz > 0 && rateHz > 0 && std::fabs(newHz - oldHz) > rateHz * 0.5;
+}
+
 /* ── WHAT THE SHIM HANDS IN, AND WHAT IT GETS BACK ──────────────────────────────────────────────────── */
 struct VagcIn {
     double now = 0.0;          // seconds, monotonic
@@ -189,6 +195,7 @@ public:
     static constexpr double kAcqAddDwellSec = 2.0;    // …and a rung goes back after this much room, not 8-10 s
     static constexpr double kAcqIfStepDb    = 6.0;    // …and the IF climbs in up to 6 dB (the smoother measures those)
     static constexpr double kRecheckSec     = 600.0;  // ★ beta92 an attenuated RF that has not moved this long is re-measured
+    static constexpr double kRecheckSoonSec = 4.0;    // ★ beta92 …and this soon after an outside gain write or a band change
     static constexpr int    kGrMin = 20, kGrMax = 59;
 
     void setProfile(VagcBand b) {
@@ -199,19 +206,23 @@ public:
     const VagcProfile& profile() const { return p_; }
     /** The gain the radio is at (ours — call once at take-over, and after anything else wrote it). Starts ACQUIRING. */
     void adopt(int lna, int gr) { lna_ = lna; gr_ = std::clamp(gr, kGrMin, kGrMax); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1;
-                                  forgetMeasure(); }
+                                  forgetMeasure();  recheckSoon_ = true; }
     /** ★ True until the level has first sat on target for kAcqSettleSec (or kAcqMaxSec has passed) after a take-over or a
      *  band change. While acquiring, gain comes UP briskly — the cold start from minimum RF on a weak band took ~100 s at
      *  the steady-state pace (measured, case B) — and everything else is unchanged: attack, budgets, hysteresis. */
     bool acquiring() const { return acquiring_; }
     /** A retune / rate change / DAB block hop: the windows in flight describe the old capture. Gains are kept. */
-    void noteRetune(double now, bool bandChanged) {
+    /** ★ beta92 `leftCapture`: a retune that leaves the capture (vagcBigRetune — MW → 40 m on an RSP1A, ONE LNA band) is
+     *  not a band change — the judgements stand — but the level is a new one: acquire at the fast pace, and owe a soon
+     *  re-check. The shim never passes it while DAB is on (a block hop is not a new band). */
+    void noteRetune(double now, bool bandChanged, bool leftCapture = false) {
+        if (leftCapture && !bandChanged) { acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; recheckSoon_ = true; }
         hist_.clear(); waitWindowsTo_ = 0; needFresh_ = true; retuneAt_ = now;
         /* ★ The dwells start again on ANY retune: a DAB block hop is a different multiplex at a different level, and a
          *   load judgement begun on the last block must not complete on this one (Lenovo, DAB rapid-step repro 10-30: an
          *   LNA cut 40 ms after a hop, on a dwell that had run through the block before). The overload ceiling is kept. */
         loadedSince_ = roomSince_ = -1;
-        if (bandChanged) { forgetJudgements(); forgetMeasure(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; }
+        if (bandChanged) { forgetJudgements(); forgetMeasure(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; recheckSoon_ = true; }
     }
     int lna() const { return lna_; }
     int gr()  const { return gr_; }
@@ -382,16 +393,22 @@ public:
             return o;
         }
         {
+            /* ★★ beta92 SOON after a gain set from ELSEWHERE (take-over at start-up — the shim starts an RSP at LNA 5 / IF 59 —
+             *  or the DAB-left restore) or a band change: one re-check once the IF has settled, not 10 minutes later. Live,
+             *  the Lenovo 11-23 on beta91-5: MW from DAB came back to LNA 5 / IF 56, the radio's own floor. */
+            if (recheckSoon_) { recheckSoon_ = false; recheckAt_ = in.now + kRecheckSoonSec; soonDue_ = true; }
             if (recheckAt_ <= 0) recheckAt_ = in.now + kRecheckSec;
+            if (soonDue_ && in.now > recheckAt_ + 60.0) { soonDue_ = false; recheckAt_ = in.now + kRecheckSec; }   // ★ lapsed
             const bool recheckProfile = band_ == VagcBand::AmMw || band_ == VagcBand::HfSsb || band_ == VagcBand::Nfm;
             if (in.rfOwned && !p_.ifFreeze && recheckProfile && !measuring_ && !revertPending_ && in.now >= recheckAt_
-                && in.now - lastLnaAt_ >= kRecheckSec && lna_ - 1 >= in.lnaFloor && lnaAllowed(in.now) && haveSecond
+                && (soonDue_ || in.now - lastLnaAt_ >= kRecheckSec) && lna_ - 1 >= in.lnaFloor && lnaAllowed(in.now) && haveSecond
+                && gr_ <= kGrMax - 3   // ★ not while the IF is still parked at its rail (a take-over's 59): it has not settled
                 && !roomForRung && !clipping && std::fabs(atk - p_.targetPk) <= p_.deadDb && dec < p_.targetPk + p_.deadDb
                 && !(ceilingState_ >= 0 && lna_ - 1 <= ceilingState_) && in.now - lastClipAt_ > addDwell) {
                 const int to = lna_ - 1;
                 const double rung = rungDbFor(in, to, lna_);
                 const int grTo = clampGr((int)std::lround(gr_ + rung));
-                measuring_ = true; periodic_ = true; measFrom_ = lna_; measGrFrom_ = gr_;
+                measuring_ = true; periodic_ = true; soonDue_ = false; measFrom_ = lna_; measGrFrom_ = gr_;
                 measPk_ = atk; measRung_ = rung; measExpect_ = rung - (grTo - gr_);
                 recheckAt_ = in.now + kRecheckSec;
                 char since[40];
@@ -497,6 +514,7 @@ private:
     bool measuring_ = false, measureNext_ = false, cutToBottom_ = false; double measPk_ = 0, measRung_ = 0, measExpect_ = 0;
     // ★ beta92 the re-check (1c): when it may next run, whether the step in flight is one, where it came from, a revert owed
     double recheckAt_ = 0; bool periodic_ = false, revertPending_ = false; int measFrom_ = 0, measGrFrom_ = 59;
+    bool recheckSoon_ = false, soonDue_ = false;   // ★ beta92 a re-check owed soon (an outside gain write, a band change)
     void forgetMeasure() { measuring_ = measureNext_ = cutToBottom_ = periodic_ = revertPending_ = false; recheckAt_ = 0; }
     std::deque<double> writeTimes_;
     unsigned writes_ = 0, ifWrites_ = 0, lnaWrites_ = 0; int maxPerSec_ = 0;
@@ -517,7 +535,8 @@ private:
         o.write = true; o.lna = lna; o.gr = gr; o.lnaChanged = lna != lna_;
         o.ifDb = -(double)(gr - gr_);
         o.expectDb = o.lnaChanged ? (expectDb + o.ifDb) : o.ifDb;
-        if (o.lnaChanged) { lastLnaAt_ = in.now; lastLnaDir_ = lnaDir; lastLnaAct_ = o.act; ++lnaWrites_; roomSince_ = -1; loadedSince_ = -1; }
+        if (o.lnaChanged) { lastLnaAt_ = in.now; lastLnaDir_ = lnaDir; lastLnaAct_ = o.act; ++lnaWrites_; roomSince_ = -1; loadedSince_ = -1;
+                            if (o.act != kActAddMeasure) soonDue_ = false; }
         // ★ only an antenna verdict or a CUT ends the measuring — an ordinary add on a small rung (5 → 4 on an RSP1A, 5 dB)
         //   can still leave the RF under the radio's own floor, and the next big rung must be measured too
         if (o.lnaChanged && lnaDir < 0) { measureNext_ = false; measuring_ = false; if (lna == in.nStates - 1) cutToBottom_ = true; }
