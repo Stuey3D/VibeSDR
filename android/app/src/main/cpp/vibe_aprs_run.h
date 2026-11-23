@@ -111,7 +111,7 @@ public:
     /** 300, 1200, 9600 — or 0 for AUTO (1200 + 9600). */
     int baud() const { return baud_; }
     /** ★ V12: this run wants the listener's CHANNEL IQ — 9600 (G3RUH), and ★ 2026-11-22 1200 Bd's own narrow FM
-     *  discriminator beside the listener's audio (narrow1200_). Not 300 Bd HF (SSB audio, no FM to discriminate). */
+     *  discriminator beside the listener's audio (iq1200_ — beta92: from the pipeline's decoder tap). Not 300 Bd HF (SSB audio, no FM to discriminate). */
     bool wantsIq() const { return g3_ != nullptr || baud_ == 1200; }
 
     /** 48 kHz audio from the decoder thread (at 9600: FM-discriminator audio — a flat, wide one only; a normal NFM
@@ -120,7 +120,13 @@ public:
         // ★ 9600 reads the audio only where no channel IQ comes (a test, a WAV of a radio's data port): once the host
         //   hands it IQ, the listener's narrow NFM audio would only cost CPU.
         if (g3_ && !iqFed_) g3_->feedAudio(x, n, 48000, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
-        if (afsk_) afsk_->feed(x, n, [&](const Frame& f) { offer1200_(f, audioT_); });
+        /* ★★ beta92: the listener's audio is 1200 Bd's path ONLY WHERE NO IQ COMES (an Icom's audio, HF 300 Bd, a test):
+         *  while the IQ receiver runs it adds nothing worth its CPU — test-aprs-onair --audio-check, 18 rows of 48 packets
+         *  at 7–9 dB (pre-emphasised, flat and de-emphasised TXs, VOICE and ALL): IQ alone 692, IQ + audio 699; the
+         *  --iq-sweep (deviation ±3–6 kHz, ±2 kHz off tune): 822 either way. And it is the listener's NFM chain, which
+         *  APRS no longer depends on (Stuart 11-23). */
+        const bool iqLive = !iqRx_.empty() && audioT_ - iqSeenAt_ < 2.0;
+        if (afsk_ && !iqLive) afsk_->feed(x, n, [&](const Frame& f) { offer1200_(f, audioT_, 0); });
         audioT_ += n / 48000.0;
         tickList_();
     }
@@ -128,7 +134,7 @@ public:
     void feedIq(const std::complex<float>* x, int n, double rate) {
         if (n <= 0 || !(rate > 0)) return;
         if (g3_) { iqFed_ = true; g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); }); }
-        if (baud_ == 0 || baud_ == 1200) narrow1200_(x, n, rate);
+        if (baud_ == 0 || baud_ == 1200) iq1200_(x, n, rate);
         tickList_();
         // ★ VIBE_PKT_LOG=1: what the 9600 receiver sees, every 5 s, to stderr — the first thing to look at on a live capture
         static const bool dbg = std::getenv("VIBE_PKT_LOG") != nullptr;
@@ -147,8 +153,6 @@ public:
     /** ★ 1200 Bd frames each path brought FIRST (the other path's copy is dropped): the listener's audio, the narrow IQ. */
     uint64_t framesFromAudio() const { return fromAudio_; }
     uint64_t framesFromNarrow() const { return fromNarrow_; }
-    /** ★★ THE NARROW PATH'S FILTER: ±kNarrowHz around the dial (docs/v12/APRS-ON-AIR-2.md). */
-    static constexpr double kNarrowHz = 5000;
     /** ★ For tests and the offline tool: one frame, as the demodulator hands it over. */
     void onFrame(const Frame& f) {
         if (f.fec == vibepkt::kFx25) ++fx25_; else if (f.fec == vibepkt::kIl2p) ++il2p_;
@@ -456,56 +460,151 @@ private:
         o += "}";
     }
 
-    /* ★★★ 1200 Bd FROM ITS OWN NARROW DISCRIMINATOR (2026-11-22, docs/v12/APRS-ON-AIR-2.md). A weak packet is lost at the
-     *  FM THRESHOLD — the discriminator breaks into clicks when the carrier is not ~9 dB over the noise IN ITS FILTER — so
-     *  the filter's width decides which packets survive: on test-aprs-onair at 8 dB CNR (in 12.5 kHz) a 10 kHz filter
-     *  gave 43 of 48, the listener's 12.5 kHz 31, 16 kHz 11. The listener's audio is THEIR choice (their filter, Voice,
-     *  de-emphasis) and stays a path; this one is the decoder's own: the channel IQ through a FIR to ±5 kHz (Bell 202 at
-     *  a normal ±3 kHz deviation fits), an ideal discriminator, the same AfskDemod. A frame both paths find is counted
-     *  once (offer1200_: the same bytes within 3 s of signal time). Costs one complex FIR at the channel rate and a second
-     *  demodulator — ~0.1 % of an M5 core. */
-    void narrow1200_(const std::complex<float>* x, int n, double rate) {
-        if (rate < 4 * kNarrowHz) return;   // a channel too narrow to hold it: the audio path alone
-        if (!afskIq_ || std::fabs(rate - nbRate_) > 0.5) {
+    /* ★★★ 1200 Bd FROM IQ — THE DECODER'S OWN RECEIVER (beta92, Stuart 11-23: "surely aprs needs to be iq based and
+     *  bypass the nfm processing completely then it can work the best it can"). The host feeds this the pipeline's
+     *  DECODER TAP (RxPipeline::setDecoderTap, ±kTapHz, cut from the cascade BEFORE the listener's channel filter), so the
+     *  listener's width, mode, Voice / ALL, de-emphasis, squelch and mute never reach it; where no tap exists (a test, an
+     *  old path) it reads the listener's channel IQ the same way.
+     *    ① an AFC — the carrier's mean frequency, power-weighted (arg of z·z*₋₁ smoothed over ~20 ms, measured on the
+     *       widest filter's output, closed loop; it moves only while the envelope says a carrier is there, and is pulled
+     *       home over ~2 s of hiss) — and one NCO
+     *       that puts a tracker 1–2 kHz off 144.800 back on DC (±kAfcMaxHz). Without it a ±2 kHz error lost nearly
+     *       everything at 8–10 dB (test-aprs-onair --iq-sweep noafc);
+     *    ② THREE channel filters side by side, ±5, ±6.5 and ±8 kHz (kIqHalves). At the FM threshold the noise IN the
+     *       filter decides which packets survive, and the best width follows the TX's deviation: at CNR 8 dB a normal ±3
+     *       kHz tracker gave 30/32 through ±5 kHz and 7/32 through ±7.5; an over-deviated ±6 kHz one 0/32 and 30/32. No
+     *       one width wins (see the numbers in test-aprs-onair --iq-sweep);
+     *    ③ an ideal discriminator each (flat: AfskDemod's per-tone levels and twist slicers take any pre-/de-emphasis);
+     *    ④ the same AfskDemod as the audio path, one per filter (FX.25, IL2P).
+     *  Any copy of a frame another path already gave within 3 s is dropped (offer1200_). */
+public:
+    /** ★ The decoder tap the host asks the pipeline for: ±12 kHz around the dial (the widest filter + the AFC's reach +
+     *  the skirts all fit). */
+    static constexpr double kTapHz = 12000;
+    static constexpr double kIqTransHz = 2000, kAfcMaxHz = 3000;
+    static constexpr int kIqPaths = 3;
+    static constexpr double kIqHalves[kIqPaths] = { 5000, 6500, 8000 };
+    /** ★ Tunables of the IQ path — fixed in the server, varied only by test-aprs-onair's sweeps (halfHz > 0: that ONE
+     *  width instead of the three). */
+    struct IqTune { double halfHz = 0; double transHz = 0; bool afc = true; double afcMaxHz = kAfcMaxHz; bool decimate = true; };
+    void setIqTune(const IqTune& t) { tune_ = t; iqRx_.clear(); }
+    double iqAfcHz() const { return afcHz_; }
+    /** ★ The IQ paths' frames by filter (narrowest first) — for tests. */
+    uint64_t framesFromIqPath(int k) const { return k >= 0 && k < int(iqRx_.size()) ? iqRx_[size_t(k)].frames : 0; }
+private:
+    struct IqRx {
+        double half = 0, rate = 0;
+        std::unique_ptr<vibedsp::FirDecimator> fir;
+        std::unique_ptr<AfskDemod> afsk;
+        std::vector<std::complex<float>> z;
+        std::vector<float> out;
+        std::complex<float> prev{1, 0};
+        uint64_t frames = 0;
+    };
+    void iq1200_(const std::complex<float>* x, int n, double rate) {
+        const IqTune& tu = tune_;
+        const double trans = tu.transHz > 0 ? tu.transHz : kIqTransHz;
+        if (std::fabs(rate - nbRate_) > 0.5 || (iqRx_.empty() && !nbNone_)) {
             nbRate_ = rate;
-            nbLp_ = vibedsp::designLowpass(kNarrowHz / rate, 2000.0 / rate);
-            std::reverse(nbLp_.begin(), nbLp_.end());
-            nbI_.assign(nbLp_.size() * 2, 0.f); nbQ_.assign(nbLp_.size() * 2, 0.f); nbHp_ = 0; nbPrev_ = { 1, 0 };
-            afskIq_.reset(new AfskDemod(rate, 1200, false, o_.fx25, o_.il2p));
+            iqRx_.clear();
+            std::vector<double> hs;
+            if (tu.halfHz > 0) hs.push_back(tu.halfHz); else hs.assign(kIqHalves, kIqHalves + kIqPaths);
+            for (double h : hs) {
+                if (rate < 2 * h + trans) continue;   // a channel too narrow to hold this width
+                IqRx r; r.half = h;
+                /* ★ Decimated only where the rate is TWICE what the stopband needs: the discriminator wants headroom over
+                 *  the widest instantaneous frequency (a ±6 kHz tracker + noise peaks), or the phase steps alias. Measured:
+                 *  ÷2 at the 40.5 kS/s tap (20 kS/s out) cost the ±8 kHz filter 68 of the sweep's packets (723 → 655) —
+                 *  so at a ~40 kS/s tap nothing is decimated. */
+                const int D = tu.decimate ? std::max(1, int(rate / (4 * (h + trans)))) : 1;
+                r.fir.reset(new vibedsp::FirDecimator(vibedsp::designLowpass(h / rate, trans / rate), D));
+                r.afsk.reset(new AfskDemod(rate / D, 1200, false, o_.fx25, o_.il2p));
+                r.rate = rate / D;
+                iqRx_.push_back(std::move(r));
+            }
+            nbNone_ = iqRx_.empty();
+            afcAcc_ = { 0, 0 }; afcHz_ = 0; ncoPh_ = { 1, 0 }; afcP2_ = afcP4_ = 0;
+            // ★ the AFC's time constants, per sample of the WIDEST filter's output (where it measures)
+            const double ra = iqRx_.empty() ? rate : iqRx_.back().rate;
+            afcA_ = float(1.0 - std::exp(-1.0 / (0.020 * ra)));     // the estimate: ~20 ms
+            afcLeak_ = 1.0 - std::exp(-1.0 / (2.0 * ra));           // home with no carrier: ~2 s
         }
-        const int K = int(nbLp_.size());
-        nbOut_.resize(size_t(n));
-        for (int i = 0; i < n; ++i) {
-            nbI_[size_t(nbHp_)] = x[i].real(); nbI_[size_t(nbHp_ + K)] = x[i].real();
-            nbQ_[size_t(nbHp_)] = x[i].imag(); nbQ_[size_t(nbHp_ + K)] = x[i].imag();
-            nbHp_ = (nbHp_ + 1) % K;
-            const std::complex<float> z(vibedsp::dotReal(&nbI_[size_t(nbHp_)], nbLp_.data(), K), vibedsp::dotReal(&nbQ_[size_t(nbHp_)], nbLp_.data(), K));
-            const std::complex<float> d = z * std::conj(nbPrev_);
-            nbOut_[size_t(i)] = (d.real() != 0 || d.imag() != 0) ? std::atan2(d.imag(), d.real()) : 0.f;
-            if (std::norm(z) > 0) nbPrev_ = z;
+        if (iqRx_.empty()) return;   // a channel too narrow for any width: the audio path alone
+        iqSeenAt_ = audioT_;
+        nbMix_.resize(size_t(n));
+        // ① the NCO: the AFC's correction (the estimate the last block left; a block is ≤ 20 ms)
+        const bool afc = tu.afc;
+        if (afc) {
+            const std::complex<double> rot = std::polar(1.0, -2 * M_PI * afcHz_ / rate);
+            for (int i = 0; i < n; ++i) { nbMix_[size_t(i)] = x[i] * std::complex<float>(ncoPh_); ncoPh_ *= rot; }
+            ncoPh_ /= std::abs(ncoPh_);
+        } else std::copy(x, x + n, nbMix_.begin());
+        int mAfc = 0;
+        const size_t widest = iqRx_.size() - 1;
+        for (size_t k = 0; k < iqRx_.size(); ++k) {
+            IqRx& r = iqRx_[k];
+            r.z.resize(size_t(r.fir->maxOut(n))); r.out.resize(r.z.size());
+            // ② the channel filter (SIMD FIR)
+            const int m = r.fir->process(nbMix_.data(), n, r.z.data());
+            // ③ the discriminator — and on the widest, the AFC's estimate
+            std::complex<float> acc = afcAcc_, prev = r.prev;
+            float p2 = afcP2_, p4 = afcP4_;
+            const bool est = k == widest;
+            for (int i = 0; i < m; ++i) {
+                const std::complex<float> z = r.z[size_t(i)];
+                const std::complex<float> d = z * std::conj(prev);
+                r.out[size_t(i)] = (d.real() != 0 || d.imag() != 0) ? std::atan2(d.imag(), d.real()) : 0.f;
+                if (est) { const float e = std::norm(z); acc += afcA_ * (d - acc); p2 += afcA_ * (e - p2); p4 += afcA_ * (e * e - p4); }
+                if (std::norm(z) > 0) prev = z;
+            }
+            r.prev = prev;
+            if (est) { afcAcc_ = acc; afcP2_ = p2; afcP4_ = p4; mAfc = m; }
+            // ④ the modem
+            const int path = 1 + int(k);
+            r.afsk->feed(r.out.data(), m, [&](const Frame& f) { if (offer1200_(f, iqT_, path)) ++r.frames; });
         }
-        afskIq_->feed(nbOut_.data(), n, [&](const Frame& f) { offer1200_(f, iqT_, true); });
+        if (afc) {
+            const std::complex<float> acc = afcAcc_;
+            // the carrier's residual offset from the filters' centre — power-weighted, so FM hiss alone pulls it nowhere
+            const double eHz = (acc.real() != 0 || acc.imag() != 0) ? std::atan2(acc.imag(), acc.real()) * iqRx_.back().rate / (2 * M_PI) : 0.0;
+            /* ★ ONLY ON A CARRIER: FM is a constant envelope (E|z|⁴ / (E|z|²)² → 1), band noise a Rayleigh one (→ 2). The
+             *  correction is weighted by how carrier-like the last ~20 ms were (full at ≤ 1.25 — a carrier ~7 dB over the
+             *  noise in the filter — none at ≥ 1.75), and only hiss lets it drift home. Without this the AFC random-walked
+             *  in pure noise to its ±3 kHz limit over 20 minutes; with it, it stays near 0 (test-aprs-onair, the noise check). */
+            const double kurt = afcP2_ > 0 ? double(afcP4_) / (double(afcP2_) * double(afcP2_)) : 2.0;
+            const double w = std::clamp((1.75 - kurt) / 0.5, 0.0, 1.0);
+            afcHz_ += w * std::min(1.0, mAfc * afcA_ * 0.5) * eHz;   // a fraction of the error per block: a ~40 ms loop
+            afcHz_ -= afcHz_ * (1.0 - w) * std::min(1.0, mAfc * afcLeak_);
+            afcHz_ = std::clamp(afcHz_, -tu.afcMaxHz, tu.afcMaxHz);
+        }
         iqT_ += n / rate;
     }
-    /** ★ One 1200 Bd frame from either path: the second copy of the same bytes within 3 s (signal time) is dropped. */
-    void offer1200_(const Frame& f, double t, bool narrow = false) {
+    /** ★ One 1200 Bd frame from any path (0 = the listener's audio, 1… = the IQ filters): a copy of the same bytes another
+     *  path gave within 3 s (signal time) is dropped. True = it was new. */
+    bool offer1200_(const Frame& f, double t, int path = 0) {
         uint32_t h = 2166136261u;
         for (uint8_t c : f.bytes) h = (h ^ c) * 16777619u;
-        for (const auto& r : seen1200_) if (r.h == h && std::fabs(r.t - t) < 3.0 && r.narrow != narrow) return;
-        seen1200_[seenP_] = { h, t, narrow }; seenP_ = (seenP_ + 1) % kSeen;
-        ++(narrow ? fromNarrow_ : fromAudio_);
+        for (const auto& r : seen1200_) if (r.h == h && std::fabs(r.t - t) < 3.0 && r.path != path) return false;
+        seen1200_[seenP_] = { h, t, path }; seenP_ = (seenP_ + 1) % kSeen;
+        ++(path ? fromNarrow_ : fromAudio_);
         onFrame(f);
+        return true;
     }
-    struct Seen { uint32_t h = 0; double t = -100; bool narrow = false; };
+    struct Seen { uint32_t h = 0; double t = -100; int path = 0; };
     static constexpr int kSeen = 16;
     Seen seen1200_[kSeen];
     int seenP_ = 0;
-    double audioT_ = 0, iqT_ = 0, nbRate_ = 0;
+    double audioT_ = 0, iqT_ = 0, nbRate_ = 0, iqSeenAt_ = -100;
     uint64_t fromAudio_ = 0, fromNarrow_ = 0;
-    std::unique_ptr<AfskDemod> afskIq_;
-    std::vector<float> nbLp_, nbI_, nbQ_, nbOut_;
-    int nbHp_ = 0;
-    std::complex<float> nbPrev_{1, 0};
+    std::vector<IqRx> iqRx_;
+    bool nbNone_ = false;
+    std::vector<std::complex<float>> nbMix_;
+    std::complex<float> afcAcc_{0, 0};
+    float afcP2_ = 0, afcP4_ = 0;   // ★ the widest filter's power and power² (the AFC's carrier test)
+    std::complex<double> ncoPh_{1, 0};
+    IqTune tune_;
+    double afcHz_ = 0, afcLeak_ = 0;
+    float afcA_ = 0;
 
     int baud_;
     Opts o_;

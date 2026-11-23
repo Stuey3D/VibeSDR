@@ -10462,11 +10462,15 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
    *  pick is confirmed (a config that put the mode's default back would otherwise stand). */
   if (d && t && audio) spec?.setBandwidth(audio.lo, audio.hi);
   if (satDec && activeDec === satDecKey(satDec) && d !== satDec) stopDecoder();
+  /* ★★ beta92 (the XCover, 11-23: after an ISS / SONATE-2 APRS pick, an SSTV pick and leaving SATELLITE, APRS attached by
+   *  hand ran "1200 Bd", not AUTO — the pick had OVERWRITTEN the listener's packet choice). The pick's baud is the pick's
+   *  alone: held apart (satPacketMode) and gone the moment the pick's decoder is no longer APRS. */
+  if (d !== 'aprs') satPacketMode = null;
   satDec = d;
   if (!d || !t || !decoders) { satBeaconOn = false; return; }
   if (activeDec === satDecKey(d) && (d !== 'cwskim' || satBeaconOn)) return;
   if (activeDec) stopDecoder();
-  if (d === 'aprs') { packetMode = satPacketBaud(t); aprsBaud = 1200; aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; }
+  if (d === 'aprs') { satPacketMode = satPacketBaud(t); aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; }
   decVfo = 'A';
   activeDec = satDecKey(d) as Exclude<typeof activeDec, null>;
   decTuneHint = '';
@@ -14558,7 +14562,8 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'time') return { station: timeStation };
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
   if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
-  if (mode === 'aprs') return packetParams(packetMode, pktFx25, pktIl2p, packetCaps);   // ★ V12 packet.ts (baud_rate kept)
+  // ★ V12 packet.ts (baud_rate kept); ★★ beta92 a satellite pick's own baud while its APRS runs (satFollow), else the listener's
+  if (mode === 'aprs') return packetParams(satPacketMode && satDec === 'aprs' ? satPacketMode : packetMode, pktFx25, pktIl2p, packetCaps);
   if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
   if (mode === 'sitora') return { center_frequency: 1000 };
   if (isTextFamily(mode)) return { mode: tmMode[mode] };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
@@ -15367,6 +15372,7 @@ const aprsLog: { t: number; line: string }[] = [];
 const PACKET_MODE_KEY = 'vibe.packetMode', PACKET_FEC_KEY = 'vibe.packetFec';
 let packetCaps: PacketCaps = parsePacketCaps({});
 let packetMode: PacketMode = '1200';
+let satPacketMode: PacketMode | null = null;   // ★★ beta92 a satellite pick's baud — never the listener's choice (satFollow)
 let pktFx25 = (lsGet(PACKET_FEC_KEY) ?? '11')[0] !== '0', pktIl2p = (lsGet(PACKET_FEC_KEY) ?? '11')[1] !== '0';
 let aprsFrames: PacketFrame[] = [];
 let aprsFrameT: number[] = [];   // ★ when each frame arrived here (the server's age is 0 on arrival)

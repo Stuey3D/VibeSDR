@@ -6212,6 +6212,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const packetCapsRef = useRef<PacketCaps>(parsePacketCaps({}));
   const [packetMode, setPacketMode] = useState<PacketMode>('1200');
   const packetModeRef = useRef<PacketMode>('1200');
+  const satPacketRef = useRef<PacketMode | null>(null);   // ★★ beta92 a satellite pick's baud — never the listener's (satFollow)
   const packetStored = useRef<string | null>(null);
   const [pktFec, setPktFec] = useState<{ fx25: boolean; il2p: boolean }>({ fx25: true, il2p: true });
   const pktFecRef = useRef({ fx25: true, il2p: true });
@@ -6917,9 +6918,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (type === 'balloon' && decoderClient.current) decoderClient.current.balloonSet = { ...balloonSetRef.current };   // ★ V12 balloons: AUTO or the pins
     if (type === 'tones' && decoderClient.current) { decoderClient.current.tonesSet = { ...tonesSetRef.current }; decoderClient.current.tonesLast = null; }   // ★ V12 DTMF + 5-tone
     if (type === 'aprs' && decoderClient.current) {
-      decoderClient.current.aprsBaud = aprsBaudRef.current;
-      decoderClient.current.aprsParams = packetParams(packetModeRef.current, pktFecRef.current.fx25, pktFecRef.current.il2p, packetCapsRef.current);
-      setDecoderStatus(`listening — ${packetIdle(packetModeRef.current)}`);
+      // ★★ beta92 a satellite pick's own baud while its APRS runs (satFollow), else the listener's choice
+      const pm = satPacketRef.current && satDecRef.current === 'aprs' ? satPacketRef.current : packetModeRef.current;
+      decoderClient.current.aprsBaud = pm === '300' ? 300 : satPacketRef.current ? 1200 : aprsBaudRef.current;
+      decoderClient.current.aprsParams = packetParams(pm, pktFecRef.current.fx25, pktFecRef.current.il2p, packetCapsRef.current);
+      setDecoderStatus(`listening — ${packetIdle(pm)}`);
     }
     // ★ V12 the RTTY skimmer (or ONE SIGNAL — 'fsk' with rttySettings, as always)
     if (type === 'rtty' && decoderClient.current) {
@@ -6997,6 +7000,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  decoder key makes (the same decoder: the server keeps it running). The decoder box stays shut while SATELLITE owns it
    *  (the SATELLITE box is its view: DecoderPanel gets no activeDecoder, the box mounts the image canvas). '' = none. */
   const satFollow = useCallback((d: SatPicked['decoder'], t: SatTx | null) => {
+    /* ★★ beta92 (the XCover, 11-23: after an ISS / SONATE-2 APRS pick, an SSTV pick and leaving SATELLITE, APRS attached by
+     *  hand ran "1200 Bd", not AUTO — this used to OVERWRITE packetModeRef). The pick's baud goes the moment its decoder is
+     *  no longer APRS. */
+    if (d !== 'aprs') satPacketRef.current = null;
     const was = satDecRef.current;
     satDecRef.current = d; setSatDec(d);
     if (d !== was) setSatTlm(null);
@@ -7014,7 +7021,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (activeDecRef.current === d) return;
-    if (d === 'aprs') { packetModeRef.current = satPacketBaud(t); aprsBaudRef.current = 1200; }   // ★ the downlink's baud, this pick only
+    // ★ the downlink's baud, THIS PICK ONLY — held apart (satPacketRef), never written over the listener's choice (beta92)
+    if (d === 'aprs') satPacketRef.current = satPacketBaud(t);
     stopSpots();
     openDecoder(d);
   }, [closeDecoder, openDecoder]);   // eslint-disable-line react-hooks/exhaustive-deps

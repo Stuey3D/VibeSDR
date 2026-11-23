@@ -3173,6 +3173,10 @@ public:
          *  demodulation — complex samples at rateHz (= chFs_). Split, not diverted: the demod
          *  runs on the same buffer afterwards. Only fires while set, so it costs nothing off. */
         void (*iq)(void* ctx, const cf32* x, int n, double rateHz) = nullptr;
+        /** ★★ V12 beta92 THE DECODER'S OWN WIDE TAP (setDecoderTap): the dial at DC, cut to ±decoderTapHz by a filter of
+         *  its own from the cascade's anti-alias stages — BEFORE the listener's channel filter, so the listener's width,
+         *  mode, de-emphasis and squelch never reach it. Only fires while a tap is set. */
+        void (*decIq)(void* ctx, const cf32* x, int n, double rateHz) = nullptr;
     };
 
     // sampleRate = input IQ rate; fftSize = waterfall bins; fftRate = frames/sec;
@@ -3345,6 +3349,19 @@ public:
         if (iqMinRate_.load(std::memory_order_relaxed) == hz) return;
         iqMinRate_ = hz; dirty_ = true;
     }
+    /** ★★ V12 beta92 (APRS from IQ, Stuart 11-23: "aprs needs to be iq based and bypass the nfm processing completely"):
+     *  a second channel out of the same cascade for a DECODER — ±halfHz, flat, at the channel rate (held at ≥ 2.7 ×
+     *  halfHz while the tap is on), delivered through Callbacks::decIq. The anti-alias stages protect ±halfHz instead of
+     *  only the listener's passband (they are the cheap, relaxed ones — a few taps more), and the decoder's last stage is
+     *  its own FIR beside the listener's. 0 = off. Rebuilds the chain ONLY when it changes (setIqMinRate's rule). */
+    void setDecoderTap(double halfHz) {
+        if (halfHz < 0) halfHz = 0;
+        if (decTapHz_.load(std::memory_order_relaxed) == halfHz) return;
+        decTapHz_ = halfHz; dirty_ = true;
+    }
+    double decoderTapHz() const { return decTapHz_.load(std::memory_order_relaxed); }
+    /** ★ The decoder tap's rate (0 = off / not built yet) — for tests. */
+    double decoderTapRate() const { return decTap_ ? chFs_ : 0.0; }
     /** ★ Turn on the RDS guard-band noise measurement — the second filter pair that makes the
      *  DEVIATION READOUT honest on a weak signal. Costs CPU, and buys nothing but accuracy of a
      *  number, so it is driven by whether anyone has the analyser OPEN rather than by a setting.
@@ -3897,6 +3914,9 @@ private:
     int chDecim_ = 1;
     double chFs_ = 0.0;
     std::atomic<double> iqMinRate_{0.0};     // raw IQ out floor on chFs_ (see setIqMinRate)
+    std::atomic<double> decTapHz_{0.0};      // ★ beta92 the decoder's wide tap, ±Hz (setDecoderTap); 0 = off
+    std::unique_ptr<FirDecimator> decTap_;   // …its own last stage, beside the listener's channel filter
+    std::vector<cf32> decBuf_;
     // WFM only: the rate the stereo audio post-chain runs at, = chFs_/audioDecim_.
     // The 15 kHz filters decimate as they filter, so everything after them (blend,
     // de-emphasis, resampling) costs a fraction of what it did at the channel rate.

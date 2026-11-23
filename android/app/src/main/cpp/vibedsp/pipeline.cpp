@@ -444,6 +444,10 @@ void RxPipeline::rebuildAudio() {
     // ★ Raw IQ out needs the channel at least as wide as the consumer's rate — a 48 kHz consumer
     //   cannot be fed from the 12 kHz channel a narrow mode would otherwise build.
     { const double f = iqMinRate_.load(std::memory_order_relaxed); if (f > 0.0) targetCh = std::max(targetCh, f); }
+    // ★★ V12 beta92 THE DECODER'S WIDE TAP (setDecoderTap): the channel must hold ±decHalf with room for its own filter's
+    //    skirt — the planner lands between target/1.2 and 1.5·target, so 3.3× gives ≥ 2.75× the half-width.
+    const double decHalf = decTapHz_.load(std::memory_order_relaxed);
+    if (decHalf > 0.0) targetCh = std::max(targetCh, decHalf * 3.3);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
@@ -618,8 +622,21 @@ void RxPipeline::rebuildAudio() {
             // Everything between chHalf and (fsOut - chHalf) is allowed to be ugly —
             // a later stage will remove it — so the transition is enormous and the
             // filter is tiny.
-            cutoff = chHalf / fs;
-            trans  = std::max((fsOut - chHalf) / fs - cutoff, cutoff * 0.5);
+            // ★★ beta92: with a decoder tap on, they protect ITS band too (±decHalf, wider than an NFM listener's) —
+            //    still the relaxed spec, a few taps more, and only while the tap runs.
+            const double prot = std::max(chHalf, decHalf);
+            cutoff = prot / fs;
+            trans  = std::max((fsOut - prot) / fs - cutoff, cutoff * 0.5);
+        }
+        if (last) {
+            // ★★ beta92 the decoder's own last stage, beside the listener's: the same decimation from the same input, cut
+            //    to ±decHalf (deep stopband; whatever folds lands outside ±decHalf).
+            decTap_.reset();
+            if (decHalf > 0.0) {
+                const double dc = std::min(0.45 / D, decHalf / fs);
+                const double dt = std::max(fsOut - 2.0 * decHalf, 0.25 * decHalf) / fs;
+                decTap_ = std::make_unique<FirDecimator>(designLowpass(dc, std::max(dt, 1e-3), /*deepStop=*/true), D);
+            }
         }
         // DEEP STOPBAND on the last stage. Whatever it fails to attenuate folds
         // straight into the audio and can never be removed afterwards — and the
@@ -1081,6 +1098,12 @@ void RxPipeline::feed(const cf32* iq, int n) {
         int nc = n;
         const cf32* src = baseBuf_.data();
         for (auto& d : decs_) {
+            // ★★ beta92 THE DECODER'S TAP: the last stage's INPUT through the decoder's own filter (setDecoderTap)
+            if (decTap_ && cb_.decIq && &d == &decs_.back()) {
+                decBuf_.resize(decTap_->maxOut(nc));
+                const int nd = decTap_->process(src, nc, decBuf_.data());
+                if (nd > 0) cb_.decIq(cb_.ctx, decBuf_.data(), nd, chFs_);
+            }
             std::vector<cf32>& dst = (src == baseBuf_.data()) ? chBuf_ : baseBuf_;
             dst.resize(d->maxOut(nc));
             nc = d->process(src, nc, dst.data());

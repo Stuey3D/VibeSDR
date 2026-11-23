@@ -10847,6 +10847,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                          || DecoderHost::packetIqRunning().load(std::memory_order_relaxed) > 0))
             c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
     }
+    /** ★★ beta92 PACKET'S OWN TAP (RxPipeline::setDecoderTap): the dial at DC, ±12 kHz, cut before this listener's channel
+     *  filter — to their host's packet decoder (DecoderHost::feedChannelIq, wide). */
+    static void clientDecIqCb(void* ctx, const cf32* x, int n, double rateHz) {
+        auto* c = (ClientDsp*)ctx;
+        if (c && c->owner) c->owner->decoders_.feedDecTapSession(c->session, x, n, rateHz);
+    }
     /** ★ The {"type":"tone"} message — the label is our own fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), no
      *  escaping needed. */
     static std::string toneJson(const std::string& label) { return "{\"type\":\"tone\",\"label\":\"" + label + "\"}"; }
@@ -11201,6 +11207,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   can only take away). 250 kHz IQ on a 12.5 kHz NFM channel would otherwise be 12.5 kHz of
         //   signal inside 250 kHz of nothing.
         if (c->iq) want = std::max(want, chanBinsFor(double(c->iq->rate) * 0.5));
+        /* ★★ beta92 PACKET'S OWN TAP (APRS from IQ, Stuart 11-23): while this listener's host runs packet on IQ, the
+         *  channel holds ±16 kHz flat (40 kHz — extract() rolls off the outer quarter) so the pipeline's decoder tap
+         *  (±vibeaprs::Run::kTapHz) is clean whatever width or mode the listener picks. Asked here, not cached, so a
+         *  pipeline rebuilt for any reason comes back with it. */
+        const bool pktTap = decoders_.sessionWantsPacketTap(c->session);
+        if (pktTap) want = std::max(want, chanBinsFor(16000.0));
         std::lock_guard<std::mutex> lk(c->mtx);
         if (want != c->chanBins || !c->rx) {
             c->chanBins = want;
@@ -11213,6 +11225,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             cb.audio = &Impl::clientAudioCb;
             cb.zoomSpectrum = &Impl::clientZoomCb;
             cb.iq = &Impl::clientIqCb;   // ★ V12 DRM: costs one null check per block unless the listener is on DRM
+            cb.decIq = &Impl::clientDecIqCb;   // ★★ beta92 packet's own wide tap (only fires while setDecoderTap holds)
             // ★ Always wired; the forwarders themselves check ownership, so a listener who becomes
             //   the RDS owner later does not need their pipeline rebuilding to start reporting.
             cb.rdsPs = &Impl::cRdsPs;   cb.rdsPi   = &Impl::cRdsPi;
@@ -11244,6 +11257,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("client channel: %.3f kHz wide (%d bins) for %s",
                  c->chanRate / 1e3, want, c->mode.c_str());
         }
+        c->rx->setDecoderTap(pktTap ? vibeaprs::Run::kTapHz : 0.0);   // ★★ beta92 a no-op unless it changed
         // ★★★ THE RESIDUAL IS NOT OPTIONAL. extract() centres on a whole BIN, so the channel
         //     lands up to half a bin away from where the listener actually tuned — 122 Hz at
         //     8 MSPS with a 32k FFT, which on SSB is the difference between speech and a growl.
@@ -21133,7 +21147,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<bool> navWide_{false};
     double navUserBw_ = 0;
     static constexpr double kNavWideHz = 25000.0;
+    /** ★★ beta92 PACKET'S OWN TAP (APRS from IQ — Stuart 11-23: "surely aprs needs to be iq based and bypass the nfm
+     *  processing completely"): every pipeline whose host runs packet on IQ gets RxPipeline::setDecoderTap(±12 kHz), and
+     *  every other gives it back. The one pipeline's directly; a listener's through clientRetune (which also widens their
+     *  channel to hold it). The listener's audio, width and mode are not touched. Synced wherever navWideSync is. */
+    void pktTapSync() {
+        rx.setDecoderTap(decoders_.sharedWantsPacketTap() && !perClientDsp() ? vibeaprs::Run::kTapHz : 0.0);
+        std::vector<std::shared_ptr<ClientDsp>> cs;
+        { std::lock_guard<std::mutex> lk(clientMtx); for (auto& kv : clientDsp) if (kv.second) cs.push_back(kv.second); }
+        for (auto& c : cs) {
+            const bool want = decoders_.sessionWantsPacketTap(c->session);
+            bool has = false;
+            { std::lock_guard<std::mutex> lk(c->mtx); has = c->rx && c->rx->decoderTapHz() > 0; }
+            if (want != has) clientRetune(c.get());
+        }
+    }
     void navWideSync() {
+        pktTapSync();
         const bool want = !perClientDsp() && decoders_.sharedWantsWide();
         if (want == navWide_.load()) return;
         navWide_.store(want);
@@ -21583,6 +21613,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
         cb.iq       = &Impl::iqCb;
+        cb.decIq    = &Impl::decIqCb;   // ★★ beta92 packet's own wide tap (pktTapSync)
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
         // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …"): the one pipeline every listener on a shared dial hears, and the
         //    dial it is on now (atomics only — this runs on the DSP/demod thread, see setLogLabel).
@@ -32287,6 +32318,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Called from feedOneClient under c->mtx: resample the DDC slice and queue it as 8-bit IQ. */
     void iqTap(ClientDsp* c, const cf32* in, int n) {
         iqTapInto(c->iq, in, n, (int)std::lround(c->chanRate));
+    }
+    /** ★★ beta92 the one pipeline's decoder tap → the shared host's packet decoder (pktTapSync). */
+    static void decIqCb(void* ctx, const cf32* x, int n, double rateHz) {
+        auto* p = (Impl*)ctx;
+        if (!p->perClientDsp()) p->decoders_.feedDecTapShared(x, n, rateHz);
     }
     /** Direct mode: the pipeline's own channel, from RxPipeline::feed on the DSP thread. */
     static void iqCb(void* ctx, const cf32* x, int n, double rateHz) {
