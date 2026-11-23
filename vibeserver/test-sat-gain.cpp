@@ -5,6 +5,9 @@
 //   resuming after the decoder stops / the pick goes / LOS (Watch).
 //   build: c++ -std=c++17 -I ../android/app/src/main/cpp -o /tmp/tsg test-sat-gain.cpp
 #include "vibe_sat_gain.h"
+#include "vibe_sat_gain_airspy.h"   // ★ beta92 the Airspy R2 / Mini hold
+#include <algorithm>
+#include <string>
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -312,6 +315,210 @@ int main() {
         ok(rspApiPassSetPoint(-15) == -22, "owner above it: lowered to -22 for the pass");
         ok(rspApiPassSetPoint(-45) == -45, "owner chose MORE headroom (-45): kept, a pass never raises it");
         ok(rspApiPassSetPoint(-22) == -22, "owner exactly at it: unchanged");
+    }
+
+    /* ═══ ★★★ beta92 THE AIRSPY R2 / MINI (vibe_sat_gain_airspy.h) — the XCover's METEOR-M2-3 pass, 2026-11-23: "the airspy
+     *  was bouncing lots", no gain write in the log (its own LNA / mixer AGC). The shim's own driver (AirspyPass::step) runs
+     *  here against a FAKE source with the real source's semantics, fed raw 12-bit ADC figures through the real AdcMeter. */
+    printf("\nThe Airspy R2 / Mini — the preset ladders\n");
+    {
+        const std::vector<int> lin = airspyLadder(false), sen = airspyLadder(true);
+        bool upL = lin.size() == 22, upS = sen.size() == 22;
+        for (size_t i = 1; i < lin.size(); ++i) upL = upL && lin[i] > lin[i - 1];
+        for (size_t i = 1; i < sen.size(); ++i) upS = upS && sen[i] >= sen[i - 1];
+        ok(upL, "linearity: 22 positions, gain strictly rising (chooseGain needs a monotone table)");
+        ok(upS, "sensitivity: 22 positions, gain never falling");
+        const double step = (lin.back() - lin.front()) / 10.0 / 21.0;
+        ok(step > 3.0 && step < 4.5, "linearity positions are ~3.8 dB apart, not the slider's nominal 1 dB");
+        printf("     (linearity span %.1f dB, %.2f dB a position)\n", (lin.back() - lin.front()) / 10.0, step);
+    }
+
+    printf("\nThe Airspy — the raw converter meter (one second at a time, impulses left out)\n");
+    {
+        AdcMeter m;
+        auto sec = [&](double t, int dev, uint32_t rails) { m.add((uint16_t)std::max(0, 2048 - dev), (uint16_t)std::min(4095, 2048 + dev), rails, 5000000u, t); };
+        sec(0.0, 600, 0); sec(1.0, 600, 0);                 // 600/2048 = -10.7 dBFS
+        AdcTake t = m.take();
+        ok(t.seconds == 1 && std::fabs(t.peak - 20.0 * std::log10(600.0 / 2048.0)) < 0.05 && t.clipRun == 0, "a quiet second: peak -10.7 dBFS, no clip");
+        sec(2.0, 2048, 3);                                   // a spark: on the rail, 3 rail samples in 5 M
+        t = m.take();
+        ok(t.sparks == 1 && t.peak <= -98.0, "an impulse second (3 rail samples in 5 M): left out of the peak");
+        sec(3.0, 2048, 400); sec(4.0, 2048, 400);            // real overload: 400 in 5 M (0.008 %) — over 8 / 1.2 M
+        t = m.take();
+        ok(t.clipRun == 2 && t.clipPct > 0.007 && t.peak > -0.1, "real overload two seconds running: clipRun 2, its peak counted");
+        m.restart(4.0);
+        sec(4.1, 2048, 400);                                 // inside the settle after a write: not evidence
+        t = m.take();
+        ok(t.seconds == 0 && t.clipRun == 0, "after a write the meter starts afresh and skips the settle");
+    }
+
+    // ── the fake radio: AirspySource's semantics (setPreset leaves Free and the AGCs; restore is exact), a band whose level
+    //    follows the ladder, raw seconds through the real meter ──
+    struct FakeAirspy {
+        AirspyState st;
+        AdcMeter meter;
+        bool adcOn = false;
+        int presetWrites = 0, restores = 0;
+        double bandAtRef = -25.0; int refPos = 15;           // the band's peak at linearity preset 15, dBFS (rail = 0)
+        uint32_t railsPerSec = 0;
+        std::vector<int> lin = airspyLadder(false), sen = airspyLadder(true);
+        AirspyState gainState() const { return st; }
+        void setPreset(int mode, int tenth) {
+            st.mode = mode == kAspModeSensitive ? kAspModeSensitive : kAspModeLinear;
+            if (tenth < 0) tenth = 0;
+            (st.mode == kAspModeSensitive ? st.sensTenth : st.linTenth) = tenth;
+            st.gainTenth = tenth; ++presetWrites;
+        }
+        void restoreGainState(const AirspyState& s) { st = s; ++restores; }
+        void setAdcStats(bool on, double now) { adcOn = on; meter.restart(now); }
+        AdcTake takeAdc() { return meter.take(); }
+        double peakNow() const {   // dBFS at the current gain (an AGC'd Free state is treated as the reference)
+            int g = lin[(size_t)refPos];
+            if (st.mode == kAspModeLinear && st.linTenth >= 0) g = lin[(size_t)std::clamp((st.linTenth + 5) / 10, 0, 21)];
+            if (st.mode == kAspModeSensitive && st.sensTenth >= 0) g = sen[(size_t)std::clamp((st.sensTenth + 5) / 10, 0, 21)];
+            return std::min(0.0, bandAtRef + (g - lin[(size_t)refPos]) / 10.0);
+        }
+        void second(double t) {
+            if (!adcOn) return;
+            const int dev = std::min(2048, (int)std::lround(2048.0 * std::pow(10.0, peakNow() / 20.0)));
+            for (int k = 0; k < 4; ++k)   // four scanned buffers a second
+                meter.add((uint16_t)std::max(0, 2048 - dev), (uint16_t)std::min(4095, 2048 + dev), railsPerSec / 4, 1250000u, t + k * 0.25);
+        }
+    };
+    auto run = [](FakeAirspy& f, AirspyPass& ps, AirspyCtx& c, double from, double to, std::vector<std::string>* log = nullptr) {
+        // the radio delivers continuously; the shim's housekeeping steps the pass every 2 s
+        for (double t = from; t < to; t += 1.0) {
+            f.second(t);
+            if (std::fmod(t, 2.0) < 0.5) { c.now = t; const auto r = ps.step(f, c); if (log) for (auto& l : r.log) log->push_back(l); }
+        }
+    };
+    auto has = [](const std::vector<std::string>& v, const char* s) { for (auto& l : v) if (l.find(s) != std::string::npos) return true; return false; };
+
+    printf("\nThe Airspy hold — the XCover's case: Free mode with both AGCs on\n");
+    {
+        FakeAirspy f;
+        AirspyState owner; owner.mode = kAspModeFree; owner.lnaAgc = owner.mixerAgc = true; owner.lna = -1; owner.mixer = 6; owner.vga = 9;
+        owner.linTenth = 120; owner.sensTenth = -1; owner.gainTenth = -1;
+        f.st = owner;
+        AirspyPass ps; AirspyCtx c; c.what = "METEOR-M2 3 LRPT"; c.on = true; c.seq = 1;
+        std::vector<std::string> log;
+        c.now = 0; { const auto r = ps.step(f, c); for (auto& l : r.log) log.push_back(l); ok(r.wrote, "begin: one write"); }
+        // ★ as AirspySource: a preset mode turns both stage AGCs off on the radio; the switches stay REMEMBERED for Free
+        ok(f.st.mode == kAspModeLinear && f.st.linTenth == 150,
+           "the hardware AGC is OFF: linearity preset 15 (no gain known under an AGC — Airspy's own start)");
+        ok(f.adcOn, "the raw converter is being measured");
+        ok(has(log, "hardware AGC OFF for the pass"), "...and the log says so");
+        // band: -25 dBFS at preset 15 → +15 dB of room to -10 → preset 18 (79.6-67.1 = +11.6; 19 would be +17.5 → -7.5)
+        run(f, ps, c, 1.0, 7.0, &log);
+        ok(ps.position() == 18 && f.st.linTenth == 180, "measured -25 dBFS at preset 15: held at linearity preset 18 (-13.4 predicted)");
+        ok(has(log, "Airspy gain held at linearity preset 18"), "logged: \"Airspy gain held at linearity preset 18 — peak …\"");
+        const int writes = f.presetWrites;
+        // the band moves about below the rail: nothing moves
+        f.bandAtRef = -20.0; run(f, ps, c, 7.0, 15.0, &log);
+        f.bandAtRef = -30.0; run(f, ps, c, 15.0, 23.0, &log);
+        ok(f.presetWrites == writes && ps.position() == 18, "the band 5 dB louder, then 10 dB quieter: held (no climb, no cut)");
+        // an impulse a second for 4 s: not an overload
+        f.bandAtRef = -25.0; f.railsPerSec = 12; run(f, ps, c, 23.0, 27.0, &log);
+        ok(f.presetWrites == writes, "a few rail samples a second (impulses): held");
+        // a real overload: a pager keys up, 0.01 % on the rail for several seconds
+        f.bandAtRef = -8.0; f.railsPerSec = 600; run(f, ps, c, 27.0, 33.0, &log);
+        ok(ps.position() < 18 && f.st.linTenth == ps.position() * 10, "real clipping two seconds running: cut DOWN");
+        ok(has(log, "Airspy on the rail"), "...and logged as a clip cut");
+        ok(ps.hold().phase() == Phase::Hold, "...still held after it (clips only)");
+        const int afterCut = ps.position();
+        f.railsPerSec = 0; f.bandAtRef = -40.0; run(f, ps, c, 33.0, 45.0, &log);
+        ok(ps.position() == afterCut, "the overload goes, the band quietens: no climb back");
+        ok(ps.note().find("linearity preset") != std::string::npos, "the summary's note names the preset");
+        // LOS: exactly the owner's state, AGCs and all
+        c.on = false; c.now = 46;
+        const auto r = ps.step(f, c);
+        ok(r.wrote && f.st == owner, "LOS: the owner's Free mode, stages, remembered positions and BOTH AGC switches back exactly");
+        ok(!f.adcOn && !ps.active(), "the raw meter is off, the pass is over");
+        ok(has(r.log, "its AGC running again"), "...and the log says the AGC is running again");
+    }
+
+    printf("\nThe Airspy hold — the owner's own presets\n");
+    {   // Linearity 12: measuring starts there, no write at the start
+        FakeAirspy f; f.st.mode = kAspModeLinear; f.st.linTenth = 120; f.st.gainTenth = 120; f.st.sensTenth = 70;
+        const AirspyState owner = f.st;
+        AirspyPass ps; AirspyCtx c; c.what = "METEOR-M2 3 LRPT"; c.on = true; c.seq = 1; c.now = 0;
+        ok(!ps.step(f, c).wrote, "owner on linearity 12: the pass starts there — no write, no jolt");
+        f.refPos = 15; f.bandAtRef = -12.0;           // at 12 that is about -23.5
+        run(f, ps, c, 1.0, 7.0);
+        ok(ps.position() >= 12 && ps.position() <= 21, "set from headroom");
+        c.on = false; c.now = 8; ps.step(f, c);
+        ok(f.st == owner, "pass over: linearity 12 back, the sensitivity curve's 7 untouched");
+    }
+    {   // Sensitivity 10: the pass works on LINEARITY (no band rule), starting at the nearest gain; restored to Sensitive
+        FakeAirspy f; f.st.mode = kAspModeSensitive; f.st.sensTenth = 100; f.st.gainTenth = 100; f.st.linTenth = -1;
+        const AirspyState owner = f.st;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        ps.step(f, c);
+        const int want = nearestIdx(airspyLadder(false), airspyLadder(true)[10]);
+        ok(f.st.mode == kAspModeLinear && f.st.linTenth == want * 10, "owner on sensitivity 10: linearity at the nearest gain");
+        run(f, ps, c, 1.0, 7.0);
+        c.on = false; c.now = 8; ps.step(f, c);
+        ok(f.st == owner && f.st.linTenth == -1, "pass over: Sensitive 10 again, linearity's position un-set again (-1)");
+    }
+    {   // Free mode, AGCs off, manual stages: start near the stages' own total
+        FakeAirspy f; f.st.mode = kAspModeFree; f.st.lna = 10; f.st.mixer = 8; f.st.vga = 8;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        ps.step(f, c);
+        ok(f.st.linTenth == nearestIdx(airspyLadder(false), aspStagesTenth(10, 8, 8)) * 10, "owner's manual stages: linearity at the nearest total gain");
+    }
+
+    printf("\nThe Airspy hold — the owner's band rules, a hand on the gain, AOS\n");
+    {   // LIMIT at linearity 14: the measurement wants 18, the ceiling says 14
+        FakeAirspy f; f.st.mode = kAspModeLinear; f.st.linTenth = 100;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        c.limited = true; c.sensCurve = false; c.ceilPos = 14;
+        ps.step(f, c);
+        f.bandAtRef = -35.0; run(f, ps, c, 1.0, 7.0);
+        ok(ps.position() == 14, "a band LIMIT of 14: never above it");
+        ok(ps.hold().lastChoice().limit == std::string("ceiling"), "...decided by the ceiling");
+    }
+    {   // LIMIT on the SENSITIVITY curve: the hold uses that curve
+        FakeAirspy f; f.st.mode = kAspModeSensitive; f.st.sensTenth = 80;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        c.limited = true; c.sensCurve = true; c.ceilPos = 12;
+        ps.step(f, c);
+        run(f, ps, c, 1.0, 7.0);
+        ok(f.st.mode == kAspModeSensitive && ps.position() <= 12, "a band rule on Sensitivity: the hold stays on that curve, under its ceiling");
+    }
+    {   // LOCK: nothing moves
+        FakeAirspy f; f.st.mode = kAspModeLinear; f.st.linTenth = 90;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        c.limited = true; c.locked = true; c.ceilPos = 9;
+        std::vector<std::string> log;
+        { const auto r = ps.step(f, c); log = r.log; ok(!r.wrote, "a LOCKED band: no write"); }
+        f.bandAtRef = -5.0; f.railsPerSec = 1000; run(f, ps, c, 1.0, 9.0);
+        ok(f.presetWrites == 0 && f.st.linTenth == 90, "...not even a clip cut: the owner's figure is the setting");
+        ok(has(log, "LOCKED"), "...and the log says why");
+        c.on = false; c.now = 10; ok(!ps.step(f, c).wrote, "...nor at the end");
+    }
+    {   // a listener moves the slider mid-pass: the hold stands aside and the end leaves their choice
+        FakeAirspy f; f.st.mode = kAspModeFree; f.st.lnaAgc = f.st.mixerAgc = true;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        ps.step(f, c); run(f, ps, c, 1.0, 7.0);
+        f.setPreset(kAspModeLinear, 50);   // the listener's slider
+        const AirspyState theirs = f.st;
+        std::vector<std::string> log;
+        run(f, ps, c, 7.0, 11.0, &log);
+        ok(ps.yielded() && has(log, "stands aside"), "a hand on the gain mid-pass: the hold stands aside, and says so");
+        f.bandAtRef = -2.0; f.railsPerSec = 1000; run(f, ps, c, 11.0, 17.0);
+        ok(f.st == theirs, "...and no longer cuts");
+        c.on = false; c.now = 18; ps.step(f, c);
+        ok(f.st == theirs && f.restores == 0, "pass over: their newer choice stays (the owner's is not forced over it)");
+    }
+    {   // AOS / the IF filter changed: measured again, a new set
+        FakeAirspy f; f.st.mode = kAspModeLinear; f.st.linTenth = 150;
+        AirspyPass ps; AirspyCtx c; c.what = "x"; c.on = true; c.seq = 1; c.now = 0;
+        ps.step(f, c);
+        f.bandAtRef = -14.0; run(f, ps, c, 1.0, 7.0);
+        const int p1 = ps.position();
+        c.seq = 2; f.bandAtRef = -26.0;               // the narrower IF: 12 dB less in the converter
+        run(f, ps, c, 7.0, 15.0);
+        ok(ps.position() > p1, "AOS / a narrower IF filter: measured again and set higher");
     }
 
     printf("\n%d passed, %d failed\n", passes, fails);

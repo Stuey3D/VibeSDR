@@ -202,6 +202,9 @@ public:
      *  hardware lock and touches the tuner, so the libusb callback must never call it (see the
      *  note on enqueueIq). Non-static: it works on the live device. */
     void overloadTick();
+    /** ★★★ V12 beta92 THE SATELLITE-PASS GAIN HOLD ON AN AIRSPY R2 / MINI (vibe_sat_gain_airspy.h) — the housekeeping
+     *  thread, every 2 s beside overloadTick: hardware AGC off, measure, one preset, hold, the owner's state put back. */
+    void airspySatTick();
     /** ★★★ THE VibeAGC RECORD (vibe_agc_record.h, 2026-10-20). agcRecordTick: one call a second from the same
      *  housekeeping thread — takes a snapshot of the loop's inputs only while the gain is moving or within 30 s of
      *  an event. agcRecordJsonl: the whole bounded ring, oldest first, one JSON object per line (admin-only: it is

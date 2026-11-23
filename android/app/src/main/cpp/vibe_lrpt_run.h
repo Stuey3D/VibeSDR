@@ -68,6 +68,9 @@ public:
         std::function<void(const std::vector<Picture>&, bool partial)> pictures;
         std::function<void(const std::string&)> log;
         std::function<void(Receiver&)> made;                             ///< ★ test seam: each new receiver (diagnostics)
+        /** ★★ beta92 what the radio's gain was over the pass (the satellite gain hold's note: "Airspy linearity preset 12
+         *  (held, 0 clip cuts)", "RTL-SDR 32.8 dB (held …)", or why a radio has none) — for the per-pass summary. */
+        std::function<std::string()> gainNote;
     };
     explicit Run(Opts o) : o_(std::move(o)) {}
 
@@ -138,10 +141,18 @@ public:
             if (o_.satInRange) inRange_ = o_.satInRange();
             if (o_.rateAuto && o_.satSymbolRate && rx_->rateGroups() > 1) rx_->preferRate(o_.satSymbolRate());
             if (snrDb_ > kQuietDb) lastSignalSec_ = fedSec_;
+            sumSecond();
+            // ★ beta92 THE PASS SUMMARY at LOS when there is no picture to save (the "nearly" pass — passOver below only
+            //   runs for a pass that has pictures); with pictures it comes with them, just below
+            if (prevInRange_ == 1 && inRange_ == 0 && !havePictures_) summary("LOS \xe2\x80\x94 the satellite has set");
+            else if (inRange_ == -1 && !havePictures_ && sum_.secs > 0 && (sum_.heard || sum_.frames) && passOver())
+                summary("no frame and no signal for 30 s");
+            prevInRange_ = inRange_;
         }
         if (havePictures_ && passOver()) {
             if (o_.log) o_.log(inRange_ == 0 ? "lrpt: the satellite has set \xe2\x80\x94 the pass's pictures to the gallery"
                                              : "lrpt: pass over (no frame and no signal for 30 s) \xe2\x80\x94 pictures to the gallery");
+            summary(inRange_ == 0 ? "LOS \xe2\x80\x94 the satellite has set" : "pass over (no frame and no signal for 30 s)");
             savePass(false);
             saved_++;
             newReceiver();
@@ -164,13 +175,81 @@ public:
     void finish(bool interrupted) {
         if (done_) return;
         done_ = true;
+        // ★ beta92 the decoder stopping ends the pass's summary too — unless the pass was already summed up at LOS and
+        //   nothing has been heard since (the minutes after LOS are not a second pass)
+        if (sum_.secs > 0 && (sum_.heard || sum_.frames || !summarised_)) summary(interrupted ? "decoder stopped" : "decoder finished");
         if (rx_) savePass(interrupted);
     }
     const Receiver* receiver() const { return rx_.get(); }
+    /** The last per-pass summary line (tests). */
+    const std::string& lastSummary() const { return lastSummary_; }
+
+    /* ── ★★★ beta92 THE PER-PASS SUMMARY (the XCover's METEOR-M2-3 pass, 2026-11-23: "kept looking like it was going to
+     *  work but nothing", and the log could not say how near it came). ONE line at LOS / the pass's end / the decoder
+     *  stopping: how long, the best signal reading and how long it stood at or above what a decode needs (kNeedDb), the
+     *  symbol rate (or the rates AUTO tried), how many seconds the carrier loop and the frame sync held, the frames (good /
+     *  failed) and picture lines, and what the radio's gain was (the satellite hold's note). Counted once a second across
+     *  receivers (a rate change or a saved picture starts a new one; the pass goes on). */
+    struct PassSum {
+        int secs = 0, aboveSec = 0, carrierSec = 0, syncSec = 0;
+        double peakSnr = 0;
+        bool heard = false;
+        unsigned rates = 0;            // bit 0 = 72k, bit 1 = 80k
+        uint64_t frames = 0, bad = 0;
+        int lines = 0;                 // lines of finished receivers this pass
+    };
+    const PassSum& passSum() const { return sum_; }
 
 private:
     Dump dump_;
+    PassSum sum_;
+    uint64_t sumOk_ = 0, sumBad_ = 0;   // the current receiver's counts already summed
+    int prevInRange_ = -1;
+    bool summarised_ = false;
+    std::string lastSummary_;
+    int curLines() const { if (!rx_) return 0; int s0, s1; rx_->stripRange(s0, s1); return std::max(0, s1 - s0) * 8; }
+    void sumSecond() {
+        if (!rx_) return;
+        ++sum_.secs;
+        sum_.peakSnr = std::max(sum_.peakSnr, snrDb_);
+        if (snrDb_ >= kNeedDb) ++sum_.aboveSec;
+        if (snrDb_ > kQuietDb) sum_.heard = true;
+        if (rx_->demodLocked()) ++sum_.carrierSec;
+        if (rx_->syncLocked()) ++sum_.syncSec;
+        const double sr = rx_->symbolRate();
+        sum_.rates |= sr >= 76000 ? 2u : 1u;
+        const Stats st = rx_->stats();
+        if (st.rsOk >= sumOk_) { sum_.frames += st.rsOk - sumOk_; sumOk_ = st.rsOk; }
+        if (st.rsFail >= sumBad_) { sum_.bad += st.rsFail - sumBad_; sumBad_ = st.rsFail; }
+    }
+    void summary(const std::string& why) {
+        if (sum_.secs <= 0) return;
+        const int lines = sum_.lines + curLines();
+        auto rateName = [](unsigned b) { return b == 3u ? std::string("72k and 80k") : b == 2u ? std::string("80k") : std::string("72k"); };
+        std::string rate = o_.rateAuto ? "AUTO, tried " + rateName(sum_.rates)
+                                       : std::to_string(int(o_.symbolRate / 1000)) + "k" + (o_.interleaved ? " interleaved" : "");
+        const char* verdict = sum_.frames > 0 ? (lines > 0 ? "decoded" : "frames but no picture lines")
+                            : sum_.syncSec > 0 ? "synced, no frame passed the error check"
+                            : sum_.carrierSec > 0 ? "carrier locked, never synced"
+                            : sum_.heard ? "heard, never locked" : "nothing heard";
+        std::string gain = o_.gainNote ? o_.gainNote() : std::string();
+        if (gain.empty()) gain = "not known (no satellite gain hold ran)";
+        char b[640];
+        std::snprintf(b, sizeof b, "lrpt pass summary (%s): %d min %02d s \xc2\xb7 peak SNR %.1f dB (a decode needs %.1f), %d s at or above it "
+                      "\xc2\xb7 symbol rate %s \xc2\xb7 carrier %d s, sync %d s \xc2\xb7 %llu frame%s (%llu failed), %d line%s \xe2\x80\x94 %s "
+                      "\xc2\xb7 gain: %s", why.c_str(), sum_.secs / 60, sum_.secs % 60, sum_.peakSnr, kNeedDb, sum_.aboveSec, rate.c_str(),
+                      sum_.carrierSec, sum_.syncSec, (unsigned long long)sum_.frames, sum_.frames == 1 ? "" : "s",
+                      (unsigned long long)sum_.bad, lines, lines == 1 ? "" : "s", verdict, gain.c_str());
+        lastSummary_ = b;
+        if (o_.log) o_.log(lastSummary_);
+        summarised_ = true;
+        sum_ = PassSum{};
+        // ★ the current receiver's lines and frames are this pass's: the next pass counts only what comes after
+        sum_.lines = -curLines();
+    }
     void newReceiver() {
+        sum_.lines += curLines();   // ★ a receiver replaced mid-pass: its lines stay counted
+        sumOk_ = sumBad_ = 0;
         ReceiverConfig c; c.sampleRate = rate_; c.symbolRate = o_.symbolRate; c.mod = o_.mod; c.diff = o_.diff; c.interleaved = o_.interleaved; c.rateAuto = o_.rateAuto;
         rx_ = std::make_unique<Receiver>(c);
         if (o_.made) o_.made(*rx_);

@@ -1,4 +1,4 @@
-// See airspy_source.h — Airspy R2 / Mini, on the vendored (unmodified) libairspy.
+// See airspy_source.h — Airspy R2 / Mini, on the vendored libairspy (marked VibeSDR patches — see airspy.c).
 #include "airspy_source.h"
 
 #ifdef VIBE_HAVE_AIRSPY
@@ -91,6 +91,8 @@ int airspyRxCallback(airspy_transfer* t) {
     auto* self = static_cast<AirspySource*>(t->ctx);
     // ★★★ What the library lost before this buffer — see AirspySource::noteUsbDropped().
     if (self && t->dropped_samples) self->noteUsbDropped((uint64_t)t->dropped_samples);
+    // ★ beta92 the raw converter's figures, when the satellite hold asked for them (airspy_vibe_set_adc_stats)
+    if (self && t->vibe_adc_total) self->noteAdc(t->vibe_adc_min, t->vibe_adc_max, t->vibe_adc_rails, t->vibe_adc_total);
     if (self) self->deliver(static_cast<const float*>(t->samples), t->sample_count);
     return 0;
 }
@@ -307,6 +309,7 @@ void AirspySource::applyAll() {
     airspy_set_rf_bias(dev_, bias_ ? 1 : 0);
     airspy_set_freq(dev_, (uint32_t)llround(centreHz_));
     applyGainMode();
+    airspy_vibe_set_adc_stats(dev_, adcEvery_);   // ★ beta92 a reopened handle keeps measuring if a pass asked
     ASLOG("Airspy: settings re-stated on the live stream — %.3f MHz, bias-T %s, packing %s",
           centreHz_ / 1e6, bias_ ? "on" : "off", packing_ ? "on" : "off");
 }
@@ -474,6 +477,36 @@ void AirspySource::setVgaGain(int v) {
 void AirspySource::setLnaAgc(bool on)   { lnaAgc_ = on;   mode_ = GainFree; applyGainMode(); }
 void AirspySource::setMixerAgc(bool on) { mixerAgc_ = on; mode_ = GainFree; applyGainMode(); }
 void AirspySource::setBiasTee(bool on)  { bias_ = on;     if (dev_) airspy_set_rf_bias(dev_, on ? 1 : 0); }
+
+/* ── ★★★ V12 beta92 THE SATELLITE-PASS GAIN HOLD (vibe_sat_gain_airspy.h) ── */
+vibesatgain::AirspyState AirspySource::gainState() const {
+    vibesatgain::AirspyState s;
+    s.mode = mode_; s.sensTenth = presetTenth_[0]; s.linTenth = presetTenth_[1]; s.gainTenth = gainTenth_;
+    s.lna = lna_; s.mixer = mixer_; s.vga = vga_; s.lnaAgc = lnaAgc_; s.mixerAgc = mixerAgc_;
+    return s;
+}
+void AirspySource::restoreGainState(const vibesatgain::AirspyState& st) {
+    mode_ = (st.mode == GainSensitive || st.mode == GainFree) ? st.mode : GainLinear;
+    presetTenth_[0] = st.sensTenth; presetTenth_[1] = st.linTenth; gainTenth_ = st.gainTenth;
+    lna_ = st.lna; mixer_ = st.mixer; vga_ = st.vga; lnaAgc_ = st.lnaAgc; mixerAgc_ = st.mixerAgc;
+    applyGainMode();
+}
+void AirspySource::setAdcStats(bool on, double) {
+    {
+        std::lock_guard<std::mutex> lk(adcMtx_);
+        adc_.restart(nowSecsMono());
+    }
+    adcEvery_ = on ? 4u : 0u;   // ★ one buffer in four — the RTL path's own price (local_sdr_shim enqueueIq)
+    if (dev_) airspy_vibe_set_adc_stats(dev_, adcEvery_);
+}
+vibesatgain::AdcTake AirspySource::takeAdc() {
+    std::lock_guard<std::mutex> lk(adcMtx_);
+    return adc_.take();
+}
+void AirspySource::noteAdc(uint16_t lo, uint16_t hi, uint32_t rails, uint32_t total) {
+    std::lock_guard<std::mutex> lk(adcMtx_);
+    adc_.add(lo, hi, rails, total, nowSecsMono());
+}
 void AirspySource::setPacking(bool on)  { packing_ = on;  if (dev_) airspy_set_packing(dev_, on ? 1 : 0); }
 
 } // namespace vibe
@@ -516,5 +549,10 @@ void AirspySource::releaseDeadHandle() {}
 bool AirspySource::reopenOnFd(int, std::string& err) { err = "built without Airspy support"; return false; }
 void AirspySource::deliver(const float*, int) {}
 double AirspySource::secondsSinceLastRx() const { return 1e9; }
+vibesatgain::AirspyState AirspySource::gainState() const { return {}; }
+void AirspySource::restoreGainState(const vibesatgain::AirspyState&) {}
+void AirspySource::setAdcStats(bool, double) {}
+vibesatgain::AdcTake AirspySource::takeAdc() { return {}; }
+void AirspySource::noteAdc(uint16_t, uint16_t, uint32_t, uint32_t) {}
 } // namespace vibe
 #endif

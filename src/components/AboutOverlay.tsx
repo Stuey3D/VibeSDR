@@ -59,6 +59,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta92 2026-11-23 — SATELLITE: THE GAIN HOLD ON AN AIRSPY R2 / MINI + A PASS SUMMARY IN THE LOG (the XCover's
+  //     METEOR-M2-3 pass: "the airspy was bouncing lots", no gain write in the log — its own hardware AGC).
+  //     vibe_sat_gain_airspy.h, LocalSdrShim::airspySatTick, the libairspy raw-ADC patch; vibe_lrpt_run.h summary().
+  { v: 'V12 (experimental)', detail: 'SATELLITE: AN AIRSPY R2 OR MINI HOLDS ITS GAIN FOR A PASS — on a METEOR pass the Airspy’s own automatic gain kept jumping under the weak signal and the picture never locked. Now, while a satellite picture or telemetry decoder runs on a pass, the Airspy’s hardware AGC is switched off, the radio’s converter is measured for a few seconds, one linearity gain step is set and held for the pass — only a real overload steps it down — and when the pass ends your own gain mode (Free, Linearity or Sensitivity), position and AGC switches are put back exactly. If you change the gain yourself during the pass, your choice stands. Which radios hold their gain for a pass: RTL-SDR, Airspy R2 / Mini and SDRplay. The Airspy HF+, USRP and HackRF keep the gain you set (the HackRF has no automatic gain to move). And the server log now writes one line per METEOR pass — best signal, how long it was strong enough, the symbol rate, whether it locked and synced, frames and lines, and the gain it was held at — so a pass that nearly worked can be understood afterwards.' },
   // ★★★ V12 beta92 2026-11-23 — THE SPOTS LIST BY CONTROLLER (Stuart: "make the spots navigatable by controller but make it
   //     so that you dont have to scroll a list of hundreds to get to the header buttons or to the control deck").
   //     src/utils/spotsNav.ts (app), web/client/src/padList.ts + gamepad.ts [data-navlist] (web).

@@ -338,6 +338,9 @@ public:
         /** ★★ beta91 LRPT: is this listener's satellite above the horizon (1), not (0), or is there no pick (−1)? Tests;
          *  empty = the satellite engine's decoderView. With an override the rate comes from the attach only. */
         std::function<int()> satInRange;
+        /** ★★ beta92 the satellite gain hold's note ("Airspy linearity preset 12 (held, 0 clip cuts)") for LRPT's per-pass
+         *  summary line. Empty = the summary says the gain is not known. */
+        std::function<std::string()> satGainNote;
         /** ★ V12 VOR / ILS: the server's place (lat, lon; false = not given) — the nearest published station on a channel,
          *  and the owner's check of how far a radial passes from here. Never sent to a listener as such. */
         std::function<bool(double&, double&)> position;
@@ -1583,6 +1586,7 @@ private:
             if (DecoderTapPtr t = tap()) for (const auto& p : ps) t->picture(p.name, p.png, p.w, p.h, partial);
         };
         o.log = [this](const std::string& l) { log(l); };
+        if (env_.satGainNote) o.gainNote = env_.satGainNote;   // ★ beta92 the per-pass summary's "gain"
         lrpt_.reset(new vibelrpt::Run(std::move(o)));
         imageKind_.store(2, std::memory_order_relaxed);   // ★ the SSTV frame shapes: a joiner is caught up on the picture
         cwWidth_.store(vibelrpt::Run::kSliceWidthHz, std::memory_order_relaxed);

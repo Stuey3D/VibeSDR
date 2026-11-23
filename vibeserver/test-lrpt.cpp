@@ -406,6 +406,79 @@ static void testLivePass(bool quick) {
     }
 }
 
+/* ★★★ beta92 THE PER-PASS SUMMARY LINE (the XCover's METEOR-M2-3 pass, 2026-11-23: "kept looking like it was going to work
+ *  but nothing" — and nothing in the log could say how near it came). One line at LOS / the pass's end / the decoder
+ *  stopping, with the best signal, the time at or above a decode's need, the rate, carrier / sync, frames, lines, gain. */
+static void testPassSummary() {
+    using namespace livepass;
+    std::printf("\nThe per-pass summary line (beta92)\n");
+    const double fs = 150000;
+    // ── 1. a decoded pass, then LOS: the summary comes with the pictures, says "decoded", names the gain ──
+    {
+        const auto a = stretch(0, 6, 100, 5.0, fs, 3, 43352840);
+        double tNow = -0.5; int inRange = 1;
+        std::vector<std::string> logs;
+        Run::Opts o; o.symbolRate = 72000; o.mod = ReceiverConfig::Oqpsk;
+        o.dopplerHz = [&] { return kDop0 + kRate * tNow; };
+        o.satInRange = [&] { return inRange; };
+        o.log = [&](const std::string& l) { logs.push_back(l); };
+        o.gainNote = [] { return std::string("Airspy linearity preset 12 (held, 0 clip cuts)"); };
+        Run run(o);
+        const size_t blk = size_t(fs / 20);
+        auto feed = [&](const float* x, size_t n) {
+            for (size_t at = 0; at < n; at += blk) { const size_t m = std::min(blk, n - at); run.feedIq(reinterpret_cast<const std::complex<float>*>(x + at * 2), int(m), fs, 0); tNow += m / fs; }
+        };
+        feed(a.data(), a.size() / 2);
+        inRange = 0;   // LOS
+        std::mt19937 rng(5); std::normal_distribution<float> g(0, float(sigmaFor(5.0, fs)));
+        std::vector<float> noise(blk * 2);
+        for (double t = 0; t < 8; t += 0.05) { for (auto& v : noise) v = g(rng); feed(noise.data(), noise.size() / 2); }
+        const std::string& s = run.lastSummary();
+        std::printf("  %s\n", s.c_str());
+        CHECK(s.find("lrpt pass summary (LOS") == 0, "decoded pass: a summary at LOS");
+        CHECK(s.find("decoded") != std::string::npos && s.find("symbol rate 72k") != std::string::npos, "says decoded, at 72k");
+        CHECK(s.find("gain: Airspy linearity preset 12") != std::string::npos, "names the gain held");
+        CHECK(run.passSum().frames == 0 && !run.passSum().heard, "the pass is closed with it: what follows LOS counts from nothing");
+        int n = 0; for (auto& l : logs) if (l.rfind("lrpt pass summary", 0) == 0) ++n;
+        run.finish(true);
+        int m = 0; for (auto& l : logs) if (l.rfind("lrpt pass summary", 0) == 0) ++m;
+        CHECK(n == 1 && m == 1, "one summary for the pass; the decoder stopping after LOS with nothing heard adds none (%d, %d)", n, m);
+    }
+    // ── 2. the "nearly" pass: a signal under what a decode needs, never synced, then LOS (no pictures to carry it) ──
+    {
+        const auto a = stretch(0, 4, 100, -2.0, fs, 9, 43352840);   // far under the need: heard, never a frame
+        double tNow = -0.5; int inRange = 1;
+        Run::Opts o; o.rateAuto = true; o.mod = ReceiverConfig::Oqpsk;
+        o.dopplerHz = [&] { return kDop0 + kRate * tNow; };
+        o.satInRange = [&] { return inRange; };
+        Run run(o);
+        const size_t blk = size_t(fs / 20);
+        auto feed = [&](const float* x, size_t n) {
+            for (size_t at = 0; at < n; at += blk) { const size_t m = std::min(blk, n - at); run.feedIq(reinterpret_cast<const std::complex<float>*>(x + at * 2), int(m), fs, 0); tNow += m / fs; }
+        };
+        feed(a.data(), a.size() / 2);
+        inRange = 0;
+        feed(a.data(), size_t(fs * 1.5));
+        const std::string& s = run.lastSummary();
+        std::printf("  %s\n", s.c_str());
+        CHECK(s.find("lrpt pass summary (LOS") == 0, "a pass with no picture still gets its summary at LOS");
+        CHECK(s.find("0 frames") != std::string::npos && s.find("AUTO, tried") != std::string::npos, "0 frames, and the rates AUTO tried");
+        CHECK(s.find("gain: not known") != std::string::npos, "no gain note: says so");
+    }
+    // ── 3. the decoder stopped mid-pass: the summary says so ──
+    {
+        Run::Opts o; o.symbolRate = 72000;
+        Run run(o);
+        std::mt19937 rng(8); std::normal_distribution<float> g(0, 0.1f);
+        std::vector<float> noise(size_t(fs / 20) * 2);
+        for (double t = 0; t < 4; t += 0.05) { for (auto& v : noise) v = g(rng); run.feedIq(reinterpret_cast<const std::complex<float>*>(noise.data()), int(noise.size() / 2), fs, 0); }
+        run.finish(true);
+        std::printf("  %s\n", run.lastSummary().c_str());
+        CHECK(run.lastSummary().find("lrpt pass summary (decoder stopped)") == 0, "decoder stopped: a summary");
+        CHECK(run.lastSummary().find("nothing heard") != std::string::npos, "noise only: nothing heard");
+    }
+}
+
 int main(int argc, char** argv) {
     ReceiverConfig c;
     for (int i = 1; i < argc; i++) {
@@ -430,6 +503,7 @@ int main(int argc, char** argv) {
     testChain(quick);
     testNoise(quick);
     testLivePass(quick);
+    testPassSummary();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
