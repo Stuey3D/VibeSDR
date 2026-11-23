@@ -242,6 +242,10 @@ export default function IsmPanel(p: IsmPanelProps) {
                   ) : <Text style={s.txt}>{line}</Text>}
                   {open && detail.map((t, k) => <Text key={k} style={s.detail}>{t}</Text>)}
                 </View>
+                {/* ★ beta92 (Stuart 11-23): each reading's SNR, measured per burst by the server — blank where not known */}
+                {/* ★ coloured by strength (Stuart: "coloured red amber green"): ≥ 20 dB green · 10-19 amber · under 10 red */}
+                <Text style={[s.snr, d.snr > 0 && { color: d.snr >= 20 ? tk.good : d.snr >= 10 ? tk.warn : tk.bad }]}
+                      numberOfLines={1}>{d.snr > 0 ? `${Math.round(d.snr)} dB` : ''}</Text>
               </>
             );
             // ★ a meter row opens its detail on a press; every other row is read, not pressed
@@ -308,6 +312,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   rowBand: { width: 32, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
   txt:     { fontFamily: F, fontSize: 12, lineHeight: 17, color: T.value },
   txtCol:  { flex: 1, minWidth: 0 },
+  snr:     { width: 40, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
   posLink: { textDecorationLine: 'underline' },
   detail:  { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted, marginTop: 2 },
   note:    { fontFamily: F, fontSize: 13, color: T.muted, padding: 12, lineHeight: 18 },

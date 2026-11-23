@@ -70,6 +70,9 @@ try {
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'ISM'); b && b.click(); return !!b; })()`);
   ok(await until(`!!document.getElementById('ismBox') && !document.getElementById('ismBox').hidden`, 6000), 'the ISM box opens');
   ok(await until(`document.querySelectorAll('#ismList .ismRow').length >= 4`, 20000), `four devices listed: ${await ev(`[...document.querySelectorAll('#ismList .ismTxt')].map(x => x.textContent).join(' | ')`)}`);
+  // ★ beta92 (Stuart 11-23): each row's SNR in dB, coloured red / amber / green by strength
+  { const sn = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#ismList .ismRow .ismSnr')].map(e => [e.textContent, e.className]))`) || '[]');
+    ok(sn.length > 0 && sn.some(([t, c]) => /^\d+ dB$/.test(t) && /\b(ok|warn|bad)\b/.test(c)), `rows carry a coloured SNR (${JSON.stringify(sn.slice(0, 3))})`); }
   const band = await ev(`document.getElementById('ismBandName')?.textContent`);
   ok(band === '433.92 MHz ISM', `the box names the band: ${band}`);
   const card = await ev(`(document.getElementById('mFreq')?.textContent || '') + ' / ' + (document.getElementById('mChan')?.textContent || '')`);

@@ -322,7 +322,12 @@ export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey =
     return `<div class="ismRow k-${esc(d.kind)}${detail.length ? ' ismTap' : ''}" data-key="${esc(d.key)}" title="${esc(tip)}">`
          + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismBand">${esc(ismBandLabel(d.freq, bands))}</span>`
          + `<span class="ismTxt">${ismPosLinked(d, esc(ismLine(d, u)))}`
-         + (open ? `<span class="ismDetail">${detail.map(esc).join('<br>')}</span>` : '') + `</span></div>`;
+         + (open ? `<span class="ismDetail">${detail.map(esc).join('<br>')}</span>` : '') + `</span>`
+         // ★ beta92 (Stuart 11-23: "on ism is it possible to have a SNR readout?"): each reading's SNR, measured per burst
+         //   by the server — blank where it is not known
+         //   coloured by strength (Stuart: "coloured red amber green"): ≥ 20 dB green · 10-19 amber · under 10 red
+         + `<span class="ismSnr${d.snr <= 0 ? '' : d.snr >= 20 ? ' ok' : d.snr >= 10 ? ' warn' : ' bad'}" title="signal over the band's noise">`
+         + `${d.snr > 0 ? `${Math.round(d.snr)} dB` : ''}</span></div>`;
   }).join('');
 }
 /** ★★ V12 (Stuart, 2026-11-01: "make the coordinates clickable so that you can see where they are on the map"): the
@@ -401,6 +406,8 @@ const CSS = `
 .ismRow:nth-child(odd) { background: rgba(255, 176, 0, 0.04); }
 .ismAgo { flex: 0 0 4.6em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
 .ismBand { flex: 0 0 2.6em; text-align: right; color: rgba(255, 190, 40, 0.75); font-variant-numeric: tabular-nums; }
+.ismSnr { flex: 0 0 3.4em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
+.ismSnr.ok { color: #7dff9a; } .ismSnr.warn { color: #ffd479; } .ismSnr.bad { color: #ff8a7d; }
 .ismTxt { flex: 1 1 auto; min-width: 0; }
 .ismEmpty { padding: 12px; color: rgba(255, 190, 40, 0.6); }
 .ismTap { cursor: pointer; }
