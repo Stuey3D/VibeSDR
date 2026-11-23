@@ -610,6 +610,56 @@ static void phase2() {
         std::FILE* o = std::fopen((std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/bgdec-wefax.png").c_str(), "wb");
         if (o) { std::fwrite(png.data(), 1, png.size(), o); std::fclose(o); }
     }
+    std::printf("── ★★★ beta92 a saved WEFAX chart is FINISHED as the client draws it (auto-align + clean paper), background and listener ──\n");
+    {
+        // A Northwood 8040 chart as received: grey speckle paper (~138), a 7-px margin 300 px in walking −0.06 px/line, a few
+        // lines lost on the way. The PNG kept must be exactly vibe_wefax_finish.h's rendering of those lines (that port is held
+        // to the TypeScript pixel for pixel by test-wefax-finish), not the raw lines.
+        const uint32_t CW = 1809, CH = 700;
+        std::mt19937 rg(5);
+        std::vector<uint8_t> raw((size_t)CW * CH, 255), got(CH, 0);
+        for (uint32_t y = 0; y < CH; y++) {
+            if (y == 50 || (y >= 400 && y < 403)) continue;                     // lost lines (filled from the line above)
+            got[y] = 1;
+            uint8_t* r = &raw[(size_t)y * CW];
+            for (uint32_t x = 0; x < CW; x++) { int v = 138 + (int)(rg() % 121) - 60; if (x % 40 >= 20 && x % 40 < 24) v = 10; /* ~10 % ink, as a chart has (test_wefax_crisp) */ r[x] = (uint8_t)std::max(0, std::min(255, v)); }
+            const int mg = (int)std::lround(300 - 0.06 * y);
+            for (int k = -3; k <= 3; k++) r[((mg + k) % (int)CW + CW) % CW] = 0;
+        }
+        std::vector<uint8_t> want = raw;
+        const auto fr = wefaxfinish::finishChart(want.data(), CW, CH, got.data(), 8038100);
+        ok(fr.hasAl && fr.via == wefaxfinish::VIA_MARGIN && fr.crisp, "the finisher finds the margin (shift " + std::to_string(fr.shift) + ") and the paper");
+        const std::string wantPng = png::encode((int)CW, (int)CH, 1, want.data()), rawPng = png::encode((int)CW, (int)CH, 1, raw.data());
+        for (const char* origin : {"background", "live"}) {
+            gallery::Store fs; fs.setDir(tmpDir((std::string("finish-") + origin).c_str()));
+            gallery::Meta fm = m; fm.origin = origin; fm.freqHz = 8038100;
+            auto t = bg::makeGalleryTap(fs, fm);
+            const uint8_t st = 0x02, sp = 0x03;
+            t->frame(&st, 1);
+            for (uint32_t y = 0; y < CH; y++) {
+                if (!got[y]) continue;
+                std::vector<uint8_t> f{0x01};
+                for (auto b : be32(y)) f.push_back(b);
+                for (auto b : be32(CW)) f.push_back(b);
+                f.insert(f.end(), raw.begin() + (size_t)y * CW, raw.begin() + (size_t)(y + 1) * CW);
+                t->frame(f.data(), f.size());
+            }
+            t->frame(&sp, 1);
+            t->finish(false);
+            const std::string fl = fs.listJson("wefax", 10);
+            std::string path, ct; const std::string f = gallery::lineStr(fl, "f");
+            const std::string png = fs.resolve(f, path, ct) ? readFile(path) : "";
+            ok(png == wantPng && png != rawPng, std::string("★ a ") + origin + " chart is saved aligned + crisp (" + std::to_string(png.size()) + " bytes; raw would be " + std::to_string(rawPng.size()) + ")");
+        }
+        // the margin, after finishing, sits at the left edge; the paper is white
+        // the paper as wefaxCrisp defines it: the 70th-percentile grey of the chart
+        auto paperOf = [](const std::vector<uint8_t>& v) { size_t h[256] = {0}; for (uint8_t g : v) h[g]++; size_t a = 0; for (int g = 0; g < 256; g++) { a += h[g]; if (a >= v.size() * 7 / 10) return g; } return 255; };
+        int edge = 0;
+        for (uint32_t y = 0; y < CH; y++) { int d = 0; for (int x = 0; x <= 4; x++) d += want[(size_t)y * CW + x] < 60; edge += d >= 4; }
+        const int pw = paperOf(want), pr = paperOf(raw);
+        ok(edge >= (int)(CH * 0.95) && pw >= 230,
+           "…margin at the left edge on " + std::to_string(edge) + "/" + std::to_string(CH) + " lines; paper " + std::to_string(pr) + " → " + std::to_string(pw));
+    }
     std::printf("── ★★ a LISTENER's WEFAX: kept only with a start tone / phasing, or 600 lines (Stuart: \"dead wefax false starts\") ──\n");
     {
         gallery::Store ls; ls.setDir(tmpDir("lpics"));

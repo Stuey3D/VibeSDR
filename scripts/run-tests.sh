@@ -237,6 +237,10 @@ flags_for() {
     # ★★ V12 beta92 THE FALSE-DECODE FILTER (vibe_callsign_entity.h, docs/v12/DIGI-MAP-FILTER.md): the ITU series table, 166
     #    real call + grid pairs (every continent, islands, Antarctic bases, /MM /P), Stuart's Pi 500 false decodes, cost.
     test-callsign-entity) echo "-O2" ;;
+    # ★★★ V12 beta92 A GALLERY WEFAX CHART IS FINISHED AS THE CLIENT DRAWS IT (vibe_wefax_finish.h — the port of wefaxAlign.ts +
+    #    wefaxCrisp.ts): parity with the TypeScript on ~90 charts (scripts/wefax-finish-golden.ts, the world corpus; needs node,
+    #    else that half is NOT RUN), white paper, margin to the edge, a flat page untouched, cost. ~1 min.
+    test-wefax-finish) echo "-O2" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;

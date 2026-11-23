@@ -38,6 +38,7 @@
 #include "vibe_station_log.h"      // ★ V12 APRS: the day's packets + the station card (StationTap)
 #include "vibe_dsc_gallery.h"
 #include "vibe_fctlm_gallery.h"   // ★ V12 beta91 FUNcube telemetry: a CSV per pass + the day's log (TELEMETRY CHARTS)
+#include "vibe_wefax_finish.h"     // ★ beta92 a WEFAX chart is saved auto-aligned and on clean paper, as the client draws it
 #include "vibe_png.h"
 #include "vibe_callsign_country.h"
 #include "vibedsp/vibedsp.h"
@@ -250,7 +251,13 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
  *    chart that comes OUT OF THE NOISE (Northwood faded in 2½ minutes into a chart — wefax_decoder.cpp), or after a stop
  *    tone with no start tone. Such a chart is missing its top, so it is held to the same 600 lines and, kept, is marked
  *    PARTIAL. A background 0x02 counts as a start when the decoder's last phase report was a start tone or phasing (1/2;
- *    the start tone is reported before its START fires) — or when none has come (an older decoder). */
+ *    the start tone is reported before its START fires) — or when none has come (an older decoder).
+ *  ★★★ A WEFAX CHART IS SAVED AS THE LISTENER SAW IT (Stuart 2026-11-23: "background wefax is not applying our auto align
+ *    and margin or contrast tweaks like they do for users"). The gallery shows this PNG — it was the raw lines: grey
+ *    speckle, rolled. It is now finished first (vibe_wefax_finish.h, a port of the clients' wefaxAlign + wefaxCrisp,
+ *    held to them pixel for pixel by test-wefax-finish): auto-aligned for the station on this dial (meta.freqHz — the dial,
+ *    background and listener alike), lost lines filled, the chart's own paper → white and ink → black. Background charts
+ *    and listeners' alike; SSTV untouched. The keep / drop rules above are decided first, unchanged. */
 class GalleryImageTap : public DecoderTap {
 public:
     static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096, kChartLines = 600;
@@ -303,7 +310,7 @@ public:
 
 private:
     void begin(uint32_t w, uint32_t h) {
-        open_ = true; px_.clear(); lines_ = 0; maxRow_ = 0; started_ = gallery::nowUtc();
+        open_ = true; px_.clear(); got_.clear(); lines_ = 0; maxRow_ = 0; started_ = gallery::nowUtc();
         marked_ = pendingMark_; pendingMark_ = false;
         w_ = w > kMaxWidth ? 0 : w; h_ = h > 2000 ? 0 : h;
         if (sstv_ && w_ && h_) px_.assign((size_t)w_ * h_ * 3, 0);
@@ -312,6 +319,7 @@ private:
         const size_t off = (size_t)row * bytes;
         if (px_.size() < off + bytes) px_.resize(off + bytes, 255);
         std::memcpy(px_.data() + off, p, bytes);
+        if (!sstv_) { if (got_.size() < (size_t)row + 1) got_.resize((size_t)row + 1, 0); got_[row] = 1; }   // ★ which lines came
         lines_++;
         if (row + 1 > maxRow_) maxRow_ = row + 1;
     }
@@ -328,6 +336,11 @@ private:
         const int ch = sstv_ ? 3 : 1;
         const uint32_t h = sstv_ ? (partial ? maxRow_ : h_) : maxRow_;
         px_.resize((size_t)w_ * h * ch, 255);
+        if (!sstv_) {   // ★ beta92: aligned + crisp, as the client draws it (see the class note)
+            got_.resize(h, 0);
+            wefaxfinish::finishChart(px_.data(), w_, h, got_.data(), meta_.freqHz);
+            got_.clear(); got_.shrink_to_fit();
+        }
         const std::string png = png::encode((int)w_, (int)h, ch, px_.data());
         px_.clear(); px_.shrink_to_fit();
         if (png.empty()) return;
@@ -348,6 +361,7 @@ private:
     size_t dropped_ = 0;
     uint32_t w_ = 0, h_ = 0, lines_ = 0, maxRow_ = 0;
     std::vector<uint8_t> px_;
+    std::vector<uint8_t> got_;   // ★ WEFAX: line y was received (a line never sent is filled or left, as the client does)
     std::string mode_;
     int64_t started_ = 0;
     size_t saved_ = 0;
