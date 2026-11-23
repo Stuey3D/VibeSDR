@@ -6,6 +6,7 @@
 import {
   ageText, clockIn, parseSatList, parseSatReadout, parseSatTrack, pickerRows, satCapFrom, satChanText, satStateWord,
   satStatusLine, skyPath, skySvg, skyXY, txListenMode, txText, txTuneHz, satCreditText, satTxCreditText, satUplinkText,
+  parseSatVfoB, parseSatPicked,
 } from '../src/services/satellites';
 
 let fail = 0;
@@ -94,6 +95,18 @@ ok(satCapFrom({ doppler: 1, dopplerWhy: 'NO SAT DATA — the satellite orbit dat
   ok(satCreditText({ ...l!, source: undefined }, now) === '' && satTxCreditText(null) === '', 'nothing to credit = nothing shown');
   const r6 = parseSatReadout({ type: 'sat', state: 'ARMED', norad: 123456789, name: 'Nine', time: 'ok' });
   ok(r6?.norad === 123456789, 'nine digits kept whole');
+}
+
+// ★★★ beta92 OPEN IN VFO B — the shapes the real server sent (scripts/test-server-sat.mjs §10, 2026-11-23)
+{
+  const b = parseSatVfoB(JSON.parse('{"type":"sat_vfob","on":true,"norad":44909,"tx":1,"hz":435605000,"mode":"cw","use":"packet","label":"CW beacon","decoder":"cw","params":{},"shift":-4745.1}'));
+  ok(!!b && b.on && b.decoder === 'cw' && b.mode === 'cw' && b.use === 'packet' && b.shift === -4745.1, 'sat_vfob (the real server) parsed');
+  const off = parseSatVfoB(JSON.parse('{"type":"sat_vfob","on":false,"norad":44909,"tx":1,"why":"The satellite pick changed \u2014 VFO B closed"}'));
+  ok(!!off && !off.on && !off.refused && /pick changed/.test(off.why || ''), 'B gone parsed (not a refusal)');
+  const evil = parseSatVfoB({ type: 'sat_vfob', on: true, norad: 1, tx: 0, decoder: 'rm -rf', label: 'x\u0000'.repeat(50), params: { a: 'y'.repeat(99) } });
+  ok(!!evil && evil.decoder === '' && (evil.label || '').length <= 60 && !/\u0000/.test(evil.label || '') && String(evil.params.a).length === 24, 'bounded: an unknown decoder is none, text cut, controls out');
+  const p = parseSatPicked(JSON.parse('{"type":"sat","state":"picked","shared":true,"norad":44909,"tx":0,"decoder":"","doppler":true,"hz":435640000,"mode":"usb","use":"voice","name":"RS-44","label":"Transponder","lo":435610000,"hi":435670000,"band":"V/u","vfob":[1],"time":"ok"}'));
+  ok(JSON.stringify(p?.vfob) === '[1]', 'picked with vfob (the real server) parsed');
 }
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');

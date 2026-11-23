@@ -334,7 +334,7 @@ export function parseSatPicked(m: unknown): SatPicked | null {
   // ★ SATELLITE-BEST 1.1 / 1.2: a CW beacon's `cw` and AO-73's FUNcube telemetry `fctlm` (the server's, beta90)
   const p: SatPicked = { norad, tx: Math.floor(tx), decoder: satDecoderName(o.decoder) };
   if (Array.isArray(o.vfob)) {
-    const v = (o.vfob as unknown[]).map(num).filter((x): x is number => x != null && x >= 0 && x !== p.tx).map(Math.floor).slice(0, 16);
+    const v = (o.vfob as unknown[]).map(num).filter((x): x is number => x != null && x >= 0).map(Math.floor).filter((x, i, a) => x !== p.tx && a.indexOf(x) === i).slice(0, 16);
     if (v.length) p.vfob = v;
   }
   return p;

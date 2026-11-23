@@ -33,7 +33,8 @@ import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowP
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
-         type SatInfo, type SatList, type SatPicked, type SatReadout } from '../services/satellites';
+         satCwTail, satDecView, satDecWord, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY,
+         type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB } from '../services/satellites';
 
 const SAT_MAX_W = 760;
 /** ★ The half-globe's drawing size (viewBox); on screen it is the box's width, capped at GLOBE_MAX_W (Stuart 11-20). */
@@ -88,6 +89,17 @@ export interface SatellitePanelProps {
   /** ★ 1.9 the MAP key (a packet downlink, once a station with a position is heard) → the DIGI MODES map's APRS layer */
   mapOffered?: boolean;
   onMap?: () => void;
+  /** ★ beta92 a CW beacon picked on A: its decoded characters (the pick's own CW decoder) */
+  cwText?: string;
+  /** ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server's word on B (on), what B's decoder has said (its text,
+   *  packet lines, own status, a picture started), the canvas B's picture draws on, and the key's press. */
+  vfob?: SatVfoB | null;
+  bText?: string;
+  bPackets?: string[];
+  bStatus?: string;
+  bPicture?: boolean;
+  bImageRef?: React.MutableRefObject<DecoderImageHandle | null>;
+  onVfoB?: (norad: number, tx: number) => void;
 }
 
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg — the dotted orbit (1.7), the drawn bird, the green
@@ -254,15 +266,32 @@ export default function SatellitePanel(p: SatellitePanelProps) {
     return () => { live = false; };
   }, [tlmCharts, galleryGet, tlmSat, p.picked?.norad]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
+  // ★★★ beta92 OPEN IN VFO B — B's line and the line switch; with no B this is exactly the one-downlink box
+  const vb = p.vfob && p.vfob.on && confirmed && p.vfob.norad === p.picked?.norad ? p.vfob : null;
+  const [view, setView] = useState<'A' | 'B'>('A');
+  // ★ the line just opened is the one shown (a tap on A's line goes back); B gone = A
+  useEffect(() => { setView(vb && satDecView(vb.decoder) ? 'B' : 'A'); }, [vb?.norad, vb?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const sw = satViewSwitch(p.picked?.decoder, vb);
+  const shown = satViewShown(p.picked?.decoder, vb, view);
+  const showA = shown === 'A';
+  const bView = vb && !showA ? satDecView(vb.decoder) : '';
+  const offers = p.onVfoB && confirmed ? satVfoBOffers(p.picked, sat, vb) : [];
+  const txB = vb ? sat?.tx[vb.tx] : undefined;
+  const bLine = vb ? [satVfoBLine(vb, txB?.label, mine), p.bStatus || (vb.decoderWhy ? `decoder: ${vb.decoderWhy}` : satDecWord(vb.decoder, vb.use ?? (txB ? txUse(txB) : 'voice'), txB?.sstv, big))].filter(Boolean).join(' · ') : '';
+  const showBPic = bView === 'image' && big && !!p.bPicture;
+  // B's picture grows the box once, as A's does (unless SMALL was chosen for this pick)
+  useEffect(() => { if (p.bPicture && !showA && !sized.current) { setBigPick(true); setMinimised(false); } }, [p.bPicture]);   // eslint-disable-line react-hooks/exhaustive-deps
   const decWord = !confirmed ? 'Tuning…'
     : tlmDec && !p.decLine ? 'listening for telemetry'
     // ★★ beta91: LRPT's own line is the live state (it says a filed pass itself) — never a stale "picture complete"
     : p.pictureDone && imageDec && !(p.picked?.decoder === 'lrpt' && p.decLine) ? 'picture complete — saved to the gallery'
-    : p.decLine || (use === 'image' ? (big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG') : use === 'packet' ? 'listening for packets' : tx?.sstv ? 'listening — an SSTV picture opens here' : '');
+    // ★ beta92: a CW beacon says its CW decoder is listening for the beacon (it said "listening for packets") — satDecWord
+    : p.decLine || satDecWord(p.picked?.decoder, use, tx?.sstv, big);
   // the folded header still says the pick: "ISS · UP · 6:12 left"
   const selRow = sat ? rows.find((r) => r.sat.norad === sat.norad) : undefined;
   const headLine = minimised && sat ? (selRow ? `${sat.name} · ${satWhenText(selRow, now)}` : sat.name) : '';
-  const stateLine = [confirmed ? lockWord : '', decWord].filter(Boolean).join(' · ');
+  const stateLine0 = [confirmed ? lockWord : '', decWord].filter(Boolean).join(' · ');
+  const stateLine = sw ? `VFO A · ${stateLine0 || tx?.label || ''}` : stateLine0;
   // ★ beta91 "In range for 4:12 · heading south" — from the pick's track (time order), only where certain
   const countdown = satCountdownText(sat, now, confirmed ? p.orbit : null);
 
@@ -301,7 +330,23 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   {/* ★ beta91 which frequency is which: the big one is the downlink; the uplink (where to call) under it */}
                   {!!satUplinkText(tx) && <Text style={s.detail}>{`${satUplinkText(tx)} · the frequency above is the downlink`}</Text>}
                   <Text style={s.txt}>{countdown}</Text>
-                  {!!stateLine && <Text style={s.detail}>{stateLine}</Text>}
+                  {!!stateLine && (sw
+                    ? <Pressable onPress={() => setView('A')} accessibilityRole="button" accessibilityState={{ selected: shown === 'A' }}
+                                 accessibilityLabel={`${stateLine}. Show VFO A's decoder in the box`} style={[s.ln, shown === 'A' && s.lnOn]}>
+                        <Text style={[s.detail, s.lnTxt, shown === 'A' && s.lnTxtOn]}>{stateLine}</Text></Pressable>
+                    : <Text style={s.detail}>{stateLine}</Text>)}
+                  {/* ★★★ beta92 B's line (tappable only while the switch exists) and the OPEN IN VFO B key(s) */}
+                  {!!vb && (sw
+                    ? <Pressable onPress={() => setView('B')} accessibilityRole="button" accessibilityState={{ selected: shown === 'B' }}
+                                 accessibilityLabel={`${bLine}. Show VFO B's decoder in the box`} style={[s.ln, shown === 'B' && s.lnOn]}>
+                        <Text style={[s.detail, s.lnTxt, shown === 'B' && s.lnTxtOn]}>{bLine}</Text></Pressable>
+                    : <Text style={s.detail}>{bLine}</Text>)}
+                  {offers.map((o) => (
+                    <View key={o.i} style={s.vbKey}>
+                      <DecoderKey label={`${SAT_VFOB_KEY} · ${o.tx.label}`} onPress={() => p.onVfoB!(sat!.norad, o.i)}
+                                  accessibilityLabel={`Open ${o.tx.label} in VFO B, with its decoder and the same Doppler correction — close it with VFO A/B on the frequency card`} />
+                    </View>
+                  ))}
                 </View>
                 {!!p.rxPos && (
                   <View style={!big ? undefined : { alignSelf: 'stretch' }}>
@@ -315,14 +360,18 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               {/* ★ the picture: mounted from the pick while the decoder draws one (so an ISS SSTV frame's first lines are
                    not lost before the box grows), shown only BIG */}
               {confirmed && imageDec && (
-                <View style={showPic ? s.img : s.hidden}>
+                <View style={showPic && showA ? s.img : s.hidden}>
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))}
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>
               )}
               {/* ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw") */}
-              {confirmed && tlmDec && (
+              {/* ★ beta92 a CW beacon on A: its decoded text, as CW shows it elsewhere */}
+              {confirmed && showA && p.picked?.decoder === 'cw' && (
+                <View style={s.pk}><Text style={s.mono} selectable>{satCwTail(p.cwText ?? '') || 'no characters yet'}</Text></View>
+              )}
+              {confirmed && showA && tlmDec && (
                 <View style={s.pk}>
                   <View style={s.nameRow}>
                     <Text style={[s.mono, { flexShrink: 1 }]}>{satTelemetryHead(p.telemetry ?? null)}</Text>
@@ -341,9 +390,27 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>}
                 </View>
               )}
-              {confirmed && use === 'packet' && !tlmDec && (
+              {confirmed && showA && use === 'packet' && !tlmDec && p.picked?.decoder !== 'cw' && (
                 <View style={s.pk}>
                   {p.packets.length ? p.packets.slice(0, 12).map((l, i) => <Text key={i} style={s.mono} numberOfLines={2}>{l}</Text>)
+                    : <Text style={s.detail}>no packets yet</Text>}
+                </View>
+              )}
+              {/* ★★★ beta92 B's decoder area — only while B's line is the one shown. B's picture canvas is mounted from the
+                   open (so a picture's first lines are not lost), shown only BIG. */}
+              {!!vb && satDecView(vb.decoder) === 'image' && !!p.bImageRef && (
+                <View style={showBPic ? s.img : s.hidden}>
+                  <DecoderImageCanvas ref={p.bImageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))}
+                    decoderName={vb.decoder === 'lrpt' ? 'meteor' : 'sstv'}
+                    onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
+                </View>
+              )}
+              {(bView === 'text' || bView === 'telemetry') && (
+                <View style={s.pk}><Text style={s.mono} selectable>{satCwTail(p.bText ?? '', bView === 'telemetry' ? 6 : 4) || (bView === 'text' ? 'no characters yet' : 'no frames yet')}</Text></View>
+              )}
+              {bView === 'packet' && (
+                <View style={s.pk}>
+                  {p.bPackets?.length ? p.bPackets.slice(0, 12).map((l, i) => <Text key={i} style={s.mono} numberOfLines={2}>{l}</Text>)
                     : <Text style={s.detail}>no packets yet</Text>}
                 </View>
               )}
@@ -423,6 +490,12 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   img:     { marginTop: 4 },
   hidden:  { display: 'none' },
   pk:      { gap: 2, marginTop: 2 },
+  // ★★★ beta92 the line switch: a line is a key only while both have a decoder view; the one shown is lit
+  ln:      { borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'transparent', paddingVertical: 3, minHeight: 30, justifyContent: 'center' },
+  lnOn:    { borderColor: T.accent, backgroundColor: T.rowActive },
+  lnTxt:   { paddingHorizontal: 8 },
+  lnTxtOn: { color: T.value },
+  vbKey:   { alignSelf: 'flex-start', paddingLeft: 8, paddingTop: 2 },
   mono:    { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.value },
   sumRow:  { paddingHorizontal: 10, paddingVertical: 8, minHeight: 36, justifyContent: 'center' },
   sum:     { fontFamily: F, fontSize: 12, letterSpacing: 1, color: T.value },

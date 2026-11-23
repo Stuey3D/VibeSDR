@@ -13,6 +13,8 @@ import {
   satBandLetter, satTxModeLabel, satTxDetail, satRemindOffered, satRemindKeyText, satRemindLead, SatReminders, SAT_REMIND_MAX, satRemindText,
   satRemindWhy, SAT_REMIND_SHARED_WHY, satRemindEnds, parseSatTelemetry, satTelemetryLine, satTelemetryHead, parseSatTrack, globeLabels,
   globeLabelText, GLOBE_RX_DOT, GLOBE_KEY_TEXT, globeArrowPath, GLOBE_ARROW_PX, satHeadingText, satMapOffered, satViaText, satTelemetryMerge, satTelemetryHex, satMapOverlay,
+  parseSatVfoB, satVfoBMsg, SAT_VFOB_OFF_MSG, SAT_VFOB_KEY, satVfoBOffers, satVfoBHz, satDecView, satViewSwitch, satViewShown, satDecWord, satVfoBLine,
+  satCwTail, satTextAppend, type SatInfo,
 } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -442,6 +444,45 @@ console.log('— 1.9 the MAP key');
   ok(globeLandInk('rgb(10, 18, 40)') === '#ffffff', 'land on a dark blue faceplate: white');
   ok(globeLandInk('#f4f1e8') === '#1a1a1a' && globeLandInk('rgb(240,240,240)') === '#1a1a1a', 'land on a light faceplate: near-black');
   ok(globeLandInk('') === '#ffffff' && globeLandInk('transparent') === '#ffffff', 'unknown ground: the dark answer');
+}
+
+// ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md) — the pure half both clients draw from
+{
+  const pk = parseSatPicked({ type: 'sat', state: 'picked', norad: 44909, tx: 0, decoder: '', vfob: [1, 0, -2, 'x', 1.0] });
+  ok(!!pk && JSON.stringify(pk.vfob) === '[1]', `picked.vfob parsed, the pick itself, repeats and junk dropped (${JSON.stringify(pk?.vfob)})`);
+  ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: '' })?.vfob === undefined, 'no vfob = none (an older server: no key)');
+  const on = parseSatVfoB({ type: 'sat_vfob', on: true, norad: 44909, tx: 1, hz: 435605000, mode: 'cw', use: 'packet', label: 'CW beacon', decoder: 'cw', params: {}, shift: -4744.6 });
+  ok(!!on && on.on && on.decoder === 'cw' && on.hz === 435605000 && on.label === 'CW beacon' && JSON.stringify(on.params) === '{}' && on.shift === -4744.6, 'sat_vfob on parsed');
+  const ap = parseSatVfoB({ type: 'sat_vfob', on: true, norad: 25544, tx: 2, decoder: 'aprs', params: { packet: '1200', baud_rate: 1200, 'bad key': 1, nest: { a: 1 } } });
+  ok(JSON.stringify(ap?.params) === '{"packet":"1200","baud_rate":1200}', `the attach parameters kept as the server sent them, nothing else (${JSON.stringify(ap?.params)})`);
+  const rf = parseSatVfoB({ type: 'sat_vfob', on: false, refused: true, norad: 25544, tx: 0, why: 'Outside the radio’s window here' });
+  ok(!!rf && !rf.on && rf.refused === true && /Outside/.test(rf.why || ''), 'a refusal parsed');
+  ok(parseSatVfoB({ type: 'sat', on: true }) === null, 'only sat_vfob');
+  ok(JSON.stringify(satVfoBMsg(44909, 1)) === '{"type":"sat_vfob","norad":44909,"tx":1}' && JSON.stringify(SAT_VFOB_OFF_MSG) === '{"type":"sat_vfob","off":true}', 'the requests');
+  ok(SAT_VFOB_KEY === 'OPEN IN VFO B', 'the key says OPEN IN VFO B');
+  const rs = { id: 'RS-44', name: 'RS-44', norad: 44909, tx: [tx({ label: 'Transponder', hz: 435610000, hiHz: 435670000, mode: 'usb' }), tx({ label: 'CW beacon', hz: 435605000, mode: 'cw' })], passes: [] } as unknown as SatInfo;
+  ok(satVfoBOffers(pk, rs, null).map((o) => `${o.i}:${o.tx.label}`).join() === '1:CW beacon', 'the beacon offered');
+  ok(satVfoBOffers({ ...pk!, vfob: [1] }, rs, on).length === 0, '…and not once it is open in B');
+  ok(satVfoBOffers({ ...pk!, vfob: [1] }, { ...rs, norad: 1 } as SatInfo, null).length === 0 && satVfoBOffers(null, rs, null).length === 0, 'another bird / no pick: nothing');
+  ok(satVfoBOffers({ ...pk!, vfob: [5] }, rs, null).length === 0, 'a downlink the list does not have: nothing');
+  // B's corrected frequency: A's offset × fB / fA (the server's rule)
+  ok(satVfoBHz(435605000, { state: 'TRACK', nominal: 435640000, offset: -4745, time: 'ok' }) === Math.round(435605000 - 4745 * 435605000 / 435640000), 'B\'s frequency with the Doppler at its own frequency');
+  ok(satVfoBHz(145825000, null) === 145825000 && satVfoBHz(145825000, { state: 'OFF', time: 'ok' }) === 145825000, 'no lock: the nominal');
+  // the decoder views and the switch
+  ok(satDecView('sstv') === 'image' && satDecView('lrpt') === 'image' && satDecView('cw') === 'text' && satDecView('aprs') === 'packet' && satDecView('fctlm') === 'telemetry' && satDecView('') === '', 'what each decoder shows');
+  const bA = parseSatVfoB({ type: 'sat_vfob', on: true, norad: 25544, tx: 2, decoder: 'aprs', params: {} });
+  ok(satViewSwitch('sstv', bA) && !satViewSwitch('', bA) && !satViewSwitch('sstv', null) && !satViewSwitch('sstv', { ...bA!, on: false }), 'the switch only while B is open and both lines have a decoder view');
+  ok(satViewShown('sstv', bA, 'A') === 'A' && satViewShown('sstv', bA, 'B') === 'B', 'with the switch: the chosen line');
+  ok(satViewShown('', on, 'A') === 'B', 'A with nothing to decode (a transponder): B\'s decoder is shown');
+  ok(satViewShown('cw', null, 'B') === 'A' && satViewShown('cw', parseSatVfoB({ type: 'sat_vfob', on: true, norad: 1, tx: 0, decoder: '', params: {} }), 'B') === 'A', 'no B, or B with nothing to decode: A, exactly as before');
+  // ★ the fix: a CW beacon is the CW decoder listening, never "listening for packets"
+  ok(satDecWord('cw', 'packet', false, false) === 'CW decoder listening for the beacon', 'a CW beacon: "CW decoder listening for the beacon"');
+  ok(satDecWord('aprs', 'packet', false, false) === 'listening for packets' && satDecWord('fctlm', 'packet', false, false) === 'listening for telemetry'
+     && satDecWord('lrpt', 'image', false, true) === 'waiting for the picture' && satDecWord('', 'voice', true, false) === 'listening — an SSTV picture opens here'
+     && satDecWord('', 'voice', false, false) === '', 'the other words unchanged');
+  ok(satVfoBLine(on!, 'CW beacon', { state: 'TRACK', nominal: 435640000, offset: -4745, time: 'ok' }) === `VFO B · CW beacon · ${satHzText(satVfoBHz(435605000, { state: 'TRACK', nominal: 435640000, offset: -4745, time: 'ok' }))}`, 'B\'s line');
+  ok(satCwTail('VVV\nDE RS44\r\n\nRS44 K\n') === 'VVV\nDE RS44\nRS44 K' && satCwTail('a\nb\nc\nd\ne\nf', 4) === 'c\nd\ne\nf', 'the CW text: the last lines');
+  ok(satTextAppend('x'.repeat(1999), 'yy').length === 1600 && satTextAppend('ab', 'c') === 'abc', 'the text kept bounded');
 }
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nall ${pass} passed`);
