@@ -18080,7 +18080,7 @@ let show = { spots: ${safe(open.layer !== 'aprs')}, aprs: ${safe(open.layer === 
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
  *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
-let decodesToday = -1, notKeptToday = 0, falseToday = 0, srvTotal = 0, srvTrunc = false;
+let decodesToday = -1, notKeptToday = 0, falseToday = 0, srvTotal = 0, srvTrunc = false, spotsSent = 0;
 /* ★★ beta92 THE RADIO FILTER (src/utils/logRadio.ts — the same rule, written out here because this page is its own
  *  document): the store is one per server; each station says which radio(s) heard it, and the server names the radios.
  *  Offered only when 2+ radios hold stations in the window; a view, client-side — a station with no radio (kept before
@@ -18304,6 +18304,7 @@ async function fetchStations(full) {
     if (j.decodesToday != null) decodesToday = Math.max(0, Math.round(okNum(j.decodesToday)));
     notKeptToday = Math.max(0, Math.round(okNum(j.notKeptToday)));
     falseToday = Math.max(0, Math.round(okNum(j.falseToday)));   // ★ beta92: false decodes the server set aside (DIGI-MAP-FILTER.md)
+    spotsSent = Math.max(0, Math.round(okNum(j.spotsSent)));     // ★ beta92: reports sent to PSK Reporter over the window
     if (full) { srvTotal = Math.max(0, Math.round(okNum(j.total))); srvTrunc = okNum(j.truncated) > 0; }
     // ★ beta92 the radios the window holds (every answer carries them for the whole window); a pick gone → all
     radios = cleanRadios(j.radios);
@@ -18715,7 +18716,13 @@ document.getElementById('summary').innerHTML = !show.spots && show.aprs
   ? cell('LATEST', (latest.country || latest.callsign) + ' · ' + latest.band,
          latest.callsign + ' · ' + latest.mode + ' · ' + latest.snr + 'dB') +
     (rarest ? cell('RAREST COUNTRY', rarest[0] + ' (' + rarest[1] + ')', '') : '') +
-    cell('SPOTS', String(spots.length), new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries')
+    /* ★★ beta92 (Stuart 11-23: "it needs to say something like 15000 spots from 3200 transmitters"): a point is a
+     *  TRANSMITTER; a SPOT is a report sent to PSK Reporter over the window (the figure its own pages count). With no
+     *  reports sent (the owner's switch off) the card says transmitters only. */
+    (spotsSent > 0
+      ? cell('SPOTS', spotsSent.toLocaleString('en-GB'), 'from ' + spots.length.toLocaleString('en-GB') + ' transmitters · ' +
+             new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries')
+      : cell('TRANSMITTERS', spots.length.toLocaleString('en-GB'), new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries'))
   : cell('WAITING', 'no spots yet', '');
 
 }

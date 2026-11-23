@@ -6889,6 +6889,8 @@ static vibestations::Store& vsStations() {
         auto& st = vibestations::shared();
         st.configure([] { auto& g = vibe::gallery::shared(); return g.enabled() ? g.dir() : std::string(); },
                      [] { return vibe::gallery::shared().limitBytes(); });
+        // ★★ beta92 the map's SPOTS: each PSK Reporter batch's reports, kept per window beside the stations
+        vibe::spotreport::Reporter::shared().setSentHook([&st](long utc, size_t n) { st.noteSent((int64_t)utc, (uint32_t)n); });
         return st;
     }();
     return s;

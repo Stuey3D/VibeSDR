@@ -102,6 +102,15 @@ int main() {
     }
     std::printf("   %zu real call/grid pairs\n", sizeof ok / sizeof ok[0]);
 
+    std::printf("── 1b. beta92 the call's SHAPE (Stuart 11-23: \"xx2324x … drop it as a corrupted signal\") ──\n");
+    for (const char* c : { "GB100RSGB", "4U1ITU", "E77XX", "3DA0XX", "2E0ABC", "S56A", "1A0KM", "8J1RL", "W1AW", "G4ABC" })
+        CHECK(ce::callShapeOk(c), "%s is shaped like a call", c);
+    for (const char* c : { "GB2324X", "DL12345A", "G4ABCDEF", "W1", "G4AB1", "4U", "ABCD1X" })
+        CHECK(!ce::callShapeOk(c), "%s is not (corrupted)", c);
+    CHECK(ce::judge("GB2324X", "IO92") == ce::kNoEntity, "GB2324X at home: dropped as corrupted, the grid does not save it");
+    CHECK(ce::judge("EA8/G4ABC", "IL18") == ce::kOk && ce::judge("G4ABC/EA8", "IL18") == ce::kOk, "portable: the own call is shape-checked");
+    CHECK(ce::judge("N6LCO", "OC08") == ce::kImplausible, "a real-shaped call with an impossible grid: KEPT, the grid dropped");
+
     std::printf("── 2. Stuart's Pi 500 false decodes (2026-11-22) ──\n");
     CHECK(ce::judge("132XQA", "PC46") == ce::kNoEntity, "132XQA: no administration has 13");
     CHECK(ce::judge("1H7IJH", "EB72") == ce::kNoEntity, "1H7IJH: no administration has 1H");

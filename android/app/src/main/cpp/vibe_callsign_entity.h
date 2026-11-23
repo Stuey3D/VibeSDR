@@ -403,8 +403,32 @@ inline int adminOfPrefix(const std::string& p) {
     return -1;
 }
 
+/** ★★ beta92 (Stuart 11-23): "if the callsign looks implausible like xx2324x … drop it as a corrupted signal". The station's
+ *  own call must be SHAPED like an amateur call: from the end, 1–5 letters (the suffix; 5 for special events such as
+ *  GB100RSGB), then a run of 1–3 digits (the district; special events carry up to 3: GB100…), then a prefix of 1–3
+ *  characters with a letter in it (G, 2E, E7, 3DA, 4U, 1A). Length 3–10. XX2324X (four digits), 132XQA (no prefix),
+ *  W1 (no suffix) are corrupted decodes. ★ A real-shaped call with an impossible GRID is not this: it is kept, the grid
+ *  dropped (an Antarctic scientist, a sailor) — judge()'s kImplausible. */
+inline bool callShapeOk(const std::string& c) {
+    const int n = (int)c.size();
+    if (n < 3 || n > 10) return false;
+    auto letter = [](char ch) { return ch >= 'A' && ch <= 'Z'; };
+    auto digit = [](char ch) { return ch >= '0' && ch <= '9'; };
+    int i = n - 1, suf = 0, dig = 0;
+    while (i >= 0 && letter(c[i])) { --i; ++suf; }
+    if (suf < 1 || suf > 5) return false;
+    while (i >= 0 && digit(c[i])) { --i; ++dig; }
+    if (dig < 1 || dig > 3) return false;
+    const int pre = i + 1;
+    if (pre < 1 || pre > 3) return false;
+    bool hasLetter = false;
+    for (int k = 0; k < pre; ++k) { if (letter(c[k])) hasLetter = true; else if (!digit(c[k])) return false; }
+    return hasLetter;
+}
+
 struct Parsed {
     std::string designator;     ///< what decides the administration ("EA8" in EA8/G4ABC, else the call)
+    std::string base;           ///< ★ beta92 the station's own call (G4ABC in EA8/G4ABC and G4ABC/EA8) — shape-checked
     bool mobile = false;        ///< /MM or /AM — anywhere
     int admin = -1;
 };
@@ -430,6 +454,8 @@ inline Parsed parse(const std::string& in) {
         if (isModifier(parts[i])) continue;
         keep.push_back(parts[i]);
     }
+    // ★ the station's own call: the longer part (a prefix like EA8 or VK0 is the shorter); with one part, that part
+    o.base = keep.size() == 2 && keep[1].size() > keep[0].size() ? keep[1] : keep[0];
     if (keep.size() == 1) o.designator = keep[0];
     else if (keep.size() == 2) o.designator = keep[0].size() < keep[1].size() ? keep[0] : keep[1].size() < keep[0].size() ? keep[1] : keep[0];
     else return o;
@@ -484,6 +510,7 @@ inline Verdict judge(const std::string& call, const std::string& grid, int* admi
     const Parsed p = parse(call);
     if (adminOut) *adminOut = p.admin;
     if (p.admin < 0) return kNoEntity;
+    if (!callShapeOk(p.base)) return kNoEntity;   // ★ beta92 a corrupted call (XX2324X): not a station
     if (grid.empty() || p.mobile) return kOk;
     const Tables& t = tables();
     const AdminRow& a = t.rows[p.admin];

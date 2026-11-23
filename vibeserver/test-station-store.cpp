@@ -139,6 +139,52 @@ static void testDisk() {
     rmDir(d);
 }
 
+/* ★★ beta92 SPOTS SENT (Stuart 11-23: "15000 spots from 3200 transmitters"): reports sent to PSK Reporter, per window,
+ *  shared by every radio's process through stations/sent.dat. */
+static void testSpotsSent() {
+    std::printf("── spots sent (PSK Reporter reports, per window, every radio) ──\n");
+    const std::string d = tmpDir("sent");
+    std::vector<pid_t> kids;
+    for (int p = 0; p < 3; ++p) {   // ★ three radios' processes, each sending batches, flushing into one file
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            vs::Store s([] { return T0 + 7200; }, false);
+            s.configure([d] { return d; }, [] { return 100ull << 20; });
+            for (int b = 0; b < 10; ++b) { s.noteSent(T0 + 7200 - 30 * 60 + b * 60, 10); s.flush(); }   // last half hour: 100
+            s.noteSent(T0 + 7200 - 3 * 3600, 7);                     // 3 h ago (outside 1H, inside 24H)
+            s.noteSent(T0 + 7200 - 3 * vs::kDaySec, 5);              // 3 days ago (7D and ALL only)
+            s.flush();
+            std::_Exit(0);
+        }
+        kids.push_back(pid);
+    }
+    for (pid_t k : kids) { int st = 0; ::waitpid(k, &st, 0); }
+    g_now = T0 + 7200;
+    vs::Store r([] { return g_now; }, false);
+    r.configure([d] { return d; }, [] { return 100ull << 20; });
+    CHECK(r.sentSince(g_now - 3600) == 300, "1H: 3 radios x 100 = 300 (%llu)", (unsigned long long)r.sentSince(g_now - 3600));
+    CHECK(r.sentSince(g_now - vs::kDaySec) == 321, "24H: + 3 x 7 = 321 (%llu)", (unsigned long long)r.sentSince(g_now - vs::kDaySec));
+    CHECK(r.sentSince(vs::dayOf(g_now - 7 * vs::kDaySec)) == 336, "7D: + 3 x 5 = 336 (%llu)", (unsigned long long)r.sentSince(vs::dayOf(g_now - 7 * vs::kDaySec)));
+    CHECK(r.sentSince(0) == 336, "ALL: 336");
+    r.noteSent(g_now - 60, 4);   // this process's, not yet flushed
+    CHECK(r.sentSince(g_now - 3600) == 304, "an unflushed batch counts at once (304)");
+    const std::string j = r.mapJson(3600, 0, NAN, NAN);
+    CHECK(num(j, "spotsSent") == 304, "the map's answer carries spotsSent for its window: %ld", num(j, "spotsSent"));
+    CHECK(fsize(d + "/stations/sent.dat") > 0 && fsize(d + "/stations/sent.dat") < 8192, "sent.dat is small and fixed (%lld B)", (long long)fsize(d + "/stations/sent.dat"));
+    // ★ the ring reuses a slot: a bucket two days and more later replaces the old one, never adds to it
+    r.flush();
+    g_now = T0 + 7200 + 400 * 600;   // 400 buckets later (the fine ring is 288)
+    r.noteSent(g_now - 60, 1); r.flush();
+    CHECK(r.sentSince(g_now - 3600) == 1, "two days on, the 1H window holds only the new batch (%llu)", (unsigned long long)r.sentSince(g_now - 3600));
+    // ★ no gallery (RAM only): still counted, still bounded
+    vs::Store m([] { return g_now; }, false);
+    for (int i = 0; i < 5000; ++i) m.noteSent(g_now - (int64_t)i * 600, 1);
+    { const uint64_t h = m.sentSince(g_now - 3600);
+      CHECK(h == 6 || h == 7, "RAM only: the last hour's batches, to the 10-minute bucket (%llu)", (unsigned long long)h); }
+    CHECK(m.sentSince(0) <= 5000 && m.sentSince(0) >= 280, "RAM only: bounded — the fine ring keeps two days, the days kKeepDays");
+    rmDir(d);
+}
+
 static void testProcesses() {
     std::printf("── four processes flushing one day ──\n");
     const std::string d = tmpDir("procs");
@@ -514,6 +560,7 @@ int main(int argc, char** argv) {
     testRamOnly();
     testDisk();
     testProcesses();
+    testSpotsSent();
     testRadios();
     testWindows();
     testBounds();

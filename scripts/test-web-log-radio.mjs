@@ -75,6 +75,12 @@ rows.forEach(([call, grid, mask], i) => {
 });
 fs.mkdirSync(path.join(gdir, 'stations'));
 fs.writeFileSync(path.join(gdir, 'stations', dayName), buf);
+// ★ beta92 the map's SPOTS: stations/sent.dat (vibe_station_store.h SentFile) — 1234 reports sent 2 minutes ago
+{ const kFine = 288, kDays = 400, sb = Buffer.alloc(8 + 8 * (kFine + kDays));
+  sb.writeUInt32LE(0x544e4553, 0); sb.writeUInt32LE(1, 4);
+  const bucket = Math.floor((now - 120) / 600); sb.writeUInt32LE(bucket, 8 + 8 * (bucket % kFine)); sb.writeUInt32LE(1234, 12 + 8 * (bucket % kFine));
+  const dkey = Math.floor((now - 120) / 86400); const o = 8 + 8 * kFine + 8 * (dkey % kDays); sb.writeUInt32LE(dkey, o); sb.writeUInt32LE(1234, o + 4);
+  fs.writeFileSync(path.join(gdir, 'stations', 'sent.dat'), sb); }
 
 const rtlPort = await freePort(), port = await freePort(), cdp = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
@@ -111,6 +117,7 @@ try {
   const by = Object.fromEntries((st.stations || []).map((s) => [s.call, (s.radios || []).join(',')]));
   ok(by.G4BOTH === `${A},${B}` && by.G4AONE === A && by.M0BONE === B && by.OH2OLD === '', `stations.json: who heard each (${JSON.stringify(by)})`);
   ok((st.radios || []).map((r) => `${r.name}:${r.n}`).join(' ') === 'HF loop:2 VHF discone:2' && st.radioUnknown === 1, `stations.json radios (${JSON.stringify(st.radios)})`);
+  ok(st.spotsSent === 1234, `stations.json spotsSent: the reports sent over the window (${st.spotsSent})`);
   const stB = await fetch(`${H}/vibeserver/stations.json?window=24h&radio=${B}`).then((r) => r.json());
   ok(stB.stations.map((s) => s.call).sort().join(' ') === 'G4BOTH M0BONE OH2OLD', `stations.json radio=VHF (${stB.stations.map((s) => s.call).join(' ')})`);
 
@@ -171,6 +178,9 @@ try {
     for (let i = 0; i < 40; i++) { m = await mstate(); if (m.rads) break; await sleep(250); }
     ok(m.rads === 'ALL RADIOS* | HF loop · 2 | VHF discone · 2', `the radio keys (${m.rads})`);
     ok(m.calls === 'G4AONE G4BOTH M0BONE OH2OLD', `ALL: every station (${m.calls})`);
+    // ★★ beta92 (Stuart 11-23): the card says SPOTS (reports sent) FROM the transmitters (the points)
+    const card = await mev(`(document.getElementById('summary') || {}).textContent || ''`);
+    ok(/SPOTS\s*1,234\s*from 4 transmitters/.test(card), `the card: 1,234 spots from 4 transmitters (${card})`);
     await mev(`document.querySelector('#rads [data-radio="${A}"]').click()`);
     for (let i = 0; i < 20; i++) { m = await mstate(); if (!/M0BONE/.test(m.calls)) break; await sleep(150); }
     ok(m.calls === 'G4AONE G4BOTH OH2OLD' && /HF loop · 2\*/.test(m.rads || ''), `HF loop: its two + the old one (${m.calls})`);

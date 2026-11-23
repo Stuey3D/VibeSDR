@@ -358,7 +358,13 @@ int main() {
         rp.setUdp([](const std::string&, int, const std::vector<uint8_t>&, std::string&) { return true; });
         rp.setHttpGet([&](const std::string& u) { ++asked; url = u; return std::string("{\"call\":\"G4ABC\",\"psk\":{\"fetched\":1800000000,\"bands\":{\"40m\":{\"reports\":5}}}}"); });
         rp.configure(c);
+        // ★ beta92 the map's SPOTS: the sent hook hears each delivered batch's report count, after the lock is let go
+        long hookUtc = 0; size_t hookN = 0;
+        rp.setSentHook([&](long u, size_t n) { hookUtc = u; hookN += n; (void)rp.pendingCount(); /* would deadlock if still held */ });
         Spot s; s.mode = "FT8"; s.call = "DL1XYZ"; s.rfHz = 7074500; s.slotUtc = now; rp.note(s); rp.flushNow();
+        CHECK(hookN == 1 && hookUtc == now, "the sent hook: 1 report at the batch's time");
+        rp.note(s); rp.flushNow();
+        CHECK(hookN == 1, "a repeat within 4 minutes is not a report, and not a spot");
         const std::string agg = aggregateStatus(dir, (long)std::time(nullptr));
         CHECK(agg.find("\"on\":true") != std::string::npos && agg.find("\"sentHour\":1") != std::string::npos && agg.find("\"label\":\"HF loop\"") != std::string::npos,
               "the setup page's line from this process's status file (1 spot in the hour, the radio named)");

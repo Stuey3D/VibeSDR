@@ -1408,6 +1408,7 @@ private:
         o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
         o.json = [this](const std::string& j) { broadcastText(j); };
         o.spot = [this](const cw::Spot& sp, double rfHz) {
+            if (falseCall_("CW", sp.call, std::isfinite(sp.snrDb) ? (int)std::lround(sp.snrDb) : 0, rfHz, sp.utcMs / 1000)) return;
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, sp.wpm, sp.snrDb, sp.how);
             /* ★★ V12 beta90 PSK REPORTER takes CW too (Stuart 2026-11-21: "yes cw skimmer should go") — a listener's CW
@@ -1436,6 +1437,15 @@ private:
         log(skimmer ? "decoder attached: CW skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: CW"));
     }
     /** ★ One skimmer spot to PSK Reporter — the CW path's guards (a finite RF above 0, a NaN SNR as 0, the slot = now). */
+    /** ★★ beta92 THE FALSE-DECODE FILTER FOR THE SKIMMERS (Stuart 11-23: "digimap should also include cw and rtty") — the
+     *  same judgement as FT8's emitSpot (vibe_callsign_entity.h): a call no administration has, or one not shaped like a
+     *  call (XX2324X), is a corrupted decode — the store counts it (falseToday) and nothing else hears of it (summary,
+     *  PSK Reporter, the map). The skimmers send no grid, so the grid half never applies here. */
+    bool falseCall_(const std::string& mode, const std::string& call, int snr, double rfHz, int64_t utc) {
+        if (vibe::callentity::judge(call, std::string()) != vibe::callentity::kNoEntity) return false;
+        toStations_(mode, call, std::string(), snr, rfHz, utc);
+        return true;
+    }
     static void noteReporter_(const std::string& mode, const std::string& call, double snrDb, double rfHz) {
         if (!(std::isfinite(rfHz) && rfHz > 0)) return;
         vibe::spotreport::Spot rs;
@@ -1458,6 +1468,7 @@ private:
         o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
         o.json = [this](const std::string& j) { broadcastText(j); };
         o.spot = [this](const psk::Spot& sp, double rfHz) {
+            if (falseCall_(sp.mode.empty() ? std::string("PSK31") : sp.mode, sp.call, (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000)) return;
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
             // ★★ V12 beta90: PSK Reporter too (its own rules: the owner's switch + callsign, plausible calls only, each station
@@ -1489,6 +1500,7 @@ private:
         o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
         o.json = [this](const std::string& j) { broadcastText(j); };
         o.spot = [this](const rttysk::Spot& sp, double rfHz) {
+            if (falseCall_("RTTY", sp.call, (int)std::lround(sp.snrDb), rfHz, sp.utcMs / 1000)) return;
             DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
             // ★★ V12 beta90 (Stuart: the per-band skimmers feed PSK Reporter 24/7): the listener's RTTY skimmer and background

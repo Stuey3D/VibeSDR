@@ -485,6 +485,9 @@ public:
     void setPost(HttpPost fn) { std::lock_guard<std::mutex> l(m_); post_ = std::move(fn); }
     void setHttpGet(HttpGet fn) { std::lock_guard<std::mutex> l(m_); get_ = std::move(fn); }
     void setRandomSeed(uint64_t s) { std::lock_guard<std::mutex> l(m_); rng_.seed(s); }
+    /** ★ beta92 told the number of reports each batch delivered (the station store's spotsSent). */
+    using SentHook = std::function<void(long utc, size_t reports)>;
+    void setSentHook(SentHook h) { std::lock_guard<std::mutex> l(m_); sentHook_ = std::move(h); }
     /** ★ Where this process writes its status line for the setup page (the runtime dir every radio process shares). */
     void setStatusDir(const std::string& d) { std::lock_guard<std::mutex> l(m_); statusDir_ = d; }
     void setRadioLabel(const std::string& s) { std::lock_guard<std::mutex> l(m_); label_ = cleanText(s, 40); }
@@ -694,6 +697,8 @@ private:
         while (!hour_.empty() && now - hour_.front().first >= 3600) hour_.pop_front();
         while (!whour_.empty() && now - whour_.front().first >= 3600) whour_.pop_front();
         writeStatusLocked_();
+        // ★★ beta92 the map's SPOTS: what this batch carried, told AFTER our lock is released (the store calls into us)
+        if (recs && err.empty() && sentHook_) { const SentHook h = sentHook_; l.unlock(); h(now, recs); l.lock(); }   // ★ the caller goes on holding it
     }
 
     std::string statusJsonLocked_() const {
@@ -736,6 +741,7 @@ private:
     }
 
     mutable std::mutex m_;
+    SentHook sentHook_;
     Config cfg_;
     std::function<long()> clock_;
     UdpSend udp_;

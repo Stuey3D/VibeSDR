@@ -392,6 +392,41 @@ public:
 
     /** Write what changed now (the flusher every kFlushSec; a test; shutdown). Never from a decode or DSP thread. */
     void flush() { std::lock_guard<std::mutex> fl(flushMtx_); flush_(); }
+
+    /* ── ★★ beta92 SPOTS SENT (Stuart 11-23: "it needs to say something like 15000 spots from 3200 transmitters") ──────
+     *  A map point is a TRANSMITTER; a SPOT is one report sent to PSK Reporter (each call + band + mode at most once a
+     *  batch — the figure PSK Reporter's own pages count). The reporter tells the store what each batch carried; the
+     *  store keeps it in stations/sent.dat, shared by every radio's process (flock, added in place like the day header):
+     *  10-minute buckets for the last two days (the 1H and 24H windows) and day totals for kKeepDays (7D and longer,
+     *  which start on a day boundary). ~5.5 KB, fixed. */
+    static constexpr int kSentFine = 288, kSentFineSec = 600, kSentDays = kKeepDays;
+    void noteSent(int64_t utc, uint32_t n) {
+        if (n == 0 || utc <= 0) return;
+        std::lock_guard<std::mutex> lk(m_);
+        sentFine_[utc / kSentFineSec] += n;
+        sentDay_[dayOf(utc)] += n;
+        // ★ bounded even with no gallery (nothing flushes): drop what no window can ask for
+        while (!sentFine_.empty() && sentFine_.begin()->first < sentFine_.rbegin()->first - kSentFine) sentFine_.erase(sentFine_.begin());
+        while (!sentDay_.empty() && sentDay_.begin()->first < sentDay_.rbegin()->first - (int64_t)kSentDays * kDaySec) sentDay_.erase(sentDay_.begin());
+    }
+    /** Reports sent from `since` to now: every radio's (the file) plus this process's not yet flushed. */
+    uint64_t sentSince(int64_t since) const {
+        const int64_t t = now();
+        const bool fine = since > 0 && t - since <= (int64_t)(kSentFine - 1) * kSentFineSec;
+        uint64_t n = 0;
+        const std::string dir = storeDir_();
+        if (!dir.empty()) {
+            SentFile f;
+            if (readSent_(dir + "/sent.dat", f)) {
+                if (fine) { for (const auto& b : f.fine) if (b.key && (int64_t)b.key * kSentFineSec + kSentFineSec > since) n += b.n; }
+                else      { for (const auto& b : f.day)  if (b.key && (int64_t)b.key * kDaySec >= dayOf(std::max<int64_t>(0, since))) n += b.n; }
+            }
+        }
+        std::lock_guard<std::mutex> lk(m_);
+        if (fine) { for (const auto& kv : sentFine_) if (kv.first * kSentFineSec + kSentFineSec > since) n += kv.second; }
+        else      { for (const auto& kv : sentDay_) if (kv.first >= dayOf(std::max<int64_t>(0, since))) n += kv.second; }
+        return n;
+    }
     void stop() {
         { std::lock_guard<std::mutex> lk(thMtx_); run_ = false; }
         cv_.notify_all();
@@ -480,6 +515,9 @@ public:
            + (filtering ? ",\"radio\":\"" + radio + "\"" : std::string())
            // ★★ beta92 the false-decode filter (docs/v12/DIGI-MAP-FILTER.md): what it set aside today, said, never silent
            + ",\"falseToday\":" + std::to_string((unsigned long long)falseToday)
+           // ★★ beta92 reports sent to PSK Reporter over this window (a SPOT, as PSK Reporter counts them — the points are
+           //    transmitters)
+           + ",\"spotsSent\":" + std::to_string((unsigned long long)sentSince(window > 0 ? since : 0))
            + ",\"unlocatedToday\":" + std::to_string((unsigned long long)unlocToday)
            + ",\"byMode\":{";
         bool first = true;
@@ -702,6 +740,16 @@ private:
                     r.flushed = r.s.count; r.dirty = false;   // ★ optimistic: put back below if the write fails
                 }
         }
+        std::map<int64_t, uint32_t> sentFine, sentDay;   // ★ beta92 reports sent since the last flush
+        { std::lock_guard<std::mutex> lk(m_); sentFine.swap(sentFine_); sentDay.swap(sentDay_); }
+        if (!sentFine.empty() || !sentDay.empty()) {
+            ::mkdir(dir.c_str(), 0755);
+            if (!writeSent_(dir + "/sent.dat", sentFine, sentDay)) {   // put back: counted on the next flush
+                std::lock_guard<std::mutex> lk(m_);
+                for (const auto& kv : sentFine) sentFine_[kv.first] += kv.second;
+                for (const auto& kv : sentDay) sentDay_[kv.first] += kv.second;
+            }
+        }
         if (jobs.empty() && refused.empty()) return;
         ::mkdir(dir.c_str(), 0755);
         std::map<int64_t, std::vector<const Job*>> byDay;
@@ -799,6 +847,37 @@ private:
     std::atomic<bool> enabled_{ true }, haveDir_{ false };
     mutable std::mutex m_;
     std::map<int64_t, Table> days_;
+    std::map<int64_t, uint32_t> sentFine_, sentDay_;   ///< ★ beta92 reports sent, not yet flushed (10-min bucket / day → n)
+#pragma pack(push, 1)
+    struct SentSlot { uint32_t key = 0, n = 0; };     ///< key: the bucket (utc / 600) or the day (utc / 86400); 0 = empty
+    struct SentFile { uint32_t magic = 0, ver = 0; SentSlot fine[kSentFine]; SentSlot day[kSentDays]; };
+#pragma pack(pop)
+    static constexpr uint32_t kSentMagic = 0x544e4553u;   // "SENT"
+    static bool readSent_(const std::string& path, SentFile& f) {
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return false;
+        ::flock(fd, LOCK_SH);
+        const bool ok = ::pread(fd, &f, sizeof f, 0) == (ssize_t)sizeof f && f.magic == kSentMagic;
+        ::flock(fd, LOCK_UN); ::close(fd);
+        return ok;
+    }
+    /** Add this process's unflushed counts into the file, in place, under its lock. */
+    static bool writeSent_(const std::string& path, const std::map<int64_t, uint32_t>& fine, const std::map<int64_t, uint32_t>& day) {
+        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (fd < 0) return false;
+        ::flock(fd, LOCK_EX);
+        SentFile f;
+        if (::pread(fd, &f, sizeof f, 0) != (ssize_t)sizeof f || f.magic != kSentMagic) { f = SentFile{}; f.magic = kSentMagic; f.ver = 1; }
+        auto add = [](SentSlot* ring, int size, int64_t key, uint32_t n) {
+            SentSlot& sl = ring[key % size];
+            if ((int64_t)sl.key == key) sl.n += n; else { sl.key = (uint32_t)key; sl.n = n; }   // ★ an old slot is reused
+        };
+        for (const auto& kv : fine) add(f.fine, kSentFine, kv.first, kv.second);
+        for (const auto& kv : day) add(f.day, kSentDays, kv.first / kDaySec, kv.second);
+        const bool ok = ::pwrite(fd, &f, sizeof f, 0) == (ssize_t)sizeof f;
+        ::flock(fd, LOCK_UN); ::close(fd);
+        return ok;
+    }
     uint64_t spots_ = 0;
     std::mutex lsMtx_;
     std::vector<std::pair<int, Listener>> listeners_;
