@@ -85,6 +85,7 @@
 #include "vibe_bgdecode_config.h"   // ★★ V12 background decoding: the save-time validation
 #include "vibe_bgdecode_band.h"     // ★ …and where a Band digital-spots VFO's slice goes (the registry is linked here)
 #include "vibe_gallery.h"           // ★★ V12 the gallery's disk figures for the setup page
+#include "vibe_log_radio.h"         // ★★ V12 beta92 which radio heard each log entry (the logs' RADIO filter)
 #include "vibe_bands.h"
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
@@ -5565,6 +5566,32 @@ int main(int argc, char** argv) {
             LocalSdrShim::setAircraftShareDir(handoffDir());
             LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
             LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
+            /* ★★ V12 beta92 WHICH RADIO HEARD IT (vibe_log_radio.h, docs/v12/LOG-RADIO-FILTER.md): every log entry this
+             *  process writes (gallery items, station-store rows) carries this radio's ID — radioId(serial), never the
+             *  serial — and the log APIs name the machine's radios as the landing list does, so a listener can filter a
+             *  server-wide log by radio. Always set (one radio too): entries made now are tagged when a second arrives.
+             *  The front door writes nothing, so it has no id. The names are re-read when the config file changes. */
+            vibe::logradio::setMine(mine && !frontDoorOnly ? vsconfig::radioId(mine->serial) : std::string());
+            vibe::logradio::setMachineRadios([]() -> std::vector<vibe::logradio::Named> {
+                static std::mutex mtx;
+                static long long stamp = -1;
+                static std::vector<vibe::logradio::Named> cached;
+                std::lock_guard<std::mutex> lk(mtx);
+                struct stat st{};
+                const long long now = ::stat(g_configPath.c_str(), &st) == 0 ? (long long)st.st_mtime * 1000000000LL + (long long)st.st_size : 0;
+                if (now != stamp || stamp < 0) {
+                    vsconfig::ServerConfig srv; std::string err;
+                    if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
+                    cached.clear();
+                    for (size_t i : vsconfig::displayOrder(srv)) {   // ★ the owner's order, as the landing cards
+                        const auto& r = srv.radios[i];
+                        if (r.serial.empty()) continue;   // ★ a removed / disabled radio's entries still get its name
+                        cached.push_back({ vsconfig::radioId(r.serial), vsconfig::publicLabel(r.label.empty() ? r.driver : r.label) });
+                    }
+                    stamp = now;
+                }
+                return cached;
+            });
             // ★★ V12 beta90 PSK REPORTER: this radio's spots under the machine's receiver callsign (a front door decodes
             //    nothing, so it reports nothing — it reads the radios' status files for the setup page, and keeps the ranking for
             //    the gallery it serves).
