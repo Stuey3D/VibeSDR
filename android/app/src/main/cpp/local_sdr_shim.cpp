@@ -11385,6 +11385,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         if (sk && sk->isOpen()) sendText(sk, msgOut);
                     }
                 }
+                satVfoBTick();   // ★★ beta92 each satellite VFO B follows its pick's lock (A's shift × fB / fA)
                 // ★ brief §9 TRAP: nobody here — an arm more than 30 min from its AOS goes (active locks run to LOS)
                 if (specListenerCount() == 0)
                     for (const auto& k : satEngine().dropOrphanArms(clk)) if (k == kSatShared) satSharedShift_.store(0.0);
@@ -11522,9 +11523,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!tx.modeName.empty()) m += ",\"modeName\":\"" + vibe::sat::jsonEsc(tx.modeName) + "\"";
         }
         if (!decoderWhy.empty()) m += ",\"decoderWhy\":\"" + vibe::sat::jsonEsc(decoderWhy) + "\"";
-        m += ",\"time\":\"" + satEngine().timeState(satClock()) + "\"}";
-        if (key == kSatShared) { for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m); }
-        else sendText(sock, m);
+        const std::string tail = ",\"time\":\"" + satEngine().timeState(satClock()) + "\"}";
+        // ★★ beta92 "vfob": the other downlinks of this bird THIS listener may open in VFO B now (satVfoBOfferJson)
+        if (key == kSatShared) { for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m + satVfoBOfferJson(k, p) + tail); }
+        else sendText(sock, m + satVfoBOfferJson(sock, p) + tail);
     }
     /** A refusal of a SATELLITE op — the existing OFF shape, with `op` so the box knows which press it answers. */
     void satRefuse(const std::shared_ptr<net::Socket>& sock, const char* op, const std::string& why) {
@@ -11571,6 +11573,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Forget `key`'s pick and detach what it attached — only while that host still runs the very decoder the pick
      *  started (the listener may have replaced it with their own since: then it is theirs, and stays). */
     void satDetachPick(const std::string& key) {
+        // ★★ beta92: a VFO B opened on another downlink of this pick closes with it (a new pick, the drop, the listener gone)
+        satVfoBCloseFor(key, "The satellite pick changed \xe2\x80\x94 VFO B closed");
         SatPick p;
         { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it == satPicks_.end()) return; p = it->second; satPicks_.erase(it); }
         if (p.decoderKey.empty()) return;
@@ -11666,6 +11670,216 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         for (auto& k : gone) satDetachPick(k);
+        satVfoBSweep();   // ★★ beta92: a satellite VFO B whose channel has gone (its listener left) is forgotten
+    }
+
+    // ══ ★★★ beta92 SATELLITE "OPEN IN VFO B" (docs/v12/SAT-VFOB.md — Stuart, 2026-11-22: "if i am on the transponder the
+    //     beacon could have an open in vfo b button. only needs one window as transponder is audio only and the orbit is
+    //     the same as its the same satellite") ══════════════════════════════════════════════════════════════════════
+    /* While a listener has PICKED one downlink of a satellite, any OTHER downlink of the same bird that fits inside the
+     * current capture (with its whole Doppler swing) may be opened in VFO B: the ordinary VFO B (handleWatch — every
+     * rule a VFO B has: the window, FM broadcast, the slots, the shared-dial contract: B NEVER moves a shared dial), the
+     * decoder that downlink's use needs on THIS listener's VFO B host (watchDecBKey — the same host a decoder socket's
+     * "vfo":"B" attach uses), and B Doppler-corrected from the SAME pass: A's shift scaled to B's own frequency
+     * (shift × fB / fA — a Doppler shift is proportional to the frequency, and so is a receiver's clock error the loop's
+     * trim follows), applied to B's oscillator by the tracker at its 25 Hz (WatchChannel::setShiftHz). The dial B
+     * reports stays on the nominal, as A's does.
+     *   · Picking one downlink at a time is EXACTLY as before: nothing here runs until `sat_vfob` is asked for.
+     *   · B goes with its usual off (watch off), with a new pick or the drop (satDetachPick), with its listener; each
+     *     time the listener is told `{"type":"sat_vfob","on":false,"why":…}`, and the decoder the open attached stops
+     *     quietly (it is not a "VFO B closed — start it again" refusal: the box knows).
+     *   · Not in ask-before-tuning's kGated (it moves nobody's dial — a VFO B is the listener's own); in the scan lock's
+     *     kLocked, as `watch` is. */
+    struct SatVfoB {
+        std::string pickKey;               // the pick it belongs to (the listener's session, or kSatShared)
+        long long norad = 0; int tx = -1;
+        double nominalHz = 0;              // B's dial (the downlink's tuneHzOf)
+        double shiftHz = 0;                // the last shift applied
+        std::string decoder, decoderKey;   // what the open attached on the B host ("" = none)
+    };
+    std::mutex satVfoBMtx_;
+    std::map<std::string, SatVfoB> satVfoB_;   // keyed by the listener's session
+    /** May THIS listener open downlink `tx` of the bird `sd` in VFO B now? "" = yes, else why (in words). */
+    std::string satVfoBWhyNot(const std::shared_ptr<net::Socket>& sock, const std::string& sess, const vibe::sat::Transmitter& tx) {
+        if (sess.empty()) return "VFO B needs a listening session";
+        if (tx.labelOnly()) return "That downlink is only named on the waterfall";
+        if (const std::string w = watchWhyNotFor(sock); !w.empty()) return w;
+        if (g_scanLock.load() && !adminNow(sock)) return "The owner's band scan is running on this receiver";
+        if (const std::string rw = vsSatReachWhy(tx.hz, tx.passband() ? tx.hiHz : tx.hz); !rw.empty()) return rw;
+        const double hz = vibe::sat::tuneHzOf(tx);
+        if (hz >= kFmBandLoHz && hz <= kFmBandHiHz) return "VFO B cannot be tuned into the FM broadcast band (87.5 to 108 MHz)";
+        const std::string md = vibe::sat::listenModeOf(tx);
+        const auto mp = paramsFor(md);
+        const double bw = vibedsp::RxPipeline::clampBwHz(rxModeFor(mp), mp.bandwidth);
+        // ★ the whole pass must fit: the largest LEO Doppler at this frequency (~2.7e-5·f) + the trim clamp, as A's lock
+        const double swing = hz * 2.7e-5 + vibe::sat::Engine::kTrimClampHz + bw * 0.5;
+        double lo = 0, hi = 0; watchWindow(lo, hi);
+        if (hz - swing < lo || hz + swing > hi) {
+            char b[200];
+            snprintf(b, sizeof b, "Outside the radio's window here (%.3f to %.3f MHz) with its Doppler", lo / 1e6, hi / 1e6);
+            return b;
+        }
+        // ★ a VFO B takes a listener's place on a radio with a limit (handleWatch's rule) — no key when there is none
+        const int maxUsers = g_vsMaxUsers.load();
+        double bh = 0; std::string bm;
+        if (maxUsers > 1 && !watchBOf(sess, bh, bm) && specListenerCount() + watchTotal() + 1 > maxUsers)
+            return "The server is full — VFO B takes a listener's place";
+        return std::string();
+    }
+    /** `,"vfob":[i,…]` — the downlinks of the pick's bird THIS listener may open in VFO B now (none = the field absent). */
+    std::string satVfoBOfferJson(const std::shared_ptr<net::Socket>& sock, const SatPick& p) {
+        vibe::sat::SatDef sd; vibe::sat::Transmitter t0;
+        if (!satEngine().txAt(p.norad, p.tx, sd, t0)) return std::string();
+        const std::string sess = sessionOfSock(sock.get());
+        std::string j;
+        for (int k = 0; k < (int)sd.tx.size(); ++k) {
+            if (k == p.tx) continue;
+            if (!satVfoBWhyNot(sock, sess, sd.tx[(size_t)k]).empty()) continue;
+            j += (j.empty() ? "" : ",") + std::to_string(k);
+        }
+        return j.empty() ? std::string() : ",\"vfob\":[" + j + "]";
+    }
+    void satVfoBRefuse(const std::shared_ptr<net::Socket>& sock, long long norad, int tx, const std::string& why) {
+        sendText(sock, "{\"type\":\"sat_vfob\",\"on\":false,\"refused\":true,\"norad\":" + std::to_string(norad) + ",\"tx\":" + std::to_string(tx)
+                       + ",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"}");
+    }
+    /** B's shift from the pick's lock now: A's shift × fB / fA while the lock tracks; `keep` otherwise (frozen, as A). */
+    double satVfoBShiftNow(const std::string& pickKey, long long norad, double nominalB, double keep) {
+        const vibe::sat::Track t = satEngine().selected(pickKey);
+        if (t.norad != norad || !(t.nominalHz > 0)) return keep;
+        if (t.state != vibe::sat::LockState::Track && t.state != vibe::sat::LockState::Coast) return keep;
+        return t.shiftHz * nominalB / t.nominalHz;
+    }
+    /** {"type":"sat_vfob","norad":N,"tx":i} — open that downlink in VFO B; {"type":"sat_vfob","off":true} — close it. */
+    void satVfoBControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        const std::string sess = sessionOfSock(sock.get());
+        if (jsonOn(msg, "off")) {
+            if (std::shared_ptr<WatchSet> w = watchFind(sess)) watchRemove(w, 1, "VFO B was closed");
+            else sendText(sock, "{\"type\":\"sat_vfob\",\"on\":false,\"why\":\"\"}");
+            return;
+        }
+        double nv = 0, tv = -1;
+        jsonNum(msg, "norad", nv); jsonNum(msg, "tx", tv);
+        const long long norad = (long long)nv; const int txi = (int)tv;
+        vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
+        if (!(nv > 0) || tv < 0 || tv != std::floor(tv) || !satEngine().txAt(norad, txi, sd, tx)) {
+            satVfoBRefuse(sock, norad, txi, "That satellite or downlink is not in this server's list"); return;
+        }
+        std::string key, session; std::shared_ptr<ClientDsp> me;
+        if (!satPickKey(sock, key, session, me)) { satVfoBRefuse(sock, norad, txi, "VFO B needs a listening session"); return; }
+        SatPick p; bool have = false;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it != satPicks_.end()) { p = it->second; have = true; } }
+        if (!have) { satVfoBRefuse(sock, norad, txi, "Pick a satellite first"); return; }
+        if (p.norad != norad) { satVfoBRefuse(sock, norad, txi, "VFO B opens another downlink of the satellite you picked"); return; }
+        if (p.tx == txi) { satVfoBRefuse(sock, norad, txi, "That downlink is the one you picked — it is on VFO A"); return; }
+        if (const std::string why = satVfoBWhyNot(sock, sess, tx); !why.empty()) { satVfoBRefuse(sock, norad, txi, why); return; }
+        // a VFO B already open on another downlink of this pick: its decoder goes first (the channel is re-aimed below)
+        SatVfoB old; bool hadOld = false;
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); auto it = satVfoB_.find(sess); if (it != satVfoB_.end()) { old = it->second; hadOld = true; satVfoB_.erase(it); } }
+        if (hadOld) satVfoBStopDecoder(sess, old);
+        // 1. ★ the ordinary VFO B — every rule handleWatch has (the window, FM broadcast, the slots); never moves a shared dial
+        const double hz = vibe::sat::tuneHzOf(tx);
+        const std::string md = vibe::sat::listenModeOf(tx);
+        handleWatch(sock, "{\"type\":\"watch\",\"id\":1,\"frequency\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\"}");
+        double bh = 0; std::string bm;
+        std::shared_ptr<vibewatch::WatchChannel> ch;
+        if (std::shared_ptr<WatchSet> w = watchFind(sess)) { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == 1) ch = c; }
+        if (!ch || !watchBOf(sess, bh, bm) || std::fabs(bh - hz) > 0.5 || bm != md) {
+            // ★ a VFO B left on the previous downlink must not keep that downlink's shift with nothing steering it
+            if (hadOld) { if (std::shared_ptr<WatchSet> w = watchFind(sess)) watchRemove(w, 1, "VFO B could not be moved to that downlink"); }
+            satVfoBRefuse(sock, norad, txi, "VFO B could not be put on that downlink here"); return;
+        }
+        SatVfoB e; e.pickKey = key; e.norad = norad; e.tx = txi; e.nominalHz = hz;
+        e.shiftHz = satVfoBShiftNow(key, norad, hz, 0.0);
+        ch->setShiftHz(e.shiftHz);
+        // 2. the decoder this downlink's use needs, on THIS listener's VFO B host (the same gates as any decoder)
+        std::string params, decoderWhy;
+        const std::string ext = vibe::sat::decoderOf(tx, params);
+        if (!ext.empty()) {
+            decoderWhy = satAttachB(sess, ext, params, e.decoderKey);
+            if (decoderWhy.empty()) e.decoder = ext;
+        }
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); satVfoB_[sess] = e; }
+        satEnsureTracker();
+        LOGI("[sat] %.8s opened %s %s in VFO B (%.3f MHz %s, shift %+.1f Hz, decoder %s)", sess.c_str(), sd.name.c_str(), tx.label.c_str(),
+             hz / 1e6, md.c_str(), e.shiftHz, e.decoder.empty() ? "none" : e.decoder.c_str());
+        std::string m = "{\"type\":\"sat_vfob\",\"on\":true,\"norad\":" + std::to_string(norad) + ",\"tx\":" + std::to_string(txi)
+                      + ",\"hz\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\",\"use\":\"" + vibe::sat::useOf(tx)
+                      + "\",\"label\":\"" + vibe::sat::jsonEsc(tx.label) + "\",\"decoder\":\"" + e.decoder + "\""
+                      + ",\"params\":{" + (e.decoder.empty() ? std::string() : params) + "}"
+                      + ",\"shift\":" + vibe::sat::fmtNum(e.shiftHz, 1);
+        if (!decoderWhy.empty()) m += ",\"decoderWhy\":\"" + vibe::sat::jsonEsc(decoderWhy) + "\"";
+        sendText(sock, m + "}");
+    }
+    /** satAttach's twin for VFO B: this listener's B host (watchDecBKey), the same gates (the owner's switch, reach, the
+     *  decoder slots and background decoding yielding). "" = started; else why not. A client's "vfo":"B" attach with the
+     *  same decoder and parameters later JOINS it (DecoderHost::start). */
+    std::string satAttachB(const std::string& sess, const std::string& ext, const std::string& params, std::string& keyOut) {
+        keyOut.clear();
+        if (decoderOnly) return "This server does not run decoders for listeners";
+        if (decoderBlocked(ext)) return "The server owner has switched this decoder off on this receiver";
+        if (const std::string why = vsDecoderWhyNot(ext); !why.empty()) return why;
+        std::shared_ptr<DecoderHost> host = decoders_.hostFor(watchDecBKey(sess), true);
+        const std::string am = vibe::sat::decoderAttachMsg(ext, params);
+        DecoderHost::Start r = host->start(ext, am);
+        if (r == DecoderHost::Start::Refused && bgYieldForListener()) r = host->start(ext, am);
+        if (r == DecoderHost::Start::Refused) return decoderLimitMessage(vsDecoderSlots().max());
+        if (r == DecoderHost::Start::Unknown) return "This server has no " + ext + " decoder";
+        keyOut = DecoderHost::startKeyFor(ext, am);
+        LOGI("[sat] decoder %s attached on VFO B for %.8s (SATELLITE open in VFO B)", ext.c_str(), sess.c_str());
+        return "";
+    }
+    /** The decoder an open attached on B stops — only while the B host still runs exactly that one. */
+    void satVfoBStopDecoder(const std::string& sess, const SatVfoB& e) {
+        if (e.decoderKey.empty()) return;
+        std::shared_ptr<DecoderHost> h = decoders_.find(watchDecBKey(sess));
+        if (!h || h->startKey() != e.decoderKey) return;
+        h->stop();
+        LOGI("[sat] decoder %s on VFO B detached (%.8s)", e.decoder.c_str(), sess.c_str());
+    }
+    /** VFO B has gone (watchRemove): a satellite open is forgotten, its decoder stopped quietly, the listener told. */
+    void satVfoBGone(const std::string& sess, const std::string& why) {
+        SatVfoB e;
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); auto it = satVfoB_.find(sess); if (it == satVfoB_.end()) return; e = it->second; satVfoB_.erase(it); }
+        satVfoBStopDecoder(sess, e);
+        LOGI("[sat] %.8s: VFO B off the satellite (%s)", sess.c_str(), why.c_str());
+        watchTell(sess, "{\"type\":\"sat_vfob\",\"on\":false,\"norad\":" + std::to_string(e.norad) + ",\"tx\":" + std::to_string(e.tx)
+                        + ",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"}");
+    }
+    /** The pick `key` changed or ended: every satellite VFO B opened under it closes (its usual off, with the reason). */
+    void satVfoBCloseFor(const std::string& key, const std::string& why) {
+        std::vector<std::string> sess;
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); for (auto& kv : satVfoB_) if (kv.second.pickKey == key) sess.push_back(kv.first); }
+        for (auto& s : sess) {
+            if (std::shared_ptr<WatchSet> w = watchFind(s)) watchRemove(w, 1, why);
+            else satVfoBGone(s, why);
+        }
+    }
+    /** ★ The tracker's tick (25 Hz): each satellite VFO B's oscillator follows its pick's lock (A's shift × fB / fA). */
+    void satVfoBTick() {
+        std::vector<std::pair<std::string, SatVfoB>> v;
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); if (satVfoB_.empty()) return; for (auto& kv : satVfoB_) v.push_back(kv); }
+        for (auto& kv : v) {
+            std::shared_ptr<vibewatch::WatchChannel> ch;
+            if (std::shared_ptr<WatchSet> w = watchFind(kv.first)) { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == 1) ch = c; }
+            if (!ch) continue;   // ★ gone: watchRemove told it already, or the sweep forgets it
+            const double s = satVfoBShiftNow(kv.second.pickKey, kv.second.norad, kv.second.nominalHz, kv.second.shiftHz);
+            if (s == kv.second.shiftHz) continue;
+            ch->setShiftHz(s);
+            std::lock_guard<std::mutex> lk(satVfoBMtx_);
+            auto it = satVfoB_.find(kv.first);
+            if (it != satVfoB_.end() && it->second.tx == kv.second.tx) it->second.shiftHz = s;
+        }
+    }
+    /** House thread: an open whose VFO B channel no longer exists (its listener's set went) is forgotten. */
+    void satVfoBSweep() {
+        std::vector<std::string> v;
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); for (auto& kv : satVfoB_) v.push_back(kv.first); }
+        for (auto& s : v) { double h = 0; std::string m; if (!watchBOf(s, h, m)) satVfoBGone(s, "VFO B has gone"); }
+    }
+    /** For tests and the admin status: this listener's satellite VFO B, if any (its shift in Hz). */
+    bool satVfoBOf(const std::string& sess, SatVfoB& out) {
+        std::lock_guard<std::mutex> lk(satVfoBMtx_); auto it = satVfoB_.find(sess); if (it == satVfoB_.end()) return false; out = it->second; return true;
     }
     /** ★★★ V12 beta91 THE SATELLITE-PASS GAIN PROFILE — is a satellite picture / telemetry decoder running on a pass, and
      *  is the satellite up? (vibe_sat_gain.h Watch.) Every 2 s on the housekeeping thread, just before overloadTick; it
@@ -13063,7 +13277,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!g_scanLock.load() || !sock) return false;
         static const std::set<std::string> kLocked = {
             "tune", "mode", "bandwidth", "zoom", "dab", "dab_service", "dab_scan", "adsb", "ism", "ndb", "ais", "mode_resume",
-            "avdata", "sondes", "sat",
+            "avdata", "sondes", "sat", "sat_vfob",
             "iqtune", "watch", "set_rate", "sampleRate", "directSampling", "gain", "agc", "rsp_control", "rsp_agc_restart",
             "ahf_control", "airspy_control", "hackrf_control", "icom_control", "antenna", "tunerbw",
         };
@@ -23403,6 +23617,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12 SATELLITES: `sat` is the lock (gated like a tune on a shared dial — askRefuses / the scan lock); `sat_list`
         //    is the picker's question (free: it changes nothing). docs/v12/SATELLITE-ENGINE.md "Wire".
         if (type == "sat") { if (sock) satControl(sock, msg); return; }
+        // ★★ beta92 "OPEN IN VFO B" — another downlink of the picked bird on the listener's own VFO B (moves no shared dial:
+        //    not in kGated; in the scan lock's kLocked, as `watch` is). docs/v12/SAT-VFOB.md
+        if (type == "sat_vfob") { if (sock) satVfoBControl(sock, msg); return; }
         if (type == "sat_list") {
             if (!sock) return;
             if (jsonStr(msg, "op") == "track") {
@@ -33545,6 +33762,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (w->chans.empty()) w->muteA = false;
             watchGen_.fetch_add(1, std::memory_order_release);
         }
+        if (id == 1) satVfoBGone(w->session, why);         // ★★ beta92 a satellite VFO B: its decoder stops quietly, the box told
         if (id == 1) watchStopDecoderB(w->session, why);   // ★ decode on either VFO: B's decoders go with B, said in words
     }
 
@@ -33798,7 +34016,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (auto& s : w->slices) if (s.id == ch->id()) sl = &s;
             if (!sl) { w->slices.emplace_back(); sl = &w->slices.back(); sl->id = ch->id(); }
             if (sl->bins != want) { sl->bins = want; sl->buf.assign((size_t)want, cf32{0.0f, 0.0f}); sl->ctx = vibedsp::Channelizer::ExtractCtx{}; }
-            const double off = wd.hz - centre;
+            const double off = wd.hz + ch->shiftHz() - centre;   // ★★ beta92 a satellite VFO B listens at nominal + Doppler
             const int cb = (int)std::lround(off / binHz);
             const int got = chan_->extract(bins, cb, want, sl->buf.data(), sl->ctx, blockIndex);
             if (got > 0) ch->feed(sl->buf.data(), got, sampleRate * (double)want / (double)fftSize, off - cb * binHz);
@@ -33833,7 +34051,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     std::vector<std::shared_ptr<vibewatch::WatchChannel>> chs;
                     { std::lock_guard<std::mutex> lk(raw->m); chs = raw->chans; chs.insert(chs.end(), raw->fading.begin(), raw->fading.end()); }
                     const double centre = rtlCenter.load() + hwOffsetHz();
-                    for (auto& ch : chs) if (!ch->parked()) ch->feed(x, k, sampleRate, ch->wanted().hz - centre);
+                    for (auto& ch : chs) if (!ch->parked()) ch->feed(x, k, sampleRate, ch->tuneHz() - centre);   // ★★ beta92 + the satellite shift
                 }, [] { vibeAudioThread("vibe-watch"); });   // ★ somebody's audio: AUDIO priority
             }
             w->feeder.feed(iq, n, sampleRate);
@@ -33852,7 +34070,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (h && !h->wantsIq()) h.reset();
             if (h) {
                 std::lock_guard<std::mutex> lk(w->m);
-                for (auto& ch : w->chans) if (ch->id() == 1) { bHz = ch->wanted().hz; parked = ch->parked(); }
+                for (auto& ch : w->chans) if (ch->id() == 1) { bHz = ch->tuneHz(); parked = ch->parked(); }
             }
         }
         // ★★ V12 beta24: B's Band (not a skimmer) on a personal receiver — Band's DC rule follows B's band (bandDcSafeFor)
@@ -34094,7 +34312,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         note = out ? "VFO B is outside the radio's window now — it is silent until it is back inside"
                                    : "VFO B is back inside the window";
                     }
-                    const int cb = (int)std::lround((wd.hz - centre) / binHz);
+                    const int cb = (int)std::lround((wd.hz + ch->shiftHz() - centre) / binHz);   // ★★ beta92 where it listens
                     const int hw = std::max(1, (int)(wd.bwHz / 2.0 / binHz));
                     float pk = -1e9f;
                     for (int o = -hw; o <= hw; o++) pk = std::max(pk, dbAt(cb + o));
