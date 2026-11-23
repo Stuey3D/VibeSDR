@@ -6,22 +6,22 @@
  *     was a 22 px circle with a 16-unit glyph in it: at a normal zoom a digipeater (purple star-in-circle) and a house
  *     (green house-in-circle) were two coloured dots. Now:
  *       · 28 px, the glyph 18 px — a car, a house, a mast, a cloud read as themselves at a glance on a phone;
- *       · the BADGE SHAPE says what kind of thing it is before the glyph does: a ROUNDED SQUARE for the network's own
- *         furniture (digipeaters, gateways / iGates, repeaters), a CIRCLE for everything else;
- *       · a dark rim inside a thin light halo, so it stands off the dark map AND the satellite / terrain imagery;
- *       · glyphs are solid silhouettes with their details CUT in the badge's colour (windows, doors, wheel hubs) — no
- *         hairlines to vanish at 28 px;
- *       · a code we have not drawn is its own symbol CHARACTER, big, on the badge — never blank, never a guess.
+ *       · ★★ NO BADGE (Stuart, same day: "aprs icons dont need to be circular as they will confuse with digi spots, so
+ *         for a car show a little car icon etc") — the SYMBOL IS THE ICON: a car is a little car, a house a house.
+ *         A round badge read as one more digi-mode spot dot;
+ *       · each silhouette is filled in its colour (moving / weather / the network's furniture / an object / a station),
+ *         with a dark outline inside a thin light halo, so it stands off the dark map AND the satellite / terrain imagery;
+ *       · details (windows, doors, wheel hubs) are CUT in dark — no hairlines to vanish at 28 px;
+ *       · a code we have not drawn is its own symbol CHARACTER, big, outlined the same way — never blank, never a guess.
  * ★ OUR OWN ARTWORK. The APRS 1.0.1 symbol table's MEANINGS are the published standard (code → "car", "house",
  *   "digipeater"…); every drawing below is ours — no third-party symbol set is copied.
  * ★ THE ALTERNATE TABLE ('\' or an overlay character) means something else for most codes, so only the codes whose
  *   alternate meaning is the same KIND of thing (a digi with an overlay, a gateway, an HF house, a car, a wx station…)
- *   take the glyph there; the rest show the character. The alternate table keeps its dashed rim, an overlay its letter
- *   or digit in a tag.
+ *   take the glyph there; the rest show the character. An overlay keeps its letter or digit in a small tag.
  */
 
-/** A glyph: drawn in order on a 16-unit square. 'f' = solid (dark), 'c' = cut (the badge's colour, on top),
- *  'l' = a dark line, 'k' = a cut line (the badge's colour). */
+/** A glyph: drawn in order on a 16-unit square. 'f' = solid (the symbol's colour, outlined), 'c' = a cut detail (dark,
+ *  on top), 'l' = a line (the colour, outlined), 'k' = a cut line (dark). */
 type Stroke = ['f' | 'c' | 'l' | 'k', string];
 
 const circ = (x: number, y: number, r: number) => `M${x - r} ${y} a${r} ${r} 0 1 0 ${2 * r} 0 a${r} ${r} 0 1 0 ${-2 * r} 0 Z`;
@@ -121,7 +121,7 @@ export const APRS_CODE_GLYPH: Record<string, string> = {
  *  with an overlay, an HF house, a car / SUV / van / truck with an overlay, a wx station with a digi, a ship). */
 export const APRS_ALT_SAME = '#&->_kuvjs';
 
-/** The badge's colour: weather, an object / item, the network's furniture, something moving, a station. */
+/** The symbol's colour: weather, an object / item, the network's furniture, something moving, a station. */
 export function aprsColour(s: { kind: string; sym: string; speed?: number }): string {
   if (s.kind === 'weather' || s.sym[1] === '_') return '#39d0d8';
   if (s.kind === 'object' || s.kind === 'item') return '#ffad42';
@@ -136,7 +136,7 @@ export function aprsGlyphOf(sym: string): string {
   if (!g) return '';
   return table === '/' || APRS_ALT_SAME.includes(code) ? g : '';
 }
-/** ★ The network's own furniture (digipeater, gateway, repeater, yagi): a rounded-square badge, not a circle. */
+/** The network's own furniture (digipeater, gateway, repeater, yagi) — its own colour (aprsColour); kept for callers. */
 export function aprsIsInfra(sym: string): boolean {
   const g = aprsGlyphOf(sym);
   return g === 'digi' || g === 'gateway' || g === 'antenna';
@@ -155,30 +155,31 @@ export function aprsIcon(s: { kind: string; sym: string; speed?: number }, px: n
   const gName = aprsGlyphOf(sym);
   const g = APRS_GLYPHS[gName];
   const overlay = table !== '/' && table !== '\\' && /[0-9A-Z]/.test(table) ? table : '';
-  const dash = table !== '/' ? ' stroke-dasharray="3.4 1.8"' : '';
-  const infra = aprsIsInfra(sym);
-  // the badge: a light halo, then the coloured face with its dark rim (dashed on the alternate table)
-  const badge = infra
-    ? `<rect x="1" y="1" width="26" height="26" rx="7" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.4"/>`
-      + `<rect x="2.6" y="2.6" width="22.8" height="22.8" rx="5.4" fill="${col}" stroke="${DARK}" stroke-width="1.7"${dash}/>`
-    : `<circle cx="14" cy="14" r="13" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.4"/>`
-      + `<circle cx="14" cy="14" r="11.5" fill="${col}" stroke="${DARK}" stroke-width="1.7"${dash}/>`;
   let inner = '';
   if (g) {
-    inner = `<g transform="translate(5 5) scale(1.125)" stroke-linejoin="round" stroke-linecap="round">`
-      + g.map(([k, d]) => k === 'f' ? `<path d="${d}" fill="${DARK}"/>`
-        : k === 'c' ? `<path d="${d}" fill="${col}"/>`
-        : `<path d="${d}" fill="none" stroke="${k === 'l' ? DARK : col}" stroke-width="${k === 'l' ? 1.6 : 1.1}"/>`).join('')
-      + '</g>';
+    /* ★★ the SILHOUETTE alone, three passes: a light halo, a dark outline, then the colour on top (lines likewise),
+     *  and the cut details in dark last. 16 units → 26 px of the 28. */
+    const solid = g.filter(([k]) => k === 'f').map(([, d]) => d).join(' ');
+    const lines = g.filter(([k]) => k === 'l').map(([, d]) => d).join(' ');
+    const halo = (solid ? `<path d="${solid}" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="2.6"/>` : '')
+      + (lines ? `<path d="${lines}" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="3.6"/>` : '');
+    const rim = (solid ? `<path d="${solid}" fill="none" stroke="${DARK}" stroke-width="1.6"/>` : '')
+      + (lines ? `<path d="${lines}" fill="none" stroke="${DARK}" stroke-width="2.6"/>` : '');
+    const face = g.map(([k, d]) => k === 'f' ? `<path d="${d}" fill="${col}"/>`
+      : k === 'c' ? `<path d="${d}" fill="${DARK}"/>`
+      : `<path d="${d}" fill="none" stroke="${k === 'l' ? col : DARK}" stroke-width="${k === 'l' ? 1.3 : 1.1}"/>`).join('');
+    inner = `<g transform="translate(1 1) scale(1.625)" stroke-linejoin="round" stroke-linecap="round">${halo}${rim}${face}</g>`;
   } else {
-    const ch = code.trim() || '?';
-    inner = `<text x="14" y="19" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="15" font-weight="800" fill="${DARK}">${escX(ch)}</text>`;
+    const ch = escX(code.trim() || '?');
+    const t = (paint: string) => `<text x="14" y="21" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="20" font-weight="800" ${paint}>${ch}</text>`;
+    inner = t(`fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="4.4" stroke-linejoin="round"`)
+      + t(`fill="none" stroke="${DARK}" stroke-width="2.6" stroke-linejoin="round"`) + t(`fill="${col}"`);
   }
   const ov = overlay
-    ? `<circle cx="22.2" cy="22.2" r="5.4" fill="${DARK}" stroke="#ffffff" stroke-width="1"/>`
-      + `<text x="22.2" y="25.2" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="8.5" font-weight="800" fill="#ffffff">${escX(overlay)}</text>`
+    ? `<rect x="17.6" y="17.6" width="9.6" height="9.6" rx="2" fill="${DARK}" stroke="#ffffff" stroke-width="1"/>`
+      + `<text x="22.4" y="25.4" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="8.5" font-weight="800" fill="#ffffff">${escX(overlay)}</text>`
     : '';
-  return { w: px, h: px, html: `<svg width="${px}" height="${px}" viewBox="0 0 28 28">${badge}${inner}${ov}</svg>` };
+  return { w: px, h: px, html: `<svg width="${px}" height="${px}" viewBox="0 0 28 28">${inner}${ov}</svg>` };
 }
 
 /** ★ The digi modes map's legend: the symbols most heard, in our drawings, with their standard meanings. */
@@ -186,8 +187,8 @@ export const APRS_LEGEND: { sym: string; kind: string; speed?: number; words: st
   { sym: '/-', kind: 'position', words: 'Home station' },
   { sym: '/>', kind: 'position', speed: 40, words: 'Car · moving = blue' },
   { sym: '/k', kind: 'position', words: 'Truck / van / bus' },
-  { sym: '/#', kind: 'position', words: 'Digipeater (square)' },
-  { sym: 'I&', kind: 'position', words: 'Gateway / iGate (square)' },
+  { sym: '/#', kind: 'position', words: 'Digipeater' },
+  { sym: 'I&', kind: 'position', words: 'Gateway / iGate' },
   { sym: '/_', kind: 'weather', words: 'Weather station' },
   { sym: '/[', kind: 'position', words: 'On foot' },
   { sym: '/Y', kind: 'position', words: 'Yacht / boat' },

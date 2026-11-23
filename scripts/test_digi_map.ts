@@ -92,15 +92,18 @@ console.log('── beta92 APRS symbols: clear, our own, a fallback ──');
   ok(aprsGlyphOf('\\O') === '' && aprsGlyphOf('\\^') === '', 'the alternate table means something else for most codes — the character, not a guess');
   ok(aprsGlyphOf('/!') === '' && aprsGlyphOf('/$') === '', 'an undrawn code has no glyph');
   const fb = aprsIcon({ kind: 'position', sym: '/$' }).html;
-  ok(/<text[^>]*font-size="15"[^>]*>\$<\/text>/.test(fb), 'the fallback is the symbol character itself, large, on the badge');
+  ok(/<text[^>]*font-size="20"[^>]*>\$<\/text>/.test(fb) && !/<circle cx="14" cy="14"/.test(fb), 'the fallback is the symbol character itself, large, outlined — no badge');
   ok(/>&lt;<\/text>/.test(aprsIcon({ kind: 'position', sym: '\\<' }).html), 'a fallback character is escaped');
   const house = aprsIcon({ kind: 'position', sym: '/-' }), digi = aprsIcon({ kind: 'position', sym: '/#' });
   ok(house.w === APRS_ICON_PX && house.h === 28 && APRS_ICON_PX >= 28, `large enough to read (${house.w} px, was 22)`);
-  ok(/<circle cx="14" cy="14" r="11.5"/.test(house.html) && /<rect /.test(digi.html) && !/<rect /.test(house.html),
-    'a digipeater is a SQUARE badge, a house a CIRCLE — told apart by shape as well as glyph');
-  ok(aprsIsInfra('/#') && aprsIsInfra('I&') && aprsIsInfra('/r') && !aprsIsInfra('/-') && !aprsIsInfra('/>'), 'the network\'s furniture is square');
-  ok(/stroke="rgba\(255,255,255,0.85\)"/.test(house.html) && /stroke="#0b1014"/.test(house.html), 'a light halo and a dark rim: contrast on the dark map and the satellite map');
-  ok(/stroke-dasharray/.test(aprsIcon({ kind: 'position', sym: '\\#' }).html) && !/stroke-dasharray/.test(digi.html), 'the alternate table keeps its dashed rim');
+  // ★★ Stuart 11-23: "aprs icons dont need to be circular as they will confuse with digi spots, so for a car show a little car icon"
+  const car = aprsIcon({ kind: 'position', sym: '/>' });
+  ok([house, digi, car].every((i) => !/<circle cx="14" cy="14"/.test(i.html) && !/<rect x="(1|2\.6)"/.test(i.html)),
+    'NO BADGE — the symbol is the icon (a car is a little car), nothing round to read as a digi-mode spot');
+  ok(digi.html !== house.html && /#c58cff/.test(digi.html) && !/#c58cff/.test(house.html), 'a digipeater and a house differ by silhouette and colour');
+  ok(aprsIsInfra('/#') && aprsIsInfra('I&') && aprsIsInfra('/r') && !aprsIsInfra('/-') && !aprsIsInfra('/>'), 'the network\'s furniture is known (its own colour)');
+  ok(/stroke="rgba\(255,255,255,0.8\)"/.test(house.html) && /stroke="#0b1014"/.test(house.html), 'a light halo and a dark outline round the silhouette: contrast on the dark map and the satellite map');
+  ok(/>3<\/text>/.test(aprsIcon({ kind: 'position', sym: '3#' }).html), 'an overlay keeps its digit in a small tag');
   ok(/>I<\/text>/.test(aprsIcon({ kind: 'position', sym: 'I&' }).html), 'an overlay character in its tag');
   for (const [sym] of common) ok(digiSvgOk(aprsIcon({ kind: 'position', sym }).html) !== '', `${sym} passes the map pages' SVG check`);
   ok(APRS_LEGEND.length >= 8 && APRS_LEGEND.every((r) => digiSvgOk(aprsIcon(r, 16).html) !== ''), 'the legend rows draw');
