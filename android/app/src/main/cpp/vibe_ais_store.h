@@ -25,6 +25,7 @@
 //   ?since=<seconds back> · ?range=<km from the receiver> · ?tracks=1 · ?limit= (newest first, at most 2048)
 #pragma once
 #include "vibe_ais_service.h"
+#include "vibe_log_radio.h"   // ★ beta92 which radio heard each ship
 
 #include <algorithm>
 #include <cmath>
@@ -77,6 +78,9 @@ struct Rec {
     int16_t alt = -1, spare = 0;
     char name[24] = {}, call[8] = {}, dest[24] = {}, eta[12] = {};
     TrkPt trk[kTrack] = {};                                ///< oldest first
+    /** ★ beta92 which radios heard it (bit n = <gallery>/radios.idx line n, vibe_log_radio.h) — the last 4 bytes of the
+     *  512, always written 0 before (the write zero-fills the slot), so an older store reads as unknown. OR-merged. */
+    uint32_t radios = 0;
 };
 static_assert(sizeof(Rec) <= kRecSize, "a ship record is 512 bytes");
 
@@ -161,6 +165,7 @@ inline void merge(Rec& have, const Rec& in) {
     }
     if (old.first && (!out.first || old.first < out.first)) out.first = old.first;
     out.count = (uint16_t)std::min<uint32_t>(65535, (uint32_t)std::max(have.count, in.count));
+    out.radios = have.radios | in.radios;   // ★ beta92 every radio that heard it
     // tracks: union, time order, a point within 20 s of another dropped (the same fix through two radios)
     std::vector<TrkPt> pts;
     for (int i = 0; i < have.nTrk && i < kTrack; ++i) pts.push_back(have.trk[i]);
@@ -246,8 +251,11 @@ inline size_t write(const std::string& dir, uint64_t limitBytes, const std::vect
     std::vector<char> touched(h.cap, 0);
     size_t n = 0;
     Rec cur;
-    for (const Rec& r : in) {
-        if (!r.mmsi) continue;
+    const int bit = vibe::logradio::bitFor(dir, vibe::logradio::mine());   // ★ beta92 this radio's bit (-1 = none)
+    for (const Rec& r0 : in) {
+        if (!r0.mmsi) continue;
+        Rec r = r0;
+        if (bit >= 0) r.radios |= 1u << bit;
         uint32_t slot;
         auto it = slotOf.find(r.mmsi);
         if (it != slotOf.end()) {
@@ -449,6 +457,10 @@ inline void metJsonFor(const std::vector<MetRec>& all, uint32_t mmsi, int64_t no
 /** `dir` given: each station's stored weather (the met store, below) is added as the live report's "met" array. */
 inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, size_t total, const std::string& dir = std::string()) {
     const std::vector<MetRec> mets = dir.empty() ? std::vector<MetRec>() : readMet(dir);
+    // ★★ beta92 the radios (vibe_log_radio.h): per ship "radios" (absent = unknown), and the answer's "radios" list
+    const std::vector<std::string> reg = vibe::logradio::readRegistry(dir);
+    std::vector<std::pair<std::string, uint64_t>> perRadio;
+    uint64_t untagged = 0;
     std::string o = "{\"now\":" + std::to_string((long long)now) + ",\"count\":" + std::to_string(v.size()) + ",\"total\":" + std::to_string(total) + ",\"vessels\":[";
     bool first = true;
     for (const Rec& r : v) {
@@ -464,6 +476,20 @@ inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, s
         const std::string eta = getStr(r.eta, sizeof r.eta);
         if (!eta.empty() && one.find("\"eta\":") == std::string::npos) one += ",\"eta\":\"" + jsonEsc(eta) + "\"";
         one += ",\"stored\":1";
+        {
+            const std::vector<std::string> ids = vibe::logradio::idsOf(reg, r.radios);
+            if (ids.empty()) ++untagged;
+            else {
+                one += ",\"radios\":[";
+                for (size_t i = 0; i < ids.size(); i++) {
+                    if (i) one += ',';
+                    one += "\"" + ids[i] + "\"";
+                    auto it = std::find_if(perRadio.begin(), perRadio.end(), [&](const std::pair<std::string, uint64_t>& p) { return p.first == ids[i]; });
+                    if (it == perRadio.end()) perRadio.push_back({ ids[i], 1 }); else ++it->second;
+                }
+                one += "]";
+            }
+        }
         if (!mets.empty()) metJsonFor(mets, r.mmsi, now, one);
         if (tracks && r.nTrk) {
             one += ",\"pts\":[";
@@ -475,7 +501,7 @@ inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, s
         }
         o += one + "}";
     }
-    return o + "]}";
+    return o + "],\"radios\":" + vibe::logradio::radiosJson(perRadio, untagged) + "}";
 }
 
 } // namespace store
