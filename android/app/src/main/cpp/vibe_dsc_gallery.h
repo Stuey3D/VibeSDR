@@ -30,6 +30,7 @@
 //    Distress and urgency are never capped: they are the reason the gallery keeps DSC at all.
 #pragma once
 #include "vibe_gallery.h"
+#include "vibe_gallery_shared.h"
 #include "decoders/dsc_decoder.h"
 
 #include <cmath>
@@ -134,45 +135,58 @@ private:
         m.dlName = "DSC " + freqShort() + " " + gallery::utcStamp(now, "%Y-%m-%d") + ".txt";
         return m;
     }
+    /* ★★★ V12 beta92 ONE LOG PER DSC FREQUENCY PER DAY FOR THE WHOLE SERVER (vibe_gallery_shared.h; Stuart 11-22: "all
+     *  radios on same server should feed the same log"). Under the shared Lock: the day's log found by its slot alone
+     *  ("day-YYYYMMDD-<Hz>" — never the radio, profile, origin or dial), this process's calls deduped against its tail (the
+     *  same call another radio decoded, within 20 s, is one line), the rest appended, and the title's counts read from the
+     *  FILE (every radio's calls, each once — a restart carries on the same way). */
     void flush(int64_t now) {
+        namespace sh = gallery::sharedday;
         if (pending_.empty()) { lastFlush_ = now; return; }
+        if (store_.dir().empty() || !store_.enabled()) { pending_.clear(); lastFlush_ = now; return; }
+        sh::Lock fl(store_.dir());
         gallery::Meta m = logMeta(now);
-        if (log_.empty()) {
-            log_ = store_.adoptSlot(m, /*anyOrigin=*/true);
-            if (!log_.empty()) {
-                // ★ The day's log after a restart: its calls carry on from what it holds.
-                std::string body;
-                if (store_.readItem(log_, body)) {
-                    unsigned long n = 0, d = 0, u = 0;
-                    size_t p = 0;
-                    while (p < body.size()) {
-                        const size_t e = body.find('\n', p);
-                        const std::string l = body.substr(p, e == std::string::npos ? std::string::npos : e - p);
-                        if (l.size() > 10 && l[2] == ':' && l[5] == ':') {
-                            ++n;
-                            if (l.find("  DISTRESS") != std::string::npos) ++d;
-                            else if (l.find("  URGENCY") != std::string::npos) ++u;
-                        }
-                        if (e == std::string::npos) break;
-                        p = e + 1;
-                    }
-                    // the pending lines are already counted in calls_ — add the ones the file holds
-                    calls_ += n; distress_ += d; urgency_ += u;
-                    m = logMeta(now);
-                }
-            }
+        if (log_.empty()) log_ = sh::adopt(store_, m);
+        std::string tail, add;
+        bool ok = false;
+        own_.prune(now);
+        const std::vector<std::string> own = own_.list();
+        if (!log_.empty() && sh::readTail(store_, log_, tail)) {
+            add = sh::dedupeLines(tail, pending_, sh::kDedupeSec, nullptr, &own);
+            ok = add.empty() || store_.append(log_, add);
         }
-        if (!log_.empty() && store_.append(log_, pending_)) {
-            store_.retag(log_, m);
-        } else {
+        if (!ok) {
             if (!log_.empty()) store_.close(log_);
             const std::string head = "DSC \xc2\xb7 " + freqText() + " \xc2\xb7 " + gallery::utcStamp(now, "%Y-%m-%d") + " (UTC)\n"
-                + "Digital Selective Calling (ITU-R M.493), one line per call as decoded. Times are UTC.\n\n";
-            log_ = store_.create(m, "txt", head + pending_);
+                + "Digital Selective Calling (ITU-R M.493), one line per call as decoded, every radio on this server, each call once. Times are UTC.\n\n";
+            add = pending_;
+            log_ = store_.create(m, "txt", head + add);
             if (!log_.empty()) ++items_;
         }
+        { size_t p = 0; while (p < add.size()) { size_t e = add.find('\n', p); if (e == std::string::npos) e = add.size(); if (e > p) own_.add(add.substr(p, e - p), now); p = e + 1; } }
+        recount();
+        if (!log_.empty()) store_.retag(log_, logMeta(now));   // ★ the server's counts; this radio joins its "ri"
         pending_.clear();
         lastFlush_ = now;
+    }
+    /** The day's calls as the FILE holds them (every radio's, each once). */
+    void recount() {
+        std::string body;
+        if (log_.empty() || !store_.readItem(log_, body)) return;
+        unsigned long n = 0, d = 0, u = 0;
+        size_t p = 0;
+        while (p < body.size()) {
+            const size_t e = body.find('\n', p);
+            const std::string l = body.substr(p, e == std::string::npos ? std::string::npos : e - p);
+            if (l.size() > 10 && l[2] == ':' && l[5] == ':' && gallery::sharedday::lineText(l).rfind("(", 0) != 0) {
+                ++n;
+                if (l.find("  DISTRESS") != std::string::npos) ++d;
+                else if (l.find("  URGENCY") != std::string::npos) ++u;
+            }
+            if (e == std::string::npos) break;
+            p = e + 1;
+        }
+        calls_ = n; distress_ = d; urgency_ = u;
     }
     /** The position a call is ABOUT: its distress position, else a position reply's. */
     static const dsc::Position& positionOf(const dsc::Call& c) { return c.pos.known ? c.pos : c.posReply; }
@@ -217,6 +231,12 @@ private:
         if (lv >= 2)
             body += "\nDSC is the GMDSS alerting system. A distress call heard here may already have been answered by a coast\n"
                     "station; this is a receiver's log, not an alerting service.\n";
+        // ★★ beta92: the same alert another radio on this server already saved is ONE item (it joins its "ri")
+        namespace sh = gallery::sharedday;
+        if (store_.dir().empty()) return;
+        sh::Lock fl(store_.dir());
+        const std::string same = sh::sameItem(store_, m);
+        if (!same.empty()) { store_.retag(same, m); return; }
         if (!store_.add(m, "txt", body).empty()) ++items_;
     }
 
@@ -226,6 +246,7 @@ private:
     mutable std::mutex m_;
     bool done_ = false;
     std::string pending_, log_;
+    gallery::sharedday::OwnLines own_;   ///< ★ beta92 the lines this radio wrote lately (never taken for another radio's)
     int64_t lastFlush_ = 0, day_ = -1;
     unsigned long calls_ = 0, distress_ = 0, urgency_ = 0;
     size_t items_ = 0;

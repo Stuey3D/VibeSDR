@@ -113,6 +113,7 @@ import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/r
 import { tlmLoadPasses, tlmParseCsv, tlmSatOfTitle, type TlmPass } from '../../../src/utils/tlmCharts';   // ★★ beta91 TELEMETRY CHARTS
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds } from '../../../src/utils/galleryPager';
+import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, radioChipLabel, type LogRadio } from '../../../src/utils/logRadio';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
          dxTuneTarget, dxWhen, dxWhere, type DxAlert, type DxEntry, type DxPage, type DxSort } from '../../../src/utils/dxLog';
@@ -18032,11 +18033,11 @@ ${glHead}
   .maplibregl-ctrl-scale{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
   #m .leaflet-control-scale-line{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
   /* ★ beta90 the layers (SPOTS / APRS / a caller's overlay) and the time window */
-  #layers,#wins{display:inline-flex;gap:4px;align-items:center}
-  #wins button,#layers button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);
+  #layers,#wins,#rads{display:inline-flex;gap:4px;align-items:center}
+  #wins button,#layers button,#rads button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);
     border-radius:4px;padding:2px 7px;cursor:pointer}
-  #wins button[aria-pressed="true"],#layers button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
-  #wins[hidden],#layers[hidden]{display:none}
+  #wins button[aria-pressed="true"],#layers button[aria-pressed="true"],#rads button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
+  #wins[hidden],#layers[hidden],#rads[hidden]{display:none}
   @media (max-width:640px){#stats{width:200px}.maplibregl-ctrl-top-left{left:220px}.maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:220px}
     #top{flex-wrap:wrap;gap:8px}}
   .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:var(--dim);font-size:9px}
@@ -18047,6 +18048,7 @@ ${ST}
     <span id="count">0</span><span style="color:var(--dim)" id="countWhat">stations</span>
     <span id="layers" role="group" aria-label="Layers" hidden></span>
     <span id="wins" role="group" aria-label="Time window" hidden></span>
+    <span id="rads" role="group" aria-label="Radio" hidden></span>
     <label><input type="checkbox" id="tStats" checked>Stats</label>
     <label><input type="checkbox" id="tSummary" checked>Summary</label>
     <label><input type="checkbox" id="tLegend" checked>Legend</label>
@@ -18079,6 +18081,29 @@ let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
  *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
 let decodesToday = -1, notKeptToday = 0, srvTotal = 0, srvTrunc = false;
+/* ★★ beta92 THE RADIO FILTER (src/utils/logRadio.ts — the same rule, written out here because this page is its own
+ *  document): the store is one per server; each station says which radio(s) heard it, and the server names the radios.
+ *  Offered only when 2+ radios hold stations in the window; a view, client-side — a station with no radio (kept before
+ *  beta92) and this page's own live spots show under every radio. */
+let radios = null, radioPick = '';
+const RID = /^[0-9a-z]{1,16}$/;
+function cleanRadios(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const r of list.slice(0, 32)) {
+    if (!r || typeof r !== 'object' || !RID.test(String(r.id || '')) || out.some((o) => o.id === r.id)) continue;
+    const n = Number(r.n);
+    if (isFinite(n) && n <= 0) continue;
+    out.push({ id: String(r.id), name: okStr(r.name, /[<>&"'\`]/g, 60) || String(r.id), n: isFinite(n) ? n : null });
+  }
+  return out.length >= 2 ? out : null;
+}
+function radioOk(s) { return !radioPick || !s.radios || !s.radios.length || s.radios.indexOf(radioPick) >= 0; }
+function heardBy(s) {
+  if (!radios || !s.radios || s.radios.length < 2) return '';
+  const n = s.radios.map((id) => { const r = radios.find((x) => x.id === id); return r ? r.name : id; });
+  return 'Heard by ' + (n.length === 2 ? n.join(' and ') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1]);
+}
 const STYLE = ${safe(DIGI_MODE_STYLE)};
 ${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (src/utils/spotTime.ts)
 const me = ${safe(me)};
@@ -18178,6 +18203,7 @@ function cleanStations(list) {
       lat: placed ? Math.max(-90, Math.min(90, okNum(s.lat))) : null, lon: placed ? Math.max(-180, Math.min(180, okNum(s.lon))) : null,
       country: okStr(s.country, /[<>&"'\`]/g, 40), km: s.km == null ? null : Math.round(okNum(s.km)),
       colour: okColour(st.colour), letter: okStr(st.letter, /[^A-Za-z0-9?]/g, 1), ink: okColour(st.ink), stored: true,
+      radios: Array.isArray(s.radios) ? s.radios.slice(0, 8).map(String).filter((x) => RID.test(x)) : [],   // ★ beta92
     });
   }
   return out;
@@ -18187,7 +18213,7 @@ function winSec() { return win === '1h' ? 3600 : win === '24h' ? 86400 : win ===
  *  keeps its count and its modes. Live spots are this page's own, all recent, and honour the window too. */
 function mergeSpots() {
   const by = new Map();
-  for (const s of stored.values()) by.set(s.callsign, s);
+  for (const s of stored.values()) if (radioOk(s)) by.set(s.callsign, s);   // ★ beta92 the radio filter (a view)
   const nowMs = srvNow ? srvNow * 1000 : Date.now();
   const w = winSec();
   for (const s of live) {
@@ -18278,6 +18304,9 @@ async function fetchStations(full) {
     if (j.decodesToday != null) decodesToday = Math.max(0, Math.round(okNum(j.decodesToday)));
     notKeptToday = Math.max(0, Math.round(okNum(j.notKeptToday)));
     if (full) { srvTotal = Math.max(0, Math.round(okNum(j.total))); srvTrunc = okNum(j.truncated) > 0; }
+    // ★ beta92 the radios the window holds (every answer carries them for the whole window); a pick gone → all
+    radios = cleanRadios(j.radios);
+    if (radioPick && !(radios && radios.some((r) => r.id === radioPick))) radioPick = '';
     // ★ a live poll: the ones that aged out of a sliding window go
     const w = winSec();
     if (w) for (const [k, s] of stored) if (s.timestamp < (srvNow - w) * 1000) stored.delete(k);
@@ -18310,6 +18339,16 @@ function paintChrome() {
     try { if (window.opener) window.opener.postMessage({ type: 'vibesdr-digimap-window', window: win }, OPENER_ORIGIN); } catch (e) { /* the opener went */ }
     paintChrome();
     fetchStations(true);
+  };
+  const rs = document.getElementById('rads');
+  rs.hidden = !srvOk || !show.spots || !radios;
+  rs.innerHTML = !radios ? '' : ['<button type="button" data-radio="" title="Every radio on this server" aria-pressed="' + (radioPick ? 'false' : 'true') + '">ALL RADIOS</button>']
+    .concat(radios.map((r) => '<button type="button" data-radio="' + esc(r.id) + '" title="Only the stations ' + esc(r.name) + ' heard" aria-pressed="'
+      + (r.id === radioPick ? 'true' : 'false') + '">' + esc(r.name) + (r.n != null ? ' · ' + esc(r.n) : '') + '</button>')).join('');
+  for (const b of rs.querySelectorAll('button')) b.onclick = () => {
+    if ((b.dataset.radio || '') === radioPick) return;
+    radioPick = b.dataset.radio || '';
+    mergeSpots(); paintChrome(); render();
   };
 }
 
@@ -18466,7 +18505,8 @@ function drawMarkers() {
       // ★ beta90 a stored station: how often, which modes and bands, since when (the window's)
       (s.stored && s.count ? '<br>Heard ' + esc(s.count) + '×' + (s.modes && s.modes.length > 1 ? ' · ' + esc(s.modes.join(' ')) : '') +
         (s.bands && s.bands.length > 1 ? ' · ' + esc(s.bands.join(' ')) : '') +
-        (s.first ? '<br>First ' + esc(new Date(s.first).toISOString().slice(0, 16).replace('T', ' ')) + ' UTC' : '') : '') + '</div>');
+        (s.first ? '<br>First ' + esc(new Date(s.first).toISOString().slice(0, 16).replace('T', ' ')) + ' UTC' : '') : '') +
+      (heardBy(s) ? '<br>' + esc(heardBy(s)) : '') + '</div>');   // ★ beta92 more than one radio heard it
   }
   // ★★ THE LETTER ON THE LEAFLET FALLBACK (no WebGL 2): its canvas circles cannot carry text, so the newest 200 markers get
   //    a small non-interactive letter above them — a mode is never told by colour alone. Capped, because each is a DOM
@@ -18966,8 +19006,31 @@ function initRecorder() {
 interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
                         title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string;
                         /** ★ V12 DSC: 3 distress · 2 urgency · 1 safety; and the position the item is about, for MAP. */
-                        lv?: number; plat?: number; plon?: number }
+                        lv?: number; plat?: number; plon?: number;
+                        /** ★ V12 beta92 the radio(s) that heard it ("a1b2c3d4[,…]"; absent = unknown — vibe_log_radio.h). */
+                        ri?: string }
 let galKind = '';
+/* ★★ V12 beta92 THE RADIO FILTER (src/utils/logRadio.ts, docs/v12/LOG-RADIO-FILTER.md): the gallery stays one per server;
+ *  a row of radio chips — ALL RADIOS · each radio by its name — appears only when the list holds items from two or more
+ *  radios, and asks the server for that radio's items (radio=, a view: nothing is split or deleted). */
+let galRadio = '';
+let galRadios: LogRadio[] | null = null;
+function renderGalRadioRow(choices: LogRadio[] | null) {
+  const row = $('galRadio');
+  galRadios = choices;
+  row.hidden = !choices;
+  row.innerHTML = '';
+  if (!choices) return;
+  const mk = (id: string, label: string) => {
+    const b = document.createElement('button'); b.className = 'btn' + (galRadio === id ? ' on' : ''); b.dataset.radio = id;
+    b.textContent = label; b.setAttribute('aria-pressed', galRadio === id ? 'true' : 'false');
+    b.title = id ? `Only what ${label.split(' · ')[0]} heard (and anything kept before radios were recorded)` : 'Every radio on this server';
+    b.onclick = () => { galRadio = id; galPage = 1; galScroll = 0; galOpenedRow = -1; void renderGallery(1); };
+    row.appendChild(b);
+  };
+  mk('', 'ALL RADIOS');
+  for (const c of choices) mk(c.id, radioChipLabel(c));
+}
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
 /** ★★ beta91 TELEMETRY CHARTS: a gallery path → its text, or null (not there / no gallery). */
 async function galleryText(path: string): Promise<string | null> {
@@ -19024,9 +19087,16 @@ async function renderGallery(page = galPage) {
   host.innerHTML = '<div class="sres"><span class="n">Loading…</span></div>';
   pager.hidden = true;
   try {
-    let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}`), { cache: 'no-store' });
-    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds };
+    let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}${radioQuery(galRadio)}`), { cache: 'no-store' });
+    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds;
+                radios?: LogRadio[] };
     let j = await r.json() as GJ;
+    {   // ★ beta92 the radio chips: only with items from 2+ radios; a pick no longer offered falls back to ALL
+      const choices = logRadioChoices(j.radios);
+      const kept = keepRadioPick(galRadio, choices);
+      if (kept !== galRadio) { galRadio = kept; void renderGallery(1); return; }
+      renderGalRadioRow(choices);
+    }
     let paged = typeof j.total === 'number';
     if (r.ok && !j.error && !paged) {   // ★ an older server: its newest 300, no pages
       r = await fetch(galUrl(`/vibeserver/gallery.json?limit=300${galKind ? `&kind=${galKind}` : ''}`), { cache: 'no-store' });
@@ -19072,7 +19142,8 @@ async function renderGallery(page = galPage) {
       n.appendChild(document.createElement('br'));
       const src = document.createElement('span'); src.className = 'src';
       // ★ only the parts an item has (an ISM day has no demodulator)
-      src.textContent = [galWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, formatSize(it.bytes)]
+      // ★ beta92 an item two or more radios heard (FUNcube's shared day log) says so, by their names
+      src.textContent = [galWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, heardByText(it.ri, galRadios) || it.r, formatSize(it.bytes)]
         .filter((x) => !!x).join(' · ');
       n.appendChild(src);
       row.appendChild(f); row.appendChild(n);
@@ -19145,7 +19216,7 @@ async function renderGallery(page = galPage) {
      *  only when the store answers with a station (an older server, or one that heard nothing: no row). */
     if ((galKind === '' || galKind === 'ft8' || galKind === 'cw' || galKind === 'psk' || galKind === 'rttyskim') && galPage === 1) {
       const kindAt = galKind;
-      void fetch(galUrl('/vibeserver/stations.json?window=all&since=' + Math.floor(Date.now() / 1000 + 86400)), { cache: 'no-store' })
+      void fetch(galUrl('/vibeserver/stations.json?window=all&since=' + Math.floor(Date.now() / 1000 + 86400) + radioQuery(galRadio)), { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null)).then((j) => {
           const total = Number(j?.total) || 0;
           if (!total || j?.off || host.querySelector('.galDigi') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
@@ -19261,7 +19332,7 @@ async function openGalleryItem(it: GalleryItem) {
   ($('galDl') as HTMLAnchorElement).download = it.dn || it.f;   // ★ "ISM 433.92 2026-10-25.txt" where the item names one
   $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)}${it.m ? ` ${it.m.toUpperCase()}` : ''} · ${galWhen(it.t)}`
     + ` · ${galOriginWords(it)}`;
-  $('galList').hidden = true; $('galFilter').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
+  $('galList').hidden = true; $('galFilter').hidden = true; $('galRadio').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
   $('galleryPanel').scrollTop = 0;
   $('galBack').focus({ preventScroll: true });
   galTrReset();

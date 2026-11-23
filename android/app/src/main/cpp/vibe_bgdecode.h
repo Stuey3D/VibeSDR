@@ -34,6 +34,7 @@
 #include "vibe_clock.h"             // ★ the capture time a Band slice's slots are cut by
 #include "vibe_decoder_host.h"
 #include "vibe_gallery.h"
+#include "vibe_gallery_shared.h"   // ★ beta92 the last-10 card, one per server
 #include "vibe_station_log.h"      // ★ V12 APRS: the day's packets + the station card (StationTap)
 #include "vibe_dsc_gallery.h"
 #include "vibe_fctlm_gallery.h"   // ★ V12 beta91 FUNcube telemetry: a CSV per pass + the day's log (TELEMETRY CHARTS)
@@ -631,7 +632,7 @@ public:
         double la, lo, km = NAN;
         if (!grid.empty() && std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) km = greatCircleKm(lat_, lon_, la, lo);
         hour_.add(mode, call, grid, ctry, km, rfHz, wpm);
-        recent_.push_back({ t, mode, call, grid, ctry, km, rfHz, wpm });
+        recent_.push_back({ t, mode, call, grid, ctry, km, rfHz, wpm, ++seq_ });
         if (!cw_ && runModes_.size() < 32) runModes_[mode]++;
         if (recent_.size() > kMaxRecent) recent_.pop_front();
         lastSpot_ = t; rollDirty_ = true;
@@ -671,8 +672,17 @@ public:
     std::string text(int64_t to) const { std::lock_guard<std::mutex> lk(m_); return hourText(to); }
 
 private:
-    struct Recent { int64_t t; std::string mode, call, grid, ctry; double km, rf, wpm; };
+    struct Recent { int64_t t; std::string mode, call, grid, ctry; double km, rf, wpm; uint64_t seq = 0; };
     int64_t now() const { return clock_ ? clock_() : gallery::nowUtc(); }
+    /** ★★ beta92 the last-10 card is the SERVER's: "every radio on this server" in place of who this run is. */
+    std::string whereShared() const {
+        std::string w = where();
+        for (const char* who : { "background decoding", "a listener's decoder" }) {
+            const size_t p = w.find(who);
+            if (p != std::string::npos) { w = w.substr(0, p) + "every radio on this server\n"; break; }
+        }
+        return w;
+    }
     std::string where() const {
         if (cw_) {
             std::string m = meta_.mode; for (auto& c : m) c = (char)std::toupper((unsigned char)c);
@@ -733,29 +743,85 @@ private:
         while (!recent_.empty() && recent_.front().t <= t - kWindowSec) { recent_.pop_front(); rollDirty_ = true; }
     }
     /** The rolling card, rewritten whole (or created, or adopted from an earlier run). `last`: the run is over. */
+    /* ★★★ V12 beta92 THE LAST-10 CARD IS ONE PER SERVER (Stuart 11-22: "we dont separate the digital spots"): one card per
+     *  kind and DIAL for the whole machine (slot "last10-<kind>-<kHz>", found without the radio, profile or origin), drawn
+     *  from a SHARED window — <gallery>/.shared/<slot>.state, every radio's spots of the last 10 minutes — merged under the
+     *  shared Lock at each refresh: this run's new spots go in unless ANOTHER radio's process already has the same call in
+     *  the same mode within kSameSec (both radios decoded one transmission); older than the window drop out. So the card
+     *  counts each transmission once, whichever radio heard it. Bounded: the window's spots (kMaxRecent at most). The hourly
+     *  cards stay this run's own (an hour is written once, when it closes). */
+    static constexpr int64_t kSameSec = 10;
+    std::string rollSlot() const {
+        char b[64]; std::snprintf(b, sizeof b, "last10-%s-%.0f", meta_.kind.c_str(), meta_.freqHz / 1e3);
+        return b;
+    }
+    /** The shared window with this run's new spots merged in (each line: t, writer, mode, call, grid, ctry, km, rf, wpm). */
+    std::vector<Recent> mergeShared(int64_t t) {
+        namespace sh = gallery::sharedday;
+        const std::string slot = rollSlot(), me = std::to_string((long long)::getpid());
+        std::vector<Recent> all; std::vector<std::string> who;
+        const std::string text = sh::readState(store_, slot);
+        size_t p = 0;
+        while (p < text.size()) {
+            size_t e = text.find('\n', p); if (e == std::string::npos) e = text.size();
+            const std::vector<std::string> f = sh::splitTabs(text.substr(p, e - p)); p = e + 1;
+            if (f.size() != 9) continue;
+            Recent r; r.t = std::atoll(f[0].c_str());
+            if (r.t <= t - kWindowSec || r.t > t + 60) continue;
+            r.mode = f[2]; r.call = f[3]; r.grid = f[4]; r.ctry = f[5];
+            r.km = f[6].empty() ? NAN : std::atof(f[6].c_str()); r.rf = std::atof(f[7].c_str()); r.wpm = std::atof(f[8].c_str());
+            all.push_back(r); who.push_back(f[1]);
+        }
+        for (const auto& r : recent_) {
+            if (r.seq <= sharedSeq_) continue;
+            bool dup = false;
+            for (size_t k = 0; k < all.size() && !dup; k++)
+                dup = who[k] != me && all[k].call == r.call && all[k].mode == r.mode && std::llabs(all[k].t - r.t) <= kSameSec;
+            if (!dup) { all.push_back(r); who.push_back(me); }
+        }
+        if (!recent_.empty()) sharedSeq_ = recent_.back().seq;
+        while (all.size() > kMaxRecent) { all.erase(all.begin()); who.erase(who.begin()); }
+        std::string o;
+        char b[64];
+        for (size_t k = 0; k < all.size(); k++) {
+            const Recent& r = all[k];
+            o += std::to_string((long long)r.t) + "\t" + who[k] + "\t" + sh::field(r.mode) + "\t" + sh::field(r.call) + "\t" + sh::field(r.grid) + "\t" + sh::field(r.ctry) + "\t";
+            if (std::isfinite(r.km)) { std::snprintf(b, sizeof b, "%.1f", r.km); o += b; }
+            std::snprintf(b, sizeof b, "\t%.0f\t%.1f\n", r.rf, r.wpm); o += b;
+        }
+        sh::writeState(store_, slot, o);
+        return all;
+    }
+    /** The rolling card, rewritten whole (or created, or adopted from an earlier run). `last`: the run is over. */
     void writeRolling(int64_t t, bool last) {
         rollWrite_ = t; rollDirty_ = false;
         if (recent_.empty() && rollName_.empty() && lastSpot_ == 0) return;   // ★ never heard anything: no card
+        std::unique_ptr<gallery::sharedday::Lock> fl;
+        std::vector<Recent> win;
+        const bool shared = !store_.dir().empty() && store_.enabled();
+        if (shared) { fl.reset(new gallery::sharedday::Lock(store_.dir())); win = mergeShared(t); }
+        else win.assign(recent_.begin(), recent_.end());
+        int64_t lastAny = lastSpot_;
         Ft8Tally w; w.cw = cw_; w.speed = !psk_;
-        for (const auto& r : recent_) w.add(r.mode, r.call, r.grid, r.ctry, r.km, r.rf, r.wpm);
-        const int64_t from = std::max(start_, t - kWindowSec);
+        for (const auto& r : win) { w.add(r.mode, r.call, r.grid, r.ctry, r.km, r.rf, r.wpm); lastAny = std::max(lastAny, r.t); }
+        const int64_t from = shared ? t - kWindowSec : std::max(start_, t - kWindowSec);
         gallery::Meta m = meta_;
         m.utc = from;
-        m.slot = "last10";
+        m.slot = shared ? rollSlot() : "last10";
         const std::string to = gallery::utcStamp(t, "%H:%M UTC");
-        std::string body = where();
+        std::string body = shared ? whereShared() : where();
         if (last) body += "The last 10 minutes of the run, to " + to + " (" + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + ")\n\n";
         else body += "The last 10 minutes: " + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + " (refreshed every minute; the hourly cards are the record)\n\n";
         if (w.spots) {
             body += w.figures(havePos());
             m.title = labelFor(w) + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 " + w.headline();
         } else {
-            const std::string ls = lastSpot_ ? gallery::utcStamp(lastSpot_, "%H:%M UTC") : std::string();
+            const std::string ls = lastAny ? gallery::utcStamp(lastAny, "%H:%M UTC") : std::string();
             body += "Nothing heard in the last 10 minutes" + (ls.empty() ? std::string() : " (the last spot was at " + ls + ")") + ".\n";
             m.title = labelFor(w) + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 nothing heard"
-                    + (ls.empty() ? std::string() : " since " + gallery::utcStamp(lastSpot_, "%H:%M"));
+                    + (ls.empty() ? std::string() : " since " + gallery::utcStamp(lastAny, "%H:%M"));
         }
-        if (rollName_.empty()) rollName_ = store_.adoptSlot(m);
+        if (rollName_.empty()) rollName_ = shared ? gallery::sharedday::adopt(store_, m) : store_.adoptSlot(m);
         if (rollName_.empty() || !store_.replace(rollName_, m, body, /*toNewest=*/true)) {
             if (!rollName_.empty()) store_.close(rollName_);
             rollName_ = store_.create(m, "txt", body);
@@ -773,6 +839,7 @@ private:
     int64_t start_ = 0, hourFrom_ = 0, rollWrite_ = 0, lastSpot_ = 0;
     Ft8Tally hour_;
     std::deque<Recent> recent_;
+    uint64_t seq_ = 0, sharedSeq_ = 0;   ///< ★ beta92 this run's spots, and how many of them are in the shared window
     bool rollDirty_ = false;
     std::string rollName_;
     uint64_t runSpots_ = 0;

@@ -19,6 +19,7 @@ import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 import { digiStationsSanitise, digiStationsMerge, digiStationRows, type StoredStation } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
+import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the logs' radio filter
 import { digiAprsPoints, digiOverlayClean, type DigiMapOverlay } from '../utils/digiMapShared';
 import { setDigiModesMapOpener, openDigiModesMap } from '../services/digiModesMap';
 import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, sondeRanges, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
@@ -11885,6 +11886,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  picks (stations.json, polled every 15 s while it is open, only what changed since), and the APRS box's stations. */
   const [digiWin, setDigiWin] = useState('24h');
   const [digiStore, setDigiStore] = useState<Map<string, StoredStation>>(() => new Map());
+  /** ★★ beta92 the radio filter's choices on the DIGI MODES MAP (logRadio.ts — 2+ radios hold stations, else null). */
+  const [digiRadios, setDigiRadios] = useState<LogRadio[] | null>(null);
   const [digiAprsOn, setDigiAprsOn] = useState(false);
   const [digiOverlay, setDigiOverlay] = useState<DigiMapOverlay | null>(null);
   /* ★★★ THE ONE OPENER (services/digiModesMap.ts — the satellite client and anything else call it): the layer, a station
@@ -11911,7 +11914,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/stations.json?${q}`, radioAuthSuffix || route.params.authSuffix || ''),
                               { cache: 'no-store' } as any);
         const j = r.ok ? digiStationsSanitise(await r.json()) : null;
-        if (live && j && !j.off) { held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); }
+        if (live && j && !j.off) { held = digiStationsMerge(held, j, !since, digiWin); since = j.now; setDigiStore(held); setDigiRadios(j.radios); }
       } catch { /* the next poll */ }
       if (live) t = setTimeout(() => { void go(); }, 15000);
     };
@@ -14420,7 +14423,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency to open the tuning menu. Here you will find direct frequency entry, your bookmarks, and a search bar to quickly find stations and band information. On supported servers you can also switch on a second VFO to listen to two signals at once.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulators & decoders',
-      body: 'This is the demodulator and decoders menu. Here you will find a wide range of demodulators and decoders to listen to or decode the signals you find \u2014 voice (AM, SSB, CW, FM and more), digital radio, data modes and whole-receiver views such as DAB, ADS-B and SATELLITE \u2014 and the filter bandwidth for what you are listening to. Each one\u2019s options open just under its key; a key this receiver cannot use stays greyed, so tap it to read why. On a VibeServer, VIEWS holds the maps: DIGI MODES (every station the digital modes and APRS heard, background decoding and every listener, over the window its age filter picks), AVIATION (every aircraft source, drawn as on the ADS-B map) and SHIPPING \u2014 each only where the server has something for it.' + (Platform.OS === 'android' ? ' With a radio plugged into this phone it also holds PAGE, the pager decoder: the speaker is muted and recordings are silent while it runs. ' + PAGING_LAW_NOTICE : ''),
+      body: 'This is the demodulator and decoders menu. Here you will find a wide range of demodulators and decoders to listen to or decode the signals you find \u2014 voice (AM, SSB, CW, FM and more), digital radio, data modes and whole-receiver views such as DAB, ADS-B and SATELLITE \u2014 and the filter bandwidth for what you are listening to. Each one\u2019s options open just under its key; a key this receiver cannot use stays greyed, so tap it to read why. On a VibeServer, VIEWS holds the maps: DIGI MODES (every station the digital modes and APRS heard, background decoding and every listener, over the window its age filter picks, and on a server with more than one radio a radio picker for which of them heard it), AVIATION (every aircraft source, drawn as on the ADS-B map) and SHIPPING \u2014 each only where the server has something for it.' + (Platform.OS === 'android' ? ' With a radio plugged into this phone it also holds PAGE, the pager decoder: the speaker is muted and recordings are silent while it runs. ' + PAGING_LAW_NOTICE : ''),
       target: tourRef('modeBtn') },    { id: 'drum', title: 'Tune with the VFO drum',
       body: 'Spin the drum or tap the buttons to tune up and down by the step rate you have set. In some modes, such as DAB and ISM, these controls step from block to block or band to band instead.',
       target: tourRef('vfoDrum') },
@@ -17236,6 +17239,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         aprsPoints={digiAprs}
         aprsFocus={aprsFocus}
         digiOverlay={digiOverlay}
+        digiRadios={digiStorePolling ? digiRadios : null}
         onPickCity={() => setCityPickerOpen(true)}
         onClose={() => { setLocalMapOpen(false); setDigiAprsOn(false); setDigiOverlay(null); }}
         disconnected={serverLost || serverBusy || connTimedOut}

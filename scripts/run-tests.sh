@@ -228,6 +228,12 @@ flags_for() {
     # ★★ V12 beta90 THE STATION STORE (vibe_station_store.h — the DIGI MODES MAP + PSK Reporter): validation, RAM, the day
     #    files, four processes flushing one day (fork), windows, the caps and pruning, subscribe(), cost. Header-only.
     test-station-store) echo "-O2 -lpthread" ;;
+    # ★★ V12 beta92 WHICH RADIO HEARD IT (vibe_log_radio.h + the gallery's "ri"): the registry, two processes (fork) on one
+    #    gallery with two radio ids, a shared item listing both, listJson radio= (a view), old lines = unknown. ~0.1 s.
+    test-log-radio)    echo "-O2 -lpthread" ;;
+    # ★★ V12 beta92 ONE DAY ITEM PER SERVER (vibe_gallery_shared.h): two forked processes / two radios write each decoder's
+    #    day item — one item, the message both heard once, both radios in "ri" (AIS/APRS DayLog, DSC, NDB). ~0.2 s.
+    test-shared-day)   echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
@@ -1239,6 +1245,8 @@ if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); 
 #    server's readers through scripts/gen-navtex-stations.mjs — stale output fails here. The rule's cases are in
 #    test_navtex.ts above and vibeserver/test-bgdecode.cpp.
 if node --no-warnings scripts/test_gallery_pager.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_pager.ts"; fi
+# ★★ V12 beta92 the logs' RADIO filter rule (src/utils/logRadio.ts) — when it is offered, what passes it
+if node --no-warnings scripts/test_log_radio.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_log_radio.ts"; fi
 # ★ The gallery's TRANSLATE (2026-10-23): which lines are sent, the source language and its hint, the layout kept.
 if node --no-warnings scripts/test_gallery_translate.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_translate.ts"; fi
 if node --no-warnings scripts/test_admin_bg.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_admin_bg.ts"; fi

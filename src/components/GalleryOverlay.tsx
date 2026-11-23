@@ -28,6 +28,7 @@ import { tlmLoadPasses, tlmParseCsv, tlmSatOfTitle, type TlmPass } from '../util
 import { rankCard } from '../utils/spotRanks';   // ★ V12 beta90 this server's PSK Reporter / WSPR places
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
+import { logRadioChoices, keepRadioPick, radioQuery, heardByText, radioChipLabel, type LogRadio } from '../utils/logRadio';   // ★ beta92
 import { langName } from '../services/transcriber';
 // ★ the translate key's plan and run, shared with the NAVTEX map's cards (MapOverlay) — one implementation
 import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
@@ -42,6 +43,8 @@ export interface GalleryItem {
   s?: string; dn?: string;
   /** ★ V12 2026-10-26 (DSC): 3 distress · 2 urgency · 1 safety, and the position a call sent ("plat"/"plon"). */
   lv?: number; plat?: number; plon?: number;
+  /** ★ V12 beta92 the radio id(s) that heard it ("a1b2c3d4[,…]"; absent = unknown — vibe_log_radio.h). */
+  ri?: string;
 }
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
@@ -102,6 +105,10 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const s = useMemo(() => makeStyles(pt), [pt]);
   const b = base.replace(/\/+$/, '');
   const [kind, setKind] = useState('');
+  /* ★★ V12 beta92 THE RADIO FILTER (src/utils/logRadio.ts, docs/v12/LOG-RADIO-FILTER.md): the gallery stays one per
+   *  server; the chips ALL RADIOS · each radio by name appear only when the list holds items from 2+ radios. A view. */
+  const [radio, setRadio] = useState('');
+  const [radios, setRadios] = useState<LogRadio[] | null>(null);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [items, setItems] = useState<GalleryItem[] | null>(null);
@@ -132,8 +139,14 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const load = useCallback(async () => {
     setItems(null); setNote('');
     try {
-      let r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?${galleryPageQuery(page, kind)}`, readAuth), { cache: 'no-store' } as any);
+      let r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?${galleryPageQuery(page, kind)}${radioQuery(radio)}`, readAuth), { cache: 'no-store' } as any);
       let j = await r.json();
+      {   // ★ beta92 the radio chips: a pick no longer offered (one radio left in this kind) falls back to ALL
+        const choices = logRadioChoices(j?.radios);
+        setRadios(choices);
+        const kept = keepRadioPick(radio, choices);
+        if (kept !== radio) { setRadio(kept); setPage(1); return; }
+      }
       const paged = typeof j?.total === 'number';
       if (r.ok && !j?.error && !paged) {   // ★ an older server: its newest 300, no pages
         r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?limit=300${kind ? `&kind=${kind}` : ''}`, readAuth), { cache: 'no-store' } as any);
@@ -151,10 +164,10 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       setNote(j.enabled === false ? 'This server keeps no gallery.'
         : galleryFooter(j, kind, KINDS.find((k) => k.id === kind)?.label || kind.toUpperCase(), size));
     } catch { setItems([]); setNote(pagesRef.current > 1 ? 'That page did not load — try again, or pick another page.' : 'This server has no gallery (it may need updating).'); }
-  }, [b, kind, page, readAuth]);
+  }, [b, kind, page, readAuth, radio]);
   // ★ Loaded on opening, a filter and a page — NOT on BACK from an item (the list under it is still there).
   useEffect(() => { if (visible) void load(); }, [visible, load]);
-  useEffect(() => { if (!visible) { setOpen(null); setPage(1); } }, [visible]);
+  useEffect(() => { if (!visible) { setOpen(null); setPage(1); setRadio(''); } }, [visible]);
 
   // ★ the NAVTEX stations row: asked once per opening, on page 1 of ALL / NAVTEX
   const [navSum, setNavSum] = useState<NavReport | null>(null);
@@ -315,6 +328,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                   </TouchableOpacity>
                 ))}
               </View>
+              {!!radios && (
+                <View style={s.filters} accessibilityRole="toolbar" accessibilityLabel="Filter by radio">
+                  {[{ id: '', name: 'ALL RADIOS' } as LogRadio, ...radios].map((r) => (
+                    <TouchableOpacity key={r.id || 'allradios'} onPress={() => { setRadio(r.id); setPage(1); }}
+                                      accessibilityRole="button" accessibilityState={{ selected: radio === r.id }}
+                                      accessibilityLabel={r.id ? `Only what ${r.name} heard` : 'Every radio on this server'}
+                                      style={[s.key, radio === r.id && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
+                      <Text style={[s.keyText, radio === r.id && { color: pt.ink.selected }]}>{r.id ? radioChipLabel(r) : r.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
               {items == null ? <ActivityIndicator style={{ marginTop: 24 }} /> : (
                 <FlatList ref={listRef} data={items} keyExtractor={(it) => it.f} contentContainerStyle={scrollLane}
                   ListFooterComponent={pages > 1 ? (
@@ -385,7 +410,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                           <Text style={s.tag}>{`  ${galleryOriginTag(it)}${it.partial ? ' · PARTIAL' : ''}`}</Text>
                         </Text>
                         {/* ★ only the parts an item has (an ISM day has no demodulator) — the web client's rule */}
-                        <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
+                        <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, heardByText(it.ri, radios) || it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
                       </View>
                       {!!onShipMap && it.k === 'dsc' && typeof it.plat === 'number' && typeof it.plon === 'number' && (
                         <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show this call's position on the shipping map: ${it.title}`}

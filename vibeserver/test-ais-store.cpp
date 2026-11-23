@@ -15,6 +15,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <set>
 #include <string>
 #include <sys/wait.h>
@@ -161,6 +162,7 @@ static void testProcesses() {
     for (int p = 0; p < kProcs; ++p) {
         const pid_t pid = ::fork();
         if (pid == 0) {
+            { char id[16]; std::snprintf(id, sizeof id, "radio%d", p); vibe::logradio::setMine(id); }   // ★ beta92 each its radio id
             for (int round = 0; round < kRounds; ++round) {
                 std::vector<st::Rec> batch;
                 // ships 0..99 heard by every radio (the shared coast), 100 more each its own
@@ -190,6 +192,27 @@ static void testProcesses() {
     bool ordered = true;
     for (auto& r : all) for (int i = 1; i < r.nTrk; ++i) if (r.trk[i].t <= r.trk[i - 1].t) ordered = false;
     CHECK(ordered, "every track in time order");
+    // ★★ beta92 which radios heard each ship: the shared coast lists all four, each radio's own ships only it
+    {
+        const auto reg = vibe::logradio::readRegistry(d);
+        bool sharedAll = true, ownOne = true;
+        for (auto& r : all) {
+            const auto ids = vibe::logradio::idsOf(reg, r.radios);
+            if (r.mmsi < 300000) { if (ids.size() != (size_t)kProcs) sharedAll = false; }
+            else if (ids.size() != 1 || ids[0] != "radio" + std::to_string((r.mmsi - 300000) / 1000)) ownOne = false;
+        }
+        CHECK(reg.size() == (size_t)kProcs, "the registry: %zu radios, one bit each", reg.size());
+        CHECK(sharedAll, "beta92: a ship every radio heard lists all four radios");
+        CHECK(ownOne, "beta92: a ship one radio heard lists only that radio");
+        vibe::logradio::setMachineRadios([] { return std::vector<vibe::logradio::Named>{ { "radio0", "HF" }, { "radio1", "VHF" } }; });
+        const std::string j = st::toJson(all, 20000, false, all.size(), d);
+        CHECK(j.find("\"radios\":[{\"id\":\"radio0\",\"name\":\"HF\",\"n\":200}") != std::string::npos, "the JSON names the radios with their ships");
+        CHECK(j.find("\"radios\":[\"radio0\",\"radio1\",\"radio2\",\"radio3\"]") != std::string::npos
+              || j.find("\"radios\":[\"radio") != std::string::npos, "each ship's radios in the JSON");
+        vibe::logradio::setMachineRadios(nullptr);
+        st::Rec old; old.mmsi = 999; std::memset(&old.radios, 0, sizeof old.radios);
+        CHECK(vibe::logradio::idsOf(reg, old.radios).empty(), "an older record (the tail bytes 0) is unknown");
+    }
     CHECK(fsize(d + "/" + st::kFile) == st::fileBytesFor(2048, 100 + 100 * kProcs), "the file is exactly header + directory + %d records", 100 + 100 * kProcs);
     rmDir(d);
 }

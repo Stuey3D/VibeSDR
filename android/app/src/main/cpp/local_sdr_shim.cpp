@@ -29196,7 +29196,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string w;
                 for (char c : qv("window")) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) w += c;
                 const long long since = std::max(0LL, std::atoll(qv("since").c_str()));
-                body = vsStations().mapJson(vibestations::windowSec(w.substr(0, 4)), (int64_t)since, g_bgLat.load(), g_bgLon.load());
+                // ★★ V12 beta92 ?radio=<id> — the calls one radio heard (a VIEW of the one server-wide store; untagged rows
+                //    from older files always pass). [0-9a-z] only, ≤ 16 (vibe_log_radio.h validId); anything else = all.
+                std::string rad = qv("radio");
+                if (!vibe::logradio::validId(rad)) rad.clear();   // ★ all of it or none: a filtered-down junk value is not an id
+                body = vsStations().mapJson(vibestations::windowSec(w.substr(0, 4)), (int64_t)since, g_bgLat.load(), g_bgLon.load(),
+                                            vibestations::kMaxOut, rad);
             }
             sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
@@ -29278,7 +29283,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (limit <= 0) limit = 25;
                     if (limit > 100) limit = 100;
                 } else if (limit <= 0 || limit > 1000) limit = 300;
-                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset);
+                // ★★ V12 beta92 ?radio=<id> — one radio's items (+ the untagged): a VIEW; the gallery stays one per server
+                std::string rad = qv("radio");
+                if (!vibe::logradio::validId(rad)) rad.clear();   // ★ all of it or none: a filtered-down junk value is not an id
+                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset, rad);
                 // ★ Plus whether this server keeps anything at all — a client shows "this server keeps no gallery" honestly.
                 j.insert(1, std::string("\"enabled\":") + (g.enabled() ? "true" : "false") + ",");
                 reply("200 OK", "application/json", j);

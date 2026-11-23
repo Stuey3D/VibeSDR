@@ -26,6 +26,7 @@
 //    loses at most that. ★ A RESTART reads the day's card back (Store::adoptSlot + readItem), so the day carries on.
 #pragma once
 #include "vibe_gallery.h"
+#include "vibe_gallery_shared.h"
 #include "vibe_mapdata.h"
 #include "vibe_ndb_gallery_clean.h"   // ★ kSetAsideHeading — the section the clean-up moved lines to
 #include "vibe_ndb_service.h"
@@ -245,8 +246,11 @@ private:
     void openDay(int64_t day) {
         day_ = day; rows_.clear(); setAside_.clear(); dirty_ = newBeacon_ = false; cardName_.clear(); mapName_.clear();
         cardAt_ = mapAt_ = 0;
-        cardName_ = store_.adoptSlot(meta("ndbsum-" + date(day_)), /*anyOrigin=*/true);
-        mapName_ = store_.adoptSlot(meta("ndbmap-" + date(day_)), /*anyOrigin=*/true);
+        // ★★ beta92 the SERVER's day (vibe_gallery_shared.h): found by slot alone — never the radio, profile or origin
+        if (store_.dir().empty()) return;
+        gallery::sharedday::Lock fl(store_.dir());
+        cardName_ = gallery::sharedday::adopt(store_, meta("ndbsum-" + date(day_)));
+        mapName_ = gallery::sharedday::adopt(store_, meta("ndbmap-" + date(day_)));
         if (!cardName_.empty()) { std::string b; if (store_.readItem(cardName_, b)) restore(b); }
     }
     void rollIfNewDay(int64_t t) {
@@ -270,7 +274,8 @@ private:
     }
     std::string body(int64_t t) const {
         std::string o = "NDB heard log" + std::string(kDot) + date(day_) + " (UTC)\n";
-        o += std::string("Heard by ") + (o_.origin == "background" ? "background decoding" + (o_.profile.empty() ? std::string() : " (" + o_.profile + ")") : "a listener in NDB mode") + ".\n";
+        // ★ beta92 the server's day: every radio, background decoding and listeners alike (vibe_gallery_shared.h)
+        o += "Heard by every radio on this server \xe2\x80\x94 background decoding and listeners in NDB mode.\n";
         o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + ". An ident is listed only once several of its repeats agreed. Stations, countries and "
              "positions: " + std::string(vibendb::kNavaidCredit) + "; a beacon not in that list shows its ident alone.\n\n";
         o += std::to_string(rows_.size()) + (rows_.size() == 1 ? " beacon" : " beacons") + " identified";
@@ -322,9 +327,33 @@ private:
             rows_[r.ident + "@" + std::to_string((long long)std::lround(r.hz / 500.0))] = r;
         }
     }
+    /** ★★ beta92 another radio's beacons: the day's card as it stands (every radio's), with ours merged over it — the
+     *  first heard the earliest, the last and its details the latest, the best SNR the best. Caller holds the Lock. */
+    void mergeFromCard() {
+        if (cardName_.empty()) cardName_ = gallery::sharedday::adopt(store_, meta("ndbsum-" + date(day_)));
+        std::string b;
+        if (cardName_.empty() || !store_.readItem(cardName_, b)) return;
+        const size_t before = rows_.size();
+        std::map<std::string, Row> mine;
+        mine.swap(rows_);
+        restore(b);
+        for (const auto& kv : mine) {
+            auto it = rows_.find(kv.first);
+            if (it == rows_.end()) { rows_[kv.first] = kv.second; continue; }
+            Row& d = it->second; const Row& r = kv.second;
+            const int64_t first = d.first && d.first < r.first ? d.first : r.first;
+            const float best = std::max(d.best, r.best);
+            if (r.last >= d.last) d = r;                    // ★ ours is the newer: its details
+            else if (!std::isfinite(d.lat) && std::isfinite(r.lat)) { d.lat = r.lat; d.lon = r.lon; }
+            d.first = first; d.best = best;
+        }
+        if (rows_.size() > before) newBeacon_ = true;   // ★ another radio's beacon: the map follows
+    }
     void writeCard(int64_t t) {
         cardAt_ = t; dirty_ = false;
-        if (rows_.empty()) return;
+        if (rows_.empty() || store_.dir().empty()) return;
+        gallery::sharedday::Lock fl(store_.dir());
+        mergeFromCard();
         gallery::Meta m = meta("ndbsum-" + date(day_));
         m.title = title();
         m.dlName = "NDB " + date(day_) + " heard.txt";
@@ -338,7 +367,9 @@ private:
         mapAt_ = t; newBeacon_ = false;
         if (rows_.empty() || !o_.havePos) return;
         const std::string png = renderMap(t);
-        if (png.empty()) return;
+        if (png.empty() || store_.dir().empty()) return;
+        gallery::sharedday::Lock fl(store_.dir());
+        if (mapName_.empty()) mapName_ = gallery::sharedday::adopt(store_, meta("ndbmap-" + date(day_)));
         gallery::Meta m = meta("ndbmap-" + date(day_));
         m.title = "NDB" + std::string(kDot) + date(day_) + kDot + "map of the " + std::to_string(rows_.size()) + (rows_.size() == 1 ? " beacon heard" : " beacons heard");
         m.dlName = "NDB " + date(day_) + " map.png";

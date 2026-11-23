@@ -9,6 +9,9 @@
 //  5. Days and windows: 1 h / 24 h / 7 d / 30 d / all; a spot yesterday is in 24 h, not in 1 h; changedSince = live poll.
 //  6. BOUNDED: kDayCap rows a day (196 KB), the rest counted dropped; maxOut calls in an answer; days pruned to the budget.
 //  7. subscribe(): every accepted reception, newToday once per call+mode+band; unsubscribe stops it; forEachSince.
+//  9. beta92 WHICH RADIO (vibe_log_radio.h): two PROCESSES (fork), two radio ids, one station heard by both → one row
+//     listing both; a station only one heard lists one; the registry gives each id one bit; the radio= filter; an OLD
+//     file (pad bytes 0) reads as unknown and passes every filter; the "radios" list names the radios as the machine does.
 //  8. Cost: spots per second into the RAM table; a flush of a full day; a 30-day map answer (cached past days).
 //  `--write <galleryDir>` writes a small fixture (today's stations) for the web/app map tests and exits.
 #include "vibe_station_store.h"
@@ -16,7 +19,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -164,6 +169,91 @@ static void testProcesses() {
     CHECK(all80, "every count exactly 80 (deltas under the lock)");
     CHECK(j.find("\"snr\":-7") != std::string::npos, "best SNR across the processes");
     rmDir(d);
+}
+
+static void testRadios() {
+    std::printf("── beta92: which radio heard it (two processes) ──\n");
+    namespace lr = vibe::logradio;
+    const std::string d = tmpDir("radios");
+    const char* ids[2] = { "aa11bb22", "cc33dd44" };
+    std::vector<pid_t> kids;
+    for (int p = 0; p < 2; ++p) {
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            lr::setMine(ids[p]);
+            vs::Store s([] { return T0 + 100; }, false);
+            s.configure([d] { return d; }, [] { return 100ull << 20; });
+            for (int round = 0; round < 10; ++round) {
+                s.spot(rx("G4BOTH", "IO91", "FT8", "20m", -10 + p, T0 + 50));       // both radios hear it
+                s.spot(rx(p == 0 ? "G4ONEA" : "M0TWOB", "IO92", "FT8", "20m", -5, T0 + 60));   // one each
+                s.flush();
+            }
+            std::_Exit(0);
+        }
+        kids.push_back(pid);
+    }
+    for (pid_t k : kids) { int st = 0; ::waitpid(k, &st, 0); }
+    const std::vector<std::string> reg = lr::readRegistry(d);
+    CHECK(reg.size() == 2 && reg[0] != reg[1], "the registry: two ids, one bit each (%zu)", reg.size());
+    lr::setMine("");
+    lr::setMachineRadios([] { return std::vector<lr::Named>{ { "aa11bb22", "RSP1A HF" }, { "cc33dd44", "RTL VHF" } }; });
+    g_now = T0 + 100;
+    vs::Store r([] { return g_now; }, false);
+    r.configure([d] { return d; }, [] { return 100ull << 20; });
+    std::string j = r.mapJson(vs::kDaySec, 0, NAN, NAN);
+    CHECK(num(j, "total") == 3, "three stations, one row each (%ld)", num(j, "total"));
+    size_t g = j.find("\"call\":\"G4BOTH\"");
+    std::string row = g == std::string::npos ? "" : j.substr(g, j.find('}', g) - g);
+    CHECK(num(row, "count") == 20, "G4BOTH counted 20 (both processes): %s", row.c_str());
+    CHECK(row.find("aa11bb22") != std::string::npos && row.find("cc33dd44") != std::string::npos, "G4BOTH lists both radios: %s", row.c_str());
+    g = j.find("\"call\":\"G4ONEA\"");
+    row = g == std::string::npos ? "" : j.substr(g, j.find('}', g) - g);
+    CHECK(row.find("\"radios\":[\"aa11bb22\"]") != std::string::npos, "G4ONEA lists only its radio: %s", row.c_str());
+    CHECK(j.find("{\"id\":\"aa11bb22\",\"name\":\"RSP1A HF\",\"n\":2}") != std::string::npos
+          && j.find("{\"id\":\"cc33dd44\",\"name\":\"RTL VHF\",\"n\":2}") != std::string::npos, "the radios list, named, with counts: %s", j.substr(0, 400).c_str());
+    std::string f = r.mapJson(vs::kDaySec, 0, NAN, NAN, vs::kMaxOut, "cc33dd44");
+    CHECK(count(f, "\"call\":") == 2 && f.find("G4ONEA") == std::string::npos && f.find("M0TWOB") != std::string::npos && f.find("G4BOTH") != std::string::npos,
+          "radio=cc33dd44: G4BOTH + M0TWOB only: %s", f.c_str());
+    CHECK(f.find("\"radio\":\"cc33dd44\"") != std::string::npos, "the answer says the filter");
+    f = r.mapJson(vs::kDaySec, 0, NAN, NAN, vs::kMaxOut, "../etc");
+    CHECK(count(f, "\"call\":") == 3, "a junk radio= is ignored (all)");
+    // ★ the OLD FILE: a beta90/91 record has 0 in the mask's bytes → unknown, shown under every radio
+    {
+        const std::string path = r.dayPath(vs::dayOf(T0));
+        const int fd = ::open(path.c_str(), O_RDWR);
+        vs::Hdr h{}; CHECK(::pread(fd, &h, sizeof h, 0) == (ssize_t)sizeof h, "read header");
+        vs::Rec rec{}; std::memset(&rec, 0, sizeof rec);
+        vs::putStr(rec.call, 16, "OH2OLD"); vs::putStr(rec.grid, 8, "KP20"); vs::putStr(rec.mode, 8, "FT8"); vs::putStr(rec.band, 8, "20m");
+        rec.first = rec.last = (uint32_t)(T0 + 70); rec.count = 3; rec.best = 1; rec.lastSnr = 1; rec.origins = 1; rec.ver = 1;
+        CHECK(::pwrite(fd, &rec, sizeof rec, vs::kHeader + (off_t)h.n * vs::kRecSize) == (ssize_t)sizeof rec, "append an old-style row");
+        h.n += 1; CHECK(::pwrite(fd, &h, sizeof h, 0) == (ssize_t)sizeof h, "header");
+        ::close(fd);
+    }
+    j = r.mapJson(vs::kDaySec, 0, NAN, NAN);
+    g = j.find("\"call\":\"OH2OLD\"");
+    row = g == std::string::npos ? "" : j.substr(g, j.find('}', g) - g);
+    CHECK(!row.empty() && row.find("\"radios\"") == std::string::npos, "an old row reads, with no radios (unknown): %s", row.c_str());
+    CHECK(num(j, "radioUnknown") == 1, "the unknown are counted: %ld", num(j, "radioUnknown"));
+    f = r.mapJson(vs::kDaySec, 0, NAN, NAN, vs::kMaxOut, "aa11bb22");
+    CHECK(f.find("OH2OLD") != std::string::npos && f.find("M0TWOB") == std::string::npos, "an unknown row passes every filter");
+    // ★ one radio only: the list has one entry (the clients then draw no filter)
+    lr::setMachineRadios(nullptr);
+    rmDir(d);
+    {
+        const std::string d1 = tmpDir("radio1");
+        lr::setMine("aa11bb22");
+        vs::Store s([] { return T0 + 100; }, false);
+        s.configure([d1] { return d1; }, [] { return 100ull << 20; });
+        s.spot(rx("G4ABC", "IO91", "FT8", "20m", -1, T0 + 10));
+        const std::string before = s.mapJson(vs::kDaySec, 0, NAN, NAN);   // unflushed, bit not yet resolved
+        s.flush();
+        const std::string after = s.mapJson(vs::kDaySec, 0, NAN, NAN);
+        CHECK(after.find("\"radios\":[{\"id\":\"aa11bb22\",\"name\":\"aa11bb22\",\"n\":1}]") != std::string::npos, "one radio listed (by id, no names known): %s", after.substr(0, 300).c_str());
+        CHECK(after.find("\"radios\":[\"aa11bb22\"]") != std::string::npos, "a row spotted before the bit was known says who heard it");
+        (void)before;
+        lr::setMine("");
+        rmDir(d1);
+    }
 }
 
 static void testWindows() {
@@ -338,6 +428,7 @@ int main(int argc, char** argv) {
     testRamOnly();
     testDisk();
     testProcesses();
+    testRadios();
     testWindows();
     testBounds();
     testSubscribe();

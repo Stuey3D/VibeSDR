@@ -184,6 +184,8 @@ export interface SpotRow {
   msg?:     string;
   /** Degrees from the receiver. Server-supplied on UberSDR; derived from `grid` on-device. */
   bearing?: number;
+  /** ★ V12 beta92 a VibeServer's stored station: the radio id(s) that heard it (src/utils/logRadio.ts); none = unknown. */
+  radios?: string[];
 }
 
 /** Trimmed string, or undefined — so an empty field never renders as a blank line. */

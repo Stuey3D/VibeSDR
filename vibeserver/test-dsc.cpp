@@ -22,6 +22,8 @@
 #include "../tools/dsc-bench/dsc_synth.h"
 
 #include <atomic>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -370,6 +372,50 @@ int main() {
         tap.finish(false);
         ok(n == 60 || n == 61, "100 positioned calls in an hour: 60 pinned items (+ the log) — " + std::to_string(n));
         ok(slurpTxt(dir).find("positioned calls this hour not pinned") != std::string::npos, "…and the log says some were not pinned");
+        rmTree(dir);
+    }
+
+    std::printf("── beta92 ONE DAY LOG PER SERVER: two radios (forked processes) on 2187.5 kHz, the same distress alert\n");
+    {
+        const std::string dir = tmpDir("galshared");
+        const auto cs = calls();
+        Call c0, c6; parse(cs[0].syms, c0); parse(cs[6].syms, c6);
+        static const char* const ids[2] = { "aa11bb22", "cc33dd44" };
+        std::vector<pid_t> kids;
+        for (int p = 0; p < 2; ++p) {
+            const pid_t pid = ::fork();
+            if (pid == 0) {
+                logradio::setMine(ids[p]);
+                gallery::Store st; st.setDir(dir); st.setLimitBytes(10u << 20); st.setRadioLabel(p ? "RTL" : "RSP1A");
+                gallery::Meta m; m.kind = "dsc"; m.origin = p ? "live" : "background"; m.freqHz = p ? 2185800 : 2187500; m.mode = "usb";
+                m.decoder = "dsc"; m.profile = p ? "" : "Profile 1";
+                {
+                    bg::DscGalleryTap tap(st, m);
+                    tap.dscCall(c0, describe(c0), "{\"rf\":2187500}", false);   // ★ both radios decode this distress alert
+                    Call mine = c6; mine.self = p ? "235099999" : mine.self;     // ★ and one call each, their own
+                    tap.dscCall(mine, describe(mine), "{\"rf\":2187500}", false);
+                    tap.finish(false);
+                }
+                std::_Exit(0);
+            }
+            kids.push_back(pid);
+        }
+        for (pid_t k : kids) { int stt = 0; ::waitpid(k, &stt, 0); }
+        logradio::setMine("");
+        gallery::Store r; r.setDir(dir); r.setLimitBytes(10u << 20);
+        std::string logN; int logs = 0, alerts = 0; std::string logT;
+        for (const auto& n : r.names("dsc")) {
+            if (r.field(n, "s").rfind("day-", 0) == 0) { ++logs; logN = n; r.readItem(n, logT); }
+            else if (r.field(n, "title").find("DISTRESS") != std::string::npos) ++alerts;
+        }
+        ok(logs == 1, "ONE day log for the server (" + std::to_string(logs) + "), whatever the radio, profile, origin or dial");
+        int dl = 0; for (size_t i = 0; (i = logT.find("MMSI 235012345", i)) != std::string::npos; ++i) ++dl;
+        ok(dl == 1, "the distress alert both radios decoded: once in the log (" + std::to_string(dl) + ")");
+        ok(alerts == 1, "…and ONE distress item (" + std::to_string(alerts) + ")");
+        ok(logT.find("235099999") != std::string::npos, "each radio's own call is in the log");
+        const std::string ri = r.field(logN, "ri");
+        ok(ri.find(ids[0]) != std::string::npos && ri.find(ids[1]) != std::string::npos, "the log lists both radios (" + ri + ")");
+        ok(r.field(logN, "title").find("3 calls \xc2\xb7 1 distress") != std::string::npos, "its title counts the server's day, each call once: " + r.field(logN, "title"));
         rmTree(dir);
     }
 
