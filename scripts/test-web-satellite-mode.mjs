@@ -6,7 +6,9 @@
 //   → the COMPACT box (corrected frequency, "In range for", the half-globe drawn), AUTO DOPPLER → {"op":"doppler"},
 //   METEOR (image) → the BIG box with the decoder image canvas lent into it, ISS 145.800 (sstv) compact → big on a
 //   picture, a packet bird's APRS lines, EXIT → {"op":"drop"} and the canvas home again; desktop and 390 px, dark and light,
-//   no sideways scroll. Needs web/dist (node scripts/build-web.mjs). Screenshots to $SAT_SHOTS (default $TMPDIR).
+//   no sideways scroll; ★★★ beta92 OPEN IN VFO B (RS-44 transponder → its CW beacon in B: the key, B's line with the
+//   Doppler, ONE box; a CW beacon on A says its CW decoder listens and shows the text; ISS 145.800 SSTV + 145.825 APRS in
+//   B: the line switch chooses the decoder area, B off ends it). Needs web/dist (node scripts/build-web.mjs). Screenshots to $SAT_SHOTS (default $TMPDIR).
 //     node scripts/test-web-satellite-mode.mjs
 import * as esbuild from 'esbuild';
 import http from 'node:http';
@@ -29,7 +31,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 // the window, bundled on its own (the shared src/services/satellites.ts inside), exposed as window.__Sat
-const bundle = (await esbuild.build({ stdin: { contents: "export { SatPanel } from './web/client/src/satellites.ts'; export { parseSatList, parseSatTelemetry, parseSatTrack } from './src/services/satellites.ts';", resolveDir: root, loader: 'ts' },
+const bundle = (await esbuild.build({ stdin: { contents: "export { SatPanel } from './web/client/src/satellites.ts'; export { parseSatList, parseSatTelemetry, parseSatTrack, parseSatVfoB, satHzText, satVfoBHz } from './src/services/satellites.ts';", resolveDir: root, loader: 'ts' },
   bundle: true, write: false, format: 'iife', globalName: '__Sat', platform: 'browser', target: 'es2020', logLevel: 'silent' })).outputFiles[0].text;
 
 // the built page, served plain (its sockets find nobody — the page sits at its connect screen, CSS and all)
@@ -68,7 +70,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-satmode-'));
 const dbg = await freePort();
 const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg}`, '--no-first-run', '--no-default-browser-check',
   `--user-data-dir=${dir}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
-const deadline = setTimeout(() => { console.log('   FAIL deadline (90 s)'); try { edge.kill('SIGKILL'); } catch {} process.exit(1); }, 90000);
+const deadline = setTimeout(() => { console.log("   FAIL deadline (150 s)"); try { edge.kill("SIGKILL"); } catch {} process.exit(1); }, 150000);
 let wsC;
 try {
   let tabs = [];
@@ -116,6 +118,7 @@ try {
       openMap: (o) => window.__sent.push({ map: o }),
       now: () => window.__fake ?? Date.now(),
       galleryGet: (p) => (window.__galGet ? window.__galGet(p) : Promise.resolve(null)),   // ★★ beta91 the saved passes
+      vfobOpen: (norad, tx) => window.__sent.push({ vfob: [norad, tx] }),                 // ★★★ beta92 OPEN IN VFO B
     });
     window.__p.setCap({ ok: true, why: '' });
     return true; })()`);
@@ -433,6 +436,82 @@ try {
   ok(await until(`/LAST PASSES · none saved/.test(document.querySelector('#satPanel .sat-tlm').textContent) && document.querySelectorAll('#satPanel .tlm-c').length === 8`, 3000),
      'no gallery (or an empty one): this pass drawn, "none saved in the gallery yet"');
   await desk();
+
+  // ── ★★★ beta92 OPEN IN VFO B ──
+  console.log('— beta92 OPEN IN VFO B: RS-44 transponder → its CW beacon');
+  await desk(); await sleep(200);
+  await ev(`window.__fake = null; window.__p.exit(); window.__p.show(); true`);
+  const rsList = list();
+  rsList.sats.unshift({ id: 'RS-44', name: 'RS-44', norad: 44909, note: '', age: 0.3, ageState: 'fresh', el: 36, az: 120, rangeKm: 2100, lat: 44, lon: 8, inRangeFor: 640,
+    tx: [{ label: 'Transponder', hz: 435610000, hiHz: 435670000, mode: 'usb', loop: 'none', reach: true, use: 'voice', upHz: 145935000 },
+         { label: 'CW beacon', hz: 435605000, mode: 'cw', loop: 'none', reach: true, use: 'packet', decoder: 'cw' }],
+    passes: [{ aos: now - 400, tca: now + 100, los: now + 640, maxEl: 48, aosAz: 300, losAz: 120 }] });
+  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(rsList)})); true`);
+  // one at a time, as before: a pick with nothing offered draws no VFO B part at all
+  await ev(`window.__p.onPicked({ norad: 44909, tx: 0, decoder: '' }); window.__p.onReadout({ state: 'TRACK', name: 'RS-44', norad: 44909, tx: 'Transponder', nominal: 435640000, offset: -4745, rate: 12, time: 'ok' }); true`);
+  ok(await ev(`document.querySelector('#satPanel .sat-vb').hidden && !document.querySelector('#satPanel [data-act="vfob"]')`), 'a pick with no vfob offer: no key, no B line (the one-downlink box)');
+  // the server offers the beacon
+  await ev(`window.__p.onPicked({ norad: 44909, tx: 0, decoder: '', vfob: [1] }); true`);
+  const key = await ev(`document.querySelector('#satPanel [data-act="vfob"]')?.textContent || ''`);
+  ok(key === 'OPEN IN VFO B · CW beacon', `the key for the beacon: "${key}"`);
+  await shot('vfob-offer-desktop');
+  await ev(`window.__sent = []; document.querySelector('#satPanel [data-act="vfob"]').click(); true`);
+  ok(JSON.stringify(await ev('window.__sent')) === '[{"vfob":[44909,1]}]', `the key sends sat_vfob for that downlink (${JSON.stringify(await ev('window.__sent'))})`);
+  await ev(`window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: true, norad: 44909, tx: 1, hz: 435605000, mode: 'cw', use: 'packet', label: 'CW beacon', decoder: 'cw', params: {}, shift: -4744.6 })); true`);
+  const bHz = await ev(`__Sat.satHzText(__Sat.satVfoBHz(435605000, { state: 'TRACK', nominal: 435640000, offset: -4745, time: 'ok' }))`);
+  const vb = JSON.parse(await ev(`JSON.stringify({ line: document.querySelector('#satPanel .sat-vb .sat-ln')?.textContent, keys: document.querySelectorAll('#satPanel [data-act="vfob"]').length,
+    boxes: document.querySelectorAll('#satPanel .sat-box').length, globes: document.querySelectorAll('#satPanel canvas.sat-globe').length,
+    sw: document.querySelectorAll('#satPanel .sat-ln.sw').length, cw: !document.querySelector('#satPanel .sat-cw').hidden && document.querySelector('#satPanel .sat-cw').textContent,
+    view: window.__p.viewNow() })`));
+  ok(vb.line === `VFO B · CW beacon · ${bHz} · CW decoder listening for the beacon`, `B's line with its Doppler: "${vb.line}" (want ${bHz})`);
+  ok(vb.boxes === 1 && vb.globes === 1, 'ONE box, one globe');
+  ok(vb.keys === 0, 'the key goes once the beacon is open');
+  ok(vb.sw === 0 && vb.view === 'B' && vb.cw === 'no characters yet', `A (a transponder) has no decoder: no switch, the area is B's CW (${JSON.stringify(vb)})`);
+  await ev(`window.__p.bTextAdd('RS44 RS44 '); window.__p.bTextAdd('DE RS44 K'); window.__p.bState('CW decoder reading the beacon'); true`);
+  ok(/RS44 RS44 DE RS44 K/.test(await ev(`document.querySelector('#satPanel .sat-cw').textContent`)) && /reading the beacon/.test(await ev(`document.querySelector('#satPanel .sat-vb').textContent`)),
+     'B\'s decoded CW in the area, its own words on its line');
+  await shot('vfob-cw-desktop');
+  await phone(); await sleep(400);
+  f = await fits(); ok(fitOk(f), `390 px with VFO B open: fits, no sideways scroll (${JSON.stringify(f)})`);
+  await shot('vfob-cw-phone');
+  await desk(); await sleep(200);
+  await ev(`window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: false, norad: 44909, tx: 1, why: 'VFO B was switched off' })); true`);
+  ok(await ev(`!document.querySelector('#satPanel .sat-vb .sat-ln') && document.querySelector('#satPanel .sat-cw').hidden && !!document.querySelector('#satPanel [data-act="vfob"]')`),
+     'B off: its line and area go, the key comes back');
+  await ev(`window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: false, refused: true, norad: 44909, tx: 1, why: 'Outside the radio’s window here' })); true`);
+  ok(/Outside the radio/.test(await ev(`document.querySelector('#satPanel .sat-why').textContent`)), 'a refusal says why');
+
+  console.log('— beta92 fix: a CW beacon on VFO A');
+  await ev(`window.__p.onPicked({ norad: 44909, tx: 1, decoder: 'cw', vfob: [0] }); true`);
+  const cwSt = await ev(`document.querySelector('#satPanel [data-s="state"]').textContent`);
+  ok(/CW decoder listening for the beacon/.test(cwSt) && !/packets/.test(cwSt), `a CW beacon says its CW decoder is listening ("${cwSt}")`);
+  ok(await ev(`document.querySelector('#satPanel .sat-pk').hidden && document.querySelector('#satPanel .sat-cw').textContent === 'no characters yet'`), 'no "no packets yet" — the CW text area instead');
+  await ev(`window.__p.cwText('VVV DE RS44'); true`);
+  ok(await ev(`document.querySelector('#satPanel .sat-cw').textContent`) === 'VVV DE RS44', 'its decoded text, as CW shows it');
+
+  console.log('— beta92 the line switch: ISS 145.800 SSTV on A + 145.825 APRS on B');
+  await ev(`window.__p.onPicked({ norad: 25544, tx: 1, decoder: 'sstv', vfob: [2] }); window.__p.onReadout({ state: 'TRACK', name: 'ISS', norad: 25544, tx: 'Voice / SSTV', nominal: 145800000, offset: 2210, rate: -40, time: 'ok' }); true`);
+  ok(await ev(`document.querySelector('#satPanel [data-act="vfob"]')?.textContent`) === 'OPEN IN VFO B · APRS', 'APRS offered');
+  await ev(`window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: true, norad: 25544, tx: 2, hz: 145825000, mode: 'nfm', use: 'packet', label: 'APRS', decoder: 'aprs', params: { packet: '1200', baud_rate: 1200 } })); true`);
+  await ev(`window.__p.bPacket('RS0ISS>APRS: ARISS'); true`);
+  const s1 = JSON.parse(await ev(`JSON.stringify({ sw: document.querySelectorAll('#satPanel .sat-ln.sw').length, on: document.querySelector('#satPanel .sat-ln.sw.on')?.dataset.v,
+    pk: !document.querySelector('#satPanel .sat-pk').hidden && document.querySelector('#satPanel .sat-pk').textContent, a: document.querySelector('#satPanel [data-s="state"]').textContent })`));
+  ok(s1.sw === 2 && s1.on === 'B' && /RS0ISS>APRS: ARISS/.test(s1.pk || ''), `both lines tappable, B shown: its packets (${JSON.stringify(s1)})`);
+  ok(/^VFO A · /.test(s1.a), `A's line says it is VFO A (${s1.a})`);
+  await shot('vfob-switch-b');
+  await ev(`document.querySelector('#satPanel [data-s="state"]').click(); window.__p.pictureStart(); true`);
+  const s2 = JSON.parse(await ev(`JSON.stringify({ view: window.__p.viewNow(), pk: document.querySelector('#satPanel .sat-pk').hidden, img: !document.querySelector('#satPanel [data-s="img"]').hidden,
+    lent: !!document.querySelector('#satPanel #decImgWrap'), big: document.getElementById('satPanel').classList.contains('big') })`));
+  ok(s2.view === 'A' && s2.pk && s2.img && s2.lent && s2.big, `a tap on A's line: A's picture (the lent canvas), B's packets hidden (${JSON.stringify(s2)})`);
+  await shot('vfob-switch-a');
+  await ev(`document.querySelector('#satPanel .sat-vb .sat-ln').click(); true`);
+  const s3 = JSON.parse(await ev(`JSON.stringify({ view: window.__p.viewNow(), pk: !document.querySelector('#satPanel .sat-pk').hidden, img: document.querySelector('#satPanel [data-s="img"]').hidden })`));
+  ok(s3.view === 'B' && s3.pk && s3.img, `a tap on B's line: B's packets again, A's picture hidden — only what the area shows changed (${JSON.stringify(s3)})`);
+  ok(JSON.stringify((await ev('window.__sent')).filter((m) => m.op === 'pick' || m.vfob)) === '[{"vfob":[44909,1]}]', 'switching sends nothing (no pick, no retune)');
+  await ev(`window.__p.onVfoB(__Sat.parseSatVfoB({ type: 'sat_vfob', on: false, norad: 25544, tx: 2, why: 'VFO B was switched off' })); true`);
+  const s4 = JSON.parse(await ev(`JSON.stringify({ sw: document.querySelectorAll('#satPanel .sat-ln.sw').length, view: window.__p.viewNow(), img: !document.querySelector('#satPanel [data-s="img"]').hidden, a: document.querySelector('#satPanel [data-s="state"]').textContent })`));
+  ok(s4.sw === 0 && s4.view === 'A' && s4.img && !/^VFO A/.test(s4.a), `B closed: the switch ends, A's box exactly as before (${JSON.stringify(s4)})`);
+  await phone(); await sleep(300); f = await fits(); ok(fitOk(f), `390 px after: fits (${JSON.stringify(f)})`); await desk();
 } catch (e) { ok(false, `driver: ${e?.stack || e}`); }
 finally {
   clearTimeout(deadline);

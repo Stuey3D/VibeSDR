@@ -26,7 +26,7 @@ import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
-import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, satPickMsg, satDopplerMsg, SAT_DROP_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack } from '../../../src/services/satellites';   // ★ V12 satellites
+import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB } from '../../../src/services/satellites';   // ★ V12 satellites
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { heartbeat } from './keepAlive';   // ★★★ the ping on a worker's clock — a hidden tab's timers are throttled (WEB-KEEPALIVE.md)
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
@@ -781,6 +781,8 @@ export interface SpectrumCallbacks {
   onSatTrack?: (t: SatTrack) => void;
   /** ★★★ SATELLITE MODE: the server's answer to a pick (it tuned, locked and attached `decoder`). */
   onSatPicked?: (p: SatPicked) => void;
+  /** ★★★ beta92 OPEN IN VFO B: the server's answer (on), a refusal, or B leaving the satellite (on false) */
+  onSatVfoB?: (b: SatVfoB) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
   onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★★ The answer to modeResume (src/services/wholeModeResume.ts): may this listener have the whole-radio mode the
@@ -1527,6 +1529,7 @@ export class SpectrumClient {
         const r = parseSatReadout(msg); if (r) this.cb.onSat?.(r); return;
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.cb.onSatTrack?.(t); return; }
+      case 'sat_vfob': { const b = parseSatVfoB(msg); if (b) this.cb.onSatVfoB?.(b); return; }   // ★★★ beta92 OPEN IN VFO B
       case 'ais_trail': {
         const m = Number(msg.mmsi);
         const pts: [number, number][] = Array.isArray(msg.pts) ? msg.pts.slice(-400).filter((p: any) => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])).map((p: any) => [Number(p[0]), Number(p[1])] as [number, number]) : [];
@@ -2637,6 +2640,10 @@ export class SpectrumClient {
   }
   satDoppler(on: boolean) { this._send(satDopplerMsg(on)); }
   satDrop() { this.serverTakesDial(); this._send({ ...SAT_DROP_MSG }); }
+  /** ★★★ beta92 OPEN IN VFO B: another downlink of the picked bird on THIS listener's VFO B (it moves nobody's dial — no
+   *  ask-before-tuning; the server checks the window, the slots and VFO B's own rules). Off = VFO B's usual off. */
+  satVfoB(norad: number, tx: number) { this._send(satVfoBMsg(norad, tx)); }
+  satVfoBOff() { this._send({ ...SAT_VFOB_OFF_MSG }); }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
 

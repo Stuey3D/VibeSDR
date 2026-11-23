@@ -76,7 +76,7 @@ import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft d
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2748,6 +2748,25 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satOrbit, setSatOrbit] = useState<{ geo: GeoPt[]; tcaIdx?: number } | null>(null);
   const satTrackAsk = useRef<{ norad: number; aos: number } | null>(null);
   const [satTlm, setSatTlm] = useState<SatTelemetry | null>(null);
+  /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
+   *  decoder on the listener's VFO B host; the app follows it on a SECOND DecoderClient ("vfo":"B", the server's exact
+   *  parameters — it JOINS that run; one socket parses one decoder's frames) whose output goes to the SATELLITE box only.
+   *  Closed (never detached — a detach would stop whatever the B host runs NOW, perhaps a re-aim's next decoder) when B
+   *  leaves the satellite, the mode ends or the screen goes. ★ beta92 also: a CW beacon on A shows its decoded text. */
+  const [satVfoB, setSatVfoB] = useState<SatVfoB | null>(null);
+  const [satBText, setSatBText] = useState('');
+  const [satBPackets, setSatBPackets] = useState<string[]>([]);
+  const [satBStatus, setSatBStatus] = useState('');
+  const [satBPicture, setSatBPicture] = useState(false);
+  const [satCwText, setSatCwText] = useState('');
+  const satBImageRef = useRef<DecoderImageHandle | null>(null);
+  const satDecB = useRef<{ dc: DecoderClient; key: string } | null>(null);
+  /** made below, once the decoder socket's base and proof are known; reached from the spectrum client's callbacks */
+  const satVfoBDecoderRef = useRef<(b: SatVfoB | null) => void>(() => {});
+  const satVfoBReset = useCallback(() => {
+    setSatVfoB(null); setSatBText(''); setSatBPackets([]); setSatBStatus(''); setSatBPicture(false);
+    satVfoBDecoderRef.current(null);
+  }, []);
   // ★★ beta91 TELEMETRY CHARTS: the SATELLITE box reads the gallery's saved passes through this
   const satGalleryGet = useMemo(() => (connectBase ? galleryReader(connectBase, radioAuthSuffix || route.params.authSuffix || '') : null),
                                 [connectBase, radioAuthSuffix, route.params.authSuffix]);
@@ -6214,6 +6233,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!decoderBase) return;
     const dc = new DecoderClient(decoderBase, sessionUuid, {
       onText: (text: string) => {
+        // ★ beta92 a CW beacon picked in SATELLITE: its decoded text in the box, as CW shows it elsewhere
+        if (satOnRef.current && satDecRef.current === 'cw' && activeDecRef.current === 'cw') setSatCwText((prev) => satTextAppend(prev, text));
         setDecoding(true);
         markDecodeOutput();          // ★ output = presence; see the idle-release effect
         queueDecoderText(text);      // ★ batched — see DECODER_FLUSH_MS
@@ -6376,12 +6397,33 @@ export default function SDRScreen({ route, navigation }: Props) {
       dc.joinChat(cs);
     }).catch(() => {});
 
-    return () => { cancelled = true; dc.destroy(); decoderClient.current = null; };
+    return () => { cancelled = true; dc.destroy(); decoderClient.current = null; satVfoBDecoderRef.current(null); };
   // decoderBase is async for Kiwi (null until the native decoder sidecar's port
   // arrives from startDecoderService) — it MUST be a dep, or the DecoderClient is
   // never (re)built when the port lands, leaving Kiwi decoders/spots with no output.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, sessionUuid, decoderBase, decoderAuth]);
+  /* ★★★ beta92 VFO B's own decoder socket (see satVfoB above) */
+  satVfoBDecoderRef.current = (b: SatVfoB | null) => {
+    const key = b && b.decoder ? `${b.decoder}|${JSON.stringify(b.params)}` : '';
+    if (satDecB.current && satDecB.current.key === key) return;
+    if (satDecB.current) { satDecB.current.dc.destroy(); satDecB.current = null; }
+    if (!b || !b.decoder || !decoderBase) return;
+    const dc = new DecoderClient(decoderBase, sessionUuid, {
+      onText: (t: string) => { if (!destroyed.current) setSatBText((prev) => satTextAppend(prev, t)); },
+      onStatus: (st: string) => { if (!destroyed.current && st && st !== 'attached') setSatBStatus(st); },
+      onDot: () => {},
+      onImageStart: (w: number, h: number) => { satBImageRef.current?.imageStart(w, h); if (!destroyed.current) setSatBPicture(true); },
+      onImageLine: (ln: number, w: number, px: Uint8Array) => satBImageRef.current?.sstvLine(ln, w, px),
+      onImageDone: () => satBImageRef.current?.imageDone(),
+      onAprsPacket: (d) => { const pk = aprsPacketSanitise(d); if (pk && !destroyed.current) setSatBPackets((prev) => [pk.line || pk.raw, ...prev].slice(0, 30)); },
+      onError: (m: string) => { if (!destroyed.current) setSatBStatus(m); },
+    }, password, decoderAuth);
+    dc.vfo = 'B';
+    if (b.decoder === 'aprs') dc.aprsParams = b.params as Record<string, number | string>;
+    dc.start(b.decoder);
+    satDecB.current = { dc, key };
+  };
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
@@ -6838,7 +6880,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (rttySkimRef.current) { setDecoderStatus('listening across the segment…'); rttyHistRef.current = {}; setRttyHist({}); }
     }
     if (type === 'cw' && decoderClient.current) {
-      decoderClient.current.cwSkim = cwSkimRef.current;
+      // ★ beta92 a CW beacon picked in SATELLITE is the server's ONE-SIGNAL CW decoder — never the skimmer the CW key may be
+      //   set to (that would replace the pick's decoder with another one)
+      decoderClient.current.cwSkim = cwSkimRef.current && !(satOnRef.current && satDecRef.current === 'cw');
       decoderClient.current.cwWidth = cwWidthRef.current;
       setDecoderStatus(cwSkimRef.current ? 'listening across the segment…' : 'listening…');
     }
@@ -6920,7 +6964,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     satOnRef.current = false; setSatOn(false);
     satFollowRef.current('', null);
     satPendingRef.current = null; setSatPending(null); setSatPicked(null); setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
-  }, [satCap]);
+    setSatCwText(''); satVfoBReset();
+  }, [satCap]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ Out of SATELLITE: the drop is ALWAYS sent (a lock must never outlive the mode), its decoder stops, the box closes. */
   const satModeOff = useCallback(() => {
     if (!satOnRef.current) return;
@@ -6929,7 +6974,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     satFollow('', null);
     satPendingRef.current = null; setSatPending(null);
     setSatPicked(null); setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
-  }, [satFollow]);
+    setSatCwText(''); satVfoBReset();
+  }, [satFollow, satVfoBReset]);
 
   const stopSpots = useCallback(() => {
     decoderClient.current?.stopSpots();
@@ -7891,10 +7937,23 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current || !satOnRef.current) return;
         satPendingRef.current = null; setSatPending(null); setSatWhy('');
         setSatPicked((prev) => {
-          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); }
+          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); }
           return pk;
         });
         satFollowRef.current(pk.decoder, satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx] ?? null);
+      },
+      /* ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick (on), a refusal (says why), or B gone */
+      onSatVfoB: (b) => {
+        if (destroyed.current) return;
+        if (b.refused) { if (satOnRef.current) setSatWhy(b.why || 'VFO B could not be opened on that downlink'); return; }
+        if (b.on && satOnRef.current) {
+          setSatVfoB((prev) => {
+            if (!prev || prev.tx !== b.tx || prev.norad !== b.norad) { setSatBText(''); setSatBPackets([]); setSatBStatus(''); setSatBPicture(false); }
+            return b;
+          });
+          setSatWhy('');
+          satVfoBDecoderRef.current(b);
+        } else satVfoBReset();
       },
       /* ★ V12 RADIOSONDES: as the datalink — a report (the box opens on the transition), sondes_off (null), a refusal. */
       onSondes: (r, why) => {
@@ -15955,6 +16014,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           onMap={() => { markInteract(); if (satPickedSat) openDigiModesMap({ layer: 'aprs', overlay: satMapOverlay(satPickedSat.name, satOrbit?.geo,
             { lat: satPickedSat.lat, lon: satPickedSat.lon, altKm: satAltKm(satPickedSat.rangeKm, satPickedSat.el) }) }); }}
           imageRef={decoderImageRef}
+          cwText={satCwText}
+          vfob={satVfoB} bText={satBText} bPackets={satBPackets} bStatus={satBStatus} bPicture={satBPicture} bImageRef={satBImageRef}
+          onVfoB={(norad, i) => {   // ★★★ beta92 OPEN IN VFO B — moves nobody's dial (no ask-before-tuning)
+            markInteract();
+            setSatWhy('');
+            (client.current as unknown as { satVfoB?: (n: number, t: number) => void } | null)?.satVfoB?.(norad, i);
+          }}
           onPick={(norad, i) => {
             markInteract();
             if (satPicked && satPicked.norad === norad && satPicked.tx === i) return;

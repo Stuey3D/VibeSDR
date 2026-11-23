@@ -10,6 +10,9 @@
 //   3. a locked window (per-listener channels): the listener's channel is built ONCE at the lock and never rebuilt by
 //      the tracker (no AGC reset), and the lock is the listener's own.
 //   4. no orbit data: doppler advertised GREYED with the reason, a lock refused in words.
+//  10. ★★★ beta92 OPEN IN VFO B: RS-44 transponder → its CW beacon in VFO B (CW on the B host, B's shift = A's × fB/fA,
+//      a B socket joins, off / new pick / drop close it quietly); ISS 145.800 → 145.825 APRS only (437.x outside the
+//      capture); nothing offered with VFO B switched off; a locked window's listener alone.
 // Silent: no audio socket is opened.   VIBESERVER_BIN=…/vibeserver node scripts/test-server-sat.mjs
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -118,11 +121,11 @@ async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 4
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
   const L = () => { try { return fs.readFileSync(path.join(dir, 'server.log'), 'utf8'); } catch { return ''; } };
-  return { port, dir, status, L, stop: () => { try { srv.kill('SIGTERM'); } catch {} try { rtl.kill('SIGTERM'); } catch {} try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { port, dir, status, L, pid: srv.pid, stop: () => { try { srv.kill('SIGTERM'); } catch {} try { rtl.kill('SIGTERM'); } catch {} try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
 }
 const sock = async (S, id) => { const sp = ws(S.port, `/ws/user-spectrum?user_session_id=${id}&bins=256&proto=1`); await until(() => sp.open, 3000); await sleep(800); return sp; };
 
-let issLoc = '';
+let issLoc = '', rsLoc = '';
 try {
   // ── 1. where is ISS now? ──
   {
@@ -137,6 +140,9 @@ try {
       ok(iss && Number.isFinite(iss.lat) && Number.isFinite(iss.lon), `ISS sub-point ${iss?.lat}, ${iss?.lon}`);
       // ★ 20 s ahead along its track is near enough (7.7 km/s): the next server starts in a few seconds
       issLoc = iss ? locator(iss.lat, iss.lon) : 'IO92ng';
+      // ★★ beta92: a place RS-44 is up from (≈1,250 km off its sub-point at 1,400 km: ~40°) with a Doppler that is not ~0
+      const rs = l?.sats?.find((s) => s.norad === 44909);
+      if (rs && Number.isFinite(rs.lat) && Number.isFinite(rs.lon)) rsLoc = locator(Math.max(-80, Math.min(80, rs.lat + (rs.lat > 0 ? -8 : 8))), ((rs.lon + 8 + 540) % 360) - 180);
       ok(/^[A-R]{2}\d\d[a-x]{2}$/.test(issLoc), `the locator under it: ${issLoc}`);
       sp.close();
     } finally { S.stop(); }
@@ -516,6 +522,171 @@ try {
       const sp = await sock(S, 'satpass01');
       ok(await until(() => /unattended pass: ISS Voice \/ SSTV, max [0-9]+° — ended \(a listener arrived\)/.test(S.L()), 4000), 'a listener arriving gives the pass up');
       ok(await until(() => lastOf(sp, 'config')?.vfo === 437800000, 4000), `…and gets the radio back where the pass found it (vfo ${lastOf(sp, 'config')?.vfo})`);
+      sp.close();
+    } finally { S.stop(); }
+  }
+
+  // ── 10. ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): another downlink of the PICKED bird on the listener's VFO B,
+  //        its decoder on the B host, Doppler-corrected from the same pass (A's shift × fB / fA) ──
+  const vfobOf = (sp) => jsons(sp, 'sat_vfob');
+  const lastVfob = (sp) => vfobOf(sp).slice(-1)[0] || null;
+  const chanB = (sp) => (lastOf(sp, 'watch')?.chans || []).find((c) => c.id === 1) || null;
+  /** the server process's CPU over `ms` (% of one core), from ps's cumulative cputime — information, not a check */
+  const cpuOver = async (pid, ms) => {
+    const { execFileSync } = await import('node:child_process');
+    const t = () => { const v = execFileSync('ps', ['-o', 'cputime=', '-p', String(pid)]).toString().trim().split(/[:.]/).map(Number);
+      return v.length === 4 ? v[0] * 3600 + v[1] * 60 + v[2] + v[3] / 100 : v.length === 3 ? v[0] * 60 + v[1] + v[2] / 100 : 0; };
+    const a = t(); await sleep(ms); return ((t() - a) / (ms / 1000)) * 100;
+  };
+  {
+    console.log(`── OPEN IN VFO B: RS-44 transponder + its CW beacon, shared dial (${rsLoc || 'no RS-44 position'}) ──`);
+    const S = await server('satvfob', { loc: rsLoc || issLoc });
+    try {
+      const sp = await sock(S, 'satvb0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      const rs = lastOf(sp, 'sat_list')?.sats?.find((s) => s.norad === 44909);
+      ok(rs && rs.el > 5, `RS-44 up here (el ${rs?.el})`);
+      // ★ the one-at-a-time path: a plain pick creates no VFO B and offers the beacon
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 0, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 44909 && lastPicked(sp)?.tx === 0, 4000), 'RS-44 transponder picked');
+      let p = lastPicked(sp);
+      ok(p && Array.isArray(p.vfob) && p.vfob.length === 1 && p.vfob[0] === 1, `picked offers the CW beacon for VFO B: vfob ${JSON.stringify(p?.vfob)}`);
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && m.tx === 'Transponder'), 3000), 'A locked on the transponder (TRACK)');
+      await sleep(600);
+      ok(!jsons(sp, 'watch').some((w) => (w.chans || []).length > 0) && !vfobOf(sp).length, 'a plain pick makes no VFO B (one at a time, unchanged)');
+      const dialA = lastOf(sp, 'config')?.vfo;
+      // open the beacon in VFO B
+      sp.txt.length = 0;
+      sp.send({ type: 'sat_vfob', norad: 44909, tx: 1 });
+      ok(await until(() => lastVfob(sp)?.on === true, 4000), `sat_vfob on: ${JSON.stringify(lastVfob(sp))}`);
+      const vb = lastVfob(sp);
+      ok(vb && vb.decoder === 'cw' && vb.mode === 'cw' && vb.hz === 435605000 && vb.use === 'packet' && vb.label === 'CW beacon' && typeof vb.params === 'object',
+         `B: ${vb?.label} ${vb?.hz} ${vb?.mode}, decoder ${vb?.decoder}`);
+      ok(await until(() => chanB(sp)?.freq === 435605000 && chanB(sp)?.mode === 'cw', 3000), `VFO B on 435.605 CW (${JSON.stringify(chanB(sp))?.slice(0, 120)})`);
+      ok(/\[sat\] decoder cw attached on VFO B/.test(S.L()) && /decoder attached: CW/.test(S.L()), 'the CW decoder attached on the VFO B host');
+      await sleep(500);
+      ok(lastOf(sp, 'config')?.vfo === dialA || !jsons(sp, 'config').some((c) => c.vfo !== dialA), `VFO A's dial untouched (${dialA})`);
+      // ★ the Doppler: B's shift = A's offset × fB / A's nominal, sampled together (the 25 Hz tracker; the readout at 2 Hz)
+      let worst = 0, samples = 0, maxShift = 0;
+      for (let i = 0; i < 6; i++) {
+        await sleep(700);
+        const r = jsons(sp, 'sat').filter((m) => m.state === 'TRACK' || m.state === 'COAST').slice(-1)[0];
+        const c = chanB(sp);
+        if (!r || !c || !r.nominal) continue;
+        const want = r.offset * 435605000 / r.nominal;
+        worst = Math.max(worst, Math.abs(c.shift - want) - Math.abs(r.rate || 0) * 0.6);
+        maxShift = Math.max(maxShift, Math.abs(c.shift)); samples++;
+      }
+      ok(samples >= 4 && worst < 6, `B's shift follows A's × fB/fA (${samples} samples, worst ${worst.toFixed(1)} Hz past the rate allowance, |shift| up to ${maxShift.toFixed(0)} Hz)`);
+      ok(maxShift > 20, `a real Doppler on B (|shift| ${maxShift.toFixed(0)} Hz)`);
+      const cpuAB = await cpuOver(S.pid, 6000);
+      console.log(`   info the whole server, fake rtl_tcp 2.4 MS/s, A on RS-44's transponder (USB, Doppler) + B on its beacon (CW decoder, Doppler): ${cpuAB.toFixed(1)} % of a core`);
+      // the decoder socket of the box's B line JOINS the decoder (no restart)
+      const dxb = ws(S.port, '/ws/dxcluster?user_session_id=satvb0001');
+      await until(() => dxb.open, 3000);
+      await sleep(300);
+      const cwStarts = (S.L().match(/decoder attached: CW/g) || []).length;
+      dxb.send({ type: 'audio_extension_attach', extension_name: 'cw', ...vb.params, vfo: 'B' });
+      ok(await until(() => dxb.txt.some((t) => t.includes('"audio_extension_attached","vfo":"B"')), 3000), 'the B socket attached on VFO B');
+      await sleep(300);
+      ok((S.L().match(/decoder attached: CW/g) || []).length === cwStarts, 'it joined the open\'s CW decoder (not restarted)');
+      // refusals
+      sp.txt.length = 0;
+      sp.send({ type: 'sat_vfob', norad: 44909, tx: 0 });
+      ok(await until(() => lastVfob(sp)?.refused === true && /on VFO A/.test(lastVfob(sp)?.why || ''), 3000), 'the picked downlink itself: refused in words');
+      sp.send({ type: 'sat_vfob', norad: 25544, tx: 2 });
+      ok(await until(() => vfobOf(sp).some((m) => m.refused && /satellite you picked/.test(m.why || '')), 3000), 'another bird: refused in words');
+      ok(await until(() => chanB(sp)?.freq === 435605000, 2000), 'a refusal leaves B where it was');
+      // B's usual off ends it: told, the decoder stopped quietly
+      sp.txt.length = 0; dxb.txt.length = 0;
+      sp.send({ type: 'watch', id: 1, off: true });
+      ok(await until(() => lastVfob(sp)?.on === false && !lastVfob(sp)?.refused, 3000), `VFO B off → sat_vfob on:false (${lastVfob(sp)?.why})`);
+      ok(/\[sat\] decoder cw on VFO B detached/.test(S.L()), 'its CW decoder stopped');
+      await sleep(400);
+      ok(!dxb.txt.some((t) => t.includes('decoder_refused')), 'quietly: no "start it again" refusal on the B socket');
+      ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && m.tx === 'Transponder'), 3000) && jsons(sp, 'sat').every((m) => m.state !== 'OFF'), 'A\'s lock on the transponder stands');
+      dxb.close();
+      const cpuA = await cpuOver(S.pid, 6000);
+      console.log(`   info …and with VFO B off (A alone): ${cpuA.toFixed(1)} % of a core`);
+      // a new pick closes it; so does the drop
+      sp.send({ type: 'sat_vfob', norad: 44909, tx: 1 });
+      await until(() => lastVfob(sp)?.on === true, 3000);
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 1, doppler: true });
+      ok(await until(() => lastVfob(sp)?.on === false && /pick changed/.test(lastVfob(sp)?.why || ''), 3000), `a new pick closes B (${lastVfob(sp)?.why})`);
+      p = lastPicked(sp);
+      ok(await until(() => lastPicked(sp)?.tx === 1, 3000) && JSON.stringify(lastPicked(sp)?.vfob) === '[0]', `beacon picked: the transponder offered the other way (${JSON.stringify(lastPicked(sp)?.vfob)})`);
+      sp.send({ type: 'sat_vfob', norad: 44909, tx: 0 });
+      ok(await until(() => lastVfob(sp)?.on === true && lastVfob(sp)?.decoder === '' && lastVfob(sp)?.mode === 'usb', 3000), 'the transponder in VFO B: USB, nothing to decode');
+      sp.txt.length = 0;
+      sp.send({ type: 'sat', op: 'drop' });
+      ok(await until(() => lastVfob(sp)?.on === false, 3000), 'the drop closes B');
+      ok(await until(() => (chanB(sp) === null), 3000), 'VFO B gone');
+      // a single-downlink bird offers nothing
+      sp.send({ type: 'sat', op: 'pick', norad: 27607, tx: 0, doppler: false });
+      ok(await until(() => lastPicked(sp)?.norad === 27607, 4000) && lastPicked(sp)?.vfob === undefined, 'SO-50 (one downlink): no vfob');
+      sp.send({ type: 'sat', op: 'drop' });
+      await sleep(300);
+      sp.send({ type: 'sat_vfob', norad: 27607, tx: 0 });
+      ok(await until(() => vfobOf(sp).some((m) => m.refused && /Pick a satellite first/.test(m.why || '')), 3000), 'no pick: refused in words');
+      sp.close();
+    } finally { S.stop(); }
+  }
+  {
+    console.log(`── OPEN IN VFO B: ISS 145.800 + 145.825 APRS (${issLoc}) ──`);
+    const S = await server('satvfobiss', { loc: issLoc, freq: 145800000 });
+    try {
+      const sp = await sock(S, 'satvi0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 25544 && lastPicked(sp)?.tx === 1, 4000), 'ISS Voice / SSTV picked');
+      const p = lastPicked(sp);
+      ok(p && JSON.stringify(p.vfob) === '[2]', `only 145.825 offered: 437.800 / 437.550 are outside the capture (vfob ${JSON.stringify(p?.vfob)})`);
+      sp.send({ type: 'sat_vfob', norad: 25544, tx: 0 });
+      ok(await until(() => vfobOf(sp).some((m) => m.refused && /Outside the radio's window/.test(m.why || '')), 3000), '437.800 asked anyway: refused, outside the window');
+      sp.txt.length = 0;
+      sp.send({ type: 'sat_vfob', norad: 25544, tx: 2 });
+      ok(await until(() => lastVfob(sp)?.on === true, 4000), `APRS in VFO B: ${JSON.stringify(lastVfob(sp))?.slice(0, 200)}`);
+      const vb = lastVfob(sp);
+      ok(vb && vb.decoder === 'aprs' && vb.hz === 145825000 && vb.mode === 'nfm' && vb.params && vb.params.baud_rate === 1200, 'B: APRS 1200 on 145.825 NFM, the attach parameters said');
+      ok(/\[sat\] decoder aprs attached on VFO B/.test(S.L()) && /\[sat\] decoder sstv attached for the shared dial/.test(S.L()), 'SSTV on A and APRS on B, both running');
+      ok(await until(() => chanB(sp)?.freq === 145825000, 3000), 'VFO B on 145.825');
+      sp.close();
+    } finally { S.stop(); }
+  }
+  {
+    console.log('── OPEN IN VFO B: not offered where VFO B is switched off ──');
+    const S = await server('satvfoboff', { loc: issLoc, freq: 145800000, radio: { vfoB: 0 } });
+    try {
+      const sp = await sock(S, 'satvo0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 1, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 25544, 4000) && lastPicked(sp)?.vfob === undefined, `VFO B off on this radio: no vfob (${JSON.stringify(lastPicked(sp)?.vfob)})`);
+      sp.send({ type: 'sat_vfob', norad: 25544, tx: 2 });
+      ok(await until(() => vfobOf(sp).some((m) => m.refused && /VFO A\/B is switched off/.test(m.why || '')), 3000), 'asked anyway: refused in words');
+      sp.close();
+    } finally { S.stop(); }
+  }
+  {
+    console.log('── OPEN IN VFO B: a locked window (each listener their own channel) ──');
+    const S = await server('satvfoblk', { loc: issLoc, radio: { mode: 'locked', lockFreq: 437800000, rate: RATE } });
+    try {
+      const sp = await sock(S, 'satvl0001');
+      sp.send({ type: 'sat_list' });
+      await until(() => !!lastOf(sp, 'sat_list'), 4000);
+      sp.send({ type: 'sat', op: 'pick', norad: 25544, tx: 0, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 25544 && lastPicked(sp)?.tx === 0, 4000), 'ISS repeater picked on the locked window');
+      ok(JSON.stringify(lastPicked(sp)?.vfob) === '[3]', `437.550 (inside the window) offered, 145.8xx not (${JSON.stringify(lastPicked(sp)?.vfob)})`);
+      sp.send({ type: 'sat_vfob', norad: 25544, tx: 3 });
+      ok(await until(() => lastVfob(sp)?.on === true && lastVfob(sp)?.decoder === 'sstv', 4000), `SSTV events in this listener's VFO B (${lastVfob(sp)?.decoder})`);
+      const other = await sock(S, 'satvl0002');
+      await sleep(800);
+      ok(!vfobOf(other).length && !(lastOf(other, 'watch')?.chans || []).length, 'another listener is not given a VFO B');
+      other.close();
       sp.close();
     } finally { S.stop(); }
   }

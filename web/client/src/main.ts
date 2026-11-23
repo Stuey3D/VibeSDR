@@ -60,7 +60,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
-import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx } from '../../../src/services/satellites';
+import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -160,7 +160,7 @@ import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
 import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
-import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
+import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, type AskState } from '../../../src/services/dialChat';
@@ -2032,6 +2032,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onSatTrack: (t) => satPanelGet()?.onTrack(t),
     onSatPicked: (p) => satPanelGet()?.onPicked(p),   // ★★★ SATELLITE: the server tuned, locked and attached the decoder
+    onSatVfoB: (b) => satVfoBFollow(b),               // ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick
     onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
@@ -10370,7 +10371,7 @@ function satPanelGet(): SatPanel | null {
       drop: () => spec?.satDrop(),
       rxPos: () => myPos(),
       follow: (d, t) => satFollow(d, t),
-      left: () => satFollow('', null),
+      left: () => { satFollow('', null); satVfoBDecoder(null); },
       image: (slot) => satLendImage(slot),
       track: (norad, aos, los) => spec?.satTrack(norad, aos, los),   // ★ 1.7 the pass's path (geo → the dotted orbit)
       rxName: () => serverName,                                      // ★ 1.8 the receiver dot's label
@@ -10380,6 +10381,7 @@ function satPanelGet(): SatPanel | null {
       mapStations: () => (satDec === 'aprs' && aprsLast ? aprsLast.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0),
       openMap: (o) => openDigiModesMap(o),                           // ★ 1.9
       galleryGet: galleryText,                                       // ★★ beta91 TELEMETRY CHARTS: the saved passes
+      vfobOpen: (norad, tx) => spec?.satVfoB(norad, tx),             // ★★★ beta92 OPEN IN VFO B
     });
     satPanel.setCap(satCap);
   }
@@ -10401,8 +10403,49 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null) {
   activeDec = d;
   decTuneHint = '';
   if (d === 'lrpt' || d === 'sstv') { clearDecImage(''); $('decImage').classList.add('on'); }
-  decoders.attach(decExt(d), decParams(d), decVfo);
+  // ★ beta92: a CW beacon is the server's ONE-SIGNAL CW decoder — never the skimmer the CW key may be set to (that
+  //   would replace the pick's decoder with another one)
+  if (d === 'cw') decoders.attach('cw', {}, decVfo);
+  else decoders.attach(decExt(d), decParams(d), decVfo);
   syncDecButtons();
+}
+/* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
+ *  decoder on the listener's VFO B host. Its frames are followed on a SECOND decoder socket — one socket parses frames
+ *  for ONE decoder (decoders.ts: 0x01 means text for CW, a picture line for SSTV) — that attaches the same decoder with
+ *  the same parameters on "vfo":"B", so it JOINS the server's run. Its output goes to the SATELLITE box only (B's line /
+ *  the decoder area when B's line is shown); the decoder box is untouched. Closed when B leaves the satellite. */
+let decHostAuth: { host: string; auth: AuthState } | null = null;
+let decodersB: DecoderClient | null = null;
+let decBMode = '';
+function satVfoBFollow(b: SatVfoB) {
+  const p = satPanelGet();
+  p?.onVfoB(b);
+  if (b.refused) return;
+  satVfoBDecoder(b.on && p?.active ? b : null);
+}
+function satVfoBDecoder(b: SatVfoB | null) {
+  const want = b && b.decoder ? `${b.decoder}|${JSON.stringify(b.params)}` : '';
+  if (want === decBMode) return;
+  // ★ closed, never detached: a detach on this socket would stop whatever the B host runs NOW — the server may already
+  //   have started the next downlink's decoder there (a re-aim). The server stops B's decoder itself when B goes.
+  if (decodersB) { decodersB.close(); decodersB = null; }
+  decBMode = want;
+  if (!b || !b.decoder || !decHostAuth) return;
+  const panel = () => satPanel;
+  const dc = new DecoderClient(decHostAuth.host, decHostAuth.auth, {
+    onText: (t: string) => panel()?.bTextAdd(t),
+    onState: (st: number) => { if (b.decoder === 'cw') panel()?.bState(st >= 3 ? 'CW decoder reading the beacon' : st ? 'CW decoder: a signal — syncing' : ''); },
+    onStatus: (t: string) => panel()?.bState(t),
+    onSstvMode: (name: string) => panel()?.bState(`SSTV · ${name}`),
+    onImageStart: (w: number, h: number) => panel()?.bImageStart(w, h),
+    onImageLine: (y: number, w: number, px: Uint8Array, rgb: boolean) => panel()?.bImageLine(y, w, px, rgb),
+    onImageDone: () => panel()?.bImageDone(),
+    onAprsPacket: (pk) => panel()?.bPacket(pk.line || pk.raw),
+    onRefused: (msg: string) => panel()?.bState(msg),
+  }, visitSessionId());
+  dc.connect();
+  dc.attach(b.decoder as Exclude<DecoderMode, null>, b.params as DecoderParams, 'B');
+  decodersB = dc;
 }
 /** The decoder box's image canvas (#decImgWrap) lent to the SATELLITE window's big box, and home again (null). */
 let satImgHome: { parent: Node; next: Node | null } | null = null;
@@ -14410,8 +14453,11 @@ function decParams(mode: string): Record<string, unknown> {
 }
 
 function initDecoders(host: string, auth: AuthState) {
+  decHostAuth = { host, auth };   // ★★★ beta92 VFO B's own decoder socket (satVfoBDecoder) opens with the same
   decoders = new DecoderClient(host, auth, {
     onText: (t: string) => {
+      // ★ beta92 a CW beacon picked in SATELLITE: its decoded text in the box, as CW shows it elsewhere
+      if (satDec === 'cw' && activeDec === 'cw') satPanel?.cwText(t);
       // ★ NAVTEX: into the message assembler, drawn by renderNavtex — #decText is hidden while it has the box.
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text

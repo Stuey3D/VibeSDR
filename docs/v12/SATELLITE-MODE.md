@@ -61,6 +61,8 @@
 - `{"type":"sat","op":"doppler","on":bool}` toggles the lock on the current pick; `{"type":"sat","op":"drop"}` = unlock +
   detach what pick attached. Leaving the SATELLITE mode sends drop.
 - The existing `sat lock/unlock` stays for old clients (one release), then goes.
+- ★★★ **beta92 OPEN IN VFO B** (`picked.vfob`, `{"type":"sat_vfob"}`): another downlink of the picked bird on the
+  listener's VFO B, decoded and Doppler-corrected from the same pass — `docs/v12/SAT-VFOB.md`.
 - ★ **beta90 additions** (band / modeName / decoder / pickPrivate in `sat_list`, `geo` in `sat_track`, lo / hi on
   `picked`, the passband re-base rule, the `fctlm_status` and `sat_tlm` decoder frames, APRS `sat`, the unattended-passes
   setting): `docs/v12/SATELLITE-BEST.md` → "Contract additions (beta90)". Server as built: `SATELLITE-BEST-SERVER.md`.

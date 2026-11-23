@@ -318,15 +318,116 @@ export function txUse(t: SatTx): SatUse {
 }
 
 /** {"type":"sat","state":"picked",norad,tx,decoder} — the server's answer to a pick (a refusal comes as OFF + why). */
-export interface SatPicked { norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'fctlm' }
+export interface SatPicked {
+  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'fctlm';
+  /** ★★ beta92 OPEN IN VFO B: the other downlinks of this bird THIS listener may open in VFO B now (the server decides:
+   *  inside the capture with their Doppler, VFO B allowed here). Absent = none (or an older server: no key). */
+  vfob?: number[];
+}
+const satDecoderName = (d: unknown): SatPicked['decoder'] =>
+  d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'fctlm' ? d : '';
 export function parseSatPicked(m: unknown): SatPicked | null {
   const o = m as Record<string, unknown> | null;
   if (!o || o.type !== 'sat' || o.state !== 'picked') return null;
   const norad = num(o.norad), tx = num(o.tx);
   if (norad == null || tx == null || tx < 0) return null;
-  const d = o.decoder;
   // ★ SATELLITE-BEST 1.1 / 1.2: a CW beacon's `cw` and AO-73's FUNcube telemetry `fctlm` (the server's, beta90)
-  return { norad, tx: Math.floor(tx), decoder: d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'fctlm' ? d : '' };
+  const p: SatPicked = { norad, tx: Math.floor(tx), decoder: satDecoderName(o.decoder) };
+  if (Array.isArray(o.vfob)) {
+    const v = (o.vfob as unknown[]).map(num).filter((x): x is number => x != null && x >= 0).map(Math.floor).filter((x, i, a) => x !== p.tx && a.indexOf(x) === i).slice(0, 16);
+    if (v.length) p.vfob = v;
+  }
+  return p;
+}
+
+// ══ ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md — Stuart, 2026-11-22: "if i am on the transponder the beacon could have
+//     an open in vfo b button. only needs one window as transponder is audio only and the orbit is the same as its the same
+//     satellite") ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// While a downlink is picked, another downlink of the SAME bird inside the capture gets OPEN IN VFO B: the server puts VFO B
+// there with its decoder and Doppler-corrects it from the same pass. ONE box: it gains a line for B, and when both lines
+// have a decoder view, tapping a line chooses which one the box's decoder area shows — that choice exists only while B is
+// open. Picking one downlink at a time is exactly as before.
+/** {"type":"sat_vfob",…} — the server's answer to an open (on), a refusal (on false + refused + why) or B going (on false). */
+export interface SatVfoB {
+  on: boolean; refused?: boolean; norad: number; tx: number;
+  hz?: number; mode?: string; use?: SatUse; label?: string;
+  decoder: SatPicked['decoder'];
+  /** the exact attach parameters the server started B's decoder with — the client's "vfo":"B" attach sends these, so it
+   *  JOINS that decoder rather than restarting it */
+  params: Record<string, unknown>;
+  shift?: number; decoderWhy?: string; why?: string;
+}
+export function parseSatVfoB(m: unknown): SatVfoB | null {
+  const o = m as Record<string, unknown> | null;
+  if (!o || o.type !== 'sat_vfob') return null;
+  const u = o.use;
+  const params: Record<string, unknown> = {};
+  if (o.params && typeof o.params === 'object' && !Array.isArray(o.params)) {
+    for (const [k, v] of Object.entries(o.params as Record<string, unknown>).slice(0, 12)) {
+      if (/^[a-z_]{1,24}$/i.test(k) && (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean')) params[k] = typeof v === 'string' ? v.slice(0, 24) : v;
+    }
+  }
+  return {
+    on: o.on === true, refused: o.refused === true || undefined,
+    norad: num(o.norad) ?? 0, tx: Math.max(-1, Math.floor(num(o.tx) ?? -1)),
+    hz: num(o.hz), mode: str(o.mode, 8), use: u === 'voice' || u === 'image' || u === 'packet' ? u : undefined, label: str(o.label, 60),
+    decoder: satDecoderName(o.decoder), params, shift: num(o.shift), decoderWhy: str(o.decoderWhy, 200), why: str(o.why, 200),
+  };
+}
+export const satVfoBMsg = (norad: number, tx: number) => ({ type: 'sat_vfob', norad, tx });
+export const SAT_VFOB_OFF_MSG = { type: 'sat_vfob', off: true } as const;
+export const SAT_VFOB_KEY = 'OPEN IN VFO B';
+/** The downlinks the box offers OPEN IN VFO B for: the server's list, less the one already open in B. */
+export function satVfoBOffers(p: SatPicked | null, sat: SatInfo | undefined, b: SatVfoB | null): { i: number; tx: SatTx }[] {
+  if (!p || !sat || !p.vfob || sat.norad !== p.norad) return [];
+  return p.vfob.filter((i) => i !== p.tx && !(b && b.on && b.norad === p.norad && b.tx === i) && !!sat.tx[i])
+    .map((i) => ({ i, tx: sat.tx[i] }));
+}
+/** VFO B's corrected frequency: its nominal plus the pick's Doppler at B's own frequency (A's offset × fB / fA — the
+ *  server's rule, so the line says where B really listens). */
+export function satVfoBHz(nominalB: number, r: SatReadout | null): number {
+  const live = r && r.state !== 'OFF' && r.nominal && r.offset != null;
+  return Math.round(nominalB + (live ? (r!.offset as number) * nominalB / (r!.nominal as number) : 0));
+}
+/** What a decoder shows in the box's decoder area: a picture, text (CW), packet lines, telemetry values — '' = nothing. */
+export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry';
+export function satDecView(d: SatPicked['decoder'] | undefined): SatDecView {
+  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : '';
+}
+/** ★ The line switch exists only while B is open AND both lines have a decoder view (Stuart: "when switching between the
+ *  lines all it does is change what is shown in the decoder box"). */
+export function satViewSwitch(aDec: SatPicked['decoder'] | undefined, b: SatVfoB | null): boolean {
+  return !!b && b.on && !!satDecView(aDec) && !!satDecView(b.decoder);
+}
+/** Which line's decoder the area shows: the one chosen while the switch exists; else whichever line has a view (A first). */
+export function satViewShown(aDec: SatPicked['decoder'] | undefined, b: SatVfoB | null, chosen: 'A' | 'B'): 'A' | 'B' {
+  if (satViewSwitch(aDec, b)) return chosen;
+  return b && b.on && !satDecView(aDec) && satDecView(b.decoder) ? 'B' : 'A';
+}
+/** ★ What a downlink's decoder is doing, before it has said anything itself — one set of words for A and B. A CW beacon
+ *  says its CW decoder is listening for the beacon (beta91 said "listening for packets" — fixed beta92). */
+export function satDecWord(decoder: SatPicked['decoder'] | undefined, use: SatUse, sstv: boolean | undefined, big: boolean): string {
+  if (decoder === 'fctlm') return 'listening for telemetry';
+  if (decoder === 'cw') return 'CW decoder listening for the beacon';
+  if (use === 'image') return big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG';
+  if (use === 'packet') return 'listening for packets';
+  if (sstv) return 'listening — an SSTV picture opens here';
+  return '';
+}
+/** "VFO B · CW beacon · 435.605 12 MHz" — B's line in the box (its decoder's words follow it). */
+export function satVfoBLine(b: SatVfoB, label: string | undefined, r: SatReadout | null): string {
+  const hz = b.hz ? satHzText(satVfoBHz(b.hz, r)) : '';
+  return ['VFO B', label || b.label || 'downlink', hz].filter(Boolean).join(' · ');
+}
+/** The decoded text a CW line shows: the last few lines, newest last (the decoder sends characters as it reads them). */
+export function satCwTail(text: string, lines = 4): string {
+  const t = text.replace(/\r/g, '').split('\n').filter((l) => l.trim().length).slice(-lines).join('\n');
+  return t.length > 400 ? t.slice(-400) : t;
+}
+/** Text appended to a CW tail, kept bounded (a pass of beacon is a few hundred characters). */
+export function satTextAppend(prev: string, add: string): string {
+  const s = prev + add;
+  return s.length > 2000 ? s.slice(-1600) : s;
 }
 /** The three requests the mode sends (spectrum socket). */
 export const satPickMsg = (norad: number, tx: number, doppler: boolean) => ({ type: 'sat', op: 'pick', norad, tx, doppler });

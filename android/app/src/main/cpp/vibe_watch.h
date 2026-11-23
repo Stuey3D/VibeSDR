@@ -232,6 +232,15 @@ public:
         hasTap_.store((bool)tap_, std::memory_order_release);
     }
 
+    /** ★★ beta92 SATELLITE "OPEN IN VFO B" (docs/v12/SAT-VFOB.md): the Doppler of the satellite VFO A is locked to, at
+     *  THIS channel's frequency (A's shift × fB / fA) — the oscillator sits at wanted().hz + shift while the dial (and
+     *  everything that reports it) stays on the nominal, exactly as VFO A's lock does. Written by the satellite tracker
+     *  (25 Hz), read by the feeding thread at its next block (a retune inside the pipeline: no rebuild). 0 = none. */
+    void setShiftHz(double hz) { shiftHz_.store(std::isfinite(hz) ? hz : 0.0, std::memory_order_relaxed); }
+    double shiftHz() const { return shiftHz_.load(std::memory_order_relaxed); }
+    /** Where the channel actually listens: the nominal plus the satellite shift. */
+    double tuneHz() const { return wanted().hz + shiftHz(); }
+
     /** ★ Outside the capture window: the channel is kept (the listener's choice survives a radio move) but silent. */
     void setParked(bool p) { if (p && !parked_.load()) flush(); parked_.store(p); }
     bool parked() const { return parked_.load(); }
@@ -267,6 +276,7 @@ private:
     std::mutex tapMtx_;
     AudioTap tap_;
     std::atomic<float> levelDb_{-200.0f};
+    std::atomic<double> shiftHz_{0.0};   // ★★ beta92 the satellite Doppler at this channel's frequency (setShiftHz)
     std::unique_ptr<vibedsp::RxPipeline> rx_;
     double rate_ = 0, lastOff_ = 1e300;
     PcmFifo fifo_;
