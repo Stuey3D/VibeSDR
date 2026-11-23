@@ -70,6 +70,8 @@ const KINDS: { id: string; label: string }[] = [
   // ★★ V12 balloons: the reports as a run, and each SSDV picture (a .jpg) — vibe_bgdecode.h BalloonGalleryTap
   { id: 'balloon', label: 'BALLOONS' },
   // ★★ V12 beta91 FUNcube telemetry: a .csv per pass (shown as charts) and the day's log (vibe_fctlm_gallery.h)
+  // ★ beta92: METEOR LRPT pictures — the web page had the key, the app never did (Stuart 11-23, "the meteor button is also missing")
+  { id: 'lrpt', label: 'METEOR' },
   { id: 'fctlm', label: 'FUNCUBE' },
 ];
 /** ★★ beta91 a FUNcube pass item (its CSV) — drawn as charts, not as text */
