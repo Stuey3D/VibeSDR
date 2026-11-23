@@ -46696,9 +46696,13 @@ void LocalSdrShim::overloadTick() {
             }
             vibesatgain::In in;
             in.now = tnow;
-            in.peak = std::max(g_adcPeakDbfs.load(std::memory_order_relaxed), g_adcPeakHeldDbfs.load(std::memory_order_relaxed));
+            /* ★★ beta91-7 THIS second's peak, not the loudest of the last ten (one spike covered the whole 4 s window — Pi 500
+             *  V4, Meteor-M2-3 11-23: 0 dBFS from a spike set 20.7 dB for the pass). A second that hit the rail with no more
+             *  than an impulse's rail samples (clipRun 0) is a SPARK, left out of the headroom. Real overload still cuts. */
+            in.peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
             in.clipPct = g_adcClipPct.load(std::memory_order_relaxed);
             in.clipRun = g_adcClipRun.load(std::memory_order_relaxed);
+            in.spark = in.peak > -1.0 && in.clipRun == 0;
             in.floorDb = p->iqFloorDb.load();
             in.ownFloorDb = NAN;   // ★ not known on an RTL yet (no terminated-input measurement) — headroom decides
             in.gains = &satGains; in.curIdx = cur; in.ceilIdx = tgtIdx;

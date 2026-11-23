@@ -148,6 +148,36 @@ int main() {
         for (double t = 1.0; t <= 6.0; t += 2.0) { in.now = t; last = h.tick(in); }
         ok(h.phase() == Phase::Hold && last.kind == Out::Set, "...then set from the clean window");
     }
+    {   // ★★ beta92 (Stuart 11-23, Meteor-M2-3 on the Pi 500's V4: "overcautious because of those noise spikes"): that pass,
+        //   at 29.7 dB the band read about -18 dBFS with ONE second spiked to 0 dBFS (impulse — clipRun 0). Before: 20.7 dB
+        //   for the pass. Now: the spike second is left out and the band's own level decides.
+        Hold h(R);
+        In in; in.gains = &rtl; in.ceilIdx = top; in.curIdx = idxOf(rtl, 297);
+        h.begin(0.0, "METEOR-M2 3 LRPT");
+        Out o; double t = 0;
+        const double pk[] = {-18.0, 0.0, -17.5};
+        for (int i = 0; i < 3; ++i) { in.now = t; in.peak = pk[i]; in.clipRun = 0; in.spark = pk[i] > -1.0; o = h.tick(in); t += 2.0; }
+        printf("        %s\n", o.log.c_str());
+        ok(h.phase() == Phase::Hold && o.kind == Out::Set && rtl[(size_t)o.idx] > 297,
+           "a spike second at 0 dBFS is left out: the gain goes UP from 29.7 dB on the band's -17.5 dBFS");
+        ok(o.log.find("1 impulse second left out") != std::string::npos, "…and the log says one spike second was left out");
+        ok(rtl[(size_t)o.idx] <= 397, "…by no more than the headroom allows (-17.5 → about -8: ~9.5 dB)");
+    }
+    {   // every second a spike: nothing to judge by — stays, never guesses
+        Hold h(R);
+        In in; in.gains = &rtl; in.ceilIdx = top; in.curIdx = idxOf(rtl, 297);
+        h.begin(0.0, "test");
+        Out o; for (double t = 0; t <= 4.0; t += 2.0) { in.now = t; in.peak = 0.0; in.clipRun = 0; in.spark = true; o = h.tick(in); }
+        ok(h.phase() == Phase::Hold && o.kind == Out::None && o.log.find("every second of the") != std::string::npos,
+           "all spikes: the gain stays where it is, and says why");
+    }
+    {   // a REAL overload is never a spike: two seconds on the rail still cut at once
+        Hold h(R);
+        In in; in.gains = &rtl; in.ceilIdx = top; in.curIdx = idxOf(rtl, 402);
+        h.begin(0.0, "test");
+        in.now = 0; in.peak = 0.0; in.clipRun = 2; in.clipPct = 0.514; in.spark = false;
+        ok(h.tick(in).kind == Out::ClipCut, "0.5 % of samples on the rail for 2 s: cut, as on the pass (40.2 → 29.7 dB)");
+    }
     {   // already at the right gain: "stays at", no write
         Hold h(R);
         In in; in.gains = &rtl; in.ceilIdx = top; in.curIdx = idxOf(rtl, 421);

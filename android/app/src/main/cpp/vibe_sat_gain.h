@@ -141,6 +141,12 @@ struct In {
     double peak = -99.0;                  // the converter's peak since the last tick, dBFS (fresh: after any write settled)
     double clipPct = 0.0;                 // % of samples on the rail
     int    clipRun = 0;                   // consecutive seconds on the rail (the radio's own hard-overload counter)
+    /** ★★ beta92 (Stuart 11-23, Meteor-M2-3 on the Pi 500's V4: "i think the gain is being overcautious because of those noise
+     *  spikes"): THIS second's peak reached the rail with only an IMPULSE's worth of rail samples (the RTL's own spark-plug
+     *  test, kAdcRailNoise — clipRun 0). Its peak says nothing about the band's level: it is left out of the headroom.
+     *  That pass: 40.2 dB really overloaded (0.5 % of samples, 6 s) → 29.7 dB, right; then ONE spiked sample at 0 dBFS in
+     *  the 4 s window set 20.7 dB for the whole pass, 9 dB lower than the band needed. */
+    bool   spark = false;
     double floorDb = NAN;                 // the band's floor now
     double ownFloorDb = NAN;              // the radio's own floor on the same scale, NaN = unknown
     const std::vector<int>* gains = nullptr;   // ★ a gain TABLE (the RTL's list) — or null: a continuous gain (the RSP's)
@@ -194,22 +200,32 @@ public:
             }
         }
         if (ph_ == Phase::Hold) return o;     // ★★★ THE HOLD: nothing else moves it — no climb, no spur chasing
-        // ── measuring ──
-        peakMax_ = std::max(peakMax_, in.peak);
+        // ── measuring ── (★ beta92 a spark's peak is not the band's level)
+        if (in.spark) ++sparks_; else peakMax_ = std::max(peakMax_, in.peak);
         if (std::isfinite(in.floorDb)) { floorSum_ += in.floorDb; ++floorN_; }
         ++n_;
         if (in.now - t0_ < r_.measureSec || n_ < 2) return o;
         const double floorAvg = floorN_ ? floorSum_ / floorN_ : NAN;
-        const Choice c = chooseGain(g, cur, in.ceilIdx, peakMax_, floorAvg, in.ownFloorDb, r_);
         ph_ = Phase::Hold;
+        if (peakMax_ <= -98.0 && sparks_ > 0) {   // ★ every second of the window was a spike: nothing to judge by — stay
+            std::snprintf(b, sizeof b, "satellite pass (%s): gain stays at %.1f dB — every second of the %.0f s window was an "
+                          "impulse on the rail (%d), nothing to judge the band by; held for the pass (clips only)",
+                          what_.c_str(), gainDb, in.now - t0_, sparks_);
+            o.log = b; ++sets_;
+            last_ = Choice{}; last_.idx = cur; last_.limit = "spikes";
+            return o;
+        }
+        const Choice c = chooseGain(g, cur, in.ceilIdx, peakMax_, floorAvg, in.ownFloorDb, r_);
         char fl[96];
         if (std::isfinite(c.floorOverOwn)) std::snprintf(fl, sizeof fl, ", floor %.1f dB above the radio's own", c.floorOverOwn);
         else std::snprintf(fl, sizeof fl, ", floor %.1f dB (the radio's own floor is not known here — headroom decides)",
                            std::isfinite(floorAvg) ? floorAvg : -99.0);
-        std::snprintf(b, sizeof b, "satellite pass (%s): gain %s %.1f dB — peak %.1f dBFS over %.0f s at %.1f dB, %.1f dB "
+        char sp[64] = "";
+        if (sparks_ > 0) std::snprintf(sp, sizeof sp, ", %d impulse second%s left out", sparks_, sparks_ == 1 ? "" : "s");
+        std::snprintf(b, sizeof b, "satellite pass (%s): gain %s %.1f dB — peak %.1f dBFS over %.0f s at %.1f dB%s, %.1f dB "
                       "predicted (set point %.0f dBFS, %.0f dB under the rail; decided by %s)%s; held for the pass "
                       "(clips only)", what_.c_str(), c.idx == cur ? "stays at" : "set to", g[(size_t)c.idx] / 10.0,
-                      peakMax_, in.now - t0_, gainDb, c.predictedPk, r_.targetPk, r_.railDbfs - r_.targetPk, c.limit, fl);
+                      peakMax_, in.now - t0_, gainDb, sp, c.predictedPk, r_.targetPk, r_.railDbfs - r_.targetPk, c.limit, fl);
         o.log = b; ++sets_;
         if (c.idx != cur) { o.kind = Out::Set; o.idx = c.idx; o.deltaDb = (g[(size_t)c.idx] - g[(size_t)cur]) / 10.0; }
         last_ = c;
@@ -222,7 +238,7 @@ private:
     Radio r_;
     Phase ph_ = Phase::Off;
     std::string what_;
-    double t0_ = 0, peakMax_ = -99.0, floorSum_ = 0; int floorN_ = 0, n_ = 0;
+    double t0_ = 0, peakMax_ = -99.0, floorSum_ = 0; int floorN_ = 0, n_ = 0, sparks_ = 0;
     unsigned sets_ = 0, cuts_ = 0;
     Choice last_;
     /** ★ The same three phases on a CONTINUOUS gain (the RSP: the shim turns deltaDb into an IF reduction and, by
@@ -256,7 +272,7 @@ private:
         if (d != 0.0) { o.kind = Out::Set; o.deltaDb = d; }
         return o;
     }
-    void startWindow(double now) { t0_ = now; peakMax_ = -99.0; floorSum_ = 0; floorN_ = 0; n_ = 0; }
+    void startWindow(double now) { t0_ = now; peakMax_ = -99.0; floorSum_ = 0; floorN_ = 0; n_ = 0; sparks_ = 0; }
 };
 
 /* ── WHEN A PASS IS ON ───────────────────────────────────────────────────────────────────────────────────── */
