@@ -69,7 +69,7 @@ RationalResampler::RationalResampler(int inRate, int outRate) {
     build_();
 }
 
-RationalResampler::RationalResampler(double inRateHz, int outRate, ExactRate) {
+void RationalResampler::initExact_(double inRateHz, int outRate) {
     long long p = 1, q = 1;
     toFraction_(inRateHz > 0.0 ? inRateHz : 1.0, 10000000LL, p, q);
     // out/in = outRate·q / p, reduced.
@@ -78,6 +78,18 @@ RationalResampler::RationalResampler(double inRateHz, int outRate, ExactRate) {
     L_ = num / g;
     M_ = p / g;
     Lt_ = (int)std::min<long long>(L_, kMaxBranches);
+    inHz_ = inRateHz > 0.0 ? inRateHz : 1.0;
+}
+
+RationalResampler::RationalResampler(double inRateHz, int outRate, ExactRate) {
+    initExact_(inRateHz, outRate);
+    build_();
+}
+
+RationalResampler::RationalResampler(double inRateHz, int outRate, ExactRate, double passHz, double stopHz) {
+    initExact_(inRateHz, outRate);
+    passHz_ = std::max(0.0, passHz);
+    stopHz_ = std::max(passHz_ + 1.0, stopHz);
     build_();
 }
 
@@ -87,9 +99,16 @@ void RationalResampler::build_() {
     // ★ With Lt_ == L_ this is exactly the old 0.5/max(L, M) — the table is unchanged.
     const double mt  = Lt_ == L_ ? (double)M_ : (double)Lt_ * (double)M_ / (double)L_;
     const double den = std::max((double)Lt_, mt);
-    const double cutoff = 0.5 / den * 0.90;   // small guard margin
-    const double trans  = 0.5 / den * 0.40;
-    std::vector<float> proto = designLowpass(cutoff, trans);
+    std::vector<float> proto;
+    if (stopHz_ > 0.0) {
+        // ★★ V12 the band design (raw IQ out): the edges in Hz at the upsampled rate Lt·in, Blackman.
+        const double U = (double)Lt_ * inHz_;
+        proto = designLowpass(0.5 * (passHz_ + stopHz_) / U, (stopHz_ - passHz_) / U, /*deepStop=*/true);
+    } else {
+        const double cutoff = 0.5 / den * 0.90;   // small guard margin
+        const double trans  = 0.5 / den * 0.40;
+        proto = designLowpass(cutoff, trans);
+    }
 
     // Pad to a whole number of polyphase branches (length multiple of Lt_).
     phaseLen_ = (int)std::ceil((double)proto.size() / Lt_);
@@ -155,6 +174,41 @@ int RationalResampler::process(const float* in, int n, float* out) {
     buf_.resize(phaseLen_);
     inCount_ += n;
     return outn;
+}
+
+// ── IqOutResampler (see vibedsp.h — RAW IQ OUT's writer half) ─────────────────────────────────────────────────────
+void IqOutResampler::configure(double inRateHz, int outRate) {
+    if (inRateHz == inHz_ && outRate == out_ && (same_ || ri_)) return;
+    inHz_ = inRateHz; out_ = outRate;
+    same_ = inRateHz <= 0.0 || outRate <= 0 || std::fabs(inRateHz - (double)outRate) < 1e-6 * (double)outRate;
+    ri_.reset(); rq_.reset(); taps_ = 0;
+    if (same_) return;
+    // ★ Flat to ±0.45 of the LOWER rate, ≥ 70 dB down from ±0.55 of it: going down, that is the consumer's band and
+    //   nothing beyond it folds in; going up (a capture narrower than the request), the images of the input stay out.
+    const double m = std::min(inRateHz, (double)outRate);
+    ri_ = std::make_unique<RationalResampler>(inRateHz, outRate, RationalResampler::ExactRate{}, 0.45 * m, 0.55 * m);
+    rq_ = std::make_unique<RationalResampler>(inRateHz, outRate, RationalResampler::ExactRate{}, 0.45 * m, 0.55 * m);
+    taps_ = ri_->phaseLen();
+}
+
+int IqOutResampler::process(const cf32* in, int n, std::vector<float>& oi, std::vector<float>& oq) {
+    if (n <= 0) { oi.clear(); oq.clear(); return 0; }
+    if ((int)fi_.size() < n) { fi_.resize((size_t)n); fq_.resize((size_t)n); }
+    // ★ De-interleave: cf32 is {re, im} pairs — a strided copy the compiler vectorises.
+    const float* f = reinterpret_cast<const float*>(in);
+    if (same_) {
+        oi.resize((size_t)n); oq.resize((size_t)n);
+        for (int i = 0; i < n; i++) { oi[i] = f[2 * i]; oq[i] = f[2 * i + 1]; }
+        return n;
+    }
+    for (int i = 0; i < n; i++) { fi_[i] = f[2 * i]; fq_[i] = f[2 * i + 1]; }
+    const int cap = ri_->maxOut(n);
+    oi.resize((size_t)cap); oq.resize((size_t)cap);
+    const int ni = ri_->process(fi_.data(), n, oi.data());
+    const int nq = rq_->process(fq_.data(), n, oq.data());
+    const int m = std::min(ni, nq);
+    oi.resize((size_t)m); oq.resize((size_t)m);
+    return m;
 }
 
 } // namespace vibedsp

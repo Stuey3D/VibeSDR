@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 
 namespace vibedsp {
 
@@ -593,6 +594,148 @@ int HalfbandDecimator::process(const cf32* in, int n, cf32* out) {
         len_ = keep;
     }
     return k;
+}
+
+// ── IqOutDecimator (see vibedsp.h — RAW IQ OUT's own wide tap) ──────────────────────────────────────────────────────
+/* ★★ THE PLAN. Every stage q (fin → fout = fin/q) has ONE job: nothing may fold into ±P (P = 0.45 R, the consumer's flat
+ *  band). Its passband is ±P, its stopband starts at fout − P — whatever lies between folds onto fout − P … fout/2, which is
+ *  outside ±P and taken out later (the next stage, or the writer's sharp filter). The transition is centred on fout/2, so a
+ *  stage by 2 is exactly a half-band. Blackman everywhere (≥ 70 dB): an IQ recorder's consumers see every leak.
+ *  ★ D (the whole decimation) is chosen by COST among Fd = fs/D in [R, 2R): the stages' MACs on the sample owner's thread
+ *    count TWICE (it is the DSP thread, or the listener's), the writer's sharp filter once (≈ 55·Fd/R taps per output and
+ *    rail — the closer Fd is to R, the fewer), and Fd == R exactly needs no writer filter at all. */
+namespace {
+struct IqStagePlan { std::vector<std::pair<int, bool>> st; double cost = 0.0; };   // (factor, half-band?)
+double iqStageCost(double fin, int q, bool hb, double P, int* tapsOut) {
+    const double fout = fin / q;
+    const double trans = (fout - 2.0 * P) / fin;
+    if (trans <= 0.0) return -1.0;
+    if (hb) { const int ph = HalfbandDecimator::halfTapsFor(trans); if (tapsOut) *tapsOut = ph; return (ph + 1.0) * fout; }
+    int n = (int)std::ceil(5.5 / std::max(trans, 1e-4));
+    if ((n & 1) == 0) ++n;
+    if (n < 9) n = 9;
+    if (tapsOut) *tapsOut = n;
+    return (double)n * fout;
+}
+double iqPlanCost(double fs, const std::vector<std::pair<int, bool>>& st, double P) {
+    double c = 0.0, f = fs;
+    for (auto& s : st) { const double k = iqStageCost(f, s.first, s.second, P, nullptr); if (k < 0) return -1.0; c += k; f /= s.first; }
+    return c;
+}
+IqStagePlan iqBestPlan(double fs, int D, double P) {
+    IqStagePlan best;
+    if (D <= 1) return best;
+    std::vector<int> primes;
+    { int r = D; for (int q = 2; q * q <= r; ++q) while (r % q == 0) { primes.push_back(q); r /= q; } if (r > 1) primes.push_back(r); }
+    std::vector<int> odd; int twos = 0;
+    for (int q : primes) { if (q == 2) ++twos; else odd.push_back(q); }
+    std::sort(odd.begin(), odd.end(), [](int a, int b) { return a > b; });
+    std::vector<std::vector<std::pair<int, bool>>> cands;
+    {   // A: the odd factors first (largest first), the twos as half-bands after
+        std::vector<std::pair<int, bool>> st; for (int q : odd) st.push_back({q, false}); for (int i = 0; i < twos; ++i) st.push_back({2, true});
+        cands.push_back(st);
+    }
+    {   // B: the twos as half-bands first, then the odd factors
+        std::vector<std::pair<int, bool>> st; for (int i = 0; i < twos; ++i) st.push_back({2, true}); for (int q : odd) st.push_back({q, false});
+        cands.push_back(st);
+    }
+    {   // C: the listener cascade's own shape — twos paired into FIR 4s, every factor largest first
+        std::vector<int> f = odd; int t = twos; for (; t >= 2; t -= 2) f.push_back(4); if (t) f.push_back(2);
+        std::sort(f.begin(), f.end(), [](int a, int b) { return a > b; });
+        std::vector<std::pair<int, bool>> st; for (int q : f) st.push_back({q, false});
+        cands.push_back(st);
+    }
+    double bc = -1.0;
+    for (auto& c : cands) {
+        const double k = iqPlanCost(fs, c, P);
+        if (k < 0) continue;
+        if (bc < 0 || k < bc) { bc = k; best.st = c; }
+    }
+    best.cost = bc;
+    return best;
+}
+}  // namespace
+
+void IqOutDecimator::configure(double inRateHz, int outRate) {
+    st_.clear(); cost_ = 0.0; D_ = 1;
+    inHz_ = inRateHz > 0.0 ? inRateHz : 0.0;
+    want_ = std::max(1, outRate);
+    if (inHz_ <= 0.0) return;
+    const double R = (double)want_, P = 0.45 * R;
+    const int dHi = (int)std::floor(inHz_ / R + 1e-9);
+    int bestD = 1; double bestScore = -1.0; IqStagePlan bestPlan;
+    if (dHi >= 2) {
+        const int dLo = std::max(1, (int)std::ceil(inHz_ / (2.0 * R) - 1e-9));
+        for (int d = dLo; d <= dHi; ++d) {
+            const double fd = inHz_ / d;
+            IqStagePlan pl = iqBestPlan(inHz_, d, P);
+            if (pl.cost < 0) continue;
+            const bool exact = std::fabs(fd - R) < 1e-6 * R;
+            const double writer = exact ? 0.0 : 55.0 * fd;                // ≈ taps/output × R (see the plan note)
+            const double score = 2.0 * pl.cost + writer;
+            if (bestScore < 0 || score < bestScore * 0.999 || (score <= bestScore * 1.001 && d > bestD)) {
+                bestScore = score; bestD = d; bestPlan = pl;
+            }
+        }
+    }
+    D_ = bestD;
+    double f = inHz_;
+    for (auto& s : bestPlan.st) {
+        Stage g; g.D = s.first;
+        const double fout = f / s.first;
+        const double trans = (fout - 2.0 * P) / f;
+        if (s.second) { g.hb = std::make_unique<HalfbandDecimator>(HalfbandDecimator::halfTapsFor(trans)); g.taps = g.hb->halfTaps(); }
+        else {
+            g.fir = std::make_unique<FirDecimator>(designLowpass(0.5 / s.first, std::max(trans, 1e-4), /*deepStop=*/true), s.first);
+            g.taps = g.fir->taps();
+        }
+        st_.push_back(std::move(g));
+        f = fout;
+    }
+    cost_ = std::max(0.0, bestPlan.cost);
+    nco_.reset();
+    if (shiftHz_ != 0.0) nco_.setFreq(shiftHz_ / inHz_);
+}
+
+void IqOutDecimator::setShiftHz(double hz) {
+    if (hz == shiftHz_) return;
+    shiftHz_ = hz;                       // ★ NCO::setFreq keeps the phase: a nudge is continuous
+    if (inHz_ > 0.0) nco_.setFreq(hz / inHz_);
+}
+
+void IqOutDecimator::reset() {
+    if (inHz_ > 0.0) configure(inHz_, want_);
+}
+
+int IqOutDecimator::process(const cf32* in, int n, cf32* out) {
+    if (n <= 0 || inHz_ <= 0.0) return 0;
+    const cf32* src = in;
+    if (shiftHz_ != 0.0) {
+        if ((int)mix_.size() < n) mix_.resize((size_t)n);
+        nco_.mix(in, mix_.data(), n);
+        src = mix_.data();
+    }
+    if (st_.empty()) { std::copy(src, src + n, out); return n; }
+    int m = n;
+    for (size_t i = 0; i < st_.size(); ++i) {
+        Stage& g = st_[i];
+        const bool last = i + 1 == st_.size();
+        std::vector<cf32>& buf = (i & 1) ? b_ : a_;
+        cf32* dst = out;
+        if (!last) { const size_t need = (size_t)m / g.D + 4; if (buf.size() < need) buf.resize(need); dst = buf.data(); }
+        m = g.hb ? g.hb->process(src, m, dst) : g.fir->process(src, m, dst);
+        src = dst;
+        if (m <= 0) return 0;
+    }
+    return m;
+}
+
+std::string IqOutDecimator::plan() const {
+    std::string s;
+    char b[48];
+    for (auto& g : st_) { std::snprintf(b, sizeof b, "%s/%d(%s %d)", s.empty() ? "" : " ", g.D, g.hb ? "hb" : "fir", g.taps); s += b; }
+    if (s.empty()) s = "none";
+    return s;
 }
 
 } // namespace vibedsp
