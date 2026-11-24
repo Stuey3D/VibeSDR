@@ -198,9 +198,9 @@ inline Caps compute(const Facts& f) {
         if (id == "avdata+8m") return rateKnown && f.maxRateHz >= 8.0e6 - 1000 && holds(R, 131.50e6, 136.99e6);
         // ★ V12 Radiosondes: one 2 MHz band of 400–406 MHz whole — not the HF+ (it stops short of 400 MHz), not an Icom (no IQ)
         if (id == "sondes") return d != "airspyhf" && (holds(R, 400.0e6, 402.0e6) || holds(R, 402.0e6, 404.0e6) || holds(R, 404.0e6, 406.0e6));
-        /* ★ V12 the VOR / ILS map: the whole navaid band (108–117.95 MHz and its windows' edges) at ≥ 1 MS/s (vibevormap::kMinRateHz —
-         *  12 windows at most) — not the HF+ (AIS's reason; its ≤ 912 kS/s could not sweep it anyway), not an Icom (no IQ) */
-        if (id == "vormap") return d != "airspyhf" && holds(R, 107.9e6, 118.05e6) && rateAtLeast(1.0e6);
+        /* ★ V12 the VOR / ILS map: the whole navaid band (108–117.95 MHz and its windows' edges) at ≥ 700 kS/s (vibevormap::kMinRateHz —
+         *  20 windows at most); the HF+ included (14 windows, a slower sweep); not an Icom (no IQ) */
+        if (id == "vormap") return holds(R, 107.9e6, 118.05e6) && rateAtLeast(0.70e6);   // ★★ 2026-11-24 the HF+ in: slower, not dead (Stuart)
         if (id == "ism" || id == "lora") {
             if (!rateAtLeast(vibeism::kMinRateHz)) return false;
             for (const auto& b : vibeism::bands()) if (holds(R, b.centreHz - b.needHz, b.centreHz + b.needHz)) return true;

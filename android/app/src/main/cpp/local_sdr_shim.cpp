@@ -44390,11 +44390,11 @@ static std::string vsNdbWhyNot() {
 }
 
 /** ★★ V12 VOR / ILS MAP (docs/v12/VOR-MAP.md): does this radio tune the whole navaid band (108–117.95 MHz, the windows'
- *  edges with it)? An Icom is a transceiver's audio; the Airspy HF+ is left out for AIS's reason (its VHF is one fixed-gain
- *  front end — and its rates, ≤ 912 kS/s, would make a 12-window sweep). AGENTS.md: where false, no control at all. */
+ *  edges with it)? An Icom is a transceiver's audio. ★★ 2026-11-24 the Airspy HF+ IS IN (Stuart: "yes"): its 60–260 MHz
+ *  covers the band, the mode writes no gain (it leaves the listener's), and its ≤ 912 kS/s only makes the sweep slower
+ *  (14 windows, ~7 min — vibe_vormap_service.h kMaxWindows). AGENTS.md: where false, no control at all. */
 static bool vsVormapReach() {
     if (g_icomOn.load()) return false;
-    if (LocalSdrShim::instance().isAirspyHf()) return false;
     const vibebands::Ranges t = vsTunableRanges();
     for (const auto& x : t) if (double(x.lo) <= 107.9e6 && double(x.hi) >= 118.05e6) return true;
     return false;
