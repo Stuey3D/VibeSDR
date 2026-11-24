@@ -650,6 +650,12 @@ try {
       sp.txt.length = 0;
       sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 1, doppler: true });
       ok(await until(() => lastVfob(sp)?.on === false && /pick changed/.test(lastVfob(sp)?.why || ''), 3000), `a new pick closes B (${lastVfob(sp)?.why})`);
+      // ★★ beta93 a VFO B opened BY HAND closes on a pick too (Stuart 11-24: "satellite should close vfo b if not needed")
+      sp.send({ type: 'watch', id: 1, frequency: 435700000, mode: 'nfm' });
+      ok(await until(() => chanB(sp)?.freq === 435700000, 3000), 'VFO B opened by hand (435.700 NFM, inside the capture)');
+      sp.send({ type: 'sat', op: 'pick', norad: 44909, tx: 1, doppler: true });
+      ok(await until(() => !chanB(sp), 3000), 'a pick closes the hand-opened VFO B (SATELLITE is one VFO)');
+      ok(/VFO B closed for the pick/.test(S.L()), '…and says so in the log');
       p = lastPicked(sp);
       ok(await until(() => lastPicked(sp)?.tx === 1, 3000) && JSON.stringify(lastPicked(sp)?.vfob) === '[0]', `beacon picked: the transponder offered the other way (${JSON.stringify(lastPicked(sp)?.vfob)})`);
       // ★★ beta92 the beacon on A: the 24 kHz skimmer centred on the Doppler-CORRECTED prediction (the lock's nominal + shift),
@@ -786,13 +792,13 @@ try {
       const pk = lastPicked(sp);
       ok(pk?.params && pk.params.packet === '1200' && pk.params.baud_rate === 1200, `★ picked carries the decoder's own parameters ${JSON.stringify(pk?.params)}`);
       ok(await until(() => /armed before the rise/.test(S.L()), 5000), 'the gain watch: armed before the rise');
-      ok(await until(() => /satellite pass: IF filter \d+ -> 350 kHz \(ISS APRS 20 kHz \+ Doppler/.test(S.L()), 5000),
+      ok(await until(() => /satellite pass: IF filter \d+ -> 500 kHz \(ISS APRS 20 kHz \+ Doppler/.test(S.L()), 5000),
          `★ the IF filter narrowed for the pass: ${(S.L().match(/satellite pass: IF filter[^\n]*/) || [''])[0]}`);
-      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 350000, 3000), `hwinfo: tunerBw ${lastOf(sp, 'hwinfo')?.tunerBw} (was ${bw0})`);
+      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 500000, 3000), `hwinfo: tunerBw ${lastOf(sp, 'hwinfo')?.tunerBw} (was ${bw0})`);
       ok(await until(() => /satellite decode \(ISS APRS\) — gain held at -?[\d.]+ dB \(clips only\); measuring headroom/.test(S.L()), 6000),
          `the gain hold measures: ${(S.L().match(/satellite decode \(ISS APRS\)[^\n]*/) || [''])[0]}`);
       {
-        const L = S.L(), iIf = L.search(/satellite pass: IF filter \d+ -> 350 kHz/), iMeasure = L.search(/satellite decode \(ISS APRS\) — gain held/);
+        const L = S.L(), iIf = L.search(/satellite pass: IF filter \d+ -> 500 kHz/), iMeasure = L.search(/satellite decode \(ISS APRS\) — gain held/);
         ok(iIf >= 0 && iMeasure > iIf, '★ the filter narrowed BEFORE the hold measured (the measurement is behind it)');
       }
       // ★ the page follows the pick with its OWN parameters (as the web page's LRPT follow did): the host restarts the
@@ -806,18 +812,18 @@ try {
       await sleep(4500);
       ok(!/satellite gain: [^\n]*(is over|has set)/.test(S.L().slice(mark)) && !/satellite pass over/.test(S.L().slice(mark)),
          '★ re-attached with other parameters: still the pick\'s pass (no "over")');
-      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 350000, 1000), 'the filter stays at 350 kHz');
+      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 500000, 1000), 'the filter stays at 500 kHz (the pass floor, beta93)');
       // ★ AOS — the hold measures again
       const wait = Math.max(0, aos - Date.now() / 1000) * 1000 + 15000;
       ok(await until(() => /satellite gain: ISS APRS — AOS: the satellite is up/.test(S.L()), wait), `★ AOS seen (waited up to ${Math.round(wait / 1000)} s)`);
       ok(await until(() => { const L = S.L(); const i = L.search(/satellite gain: ISS APRS — AOS/); return i >= 0 && /measuring again —/.test(L.slice(i)); }, 6000),
          '★ AOS: the gain hold measures again');
-      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 350000, 1000), 'the filter held through AOS');
+      ok(await until(() => lastOf(sp, 'hwinfo')?.tunerBw === 500000, 1000), 'the filter held through AOS');
       // the drop: the filter goes back to following the view
       sp.send({ type: 'sat', op: 'drop' });
-      ok(await until(() => /satellite pass over: IF filter 350 -> \d+ kHz \(follows the view again\)/.test(S.L()), 5000),
+      ok(await until(() => /satellite pass over: IF filter 500 -> \d+ kHz \(follows the view again\)/.test(S.L()), 5000),
          `★ the drop gives the filter back: ${(S.L().match(/satellite pass over: IF filter[^\n]*/) || [''])[0]}`);
-      ok(await until(() => (lastOf(sp, 'hwinfo')?.tunerBw ?? 0) > 350000, 3000), `hwinfo: tunerBw ${lastOf(sp, 'hwinfo')?.tunerBw} after the pass`);
+      ok(await until(() => (lastOf(sp, 'hwinfo')?.tunerBw ?? 0) > 500000, 3000), `hwinfo: tunerBw ${lastOf(sp, 'hwinfo')?.tunerBw} after the pass`);
       dx.close();
       sp.close();
     } finally { S.stop(); }

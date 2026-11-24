@@ -11831,6 +11831,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("[sat] %s picked %s %s (%.3f MHz %s, Doppler %s, decoder %s)", key == kSatShared ? "the shared dial" : session.substr(0, 8).c_str(),
              sd.name.c_str(), tx.label.c_str(), hz / 1e6, md.c_str(), doppler ? "on" : "off", p.decoder.empty() ? "none" : p.decoder.c_str());
         satSendPicked(sock, key, p, decoderWhy);
+        /* ★★ beta93 SATELLITE IS ONE VFO (Stuart 11-24: RS-44 on both VFOs, then METEOR — "not realising that vfo b stayed
+         *  active … satellite should close vfo b if not needed, dont want to make things confusing by having a 2nd vfo
+         *  separate to the satellite view"). The old pick's OPEN IN VFO B already closed with it (satDetachPick); a VFO B
+         *  the picker opened by hand closes now too, told as an ordinary VFO B off. OPEN IN VFO B on THIS pick opens it again. */
+        if (!session.empty()) if (std::shared_ptr<WatchSet> w = watchFind(session)) {
+            bool hasB = false;
+            { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == 1) hasB = true; }
+            if (hasB) {
+                watchRemove(w, 1, "VFO B closed \xe2\x80\x94 SATELLITE listens on one VFO");
+                sendText(sock, watchStateJson(w.get()));
+                LOGI("[sat] %.8s: VFO B closed for the pick (SATELLITE is one VFO)", session.c_str());
+            }
+        }
     }
     /** {"type":"sat","op":"doppler","on":bool} — the AUTO DOPPLER key on the current pick. */
     void satDopplerOp(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
