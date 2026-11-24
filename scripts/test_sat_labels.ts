@@ -7,7 +7,8 @@
  *   • ONE TEXT: "ISS FM", "Meteor-M2-4 LRPT", "SO-50 FM", "RS-44 linear", "ORBCOMM FM114";
  *   • the mark at the Doppler-shifted frequency, carried along the rate between messages (≤ 8 s);
  *   • label-only ORBCOMM birds over the band merged into one label; one with its own channel stays its own;
- *   • priorities, the sky-blue colour, the hint saying "never decoded"; a tap tunes, never opens a decoder;
+ *   • priorities, the sky-blue colour, the hint (ORBCOMM: decoded from a SATELLITE pick, subscriber messages never); a tap
+ *     tunes, never opens a decoder;
  *   • the layout takes them with the other labels (two Meteors on 137.9 stack, not overlap).
  * Run: node --no-warnings scripts/test_sat_labels.ts
  */
@@ -80,8 +81,9 @@ console.log('priority, colour, words, tap');
 ok(iss!.prio === PRIO_SAT && PRIO_SAT < PRIO_TABLE && PRIO_SAT > PRIO_PERSONAL, 'below the curated table, above every bookmark');
 ok(knownLabelColour(iss) === SAT_LABEL_COLOUR && SAT_LABEL_COLOUR !== DX_LABEL_COLOUR && SAT_LABEL_COLOUR !== KNOWN_LABEL_COLOUR
    && knownLabelColour(KNOWN_SIGNALS[0]) === KNOWN_LABEL_COLOUR, 'its own sky blue; a curated label keeps the lilac');
-ok(/never decoded/.test(satLabelHint(band)) && /ORBCOMM FM116/.test(satLabelHint(band)) && /Doppler/.test(satLabelHint(iss!)) && /38° up/.test(satLabelHint(iss!)),
-   'the hint: ORBCOMM named only (never decoded); the ISS how high, Doppler-shifted');
+ok(/SATELLITE pick/.test(satLabelHint(band)) && /subscriber messages are never decoded/.test(satLabelHint(band)) && !/named only/.test(satLabelHint(band))
+   && /ORBCOMM FM116/.test(satLabelHint(band)) && /Doppler/.test(satLabelHint(iss!)) && /38° up/.test(satLabelHint(iss!)),
+   'the hint: ORBCOMM decoded from a SATELLITE pick (subscriber messages never); the ISS how high, Doppler-shifted');
 const tap = knownTapPlan(iss!, { rtty: true, wefax: true, navtex: true, dsc: true, spots: true, time: true, hfdl: true, cw: true });
 ok(tap.hz === 437806532 && tap.mode === 'nfm' && tap.dec === '', 'a tap tunes to where it is now, NFM — no decoder opened');
 ok(knownTapPlan(band, {}).dec === '' && knownTapPlan(band, {}).mode === 'nfm', 'an ORBCOMM tap only tunes (never a decoder)');

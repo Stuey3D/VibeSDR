@@ -12788,7 +12788,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★★ beta91 SATELLITE LABELS (vibe_sat_engine.h skyLabels — Stuart, 2026-11-22: "we dont even need to be in satellite
    *  mode either"): the last `sat_labels` message — the birds in range in this radio's capture, Doppler-shifted, every 4 s
    *  while one is up — dropped SATLABEL_STALE_MS after the last message. Drawn with the other labels (SIGNAL LABELS).
-   *  ORBCOMM is a name only, never decoded. */
+   *  ★★ 2026-11-24 ORBCOMM's band birds are merged into one label; the label only tunes — ORBCOMM is DECODED from a SATELLITE
+   *  pick (housekeeping; subscriber messages raw only, never decoded). */
   const [satLabels, setSatLabels] = useState<SatLabelEntry[]>([]);
   const satLabelsAtRef = useRef(0);
   useEffect(() => {

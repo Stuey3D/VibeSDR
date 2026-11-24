@@ -74,7 +74,8 @@ export interface KnownSignal {
    *  the server's confidence. Display and tune only; never a decoder (VARA is proprietary and never decoded). */
   tag?: { kind: 'vara'; conf: number };
   /** ★★ beta91 a SATELLITE IN RANGE (satLabelSignals): the birds it names (one, or a label-only constellation's several
-   *  merged), the highest one's elevation, and whether it is a name only (ORBCOMM — never decoded). */
+   *  merged), the highest one's elevation, and whether it is a band constellation's merged label (`b`: ORBCOMM — its tap
+   *  only tunes; ORBCOMM is decoded from a SATELLITE pick, 2026-11-24). */
   sat?: { names: string[]; tx: string; el: number; labelOnly: boolean };
   /** ★★ beta92 a BAND SKIMMER signal (services/bandSkim.ts bandSkimLabels): its mode and the callsign read ("" = not yet). */
   skim?: { mode: 'CW' | 'RTTY'; call: string };
@@ -554,8 +555,10 @@ export function isTagLabel(s: KnownSignal | null | undefined): boolean {
  *    `{"type":"sat_labels","v":1,"t":unix,"sats":[{"id","n","norad","tx","hz","lo"?,"hi"?,"r","el","m","b"?}]}` every 4 s
  *    while a bird is up in the radio's capture, and an empty list once when the last one sets. The client keeps those in
  *    its own view (signalsInView) and forgets them SATLABEL_STALE_MS after the last message.
- *  ★★ IDENTIFY ONLY for a label-only bird (`b`: ORBCOMM — commercial data messaging): a name, never a decoder. Several
- *     ORBCOMM birds on the band at once are ONE label ("ORBCOMM FM114 +2") over the band. A tap only tunes there.
+ *  ★★ A BAND CONSTELLATION (`b`: ORBCOMM — commercial data messaging): several ORBCOMM birds on the band at once are ONE
+ *     label ("ORBCOMM FM114 +2") over the band, and a tap only tunes there. ★★ 2026-11-24 ORBCOMM is no longer name-only:
+ *     it is DECODED from a SATELLITE pick (its housekeeping — positions, clocks, channel lists; subscriber messages are
+ *     never decoded, raw bytes only) — the label stays a label, the hint says where to decode it.
  *  ★ Switched with the other signal labels (Display settings' SIGNAL LABELS); the owner's "satlabels" stops the server. */
 /** Satellite labels' colour: a pale sky blue — not the bookmarks' lilac, the DX lemon, the VFO's red or DAB's pink. */
 export const SAT_LABEL_COLOUR = '#a8d8ff';
@@ -649,12 +652,13 @@ export function satLabelSignals(entries: readonly SatLabelEntry[] | null | undef
 export function isSatLabel(s: KnownSignal | null | undefined): boolean {
   return !!s && s.src === 'sat';
 }
-/** What a hover or a screen reader says: who, which downlink, how high, and — for a label-only bird — that it is named only. */
+/** What a hover or a screen reader says: who, which downlink, how high, and — for a band constellation (ORBCOMM) — where it
+ *  is decoded (a SATELLITE pick) and that subscriber messages never are. */
 export function satLabelHint(s: KnownSignal): string {
   const m = s.sat;
   if (!m) return s.label;
   const up = `${Math.round(m.el)}° up`;
-  if (m.labelOnly) return `${m.names.join(', ')} — commercial data messaging, named only (never decoded); ${up}; Doppler-shifted`;
+  if (m.labelOnly) return `${m.names.join(', ')} — commercial data messaging; decoded from a SATELLITE pick (housekeeping only — subscriber messages are never decoded); ${up}; Doppler-shifted`;
   return `${m.names[0]} — ${m.tx}, ${up}; at its Doppler-shifted frequency now`;
 }
 /** Labels plus satellites, one sorted list. */
