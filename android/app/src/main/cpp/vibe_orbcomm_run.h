@@ -280,7 +280,16 @@ private:
                           c.locked ? "true" : "false", (unsigned long long)c.ok, (unsigned long long)c.bad, (unsigned long long)c.repaired);
             j += b; first = false;
         }
-        j += "],\"refused\":{\"spurs\":" + std::to_string(rx_.spursRejected()) + ",\"notSdpsk\":" + std::to_string(rx_.notSdpskRejected()) + "}";   // ★ candidates the carrier checks turned away
+        j += "],\"refused\":{\"spurs\":" + std::to_string(rx_.spursRejected()) + ",\"notSdpsk\":" + std::to_string(rx_.notSdpskRejected()) + ",\"last\":[";
+        {   // ★ the last few turned away: where, why, how long banned (a live log shows what was refused)
+            bool f1 = true;
+            for (const auto& rf : rx_.refusedRecent()) {
+                char b[140];
+                std::snprintf(b, sizeof b, "%s{\"rf\":%.0f,\"why\":\"%s\",\"ago\":%.0f,\"ban\":%.0f}", f1 ? "" : ",", rf.rfHz, rf.why, t - rf.t, rf.banSec);
+                j += b; f1 = false;
+            }
+        }
+        j += "]}";   // ★ candidates the carrier checks turned away
         j += ",\"pick\":" + std::to_string(o_.pickNorad ? o_.pickNorad() : 0) + ",\"up\":" + std::to_string(up) + ",\"dots\":[";
         for (size_t i = 0; i < liveDots_.size() && i < 64; i++) {
             const auto& d = liveDots_[i];

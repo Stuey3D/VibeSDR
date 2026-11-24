@@ -493,10 +493,13 @@ private:
             const bool quarter = cosAvg_ >= 0.66 && cosAvg_ > stepAvg_ + 0.08 && turnSign_ < kTurnSignMax && quarters_ < 2;   // noise: both ≈ 0.62
             if (quarter) {
                 off_ += off_ > cfg_.offsetHz ? -1200.0 : 1200.0;
-                quarters_++; lookAt_ = syms_ + kSpurLookSym; stepAvg_ = cosAvg_ = turnSum_ = 0; turnN_ = 0;
-            } else if (stepAvg_ < kNotSdpskStep) { rejected_ = true; spur_ = stepAvg_ < kSpurStep; }
+                quarters_++; lookAt_ = syms_ + kSpurLookSym; stepAvg_ = cosAvg_ = turnSum_ = sinSum_ = 0; turnN_ = 0;
+            } else if (stepAvg_ < kNotSdpskStep || std::fabs(sinSum_ / std::max<uint64_t>(1, turnN_)) > 0.5) {
+                // ★ refused: no ±90° steps — or steps all ONE way (a CW spur seen a quarter turn out: |sin| ≈ 1, but never data)
+                rejected_ = true; spur_ = stepAvg_ < kSpurStep || std::fabs(sinSum_ / std::max<uint64_t>(1, turnN_)) > 0.5;
+            }
         }
-        turnSum_ += ad > 0 ? double(dr.real()) / ad : 0.0; turnN_++;
+        turnSum_ += ad > 0 ? double(dr.real()) / ad : 0.0; sinSum_ += ad > 0 ? double(dr.imag()) / ad : 0.0; turnN_++;
         turnSign_ = turnN_ ? std::fabs(turnSum_ / turnN_) : 0.0;
         framer_.push(b, std::fabs(dr.imag()) / std::max(1e-12f, float(pAvg_)), syms_);
     }
@@ -527,9 +530,14 @@ private:
          *  So the score is the weaker of the two side lines PLUS the centre: the side pair alone repeats every 9600 Hz of x⁴
          *  (a 2400 Hz error — 2 quarter turns a symbol, which the d⁴ loop cannot see either: the live-like test locked
          *  there and stayed); the centre line breaks that tie, so the answer is unique over ±2400 Hz. */
-        auto comb = [&](int k) { return std::min(line(k - side), line(k + side)) + line(k); };
+        /* ★★★ 2026-11-24 16:50, the live FM116 pass: a steady spur sits ON its carrier (137.666 MHz) — its x⁴ is a strong CENTRE
+         *  line, so "sides + centre" locked onto the spur, the steps read 0°, and the real carrier was refused (and banned).
+         *  The score is the side pair ALONE (a spur can never fill both), searched only over |Δf| ≤ 1200 Hz around the
+         *  scanner's estimate — inside the side pair's 2400 Hz period, so no tie to break; a quarter-turn-out landing is
+         *  caught by the |cos| look below. */
+        auto comb = [&](int k) { return std::min(line(k - side), line(k + side)); };
         int best = 0; float bestP = -1;
-        const int lim = int(std::min(fsA / 2 - 3 * binHz, 4 * cfg_.acqRangeHz) / binHz);
+        const int lim = int(std::min(fsA / 4 - 3 * binHz, 4 * cfg_.acqRangeHz) / binHz);
         double sum = 0; int cnt = 0;
         for (int k = -lim; k <= lim; k++) {
             const float q = comb(k);
@@ -557,7 +565,7 @@ private:
     vibelrpt::PolyRrc rrc_;
     std::vector<std::complex<float>> acq_;
     bool acquired_ = false, rejected_ = false, spur_ = false;
-    double stepAvg_ = 0, cosAvg_ = 0, turnSum_ = 0, turnSign_ = 0;
+    double stepAvg_ = 0, cosAvg_ = 0, turnSum_ = 0, turnSign_ = 0, sinSum_ = 0;
     uint64_t turnN_ = 0, lookAt_ = kSpurLookSym;
     int quarters_ = 0;
     static constexpr double kTurnSignMax = 0.5;        ///< |mean cos| of the steps: a spur ≈ 1 (always +), data ≈ 0                               ///< mean |sin| of the symbol steps (SDPSK ≈ 0.8–1, a CW spur ≈ 0.4–0.6 in noise)
@@ -579,7 +587,7 @@ private:
  *  centroid over ±3.4 kHz. Only the flat part of the slice (±0.45 of its rate) is searched. */
 class Scanner {
 public:
-    static constexpr double kMinDb = 2.0;
+    static constexpr double kMinDb = 3.0;   ///< 2 dB opened ~500 noise candidates in 4 minutes on the live V4L (2026-11-24 16:46)
     struct Peak { double offsetHz = 0, db = 0; };
     void configure(double fs) {
         fs_ = fs;
@@ -721,11 +729,13 @@ public:
                 Strike& st = strikes_[key];
                 if (now_ - st.at > 600) st.n = 0;
                 st.at = now_;
-                const double ban = std::min(300.0, (c.spur() ? 4 * cfg_.banSec : cfg_.banSec) * double(1 << std::min(st.n, 5)));
+                const double ban = banFor(st.n, c.spur(), cfg_.banSec);
                 if (c.rejected()) st.n++;
                 if (strikes_.size() > 512) strikes_.clear();
                 bans_.push_back({ c.offsetHz(), now_ + ban, c.spur() ? 2000.0 : 6000.0 });
                 if (c.spur()) spurs_++; else if (c.rejected()) notSdpsk_++;
+                refusedLast_.push_back({ centre_ + c.offsetHz(), now_, c.spur() ? "spur" : c.rejected() ? "not SDPSK" : "quiet", ban });
+                if (refusedLast_.size() > 8) refusedLast_.erase(refusedLast_.begin());
                 chans_.erase(chans_.begin() + long(i));
             } else i++;
         }
@@ -740,6 +750,13 @@ public:
     const std::vector<Scanner::Peak>& peaks() const { return scan_.peaks(); }
     uint64_t spursRejected() const { return spurs_; }      ///< steady lines refused (the spur check)
     uint64_t notSdpskRejected() const { return notSdpsk_; } ///< peaks with no x⁴ line (the carrier check)
+    /** The last few carriers dropped: where, when, why ("spur" | "not SDPSK" | "quiet"), banned for how long. */
+    struct Refused { double rfHz, t; const char* why; double banSec; };
+    const std::vector<Refused>& refusedRecent() const { return refusedLast_; }
+    /** ★★ A refusal NEVER bans a place for a pass (the live FM116 pass, 16:46: doubled bans of up to 5 minutes kept a wrongly
+     *  refused carrier out for good): kMaxBanSec at most, a strike doubling from `base`. */
+    static constexpr double kMaxBanSec = 60;
+    static double banFor(int strikes, bool spur, double base) { return std::min(kMaxBanSec, (spur ? 2 * base : base) * double(1 << std::min(strikes, 4))); }
     double floorDb() const { return scan_.floorDb(); }
     /** The scanner's level (dB over the floor) at the carrier nearest `rfHz` (within 4 kHz), or −99. */
     double levelAt(double rfHz) const {
@@ -776,6 +793,7 @@ private:
     const Chan* cur_ = nullptr;
     int nextId_ = 0;
     uint64_t spurs_ = 0, notSdpsk_ = 0;
+    std::vector<Refused> refusedLast_;
     Scanner scan_;
     std::vector<std::unique_ptr<Chan>> chans_;
     std::vector<Ban> bans_;

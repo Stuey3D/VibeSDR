@@ -201,6 +201,38 @@ static void testLiveLike(bool quick) {
     CHECK(!spurOpened, "no carrier is ever opened on a spur (the scanner cuts narrow lines)");
 }
 
+/** ★★★ REGRESSION — the live FM116 pass, 2026-11-24 16:46 (build 894c2abd7): a carrier with a steady spur ON it was never
+ *  opened again — the x⁴ score's centre slot took the spur, the steps read 0°, the carrier was refused and its place banned
+ *  (doubling, up to 5 minutes). A strong carrier with a pass's Doppler and a spur on it (and the spur comb across the slice)
+ *  must open and LOCK from a cold start within 3 s, and no refusal may ban a place for more than kMaxBanSec. */
+static void testSpurOnCarrier() {
+    std::printf("── regression: a spur ON the carrier (live FM116 16:46)\n");
+    for (double esn0 : { 20.0, 8.0 }) {
+        const double fs = 1024000, centre = 137.5e6, carrier = 162500;   // 137.6625 MHz
+        std::vector<uint8_t> bytes;
+        for (int f = 0; f < 8; f++) { auto fr = tx::minorFrame(0x2E, 0x0A, f, {}); bytes.insert(bytes.end(), fr.begin(), fr.end()); }
+        tx::Signal s; s.fs = fs; s.offsetHz = carrier + 1500; s.slopeHzS = -30; s.esn0Db = esn0; s.clockPpm = 30; s.phaseWalkHz = 5; s.seed = 31;
+        auto x = tx::modulate(bytes, s);
+        const double es = s.amp * s.amp / kBaud, n0 = es / std::pow(10.0, 8.0 / 10.0);   // the spurs' level is the 8 dB case's
+        // the spur on the channel (137.666, C/N −4 dB in 6.7 kHz — the live comb's +10 dB in a 250 Hz bin) and the comb every 40 kHz
+        std::vector<std::pair<double, double>> sp = { { 166000, -4 } };
+        for (double o = -480000; o < 480000; o += 40000) sp.push_back({ o + 20000, -4 });   // the comb, none on the channel
+        for (size_t i = 0; i < x.size(); i++)
+            for (auto& q : sp) x[i] += std::complex<float>(std::polar(std::sqrt(n0 * 6720 * std::pow(10.0, q.second / 10.0)), 2 * M_PI * q.first * double(i) / fs));
+        Receiver r;
+        int ok = 0; double firstOk = -1;
+        r.onPacket = [&](const Rx& p) { if (p.p.ok) { ok++; if (firstOk < 0) firstOk = p.t; } };
+        for (size_t i = 0; i < x.size(); i += 16384) r.feed(&x[i], int(std::min<size_t>(16384, x.size() - i)), fs, centre, double(i) / fs);
+        std::printf("   %2.0f dB: good %d, first at %.1f s, refused spurs %llu / not SDPSK %llu\n", esn0, ok, firstOk,
+                    (unsigned long long)r.spursRejected(), (unsigned long long)r.notSdpskRejected());
+        CHECK(firstOk >= 0 && firstOk < 3.0, "%.0f dB with a spur on it: locked from a cold start in under 3 s (%.1f)", esn0, firstOk);
+        CHECK(ok > int(bytes.size() / 12) / 2, "%.0f dB: most packets decode (%d)", esn0, ok);
+    }
+    bool capped = true;
+    for (int k = 0; k < 40; k++) for (bool spur : { false, true }) if (Receiver::banFor(k, spur, 12) > Receiver::kMaxBanSec) capped = false;
+    CHECK(capped && Receiver::kMaxBanSec <= 60, "no refusal bans a place for more than %.0f s", Receiver::kMaxBanSec);
+}
+
 static void testSensitivity() {
     std::printf("── sensitivity (Es/N0 → good packets)\n");
     const double fs = 100000;
@@ -220,6 +252,7 @@ int main(int argc, char** argv) {
     testReceiver(quick);
     testCarrierCheck();
     testLiveLike(quick);
+    testSpurOnCarrier();
     if (!quick) testSensitivity();
     std::printf("test-orbcomm: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
