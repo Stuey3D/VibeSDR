@@ -117,6 +117,8 @@ import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery,
          GALLERY_RANGES, GALLERY_RANGE_KEY, GALLERY_RANGE_HINT, galleryRangeOf, galleryRangeQuery, galleryRangePhrase, galleryKnowsRange,
          galleryRangeFooter } from '../../../src/utils/galleryPager';
 import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, radioChipLabel, type LogRadio } from '../../../src/utils/logRadio';
+import { orbAttachParams } from '../../../src/services/orbcomm';   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
+import { parseSkyPlotJson, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, skyRadioFromBase, SKY_LEGEND, SKY_PLOT_WHAT, type SkyPlotData } from '../../../src/utils/skyPlot';   // ★★ 2026-11-24 THE SKY PLOT
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
          dxTuneTarget, dxWhen, dxWhere, type DxAlert, type DxEntry, type DxPage, type DxSort } from '../../../src/utils/dxLog';
@@ -10445,6 +10447,13 @@ function satPanelGet(): SatPanel | null {
       openMap: (o) => openDigiModesMap(o),                           // ★ 1.9
       galleryGet: galleryText,                                       // ★★ beta91 TELEMETRY CHARTS: the saved passes
       vfobOpen: (norad, tx) => spec?.satVfoB(norad, tx),             // ★★★ beta92 OPEN IN VFO B
+      // ★★ 2026-11-24 ORBCOMM: CARRIERS AUTO / 1–6 re-attaches with "max_carriers"; the sky plot of THIS radio (its /r/<id>)
+      orbMax: (k) => {
+        satOrbMax = k;
+        if (satDec === 'orbcomm' && activeDec === 'orbcomm' && decoders) decoders.attach('orbcomm', orbAttachParams(satOrbPrm, k) as DecoderParams, decVfo);
+      },
+      skyGet: galleryText,
+      skyRadio: () => skyRadioFromBase(BASE_PATH),
     });
     satPanel.setCap(satCap);
   }
@@ -10458,6 +10467,10 @@ let satDec: SatPicked['decoder'] = '';
 /** ★★ beta92 the decoder key a pick's decoder runs under: a skimmed CW beacon ('cwskim') is CW's (the skimmer is CW's). */
 const satDecKey = (d: SatPicked['decoder']) => (d === 'cwskim' ? 'cw' : d);
 let satBeaconOn = false;   // ★★ beta92 the cwskim attach is the pick's (not the CW key's own skimmer setting)
+/** ★★ 2026-11-24 ORBCOMM: the pick's own attach parameters (its slice) and the manual fallback (carriers at most, 0 = AUTO —
+ *  this page only; a later pick attaches with it too). */
+let satOrbPrm: Record<string, unknown> | null = null;
+let satOrbMax = 0;
 function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string, unknown>, audio?: SatPicked['audio']) {
   /* ★★★ beta92 THE PICK'S OWN PASSBAND (BPSK telemetry: 100–7600 Hz USB, the decoder's centre 3800 in the middle — the
    *  signal and ±2.5 kHz of prediction error fit). The server set it; the page shows and keeps exactly it, every time the
@@ -10488,6 +10501,8 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
     decoders.attach('cwskim', { width: SAT_BEACON_SKIM_HZ }, decVfo);
     spec?.setBandwidth(-SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_AUDIO_HALF_HZ);
   }
+  // ★★ 2026-11-24 ORBCOMM: the pick's slice — JOINS its run — with "max_carriers" when it was set by hand on this page
+  else if (d === 'orbcomm') { satOrbPrm = prm ?? null; decoders.attach('orbcomm', orbAttachParams(prm, satOrbMax) as DecoderParams, decVfo); }
   // ★★ beta92 the server's own parameters when it sent them (the pick's symbol rate): this JOINS its run, never restarts it
   else decoders.attach(decExt(d), prm ? (prm as DecoderParams) : decParams(d), decVfo);
   syncDecButtons();
@@ -13658,7 +13673,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | null = null;   // ★ fctlm: SATELLITE-BEST 1.2, only ever followed from a SATELLITE pick
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | 'orbcomm' | null = null;   // ★ fctlm: SATELLITE-BEST 1.2, only ever followed from a SATELLITE pick (★★ orbcomm: 2026-11-24, likewise)
 /* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
  *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
  *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
@@ -14867,7 +14882,8 @@ function initDecoders(host: string, auth: AuthState) {
       decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
-    onSatTlm: (d) => { if (satDec && activeDec === satDec) satPanel?.telemetry(parseSatTelemetry(d)); },   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
+    onSatTlm: (d) => { if (satDec && activeDec === satDec) satPanel?.telemetry(parseSatTelemetry(d)); },
+    onOrbcomm: (type, d) => { if (satDec === 'orbcomm' && activeDec === 'orbcomm') satPanel?.orbcomm(type, d); },   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);
@@ -15760,7 +15776,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'lrpt', 'ale', 'vor', 'sarsat', 'fctlm'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'lrpt', 'ale', 'vor', 'sarsat', 'fctlm', 'orbcomm'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -19210,6 +19226,79 @@ function galShowTlm(it: GalleryItem, body: string): boolean {
   void tlmLoadPasses(galleryText, tlmSatOfTitle(it.title), it.t).then((x) => { if (seq === galTlmSeq) { across = x; paint(); } });
   return true;
 }
+/* ★★ 2026-11-24 THE SKY PLOT in the gallery (docs/v12/SKY-PLOT.md, src/utils/skyPlot.ts — the app draws the same dome):
+ *  where this server's aerials hear the satellites, one dot per 5 s of decodes, coloured by SNR, grey where a bird was
+ *  tracked but nothing decoded. Opened from its standing row (page 1 of ALL / ORBCOMM) into #galSky (made here, beside
+ *  #galText); the radio chips — a sky plot is about an AERIAL — appear when 2+ radios hold dots, and it opens on THIS radio
+ *  (its /r/<id>) when it is one of them. DOWNLOAD saves the server's own PNG of the same view. */
+let galSkyRadio: string | null = null;   // null = not chosen yet: this radio when it is a choice
+let galSkySeq = 0;
+function galSkyEl(): HTMLElement {
+  let el = document.getElementById('galSky');
+  if (!el) {
+    el = document.createElement('div'); el.id = 'galSky'; el.hidden = true;
+    $('galText').parentElement!.insertBefore(el, $('galText'));
+    const st = document.createElement('style');
+    st.textContent = `#galSky svg{display:block;width:100%;max-width:420px;height:auto;margin:6px auto;color:var(--btn-text,#ddd)}`
+      + `#galSky .galSkyLeg{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 12px;font-size:12px;color:var(--text-dim)}`
+      + `#galSky .galSkyLeg i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}`
+      + `#galSky .galSkySum{text-align:center;margin-top:4px}`;
+    document.head.appendChild(st);
+  }
+  return el;
+}
+async function openGallerySky() {
+  const el = galSkyEl();
+  const seq = ++galSkySeq;
+  $('galList').hidden = true; $('galFilter').hidden = true; $('galRadio').hidden = true; $('galRange').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
+  $('galText').hidden = true; ($('galImg') as HTMLImageElement).hidden = true; galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
+  galTrReset();
+  $('galViewMeta').textContent = 'SKY PLOT · ORBCOMM';
+  el.hidden = false;
+  el.innerHTML = '<div class="hint">Loading…</div>';
+  const mine = skyRadioFromBase(BASE_PATH);
+  const pick = galSkyRadio ?? mine;
+  let d: SkyPlotData | null = null, err = '';
+  try {
+    const r = await fetch(galUrl(skyPlotQuery('orbcomm', pick)), { cache: 'no-store' });
+    const j = await r.json().catch(() => null);
+    d = parseSkyPlotJson(j);
+    if (!d) err = String((j as any)?.error || 'The sky plot could not be read.');
+  } catch { err = 'Could not reach the server.'; }
+  if (seq !== galSkySeq) return;
+  // ★ the chips: this radio first time when it is one of them; a pick no longer offered → every radio
+  const ok = (id: string) => !!d?.radios && d.radios.some((x) => x.id === id);
+  if (d && pick && !ok(pick) && d.radios) { galSkyRadio = ''; void openGallerySky(); return; }
+  const shown = d?.radios ? pick : '';
+  const dl = $('galDl') as HTMLAnchorElement;
+  const png = galUrl(skyPlotQuery('orbcomm', pick, 0, 0, true));
+  dl.href = png + (png.includes('?') ? '&' : '?') + 'download=1'; dl.download = 'ORBCOMM sky plot.png';
+  el.innerHTML = '';
+  if (!d) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = err; el.appendChild(h); return; }
+  if (d.radios) {
+    const row = document.createElement('div'); row.className = 'btnRow'; row.setAttribute('role', 'group'); row.setAttribute('aria-label', "Sky plot: which radio's aerial");
+    const mk = (id: string, label: string) => {
+      const b = document.createElement('button'); b.className = 'btn' + (shown === id ? ' on' : ''); b.textContent = label;
+      b.setAttribute('aria-pressed', shown === id ? 'true' : 'false');
+      b.title = id ? `Where ${label.split(' · ')[0]}'s aerial hears` : 'Every radio on this server — meaningful only when they share an aerial';
+      b.onclick = () => { galSkyRadio = id; void openGallerySky(); };
+      row.appendChild(b);
+    };
+    mk('', 'ALL RADIOS');
+    for (const c of d.radios) mk(c.id, radioChipLabel(c));
+    el.appendChild(row);
+  }
+  const fig = document.createElement('div');
+  fig.innerHTML = skyPlotSvg(skyPlotScene(d.dots, 300, 6000), 'Sky plot: where this aerial hears the ORBCOMM satellites')
+    + `<div class="galSkyLeg">${SKY_LEGEND.map((k) => `<span><i style="background:${k.css}"></i>${k.label.replace(/[<>&]/g, '')}</span>`).join('')}</div>`;
+  el.appendChild(fig);
+  const sum = document.createElement('div'); sum.className = 'hint galSkySum';
+  sum.textContent = skyPlotSummary(d.dots, d.truncated) || 'No dots for this radio yet.';
+  el.appendChild(sum);
+  const what = document.createElement('div'); what.className = 'hint';
+  what.textContent = SKY_PLOT_WHAT + (d.radios && !shown ? ' Every radio together is only meaningful when they share an aerial.' : '');
+  el.appendChild(what);
+}
 function galWhen(t: number): string {
   const d = new Date(t * 1000);
   const p2 = (n: number) => String(n).padStart(2, '0');
@@ -19390,6 +19479,33 @@ async function renderGallery(page = galPage) {
           host.insertBefore(row, host.firstChild);
         }).catch(() => {});
     }
+    /* ★★ 2026-11-24 THE SKY PLOT — a standing row on the first page of ALL and ORBCOMM once the server holds dots (an older
+     *  server, or none yet: no row). VIEW opens the dome (openGallerySky). */
+    if ((galKind === '' || galKind === 'orbcomm') && galPage === 1) {
+      const kindAt = galKind;
+      void fetch(galUrl(skyPlotQuery('orbcomm')), { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null)).then((j) => {
+          const d = parseSkyPlotJson(j);
+          if (!d || !d.dots.length || host.querySelector('.galSky') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
+          const row = document.createElement('div'); row.className = 'sres galSky'; row.tabIndex = 0; row.setAttribute('role', 'button');
+          const f = document.createElement('span'); f.className = 'f'; f.textContent = 'SKY PLOT';
+          const n = document.createElement('span'); n.className = 'n';
+          n.appendChild(document.createTextNode(`ORBCOMM · ${skyPlotSummary(d.dots, d.truncated)}`));
+          n.appendChild(document.createElement('br'));
+          const src = document.createElement('span'); src.className = 'src';
+          src.textContent = 'Where this server’s aerials hear the satellites, by SNR — grey where tracked but nothing decoded';
+          n.appendChild(src);
+          const go = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = -1; void openGallerySky(); };
+          const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'VIEW';
+          mb.title = 'The sky plot'; mb.setAttribute('aria-label', 'Open the ORBCOMM sky plot');
+          mb.onclick = (e) => { e.stopPropagation(); go(); };
+          mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+          row.onclick = go;
+          row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+          row.appendChild(f); row.appendChild(n); row.appendChild(mb);
+          host.insertBefore(row, host.firstChild);
+        }).catch(() => {});
+    }
     /* ★★ beta88 THE DSC CALLS WITH A POSITION (Stuart, 2026-11-20: "i have no map button to view them from the gallery on
      *  the pi500") — NAVTEX's standing row's shape, on the first page of ALL or DSC: MAP opens the SHIPPING MAP, DSC first.
      *  Drawn only when the gallery holds a pinned DSC call (dscGalSummary; no dead control). */
@@ -19472,6 +19588,7 @@ function renderGalleryPager(pages: number) {
 function galleryBack() {
   if (!$('galList').childElementCount) { void renderGallery(); return; }
   $('galView').hidden = true; $('galList').hidden = false; $('galFilter').hidden = false;
+  galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24 the sky plot view goes with BACK
   $('galRadio').hidden = !galRadios; $('galRange').hidden = !galRangeOk;   // ★ beta92 the filters back with the list
   $('galPager').hidden = $('galPager').childElementCount === 0;
   $('galleryPanel').scrollTop = galScroll;
@@ -19491,12 +19608,14 @@ async function openGalleryItem(it: GalleryItem) {
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
   if (/\.(png|jpg)$/i.test(it.f)) {   // ★ V12 balloons: SSDV pictures are JPEGs
+    galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24
     $('galText').hidden = true; img.hidden = false; img.src = url;
     galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
     return;
   }
   img.hidden = true; img.removeAttribute('src'); $('galText').hidden = false;
   galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
+  galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24
   $('galText').textContent = 'Loading…';
   try {
     const r = await fetch(url, { cache: 'no-store' });
@@ -19977,7 +20096,8 @@ function sigTagsClear() { if (sigTagEntries.length) { sigTagEntries = []; sigTag
  *     dont even need to be in satellite mode either"): the server's `sat_labels` — every bird above the horizon whose
  *     downlink is in this radio's capture, Doppler-shifted, every 4 s while one is up (the mark moves with each). Dropped
  *     SATLABEL_STALE_MS after the last message; a new server clears them. Drawn only while the labels are on (SIGNAL
- *     LABELS). ORBCOMM is a name only — never decoded. */
+ *     LABELS). ★★ 2026-11-24 ORBCOMM's band birds merge into one label that only tunes; ORBCOMM is DECODED from a
+ *     SATELLITE pick (housekeeping; subscriber messages raw only, never decoded). */
 let satLabelEntries: SatLabelEntry[] = [];
 let satLabelsAt = 0, satLabelSig = '';
 let satLabelStaleTimer: number | null = null;

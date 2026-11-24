@@ -31,6 +31,10 @@ import {
   type SatPass,
   type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
+// ★★ 2026-11-24 ORBCOMM + the sky plot — the app's words and dome (src/services/orbcomm.ts, src/utils/skyPlot.ts)
+import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbViewMerge,
+         parseOrbcommPkt, parseOrbcommStatus, type OrbView } from '../../../src/services/orbcomm';
+import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, SKY_LEGEND, SKY_PLOT_WHAT, type SkyDot } from '../../../src/utils/skyPlot';
 
 export interface SatPanelDeps {
   list: () => void;
@@ -68,6 +72,11 @@ export interface SatPanelDeps {
   galleryGet?: (path: string) => Promise<string | null>;
   /** ★★★ beta92 OPEN IN VFO B — {"type":"sat_vfob",norad,tx} (main.ts follows B's decoder on a second decoder socket) */
   vfobOpen?: (norad: number, tx: number) => void;
+  /** ★★ 2026-11-24 ORBCOMM: the manual fallback under AUTO — carriers at most (0 = AUTO); main.ts re-attaches with
+   *  "max_carriers". The sky plot: the server's stored dots read through `skyGet` for THIS radio (`skyRadio`). */
+  orbMax?: (k: number) => void;
+  skyGet?: (path: string) => Promise<string | null>;
+  skyRadio?: () => string;
 }
 /** ★ 1.9: what the MAP key hands the DIGI MODES map (b90-maps' DigiMapOpts shape) — its APRS layer, and an overlay of the
  *  pass's orbit, footprint and the bird ("ISS PASS"); the stations carry "via ISS" from the server (aprs …sat). */
@@ -170,6 +179,25 @@ const CSS = `
 #satPanel .sat-tlm[hidden]{display:none}
 #satPanel .sat-tlm .sat-tk{display:inline-flex;gap:6px;margin-left:6px}
 #satPanel .sat-tlm .sat-tv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1px 12px;margin-top:3px}
+/* ★★ 2026-11-24 ORBCOMM: the birds, the carriers' manual fallback, the sky plot, the packets (subscriber messages raw) */
+#satPanel .sat-orb{margin-top:6px;font:12px/1.35 ui-monospace,Menlo,monospace}
+#satPanel .sat-orb[hidden]{display:none}
+#satPanel .sat-orb .sat-tk{display:inline-flex;gap:6px;margin-left:6px}
+#satPanel .sat-orb .sat-cav{font-family:system-ui,sans-serif;margin:2px 0}
+#satPanel .sat-orb .sat-note{font-family:system-ui,sans-serif;color:var(--text-dim);font-size:12px}
+#satPanel .sat-orb .sat-bird{border-top:1px solid var(--bar-border,var(--btn-border));padding-top:3px;margin-top:3px;overflow-wrap:anywhere}
+#satPanel .sat-orb .sat-bird > div:first-child{color:var(--amber)}
+#satPanel .sat-orb .sat-car{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px;font-family:system-ui,sans-serif;font-size:12px;color:var(--text-dim)}
+#satPanel .sat-orb .sat-car button{min-height:26px;padding:1px 8px}
+#satPanel .sat-orb .sat-sky[hidden]{display:none}
+#satPanel .sat-orb .sat-sky svg{display:block;width:100%;max-width:260px;height:auto;margin:4px auto 0;color:var(--btn-text)}
+#satPanel.big .sat-orb .sat-sky svg{max-width:360px}
+#satPanel .sat-orb .sat-leg{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 10px;font:11px system-ui,sans-serif;color:var(--text-dim);margin-top:2px}
+#satPanel .sat-orb .sat-leg i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+#satPanel .sat-orb .sat-skys{text-align:center;font:11px system-ui,sans-serif;color:var(--text-dim)}
+#satPanel .sat-orb .sat-pkh{font-family:system-ui,sans-serif;letter-spacing:.06em;color:var(--text-dim);margin-top:6px}
+#satPanel .sat-orb .sat-pks{max-height:12em;overflow:auto}
+#satPanel .sat-orb .sat-hex{color:var(--text-dim);padding-left:10px;word-break:break-all}
 /* ★ the pop-ups: decoder-box styles, top of the window, newest on top, three at most ("+2 more") */
 #satRemind{position:fixed;z-index:60;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);
   width:min(94vw,460px);display:flex;flex-direction:column;gap:6px;pointer-events:none}
@@ -261,6 +289,15 @@ export class SatPanel {
   /** ★★ beta92 a CW beacon's skimmer list (A, and B when B is on a beacon) — the box shows it nearest the prediction first */
   private aBeacon: SatBeaconList | null = null; private bBeacon: SatBeaconList | null = null;
   private bText = ''; private bPackets: string[] = []; private bStatus = ''; private bPicture = false; private bPictureDone = false;
+  // ★★ 2026-11-24 ORBCOMM — the decoder's state + packets, the manual fallback, the sky plot (stored dots + live)
+  private sOrb!: HTMLElement; private oTxt!: HTMLElement; private oSky!: HTMLElement; private oPk!: HTMLElement;
+  private orb: OrbView | null = null;
+  private orbMaxK = 0;
+  private orbSky = true;
+  private skyDots: SkyDot[] = [];
+  private skyNote = '';
+  private skySeq = 0;
+  private oTxtKey = ''; private oSkyKey = ''; private oPkKey = '';
 
   constructor(private deps: SatPanelDeps) {
     if (!document.getElementById('satPanelCss')) {
@@ -284,6 +321,7 @@ export class SatPanel {
       +   `<div><canvas class="sat-globe" data-s="globe" width="640" height="300" aria-label="Where the satellite is: above the globe, its beam to the ground, the pass's orbit dotted with arrows for its direction"></canvas>`
       +   `<div class="sat-key sat-dim" data-s="key" hidden></div></div></div>`
       + `<div class="sat-img" data-s="img" hidden></div><div class="sat-cw" data-s="cw" hidden></div><div class="sat-pk" data-s="pk" hidden></div><div class="sat-tlm" data-s="tlm" hidden></div>`
+      + `<div class="sat-orb" data-s="orb" hidden><div data-o="txt"></div><div class="sat-sky" data-o="sky"></div><div data-o="pk"></div></div>`
       + `<div class="sat-img sat-bimg" data-s="bimg" hidden><canvas width="320" height="256" aria-label="The picture VFO B is receiving"></canvas></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary><div data-s="rows"></div></details>`
@@ -296,6 +334,9 @@ export class SatPanel {
     this.sList = q<HTMLDetailsElement>('list'); this.sRows = q('rows'); this.sCredit = q('credit');
     this.sKey = q('key'); this.sTlm = q('tlm'); this.sMap = this.el.querySelector('[data-act="map"]') as HTMLButtonElement;
     this.sVb = q('vb'); this.sCw = q('cw'); this.sBImg = q('bimg'); this.bCanvas = this.sBImg.querySelector('canvas') as HTMLCanvasElement;
+    this.sOrb = q('orb');
+    this.oTxt = this.sOrb.querySelector('[data-o="txt"]') as HTMLElement; this.oSky = this.sOrb.querySelector('[data-o="sky"]') as HTMLElement;
+    this.oPk = this.sOrb.querySelector('[data-o="pk"]') as HTMLElement;
     // ★ 1.6 the reminders' pop-ups — their own place at the top of the window (they fire with the mode off too)
     this.remEl = document.createElement('div');
     this.remEl.id = 'satRemind'; this.remEl.hidden = true; this.remEl.setAttribute('aria-live', 'polite');
@@ -341,6 +382,7 @@ export class SatPanel {
     this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
     this.track = null; this.trackAsk = null; this.tlm = null;
     this.aText = ''; this.aBeacon = null; this.vfobClear();
+    this.orb = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
     this.lend(false);
   }
   private vfobClear() {
@@ -423,6 +465,7 @@ export class SatPanel {
     if (r.pickGone && this.picked) {
       this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
       this.track = null; this.trackAsk = null; this.tlm = null; this.aText = ''; this.aBeacon = null; this.vfobClear(); this.lend(false);
+      this.orb = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
       this.refusal = r.why || 'The satellite pick ended';
       this.deps.pickGone?.();
       this.sList.open = true;
@@ -435,7 +478,9 @@ export class SatPanel {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
     if (changed) { this.aText = ''; this.aBeacon = null; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
+    if (changed) { this.orb = null; this.skyDots = []; this.skyNote = ''; this.skySeq++; }
     this.picked = p; this.pending = null; this.refusal = '';
+    if (changed && p.decoder === 'orbcomm') this.skyLoad();
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t, p.params, p.audio);   // ★★ beta92 the server's own parameters (and passband): the page JOINS its run
     this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again)
@@ -471,6 +516,34 @@ export class SatPanel {
     this.tlm = satTelemetryMerge(this.tlm, t);
     if (this.tlmCharts && (this.tlm?.sat || '') !== was) this.tlmLoad();   // ★ beta91 the satellite's own passes, once it names itself
     if (this.open) this.paintPick();
+  }
+  /** ★★ 2026-11-24 ORBCOMM: {"type":"orbcomm_status"|"orbcomm_pkt","data":…} from the pick's decoder (parsed in orbcomm.ts) */
+  orbcomm(type: 'orbcomm_status' | 'orbcomm_pkt', data: unknown) {
+    if (this.picked?.decoder !== 'orbcomm') return;
+    if (type === 'orbcomm_status') {
+      const st = parseOrbcommStatus(data);
+      if (!st) return;
+      this.orb = orbViewMerge(this.orb, { status: st });
+      if (st.dots.length) this.skyDots = skyPlotMerge(this.skyDots, st.dots);
+    } else {
+      const pk = parseOrbcommPkt(data);
+      if (!pk) return;
+      this.orb = orbViewMerge(this.orb, { pkt: pk });
+    }
+    if (this.open) this.paintPick();
+  }
+  /** the ORBCOMM state now (tests) */
+  orbNow(): OrbView | null { return this.orb; }
+  /** This radio's stored ORBCOMM dots (the server's skyplot.json), read once per pick; live dots join as they come. */
+  private skyLoad() {
+    const seq = ++this.skySeq;
+    if (!this.deps.skyGet) { this.skyNote = 'This server has no sky plot to read'; return; }
+    this.deps.skyGet(skyPlotQuery('orbcomm', this.deps.skyRadio?.() ?? '')).then((txt) => {
+      if (seq !== this.skySeq) return;
+      let d = null; try { d = txt ? parseSkyPlotJson(JSON.parse(txt)) : null; } catch { d = null; }
+      if (d) this.skyDots = skyPlotMerge(d.dots, this.skyDots); else this.skyNote = 'The stored sky plot could not be read — live dots only';
+      if (this.open) this.paintPick();
+    }).catch(() => { if (seq === this.skySeq) { this.skyNote = 'The stored sky plot could not be read — live dots only'; if (this.open) this.paintPick(); } });
   }
   private tlmRaw = false;
   // ★★ beta91 TELEMETRY CHARTS: CHARTS beside RAW — this pass (the live frames), the last passes (the gallery, read on opening)
@@ -516,6 +589,8 @@ export class SatPanel {
     if (act === 'tlmraw') { this.tlmRaw = !this.tlmRaw; if (this.tlmRaw) this.tlmCharts = false; this.paintPick(); return; }
     if (act === 'tlmcharts') { this.tlmCharts = !this.tlmCharts; if (this.tlmCharts) { this.tlmRaw = false; this.tlmLoad(); } this.paintPick(); return; }
     if (act === 'tlmall') { this.tlmAll = !this.tlmAll; this.paintPick(); return; }
+    if (act === 'orbsky') { this.orbSky = !this.orbSky; this.paintPick(); return; }
+    if (act === 'orbmax') { this.orbMaxK = Math.max(0, Math.min(6, Number(b.dataset.v) || 0)); this.deps.orbMax?.(this.orbMaxK); this.paintPick(); return; }
     if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
     if (act === 'lead') {
       this.lead = satRemindLead(b.dataset.v);
@@ -665,7 +740,10 @@ export class SatPanel {
     const use = txUse(t);
     const lockWord = !this.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
     // ★ beta92: a CW beacon says its CW decoder is listening for the beacon (it said "listening for packets") — satDecWord
-    const decWord = this.decLine || satDecWord(this.picked?.decoder, use, t.sstv, big);
+    const orbSt = this.picked?.decoder === 'orbcomm' ? this.orb?.status ?? null : null;
+    const decWord = this.picked?.decoder === 'orbcomm'
+      ? (orbSt?.sats.length ? `decoding ${orbSt.sats.length} ORBCOMM bird${orbSt.sats.length === 1 ? '' : 's'}` : satDecWord('orbcomm', use, false, big))
+      : this.decLine || satDecWord(this.picked?.decoder, use, t.sstv, big);
     // ★★★ beta92 OPEN IN VFO B — B's line and the line switch; with no B this is exactly the one-downlink box
     const vb = this.vfob && this.vfob.on ? this.vfob : null;
     const sw = satViewSwitch(this.picked?.decoder, vb);
@@ -693,7 +771,7 @@ export class SatPanel {
      *  itself ("last pass saved to the gallery · …", src/services/lrpt.ts) — so it wins. SSTV keeps the words. */
     if (this.pictureDone && imageKind && !(this.picked?.decoder === 'lrpt' && this.decLine)) this.sState.textContent = [lockWord, 'picture complete — saved to the gallery'].filter(Boolean).join(' · ');
     // packet: the APRS lines
-    const pkt = showA && use === 'packet' && this.picked?.decoder !== 'fctlm' && satDecView(this.picked?.decoder) !== 'text';   // ★ telemetry shows values; CW its text
+    const pkt = showA && use === 'packet' && this.picked?.decoder !== 'fctlm' && this.picked?.decoder !== 'orbcomm' && satDecView(this.picked?.decoder) !== 'text';   // ★ telemetry shows values; CW its text
     this.sPk.hidden = !pkt;
     if (pkt) this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
     // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
@@ -709,12 +787,50 @@ export class SatPanel {
           : this.tlmRaw && hex ? `<div class="sat-dim" style="word-break:break-all">${esc(hex)}</div>`
           : this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : '');
     }
+    // ★★ 2026-11-24 ORBCOMM — its own panel
+    this.paintOrb(showA && this.picked?.decoder === 'orbcomm');
     // ★★ 1.9 the MAP key — a packet downlink, once a station with a position is heard (no dead key)
     this.sMap.hidden = !satMapOffered(t, this.deps.mapStations?.() ?? 0) || !this.deps.openMap;
     // ★★★ beta92 after A's area: B's line, and B's area when B's line is the one shown (A's parts are hidden then)
     this.paintVfoB(sat, mine, big, sw, shown);
     this.askTrack();
     this.drawGlobe(sat);
+  }
+
+  /** ★★ 2026-11-24 THE ORBCOMM PANEL: the head (+ SKY PLOT), the caveat (subscriber messages are never decoded), each bird
+   *  with its housekeeping, CARRIERS AUTO / 1–6, the sky plot (redrawn only when its dots change), the packets. Each part is
+   *  written only when its text changed — this runs every second with the countdowns. */
+  private paintOrb(show: boolean) {
+    this.sOrb.hidden = !show;
+    if (!show) return;
+    const v = this.orb, st = v?.status ?? null;
+    let h = `<div>${esc(orbHeadText(st))}<span class="sat-tk"><button data-act="orbsky" class="${this.orbSky ? 'on' : ''}" aria-pressed="${this.orbSky}" title="The sky plot: where this aerial hears the ORBCOMM satellites">SKY PLOT</button></span></div>`
+      + `<div class="sat-cav">${esc(ORB_CAVEAT)}</div>`;
+    const note = orbNoteText(st);
+    if (note) h += `<div class="sat-note">${esc(note)}</div>`;
+    const counts = orbCountsText(st?.counts);
+    if (counts) h += `<div class="sat-note">Packets: ${esc(counts)}</div>`;
+    for (const b of st?.sats ?? []) h += `<div class="sat-bird">${orbSatLines(b, v?.clockOff[b.norad]).map((l) => `<div>${esc(l)}</div>`).join('')}</div>`;
+    if (this.deps.orbMax)
+      h += `<div class="sat-car" role="group" aria-label="Carriers the decoder follows at most"><span>CARRIERS</span>`
+        + ORB_CARRIER_CHOICES.map((k) => `<button data-act="orbmax" data-v="${k}" class="${k === this.orbMaxK ? 'on' : ''}" aria-pressed="${k === this.orbMaxK}"`
+          + ` title="${k ? `Follow at most ${k} ORBCOMM carrier${k === 1 ? '' : 's'}` : 'AUTO: the decoder follows up to four'}">${orbCarriersLabel(k)}</button>`).join('') + `</div>`;
+    if (h !== this.oTxtKey) { this.oTxtKey = h; this.oTxt.innerHTML = h; }
+    this.oSky.hidden = !this.orbSky;
+    if (this.orbSky) {
+      const sum = [skyPlotSummary(this.skyDots) || 'No dots yet — they appear as the birds are heard', this.skyNote].filter(Boolean).join(' · ');
+      const key = `${this.skyDots.length}|${this.skyDots[0]?.t ?? 0}|${sum}|${this.big ? 1 : 0}`;
+      if (key !== this.oSkyKey) {
+        this.oSkyKey = key;
+        this.oSky.innerHTML = skyPlotSvg(skyPlotScene(this.skyDots, 300, 3000), 'Sky plot: where this aerial hears the ORBCOMM satellites')
+          + `<div class="sat-leg">${SKY_LEGEND.map((k) => `<span><i style="background:${k.css}"></i>${esc(k.label)}</span>`).join('')}</div>`
+          + `<div class="sat-skys">${esc(sum)}</div>` + (this.big ? `<div class="sat-skys">${esc(SKY_PLOT_WHAT)}</div>` : '');
+      }
+    }
+    const pk = `<div class="sat-pkh">RECENT PACKETS</div><div class="sat-pks">`
+      + (v?.pkts.length ? v.pkts.slice(0, 20).map((k) => `<div>${esc(orbPktLine(k))}</div>` + (k.raw && k.hex ? `<div class="sat-hex">${esc(k.hex)}</div>` : '')).join('')
+        : `<div class="sat-dim">no packets yet</div>`) + `</div>`;
+    if (pk !== this.oPkKey) { this.oPkKey = pk; this.oPk.innerHTML = pk; }
   }
 
   /** ★★★ beta92 the VFO B part of the box: OPEN IN VFO B key(s) for the downlinks the server offered, B's line once it is
@@ -738,7 +854,7 @@ export class SatPanel {
     const showB = !!vb && shown === 'B';
     const v = showB ? satDecView(vb!.decoder) : '';
     this.sBImg.hidden = !(v === 'image' && big && (this.bPicture || this.bPictureDone));
-    if (v === 'text' || v === 'telemetry') {
+    if (v === 'text' || v === 'telemetry' || v === 'orbcomm') {
       this.sCw.hidden = false;
       const ct = vb!.decoder === 'cwskim' ? satBeaconText(this.bBeacon) || SAT_BEACON_EMPTY
         : satCwTail(this.bText, v === 'telemetry' ? 6 : 4) || (v === 'text' ? 'no characters yet' : 'no frames yet');
