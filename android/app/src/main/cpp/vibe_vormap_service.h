@@ -69,10 +69,12 @@ constexpr double  kHalfWidthHz = 12500.0;
 constexpr double  kMinChanRate = 30000.0;
 /** ★ The share of the capture used (the outer 5 % each side is the radio's anti-alias roll-off). */
 constexpr double  kUsable      = 0.90;
-/** ★ Below this many windows a sweep is too slow to be a map (and the rate too low to be the radio's real one). */
-constexpr int     kMaxWindows  = 12;
-/** ★ The lowest running rate offered: ≥ 1 MS/s keeps the sweep to 12 windows (6 min) at most. */
-constexpr double  kMinRateHz   = 1.0e6;
+/** ★ More windows than this and a sweep is too slow to be a map. ★★ 2026-11-24 (Stuart, "yes" to the Airspy HF+): 20, so the
+ *  HF+ is in — 912 kS/s = 14 windows (~7 min a sweep), 768 kS/s = 16 (~8 min). VORs do not move, so a slow sweep still
+ *  draws a true map; the status words say how long a sweep takes. (Was 12 and 1 MS/s, which left the HF+ out.) */
+constexpr int     kMaxWindows  = 20;
+/** ★ The lowest running rate offered: ≥ 700 kS/s keeps the sweep to 20 windows (~10 min) at most. */
+constexpr double  kMinRateHz   = 0.70e6;
 
 inline int64_t chanHz(int i) { return kFirstChanHz + int64_t(i) * kChanStepHz; }
 /** 1 VOR, 2 ILS localiser (nav_rx.h's channelKind on our grid). */
