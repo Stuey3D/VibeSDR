@@ -159,6 +159,17 @@ try {
   }
   ok(!errors.length, `no page errors${errors.length ? ': ' + errors.slice(0, 2).join(' / ') : ''}`);
 
+  console.log('── B2. ★★★ AN hwinfo STORM COSTS NO DX LOG REQUESTS (2026-11-24: ~6,500 dxlog.json/min took the Workers allowance) ──');
+  {
+    const count = `performance.getEntriesByType('resource').filter((e) => e.name.includes('/vibeserver/dxlog')).length`;
+    const before = await js(count);
+    // 60 NR changes in a burst — the server answers each with an hwinfo (the storm's shape), each carrying `dxLog`
+    await js(`(() => { const el = document.getElementById('nr'); if (!el) return 0;
+      for (let i = 0; i < 60; i++) { el.value = String(20 + (i % 30)); el.dispatchEvent(new Event('input')); } return 1; })()`);
+    await sleep(4000);
+    const after = await js(count);
+    ok(after - before <= 1, `★ 60 hwinfo answers → ${after - before} DX Log request(s) (was one each: re-armed per hwinfo)`);
+  }
   console.log('── C. the owner keeps the log private (viewAdmin) ──');
   const P = await startServer('private', true);
   const r403 = await fetch(`${P.base}/vibeserver/dxlog.json?dial=1&limit=100`);

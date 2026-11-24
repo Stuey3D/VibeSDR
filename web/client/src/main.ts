@@ -2059,7 +2059,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); if (dabOn) spec?.dabScanGet(); },
     onAfc: (a) => { afcNow = a; afcAt = Date.now(); paintAfc(); },   // ★★ V12 auto-PPM — the owner's line (paintAfc)   // ★ V12: hwinfo comes on every (re)connect — the kept list with it
     onFmScan: (m: unknown) => { const s = parseFmScan(m); if (s) scanLockSet(s.running && s.lock, s.done, s.total); },
-    onDxLogOk: (ok: boolean) => { dxLogOk = ok; dxLogSyncBtn(); },   // ★★★ V12 the DX LOG key beside GALLERY
+    // ★★★ 2026-11-24 ONLY ON A CHANGE. hwinfo carries `dxLog` and comes far more often than on connect; this ran
+    //     dxLogSyncBtn → dxDialArm + dxAlertsArm, each of which fetches AT ONCE, on every one. Under an NR echo storm
+    //     (hwinfo many times a second) that was ~6,500 GET /vibeserver/dxlog.json a minute from one page through the tunnel
+    //     Worker — the XCover answered 500, and the account's whole 100k/day Workers allowance went in minutes, taking
+    //     every *.vibeserver.vibesdr.net address down (Stuart, 18:13). Re-armed when the server or its answer changes.
+    onDxLogOk: (ok: boolean) => {
+      dxLogOk = ok;
+      const key = `${P('/')}|${ok ? 1 : 0}`;
+      if (key === dxLogArmedKey) return;
+      dxLogArmedKey = key; dxDialFetchedAt = 0; dxAlertFetchedAt = 0;   // ★ a new server / answer: its first fetch is due now
+      dxLogSyncBtn();
+    },   // ★★★ V12 the DX LOG key beside GALLERY
     onSigTags: (msg: unknown) => { sigTagsReceived(msg); },   // ★★ V12 the VARA HF tag (identify only — vibe_varatag.h)
     onSatLabels: (msg: unknown) => { satLabelsReceived(msg); },   // ★★ beta91 satellites in range, named on the waterfall
     onDab: (d: DabState) => {
@@ -19968,6 +19979,11 @@ function initGallery() {
  *  BOOKMARK (the owner) copies it into the bookmarks. src/utils/dxLog.ts is the rule, shared with the app.
  *  ★ Alerts are per user and opt-in: "Tell me about new DX here" (this browser), shown in the VTS like a server notice. */
 let dxLogOk = false;
+let dxLogArmedKey = '';   // ★ 2026-11-24 the server + answer dxLogSyncBtn last ran for (onDxLogOk)
+/** ★★★ 2026-11-24 A FLOOR UNDER EVERY DX LOG REQUEST: whatever calls them, the dial list and the alerts poll each reach
+ *  the server at most once in DX_FETCH_FLOOR_MS — a storm upstream costs one request, never thousands (see onDxLogOk). */
+const DX_FETCH_FLOOR_MS = 30_000;
+let dxDialFetchedAt = 0, dxAlertFetchedAt = 0;
 let dxBand: '' | 'FM' | 'DAB' = '';
 let dxShowLocal = false, dxShowSuspect = false;
 let dxSort: DxSort = 'last';
@@ -19991,6 +20007,8 @@ function dxAlertsArm() {
   if (dxAlertTimer != null) { clearInterval(dxAlertTimer); dxAlertTimer = null; }
   if (!dxLogOk || !dxAlertsOn()) return;
   const poll = async () => {
+    if (Date.now() - dxAlertFetchedAt < DX_FETCH_FLOOR_MS) return;   // ★ 2026-11-24 the floor
+    dxAlertFetchedAt = Date.now();
     try {
       let seen = Number(localStorage.getItem(dxAlertSeqKey()) || '-1');
       const r = await fetch(galUrl(`/vibeserver/dxlog/alerts?since=${Math.max(0, seen)}`), { cache: 'no-store' });
@@ -20376,6 +20394,8 @@ let dxDialFetchTimer: number | null = null, dxDialClock: number | null = null;
 let dxDialGen = 0;
 async function dxDialFetch() {
   if (!dxLogOk || !knownLabelsOn) return;
+  if (Date.now() - dxDialFetchedAt < DX_FETCH_FLOOR_MS) return;   // ★ 2026-11-24 the floor
+  dxDialFetchedAt = Date.now();
   const gen = dxDialGen;
   let entries: DxDialEntry[] = [], pageNow = 0;
   try {
