@@ -3500,6 +3500,16 @@ static std::map<int, int>    g_bandGainMem;
  *     dropping samples" from "something further downstream is stuttering". One of those is worth
  *     chasing in the DSP and the other very much is not. */
 static std::atomic<long long> g_iqDrops{0};
+/** ★★ V12 2026-11-24 — HOW FAR BEHIND THE LISTENER'S DSP THREAD RAN: the radio's IQ queue at its fullest since the last
+ *  read, in thousandths of its cap (the USB paths only — a network jitter buffer is deep on purpose). Read-and-reset by
+ *  background decoding's easing governor every ~2 s (vibe_bg_ease.h): 600 = 150 ms of a 250 ms queue waiting, the first
+ *  sign that the listener's own receiver is losing the race — before a buffer is dropped. -1 = never measured. */
+static std::atomic<int> g_iqLagPeakPermille{-1};
+static inline void noteIqLag(double frac) {
+    const int v = (int)std::lround(std::min(1.0, std::max(0.0, frac)) * 1000.0);
+    int cur = g_iqLagPeakPermille.load(std::memory_order_relaxed);
+    while (v > cur && !g_iqLagPeakPermille.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {}
+}
 /** ★★★ SAMPLES AS LIBUSB HANDED THEM TO US — the ONLY counter upstream of every choice we make.
  *  The DAB decoder's samplesIn sits at the far end of the queue and the DSP loop, so a shortfall
  *  there could be the wire OR us, and we could not tell which. Counted in the callback itself. */
@@ -33487,6 +33497,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             iqQueuedSamples += v.size();
             iqQueue.push_back(IqBuf{std::move(v), std::exchange(iqGapNext, false), false, (float)rtlPllStamp()});
+            if (iqMaxSamples == 0) noteIqLag((double)iqQueue.size() / (double)IQ_QUEUE_MAX);   // ★ V12 easing: the DSP's lag
         }
         iqCv.notify_one();
     }
@@ -33515,9 +33526,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else if (iqQueuedSamples >= iqMaxSamples) {
                     dropOldestLocked();
                 }
+            } else {
+                /* ★★★ V12 2026-11-24 — BOUNDED BY TIME, AS THE FLOAT PATH IS. The int16 USB path (every SDRplay RSP) had NO
+                 *  bound: a DSP thread that fell behind grew this queue without limit (memory rule: no OOM, ever) and the
+                 *  listener heard it as ever-growing delay, never as a counted drop — so neither the health card nor background
+                 *  decoding's easing could see it. A quarter of a second at the running rate (at least 262144 samples), oldest
+                 *  dropped and counted — the float path's rule, word for word. */
+                const size_t cap = std::max<size_t>(262144, (size_t)(sampleRate > 0 ? sampleRate * 0.25 : 0));
+                while (iqQueuedSamples >= cap && !iqQueue.empty()) {
+                    g_iqDrops.fetch_add(1, std::memory_order_relaxed);
+                    g_iqLastDropAt.store((double)vsNowEpoch(), std::memory_order_relaxed);
+                    g_pipelineDisturbedAt.store(nowSecs(), std::memory_order_relaxed);
+                    static double lastDropLog = 0;
+                    const double nd = nowSecs();
+                    if (nd - lastDropLog > 2.0) { lastDropLog = nd; LOGI("IQ overrun \xe2\x80\x94 dropping a buffer (the DSP thread is behind)"); }
+                    dropOldestLocked();
+                }
             }
             iqQueuedSamples += v.size();
             iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false), gainStep});
+            if (iqMaxSamples == 0)   // ★ V12 easing: the DSP's lag
+                noteIqLag((double)iqQueuedSamples / (double)std::max<size_t>(262144, (size_t)(sampleRate > 0 ? sampleRate * 0.25 : 0)));
         }
         iqCv.notify_one();
     }
@@ -33564,6 +33593,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             iqQueuedSamples += v.size();
             iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false)});
+            if (iqMaxSamples == 0)   // ★ V12 easing: the DSP's lag
+                noteIqLag((double)iqQueuedSamples / (double)std::max<size_t>(262144, (size_t)(sampleRate > 0 ? sampleRate * 0.25 : 0)));
         }
         iqCv.notify_one();
     }
@@ -36726,6 +36757,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    "paused"   a listener is on and nothing can run (switched to stop for listeners, or none in their window)
      *    "busy"     another program has the radio (shared by time) — tried again in `retryIn` s
      *  ★ Under bgOpMtx_, so the runner cannot be started or stopped under the read. */
+    /** ★★★ V12 2026-11-24 — BACKGROUND DECODING EASES OFF FOR LISTENERS (vibe_bg_ease.h, docs/v12/BG-EASE.md). Every health
+     *  tick (~2 s, the housekeeping thread): what the listener's own receiver and the machine measured, handed to the runner's
+     *  governor — which sheds or gives back at most one step. Never waits: a start/stop in progress skips this tick. */
+    void bgEaseTick(int64_t nowMs, double machineBusyPct, int cores) {
+        const int lag = g_iqLagPeakPermille.exchange(-1, std::memory_order_relaxed);   // ★ always reset: a fresh peak per tick
+        std::unique_lock<std::mutex> op(bgOpMtx_, std::try_to_lock);
+        if (!op.owns_lock() || !bgActive_.load() || !bgRun_.running()) return;
+        vibe::bg::BgRunner::EaseInputs in;
+        in.nowMs = nowMs;
+        in.listenerIqDrops = (uint64_t)std::max(0LL, g_iqDrops.load(std::memory_order_relaxed));
+        in.listenerLag = lag < 0 ? -1.0 : lag / 1000.0;
+        in.machineBusyPct = machineBusyPct; in.cores = cores;
+        in.listenerHz = audioFreq.load();
+        bgRun_.easeTick(in);
+    }
+    /** ★★ V12 2026-11-24 the admin line's honest CPU figure: the background threads counted, the busiest named, the cores. */
+    std::string bgThreadsJson() {
+        static vibeadmin::BgThreadSampler sampler;
+        const vibeadmin::BgThreadCpu t = sampler.sample();
+        const long cores = sysconf(_SC_NPROCESSORS_ONLN);
+        std::string j = ",\"cores\":" + std::to_string(cores > 0 ? cores : 0);
+        if (t.threads > 0) {
+            char b[64];
+            j += ",\"threads\":" + std::to_string(t.threads);
+            if (t.hottestPct >= 0) {
+                std::snprintf(b, sizeof b, ",\"hottestPct\":%.1f", t.hottestPct);
+                j += b + std::string(",\"hottestName\":\"") + vibe::gallery::jsonEsc(t.hottestName) + "\"";
+            }
+        }
+        return j;
+    }
     std::string bgStatusJson() {
         vibe::bg::Config cfg;
         { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
@@ -36783,7 +36845,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             j += ",\"ais\":{";
             if (active && bgAis_) j += "\"ships\":" + std::to_string((unsigned long long)g_ais.vesselCount()) + ",";
             j += "\"storeBytes\":" + std::to_string((unsigned long long)vibeais::store::bytesOnDisk(vibe::gallery::shared().dir())) + "}";
-        } else if (active) j += ",\"runner\":" + bgRun_.statusJson();
+        } else if (active) j += ",\"runner\":" + bgRun_.statusJson(bgThreadsJson());
         return j + "}";
     }
     // ══ ★★ V12 beta90 UNATTENDED SATELLITE PASSES (Stuart 2026-11-21, docs/v12/SATELLITE-BEST.md "Decided 3") ══════════
@@ -44567,7 +44629,10 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
          *  it falls half a second behind — Band then loses whole slots without a single "slot skipped". Named here too. */
         if (p->skimTap_.running())
             watch.note("bandtap", "Digital spots / skimmer slice (radio-rate tap)", p->skimTap_.droppedBlocks(), nowMs);
-        if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
+        /* ★★★ V12 2026-11-24: background decoding giving way to a listener is the design working (vibe_bg_ease.h) — its drops
+         *  are EXCUSED while a listener is on and the easing still has room to act. TOO HEAVY stays for real overload:
+         *  drops with nobody on, or drops after everything that may be eased has been. */
+        if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs, p->bgRun_.dropsExcused());
         // ★ V12 DRM: each DRM receiver's queue drops its oldest IQ rather than make the pipeline wait — counted here
         {
             std::shared_ptr<vibe::DrmListener> d;
@@ -44611,7 +44676,14 @@ void LocalSdrShim::healthTick() {
     if (now - lastAt < 2000) return;
     lastAt = now;
     vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    // ★★ V12 2026-11-24: background decoding's easing governor first (it decides whether its drops are planned), then who
+    //    is behind; an EASED background is a line of information, not a fault (vibe_bg_ease.h)
+    if (p) p->bgEaseTick(now, g_health.machineBusyPct, g_health.cores);
     h.behind = decodersBehind(now);
+    if (p) {
+        const std::string en = p->bgRun_.running() ? p->bgRun_.easeNote() : std::string();
+        if (!en.empty()) h.notes.push_back("Background decoding: " + en);
+    }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,

@@ -32,7 +32,9 @@
 #include <unistd.h>
 #include <atomic>
 #include <deque>
+#include <map>
 #include <set>
+#include <dirent.h>
 #include <mutex>
 #include <string>
 #include <functional>
@@ -1442,6 +1444,78 @@ inline double cpuUsagePct() {
     const double pct = 100.0 * dBusy / dTotal;
     return pct < 0 ? 0 : pct > 100 ? 100 : pct;
 }
+
+/** ★★★ V12 2026-11-24 — WHERE BACKGROUND DECODING'S CPU REALLY GOES (Stuart, 24 Nov: "does background decoding get spread
+ *  across cores as right now it says 87% of 1 core in the admin menu"). The admin figure is a SUM over every background
+ *  thread; read alone it looks like one core nearly full. This counts THIS PROCESS's threads at the background rung (nice
+ *  19, not SCHED_IDLE — vibeBackgroundThread: vibe-bgdsp, vibe-bgdemod, vibe-bgdec, the band skimmers' workers) and finds
+ *  the busiest one, so the page can say "spread over 41 threads on 4 cores · busiest thread 33 %".
+ *  ★ Measured from /proc/self/task/<tid>/stat (utime + stime) between two calls ≥ 1 s apart; a quicker call returns the
+ *    last answer. Linux and Android only (a process may always read its own tasks); elsewhere threads = 0 and the page
+ *    says nothing new. Bounded: one entry per live thread, rebuilt each call. */
+struct BgThreadCpu { int threads = 0; double hottestPct = -1; std::string hottestName; };
+class BgThreadSampler {
+public:
+    BgThreadCpu sample() {
+#if defined(__linux__)
+        std::lock_guard<std::mutex> lk(m_);
+        struct timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        const double now = (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+        if (at_ > 0 && now - at_ < 1.0) return last_;
+        const long hz = sysconf(_SC_CLK_TCK) > 0 ? sysconf(_SC_CLK_TCK) : 100;
+        std::map<long, unsigned long long> cur;
+        std::map<long, std::string> names;
+        DIR* d = ::opendir("/proc/self/task");
+        if (!d) return last_;
+        while (dirent* e = ::readdir(d)) {
+            const long tid = std::strtol(e->d_name, nullptr, 10);
+            if (tid <= 0) continue;
+            char path[64]; std::snprintf(path, sizeof path, "/proc/self/task/%ld/stat", tid);
+            FILE* f = std::fopen(path, "r");
+            if (!f) continue;
+            char b[1024]; const size_t n = std::fread(b, 1, sizeof b - 1, f); std::fclose(f);
+            b[n] = 0;
+            char* lp = std::strchr(b, '('); char* rp = std::strrchr(b, ')');
+            if (!lp || !rp || rp < lp) continue;
+            // ★ after ")": state(3) … utime(14) stime(15) … nice(19) … policy(41) — token k is field k + 3
+            std::vector<const char*> tok;
+            for (char* q = rp + 1; *q && tok.size() < 40; ) {
+                while (*q == ' ') ++q;
+                if (!*q) break;
+                tok.push_back(q);
+                while (*q && *q != ' ') ++q;
+            }
+            if (tok.size() < 39) continue;
+            const long nice = std::strtol(tok[16], nullptr, 10), policy = std::strtol(tok[38], nullptr, 10);
+            if (nice != 19 || policy == 5 /* SCHED_IDLE */) continue;
+            cur[tid] = std::strtoull(tok[11], nullptr, 10) + std::strtoull(tok[12], nullptr, 10);
+            names[tid] = std::string(lp + 1, (size_t)(rp - lp - 1));
+        }
+        ::closedir(d);
+        BgThreadCpu r;
+        r.threads = (int)cur.size();
+        if (at_ > 0) {
+            const double dt = now - at_;
+            for (auto& kv : cur) {
+                auto it = prev_.find(kv.first);
+                if (it == prev_.end() || kv.second < it->second) continue;
+                const double pct = 100.0 * (double)(kv.second - it->second) / (double)hz / dt;
+                if (pct > r.hottestPct) { r.hottestPct = pct; r.hottestName = names[kv.first]; }
+            }
+        }
+        prev_ = std::move(cur); at_ = now; last_ = r;
+        return r;
+#else
+        return BgThreadCpu();
+#endif
+    }
+private:
+    std::mutex m_;
+    std::map<long, unsigned long long> prev_;
+    double at_ = 0;
+    BgThreadCpu last_;
+};
 
 struct SysStats {
     bool   haveLoad = false;

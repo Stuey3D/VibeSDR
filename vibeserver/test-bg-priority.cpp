@@ -364,7 +364,59 @@ static void backSeat() {
     }
 }
 
+
+// ── ★★★ V12 2026-11-24: easing off for listeners — the runner's side (vibe_bg_ease.h; the governor: test-bg-ease.cpp) ──
+static void eased() {
+    std::printf("── easing for listeners: pictures, then text, DSC/NAVTEX last; given back when the listener goes ──\n");
+    const std::string dir = tmpDir("ease");
+    FileSlots slots(dir, [] { return 8; });
+    bg::BgRegistry reg; reg.open(dir, "E");
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &slots; p.registry = &reg;
+    p.profile.centreHz = 500000; p.listenerOn = true;
+    p.profile.vfos = { bg::Vfo{490000, "usb", "navtex"}, bg::Vfo{505000, "usb", "rtty-weather"}, bg::Vfo{512000, "usb", "wefax"},
+                       bg::Vfo{518000, "usb", "navtex"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    ok(r.decodersRunning() == 4, "4 VFOs running, a listener on");
+    int64_t t = 0;
+    auto tick = [&](double lag, bool on = true) {
+        t += 2000;
+        if (!on) r.retarget(500000, 0, false);
+        bg::BgRunner::EaseInputs in; in.nowMs = t; in.listenerLag = lag; in.listenerHz = 505000; in.machineBusyPct = 40; in.cores = 4;
+        r.easeTick(in);
+    };
+    for (int i = 0; i < 10; i++) tick(0.1);
+    ok(r.easeStepsForTest() == 0 && r.dropsExcused() && r.easeNote().empty(), "★ 20 s with a listener on, nothing lagging: nothing eased, drops excused");
+    for (int i = 0; i < 6 && r.easeStepsForTest() == 0; i++) tick(0.8);
+    ok(r.easeStepsForTest() == 1 && r.vfoEasedForTest(2) && !r.vfoDecodingForTest(2), "★ the listener's queue lagging: step 1 pauses the WEFAX VFO (pictures first)");
+    ok(logged("eased for listeners, step 1 \xe2\x80\x94 VFO 3 (512.0 kHz WEFAX (120 LPM)) paused"), "logged in plain words");
+    ok(r.easeNote() == "eased for listeners (1 of 4 paused)", "the health card's line: " + r.easeNote());
+    bool inReg = false; for (auto& e : bg::BgRegistry::all(dir)) if (e.id == "E" && e.rank == 3) inReg = true;
+    ok(!inReg, "★ an eased VFO is not 'waiting' in the box's registry (it would hold other radios' VFOs back)");
+    r.slotTickForTest();
+    ok(!r.vfoDecodingForTest(2), "...and the ordinary resume path leaves it alone, slots free or not");
+    for (int i = 0; i < 6 && r.easeStepsForTest() == 1; i++) tick(0.8);
+    ok(r.easeStepsForTest() == 2 && r.vfoEasedForTest(1), "still lagging: step 2 pauses RTTY weather (text)");
+    for (int i = 0; i < 6 && r.easeStepsForTest() == 2; i++) tick(0.8);
+    ok(r.easeStepsForTest() == 3 && r.vfoEasedForTest(3) && r.vfoDecodingForTest(0), "★ still lagging, only NAVTEX left: the LOWEST row (VFO 4) goes, VFO 1 runs on");
+    ok(logged("a distress watch, paused LAST"), "...said so");
+    tick(0.1, false);
+    ok(r.easeStepsForTest() == 0 && !r.vfoEasedForTest(1) && !r.vfoEasedForTest(2) && !r.vfoEasedForTest(3), "★ the listener leaves: every step given back");
+    ok(logged("all 3 eased step(s) given back"), "logged");
+    for (int i = 0; i < 4; i++) r.slotTickForTest();
+    ok(waitFor([&] { r.slotTickForTest(); return r.decodersRunning() == 4; }, 3000), "...and all 4 decode again");
+    const std::string js = r.statusJson(",\"threads\":3");
+    ok(js.find("\"ease\":{\"paused\":0,\"chips\":0") != std::string::npos && js.find(",\"threads\":3}") != std::string::npos, "the admin JSON carries the ease state and the caller's extra fields");
+    r.stop();
+    ok(slots.inUse() == 0, "stopped: every slot back");
+}
+
 int main() {
+    eased();
     backSeat();
     inRange();
     priority();

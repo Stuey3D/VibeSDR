@@ -60,6 +60,10 @@ struct Health {
     /** ★★ DECODERS THAT CANNOT KEEP UP (Stuart, 2026-10-25: "a little addition to the health card that says something
      *  like Decoder too heavy"). Their readable names, sorted — see BehindWatch. Empty = all keeping up. */
     std::vector<std::string> behind;
+    /** ★★ V12 2026-11-24 — WORK EASED ON PURPOSE, NOT A FAULT (Stuart, 24 Nov: "TOO HEAVY" showed while he listened and the
+     *  receiver felt fine). Plain lines in our own fixed words, e.g. "Background decoding: eased for listeners (3 of 9
+     *  paused)" — drawn as information (amber text, no alarm), never as "TOO HEAVY". Empty = nothing eased. */
+    std::vector<std::string> notes;
     /** ★★ THE RADIO'S USB LINK LOSING SAMPLES (Stuart, 2026-11-14: a B210 at 56 MS/s dropped two chunks a second
      *  while the CPU sat at 17 %, so the pill said all was well and DAB kept losing lock — "Maybe put a USB icon to
      *  indicate USB issue"). OK = no hole in the last minute; the slot is only drawn when it is not OK. See UsbWatch. */
@@ -95,12 +99,16 @@ private:
  *  decoder restarted (a fresh baseline, not a drop). Keys not fed for two minutes are forgotten. */
 class BehindWatch {
 public:
-    void note(const std::string& key, const std::string& label, uint64_t dropped, int64_t nowMs) {
+    /** ★★ V12 2026-11-24 `excused`: the drops since the last note were PLANNED — background decoding giving way to a
+     *  listener (vibe_bg_ease.h: a listener is on and the easing still has room to act). They move the baseline and are
+     *  never named: the design working is not "TOO HEAVY". A drop that is not excused names the decoder for a minute as
+     *  before — background decoding with nobody on, or after everything that may be eased has been. */
+    void note(const std::string& key, const std::string& label, uint64_t dropped, int64_t nowMs, bool excused = false) {
         auto it = m_.find(key);
         if (it == m_.end()) { m_[key] = {label, dropped, -kHoldMs, nowMs}; return; }
         E& e = it->second;
         e.label = label; e.seenMs = nowMs;
-        if (dropped > e.dropped) e.lastDropMs = nowMs;
+        if (dropped > e.dropped && !excused) e.lastDropMs = nowMs;
         e.dropped = dropped;
     }
     std::vector<std::string> behind(int64_t nowMs) {
@@ -490,6 +498,8 @@ struct FwClock {
  *  `prev` carries the hysteresis and the smoothing between calls. */
 struct Sampler {
     double cpuEwma = -1, ramEwma = -1;
+    double machineBusyPct = -1;    ///< the last sample's whole-machine busy % (0..100), -1 = not readable — see sample()
+    int    cores = 0;
     int    iqDropRun = 0;          // consecutive seconds with IQ thrown away
     Health last;
     int    critHoldCpu = 0, critHoldRam = 0, critHoldTemp = 0;
@@ -626,6 +636,10 @@ struct Sampler {
          *     denominator and did not have it.
          *  ★ The process figure is still the right input where it is all we have: it is what OUR
          *    work costs, and this badge is about whether the RECEIVER is coping. */
+        // ★ V12 2026-11-24: the WHOLE MACHINE's busy % (0..100) and its cores, for background decoding's easing governor
+        //   (vibe_bg_ease.h — a step comes back only with room for it). -1 where only this process is readable (Android).
+        machineBusyPct = (s.cpuPct >= 0 && !s.cpuIsProcess) ? s.cpuPct : -1.0;
+        cores = s.cores;
         double cpu = -1;
         if (s.cpuPct >= 0) cpu = s.cores > 0 ? s.cpuPct / s.cores : s.cpuPct;
         else if (s.haveLoad && s.cores > 0) cpu = 100.0 * s.load1 / s.cores;   // fallback: load average
@@ -838,6 +852,12 @@ inline std::string json(const Health& h) {
     }
     // ★ ADDITIVE and omitted when OK: an older client ignores it, and a newer one draws no USB slot.
     if (h.usb != OK) j += ",\"usb\":" + std::to_string((int)h.usb);
+    // ★ V12 2026-11-24: ADDITIVE and omitted when empty — information lines (work eased on purpose). Our own fixed words.
+    if (!h.notes.empty()) {
+        j += ",\"notes\":[";
+        for (size_t i = 0; i < h.notes.size(); ++i) j += (i ? ",\"" : "\"") + h.notes[i] + "\"";
+        j += "]";
+    }
     return j + "}";
 }
 
@@ -845,7 +865,7 @@ inline std::string json(const Health& h) {
 inline bool differs(const Health& a, const Health& b) {
     return a.cpu != b.cpu || a.ram != b.ram || a.temp != b.temp || a.tempKind != b.tempKind
         || a.bat != b.bat || a.batPresent != b.batPresent || a.batCharging != b.batCharging
-        || a.batPct != b.batPct || a.behind != b.behind || a.usb != b.usb;
+        || a.batPct != b.batPct || a.behind != b.behind || a.usb != b.usb || a.notes != b.notes;
 }
 
 }  // namespace vibehealth
