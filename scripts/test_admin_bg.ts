@@ -1,5 +1,5 @@
 // test_admin_bg.ts — the admin page's background-decoding line (web/client/src/adminBg.ts, V12 beta 4).
-import { bgLines, bgVfoLine, bgDuration } from '../web/client/src/adminBg.ts';
+import { bgLines, bgVfoLine, bgDuration, bgCpuText } from '../web/client/src/adminBg.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -62,6 +62,22 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
           { hz: 8040000, label: 'Northwood GYA 8040.0 kHz', state: 'out' }] });
   ok(fx === 'WEFAX stations · running, one decoder slot · Northwood GYA 4610.0 kHz receiving a chart, Pinneberg (DWD) 7880.0 kHz standing by, Northwood GYA 8040.0 kHz out of range · no chart yet · 0.4 %', `WEFAX stations: ${fx}`);
   ok(bgVfoLine({ hz: 0, dec: 'wefax-stations', label: '', state: 'paused', why: 'a listener needed a decoder slot', fax: [] }) === 'WEFAX stations · paused (a listener needed a decoder slot)', 'WEFAX stations paused');
+}
+
+// ★★ V12 2026-11-24: the CPU figure says what it is — a sum over threads, spread over cores — and easing is said as such
+{
+  const t = bgCpuText({ cpuPct: 87, threads: 41, cores: 4, hottestPct: 33.2, hottestName: 'vibe-bgdsp' });
+  ok(t === '87 % of one core in all — spread over 41 threads on 4 cores (22 % of this machine) · busiest thread 33 % (vibe-bgdsp)', `the spread: ${t}`);
+  ok(bgCpuText({ cpuPct: 3.14 }) === '3.1 % of one core', 'an older server: the bare figure');
+  ok(bgCpuText({ cpuPct: 12, cores: 4 }) === '12 % of one core in all — spread over its threads on 4 cores (3.0 % of this machine)', 'cores but no thread count (not Linux)');
+  ok(bgCpuText({ cpuPct: null, threads: 3, cores: 4 }) === 'measuring…', 'measuring');
+  const e = bgLines({ ...run, state: 'listener', runner: { ...run.runner, cpuPct: 87, threads: 41, cores: 4, hottestPct: 33, hottestName: 'vibe-bgdsp',
+    ease: { paused: 2, chips: 1, excused: true, note: 'eased for listeners (2 of 9 paused, extra modes off on 1 band)' },
+    vfos: [{ hz: 7074000, dec: 'spots-band', label: 'Band', band: '40 m', state: 'running' as const, chipsOff: true, spots: 10, countries: 3, cpuPct: 4 },
+           { hz: 10100800, dec: 'rtty-weather', label: 'RTTY weather', state: 'paused' as const, why: 'eased for listeners', eased: true }] } })!;
+  ok(e.head.endsWith('busiest thread 33 % (vibe-bgdsp) · eased for listeners (2 of 9 paused, extra modes off on 1 band)') && !e.warn, `eased head, not a warning: ${e.head}`);
+  ok(e.rows[0].includes('Band skimmer 40 m · CW / RTTY / PSK eased off for listeners · running'), `chips eased: ${e.rows[0]}`);
+  ok(e.rows[1] === '10100.8 RTTY weather · paused (eased for listeners)', `paused for listeners: ${e.rows[1]}`);
 }
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);

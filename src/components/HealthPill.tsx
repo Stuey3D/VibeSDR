@@ -41,6 +41,9 @@ export interface Health {
   /** ★★ The radio's USB link losing samples (vibe_health.h UsbWatch) — 0/absent = no slot drawn. Stuart, 2026-11-14:
    *  "Maybe put a USB icon to indicate USB issue" (a B210 at 56 MS/s, CPU at 17 %, the pill said all was well). */
   usb?: HealthLevel;
+  /** ★★ V12 2026-11-24 — work EASED ON PURPOSE, not a fault (vibe_health.h Health::notes): "Background decoding: eased for
+   *  listeners (3 of 9 paused)". Drawn quietly, never as TOO HEAVY (Stuart, 24 Nov: the warning showed while all was well). */
+  notes?: string[];
 }
 
 /** 0 OK · 1 Elevated · 2 High · 3 Critical. Verbatim from the web client's HEALTH_COLOURS. */
@@ -297,11 +300,13 @@ export default function HealthPill({
   /* ★★ "<decoder>: TOO HEAVY" under the icons — the web client's renderHealthPill line, ONE RULE TWO READERS (Stuart,
    *  2026-10-25: "a little addition to the health card that says something like Decoder too heavy"). */
   const behind = (health.behind ?? []).filter(Boolean).slice(0, 3);
+  const notes = (health.notes ?? []).filter(Boolean).slice(0, 2);
   const label = 'Server health: processor ' + HEALTH_WORDS[cpu] + ', memory ' + HEALTH_WORDS[ram]
     + (temp ? `, ${temp.word}` : '')
     + (health.bat.present ? `, battery ${batPct}%${health.bat.charging ? ' on power' : ''}` : '')
     + (usb > 0 ? `, radio USB link ${USB_WORDS[usb]}` : '')
-    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '');
+    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '')
+    + (notes.length ? `. ${notes.join('. ')}` : '');
 
   /* ★★ THE WORST POSITION, not the worst level — and the alpha ramps with it instead of stepping
    *  at level 1, because a frame that suddenly got more opaque was the second half of the snap.
@@ -345,6 +350,7 @@ export default function HealthPill({
       </View>
       {behind.map((b) => <Text key={b} style={styles.warn} numberOfLines={1}>{b}: TOO HEAVY</Text>)}
       {usb >= 2 ? <Text style={styles.warn} numberOfLines={1}>RADIO USB: LOSING SAMPLES</Text> : null}
+      {notes.map((n) => <Text key={n} style={styles.note} numberOfLines={2}>{n}</Text>)}
     </Animated.View>
   );
 }
@@ -442,6 +448,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   // ★ the caption's size, in the readout amber — the web client's #srvHealth .hWarn
   warn: { fontSize: 9, lineHeight: 11, fontWeight: '700', letterSpacing: 0.7, color: '#ffb833', textAlign: 'center', marginTop: 3 },
+  // ★ V12 2026-11-24 a NOTE (work eased on purpose) — the caption's quiet colour, never the warning amber (web: .hNote)
+  note: { fontSize: 9, lineHeight: 11, fontWeight: '600', letterSpacing: 0.4, color: '#B9C0B4', textAlign: 'center', marginTop: 3, maxWidth: 220 },
   slot: { position: 'relative' },
   divider: { width: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.16)' },
   dot: { position: 'absolute', top: -1, right: -2, width: 4, height: 4, borderRadius: 2 },

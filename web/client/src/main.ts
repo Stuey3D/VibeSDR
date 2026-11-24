@@ -15752,6 +15752,7 @@ function renderHealthPill(h: {
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
   behind?: string[];
   usb?: number;
+  notes?: string[];
 }): void {
   /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
    *  `battery` message, which recreates it — so the old pill reappeared ON TOP of the new one
@@ -15842,8 +15843,14 @@ function renderHealthPill(h: {
    *  the audio is unaffected by design, and the screen-reader sentence says so. */
   const behind = Array.isArray(h.behind) ? h.behind.filter((b) => typeof b === 'string' && b).slice(0, 3) : [];
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  /* ★★ V12 2026-11-24 — WORK EASED ON PURPOSE IS NOT A FAULT (Stuart, 24 Nov: "TOO HEAVY" showed while he listened and
+   *  the receiver felt fine). Background decoding stepping back for listeners arrives as a NOTE (vibe_health.h
+   *  Health::notes, e.g. "Background decoding: eased for listeners (3 of 9 paused)") and is drawn as information — the
+   *  caption's quiet colour, never the TOO HEAVY amber. TOO HEAVY stays for real overload. */
+  const notes = Array.isArray(h.notes) ? h.notes.filter((b) => typeof b === 'string' && b).slice(0, 2) : [];
   const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('')
-    + (usb >= 2 ? '<div class="hWarn">RADIO USB: LOSING SAMPLES</div>' : '');
+    + (usb >= 2 ? '<div class="hWarn">RADIO USB: LOSING SAMPLES</div>' : '')
+    + notes.map((n) => `<div class="hNote">${esc(n)}</div>`).join('');
   body.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
   body.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
@@ -15851,7 +15858,8 @@ function renderHealthPill(h: {
        : h.temp.kind === 'none' ? '' : ', throttling')
     + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
     + (usb > 0 ? `, radio USB link ${USB_WORDS[usb]}` : '')
-    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : ''));
+    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '')
+    + (notes.length ? `. ${notes.join('. ')}` : ''));
 }
 
 function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, h = 20): string {

@@ -37,6 +37,7 @@
 #pragma once
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
 #include "vibe_bgdecode_band.h"     // ★ V12: a Band digital-spots VFO's span (installBandSpan)
+#include "vibe_bg_ease.h"           // ★ V12 2026-11-24: easing off for listeners, on purpose, before it hurts
 #include "vibe_band_slice.h"        // ★ …and its slices: sized, tapered and placed as a listener's Band (one rule)
 #include "vibe_clock.h"             // ★ the capture time a Band slice's slots are cut by
 #include "vibe_decoder_host.h"
@@ -1312,7 +1313,17 @@ public:
             const double dialHz = c->band ? c->bandCentre : c->vfo.hz;
             env.dialHz = [dialHz] { return dialHz; };
             if (c->band) {
-                env.bandOverride = p_.bandOverride;
+                /* ★★ V12 2026-11-24 EASING FOR LISTENERS (vibe_bg_ease.h): step 0 turns this band's EXTRA chips (CW / RTTY /
+                 *  wide PSK — digi::iqModes) off while a listener needs the room; FT8/FT4/WSPR carry on. The owner's own
+                 *  word wins: a chip he set to Always is never eased, one he set Off stays off. Read at each gate period. */
+                auto ov = p_.bandOverride; auto off = c->chipsOff;
+                env.bandOverride = [ov, off](const std::string& m) -> int {
+                    const int own = ov ? ov(m) : 0;
+                    if (own == 0 && off->load(std::memory_order_relaxed))
+                        for (const auto& d : digi::iqModes()) if (m == d.name) return -1;
+                    return own;
+                };
+                c->hasChips = !digi::iqModes().empty();
                 env.loaded = p_.loaded;
                 auto bu = p_.bandBudgetUnits; const int share = std::max(1, nBand);
                 env.bandBudgetUnits = [bu, share] { const double u = bu ? bu() : NAN; return std::isfinite(u) && u > 0 ? u / share : u; };
@@ -1392,7 +1403,9 @@ public:
             chans_.push_back(std::move(c));
         }
         startedAt_ = std::time(nullptr);
-        { std::lock_guard<std::mutex> ck(cpuMtx_); cpu_.clear(); }   // ★ new channels, new counters: the CPU window starts again
+        { std::lock_guard<std::mutex> ck(cpuMtx_); cpu_.clear(); }
+        easeTaken_.clear(); easeCpu_.clear(); gov_.reset(); easeExcused_.store(false); easePaused_.store(0); easeChips_.store(0);
+        easeExhaustedSaid_ = false; vfoCount_.store((int)chans_.size());   // ★ new channels, new counters: the CPU window starts again
         listenerOnFlag_->store(p_.listenerOn);
         startDecoders();
         publish();
@@ -1449,6 +1462,7 @@ public:
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
         chans_.clear();
+        easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0);
         if (p_.registry) p_.registry->publish({});
         if (was && sayIt) say("background decoding stopped");
     }
@@ -1504,6 +1518,120 @@ public:
     /** ★ beta92: chunks the DSP thread did not hand over because the worker held the queue at that instant (test seam). */
     uint64_t busyDrops() const { return busyDrops_.load(std::memory_order_relaxed); }
 
+    // ── ★★★ V12 2026-11-24 EASING OFF FOR LISTENERS (vibe_bg_ease.h, docs/v12/BG-EASE.md) ─────────────────────────────
+    /** One step in effect: which VFO, what was done, and what it cost when taken (% of one core, -1 unknown). */
+    struct EaseStep { int vfo = 0; ease::Kind kind = ease::Kind::Pause; double costPct = -1; };
+    /** What the shim measured, handed in every ~2 s (the health tick). */
+    struct EaseInputs {
+        int64_t  nowMs = 0;              ///< a steady clock, ms (a test passes its own)
+        uint64_t listenerIqDrops = 0;    ///< monotonic: the listener's IQ buffers dropped (the DSP thread fell behind)
+        double   listenerLag = -1;       ///< the listener's IQ queue at its fullest since the last tick, 0..1 (-1 unknown)
+        double   machineBusyPct = -1;    ///< the whole machine 0..100 (-1 unknown — Android)
+        int      cores = 0;
+        double   listenerHz = NAN;       ///< the listener's dial — chips and skimmers furthest from it go first (NaN = centre)
+    };
+    /** ★★ ONE TICK OF THE GOVERNOR: at most one step taken or given back, said in the log in plain words. Never touches a
+     *  listener's own decoders (it only ever reaches this runner's VFOs). Takes the slot lock and the channel lock, as
+     *  retarget() does — the worker is between blocks when it runs. */
+    void easeTick(const EaseInputs& in) {
+        if (!running_.load()) return;
+        std::lock_guard<std::mutex> sl(slotMtx_);
+        std::lock_guard<std::mutex> cl(chanMtx_);
+        const auto now = std::chrono::steady_clock::now();
+        easeCpu_.push_back({ now, vfoCpuNsLocked() });
+        while (easeCpu_.size() > 2 && now - easeCpu_[1].t >= std::chrono::seconds(20)) easeCpu_.pop_front();
+        while (easeCpu_.size() > 16) easeCpu_.pop_front();
+        // ★ what a VFO costs now, measured (its threads' own CPU clocks over the last ~20 s), % of one core; -1 unknown
+        auto costOf = [&](int i) -> double {
+            if (easeCpu_.size() < 2) return -1;
+            const auto& a = easeCpu_.front(); const auto& b = easeCpu_.back();
+            if (a.ns.size() != b.ns.size() || i < 0 || (size_t)i >= b.ns.size()) return -1;
+            const double w = std::chrono::duration<double>(b.t - a.t).count();
+            if (w < 1.0) return -1;
+            return 100.0 * (double)(b.ns[(size_t)i] >= a.ns[(size_t)i] ? b.ns[(size_t)i] - a.ns[(size_t)i] : 0) / (w * 1e9);
+        };
+        const double ref = std::isfinite(in.listenerHz) ? in.listenerHz : p_.centreHz;
+        std::vector<ease::Candidate> cands;
+        for (auto& c : chans_) {
+            if (c->eased || !c->inWindow || !c->blockWhy.empty() || !c->decoding) continue;
+            const double at = c->band ? c->bandCentre
+                            : c->fax ? (c->subs.empty() ? p_.centreHz : c->subs.front()->centreHz)
+                            : c->ndb ? 0.5 * (c->ndbLo + c->ndbHi) : c->vfo.hz;
+            ease::Candidate k;
+            k.vfo = c->index; k.distHz = std::fabs(at - ref); k.rank = c->index + 1; k.busy = busy(*c);
+            if (c->band && c->hasChips && !c->chipsOff->load()) { k.kind = ease::Kind::Chips; k.tier = ease::kTierChips; cands.push_back(k); }
+            k.kind = ease::Kind::Pause; k.tier = ease::tierOf(c->vfo.dec);
+            cands.push_back(k);
+        }
+        bool canShed = false, canSafety = false;
+        for (auto& k : cands) { if (k.tier == ease::kTierSafety) canSafety = true; else canShed = true; }
+        ease::Signals sg;
+        sg.nowMs = in.nowMs; sg.listenerOn = p_.listenerOn;
+        sg.bgDroppedSec = p_.sampleRate > 0 ? (double)dropped_.load(std::memory_order_relaxed) / p_.sampleRate : 0.0;
+        sg.listenerIqDrops = in.listenerIqDrops; sg.listenerLag = in.listenerLag;
+        sg.machineBusyPct = in.machineBusyPct; sg.cores = in.cores;
+        const ease::Act a = gov_.tick(sg, (int)easeTaken_.size(), canShed, canSafety,
+                                      easeTaken_.empty() ? -1.0 : easeTaken_.back().costPct);
+        const std::string n = std::to_string(easeTaken_.size() + 1);
+        if (a == ease::Act::Shed || a == ease::Act::ShedSafety) {
+            const int k = ease::pickNext(cands, a == ease::Act::ShedSafety);
+            if (k >= 0) {
+                Chan& c = *chans_[(size_t)cands[(size_t)k].vfo];
+                EaseStep st{ c.index, cands[(size_t)k].kind, costOf(c.index) };
+                char cost[96] = "";
+                if (st.costPct >= 0) std::snprintf(cost, sizeof cost, " (it was costing %.1f %% of one core)", st.costPct);
+                if (st.kind == ease::Kind::Chips) {
+                    c.chipsOff->store(true);
+                    say("background decoding: eased for listeners, step " + n + " \xe2\x80\x94 VFO " + name(c)
+                        + ": its extra modes (CW, RTTY, wide PSK) off, FT8/FT4/WSPR carry on" + cost + " \xe2\x80\x94 " + gov_.why());
+                } else {
+                    pauseOne(c, "eased for listeners", false);
+                    c.eased = true;
+                    say("background decoding: eased for listeners, step " + n + " \xe2\x80\x94 VFO " + name(c) + " paused" + cost
+                        + (cands[(size_t)k].tier == ease::kTierSafety ? " \xe2\x80\x94 a distress watch, paused LAST" : "")
+                        + " \xe2\x80\x94 " + gov_.why());
+                }
+                easeTaken_.push_back(st);
+            }
+        } else if (a == ease::Act::Restore && !easeTaken_.empty()) {
+            const EaseStep st = easeTaken_.back();
+            easeTaken_.pop_back();
+            say("background decoding: eased step " + std::to_string(easeTaken_.size() + 1) + " given back \xe2\x80\x94 VFO "
+                + name(*chans_[(size_t)st.vfo]) + (st.kind == ease::Kind::Chips ? ": its extra modes back on" : ": resuming") + " \xe2\x80\x94 " + gov_.why());
+            undoEase(st);
+        } else if (a == ease::Act::RestoreAll && !easeTaken_.empty()) {
+            const size_t k = easeTaken_.size();
+            while (!easeTaken_.empty()) { undoEase(easeTaken_.back()); easeTaken_.pop_back(); }
+            say("background decoding: " + gov_.why() + " \xe2\x80\x94 all " + std::to_string(k) + " eased step(s) given back");
+        }
+        int paused = 0, chips = 0;
+        for (auto& c : chans_) { if (c->eased) ++paused; if (c->chipsOff->load()) ++chips; }
+        easePaused_.store(paused); easeChips_.store(chips);
+        const bool exh = p_.listenerOn && gov_.exhausted();
+        if (exh && !easeExhaustedSaid_)
+            say("background decoding: TOO HEAVY even eased \xe2\x80\x94 " + gov_.why() + "; nothing left to ease "
+                + (canSafety ? "but the distress watches (DSC / NAVTEX), which are never paused for background decoding's own sake"
+                             : "(every background VFO is paused or eased)"));
+        easeExhaustedSaid_ = exh;
+        easeExcused_.store(p_.listenerOn && !exh);
+        publish();
+    }
+    /** ★ For the health card: a listener is on and background decoding's drops are the planned give-way (not a fault). */
+    bool dropsExcused() const { return easeExcused_.load(); }
+    /** ★ The health card's line while eased, "" when not: "eased for listeners (3 of 9 paused)". Fixed words, no user text. */
+    std::string easeNote() const {
+        const int pz = easePaused_.load(), ch = easeChips_.load();
+        if (pz <= 0 && ch <= 0) return std::string();
+        std::string t = "eased for listeners (";
+        if (pz > 0) t += std::to_string(pz) + " of " + std::to_string(vfoCount_.load()) + " paused";
+        if (ch > 0) t += std::string(pz > 0 ? ", " : "") + "extra modes off on " + std::to_string(ch) + " band" + (ch == 1 ? "" : "s");
+        return t + ")";
+    }
+    int easeStepsForTest() { std::lock_guard<std::mutex> sl(slotMtx_); return (int)easeTaken_.size(); }
+    bool vfoEasedForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->eased; }
+    bool chipsOffForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->chipsOff->load(); }
+    bool vfoDecodingForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->decoding; }
+
     /** ★★ V12 beta 4 — THE ADMIN PAGE'S LINE (admin only; LocalSdrShim::adminStatusJson). Per VFO: running / paused (and
      *  why) / out of the radio's window, the decoder's lock, the last item written, and its CPU as % of ONE core,
      *  averaged over ~10 s. ★ Measured, never estimated: every figure is a thread reading its own CPU clock around its own
@@ -1511,18 +1639,12 @@ public:
      *  around its decoder — so the counters cost two clock reads per block and nothing samples anything until the page
      *  asks (it polls every 2 s while open). The channeliser's FFT serves every VFO at once: it is reported as
      *  "channels", never shared out by guesswork. "cpuPct": null until two samples ≥ 1 s apart exist. */
-    std::string statusJson() {
+    /** ★ V12 2026-11-24: `extra` — more fields for the runner's object, from the caller (the shim's per-thread figures). */
+    std::string statusJson(const std::string& extra = std::string()) {
         std::lock_guard<std::mutex> cl(chanMtx_);
         std::lock_guard<std::mutex> ck(cpuMtx_);
         const auto now = std::chrono::steady_clock::now();
-        CpuSample cur{ now, sharedNs_.load(std::memory_order_relaxed), {} };
-        for (auto& c : chans_) {
-            uint64_t ndbNs = 0;
-            if (c->ndb) { std::lock_guard<std::mutex> nl(c->ndbM); ndbNs = c->ndbCpuDone + (c->ndbFeed ? c->ndbFeed->cpuNs() : 0); }
-            uint64_t faxNs = 0;
-            for (auto& sb : c->subs) faxNs += sb->host->cpuNs();
-            cur.vfo.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0) + ndbNs + faxNs);
-        }
+        CpuSample cur{ now, sharedNs_.load(std::memory_order_relaxed), vfoCpuNsLocked() };
         if (!cpu_.empty() && cpu_.back().vfo.size() != cur.vfo.size()) cpu_.clear();   // ★ a restart: new VFOs
         if (cpu_.empty() || now - cpu_.back().t >= std::chrono::milliseconds(1500)) cpu_.push_back(cur);
         while (cpu_.size() > 2 && now - cpu_[1].t >= std::chrono::seconds(10)) cpu_.pop_front();
@@ -1554,6 +1676,8 @@ public:
                + "\",\"state\":\"" + state + "\",\"why\":\"" + gallery::jsonEsc(state == "paused" ? c.pauseWhy : std::string())
                + "\",\"lock\":\"" + lock + "\",\"last\":" + std::to_string((long long)c.lastItem->load(std::memory_order_relaxed))
                + ",\"cpuPct\":" + pct(cur.vfo[i], base ? base->vfo[i] : 0)
+               // ★ V12 2026-11-24: paused or its extra modes off FOR LISTENERS (easing — not a fault)
+               + (c.eased ? ",\"eased\":true" : "") + (c.chipsOff->load() ? ",\"chipsOff\":true" : "")
                // ★ V12: a Band VFO names its band and what its governor runs now ("FT8 7.074, FT4 7.0475 …")
                + (c.band ? ",\"band\":\"" + gallery::jsonEsc(c.bandName) + "\",\"modes\":\"" + gallery::jsonEsc(c.decoding && c.host ? c.host->spotsDescribe() : std::string()) + "\"" : std::string())
                // ★ V12: an NDB skimmer names the part of the band it covers and how it is doing ("12 beacons identified of 41 carriers")
@@ -1566,8 +1690,10 @@ public:
                                 + ",\"countries\":" + std::to_string((unsigned long long)c.liveCountries->load(std::memory_order_relaxed)) : std::string())
                + "}";
         }
-        j += "],\"cpuPct\":" + pct(sumNow, sumBase) + "}";
-        return j;
+        j += "],\"cpuPct\":" + pct(sumNow, sumBase);
+        j += ",\"ease\":{\"paused\":" + std::to_string(easePaused_.load()) + ",\"chips\":" + std::to_string(easeChips_.load())
+           + ",\"excused\":" + (easeExcused_.load() ? "true" : "false") + ",\"note\":\"" + gallery::jsonEsc(easeNote()) + "\"}";
+        return j + extra + "}";
     }
 
 
@@ -1624,6 +1750,11 @@ private:
         std::shared_ptr<std::atomic<uint64_t>> liveSpots = std::make_shared<std::atomic<uint64_t>>(0),
                                                liveCountries = std::make_shared<std::atomic<uint64_t>>(0);
         std::string pauseWhy;
+        // ★★ V12 2026-11-24 EASING (vibe_bg_ease.h): paused for listeners (comes back only by easeTick), and a Band VFO's
+        //    extra chips off (read by its bandOverride wrapper on the decode thread — hence shared and atomic).
+        bool eased = false;
+        bool hasChips = false;
+        std::shared_ptr<std::atomic<bool>> chipsOff = std::make_shared<std::atomic<bool>>(false);
     };
     /** Cut this VFO's channel against the current centre, and say whether it is inside the window at all. */
     void place(Chan& c) {
@@ -1867,7 +1998,7 @@ private:
     /** ★ Pause one VFO for a listener: its decoder stops — the tap WRITES what it held (an RTTY buffer; a chart or
      *  picture in progress as PARTIAL) — and its slot is free. The channel keeps running, decoder-less (the host takes
      *  no audio while nothing runs), which is cheaper than tearing down and rebuilding the pipeline when it comes back. */
-    void pauseOne(Chan& c, const std::string& why = "a listener needed a decoder slot") {
+    void pauseOne(Chan& c, const std::string& why = "a listener needed a decoder slot", bool sayIt = true) {
         if (!c.decoding) return;
         if (c.ndb) stopNdb(c);
         else if (c.fax) stopFax(c);
@@ -1875,7 +2006,7 @@ private:
         else { c.host->stop(); c.host->stopSpots(); }
         c.decoding = false;
         c.pauseWhy = why;
-        say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
+        if (sayIt) say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
     }
     static std::string upperMode(std::string m) { for (auto& ch : m) ch = (char)std::toupper((unsigned char)ch); return m; }
     std::string name(const Chan& c) const {
@@ -1891,7 +2022,9 @@ private:
     void publish() {
         if (!p_.registry) return;
         std::vector<BgRegistry::Pub> v;
-        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty()) v.push_back({ c->index + 1, c->decoding, c->decoding && busy(*c) });   // ★ out of the window (or switched off here) = not waiting
+        // ★ out of the window (or switched off here) = not waiting; nor is a VFO EASED for a listener (vibe_bg_ease.h) — it
+        //   comes back by easeTick alone, and would otherwise hold every lower-ranked VFO on the box back behind it
+        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty() && !c->eased) v.push_back({ c->index + 1, c->decoding, c->decoding && busy(*c) });
         p_.registry->publishState(v);
     }
     /** ★★ Part-way through a picture (a WEFAX chart, an SSTV frame) — see DecoderHost::midPicture. */
@@ -1940,7 +2073,7 @@ private:
         else if (force || now - lastResume_ > std::chrono::seconds(3)) {
             lastResume_ = now;
             for (auto& c : chans_) {
-                if (c->decoding || !c->inWindow || !c->blockWhy.empty()) continue;
+                if (c->decoding || !c->inWindow || !c->blockWhy.empty() || c->eased) continue;   // ★ eased: back only by easeTick
                 if (c->ndb && p_.ndbWhyNot) {
                     if (!ndbWhyRead) { ndbWhy = p_.ndbWhyNot(); ndbWhyRead = true; }
                     if (!ndbWhy.empty()) { c->pauseWhy = ndbWhy; continue; }   // ★ not its turn — never blocks the VFOs below
@@ -1958,6 +2091,28 @@ private:
             }
         }
         publish();   // ★ every tick: a picture starting or ending changes who gives way (a no-op when nothing changed)
+    }
+    /** ★ Give one eased step back. A paused VFO resumes by the ordinary path (slotTick, a slot permitting), promptly. */
+    void undoEase(const EaseStep& st) {
+        if (st.vfo < 0 || (size_t)st.vfo >= chans_.size()) return;
+        Chan& c = *chans_[(size_t)st.vfo];
+        if (st.kind == ease::Kind::Chips) { c.chipsOff->store(false); return; }
+        c.eased = false;
+        if (!c.decoding) c.pauseWhy = "back from easing \xe2\x80\x94 resuming";
+        lastResume_ = {};
+    }
+    /** Each VFO's CPU so far (ns, monotonic) — its demodulator's cut + feed, its decoder(s). chanMtx_ held. */
+    std::vector<uint64_t> vfoCpuNsLocked() {
+        std::vector<uint64_t> v;
+        v.reserve(chans_.size());
+        for (auto& c : chans_) {
+            uint64_t ndbNs = 0;
+            if (c->ndb) { std::lock_guard<std::mutex> nl(c->ndbM); ndbNs = c->ndbCpuDone + (c->ndbFeed ? c->ndbFeed->cpuNs() : 0); }
+            uint64_t faxNs = 0;
+            for (auto& sb : c->subs) faxNs += sb->host->cpuNs();
+            v.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0) + ndbNs + faxNs);
+        }
+        return v;
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
     void loop() {
@@ -2138,6 +2293,15 @@ private:
     struct CpuSample { std::chrono::steady_clock::time_point t; uint64_t shared; std::vector<uint64_t> vfo; };
     std::deque<CpuSample> cpu_;           // ★ statusJson's ~10 s window: at most 7 samples, taken only when asked
     std::mutex cpuMtx_;
+    // ★★ V12 2026-11-24 easing for listeners — see easeTick. The steps in effect (undone last-first), the governor, a
+    //    20 s window of each VFO's CPU (what a step is worth), and what the health card reads (lock-free).
+    std::vector<EaseStep> easeTaken_;
+    ease::Governor gov_;
+    struct EaseCpu { std::chrono::steady_clock::time_point t; std::vector<uint64_t> ns; };
+    std::deque<EaseCpu> easeCpu_;         // ★ ≤ 12 samples (2 s apart, 20 s)
+    std::atomic<bool> easeExcused_{false};
+    std::atomic<int>  easePaused_{0}, easeChips_{0}, vfoCount_{0};
+    bool easeExhaustedSaid_ = false;
 };
 
 } // namespace bg

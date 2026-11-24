@@ -4120,6 +4120,10 @@ select.btn { padding: 6px 8px; }
 /* ★ "<decoder>: TOO HEAVY" — the caption's own size and spacing, in the readout amber, under the icons (renderHealthPill). */
 #srvHealth .hWarn { font: 700 9px/1.2 system-ui, sans-serif; letter-spacing: 0.08em; color: #ffb833;
                     text-align: center; margin-top: 3px; white-space: nowrap; }
+/* ★ V12 2026-11-24: a NOTE — work eased on purpose ("Background decoding: eased for listeners (3 of 9 paused)"). The
+     caption's quiet colour, not the warning amber: it is information, not a fault. Wraps rather than widen the pill. */
+#srvHealth .hNote { font: 600 9px/1.25 system-ui, sans-serif; letter-spacing: 0.04em; color: #B9C0B4;
+                    text-align: center; margin: 3px auto 0; max-width: 220px; white-space: normal; }
 #srvHealth .hSlot { display: inline-flex; position: relative; }
 #srvHealth .hDiv { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); }
 /* ★ The percentage and the bolt are drawn INSIDE the outline now (see renderHealthPill), so this
