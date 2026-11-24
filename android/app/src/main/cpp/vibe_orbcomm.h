@@ -405,6 +405,8 @@ public:
         nco_ = { cr / a, ci / a };
     }
     double offsetHz() const { return off_; }
+    /** The slice's centre moved by −`d` Hz (the dial / capture moved): the carrier stays where it is in RF. */
+    void shift(double d) { off_ += d; cfg_.offsetHz += d; }
     double snrDb() const {
         const double s2 = 2 * m2_ * m2_ - m4_;
         if (!(m2_ > 0) || s2 <= 0) return -10;
@@ -733,7 +735,17 @@ public:
     void feed(const std::complex<float>* x, int n, double fs, double centreHz, double t0) {
         if (n <= 0 || !(fs > 0)) return;
         if (std::fabs(fs - fs_) > 0.5) { fs_ = fs; scan_.configure(fs); chans_.clear(); }
-        centre_ = centreHz;
+        /* ★★ THE SLICE MOVED (Stuart 2026-11-24, an ORBCOMM pick on the XCover: he tuned the dial to 137.800 by hand, and a
+         *  one-pipeline radio's slice follows the dial). Every carrier keeps its RF frequency: its offset in the slice moves
+         *  by the jump, the bans with it, and the scanner starts its average again (its bins changed under it). */
+        if (centre_ != 0 && std::fabs(centreHz - centre_) > 0.5) {
+            const double d = centre_ - centreHz;
+            for (auto& c : chans_) c->shift(d);
+            for (auto& b : bans_) b.off += d;
+            scan_.configure(fs_);
+            moves_++;
+        }
+        centre_ = centreHz; blocks_++; fedSec_ += n / fs;
         // the carriers first (their packets carry the block's time)
         for (auto& c : chans_) {
             blockT0_ = t0; blockSym0_ = c->symbols(); cur_ = c.get();
@@ -774,6 +786,13 @@ public:
         return v;
     }
     const std::vector<Scanner::Peak>& peaks() const { return scan_.peaks(); }
+    /** What the receiver is being fed (the status's "slice": a live log shows whether IQ arrives at all, and where). */
+    double sliceRate() const { return fs_; }
+    double sliceCentre() const { return centre_; }
+    double sliceHalfHz() const { return cfg_.windowHz > 0 ? std::min(cfg_.windowHz, 0.45 * fs_) : 0.45 * fs_; }
+    uint64_t blocksFed() const { return blocks_; }
+    double secondsFed() const { return fedSec_; }
+    uint64_t centreMoves() const { return moves_; }
     uint64_t spursRejected() const { return spurs_; }      ///< steady lines refused (the spur check)
     uint64_t notSdpskRejected() const { return notSdpsk_; } ///< peaks with no x⁴ line (the carrier check)
     /** The last few carriers dropped: where, when, why ("spur" | "not SDPSK" | "quiet"), banned for how long. */
@@ -818,7 +837,8 @@ private:
     uint64_t blockSym0_ = 0;
     const Chan* cur_ = nullptr;
     int nextId_ = 0;
-    uint64_t spurs_ = 0, notSdpsk_ = 0;
+    uint64_t spurs_ = 0, notSdpsk_ = 0, blocks_ = 0, moves_ = 0;
+    double fedSec_ = 0;
     std::vector<Refused> refusedLast_;
     Scanner scan_;
     std::vector<std::unique_ptr<Chan>> chans_;

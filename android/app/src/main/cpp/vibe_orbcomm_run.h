@@ -278,9 +278,27 @@ private:
         first = true;
         for (auto& c : rx_.channels()) {
             char b[200];
-            std::snprintf(b, sizeof b, "%s{\"id\":%d,\"rf\":%.0f,\"snr\":%.1f,\"lock\":%s,\"ok\":%llu,\"bad\":%llu,\"fixed\":%llu}", first ? "" : ",", c.id, c.rfHz, c.snrDb,
+            std::snprintf(b, sizeof b, "%s{\"id\":%d,\"rf\":%.0f,\"snr\":%.1f,\"lock\":%s,\"ok\":%llu,\"bad\":%llu,\"fixed\":%llu", first ? "" : ",", c.id, c.rfHz, c.snrDb,
                           c.locked ? "true" : "false", (unsigned long long)c.ok, (unsigned long long)c.bad, (unsigned long long)c.repaired);
             j += b; first = false;
+            // ★ the bird on this carrier, once named (the waterfall's carrier mark)
+            for (auto& kv : sats_) if (kv.second.chan == c.id && kv.second.norad && t - kv.second.last < 30) { j += ",\"sat\":\"" + jsonEsc(kv.second.name) + "\""; break; }
+            j += "}";
+        }
+        {   /* ★★ THE SLICE (2026-11-24, the XCover's HF+ showed no carrier and nothing said whether IQ arrived): what the decoder is
+             *  fed and where it searches — the clients draw lo…hi on the waterfall ("every carrier decoded here") — and the
+             *  scanner's strongest peaks over its floor, so a live log shows a carrier seen but not opened. */
+            char b[260];
+            std::snprintf(b, sizeof b, "],\"slice\":{\"rate\":%.0f,\"centre\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"fedSec\":%.1f,\"blocks\":%llu,\"moves\":%llu,\"floorDb\":%.1f},\"peaks\":[",
+                          rx_.sliceRate(), rx_.sliceCentre(), rx_.sliceCentre() - rx_.sliceHalfHz(), rx_.sliceCentre() + rx_.sliceHalfHz(), rx_.secondsFed(),
+                          (unsigned long long)rx_.blocksFed(), (unsigned long long)rx_.centreMoves(), rx_.floorDb());
+            j += b;
+            int k = 0;
+            for (const auto& pk : rx_.peaks()) {
+                if (k >= 6) break;
+                char c[64]; std::snprintf(c, sizeof c, "%s{\"rf\":%.0f,\"db\":%.1f}", k ? "," : "", rx_.sliceCentre() + pk.offsetHz, pk.db);
+                j += c; k++;
+            }
         }
         j += "],\"refused\":{\"spurs\":" + std::to_string(rx_.spursRejected()) + ",\"notSdpsk\":" + std::to_string(rx_.notSdpskRejected()) + ",\"last\":[";
         {   // ★ the last few turned away: where, why, how long banned (a live log shows what was refused)
