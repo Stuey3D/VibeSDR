@@ -32,7 +32,8 @@ if (!BIN || !fs.existsSync(BIN) || !GEN || !fs.existsSync(GEN)) {
   console.log('   not run — set VIBESERVER_BIN and VIBE_APRS_ONAIR_BIN (the test-aprs-onair binary, which writes the clips)');
   process.exit(3);
 }
-const RATE = 1200000, DIAL = 144800000, N = 10;
+// ★ VIBE_APRS_RATE: the capture rate (1 200 000 default; 2 400 000, and 960 000 — an Airspy HF+'s class of rate — 2026-11-24)
+const RATE = Number(process.env.VIBE_APRS_RATE || 1200000), DIAL = 144800000, N = 10;
 let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

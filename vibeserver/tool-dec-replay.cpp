@@ -5,6 +5,8 @@
 //   tool-dec-replay --ext aprs --msg '{"packet":"1200"}' --wav f.wav [--iq f.cf32 --iq-rate 37500]
 //   --params '<json>'   override the attach message the capture recorded (e.g. '{"packet":"1200"}' to leave 9600 out)
 //   --quiet             the counts only, not each frame
+//   --channel           hand the IQ over as the listener's CHANNEL (feedChannelIq wide = false) — a capture made before
+//                       beta92. Default for aprs: the DECODER TAP (wide = true), as a beta92+ server feeds packet.
 // Any 16-bit or float WAV works (another receiver's recording too); it must be 48 kHz — the host's rate.
 // Built like test-decoder-hosts (scripts/run-tests.sh deps_for); nothing is sent anywhere, nothing played.
 #include "dec_replay.h"
@@ -16,7 +18,7 @@
 int main(int argc, char** argv) {
     std::string base, ext, msg, wav, iqPath, params;
     double iqRate = 0;
-    bool quiet = false, haveParams = false;
+    bool quiet = false, haveParams = false, channel = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : std::string(); };
@@ -26,6 +28,7 @@ int main(int argc, char** argv) {
         else if (a == "--iq") iqPath = next();
         else if (a == "--iq-rate") iqRate = std::atof(next().c_str());
         else if (a == "--quiet") quiet = true;
+        else if (a == "--channel") channel = true;
         else if (a == "-h" || a == "--help") { std::printf("see the top of tool-dec-replay.cpp\n"); return 0; }
         else base = a;
     }
@@ -53,7 +56,8 @@ int main(int argc, char** argv) {
     peer.echo = !quiet;
     std::string why;
     const auto t0 = std::chrono::steady_clock::now();
-    if (!decreplay::replay(ext, msg, audio, iq, iqRate, peer, &why)) { std::fprintf(stderr, "%s\n", why.c_str()); return 1; }
+    const bool wide = ext == "aprs" && !channel;
+    if (!decreplay::replay(ext, msg, audio, iq, iqRate, peer, &why, wide)) { std::fprintf(stderr, "%s\n", why.c_str()); return 1; }
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     const auto raws = decreplay::aprsRaws(peer);
     if (ext == "aprs") for (const auto& r : raws) std::printf("APRS  %s\n", r.c_str());

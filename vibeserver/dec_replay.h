@@ -56,9 +56,13 @@ inline bool readCf32(const std::string& path, std::vector<std::complex<float>>& 
 }
 
 /** Run `audio` (48 kHz mono) and, interleaved by time, `iq` at `iqRate` through a fresh DecoderHost started with
- *  `ext` / `msg`. Paced on the host's own queues (never past what it would drop). The peer holds what came out. */
+ *  `ext` / `msg`. Paced on the host's own queues (never past what it would drop). The peer holds what came out.
+ *  ★ `wide`: hand the IQ over as the live server does for packet since beta92 — the pipeline's DECODER TAP
+ *  (feedDecTapShared → feedChannelIq(…, wide = true)), not the listener's channel. A beta92+ server's APRS capture is
+ *  the tap (vibe_dec_dump.h writes only the tap's blocks while it runs), so that is what mirrors live. */
 inline bool replay(const std::string& ext, const std::string& msg, const std::vector<float>& audio,
-                   const std::vector<std::complex<float>>& iq, double iqRate, Peer& peer, std::string* why = nullptr) {
+                   const std::vector<std::complex<float>>& iq, double iqRate, Peer& peer, std::string* why = nullptr,
+                   bool wide = false) {
     vibe::DecoderHost::Env env;
     env.dialHz = [] { return 144.8e6; };
     env.log = [](const std::string& t) { std::fprintf(stderr, "[host] %s\n", t.c_str()); };
@@ -76,7 +80,7 @@ inline bool replay(const std::string& ext, const std::string& msg, const std::ve
             while (qi < until) {
                 const size_t k = std::min<size_t>(until - qi, size_t(iqRate / 50) + 1);
                 while (host.queuedChannelIqSec() > 0.5) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                host.feedChannelIq(iq.data() + qi, int(k), iqRate);
+                host.feedChannelIq(iq.data() + qi, int(k), iqRate, wide);
                 qi += k;
             }
         }

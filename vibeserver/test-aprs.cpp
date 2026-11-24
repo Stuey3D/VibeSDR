@@ -12,6 +12,7 @@
 #include "vibe_aprs_run.h"
 
 #include <chrono>
+#include <complex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -206,6 +207,18 @@ static void testModem() {
     std::printf("   6/8/10 dB × flat/±6 dB (360 frames): one slicer %d, five slicers + repair %d\n", one, all);
     CHECK(all > one, "the slicers gain");
 
+    // ★★ 2026-11-24 (docs/v12/APRS-WEAK.md): THE TONES FAR APART — a TX's pre-emphasis on top of a receiver's de-emphasis
+    //    (or neither) puts 2200 Hz up to ±12 dB from 1200 Hz. The two tones are fitted together (no leak of one into the
+    //    other's level), so a deep tilt costs SNR, not every packet.
+    std::printf("   tilt (space vs mark)   −12 dB  −9 dB  +9 dB  +12 dB   at 12 dB SNR in 3 kHz (of 40)\n");
+    int far = 0, farWrong = 0;
+    {
+        std::printf("                         ");
+        for (double tl : { -12.0, -9.0, 9.0, 12.0 }) { Res a = modemRun(1200, 12, tl, 40, 70 + uint64_t(tl + 20)); far += a.heard; farWrong += a.wrong; std::printf("  %2d   ", a.heard); }
+        std::printf("\n");
+    }
+    CHECK(farWrong == 0, "no wrong frames with the tones far apart");
+    CHECK(far >= 140, "the tones ±9–12 dB apart at 12 dB: ≥ 140 of 160 (%d)", far);
     std::printf("── the modem: HF 300 Bd ──\n");
     for (double off : { 0.0, -50.0, 30.0 }) {
         Res a = modemRun(300, 12, 0, 12, 40 + uint64_t(off + 100), off);
@@ -407,6 +420,36 @@ static int decodeWav(const char* path, int baud) {
     return 0;
 }
 
+// ★★ 2026-11-24 (docs/v12/APRS-WEAK.md) the tone bank's SIMD kernel against plain complex arithmetic, and the copies'
+//    vote (resolveCandidates): the variant most slicers heard wins; a near tie drops the transmission.
+static void testWeakParts() {
+    std::printf("── the IQ tone bank's kernel, the copies' vote ──\n");
+    Rng rng(4711);
+    const int K = 12; float aRe[K], aIm[K], nRe[K], nIm[K], oRe[K], oIm[K];
+    std::complex<float> ref[K];
+    for (int k = 0; k < K; ++k) { aRe[k] = float(rng.g()); aIm[k] = float(rng.g()); ref[k] = { aRe[k], aIm[k] }; nRe[k] = float(rng.g()); nIm[k] = float(rng.g()); oRe[k] = float(rng.g()); oIm[k] = float(rng.g()); }
+    const std::complex<float> z(0.3f, -0.7f), w(-1.1f, 0.4f);
+    const float mx = vibeaprs::toneBankRow(aRe, aIm, nRe, nIm, oRe, oIm, K, z.real(), z.imag(), w.real(), w.imag());
+    float err = 0, mref = 0;
+    for (int k = 0; k < K; ++k) {
+        ref[k] += z * std::complex<float>(nRe[k], nIm[k]) - w * std::complex<float>(oRe[k], oIm[k]);
+        err = std::max(err, std::abs(ref[k] - std::complex<float>(aRe[k], aIm[k]))); mref = std::max(mref, std::norm(ref[k]));
+    }
+    CHECK(err < 1e-5f && std::fabs(mx - mref) < 1e-4f * std::max(1.f, mref), "toneBankRow = complex arithmetic (err %.2g, max %.4f vs %.4f)", err, mx, mref);
+    auto fr = [](std::vector<uint8_t> b, int rep, float votes) { vibeaprs::Frame f; f.bytes = std::move(b); f.repaired = rep; f.votes = votes; return f; };
+    std::vector<uint8_t> a(40, 0x41), bad = a; bad[7] ^= 0x30; bad[20] ^= 0x01;
+    std::vector<vibeaprs::Frame> c = { fr(a, 0, 5), fr(bad, 0, 1.7f) };
+    int d = vibeaprs::resolveCandidates(c);
+    CHECK(c.size() == 1 && c[0].bytes == a && d == 1, "the variant most copies heard wins (%zu kept, %d dropped)", c.size(), d);
+    c = { fr(a, 1, 1.4f), fr(bad, 0, 1.f) };
+    d = vibeaprs::resolveCandidates(c);
+    CHECK(c.empty() && d == 2, "a near tie (1.4 vs 1.0 votes): nothing of that transmission goes out");
+    std::vector<uint8_t> other(52, 0x42);
+    c = { fr(a, 0, 1), fr(other, 1, 0.7f) };
+    d = vibeaprs::resolveCandidates(c);
+    CHECK(c.size() == 2 && d == 0, "two different packets at once both go out");
+}
+
 int main(int argc, char** argv) {
     if (argc >= 4 && std::strcmp(argv[1], "--write-clip") == 0) return writeClip(argv[2], std::atof(argv[3]));
     if (argc >= 3 && std::strcmp(argv[1], "--wav") == 0) return decodeWav(argv[2], argc >= 4 ? std::atoi(argv[3]) : 1200);
@@ -414,6 +457,7 @@ int main(int argc, char** argv) {
     testFormats();
     testModem();
     testNoise();
+    testWeakParts();
     testRun();
     testViaSatellite();
     testCpu();

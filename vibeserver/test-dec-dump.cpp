@@ -159,6 +159,95 @@ int main() {
         check(sz > 44 && sz <= 44 + 100000, "at the cap the .wav stops (" + std::to_string(sz) + " bytes)");
         check(tail.find("cap reached") != std::string::npos, "…and the .txt says so: " + tail);
     }
+    unsetenv("VIBE_DEC_AUDIO_DUMP");
+
+    /* ── 5. THE LIVE SHAPE (2026-11-24, "APRS 0 since beta92"): a host fed the way the live server feeds it — 20 ms of
+     *  audio, the pipeline's DECODER TAP (feedChannelIq wide = true, as feedDecTapShared) at a NON-INTEGER rate
+     *  (41379.31 S/s, the Pi 500's RTL-SDR V4), and the listener's own CHANNEL IQ beside it (wide = false, 37500 S/s, as
+     *  feedChannelIqShared also hands it over). The listener's audio and channel are NOISE ONLY (squelch shut / a narrow
+     *  channel): every packet has to come from the tap, and the channel must not be read while the tap runs. ── */
+    std::printf("── 5. the live shape: tap IQ (wide) at 41379.31 S/s + channel IQ + audio ──\n");
+    {
+        const double tapRate = 41379.310, chRate = 37500;
+        std::vector<std::complex<float>> tap(size_t(clean.size() / 48000.0 * tapRate));
+        std::mt19937 r2(9); std::normal_distribution<float> n2(0.f, 0.03f);
+        double fp = 0;
+        for (size_t k = 0; k < tap.size(); ++k) {
+            const double t = k * 48000.0 / tapRate; const size_t a = size_t(t); const double fr = t - a;
+            const double v = a + 1 < clean.size() ? clean[a] * (1 - fr) + clean[a + 1] * fr : 0.0;
+            fp += 2 * M_PI * (3000.0 * v / 0.3) / tapRate;
+            tap[k] = { float(std::cos(fp)) + n2(r2), float(std::sin(fp)) + n2(r2) };
+        }
+        std::vector<float> hiss(clean.size()); for (auto& x : hiss) x = n2(r2);
+        std::vector<std::complex<float>> chan(size_t(clean.size() / 48000.0 * chRate));
+        for (auto& z : chan) z = { n2(r2), n2(r2) };
+        vibe::DecoderHost::Env env;
+        env.dialHz = [] { return 144.8e6; };
+        vibe::DecoderHost host(env, "live-shape");
+        decreplay::Peer peer;
+        host.addPeer(std::shared_ptr<vibe::DecoderPeer>(&peer, [](vibe::DecoderPeer*) {}));
+        const bool started = host.start("aprs", "{\"type\":\"audio_extension_attach\",\"extension_name\":\"aprs\",\"baud_rate\":1200,\"packet\":\"auto\"}") == vibe::DecoderHost::Start::Ok;
+        check(started && host.wantsPacketTap(), "APRS AUTO starts and asks for the decoder tap");
+        size_t ti = 0, ci = 0;
+        for (size_t o = 0; o < hiss.size(); o += 960) {
+            const size_t n = std::min<size_t>(960, hiss.size() - o);
+            const double tEnd = double(o + n) / 48000.0;
+            // the tap's blocks: the pipeline cuts whatever its decimation gives (~19.4 ms here) — never a whole number
+            for (size_t until = std::min(tap.size(), size_t(tEnd * tapRate)); ti < until;) {
+                const size_t k = std::min<size_t>(until - ti, 803);
+                while (host.queuedChannelIqSec() > 0.5) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                host.feedChannelIq(tap.data() + ti, int(k), tapRate, true);
+                ti += k;
+            }
+            for (size_t until = std::min(chan.size(), size_t(tEnd * chRate)); ci < until;) {
+                const size_t k = std::min<size_t>(until - ci, 750);
+                host.feedChannelIq(chan.data() + ci, int(k), chRate, false);
+                ci += k;
+            }
+            while (host.queued() > 24000) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            host.feed(hiss.data() + o, int(n), 1);
+        }
+        for (int i = 0; i < 2000 && (host.queued() > 0 || host.queuedChannelIqSec() > 0); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));   // past the 0.3 s hold
+        host.shutdown();
+        const auto got = decreplay::aprsRaws(peer);
+        check(got.size() >= 10, "the tap alone carries them: " + std::to_string(got.size()) + " of 12 packets (audio + channel are hiss)");
+        check(host.droppedSamples() == 0, "nothing dropped (" + std::to_string(host.droppedSamples()) + ")");
+    }
+
+    /* ── 6. THE ON-AIR CAPTURE (Pi 500 RTL-SDR V4, 144.800, 2026-11-24 12:34 — the 10 minutes the live beta92 server
+     *  decoded 0 in): through a real host as live (audio + the tap, wide) it must give AT LEAST what the bare receiver
+     *  (vibeaprs::Run fed the same IQ) gives — the host may add the audio path's, never lose one. Other people's
+     *  transmissions, so the capture lives in ~/VibeSDR-test-audio only: absent = NOT RUN for this part, said plainly. ── */
+    std::printf("── 6. the on-air capture (host vs the bare receiver) ──\n");
+    {
+        const char* home = std::getenv("HOME");
+        const std::string cap = std::string(home ? home : "") + "/VibeSDR-test-audio/aprs/v4l-2026-11-24/dec-1795523663-aprs-0";
+        const decreplay::Sidecar s = decreplay::readSidecar(cap + ".txt");
+        std::vector<float> wav; int wr = 0;
+        std::vector<std::complex<float>> ciq;
+        if (!s.ok || !vibedec::DecDump::readWav(cap + ".wav", wav, wr) || !decreplay::readCf32(cap + ".cf32", ciq) || ciq.empty()) {
+            std::printf("  [NOT RUN] %s not here (it lives in ~/VibeSDR-test-audio only)\n", cap.c_str());
+        } else {
+            std::vector<std::string> bare;
+            {
+                vibeaprs::Run::Opts o;
+                o.json = [&](const std::string& j) { if (j.find("\"type\":\"aprs_packet\"") != std::string::npos) bare.push_back(j); };
+                vibeaprs::Run r(0, std::move(o));
+                const size_t blk = size_t(s.iqRate / 50);
+                for (size_t i = 0; i + blk <= ciq.size(); i += blk) r.feedIq(ciq.data() + i, int(blk), s.iqRate);
+                r.flush();
+            }
+            decreplay::Peer peer;
+            std::string why;
+            decreplay::replay(s.ext, s.params, wav, ciq, s.iqRate, peer, &why, true);
+            const auto host = decreplay::aprsRaws(peer);
+            check(bare.size() >= 8, "the bare receiver: " + std::to_string(bare.size()) + " packets (10 at aprs-weak ca72d8127; beta92's: 0)");
+            check(host.size() >= bare.size(), "the host as live (audio + tap at " + std::to_string(s.iqRate).substr(0, 9) + " S/s): "
+                  + std::to_string(host.size()) + " packets, at least the bare receiver's " + std::to_string(bare.size()) + (why.empty() ? "" : " — " + why));
+        }
+    }
+
     // tidy: our own files only
     for (const std::string& d : { none, dir, small }) { for (auto& f : listDir(d)) std::remove((d + "/" + f).c_str()); rmdir(d.c_str()); }
     std::printf("\ntest-dec-dump: %d passed, %d failed\n", g_pass, g_fail);
