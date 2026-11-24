@@ -71,6 +71,16 @@ public:
         if (n <= 0 || !(rate > 0)) return;
         const double t = now_();
         if (t - birdsAt_ > kBirdsEverySec || birdsAt_ == 0) refreshBirds_(t);
+        /* ★★ THE LOG SAYS WHETHER IQ ARRIVES (the XCover's HF+, 2026-11-24: "0 good, no carrier" and no way to tell a slice that
+         *  never came from a sky with nothing in it): one line at the first block, one a minute after. */
+        if (!firstLogged_ && o_.log) {
+            firstLogged_ = true;
+            char b[200];
+            std::snprintf(b, sizeof b, "ORBCOMM: IQ arriving \xe2\x80\x94 a %.0f kS/s slice centred %.4f MHz (searching %.4f\xe2\x80\x93%.4f MHz), %d birds with elements",
+                          rate / 1000, centreHz / 1e6, (centreHz - std::min(o_.widthHz / 2, 0.45 * rate)) / 1e6, (centreHz + std::min(o_.widthHz / 2, 0.45 * rate)) / 1e6,
+                          int(id_.birds().size()));
+            o_.log(b);
+        }
         rx_.feed(iq, n, rate, centreHz, t - n / rate);
         if (t - statusAt_ >= 1.0) { statusAt_ = t; tick_(t); }
     }
@@ -245,6 +255,18 @@ private:
         }
     }
     void tick_(double t) {
+        if (o_.log && t - minuteLogAt_ >= 60) {
+            minuteLogAt_ = t;
+            std::string pk;
+            int k = 0;
+            for (const auto& p : rx_.peaks()) { if (k++ >= 4) break; char c[48]; std::snprintf(c, sizeof c, " %.4f(+%.1f dB)", (rx_.sliceCentre() + p.offsetHz) / 1e6, p.db); pk += c; }
+            int locked = 0, open = 0; for (auto& c : rx_.channels()) { open++; if (c.locked) locked++; }
+            char b[320];
+            std::snprintf(b, sizeof b, "ORBCOMM: %.0f s of IQ fed (%.0f kS/s at %.4f MHz), %d carriers open, %d locked, %llu good / %llu bad packets; refused %llu spurs, %llu not SDPSK; peaks:%s",
+                          rx_.secondsFed(), rx_.sliceRate() / 1000, rx_.sliceCentre() / 1e6, open, locked, (unsigned long long)good_, (unsigned long long)bad_,
+                          (unsigned long long)rx_.spursRejected(), (unsigned long long)rx_.notSdpskRejected(), pk.empty() ? " none" : pk.c_str());
+            o_.log(b);
+        }
         for (auto it = sats_.begin(); it != sats_.end();) { if (t - it->second.last > 600) { lastEph_.erase(it->first); buckets_.erase(it->first); it = sats_.erase(it); } else ++it; }   // ★ bounded
         quietDot_(t);
         flushDots_(t);
@@ -350,7 +372,8 @@ private:
     double birdsAt_ = 0, statusAt_ = 0, pktSecAt_ = 0, quietFrom_ = 0;
     int pktSec_ = 0, lastUp_ = -1;
     uint64_t good_ = 0, bad_ = 0, msgs_ = 0, dropped_ = 0, dotsWritten_ = 0;
-    bool finished_ = false;
+    bool finished_ = false, firstLogged_ = false;
+    double minuteLogAt_ = 0;
 };
 
 }  // namespace vibeorb
