@@ -2948,6 +2948,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       updateVts();
     },
     onRds: (m) => {
+      // ★★ 2026-11-24 RDS IS BROADCAST FM'S ALONE (Stuart, again: "still got the vts issue" — "PI: C201 / BBC R1: Radio 1's Fu"
+      //   in the strip on USB 145.865 with JO-97 picked). An RDS message reaching a page on any other mode (a shared dial's
+      //   leftover, a late one after a mode change) names nothing on this channel: it is dropped, and expireRdsIfRetuned
+      //   clears what was held the moment the mode leaves WFM.
+      if (!spec || spec.mode !== 'wfm') return;
       rdsStereo = m.stereo; syncStereoLight();   // ★ the pilot's — DAB's own light wins in DAB
       // RDS is the station naming itself — it outranks any bookmark guess.
       const ps = m.ps.trim();
@@ -4434,7 +4439,9 @@ let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
 
 /** Drop RDS state if the dial has moved off the station it came from. */
 function expireRdsIfRetuned() {
-  if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
+  if (!spec) return;
+  const offFm = spec.mode !== 'wfm';   // ★ 2026-11-24 not broadcast FM: nothing held from RDS may show (see onRds)
+  if (offFm ? (rdsPi < 0 && !rdsName && !rdsText) : (rdsFreq < 0 || spec.frequency === rdsFreq)) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
   resetPsStab();
   rdsLogoProvisional = false;

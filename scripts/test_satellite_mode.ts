@@ -73,6 +73,12 @@ const rows = satModeRows(l, now);
 const order = rows.map((r) => `${r.sat.id}#${r.i}`).join(',');
 ok(order === 'ISS#0,ISS#1,ISS#2,METEOR-M2-3#0,SO-50#0,RS-44#0,AO-7#0', `up now SHORTEST remaining first (ISS 6:12 before METEOR 9:55), then by AOS, no pass last: ${order}`);
 ok(rows.length === 7, 'nothing left out (every downlink listed)');
+{ // ★★ 2026-11-24 the strip shows RDS on broadcast FM only (Stuart: "PI: C201 / BBC R1" on USB 145.865 with JO-97 picked)
+  const fs = require('node:fs') as typeof import('node:fs');
+  const web = fs.readFileSync('web/client/src/main.ts', 'utf8');
+  ok(/onRds: \(m\) => \{[\s\S]{0,600}?if \(!spec \|\| spec\.mode !== 'wfm'\) return;/.test(web), 'web: an RDS message off WFM is dropped');
+  ok(/function expireRdsIfRetuned\(\) \{[\s\S]{0,200}?const offFm = spec\.mode !== 'wfm'/.test(web), 'web: leaving WFM clears the held RDS');
+}
 { // ★★ 2026-11-24 EVERY PASS (Stuart: "so we need to list all passes including the next ones" — a low 19:03 METEOR hid its 60° 20:42)
   const met = l.sats.find((x) => x.id === 'METEOR-M2-3')!;
   const t0 = now + 3600;
