@@ -34,6 +34,7 @@ import { scrollLane } from '../constants/popupTokens';
 import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky plot
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines,
          type OrbView } from '../services/orbcomm';
+import { ORB_NO_TUNE } from '../utils/orbcommView';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
@@ -458,6 +459,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                                   accessibilityLabel="The sky plot: where this aerial hears the ORBCOMM satellites" />
                     </View>
                   </View>
+                  <Text style={[s.detailNp, s.caveat]}>{ORB_NO_TUNE}</Text>
                   <Text style={[s.detailNp, s.caveat]}>{ORB_CAVEAT}</Text>
                   {!!orbNoteText(orbStatus) && <Text style={s.detailNp}>{orbNoteText(orbStatus)}</Text>}
                   {!!orbCountsText(orbStatus?.counts) && <Text style={s.detailNp}>{`Packets: ${orbCountsText(orbStatus?.counts)}`}</Text>}

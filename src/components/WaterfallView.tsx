@@ -94,6 +94,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
+import { orbOverlayLayout, ORB_OVERLAY_COLOUR, ORB_SLICE_LABEL, type OrbOverlay } from '../utils/orbcommView';   // ★★ 2026-11-24
 import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, isTagLabel, VARA_TAG_HINT, isSatLabel, satLabelHint, SAT_LABEL_COLOUR, knownLabelColour, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { isSkimLabel, skimLabelHint } from '../services/bandSkim';   // ★★ beta92 the band skimmer's marks
 import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
@@ -328,6 +329,10 @@ export interface WaterfallViewProps {
   /** ★★ V12 beta25: the radio's DC spike (Hz; 0 = none) — a small red "DC Spike / Not a real signal" label at it. The
    *  caller decides when (FREE tuning on a radio with a real spike — SDRScreen dcSpikeShown). */
   dcSpikeHz?: number;
+  /** ★★ 2026-11-24 AN ORBCOMM PICK (utils/orbcommView.ts): the decoder's whole slice shaded and labelled "ORBCOMM · every
+   *  carrier decoded here", each carrier at its RF (locked solid, acquiring hollow, named once known). null = none. Drawn
+   *  whatever the signal-label switch says (the caller passes it only while an ORBCOMM pick runs). */
+  orbOverlay?: OrbOverlay | null;
   /** ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts): the sorted list in force (the curated table + EiBi's on-air utility
    *  entries), or null/empty = off. The caller (SDRScreen) owns the toggle; nothing is laid out or drawn while it is off. */
   knownSignals?: readonly KnownSignal[] | null;
@@ -682,7 +687,7 @@ function WaterfallView({
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
-  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null,
+  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null, orbOverlay = null,
   onKnownTap, deckOcclusion = null, dabBlocks = null, onDabBlockTap,
 }: WaterfallViewProps) {
 
@@ -2807,6 +2812,9 @@ function WaterfallView({
     return { x, dashes };
   }, [showCenterMarker, centerMarkerHz, hzToX, width, height, bwHz]);
 
+  // ★★ 2026-11-24 the ORBCOMM slice and its carriers, laid out for this view (orbcommView.ts — the web's geometry)
+  const orbLayout = useMemo(() => (orbOverlay && bwHz > 0 ? orbOverlayLayout(orbOverlay, hzToX, width, estimateLabelWidth(ORB_SLICE_LABEL, 10, 3, 0.6) + 8) : null),
+                            [orbOverlay, hzToX, width, bwHz]);
   // ★ V12 beta25: the DC spike's x, or null when there is none or it is off screen
   const dcSpikeX = useMemo(() => {
     if (!(dcSpikeHz > 0) || !(bwHz > 0)) return null;
@@ -3451,6 +3459,33 @@ function WaterfallView({
           <View pointerEvents="none" style={[styles.dcSpikeTick, { left: dcSpikeX - 0.5, top: labelBase - 44 }]} />
         )}
 
+        {/* ★★ 2026-11-24 THE ORBCOMM SLICE (Stuart: an ORBCOMM pick looked like NFM on an empty spot) — the band the decoder
+            searches, shaded over the spectrum and faintly down the waterfall, its edges dashed, labelled just under the join;
+            each carrier a triangle there — solid locked, hollow acquiring — with its bird's name once known */}
+        {orbLayout?.band && (
+          <React.Fragment>
+            {specShow && specH > 40 && (
+              <View pointerEvents="none" style={[styles.orbBand, { left: orbLayout.band.x0, width: orbLayout.band.x1 - orbLayout.band.x0, top: specTop, height: specH }]} />
+            )}
+            <View pointerEvents="none" style={[styles.orbBandWf, { left: orbLayout.band.x0, width: orbLayout.band.x1 - orbLayout.band.x0, top: wfTop, height: Math.max(0, height - wfTop) }]} />
+            {orbLayout.band.loIn && <View pointerEvents="none" style={[styles.orbEdge, { left: orbLayout.band.x0, top: specTop, height: Math.max(0, height - specTop) }]} />}
+            {orbLayout.band.hiIn && <View pointerEvents="none" style={[styles.orbEdge, { left: orbLayout.band.x1 - 1, top: specTop, height: Math.max(0, height - specTop) }]} />}
+            {orbLayout.label && orbLayout.band.x1 - orbLayout.band.x0 >= 24 && (
+              <Text pointerEvents="none" numberOfLines={1} accessibilityLabel="ORBCOMM: every carrier in this band is decoded"
+                    style={[styles.orbLabel, { fontFamily, left: orbLayout.label.x, top: wfTop + 3 }]}>{ORB_SLICE_LABEL}</Text>
+            )}
+          </React.Fragment>
+        )}
+        {orbLayout?.marks.map((m, i) => (
+          <React.Fragment key={'orb' + i}>
+            <View pointerEvents="none" style={[styles.orbMark, m.locked ? styles.orbMarkOn : styles.orbMarkOff, { left: m.x - 5, top: wfTop + 20 }]} />
+            {!!m.label && (
+              <Text pointerEvents="none" numberOfLines={1}
+                    style={[styles.orbLabel, { fontFamily, left: Math.max(0, Math.min(width - 72, m.x - 36)), top: wfTop + 32, width: 72, textAlign: 'center' }]}>{m.label}</Text>
+            )}
+          </React.Fragment>
+        ))}
+
         {/* ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts): a thin tick at the signal down to the spectrum's floor (beside the
             box on the waterfall when the spectrum is hidden), a bar along a digital mode's span, and the decoder's name on
             RF CENTRE's dark box in a fixed pale lilac — never the VFO colour, which LISTEN uses on the same row. */}
@@ -3703,6 +3738,14 @@ const styles = StyleSheet.create({
   dcSpikeSub: { position: 'relative', width: 90, textAlign: 'right', fontSize: 8, fontWeight: 'normal', color: 'rgba(255,110,110,0.9)',
                 textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
   dcSpikeTick: { position: 'absolute', width: 1, height: 22, backgroundColor: '#ff4d4d' },
+  // ★★ 2026-11-24 the ORBCOMM slice (orbcommView.ts) — the satellite labels' sky blue
+  orbBand:   { position: 'absolute', backgroundColor: ORB_OVERLAY_COLOUR, opacity: 0.12 },
+  orbBandWf: { position: 'absolute', backgroundColor: ORB_OVERLAY_COLOUR, opacity: 0.06 },
+  orbEdge:   { position: 'absolute', width: 1, backgroundColor: ORB_OVERLAY_COLOUR, opacity: 0.6 },
+  orbLabel:  { position: 'absolute', fontSize: 10, color: ORB_OVERLAY_COLOUR, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 3, overflow: 'hidden' },
+  orbMark:   { position: 'absolute', width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
+  orbMarkOn: { backgroundColor: ORB_OVERLAY_COLOUR, borderColor: 'rgba(0,0,0,0.8)' },
+  orbMarkOff:{ backgroundColor: 'rgba(0,0,0,0.55)', borderColor: ORB_OVERLAY_COLOUR },
   // ★★ known-signal labels (utils/knownSignals.ts) — RF CENTRE's size and dark box, a fixed pale lilac
   knownTick: { position: 'absolute', width: 1, backgroundColor: KNOWN_LABEL_COLOUR, opacity: 0.8 },
   knownSpan: { position: 'absolute', height: 2, backgroundColor: KNOWN_LABEL_COLOUR, opacity: 0.55 },

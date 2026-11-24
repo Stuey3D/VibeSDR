@@ -125,7 +125,8 @@ import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery,
          GALLERY_RANGES, GALLERY_RANGE_KEY, GALLERY_RANGE_HINT, galleryRangeOf, galleryRangeQuery, galleryRangePhrase, galleryKnowsRange,
          galleryRangeFooter } from '../../../src/utils/galleryPager';
 import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, radioChipLabel, type LogRadio } from '../../../src/utils/logRadio';
-import { orbAttachParams } from '../../../src/services/orbcomm';   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
+import { orbAttachParams } from '../../../src/services/orbcomm';
+import { orbOverlayFrom } from '../../../src/utils/orbcommView';   // ★★ 2026-11-24 the ORBCOMM slice on the waterfall   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
 import { parseSkyPlotJson, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, skyRadioFromBase, SKY_LEGEND, SKY_PLOT_WHAT, type SkyPlotData } from '../../../src/utils/skyPlot';   // ★★ 2026-11-24 THE SKY PLOT
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
@@ -10705,6 +10706,7 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
    *  hand ran "1200 Bd", not AUTO — the pick had OVERWRITTEN the listener's packet choice). The pick's baud is the pick's
    *  alone: held apart (satPacketMode) and gone the moment the pick's decoder is no longer APRS. */
   if (d !== 'aprs') satPacketMode = null;
+  if (d !== 'orbcomm' && wf) wf.orbOverlay = null;   // ★★ 2026-11-24 the ORBCOMM slice goes with its pick
   satDec = d;
   if (!d || !t || !decoders) { satBeaconOn = false; return; }
   if (activeDec === satDecKey(d) && (d !== 'cwskim' || satBeaconOn)) return;
@@ -15222,7 +15224,12 @@ function initDecoders(host: string, auth: AuthState) {
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
     onSatTlm: (d) => { if (satDec && activeDec === satDec) satPanel?.telemetry(parseSatTelemetry(d)); },
-    onOrbcomm: (type, d) => { if (satDec === 'orbcomm' && activeDec === 'orbcomm') satPanel?.orbcomm(type, d); },   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
+    onOrbcomm: (type, d) => {
+      if (satDec !== 'orbcomm' || activeDec !== 'orbcomm') return;
+      satPanel?.orbcomm(type, d);
+      // ★★ 2026-11-24 the decoder's slice and its carriers on the waterfall (it follows the dial: drawn from each status)
+      if (type === 'orbcomm_status' && wf) wf.orbOverlay = orbOverlayFrom(satPanel?.orbNow()?.status);
+    },   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);

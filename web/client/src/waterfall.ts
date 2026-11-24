@@ -60,6 +60,7 @@ import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRo
 import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, labelStems, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, SAT_LABEL_COLOUR, isSatLabel, knownLabelColour, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
+import { orbOverlayLayout, ORB_OVERLAY_COLOUR, ORB_SLICE_LABEL, type OrbOverlay } from '../../../src/utils/orbcommView';   // ★★ 2026-11-24
 import { tunedPick, tunedLabelX, vfoLabelLayout, utcMinutes, type Passband, type TunedRow, type TunedPick, type VfoLabelPlan, type VfoBlockedBox } from '../../../src/utils/tunedStation.ts';
 import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
@@ -301,6 +302,10 @@ export class Waterfall {
   rfCenterHz: number | null = null;
   /** ★★ V12 beta25: the radio's DC spike — a small red "DC Spike / Not a real signal" label (main.ts decides when). */
   dcSpikeHz: number | null = null;
+  /** ★★ 2026-11-24 AN ORBCOMM PICK (src/utils/orbcommView.ts): the decoder's whole slice shaded and labelled "ORBCOMM · every
+   *  carrier decoded here", each carrier it follows marked at its RF (locked solid, acquiring hollow, named once known).
+   *  main.ts sets it from each orbcomm_status; null = none. Drawn whatever the signal-label switch says. */
+  orbOverlay: OrbOverlay | null = null;
   /** ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts; Stuart, 2026-10-30: "this is more for a user to know what decoder
    *  to use"): the sorted list in force (the curated table + EiBi's on-air utility entries), or null = the toggle is off.
    *  main.ts sets it; bump `knownGen` whenever the list changes. */
@@ -1249,6 +1254,7 @@ export class Waterfall {
     //    _drawKnown sets LISTEN's row from the layout it makes; anything else, row 0
     if (!isDabWideList(this.labelList)) { this.liveRow = 0; this.readoutMerged = false; }
     // ★★ the VFO's box is laid out with the labels (vfoLabelLayout) even when they are off; a wide DAB view keeps its own
+    if (this.orbOverlay && this.spanHz > 0) this._drawOrb(ctx, W, H);
     if (this.spanHz > 0 && ((this.labelList && this.labelList.length) || !isDabWideList(this.labelList))) this._drawKnown(ctx, W, H);
     else { this.vfoPlan = null; if (this.knownPlaced.length) { this.knownPlaced = []; this.knownKey = ''; } }
     this._drawVfo(ctx, W, H);
@@ -1809,6 +1815,51 @@ export class Waterfall {
    *  they sit where RF CENTRE does then, at the top of the waterfall — the CURRENT view, not anchored to history.
    *  ★ COST: the layout (and every text width) is cached against the view, the dial and the list; a frame that changes
    *    none of them draws a handful of fillRect/fillText calls. Nothing at all while the toggle is off. */
+  /** ★★ 2026-11-24 the ORBCOMM slice and its carriers (orbcommView.ts). The band is shaded over the spectrum and edged down
+   *  the waterfall; the label and the carrier marks hang just under the spectrum / waterfall join. */
+  private _drawOrb(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const dpr = renderDpr();
+    const specH = H - this.wf.height;
+    const join = Math.max(0, specH);
+    const font = `${10 * dpr}px system-ui, sans-serif`;
+    ctx.save();
+    ctx.font = font;
+    const L = orbOverlayLayout(this.orbOverlay, (hz) => this.hzToX(hz, W), W, ctx.measureText(ORB_SLICE_LABEL).width + 8 * dpr);
+    if (L.band) {
+      const { x0, x1 } = L.band;
+      ctx.fillStyle = ORB_OVERLAY_COLOUR;
+      if (this._showSpec && specH > 40 * dpr) { ctx.globalAlpha = 0.12; ctx.fillRect(x0, 0, x1 - x0, specH); }
+      ctx.globalAlpha = 0.07; ctx.fillRect(x0, join, x1 - x0, H - join);
+      ctx.globalAlpha = 0.7; ctx.strokeStyle = ORB_OVERLAY_COLOUR; ctx.lineWidth = Math.max(1, dpr); ctx.setLineDash([4 * dpr, 4 * dpr]);
+      for (const [x, on] of [[x0, L.band.loIn], [x1, L.band.hiIn]] as [number, boolean][]) {
+        if (!on) continue;
+        ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, H); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      if (L.label && x1 - x0 >= 24 * dpr) {
+        const y = join + 14 * dpr;
+        ctx.globalAlpha = 0.75; ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(L.label.x, y - 10 * dpr, L.label.w, 13 * dpr);
+        ctx.globalAlpha = 1; ctx.fillStyle = ORB_OVERLAY_COLOUR; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+        ctx.fillText(ORB_SLICE_LABEL, L.label.x + 4 * dpr, y);
+      }
+    }
+    // the carriers: a triangle on the join pointing down at the waterfall — solid locked, hollow acquiring
+    const r = 5 * dpr, yT = join + 18 * dpr;
+    for (const m of L.marks) {
+      ctx.globalAlpha = 1; ctx.beginPath();
+      ctx.moveTo(m.x - r, yT); ctx.lineTo(m.x + r, yT); ctx.lineTo(m.x, yT + 1.6 * r); ctx.closePath();
+      if (m.locked) { ctx.fillStyle = ORB_OVERLAY_COLOUR; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = dpr; ctx.stroke(); }
+      else { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill(); ctx.strokeStyle = ORB_OVERLAY_COLOUR; ctx.lineWidth = 1.5 * dpr; ctx.stroke(); }
+      if (m.label) {
+        const w = ctx.measureText(m.label).width + 6 * dpr, y = yT + 1.6 * r + 12 * dpr;
+        const lx = Math.max(0, Math.min(W - w, m.x - w / 2));
+        ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(lx, y - 10 * dpr, w, 13 * dpr);
+        ctx.fillStyle = ORB_OVERLAY_COLOUR; ctx.textAlign = 'left'; ctx.fillText(m.label, lx + 3 * dpr, y);
+      }
+    }
+    ctx.restore();
+  }
+
   private _drawKnown(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const dpr = renderDpr();
     const span = this.spanHz, lo = this.displayCenterHz() - span / 2;

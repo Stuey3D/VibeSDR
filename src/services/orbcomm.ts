@@ -26,7 +26,16 @@ export interface OrbSat {
   up?: { hz: number[]; retries: number; slots: number };
   elements?: { sc: number; ma: number; mm: number };
 }
-export interface OrbCarrier { id: number; rf: number; snr: number; lock: boolean; ok: number; bad: number; fixed: number }
+export interface OrbCarrier {
+  id: number; rf: number; snr: number; lock: boolean; ok: number; bad: number; fixed: number;
+  /** ★ 2026-11-24 the bird on this carrier once named ('' = not yet) — the waterfall's carrier mark */
+  sat: string;
+}
+/** ★★ 2026-11-24 THE SLICE the decoder is fed and searches (RF edges lo…hi — drawn on the waterfall), how much has arrived,
+ *  how often its centre moved (a dial move on a one-pipeline radio moves it), and the scanner's floor. */
+export interface OrbSlice { rate: number; centre: number; lo: number; hi: number; fedSec: number; blocks: number; moves: number; floorDb: number }
+export interface OrbPeak { rf: number; db: number }
+export interface OrbRefused { spurs: number; notSdpsk: number; last: { rf: number; why: string; ago: number; ban: number }[] }
 export interface OrbStatus {
   t: number; good: number; bad: number; messages: number; dropped: number; maxChans: number; located: boolean; birds: number;
   counts: Record<string, number>; sats: OrbSat[]; carriers: OrbCarrier[];
@@ -34,6 +43,10 @@ export interface OrbStatus {
   pick: number; up: number;
   /** the sky dots new since the last status */
   dots: SkyDot[];
+  /** ★★ 2026-11-24 where the decoder searches (null = an older server: nothing drawn), its strongest peaks, what it refused */
+  slice: OrbSlice | null;
+  peaks: OrbPeak[];
+  refused: OrbRefused | null;
 }
 export type OrbPktType = 'ephemeris' | 'downlink' | 'uplink' | 'elements' | 'ncc' | 'message' | 'unknown';
 export interface OrbPkt {
@@ -96,13 +109,28 @@ export function parseOrbcommStatus(d: unknown): OrbStatus | null {
     for (const x of (o.carriers as unknown[]).slice(0, 12)) {
       const q = obj(x);
       if (!q) continue;
-      carriers.push({ id: Math.floor(n(q.id)), rf: Math.max(0, n(q.rf)), snr: n(q.snr), lock: q.lock === true, ok: cnt(q.ok), bad: cnt(q.bad), fixed: cnt(q.fixed) });
+      carriers.push({ id: Math.floor(n(q.id)), rf: Math.max(0, n(q.rf)), snr: n(q.snr), lock: q.lock === true, ok: cnt(q.ok), bad: cnt(q.bad), fixed: cnt(q.fixed),
+                      sat: s(q.sat, 40) });
     }
+  // ★★ the slice: a window only when its edges are real RF (lo < hi, under 10 GHz, at most 20 MHz wide)
+  let slice: OrbSlice | null = null;
+  { const q = obj(o.slice);
+    const lo = q ? n(q.lo, NaN) : NaN, hi = q ? n(q.hi, NaN) : NaN;
+    if (q && lo > 0 && hi > lo && hi < 1e10 && hi - lo <= 20e6)
+      slice = { rate: Math.max(0, n(q.rate)), centre: n(q.centre, (lo + hi) / 2), lo, hi, fedSec: Math.max(0, n(q.fedSec)), blocks: cnt(q.blocks), moves: cnt(q.moves), floorDb: n(q.floorDb) }; }
+  const peaks: OrbPeak[] = Array.isArray(o.peaks)
+    ? (o.peaks as unknown[]).slice(0, 12).map(obj).filter((q): q is Record<string, unknown> => !!q && n(q.rf) > 0 && n(q.rf) < 1e10).map((q) => ({ rf: n(q.rf), db: n(q.db) }))
+    : [];
+  let refused: OrbRefused | null = null;
+  { const q = obj(o.refused);
+    if (q) refused = { spurs: cnt(q.spurs), notSdpsk: cnt(q.notSdpsk),
+      last: Array.isArray(q.last) ? (q.last as unknown[]).slice(0, 8).map(obj).filter((x): x is Record<string, unknown> => !!x && n(x.rf) > 0)
+        .map((x) => ({ rf: n(x.rf), why: s(x.why, 40), ago: Math.max(0, n(x.ago)), ban: Math.max(0, n(x.ban)) })) : [] }; }
   const up = Math.floor(n(o.up, -1));
   return {
     t: Math.max(0, n(o.t)), good: cnt(o.good), bad: cnt(o.bad), messages: cnt(o.messages), dropped: cnt(o.dropped),
     maxChans: cnt(o.maxChans), located: o.located === true, birds: cnt(o.birds), counts, sats, carriers,
-    pick: cnt(o.pick), up: up === 1 || up === 0 ? up : -1, dots: parseSkyDotsLive(o.dots),
+    pick: cnt(o.pick), up: up === 1 || up === 0 ? up : -1, dots: parseSkyDotsLive(o.dots), slice, peaks, refused,
   };
 }
 

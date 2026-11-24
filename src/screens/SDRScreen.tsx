@@ -270,6 +270,7 @@ import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay, { galleryReader } from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
 import { orbViewMerge, type OrbView } from '../services/orbcomm';   // ★★ 2026-11-24 ORBCOMM in the SATELLITE box
+import { orbOverlayFrom } from '../utils/orbcommView';   // ★★ 2026-11-24 its slice and carriers on the waterfall
 import { skyRadioFromBase } from '../utils/skyPlot';
 import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
@@ -2772,6 +2773,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satOrb, setSatOrb] = useState<OrbView | null>(null);
   const [satOrbMax, setSatOrbMax] = useState(0);
   const satOrbMaxRef = useRef(0);
+  /** ★★ 2026-11-24 the ORBCOMM pick's slice + carriers on the waterfall (from each status — it follows the dial) */
+  const satOrbOverlay = useMemo(() => (satDec === 'orbcomm' ? orbOverlayFrom(satOrb?.status) : null), [satDec, satOrb?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
    *  decoder on the listener's VFO B host; the app follows it on a SECOND DecoderClient ("vfo":"B", the server's exact
    *  parameters — it JOINS that run; one socket parses one decoder's frames) whose output goes to the SATELLITE box only.
@@ -15297,6 +15300,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         deckOcclusion={deckOcclusion}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
         dcSpikeHz={dcSpikeShown ? hwDcHz : 0}
+        orbOverlay={satOrbOverlay}
         knownSignals={knownSignals}
         onKnownTap={onKnownTap}
         dabBlocks={dabBlockRows}
