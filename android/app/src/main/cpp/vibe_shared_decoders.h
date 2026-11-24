@@ -59,6 +59,17 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         Entry& e = e_[s];
         bool changed = false;
+        /* ★★★ A HOLDER CHANGING THE SETTINGS (Stuart, 2026-11-24: "it would save cpu on the host if one set of settings
+         *  applies to all users"): the same decoder's box (RTTY's shift, WEFAX's LPM, one signal ↔ skimmer …) re-attached by
+         *  somebody who holds it is the ROOM's run with new settings — one restart, and everybody who held it holds the new
+         *  run (their clients are told the new parameters and show them). A different decoder still replaces the room's. */
+        if (!joined && !sat && !e.sat && !e.key.empty() && e.key != runningKey && e.holders.count(holder) && !ext.empty()
+            && family(e.ext) == family(ext)) {
+            e.key = runningKey; e.ext = ext; e.params = paramsJson;
+            if (!session.empty()) e.by = session;
+            e.holders[holder] = session;
+            return true;
+        }
         if (!joined || e.key != runningKey) {
             e = Entry();
             e.key = runningKey; e.ext = ext; e.params = paramsJson; e.sat = sat;
@@ -193,6 +204,16 @@ public:
             out += "\"" + name + "\":" + val;
         }
         return out + "}";
+    }
+
+    /** The decoder's BOX: one family for RTTY's one signal and skimmer, CW's, PSK's, and every time station (the clients'
+     *  sharedDecoderKey, src/services/sharedDecoders.ts). */
+    static std::string family(const std::string& ext) {
+        if (ext == "fsk" || ext == "rttyskim") return "rtty";
+        if (ext == "cwskim") return "cw";
+        if (ext == "pskskim") return "psk";
+        if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy" || ext == "tdf") return "time";
+        return ext;
     }
 
 private:

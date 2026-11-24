@@ -827,15 +827,101 @@ public:
 
     /** Send every attached socket a frame. */
     void broadcast(const uint8_t* d, size_t n) {
-        for (auto& p : snapshotPeers()) p->binary(d, n);
-        record(d, n);
+        { std::lock_guard<std::mutex> ol(outMtx_);   // ★ the send and its note together — see joinPeer
+          for (auto& p : snapshotPeers()) liveBin_(p, d, n);
+          record(d, n); }
         if (DecoderTapPtr t = tap()) t->frame(d, n);
     }
     /** `gap`: which gap log keeps it for a listener coming back (GapDecoder / GapSpots), or -1 = not kept (a status frame
      *  that is re-sent anyway). */
     void broadcastText(const std::string& s, int gap = 0 /* GapDecoder */) {
-        for (auto& p : snapshotPeers()) p->text(s);
+        std::lock_guard<std::mutex> ol(outMtx_);
+        for (auto& p : snapshotPeers()) liveText_(p, s);
         if (gap >= 0) gapNote((uint8_t)gap, false, s.data(), s.size());
+    }
+
+    /* ── ★★★ A JOINER SEES WHAT IS ALREADY IN THE BOX (Stuart, 2026-11-24: "when a new user joins they can see what is
+     *  already in the decoder box such as a half drawn wefax image etc") ────────────────────────────────────────────────
+     *  joinPeer makes `p` a peer of this host AND snapshots what the run has produced so far, in ONE step under outMtx_ —
+     *  the lock every live send takes together with its note (record / gapNote). So every frame is either in the snapshot
+     *  (sent before p was a peer) or sent to p live (after) — never both, never neither: no duplicate and no hole at the
+     *  join. Live frames that arrive while the snapshot is still being sent are QUEUED for p (bounded, kCatchMax) and sent
+     *  after it, in order.
+     *   · the picture so far: WEFAX / SSTV / LRPT (replay_, the existing ≤ 4 MB copy) and FELD HELL (its last kHellLines
+     *     lines, each kept at its latest — a strip re-sends a line as it fills);
+     *   · the run's recent output: the gap log of this run (≤ 384 KB, already kept for a returning listener) — RTTY / NAVTEX
+     *     / SITOR / CW / PSK text, APRS packets and frames, DSC / SELCAL / time lines … or, for `spots`, the spots;
+     *   · APRS: the station list first (its own JSON, the state).
+     *  Paced on a thread of its own at the socket's drain (as replayTo). No new copies are kept: both buffers existed. */
+    size_t joinPeer(const DecoderPeerPtr& p, bool spots) {
+        if (!p || !p->open()) return 0;
+        if (!spots) {   // ★ the APRS station list — read BEFORE outMtx_ (decMtx_ is taken on the decode thread around sends)
+            std::string l;
+            { std::lock_guard<std::mutex> lk(decMtx_); if (aprs_) l = aprs_->listJson(true); }
+            if (!l.empty()) p->text(l);
+        }
+        std::vector<std::pair<bool, std::string>> snap;
+        {
+            std::lock_guard<std::mutex> ol(outMtx_);
+            if (catch_.count(p.get())) return 0;   // ★ already catching up (a second attach): the first one carries on
+            if (!spots) {
+                std::lock_guard<std::mutex> rl(replayMtx_);
+                if (imageKind_.load(std::memory_order_relaxed) == 3) {
+                    if (!hellLines_.empty()) { snap.push_back({ true, std::string(1, '\x02') });
+                                               for (auto& kv : hellLines_) snap.push_back({ true, std::string((const char*)kv.second.data(), kv.second.size()) }); }
+                } else for (auto& f : replay_) snap.push_back({ true, std::string((const char*)f.data(), f.size()) });
+            }
+            { std::lock_guard<std::mutex> gl(gapMtx_);
+              const uint8_t k = spots ? GapSpots : GapDecoder;
+              for (const auto& e : gap_) if (e.kind == k) snap.push_back({ e.bin, e.data }); }
+            { std::lock_guard<std::mutex> lk(peerMtx_);
+              prunePeersLocked();
+              if (std::find(peers_.begin(), peers_.end(), p) == peers_.end()) peers_.push_back(p); }
+            if (snap.empty()) return 0;
+            catch_[p.get()];
+            catchN_.fetch_add(1, std::memory_order_relaxed);
+        }
+        const size_t n = snap.size();
+        log(std::string("decoder joined — sending ") + std::to_string(n) + (spots ? " spots" : " frames") + " already decoded in this run");
+        std::lock_guard<std::mutex> tl(replayThrMtx_);
+        replayThreads_.erase(std::remove_if(replayThreads_.begin(), replayThreads_.end(),
+            [](std::unique_ptr<ReplayJob>& j) { if (j->done.load()) { if (j->th.joinable()) j->th.join(); return true; } return false; }),
+            replayThreads_.end());
+        auto job = std::make_unique<ReplayJob>();
+        ReplayJob* jp = job.get();
+        jp->th = std::thread([this, p, snap = std::move(snap), jp] {
+            vibeDecoderThread("vibe-join");
+            auto pace = [&] { for (int w = 0; w < 500 && p->open() && p->backlog() > kReplayBacklog && !replayStop_.load(); ++w)
+                                  std::this_thread::sleep_for(std::chrono::milliseconds(20)); };
+            for (auto& e : snap) {
+                pace();
+                if (!p->open() || replayStop_.load()) break;
+                if (e.first) p->binary((const uint8_t*)e.second.data(), e.second.size()); else p->text(e.second);
+            }
+            // ★ then what arrived meanwhile, in order — the gate lifts only when the queue is empty, under outMtx_, so no
+            //   live frame can overtake one still queued
+            for (;;) {
+                std::deque<std::pair<bool, std::string>> q; bool dropped = false;
+                { std::lock_guard<std::mutex> ol(outMtx_);
+                  auto it = catch_.find(p.get());
+                  if (it == catch_.end()) break;
+                  if (it->second.q.empty() || !p->open() || replayStop_.load()) {
+                      dropped = it->second.dropped;
+                      catch_.erase(it); catchN_.fetch_sub(1, std::memory_order_relaxed);
+                      if (dropped) log("decoder joined — the live frames queued behind the catch-up overflowed; some were dropped");
+                      break;
+                  }
+                  q.swap(it->second.q); it->second.bytes = 0; }
+                for (auto& e : q) {
+                    pace();
+                    if (!p->open()) break;
+                    if (e.first) p->binary((const uint8_t*)e.second.data(), e.second.size()); else p->text(e.second);
+                }
+            }
+            jp->done.store(true);
+        });
+        replayThreads_.push_back(std::move(job));
+        return n;
     }
 
     /* ── ★★★ THE GAP LOG — WHAT A LISTENER WHO WAS AWAY MISSED (V12 held session, 2026-10-27) ──────────────────────────
@@ -925,6 +1011,27 @@ public:
 
 private:
     struct ReplayJob { std::thread th; std::atomic<bool> done{false}; };
+    /** ★★★ joinPeer's gate. outMtx_: every live send with its note (record / gapNote), and a joiner's snapshot. Order:
+     *  outMtx_ → replayMtx_ / gapMtx_ / peerMtx_ (never decMtx_ under it — the decode thread holds decMtx_ around sends). */
+    std::mutex outMtx_;
+    struct CatchQ { std::deque<std::pair<bool, std::string>> q; size_t bytes = 0; bool dropped = false; };
+    std::map<const DecoderPeer*, CatchQ> catch_;   // outMtx_
+    std::atomic<int> catchN_{0};
+    static constexpr size_t kCatchMax = 1024u * 1024;   // ★ live frames queued behind one joiner's catch-up, at most
+    static constexpr size_t kHellLines = 400;           // ★ FELD HELL: the strip's last lines a joiner is shown
+    std::map<uint32_t, std::vector<uint8_t>> hellLines_;   // replayMtx_
+    /** outMtx_ held: to `p` now, or behind its catch-up. */
+    bool catchQueue_(const DecoderPeer* p, bool bin, const void* d, size_t n) {
+        if (!catchN_.load(std::memory_order_relaxed)) return false;
+        auto it = catch_.find(p);
+        if (it == catch_.end()) return false;
+        if (it->second.bytes + n > kCatchMax) { it->second.dropped = true; return true; }
+        it->second.q.push_back({ bin, std::string((const char*)d, n) });
+        it->second.bytes += n;
+        return true;
+    }
+    void liveBin_(const DecoderPeerPtr& p, const uint8_t* d, size_t n) { if (!catchQueue_(p.get(), true, d, n)) p->binary(d, n); }
+    void liveText_(const DecoderPeerPtr& p, const std::string& s) { if (!catchQueue_(p.get(), false, s.data(), s.size())) p->text(s); }
     struct GapEntry { uint64_t seq; uint8_t kind; bool bin; std::string data; };
     static constexpr size_t kGapMaxBytes = 384u * 1024, kGapMaxEntries = 4000;
     std::mutex gapMtx_;
@@ -1047,7 +1154,7 @@ private:
         active_.store(false, std::memory_order_relaxed);
         imageKind_.store(0, std::memory_order_relaxed);
         pictureSince_.store(0.0, std::memory_order_relaxed);
-        { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; replayDoneSeq_ = 0; done_.clear(); doneBytes_ = 0; }
+        { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; replayDoneSeq_ = 0; done_.clear(); doneBytes_ = 0; hellLines_.clear(); }
         gapClear(GapDecoder);   // ★ a new run — see the gap log
     }
     void log(const std::string& s) { if (env_.log) env_.log(s); }
@@ -1090,6 +1197,17 @@ private:
         // ★ Read from an atomic, not name_: SSTV calls this from its own video thread.
         const int kind = imageKind_.load(std::memory_order_relaxed);
         if (kind == 0) return;
+        if (kind == 3) {   // ★ FELD HELL: each line at its latest, the last kHellLines — what a joiner is shown (joinPeer)
+            if (env_.noReplay) return;
+            std::lock_guard<std::mutex> rl(replayMtx_);
+            if (n == 1 && d[0] == 0x02) { hellLines_.clear(); return; }
+            if (n >= 9 && d[0] == 0x01) {
+                const uint32_t ln = ((uint32_t)d[1] << 24) | ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 8) | d[4];
+                hellLines_[ln].assign(d, d + n);
+                while (hellLines_.size() > kHellLines) hellLines_.erase(hellLines_.begin());
+            }
+            return;
+        }
         const bool starts = (kind == 1 && n == 1 && d[0] == 0x02) || (kind == 2 && n >= 9 && d[0] == 0x07);
         // ★ No joiner will ever ask (a WEFAX-stations channel): only whether a picture is in progress is kept — no 4 MB copy
         if (env_.noReplay) {
@@ -1165,8 +1283,9 @@ private:
             return m;
         };
         const std::vector<uint8_t> a = frame(pub), b = frame(priv);
-        for (auto& p : snapshotPeers()) { const auto& m = p->privileged() ? b : a; p->binary(m.data(), m.size()); }
-        gapNote(GapDecoder, true, a.data(), a.size());
+        { std::lock_guard<std::mutex> ol(outMtx_);   // ★ the send and its note together — see joinPeer
+          for (auto& p : snapshotPeers()) { const auto& m = p->privileged() ? b : a; liveBin_(p, m.data(), m.size()); }
+          gapNote(GapDecoder, true, a.data(), a.size()); }
         if (DecoderTapPtr t = tap()) t->text(pub);
     }
     void textFrame(const std::string& text) {
@@ -1178,8 +1297,9 @@ private:
         const uint32_t len = (uint32_t)text.size();
         m[9] = (uint8_t)(len >> 24); m[10] = (uint8_t)(len >> 16); m[11] = (uint8_t)(len >> 8); m[12] = (uint8_t)len;
         std::memcpy(m.data() + 13, text.data(), text.size());
-        for (auto& p : snapshotPeers()) p->binary(m.data(), m.size());
-        gapNote(GapDecoder, true, m.data(), m.size());   // ★ the gap log — for a listener coming back
+        { std::lock_guard<std::mutex> ol(outMtx_);   // ★ the send and its note together — see joinPeer
+          for (auto& p : snapshotPeers()) liveBin_(p, m.data(), m.size());
+          gapNote(GapDecoder, true, m.data(), m.size()); }   // ★ the gap log — for a listener coming back
         if (DecoderTapPtr t = tap()) t->text(text);
     }
     static void put32(std::vector<uint8_t>& v, uint32_t x) {
@@ -1683,10 +1803,12 @@ private:
     }
     /** ★★ FELD HELL (V12, 2026-10-31): drawn, not read (decoders/feld_hell.h). The strip being drawn goes out as WEFAX's
      *  0x01 lines (line number, width, grey bytes) — re-sent as it fills, so a client that draws line y at y watches it
-     *  grow; 0x02 once at the start (a new picture); {"type":"hell_status","data":{hz, signal}} on change. Not kept for
-     *  replay (imageKind_ 0): a strip is seconds of text, not a chart. */
+     *  grow; 0x02 once at the start (a new picture); {"type":"hell_status","data":{hz, signal}} on change. imageKind_ 3: its
+     *  last kHellLines lines, each at its latest, are kept for a listener who joins part-way (joinPeer) — not replay_'s
+     *  first 4 MB, which a never-ending strip would fill with its oldest lines. */
     void buildHellLocked_() {
         hell_.reset(new FeldHellDecoder(48000));
+        imageKind_.store(3, std::memory_order_relaxed);   // ★★★ its last lines kept for a joiner (record, joinPeer)
         hell_->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
             std::vector<uint8_t> m; m.reserve(9 + w);
             m.push_back(0x01); put32(m, ln); put32(m, w); m.insert(m.end(), px, px + w);

@@ -107,6 +107,31 @@ int main() {
         room.started(R::Text, 0x77, "p", "paging", "{}", "paging|", false);
         ok(!has(room.listJson("b", "paging|", ""), "paging"), "PAGING is never listed");
     }
+    std::printf("── one set of settings for the room ──\n");
+    {
+        R room;
+        room.started(R::Text, 0x10, "a", "fsk", "{\"shift\":170}", "fsk|170", false);
+        room.started(R::Text, 0x20, "b", "fsk", "{\"shift\":170}", "fsk|170", true);
+        ok(room.started(R::Text, 0x20, "b", "fsk", "{\"shift\":850}", "fsk|850", false), "b (a holder) changes the shift: the room changed");
+        ok(room.holderCount(R::Text) == 2 && room.key(R::Text) == "fsk|850", "…ONE run with the new settings, and BOTH still hold it");
+        const std::string va = room.listJson("a", "fsk|850", "");
+        ok(has(va, "\"held\":true") && has(va, "\"shift\":850") && has(va, "\"mine\":false"), "a is told the new settings (held — its panel follows, nothing re-attached)");
+        ok(room.by(R::Text) == "b", "the credit is b's (the last to set it)");
+        ok(room.started(R::Text, 0x10, "a", "rttyskim", "{\"width\":48000}", "rttyskim|48", false) && room.holderCount(R::Text) == 2,
+           "one signal → skimmer is the same box: still both");
+        ok(room.started(R::Text, 0x10, "a", "navtex", "{}", "navtex|x", false) && room.holderCount(R::Text) == 1, "a different decoder replaces it (b must follow)");
+        room.started(R::Text, 0x30, "c", "navtex", "{}", "navtex|y", false);
+        ok(room.holderCount(R::Text) == 1 && room.by(R::Text) == "c", "a NON-holder's attach with other settings replaces the run (the others follow it)");
+        R t;
+        t.started(R::Text, 0x10, "a", "msf", "{}", "msf|", false);
+        t.started(R::Text, 0x20, "b", "msf", "{}", "msf|", true);
+        ok(t.started(R::Text, 0x20, "b", "time", "{\"station\":\"dcf77\"}", "time|dcf77", false) && t.holderCount(R::Text) == 2, "a time station change is the same box");
+        R s;
+        s.started(R::Text, R::kSatHolder, "", "lrpt", "{}", "lrpt|a", false, true);
+        s.started(R::Text, 0x10, "a", "lrpt", "{}", "lrpt|a", true);
+        s.started(R::Text, 0x10, "a", "lrpt", "{\"symbol_rate\":80000}", "lrpt|b", false);
+        ok(!s.holds(R::Text, R::kSatHolder), "changing a SATELLITE pick's decoder makes it the listener's own (not the pick's)");
+    }
     {
         R room;
         int added = 0;

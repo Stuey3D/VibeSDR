@@ -12,6 +12,10 @@
 //   D. a SATELLITE pick's decoder on the shared dial: never listed (the pick tells the room), and a listener who joined it
 //      and closes their box does not stop it under the pick.
 //   E. a listener's own VFO (users 4, range-locked): no dec_shared at all (each listener has their own host).
+//   F. ★★★ "when a new user joins they can see what is already in the decoder box such as a half drawn wefax image": a
+//      listener joining WEFAX part-way receives every line already drawn, then the live ones — each line once, no gap.
+//   G. ★★★ "one set of settings applies to all users": listener 2 changes the room's RTTY shift — the ONE run restarts once
+//      with it, both still hold it, and listener 1 is told the new settings (its panel follows) without re-attaching.
 // Silent: an audio socket is opened only so a listener has audio; its frames are dropped unread.
 //   VIBESERVER_BIN=…/vibeserver VIBE_APRS_ONAIR_BIN=…/test-aprs-onair node scripts/test-server-shared-decoders.mjs
 import net from 'node:net';
@@ -39,7 +43,7 @@ const until = async (f, ms) => { for (let i = 0; i < ms / 200; i++) { if (await 
 function ws(port, pathq) {
   const key = crypto.randomBytes(16).toString('base64');
   const s = net.connect(port, '127.0.0.1');
-  const st = { txt: [], open: false };
+  const st = { txt: [], bin: [], open: false };
   let hs = false, buf = Buffer.alloc(0);
   s.on('connect', () => s.write(`GET ${pathq} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
@@ -56,6 +60,7 @@ function ws(port, pathq) {
       const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
       if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
       if (op === 0x1 && st.txt.length < 20000) st.txt.push(p.toString());
+      if (op === 0x2 && st.bin.length < 20000) st.bin.push(Buffer.from(p));
     }
   });
   st.send = (o) => {
@@ -226,6 +231,56 @@ const joinMsg = (e) => ({ type: 'audio_extension_attach', extension_name: e.ext,
     ok(!/the last listener holding it let go — stopped/.test(S.logText()), 'listener 2 closing the pick\'s box does not stop the pick\'s decoder');
     L1.sp.send({ type: 'sat', op: 'drop' });
     ok(await until(() => /\[sat\] decoder aprs detached/.test(S.logText()), 4000), 'the drop ends it');
+    L1.close(); L2.close();
+  } finally { S.stop(); }
+}
+const wefaxLns = (dx) => dx.bin.filter((b) => b.length === 9 + 1809 && b[0] === 0x01).map((b) => b.readUInt32BE(1));
+{
+  console.log('── F. joining WEFAX part-way: the lines already drawn, then the live ones ──');
+  const S = await server('wefax');
+  try {
+    const L1 = await listener(S, 'shdec51');
+    L1.dx.send({ type: 'audio_extension_attach', extension_name: 'wefax', lpm: 120, image_width: 1809, carrier: 1900, deviation: 400, use_phasing: false });
+    ok(await until(() => wefaxLns(L1.dx).length >= 10, 15000), `listener 1 draws a chart (${wefaxLns(L1.dx).length} lines)`);
+    const L2 = await listener(S, 'shdec52');
+    const e = roomDec(L2.sp);
+    ok(e?.ext === 'wefax' && e.params?.lpm === 120, `listener 2 is told the room's WEFAX (${JSON.stringify(e?.params)})`);
+    const before = wefaxLns(L1.dx).length;
+    L2.dx.send(joinMsg(e));
+    await sleep(4000);
+    const l2 = wefaxLns(L2.dx), l1 = wefaxLns(L1.dx);
+    const uniq = new Set(l2);
+    ok(l2.length >= before, `listener 2 received the ${before} lines already drawn and the live ones (${l2.length})`);
+    ok(l2.length > 0 && Math.min(...l2) === Math.min(...l1), `…from the chart's first line (${Math.min(...l2)})`);
+    ok(uniq.size === l2.length, `each line ONCE — nothing doubled at the join (${l2.length} lines, ${uniq.size} distinct)`);
+    ok(uniq.size === Math.max(...l2) - Math.min(...l2) + 1, 'no line missing at the join (contiguous)');
+    ok(Math.max(...l2) >= Math.max(...l1) - 1, `and it keeps up with the live chart (L2 ${Math.max(...l2)}, L1 ${Math.max(...l1)})`);
+    ok(roomDec(L1.sp)?.key === e.key && roomDec(L1.sp)?.n === 2, 'the same run (not restarted), held by both');
+    ok(/decoder joined — sending \d+ frames already decoded/.test(S.logText()), 'the server log says it caught the joiner up');
+    L1.close(); L2.close();
+  } finally { S.stop(); }
+}
+{
+  console.log('── G. one set of settings: listener 2 changes the room\'s RTTY shift ──');
+  const S = await server('settings');
+  try {
+    const L1 = await listener(S, 'shdec61'), L2 = await listener(S, 'shdec62');
+    const RT = (shift) => ({ type: 'audio_extension_attach', extension_name: 'fsk',
+                             params: { center_frequency: 1000, shift, baud_rate: 45.45, inverted: false, framing: '5N1.5', encoding: 'ITA2' } });
+    L1.dx.send(RT(170));
+    ok(await until(() => roomDec(L2.sp)?.ext === 'fsk', 4000), 'listener 1 opened RTTY (170 Hz)');
+    L2.dx.send(joinMsg(roomDec(L2.sp)));
+    ok(await until(() => roomDec(L1.sp)?.n === 2, 4000), 'listener 2 joined it');
+    const builds = () => (S.logText().match(/decoder attached: fsk/g) || []).length;
+    const b0 = builds(), k0 = roomDec(L1.sp).key;
+    L2.dx.send(RT(850));   // ★ listener 2's panel: shift 850
+    ok(await until(() => roomDec(L1.sp)?.params?.shift === 850, 4000), `listener 1 is told the new shift (${roomDec(L1.sp)?.params?.shift})`);
+    const e1 = roomDec(L1.sp);
+    ok(e1.held === true && e1.n === 2 && e1.key !== k0, 'still held by BOTH — the one run, with the new settings (listener 1 re-attached nothing)');
+    ok(e1.mine === false && roomDec(L2.sp)?.mine === true, 'credited to listener 2, who changed it');
+    await sleep(800);
+    ok(builds() === b0 + 1, `the run restarted ONCE (${builds() - b0})`);
+    ok(/shift=850/.test(S.logText()), 'with shift 850');
     L1.close(); L2.close();
   } finally { S.stop(); }
 }

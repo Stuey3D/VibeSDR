@@ -33114,9 +33114,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<DecoderHost> host;
         if (!perVfo || !sess.empty()) host = decoders_.hostFor(sess, perVfo);
         auto peer = std::make_shared<DxPeer>(this, sock);
-        const bool mirror = host ? host->addPeer(peer) : false;
+        /* ★★★ SHARED DECODERS (Stuart 11-24): on the one-pipeline host a socket is a peer only once it attaches or subscribes
+         *  — then it is caught up on what the run has drawn so far (DecoderHost::joinPeer), with nothing doubled at the join.
+         *  It used to be a mirror from the moment it connected, which (with the catch-up) would hand a client the same lines
+         *  twice; a listener who has not opened the box is TOLD what runs (dec_shared) and their client opens it. */
+        if (host && perVfo) host->addPeer(peer);
         { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.insert(sock); dxSockSession[sock.get()] = session; }
-        LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : (mirror ? " (mirror)" : ""),
+        LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : "",
              perVfo && sess.empty() ? " — NO SESSION, decoders refused" : "");
         bool rdsHere = false;
         /* ★★★ DECODE ON EITHER VFO (V12, 2026-10-27 — see watchDecBKey). "vfo":"B" on an attach or a subscribe = this
@@ -33125,11 +33129,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const std::string bSess = sess.empty() ? session : sess;
         std::shared_ptr<DecoderHost> hostB;
         bool textA = false, spotsA = false, textB = false, spotsB = false;
-        bool peerOnA = true;   // ★ every decoder socket starts as a peer of its A host (a mirror on a shared dial — as before)
-        /* ★★★ SHARED DECODERS (Stuart 11-24): this socket CLOSED the room's decoder for itself while somebody else still holds
-         *  it — so it stops being a mirror of the shared host (the box is shut; the frames would be bytes for nothing) until
-         *  it attaches or subscribes again. */
-        bool quietA = false;
+        bool peerOnA = perVfo;   // ★ a peer of its own host at once; of the shared host only once it attaches / subscribes
+        /* ★★★ SHARED DECODERS (Stuart 11-24): this socket holds nothing on the shared host (not attached yet, or it CLOSED
+         *  the room's decoder for itself) — so it is not a mirror of it until it attaches or subscribes. */
+        bool quietA = !perVfo;
         auto wantsB = [](const std::string& p) { const std::string v = jsonStr(p, "vfo"); return v == "B" || v == "b"; };
         /** VFO B's host, made on first use, this socket a peer of it — or null (no VFO B, no session: refused by the caller). */
         auto takeHostB = [&]() -> std::shared_ptr<DecoderHost> {
@@ -33268,11 +33271,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         continue;
                     }
                 }
-                quietA = false;   // ★ attaching = a mirror of the host again (a join is caught up below)
-                syncPeerA();
+                quietA = false;   // ★ attaching = a peer of the host again (a join is caught up below)
+                /* ★★★ SHARED DECODERS (Stuart 11-24: "when a new user joins they can see what is already in the decoder
+                 *  box"): joining the room's running decoder on the shared host — no gap mark of a held session to honour —
+                 *  makes this socket a peer and sends it what the run has drawn so far IN ONE STEP (joinPeer), so nothing
+                 *  is doubled or lost at the join. Anything else becomes a peer first, as always (a new run's first frames
+                 *  are sent while it is being built). */
+                const uint64_t gapMk = dxGapPeek(sess);
+                const bool roomJoin = !perVfo && gapMk == DecoderHost::kNoCatchUp && !textA
+                                   && !decRoom_.holds(vibe::SharedDecoderRoom::Text, (uintptr_t)sock.get())
+                                   && !host->startKey().empty() && host->startKey() == DecoderHost::startKeyFor(ext, payload);
+                if (!roomJoin) syncPeerA();
                 // ★★ V12 beta24: a held session's decoder socket coming back names where it left (its gap mark), so the
                 //    pictures finished while it was away come before the one in progress (DecoderHost::replayTo)
-                auto r = host->start(ext, payload, peer, dxGapPeek(sess));
+                auto r = roomJoin ? host->start(ext, payload) : host->start(ext, payload, peer, gapMk);
+                if (roomJoin && r == DecoderHost::Start::Joined) { host->joinPeer(peer, false); peerOnA = true; }
+                else if (roomJoin) syncPeerA();
                 // ★★ V12: never refused because the box is busy decoding for NOBODY — background decoding on every radio
                 //    of this machine gives its slots back, and the listener's decoder is tried again.
                 if (r == DecoderHost::Start::Refused && !decoderOnly && bgYieldForListener()) r = host->start(ext, payload, peer);
@@ -33305,7 +33319,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!perVfo) decSharedBroadcast();   // ★★★ the room: what runs now, and who holds it
                 // ★★ V12: the same decoder, still running (a held session back, a socket blip) — what it decoded while
                 //    this listener's socket was away follows, after the attach (the gap log).
-                if (r == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, false);
+                if (r == DecoderHost::Start::Joined && !roomJoin) dxGapReplay(sess, host, peer, false);
             } else if (type == "audio_extension_detach") {
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
                 if (textB && hostB) { hostB->stop(); textB = false; }   // ★ the decoder this socket runs on VFO B
@@ -33371,6 +33385,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
                         icomDecReconcile();
                     } else {
+                        // ★★★ SHARED DECODERS: joining the room's spots run — a peer and its spots so far, in one step
+                        const bool spotsJoin = !perVfo && sr == DecoderHost::Start::Joined && dxGapPeek(sess) == DecoderHost::kNoCatchUp
+                                               && !decRoom_.holds(vibe::SharedDecoderRoom::Spots, (uintptr_t)sock.get());
+                        if (spotsJoin) { host->joinPeer(peer, true); peerOnA = true; }
                         spotsA = true; quietA = false; syncPeerA();
                         if (!perVfo) {
                             if (!session.empty() && sr != DecoderHost::Start::Joined) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
@@ -33381,7 +33399,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             decSharedBroadcast();
                         }
                         // ★★ V12: the same run, still going — the spots heard while this listener was away (the gap log)
-                        if (sr == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, true);
+                        if (sr == DecoderHost::Start::Joined && !spotsJoin) dxGapReplay(sess, host, peer, true);
                     }
                 }
             } else if (type == "unsubscribe_digital_spots") {
