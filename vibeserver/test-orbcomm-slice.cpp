@@ -23,7 +23,7 @@ using cf32 = vibedsp::cf32;
 
 static int fftSizeForRate(double rate) { double want = rate / 75.0; int s = 4096; while (s < (int)want && s < 32768) s *= 2; return s; }
 
-struct Res { int ok137662 = 0, ok137800 = 0, after = 0; };
+struct Res { int ok137662 = 0, ok137800 = 0, after = 0, bad = 0; };
 
 static std::vector<std::complex<float>> capture(double fs, double centre, double scale, int frames) {
     std::vector<uint8_t> a, b;
@@ -102,7 +102,7 @@ static Res viaTapSteps(const std::vector<std::complex<float>>& x0, double fs, do
     vibe::WideTap tap;
     Receiver::Cfg cfg; cfg.windowHz = std::max(10000.0, widthHz / 2); Receiver r(cfg);
     Res res; double t = 0; int sec = 0; std::vector<int> perSec(200, 0);
-    r.onPacket = [&](const Rx& p) { if (!p.p.ok) return; if (sec < 200) perSec[size_t(sec)]++; if (std::fabs(p.rfHz - 137.6625e6) < 6000) res.ok137662++; if (std::fabs(p.rfHz - 137.800e6) < 6000) res.ok137800++; };
+    r.onPacket = [&](const Rx& p) { if (!p.p.ok) { res.bad++; return; } if (sec < 200) perSec[size_t(sec)]++; if (std::fabs(p.rfHz - 137.6625e6) < 6000) res.ok137662++; if (std::fabs(p.rfHz - 137.800e6) < 6000) res.ok137800++; };
     tap.start(vibe::WideTap::BandSink([&](const cf32* s, int k, double rate, double centre, const float*, int, double, double, int slice) {
         if (slice != 0 || !s) return;
         r.feed(reinterpret_cast<const std::complex<float>*>(s), k, rate, centre, t); t += k / rate;
@@ -162,6 +162,7 @@ int main(int argc, char** argv) {
         std::printf("   912 kS/s band pick, LO + dial stepping \u221230 Hz/s: 137.6625 %d / 137.800 %d packets, %d silent seconds\n", st.ok137662, st.ok137800, st.after);
         CHECK(st.ok137662 > secs * 50 * 2 / 3 && st.ok137800 > secs * 50 * 2 / 3, "band pick with Doppler steps: both carriers decode (%d / %d)", st.ok137662, st.ok137800);
         CHECK(st.after == 0, "IQ keeps flowing: no silent second after the first 3 (%d)", st.after);
+        CHECK(st.bad * 20 < st.ok137662 + st.ok137800, "bad packets near zero through the steps (%d bad of %d)", st.bad, st.ok137662 + st.ok137800 + st.bad);
     }
     // ★★ A MANUAL DIAL MOVE MID-PICK (Stuart tuned to 137.800 by hand): the slice follows the dial; decoding must go on
     for (double fs : { 912000.0, 1024000.0 }) {
