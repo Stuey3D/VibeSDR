@@ -579,6 +579,15 @@ for t in "$SRC"/test-*.cpp; do
     head -5 "$OUT/$name.buildlog" | sed 's/^/     /'
     broke=$((broke+1)); continue
   fi
+  # ★★ 2026-11-24 tool-dec-replay is built WITH test-dec-dump, every time. It was built only in the end-to-end block below,
+  #    which VIBE_TESTS never reaches — so `VIBE_TESTS=test-dec-dump` left a stale replay tool in the shared $OUT (one
+  #    built 11-23 from beta92's tree replayed the Pi 500 capture as 0 packets and was taken for a host fault). A failed
+  #    build removes the old binary rather than leaving it to be run.
+  if [ "$name" = test-dec-dump ]; then
+    g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for "$name") -o "$OUT/tool-dec-replay" \
+        "$SRC/tool-dec-replay.cpp" $(deps_for "$name") $cobj 2>"$OUT/tool-dec-replay.buildlog" \
+      || { rm -f "$OUT/tool-dec-replay"; echo '   (tool-dec-replay did not build — removed)'; }
+  fi
   # ★ Exit 3 = NOT RUN (its data is not here) — counted apart, never as a pass. Same rule as the end-to-end suites.
   "$OUT/$name"; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
