@@ -101,6 +101,17 @@ int main() {
         ok(cw >= kViewMinSpanHz, std::string("never under the 50 kHz floor (" + std::to_string((int)cw) + ")").c_str());
     }
 
+    {   // ★★ beta93 a pass never narrower than 500 kHz, and VFO B's downlink widens it (Stuart 11-24)
+        const Region m = regionOf(tx("LRPT", 137.9e6, "lrpt", "lrpt", 72000));
+        ok(narrowestRung(2.0 * halfForPass({m}, 137.9e6), rtl, cap) == 500000, "METEOR alone: 500 kHz on an RTL (was 350)");
+        ok(narrowestRung(2.0 * halfForPass({m}, 137.9e6), rsp, rspRate) == 600000, "METEOR alone: 600 kHz on an RSP");
+        ok(halfForPass({}, 137.9e6) == 0.0, "no pass: no floor");
+        const Region tr = regionOf(tx("Transponder", 435.64e6, "usb", "", 0, 435.67e6));
+        const Region bc = regionOf(tx("Beacon", 435.57e6, "cw", "cw", 0));
+        const double two = 2.0 * halfForPass({tr, bc}, 435.64e6);
+        ok(two > 2.0 * (70000.0), "a beacon 70 kHz away in VFO B is inside the width");
+    }
+
     printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }

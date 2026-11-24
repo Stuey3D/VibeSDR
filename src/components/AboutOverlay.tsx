@@ -59,6 +59,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta93 2026-11-24 — A PASS'S IF FILTER: 500 kHz AT LEAST, AND VFO B COUNTS (Stuart: "maybe a 500khz if filter is
+  //    needed as the satellites with beacons and transponders on 2 vfo's will need a wider filter"). vibesatif::halfForPass.
+  { v: 'V12 (experimental)', detail: 'SATELLITE: THE RADIO’S FILTER LEAVES MORE ROOM — during a pass the radio’s IF filter is now never narrower than 500 kHz (600 kHz on an SDRplay), where beta92 could go down to an RTL-SDR’s narrowest, 350 kHz; and a second downlink you open in VFO B — a beacon beside a transponder — is now counted when the width is chosen, so it is never filtered out. Strong stations further away are still kept out.' },
   // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
   //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
   //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.

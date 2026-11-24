@@ -99,6 +99,16 @@ inline double halfNeeded(const std::vector<Region>& rs, double rfHz) {
     for (const auto& r : rs) h = std::max(h, std::fabs(r.centreHz - rfHz) + r.halfHz);
     return h;
 }
+/** ★★ beta93 NEVER NARROWER THAN 500 kHz FOR A PASS (Stuart 11-24: "maybe a 500khz if filter is needed as the satellites
+ *  with beacons and transponders on 2 vfo's will need a wider filter"). The RTL's 350 kHz rung is its tuner's floor — the
+ *  narrowest, least even filter it has — and a 150 kHz METEOR plus Doppler sits close to its edges; 500 kHz leaves room
+ *  for a second downlink and the filter's own skirts. Strong out-of-band stations stay out either way. */
+inline constexpr double kPassMinWidthHz = 500000.0;
+/** Half the filter width a pass needs around `rfHz`: what the regions need, and never under kPassMinWidthHz. 0 = no pass. */
+inline double halfForPass(const std::vector<Region>& rs, double rfHz) {
+    if (rs.empty()) return 0.0;
+    return std::max(0.5 * kPassMinWidthHz, halfNeeded(rs, rfHz));
+}
 /** The narrowest rung ≥ widthHz from an ascending list; 0 when none is (or none is narrower than `captureHz`). */
 inline int narrowestRung(double widthHz, const std::vector<int>& rungs, double captureHz) {
     for (int r : rungs) {

@@ -6037,7 +6037,7 @@ static void vsRspSatIf(SdrplaySource* sdrp, double rfHz, double rate) {
     if (g_satIfOn.load(std::memory_order_relaxed)) rs = vsSatIfRegions();
     const int rateK = SdrplaySource::bandwidthKHzForRate(rate);
     if (!rs.empty() && !sdrp->dabDecimation())
-        want = vibesatif::narrowestRung(2.0 * vibesatif::halfNeeded(rs, rfHz), vibesatif::rspRungs(), rateK * 1000.0) / 1000;
+        want = vibesatif::narrowestRung(2.0 * vibesatif::halfForPass(rs, rfHz), vibesatif::rspRungs(), rateK * 1000.0) / 1000;
     const int had = sdrp->ifBandwidthOverrideKHz();
     if (want == had) return;
     const int from = sdrp->ifBandwidthKHzNow();
@@ -8846,7 +8846,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                                                                         : std::vector<vibesatif::Region>{};
         const bool satPass = !satRs.empty();
         if (satPass) {
-            half = std::max(half, vibesatif::halfNeeded(satRs, rf));
+            half = std::max(half, vibesatif::halfForPass(satRs, rf));
             if (!vsSharedDial())
                 for (auto& pr : allSpecPeers()) {
                     auto c = dspFor(pr.sock);
@@ -12134,6 +12134,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool room = kv.first == kSatShared;
             consider("pick:" + kv.first + ":" + std::to_string(kv.second.norad) + ":" + std::to_string(kv.second.tx),
                      kv.second.norad, kv.second.tx, room ? std::string() : kv.second.owner, room ? rxBwHz : 0.0);
+        }
+        /* ★★ beta93 a downlink open in VFO B is held by the filter too (Stuart 11-24: "satellites with beacons and
+         *  transponders on 2 vfo's will need a wider filter") — beta92 sized it for the picked downlink alone. */
+        std::vector<SatVfoB> vbs;
+        { std::lock_guard<std::mutex> lk(satVfoBMtx_); for (auto& kv : satVfoB_) vbs.push_back(kv.second); }
+        for (const auto& b : vbs) {
+            if (b.norad <= 0 || b.tx < 0) continue;
+            const bool room = b.pickKey == kSatShared;
+            consider("vfob:" + b.pickKey + ":" + std::to_string(b.norad) + ":" + std::to_string(b.tx), b.norad, b.tx,
+                     room ? std::string() : b.pickKey, 0.0);
         }
         for (auto it = satIfWatch_.begin(); it != satIfWatch_.end();) it = live.count(it->first) ? std::next(it) : satIfWatch_.erase(it);
         bool changed;
