@@ -1611,6 +1611,13 @@ async function serveBySlug(host, request, env) {
   //     expensive bytes still never cross this Worker and we are still not anybody's transit
   //     provider — the thing this design has refused from the start. What crosses is a page, some
   //     script, and a few small JSON reads.
+  // ★★★ beta93 (Stuart 2026-11-24, after one page's DX Log poll spent the account's whole Workers allowance and took
+  //     every tunnel down): "they should only establish the connection". A beta93+ page now sends EVERY HTTP read after
+  //     the document straight to the tunnel too (web/client/src/origin.ts dataUrl; the receiver answers CORS for these
+  //     origins, vibe_cors.h), and its scripts when the receiver's policy allows (vibe-direct-assets below). So for a
+  //     beta93+ server this Worker carries the document, the browser's same-origin furniture, and a rate-limited
+  //     vibeserver.json when a page re-learns a rotated tunnel. Older servers' pages still read everything through here,
+  //     so nothing is refused — the log line's `slug` class (slugClass) counts what is still "legacy".
   //
   // ★★ A WebSocket upgrade must never be proxied here: the page is told to dial the tunnel itself
   //    (see __VIBE_DIRECT_HOST__ below), so an upgrade arriving at this Worker means something has
@@ -1648,6 +1655,10 @@ async function serveBySlug(host, request, env) {
   //     ("VibeServer directory visitor (via Cloudflare)") instead of drawing a lurker. It believes
   //     this header only from Cloudflare's Worker range, so nobody can relabel themselves with it.
   fwd.set('x-vibesdr-via', 'directory');
+  /* ★★ beta93 — AND WHICH HOST IS THE RECEIVER'S OWN. A beta93+ server adds it to the page's Content-Security-Policy
+   *    (script/style/media/font) so the page may load its scripts straight from the tunnel, not through us
+   *    (local_sdr_shim.cpp, vibe_cors.h cspDirect). An older server ignores the header. */
+  fwd.set('x-vibesdr-direct-host', new URL(origin).host);
   /* ★★★ NO CREDENTIALS OF OURS GO TO SOMEBODY ELSE'S BOX (security audit, 2026-10-03). Every
    *     <slug>.vibeserver.vibesdr.net is one SITE with the directory, so a browser sends this
    *     proxied request any cookie scoped to .vibesdr.net / vibeserver.vibesdr.net — the portable
@@ -1799,11 +1810,28 @@ async function serveBySlug(host, request, env) {
   } catch (e) {
     console.warn('slug: no lan lookup', String((e && e.message) || e).slice(0, 120));
   }
-  const inject = `<meta name="vibe-direct-host" content="${direct.replace(/[^A-Za-z0-9.:\[\]-]/g, '')}">` + lanMeta
+  /* ★★★ beta93 — THE SCRIPTS MAY COME FROM THE RECEIVER TOO, but only when ITS policy says so. A beta93+ server names
+   *     its own host in the page's Content-Security-Policy when we proxied the request (the x-vibesdr-direct-host
+   *     above); then <meta name="vibe-direct-assets"> tells the page's loader (scripts/build-web.mjs) to fetch /vs/
+   *     from there. An older server's policy does not name it, so no meta, and its page loads everything from here
+   *     exactly as before — a newer directory can never break an older server's page. */
+  const safeDirect = direct.replace(/[^A-Za-z0-9.:\[\]-]/g, '');
+  const csp = res.headers.get('content-security-policy') || '';
+  const scriptSrc = (/(?:^|;)\s*script-src([^;]*)/i.exec(csp) || [])[1] || '';
+  const assetsOk = scriptSrc.toLowerCase().split(/\s+/).includes(`https://${direct}`.toLowerCase());
+  const assetsMeta = assetsOk ? `<meta name="vibe-direct-assets" content="${safeDirect}">` : '';
+  const inject = `<meta name="vibe-direct-host" content="${safeDirect}">` + assetsMeta + lanMeta
                + `<script>window.__VIBE_DIRECT_HOST__=${JSON.stringify(direct).replace(/</g, '\\u003c')};</script>`;
-  const out = html.includes('</head>')
-    ? html.replace('</head>', inject + '</head>')
-    : inject + html;
+  /* ★★ AT THE TOP OF THE HEAD (beta93), right after <meta charset>: the page's head loader reads vibe-direct-assets
+   *    before the preloads are wanted. A page that does not start with the charset meta (an older one, a stranger's)
+   *    gets it before </head> as it always has — origin.ts reads the host whenever it runs, either way. */
+  const CHARSET = '<meta charset="utf-8">';
+  const at = html.indexOf(CHARSET);
+  const out = at !== -1 && at < 512
+    ? html.slice(0, at + CHARSET.length) + inject + html.slice(at + CHARSET.length)
+    : html.includes('</head>')
+      ? html.replace('</head>', inject + '</head>')
+      : inject + html;
 
   const headers = upHeaders;
   // ★ The document must not be cached: the host it names changes when the tunnel restarts.
@@ -1976,6 +2004,25 @@ function withSecurityHeaders(res, pathname) {
   return out;
 }
 
+/* ★★★ beta93 — WHAT A SLUG REQUEST WAS, FOR COUNTING (Stuart 2026-11-24: Workers allowance gone to one page's DX Log
+ *     poll). A beta93+ page asks this Worker for its DOCUMENT and nothing else: every read after that goes straight to
+ *     the receiver's tunnel (web/client/src/origin.ts), its scripts too when the receiver allows it. What is left here:
+ *       · doc       — the page itself (the stable origin is why we proxy at all: localStorage).
+ *       · status    — /vibeserver.json: the directory page's live counts, the apps' first read (they learn directHost
+ *                     from it), and a beta93 page re-learning a tunnel that rotated (rate-limited, origin.ts).
+ *       · furniture — the browser's own same-origin fetches: the service worker (must be same-origin), the manifest,
+ *                     the icons. Once a visit, cached.
+ *       · legacy    — EVERYTHING ELSE: a beta92-or-older server's page reading through us. Not refused (it would break
+ *                     those servers); counted, so `slug:"legacy"` in Workers Logs shows when they have gone and this
+ *                     Worker can stop proxying anything but the document.
+ *  ★ Only the class goes in the log — never a query string (see the note below). */
+function slugClass(request, path) {
+  if (/^\/(r\/[^/]+\/)?vibeserver\.json$/.test(path)) return 'status';
+  if (/^\/(r\/[^/]+\/)?(sw\.js|manifest\.webmanifest|favicon[^/]*|apple-touch-icon[^/]*|icon-(192|512)\.png)$/.test(path)) return 'furniture';
+  if (wantsPage(request, path) || ((request.method === 'GET' || request.method === 'HEAD') && /^\/r\/[^/]+\/?(index\.html)?$/.test(path))) return 'doc';
+  return 'legacy';
+}
+
 export default {
   /* ★★★ THE REQUEST LOG CARRIES NO QUERY STRING (security audit, 2026-10-03). Proxied receiver
    *     requests carry credentials in their query (vs_nonce + vs_auth, a reusable hour-long session
@@ -1993,6 +2040,7 @@ export default {
         const u = new URL(request.url);
         console.log(JSON.stringify({
           req: request.method, host: u.hostname, path: u.pathname.slice(0, 200),
+          ...(u.hostname.toLowerCase().endsWith('.' + PUBLIC_ZONE) ? { slug: slugClass(request, u.pathname) } : {}),
           status: res ? res.status : 500, ms: Date.now() - t0,
           country: (request.cf && request.cf.country) || '', ...(err ? { error: String(err).slice(0, 200) } : {}),
         }));
