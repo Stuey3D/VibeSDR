@@ -94,6 +94,47 @@ static Res viaTap(const std::vector<std::complex<float>>& x, double fs, double d
     return res;
 }
 
+/** ★★ THE BAND PICK ON A ONE-PIPELINE RADIO WITH THE PASS'S DOPPLER STEPS (the XCover, 2026-11-24: a 640 kHz band pick opened
+ *  nothing while a 40 kHz one decoded). Every second the satellite lock moves the dial by the Doppler step and the hardware
+ *  LO follows it (the worst case: the capture itself shifts, as a retune does) — the tap re-plans, the slice's centre moves.
+ *  Decoding must keep flowing all through and both carriers lock. */
+static Res viaTapSteps(const std::vector<std::complex<float>>& x0, double fs, double widthHz, double stepHz) {
+    vibe::WideTap tap;
+    Receiver::Cfg cfg; cfg.windowHz = std::max(10000.0, widthHz / 2); Receiver r(cfg);
+    Res res; double t = 0; int sec = 0; std::vector<int> perSec(200, 0);
+    r.onPacket = [&](const Rx& p) { if (!p.p.ok) return; if (sec < 200) perSec[size_t(sec)]++; if (std::fabs(p.rfHz - 137.6625e6) < 6000) res.ok137662++; if (std::fabs(p.rfHz - 137.800e6) < 6000) res.ok137800++; };
+    tap.start(vibe::WideTap::BandSink([&](const cf32* s, int k, double rate, double centre, const float*, int, double, double, int slice) {
+        if (slice != 0 || !s) return;
+        r.feed(reinterpret_cast<const std::complex<float>*>(s), k, rate, centre, t); t += k / rate;
+    }));
+    vibe::WideTap::Geometry g;
+    g.sampleRate = fs; g.hwCentreHz = 137.5e6; g.wantCentreHz = 137.5e6; g.widthHz = std::min(widthHz, fs * 0.8); g.fftSize = fftSizeForRate(fs); g.band = true;
+    tap.aim(g);
+    std::vector<std::complex<float>> buf(8192);
+    double lo = 0, ph = 0;   // the LO's move from 137.5 MHz: the capture is the RF seen from the moved LO
+    for (size_t i = 0; i < x0.size(); i += 8192) {
+        const int n = int(std::min<size_t>(8192, x0.size() - i));
+        const int nowSec = int(double(i) / fs);
+        if (nowSec != sec) {   // the lock's step: dial and LO move together
+            sec = nowSec; lo += stepHz;
+            while (tap.queuedSamples() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            g.hwCentreHz = 137.5e6 + lo; g.wantCentreHz = 137.5e6 + lo; tap.aim(g);
+        }
+        const double w = -2 * M_PI * lo / fs;
+        for (int k = 0; k < n; k++) { buf[size_t(k)] = x0[i + size_t(k)] * std::complex<float>(float(std::cos(ph)), float(std::sin(ph))); ph += w; }
+        ph = std::fmod(ph, 2 * M_PI);
+        tap.feed(reinterpret_cast<const cf32*>(buf.data()), n, 1.0e9 + double(i) / fs);
+        while (tap.queuedSamples() > size_t(fs * 0.2)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    while (tap.queuedSamples() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    tap.stop();
+    int quiet = 0;   // whole seconds after the first 3 with no packet at all
+    for (int k = 3; k < sec; k++) if (perSec[size_t(k)] == 0) quiet++;
+    res.after = quiet;
+    return res;
+}
+
 int main(int argc, char** argv) {
     const bool quick = argc > 1 && std::string(argv[1]) == "--quick";
     const int frames = quick ? 8 : 12;
@@ -113,6 +154,14 @@ int main(int argc, char** argv) {
                 if (holds800) CHECK(a.ok137800 > need && b.ok137800 > need, "%.0f k scale %g dial %.3f: 137.800 (+3 kHz) decodes (shared %d, tap %d)", fs / 1000, scale, dial / 1e6, a.ok137800, b.ok137800);
             }
         }
+    }
+    {   // ★★ a band pick (640 kHz) at 912 kS/s, one-pipeline, the dial + LO stepping by the Doppler every second
+        const int secs = quick ? 12 : 30;
+        auto x = capture(912000, 137.5e6, 1e-4, secs);
+        const Res st = viaTapSteps(x, 912000, width, -30);
+        std::printf("   912 kS/s band pick, LO + dial stepping \u221230 Hz/s: 137.6625 %d / 137.800 %d packets, %d silent seconds\n", st.ok137662, st.ok137800, st.after);
+        CHECK(st.ok137662 > secs * 50 * 2 / 3 && st.ok137800 > secs * 50 * 2 / 3, "band pick with Doppler steps: both carriers decode (%d / %d)", st.ok137662, st.ok137800);
+        CHECK(st.after == 0, "IQ keeps flowing: no silent second after the first 3 (%d)", st.after);
     }
     // ★★ A MANUAL DIAL MOVE MID-PICK (Stuart tuned to 137.800 by hand): the slice follows the dial; decoding must go on
     for (double fs : { 912000.0, 1024000.0 }) {

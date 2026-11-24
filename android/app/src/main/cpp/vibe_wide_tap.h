@@ -256,7 +256,15 @@ private:
             if (same) return D > 1;
             kRate = g.sampleRate; kHw = g.hwCentreHz; kWant = g.wantCentreHz; kFft = g.fftSize; kN = g.nExtras;
             for (int k = 0; k < g.nExtras; ++k) { kX[2 * k] = g.extras[k].centreHz; kX[2 * k + 1] = g.extras[k].widthHz; }
+            /* ★★ V12 2026-11-24 (an ORBCOMM band pick on the XCover's HF+, the satellite lock moving the dial every second): every
+             *  re-plan bumped `gen`, and a new gen REBUILDS the channeliser — so a slice that needs no front end at all (D 1, the
+             *  whole capture transformed) lost its overlap and its phase once a second for nothing: a third of its packets, whole
+             *  seconds silent (test-orbcomm-slice). With no front end before and none after, the channeliser does not depend on
+             *  where the slice is — the generation is kept. */
+            const bool wasPlain = D == 1 && st.empty();
+            const int oldGen = gen;
             ++gen; D = 1; st.clear();
+            struct KeepGen { int& gen; int old; bool keep; int& D; ~KeepGen() { if (keep && D == 1) gen = old; } } keepGen{ gen, oldGen, wasPlain, D };
             const double fs = g.sampleRate, binHz = fs / g.fftSize;
             // the slices this capture holds: their extents and their bin counts
             const int mb = bandSliceBins(fs, g.fftSize, g.widthHz);
