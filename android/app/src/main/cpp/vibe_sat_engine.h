@@ -316,11 +316,18 @@ inline std::string listenModeOf(const Transmitter& t) {
  *  with the decoder's centre in the middle (3800 Hz) and its hunt ±2600 Hz — the signal's own ±0.9 kHz plus ±2.5 kHz
  *  of prediction error fits. The dial sits kTlmCentreHz below the downlink. Once the decoder is locked, its measured
  *  offset becomes the lock's TRIM (Engine::setDecoderTrim), so the channel follows the real signal back to the centre
- *  ("a wider usb passband and audio correction too that way it compensates for transmitter drift too"). */
-constexpr double kTlmCentreHz = 3800.0;   ///< the decoder's audio centre on a telemetry pick
-constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt either side (vibebpsk::RxCfg::afcRangeHz)
+ *  ("a wider usb passband and audio correction too that way it compensates for transmitter drift too").
+ * ★★★ beta93 (11-24) THE CARRIER AT 1.5 kHz, NOT 3.8 (Stuart: the pick's telemetry "sounds thin and high-pitched"; tuned
+ *  by hand it sounded fuller). The dial now sits 1500 Hz below the downlink, so the BPSK lands where a hand-tuned USB
+ *  signal does, and the passband stops at 5 kHz (the hunt's top, 1500 + 2600, plus the signal's own ~0.9 kHz). The hunt
+ *  keeps its 2.6 kHz UPWARDS; downwards it now reaches 1.2 kHz (a carrier at 300 Hz — vibebpsk::RxCfg::minCarrierHz:
+ *  below 0 Hz there is no USB audio, and the window must not hold the carrier's mirror). On air so far the bird has
+ *  been +1.3 kHz (11-23) and −0.6 kHz (11-24) from the prediction — both inside. A signal more than ~1.2 kHz BELOW the
+ *  prediction is no longer found (at 3800 it was, to −2.6 kHz): the trade for a natural-sounding pick. */
+constexpr double kTlmCentreHz = 1500.0;   ///< the decoder's audio centre on a telemetry pick (the carrier lands here)
+constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt (vibebpsk::RxCfg::afcRangeHz) — up 2600, down to a 300 Hz carrier
 constexpr double kTlmAudioLoHz = 100.0;   ///< the USB passband a telemetry pick listens with (the clients' edges)
-constexpr double kTlmAudioHiHz = 7600.0;
+constexpr double kTlmAudioHiHz = 5000.0;
 /** ★★ beta92: a downlink whose pick runs the BPSK telemetry decoder on the wide passband (FUNcube "fc-bpsk" — the one
  *  BPSK telemetry format we decode; Fox "fox-bpsk" is heard, not decoded, so it keeps the voice passband). */
 inline bool tlmWide(const Transmitter& t) { return t.consumer == "fc-bpsk" && t.mode == "usb"; }

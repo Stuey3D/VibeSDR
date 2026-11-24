@@ -19,12 +19,14 @@ struct Cfg {
     double carrierHz = 1200;      ///< where the signal sits in the audio
     double offsetHz = 0;          ///< a residual the receiver must find
     double rampHzS = 0;           ///< Doppler residual slope
-    double clockPpm = 0;          ///< the satellite's symbol clock error
+    double clockPpm = 0;          ///< the satellite's symbol clock error (+ = slower). ★ AO-73 on air: −1400 (1201.6 Bd)
     double phase = 0.3;           ///< carrier start phase (rad)
     double ebn0Db = 99;           ///< noise: Eb/N0 in the 2.4 kHz audio (99 = none)
     double amp = 0.3;
     bool differential = true;     ///< AO-40's differential code before the modulator
-    bool invertBits = false;      ///< the other polarity convention
+    /** ★★★ 11-24 ON AIR: AO-73 sends a 1 as NO phase change (the framer's differential-inverted form). true = as the
+     *  satellite does; false = the other convention (the framer tries both). */
+    bool invertBits = true;
     double gapSym = 800;          ///< symbols between frames (5 s period − 5200 symbols at 1200 Bd)
     uint32_t seed = 1;
 };
@@ -85,7 +87,7 @@ inline std::vector<float> modulate(const std::vector<std::vector<uint8_t>>& fram
     return out;
 }
 
-/** A plausible real-time frame for the tests: satellite id 2 (FUNcube-1), frame type `type`, fields filled. */
+/** A plausible real-time frame for the tests: satellite id 2 (FUNcube-1), frame type `type` (0–23, WO1 = 0), fields filled. */
 inline std::vector<uint8_t> sampleFrame(int type, uint32_t seq, const char* fitter = nullptr) {
     std::vector<uint8_t> d(kDataBytes, 0);
     size_t pos = 0;

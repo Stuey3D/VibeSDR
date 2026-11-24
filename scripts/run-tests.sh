@@ -317,7 +317,8 @@ flags_for() {
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
     test-sat-orbit|test-sat-engine|test-sat-labels|test-sat-if) echo "-O2 -lpthread" ;;   # ★ beta91 test-sat-labels: the waterfall's satellite labels
     # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
-    #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
+    #   from our own transmitter, SIMD = scalar, the values; ★★★ §10 the REAL signal (test/fixtures/funcube/, AO-73 on air
+    #   2026-11-24, 23.5 s of the Pi 500 V4L decoder input — it decoded nothing live). -O2: ~4 s.
     test-fctlm)            echo "-O2" ;;
     # ★ V12 ORBCOMM (vibe_orbcomm.h, docs/v12/ORBCOMM.md): Kenny's published packets, the receiver on synthetic SDPSK
     #   (offsets, Doppler slope, clock error, two carriers, noise), and a synthetic pass end to end through the run + the

@@ -505,9 +505,9 @@ static void s12(const std::string& dir) {
     CHECK(e->txAt(44881, 0, sd, tx) && tx.passband() && tx.hz == 145915000 && tx.hiHz == 145935000 && bandOf(tx) == "U/v", "TO-108 (CAS-6) U/v 145.915–145.935");
     // ★★★ beta92 THE WIDE TELEMETRY PICK (Stuart 11-23: AO-73 1.3 kHz above the prediction, 0 frames at the 1200 Hz centre)
     CHECK(e->txAt(39444, 1, sd, tx) && tx.consumer == "fc-bpsk" && tlmWide(tx) && decoderOf(tx, p) == "fctlm"
-          && p == "\"centre\":3800,\"afc_range\":2600", "AO-73: fc-bpsk → fctlm at centre 3800, hunting ±2600 (%s)", p.c_str());
-    CHECK(tuneHzOf(tx) == 145935000 - 3800 && listenModeOf(tx) == "usb" && kTlmAudioLoHz == 100 && kTlmAudioHiHz == 7600,
-          "…the dial 3800 Hz below the downlink, USB 100–7600 Hz (%.0f)", tuneHzOf(tx));
+          && p == "\"centre\":1500,\"afc_range\":2600", "AO-73: fc-bpsk → fctlm at centre 1500 (beta93; 3800 in beta92), hunting ±2600 (%s)", p.c_str());
+    CHECK(tuneHzOf(tx) == 145935000 - 1500 && listenModeOf(tx) == "usb" && kTlmAudioLoHz == 100 && kTlmAudioHiHz == 5000,
+          "…the dial 1500 Hz below the downlink, USB 100–5000 Hz (%.0f)", tuneHzOf(tx));
     CHECK(e->txAt(60209, 1, sd, tx) && tx.consumer == "fox-bpsk" && decoderOf(tx, p).empty() && !tlmWide(tx) && listenOffsetHz(tx) == 0,
           "MO-122: fox-bpsk, no FUNcube decoder (and so not the wide telemetry pick)");
     // ★★ beta92 a CW beacon pick runs the CW SKIMMER over 24 kHz (Stuart's RS-44 pass 11-23: the beacon ~2 kHz off the figure)
@@ -560,8 +560,8 @@ static void s12(const std::string& dir) {
         if (ps && ps->t == json::Value::Arr && !ps->a.empty()) { aAos = ps->a[0].num("aos"); aLos = ps->a[0].num("los"); }
         CHECK(aLos > aAos + 120, "an AO-73 pass (%.0f s)", aLos - aAos);
         const double ta = aAos + 60;
-        Track tt = e->start("TL", "o", 145931200, "usb", Clock{ta, true}, 39444, 1);
-        CHECK(tt.state == LockState::Track && tt.nominalHz == 145935000 - kTlmCentreHz, "AO-73 telemetry locked, the nominal at downlink − 3800 (%.0f)", tt.nominalHz);
+        Track tt = e->start("TL", "o", 145933500, "usb", Clock{ta, true}, 39444, 1);
+        CHECK(tt.state == LockState::Track && tt.nominalHz == 145935000 - kTlmCentreHz, "AO-73 telemetry locked, the nominal at downlink − 1500 (%.0f)", tt.nominalHz);
         double ap = -1, tg = -1;
         CHECK(e->decoderTrim("TL", ap, tg) && ap == 0 && tg == 0, "the decoder's trim: 0, nothing asked");
         CHECK(e->setDecoderTrim("TL", 1300) && e->decoderTrim("TL", ap, tg) && tg == 1300 && ap == 0, "asked +1300: the target set, the channel not moved yet");

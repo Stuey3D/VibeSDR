@@ -13,6 +13,10 @@
 //      passband — the OLD pick (1200 Hz centre, ±900 Hz hunt, 2.65 kHz USB) against the NEW one (3800 Hz, ±2600 Hz,
 //      7.5 kHz), and the trim the locked decoder steers (vibefc::TrimFollow) converging without ringing.
 //   §9 ★ noise at the wide range: no frame, and the follow never moves the trim
+//   §10 ★★★ THE REAL SIGNAL (2026-11-24): 23.5 s of AO-73 as the Pi 500's decoder heard it, which decoded NOTHING live —
+//      the satellite's clock is ~1400 ppm fast (the timing loop now integrates), a 1 is no phase change (the test
+//      transmitter's default now), the frame type counts 0–23. Frames, their schedule, sane values, the learnt clock.
+//      ★★ beta93: the same air moved as the 1500 Hz pick hears it (dial shifted in the test) — the frames hold.
 // Silent: no audio device. `--quick` shortens §3/§4.
 #include "vibe_fctlm_tx.h"
 #include "vibe_sat_orbit.h"   // its json:: parser (for the §6 checks)
@@ -47,7 +51,7 @@ static void s2() {
     std::printf("§2 the FEC: our encoder → the decoder\n");
     std::mt19937 rng(7);
     int ok = 0, bitOk = 0;
-    for (int t = 1; t <= 24; ++t) {
+    for (int t = 0; t < 24; ++t) {
         std::vector<uint8_t> f = tx::sampleFrame(t, 100 + t);
         uint8_t ch[kSyms]; encodeFrame(f.data(), ch);
         int8_t soft[kSyms]; for (int i = 0; i < kSyms; ++i) soft[i] = ch[i] ? 40 : -40;
@@ -59,7 +63,7 @@ static void s2() {
     // symbol errors: 6 % hard flips (Viterbi territory) + soft noise
     int good = 0;
     for (int k = 0; k < 20; ++k) {
-        std::vector<uint8_t> f = tx::sampleFrame(1 + k % 24, k);
+        std::vector<uint8_t> f = tx::sampleFrame(k % 24, k);
         uint8_t ch[kSyms]; encodeFrame(f.data(), ch);
         int8_t soft[kSyms];
         std::normal_distribution<double> g(0, 1);
@@ -115,7 +119,7 @@ static void s3() {
 struct Result { int good = 0; uint64_t syncs = 0, failed = 0; double afc = 0; };
 static Result runChain(const tx::Cfg& tc, int nFrames, bool invertRx = false, bool forceScalar = false, std::vector<float>* symsOut = nullptr, size_t blk = 4800) {
     std::vector<std::vector<uint8_t>> fr;
-    for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(1 + i % 24, 1000 + (uint32_t)i));
+    for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(i % 24, 1000 + (uint32_t)i));
     std::vector<float> audio = tx::modulate(fr, tc);
     vibebpsk::Rx::Cfg c;
     Result r;
@@ -148,10 +152,17 @@ static void s4() {
     c.offsetHz = 350; c.rampHzS = 8; c.clockPpm = 60; c.phase = 2.1; c.ebn0Db = 14;
     r = runChain(c, nf);
     CHECK(r.good >= nf - 1, "+350 Hz off, an 8 Hz/s Doppler ramp, 60 ppm clock, Eb/N0 14 dB: %d / %d (AFC %.0f Hz)", r.good, nf, r.afc);
-    c.offsetHz = -500; c.rampHzS = -6; c.invertBits = true;
+    c.offsetHz = -500; c.rampHzS = -6; c.invertBits = false;   // ★ the air's is true (a 1 = no phase change)
     r = runChain(c, nf);
     CHECK(r.good >= nf - 1, "−500 Hz, the other polarity: %d / %d (AFC %.0f Hz)", r.good, nf, r.afc);
-    c.differential = false; c.offsetHz = 120; c.invertBits = false;
+    /* ★★★ 11-24 THE SATELLITE'S CLOCK: AO-73 sends ~1201.6 Bd (−1400 ppm here: a shorter symbol). The proportional-only
+     *  timing loop held ±800 ppm and slipped all pass (0 syncs on a 12 dB signal). Both signs, and well past it. */
+    for (double ppm : {-1400.0, 1400.0, -3000.0}) {
+        tx::Cfg k; k.offsetHz = 150; k.clockPpm = ppm; k.ebn0Db = 12; k.seed = 77;
+        Result q = runChain(k, nf, false, false, nullptr, 960);
+        CHECK(q.good >= nf - 1, "the symbol clock %+.0f ppm (%.1f Bd), 20 ms blocks, Eb/N0 12 dB: %d / %d", ppm, 1200.0 / (1.0 + ppm * 1e-6), q.good, nf);
+    }
+    c.differential = false; c.offsetHz = 120; c.invertBits = false; c.clockPpm = 60;
     r = runChain(c, nf);
     CHECK(r.good >= nf - 1, "no differential code (coherent form): %d / %d", r.good, nf);
     std::printf("   frame rate against Eb/N0 (offset +200 Hz, 4 Hz/s ramp, 30 ppm):\n");
@@ -178,9 +189,11 @@ static void s5() {
 using vibe::sat::json::Value; namespace json = vibe::sat::json;
 static void s6() {
     std::printf("§6 the values and the JSON\n");
-    std::vector<uint8_t> f = tx::sampleFrame(14, 0x123456, "HELLO FROM THE TEST\x01");
+    std::vector<uint8_t> f = tx::sampleFrame(13, 0x123456, "HELLO FROM THE TEST\x01");
     Decoded d = parse(f.data());
-    CHECK(d.satId == 2 && d.frameType == 14 && d.frameName == "FM1", "FUNcube-1, FM1");
+    CHECK(d.satId == 2 && d.frameType == 13 && d.frameName == "FM1", "FUNcube-1, type 13 = FM1 (the air counts 0–23, WO1 = 0)");
+    CHECK(frameName(0) == "WO1" && frameName(11) == "WO12" && frameName(12) == "HR1" && frameName(16) == "HR2" && frameName(20) == "HR3"
+          && frameName(23) == "FM9" && frameName(24) == "type 24", "the schedule 0–23: WO1–12, HR1, FM1–3, HR2, FM4–6, HR3, FM7–9");
     CHECK(d.seq == 0x123456 && d.mode == "Eclipse", "sequence %lld, mode %s", d.seq, d.mode.c_str());
     CHECK(d.values.size() == 58 && d.values[4].key == "eps.vbat" && d.values[4].v == 1444 && d.values[4].raw, "58 values; battery voltage raw 1444");
     CHECK(d.values[6].key == "eps.reboots" && !d.values[6].raw, "a count is exact, not raw");
@@ -191,8 +204,16 @@ static void s6() {
     const json::Value* dd = v.get("data");
     CHECK(dd && dd->str("sat") == "AO-73" && dd->str("format") == "funcube-rt" && dd->num("seq") == 0x123456 && dd->get("values")
           && dd->get("values")->a.size() == 58 && dd->str("hex").size() == 512, "the contract's fields");
-    Decoded w = parse(tx::sampleFrame(3, 9).data());
+    Decoded w = parse(tx::sampleFrame(2, 9).data());
     CHECK(w.fitter.empty() && w.frameName == "WO3", "a whole-orbit frame carries no fitter text");
+    // ★★ 11-24 on air: an empty slot is "..", and FM9 carries binary — neither is a message
+    Decoded e = parse(tx::sampleFrame(21, 9, "..").data());
+    CHECK(e.frameName == "FM7" && e.fitter.empty(), "an empty fitter slot (\"..\") shows nothing");
+    std::vector<uint8_t> bin = tx::sampleFrame(23, 9);
+    const uint8_t air[] = {0xff, 0x0e, 0x09, 0xff, 0xff, 0xff, 0x00};   // FM9's payload as AO-73 sent it 11-24
+    std::memcpy(&bin[56], air, sizeof air);
+    Decoded b9 = parse(bin.data());
+    CHECK(b9.frameName == "FM9" && b9.fitter.empty(), "binary in a fitter slot is not shown as text (%s)", b9.fitter.c_str());
 }
 
 static void s7() {
@@ -214,7 +235,7 @@ static void s7() {
 /** The pick's listening setup (old or new). */
 struct Pick { double centre, range, bw; const char* name; };
 static const Pick kOld{1200, 900, 2650, "OLD 1200 Hz / ±900 Hz / 2.65 kHz USB"};
-static const Pick kNew{vibe::sat::kTlmCentreHz, vibe::sat::kTlmAfcHz, vibe::sat::kTlmAudioHiHz - vibe::sat::kTlmAudioLoHz, "NEW 3800 Hz / ±2600 Hz / 7.5 kHz USB"};
+static const Pick kNew{vibe::sat::kTlmCentreHz, vibe::sat::kTlmAfcHz, vibe::sat::kTlmAudioHiHz - vibe::sat::kTlmAudioLoHz, "NEW 1500 Hz / +2600 −900 Hz / 4.9 kHz USB"};
 /** A USB demodulator with a 0..bw passband: x (real, the "RF" at 48 kHz) × e^{−jφ_LO}, then only 0..bw kept (a complex
  *  band-pass: shift by −bw/2, low-pass at bw/2, shift back) — what the server's SsbDemod does. The LO's frequency is
  *  set per block (the dial + the trim): phase-continuous. */
@@ -251,7 +272,7 @@ static constexpr double kPredHz = 12000;   // the prediction, as an "RF" tone in
  *  steers the trim (the new pick's behaviour); otherwise the channel stays on the prediction. */
 static PassResult pass(const Pick& pk, double errHz, double driftHzS, int nFrames, bool follow, double ebn0 = 14, uint32_t seed = 5) {
     std::vector<std::vector<uint8_t>> fr;
-    for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(1 + i % 24, 2000 + (uint32_t)i));
+    for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(i % 24, 2000 + (uint32_t)i));
     tx::Cfg tc; tc.carrierHz = kPredHz; tc.offsetHz = errHz; tc.rampHzS = driftHzS; tc.ebn0Db = ebn0; tc.seed = seed;
     const std::vector<float> rf = tx::modulate(fr, tc);
     UsbChannel ch(pk.bw);
@@ -302,11 +323,16 @@ static void s8() {
     std::printf("§8 ★★★ the wide search and the drift follow (beta92 — AO-73 1.3 kHz above the prediction)\n");
     const int nf = g_quick ? 12 : 24;
     struct Case { double err, drift; const char* what; };
-    const Case cases[] = { {1300, 0, "+1.3 kHz (Stuart's 11-23 pass)"}, {-2000, 0, "−2.0 kHz"} };
+    /* ★★ beta93 the carrier at 1500 Hz (Stuart: 3800 "sounds thin and high-pitched"): below the centre the hunt now reaches
+     *  a 300 Hz carrier (−1200) — −2.0 kHz (beta92's case) would be below 0 Hz in USB audio. −0.8 kHz: a 700 Hz carrier,
+     *  its mirror at −700 Hz, never taken (the trim converges to −800, not to the mirror). The 11-24 pass was −0.6. */
+    const Case cases[] = { {1300, 0, "+1.3 kHz (Stuart's 11-23 pass)"}, {-800, 0, "−0.8 kHz (11-24 was −0.6)"} };
     for (const Case& c : cases) {
         PassResult o = pass(kOld, c.err, c.drift, nf, false);
-        CHECK(o.good == 0, "%s on the %s pick: %d / %d frames", c.what, kOld.name, o.good, nf);
         PassResult w = pass(kNew, c.err, c.drift, nf, false);
+        // ★ beta93: −0.8 kHz is inside the old pick's reach too (a 400 Hz carrier) — only +1.3 kHz was ever out of it
+        if (c.err > 0) CHECK(o.good == 0, "%s on the %s pick: %d / %d frames", c.what, kOld.name, o.good, nf);
+        else std::printf("     (%s on the %s pick: %d / %d — inside its reach)\n", c.what, kOld.name, o.good, nf);
         CHECK(w.good >= nf - 2, "%s on the %s pick, no follow: %d / %d frames (AFC %+.0f Hz)", c.what, kNew.name, w.good, nf, w.afc);
         PassResult f = pass(kNew, c.err, c.drift, nf, true);
         CHECK(f.good >= nf - 2, "%s, following: %d / %d frames", c.what, f.good, nf);
@@ -316,6 +342,18 @@ static void s8() {
         CHECK(f.moves >= 1 && f.moves <= 3 && f.reversals == 0 && f.maxOver < 120,
               "  no ringing: %d move(s), %d reversal(s), overshoot %.0f Hz", f.moves, f.reversals, f.maxOver);
         if (!f.log.empty()) std::printf("     log: %s\n", f.log.c_str());
+    }
+    {   // ★★ beta93 ON the prediction: the carrier at 1500 Hz in the audio, the AFC at ~0 from the start
+        PassResult z = pass(kNew, 0, 0, nf, false);
+        CHECK(z.good >= nf - 1 && std::fabs(z.afc) < 40, "on the prediction, the NEW pick: %d / %d frames, the carrier at %.0f Hz audio (AFC %+.0f)",
+              z.good, nf, kNew.centre + z.afc, z.afc);
+        PassResult b = pass(kNew, -1000, 0, nf, false);
+        CHECK(b.good >= nf - 2, "−1.0 kHz (a 500 Hz carrier, low in the audio): %d / %d frames (AFC %+.0f)", b.good, nf, b.afc);
+        vibebpsk::Rx::Cfg rc; rc.centreHz = kNew.centre; rc.afcRangeHz = kNew.range;
+        vibebpsk::Rx rx(rc);
+        CHECK(rx.afcLoHz() == -1200 && rx.afcHiHz() == 2600, "the NEW pick's search window: %+.0f … %+.0f Hz (a carrier from 300 to 4100 Hz)", rx.afcLoHz(), rx.afcHiHz());
+        vibebpsk::Rx::Cfg hc; vibebpsk::Rx hand(hc);
+        CHECK(hand.afcLoHz() == -900 && hand.afcHiHz() == 900, "by hand (centre 1200, ±900): %+.0f … %+.0f Hz — as before", hand.afcLoHz(), hand.afcHiHz());
     }
     {   // ★ the wide hunt costs no weak-signal margin: the old pick ON its centre against the new one 1.3 kHz out, following
         std::printf("     weak signals (Eb/N0): the old pick with the signal ON its centre | the new one 1.3 kHz out, following\n");
@@ -330,7 +368,11 @@ static void s8() {
     }
     {   // the passband alone was not the fix: the old ±900 Hz hunt in a wide passband still cannot reach +1.3 kHz
         PassResult n0 = pass(Pick{1200, 900, 7500, "1200 / ±900 / 7.5 kHz"}, 1300, 0, nf, false);
-        CHECK(n0.good == 0, "+1.3 kHz, the passband widened but the old ±900 Hz hunt: %d / %d (the range was the other half)", n0.good, nf);
+        /* ★ beta93: with the 11-24 receiver this case decodes SOME frames — the hunt, capped at +900, takes the squared
+         *  signal's side line (2Δf − baud) and the loop sits half a baud (600 Hz) off the carrier, where the differential
+         *  decode still reads every bit inverted. Real frames (RS-checked), at the wrong AFC — so the satellite pick's own
+         *  window (centre 1500, +2600) is still what makes +1.3 kHz work properly; printed, not pinned. */
+        std::printf("     +1.3 kHz, the passband widened but the old ±900 Hz hunt: %d / %d (AFC %+.0f — a half-baud lock, not the carrier)\n", n0.good, nf, n0.afc);
     }
     {   // ★ a slow drift: 300 Hz a minute from +1.3 kHz — the follow keeps it near the centre
         const int nd = g_quick ? 30 : 48;   // 2.5 / 4 minutes
@@ -371,9 +413,113 @@ static void s9() {
     CHECK(rx.afcRangeHz() == vibe::sat::kTlmAfcHz, "the wide receiver's range: %.0f Hz", rx.afcRangeHz());
 }
 
+/** Real USB audio heard with the dial `shiftHz` HIGHER: only [lo, hi] Hz kept (a complex band-pass — the analytic
+ *  signal of that band), moved down by shiftHz, the real part. What a USB demodulator gives on the moved dial. */
+static std::vector<float> shiftDown(const std::vector<float>& x, double rate, double shiftHz, double lo, double hi) {
+    const int n = 256;
+    const std::vector<float> h = vibebpsk::lowpass(n, (hi - lo) / 2, rate);
+    const double fc = (lo + hi) / 2, m = (n - 1) / 2.0;
+    std::vector<double> hr((size_t)n), hq((size_t)n);
+    for (int i = 0; i < n; ++i) { const double ang = 2 * M_PI * fc / rate * (i - m); hr[(size_t)i] = h[(size_t)i] * std::cos(ang); hq[(size_t)i] = h[(size_t)i] * std::sin(ang); }
+    std::vector<float> y(x.size(), 0.f);
+    const double w = 2 * M_PI * shiftHz / rate;
+    for (size_t k = 0; k < x.size(); ++k) {
+        double zr = 0, zi = 0;
+        for (int i = 0; i < n; ++i) {
+            const long j = (long)k - i + n / 2;
+            if (j < 0 || j >= (long)x.size()) continue;
+            zr += x[(size_t)j] * hr[(size_t)i]; zi += x[(size_t)j] * hq[(size_t)i];
+        }
+        const double ph = std::fmod(w * (double)k, 2 * M_PI);
+        y[k] = float(2.0 * (zr * std::cos(ph) + zi * std::sin(ph)));
+    }
+    return y;
+}
+
+/** 16-bit PCM mono WAV → float (the fixture's format; nothing else is accepted). */
+static bool readWav16(const char* fn, std::vector<float>& out, int& rate) {
+    FILE* f = std::fopen(fn, "rb");
+    if (!f) return false;
+    std::vector<uint8_t> d;
+    uint8_t buf[65536]; size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) d.insert(d.end(), buf, buf + n);
+    std::fclose(f);
+    if (d.size() < 44 || std::memcmp(d.data(), "RIFF", 4) || std::memcmp(d.data() + 8, "WAVE", 4)) return false;
+    size_t p = 12; int ch = 0, bits = 0; rate = 0;
+    while (p + 8 <= d.size()) {
+        uint32_t sz; std::memcpy(&sz, &d[p + 4], 4);
+        if (!std::memcmp(&d[p], "fmt ", 4) && sz >= 16) {
+            uint16_t c, b; uint32_t r; std::memcpy(&c, &d[p + 10], 2); std::memcpy(&r, &d[p + 12], 4); std::memcpy(&b, &d[p + 22], 2);
+            ch = c; rate = (int)r; bits = b;
+        } else if (!std::memcmp(&d[p], "data", 4)) {
+            if (ch != 1 || bits != 16) return false;
+            const size_t end = std::min(d.size(), p + 8 + (size_t)sz);
+            for (size_t q = p + 8; q + 2 <= end; q += 2) { int16_t v; std::memcpy(&v, &d[q], 2); out.push_back(v / 32768.f); }
+            return true;
+        }
+        p += 8 + sz + (sz & 1);
+    }
+    return false;
+}
+
+static void s10() {
+    std::printf("§10 ★★★ THE REAL SIGNAL: AO-73 on air, 2026-11-24 (the Pi 500 V4L's decoder input, 23.5 s)\n");
+    /* The decoder's exact input (VIBE_DEC_AUDIO_DUMP) from the pass that decoded nothing live: a satellite pick (centre
+     * 3800, ±2600 Hz), 20 ms blocks as the server feeds them, the hunt from cold. Before the fix: 0 syncs, 0 frames.
+     * Cut from v4l-dec-1795534491-fctlm-6.wav (our own recording), 16-bit 48 kHz mono, normalised. */
+    const char* fn = std::getenv("VIBE_FCTLM_REAL");
+    if (!fn) fn = "test/fixtures/funcube/ao73-v4l-2026-11-24-23s.wav";
+    std::vector<float> a; int rate = 0;
+    const bool ok = readWav16(fn, a, rate);
+    CHECK(ok && rate == 48000 && a.size() > 48000 * 20, "the recording reads (%s, %zu samples at %d Hz)", fn, a.size(), rate);
+    if (!ok) return;
+    vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = vibe::sat::kTlmAfcHz;
+    std::vector<Decoded> got; int falseIds = 0;
+    Run::Out o{ nullptr, nullptr, nullptr, nullptr };
+    o.record = [&](const Decoded& d, const TlmCtx&) { got.push_back(d); if (d.satId != 2) ++falseIds; };
+    Run run(c, false, std::move(o));
+    for (size_t i = 0; i + 960 <= a.size(); i += 960) run.feedAudio(&a[i], 960);
+    std::string names; for (auto& d : got) names += d.frameName + " ";
+    CHECK(got.size() >= 4, "%zu frames from 23.5 s (5 s apart, the first after the hunt): %s(%llu syncs, %llu failed)",
+          got.size(), names.c_str(), (unsigned long long)run.framer().syncs(), (unsigned long long)run.framer().failed());
+    CHECK(falseIds == 0, "every frame says FUNcube-1 (satellite id 2)");
+    // what AO-73 sent: FM7, FM8, FM9 of sequence 1023471, then WO1 of 1023472 — the counter steps on type 0
+    const bool sched = got.size() >= 4 && got[0].frameName == "FM7" && got[0].seq == 1023471 && got[1].frameName == "FM8"
+                       && got[2].frameName == "FM9" && got[3].frameName == "WO1" && got[3].seq == 1023472;
+    CHECK(sched, "FM7 · FM8 · FM9 of seq 1023471, then WO1 of seq 1023472 (types 21, 22, 23, 0)");
+    // sane values: the battery in its raw range, the reboot count steady across the frames, sunlit
+    bool sane = !got.empty();
+    for (auto& d : got) {
+        sane = sane && d.values.size() == 58 && d.values[4].key == "eps.vbat" && d.values[4].v > 7000 && d.values[4].v < 9000;
+        sane = sane && d.values[6].key == "eps.reboots" && d.values[6].v == got[0].values[6].v && d.mode == "Sunlight";
+    }
+    CHECK(sane, "battery raw %.0f (≈ 7.9 V read as mV), reboot count %.0f in every frame, sunlit",
+          got.empty() ? 0.0 : got[0].values[4].v, got.empty() ? 0.0 : got[0].values[6].v);
+    const double baud = run.rx().baudHz();
+    CHECK(baud > 1201.0 && baud < 1202.5, "the timing loop learnt the satellite's clock: %.2f Bd (1200 nominal)", baud);
+    /* ★★ beta93 THE SAME AIR, AS THE NEW PICK HEARS IT. The recording was made with the dial 3800 Hz below the downlink;
+     * the pick now sits 1500 below, i.e. 2300 Hz higher — the same as moving every audio frequency 2300 Hz down (only
+     * what was above the new 100 Hz edge kept). Then the carrier lands where THAT pass's error puts it (~880 Hz: the
+     * bird was ~0.6 kHz below the prediction), and, moved 1700 Hz, where a pass ON the prediction would (~1480 Hz). */
+    struct Sh { double hz; const char* what; double afcLo, afcHi; };
+    for (const Sh& sh : {Sh{2300, "as the 1500 Hz pick would have heard this pass (carrier ~880 Hz)", -700, -500},
+                         Sh{1700, "the carrier moved to ~1480 Hz (a pass ON the prediction)", -100, 100}}) {
+        const std::vector<float> b = shiftDown(a, 48000, sh.hz, sh.hz + 100, 7400);
+        std::vector<Decoded> g2;
+        Run::Out o2{ nullptr, nullptr, nullptr, nullptr };
+        o2.record = [&](const Decoded& d, const TlmCtx&) { g2.push_back(d); };
+        Run r2(c, false, std::move(o2));
+        double afcAtFirst = NAN;
+        for (size_t i = 0; i + 960 <= b.size(); i += 960) { r2.feedAudio(&b[i], 960); if (std::isnan(afcAtFirst) && !g2.empty()) afcAtFirst = r2.rx().afcHz(); }
+        std::string n2; for (auto& d : g2) n2 += d.frameName + " ";
+        CHECK(g2.size() >= 4 && g2[0].seq == 1023471 && g2.back().frameName == "WO1" && afcAtFirst > sh.afcLo && afcAtFirst < sh.afcHi,
+              "%s: %zu frames (%s), AFC %+.0f Hz at the first", sh.what, g2.size(), n2.c_str(), afcAtFirst);
+    }
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--quick") g_quick = true;
-    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9();
+    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9(); s10();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

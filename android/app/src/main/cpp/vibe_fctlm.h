@@ -18,6 +18,15 @@
 //    phase. The framer tries the sync vector on the coherent stream and on its differential decode, both signs (four
 //    cases, cheap), and the Viterbi on both output orders; RS decides. A frame is trusted only when BOTH RS words
 //    decode AND the 95 padding bytes are still zero after correction — 0 false frames on noise (test-fctlm §3).
+// ★★★ WHAT THE AIR SAYS (AO-73, 2026-11-24 15:27–15:38 UTC, three recordings, ~64 frames decoded — test-fctlm §10):
+//    · DIFFERENTIAL, and a 1 is NO phase change (the framer's form 3: the differential decode, inverted). Our test
+//      transmitter now sends exactly that by default (vibe_fctlm_tx.h).
+//    · the symbol clock is ~1201.6 Bd — 1400 ppm FAST — on both the Airspy (XCover) and the V4L (Pi 500): the
+//      satellite's own clock. The receiver's timing loop was proportional-only and held ±800 ppm: it slipped symbols
+//      all pass and the sync never matched (0 syncs, 0 frames, with a 12 dB signal). vibe_bpsk_rx.h now integrates.
+//    · the frame TYPE counts 0–23, not 1–24: the sequence number steps on type 0, which follows type 23 (WO1 = 0).
+//    · the carrier sat ~3.2 kHz into the audio (centre 3800, AFC ≈ −600 Hz); the passband (0–7.4 kHz) cut nothing.
+//      ★★ beta93 the pick puts it at ~1.5 kHz instead (vibe_sat_engine.h kTlmCentreHz) — the same frames decode.
 // ★ The Viterbi, the Reed–Solomon (255,223) and the PN are vibe_lrpt_fec.h's — the same code, field, roots and
 //   scrambler (LRPT is CCSDS too); only the shortening, the de-interleaver and the sync are new here.
 // ★ Content: FUNcube is an AMATEUR satellite; its telemetry and fitter messages are amateur transmissions meant to be
@@ -142,12 +151,15 @@ struct Bits {
     explicit Bits(const uint8_t* d, size_t start = 0) : p(d), pos(start) {}
     uint32_t get(int n) { uint32_t v = 0; for (int i = 0; i < n; ++i, ++pos) v = (v << 1) | ((p[pos >> 3] >> (7 - (pos & 7))) & 1u); return v; }
 };
+/** ★★★ 11-24 ON AIR: the 6-bit frame type counts 0–23 (WO1 = 0) — AO-73 steps its sequence number on type 0, which
+ *  follows type 23; the 1–24 reading named every frame one off (FM1's fitter text arrived as "FM2"). */
 inline std::string frameName(int t) {
-    if (t >= 1 && t <= 12) return "WO" + std::to_string(t);
+    if (t >= 0 && t <= 11) return "WO" + std::to_string(t + 1);
     static const char* rest[] = {"HR1", "FM1", "FM2", "FM3", "HR2", "FM4", "FM5", "FM6", "HR3", "FM7", "FM8", "FM9"};
-    if (t >= 13 && t <= 24) return rest[t - 13];
+    if (t >= 12 && t <= 23) return rest[t - 12];
     return "type " + std::to_string(t);
 }
+inline bool isFitterType(int t) { return t >= 13 && t <= 23 && t != 16 && t != 20; }
 inline const char* satIdName(int id) {
     switch (id) { case 0: return "FUNcube-1 engineering model"; case 1: return "FUNcube-2 (UKube-1)"; case 2: return "FUNcube-1"; default: return "extended"; }
 }
@@ -190,15 +202,22 @@ inline Decoded parse(const uint8_t* d) {
     { Value v; v.key = "sw.safe"; v.name = "In safe mode"; v.v = safe; o.values.push_back(v); }
     cnt("sw.habf", "Hardware ABF on", 1); cnt("sw.sabf", "Software ABF on", 1); cnt("sw.depwait", "Deployment wait at next boot", 1);
     o.mode = safe ? "Safe" : eclipse ? "Eclipse" : "Sunlight";
-    // ★ a fitter message frame: its 200 payload bytes are the message, copied verbatim on board
-    const bool fm = o.frameType >= 14 && o.frameType <= 24 && o.frameType != 17 && o.frameType != 21;
-    if (fm) {
+    // ★ a fitter message frame: its 200 payload bytes are the message, copied verbatim on board, NUL-terminated.
+    //   ★★ 11-24 ON AIR: an empty slot is sent as ".." and FM9 (type 23) carries binary — so a message is shown only
+    //   when it is text (≥ 90 % printable) and says something (not only dots and spaces).
+    if (isFitterType(o.frameType)) {
+        std::string t; int bad = 0;
         for (int i = 56; i < 256; ++i) {
             const unsigned char ch = d[i];
             if (ch == 0) break;
-            o.fitter += (ch >= 0x20 && ch < 0x7F) ? char(ch) : (ch == '\n' || ch == '\r') ? ' ' : '.';
+            if (ch >= 0x20 && ch < 0x7F) t += char(ch);
+            else if (ch == '\n' || ch == '\r') t += ' ';
+            else { t += '.'; ++bad; }
         }
-        while (!o.fitter.empty() && o.fitter.back() == ' ') o.fitter.pop_back();
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        const bool text = !t.empty() && bad * 10 <= (int)t.size();
+        const bool says = t.find_first_not_of(". ") != std::string::npos;
+        if (text && says) o.fitter = t;
     }
     return o;
 }
