@@ -10205,7 +10205,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::unique_ptr<vibedsp::RxPipeline> rx;
         std::vector<cf32> slice;
         /* ★★★ V12 RAW IQ OUT's OWN SLICE (iqTapClient, docs/v12/IQOUT-WIDE.md): one more extract of the SAME forward FFT,
-         *  ≥ 1.2 × the consumer's rate (flat to ±0.375 of it ≥ ±0.45 of theirs), then its own decimator — never this
+         *  ≥ 1.2 × the consumer's rate (a sixteenth roll-off: flat to ±0.4375 of it, ≥ ±0.525 of theirs), then its own decimator — never this
          *  listener's demodulator channel. Under mtx, on this listener's thread. iqBins 0 = (re)build at the next block. */
         int iqBins = 0; double iqSliceRate = 0;
         std::vector<cf32> iqSlice, iqDecOut;
@@ -32363,8 +32363,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (r > 0) { iq->bytesSent += r; iq->lastReadAt.store(Impl::nowSecs()); }
         }
     }
-    /** ★★★ V12 the per-listener raw IQ slice: the narrowest power-of-two slice of the shared FFT whose flat part (±0.375 of
-     *  its rate — Channelizer::extract's quarter roll-off) holds the consumer's ±0.45 × rate. Capped at the whole FFT. */
+    /** ★★★ V12 the per-listener raw IQ slice: the narrowest power-of-two slice of the shared FFT at ≥ 1.2 × the consumer's
+     *  rate. Extracted with a SIXTEENTH roll-off (kIqTaperDiv — Band spots' causal one, test-band-slice), so it is flat to
+     *  ±0.4375 of its rate ≥ ±0.525 of theirs. ★ NOT the listeners' quarter roll-off: that is flat only to ±0.25 of the
+     *  slice, and measured 2.6–5.6 dB down at +0.445 × rate (test-iqout-wide). Capped at the whole FFT. */
+    static constexpr int kIqTaperDiv = 16;
     int iqSliceBinsFor(int rate) const {
         const double need = 1.2 * (double)rate;
         int b = 64;
@@ -32387,7 +32390,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double binHz = sampleRate / (double)fftSize;
         const double off = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         c->iqDec.setShiftHz(off - std::lround(off / binHz) * binHz + c->satShiftHz);   // ★ the listener's own residual
-        const int got = chan_->extract(bins, clientCentreBin(c), b, c->iqSlice.data(), c->iqctx, blockIndex);
+        const int got = chan_->extract(bins, clientCentreBin(c), b, c->iqSlice.data(), c->iqctx, blockIndex, kIqTaperDiv);
         if (got <= 0) return;
         const size_t need = (size_t)c->iqDec.maxOut(got);
         if (c->iqDecOut.size() < need) c->iqDecOut.resize(need);
