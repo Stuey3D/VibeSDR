@@ -59,6 +59,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 2026-11-24 — METEOR LRPT SENSITIVITY (Stuart: "can we improve the lrpt decoder sensitivity?"; branch
+  //     lrpt-sens, docs/v12/LRPT-SENSITIVITY.md). Numbers are the replays of his own Pi 500 captures, same IQ before/after.
+  { v: 'V12 (experimental)', detail: 'METEOR PICTURES FROM WEAKER PASSES — the LRPT decoder now holds onto a signal about 1.4 dB weaker than before. Its carrier tracking weighs each symbol by how sure it is instead of trusting every one, and its tracking loops are tuned against real passes recorded on an RTL-SDR with a loop aerial. Replaying those same recordings: this morning’s 10:55 METEOR-M2-3 pass, which gave 1 frame live and nothing on replay, now gives 97 frames and about 90 lines of picture; the 09:20 pass goes from 16 frames to 63; the best pass of 23 Nov from 98 frames (46 picture strips) to 148 (about 70). Passes that never rose above the noise still give nothing — no decoder can find a picture that is not there — and the status line now says a decode needs about +4 dB over the noise, not +5.' },
   // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
   //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
   //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.

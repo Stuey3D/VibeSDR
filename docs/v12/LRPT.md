@@ -140,6 +140,9 @@ AUTO's contest doubles the demodulator (≈ +55 %) for the first ~12 frames only
 
 ## RESUME HERE
 
+00. **2026-11-24 sensitivity (branch `lrpt-sens`) — see `LRPT-SENSITIVITY.md`**: soft-decision Costas, carrier loop
+    0.002, timing 0.004, ASM find 44: synthetic OQPSK + diff 3.0 → 1.6 dB at the 50 % frame point; Stuart's 24 Nov 10:55
+    pass 0 → 97 frames on replay.
 0. **beta91: a real Meteor-M2-4 pass was captured and replayed — see `LRPT-LIVE-PASS.md`** (OQPSK + differential at
    72k confirmed on air; the receiver's sensitivity, relock, rate choice and pass end were fixed against it). Item 1 below
    is done for 72k OQPSK; the 80k mode is still untested on air.
