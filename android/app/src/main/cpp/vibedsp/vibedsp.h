@@ -439,6 +439,11 @@ public:
      *    of that L/M: same table, same branches. */
     struct ExactRate {};
     RationalResampler(double inRateHz, int outRate, ExactRate);
+    /** ★★ V12 RAW IQ OUT (IQOUT-WIDE): ExactRate with a filter DESIGNED FOR A BAND rather than the audio default —
+     *  passband flat to `passHz`, Blackman stopband (≥ 70 dB) from `stopHz`, both in Hz. The default design puts the
+     *  -6 dB point at 0.45 of the lower rate with a 0.2-wide transition (flat only to ~0.35) and a Hamming stopband
+     *  (~53 dB) — right for audio, wrong for an IQ recorder that promises ±0.45 of its rate flat. */
+    RationalResampler(double inRateHz, int outRate, ExactRate, double passHz, double stopHz);
     int process(const float* in, int n, float* out);   // returns #outputs
     int maxOut(int n) const { return (int)((double)n * (double)L_ / (double)M_) + 3; }
     /** The exact ratio out/in = L/M (reduced). May exceed the branch count — see branches(). */
@@ -446,11 +451,15 @@ public:
     long long M() const { return M_; }
     /** Polyphase branches actually built: == L() when the ratio is exact in the table. */
     int branches() const { return Lt_; }
+    /** Taps per output (one polyphase branch). */
+    int phaseLen() const { return phaseLen_; }
     void reset();
     static constexpr int kMaxL = 256;          ///< integer-rate constructor: ratio approximated beyond
     static constexpr int kMaxBranches = 512;   ///< ExactRate: filter phase quantised beyond
 private:
     void build_();                             // design the table for Lt_ branches at ratio L_/M_
+    void initExact_(double inRateHz, int outRate);
+    double inHz_ = 0.0, passHz_ = 0.0, stopHz_ = 0.0;   // ★ the band design (stopHz_ 0 = the default design)
     long long L_ = 1, M_ = 1;
     int Lt_ = 1, phaseLen_ = 1;
     long long inCount_ = 0, outCount_ = 0;
@@ -466,6 +475,63 @@ private:
     // [phaseLen history][block]. (Was a strided prototype + circular history.)
     std::vector<float> rBranch_; // L_ branches x phaseLen_ taps, reversed
     std::vector<float> buf_;     // [phaseLen_ history][block]
+};
+
+// ── Raw IQ out: its own wide tap (IQOUT-WIDE, V12) ─────────────────────────────────────────────────────────────────
+/* ★★★ RAW IQ OUT IS THE REAL IQ, NOT THE LISTENER'S CHANNEL (2026-11-24, docs/v12/IQOUT-WIDE.md).
+ *  Up to beta92 the stream was the listener's demodulator channel AFTER its channel filter, resampled up: a 250 kHz request
+ *  delivered ±3 kHz of USB (or ±7 kHz of NFM) inside 250 kHz of nothing, and raising the channel rate to feed it ran the
+ *  whole audio chain at 250 kHz+ — one Pi 500 core at 99.5 %, 29–44 % of the samples lost. Now the stream has a tap of its
+ *  own, in two halves:
+ *   • IqOutDecimator — on the thread that owns the samples (the DSP thread / a listener's thread): from the dial-at-DC
+ *     baseband straight down to an INTEGER decimation Fd = fs/D in [R, 2R), through cheap anti-alias stages (half-bands
+ *     for the twos, short Blackman FIRs for the rest) that each only have to keep ±0.45 R clean of anything folding in.
+ *   • IqOutResampler — on the stream's own writer thread (vibe-iqout, network rung): Fd → the consumer's exact R with a
+ *     polyphase filter flat to ±0.45 R and ≥ 70 dB down from ±0.55 R (Blackman). The sharp filter lives HERE, off the DSP
+ *     thread. When Fd == R it is not needed (the decimator's last stage already stops from 0.55 R) and is skipped.
+ *  The listener's channel is never touched: their chain, rate and output are bit-identical with IQ out on or off. */
+class IqOutDecimator {
+public:
+    /** Plan the stages for `inRateHz` → ≥ `outRate`. Cheap; call again only when either changes (state is reset). */
+    void configure(double inRateHz, int outRate);
+    bool configured() const { return inHz_ > 0.0; }
+    double inRate() const { return inHz_; }
+    int requested() const { return want_; }
+    /** The rate process() delivers: inRate / decim() — an integer decimation, so exact. */
+    double outRate() const { return D_ > 0 ? inHz_ / D_ : 0.0; }
+    int decim() const { return D_; }
+    /** Optional shift ahead of the stages, Hz: a signal at +hz lands on DC (NCO::mix). For a per-listener slice, whose
+     *  centre is a whole FFT bin from the dial. 0 = none (no pass over the samples at all). */
+    void setShiftHz(double hz);
+    int maxOut(int n) const { return n / std::max(1, D_) + 2 * (int)st_.size() + 2; }
+    /** `in` is not modified. Returns the outputs written to `out` (≥ maxOut(n) room). */
+    int process(const cf32* in, int n, cf32* out);
+    void reset();
+    /** Complex MACs per second the stages cost (the planner's figure) — for the log and the tests. */
+    double macsPerSec() const { return cost_; }
+    /** e.g. "/4(hb 6) /3(fir 23)" — the stages, for the log and the tests. */
+    std::string plan() const;
+private:
+    struct Stage { int D = 1; std::unique_ptr<HalfbandDecimator> hb; std::unique_ptr<FirDecimator> fir; int taps = 0; };
+    std::vector<Stage> st_;
+    double inHz_ = 0.0, cost_ = 0.0, shiftHz_ = 0.0;
+    int want_ = 0, D_ = 1;
+    NCO nco_;
+    std::vector<cf32> mix_, a_, b_;
+};
+class IqOutResampler {
+public:
+    /** Fd → R with IqOutDecimator's contract (flat ±0.45 R, stop from ±0.55 R). Rebuilds only when either changes. */
+    void configure(double inRateHz, int outRate);
+    /** De-interleaves and resamples: `oi`/`oq` are resized and hold the outputs; returns their count. */
+    int process(const cf32* in, int n, std::vector<float>& oi, std::vector<float>& oq);
+    bool passThrough() const { return same_; }
+    /** Real taps per output per rail (0 = passing through) — for the log and the tests. */
+    int tapsPerOutput() const { return taps_; }
+private:
+    double inHz_ = 0.0; int out_ = 0; bool same_ = true; int taps_ = 0;
+    std::unique_ptr<RationalResampler> ri_, rq_;
+    std::vector<float> fi_, fq_;
 };
 
 // ── IQ cleaner: DC block + I/Q imbalance + rotation, one SIMD pass ─────────────
@@ -3169,14 +3235,19 @@ public:
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
-        /** ★ RAW IQ OUT (direct mode): the channel after the decimation cascade, BEFORE any
-         *  demodulation — complex samples at rateHz (= chFs_). Split, not diverted: the demod
-         *  runs on the same buffer afterwards. Only fires while set, so it costs nothing off. */
+        /** ★ THE CHANNEL IQ (the decoders that read the listener's channel — DRM, M17, DV, tone, paging, …): the channel
+         *  after the decimation cascade, BEFORE any demodulation — complex samples at rateHz (= chFs_). Split, not
+         *  diverted: the demod runs on the same buffer afterwards. Only fires while set, so it costs nothing off.
+         *  ★★ V12: NOT raw IQ out any more — that is rawIq below (this is cut to the listener's passband). */
         void (*iq)(void* ctx, const cf32* x, int n, double rateHz) = nullptr;
         /** ★★ V12 beta92 THE DECODER'S OWN WIDE TAP (setDecoderTap): the dial at DC, cut to ±decoderTapHz by a filter of
          *  its own from the cascade's anti-alias stages — BEFORE the listener's channel filter, so the listener's width,
          *  mode, de-emphasis and squelch never reach it. Only fires while a tap is set. */
         void (*decIq)(void* ctx, const cf32* x, int n, double rateHz) = nullptr;
+        /** ★★★ V12 RAW IQ OUT's OWN TAP (setRawIqRate, docs/v12/IQOUT-WIDE.md): the dial at DC, straight from the
+         *  baseband through IqOutDecimator — ±0.45 of the consumer's rate kept, at an integer decimation of the input in
+         *  [rate, 2·rate). Never the listener's channel; fires only while a rate is set. */
+        void (*rawIq)(void* ctx, const cf32* x, int n, double rateHz) = nullptr;
     };
 
     // sampleRate = input IQ rate; fftSize = waterfall bins; fftRate = frames/sec;
@@ -3340,8 +3411,8 @@ public:
      *  ★ Live, no rebuild: the filters are designed on the DSP thread when first needed. */
     void setNfmVoice(bool on) { nfmVoice_.store(on, std::memory_order_relaxed); }
     bool nfmVoice() const { return nfmVoice_.load(std::memory_order_relaxed); }
-    /** ★ RAW IQ OUT: the channel rate must be at least this (Hz) so the consumer's rate can be
-     *  resampled out of it. 0 = no constraint. Rebuilds the chain (same discipline as dirty_). */
+    /** ★ A FLOOR ON THE CHANNEL RATE (Hz) — DRM's 24 kHz. 0 = no constraint. Rebuilds the chain (same discipline as
+     *  dirty_). ★★ V12: no longer raw IQ out's — that has its own tap (setRawIqRate) and never touches the channel. */
     /*  ★★ AND ONLY WHEN IT CHANGES. Every per-listener retune re-states the floor (24 kHz for DRM), and each restatement
      *  rebuilt the whole chain — buffers cleared, a hole in the IQ the DRM receiver is reading (2026-10-29, the zoom that
      *  dropped the DRM lock). Same rule as the fftRate handler: the same value is not a change. */
@@ -3360,6 +3431,16 @@ public:
         decTapHz_ = halfHz; dirty_ = true;
     }
     double decoderTapHz() const { return decTapHz_.load(std::memory_order_relaxed); }
+    /** ★★★ V12 RAW IQ OUT (docs/v12/IQOUT-WIDE.md): a tap of its own off the baseband (the dial at DC, the full input
+     *  rate), decimated for a consumer at `hz` and delivered through Callbacks::rawIq. NOTHING ELSE CHANGES: no rebuild,
+     *  no wider channel — the listener's chain, its cost and its output are exactly what they are with it off (beta92 and
+     *  before raised the channel rate instead — setIqMinRate — and ran the whole audio chain at 250 kHz). The tap is built
+     *  on the DSP thread at its next block. 0 = off. */
+    void setRawIqRate(int hz) { rawIqWant_.store(hz > 0 ? hz : 0, std::memory_order_relaxed); }
+    int rawIqRate() const { return rawIqWant_.load(std::memory_order_relaxed); }
+    /** The rate the tap delivers (0 = off / not built yet) and its stages — for the log and the tests. DSP thread / tests. */
+    double rawIqTapRate() const { return rawIqBuilt_ > 0 ? rawTap_.outRate() : 0.0; }
+    std::string rawIqTapPlan() const { return rawIqBuilt_ > 0 ? rawTap_.plan() : std::string(); }
     /** ★ The decoder tap's rate (0 = off / not built yet) — for tests. */
     double decoderTapRate() const { return decTap_ ? chFs_ : 0.0; }
     /** ★ Turn on the RDS guard-band noise measurement — the second filter pair that makes the
@@ -3913,10 +3994,14 @@ private:
     std::vector<float> ref57Buf_, ref57qBuf_, bitClkBuf_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
-    std::atomic<double> iqMinRate_{0.0};     // raw IQ out floor on chFs_ (see setIqMinRate)
+    std::atomic<double> iqMinRate_{0.0};     // a floor on chFs_ — DRM's (see setIqMinRate)
     std::atomic<double> decTapHz_{0.0};      // ★ beta92 the decoder's wide tap, ±Hz (setDecoderTap); 0 = off
     std::unique_ptr<FirDecimator> decTap_;   // …its own last stage, beside the listener's channel filter
     std::vector<cf32> decBuf_;
+    std::atomic<int> rawIqWant_{0};          // ★ V12 raw IQ out's own tap: the consumer's rate (setRawIqRate); 0 = off
+    int rawIqBuilt_ = 0; double rawIqFs_ = 0.0;   // …what rawTap_ was built for (DSP thread)
+    IqOutDecimator rawTap_;
+    std::vector<cf32> rawBuf_;
     // WFM only: the rate the stereo audio post-chain runs at, = chFs_/audioDecim_.
     // The 15 kHz filters decimate as they filter, so everything after them (blend,
     // de-emphasis, resampling) costs a fraction of what it did at the channel rate.

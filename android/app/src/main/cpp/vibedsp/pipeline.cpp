@@ -441,8 +441,8 @@ void RxPipeline::rebuildAudio() {
     //     RDS sidebands, until something forced a rebuild. Found by test-passband-cost's audit
     //     (2026-09-29); pinned by its "dragged builds what a fresh build builds" rule.
     if (mode_ == Mode::WFM) targetCh = std::max(chainBw * 1.5, 150000.0);
-    // ★ Raw IQ out needs the channel at least as wide as the consumer's rate — a 48 kHz consumer
-    //   cannot be fed from the 12 kHz channel a narrow mode would otherwise build.
+    // ★ A floor on the channel rate (DRM's 24 kHz). ★★ V12: raw IQ out no longer comes here — it has its own tap
+    //   (setRawIqRate) off the baseband, and the listener's channel is never widened for it.
     { const double f = iqMinRate_.load(std::memory_order_relaxed); if (f > 0.0) targetCh = std::max(targetCh, f); }
     // ★★ V12 beta92 THE DECODER'S WIDE TAP (setDecoderTap): the channel must hold ±decHalf with room for its own filter's
     //    skirt — the planner lands between target/1.2 and 1.5·target, so 3.3× gives ≥ 2.75× the half-width.
@@ -1076,6 +1076,24 @@ void RxPipeline::feed(const cf32* iq, int n) {
         baseBuf_.resize(n);
         nco_.mix(iq, baseBuf_.data(), n);
 
+        /* ★★★ V12 RAW IQ OUT's OWN TAP (setRawIqRate, docs/v12/IQOUT-WIDE.md) — the dial at DC, BEFORE the cascade below
+         *  cuts it to the listener's passband. Its own decimator (half-bands + short Blackman stages to an integer rate in
+         *  [rate, 2·rate)); the sharp filter and the exact rate are the stream's writer thread's (IqOutResampler). Reads
+         *  baseBuf_, writes its own buffer: the listener's chain below is not touched. One relaxed load when off. */
+        {
+            const int want = rawIqWant_.load(std::memory_order_relaxed);
+            if (want != rawIqBuilt_ || (want > 0 && rawIqFs_ != sampleRate_)) {
+                rawIqBuilt_ = want; rawIqFs_ = sampleRate_;
+                if (want > 0) rawTap_.configure(sampleRate_, want);
+            }
+            if (want > 0 && cb_.rawIq) {
+                const size_t need = (size_t)rawTap_.maxOut(n);
+                if (rawBuf_.size() < need) rawBuf_.resize(need);
+                const int m = rawTap_.process(baseBuf_.data(), n, rawBuf_.data());
+                if (m > 0) cb_.rawIq(cb_.ctx, rawBuf_.data(), m, rawTap_.outRate());
+            }
+        }
+
         /* ★★★ THE INSTRUMENT'S TAP — the station at DC, BEFORE the cascade below applies the
          *  listener's passband. Taken only while somebody has Advanced RDS open (the same condition
          *  that used to gate the eye), so normal listening pays nothing. What it costs HERE is one
@@ -1114,7 +1132,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
         if (src != chBuf_.data()) {
             chBuf_.assign(src, src + nc);
         }
-        // ★ RAW IQ OUT tap — the channel as it stands, before the demod touches anything.
+        // ★ The channel IQ callback (cb_.iq, the decoders' — DRM, M17, …) fires in demodTail_, before the demod.
         // ★ THE CUT (setDemodThread): everything above is the DSP thread's, everything below may run
         //   on vibe-demod. The channel block is handed over whole; a full queue is WAITED for, never
         //   dropped — a hole in the channel is a click, and a late block is only a late block.

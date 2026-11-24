@@ -9920,17 +9920,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  (the network rung) converts and sends. A consumer that stops reading — or a writer that falls behind — costs
          *  its OWN stream: past half a second queued the oldest block goes, counted (drops, g_iqOutDrops in
          *  vibeserver.json), never the radio's time. */
-        struct RawBlk { std::vector<cf32> v; int rate = 0; double rotHz = 0.0; };
+        struct RawBlk { std::vector<cf32> v; double rate = 0.0; double rotHz = 0.0; };   // ★ V12 rate: the tap's exact Fd (fs/D)
         std::mutex qm; std::condition_variable qcv;
         std::deque<RawBlk> raw; size_t rawSamples = 0;   // under qm
         std::atomic<long long> drops{0};         // blocks this stream dropped (its writer/consumer behind)
         std::thread writeTh;
         std::atomic<double> lastReadAt{0};       // last time the consumer took bytes
         std::atomic<long long> bytesSent{0};
-        int inRate = 0;                          // the DDC rate the resamplers were built for
         float lvl = 1.0f;                        // ★ the 8-bit normaliser's gain (see iqConvert) — writer thread only
-        std::unique_ptr<vibedsp::RationalResampler> ri, rq;
-        std::vector<float> fi, fq, oi, oq;
+        /* ★★★ V12 THE SHARP FILTER AND THE EXACT RATE, HERE (docs/v12/IQOUT-WIDE.md): the tap (IqOutDecimator, on the
+         *  sample owner's thread) delivers an integer decimation Fd in [rate, 2·rate); this takes it to the consumer's
+         *  exact rate, flat ±0.45, ≥ 70 dB down from ±0.55 — writer thread only. Was two RationalResamplers whose ratio
+         *  was APPROXIMATED past L = 256 (a stream that drifted) with the audio design (flat only to ~0.35). */
+        vibedsp::IqOutResampler rs;
+        std::vector<float> oi, oq;
         vibedsp::IqCleaner rot;                  // ★ full rate: the offset rotation only (writer thread — iqConvert)
         double rotAt = 0.0; int rotRate = 0;     // ★ what `rot` was configured for
         std::vector<uint8_t> out;                // ★ the frame being sent (writer thread)
@@ -10201,6 +10204,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double chanRate = 0;
         std::unique_ptr<vibedsp::RxPipeline> rx;
         std::vector<cf32> slice;
+        /* ★★★ V12 RAW IQ OUT's OWN SLICE (iqTapClient, docs/v12/IQOUT-WIDE.md): one more extract of the SAME forward FFT,
+         *  ≥ 1.2 × the consumer's rate (flat to ±0.375 of it ≥ ±0.45 of theirs), then its own decimator — never this
+         *  listener's demodulator channel. Under mtx, on this listener's thread. iqBins 0 = (re)build at the next block. */
+        int iqBins = 0; double iqSliceRate = 0;
+        std::vector<cf32> iqSlice, iqDecOut;
+        vibedsp::IqOutDecimator iqDec;
         // Audio encode is per client too: two listeners may want different codecs, and an Opus
         // encoder carries stream state that cannot be shared.
         bool wantsOpus = false, forceMono = false;
@@ -10320,6 +10329,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** ★ This listener's own extract scratch — see Channelizer::ExtractCtx. Sharing one made
          *  every listener's channel land somewhere other than it asked for. */
         vibedsp::Channelizer::ExtractCtx ectx, vectx;
+        vibedsp::Channelizer::ExtractCtx iqctx;   // ★ V12 raw IQ out's own slice (iqTapClient)
         /** ★ V12: a CW skimmer's slice of the same FFT (its own scratch, as above), and Band spots' EXTRA slices
          *  (vibe_band_slice.h): one buffer and extract context each. This thread only. */
         SkimCut skim;
@@ -11223,10 +11233,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  every WFM listener's channel at 600 kHz would cost CPU in normal listening, with the panel
          *  shut, to buy that 1 % — and resizing only when the panel opens would rebuild the listener's
          *  pipeline under their audio. Neither is worth it; the residual is stated instead. */
-        // ★ RAW IQ OUT needs the channel at least as wide as the rate it delivers (the resampler
-        //   can only take away). 250 kHz IQ on a 12.5 kHz NFM channel would otherwise be 12.5 kHz of
-        //   signal inside 250 kHz of nothing.
-        if (c->iq) want = std::max(want, chanBinsFor(double(c->iq->rate) * 0.5));
+        // ★★★ V12: NOT WIDENED FOR RAW IQ OUT ANY MORE. It was (to the IQ rate), and the stream was still this channel
+        //     after the listener's filter — while their pipeline was rebuilt and ran at the wide rate. Raw IQ out now takes
+        //     a slice of its own off the same forward FFT (iqTapClient); this channel is the demodulator's alone.
         /* ★★ beta92 PACKET'S OWN TAP (APRS from IQ, Stuart 11-23): while this listener's host runs packet on IQ, the
          *  channel holds ±16 kHz flat (40 kHz — extract() rolls off the outer quarter) so the pipeline's decoder tap
          *  (±vibeaprs::Run::kTapHz) is clean whatever width or mode the listener picks. Asked here, not cached, so a
@@ -21213,11 +21222,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("VOR on the shared channel: width %s", want ? "held at 25 kHz while it runs" : "given back");
         setBandwidth(bw);
     }
-    /** The raw-IQ-out consumer's rate on the direct path, or 0 — the channel floor DRM must not lower. */
-    double iqDirectRate() {
-        std::lock_guard<std::mutex> lk(iqDirectMtx);
-        return iqDirect ? double(iqDirect->rate) : 0.0;
-    }
 
     void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
@@ -21550,8 +21554,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         {   // ★ V12 DRM on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
             std::lock_guard<std::mutex> lk(drmSharedMtx);
             watchAllowDirty_.store(true, std::memory_order_relaxed);   // ★ VFO B allowance may have changed (watchMaxFor)
-            if (mode == "drm") { drmShared = std::make_shared<vibe::DrmListener>(); drmSharedVer = 0; rx.setIqMinRate(std::max(24000.0, iqDirectRate())); }
-            else if (drmShared) { drmShared.reset(); rx.setIqMinRate(iqDirectRate()); }
+            // ★ V12: the floor is DRM's alone now — raw IQ out has its own tap and never sets one
+            if (mode == "drm") { drmShared = std::make_shared<vibe::DrmListener>(); drmSharedVer = 0; rx.setIqMinRate(24000.0); }
+            else if (drmShared) { drmShared.reset(); rx.setIqMinRate(0.0); }
         }
         if (mode == "drm") drmSharedSinkSync();   // ★ the constellation, if a Signal pane is already open (outside drmSharedMtx)
         {   // ★ V12 FreeDV on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
@@ -21655,6 +21660,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
         cb.iq       = &Impl::iqCb;
+        cb.rawIq    = &Impl::rawIqCb;   // ★★★ V12 raw IQ out's own tap (fires only while setRawIqRate holds a rate)
         cb.decIq    = &Impl::decIqCb;   // ★★ beta92 packet's own wide tap (pktTapSync)
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
         // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …"): the one pipeline every listener on a shared dial hears, and the
@@ -32357,9 +32363,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (r > 0) { iq->bytesSent += r; iq->lastReadAt.store(Impl::nowSecs()); }
         }
     }
-    /** Called from feedOneClient under c->mtx: resample the DDC slice and queue it as 8-bit IQ. */
-    void iqTap(ClientDsp* c, const cf32* in, int n) {
-        iqTapInto(c->iq, in, n, (int)std::lround(c->chanRate));
+    /** ★★★ V12 the per-listener raw IQ slice: the narrowest power-of-two slice of the shared FFT whose flat part (±0.375 of
+     *  its rate — Channelizer::extract's quarter roll-off) holds the consumer's ±0.45 × rate. Capped at the whole FFT. */
+    int iqSliceBinsFor(int rate) const {
+        const double need = 1.2 * (double)rate;
+        int b = 64;
+        while (b < fftSize && sampleRate * (double)b / (double)fftSize < need) b <<= 1;
+        return std::min(b, fftSize);
+    }
+    double iqSliceRateFor(int rate) const { return sampleRate * (double)iqSliceBinsFor(rate) / (double)fftSize; }
+    /** ★★★ V12 — called from feedOneClient under c->mtx, on this listener's thread: RAW IQ OUT's own slice of the shared
+     *  forward FFT (the dial within half a bin of DC), the residual and any satellite shift taken out by the decimator's
+     *  NCO, decimated to Fd in [rate, 2·rate) and queued for the writer. The listener's own channel is not involved. */
+    void iqTapClient(ClientDsp* c, const cf32* bins, long long blockIndex) {
+        const int R = c->iq->rate;
+        const int b = iqSliceBinsFor(R);
+        const double sr = sampleRate * (double)b / (double)fftSize;
+        if (b != c->iqBins || sr != c->iqSliceRate || c->iqDec.requested() != R) {
+            c->iqBins = b; c->iqSliceRate = sr;
+            c->iqSlice.assign((size_t)b, cf32{0.0f, 0.0f});
+            c->iqDec.configure(sr, R);
+        }
+        const double binHz = sampleRate / (double)fftSize;
+        const double off = c->vfoHz - rtlCenter.load() - hwOffsetHz();
+        c->iqDec.setShiftHz(off - std::lround(off / binHz) * binHz + c->satShiftHz);   // ★ the listener's own residual
+        const int got = chan_->extract(bins, clientCentreBin(c), b, c->iqSlice.data(), c->iqctx, blockIndex);
+        if (got <= 0) return;
+        const size_t need = (size_t)c->iqDec.maxOut(got);
+        if (c->iqDecOut.size() < need) c->iqDecOut.resize(need);
+        const int m = c->iqDec.process(c->iqSlice.data(), got, c->iqDecOut.data());
+        if (m > 0) iqTapInto(c->iq, c->iqDecOut.data(), m, c->iqDec.outRate());
     }
     /** ★★ beta92 the one pipeline's decoder tap → the shared host's packet decoder (pktTapSync). */
     static void decIqCb(void* ctx, const cf32* x, int n, double rateHz) {
@@ -32394,9 +32427,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    navWideSync); one relaxed load when none runs
         if (!p->perClientDsp() && DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)
             p->decoders_.feedNavIqShared(x, n, rateHz);
+        // ★★★ V12: raw IQ out is NOT taken here any more — this is the listener's channel, cut to their passband
+        //     (docs/v12/IQOUT-WIDE.md). It has its own tap: rawIqCb.
+    }
+    /** ★★★ V12 direct mode: raw IQ out's OWN tap (RxPipeline::setRawIqRate) — the dial at DC off the baseband, decimated
+     *  for the consumer, on the DSP thread. A copy into the stream's queue; the writer does the rest. */
+    static void rawIqCb(void* ctx, const cf32* x, int n, double rateHz) {
+        auto* p = (Impl*)ctx;
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
-        if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
+        if (iq && !iq->full) p->iqTapInto(iq, x, n, rateHz);
     }
     // ── ★★ V12 AUTO-PPM: the digital correction of the radio's clock (vibe_afc.h) ─────────────
     /* ★★★ THE WHOLE CAPTURE, ONCE, BEFORE ANYBODY READS IT — the spectrum, every listener's channel, DAB, the decoders,
@@ -32515,17 +32555,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void iqTapFull(const cf32* x, int n, double rateHz) {
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(iqDirectMtx); iq = iqDirect; }
-        if (iq && iq->full) iqTapInto(iq, x, n, (int)std::lround(rateHz));
+        if (iq && iq->full) iqTapInto(iq, x, n, rateHz);
     }
     /** ★★★ beta92 — THE TAP: a copy into this stream's own queue and nothing else (see IqOut::RawBlk). On the DSP thread
      *  (full rate), vibe-demod (direct) or a listener's thread (per-VFO). Never waits on the consumer: past half a second
      *  of input queued, the OLDEST block goes and is counted. */
-    void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
+    void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, double inRate) {
         if (!iq || n <= 0 || !iq->hasConsumer()) return;
         // ★★★ V12 PAGING: not a sample of IQ leaves while a paging receiver runs (vibe_paging_gate.h; the stream is
         //     closed by iqOffForPaging — this covers the moment in between)
         if (!vibe::pagingAllowsIqOut(DecoderHost::pagingRunning().load(std::memory_order_relaxed))) return;
-        if (inRate <= 0) return;
+        if (inRate <= 0.0) return;
         IqOut::RawBlk blk;
         blk.v.assign(in, in + n);
         blk.rate = inRate;
@@ -32534,7 +32574,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(iq->qm);
             // ★ half a second of input, and never more than 1 Mi samples (8 MB) whatever the rate — a full-rate stream off a
             //   wide radio must not hold a quarter of a 512 MB box (memory rule: every path bounded)
-            const size_t cap = std::max<size_t>((size_t)n, std::min<size_t>((size_t)(inRate / 2), (size_t)1 << 20));
+            const size_t cap = std::max<size_t>((size_t)n, std::min<size_t>((size_t)(inRate * 0.5), (size_t)1 << 20));
             while (iq->rawSamples + (size_t)n > cap && !iq->raw.empty()) {
                 iq->rawSamples -= iq->raw.front().v.size(); iq->raw.pop_front();
                 iq->drops.fetch_add(1, std::memory_order_relaxed);
@@ -32547,40 +32587,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★★ beta92 — the stream's conversion, on its WRITER thread only: rotation (full rate), resampling to the consumer's
      *  rate, the slow 8-bit normaliser, u8. Returns the frame to send (empty = nothing this block). */
     const std::vector<uint8_t>& iqConvert(const std::shared_ptr<IqOut>& iq, IqOut::RawBlk& blk) {
-        const int n = (int)blk.v.size(), inRate = blk.rate;
+        const int n = (int)blk.v.size();
+        const double inRate = blk.rate;
         iq->out.clear();
-        if (n <= 0 || inRate <= 0) return iq->out;
+        if (n <= 0 || inRate <= 0.0) return iq->out;
         const cf32* in = blk.v.data();
         // ★ Full rate: rotate the capture down by the hardware offset (on the tap's copy — the pipeline
         //   keeps the original), so the consumer's centre is exact. See requestConsumerCentre.
         if (iq->full && blk.rotHz != 0.0) {
-            if (iq->rotAt != blk.rotHz || iq->rotRate != inRate) {   // ★ configured here, on the one thread that uses it
-                iq->rot.configure((double)inRate); iq->rot.setDc(false); iq->rot.setImbalance(false);
+            const int rr = (int)std::lround(inRate);
+            if (iq->rotAt != blk.rotHz || iq->rotRate != rr) {       // ★ configured here, on the one thread that uses it
+                iq->rot.configure(inRate); iq->rot.setDc(false); iq->rot.setImbalance(false);
                 iq->rot.setRotation(blk.rotHz);                       // ★ +offset: the signal at −15 kHz lands on 0
-                iq->rotAt = blk.rotHz; iq->rotRate = inRate;
+                iq->rotAt = blk.rotHz; iq->rotRate = rr;
             }
             iq->rot.process(blk.v.data(), n);                         // ★ the block is the writer's own copy now
         }
-        const bool same = inRate == iq->rate;    // ★ full rate: nothing to resample
-        if (!same && (iq->inRate != inRate || !iq->ri)) {
-            iq->ri.reset(new vibedsp::RationalResampler(inRate, iq->rate));
-            iq->rq.reset(new vibedsp::RationalResampler(inRate, iq->rate));
-            iq->inRate = inRate;
-        }
-        iq->fi.resize((size_t)n); iq->fq.resize((size_t)n);
-        // ★ De-interleave: cf32 is {re, im} pairs, so this is a strided copy the compiler
-        //   vectorises; the resampler behind it is vibedsp's NEON/SSE2 one.
-        const float* f = reinterpret_cast<const float*>(in);
-        for (int i = 0; i < n; i++) { iq->fi[i] = f[2 * i]; iq->fq[i] = f[2 * i + 1]; }
-        int m;
-        if (same) { iq->oi.swap(iq->fi); iq->oq.swap(iq->fq); m = n; }
-        else {
-            const int cap = iq->ri->maxOut(n);
-            iq->oi.resize((size_t)cap); iq->oq.resize((size_t)cap);
-            const int ni = iq->ri->process(iq->fi.data(), n, iq->oi.data());
-            const int nq = iq->rq->process(iq->fq.data(), n, iq->oq.data());
-            m = std::min(ni, nq);
-        }
+        // ★ Full rate passes straight through (inRate == rate); otherwise Fd → the consumer's exact rate (IqOutResampler:
+        //   de-interleave, then vibedsp's NEON/SSE2 polyphase pair). Rebuilt only when the tap's rate changes.
+        iq->rs.configure(inRate, iq->rate);
+        const int m = iq->rs.process(in, n, iq->oi, iq->oq);
         if (m <= 0) return iq->out;
         iq->out.resize((size_t)m * 2);
         /* ★★★ UNITY — THE LEVEL THE SERVER'S OWN DEMODULATORS SEE. Two guesses preceded this:
@@ -32613,14 +32639,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     void iqStop(ClientDsp* c) {
         std::shared_ptr<IqOut> iq;
-        { std::lock_guard<std::mutex> lk(c->mtx); iq = c->iq; c->iq.reset(); }
+        { std::lock_guard<std::mutex> lk(c->mtx); iq = c->iq; c->iq.reset(); c->iqBins = 0; }
         iqTearDown(iq);
     }
     void iqStopDirect() {
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(iqDirectMtx); iq = iqDirect; iqDirect.reset(); iqDirectSock.reset(); }
         if (!iq) return;
-        rx.setIqMinRate(0.0);          // ★ let the channel shrink back to what the mode wants
+        // ★★★ V12: the tap goes; the listener's channel was never widened, so there is nothing to give back (this used to
+        //     be setIqMinRate(0) — which also dropped a DRM listener's 24 kHz floor when their IQ stream ended).
+        if (!iq->full) rx.setRawIqRate(0);
         iqTearDown(iq);
         if (iq->full) applyAutoIf();   // ★ the IF filter follows the zoom again
     }
@@ -32741,7 +32769,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_vsRawIqActive.fetch_add(1);
         // ★ A full-rate stream is fed from the raw block, so it lives in the direct slot even
         //   when this session has a per-client channel of its own.
-        if (c && !full) { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; }
+        if (c && !full) { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; c->iqBins = 0; }   // ★ its slice is built afresh
         else            { std::lock_guard<std::mutex> lk(iqDirectMtx); iqDirect = iq; iqDirectSock = sock; }
         iq->writeTh = std::thread([this, iq]{ iqWriteLoop(iq); });
         if (iq->lis) {
@@ -32771,8 +32799,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ The offset rotation is configured by the writer (iqConvert) from each block's own rotHz (beta92).
             applyAutoIf();                       // ★ and open the tuner's IF filter right up
         }
-        else if (c) clientRetune(c.get());          // ★ widen the channel to the IQ rate (chanBinsFor above)
-        else   rx.setIqMinRate((double)iq->rate);   // ★ direct: the pipeline's channel floor
+        /* ★★★ V12 ITS OWN TAP, AND THE LISTENER'S CHANNEL IS LEFT ALONE (docs/v12/IQOUT-WIDE.md). This widened the channel
+         *  to the IQ rate (direct: setIqMinRate; per-listener: chanBinsFor in clientRetune) and delivered the CHANNEL —
+         *  cut to the listener's passband, ±3 kHz of USB inside 250 kHz — while the whole audio chain ran at 250 kHz+
+         *  (a Pi 500 core at 99.5 %, 29–44 % of the samples lost). Now: direct, the pipeline's own baseband tap; per
+         *  listener, a slice of its own off the shared FFT (feedOneClient → iqTapClient). */
+        else if (!c) rx.setRawIqRate(iq->rate);
+        {   // ★ the plan, so a stream's cost and shape can be read off the log (direct: the capture; per listener: its slice)
+            vibedsp::IqOutDecimator d; vibedsp::IqOutResampler r;
+            const double in = full ? 0.0 : (c ? iqSliceRateFor(iq->rate) : sampleRate);
+            if (in > 0.0) {
+                d.configure(in, iq->rate); r.configure(d.outRate(), iq->rate);
+                LOGI("raw IQ out: tap %.0f Hz → %s → %.1f Hz (%.1f M MAC/s), writer %s", in, d.plan().c_str(), d.outRate(),
+                     d.macsPerSec() / 1e6, r.passThrough() ? "passes through" : (std::to_string(r.tapsPerOutput()) + " taps/output").c_str());
+            }
+        }
         LOGI("raw IQ out: on for %s — %s at %d Hz%s", peer.c_str(),
              local ? ("port " + std::to_string(iq->port)).c_str() : "tunnel", iq->rate,
              iq->pub ? (", code " + iq->code).c_str() : "");
@@ -34781,9 +34822,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  when none runs on this server. */
         if (got > 0 && c->owner && DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)
             c->owner->decoders_.feedNavIqSession(c->session, c->slice.data(), got, c->chanRate);
-        // ★ RAW IQ OUT: the same slice, resampled to the consumer's rate, as 8-bit IQ. The demod
-        //   above keeps its copy — the stream is split, not diverted.
-        if (got > 0 && c->iq && c->iq->hasConsumer()) iqTap(c.get(), c->slice.data(), got);
+        // ★★★ RAW IQ OUT: V12 a slice of its OWN off the same FFT (iqTapClient) — this listener's slice above is cut for
+        //     their demodulator and is never widened for it any more (docs/v12/IQOUT-WIDE.md).
+        if (c->iq && c->iq->hasConsumer()) iqTapClient(c.get(), bins, blockIndex);
         // ★ And the VIEW channel, when this listener is drawing its own waterfall.
         if (c->viewRx && c->viewChanBins > 0) {
             const int gv = chan_->extract(bins, clientViewCentreBin(c.get()),
