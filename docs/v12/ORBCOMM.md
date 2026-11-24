@@ -80,8 +80,17 @@ sky dots within 1° of SGP4). **On-air: see "Real data" below.**
 a ~4.4 kHz channel at DC (the listener's passband resampled — a server bug, fixed separately), so no ORBCOMM carrier was
 in it: 0 packets, correctly. A raw `rtl_sdr` capture (1.024 MS/s, 137.5 MHz) was made after; results below.
 
-**The raw capture has not been made yet** (the dongle was needed for a METEOR pass). Until it is, nothing here is
-proven on air. To check one: `vibeserver/tool-orbcomm-file <file.cu8> --rate 1024000 --centre 137500000 --start
+**2026-11-24 09:38:16 UTC raw capture** (`~/VibeSDR-test-audio/orbcomm/orbcomm-20261124T093816Z.cu8`: `rtl_sdr` on the
+Pi 500's RTL-SDR V4 + YouLoop, 1.024 MS/s, 137.500 MHz, gain 40, 600 s, no header). **No ORBCOMM bird was up**: by
+CelesTrak's current ORBCOMM elements only FM108 rose, reaching 3.9° in the last seconds; the spectrum shows no carrier
+(only the RTL's ~3 dB ripple every ~40 kHz). So it proves no decode — but it found a real fault: the scanner adopted
+that ripple as **268 "carriers" in 10 minutes**, each demodulated for 8 s. Fixed: a candidate must show an SDPSK line in
+its x⁴ comb (`Chan::kAcqMinRatio` 16; measured: noise across this capture at most 10.7, synthetic 6 dB 24, 8 dB 75)
+or it is dropped and banned at once. Re-run: 0 carriers, 0 packets — correct for an empty sky, at no cost.
+**Still unproven on air: everything that needs a bird.** Next good passes over Luton that day (UTC): FM117 47° at 10:46,
+FM32 40° at 11:05, FM108 49° at 11:37 — record ~10 minutes around one.
+
+To check a capture: `vibeserver/tool-orbcomm-file <file.cu8> --rate 1024000 --centre 137500000 --start
 <UTC ISO> --tle orbcomm.tle --lat … --lon … --csv out.csv` (a raw `rtl_sdr` file has no header; the tool handles both).
 Look for: carriers found, sync/ephemeris counts, "learnt IDs" (sync ID → catalogue number), the ephemeris match in km
 (the E80050015 scaling — if it is wrong the match is thousands of km and naming falls back to Doppler), the satellite

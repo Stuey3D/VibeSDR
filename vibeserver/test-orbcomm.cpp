@@ -139,6 +139,28 @@ static void testReceiver(bool quick) {
     }
 }
 
+/** ★ The x⁴ check that a scanner peak IS an SDPSK carrier (the first raw capture: 268 "carriers" from the RTL's ripple). */
+static void testCarrierCheck() {
+    std::printf("── carrier check (x⁴ line over the comb)\n");
+    std::vector<uint8_t> all;
+    for (int f = 0; f < 2; f++) { auto fr = tx::minorFrame(0x2B, 0x73, f, {}); all.insert(all.end(), fr.begin(), fr.end()); }
+    auto ratio = [](const std::vector<std::complex<float>>& x, double fs, double off, bool& rej) {
+        Chan::Cfg c; c.fsIn = fs; c.offsetHz = off; Chan ch(c);
+        for (size_t i = 0; i < x.size() && !ch.acquired() && !ch.rejected(); i += 4096) ch.feed(&x[i], int(std::min<size_t>(4096, x.size() - i)));
+        rej = ch.rejected(); return ch.acqRatio();
+    };
+    tx::Signal s; s.fs = 250000; s.offsetHz = 20000; s.esn0Db = 6; s.seed = 11;
+    bool rej = true; const double r6 = ratio(tx::modulate(all, s), s.fs, 20600, rej);
+    CHECK(!rej && r6 > Chan::kAcqMinRatio, "a 6 dB carrier is accepted (ratio %.1f)", r6);
+    s.amp = 0; s.esn0Db = -100;
+    auto noise = tx::modulate(all, s);
+    std::mt19937 g(4); std::normal_distribution<float> n(0, 0.05f);
+    for (auto& v : noise) v = { n(g), n(g) };
+    int rejected = 0;
+    for (double off : { -90000.0, -30000.0, 0.0, 45000.0, 100000.0 }) { bool r = false; ratio(noise, s.fs, off, r); rejected += r; }
+    CHECK(rejected == 5, "noise is rejected at every offset (%d of 5)", rejected);
+}
+
 static void testSensitivity() {
     std::printf("── sensitivity (Es/N0 → good packets)\n");
     const double fs = 100000;
@@ -156,6 +178,7 @@ int main(int argc, char** argv) {
     const bool quick = argc > 1 && std::strcmp(argv[1], "--quick") == 0;
     testFields();
     testReceiver(quick);
+    testCarrierCheck();
     if (!quick) testSensitivity();
     std::printf("test-orbcomm: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -395,6 +395,11 @@ public:
         return N > 0 ? std::min(40.0, 10 * std::log10(S / N)) : 40.0;
     }
     bool acquired() const { return acquired_; }
+    bool rejected() const { return rejected_; }       ///< the x⁴ comb showed no SDPSK line: not an ORBCOMM carrier
+    double acqRatio() const { return acqRatio_; }      ///< the line over the comb's mean (the tests read it)
+    /** Measured 2026-11-24: synthetic SDPSK at Es/N0 4 dB 10, 6 dB 24, 8 dB 75; the raw capture with no bird up, 119 tries
+     *  across the band, at most 10.7 (the RTL's ripple and spurs). 16 keeps every carrier that can decode (≈ 6 dB up). */
+    static constexpr double kAcqMinRatio = 16.0;
     bool locked() const { return framer_.locked(); }
     uint64_t symbols() const { return syms_; }
     const Framer::Stats& stats() const { return framer_.stats(); }
@@ -486,10 +491,18 @@ private:
         auto comb = [&](int k) { return pw(k) + pw(k - side) + pw(k + side); };
         int best = 0; float bestP = -1;
         const int lim = int(std::min(fsA / 4 - binHz, 4 * cfg_.acqRangeHz) / binHz);
+        double sum = 0; int cnt = 0;
         for (int k = -lim; k <= lim; k++) {
             const float q = comb(k);
+            sum += q; cnt++;
             if (q > bestP) { bestP = q; best = k; }
         }
+        /* ★★ IS IT AN ORBCOMM CARRIER AT ALL? (the first raw capture, 2026-11-24 09:38 UTC: no bird up, and the scanner
+         *  adopted the RTL's own passband ripple — ~3 dB bumps every ~40 kHz — as 268 "carriers" in 10 minutes, each
+         *  demodulated for 8 s.) A real SDPSK carrier puts a LINE in the x⁴ comb; noise does not. The line must stand
+         *  kAcqMinRatio over the comb's mean, or the carrier is REJECTED (the receiver drops and bans it at once). */
+        acqRatio_ = cnt > 0 && sum > 0 ? double(bestP) / (sum / cnt) : 0.0;
+        if (acqRatio_ < kAcqMinRatio) { rejected_ = true; acq_.clear(); return; }
         // parabolic refinement
         const float l = comb(best - 1), c = comb(best), r = comb(best + 1);
         const float den = l - 2 * c + r;
@@ -506,7 +519,8 @@ private:
     DecimLp lp_;
     vibelrpt::PolyRrc rrc_;
     std::vector<std::complex<float>> acq_;
-    bool acquired_ = false;
+    bool acquired_ = false, rejected_ = false;
+    double acqRatio_ = 0;
     std::complex<float> prev_{ 0, 0 }, acc4_{ 0, 0 };
     double pAvg_ = 0, m2_ = 0, m4_ = 0;
     int lastB_ = 0;
@@ -641,7 +655,7 @@ public:
         for (size_t i = 0; i < chans_.size();) {
             Chan& c = *chans_[i];
             const double quietSec = double(c.symbols() - c.lastGoodSym) / kBaud;
-            if (now_ - c.createdSec > cfg_.dropSec && quietSec > cfg_.dropSec) {
+            if (c.rejected() || (now_ - c.createdSec > cfg_.dropSec && quietSec > cfg_.dropSec)) {
                 bans_.push_back({ c.offsetHz(), now_ + cfg_.banSec });
                 chans_.erase(chans_.begin() + long(i));
             } else i++;
