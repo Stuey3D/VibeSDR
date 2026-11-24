@@ -282,6 +282,7 @@ class ConverterBackend implements SDRBackend {
   setRate(divisor: number) { this.inner.setRate(divisor); }
   pauseSpectrum() { this.inner.pauseSpectrum(); }
   resumeSpectrum() { this.inner.resumeSpectrum(); }
+  setPresence(state: 'foreground' | 'background') { this.inner.setPresence?.(state); }   // ★ V12 PRESENCE
   watchSpectrumUrl?(): string { return this.inner.watchSpectrumUrl!(); }
   forceResubscribe?(reason: string): void { this.inner.forceResubscribe?.(reason); }
 

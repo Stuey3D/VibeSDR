@@ -221,6 +221,9 @@ export interface SDRBackend {
   setRate(divisor: number): void;
   pauseSpectrum(): void;
   resumeSpectrum(): void;
+  /** ★★ V12 PRESENCE: tell the server the app went to / came back from the background, so it knows what a later
+   *  drop means (VibeServerWsClient.setPresence). VibeServer only — absent elsewhere (no server to tell). */
+  setPresence?(state: 'foreground' | 'background'): void;
   /** UberSDR only: the spectrum WS URL (with auth) for the native locked-pocket
    *  forwarder. Absent on adapters whose spectrum isn't a native-openable UberSDR WS. */
   watchSpectrumUrl?(): string;

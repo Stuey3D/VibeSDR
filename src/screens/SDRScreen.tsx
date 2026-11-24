@@ -10047,6 +10047,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         appActiveRef.current = (state === 'active');
         return;
       }
+      // ★★ V12 PRESENCE: tell a VibeServer where the app is BEFORE the spectrum pause below closes its socket — a later
+      //    drop of the audio socket is then the OS suspending us (held), not the app closing (VibeServerWsClient.setPresence).
+      client.current?.setPresence?.(state === 'active' ? 'foreground' : 'background');
       if (state !== 'active') {
         if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
         // Backgrounded: the spectrum pause starves the link to 0, but that's NOT
