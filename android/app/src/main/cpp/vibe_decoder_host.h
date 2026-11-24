@@ -68,6 +68,7 @@
 #include "vibe_balloon_run.h"  // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV pictures — docs/v12/BALLOONS.md
 #include "vibe_tones_run.h"    // ★ V12 tone decoders: DTMF and 5-tone selective calling — docs/v12/TONES.md
 #include "vibe_lrpt_run.h"     // ★ V12 METEOR-M LRPT pictures on an IQ slice of the dial — docs/v12/LRPT.md
+#include "vibe_orbcomm_run.h"  // ★ V12 ORBCOMM housekeeping + raw subscriber frames on an IQ slice — docs/v12/ORBCOMM.md
 #include "vibe_sat_engine.h"    // ★ V12 the satellite engine's decoder hook (LRPT's Doppler feed-forward)
 #include "vibe_nav_run.h"      // ★ V12 VOR bearing + ILS deviation on the channel IQ — docs/v12/VOR-ILS.md
 #include "vibe_sarsat_run.h"   // ★ V12 COSPAS-SARSAT 406 MHz beacons on the channel IQ — docs/v12/SARSAT.md
@@ -811,7 +812,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : lrpt_ ? "lrpt" : fctlm_ ? "fctlm" : nav_ ? "vor" : sarsat_ ? "sarsat" : ale_ ? "ale" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : lrpt_ ? "lrpt" : orbcomm_ ? "orbcomm" : fctlm_ ? "fctlm" : nav_ ? "vor" : sarsat_ ? "sarsat" : ale_ ? "ale" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -954,7 +955,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "lrpt" || e == "fctlm" || e == "vor" || e == "sarsat" || e == "ale";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "lrpt" || e == "orbcomm" || e == "fctlm" || e == "vor" || e == "sarsat" || e == "ale";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -1000,10 +1001,11 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || lrpt_ || fctlm_ || nav_ || sarsat_ || ale_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || lrpt_ || orbcomm_ || fctlm_ || nav_ || sarsat_ || ale_; }
     void clearLocked_() {
         // ★ LRPT hands the gallery its pass's pictures as it finishes, so it goes before the gallery's copy is closed
         if (lrpt_) lrpt_->finish(true);
+        if (orbcomm_) orbcomm_->finish(true);   // ★ ORBCOMM's sky plot picture, the same way
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
           if (t) t->finish(running_());
@@ -1020,6 +1022,7 @@ private:
         psk_.reset();
         rttySkim_.reset();   // ★ joins its search workers
         lrpt_.reset();
+        orbcomm_.reset();
         fctlm_.reset();
         aprs_.reset();
         if (packetIq_.exchange(false)) packetIqRunning().fetch_sub(1);
@@ -1275,6 +1278,9 @@ private:
             return;
         } else if (ext == "lrpt") {
             buildLrptLocked_(msg);
+            return;
+        } else if (ext == "orbcomm") {
+            buildOrbcommLocked_(msg);
             return;
         } else if (ext == "fctlm") {
             /* ★★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_fctlm.h): the listener's USB audio, the signal near "centre"
@@ -1601,6 +1607,45 @@ private:
         if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
         log("decoder attached: METEOR LRPT, " + (o.rateAuto ? std::string("72k / 80k AUTO") : std::to_string((int)o.symbolRate) + " sym/s") + ", modulation " + (m.empty() ? "auto" : m)
             + ", differential " + (d.empty() ? "auto" : d));
+    }
+    /** ★★ V12 2026-11-24 ORBCOMM (vibe_orbcomm_run.h, docs/v12/ORBCOMM.md): an IQ slice of the dial ("width": one listed
+     *  channel ± Doppler = 40 kHz, a listed band up to 640 kHz — vibe_sat_engine.h decoderOf), every ORBCOMM carrier in it
+     *  decoded. "max_carriers" 1–6 is the manual fallback under AUTO (4). Housekeeping as lines + orbcomm_status; subscriber
+     *  messages only as raw bytes; sky dots to the machine's sky plot; the plot's PNG to the gallery at the pass's end. */
+    void buildOrbcommLocked_(const std::string& msg) {
+        vibeorb::Run::Opts o;
+        double w = 40000; num(msg, "width", w);
+        o.widthHz = std::max(20000.0, std::min(640000.0, w));
+        double mc = 0; num(msg, "max_carriers", mc);
+        o.maxChans = mc >= 1 ? std::min(vibeorb::kMaxChans, (int)mc) : 0;
+        o.json = [this](const std::string& j) { broadcastText(j, -1); };
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.birds = [] {
+            std::vector<vibeorb::Bird> v;
+            for (auto& e : vibe::sat::engine().orbcommElements()) { vibeorb::Bird b; b.norad = e.norad; b.name = e.name; b.ok = b.sgp.init(e.el); v.push_back(std::move(b)); }
+            return v;
+        };
+        o.observer = [](vibe::sat::Observer& ob) { return vibe::sat::engine().observer(ob); };
+        const std::string sess = session_;
+        o.pickNorad = [sess] { const vibe::sat::DecoderView v = vibe::sat::decoderView(sess); return v.consumer == "orbcomm" ? v.norad : 0LL; };
+        if (env_.satInRange) o.satInRange = env_.satInRange;
+        else o.satInRange = [sess] { return vibe::sat::inRangeOf(vibe::sat::decoderView(sess)); };
+        o.dots = [](const std::vector<vibe::skyplot::Dot>& d) { vibe::skyplot::shared().add(d); };
+        o.skyPng = [](std::string& title) {
+            vibe::skyplot::Store::Filter f; f.kind = vibe::skyplot::kOrbcomm; f.radio = vibe::logradio::mine();
+            const auto dots = vibe::skyplot::shared().read(f);
+            if (dots.empty()) return std::string();
+            title = "ORBCOMM SKY PLOT - " + std::to_string(dots.size()) + " DOTS" + (f.radio.empty() ? std::string() : " - RADIO " + f.radio);
+            return vibe::skyplot::png(dots, title);
+        };
+        o.picture = [this](const std::string& name, const std::string& png, int pw, int ph, bool partial) {
+            if (DecoderTapPtr t = tap()) t->picture(name, png, pw, ph, partial);
+        };
+        o.log = [this](const std::string& l) { log(l); };
+        orbcomm_.reset(new vibeorb::Run(std::move(o)));
+        cwWidth_.store(std::max(20000.0, std::min(640000.0, w)), std::memory_order_relaxed);
+        if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
+        log("decoder attached: ORBCOMM, a " + std::to_string((int)std::lround(w / 1000)) + " kHz slice, " + (mc >= 1 ? std::to_string((int)mc) + " carriers at most" : std::string("carriers AUTO")));
     }
     /** ★★ DSC (V12, 2026-10-26): "band":"vhf" = channel 70 on an FM demodulator's audio; anything else MF/HF, its tones
      *  centred on "center_frequency" (1700 Hz: the dial 1.7 kHz below the DSC frequency on USB, above it on LSB). */
@@ -2224,6 +2269,7 @@ private:
                     if (b.gapN == 0 && b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && rttySkim_) rttySkim_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && orbcomm_) orbcomm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
@@ -2505,6 +2551,7 @@ private:
     DecoderTapPtr cwTap_;                    // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
     std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     std::unique_ptr<RttySkimRun> rttySkim_;   // ★ the RTTY skimmer (buildRttySkimLocked_) — shares cwIq_/cwWidth_, owns its workers
+    std::unique_ptr<vibeorb::Run> orbcomm_;    // ★ V12 ORBCOMM (buildOrbcommLocked_) — shares cwIq_/cwWidth_
     std::unique_ptr<vibelrpt::Run> lrpt_;      // ★ V12 METEOR-M LRPT (buildLrptLocked_) — shares cwIq_/cwWidth_
     int   sstvDecim_ = 0; float sstvAcc_ = 0.0f;
     int   textSlot_ = -1;

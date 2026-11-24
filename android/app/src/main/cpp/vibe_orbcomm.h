@@ -539,7 +539,8 @@ public:
             for (size_t k = 0; k < n_; k++) acc_[k] += std::norm(a[k]);
             buf_.clear();
             skip_ = every_ - n_;
-            if (++frames_ >= std::max<size_t>(4, size_t(fs_ / double(every_)))) { analyse_(); done = true; }
+            // the first look after ~0.25 s (a pass should not wait), then one a second
+            if (++frames_ >= (looks_ == 0 ? size_t(5) : std::max<size_t>(4, size_t(fs_ / double(every_))))) { analyse_(); looks_++; done = true; }
         }
         return done;
     }
@@ -588,7 +589,7 @@ private:
         peaks_ = std::move(out);
     }
     double fs_ = 0, floorDb_ = 0;
-    size_t n_ = 256, every_ = 256, skip_ = 0, frames_ = 0;
+    size_t n_ = 256, every_ = 256, skip_ = 0, frames_ = 0, looks_ = 0;
     std::vector<float> win_;
     std::vector<std::complex<float>> buf_;
     std::vector<double> acc_;

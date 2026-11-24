@@ -12158,7 +12158,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void satGainWatchTick() {
         if (frontDoorOnly || decoderOnly || stopping.load()) return;
         satIfTick();   // ★★ beta92 the pass's IF filter first — the gain is measured behind it
-        auto satDec = [](const std::string& d) { return d == "lrpt" || d == "sstv" || d == "fctlm" || d == "aprs"; };
+        auto satDec = [](const std::string& d) { return d == "lrpt" || d == "sstv" || d == "fctlm" || d == "aprs" || d == "orbcomm"; };
         bool running = false; std::string key, what; long long norad = 0;
         {   // 1. an unattended pass (its decoder on the shared host)
             std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
@@ -12188,7 +12188,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!running) {   // 3. LRPT / FUNcube telemetry started by hand — satellite-only decoders
             for (auto& kv : decoders_.all()) {
                 const std::string k = kv.second ? kv.second->kind() : std::string();
-                if (k == "lrpt" || k == "fctlm") { running = true; key = k; what = k == "lrpt" ? "METEOR LRPT" : "FUNcube telemetry"; break; }
+                if (k == "lrpt" || k == "fctlm" || k == "orbcomm") { running = true; key = k; what = k == "lrpt" ? "METEOR LRPT" : k == "orbcomm" ? "ORBCOMM" : "FUNcube telemetry"; break; }
             }
         }
         bool knowsSky = false, up = false;
@@ -29524,6 +29524,58 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
             return;
+        } else if (reqLine.rfind("GET /vibeserver/skyplot.json", 0) == 0 || reqLine.rfind("GET /vibeserver/skyplot.png", 0) == 0) {
+            /* ★★ V12 2026-11-24 THE SKY PLOT (vibe_skyplot.h, docs/v12/SKY-PLOT.md): where this machine's aerials hear
+             *  satellites — one dot per satellite per 5 s of decodes (ORBCOMM first), at its az/el, coloured by SNR; grey =
+             *  tracked, nothing decoded. ?kind=orbcomm|meteor|aprs|funcube (default orbcomm) · ?radio=<id> (the logs'
+             *  filter: a sky plot is about an AERIAL) · ?days=N (default all kept) · ?norad=N. .json for the clients'
+             *  own drawing, .png the server's picture (the same one the gallery keeps). Satellite positions and SNRs only;
+             *  the gallery's privacy applies. */
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            const bool asPng = reqLine.rfind("GET /vibeserver/skyplot.png", 0) == 0;
+            const size_t sp = reqLine.find(' ', 4);
+            const std::string target = reqLine.substr(4, sp == std::string::npos ? std::string::npos : sp - 4);
+            const size_t qm = target.find('?');
+            const std::string query = qm == std::string::npos ? "" : target.substr(qm + 1);
+            auto qv = [&](const char* k) {
+                const std::string key = std::string(k) + "=";
+                size_t p = 0;
+                while ((p = query.find(key, p)) != std::string::npos) {
+                    if (p == 0 || query[p - 1] == '&') { const size_t e = query.find('&', p); return query.substr(p + key.size(), e == std::string::npos ? std::string::npos : e - p - key.size()); }
+                    p += key.size();
+                }
+                return std::string();
+            };
+            std::string body, type = asPng ? "image/png" : "application/json";
+            const char* status = "200 OK";
+            if (!g_galleryPublic.load() && !adminOkFor(reqLine, sock)) {
+                status = "403 Forbidden"; type = "application/json";
+                body = "{\"v\":1,\"dots\":[],\"count\":0,\"error\":\"the owner has made this server's gallery private\"}";
+            } else {
+                vibe::skyplot::Store::Filter f;
+                std::string k = qv("kind"); if (k.empty()) k = "orbcomm";
+                f.kind = vibe::skyplot::kindOf(k);
+                if (!f.kind) { f.kind = vibe::skyplot::kOrbcomm; k = "orbcomm"; }
+                f.radio = qv("radio");
+                if (!vibe::logradio::validId(f.radio)) f.radio.clear();
+                const long long days = std::atoll(qv("days").c_str());
+                if (days > 0) f.since = (uint32_t)std::max<long long>(0, (long long)std::time(nullptr) - std::min(3650LL, days) * 86400);
+                f.norad = std::max(0LL, std::atoll(qv("norad").c_str()));
+                std::map<std::string, uint64_t> radios;
+                const auto dots = vibe::skyplot::shared().read(f, vibe::skyplot::kMaxOut + 1, &radios);
+                const bool trunc = dots.size() > vibe::skyplot::kMaxOut;
+                std::vector<vibe::skyplot::Dot> v(dots.begin(), dots.begin() + (long)std::min(dots.size(), vibe::skyplot::kMaxOut));
+                if (asPng) {
+                    std::string title = k + " SKY PLOT - " + std::to_string(v.size()) + " DOTS";
+                    if (!f.radio.empty()) title += " - RADIO " + f.radio;
+                    body = vibe::skyplot::png(v, title);
+                } else body = vibe::skyplot::json(v, radios, k, trunc);
+            }
+            sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: " + type + "\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+            return;
         } else if (reqLine.rfind("GET /addon/hfdl/", 0) == 0) {
             /* ★★ V12 HFDL — THE HFDL MAP'S TWO ENDPOINTS (docs/v12/AVIATION.md §Decision): the clients' HFDL map
              *  (MapOverlay KIND 'hfdl', fetchAC / fetchGS) already reads this shape; served from this radio's aircraft table
@@ -42037,6 +42089,7 @@ void LocalSdrShim::setAircraftShareDir(const std::string& dir) {
 void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive) {
     auto& g = vibe::gallery::shared();
     g.setDir(dir);
+    vibe::skyplot::shared().setDir(dir);   // ★ V12 2026-11-24 the SKY PLOT's one file per server (vibe_skyplot.h)
     g.setLimitBytes(limitMb > 0 ? (uint64_t)(limitMb * 1024.0 * 1024.0) : 0);
     g_galleryPublic.store(publicRead);
     g_gallerySaveLive.store(saveLive);
@@ -43981,7 +44034,7 @@ std::string LocalSdrShim::backgroundCapsJson() {
             if (!vibe::sat::passKeepable(t)) continue;
             std::string pr; const std::string d = vibe::sat::decoderOf(t, pr);
             const std::string what = d == "lrpt" ? "weather pictures (LRPT)" : d == "sstv" ? "SSTV pictures on " + vibe::sat::fmtNum(t.hz / 1e6, 3) + " MHz"
-                                   : d == "fctlm" ? "FUNcube telemetry" : t.consumer == "ax25-9600" ? "9600 Bd telemetry" : "APRS packets";
+                                   : d == "fctlm" ? "FUNcube telemetry" : d == "orbcomm" ? "ORBCOMM housekeeping and the sky plot" : t.consumer == "ax25-9600" ? "9600 Bd telemetry" : "APRS packets";
             j += std::string(first ? "" : ",") + "{\"norad\":" + std::to_string(sd.norad) + ",\"label\":\"" + vibe::sat::jsonEsc(t.label)
                + "\",\"name\":\"" + vibe::sat::jsonEsc(sd.name) + "\",\"what\":\"" + vibe::sat::jsonEsc(what + (t.note.find("Germany") != std::string::npos ? " (Germany passes only)" : "")) + "\"}";
             first = false;
@@ -44091,6 +44144,9 @@ static std::string vsTunableJson() {
     /* ★ V12 beta90 FUNcube telemetry (vibe_fctlm.h): AO-73's BPSK 1200 on a listener's USB audio — attached by a SATELLITE
      *  pick (or the toggle under it). Absent on an older server; false + its reason where 145.935 is out of reach / blocked. */
     j += vsDecoderCapJson("fctlm", reach);
+    /* ★ V12 2026-11-24 ORBCOMM (vibe_orbcomm.h, docs/v12/ORBCOMM.md): the 137–138 MHz downlinks on an IQ slice — attached by
+     *  a SATELLITE pick of an ORBCOMM bird. Absent on an older server; false + its reason where 137 MHz is out of reach. */
+    j += vsDecoderCapJson("orbcomm", reach);
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -44358,7 +44414,8 @@ static std::string vsTunableJson() {
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
                                         "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "ale", "drm", "freedv", "m17", "dvsig",
                                         "lrpt",             // ★ V12 METEOR-M LRPT (docs/v12/LRPT.md) — reach-gated (137 MHz), never an Icom
-                                        "fctlm" };          // ★ V12 beta90 FUNcube telemetry (AO-73) — reach-gated (145.935 MHz)
+                                        "fctlm",            // ★ V12 beta90 FUNcube telemetry (AO-73) — reach-gated (145.935 MHz)
+                                        "orbcomm" };        // ★ V12 ORBCOMM housekeeping + sky plot — reach-gated (137–138 MHz)
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -44535,7 +44592,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"lrpt", "METEOR LRPT"}, {"fctlm", "FUNcube telemetry"}, {"vor", "VOR / ILS"}, {"sarsat", "406 MHz beacons"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"lrpt", "METEOR LRPT"}, {"orbcomm", "ORBCOMM"}, {"fctlm", "FUNcube telemetry"}, {"vor", "VOR / ILS"}, {"sarsat", "406 MHz beacons"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

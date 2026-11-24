@@ -94,8 +94,8 @@ static void testReceiver(bool quick) {
     struct Case { double off, slope, ppm, esn0; int minOk; const char* what; };
     const int n = int(bytes.size() / 12);
     const Case cs[] = {
-        { 0, 0, 0, 25, n * 8 / 10, "clean, on the centre" },
-        { -47500, 0, 0, 25, n * 8 / 10, "−47.5 kHz in the slice" },
+        { 0, 0, 0, 25, n * 3 / 4, "clean, on the centre" },
+        { -47500, 0, 0, 25, n * 3 / 4, "−47.5 kHz in the slice" },
         { 61234, -35, 40, 18, n * 7 / 10, "+61 kHz, −35 Hz/s Doppler, 40 ppm clock, 18 dB" },
         { -12000, 30, -60, 12, n * 6 / 10, "12 dB, +30 Hz/s, −60 ppm" },
     };

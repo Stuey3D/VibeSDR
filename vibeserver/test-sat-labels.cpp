@@ -46,21 +46,27 @@ static const SkyLabel* find(const std::vector<SkyLabel>& v, long long norad, con
 }
 
 static void s1(const std::string& dir) {
-    std::printf("§1 sats.json with label-only birds\n");
+    /* ★★ 2026-11-24: ORBCOMM is a REGULAR satellite now (docs/v12/ORBCOMM.md — Stuart: "we can treat orbcomm as a regular
+     *  satellite"). The mirror's beta91 shape (label-only birds, mode "label") is turned into ordinary picks with the ORBCOMM
+     *  decoder; the label-only machinery stays for any other label bird. */
+    std::printf("§1 sats.json with ORBCOMM's label-only birds → regular ORBCOMM picks\n");
     const std::string js = readFile(dir + kFix);
     std::vector<SatDef> d; std::vector<Elements> el; std::vector<bool> have; SatsMeta meta; std::string err; LabelSet ls;
     CHECK(parseSats(js, d, el, have, meta, err, &ls), "the fixture parses (%s)", err.c_str());
-    CHECK(d.size() == curatedCatalogue().size(), "the list is the curated birds alone (%zu)", d.size());
-    CHECK(ls.defs.size() == 8, "8 ORBCOMM birds in the label set (%zu)", ls.defs.size());
-    bool allHave = true, allLabel = true;
-    for (size_t i = 0; i < ls.defs.size(); ++i) {
-        allHave = allHave && ls.have[i];
-        for (auto& t : ls.defs[i].tx) allLabel = allLabel && t.labelOnly() && t.loop == "none" && t.consumer.empty();
+    CHECK(d.size() == curatedCatalogue().size() + 8, "the list is the curated birds + 8 ORBCOMM (%zu)", d.size());
+    CHECK(ls.defs.empty(), "no label-only birds left (%zu)", ls.defs.size());
+    bool allHave = true, allOrb = true; int orb = 0;
+    for (size_t i = 0; i < d.size(); ++i) {
+        if (!orbcommBird(d[i])) continue;
+        ++orb; allHave = allHave && have[i];
+        for (auto& t : d[i].tx) { std::string p; allOrb = allOrb && t.orbcomm() && !t.labelOnly() && t.loop == "none" && decoderOf(t, p) == "orbcomm" && std::string(useOf(t)) == "packet"; }
     }
-    CHECK(allHave && allLabel, "each has elements and only 'label' downlinks (no loop, no consumer)");
-    bool fm108 = false;
-    for (auto& s : ls.defs) if (s.norad == 41179 && s.tx.size() == 1 && s.tx[0].hz == 137713000 && !s.tx[0].passband()) fm108 = true;
-    CHECK(fm108, "FM108 on its own SatNOGS channel, 137.713 MHz");
+    CHECK(orb == 8 && allHave && allOrb, "each has elements and an ORBCOMM downlink: decoder orbcomm, use packet (%d)", orb);
+    bool fm108 = false, bandW = false;
+    for (auto& s : d) if (s.norad == 41179 && s.tx.size() == 1 && s.tx[0].hz == 137713000 && !s.tx[0].passband()) { std::string p; decoderOf(s.tx[0], p); fm108 = p.find("\"width\":40000") != std::string::npos; }
+    for (auto& s : d) if (orbcommBird(s) && s.tx.size() == 1 && s.tx[0].passband()) { std::string p; decoderOf(s.tx[0], p); bandW = p.find("\"width\":640000") != std::string::npos; }
+    CHECK(fm108, "FM108 on its own SatNOGS channel, 137.713 MHz: a 40 kHz slice");
+    CHECK(bandW, "a band bird: a 640 kHz slice over 137.2–137.8 MHz");
     std::vector<SatDef> d2; std::vector<Elements> e2; std::vector<bool> h2; SatsMeta m2; std::string err2;
     CHECK(parseSats(js, d2, e2, h2, m2, err2) && d2.size() == d.size(), "a validator (no label set) accepts the same file");
     // a label downlink on an ordinary bird is dropped; a file of label birds only is refused (nothing to offer)
@@ -69,21 +75,21 @@ static void s1(const std::string& dir) {
     CHECK(parseSats(mixed, d2, e2, h2, m2, err2, &ls) && d2.size() == 1 && d2[0].tx.size() == 1 && ls.defs.empty(), "a stray 'label' downlink on an ordinary bird is dropped");
     const std::string only = R"({"format":1,"satellites":[{"id":"O-1","name":"O","norad":99002,"labelOnly":true,"transmitters":[
         {"label":"L","downlink":137500000,"mode":"label","loop":"none"}]}]})";
-    CHECK(!parseSats(only, d2, e2, h2, m2, err2, &ls), "a file of label-only birds is refused (%s)", err2.c_str());
+    CHECK(!parseSats(only, d2, e2, h2, m2, err2, &ls), "a file of (non-ORBCOMM) label-only birds is refused (%s)", err2.c_str());
     const std::string flagged = R"({"format":1,"satellites":[{"id":"A-1","name":"A","norad":99003,"transmitters":[{"label":"FM","downlink":145900000,"mode":"nfm","loop":"fll"}]},
         {"id":"F-1","name":"F","norad":99004,"labelOnly":true,"transmitters":[{"label":"FM","downlink":137500000,"mode":"nfm","loop":"fll"},{"label":"L","downlink":137600000,"mode":"label","loop":"none"}]}]})";
     CHECK(parseSats(flagged, d2, e2, h2, m2, err2, &ls) && d2.size() == 1 && ls.defs.size() == 1 && ls.defs[0].tx.size() == 1 && ls.defs[0].tx[0].hz == 137600000,
           "\"labelOnly\":true keeps only its label downlinks");
+    const std::string orbMode = R"({"format":1,"satellites":[{"id":"ORBCOMM-FM999","name":"ORBCOMM FM999","norad":99005,"transmitters":[
+        {"label":"Downlink","downlink":137250000,"mode":"orbcomm","loop":"none"}]}]})";
+    CHECK(parseSats(orbMode, d2, e2, h2, m2, err2, &ls) && d2.size() == 1 && d2[0].tx.size() == 1 && d2[0].tx[0].orbcomm(), "a future mirror's mode \"orbcomm\" is accepted as is");
 
     auto e = mk(dir, kIoLat, kIoLon);
-    int withEl = 0;
-    CHECK(e->labelCount(&withEl) == 8 && withEl == 8, "the engine holds them apart (%d, %d with elements)", e->labelCount(), withEl);
+    CHECK(e->labelCount() == 0, "no label-only birds held (%d)", e->labelCount());
+    CHECK(e->orbcommElements().size() == 8, "the ORBCOMM decoder's birds: 8 with elements (%zu)", e->orbcommElements().size());
     const std::string list = e->listJson(Clock{kIssTca, true}, 24e6, 1766e6);
-    CHECK(list.find("ORBCOMM") == std::string::npos, "never in the SATELLITE picker's sat_list");
-    CHECK(!e->reaches(137.15e6, 137.85e6), "the reach gate ignores them (137.15–137.85 MHz reaches nothing listed)");
-    const Track t = e->start("k", "o", 137.5e6, "nfm", Clock{kIssTca, true});
-    CHECK(t.state == LockState::Off, "Doppler at 137.5 MHz locks nothing (%s)", t.why.c_str());
-    for (auto& sd : e->defs()) CHECK(sd.group != "orbcomm", "defs() never carries %s", sd.id.c_str());
+    CHECK(list.find("ORBCOMM") != std::string::npos && list.find("\"decoder\":\"orbcomm\"") != std::string::npos, "in the SATELLITE picker's sat_list, decoder orbcomm");
+    CHECK(e->reaches(137.15e6, 137.85e6), "the reach gate counts them (137.15–137.85 MHz)");
 }
 
 static void s2(const std::string& dir) {
@@ -120,7 +126,7 @@ static void s2(const std::string& dir) {
 }
 
 static void s3(const std::string& dir) {
-    std::printf("§3 ORBCOMM rises (label-only)\n");
+    std::printf("§3 ORBCOMM rises (named on the waterfall; a band label keeps the merge flag)\n");
     auto e = mk(dir, kIoLat, kIoLon);
     const SkyLabel* seen = nullptr; std::vector<SkyLabel> v; double at = 0; int maxUp = 0;
     bool fm108 = false, band = false, fm108ok = false, bandok = false;
@@ -128,15 +134,15 @@ static void s3(const std::string& dir) {
         v = e->skyLabels(Clock{t, true}, 137.0e6, 138.0e6);
         int up = 0;
         for (auto& L : v) {
-            if (!L.labelOnly) continue;
+            if (L.name.rfind("ORBCOMM", 0) != 0) continue;
             ++up;
             if (!seen) { at = t; }
             seen = &L;
-            if (L.norad == 41179) { fm108 = true; fm108ok = L.loHz == 0 && std::fabs(L.hz - 137.713e6) < 4000 && L.mode == "nfm" && L.tx == "ORBCOMM"; }
+            if (L.norad == 41179) { fm108 = true; fm108ok = L.loHz == 0 && std::fabs(L.hz - 137.713e6) < 4000 && L.mode == "nfm" && L.tx == "ORBCOMM" && !L.labelOnly; }
             else if (L.hiHz > L.loHz) {
                 band = true;
                 bandok = std::fabs(L.loHz - 137.2e6) < 4000 && std::fabs(L.hiHz - 137.8e6) < 4000 && std::fabs(L.hz - 137.5e6) < 4000
-                         && L.name.rfind("ORBCOMM FM", 0) == 0;
+                         && L.name.rfind("ORBCOMM FM", 0) == 0 && L.labelOnly;
             }
         }
         maxUp = std::max(maxUp, up);
@@ -147,7 +153,7 @@ static void s3(const std::string& dir) {
     std::printf("   up to %d ORBCOMM birds at once\n", maxUp);
     bool none = true;
     for (double t = kIssTca - 6 * 3600; t < kIssTca + 6 * 3600; t += 300)
-        for (auto& L : e->skyLabels(Clock{t, true}, 144e6, 146e6)) if (L.labelOnly) none = false;
+        for (auto& L : e->skyLabels(Clock{t, true}, 144e6, 146e6)) if (L.name.rfind("ORBCOMM", 0) == 0) none = false;
     CHECK(none, "never named outside 137 MHz");
 }
 

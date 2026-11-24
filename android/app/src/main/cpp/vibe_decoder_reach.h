@@ -118,6 +118,8 @@ inline const std::vector<Entry>& table() {
             { band(108.0e6, 117.975e6), band(328.6e6, 335.4e6) } });
         // ★ V12 beta90 FUNcube telemetry (vibe_fctlm.h): AO-73's BPSK 1200 on 145.935 MHz, ±4 kHz of Doppler
         v.push_back({ "fctlm", "FUNcube telemetry", "is on 145.935 MHz (AO-73, FUNcube-1)", { ch(145.935e6, 5e3) } });
+        // ★ V12 2026-11-24 ORBCOMM (docs/v12/ORBCOMM.md): the subscriber downlinks in use, 137.2–137.8 MHz
+        v.push_back({ "orbcomm", "ORBCOMM", "is on 137.2\xe2\x80\x93" "137.8 MHz (the ORBCOMM satellites)", { band(137.19e6, 137.81e6) } });
         // ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): first-generation distress beacons, 406.0–406.1 MHz.
         v.push_back({ "sarsat", "406 MHz beacons", "is on 406.0\xe2\x80\x93" "406.1 MHz", { band(406.0e6, 406.1e6) } });
         return v;
