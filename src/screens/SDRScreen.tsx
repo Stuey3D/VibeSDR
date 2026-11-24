@@ -177,6 +177,7 @@ import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, sh
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
 import { PAGING_LAW_NOTICE, pagingRecSilent, pagingMutedBanner } from '../services/paging';   // ★ V12 PAGE: the law, REC silent
 import { SilentMute, isSilentDecoder, silentMutedBanner } from '../services/silentDecoder';   // ★★ APRS + METEOR LRPT mute (one rule, web and app)
+import { SharedFollower, roomSettingsOf, type SharedAction, type SharedDecoder } from '../services/sharedDecoders';   // ★★★ the room's decoder (2026-11-24)
 import { sessionChoice, setSessionChoice } from '../services/decoderSession';   // ★★★ AUTO first; manual for the session only
 import { fullModeName } from '../services/autoModes';   // ★★★ AUTO's fallback rows (RTTY's pattern)
 import { hzReachable } from '../utils/tuneWindow';
@@ -6861,7 +6862,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status.frequency]);
 
+  /** ★★★ SHARED DECODERS (Stuart, 2026-11-24 — src/services/sharedDecoders.ts): what this listener closed / pressed, and the
+   *  room's run being joined right now (openDecoder reads it). */
+  const roomFollowRef = useRef(new SharedFollower());
+  const roomJoinRef = useRef<{ box: DecoderType; ext: string; params: Record<string, unknown>; key: string } | null>(null);
   const openDecoder = useCallback((type: DecoderType) => {
+    /* ★★★ SHARED DECODERS (2026-11-24): a join of the room's decoder (roomApply) rides through here so the box resets exactly
+     *  as a press does — on VFO A, attached with the server's extension and parameters. Anything else is this listener's
+     *  own press (sharedDecoders.ts: it wins for a moment, and forgets what they had closed). */
+    const roomJoin = roomJoinRef.current && roomJoinRef.current.box === type ? roomJoinRef.current : null;
+    roomJoinRef.current = null;
+    if (!roomJoin && type && type !== 'transcribe' && type !== 'scanner') roomFollowRef.current.noteOwnOpen('decoder', Date.now());
     // ★ Leaving TRANSCRIBE for another decoder stops the native recogniser; entering it stops the socket decoder.
     if (activeDecRef.current === 'transcribe' && type !== 'transcribe') stopTranscribe();
     // ★★ V12: one box at a time — leaving the SCANNER for a decoder stops the scan (gate opened); entering it stops the
@@ -6873,7 +6884,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (type === 'scanner') onVfoAB(false);
     // ★★★ A server decoder runs on the VFO selected NOW (decode on either VFO); TRANSCRIBE hears the app's own audio — both
     //     VFOs as mixed — so it belongs to neither and carries no DEC tag.
-    else if (type && type !== 'transcribe') { const v = abStartVfo(); decVfoRef.current = v; setDecVfo(v); }
+    else if (type && type !== 'transcribe') { const v = roomJoin ? 'A' : abStartVfo(); decVfoRef.current = v; setDecVfo(v); }   // ★ the room's runs on A
     if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
@@ -6909,7 +6920,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ A forced station wins over the dial. Auto is right nearly always, but 60 kHz is two
       //   stations and only the receiver's location tells them apart — which not every server
       //   publishes.
-      const forced = timeStationPref !== 'auto' ? timeStationPref : '';
+      // ★★★ the room's time decoder names its own station (the web page sends 'time' + station, the app the station's name)
+      const roomSt = roomJoin ? (roomJoin.ext === 'time' ? String(roomJoin.params.station ?? '') : roomJoin.ext) : '';
+      const forced = roomSt || (timeStationPref !== 'auto' ? timeStationPref : '');
       const st0 = forced || timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
       const st = st0 === 'tdf' && !timeTdfCapable ? null : st0;   // ★ V12 TDF only where the server reads it
       if (!st) {
@@ -6975,7 +6988,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     if (decoderClient.current) decoderClient.current.vfo = decVfoRef.current;   // ★★ "vfo":"B" when it runs on B
-    decoderClient.current?.start(type);
+    // ★★★ the room's decoder: exactly the server's extension and parameters — this JOINS its run (never restarts it)
+    if (roomJoin && decoderClient.current) { decoderClient.current.startShared(type, roomJoin.ext, roomJoin.params); roomFollowRef.current.noteFollowed('decoder', roomJoin.key); }
+    else decoderClient.current?.start(type);
   }, [status.frequency, timeStationPref, timeTdfCapable, onVfoAB, aprsReset, abStartVfo]);
 
   /**
@@ -7001,6 +7016,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [activeDecoder, status.frequency, timeStationPref, openDecoder]);
 
   const closeDecoder = useCallback(() => {
+    // ★★★ SHARED DECODERS: closed by this listener — the room's run stays closed for them (the server lets go for them only)
+    roomFollowRef.current.noteClosed('decoder', activeDecRef.current);
     if (activeDecRef.current === 'transcribe') stopTranscribe();
     if (activeDecRef.current === 'scanner') scannerCtlRef.current?.stop();   // ★ closing the box stops the scan
     decoderClient.current?.stop();
@@ -7067,12 +7084,110 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [satFollow, satVfoBReset]);
 
   const stopSpots = useCallback(() => {
+    if (spotsKindRef.current === 'digi') roomFollowRef.current.noteClosed('spots', null);   // ★★★ shared decoders: closed for me
     decoderClient.current?.stopSpots();
     spotsKindRef.current = null;
     setSpotsKind(null);
     spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]); setBandSkim(null);
     stopSpotFlush();
   }, [stopSpotFlush]);
+
+  /* ★★★ SHARED DECODERS (Stuart, 2026-11-24: "if the aprs decoder is open for user 1 then user 2 connecting it should be open
+   *  for … if user 2 closes it then it closes for them only"). On a shared dial the server says what the room's decoder host
+   *  runs ({"type":"dec_shared"}, on change and on arrival); the app opens that box and JOINS the run with exactly the
+   *  server's extension and parameters (openDecoder → DecoderClient.startShared). The rule — held / closed-by-me / my own
+   *  press / busy — is sharedDecoders.ts, one copy with the web page. Closing the box is the ordinary detach (the server lets
+   *  go for this listener only); opening another decoder is the ordinary attach (it replaces the room's; the others follow).
+   *  ★ One box at a time in the app: the room's decoder is followed before its spots run, and the spots only into an empty
+   *    box. The silent-decoder mute follows the box, as for a decoder opened by hand. */
+  const roomCtxRef = useRef<{ blocked: Set<string>; why: Record<string, string>; band: boolean }>({ blocked: new Set(), why: {}, band: false });
+  roomCtxRef.current = { blocked: blockedModes, why: decWhy, band: !!spotsBandCap?.ok };
+  /** ★★★ The room's run's settings, shown in this listener's panel (one set of settings for the room — Stuart 11-24). The
+   *  refs and the state the panel draws from, and the decoder client's own copies; never saved as the listener's choice. */
+  const roomSettingsApply = useCallback((ext: string, params: Record<string, number | string | boolean>) => {
+    const st = roomSettingsOf(ext, params);
+    const dc = decoderClient.current;
+    if (st.rtty) {
+      rttySkimRef.current = st.rtty.skim; setRttySkim(st.rtty.skim);
+      if (dc) dc.rttySkim = st.rtty.skim;
+      if (st.rtty.skim) { rttyWidthRef.current = st.rtty.width; setRttyWidth(st.rtty.width); if (dc) dc.rttyWidth = st.rtty.width; }
+      else {
+        const r = st.rtty;
+        const next: RttySettings = { ...rttySettingsRef.current, shift: r.shift, baud: r.baud, encoding: r.encoding as RttySettings['encoding'],
+          inverted: r.inverted, auto: r.auto, usos: r.usos, ...(r.stop ? { stop: r.stop } : {}), ...(r.dataBits ? { dataBits: r.dataBits } : {}),
+          ...(r.parity ? { parity: r.parity as RttySettings['parity'] } : {}) };
+        rttySettingsRef.current = next; setRttySettings(next);
+        if (dc) dc.rttySettings = { ...next };
+      }
+    }
+    if (st.cw) { cwSkimRef.current = st.cw.skim; setCwSkim(st.cw.skim); if (dc) dc.cwSkim = st.cw.skim;
+                 if (st.cw.skim && st.cw.width) { cwWidthRef.current = st.cw.width; setCwWidth(st.cw.width); if (dc) dc.cwWidth = st.cw.width; } }
+    if (st.psk) { pskSkimRef.current = st.psk.skim; setPskSkim(st.psk.skim); if (dc) dc.pskSkim = st.psk.skim;
+                  if (st.psk.skim && st.psk.width) { pskWidthRef.current = st.psk.width; setPskWidth(st.psk.width); if (dc) dc.pskWidth = st.psk.width; } }
+    if (st.wefax) { setWefaxLpm(st.wefax.lpm); if (dc) dc.wefaxLpm = st.wefax.lpm; }
+    if (st.time) { timeStationRef.current = st.time.station; if (dc) dc.timeStation = st.time.station as typeof dc.timeStation; }
+    if (st.mfsk) { const m = { ...tmModeRef.current, mfsk: st.mfsk.mode }; tmModeRef.current = m; setTmMode(m); if (dc) dc.textMode = { ...m }; }
+    if (st.aprs) {
+      packetModeRef.current = st.aprs.mode as PacketMode; setPacketMode(st.aprs.mode as PacketMode);
+      const fec = { fx25: st.aprs.fx25, il2p: st.aprs.il2p }; pktFecRef.current = fec; setPktFec(fec);
+    }
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const roomApply = useCallback((a: SharedAction) => {
+    if (destroyed.current) return;
+    if (a.kind === 'settings') {
+      // ★★★ somebody changed the room's run, which this listener already holds: the panel shows its settings, a reconnect
+      //     re-asserts exactly it; nothing is sent now
+      if (a.box === 'spots') {
+        if (spotsKindRef.current === 'digi') {
+          const band = a.entry.params.scope === 'band';
+          spotsBandOnRef.current = band; setSpotsBandOn(band); setSpotModeStates([]); setBandSkim(null);
+          decoderClient.current?.noteSpotsScope(band ? 'band' : 'single');
+        }
+      } else if (activeDecRef.current === a.box) {
+        roomSettingsApply(a.entry.ext, a.entry.params);
+        decoderClient.current?.noteShared(a.box as Parameters<DecoderClient["noteShared"]>[0], a.entry.ext, a.entry.params);
+        if (a.box === 'aprs') aprsReset();
+        setDecoderStatus('settings changed by another listener — the decoder restarted with them');
+      }
+      return;
+    }
+    if (a.kind === 'follow') {
+      const box = a.box as DecoderType;
+      const ext = a.entry.ext;
+      roomSettingsApply(ext, a.entry.params);   // ★★★ the panel shows the ROOM's settings (one set for all)
+      if (spotsKindRef.current) stopSpots();
+      roomJoinRef.current = { box, ext, params: { ...a.entry.params }, key: a.entry.key };
+      openDecoder(box);
+      roomJoinRef.current = null;
+      setDecoderStatus('open for everyone on this receiver — close it to stop it for you only');
+    } else if (a.kind === 'spots') {
+      if (activeDecRef.current || spotsKindRef.current === 'digi') return;
+      spotsVfoRef.current = 'A'; setSpotsVfo('A');
+      setSpots([]);
+      spotsKindRef.current = 'digi'; setSpotsKind('digi');
+      startSpotFlush();
+      if (a.scope === 'band') { spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]); setBandSkim(null); }
+      decoderClient.current?.startSpots('digi', a.scope, 'A');
+      roomFollowRef.current.noteFollowed('spots', a.entry.key);
+    }
+  }, [openDecoder, stopSpots, startSpotFlush, roomSettingsApply, aprsReset]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const roomIn = useCallback((list: SharedDecoder[]) => {
+    const box = activeDecRef.current;
+    const busy = box === 'scanner' || box === 'transcribe' || box === 'ft8' || box === 'paging' || satOnRef.current
+      || (!!box && decVfoRef.current === 'B')
+      || dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current || avOnRef.current;
+    const ctx = roomCtxRef.current;
+    const acts = roomFollowRef.current.receive(list, {
+      box, busy, spotsOn: spotsKindRef.current === 'digi',
+      canShow: (b) => !ctx.blocked.has(b) && !ctx.why[b],
+      canSpots: (s) => !busy && !activeDecRef.current && !ctx.blocked.has('spots') && (s === 'single' || ctx.band),
+      now: Date.now(),
+    });
+    const act = acts.find((x) => x.kind === 'follow') ?? acts[0];
+    if (act) roomApply(act);
+  }, [roomApply]);
+  const roomInRef = useRef(roomIn);
+  roomInRef.current = roomIn;
   /** ★★ V12 THE HFDL MAP. An UberSDR's add-on decodes every HFDL channel itself; a VibeServer decodes the listener's OWN
    *  dial (vibe_hfdl_run.h) — so on a VibeServer that offers it ("hfdl": true) opening the map starts the HFDL decoder on
    *  the dial first (one box at a time, as any decoder), and what it hears fills /addon/hfdl/*, which the map polls. */
@@ -7157,6 +7272,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       spotsKindRef.current = k;
       setSpotsKind(k);
       startSpotFlush();
+      if (k === 'digi') roomFollowRef.current.noteOwnOpen('spots', Date.now());   // ★★★ shared decoders: the listener's own press
       decoderClient.current?.startSpots(k, 'single', v);
     }
   }, [closeDecoder, stopSpots, startSpotFlush, abStartVfo]);
@@ -8030,6 +8146,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setSatRo(r.state === 'OFF' && !r.why ? null : r);
       },
       /* ★★★ SATELLITE: the server tuned, locked (if asked) and attached the decoder — follow it on the decoder socket */
+      onDecShared: (l) => { if (!destroyed.current) roomInRef.current(l); },   // ★★★ the room's decoder on a shared dial
       onSatPicked: (pk) => {
         if (destroyed.current || !satOnRef.current) return;
         satPendingRef.current = null; setSatPending(null); setSatWhy('');
@@ -11379,6 +11496,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       spotsVfoRef.current = v; setSpotsVfo(v);
       spotsKindRef.current = 'digi'; setSpotsKind('digi');
       spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]); setBandSkim(null);
+      roomFollowRef.current.noteOwnOpen('spots', Date.now());   // ★★★ shared decoders: the listener's own press
       decoderClient.current?.startSpots('digi', 'band', v);
       // ★★ Always onto the band's place, as the web does — see spotsBandBtn in web/client/src/main.ts (Stuart, beta22).
       bandSpotsGo(b.hz, b.id);

@@ -23,6 +23,7 @@ import { parseSkimBands, skimPickable, skimBandAtDial, skimOffLabel, skimPointLa
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
 import { SilentMute, isSilentDecoder } from '../../../src/services/silentDecoder.ts';   // ★★ APRS + METEOR LRPT mute (one rule, web and app)
+import { SharedFollower, sharedDecoderKey, roomSettingsOf, type SharedDecoder, type SharedAction, type SharedNow } from '../../../src/services/sharedDecoders.ts';   // ★★★ the room's decoder (2026-11-24)
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
@@ -2047,6 +2048,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onSatTrack: (t) => satPanelGet()?.onTrack(t),
     onSatPicked: (p) => satPanelGet()?.onPicked(p),   // ★★★ SATELLITE: the server tuned, locked and attached the decoder
+    onDecShared: (l) => roomDecIn(l),                  // ★★★ the room's decoder on a shared dial (sharedDecoders.ts)
     onSatVfoB: (b) => satVfoBFollow(b),               // ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick
     onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
@@ -10520,6 +10522,114 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
   else decoders.attach(decExt(d), prm ? (prm as DecoderParams) : decParams(d), decVfo);
   syncDecButtons();
 }
+/* ★★★ SHARED DECODERS (Stuart, 2026-11-24: "if the aprs decoder is open for user 1 then user 2 connecting it should be open
+ *  for … if user 2 closes it then it closes for them only"). On a shared dial the server says what the room's decoder host
+ *  runs ({"type":"dec_shared"}, on change and on arrival); the page opens that box and JOINS the run with exactly the server's
+ *  parameters. The rule — held / closed-by-me / my own press / busy — is sharedDecoders.ts, one copy with the app. Closing
+ *  the box is the ordinary detach (the server lets go for this listener only); opening another decoder is the ordinary
+ *  attach (it replaces the room's, and the others follow it — the shared dial's rule, as a tune). */
+const roomFollow = new SharedFollower();
+/** The page's decoder mode for a server extension (it says how the frames are parsed). */
+function roomModeOf(ext: string): Exclude<DecoderMode, null> | null {
+  if (ext === 'rttyskim' || ext === 'cwskim' || ext === 'pskskim') return ext;
+  const k = sharedDecoderKey(ext);
+  return k ? (k as Exclude<DecoderMode, null>) : null;
+}
+/** The box is the listener's own business now — not followed into (Advanced RDS, SATELLITE, a whole-radio mode, VFO B). */
+function roomBusy(): boolean {
+  return activeDec === 'rds' || !!satPanel?.active || (!!activeDec && decVfo === 'B')
+      || dabOn || adsbOn || ismOn || ndbOn || aisOn || avOn || sdOn;
+}
+function roomCanShow(box: string): boolean {
+  const b = document.querySelector(`#decodersPanel [data-dec="${box}"]`) as HTMLButtonElement | null;
+  return !!b && !b.hidden && !blockedModes.has(box) && !decWhy[box];
+}
+function roomNow(): SharedNow {
+  return { box: activeDec, busy: roomBusy(), spotsOn: !!decoders?.spotsEnabled, canShow: roomCanShow,
+           canSpots: (s) => !blockedModes.has('spots') && (s === 'single' || !!spotBandCap?.ok) && !roomBusy(), now: Date.now() };
+}
+function roomDecIn(list: SharedDecoder[]) {
+  for (const a of roomFollow.receive(list, roomNow())) roomApply(a);
+}
+/** ★★★ The room's run's settings, shown in this page's panel (sharedDecoders.ts roomSettingsOf) — the segment keys pressed
+ *  with re-attaching held off (roomApplying), so their hints and rows follow exactly as a press; the rest set directly. */
+let roomApplying = false;
+function roomSettingsApply(ext: string, params: Record<string, number | string | boolean>) {
+  const st = roomSettingsOf(ext, params);
+  roomApplying = true;
+  try {
+    if (st.rtty) {
+      roomView('rttyView', 'rttyview', st.rtty.skim ? 'skim' : 'one');
+      if (st.rtty.skim) roomView('rttyWidth', 'rttywidth', String(st.rtty.width));
+      else {
+        const r = st.rtty;
+        rtty = { ...rtty, shift: r.shift, baud: r.baud, encoding: r.encoding as RttySettings['encoding'], inverted: r.inverted, auto: r.auto,
+                 usos: r.usos, ...(r.stop ? { stop: r.stop } : {}), ...(r.dataBits ? { dataBits: r.dataBits } : {}),
+                 ...(r.parity ? { parity: r.parity as RttyParity } : {}) };
+        syncRttyControls();
+      }
+    }
+    if (st.cw) { roomView('cwView', 'cwview', st.cw.skim ? 'skim' : 'one'); if (st.cw.skim && st.cw.width) roomView('cwWidth', 'cwwidth', String(st.cw.width)); }
+    if (st.psk) { roomView('pskView', 'pskview', st.psk.skim ? 'skim' : 'one'); if (st.psk.skim && st.psk.width) roomView('pskWidth', 'pskwidth', String(st.psk.width)); }
+    if (st.wefax) roomView('wefaxLpm', 'lpm', String(st.wefax.lpm));
+    if (st.time) roomView('timeStation', 'station', st.time.station);
+    if (st.mfsk) { tmMode.mfsk = st.mfsk.mode; renderTmModes(); }
+    if (st.aprs) {
+      packetMode = st.aprs.mode as PacketMode; aprsBaud = st.aprs.mode === '300' ? 300 : 1200;
+      pktFx25 = st.aprs.fx25; pktIl2p = st.aprs.il2p;
+      packetSegRender();
+      $('aprsFx25').classList.toggle('on', pktFx25); $('aprsIl2p').classList.toggle('on', pktIl2p);
+    }
+  } catch (e) { console.error('[decoders] room settings', e); }
+  finally { roomApplying = false; }
+}
+/** One of the box's views (ONE SIGNAL / SKIMMER) pressed for the room's run — before the attach, with no box of that
+ *  decoder open, so the view's own re-attach (reattachIf) does nothing. */
+function roomView(id: string, attr: string, val: string) {
+  (Array.from($(id).children) as HTMLButtonElement[]).find((b) => b.dataset[attr] === val && !b.classList.contains('on'))?.click();
+}
+function roomApply(a: SharedAction) {
+  if (!decoders) return;
+  if (a.kind === 'follow') {
+    const mode = roomModeOf(a.entry.ext);
+    if (!mode) return;
+    const box = a.box as Exclude<typeof activeDec, null>;
+    activeDec = null;   // ★ the attach below replaces what this page had (on a shared dial that was the room's, now replaced)
+    roomSettingsApply(a.entry.ext, a.entry.params);   // ★★★ the panel shows the ROOM's settings (one set for all)
+    if (box === 'aprs') { aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; }
+    decVfo = 'A';
+    activeDec = box;
+    decTuneHint = '';
+    decoders.attach(mode, { ...a.entry.params } as DecoderParams, 'A', a.entry.ext);   // ★ exactly the server's: JOINS the run
+    roomFollow.noteFollowed('decoder', a.entry.key);
+    showDecBox(box);
+    syncDecButtons();
+    const name = (document.querySelector(`#decodersPanel [data-dec="${box}"]`)?.textContent || box).trim();
+    showPill(`${name} is open for everyone on this receiver — close it to stop it for you only`, 6000);
+  } else if (a.kind === 'settings') {
+    // ★★★ somebody changed the room's run: this listener already holds the new run — the panel shows its settings, and a
+    //     reconnect re-asserts exactly it; nothing is sent now
+    if (a.box === 'spots') {
+      const band = a.entry.params.scope === 'band';
+      decoders.noteSpotsScope(band ? 'band' : 'single');
+      bandSpotsUi(band);
+      $<HTMLButtonElement>('spotsBtn').classList.toggle('on', !band);
+    } else if (activeDec === a.box) {
+      roomSettingsApply(a.entry.ext, a.entry.params);
+      const mode = roomModeOf(a.entry.ext);
+      if (mode) decoders.noteAttached(mode, { ...a.entry.params } as DecoderParams, a.entry.ext);
+      if (a.box === 'aprs') { aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; renderAprs(); }
+      if (a.box === 'rtty' || a.box === 'cw' || a.box === 'psk') { cwLast = null; rttyHist.clear(); rttyCardId = 0; showDecBox(a.box); }
+    }
+  } else if (a.kind === 'spots') {
+    decoders.setSpots(true, a.scope, 'A');
+    spotsVfo = 'A';
+    roomFollow.noteFollowed('spots', a.entry.key);
+    if (a.scope === 'band') bandSpotsUi(true); else bandSpotsUi(false);
+    $<HTMLButtonElement>('spotsBtn').classList.toggle('on', a.scope === 'single');
+    showDecBox('spots');
+  }
+}
 /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
  *  decoder on the listener's VFO B host. Its frames are followed on a SECOND decoder socket — one socket parses frames
  *  for ONE decoder (decoders.ts: 0x01 means text for CW, a picture line for SSTV) — that attaches the same decoder with
@@ -15046,6 +15156,7 @@ function initDecoders(host: string, auth: AuthState) {
       // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
       decVfo = mode === 'rds' ? 'A' : abStartVfo();
       activeDec = mode;
+      if (mode !== 'rds') roomFollow.noteOwnOpen('decoder', Date.now());   // ★★★ the listener's own press (sharedDecoders.ts)
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
       decoders!.attach(decExt(mode), decParams(mode), decVfo);
       if (mode === 'rds') spec?.rdsxLight(true);   // ★ the lighter eye stream — see SpectrumClient.rdsxLight
@@ -15164,6 +15275,7 @@ function initDecoders(host: string, auth: AuthState) {
     // ★ SINGLE MODE: the button there always was. From Band it switches (one subscribe; the server keeps the slot).
     const on = decoders!.spotsScope !== 'single';
     if (on) spotsVfo = abStartVfo();   // ★★★ V12: the spots run on the VFO selected now (decode on either VFO)
+    if (on) roomFollow.noteOwnOpen('spots', Date.now()); else roomFollow.noteClosed('spots', null);   // ★★★ shared decoders
     decoders!.setSpots(on, 'single', on ? spotsVfo : undefined);
     bandSpotsUi(false);
     spotsBtn.classList.toggle('on', on);
@@ -15182,6 +15294,7 @@ function initDecoders(host: string, auth: AuthState) {
       // ★★★ V12: Band runs on the VFO selected now — its dial, its arrows, its span, its mute (decode on either VFO)
       if (bandSpots) bandSpotsUi(false);   // ★ a Band already running elsewhere ends first (its mute goes back)
       spotsVfo = abStartVfo();
+      roomFollow.noteOwnOpen('spots', Date.now());   // ★★★ shared decoders: the listener's own press
       decoders!.setSpots(true, 'band', spotsVfo);
       bandSpotsUi(true);
       /* ★★ THE PRESS PUTS THE DIAL ON THE BAND'S PLACE, ALWAYS (Stuart, beta22: "should snap the VFO to the correct position
@@ -15193,6 +15306,7 @@ function initDecoders(host: string, auth: AuthState) {
       spotsBtn.classList.remove('on');
       showDecBox('spots');
     } else {
+      roomFollow.noteClosed('spots', null);   // ★★★ shared decoders: closed for this listener only
       decoders!.setSpots(false);
       bandSpotsUi(false);
       if (!activeDec) hideDecBox();
@@ -15278,7 +15392,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('decAdjReset').onclick = () => { decManualShift = null; decRaw = false; decSlantTouched = false; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
-  $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
+  $('decHide').onclick = () => { stopDecoder(); if (decoders!.spotsEnabled) roomFollow.noteClosed('spots', null); decoders!.setSpots(false);
     $<HTMLButtonElement>('spotsBtn').classList.remove('on'); bandSpotsUi(false); hideDecBox(); };
   initDecHeadScroll();
 }
@@ -15396,6 +15510,7 @@ function syncRttyControls() {
 /** A settings change while running must re-attach — the shim builds the decoder
  *  from the attach params, so it can't be tweaked in place. */
 function reattachIf(mode: string) {
+  if (roomApplying) return;   // ★★★ the room's settings being shown in the panel — nothing is re-attached (sharedDecoders.ts)
   if (activeDec === mode) { decTuneHint = ''; decoders?.attach(decExt(mode), decParams(mode)); }
 }
 
@@ -15507,6 +15622,8 @@ function aprsColourOf(st: { kind: string; sym: string; speed?: number }): string
  *  of under the key). Something inside syncDecButtons threw on every call, so the close after it never ran. Not reproduced;
  *  so the close is in a finally, and each step of syncDecButtons is isolated (decStep) and names itself in the console. */
 function stopDecoder() {
+  // ★★★ SHARED DECODERS: closed by this listener — the room's run stays closed for them (sharedDecoders.ts)
+  try { roomFollow.noteClosed('decoder', activeDec); } catch { /* never in the way of the close */ }
   try {
     if (activeDec === 'rds') spec?.rdsxLight(false);
     decoders?.detach();

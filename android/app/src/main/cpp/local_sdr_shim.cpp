@@ -175,6 +175,7 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "decoders/tone_id.h"         // ★ V12: CTCSS / DCS tone ID on NFM (its own discriminator on the channel IQ)
 #include "vibe_dmr_id.h"           // ★ V12 beta90: DMR ID → callsign (docs/v12/DMR-ID.md)
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
+#include "vibe_shared_decoders.h"    // ★★★ a decoder on a shared dial is the room's (Stuart 11-24)
 #include "vibe_paging_gate.h"        // ★★★ V12 PAGING: where it may run (Android app / R36S handheld only) — one pure rule
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
 #include "vibe_freedv.h"              // ★ V12 FreeDV: a per-listener mode — the system's libcodec2, dlopen'd (docs/v12/FREEDV.md)
@@ -9697,6 +9698,74 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     DecoderRouter decoders_{ [this](const std::string& s) { return decoderEnv(s); } };
     /** Who started the ONE-pipeline decoder, for the admin table's credit. Guarded by clientMtx. */
     std::string sharedDecoderBy_;
+    /** ★★★ A DECODER ON A SHARED DIAL IS THE ROOM'S (Stuart, 2026-11-24 — vibe_shared_decoders.h): who holds the one-
+     *  pipeline host's decoder and spots run, by decoder socket. A listener closing the box lets go for THEMSELVES; the
+     *  decoder stops when the last holder lets go; the room is told what runs (`dec_shared` on the spectrum socket) with
+     *  the parameters that join it. Not used on a per-VFO radio (each listener has their own host). Leaf lock. */
+    vibe::SharedDecoderRoom decRoom_;
+    /** The last room view broadcast (decSharedPoll's change test). decRoomMtx_. */
+    std::mutex decRoomMtx_;
+    std::string decRoomSig_;
+    static std::string spotsKeyOf(const std::shared_ptr<DecoderHost>& h) {
+        if (!h) return "";
+        const std::string s = h->spotsScope();
+        return s.empty() ? std::string() : "spots|" + s;
+    }
+    /** Is the room told about the shared host's decoders here? A shared dial or a one-listener radio — never a per-VFO
+     *  radio (each listener's own host) or the decoder-only sidecar. */
+    bool decRoomHere() const { return !perClientDsp() && !decoderOnly; }
+    std::string decRoomSigOf(const std::string& tk, const std::string& sk) {
+        return tk + "\n" + sk + "\n" + decRoom_.key(vibe::SharedDecoderRoom::Text) + "\n" + decRoom_.key(vibe::SharedDecoderRoom::Spots)
+             + "\n" + std::to_string(decRoom_.holderCount(vibe::SharedDecoderRoom::Text)) + "/" + std::to_string(decRoom_.holderCount(vibe::SharedDecoderRoom::Spots));
+    }
+    /** The room's view, to every spectrum listener (each told whether THEY hold it) — or to one (`only`, an arrival).
+     *  ★ Sent outside clientMtx (the socket list is copied under it); the book and the router are leaf locks. */
+    void decSharedBroadcast(const std::shared_ptr<net::Socket>& only = nullptr) {
+        if (!decRoomHere()) return;
+        auto h = decoders_.shared();
+        const std::string tk = h ? h->startKey() : std::string(), sk = spotsKeyOf(h);
+        std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> to;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          auto sessOf = [&](const std::shared_ptr<net::Socket>& k) { auto it = sockSession.find(k.get()); return it == sockSession.end() ? std::string() : it->second; };
+          if (only) to.push_back({ only, sessOf(only) });
+          else for (auto& k : allSpecClientsLocked()) to.push_back({ k, sessOf(k) }); }
+        if (!only) { const std::string sig = decRoomSigOf(tk, sk); std::lock_guard<std::mutex> rl(decRoomMtx_); decRoomSig_ = sig; }
+        for (auto& [k, sess] : to) if (k && k->isOpen()) sendText(k, decRoom_.listJson(sess, tk, sk));
+    }
+    /** House thread: the shared host's decoder stopped or changed some other way (a hold ran out, a whole-radio mode, the
+     *  listener's session ended) — the book forgets it and the room is told. */
+    void decSharedPoll() {
+        if (!decRoomHere()) return;
+        auto h = decoders_.shared();
+        const std::string tk = h ? h->startKey() : std::string(), sk = spotsKeyOf(h);
+        if (decRoom_.key(vibe::SharedDecoderRoom::Text) != tk) decRoom_.clear(vibe::SharedDecoderRoom::Text);
+        if (decRoom_.key(vibe::SharedDecoderRoom::Spots) != sk) decRoom_.clear(vibe::SharedDecoderRoom::Spots);
+        const std::string sig = decRoomSigOf(tk, sk);
+        { std::lock_guard<std::mutex> rl(decRoomMtx_); if (sig == decRoomSig_) return; }
+        decSharedBroadcast();
+    }
+    /** The admin table's credit after `gone` let go: whoever still holds the decoder (or its spots). */
+    void decRoomCredit(const std::string& gone) {
+        std::string next = decRoom_.by(vibe::SharedDecoderRoom::Text);
+        if (next.empty()) next = decRoom_.by(vibe::SharedDecoderRoom::Spots);
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (!gone.empty() && sharedDecoderBy_ == gone && !next.empty()) sharedDecoderBy_ = next;
+    }
+    /** A listener lets go of the shared host's decoder (`spots` = its spots run): stopped only when they were the LAST to
+     *  hold it — or, for a decoder the book does not know, by the old rule (`oldStop`). @return true when it was stopped. */
+    bool decRoomLetGo(const std::shared_ptr<DecoderHost>& host, const net::Socket* sock, const std::string& session, bool spots, bool oldStop) {
+        if (!host) return false;
+        using R = vibe::SharedDecoderRoom;
+        const R::Slot slot = spots ? R::Spots : R::Text;
+        const R::Release r = decRoom_.release(slot, (uintptr_t)sock, spots ? spotsKeyOf(host) : host->startKey());
+        const bool stop = r == R::Release::Last || (r == R::Release::Untracked && oldStop);
+        if (stop) { if (spots) host->stopSpots(); else host->stop(); }
+        else if (r == R::Release::Kept) decRoomCredit(session);
+        if (r != R::Release::Untracked || stop) LOGI("decoder%s on the shared dial: %s", spots ? " spots" : "",
+            r == R::Release::Last ? "the last listener holding it let go — stopped" : r == R::Release::Kept ? "one listener let go — kept for the others"
+                                  : "stopped (not in the room's book)");
+        return stop;
+    }
     /** Every open decoder socket — so a shutdown can close them all. Guarded by clientMtx. */
     std::set<std::shared_ptr<net::Socket>> dxSocks;
     /** ★ Each decoder socket's listener session — so an open decoder can keep that listener's TURN
@@ -11764,6 +11833,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!perVfo) {
             if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
             resumeCaptureIdle();   // ★ a decoder is a consumer of the radio's audio — as the socket attach does
+            /* ★★★ SHARED DECODERS: the PICK holds its decoder (a listener closing their box cannot stop it under the room;
+             *  satDetachPick ends it) and it is not listed — the pick's own "picked" message tells the room. */
+            decRoom_.started(vibe::SharedDecoderRoom::Text, vibe::SharedDecoderRoom::kSatHolder, "", ext,
+                             vibe::SharedDecoderRoom::paramsJson(am), host->startKey(), r == DecoderHost::Start::Joined, true);
+            decSharedBroadcast();
         }
         navWideSync();
         LOGI("[sat] decoder %s attached for %s (SATELLITE pick)", ext.c_str(), perVfo ? session.substr(0, 8).c_str() : "the shared dial");
@@ -11780,8 +11854,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (p.decoderKey.empty()) return;
         std::shared_ptr<DecoderHost> host = p.perVfo ? decoders_.find(p.owner) : decoders_.shared();
         // ★ beta92: the pick's decoder as the page re-attached it (same decoder, its own parameters) is still the pick's
-        if (!host || !vibesatgain::pickStillRuns(p.decoder, p.decoderKey, host->startKey())) return;
+        if (!host || !vibesatgain::pickStillRuns(p.decoder, p.decoderKey, host->startKey())) {
+            // ★★★ SHARED DECODERS: replaced since — the pick no longer holds what runs
+            if (host && !p.perVfo) decRoom_.release(vibe::SharedDecoderRoom::Text, vibe::SharedDecoderRoom::kSatHolder, host->startKey());
+            return;
+        }
         host->stop();
+        if (!p.perVfo) { decRoom_.clear(vibe::SharedDecoderRoom::Text); decSharedBroadcast(); }
         navWideSync();
         LOGI("[sat] decoder %s detached (SATELLITE drop: %s)", p.decoder.c_str(), why);   // ★ beta92 which drop, in words
     }
@@ -13900,6 +13979,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★ V12: the shared dial's CTCSS / DCS label, if one is locked — it is sent on change only. */
         { std::string tl; { std::lock_guard<std::mutex> lk(toneSharedMtx); tl = toneSharedLabel; }
           if (!tl.empty() && !perClientDsp()) sendText(sock, toneJson(tl)); }
+        /* ★★★ SHARED DECODERS (Stuart 11-24): the decoder the room has open — an arrival's box opens on it (the client
+         *  joins the run with the parameters given). Always sent here (an empty list too), so a client knows the state. */
+        decSharedBroadcast(sock);
         /* ★ A receiver already on a multiplex tells the client NOW, not at the next half-second
          *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
          *  the second listener on a shared radio got audio and no box). */
@@ -33168,9 +33250,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<DecoderHost> host;
         if (!perVfo || !sess.empty()) host = decoders_.hostFor(sess, perVfo);
         auto peer = std::make_shared<DxPeer>(this, sock);
-        const bool mirror = host ? host->addPeer(peer) : false;
+        /* ★★★ SHARED DECODERS (Stuart 11-24): on the one-pipeline host a socket is a peer only once it attaches or subscribes
+         *  — then it is caught up on what the run has drawn so far (DecoderHost::joinPeer), with nothing doubled at the join.
+         *  It used to be a mirror from the moment it connected, which (with the catch-up) would hand a client the same lines
+         *  twice; a listener who has not opened the box is TOLD what runs (dec_shared) and their client opens it. */
+        if (host && perVfo) host->addPeer(peer);
         { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.insert(sock); dxSockSession[sock.get()] = session; }
-        LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : (mirror ? " (mirror)" : ""),
+        LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : "",
              perVfo && sess.empty() ? " — NO SESSION, decoders refused" : "");
         bool rdsHere = false;
         /* ★★★ DECODE ON EITHER VFO (V12, 2026-10-27 — see watchDecBKey). "vfo":"B" on an attach or a subscribe = this
@@ -33179,7 +33265,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const std::string bSess = sess.empty() ? session : sess;
         std::shared_ptr<DecoderHost> hostB;
         bool textA = false, spotsA = false, textB = false, spotsB = false;
-        bool peerOnA = true;   // ★ every decoder socket starts as a peer of its A host (a mirror on a shared dial — as before)
+        bool peerOnA = perVfo;   // ★ a peer of its own host at once; of the shared host only once it attaches / subscribes
+        /* ★★★ SHARED DECODERS (Stuart 11-24): this socket holds nothing on the shared host (not attached yet, or it CLOSED
+         *  the room's decoder for itself) — so it is not a mirror of it until it attaches or subscribes. */
+        bool quietA = !perVfo;
         auto wantsB = [](const std::string& p) { const std::string v = jsonStr(p, "vfo"); return v == "B" || v == "b"; };
         /** VFO B's host, made on first use, this socket a peer of it — or null (no VFO B, no session: refused by the caller). */
         auto takeHostB = [&]() -> std::shared_ptr<DecoderHost> {
@@ -33193,7 +33282,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  was): a socket decoding on B must not ALSO be handed somebody else's decoder off a shared dial's host. */
         auto syncPeerA = [&] {
             if (!host) return;
-            const bool want = textA || spotsA || !(textB || spotsB);
+            const bool want = (textA || spotsA || !(textB || spotsB)) && !(quietA && !textA && !spotsA);
             if (want && !peerOnA) host->addPeer(peer);
             if (!want && peerOnA) host->removePeer(peer.get());
             peerOnA = want;
@@ -33202,12 +33291,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  watching it — somebody else's mirror is theirs to keep. */
         auto stopTextA = [&] {
             if (!textA || !host) { textA = false; return; }
-            if (perVfo || host->peerCount() <= 1) host->stop();
+            if (perVfo) host->stop();
+            else { decRoomLetGo(host, sock.get(), session, false, host->peerCount() <= 1); decSharedBroadcast(); }   // ★★★ the room's
             textA = false;
         };
         auto stopSpotsA = [&] {
             if (!spotsA || !host) { spotsA = false; return; }
-            if (perVfo || host->peerCount() <= 1) host->stopSpots();
+            if (perVfo) host->stopSpots();
+            else { decRoomLetGo(host, sock.get(), session, true, host->peerCount() <= 1); decSharedBroadcast(); }
             spotsA = false;
         };
         while (serverRunning.load() && sock->isOpen()) {
@@ -33316,10 +33407,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         continue;
                     }
                 }
-                syncPeerA();
+                quietA = false;   // ★ attaching = a peer of the host again (a join is caught up below)
+                /* ★★★ SHARED DECODERS (Stuart 11-24: "when a new user joins they can see what is already in the decoder
+                 *  box"): joining the room's running decoder on the shared host — no gap mark of a held session to honour —
+                 *  makes this socket a peer and sends it what the run has drawn so far IN ONE STEP (joinPeer), so nothing
+                 *  is doubled or lost at the join. Anything else becomes a peer first, as always (a new run's first frames
+                 *  are sent while it is being built). */
+                const uint64_t gapMk = dxGapPeek(sess);
+                const bool roomJoin = !perVfo && gapMk == DecoderHost::kNoCatchUp && !textA
+                                   && !decRoom_.holds(vibe::SharedDecoderRoom::Text, (uintptr_t)sock.get())
+                                   && !host->startKey().empty() && host->startKey() == DecoderHost::startKeyFor(ext, payload);
+                if (!roomJoin) syncPeerA();
                 // ★★ V12 beta24: a held session's decoder socket coming back names where it left (its gap mark), so the
                 //    pictures finished while it was away come before the one in progress (DecoderHost::replayTo)
-                auto r = host->start(ext, payload, peer, dxGapPeek(sess));
+                auto r = roomJoin ? host->start(ext, payload) : host->start(ext, payload, peer, gapMk);
+                if (roomJoin && r == DecoderHost::Start::Joined) { host->joinPeer(peer, false); peerOnA = true; }
+                else if (roomJoin) syncPeerA();
                 // ★★ V12: never refused because the box is busy decoding for NOBODY — background decoding on every radio
                 //    of this machine gives its slots back, and the listener's decoder is tried again.
                 if (r == DecoderHost::Start::Refused && !decoderOnly && bgYieldForListener()) r = host->start(ext, payload, peer);
@@ -33334,20 +33437,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 navWideSync();   // ★ V12 VOR on the one pipeline: its 25 kHz (or given back when this attach replaced it)
                 // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
                 //     listener's own host is theirs by construction.
-                if (!perVfo && !session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+                if (!perVfo && !session.empty() && r != DecoderHost::Start::Joined) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+                /* ★★★ SHARED DECODERS (Stuart 11-24): this listener now HOLDS the room's decoder — the only holder if this
+                 *  attach started (or replaced) it, one more if it joined. The room is told what runs and how to join it.
+                 *  Parameters that cannot be rebuilt safely: the decoder runs, the room is not offered it (ext ""). */
+                if (!perVfo) {
+                    const std::string pj = vibe::SharedDecoderRoom::paramsJson(payload);
+                    decRoom_.started(vibe::SharedDecoderRoom::Text, (uintptr_t)sock.get(), session, pj.empty() ? std::string() : ext, pj,
+                                     host->startKey(), r == DecoderHost::Start::Joined);
+                }
                 // ★★ A decoder is a consumer of the radio's audio (sharedDecoderNeedsAudio), so one
                 //    started on a parked or released radio — its listener's sockets came back after
                 //    the grace ran out, decoder socket first — takes the radio back exactly as an
                 //    arriving listener does. A no-op when the capture is running (2026-10-07).
                 if (!perVfo) resumeCaptureIdle();
                 sendText(sock, "{\"type\":\"audio_extension_attached\"}");
+                if (!perVfo) decSharedBroadcast();   // ★★★ the room: what runs now, and who holds it
                 // ★★ V12: the same decoder, still running (a held session back, a socket blip) — what it decoded while
                 //    this listener's socket was away follows, after the attach (the gap log).
-                if (r == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, false);
+                if (r == DecoderHost::Start::Joined && !roomJoin) dxGapReplay(sess, host, peer, false);
             } else if (type == "audio_extension_detach") {
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
                 if (textB && hostB) { hostB->stop(); textB = false; }   // ★ the decoder this socket runs on VFO B
-                else if (host) host->stop();
+                else if (host && perVfo) host->stop();
+                else if (host) {
+                    /* ★★★ SHARED DECODERS (Stuart 11-24: "if user 2 closes it then it closes for them only"): this listener
+                     *  lets go; the decoder stops only if they were the last holding it. One the book does not know (a held
+                     *  session's, an older path's) stops as it always did. Kept for others = this socket goes quiet. */
+                    decRoomLetGo(host, sock.get(), session, false, true);
+                    quietA = !spotsA;   // ★ holding nothing on A now: not a mirror of the room's decoder (its box is shut)
+                    decSharedBroadcast();
+                }
                 textA = false; syncPeerA();
                 icomDecReconcile();   // ★ an Icom goes back as the decoder found it
                 navWideSync();
@@ -33401,18 +33521,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
                         icomDecReconcile();
                     } else {
-                        spotsA = true; syncPeerA();
+                        // ★★★ SHARED DECODERS: joining the room's spots run — a peer and its spots so far, in one step
+                        const bool spotsJoin = !perVfo && sr == DecoderHost::Start::Joined && dxGapPeek(sess) == DecoderHost::kNoCatchUp
+                                               && !decRoom_.holds(vibe::SharedDecoderRoom::Spots, (uintptr_t)sock.get());
+                        if (spotsJoin) { host->joinPeer(peer, true); peerOnA = true; }
+                        spotsA = true; quietA = false; syncPeerA();
                         if (!perVfo) {
-                            if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+                            if (!session.empty() && sr != DecoderHost::Start::Joined) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
                             resumeCaptureIdle();       // ★ the spotter is a consumer too — see the decoder start above
+                            // ★★★ SHARED DECODERS: the spots run is the room's too — held by this listener, the room told
+                            decRoom_.started(vibe::SharedDecoderRoom::Spots, (uintptr_t)sock.get(), session, "spots",
+                                             band ? "{\"scope\":\"band\"}" : "{}", spotsKeyOf(host), sr == DecoderHost::Start::Joined);
+                            decSharedBroadcast();
                         }
                         // ★★ V12: the same run, still going — the spots heard while this listener was away (the gap log)
-                        if (sr == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, true);
+                        if (sr == DecoderHost::Start::Joined && !spotsJoin) dxGapReplay(sess, host, peer, true);
                     }
                 }
             } else if (type == "unsubscribe_digital_spots") {
                 if (spotsB && hostB) { hostB->stopSpots(); spotsB = false; }   // ★ the spots this socket runs on VFO B
-                else if (host) host->stopSpots();
+                else if (host && perVfo) host->stopSpots();
+                else if (host) {   // ★★★ SHARED DECODERS: this listener's spots only — stopped when the last lets go
+                    decRoomLetGo(host, sock.get(), session, true, true);
+                    quietA = !textA;
+                    decSharedBroadcast();
+                }
                 spotsA = false; syncPeerA();
                 icomDecReconcile();
             }
@@ -33432,20 +33565,42 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    (the gap log: dxGapReplay at the next attach / subscribe). Kept whoever else is still watching.
         if (host) dxGapNote(sess, host->gapMark());
         bool keptForHold = false;
-        if (host && left == 0) {
+        /* ★★★ SHARED DECODERS (Stuart 11-24): on the one-pipeline host this socket lets go of what it HELD. The decoder (or
+         *  the spots run) whose LAST holder this was is judged as a host with nobody left always was — even while other
+         *  listeners' sockets are open (they do not hold it: their boxes are shut). Somebody still holding it = it runs. */
+        using RoomR = vibe::SharedDecoderRoom;
+        RoomR::Release rt = RoomR::Release::Untracked, rs = RoomR::Release::Untracked;
+        if (host && !perVfo) {
+            rt = decRoom_.release(RoomR::Text, (uintptr_t)sock.get(), host->startKey());
+            rs = decRoom_.release(RoomR::Spots, (uintptr_t)sock.get(), spotsKeyOf(host));
+        }
+        const bool lastT = rt == RoomR::Release::Last, lastS = rs == RoomR::Release::Last;
+        if (host && (left == 0 || lastT || lastS)) {
             /* ★★★ V12 HELD SESSION: a decoder whose listener is held — or is still here, and whose other sockets may be
              *  about to go the same way (a suspension takes all three, in any order) — is KEPT running (decHeld_), and
              *  decoderHoldTick decides: held = it runs on; gone without a hold = stopped, exactly as here before.
              *  ★ A decoder the listener closed is detached first (audio_extension_detach / unsubscribe), so a socket
              *    closing with one still running is not somebody switching it off. */
             std::string owner = sess;
-            if (!perVfo) { std::lock_guard<std::mutex> lk(clientMtx); owner = sharedDecoderBy_.empty() ? sess : sharedDecoderBy_; }
-            if (decoderKeepForHold(owner, host)) {
+            if (!perVfo) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                owner = (lastT || lastS) && !session.empty() ? session : sharedDecoderBy_.empty() ? sess : sharedDecoderBy_;
+            }
+            // ★ a hold keeps the whole host — only when nobody else holds any of it (else what is theirs is not ours to keep)
+            const bool othersHold = !perVfo && decRoom_.holderCount(RoomR::Text) + decRoom_.holderCount(RoomR::Spots) > 0;
+            if (!othersHold && decoderKeepForHold(owner, host)) {
                 keptForHold = true;
                 std::lock_guard<std::mutex> dl(decHoldMtx_);
                 decHeld_[perVfo ? sess : std::string()] = DecHeld{ owner, nowSecs() };
             } else if (perVfo) decoders_.drop(sess);   // ★ a listener's own host goes with them, slots and all
-            else { host->stop(); host->stopSpots(); }
+            else {
+                if (left == 0 ? rt != RoomR::Release::Kept : lastT) host->stop();
+                if (left == 0 ? rs != RoomR::Release::Kept : lastS) host->stopSpots();
+            }
+        }
+        if (host && !perVfo) {
+            if (rt == RoomR::Release::Kept || rs == RoomR::Release::Kept) decRoomCredit(session);
+            decSharedBroadcast();
         }
         navWideSync();
         outboxClose(sock);
@@ -38190,6 +38345,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           for (auto it = noHoldUntil_.begin(); it != noHoldUntil_.end(); ) it = it->second <= now ? noHoldUntil_.erase(it) : std::next(it); }
         for (const auto& s : ended) finishHold(s);
         decoderHoldTick();
+        decSharedPoll();      // ★★★ the room's decoder stopped or changed some other way: the room is told
         satPickHousekeep();   // ★ V12 SATELLITE MODE: a departed listener's pick (and the decoder it attached) goes
     }
 
@@ -38215,7 +38371,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double now = nowSecs();
         for (auto& [key, d] : list) {
             auto host = key.empty() ? decoders_.shared() : decoders_.find(key);
-            bool done = !host || host->peerCount() > 0 || (!host->wantsAudio() && !host->wantsIq());
+            /* ★★★ SHARED DECODERS: the one-pipeline host is somebody's again when somebody HOLDS its decoder (a join, the
+             *  held listener re-attaching) — an open socket of another listener with their box shut is not that. */
+            const bool someoneOn = host && (key.empty() ? decRoom_.holderCount(vibe::SharedDecoderRoom::Text) + decRoom_.holderCount(vibe::SharedDecoderRoom::Spots) > 0
+                                                        : host->peerCount() > 0);
+            bool done = !host || someoneOn || (!host->wantsAudio() && !host->wantsIq());
             bool stop = false;
             if (!done) {
                 bool held, live, nohold;

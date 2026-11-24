@@ -416,8 +416,30 @@ export class DecoderClient {
   vfo: 'A' | 'B' = 'A';
   spotsVfo: 'A' | 'B' = 'A';
 
+  /** ★★★ SHARED DECODERS (2026-11-24, sharedDecoders.ts): the server's own extension and parameters when the app FOLLOWS the
+   *  room's decoder on a shared dial — so the attach JOINS the run (the same key) instead of restarting it with this app's
+   *  settings. Kept for reconnects (the re-attach re-asserts exactly it); cleared by an ordinary start. */
+  private follow: { name: DecoderName; ext: string; params: Record<string, unknown> } | null = null;
+
+  /** Join the room's decoder: `name` is the box (how the frames are parsed), `ext` / `params` exactly the server's. */
+  startShared(name: DecoderName, ext: string, params: Record<string, unknown>) {
+    this.follow = /^[a-z0-9]{1,16}$/.test(ext) ? { name, ext, params: { ...params } } : null;
+    this.active = name;
+    this._idleCheck();
+    if (this.ws?.readyState === WebSocket.OPEN) this._attach();
+    else this._open();
+  }
+
+  /** ★★★ The room's run this app already holds changed settings (another listener changed them): remembered, so a reconnect
+   *  re-asserts exactly that run. Nothing is sent. */
+  noteShared(name: DecoderName, ext: string, params: Record<string, unknown>) {
+    if (this.active !== name || !/^[a-z0-9]{1,16}$/.test(ext)) return;
+    this.follow = { name, ext, params: { ...params } };
+  }
+
   /** Start a decoder. Replaces any running one (server enforces one/session). */
   start(name: DecoderName) {
+    this.follow = null;
     this.active = name;
     this._idleCheck();                     // ★ wanted again: cancels a pending idle close
     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -431,6 +453,7 @@ export class DecoderClient {
    *  if nothing — decoder, spots, chat — still needs it. */
   stop() {
     this.active = null;
+    this.follow = null;
     if (this.ws?.readyState === WebSocket.OPEN) {
       try { this.ws.send(JSON.stringify({ type: 'audio_extension_detach' })); } catch {}
     }
@@ -466,6 +489,8 @@ export class DecoderClient {
    *  keeps the slot (the web's setSpots). */
   private spotsScope: 'single' | 'band' = 'single';
   get spotsBandScope(): boolean { return !!this.spotsKind && this.spotsScope === 'band'; }
+  /** ★★★ SHARED DECODERS: the room's spots run moved between Single and Band — remembered for a reconnect, nothing sent. */
+  noteSpotsScope(scope: 'single' | 'band') { if (this.spotsKind === 'digi') this.spotsScope = scope; }
 
   startSpots(kind: SpotsKind, scope: 'single' | 'band' = 'single', vfo?: 'A' | 'B') {
     if (vfo) this.spotsVfo = vfo;
@@ -897,7 +922,10 @@ export class DecoderClient {
   private _attach() {
     this.wefaxPhases = false;
     if (!this.ws || !this.active) return;
-    const { extension_name, params } = this._paramsFor(this.active);
+    // ★★★ following the room's decoder: exactly the server's extension and parameters (they JOIN its run)
+    const own = this._paramsFor(this.active);   // ★ always: it also resets the decoder's last status (SITOR, ALE, MFSK …)
+    const { extension_name, params } = this.follow && this.follow.name === this.active
+      ? { extension_name: this.follow.ext, params: this.follow.params } : own;
     this.ws.send(JSON.stringify({
       type: 'audio_extension_attach', extension_name, params, ...(this.vfo === 'B' ? { vfo: 'B' } : {}),
     }));

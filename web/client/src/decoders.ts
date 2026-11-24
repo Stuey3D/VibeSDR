@@ -397,19 +397,36 @@ export class DecoderClient {
   }
 
   private _sendAttach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}) {
-    this._send({ type: 'audio_extension_attach', extension_name: EXT[mode], ...params, ...(this.decVfo === 'B' ? { vfo: 'B' } : {}) });
+    this._send({ type: 'audio_extension_attach', extension_name: this.extOverride || EXT[mode], ...params, ...(this.decVfo === 'B' ? { vfo: 'B' } : {}) });
   }
+  /** ★★★ SHARED DECODERS (2026-11-24): the server's own extension name when the page FOLLOWS the room's decoder — a time
+   *  station the app started is 'msf' on the wire, where this page sends 'time' + station; joining needs the very name.
+   *  '' = the mode's own (EXT). Kept for reconnects; cleared by an ordinary attach. */
+  private extOverride = '';
 
   /** Attach a decoder (detaching whatever was running). `vfo` — the VFO it runs on (V12 VFO A/B); omitted = the one it
-   *  already runs on (a re-attach for new settings stays where it is). */
-  attach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}, vfo?: 'A' | 'B') {
+   *  already runs on (a re-attach for new settings stays where it is). `ext` — the server's extension name to send instead
+   *  of the mode's own (following the room's decoder: sharedDecoders.ts). */
+  attach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}, vfo?: 'A' | 'B', ext = '') {
     if (vfo) this.decVfo = vfo;
     this.mode = mode;
+    this.extOverride = /^[a-z0-9]{1,16}$/.test(ext) ? ext : '';
     // ★ Remembered so a reconnect can re-assert the SAME decoder, not the default one.
     this.params = params;
     if (this.ws?.readyState === WebSocket.OPEN) this._sendAttach(mode, params);
     else this._sync();                     // opening: onopen re-asserts mode + params
   }
+
+  /** ★★★ SHARED DECODERS: the room's run this socket already holds changed settings (somebody else changed them) — remember
+   *  them, so a reconnect re-asserts exactly that run; nothing is sent now. */
+  noteAttached(mode: Exclude<DecoderMode, null>, params: DecoderParams, ext: string) {
+    if (!this.mode) return;   // ★ only while a decoder is attached here (the caller checks it is this box's)
+    this.mode = mode;
+    this.params = params;
+    this.extOverride = /^[a-z0-9]{1,16}$/.test(ext) ? ext : '';
+  }
+  /** …and the room's spots run moved between Single and Band: remembered for a reconnect, nothing sent. */
+  noteSpotsScope(scope: 'single' | 'band') { if (this.spotsOn) this.spotScope = scope; }
 
   detach() {
     if (!this.mode) return;

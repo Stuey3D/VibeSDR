@@ -27,6 +27,7 @@ import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB } from '../../../src/services/satellites';   // ★ V12 satellites
+import { parseDecShared, type SharedDecoder } from '../../../src/services/sharedDecoders';   // ★★★ the room's decoder (2026-11-24)
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { heartbeat } from './keepAlive';   // ★★★ the ping on a worker's clock — a hidden tab's timers are throttled (WEB-KEEPALIVE.md)
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
@@ -781,6 +782,8 @@ export interface SpectrumCallbacks {
   onSatTrack?: (t: SatTrack) => void;
   /** ★★★ SATELLITE MODE: the server's answer to a pick (it tuned, locked and attached `decoder`). */
   onSatPicked?: (p: SatPicked) => void;
+  /** ★★★ SHARED DECODERS (2026-11-24): what the room's decoder host runs on a shared dial — on change and on arrival. */
+  onDecShared?: (l: SharedDecoder[]) => void;
   /** ★★★ beta92 OPEN IN VFO B: the server's answer (on), a refusal, or B leaving the satellite (on false) */
   onSatVfoB?: (b: SatVfoB) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
@@ -1529,6 +1532,7 @@ export class SpectrumClient {
         const r = parseSatReadout(msg); if (r) this.cb.onSat?.(r); return;
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.cb.onSatTrack?.(t); return; }
+      case 'dec_shared': { const l = parseDecShared(msg); if (l) this.cb.onDecShared?.(l); return; }   // ★★★ the room's decoder
       case 'sat_vfob': { const b = parseSatVfoB(msg); if (b) this.cb.onSatVfoB?.(b); return; }   // ★★★ beta92 OPEN IN VFO B
       case 'ais_trail': {
         const m = Number(msg.mmsi);

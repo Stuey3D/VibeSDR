@@ -126,7 +126,7 @@ flags_for() {
     test-fir-simd)         echo "-O3 -ffp-contract=fast -I $VDSP" ;;
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
-    test-decoder-hosts|test-dec-dump) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;   # ★ test-dec-dump: the decoder capture + replay (docs/v12/APRS-ON-AIR-2.md)
+    test-decoder-hosts|test-dec-dump|test-shared-decoders) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;   # ★ test-dec-dump: the decoder capture + replay (docs/v12/APRS-ON-AIR-2.md)
     # ★ V12 METEOR LRPT (beta91): optimised as ctest builds it (-O3 there) — unoptimised the suite took 42 s, and the
     #   live-pass cases (a 35 s fade through the server's Run, twice) would double that.
     test-lrpt)             echo "-O2" ;;
@@ -508,7 +508,7 @@ deps_for() {
     test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
     test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
                               android/app/src/main/cpp/decoders/auto_notch.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/rds.cpp $VDSP/stereo.cpp $RADE_LIBS" ;;
-    test-decoder-hosts|test-digi-spots|test-dec-dump) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hosts|test-digi-spots|test-dec-dump|test-shared-decoders) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp $VDSP/resampler.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc + resampler: the host carries APRS and 9600 packet (V12)
@@ -539,7 +539,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-dec-dump|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
+    test-decoder-hosts|test-dec-dump|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer|test-shared-decoders)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -1016,6 +1016,9 @@ if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fa
 if TZ=UTC npx tsx scripts/test_tlm_charts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 SHARED DECODERS (2026-11-24, Stuart): on a shared dial the room's decoder is followed (the server's own extension and
+#     parameters), a close is this listener's only and is remembered, a press wins — web and app alike (sharedDecoders.ts).
+if npx tsx scripts/test_shared_decoders.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 PAGE (2026-11-16, Stuart): the law's notice wherever PAGE is described, and RECORDINGS SILENT WHILE PAGE RUNS — every
 #     audio sender in the engine passes through pagingAudioOut (what the Android recorder and the R36S tap record), raw IQ
 #     out refused / closed, the app's words (test-paging-gate runs the rule end to end).
@@ -2088,6 +2091,16 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
     VIBE_APRS_RATE=960000 VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-aprs-shared.mjs; rc=$?
     if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   else notrun=$((notrun+1)); echo '   (test-server-aprs-shared not run — test-aprs-onair did not build)'; fi
+  # ★★★ 2026-11-24 SHARED DECODERS (Stuart): on a shared dial the room's decoder is told to every arrival, joined with the
+  #     server's parameters, closed for ONE listener only and stopped when the last lets go; spots too; a SATELLITE pick's
+  #     decoder not listed and not stopped by a box; a per-VFO radio never told (vibe_shared_decoders.h)
+  if [ -x "$OUT/test-aprs-onair" ]; then
+    VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-shared-decoders.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+    # …and the web page following it (headless Edge, --mute-audio): opens on arrival, joins, a close stays closed, follows a new one
+    VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-web-shared-decoders.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  else notrun=$((notrun+1)); echo '   (test-server-shared-decoders not run — test-aprs-onair did not build)'; fi
   # ★★ V12 2026-11-10: a listener's manual gain / AUTO reaches EVERY listener's readout (hwinfo agc + gainNow)
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-gain-readout.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

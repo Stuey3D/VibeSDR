@@ -207,16 +207,18 @@ const RTTY = { type: 'audio_extension_attach', extension_name: 'fsk', center_fre
     const xc = rdsx(X.spec); await sleep(1200);
     ok(rdsx(X.spec) === xc, 'the last reader closes it: nobody receives it any more');
     void x1;
-    // Decoders on a shared dial are shared: a mirror, one slot.
+    // Decoders on a shared dial are shared: one run, one slot. ★★★ 2026-11-24 (shared decoders): a listener who has not
+    // opened the box is TOLD what runs (dec_shared) and receives no frames until they open it; opening it joins the run
+    // and catches them up on the lines already drawn (DecoderHost::joinPeer).
     const Z = await listener(S.port, 'zzzzzzzz');
     X.dx.bin.length = 0; Z.dx.bin.length = 0;
     X.dx.send(WEFAX);
     await sleep(3500);
-    ok(wefaxLines(X.dx) >= 3 && wefaxLines(Z.dx) >= 3, `on a shared dial the decoder is everybody's (X ${wefaxLines(X.dx)}, Z ${wefaxLines(Z.dx)} lines)`);
-    const zb = wefaxLines(Z.dx);
+    ok(wefaxLines(X.dx) >= 3 && wefaxLines(Z.dx) === 0, `on a shared dial the decoder runs once; Z, who has not opened it, gets nothing (X ${wefaxLines(X.dx)}, Z ${wefaxLines(Z.dx)} lines)`);
+    const xw = wefaxLines(X.dx);
     Z.dx.send(WEFAX);             // the SAME decoder — joins, does not restart the chart
-    await sleep(800);
-    ok(texts(Z.dx, 'audio_extension_attached').length === 1 && wefaxLines(Z.dx) >= zb, 'opening the same decoder joins it (and is caught up), rather than restarting it');
+    await sleep(1500);
+    ok(texts(Z.dx, 'audio_extension_attached').length === 1 && wefaxLines(Z.dx) >= xw, `opening the same decoder joins it and is caught up on the ${xw} lines already drawn (Z ${wefaxLines(Z.dx)})`);
     for (const L of [X, Z]) for (const k of ['spec', 'aud', 'dx']) L[k]?.close();
     Y.aud?.close(); Y.dx?.close();
   } finally { S.stop(); }

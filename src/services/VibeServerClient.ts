@@ -34,6 +34,7 @@ import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
 import { parseSondeReport } from './sondes';   // ★ V12 radiosondes (RS41)
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG } from './satellites';   // ★ V12 satellites
+import { parseDecShared } from './sharedDecoders';   // ★★★ the room's decoder on a shared dial (2026-11-24)
 import { parseDabScan, parseFmScan } from './dabBandScan';
 import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
@@ -621,6 +622,7 @@ export class VibeServerClient extends VibeServerWsClient {
         const r = parseSatReadout(msg); if (r) this.callbacks.onSat?.(r); return true;
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.callbacks.onSatTrack?.(t); return true; }
+      case 'dec_shared': { const l = parseDecShared(msg); if (l) this.callbacks.onDecShared?.(l); return true; }   // ★★★ the room's decoder
       case 'sat_vfob': { const b = parseSatVfoB(msg); if (b) this.callbacks.onSatVfoB?.(b); return true; }   // ★★★ beta92 OPEN IN VFO B
       case 'ais_off':
         this.aisExit.offConfirmed(Date.now());
