@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta93 2026-11-24 — PRESENCE (Stuart: "i also closed down the app a minute ago but its still holding a slot on
+  //    the xcover … we need the app to identify to the server when it has been backgrounded then it holds the slot rather
+  //    than wait 3 mins after it has closed"). local_sdr_shim.cpp "PRESENCE"; VibeServerWsClient.setPresence; the native
+  //    goodbye at termination (VibePowerModule.goodbyeAtTermination, VibeStreamService.goodbyeLocalAudio); web initPresence.
+  { v: 'V12 (experimental)', detail: 'CLOSING THE APP FREES YOUR PLACE AT ONCE — when your connection to a VibeServer dropped, the server kept your place (and your mode, decoders and VFO B) for three minutes, because it could not tell an app that had been closed from a phone that had only put it to sleep or lost Wi-Fi for a moment. So a closed app still counted as a listener — “2/5” on a shared dial — and still held a place on a full radio for three minutes. Now the app tells the server when it goes into the background and when it comes back, and says goodbye when it closes: going back to the server list, swiping the app away while it is playing, or quitting the Mac app. A goodbye frees your place straight away; going into the background, or a connection that simply drops, is still held for the same three minutes as before, so a phone in your pocket or a Wi-Fi blip never loses your place. The web page does the same when its tab is closed. An app that iOS has already put to sleep cannot say goodbye, so swiping that one away is still held. Best with a VibeServer updated to this beta; an older app is held exactly as before.' },
   // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
   //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
   //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.
