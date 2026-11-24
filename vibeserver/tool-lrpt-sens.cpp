@@ -2,7 +2,7 @@
 // with what a real pass has — the radio's fixed frequency error, the satellite's Doppler slope fed forward as the
 // satellite engine does, a symbol-clock error and oscillator phase noise. A DEVELOPER TOOL (docs/v12/LRPT-SENSITIVITY.md).
 //
-//   tool-lrpt-sens [--profile o72d|o72|q72|q72d|o80i] [--es 1.0:5.0:0.5] [--seeds 4] [--periods 12] [--pn 0.1] [--slope -25] [--no-feed] [--fs 300000]
+//   tool-lrpt-sens [--profile o72d|o72|q72|q72d|o80i] [--es 1.0:5.0:0.5] [--seeds 4] [--seed0 1] [--periods 12] [--pn 0.1] [--slope -25] [--no-feed] [--fs 300000]
 //                  [--threads 6] [--scalar]
 //
 // Prints one line per Es/N0: frames (VCDUs passing RS) and picture blocks as % of what was sent, then the Es/N0 at the
@@ -26,7 +26,7 @@ namespace {
 struct Opt {
     std::string profile = "o72d";
     double es0 = 1.0, es1 = 5.0, esStep = 0.5;
-    int seeds = 4, periods = 12, threads = 6;
+    int seeds = 4, periods = 12, threads = 6, seed0 = 1;
     double pn = 0.1, fs = 300000, ppm = 20;
     double slope = -25;     ///< Doppler slope, Hz/s
     bool noFeed = false;    ///< no satellite engine: the receiver tracks the whole Doppler itself
@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
         if (a == "--profile") o.profile = val();
         else if (a == "--es") { const std::string s = val(); std::sscanf(s.c_str(), "%lf:%lf:%lf", &o.es0, &o.es1, &o.esStep); if (s.find(':') == std::string::npos) o.es1 = o.es0; }
         else if (a == "--seeds") o.seeds = std::atoi(val().c_str());
+        else if (a == "--seed0") o.seed0 = std::atoi(val().c_str());
         else if (a == "--periods") o.periods = std::atoi(val().c_str());
         else if (a == "--threads") o.threads = std::max(1, std::atoi(val().c_str()));
         else if (a == "--pn") o.pn = std::atof(val().c_str());
@@ -88,11 +89,12 @@ int main(int argc, char** argv) {
     for (double e = o.es0; e <= o.es1 + 1e-9; e += o.esStep) esList.push_back(e);
     struct Job { double es; uint32_t seed; Res r; };
     std::vector<Job> jobs;
-    for (double e : esList) for (int s = 1; s <= o.seeds; s++) jobs.push_back({ e, uint32_t(s), {} });
+    for (double e : esList) for (int s = o.seed0; s < o.seed0 + o.seeds; s++) jobs.push_back({ e, uint32_t(s), {} });
     std::atomic<size_t> next{0};
     std::vector<std::thread> th;
     for (int k = 0; k < o.threads; k++) th.emplace_back([&] { for (size_t j; (j = next++) < jobs.size();) jobs[j].r = runOne(o, jobs[j].es, jobs[j].seed); });
     for (auto& t : th) t.join();
+    if (std::getenv("LRPT_JOBS")) for (auto& j : jobs) std::printf("  es %.1f seed %u: frames %llu/%llu\n", j.es, j.seed, (unsigned long long)j.r.frames, (unsigned long long)j.r.sent);
     std::printf("profile %s, %.0f S/s, %d periods × %d seeds, phase noise %.1f Hz, clock %.0f ppm, Doppler slope %.0f Hz/s%s\n", o.profile.c_str(), o.fs, o.periods, o.seeds, o.pn, o.ppm, o.slope, o.noFeed ? " (not fed forward)" : " (fed forward)");
     double prevEs = 0, prevF = -1, at50 = 0; double cpu = 0, air = 0;
     for (double e : esList) {

@@ -42,9 +42,11 @@ public:
     static constexpr double kSetSec = 5;               ///< the engine says the satellite has set: frames stopped this long = over
     /** ★ The signal reading's floor for "the satellite is still there": (S+N)/N in dB (noise reads ≈ 0). */
     static constexpr double kQuietDb = 1.5;
-    /** ★★ What the reading must reach to decode: (S+N)/N ≈ +5 dB = Es/N0 ≈ 3.2 dB (synthetic OQPSK + differential at
-     *  300 kS/s: Es/N0 3 dB 48 %, 3.5 dB 79 %, 4 dB 90 % of frames; the live Meteor-M2-4 pass decoded from Es/N0 ≈ 3). */
-    static constexpr double kNeedDb = 5.0;
+    /** ★★ What the reading must reach to decode: (S+N)/N ≈ +4 dB (2026-11-24, docs/v12/LRPT-SENSITIVITY.md — was +5 before
+     *  the soft Costas detector and the narrower loops). Synthetic OQPSK + differential: 50 % of frames at Es/N0 1.6 dB
+     *  ((S+N)/N 3.9 dB). On the real Pi 500 passes, of the frames the new decoder got, 89 of 97 (24 Nov 10:55), 43 of 63
+     *  (09:20) and 60 of 143 (23 Nov 13:59) came while the reading said 3.5–4.5 dB. */
+    static constexpr double kNeedDb = 4.0;
     static constexpr int kPreviewW = kLineWidth / 4;   ///< 392
     static constexpr int kPreviewRowsPerStrip = 2;
     static constexpr int kPreviewMaxH = kMaxStrips * kPreviewRowsPerStrip;   ///< 1600

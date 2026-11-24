@@ -13,7 +13,7 @@ export interface LrptStatus {
   /** ★★ beta91: the signal over the noise, dB — (S+N)/N from the demodulator's own Es/N0, what the waterfall shows over
    *  its floor at the top of the signal; ≈ 0 on noise. undefined from an older server. */
   snrDb?: number;
-  needDb?: number;       // what it takes to decode (≈ +5 dB)
+  needDb?: number;       // what it takes to decode (≈ +4 dB since lrpt-sens 2026-11-24; +5 before)
   saved: number;         // passes filed to the gallery since the decoder started
   inRange: number;       // the satellite engine: 1 above the horizon, 0 not, −1 no pick
   offsetHz: number;      // the carrier's offset from the dial (the Doppler left over)
