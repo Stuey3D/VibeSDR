@@ -208,13 +208,15 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
  *  has not heard for a minute has flown out of range or the radio stopped listening. Same number as the server's
  *  kAdsbNowSec (vibe_aircraft_share.h). */
 export const AV_ADSB_NOW_SEC = 60;
+/** ★★ V12 11-24: an ADS-B position is drawn faded ("last seen") from AV_ADSB_NOW_SEC until this, then removed (Stuart). */
+export const AV_ADSB_EXPIRE_SEC = 300;
 const hhmmUtc = (epochSec: number) => { const d = new Date(epochSec * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
 /** ★★ The now-rule, on the merged aircraft (copies; the input is not touched):
  *   · ADS-B heard it in the last AV_ADSB_NOW_SEC AND the server says a radio is decoding ADS-B (adsb.live; an older
  *     server that cannot say → the age alone) → ADS-B counts.
  *   · else an aircraft heard ONLY on ADS-B is gone — neither drawn nor counted;
  *   · else (a datalink source too) it stays with its datalink history: 'ADS-B' leaves `src` (adsbWas keeps when), and an
- *     ADS-B position is "last seen HH:MM UTC" — faded, never a live fix.
+ *     ADS-B position is "last seen HH:MM UTC" — faded, never a live fix — and past AV_ADSB_EXPIRE_SEC it is removed.
  *  `adsbGone`: how many had ADS-B and lost it (the status line's ADS-B words). */
 export function avNowRule(planes: AvPlane[], shared: SharedAircraft | null): { planes: AvPlane[]; adsbGone: number } {
   const adsbOk = shared?.adsb?.live !== false && !shared?.adsb?.off;
@@ -233,8 +235,16 @@ export function avNowRule(planes: AvPlane[], shared: SharedAircraft | null): { p
       delete p.srcAge['ADS-B'];
     }
     if (p.posSrc === 'ADS-B' && p.lat != null && (!heard || (p.posAge ?? Infinity) > AV_ADSB_NOW_SEC)) {
-      p.lastSeen = hhmmUtc(nowSec - (p.posAge ?? 0));
-      p.trk = undefined; p.gs = undefined;              // ★ never drawn as if it were flying there now
+      if ((p.posAge ?? Infinity) > AV_ADSB_EXPIRE_SEC) {
+        // ★★ V12 11-24 (Stuart: "keep them for 1 minute as now but then fade off at 5 mins") — past five minutes an ADS-B
+        //   fix EXPIRES: the aircraft stays for its datalink ("no position") but is not drawn where it was. The hour-long
+        //   faded "last seen" drew 16 aircraft at fixes minutes old after a radio moved from ADS-B to VDL2.
+        p.lat = undefined; p.lon = undefined; p.trk = undefined; p.gs = undefined;
+        p.posSrc = undefined; p.posAge = undefined; p.posTime = undefined;
+      } else {
+        p.lastSeen = hhmmUtc(nowSec - (p.posAge ?? 0));
+        p.trk = undefined; p.gs = undefined;            // ★ never drawn as if it were flying there now
+      }
     }
     out.push(p);
   }
@@ -414,7 +424,7 @@ export function avLegendRows(present: AvLayerId[], adsbWay = false): Array<[stri
   const rows: Array<[string, string]> = [];
   for (const s of AV_SRC) if (present.includes(s.id)) rows.push([small(plane(s.name, [s.name])), `Aircraft whose position came from ${s.name}`]);
   rows.push([small(plane('ADS-B', ['ADS-B', 'VDL2'])), 'The number: heard on that many sources (one aircraft, never drawn twice)']);
-  rows.push([small(plane('VDL2', ['VDL2'], { posAge: AV_FADE_SEC + 1 })), 'Faded: an old position — a datalink fix over ten minutes old, or an ADS-B one not heard for a minute ("last seen")']);
+  rows.push([small(plane('VDL2', ['VDL2'], { posAge: AV_FADE_SEC + 1 })), 'Faded: an old position — a datalink fix over ten minutes old, or an ADS-B one not heard for a minute ("last seen"; removed after five)']);
   if (present.includes('stations')) rows.push([small(avStationIcon().html), 'HFDL ground station heard']);
   if (present.includes('airports')) rows.push(['<span style="display:inline-block;width:20px;text-align:center">✈</span>', 'Airports and runways (the AIRPORTS layer)']);
   return rows;
