@@ -529,14 +529,14 @@ export default function SatellitePanel(p: SatellitePanelProps) {
           </Pressable>
           {listOpen && (!p.list ? <Text style={s.note}>Asking the server…</Text>
             : !rows.length ? <Text style={s.note}>{p.list.why || (p.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server')}</Text>
-            : rows.slice(0, 40).map((r) => {
-                const on = !!sel && sel.norad === r.sat.norad && sel.tx === r.i;
+            : rows.slice(0, 160).map((r) => {
+                const on = !r.later && !!sel && sel.norad === r.sat.norad && sel.tx === r.i;   // ★ 2026-11-24 a later pass: no highlight
                 const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
                 // ★★ 1.6 REMIND — only where a pick disturbs nobody (pickPrivate), hearable, a pass to come; hidden otherwise
-                const offer = !!p.onRemind && !greyed && satRemindOffered(p.list, r);
+                const offer = !r.later && !!p.onRemind && !greyed && satRemindOffered(p.list, r);
                 const held = offer && !!p.remindHeld?.(r.sat.norad, r.i);
                 return (
-                  <View key={`${r.sat.norad}.${r.i}`} style={s.rw}>
+                  <View key={`${r.sat.norad}.${r.i}.${r.pass?.aos ?? 0}`} style={s.rw}>
                   <Pressable
                     onPress={() => (r.grey || greyed ? p.onGreyed(r.grey ? r.why : p.cap.why) : p.onPick(r.sat.norad, r.i))}
                     accessibilityRole="button" accessibilityState={{ disabled: r.grey || greyed, selected: on }}

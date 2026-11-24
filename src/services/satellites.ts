@@ -507,6 +507,8 @@ export const SAT_DROP_MSG = { type: 'sat', op: 'drop' } as const;
 
 export interface SatRow {
   sat: SatInfo; tx: SatTx; i: number;
+  /** ★ 2026-11-24 a LATER pass of a bird already listed (its current-or-next group comes first): no pick highlight, no REMIND */
+  later?: boolean;
   /** passing now */
   up: boolean;
   /** seconds to LOS while up (inRangeFor, else the current pass's LOS) */
@@ -535,15 +537,23 @@ export function satModeRows(l: SatList | null, nowSec: number): SatRow[] {
     const next = up ? undefined : sat.passes.find((p) => p.aos > nowSec);
     const key = up ? (left ?? 1e9) : next ? 1e10 + next.aos : 1e12;
     const pass = up ? cur : next;
-    return { sat, up, left, next, pass, key };
-  });
+    const first = { sat, up, left, next, pass, key, later: false };
+    /* ★★★ 2026-11-24 EVERY PASS, NOT JUST THE NEXT (Stuart: "so we need to list all passes including the next ones"). One
+     *  row group a bird hid every pass after its next: a low 28° METEOR at 19:03 kept that evening's 60° pass at 20:42 off
+     *  the list until it was gone ("it was saying another decent pass wasnt until 0200"), and the timetable looked empty
+     *  for hours. The server already sends ≤ 4 passes a bird in the next 24 h; each later one gets its own group, in AOS
+     *  order with the rest. A bird's FIRST group is still its current-or-next pass, so a lookup by norad finds the same. */
+    const later = sat.passes.filter((p) => p.aos > nowSec && p !== next)
+      .map((p) => ({ sat, up: false, left: undefined, next: p, pass: p, key: 1e10 + p.aos, later: true }));
+    return [first, ...later];
+  }).flat();
   birds.sort((a, b) => a.key - b.key || a.sat.name.localeCompare(b.sat.name));
   const out: SatRow[] = [];
   for (const b of birds) {
     const orbitWhy = b.sat.ageState === 'expired' || b.sat.ageState === 'none' ? ageText(b.sat) : '';
     b.sat.tx.forEach((tx, i) => {
       const why = !tx.reach ? (tx.why || 'out of this receiver’s range') : orbitWhy;
-      out.push({ sat: b.sat, tx, i, up: b.up, left: b.left, next: b.next, pass: b.pass, grey: !!why, why });
+      out.push({ sat: b.sat, tx, i, up: b.up, left: b.left, next: b.next, pass: b.pass, grey: !!why, why, ...(b.later ? { later: true } : {}) });
     });
   }
   return out;

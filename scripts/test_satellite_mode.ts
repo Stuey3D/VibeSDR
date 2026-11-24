@@ -73,6 +73,18 @@ const rows = satModeRows(l, now);
 const order = rows.map((r) => `${r.sat.id}#${r.i}`).join(',');
 ok(order === 'ISS#0,ISS#1,ISS#2,METEOR-M2-3#0,SO-50#0,RS-44#0,AO-7#0', `up now SHORTEST remaining first (ISS 6:12 before METEOR 9:55), then by AOS, no pass last: ${order}`);
 ok(rows.length === 7, 'nothing left out (every downlink listed)');
+{ // ★★ 2026-11-24 EVERY PASS (Stuart: "so we need to list all passes including the next ones" — a low 19:03 METEOR hid its 60° 20:42)
+  const met = l.sats.find((x) => x.id === 'METEOR-M2-3')!;
+  const t0 = now + 3600;
+  const lowNext = { aos: t0, tca: t0 + 300, los: t0 + 600, maxEl: 28 } as any;
+  const highLater = { aos: t0 + 6000, tca: t0 + 6300, los: t0 + 6700, maxEl: 60 } as any;
+  const other = { ...l.sats.find((x) => x.id === 'SO-50')!, passes: [{ aos: t0 + 3000, tca: t0 + 3300, los: t0 + 3600, maxEl: 40 } as any] };
+  const l2 = { ...l, sats: [{ ...met, inRangeFor: undefined, el: -10, passes: [lowNext, highLater] }, other] };
+  const r3 = satModeRows(l2 as any, now);
+  const seq = r3.map((r) => `${r.sat.id}@${(r.pass as any)?.maxEl}${r.later ? '+' : ''}`).join(',');
+  ok(seq === 'METEOR-M2-3@28,SO-50@40,METEOR-M2-3@60+', `every pass its own row, in AOS order — the 60° pass is listed after the 28° one: ${seq}`);
+  ok(r3.find((r) => r.sat.norad === met.norad)!.pass === lowNext, 'a lookup by norad still finds the bird\'s NEXT pass first');
+}
 { // up decided by elevation when an older server sends no inRangeFor: remaining from the pass's LOS
   const old = parseSatList({ ...raw, sats: raw.sats.map((s) => ({ ...s, inRangeFor: undefined })) })!;
   const r2 = satModeRows(old, now);

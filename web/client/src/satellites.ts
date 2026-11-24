@@ -669,13 +669,13 @@ export class SatPanel {
     else if (!rows.length) h = `<div class="sat-dim">${esc(this.list.why || (this.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server'))}</div>`;
     let anyRemind = false;
     const whens: string[] = [];
-    for (const r of rows.slice(0, 40)) {
-      const sel = (this.picked && this.picked.norad === r.sat.norad && this.picked.tx === r.i) || (this.pending && this.pending.norad === r.sat.norad && this.pending.tx === r.i);
+    for (const r of rows.slice(0, 160)) {   // ★ 2026-11-24 every pass is a row now (was 40)
+      const sel = !r.later && ((this.picked && this.picked.norad === r.sat.norad && this.picked.tx === r.i) || (this.pending && this.pending.norad === r.sat.norad && this.pending.tx === r.i));
       const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
       const inactive = r.tx.status === 'inactive' ? ' · INACTIVE' : '';
       // ★★ 1.6 REMIND — only where a pick disturbs nobody (the server's pickPrivate), on a hearable row with a pass to come;
       //    hidden, not greyed, everywhere else
-      const offer = satRemindOffered(this.list, r);
+      const offer = !r.later && satRemindOffered(this.list, r);   // ★ 2026-11-24 REMIND on the current-or-next pass only
       const held = offer ? this.rem.find(this.srv(), r.sat.norad, r.i) : undefined;
       anyRemind ||= offer;
       h += `<div class="sat-rw"><button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
