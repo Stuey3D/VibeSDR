@@ -78,11 +78,11 @@ static void s1_s2() {
     {
         bg::FcTlmGalleryTap tap(st, meta(), [&] { return ck.t; });
         vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = T0 - 60; c.los = T0 + 660;
-        for (int i = 0; i < 6; ++i) { ck.t = T0 + 5 * i; c.unix = (double)ck.t; c.elDeg = 10 + i; tap.satTlm(frame(1 + i % 12, 1000 + i), c); }
+        for (int i = 0; i < 6; ++i) { ck.t = T0 + 5 * i; c.unix = (double)ck.t; c.elDeg = 10 + i; tap.satTlm(frame(i % 12, 1000 + i), c); }
         CHECK(st.itemCount() == 0, "six frames in 25 s: nothing written yet (held in RAM)");
         ck.t = T0 + 61; c.unix = (double)ck.t; c.elDeg = 54.4; tap.satTlm(frame(7, 1006), c);
         CHECK(itemsOf(st, ".csv").size() == 1 && itemsOf(st, ".txt").size() == 1, "a minute on: one pass CSV and one day log, written once");
-        for (int i = 7; i < 30; ++i) { ck.t = T0 + 5 * i + 30; c.unix = (double)ck.t; c.elDeg = 54.4 - i; tap.satTlm(frame(1 + i % 12, 1000 + i), c); }
+        for (int i = 7; i < 30; ++i) { ck.t = T0 + 5 * i + 30; c.unix = (double)ck.t; c.elDeg = 54.4 - i; tap.satTlm(frame(i % 12, 1000 + i), c); }
         tap.finish(false);
     }
     auto csv = itemsOf(st, ".csv");
@@ -94,14 +94,14 @@ static void s1_s2() {
     CHECK(L.size() > 3 && L[1].find("AOS 14:01") != std::string::npos && L[1].find("LOS 14:13 UTC") != std::string::npos, "the pass's AOS and LOS: %s", L.size() > 1 ? L[1].c_str() : "");
     CHECK(L.size() > 3 && L[2].find("[raw] = sent uncalibrated") != std::string::npos, "the head says what [raw] means");
     const std::string hdr = L.size() > 3 ? L[3] : "";
-    const vibefc::Decoded d0 = frame(1, 1000);
+    const vibefc::Decoded d0 = frame(0, 1000);
     CHECK(cols(hdr) == 7 + (int)d0.values.size(), "the header: 7 fixed columns + %zu channels (got %d)", d0.values.size(), cols(hdr));
     CHECK(hdr.rfind("utc,unix,frame,seq,mode,elevation [deg],rs fixed,", 0) == 0, "the fixed columns first");
     CHECK(hdr.find(",Battery voltage [raw],") != std::string::npos, "Battery voltage is labelled [raw] (no published calibration)");
     CHECK(hdr.find(",Reboot count,") != std::string::npos && hdr.find("Reboot count [") == std::string::npos, "a count has no bracket");
     bool same = true; for (size_t i = 4; i < L.size(); ++i) same &= cols(L[i]) == cols(hdr);
     CHECK(same, "every row has the header's column count");
-    // the values: row 1 = frame(1, 1000) exactly
+    // the values: row 1 = frame(0, 1000) exactly
     if (L.size() > 4) {
         std::vector<std::string> cells; std::stringstream ss(L[4]); std::string x; while (std::getline(ss, x, ',')) cells.push_back(x);
         bool eq = cells.size() == 7 + d0.values.size();
@@ -128,7 +128,7 @@ static void s3_s4() {
     uint32_t seq = 2000;   // ★ the satellite's own counter: one a frame, never repeated (a frame's identity)
     auto run = [&](bg::FcTlmGalleryTap& tap, const char* sat, double aos, int64_t start, int n) {
         vibefc::TlmCtx c; c.sat = sat; c.aos = aos; c.los = aos > 0 ? aos + 700 : 0;
-        for (int i = 0; i < n; ++i) { ck.t = start + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(1 + i % 24, seq++), c); }
+        for (int i = 0; i < n; ++i) { ck.t = start + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(i % 24, seq++), c); }
     };
     {
         bg::FcTlmGalleryTap tap(st, meta(), [&] { return ck.t; });
@@ -189,7 +189,7 @@ static void s4b() {
         vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = (double)T0; c.los = (double)T0 + 700;
         for (int i = 0; i < 60; ++i) {   // 5 minutes, alternate frames, flushes interleaving every minute
             ck.t = T0 + 5 * i; c.unix = (double)ck.t;
-            if (i % 2) { bgTap.satTlm(frame(1 + i % 24, 5000 + i), c); ++bgN; } else { lvTap.satTlm(frame(1 + i % 24, 6000 + i), c); ++lvN; }
+            if (i % 2) { bgTap.satTlm(frame(i % 24, 5000 + i), c); ++bgN; } else { lvTap.satTlm(frame(i % 24, 6000 + i), c); ++lvN; }
         }
         bgTap.finish(false);
         CHECK(bgTap.dayName() == lvTap.dayName() || lvTap.dayName().empty() || bgTap.dayName().empty(), "both taps hold the same day item");
@@ -241,7 +241,7 @@ static void s4c() {
         vibefc::TlmCtx cl = cb; cl.aos = 0; cl.los = 0;   // ★ the listener's lock does not know the AOS: joins by time
         for (int i = 0; i < 40; ++i) {
             ck.t = T0 + 5 * i;
-            const vibefc::Decoded d = frame(1 + i % 24, 8000 + i);
+            const vibefc::Decoded d = frame(i % 24, 8000 + i);
             cb.unix = (double)ck.t; cl.unix = (double)ck.t + (i % 3 == 0 ? 1 : 0);   // a second apart sometimes
             if (i % 7 != 3) bgTap.satTlm(d, cb);     // ★ each misses a few the other heard
             if (i % 5 != 1) lvTap.satTlm(d, cl);
@@ -281,7 +281,7 @@ static void s4d() {
                 vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = k ? 0.0 : (double)T0; c.los = k ? 0.0 : (double)T0 + 700;
                 for (int i = 0; i < N; ++i) {
                     now = T0 + 5 * i; c.unix = (double)now;
-                    if (k == 0 ? (i % 7 != 3) : (i % 5 != 1)) tap.satTlm(frame(1 + i % 24, 9000 + i), c);
+                    if (k == 0 ? (i % 7 != 3) : (i % 5 != 1)) tap.satTlm(frame(i % 24, 9000 + i), c);
                     tap.tick();
                     ::usleep(1500);   // ★ the two processes' flushes interleave in real time
                 }
@@ -334,7 +334,7 @@ static void s5() {
     {
         bg::FcTlmGalleryTap tap(st, meta(), [&] { return ck.t; });
         vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = T0; c.los = T0 + 99999;
-        for (int i = 0; i < 1500; ++i) { ck.t = T0 + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(1 + i % 24, 3000 + i), c); }
+        for (int i = 0; i < 1500; ++i) { ck.t = T0 + 5 * i; c.unix = (double)ck.t; tap.satTlm(frame(i % 24, 3000 + i), c); }
         tap.finish(false);
     }
     auto csv = itemsOf(st, ".csv");
@@ -363,7 +363,7 @@ static int writeFixture(const std::string& out) {
             for (int i = 0; i < 24; ++i) {
                 if (p == 1 && i >= 10 && i < 16) continue;   // a fade: six frames lost mid-pass
                 ck.t = aos + 30 + 5 * i; c.unix = (double)ck.t; c.elDeg = 5 + 40 * std::sin(3.14159 * i / 23.0);
-                vibefc::Decoded d = frame(1 + i % 24, 4000 + p * 100 + i);
+                vibefc::Decoded d = frame(i % 24, 4000 + p * 100 + i);
                 for (size_t k = 0; k < d.values.size(); ++k)
                     if (d.values[k].raw) d.values[k].v = std::round(d.values[k].v + (k % 5 + 1) * 3 * std::sin(0.25 * i + k) - p * (k % 3));
                 tap.satTlm(d, c);

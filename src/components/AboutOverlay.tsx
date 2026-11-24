@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta93 2026-11-24 — FUNCUBE TELEMETRY DECODES ON AIR AT LAST (Stuart's AO-73 pass, 73°, XCover + Pi 500 V4L:
+  //     a strong signal, the decoder never synced). The satellite's symbol clock is ~1400 ppm fast (1201.6 Bd) and our
+  //     timing loop held ±800 ppm → vibe_bpsk_rx.h second-order loop; the soft symbol keeps the spin fade; the frame type
+  //     counts 0–23 (vibe_fctlm.h frameName); test-fctlm §10 decodes 23.5 s of the real recording.
+  { v: 'V12 (experimental)', detail: 'FUNCUBE (AO-73) TELEMETRY NOW DECODES FROM THE REAL SATELLITE — until now it had only ever been tested against our own made-up signal, and on the first good pass (73° high, strong on the waterfall, clearly audible) it decoded nothing at all. Recordings of that pass showed why: AO-73 sends its data a little faster than the published 1200 bits a second (about 1201.6 — its own clock, the same on two different radios), more than the decoder’s timing could follow, so it slipped a bit every few seconds and never found the start of a frame. It now learns the satellite’s real speed. The same recordings now give 64 frames over three files, with the satellite’s own messages (“FUNcube is nearly 13 years old and 550km up in space”). Two smaller fixes from the same pass: frames are now named as the satellite numbers them (they were one out, so FM1 showed as FM2), and an empty message slot (“..”) or binary data no longer shows as garbled text. Frames are still lost in the deep fades as the satellite spins and when it is low. Needs a VibeServer that has it.' },
   // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
   //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
   //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.

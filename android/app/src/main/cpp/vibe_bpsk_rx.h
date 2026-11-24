@@ -166,6 +166,8 @@ public:
     void setLocked(bool on) { locked_ = on; }
     /** Samples fed so far (a clock for tests and the status). */
     uint64_t samples() const { return nIn_; }
+    /** The symbol rate the timing loop has learnt (baud × sps / (sps + period)). */
+    double baudHz() const { return fs2_ / (sps_ + period_); }
 
     void feed(const float* x, int n) {
         for (int i = 0; i < n; ++i) {
@@ -215,8 +217,14 @@ private:
         // timing error (Gardner), normalised
         const float te = (prev_.real() - sr) * (sMid.real() * g);
         prev_ = std::complex<float>(sr, si);
-        double adj = std::max(-0.5, std::min(0.5, 0.06 * (double)te));
-        nextStrobe_ += sps_ + adj;
+        // ★★★ 11-24 a SECOND-ORDER timing loop (proportional + the symbol period's own integrator). AO-73 on air sends
+        //   ~1201.6 Bd — 1300 ppm fast (measured on the Pi 500 V4L capture: the 5 s frames are 6000 of OUR symbols at
+        //   1201.57 Bd) — and a proportional-only Gardner loop holds only ~±800 ppm (its standing error eats the S-curve):
+        //   it slipped symbols all pass and the sync never matched. The integrator learns the period (±0.5 %).
+        const double tei = std::max(-1.0, std::min(1.0, (double)te));
+        period_ = std::max(-kPeriodMax * sps_, std::min(kPeriodMax * sps_, period_ + kTi_ * tei));
+        double adj = std::max(-0.5, std::min(0.5, kTp_ * tei));
+        nextStrobe_ += sps_ + period_ + adj;
         // Costas (BPSK): e = sign(I)·Q, a second-order loop at the symbol rate
         const float ce = (sr >= 0 ? si : -si);
         w2_ += kI_ * ce; p2_ += kP_ * ce;
@@ -229,7 +237,13 @@ private:
         if (std::fabs(w2Hz) > 20.0 && std::fabs(coarse_ + w2Hz) <= range_) { coarse_ += w2Hz; w2_ = 0; setNco1(); }
         sigPow_ = sigPow_ * 0.99f + sr * sr * 0.01f;
         noisePow_ = noisePow_ * 0.99f + si * si * 0.01f;
-        if (onSymbol) onSymbol(sr);
+        // ★★★ 11-24 THE SOFT SYMBOL CARRIES THE FADE. AO-73 spins: its signal fades 10+ dB every ~7.6 s, two or three
+        //   fades inside every 4.3 s frame. The loops above want a normalised symbol (a 200-symbol AGC), but the
+        //   Viterbi wants a faded symbol to LOOK weak — normalised, the noise in a fade arrived as confident as the
+        //   peak's data. So the symbol out is scaled by a slow peak-following level instead (fast attack, ~8 s decay).
+        powSlow_ = pow_ > powSlow_ ? powSlow_ * 0.95f + pow_ * 0.05f : powSlow_ * 0.9999f + pow_ * 0.0001f;
+        const float gs = 1.0f / std::sqrt(std::max(powSlow_, 1e-12f));
+        if (onSymbol) onSymbol(sNow.real() * gs);
     }
     /** The matched-filter output at absolute (fractional) sample index `t` — linear between its neighbours. */
     std::complex<float> interp(double t) const {
@@ -294,8 +308,10 @@ private:
     static constexpr double kP_ = 0.04, kI_ = 0.0008;
     std::vector<std::complex<float>> hist_; size_t hpos_ = 0;
     double nextStrobe_ = 8;
+    double period_ = 0;                                          ///< the timing loop's integrator: samples a symbol beyond sps_
+    static constexpr double kTp_ = 0.06, kTi_ = 0.0015, kPeriodMax = 0.005;
     std::complex<float> prev_{0, 0};
-    float pow_ = 1e-6f, sigPow_ = 0, noisePow_ = 1;
+    float pow_ = 1e-6f, powSlow_ = 1e-6f, sigPow_ = 0, noisePow_ = 1;
     bool locked_ = false;
     /* ★★ After a hunt finds a line (moved to it, or it is already where we are tuned), no hunt for kHoldSec — longer than
      *  a FUNcube frame period (5 s), so the framer gets a whole frame. Re-hunting every 53 ms until the first frame

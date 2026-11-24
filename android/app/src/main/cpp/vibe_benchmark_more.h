@@ -926,10 +926,11 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         return hostAudioRow("dec_cw", "Decoder: CW", "cw", attach + "\"extension_name\":\"cw\"}", cwSignal("CQ CQ DE G4ABC G4ABC K   "), Count::Chars);
     });
     run("dec_fctlm", "Decoder: FUNcube telemetry", [&] {
-        // ★ V12 beta90: four frames of our own FUNcube transmitter (offset 150 Hz, Eb/N0 12 dB), counted as sat_tlm frames
+        // ★ V12 beta90: four frames of our own FUNcube transmitter (offset 150 Hz, Eb/N0 12 dB), counted as sat_tlm frames.
+        //   ★★ 11-24: sent as AO-73 does on air — a 1 = no phase change (the default) and its clock 1400 ppm fast
         std::vector<std::vector<uint8_t>> fr;
-        for (int i = 0; i < 4; ++i) fr.push_back(vibefc::tx::sampleFrame(1 + i, (uint32_t)i));
-        vibefc::tx::Cfg c; c.offsetHz = 150; c.ebn0Db = 12;
+        for (int i = 0; i < 4; ++i) fr.push_back(vibefc::tx::sampleFrame(i, (uint32_t)i));
+        vibefc::tx::Cfg c; c.offsetHz = 150; c.ebn0Db = 12; c.clockPpm = -1400;
         return hostAudioRow("dec_fctlm", "Decoder: FUNcube telemetry (BPSK 1200)", "fctlm", attach + "\"extension_name\":\"fctlm\"}",
                             vibefc::tx::modulate(fr, c), Count::Json, "sat_tlm");
     });
