@@ -12,10 +12,12 @@ import { SKY_LEGEND, skyPlotScene, type SkyDot } from '../utils/skyPlot';
 /** The drawing's own units (viewBox); on screen it is the width it is given, capped at maxW. */
 const SIZE = 300;
 
-function SkyPlotViewInner({ dots, ink, muted, font, maxW = 320, label = 'Sky plot' }: {
+function SkyPlotViewInner({ dots, ink, muted, font, maxW = 320, label = 'Sky plot', maxDraw = 3000 }: {
   dots: SkyDot[]; ink: string; muted: string; font?: string; maxW?: number; label?: string;
+  /** the newest this many dots are drawn (each is a native view: the live box keeps it lower — 1 GB phones) */
+  maxDraw?: number;
 }) {
-  const scene = useMemo(() => skyPlotScene(dots, SIZE, 3000), [dots]);
+  const scene = useMemo(() => skyPlotScene(dots, SIZE, maxDraw), [dots, maxDraw]);
   const [w, setW] = useState(maxW);
   const fs = 11 * SIZE / Math.max(80, w);   // ★ labels sized on SCREEN, so they read at any width
   return (

@@ -469,7 +469,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   )}
                   {orbSky && (
                     <View style={s.orbSky}>
-                      <SkyPlotView dots={skyDots} ink={tk.value} muted={tk.muted} font={F} maxW={big ? 360 : 260}
+                      <SkyPlotView dots={skyDots} ink={tk.value} muted={tk.muted} font={F} maxW={big ? 360 : 260} maxDraw={1500}
                                    label="Sky plot: where this aerial hears the ORBCOMM satellites" />
                       <Text style={[s.detailNp, s.center]}>{[skyPlotSummary(skyDots) || 'No dots yet — they appear as the birds are heard', skyNote].filter(Boolean).join(' · ')}</Text>
                       {big && <Text style={[s.detailNp, s.center]}>{SKY_PLOT_WHAT}</Text>}
