@@ -62,6 +62,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
   //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
   //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.
+  { v: 'V12 (experimental)', detail: 'VOR / ILS: THE COMPASS STAYS UP \u2014 the box redrew its compass or ILS needle every second and blanked it whenever a second brought no fresh reading (while the beacon sends its Morse ident, or in a fade). The last good reading now stays up, dimmed and marked \u201clast reading N s ago\u201d, for up to a minute on the same channel; a new reading replaces it at once, and tuning elsewhere clears it.' },
   { v: 'V12 (experimental)', detail: 'SATELLITE OPENS ZOOMED IN ON THE SIGNAL — picking a satellite now also zooms the waterfall to the signal, its Doppler swing and its neighbours, instead of leaving the whole capture on screen with the satellite a sliver in the middle: about 400 kHz across for a METEOR picture, less for the ISS’s voice or a beacon. It happens once, when you pick; zoom in or out afterwards and it stays where you put it.' },
   // ★★★ V12 beta92 2026-11-23 — APRS FROM IQ (Stuart: "surely aprs needs to be iq based and bypass the nfm processing
   //     completely then it can work the best it can"). RxPipeline::setDecoderTap (pipeline.cpp), vibe_aprs_run.h iq1200_,

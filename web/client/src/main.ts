@@ -216,7 +216,7 @@ import { LEAFLET_ASSET } from './leafletAsset';
 import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonMerge, balloonParams,
          balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonPayload, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
 import { FIVE_TONE_STANDARDS, TONES_DEFAULTS, TONES_HINT, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from '../../../src/services/tones';   // ★ V12 DTMF + 5-tone
-import { VOR_HINT, SARSAT_HINT, SARSAT_NOTE, vorSanitise, vorStateText, navCardSvg, radialFix, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from '../../../src/services/navaids';   // ★ V12 VOR / ILS, 406 MHz beacons
+import { VOR_HINT, SARSAT_HINT, SARSAT_NOTE, vorSanitise, vorStateText, navCardSvg, vorHold, type VorHoldState, radialFix, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from '../../../src/services/navaids';   // ★ V12 VOR / ILS, 406 MHz beacons
 import { NCDXF_BANDS, NCDXF_HINT, NCDXF_FOLLOW_HINT, NCDXF_CALLS, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, ncdxfFollowBand,
          ncdxfFollowAllowed, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
@@ -13672,6 +13672,7 @@ let lrptCap = false;   // ★ V12 METEOR-M LRPT pictures (vibe_lrpt_run.h) — t
  *  and position reach the owner's own lines only (the server's rule, vibe_sarsat_run.h). No settings: AUTO (the channel says
  *  VOR / localiser / glideslope, the signal confirms). */
 let vorCap = false, sarsatCap = false;
+const vorHoldSt: VorHoldState = { good: null, at: 0 };   // ★ V12 11-24 the last good reading, held
 let vorLast: VorStatus | null = null, sarsatLast: SarsatStatus | null = null;
 const vorHeard = new Map<string, { lat: number; lon: number; brg: number; at: number }>();   // station → its last true radial
 function renderNavCard() {
@@ -13680,7 +13681,7 @@ function renderNavCard() {
   if (activeDec === 'sarsat') { host.innerHTML = `<div class="note">${SARSAT_NOTE.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))}</div>`; return; }
   const s = vorLast;
   let h = navCardSvg(s);
-  if (s && s.kind === 'vor' && s.station && s.trueBrg != null) {
+  if (s && s.kind === 'vor' && s.station && s.trueBrg != null && s.heldSecs == null) {
     vorHeard.set(s.station.ident, { lat: s.station.lat, lon: s.station.lon, brg: s.trueBrg, at: Date.now() });
     const others = [...vorHeard.entries()].filter(([k, v]) => k !== s.station!.ident && Date.now() - v.at < 30 * 60e3);
     for (const [k, v] of others.slice(-1)) {
@@ -14818,7 +14819,7 @@ function initDecoders(host: string, auth: AuthState) {
     // ★★ V12 VOR / ILS: once a second — the radial or the deviation, the ident, the station.
     onVor: (d) => {
       if (activeDec !== 'vor') return;
-      vorLast = vorSanitise(d);
+      vorLast = vorHold(vorHoldSt, vorSanitise(d), Date.now());
       decStateText = vorStateText(vorLast && vorLast.kind !== 'none' ? 1 : 0, vorLast);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
       renderNavCard();
@@ -15889,7 +15890,7 @@ function showDecBox(what: string) {
   if (what === 'ncdxf') { ncdxfLast = null; renderNcdxf(); }
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
-  else if (what === 'vor') { vorLast = null; decStateText = vorStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = VOR_HINT; }
+  else if (what === 'vor') { vorLast = null; vorHoldSt.good = null; decStateText = vorStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = VOR_HINT; }
   else if (what === 'sarsat') { sarsatLast = null; decStateText = sarsatStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = SARSAT_HINT; }
   else if (what === 'tones') { tonesLast = null; decStateText = tonesStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = TONES_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
