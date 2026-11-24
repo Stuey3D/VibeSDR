@@ -7025,9 +7025,9 @@ async function showSplashRadios(): Promise<void> {
       const r = radios.find((x: any) => String(x.id ?? x.serial ?? '') === busyId);
       const name = r ? String((r as any).label || (r as any).driver || 'That radio') : 'That radio';
       const fi = Number(qs.get('freeIn'));
-      const when = Number.isFinite(fi) && fi >= 0
-        ? ` It should be free again in about ${Math.max(1, Math.round(fi / 60))} minute${Math.round(fi / 60) === 1 ? '' : 's'}.`
-        : '';
+      // ★ beta93: the plural follows the number SHOWN (it said "about 1 minutes" under 30 s — Stuart 11-24)
+      const mins = Number.isFinite(fi) && fi >= 0 ? Math.max(1, Math.round(fi / 60)) : -1;
+      const when = mins > 0 ? ` It should be free again in about ${mins} minute${mins === 1 ? '' : 's'}.` : '';
       let note = document.getElementById('splashBusyNote');
       if (!note) {
         note = document.createElement('div');
