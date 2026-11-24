@@ -227,7 +227,7 @@ try {
   const fw = JSON.parse(await ev(`(() => { const c = document.getElementById('decImage'), x = c.getContext('2d'); const img = x.getImageData(0, 0, 392, 300);
     c.height = 1600; x.putImageData(img, 0, 0); x.fillStyle = '#556'; x.fillRect(0, 300, 392, 1300);
     const w = document.querySelector('#satPanel #decImgWrap'), r = c.getBoundingClientRect(), wr = w.getBoundingClientRect();
-    return JSON.stringify({ iw: r.width, ww: wr.width, ih: r.height, wh: wr.height, sh: w.scrollHeight }); })()`));
+    return JSON.stringify({ iw: r.width, ww: w.clientWidth, ih: r.height, wh: wr.height, sh: w.scrollHeight }); })()`));   // ★ 11-24: the box's INSIDE width — a classic (always-shown) scrollbar is not picture room
   ok(Math.abs(fw.iw - fw.ww) <= 2, `a 1600-line pass is drawn at the box's full width (${Math.round(fw.iw)} of ${Math.round(fw.ww)} px)`);
   ok(fw.wh <= 445 && fw.sh > fw.wh + 400, `…and the box scrolls (${Math.round(fw.wh)} px tall, ${Math.round(fw.sh)} px of picture)`);
   await ev(`(() => { const c = document.getElementById('decImage'), x = c.getContext('2d'); const img = x.getImageData(0, 0, 392, 300); c.height = 300; x.putImageData(img, 0, 0); return true; })()`);
