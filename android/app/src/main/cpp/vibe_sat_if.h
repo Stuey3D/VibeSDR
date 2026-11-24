@@ -69,6 +69,7 @@ inline double dopplerHz(double hz) { return std::fabs(hz) * kLeoDopplerFrac + vi
 /** One downlink the filter must hold. */
 inline constexpr double kViewSpanX = 2.5;          ///< the opening view: this many times the region (viewSpanHz)
 inline constexpr double kViewMinSpanHz = 50000.0;  ///< …and never narrower than this
+inline constexpr double kOrbViewMarginHz = 60000.0; ///< ★ an ORBCOMM pick's view: its decoder slice + this
 
 struct Region {
     double centreHz = 0;   // where the signal sits (its nominal centre; the Doppler is in halfHz)
@@ -94,6 +95,10 @@ inline Region regionOf(const vibe::sat::Transmitter& t, double demodBwHz = 0.0) 
  *  METEOR LRPT 150 kHz + ±3.4 kHz → ~410 kHz; the ISS's FM → ~60 kHz; a CW beacon or telemetry → the 50 kHz floor. The
  *  client caps it at its capture. */
 inline double viewSpanHz(const vibe::sat::Transmitter& t) {
+    /* ★★ ORBCOMM (Stuart 11-24: "its different to every other satellite which is why i manually tuned"): the view is the
+     *  decoder's WHOLE slice and a little margin — the shaded "every carrier decoded here" band and every carrier on screen
+     *  at once (a band pick: 640 kHz → 700 kHz), not 2.5 × it. */
+    if (t.orbcomm()) return std::max(kViewMinSpanHz, occupiedHz(t) + kOrbViewMarginHz);
     return std::max(kViewMinSpanHz, kViewSpanX * 2.0 * regionOf(t).halfHz);
 }
 /** Half the filter width the regions need around a tuner centred at `rfHz` (0 = none). */
