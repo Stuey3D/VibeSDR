@@ -372,16 +372,20 @@ public:
     /** Feed slice samples (the slice's own block). */
     void feed(const std::complex<float>* x, int n) {
         const double w = -2 * M_PI * off_ / cfg_.fsIn;
-        const std::complex<double> step(std::cos(w), std::sin(w));
+        // ★ by hand (no std::complex multiply: without -ffast-math it is a library call with NaN checks — the Pi 2 rule)
+        const double sr = std::cos(w), si = std::sin(w);
+        double cr = nco_.real(), ci = nco_.imag();
         for (int i = 0; i < n; i++) {
-            const std::complex<double> m = std::complex<double>(x[i].real(), x[i].imag()) * nco_;
-            nco_ *= step;
+            const double xr = x[i].real(), xi = x[i].imag();
+            const float mr = float(xr * cr - xi * ci), mi = float(xr * ci + xi * cr);
+            const double t = cr * sr - ci * si; ci = cr * si + ci * sr; cr = t;
             float r, q;
-            if (!lp_.push(float(m.real()), float(m.imag()), r, q)) continue;
+            if (!lp_.push(mr, mi, r, q)) continue;
             rrc_.push(r, q);
             pump_();
         }
-        nco_ /= std::abs(nco_);
+        const double a = std::sqrt(cr * cr + ci * ci);
+        nco_ = { cr / a, ci / a };
     }
     double offsetHz() const { return off_; }
     double snrDb() const {
