@@ -1957,6 +1957,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // and show a "Disconnected" card with a working ▶ button.
     DispatchQueue.main.async {
       if muted {
+        /* ★★ beta93 A RECORDING KEEPS THE STREAM (Stuart 11-24: a 90 s recording on the XCover came out 5 s long — APRS
+         *  had muted, and pause = disconnect closed the audio WS under the recorder). Paused while recording: the speaker
+         *  is silent (isMuted — deliver() skips it) and the recorder keeps writing, as it was built to. */
+        if self.recArmed { return }
         self.disconnectForPause()
       } else if self.dataSaverDisconnected {
         self.resumeFromDataSaver()

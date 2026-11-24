@@ -2400,6 +2400,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       });
   }, []);
   const lastReconnectAt = useRef(0);
+  const fullReconnectRef = useRef<(() => void) | null>(null);   // ★★ beta93 for REC while paused (onRecord)
   const fullReconnect = useCallback(() => {
     /* ★★★ THERE IS NOTHING TO RECONNECT TO WHILE A RADIO IS STILL BEING CHOSEN, and trying
      *   guarantees the red banner: this arms a 12 s timer that raises "Reconnect Failed — Tap to
@@ -2446,6 +2447,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     }, 12000);
   }, []);
+  useEffect(() => { fullReconnectRef.current = fullReconnect; }, [fullReconnect]);
   /**
    * TAKE OVER from the refusal card — one implementation, reached by the button and by Return.
    * ★★ See doPickerUnlock: an unhandled Return does not stay in the text field, it reaches the
@@ -4973,6 +4975,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           const pre = bufferedSecondsOf(r);
           if (pre > 0) setRecStartedAt((t) => (t === tapAt ? tapAt - Math.round(pre * 1000) : t));
           noteAudioEvent(`REC started${pre > 0 ? ` (${pre.toFixed(1)} s from the record buffer)` : ''}`);
+          /* ★★ beta93 recording while PAUSED (APRS / METEOR mute the speaker; a pause closes the audio stream): reopen the
+           *  stream for the recording — the speaker stays muted (native isMuted is untouched by a reconnect, and a pause
+           *  while recording no longer disconnects). Stuart 11-24: a 90 s recording came out 5 s long. */
+          if (dataSaverOffRef.current) {
+            noteAudioEvent('REC while paused — the audio stream reopens for the recording; the speaker stays muted');
+            setDataSaverOff(false);
+            fullReconnectRef.current?.();
+          }
         })
         .catch((e: Error) => {
           recBusy.current = false;

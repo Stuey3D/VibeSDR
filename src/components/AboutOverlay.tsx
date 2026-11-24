@@ -62,6 +62,8 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
   //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
   //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.
+  // ★★ V12 beta93 2026-11-24 — RECORDING WHILE APRS / METEOR MUTE THE SPEAKER (Stuart: a 90 s recording came out 5 s long).
+  { v: 'V12 (experimental)', detail: 'RECORDINGS WHILE THE SPEAKER IS MUTED ARE WHOLE AGAIN — APRS and METEOR LRPT mute the speaker while they decode, and on a VibeServer a mute closed the audio stream to save data, so a recording made then had almost nothing in it (90 seconds came out as 5). A mute while you are recording now keeps the stream and only silences the speaker, and starting a recording while muted opens the stream again for it — the speaker stays quiet either way.' },
   { v: 'V12 (experimental)', detail: 'SATELLITE OPENS ZOOMED IN ON THE SIGNAL — picking a satellite now also zooms the waterfall to the signal, its Doppler swing and its neighbours, instead of leaving the whole capture on screen with the satellite a sliver in the middle: about 400 kHz across for a METEOR picture, less for the ISS’s voice or a beacon. It happens once, when you pick; zoom in or out afterwards and it stays where you put it.' },
   // ★★★ V12 beta92 2026-11-23 — APRS FROM IQ (Stuart: "surely aprs needs to be iq based and bypass the nfm processing
   //     completely then it can work the best it can"). RxPipeline::setDecoderTap (pipeline.cpp), vibe_aprs_run.h iq1200_,
