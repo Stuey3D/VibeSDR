@@ -2508,7 +2508,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
   ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_fctlm", "FUNcube telemetry"], ["dec_ale", "ALE"], ["dec_vor", "VOR / ILS"], ["dec_vormap", "VOR / ILS map"], ["dec_sarsat", "406 MHz beacons"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
-  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
+  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_avboth", "ACARS + VDL2 together"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"], ["dec_dvsig", "DMR / D-STAR / YSF signalling"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
   ["dab", "DAB+"], ["dab_scan", "DAB+ station label scan", "dab"], ["dec_dab_station", "DAB+ own station", "dab"],

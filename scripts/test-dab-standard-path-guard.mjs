@@ -33,7 +33,11 @@ console.log(`── 1. source, against ${BASE} ──`);
  *  and today's code. The RTL's gain files (vibe_agc_record.h, vibe_agc_rules.h) stay byte for byte. */
 /* ★ beta92 vibe_sat_gain_airspy.h is the Airspy SATELLITE-PASS hold (new file, 11-23): it acts only inside
  *  LocalSdrShim::airspySatTick during a satellite pick, never in DAB — the same footing as vibe_sat_gain.h. */
-const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f) && f !== 'vibe_sat_gain.h' && f !== 'vibe_sat_gain_airspy.h' && f !== 'vibe_rsp_vibeagc.h').map((f) => C + f);
+/* ★ beta93 vibe_mode_gain.h is the BURST MODES' per-radio gain rule (new file, 11-24, c0282cfe5 — the HF+ datalink): pure and
+ *  header-only, included only by local_sdr_shim.cpp and called only from burstGainFields / burstGains, whose only callers are
+ *  AIS's and the aircraft datalink's (ACARS / VDL2) report and entry. DAB never reaches it — the same footing as
+ *  vibe_sat_gain.h. Held to its own test (vibeserver/test-avi-service.cpp). */
+const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f) && f !== 'vibe_sat_gain.h' && f !== 'vibe_sat_gain_airspy.h' && f !== 'vibe_rsp_vibeagc.h' && f !== 'vibe_mode_gain.h').map((f) => C + f);
 const agcDiff = git('diff', BASE, '--', ...agcFiles);
 ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged (${agcFiles.length} files: ${agcFiles.map((f) => path.basename(f)).join(', ')})`);
 /* ★ The shim's gain/AGC lines are judged from SHIM_BASE: f026471cd is the end of the SDRplay AGC lock work (Stuart,
@@ -44,7 +48,13 @@ ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged 
 /* ★ beta91: moved to ba9afd6ca (the satellite-pass gain merge, 11-22). The lines it added are the satellite profile's
  *  own writes (vsRspSatTick, the RTL block — both gated on g_satGainOn) and one READ of the gain in the APRS developer
  *  dump's header (b91-aprsdbg) — none on DAB's standard path, whose AGC sources are still held to BASE above. */
-const SHIM_BASE = process.env.SHIM_BASE || 'ba9afd6ca';
+/* ★ beta93: moved to c0282cfe5 (aircraft datalink + AIS on the Airspy HF+, 11-24). Every gain line it changed is in aisLeave /
+ *  avLeave and the AIS / datalink report — the burst modes, never DAB: the report's "gain"/"gainAuto" fields moved into
+ *  burstGainFields (the same g_gainTarget read, the same format, the same auto rule — byte-identical off the HF+), the list
+ *  into burstGains (getTunerGains as before, empty only on an HF+), and the gain put back on leaving is skipped only on an
+ *  HF+ (the mode never set it there). Between ba9afd6ca and its parent, and from it to beta93's head, no gain/AGC line
+ *  changed (checked with this gainish pattern when the base moved), so the move hides nothing else. */
+const SHIM_BASE = process.env.SHIM_BASE || 'c0282cfe5';
 const shim = git('diff', '-U0', SHIM_BASE, '--', C + 'local_sdr_shim.cpp').split('\n');
 const gainish = /setGain|setTunerGain|g_gain|dabSeedGain|vibeAgc|Agc\(|agc_|rtlAgc|gainSteps|setLna|setIfGain/;
 ok(!shim.some((l) => l.startsWith('-') && !l.startsWith('---') && gainish.test(l)), 'the shim removes no line that touches the gain or AGC');
