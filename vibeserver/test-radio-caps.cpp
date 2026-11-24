@@ -88,11 +88,11 @@ int main(int argc, char** argv) {
         yes(c, "HF+", { "wfm", "rds", "nfm", "am", "sam", "amst", "drm", "navtex", "wefax", "time", "ndb", "aprs", "same", "ft8",
                        "m17",      // ★ M17 on 2 m (Stuart 11-16: every SDR that can reach it); 70 cm is out of its range
                        "dvsig",    // ★ V12 DV ID on VHF 136–174 MHz (inside the HF+'s 60–260 MHz)
-                       "ais", "aisstore", "avdata",   // ★★ V12 2026-11-24 AIS and the datalink: no gain stepped there
-                       "vormap" });   // ★★ V12 2026-11-24 the VOR map too: 14 windows, a slower sweep (Stuart: "it can do it just slower")
+                       "ais", "aisstore", "avdata" });   // ★★ V12 2026-11-24 AIS and the datalink: no gain stepped there
         no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom",
                        "sondes",          // ★ it stops at 260 MHz
-                       "avdata+8m" });    // ★ 912 kS/s: no 8 MS/s switch drawn
+                       "avdata+8m",      // ★ 912 kS/s: no 8 MS/s switch drawn
+                       "vormap" });       // ★ V12 the VOR map: not the HF+ (≤ 912 kS/s could not sweep it)
         ok(!c.s.dabLanding && !c.s.adsbLanding && c.s.fmDefaults && c.s.dxScan, "HF+: no DAB / ADS-B landing; FM defaults and DX scan");
         ok(c.s.ppb && !c.s.ppm && !c.s.biasT && !c.s.directSampling, "HF+: ppb, no ppm, bias-T or direct sampling");
         ok(c.hints.empty(), "HF+: no hint (nothing the owner could change)");

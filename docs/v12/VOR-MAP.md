@@ -81,7 +81,7 @@ the next stays bright); otherwise faded, still listed.
   no audio (spectrum-only), the waterfall at 1 fps; the gain left as the listener had it (steady carriers, NDB's rule); an RTL in
   manual direct sampling has it switched off and put back on leaving. Idle leave + arrival resume as every whole-radio mode.
 - `vibeserver.json`: `vormap` true / false + `vormapWhy` / **absent** where the radio cannot tune 108–118 MHz (an HF-only radio;
-  an Icom; ★ 2026-11-24 the Airspy HF+ IS offered — 912 kS/s = 14 windows, ~7 min a sweep; kMaxWindows 20, kMinRateHz 700 kS/s, Stuart: "it can do it just slower"); `vormapWins`, `vormapDwell`; `"vormap"` in
+  the Airspy HF+ for AIS's reason — and ≤ 912 kS/s could not sweep it; an Icom); `vormapWins`, `vormapDwell`; `"vormap"` in
   `modes` (LAST — an app before beta93 kept only the first 40 names of that list; it now keeps 96).
 - `{"type":"vormap", now, rate, window, windows, wlo, whi, centre, sweep, inWin, dwell, progress, pos, wins:[[lo,hi]…],
   beacons:[{hz, kind:"vor"|"loc", win, ident, reading, votes, held, level, first, last, fresh, wpm?, radial?, sigma?, trueBrg?,
@@ -126,7 +126,7 @@ spread over its four. The benchmark's row on that box sets the switch's default 
 | `test-vormap` | the plan (RTL 5, 2.048 → 6, 3.2 → 4, RSP 8 / 10 → 2, 20 → 1, under 1 MS/s none; one window per channel; centred between channels); one window with 4 VORs (two on ADJACENT channels) and a localiser at 2.4 and 8 MS/s: radials ±2° (worst 0.1°), idents read, the listed one named, the DDM, nothing on the 35 / 95 empty channels; SIMD = scalar; the sweep 0→1→2→3→4→0, a beacon only in window 3 found with its radial and station; fresh → faded after a silent sweep, nothing false on 200 channels | **46 / 0** |
 | `test-server-vormap` | the real server, fake rtl_tcp `--vor` (HON 113.65 in window 3, DTY 116.40 in window 5) at 2.4 MS/s: a radio held off VHF offers none; vormap / 5 windows / modes; entering, window 1, the step to window 2 at the dwell, HON and DTY found in their windows (radials ±2°, Honiley / Daventry, DTY's true bearing and ~20 km), every window visited, nothing else heard, tune ignored, 1 fps, leaving gives the receiver back exactly; ask before tuning refuses a second listener (logged); the only mode lands a listener and refuses their "off" | **32 / 0** |
 | `test_vormap_app` | sanitise, the list, the status, the map items (named only; the radial through the receiver; faded), the FIX (two radials at the receiver within 0.5 km, three a cluster, 1° error inside its claim, one per station, this sweep only, no fix from an unnamed radial, a shallow crossing said), both clients' wiring, the setup screens | **45 / 0** |
-| `test-radio-caps` | `vormap` on RTL / R2 / HackRF / USRP / RSP, the HF+ too (14 windows, 2026-11-24); never an Icom, an RTL behind a 65 MHz up-converter | **262 / 0** |
+| `test-radio-caps` | `vormap` on RTL / R2 / HackRF / USRP / RSP, never the HF+, an Icom, an RTL behind a 65 MHz up-converter | **262 / 0** |
 | `test-bench-hw`, `test-bench-decoders` | `dec_vormap` runs only where a radio reaches the band; it decodes, has a defaults rule | 64 / 0; `dec_vormap` pass (`dec_rade` fails here: RADE is not built into this Mac's test tree — not this change) |
 | also | test-only-mode-clients 96, test_ask_before_tuning 34, test_decoder_bands, test_navaids_app 42, test_ndb_app 204, test_sessionHoldNotice 34, test-setup-radio-caps 71, test-local-bench 37, test-bench-defaults, check-setup-page, test-vor 35 | pass |
 

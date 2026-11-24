@@ -4,7 +4,7 @@
 // ★★★ WHAT IS PINNED.
 //   • THE PLAN: 200 channels on the 50 kHz grid; an RTL at 2.4 MS/s = 5 windows of 40, an RSP at 8 and 10 MS/s = 2; every
 //     channel in exactly one window; every window centred BETWEEN two channels (its DC in no channel); every channel inside
-//     90 % of the rate with its ±12.5 kHz; under 700 kS/s not offered (the HF+'s 912/768 kS/s are, as 14/16 windows — 2026-11-24).
+//     90 % of the rate with its ±12.5 kHz; under 1 MS/s (an HF+'s VHF rates) not offered.
 //   • ONE WINDOW, EVERY CHANNEL AT ONCE, at an RTL rate (2.4 MS/s) and an RSP rate (8 MS/s): four VORs (two on ADJACENT
 //     50 kHz channels) and an ILS localiser, each with its ident — every radial within ±2°, every ident read, the listed one
 //     named, the localiser's DDM, NOTHING heard on the window's other 35 / 95 channels.
@@ -55,10 +55,7 @@ static void testPlan() {
         ok(got && (int)p.w.size() == c.wins && every && between && inside, b);
     }
     Plan p;
-    { Plan a, b; const bool okA = plan(912e3, a), okB = plan(768e3, b);
-      ok(okA && okB && a.w.size() <= 20 && b.w.size() <= 20 && a.w.size() > 12 && !plan(0, p) && !plan(500e3, p),
-         "★★ 2026-11-24 the HF+'s rates are offered, slower: 912 kS/s → " + std::to_string(a.w.size()) + " windows, 768 kS/s → "
-         + std::to_string(b.w.size()) + " (≤ 20); 0 / 500 kS/s not"); }
+    ok(!plan(768e3, p) && !plan(912e3, p) && !plan(0, p), "under 1 MS/s (an HF+'s VHF rates): not offered");
     plan(2.4e6, p);
     ok(p.w[0].first == 0 && p.w[0].last == 39 && std::llround(p.w[0].hwCentre) == 108975000 && std::llround(p.w[4].hwCentre) == 116975000,
        "RTL 2.4 MS/s: 108.00–109.95 MHz centred 108.975, …, 116.00–117.95 centred 116.975");
