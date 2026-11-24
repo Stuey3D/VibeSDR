@@ -11,8 +11,9 @@ import {
   POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, POCKET_TRY_SEC,
   type PocketConn, type PocketChoice,
 } from '../../../src/services/pocketConnection';
+import { dataUrl } from './origin';
 
-const URL_ = '/vibeserver/pocket/connection';
+const URL_ = dataUrl('/vibeserver/pocket/connection');   // ★ beta93: direct on a proxied page (origin.ts)
 let conn: PocketConn | null = null;
 let snoozedUntil = 0;
 let switching = false;

@@ -232,6 +232,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_mapdata.h"   // the bundled vector map, served from DISK — see the header
 #include "vibe_mapgl.h"     // the GPU map's files (renderer, style, glyphs, PMTiles) — see the header
 #include "vibe_proxy.h"
+#include "vibe_cors.h"          // ★ beta93: who may read this server cross-origin (the page reads direct)
 #include "vibe_admin_ticket.h"
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
@@ -27236,6 +27237,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
+        std::string directHostHeader;                // ★ beta93: x-vibesdr-direct-host, from the directory (vibe_cors.h cspDirect)
         std::string originHeader, hostHeader;        // ★ see the cross-site check after the proxy resolution
         std::string ifNoneMatch;                     // ★ GET /bookmarks and the off-air pictures (vsAirImageReply) answer 304 when unchanged
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
@@ -27482,6 +27484,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                               return a2 == std::string::npos ? std::string() : line.substr(a2, b2 - a2 + 1); };
                 if (line.size() > 7 && strncasecmp(line.c_str(), "origin:", 7) == 0) originHeader = hv(7);
                 else if (line.size() > 5 && strncasecmp(line.c_str(), "host:", 5) == 0) hostHeader = hv(5);
+                else if (line.size() > 22 && strncasecmp(line.c_str(), "x-vibesdr-direct-host:", 22) == 0) directHostHeader = hv(22).substr(0, 260);
                 else if (line.size() > 14 && strncasecmp(line.c_str(), "if-none-match:", 14) == 0) ifNoneMatch = hv(14);   // ★ GET /bookmarks, dabslide, dablogoair, dabmot
             }
             if (line.size() > 15) {
@@ -27634,6 +27637,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
                 sock->close(); return;
             }
+        }
+
+        /* ★★★ beta93 — CORS, DECIDED ONCE, HERE (vibe_cors.h has the rule and the security reasoning). The web page served
+         *  through <slug>.vibeserver.vibesdr.net now reads this server DIRECTLY (web/client/src/origin.ts dataUrl), not
+         *  through the directory's Worker: a slug origin gets its own origin echoed on every answer; a foreign origin on a
+         *  request that carries a credential gets no Access-Control-Allow-Origin at all (never `*`); everything else goes
+         *  out exactly as each route writes it. The socket applies it to the answer's head (net_shim setCorsHead), so no
+         *  route — today's eighty or a new one — decides for itself. */
+        {
+            // ★ A preflight from a slug page (the GPU map's Range reads, a JSON POST) is answered here, before any route.
+            if (reqLine.rfind("OPTIONS ", 0) == 0) {
+                const std::string ok = vibecors::allowedOrigin(originHeader);
+                if (!ok.empty()) { sock->sendstr(vibecors::preflight(ok)); sock->close(); return; }
+            }
+            std::string corsLine;
+            if (vibecors::headFor(originHeader, reqLine, corsLine)) sock->setCorsHead(corsLine);
         }
 
         /* ★★★ ROUTES MATCH THE PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE (audit 2026-10-03).
@@ -29895,7 +29914,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     body = vibe::skyplot::png(v, title);
                 } else body = vibe::skyplot::json(v, radios, k, trunc);
             }
+            /* ★ beta93: SAVE PNG sends ?download=1, and the page now reads this server DIRECT — cross-origin, where a
+             *  browser ignores <a download>. Saying "attachment" here keeps it a download rather than a navigation away. */
+            std::string fileKind;
+            for (char c : qv("kind")) if (std::isalnum((unsigned char)c) && fileKind.size() < 16) fileKind += (char)std::tolower((unsigned char)c);
+            if (fileKind.empty()) fileKind = "orbcomm";
+            const std::string dispo = (asPng && qv("download") == "1")
+                ? "Content-Disposition: attachment; filename=\"" + fileKind + "-sky-plot.png\"\r\n" : std::string();
             sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: " + type + "\r\nAccess-Control-Allow-Origin: *\r\n"
+                          + dispo +
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
@@ -30597,6 +30624,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    shim) AND a headless check that ENTERS A RADIO and sees the spectrogram — the
              *    front-door check alone passed both times this shipped broken. */
             const std::string& kPage = kBase;
+            /* ★★★ beta93 — THE PAGE MAY RUN SCRIPT FROM THIS RECEIVER'S OWN PUBLIC HOST when the directory proxied it. A
+             *  page opened at <slug>.vibeserver.vibesdr.net has that stable name as 'self', and its scripts, styles and
+             *  media now come straight from the tunnel host instead of through the directory's Worker (Stuart 2026-11-24:
+             *  the Worker should only establish the connection). That host is THIS server — the Worker names it in
+             *  x-vibesdr-direct-host, and the tunnel delivered the request under it — so adding it grants nothing that
+             *  'self' on a direct visit does not. The Worker writes <meta name="vibe-direct-assets"> into the page ONLY
+             *  when it sees the host in this policy, so an older server (no host here) keeps every script on the Worker
+             *  and is never broken by a newer directory. Empty unless the request came through the directory. */
+            const std::string dshost = vibecors::cspDirect(vibeViaHeader, directHostHeader, hostHeader);
+            const std::string dsp = dshost.empty() ? std::string() : " " + dshost;
             const std::string csp =
                 "Content-Security-Policy: default-src 'self'; "
                 /* ★★★ 'wasm-unsafe-eval' AND blob:, or the audio never starts. The Opus decoder is
@@ -30617,11 +30654,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  longer has to allow one. A future bug that feeds attacker text into an eval sink
                  *  is refused by the browser rather than run.
                  *  ★ 'wasm-unsafe-eval' stays for the Opus decoder; blob: for the AudioWorklet. */
-                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; "
-                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self'" + dsp + " 'unsafe-inline' 'wasm-unsafe-eval' blob:; "
+                "style-src 'self'" + dsp + " 'unsafe-inline'; "
                 "img-src 'self' data: blob: https: http:; "
-                "media-src 'self' data: blob:; "
-                "font-src 'self' data:; "
+                "media-src 'self'" + dsp + " data: blob:; "
+                "font-src 'self'" + dsp + " data:; "
                 "connect-src 'self' ws: wss: https: http:; "
                 "worker-src 'self' blob:; "
                 "child-src 'self' blob:; "

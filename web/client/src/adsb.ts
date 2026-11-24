@@ -14,6 +14,7 @@
 import type { AdsbAircraft, AdsbReport } from './spectrum';
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
+import { dataUrl } from './origin';
 import { loadVibemapSource } from './chunkCache';
 import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
 
@@ -234,7 +235,7 @@ export function adsbImageBase(): string {
    *  parse failed, the catch fell back to the map's own trail — so only what this map had seen since it opened, never the
    *  server's. The door forwards /r/<id>/adsb/… to the radio, which keeps the trails (and the owner's logos). */
   const m = /^\/r\/[^/?#]+/.exec(location.pathname);
-  return location.origin + (m ? m[0] : '') + '/adsb/';
+  return dataUrl(location.origin + (m ? m[0] : '') + '/adsb/');   // ★ beta93: direct when the page was proxied (origin.ts)
 }
 /** ★ Windows draws regional-indicator pairs as two letters, not a flag: there the code is shown as a small chip. */
 function flagHtml(iso: unknown): string {
@@ -374,7 +375,7 @@ export class AdsbMap {
     const L = w.L;
     this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
     this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
-    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero', scale: 'nautical' });
+    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), profile: 'aero', scale: 'nautical' });
     this.attach(this.lmap);
   }
 

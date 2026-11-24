@@ -40,7 +40,10 @@ if (!BIN || !fs.existsSync(BIN) || !fs.existsSync(EDGE)) {
 const html = fs.readFileSync(path.join(root, 'web/dist/vibesdr.html'), 'utf8');
 const man = JSON.parse(/<script type="application\/json" id="vs-chunks">([^<]*)<\/script>/.exec(html)?.[1] || '{}');
 if (!man.vibemap || !man.admin) { console.log('   FAIL web/dist/vibesdr.html has no chunk manifest — run node scripts/build-web.mjs'); process.exit(1); }
-const sharedChunk = (/<link rel="modulepreload" href="\/vs\/(c-[A-Z0-9]+\.js)">/.exec(html.replace(/<link rel="modulepreload" href="\/vs\/app-[^"]+">/, '')) || [])[1];
+// ★ beta93: the preloads are written by a head script (build-web.mjs — the scripts may come from the receiver's own
+//   host), so the eager list is read from it: `var n=["app-….js","c-….js",…]`.
+const eagerList = JSON.parse(/<script>\(function\(\)\{var n=(\[[^\]]*\]);/.exec(html)?.[1] || '[]');
+const sharedChunk = eagerList.find((n) => /^c-[A-Z0-9]+\.js$/.test(n));
 
 let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };

@@ -16,6 +16,7 @@
  */
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
+import { dataUrl } from './origin';
 import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 
@@ -242,7 +243,7 @@ export class NdbMap {
       const L = w.L;
       this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
       this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
-      if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero', scale: 'nautical' });
+      if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), profile: 'aero', scale: 'nautical' });
       mk(this.lmap);
     })().catch((e) => { console.error('[ndb] the map could not load', e); if (my === this.gen) this.note('The map did not finish loading — the list still updates.'); });
   }

@@ -16,6 +16,7 @@
  * ★ Anything missing — no WebGL 2, an older server with no /mapgl/, a script that fails — returns
  *   null here and the caller keeps today's Leaflet map. Every failure is logged, never swallowed.
  */
+import { dataUrl, dataOrigin, assetOrigin } from './origin';
 
 export interface MapGLKit {
   /** e.g. "http://pi.local:8073/mapgl/" — absolute, trailing slash. */
@@ -37,13 +38,23 @@ const MAPGL_REV: string = typeof __VS_MAPGL_REV__ !== 'undefined' ? __VS_MAPGL_R
 
 /** A renderer script or stylesheet under /mapgl/vendor/, with its content revision. */
 export function mapglVendor(base: string, file: string): string {
-  return base + 'vendor/' + file + (MAPGL_REV ? '?r=' + MAPGL_REV : '');
+  return scriptBase(base) + 'vendor/' + file + (MAPGL_REV ? '?r=' + MAPGL_REV : '');
 }
 
-/** Absolute URL of this server's /mapgl/ directory, or '' where the page has no http(s) origin. */
+/** Absolute URL of this server's /mapgl/ directory, or '' where the page has no http(s) origin.
+ *  ★★ beta93: on a page that came through the directory's slug proxy this is the RECEIVER'S OWN host (origin.ts
+ *     dataUrl) — the style, fonts, icons and every PMTiles range read go direct, never through the Worker. */
 export function mapglBase(): string {
   if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return '';
-  return location.origin + '/mapgl/';
+  return dataUrl(location.origin + '/mapgl/');
+}
+
+/** ★ The renderer's SCRIPTS follow the page's own scripts (origin.ts assetOrigin): direct only when the receiver's
+ *  policy lets the page run script from there, else this page's own origin — the data base is not enough. */
+function scriptBase(base: string): string {
+  const d = dataOrigin();
+  if (!d || !base.startsWith(d + '/') || typeof location === 'undefined') return base;
+  return (assetOrigin() || location.origin) + base.slice(d.length);
 }
 
 /** ★ Asked BEFORE loading ~800 KB of MapLibre: a browser without WebGL 2 keeps Leaflet. */

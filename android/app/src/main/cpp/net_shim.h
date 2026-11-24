@@ -95,6 +95,17 @@ public:
     bool setSendBufferSize(int bytes);
     bool setRecvBufferSize(int bytes);
 
+    /* ★★★ beta93 — ONE PLACE DECIDES THE CORS HEADER OF AN HTTP ANSWER (Stuart 2026-11-24: page reads go DIRECT to the
+     *     receiver, not through the directory's Worker — so a *.vibeserver.vibesdr.net page now reads this server
+     *     cross-origin, and dozens of routes each wrote their own `Access-Control-Allow-Origin: *` or none at all).
+     *     handleConnection decides once per request (vsCorsFor in local_sdr_shim.cpp); the FIRST send that begins
+     *     "HTTP/" then has every Access-Control-Allow-Origin line in its head removed and `line` (already CRLF-ended,
+     *     or empty) put straight after the status line. A route added later cannot get it wrong, because it never
+     *     decides. Off (the default) = bytes go out exactly as written, as before.
+     *  ★ Only the head is rewritten, and the body is sent from the caller's buffer — no copy of a large answer.
+     *  ★ One request per connection (every answer says Connection: close), so "the first HTTP/ send" is THE answer. */
+    void setCorsHead(const std::string& line) { corsLine_ = line; corsOn_ = true; corsDone_ = false; }
+
     // Send all `len` bytes; returns len on success, -1 on error.
     int send(const uint8_t* data, size_t len, const Address* dest = nullptr);
     int sendstr(const std::string& str, const Address* dest = nullptr);
@@ -158,6 +169,9 @@ public:
 
 private:
     int  recvRaw(uint8_t* data, size_t maxLen, int timeout);
+    int  sendRaw(const uint8_t* data, size_t len);
+    std::string corsLine_;          // see setCorsHead
+    bool corsOn_ = false, corsDone_ = false;
     std::atomic<uint64_t> tx_{0};
     Why why_ = Why::Peer;
     double openedAt_ = 0.0;

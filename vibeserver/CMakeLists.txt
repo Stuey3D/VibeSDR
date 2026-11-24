@@ -1338,6 +1338,12 @@ add_test(NAME diag-scrub COMMAND test-diag-scrub)
 add_executable(test-tunnel-url "${CMAKE_CURRENT_SOURCE_DIR}/test-tunnel-url.cpp")
 vibe_sanitize(test-tunnel-url)
 add_test(NAME tunnel-url COMMAND test-tunnel-url)
+# ★★★ beta93 — who may read the receiver cross-origin (vibe_cors.h): the page served at <slug>.vibeserver.vibesdr.net now
+#     reads the receiver DIRECTLY, not through the directory's Worker. Slug origins echoed, never `*` with a credential.
+add_executable(test-cors "${CMAKE_CURRENT_SOURCE_DIR}/test-cors.cpp")
+target_include_directories(test-cors PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-cors)
+add_test(NAME cors COMMAND test-cors)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).
