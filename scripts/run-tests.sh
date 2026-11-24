@@ -989,6 +989,9 @@ if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fa
 if TZ=UTC npx tsx scripts/test_tlm_charts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 SHARED DECODERS (2026-11-24, Stuart): on a shared dial the room's decoder is followed (the server's own extension and
+#     parameters), a close is this listener's only and is remembered, a press wins — web and app alike (sharedDecoders.ts).
+if npx tsx scripts/test_shared_decoders.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 PAGE (2026-11-16, Stuart): the law's notice wherever PAGE is described, and RECORDINGS SILENT WHILE PAGE RUNS — every
 #     audio sender in the engine passes through pagingAudioOut (what the Android recorder and the R36S tap record), raw IQ
 #     out refused / closed, the app's words (test-paging-gate runs the rule end to end).

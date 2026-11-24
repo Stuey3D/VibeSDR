@@ -518,6 +518,8 @@ export interface SDRCallbacks {
   onSatTrack?:  (t: import('./satellites').SatTrack) => void;
   /** ★★★ SATELLITE MODE: the server's answer to a pick (it tuned, locked and attached `decoder`). */
   onSatPicked?: (p: import('./satellites').SatPicked) => void;
+  /** ★★★ SHARED DECODERS (2026-11-24): what the room's decoder host runs on a shared dial — on change and on arrival. */
+  onDecShared?: (l: import('./sharedDecoders').SharedDecoder[]) => void;
   /** ★★★ beta92 OPEN IN VFO B: the server's answer (on), a refusal, or B leaving the satellite (on false) */
   onSatVfoB?: (b: import('./satellites').SatVfoB) => void;
   /** ★★ V12, VIBESERVER-ONLY: the answer to modeResume (wholeModeResume.ts) — may this listener have the whole-radio mode
