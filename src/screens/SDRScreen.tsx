@@ -9132,6 +9132,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         // ★ FM RDS only (an OWRX DAB label also carries 'RDS', but with its programme list) — a
         //   DAB service label or a DMR caller is not a PS and must show every change.
+        // ★★ 2026-11-24 RDS IS BROADCAST FM'S ALONE (the web page's onRds rule): an FM RDS label arriving on any other mode
+        //   (a shared dial's leftover, a late one after a mode change) names nothing on this channel — drop it and let go
+        //   of an RDS name still held (Stuart: "PI: C201 / BBC R1" in the strip on USB with a satellite picked).
+        if (meta.badge === 'RDS' && !meta.programmes && tuneRef.current.mode !== 'wfm' && tuneRef.current.mode !== 'fm') {
+          if (liveBadgeRef.current === 'RDS') { liveStationRef.current = ''; liveBadgeRef.current = undefined as any; setLiveStation({}); }
+          return;
+        }
         let stationName = meta.stationName;
         if (meta.badge === 'RDS' && !meta.programmes) {
           liveCallRef.current = (meta as any).call;
