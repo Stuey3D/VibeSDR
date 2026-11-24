@@ -32,7 +32,7 @@ import {
   type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
 // ★★ 2026-11-24 ORBCOMM + the sky plot — the app's words and dome (src/services/orbcomm.ts, src/utils/skyPlot.ts)
-import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbViewMerge,
+import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbShownSats, orbViewMerge,
          parseOrbcommPkt, parseOrbcommStatus, type OrbView } from '../../../src/services/orbcomm';
 import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, SKY_LEGEND, SKY_PLOT_WHAT, type SkyDot } from '../../../src/utils/skyPlot';
@@ -191,6 +191,7 @@ const CSS = `
 #satPanel .sat-orb .sat-note{font-family:system-ui,sans-serif;color:var(--text-dim);font-size:12px}
 #satPanel .sat-orb .sat-bird{border-top:1px solid var(--bar-border,var(--btn-border));padding-top:3px;margin-top:3px;overflow-wrap:anywhere}
 #satPanel .sat-orb .sat-bird > div:first-child{color:var(--amber)}
+#satPanel .sat-orb .sat-bird.held{opacity:.5}
 #satPanel .sat-orb .sat-car{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px;font-family:system-ui,sans-serif;font-size:12px;color:var(--text-dim)}
 #satPanel .sat-orb .sat-car button{min-height:26px;padding:1px 8px}
 #satPanel .sat-orb .sat-sky[hidden]{display:none}
@@ -487,7 +488,7 @@ export class SatPanel {
     if (changed && p.decoder === 'orbcomm') this.skyLoad();
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t, p.params, p.audio);   // ★★ beta92 the server's own parameters (and passband): the page JOINS its run
-    if (changed && t && p.view) this.deps.zoomView?.(txTuneHz(t), p.view);   // ★★ beta93 open at the pick's own view
+    if (changed && t && p.view) this.deps.zoomView?.(p.viewCentre ?? txTuneHz(t), p.view);   // ★★ an ORBCOMM pick: the band's centre   // ★★ beta93 open at the pick's own view
     this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again)
     this.render();
   }
@@ -815,7 +816,9 @@ export class SatPanel {
     if (note) h += `<div class="sat-note">${esc(note)}</div>`;
     const counts = orbCountsText(st?.counts);
     if (counts) h += `<div class="sat-note">Packets: ${esc(counts)}</div>`;
-    for (const b of st?.sats ?? []) h += `<div class="sat-bird">${orbSatLines(b, v?.clockOff[b.norad]).map((l) => `<div>${esc(l)}</div>`).join('')}</div>`;
+    // ★★ the birds listed now, then the held ones (last heard a while ago) dimmed — a carrier drop no longer blanks a bird
+    for (const { sat: b, heldSecs } of orbShownSats(v))
+      h += `<div class="sat-bird${heldSecs != null ? ' held' : ''}">${orbSatLines(b, v?.clockOff[b.norad], heldSecs).map((l) => `<div>${esc(l)}</div>`).join('')}</div>`;
     if (this.deps.orbMax)
       h += `<div class="sat-car" role="group" aria-label="Carriers the decoder follows at most"><span>CARRIERS</span>`
         + ORB_CARRIER_CHOICES.map((k) => `<button data-act="orbmax" data-v="${k}" class="${k === this.orbMaxK ? 'on' : ''}" aria-pressed="${k === this.orbMaxK}"`

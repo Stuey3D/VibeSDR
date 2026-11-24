@@ -156,14 +156,30 @@ export interface OrbView {
   pkts: OrbPkt[];
   /** each bird's clock against ours, from its last position report (norad → s) */
   clockOff: Record<number, number>;
+  /** ★★ 2026-11-24 THE HOLD (navaids.ts vorHold's pattern — Stuart: a bird's block vanished when its carrier dropped): each
+   *  named bird's last block and the server time (status t) it was last listed — kept, drawn dimmed with its age, until
+   *  ORB_HOLD_SEC passes or the pick ends (the box's state is made fresh for a new pick; a status for another pick clears it) */
+  held: Record<number, { sat: OrbSat; t: number }>;
+  /** the pick the hold belongs to (status `pick`) */
+  heldPick: number;
 }
 export const ORB_PKTS_MAX = 40;
-export const orbViewEmpty = (): OrbView => ({ status: null, pkts: [], clockOff: {} });
+/** How long a bird's last block stays after the server stops listing it (s). */
+export const ORB_HOLD_SEC = 600;
+export const orbViewEmpty = (): OrbView => ({ status: null, pkts: [], clockOff: {}, held: {}, heldPick: 0 });
 /** A status or a packet folded into the box's state (a status keeps the packets; a packet keeps the status). */
 export function orbViewMerge(prev: OrbView | null, m: { status?: OrbStatus | null; pkt?: OrbPkt | null }): OrbView {
   const v = prev ?? orbViewEmpty();
   let next = v;
-  if (m.status) next = { ...next, status: m.status };
+  if (m.status) {
+    const st = m.status;
+    // ★ the hold: a status for another pick drops it; each listed, named bird refreshes its entry; one unheard for
+    //   ORB_HOLD_SEC goes
+    const held: OrbView['held'] = st.pick !== (v.heldPick ?? 0) ? {} : { ...(v.held ?? {}) };
+    for (const b of st.sats) if (b.norad > 0) held[b.norad] = { sat: b, t: st.t };
+    for (const k of Object.keys(held)) if (st.t - held[Number(k)].t + held[Number(k)].sat.age > ORB_HOLD_SEC) delete held[Number(k)];
+    next = { ...next, status: st, held, heldPick: st.pick };
+  }
   if (m.pkt) {
     const pkts = [m.pkt, ...next.pkts];
     if (pkts.length > ORB_PKTS_MAX) pkts.length = ORB_PKTS_MAX;
@@ -171,6 +187,24 @@ export function orbViewMerge(prev: OrbView | null, m: { status?: OrbStatus | nul
     next = { ...next, pkts, clockOff };
   }
   return next;
+}
+
+/** The birds the box shows: those the server lists now, then the held ones it has stopped listing — each with `heldSecs`
+ *  (seconds since it was last heard, drawn dimmed) — newest heard first. */
+export function orbShownSats(v: OrbView | null | undefined): { sat: OrbSat; heldSecs?: number }[] {
+  const st = v?.status;
+  if (!st) return [];
+  const out: { sat: OrbSat; heldSecs?: number }[] = st.sats.map((sat) => ({ sat }));
+  const listed = new Set(st.sats.map((b) => b.norad).filter((x) => x > 0));
+  const held = Object.values(v!.held ?? {}).filter((h) => !listed.has(h.sat.norad))
+    .map((h) => ({ sat: h.sat, heldSecs: Math.max(0, Math.round(st.t - h.t + h.sat.age)) }))
+    .filter((h) => h.heldSecs <= ORB_HOLD_SEC)
+    .sort((a, b) => a.heldSecs - b.heldSecs);
+  return out.concat(held);
+}
+/** "last heard 42 s ago" / "last heard 3 min ago". */
+export function orbHeldText(secs: number): string {
+  return secs < 120 ? `last heard ${Math.max(0, Math.round(secs))} s ago` : `last heard ${Math.round(secs / 60)} min ago`;
 }
 
 // ── words ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -210,13 +244,13 @@ export function orbCountsText(c: Record<string, number> | undefined): string {
   return ORB_COUNT_KEYS.filter((k) => (c[k] ?? 0) > 0).map((k) => `${word[k]} ${c[k].toLocaleString('en-GB')}`).join(' · ');
 }
 /** A bird's lines in the box (name first). `clockOff` = its clock against ours from its last position report. */
-export function orbSatLines(b: OrbSat, clockOff?: number): string[] {
+export function orbSatLines(b: OrbSat, clockOff?: number, heldSecs?: number): string[] {
   const out: string[] = [];
-  out.push(`${b.name || (b.norad ? `NORAD ${b.norad}` : 'Unknown ORBCOMM bird')} · ${orbHowText(b.how)}`);
+  out.push(`${b.name || (b.norad ? `NORAD ${b.norad}` : 'Unknown ORBCOMM bird')} · ${orbHowText(b.how)}${heldSecs != null ? ` · ${orbHeldText(heldSecs)}` : ''}`);
   const sky = b.el > -90 && (b.az || b.el) ? ` · az ${Math.round(b.az)}° el ${Math.round(b.el)}°` : '';
   out.push(`SNR ${b.snr.toFixed(1)} dB · Doppler ${kHz(b.dop)}${b.pred ? ` (predicted ${kHz(b.pred)})` : ''}${sky}`);
   out.push(`${b.ok.toLocaleString('en-GB')} good packets${b.messages ? ` · ${b.messages.toLocaleString('en-GB')} subscriber messages (raw)` : ''}`
-    + `${b.rf ? ` · ${mhz(b.rf)} MHz` : ''}${b.age >= 3 ? ` · last ${Math.round(b.age)} s ago` : ''}`);
+    + `${b.rf ? ` · ${mhz(b.rf)} MHz` : ''}${heldSecs == null && b.age >= 3 ? ` · last ${Math.round(b.age)} s ago` : ''}`);
   if (b.eph) {
     const e = b.eph;
     out.push(`Position ${Math.abs(e.lat).toFixed(2)}°${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lon > 180 ? e.lon - 360 : e.lon).toFixed(2)}°${(e.lon > 180 ? e.lon - 360 : e.lon) >= 0 ? 'E' : 'W'}`

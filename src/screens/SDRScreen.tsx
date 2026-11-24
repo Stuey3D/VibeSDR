@@ -8202,7 +8202,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current || !satOnRef.current) return;
         satPendingRef.current = null; setSatPending(null); setSatWhy('');
         setSatPicked((prev) => {
-          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); }
+          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); setSatOrb(null); }
           return pk;
         });
         /* ★★ beta92 LRPT at the symbol rate the server attached it with, so the app JOINS the pick's run instead of
@@ -8229,7 +8229,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             satZoomedPickRef.current = key;
             const c = client.current, v = c?.getView();
             const n = v?.binCount || 1024;
-            if (c) c.zoom(txTuneHz(ptx), Math.max(1, pk.view / n));
+            if (c) c.zoom(pk.viewCentre ?? txTuneHz(ptx), Math.max(1, pk.view / n));   // ★★ an ORBCOMM pick: the band's centre
           } }
         satFollowRef.current(pk.decoder, satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx] ?? null);
       },

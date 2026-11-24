@@ -32,7 +32,7 @@ import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
 import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky plot
-import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines,
+import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
          type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
@@ -463,9 +463,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <Text style={[s.detailNp, s.caveat]}>{ORB_CAVEAT}</Text>
                   {!!orbNoteText(orbStatus) && <Text style={s.detailNp}>{orbNoteText(orbStatus)}</Text>}
                   {!!orbCountsText(orbStatus?.counts) && <Text style={s.detailNp}>{`Packets: ${orbCountsText(orbStatus?.counts)}`}</Text>}
-                  {(orbStatus?.sats ?? []).map((b) => (
-                    <View key={`${b.norad}.${b.carrier}`} style={s.orbBird}>
-                      {orbSatLines(b, p.orbcomm?.clockOff[b.norad]).map((l, i) => (
+                  {/* ★★ the birds listed now, then the held ones dimmed with their age (a carrier drop no longer blanks one) */}
+                  {orbShownSats(p.orbcomm).map(({ sat: b, heldSecs }) => (
+                    <View key={`${b.norad}.${b.carrier}${heldSecs != null ? 'h' : ''}`} style={[s.orbBird, heldSecs != null && s.orbHeld]}>
+                      {orbSatLines(b, p.orbcomm?.clockOff[b.norad], heldSecs).map((l, i) => (
                         <Text key={i} style={[s.mono, i === 0 && s.orbName]} selectable>{l}</Text>
                       ))}
                     </View>
@@ -616,6 +617,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   caveat:  { color: T.value },
   orbBird: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.divider, paddingTop: 4, marginTop: 2 },
   orbName: { color: T.accent },
+  orbHeld: { opacity: 0.5 },
   orbSky:  { marginVertical: 4, gap: 2 },
   orbHead: { letterSpacing: 1, marginTop: 4 },
   hex:     { color: T.muted, paddingLeft: 10 },

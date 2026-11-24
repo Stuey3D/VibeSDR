@@ -10,6 +10,7 @@ import { parseSkyDotsLive, parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlot
 import { parseSatList, parseSatPicked, satDecView, satDecWord, satDecoderFor, txListenMode, txUse } from '../src/services/satellites';
 import { REACH_DECODERS } from '../src/services/sdrTypes';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
+import { orbHeldText, orbShownSats, orbViewEmpty, ORB_HOLD_SEC } from '../src/services/orbcomm';
 import { orbOverlayFrom, orbOverlayKey, orbOverlayLayout, ORB_NO_TUNE, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
 
 let fail = 0, pass = 0;
@@ -194,6 +195,37 @@ console.log('── the slice on the waterfall (2026-11-24) ──');
   ok(orbOverlayLayout(null, hzToX, 1000).band === null && orbOverlayLayout(ov, hzToX, 0).band === null, 'no overlay / no width → nothing');
   ok(orbOverlayKey(ov) !== orbOverlayKey({ ...ov, carriers: [{ ...ov.carriers[0], locked: false }, ov.carriers[1], ov.carriers[2]] }) && orbOverlayKey(null) === '', 'the redraw key changes with a lock');
   ok(ORB_SLICE_LABEL === 'ORBCOMM · every carrier decoded here' && ORB_NO_TUNE === 'The whole ORBCOMM band is decoded at once — no need to tune.', 'the words');
+}
+
+console.log('── the band view and the hold (2026-11-24) ──');
+{
+  const pk = parseSatPicked({ type: 'sat', state: 'picked', norad: 41185, tx: 0, decoder: 'orbcomm', view: 700000, viewCentre: 137500000 });
+  ok(!!pk && pk.view === 700000 && pk.viewCentre === 137500000, 'viewCentre parses (the band\'s centre)');
+  for (const bad of ['137500000', -5, NaN, 1e12, null])
+    ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: 'orbcomm', view: 700000, viewCentre: bad })!.viewCentre === undefined, `a bad viewCentre ${String(bad)} → none (centre on the downlink)`);
+  ok(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: 'lrpt', view: 410000 })!.viewCentre === undefined, 'absent → today\'s behaviour');
+
+  const bird = (norad: number, name: string, age = 0) => ({ norad, name, how: 'position', carrier: 0, rf: 137287500, snr: 10, dop: 0, pred: 0, az: 10, el: 20, dcn: 0,
+    nominal: 0, scId: 1, ok: 5, messages: 0, age, eph: { lat: 51.2, lon: -0.4, altKm: 742, kmS: 7.08, clock: 1000 } });
+  const S = (t: number, sats: unknown[], pick = 41185) => parseOrbcommStatus({ t, good: 1, bad: 0, located: true, birds: 8, sats, pick, dots: [] });
+  let h = orbViewMerge(null, { status: S(1000, [bird(41185, 'ORBCOMM FM114'), bird(41186, 'ORBCOMM FM115')]) });
+  ok(orbShownSats(h).length === 2 && orbShownSats(h).every((x) => x.heldSecs === undefined), 'both listed: neither held');
+  h = orbViewMerge(h, { status: S(1040, [bird(41185, 'ORBCOMM FM114')]) });
+  let shown = orbShownSats(h);
+  ok(shown.length === 2 && shown[1].sat.name === 'ORBCOMM FM115' && shown[1].heldSecs === 40, 'FM115\'s carrier dropped: its block stays, held 40 s');
+  const lines = orbSatLines(shown[1].sat, undefined, shown[1].heldSecs);
+  ok(/· last heard 40 s ago$/.test(lines[0]) && lines.some((l) => /^Position 51\.20°N/.test(l)), `held: its last block, "last heard" (${lines[0]})`);
+  ok(orbHeldText(30) === 'last heard 30 s ago' && orbHeldText(300) === 'last heard 5 min ago', 'the age in words');
+  h = orbViewMerge(h, { status: S(1000 + ORB_HOLD_SEC, [bird(41185, 'ORBCOMM FM114')]) });
+  ok(orbShownSats(h).length === 2 && orbShownSats(h)[1].heldSecs === ORB_HOLD_SEC, 'still held at 10 min');
+  h = orbViewMerge(h, { status: S(1001 + ORB_HOLD_SEC, [bird(41185, 'ORBCOMM FM114')]) });
+  ok(orbShownSats(h).length === 1 && !h.held[41186], 'gone after 10 min');
+  h = orbViewMerge(h, { status: S(2000, []) });
+  ok(orbShownSats(h).length === 1 && orbShownSats(h)[0].heldSecs === 399,
+     'the pick\'s own bird held too while its carrier is down');
+  h = orbViewMerge(h, { status: S(2001, [], 41190) });
+  ok(orbShownSats(h).length === 0, 'a status for another pick: the hold goes (the pick ended)');
+  ok(orbShownSats(orbViewEmpty()).length === 0 && orbShownSats(null).length === 0, 'a fresh box (a new pick) holds nothing');
 }
 
 console.log(`\ntest_orbcomm_app: ${pass} passed, ${fail} failed`);

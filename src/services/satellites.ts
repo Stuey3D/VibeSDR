@@ -344,6 +344,9 @@ export interface SatPicked {
    *  vibesatif::viewSpanHz: 2.5 × the region the pass's IF filter holds, ≥ 50 kHz; METEOR ≈ 410 kHz). Stuart 11-24: "we need
    *  to start zoomed in, not all the way but enough to see the signal and neighbours". Absent = an older server: no zoom. */
   view?: number;
+  /** ★★ 2026-11-24 where that view is CENTRED when it is not the downlink (an ORBCOMM pick decodes the whole band: the band's
+   *  centre, 137.5 MHz, while the dial sits on the listed channel). Absent = centre on the downlink, as before. */
+  viewCentre?: number;
 }
 function satDecoderName(d: unknown): SatPicked['decoder'] {
   return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' ? d : '';
@@ -364,6 +367,7 @@ export function parseSatPicked(m: unknown): SatPicked | null {
     const lo = a ? num(a.lo) : undefined, hi = a ? num(a.hi) : undefined;
     if (lo != null && hi != null && hi > lo && hi - lo <= 12000) p.audio = { lo, hi }; }
   { const v = num(o.view); if (v != null && v >= 5000 && v <= 20e6) p.view = v; }
+  { const c = num(o.viewCentre); if (c != null && c >= 10e3 && c <= 10e9) p.viewCentre = c; }
   return p;
 }
 
