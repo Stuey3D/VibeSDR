@@ -271,6 +271,8 @@ struct DecoderTap {
     /** ★ V12 LRPT: one finished picture of a pass (a standard PNG, full size) — `name` says which ("channel 2 near-IR",
      *  "RGB 221 false colour"); `partial` = the decoder stopped before the pass ended. */
     virtual void picture(const std::string& /*name*/, const std::string& /*png*/, int /*w*/, int /*h*/, bool /*partial*/) {}
+    /** ★ V12 METEOR LRPT: the pass's map outline JSON (empty + `why` = none), handed over just before its pictures. */
+    virtual void outline(const std::string& /*json*/, const std::string& /*why*/) {}
     /** ★★ V12 beta91 TELEMETRY CHARTS: one good FUNcube frame, parsed, with its time and pass (vibe_fctlm_gallery.h —
      *  the per-pass CSV and the day's log). */
     virtual void satTlm(const vibefc::Decoded& /*frame*/, const vibefc::TlmCtx& /*ctx*/) {}
@@ -341,6 +343,11 @@ public:
         /** ★★ beta92 the satellite gain hold's note ("Airspy linearity preset 12 (held, 0 clip cuts)") for LRPT's per-pass
          *  summary line. Empty = the summary says the gain is not known. */
         std::function<std::string()> satGainNote;
+        /** ★★ V12 LRPT's MAP OUTLINE (vibe_lrpt_overlay.h) — tests: the METEOR element sets to try, this server's place,
+         *  and the clock. Empty = the satellite engine's (lrptCandidates / observer) and vibeUtcNow(). */
+        std::function<std::vector<vibelrpt::geo::Candidate>()> lrptGeoCandidates;
+        std::function<bool(vibe::sat::Observer&)> lrptGeoObserver;
+        std::function<double()> nowUnix;
         /** ★ V12 VOR / ILS: the server's place (lat, lon; false = not given) — the nearest published station on a channel,
          *  and the owner's check of how far a radial passes from here. Never sent to a listener as such. */
         std::function<bool(double&, double&)> position;
@@ -1591,8 +1598,25 @@ private:
             o.satSymbolRate = [sess] { return vibe::sat::lrptSymbolRateOf(vibe::sat::decoderView(sess)); };
         }
         o.pictures = [this](const std::vector<vibelrpt::Picture>& ps, bool partial) {
-            if (DecoderTapPtr t = tap()) for (const auto& p : ps) t->picture(p.name, p.png, p.w, p.h, partial);
+            DecoderTapPtr t = tap();
+            if (!t) return;
+            if (!ps.empty() && (!ps.front().geoJson.empty() || !ps.front().geoWhy.empty())) t->outline(ps.front().geoJson, ps.front().geoWhy);
+            for (const auto& p : ps) t->picture(p.name, p.png, p.w, p.h, partial);
         };
+        /* ★★ V12 THE MAP OUTLINE (vibe_lrpt_overlay.h): which METEOR it may be — the pick's, if this listener's dial is the
+         *  satellite engine's lock (marked "picked"), and every METEOR with an LRPT downlink and an element set — this
+         *  server's place, and OUR corrected clock. An Env override wins (tests). */
+        if (env_.lrptGeoCandidates) o.geoCandidates = env_.lrptGeoCandidates;
+        else {
+            const std::string sess = session_;
+            o.geoCandidates = [sess] {
+                const vibe::sat::DecoderView v = vibe::sat::decoderView(sess);
+                return vibe::sat::engine().lrptCandidates(v.state.empty() ? 0 : v.norad);
+            };
+            o.geoObserver = [](vibe::sat::Observer& ob) { return vibe::sat::engine().observer(ob); };
+        }
+        if (env_.lrptGeoObserver) o.geoObserver = env_.lrptGeoObserver;
+        o.nowUnix = env_.nowUnix ? env_.nowUnix : std::function<double()>([] { return vibeUtcNow(); });
         o.log = [this](const std::string& l) { log(l); };
         if (env_.satGainNote) o.gainNote = env_.satGainNote;   // ★ beta92 the per-pass summary's "gain"
         lrpt_.reset(new vibelrpt::Run(std::move(o)));

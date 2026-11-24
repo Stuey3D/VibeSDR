@@ -388,7 +388,23 @@ public:
         m.utc = started_;
         m.partial = partial;
         m.title = "METEOR LRPT \xc2\xb7 " + gallery::printable(name, 40) + " \xc2\xb7 " + std::to_string(w) + "\xc3\x97" + std::to_string(h);
+        m.geo = geoName_; m.geoWhy = geoWhy_;
         if (!store_.add(m, "png", png).empty()) ++saved_;
+    }
+    /* ★★ V12 2026-11-24 THE MAP OUTLINE (vibe_lrpt_overlay.h, docs/v12/LRPT-MAP-OVERLAY.md). Called once per pass, BEFORE
+     *  its pictures: the outline is filed as its own small item (kind "lrptgeo", JSON — listed by no client, served like
+     *  any item) and every picture of the pass names it ("geo"); with none, the pictures carry the reason ("gw"). The
+     *  PNGs themselves stay the plain picture. */
+    void outline(const std::string& json, const std::string& why) override {
+        std::lock_guard<std::mutex> lk(m_);
+        geoName_.clear(); geoWhy_ = why;
+        if (json.empty()) return;
+        gallery::Meta m = meta_;
+        m.kind = "lrptgeo";
+        m.utc = started_;
+        m.title = "METEOR LRPT \xc2\xb7 map outline";
+        geoName_ = store_.add(m, "json", json);
+        if (geoName_.empty()) geoWhy_ = "the map outline could not be saved";
     }
     size_t saved() const { std::lock_guard<std::mutex> lk(m_); return saved_; }
 private:
@@ -397,6 +413,7 @@ private:
     mutable std::mutex m_;
     int64_t started_ = 0;
     size_t saved_ = 0;
+    std::string geoName_, geoWhy_;
 };
 
 // ── FT8 / FT4: a SUMMARY, not the spots ─────────────────────────────────────────────────────────────────────────

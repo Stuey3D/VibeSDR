@@ -426,6 +426,9 @@ public:
     /** ★ The packet time (ms of day, as the satellite stamped it) of strip `s`'s scan period; −1 when no packet of that
      *  strip was heard. The map overlay's only clock (vibe_lrpt_geo.h). */
     int32_t stripTimeMs(int s) const { return s >= 0 && size_t(s) < stripMs_.size() ? stripMs_[size_t(s)] : -1; }
+    /** ★ The newest period stamp heard (ms of day), −1 = none yet — paired with OUR clock by Run for the overlay's clock
+     *  check (vibe_lrpt_overlay.h checkClock). */
+    int32_t lastStampMs() const { return haveT0_ ? int32_t(lastMs_) : -1; }
     /** How many rates AUTO is still walking (1 = settled or pinned). */
     size_t rateGroups() const { return groups_.size(); }
     /** Feed soft symbols directly (an archived .s file, or the client-assisted stage): the first chain's path. */
@@ -619,7 +622,12 @@ private:
 };
 
 // ── The gallery's pictures ──────────────────────────────────────────────────────────────────────────────────────────
-struct Picture { std::string name; int apid = 0; std::string png; int w = 0, h = 0; };
+struct Picture {
+    std::string name; int apid = 0; std::string png; int w = 0, h = 0;
+    /** ★ V12 the MAP OUTLINE for this pass (vibe_lrpt_overlay.h): the vector JSON (same for every channel of the pass —
+     *  they share the line grid), or empty with `geoWhy` saying why there is none. Both empty = not attempted. */
+    std::string geoJson, geoWhy;
+};
 /** ★ Channel names per MSU-MR (1: 0.5–0.7 µm … 6: 11.5–12.5 µm); APID 64 + n − 1. Channels 4–6 are thermal and drawn
  *  inverted (cloud white). */
 inline const char* channelName(int apid) {

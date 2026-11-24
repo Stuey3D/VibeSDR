@@ -18,7 +18,9 @@
 //     overlay and a plain-English reason (`why`) the clients show. (METEOR-M2 3 sent wrong on-board times in Oct 2023.)
 //
 // ★★ HOW (forward and inverse). Each image row r has a time t(r); SGP4 gives the satellite's Earth-fixed position p and its
-//    orbital frame — z to the Earth's centre (nadir), y = z × v (across the track), x = y × z (along it). Pixel column c is
+//    orbital frame — z down the ellipsoid's normal under it (GEODETIC nadir: the geocentric one put every coast ~2.5 km
+//    too far north on the 23 Nov pass, LRPT-MAP-OVERLAY.md), y = z × v (across the track; v the inertial velocity: the
+//    spacecraft is not yaw-steered for the Earth's turning), x = y × z (along it). Pixel column c is
 //    a look angle θ(c) = (c + ½ − W/2) · Δθ · sign in the y–z plane; the ray meets the WGS-84 ellipsoid at the pixel's
 //    ground point. The overlay goes the OTHER way, for every coastline vertex: the row is where the vertex crosses the
 //    scan plane ((P − p(r)) · x(r) = 0: a binary search over the row table, linear between rows), the column from the
@@ -50,15 +52,22 @@ constexpr double kEarthRate = 7.292115146706979e-5;         ///< rad/s (IERS)
 /** ★★ MSU-MR as LRPT carries it. */
 struct Instrument {
     int width = 1568;                 ///< pixels a line (196 MCUs × 8)
-    /** Half the scan, degrees, edge pixel's outer edge. ±54.4° puts a 2800 km swath under an 830 km orbit (OSCAR's figure);
-     *  checked against coastlines on real passes (LRPT-MAP-OVERLAY.md). */
-    double halfScanDeg = 54.4;
-    /** +1: column 0 looks to the satellite's LEFT of its track (west on a northbound pass) — measured, see the doc. */
+    /** ★★ Half the scan, degrees, from nadir to the outer edge of the edge pixel (pixels are equal steps of angle: a
+     *  rotating-mirror scanner). Published figures bracket it — a 2800 km swath (WMO OSCAR, "±54°") to 2950 km (the
+     *  instrument makers' paper), i.e. 54.4°–55.6° from an ~830 km orbit — and the coastline fit on Stuart's 23 Nov
+     *  METEOR-M2-4 pass (LRPT-MAP-OVERLAY.md) puts it at 55.2°: the same for every MSU-MR, NOT a per-satellite value. */
+    double halfScanDeg = 55.2;
+    /** −1: column 0 looks to the satellite's RIGHT (east on a northbound pass — the picture's top is its first line, so a
+     *  northbound picture is south-up with east on the left). +1 drew Scotland mirrored on the 23 Nov pass. */
     int scanSign = -1;
     double degPerPixel() const { return 2.0 * halfScanDeg / width; }
     double angleOf(double col) const { return scanSign * (col + 0.5 - width * 0.5) * degPerPixel() * kDeg; }
     double colOf(double angleRad) const { return angleRad / (scanSign * degPerPixel() * kDeg) - 0.5 + width * 0.5; }
 };
+
+/** One satellite a picture may have come from: the pick's (named by the satellite engine), or every METEOR with LRPT
+ *  and an element set (vibe_sat_engine.h lrptCandidates). */
+struct Candidate { std::string name; long long norad = 0; vibe::sat::Elements el; bool picked = false; };
 
 /** One picture row: when it was scanned, where the satellite was, its orbital frame (Earth-fixed, km). */
 struct Row { double t = 0; double p[3] = {0, 0, 0}, x[3] = {0, 0, 0}, y[3] = {0, 0, 0}, z[3] = {0, 0, 0}; };

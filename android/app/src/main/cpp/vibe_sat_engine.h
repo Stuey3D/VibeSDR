@@ -19,6 +19,7 @@
 #pragma once
 
 #include "vibe_sat_orbit.h"
+#include "vibe_lrpt_geo.h"   // ★ V12 LRPT map outline: lrptCandidates()
 
 #include <algorithm>
 #include <atomic>
@@ -558,6 +559,8 @@ public:
         skyAt_ = 0;
     }
     bool haveObserver() const { std::lock_guard<std::mutex> lk(m_); return obs_.valid; }
+    /** ★ This server's place (false = not set) — LRPT's map outline checks the satellite was above our horizon. */
+    bool observer(Observer& o) const { std::lock_guard<std::mutex> lk(m_); o = obs_; return obs_.valid; }
     /** ★★ sats.json (vibesdr.net's mirror) → the LIST and the element sets, replacing the built-in list. Returns how
      *  many listed birds have elements, -1 = refused (the current list and elements stay). A bird kept from the old
      *  list keeps its elements if the new file has none or older ones; a running lock follows its bird and transmitter
@@ -693,6 +696,22 @@ public:
         for (auto& s : sats_) if (s.have) { ++n; best = std::max(best, s.el.epochUnix()); }
         if (newestEpoch) *newestEpoch = best;
         return n;
+    }
+    /** ★★ V12 LRPT's MAP OUTLINE (vibe_lrpt_overlay.h): every listed bird with an LRPT downlink and an element set — the
+     *  METEORs a picture may have come from. `pickedNorad` (the listener's lock, 0 = none) is marked. */
+    std::vector<vibelrpt::geo::Candidate> lrptCandidates(long long pickedNorad = 0) const {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<vibelrpt::geo::Candidate> out;
+        for (size_t i = 0; i < defs_.size() && i < sats_.size(); ++i) {
+            if (!sats_[i].have) continue;
+            bool lrpt = false;
+            for (const auto& t : defs_[i].tx) if (t.consumer == "lrpt" || t.mode == "lrpt") lrpt = true;
+            if (!lrpt) continue;
+            vibelrpt::geo::Candidate c; c.name = defs_[i].name; c.norad = defs_[i].norad; c.el = sats_[i].el;
+            c.picked = pickedNorad > 0 && c.norad == pickedNorad;
+            out.push_back(std::move(c));
+        }
+        return out;
     }
     /** A copy: sats.json can replace the list at any time (loadSats). */
     std::vector<SatDef> defs() const { std::lock_guard<std::mutex> lk(m_); return defs_; }
