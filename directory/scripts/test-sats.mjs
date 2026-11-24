@@ -107,14 +107,17 @@ console.log('§2 the first round — CSV, compression, User-Agent, once per upda
   ok(cur.filter((s) => s.omm).length === curated.satellites.length, 'every curated bird has elements');
   // ★★ beta91 SATELLITE LABELS: the ORBCOMM birds, label-only
   const orb = d.satellites.filter((s) => s.labelOnly);
-  ok(orb.length === 8 && orb.every((s) => s.group === 'orbcomm' && s.omm && s.transmitters.length === 1 && s.transmitters[0].mode === 'label'),
+  ok(orb.length === 8 && orb.every((s) => s.group === 'orbcomm' && s.omm && s.transmitters.length >= 1 && s.transmitters.every((t) => t.mode === 'label')),
      `ORBCOMM: 8 of the fixture's 9 birds, label-only, elements inline (${orb.map((s) => s.id).join(' ')})`);
   ok(!orb.some((s) => s.norad === 41180), 'FM109 — every SatNOGS listing not alive — is left out (no label beats a wrong one)');
   const fm108 = orb.find((s) => s.norad === 41179), fm110 = orb.find((s) => s.norad === 41181), fm36 = orb.find((s) => s.norad === 25984);
   ok(fm108.id === 'ORBCOMM-FM108' && fm108.name === 'ORBCOMM FM108' && fm108.transmitters[0].downlink === 137713000 && !('downlinkHigh' in fm108.transmitters[0]),
      'FM108: SatNOGS lists one alive channel — its own 137.713 MHz');
-  ok(fm110.transmitters[0].downlink === 137200000 && fm110.transmitters[0].downlinkHigh === 137800000 && fm36.transmitters[0].downlinkHigh === 137800000,
-     'FM110 (two channels) and FM36 (unlisted): the whole 137.2–137.8 MHz band');
+  // ★★ 11-24: two alive channels = a label on each (was the whole band, so the label sat on 137.5 MHz — Stuart: "the marker seems to be in the wrong place")
+  ok(fm110.transmitters.length === 2 && fm110.transmitters.every((t) => !('downlinkHigh' in t)) && fm110.transmitters[0].downlink < fm110.transmitters[1].downlink,
+     `FM110 (two channels): a label on each (${fm110.transmitters.map((t) => t.downlink).join(', ')})`);
+  ok(fm36.transmitters.length === 1 && fm36.transmitters[0].downlink === 137200000 && fm36.transmitters[0].downlinkHigh === 137800000,
+     'FM36 (unlisted): the whole 137.2–137.8 MHz band');
   ok(d.orbits.amateur && d.orbits.weather && !d.orbits.orbcomm && d.labelOrbits && d.labelOrbits.orbcomm,
      'the orbit data\'s age stays the main groups\' (orbcomm\'s fetch is under labelOrbits)');
   ok(d.satellites.length <= M.SATS_JSON_MAX && new Set(d.satellites.map((s) => s.id)).size === d.satellites.length, 'within every server\'s 200-bird limit; ids unique');
@@ -347,6 +350,12 @@ console.log('§11 beta91 label groups: a failure there costs the main groups not
   ok(M.satnogsChannel(1, []).state === 'band' && M.satnogsChannel(1, [{ norad: 1, low: 145e6, alive: false }]).state === 'band',
      'no 137 MHz listing: the band (a listing elsewhere says nothing)');
   ok(M.roundGroups({ groups: ['a', 'b'], labelGroups: ['b', 'c'] }).join() === 'a,b,c', 'round order: main groups, then label groups once');
+  // ★★ 11-24: a bird with two alive channels (FM116: 137.6625 + 137.800) gets a label on each, not one on 137.5 MHz
+  const two = M.satnogsChannel(41189, [{ norad: 41189, low: 137800000, alive: true, status: 'active' }, { norad: 41189, low: 137662500, alive: true, status: 'active' }]);
+  ok(two.state === 'channels' && two.downlinks.join() === '137662500,137800000', 'two alive channels: both, lowest first');
+  const many = M.satnogsChannel(9, [137.2e6, 137.3e6, 137.4e6, 137.5e6].map((low) => ({ norad: 9, low, alive: true, status: 'active' })));
+  ok(many.state === 'band', `more than ${M.LABEL_CHANNELS_MAX} alive channels: still the band`);
+  ok(M.satnogsChannel(9, [{ norad: 9, low: 137.66e6, alive: true, status: 'active' }]).state === 'channel', 'one alive channel: that one');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

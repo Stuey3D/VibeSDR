@@ -379,9 +379,15 @@ export function satnogsChannel(norad, list, lo = 137e6, hi = 138e6) {
   const mine = (list || []).filter((t) => t.norad === norad && t.low >= lo && t.low <= hi);
   if (!mine.length) return { state: 'band' };
   if (mine.every((t) => t.alive === false)) return { state: 'dead' };
-  const f = [...new Set(mine.filter((t) => t.alive && t.status === 'active').map((t) => t.low))];
-  return f.length === 1 ? { state: 'channel', downlink: f[0] } : { state: 'band' };
+  const f = [...new Set(mine.filter((t) => t.alive && t.status === 'active').map((t) => t.low))].sort((a, b) => a - b);
+  // ★★ 11-24 (Stuart: "the marker seems to be in the wrong place") — FM116 lists TWO alive channels (137.6625, 137.800),
+  //   so it fell to 'band' and its label sat on 137.5 MHz, between nothing. Up to LABEL_CHANNELS_MAX alive channels each
+  //   get their own label; more than that (a listing that cannot be right) still falls back to the band.
+  if (f.length === 1) return { state: 'channel', downlink: f[0] };
+  if (f.length >= 2 && f.length <= LABEL_CHANNELS_MAX) return { state: 'channels', downlinks: f };
+  return { state: 'band' };
 }
+export const LABEL_CHANNELS_MAX = 3;
 
 /** sats.json from the curated list and the good copies. */
 export async function rebuild(env, curated, now) {
@@ -431,11 +437,14 @@ export async function rebuild(env, curated, now) {
       if (w.state === 'dead') continue;
       const tx = { ...c.transmitter };
       if (w.state === 'channel') { tx.downlink = w.downlink; delete tx.downlinkHigh; }
+      const txs = w.state === 'channels'
+        ? w.downlinks.map((d) => { const t = { ...c.transmitter, downlink: d }; delete t.downlinkHigh; return t; })
+        : [tx];
       let id = constellationId(c.prefix, o.OBJECT_NAME, norad);
       if (ids.has(id)) id = `${id.slice(0, 22)}-${norad}`;
       ids.add(id);
       sats.push({ id, name: String(o.OBJECT_NAME || id).slice(0, 64), norad, group: c.group, note: c.note || '', labelOnly: true,
-                  transmitters: [tx], omm: o });
+                  transmitters: txs, omm: o });
       n++;
     }
   }
