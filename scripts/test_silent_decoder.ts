@@ -30,7 +30,8 @@ function rig(startMuted: boolean | null = false) {
 }
 
 // ── which decoders ──
-ok(SILENT_DECODERS.length === 2 && isSilentDecoder('aprs') && isSilentDecoder('lrpt'), 'APRS and METEOR LRPT are silent');
+ok(SILENT_DECODERS.length === 3 && isSilentDecoder('aprs') && isSilentDecoder('lrpt') && isSilentDecoder('orbcomm'), 'APRS, METEOR LRPT and ORBCOMM are silent');
+ok(silentMutedBanner('orbcomm').includes('ORBCOMM'), 'the banner names ORBCOMM');
 ok(!isSilentDecoder('paging') && !isSilentDecoder('sstv') && !isSilentDecoder('rtty') && !isSilentDecoder(null) && !isSilentDecoder(''),
   'nothing else (PAGE has its own, unbreakable mute; SSTV, RTTY are listenable)');
 ok(silentMutedBanner('lrpt') === '\u{1F507} AUDIO MUTED WHILE METEOR LRPT RUNS — TAP TO UNMUTE'

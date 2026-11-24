@@ -20,7 +20,8 @@
 import type { VfoId } from './vfoAB';
 
 /** The decoders whose audio is muted while they run. */
-export const SILENT_DECODERS = ['aprs', 'lrpt'] as const;
+/** ★ 2026-11-24 + ORBCOMM (Stuart: "can the nfm from orbcomm be muted too") — its downlink is data hiss, as METEOR's. */
+export const SILENT_DECODERS = ['aprs', 'lrpt', 'orbcomm'] as const;
 export type SilentDecoder = typeof SILENT_DECODERS[number];
 
 export function isSilentDecoder(d: string | null | undefined): d is SilentDecoder {
@@ -28,7 +29,7 @@ export function isSilentDecoder(d: string | null | undefined): d is SilentDecode
 }
 
 /** Its name for the muted banner. */
-export function silentDecoderName(d: SilentDecoder): string { return d === 'lrpt' ? 'METEOR LRPT' : 'APRS'; }
+export function silentDecoderName(d: SilentDecoder): string { return d === 'lrpt' ? 'METEOR LRPT' : d === 'orbcomm' ? 'ORBCOMM' : 'APRS'; }
 
 /** The app's banner while a silent decoder holds the speaker — a key: the listener may unmute, and it stands. */
 export function silentMutedBanner(d: SilentDecoder): string {
