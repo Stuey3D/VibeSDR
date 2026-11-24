@@ -125,8 +125,11 @@ public:
          *  at 7–9 dB (pre-emphasised, flat and de-emphasised TXs, VOICE and ALL): IQ alone 692, IQ + audio 699; the
          *  --iq-sweep (deviation ±3–6 kHz, ±2 kHz off tune): 822 either way. And it is the listener's NFM chain, which
          *  APRS no longer depends on (Stuart 11-23). */
-        const bool iqLive = !iqRx_.empty() && audioT_ - iqSeenAt_ < 2.0;
-        if (afsk_ && !iqLive) afsk_->feed(x, n, [&](const Frame& f) { offer1200_(f, audioT_, 0); });
+        /* ★★★ beta93 HOTFIX (Stuart 11-24, the XCover's Airspy on 144.800: clear S5 packets, "no packets yet"; the Lenovo
+         *  silent overnight): the listener's audio path runs ALWAYS again, beside the IQ receiver — beta92 switched it off
+         *  whenever IQ came, so a fault anywhere in the IQ feed on a real server silenced APRS completely. Both paths offer
+         *  to offer1200_, which drops a frame another path gave within 3 s. Cost: one AfskDemod at 48 kHz (beta91's). */
+        if (afsk_) afsk_->feed(x, n, [&](const Frame& f) { offer1200_(f, audioT_, 0); });
         audioT_ += n / 48000.0;
         tickList_();
     }
