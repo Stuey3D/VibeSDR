@@ -5,11 +5,11 @@
 // EXIT keeps dabOnly.ts's rule, unchanged — DAB is one case of this one, and a new server says "dab" here too.)
 
 /** The whole-radio modes with an EXIT key that moves the radio (the server's onlyModeNow list). */
-export const ONLY_MODES = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes'];
+export const ONLY_MODES = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes', 'vormap'];
 /** Each one's name as its EXIT key says it. */
-const KEY: Record<string, string> = { dab: 'DAB', adsb: 'ADS-B', ism: 'ISM', ndb: 'NDB', ais: 'AIS', avdata: 'DATALINK', sondes: 'SONDES' };
+const KEY: Record<string, string> = { dab: 'DAB', adsb: 'ADS-B', ism: 'ISM', ndb: 'NDB', ais: 'AIS', avdata: 'DATALINK', sondes: 'SONDES', vormap: 'VOR MAP' };
 /** …and in a sentence (the server's onlyModeWhy). */
-const WORDS: Record<string, string> = { dab: 'DAB', adsb: 'ADS-B', ism: 'ISM', ndb: 'NDB', ais: 'AIS', avdata: 'aircraft datalink', sondes: 'radiosonde' };
+const WORDS: Record<string, string> = { dab: 'DAB', adsb: 'ADS-B', ism: 'ISM', ndb: 'NDB', ais: 'AIS', avdata: 'aircraft datalink', sondes: 'radiosonde', vormap: 'VOR / ILS map' };
 
 /** The receiver's only mode for THIS listener, or ''. `said`: the server's hwinfo `onlyMode` ('' none, '' for the
  *  signed-in admin), null when this server never sent one. An OLDER server never does, so its blocked modes decide, the

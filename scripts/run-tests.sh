@@ -962,6 +962,9 @@ if npx tsx scripts/test_tones_app.ts; then pass=$((pass+1)); else fail=$((fail+1
 # ★ V12 VOR / ILS and 406 MHz beacons: the shared client half (src/services/navaids.ts — the radial's line, the FIX, the card),
 #   both clients' keys, the setup screens, the copy.
 if npx tsx scripts/test_navaids_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 THE VOR / ILS MAP: the shared client half (src/services/vorMap.ts — the report, the list, the map's items, the
+#    receiver FIX and its words), both clients' wiring, the setup screens.
+if npx tsx scripts/test_vormap_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

@@ -26,6 +26,7 @@ import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
+import { vorMapSanitise, type VorMapReport } from '../../../src/services/vorMap';   // ★ V12 the VOR / ILS map
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB } from '../../../src/services/satellites';   // ★ V12 satellites
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { heartbeat } from './keepAlive';   // ★★★ the ping on a worker's clock — a hidden tab's timers are throttled (WEB-KEEPALIVE.md)
@@ -774,6 +775,10 @@ export interface SpectrumCallbacks {
    *  on; null = the server left it (`sondes_off`). Parsed by the app's own src/services/sondes.ts. */
   onSondes?: (r: SondeReport | null) => void;
   onSondesError?: (why: string) => void;
+  /** ★ V12 the VOR / ILS map: a report means the mode is on; null = the server left it (`vormap_off`). Parsed by the app's
+   *  own src/services/vorMap.ts. */
+  onVormap?: (r: VorMapReport | null) => void;
+  onVormapError?: (why: string) => void;
   /** ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md): the picker's list, a Doppler lock's readout (twice a second while
    *  locked; OFF with `why` when it ends or is refused), and one pass's sky track. Parsed by src/services/satellites.ts. */
   onSatList?: (l: SatList) => void;
@@ -1004,7 +1009,7 @@ export class SpectrumClient {
     const newMode = !!mode && mode !== o.mode;
     if (v === 'A') {
       if (this.askBlocked()) return;
-      if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;
+      if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return;
       this.lastLocalTuneAt = performance.now();
     }
     if (frequency) o.frequency = Math.round(frequency);
@@ -1520,6 +1525,25 @@ export class SpectrumClient {
       }
       case 'sondes_error':
         this.cb.onSondesError?.(String(msg.why ?? 'Radiosondes are not available on this receiver').slice(0, 200));
+        return;
+      /* ★★ V12 THE VOR / ILS MAP — NDB's three messages and the datalink's ghost guard. */
+      case 'vormap': {
+        if (Date.now() < this.vorQuietUntil) return;
+        const r = vorMapSanitise(msg);
+        if (!r) return;
+        this.vorHeld = true;
+        this.cb.onVormap?.(r);
+        return;
+      }
+      case 'vormap_off': {
+        this.vorHeld = false;
+        const now = Date.now();
+        if (this.vorQuietUntil > now) this.vorQuietUntil = Math.min(this.vorQuietUntil, now + 1500);
+        this.cb.onVormap?.(null);
+        return;
+      }
+      case 'vormap_error':
+        this.cb.onVormapError?.(String(msg.why ?? 'The VOR / ILS map is not available on this receiver').slice(0, 200));
         return;
       /* ★★ V12 SATELLITES */
       case 'sat_list': { const l = parseSatList(msg); if (l) this.cb.onSatList?.(l); return; }
@@ -2276,7 +2300,7 @@ export class SpectrumClient {
       return;
     }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
@@ -2312,7 +2336,7 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
-    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM / AIS / NDB before picking a mode
+    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM / AIS / NDB before picking a mode
     if (this.abOn && this.abSel === 'B') {   // ★★ V12 VFO B — its own mode, never the room's
       this.mode = mode;
       const bw = MODE_BANDWIDTHS[mode];
@@ -2359,7 +2383,7 @@ export class SpectrumClient {
   setBandwidth(low: number, high: number) {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
     //   is applied once, here — see WFM_MIN_BW_HZ.
-    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B, ISM, AIS and NDB
+    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B, ISM, AIS and NDB
     [low, high] = clampPassband(this.mode, low, high);
     if (this.abOn && this.abSel === 'B') {   // ★★ V12 VFO B — its own passband
       this.bandwidthLow = low; this.bandwidthHigh = high;
@@ -2432,7 +2456,7 @@ export class SpectrumClient {
 
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
     if (this.icomSpans) {
       if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return; }
@@ -2472,7 +2496,7 @@ export class SpectrumClient {
    * the thing you're listening to stays put and the span closes in around it.
    */
   zoomBy(factor: number, anchorHz?: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return;   // ★ see dabHeld
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
@@ -2628,6 +2652,17 @@ export class SpectrumClient {
     this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     this._send(on && band ? { type: 'sondes', on: 1, band } : { type: 'sondes', on: on ? 1 : 0 });
   }
+  /* ★★ V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md): the whole radio sweeps 108–118 MHz — NDB's rules. */
+  vorHeld = false;
+  private vorQuietUntil = 0;
+  vormap(on: boolean) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — it takes the whole shared radio across the navaid band
+    if (on) this.tunePacer.cancel();
+    this.vorQuietUntil = on ? 0 : Date.now() + 5000;
+    this.vorHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
+    this._send({ type: 'vormap', on: on ? 1 : 0 });
+  }
   /* ★★ V12 SATELLITES: the picker's question (free — it changes nothing) and the Doppler lock (moves the dial on a shared
    *  receiver, so it asks before tuning like a tune does). */
   satList() { this._send({ type: 'sat_list' }); }
@@ -2736,7 +2771,7 @@ export class SpectrumClient {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
   }
 
-  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'reset' }); }
+  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return; this._send({ type: 'reset' }); }
 
   /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
    *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */
@@ -2784,11 +2819,11 @@ export class SpectrumClient {
   /** ★★ V12 auto-PPM, the owner's two buttons (admin-gated on the server, as the ppm is). */
   setAutoPpm(on: boolean)  { this._send({ type: 'autoppm', on }); }
   resetAutoPpm()           { this._send({ type: 'autoppm_reset' }); }
-  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
+  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */
   setAutoBw(on: boolean) { this._send({ type: 'autobw', on }); }
-  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
+  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld || this.vorHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
   /** ★ The owner's AUTOMATIC crossover — admin-gated server side, because unlike direct sampling
    *  itself this PERSISTS and outlives whoever set it. Turning it off leaves the tuner wherever it

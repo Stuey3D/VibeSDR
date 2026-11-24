@@ -511,6 +511,8 @@ export interface SDRCallbacks {
   /** ★ V12 RADIOSONDES (RS41), VIBESERVER-ONLY: a report about once a second while the receiver is in the SONDES mode;
    *  null = it ended (`sondes_off`); `err` = the refusal (`sondes_error`). */
   onSondes?:    (r: import('./sondes').SondeReport | null, err?: string) => void;
+  /** ★ V12 the VOR / ILS map: a report (on), null (vormap_off), or null with why (refused). */
+  onVormap?:    (r: import('./vorMap').VorMapReport | null, err?: string) => void;
   /** ★★ V12 SATELLITES, VIBESERVER-ONLY (docs/v12/SATELLITE-ENGINE.md): the picker's list, a Doppler lock's readout
    *  (twice a second while locked; OFF with `why` at the end or on a refusal), one pass's sky track. */
   onSatList?:   (l: import('./satellites').SatList) => void;

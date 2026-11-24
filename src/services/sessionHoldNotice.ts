@@ -20,13 +20,13 @@
  *     input to audioQuietFor below: whatever it is, it can never release the session.
  */
 
-export interface QuietModes { adsb: boolean; ism: boolean; ndb: boolean; ais: boolean }
+export interface QuietModes { adsb: boolean; ism: boolean; ndb: boolean; ais: boolean; vormap?: boolean }   // ★ V12 + the VOR / ILS map (no audio, as NDB)
 
 /** ★★ The ONE rule for "nothing to hear — let the audio session go" (SDRScreen's setNativeQuiet). Only the whole-radio
  *  modes the server sends no audio for. A squelch, a mute of one VFO, a decoder, a waterfall-only view are not here,
  *  and must never be: each of those still has a live stream (gated silence) the listener may be waiting on. */
 export function audioQuietFor(m: QuietModes): boolean {
-  return m.adsb || m.ism || m.ndb || m.ais;
+  return m.adsb || m.ism || m.ndb || m.ais || !!m.vormap;
 }
 
 /** What the server said (hwinfo): seconds it holds us, and Date.now() at which a hard limit ends that sooner (0 = none). */

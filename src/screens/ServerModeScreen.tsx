@@ -98,6 +98,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'fctlm', label: 'FUNcube satellite telemetry (AO-73)' },
   // ★ V12 VOR / ILS and 406 MHz beacons (docs/v12/VOR-ILS.md, SARSAT.md) — the setup page's same two switches
   { id: 'vor', label: 'VOR bearing and ILS deviation' },
+  // ★★ V12 the VOR / ILS MAP (docs/v12/VOR-MAP.md) — a whole-radio mode treated as NDB is, as on the setup page
+  { id: 'vormap', label: 'VOR / ILS map (the whole navaid band, swept)' },
   { id: 'sarsat', label: '406 MHz distress beacons (COSPAS-SARSAT)' },
   /* ★★ V12 DV ID (docs/v12/DV-SIGNALLING.md): DMR, D-STAR, YSF, NXDN, dPMR — who is talking, never the voice — a demodulator
    *  on VHF / UHF, and under it the owner's opt-in for radio IDs off the amateur bands ("+" token), as on the setup page. */
@@ -180,7 +182,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
 const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'loraaprs', 'meshcom', 'fanet', 'ndb', 'ais', 'aisstore', 'adsb', 'commb', 'drm', 'tone',
-  'avdata', 'avdata+text', 'sondes',
+  'avdata', 'avdata+text', 'sondes', 'vormap',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,

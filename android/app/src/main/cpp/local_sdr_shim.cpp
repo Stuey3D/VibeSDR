@@ -44612,10 +44612,11 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "vormap",           // ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md)
                                         "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "ale", "drm", "freedv", "m17", "dvsig",
                                         "lrpt",             // ★ V12 METEOR-M LRPT (docs/v12/LRPT.md) — reach-gated (137 MHz), never an Icom
-                                        "fctlm" };          // ★ V12 beta90 FUNcube telemetry (AO-73) — reach-gated (145.935 MHz)
+                                        "fctlm",            // ★ V12 beta90 FUNcube telemetry (AO-73) — reach-gated (145.935 MHz)
+                                        "vormap" };         // ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md) — LAST: an app before
+                                                            //   beta93 keeps only the first 40 names of this list
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
