@@ -243,6 +243,7 @@ private:
         }
     }
     void tick_(double t) {
+        for (auto it = sats_.begin(); it != sats_.end();) { if (t - it->second.last > 600) { lastEph_.erase(it->first); buckets_.erase(it->first); it = sats_.erase(it); } else ++it; }   // ★ bounded
         quietDot_(t);
         flushDots_(t);
         const int up = o_.satInRange ? o_.satInRange() : -1;

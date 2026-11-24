@@ -55,6 +55,7 @@ public:
 
     /** One good packet on carrier `chan` (received at `rfHz`, at `t` UTC). Learns from sync and ephemeris packets. */
     Answer onPacket(const Rx& r, double t) {
+        if (carriers_.size() > 64 && !carriers_.count(r.chan)) carriers_.erase(carriers_.begin());   // ★ bounded: carriers come and go
         Carrier& c = carriers_[r.chan];
         SyncInfo si;
         if (decodeSync(r.p, si)) { c.scId = si.id; c.dcn = si.channel; }

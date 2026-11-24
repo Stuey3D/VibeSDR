@@ -319,6 +319,10 @@ flags_for() {
     # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
     #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
     test-fctlm)            echo "-O2" ;;
+    # ★ V12 ORBCOMM (vibe_orbcomm.h, docs/v12/ORBCOMM.md): Kenny's published packets, the receiver on synthetic SDPSK
+    #   (offsets, Doppler slope, clock error, two carriers, noise), and a synthetic pass end to end through the run + the
+    #   sky plot's store / JSON / PNG (test-orbcomm-run). -O2: ~3 s each.
+    test-orbcomm|test-orbcomm-run) echo "-O2" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
     test-sat-cw)           echo "-O2 -I $VDSP" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
