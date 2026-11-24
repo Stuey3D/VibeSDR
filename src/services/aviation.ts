@@ -36,8 +36,12 @@ export interface AvAircraft {
 }
 /** A band the server's datalink mode steps through (hwinfo / vibeserver.json avdataBands). */
 export interface AvBand { id: string; name: string; region: string; hz: number; channels: number }
-/** {"type":"avdata", band, bandName, hz, msgs, aircraft, dropped, gain?, gainAuto?} */
+/** {"type":"avdata", band, bandName, hz, msgs, aircraft, dropped, gain?, gainAuto?, gainNote?, rateNote?}
+ *  ★ V12 2026-11-24 `gainNote`: on a radio the mode sets no gain on (the Airspy HF+) what its front end IS doing, in place
+ *    of a dB figure ("HF+ AGC · attenuator 12 dB"); `rateNote`: the capture was raised for ACARS + VDL2 (the owner's 8 MS/s
+ *    switch) and will be given back. */
 export interface AvReport { band: string; bandName: string; hz: number; msgs: number; dropped: number; aircraft: AvAircraft[]; gain?: number; gainAuto?: number;
+  gainNote?: string; rateNote?: string;
   /** ★ what the applications read: positions, OOOI events, ADS-C and CPDLC messages, and those with text no layout fitted */
   apps?: { pos: number; oooi: number; adsc: number; cpdlc: number; unparsed: number } }
 
@@ -69,7 +73,14 @@ export function parseAvReport(m: unknown): AvReport | null {
   const ap = (o.apps && typeof o.apps === 'object' ? o.apps : null) as Record<string, unknown> | null;
   const apps = ap ? { pos: num(ap.pos) ?? 0, oooi: num(ap.oooi) ?? 0, adsc: num(ap.adsc) ?? 0, cpdlc: num(ap.cpdlc) ?? 0, unparsed: num(ap.unparsed) ?? 0 } : undefined;
   return { band: str(o.band, 10) ?? '', bandName: str(o.bandName, 20) ?? '', hz: num(o.hz) ?? 0, msgs: num(o.msgs) ?? 0,
-           dropped: num(o.dropped) ?? 0, aircraft, gain: num(o.gain), gainAuto: num(o.gainAuto), apps };
+           dropped: num(o.dropped) ?? 0, aircraft, gain: num(o.gain), gainAuto: num(o.gainAuto),
+           gainNote: str(o.gainNote, 60), rateNote: str(o.rateNote, 120), apps };
+}
+/** ★ The status line's gain part — the same words on the web and in the app: " · gain 43.4 dB auto", or the radio's own
+ *  state where the mode sets no gain (" · HF+ AGC"); then " · capture raised to 8 MS/s …" while it is. */
+export function avGainText(r: AvReport): string {
+  return (r.gain != null ? ` · gain ${r.gain.toFixed(1)} dB${r.gainAuto ? ' auto' : ''}` : r.gainNote ? ` · ${r.gainNote}` : '')
+    + (r.rateNote ? ` · ${r.rateNote}` : '');
 }
 export function parseAvBands(v: unknown): AvBand[] {
   if (!Array.isArray(v)) return [];

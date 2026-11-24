@@ -1,7 +1,7 @@
 // test_aviation_app.ts — V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed
 // defensively (bounded, control characters out, bad numbers dropped), the bands list, the list line (never the body),
 // the HFDL status line. The server's own shapes are checked end to end in scripts/test-server-avdata.mjs.
-import { avAge, avAppsText, avCard, avDetail, avFix, avLine, avRoute, avTrackItems, avTrackRows, hfdlStatusText, parseAvBands, parseAvReport } from '../src/services/aviation';
+import { avAge, avAppsText, avCard, avDetail, avFix, avGainText, avLine, avRoute, avTrackItems, avTrackRows, hfdlStatusText, parseAvBands, parseAvReport } from '../src/services/aviation';
 
 let fail = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
@@ -48,5 +48,18 @@ ok(items.length === 2 && items[0].key === '3C6548' && items[0]._lb === 'LH4567' 
 ok(!avCard({ reg: '<b>x', level: 0, n: 0, age: 0, via: '<img>' }).includes('<img>'), 'the card is escaped');
 const rows = avTrackRows(apps, { lat: 51.5, lon: -0.12 });
 ok(rows.length === 4 && rows[0].sp === 'FL360' && /km$/.test(rows[0].range) && rows[1].range === 'no position' && rows[1].noPos, `map rows: ${rows.map((r) => `${r.key}:${r.sp}:${r.range}`).join(' ')}`);
+
+// ★★ V12 2026-11-24 the Airspy HF+ (no gain figure: its own AGC / attenuator named) and ACARS + VDL2 at a raised rate
+const hf = parseAvReport({ type: 'avdata', band: 'vdl2', bandName: 'VDL2', hz: 136862500, msgs: 2, dropped: 0, aircraft: [],
+  gainNote: 'HF+ AGC \u00b7 attenuator 12 dB' });
+ok(!!hf && hf.gain === undefined && avGainText(hf) === ' · HF+ AGC · attenuator 12 dB', `HF+ status: "${hf && avGainText(hf)}"`);
+ok(!!r && avGainText(r) === ' · gain 43.4 dB auto', `an RTL's status unchanged: "${r && avGainText(r)}"`);
+const wide = parseAvReport({ type: 'avdata', band: 'acars+vdl2', bandName: 'ACARS + VDL2', hz: 134250000, msgs: 0, dropped: 0, aircraft: [], gain: 30, gainAuto: 1,
+  rateNote: 'capture raised to 8 MS/s for ACARS + VDL2 \u2014 back to 2 MS/s when you leave' });
+ok(!!wide && wide.band === 'acars+vdl2' && wide.bandName === 'ACARS + VDL2', 'the combined band\'s id and name survive the parser\'s bounds');
+ok(!!wide && avGainText(wide).endsWith(' · capture raised to 8 MS/s for ACARS + VDL2 \u2014 back to 2 MS/s when you leave'), `the rate note: "${wide && avGainText(wide)}"`);
+const b3 = parseAvBands([{ id: 'acars', name: 'ACARS', region: 'x', hz: 131675000, channels: 4 }, { id: 'vdl2', name: 'VDL2', region: 'y', hz: 136862500, channels: 12 },
+                         { id: 'acars+vdl2', name: 'ACARS + VDL2', region: 'z', hz: 134250000, channels: 16 }]);
+ok(b3.length === 3 && b3[2].id === 'acars+vdl2' && b3[2].channels === 16, 'three bands: the third is the combined one');
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);

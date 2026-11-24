@@ -25,7 +25,9 @@ import BandLimitEditor, { Band } from '../components/BandLimitEditor';
  *  ★ Only what EXISTS is listed. Offering to block ADS-B before there is an ADS-B decoder would
  *    be a setting with nothing behind it — but the mechanism takes any name, so each decoder
  *    joins this list on the day it ships. Keep it in step with BLOCKABLE in vibe_setup_page.h. */
-type ModeEntry = { id: string; label: string; parent?: string; on?: boolean; node?: string; spotMode?: boolean };
+type ModeEntry = { id: string; label: string; parent?: string; on?: boolean; node?: string; spotMode?: boolean;
+  /** ★ an `on` option the radio answers for itself (radio caps), not its parent — the datalink's 8 MS/s */
+  cap?: boolean };
 /* ★★★ V12 (2026-10-31, Stuart: "all the decoders need to be able to be toggled and any options such as LoRA all or All
  *  station name scanning for DAB need to be options under the enable toggle for the main decoder itself"). The SAME list
  *  as vibe_setup_page.h BLOCKABLE — ids, parents, labels (ONE LIST, TWO READERS). A decoder's options are drawn indented
@@ -117,6 +119,9 @@ const BLOCKABLE: ModeEntry[] = [
    *  ("+" token, IN the CSV when on, off by default) with DECODER-RESEARCH.md §4.3's notice — as on the setup page. */
   { id: 'avdata', label: 'Aircraft datalink (ACARS, VDL2)' },
   { id: 'avdata+text', label: 'Aircraft datalink: show the message text (to you only)', parent: 'avdata', on: true },
+  /* ★★ V12 2026-11-24 ACARS + VDL2 together at 8 MS/s ("avdata+8m", IN the CSV when ticked) — drawn only where the radio
+   *  lists 8 MS/s (radio caps: an RSP, an Airspy R2, a HackRF, a USRP), as on the setup page. */
+  { id: 'avdata+8m', label: 'Aircraft datalink: ACARS + VDL2 together (raise the capture to 8 MS/s)', parent: 'avdata', on: true, cap: true },
   // ★★ V12 RADIOSONDES (RS41 on 400–406 MHz, a whole-radio mode) — as on the setup page
   { id: 'sondes', label: 'Radiosondes (RS41, DFM, M10, M20 weather balloons)' },
 ];
@@ -140,6 +145,10 @@ function ft8DeepAutoFrom(rows: any[]): boolean | null {
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
   + 'Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law '
   + 'where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.';
+/** ★ V12 2026-11-24 ONE TEXT, TWO READERS: vibe_setup_page.h AVDATA_8M_NOTICE. */
+const AVDATA_8M_NOTICE = 'Adds \u201cACARS + VDL2\u201d to the aircraft datalink\u2019s bands: picking it raises this radio\u2019s '
+  + 'capture to 8 MS/s so both sets of channels fit inside the flat part of its filter, and leaving gives your own rate back. '
+  + 'Without it, ACARS + VDL2 is offered only when the radio already runs at 6.1 MS/s or more. Never while you have pinned the rate.';
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h ALE_AMD_NOTICE. */
 const ALE_AMD_NOTICE = 'Off the amateur bands an ALE text message (AMD) is a private message between government, military '
   + 'or commercial stations. Only switch this on if the law where this server is allows it. The text is shown only to you, '
@@ -180,7 +189,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
 const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'loraaprs', 'meshcom', 'fanet', 'ndb', 'ais', 'aisstore', 'adsb', 'commb', 'drm', 'tone',
-  'avdata', 'avdata+text', 'sondes',
+  'avdata', 'avdata+text', 'avdata+8m', 'sondes',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
@@ -777,6 +786,20 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         notes.push(`LoRa on every channel is off — it measured ${Math.round(lall.pct)}% of a core here at its busiest thread. Switch it on to use it anyway; the default channels decode either way.`);
       }
     }
+    /* ★★ V12 2026-11-24 ACARS + VDL2 AT 8 MS/s ("avdata+8m", under the datalink) — lora+all's INVERTED rule, as
+     *  vibe_setup_page.h benchApplyDefaults: GREEN dec_avboth ticks it ON, anything else leaves it off with the figure.
+     *  Only where the radio lists 8 MS/s (the row is drawn nowhere else). Never hidden. */
+    const avb = row('dec_avboth');
+    if (avb && avb.grade !== 'none' && capsAllowMode(radioCapsNow, 'avdata+8m')) {
+      const has = new RegExp('(^|,)avdata\\+8m(,|$)').test(bm);
+      if (avb.grade === 'green') {
+        if (!has) { bm = bm ? bm + ',avdata+8m' : 'avdata+8m'; setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`ACARS + VDL2 together is on — both decoders at 8 MS/s measured ${Math.round(avb.pct)}% of a core here at their busiest thread, so it was turned on.`);
+      } else {
+        if (has) { bm = bm.split(',').filter((t: string) => t !== 'avdata+8m').join(','); setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`ACARS + VDL2 together is off — both decoders at 8 MS/s measured ${Math.round(avb.pct)}% of a core here at their busiest thread. Switch it on to use it anyway; ACARS and VDL2 each work either way.`);
+      }
+    }
     /* ★★★ EVERY OTHER DECODER (2026-10-31) — the server's defaults rule (vibe_benchmark_more.h ruleFor) says which owner
      *  switches start OFF: each one's main decoder measured below green on this device. Offered, never hidden — the
      *  switch is in BLOCKABLE and the owner can turn it back on. The same as vibe_setup_page.h benchApplyDefaults. */
@@ -1093,7 +1116,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** A row of the modes tree is drawn when this radio can run it and every row above it is drawn (the page's modeCapShown). */
   const modeCapShown = (tree: ModeEntry[], m: ModeEntry): boolean => {
     for (let x: ModeEntry | undefined = m; x; x = x.parent ? tree.find((y) => y.id === x!.parent) : undefined) {
-      if (x.node || x.on || x.spotMode) continue;
+      if (x.node || (x.on && !x.cap) || x.spotMode) continue;
       if (!capsAllowMode(radioCapsNow, x.id)) return false;
     }
     return true;
@@ -5187,6 +5210,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AVDATA_TEXT_NOTICE}</Text>
+                      </View>
+                    ) : m.id === 'avdata+8m' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AVDATA_8M_NOTICE}</Text>
                       </View>
                     ) : m.id === 'ale+amd' ? (
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
