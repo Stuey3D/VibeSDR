@@ -1282,8 +1282,10 @@ export class SpectrumClient {
     //     on the floor whenever the socket was not open, so the dial moved on screen and the radio
     //     ignored it with nothing said — the exact experience that ended in a page refresh. A ping
     //     is exempt: it is our own heartbeat and saying "connection lost" because a heartbeat could
-    //     not be sent, when the watchdog is already about to say it, is noise.
-    if (obj && (obj as { type?: string }).type !== 'ping') {
+    //     not be sent, when the watchdog is already about to say it, is noise. ★ V12 so is PRESENCE (presence / bye /
+    //     leave): what the page says about itself, never a control — a hidden tab must not wake the socket to say so.
+    const t = obj ? (obj as { type?: string }).type : undefined;
+    if (obj && t !== 'ping' && t !== 'presence' && t !== 'bye' && t !== 'leave') {
       this.cb.onStatus?.('error', 'not connected — reconnecting');
       // ★ And ASK FOR IT BACK NOW. Somebody reaching for the dial is the best possible signal that
       //   the socket is wanted; waiting out the watchdog's remaining seconds serves nobody.
