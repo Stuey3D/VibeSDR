@@ -162,6 +162,7 @@ public:
         }
         { std::lock_guard<std::mutex> lk(qm_); q_.clear(); queued_ = 0; }
         dropped_.store(0); wDropped_.store(0); wDroppedBase_ = 0; win_.store(0); gen_.store(0); sweep_.store(0); fedInWin_ = 0; hopAsked_ = false; streamPos_ = 0;
+        lastReportMs_ = -100000; streamMs_.store(0);   // ★★ 11-24: the report clock restarts with the stream (a second ON sent no report until the old count was passed)
         decGen_ = -1; decWin_ = -1;
         run_.store(true);
         th_ = std::thread([this] { vibeDecoderThread("vibe-vormap"); loop_(); });

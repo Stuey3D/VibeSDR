@@ -123,6 +123,15 @@ try {
   ok(await until(() => L.off, 4000), 'vormap_off');
   ok(await until(() => before && L.cfg && L.cfg.centerFreq === before.c && L.cfg.vfo === before.v && L.cfg.mode === before.m, 5000),
      `the receiver is back exactly as found: ${JSON.stringify(before)} → ${L.cfg && JSON.stringify({ c: L.cfg.centerFreq, v: L.cfg.vfo, m: L.cfg.mode })}`);
+  // ★★ 11-24 (Stuart, the XCover: "sweep not starting this time" — "it did have an updating status before"): the
+  //    report clock counted stream time from the FIRST entry, so after EXIT + re-entry no report was built until the new
+  //    stream caught up with the old count — the page sat at "Window 1 · 0 of 30 s · 0 heard" while the radio swept
+  L.last = null; L.off = false;
+  L.send({ type: 'vormap', on: 1 });
+  ok(await until(() => L.last && !L.last.starting && L.last.inWin >= 2, 8000),
+     `★ re-entered: the report runs again at once (inWin ${L.last && L.last.inWin}, starting ${L.last && L.last.starting})`);
+  L.send({ type: 'vormap', on: 0 });
+  ok(await until(() => L.off, 4000), 'vormap_off again');
   L.close();
 } finally {
   s.stop(); await sleep(800);

@@ -317,6 +317,7 @@ private:
             s->onCopy = [this](const vibe::ndb::Copy& cp) { onCopy(cp); };
             std::lock_guard<std::mutex> lk(m_);
             sk_ = std::move(s); sliceRate_ = rate; sliceCentre_ = centre;
+            lastReportMs_ = -100000;   // ★★ 11-24: a new skimmer's clock starts at 0 — the old count held the report back (VOR map's bug)
         }
         sk_->feedIq(x, n);
         const int64_t t = sk_->nowMs();
