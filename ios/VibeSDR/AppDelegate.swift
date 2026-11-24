@@ -61,6 +61,7 @@ class AppDelegate: ExpoAppDelegate {
 
   // Full process termination (the scene path covers swipe-close; this covers the rest).
   override func applicationWillTerminate(_ application: UIApplication) {
+    VibePowerModule.goodbyeAtTermination()   // ★ V12 PRESENCE: a quit app frees its VibeServer place now, not in 3 minutes
     VibeWatchModule.appWillTerminate()
     super.applicationWillTerminate(application)
   }

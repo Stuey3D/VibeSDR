@@ -2839,6 +2839,29 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
   }
 
+  /* ★★ V12 PRESENCE — THE GOODBYE AT TERMINATION (Stuart 2026-11-24: "i also closed down the app a minute ago but its
+   *  still holding a slot"). A VibeServer holds a session whose sockets all drop for three minutes, because a suspended
+   *  phone looks the same as a closed app. JS says `leave` when the person leaves the server screen (VibeServerWsClient
+   *  .destroy), but a QUIT — swiped from the switcher while still running (background audio), or the Mac app quitting —
+   *  never reaches JS, and in the background JS has already closed its spectrum socket anyway. So the audio pump says
+   *  it here, on the one VibeServer socket still open, and the server releases the place at once.
+   *  ★ applicationWillTerminate ONLY — never sceneDidDisconnect, which iOS also does on its own account to a running
+   *    app (see VibeWatchModule.sceneDisconnected); a goodbye there would end a session that is still listening.
+   *  ★ Bounded: waits at most 0.4 s for the frame to be handed to the network (the completion runs on wsQueue, so the
+   *    main thread waiting here cannot deadlock it). A suspended app never runs this — that is the case the hold is for.
+   *  Main thread. */
+  @objc static func goodbyeAtTermination() {
+    guard let m = shared, m.laWanted, let conn = m.laConn,
+          let data = "{\"type\":\"leave\"}".data(using: .utf8) else { return }
+    m.laWanted = false   // ★ nothing reopens it now
+    let done = DispatchSemaphore(value: 0)
+    let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+    let ctx  = NWConnection.ContentContext(identifier: "leave", metadata: [meta])
+    conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in done.signal() })
+    let sent = done.wait(timeout: .now() + 0.4) == .success
+    NSLog("[VibePowerModule] terminating — told the server we are leaving (%@)", sent ? "sent" : "timed out")
+  }
+
   /** ★ beta73: the server's own dial becomes the hello a reconnect replays — NOT sent (LocalAudioPlayer's
    *  serverDial effect). A replayed stale tune put an ISM band back on an old frequency after every background. */
   @objc func noteLocalTune(_ json: String) {
