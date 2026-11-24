@@ -2043,6 +2043,10 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
   if [ -x "$OUT/test-aprs-onair" ]; then
     VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-aprs-shared.mjs; rc=$?
     if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+    # ★★ 2026-11-24 the same rows at 960 kS/s — an Airspy HF+'s class of capture rate (the XCover's radio; docs/v12/APRS-WEAK.md)
+    printf '   (again at 960 kS/s)\n'
+    VIBE_APRS_RATE=960000 VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-aprs-shared.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   else notrun=$((notrun+1)); echo '   (test-server-aprs-shared not run — test-aprs-onair did not build)'; fi
   # ★★ V12 2026-11-10: a listener's manual gain / AUTO reaches EVERY listener's readout (hwinfo agc + gainNow)
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-gain-readout.mjs; rc=$?

@@ -587,7 +587,7 @@ int main(int argc, char** argv) {
             const Multi M = viaPipelineAll(c, iq, fs, off);
             const int f = M.pipe.frames + M.iq.frames + M.audio.frames;
             rnd += f; rndWrong += M.pipe.wrong + M.iq.wrong + M.audio.wrong;
-            std::printf("random data, CNR %4.1f dB, %d bursts of ~0.6 s: %d frames\n", cnr, RP, f);
+            std::printf("random data, CNR %4.1f dB, %d bursts of ~2.5 s of random bits: %d frames\n", cnr, RP, f);
         }
         std::printf("FALSE TOTAL noise %d, random data %d\n", frames, rnd);
         return frames || rnd ? 1 : 0;
@@ -706,6 +706,21 @@ int main(int argc, char** argv) {
                 p.stop();
                 check(got >= 2.75 * vibeaprs::Run::kTapHz, "the decoder tap with the listener on mode " + std::to_string(int(m)) + ": " + std::to_string(int(got)) + " S/s");
             }
+        }
+        std::printf("── ★★★ 2026-11-24 BELOW THE FM THRESHOLD: the IQ tone bank (docs/v12/APRS-WEAK.md) ──\n");
+        t = Cfg(); t.cnrDb = 5; t.tiltDb = 0; t.packets = 48; t.seed = 1124; r = run1(t, false);
+        check(r.iq >= 30 && r.wrong == 0, "CNR 5 dB, a flat ±3 kHz tracker: the IQ receiver ≥ 30 of 48 (" + std::to_string(r.iq) + "; the discriminators alone gave 0 here)");
+        t.tiltDb = 5; t.cnrDb = 4.5; t.seed = 1125; r = run1(t, false);
+        check(r.iq >= 20 && r.wrong == 0, "CNR 4.5 dB, pre-emphasised: ≥ 20 of 48 (" + std::to_string(r.iq) + ")");
+        {   // ★ RANDOM DATA keyed on FM (flags, then random bits where a frame would be): no frame at all
+            int f = 0, wr = 0;
+            for (double cnr : { 6.0, 12.0, 20.0 }) {
+                Cfg c; c.cnrDb = cnr; c.packets = 10; c.seed = uint64_t(cnr * 31 + 5);
+                g_randomData = true; const std::vector<cf> iq = makeIq(c, 240000, 37000); g_randomData = false;
+                const Multi M = viaPipelineAll(c, iq, 240000, 37000);
+                f += M.pipe.frames + M.iq.frames + M.audio.frames; wr += M.pipe.wrong + M.iq.wrong + M.audio.wrong;
+            }
+            check(f == 0 && wr == 0, "random data keyed on FM at 6 / 12 / 20 dB (30 bursts of ~2.5 s): " + std::to_string(f) + " frames");
         }
         {   // ★★ THE NOISE CHECK: 20 minutes of band noise straight into AUTO's IQ receiver (and 9600) — no frame at all
             vibeaprs::Run::Opts o; int frames = 0; o.json = [&](const std::string& j) { if (j.find("\"type\":\"aprs_frame\"") != std::string::npos || j.find("\"type\":\"aprs_packet\"") != std::string::npos) ++frames; };

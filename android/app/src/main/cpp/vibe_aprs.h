@@ -235,6 +235,7 @@ public:
         for (double o : offs) {
             Pair p;
             p.m.init(mark + o, fs_, L_); p.s.init(space + o, fs_, L_);
+            if (!tones) tableGram_(p, mark + o, space + o, fs_, L_);
             pairs_.push_back(std::move(p));
         }
         /* ★★ 2026-11-24 ONE-TONE SLICERS (docs/v12/APRS-WEAK.md): with the tones 9–12 dB or more apart (a pre-emphasised
@@ -322,14 +323,53 @@ private:
         std::complex<double> a2m{0, 0}, a2s{0, 0}, ap{0, 0}, ad{0, 0};
         int rp = 0, renorm = 0;
     };
-    struct Pair { Tone m, s; float mN = 0, sN = 0; Gram g; };
+    struct Pair { Tone m, s; float mN = 0, sN = 0; Gram g;
+                  std::vector<float> ginv; int P = 0, nph = 0; };   ///< ★ G⁻¹ by sample index mod P, where the tones repeat
+    /** ★ The Gram matrix depends only on WHERE the window sits (the tones' phases at its samples), never on the signal. Where
+     *  both tones repeat within P ≤ 1200 samples (1200 / 2200 Hz at 12 kS/s: P = 60; the IQ paths' 13.3 kS/s: 200) its
+     *  inverse is tabled once, and a sample costs a 4 × 4 multiply instead of a Cholesky solve. */
+    static void tableGram_(Pair& p, double fm, double fsHz, double fsr, int L) {
+        int P = 0;
+        for (int q = 1; q <= 1200 && !P; ++q) {
+            const double a = fm * q / fsr, b = fsHz * q / fsr;
+            if (std::fabs(a - std::round(a)) < 1e-7 && std::fabs(b - std::round(b)) < 1e-7) P = q;
+        }
+        if (!P) return;
+        p.P = P; p.nph = 0; p.ginv.assign(size_t(P) * 16, 0.f);
+        const double wm = 2 * M_PI * fm / fsr, ws = 2 * M_PI * fsHz / fsr, ridge = 1e-3 * L;
+        for (int n0 = 0; n0 < P; ++n0) {
+            double G[4][8] = {};
+            for (int i = 0; i < L; ++i) {
+                const double n = double(n0 - i);
+                const double f[4] = { std::cos(wm * n), std::sin(wm * n), std::cos(ws * n), std::sin(ws * n) };
+                for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) G[r][c] += f[r] * f[c];
+            }
+            for (int r = 0; r < 4; ++r) { G[r][r] += ridge; G[r][4 + r] = 1; }
+            for (int c = 0; c < 4; ++c) {   // Gauss-Jordan (SPD: no pivoting needed)
+                const double d = G[c][c];
+                for (int k = 0; k < 8; ++k) G[c][k] /= d;
+                for (int r = 0; r < 4; ++r) if (r != c) { const double m = G[r][c]; for (int k = 0; k < 8; ++k) G[r][k] -= m * G[c][k]; }
+            }
+            for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) p.ginv[size_t(n0) * 16 + size_t(r * 4 + c)] = float(G[r][4 + c]);
+        }
+    }
     /** One sample through a pair: the tones' correlators, then the least-squares amplitudes of both. */
     void pairStep_(Pair& p, float y, float& lm, float& ls) {
         const std::complex<float> um(p.m.ph), us(p.s.ph);   // e^{−jωn} at this sample (before the correlators advance)
         p.m.step(y); p.s.step(y);
         if (!sep_) { lm = float(std::abs(p.m.acc)); ls = float(std::abs(p.s.acc)); return; }
-        Gram& g = p.g;
         const int L = int(p.m.ring.size());
+        if (p.P) {
+            const float* gi = &p.ginv[size_t(p.nph) * 16];
+            if (++p.nph >= p.P) p.nph = 0;
+            const float b[4] = { float(p.m.acc.real()), float(-p.m.acc.imag()), float(p.s.acc.real()), float(-p.s.acc.imag()) };
+            float c[4];
+            for (int r = 0; r < 4; ++r) c[r] = gi[r * 4] * b[0] + gi[r * 4 + 1] * b[1] + gi[r * 4 + 2] * b[2] + gi[r * 4 + 3] * b[3];
+            const float h = 0.5f * float(L);
+            lm = std::sqrt(c[0] * c[0] + c[1] * c[1]) * h; ls = std::sqrt(c[2] * c[2] + c[3] * c[3]) * h;
+            return;
+        }
+        Gram& g = p.g;
         if (g.ring.empty()) g.ring.assign(size_t(L) * 4, { 0, 0 });
         const std::complex<float> v[4] = { um * um, us * us, um * us, um * std::conj(us) };
         std::complex<float>* r = &g.ring[size_t(g.rp) * 4];
