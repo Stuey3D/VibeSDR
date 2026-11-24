@@ -120,7 +120,11 @@ int main() {
         const double slice = std::atof(p.c_str() + p.find(':') + 1);
         ok(slice == 640000, "a band pick's slice is 640 kHz");
         ok(viewSpanHz(band) >= slice && viewSpanHz(band) <= slice + 100000, "an ORBCOMM band pick's view holds the whole slice (+ a little)");
-        ok(viewSpanHz(one) >= 40000 && viewSpanHz(one) <= 120000, "a one-channel ORBCOMM pick's view: its 40 kHz slice + margin");
+        // ★★ Stuart 11-24: EVERY ORBCOMM pick decodes the whole band — a one-channel bird too (its listing goes stale)
+        std::string p1; vibe::sat::decoderOf(one, p1);
+        ok(p1.find("\"width\":640000") != std::string::npos && p1.find("\"centre\":137500000") != std::string::npos, "a one-channel ORBCOMM pick gets the BAND slice, fixed on 137.5 MHz");
+        ok(viewSpanHz(one) >= 640000 && viewSpanHz(one) <= 740000, "…and the band's view (the slice + a little)");
+        ok(std::fabs(regionOf(one).centreHz - 137.5e6) < 1 && regionOf(one).halfHz >= 320000, "…and the IF holds the band, not the listed channel");
         // 137.800 at +3.5 kHz Doppler with its ±3.4 kHz is 137.807 MHz: inside the slice (centred 137.5) and the IF's region
         const Region rb = regionOf(band);
         ok(rb.centreHz + rb.halfHz > 137.8075e6 && rb.centreHz - rb.halfHz < 137.1925e6, "the IF region holds 137.200 and 137.800 with their width and Doppler");

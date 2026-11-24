@@ -63,9 +63,9 @@ static void s1(const std::string& dir) {
     }
     CHECK(orb == 8 && allHave && allOrb, "each has elements and an ORBCOMM downlink: decoder orbcomm, use packet (%d)", orb);
     bool fm108 = false, bandW = false;
-    for (auto& s : d) if (s.norad == 41179 && s.tx.size() == 1 && s.tx[0].hz == 137713000 && !s.tx[0].passband()) { std::string p; decoderOf(s.tx[0], p); fm108 = p.find("\"width\":40000") != std::string::npos; }
+    for (auto& s : d) if (s.norad == 41179 && s.tx.size() == 1 && s.tx[0].hz == 137713000 && !s.tx[0].passband()) { std::string p; decoderOf(s.tx[0], p); fm108 = p.find("\"width\":640000") != std::string::npos && p.find("\"centre\":137500000") != std::string::npos; }
     for (auto& s : d) if (orbcommBird(s) && s.tx.size() == 1 && s.tx[0].passband()) { std::string p; decoderOf(s.tx[0], p); bandW = p.find("\"width\":640000") != std::string::npos; }
-    CHECK(fm108, "FM108 on its own SatNOGS channel, 137.713 MHz: a 40 kHz slice");
+    CHECK(fm108, "FM108 on its own SatNOGS channel, 137.713 MHz: still the whole band's slice, fixed on 137.5 MHz (Stuart 11-24)");
     CHECK(bandW, "a band bird: a 640 kHz slice over 137.2–137.8 MHz");
     std::vector<SatDef> d2; std::vector<Elements> e2; std::vector<bool> h2; SatsMeta m2; std::string err2;
     CHECK(parseSats(js, d2, e2, h2, m2, err2) && d2.size() == d.size(), "a validator (no label set) accepts the same file");

@@ -634,6 +634,9 @@ public:
      *  offset from the prediction (vibe_cw_run.h feedIq). Atomic: set on the tracker thread, read on the DSP thread. */
     void setIqAim(double hz) { iqAim_.store(std::isfinite(hz) && hz > 0 ? hz : 0.0, std::memory_order_relaxed); }
     double iqAim() const { return iqAim_.load(std::memory_order_relaxed); }
+    /** ★★ 2026-11-24 ORBCOMM: a FIXED slice centre the decoder asked for (the band's), 0 = none. When set, the caller cuts the
+     *  slice there (clamped into its capture) and neither the dial nor the satellite lock's aim moves it. */
+    double iqFixed() const { return iqFixed_.load(std::memory_order_relaxed); }
     /** ★ Band spots wants the slice's FFT bins' power with each block (its activity gate — digi_activity.h). Cheap. */
     bool wantsBins() const { return bandIq_.load(std::memory_order_relaxed); }
     /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed().
@@ -1137,6 +1140,7 @@ private:
         rttySkim_.reset();   // ★ joins its search workers
         lrpt_.reset();
         orbcomm_.reset();
+        iqFixed_.store(0.0, std::memory_order_relaxed);
         fctlm_.reset();
         aprs_.reset();
         if (packetIq_.exchange(false)) packetIqRunning().fetch_sub(1);
@@ -1763,6 +1767,8 @@ private:
         o.widthHz = std::max(20000.0, std::min(640000.0, w));
         double mc = 0; num(msg, "max_carriers", mc);
         o.maxChans = mc >= 1 ? std::min(vibeorb::kMaxChans, (int)mc) : 0;
+        double fc = 0; num(msg, "centre", fc);
+        iqFixed_.store(fc > 1e6 ? fc : 0.0, std::memory_order_relaxed);   // ★ the band's centre: the slice stays there
         o.json = [this](const std::string& j) { broadcastText(j, -1); };
         o.text = [this](const std::string& t) { textFrame(t); };
         o.birds = [] {
@@ -2694,6 +2700,7 @@ private:
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
+    std::atomic<double> iqFixed_{0.0};        // ★★ ORBCOMM's fixed slice centre (buildOrbcommLocked_) — 0 = none
     std::atomic<double> iqAim_{0.0};          // ★★ beta92 the satellite lock's corrected frequency (setIqAim) — 0 = none
     DecoderTapPtr cwTap_;                    // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
     std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_

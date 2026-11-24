@@ -11852,6 +11852,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (const std::string b = vibe::sat::bandOf(tx); !b.empty()) m += ",\"band\":\"" + b + "\"";
             // ★★ beta93 the span the client's view opens at for this pick (vibesatif::viewSpanHz — Stuart 11-24)
             m += ",\"view\":" + vibe::sat::fmtNum(vibesatif::viewSpanHz(tx), 0);
+            // ★★ 2026-11-24 ORBCOMM: the view is centred on the BAND the decoder reads, not the listed channel the dial sits on
+            if (tx.orbcomm()) m += ",\"viewCentre\":" + vibe::sat::fmtNum(vibe::sat::orbcommBandCentreHz(tx), 0);
             if (!tx.modeName.empty()) m += ",\"modeName\":\"" + vibe::sat::jsonEsc(tx.modeName) + "\"";
             /* ★★ beta92 the decoder's attach parameters, so a page following the pick attaches EXACTLY them and JOINS the
              *  pick's run — the web page's LRPT follow sent no symbol rate, the host restarted the decoder under another key,
@@ -35621,8 +35623,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12 (2026-10-27): sized for the slice's FLAT part, cut with a sixteenth's roll-off (vibe_band_slice.h —
         //    it was sized for 4 % and cut with a quarter: 40 m's ends sat 2–3 dB down at 960 kS/s, JTTY 17 dB).
         const int b = vibe::bandSliceBins(sampleRate, fftSize, w);
+        // ★★ 2026-11-24 ORBCOMM: a FIXED centre (the band's), clamped into the capture — neither the dial nor the lock moves it
+        if (const double fx = h->iqFixed(); fx > 0) {
+            const double bh = sampleRate / (double)fftSize, hw = rtlCenter.load() + hwOffsetHz();
+            const double room = std::max(0.0, 0.5 * sampleRate * vibe::kBandFlatFrac - 0.5 * w);
+            cb = (int)std::lround((std::max(hw - room, std::min(hw + room, fx)) - hw) / bh);
+            sc.aimHz = 0;
+        }
         // ★★ beta92 a satellite lock aims the skimmer (not Band): the slice is cut near the corrected frequency, not the dial
-        if (const double aim = h->iqAim(); aim > 0 && !h->wantsBins()) {
+        else if (const double aim = h->iqAim(); aim > 0 && !h->wantsBins()) {
             const double bh = sampleRate / (double)fftSize;
             cb = (int)std::lround((vibe::skimAimCentre(sc.aimHz, aim, sampleRate * (double)b / (double)fftSize, w) - rtlCenter.load() - hwOffsetHz()) / bh);
         } else sc.aimHz = 0;
@@ -37166,7 +37175,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g.widthHz = h ? std::min(h->iqWidthHz(), sampleRate * 0.8) : 0; g.fftSize = fftSize;
         g.bins = h && h->wantsBins();   // ★ Band spots' activity gate: the slice's bins' power with each block
         // ★★ beta92 the room's satellite lock aims the skimmer: cut near the corrected frequency, re-planned seldom (skimAimCentre)
-        if (const double aim = h ? h->iqAim() : 0.0; aim > 0 && !g.bins)
+        if (const double fx = h ? h->iqFixed() : 0.0; fx > 0) {   // ★★ 2026-11-24 ORBCOMM: the band's fixed centre, clamped into the capture
+            const double room = std::max(0.0, 0.5 * sampleRate * vibe::kBandFlatFrac - 0.5 * g.widthHz);
+            g.wantCentreHz = std::max(g.hwCentreHz - room, std::min(g.hwCentreHz + room, fx));
+            skimAimShared_ = 0;
+        } else if (const double aim = h ? h->iqAim() : 0.0; aim > 0 && !g.bins)
             g.wantCentreHz = vibe::skimAimCentre(skimAimShared_, aim, sampleRate * vibe::bandSliceBins(sampleRate, fftSize, g.widthHz) / (double)fftSize, g.widthHz);
         else skimAimShared_ = 0;
         g.band = true;                  // ★ the flat-part sizing (vibe_band_slice.h) — the CW/PSK skimmers share it

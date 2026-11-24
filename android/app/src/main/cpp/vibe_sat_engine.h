@@ -347,6 +347,9 @@ constexpr double kBeaconSkimHz = 24000.0;
  *  channel's neighbours to find), and the most a band pick asks for (137.2–137.8 MHz with Doppler room). */
 constexpr double kOrbNarrowHz = 40000.0;
 constexpr double kOrbMaxSliceHz = 640000.0;
+constexpr double kOrbBandLoHz = 137.2e6, kOrbBandHiHz = 137.8e6;   ///< the channels in use (the directory's band listing)
+/** The band an ORBCOMM pick decodes: the listed band when the downlink is one, else the channels in use — its centre. */
+inline double orbcommBandCentreHz(const Transmitter& t) { return t.passband() ? t.centre() : 0.5 * (kOrbBandLoHz + kOrbBandHiHz); }
 /** ★★ beta92: half the CW passband a beacon pick listens with, centred on the prediction (so ±3 kHz is heard). */
 constexpr double kBeaconAudioHalfHz = 3000.0;
 /** ★★ beta92: a downlink whose pick runs the CW skimmer over kBeaconSkimHz (a satellite CW beacon). */
@@ -382,9 +385,13 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     /* ★★ 2026-11-24 ORBCOMM: the decoder cuts its own slice at the dial — the bird's listed channel ± Doppler
      *  (kOrbNarrowHz), or the whole listed band (the mirror's 137.2–137.8 MHz when no single channel is known) — and finds
      *  every carrier in it; the one that is this bird is named by its own position report (vibe_orbcomm_id.h). */
+    /* ★★★ 2026-11-24 (Stuart: "why is it not the full 137.2 – 137.8?"): EVERY ORBCOMM pick decodes the WHOLE band — a bird
+     *  with one listed channel too (FM110's own packets listed 137.7125 / 137.800 the night its listing said 137.290: published
+     *  channels go stale). The slice is the band + kOrbNarrowHz, FIXED on the band's centre ("centre"), never following the
+     *  dial's Doppler steps (the receiver tracks each carrier's Doppler itself; a slice that moved each second jolted the
+     *  carriers — the live FM110 pass lost lock at its highest). The listed channel only places the listening dial. */
     if (t.orbcomm()) {
-        const double w = t.passband() ? std::min(kOrbMaxSliceHz, t.hiHz - t.hz + kOrbNarrowHz) : kOrbNarrowHz;
-        params = "\"width\":" + std::to_string((int)w);
+        params = "\"width\":" + std::to_string((int)kOrbMaxSliceHz) + ",\"centre\":" + std::to_string((long long)std::llround(orbcommBandCentreHz(t)));
         return "orbcomm";
     }
     if (sstvOf(t)) return "sstv";
