@@ -111,6 +111,8 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
   ok(await ev(`(() => { const b = document.querySelector('#decodersPanel [data-dec="aprs"]'); return !!b && !b.hidden; })()`), 'the DECODERS panel offers APRS');
   await ev(`document.querySelector('#decodersPanel [data-dec="aprs"]').click()`);
   ok(await until(`document.getElementById('decTitle')?.textContent === 'APRS'`, 4000), 'the box is APRS');
+  // ★ 11-24 (Stuart: "why is there a big empty box in the aprs decoder?"): the lists ARE the box — no empty text pane above them
+  ok(await ev(`(() => { const t = document.getElementById('decText'); return t.classList.contains('off') && t.offsetHeight === 0; })()`), 'no empty text pane above the APRS lists');
   ok(await until(`document.querySelectorAll('#aprsRows .ar').length >= 4`, 40000), `stations listed: ${await ev(`[...document.querySelectorAll('#aprsRows .ar .c')].map(x => x.textContent).join(' | ')`)}`);
   ok(/See you at the club/.test(await ev(`document.getElementById('aprsMsgs')?.textContent`) || ''), 'the message is shown');
   ok(/G4ABC-9/.test(await ev(`document.getElementById('aprsLog')?.textContent`) || ''), 'the packet log');

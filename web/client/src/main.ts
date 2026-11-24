@@ -16306,7 +16306,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || listSkim || isDsc || isJtty);
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || listSkim || isDsc || isJtty || isAprs);   // ★ 11-24 APRS too: its lists are the whole box (Stuart: "why is there a big empty box in the aprs decoder?")
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
