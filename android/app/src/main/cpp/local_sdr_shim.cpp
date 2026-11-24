@@ -10134,6 +10134,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<float> bandXpw;
         double aimHz = 0;   // ★★ beta92 the centre held while the host is aimed (vibe::skimAimCentre); 0 = not aimed
     };
+    /** ★★★ beta93 VFO B'S OWN NR AND AUTO NOTCH (Stuart, 2026-11-24: "maybe needs two sets of nr/nb controls for each vfo").
+     *  VFO B had NONE: the Audio panel's one NR slider and AUTO NOTCH drove VFO A's processing (the listener's ClientDsp, or
+     *  the one pipeline), and B — its own demodulator — was heard raw whatever they said. Now each watch channel carries its
+     *  own, set by {"type":"watch","id":1,"nr":…,"nrStrength":…,"notch":…,"nbx":…} and reported per channel in the watch
+     *  state. The same engines and the same order as VFO A's (onClientAudio): notch BEFORE NR, mono, after the decoder tap.
+     *  Seeded from VFO A's at creation (B starts where A is, as its frequency does). The listener's own — never shared. */
+    struct WatchDsp : vibewatch::ChannelFx {
+        std::atomic<bool>  nrOn{false}, notchOn{false};
+        std::atomic<float> nrStrength{0.5f};
+        std::mutex m;
+        std::unique_ptr<AudioNR> nr;
+        std::unique_ptr<AutoNotch> notch;
+        bool active() const override { return nrOn.load(std::memory_order_relaxed) || notchOn.load(std::memory_order_relaxed); }
+        void process(std::vector<float>& io) override {
+            std::lock_guard<std::mutex> lk(m);
+            if (notchOn.load(std::memory_order_relaxed)) {
+                if (!notch) notch.reset(new AutoNotch());
+                notch->process(io.data(), (int)io.size());
+            }
+            if (nrOn.load(std::memory_order_relaxed)) {
+                if (!nr) nr.reset(new AudioNR());
+                nr->setStrength(nrStrength.load(std::memory_order_relaxed));
+                std::vector<float> o;
+                nr->process(io.data(), (int)io.size(), o);
+                io.swap(o);
+            }
+        }
+        /** Returns true when anything changed (the caller reports only then — no reply to an unchanged setting). */
+        bool setNr(bool on, const double* strength) {
+            bool changed = on != nrOn.load();
+            if (strength) {
+                const float st = (float)std::max(0.0, std::min(1.4, *strength));   // ★ the per-listener path's 1.4 ceiling
+                if (st != nrStrength.load()) { nrStrength.store(st); changed = true; }
+            }
+            nrOn.store(on);
+            if (!on) { std::lock_guard<std::mutex> lk(m); if (nr) nr->reset(); }
+            return changed;
+        }
+        bool setNotch(bool on) {
+            const bool changed = on != notchOn.load();
+            notchOn.store(on);
+            if (!on) { std::lock_guard<std::mutex> lk(m); if (notch) notch->reset(); }
+            return changed;
+        }
+    };
     struct WatchSet {
         std::string session;
         std::mutex m;
@@ -23186,6 +23231,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    clears a "still listening?" prompt, so answering it is simply using the radio.
             if (auto c = dspFor(sock)) { c->lastAsk = Impl::nowSecs(); c->idleAskAt = 0; }
         }
+        hwDeferFlush();   // ★★★ beta93 a debounced NR report that is due (deferHwInfo) — before this message's own answer
         // ★★ V12 VFO A/B — the listener's watch channels, on every kind of radio (handleWatch).
         if (type == "watch") { handleWatch(sock, msg); return; }
 #if defined(__linux__) && !defined(__ANDROID__)
@@ -23345,6 +23391,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             if (type == "nr") {
+                /* ★★★ REPLY ONLY TO A CHANGE (beta93, Stuart 2026-11-24 — the XCover's spectrum socket at 1 MB/s, NR sliding
+                 *     38 → 33 → 31 → 2 % on its own). Every `nr` was answered with a full hwinfo (fb78d4450, 11-11), and the web
+                 *     client RE-SENT every strength it was told (onDspState dispatched `input`, 08-10). Two in flight — a drag,
+                 *     or the reconnect's restore crossing the arrival hwinfo — then circulate for ever: each echo answered,
+                 *     each answer echoed, ~700 round trips a second on a LAN. The client no longer echoes (main.ts); this half
+                 *     means a client that does (beta68–beta92 pages, cached) cannot start the ring either: an unchanged
+                 *     value gets no answer, so the ring dies on its first lap. */
+                const bool wasOn = me->nrOn.load();
+                const float wasSt = me->nrStrength;
                 me->nrOn.store(jsonOn(msg));
                 double st;
                 if (jsonNum(msg, "strength", st)) {
@@ -23361,14 +23416,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (!me->nrOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
                                         if (me->nrEng) me->nrEng->reset(); }
-                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
+                if (me->nrOn.load() != wasOn || me->nrStrength != wasSt)
+                    deferHwInfo(sock);   // ★ AND SAY SO — a CHANGE only, once the slider stops (deferHwInfo)
                 return;
             }
             if (type == "notch") {
+                const bool was = me->notchOn.load();
                 me->notchOn.store(jsonOn(msg));
                 if (!me->notchOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
                                            if (me->notchEng) me->notchEng->reset(); }
-                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
+                if (me->notchOn.load() != was) sendHwInfo(sock);   // ★ AND SAY SO — a change only (see `nr` above)
                 return;
             }
             if (type == "deemph") {
@@ -25971,13 +26028,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "nr") {
             if (!sharedGate("noise reduction")) return;
+            // ★★★ A CHANGE ONLY is broadcast (beta93 — see the per-listener `nr` handler: the echo ring). On a shared dial
+            //     it was worse: every listener's page echoed every broadcast, so two pages doubled the ring each lap.
+            const bool wasOn = nrOn.load();
+            const float wasSt = vsDesiredNrStrength();
             LocalSdrShim::instance().setNR(jsonOn(msg));
             // ★ Same 1.4 ceiling as the per-listener path above, and for the same reason —
             //   two copies of one clamp, so they must move together or the shared radio keeps
             //   the bug the per-client path just lost.
             if (jsonNum(msg, "strength", v))
                 LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.4, v)));
-            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
+            if (nrOn.load() != wasOn || vsDesiredNrStrength() != wasSt)
+                deferHwInfo(nullptr);   // ★ AND SAY SO — shared, so everybody's; once the slider stops (deferHwInfo)
             return;
         }
         // ★★★ THE FOUR BROADCAST-FM TREATMENTS ARE PER LISTENER, and the premise that made them
@@ -26009,19 +26071,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (auto dsp = dspFor(sock)) {
                 // ★ The value is REMEMBERED on the listener, not only pushed at the pipeline it
                 //   happens to own right now — the next mode change replaces that pipeline.
+                const bool was = ((*dsp).*slot).load();
                 ((*dsp).*slot).store(on);
                 if (dsp->rx) ((*dsp->rx).*setter)(on);
                 fmNote(sock);   // ★ theirs, and "the last listener's" (vibe_fm_defaults.h)
-                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
+                if (was != on) sendHwInfo(sock);   // ★ AND SAY SO — a change only (beta93, the `nr` echo ring)
                 return;
             }
+            const bool was = shared ? shared->load() : !on;
             (rx.*setter)(on);
             if (shared) shared->store(on);
             /* ★★ AND INTO THE DESIRED RECORD, or the next fresh Impl (a reopen, a rate change) forgets it —
              *  applyDesiredDsp replays g_dsp, and this path never wrote it. */
             vsFmRecordDesired(fmSharedState());
             fmNote(sock);
-            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
+            if (was != on) LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's; a change only
         };
         /* ★ NAMED IN THE LOG, because these six were dead on a local dongle for two releases and
          *  nothing said so — the switch moved, the audio did not, and there was no way to tell
@@ -26103,8 +26167,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "notch") {
             if (!sharedGate("the notch filter")) return;
+            const bool was = notchOn.load();
             LocalSdrShim::instance().setNotch(jsonOn(msg));
-            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
+            if (notchOn.load() != was)   // ★★★ a change only (beta93 — the `nr` echo ring)
+                LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
             return;
         }
         // ★★ THE ANALYSER SWITCH, ON THE CONTROL SOCKET. The web client turns the extended
@@ -26295,6 +26361,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double m = 0;
         for (double r : advertisedRates()) if (r > m) m = r;
         return m;
+    }
+
+    /* ★★★ THE NR REPORT WAITS FOR THE SLIDER TO STOP (beta93, Stuart 2026-11-24 — the XCover's spectrum socket at 1 MB/s,
+     *     NR sliding 30 → 2 % by itself). A page from beta68–beta92 RE-SENDS every strength it is told, and this server
+     *     answered every `nr` with a full hwinfo: a drag's four values in flight went round for ever, each one a CHANGE,
+     *     so "answer a change only" alone does not stop it (measured: 3,560 laps in 5 s either way). So the answer to a
+     *     STRENGTH is debounced: sent once the `nr` messages have been quiet for kHwDeferQuietMs (at most kHwDeferMaxMs
+     *     after the first, so a long drag is still reported), and it states the LAST value — exactly what that page sent
+     *     last, so it has nothing to echo and the ring dies on its first lap. The current page never echoes (vfoDsp.ts).
+     *  ★ Flushed from the spectrum frame (watchOnFrame) and from the next control message, whichever comes first. A
+     *    socket gone in the meantime is skipped. nullptr = every spectrum peer (the shared radio's broadcast). */
+    static constexpr double kHwDeferQuietMs = 150.0, kHwDeferMaxMs = 600.0;
+    struct HwDefer { std::weak_ptr<net::Socket> sock; bool all = false; double first = 0, due = 0; };
+    std::mutex hwDeferMtx_;
+    std::vector<HwDefer> hwDefer_;
+    std::atomic<int> hwDeferN_{0};
+    void deferHwInfo(const std::shared_ptr<net::Socket>& sock) {
+        const double now = wallMs();
+        std::lock_guard<std::mutex> lk(hwDeferMtx_);
+        for (auto& d : hwDefer_) {
+            if (sock ? (!d.all && d.sock.lock() == sock) : d.all) { d.due = std::min(d.first + kHwDeferMaxMs, now + kHwDeferQuietMs); return; }
+        }
+        HwDefer d; d.sock = sock; d.all = !sock; d.first = now; d.due = now + kHwDeferQuietMs;
+        hwDefer_.push_back(d);
+        hwDeferN_.store((int)hwDefer_.size(), std::memory_order_relaxed);
+    }
+    void hwDeferFlush() {
+        if (hwDeferN_.load(std::memory_order_relaxed) <= 0) return;   // ★ the common case: one relaxed read
+        const double now = wallMs();
+        std::vector<HwDefer> go;
+        {
+            std::lock_guard<std::mutex> lk(hwDeferMtx_);
+            for (size_t i = 0; i < hwDefer_.size();) {
+                if (hwDefer_[i].due <= now) { go.push_back(hwDefer_[i]); hwDefer_.erase(hwDefer_.begin() + (long)i); }
+                else ++i;
+            }
+            hwDeferN_.store((int)hwDefer_.size(), std::memory_order_relaxed);
+        }
+        for (auto& d : go) {
+            if (d.all) LocalSdrShim::instance().broadcastHwInfo();
+            else if (auto s = d.sock.lock()) { if (s->isOpen()) sendHwInfo(s); }
+        }
     }
 
     void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
@@ -34470,11 +34578,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const auto wd = ch->wanted();
                 const auto g = ch->gate();
                 snprintf(b, sizeof b, "%s{\"id\":%d,\"freq\":%.0f,\"mode\":\"%s\",\"bw\":%.0f,\"sqlOn\":%s,\"sql\":%.1f,"
-                                      "\"open\":%s,\"since\":%.0f,\"lvl\":%.1f,\"parked\":%s,\"mute\":%s,\"shift\":%.1f}",
+                                      "\"open\":%s,\"since\":%.0f,\"lvl\":%.1f,\"parked\":%s,\"mute\":%s,\"shift\":%.1f",
                          first ? "" : ",", ch->id(), wd.hz, jsonEscape(wd.mode).c_str(), wd.bwHz, g.on ? "true" : "false",
                          (double)g.db, g.open ? "true" : "false", g.changedAt, (double)ch->levelDb(), ch->parked() ? "true" : "false",
                          ch->muted() ? "true" : "false", ch->shiftHz());   // ★★ beta92 shift: a satellite VFO B's Doppler (0 otherwise)
                 j += b; first = false;
+                // ★★★ beta93 THIS VFO's own NR / notch / blanker (WatchDsp). Their presence is what tells a client it may draw
+                //     a second set — an older server's B has none, and a B set there would be a dead control.
+                if (auto fx = std::static_pointer_cast<WatchDsp>(ch->fx())) {
+                    snprintf(b, sizeof b, ",\"nr\":%s,\"nrStrength\":%.6f,\"notch\":%s,\"nbx\":%s",
+                             fx->nrOn.load() ? "true" : "false", (double)fx->nrStrength.load(),
+                             fx->notchOn.load() ? "true" : "false", ch->nbx() ? "true" : "false");
+                    j += b;
+                }
+                j += "}";
             }
             j += "]";
         } else j += ",\"chans\":[]";
@@ -34625,12 +34742,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<vibewatch::WatchChannel> ch;
         if (w) { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == id) ch = c; }
         if (hasMute && ch) ch->setMuted(jsonOn(msg, "mute"));
+        /* ★★★ beta93 THIS VFO'S OWN NR / AUTO NOTCH / NOISE BLANKER (WatchDsp) — settings only, like mute. Only for a channel
+         *  that exists (B off = nothing to set). ★★ NO REPLY TO AN UNCHANGED SETTING: the 2026-11-24 flood was a client
+         *  re-sending every value it was told and a server answering every value it was sent (see the `nr` handler). */
+        const bool hasNr = msg.find("\"nr\":") != std::string::npos, hasNrSt = msg.find("\"nrStrength\":") != std::string::npos;
+        const bool hasNotch = msg.find("\"notch\":") != std::string::npos, hasNbx = msg.find("\"nbx\":") != std::string::npos;
+        const bool dspKeys = hasNr || hasNrSt || hasNotch || hasNbx;
+        bool dspChanged = false;
+        if (dspKeys && ch) {
+            if (auto fx = std::static_pointer_cast<WatchDsp>(ch->fx())) {
+                double st = 0;
+                const bool gotSt = hasNrSt && jsonNum(msg, "nrStrength", st) && std::isfinite(st);
+                if (hasNr || gotSt) dspChanged |= fx->setNr(hasNr ? jsonOn(msg, "nr") : fx->nrOn.load(), gotSt ? &st : nullptr);
+                if (hasNotch) dspChanged |= fx->setNotch(jsonOn(msg, "notch"));
+            }
+            if (hasNbx) { const bool on = jsonOn(msg, "nbx"); dspChanged |= on != ch->nbx(); ch->setNbx(on); }
+        }
+        const bool otherSettings = hasStereo || hasMonoOut || hasMuteA || hasMute || hasBal
+                                || msg.find("\"recA\":") != std::string::npos || msg.find("\"recB\":") != std::string::npos;
         // only the stereo switch? then that is all
         const bool aims = msg.find("\"frequency\"") != std::string::npos || msg.find("\"mode\"") != std::string::npos
                        || msg.find("\"bandwidth") != std::string::npos || msg.find("\"sql") != std::string::npos
                        || jsonOn(msg, "on");   // ★ {"on":true} = create at VFO A's frequency
         if (hasStereo && w) { std::lock_guard<std::mutex> lk(w->m); w->stereo = stereoOn; }
         if (!aims) {   // ★ settings only (stereo, monoOut, mute, balance): never creates a channel, never re-aims one
+            /* ★★★ beta93 B's NR / notch / blanker are NEVER answered message by message — the watch state's half-second beat
+             *  (watchOnFrame) carries them, with the LAST value, so a drag's values in flight can never be echoed round (the
+             *  A-side `nr` ring, measured on B too: 697 KB/s with an echoing page when each was answered). */
+            if (dspKeys && !otherSettings && ch) { (void)dspChanged; return; }
             if (!w) sendText(sock, watchStateJson(nullptr, std::string(",\"stereo\":") + (stereoOn ? "true" : "false")));
             else sendText(sock, watchStateJson(w.get()));
             return;
@@ -34712,6 +34851,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             ch = std::make_shared<vibewatch::WatchChannel>(id);
             { auto dsp = dspFor(sock); ch->setAutoBw(dsp ? dsp->autoBwOn.load() : g_autoBwPassOn.load()); }   // ★★ V12 B follows AUTO (B is never WFM's TEF auto)
+            {
+                /* ★★★ beta93 B's OWN NR / notch / blanker (WatchDsp), seeded from VFO A's — this listener's where it has its
+                 *  own pipeline, the one pipeline's otherwise. From here on each VFO's are its own. */
+                auto fx = std::make_shared<WatchDsp>();
+                auto dsp = dspFor(sock);
+                const float aSt = dsp ? dsp->nrStrength : vsDesiredNrStrength();
+                fx->nrOn.store(dsp ? dsp->nrOn.load() : nrOn.load());
+                fx->nrStrength.store(aSt >= 0.0f ? aSt : 0.5f);
+                fx->notchOn.store(dsp ? dsp->notchOn.load() : notchOn.load());
+                ch->setNbx(dsp ? dsp->nbxOn.load() : nbxOn.load());
+                // ★ …and what this very message says, so {"on":true,"nr":…} opens B already set
+                double st = 0;
+                const bool gotSt = hasNrSt && jsonNum(msg, "nrStrength", st) && std::isfinite(st);
+                if (hasNr || gotSt) fx->setNr(hasNr ? jsonOn(msg, "nr") : fx->nrOn.load(), gotSt ? &st : nullptr);
+                if (hasNotch) fx->setNotch(jsonOn(msg, "notch"));
+                if (hasNbx) ch->setNbx(jsonOn(msg, "nbx"));
+                ch->setFx(fx);
+            }
             /* ★★ DECODE ON EITHER VFO: B's audio, before the mix, to this listener's VFO B decoder host whenever one is
              *  decoding (DecoderHost::feed copies and returns — queued, never decoded on the feeding thread). Looked up per
              *  block so a host made later, or remade, is found; with nothing decoding B it is one map lookup a block. */
@@ -35081,6 +35238,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void watchOnFrame(const std::function<float(int)>& dbAt, double binHz) {
         // ★ Before the no-watch-sets return — a listener with no VFO B still needs its toggle hidden/shown (DRM, WFM, the
         //   FM broadcast band, a whole-radio mode): at once when a tune flagged it, and once a second regardless.
+        hwDeferFlush();   // ★★★ beta93 a debounced NR report whose slider has stopped (deferHwInfo)
         const double now = wallMs();
         if (watchAllowDirty_.exchange(false, std::memory_order_relaxed) || now - watchLastRecheck_ >= 1000.0) {
             watchLastRecheck_ = now;

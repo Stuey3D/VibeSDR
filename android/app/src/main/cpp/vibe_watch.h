@@ -146,6 +146,18 @@ private:
  *  (the audio tap), so they never wait for it. */
 constexpr size_t kWatchPrimeFrames = 2400;
 
+// ── ★★★ beta93 A WATCH CHANNEL'S OWN AUDIO EFFECTS (Stuart, 2026-11-24: "maybe needs two sets of nr/nb controls for each vfo")
+/** The listener's NR and auto notch for ONE VFO, after its demodulator — the shim's AudioNR / AutoNotch, which this header
+ *  does not include (it stays DSP-only, test-watch builds without the decoders). Called on the feeding thread with B's mono
+ *  48 kHz audio, AFTER the decoder tap (a decoder hears B raw, as VFO A's decoders hear A raw). `io` may come back SHORTER
+ *  or empty (NR's STFT latency) — the FIFO takes whatever it is given. */
+struct ChannelFx {
+    virtual ~ChannelFx() = default;
+    /** Anything switched on? Off = the audio goes straight to the FIFO, no copy (nothing runs for a VFO B with both off). */
+    virtual bool active() const = 0;
+    virtual void process(std::vector<float>& io) = 0;
+};
+
 // ── One watch channel ───────────────────────────────────────────────────────────────────────────────────────────────
 /** What the listener asked for. Written by the control thread through WatchChannel::want(), applied by the feeding
  *  thread at its next block — so a retune never races a feed. */
@@ -194,11 +206,20 @@ public:
         }
         if (dirty || offsetHz != lastOff_) { rx_->setTune(offsetHz, w.rxMode, w.bwHz); lastOff_ = offsetHz; }
         rx_->setAmAutoBandwidth(autoBw_.load(std::memory_order_relaxed));   // ★★ V12 an atomic store: cheap every block
+        rx_->setNoiseBlankerHf(nbx_.load(std::memory_order_relaxed));       // ★★★ beta93 B's own blanker, the same way
         rx_->feed(x, n);
     }
     /** ★★ V12 VFO B FOLLOWS ITS LISTENER'S AUTO (bandwidth): the AM family's, SSB's and CW's auto in B's own pipeline.
      *  Any thread; read by the feeding thread at its next block. */
     void setAutoBw(bool on) { autoBw_.store(on, std::memory_order_relaxed); }
+    /** ★★★ beta93 VFO B's OWN NOISE BLANKER (the audio menu's, RxPipeline::setNoiseBlankerHf) — set per VFO, read by the
+     *  feeding thread at its next block (an atomic store, as AUTO above). */
+    void setNbx(bool on) { nbx_.store(on, std::memory_order_relaxed); }
+    bool nbx() const { return nbx_.load(std::memory_order_relaxed); }
+    /** ★★★ beta93 VFO B's own NR / auto notch (ChannelFx). Set ONCE, before the channel is fed (the shim makes it with the
+     *  channel); null = none. */
+    void setFx(std::shared_ptr<ChannelFx> fx) { std::lock_guard<std::mutex> lk(fxMtx_); fx_ = std::move(fx); }
+    std::shared_ptr<ChannelFx> fx() const { std::lock_guard<std::mutex> lk(fxMtx_); return fx_; }
     /** Forget the audio queued so far (the channel was parked outside the window, or re-armed). */
     void flush() { fifo_.clear(); }
 
@@ -259,11 +280,20 @@ private:
             for (int i = 0; i < frames; i++) m[i] = 0.5f * (pcm[2 * i] + pcm[2 * i + 1]);
             mono = m.data();
         }
-        self->fifo_.push(mono, (size_t)frames);
+        // ★ The decoder tap FIRST, raw — then B's own NR / notch, then the FIFO (what the listener hears).
         if (self->hasTap_.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> lk(self->tapMtx_);
             if (self->tap_) self->tap_(mono, frames);
         }
+        std::shared_ptr<ChannelFx> fx;
+        { std::lock_guard<std::mutex> lk(self->fxMtx_); fx = self->fx_; }
+        if (fx && fx->active()) {
+            std::vector<float> io(mono, mono + frames);
+            fx->process(io);
+            if (!io.empty()) self->fifo_.push(io.data(), io.size());
+            return;
+        }
+        self->fifo_.push(mono, (size_t)frames);
     }
     const int id_;
     mutable std::mutex wantMtx_;
@@ -272,6 +302,9 @@ private:
     bool dirty_ = true;
     SquelchGate gate_;
     std::atomic<bool> open_{true}, parked_{false}, muted_{false}, hasTap_{false};
+    std::atomic<bool> nbx_{false};     // ★★★ beta93 VFO B's own noise blanker (setNbx)
+    mutable std::mutex fxMtx_;
+    std::shared_ptr<ChannelFx> fx_;    // ★★★ beta93 VFO B's own NR / auto notch (setFx)
     std::atomic<bool> autoBw_{false};  // ★★ V12 the listener's AUTO (bandwidth) — VFO B follows it (setAutoBw); OFF by default (2026-10-31)
     std::mutex tapMtx_;
     AudioTap tap_;
