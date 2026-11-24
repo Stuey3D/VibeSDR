@@ -775,7 +775,6 @@ public:
             if (labelSats_[i].have && orbcommBird(labelDefs_[i])) v.push_back({ labelDefs_[i].norad, labelDefs_[i].name, labelSats_[i].el });
         return v;
     }
-    bool observer(Observer& o) const { std::lock_guard<std::mutex> lk(m_); o = obs_; return obs_.valid; }
     /** ★ SATELLITE MODE's pick: bird `norad`'s downlink number `txIndex` (the index in sat_list's tx[]). false = no such. */
     bool txAt(long long norad, int txIndex, SatDef& sat, Transmitter& tx) const {
         std::lock_guard<std::mutex> lk(m_);
