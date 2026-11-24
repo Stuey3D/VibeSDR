@@ -6478,6 +6478,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onCwSignals: (l) => { if (!destroyed.current && b.decoder === 'cwskim') setSatBBeacon(l); },   // ★★ beta92 a beacon on B is skimmed too
     }, password, decoderAuth);
     dc.vfo = 'B';
+    dc.outlineStore = false;   // ★ V12 the live MAP OUTLINE store is VFO A's picture's
     if (b.decoder === 'aprs') dc.aprsParams = b.params as Record<string, number | string>;
     // ★★ beta92 a skimmed beacon: CW's skimmer at the server's width (the same attach — it JOINS B's run)
     if (b.decoder === 'cwskim') { dc.cwSkim = true; dc.cwWidth = typeof b.params.width === 'number' ? b.params.width : SAT_BEACON_SKIM_HZ; dc.start('cw'); }

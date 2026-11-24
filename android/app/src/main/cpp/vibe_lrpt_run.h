@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "vibe_lrpt.h"
+#include "vibe_lrpt_overlay.h"   // ★ V12 the MAP OUTLINE (docs/v12/LRPT-MAP-OVERLAY.md)
 
 namespace vibelrpt {
 
@@ -73,7 +74,16 @@ public:
         /** ★★ beta92 what the radio's gain was over the pass (the satellite gain hold's note: "Airspy linearity preset 12
          *  (held, 0 clip cuts)", "RTL-SDR 32.8 dB (held …)", or why a radio has none) — for the per-pass summary. */
         std::function<std::string()> gainNote;
+        /** ★★ V12 THE MAP OUTLINE (vibe_lrpt_overlay.h, docs/v12/LRPT-MAP-OVERLAY.md). `geoCandidates`: the METEORs it may
+         *  be (the satellite engine's pick first, marked; else every METEOR with LRPT and elements) — null = no outline is
+         *  attempted (tests, a developer replay without orbits). `geoObserver`: this server's place (false = not set).
+         *  `nowUnix`: OUR UTC clock (the server's corrected clock); null = the system clock. */
+        std::function<std::vector<geo::Candidate>()> geoCandidates;
+        std::function<bool(vibe::sat::Observer&)> geoObserver;
+        std::function<double()> nowUnix;
     };
+    /** ★ The live preview's outline is recomputed at most this often while the picture grows. */
+    static constexpr double kLiveGeoSec = 20.0;
     explicit Run(Opts o) : o_(std::move(o)) {}
 
     /* ★★ A DEVELOPER'S CAPTURE, NOT A FEATURE (Stuart 2026-11-21: "no point adding a recorder for users but for you to use
@@ -132,7 +142,11 @@ public:
         rx_->feedIq(reinterpret_cast<const float*>(iq), size_t(n));
         fedSec_ += n / rate;
         // ── progressive preview: every new strip that has landed ──
-        if (rx_->version() != seenVersion_) { seenVersion_ = rx_->version(); lastFrameSec_ = fedSec_; }
+        if (rx_->version() != seenVersion_) {
+            seenVersion_ = rx_->version(); lastFrameSec_ = fedSec_;
+            // ★ the overlay's clock check: OUR time when the newest stamp arrived (vibe_lrpt_overlay.h checkClock)
+            wallStamp_ = rx_->lastStampMs(); wallAt_ = now();
+        }
         // ★ at most once a second: the version moves with every packet, and each preview resends its last strips
         if (seenVersion_ != previewVersion_ && fedSec_ - lastPreview_ >= 1.0) { previewVersion_ = seenVersion_; lastPreview_ = fedSec_; preview(); }
         if (fedSec_ - lastStatus_ >= 1.0) { lastStatus_ = fedSec_; status(""); }
@@ -256,6 +270,7 @@ private:
         rx_ = std::make_unique<Receiver>(c);
         if (o_.made) o_.made(*rx_);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
+        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0;
         lastSignalSec_ = fedSec_; snrAcc_ = 0; snrN_ = 0;
         if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
                            + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
@@ -265,8 +280,39 @@ private:
         preview(true);
         if (sentRows_ > 0 && o_.frame) { std::vector<uint8_t> m{ 0x05, 0, 0, 0, 0 }; o_.frame(m.data(), m.size()); }
         auto pics = renderPictures(*rx_);
+        if (!pics.empty() && o_.geoCandidates) {
+            int s0, s1; rx_->stripRange(s0, s1);
+            const geo::Overlay ov = overlay(s0, s1, 1.0);
+            for (auto& p : pics) { if (ov.ok) p.geoJson = ov.json; else p.geoWhy = ov.why; }
+            if (o_.log) o_.log(ov.ok ? "lrpt: map outline made (" + std::to_string(ov.points) + " points)" : "lrpt: no map outline \xe2\x80\x94 " + ov.why);
+        }
         if (!pics.empty() && o_.pictures) o_.pictures(pics, partial);
         havePictures_ = false;
+    }
+    double now() const {
+        if (o_.nowUnix) return o_.nowUnix();
+        return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+    /** The outline for strips [s0, s1) — the full picture (scale 1) or the live preview (a quarter). */
+    geo::Overlay overlay(int s0, int s1, double scale) const {
+        std::vector<int32_t> ms;
+        for (int s = s0; s < s1; s++) ms.push_back(rx_->stripTimeMs(s));
+        std::vector<geo::Candidate> cs = o_.geoCandidates ? o_.geoCandidates() : std::vector<geo::Candidate>{};
+        vibe::sat::Observer ob; const bool haveObs = o_.geoObserver && o_.geoObserver(ob) && ob.valid;
+        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale);
+    }
+    /** ★★ THE LIVE OUTLINE: {"type":"lrpt_geo","data":{…}} in the PREVIEW's coordinates (a quarter size, from the
+     *  preview's first strip), every kLiveGeoSec while the picture grows — the clients draw it over the growing picture
+     *  when the viewer's MAP OUTLINE toggle is on. A pass whose checks fail sends {"why":"…"} once. */
+    void liveGeo() {
+        if (!o_.geoCandidates || !o_.json || !previewOpen_ || sentRows_ <= 0) return;
+        if (fedSec_ - lastGeoSec_ < kLiveGeoSec && lastGeoSec_ >= 0) return;
+        const int strips = (sentRows_ + kPreviewRowsPerStrip - 1) / kPreviewRowsPerStrip;
+        if (strips == geoStrips_) return;
+        lastGeoSec_ = fedSec_; geoStrips_ = strips;
+        const geo::Overlay ov = overlay(previewS0_, previewS0_ + strips, double(kPreviewW) / kLineWidth);
+        std::string esc; for (char c : ov.why) { if (c == '"' || c == '\\') esc += '\\'; esc += c; }
+        o_.json(std::string("{\"type\":\"lrpt_geo\",\"data\":") + (ov.ok ? ov.json : "{\"why\":\"" + esc + "\"}") + "}");
     }
     static void put32(std::vector<uint8_t>& m, uint32_t v) { m.push_back(uint8_t(v >> 24)); m.push_back(uint8_t(v >> 16)); m.push_back(uint8_t(v >> 8)); m.push_back(uint8_t(v)); }
     /** ★★ THE PREVIEW: a QUARTER-SIZE picture (392 px, two rows a strip), each row sent ONCE, in order, a strip only once
@@ -313,6 +359,7 @@ private:
             o_.frame(m.data(), m.size());
             sentRows_ = y + 1;
         }
+        liveGeo();
     }
     void status(const std::string& why) {
         // ★ the second's average of the demodulator's Es/N0 → (S+N)/N in dB: what the waterfall shows over its floor at
@@ -347,6 +394,7 @@ private:
     double lastPreview_ = -1;
     bool havePictures_ = false, previewOpen_ = false, done_ = false, rateWarned_ = false;
     int sentRows_ = 0, previewS0_ = 0;
+    double wallAt_ = 0, lastGeoSec_ = -1; int32_t wallStamp_ = -1; int geoStrips_ = 0;   // ★ the map outline
 };
 
 } // namespace vibelrpt

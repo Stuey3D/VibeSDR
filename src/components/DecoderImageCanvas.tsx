@@ -27,8 +27,9 @@ import { File, Paths } from 'expo-file-system';
 import { WEFAX_ALIGN_ZERO, chartAlignStep, drawnAlign, wefaxOffset, type ChartAlignState, type WefaxAlign, type WefaxFormat } from '../utils/wefaxAlign';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../utils/wefaxCrisp';
 import { HELL_STRIP_ROWS, HellPager } from '../services/feldHell';   // ★ V12 FELD HELL: a page of strips
+import { OUTLINE_INK, type Outline } from '../utils/lrptOutline';   // ★ V12 METEOR LRPT's MAP OUTLINE on the live picture
 import {
-  Canvas, Image as SkiaImage, Skia,
+  Canvas, Image as SkiaImage, Path as SkiaPath, Skia,
   AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
 } from '@shopify/react-native-skia';
 
@@ -140,6 +141,9 @@ export interface DecoderImageCanvasProps {
   raw?: boolean;
   /** ★ A new chart has started on this canvas (the line count went back) — RAW and a manual shift are per chart. */
   onNewChart?: () => void;
+  /** ★ V12 METEOR LRPT: the live picture's MAP OUTLINE (src/utils/lrptOutline.ts) in the picture's own pixels — drawn over
+   *  it when given (the caller passes it only with the viewer's switch ON); never over PREV (another picture). */
+  outline?: Outline | null;
 }
 
 /** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
@@ -199,7 +203,7 @@ function mkBuf(w: number, h: number): PixBuf {
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, fullWidth = false, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
                                autoMargin = false, autoSlant = true, stationSlant = 0, stationFormat, onAutoAlign,
-                               alignPreview, onAlignDrag, raw = false, onNewChart }, ref) {
+                               alignPreview, onAlignDrag, raw = false, onNewChart, outline = null }, ref) {
     const rawRef = useRef(raw);
     rawRef.current = raw;
     // ★ beta92 fullWidth: the outer scroller, and whether it is at the foot (then each new strip keeps the newest in view)
@@ -649,6 +653,17 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       });
     }, []);
     // The shift as the listener reads it: px, signed, the short way round (−904…+904 on a 1809 px chart).
+    // ★ V12 the MAP OUTLINE as Skia paths at the drawn scale (rebuilt only when the outline or the scale changes)
+    const olPaths = useMemo(() => {
+      if (!outline || viewingPrev) return null;
+      const mk = (ls: number[][]) => {
+        if (!ls.length) return null;
+        const p = Skia.Path.Make();
+        for (const l of ls) { p.moveTo(l[0] * scale, l[1] * scale); for (let i = 2; i + 1 < l.length; i += 2) p.lineTo(l[i] * scale, l[i + 1] * scale); }
+        return p;
+      };
+      return { coast: mk(outline.lines.coast), lake: mk(outline.lines.lake), border: mk(outline.lines.border), grid: mk(outline.lines.grid) };
+    }, [outline, scale, viewingPrev]);
     const hintShift = W0 > 1 ? ((((shown % W0) + W0 + W0 / 2) % W0) - W0 / 2) : shown;
     const alignHint = `SHIFT ${hintShift > 0 ? '+' : ''}${Math.round(hintShift)}`;
     // ★ Room for the hint on a chart only a few lines tall (it is fitted whole, so early on it is a sliver).
@@ -676,8 +691,15 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
                 {slidePx > 0 && (
                   <SkiaImage image={img} x={(W0 - slidePx) * scale} y={0} width={drawW} height={drawH} fit="fill" />
                 )}
+                {olPaths?.grid && <SkiaPath path={olPaths.grid} style="stroke" strokeWidth={1} color={OUTLINE_INK.grid} />}
+                {olPaths?.border && <SkiaPath path={olPaths.border} style="stroke" strokeWidth={1.2} color={OUTLINE_INK.border} />}
+                {olPaths?.lake && <SkiaPath path={olPaths.lake} style="stroke" strokeWidth={1.2} color={OUTLINE_INK.lake} />}
+                {olPaths?.coast && <SkiaPath path={olPaths.coast} style="stroke" strokeWidth={1.4} color={OUTLINE_INK.coast} />}
               </Canvas>
             )}
+            {!!olPaths && outline!.labels.map((l, i) => (
+              <Text key={i} pointerEvents="none" style={[styles.olLabel, { left: l.x * scale + 3, top: l.y * scale + 2 }]}>{l.text}</Text>
+            ))}
           </View>
         </ScrollView>
       </ScrollView>
@@ -696,6 +718,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
 
 const styles = StyleSheet.create({
   canvasWrap: { backgroundColor: '#000', borderRadius: 4, overflow: 'hidden' },
+  // ★ V12 the MAP OUTLINE's grid labels (OUTLINE_INK.grid on a dark edge, so they read on cloud and sea)
+  olLabel: { position: 'absolute', color: '#96CDFF', fontSize: 10, textShadowColor: 'rgba(0,0,0,0.9)', textShadowRadius: 2, textShadowOffset: { width: 0, height: 0 } },
   /* ★ ALIGN's cover: the whole picture is the drag target; the hint sits on the chart in a dark pill so it reads on
    *  white paper and black alike, on every chassis (the picture is the same black-and-white whatever the skin). */
   alignCover: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 8 },

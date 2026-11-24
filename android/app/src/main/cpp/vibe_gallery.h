@@ -170,6 +170,10 @@ struct Meta {
     /** ★ V12 2026-11-22: the STATION a picture came from ("Northwood GYA 4610.0 kHz" — a WEFAX-stations VFO's channel),
      *  put in its title by the picture tap. Not written to the index on its own. Empty = none. */
     std::string station;
+    /** ★ V12 2026-11-24 METEOR LRPT's MAP OUTLINE (vibe_lrpt_overlay.h): the name of the pass's outline item (kind
+     *  "lrptgeo", JSON — the clients draw it over this picture when their MAP OUTLINE toggle is on) as "geo", or why the
+     *  pass has none as "gw" (a caption line). Both empty = not attempted (an older build's picture: plain). */
+    std::string geo, geoWhy;
 };
 /** What a download name may hold (Meta::dlName). Anything else is dropped. */
 inline std::string downloadSafe(const std::string& s) {
@@ -921,6 +925,8 @@ private:
             + (m.slot.empty() ? std::string() : ",\"s\":\"" + jsonEsc(m.slot) + "\"")
             + (m.dlName.empty() ? std::string() : ",\"dn\":\"" + jsonEsc(downloadSafe(m.dlName)) + "\"")
             + pinText(m) + (m.level >= 0 ? ",\"lv\":" + std::to_string(m.level) : std::string())
+            + (m.geo.empty() ? std::string() : ",\"geo\":\"" + jsonEsc(m.geo) + "\"")
+            + (m.geoWhy.empty() ? std::string() : ",\"gw\":\"" + jsonEsc(printable(m.geoWhy, 160)) + "\"")
             + [&ri] { const std::string r = vibe::logradio::joinIds(vibe::logradio::splitIds(ri)); return r.empty() ? std::string() : ",\"ri\":\"" + r + "\""; }()
             + (re ? ",\"re\":" + std::to_string(re) : std::string()) + "}\n";
         return l;

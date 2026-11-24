@@ -26,6 +26,8 @@ import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
+import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
 import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
@@ -207,6 +209,7 @@ export function SatRemindBanner({ toasts, nowSec, picked, pickedName, top, onLis
 
 export default function SatellitePanel(p: SatellitePanelProps) {
   const s = useDecoderStyles(makeStyles);
+  const lrptOl = useLrptOutline();   // ★ V12 the live METEOR picture's map outline + the viewer's switch
   const tk = useDecoderTokens();
   const { height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -369,8 +372,16 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                    not lost before the box grows), shown only BIG */}
               {confirmed && imageDec && (
                 <View style={showPic && showA ? s.img : s.hidden}>
+                  {/* ★ V12 METEOR LRPT: MAP OUTLINE: OFF / ON over the live picture — once the server has sent one */}
+                  {p.picked!.decoder === 'lrpt' && !!lrptOl.outline && (
+                    <View style={s.olRow}>
+                      <DecoderKey label={outlineKeyLabel(lrptOl.on)} active={lrptOl.on} onPress={lrptOl.toggle}
+                                  accessibilityLabel={outlineKeyA11y(lrptOl.on)} />
+                    </View>
+                  )}
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))} fullWidth
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
+                    outline={p.picked!.decoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>
               )}
@@ -501,6 +512,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   coast:   { opacity: 0.6 },
   big:     { fontFamily: F, fontSize: 18, color: T.value, fontVariant: ['tabular-nums'], ...engraveStyle(T) },
   img:     { marginTop: 4 },
+  olRow:   { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 4 },
   hidden:  { display: 'none' },
   pk:      { gap: 2, marginTop: 2 },
   // ★★★ beta92 the line switch: a line is a key only while both have a decoder view; the one shown is lit

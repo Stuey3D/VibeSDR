@@ -10,6 +10,9 @@ import { dabOnlyFrom } from './dabOnly';
 import { onlyModeFrom, onlyModeNote, onlyModeWhy } from './onlyMode';   // ★★ V12 the only mode — any whole-radio mode (the app reads the same)   // ★★ V12 DAB only — the rule (the app's src/services/dabOnly.ts reads the same)
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
+// ★ V12 METEOR LRPT's MAP OUTLINE (the rule: src/utils/lrptOutline.ts; the drawing: lrptOutlineDom.ts)
+import { parseOutline, parseLiveOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl, type Outline } from '../../../src/utils/lrptOutline';
+import { drawOutline, outlineOn, setOutlineOn } from './lrptOutlineDom';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
 import { initMenuCats, revealServerUnlock } from './menuCats';
@@ -14885,6 +14888,12 @@ function initDecoders(host: string, auth: AuthState) {
       if (satDec === 'lrpt') satPanel?.status(decStateText);   // ★★★ SATELLITE: the LRPT line in the window
       setDecLive(!!st && (st.sync || st.lines > 0));
     },
+    onLrptGeo: (d) => {   // ★ V12 METEOR LRPT: the live picture's map outline (or why there is none), every ~20 s
+      if (activeDec !== 'lrpt') return;
+      const g = parseLiveOutline(d);
+      decOutline = g.outline; decOutlineWhy = g.why;
+      decOutlinePaint();
+    },
     onHfdlStatus: (d) => {   // ★ V12 HFDL: the messages and bursts heard on this dial
       if (activeDec !== 'hfdl') return;
       decStateText = hfdlStatusText(d); $('decStatus').textContent = decStateText;
@@ -17411,7 +17420,43 @@ function clearDecImage(why?: string) {
   $('decStatus').textContent = why ?? 'cleared — the last picture is under PREV';
 }
 
+/* ★★ V12 METEOR LRPT's MAP OUTLINE over the LIVE picture (docs/v12/LRPT-MAP-OVERLAY.md): the server sends the outline
+ *  for the quarter-size preview as it grows ({"type":"lrpt_geo"}); with the viewer's MAP OUTLINE switch ON (remembered in
+ *  this browser, OFF until switched) it is drawn as an SVG on the canvas's own box — the same switch as the gallery's. No
+ *  switch until there is an outline; PREV (another picture) hides it. The switch and the SVG live in #decImgWrap, so the
+ *  SATELLITE box, which borrows that wrapper, shows them too. */
+let decOutline: Outline | null = null;
+let decOutlineWhy = '';
+function decOutlineReset() { decOutline = null; decOutlineWhy = ''; decOutlinePaint(); }
+function decOutlinePaint() {
+  const bar = $('decOutlineBar'), key = $('decOutline') as HTMLButtonElement, svg = $('decGeo') as unknown as SVGSVGElement;
+  const c = $<HTMLCanvasElement>('decImage');
+  const has = activeDec === 'lrpt' && !!decOutline;
+  bar.hidden = !has;
+  if (decOutlineWhy && activeDec === 'lrpt') key.title = outlineWhyLine(decOutlineWhy);
+  if (!has) { svg.setAttribute('hidden', ''); return; }
+  const on = outlineOn();
+  key.textContent = outlineKeyLabel(on); key.setAttribute('aria-pressed', on ? 'true' : 'false');
+  key.setAttribute('aria-label', outlineKeyA11y(on)); key.classList.toggle('on', on);
+  if (!on || decViewingPrev || !c.classList.contains('on') || !c.width) { svg.setAttribute('hidden', ''); return; }
+  // the canvas's box inside the wrapper; the picture is drawn in it with object-fit: contain (xMidYMid meet)
+  svg.style.left = `${c.offsetLeft}px`; svg.style.top = `${c.offsetTop}px`;
+  svg.style.width = `${c.offsetWidth}px`; svg.style.height = `${c.offsetHeight}px`;
+  const scale = Math.min(c.offsetWidth / c.width, c.offsetHeight / Math.max(1, c.height));
+  drawOutline(svg, decOutline!, decOutline!.w * scale);
+  svg.setAttribute('viewBox', `0 0 ${c.width} ${c.height}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.removeAttribute('hidden');
+}
+let decOutlineObs = false;
+function decOutlineWatch() {
+  if (decOutlineObs || typeof ResizeObserver === 'undefined') return;
+  decOutlineObs = true;
+  new ResizeObserver(() => { if (decOutline) decOutlinePaint(); }).observe($('decImage'));
+}
+
 function startDecImage(w: number, h: number) {
+  decOutlineReset();   // ★ a new picture: the last one's outline does not belong to it
   // A new transmission is starting. If the live image was COMPLETED, bank it as PREV so it isn't lost
   // before the user saves it. An incomplete live image (partial, we retuned) is just replaced.
   // ★★ …or any image with lines in it (Stuart, 2026-10-04): a partial SSTV frame or a chart joined late is
@@ -17753,6 +17798,7 @@ function toggleDecPrev() {
   else $('decAlign').style.display = '';
   blitToVisible(decViewingPrev ? decPrevCv : decLiveCv);
   updateDecImageButtons();
+  decOutlinePaint();
 }
 
 /** Save the currently-shown image to a PNG download (share sheet where available). */
@@ -19133,7 +19179,9 @@ interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; 
                         /** ★ V12 DSC: 3 distress · 2 urgency · 1 safety; and the position the item is about, for MAP. */
                         lv?: number; plat?: number; plon?: number;
                         /** ★ V12 beta92 the radio(s) that heard it ("a1b2c3d4[,…]"; absent = unknown — vibe_log_radio.h). */
-                        ri?: string }
+                        ri?: string;
+                        /** ★ V12 METEOR LRPT: the pass's map outline item, or why it has none (lrptOutline.ts outlineOfItem). */
+                        geo?: string; gw?: string }
 let galKind = '';
 /** ★ beta92 the gallery kinds that show this server's PSK Reporter / WSPR ranking card (ALL + the spot kinds). */
 const RANK_KINDS = ['', 'ft8', 'cw', 'psk'];
@@ -19272,7 +19320,8 @@ async function renderGallery(page = galPage) {
       if (galPages > 1 && r.status !== 404) renderGalleryPager(galPages);   // ★ a failed page keeps the pager (retry / go back)
       return;
     }
-    const items = j.items || [];
+    // ★ V12 a METEOR pass's map outline is data for its pictures, never a row of its own (lrptOutline.ts)
+    const items = (j.items || []).filter((it) => !isOutlineItem(it));
     // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
     const chip = galKind ? $('galFilter').querySelector(`[data-kind="${galKind}"]`) : null;
     note.textContent = j.enabled === false ? 'This server keeps no gallery.'
@@ -19500,6 +19549,7 @@ async function openGalleryItem(it: GalleryItem) {
   galTrReset();
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
+  galOutlineSetup(it, url);
   if (/\.(png|jpg)$/i.test(it.f)) {   // ★ V12 balloons: SSDV pictures are JPEGs
     $('galText').hidden = true; img.hidden = false; img.src = url;
     galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
@@ -19515,6 +19565,49 @@ async function openGalleryItem(it: GalleryItem) {
     if (r.ok && it.k === 'fctlm' && /\.csv$/i.test(it.f) && galShowTlm(it, body)) return;   // ★★ beta91 charts, not a CSV wall
     if (r.ok) void galTranslateSetup(it, body);
   } catch { $('galText').textContent = 'Could not reach the server.'; }
+}
+
+/* ★★ V12 METEOR LRPT's MAP OUTLINE in the gallery viewer (docs/v12/LRPT-MAP-OVERLAY.md). The picture stays the saved
+ *  plain PNG; the outline (its own small item, named by the picture's "geo") is an SVG over it, shown when the viewer's
+ *  MAP OUTLINE switch is ON (remembered in this browser; OFF until switched — OUTLINE_DEFAULT_ON). DOWNLOAD follows the
+ *  switch: ON = the server's copy with the outline burnt in (?outline=1). No key without an outline; a pass that failed
+ *  its checks says why ("gw"); a picture from before this feature shows nothing extra. */
+let galOutlineSeq = 0;
+let galOutlineNow: Outline | null = null;
+let galOutlineUrl = '';
+function galOutlineSetup(it: GalleryItem, url: string) {
+  const seq = ++galOutlineSeq;
+  const key = $('galOutline') as HTMLButtonElement, svg = $('galGeo') as unknown as SVGSVGElement, why = $('galOutlineWhy');
+  galOutlineNow = null; galOutlineUrl = url;
+  key.hidden = true; svg.setAttribute('hidden', ''); why.hidden = true; why.textContent = '';
+  const isPic = /\.png$/i.test(it.f);
+  const oi = isPic ? outlineOfItem(it) : { geo: '', why: '' };
+  if (oi.why && !oi.geo) { why.textContent = outlineWhyLine(oi.why); why.hidden = false; }
+  if (!oi.geo) return;
+  void fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(oi.geo)}`), { cache: 'no-store' })
+    .then((r) => (r.ok ? r.text() : null)).then((t) => {
+      if (seq !== galOutlineSeq || !t) return;
+      const o = parseOutline(t);
+      if (!o) return;
+      galOutlineNow = o;
+      key.hidden = false;
+      galOutlinePaint();
+    }).catch(() => {});
+}
+function galOutlinePaint() {
+  const key = $('galOutline') as HTMLButtonElement, svg = $('galGeo') as unknown as SVGSVGElement, img = $('galImg') as HTMLImageElement;
+  const on = outlineOn();
+  key.textContent = outlineKeyLabel(on); key.setAttribute('aria-pressed', on ? 'true' : 'false');
+  key.setAttribute('aria-label', outlineKeyA11y(on)); key.classList.toggle('on', on);
+  ($('galDl') as HTMLAnchorElement).href = outlineDownloadUrl(galOutlineUrl, on, !!galOutlineNow);
+  if (!galOutlineNow || !on) { svg.setAttribute('hidden', ''); return; }
+  const draw = () => { if (galOutlineNow) drawOutline(svg, galOutlineNow, img.clientWidth); svg.removeAttribute('hidden'); };
+  if (img.complete && img.clientWidth) draw(); else img.addEventListener('load', draw, { once: true });
+}
+function galOutlineToggle() {
+  if (!galOutlineNow) return;
+  setOutlineOn(!outlineOn());
+  galOutlinePaint();
 }
 
 /* ★★ V12 TRANSLATE in the gallery viewer (2026-10-23) — the BROWSER's own on-device Translator and LanguageDetector
@@ -19591,6 +19684,9 @@ function initGallery() {
   $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) { galPage = 1; void renderGallery(1); } };
   $('galClose').onclick = () => $('galleryPanel').classList.remove('open');
   $('galBack').onclick = () => { galTrReset(); galleryBack(); };
+  $('galOutline').onclick = () => galOutlineToggle();   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+  $('decOutline').onclick = () => { setOutlineOn(!outlineOn()); decOutlinePaint(); };   // ★ …and the live picture's (the same choice)
+  decOutlineWatch();
   for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       galKind = b.dataset.kind || '';

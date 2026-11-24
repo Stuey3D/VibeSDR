@@ -183,6 +183,7 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
+#include "vibe_lrpt_burn.h"         // ★ V12 METEOR LRPT: a picture with its map outline burnt in (?outline=1)
 #include "vibe_bgdecode_ndb.h"      // ★★ V12: …its NDB skimmer VFO (the listener's NDB service, fed the runner's slice)
 #include "vibe_skim_bands.h"        // ★★ V12 beta90: the skimmers' per-band windows (CW / RTTY / PSK, per IARU region)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
@@ -29741,10 +29742,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 ::close(fd);
             } else { reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
             const std::string& name = itemName;
+            /* ★★ V12 2026-11-24 METEOR LRPT: ?outline=1 on a picture whose pass has a map outline ("geo") = the picture
+             *  with the outline BURNT IN, made now (vibe_lrpt_burn.h) — what DOWNLOAD gives a viewer whose MAP OUTLINE
+             *  toggle is on. The saved PNG is never changed; a picture with no outline is served plain. */
+            bool outlined = false;
+            if (qv("outline") == "1" && name.size() > 4 && name.compare(name.size() - 4, 4, ".png") == 0) {
+                const std::string geo = g.field(name, "geo");
+                std::string gj;
+                if (!geo.empty() && g.readItem(geo, gj, 4u << 20)) {
+                    std::string err;
+                    std::string burnt = vibelrpt::burn::withOutline(body, gj, err);
+                    if (!burnt.empty()) { body.swap(burnt); outlined = true; }
+                    else std::fprintf(stderr, "[gallery] outline for %s not drawn: %s\n", name.c_str(), err.c_str());
+                }
+            }
             // ★ V12 2026-10-25: an item may carry its own download name ("ISM 433.92 2026-10-25.txt", Meta::dlName) —
             //   only letters, digits, spaces and . - _ ( ) (downloadSafe, again here), so the header cannot be broken.
             std::string dn = vibe::gallery::downloadSafe(g.field(name, "dn"));
             if (dn.empty()) dn = name;
+            if (outlined) { const size_t dot = dn.rfind('.'); dn = vibe::gallery::downloadSafe((dot == std::string::npos ? dn : dn.substr(0, dot)) + " map outline.png"); }
             reply("200 OK", ctype.c_str(), body, qv("download") == "1"
                   ? "Content-Disposition: attachment; filename=\"" + dn + "\"\r\n" : "Content-Disposition: inline\r\n");
             return;
