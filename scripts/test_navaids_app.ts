@@ -4,7 +4,7 @@
 // Run: npx tsx scripts/test_navaids_app.ts
 import { readFileSync } from 'node:fs';
 import { VOR_HINT, SARSAT_HINT, SARSAT_NOTE, vorSanitise, vorStateText, vorReadout, ilsWords, radialLine, radialFix, navCardSvg,
-         sarsatSanitise, sarsatStateText } from '../src/services/navaids';
+         vorHold, VOR_HOLD_SEC, type VorHoldState, sarsatSanitise, sarsatStateText } from '../src/services/navaids';
 import { bandsOfDecoder, decoderNear } from '../src/utils/decoderBands';
 import { modeIconFor } from '../src/utils/modeIcons';
 
@@ -90,6 +90,22 @@ ok(/id: "sarsat", label: "406 MHz distress beacons \(COSPAS-SARSAT\)"/.test(setu
 const about = readFileSync('src/components/AboutOverlay.tsx', 'utf8'), tut = readFileSync('web/client/src/tutorial.ts', 'utf8');
 ok(/VOR, ILS AND 406 MHz BEACONS/.test(about) && /under Aviation, on the VHF and UHF tabs/.test(about) && /under Maritime, on the UHF tab/.test(about), 'About: where both keys are');
 ok(/VHF '\s*\+ 'and UHF tabs VOR \/ ILS/.test(tut) && /406 BEACONS/.test(tut), 'web tutorial: both');
+
+// ── V12 11-24 the hold (Stuart: "the compass doesnt stay on the screen long enough") ──
+{
+  const h: VorHoldState = { good: null, at: 0 };
+  const gap = vorSanitise({ chan: '113.60', expect: 'vor', kind: 'none', rate: 37500, secs: 13, ident: 'LON', reading: 'LO' })!;
+  ok(vorHold(h, v, 1000) === v, 'a fresh reading is shown as it is');
+  const held = vorHold(h, gap, 6000)!;
+  ok(held.kind === 'vor' && held.radial === 247.5 && held.heldSecs === 5, 'a second without a reading: the last one held, 5 s old');
+  ok(/opacity="\.55"/.test(navCardSvg(held)) && /last reading 5 s ago/.test(navCardSvg(held)), '…drawn dimmed, with its age');
+  ok(!/opacity/.test(navCardSvg(v)), 'a fresh reading is not dimmed');
+  ok(vorHold(h, gap, 1000 + VOR_HOLD_SEC * 1000 + 1)!.kind === 'none', 'past the hold: cleared');
+  const h2: VorHoldState = { good: null, at: 0 };
+  vorHold(h2, v, 0);
+  const other = vorSanitise({ chan: '116.40', expect: 'vor', kind: 'none', rate: 37500, secs: 1, ident: '', reading: '' })!;
+  ok(vorHold(h2, other, 2000)!.chan === '116.40' && h2.good == null, 'a retune clears it at once');
+}
 
 console.log(`\n${fail ? '✗' : '✓'} test_navaids_app: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
