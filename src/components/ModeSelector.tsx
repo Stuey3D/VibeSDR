@@ -519,6 +519,8 @@ interface ModeSelectorProps {
     avdataAvail?: boolean; avdataWhy?: string; avdataOn?: boolean; onAvdata?: () => void;
     /** ★★ V12 RADIOSONDES (RS41) — the same three states: absent (no 400 MHz reach), dimmed with the reason, live. */
     sondesAvail?: boolean; sondesWhy?: string; sondesOn?: boolean; onSondes?: () => void;
+    /** ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md) — NDB's key beside it: absent where the radio cannot tune 108–118 MHz. */
+    vormapAvail?: boolean; vormapWhy?: string; vormapOn?: boolean; onVormap?: () => void;
     /** ★★ V12 SATELLITES — opens the satellites box (not a whole-radio mode): absent (no listed downlink in reach), dimmed
      *  with the reason (no orbit data / location / time yet), lit while a Doppler lock runs. */
     satAvail?: boolean; satWhy?: string; satOn?: boolean; onSat?: () => void;
@@ -713,6 +715,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const aisShown = !!decoderControls?.aisAvail && !isBlocked('ais');   // ★ V12 AIS
   const avShown = !!decoderControls?.avdataAvail && !isBlocked('avdata');   // ★ V12 Aircraft datalink
   const sdShown = !!decoderControls?.sondesAvail && !isBlocked('sondes');   // ★ V12 radiosondes
+  const vmShown = !!decoderControls?.vormapAvail && !isBlocked('vormap');   // ★ V12 the VOR / ILS map
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
   const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown || aisShown || avShown || sdShown;
   const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !srvDecShown && !scanShown;
@@ -769,6 +772,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (aisShown) addLegend('AIS', 'ais');
     if (avShown) addLegend('DATALINK', 'acars');
     if (sdShown) addLegend('SONDES', 'sondes');
+    if (vmShown) addLegend('VOR MAP', 'vormap');
     if (decoderControls.satAvail) addLegend('SATELLITE', 'sat');   // ★★★ V12 SATELLITE (a whole-radio mode)
     if (decoderControls.dabAvail) addLegend('DAB', 'dab');
     if (ismShown) addLegend('ISM', 'ism');
@@ -1071,6 +1075,32 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE VOR MAP KEY — NDB's place, the sondes key's look: the whole radio sweeps 108–118 MHz into a map. */
+  const vmOff = !!decoderControls?.vormapWhy;
+  const vmLit = !!decoderControls?.vormapOn;
+  const vmKey = () => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="vormap" onPress={() => dc.onVormap?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="VOR MAP" active={vmLit} pip iconId="vormap" stack={stackIco}
+          onPress={() => dc.onVormap?.()} fontSize={12}
+          style={vmOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={vmOff ? `VOR map, unavailable: ${dc.vormapWhy}` : 'VOR / ILS map — every VOR and localiser on 108 to 118 MHz, their radials and your fix on a map'}
+        style={[st.btn, { borderColor: vmLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
+                vmLit && { backgroundColor: decBg },
+                vmOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onVormap?.()} activeOpacity={0.8}>
+        <ModeLabel id="vormap" stack={stackIco} numberOfLines={1} color={vmLit ? dec : t.btnText}
+              style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: vmLit ? dec : t.btnText }]}>
+          VOR MAP
+        </ModeLabel>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   /* ★★ V12 THE SATELLITES KEY — the sondes key's look; it opens the box, and the box says why when it is greyed. */
   const satOff = !!decoderControls?.satWhy;
   const satLit = !!decoderControls?.satOn;
@@ -1284,6 +1314,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'dab':  return { id, node: decoderControls.dabAvail ? dabKey() : null };
       case 'ism':  return { id, node: ismShown ? ismKey(false) : null };
       case 'ndb':  return { id, node: ndbShown ? ndbKey(false) : null };
+      case 'vormap': return { id, node: vmShown ? vmKey() : null };
       case 'spotsband': return { id, node: bandInWhole ? spotsBandKey() : null };
       default: return { id, node: null };
     }
@@ -1358,6 +1389,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const sdWhyLine = sdOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
       {`Radiosondes unavailable — ${decoderControls!.sondesWhy}`}
+    </Text>
+  ) : null;
+  const vmWhyLine = vmOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`VOR map unavailable — ${decoderControls!.vormapWhy}`}
     </Text>
   ) : null;
   const ismWhyLine = ismOff ? (
@@ -2339,6 +2375,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             {aisShown && aisWhyLine}
             {avShown && avWhyLine}
             {sdShown && sdWhyLine}
+            {vmShown && vmWhyLine}
           </View>
         )}
 

@@ -121,7 +121,7 @@ the full web `tsc` cannot run inside the agents' 1 GB cap (OOM at 960 MB) — th
 
 ## Not built
 
-- **The radial on a MAP** (the brief's "line on the map"): `radialLine()` is ready (great circle from the station along the
+- **The radial on a MAP** — ★ beta93: the VOR / ILS MAP mode draws every station's radial and the FIX (docs/v12/VOR-MAP.md). For this decoder (the brief's "line on the map"): `radialLine()` is ready (great circle from the station along the
   true bearing) and the web shows the FIX in words; drawing it on the web's TrackView / the app's MapOverlay is not done.
 - **The app's card** (compass / needle) — the app shows the status line and the log. **R36S** view — not built.
 - A `wav`/`cu8` replay mode in `test-vor` for real recordings.

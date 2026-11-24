@@ -79,7 +79,8 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
     //   ndb()/ais()/modeResume() with askBlocked, not by this list (NDB/AIS e41b23dee+, mode_resume 8b63720b9).
     //   ★ 'avdata' and 'sondes' (V12 2026-11-16) likewise — the web's avdata()/sondes() askBlocked.
     //   ★ 'sat' (V12 2026-11-19, the Doppler lock) likewise — satLock() askBlocked; sat_list (the picker) is free.
-    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'ndb', 'ais', 'mode_resume', 'iqtune', 'avdata', 'sondes', 'sat'].includes(t)).sort();
+    //   ★ 'vormap' (V12 2026-11-24, the VOR / ILS map) likewise — vormap() askBlocked in both clients.
+    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'ndb', 'ais', 'mode_resume', 'iqtune', 'avdata', 'sondes', 'vormap', 'sat'].includes(t)).sort();
   const jr = read('spike/WristSDR/WristSDR/UberClient.swift');
   const js = jr.indexOf('askSharedSettings: Set<String> = ['), je = jr.indexOf(']', js + 40);
   const jrList = [...jr.slice(js, je).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1]).sort();

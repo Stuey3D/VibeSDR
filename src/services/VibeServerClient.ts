@@ -33,6 +33,7 @@ import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the pass
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
 import { parseSondeReport } from './sondes';   // ★ V12 radiosondes (RS41)
+import { vorMapSanitise } from './vorMap';     // ★ V12 the VOR / ILS map
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG } from './satellites';   // ★ V12 satellites
 import { parseDecShared } from './sharedDecoders';   // ★★★ the room's decoder on a shared dial (2026-11-24)
 import { parseDabScan, parseFmScan } from './dabBandScan';
@@ -350,6 +351,18 @@ export class VibeServerClient extends VibeServerWsClient {
     this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     this.sendSpectrum(on && band ? { type: 'sondes', on: 1, band } : { type: 'sondes', on: on ? 1 : 0 });
   }
+  /* ── V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md) — NDB's rules, the sondes' pattern: the server sweeps 108–118 MHz window
+   *  by window, decodes every channel, ignores tune / zoom / mode while it runs. ── */
+  private vmExit = new DabExitGuard();
+  vormap(on: boolean) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio across the navaid band
+    holdNativeHealing(VibeServerClient.AIS_HOLD_MS, on ? 'VOR map on' : 'VOR map off');
+    if (on && !this.vormapHeld) { this.vmExit.entered(); this.cancelPacedTune(); }
+    else if (!on) this.vmExit.left(Date.now());
+    this.vormapHeld = on;
+    this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
+    this.sendSpectrum({ type: 'vormap', on: on ? 1 : 0 });
+  }
   /* ── V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md): the picker's question is free (it changes nothing); the Doppler lock
    *  moves the dial on a shared receiver, so it asks before tuning like a tune. The server owns the lock (the dial it
    *  snaps to arrives in the config, the readout as {"type":"sat"}). ── */
@@ -613,6 +626,24 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'sondes_error':
         this.sondesHeld = false;
         this.callbacks.onSondes?.(null, dabSafeText(msg.why, 200) || 'Radiosondes are not available on this receiver');
+        return true;
+      /* ★ V12 THE VOR / ILS MAP: as the sondes — a report MEANS the mode is on; `vormap_off` ended it; `vormap_error` refused. */
+      case 'vormap': {
+        if (!this.vmExit.accept(Date.now())) return true;   // ★ a ghost after our own off
+        const r = vorMapSanitise(msg);
+        if (!r) return true;
+        this.vormapHeld = true;
+        this.callbacks.onVormap?.(r);
+        return true;
+      }
+      case 'vormap_off':
+        this.vmExit.offConfirmed(Date.now());
+        this.vormapHeld = false;
+        this.callbacks.onVormap?.(null);
+        return true;
+      case 'vormap_error':
+        this.vormapHeld = false;
+        this.callbacks.onVormap?.(null, dabSafeText(msg.why, 200) || 'The VOR / ILS map is not available on this receiver');
         return true;
       /* ★★ V12 SATELLITES — the picker's list, the lock's readout, a pass's sky track (src/services/satellites.ts). */
       case 'sat_list': { const l = parseSatList(msg); if (l) this.callbacks.onSatList?.(l); return true; }

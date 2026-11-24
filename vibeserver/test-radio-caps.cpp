@@ -45,7 +45,8 @@ int main(int argc, char** argv) {
         no(c, "Icom", { "wfm", "rds", "tone", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "drm", "dab", "spotsband", "ism",
                         "lora", "loraaprs", "fanet", "meshcom", "ndb", "ais", "aisstore", "adsb", "commb", "same",
                         "dvsig",      // ★ V12 DV ID reads IQ, as M17
-                        "avdata", "avdata+8m" });
+                        "avdata", "avdata+8m",
+                        "vormap" });  // ★ V12 the VOR / ILS map: a whole-radio IQ mode
         ok(!c.s.usage && !c.s.vfoB && !c.s.rawIq && !c.s.nbWide && !c.s.landing && !c.s.gain && !c.s.hardware,
            "Icom: no usage chooser, VFO A/B, Raw IQ, impulse NB, landing, gain or hardware card");
         ok(!c.s.fmDefaults && !c.s.dabLanding && !c.s.adsbLanding && !c.s.dxScan && !c.s.bgDecode && !c.s.converter,
@@ -61,6 +62,7 @@ int main(int argc, char** argv) {
         // ★★ V12 2026-11-24 the datalink yes; its 8 MS/s switch for ACARS + VDL2 never (an RTL tops out at 2.4 MS/s)
         yes(c, "RTL (no DS)", { "avdata" });
         no(c, "RTL (no DS)", { "avdata+8m" });
+        yes(c, "RTL (no DS)", { "vormap" });   // ★ V12 the VOR / ILS map: 108–118 MHz at 2.4 MS/s (5 windows)
         ok(c.s.usage && c.s.vfoB && c.s.rawIq && c.s.nbWide && c.s.fmDefaults && c.s.dabLanding && c.s.adsbLanding && c.s.dxScan,
            "RTL: the IQ settings, FM defaults, both landings and the DX scanner");
         ok(c.s.directSampling && c.s.ppm && c.s.biasT && !c.s.ppb, "RTL: direct sampling, ppm and bias-T; no ppb");
@@ -77,7 +79,7 @@ int main(int argc, char** argv) {
         ok(v4.hints.empty(), "RTL V4: no hint");
         const Caps up = of("rtl", false, "", -125e6, 0, 65e6);   // a Ham It Up
         yes(up, "RTL + upconverter", { "wefax", "time", "navtex", "drm" });
-        no(up, "RTL + upconverter", { "wfm", "dab", "adsb", "ism" });
+        no(up, "RTL + upconverter", { "wfm", "dab", "adsb", "ism", "vormap" });   // ★ the converter's 65 MHz top: no VHF navaids
         ok(up.hints.empty(), "RTL + upconverter: no hint");
     }
     // ── AIRSPY HF+ (0.5 kHz – 31 MHz and 60 – 260 MHz, 912 kS/s) ──
@@ -89,7 +91,8 @@ int main(int argc, char** argv) {
                        "ais", "aisstore", "avdata" });   // ★★ V12 2026-11-24 AIS and the datalink: no gain stepped there
         no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom",
                        "sondes",          // ★ it stops at 260 MHz
-                       "avdata+8m" });    // ★ 912 kS/s: no 8 MS/s switch drawn
+                       "avdata+8m",      // ★ 912 kS/s: no 8 MS/s switch drawn
+                       "vormap" });       // ★ V12 the VOR map: not the HF+ (≤ 912 kS/s could not sweep it)
         ok(!c.s.dabLanding && !c.s.adsbLanding && c.s.fmDefaults && c.s.dxScan, "HF+: no DAB / ADS-B landing; FM defaults and DX scan");
         ok(c.s.ppb && !c.s.ppm && !c.s.biasT && !c.s.directSampling, "HF+: ppb, no ppm, bias-T or direct sampling");
         ok(c.hints.empty(), "HF+: no hint (nothing the owner could change)");
@@ -103,7 +106,7 @@ int main(int argc, char** argv) {
     // ── AIRSPY R2 / MINI (24 MHz – 1.8 GHz, 10 MS/s) ──
     {
         const Caps c = of("airspy");
-        yes(c, "R2", { "wfm", "dab", "adsb", "ism", "ais", "ft8", "spotsband", "rtty" });
+        yes(c, "R2", { "wfm", "dab", "adsb", "ism", "ais", "ft8", "spotsband", "rtty", "vormap" });
         no(c, "R2", { "drm", "amst", "navtex", "wefax", "time", "ndb", "sitora" });
         yes(c, "R2", { "avdata", "avdata+8m" });   // ★ 10 MS/s: the switch is drawn
         ok(c.hints.size() == 1 && c.hints[0].find("24 MHz") != std::string::npos, "R2: the upconverter hint");
@@ -111,7 +114,7 @@ int main(int argc, char** argv) {
     // ── HACKRF (1 MHz – 6 GHz) ──
     {
         const Caps c = of("hackrf");
-        yes(c, "HackRF", { "wfm", "dab", "adsb", "ism", "ais", "drm", "wefax", "time", "navtex" });
+        yes(c, "HackRF", { "wfm", "dab", "adsb", "ism", "ais", "drm", "wefax", "time", "navtex", "vormap" });
         no(c, "HackRF", { "ndb" });   // ★ nothing below 1 MHz: no LF (the top of medium wave, 1–1.7 MHz, it reaches)
         yes(c, "HackRF", { "amst", "avdata+8m" });
         ok(c.hints.empty(), "HackRF: no hint");
@@ -119,7 +122,7 @@ int main(int argc, char** argv) {
     // ── USRP B2xx (50 MHz – 6 GHz) ──
     {
         const Caps c = of("usrp");
-        yes(c, "USRP", { "wfm", "dab", "adsb", "ism", "lora", "ais", "aprs", "same", "ft8", "spotsband" });
+        yes(c, "USRP", { "wfm", "dab", "adsb", "ism", "lora", "ais", "aprs", "same", "ft8", "spotsband", "vormap" });
         no(c, "USRP", { "drm", "amst", "navtex", "wefax", "time", "ndb", "rtty", "sitora", "mfsk", "hell" });
         ok(c.has("dsc"), "USRP: DSC (VHF channel 70, 156.525 MHz)");
         ok(!c.s.biasT && !c.s.ppm, "USRP: no bias-T, no ppm");

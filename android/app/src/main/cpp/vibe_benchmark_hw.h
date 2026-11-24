@@ -139,6 +139,7 @@ enum class Need {
     Spots,       // digital spots: HF, 6 m or 2 m
     Avdata,      // ★ V12 the aircraft datalink: ACARS 131.5–131.85 or VDL2 136.68–136.99 MHz, not an HF+ / an Icom
     Sondes,      // ★ V12 radiosondes: a 2 MHz band of 400–406 MHz, not an HF+ / an Icom
+    Vormap,      // ★ V12 the VOR / ILS map: 108–118 MHz whole, not an HF+ / an Icom (vsVormapReach)
     M17,         // ★ V12 M17 digital voice: 2 m or 70 cm on any SDR (the HF+ on 2 m), never an Icom (vibe_radio_caps.h)
     Lrpt,        // ★ V12 METEOR LRPT: 137.1 or 137.9 MHz (an IQ slice — never an Icom)
     Pkt9600,     // ★ V12 9600 packet (G3RUH on the channel IQ): 2 m or 70 cm on any SDR, never an Icom (local_sdr_shim pkt9600)
@@ -205,6 +206,10 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                                                  && (reaches(r, 131.50e6, 131.85e6) || reaches(r, 136.68e6, 136.99e6)); }))
                 return no("no radio here reaches the aircraft datalink (131 / 136 MHz)");
             break;
+        case Need::Vormap:
+            if (!any([](const Radio& r) { return r.driver != "airspyhf" && r.driver != "icom" && reaches(r, 107.9e6, 118.05e6); }))
+                return no("no radio here reaches the VOR / ILS band (108\xe2\x80\x93" "118 MHz)");
+            break;
         case Need::Sondes:
             if (!any([](const Radio& r) { return r.driver != "airspyhf" && r.driver != "icom"
                                                  && (reaches(r, 400.0e6, 402.0e6) || reaches(r, 402.0e6, 404.0e6) || reaches(r, 404.0e6, 406.0e6)); }))
@@ -247,6 +252,7 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_ais") return Need::Ais;
     if (id == "dec_vdl2" || id == "dec_acars") return Need::Avdata;
     if (id == "dec_rs41" || id == "dec_dfm" || id == "dec_m10") return Need::Sondes;
+    if (id == "dec_vormap") return Need::Vormap;
     if (id == "dec_hfdl") return Need::Hf;
     if (id == "dec_m17") return Need::M17;
     if (id == "dec_lrpt") return Need::Lrpt;

@@ -135,6 +135,10 @@ export type MobileDeps = {
   sdCap?: () => { ok: boolean; why: string } | null;
   sdOn?: () => boolean;
   toggleSd?: () => void;
+  /** ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md) — NDB's three states: null = this radio cannot tune 108–118 MHz. */
+  vmCap?: () => { ok: boolean; why: string } | null;
+  vmOn?: () => boolean;
+  toggleVm?: () => void;
   /** ★ V12 satellites — not a whole-radio mode: opens the picker (passes, sky track, DOPPLER). Absent = no entry. */
   satCap?: () => { ok: boolean; why: string } | null;
   satOn?: () => boolean;
@@ -425,6 +429,19 @@ export function initMobileControls(deps: MobileDeps) {
       if (!nc.ok) ndbRow.setAttribute('aria-disabled', 'true');
       ndbRow.onclick = () => { deps.toggleNdb(); close(); refresh(); };
       grid.appendChild(ndbRow);
+    }
+    /* ★★ V12 THE VOR / ILS MAP beside NDB (Stuart, 2026-11-24: "the same places NDB does") — the same three states; absent
+     *  where the radio cannot tune 108–118 MHz (an HF+, an Icom, an HF-only radio). */
+    const vmc = deps.vmCap?.();
+    if (vmc && deps.toggleVm && (vmc.ok || deps.vmOn?.())) {
+      const vmRow = document.createElement('button');
+      vmRow.className = 'mModeOpt' + (deps.vmOn?.() ? ' on' : '') + (vmc.ok ? '' : ' dis');
+      setModeLabel(vmRow, 'vormap', 'VOR MAP');
+      vmRow.title = vmc.ok ? 'VOR / ILS map — every VOR and localiser on 108–118 MHz, swept a window at a time, with their radials and your fix on a map'
+                           : `The VOR / ILS map is not available: ${vmc.why}`;
+      if (!vmc.ok) vmRow.setAttribute('aria-disabled', 'true');
+      vmRow.onclick = () => { deps.toggleVm!(); close(); refresh(); };
+      grid.appendChild(vmRow);
     }
     /* ★★ AIS beside ISM — the fourth whole-radio mode, the same three states; absent where the radio cannot reach 162 MHz. */
     const aic = deps.aisCap();

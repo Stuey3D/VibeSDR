@@ -44,7 +44,8 @@ for (const [said, blocked, admin, offered, want, what] of cases) {
   ok(web(said, blocked, admin, offered) === want, `web: ${what}`);
   ok(app(said, blocked, admin, offered) === want, `app: ${what}`);
 }
-for (const m of ['adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes']) ok(webNote(m) === appNote(m) && webWhy(m) === appWhy(m), `the same words for ${m}`);
+for (const m of ['adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes', 'vormap']) ok(webNote(m) === appNote(m) && webWhy(m) === appWhy(m), `the same words for ${m}`);
+ok(webWhy('vormap') === 'This receiver is VOR / ILS map only \u2014 its owner has set it up for VOR / ILS map listeners.', 'the VOR map\'s reason is the server\'s words');
 ok(webNote('adsb') === 'ADS-B only on this receiver' && webNote('avdata') === 'DATALINK only on this receiver', 'the note names the EXIT key\'s mode');
 ok(webWhy('adsb') === 'This receiver is ADS-B only \u2014 its owner has set it up for ADS-B listeners.', 'the reason is the server\'s');
 const body = (p: string) => read(p).split('\n').filter((l) => !l.startsWith('//')).join('\n');
@@ -56,12 +57,12 @@ ok(/if \(typeof msg\.onlyMode === 'string'\) this\.cb\.onOnlyMode\?\.\(msg\.only
    '★ web: the server word only when sent (an older server is read from its list)');
 ok(/return onlyModeFrom\(hwOnlyMode, blockedModes, adminUnlocked, offered\);/.test(main), 'web: the rule from the server word, the blocked list, the admin and the offer');
 for (const [id, k] of [['adsb', "document.getElementById('adsbExit')"], ['ndb', "document.getElementById('ndbExit')"], ['ism', "document.getElementById('ismExit')"],
-                       ['ais', 'trk(aisView)'], ['avdata', 'trk(avView)'], ['sondes', 'trk(sdView)']])
+                       ['ais', 'trk(aisView)'], ['avdata', 'trk(avView)'], ['sondes', 'trk(sdView)'], ['vormap', 'trk(vmView)']])
   ok(main.includes(`['${id}', ${k}]`), `web: EXIT for ${id} is one the rule removes`);
 ok(/ex\.style\.display = here \? 'none' : '';/.test(main) && /note\.textContent = onlyModeNote\(m\);/.test(main), '★ web: EXIT not drawn, the note in its place');
-for (const [f, k] of [['adsbSetMode', 'adsb'], ['ismSetMode', 'ism'], ['ndbSetMode', 'ndb'], ['aisSetMode', 'ais'], ['avSetMode', 'avdata'], ['sdSetMode', 'sondes']])
+for (const [f, k] of [['adsbSetMode', 'adsb'], ['ismSetMode', 'ism'], ['ndbSetMode', 'ndb'], ['aisSetMode', 'ais'], ['avSetMode', 'avdata'], ['sdSetMode', 'sondes'], ['vmSetMode', 'vormap']])
   ok(new RegExp(`function ${f}\\(on: boolean\\) \\{\\n  if \\(!on && onlyModeRefuses\\('${k}'\\)\\) return;`).test(main), `web: every way out of ${k} goes through the guard (${f})`);
-for (const f of ['adsbUiOn', 'ismUiOn', 'ndbUiOn', 'aisUiOn', 'avUiOn', 'sdUiOn'])
+for (const f of ['adsbUiOn', 'ismUiOn', 'ndbUiOn', 'aisUiOn', 'avUiOn', 'sdUiOn', 'vmUiOn'])
   ok(new RegExp(`function ${f}\\(\\) \\{\\n[^\\n]*\\n  setTimeout\\(syncOnlyMode, 0\\);`).test(main), `web: ${f} re-reads the rule once its view is drawn`);
 ok(/onlyModeNow\(\) === 'adsb' \? 'This receiver is ADS-B only/.test(main), 'web: the locked-dial message does not say "press EXIT ADS-B" on an ADS-B-only receiver');
 
@@ -70,7 +71,7 @@ const scr = read('src/screens/SDRScreen.tsx'), wsc = read('src/services/VibeServ
 ok(/if \(typeof msg\.onlyMode === 'string'\) this\.callbacks\.onHwOnlyMode\?\.\(msg\.onlyMode\);/.test(wsc), '★ app: only a server that SENDS onlyMode is believed');
 ok(/const onlyModeHere = onlyModeFrom\(hwOnlyMode, blockedModes, adminOk,/.test(scr) && /onlyModeRef\.current = onlyModeHere;/.test(scr), 'app: the rule, the server word, the list, the admin');
 ok(/setHwOnlyMode\(null\); onlyToldRef\.current\.clear\(\);/.test(scr), 'app: a new server starts as "has not said"');
-for (const k of ['adsb', 'ism', 'ndb', 'ais', 'sondes', 'avdata'])
+for (const k of ['adsb', 'ism', 'ndb', 'ais', 'sondes', 'avdata', 'vormap'])
   ok((scr.match(new RegExp(`onlyRefuses\\('${k}'`, 'g')) || []).length >= 2, `app: EXIT/Back and the Mode sheet both refuse to leave ${k}`);
 ok(/appAlert\(onlyModeNote\(k\), onlyModeWhy\(k\)\)/.test(scr), 'app: Back explains instead of leaving');
 for (const f of ['AdsbPanel', 'IsmPanel', 'AvdataPanel', 'SondesPanel']) {

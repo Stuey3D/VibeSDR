@@ -110,7 +110,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
  * frequencies; the tune keys then step bands). Their availability is the callers' existing rules (locked range,
  * blocked modes, what the radio reaches), untouched.
  */
-export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'avdata', 'dab', 'ism', 'ndb', 'sondes', 'sat', 'spotsband'];   // ★ V12 avdata: the aircraft datalink; sondes: RS41 radiosondes; sat: SATELLITE (every satellite — replaced SAT and METEOR LRPT, 2026-11-20)
+export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'avdata', 'dab', 'ism', 'ndb', 'vormap', 'sondes', 'sat', 'spotsband'];   // ★ V12 beta93 vormap: the VOR / ILS map, beside NDB (Stuart 11-24)   // ★ V12 avdata: the aircraft datalink; sondes: RS41 radiosondes; sat: SATELLITE (every satellite — replaced SAT and METEOR LRPT, 2026-11-20)
 export const WHOLE_RADIO_LABEL = 'TUNES THE RADIO ITSELF';
 export const WHOLE_RADIO_HINT = 'Each moves the radio to its own frequencies and opens its own view.';
 

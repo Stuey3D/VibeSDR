@@ -23,6 +23,7 @@ import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the logs' rad
 import { digiAprsPoints, digiOverlayClean, type DigiMapOverlay } from '../utils/digiMapShared';
 import { setDigiModesMapOpener, openDigiModesMap } from '../services/digiModesMap';
 import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, sondeRanges, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
+import { vorMapItems, vorMapTrackRows, vorMapStatus, vorFixLine, VORMAP_EMPTY, type VorMapReport } from '../services/vorMap';   // ★ V12 the VOR / ILS map
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode, ICOM_SCOPE_FLOOR_DB,
@@ -944,6 +945,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
     setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setSdCap(undefined);                          // ★ V12 radiosondes — the same
+    setVmCap(undefined);                          // ★ V12 the VOR / ILS map — the same
     setSatCap(undefined);                         // ★ V12 satellites — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
     setHwOnlyMode(null); onlyToldRef.current.clear();   // ★★ V12 the only mode — likewise
@@ -968,6 +970,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHfdlCapable(o?.hfdl === true);   // ★ V12 HFDL: this VibeServer decodes it on the dial (and serves the HFDL MAP)
         setAvCap(o?.avdata);                // ★ V12 Aircraft datalink — absent where no band is reachable (no key at all)
         setSdCap(o?.sondes);                // ★ V12 radiosondes — absent where the radio cannot reach 400 MHz (no key at all)
+        setVmCap(o?.vormap);                // ★ V12 the VOR / ILS map — absent where the radio cannot tune 108–118 MHz (no key at all)
         setSatCap(o?.sat);                  // ★ V12 satellites — absent where the radio reaches no listed downlink (no key at all)
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         setTimeTdfCapable(o?.timeTdf === true);
@@ -2727,6 +2730,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sdBoxOpen, setSdBoxOpen] = useState(false);
   const [sdMapOpen, setSdMapOpen] = useState(false);
   const sdUiOff = useCallback(() => { sdOnRef.current = false; setSdOn(false); setSdReport(null); setSdBoxOpen(false); setSdMapOpen(false); setSdError(undefined); }, []);
+  /* ★★ V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md) — NDB's rules, the sondes' map: the mode IS its map (MapOverlay 'vormap',
+   *  the shared track layer). None on the Apple TV (no maps there), as NDB. */
+  const [vmCap, setVmCap] = useState<{ ok: boolean; why: string; wins: number; dwell: number } | undefined>(undefined);
+  const [vmOn, setVmOn] = useState(false);
+  const vmOnRef = useRef(false);
+  const [vmReport, setVmReport] = useState<VorMapReport | null>(null);
+  const [vmMapOpen, setVmMapOpen] = useState(false);
+  const vmUiOff = useCallback(() => { vmOnRef.current = false; setVmOn(false); setVmReport(null); setVmMapOpen(false); }, []);
   /* ★★★ V12 SATELLITE MODE (docs/v12/SATELLITE-MODE.md) — a whole-radio mode: the box (SatellitePanel) IS the mode. A row
    *  asks {"op":"pick"}; the server tunes, locks the Doppler and attaches the decoder, answering {"state":"picked"}; the app
    *  follows that decoder on its decoder socket (satFollow) with the box as its view; leaving sends {"op":"drop"}. The lock's
@@ -3137,7 +3148,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const quietSaid = useRef(false);
   // ★ V12 NDB and AIS too: the server sends no audio there. ★★ NEVER a squelch (sessionHoldNotice.audioQuietFor): a closed
   //   squelch plays the server's gated silence and must keep the session — "the one time where silence is justified".
-  const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn });
+  const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn, vormap: vmOn });
   /* ★★★ V12 TWO SERVERS: NOT WHILE ANOTHER SERVER IS PLAYING. QUIET pauses the main engine and lets the audio session go
    *  — the other server's voice with it (server 1 on the main pump, and the session both engines share). In a pairing
    *  this server's silence is its own voice going to zero, and the other plays on CENTRED (dualMix.dualTargets). */
@@ -3145,7 +3156,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (engineQuiet === quietSaid.current) return;
     quietSaid.current = engineQuiet;
-    setNativeQuiet(engineQuiet, engineQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS')
+    setNativeQuiet(engineQuiet, engineQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : vmOn ? 'VOR map' : 'AIS')
       : audioQuiet ? 'two servers playing' : 'left ADS-B / ISM / NDB / AIS');
   }, [engineQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
@@ -3611,6 +3622,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (sdOnRef.current) c?.sondes?.(false);
     sdUiOff();
   }, [sdUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** ★★ V12 Leave the VOR MAP from its map — the mode's EXIT (NDB's steps: the only mode, ask before tuning). */
+  const exitVormap = useCallback(() => {
+    const c = client.current as unknown as { vormap?: (on: boolean) => void } | null;
+    if (vmOnRef.current && onlyRefuses('vormap', () => setVmMapOpen(false))) return;   // ★★ V12 the only mode: the map put away
+    if (vmOnRef.current && askLocked(dialStateRef.current)) { setVmMapOpen(false); askGate(); return; }
+    if (vmOnRef.current) c?.vormap?.(false);
+    vmUiOff();
+  }, [vmUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
@@ -4526,6 +4546,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     : navMapOpen && !IS_APPLE_TV ? 'navtex'
     : ismGal && !IS_APPLE_TV ? 'ism'
     : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism'
+    : vmMapOpen && !IS_APPLE_TV && vmOn ? 'vormap'   // ★ V12 the VOR / ILS map: the mode's own screen, as NDB's
     : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes'   // ★ V12 the SONDES box's MAP (the mode carries on)
     : avMapOpen && !IS_APPLE_TV && (avOn || avMapFocus !== 'datalink') ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on); beta90 VIEWS' AVIATION standalone
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
@@ -5973,7 +5994,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  modes it offers (DAB counted as offered: an unknown never makes another mode look like the only one). */
   const onlyModeHere = onlyModeFrom(hwOnlyMode, blockedModes, adminOk,
     new Set(['dab', ...(adsbCap ? ['adsb'] : []), ...(ismCap ? ['ism'] : []), ...(ndbCap ? ['ndb'] : []), ...(aisCap ? ['ais'] : []),
-             ...(avCap ? ['avdata'] : []), ...(sdCap ? ['sondes'] : [])]));
+             ...(avCap ? ['avdata'] : []), ...(sdCap ? ['sondes'] : []), ...(vmCap ? ['vormap'] : [])]));
   onlyModeRef.current = onlyModeHere;
   /* ★★ V12 WHAT THIS PHONE CAN RUN (LocalBenchmarkCard, in the hardware sheet) — Android, a radio plugged into THIS phone
    *  only (pagingHere is exactly that gate). `reach` is the same per-radio answers the decoder keys are drawn from, so the
@@ -5984,13 +6005,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     reach: {
       sampleRate: hwSampleRate, tunable: radioTunable, dab: dabCapable, freedv: freedvCap, m17: m17Cap,
       adsb: !!adsbCap?.ok, ais: !!aisCap?.ok, ismHz: ismCap?.ok ? ismCap.bands.map((b) => b.hz) : [], ndb: !!ndbCap?.ok,
-      avdata: !!avCap?.ok, sondes: !!sdCap?.ok, hfdl: hfdlCapable, cwSkim: cwCapable && skimCapable && !decWhy.cw,
+      avdata: !!avCap?.ok, sondes: !!sdCap?.ok, vormap: !!vmCap?.ok, hfdl: hfdlCapable, cwSkim: cwCapable && skimCapable && !decWhy.cw,
       rttySkim: rttySkimCapable, spotsBand: !!spotsBandCap?.ok,
     },
     onPause: () => { client.current?.pauseSpectrum?.(); },
     onResume: () => { client.current?.resumeSpectrum?.(); reviveLocalAudio(); },
   } : undefined), [pagingHere, hwSampleRate, radioTunable, dabCapable, freedvCap, m17Cap, adsbCap, aisCap, ismCap, ndbCap, avCap,
-                   sdCap, hfdlCapable, cwCapable, skimCapable, decWhy, rttySkimCapable, spotsBandCap]);
+                   sdCap, vmCap, hfdlCapable, cwCapable, skimCapable, decWhy, rttySkimCapable, spotsBandCap]);
   /* ★★★ "THE RADIO IS DEAF AND THAT IS WHY YOU SEE NOTHING." Stuart: "dont want people connecting
    *   to a server seeing a flat spectrum thinking this is fucked and then leaving."
    *   A receiver sitting at minimum gain looks EXACTLY like a broken one — flat waterfall, no
@@ -8221,6 +8242,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSatWhy('');
           satVfoBDecoderRef.current(b);
         } else satVfoBReset();
+      },
+      /* ★ V12 THE VOR / ILS MAP: a report (the map opens on the transition — somebody else may have put the radio there),
+       *  vormap_off (null), a refusal said in words. */
+      onVormap: (r, why) => {
+        if (destroyed.current) return;
+        if (why) { vmUiOff(); setTimeout(() => { if (!destroyed.current) appAlert('VOR map unavailable', why); }, 450); return; }
+        if (!r) { vmUiOff(); return; }
+        if (!vmOnRef.current) { vmOnRef.current = true; if (!IS_APPLE_TV) setVmMapOpen(true); }
+        setVmOn(true);
+        setVmReport(r);
       },
       /* ★ V12 RADIOSONDES: as the datalink — a report (the box opens on the transition), sondes_off (null), a refusal. */
       onSondes: (r, why) => {
@@ -12133,6 +12164,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       (client.current as unknown as { sondes?: (on: boolean, band?: string) => void } | null)?.sondes?.(true, id);
     },
   }), [sdReport, trkRx?.lat, trkRx?.lon, sdCap]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ V12 the VOR MAP: every named station with its radial towards the receiver, the FIX where radials cross (vorMap.ts). */
+  const vmTrk = useMemo(() => ({
+    items: vorMapItems(vmReport), rows: vorMapTrackRows(vmReport),
+    status: [vorMapStatus(vmReport), vorFixLine(vmReport)].filter(Boolean).join(' \u00b7 '), empty: VORMAP_EMPTY,
+    trail: () => Promise.resolve([] as [number, number][]),   // ★ a station does not move: no track
+  }), [vmReport]);
   /* ★★ V12 2026-11-16 THE AVIATION MAP (services/aviationMap.ts — the web's avCompose too): the DATALINK box's MAP shows
    *  this radio's live aircraft AND every other source on the server (GET /vibeserver/aircraft.json — ADS-B, another radio's
    *  ACARS / VDL2, HFDL, ADS-C), each aircraft once with the sources that heard it; layers with no aircraft are absent;
@@ -14825,6 +14862,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (ndbOnRef.current) toggleNdb();
     if (sdOnRef.current) { c?.sondes?.(false); sdUiOff(); }
     if (avOnRef.current) { c?.avdata?.(false); avUiOff(); }
+    if (vmOnRef.current) { (client.current as unknown as { vormap?: (on: boolean) => void } | null)?.vormap?.(false); vmUiOff(); }
     setSatWhy(''); satOnRef.current = true; setSatOn(true);
   };
   /** ★★ 1.6 LISTEN on a reminder: re-checked, into SATELLITE, then the ORDINARY pick (ask-before-tuning). */
@@ -17063,6 +17101,24 @@ export default function SDRScreen({ route, navigation }: Props) {
             sdOnRef.current = true; setSdOn(true);
             c.sondes(true);
           },
+          /* ★★ V12 THE VOR / ILS MAP — NDB's three states, beside it; none on the Apple TV (no maps there), as NDB. */
+          vormapAvail: (vmCap?.ok === true || vmOn) && !!(client.current as any)?.isVibe && !IS_APPLE_TV,
+          vormapWhy: !vmOn && vmCap && !vmCap.ok ? vmCap.why : undefined,
+          vormapOn: vmOn,
+          onVormap: () => {
+            markInteract();
+            satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
+            const c = client.current as unknown as { vormap?: (on: boolean) => void } | null;
+            if (!c?.vormap) return;
+            if (!vmOnRef.current && vmCap && !vmCap.ok) { appAlert('VOR map unavailable', vmCap.why); return; }
+            setModeSelOpen(false);
+            if (askGate()) return;   // ★★ ask before tuning — entering or leaving moves everybody's radio
+            if (vmOnRef.current && onlyRefuses('vormap')) return;   // ★★ V12 the only mode
+            if (vmOnRef.current) { c.vormap(false); vmUiOff(); return; }
+            setVmReport(null); setVmMapOpen(true);   // ★ into its map at once, as NDB's
+            vmOnRef.current = true; setVmOn(true);
+            c.vormap(true);
+          },
           avdataAvail: (avCap?.ok === true || avOn) && !!(client.current as any)?.isVibe,
           avdataWhy: !avOn && avCap && !avCap.ok ? avCap.why : undefined,
           avdataOn: avOn,
@@ -17484,8 +17540,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
-      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
-                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
+      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
+                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'vormap' ? setVmMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
@@ -17494,11 +17550,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'vormap' ? exitVormap() : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}
-        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lon ?? null : undefined}
+        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lon ?? null : undefined}
         /* ★★ V12 NDB: the report, the readings kept, Find and the stats (NdbLiveList) — the page opens no socket of its own. */
         ndb={shownMap === 'ndb' ? {
           report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
@@ -17508,7 +17564,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDecide: (act, ident, hz, airfield) => { client.current?.ndbConfirm?.(act, ident, hz, airfield); },
         } : undefined}
         /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
-        trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : shownMap === 'sondes' ? sdTrk : shownMap === 'avdata' ? avTrk : null}
+        trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : shownMap === 'sondes' ? sdTrk : shownMap === 'vormap' ? vmTrk : shownMap === 'avdata' ? avTrk : null}
         /* ★ V12 the spots map's MODE filter and legend: this server's modes (vibeserver.json spotModes), by family */
         spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}

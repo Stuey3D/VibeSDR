@@ -525,6 +525,9 @@ export abstract class VibeServerWsClient {
   protected ndbHeld = false;
   /** ★ V12 AIS: the same lock — the server owns the radio on 162.000 MHz (docs/v12/AIS-APRS.md). Set only by VibeServerClient. */
   protected aisHeld = false;
+  /** ★ V12 the VOR / ILS map: NDB's lock — the server sweeps the radio across 108–118 MHz (docs/v12/VOR-MAP.md: tune, mode,
+   *  passband, zoom, rate ignored while it runs). Set only by VibeServerClient. */
+  protected vormapHeld = false;
 
   /** True while a DAB multiplex is being decoded — the UI locks zoom and the VFO out. */
   get inDab(): boolean { return this.dabHeld; }
@@ -568,7 +571,7 @@ export abstract class VibeServerWsClient {
       return;
     }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld) return;   // ★ see dabHeld — the multiplex IS the tuning
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.vormapHeld || this.aisHeld) return;   // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     this._armTuneSettleAsk();
@@ -822,7 +825,7 @@ export abstract class VibeServerWsClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.vormapHeld || this.aisHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
     /* ★★★ THE VIEW CENTRE IS NOT A TUNE REQUEST — DO NOT CLAMP IT TO THE TUNER'S RANGE.
      *
      *  This was `Math.max(this.minHz, …)`, and for every VibeServer connection minHz is
@@ -872,7 +875,7 @@ export abstract class VibeServerWsClient {
   }
 
   pan(frequency: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.vormapHeld || this.aisHeld) return;   // ★ see dabHeld
     // ★ Same rule as zoom(): panning the VIEW is not tuning, so the tuner's range does not bound
     //   it. Clamping here hid the low end of every radio that reaches below the RTL-SDR's floor.
     const f = Math.round(frequency);
@@ -1400,7 +1403,7 @@ export abstract class VibeServerWsClient {
   }
 
   resetView() {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.vormapHeld || this.aisHeld) return;   // ★ see dabHeld
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     this.spectrumWs.send(JSON.stringify({ type: 'reset' }));
   }
@@ -1802,7 +1805,7 @@ export abstract class VibeServerWsClient {
      *  VFOs): "when I went back to it the frequency reset to 4778 every time". The decision, and
      *  why it cannot touch a SHARED dial, is in reopenTune.ts. */
     this.wantTune = reopenRestoreTune({
-      hadConfig: this.hadConfig, sharedDial: this.sharedDial, inDab: this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld,   // ★ ADS-B too: 1090 is not ours to restore over
+      hadConfig: this.hadConfig, sharedDial: this.sharedDial, inDab: this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.vormapHeld || this.aisHeld,   // ★ ADS-B too: 1090 is not ours to restore over
       pending: this.wantTune, frequency: Number(this.status.frequency), mode: this.status.mode,
     });
 
@@ -3659,7 +3662,7 @@ export abstract class VibeServerWsClient {
        *  ★★ So here we adopt: fall through to the lines below, which take the server's centre as ours. */
       /* ★★ …NOR WHILE A WHOLE-RADIO MODE HOLDS THE RADIO: the server put the capture there (1090 MHz, the multiplex, the
        *  ISM band) and refuses our view meanwhile, so re-asserting the old one only argues — adopt it, as on a shared dial. */
-      const wholeHeld = this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld;
+      const wholeHeld = this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.vormapHeld || this.aisHeld;
       if (unsolicitedChange && !this.sharedDial && !wholeHeld) {
         this.dbg(`unsolicited config (centre ${this.status.centerHz} bb ${this.status.binBandwidth}) — re-asserting view`);
         this._sendView(Math.round(v.centerHz), v.binBandwidth);

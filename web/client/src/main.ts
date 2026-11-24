@@ -59,6 +59,8 @@ import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } f
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
+import { vorMapItems, vorMapRows, vorMapStatus, VORMAP_LEGEND, VORMAP_ROW_CSS } from './vormap';   // ★ V12 the VOR / ILS map
+import { type VorMapReport } from '../../../src/services/vorMap';
 // ★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): AUTO / 1200 / 9600 / 300, FX.25 + IL2P, the frame log — the app's rule too
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
@@ -982,6 +984,7 @@ async function loadAudioPolicy(httpBase: string) {
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
     avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
     sdReadCap(j);                // ★ V12 radiosondes (RS41): the same three states, and its bands
+    vmReadCap(j);                // ★ V12 the VOR / ILS map: NDB's three states
     satReadCap(j);               // ★ V12 satellites: `doppler` (a version) / `dopplerWhy` — absent = no entry at all
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
@@ -2053,6 +2056,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDecShared: (l) => roomDecIn(l),                  // ★★★ the room's decoder on a shared dial (sharedDecoders.ts)
     onSatVfoB: (b) => satVfoBFollow(b),               // ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick
     onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
+    onVormap: (r) => onVmReport(r),
+    onVormapError: (why: string) => { showPill(why, 7000); if (vmOn && !vmReport) vmUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
@@ -6037,7 +6042,7 @@ function sqlChannelKey(): string {
 /** ★★ beta92 (Stuart 11-23: "squelch needs to be ignored when in things like ism/dab/acars/adsb etc anything that isnt
  *  audio"): the server applies no gate in these (local_sdr_shim.cpp vsNoAudioMode); auto squelch pauses with them and
  *  reseeds on the next analogue mode. A function: the flags are declared further down. */
-function sqlNoAudioMode(): boolean { return dabOn || adsbOn || ismOn || aisOn || avOn || sdOn || ndbOn; }
+function sqlNoAudioMode(): boolean { return dabOn || adsbOn || ismOn || aisOn || avOn || sdOn || ndbOn || vmOn; }
 function autoSquelchTick() {
   if (!sqlAuto || !srvSigValid) return;
   if (sqlNoAudioMode()) { sqlSeedKey = ''; return; }   // ★ paused; the blank key reseeds when an analogue mode resumes
@@ -9387,7 +9392,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn || aisOn || ndbOn || avOn || sdOn;   // ★ V12 + the aircraft datalink and the sondes (no audio either)
+  const q = adsbOn || ismOn || aisOn || ndbOn || avOn || sdOn || vmOn;   // ★ V12 + the aircraft datalink, the sondes and the VOR map (no audio either)
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -10268,7 +10273,7 @@ let aisOn = false;
 let aisReport: AisReport | null = null;
 let aisView: TrackView | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
-function trackViewUp(): boolean { return !!aisView?.open; }
+function trackViewUp(): boolean { return !!aisView?.open || !!vmView?.open; }   // ★ V12 + the VOR map: nothing drawn behind it, as NDB
 function aisReadCap(j: any) {
   if (j?.ais === true) aisCap = { ok: true, why: '' };
   else if (j?.ais === false) {
@@ -10562,6 +10567,70 @@ function sdRender() {
   sdView.update(sondeItems(r), sondeRows(r), sondeStatus(r), r ? r.sondes.length : 0, myPos());
   if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
 }
+/* ★★★ THE VOR / ILS MAP (V12, docs/v12/VOR-MAP.md — Stuart, 2026-11-24: "treated the same as NDB") — the sondes' shape
+ *  (vormap.ts): a TrackView, EXIT VOR MAP gives the receiver back. Every station heard at its published position, a VOR's
+ *  radial towards the receiver, the FIX where radials cross; the status says which window the sweep is on. ★ Offered only
+ *  where vibeserver.json says so: `vormap` true (live) / false (greyed, `vormapWhy` on a tap) / absent (no control). */
+let vmCap: { ok: boolean; why: string } | null = null;
+let vmOn = false;
+let vmReport: VorMapReport | null = null;
+let vmView: TrackView | null = null;
+function vmReadCap(j: any) {
+  if (j?.vormap === true) vmCap = { ok: true, why: '' };
+  else if (j?.vormap === false) {
+    const why = typeof j.vormapWhy === 'string' ? j.vormapWhy.trim().slice(0, 200) : '';
+    vmCap = { ok: false, why: why || 'The VOR / ILS map is not available on this receiver' };
+  } else vmCap = null;
+}
+function vmUiOn() {
+  vmOn = true;
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
+  syncAudioQuiet();
+  closePanels();
+  if (!document.getElementById('vmRowCss')) { const st = document.createElement('style'); st.id = 'vmRowCss'; st.textContent = VORMAP_ROW_CSS; document.head.appendChild(st); }
+  if (!vmView) vmView = new TrackView({
+    title: 'VOR / ILS MAP', exitLabel: 'EXIT VOR MAP', listTitle: 'NAVAIDS', onExit: () => vmSetMode(false),
+    icon: (it: any) => it._ic, label: (it: any) => String(it._lb || ''), card: (it: any) => String(it._cd || ''),
+    shape: (it: any) => it._sh ?? null, labelRank: (it: any) => Number(it._rk) || 0, aria: (it: any) => String(it._aria || it._lb || ''),
+    legend: VORMAP_LEGEND, profile: 'aero', nautical: true, labelZoom: 6, focusZoom: 9,
+  });
+  vmView.show(myPos());
+  vmRender();
+}
+function vmUiOff() {
+  vmOn = false;
+  syncAudioQuiet();
+  vmReport = null;
+  vmView?.hide();
+  renderFreq();
+}
+function vmSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('vormap')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
+  if (on) {
+    if (vmCap && !vmCap.ok) { showPill(vmCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.vormap(true); return; }   // ★ ask before tuning: spec says why
+    audio?.holdHealing(6000);
+    vmUiOn();
+    spec?.vormap(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.vormap(false);
+    vmUiOff();
+  }
+}
+function vmRender() {
+  if (!vmView) return;
+  const r = vmReport;
+  vmView.update(vorMapItems(r), vorMapRows(r), vorMapStatus(r), r ? r.heard : 0, myPos());
+}
+/** ★ A report (on) or the server's `vormap_off` (null). */
+function onVmReport(r: VorMapReport | null) {
+  if (!r) { if (vmOn) { audio?.holdHealing(6000); vmUiOff(); } return; }
+  vmReport = r;
+  if (!vmOn) vmUiOn();   // ★ somebody else put the receiver in the VOR map (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio
+  vmRender();
+}
 /* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md, satellites.ts): the panel is made on first use. */
 function satMarkerOffset(): number {
   const r = satPanel?.readout();
@@ -10848,7 +10917,7 @@ function toggleSatMode() {
   if (!p.active) {
     // ★ each switched OFF properly (its own toggle tells the server), not just its view — SATELLITE takes the receiver
     if (dabOn) toggleDabMode(); if (adsbOn) toggleAdsbMode(); if (ismOn) toggleIsmMode(); if (aisOn) toggleAisMode();
-    if (ndbOn) toggleNdbMode(); if (avOn) toggleAvMode(); if (sdOn) toggleSdMode();
+    if (ndbOn) toggleNdbMode(); if (avOn) toggleAvMode(); if (sdOn) toggleSdMode(); if (vmOn) toggleVmMode();
   }
   p.toggle();
 }
@@ -11254,7 +11323,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : vmOn ? 'VOR MAP' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -11337,6 +11406,9 @@ function buildControls() {
     ndbCap:        () => ndbCap,
     ndbOn:         () => ndbOn,
     toggleNdb:     toggleNdbMode,
+    vmCap:         () => vmCap,          // ★ V12 the VOR / ILS map, beside NDB
+    vmOn:          () => vmOn,
+    toggleVm:      toggleVmMode,
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -13636,7 +13708,7 @@ function spotsTitle(): string {
  *     dropped — the band IS where this listener asked to go back to.
  *  ★ Never on recovery: only bandSpotsGo (a press of Band, an arrow, a band chosen) parks a band here. */
 let bandSpotsPending: SpotBand | null = null;
-function heldMode(): boolean { return dabOn || adsbOn || ismOn || aisOn || ndbOn; }
+function heldMode(): boolean { return dabOn || adsbOn || ismOn || aisOn || ndbOn || vmOn; }
 /** Leave whichever whole-radio mode holds the dial (a user action). False when none does. */
 function bandSpotsLeaveHeld(): boolean {
   if (dabOn) { dabSetMode(false); dabRestore = null; return true; }
@@ -13644,6 +13716,7 @@ function bandSpotsLeaveHeld(): boolean {
   if (ismOn) { ismSetMode(false); return true; }
   if (aisOn) { aisSetMode(false); return true; }
   if (ndbOn) { ndbSetMode(false); return true; }
+  if (vmOn) { vmSetMode(false); return true; }
   return false;
 }
 /** ★ A frequency typed while DAB (ADS-B, NDB) held the dial — tuned on the first config out of it, as bandSpotsPending. */
@@ -16018,13 +16091,14 @@ function anyDecoderLeft(): boolean {
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
  *  (decoderBandsDom.ts). Each leaves whichever other whole-radio mode is on first, as the menu always did. */
-function toggleDabMode() { satModeOff(); if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
-function toggleAdsbMode() { satModeOff(); if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
-function toggleIsmMode() { satModeOff(); if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
-function toggleAisMode() { satModeOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
-function toggleAvMode() { satModeOff(); if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
-function toggleSdMode() { satModeOff(); if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
-function toggleNdbMode() { satModeOff(); if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
+function toggleDabMode() { satModeOff(); if (vmOn && !dabOn) vmUiOff(); if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
+function toggleAdsbMode() { satModeOff(); if (vmOn && !adsbOn) vmUiOff(); if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
+function toggleIsmMode() { satModeOff(); if (vmOn && !ismOn) vmUiOff(); if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
+function toggleAisMode() { satModeOff(); if (vmOn && !aisOn) vmUiOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleAvMode() { satModeOff(); if (vmOn && !avOn) vmUiOff(); if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
+function toggleSdMode() { satModeOff(); if (vmOn && !sdOn) vmUiOff(); if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
+function toggleNdbMode() { satModeOff(); if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); if (vmOn && !ndbOn) vmUiOff(); ndbSetMode(!ndbOn); }
+function toggleVmMode() { satModeOff(); if (adsbOn && !vmOn) adsbUiOff(); if (ismOn && !vmOn) ismUiOff(); if (ndbOn && !vmOn) ndbUiOff(); if (aisOn && !vmOn) aisUiOff(); if (avOn && !vmOn) avUiOff(); if (sdOn && !vmOn) sdUiOff(); vmSetMode(!vmOn); }
 /* ★★★ TUNES THE RADIO ITSELF in the decoder panel — the mode menu's keys, with the mode menu's rule: a REFUSED mode is not
  *  drawn unless it is ON (so it can be left), DAB where the radio is DAB-capable. A press closes the panel, as the menu does. */
 setWholeRadioKeys(() => {
@@ -16042,6 +16116,7 @@ setWholeRadioKeys(() => {
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
   add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
+  add('vormap', 'VOR MAP', vmCap, vmOn, toggleVmMode, 'VOR / ILS map — every VOR and localiser on 108–118 MHz, swept a window at a time, with their radials and your fix on a map');
   // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md): a whole-radio mode — every satellite, its passes, a pick tunes and
   //     decodes, AUTO DOPPLER. Only where the server offers `doppler` (the radio reaches a listed downlink); the menu's rule
   //     — not drawn while it cannot run, unless on (so it can be left).
@@ -23638,7 +23713,7 @@ let hwOnlyMode: string | null = null;
 function onlyModeNow(): string {
   const offered = new Set<string>(['dab']);   // ★ DAB counted as offered: an unknown never makes a mode look "the only one"
   if (adsbCap) offered.add('adsb'); if (ismCap) offered.add('ism'); if (ndbCap) offered.add('ndb');
-  if (aisCap) offered.add('ais'); if (avCap) offered.add('avdata'); if (sdCap) offered.add('sondes');
+  if (aisCap) offered.add('ais'); if (avCap) offered.add('avdata'); if (sdCap) offered.add('sondes'); if (vmCap) offered.add('vormap');
   return onlyModeFrom(hwOnlyMode, blockedModes, adminUnlocked, offered);
 }
 /** A listener's way out of `m` while it is the only mode: said in a pill, and nothing sent. True = refused. */
@@ -23651,7 +23726,7 @@ function onlyModeRefuses(m: string): boolean {
 function onlyModeExits(): Array<[string, HTMLElement | null]> {
   const trk = (v: TrackView | null) => (v?.root.querySelector('.exit') as HTMLElement | null) ?? null;
   return [['adsb', document.getElementById('adsbExit')], ['ndb', document.getElementById('ndbExit')], ['ism', document.getElementById('ismExit')],
-          ['ais', trk(aisView)], ['avdata', trk(avView)], ['sondes', trk(sdView)]];
+          ['ais', trk(aisView)], ['avdata', trk(avView)], ['sondes', trk(sdView)], ['vormap', trk(vmView)]];
 }
 function syncOnlyMode() {
   const only = onlyModeNow();
@@ -24279,6 +24354,7 @@ function initKeyboard() {
        *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
       if (!anyOpen && adsbOn && adsbViewUp) { adsbSetMode(false); return true; }
       if (!anyOpen && ndbOn && ndbViewUp) { ndbSetMode(false); return true; }
+      if (!anyOpen && vmOn && vmView?.root && !vmView.root.hidden) { vmSetMode(false); return true; }   // ★ V12 the VOR map, as NDB's
       return anyOpen;
     },
     guide: () => togglePadGuide(),

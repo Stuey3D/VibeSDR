@@ -128,7 +128,7 @@ const STEPS: Step[] = [
         + 'talker alias and, on the amateur bands, a position for the MAP); off the amateur bands it says only that a system was '
         + 'heard, with its colour code and slot. Analogue FM on the same channel still plays. '
         + 'In DECODERS… there, the modes that tune the radio themselves and open '
-        + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, SATELLITE, BAND SKIM) come first, under TUNES THE RADIO ITSELF — they '
+        + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, VOR MAP, SONDES, SATELLITE, BAND SKIM) come first, under TUNES THE RADIO ITSELF — they '
         // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md) — where the server allows it, a pick is the listener's alone
         + 'are in this menu too; DAB\u2019s station list marks \u25B6 2 beside a station two listeners are hearing, and where the '
         + 'server gives each listener their own station a pick changes only what you hear (the multiplex stays shared); they '

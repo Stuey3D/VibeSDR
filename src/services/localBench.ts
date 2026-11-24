@@ -37,6 +37,8 @@ export interface LocalReach {
   ndb: boolean;
   avdata: boolean;
   sondes: boolean;
+  /** ★ V12 the VOR / ILS map: the radio tunes 108–118 MHz (vibeserver.json vormap). */
+  vormap?: boolean;
   hfdl: boolean;
   /** The CW decoder is offered (and the radio is not an Icom — `skim`), and the RTTY skimmer. */
   cwSkim: boolean;
@@ -126,6 +128,7 @@ const ACTIVITIES: Activity[] = [
   { key: 'sondes', title: 'Radiosondes', rows: () => ['dec_rs41', 'dec_dfm', 'dec_m10'],
     names: { dec_rs41: 'RS41', dec_dfm: 'DFM', dec_m10: 'M10 / M20' }, can: (r) => r.sondes },
   { key: 'ndb', title: 'NDB beacons', rows: () => ['dec_ndb'], can: (r) => r.ndb },
+  { key: 'vormap', title: 'VOR / ILS map (the whole navaid band)', rows: () => ['dec_vormap'], can: (r) => !!r.vormap },
   { key: 'hfdl', title: 'HFDL aircraft', rows: () => ['dec_hfdl'], can: (r) => r.hfdl },
 ];
 

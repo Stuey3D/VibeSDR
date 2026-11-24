@@ -497,6 +497,9 @@ export interface ServerOccupancy {
   avdata?: { ok: boolean; why: string; bands: AvBand[]; text: boolean };
   /** ★ V12 RADIOSONDES (RS41, a whole-radio mode on 400–406 MHz): offered / greyed with its reason; absent = no key. */
   sondes?: { ok: boolean; why: string; bands: SondeBand[] };
+  /** ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md): absent where the radio cannot tune 108–118 MHz; `wins` windows a sweep at
+   *  the running rate, `dwell` seconds each. */
+  vormap?: { ok: boolean; why: string; wins: number; dwell: number };
   /** ★★ V12 satellites: `doppler` (a version) — absent where the radio reaches no listed downlink (no entry at all). */
   sat?: { ok: boolean; why: string };
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
@@ -618,6 +621,11 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
         ? { ok: j.sondes === true, why: cleanText(j.sondesWhy, 200) || (j.sondes === true ? '' : 'Radiosondes are not available on this receiver'),
             bands: parseSondeBands(j.sondesBands) }
         : undefined,
+      vormap:    j.vormap === true || j.vormap === false
+        ? { ok: j.vormap === true, why: cleanText(j.vormapWhy, 200) || (j.vormap === true ? '' : 'The VOR / ILS map is not available on this receiver'),
+            wins: typeof j.vormapWins === 'number' && j.vormapWins > 0 && j.vormapWins < 64 ? Math.round(j.vormapWins) : 0,
+            dwell: typeof j.vormapDwell === 'number' && j.vormapDwell > 0 && j.vormapDwell < 600 ? j.vormapDwell : 30 }
+        : undefined,
       mfsk:      j.mfsk === true,
       mfskModes: parseTextModes(j.mfskModes),
       hell:      j.hell === true,
@@ -626,7 +634,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       tunable:   parseTunable(j.tunable),
       spotModes: parseSpotModes(j.spotModes),
       spotsBand: parseSpotsBandCap(j),
-      modes:     Array.isArray(j.modes) ? j.modes.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 12)).slice(0, 40) : undefined,
+      modes:     Array.isArray(j.modes) ? j.modes.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 12)).slice(0, 96) : undefined,   // ★ V12 beta93: 50 names now (was cut at 40)
       freedvSubs: Array.isArray(j.freedvSubs) ? j.freedvSubs.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 8)).slice(0, 8) : undefined,
       ism:       parseIsmCapability(j),
       ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF

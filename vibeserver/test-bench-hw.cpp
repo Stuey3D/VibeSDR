@@ -40,6 +40,7 @@ int main() {
         ok(!runs(hw, "dec_ism") && !runs(hw, "dec_lora"), "HF+ only: no ISM / LoRa (it tops out near 260 MHz)");
         ok(runs(hw, "dec_m17"), "HF+ only: M17 runs (2 m is in its 60\u2013260 MHz range)");
         ok(runs(hw, "dec_aprs9600"), "HF+ only: 9600 packet runs (2 m)");
+        ok(!runs(hw, "dec_vormap"), "HF+ only: no VOR / ILS map (vsVormapReach leaves the HF+ out)");
     }
     // ── an RTL dongle alone ──
     {
@@ -51,6 +52,7 @@ int main() {
         ok(!runs(hw, "dec_ndb") && !runs(hw, "dec_navtex"), "RTL without direct sampling: no NDB / NAVTEX (vsNdbReach)");
         ok(runs(hw, "dec_rtty"), "RTL: HF decoders run (its coverage table reaches HF — a V4, or direct sampling)");
         ok(runs(hw, "dec_aprs9600"), "RTL: 9600 packet runs (2 m and 70 cm)");
+        ok(runs(hw, "dec_vormap"), "RTL: the VOR / ILS map runs (108\u2013118 MHz)");
         Hw ds; ds.radios.push_back(benchhw::radioFor("rtl", 0, 0, 0, true));
         ok(runs(ds, "dec_ndb") && runs(ds, "dec_navtex"), "RTL with direct sampling: NDB and NAVTEX run");
     }

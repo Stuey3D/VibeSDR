@@ -209,6 +209,11 @@ flags_for() {
     # ★★ V12 VOR / ILS (docs/v12/VOR-ILS.md): 40 radials × 4 channel rates, 20 dB, offsets, voice; ILS DDM; idents; 5 min of
     #    noise and of AM speech → nothing; SIMD = scalar; cost. `test-vor clip …` writes the e2e clip. Header-only.
     test-vor)              echo "-O2" ;;
+    # ★★ V12 VOR / ILS MAP MODE (vibe_vormap_service.h, docs/v12/VOR-MAP.md): the window plan (RTL 5, RSP 2, under 1 MS/s none);
+    #    one window with every channel decoded at once at 2.4 and 8 MS/s (four VORs, two on adjacent channels, and a
+    #    localiser: radials ±2°, idents, the listed one named, nothing on the empty channels); SIMD = scalar; the sweep finds
+    #    a beacon only in window 3; fresh → faded after a sweep. ~15 s.
+    test-vormap)           echo "-O2 -lpthread -I $VDSP -I $KISS" ;;
     # ★★ V12 COSPAS-SARSAT 406 MHz (docs/v12/SARSAT.md): C/S T.001 Annex B's worked examples, the BCH codes, the protocols,
     #    the modem down to 34 dB-Hz, an hour of noise and beacon-shaped random bursts → nothing. `clip …` writes the e2e clip.
     test-sarsat)           echo "-O2" ;;
@@ -523,6 +528,7 @@ deps_for() {
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
     test-drm-xaac) echo "$XAAC_LIB" ;;   # ★ after the source, like FAAD2   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue|test-dab-tii-air) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
+    test-vormap) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ IdentVote + the datalink's front end; pffft + kiss from cobjs_for
     test-ndb|test-ndb-suspect) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
     # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
@@ -548,7 +554,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
+    test-vormap|test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -991,6 +997,9 @@ if npx tsx scripts/test_tones_app.ts; then pass=$((pass+1)); else fail=$((fail+1
 # ★ V12 VOR / ILS and 406 MHz beacons: the shared client half (src/services/navaids.ts — the radial's line, the FIX, the card),
 #   both clients' keys, the setup screens, the copy.
 if npx tsx scripts/test_navaids_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 THE VOR / ILS MAP: the shared client half (src/services/vorMap.ts — the report, the list, the map's items, the
+#    receiver FIX and its words), both clients' wiring, the setup screens.
+if npx tsx scripts/test_vormap_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -2308,6 +2317,16 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-vor" ] && [ -x "$OUT/test-sar
 else
   echo '   not run — needs VIBESERVER_BIN (and test-vor / test-sarsat built above)'; notrun=$((notrun+1))
 fi
+
+# ★★★ V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md): the real server on a fake rtl_tcp synthesising two VORs at their own
+#     frequencies (--vor: HON 113.65 in window 3, DTY 116.40 in window 5) at 2.4 MS/s — a radio held off VHF offers none;
+#     the capability (5 windows); entering, the sweep stepping window by window, both found in their own windows with their
+#     radials, idents and stations; a tune ignored; 1 fps; leaving gives the receiver back exactly; ask before tuning refuses a
+#     second listener; the only mode lands a listener and refuses their "off" (test-server-vormap). ~3 min. NOT RUN without
+#     VIBESERVER_BIN.
+printf '\n\033[1m── VOR / ILS map (end to end: the server) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vormap.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 DV ID — DMR, D-STAR, YSF, NXDN, dPMR signalling, never voice (docs/v12/DV-SIGNALLING.md): the real server on a fake
 #     rtl_tcp replaying test-dvsig's synthetic clip (our own transmitter for each system in turn): on 70 cm the identities copy
