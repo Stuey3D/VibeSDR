@@ -56,7 +56,7 @@ struct Clock {
 inline std::string spanWords(double sec) {
     sec = std::fabs(sec);
     char b[48];
-    if (sec >= 3600) std::snprintf(b, sizeof b, "%d h %d min", int(sec / 3600), int(std::fmod(sec, 3600) / 60));
+    if (sec >= 3600) { const long m = std::lround(sec / 60); std::snprintf(b, sizeof b, "%ld h %ld min", m / 60, m % 60); }
     else if (sec >= 60) std::snprintf(b, sizeof b, "%d min %d s", int(sec / 60), int(std::fmod(sec, 60)));
     else std::snprintf(b, sizeof b, "%.1f s", sec);
     return b;
@@ -92,11 +92,13 @@ inline bool checkClock(const std::vector<int32_t>& stripMs, double wallUnix, int
         why = b; return false;
     }
     if (!(wallUnix > 0) || wallStampMs < 0) { why = "this server's clock was not known for the pass"; return false; }
-    // the UTC day: the one that puts the stamp nearest our clock
+    // the UTC day of the FIRST stamp: the one that puts the newest stamp (unwrapped like the rest) nearest our clock
+    double wallMs = wallStampMs;
+    if (wallMs < first - 43200000.0) wallMs += 86400000.0;
     const double day0 = std::floor(wallUnix / 86400.0) * 86400.0;
     double best = 1e18;
-    for (int d = -1; d <= 1; d++) {
-        const double s = day0 + d * 86400.0 + wallStampMs / 1000.0 - wallUnix;
+    for (int d = -2; d <= 1; d++) {
+        const double s = day0 + d * 86400.0 + wallMs / 1000.0 - wallUnix;
         if (std::fabs(s) < std::fabs(best)) { best = s; c.dayStartUnix = day0 + d * 86400.0; }
     }
     c.skewSec = best;
@@ -132,8 +134,8 @@ inline int chooseSatellite(const std::vector<Candidate>& cs, const vibe::sat::Ob
                     : "no METEOR satellite was above this server's horizon at the picture's time";
         return -1;
     }
-    why = up.size() > 1 ? "two METEOR satellites were up at once and nothing says which one this was"
-                        : "this server's location is not set, so the satellite cannot be confirmed";
+    why = !(obs && obs->valid) ? "this server's location is not set, so the satellite cannot be confirmed"
+                               : "two METEOR satellites were up at once and nothing says which one this was";
     return -1;
 }
 
