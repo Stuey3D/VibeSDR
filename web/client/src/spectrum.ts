@@ -533,6 +533,8 @@ export interface SpectrumCallbacks {
     behind?: string[];
     /** ★ The radio's USB link losing samples, 1–3 (vibe_health.h UsbWatch). Absent = none, or an older server. */
     usb?: number;
+    /** ★ V12 2026-11-24: work eased ON PURPOSE (vibe_health.h Health::notes) — information, not a fault. */
+    notes?: string[];
   }) => void;
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
@@ -1784,6 +1786,7 @@ export class SpectrumClient {
             : { present: false },
           behind: Array.isArray(msg.behind) ? msg.behind.filter((b: unknown) => typeof b === 'string') : undefined,
           usb: Number(msg.usb) || 0,
+          notes: Array.isArray(msg.notes) ? msg.notes.filter((b: unknown) => typeof b === 'string') : undefined,
         });
         break;
       /* ★★★ AN ICOM'S STATUS LINE — mode, FIL, the S-meter (≤4/s), TX, link, scope rate/span/mode. Sent on join,

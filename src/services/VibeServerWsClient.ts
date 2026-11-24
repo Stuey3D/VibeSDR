@@ -135,6 +135,8 @@ export type ServerHealth = {
   behind?: string[];
   /** ★ The radio's USB link losing samples, 1–3 (vibe_health.h UsbWatch). 0/absent = none, or an older server. */
   usb?: number;
+  /** ★ V12 2026-11-24: work eased ON PURPOSE (vibe_health.h Health::notes) — information, not a fault. Absent = none. */
+  notes?: string[];
 };
 
 /** ★★★ ADDITIVE, SO THE CALLBACK LIVES HERE AND NOT IN THE SHARED SHAPE'S FILE.
@@ -3040,6 +3042,7 @@ export abstract class VibeServerWsClient {
           : { present: false },
         behind: Array.isArray(msg.behind) ? msg.behind.filter((x: unknown) => typeof x === 'string') : undefined,
         usb: Number(msg.usb) || 0,
+        notes: Array.isArray(msg.notes) ? msg.notes.filter((x: unknown) => typeof x === 'string') : undefined,
       });
       return;
     }

@@ -11,6 +11,8 @@ export interface BgVfo {
   hz: number; dec: string; label: string;
   state: 'running' | 'paused' | 'out';
   why?: string; lock?: string; last?: number; cpuPct?: number | null;
+  /** ★ V12 2026-11-24: paused FOR LISTENERS (easing — vibe_bg_ease.h), and a Band VFO's extra modes off for them. */
+  eased?: boolean; chipsOff?: boolean;
   /** FT8/FT4 only: the run's summary so far (rewritten in the gallery every 10 min). */
   spots?: number; countries?: number;
   /** ★ V12 2026-10-27: a Band digital-spots VFO — its band ("40 m") and what the governor runs now. */
@@ -29,13 +31,36 @@ export interface BgStatus {
   /** ★ V12 2026-10-25: an ISM profile — its band, and while it runs the devices listed now and the day so far. */
   ism?: { band: string; name: string; devices?: number; today?: string };
   runner?: { running: boolean; inRangeOnly?: boolean; listenerOn?: boolean; channelsCpuPct?: number | null;
-             cpuPct?: number | null; vfos: BgVfo[] };
+             cpuPct?: number | null; vfos: BgVfo[];
+             /** ★ V12 2026-11-24 what the CPU figure is SPREAD over: background-rung threads, the machine's cores, the
+              *  busiest single thread (Linux; absent elsewhere and on older servers). */
+             threads?: number; cores?: number; hottestPct?: number; hottestName?: string;
+             /** ★ V12 2026-11-24 easing for listeners: VFOs paused, bands with extra modes off, and the line. */
+             ease?: { paused: number; chips: number; excused?: boolean; note?: string } };
 }
 
 const pct = (v: number | null | undefined) =>
   typeof v === 'number' && Number.isFinite(v) ? `${v < 10 ? v.toFixed(1) : v.toFixed(0)} % of one core` : 'measuring…';
 const pctShort = (v: number | null | undefined) =>
   typeof v === 'number' && Number.isFinite(v) ? `${v < 10 ? v.toFixed(1) : v.toFixed(0)} %` : '';
+/** ★★★ V12 2026-11-24 — THE FIGURE SAYS WHAT IT IS (Stuart, 24 Nov: "does background decoding get spread across cores as
+ *  right now it says 87% of 1 core"). It is a SUM over every background thread, and read bare it looks like one core
+ *  nearly full. "87 % of one core in all — spread over 41 threads on 4 cores (22 % of this machine) · busiest thread
+ *  33 % (vibe-bgdsp)". A server that does not send the spread (older, or not Linux) keeps the bare figure. */
+export function bgCpuText(r: { cpuPct?: number | null; threads?: number; cores?: number; hottestPct?: number; hottestName?: string }): string {
+  const v = r.cpuPct;
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 'measuring…';
+  const base = pct(v);
+  const threads = typeof r.threads === 'number' && r.threads > 0 ? r.threads : 0;
+  const cores = typeof r.cores === 'number' && r.cores > 0 ? r.cores : 0;
+  if (!threads && !cores) return base;
+  let t = `${base} in all — spread over `
+    + (threads ? `${threads} thread${threads === 1 ? '' : 's'}` : 'its threads')
+    + (cores ? ` on ${cores} core${cores === 1 ? '' : 's'} (${pctShort(v / cores)} of this machine)` : '');
+  if (typeof r.hottestPct === 'number' && Number.isFinite(r.hottestPct) && r.hottestPct >= 0)
+    t += ` · busiest thread ${pctShort(r.hottestPct)}${r.hottestName ? ` (${r.hottestName})` : ''}`;
+  return t;
+}
 /** "3 min 20 s", "45 s". */
 export function bgDuration(sec: number): string {
   const s = Math.max(0, Math.round(sec));
@@ -86,6 +111,8 @@ export function bgVfoLine(v: BgVfo): string {
     return p.join(' · ');
   }
   const parts = [`${khz(v.hz)} ${name}`];
+  // ★ V12 2026-11-24: a Band skimmer with its extra modes eased off for listeners says so (FT8/FT4/WSPR carry on)
+  if (v.chipsOff && v.state === 'running') parts.push('CW / RTTY / PSK eased off for listeners');
   if (v.state === 'out') parts.push("out of range (outside the listener's window)");
   else if (v.state === 'paused') parts.push(`paused (${v.why || 'a listener needed the decoder slot'})`);
   else if (typeof v.spots === 'number') {
@@ -136,7 +163,9 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
                     : `${p} · ${of}${bg.locked ? ' · locked window' : ''}`;
   }
   if (bg.ism && bg.state === 'waiting' && !bg.locked) head = `${p} (ISM ${bg.ism.name}) starts in ${bgDuration(bg.startsIn ?? 0)} unless somebody arrives`;
-  if (r) head += ` · ${pct(r.cpuPct)}`;
+  if (r) head += ` · ${bgCpuText(r)}`;
+  // ★ V12 2026-11-24: background decoding stepping back for listeners — on purpose, said as such (not a warning)
+  if (r?.ease?.note) head += ` · ${r.ease.note}`;
   const rows = r ? vfos.map(bgVfoLine) : [];
   if (r && running && typeof r.channelsCpuPct === 'number') rows.push(`channels (one FFT for every VFO) · ${pctShort(r.channelsCpuPct)}`);
   return { head: `Background decoding · ${head}`, rows, warn };
