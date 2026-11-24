@@ -161,7 +161,18 @@ public:
 
     /** Decode one 255-byte code word in place (cw[0] is the coefficient of x²⁵⁴). Returns bytes corrected (0…16), or −1
      *  when the word is beyond the code — ★ and on −1 the word is left exactly as it came. */
-    int decode(uint8_t* cw) const {
+    int decode(uint8_t* cw) const { return decode(cw, nullptr, 0); }
+
+    /** ★★ ERRORS AND ERASURES (2026-11-24, docs/v12/LRPT-SENSITIVITY.md §Erasures). `era` = byte indices (0…254, as
+     *  cw[]) the caller does not trust; with e of them the code corrects any 2·(errors) + e ≤ 32. Textbook (Blahut): the
+     *  erasure locator Γ(x) = Π(1 − X_j x) starts Berlekamp–Massey with L = e; Forney gives every value, erasures and
+     *  errors alike, and an erasure that was in fact right gets value 0. Returns the bytes changed, −1 beyond the code
+     *  (the word left exactly as it came). ★ NOT USED BY THE RECEIVER: erasing the bytes the Viterbi's re-encoded path
+     *  doubted most recovered 1 frame in 400 on the real passes and nothing measurable on the synthetic curve — when a
+     *  word fails (AWGN, Es/N0 1.5 dB) it has 17–24 bad bytes and the doubt ranking puts only a third of them in its top
+     *  16. Kept (tested) for a better reliability (a SOVA). */
+    int decode(uint8_t* cw, const int* era, int ne) const {
+        if (ne < 0 || ne > R) return -1;
         uint8_t S[R];
         bool any = false;
         /* ★ Horner with a 256-byte "times this root" table per root (8 KB in all): two loads and an XOR a byte, where a
@@ -173,27 +184,36 @@ public:
             S[i] = acc; any |= acc != 0;
         }
         if (!any) return 0;
-        // Berlekamp–Massey.
+        // Berlekamp–Massey, started from the erasure locator Γ(x) (Γ = 1 with no erasures).
         uint8_t L[R + 1] = {1}, B[R + 1] = {1}, T[R + 1];
-        int Ld = 0, m = 1; uint8_t b = 1;
-        for (int n = 0; n < R; n++) {
+        for (int k = 0; k < ne; k++) {
+            const int p = N - 1 - era[k];                     // the power of x this byte is the coefficient of
+            if (p < 0 || p >= N) return -1;
+            const uint8_t X = exp_[(p * PRIM) % N];           // its locator β^p
+            for (int i = k + 1; i >= 1; i--) L[i] ^= mul(L[i - 1], X);   // Γ ← Γ · (1 − X x)  (char 2: − = +)
+        }
+        std::memcpy(B, L, sizeof(L));
+        int Ld = ne, m = 1; uint8_t b = 1;
+        for (int n = ne; n < R; n++) {
             uint8_t d = S[n];
             for (int i = 1; i <= Ld; i++) d ^= mul(L[i], S[n - i]);
             if (d == 0) { m++; continue; }
             std::memcpy(T, L, sizeof(L));
             const uint8_t coef = div(d, b);
             for (int i = 0; i + m <= R; i++) L[i + m] ^= mul(coef, B[i]);
-            if (2 * Ld <= n) { Ld = n + 1 - Ld; std::memcpy(B, T, sizeof(T)); b = d; m = 1; }
+            if (2 * Ld <= n + ne) { Ld = n + 1 + ne - Ld; std::memcpy(B, T, sizeof(T)); b = d; m = 1; }
             else m++;
         }
-        if (Ld > R / 2) return -1;
+        // ★ the locator's true degree (BM's L can overstate it when the top coefficients cancel)
+        int deg = R; while (deg > 0 && L[deg] == 0) deg--;
+        if (deg != Ld || 2 * (Ld - ne) + ne > R) return -1;
         // Chien search over β: error at power p (coefficient of x^p, byte index N-1-p) ⇔ Λ(β^-p) = 0.
-        int pos[R / 2], nf = 0;
+        int pos[R], nf = 0;
         for (int p = 0; p < N && nf <= Ld; p++) {
             const int e = (N - (p * PRIM) % N) % N;           // log_α of β^-p
             uint8_t v = 0;
             for (int i = Ld; i >= 0; i--) v = uint8_t(mul(v, exp_[e]) ^ L[i]);
-            if (v == 0) { if (nf < R / 2) pos[nf] = p; nf++; }
+            if (v == 0) { if (nf < R) pos[nf] = p; nf++; }
         }
         if (nf != Ld) return -1;
         // Ω(x) = S(x)Λ(x) mod x^R; Forney: e = X^(1-FCR) Ω(X⁻¹) / Λ'(X⁻¹), X = β^p.
@@ -203,7 +223,8 @@ public:
             for (int j = 0; j <= i && j <= Ld; j++) a ^= mul(L[j], S[i - j]);
             Om[i] = a;
         }
-        uint8_t fix[R / 2];
+        uint8_t fix[R];
+        int changed = 0;
         for (int k = 0; k < nf; k++) {
             const int p = pos[k];
             const int xinv = (N - (p * PRIM) % N) % N;        // log of X⁻¹
@@ -214,10 +235,14 @@ public:
             const int xlog = (p * PRIM) % N;
             const int pw = ((xlog * (1 - FCR)) % N + N) % N;
             fix[k] = mul(exp_[pw], div(om, dl));
-            if (fix[k] == 0) return -1;
+            if (fix[k] == 0) {
+                // ★ an erasure that was right all along; an ERROR position with value 0 means the decode is nonsense
+                bool isEra = false; for (int j = 0; j < ne && !isEra; j++) isEra = era[j] == N - 1 - p;
+                if (!isEra) return -1;
+            } else changed++;
         }
         for (int k = 0; k < nf; k++) cw[N - 1 - pos[k]] ^= fix[k];
-        return nf;
+        return changed;
     }
 
     uint8_t mul(uint8_t a, uint8_t b) const { return (a && b) ? exp_[log_[a] + log_[b]] : 0; }

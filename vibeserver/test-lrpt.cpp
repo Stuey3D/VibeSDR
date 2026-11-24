@@ -129,6 +129,30 @@ static void testRs() {
     CHECK(okFix > 280, "corrected %d", okFix);
     CHECK(miscorrect == 0, "17..21 errors miscorrected %d (refused %d)", miscorrect, refused);
     std::printf("  0–16 errors corrected %d / %d; 17–21 refused %d, miscorrected %d\n", okFix, okFix + badFix, refused, miscorrect);
+    // ★★ errors AND erasures (2026-11-24): 2·errors + erasures ≤ 32 always decodes; flagged bytes that were right cost nothing
+    {
+        int ok = 0, bad = 0, refusedOver = 0, wrongOver = 0, n = 0;
+        for (int trial = 0; trial < 600; trial++) {
+            uint8_t d[223], p[32], cw[255], ref[255];
+            for (auto& x : d) x = uint8_t(rng());
+            rs.encode(d, p); std::memcpy(cw, d, 223); std::memcpy(cw + 223, p, 32); std::memcpy(ref, cw, 255);
+            const int ne = int(rng() % 33);                         // erasures flagged
+            const int nbadEra = ne ? int(rng() % (ne + 1)) : 0;     // of them really wrong
+            const int room = (32 - ne) / 2;
+            const bool over = trial % 5 == 4;                       // one in five: beyond the code
+            const int nerr = over ? room + 1 + int(rng() % 3) : int(rng() % (room + 1));
+            std::vector<int> pos;
+            while ((int)pos.size() < ne + nerr) { const int q = int(rng() % 255); if (std::find(pos.begin(), pos.end(), q) == pos.end()) pos.push_back(q); }
+            for (int i = 0; i < nbadEra; i++) cw[pos[size_t(i)]] ^= uint8_t(1 + rng() % 255);
+            for (int i = ne; i < ne + nerr; i++) cw[pos[size_t(i)]] ^= uint8_t(1 + rng() % 255);
+            const int e = rs.decode(cw, pos.data(), ne);
+            n++;
+            if (!over) { if (e == nbadEra + nerr && !std::memcmp(cw, ref, 255)) ok++; else { bad++; if (std::getenv("RSDBG")) std::printf("    ne %d badEra %d err %d → %d\n", ne, nbadEra, nerr, e); } }
+            else { if (e < 0) refusedOver++; else if (std::memcmp(cw, ref, 255)) wrongOver++; }
+        }
+        CHECK(bad == 0, "errors+erasures within the bound: %d wrong of %d", bad, ok + bad);
+        std::printf("  errors + erasures (2·err + era ≤ 32): %d / %d corrected; beyond: %d refused, %d miscorrected\n", ok, ok + bad, refusedOver, wrongOver);
+    }
     // interleaved frame
     uint8_t v[892], f[1020];
     for (auto& x : v) x = uint8_t(rng());
