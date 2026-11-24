@@ -3912,7 +3912,15 @@ function load(first) {
 wireDial();
 loadPlan().then(() => { if (ALL.length) renderDial(); });
 load(true);
-setInterval(() => load(false), 60000);
+/* ★★★ 2026-11-24 NOT WHILE NOBODY IS LOOKING (Stuart: Cloudflare "Workers daily request usage is at 88%", two days running).
+ *  Every refresh asks EVERY listed server (and each radio of a multi-radio one) for its vibeserver.json through the tunnel
+ *  Worker — ~20–30 requests a minute per open tab, ~30–45k a day for a tab left in the background, and the free plan is
+ *  100k a day for the whole account. A tab nobody can see refreshes nothing; it refreshes at once when it is looked at
+ *  again (if a minute has passed), so a viewer never sees a stale page. */
+let lastLoad = Date.now();
+const loadIfSeen = () => { if (document.hidden) return; lastLoad = Date.now(); load(false); };
+setInterval(loadIfSeen, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastLoad >= 60000) loadIfSeen(); });
 
 /* ★ The MODES pill's list, for touch (and click): it sits inside the card's link, so the tap is stopped from opening
  *  the receiver. One panel at a time; a tap elsewhere, Escape or scrolling closes it. */
