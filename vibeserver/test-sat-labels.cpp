@@ -3,11 +3,11 @@
 // the mirror), the ORBCOMM birds are a SYNTHETIC fixture (plausible orbits — testdata-sat/celestrak-orbcomm-SYNTHETIC-*),
 // built into sats.json by the directory mirror's own code (sats-orbcomm-SYNTHETIC-2026-11-22.json).
 //
-// §1 sats.json with label-only birds: they parse into their own set; never in the list, the picker, the reach gate or
-//    a Doppler lock; a validator (no label set) accepts the file; an all-label file is refused.
+// §1 sats.json with ORBCOMM label-only birds: since 2026-11-24 they become REGULAR ORBCOMM picks (docs/v12/ORBCOMM.md);
+//    other label-only birds still parse apart; a validator (no label set) accepts the file; an all-label file is refused.
 // §2 the ISS overhead (São Paulo, the reference pass): its downlinks named at the Doppler-shifted frequency, equal to the
 //    lock's model; only inside the window; the rate's sign; gone after LOS; the 4-s cache; no location / no time = none.
-// §3 ORBCOMM: a label-only bird rises — named, flagged, NFM, its own SatNOGS channel or the shifted band.
+// §3 ORBCOMM rises — named, NFM, its own SatNOGS channel, or the shifted band (that label keeps the merge flag).
 // §4 the wire message: parses back, the flags, bounded size, the cap (highest first).
 // §5 cost: a refresh of every bird.
 #include "vibe_sat_engine.h"
