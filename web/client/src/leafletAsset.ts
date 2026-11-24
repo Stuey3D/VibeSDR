@@ -13,6 +13,8 @@
  *  ★ `typeof` guard: a test harness that bundles a source file without build-web's define gets null
  *    (no Leaflet map) rather than a ReferenceError.
  */
+import { assetOrigin } from './origin';
+
 declare const __VS_LEAFLET__: { js: string; css: string; jsSri: string; cssSri: string };
 
 export interface LeafletAsset { js: string; css: string; jsSri: string; cssSri: string }
@@ -23,7 +25,7 @@ export const LEAFLET_ASSET: LeafletAsset | null =
 /** Load Leaflet into `doc` (this page by default) from `origin` + its /vs/ path. Resolves true once
  *  window.L exists, false on any failure or after `timeoutMs` — a map that cannot load must cost
  *  nothing but a map. */
-export function loadLeafletInto(doc: Document = document, origin = '', timeoutMs = 6000): Promise<boolean> {
+export function loadLeafletInto(doc: Document = document, origin = assetOrigin(), timeoutMs = 6000): Promise<boolean> {
   const win = doc.defaultView as (Window & { L?: unknown }) | null;
   if (win?.L) return Promise.resolve(true);
   const a = LEAFLET_ASSET;
@@ -31,10 +33,12 @@ export function loadLeafletInto(doc: Document = document, origin = '', timeoutMs
   return new Promise<boolean>((resolve) => {
     const css = doc.createElement('link');
     css.rel = 'stylesheet';
+    css.crossOrigin = 'anonymous';   // ★ beta93: SRI on a cross-origin file needs a CORS fetch (origin.ts assetOrigin)
     css.href = origin + a.css;
     css.integrity = a.cssSri;
     doc.head.appendChild(css);
     const js = doc.createElement('script');
+    js.crossOrigin = 'anonymous';
     js.src = origin + a.js;
     js.integrity = a.jsSri;
     js.onload = () => resolve(true);

@@ -260,10 +260,25 @@ async function bundle() {
   //     a refresh is the cure. onerror fires only for a fetch or parse failure of the module graph,
   //     never after it has run, so a fallback can never run the client twice.
   //  ★ Replacer FUNCTIONS, not strings: in a replacement string "$&" means "the matched text".
-  const preload = eager.map((n) => `<link rel="modulepreload" href="${JS_DIR}${n}">`).join('');
-  const run = `<script>(function(){var b=${BASE_JS},d=[${JSON.stringify(JS_DIR)}];if(b)d.push(b+${JSON.stringify(JS_DIR)});`
-            + `function go(i){var s=document.createElement('script');s.type='module';s.src=d[i]+${JSON.stringify(entry.name)};`
-            + `s.onerror=function(){s.remove();if(i+1<d.length)return go(i+1);var e=document.createElement('div');`
+  /* ★★★ beta93 — THE SCRIPTS FROM THE RECEIVER ITSELF WHEN THE PAGE CAME THROUGH THE DIRECTORY (Stuart 2026-11-24: "the
+   *     gallery etc should all be handled via the free tunnel not the main workers — they should only establish the
+   *     connection"). Only the HTML document needs the stable *.vibeserver.vibesdr.net origin (localStorage is keyed by
+   *     it); the scripts are just bytes. The directory's Worker writes <meta name="vibe-direct-assets" content="<tunnel
+   *     host>"> at the TOP of the head — and only when the receiver's own Content-Security-Policy already allows script
+   *     from that host (local_sdr_shim.cpp adds it for a request the directory proxied) — so this runs before the
+   *     preloads are wanted. No meta (a LAN page, an older directory, an older server): '' and everything is exactly as
+   *     before. window.__vsJsOrigin tells the rest (web/client/src/origin.ts assetOrigin).
+   *  ★ crossOrigin 'anonymous' on the preload AND the module (below) when direct: the two must share a credentials mode
+   *    or the preload is fetched for nothing. A module that will not load from there falls back to /vs/ here. */
+  const ORIGIN_JS = `var o='',m=document.querySelector('meta[name="vibe-direct-assets"]'),h=m?m.getAttribute('content')||'':'';`
+                  + `if(location.protocol==='https:'&&/^[A-Za-z0-9.-]+(:\\d{1,5})?$/.test(h)&&h.toLowerCase()!==location.host.toLowerCase())o='https://'+h;`
+                  + `window.__vsJsOrigin=o;`;
+  const preload = `<script>(function(){var n=${JSON.stringify(eager)};${ORIGIN_JS}`
+                + `for(var i=0;i<n.length;i++){var l=document.createElement('link');l.rel='modulepreload';if(o)l.crossOrigin='anonymous';`
+                + `l.href=o+${JSON.stringify(JS_DIR)}+n[i];document.head.appendChild(l)}})()</script>`;
+  const run = `<script>(function(){var b=${BASE_JS},o=window.__vsJsOrigin||'',d=[o+${JSON.stringify(JS_DIR)}];if(o)d.push(${JSON.stringify(JS_DIR)});if(b)d.push(b+${JSON.stringify(JS_DIR)});`
+            + `function go(i){var s=document.createElement('script');s.type='module';if(d[i].charAt(0)!=='/')s.crossOrigin='anonymous';s.src=d[i]+${JSON.stringify(entry.name)};`
+            + `s.onerror=function(){s.remove();if(o&&i===0)window.__vsJsOrigin='';if(i+1<d.length)return go(i+1);var e=document.createElement('div');`
             + `e.textContent='This page did not finish loading. Refresh to try again.';`
             + `e.style.cssText='position:fixed;left:0;right:0;bottom:0;padding:12px;background:#300;color:#ffb833;font:14px monospace;text-align:center;z-index:99999';`
             + `document.body.appendChild(e)};document.body.appendChild(s)}go(0)})()</script>`;

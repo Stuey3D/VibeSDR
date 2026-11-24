@@ -17,6 +17,7 @@
  *   Panfrost GPU shared with the waterfall underneath.
  */
 import { loadLeafletInto } from './leafletAsset';
+import { dataUrl } from './origin';
 import { loadVibemapSource } from './chunkCache';
 import { setPadCapture, type PadCaptureAction } from './gamepad';
 import { padFace } from './padFace';
@@ -208,7 +209,7 @@ export function openMapPick(o: MapPickOptions): void {
                         zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false, minZoom: MIN_Z, maxZoom: MAX_Z,
                         zoomSnap: 1, boxZoom: false });
     map.setView([lat, lon], zoom, { animate: false });
-    if (w.VibeMap) vm = w.VibeMap.attach(map, { dataBase: '/mapdata/v1/', profile: 'directory', memory: { lowRam: true } });
+    if (w.VibeMap) vm = w.VibeMap.attach(map, { dataBase: dataUrl('/mapdata/v1/'), profile: 'directory', memory: { lowRam: true } });
     else note.textContent = 'The map\'s drawing code did not load — the crosshair still works.';
     if (w.VibeMap) note.textContent = '';
     // ★ A finger or a mouse may move it too (desktop testing): the readout follows any move, not only ours

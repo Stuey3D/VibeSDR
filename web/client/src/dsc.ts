@@ -189,9 +189,9 @@ function draw() {
 }
 function bootLeaflet() {
   if (!LEAFLET) { document.getElementById('note').textContent = 'The map could not be loaded.'; return; }
-  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = LEAFLET.css; css.integrity = LEAFLET.cssSri;
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.crossOrigin = 'anonymous'; css.href = LEAFLET.css; css.integrity = LEAFLET.cssSri;
   document.head.appendChild(css);
-  const js = document.createElement('script'); js.src = LEAFLET.js; js.integrity = LEAFLET.jsSri;
+  const js = document.createElement('script'); js.crossOrigin = 'anonymous'; js.src = LEAFLET.js; js.integrity = LEAFLET.jsSri;
   js.onload = () => {
     L = window.L;
     if (!window.VibeMap) { const s = document.createElement('script'); s.textContent = VIBEMAP_SRC; document.head.appendChild(s); }

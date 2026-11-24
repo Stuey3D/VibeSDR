@@ -182,7 +182,7 @@ import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, type AskState } from '../../../src/services/dialChat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
-import { httpBase, wsBase, isValidServerHost } from './origin';
+import { httpBase, wsBase, isValidServerHost, dataUrl, dataOrigin, assetOrigin, watchDirectFetches, relearnDirectHost } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
 
 /** True when THIS process is the front door — it owns no radio, so START and the PIN are
@@ -3010,6 +3010,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onStatus: (s, detail) => {
       setStatus(s, detail);
       if (s === 'closed' || s === 'error') rspAgcClear();   // ★ the AGC readout described the radio we just lost
+      // ★★ beta93: a socket that drops may mean the tunnel host rotated (a server restart) — ask the directory where
+      //    the receiver is now, rate-limited (origin.ts relearnDirectHost); a move reloads the page (below).
+      //    ★ Only a socket LOST (1006, never opened or cut) — not an ordinary close, and not the watchdog's own.
+      if (s === 'closed' && detail === 'connection lost') void relearnDirectHost();
       // Server-side settings live on the SERVER, so restoring the sliders isn't
       // enough — they have to be re-sent, or the UI shows values the radio isn't
       // actually using. Also covers reconnects, where the shim starts fresh.
@@ -3362,7 +3366,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // Register the service worker — Chromium will not offer "install" without one. It caches
   // nothing (see /sw.js); it exists purely to satisfy the installability rule.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register(P('/sw.js')).catch(() => { /* http:// LAN, or unsupported */ });
+    // ★ beta93: BASE_PATH, never P() — a service worker must be same-origin (origin.ts dataUrl).
+    navigator.serviceWorker.register(BASE_PATH + '/sw.js').catch(() => { /* http:// LAN, or unsupported */ });
   }
 
   buildControls();
@@ -3966,8 +3971,17 @@ const BASE_PATH = (() => {
   const m = location.pathname.match(/^\/r\/[^/]+/);
   return m ? m[0] : '';
 })();
-/** An absolute path on THIS receiver, prefix included. */
-const P = (path: string) => BASE_PATH + path;
+/** An absolute URL for an HTTP request to THIS receiver, prefix included.
+ *  ★★★ beta93: on a page that came through the directory's slug proxy this is https://<the receiver's own host>/…,
+ *      not the page's origin — every read goes direct, never through the directory's Worker (origin.ts dataUrl).
+ *      Elsewhere it is the bare path exactly as before. ★ NOT for anything that must stay same-origin: the service
+ *      worker registration and links a person follows use BASE_PATH directly. */
+const P = (path: string) => dataUrl(BASE_PATH + path);
+// ★ Before anything fetches: a proxied page watches its direct reads, and re-learns the host if the tunnel rotated.
+watchDirectFetches();
+// ★★ THE RECEIVER MOVED (its tunnel restarted under a new hostname): every socket is dialling a host that is gone, so
+//    the page starts again from the stable address — one document through the Worker, then direct to the new host.
+window.addEventListener('vibe-direct-moved', () => { location.reload(); });
 
 const NO_AUDIO = location.hash.includes('noaudio');
 const NO_WF    = location.hash.includes('nowf');
@@ -6696,7 +6710,7 @@ function wireIcomDoorPower(host: HTMLElement, radios: any[]) {
       const words = row?.querySelector('.sub') as HTMLElement | null;
       try {
         const rid = encodeURIComponent(r.id || r.serial);
-        const res = await fetch(`${location.origin}/r/${rid}/vibeserver/icom/power?action=${act}&${adminTicketQuery()}`,
+        const res = await fetch(dataUrl(`/r/${rid}/vibeserver/icom/power?action=${act}&${adminTicketQuery()}`),
                                 { method: 'POST', cache: 'no-store' });
         const j = await res.json().catch(() => ({} as any));
         if (words) words.textContent = j.ok ? (act === 'off' ? 'Switching it off…' : 'Switching it on — about a minute…')
@@ -7104,7 +7118,7 @@ async function showSplashRadios(): Promise<void> {
       //     resolves to the same radio; the server still accepts the serial, so an older link and
       //     an older server both keep working.
       const rid = encodeURIComponent((r as any).id || r.serial);
-      const base = `${location.origin}/r/${rid}`;
+      const base = dataUrl(`/r/${rid}`);
       const resp = await fetch(`${base}/vibeserver.json`, { cache: 'no-store' });
       if (!resp.ok) { latestRadioStatus.delete(r.serial); return null; }
       const j = await resp.json();
@@ -8656,7 +8670,7 @@ function forgetDeadLogo(src: string) {
   if (!src) return;
   let u: URL;
   try { u = new URL(src, location.href); } catch { return; }
-  if (u.origin === location.origin || !/^https?:$/.test(u.protocol)) return;
+  if (u.origin === location.origin || u.origin === dataOrigin() || !/^https?:$/.test(u.protocol)) return;   // ★ beta93: our own reads may be direct (origin.ts)
   const dead = u.href;
   const same = (v: string | null | undefined) => { if (!v) return false; try { return new URL(v, location.href).href === dead; } catch { return false; } };
   for (const [k, v] of dabLogos) if (same(v)) (window as any).dabLogoFailed?.(k);
@@ -8714,7 +8728,7 @@ async function dabLogoLookup(key: string, sv: DabState['services'][number], d: D
         if (r.ok) {
           // ★ An absolute broadcaster URL (the Sony Lite server answers with Global's own), or the server's own copy.
           const u = String((await r.json())?.logo ?? '');
-          url = webImageUrl(u) || (u.startsWith('/') && !u.startsWith('//') ? u : '') || null;
+          url = webImageUrl(u) || (u.startsWith('/') && !u.startsWith('//') ? dataUrl(u) : '') || null;   // ★ beta93 direct (origin.ts)
         }
         else if (r.status >= 500) stalled = true;
       } catch { stalled = true; } finally { clearTimeout(t); }
@@ -11502,7 +11516,7 @@ function buildArtwork() {
   //    the page, 36 KB of every visit (twice over, with an unused copy) for a picture only the OS
   //    media controls show. The server has always served the same file as the PWA icon, and a
   //    front door answers /icon too, so an absolute path works from every page.
-  if (!base.getAttribute('src')) { base.onload = use; base.src = '/icon-512.png'; return; }
+  if (!base.getAttribute('src')) { base.onload = use; base.src = dataUrl('/icon-512.png'); return; }   // ★ beta93 direct (origin.ts)
   if (base.complete) use(); else base.onload = use;
 }
 
@@ -14258,10 +14272,12 @@ function openPinsMap(pins: DscPin[]) {
   const w = window.open('', '_blank');
   if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
   const origin = /^https?:$/.test(location.protocol) ? location.origin : '';
-  const leaflet = LEAFLET_ASSET ? { js: origin + LEAFLET_ASSET.js, css: origin + LEAFLET_ASSET.css, jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null;
+  // ★ beta93: the script from wherever the page's scripts come from, the DATA from the receiver directly (origin.ts).
+  const jsOrigin = origin ? (assetOrigin() || origin) : '';
+  const leaflet = LEAFLET_ASSET ? { js: jsOrigin + LEAFLET_ASSET.js, css: jsOrigin + LEAFLET_ASSET.css, jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null;
   void Promise.all([probeMapGL(), loadVibemapSource()]).then(([kit, m]) => {
     if (w.closed) return;
-    w.document.write(dscMapHtml(kit, m.VIBEMAP_JS, pins, myPos(), leaflet, origin ? origin + '/mapdata/v1/' : '/mapdata/v1/'));
+    w.document.write(dscMapHtml(kit, m.VIBEMAP_JS, pins, myPos(), leaflet, origin ? dataUrl(origin + '/mapdata/v1/') : '/mapdata/v1/'));
     w.document.close();
   }).catch((e) => {
     console.error('[map] the map could not load', e);
@@ -18558,11 +18574,11 @@ const TZ_ABBR = ${safe(srvClockNow()?.abbr ?? '')};
 // ★ The Leaflet fallback's renderer (web/mapkit/vibemap.js), as a string for a script element.
 const VIBEMAP_SRC = ${safe(VIBEMAP_JS)};
 // ★ Its data, on the server that opened this window — absolute, since this window is about:blank.
-const GL_DATA_BASE = ${safe(/^https?:$/.test(location.protocol) ? location.origin + '/mapdata/v1/' : '/mapdata/v1/')};
+const GL_DATA_BASE = ${safe(/^https?:$/.test(location.protocol) ? dataUrl(location.origin + '/mapdata/v1/') : '/mapdata/v1/')};
 // ★★★ LEAFLET FROM THE SERVER THAT OPENED THIS WINDOW, with its SRI hash — never a CDN. This
 //     window is about:blank and shares the receiver's origin, so a script it loads runs as the owner.
-const LEAFLET = ${safe(LEAFLET_ASSET ? { js: (/^https?:$/.test(location.protocol) ? location.origin : '') + LEAFLET_ASSET.js,
-                                          css: (/^https?:$/.test(location.protocol) ? location.origin : '') + LEAFLET_ASSET.css,
+const LEAFLET = ${safe(LEAFLET_ASSET ? { js: (/^https?:$/.test(location.protocol) ? (assetOrigin() || location.origin) : '') + LEAFLET_ASSET.js,
+                                          css: (/^https?:$/.test(location.protocol) ? (assetOrigin() || location.origin) : '') + LEAFLET_ASSET.css,
                                           jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null)};
 // ★ The origin of the page that opened this one. location.origin here is "null" (about:blank), so it is
 //   handed over rather than read.
@@ -18864,10 +18880,10 @@ function bootLeaflet() {
     return;
   }
   const css = document.createElement('link');
-  css.rel = 'stylesheet'; css.href = LEAFLET.css; css.integrity = LEAFLET.cssSri;
+  css.rel = 'stylesheet'; css.crossOrigin = 'anonymous'; css.href = LEAFLET.css; css.integrity = LEAFLET.cssSri;
   document.head.appendChild(css);
   const js = document.createElement('script');
-  js.src = LEAFLET.js; js.integrity = LEAFLET.jsSri;
+  js.crossOrigin = 'anonymous'; js.src = LEAFLET.js; js.integrity = LEAFLET.jsSri;
   js.onload = () => {
     L = window.L;
     ensureVibeMap();
@@ -24293,7 +24309,7 @@ async function refreshSplashRadios(): Promise<void> {
   const live = await Promise.all(radios.map(async (r) => {
     try {
       const rid = encodeURIComponent((r as any).id || r.serial);
-      const resp = await fetch(`${location.origin}/r/${rid}/vibeserver.json`, { cache: 'no-store' });
+      const resp = await fetch(dataUrl(`/r/${rid}/vibeserver.json`), { cache: 'no-store' });
       if (!resp.ok) { latestRadioStatus.delete(r.serial); return null; }
       const j = await resp.json();
       // ★ The click handler reads THIS, not the object the card was built from — see the map.

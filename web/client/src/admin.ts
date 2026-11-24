@@ -17,7 +17,7 @@ import { fetchAuthChallenge, vibeAuthToken } from './auth';
 // ★ The client already knows how to turn an ISO code into a flag — it does it for RDS station
 //   countries. Reuse it rather than growing a second copy that renders a different set.
 import { isoToFlag } from '../../../src/services/rdsCountry';
-import { httpBase } from './origin';
+import { httpBase, dataUrl } from './origin';
 import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
@@ -796,7 +796,7 @@ async function makeCountryMap(host: HTMLElement): Promise<boolean> {
      *     and country names"*.
      *  ★ The dark CSS filter that used to sit on the tile pane is gone with the tiles: the vector
      *    map is already dark by design, and filtering it would fight its own palette. */
-    (window as any).VibeMap.attach(ccMap, { dataBase: '/mapdata/v1/', profile: 'admin' });
+    (window as any).VibeMap.attach(ccMap, { dataBase: dataUrl('/mapdata/v1/'), profile: 'admin' });
   }
   return true;
 }

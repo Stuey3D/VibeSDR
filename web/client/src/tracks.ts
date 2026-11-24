@@ -13,6 +13,7 @@
  */
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
+import { dataUrl } from './origin';
 import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
@@ -744,7 +745,7 @@ export class TrackView {
     if (my !== this.gen) return;
     // ★ the shared map data (coastlines, places) — as AdsbMap draws it under Leaflet
     if (!w.VibeMap) { try { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); } catch (e) { console.error('[tracks] vibemap', e); } }
-    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind() });
+    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind() });
     this.attach(this.lmap, L);
   }
   /** The scale bar's units: NM beside km on the sea and air maps. */
