@@ -325,62 +325,94 @@ private:
     vibeacarsapps::Reassembler reasm_;   // ★ bounded (32 messages × 8 blocks)
 };
 
-/** The whole-radio decoder (ACARS or VDL2) on its own thread. `kind` "acars" | "vdl2". */
+/** The whole-radio decoder (ACARS or VDL2) on its own thread. `kind` "acars" | "vdl2" | "acars+vdl2".
+ *  ★★ V12 2026-11-24 "acars+vdl2" (the combined band, vibe_avi_mode.h): BOTH decoders on one wide capture, each on its
+ *  OWN thread (a LANE: its own queue, its own channeliser), the channels split by isAcarsChannel. VDL2's channels then
+ *  spread over its own workers (vibe_avi_workers.h) as before — D8PSK per channel is the heavy half; ACARS' four MSK
+ *  channels sit on their lane's thread. A block is copied ONCE and shared by the lanes (at 8 MS/s half a second is 32 MB
+ *  of samples; two copies would be 64). Each lane drops its own oldest past half a second, and counts it. */
 class Service {
 public:
     explicit Service(Tracker& t) : tr_(t) {}
     ~Service() { stop(); }
+    /** ★ Which decoder a channel belongs to in the combined band: ACARS lives at 129–132 MHz, VDL2 at 136–137 MHz. */
+    static bool isAcarsChannel(double hz) { return hz < 134.0e6; }
     void start(const std::string& kind, double hwCentreHz, double rateHz, const std::vector<double>& chans) {
         stop();
         kind_ = kind; rate_ = rateHz;
-        if (kind == "acars") acars_.reset(new vibeacars::Receiver(rateHz, hwCentreHz, chans));
-        else vdl2_.reset(new vibevdl2::Receiver(rateHz, hwCentreHz, chans));
-        { std::lock_guard<std::mutex> lk(mtx_); queue_.clear(); queued_ = 0; dropped_ = 0; run_ = true; health_ = Health(); clipN_ = clipSeen_ = 0; winStart_ = 0; }
-        worker_ = std::thread([this] { vibeDecoderThread(kind_ == "acars" ? "vibe-acars" : "vibe-vdl2"); loop_(); });   // ★ decoder priority (vibe_thread.h)
+        std::vector<double> ac, vd;
+        if (kind == "acars") ac = chans;
+        else if (kind == "vdl2") vd = chans;
+        else for (double h : chans) (isAcarsChannel(h) ? ac : vd).push_back(h);
+        if (!vd.empty()) { lanes_.emplace_back(new Lane); lanes_.back()->vdl2.reset(new vibevdl2::Receiver(rateHz, hwCentreHz, vd)); }
+        if (!ac.empty()) { lanes_.emplace_back(new Lane); lanes_.back()->acars.reset(new vibeacars::Receiver(rateHz, hwCentreHz, ac)); }
+        { std::lock_guard<std::mutex> lk(mtx_); dropped_ = 0; run_ = true; health_ = Health(); clipN_ = clipSeen_ = 0; winStart_ = 0; }
+        for (size_t i = 0; i < lanes_.size(); ++i) {
+            Lane* L = lanes_[i].get();
+            const bool first = i == 0;   // ★ the clip share is measured once, on the first lane
+            L->th = std::thread([this, L, first] { vibeDecoderThread(L->acars ? "vibe-acars" : "vibe-vdl2"); loop_(*L, first); });   // ★ decoder priority (vibe_thread.h)
+        }
     }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); run_ = false; }
         cv_.notify_all();
-        if (worker_.joinable()) worker_.join();
-        acars_.reset(); vdl2_.reset();
+        for (auto& L : lanes_) if (L->th.joinable()) L->th.join();
+        std::lock_guard<std::mutex> lk(mtx_);
+        lanes_.clear();
     }
     bool running() { std::lock_guard<std::mutex> lk(mtx_); return run_; }
-    /** From the DSP thread: copy and return. Over half a second queued, the OLDEST block goes (and is counted). */
+    /** From the DSP thread: copy once and return. Over half a second queued on a lane, that lane's OLDEST block goes
+     *  (and is counted). */
     void feed(const cf32* iq, size_t n) {
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            if (!run_) return;
-            queue_.emplace_back(iq, iq + n);
-            queued_ += n;
-            while (queued_ > size_t(rate_ * 0.5) && queue_.size() > 1) { queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_; }
+            if (!run_ || lanes_.empty()) return;
+            auto blk = std::make_shared<const std::vector<cf32>>(iq, iq + n);
+            for (auto& L : lanes_) {
+                L->q.push_back(blk);
+                L->queued += n;
+                while (L->queued > size_t(rate_ * 0.5) && L->q.size() > 1) { L->queued -= L->q.front()->size(); L->q.pop_front(); ++dropped_; }
+            }
         }
-        cv_.notify_one();
+        cv_.notify_all();
     }
     uint64_t dropped() { std::lock_guard<std::mutex> lk(mtx_); return dropped_; }
     uint64_t messages() const { return msgs_.load(); }
     const std::string& kind() const { return kind_; }
+    /** How many decoders run (1, or 2 for "acars+vdl2") — each on its own thread. */
+    size_t lanes() { std::lock_guard<std::mutex> lk(mtx_); return lanes_.size(); }
     /** ★ The gain rule's input (ISM's / AIS's vibeism::GainRule): the share of samples near full scale over the last
      *  second, measured on the service thread (every 4th sample), never the DSP's. `valid` once a second has passed. */
     struct Health { double clipFrac = 0; uint64_t msgs = 0; bool valid = false; };
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
 
 private:
+    struct Lane {
+        std::unique_ptr<vibeacars::Receiver> acars;
+        std::unique_ptr<vibevdl2::Receiver> vdl2;
+        std::deque<std::shared_ptr<const std::vector<cf32>>> q;
+        size_t queued = 0;
+        std::thread th;
+    };
     static double now_() { return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count(); }
-    void loop_() {
+    void loop_(Lane& L, bool measure) {
         std::unique_lock<std::mutex> lk(mtx_);
         while (run_) {
-            cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });
-            while (run_ && !queue_.empty()) {
-                std::vector<cf32> b = std::move(queue_.front());
-                queue_.pop_front();
-                queued_ -= b.size();
+            cv_.wait_for(lk, std::chrono::milliseconds(250), [&] { return !run_ || !L.q.empty(); });
+            while (run_ && !L.q.empty()) {
+                std::shared_ptr<const std::vector<cf32>> b = std::move(L.q.front());
+                L.q.pop_front();
+                L.queued -= b->size();
                 lk.unlock();
                 size_t clip = 0, seen = 0;
-                for (size_t i = 0; i < b.size(); i += 4, ++seen) if (std::fabs(b[i].real()) > 0.93f || std::fabs(b[i].imag()) > 0.93f) ++clip;
+                if (measure)
+                    for (size_t i = 0; i < b->size(); i += 4, ++seen) if (std::fabs((*b)[i].real()) > 0.93f || std::fabs((*b)[i].imag()) > 0.93f) ++clip;
                 const double t = now_();
-                if (acars_) acars_->feed(b.data(), b.size(), [&](const vibeacars::Block& x) { tr_.addAcars(x, t); ++msgs_; });
-                if (vdl2_) vdl2_->feed(b.data(), b.size(), [&](const vibevdl2::Frame& x) { tr_.addVdl2(x, t); ++msgs_; });
+                if (L.acars) L.acars->feed(b->data(), b->size(), [&](const vibeacars::Block& x) { tr_.addAcars(x, t); ++msgs_; });
+                if (L.vdl2) L.vdl2->feed(b->data(), b->size(), [&](const vibevdl2::Frame& x) { tr_.addVdl2(x, t); ++msgs_; });
+                b.reset();
                 lk.lock();
+                if (!measure) continue;
                 clipN_ += clip; clipSeen_ += seen;
                 if (t - winStart_ >= 1.0) {
                     if (winStart_ > 0) { health_.clipFrac = clipSeen_ ? double(clipN_) / double(clipSeen_) : 0; health_.msgs = msgs_.load(); health_.valid = true; }
@@ -392,18 +424,14 @@ private:
     Tracker& tr_;
     std::string kind_;
     double rate_ = 0;
-    std::unique_ptr<vibeacars::Receiver> acars_;
-    std::unique_ptr<vibevdl2::Receiver> vdl2_;
+    std::vector<std::unique_ptr<Lane>> lanes_;
     std::mutex mtx_;
     std::condition_variable cv_;
-    std::deque<std::vector<cf32>> queue_;
-    size_t queued_ = 0;
     uint64_t dropped_ = 0, clipN_ = 0, clipSeen_ = 0;
     double winStart_ = 0;
     Health health_;
     bool run_ = false;
     std::atomic<uint64_t> msgs_{0};
-    std::thread worker_;
 };
 
 /** ★ THE ONE TABLE of this radio process: the datalink mode (ACARS / VDL2) and every listener's HFDL land here, so an

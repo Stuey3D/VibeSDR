@@ -24,7 +24,7 @@
 //
 // ★★ THE RULES ARE THE SERVER'S OWN, restated nowhere else: coverage = vibereach::reachRanges (driverCoverage through the
 //    converter, an RTL's HF only through direct sampling or a V4), the fixed-frequency decoders = vibereach's table, DAB =
-//    vibedab::radioCanDab, ADS-B = 1090 MHz at 2.4 MS/s (vsAdsbHwWhyNot), AIS = 162 MHz and not an HF+ (vsAisReach), NDB =
+//    vibedab::radioCanDab, ADS-B = 1090 MHz at 2.4 MS/s (vsAdsbHwWhyNot), AIS = 162 MHz (vsAisReach — the HF+ too, since 2026-11-24), NDB =
 //    an RTL only in direct sampling (vsNdbReach), ISM = a whole vibeism band at 0.9 MS/s (vsIsmReach), the offline rates =
 //    vibe_benchmark_hw.h offlineRates (the Setup page's DRIVER_HW). An Icom = one demodulated audio channel: its own modes
 //    and the decoders that read audio (vibe_icom_decode.h — no skimmer, no Band, no DRM, no whole-radio mode).
@@ -61,6 +61,7 @@ inline const std::vector<const char*>& allModes() {
         "drm", "freedv", "rade", "m17", "dvsig", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
+        "avdata+8m",        // ★ V12 2026-11-24 …its option: raise the capture to 8 MS/s for ACARS + VDL2 together (a "+" token)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
         "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
@@ -185,10 +186,15 @@ inline Caps compute(const Facts& f) {
             return vibedab::radioCanDab(v.data(), v.size(), rateKnown ? (uint32_t)f.maxRateHz : vibedab::kMinCaptureHz);
         }
         if (id == "adsb" || id == "commb") return holds(R, 1089e6, 1091e6) && rateAtLeast(2.4e6 - 1000);
-        if (id == "ais" || id == "aisstore") return d != "airspyhf" && holds(R, 161.95e6, 162.05e6);
-        // ★ V12 Aircraft datalink: ACARS (131.525–131.825) or VDL2 (136.700–136.975) whole — not the HF+ (AIS's reason)
-        if (id == "avdata") return d != "airspyhf" && (holds(R, 131.50e6, 131.85e6) || holds(R, 136.68e6, 136.99e6));
-        // ★ V12 Radiosondes: one 2 MHz band of 400–406 MHz whole — not the HF+ (AIS's reason), not an Icom (no IQ)
+        /* ★★ AIS and the aircraft datalink on the HF+ too (2026-11-24, Stuart's XCover): left out "for its fixed-gain front
+         *  end", but the modes step no gain there (vibe_mode_gain.h) and its 912 kS/s holds every band they use. */
+        if (id == "ais" || id == "aisstore") return holds(R, 161.95e6, 162.05e6);
+        // ★ V12 Aircraft datalink: ACARS (131.525–131.825) or VDL2 (136.700–136.975) whole
+        if (id == "avdata") return holds(R, 131.50e6, 131.85e6) || holds(R, 136.68e6, 136.99e6);
+        /* ★★ …and its 8 MS/s switch for ACARS + VDL2 together: only where BOTH sets are in reach and the radio lists a rate
+         *  of 8 MS/s or more (an RSP, an Airspy R2, a HackRF, a USRP) — never an RTL or the HF+ (AGENTS.md: no dead switch). */
+        if (id == "avdata+8m") return rateKnown && f.maxRateHz >= 8.0e6 - 1000 && holds(R, 131.50e6, 136.99e6);
+        // ★ V12 Radiosondes: one 2 MHz band of 400–406 MHz whole — not the HF+ (it stops short of 400 MHz), not an Icom (no IQ)
         if (id == "sondes") return d != "airspyhf" && (holds(R, 400.0e6, 402.0e6) || holds(R, 402.0e6, 404.0e6) || holds(R, 404.0e6, 406.0e6));
         if (id == "ism" || id == "lora") {
             if (!rateAtLeast(vibeism::kMinRateHz)) return false;
@@ -226,7 +232,7 @@ inline Caps compute(const Facts& f) {
         if (!c.has(parent)) c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string(child)), c.modes.end());
     };
     drop("rds", "wfm"); drop("tone", "nfm"); drop("lora", "ism"); drop("aisstore", "ais"); drop("spotsband", "spots"); drop("commb", "adsb");
-    drop("loraaprs", "lora"); drop("fanet", "lora"); drop("meshcom", "lora");
+    drop("loraaprs", "lora"); drop("fanet", "lora"); drop("meshcom", "lora"); drop("avdata+8m", "avdata");
 
     // ── the settings ──
     Settings& s = c.s;

@@ -812,6 +812,10 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_ndb",      { "ndb",    true,  false } }, { "dec_ais",      { "ais",    true,  false } },
         // ★ V12 aviation: VDL2 (12 channels, the heavier band) sets the datalink mode's default; ACARS is shown beside it
         { "dec_vdl2",     { "avdata", true,  false } }, { "dec_acars",    { "avdata", false, false } },
+        /* ★★ V12 2026-11-24 ACARS + VDL2 TOGETHER at 8 MS/s — the owner's "avdata+8m", an option UNDER the datalink, with
+         *  lora+all's INVERTED rule: GREEN ticks it ON on a fresh setup (on radios that can run 8 MS/s — the box is drawn
+         *  nowhere else), anything else leaves it off with the figure beside it. Never primary: it switches nothing off. */
+        { "dec_avboth",   { "avdata+8m", false, false } },
         { "dec_hfdl",     { "hfdl",   true,  true  } },
         // ★ V12 RS41 radiosondes: the SONDES mode's default (a whole-radio mode — not the decoder limit's yardstick)
         { "dec_rs41",     { "sondes", true,  false } },
@@ -1299,18 +1303,25 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     /* ★★ V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md §Cost): the mode's two bands as the server runs them — vibeavi::Service
      *  on its own thread (VDL2's channels on its workers), fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS).
      *  The traffic is the transmitters of the tests (vibe_avi_tx.h): bursts on three channels in one second of noise, looped. */
-    auto aviRow = [&](const char* id, const char* label, const char* bandId) {
+    /* ★★ V12 2026-11-24 …and ACARS + VDL2 TOGETHER at 8 MS/s (the owner's "avdata+8m"): both decoders on their own threads
+     *  (vibeavi::Service lanes), bursts of each kind on both sets, SCORED BY THE HOTTEST THREAD — VDL2's channeliser at
+     *  8 MS/s is the heavy one (its demodulators spread over its workers). The radio's own cost at 8 MS/s (USB, the DSP's
+     *  spectrum) is not in this row: the WFM rate rows measure the capture. */
+    auto aviRow = [&](const char* id, const char* label, const char* bandId, double fs) {
         run(id, label, [&] {
             Row r; r.id = id; r.label = label;
             const vibeavi::Band* b = vibeavi::bandById(bandId);
             if (!b) return r;
-            const double fs = 2.4e6;
             std::vector<vibeavi::cf32> x((size_t)fs);
             { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
             const double nPow = 2 * 0.02 * 0.02 * 10500.0 / fs;
-            for (int k = 0; k < 3; ++k) {
-                const double off = b->chans[size_t(k % b->chans.size())] - b->centreHz;
-                if (std::string(bandId) == "vdl2") {
+            const bool mixed = std::string(bandId) == "acars+vdl2";
+            for (int k = 0; k < (mixed ? 4 : 3); ++k) {
+                // ★ the combined band: ACARS on its first channels, VDL2 on its last (the far ends of the capture)
+                const double ch = mixed ? (k % 2 == 0 ? b->chans[size_t(k / 2)] : b->chans[b->chans.size() - 1 - size_t(k / 2)])
+                                        : b->chans[size_t(k % b->chans.size())];
+                const double off = ch - b->centreHz;
+                if (std::string(bandId) == "vdl2" || (mixed && k % 2 == 1)) {
                     char txt[64]; std::snprintf(txt, sizeof txt, "M%02dABE%04d/BENCH %d", k, 1000 + k, k);
                     auto f = vibeavitx::avlcAcars(0x400100u + uint32_t(k), 0x10949Au, ".G-BNCH", "H1", char('0' + k), txt);
                     vibeavitx::vdl2Burst(x, fs, off, std::sqrt(nPow * 300.0), size_t((0.05 + 0.3 * k) * fs), vibeavitx::vdl2Symbols({ f }), 0.3 * k);
@@ -1340,8 +1351,9 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
             return r;
         });
     };
-    aviRow("dec_vdl2", "Decoder: VDL2 aircraft (12 channels @ 2.4 MS/s)", "vdl2");
-    aviRow("dec_acars", "Decoder: ACARS aircraft (4 channels @ 2.4 MS/s)", "acars");
+    aviRow("dec_vdl2", "Decoder: VDL2 aircraft (12 channels @ 2.4 MS/s)", "vdl2", 2.4e6);
+    aviRow("dec_acars", "Decoder: ACARS aircraft (4 channels @ 2.4 MS/s)", "acars", 2.4e6);
+    aviRow("dec_avboth", "Decoder: ACARS + VDL2 together (16 channels @ 8 MS/s)", "acars+vdl2", 8.0e6);
     /* ★★ V12 RADIOSONDES (docs/v12/RS41.md): the SONDES mode as the server runs it — vibers41::Service on its own thread,
      *  one 2 MHz band at 2.4 MS/s, fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS and the datalink). Three sondes
      *  from our own transmitter (vibe_rs41_tx.h), one frame a second each, in four seconds of noise, looped. */
