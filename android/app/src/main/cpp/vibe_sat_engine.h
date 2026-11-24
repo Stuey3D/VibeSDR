@@ -117,8 +117,16 @@ inline std::vector<SatDef> curatedCatalogue() {
                   named(cw("Mode B beacon", 145977500, "AMSAT gives 145.9775 MHz; it has drifted to about 145.973"), "Mode B")}});
     v.push_back({"AO-73", "AO-73 (FUNcube-1)", 39444, "amateur", "Transponder in eclipse; telemetry in sunlight",
                  {lin("Transponder", 145950000, 145970000, 435130000), dig("Telemetry", 145935000, "usb", "fc-bpsk", 1200, "none")}});
-    v.push_back({"JO-97", "JO-97 (JY1Sat)", 43803, "amateur", "Linear transponder",
-                 {lin("Transponder", 145855000, 145875000, 435100000)}});
+    // ★★ 2026-11-24 + its TELEMETRY BEACON (Stuart heard it at ~145.841 MHz on the Pi 500's V4, the FUNcube 5 s frame rhythm
+    //   plain on the waterfall): JY1Sat is built on the FUNcube design — 1200 bit/s BPSK, the same AO-40 FEC — so the fctlm
+    //   decoder frames it. Its satellite id is not FUNcube-1's ("extended"), and its value fields are laid out as FUNcube-1's,
+    //   so the note says the names are FUNcube-1's until JY1Sat's own layout is mapped.
+    {
+        Transmitter t = dig("Telemetry", 145840000, "usb", "fc-bpsk", 1200, "none");
+        t.note = "FUNcube-format beacon; values use FUNcube-1's field names for now";
+        v.push_back({"JO-97", "JO-97 (JY1Sat)", 43803, "amateur", "Linear transponder; FUNcube-format telemetry beacon",
+                     {lin("Transponder", 145855000, 145875000, 435100000), t}});
+    }
     v.push_back({"MO-122", "MO-122 (MESAT1)", 60209, "amateur", "Linear transponder",
                  {lin("Transponder", 435810000, 435840000, 145910000), dig("Telemetry", 435800000, "usb", "fox-bpsk", 1200, "none")}});
     v.push_back({"SONATE-2", "SONATE-2", 59112, "amateur", "Telemetry, APRS and SSTV",

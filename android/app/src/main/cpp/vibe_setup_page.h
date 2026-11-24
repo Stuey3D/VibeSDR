@@ -8065,6 +8065,7 @@ const SAT_PASS_DOWNLINKS = [
   { norad: 59112, label: "Telemetry", name: "SONATE-2", what: "9600 Bd telemetry (Germany passes only)" },
   { norad: 59112, label: "APRS", name: "SONATE-2", what: "APRS packets" },
   { norad: 39444, label: "Telemetry", name: "AO-73 (FUNcube-1)", what: "FUNcube telemetry" },
+  { norad: 43803, label: "Telemetry", name: "JO-97 (JY1Sat)", what: "FUNcube-format telemetry" },
 ];
 let spModel = { on: false, minEl: 20, birds: [] };
 function spHas(b) { return spModel.birds.some(function (x) { return x.norad === b.norad && x.label === b.label; }); }

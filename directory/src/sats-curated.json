@@ -35,9 +35,11 @@
       "transmitters": [
         { "label": "Transponder", "downlink": 145950000, "downlinkHigh": 145970000, "mode": "usb", "loop": "none", "uplink": 435130000 },
         { "label": "Telemetry", "downlink": 145935000, "mode": "usb", "loop": "none", "consumer": "fc-bpsk", "baud": 1200 } ] },
-    { "id": "JO-97", "name": "JO-97 (JY1Sat)", "norad": 43803, "group": "amateur", "note": "Linear transponder",
+    { "id": "JO-97", "name": "JO-97 (JY1Sat)", "norad": 43803, "group": "amateur", "note": "Linear transponder; FUNcube-format telemetry beacon",
       "transmitters": [
-        { "label": "Transponder", "downlink": 145855000, "downlinkHigh": 145875000, "mode": "usb", "loop": "none", "uplink": 435100000 } ] },
+        { "label": "Transponder", "downlink": 145855000, "downlinkHigh": 145875000, "mode": "usb", "loop": "none", "uplink": 435100000 },
+        { "label": "Telemetry", "downlink": 145840000, "mode": "usb", "loop": "none", "consumer": "fc-bpsk", "baud": 1200,
+          "note": "FUNcube-format beacon; values use FUNcube-1's field names for now" } ] },
     { "id": "MO-122", "name": "MO-122 (MESAT1)", "norad": 60209, "group": "amateur", "note": "Linear transponder",
       "transmitters": [
         { "label": "Transponder", "downlink": 435810000, "downlinkHigh": 435840000, "mode": "usb", "loop": "none", "uplink": 145910000 },
