@@ -6,6 +6,8 @@
 //   build: c++ -std=c++17 -O2 -I ../android/app/src/main/cpp -o /tmp/tsi test-sat-if.cpp -lpthread
 #include "vibe_sat_if.h"
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <cmath>
 #include <vector>
 
@@ -110,6 +112,19 @@ int main() {
         const Region bc = regionOf(tx("Beacon", 435.57e6, "cw", "cw", 0));
         const double two = 2.0 * halfForPass({tr, bc}, 435.64e6);
         ok(two > 2.0 * (70000.0), "a beacon 70 kHz away in VFO B is inside the width");
+    }
+    {   // ★★ 2026-11-24 ORBCOMM: the pick's VIEW holds the decoder's whole slice (+ margin), the IF its search edges
+        vibe::sat::Transmitter band = tx("ORBCOMM", 137.2e6, "orbcomm", "orbcomm", 0, 137.8e6);
+        vibe::sat::Transmitter one = tx("ORBCOMM", 137.6625e6, "orbcomm", "orbcomm", 0);
+        std::string p; vibe::sat::decoderOf(band, p);
+        const double slice = std::atof(p.c_str() + p.find(':') + 1);
+        ok(slice == 640000, "a band pick's slice is 640 kHz");
+        ok(viewSpanHz(band) >= slice && viewSpanHz(band) <= slice + 100000, "an ORBCOMM band pick's view holds the whole slice (+ a little)");
+        ok(viewSpanHz(one) >= 40000 && viewSpanHz(one) <= 120000, "a one-channel ORBCOMM pick's view: its 40 kHz slice + margin");
+        // 137.800 at +3.5 kHz Doppler with its ±3.4 kHz is 137.807 MHz: inside the slice (centred 137.5) and the IF's region
+        const Region rb = regionOf(band);
+        ok(rb.centreHz + rb.halfHz > 137.8075e6 && rb.centreHz - rb.halfHz < 137.1925e6, "the IF region holds 137.200 and 137.800 with their width and Doppler");
+        ok(137.5e6 + slice / 2 > 137.8075e6 && 137.5e6 - slice / 2 < 137.1925e6, "…and so does the slice");
     }
 
     printf("\n%d passed, %d failed\n", passes, fails);

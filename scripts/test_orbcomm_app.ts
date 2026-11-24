@@ -10,6 +10,7 @@ import { parseSkyDotsLive, parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlot
 import { parseSatList, parseSatPicked, satDecView, satDecWord, satDecoderFor, txListenMode, txUse } from '../src/services/satellites';
 import { REACH_DECODERS } from '../src/services/sdrTypes';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
+import { orbOverlayFrom, orbOverlayKey, orbOverlayLayout, ORB_NO_TUNE, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
 
 let fail = 0, pass = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (c) pass++; else fail++; };
@@ -155,6 +156,44 @@ ok((REACH_DECODERS as readonly string[]).includes('orbcomm') && (CLIENT_DECODERS
   ok(/orbcomm: 'orbcomm'/.test(dec) && /orbcomm_status/.test(dec) && /orbcomm_pkt/.test(dec), 'web: the decoder socket attaches it and hands its messages on');
   const ws = fs.readFileSync(new URL('../web/client/src/satellites.ts', import.meta.url), 'utf8');
   ok(/ORB_CAVEAT/.test(ws) && /skyPlotSvg/.test(ws), 'web: the SATELLITE box shows the caveat and the sky plot');
+}
+
+console.log('── the slice on the waterfall (2026-11-24) ──');
+{
+  const base = { t: 1, good: 0, bad: 0, located: true, birds: 8, sats: [], dots: [] };
+  const st2 = parseOrbcommStatus({ ...base,
+    slice: { rate: 912000, centre: 137500000, lo: 137180000, hi: 137820000, fedSec: 12.5, blocks: 300, moves: 1, floorDb: -42.5 },
+    peaks: [{ rf: 137287500, db: 14.2 }, { rf: 'x', db: 1 }, null, { rf: -5, db: 3 }],
+    carriers: [{ id: 0, rf: 137287500, snr: 12, lock: true, ok: 5, bad: 0, fixed: 0, sat: 'ORBCOMM FM114' },
+               { id: 1, rf: 137662500, snr: 4, lock: false, ok: 0, bad: 0, fixed: 0 },
+               { id: 2, rf: 139000000, snr: 4, lock: true, ok: 0, bad: 0, fixed: 0, sat: 'ORBCOMM FM999' }],
+    refused: { spurs: 2, notSdpsk: 1, last: [{ rf: 137400000, why: 'spur', ago: 3, ban: 60 }, { rf: 'x' }] } });
+  ok(!!st2 && !!st2.slice && st2.slice.lo === 137180000 && st2.slice.hi === 137820000 && st2.slice.moves === 1 && st2.slice.floorDb === -42.5, 'the slice parses');
+  ok(!!st2 && st2.peaks.length === 1 && st2.peaks[0].db === 14.2, 'the peaks: junk dropped');
+  ok(!!st2 && st2.carriers[0].sat === 'ORBCOMM FM114' && st2.carriers[1].sat === '', 'carriers[].sat');
+  ok(!!st2 && !!st2.refused && st2.refused.spurs === 2 && st2.refused.last.length === 1 && st2.refused.last[0].why === 'spur', 'refused parses (junk dropped)');
+  for (const bad of [{ lo: 5, hi: 3 }, { lo: 'x', hi: 9 }, { lo: 1e9, hi: 1.1e9 }, 'slice', null])
+    ok(parseOrbcommStatus({ ...base, slice: bad })!.slice === null, `a bad slice ${JSON.stringify(bad)} → none drawn`);
+  ok(parseOrbcommStatus(base)!.slice === null && parseOrbcommStatus(base)!.peaks.length === 0 && parseOrbcommStatus(base)!.refused === null, 'an older server: no slice, no peaks');
+  ok(orbOverlayFrom(parseOrbcommStatus(base)) === null && orbOverlayFrom(null) === null, 'no slice → no overlay');
+  const ov = orbOverlayFrom(st2)!;
+  ok(ov.lo === 137180000 && ov.hi === 137820000 && ov.carriers.length === 3 && ov.carriers[0].locked && ov.carriers[0].label === 'FM114'
+     && !ov.carriers[1].locked && ov.carriers[1].label === '', 'the overlay: the slice, carriers locked / not, named (the "ORBCOMM " prefix dropped)');
+  // a 1 MHz view 137.0–138.0 on 1000 px: 1 kHz a pixel
+  const hzToX = (hz: number) => (hz - 137000000) / 1000;
+  const L = orbOverlayLayout(ov, hzToX, 1000, 200);
+  ok(!!L.band && near(L.band.x0, 180) && near(L.band.x1, 820) && L.band.loIn && L.band.hiIn, 'the band: lo…hi at its x');
+  ok(!!L.label && near(L.label.x, 184) && L.label.w === 200, 'the label inside the band, at its left');
+  ok(L.marks.length === 2 && near(L.marks[0].x, 287.5) && L.marks[0].locked && L.marks[0].label === 'FM114' && !L.marks[1].locked && near(L.marks[1].x, 662.5),
+     'the carriers on screen: solid locked, hollow acquiring, the off-screen one left out');
+  // zoomed in on 137.6–137.9: the band runs off the left, its label stays on screen
+  const L2 = orbOverlayLayout(ov, (hz) => (hz - 137600000) / 300, 1000, 200);
+  ok(!!L2.band && L2.band.x0 === 0 && !L2.band.loIn && L2.band.hiIn && near(L2.band.x1, 733.333, 0.01) && L2.label!.x === 4, 'a band off the left edge is clamped, its label kept on screen');
+  const L3 = orbOverlayLayout(ov, (hz) => (hz - 140000000) / 1000, 1000, 200);
+  ok(L3.band === null && L3.label === null && L3.marks.length === 0, 'a slice off screen draws nothing');
+  ok(orbOverlayLayout(null, hzToX, 1000).band === null && orbOverlayLayout(ov, hzToX, 0).band === null, 'no overlay / no width → nothing');
+  ok(orbOverlayKey(ov) !== orbOverlayKey({ ...ov, carriers: [{ ...ov.carriers[0], locked: false }, ov.carriers[1], ov.carriers[2]] }) && orbOverlayKey(null) === '', 'the redraw key changes with a lock');
+  ok(ORB_SLICE_LABEL === 'ORBCOMM · every carrier decoded here' && ORB_NO_TUNE === 'The whole ORBCOMM band is decoded at once — no need to tune.', 'the words');
 }
 
 console.log(`\ntest_orbcomm_app: ${pass} passed, ${fail} failed`);

@@ -332,6 +332,8 @@ flags_for() {
     #   (offsets, Doppler slope, clock error, two carriers, noise), and a synthetic pass end to end through the run + the
     #   sky plot's store / JSON / PNG (test-orbcomm-run). -O2: ~3 s each.
     test-orbcomm|test-orbcomm-run) echo "-O2" ;;
+    # ★ ORBCOMM through the server's OWN slice paths (shared FFT + one-pipeline WideTap) at an HF+'s 912/768/456 kS/s, float IQ, a dial move
+    test-orbcomm-slice)    echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
     test-sat-cw)           echo "-O2 -I $VDSP" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
@@ -510,6 +512,7 @@ deps_for() {
     test-feld-hell)     echo "android/app/src/main/cpp/decoders/feld_hell.cpp" ;;   # ★ V12 FELD HELL, drawn (pffft: cobj-ndb)
     test-msk144)        echo "android/app/src/main/cpp/decoders/digimodes/msk144_code.cpp android/app/src/main/cpp/decoders/digimodes/msk144_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-q65)           echo "android/app/src/main/cpp/decoders/digimodes/q65_code.cpp android/app/src/main/cpp/decoders/digimodes/q65_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-orbcomm-slice) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp $VDSP/resampler.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft (cobjs_for, the ndb group)
     test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
     test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
                               android/app/src/main/cpp/decoders/auto_notch.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/rds.cpp $VDSP/stereo.cpp $RADE_LIBS" ;;
@@ -554,7 +557,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-vormap|test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
+    test-vormap|test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"

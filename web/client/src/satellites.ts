@@ -34,6 +34,7 @@ import {
 // ★★ 2026-11-24 ORBCOMM + the sky plot — the app's words and dome (src/services/orbcomm.ts, src/utils/skyPlot.ts)
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbViewMerge,
          parseOrbcommPkt, parseOrbcommStatus, type OrbView } from '../../../src/services/orbcomm';
+import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, SKY_LEGEND, SKY_PLOT_WHAT, type SkyDot } from '../../../src/utils/skyPlot';
 
 export interface SatPanelDeps {
@@ -809,7 +810,7 @@ export class SatPanel {
     if (!show) return;
     const v = this.orb, st = v?.status ?? null;
     let h = `<div>${esc(orbHeadText(st))}<span class="sat-tk"><button data-act="orbsky" class="${this.orbSky ? 'on' : ''}" aria-pressed="${this.orbSky}" title="The sky plot: where this aerial hears the ORBCOMM satellites">SKY PLOT</button></span></div>`
-      + `<div class="sat-cav">${esc(ORB_CAVEAT)}</div>`;
+      + `<div class="sat-cav">${esc(ORB_NO_TUNE)}</div><div class="sat-cav">${esc(ORB_CAVEAT)}</div>`;
     const note = orbNoteText(st);
     if (note) h += `<div class="sat-note">${esc(note)}</div>`;
     const counts = orbCountsText(st?.counts);
