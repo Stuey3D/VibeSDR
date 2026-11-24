@@ -144,8 +144,6 @@ inline std::string tnc2(const Ax25& f) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 struct Frame { std::vector<uint8_t> bytes; int repaired = 0; float quality = 0; int slicer = 0;
                float votes = 0;   ///< ★ 2026-11-24 how many slicers / paths heard exactly these bytes (resolveCandidates)
-               int weak = 0; float flipConf = 0;   ///< ★ from the deframer (vibehdlc::Frame): unsure levels, the flipped one's |soft|
-               bool repVoted = false;   ///< …a repair of one demodulator's has voted already (offerCandidate)
                int fec = 0; int fixed = 0; bool crc = false; };   ///< ★ V12: fec = vibepkt::Fec (AX.25 / FX.25 / IL2P)
 
 inline bool aprsFrameOk(const std::vector<uint8_t>& b) { Ax25 f; return parseAx25(b, f); }
@@ -156,26 +154,14 @@ inline int frameRank(const Frame& f) { return f.fec ? 2 : f.repaired ? 1 : 0; }
 inline bool frameBetter(const Frame& a, const Frame& b) {
     return frameRank(a) < frameRank(b) || (frameRank(a) == frameRank(b) && (a.fixed < b.fixed || (a.fixed == b.fixed && a.quality > b.quality)));
 }
-/** ★ A SURE repair counts as a clean copy: the level flipped was weak (≤ 0.3 of the mean) and the frame had at most two
- *  weak levels in all. The wrong repairs found come from frames with TWO errors, where the flip makes a third weak level
- *  the FCS cannot see past — three weak levels at least, so they are never "sure". */
-inline bool sureRepair(const Frame& f) { return f.repaired == 1 && f.weak <= 2 && f.flipConf <= 0.3f; }
-/** One copy into a list of candidates heard together: the same bytes again add their votes and keep the better copy's
- *  details. A copy with no votes yet counts as one, a repaired one as 0.7 (it needed help). `onePath`: the copies come
- *  from ONE demodulator's slicers, whose repairs are not independent (neighbouring balances see the same bits and flip
- *  the same weakest level) — there, repairs of the same bytes count once, however many slicers made them. */
-inline void offerCandidate(std::vector<Frame>& c, Frame f, bool onePath = false) {
-    if (f.votes <= 0) f.votes = !f.repaired ? 1.f : sureRepair(f) ? 1.f : 0.7f;
-    for (Frame& x : c) if (x.bytes == f.bytes) {
-        float add = f.votes;
-        if (onePath && f.repaired) { add = x.repVoted ? 0.f : f.votes; x.repVoted = true; }
-        const float v = x.votes + add;
-        const bool rv = x.repVoted;
-        if (frameBetter(f, x)) x = f;
-        x.votes = v; x.repVoted = rv;
-        return;
-    }
-    f.repVoted = onePath && f.repaired;
+/** One copy into a list of candidates heard together: the same bytes again add a vote and keep the better copy's
+ *  details. (Weighting repairs lower, or letting a lone repair out only when "sure" — the flipped level ≤ 0.3 of the mean,
+ *  ≤ 2 weak levels — was measured and dropped: test-aprs-onair --curve 100 7 10 ab, 2 400 packets × 3 runs, it lost the
+ *  audio path 123 packets AND let one wrong frame through that the plain vote stops: a chance-pass CLEAN copy that a
+ *  correct repair from another slicer outvotes.) */
+inline void offerCandidate(std::vector<Frame>& c, Frame f) {
+    if (f.votes <= 0) f.votes = 1.f;
+    for (Frame& x : c) if (x.bytes == f.bytes) { const float v = x.votes + f.votes; if (frameBetter(f, x)) x = f; x.votes = v; return; }
     c.push_back(f);
 }
 /* ★★★ 2026-11-24 COPIES THAT DISAGREE (docs/v12/APRS-WEAK.md). Every slicer, filter and path decodes the same transmission,
@@ -243,14 +229,20 @@ public:
          *  near the hiss, but the strong one still switches cleanly ON and OFF. Two more slicers read ONE tone each as
          *  on/off keying against half its own peak (mark − ½, ½ − space). Not for the tone bank (its levels are not
          *  peak-normalised) and not 300 Bd (five tunings × slicers already). */
-        struct SlSpec { float a, g, c; };
+        struct SlSpec { float a, g, c; bool ls; };
         std::vector<SlSpec> specs;
-        for (float g : gains) specs.push_back({ 1.f, g, 0.f });
-        if (!single && !tones && baud != 300) { specs.push_back({ 1.f, 0.f, 0.5f }); specs.push_back({ 0.f, 1.f, -0.5f }); }
+        for (float g : gains) specs.push_back({ 1.f, g, 0.f, false });
+        /* ★★ and the same balances again on the FITTED levels (Pair: the two tones least-squares fitted together). Both
+         *  sets, not one: the fit wins by far with the tones far apart (test-aprs: 2200 Hz 9 dB down 4 → 39 of 40) but
+         *  loses a little on balanced tones through a listener's NFM chain near the threshold (test-aprs-onair --curve,
+         *  ±4.5 kHz +1 kHz, audio alone at 9 dB: plain 85, fitted alone 77 of 100); the copies' vote takes both. */
+        sep_ = !single && !tones;
+        if (sep_) for (float g : gains) specs.push_back({ 1.f, g, 0.f, true });
+        if (!single && !tones && baud != 300) { specs.push_back({ 1.f, 0.f, 0.5f, false }); specs.push_back({ 0.f, 1.f, -0.5f, false }); }
         for (size_t pi = 0; pi < pairs_.size(); ++pi)
             for (const SlSpec& sp : specs) {
                 Slicer s;
-                s.pair = int(pi); s.gain = sp.g; s.a = sp.a; s.c = sp.c;
+                s.pair = int(pi); s.gain = sp.g; s.a = sp.a; s.c = sp.c; s.ls = sp.ls;
                 s.clk.reset(new vibehdlc::BitClock(fs_, baud, 0));
                 vibehdlc::Deframer::Options o;
                 o.minBytes = 18; o.maxBytes = 340;
@@ -324,6 +316,7 @@ private:
         int rp = 0, renorm = 0;
     };
     struct Pair { Tone m, s; float mN = 0, sN = 0; Gram g;
+                  float mN2 = 0, sN2 = 0, pm2 = 1e-6f, ps2 = 1e-6f;   ///< ★ the FITTED levels, normalised by their own peaks
                   std::vector<float> ginv; int P = 0, nph = 0; };   ///< ★ G⁻¹ by sample index mod P, where the tones repeat
     /** ★ The Gram matrix depends only on WHERE the window sits (the tones' phases at its samples), never on the signal. Where
      *  both tones repeat within P ≤ 1200 samples (1200 / 2200 Hz at 12 kS/s: P = 60; the IQ paths' 13.3 kS/s: 200) its
@@ -404,7 +397,7 @@ private:
         for (int i = 3; i >= 0; --i) { double sum = z[i]; for (int k = i + 1; k < 4; ++k) sum -= Lc[k][i] * c[k]; c[i] = sum / Lc[i][i]; }
         lm = float(std::sqrt(c[0] * c[0] + c[1] * c[1]) * h); ls = float(std::sqrt(c[2] * c[2] + c[3] * c[3]) * h);
     }
-    struct Slicer { int pair = 0; float gain = 1, a = 1, c = 0; std::unique_ptr<vibehdlc::BitClock> clk; std::unique_ptr<vibehdlc::Deframer> df;
+    struct Slicer { int pair = 0; float gain = 1, a = 1, c = 0; bool ls = false; std::unique_ptr<vibehdlc::BitClock> clk; std::unique_ptr<vibehdlc::Deframer> df;
                     std::unique_ptr<vibefx25::Rx> fx; std::unique_ptr<vibeil2p::Rx> il; int prev = 0; };
 
     void level_(Pair& p, float m, float s) {
@@ -414,19 +407,26 @@ private:
         p.mN = m / std::max(p.m.peak, 1e-9f); p.sN = s / std::max(p.s.peak, 1e-9f);
     }
     template <class Out> void sample_(float y, Out& out) {
-        for (auto& p : pairs_) { float m, sp; pairStep_(p, y, m, sp); level_(p, m, sp); }
+        for (auto& p : pairs_) {
+            float m, sp; pairStep_(p, y, m, sp);
+            level_(p, float(std::abs(p.m.acc)), float(std::abs(p.s.acc)));   // the plain correlators
+            if (sep_) {                                                       // the fitted levels, their own peaks
+                p.pm2 += (m > p.pm2 ? 0.3f : peakA_) * (m - p.pm2); p.ps2 += (sp > p.ps2 ? 0.3f : peakA_) * (sp - p.ps2);
+                p.mN2 = m / std::max(p.pm2, 1e-9f); p.sN2 = sp / std::max(p.ps2, 1e-9f);
+            }
+        }
         slice_(out);
     }
     template <class Out> void slice_(Out& out) {
         for (size_t k = 0; k < sl_.size(); ++k) {
             Slicer& s = sl_[k];
             const Pair& p = pairs_[size_t(s.pair)];
-            const float d = s.a * p.mN - s.gain * p.sN - s.c;
+            const float d = s.ls ? p.mN2 - s.gain * p.sN2 : s.a * p.mN - s.gain * p.sN - s.c;
             const bool busy = s.df->inFrame() || (s.fx && s.fx->busy()) || (s.il && s.il->busy());
             s.clk->push(d, busy ? 0.75f : 0.45f, [&](float lvl) {
                 s.df->push(lvl, [&](const vibehdlc::Frame& fr) {
                     if (!fr.repaired && !ax25FrameOk(fr.bytes)) return;
-                    Frame f; f.bytes = fr.bytes; f.repaired = fr.repaired; f.quality = fr.quality; f.weak = fr.weak; f.flipConf = fr.flipConf;
+                    Frame f; f.bytes = fr.bytes; f.repaired = fr.repaired; f.quality = fr.quality;
                     offer_(f, int(k), out);
                 });
                 const int raw = lvl >= 0 ? 1 : 0;   // mark (1200 Hz) = 1, as IL2P's AFSK symbol map says
@@ -453,26 +453,16 @@ private:
         for (auto& r : recent_) if (r.h == h && t_ - r.t < uint64_t(fs_ * (baud_ >= 1200 ? 2.0 : 0.5))) { if (fr.fec) ++fecDupes_; return; }
         Frame f = fr; f.slicer = slicer;
         if (pend_.empty()) pendDue_ = t_ + uint64_t(fs_ / baud_ * 3) + 1;
-        offerCandidate(pend_, f, true);
+        offerCandidate(pend_, f);
     }
     template <class Out> void flush_(Out& out) {
         std::vector<Frame> v; v.swap(pend_);
         conflicts_ += resolveCandidates(v);
-        for (const Frame& f : v) {
-            if (f.votes < minVotes_) { ++lone_; continue; }
-            recent_[rp_] = { frameHash(f.bytes), t_ }; rp_ = (rp_ + 1) % kRecent; out(f);
-        }
+        for (const Frame& f : v) { recent_[rp_] = { frameHash(f.bytes), t_ }; rp_ = (rp_ + 1) % kRecent; out(f); }
     }
 public:
     /** ★ 2026-11-24: frames dropped because copies of one transmission disagreed (resolveCandidates). */
     uint64_t conflicts() const { return conflicts_; }
-    /** ★ 2026-11-24 THE LONE REPAIR RULE (docs/v12/APRS-WEAK.md): a frame goes out only with at least `v` votes — a clean
-     *  copy is 1, a repaired one 0.7, so a repair that no other slicer (or path) backs up is NOT trusted. One flipped level
-     *  turns a frame with TWO errors into a wrong frame that passes the FCS about once in 4 000 such frames (the 16-bit
-     *  FCS is a 15-bit check against level errors: its (1 + x) factor is spent on NRZI's paired bit errors), and the
-     *  curve found them. Run sets 0 on its own demodulators and applies the rule after every path has voted. */
-    void setMinVotes(float v) { minVotes_ = v; }
-    uint64_t loneRepairs() const { return lone_; }
 private:
     int baud_, decim_ = 4, dph_ = 0, L_ = 10;
     double fs_ = 12000;
@@ -481,11 +471,10 @@ private:
     std::vector<Pair> pairs_;
     std::vector<Slicer> sl_;
     float peakA_ = 0.001f;
-    bool sep_ = true;   ///< the two tones fitted together (false = the plain correlators, for the before/after numbers)
+    bool sep_ = true;   ///< ★ the fitted slicers run too (not for the tone bank, nor `single`)
     uint64_t t_ = 0;
     std::vector<Frame> pend_; uint64_t pendDue_ = 0;
-    uint64_t fecDupes_ = 0, conflicts_ = 0, lone_ = 0;
-    float minVotes_ = 1.f;
+    uint64_t fecDupes_ = 0, conflicts_ = 0;
     struct Rec { uint32_t h = 0; uint64_t t = 0; };
     static constexpr int kRecent = 8;
     Rec recent_[kRecent];

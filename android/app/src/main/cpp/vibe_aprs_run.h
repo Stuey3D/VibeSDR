@@ -106,7 +106,6 @@ public:
             const int b = baud_ == 0 ? 1200 : baud_;
             // FX.25 and IL2P are VHF/UHF FM packet things: not on HF 300 Bd
             afsk_.reset(new AfskDemod(48000, b, false, b == 1200 && o_.fx25, b == 1200 && o_.il2p));
-            afsk_->setMinVotes(0);   // ★ the run applies the lone repair rule after every path has voted (flushHeld_)
         }
     }
     /** 300, 1200, 9600 — or 0 for AUTO (1200 + 9600). */
@@ -526,7 +525,6 @@ private:
                 const int D = tu.decimate ? std::max(1, int(rate / (4 * (h + trans)))) : 1;
                 r.fir.reset(new vibedsp::FirDecimator(vibedsp::designLowpass(h / rate, trans / rate), D));
                 r.afsk.reset(new AfskDemod(rate / D, 1200, false, o_.fx25, o_.il2p));
-                r.afsk->setMinVotes(0);
                 r.rate = rate / D;
                 iqRx_.push_back(std::move(r));
             }
@@ -607,7 +605,6 @@ private:
         std::vector<float> bs = tu.mfBs.empty() ? std::vector<float>{ 0.9f, 1.6f, 2.6f } : tu.mfBs;
         mf_.reset(new FmToneBank(r2, 1200, bm, bs, tu.mfK > 0 ? tu.mfK : 12));
         mfAfsk_.reset(new AfskDemod(r2, 1200, false, o_.fx25, o_.il2p, true));
-        mfAfsk_->setMinVotes(0);
     }
     void mfRun_(int n) {
         if (!mf_) return;
@@ -648,7 +645,7 @@ private:
         if (!all && now - heldT_ < kHoldSec) return;
         std::vector<Frame> v; v.swap(held_);
         conflicts1200_ += uint64_t(resolveCandidates(v));
-        for (const Frame& f : v) { if (f.votes < 1.f) { ++lone1200_; continue; } onFrame(f); }   // the lone repair rule (AfskDemod::setMinVotes)
+        for (const Frame& f : v) onFrame(f);
     }
 public:
     static constexpr double kHoldSec = 0.3;
@@ -657,10 +654,7 @@ public:
     /** ★ Tests / tools at the end of a recording: whatever is still held goes out now. */
     void flush() { flushHeld_(true); }
 private:
-    std::vector<Frame> held_; double heldT_ = 0; uint64_t conflicts1200_ = 0, lone1200_ = 0;
-public:
-    uint64_t loneRepairs1200() const { return lone1200_; }
-private:
+    std::vector<Frame> held_; double heldT_ = 0; uint64_t conflicts1200_ = 0;
     struct Seen { uint32_t h = 0; double t = -100; int path = 0; };
     static constexpr int kSeen = 16;
     Seen seen1200_[kSeen];
