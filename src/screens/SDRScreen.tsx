@@ -177,7 +177,7 @@ import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, sh
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
 import { PAGING_LAW_NOTICE, pagingRecSilent, pagingMutedBanner } from '../services/paging';   // ★ V12 PAGE: the law, REC silent
 import { SilentMute, isSilentDecoder, silentMutedBanner } from '../services/silentDecoder';   // ★★ APRS + METEOR LRPT mute (one rule, web and app)
-import { SharedFollower, type SharedAction, type SharedDecoder } from '../services/sharedDecoders';   // ★★★ the room's decoder (2026-11-24)
+import { SharedFollower, roomSettingsOf, type SharedAction, type SharedDecoder } from '../services/sharedDecoders';   // ★★★ the room's decoder (2026-11-24)
 import { sessionChoice, setSessionChoice } from '../services/decoderSession';   // ★★★ AUTO first; manual for the session only
 import { fullModeName } from '../services/autoModes';   // ★★★ AUTO's fallback rows (RTTY's pattern)
 import { hzReachable } from '../utils/tuneWindow';
@@ -7083,15 +7083,59 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    box. The silent-decoder mute follows the box, as for a decoder opened by hand. */
   const roomCtxRef = useRef<{ blocked: Set<string>; why: Record<string, string>; band: boolean }>({ blocked: new Set(), why: {}, band: false });
   roomCtxRef.current = { blocked: blockedModes, why: decWhy, band: !!spotsBandCap?.ok };
+  /** ★★★ The room's run's settings, shown in this listener's panel (one set of settings for the room — Stuart 11-24). The
+   *  refs and the state the panel draws from, and the decoder client's own copies; never saved as the listener's choice. */
+  const roomSettingsApply = useCallback((ext: string, params: Record<string, number | string | boolean>) => {
+    const st = roomSettingsOf(ext, params);
+    const dc = decoderClient.current;
+    if (st.rtty) {
+      rttySkimRef.current = st.rtty.skim; setRttySkim(st.rtty.skim);
+      if (dc) dc.rttySkim = st.rtty.skim;
+      if (st.rtty.skim) { rttyWidthRef.current = st.rtty.width; setRttyWidth(st.rtty.width); if (dc) dc.rttyWidth = st.rtty.width; }
+      else {
+        const r = st.rtty;
+        const next: RttySettings = { ...rttySettingsRef.current, shift: r.shift, baud: r.baud, encoding: r.encoding as RttySettings['encoding'],
+          inverted: r.inverted, auto: r.auto, usos: r.usos, ...(r.stop ? { stop: r.stop } : {}), ...(r.dataBits ? { dataBits: r.dataBits } : {}),
+          ...(r.parity ? { parity: r.parity as RttySettings['parity'] } : {}) };
+        rttySettingsRef.current = next; setRttySettings(next);
+        if (dc) dc.rttySettings = { ...next };
+      }
+    }
+    if (st.cw) { cwSkimRef.current = st.cw.skim; setCwSkim(st.cw.skim); if (dc) dc.cwSkim = st.cw.skim;
+                 if (st.cw.skim && st.cw.width) { cwWidthRef.current = st.cw.width; setCwWidth(st.cw.width); if (dc) dc.cwWidth = st.cw.width; } }
+    if (st.psk) { pskSkimRef.current = st.psk.skim; setPskSkim(st.psk.skim); if (dc) dc.pskSkim = st.psk.skim;
+                  if (st.psk.skim && st.psk.width) { pskWidthRef.current = st.psk.width; setPskWidth(st.psk.width); if (dc) dc.pskWidth = st.psk.width; } }
+    if (st.wefax) { setWefaxLpm(st.wefax.lpm); if (dc) dc.wefaxLpm = st.wefax.lpm; }
+    if (st.time) { timeStationRef.current = st.time.station; if (dc) dc.timeStation = st.time.station as typeof dc.timeStation; }
+    if (st.mfsk) { const m = { ...tmModeRef.current, mfsk: st.mfsk.mode }; tmModeRef.current = m; setTmMode(m); if (dc) dc.textMode = { ...m }; }
+    if (st.aprs) {
+      packetModeRef.current = st.aprs.mode as PacketMode; setPacketMode(st.aprs.mode as PacketMode);
+      const fec = { fx25: st.aprs.fx25, il2p: st.aprs.il2p }; pktFecRef.current = fec; setPktFec(fec);
+    }
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const roomApply = useCallback((a: SharedAction) => {
     if (destroyed.current) return;
+    if (a.kind === 'settings') {
+      // ★★★ somebody changed the room's run, which this listener already holds: the panel shows its settings, a reconnect
+      //     re-asserts exactly it; nothing is sent now
+      if (a.box === 'spots') {
+        if (spotsKindRef.current === 'digi') {
+          const band = a.entry.params.scope === 'band';
+          spotsBandOnRef.current = band; setSpotsBandOn(band); setSpotModeStates([]); setBandSkim(null);
+          decoderClient.current?.noteSpotsScope(band ? 'band' : 'single');
+        }
+      } else if (activeDecRef.current === a.box) {
+        roomSettingsApply(a.entry.ext, a.entry.params);
+        decoderClient.current?.noteShared(a.box as Parameters<DecoderClient["noteShared"]>[0], a.entry.ext, a.entry.params);
+        if (a.box === 'aprs') aprsReset();
+        setDecoderStatus('settings changed by another listener — the decoder restarted with them');
+      }
+      return;
+    }
     if (a.kind === 'follow') {
       const box = a.box as DecoderType;
       const ext = a.entry.ext;
-      // ★ the box's view the run needs (ONE SIGNAL / SKIMMER) — for this session's box, not saved as the listener's choice
-      if (box === 'rtty') { const s = ext === 'rttyskim'; rttySkimRef.current = s; setRttySkim(s); }
-      if (box === 'cw') { const s = ext === 'cwskim'; cwSkimRef.current = s; setCwSkim(s); }
-      if (box === 'psk') { const s = ext === 'pskskim'; pskSkimRef.current = s; setPskSkim(s); }
+      roomSettingsApply(ext, a.entry.params);   // ★★★ the panel shows the ROOM's settings (one set for all)
       if (spotsKindRef.current) stopSpots();
       roomJoinRef.current = { box, ext, params: { ...a.entry.params }, key: a.entry.key };
       openDecoder(box);
@@ -7107,7 +7151,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       decoderClient.current?.startSpots('digi', a.scope, 'A');
       roomFollowRef.current.noteFollowed('spots', a.entry.key);
     }
-  }, [openDecoder, stopSpots, startSpotFlush]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openDecoder, stopSpots, startSpotFlush, roomSettingsApply, aprsReset]);   // eslint-disable-line react-hooks/exhaustive-deps
   const roomIn = useCallback((list: SharedDecoder[]) => {
     const box = activeDecRef.current;
     const busy = box === 'scanner' || box === 'transcribe' || box === 'ft8' || box === 'paging' || satOnRef.current

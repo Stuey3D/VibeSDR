@@ -20,7 +20,7 @@ import { parseSkimBands, skimPickable, skimBandAtDial, skimOffLabel, skimPointLa
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
 import { SilentMute, isSilentDecoder } from '../../../src/services/silentDecoder.ts';   // ★★ APRS + METEOR LRPT mute (one rule, web and app)
-import { SharedFollower, sharedDecoderKey, type SharedDecoder, type SharedAction, type SharedNow } from '../../../src/services/sharedDecoders.ts';   // ★★★ the room's decoder (2026-11-24)
+import { SharedFollower, sharedDecoderKey, roomSettingsOf, type SharedDecoder, type SharedAction, type SharedNow } from '../../../src/services/sharedDecoders.ts';   // ★★★ the room's decoder (2026-11-24)
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
@@ -10524,6 +10524,38 @@ function roomNow(): SharedNow {
 function roomDecIn(list: SharedDecoder[]) {
   for (const a of roomFollow.receive(list, roomNow())) roomApply(a);
 }
+/** ★★★ The room's run's settings, shown in this page's panel (sharedDecoders.ts roomSettingsOf) — the segment keys pressed
+ *  with re-attaching held off (roomApplying), so their hints and rows follow exactly as a press; the rest set directly. */
+let roomApplying = false;
+function roomSettingsApply(ext: string, params: Record<string, number | string | boolean>) {
+  const st = roomSettingsOf(ext, params);
+  roomApplying = true;
+  try {
+    if (st.rtty) {
+      roomView('rttyView', 'rttyview', st.rtty.skim ? 'skim' : 'one');
+      if (st.rtty.skim) roomView('rttyWidth', 'rttywidth', String(st.rtty.width));
+      else {
+        const r = st.rtty;
+        rtty = { ...rtty, shift: r.shift, baud: r.baud, encoding: r.encoding as RttySettings['encoding'], inverted: r.inverted, auto: r.auto,
+                 usos: r.usos, ...(r.stop ? { stop: r.stop } : {}), ...(r.dataBits ? { dataBits: r.dataBits } : {}),
+                 ...(r.parity ? { parity: r.parity as RttyParity } : {}) };
+        syncRttyControls();
+      }
+    }
+    if (st.cw) { roomView('cwView', 'cwview', st.cw.skim ? 'skim' : 'one'); if (st.cw.skim && st.cw.width) roomView('cwWidth', 'cwwidth', String(st.cw.width)); }
+    if (st.psk) { roomView('pskView', 'pskview', st.psk.skim ? 'skim' : 'one'); if (st.psk.skim && st.psk.width) roomView('pskWidth', 'pskwidth', String(st.psk.width)); }
+    if (st.wefax) roomView('wefaxLpm', 'lpm', String(st.wefax.lpm));
+    if (st.time) roomView('timeStation', 'station', st.time.station);
+    if (st.mfsk) { tmMode.mfsk = st.mfsk.mode; renderTmModes(); }
+    if (st.aprs) {
+      packetMode = st.aprs.mode as PacketMode; aprsBaud = st.aprs.mode === '300' ? 300 : 1200;
+      pktFx25 = st.aprs.fx25; pktIl2p = st.aprs.il2p;
+      packetSegRender();
+      $('aprsFx25').classList.toggle('on', pktFx25); $('aprsIl2p').classList.toggle('on', pktIl2p);
+    }
+  } catch (e) { console.error('[decoders] room settings', e); }
+  finally { roomApplying = false; }
+}
 /** One of the box's views (ONE SIGNAL / SKIMMER) pressed for the room's run — before the attach, with no box of that
  *  decoder open, so the view's own re-attach (reattachIf) does nothing. */
 function roomView(id: string, attr: string, val: string) {
@@ -10536,9 +10568,7 @@ function roomApply(a: SharedAction) {
     if (!mode) return;
     const box = a.box as Exclude<typeof activeDec, null>;
     activeDec = null;   // ★ the attach below replaces what this page had (on a shared dial that was the room's, now replaced)
-    if (box === 'rtty') roomView('rttyView', 'rttyview', a.entry.ext === 'rttyskim' ? 'skim' : 'one');
-    if (box === 'cw') roomView('cwView', 'cwview', a.entry.ext === 'cwskim' ? 'skim' : 'one');
-    if (box === 'psk') roomView('pskView', 'pskview', a.entry.ext === 'pskskim' ? 'skim' : 'one');
+    roomSettingsApply(a.entry.ext, a.entry.params);   // ★★★ the panel shows the ROOM's settings (one set for all)
     if (box === 'aprs') { aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; }
     decVfo = 'A';
     activeDec = box;
@@ -10549,6 +10579,21 @@ function roomApply(a: SharedAction) {
     syncDecButtons();
     const name = (document.querySelector(`#decodersPanel [data-dec="${box}"]`)?.textContent || box).trim();
     showPill(`${name} is open for everyone on this receiver — close it to stop it for you only`, 6000);
+  } else if (a.kind === 'settings') {
+    // ★★★ somebody changed the room's run: this listener already holds the new run — the panel shows its settings, and a
+    //     reconnect re-asserts exactly it; nothing is sent now
+    if (a.box === 'spots') {
+      const band = a.entry.params.scope === 'band';
+      decoders.noteSpotsScope(band ? 'band' : 'single');
+      bandSpotsUi(band);
+      $<HTMLButtonElement>('spotsBtn').classList.toggle('on', !band);
+    } else if (activeDec === a.box) {
+      roomSettingsApply(a.entry.ext, a.entry.params);
+      const mode = roomModeOf(a.entry.ext);
+      if (mode) decoders.noteAttached(mode, { ...a.entry.params } as DecoderParams, a.entry.ext);
+      if (a.box === 'aprs') { aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; renderAprs(); }
+      if (a.box === 'rtty' || a.box === 'cw' || a.box === 'psk') { cwLast = null; rttyHist.clear(); rttyCardId = 0; showDecBox(a.box); }
+    }
   } else if (a.kind === 'spots') {
     decoders.setSpots(true, a.scope, 'A');
     spotsVfo = 'A';
@@ -15431,6 +15476,7 @@ function syncRttyControls() {
 /** A settings change while running must re-attach — the shim builds the decoder
  *  from the attach params, so it can't be tweaked in place. */
 function reattachIf(mode: string) {
+  if (roomApplying) return;   // ★★★ the room's settings being shown in the panel — nothing is re-attached (sharedDecoders.ts)
   if (activeDec === mode) { decTuneHint = ''; decoders?.attach(decExt(mode), decParams(mode)); }
 }
 

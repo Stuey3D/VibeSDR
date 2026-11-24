@@ -412,6 +412,17 @@ export class DecoderClient {
     else this._sync();                     // opening: onopen re-asserts mode + params
   }
 
+  /** ★★★ SHARED DECODERS: the room's run this socket already holds changed settings (somebody else changed them) — remember
+   *  them, so a reconnect re-asserts exactly that run; nothing is sent now. */
+  noteAttached(mode: Exclude<DecoderMode, null>, params: DecoderParams, ext: string) {
+    if (!this.mode) return;   // ★ only while a decoder is attached here (the caller checks it is this box's)
+    this.mode = mode;
+    this.params = params;
+    this.extOverride = /^[a-z0-9]{1,16}$/.test(ext) ? ext : '';
+  }
+  /** …and the room's spots run moved between Single and Band: remembered for a reconnect, nothing sent. */
+  noteSpotsScope(scope: 'single' | 'band') { if (this.spotsOn) this.spotScope = scope; }
+
   detach() {
     if (!this.mode) return;
     this.mode = null;

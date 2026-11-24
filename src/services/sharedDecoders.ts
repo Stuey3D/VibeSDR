@@ -92,7 +92,10 @@ export function sharedDecoderKey(ext: string): string | null {
 export type SharedAction =
   | { kind: 'none' }
   | { kind: 'follow'; entry: SharedDecoder; box: string }
-  | { kind: 'spots'; entry: SharedDecoder; scope: 'single' | 'band' };
+  | { kind: 'spots'; entry: SharedDecoder; scope: 'single' | 'band' }
+  /** ★★★ The room's run (that this listener already holds) has new settings — somebody changed them: show them in the panel.
+   *  Nothing is re-attached (the server moved every holder to the new run). Stuart 2026-11-24: one set of settings for all. */
+  | { kind: 'settings'; entry: SharedDecoder; box: string };
 
 export interface SharedNow {
   /** The decoder box this listener has open ('rtty', 'aprs' …), or null. */
@@ -119,6 +122,8 @@ export class SharedFollower {
   private closedKey: Record<SharedSlot, string> = { decoder: '', spots: '' };
   private pressedAt: Record<SharedSlot, number> = { decoder: -1e15, spots: -1e15 };
   private followed: Record<SharedSlot, string> = { decoder: '', spots: '' };
+  /** The run whose settings this listener's panel shows (followed, or told while holding it). */
+  private applied: Record<SharedSlot, string> = { decoder: '', spots: '' };
 
   /** The room's list as last received. */
   get list(): readonly SharedDecoder[] { return this.last; }
@@ -145,11 +150,21 @@ export class SharedFollower {
   decide(now: SharedNow): SharedAction[] {
     const out: SharedAction[] = [];
     const d = this.entry('decoder');
+    // ★★★ held, and the run's settings changed under it: the panel follows (their own change: already shown)
+    if (d && d.held && d.key !== this.applied.decoder) {
+      this.applied.decoder = d.key;
+      const box = sharedDecoderKey(d.ext);
+      if (!d.mine && box) out.push({ kind: 'settings', entry: d, box });
+    }
     if (d && !d.held && this.closedKey.decoder !== d.key && now.now - this.pressedAt.decoder >= OWN_PRESS_MS && !now.busy) {
       const box = sharedDecoderKey(d.ext);
       if (box && now.canShow(box) && this.followed.decoder !== d.key) out.push({ kind: 'follow', entry: d, box });
     }
     const s = this.entry('spots');
+    if (s && s.held && s.key !== this.applied.spots) {
+      this.applied.spots = s.key;
+      if (!s.mine) out.push({ kind: 'settings', entry: s, box: 'spots' });
+    }
     if (s && !s.held && this.closedKey.spots !== s.key && now.now - this.pressedAt.spots >= OWN_PRESS_MS && this.followed.spots !== s.key) {
       const scope = s.params.scope === 'band' ? 'band' : 'single';
       if (!now.canSpots || now.canSpots(scope)) out.push({ kind: 'spots', entry: s, scope });
@@ -158,7 +173,7 @@ export class SharedFollower {
   }
 
   /** The client acted on a follow (it attached with the entry's parameters / subscribed with its scope). */
-  noteFollowed(slot: SharedSlot, key: string) { this.followed[slot] = key; }
+  noteFollowed(slot: SharedSlot, key: string) { this.followed[slot] = key; this.applied[slot] = key; }
 
   /** The listener pressed something themselves — opened a decoder (or the spots): their press wins for a moment, and what
    *  they had closed is forgotten (they are choosing again). */
@@ -184,5 +199,55 @@ export class SharedFollower {
     this.closedKey = { decoder: '', spots: '' };
     this.pressedAt = { decoder: -1e15, spots: -1e15 };
     this.followed = { decoder: '', spots: '' };
+    this.applied = { decoder: '', spots: '' };
   }
+}
+
+/* ── ★★★ THE ROOM'S SETTINGS, AS THE PANELS SHOW THEM (Stuart, 2026-11-24: "it would save cpu on the host if one set of
+ *  settings applies to all users") — the inverse of what each client attaches with (decParams / DecoderClient._paramsFor),
+ *  so a follower's panel shows the run's settings, not its own. Only what a panel shows; anything else stays as it is. */
+export type PacketModeId = 'auto' | '1200' | '9600' | '300';
+export interface RoomSettings {
+  rtty?: { skim: true; width: number }
+       | { skim: false; shift: number; baud: number; encoding: string; inverted: boolean; auto: boolean; usos: boolean;
+           stop?: 1 | 1.5 | 2; dataBits?: 7 | 8; parity?: string };
+  cw?: { skim: boolean; width?: number };
+  psk?: { skim: boolean; width?: number };
+  wefax?: { lpm: number };
+  aprs?: { mode: PacketModeId; fx25: boolean; il2p: boolean };
+  time?: { station: string };
+  mfsk?: { mode: string };
+  spots?: { scope: 'single' | 'band' };
+}
+const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+const flag = (v: unknown, d: boolean) => (v === true || v === 1 ? true : v === false || v === 0 ? false : d);
+export function roomSettingsOf(ext: string, p: Record<string, number | string | boolean>): RoomSettings {
+  const out: RoomSettings = {};
+  const box = ext === 'spots' ? 'spots' : sharedDecoderKey(ext);
+  if (box === 'rtty') {
+    if (ext === 'rttyskim') out.rtty = { skim: true, width: num(p.width, 48000) };
+    else {
+      const encoding = typeof p.encoding === 'string' && /^(ITA2|ASCII|CCIR476)$/.test(p.encoding) ? p.encoding : 'ITA2';
+      const r: NonNullable<RoomSettings['rtty']> = { skim: false, shift: num(p.shift, 170), baud: num(p.baud_rate, 45.45), encoding,
+        inverted: flag(p.inverted, false), auto: flag(p.auto, false), usos: flag(p.usos, false) };
+      const m = typeof p.framing === 'string' ? /^([5-8])([NEOMS])(1|1\.5|2)$/.exec(p.framing) : null;
+      if (m) {
+        r.stop = m[3] === '2' ? 2 : m[3] === '1' ? 1 : 1.5;
+        if (encoding === 'ASCII') { r.dataBits = m[1] === '8' ? 8 : 7; r.parity = m[2]; }
+      }
+      out.rtty = r;
+    }
+  } else if (box === 'cw') out.cw = ext === 'cwskim' ? { skim: true, width: num(p.width, 48000) } : { skim: false };
+  else if (box === 'psk') out.psk = ext === 'pskskim' ? { skim: true, width: num(p.width, 12000) } : { skim: false };
+  else if (box === 'wefax') out.wefax = { lpm: num(p.lpm, 120) };
+  else if (box === 'aprs') {
+    const baud = num(p.baud_rate, 1200);
+    const mode: PacketModeId = baud < 600 ? '300' : p.packet === 'auto' ? 'auto' : p.packet === '9600' || baud === 9600 ? '9600' : '1200';
+    out.aprs = { mode, fx25: flag(p.fx25, true), il2p: flag(p.il2p, true) };
+  } else if (box === 'time') {
+    const st = ext === 'time' ? (typeof p.station === 'string' ? p.station : '') : ext;
+    if (st) out.time = { station: st };
+  } else if (box === 'mfsk' && typeof p.mode === 'string') out.mfsk = { mode: p.mode };
+  else if (box === 'spots') out.spots = { scope: p.scope === 'band' ? 'band' : 'single' };
+  return out;
 }

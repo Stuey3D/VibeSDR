@@ -416,6 +416,13 @@ export class DecoderClient {
     else this._open();
   }
 
+  /** ★★★ The room's run this app already holds changed settings (another listener changed them): remembered, so a reconnect
+   *  re-asserts exactly that run. Nothing is sent. */
+  noteShared(name: DecoderName, ext: string, params: Record<string, unknown>) {
+    if (this.active !== name || !/^[a-z0-9]{1,16}$/.test(ext)) return;
+    this.follow = { name, ext, params: { ...params } };
+  }
+
   /** Start a decoder. Replaces any running one (server enforces one/session). */
   start(name: DecoderName) {
     this.follow = null;
@@ -468,6 +475,8 @@ export class DecoderClient {
    *  keeps the slot (the web's setSpots). */
   private spotsScope: 'single' | 'band' = 'single';
   get spotsBandScope(): boolean { return !!this.spotsKind && this.spotsScope === 'band'; }
+  /** ★★★ SHARED DECODERS: the room's spots run moved between Single and Band — remembered for a reconnect, nothing sent. */
+  noteSpotsScope(scope: 'single' | 'band') { if (this.spotsKind === 'digi') this.spotsScope = scope; }
 
   startSpots(kind: SpotsKind, scope: 'single' | 'band' = 'single', vfo?: 'A' | 'B') {
     if (vfo) this.spotsVfo = vfo;

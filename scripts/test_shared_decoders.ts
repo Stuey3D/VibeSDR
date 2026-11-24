@@ -6,7 +6,9 @@
  * The server half is test-shared-decoders (C++) and scripts/test-server-shared-decoders.mjs (the real server).
  */
 import { readFileSync } from 'node:fs';
-import { parseDecShared, sharedDecoderKey, SharedFollower, OWN_PRESS_MS, type SharedDecoder, type SharedNow } from '../src/services/sharedDecoders';
+import { parseDecShared, sharedDecoderKey, SharedFollower, OWN_PRESS_MS, roomSettingsOf, type SharedDecoder, type SharedNow } from '../src/services/sharedDecoders';
+import { rttyFraming } from '../src/utils/rttySpec';
+import { packetParams } from '../src/services/packet';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) { pass++; console.log('   ok  ', m); } else { fail++; console.log('   FAIL', m); } };
@@ -90,6 +92,53 @@ console.log('the spots run');
   ok(a.some((x) => x.kind === 'follow') && a.some((x) => x.kind === 'spots'), 'decoder and spots both offered (the app takes the decoder first)');
 }
 
+console.log('one set of settings for the room');
+{
+  const f = new SharedFollower();
+  f.receive(L({ held: true, mine: true, key: 'aprs|a' }), now());
+  let a = f.receive(L({ held: true, mine: false, key: 'aprs|b', params: { baud_rate: 9600, packet: '9600', fx25: 0, il2p: 1 } }), now({ box: 'aprs' }));
+  ok(a.length === 1 && a[0].kind === 'settings' && a[0].box === 'aprs', 'another listener changes the room\'s run: this panel is told (settings, no re-attach)');
+  ok(f.receive(L({ held: true, mine: false, key: 'aprs|b', n: 3 }), now({ box: 'aprs' })).length === 0, '…once');
+  ok(f.receive(L({ held: true, mine: true, key: 'aprs|c' }), now({ box: 'aprs' })).length === 0, 'their OWN change: already shown, nothing to do');
+  a = f.receive(L({ held: false, key: 'aprs|d' }), now());
+  ok(a.length === 1 && a[0].kind === 'follow', 'a run they do not hold (a replacement): followed — with its settings');
+  f.noteFollowed('decoder', 'aprs|d');
+  ok(f.receive(L({ held: true, key: 'aprs|d' }), now({ box: 'aprs' })).length === 0, 'the followed run, now held: its settings are already shown');
+  const sp = { slot: 'spots', ext: 'spots', mine: false } as Partial<SharedDecoder>;
+  f.receive(L({ ...sp, held: true, mine: true, key: 'spots|single', params: {} }), now());
+  a = f.receive(L({ ...sp, held: true, key: 'spots|band', params: { scope: 'band' } }), now());
+  ok(a.length === 1 && a[0].kind === 'settings' && a[0].box === 'spots', 'the spots run moved to Band: the panel follows');
+}
+{
+  // ★ the inverse of what each client attaches with — every RTTY shape round-trips
+  const cases = [
+    { shift: 170, baud: 45.45, encoding: 'ITA2', inverted: false, stop: 1.5, auto: true, usos: false },
+    { shift: 850, baud: 50, encoding: 'ITA2', inverted: true, stop: 1, auto: false, usos: true },
+    { shift: 170, baud: 110, encoding: 'ASCII', inverted: false, stop: 2, dataBits: 8, parity: 'E', auto: false, usos: false },
+    { shift: 170, baud: 100, encoding: 'CCIR476', inverted: false, auto: false, usos: false },
+  ] as const;
+  for (const c of cases) {
+    const p: Record<string, number | string | boolean> = { center_frequency: 1000, shift: c.shift, baud_rate: c.baud, encoding: c.encoding, inverted: c.inverted,
+      framing: rttyFraming(c as never), ...(c.auto ? { auto: true } : {}), ...(c.usos ? { usos: true } : {}) };
+    const r = roomSettingsOf('fsk', p).rtty;
+    ok(!!r && !r.skim && r.shift === c.shift && r.baud === c.baud && r.encoding === c.encoding && r.inverted === c.inverted && r.auto === c.auto
+       && r.usos === c.usos && (c.encoding === 'CCIR476' || r.stop === (c as { stop?: number }).stop)
+       && (c.encoding !== 'ASCII' || (r.dataBits === 8 && r.parity === 'E')), `RTTY ${c.encoding} ${c.shift}/${c.baud} ${p.framing} round-trips`);
+  }
+  const sk = roomSettingsOf('rttyskim', { width: 96000 }).rtty;
+  ok(!!sk && sk.skim && sk.width === 96000, 'the RTTY skimmer and its width');
+  ok(roomSettingsOf('cwskim', { width: 24000 }).cw?.width === 24000 && roomSettingsOf('cw', {}).cw?.skim === false, 'CW: one signal / skimmer + width');
+  ok(roomSettingsOf('pskskim', { width: 6000 }).psk?.width === 6000, 'PSK skimmer width');
+  ok(roomSettingsOf('wefax', { lpm: 60, carrier: 1900 }).wefax?.lpm === 60, 'WEFAX LPM');
+  const caps = { fec: true, has9600: true } as never;
+  for (const m of ['auto', '1200', '9600', '300'] as const) for (const fx of [true, false]) {
+    const a = roomSettingsOf('aprs', packetParams(m, fx, !fx, caps)).aprs!;
+    ok(a.mode === m && (m === 'auto' || m === '300' || (a.fx25 === fx && a.il2p === !fx)), `APRS ${m} fx25=${fx} round-trips (${JSON.stringify(a)})`);
+  }
+  ok(roomSettingsOf('msf', {}).time?.station === 'msf' && roomSettingsOf('time', { station: 'dcf77' }).time?.station === 'dcf77', 'the time station (app and web shapes)');
+  ok(roomSettingsOf('mfsk', { mode: 'olivia-8-500' }).mfsk?.mode === 'olivia-8-500', 'MFSK sub-mode');
+}
+
 console.log('the web page and the app wire it alike');
 {
   const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
@@ -109,6 +158,9 @@ console.log('the web page and the app wire it alike');
   ok(/roomFollow\.noteOwnOpen\('decoder'/.test(web) && /roomFollowRef\.current\.noteOwnOpen\('decoder'/.test(app), 'both: a press is the listener\'s own');
   ok((web.match(/roomFollow\.noteClosed\('spots'/g) || []).length >= 3 && /noteClosed\('spots', null\)/.test(app), 'both: closing the spots is remembered');
   ok(/this\.follow = null;\s*\n\s*this\.active = name;/.test(dc), 'app: an ordinary start drops the follow (its own settings again)');
+  ok(/roomSettingsApply\(a\.entry\.ext, a\.entry\.params\)/.test(web) && /roomSettingsApply\(ext, a\.entry\.params\)/.test(app), 'both: a follow shows the room\'s settings in the panel');
+  ok(/if \(roomApplying\) return;/.test(web), 'web: showing the room\'s settings never re-attaches');
+  ok(/kind === 'settings'/.test(web) && /kind === 'settings'/.test(app) && /noteAttached\(/.test(web) && /noteShared\(/.test(app), 'both: a settings change by another listener is shown and kept for a reconnect, nothing sent');
 }
 
 console.log(`\ntest_shared_decoders: ${pass} passed, ${fail} failed`);

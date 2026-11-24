@@ -139,6 +139,20 @@ try {
   L1.dx.send({ type: 'audio_extension_attach', extension_name: 'navtex', center_frequency: 500, shift: 170, baud_rate: 100, inverted: false, framing: '4/7', encoding: 'CCIR476' });
   ok(await until(boxIs('NAVTEX'), 8000), `listener 1 opens NAVTEX: the page follows it (${await ev(`document.getElementById('decTitle')?.textContent`)})`);
   ok(await waitFor(() => roomDec(L1.sp)?.ext === 'navtex' && roomDec(L1.sp)?.n >= 2, 6000), `…and joined it (${roomDec(L1.sp)?.n} hold it)`);
+
+  // ★★★ one set of settings: the page's RTTY panel shows the room's run, and follows a change made by somebody else
+  const RT = (shift) => ({ type: 'audio_extension_attach', extension_name: 'fsk', center_frequency: 1000, shift, baud_rate: 50, inverted: true, framing: '5N1', encoding: 'ITA2' });
+  L1.dx.send(RT(425));
+  ok(await until(boxIs('RTTY'), 8000), 'listener 1 opens RTTY (425 Hz, 50 Bd, inverted): the page follows it');
+  const on = (id, attr, v) => ev(`!!document.querySelector('#${id} [data-${attr}="${v}"].on')`);
+  ok(await until(`!!document.querySelector('#rttyShift [data-shift="425"].on') && !!document.querySelector('#rttyBaud [data-baud="50"].on')`, 4000)
+     && await ev(`document.getElementById('rttyInv')?.classList.contains('on')`), 'the page\'s panel shows the ROOM\'s settings (425 Hz, 50 Bd, inverted)');
+  ok(await waitFor(() => roomDec(L1.sp)?.ext === 'fsk' && roomDec(L1.sp)?.n >= 2, 6000), 'the page joined that run');
+  const k0 = roomDec(L1.sp).key;
+  L1.dx.send(RT(850));
+  ok(await until(`!!document.querySelector('#rttyShift [data-shift="850"].on')`, 6000), 'listener 1 changes the shift to 850: the page\'s panel follows');
+  ok(await waitFor(() => roomDec(L1.sp)?.key !== k0 && roomDec(L1.sp)?.n >= 2, 4000) && await ev(boxIs('RTTY')), 'the one run, still held by both, the box still open');
+  void on;
 } catch (e) { ok(false, `driver: ${e}`); }
 finally {
   try { wsC?.close(); } catch {}
