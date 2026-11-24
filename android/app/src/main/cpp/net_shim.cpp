@@ -14,6 +14,9 @@
 #include "vibe_sock.h"   // ★ close / errno / EINPROGRESS / SO_REUSEADDR — the four that differ on Windows
 #include <chrono>
 #include <cstring>
+#include <cctype>
+#include <string>
+#include <string_view>
 #include <stdexcept>
 
 namespace net {
@@ -109,6 +112,42 @@ bool Socket::setRecvBufferSize(int bytes) {
 }
 
 int Socket::send(const uint8_t* data, size_t len, const Address*) {
+    // ★★ beta93 — the CORS head rewrite (see setCorsHead in net_shim.h). Once, on the answer's head only.
+    if (corsOn_ && !corsDone_ && len >= 5 && std::memcmp(data, "HTTP/", 5) == 0) {
+        corsDone_ = true;
+        const char* p = reinterpret_cast<const char*>(data);
+        const std::string_view all(p, len);
+        size_t headEnd = all.find("\r\n\r\n");
+        headEnd = headEnd == std::string_view::npos ? len : headEnd + 2;    // ★ keep the blank line with the body
+        const size_t statusEnd = all.find("\r\n");
+        if (statusEnd != std::string_view::npos && statusEnd < headEnd) {
+            std::string head;
+            head.reserve(headEnd + corsLine_.size());
+            head.append(p, statusEnd + 2);
+            head += corsLine_;
+            size_t at = statusEnd + 2;
+            while (at < headEnd) {
+                size_t e = all.find("\r\n", at);
+                if (e == std::string_view::npos || e >= headEnd) e = headEnd; else e += 2;
+                static const char kAcao[] = "access-control-allow-origin:";
+                const size_t n = sizeof kAcao - 1;
+                bool acao = e - at >= n;
+                for (size_t k = 0; acao && k < n; k++) acao = (char)std::tolower((unsigned char)p[at + k]) == kAcao[k];
+                if (!acao) head.append(p + at, e - at);
+                at = e;
+            }
+            if (sendRaw(reinterpret_cast<const uint8_t*>(head.data()), head.size()) < 0) return -1;
+            if (headEnd < len && sendRaw(data + headEnd, len - headEnd) < 0) return -1;
+            tx_.fetch_add(head.size() + (len - headEnd), std::memory_order_relaxed);
+            return (int)len;
+        }
+    }
+    if (sendRaw(data, len) < 0) return -1;
+    tx_.fetch_add(len, std::memory_order_relaxed);   // see txBytes() in the header
+    return (int)len;
+}
+
+int Socket::sendRaw(const uint8_t* data, size_t len) {
     if (!open_ || fd_ < 0) return -1;
     size_t off = 0;
     while (off < len) {
@@ -121,7 +160,6 @@ int Socket::send(const uint8_t* data, size_t len, const Address*) {
         if (w == 0) { open_ = false; return -1; }
         off += (size_t)w;
     }
-    tx_.fetch_add(len, std::memory_order_relaxed);   // see txBytes() in the header
     return (int)len;
 }
 
