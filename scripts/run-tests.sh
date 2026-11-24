@@ -2044,6 +2044,13 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
     VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-aprs-shared.mjs; rc=$?
     if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   else notrun=$((notrun+1)); echo '   (test-server-aprs-shared not run — test-aprs-onair did not build)'; fi
+  # ★★★ 2026-11-24 SHARED DECODERS (Stuart): on a shared dial the room's decoder is told to every arrival, joined with the
+  #     server's parameters, closed for ONE listener only and stopped when the last lets go; spots too; a SATELLITE pick's
+  #     decoder not listed and not stopped by a box; a per-VFO radio never told (vibe_shared_decoders.h)
+  if [ -x "$OUT/test-aprs-onair" ]; then
+    VIBE_APRS_ONAIR_BIN="$OUT/test-aprs-onair" node --max-old-space-size=512 scripts/test-server-shared-decoders.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  else notrun=$((notrun+1)); echo '   (test-server-shared-decoders not run — test-aprs-onair did not build)'; fi
   # ★★ V12 2026-11-10: a listener's manual gain / AUTO reaches EVERY listener's readout (hwinfo agc + gainNow)
   VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-gain-readout.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
