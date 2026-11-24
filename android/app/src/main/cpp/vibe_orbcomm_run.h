@@ -171,8 +171,10 @@ private:
             msgs_++; s.msgs++;
             what = "subscriber message \xe2\x80\x94 not decoded (part " + std::to_string((r.p.b[1] & 15) + 1) + " of " + std::to_string(std::max(1, r.p.b[1] >> 4)) + ")";
         } else {
-            what = "packet type " + fmt("%02X", ty) + " (not described)";
-            housekeeping = false;
+            /* ★ FM116 2026-11-24: types 0A 0B 0D 0E 13 (≈ 7 % of good packets, most of them clean) are in no published
+             *  description — shown raw, deduplicated like housekeeping, never interpreted. */
+            what = "system packet type " + fmt("%02X", ty) + " — not published, shown raw";
+            housekeeping = true;
         }
         if (housekeeping && ty != kEphemeris) {   // unchanged housekeeping: once a minute
             const std::string k = std::to_string(key) + ":" + r.p.hex();

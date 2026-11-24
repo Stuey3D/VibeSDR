@@ -61,7 +61,10 @@ public:
         if (decodeSync(r.p, si)) { c.scId = si.id; c.dcn = si.channel; }
         Ephemeris e;
         if (decodeEphemeris(r.p, e, t)) {
-            c.scId = e.id;
+            /* ★ A REPAIRED packet never teaches an ID (FM116, 2026-11-24: one 2-symbol repair passed the Fletcher check with
+             *  its ID byte wrong — 0x1E for 0x2E — and the run "learnt" a second ID for the bird). Its position still names
+             *  the carrier (a wrong position cannot land within kPosMatchKm of a bird by chance). */
+            if (!r.p.repaired) c.scId = e.id;
             const double tq = e.unix > 0 && std::fabs(e.unix - t) < 120 ? e.unix : t;
             double best = 1e18; long long bn = 0;
             for (Bird& b : birds_) {
@@ -72,7 +75,7 @@ public:
                 if (d < best) { best = d; bn = b.norad; }
             }
             lastEphKm_ = best;
-            if (bn && best < kPosMatchKm) { idMap_[e.id] = bn; c.norad = bn; c.how = "position"; }
+            if (bn && best < kPosMatchKm) { if (!r.p.repaired) idMap_[e.id] = bn; c.norad = bn; c.how = "position"; }
         }
         if (!c.norad && c.scId >= 0) {
             auto it = idMap_.find(c.scId);

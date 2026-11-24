@@ -113,6 +113,33 @@ oscillator wander, 30 ppm clock, a 10 dB spur 6 kHz beside the carrier and two m
 no spur ever opened. Es/N0 6 dB now 250 of ~500 packets, 8 dB 447. **Still unproven on a real pass** until the FM113
 capture (15:43–15:57 UTC, bias-T on) is run.
 
+**2026-11-24 16:53 UTC — THE FIRST REAL DECODE** (`orbcomm-FM116-v4l4-youloop-2400k-137500k-20261124T165319Z.cu8`: the Pi 500's
+other RTL-SDR V4, 00000004, on the YouLoop with a LaNA, 2.4 MS/s, 137.500 MHz, 446 s):
+
+| | |
+|---|---|
+| Carriers | both FM116 channels LOCKED: DCN 265 = 137.6625 MHz (SNR up to 13.8 dB), DCN 320 = 137.800 MHz (12.4 dB) |
+| Packets | ≈ 16 500 good (1806 distinct subscriber-message packets, raw only); types also seen that no description names: 0A 0B 0D 0E 13 (≈ 7 %, most clean) — shown raw |
+| Sync | `65 A8 F9 2E 20 09 m1`: ID 0x2E, byte 4 = 0x20 (Kenny: 0x10), F = 0x09 → Kenny's rule gives 0x109 = 265 = 137.6625 ✔; F = 0x40 → 320 = 137.800 ✔ |
+| Naming | FM116 by its own position report; learnt ID 0x2E → 41189 (a "0x1E" seen once was a 2-symbol REPAIR that passed the check with the ID byte wrong — repaired packets no longer teach IDs) |
+| Position | 700.2 km up, 7.161 km/s; **within 4.8–6 km of SGP4** once the clock is read as UTC |
+| **Clock** | **the satellite's GPS week + TOW count UTC, not GPS time**: read as GPS − 18 s the clock sat 17.7–18.7 s behind the recording and the position missed by 124 km (18 s × 7.16 km/s); read as UTC, Δ = +0.3 s (whole seconds) and 5 km. `kOrbClockMinusUtc = 0` |
+| Doppler | measured vs predicted at 137.6625 MHz: mean −31 Hz, rms 57 Hz over the pass (the dongle's ppm + the elements) |
+| Sky | 48 five-second dots from 200°/46° to 109°/19° — decoding stopped below ≈ 19° on the YouLoop |
+
+Fixed from it: **the AFC now reaches the mixer at once** — the NCO's step was set once per block, so on 48 kS/s blocks of
+0.34 s the frequency loop wound up and ran away by kHz (the 12-s fixture went 3 → 571 good packets, 0 bad); the satellite
+clock as UTC; IDs only from unrepaired packets; the undescribed types shown raw and deduplicated.
+
+The same pass on the **other V4L (00000001, LaNA + FM-stop, the ADS-B aerial)**: no FM116 energy at all — +0.1 dB at
+137.6625 MHz while the YouLoop dongle had 13.8 dB SNR; 137.800 MHz shows only the steady spur (+3 dB, constant). A hardware
+answer: that chain does not hear 137 MHz.
+
+**Regression on real signal:** `test/fixtures/orbcomm/fm116-20261124T165523Z-137662500-48k.cu8` (12 s, channel 265 mixed to
+DC, 48 kS/s cu8, 1.1 MB) + FM116's CelesTrak elements of that day; `test-orbcomm-run` §3 asserts lock, 400–650 packets,
+ID 0x2E, channel 265, named by position, ephemeris within 15 km of SGP4, the clock within 1.5 s, raw-only messages, dots at
+the right elevation.
+
 To check a capture: `vibeserver/tool-orbcomm-file <file.cu8> --rate 1024000 --centre 137500000 --start
 <UTC ISO> --tle orbcomm.tle --lat … --lon … --csv out.csv` (a raw `rtl_sdr` file has no header; the tool handles both).
 Look for: carriers found, sync/ephemeris counts, "learnt IDs" (sync ID → catalogue number), the ephemeris match in km

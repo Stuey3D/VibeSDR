@@ -60,7 +60,7 @@ int main() {
             double re[3]; ecefKm(bird.sgp, t + 0.1, re);
             double re2[3]; ecefKm(bird.sgp, t + 1.1, re2);
             const double pos[3] = { re[0] * 1000, re[1] * 1000, re[2] * 1000 }, vel[3] = { (re2[0] - re[0]) * 1000, (re2[1] - re[1]) * 1000, (re2[2] - re[2]) * 1000 };
-            const double gps = t + 0.1 - 315964800.0 + kGpsLeap;
+            const double gps = t + 0.1 - 315964800.0 + kOrbClockMinusUtc;   // the satellite counts UTC in GPS weeks
             body.push_back(tx::ephemerisPacket(scId, pos, vel, int(gps / 604800), int(std::fmod(gps, 604800))));
         }
         body.push_back(tx::packet(kDownlink, { 0x30, uint8_t(ch), 0x00, 0x05, 0x64, 0x00, 0x14, 0x1D, 0x01 }));
@@ -186,6 +186,82 @@ int main() {
     const std::string out = std::string(td && *td ? td : "/tmp") + "/orbcomm-skyplot-synthetic.png";
     { std::ofstream f(out, std::ios::binary); f << png; }
     std::printf("   picture: %s\n", out.c_str());
+
+    /* §3 ★★★ REAL SIGNAL (the regression the whole decoder answers to): 12 s of ORBCOMM FM116 off air, 2026-11-24 16:55:23
+     *  UTC — the Pi 500's RTL-SDR V4 (00000004) on the YouLoop, 2.4 MS/s, channel 265 (137.6625 MHz) mixed to DC and
+     *  decimated to 48 kS/s cu8 (test/fixtures/orbcomm/, 1.1 MB) — with FM116's CelesTrak elements of that day. Through the run
+     *  exactly as the decoder host drives it: it must lock, decode hundreds of packets, read the sync's ID 0x2E and channel
+     *  265, name the bird FM116 BY ITS OWN POSITION within a few km (the satellite clock read as UTC — kOrbClockMinusUtc), put
+     *  that clock within 1.5 s of the recording's, and show subscriber messages only raw. */
+    std::printf("§3 real FM116 off air (12 s fixture)\n");
+    {
+        std::ifstream fx("test/fixtures/orbcomm/fm116-20261124T165523Z-137662500-48k.cu8", std::ios::binary);
+        std::ifstream tl("test/fixtures/orbcomm/fm116-celestrak-20261124.tle");
+        std::string raw((std::istreambuf_iterator<char>(fx)), std::istreambuf_iterator<char>());
+        std::string n, l1, l2;
+        std::getline(tl, n); std::getline(tl, l1); std::getline(tl, l2);
+        vibe::sat::Elements e; std::string err;
+        CHECK(raw.size() == 1152000 && vibe::sat::parseTle(l1, l2, e, err, "ORBCOMM FM116"), "the fixture and FM116's elements (%zu bytes)", raw.size());
+        std::vector<Bird> fb(1); fb[0].norad = 41189; fb[0].name = "ORBCOMM FM116"; fb[0].ok = fb[0].sgp.init(e);
+        const double fs = 48000, t0 = 1795539323.0;   // 2026-11-24T16:55:23Z
+        double now = t0;
+        std::vector<std::string> fl, fj; std::vector<vibe::skyplot::Dot> fd;
+        Run::Opts q;
+        q.widthHz = 40000; q.now = [&] { return now; }; q.birds = [&] { return fb; };
+        q.observer = [](vibe::sat::Observer& v) { v = vibe::sat::Observer(51.88, -0.42, 100); return true; };
+        q.pickNorad = [] { return 41189LL; }; q.satInRange = [] { return 1; };
+        q.text = [&](const std::string& l) { fl.push_back(l); }; q.json = [&](const std::string& j) { fj.push_back(j); };
+        q.dots = [&](const std::vector<vibe::skyplot::Dot>& d) { fd.insert(fd.end(), d.begin(), d.end()); };
+        uint64_t good = 0, msgs = 0; std::map<long long, int> by;
+        {
+            Run run(q);
+            std::vector<std::complex<float>> x(4800);
+            for (size_t i = 0; i + 2 * x.size() <= raw.size(); i += 2 * x.size()) {
+                for (size_t k = 0; k < x.size(); k++) x[k] = { (uint8_t(raw[i + 2 * k]) - 127.5f) / 128.f, (uint8_t(raw[i + 2 * k + 1]) - 127.5f) / 128.f };
+                now = t0 + double(i / 2 + x.size()) / fs;
+                run.feedIq(x.data(), int(x.size()), fs, 137662500.0);
+            }
+            run.finish(true);
+            good = run.good(); msgs = run.messages(); by = run.goodBySat();
+        }
+        std::printf("   good %llu, subscriber messages %llu, FM116 %d, dots %zu\n", (unsigned long long)good, (unsigned long long)msgs, by[41189], fd.size());
+        CHECK(good >= 400 && good <= 650, "locks and decodes 400–600 packets in 12 s (%llu; 521 when made)", (unsigned long long)good);
+        CHECK(by[41189] >= 300, "attributed to FM116 (%d)", by[41189]);
+        CHECK(msgs >= 20, "subscriber messages seen (raw only) (%llu)", (unsigned long long)msgs);
+        bool byPos = false, chan = false, id = false; double km = -1, clk = 99;
+        for (auto& j : fj) {
+            if (j.find("\"how\":\"position\"") != std::string::npos && j.find("\"norad\":41189") != std::string::npos) byPos = true;
+            if (j.find("\"dcn\":265") != std::string::npos) chan = true;
+            if (j.find("\"scId\":46") != std::string::npos) id = true;   // 0x2E
+            const size_t c = j.find("\"clock\":");
+            if (c != std::string::npos) { const double sc = std::atof(j.c_str() + c + 8); const size_t tt = j.find("\"t\":"); if (tt != std::string::npos) clk = std::min(clk, std::fabs(sc - std::atof(j.c_str() + tt + 4))); }
+        }
+        CHECK(byPos && chan && id, "named FM116 by its own position, channel 265, ID 0x2E (pos %d chan %d id %d)", byPos, chan, id);
+        CHECK(clk < 1.5, "the satellite's clock (read as UTC) within 1.5 s of the recording's (%.2f s)", clk);
+        // the position report against SGP4 at the satellite's own time, directly
+        Ident idn; idn.setBirds(fb);
+        {
+            Receiver rr; double best = 1e9;
+            rr.onPacket = [&](const Rx& r) {
+                Ephemeris ep;
+                if (!r.p.ok || r.p.repaired || !decodeEphemeris(r.p, ep, t0)) return;
+                double p[3]; Bird b = fb[0];
+                if (ecefKm(b.sgp, ep.unix, p)) best = std::min(best, std::sqrt(std::pow(p[0] - ep.x / 1000, 2) + std::pow(p[1] - ep.y / 1000, 2) + std::pow(p[2] - ep.z / 1000, 2)));
+                CHECK(ep.altKm > 690 && ep.altKm < 715 && ep.speedKmS > 7.0 && ep.speedKmS < 7.3, "a sane position report (%.1f km up, %.3f km/s)", ep.altKm, ep.speedKmS);
+            };
+            std::vector<std::complex<float>> x(4800);
+            for (size_t i = 0; i + 2 * x.size() <= raw.size(); i += 2 * x.size()) {
+                for (size_t k = 0; k < x.size(); k++) x[k] = { (uint8_t(raw[i + 2 * k]) - 127.5f) / 128.f, (uint8_t(raw[i + 2 * k + 1]) - 127.5f) / 128.f };
+                rr.feed(x.data(), int(x.size()), fs, 137662500.0, t0 + double(i / 2) / fs);
+            }
+            km = best;
+        }
+        CHECK(km < 15, "the ephemeris matches SGP4 within a few km (%.1f km; 124 km when read as GPS time)", km);
+        bool rawOnly = true;
+        for (auto& l : fl) if (l.find("subscriber message") != std::string::npos && l.find("not decoded") == std::string::npos) rawOnly = false;
+        CHECK(rawOnly, "every subscriber message line says not decoded");
+        CHECK(!fd.empty() && fd.front().elDeg > 33 && fd.front().elDeg < 40, "sky dots at FM116's elevation then (~36° per SGP4: %.1f)", fd.empty() ? -1.0 : double(fd.front().elDeg));
+    }
 
     std::printf("test-orbcomm-run: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

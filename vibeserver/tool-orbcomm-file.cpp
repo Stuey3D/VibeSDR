@@ -120,6 +120,6 @@ int main(int argc, char** argv) {
         std::printf("   bird:"); for (auto& b : birdOf[c]) std::printf(" %s;", b.c_str()); std::printf("\n");
     }
     std::printf("learnt IDs:"); for (auto& m : id.learntIds()) std::printf(" 0x%02X→%lld", m.first, m.second); std::printf("\n");
-    std::printf("distinct subscriber message packets: %zu\nclock anchors (ephemeris): %d, final offset %.1f s (sample clock behind GPS)\n", messages.size(), anchors, clockOff);
+    std::printf("distinct subscriber message packets: %zu\nclock anchors (ephemeris): %d, final offset %.1f s (the satellite clock minus the recording clock)\n", messages.size(), anchors, clockOff);
     return 0;
 }

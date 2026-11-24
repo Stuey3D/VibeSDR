@@ -48,6 +48,7 @@ namespace vibeorb {
 
 constexpr double kBaud = 4800;               ///< bit/s (the satellites can be set to 9600; none is seen doing so)
 constexpr double kRrcAlpha = 0.4;
+constexpr int kRrcSpan = 8;                  ///< ±symbols of the matched filter (4 let a strong spur 5 kHz off through — FM116 2026-11-24)
 constexpr double kDownBaseHz = 137.0e6;      ///< downlink channel N = 137.0 MHz + N × 2.5 kHz
 constexpr double kUpBaseHz = 148.0e6;        ///< uplink channel N = 148.0 MHz + N × 2.5 kHz
 constexpr double kChanStepHz = 2500;
@@ -145,7 +146,12 @@ struct Ephemeris {
     double unix = 0;   ///< the satellite's clock as UTC (GPS − leap seconds), 0 = implausible
 };
 constexpr double kEphRmax = 8378155.0, kEphVmax = 7700.0;
-constexpr int kGpsLeap = 18;                 ///< GPS − UTC since 2017 (no leap second announced since)
+/** ★★★ THE SATELLITE'S CLOCK IS UTC, not GPS time, though it is counted in GPS weeks and seconds of week (MEASURED
+ *  2026-11-24, FM116 on the Pi 500's V4L + YouLoop, 70 ephemerides: read as GPS time − 18 s the clock sat 17.7–18.7 s
+ *  behind the recording AND the reported position matched SGP4 only at 124 km — exactly 18 s of travel at 7.16 km/s;
+ *  read as UTC both close up — see docs/v12/ORBCOMM.md "Real data"). So the offset applied to week/TOW is ZERO. Kept as a
+ *  named constant so the evidence stays beside it; set it to 18 only if a future capture shows the opposite. */
+constexpr int kOrbClockMinusUtc = 0;
 inline bool decodeEphemeris(const Packet& p, Ephemeris& e, double nowUnix = 0) {
     if (p.type() != kEphemeris || p.len != 24) return false;
     e.id = p.b[1];
@@ -174,7 +180,7 @@ inline bool decodeEphemeris(const Packet& p, Ephemeris& e, double nowUnix = 0) {
     e.altKm = (std::fabs(std::cos(lat)) > 1e-6 ? pr / std::cos(lat) - n : std::fabs(e.z) - n * (1 - e2)) / 1000.0;
     // GPS week + seconds → UTC. A 10-bit (rolled-over) week is brought forward to the nearest era of `nowUnix`.
     if (e.tow < 604800 && r > 6.4e6 && r < 8.4e6) {
-        double t = 315964800.0 + double(e.week) * 604800.0 + double(e.tow) - kGpsLeap;
+        double t = 315964800.0 + double(e.week) * 604800.0 + double(e.tow) - kOrbClockMinusUtc;
         if (nowUnix > 0) while (t < nowUnix - 512.0 * 604800.0) t += 1024.0 * 604800.0;
         e.unix = t;
     }
@@ -366,7 +372,7 @@ public:
         // pass ±(3.4 kHz signal + 1.5 kHz search), stop before anything that would fold onto ±5 kHz
         lp_.configure(c.fsIn, D, 7500, std::max(4000.0, fsD_ - 5000 - 7500));
         sps_ = fsD_ / kBaud;
-        rrc_.configure(sps_, kRrcAlpha, 4);
+        rrc_.configure(sps_, kRrcAlpha, kRrcSpan);
         tau_ = rrc_.half() + 2;
         T_ = sps_;
         framer_.onPacket = [this](const Packet& p) { if (onPacket) onPacket(p, *this); };
@@ -376,9 +382,14 @@ public:
 
     /** Feed slice samples (the slice's own block). */
     void feed(const std::complex<float>* x, int n) {
-        const double w = -2 * M_PI * off_ / cfg_.fsIn;
+        /* ★★★ THE AFC ACTS AT ONCE (the FM116 recording, 2026-11-24): the NCO's step was computed once per BLOCK, so the
+         *  frequency loop's corrections reached the mixer a whole block later — 0.34 s (1600 symbols) in the replay tool,
+         *  ~50 ms (240 symbols) on a server's slice — and the integrating loop wound up and ran away by kHz on a real pass
+         *  (the synthetic tests' short blocks hid it). The step is now re-derived whenever the loop has moved the offset. */
+        double offUsed = off_;
+        double w = -2 * M_PI * offUsed / cfg_.fsIn;
         // ★ by hand (no std::complex multiply: without -ffast-math it is a library call with NaN checks — the Pi 2 rule)
-        const double sr = std::cos(w), si = std::sin(w);
+        double sr = std::cos(w), si = std::sin(w);
         double cr = nco_.real(), ci = nco_.imag();
         for (int i = 0; i < n; i++) {
             const double xr = x[i].real(), xi = x[i].imag();
@@ -388,6 +399,7 @@ public:
             if (!lp_.push(mr, mi, r, q)) continue;
             rrc_.push(r, q);
             pump_();
+            if (off_ != offUsed) { offUsed = off_; w = -2 * M_PI * offUsed / cfg_.fsIn; sr = std::cos(w); si = std::sin(w); }
         }
         const double a = std::sqrt(cr * cr + ci * ci);
         nco_ = { cr / a, ci / a };
@@ -468,6 +480,9 @@ private:
         }
         const float th = std::arg(acc4_) / 4.f;          // residual rotation a symbol (radians)
         off_ += kAfc_ * double(th) * kBaud / (2 * M_PI);  // the NCO follows (feedback, a few hundred symbols)
+#ifdef VIBE_ORB_DEBUG
+        if (syms_ % 240 == 0 && syms_ <= 4800) std::fprintf(stderr, "  sym %llu off %.0f th %.3f tau-T %.4f sps %.3f |acc4| %.3g p %.3g\n", (unsigned long long)syms_, off_, double(th), T_ - sps_, sps_, double(std::abs(acc4_)), pAvg_);
+#endif
         const std::complex<float> rot(std::cos(-th), std::sin(-th));
         const std::complex<float> dr = d * rot;
         /* ★★★ THE BIT IS THE PHASE STEP ITSELF (Kenny's own table: 1 = −90°, 0 = +90°; the step from symbol to symbol IS
@@ -553,6 +568,17 @@ private:
         const float den = l - 2 * c + r;
         const double frac = std::fabs(den) > 1e-20f ? 0.5 * (l - r) / den : 0.0;
         const double df = (best + frac) * binHz / 4.0;
+#ifdef VIBE_ORB_DEBUG
+        {
+            // the five best comb positions, as Δf
+            std::vector<std::pair<float, int>> top;
+            for (int k = -lim; k <= lim; k++) top.push_back({ comb(k), k });
+            std::partial_sort(top.begin(), top.begin() + 5, top.end(), [](auto& a, auto& b) { return a.first > b.first; });
+            std::fprintf(stderr, "acq: off %.0f lim ±%.0f Hz best df %.0f;", off_, lim * binHz / 4, df);
+            for (int i = 0; i < 5; i++) std::fprintf(stderr, " %.0f(%.2g)", top[size_t(i)].second * binHz / 4, double(top[size_t(i)].first));
+            std::fprintf(stderr, " | centre-line at 0: %.2g, sides %.2g %.2g\n", double(line(0)), double(line(-side)), double(line(side)));
+        }
+#endif
         off_ += df;
         acq_.clear();
         acquired_ = true;
