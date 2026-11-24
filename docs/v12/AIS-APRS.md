@@ -134,7 +134,7 @@ Written from the tables; every field's "not available" code becomes nothing (nev
 
 ### Server contract
 
-**Capability** (`/vibeserver.json`): no `ais` field = the radio cannot reach 162 MHz, or it is an Airspy HF+ or an Icom
+**Capability** (`/vibeserver.json`): no `ais` field = the radio cannot reach 162 MHz, or it is an Icom (the Airspy HF+ is offered AIS since 2026-11-24: nothing steps its gain, and the report carries `gainNote` — its AGC / attenuator — instead of `gain`)
 (no control at all — AGENTS.md). `"ais": true` = can run; `"ais": false` + `"aisWhy"` = greyed with the reason (the owner
 switched AIS off, a locked centre on a per-VFO radio, a capture under 96 kS/s). `"modes"` lists `ais` when it can run.
 

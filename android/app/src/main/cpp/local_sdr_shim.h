@@ -260,6 +260,10 @@ public:
     int  waitingCount() const;
     /** The captured span in Hz (the sample rate). 0 when nothing is running. */
     double captureSpanHz() const;
+    /** ★ V12 the RECEIVABLE part of that capture: an HF+'s outer filter skirt left out (Impl::usableSpan), else the rate. */
+    double usableSpanHz() const;
+    /** ★ V12 the rates this radio lists (supportedRates), as numbers — empty when nothing is held. */
+    std::vector<double> listedRatesHz();
     /** Full-rate raw IQ on offer: the capture rate in Hz, or 0 when not (see Impl::iqFullRateOffered). */
     int rawIqFullRate() const;
     /** ★★ SPECTROGRAM PERSISTENCE. Setting a path also LOADS whatever is there, so a restart keeps

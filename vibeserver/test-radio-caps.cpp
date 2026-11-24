@@ -44,7 +44,8 @@ int main(int argc, char** argv) {
                          "cw", "psk", "dsc", "sitora", "selcal", "mfsk", "hell", "jtty", "aprs" });
         no(c, "Icom", { "wfm", "rds", "tone", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "drm", "dab", "spotsband", "ism",
                         "lora", "loraaprs", "fanet", "meshcom", "ndb", "ais", "aisstore", "adsb", "commb", "same",
-                        "dvsig" });   // ★ V12 DV ID reads IQ, as M17
+                        "dvsig",      // ★ V12 DV ID reads IQ, as M17
+                        "avdata", "avdata+8m" });
         ok(!c.s.usage && !c.s.vfoB && !c.s.rawIq && !c.s.nbWide && !c.s.landing && !c.s.gain && !c.s.hardware,
            "Icom: no usage chooser, VFO A/B, Raw IQ, impulse NB, landing, gain or hardware card");
         ok(!c.s.fmDefaults && !c.s.dabLanding && !c.s.adsbLanding && !c.s.dxScan && !c.s.bgDecode && !c.s.converter,
@@ -57,6 +58,9 @@ int main(int argc, char** argv) {
         yes(c, "RTL (no DS)", { "wfm", "rds", "nfm", "tone", "am", "usb", "lsb", "sam", "dab", "adsb", "ism", "lora", "ais",
                                 "aisstore", "aprs", "same", "ft8", "spots", "spotsband", "cw", "psk", "sstv", "rtty" });
         no(c, "RTL (no DS)", { "drm", "amst", "navtex", "wefax", "sitora", "time", "ndb" });
+        // ★★ V12 2026-11-24 the datalink yes; its 8 MS/s switch for ACARS + VDL2 never (an RTL tops out at 2.4 MS/s)
+        yes(c, "RTL (no DS)", { "avdata" });
+        no(c, "RTL (no DS)", { "avdata+8m" });
         ok(c.s.usage && c.s.vfoB && c.s.rawIq && c.s.nbWide && c.s.fmDefaults && c.s.dabLanding && c.s.adsbLanding && c.s.dxScan,
            "RTL: the IQ settings, FM defaults, both landings and the DX scanner");
         ok(c.s.directSampling && c.s.ppm && c.s.biasT && !c.s.ppb, "RTL: direct sampling, ppm and bias-T; no ppb");
@@ -81,8 +85,11 @@ int main(int argc, char** argv) {
         const Caps c = of("airspyhf");
         yes(c, "HF+", { "wfm", "rds", "nfm", "am", "sam", "amst", "drm", "navtex", "wefax", "time", "ndb", "aprs", "same", "ft8",
                        "m17",      // ★ M17 on 2 m (Stuart 11-16: every SDR that can reach it); 70 cm is out of its range
-                       "dvsig" }); // ★ V12 DV ID on VHF 136–174 MHz (inside the HF+'s 60–260 MHz)
-        no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom", "ais", "aisstore" });
+                       "dvsig",    // ★ V12 DV ID on VHF 136–174 MHz (inside the HF+'s 60–260 MHz)
+                       "ais", "aisstore", "avdata" });   // ★★ V12 2026-11-24 AIS and the datalink: no gain stepped there
+        no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom",
+                       "sondes",          // ★ it stops at 260 MHz
+                       "avdata+8m" });    // ★ 912 kS/s: no 8 MS/s switch drawn
         ok(!c.s.dabLanding && !c.s.adsbLanding && c.s.fmDefaults && c.s.dxScan, "HF+: no DAB / ADS-B landing; FM defaults and DX scan");
         ok(c.s.ppb && !c.s.ppm && !c.s.biasT && !c.s.directSampling, "HF+: ppb, no ppm, bias-T or direct sampling");
         ok(c.hints.empty(), "HF+: no hint (nothing the owner could change)");
@@ -98,6 +105,7 @@ int main(int argc, char** argv) {
         const Caps c = of("airspy");
         yes(c, "R2", { "wfm", "dab", "adsb", "ism", "ais", "ft8", "spotsband", "rtty" });
         no(c, "R2", { "drm", "amst", "navtex", "wefax", "time", "ndb", "sitora" });
+        yes(c, "R2", { "avdata", "avdata+8m" });   // ★ 10 MS/s: the switch is drawn
         ok(c.hints.size() == 1 && c.hints[0].find("24 MHz") != std::string::npos, "R2: the upconverter hint");
     }
     // ── HACKRF (1 MHz – 6 GHz) ──
@@ -105,7 +113,7 @@ int main(int argc, char** argv) {
         const Caps c = of("hackrf");
         yes(c, "HackRF", { "wfm", "dab", "adsb", "ism", "ais", "drm", "wefax", "time", "navtex" });
         no(c, "HackRF", { "ndb" });   // ★ nothing below 1 MHz: no LF (the top of medium wave, 1–1.7 MHz, it reaches)
-        yes(c, "HackRF", { "amst" });
+        yes(c, "HackRF", { "amst", "avdata+8m" });
         ok(c.hints.empty(), "HackRF: no hint");
     }
     // ── USRP B2xx (50 MHz – 6 GHz) ──

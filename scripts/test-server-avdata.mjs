@@ -5,6 +5,10 @@
 //   still none for a listener while the owner's socket gets it, a tune held, the band step to ACARS (131.675 MHz) and
 //   back, the receiver given back exactly as found, the mode refused where the owner switched it off, and
 //   /addon/hfdl/aircraft + /addon/hfdl/groundstations (the HFDL map's shape).
+// ★★ V12 2026-11-24 ACARS + VDL2 TOGETHER and the owner's 8 MS/s switch ("avdata+8m"): an RTL never sees the combined band
+//   or the switch (even ticked); a radio listing 8 MS/s (the fake rtl_tcp given an RSP's rate list, VIBE_TEST_TCP_RATES)
+//   at 2 MS/s is NOT offered it with the switch off, and with it on goes to 8 MS/s on entering it and back to 2 MS/s on
+//   leaving — and on stepping to a single band.
 // Silent: no audio socket is opened.
 //   VIBESERVER_BIN=…/vibeserver VIBE_VDL2_CLIP=…/vdl2.cu8 node scripts/test-server-avdata.mjs
 import net from 'node:net';
@@ -64,7 +68,7 @@ function ws(port, pathq) {
 const jsons = (st, type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).map((t) => { try { return JSON.parse(t); } catch { return null; } }).filter(Boolean);
 const lastOf = (st, type) => { const a = jsons(st, type); return a[a.length - 1] || null; };
 
-async function server(tag, radioExtra = {}) {
+async function server(tag, radioExtra = {}, opt = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
@@ -72,13 +76,14 @@ async function server(tag, radioExtra = {}) {
     radios: [{ serial: `${tag}-test`, label: 'Test radio', enabled: true, configured: true, users: 4, ...radioExtra }],
   }));
   const rtlPort = await freePort(), port = await freePort();
-  const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
-                                       '--hf', CLIP, '--hf-centre', '136850000'], { stdio: 'ignore' });
+  const rate = opt.rate || RATE;
+  const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(rate),
+                                       ...(opt.noClip ? [] : ['--hf', CLIP, '--hf-centre', '136850000'])], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
-                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run'), ...(opt.env || {}) };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
-  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), '--freq', '96100000', '--mode', 'wfm',
+  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(rate), '--freq', '96100000', '--mode', 'wfm',
                           '--users', '4', '--admin-pass', PASS], { env, stdio: ['ignore', log, log] });
   const getJson = async (p) => { try { const r = await fetch(`http://127.0.0.1:${port}${p}`, { signal: AbortSignal.timeout(3000) }); return { status: r.status, cors: r.headers.get('access-control-allow-origin'), j: await r.json() }; } catch { return null; } };
   const status = async () => (await getJson('/vibeserver.json'))?.j || null;
@@ -100,7 +105,7 @@ async function signIn(S, sock) {
     const st = await S.status();
     ok(st && st.avdata === true, `vibeserver.json: avdata ${JSON.stringify(st && st.avdata)} ${st && st.avdataWhy || ''}`);
     const ids = (st && st.avdataBands || []).map((b) => b.id);
-    ok(ids.join(',') === 'acars,vdl2', `avdataBands ${JSON.stringify(st && st.avdataBands)}`);
+    ok(ids.join(',') === 'acars,vdl2', `avdataBands ${JSON.stringify(st && st.avdataBands)} — ★ an RTL at 2.4 MS/s: no ACARS + VDL2`);
     ok(st && Array.isArray(st.modes) && st.modes.includes('avdata') && st.modes.includes('hfdl'), `modes lists avdata and hfdl (${st && st.modes && st.modes.join(' ')})`);
     ok(st && st.hfdl === true, `hfdl true on an RTL (direct sampling reaches HF) — ${JSON.stringify(st && st.hfdl)} ${st && st.hfdlWhy || ''}`);
     ok(st && !st.avdataText, 'no avdataText without the owner\'s opt-in');
@@ -194,6 +199,81 @@ async function signIn(S, sock) {
     ok(!lastOf(sp, 'avdata'), 'no report');
     sp.close();
   } finally { S.stop(); }
+}
+
+// ── 4. ACARS + VDL2 together: who sees it, and the owner's 8 MS/s switch ─────────────────────────────────────────────
+{
+  console.log('── ACARS + VDL2 together: an RTL never; a wider radio only with the owner\'s 8 MS/s switch ──');
+  {
+    const S = await server('avd8rtl', { blockedModes: 'avdata+8m' });
+    try {
+      const st = await S.status();
+      ok(st && st.avdata === true && (st.avdataBands || []).map((b) => b.id).join(',') === 'acars,vdl2',
+         `an RTL with the switch ticked: still only ${JSON.stringify((st && st.avdataBands || []).map((b) => b.id))}`);
+      const hw = await S.getJson('/vibeserver/hardware');
+      const modes = hw && hw.j && hw.j.caps && hw.j.caps.modes || [];
+      ok(modes.includes('avdata') && !modes.includes('avdata+8m'), `an RTL's caps: avdata, never the 8 MS/s switch (${modes.filter((m) => m.startsWith('avdata')).join(' ')})`);
+    } finally { S.stop(); }
+  }
+  const RSP_RATES = '8000000,6000000,5000000,4000000,3000000,2048000,2000000';
+  {
+    const S = await server('avd8off', {}, { rate: 2000000, noClip: true, env: { VIBE_TEST_TCP_RATES: RSP_RATES } });
+    try {
+      const st = await S.status();
+      ok(st && st.avdata === true && (st.avdataBands || []).map((b) => b.id).join(',') === 'acars,vdl2',
+         `a radio listing 8 MS/s, at 2 MS/s, switch OFF: no ACARS + VDL2 (${JSON.stringify((st && st.avdataBands || []).map((b) => b.id))})`);
+      const hw = await S.getJson('/vibeserver/hardware');
+      ok((hw && hw.j && hw.j.caps && hw.j.caps.modes || []).includes('avdata+8m'), '…and its caps offer the owner the switch');
+      const sp = ws(S.port, '/ws/user-spectrum?user_session_id=avd8off1&bins=256&proto=1');
+      await until(() => sp.open, 3000);
+      await sleep(800);
+      sp.send({ type: 'avdata', on: 1, band: 'acars+vdl2' });
+      ok(await until(() => /needs a capture of 6\.1 MS\/s or more .* runs at 2\.000 MS\/s \(its owner can let/.test(lastOf(sp, 'avdata_error')?.why || ''), 4000),
+         `asking anyway is refused, with the numbers and the way out: ${JSON.stringify(lastOf(sp, 'avdata_error'))}`);
+      sp.close();
+    } finally { S.stop(); }
+  }
+  {
+    const S = await server('avd8on', { blockedModes: 'avdata+8m' }, { rate: 2000000, noClip: true, env: { VIBE_TEST_TCP_RATES: RSP_RATES } });
+    try {
+      const st = await S.status();
+      const both = (st && st.avdataBands || []).find((b) => b.id === 'acars+vdl2');
+      ok(both && both.name === 'ACARS + VDL2' && both.channels === 16 && Math.abs(both.hz - 134.25e6) < 1,
+         `switch ON at 2 MS/s: the third band offered — ${JSON.stringify(both)}`);
+      const sp = ws(S.port, '/ws/user-spectrum?user_session_id=avd8on01&bins=256&proto=1');
+      await until(() => sp.open, 3000);
+      await sleep(1000);
+      const before = lastOf(sp, 'config');
+      ok(before && Math.abs((before.maxBandwidth || 0) - 2e6) < 5e4, `starts at 2 MS/s (${before && (before.maxBandwidth || before.span)})`);
+      sp.send({ type: 'avdata', on: 1, band: 'acars+vdl2' });
+      ok(await until(() => { const c = lastOf(sp, 'config'); return c && Math.abs(c.centerFreq - 134.25e6) < 1 && (c.maxBandwidth || 0) > 7.9e6; }, 10000),
+         `entering ACARS + VDL2: the radio on 134.25 MHz at 8 MS/s (${lastOf(sp, 'config')?.centerFreq} @ ${lastOf(sp, 'config')?.maxBandwidth})`);
+      ok(await until(() => /capture raised to 8 MS\/s for ACARS \+ VDL2/.test(lastOf(sp, 'avdata')?.rateNote || ''), 5000),
+         `the report says so: "${lastOf(sp, 'avdata')?.rateNote}"`);
+      ok(lastOf(sp, 'avdata')?.band === 'acars+vdl2', 'the report names the band');
+      ok(/\[AVDATA\] rate 2\.000 -> 8\.000 MS\/s/.test(S.L()), 'the log says the rate went up');
+      sp.send({ type: 'avdata', on: 1, band: 'vdl2' });
+      ok(await until(() => { const c = lastOf(sp, 'config'); return c && Math.abs(c.centerFreq - 136.8625e6) < 1 && Math.abs((c.maxBandwidth || 0) - 2e6) < 5e4; }, 10000),
+         `a single band (VDL2): the owner's 2 MS/s back (${lastOf(sp, 'config')?.maxBandwidth})`);
+      ok(await until(() => { const r = lastOf(sp, 'avdata'); return r && r.band === 'vdl2' && !r.rateNote; }, 4000), '…and no rate note');
+      sp.send({ type: 'avdata', on: 1, band: 'acars+vdl2' });
+      ok(await until(() => (lastOf(sp, 'config')?.maxBandwidth || 0) > 7.9e6, 10000), 'back to ACARS + VDL2: 8 MS/s again');
+      sp.send({ type: 'avdata', on: 0 });
+      ok(await until(() => jsons(sp, 'avdata_off').length > 0, 4000), 'avdata_off');
+      ok(await until(() => { const c = lastOf(sp, 'config'); return c && Math.abs((c.maxBandwidth || 0) - 2e6) < 5e4 && Math.abs(c.vfo - before.vfo) < 1; }, 10000),
+         `leaving: 2 MS/s and the listener's dial back (${lastOf(sp, 'config')?.maxBandwidth}, vfo ${lastOf(sp, 'config')?.vfo})`);
+      ok(/\[AVDATA\] rate back to the owner's 2\.000 MS\/s/.test(S.L()), 'the log says the rate came back');
+      sp.close();
+    } finally { S.stop(); }
+  }
+  {
+    // ★ the owner PINNED the rate: never raised, so the combined band is not offered at 2 MS/s even with the switch
+    const S = await server('avd8pin', { blockedModes: 'avdata+8m', rateLock: true }, { rate: 2000000, noClip: true, env: { VIBE_TEST_TCP_RATES: RSP_RATES } });
+    try {
+      const st = await S.status();
+      ok(st && (st.avdataBands || []).map((b) => b.id).join(',') === 'acars,vdl2', `the rate pinned: no ACARS + VDL2 (${JSON.stringify((st && st.avdataBands || []).map((b) => b.id))})`);
+    } finally { S.stop(); }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

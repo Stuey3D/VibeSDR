@@ -513,7 +513,7 @@ interface ModeSelectorProps {
      *  no LF (an RTL without direct sampling, a HackRF, an R2, an Icom), dimmed with the server's reason, live. */
     ndbAvail?: boolean; ndbWhy?: string; ndbOn?: boolean; onNdb?: () => void;
     /** ★★ V12 AIS — ISM's kind of key, beside it, and the same three states: absent (`aisAvail` false — the radio cannot
-     *  reach 162 MHz, an HF+, an Icom; or Apple TV, which has no map), dimmed with the server's reason (`aisWhy`), live. */
+     *  reach 162 MHz, an Icom; or Apple TV, which has no map — the HF+ is offered it since 2026-11-24), dimmed with the server's reason (`aisWhy`), live. */
     aisAvail?: boolean; aisWhy?: string; aisOn?: boolean; onAis?: () => void;
     /** ★★ V12 AIRCRAFT DATALINK (ACARS / VDL2) — AIS's three states: absent (no band reachable), dimmed with the reason, live. */
     avdataAvail?: boolean; avdataWhy?: string; avdataOn?: boolean; onAvdata?: () => void;

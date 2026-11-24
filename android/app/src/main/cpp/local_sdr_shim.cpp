@@ -150,6 +150,7 @@
 #include "vibe_avi_service.h"   // ★★ V12 AIRCRAFT DATALINK (ACARS, VDL2; HFDL via the decoder host) — docs/v12/AVIATION.md
 #include "vibe_aircraft_info.h"  // ★★ V12 beta91 the ADS-B aircraft data for every aviation-map row (VDL2 / ACARS / HFDL too)
 #include "vibe_avi_mode.h"
+#include "vibe_mode_gain.h"   // ★ V12 the burst modes' gain per radio: the HF+ is stepped by nothing and reports what is true
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
 #include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
 #include "vibe_sat_if.h"         // ★★ V12 beta92 the satellite pass's IF filter — the narrowest that holds the signal + its Doppler
@@ -986,10 +987,17 @@ static vibendb::Service    g_ndb;
 static std::atomic<bool>   g_aisMode{false};
 static vibeais::Service    g_ais;
 /* ★★★ AIRCRAFT DATALINK MODE (V12, docs/v12/AVIATION.md). A whole-radio mode in AIS's shape with ISM's BANDS: ACARS
- *  (131.675 MHz, four channels) or VDL2 (136.8625 MHz, every channel 136.700–136.975), decoded on the service's own
- *  thread into the radio's aircraft table (vibeavi::sharedTracker — the listeners' HFDL lands there too). No rate change. */
+ *  (131.675 MHz, four channels) or VDL2 (136.8625 MHz, every channel 136.700–136.975) — or BOTH at once on a wide
+ *  capture (134.25 MHz, V12 2026-11-24) — decoded on the service's own threads into the radio's aircraft table
+ *  (vibeavi::sharedTracker — the listeners' HFDL lands there too). No rate change, EXCEPT the owner's 8 MS/s switch for
+ *  ACARS + VDL2 ("avdata+8m": g_avBoostFrom below). */
 static std::atomic<bool>   g_avMode{false};
 static vibeavi::Service    g_av(vibeavi::sharedTracker());
+/** ★★ V12 2026-11-24 while the datalink's ACARS + VDL2 band has RAISED the capture (the owner's 8 MS/s switch): the rate it
+ *  gives back on leaving (0 = it raised nothing). A crash meanwhile leaves no trace in the config — the rate the mode set is
+ *  never persisted, so a restart opens at the owner's own — and the rate guard's marker (g_rateGuard.mark, written before
+ *  the raise) records the crash at 8 MS/s, which holds the switch off until the owner clears it. */
+static std::atomic<double> g_avBoostFrom{0.0};
 /* ★★★ SONDES MODE (V12, docs/v12/RS41.md). A whole-radio mode in the aircraft datalink's shape: the radio on one of the
  *  400–406 MHz bands, every RS41 radiosonde in the capture found by the scan and decoded on the service's own thread
  *  (vibe_rs41_service.h). The tune keys step the bands. No rate change. */
@@ -1993,9 +2001,10 @@ static std::string vsAdsbWhyNot();   // "" = ADS-B can run on this receiver now 
 static std::string vsAdsbHwWhyNot(); // "" = this radio could run ADS-B with the right settings — the setup page's half
 static std::string vsIsmWhyNot();    // "" = ISM can run here now — see its definition (by vsAdsbWhyNot)
 static bool vsIsmReach(const vibeism::Band& b);   // this radio can tune the whole of the band
-static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz (and is not an HF+ / an Icom) — by vsIsmReach
+static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz (not an Icom; the HF+ too since 2026-11-24) — by vsIsmReach
 static std::string vsAisWhyNot();    // "" = AIS can run here now
-static bool vsAvdataReach(const vibeavi::Band& b);   // ★ V12 Aircraft datalink: this radio tunes the whole band (not an HF+ / an Icom)
+static bool vsAvdataReach(const vibeavi::Band& b);   // ★ V12 Aircraft datalink: this radio tunes the whole band (not an Icom) and may run it
+static double vsAvdataBoostRate();   // ★ the rate ACARS + VDL2 would raise the capture to (the owner's 8 MS/s switch), or 0
 static bool vsAvdataAnyBand();       // false = not offered at all
 static std::string vsAvdataWhyNot(const vibeavi::Band* b = nullptr);   // "" = it can run here now (on `b`, or on any band)
 static bool vsSondeTunes(const vibers41::Band& b);   // ★ V12 SONDES: this radio tunes the band
@@ -13090,6 +13099,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     audiences (this one the setup page and the apps, that one hwinfo), and they had
          *     already drifted — 2 048 000 was added here on 2026-09-08 and never there. Change one,
          *     change the other, or a rate is offered in one place and refused in the other. */
+        /* ★ TESTS ONLY (scripts/test-server-avdata.mjs): VIBE_TEST_TCP_RATES gives an rtl_tcp stream — which takes any rate
+         *  it is sent, the fake one included — the rate list of a wider radio, so the datalink's 8 MS/s switch can be driven
+         *  end to end without an RSP on the bench. Never set by any service file or package. */
+        if (useTcp()) if (const char* e = std::getenv("VIBE_TEST_TCP_RATES")) if (*e) return e;
         return "2400000,2048000,1800000,1200000,960000";
     }
 
@@ -17199,6 +17212,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (mode == "ISM") {   // ★ V12 ISM's own 2.56 switch is what boosted it: that one goes off
             g_ism256.store(false, std::memory_order_relaxed);
             vsPersist("{\"ism256\":false}");
+        } else if (mode == "AVDATA") {
+            // ★ V12 the datalink's 8 MS/s ("avdata+8m", a token in the modes CSV): the guard's record (blocked()) is what
+            //   holds it off from here — vsAvdataBoostRate asks it — until the owner clears it; the CSV stays theirs
         } else {
             g_dabRateBoost.store(false, std::memory_order_relaxed);
             vsPersist("{\"dabRateBoost\":false}");
@@ -17208,6 +17224,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
         else if (g_dabMode.load()) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         else if (g_ismMode.load()) handleControl(nullptr, "{\"type\":\"ism\",\"on\":0}");   // ★ V12 ISM at 2.56 MS/s
+        else if (g_avMode.load()) handleControl(nullptr, "{\"type\":\"avdata\",\"on\":0}");   // ★ V12 ACARS + VDL2 at 8 MS/s
         // ★ The leave relaunched the stream at the base rate; if IQ flows, a dead-stream flag from the boost is history.
         auto heard = [this] { return std::max(lastIqAt.load(std::memory_order_relaxed), tcpDataAt.load(std::memory_order_relaxed)); };
         const double before = heard();
@@ -18134,15 +18151,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         };
     }
 
+    /** ★★ V12 2026-11-24 THE BURST MODES' GAIN FIELDS (vibe_mode_gain.h): the figure where the mode sets the gain (a
+     *  listener's own value the moment it is set), or — on the Airspy HF+, which has no variable gain — what its front end
+     *  is doing as the owner set it ("HF+ AGC · attenuator 12 dB"), never a dB figure it never had. */
+    void burstGainFields(std::string& r, int set, bool manual) {
+        if (useAirspyHf() && ahf) {
+            vibemodegain::appendGain(r, true, -1, false, vibemodegain::hfNote(ahf->agc(), ahf->agcThresholdHigh(), ahf->attenuation(), ahf->lna()));
+            return;
+        }
+        const int curG = g_gainTarget.load(std::memory_order_relaxed);
+        const int shownG = curG >= 0 && curG != set ? curG : set;
+        vibemodegain::appendGain(r, false, shownG, !(shownG != set || manual), std::string());
+    }
+    /** ★ The gain list a burst mode steps on this radio — EMPTY on the HF+ (vibemodegain::steps), so it steps nothing. */
+    std::vector<int> burstGains() {
+        std::vector<int> g = LocalSdrShim::instance().getTunerGains();
+        if (!vibemodegain::steps(useAirspyHf() ? "airspyhf" : "", g)) g.clear();
+        return g;
+    }
+
     void sendAisAll() {
         std::string r = g_ais.report();
-        const int curG = g_gainTarget.load(std::memory_order_relaxed);
-        const int shownG = curG >= 0 && curG != aisGainSet_ ? curG : aisGainSet_;
-        if (shownG >= 0 && !r.empty() && r.back() == '}') {
-            char g[80];
-            std::snprintf(g, sizeof g, ",\"gain\":%.1f,\"gainAuto\":%d}", shownG / 10.0, shownG != aisGainSet_ || aisManual_ ? 0 : 1);
-            r.pop_back(); r += g;
-        }
+        burstGainFields(r, aisGainSet_, aisManual_);
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
         for (auto& sk : socks) sendText(sk, r);
@@ -18172,7 +18202,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         iqStopDirect();
         rx.setSpectrumOnly(true);
         LocalSdrShim::instance().setAgc(false);
-        aisGains_ = LocalSdrShim::instance().getTunerGains();
+        aisGains_ = burstGains();   // ★ empty on the HF+: nothing below steps it
         aisGainIdx_ = aisGainSet_ = -1; aisGainStart_ = -1; aisManual_ = false;
         if (!aisGains_.empty()) {
             /* ★★ 85 % UP THE RADIO'S OWN LIST (was ISM's 60 %, 2026-10-29). A listener with an RTL heard ONE ship where
@@ -18233,8 +18263,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_vsLockedCentre.store(s.lockedCentre);
         g_vsLockedRate.store(s.lockedRate);
         const bool agcBack = (dev != nullptr || (useTcp() && tcpHasGain())) && (s.agcOn || s.gainTarget < 0);
-        if (agcBack) { if (s.hwGain >= 0) LocalSdrShim::instance().setGain(s.hwGain); }
-        else LocalSdrShim::instance().setGain(s.gainTarget);
+        // ★ V12 the HF+: the mode never touched its gain (burstGains), so nothing is written back either
+        if (!useAirspyHf()) {
+            if (agcBack) { if (s.hwGain >= 0) LocalSdrShim::instance().setGain(s.hwGain); }
+            else LocalSdrShim::instance().setGain(s.gainTarget);
+        }
         if (s.lna >= 0 && useSdrplay() && sdrp && s.lna != sdrp->currentLnaState()) {
             LocalSdrShim::instance().setLnaState(s.lna);
             g_vibeAgcRspLastLna.store(s.lna, std::memory_order_relaxed);
@@ -18333,13 +18366,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double t = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
         vibeavi::sharedTracker().setBodies(vsModeBlocked("avdata+text"));   // ★ the "+" token is the opt-in, IN the CSV when on
         auto withGain = [&](std::string r) {
-            const int curG = g_gainTarget.load(std::memory_order_relaxed);
-            const int shownG = curG >= 0 && curG != avGainSet_ ? curG : avGainSet_;
-            if (shownG >= 0 && !r.empty() && r.back() == '}') {
-                char g[80];
-                std::snprintf(g, sizeof g, ",\"gain\":%.1f,\"gainAuto\":%d}", shownG / 10.0, shownG != avGainSet_ || avManual_ ? 0 : 1);
-                r.pop_back(); r += g;
-            }
+            burstGainFields(r, avGainSet_, avManual_);
+            avRateNote(r);
             return r;
         };
         const unsigned long long dr = (unsigned long long)g_av.dropped();
@@ -18361,9 +18389,47 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                (unsigned long long)g_av.dropped());
     }
 
+    /** ★★ V12 2026-11-24 THE OWNER'S 8 MS/s FOR ACARS + VDL2 ("avdata+8m", vibe_avi_mode.h). Entering the wide band on a
+     *  capture that does not hold it raises the rate (ADS-B's door: the guard's marker down FIRST, then the change, the
+     *  centre already stored so the rebuild opens there); any other band, or leaving, gives the owner's rate back. Called
+     *  with rtlCenter already on the band. The listener is told in the report (rateNote) for as long as it lasts. */
+    void avApplyRate(const vibeavi::Band* b) {
+        const double from = g_avBoostFrom.load();
+        const double running = from > 0 ? from : LocalSdrShim::instance().usableSpanHz();
+        const double boost = b ? vsAvdataBoostRate() : 0.0;
+        if (b && vibeavi::needsBoost(*b, running, boost)) {
+            if (from <= 0) g_avBoostFrom.store(sampleRate);
+            if (std::fabs(boost - sampleRate) > 1000.0) {
+                LOGI("[AVDATA] rate %.3f -> %.3f MS/s for ACARS + VDL2 (the owner's 8 MS/s switch; given back on leaving)",
+                     sampleRate / 1e6, boost / 1e6);
+                g_rateGuard.mark(boost, "AVDATA", (long long)vsNowEpoch());   // ★ the marker FIRST — vibe_rate_guard.h
+                rateBoostFellBack_.store(false);
+                noteHwMoved();
+                LocalSdrShim::instance().setSampleRate(boost);
+                applyAutoIf();   // ★ the filter for the NEW capture (an RSP's is the rate's own: 8 MHz at 8 MS/s)
+            }
+        } else if (from > 0) {
+            g_avBoostFrom.store(0.0);
+            if (std::fabs(from - sampleRate) > 1000.0) {
+                LOGI("[AVDATA] rate back to the owner's %.3f MS/s", from / 1e6);
+                noteHwMoved();
+                LocalSdrShim::instance().setSampleRate(from);
+                applyAutoIf();
+            }
+        }
+    }
+    /** ★ The report's word while the capture is raised: what happened and that it is temporary. */
+    void avRateNote(std::string& r) {
+        const double from = g_avBoostFrom.load();
+        if (from <= 0 || r.empty() || r.back() != '}') return;
+        char n[200];
+        std::snprintf(n, sizeof n, ",\"rateNote\":\"capture raised to %g MS/s for ACARS + VDL2 \xe2\x80\x94 back to %g MS/s when you leave\"}",
+                      std::round(sampleRate / 1e3) / 1e3, std::round(from / 1e3) / 1e3);
+        r.pop_back(); r += n;
+    }
+
     void avEnter(const vibeavi::Band& b) {
         vibeavi::shareTrackerProvide();   // ★ V12 2026-11-16 the AVIATION MAP: this radio's datalink into the shared table
-        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         const double hw = b.centreHz;
         if (g_avMode.load()) {
             if (avBand_ == &b) { sendAvAll(); return; }
@@ -18373,6 +18439,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const double logical = hw - hwOffsetHz();
             rtlCenter.store(logical); audioFreq.store(hw); viewCenter.store(hw);
             noteHwMoved();
+            avApplyRate(&b);   // ★ into ACARS + VDL2: raised (the owner's switch); out of it: the owner's rate back
+            rtlCenter.store(logical);
+            const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
             g_av.start(b.id, hw, rate, b.chans);
             tuneHw(logical);
             std::vector<std::shared_ptr<net::Socket>> socks;
@@ -18404,7 +18473,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         iqStopDirect();
         rx.setSpectrumOnly(true);
         LocalSdrShim::instance().setAgc(false);
-        avGains_ = LocalSdrShim::instance().getTunerGains();
+        avGains_ = burstGains();    // ★ empty on the HF+: nothing below steps it
         avGainIdx_ = avGainSet_ = -1; avGainStart_ = -1; avManual_ = false;
         if (!avGains_.empty()) {
             // ★ AIS's 85 % up the radio's own list (bursts on quiet channels); the clip rule in avTick steps it down
@@ -18425,6 +18494,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         viewCenter.store(hw);
         noteHwMoved();
         g_av.stop();
+        avApplyRate(&b);   // ★ ACARS + VDL2 on a narrower capture: the owner's 8 MS/s, if they allowed it (else no change)
+        rtlCenter.store(logical);
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         vibeavi::sharedTracker().setBodies(vsModeBlocked("avdata+text"));
         g_av.start(b.id, hw, rate, b.chans);
         tuneHw(logical);
@@ -18457,14 +18529,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         g_av.stop();
+        // ★★ the owner's rate back FIRST, if ACARS + VDL2 raised it — before the owner's locked centre is put back below,
+        //    which setSampleRate refuses to move under (a locked window locks its rate too)
+        avApplyRate(nullptr);
         const AdsbSaved& s = avSaved_;
         rx.setSpectrumOnly(false);
         rx.requestReset();
         g_vsLockedCentre.store(s.lockedCentre);
         g_vsLockedRate.store(s.lockedRate);
         const bool agcBack = (dev != nullptr || (useTcp() && tcpHasGain())) && (s.agcOn || s.gainTarget < 0);
-        if (agcBack) { if (s.hwGain >= 0) LocalSdrShim::instance().setGain(s.hwGain); }
-        else LocalSdrShim::instance().setGain(s.gainTarget);
+        // ★ V12 the HF+: the mode never touched its gain (burstGains), so nothing is written back either
+        if (!useAirspyHf()) {
+            if (agcBack) { if (s.hwGain >= 0) LocalSdrShim::instance().setGain(s.hwGain); }
+            else LocalSdrShim::instance().setGain(s.gainTarget);
+        }
         if (s.lna >= 0 && useSdrplay() && sdrp && s.lna != sdrp->currentLnaState()) {
             LocalSdrShim::instance().setLnaState(s.lna);
             g_vibeAgcRspLastLna.store(s.lna, std::memory_order_relaxed);
@@ -40775,7 +40853,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool tcpSilent = useTcp() && tcpAt > 0 && nowSecs() - tcpAt > 3.0;
             if (((silent && expectingIq) || tcpSilent || captureDown.load()) && !radioReleased.load() && !rateBoostFellBack_.load()
                 && (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)
-                    || g_ismMode.load(std::memory_order_relaxed))   // ★ V12 ISM at 2.56 MS/s
+                    || g_ismMode.load(std::memory_order_relaxed)    // ★ V12 ISM at 2.56 MS/s
+                    || g_avMode.load(std::memory_order_relaxed))    // ★ V12 the datalink's ACARS + VDL2 at 8 MS/s
                 && g_rateGuard.boosted(&bRate, &bMode)) {
                 rateBoostStalled(bRate, bMode, (silent || tcpSilent) ? "the radio stopped delivering samples (no IQ for 3 s)"
                                                                      : "the capture stream stopped");
@@ -42130,6 +42209,19 @@ int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0;
 int LocalSdrShim::rawIqFullRate() const { return p ? p->iqFullRateOffered() : 0; }
 
 double LocalSdrShim::captureSpanHz() const { return p ? p->sampleRate : 0.0; }
+double LocalSdrShim::usableSpanHz() const { return p ? p->usableSpan() : 0.0; }
+std::vector<double> LocalSdrShim::listedRatesHz() {
+    std::vector<double> out;
+    if (!p) return out;
+    const std::string r = p->supportedRates();
+    for (size_t i = 0; i < r.size();) {
+        size_t j = r.find(',', i); if (j == std::string::npos) j = r.size();
+        const double v = strtod(r.substr(i, j - i).c_str(), nullptr);
+        if (v > 0) out.push_back(v);
+        i = j + 1;
+    }
+    return out;
+}
 
 double LocalSdrShim::listenFrequency() const {
     if (!p) return 0.0;
@@ -43888,12 +43980,16 @@ static std::string vsNdbWhyNot() {
     return {};
 }
 
-/** ★★ V12 AIS: does this radio reach both channels (161.975–162.025 MHz, with margin)? An Icom is a transceiver's audio;
- *  the Airspy HF+ is left out (its VHF range is a single fixed-gain front end with no IF gain to set — AGENTS.md: a
- *  control built for one radio is not drawn on the others). */
+/** ★★ V12 AIS: does this radio reach both channels (161.975–162.025 MHz, with margin)? An Icom is a transceiver's audio.
+ *  ★★ The Airspy HF+ IS IN (2026-11-24, Stuart's XCover): it was left out because "its VHF range is a single fixed-gain
+ *     front end with no IF gain to set" — true, and no reason on its own. What made it a dead control was the MODE's gain
+ *     rule (85 % up a gain list, steps when bursts clip) and the report's "gain 43.4 dB": on the HF+ the list is empty, so
+ *     nothing steps and no gain is written (burstGains), and the report says what its front end is doing instead
+ *     (vibe_mode_gain.h). Its 912 kS/s capture holds both channels many times over (96 kS/s needed); the mode never
+ *     changes the rate (the HF+'s is pinned anyway), and the HF+ is low-IF with no DC spike, so the radio sitting at
+ *     162.000 between the channels costs nothing there. */
 static bool vsAisReach() {
     if (g_icomOn.load()) return false;
-    if (LocalSdrShim::instance().isAirspyHf()) return false;
     const vibebands::Ranges t = vsTunableRanges();
     for (const auto& x : t) if (double(x.lo) <= 161.95e6 && double(x.hi) >= 162.05e6) return true;
     return false;
@@ -43903,7 +43999,7 @@ static std::string vsAisWhyNot() {
     if (!vsAisReach()) return "this radio cannot tune to 162 MHz";
     if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
         return "this receiver's centre frequency is locked by its owner";
-    double running = LocalSdrShim::instance().captureSpanHz();
+    double running = LocalSdrShim::instance().usableSpanHz();   // ★ the receivable part (an HF+'s filter skirt left out)
     if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
     if (running > 0 && running < vibeais::kMinRateHz) {
         char b[200];
@@ -43914,13 +44010,33 @@ static std::string vsAisWhyNot() {
 }
 
 /** ★★ V12 AIRCRAFT DATALINK: does this radio tune the whole band (every channel, 12.5 kHz each side)? An Icom is a
- *  transceiver's audio; the Airspy HF+ is left out for AIS's reason (its VHF is one fixed-gain front end). */
-static bool vsAvdataReach(const vibeavi::Band& b) {
+ *  transceiver's audio. ★★ The Airspy HF+ IS IN (2026-11-24) — AIS's reasoning above: nothing in the mode steps its gain
+ *  (burstGains is empty there), the report names its AGC / attenuator instead of a dB figure, its 912 kS/s holds either
+ *  band (0.36 / 0.39 MS/s needed) inside the part of the capture that is not filter skirt, and the band centres between
+ *  channels are harmless on a low-IF radio. ★★ The WIDE band (ACARS + VDL2 together, vibe_avi_mode.h) only where the
+ *  running capture holds it or the owner's 8 MS/s switch will raise it there (vibeavi::offered) — never a dead choice. */
+static double vsAvdataRunning() {
+    double running = LocalSdrShim::instance().usableSpanHz();   // ★ the receivable part (an HF+'s filter skirt left out)
+    if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
+    // ★ while the mode itself raised the capture, the question is asked of the rate it will give back
+    if (g_avBoostFrom.load(std::memory_order_relaxed) > 0) running = g_avBoostFrom.load(std::memory_order_relaxed);
+    return running;
+}
+/** The rate entering ACARS + VDL2 would raise this radio to (the owner's "avdata+8m" switch), or 0. */
+static double vsAvdataBoostRate() {
+    if (g_icomOn.load()) return 0;
+    return vibeavi::wideBoostRate(vsModeBlocked("avdata+8m"), g_vsRateLock.load(std::memory_order_relaxed), g_rateGuard.blocked(),
+                                  LocalSdrShim::instance().listedRatesHz());
+}
+static bool vsAvdataTunes(const vibeavi::Band& b) {
     if (g_icomOn.load()) return false;
-    if (LocalSdrShim::instance().isAirspyHf()) return false;
     const vibebands::Ranges t = vsTunableRanges();
     for (const auto& x : t) if (double(x.lo) <= b.lo() && double(x.hi) >= b.hi()) return true;
     return false;
+}
+static bool vsAvdataReach(const vibeavi::Band& b) {
+    if (!vsAvdataTunes(b)) return false;
+    return vibeavi::offered(b, vsAvdataRunning(), b.wide ? vsAvdataBoostRate() : 0.0);
 }
 static bool vsAvdataAnyBand() {
     for (const auto& b : vibeavi::bands()) if (vsAvdataReach(b)) return true;
@@ -43929,14 +44045,27 @@ static bool vsAvdataAnyBand() {
 /** "" = the mode can run here now — on `b`, or (null) on at least one band. */
 static std::string vsAvdataWhyNot(const vibeavi::Band* b) {
     if (vsModeBlocked("avdata")) return "the server owner has switched the aircraft datalink off on this receiver";
+    const double running = vsAvdataRunning();
+    if (b && b->wide && vsAvdataTunes(*b) && !vsAvdataReach(*b)) {
+        // ★ it tunes the band, the capture is too narrow, and nothing will raise it: say THAT, with the numbers
+        char w[240];
+        std::snprintf(w, sizeof w, "%s needs a capture of %.1f MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s%s", b->name,
+                      std::ceil(b->minRateHz() / 1e5) / 10.0, running / 1e6,
+                      vibeavi::boostRateFrom(LocalSdrShim::instance().listedRatesHz()) > 0
+                          ? " (its owner can let the aircraft datalink raise it to 8 MS/s)" : "");
+        return w;
+    }
     if (b ? !vsAvdataReach(*b) : !vsAvdataAnyBand())
         return b ? std::string("this radio cannot tune the ") + b->name + " channels" : "this radio cannot tune the aircraft datalink bands (131 or 136 MHz)";
     if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
         return "this receiver's centre frequency is locked by its owner";
-    double running = LocalSdrShim::instance().captureSpanHz();
-    if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
+    // ★ the wide band raised to the owner's 8 MS/s: the rate it will run at is the boost, not the running one
+    if (b && vibeavi::needsBoost(*b, running, vsAvdataBoostRate())) return {};
     double need = 0;
-    for (const auto& x : vibeavi::bands()) if (!b || b == &x) need = need > 0 ? std::min(need, x.minRateHz()) : x.minRateHz();
+    for (const auto& x : vibeavi::bands()) {
+        if (b ? b != &x : x.wide) continue;   // ★ "any band" asks of the narrow ones (the wide one is offered only where it fits)
+        need = need > 0 ? std::min(need, x.minRateHz()) : x.minRateHz();
+    }
     if (running > 0 && running < need) {
         char w[200];
         std::snprintf(w, sizeof w, "the aircraft datalink needs a capture of %.1f MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s",
@@ -44598,7 +44727,7 @@ static std::string vsTunableJson() {
         }
     }
     /* ★★ AIS (V12): offered, or shown DISABLED with its reason — and NOT AT ALL where the radio does not reach 162 MHz
-     *  (an HF-only radio, the HF+, an Icom: AGENTS.md). ★ APRS (V12) is a listener's decoder on their NFM/USB audio
+     *  (an HF-only radio, an Icom: AGENTS.md; the HF+ reaches it and is offered since 2026-11-24). ★ APRS (V12) is a listener's decoder on their NFM/USB audio
      *  ("aprs": false only where the owner switched it off; absent on an older server, so no button there). */
     if (vsAisReach()) {
         const std::string why = vsAisWhyNot();
@@ -44606,8 +44735,9 @@ static std::string vsTunableJson() {
         if (!why.empty()) j += ",\"aisWhy\":\"" + dabEscape(why) + "\"";
     }
     /* ★★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered, or DISABLED with its reason — and NOT AT ALL
-     *  where the radio reaches neither band (HF-only radios, the HF+, an Icom: AGENTS.md). `avdataBands`: the bands THIS
-     *  radio reaches, in step order. `avdataText`: the owner switched message bodies on (shown to the owner only). */
+     *  where the radio reaches neither band (HF-only radios, an Icom: AGENTS.md; the HF+ reaches both, since 2026-11-24).
+     *  `avdataBands`: the bands THIS radio reaches AND may run, in step order — "ACARS + VDL2" only where the running capture
+     *  holds it or the owner's 8 MS/s switch will raise it (vsAvdataReach; the report's rateNote says so while it is). `avdataText`: the owner switched message bodies on (shown to the owner only). */
     if (vsAvdataAnyBand()) {
         const std::string why = vsAvdataWhyNot(nullptr);
         j += std::string(",\"avdata\":") + (why.empty() ? "true" : "false");

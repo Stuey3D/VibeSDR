@@ -92,7 +92,7 @@ int main() {
         ok(r.pct > 0.0 && r.pct < 400.0, r.id + ": " + std::to_string(r.pct).substr(0, 5) + " % of a core");
         if (!filter) ok(r.decoded > 0, r.id + " decoded its signal (" + std::to_string(r.decoded) + ")");
         // ★★ whole-radio rows are scored by their HOTTEST thread (as ADS-B), the process total kept in the detail
-        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus" || r.id == "dec_lora_all" || r.id == "dec_vdl2" || r.id == "dec_acars" || r.id == "dec_rs41" || r.id == "dec_dfm" || r.id == "dec_m10") {
+        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus" || r.id == "dec_lora_all" || r.id == "dec_vdl2" || r.id == "dec_acars" || r.id == "dec_avboth" || r.id == "dec_rs41" || r.id == "dec_dfm" || r.id == "dec_m10") {
             double proc = -1; for (const auto& t : r.threads) if (t.first == "process") proc = t.second;
             ok(!r.hottest.empty() && proc >= 0 && r.pct <= proc + 0.5, r.id + ": scored by its hottest thread (" + r.hottest + " "
                + std::to_string(r.pct).substr(0, 5) + " %), process " + std::to_string(proc).substr(0, 5) + " % kept in the detail");
@@ -121,6 +121,16 @@ int main() {
     ok(!ruleFor("spot_q65").primary && ruleFor("spot_q65").slot, "a digital-spots mode is a slot, flagged but never switched off");
     ok(std::string(ruleFor("dec_lora_all").sw) == "lora+all" && !ruleFor("dec_lora_all").primary && !ruleFor("dec_lora_all").slot,
        "dec_lora_all names the owner's \"lora+all\", never switches anything off and is no slot (the readers tick it ON when green)");
+    // ★★ V12 2026-11-24 ACARS + VDL2 together at 8 MS/s: the owner's "avdata+8m", lora+all's inverted rule
+    ok(std::string(ruleFor("dec_avboth").sw) == "avdata+8m" && !ruleFor("dec_avboth").primary && !ruleFor("dec_avboth").slot,
+       "dec_avboth names the owner's \"avdata+8m\", never switches anything off and is no slot (the readers tick it ON when green)");
+    { const Row* b = nullptr; for (const auto& r : more) if (r.id == "dec_avboth") b = &r;
+      int lanes = 0; if (b) for (const auto& t : b->threads) if (t.first.find("vibe-acars") != std::string::npos || t.first.find("vibe-vdl2") != std::string::npos) ++lanes;
+      ok(b && b->decoded >= 4, "dec_avboth decodes both kinds at 8 MS/s (" + std::to_string(b ? b->decoded : -1) + " of 4 bursts a second, looped)");
+#if defined(__linux__) || defined(__APPLE__)
+      ok(lanes >= 2, "…on two decoder threads, ACARS and VDL2 (" + std::to_string(lanes) + " in the detail)");
+#endif
+      if (b) std::printf("   ACARS + VDL2 at 8 MS/s: %.1f %% of a core at its hottest thread (%s)\n", b->pct, b->hottest.c_str()); }
     ok(std::string(ruleFor("dec_ft8deep").sw) == "ft8+deep" && !ruleFor("dec_ft8deep").primary && !ruleFor("dec_ft8deep").slot,
        "dec_ft8deep names the owner's \"ft8+deep\", never switches anything off and is no slot (the server decides from it, ft8_deep_auto.h)");
     ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");

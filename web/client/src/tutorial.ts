@@ -133,7 +133,7 @@ const STEPS: Step[] = [
         + 'are in this menu too; DAB\u2019s station list marks \u25B6 2 beside a station two listeners are hearing, and where the '
         + 'server gives each listener their own station a pick changes only what you hear (the multiplex stays shared); they '
         + 'are in this menu too; DATALINK opens the AVIATION MAP with the aircraft heard on the ACARS (131 MHz) or VDL2 (136 MHz) channels, '
-        + 'the two bands in its top bar, and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
+        + 'the bands in its top bar (a radio with a wide enough capture adds ACARS + VDL2, both at once), and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
         + 'aircraft once, its card saying which sources heard it, with a layer key for each source, HFDL STATIONS and AIRPORTS (on until you switch '
         + 'it off) \u2014 every aircraft drawn as on the ADS-B map, whichever source heard it (its type\u2019s silhouette, its operator\u2019s badge, the flag): range rings, AUTO and FIT, each one gliding to its new position and pointing '
         + 'the way it is going; ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft. VIEWS, at the foot of this menu, '

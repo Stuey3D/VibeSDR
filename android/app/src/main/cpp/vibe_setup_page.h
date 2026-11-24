@@ -2878,6 +2878,20 @@ function benchApplyDefaults() {
       benchNote(lallBox, "LoRa on every channel is off: it measured " + Math.round(lall.pct) + "% of a core here at its busiest thread. Tick it to use it anyway \u2014 the default channels decode either way.");
     }
   }
+  // ★★ V12 2026-11-24 ACARS + VDL2 AT 8 MS/s ("avdata+8m", under the datalink) — lora+all's INVERTED rule: a GREEN
+  //    dec_avboth ticks it ON on a fresh setup, anything else leaves it off with the figure beside it. Only where the box
+  //    is drawn (a radio that lists 8 MS/s). Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
+  const avb = row("dec_avboth");
+  const avbBox = document.querySelector('input[data-mode="avdata+8m"]');
+  if (avb && avb.grade !== "none" && avbBox) {
+    if (avb.grade === "green") {
+      if (!avbBox.checked) { avbBox.checked = true; avbBox.dispatchEvent(new Event("change")); }
+      benchNote(avbBox, "ACARS + VDL2 together is on: both decoders at 8 MS/s measured " + Math.round(avb.pct) + "% of a core here at their busiest thread, so it was turned on.");
+    } else {
+      if (avbBox.checked) { avbBox.checked = false; avbBox.dispatchEvent(new Event("change")); }
+      benchNote(avbBox, "ACARS + VDL2 together is off: both decoders at 8 MS/s measured " + Math.round(avb.pct) + "% of a core here at their busiest thread. Tick it to use it anyway — ACARS and VDL2 each work either way.");
+    }
+  }
   // ★★ V12 beta91 FT8 / FT4 DIG DEEPER is AUTOMATIC (ft8DeepAuto): nothing is written here — the box shows what the server
   //    decides from this benchmark until the owner makes a choice of their own (ft8DeepRefresh, from renderBench).
   // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
@@ -3604,6 +3618,10 @@ const FT8_DEEP_HINT = "More FT8, FT4 and FT2 decodes from the same audio \u2014 
 const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless "
   + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
   + "where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.";
+/* \u2605\u2605 V12 2026-11-24 the 8 MS/s option's line. ONE TEXT, TWO READERS: ServerModeScreen.tsx AVDATA_8M_NOTICE. */
+const AVDATA_8M_NOTICE = "Adds \u201cACARS + VDL2\u201d to the aircraft datalink\u2019s bands: picking it raises this radio\u2019s "
+  + "capture to 8 MS/s so both sets of channels fit inside the flat part of its filter, and leaving gives your own rate back. "
+  + "Without it, ACARS + VDL2 is offered only when the radio already runs at 6.1 MS/s or more. Never while you have pinned the rate.";
 /* ★ V12 tones (docs/v12/TONES.md): beside the 5-tone opt-in — what it is and who sees it. */
 /** ★ ONE TEXT, TWO READERS: src/screens/ServerModeScreen.tsx ALE_AMD_NOTICE. */
 const ALE_AMD_NOTICE = "Off the amateur bands an ALE text message (AMD) is a private message between government, military "
@@ -3767,6 +3785,11 @@ const BLOCKABLE = [
    *  token, IN the CSV when ticked, off by default), with the notice DECODER-RESEARCH.md §4.3 asks for. */
   { id: "avdata", label: "Aircraft datalink (ACARS, VDL2)" },
   { id: "avdata+text", label: "Aircraft datalink: show the message text (to you only)", parent: "avdata", on: true },
+  /* ★★ V12 2026-11-24 (Stuart: "a settings toggle to allow 8 MS/s (for SDRplay, to compensate for the roll-off) for the
+   *  aircraft datalink to capture both ACARS and VDL2 together"). "+" token, IN the CSV when ticked. `cap`: drawn only where
+   *  the radio itself can (vibe_radio_caps.h "avdata+8m": a rate of 8 MS/s or more — an RSP, an Airspy R2, a HackRF, a
+   *  USRP; never an RTL or the HF+). The benchmark's dec_avboth sets its default, as lora+all's. */
+  { id: "avdata+8m", label: "Aircraft datalink: ACARS + VDL2 together (raise the capture to 8 MS/s)", parent: "avdata", on: true, cap: true },
   /* ★★ V12 RADIOSONDES (docs/v12/RS41.md, SONDES-TYPES.md) — RS41, DFM, M10 / M20 weather balloons on 400–406 MHz, a whole-radio mode. */
   { id: "sondes", label: "Radiosondes (RS41, DFM, M10, M20 weather balloons)" },
 ];
@@ -3808,10 +3831,11 @@ function capSet(k, r) {
   return !c || !c.settings || typeof c.settings !== "object" || c.settings[k] !== false;
 }
 /** A row of the modes tree is drawn when this radio can run it AND every row above it is drawn. The derived rows
- *  (each digital-spots mode, LoRa's "every channel", the DAB label scan, Band's per-mode list) follow their parent. */
+ *  (each digital-spots mode, LoRa's "every channel", the DAB label scan, Band's per-mode list) follow their parent —
+ *  except an option marked `cap`, which the radio answers for itself (the datalink's 8 MS/s: only where it lists 8 MS/s). */
 function modeCapShown(tree, m) {
   for (let x = m; x; x = x.parent ? tree.find(y => y.id === x.parent) : null) {
-    if (x.node || x.on || x.spotMode) continue;
+    if (x.node || (x.on && !x.cap) || x.spotMode) continue;
     if (!capMode(x.id)) return false;
   }
   return true;
@@ -4164,6 +4188,8 @@ function modeBlockRender() {
                                 + ft8DeepHint() + `</div></div>`;
     if (m.id === "avdata+text") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdataTextHint" style="margin:2px 0 0 24px">`
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
+    if (m.id === "avdata+8m") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdata8mHint" style="margin:2px 0 0 24px">`
+                                 + esc(AVDATA_8M_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
                                    + esc(TONES_DIGITS_NOTICE) + `</div></div>`;
     if (m.id === "dvsig+ids") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="dvsigIdsHint" style="margin:2px 0 0 24px">`
@@ -4606,6 +4632,7 @@ function modeBlockSummary() {
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
     + (ft8DeepOwner() ? ` FT8 / FT4 dig deeper: ${ft8DeepOwner() > 0 ? "on" : "off"} (your choice).` : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
+    + (all.includes("avdata+8m") && drawn("avdata+8m") ? " The aircraft datalink may raise the capture to 8 MS/s for ACARS + VDL2." : "")
     + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
     + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")
     + (all.includes("ale+amd") ? " ALE message text is shown to you." : "");

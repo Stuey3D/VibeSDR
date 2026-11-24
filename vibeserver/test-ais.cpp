@@ -371,6 +371,15 @@ static void testReceiver() {
     CHECK(clean2.heard >= clean2.sent - 2 && clean2.wrong == 0, "2.048 MS/s, −3 kHz crystal, cold: %d of %d, %d wrong", clean2.heard, clean2.sent, clean2.wrong);
     E2E slow = endToEnd(250e3, 30, 20, true, 3, 500);
     CHECK(slow.heard == slow.sent, "250 kS/s capture: %d of %d", slow.heard, slow.sent);
+    /* ★★ V12 2026-11-24 THE AIRSPY HF+ (offered AIS now): its own rates, 912 and 768 kS/s, the radio on 162.000 between the
+     *  channels as the mode puts it — and at 14 dB, where the 2.4 MS/s table below hears ≥ 119 of 120. */
+    for (double fs : { 912e3, 768e3 }) {
+        E2E hf = endToEnd(fs, 30, 30, true, 4, 300);
+        CHECK(hf.heard == hf.sent && hf.wrong == 0, "HF+ %.0f kS/s, clean: %d of %d, %d wrong", fs / 1e3, hf.heard, hf.sent, hf.wrong);
+        E2E hf14 = endToEnd(fs, 14, 60, true, 5, 300);
+        CHECK(hf14.heard >= 59 && hf14.wrong == 0, "HF+ %.0f kS/s at 14 dB: %d of %d, %d wrong", fs / 1e3, hf14.heard, hf14.sent, hf14.wrong);
+        std::printf("   HF+ %.0f kS/s: clean %d/%d, 14 dB %d/%d\n", fs / 1e3, hf.heard, hf.sent, hf14.heard, hf14.sent);
+    }
     std::printf("   Eb/N0 (dB)   decoded of 120: no repair   with repair (repaired)   wrong\n");
     const double snrs[] = { 8, 10, 11, 12, 13, 14, 16, 18 };
     int at14 = 0, at18 = 0, at12r = 0, at12n = 0, at10 = 0, at8 = 0;
