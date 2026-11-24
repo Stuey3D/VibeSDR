@@ -1280,7 +1280,8 @@ private:
             /* ★★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_fctlm.h): the listener's USB audio, the signal near "centre"
              *  (default 1200 Hz); "afc":false / "invert":true are the manual fallback under AUTO. sat_tlm per good frame,
              *  fctlm_status once a second, a readable line to the gallery.
-             *  ★★★ beta92 a SATELLITE pick attaches it WIDE — "centre":3800,"afc_range":2600 on a 100–7600 Hz passband
+             *  ★★★ beta92 a SATELLITE pick attaches it WIDE — "afc_range":2600 on a wide passband (★★ beta93: "centre":1500 on
+             *  100–5000 Hz, the carrier where a hand-tuned USB signal sits; beta92 was 3800 on 100–7600)
              *  (vibe_sat_engine.h kTlmCentreHz) — and, once frames decode, it steers the pick's Doppler trim to where the
              *  signal really is (vibefc::TrimFollow → Engine::setDecoderTrim). */
             vibebpsk::RxCfg c;

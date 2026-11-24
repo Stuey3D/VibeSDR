@@ -10,6 +10,7 @@
 // ★★★ beta92 THE WIDE SEARCH (Stuart 11-23, AO-73 on the Pi 500's RTL-SDR V4: the bird sat 1.2–1.4 kHz ABOVE the
 //    Doppler-corrected prediction all pass — 2.4 kHz audio, outside the ±900 Hz hunt and half cut by the 2.7 kHz USB
 //    edge: 0 frames). A satellite pick now listens at a 3800 Hz centre in a 100–7600 Hz passband with afcRangeHz 2600
+//    (★★ beta93: a 1500 Hz centre in 100–5000 Hz — the search window floored at a 300 Hz carrier, RxCfg::minCarrierHz)
 //    (vibe_sat_engine.h kTlmCentreHz / kTlmAfcHz). A wider range changes three things here, and nothing at the default:
 //      · the first low-pass opens to range + 0.75 × baud (the signal 2.6 kHz off still passes it whole);
 //      · the decimation drops so the squared signal's line (2Δf, up to 5.2 kHz) stays under Nyquist (48 k / 4 = 12 k);
@@ -131,6 +132,12 @@ struct RxCfg {
     double centreHz = 1200;   ///< where in the audio the signal is expected
     bool afc = true;          ///< the coarse hunt (±afcRangeHz); off = the Costas loop alone (±~60 Hz)
     double afcRangeHz = 900;  ///< ★ beta92: the hunt's reach around the centre (a satellite pick: 2600, kTlmAfcHz)
+    /** ★★★ 11-24: the lowest audio frequency the CARRIER may be looked for at. USB audio has nothing below 0 Hz, and a
+     *  real carrier at f has its mirror at −f, whose squared line the hunt would take just as readily. With the window's
+     *  low side at (minCarrierHz − centre) > −centre, a carrier inside the window always has its mirror outside it. A
+     *  satellite pick's centre at 1500 Hz reaches −1200 Hz (a carrier at 300 Hz); its high side keeps the whole
+     *  afcRangeHz. By hand (centre 1200, ±900) the window is unchanged. */
+    double minCarrierHz = 300;
 };
 
 class Rx {
@@ -142,6 +149,8 @@ public:
 
     explicit Rx(const Cfg& c = RxCfg()) : c_(c) {
         range_ = std::max(100.0, std::min(4000.0, c_.afcRangeHz));
+        lo_ = std::min(0.0, std::max(-range_, c_.minCarrierHz - c_.centreHz));   // ★ 11-24 the audio floor (never above 0)
+        hi_ = range_;
         dec_ = std::max(1, (int)std::lround(c_.rate / (8.0 * c_.baud)));
         // ★ beta92: the squared signal's line sits at 2Δf — at a wide range it must stay under the second rate's Nyquist
         //   (with 10 % to spare). The default (±900: 1.98 kHz needed, 9.6 k given) is untouched.
@@ -159,6 +168,9 @@ public:
     }
     double afcHz() const { return coarse_ + w2_ * fs2_ / (2 * M_PI); }
     double afcRangeHz() const { return range_; }
+    /** The search window around the centre (Hz): [afcLoHz, afcHiHz] — the low side floored by minCarrierHz. */
+    double afcLoHz() const { return lo_; }
+    double afcHiHz() const { return hi_; }
     double centreHz() const { return c_.centreHz; }
     bool afcOn() const { return c_.afc; }
     double snrDb() const { return 10.0 * std::log10(std::max(1e-6, (double)sigPow_) / std::max(1e-6, (double)noisePow_)); }
@@ -234,7 +246,7 @@ private:
         //   the rotator carries on from where it is — and the total frequency is unchanged), so the loop never meets its
         //   clamp. The first NCO's own range is the AFC's (±afcRangeHz around the centre).
         const double w2Hz = w2_ * fs2_ / (2 * M_PI);
-        if (std::fabs(w2Hz) > 20.0 && std::fabs(coarse_ + w2Hz) <= range_) { coarse_ += w2Hz; w2_ = 0; setNco1(); }
+        if (std::fabs(w2Hz) > 20.0 && coarse_ + w2Hz >= lo_ && coarse_ + w2Hz <= hi_) { coarse_ += w2Hz; w2_ = 0; setNco1(); }
         sigPow_ = sigPow_ * 0.99f + sr * sr * 0.01f;
         noisePow_ = noisePow_ * 0.99f + si * si * 0.01f;
         // ★★★ 11-24 THE SOFT SYMBOL CARRIES THE FADE. AO-73 spins: its signal fades 10+ dB every ~7.6 s, two or three
@@ -265,9 +277,13 @@ private:
         for (size_t i = 0; i < a.size(); ++i) a[i] *= (float)(0.5 - 0.5 * std::cos(2 * M_PI * i / (a.size() - 1)));
         fft(a);
         const double binHz = fs2_ / (double)kFft;
-        const int maxBin = std::min((int)kFft / 2 - 2, (int)(2 * range_ / binHz));
+        // ★ the window [lo_, hi_] around the centre, seen from where we are tuned now (coarse_); the line is at 2Δf
+        const int nyq = (int)kFft / 2 - 2;
+        const int kLo = std::max(-nyq, (int)std::ceil(2 * (lo_ - coarse_) / binHz));
+        const int kHi = std::min(nyq, (int)std::floor(2 * (hi_ - coarse_) / binHz));
+        if (kHi - kLo < 8) return;
         double best = 0, sum = 0; int bi = 0, cnt = 0;
-        for (int k = -maxBin; k <= maxBin; ++k) {
+        for (int k = kLo; k <= kHi; ++k) {
             const double m = std::norm(a[(size_t)((k + (int)kFft) % (int)kFft)]);
             sum += m; ++cnt;
             if (m > best) { best = m; bi = k; }
@@ -290,7 +306,7 @@ private:
         const double df = 0.5 * (bi + std::max(-0.5, std::min(0.5, d))) * binHz;   // Δf = (line)/2
         const double resid = df + w2_ * fs2_ / (2 * M_PI);
         if (std::fabs(resid) < 8.0) return;   // already there
-        coarse_ = std::max(-range_, std::min(range_, coarse_ + df));
+        coarse_ = std::max(lo_, std::min(hi_, coarse_ + df));
         w2_ = 0; p2_ = 0;
         setNco1();
         huntHold_ = n2_ + (uint64_t)(kHoldSec * fs2_);   // ★ found: let the Costas loop and the framer work
@@ -298,7 +314,7 @@ private:
 
     Cfg c_;
     int dec_ = 5, phase1_ = 0;
-    double fs2_ = 9600, sps_ = 8, range_ = 900;
+    double fs2_ = 9600, sps_ = 8, range_ = 900, lo_ = -900, hi_ = 900;
     std::vector<float> h1_, h2_;
     Ring r1_, r2_;
     float cr_ = 1, ci_ = 0, dr_ = 1, di_ = 0;
