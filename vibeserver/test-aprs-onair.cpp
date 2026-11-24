@@ -61,6 +61,7 @@ struct Cfg {
     vibedsp::RxPipeline::Mode mode = vibedsp::RxPipeline::Mode::NFM;   ///< ★ beta92 the LISTENER's mode (the tap ignores it)
 };
 
+static bool g_randomData = false;   ///< ★ makeIq sends random bits instead of each frame (the false-decode check)
 /** The capture: 240 kS/s, the station 37 kHz above its centre, keyed only for each packet (and 30 ms of tail). */
 static std::vector<cf> makeIq(const Cfg& c, double fs, double off) {
     std::vector<float> aud;      // 48 kHz modulating audio, normalised to the louder tone = 1
@@ -72,7 +73,11 @@ static std::vector<cf> makeIq(const Cfg& c, double fs, double off) {
         aud.insert(aud.end(), gap, 0.f); key.insert(key.end(), gap, 0);
         std::vector<uint8_t> f = ui(i); vibehdlc::appendFcs(f);
         std::vector<int> bits; for (int k = 0; k < c.flags; ++k) vibehdlc::flagBits(bits);
-        vibehdlc::stuffBits(f, bits); vibehdlc::flagBits(bits); vibehdlc::flagBits(bits);
+        if (g_randomData) {   // ★ --false: random bits (4× a frame's length) where the frame would be
+            std::mt19937 rb(uint32_t(c.seed * 131 + uint64_t(i)));
+            for (size_t k = 0; k < f.size() * 8 * 4; ++k) bits.push_back(int(rb() & 1));
+        } else vibehdlc::stuffBits(f, bits);
+        vibehdlc::flagBits(bits); vibehdlc::flagBits(bits);
         std::vector<int> lv; int level = 1; vibehdlc::nrzi(bits, lv, level);
         double t = 0;
         for (size_t k = 0; k < lv.size(); ++k)
@@ -112,9 +117,41 @@ static std::vector<cf> makeIq(const Cfg& c, double fs, double off) {
     return iq;
 }
 
+/** ★ 2026-11-24 (docs/v12/APRS-WEAK.md): EXACT — every frame the run logs (aprs_frame: source and the information field
+ *  in hex) must be one the transmitter sent, byte for byte; anything else (a repair that "passed" the FCS on the wrong
+ *  bits, a noise frame) counts as WRONG. Before this only a missing "on-air test #" text counted. */
+static std::string hexOf(const std::string& s) { static const char* hx = "0123456789abcdef"; std::string o; for (unsigned char c : s) { o += hx[c >> 4]; o += hx[c & 15]; } return o; }
+static const std::string& expectedFrame(int i) {   // "from|hex(info)" of packet i
+    static std::vector<std::string> v;
+    while (int(v.size()) <= i) {
+        const int k = int(v.size());
+        const std::vector<uint8_t> b = ui(k);
+        const std::string info(b.begin() + 30, b.end());
+        v.push_back(std::string("G4ABC") + (k % 16 ? "-" + std::to_string(k % 16) : "") + "|" + hexOf(info));
+    }
+    return v[size_t(i)];
+}
+static std::string field(const std::string& j, const char* name) {
+    const std::string k = std::string("\"") + name + "\":\"";
+    const size_t a = j.find(k); if (a == std::string::npos) return "";
+    const size_t b = j.find('"', a + k.size()); return j.substr(a + k.size(), b == std::string::npos ? std::string::npos : b - a - k.size());
+}
+
 /** The packets (by number) a run's JSON announced. */
-struct Heard { std::set<int> got; int wrong = 0; };
+struct Heard { std::set<int> got; int wrong = 0; int frames = 0; };
 static void noteJson(const std::string& j, Heard& h) {
+    if (j.find("\"type\":\"aprs_frame\"") != std::string::npos) {
+        ++h.frames;
+        const std::string hx = field(j, "hex"), from = field(j, "from");
+        const std::string txt = field(j, "text");
+        const size_t p = txt.find("on-air test #");
+        const int i = p == std::string::npos ? -1 : std::atoi(txt.c_str() + p + 13);
+        if (i < 0 || i > 100000 || expectedFrame(i) != from + "|" + hx) {
+            ++h.wrong;
+            if (std::getenv("APRS_SHOW_WRONG")) std::printf("WRONG FRAME: %s\n   expected %s\n", j.c_str(), i >= 0 && i <= 100000 ? expectedFrame(i).c_str() : "?");
+        }
+        return;
+    }
     if (j.find("\"type\":\"aprs_packet\"") == std::string::npos) return;
     const size_t p = j.find("on-air test #");
     if (p == std::string::npos) { ++h.wrong; return; }
@@ -392,6 +429,168 @@ int main(int argc, char** argv) {
             std::printf("pipeline NFM 12.5 kHz at 2.4 MS/s, decoder tap %s: %.3f %% of a core\n", tap ? "ON " : "off", 100 * s / 30);
         }
         return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "--curve") == 0) {
+        // ★★ 2026-11-24 THE WEAK-SIGNAL CURVE (docs/v12/APRS-WEAK.md): packets decoded against CNR (in 12.5 kHz) for flat,
+        //    pre-emphasised (+5 dB) and de-emphasised (−5 dB) transmitters at three deviation / tuning shapes, through the
+        //    server's chain — `both` = AUTO as a listener runs it (audio + IQ), `iq` = the IQ receiver alone, `aud` = a 1200
+        //    run on the listener's audio alone (NFM 12.5 kHz ALL, 50 µs). The 50 % point of each by interpolation.
+        //    argv: [packets a row] [first CNR] [last CNR] [shapes: a subset of "abc"]
+        const int P = argc > 2 ? std::atoi(argv[2]) : 40;
+        const double lo = argc > 3 ? std::atof(argv[3]) : 3, hi = argc > 4 ? std::atof(argv[4]) : 12;
+        const std::string pick = argc > 5 ? argv[5] : "abc";
+        struct Shape { char id; double dev, err; } shapes[] = { { 'a', 3000, 0 }, { 'b', 4500, 1000 }, { 'c', 6000, -2000 }, { 'd', 6000, 0 }, { 'e', 3000, -2000 }, { 'f', 4500, 0 } };   // d–f: by hand
+        int totB = 0, totI = 0, totA = 0, totW = 0, totF = 0;
+        std::printf("%d packets a row; columns: both (audio + IQ) / IQ alone / audio alone; wrong frames\n", P);
+        for (const Shape& s : shapes) {
+            if (pick.find(s.id) == std::string::npos) continue;
+            for (double tilt : { 0.0, 5.0, -5.0 }) {
+                if (const char* e = std::getenv("APRS_CURVE_TILT")) if (std::atof(e) != tilt) continue;   // one TX shape only
+                std::vector<double> xs; std::vector<int> yb, yi, ya;
+                for (double cnr = lo; cnr <= hi + 1e-9; cnr += 1) {
+                    Cfg c; c.cnrDb = cnr; c.devHz = s.dev; c.errHz = s.err; c.tiltDb = tilt; c.packets = P;
+                    c.seed = uint64_t(1000 + cnr * 13 + tilt * 3 + s.dev / 100);
+                    const double fs = 240000, off = 37000;
+                    const std::vector<cf> iq = makeIq(c, fs, off);
+                    const Multi M = viaPipelineAll(c, iq, fs, off);
+                    const int w = M.pipe.wrong + M.iq.wrong + M.audio.wrong;
+                    xs.push_back(cnr); yb.push_back(int(M.pipe.got.size())); yi.push_back(int(M.iq.got.size())); ya.push_back(int(M.audio.got.size()));
+                    totB += yb.back(); totI += yi.back(); totA += ya.back(); totW += w; totF += M.pipe.frames;
+                    std::printf("  dev %.1fk err %+5.0f TX %-8s CNR %4.1f   both %3d  iq %3d  aud %3d  wrong %d\n", s.dev / 1000, s.err,
+                                tilt > 0 ? "pre-emph" : tilt < 0 ? "de-emph" : "flat", cnr, yb.back(), yi.back(), ya.back(), w);
+                    std::fflush(stdout);
+                }
+                auto half = [&](const std::vector<int>& y) {
+                    for (size_t k = 0; k < y.size(); ++k) if (y[k] * 2 >= P) {
+                        if (k == 0) return xs[0];
+                        const double a = y[k - 1], b = y[k];
+                        return xs[k - 1] + (P / 2.0 - a) / std::max(1e-9, b - a);
+                    }
+                    return 99.0;
+                };
+                std::printf("  50%% POINT dev %.1fk err %+5.0f TX %-8s  both %.2f dB  iq %.2f dB  aud %.2f dB\n", s.dev / 1000, s.err,
+                            tilt > 0 ? "pre-emph" : tilt < 0 ? "de-emph" : "flat", half(yb), half(yi), half(ya));
+            }
+        }
+        std::printf("TOTAL both %d  iq %d  aud %d  wrong %d (frames logged %d)\n", totB, totI, totA, totW, totF);
+        return totW ? 1 : 0;
+    }
+    if (argc >= 4 && std::strcmp(argv[1], "--listener-wav") == 0) {
+        // ★★ 2026-11-24 what a LISTENER's REC sounds like at a CNR: the synthetic keyed packets (flat TX, ±3 kHz, 8 packets)
+        //    through the pipeline's NFM 12.5 kHz ALL 50 µs, written as a 48 kHz 16-bit WAV — to place a real REC on the
+        //    curve by its hiss quieting and tone-to-hiss ratio (docs/v12/APRS-WEAK.md).
+        Cfg c; c.cnrDb = std::atof(argv[3]); c.tiltDb = argc > 4 ? std::atof(argv[4]) : 0; c.packets = 8; c.seed = 3;
+        const double fs = 240000, off = 37000;
+        const std::vector<cf> iq = makeIq(c, fs, off);
+        static std::vector<int16_t> pcmOut; pcmOut.clear();
+        vibedsp::RxPipeline::Callbacks cb;
+        cb.audio = [](void*, const float* pcm, int frames, int ch, int) { for (int i = 0; i < frames; ++i) pcmOut.push_back(int16_t(std::clamp(pcm[size_t(i) * size_t(ch)] * 16000.f, -32767.f, 32767.f))); };
+        vibedsp::RxPipeline p; p.setMeasureThread(false); p.setDeemphasis(50e-6);
+        p.start(fs, 1024, 20.0, 48000, cb); p.setTune(off, vibedsp::RxPipeline::Mode::NFM, 12500);
+        const int blk = int(fs / 50);
+        for (size_t i = 0; i + size_t(blk) <= iq.size(); i += size_t(blk)) p.feed(reinterpret_cast<const vibedsp::cf32*>(iq.data() + i), blk);
+        p.stop();
+        FILE* f = std::fopen(argv[2], "wb"); if (!f) return 1;
+        const uint32_t n = uint32_t(pcmOut.size() * 2);
+        auto w32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); }; auto w16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+        std::fwrite("RIFF", 1, 4, f); w32(36 + n); std::fwrite("WAVEfmt ", 1, 8, f); w32(16); w16(1); w16(1); w32(48000); w32(96000); w16(2); w16(16);
+        std::fwrite("data", 1, 4, f); w32(n); std::fwrite(pcmOut.data(), 2, pcmOut.size(), f); std::fclose(f);
+        return 0;
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "--wav") == 0) {
+        // ★★ 2026-11-24 a REAL recording of the decoder's audio (a client's REC of NFM — the XCover HF+ file): a 1200 run on
+        //    it (16-bit or float WAV, first channel, 48 kHz), every packet printed. docs/v12/APRS-WEAK.md.
+        FILE* f = std::fopen(argv[2], "rb");
+        if (!f) { std::fprintf(stderr, "cannot open %s\n", argv[2]); return 1; }
+        std::vector<uint8_t> b; { uint8_t t[65536]; size_t k; while ((k = std::fread(t, 1, sizeof t, f)) > 0) b.insert(b.end(), t, t + k); }
+        std::fclose(f);
+        auto u32 = [&](size_t p) { return uint32_t(b[p]) | uint32_t(b[p + 1]) << 8 | uint32_t(b[p + 2]) << 16 | uint32_t(b[p + 3]) << 24; };
+        auto u16 = [&](size_t p) { return uint16_t(b[p] | b[p + 1] << 8); };
+        size_t p = 12, at = 0, len = 0; int fmt = 0, ch = 1, bits = 0, rate = 0;
+        while (p + 8 <= b.size()) {
+            const uint32_t l = u32(p + 4);
+            if (!std::memcmp(&b[p], "fmt ", 4)) { fmt = u16(p + 8); ch = u16(p + 10); rate = int(u32(p + 12)); bits = u16(p + 22); }
+            if (!std::memcmp(&b[p], "data", 4)) { at = p + 8; len = std::min<size_t>(l, b.size() - at); break; }
+            p += 8 + l + (l & 1);
+        }
+        std::vector<float> a;
+        if (fmt == 1 && bits == 16) for (size_t i = 0; i + size_t(2 * ch) <= len; i += size_t(2 * ch)) a.push_back(int16_t(u16(at + i)) / 32768.f);
+        else if (fmt == 3 && bits == 32) for (size_t i = 0; i + size_t(4 * ch) <= len; i += size_t(4 * ch)) { float v; std::memcpy(&v, &b[at + i], 4); a.push_back(v); }
+        if (rate != 48000 || a.empty()) { std::fprintf(stderr, "need a 48 kHz 16-bit or float WAV (got %d Hz, fmt %d, %d bits)\n", rate, fmt, bits); return 1; }
+        int pk = 0, fr = 0;
+        vibeaprs::Run::Opts o; double tNow = 0;
+        o.json = [&](const std::string& j) {
+            if (j.find("\"type\":\"aprs_frame\"") != std::string::npos) ++fr;
+            if (j.find("\"type\":\"aprs_packet\"") == std::string::npos) return;
+            ++pk; std::printf("  %6.1f s  %s\n", tNow, field(j, "raw").c_str());
+        };
+        vibeaprs::Run run(argc > 3 ? std::atoi(argv[3]) : 1200, std::move(o));
+        for (size_t i = 0; i < a.size(); i += 960) { tNow = double(i) / 48000; run.feedAudio(a.data() + i, int(std::min<size_t>(960, a.size() - i))); }
+        std::printf("%s: %.1f s — %d packets, %d frames (%llu repaired)\n", argv[2], a.size() / 48000.0, pk, fr, (unsigned long long)run.repaired());
+        return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "--cpu-paths") == 0) {
+        // ★★ 2026-11-24: what each 1200 Bd path costs, one core of this machine — the listener's audio path (one AfskDemod
+        //    at 48 kHz) and the IQ receiver at a 40 kS/s tap (three discriminator filters + AFC, then + the FM tone bank).
+        const double secs = 60;
+        std::mt19937 rng(9); std::normal_distribution<float> nd(0.f, 0.3f);
+        {
+            vibeaprs::Run::Opts o; o.json = [](const std::string&) {}; vibeaprs::Run r(1200, std::move(o));
+            std::vector<float> a(960); for (auto& v : a) v = nd(rng);
+            const auto t0 = std::chrono::steady_clock::now();
+            for (int k = 0; k < int(secs * 50); ++k) r.feedAudio(a.data(), int(a.size()));
+            std::printf("audio path (AfskDemod at 48 kHz): %.3f %% of a core\n", 100 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / secs);
+        }
+        for (int mf = 0; mf < 2; ++mf) {
+            vibeaprs::Run::Opts o; o.json = [](const std::string&) {}; vibeaprs::Run r(1200, std::move(o));
+            setenv("APRS_MF", mf ? "1" : "0", 1);
+            const double rate = 40000; std::vector<cf> b(size_t(rate / 50)); for (auto& z : b) z = cf(nd(rng), nd(rng));
+            const auto t0 = std::chrono::steady_clock::now();
+            for (int k = 0; k < int(secs * 50); ++k) r.feedIq(b.data(), int(b.size()), rate);
+            std::printf("IQ receiver at 40 kS/s, tone bank %s: %.3f %% of a core\n", mf ? "ON " : "off", 100 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / secs);
+        }
+        return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "--false") == 0) {
+        // ★★ 2026-11-24 FALSE DECODES (docs/v12/APRS-WEAK.md): zero is the only pass. (1) band noise into AUTO's IQ receiver
+        //    and a 1200 run's audio (a discriminator of the same noise); (2) RANDOM DATA — Bell 202 AFSK of random bits (no
+        //    frames, but flags and frame-sized runs between them by chance) keyed on FM at 4–20 dB, through the server's
+        //    chain; every frame either run logs is counted. argv: [minutes of noise] [random-data packets a CNR]
+        const double mins = argc > 2 ? std::atof(argv[2]) : 20;
+        const int RP = argc > 3 ? std::atoi(argv[3]) : 40;
+        int frames = 0;
+        {
+            vibeaprs::Run::Opts o; o.json = [&](const std::string& j) { if (j.find("\"type\":\"aprs_frame\"") != std::string::npos) ++frames; };
+            vibeaprs::Run run(0, std::move(o));
+            vibeaprs::Run::Opts o2; o2.json = [&](const std::string& j) { if (j.find("\"type\":\"aprs_frame\"") != std::string::npos) ++frames; };
+            vibeaprs::Run runA(1200, std::move(o2));
+            const double rate = 40000; std::mt19937 rng(777); std::normal_distribution<float> nd(0.f, 0.3f);
+            std::vector<cf> b(size_t(rate / 50)); std::vector<float> a; cf prev(1, 0);
+            for (long k = 0; k < long(mins * 60 * 50); ++k) {
+                for (auto& z : b) z = cf(nd(rng), nd(rng));
+                run.feedIq(b.data(), int(b.size()), rate);
+                // the same noise's discriminator, ×1.2 to 48 kHz by holding (it is noise; the shape does not matter)
+                a.clear();
+                for (size_t i = 0; i < b.size(); ++i) { const float v = std::arg(b[i] * std::conj(prev)) / float(M_PI); prev = b[i]; a.push_back(v); if (i % 5 == 4) a.push_back(v); }
+                runA.feedAudio(a.data(), int(a.size()));
+            }
+            std::printf("noise: %.0f minutes into AUTO's IQ receiver and a 1200 run's audio: %d frames\n", mins, frames);
+        }
+        int rnd = 0, rndWrong = 0;
+        for (double cnr : { 4.0, 8.0, 12.0, 20.0 }) {
+            // random bits: replace the generator's frames with random levels of the same length, flags kept out
+            Cfg c; c.cnrDb = cnr; c.packets = RP; c.tiltDb = 0; c.seed = uint64_t(cnr * 31 + 5);
+            const double fs = 240000, off = 37000;
+            g_randomData = true;
+            const std::vector<cf> iq = makeIq(c, fs, off);
+            g_randomData = false;
+            const Multi M = viaPipelineAll(c, iq, fs, off);
+            const int f = M.pipe.frames + M.iq.frames + M.audio.frames;
+            rnd += f; rndWrong += M.pipe.wrong + M.iq.wrong + M.audio.wrong;
+            std::printf("random data, CNR %4.1f dB, %d bursts of ~0.6 s: %d frames\n", cnr, RP, f);
+        }
+        std::printf("FALSE TOTAL noise %d, random data %d\n", frames, rnd);
+        return frames || rnd ? 1 : 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--audio-check") == 0) {
         // ★★ beta92: does the listener's AUDIO path still add packets the IQ receiver misses? Pre-emphasised and flat TXs,

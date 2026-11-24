@@ -106,6 +106,7 @@ public:
             const int b = baud_ == 0 ? 1200 : baud_;
             // FX.25 and IL2P are VHF/UHF FM packet things: not on HF 300 Bd
             afsk_.reset(new AfskDemod(48000, b, false, b == 1200 && o_.fx25, b == 1200 && o_.il2p));
+            afsk_->setMinVotes(0);   // ★ the run applies the lone repair rule after every path has voted (flushHeld_)
         }
     }
     /** 300, 1200, 9600 — or 0 for AUTO (1200 + 9600). */
@@ -131,6 +132,7 @@ public:
          *  to offer1200_, which drops a frame another path gave within 3 s. Cost: one AfskDemod at 48 kHz (beta91's). */
         if (afsk_) afsk_->feed(x, n, [&](const Frame& f) { offer1200_(f, audioT_, 0); });
         audioT_ += n / 48000.0;
+        flushHeld_();
         tickList_();
     }
     /** ★ V12 9600 (and ★ 1200's narrow path): the listener's channel IQ (dial at DC) at `rate` Hz. */
@@ -138,6 +140,7 @@ public:
         if (n <= 0 || !(rate > 0)) return;
         if (g3_) { iqFed_ = true; g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); }); }
         if (baud_ == 0 || baud_ == 1200) iq1200_(x, n, rate);
+        flushHeld_();
         tickList_();
         // ★ VIBE_PKT_LOG=1: what the 9600 receiver sees, every 5 s, to stderr — the first thing to look at on a live capture
         static const bool dbg = std::getenv("VIBE_PKT_LOG") != nullptr;
@@ -489,7 +492,8 @@ public:
     static constexpr double kIqHalves[kIqPaths] = { 5000, 6500, 8000 };
     /** ★ Tunables of the IQ path — fixed in the server, varied only by test-aprs-onair's sweeps (halfHz > 0: that ONE
      *  width instead of the three). */
-    struct IqTune { double halfHz = 0; double transHz = 0; bool afc = true; double afcMaxHz = kAfcMaxHz; bool decimate = true; };
+    struct IqTune { double halfHz = 0; double transHz = 0; bool afc = true; double afcMaxHz = kAfcMaxHz; bool decimate = true;
+                    int mf = -1; double mfHalf = 0; int mfK = 0; double mfRate = 0; std::vector<float> mfBm, mfBs; };
     void setIqTune(const IqTune& t) { tune_ = t; iqRx_.clear(); }
     double iqAfcHz() const { return afcHz_; }
     /** ★ The IQ paths' frames by filter (narrowest first) — for tests. */
@@ -522,10 +526,12 @@ private:
                 const int D = tu.decimate ? std::max(1, int(rate / (4 * (h + trans)))) : 1;
                 r.fir.reset(new vibedsp::FirDecimator(vibedsp::designLowpass(h / rate, trans / rate), D));
                 r.afsk.reset(new AfskDemod(rate / D, 1200, false, o_.fx25, o_.il2p));
+                r.afsk->setMinVotes(0);
                 r.rate = rate / D;
                 iqRx_.push_back(std::move(r));
             }
             nbNone_ = iqRx_.empty();
+            mfSetup_(rate);
             afcAcc_ = { 0, 0 }; afcHz_ = 0; ncoPh_ = { 1, 0 }; afcP2_ = afcP4_ = 0;
             // ★ the AFC's time constants, per sample of the WIDEST filter's output (where it measures)
             const double ra = iqRx_.empty() ? rate : iqRx_.back().rate;
@@ -566,6 +572,7 @@ private:
             const int path = 1 + int(k);
             r.afsk->feed(r.out.data(), m, [&](const Frame& f) { if (offer1200_(f, iqT_, path)) ++r.frames; });
         }
+        mfRun_(n);
         if (afc) {
             const std::complex<float> acc = afcAcc_;
             // the carrier's residual offset from the filters' centre — power-weighted, so FM hiss alone pulls it nowhere
@@ -582,17 +589,78 @@ private:
         }
         iqT_ += n / rate;
     }
+    /* ★★★ 2026-11-24 THE TONE BANK PATH (FmToneBank, docs/v12/APRS-WEAK.md): the AFC-corrected IQ, cut to ±mfHalf and
+     *  decimated to ~20 kS/s, straight into the matched tone bank — no discriminator — then the same slicers. */
+    void mfSetup_(double rate) {
+        mf_.reset(); mfAfsk_.reset();
+        const IqTune& tu = tune_;
+        int on = tu.mf;
+        if (on < 0) { const char* e = std::getenv("APRS_MF"); on = e ? std::atoi(e) : 1; }
+        if (!on) return;
+        const double half = tu.mfHalf > 0 ? tu.mfHalf : 8000, trans = 2000;
+        const double want = tu.mfRate > 0 ? tu.mfRate : 20000;
+        if (rate < 2 * half + trans) return;
+        const int D = std::max(1, int(rate / want));
+        mfFir_.reset(new vibedsp::FirDecimator(vibedsp::designLowpass(half / rate, trans / rate), D));
+        const double r2 = rate / D;
+        std::vector<float> bm = tu.mfBm.empty() ? std::vector<float>{ 1.5f, 2.5f, 3.6f, 5.0f } : tu.mfBm;
+        std::vector<float> bs = tu.mfBs.empty() ? std::vector<float>{ 0.9f, 1.6f, 2.6f } : tu.mfBs;
+        mf_.reset(new FmToneBank(r2, 1200, bm, bs, tu.mfK > 0 ? tu.mfK : 12));
+        mfAfsk_.reset(new AfskDemod(r2, 1200, false, o_.fx25, o_.il2p, true));
+        mfAfsk_->setMinVotes(0);
+    }
+    void mfRun_(int n) {
+        if (!mf_) return;
+        mfZ_.resize(size_t(mfFir_->maxOut(n)));
+        const int m = mfFir_->process(nbMix_.data(), n, mfZ_.data());
+        mfM_.resize(size_t(m)); mfS_.resize(size_t(m));
+        for (int i = 0; i < m; ++i) mf_->step(mfZ_[size_t(i)], mfM_[size_t(i)], mfS_[size_t(i)]);
+        const int path = 1 + kIqPaths;
+        mfAfsk_->feedTones(mfM_.data(), mfS_.data(), m, [&](const Frame& f) { if (offer1200_(f, iqT_, path)) ++mfFrames_; });
+    }
+public:
+    uint64_t framesFromToneBank() const { return mfFrames_; }
+private:
+    std::unique_ptr<FmToneBank> mf_;
+    std::unique_ptr<AfskDemod> mfAfsk_;
+    std::unique_ptr<vibedsp::FirDecimator> mfFir_;
+    std::vector<std::complex<float>> mfZ_;
+    std::vector<float> mfM_, mfS_;
+    uint64_t mfFrames_ = 0;
     /** ★ One 1200 Bd frame from any path (0 = the listener's audio, 1… = the IQ filters): a copy of the same bytes another
      *  path gave within 3 s (signal time) is dropped. True = it was new. */
     bool offer1200_(const Frame& f, double t, int path = 0) {
-        uint32_t h = 2166136261u;
-        for (uint8_t c : f.bytes) h = (h ^ c) * 16777619u;
+        const uint32_t h = frameHash(f.bytes);
+        // ★ a copy of a frame still held: its votes join (resolveCandidates); a copy of one already gone out: dropped
+        for (Frame& x : held_) if (x.bytes == f.bytes) { offerCandidate(held_, f); return false; }
         for (const auto& r : seen1200_) if (r.h == h && std::fabs(r.t - t) < 3.0 && r.path != path) return false;
         seen1200_[seenP_] = { h, t, path }; seenP_ = (seenP_ + 1) % kSeen;
         ++(path ? fromNarrow_ : fromAudio_);
-        onFrame(f);
+        /* ★★★ 2026-11-24 held ~0.3 s (signal time) beside the other paths' copies, then resolveCandidates (vibe_aprs.h):
+         *  a repaired copy one path got wrong never goes out beside the right copy another path got clean. */
+        if (held_.empty()) heldT_ = t;
+        offerCandidate(held_, f);
         return true;
     }
+    void flushHeld_(bool all = false) {
+        if (held_.empty()) return;
+        const double now = std::max(audioT_, iqT_);
+        if (!all && now - heldT_ < kHoldSec) return;
+        std::vector<Frame> v; v.swap(held_);
+        conflicts1200_ += uint64_t(resolveCandidates(v));
+        for (const Frame& f : v) { if (f.votes < 1.f) { ++lone1200_; continue; } onFrame(f); }   // the lone repair rule (AfskDemod::setMinVotes)
+    }
+public:
+    static constexpr double kHoldSec = 0.3;
+    /** ★ 1200 Bd copies dropped because two disagreed (the demodulators' own and across paths). */
+    uint64_t conflicts1200() const { return conflicts1200_ + (afsk_ ? afsk_->conflicts() : 0); }
+    /** ★ Tests / tools at the end of a recording: whatever is still held goes out now. */
+    void flush() { flushHeld_(true); }
+private:
+    std::vector<Frame> held_; double heldT_ = 0; uint64_t conflicts1200_ = 0, lone1200_ = 0;
+public:
+    uint64_t loneRepairs1200() const { return lone1200_; }
+private:
     struct Seen { uint32_t h = 0; double t = -100; int path = 0; };
     static constexpr int kSeen = 16;
     Seen seen1200_[kSeen];

@@ -65,6 +65,8 @@ struct Frame {
     int repaired = 0;             ///< 0 = clean; 1 = one channel bit was flipped to pass the FCS
     float quality = 0;            ///< the mean |soft| over the frame (0…~1): how clean the eye was
     float flipConf = 0;           ///< a repaired frame: the |soft| of the level flipped, relative to the frame's mean
+    int weak = 0;                 ///< ★ 2026-11-24 levels under kWeak × the mean |soft| (how many bits the frame was unsure of)
+    static constexpr float kWeak = 0.3f;
 };
 
 struct DeframerOptions {
@@ -74,6 +76,9 @@ struct DeframerOptions {
      *  `validateClean`. Empty = accept. */
     std::function<bool(const std::vector<uint8_t>&)> validate;
     bool validateClean = false;
+    /** ★ 2026-11-24: a level is only flipped if its |soft| is under this × the frame's mean (0 = any of the weakest).
+     *  A level as sure as half the average was not the error; flipping it is how a wrong frame passes the FCS. */
+    float repairConf = 0;
     int pairDist = 1;                      ///< data bit = (level k == level k−pairDist): 1 = NRZI levels, 2 = coherent MSK
 };
 
@@ -136,6 +141,7 @@ private:
         float q = 0; for (size_t i = 0; i < n; ++i) q += lv_[i];
         q /= float(n);
         Frame f;
+        for (size_t i = 0; i < n; ++i) if (lv_[i] < Frame::kWeak * q) ++f.weak;
         if (unstuff_(bits_.data(), n, tmp_) && tmp_.size() >= o_.minBytes && tmp_.size() <= o_.maxBytes && fcsOk(tmp_.data(), tmp_.size())) {
             f.bytes.assign(tmp_.begin(), tmp_.end() - 2);
             if (o_.validateClean && o_.validate && !o_.validate(f.bytes)) return;
@@ -154,6 +160,7 @@ private:
         std::partial_sort(idx_.begin(), idx_.begin() + long(k), idx_.end(), [this](uint32_t a, uint32_t b) { return lv_[a] < lv_[b]; });
         for (size_t t = 0; t < k; ++t) {
             const size_t i = idx_[t];
+            if (o_.repairConf > 0 && lv_[i] > o_.repairConf * q) break;   // sorted: the rest are surer still
             bits_[i] ^= 1; bits_[i + D] ^= 1;
             const bool good = unstuff_(bits_.data(), n, tmp_) && tmp_.size() >= o_.minBytes && tmp_.size() <= o_.maxBytes && fcsOk(tmp_.data(), tmp_.size());
             bits_[i] ^= 1; bits_[i + D] ^= 1;
@@ -165,6 +172,7 @@ private:
             return;
         }
     }
+
 
     Options o_;
     std::vector<uint8_t> bits_, tmp_;

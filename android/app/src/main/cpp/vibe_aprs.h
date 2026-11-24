@@ -143,17 +143,84 @@ inline std::string tnc2(const Ax25& f) {
 //  THE DEMODULATOR
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 struct Frame { std::vector<uint8_t> bytes; int repaired = 0; float quality = 0; int slicer = 0;
+               float votes = 0;   ///< ★ 2026-11-24 how many slicers / paths heard exactly these bytes (resolveCandidates)
+               int weak = 0; float flipConf = 0;   ///< ★ from the deframer (vibehdlc::Frame): unsure levels, the flipped one's |soft|
+               bool repVoted = false;   ///< …a repair of one demodulator's has voted already (offerCandidate)
                int fec = 0; int fixed = 0; bool crc = false; };   ///< ★ V12: fec = vibepkt::Fec (AX.25 / FX.25 / IL2P)
 
 inline bool aprsFrameOk(const std::vector<uint8_t>& b) { Ax25 f; return parseAx25(b, f); }
+
+inline uint32_t frameHash(const std::vector<uint8_t>& b) { uint32_t h = 2166136261u; for (uint8_t c : b) h = (h ^ c) * 16777619u; return h; }
+/** ★ Rank of a copy: a clean AX.25 copy first, then a repaired one, then an FEC copy (fewest fixes first). */
+inline int frameRank(const Frame& f) { return f.fec ? 2 : f.repaired ? 1 : 0; }
+inline bool frameBetter(const Frame& a, const Frame& b) {
+    return frameRank(a) < frameRank(b) || (frameRank(a) == frameRank(b) && (a.fixed < b.fixed || (a.fixed == b.fixed && a.quality > b.quality)));
+}
+/** ★ A SURE repair counts as a clean copy: the level flipped was weak (≤ 0.3 of the mean) and the frame had at most two
+ *  weak levels in all. The wrong repairs found come from frames with TWO errors, where the flip makes a third weak level
+ *  the FCS cannot see past — three weak levels at least, so they are never "sure". */
+inline bool sureRepair(const Frame& f) { return f.repaired == 1 && f.weak <= 2 && f.flipConf <= 0.3f; }
+/** One copy into a list of candidates heard together: the same bytes again add their votes and keep the better copy's
+ *  details. A copy with no votes yet counts as one, a repaired one as 0.7 (it needed help). `onePath`: the copies come
+ *  from ONE demodulator's slicers, whose repairs are not independent (neighbouring balances see the same bits and flip
+ *  the same weakest level) — there, repairs of the same bytes count once, however many slicers made them. */
+inline void offerCandidate(std::vector<Frame>& c, Frame f, bool onePath = false) {
+    if (f.votes <= 0) f.votes = !f.repaired ? 1.f : sureRepair(f) ? 1.f : 0.7f;
+    for (Frame& x : c) if (x.bytes == f.bytes) {
+        float add = f.votes;
+        if (onePath && f.repaired) { add = x.repVoted ? 0.f : f.votes; x.repVoted = true; }
+        const float v = x.votes + add;
+        const bool rv = x.repVoted;
+        if (frameBetter(f, x)) x = f;
+        x.votes = v; x.repVoted = rv;
+        return;
+    }
+    f.repVoted = onePath && f.repaired;
+    c.push_back(f);
+}
+/* ★★★ 2026-11-24 COPIES THAT DISAGREE (docs/v12/APRS-WEAK.md). Every slicer, filter and path decodes the same transmission,
+ *  so several copies of one packet arrive together. Now and then one of them passes the FCS ON THE WRONG BITS — 16 bits
+ *  of FCS against many slicers' tries: test-aprs-onair --curve found two such frames in 100 packets at 9 dB with the
+ *  shipping decoder ("WIDE28-1 … 854.Y8W", once clean and once repaired, from the slicers either side of the right ones)
+ *  — and it arrives BESIDE the right copy, a few bytes different. Two candidates of the same length that differ in ≤ 8
+ *  bytes are one transmission, and the copies VOTE: the variant most slicers / paths heard wins if it has at least
+ *  1.5 × the votes of any other; otherwise nothing of that transmission is trusted. Returns how many were dropped. */
+inline int resolveCandidates(std::vector<Frame>& c) {
+    const size_t n = c.size();
+    if (n < 2) return 0;
+    std::vector<int> grp(n); for (size_t i = 0; i < n; ++i) grp[i] = int(i);
+    auto root = [&](int i) { while (grp[size_t(i)] != i) i = grp[size_t(i)] = grp[size_t(grp[size_t(i)])]; return i; };
+    for (size_t i = 0; i < n; ++i) for (size_t j = i + 1; j < n; ++j) {
+        if (c[i].bytes.size() != c[j].bytes.size()) continue;
+        int d = 0; for (size_t k = 0; k < c[i].bytes.size() && d <= 8; ++k) d += c[i].bytes[k] != c[j].bytes[k];
+        if (d <= 8) grp[size_t(root(int(i)))] = root(int(j));
+    }
+    std::vector<Frame> keep; int dropped = 0;
+    std::vector<char> done(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        const int r = root(int(i));
+        if (done[size_t(r)]) continue;
+        done[size_t(r)] = 1;
+        int best = -1, members = 0; float second = 0;
+        for (size_t j = 0; j < n; ++j) if (root(int(j)) == r) {
+            ++members;
+            if (best < 0 || c[j].votes > c[size_t(best)].votes) { if (best >= 0) second = std::max(second, c[size_t(best)].votes); best = int(j); }
+            else second = std::max(second, c[j].votes);
+        }
+        if (members > 1 && c[size_t(best)].votes < 1.5f * second) { dropped += members; continue; }
+        keep.push_back(c[size_t(best)]); dropped += members - 1;
+    }
+    c.swap(keep);
+    return dropped;
+}
 
 class AfskDemod {
 public:
     /** `fsIn` the audio rate (48000 from the decoder host); `baud` 1200 (Bell 202) or 300 (HF). `single`: one slicer
      *  only (balanced, on tune) — the baseline test-aprs measures the extra slicers against. */
     /** ★ V12 `fx25` / `il2p`: also run those receivers on every slicer's bits (docs/v12/AX25-9600-FX25-IL2P.md). */
-    AfskDemod(double fsIn, int baud, bool single = false, bool fx25 = false, bool il2p = false) : baud_(baud) {
-        decim_ = std::max(1, int(std::lround(fsIn / 12000.0)));
+    AfskDemod(double fsIn, int baud, bool single = false, bool fx25 = false, bool il2p = false, bool tones = false) : baud_(baud) {
+        decim_ = tones ? 1 : std::max(1, int(std::lround(fsIn / 12000.0)));
         fs_ = fsIn / decim_;
         const double hi = baud == 300 ? 2400 : 2900;
         lp_ = vibedsp::designLowpass(hi / fsIn, 1200 / fsIn);
@@ -170,16 +237,26 @@ public:
             p.m.init(mark + o, fs_, L_); p.s.init(space + o, fs_, L_);
             pairs_.push_back(std::move(p));
         }
+        /* ★★ 2026-11-24 ONE-TONE SLICERS (docs/v12/APRS-WEAK.md): with the tones 9–12 dB or more apart (a pre-emphasised
+         *  TX through a flat receiver plus a radio's own response; a de-emphasised one the other way) the weak tone is
+         *  near the hiss, but the strong one still switches cleanly ON and OFF. Two more slicers read ONE tone each as
+         *  on/off keying against half its own peak (mark − ½, ½ − space). Not for the tone bank (its levels are not
+         *  peak-normalised) and not 300 Bd (five tunings × slicers already). */
+        struct SlSpec { float a, g, c; };
+        std::vector<SlSpec> specs;
+        for (float g : gains) specs.push_back({ 1.f, g, 0.f });
+        if (!single && !tones && baud != 300) { specs.push_back({ 1.f, 0.f, 0.5f }); specs.push_back({ 0.f, 1.f, -0.5f }); }
         for (size_t pi = 0; pi < pairs_.size(); ++pi)
-            for (float g : gains) {
+            for (const SlSpec& sp : specs) {
                 Slicer s;
-                s.pair = int(pi); s.gain = g;
+                s.pair = int(pi); s.gain = sp.g; s.a = sp.a; s.c = sp.c;
                 s.clk.reset(new vibehdlc::BitClock(fs_, baud, 0));
                 vibehdlc::Deframer::Options o;
                 o.minBytes = 18; o.maxBytes = 340;
                 // ★ V12: a REPAIRED frame must still be APRS (the old rule, three-in-a-million); a CLEAN one need only be
                 //   any well-formed AX.25 frame (offer_ checks) — cubesat telemetry and other traffic reach the frame log.
-                o.repairMax = 8; o.validate = aprsFrameOk; o.validateClean = false;
+                o.repairMax = 8; o.repairConf = 0.5f;
+ o.validate = aprsFrameOk; o.validateClean = false;
                 s.df.reset(new vibehdlc::Deframer(o));
                 if (fx25) s.fx.reset(new vibefx25::Rx());
                 if (il2p) s.il.reset(new vibeil2p::Rx());
@@ -202,6 +279,15 @@ public:
             sample_(y, out);
         }
     }
+    /** ★ 2026-11-24 TONE LEVELS IN (docs/v12/APRS-WEAK.md): the mark and space levels already measured elsewhere (the IQ
+     *  receiver's FM tone bank, FmToneBank) at this demodulator's own rate — `fsIn` of a demodulator built with `tones`.
+     *  Everything after the correlators is the same: per-tone peaks, the slicers, PLLs, deframers, FX.25 / IL2P. */
+    template <class Out> void feedTones(const float* m, const float* s, int n, Out&& out) {
+        // ★ RAW levels — no per-tone peak normalisation. The bank's two levels are already on one scale (an FM carrier
+        //   has a constant envelope: the matched tone gives the same |sum| whichever it is), and a peak tracker's noise
+        //   peaks cost 1.4 dB (test-aprs-onair --curve: 50 % point 5.06 → 3.63 dB CNR).
+        for (int i = 0; i < n; ++i) { pairs_[0].mN = m[i]; pairs_[0].sN = s[i]; slice_(out); }
+    }
     uint64_t repaired() const { uint64_t r = 0; for (auto& s : sl_) r += s.df->framesRepaired(); return r; }
     uint64_t fecDupes() const { return fecDupes_; }
 
@@ -223,27 +309,84 @@ private:
             return float(std::abs(acc));
         }
     };
-    struct Pair { Tone m, s; float mN = 0, sN = 0; };
-    struct Slicer { int pair = 0; float gain = 1; std::unique_ptr<vibehdlc::BitClock> clk; std::unique_ptr<vibehdlc::Deframer> df;
+    /* ★★★ 2026-11-24 THE TWO TONES SEPARATED (docs/v12/APRS-WEAK.md; Stuart's XCover + HF+ recording: 2200 Hz 13–14 dB
+     *  under 1200 Hz in some packets, 7.5 dB over it in others — 0 decoded). Over one bit, 1200 and 2200 Hz are NOT
+     *  orthogonal (1000 Hz apart, the window's bins are 1200 Hz): a 1200 Hz bit leaks about −14 dB into the 2200 Hz
+     *  correlator. With 2200 Hz 14 dB down, the leak IS the space tone's level — every bit looks like space, whatever the
+     *  slicer's balance. So the two tones are FITTED TOGETHER: the window is least-squares fitted by both tones (cos and
+     *  sin of each — four basis functions; their 4 × 4 Gram matrix kept as running sums of the tones' products, exact for
+     *  any rate and tuning offset) and each tone's level is its own fitted amplitude, the other tone's leak removed. A pure
+     *  1200 Hz bit then gives a 2200 Hz level of ~0 however loud it is. */
+    struct Gram {
+        std::vector<std::complex<float>> ring;   // per sample: um², us², um·us, um·conj(us)
+        std::complex<double> a2m{0, 0}, a2s{0, 0}, ap{0, 0}, ad{0, 0};
+        int rp = 0, renorm = 0;
+    };
+    struct Pair { Tone m, s; float mN = 0, sN = 0; Gram g; };
+    /** One sample through a pair: the tones' correlators, then the least-squares amplitudes of both. */
+    void pairStep_(Pair& p, float y, float& lm, float& ls) {
+        const std::complex<float> um(p.m.ph), us(p.s.ph);   // e^{−jωn} at this sample (before the correlators advance)
+        p.m.step(y); p.s.step(y);
+        if (!sep_) { lm = float(std::abs(p.m.acc)); ls = float(std::abs(p.s.acc)); return; }
+        Gram& g = p.g;
+        const int L = int(p.m.ring.size());
+        if (g.ring.empty()) g.ring.assign(size_t(L) * 4, { 0, 0 });
+        const std::complex<float> v[4] = { um * um, us * us, um * us, um * std::conj(us) };
+        std::complex<float>* r = &g.ring[size_t(g.rp) * 4];
+        g.a2m += std::complex<double>(v[0]) - std::complex<double>(r[0]); g.a2s += std::complex<double>(v[1]) - std::complex<double>(r[1]);
+        g.ap += std::complex<double>(v[2]) - std::complex<double>(r[2]); g.ad += std::complex<double>(v[3]) - std::complex<double>(r[3]);
+        for (int k = 0; k < 4; ++k) r[k] = v[k];
+        g.rp = (g.rp + 1) % L;
+        if (++g.renorm >= 1024) {
+            g.renorm = 0; g.a2m = g.a2s = g.ap = g.ad = 0;
+            for (int i = 0; i < L; ++i) { const std::complex<float>* q = &g.ring[size_t(i) * 4]; g.a2m += std::complex<double>(q[0]); g.a2s += std::complex<double>(q[1]); g.ap += std::complex<double>(q[2]); g.ad += std::complex<double>(q[3]); }
+        }
+        // basis: cos ωm n = Re um, sin ωm n = −Im um (and the same for s); Σ over the window via the sums above
+        const double h = 0.5 * L, ridge = 1e-3 * L;
+        double G[4][4];
+        G[0][0] = h + 0.5 * g.a2m.real() + ridge; G[1][1] = h - 0.5 * g.a2m.real() + ridge; G[0][1] = -0.5 * g.a2m.imag();
+        G[2][2] = h + 0.5 * g.a2s.real() + ridge; G[3][3] = h - 0.5 * g.a2s.real() + ridge; G[2][3] = -0.5 * g.a2s.imag();
+        G[0][2] = 0.5 * (g.ad.real() + g.ap.real());   // cos·cos
+        G[1][3] = 0.5 * (g.ad.real() - g.ap.real());   // sin·sin
+        G[0][3] = 0.5 * (g.ad.imag() - g.ap.imag());   // cos_m·sin_s
+        G[1][2] = -0.5 * (g.ap.imag() + g.ad.imag());  // sin_m·cos_s
+        for (int i = 0; i < 4; ++i) for (int j = 0; j < i; ++j) G[i][j] = G[j][i];
+        double b[4] = { p.m.acc.real(), -p.m.acc.imag(), p.s.acc.real(), -p.s.acc.imag() };
+        // Cholesky solve (G is symmetric positive definite: four independent functions over a bit, plus the ridge)
+        double Lc[4][4] = {};
+        for (int i = 0; i < 4; ++i) for (int j = 0; j <= i; ++j) {
+            double sum = G[i][j];
+            for (int k = 0; k < j; ++k) sum -= Lc[i][k] * Lc[j][k];
+            if (i == j) Lc[i][i] = std::sqrt(std::max(sum, 1e-12)); else Lc[i][j] = sum / Lc[j][j];
+        }
+        double z[4], c[4];
+        for (int i = 0; i < 4; ++i) { double sum = b[i]; for (int k = 0; k < i; ++k) sum -= Lc[i][k] * z[k]; z[i] = sum / Lc[i][i]; }
+        for (int i = 3; i >= 0; --i) { double sum = z[i]; for (int k = i + 1; k < 4; ++k) sum -= Lc[k][i] * c[k]; c[i] = sum / Lc[i][i]; }
+        lm = float(std::sqrt(c[0] * c[0] + c[1] * c[1]) * h); ls = float(std::sqrt(c[2] * c[2] + c[3] * c[3]) * h);
+    }
+    struct Slicer { int pair = 0; float gain = 1, a = 1, c = 0; std::unique_ptr<vibehdlc::BitClock> clk; std::unique_ptr<vibehdlc::Deframer> df;
                     std::unique_ptr<vibefx25::Rx> fx; std::unique_ptr<vibeil2p::Rx> il; int prev = 0; };
 
+    void level_(Pair& p, float m, float s) {
+        // ★ each tone's own level: a fast-rising, slowly-falling peak — the tilt of pre-/de-emphasis divided out
+        p.m.peak += (m > p.m.peak ? 0.3f : peakA_) * (m - p.m.peak);
+        p.s.peak += (s > p.s.peak ? 0.3f : peakA_) * (s - p.s.peak);
+        p.mN = m / std::max(p.m.peak, 1e-9f); p.sN = s / std::max(p.s.peak, 1e-9f);
+    }
     template <class Out> void sample_(float y, Out& out) {
-        for (auto& p : pairs_) {
-            const float m = p.m.step(y), s = p.s.step(y);
-            // ★ each tone's own level: a fast-rising, slowly-falling peak — the tilt of pre-/de-emphasis divided out
-            p.m.peak += (m > p.m.peak ? 0.3f : peakA_) * (m - p.m.peak);
-            p.s.peak += (s > p.s.peak ? 0.3f : peakA_) * (s - p.s.peak);
-            p.mN = m / std::max(p.m.peak, 1e-9f); p.sN = s / std::max(p.s.peak, 1e-9f);
-        }
+        for (auto& p : pairs_) { float m, sp; pairStep_(p, y, m, sp); level_(p, m, sp); }
+        slice_(out);
+    }
+    template <class Out> void slice_(Out& out) {
         for (size_t k = 0; k < sl_.size(); ++k) {
             Slicer& s = sl_[k];
             const Pair& p = pairs_[size_t(s.pair)];
-            const float d = p.mN - s.gain * p.sN;
+            const float d = s.a * p.mN - s.gain * p.sN - s.c;
             const bool busy = s.df->inFrame() || (s.fx && s.fx->busy()) || (s.il && s.il->busy());
             s.clk->push(d, busy ? 0.75f : 0.45f, [&](float lvl) {
                 s.df->push(lvl, [&](const vibehdlc::Frame& fr) {
                     if (!fr.repaired && !ax25FrameOk(fr.bytes)) return;
-                    Frame f; f.bytes = fr.bytes; f.repaired = fr.repaired; f.quality = fr.quality;
+                    Frame f; f.bytes = fr.bytes; f.repaired = fr.repaired; f.quality = fr.quality; f.weak = fr.weak; f.flipConf = fr.flipConf;
                     offer_(f, int(k), out);
                 });
                 const int raw = lvl >= 0 ? 1 : 0;   // mark (1200 Hz) = 1, as IL2P's AFSK symbol map says
@@ -261,31 +404,36 @@ private:
             });
         }
         ++t_;
-        if (hasPend_ && t_ >= pendDue_) flush_(out);
+        if (!pend_.empty() && t_ >= pendDue_) flush_(out);
     }
-    /** ★ Rank of a copy: a clean AX.25 copy first, then a repaired one, then an FEC copy (fewest fixes first). */
-    static int rank_(const Frame& f) { return f.fec ? 2 : f.repaired ? 1 : 0; }
     template <class Out> void offer_(const Frame& fr, int slicer, Out& out) {
-        uint32_t h = 2166136261u;
-        for (uint8_t c : fr.bytes) h = (h ^ c) * 16777619u;
+        const uint32_t h = frameHash(fr.bytes);
         // ★ FX.25's check bytes arrive after the frame's own end flag, so its copy of a frame a slicer already passed
         //   lands here; 1.5 s covers the longest code block at 1200 Bd (255 bytes ≈ 1.7 s at 300 Bd is HF, no FX.25).
         for (auto& r : recent_) if (r.h == h && t_ - r.t < uint64_t(fs_ * (baud_ >= 1200 ? 2.0 : 0.5))) { if (fr.fec) ++fecDupes_; return; }
-        if (hasPend_ && pendH_ == h) {
-            if (rank_(fr) < rank_(pend_) || (rank_(fr) == rank_(pend_) && (fr.fixed < pend_.fixed || (fr.fixed == pend_.fixed && fr.quality > pend_.quality))))
-                { pend_ = fr; pend_.slicer = slicer; }
-            return;
-        }
-        if (hasPend_) flush_(out);
-        pend_ = fr; pend_.slicer = slicer;
-        pendH_ = h; hasPend_ = true; pendDue_ = t_ + uint64_t(fs_ / baud_ * 3) + 1;
+        Frame f = fr; f.slicer = slicer;
+        if (pend_.empty()) pendDue_ = t_ + uint64_t(fs_ / baud_ * 3) + 1;
+        offerCandidate(pend_, f, true);
     }
     template <class Out> void flush_(Out& out) {
-        hasPend_ = false;
-        recent_[rp_] = { pendH_, t_ }; rp_ = (rp_ + 1) % kRecent;
-        out(pend_);
+        std::vector<Frame> v; v.swap(pend_);
+        conflicts_ += resolveCandidates(v);
+        for (const Frame& f : v) {
+            if (f.votes < minVotes_) { ++lone_; continue; }
+            recent_[rp_] = { frameHash(f.bytes), t_ }; rp_ = (rp_ + 1) % kRecent; out(f);
+        }
     }
-
+public:
+    /** ★ 2026-11-24: frames dropped because copies of one transmission disagreed (resolveCandidates). */
+    uint64_t conflicts() const { return conflicts_; }
+    /** ★ 2026-11-24 THE LONE REPAIR RULE (docs/v12/APRS-WEAK.md): a frame goes out only with at least `v` votes — a clean
+     *  copy is 1, a repaired one 0.7, so a repair that no other slicer (or path) backs up is NOT trusted. One flipped level
+     *  turns a frame with TWO errors into a wrong frame that passes the FCS about once in 4 000 such frames (the 16-bit
+     *  FCS is a 15-bit check against level errors: its (1 + x) factor is spent on NRZI's paired bit errors), and the
+     *  curve found them. Run sets 0 on its own demodulators and applies the rule after every path has voted. */
+    void setMinVotes(float v) { minVotes_ = v; }
+    uint64_t loneRepairs() const { return lone_; }
+private:
     int baud_, decim_ = 4, dph_ = 0, L_ = 10;
     double fs_ = 12000;
     std::vector<float> lp_, hist_;
@@ -293,13 +441,145 @@ private:
     std::vector<Pair> pairs_;
     std::vector<Slicer> sl_;
     float peakA_ = 0.001f;
+    bool sep_ = true;   ///< the two tones fitted together (false = the plain correlators, for the before/after numbers)
     uint64_t t_ = 0;
-    Frame pend_; uint32_t pendH_ = 0; bool hasPend_ = false; uint64_t pendDue_ = 0;
-    uint64_t fecDupes_ = 0;
+    std::vector<Frame> pend_; uint64_t pendDue_ = 0;
+    uint64_t fecDupes_ = 0, conflicts_ = 0, lone_ = 0;
+    float minVotes_ = 1.f;
     struct Rec { uint32_t h = 0; uint64_t t = 0; };
     static constexpr int kRecent = 8;
     Rec recent_[kRecent];
     int rp_ = 0;
+};
+
+/* ★★★ 2026-11-24 THE FM TONE BANK — Bell 202 detected IN THE IQ, below the FM threshold (docs/v12/APRS-WEAK.md).
+ *  A discriminator turns weak FM into clicks below ~9 dB carrier to noise and nothing after it can undo that. But an
+ *  AFSK-over-FM bit is a KNOWN WAVEFORM in the IQ: one bit of a tone f at deviation D is the carrier's phase swinging
+ *  β·sin(2πft + θ), β = D / f, for 1/1200 s. So correlate the IQ itself against exp(jβ·sin(2πft + θ)) over exactly one
+ *  bit, for each tone, a few β (the TX's deviation and tilt are unknown) and K tone phases θ (AFSK keeps its phase
+ *  across bits, so any θ can start a bit), and take the magnitude (non-coherent: the carrier's phase is unknown). The
+ *  largest magnitude per tone is that tone's level. It is the textbook matched filter for a known signal in white noise,
+ *  so it is not bounded by the FM threshold; Eb/N0 at 6 dB CNR in 12.5 kHz is ≈ 16 dB.
+ *  ★ Costs: per sample and hypothesis two complex multiply-adds (the new sample in, the one a bit ago out — running sums,
+ *    refreshed exactly every 1024 samples against float drift) and a |·|². Templates from a 256-step table per β. */
+/** ★ The tone bank's kernel: K hypotheses (a multiple of 4) of one β — each running sum takes the new sample times its
+ *  template and gives back the sample a bit ago times its own; returns the largest |sum|². SoA rows: the K templates at
+ *  one table step lie side by side, so NEON / SSE2 take four hypotheses an instruction. Scalar is the reference. */
+inline float toneBankRow(float* aRe, float* aIm, const float* nRe, const float* nIm, const float* oRe, const float* oIm, int K,
+                         float zr, float zi, float wr, float wi) {
+#if VIBE_NEON
+    const float32x4_t vzr = vdupq_n_f32(zr), vzi = vdupq_n_f32(zi), vwr = vdupq_n_f32(wr), vwi = vdupq_n_f32(wi);
+    float32x4_t mx = vdupq_n_f32(0.f);
+    for (int k = 0; k < K; k += 4) {
+        const float32x4_t nr = vld1q_f32(nRe + k), ni = vld1q_f32(nIm + k), or_ = vld1q_f32(oRe + k), oi = vld1q_f32(oIm + k);
+        float32x4_t ar = vld1q_f32(aRe + k), ai = vld1q_f32(aIm + k);
+        ar = vaddq_f32(ar, vsubq_f32(vmulq_f32(vzr, nr), vmulq_f32(vzi, ni)));
+        ar = vsubq_f32(ar, vsubq_f32(vmulq_f32(vwr, or_), vmulq_f32(vwi, oi)));
+        ai = vaddq_f32(ai, vaddq_f32(vmulq_f32(vzr, ni), vmulq_f32(vzi, nr)));
+        ai = vsubq_f32(ai, vaddq_f32(vmulq_f32(vwr, oi), vmulq_f32(vwi, or_)));
+        vst1q_f32(aRe + k, ar); vst1q_f32(aIm + k, ai);
+        mx = vmaxq_f32(mx, vaddq_f32(vmulq_f32(ar, ar), vmulq_f32(ai, ai)));
+    }
+    float m4[4]; vst1q_f32(m4, mx);
+    return std::max(std::max(m4[0], m4[1]), std::max(m4[2], m4[3]));
+#elif VIBE_SSE
+    const __m128 vzr = _mm_set1_ps(zr), vzi = _mm_set1_ps(zi), vwr = _mm_set1_ps(wr), vwi = _mm_set1_ps(wi);
+    __m128 mx = _mm_setzero_ps();
+    for (int k = 0; k < K; k += 4) {
+        const __m128 nr = _mm_loadu_ps(nRe + k), ni = _mm_loadu_ps(nIm + k), or_ = _mm_loadu_ps(oRe + k), oi = _mm_loadu_ps(oIm + k);
+        __m128 ar = _mm_loadu_ps(aRe + k), ai = _mm_loadu_ps(aIm + k);
+        ar = _mm_add_ps(ar, _mm_sub_ps(_mm_mul_ps(vzr, nr), _mm_mul_ps(vzi, ni)));
+        ar = _mm_sub_ps(ar, _mm_sub_ps(_mm_mul_ps(vwr, or_), _mm_mul_ps(vwi, oi)));
+        ai = _mm_add_ps(ai, _mm_add_ps(_mm_mul_ps(vzr, ni), _mm_mul_ps(vzi, nr)));
+        ai = _mm_sub_ps(ai, _mm_add_ps(_mm_mul_ps(vwr, oi), _mm_mul_ps(vwi, or_)));
+        _mm_storeu_ps(aRe + k, ar); _mm_storeu_ps(aIm + k, ai);
+        mx = _mm_max_ps(mx, _mm_add_ps(_mm_mul_ps(ar, ar), _mm_mul_ps(ai, ai)));
+    }
+    float m4[4]; _mm_storeu_ps(m4, mx);
+    return std::max(std::max(m4[0], m4[1]), std::max(m4[2], m4[3]));
+#else
+    float mx = 0;
+    for (int k = 0; k < K; ++k) {
+        aRe[k] += (zr * nRe[k] - zi * nIm[k]) - (wr * oRe[k] - wi * oIm[k]);
+        aIm[k] += (zr * nIm[k] + zi * nRe[k]) - (wr * oIm[k] + wi * oRe[k]);
+        mx = std::max(mx, aRe[k] * aRe[k] + aIm[k] * aIm[k]);
+    }
+    return mx;
+#endif
+}
+
+class FmToneBank {
+public:
+    /** `fs` the IQ rate here; `betaM` / `betaS` the modulation indices tried for mark (1200 Hz) and space (2200 Hz);
+     *  `phases` the tone phases tried (rounded up to a multiple of 4 — the SIMD width). */
+    FmToneBank(double fs, int baud, const std::vector<float>& betaM, const std::vector<float>& betaS, int phases = 12)
+        : K_((std::max(4, phases) + 3) / 4 * 4) {
+        L_ = std::max(4, int(std::lround(fs / baud)));
+        const double f[2] = { baud == 300 ? 1600.0 : 1200.0, baud == 300 ? 1800.0 : 2200.0 };
+        const std::vector<float>* bs[2] = { &betaM, &betaS };
+        for (int t = 0; t < 2; ++t) {
+            Tone& T = tone_[t];
+            T.inc = uint32_t(std::llround(f[t] / fs * 4294967296.0));
+            T.nb = int(bs[t]->size());
+            // row m, hypothesis k: exp(−jβ·sin(2π(m/kTab + k/K)))
+            T.re.assign(size_t(T.nb) * kTab * size_t(K_), 0.f); T.im.assign(T.re.size(), 0.f);
+            for (int b = 0; b < T.nb; ++b)
+                for (int m = 0; m < kTab; ++m)
+                    for (int k = 0; k < K_; ++k) {
+                        const double ph = -double((*bs[t])[size_t(b)]) * std::sin(2 * M_PI * (double(m) / kTab + double(k) / K_));
+                        const size_t i = (size_t(b) * kTab + size_t(m)) * size_t(K_) + size_t(k);
+                        T.re[i] = float(std::cos(ph)); T.im[i] = float(std::sin(ph));
+                    }
+            T.aRe.assign(size_t(T.nb) * size_t(K_), 0.f); T.aIm.assign(T.aRe.size(), 0.f);
+            T.ph.assign(size_t(L_), 0);
+        }
+        zr_.assign(size_t(L_), { 0, 0 });
+    }
+    int length() const { return L_; }
+    /** One IQ sample → the mark and space levels (the best hypothesis's |sum| of each). */
+    void step(std::complex<float> z, float& mark, float& space) {
+        const std::complex<float> zo = zr_[size_t(rp_)];
+        zr_[size_t(rp_)] = z;
+        float best[2];
+        for (int t = 0; t < 2; ++t) {
+            Tone& T = tone_[t];
+            const uint32_t po = T.ph[size_t(rp_)], pn = T.cur;
+            T.ph[size_t(rp_)] = pn; T.cur += T.inc;
+            const size_t rn = size_t(pn >> kShift) * size_t(K_), ro = size_t(po >> kShift) * size_t(K_);
+            float b = 0;
+            for (int bi = 0; bi < T.nb; ++bi) {
+                const size_t base = size_t(bi) * kTab * size_t(K_);
+                b = std::max(b, toneBankRow(&T.aRe[size_t(bi) * size_t(K_)], &T.aIm[size_t(bi) * size_t(K_)],
+                                            &T.re[base + rn], &T.im[base + rn], &T.re[base + ro], &T.im[base + ro], K_,
+                                            z.real(), z.imag(), zo.real(), zo.imag()));
+            }
+            best[t] = b;
+        }
+        rp_ = (rp_ + 1) % L_;
+        if (++n_ >= 1024) refresh_();
+        mark = std::sqrt(best[0]); space = std::sqrt(best[1]);
+    }
+private:
+    static constexpr int kTab = 256, kShift = 24;   // 256 template steps a cycle (≤ 0.06 rad of phase error at β 5)
+    struct Tone { uint32_t inc = 0, cur = 0; int nb = 0; std::vector<float> re, im, aRe, aIm; std::vector<uint32_t> ph; };
+    /** The running sums again from the ring, every 1024 samples (float sums drift). */
+    void refresh_() {
+        n_ = 0;
+        for (auto& T : tone_)
+            for (int bi = 0; bi < T.nb; ++bi)
+                for (int k = 0; k < K_; ++k) {
+                    double sr = 0, si = 0;
+                    for (int i = 0; i < L_; ++i) {
+                        const size_t j = (size_t(bi) * kTab + size_t(T.ph[size_t(i)] >> kShift)) * size_t(K_) + size_t(k);
+                        const std::complex<float> z = zr_[size_t(i)];
+                        sr += double(z.real() * T.re[j] - z.imag() * T.im[j]); si += double(z.real() * T.im[j] + z.imag() * T.re[j]);
+                    }
+                    T.aRe[size_t(bi) * size_t(K_) + size_t(k)] = float(sr); T.aIm[size_t(bi) * size_t(K_) + size_t(k)] = float(si);
+                }
+    }
+    int K_, L_ = 10, rp_ = 0, n_ = 0;
+    Tone tone_[2];
+    std::vector<std::complex<float>> zr_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
