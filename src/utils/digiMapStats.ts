@@ -167,8 +167,13 @@ function digiStatsHtml(st,o){
     sm=digiCell('LATEST',(l.country||l.call)+' · '+l.band,l.call+' · '+l.mode+(l.snr!=null&&isFinite(Number(l.snr))?' · '+l.snr+'dB':''))+
       (st.rarest?digiCell('RAREST COUNTRY',st.rarest[0]+' ('+st.rarest[1]+')',''):'')+
       (tot.spotsSent>0?digiCell('SPOTS',digiNum(tot.spotsSent),'from '+digiNum(st.n)+' transmitters · '+st.nCountries+' countries')
-                      :digiCell('TRANSMITTERS',digiNum(st.n),st.nCountries+' countries'));
-  }else sm=digiCell('WAITING','no spots yet','');
+                      :digiCell('TRANSMITTERS',digiNum(st.n),st.nCountries+' countries'))+
+      (ap.n?digiCell('APRS',digiNum(ap.n)+' station'+(ap.n===1?'':'s'),ap.newest?'newest '+ap.newest:''):'');
+  /* ★ beta93 (Stuart 11-24: an APRS station on the map and the card said "no spots yet") — APRS stations are not digital
+   *  spots, but they are not nothing: the card says so instead of WAITING. */
+  }else if(ap.n)sm=digiCell('APRS',digiNum(ap.n)+' station'+(ap.n===1?'':'s'),ap.newest?'newest '+ap.newest:'none with a position yet')+
+      digiCell('DIGITAL SPOTS','none yet','');
+  else sm=digiCell('WAITING','no spots yet','');
   return {stats:h,legend:lg,summary:sm};
 }
 `;

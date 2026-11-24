@@ -719,7 +719,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
         // UberSDR — Pause = disconnect, Play = reconnect (disconnect card + ▶).
         mainHandler.post {
-            if (m) {
+            if (m && recArmed) {
+                /* ★★ beta93 A RECORDING KEEPS THE STREAM (Stuart 11-24: APRS muted, the pause closed the audio WS and a
+                 *  90 s recording came out 5 s long): the speaker is silent (muted) and the recorder keeps writing. */
+                updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                updateNotification()
+            } else if (m) {
                 disconnectForPause()
             } else if (dataSaverDisconnected) {
                 resumeFromDataSaver()

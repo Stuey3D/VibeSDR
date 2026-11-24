@@ -69,6 +69,10 @@ ok(noRx.stats.includes('No receiver location published') && !noRx.stats.includes
    'no receiver: no distances, no bearing, and it says why');
 const empty = lib.digiStatsHtml(lib.digiStats([], me), {});
 ok(empty.summary.includes('WAITING') && empty.stats.includes('Nothing yet'), 'nothing heard: WAITING, "Nothing yet"');
+// ★ beta93 (Stuart 11-24): APRS on the map and no digital spots — the card names the APRS station, not WAITING
+const aprsOnly = lib.digiStatsHtml(lib.digiStats([], me), { aprs: { n: 1, on: true, far: null, leg: [], only: false, newest: 'M0UNC-9' } });
+ok(!aprsOnly.summary.includes('WAITING') && aprsOnly.summary.includes('1 station') && aprsOnly.summary.includes('M0UNC-9'),
+   'APRS only: "APRS · 1 station · newest M0UNC-9", not WAITING');
 const evil = lib.digiStatsHtml(lib.digiStats([it('<img src=x onerror=1>', '<b>X</b>', '20m', 'FT8', 10, 51, 0, 1)], me), {});
 ok(!/<img|<b>X/.test(evil.stats + evil.summary + evil.legend), 'off-air text is escaped wherever it lands');
 
