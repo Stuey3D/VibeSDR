@@ -29,6 +29,10 @@ import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanva
 import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
+import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky plot
+import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines,
+         type OrbView } from '../services/orbcomm';
+import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
@@ -105,6 +109,14 @@ export interface SatellitePanelProps {
   bPicture?: boolean;
   bImageRef?: React.MutableRefObject<DecoderImageHandle | null>;
   onVfoB?: (norad: number, tx: number) => void;
+  /** ★★ 2026-11-24 ORBCOMM (services/orbcomm.ts): the decoder's state and recent packets for this pick; the manual fallback
+   *  under AUTO — carriers at most (0 = AUTO) — and its press (the app re-attaches with "max_carriers"); the server's sky
+   *  plot read through `skyGet` (the gallery's reader) for THIS radio (`skyRadio`, '' = the server's only one). */
+  orbcomm?: OrbView | null;
+  orbMax?: number;
+  onOrbMax?: (k: number) => void;
+  skyGet?: ((path: string) => Promise<string | null>) | null;
+  skyRadio?: string;
 }
 
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg — the dotted orbit (1.7), the drawn bird, the green
@@ -273,6 +285,26 @@ export default function SatellitePanel(p: SatellitePanelProps) {
       .catch(() => { if (live) setTlmAcrossNote('LAST PASSES · the gallery could not be read'); });
     return () => { live = false; };
   }, [tlmCharts, galleryGet, tlmSat, p.picked?.norad]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ★★ 2026-11-24 ORBCOMM — the sky plot: this radio's stored dots, read on the pick, then the live ones as they come
+  const orbDec = p.picked?.decoder === 'orbcomm';
+  const [orbSky, setOrbSky] = useState(true);
+  const [skyDots, setSkyDots] = useState<SkyDot[]>([]);
+  const [skyNote, setSkyNote] = useState('');
+  const skyGet = p.skyGet;
+  useEffect(() => {
+    setSkyDots([]); setSkyNote('');
+    if (!orbDec) return;
+    if (!skyGet) { setSkyNote('This server has no sky plot to read'); return; }
+    let live = true;
+    skyGet(skyPlotQuery('orbcomm', p.skyRadio ?? '')).then((txt) => {
+      if (!live) return;
+      let d = null; try { d = txt ? parseSkyPlotJson(JSON.parse(txt)) : null; } catch { d = null; }
+      if (d) setSkyDots((prev) => skyPlotMerge(d!.dots, prev)); else setSkyNote('The stored sky plot could not be read — live dots only');
+    }).catch(() => { if (live) setSkyNote('The stored sky plot could not be read — live dots only'); });
+    return () => { live = false; };
+  }, [orbDec, p.picked?.norad, p.picked?.tx, skyGet, p.skyRadio]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const orbStatus = p.orbcomm?.status ?? null;
+  useEffect(() => { if (orbDec && orbStatus?.dots.length) setSkyDots((prev) => skyPlotMerge(prev, orbStatus.dots)); }, [orbStatus]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
   // ★★★ beta92 OPEN IN VFO B — B's line and the line switch; with no B this is exactly the one-downlink box
   const vb = p.vfob && p.vfob.on && confirmed && p.vfob.norad === p.picked?.norad ? p.vfob : null;
@@ -291,6 +323,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   useEffect(() => { if (p.bPicture && !showA && !sized.current) { setBigPick(true); setMinimised(false); } }, [p.bPicture]);   // eslint-disable-line react-hooks/exhaustive-deps
   const decWord = !confirmed ? 'Tuning…'
     : tlmDec && !p.decLine ? 'listening for telemetry'
+    // ★★ 2026-11-24 ORBCOMM says what it is decoding (its status), never the socket's "listening…"
+    : orbDec ? (orbStatus?.sats.length ? `decoding ${orbStatus.sats.length} ORBCOMM bird${orbStatus.sats.length === 1 ? '' : 's'}` : satDecWord('orbcomm', use, false, big))
     // ★★ beta91: LRPT's own line is the live state (it says a filed pass itself) — never a stale "picture complete"
     : p.pictureDone && imageDec && !(p.picked?.decoder === 'lrpt' && p.decLine) ? 'picture complete — saved to the gallery'
     // ★ beta92: a CW beacon says its CW decoder is listening for the beacon (it said "listening for packets") — satDecWord
@@ -402,7 +436,55 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>}
                 </View>
               )}
-              {confirmed && showA && use === 'packet' && !tlmDec && satDecView(p.picked?.decoder) !== 'text' && (
+              {/* ★★ 2026-11-24 ORBCOMM: the birds, their housekeeping, the carriers' manual fallback, the sky plot and the
+                   packets — subscriber messages as raw bytes only, said so */}
+              {confirmed && showA && orbDec && (
+                <View style={s.pk}>
+                  <View style={s.nameRow}>
+                    <Text style={[s.mono, { flexShrink: 1 }]}>{orbHeadText(orbStatus)}</Text>
+                    <View style={s.keys}>
+                      <DecoderKey label="SKY PLOT" active={orbSky} onPress={() => setOrbSky((v) => !v)}
+                                  accessibilityLabel="The sky plot: where this aerial hears the ORBCOMM satellites" />
+                    </View>
+                  </View>
+                  <Text style={[s.detailNp, s.caveat]}>{ORB_CAVEAT}</Text>
+                  {!!orbNoteText(orbStatus) && <Text style={s.detailNp}>{orbNoteText(orbStatus)}</Text>}
+                  {!!orbCountsText(orbStatus?.counts) && <Text style={s.detailNp}>{`Packets: ${orbCountsText(orbStatus?.counts)}`}</Text>}
+                  {(orbStatus?.sats ?? []).map((b) => (
+                    <View key={`${b.norad}.${b.carrier}`} style={s.orbBird}>
+                      {orbSatLines(b, p.orbcomm?.clockOff[b.norad]).map((l, i) => (
+                        <Text key={i} style={[s.mono, i === 0 && s.orbName]} selectable>{l}</Text>
+                      ))}
+                    </View>
+                  ))}
+                  {/* ★ the manual fallback under AUTO: how many carriers the decoder follows at most (AUTO = the server's 4) */}
+                  {!!p.onOrbMax && (
+                    <View style={s.leadRowNp}>
+                      <Text style={s.detailNp}>CARRIERS</Text>
+                      {ORB_CARRIER_CHOICES.map((k) => (
+                        <DecoderKey key={k} label={orbCarriersLabel(k)} active={(p.orbMax ?? 0) === k} onPress={() => p.onOrbMax!(k)}
+                                    accessibilityLabel={k ? `Follow at most ${k} ORBCOMM carrier${k === 1 ? '' : 's'}` : 'Carriers AUTO: the decoder follows up to four'} />
+                      ))}
+                    </View>
+                  )}
+                  {orbSky && (
+                    <View style={s.orbSky}>
+                      <SkyPlotView dots={skyDots} ink={tk.value} muted={tk.muted} font={F} maxW={big ? 360 : 260}
+                                   label="Sky plot: where this aerial hears the ORBCOMM satellites" />
+                      <Text style={[s.detailNp, s.center]}>{[skyPlotSummary(skyDots) || 'No dots yet — they appear as the birds are heard', skyNote].filter(Boolean).join(' · ')}</Text>
+                      {big && <Text style={[s.detailNp, s.center]}>{SKY_PLOT_WHAT}</Text>}
+                    </View>
+                  )}
+                  <Text style={[s.detailNp, s.orbHead]}>RECENT PACKETS</Text>
+                  {p.orbcomm?.pkts.length ? p.orbcomm.pkts.slice(0, 20).map((k, i) => (
+                    <View key={`${k.t}.${i}`}>
+                      <Text style={s.mono} numberOfLines={2}>{orbPktLine(k)}</Text>
+                      {k.raw && !!orbPktHex(k) && <Text style={[s.mono, s.hex]} selectable>{orbPktHex(k)}</Text>}
+                    </View>
+                  )) : <Text style={s.detailNp}>no packets yet</Text>}
+                </View>
+              )}
+              {confirmed && showA && use === 'packet' && !tlmDec && !orbDec && satDecView(p.picked?.decoder) !== 'text' && (
                 <View style={s.pk}>
                   {p.packets.length ? p.packets.slice(0, 12).map((l, i) => <Text key={i} style={s.mono} numberOfLines={2}>{l}</Text>)
                     : <Text style={s.detail}>no packets yet</Text>}
@@ -417,7 +499,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>
               )}
-              {(bView === 'text' || bView === 'telemetry') && (
+              {(bView === 'text' || bView === 'telemetry' || bView === 'orbcomm') && (
                 <View style={s.pk}><Text style={s.mono} selectable>{vb?.decoder === 'cwskim' ? satBeaconText(p.bBeacon) || SAT_BEACON_EMPTY
                   : satCwTail(p.bText ?? '', bView === 'telemetry' ? 6 : 4) || (bView === 'text' ? 'no characters yet' : 'no frames yet')}</Text></View>
               )}
@@ -516,6 +598,15 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   remKey:  { paddingRight: 6 },
   leadRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 },
   detailNp:{ fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted },
+  // ★★ 2026-11-24 ORBCOMM
+  caveat:  { color: T.value },
+  orbBird: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.divider, paddingTop: 4, marginTop: 2 },
+  orbName: { color: T.accent },
+  orbSky:  { marginVertical: 4, gap: 2 },
+  orbHead: { letterSpacing: 1, marginTop: 4 },
+  hex:     { color: T.muted, paddingLeft: 10 },
+  center:  { textAlign: 'center' },
+  leadRowNp:{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingVertical: 4 },
   key:     { textAlign: 'center', marginTop: 2 },
   tlmGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
   keys:    { flexDirection: 'row', gap: 6 },
