@@ -2243,6 +2243,16 @@ else
   echo '   not run — needs VIBESERVER_BIN (and test-vor / test-sarsat built above)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md): the real server on a fake rtl_tcp synthesising two VORs at their own
+#     frequencies (--vor: HON 113.65 in window 3, DTY 116.40 in window 5) at 2.4 MS/s — a radio held off VHF offers none;
+#     the capability (5 windows); entering, the sweep stepping window by window, both found in their own windows with their
+#     radials, idents and stations; a tune ignored; 1 fps; leaving gives the receiver back exactly; ask before tuning refuses a
+#     second listener; the only mode lands a listener and refuses their "off" (test-server-vormap). ~3 min. NOT RUN without
+#     VIBESERVER_BIN.
+printf '\n\033[1m── VOR / ILS map (end to end: the server) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vormap.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ V12 DV ID — DMR, D-STAR, YSF, NXDN, dPMR signalling, never voice (docs/v12/DV-SIGNALLING.md): the real server on a fake
 #     rtl_tcp replaying test-dvsig's synthetic clip (our own transmitter for each system in turn): on 70 cm the identities copy
 #     (DMR source, TG, alias and GPS; YSF and D-STAR callsigns; NXDN and dPMR IDs), status and pins, NFM after; on PMR446 the

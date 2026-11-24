@@ -2506,7 +2506,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
-  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_fctlm", "FUNcube telemetry"], ["dec_ale", "ALE"], ["dec_vor", "VOR / ILS"], ["dec_sarsat", "406 MHz beacons"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
+  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_fctlm", "FUNcube telemetry"], ["dec_ale", "ALE"], ["dec_vor", "VOR / ILS"], ["dec_vormap", "VOR / ILS map"], ["dec_sarsat", "406 MHz beacons"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"], ["dec_dvsig", "DMR / D-STAR / YSF signalling"],
@@ -3738,6 +3738,11 @@ const BLOCKABLE = [
   /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
    *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
   { id: "vor", label: "VOR bearing and ILS deviation" },
+  /* ★★ V12 the VOR / ILS MAP (docs/v12/VOR-MAP.md) — a whole-radio mode treated as NDB is: the receiver sweeps 108–118 MHz
+   *  window by window, every channel decoded at once, the stations heard on a map with their radials and the fix where
+   *  they cross. Offered only where the radio tunes 108–118 MHz (not an HF+, not an Icom); the benchmark's dec_vormap row
+   *  sets this switch's default, never hides it. */
+  { id: "vormap", label: "VOR / ILS map (the whole navaid band, swept)" },
   /* ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): 406 MHz distress beacons (mostly tests). Listeners see that a beacon was
    *  heard; its identity and encoded position go to you only. Real alerts are handled by the authorities, not by us. */
   { id: "sarsat", label: "406 MHz distress beacons (COSPAS-SARSAT)" },
@@ -4221,7 +4226,7 @@ function modeBlockRender() {
 /** ★★ V12 DAB ONLY — the server's rule (local_sdr_shim.cpp dabOnlyNow): DAB on, and every demodulator and every whole-radio
  *  mode this radio offers off. */
 const DAB_ONLY_OTHERS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
-                         "drm", "freedv", "m17", "dvsig", "adsb", "ism", "ndb", "ais", "avdata", "sondes"];
+                         "drm", "freedv", "m17", "dvsig", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap"];
 function dabOnlyModes(off, tree) {
   const has = new Set(tree.map(m => m.id));
   return has.has("dab") && !off.has("dab") && DAB_ONLY_OTHERS.filter(id => has.has(id)).every(id => off.has(id));
@@ -4229,7 +4234,7 @@ function dabOnlyModes(off, tree) {
 /** ★★ V12 THE ONLY MODE, any whole-radio mode — the server's rule (local_sdr_shim.cpp onlyModeNow): the one whole-radio
  *  mode this radio offers that is on, with every demodulator and every other whole-radio mode off; "" when none. DAB is
  *  one case (dabOnlyModes, as before). */
-const ONLY_MODE_WHOLE = { dab: "DAB", adsb: "ADS-B", ism: "ISM", ndb: "NDB", ais: "AIS", avdata: "DATALINK", sondes: "SONDES" };
+const ONLY_MODE_WHOLE = { dab: "DAB", adsb: "ADS-B", ism: "ISM", ndb: "NDB", ais: "AIS", avdata: "DATALINK", sondes: "SONDES", vormap: "VOR MAP" };
 function onlyModeOf(off, tree) {
   if (dabOnlyModes(off, tree)) return "dab";
   const has = new Set(tree.map(m => m.id));

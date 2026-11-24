@@ -30,7 +30,7 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 const until = async (f, ms = 15000) => { for (let i = 0; i < ms / 100; i++) { if (f()) return true; await sleep(100); } return !!f(); };
 const ADMIN = 'onlymode-Test-Pass-9';
 const DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl', 'drm', 'freedv', 'm17', 'dvsig'];
-const WHOLE = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes'];
+const WHOLE = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes', 'vormap'];   // ★ V12 + the VOR / ILS map (its own only-mode run: test-server-vormap)
 /** The owner's ticks leaving only `mode`. */
 const onlyLeaves = (mode) => [...DEMODS, ...WHOLE.filter((m) => m !== mode)].join(',');
 

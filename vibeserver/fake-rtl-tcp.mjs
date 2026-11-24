@@ -51,6 +51,11 @@
 //               clip lands −(P − ppm)·f low AND is sampled (P − ppm) ppm fast (the null walks later each frame), where
 //               ppm is what the server last wrote (0x05) — rtlsdr_set_freq_correction corrects both, and so does this.
 //   --clock-drift PPM_PER_MIN  …and it warms: the error grows by this much a minute from the first connection.
+//   --vor MHz:IDENT:RADIAL[:AMP][,…]  VORs at absolute frequencies (V12 VOR / ILS map, 2026-11-24): each the carrier AM'd by the
+//               variable 30 Hz (30 %, its phase lagging by RADIAL), the 9960 Hz subcarrier FM'd ±480 Hz by the reference 30 Hz
+//               (30 %) and the Morse ident on 1020 Hz (10 %, 8 WPM, every 7 s) — heard wherever the dongle's capture holds it, so
+//               the VOR map's sweep finds each in its own window (scripts/test-server-vormap.mjs). AMP of full scale (0.25).
+//               One period of the modulation (1/30 s) is tabulated per rate: no trig per sample.
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -91,6 +96,25 @@ const FM_RDS = (() => {
     for (let k = 0; k < bits.length; k++) { m[k] = prev ^ bits[k]; prev = m[k]; }
     return { hz: Number(mhz) * 1e6, amp: amp ? Number(amp) : 0.3, m, ph: 0, pil: Math.random() * 6.28, aud: 0 };
   }).filter((x) => x.hz > 0);
+})();
+// ★ --vor (see the header)
+const VORS = (() => {
+  const i = process.argv.indexOf('--vor');
+  if (i < 0 || !process.argv[i + 1]) return [];
+  const MORSE = { A: '.-', B: '-...', C: '-.-.', D: '-..', E: '.', F: '..-.', G: '--.', H: '....', I: '..', J: '.---', K: '-.-', L: '.-..', M: '--',
+    N: '-.', O: '---', P: '.--.', Q: '--.-', R: '.-.', S: '...', T: '-', U: '..-', V: '...-', W: '.--', X: '-..-', Y: '-.--', Z: '--..' };
+  return process.argv[i + 1].split(',').map((t, k) => {
+    const [mhz, ident, brg, amp] = t.split(':');
+    const dot = Math.round(1200 / 8);   // ms at 8 WPM
+    const key = [];
+    [...(ident || '')].forEach((c, ci) => {
+      const m = MORSE[c] || '';
+      [...m].forEach((e, ei) => { for (let q = 0; q < (e === '-' ? 3 : 1) * dot; q++) key.push(1); if (ei < m.length - 1) for (let q = 0; q < dot; q++) key.push(0); });
+      if (ci < ident.length - 1) for (let q = 0; q < 3 * dot; q++) key.push(0);
+    });
+    return { hz: Number(mhz) * 1e6, ident, th: Number(brg || 0) * Math.PI / 180, amp: amp ? Number(amp) : 0.25, key, start: 700 + 900 * k,
+             n: 0, cr: 1, ci: 0, tabRate: 0, env: null, idt: null, on: false, P: 1, cw: 1, sw: 0 };
+  }).filter((v) => v.hz > 0);
 })();
 const STALL_AT = arg('stall-at', 0);
 const CLOCK_PPM = arg('clock-ppm', 0), CLOCK_DRIFT = arg('clock-drift', 0);   // ★ --clock-ppm / --clock-drift (see the header)
@@ -287,6 +311,21 @@ const srv = net.createServer((sock) => {
     //   pure tone is one grey, where an AM station's sidebands make a picture whose brightness rides on millihertz)
     const wcT = (2 * Math.PI * (CARRIER_HZ - centreHz)) / (rate || RATE), ccwT = Math.cos(wcT), cswT = Math.sin(wcT), caT = CARRIER_A / 127;
     const buf = Buffer.allocUnsafe(n * 2);
+    for (const v of VORS) {   // ★ --vor: the period table for this rate, the carrier's rotation for this tuning
+      const off = v.hz - centreHz;
+      v.on = Math.abs(off) < rate / 2 * 0.95;
+      if (!v.on) v.n += n;   // ★ off the capture: the station's own clock runs on
+      if (v.tabRate !== rate) {
+        v.tabRate = rate; v.P = Math.round(rate / 30); v.env = new Float32Array(v.P); v.idt = new Float32Array(v.P);
+        for (let q = 0; q < v.P; q++) {
+          const w = 2 * Math.PI * q / v.P;
+          v.env[q] = 0.30 * Math.cos(w - v.th) + 0.30 * Math.cos(332 * w + 16 * Math.sin(w));   // ★ 9960 = 332 × 30 Hz; β = 480 / 30
+          v.idt[q] = 0.10 * Math.cos(34 * w);                                                      // ★ 1020 = 34 × 30 Hz
+        }
+      }
+      v.cw = Math.cos(2 * Math.PI * off / rate); v.sw = Math.sin(2 * Math.PI * off / rate);
+      const m = 1.5 - 0.5 * (v.cr * v.cr + v.ci * v.ci); v.cr *= m; v.ci *= m;
+    }
     if (HF_IQ && HF_UTC && !hfAnchored) {
       hfAnchored = true;
       const secs = HF_IQ.length / 2 / rate;
@@ -443,6 +482,16 @@ const srv = net.createServer((sock) => {
           st.aud += 2 * Math.PI * 800 / rate; if (st.aud > 2 * Math.PI) st.aud -= 2 * Math.PI;
           re += st.amp * Math.cos(st.ph); im += st.amp * Math.sin(st.ph);
         }
+      }
+      for (const v of VORS) {
+        if (!v.on) continue;
+        const k = v.n % v.P;
+        const tms = Math.floor(v.n * 1000 / rate) % 7000 - v.start;
+        const m = v.env[k] + (tms >= 0 && tms < v.key.length && v.key[tms] ? v.idt[k] : 0);
+        const a = v.amp * Math.max(0, 1 + m);
+        re += a * v.cr; im += a * v.ci;
+        const r2 = v.cr * v.cw - v.ci * v.sw; v.ci = v.cr * v.sw + v.ci * v.cw; v.cr = r2;
+        v.n++;
       }
       buf[i * 2]     = Math.max(0, Math.min(255, Math.round(127.5 + re * 127)));
       buf[i * 2 + 1] = Math.max(0, Math.min(255, Math.round(127.5 + im * 127)));

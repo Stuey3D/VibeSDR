@@ -23,8 +23,8 @@
 //     worker threads (vibe_avi_workers.h — up to 4, decoder priority), each running nav::NavRx on its channels (the hot loops
 //     NEON / SSE2 with scalar twins, nav_rx.h). A channel's state is touched only by its worker; a beacon's record is
 //     written under one lock, once a second at most.
-// ★★ MEMORY IS BOUNDED (the 256–512 MB boxes): the queue (¼ s of capture: 2.4 MB at 2.4 MS/s), the workers' rings (16 FFT
-//    blocks each), one NavRx per channel of the WINDOW only (a few tens of KB each), 200 small beacon records.
+// ★★ MEMORY IS BOUNDED (the 256–512 MB boxes): the queue (¼ s of capture: 2.4 MB at 2.4 MS/s), the workers' rings (≤ 2 MB of
+//    FFT bins each), one NavRx per channel of the WINDOW only (a few tens of KB each), 200 small beacon records.
 // ★★ A NAME IS EARNED ON AIR: a beacon is named only by an ident read from it, matched to a station published on THAT
 //    channel near the receiver. A channel with no ident read stays "unidentified" — never named from the list alone.
 #pragma once
@@ -336,7 +336,7 @@ private:
         if (ms - lastReportMs_ >= 1000) { lastReportMs_ = ms; streamMs_.store(ms); buildReport_(); }
     }
     void dropWindow_() {
-        if (workers_) { if (o_.lossless) workers_->flush(); workers_->stop(); wDroppedBase_ += workers_->dropped(); wDropped_.store(wDroppedBase_); }
+        if (workers_) { if (o_.lossless) workers_->flush(); workers_->stop(); wDroppedBase_ += workers_->dropped(); wDropped_.store(wDroppedBase_); }   // ★ (lossless rings: 0)
         workers_.reset();
         lives_.clear();
         mc_.reset();
@@ -360,11 +360,17 @@ private:
             L.rx->keyer.onWord = [this, lp](const std::string& word, double wpm) { onWord_(*lp, word, wpm); };
         }
         const int nW = o_.workers < 0 ? vibeavi::defaultWorkers() : o_.workers;
+        /* ★★ THE RINGS WAIT, THE QUEUE DROPS. This is the decoder's own thread, not the DSP's, so it may wait for a worker
+         *  (the rings' lossless mode): a worker's wake-up at decoder priority can lag by more than a few FFT blocks under
+         *  load, and a ring that overwrote then cut every channel's stream (measured on the Mac server with the fake radio:
+         *  ~450 blocks a second lost, no bearing anywhere). Back-pressure reaches the quarter-second queue in feed(), which
+         *  drops the OLDEST and counts it — the one place a sample is ever let go. ★ Memory: ≤ 2 MB of bins per worker. */
+        const int slots = std::max(8, std::min(64, (int)(2.0e6 / ((double)mc_->fftSize() * sizeof(cf32)))));
         workers_.reset(new vibeavi::Workers(*mc_, nW, [this](int c, const cf32* z, int k) {
             Live& L = lives_[(size_t)c];
             L.rx->feed(z, k);
             L.samples += k;
-        }, o_.lossless, 16));
+        }, /*lossless=*/true, slots));
     }
     /** A worker's channel finished a second: a believed bearing / deviation is recorded. */
     void onSecond_(Live& L, const vibe::nav::Report& r) {

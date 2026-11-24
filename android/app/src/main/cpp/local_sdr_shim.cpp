@@ -150,6 +150,7 @@
 #include "vibe_avi_service.h"   // ★★ V12 AIRCRAFT DATALINK (ACARS, VDL2; HFDL via the decoder host) — docs/v12/AVIATION.md
 #include "vibe_aircraft_info.h"  // ★★ V12 beta91 the ADS-B aircraft data for every aviation-map row (VDL2 / ACARS / HFDL too)
 #include "vibe_avi_mode.h"
+#include "vibe_vormap_service.h"   // ★★ V12 VOR / ILS MAP — the whole navaid band swept, every channel at once (docs/v12/VOR-MAP.md)
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
 #include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
 #include "vibe_sat_if.h"         // ★★ V12 beta92 the satellite pass's IF filter — the narrowest that holds the signal + its Doppler
@@ -993,6 +994,12 @@ static vibeavi::Service    g_av(vibeavi::sharedTracker());
  *  (vibe_rs41_service.h). The tune keys step the bands. No rate change. */
 static std::atomic<bool>   g_sdMode{false};
 static vibers41::Service   g_sd;
+/* ★★★ VOR / ILS MAP MODE (V12, docs/v12/VOR-MAP.md — Stuart, 2026-11-24). A whole-radio, map-first mode treated as NDB is: the
+ *  capture STEPS across 108–117.95 MHz window by window at the rate it runs at (never raised), every 50 kHz channel of a
+ *  window decoded at once (vibe_vormap_service.h), each beacon named by its own ident off the air. No audio; the waterfall
+ *  at 1 fps behind the clients' map; tune / mode / passband / zoom / rate / IF filter ignored with a log line. */
+static std::atomic<bool>   g_vorMode{false};
+static vibevormap::Service g_vormap;
 /** ★★ beta92 A WHOLE-RADIO MODE WITH NOTHING TO LISTEN TO (Stuart 11-23: "squelch needs to be ignored when in things like
  *  ism/dab/acars/adsb etc anything that isnt audio"): DAB (a decoded service, 11-21), ADS-B, ISM, AIS, the aircraft
  *  datalink, radiosondes and the NDB skimmer. No squelch gate applies while one is on — the listener's, the shared dial's
@@ -1000,7 +1007,7 @@ static vibers41::Service   g_sd;
 static inline bool vsNoAudioMode() {
     return g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
         || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed)
-        || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)
+        || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
         || g_ndbMode.load(std::memory_order_relaxed);
 }
 /* ★★★ NO `dab` REPORT MAY FOLLOW `dab_off` (2026-10-05). The twice-a-second report is built and sent
@@ -2010,6 +2017,8 @@ static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (t
 static vibecaps::Caps vsRadioCaps(); // ★★ V12 what THIS running radio can do (vibe_radio_caps.h) — see its definition
 static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band this radio reaches ("" = none worth offering)
 static std::string vsNdbWhyNot();    // "" = NDB can run here now
+static bool vsVormapReach();         // ★ V12 VOR MAP: this radio tunes 108–118 MHz with IQ (not an HF+ / an Icom) — absent otherwise
+static std::string vsVormapWhyNot(); // "" = the VOR / ILS map can run here now
 static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
 static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans);   // ,"spotBands":[…] (hwinfo + /hardware)
 static std::string vsSkimBandsJson(bool radio);   // ★ V12 beta90 ,"skimBands":{…} (hwinfo + /hardware + backgroundCapsJson)
@@ -8668,7 +8677,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    its DAB profile is a fixed 2.4 MS/s with no view-driven IF filter to narrow.
          *
          *  ★ 0 means "no filtering", which is what a mode that occupies the whole capture wants. */
-        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) {
+        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)) {
             /* ★★ ADS-B (and ISM, and NDB — a whole band; AIS — both channels): as wide as the capture and no wider. A reply is ±1 MHz around 1090; a filter that follows the
              *  view would cut it, and one wide open lets whatever sits beyond Nyquist fold back onto it (the same
              *  lesson as DAB's below). */
@@ -12510,6 +12519,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  the waterfall to save server CPU and skim the entire NDB band at once"): the map covers it; 1 fps keeps the gain
          *  telemetry and the link meter alive. */
         if (g_ndbMode.load(std::memory_order_relaxed) && want > 1.0) want = 1.0;
+        if (g_vorMode.load(std::memory_order_relaxed) && want > 1.0) want = 1.0;   // ★ V12 the VOR map likewise (the map covers it)
         /* ★★ V12 DAB WITH SEVERAL STATIONS PLAYING, ON A WEAK BOX: 2 fps (Stuart, 2026-11-17: "5FPS if all users are on
          *  the same station but as soon as users change to another station and multiple dab stations are running the
          *  waterfall throttles to 2FPS but only on weaker boxes" — "the waterfall is only really there on DAB to show you
@@ -13486,6 +13496,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "ndb", "ais", "mode_resume", "iqtune",
             "avdata",   // ★ V12 Aircraft datalink: a whole-radio mode, gated as AIS is
             "sondes",   // ★ V12 SONDES (RS41): likewise
+            "vormap",   // ★ V12 VOR / ILS MAP: a whole-radio mode, gated as NDB is
             "sat",      // ★ V12 the satellite Doppler lock moves the shared dial (sat_list, the picker, is free)
             "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
             "tunerbw", "sampleRate", "directSampling",
@@ -13564,7 +13575,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!g_scanLock.load() || !sock) return false;
         static const std::set<std::string> kLocked = {
             "tune", "mode", "bandwidth", "zoom", "dab", "dab_service", "dab_scan", "adsb", "ism", "ndb", "ais", "mode_resume",
-            "avdata", "sondes", "sat", "sat_vfob",
+            "avdata", "sondes", "vormap", "sat", "sat_vfob",
             "iqtune", "watch", "set_rate", "sampleRate", "directSampling", "gain", "agc", "rsp_control", "rsp_agc_restart",
             "ahf_control", "airspy_control", "hackrf_control", "icom_control", "antenna", "tunerbw",
         };
@@ -13885,6 +13896,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_aisMode.load(std::memory_order_relaxed)) sendText(sock, g_ais.report());   // ★ the ships, at once
         if (g_avMode.load(std::memory_order_relaxed)) sendText(sock, avReportFor(sock));   // ★ the aircraft, at once
         if (g_sdMode.load(std::memory_order_relaxed)) sendText(sock, sdReport());          // ★ the sondes, at once
+        if (g_vorMode.load(std::memory_order_relaxed)) { const std::string r = g_vormap.report(); sendText(sock, r.empty() ? vorHello() : r); }   // ★ the navaids, at once
         // ★★ V12: an owner's scan holds this shared radio — the arrival is told at once, so its banner and lock are up
         //    before it reaches for a control (every client would otherwise wait for the scan's next step)
         if (g_scanLock.load()) {
@@ -17354,7 +17366,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bool bgOwns;
             { std::lock_guard<std::mutex> op(bgOpMtx_); bgOwns = bgIsm_ || bgAis_; }
             if (!bgOwns && (g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)
-                            || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed))) return;
+                            || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed))) return;
         }
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
@@ -17813,6 +17825,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);
             if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);
             if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);     // ★ …and the sondes
+            if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
             if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
             if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         }
@@ -17947,6 +17960,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);
         if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);
         if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);     // ★ …and the sondes
+        if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
         if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
         if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         LOGI("[NDB] ON asked%s", sock ? " by a client" : " internally");
@@ -18180,6 +18194,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);
             if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);
             if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);     // ★ …and the sondes
+            if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
             if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
             if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         }
@@ -18430,6 +18445,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);
             if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);
             if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);
+            if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
             if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
             if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         }
@@ -18664,12 +18680,185 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);
             if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);
             if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);
+            if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
             if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
             if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         }
         LOGI("[SONDES] %s asked%s: %s", g_sdMode.load() ? "a band change" : "ON", sock ? " by a client" : " internally", want->name);
         noteDialMover(sock);
         sdEnter(*want);
+    }
+
+    /* ★★★ VOR / ILS MAP MODE (V12, docs/v12/VOR-MAP.md — Stuart, 2026-11-24: "treated the same as NDB"). Save the listener's
+     *  place, step the capture across 108–117.95 MHz window by window (vibevormap::plan — at the rate the radio RUNS at,
+     *  never raised), decode every 50 kHz channel of the window at once, hop when the dwell is done (vorTick, on the DSP
+     *  thread that owns the hardware), and give the radio back EXACTLY as found. ★★ NDB's shape: no audio (spectrum-only),
+     *  the waterfall at 1 fps behind the map, tune / mode / passband / zoom / rate / IF filter ignored. The gain is left as
+     *  the listener had it (steady carriers do not fool VibeAGC); each hop tells it the band moved. */
+    AdsbSaved vorSaved_;
+    vibevormap::Plan vorPlan_;
+    double vorLastReport_ = 0;
+    void sendVorAll() {
+        const std::string r = g_vormap.report();
+        if (r.empty()) return;
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendText(sk, r);
+    }
+    /** ★ What a listener sees on entering, before the first report: the windows, the first one being searched. */
+    std::string vorHello() const {
+        std::string o = "{\"type\":\"vormap\",\"starting\":1,\"window\":0,\"windows\":" + std::to_string(vorPlan_.w.size()) + ",\"wins\":[";
+        for (size_t i = 0; i < vorPlan_.w.size(); ++i) {
+            char b[64]; std::snprintf(b, sizeof b, "%s[%.0f,%.0f]", i ? "," : "", vorPlan_.w[i].lo(), vorPlan_.w[i].hi()); o += b;
+        }
+        char b[160];
+        std::snprintf(b, sizeof b, "],\"dwell\":%.0f,\"rate\":%.0f,\"sweep\":0,\"progress\":0,\"heard\":0,\"identified\":0,\"beacons\":[]}",
+                      vibevormap::kDwellSec, vorPlan_.rate);
+        return o + b;
+    }
+    /** The radio onto window `w` — the hardware, the view, the per-listener channels. Under modeMtx (the DSP loop, or a
+     *  control thread on entry), as every tuneHw. */
+    void vorTuneWindow(int w) {
+        if (w < 0 || w >= (int)vorPlan_.w.size()) return;
+        const double hw = vorPlan_.w[(size_t)w].hwCentre;
+        const double logical = hw - hwOffsetHz();
+        rtlCenter.store(logical);
+        audioFreq.store(hw);
+        viewCenter.store(hw);
+        noteHwMoved();
+        agcForget("VOR map: the next window of the navaid band");
+        tuneHw(logical);
+        g_vormap.tunedTo(w);
+    }
+    /** ★ Test seam (VIBE_VORMAP_DWELL_S, 5–120): a shorter dwell for the end-to-end test only; the mode's own is kDwellSec. */
+    static double vorDwellSec() {
+        const char* e = std::getenv("VIBE_VORMAP_DWELL_S");
+        if (!e || !*e) return vibevormap::kDwellSec;
+        const double v = std::atof(e);
+        return v >= 5.0 && v <= 120.0 ? v : vibevormap::kDwellSec;
+    }
+    void vorEnter() {
+        if (!vsVormapReach()) return;
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
+        vibevormap::Plan pl;
+        if (!vibevormap::plan(rate, pl)) return;
+        AdsbSaved& s = vorSaved_;
+        s.lockedCentre = g_vsLockedCentre.load(); s.lockedRate = g_vsLockedRate.load();
+        s.rtl = rtlCenter.load(); s.audio = audioFreq.load(); s.view = viewCenter.load(); s.rate = sampleRate;
+        s.ds = -1;
+        {
+            // ★ an RTL left in manual direct sampling cannot hear VHF (the sondes' rule): off, put back on leaving
+            const int ds = g_dsNow.load(std::memory_order_relaxed);
+            if (ds > 0 && dev && !g_autoDs.load(std::memory_order_relaxed)) {
+                s.ds = ds;
+                LOGI("[VORMAP] direct sampling %d -> off (put back when the mode ends)", ds);
+                LocalSdrShim::instance().setDirectSampling(0);
+            }
+        }
+        iqStopDirect();                      // ★ raw IQ out cannot follow the receiver across the band
+        rx.setSpectrumOnly(true);            // ★ no audio: the navaids are on the map and in the list
+        g_vsLockedCentre.store(0.0); g_vsLockedRate.store(0.0);
+        vorPlan_ = pl;
+        const bool havePos = std::isfinite(g_bgLat.load()) && std::isfinite(g_bgLon.load());
+        vibevormap::ServiceOpts o; o.dwellSec = vorDwellSec();
+        g_vormap.start(pl, havePos, havePos ? g_bgLat.load() : 0, havePos ? g_bgLon.load() : 0, o);
+        g_vorMode.store(true);
+        vorTuneWindow(0);
+        zoomFactor.store(1.0);
+        std::vector<std::shared_ptr<ClientDsp>> views;
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second) { kv.second->viewSpanHz = 0; kv.second->ownView = false; views.push_back(kv.second); }
+            socks = allSpecClientsLocked();
+        }
+        for (auto& v : views) clientRetune(v.get());
+        updateZoomView();
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
+        applyAutoIf();
+        vorLastReport_ = nowSecs();
+        recomputeEngineRate();               // ★ the waterfall slows to a crawl behind the map
+        for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); sendText(sk, vorHello()); }
+        LOGI("[VORMAP] mode ON: %.3f MS/s, %zu windows of the navaid band, %.0f s each, first at %.3f MHz",
+             rate / 1e6, pl.w.size(), o.dwellSec, pl.w[0].hwCentre / 1e6);
+    }
+    void vorLeave(bool tell) {
+        if (!g_vorMode.exchange(false)) {
+            if (tell) {
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                for (auto& sk : socks) sendText(sk, "{\"type\":\"vormap_off\"}");
+            }
+            return;
+        }
+        g_vormap.stop();
+        const AdsbSaved& s = vorSaved_;
+        rx.setSpectrumOnly(false);
+        rx.requestReset();
+        g_vsLockedCentre.store(s.lockedCentre);
+        g_vsLockedRate.store(s.lockedRate);
+        agcForget("VOR map off: back to the listener's carrier");
+        if (s.ds > 0) { LOGI("[VORMAP] mode OFF: direct sampling back to %d", s.ds); LocalSdrShim::instance().setDirectSampling(s.ds); }
+        if (s.audio > 0.0) audioFreq.store(s.audio);
+        if (s.view > 0.0) viewCenter.store(s.view);
+        if (s.rtl > 0.0) { rtlCenter.store(s.rtl); tuneHw(s.rtl); }
+        std::vector<std::shared_ptr<ClientDsp>> views;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second) views.push_back(kv.second);
+        }
+        for (auto& v : views) clientRetune(v.get());
+        updateZoomView();
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
+        applyAutoIf();
+        recomputeEngineRate();               // ★ the waterfall back at the listeners' rate
+        LOGI("[VORMAP] mode OFF: radio back at %.3f MHz (VFO %.3f MHz)", s.rtl / 1e6, s.audio / 1e6);
+        if (tell) {
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+            for (auto& sk : socks) { sendText(sk, "{\"type\":\"vormap_off\"}"); sendConfig(sk); sendHwInfo(sk); }
+        }
+    }
+    /** From the DSP loop (modeMtx held): the hop when the dwell is done, the report once a second. */
+    void vorTick() {
+        const int w = g_vormap.hopDue();
+        if (w >= 0) {
+            vorTuneWindow(w);
+            std::vector<std::shared_ptr<ClientDsp>> views;
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                for (auto& kv : clientDsp) if (kv.second) views.push_back(kv.second);
+                socks = allSpecClientsLocked();
+            }
+            for (auto& v : views) clientRetune(v.get());
+            updateZoomView();
+            for (auto& sk : socks) sendConfig(sk);   // ★ the waterfall's scale follows the window
+            LOGI("[VORMAP] window %d of %zu: radio at %.3f MHz (%.2f–%.2f MHz)", w + 1, vorPlan_.w.size(),
+                 vorPlan_.w[(size_t)w].hwCentre / 1e6, vorPlan_.w[(size_t)w].lo() / 1e6, vorPlan_.w[(size_t)w].hi() / 1e6);
+        }
+        const double t = nowSecs();
+        if (t - vorLastReport_ >= 1.0) { vorLastReport_ = t; sendVorAll(); }
+    }
+    /** {"type":"vormap", on}. ★ The default is OFF, as every whole-radio mode's. */
+    void vorControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        double onV = 0; jsonNum(msg, "on", onV);
+        if (onV == 0 && onlyModeRefusesLeave(sock, "vormap", "VORMAP", "vormap_error")) return;   // ★★ V12 the only mode
+        if (onV == 0) { if (g_vorMode.load()) noteDialMover(sock); vorLeave(true); return; }
+        if (g_vorMode.load()) { if (sock) { const std::string r = g_vormap.report(); sendText(sock, r.empty() ? vorHello() : r); } return; }
+        const std::string why = vsVormapWhyNot();
+        if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"vormap_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
+        // ★ One whole-radio mode at a time: the other leaves through its own door (which tells every listener)
+        if (g_ismMode.load(std::memory_order_relaxed)) ismLeave(true);
+        if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);
+        if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);
+        if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);
+        if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);
+        if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
+        if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
+        LOGI("[VORMAP] ON asked%s", sock ? " by a client" : " internally");
+        noteDialMover(sock);   // ★ the asker is the tuner — before the entry's config reaches the others
+        vorEnter();
     }
 
     /** ★★★ V12 WIDE-RATE DAB — HOW A BLOCK IS CAPTURED (see vibe_dab_ddc.h and the DAB entry).
@@ -19016,6 +19205,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_fmScanActive.load()) return "an FM scan is already running on this radio";
         if (g_avMode.load()) return "the radio is in the aircraft datalink for its listeners just now \xe2\x80\x94 scan when they have left it";
         if (g_sdMode.load()) return "the radio is following radiosondes for its listeners just now \xe2\x80\x94 scan when they have left it";
+        if (g_vorMode.load()) return "the radio is sweeping the VOR / ILS band for its listeners just now \xe2\x80\x94 scan when they have left it";
         if (g_ismMode.load() || g_aisMode.load() || g_ndbMode.load())
             return std::string("the radio is in ") + (g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "NDB")
                  + " for its listeners just now \xe2\x80\x94 scan when they have left it";
@@ -19130,7 +19320,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  Called from the WebSocket reader only, after askRefuses; bounded like dabScanYield. */
     void dabScanUserTune(const std::string& msg) {
         static const std::set<std::string> kMoves = { "tune", "mode", "dab", "dab_service", "adsb", "ism", "ais", "iqtune",
-                                                      "avdata", "sondes" };
+                                                      "avdata", "sondes", "vormap" };
         // ★★ V12: the owner's FM scan ends the same way when the ADMIN tunes (everybody else is refused — scanLockRefuses)
         if (g_fmScanActive.load() && kMoves.count(jsonStr(msg, "type"))) {
             LOGI("FM scan: the dial was tuned \xe2\x80\x94 the scan stops there and leaves the dial where it was put");
@@ -19886,7 +20076,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (vsModeBlocked("dab")) return false;
         static const char* kOthers[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
                                          "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig",
-                                         "adsb", "ism", "ndb", "ais", "avdata", "sondes" };
+                                         "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" };
         for (const char* m : kOthers) if (!vsModeBlocked(m)) return false;
         return perClientDsp() ? dabLrEligible() : vsDabCapable();
     }
@@ -19905,7 +20095,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                          "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
         for (const char* m : kDemods) if (!vsModeBlocked(m)) return {};
         const char* left = nullptr;
-        for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes" })
+        for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" })
             if (!vsModeBlocked(m)) { if (left) return {}; left = m; }
         if (!left) return {};
         const std::string k = left;
@@ -19915,6 +20105,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (k == "ais")    return g_aisMode.load(std::memory_order_relaxed)  || vsAisWhyNot().empty()      ? k : std::string();
         if (k == "avdata") return g_avMode.load(std::memory_order_relaxed)   || vsAvdataWhyNot().empty()   ? k : std::string();
         if (k == "sondes") return g_sdMode.load(std::memory_order_relaxed)   || vsSondeWhyNot().empty()    ? k : std::string();
+        if (k == "vormap") return g_vorMode.load(std::memory_order_relaxed)  || vsVormapWhyNot().empty()   ? k : std::string();
         return {};   // ★ "dab" left alone but dabOnlyNow said no (a radio that cannot do DAB): not an only mode
     }
     /** Is whole-radio mode `k` on now? */
@@ -19922,12 +20113,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return k == "dab" ? g_dabMode.load(std::memory_order_relaxed) : k == "adsb" ? g_adsbMode.load(std::memory_order_relaxed)
              : k == "ism" ? g_ismMode.load(std::memory_order_relaxed) : k == "ndb" ? g_ndbMode.load(std::memory_order_relaxed)
              : k == "ais" ? g_aisMode.load(std::memory_order_relaxed) : k == "avdata" ? g_avMode.load(std::memory_order_relaxed)
-             : k == "sondes" ? g_sdMode.load(std::memory_order_relaxed) : false;
+             : k == "sondes" ? g_sdMode.load(std::memory_order_relaxed) : k == "vormap" ? g_vorMode.load(std::memory_order_relaxed) : false;
     }
     /** The reason a listener is given, in DAB's words (kDabOnlyWhy). */
     static std::string onlyModeWhy(const std::string& k) {
         const char* n = k == "adsb" ? "ADS-B" : k == "ism" ? "ISM" : k == "ndb" ? "NDB" : k == "ais" ? "AIS"
-                      : k == "avdata" ? "aircraft datalink" : k == "sondes" ? "radiosonde" : "DAB";
+                      : k == "avdata" ? "aircraft datalink" : k == "sondes" ? "radiosonde" : k == "vormap" ? "VOR / ILS map" : "DAB";
         return std::string("this receiver is ") + n + " only \xe2\x80\x94 its owner has set it up for " + n + " listeners";
     }
     /** ★★ A listener's "off" for mode `k` while it is the only mode: refused with the reason (`errType`, the mode's own
@@ -20897,7 +21088,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Same rule for the per-client path — see dabInject_. And ADS-B — see onAudio.
         if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
         if (dabLrMuted(sock.get())) return;   // ★★★ V12 Phase 2: this listener is in DAB — their station plays, not their VFO
-        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) return;
+        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)) return;
         // ★★★ V12 PAGING: silence while a paging receiver runs here — so every recording of this stream is silent too
         //     (vibe_paging_gate.h). Before the encoder: Opus and PCM alike carry the silence.
         std::vector<int16_t> pagingZeros;
@@ -21336,7 +21527,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  muted"). The chain still runs for the spectrum, so it made audio — loud noise — and both senders passed it
          *  on. The clients already expect silence here (VibeServerClient.adsb holds the native self-heal for it), so
          *  nothing is sent at all, as in DAB between services. */
-        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) return;   // ★ nor at an ISM band, nor across the NDB band
+        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)) return;   // ★ nor at an ISM band, nor across the NDB band
         {
             for (int i = 0; i < count; i++) { audit.note(data[i].l); if (ch == 2) audit.note(data[i].r); }
             char line[160];
@@ -22620,7 +22811,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "gain", "agc", "tunerbw", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control",
             "hackrf_control", "antenna", "sampleRate", "directSampling", "autoDirectSampling", "biasT", "ppm",
             "rawIq", "iqout", "iqtune", "rdsx", "dab", "dab_service", "dab_scopes", "dab_resync", "dab_erase", "adsb", "ism", "ndb", "ais",
-            "avdata", "sondes",
+            "avdata", "sondes", "vormap",
             "dabBoost", "autobw", "ims", "ceq", "nb", "nbx", "stereo", "deemph", "nfmvoice", "squelch", "fftRate" };
         for (const char* k : kNotHere)
             if (type == k) { LOGI("icom: '%s' ignored — this radio has no such control", type.c_str()); return true; }
@@ -23931,6 +24122,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "ais") { aisControl(sock, msg); return; }
         if (type == "avdata") { avControl(sock, msg); return; }   // ★ V12 Aircraft datalink (ACARS / VDL2)
         if (type == "sondes") { sdControl(sock, msg); return; }   // ★ V12 SONDES (RS41 radiosondes)
+        if (type == "vormap") { vorControl(sock, msg); return; }  // ★ V12 VOR / ILS MAP (docs/v12/VOR-MAP.md)
         // ★★ V12 SATELLITES: `sat` is the lock (gated like a tune on a shared dial — askRefuses / the scan lock); `sat_list`
         //    is the picker's question (free: it changes nothing). docs/v12/SATELLITE-ENGINE.md "Wire".
         if (type == "sat") { if (sock) satControl(sock, msg); return; }
@@ -23995,6 +24187,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);   // ★ …and AIS
             if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);     // ★ …and the aircraft datalink
             if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);     // ★ …and the sondes
+            if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
             // ★ From DAB: a handover, not leave-then-enter — see adsbHandOff
             if (g_dabMode.load(std::memory_order_relaxed) && g_dabLockHeld.load()) { dabHandOffToAdsb(); adsbEnter(true); }
             else adsbEnter();
@@ -24211,6 +24404,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_aisMode.load(std::memory_order_relaxed)) aisLeave(true);   // ★ …and AIS
             if (g_avMode.load(std::memory_order_relaxed)) avLeave(true);     // ★ …and the aircraft datalink
             if (g_sdMode.load(std::memory_order_relaxed)) sdLeave(true);     // ★ …and the sondes
+            if (g_vorMode.load(std::memory_order_relaxed)) vorLeave(true);   // ★ …and the VOR map
             if (g_adsbMode.load(std::memory_order_relaxed)) {
                 const AdsbSaved a = adsbHandOff();
                 g_dabSavedCentre.store(a.lockedCentre); g_dabSavedRate.store(a.lockedRate);
@@ -24841,6 +25035,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("%s ignored — the aircraft datalink owns the receiver (send {\"type\":\"avdata\",\"on\":0} to leave)", type.c_str());
             return;
         }
+        // ★ V12 THE VOR MAP — NDB's shape: the receiver and the view are the sweep's
+        if ((type == "zoom" || type == "reset" || type == "tune" || type == "mode" || type == "bandwidth") && g_vorMode.load(std::memory_order_relaxed)) {
+            LOGI("%s ignored — the VOR map owns the receiver (send {\"type\":\"vormap\",\"on\":0} to leave)", type.c_str());
+            return;
+        }
         // ★ SONDES likewise — the view is the band (the tune keys step bands)
         if ((type == "zoom" || type == "reset" || type == "tune" || type == "mode" || type == "bandwidth") && g_sdMode.load(std::memory_order_relaxed)) {
             LOGI("%s ignored — the sondes mode owns the receiver (send {\"type\":\"sondes\",\"on\":0} to leave)", type.c_str());
@@ -25260,8 +25459,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  decoder with them. Stuart, 2026-09-08: "lock out the IF filter when in DAB mode,
              *  don't want someone accidentally narrowing it and breaking DAB". The client greys the
              *  control; this is the same rule for anything else that sends the message. */
-            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) {
-                LOGI("tunerbw ignored — %s owns the IF filter", g_ndbMode.load() ? "NDB" : g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "ADS-B");
+            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)) {
+                LOGI("tunerbw ignored — %s owns the IF filter", g_vorMode.load() ? "the VOR map" : g_ndbMode.load() ? "NDB" : g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "ADS-B");
                 return;
             }
             if (g_dabMode.load(std::memory_order_relaxed)) {
@@ -25467,6 +25666,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  PERSISTED: a gain chosen at 1090 MHz is not the radio's listening gain, and leaving ADS-B puts back what
              *  was there before (adsbSaved_). */
             // ★ ISM likewise: AUTO is vibeism::GainRule (ismTick), and a band's gain is never the radio's listening gain
+            // ★ (not the VOR map: as NDB, the gain stays the listener's own — steady carriers do not fool VibeAGC as bursts do)
             if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) {
                 if (msg.find("\"auto\":true") != std::string::npos || (jsonNum(msg, "value", v) && v < 0)) {
                     g_gainTarget.store(-1, std::memory_order_relaxed);
@@ -25638,8 +25838,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("sampleRate ignored — DAB owns the rate (2.048 MS/s)");
                 return;
             }
-            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) {
-                LOGI("sampleRate ignored — %s runs at the rate it found", g_ndbMode.load() ? "NDB" : g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "ADS-B");
+            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)) {
+                LOGI("sampleRate ignored — %s runs at the rate it found", g_vorMode.load() ? "the VOR map" : g_ndbMode.load() ? "NDB" : g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "ADS-B");
                 return;
             }
             if (jsonNum(msg,"value",v) && v > 0) {
@@ -33927,7 +34127,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!g_vsVfoB.load(std::memory_order_relaxed)) return false;
         if (useIcom() || useSpy()) return false;
         if (g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
-            || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)
+            || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
             || g_ndbMode.load(std::memory_order_relaxed)) return false;
         return true;
     }
@@ -35320,6 +35520,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 else                 feedClientChannels(buf.data(), (int)buf.size());
                 continue;
             }
+            /* ★★★ THE VOR MAP LIKEWISE — copy and return (the service drops its OLDEST block when it falls behind); vorTick moves
+             *  the radio to the next window when the dwell is done. ★ The hop is HERE, on the thread that owns the hardware. */
+            if (g_vorMode.load(std::memory_order_relaxed)) {
+                g_vormap.feed(reinterpret_cast<const vibevormap::cf32*>(buf.data()), buf.size());
+                vorTick();
+                if (!perClientDsp()) rx.feed(buf.data(), (int)buf.size());
+                else                 feedClientChannels(buf.data(), (int)buf.size());
+                continue;
+            }
             // ★★★ SONDES LIKEWISE — copy and return (the service drops its OLDEST block when it falls behind)
             if (g_sdMode.load(std::memory_order_relaxed)) {
                 g_sd.feed(reinterpret_cast<const vibers41::cf32*>(buf.data()), buf.size());
@@ -36092,7 +36301,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         static const bool kOff = [] { const char* e = std::getenv("VIBE_BAND_DC"); return e && *e == '0'; }();
         if (kOff || !bandDcActive() || !dcAtCaptureCentre()) return centre;
         if (g_vsLockedCentre.load() > 0.0 || g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
-            || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed))
+            || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed))
             return centre;
         /* ★★ WHOSE BAND (V12 beta24). `dialHz` is VFO A's. Band on A: A's band, and — on a personal receiver with a VFO B —
          *  the DC kept off B's passband too. Band on B: B's band (its own dial), and the DC kept off A's passband. Before,
@@ -36150,7 +36359,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double off = hwOffsetHz();
         if (kOff || off <= 0.0 || !dcAtCaptureCentre()) return 0.0;
         if (g_vsLockedCentre.load() > 0.0 || g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
-            || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)
+            || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
             || bandDcActive())
             return 0.0;
         if (vsSharedDial() && !person) return 0.0;
@@ -36192,7 +36401,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (off <= 0.0 || !dcAtCaptureCentre()) return 0.0;
         if (g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
             || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)
-            || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed))
+            || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed))
             return 0.0;
         /* ★ beta79: the spike is where the TUNER put it, and afcMix (after the capture cleaner, which has already taken
          *  most of it out) then moves the whole capture by the correction's shift — the learned ppm plus an RTL's
@@ -38137,7 +38346,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool wholeModeLeavesWhenEmpty() {
         return g_dabMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)
             || (g_ndbMode.load(std::memory_order_relaxed) && ndbOrigin_ != "background")
-            || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)
+            || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
             || (g_adsbMode.load(std::memory_order_relaxed) && !adsbKeepHolds());
     }
     /** ★ The radio may just have emptied (a held session finished): leave the whole-radio mode after `leaveGraceS`, and
@@ -38242,6 +38451,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             avLeave(false);
             noteModeAutoLeft("avdata", band);   // ★ the band rides in the ISM field: resumeEnter names it
         }
+        if (g_vorMode.load(std::memory_order_relaxed)) {
+            LOGI("[VORMAP] last listener left — the receiver goes back to where it was");
+            vorLeave(false);
+            noteModeAutoLeft("vormap");
+        }
         if (g_sdMode.load(std::memory_order_relaxed)) {
             LOGI("[SONDES] last listener left — the receiver goes back to where it was");
             const std::string band = sdBand_ ? sdBand_->id : "";
@@ -38273,8 +38487,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★ THE ONE RULE for giving a returning listener their whole-radio mode back (modeResume, arrivalResume): "" = yes.
      *  `here` = listeners on the radio, the asker included. Call WITHOUT clientMtx. */
     std::string resumeWhyNot(const std::string& kind, const ModeAutoLeft& rec, int here) {
-        const char* name = kind == "adsb" ? "ADS-B" : kind == "ndb" ? "NDB" : kind == "ism" ? "ISM" : kind == "ais" ? "AIS" : kind == "avdata" ? "the aircraft datalink" : kind == "sondes" ? "the sondes mode" : "the mode";
-        const bool adsb = g_adsbMode.load(), ndb = g_ndbMode.load(), ism = g_ismMode.load(), ais = g_aisMode.load() || g_avMode.load() || g_sdMode.load();
+        const char* name = kind == "adsb" ? "ADS-B" : kind == "ndb" ? "NDB" : kind == "ism" ? "ISM" : kind == "ais" ? "AIS" : kind == "avdata" ? "the aircraft datalink" : kind == "sondes" ? "the sondes mode" : kind == "vormap" ? "the VOR map" : "the mode";
+        const bool adsb = g_adsbMode.load(), ndb = g_ndbMode.load(), ism = g_ismMode.load(), ais = g_aisMode.load() || g_avMode.load() || g_sdMode.load() || g_vorMode.load();
         /* ★★★ KEPT-RUNNING ADS-B IS THE RADIO'S IDLE DEFAULT, NOT SOMEBODY'S USE OF IT (2026-11-12). Stuart, iPhone, the Pi
          *  500's V4L (idle default ADS-B): ISM backgrounded past the hold came back to ADS-B for good — "it looks like the
          *  keep awake is not working". The server itself moved the radio to ADS-B (and to the owner's landing before it)
@@ -38326,7 +38540,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void modeResume(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         if (!sock) return;
         const std::string kind = jsonStr(msg, "mode");
-        const char* name = kind == "adsb" ? "ADS-B" : kind == "ndb" ? "NDB" : kind == "ism" ? "ISM" : kind == "ais" ? "AIS" : kind == "avdata" ? "AVDATA" : kind == "sondes" ? "SONDES" : nullptr;
+        const char* name = kind == "adsb" ? "ADS-B" : kind == "ndb" ? "NDB" : kind == "ism" ? "ISM" : kind == "ais" ? "AIS" : kind == "avdata" ? "AVDATA" : kind == "sondes" ? "SONDES" : kind == "vormap" ? "VORMAP" : nullptr;
         if (!name) return;
         auto answer = [&](bool ok, const std::string& why) {
             sendText(sock, "{\"type\":\"mode_resume\",\"mode\":\"" + kind + "\",\"ok\":" + (ok ? "1" : "0")
@@ -38334,7 +38548,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         };
         const bool adsb = g_adsbMode.load(), ndb = g_ndbMode.load(), ism = g_ismMode.load(), ais = g_aisMode.load();
         if ((kind == "adsb" && adsb) || (kind == "ndb" && ndb) || (kind == "ism" && ism) || (kind == "ais" && ais)
-            || (kind == "avdata" && g_avMode.load()) || (kind == "sondes" && g_sdMode.load())) {
+            || (kind == "avdata" && g_avMode.load()) || (kind == "sondes" && g_sdMode.load()) || (kind == "vormap" && g_vorMode.load())) {
             answer(true, "");
             return;
         }
@@ -38374,11 +38588,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); rec = modeAutoLeft_; }
         if (rec.kind.empty() || rec.at <= 0.0 || rec.session != session) return false;
         const bool on = rec.kind == "adsb" ? g_adsbMode.load() : rec.kind == "ndb" ? g_ndbMode.load()
-                      : rec.kind == "ism" ? g_ismMode.load() : rec.kind == "avdata" ? g_avMode.load() : rec.kind == "sondes" ? g_sdMode.load() : g_aisMode.load();
+                      : rec.kind == "ism" ? g_ismMode.load() : rec.kind == "avdata" ? g_avMode.load() : rec.kind == "sondes" ? g_sdMode.load() : rec.kind == "vormap" ? g_vorMode.load() : g_aisMode.load();
         if (on) { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); modeAutoLeft_ = {}; return true; }   // ★ already there
         const std::string why = resumeWhyNot(rec.kind, rec, othersAtArrival + 1);
         { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); modeAutoLeft_ = {}; }   // ★ answered either way, once
-        const char* name = rec.kind == "adsb" ? "ADS-B" : rec.kind == "ndb" ? "NDB" : rec.kind == "ism" ? "ISM" : rec.kind == "avdata" ? "AVDATA" : rec.kind == "sondes" ? "SONDES" : "AIS";
+        const char* name = rec.kind == "adsb" ? "ADS-B" : rec.kind == "ndb" ? "NDB" : rec.kind == "ism" ? "ISM" : rec.kind == "avdata" ? "AVDATA" : rec.kind == "sondes" ? "SONDES" : rec.kind == "vormap" ? "VORMAP" : "AIS";
         if (!why.empty()) {
             LOGI("[%s] session [%.8s] is back, %.0f s after it left the radio in %s \xe2\x80\x94 not resumed: %s", name,
                  session.c_str(), nowSecs() - rec.at, name, why.c_str());
@@ -38391,7 +38605,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("[%s] session [%.8s] is back, %.0f s after it left the radio in %s \xe2\x80\x94 nobody else is here and only the "
              "idle default has run since, so it goes back in", name, session.c_str(), nowSecs() - rec.at, name);
         resumeEnter(sock, rec, false);
-        return g_adsbMode.load() || g_ndbMode.load() || g_ismMode.load() || g_aisMode.load() || g_avMode.load() || g_sdMode.load();
+        return g_adsbMode.load() || g_ndbMode.load() || g_ismMode.load() || g_aisMode.load() || g_avMode.load() || g_sdMode.load() || g_vorMode.load();
     }
 
     void armIdlePark() {
@@ -43455,6 +43669,33 @@ static std::string vsNdbWhyNot() {
     return {};
 }
 
+/** ★★ V12 VOR / ILS MAP (docs/v12/VOR-MAP.md): does this radio tune the whole navaid band (108–117.95 MHz, the windows'
+ *  edges with it)? An Icom is a transceiver's audio; the Airspy HF+ is left out for AIS's reason (its VHF is one fixed-gain
+ *  front end — and its rates, ≤ 912 kS/s, would make a 12-window sweep). AGENTS.md: where false, no control at all. */
+static bool vsVormapReach() {
+    if (g_icomOn.load()) return false;
+    if (LocalSdrShim::instance().isAirspyHf()) return false;
+    const vibebands::Ranges t = vsTunableRanges();
+    for (const auto& x : t) if (double(x.lo) <= 107.9e6 && double(x.hi) >= 118.05e6) return true;
+    return false;
+}
+static std::string vsVormapWhyNot() {
+    if (vsModeBlocked("vormap")) return "the server owner has switched the VOR / ILS map off on this receiver";
+    if (!vsVormapReach()) return "this radio cannot tune the VOR / ILS band (108\xe2\x80\x93" "118 MHz)";
+    if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
+        return "this receiver's centre frequency is locked by its owner";
+    double running = LocalSdrShim::instance().captureSpanHz();
+    if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
+    vibevormap::Plan p;
+    if (running > 0 && !vibevormap::plan(running, p)) {
+        char b[200];
+        std::snprintf(b, sizeof b, "the VOR / ILS map needs a capture of %.1f MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s",
+                      vibevormap::kMinRateHz / 1e6, running / 1e6);
+        return b;
+    }
+    return {};
+}
+
 /** ★★ V12 AIS: does this radio reach both channels (161.975–162.025 MHz, with margin)? An Icom is a transceiver's audio;
  *  the Airspy HF+ is left out (its VHF range is a single fixed-gain front end with no IF gain to set — AGENTS.md: a
  *  control built for one radio is not drawn on the others). */
@@ -44161,6 +44402,19 @@ static std::string vsTunableJson() {
             char e[80]; std::snprintf(e, sizeof e, ",\"ndbLo\":%.0f,\"ndbHi\":%.0f", lo, hi); j += e;
         }
     }
+    /* ★★ V12 VOR / ILS MAP: offered, or shown DISABLED with its reason — and NOT AT ALL where the radio does not tune
+     *  108–118 MHz (an HF-only radio, the HF+, an Icom: AGENTS.md). `vormapWins`: how many windows a sweep takes at the rate
+     *  this radio runs at now, `vormapDwell` the seconds each is held — the clients say how long a sweep takes. */
+    if (vsVormapReach()) {
+        const std::string why = vsVormapWhyNot();
+        j += std::string(",\"vormap\":") + (why.empty() ? "true" : "false");
+        if (!why.empty()) j += ",\"vormapWhy\":\"" + dabEscape(why) + "\"";
+        vibevormap::Plan vp;
+        const double running = LocalSdrShim::instance().captureSpanHz();
+        if (running > 0 && vibevormap::plan(running, vp)) {
+            char e[80]; std::snprintf(e, sizeof e, ",\"vormapWins\":%zu,\"vormapDwell\":%.0f", vp.w.size(), vibevormap::kDwellSec); j += e;
+        }
+    }
     /* ★★ AIS (V12): offered, or shown DISABLED with its reason — and NOT AT ALL where the radio does not reach 162 MHz
      *  (an HF-only radio, the HF+, an Icom: AGENTS.md). ★ APRS (V12) is a listener's decoder on their NFM/USB audio
      *  ("aprs": false only where the owner switched it off; absent on an older server, so no button there). */
@@ -44358,6 +44612,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
+                                        "vormap",           // ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md)
                                         "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "ale", "drm", "freedv", "m17", "dvsig",
                                         "lrpt",             // ★ V12 METEOR-M LRPT (docs/v12/LRPT.md) — reach-gated (137 MHz), never an Icom
                                         "fctlm" };          // ★ V12 beta90 FUNcube telemetry (AO-73) — reach-gated (145.935 MHz)
@@ -44392,6 +44647,7 @@ static std::string vsTunableJson() {
             else if (k == "ais") { if (!vsAisReach() || !vsAisWhyNot().empty()) continue; }
             else if (k == "avdata") { if (!vsAvdataWhyNot(nullptr).empty()) continue; }
             else if (k == "sondes") { if (!vsSondeWhyNot(nullptr).empty()) continue; }
+            else if (k == "vormap") { if (!vsVormapReach() || !vsVormapWhyNot().empty()) continue; }
             else if (vsModeBlocked(k)) continue;
             else if (vibereach::entry(k) && !vsDecoderWhyNot(k, &reach).empty()) continue;   // ★ V12 out of this radio's reach
             if (k == "rds" && vsModeBlocked("wfm")) continue;   // no FM, no RDS of any kind
@@ -44591,6 +44847,7 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     if (g_ais.running()) watch.note("ais", "AIS", g_ais.droppedBlocks(), nowMs);
     if (g_av.running()) watch.note("avdata", "Aircraft datalink", g_av.dropped(), nowMs);
     if (g_sd.running()) watch.note("sondes", "Radiosondes", g_sd.dropped(), nowMs);
+    if (g_vormap.running()) watch.note("vormap", "VOR / ILS map", g_vormap.droppedBlocks(), nowMs);
     /* ★★ V12: DAB+ through FAAD2 decodes on its own thread (vibe-faad2) behind a drop-never-wait ring; a unit it could
      *  not take in time is concealed — this box is too light for the decode on top of the multiplex. Monotonic. */
     watch.note("dab:aac", "DAB+ audio decoder", g_dab.aacDropped(), nowMs);
@@ -46519,6 +46776,7 @@ void LocalSdrShim::stopLocked() {
     // ★★ V12: ISM's decoder too — its day's log is held in RAM, and a clean shutdown (an update, a restart) writes it.
     g_ism.stop();
     g_ndb.stop();   // ★ …and NDB's day (the card and the map)
+    g_vormap.stop();   // ★ V12 …and the VOR map's decoder threads
     g_ais.stop();   // ★ AIS likewise (its day's log)
     g_av.stop();    // ★ …and the aircraft datalink's thread
     g_sd.stop();    // ★ …and the sondes'

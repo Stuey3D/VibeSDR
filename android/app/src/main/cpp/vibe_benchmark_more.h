@@ -49,6 +49,7 @@
 #include "vibe_ais_service.h"
 #include "vibe_avi_service.h"   // ★ V12 aviation: the datalink rows (dec_vdl2, dec_acars)
 #include "vibe_rs41_service.h"  // ★ V12 RS41 radiosondes: the SONDES row (dec_rs41)
+#include "vibe_vormap_service.h" // ★ V12 the VOR / ILS map: one window of the sweep (dec_vormap)
 #include "vibe_rs41_tx.h"
 #include "vibe_sonde_tx.h"     // ★ V12 the DFM / M10 / M20 rows (dec_dfm, dec_m10)
 #include "vibe_avi_mode.h"
@@ -815,6 +816,9 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_hfdl",     { "hfdl",   true,  true  } },
         // ★ V12 RS41 radiosondes: the SONDES mode's default (a whole-radio mode — not the decoder limit's yardstick)
         { "dec_rs41",     { "sondes", true,  false } },
+        // ★ V12 the VOR / ILS map: ONE window of the sweep (40 channels at 2.4 MS/s) sets the "vormap" switch's default — a
+        //   whole-radio mode, not the decoder limit's yardstick; never hides it (the owner can always tick it back)
+        { "dec_vormap",   { "vormap", true,  false } },
         // ★ V12 the other types run inside the same SONDES receiver: shown beside RS41's row, RS41 keeps the default
         { "dec_dfm",      { "sondes", false, false } }, { "dec_m10",      { "sondes", false, false } },
         { "dec_ism",      { "ism",    true,  false } }, { "dec_wmbus",    { "ism",    false, false } },
@@ -1380,6 +1384,44 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         if (behind) r.label += " (fell behind)";
         svc.stop();
     };
+    /* ★★ V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md): one window of the sweep as an RTL runs it — 2.4 MS/s, 40 channels
+     *  (110.00–111.95 MHz), EVERY channel decoded at once across the workers — with five VORs and a localiser on it (our own
+     *  transmitter, nav_tx.h WideSynth; 1 s made once and looped). % of a core over the signal fed, in real time; decoded =
+     *  beacons heard. The setup page reads it as the "vormap" switch's default; an RSP's 8 MS/s window (100 channels) costs
+     *  about 2.5× this (test-vormap prints both). */
+    run("dec_vormap", "Decoder: VOR / ILS map (one 40-channel window @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_vormap"; r.label = "Decoder: VOR / ILS map (one 40-channel window @ 2.4 MS/s)";
+        const double fs = 2.4e6;
+        vibevormap::Plan pl;
+        if (!vibevormap::plan(fs, pl)) return r;
+        const int wi = vibevormap::windowOf(pl, 110400000);
+        vibe::nav::tx::WideSynth syn(fs, 34.0, 11);
+        const double hz[6] = { 110.40e6, 110.45e6, 110.90e6, 111.20e6, 111.60e6, 111.85e6 };
+        for (int k = 0; k < 6; ++k) {
+            vibe::nav::tx::WideSynth::Src s; s.hz = hz[k]; s.ils = k == 2; s.bearing = 40.0 * k + 13; s.ident = "BEN"; s.identEvery = 7;
+            syn.add(s);
+        }
+        std::vector<vibevormap::cf32> clip;
+        syn.block(pl.w[(size_t)wi].hwCentre, (size_t)fs, clip);
+        vibevormap::Service s;
+        s.start(pl, false, 0, 0);
+        s.tunedTo(wi);
+        const double c0 = processCpu(), w0 = wallNow(); double fedSec = 0; size_t pos = 0;
+        const size_t blk = (size_t)(fs / 100);
+        while (fedSec < 2 * kRowMaxSec && (fedSec < 2 * kRowMinSec || wallNow() - w0 < kRowWallSec)) {
+            while (s.queuedSec() > 0.15) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const size_t n = std::min(blk, clip.size() - pos);
+            s.feed(clip.data() + pos, n);
+            pos = (pos + n) % clip.size(); fedSec += (double)n / fs;
+        }
+        s.drain();
+        settleCpu(5.0);
+        r.pct = 100.0 * (processCpu() - c0) / fedSec;
+        s.buildReportNow();
+        r.decoded = s.heardNow();
+        s.stop();
+        return r;
+    });
     run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
         Row r; r.id = "dec_rs41"; r.label = "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
         if (!vibers41::bandById("mid")) return r;
