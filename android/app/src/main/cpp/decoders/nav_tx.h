@@ -145,6 +145,97 @@ inline std::vector<std::complex<float>> amSpeech(double sec, double rate, double
     return x;
 }
 
+
+/** ★★ V12 VOR MAP (vibe_vormap_service.h, docs/v12/VOR-MAP.md): MANY navaids in ONE wide capture — streamed block by block
+ *  (a 30 s window at 8 MS/s is 240 M samples: never held whole), with no trig per sample (every tone a rotating phasor, the
+ *  subcarrier's FM a small rotation per sample), the noise from one Gaussian table. Each source at an absolute frequency;
+ *  `centreHz` is where the "radio" is tuned and may move between blocks (a sweep). Carrier amplitude `amp` (1 = the
+ *  reference the noise is set against: `snrDb` = an amp-1 carrier to the noise in 25 kHz). */
+class WideSynth {
+public:
+    struct Src {
+        double hz = 0;              ///< absolute
+        bool ils = false;           ///< false: a VOR; true: an ILS localiser (90 / 150 Hz)
+        double amp = 1.0;
+        double bearing = 0;         ///< VOR radial (deg)
+        double m90 = 0.20, m150 = 0.20;
+        std::string ident;
+        double wpm = 8, identEvery = 10, identStart = 0.5;   ///< the ident starts every this many seconds, first at identStart
+        double varDepth = 0.30, subDepth = 0.30, devHz = 480, identDepth = 0.10;
+    };
+    WideSynth(double rate, double snrDb, uint32_t seed = 7) : rate_(rate) {
+        sigma_ = (float)std::sqrt(std::pow(10.0, -snrDb / 10) * rate / 25000.0 / 2.0);
+        std::mt19937 r(seed); std::normal_distribution<float> n(0.f, 1.f);
+        noise_.resize(1u << 20);
+        for (auto& v : noise_) v = n(r);
+        lcg_ = seed * 2654435761u + 1;
+    }
+    void add(const Src& s) {
+        St st; st.s = s;
+        st.key = keying(s.ident, s.wpm, 1000.0);   // ★ keyed at 1 ms resolution (Morse timing is tens of ms)
+        st.th = s.bearing * M_PI / 180.0;
+        src_.push_back(std::move(st));
+    }
+    /** `n` samples with the radio tuned to `centreHz`, appended to `out`. Time runs on across calls. */
+    void block(double centreHz, size_t n, std::vector<std::complex<float>>& out) {
+        const size_t o0 = out.size();
+        out.resize(o0 + n);
+        std::complex<float>* y = out.data() + o0;
+        for (size_t i = 0; i < n; ++i) {
+            lcg_ = lcg_ * 1664525u + 1013904223u;
+            const uint32_t k = lcg_ >> 12;
+            y[i] = std::complex<float>(sigma_ * noise_[k & 0xFFFFF], sigma_ * noise_[(k * 7 + 12345) & 0xFFFFF]);
+        }
+        const double w30 = 2 * M_PI * 30.0 / rate_;
+        for (auto& st : src_) {
+            const double off = st.s.hz - centreHz;
+            if (std::fabs(off) > rate_ / 2) { st.t += (double)n / rate_; continue; }   // ★ outside the capture: time still runs
+            // the phasors, rebuilt from the absolute time each block (no drift), advanced by rotation inside it
+            const double t0 = st.t;
+            std::complex<double> c = std::polar(1.0, 2 * M_PI * off * t0), cr = std::polar(1.0, 2 * M_PI * off / rate_);
+            std::complex<double> p30 = std::polar(1.0, 2 * M_PI * 30.0 * t0), r30 = std::polar(1.0, w30);
+            std::complex<double> p90 = std::polar(1.0, 2 * M_PI * 90.0 * t0), r90 = std::polar(1.0, 3 * w30);
+            std::complex<double> p150 = std::polar(1.0, 2 * M_PI * 150.0 * t0), r150 = std::polar(1.0, 5 * w30);
+            std::complex<double> pid = std::polar(1.0, 2 * M_PI * 1020.0 * t0), rid = std::polar(1.0, 34 * w30);
+            // the subcarrier's phase at t0: 2π·9960·t + (dev/30)·sin(w30·t)
+            std::complex<double> ps = std::polar(1.0, 2 * M_PI * 9960.0 * t0 + (st.s.devHz / 30.0) * std::sin(2 * M_PI * 30.0 * t0));
+            const std::complex<double> rs0 = std::polar(1.0, 2 * M_PI * 9960.0 / rate_);
+            const double d1 = 2 * M_PI * st.s.devHz / rate_;
+            const std::complex<double> eth = std::polar(1.0, -st.th);
+            const double every = st.s.identEvery, start = st.s.identStart;
+            for (size_t i = 0; i < n; ++i) {
+                const double t = t0 + (double)i / rate_;
+                double m;
+                if (!st.s.ils) {
+                    m = st.s.varDepth * (p30 * eth).real() + st.s.subDepth * ps.real();
+                } else {
+                    m = st.s.m90 * p90.real() + st.s.m150 * p150.real();
+                }
+                if (st.s.identDepth > 0 && !st.key.empty() && t >= start) {
+                    const double tk = every > 0 ? std::fmod(t - start, every) : t - start;
+                    const size_t ki = (size_t)(tk * 1000.0);
+                    if (ki < st.key.size() && st.key[ki]) m += st.s.identDepth * pid.real();
+                }
+                const double a = st.s.amp * std::max(0.0, 1.0 + m);
+                y[i] += std::complex<float>((float)(a * c.real()), (float)(a * c.imag()));
+                // advance: the subcarrier's instantaneous frequency is 9960 + dev·cos(w30 t)
+                const double x = d1 * p30.real();
+                ps *= rs0 * std::complex<double>(1.0 - 0.5 * x * x, x);
+                c *= cr; p30 *= r30; p90 *= r90; p150 *= r150; pid *= rid;
+            }
+            st.t = t0 + (double)n / rate_;
+        }
+    }
+    double rate() const { return rate_; }
+private:
+    struct St { Src s; std::vector<uint8_t> key; double th = 0, t = 0; };
+    double rate_;
+    float sigma_;
+    std::vector<float> noise_;
+    uint32_t lcg_;
+    std::vector<St> src_;
+};
+
 } // namespace tx
 } // namespace nav
 } // namespace vibe
