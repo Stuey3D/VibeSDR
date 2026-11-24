@@ -193,8 +193,11 @@ void perListenerCase(double fs, int fftSize, int R) {
     const int blk = (int)(fs / 100.0);
     size_t at10 = 0;
     long long consumed = 0;                                   // input samples the channelizer has turned into blocks
+    double tapCpu = 0;                                        // the listener thread's share: extract + decimate (+ the copy out)
     for (size_t o = 0; o + (size_t)blk <= x.size(); o += (size_t)blk) {
         ch.feed(x.data() + o, blk, [&](const cf32* bins, int) {
+            const double t0 = threadCpu();
+            struct Acc { double& a; double t0; ~Acc() { a += threadCpu() - t0; } } acc{ tapCpu, t0 };
             const int got = ch.extract(bins, centreBin, b, slice.data(), ctx, ch.blockIndex(), 16);   // ★ the shim's kIqTaperDiv
             consumed += ch.hop();
             if (got <= 0) return;
@@ -217,6 +220,8 @@ void perListenerCase(double fs, int fftSize, int R) {
     ok(short_ >= 0.0 && short_ <= 0.01 * R, std::string(tag) + ": " + std::to_string(at20) + " samples for " + std::to_string(expect) + " expected");
     std::printf("   %-34s slice %d bins = %.0f Hz → %s → %.1f Hz, writer %d taps; 20 s → %zu samples, %.1f short of rate × input (filter delay %.2f ms)\n", "", b, sr,
                 dec.plan().c_str(), dec.outRate(), c.rs.tapsPerOutput(), at20, short_, short_ / R * 1e3);
+    std::printf("   %-34s listener thread %.2f %% of a Mac core (incl. the writer's %.2f %%, run inline here)\n", "",
+                tapCpu / 20.0 * 100.0, c.writerCpu / 20.0 * 100.0);
 }
 
 // ── 4. the listener's audio, IQ out on vs off ───────────────────────────────────────────────────────────────────────

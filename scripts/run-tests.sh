@@ -1720,6 +1720,12 @@ printf '\n\033[1m── raw IQ out + saturating background decoders: the listene
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-iq-priority.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ RAW IQ OUT IS THE REAL IQ (V12, docs/v12/IQOUT-WIDE.md): a carrier 100 kHz off a USB dial is IN a 250 kHz stream, at its
+#     exact rate, nothing dropped — one-pipeline radio and a listener's own VFO. Same VIBESERVER_BIN rule. ~80 s.
+printf '\n\033[1m── raw IQ out is the real IQ, not the listener'"'"'s passband (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-iqout-wide.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ ONE .local NAME ON A PORTABLE (2026-10-25): the server hands its name to the root service (avahi publishes it) and
 #     runs no responder of its own there; anywhere else its responder runs as before.
 printf '\n\033[1m── pocket: one .local name, through avahi (end to end) ──\033[0m\n'
