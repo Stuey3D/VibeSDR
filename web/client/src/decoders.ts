@@ -191,6 +191,8 @@ export interface DecoderCallbacks {
   onSitorStatus?: (data: unknown) => void;
   onHfdlStatus?: (data: unknown) => void;   // ★ V12 HFDL: {msgs, bursts, detections}
   onLrptStatus?: (data: unknown) => void;
+  /** ★ V12 METEOR LRPT's map outline for the live preview ({"type":"lrpt_geo"}) — src/utils/lrptOutline.ts */
+  onLrptGeo?: (data: unknown) => void;
   onSatTlm?: (data: unknown) => void;   // ★ SATELLITE-BEST 1.3: fctlm_status / sat_tlm (src/services/satellites.ts parseSatTelemetry)   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
@@ -552,6 +554,11 @@ export class DecoderClient {
     if (msg.type === 'lrpt_status' && msg.data) {
       if (this.mode !== 'lrpt') return;
       this.cb.onLrptStatus?.(msg.data);
+      return;
+    }
+    if (msg.type === 'lrpt_geo' && msg.data) {
+      if (this.mode !== 'lrpt') return;
+      this.cb.onLrptGeo?.(msg.data);
       return;
     }
     if (msg.type === 'hfdl_status' && msg.data) {

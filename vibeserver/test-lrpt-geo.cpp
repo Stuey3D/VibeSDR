@@ -5,6 +5,7 @@
 #include "vibe_bgdecode.h"
 #include "vibe_lrpt_run.h"
 #include "vibe_lrpt_tx.h"
+#include "vibe_lrpt_burn.h"
 
 #include <chrono>
 #include <cmath>
@@ -234,6 +235,32 @@ int main() {
             CHECK(all, "3 h out: no outline, the reason on every picture (%s)", got.empty() ? "-" : got[0].geoWhy.c_str());
             CHECK(live >= 1 && lastLive.find("\"why\":\"the satellite's clock") != std::string::npos, "the live message says why: %s", lastLive.c_str());
         }
+    }
+
+    std::printf("── DOWNLOAD with the outline: burnt into a copy (vibe_lrpt_burn.h, ?outline=1) ──\n");
+    {
+        const int w = 64, h = 40;
+        std::vector<uint8_t> grey(size_t(w) * h);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) grey[size_t(y) * w + x] = uint8_t((x * 3 + y * 5) & 0xFF);
+        const std::string png = vibe::png::encode(w, h, 1, grey.data());
+        const std::string js = "{\"v\":1,\"w\":64,\"h\":40,\"coast\":[[2,10,60,10]],\"lake\":[],\"border\":[[5,30,5,35]],\"grid\":[],\"labels\":[[20,20,\"5\xc2\xb0N\"]]}";
+        std::string err;
+        const std::string out = burn::withOutline(png, js, err);
+        int ow = 0, oh = 0; std::vector<uint8_t> rgb;
+        CHECK(!out.empty() && burn::decodeRgb(out, ow, oh, rgb).empty() && ow == w && oh == h, "a burnt copy decodes (%s)", err.c_str());
+        if (rgb.size() == size_t(w) * h * 3) {
+            auto at = [&](int x, int y) { const uint8_t* p = &rgb[(size_t(y) * w + x) * 3]; return (int(p[0]) << 16) | (int(p[1]) << 8) | p[2]; };
+            CHECK(at(30, 10) == 0xFFD600, "the coast line is drawn (%06x)", at(30, 10));
+            CHECK(at(5, 32) == 0xFF8C3C, "the border line is drawn (%06x)", at(5, 32));
+            const int g = grey[size_t(2) * w + 50];
+            CHECK(at(50, 2) == ((g << 16) | (g << 8) | g), "the rest of the picture is untouched");
+            bool lab = false; for (int y = 24; y < 40; y++) for (int x = 24; x < 40; x++) if (at(x, y) == 0x96CDFF) lab = true;
+            CHECK(lab, "the grid label is drawn");
+        }
+        // ★ every PNG row filter decodes (our writer uses Sub only; a decoder that skipped the others would be a trap)
+        std::string rt; int rw, rh; std::vector<uint8_t> back;
+        CHECK(burn::decodeRgb(png, rw, rh, back).empty() && back[(size_t(7) * w + 9) * 3] == grey[size_t(7) * w + 9], "a grey PNG reads back");
+        err.clear(); CHECK(burn::withOutline("not a png", js, err).empty() && !err.empty(), "nonsense refused: %s", err.c_str());
     }
 
     std::printf("── the gallery: the outline item, geo / gw, the PNG untouched ──\n");

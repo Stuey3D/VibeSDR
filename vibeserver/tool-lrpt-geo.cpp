@@ -15,6 +15,7 @@
 //
 // Build: c++ -std=c++17 -O2 -I android/app/src/main/cpp vibeserver/tool-lrpt-geo.cpp -o tool-lrpt-geo
 #include "vibe_lrpt_run.h"
+#include "vibe_lrpt_burn.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -47,36 +48,6 @@ std::vector<geo::Candidate> loadCandidates(const std::string& path) {
         out.push_back(c);
     }
     return out;
-}
-
-/** Burn the outline JSON into an RGB picture (the client's DOWNLOAD with the toggle on does the same). */
-void burn(std::vector<uint8_t>& rgb, int w, int h, const std::string& js) {
-    auto line = [&](int x0, int y0, int x1, int y1, const uint8_t* c) {
-        int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
-        for (;;) {
-            if (x0 >= 0 && y0 >= 0 && x0 < w && y0 < h) { uint8_t* p = &rgb[(size_t(y0) * w + x0) * 3]; p[0] = c[0]; p[1] = c[1]; p[2] = c[2]; }
-            if (x0 == x1 && y0 == y1) break;
-            const int e2 = 2 * e;
-            if (e2 >= dy) { e += dy; x0 += sx; }
-            if (e2 <= dx) { e += dx; y0 += sy; }
-        }
-    };
-    const uint8_t coast[3] = { 255, 214, 0 }, border[3] = { 255, 140, 60 }, grid[3] = { 120, 200, 255 };
-    struct L { const char* key; const uint8_t* c; } layers[] = { { "\"grid\":[", grid }, { "\"border\":[", border }, { "\"lake\":[", coast }, { "\"coast\":[", coast } };
-    for (auto& ly : layers) {
-        size_t p = js.find(ly.key);
-        if (p == std::string::npos) continue;
-        p += std::strlen(ly.key);
-        // a list of [x,y,x,y…] arrays, ended by the layer's closing ']'
-        while (p < js.size() && js[p] == '[') {
-            const size_t e = js.find(']', p);
-            std::vector<int> v; const char* q = js.c_str() + p + 1;
-            while (q < js.c_str() + e) { char* end; v.push_back(int(std::strtol(q, &end, 10))); q = end; if (*q == ',') q++; else break; }
-            for (size_t i = 2; i + 1 < v.size(); i += 2) line(v[i - 2], v[i - 1], v[i], v[i + 1], ly.c);
-            p = e + 1;
-            if (p < js.size() && js[p] == ',') p++;
-        }
-    }
 }
 
 }  // namespace
@@ -144,7 +115,7 @@ int main(int argc, char** argv) {
             auto b = channelImage(cur->channels().at(comp ? 64 : p0.apid), s0, s1, !comp && p0.apid >= 67, w, h);
             std::vector<uint8_t> r = comp ? channelImage(cur->channels().at(65), s0, s1, false, w, h) : b;
             for (size_t i = 0; i < size_t(w) * h; i++) { rgb[i * 3] = r[i]; rgb[i * 3 + 1] = r[i]; rgb[i * 3 + 2] = b[i]; }
-            burn(rgb, w, h, p0.geoJson);
+            burn::draw(rgb, w, h, p0.geoJson);   // ★ the server's own ?outline=1 drawing (vibe_lrpt_burn.h)
             const std::string png = vibe::png::encode(w, h, 3, rgb.data());
             if (FILE* q = std::fopen((base + "-outline.png").c_str(), "wb")) { std::fwrite(png.data(), 1, png.size(), q); std::fclose(q); }
         }
