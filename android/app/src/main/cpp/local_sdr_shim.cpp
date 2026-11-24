@@ -23973,7 +23973,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    ★ V12 PRESENCE (11-24): "bye" is the same message under the name the presence protocol gives it.
         if (type == "leave" || type == "bye") {
             if (sock) { std::lock_guard<std::mutex> lk(clientMtx);
-                        noHoldSockLocked(sock.get(), type == "bye" ? "the app said goodbye — it has closed" : "the listener left on purpose"); }
+                        const char* why = type == "bye" ? "the app said goodbye — it has closed" : "the listener left on purpose";
+                        auto it = sockSession.find(sock.get());
+                        if (it != sockSession.end() && !it->second.empty())
+                            LOGI("listener %.8s: %s — when its sockets go it is released at once, never held", it->second.c_str(), why);
+                        noHoldSockLocked(sock.get(), why); }
             return;
         }
         // ★★ V12 PRESENCE (Stuart 11-24): the app says when it goes to the background and comes back — see "PRESENCE"
@@ -37943,6 +37947,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (s.empty() || sessionHasOtherSocketLocked(s, closing)) return;
         auto it = presence_.find(s);
         if (it == presence_.end() || it->second.bg) return;
+        LOGI("listener %.8s: its app closed its connection cleanly in the foreground — it has closed, not been suspended: "
+             "released at once, never held", s.c_str());
         noHoldLocked(s, "its app closed its connection cleanly in the foreground — it has closed, not been suspended");
     }
 
