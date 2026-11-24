@@ -363,7 +363,7 @@ static void testLivePass(bool quick) {
     using namespace livepass;
     std::printf("The live pass (Meteor-M2-4, 2026-11-22): OQPSK + differential, −3.34 kHz, −25 Hz/s fed forward\n");
     // ── 1. sensitivity where that pass was: the joint differential decode + acquisition on the matched filter ──
-    for (double es : {3.0, 3.5, 5.0}) {
+    for (double es : {2.0, 3.0, 3.5, 5.0}) {
         if (quick && es == 3.0) continue;
         uint64_t blocks = 0; const int P = 8;
         for (uint32_t seed = 1; seed <= 2; seed++) {
@@ -381,6 +381,8 @@ static void testLivePass(bool quick) {
         std::printf("  Es/N0 %.1f dB: %llu of %llu picture blocks (%.0f %%)\n", es, (unsigned long long)blocks, (unsigned long long)want, 100.0 * double(blocks) / double(want));
         // ★ before beta91: 0 % at 3.5 dB and at 4 dB (the soft differential decode + the raw-slice acquisition)
         if (es >= 3.5) CHECK(blocks >= want * 6 / 10, "live-pass shape at Es/N0 %.1f: blocks %llu of %llu", es, (unsigned long long)blocks, (unsigned long long)want);
+        // ★★ 2026-11-24 (LRPT-SENSITIVITY.md): the soft Costas detector + the 0.002 carrier loop — before it, 2.0 dB gave ≈ 2 %
+        if (es == 2.0) CHECK(blocks >= want * 4 / 10, "sensitivity at Es/N0 2.0 dB: blocks %llu of %llu (needs 40 %%)", (unsigned long long)blocks, (unsigned long long)want);
     }
     // ── 2. a fade and the recovery, through the server's Run: frames, 20 s of nothing, frames again ──
     //    ★ before beta91: the frames never came back (FrameSync::decoding() stayed true after the ASM was lost, so the
