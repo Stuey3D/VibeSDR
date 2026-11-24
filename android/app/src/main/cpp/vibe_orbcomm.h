@@ -4,7 +4,7 @@
 //
 //   IQ slice (any rate ≥ ~29 kS/s) → Scanner (which carriers are up) → one Chan per carrier:
 //     NCO (its carrier, moved by the AFC) → decimating low-pass (SIMD) → root-raised-cosine (α 0.4) + interpolator in one
-//     (vibelrpt::PolyRrc) → Gardner timing → differential detection with a 4th-power frequency loop → NRZ-M decode
+//     (vibelrpt::PolyRrc) → Gardner timing → differential detection with a 4th-power frequency loop → the step's sign is the bit
 //     → Framer (24-bit sync 65 A8 F9, 12-byte packets, a 24-byte ephemeris, Fletcher check + a small Chase repair)
 //
 // ★★★ SOURCES (published descriptions; every line of this file is ours):
@@ -37,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -184,7 +185,7 @@ inline bool decodeEphemeris(const Packet& p, Ephemeris& e, double nowUnix = 0) {
 /** Bits arrive LSB first. Hunt: the 24-bit sync 65 A8 F9 (≤ 2 bits wrong, then the sync packet's own Fletcher must pass).
  *  Locked: 12-byte packets (24 for an ephemeris) back to back, 4800 bits a minor frame; each minor frame must start
  *  with a sync again (≤ 4 bits wrong) — two missed in a row = hunt.
- *  ★ REPAIR (Chase): NRZ-M turns one wrong SYMBOL into two adjacent wrong bits, so a packet that fails its check gets
+ *  ★ REPAIR (Chase): one wrong SYMBOL is one wrong bit (the bit is the phase step), so a packet that fails its check gets
  *    its weakest symbols flipped — singly and in pairs (kChase of them: 28 trials, a false pass ≈ 28 / 65 536). */
 class Framer {
 public:
@@ -203,23 +204,27 @@ public:
         histN_++;
         sr_ = (sr_ >> 1) | (uint32_t(bit & 1) << 23);
         if (st_ == Hunt) {
-            if (popcount24(sr_ ^ kSyncWord) <= 2 && histN_ >= 25) {
+            /* ★ EITHER POLARITY: which sign of the ±90° step is a 1 depends on the spectrum's orientation (an IQ swap, a
+             *  mixer's side) — Kenny's table has 1 = −90°; the sync word says which, and the rest of the run follows it. */
+            const bool pos = popcount24(sr_ ^ kSyncWord) <= 2, neg = popcount24(sr_ ^ (~kSyncWord & 0xFFFFFF)) <= 2;
+            if ((pos || neg) && histN_ >= 25) {
+                inv_ = neg && !pos ? 1 : 0;
                 // the 24 sync bits (and the confidence of the symbol before them) become the packet's start
                 n_ = 0;
-                for (int i = 24; i >= 1; i--) { const Bit& h = hist_[(histN_ - uint64_t(i)) % kHist]; bits_[n_] = h.b; conf_[n_ + 1] = h.c; n_++; }
+                for (int i = 24; i >= 1; i--) { const Bit& h = hist_[(histN_ - uint64_t(i)) % kHist]; bits_[n_] = uint8_t(h.b ^ inv_); conf_[n_ + 1] = h.c; n_++; }
                 conf_[0] = hist_[(histN_ - 25) % kHist].c;
                 frameBits_ = 24; want_ = 96; st_ = Tentative;
             }
             return;
         }
-        bits_[n_] = uint8_t(bit & 1); conf_[n_ + 1] = conf; n_++; frameBits_++;
+        bits_[n_] = uint8_t((bit ^ inv_) & 1); conf_[n_ + 1] = conf; n_++; frameBits_++;
         if (n_ == 8) {
             const uint8_t t = byteAt(0);
             want_ = packetLen(t) * 8;
             if (frameBits_ - 8 + want_ > 4800) want_ = 96;   // an ephemeris never straddles the minor frame
         }
         if (n_ == 24 && frameBits_ == 24 && st_ == Locked) {   // a minor frame's first packet: must be the sync
-            if (popcount24(sr_ ^ kSyncWord) > 4) {
+            if (popcount24(sr_ ^ (inv_ ? (~kSyncWord & 0xFFFFFF) : kSyncWord)) > 4) {
                 stats_.syncMiss++;
                 if (++missed_ >= 2) { st_ = Hunt; missed_ = 0; return; }
             } else missed_ = 0;
@@ -250,18 +255,18 @@ private:
         if (frameBits_ >= 4800) frameBits_ = 0;
         want_ = 96;
     }
-    /** Flip the weakest symbols (each flips its own bit and the next) until the check passes. */
+    /** Flip the weakest symbols (one symbol = one bit: the data IS the phase step) until the check passes. */
     void chase_(Packet& p) {
         const int L = n_;
         std::array<int, kChase> weak{}; int nw = 0;
-        // the L+1 symbols: index s flips bits s−1 and s (symbol 0 is the one before the packet: bit 0 only)
+        // index s = bit s−1's symbol (conf_[0], the symbol before the packet, carries no bit of it)
         std::vector<std::pair<float, int>> c; c.reserve(size_t(L) + 1);
         for (int s = 0; s <= L; s++) c.push_back({ conf_[size_t(s)], s });
         const int k = std::min<int>(kChase, int(c.size()));
         std::partial_sort(c.begin(), c.begin() + k, c.end());
         for (int i = 0; i < k; i++) weak[size_t(nw++)] = c[size_t(i)].second;
         auto flip = [&](std::array<uint8_t, 24>& b, int s) {
-            for (int bit : { s - 1, s }) if (bit >= 0 && bit < L) b[size_t(bit / 8)] ^= uint8_t(1u << (bit % 8));
+            const int bit = s - 1; if (bit >= 0 && bit < L) b[size_t(bit / 8)] ^= uint8_t(1u << (bit % 8));
         };
         for (int i = 0; i < nw; i++) {
             std::array<uint8_t, 24> b = p.b; flip(b, weak[size_t(i)]);
@@ -278,7 +283,7 @@ private:
     uint64_t histN_ = 0, sym_ = 0;
     std::array<uint8_t, 192> bits_{};
     std::array<float, 193> conf_{};
-    int n_ = 0, want_ = 96, frameBits_ = 0, missed_ = 0;
+    int n_ = 0, want_ = 96, frameBits_ = 0, missed_ = 0, inv_ = 0;
     Stats stats_;
 };
 
@@ -347,13 +352,13 @@ private:
 };
 
 /** One ORBCOMM carrier cut from the slice: mix → decimate → matched filter + Gardner → differential detection with a
- *  4th-power AFC → NRZ-M bits → Framer. `offsetHz` is the carrier's place in the slice (Hz from its centre). */
+ *  4th-power AFC → the steps' signs (bits) → Framer. `offsetHz` is the carrier's place in the slice (Hz from its centre). */
 class Chan {
 public:
     struct Cfg {
         double fsIn = 0;              ///< the slice's rate
         double offsetHz = 0;          ///< where the scanner saw the carrier
-        double acqRangeHz = 1500;     ///< the 4th-power search either side of it
+        double acqRangeHz = 2400;     ///< the 4th-power search either side of it (the comb's whole unambiguous range)
     };
     explicit Chan(const Cfg& c) : cfg_(c), off_(c.offsetHz) {
         const int D = std::max(1, int(std::floor(c.fsIn / 28800.0)));
@@ -395,11 +400,13 @@ public:
         return N > 0 ? std::min(40.0, 10 * std::log10(S / N)) : 40.0;
     }
     bool acquired() const { return acquired_; }
-    bool rejected() const { return rejected_; }       ///< the x⁴ comb showed no SDPSK line: not an ORBCOMM carrier
+    bool rejected() const { return rejected_; }
+    bool spur() const { return spur_; }                ///< rejected as a steady line (banned longer: spurs do not move)       ///< the x⁴ comb showed no SDPSK line: not an ORBCOMM carrier
     double acqRatio() const { return acqRatio_; }      ///< the line over the comb's mean (the tests read it)
-    /** Measured 2026-11-24: synthetic SDPSK at Es/N0 4 dB 10, 6 dB 24, 8 dB 75; the raw capture with no bird up, 119 tries
-     *  across the band, at most 10.7 (the RTL's ripple and spurs). 16 keeps every carrier that can decode (≈ 6 dB up). */
-    static constexpr double kAcqMinRatio = 16.0;
+    double stepMean() const { return stepAvg_; }       ///< mean |sin| of the symbol steps (the spur check; tests)
+    /* (History: the x⁴ ratio was the gate — 16, then 7 over ±2 bins — until an oscillator's wander pushed a real 6 dB carrier
+     *  under the noise's best: measured synthetic 6 dB 10.4, 8 dB 21, the 09:38 capture's noise at most 5.1. It is now only
+     *  reported; the step statistic below is the gate.) */
     bool locked() const { return framer_.locked(); }
     uint64_t symbols() const { return syms_; }
     const Framer::Stats& stats() const { return framer_.stats(); }
@@ -463,10 +470,35 @@ private:
         off_ += kAfc_ * double(th) * kBaud / (2 * M_PI);  // the NCO follows (feedback, a few hundred symbols)
         const std::complex<float> rot(std::cos(-th), std::sin(-th));
         const std::complex<float> dr = d * rot;
-        const int b = dr.imag() > 0 ? 1 : 0;              // the encoded bit (+90° = 1)
-        const int info = b ^ lastB_;                      // NRZ-M: the information bit is the change
-        lastB_ = b;
-        framer_.push(info, std::fabs(dr.imag()) / std::max(1e-12f, float(pAvg_)), syms_);
+        /* ★★★ THE BIT IS THE PHASE STEP ITSELF (Kenny's own table: 1 = −90°, 0 = +90°; the step from symbol to symbol IS
+         *  the differential coding he calls NRZ-M). The first build XORed successive steps as well — our transmitter did the
+         *  same, so every synthetic test passed while the live FM116 pass (2026-11-24 15:09) never found a sync. */
+        const int b = dr.imag() < 0 ? 1 : 0;
+        // ★ a steady SPUR (the RTL's / an LNA's own lines) is no SDPSK: its steps sit at 0°, not ±90°
+        stepAvg_ += 0.01 * (double(ad > 0 ? std::fabs(dr.imag()) / ad : 0.f) - stepAvg_);
+        cosAvg_ += 0.01 * (double(ad > 0 ? std::fabs(dr.real()) / ad : 0.f) - cosAvg_);
+        /* ★★ THE GATE (the first raw capture: the RTL's ripple adopted as 268 "carriers" in 10 minutes; the live FM116 pass:
+         *  steady spurs at 137.474 / 137.282 / 137.666 found again and again). Half a second in, the mean |sin| of the steps:
+         *  SDPSK ≥ 0.80 from 6 dB; noise 2/π = 0.64; a CW spur 0.40 down to 0.06. Below kNotSdpskStep = dropped; below
+         *  kSpurStep it is a steady line and banned longer. */
+        /* ★★ A QUARTER TURN OUT: acquisition can land a multiple of 1200 Hz off (one quarter turn a symbol — invisible to the
+         *  d⁴ loop); then the steps sit at 0°/180° and look like a SPUR, but their |cos| is as high as SDPSK's |sin|. A
+         *  spur's steps are near 0° too — the difference: a quarter-turn-out carrier's steps are 0° AND 180° (|cos| high,
+         *  data-like), a spur's 0° only. So when |cos| is high, move 1200 Hz towards where the scanner saw the carrier and
+         *  look again (twice at most); a steady line is caught by sign: a spur's mean step stays at +|d| (wantsQuarter_). */
+        if (syms_ == lookAt_) {
+#ifdef VIBE_ORB_DEBUG
+            std::fprintf(stderr, "look: off %.0f (scan %.0f) sin %.3f cos %.3f turn %.3f acqRatio %.1f\n", off_, cfg_.offsetHz, stepAvg_, cosAvg_, turnSign_, acqRatio_);
+#endif
+            const bool quarter = cosAvg_ >= 0.66 && cosAvg_ > stepAvg_ + 0.08 && turnSign_ < kTurnSignMax && quarters_ < 2;   // noise: both ≈ 0.62
+            if (quarter) {
+                off_ += off_ > cfg_.offsetHz ? -1200.0 : 1200.0;
+                quarters_++; lookAt_ = syms_ + kSpurLookSym; stepAvg_ = cosAvg_ = turnSum_ = 0; turnN_ = 0;
+            } else if (stepAvg_ < kNotSdpskStep) { rejected_ = true; spur_ = stepAvg_ < kSpurStep; }
+        }
+        turnSum_ += ad > 0 ? double(dr.real()) / ad : 0.0; turnN_++;
+        turnSign_ = turnN_ ? std::fabs(turnSum_ / turnN_) : 0.0;
+        framer_.push(b, std::fabs(dr.imag()) / std::max(1e-12f, float(pAvg_)), syms_);
     }
     void acquire_() {
         // x⁴ (each point unit-normalised: the line, not the strongest burst), Hann window, FFT
@@ -488,21 +520,26 @@ private:
         const double binHz = fsA / double(N);
         const int side = int(std::lround(kBaud / binHz));
         auto pw = [&](int k) { return std::norm(a[size_t(((k % int(N)) + int(N)) % int(N))]); };
-        auto comb = [&](int k) { return pw(k) + pw(k - side) + pw(k + side); };
+        /* ★ ±2 bins each (a pass's Doppler rate, up to ~35 Hz/s, smears 4× its drift over the 0.21 s look: ±30 Hz of x⁴) */
+        auto line = [&](int k) { float a = 0; for (int j = -2; j <= 2; j++) a += pw(k + j); return a; };
+        /* ★★ BOTH SIDE LINES, NOT THE CENTRE (the live-like test: a steady spur 6 kHz beside the carrier at 10 dB). A CW
+         *  spur's x⁴ is ONE line — it can fill the centre slot but never both side slots at once; SDPSK always fills both.
+         *  So the score is the weaker of the two side lines PLUS the centre: the side pair alone repeats every 9600 Hz of x⁴
+         *  (a 2400 Hz error — 2 quarter turns a symbol, which the d⁴ loop cannot see either: the live-like test locked
+         *  there and stayed); the centre line breaks that tie, so the answer is unique over ±2400 Hz. */
+        auto comb = [&](int k) { return std::min(line(k - side), line(k + side)) + line(k); };
         int best = 0; float bestP = -1;
-        const int lim = int(std::min(fsA / 4 - binHz, 4 * cfg_.acqRangeHz) / binHz);
+        const int lim = int(std::min(fsA / 2 - 3 * binHz, 4 * cfg_.acqRangeHz) / binHz);
         double sum = 0; int cnt = 0;
         for (int k = -lim; k <= lim; k++) {
             const float q = comb(k);
             sum += q; cnt++;
             if (q > bestP) { bestP = q; best = k; }
         }
-        /* ★★ IS IT AN ORBCOMM CARRIER AT ALL? (the first raw capture, 2026-11-24 09:38 UTC: no bird up, and the scanner
-         *  adopted the RTL's own passband ripple — ~3 dB bumps every ~40 kHz — as 268 "carriers" in 10 minutes, each
-         *  demodulated for 8 s.) A real SDPSK carrier puts a LINE in the x⁴ comb; noise does not. The line must stand
-         *  kAcqMinRatio over the comb's mean, or the carrier is REJECTED (the receiver drops and bans it at once). */
+        /* ★ The line over the comb's mean — REPORTED, no longer a gate: an oscillator's wander (or a fast Doppler rate)
+         *  smears the x⁴ lines so a real 6 dB carrier scored under the noise's best (live-like test). The gate is the
+         *  symbol steps' statistic half a second in (kNotSdpskStep / kSpurStep), which needs only the AFC to have pulled in. */
         acqRatio_ = cnt > 0 && sum > 0 ? double(bestP) / (sum / cnt) : 0.0;
-        if (acqRatio_ < kAcqMinRatio) { rejected_ = true; acq_.clear(); return; }
         // parabolic refinement
         const float l = comb(best - 1), c = comb(best), r = comb(best + 1);
         const float den = l - 2 * c + r;
@@ -519,7 +556,14 @@ private:
     DecimLp lp_;
     vibelrpt::PolyRrc rrc_;
     std::vector<std::complex<float>> acq_;
-    bool acquired_ = false, rejected_ = false;
+    bool acquired_ = false, rejected_ = false, spur_ = false;
+    double stepAvg_ = 0, cosAvg_ = 0, turnSum_ = 0, turnSign_ = 0;
+    uint64_t turnN_ = 0, lookAt_ = kSpurLookSym;
+    int quarters_ = 0;
+    static constexpr double kTurnSignMax = 0.5;        ///< |mean cos| of the steps: a spur ≈ 1 (always +), data ≈ 0                               ///< mean |sin| of the symbol steps (SDPSK ≈ 0.8–1, a CW spur ≈ 0.4–0.6 in noise)
+    static constexpr uint64_t kSpurLookSym = 2400;    ///< half a second after acquisition
+    static constexpr double kSpurStep = 0.5;           ///< measured: a CW spur at C/N 3–20 dB 0.40–0.06
+    static constexpr double kNotSdpskStep = 0.72;      ///< measured: SDPSK 6 dB 0.80, 8 dB 0.90; noise 0.64
     double acqRatio_ = 0;
     std::complex<float> prev_{ 0, 0 }, acc4_{ 0, 0 };
     double pAvg_ = 0, m2_ = 0, m4_ = 0;
@@ -576,6 +620,19 @@ private:
         std::vector<double> flat;
         for (int k = -lim; k < lim; k++) flat.push_back(p[size_t(k + half)]);
         if (flat.size() < 8) { peaks_.clear(); return; }
+        /* ★ NARROW LINES OUT FIRST (spurs: an RTL's, an LNA's — one or two bins; ORBCOMM fills ~17+): a bin over 4× the
+         *  median of its ±6 neighbours is cut to that median, so a spur never makes a peak, nor drags a carrier's centroid. */
+        {
+            std::vector<double> c = flat, w;
+            for (size_t i = 0; i < flat.size(); i++) {
+                w.clear();
+                for (long j = long(i) - 6; j <= long(i) + 6; j++) if (j >= 0 && j < long(flat.size()) && j != long(i)) w.push_back(flat[size_t(j)]);
+                std::nth_element(w.begin(), w.begin() + long(w.size() / 2), w.end());
+                const double med = w[w.size() / 2];
+                if (flat[i] > 4 * med) c[i] = med;
+            }
+            flat.swap(c);
+        }
         std::vector<double> s = flat; std::nth_element(s.begin(), s.begin() + long(s.size() * 3 / 10), s.end());
         const double floor = std::max(1e-30, s[s.size() * 3 / 10]);
         floorDb_ = 10 * std::log10(floor);
@@ -628,7 +685,7 @@ public:
     struct Cfg {
         int maxChans = 4;              ///< AUTO; the client's manual control can lower or raise it (≤ kMaxChans)
         double dropSec = 8;            ///< a carrier with no good packet this long is dropped
-        double banSec = 30;            ///< … and its frequency is not retried for this long
+        double banSec = 12;            ///< … and its frequency is not retried for this long (a spur: 4×, ±2 kHz)
         /** Only carriers within this of the slice centre (Hz); 0 = the whole flat slice. A single-channel pick narrows it. */
         double windowHz = 0;
     };
@@ -656,7 +713,19 @@ public:
             Chan& c = *chans_[i];
             const double quietSec = double(c.symbols() - c.lastGoodSym) / kBaud;
             if (c.rejected() || (now_ - c.createdSec > cfg_.dropSec && quietSec > cfg_.dropSec)) {
-                bans_.push_back({ c.offsetHz(), now_ + cfg_.banSec });
+                // ★ a spur does not move: banned 4× longer but only ±2 kHz (a real carrier 6 kHz beside it stays findable)
+                /* ★ STRIKES: the same place refused again (the RTL's ripple does not move; a carrier moves with Doppler) doubles
+                 *  its ban, up to 5 minutes — the 09:38 empty-sky capture opened ~965 short-lived candidates in 10 minutes
+                 *  without this. A strike is forgotten after 10 minutes. */
+                const long key = long(std::lround(c.offsetHz() / 2000.0));
+                Strike& st = strikes_[key];
+                if (now_ - st.at > 600) st.n = 0;
+                st.at = now_;
+                const double ban = std::min(300.0, (c.spur() ? 4 * cfg_.banSec : cfg_.banSec) * double(1 << std::min(st.n, 5)));
+                if (c.rejected()) st.n++;
+                if (strikes_.size() > 512) strikes_.clear();
+                bans_.push_back({ c.offsetHz(), now_ + ban, c.spur() ? 2000.0 : 6000.0 });
+                if (c.spur()) spurs_++; else if (c.rejected()) notSdpsk_++;
                 chans_.erase(chans_.begin() + long(i));
             } else i++;
         }
@@ -669,6 +738,8 @@ public:
         return v;
     }
     const std::vector<Scanner::Peak>& peaks() const { return scan_.peaks(); }
+    uint64_t spursRejected() const { return spurs_; }      ///< steady lines refused (the spur check)
+    uint64_t notSdpskRejected() const { return notSdpsk_; } ///< peaks with no x⁴ line (the carrier check)
     double floorDb() const { return scan_.floorDb(); }
     /** The scanner's level (dB over the floor) at the carrier nearest `rfHz` (within 4 kHz), or −99. */
     double levelAt(double rfHz) const {
@@ -676,14 +747,14 @@ public:
         return -99;
     }
 private:
-    struct Ban { double off, until; };
+    struct Ban { double off, until, radius; };
     void adopt_() {
         for (const Scanner::Peak& pk : scan_.peaks()) {
             if (int(chans_.size()) >= cfg_.maxChans) break;
             if (cfg_.windowHz > 0 && std::fabs(pk.offsetHz) > cfg_.windowHz) continue;
             bool near = false;
             for (auto& c : chans_) if (std::fabs(c->offsetHz() - pk.offsetHz) < 9000) near = true;
-            for (auto& b : bans_) if (std::fabs(b.off - pk.offsetHz) < 6000) near = true;
+            for (auto& b : bans_) if (std::fabs(b.off - pk.offsetHz) < b.radius) near = true;
             if (near) continue;
             Chan::Cfg cc; cc.fsIn = fs_; cc.offsetHz = pk.offsetHz;
             std::unique_ptr<Chan> c(new Chan(cc));
@@ -704,9 +775,12 @@ private:
     uint64_t blockSym0_ = 0;
     const Chan* cur_ = nullptr;
     int nextId_ = 0;
+    uint64_t spurs_ = 0, notSdpsk_ = 0;
     Scanner scan_;
     std::vector<std::unique_ptr<Chan>> chans_;
     std::vector<Ban> bans_;
+    struct Strike { int n = 0; double at = 0; };
+    std::map<long, Strike> strikes_;
 };
 
 }  // namespace vibeorb

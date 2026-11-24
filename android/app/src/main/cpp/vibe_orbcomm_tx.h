@@ -1,5 +1,5 @@
 // vibe_orbcomm_tx.h — a TEST transmitter for the ORBCOMM downlink (tests only; never linked into a server's path).
-// Packets → minor frames (sync, zero fill, the rest) → LSB-first bits → NRZ-M → ±90° SDPSK steps → RRC (α 0.4) at any
+// Packets → minor frames (sync, zero fill, the rest) → LSB-first bits → ±90° SDPSK steps (1 = −90°, Kenny's table) → RRC (α 0.4) at any
 // rate, with a carrier offset, a Doppler slope, a timing error and white noise at a chosen Es/N0. Same published format
 // as vibe_orbcomm.h (sources there).
 #pragma once
@@ -61,15 +61,16 @@ struct Signal {
     double esn0Db = 30;        ///< per-symbol SNR (noise over the output rate's bandwidth scaled to Es/N0)
     double amp = 0.3;
     unsigned seed = 1;
+    double phaseWalkHz = 0;    ///< oscillator phase noise: a random walk whose rate wanders by about this (Hz rms)
 };
 /** Bytes → complex samples (cf32) at s.fs. */
 inline std::vector<std::complex<float>> modulate(const std::vector<uint8_t>& bytes, const Signal& s) {
     std::vector<int> bits; bits.reserve(bytes.size() * 8);
     for (uint8_t b : bytes) for (int i = 0; i < 8; i++) bits.push_back(b >> i & 1);   // LSB first
-    // NRZ-M then ±90°
+    // the bit IS the step: 1 = −90°, 0 = +90° (Kenny's table — the step itself is the differential coding)
     std::vector<std::complex<double>> sym; sym.reserve(bits.size());
-    int e = 0; double ph = 0;
-    for (int I : bits) { e ^= I; ph += e ? M_PI / 2 : -M_PI / 2; sym.push_back(std::polar(1.0, ph)); }
+    double ph = 0;
+    for (int I : bits) { ph += I ? -M_PI / 2 : M_PI / 2; sym.push_back(std::polar(1.0, ph)); }
     const double sps = s.fs / (kBaud * (1 + s.clockPpm * 1e-6));
     const int span = 6;
     auto rrc = [](double t, double a) {
@@ -85,13 +86,14 @@ inline std::vector<std::complex<float>> modulate(const std::vector<uint8_t>& byt
     const double es = s.amp * s.amp / kBaud;
     const double n0 = es / std::pow(10.0, s.esn0Db / 10.0);
     const double sigma = std::sqrt(n0 * s.fs / 2);
-    double phase = 0;
+    double phase = 0, walk = 0;
     for (size_t n = 0; n < N; n++) {
         const double t = double(n) / sps - span;            // in symbols
         const long k0 = long(std::floor(t)) - span, k1 = long(std::ceil(t)) + span;
         std::complex<double> v = 0;
         for (long k = std::max(0L, k0); k <= k1 && k < long(sym.size()); k++) v += sym[size_t(k)] * rrc(t - double(k), kRrcAlpha);
-        const double f = s.offsetHz + s.slopeHzS * double(n) / s.fs;
+        if (s.phaseWalkHz > 0) walk += s.phaseWalkHz * 0.0045 * g(rng), walk *= 0.99999;   // a wander of the frequency, ≈ 0.1 s
+        const double f = s.offsetHz + s.slopeHzS * double(n) / s.fs + walk;
         phase += 2 * M_PI * f / s.fs;
         v *= std::polar(s.amp, phase);
         out[n] = std::complex<float>(float(v.real() + sigma * g(rng)), float(v.imag() + sigma * g(rng)));

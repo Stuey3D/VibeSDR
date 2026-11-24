@@ -280,7 +280,8 @@ private:
                           c.locked ? "true" : "false", (unsigned long long)c.ok, (unsigned long long)c.bad, (unsigned long long)c.repaired);
             j += b; first = false;
         }
-        j += "],\"pick\":" + std::to_string(o_.pickNorad ? o_.pickNorad() : 0) + ",\"up\":" + std::to_string(up) + ",\"dots\":[";
+        j += "],\"refused\":{\"spurs\":" + std::to_string(rx_.spursRejected()) + ",\"notSdpsk\":" + std::to_string(rx_.notSdpskRejected()) + "}";   // ★ candidates the carrier checks turned away
+        j += ",\"pick\":" + std::to_string(o_.pickNorad ? o_.pickNorad() : 0) + ",\"up\":" + std::to_string(up) + ",\"dots\":[";
         for (size_t i = 0; i < liveDots_.size() && i < 64; i++) {
             const auto& d = liveDots_[i];
             char b[96];

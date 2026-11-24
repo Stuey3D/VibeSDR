@@ -23,7 +23,7 @@ sky dots within 1° of SGP4). **On-air: see "Real data" below.**
 | | |
 |---|---|
 | Band | 137–138 MHz, channel N = 137.0 MHz + N × 2.5 kHz (in use N ≈ 80–320, 137.2–137.8 MHz); each satellite sends on one or two |
-| Modulation | SDPSK — ±90° a symbol — after NRZ-M (bₙ = bₙ₋₁ ⊕ Iₙ); 4800 bit/s; RRC α 0.4 (≈ 6.7 kHz wide) |
+| Modulation | SDPSK — ±90° a symbol, **the step itself is the bit** (Kenny's table: 1 = −90°, 0 = +90°; the step is the differential coding he calls NRZ-M — there is no second XOR); 4800 bit/s; RRC α 0.4 (≈ 6.7 kHz wide) |
 | Framing | LSB first; a minor frame = 600 bytes = 1 s = 50 packets of 12 bytes (an ephemeris is 24) — sync, a zero fill, the rest |
 | Check | Fletcher (ORBCOMM E80050015 App. F): both running sums zero over a good packet |
 | Doppler | ±3.3 kHz at 137 MHz, ≤ ~35 Hz/s |
@@ -60,7 +60,7 @@ sky dots within 1° of SGP4). **On-air: see "Real data" below.**
 - **The receiver** (`vibe_orbcomm.h`): a scanner (an FFT every ~50 ms, averaged ~1 s) finds ORBCOMM-shaped carriers;
   each gets a `Chan` (≤ 4 AUTO, 1–6 manual `max_carriers`): NCO → SIMD decimating low-pass (NEON / SSE2 / scalar) →
   `vibelrpt::PolyRrc` matched filter + interpolator → Gardner → differential detection with a d⁴ frequency loop →
-  NRZ-M → the framer. Acquisition is an x⁴ FFT at **four points a symbol with a three-line comb**: SDPSK's x⁴ has side
+  the step's sign (either polarity: the sync word says which) → the framer. Acquisition is an x⁴ FFT at **four points a symbol with a three-line comb**: SDPSK's x⁴ has side
   lines at ± the symbol rate, and at two points a symbol the side line aliases onto 4Δf + 4800 — a 1200 Hz error (a
   quarter turn a symbol, invisible to differential detection). A failed packet gets a small Chase repair (the 7 weakest
   symbols, singly and in pairs: false-pass odds ≈ 28 / 65 536).
@@ -89,6 +89,29 @@ its x⁴ comb (`Chan::kAcqMinRatio` 16; measured: noise across this capture at m
 or it is dropped and banned at once. Re-run: 0 carriers, 0 packets — correct for an empty sky, at no cost.
 **Still unproven on air: everything that needs a bird.** Next good passes over Luton that day (UTC): FM117 47° at 10:46,
 FM32 40° at 11:05, FM108 49° at 11:37 — record ~10 minutes around one.
+
+**2026-11-24 15:09 UTC, the first LIVE pick** (FM116, Pi 500 V4 + YouLoop + LNA, test build 8f365e138): the carriers were
+found (137.7975 MHz, 137.6600 MHz, SNR 6–8 dB) but none ever framed — `lock:false ok:0 bad:0`, carrier ids past 600, `good:0`
+all pass; steady spurs at 137.474 / 137.282 / 137.666 MHz were found again and again. Causes, fixed:
+
+1. **The bit is the phase step itself.** Kenny's own table (1 = −90°, 0 = +90°) is the whole coding; the first build XORed
+   successive steps as well (reading "NRZ-M" as a second layer) and its synthetic transmitter did the same, so every
+   synthetic test passed and no real sync could ever be found. Either polarity is now accepted (the sync word says which).
+   (F. Bieberly's MIT-licensed receiver, which decodes real passes, also takes the step's sign directly.)
+2. **Spurs**: the scanner cuts lines narrower than a few bins before it looks for carriers; a carrier whose symbol steps
+   sit at 0° (mean |sin| < 0.5) is a steady line — refused and banned ±2 kHz for 4× longer.
+3. **The acquisition gate** (x⁴ line over the comb) refused real carriers once the line was smeared by a Doppler rate or an
+   oscillator's wander; it is now only reported. The gate is the steps' mean |sin| half a second in (SDPSK ≥ 0.80 from
+   6 dB, noise 0.64). The comb scores the weaker side line plus the centre (a spur fills one slot, never both sides; the
+   centre breaks the 2400 Hz tie), and a carrier found a quarter turn out (n × 1200 Hz, |cos| high) is moved 1200 Hz
+   towards the scanner's estimate and looked at again.
+4. **Strikes**: a place refused again doubles its ban (≤ 5 min) — the empty-sky capture went from ~965 short-lived
+   candidates in 10 minutes to 187, with 0 locks and 0 packets.
+
+`orbcomm_status` now also carries `refused: {spurs, notSdpsk}`. Synthetic (test-orbcomm "live-like"): 6.5 dB, −30 Hz/s,
+oscillator wander, 30 ppm clock, a 10 dB spur 6 kHz beside the carrier and two more across a 1.024 MS/s slice — decodes,
+no spur ever opened. Es/N0 6 dB now 250 of ~500 packets, 8 dB 447. **Still unproven on a real pass** until the FM113
+capture (15:43–15:57 UTC, bias-T on) is run.
 
 To check a capture: `vibeserver/tool-orbcomm-file <file.cu8> --rate 1024000 --centre 137500000 --start
 <UTC ISO> --tle orbcomm.tle --lat … --lon … --csv out.csv` (a raw `rtl_sdr` file has no header; the tool handles both).
