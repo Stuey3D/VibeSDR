@@ -146,6 +146,7 @@ int airspy_set_linearity_gain(airspy_device* d, uint8_t v) { note("asp linearity
 int airspy_set_sensitivity_gain(airspy_device* d, uint8_t v) { note("asp sensitivity " + std::to_string(d->id) + " " + std::to_string(v)); return AIRSPY_SUCCESS; }
 int airspy_set_rf_bias(airspy_device* d, uint8_t v) { note("asp bias " + std::to_string(d->id) + " " + std::to_string(v)); return AIRSPY_SUCCESS; }
 int airspy_set_packing(airspy_device*, uint8_t) { return AIRSPY_SUCCESS; }
+void airspy_vibe_set_adc_stats(airspy_device*, uint32_t) {}   // ★ VibeSDR libairspy patch (beta92 satellite gain hold)
 const char* airspy_error_name(enum airspy_error) { return "stub error"; }
 const char* airspy_board_id_name(enum airspy_board_id) { return "AIRSPY"; }
 }

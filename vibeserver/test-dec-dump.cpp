@@ -64,7 +64,7 @@ int main() {
     const std::string none = tmp + "-unset", dir = tmp + "-on", small = tmp + "-cap";
     mkdir(none.c_str(), 0755); mkdir(dir.c_str(), 0755); mkdir(small.c_str(), 0755);
 
-    // ── the signal: 12 packets (8 clean, 4 at about 9 dB in 3 kHz), 0.4 s gaps; channel IQ = noise at 37.5 kS/s ──
+    // ── the signal: 12 packets (8 clean, 4 at about 9 dB in 3 kHz), 0.4 s gaps; channel IQ = the same packets on FM at 37.5 kS/s ──
     std::vector<float> audio; double ph = 0;
     std::vector<std::string> sentRaw;
     for (int i = 0; i < 12; ++i) {
@@ -72,11 +72,21 @@ int main() {
         modulate(audio, ui(i), i < 8 ? 0.3 : 0.08, 30, ph);
     }
     audio.insert(audio.end(), 19200, 0.f);
+    /* ★ beta92: the channel IQ CARRIES the packets — an FM carrier at DC, deviated by the same tones (0.3 → ±3 kHz),
+     *  plus noise. Once IQ comes, 1200 Bd reads the IQ receiver alone (vibe_aprs_run.h feedAudio), so noise-only IQ beside
+     *  the audio decoded nothing — what a real dial never sends. */
+    const std::vector<float> clean = audio;
     std::mt19937 rng(5); std::normal_distribution<float> nd(0.f, 0.03f);
     for (auto& x : audio) x += nd(rng);
     const double iqRate = 37500;
     std::vector<std::complex<float>> iq(size_t(audio.size() / 48000.0 * iqRate));
-    for (auto& z : iq) z = { nd(rng), nd(rng) };
+    double fmPh = 0;
+    for (size_t k = 0; k < iq.size(); ++k) {
+        const double t = k * 48000.0 / iqRate; const size_t a = size_t(t); const double fr = t - a;
+        const double v = a + 1 < clean.size() ? clean[a] * (1 - fr) + clean[a + 1] * fr : 0.0;
+        fmPh += 2 * M_PI * (3000.0 * v / 0.3) / iqRate;
+        iq[k] = { float(std::cos(fmPh)) + nd(rng), float(std::sin(fmPh)) + nd(rng) };
+    }
     std::printf("── the signal: %.1f s of audio, 12 packets; %.1f s of channel IQ ──\n", audio.size() / 48000.0, iq.size() / iqRate);
 
     // ── 1. unset: nothing written ──

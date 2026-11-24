@@ -529,7 +529,8 @@ int main() {
             judge(v, "real CW, 387 Hz (below) + 715 Hz (above, −7 dB):", L, R, c387, 350, 425, c715, 680, 750, rate, 2.0);
         } else check(false, "read binaural/cw2sig_483.wav");
     }
-    if (!dir.empty() && exists(dir + "/ssb/offsets/shannon-5505")) {
+    // ★ the WAVs, not the folder: the recordings were deleted 11-09 (their .log files stay) — absent = not run, never a fail
+    if (!dir.empty() && exists(dir + "/ssb/offsets/shannon-5505/5505000_usb_dial500.wav")) {
         realRun = true;
         std::printf(" ── REAL: two off-air VOLMET broadcasts, one below the dial, one above ──\n");
         // dial OFF above a carrier → the voice is BELOW the dial; its audio is shifted −OFF (USB).
