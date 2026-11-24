@@ -238,6 +238,8 @@ export class VibeServerAdapter implements SDRBackend {
    *  (our DSP, on-device) and in the web client, and did nothing from the app on a VibeServer.
    *  Both halves, again — client method AND this passthrough. See UberSDRClient.setNrEnabled. */
   setNrEnabled(on: boolean, strength?: number) { this.client.setNrEnabled(on, strength); }
+  /** ★★★ beta93 VFO B's own NR / auto notch / blanker — both halves (client method AND this passthrough). */
+  setVfoBDsp(d: { nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean }) { this.client.setVfoBDsp(d); }
   setSquelchDb(db: number)              { this.client.setSquelchDb(db); }
   /** ★ hwinfo said `sqlOn` — a threshold below -100 dBFS is a threshold here, not "off" (vibeSquelch.ts). */
   squelchSpeaksOn(): boolean            { return this.client.squelchSpeaksOn; }

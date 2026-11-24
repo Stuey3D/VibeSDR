@@ -18,6 +18,9 @@ export interface WatchChan {
   sqlOn: boolean; sql: number; open: boolean; since: number; lvl: number; parked: boolean;
   /** ★ Round 3: muted in this listener's mix (absent from an older server = false). */
   mute: boolean;
+  /** ★★★ beta93 THIS VFO's own NR / auto notch / blanker (local_sdr_shim.cpp WatchDsp) — absent from an older server, whose
+   *  VFO B has none (then no B set is drawn: vfoDsp.ts vfoBDspOf). */
+  nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean;
 }
 export interface WatchState {
   max: number; lo: number; hi: number; stereo: boolean; monoOut: boolean;
@@ -41,6 +44,9 @@ export function watchSanitise(m: any): WatchState | null {
     id: num(c?.id, 1), freq: num(c?.freq), mode: typeof c?.mode === 'string' ? c.mode : 'am', bw: num(c?.bw, 10000),
     sqlOn: c?.sqlOn === true, sql: num(c?.sql, -100), open: c?.open !== false, since: num(c?.since),
     lvl: num(c?.lvl, -200), parked: c?.parked === true, mute: c?.mute === true,
+    ...(typeof c?.nr === 'boolean' ? { nr: c.nr, notch: c?.notch === true } : {}),
+    ...(typeof c?.nrStrength === 'number' && Number.isFinite(c.nrStrength) ? { nrStrength: c.nrStrength } : {}),
+    ...(typeof c?.nbx === 'boolean' ? { nbx: c.nbx } : {}),
   })).filter((c: WatchChan) => c.freq > 0) : [];
   return {
     max: num(m.max, -1), lo: num(m.lo), hi: num(m.hi), stereo: m.stereo !== false, monoOut: m.monoOut === true,

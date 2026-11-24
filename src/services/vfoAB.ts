@@ -48,7 +48,25 @@ export interface WatchChan {
   parked: boolean;
   /** ★ Round 3: muted in this listener's mix (absent from an older server = false). */
   mute: boolean;
+  /** ★★★ beta93 THIS VFO's own NR / auto notch / blanker (local_sdr_shim.cpp WatchDsp) — absent from an older server. */
+  nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean;
 }
+
+/** ★★★ beta93 the app's NR slider (0 = off … 20) ⟷ the wire's strength — SDRScreen onLocalNR's curve (the first 12 steps
+ *  work AudioNR's floor, the rest over-subtract, clamped at 1.4), and its exact inverse for B's REPORT. The report only
+ *  paints the slider; nothing re-sends it (the 2026-11-24 echo ring). */
+export function nrStrengthOfLevel(level: number): number {
+  const l = Math.max(0, Math.min(20, level));
+  return Math.min(1.4, l <= 12 ? l / 12 : 1 + ((l - 12) / 3) * 0.4);
+}
+export function nrLevelOfReport(on: boolean, strength: number | undefined): number {
+  if (!on) return 0;
+  const s = typeof strength === 'number' && Number.isFinite(strength) ? Math.max(0, Math.min(1.4, strength)) : 0.5;
+  return Math.max(1, Math.min(20, Math.round(s <= 1 ? s * 12 : 12 + ((s - 1) / 0.4) * 3)));
+}
+
+/** ★★★ beta93 VFO B's own NR / notch / blanker, as reported (VfoABInfo.dspB). */
+export interface VfoBDsp { nr: boolean; nrStrength?: number; notch: boolean; nbx?: boolean }
 
 export interface WatchState {
   /** Watch channels this listener may hold here (0 = VFO A/B not available now). */
@@ -102,6 +120,9 @@ export function parseWatch(msg: Record<string, unknown> | null | undefined): Wat
         id, freq, mode: text(o.mode, 12) || 'am', bw: Math.max(0, num(o.bw)),
         sqlOn: o.sqlOn === true, sql: num(o.sql, -100), open: o.open !== false, since: num(o.since),
         lvl: num(o.lvl, -200), parked: o.parked === true, mute: o.mute === true,
+        ...(typeof o.nr === 'boolean' ? { nr: o.nr, notch: o.notch === true } : {}),
+        ...(typeof o.nrStrength === 'number' && Number.isFinite(o.nrStrength) ? { nrStrength: o.nrStrength } : {}),
+        ...(typeof o.nbx === 'boolean' ? { nbx: o.nbx } : {}),
       });
     }
   }
@@ -174,6 +195,16 @@ export function vfoB(st: WatchState | null | undefined): WatchChan | undefined {
 export function msgOn(stereo: boolean, monoOut: boolean, balance?: number): Record<string, unknown> {
   const m: Record<string, unknown> = { type: 'watch', id: VFO_B_ID, on: true, stereo, monoOut };
   if (balance !== undefined) m.balance = roundBalance(balance);   // ★ only to a server that takes it (watchBal)
+  return m;
+}
+/** ★★★ beta93 VFO B's own NR / auto notch / blanker — the VFO-B channel (watch, id 1), never A's `nr` / `notch` / `nbx`. The
+ *  server answers none of these one by one; its half-second watch beat carries them back (no echo ring). */
+export function msgDspB(d: { nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean }): Record<string, unknown> {
+  const m: Record<string, unknown> = { type: 'watch', id: VFO_B_ID };
+  if (d.nr !== undefined) m.nr = d.nr;
+  if (d.nrStrength !== undefined && Number.isFinite(d.nrStrength)) m.nrStrength = Math.round(d.nrStrength * 1e6) / 1e6;
+  if (d.notch !== undefined) m.notch = d.notch;
+  if (d.nbx !== undefined) m.nbx = d.nbx;
   return m;
 }
 export function msgOff(): Record<string, unknown> {
@@ -281,6 +312,8 @@ export interface VfoABInfo {
   balance: number;
   /** ★★★ This server records each VFO on its own (its state's recVfo) — the Audio menu then has REC A and REC B. */
   recOffered: boolean;
+  /** ★★★ beta93 VFO B's own NR / notch / blanker as the server reports them; null = none reported (no B set). */
+  dspB: VfoBDsp | null;
 }
 
 /** The four fields of the client's status that ARE a VFO's tuning. */
@@ -388,6 +421,12 @@ export class VfoABCore {
   private localAt = 0;
   /** When the listener last turned B OFF here — a state already on its way with B in it must not bring B back. */
   private offAt = 0;
+  /** ★★★ beta93 OUR OFF HAS NOT LANDED YET (Stuart 2026-11-24, during the NR echo storm: VFO B "could NOT be switched off").
+   *  ADOPT_AFTER_OFF_MS is a guess at the link; on a flooded one the server's beat still carried B 1.5 s later and B was
+   *  adopted straight back. While this is set, a state with B in it is answered with the off again (at most once a
+   *  second) and never adopted; a state without B clears it. */
+  private offPending = false;
+  private offSentAt = 0;
   /** A spectrum socket opened at this time and no `watch` state has been heard on it since (0 = not waiting). */
   private openAt = 0;
   private status: () => TuneStatus;
@@ -415,7 +454,9 @@ export class VfoABCore {
              activeSquelchDb: this.active === 'A' ? this.sqlA : this.sqlB, state: this.state,
              squelchA: this.sqlA, squelchB: this.sqlB,
              muteA: !!b && this.state?.muteA === true, muteB: !!b && b.mute,
-             balOffered: this.balOffered, balance: this.balance, recOffered: this.on && this.recOffered };
+             balOffered: this.balOffered, balance: this.balance, recOffered: this.on && this.recOffered,
+             // ★★★ beta93 VFO B's own NR / notch / blanker as the server reports them (absent = an older server: no B set)
+             dspB: b && typeof b.nr === 'boolean' ? { nr: b.nr, nrStrength: b.nrStrength, notch: b.notch === true, nbx: b.nbx } : null };
   }
   /** hwinfo's `watch`. Returns true when the offer CHANGED. A withdrawn offer resets (no dead VFO B). */
   setOffered(n: number): boolean {
@@ -429,7 +470,7 @@ export class VfoABCore {
     if (on === this.on) return true;
     if (on) {
       if (this.offered <= 0) return false;
-      this.on = true; this.onAt = this.now(); this.active = 'A';
+      this.on = true; this.onAt = this.now(); this.active = 'A'; this.offPending = false;
       this.stash = this.slotOfStatus(-999);   // ★ B starts where A is (the server does the same), squelch off
       this.sqlB = -999;
       this.send(msgOn(this.stereo, this.monoOut, this.balOffered ? this.balance : undefined));
@@ -439,6 +480,7 @@ export class VfoABCore {
     this.send(msgOff());
     this.reset();
     this.offAt = this.now();
+    this.offPending = true; this.offSentAt = this.offAt;   // ★★★ beta93 see offPending
     return true;
   }
   /** Which VFO the controls tune — a swap of the two slots; nothing is sent (both already are where they are). Returns
@@ -519,6 +561,8 @@ export class VfoABCore {
   /** ★★ Round 3 — mute VFO `v` in the mix. Only while B is on (the server ignores it otherwise). */
   setMute(v: VfoId, on: boolean) { if (this.on) this.send(msgMute(v, on)); }
   setStereo(on: boolean) { this.stereo = on; if (this.on) this.send(msgStereo(on)); }
+  /** ★★★ beta93 VFO B's own NR / notch / blanker — only while B is on (B off = nothing to set). */
+  setDspB(d: { nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean }) { if (this.on) this.send(msgDspB(d)); }
   /** ★★★ V12 PER-VFO RECORDING: which VFOs' own audio to send (held always; sent only while B is on, to a server that
    *  offers it — the set lives with B on the server, so a new B is told again). */
   private recOffered = false;
@@ -568,6 +612,11 @@ export class VfoABCore {
       //     the listener's ears; the screen must show it. ADOPTED, never asked for: nothing is sent (the shared-dial
       //     contract — the server sends full state, the client has no vote). A not on its way back from our own OFF.
       const b0 = vfoB(st);
+      if (!b0) this.offPending = false;
+      else if (this.offPending) {
+        if (this.now() - this.offSentAt >= 1000) { this.offSentAt = this.now(); this.send(msgOff()); }
+        return out;
+      }
       if (b0 && !st.refused && this.offered > 0 && this.now() - this.offAt > ADOPT_AFTER_OFF_MS) {
         this.adoptB(b0);
         if (st.bal !== null) this.balance = st.bal;   // ★ the balance it is mixed with is the server's word too

@@ -89,6 +89,8 @@ import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { earTags, needleAlpha, decStartVfo, decTagFor } from './vfoAB';
+// ★★★ beta93 NR / notch / blanker: reports PAINT, never send (the echo ring), and a second set for VFO B (vfoDsp.ts)
+import { nrStrength, nrPercent, nrSliderFromReport, ReportedControl, vfoBDspOf, dspSets, type VfoBDsp } from './vfoDsp';
 import { balanceGains, clampBalance } from '../../../src/services/dualMix';   // ★★★ the A ⟷ B balance: the two-server rule, one copy
 import { FrameClock, renderEvery } from './wfPacing';
 import { tickStep, fmtTick } from './freqScale';
@@ -2056,7 +2058,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
     onModeResume: (kind, ok, why) => wholeResumeDo(wholeResume.answered(kind, ok, why, Date.now())),
     onDabScan: (m: unknown) => dabScanOnMessage(m),
-    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); if (dabOn) spec?.dabScanGet(); },
+    // ★★★ beta93 the scan is asked for on a CHANGE (or a new socket), not on every hwinfo — each ask is the whole band scan back
+    onDabScanOk: (ok: boolean) => { const ch = ok !== dabScanOk || spec?.hwFirst !== false; dabScanOk = ok; if (!ch) return;
+                                    dabScanSyncBtn(); if (dabOn) spec?.dabScanGet(); },
     onAfc: (a) => { afcNow = a; afcAt = Date.now(); paintAfc(); },   // ★★ V12 auto-PPM — the owner's line (paintAfc)   // ★ V12: hwinfo comes on every (re)connect — the kept list with it
     onFmScan: (m: unknown) => { const s = parseFmScan(m); if (s) scanLockSet(s.running && s.lock, s.done, s.total); },
     // ★★★ 2026-11-24 ONLY ON A CHANGE. hwinfo carries `dxLog` and comes far more often than on connect; this ran
@@ -2220,13 +2224,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //    number drew a figure the radio was not using — the switch agreed and the value
         //    lied, which is harder to spot than the switch being wrong (Stuart, 2026-08-10).
         //    Falls back to the saved strength only when the server never had one.
-        const want = !s.nr ? 0
-          : s.nrStrength !== undefined ? Math.max(1, Math.round(nrPercent(s.nrStrength)))
-          : Math.max(1, Number(prefs()['nr']) || 50);
-        if (Number(nrEl.value) !== want) {
-          nrEl.value = String(want);
-          nrEl.dispatchEvent(new Event('input'));
-        }
+        const want = nrSliderFromReport(s.nr, s.nrStrength, Number(prefs()['nr']) || 50);
+        /* ★★★ PAINT, NEVER SEND (beta93 — Stuart 2026-11-24: the slider slid 30 → 2 % on its own and the spectrum socket
+         *     ran at 1 MB/s). This dispatched `input`, which RE-SENT the reported strength; the server answers every `nr`
+         *     with an hwinfo (since 11-11). Two values in flight — a drag, or the reconnect's restore crossing the arrival
+         *     report — then went round for ever. The report now only moves the slider and its label (and the saved value,
+         *     which the reconnect restore reads); a press is what sends (nrCtlA.press). See vfoDsp.ts. */
+        if (nrCtlA.report(want, Date.now())) paintNrA(want);
       }
       setToggleTo('notch', s.notch, 'notch');
       // ★ Sticky, so it must be RESTORED from the server's own report — the button has to say
@@ -2255,7 +2259,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *  report as the pref (setToggleTo's prefKey) would quietly forget the choice. So the
          *  remembered value wins: re-stated if the server disagrees, and shown. Only a CLICK saves. */
         const want = nfmVoiceWant();   // ★★ the listener's choice — or ALL while APRS has it (silentDecoderSync)
-        if (typeof want === 'boolean' && want !== s.nfmVoice) spec?.setNfmVoice(want);
+        /* ★★★ beta93 RE-STATED AT MOST ONCE PER 5 s FOR THE SAME VALUE. Per hwinfo it was a loop waiting to happen: a shared
+         *  dial whose gate refuses us never changes, so every report re-sent it; two pages with opposite choices flipped it
+         *  back and forth, each flip a broadcast hwinfo. */
+        if (typeof want === 'boolean' && want !== s.nfmVoice
+            && (want !== nfmVoiceAsserted.v || Date.now() - nfmVoiceAsserted.at > 5000)) {
+          nfmVoiceAsserted = { v: want, at: Date.now() };
+          spec?.setNfmVoice(want);
+        }
         setToggleTo('nfmVoiceBtn', typeof want === 'boolean' ? want : s.nfmVoice, undefined,
                     (on) => on ? 'VOICE' : 'RAW');
       }
@@ -2303,6 +2314,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   hwinfo, i.e. AFTER the controls are first built, so this must re-render rather than
     //   assume it can filter at build time.
     onBlockedModes: (list) => {
+      // ★★★ beta93 a CHANGE only (or a new socket): this relays out the decoder panel, twice, on every hwinfo otherwise
+      const sig = list.map(m => m.toLowerCase()).sort().join(',');
+      if (sig === blockedModesSig && spec?.hwFirst === false) return;
+      blockedModesSig = sig;
       blockedModes = new Set(list.map(m => m.toLowerCase()));
       syncDabOnly();   // ★★ V12 an older server's DAB only is read from this list
       syncOnlyMode();  // ★★ …and its only mode
@@ -2357,7 +2372,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
                gainNow, agc, ovlSteps, adcPeak, rateNow) => {
       // ★★ V12 PRESENCE: every socket says where this page is — a reconnect while hidden must not read as "here" (see
       //    initPresence). hwinfo arrives once per socket, after the server has registered its session.
-      sendPresence();
+      if (spec?.hwFirst !== false) sendPresence();   // ★★★ beta93 once per socket — hwinfo also comes on every change
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwRateNow = typeof rateNow === 'number' ? rateNow : 0;
       if (typeof gainNow === 'number' && gainNow !== hwGainNow) hwGainChangedAt = performance.now();
@@ -6238,6 +6253,7 @@ function sqlRowsPaint() {
   if (!ab && sqlBAuto) { sqlBAuto = false; sqlBTrack.reset(); }
   drawSquelchBarB();
   abBalPaint();
+  dspRowsPaint();   // ★★★ beta93 the NR / notch / blanker set per VFO
 }
 function setupSquelchRowB() {
   const bar = document.getElementById('sqlBarB');
@@ -6261,6 +6277,86 @@ function setupSquelchRowB() {
   document.getElementById('sqlAutoB')?.addEventListener('click', () => setSquelchAutoB(!sqlBAuto));
   document.getElementById('sqlMuteA')?.addEventListener('click', () => { if (spec) spec.setAbMute('A', !spec.abMuteA); });
   document.getElementById('sqlMuteB')?.addEventListener('click', () => { if (spec) spec.setAbMute('B', !spec.abMuteB); });
+}
+
+/* ══ ★★★ beta93 NOISE REDUCTION / AUTO NOTCH / NOISE BLANKER — ONE SET PER VFO ═══════════════════════════════════════
+ *  Stuart, 2026-11-24: "maybe needs two sets of nr/nb controls for each vfo". VFO A only: the one set, exactly as before.
+ *  VFO B on (and the server reporting B's own — vfoDsp.ts vfoBDspOf): the rows above carry an amber VFO A tag and
+ *  #dspBlockB below is VFO B's, blue — each writes ONLY its own VFO (A: nr / notch / nbx; B: watch id 1) and reads ONLY
+ *  its own VFO's report (A: hwinfo; B: the watch state). Reports PAINT, never send (ReportedControl — the echo ring). */
+/** ★★★ beta93 the last NFM VOICE re-statement (onDspState) and the last blocked-modes list (onBlockedModes) — see there. */
+let nfmVoiceAsserted: { v: boolean | null; at: number } = { v: null, at: 0 };
+let blockedModesSig = '\u0000';
+const nrFmt = (v: number) => (v === 0 ? 'OFF' : `${v}%`);
+const nrCtlA = new ReportedControl<number>(-1);
+const nrCtlB = new ReportedControl<number>(-1);
+const notchCtlB = new ReportedControl<boolean | null>(null);
+const nbxCtlB = new ReportedControl<boolean | null>(null);
+/** VFO A's NR slider from a report: the value, its label and the saved value (the reconnect restore reads it). Never sent. */
+function paintNrA(v: number) {
+  const el = document.getElementById('nr') as HTMLInputElement | null;
+  if (el) el.value = String(v);
+  const l = document.getElementById('nrVal');
+  if (l) l.textContent = nrFmt(v);
+  try { savePref('nr', v); } catch { /* storage blocked */ }
+}
+function vfoBDspNow(): VfoBDsp | null {
+  if (!spec?.abOn) return null;
+  return vfoBDspOf(spec.watchState?.chans.find((c) => c.id === 1));
+}
+function paintOnOff(id: string, on: boolean) {
+  const b = document.getElementById(id);
+  if (!b) return;
+  b.classList.toggle('on', on);
+  b.textContent = on ? 'ON' : 'OFF';
+}
+/** On every watch change (sqlRowsPaint): which sets are drawn, and B's from the server's report. Sends nothing. */
+function dspRowsPaint() {
+  const b = vfoBDspNow();
+  const two = dspSets(!!spec?.abOn, b).length === 2;
+  for (const id of ['nrVfoA', 'notchVfoA', 'nbxVfoA']) {
+    const t = document.getElementById(id);
+    if (t) { t.hidden = !two; t.style.setProperty('--abcol', abColourOf('A')); }
+  }
+  for (const id of ['nrVfoB', 'notchVfoB', 'nbxVfoB']) document.getElementById(id)?.style.setProperty('--abcol', abColourOf('B'));
+  const blk = document.getElementById('dspBlockB');
+  if (blk) blk.hidden = !two;
+  if (!two || !b) return;
+  const now = Date.now();
+  const nrv = nrSliderFromReport(b.nr, b.nrStrength, 50);
+  if (nrCtlB.report(nrv, now)) {
+    const el = document.getElementById('nrB') as HTMLInputElement | null;
+    if (el) el.value = String(nrv);
+    const l = document.getElementById('nrBVal');
+    if (l) l.textContent = nrFmt(nrv);
+  }
+  if (notchCtlB.report(b.notch, now)) paintOnOff('notchB', b.notch);
+  const nbRow = document.getElementById('nbxRowB');
+  if (nbRow) nbRow.hidden = b.nbx === undefined;
+  if (b.nbx !== undefined && nbxCtlB.report(b.nbx, now)) paintOnOff('nbxB', b.nbx);
+}
+/** VFO B's set — a press is the only thing that sends, and it goes to B (spec.setVfoBDsp: watch, id 1). */
+function setupVfoBDsp() {
+  const nr = document.getElementById('nrB') as HTMLInputElement | null;
+  if (nr) nr.oninput = () => {
+    const v = Number(nr.value);
+    nrCtlB.press(v, Date.now());
+    const l = document.getElementById('nrBVal');
+    if (l) l.textContent = nrFmt(v);
+    spec?.setVfoBDsp({ nr: v > 0, nrStrength: nrStrength(v) });
+  };
+  const btn = (id: string, ctl: ReportedControl<boolean | null>, key: 'notch' | 'nbx') => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.onclick = () => {
+      const on = !el.classList.contains('on');
+      ctl.press(on, Date.now());
+      paintOnOff(id, on);
+      spec?.setVfoBDsp({ [key]: on });
+    };
+  };
+  btn('notchB', notchCtlB, 'notch');
+  btn('nbxB', nbxCtlB, 'nbx');
 }
 
 /** The live meter scale, updated each frame — the squelch bar drag maps pointer x through it. */
@@ -20605,26 +20701,8 @@ function setSegmentTo(id: string, attr: string, v: number, prefKey?: string) {
  *     aggressive half was unreachable from the web client no matter where the slider was dragged.
  *  ★ So map the percentage onto the range the DSP was actually written for, keeping the same shape:
  *    0..80% covers the floor (0..1.0), and the last fifth crosses into over-subtraction (1.0..1.4,
- *    where setStrength() clamps). Same wire field, same units, nothing else has to know. */
-function nrStrength(pct: number): number {
-  const p = Math.max(0, Math.min(100, pct));
-  return p <= 80 ? p / 80 : 1 + ((p - 80) / 20) * 0.4;
-}
-
-/** ★★★ THE EXACT INVERSE OF nrStrength(), AND IT MUST STAY EXACT. The server echoes the strength
- *  it is using and onDspState renders it back onto the slider — then DISPATCHES an `input` event,
- *  which sends the value again. That round trip is a feedback loop, so any disagreement between
- *  the two directions is not a small display error, it is a RATCHET: this read `strength * 100`
- *  against a forward map that divides by 80, so every echo multiplied the setting by 1.25 and it
- *  climbed on its own until it stuck at 100% (Stuart, 2026-08-26: "I set noise reduction to 30%
- *  but it has a mind of its own and increased to 100% by itself").
- *  ★★ I introduced this the same day by changing the forward map alone. **A wire value converted
- *     in two places must be changed in both, in the same edit** — the loop is what turns a units
- *     mismatch into a runaway instead of an off-by-a-bit. */
-function nrPercent(strength: number): number {
-  const s = Math.max(0, Math.min(1.4, strength));
-  return s <= 1 ? s * 80 : 80 + ((s - 1) / 0.4) * 20;
-}
+ *    where setStrength() clamps). Same wire field, same units, nothing else has to know.
+ *  ★ beta93: nrStrength() / nrPercent() live in vfoDsp.ts now (one copy, pure, tested by test-nr-roundtrip.mjs). */
 
 function buildMenu() {
   // ★★ The menu's folding categories (menuCats.ts, 2026-11-12) — first, so the handheld can add its own to them.
@@ -20743,9 +20821,10 @@ function buildMenu() {
   setupSquelchAutoMargin();
 
   slider('nr', 'nrVal',
-    (v) => (v === 0 ? 'OFF' : `${v}%`),
-    (v) => spec!.setNr(v > 0, nrStrength(v)),
+    nrFmt,
+    (v) => { nrCtlA.press(v, Date.now()); spec!.setNr(v > 0, nrStrength(v)); },   // ★ a press — the only path to the wire
     'nr');
+  setupVfoBDsp();   // ★★★ beta93 VFO B's own set (shown only while B is on and the server reports B's)
 
   toggle('notch', (on) => spec!.setNotch(on), 'notch');
   /* ★★★ THE BROADCAST FM ROW IS READ, NEVER ASSERTED (2026-11-03) — pushOnInit=false on all five, like AUTO BW below.

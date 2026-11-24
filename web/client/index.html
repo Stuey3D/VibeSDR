@@ -5582,12 +5582,12 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="lbl wrap" id="iqNote" hidden></div>
   <div class="mrow">
-    <label for="nr">NOISE REDUCTION</label>
+    <label for="nr">NOISE REDUCTION<span class="sqlVfoTag" id="nrVfoA" hidden>VFO A</span></label>
     <input type="range" id="nr" min="0" max="100" value="0">
     <span class="val" id="nrVal">OFF</span>
   </div>
   <div class="mrow">
-    <label>AUTO NOTCH</label>
+    <label>AUTO NOTCH<span class="sqlVfoTag" id="notchVfoA" hidden>VFO A</span></label>
     <div class="seg"><button class="btn" id="notch">OFF</button></div>
   </div>
   <!-- ★ The listener's own impulse blanker for every mode BUT broadcast FM — the FM one is the
@@ -5605,8 +5605,27 @@ select.btn { padding: 6px 8px; }
   <!-- ★★ V12 the AM AUTO BW row MOVED to the AUTO key in the bandwidth row (#bwAuto, docs/v12/AM-SYNC.md §11), which
        serves every mode the server can widen and narrow by itself. -->
   <div class="mrow" id="nbxRow" hidden>
-    <label>NOISE BLANKER</label>
+    <label>NOISE BLANKER<span class="sqlVfoTag" id="nbxVfoA" hidden>VFO A</span></label>
     <div class="seg"><button class="btn" id="nbxBtn" title="Impulse noise blanker on your own channel — the crackle of distant lightning, power-line hash, ignition, thermostats, switch-mode supplies. Removes the moments an impulse occupies rather than filtering continuously; on a clean signal it blanks nothing. Not for broadcast FM, which has its own NB below. The owner may also run a wider one on the whole receiver.">OFF</button></div>
+  </div>
+  <!-- ★★★ beta93 VFO B's OWN NR / AUTO NOTCH / NOISE BLANKER (Stuart, 2026-11-24: "maybe needs two sets of nr/nb controls
+       for each vfo"). With VFO B on, the three rows above are VFO A's (tagged in A's colour) and these are B's — each
+       writes only its own VFO and shows only its own VFO's state. Shown only when the server reports B's own (an older
+       server's VFO B has none). One VFO: hidden, and the rows above are exactly as they always were. -->
+  <div id="dspBlockB" hidden>
+    <div class="mrow">
+      <label for="nrB">NOISE REDUCTION<span class="sqlVfoTag" id="nrVfoB">VFO B</span></label>
+      <input type="range" id="nrB" min="0" max="100" value="0">
+      <span class="val" id="nrBVal">OFF</span>
+    </div>
+    <div class="mrow">
+      <label>AUTO NOTCH<span class="sqlVfoTag" id="notchVfoB">VFO B</span></label>
+      <div class="seg"><button class="btn" id="notchB">OFF</button></div>
+    </div>
+    <div class="mrow" id="nbxRowB" hidden>
+      <label>NOISE BLANKER<span class="sqlVfoTag" id="nbxVfoB">VFO B</span></label>
+      <div class="seg"><button class="btn" id="nbxB" title="VFO B's own impulse noise blanker — the same blanker as VFO A's, on B's channel only.">OFF</button></div>
+    </div>
   </div>
   <!-- ★★★ NFM AUDIO: VOICE or RAW. Voice band-limits to 300 Hz - 3 kHz as every NFM radio does —
        the repeater's CTCSS tone (the "hum" Stuart heard on 2 m) goes, and the hiss between overs is

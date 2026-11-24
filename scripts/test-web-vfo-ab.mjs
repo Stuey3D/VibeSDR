@@ -212,6 +212,24 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await until(`${sentWatch}.some(m => m.muteA === true) && ${AB}.state.muteA === true`, 3000), 'A\'s MUTE sends {watch, muteA:true}; the server mutes A');
   await click('#sqlMuteA');
   ok(await until(`${AB}.state.muteA === false`, 3000), 'pressed again: A unmuted');
+  // ── ★★★ beta93 ONE NR / AUTO NOTCH / BLANKER SET PER VFO, and nothing re-sent from a report (the NR echo storm)
+  ok(await until(`!document.getElementById('dspBlockB').hidden && !document.getElementById('nrVfoA').hidden && !document.getElementById('notchVfoA').hidden`, 3000),
+     'with B on (and the server reporting B\'s DSP), the AUDIO panel has an NR / AUTO NOTCH set for VFO A AND one for VFO B');
+  ok(await ev(`getComputedStyle(document.getElementById('nrVfoB')).getPropertyValue('--abcol').trim() === ${AB}.liveColor`), 'B\'s set is labelled in B\'s colour');
+  await ev(`window.__sent.length = 0`);
+  await click('#notchB');
+  ok(await until(`${sentWatch}.some(m => m.id === 1 && m.notch === true)`, 2000) && (await ev(`!window.__sent.some(s => s.includes('"type":"notch"'))`)),
+     'B\'s AUTO NOTCH sends {watch, id:1, notch:true} — never A\'s `notch`');
+  ok(await until(`${AB}.state.chans[0].notch === true && document.getElementById('notchB').classList.contains('on') && !document.getElementById('notch').classList.contains('on')`, 3000),
+     'the server reports B\'s notch on; A\'s AUTO NOTCH still off');
+  await ev(`(() => { const e = document.getElementById('nrB'); e.value = '45'; e.dispatchEvent(new Event('input')); })()`);
+  ok(await until(`${sentWatch}.some(m => m.id === 1 && m.nr === true && Math.abs(m.nrStrength - 0.5625) < 1e-6)`, 2000), 'B\'s NR slider sends {watch, id:1, nr, nrStrength} for 45 %');
+  ok(await until(`Math.abs(${AB}.state.chans[0].nrStrength - 0.5625) < 1e-6`, 3000), 'the server reports B\'s NR at 45 %');
+  await ev(`window.__sent.length = 0`);
+  await new Promise((r) => setTimeout(r, 3000));
+  ok(await ev(`!window.__sent.some(s => /"type":"(nr|notch|nbx)"/.test(s)) && !window.__sent.some(s => /"nrStrength"|"notch"/.test(s))`),
+     `3 s of reports: the page re-sends nothing it was told (${await ev('window.__sent.length')} messages, none NR / notch)`);
+  await click('#notchB');
   // ── ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30): right under VFO B's squelch row, only where the server takes it
   ok((await ev(`${AB}.watchBal`)) === true, 'hwinfo says watchBal: this server takes the balance');
   ok(await ev(`(() => { const b = document.getElementById('abBalBlock'), q = document.getElementById('sqlBlockB');
@@ -326,6 +344,7 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await until(`${AB}.state && ${AB}.state.chans.length === 0`, 3000), 'the server has no VFO B');
   ok(await ev(`document.getElementById('sqlBlockB').hidden && document.getElementById('sqlMuteA').hidden && document.getElementById('sqlVfoA').hidden`),
      'one VFO: B\'s squelch row and the MUTE keys are gone — the squelch block is exactly as before');
+  ok(await ev(`document.getElementById('dspBlockB').hidden && document.getElementById('nrVfoA').hidden`), 'one VFO: one NR / AUTO NOTCH set, untagged — as before');
 });
 
 console.log('── a server whose owner switched VFO A/B off ──');

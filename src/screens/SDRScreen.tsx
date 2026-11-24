@@ -285,7 +285,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, decStartVfo, decTagFor, abOfferNow, type VfoABInfo, type VfoId } from '../services/vfoAB';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, decStartVfo, decTagFor, abOfferNow, nrStrengthOfLevel, nrLevelOfReport, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -3765,6 +3765,33 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSquelchVfo?: (v: VfoId, db: number) => void; abSetMute?: (v: VfoId, on: boolean) => void;
     channelLevelVfoDb?: (v: VfoId, maxAgeMs?: number) => number;
     abSetRec?: (a: boolean, b: boolean) => void } | null, []);
+  /* ★★★ beta93 VFO B's OWN NR / AUTO NOTCH / NOISE BLANKER (Stuart, 2026-11-24: "maybe needs two sets of nr/nb controls for
+   *  each vfo"). Shown while B is on and the server reports B's own (abInfo.dspB). A press sends to B only (watch, id 1) and
+   *  holds off B's reports for 1.5 s; a report only PAINTS — nothing here re-sends what the server said (the echo ring the
+   *  web page had). */
+  const [nrLevelB, setNrLevelB] = useState(0);
+  const [notchB, setNotchB] = useState(false);
+  const [nbxB, setNbxB] = useState(false);
+  const dspBPressAt = useRef(0);
+  const dspBRep = abInfo?.on ? abInfo.dspB : null;
+  useEffect(() => {
+    if (!dspBRep || Date.now() - dspBPressAt.current < 1500) return;
+    setNrLevelB(nrLevelOfReport(dspBRep.nr, dspBRep.nrStrength));
+    setNotchB(dspBRep.notch);
+    if (dspBRep.nbx !== undefined) setNbxB(dspBRep.nbx);
+  }, [dspBRep?.nr, dspBRep?.nrStrength, dspBRep?.notch, dspBRep?.nbx]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const abDsp = useCallback(() => client.current as unknown as {
+    setVfoBDsp?: (d: { nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean }) => void } | null, []);
+  const onNrB = useCallback((level: number) => {
+    dspBPressAt.current = Date.now(); setNrLevelB(level);
+    abDsp()?.setVfoBDsp?.({ nr: level > 0, nrStrength: nrStrengthOfLevel(level) });
+  }, [abDsp]);
+  const onNotchB = useCallback((on: boolean) => {
+    dspBPressAt.current = Date.now(); setNotchB(on); abDsp()?.setVfoBDsp?.({ notch: on });
+  }, [abDsp]);
+  const onNbxB = useCallback((on: boolean) => {
+    dspBPressAt.current = Date.now(); setNbxB(on); abDsp()?.setVfoBDsp?.({ nbx: on });
+  }, [abDsp]);
   const onVfoStereo = useCallback((on: boolean) => {
     vfoStereoRef.current = on; setVfoStereoState(on);
     AsyncStorage.setItem(VFO_STEREO_KEY, on ? '1' : '0').catch(() => {});
@@ -17236,6 +17263,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDragB: onSquelchDragB, autoB: sqlBAuto, onAutoB: setSquelchAutoB, autoOkB: sqlAutoOk,
           // ★★★ the A ⟷ B balance — only on a server that takes it (hwinfo watchBal): never a dead row
           balance: vfoBalance, onBalance: abInfo?.balOffered ? onVfoBalance : undefined,
+          // ★★★ beta93 VFO B's own NR / notch / blanker — only when the server reports B's (never a dead B set)
+          dspB: dspBRep ? { nrLevel: nrLevelB, onNr: onNrB, notch: notchB, onNotch: onNotchB,
+                            ...(dspBRep.nbx !== undefined ? { nbx: nbxB, onNbx: onNbxB } : {}) } : undefined,
         } : undefined}
         deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */
         stereo={hwStereo}   onStereo={icom ? undefined : askWrap(onHwStereo)}

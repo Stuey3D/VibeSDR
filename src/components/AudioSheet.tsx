@@ -361,6 +361,13 @@ function SquelchControl({
 
 /* ── ★★ V12 VFO A/B round 3: one VFO's squelch-row label — SQUELCH, the VFO's letter in its needle colour, and its MUTE.
  *  A muted VFO keeps decoding and its meter keeps moving; the other comes to the middle, both ears (the server's mix). */
+/** ★★★ beta93 the VFO A / VFO B tag on an NR / AUTO NOTCH / NOISE BLANKER row, in that VFO's needle colour. */
+function VfoDspTag({ vfo, colour }: { vfo: 'A' | 'B'; colour: string }) {
+  const st = usePopupStyles(makeSt);
+  return <Text style={[st.bwLabel, { color: colour, fontWeight: '700', width: undefined, marginLeft: 4 }]}
+               accessibilityLabel={`VFO ${vfo}`}>{vfo}</Text>;
+}
+
 function VfoSqlLabel({ vfo, colour, muted, onMute, dec }: { vfo: 'A' | 'B'; colour: string; muted: boolean; onMute: (on: boolean) => void; dec?: boolean }) {
   const st = usePopupStyles(makeSt);
   return (
@@ -673,6 +680,11 @@ export interface AudioSheetProps {
     /** ★★★ The A ⟷ B BALANCE (−1 all A … +1 all B) — a row right under the two squelch rows. `onBalance` absent = this
      *  server does not take it (hwinfo watchBal): no row, never a dead one. */
     balance?: number; onBalance?: (b: number) => void;
+    /** ★★★ beta93 VFO B's OWN NR / AUTO NOTCH / NOISE BLANKER (Stuart, 2026-11-24: "maybe needs two sets of nr/nb controls
+     *  for each vfo"). Present = the server reports B's own: the NR / AUTO NOTCH / NOISE BLANKER rows become VFO A's
+     *  (tagged) and a B row follows each. Absent (an older server) = one set, as before — never a dead B control. */
+    dspB?: { nrLevel: number; onNr: (level: number) => void; notch: boolean; onNotch: (on: boolean) => void;
+             nbx?: boolean; onNbx?: (on: boolean) => void };
   };
 
   /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
@@ -762,6 +774,7 @@ export default function AudioSheet({
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam, askLocked = false,
 }: AudioSheetProps) {
   const askDim = askLocked ? { opacity: 0.35 } : null;   // ★ ask before tuning — see the prop
+  const dspB = vfoRows?.dspB;   // ★★★ beta93 VFO B's own NR / notch / blanker set (absent = one set, as before)
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
   const sheetDrag = useSheetDrag(onClose);   // ★ the grab handle drags the sheet closed (PopupShell)
@@ -1067,6 +1080,7 @@ export default function AudioSheet({
           {onLocalNR && (
             <View style={[st.bwRow, askDim]}>
               <Text style={st.bwLabel}>NR</Text>
+              {dspB && <VfoDspTag vfo="A" colour={vfoRows!.colourA} />}
               <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={20} step={1}
                 value={localNR}
@@ -1076,13 +1090,36 @@ export default function AudioSheet({
               <Text style={st.bwVal}>{localNR <= 0 ? 'Off' : String(localNR)}</Text>
             </View>
           )}
+          {/* ★★★ beta93 VFO B's own NR — writes only B (watch, id 1), shows only B's report */}
+          {onLocalNR && dspB && (
+            <View style={st.bwRow}>
+              <Text style={st.bwLabel}>NR</Text>
+              <VfoDspTag vfo="B" colour={vfoRows!.colourB} />
+              <NavSlider style={st.bwSlider}
+                minimumValue={0} maximumValue={20} step={1}
+                value={dspB.nrLevel}
+                onValueChange={(v: number) => dspB.onNr(v)}
+                minimumTrackTintColor={dspB.nrLevel > 0 ? pt.gold.fill : C.track}
+                maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
+              <Text style={st.bwVal}>{dspB.nrLevel <= 0 ? 'Off' : String(dspB.nrLevel)}</Text>
+            </View>
+          )}
 
           {/* Automatic notch (adaptive line enhancer) — on/off, all backends. */}
           {onNotch && (
             <View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>AUTO NOTCH</Text>
+              {dspB && <VfoDspTag vfo="A" colour={vfoRows!.colourA} />}
               <View style={{ flex: 1 }} />
               <Toggle label={notchOn ? 'ON' : 'OFF'} on={notchOn} onPress={() => onNotch?.(!notchOn)} />
+            </View>
+          )}
+          {onNotch && dspB && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>AUTO NOTCH</Text>
+              <VfoDspTag vfo="B" colour={vfoRows!.colourB} />
+              <View style={{ flex: 1 }} />
+              <Toggle label={dspB.notch ? 'ON' : 'OFF'} on={dspB.notch} onPress={() => dspB.onNotch(!dspB.notch)} />
             </View>
           )}
 
@@ -1148,8 +1185,17 @@ export default function AudioSheet({
           {onNbx && (
             <View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>NOISE BLANKER</Text>
+              {dspB && dspB.onNbx && <VfoDspTag vfo="A" colour={vfoRows!.colourA} />}
               <View style={{ flex: 1 }} />
               <Toggle label={nbx ? 'ON' : 'OFF'} on={nbx} onPress={() => onNbx?.(!nbx)} />
+            </View>
+          )}
+          {onNbx && dspB?.onNbx && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>NOISE BLANKER</Text>
+              <VfoDspTag vfo="B" colour={vfoRows!.colourB} />
+              <View style={{ flex: 1 }} />
+              <Toggle label={dspB.nbx ? 'ON' : 'OFF'} on={!!dspB.nbx} onPress={() => dspB.onNbx?.(!dspB.nbx)} />
             </View>
           )}
 

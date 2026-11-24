@@ -32,6 +32,7 @@ import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tu
 import { heartbeat } from './keepAlive';   // ★★★ the ping on a worker's clock — a hidden tab's timers are throttled (WEB-KEEPALIVE.md)
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
+import { vfoBDspMsg } from './vfoDsp';   // ★★★ beta93 VFO B's own NR / notch / blanker on the wire
 import { clampBalance } from '../../../src/services/dualMix';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs, type AskState } from '../../../src/services/dialChat';
@@ -915,6 +916,16 @@ export class SpectrumClient {
     if (this.abOn && this.watchRecVfo) this._send({ type: 'watch', recA: a, recB: b });
   }
   private lastLocalWatchAt = -Infinity;
+  /** ★★★ beta93 true while handling the FIRST hwinfo on the current socket (see the hwinfo case). */
+  hwFirst = false;
+  private hwSeenWs: WebSocket | null = null;
+  /** ★★★ beta93 THIS LISTENER SWITCHED VFO B OFF and the server has not yet said B is gone (Stuart 2026-11-24, during the NR
+   *  echo storm: "could NOT switch VFO B off" — the toggle stayed ON). The off went out with no echo window of its own, so
+   *  the server's next half-second watch beat — still carrying B, the off queued behind the storm — ADOPTED B back as "a
+   *  reconnect that still has VFO B". While this is set, a state with B in it is answered with the off again (at most
+   *  once a second), never adopted; a state without B clears it. Survives a reconnect: the off still stands. */
+  private abOffPending = false;
+  private abOffSentAt = -Infinity;
   private watchTimer: number | null = null;
   private swapLive() {
     const o = this.abOther;
@@ -939,6 +950,7 @@ export class SpectrumClient {
     if (on === this.abOn || (on && this.watchMax < 1)) return;
     if (on) {
       this.abOn = true;
+      this.abOffPending = false;   // ★★★ beta93 a new B supersedes an off still on its way
       this.abOther = { frequency: this.frequency, mode: this.mode, bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh, sqlDb: -150 };
       this.lastLocalWatchAt = performance.now();
       this._send({ type: 'watch', id: 1, on: true, stereo: this.abStereo, monoOut: this.abMonoOut,
@@ -949,6 +961,7 @@ export class SpectrumClient {
       if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; }
       this.abOn = false;
       this.abMuteA = this.abMuteB = false;
+      this.abOffPending = true; this.abOffSentAt = performance.now();   // ★★★ beta93 see abOffPending
       this._send({ type: 'watch', id: 1, off: true });
     }
     this.cb.onWatch?.();
@@ -1029,6 +1042,13 @@ export class SpectrumClient {
     } else this._send({ type: 'tune', frequency: o.frequency, mode: o.mode });
     this.cb.onWatch?.();
   }
+  /** ★★★ beta93 VFO B's OWN NR / auto notch / blanker (vfoDsp.ts) — the VFO-B channel convention (watch, id 1), so it can
+   *  never land on A's pipeline. Only while B exists. The listener's own: not an ask-before-tuning setting. */
+  setVfoBDsp(s: { nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean }) {
+    if (!this.abOn) return;
+    this.lastLocalWatchAt = performance.now();
+    this._send(vfoBDspMsg(s));
+  }
   setAbStereo(on: boolean) { this.abStereo = on; if (this.abOn) this._send({ type: 'watch', stereo: on }); }
   /** ★★★ The A ⟷ B balance (Stuart, 2026-10-30: "to compensate for a louder broadcast station and an SSB contact"). The
    *  server applies it as a level before placement (vibe_watch.h PanMixer::setBalance): stereo, stereo off and mono. */
@@ -1063,7 +1083,11 @@ export class SpectrumClient {
     this.abMuteA = !!ch && w.muteA;
     this.abMuteB = !!ch && ch.mute;
     const recent = performance.now() - this.lastLocalWatchAt < 900;
-    if (ch && !this.abOn && !recent) {
+    if (!ch) this.abOffPending = false;   // ★★★ beta93 the server has closed it: the off has landed
+    if (ch && !this.abOn && this.abOffPending) {
+      // ★★★ beta93 OUR OFF HAS NOT LANDED YET — say it again (idempotent on the server), never adopt the B we closed.
+      if (performance.now() - this.abOffSentAt >= 1000) { this.abOffSentAt = performance.now(); this._send({ type: 'watch', id: 1, off: true }); }
+    } else if (ch && !this.abOn && !recent) {
       // ★ The server still has VFO B for this session (the socket reconnected) — adopt it rather than orphan it.
       this.abOn = true;
       this.abOther = { frequency: ch.freq, mode: (ch.mode as SDRMode) || this.mode, bandwidthLow: -ch.bw / 2, bandwidthHigh: ch.bw / 2, sqlDb: ch.sqlOn ? ch.sql : -150 };
@@ -1875,6 +1899,12 @@ export class SpectrumClient {
         this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);
         break;
       case 'hwinfo':
+        /* ★★★ beta93 THE FIRST hwinfo ON THIS SOCKET (hwFirst). hwinfo is the server's standing word and comes again on
+         *  every change — under the 2026-11-24 NR echo storm, hundreds a second. Anything that SENDS or FETCHES because
+         *  hwinfo arrived must do so once per socket (or on a real change), never per message: the DX Log fetches it re-armed
+         *  blew the account's Workers limit (134k requests from one page in 20 min). */
+        this.hwFirst = this.hwSeenWs !== this.ws;
+        this.hwSeenWs = this.ws;
         this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);   // ★ V12 beta25 — absent dcHz = no spike to show
         this.cb.onDabScanOk?.(msg.dabScan === true);   // ★ absent (an older server, a shared radio) = no SCAN key
         this.cb.onAfc?.(msg.afc && typeof msg.afc === 'object' ? (msg.afc as AfcState) : null);   // ★★ V12 auto-PPM
@@ -1883,7 +1913,7 @@ export class SpectrumClient {
         // ★★★ …and whether it takes the A ⟷ B balance; re-sent here so a reconnect keeps the listener's balance.
         { const wb = msg.watchBal === true;
           if (wb !== this.watchBal) { this.watchBal = wb; this.cb.onWatch?.(); }
-          if (wb && this.abOn) this._send({ type: 'watch', balance: this.abBalance }); }
+          if (wb && this.abOn && this.hwFirst) this._send({ type: 'watch', balance: this.abBalance }); }   // ★★★ beta93 once a socket
         { const wm = Number(msg.watch) || 0;
           if (wm !== this.watchMax) { this.watchMax = wm; if (wm < 1 && this.abOn) { if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; } this.abOn = false; } this.cb.onWatch?.(); } }
         if (msg.tunerBw !== undefined)
@@ -1990,7 +2020,7 @@ export class SpectrumClient {
         //    self-heal rather than depend on catching one packet.
         // ★ Only reported on a CHANGE, and never as a refusal, so it greys the controls without
         //   the "that password was not accepted" alert.
-        if (msg.adminOk === true) {
+        if (msg.adminOk === true && (!this.adminBelief || this.hwFirst)) {   // ★★★ beta93 a change (or a new socket) only
           this.adminBelief = true;
           this.cb.onAdmin?.(true, false);
         } else if (msg.adminOk === false && this.adminBelief) {

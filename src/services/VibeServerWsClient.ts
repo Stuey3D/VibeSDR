@@ -935,6 +935,9 @@ export abstract class VibeServerWsClient {
   /** ★ NOT `setNr` — that name is already taken on SDRBackend by OWRX's setNr(threshold: number),
    *  which means something else entirely. Two meanings on one name is how the next bug gets
    *  written; the distinct name is deliberate. */
+  /** ★★★ beta93 VFO B's OWN NR / auto notch / blanker (vfoAB.ts msgDspB — watch, id 1). The listener's own, so not behind
+   *  ask-before-tuning (the watch message never is). */
+  setVfoBDsp(d: { nr?: boolean; nrStrength?: number; notch?: boolean; nbx?: boolean }) { this.ab.setDspB(d); }
   setNrEnabled(on: boolean, strength?: number) {
     const m: Record<string, unknown> = { type: 'nr', on };
     // Server clamps to 0..1 itself; send only when we have a value so "toggle" stays a toggle.

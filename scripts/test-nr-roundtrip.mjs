@@ -1,5 +1,7 @@
 // test-nr-roundtrip.mjs — the NR slider's two conversions must be exact inverses.
 //
+// ★ beta93: the two maps moved from main.ts to web/client/src/vfoDsp.ts (one copy); the report no longer re-sends
+//   (the echo ring — scripts/test-vfo-dsp.ts), but a slider that reads back a different figure is still a lie.
 // ★★★ WHY THIS EXISTS. The server echoes the strength it is using, onDspState renders it back
 //     onto the slider AND dispatches an `input` event — which sends it again. That round trip is a
 //     FEEDBACK LOOP, so a disagreement between the two directions is not an off-by-a-bit: it is a
@@ -17,10 +19,11 @@ import fs from 'node:fs';
 //    curve would agree with itself for ever while the shipped one drifted — the same trap as a
 //    synthetic fixture that agrees with the bug. Bundling main.ts is not an option (it pulls in
 //    the whole React Native app), so lift the two functions out of it verbatim and run those.
-const src = fs.readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+const src = fs.readFileSync(new URL('../web/client/src/vfoDsp.ts', import.meta.url), 'utf8');
 function lift(name) {
-  const i = src.indexOf(`function ${name}(`);
-  assert.ok(i >= 0, `${name}() not found in main.ts — has it been renamed?`);
+  const at = src.indexOf(`export function ${name}(`);
+  assert.ok(at >= 0, `${name}() not found in vfoDsp.ts — has it been renamed?`);
+  const i = at + 'export '.length;
   let depth = 0, j = src.indexOf('{', i);
   for (let k = j; k < src.length; k++) {
     if (src[k] === '{') depth++;

@@ -781,6 +781,11 @@ VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vfo-ab.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta93 each VFO's OWN NR / notch / blanker, and THE NR ECHO STORM (Stuart 11-24: ~1 MB/s, NR sliding by itself, VFO B
+#    would not switch off): B set/reported apart from A, no answer to an unchanged setting, a drag answered once, B's notch
+#    on B's audio only, 30 s of an echoing page at the idle rate, VFO B OFF stays off. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vfo-dsp.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 a FREE VFO walking across the tuner's DC (vibe_vfo_dc.h, GitHub #57): the DC moved out of the passband, one retune
 #    per crossing, never on a range-locked radio, a shared dial moved only by a person's tune. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-vfo-dc.mjs; rc=$?
@@ -932,6 +937,8 @@ if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fa
 if node --no-warnings scripts/test_binauralOffset.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 VFO A/B, the app's half (src/services/vfoAB.ts): the wire, the A/B slots, the L/R tags (the server's rule).
 if node --no-warnings scripts/test_vfoAB.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta93 the NR echo ring (a report paints, never sends) and the per-VFO NR / notch / blanker sets — web and app
+if node --no-warnings scripts/test-vfo-dsp.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 TRANSCRIBE AUTO ORDER (transcribeOrder.ts): EiBi, the SDR's local language's reserved lane, the ★ list, the ⚠.
 if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 RECORD BUFFER (recordBuffer.ts): the retune rule — per-mode allowance, measured from the ANCHOR, mode/source clear.
