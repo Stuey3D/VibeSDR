@@ -60,7 +60,9 @@ public:
         process();
     }
     Stats& stats() { return st_; }
-    bool locked() const { return locked_; }
+    /** ★ Locked AND confirmed — the marker seen again one CADU on, or Reed–Solomon passed (2026-11-24: with kFind 44 a
+     *  noise window matches now and then; that unconfirmed find is not reported as "sync" to the status or the summary). */
+    bool locked() const { return locked_ && confirmed_; }
     /** ★ Reed–Solomon passed within the last 8 CADUs — the only proof the carrier is really locked (an ASM can be "found"
      *  with the carrier 400 Hz out at Es/N0 3 dB; holding the acquisition on that kept it out for the whole run). */
     /* ★★★ COUNTED IN SOFT VALUES ARRIVING, NOT IN CADUs TRIED (2026-11-22, the live pass's "never relocked"). It counted
@@ -74,7 +76,13 @@ public:
 
 private:
     static constexpr int kLead = 128, kTail = 128;               // soft bits each side (64 Viterbi steps)
-    static constexpr int kFind = 46, kKeep = 38;                 // of 52 fixed coded ASM bits
+    /* ★★ kFind 46 → 44 (2026-11-24, docs/v12/LRPT-SENSITIVITY.md): on the differential path the ASM is searched on the
+     *  differentially decoded stream, whose hard-bit error rate is about twice the channel's — at Es/N0 2 dB about 9–10 of
+     *  the 52 fixed bits are wrong, and ≥ 46 matched one CADU in eight. 44 finds the frame sooner after a fade; noise
+     *  passes 44 a few times a second more, each costing one Viterbi that Reed–Solomon then refuses (0 false pictures:
+     *  test-lrpt's noise runs). Real passes: 400 → 415 frames (the weak 24 Nov 09:20 pass 44 → 56). 42 lost frames
+     *  (385): false locks hold the searcher off the real marker. */
+    static constexpr int kFind = 44, kKeep = 38;                 // of 52 fixed coded ASM bits
     uint64_t windowAt(size_t p) const {                         // 64 hard bits starting at p
         uint64_t w = 0;
         for (int i = 0; i < 64; i++) w = (w << 1) | uint64_t(buf_[p + size_t(i)] > 0);
@@ -102,7 +110,7 @@ private:
                     if (scan_ > buf_.size()) scan_ = 0;
                     return;
                 }
-                pos_ = p; locked_ = true; misses_ = 0;
+                pos_ = p; locked_ = true; misses_ = 0; confirmed_ = false;
             }
             // ── LOCKED: a whole CADU plus the tail must be here ──
             if (buf_.size() < pos_ + size_t(kCaduSoft + kTail + 64)) return;
@@ -115,6 +123,8 @@ private:
                 const uint64_t w = windowAt(q);
                 for (int x = 0; x < 8; x++) { const int sc = syncScore(w, x); if (sc > best) { best = sc; bp = q; bx = x; } }
             }
+            // ★ confirmed: the marker again, on the same ambiguity, at ≥ 42 of 52 (noise: ≈ 10⁻⁵ a CADU)
+            if (best >= 42 && bx == x_) confirmed_ = true;
             if (best >= kKeep) { pos_ = bp; x_ = bx; misses_ = 0; }
             else if (++misses_ > 3) { locked_ = false; st_.syncLost++; pos_ = want; }
             else pos_ = want;                                   // flywheel: RS judges it
@@ -221,7 +231,7 @@ private:
         uint8_t* f = cadu + kAsmBytes;
         if (caduDiag) caduDiag(syncScore(windowAt(p), x_), x_, st_.lastVit, pw);
         if (e < 0) { st_.rsFail++; return; }
-        softSinceGood_ = 0;
+        softSinceGood_ = 0; confirmed_ = true;
         st_.rsOk++; st_.rsFixed += uint64_t(e);
         fn_(f, e);
     }
@@ -236,7 +246,7 @@ private:
     size_t scan_ = 0, pos_ = 0;
     int x_ = 0, misses_ = 0;
     uint64_t softSinceGood_ = uint64_t(1) << 40;
-    bool locked_ = false;
+    bool locked_ = false, confirmed_ = false;
     Stats st_;
 };
 

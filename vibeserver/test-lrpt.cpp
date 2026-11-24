@@ -129,6 +129,30 @@ static void testRs() {
     CHECK(okFix > 280, "corrected %d", okFix);
     CHECK(miscorrect == 0, "17..21 errors miscorrected %d (refused %d)", miscorrect, refused);
     std::printf("  0–16 errors corrected %d / %d; 17–21 refused %d, miscorrected %d\n", okFix, okFix + badFix, refused, miscorrect);
+    // ★★ errors AND erasures (2026-11-24): 2·errors + erasures ≤ 32 always decodes; flagged bytes that were right cost nothing
+    {
+        int ok = 0, bad = 0, refusedOver = 0, wrongOver = 0, n = 0;
+        for (int trial = 0; trial < 600; trial++) {
+            uint8_t d[223], p[32], cw[255], ref[255];
+            for (auto& x : d) x = uint8_t(rng());
+            rs.encode(d, p); std::memcpy(cw, d, 223); std::memcpy(cw + 223, p, 32); std::memcpy(ref, cw, 255);
+            const int ne = int(rng() % 33);                         // erasures flagged
+            const int nbadEra = ne ? int(rng() % (ne + 1)) : 0;     // of them really wrong
+            const int room = (32 - ne) / 2;
+            const bool over = trial % 5 == 4;                       // one in five: beyond the code
+            const int nerr = over ? room + 1 + int(rng() % 3) : int(rng() % (room + 1));
+            std::vector<int> pos;
+            while ((int)pos.size() < ne + nerr) { const int q = int(rng() % 255); if (std::find(pos.begin(), pos.end(), q) == pos.end()) pos.push_back(q); }
+            for (int i = 0; i < nbadEra; i++) cw[pos[size_t(i)]] ^= uint8_t(1 + rng() % 255);
+            for (int i = ne; i < ne + nerr; i++) cw[pos[size_t(i)]] ^= uint8_t(1 + rng() % 255);
+            const int e = rs.decode(cw, pos.data(), ne);
+            n++;
+            if (!over) { if (e == nbadEra + nerr && !std::memcmp(cw, ref, 255)) ok++; else { bad++; if (std::getenv("RSDBG")) std::printf("    ne %d badEra %d err %d → %d\n", ne, nbadEra, nerr, e); } }
+            else { if (e < 0) refusedOver++; else if (std::memcmp(cw, ref, 255)) wrongOver++; }
+        }
+        CHECK(bad == 0, "errors+erasures within the bound: %d wrong of %d", bad, ok + bad);
+        std::printf("  errors + erasures (2·err + era ≤ 32): %d / %d corrected; beyond: %d refused, %d miscorrected\n", ok, ok + bad, refusedOver, wrongOver);
+    }
     // interleaved frame
     uint8_t v[892], f[1020];
     for (auto& x : v) x = uint8_t(rng());
@@ -339,7 +363,7 @@ static void testLivePass(bool quick) {
     using namespace livepass;
     std::printf("The live pass (Meteor-M2-4, 2026-11-22): OQPSK + differential, −3.34 kHz, −25 Hz/s fed forward\n");
     // ── 1. sensitivity where that pass was: the joint differential decode + acquisition on the matched filter ──
-    for (double es : {3.0, 3.5, 5.0}) {
+    for (double es : {2.0, 3.0, 3.5, 5.0}) {
         if (quick && es == 3.0) continue;
         uint64_t blocks = 0; const int P = 8;
         for (uint32_t seed = 1; seed <= 2; seed++) {
@@ -357,6 +381,8 @@ static void testLivePass(bool quick) {
         std::printf("  Es/N0 %.1f dB: %llu of %llu picture blocks (%.0f %%)\n", es, (unsigned long long)blocks, (unsigned long long)want, 100.0 * double(blocks) / double(want));
         // ★ before beta91: 0 % at 3.5 dB and at 4 dB (the soft differential decode + the raw-slice acquisition)
         if (es >= 3.5) CHECK(blocks >= want * 6 / 10, "live-pass shape at Es/N0 %.1f: blocks %llu of %llu", es, (unsigned long long)blocks, (unsigned long long)want);
+        // ★★ 2026-11-24 (LRPT-SENSITIVITY.md): the soft Costas detector + the 0.002 carrier loop — before it, 2.0 dB gave ≈ 2 %
+        if (es == 2.0) CHECK(blocks >= want * 4 / 10, "sensitivity at Es/N0 2.0 dB: blocks %llu of %llu (needs 40 %%)", (unsigned long long)blocks, (unsigned long long)want);
     }
     // ── 2. a fade and the recovery, through the server's Run: frames, 20 s of nothing, frames again ──
     //    ★ before beta91: the frames never came back (FrameSync::decoding() stayed true after the ASM was lost, so the

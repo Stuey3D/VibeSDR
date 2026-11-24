@@ -43,8 +43,14 @@ struct DemodConfig {
     double symbolRate = 72000;    ///< 72000 or 80000 (per satellite, from sats.json — never hard-coded by the caller)
     bool   oqpsk = false;         ///< METEOR-M N2-2 onwards transmit OQPSK
     double rrcAlpha = 0.6;
-    double carrierBw = 0.005;     ///< loop noise bandwidth × symbol period
-    double timingBw  = 0.002;
+    /* ★★★ THE LOOP BANDWIDTHS (2026-11-24, docs/v12/LRPT-SENSITIVITY.md). The carrier loop was 0.005 (≈ 360 Hz at 72k):
+     *  at Es/N0 2–3 dB its phase jitter alone cost OQPSK about 1 dB (synthetic: the 50 % frame point 3.0 dB at 0.005,
+     *  1.9 dB at 0.002). Narrower still wins on the synthetic signal (0.001: 1.65 dB) but LOSES on the real passes (the
+     *  four Pi 500 captures, three start offsets each: 0.005 168 frames, 0.0015 348, 0.002 361, 0.003 319 — the real
+     *  carrier has more life in it than a clean oscillator, and a narrow loop is slower back after a fade). The timing
+     *  loop went the other way: 0.004 beat 0.002 on the real passes (361 vs 342) and is level on the synthetic. */
+    double carrierBw = 0.002;     ///< loop noise bandwidth × symbol period
+    double timingBw  = 0.004;
 };
 
 /** Real FIR of a complex stream with a doubled delay line (no wrap in the inner loop). Taps padded to a multiple of 4. */
@@ -224,10 +230,10 @@ public:
         cfg_ = c;
         sps_ = c.sampleRate / c.symbolRate;
         mf_.configure(sps_, c.rrcAlpha);
-        loopGains(c.carrierBw, cA_, cB_);
-        loopGains(c.timingBw, tA_, tB_);
+        loopGains(cfg_.carrierBw, cA_, cB_);
+        loopGains(cfg_.timingBw, tA_, tB_);
         hold_ = false; haveGood_ = false; goodFreq_ = 0;
-        tau_ = double(mf_.half()); nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f;
+        tau_ = double(mf_.half()); nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f; railP_ = 1.f;
         acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0; acqPow_.clear(); acqLooks_ = 0;
         lockAcc_ = 0; lockN_ = 0; lockMetric_ = 0; locked_ = false;
         agc_ = 1.f; amp_ = 1.f;
@@ -317,6 +323,8 @@ private:
      *    decoding (the old "only while the lock detector says unlocked" never re-ran on OQPSK, whose lock metric sits
      *    at 0.72–0.78 on a decoding signal, under the 0.80 bar). */
     static constexpr double kAcqMinHz = 60;
+    /** 2A/σ² × √(rail power) for a design Es/N0 of 0 dB (A² = σ² = P/2): 2√2. */
+    static constexpr float kSoftA = 2.8284271f;
     static constexpr double kLeashHz = 150;
     void acqPush(std::complex<float> y) {
         if (acqDue_ > 0) { acqDue_--; return; }
@@ -382,9 +390,25 @@ private:
         if (tFreq_ > 0.01 * sps_) tFreq_ = 0.01 * sps_; else if (tFreq_ < -0.01 * sps_) tFreq_ = -0.01 * sps_;
         tau_ += tA_ * e * sps_;
     }
+    /** tanh to ≈ 2 % (a Padé form, exact at 0 and saturating to ±1 by |x| = 3) — two a symbol, no libm call. */
+    static float tanhFast(float x) {
+        if (x > 3.f) return 1.f; if (x < -3.f) return -1.f;
+        const float x2 = x * x;
+        return x * (27.f + x2) / (27.f + 9.f * x2);
+    }
     void carrier(float I, float Q) {
-        float e = (I > 0 ? Q : -Q) - (Q > 0 ? I : -I);
         const float r = std::sqrt(I * I + Q * Q) + 1e-9f;
+        /* ★★★ SOFT DECISIONS IN THE COSTAS DETECTOR (2026-11-24, docs/v12/LRPT-SENSITIVITY.md). The textbook QPSK
+         *  detector sign(I)·Q − sign(Q)·I assumes every symbol's decision is right; at Es/N0 ≈ 2 dB, where a weak pass is
+         *  decoded, one rail in ten is wrong and each wrong one kicks the loop the wrong way at full weight. The
+         *  maximum-likelihood form weights each decision by how sure it is: tanh(a·I)·Q − tanh(a·Q)·I with a = 2A/σ²
+         *  (A the rail's amplitude, σ² its noise) — sign() when the symbol is far from the boundary, a gentle linear
+         *  pull when it is close. A and σ² are taken for a DESIGN Es/N0 of 0 dB from the rail power (the threshold
+         *  region is where it matters; a strong signal is tracked either way), not from the noisy M2M4 reading.
+         *  Synthetic OQPSK + differential, loop 0.002: the 50 % frame point 1.89 → 1.66 dB. */
+        railP_ += 1e-3f * (0.5f * (I * I + Q * Q) - railP_);
+        const float a = kSoftA / std::sqrt(railP_ + 1e-20f);
+        float e = tanhFast(a * I) * Q - tanhFast(a * Q) * I;
         e /= r;
         // Applied as the NCO's phase/frequency: the NCO turns backwards by w a sample, so a positive error turns it back
         // by α·e now (a small rotation of the phasor) and adds β·e to the frequency.
@@ -437,6 +461,7 @@ private:
     double tau_ = 0, tFreq_ = 0; uint64_t nIn_ = 0; int half_ = 0;
     std::complex<float> prev_{0, 0}, mid_{0, 0}, prevMid_{0, 0}; bool primed_ = false;
     double freq_ = 0, cA_ = 0, cB_ = 0, tA_ = 0, tB_ = 0;
+    float railP_ = 1.f;   ///< the soft Costas detector's rail power follower
     double nr_ = 1, ni_ = 0, stepW_ = 1e9, stepC_ = 1, stepS_ = 0;   ///< the NCO phasor and its per-sample step
     std::atomic<double> doppler_{0.0};
     float pow_ = 1.f, agc_ = 1.f, agcG_ = 1.f; double amp_ = 0;

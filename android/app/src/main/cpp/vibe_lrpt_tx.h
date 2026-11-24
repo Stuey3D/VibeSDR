@@ -83,6 +83,9 @@ struct TxConfig {
     double carrierHz = 0, dopplerRateHzS = 0, phase0 = 0.3;
     double symbolPpm = 0;              ///< symbol clock error
     double esn0Db = 30;                ///< Es/N0 of the QPSK symbols
+    /** ★ Oscillator phase noise as a Wiener (random-walk) phase of this Lorentzian linewidth, Hz (0 = none). An RTL-SDR's
+     *  R828D synthesiser plus its 28.8 MHz crystal: a few Hz to a few tens of Hz at 137 MHz (docs/v12/LRPT-SENSITIVITY.md). */
+    double phaseNoiseHz = 0;
     int transform = 0;                 ///< the channel's ambiguity (applyX inverse) — the receiver must undo it
     std::vector<int> apids = {64, 65, 68};
     int q = 80;
@@ -227,6 +230,8 @@ inline std::vector<float> modulate(const TxConfig& c, const std::vector<uint8_t>
     const double n0 = sps / std::pow(10.0, c.esn0Db / 10.0);
     const double sigma = std::sqrt(n0 / 2);
     double ph = c.phase0;
+    const double pnSigma = std::sqrt(2 * M_PI * c.phaseNoiseHz / c.sampleRate);   // per-sample phase step σ (rad)
+    std::mt19937 rngPn(c.seed * 7919u + 13u); std::normal_distribution<double> gPn(0, 1);
     for (size_t n = 0; n < ns; n++) {
         const double t = n / c.sampleRate - leadSec;          // seconds since the first symbol
         const double ts = t * rs;                              // in symbols
@@ -239,6 +244,7 @@ inline std::vector<float> modulate(const TxConfig& c, const std::vector<uint8_t>
         }
         const double f = c.carrierHz + c.dopplerRateHzS * t;
         ph += 2 * M_PI * f / c.sampleRate;
+        if (pnSigma > 0) ph += pnSigma * gPn(rngPn);
         const double cr = std::cos(ph), si = std::sin(ph);
         out[2 * n] = float(re * cr - im * si + sigma * g(rng));
         out[2 * n + 1] = float(re * si + im * cr + sigma * g(rng));
