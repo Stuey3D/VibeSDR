@@ -19,6 +19,7 @@
  */
 import { tlmLivePush, type TlmLiveFrame } from '../utils/tlmCharts';
 import { GLOBE_COAST } from './globeCoast';
+import { ORB_LISTENING } from './orbcomm';
 
 export type SatLockState = 'OFF' | 'ARMED' | 'TRACK' | 'COAST' | 'ENDED';
 
@@ -106,7 +107,7 @@ export function parseSatList(m: unknown): SatList | null {
                   sstv: t.sstv === true ? true : undefined, why: str(t.why, 160),
                   band: typeof t.band === 'string' && /^[A-Za-z]{1,2}\/[A-Za-z]{1,2}$/.test(t.band) ? t.band : undefined,
                   modeName: str(t.modeName, 24),
-                  decoder: t.decoder === 'lrpt' || t.decoder === 'sstv' || t.decoder === 'aprs' || t.decoder === 'cw' || t.decoder === 'cwskim' || t.decoder === 'fctlm' || t.decoder === '' ? t.decoder : undefined });
+                  decoder: t.decoder === '' || satDecoderName(t.decoder) ? satDecoderName(t.decoder) : undefined });   // ★ 2026-11-24 + orbcomm
       }
     const passes: SatPass[] = [];
     if (Array.isArray(s.passes))
@@ -233,6 +234,7 @@ export function txTuneHz(t: SatTx): number { return t.hiHz ? Math.round((t.hz + 
 export function txListenMode(t: SatTx): string {
   if (t.mode === 'nfm' || t.mode === 'usb' || t.mode === 'lsb' || t.mode === 'cw') return t.mode;
   if (t.mode === 'lrpt') return 'nfm';   // ★ the LRPT decoder (v12-lrpt) takes the channel IQ; NFM is its listening mode
+  if (t.mode === 'orbcomm') return 'nfm';   // ★ 2026-11-24 ORBCOMM's decoder takes an IQ slice too; heard on NFM (the server's listenModeOf)
   return 'nfm';
 }
 /** The element-set age in words, or '' when fresh. */
@@ -317,6 +319,7 @@ export function satTxCreditText(l: SatList | null): string {
 export function txUse(t: SatTx): SatUse {
   if (t.use) return t.use;
   if (t.mode === 'lrpt' || t.consumer === 'lrpt') return 'image';
+  if (t.mode === 'orbcomm' || t.consumer === 'orbcomm') return 'packet';   // ★ 2026-11-24 the server sends use "packet" too
   if (/^ax25|aprs|packet|9600|1200/i.test(t.mode) || /aprs|ax25|packet/i.test(t.consumer ?? '')) return 'packet';
   return 'voice';
 }
@@ -325,7 +328,8 @@ export function txUse(t: SatTx): SatUse {
 export interface SatPicked {
   /** ★★ beta92 a CW beacon is 'cwskim' (the CW skimmer over 24 kHz centred on the corrected prediction); 'cw' = an older
    *  server's one-signal CW decoder. */
-  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm';
+  /** ★★ 2026-11-24 'orbcomm' — ORBCOMM is a regular satellite now: every carrier in the pick's slice decoded (orbcomm.ts). */
+  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm' | 'orbcomm';
   /** ★★ beta92 OPEN IN VFO B: the other downlinks of this bird THIS listener may open in VFO B now (the server decides:
    *  inside the capture with their Doppler, VFO B allowed here). Absent = none (or an older server: no key). */
   vfob?: number[];
@@ -341,8 +345,9 @@ export interface SatPicked {
    *  to start zoomed in, not all the way but enough to see the signal and neighbours". Absent = an older server: no zoom. */
   view?: number;
 }
-const satDecoderName = (d: unknown): SatPicked['decoder'] =>
-  d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' ? d : '';
+function satDecoderName(d: unknown): SatPicked['decoder'] {
+  return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' ? d : '';
+}
 export function parseSatPicked(m: unknown): SatPicked | null {
   const o = m as Record<string, unknown> | null;
   if (!o || o.type !== 'sat' || o.state !== 'picked') return null;
@@ -412,9 +417,10 @@ export function satVfoBHz(nominalB: number, r: SatReadout | null): number {
   return Math.round(nominalB + (live ? (r!.offset as number) * nominalB / (r!.nominal as number) : 0));
 }
 /** What a decoder shows in the box's decoder area: a picture, text (CW), packet lines, telemetry values — '' = nothing. */
-export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry';
+/** ★★ 2026-11-24 'orbcomm': the ORBCOMM panel (orbcomm.ts — birds, housekeeping, the packet list, the sky plot). */
+export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry' | 'orbcomm';
 export function satDecView(d: SatPicked['decoder'] | undefined): SatDecView {
-  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : '';
+  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : d === 'orbcomm' ? 'orbcomm' : '';
 }
 /** ★ The line switch exists only while B is open AND both lines have a decoder view (Stuart: "when switching between the
  *  lines all it does is change what is shown in the decoder box"). */
@@ -430,6 +436,7 @@ export function satViewShown(aDec: SatPicked['decoder'] | undefined, b: SatVfoB 
  *  says its CW decoder is listening for the beacon (beta91 said "listening for packets" — fixed beta92). */
 export function satDecWord(decoder: SatPicked['decoder'] | undefined, use: SatUse, sstv: boolean | undefined, big: boolean): string {
   if (decoder === 'fctlm') return 'listening for telemetry';
+  if (decoder === 'orbcomm') return ORB_LISTENING;
   if (decoder === 'cw') return 'CW decoder listening for the beacon';
   if (decoder === 'cwskim') return SAT_BEACON_WORD;
   if (use === 'image') return big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG';

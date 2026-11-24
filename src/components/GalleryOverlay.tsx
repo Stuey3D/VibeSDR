@@ -44,6 +44,8 @@ import Svg, { Path as SvgPath, Text as SvgText } from 'react-native-svg';
 import { parseOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl,
          outlineLabelSize, OUTLINE_INK, type Outline } from '../utils/lrptOutline';
 import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ beta92 the DIGI MODES MAP row (the web's words)
+import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 THE SKY PLOT (src/utils/skyPlot.ts)
+import { parseSkyPlotJson, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyPlotData } from '../utils/skyPlot';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -81,7 +83,11 @@ const KINDS: { id: string; label: string }[] = [
   // ★ beta92: METEOR LRPT pictures — the web page had the key, the app never did (Stuart 11-23, "the meteor button is also missing")
   { id: 'lrpt', label: 'METEOR' },
   { id: 'fctlm', label: 'FUNCUBE' },
+  // ★★ 2026-11-24 ORBCOMM: each pass's sky plot (a PNG, "ORBCOMM · …") — and the SKY PLOT row on its first page
+  { id: 'orbcomm', label: 'ORBCOMM' },
 ];
+/** ★★ 2026-11-24 the gallery kinds whose first page carries the SKY PLOT row */
+const SKY_KINDS = ['', 'orbcomm'];
 /** ★★ beta91 a FUNcube pass item (its CSV) — drawn as charts, not as text */
 export const isTlmPass = (it: { k: string; f: string }) => it.k === 'fctlm' && /\.csv$/i.test(it.f);
 /** ★★ beta91 TELEMETRY CHARTS: a server's gallery as a reader — a path ("/vibeserver/gallery.json?…") → its text, or
@@ -101,7 +107,7 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap, onShipMap, onDigiMap }: {
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap, onShipMap, onDigiMap, radioNow = '' }: {
   /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
   visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
   /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
@@ -116,6 +122,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   /** ★★ beta92 THE DIGI MODES MAP from the gallery (the web's SPOTS row and a spots card's MAP): the window to open on. Absent
    *  where there is no map (Apple TV): no key. */
   onDigiMap?: ((window: string) => void) | null;
+  /** ★★ 2026-11-24 the radio this screen is on (its …/r/<id>, '' = a one-radio server) — the SKY PLOT opens on it */
+  radioNow?: string;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -320,7 +328,46 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
     setTrText(r.text); setShowTr(true);
     setTrNote(r.note);
   };
-  const close = () => { setOpen(null); onClose(); };
+  /* ★★ 2026-11-24 THE SKY PLOT (docs/v12/SKY-PLOT.md): a standing row on page 1 of ALL / ORBCOMM once the server holds
+   *  dots (no dead row); SKY PLOT opens the dome — the radio chips when 2+ radios hold dots (a sky plot is about an AERIAL,
+   *  so it opens on THIS radio when it is one of them), the summary, and OPEN / SAVE for the server's own PNG. */
+  const [skyRow, setSkyRow] = useState<string | null>(null);
+  const [skyOpen, setSkyOpen] = useState(false);
+  const [skyRadio, setSkyRadio] = useState<string | null>(null);   // null = not chosen yet: this radio when it is a choice
+  const [sky, setSky] = useState<SkyPlotData | null>(null);
+  const [skyNote, setSkyNote] = useState('');
+  useEffect(() => {
+    if (!visible || page !== 1 || !SKY_KINDS.includes(kind)) { setSkyRow(null); return; }
+    let live = true;
+    fetch(withReadAuth(`${b}${skyPlotQuery('orbcomm')}`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => {
+        const d = parseSkyPlotJson(j);
+        if (live) setSkyRow(d && d.dots.length ? skyPlotSummary(d.dots, d.truncated) : null);
+      }).catch(() => { if (live) setSkyRow(null); });
+    return () => { live = false; };
+  }, [visible, kind, page, b, readAuth]);
+  useEffect(() => {
+    if (!visible || !skyOpen) return;
+    let live = true;
+    setSkyNote('');
+    const pick = skyRadio ?? radioNow;
+    fetch(withReadAuth(`${b}${skyPlotQuery('orbcomm', pick)}`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => {
+        if (!live) return;
+        const d = parseSkyPlotJson(j);
+        if (!d) { setSky(null); setSkyNote(String((j as any)?.error || 'The sky plot could not be read.')); return; }
+        // ★ the chips: this radio first time when it is one of them; a pick no longer offered → every radio
+        const ok = (id: string) => !!d.radios && d.radios.some((x) => x.id === id);
+        if (skyRadio == null && pick && !ok(pick) && d.radios) { setSkyRadio(''); return; }
+        if (skyRadio && !ok(skyRadio)) { setSkyRadio(''); return; }
+        setSky(d);
+      }).catch(() => { if (live) setSkyNote('Could not reach the server.'); });
+    return () => { live = false; };
+  }, [visible, skyOpen, skyRadio, radioNow, b, readAuth]);
+  useEffect(() => { if (!visible) { setSkyOpen(false); setSkyRadio(null); setSky(null); } }, [visible]);
+  const skyPick = sky?.radios ? (skyRadio ?? radioNow) : '';
+  const skyPngUrl = withReadAuth(`${b}${skyPlotQuery('orbcomm', skyRadio ?? radioNow, 0, 0, true)}`, readAuth);
+  const close = () => { setOpen(null); setSkyOpen(false); onClose(); };
 
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={() => (open ? setOpen(null) : close())}>
@@ -336,8 +383,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                   <Text style={[s.keyText, showTr && { color: pt.ink.selected }]}>{trBusy ? 'TRANSLATING…' : showTr ? 'ORIGINAL' : 'TRANSLATE'}</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity onPress={open ? () => setOpen(null) : close} style={s.key} accessibilityRole="button">
-                <Text style={s.keyText}>{open ? '‹ BACK' : 'CLOSE'}</Text>
+              <TouchableOpacity onPress={open ? () => setOpen(null) : skyOpen ? () => setSkyOpen(false) : close} style={s.key} accessibilityRole="button">
+                <Text style={s.keyText}>{open || skyOpen ? '‹ BACK' : 'CLOSE'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -403,8 +450,36 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
               </View>
             </View>
           )}
+          {skyOpen && !open && (
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={scrollLane}>
+              <Text style={s.meta}>SKY PLOT · ORBCOMM</Text>
+              {!!sky?.radios && (
+                <View style={s.filters} accessibilityRole="toolbar" accessibilityLabel="Sky plot: which radio's aerial">
+                  {[{ id: '', name: 'ALL RADIOS' } as LogRadio, ...sky.radios].map((r) => (
+                    <TouchableOpacity key={r.id || 'allradios'} onPress={() => setSkyRadio(r.id)}
+                                      accessibilityRole="button" accessibilityState={{ selected: skyPick === r.id }}
+                                      accessibilityLabel={r.id ? `Where ${r.name}'s aerial hears` : 'Every radio on this server — meaningful only when they share an aerial'}
+                                      style={[s.key, skyPick === r.id && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
+                      <Text style={[s.keyText, skyPick === r.id && { color: pt.ink.selected }]}>{r.id ? radioChipLabel(r) : r.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              {sky ? (<>
+                <SkyPlotView dots={sky.dots} ink={pt.ink.text} muted={pt.ink.textDim} maxW={420}
+                             label="Sky plot: where this aerial hears the ORBCOMM satellites" />
+                <Text style={[s.dim, { textAlign: 'center' }]}>{skyPlotSummary(sky.dots, sky.truncated) || 'No dots for this radio yet.'}</Text>
+                <Text style={s.dim}>{SKY_PLOT_WHAT}</Text>
+                {!!sky.radios && !skyPick && <Text style={s.dim}>Every radio together is only meaningful when they share an aerial.</Text>}
+                <TouchableOpacity onPress={() => { void Linking.openURL(skyPngUrl); }} style={[s.key, { alignSelf: 'flex-start', marginTop: 8 }]} accessibilityRole="button"
+                                  accessibilityLabel="Open the server's own picture of this sky plot">
+                  <Text style={s.keyText}>OPEN / SAVE PNG</Text>
+                </TouchableOpacity>
+              </>) : skyNote ? <Text style={s.dim}>{skyNote}</Text> : <ActivityIndicator style={{ marginTop: 24 }} />}
+            </ScrollView>
+          )}
           {/* ★ The list stays mounted under an open item (display: none), so BACK lands on the same page and scroll. */}
-            <View style={open ? { display: 'none' } : { flex: 1 }}>
+            <View style={open || skyOpen ? { display: 'none' } : { flex: 1 }}>
               <View style={s.filters}>
                 {KINDS.map((k) => (
                   <TouchableOpacity key={k.id || 'all'} onPress={() => { setKind(k.id); setPage(1); }}
@@ -463,7 +538,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
                     </View>
                   ) : null}
-                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) || rankC || (digiC && onDigiMap) ? (<>
+                  ListHeaderComponent={(navSum && navSum.stations.length > 0 && onNavtexMap) || (dscSum && onShipMap) || rankC || (digiC && onDigiMap) || skyRow ? (<>
+                  {!!skyRow && (
+                    <TouchableOpacity onPress={() => setSkyOpen(true)} accessibilityRole="button"
+                                      accessibilityLabel={`ORBCOMM sky plot: ${skyRow}. Open it`} style={s.row}>
+                      <Text style={s.freq}>SKY PLOT</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.name}>{`ORBCOMM · ${skyRow}`}</Text>
+                        <Text style={s.dim}>Where this server's aerials hear the satellites, by SNR — grey where tracked but nothing decoded</Text>
+                      </View>
+                      <View style={[s.key, s.mapKey]}><Text style={s.keyText}>VIEW</Text></View>
+                    </TouchableOpacity>
+                  )}
                   {!!digiC && !!onDigiMap && (
                     <TouchableOpacity onPress={() => onDigiMap('all')} accessibilityRole="button"
                                       accessibilityLabel={`${digiC.title}. Show them on the digi modes map`} style={s.row}>

@@ -24,6 +24,7 @@
  *       · AX.25 9600 (G3RUH)    25 kHz
  *       · FM voice / APRS 1200 / SSTV   20 kHz (5 kHz deviation + 3 kHz audio, Carson's 16 kHz with margin)
  *       · SSB / CW / BPSK telemetry      3 kHz
+ *       · ORBCOMM (2026-11-24)           its decoder slice: 40 kHz, or the listed band + 40 kHz
  *     The listening demodulator's own channel is a floor too (the shim passes its width).
  *
  * Pure: no radio, no clock — vibeserver/test-sat-if.cpp drives it.
@@ -47,6 +48,8 @@ inline double occupiedHz(const vibe::sat::Transmitter& t, std::string* what = nu
         say("LRPT");
         return std::max(150000.0, 2.0 * (t.baud > 0 ? t.baud : 72000.0));
     }
+    // ★ 2026-11-24 ORBCOMM: the decoder's own slice (one channel ± its neighbours, or the band + the same margin)
+    if (t.orbcomm()) { say("ORBCOMM"); return t.passband() ? (t.hiHz - t.hz) + vibe::sat::kOrbNarrowHz : vibe::sat::kOrbNarrowHz; }
     if (t.passband()) { say("transponder"); return (t.hiHz - t.hz) + 3000.0; }
     if (vibe::sat::beaconSkimmed(t)) { say("CW beacon (skimmed)"); return vibe::sat::kBeaconSkimHz; }
     if (t.consumer == "ax25-9600") { say("9600 packet"); return 25000.0; }

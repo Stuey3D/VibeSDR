@@ -39,6 +39,10 @@ clients have neither the element sets nor (necessarily) the location. Cheapest b
 
 ## ORBCOMM (label-only)
 
+> **Superseded 2026-11-24 (docs/v12/ORBCOMM.md):** ORBCOMM is now a REGULAR satellite — the server turns the mirror's
+> label-only ORBCOMM birds into ordinary picks with the ORBCOMM decoder (housekeeping decoded, subscriber messages shown
+> raw, never decoded). The mirror below is unchanged; a band label keeps the `b` flag only so clients still merge it.
+
 - Directory mirror (`directory/src/sats.js`, `sats-curated.json` on branch **b91-orbcomm** in the main repo):
   `labelGroups: ["orbcomm"]` — asked AFTER amateur + weather in the same round (one more URL, the same
   stop-on-non-200 rules); `constellations` expands every ORBCOMM bird (name prefix, ≤ 60; ≤ 200 birds in the whole

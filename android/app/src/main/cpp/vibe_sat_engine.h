@@ -65,6 +65,9 @@ struct Transmitter {
     /** ★★ beta91 SATELLITE LABELS: mode "label" = a downlink that is only ever NAMED on the waterfall (ORBCOMM — commercial
      *  messaging): never offered in SATELLITE mode, never locked, never decoded. */
     bool labelOnly() const { return mode == "label"; }
+    /** ★★ V12 2026-11-24 ORBCOMM (docs/v12/ORBCOMM.md): a downlink the ORBCOMM decoder reads (vibe_orbcomm.h) — the
+     *  satellite's own broadcast housekeeping decoded, subscriber messages shown RAW (never decoded). */
+    bool orbcomm() const { return consumer == "orbcomm" || mode == "orbcomm"; }
 };
 struct SatDef {
     std::string id, name;
@@ -131,6 +134,18 @@ inline std::vector<SatDef> curatedCatalogue() {
     return v;
 }
 
+/** ★★ V12 2026-11-24 ORBCOMM: a bird of the ORBCOMM constellation (by name — the mirror's "ORBCOMM FM114"). */
+inline bool orbcommBird(const SatDef& d) {
+    std::string n; for (char c : d.name.substr(0, 7)) n += (char)std::toupper((unsigned char)c);
+    std::string i; for (char c : d.id.substr(0, 7)) i += (char)std::toupper((unsigned char)c);
+    return n == "ORBCOMM" || i == "ORBCOMM";
+}
+/** A label-only ORBCOMM downlink → the decoder's downlink (the same frequency or band; NFM to listen with). */
+inline void orbcommTx(Transmitter& t) {
+    t.mode = "orbcomm"; t.consumer = "orbcomm"; t.loop = "none"; t.baud = 4800;
+    if (t.label.empty() || t.label == "label") t.label = "Downlink";
+    if (t.note.empty()) t.note = "Housekeeping decoded; subscriber messages are not decoded (shown raw)";
+}
 /** What sats.json says about itself — the picker's credit line ("Orbits: CelesTrak · 5 h old"). */
 struct SatsMeta {
     double generated = 0;     // the mirror built it (Unix)
@@ -199,7 +214,7 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
                 tr.mode = t.str("mode"); tr.loop = t.str("loop"); tr.consumer = t.str("consumer"); tr.baud = t.num("baud");
                 tr.upHz = t.num("uplink"); tr.ctcss = t.num("ctcss"); tr.note = t.str("note").substr(0, 160); tr.status = t.str("status");
                 tr.modeName = t.str("modeName").substr(0, 24);
-                static const char* kModes[] = {"nfm", "usb", "lsb", "cw", "am", "lrpt", "label"};
+                static const char* kModes[] = {"nfm", "usb", "lsb", "cw", "am", "lrpt", "label", "orbcomm"};
                 bool modeOk = false; for (auto m : kModes) if (tr.mode == m) modeOk = true;
                 const bool loopOk = tr.loop == "fll" || tr.loop == "none" || tr.loop == "costas";
                 if (!modeOk || !loopOk || !(tr.hz >= 1e6 && tr.hz <= 1e10) || (tr.hiHz != 0 && !(tr.hiHz > tr.hz && tr.hiHz - tr.hz <= 2e6))) continue;
@@ -212,7 +227,16 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
         bool allLabel = !d.tx.empty();
         for (auto& t : d.tx) if (!t.labelOnly()) allLabel = false;
         const json::Value* lo = x.get("labelOnly");
-        const bool labelBird = allLabel || (lo && lo->t == json::Value::Bool && lo->b);
+        bool labelBird = allLabel || (lo && lo->t == json::Value::Bool && lo->b);
+        /* ★★★ V12 2026-11-24 ORBCOMM IS A REGULAR SATELLITE NOW (Stuart: "we can treat orbcomm as a regular satellite, just
+         *  put the caveat that encrypted messages not decoded but we can show the raw data"). The directory's mirror still
+         *  sends the beta91 shape — an "ORBCOMM …" bird, label-only, one downlink of mode "label" (its own channel, or the
+         *  137.2–137.8 MHz band) — so THIS server turns it into an ordinary pick: listed with passes, Doppler-tracked, the
+         *  ORBCOMM decoder attached (orbcommBird). A mirror that one day sends mode "orbcomm" itself needs nothing here. */
+        if (labelBird && orbcommBird(d)) {
+            for (auto& t : d.tx) if (t.labelOnly()) orbcommTx(t);
+            labelBird = false;
+        }
         if (labelBird) {
             d.tx.erase(std::remove_if(d.tx.begin(), d.tx.end(), [](const Transmitter& t) { return !t.labelOnly(); }), d.tx.end());
             for (auto& t : d.tx) { t.loop = "none"; t.consumer.clear(); t.upHz = 0; t.ctcss = 0; }   // ★ a name, nothing else
@@ -256,6 +280,7 @@ inline const char* useOf(const Transmitter& t) {
     if (t.consumer == "lrpt" || t.mode == "lrpt") return "image";
     if (t.consumer.rfind("ax25", 0) == 0) return "packet";
     if (t.consumer == "fc-bpsk") return "packet";
+    if (t.orbcomm()) return "packet";   // ★ 2026-11-24 ORBCOMM: housekeeping lines + raw subscriber frames
     if (t.mode == "cw" && t.consumer.empty()) return "packet";
     return "voice";
 }
@@ -311,6 +336,10 @@ inline double listenOffsetHz(const Transmitter& t) {
 inline double tuneHzOf(const Transmitter& t) { return std::round(t.centre() + listenOffsetHz(t)); }
 /** ★★ beta92: the CW skimmer's window for a satellite CW beacon (Hz) — wide enough for a prediction a few kHz out at UHF. */
 constexpr double kBeaconSkimHz = 24000.0;
+/** ★★ 2026-11-24 ORBCOMM: the slice around ONE listed channel (±3.4 kHz signal, ±3.3 kHz Doppler, a dongle's ppm and the
+ *  channel's neighbours to find), and the most a band pick asks for (137.2–137.8 MHz with Doppler room). */
+constexpr double kOrbNarrowHz = 40000.0;
+constexpr double kOrbMaxSliceHz = 640000.0;
 /** ★★ beta92: half the CW passband a beacon pick listens with, centred on the prediction (so ±3 kHz is heard). */
 constexpr double kBeaconAudioHalfHz = 3000.0;
 /** ★★ beta92: a downlink whose pick runs the CW skimmer over kBeaconSkimHz (a satellite CW beacon). */
@@ -343,6 +372,14 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
      *  on the Doppler-corrected prediction (the host's IQ aim, DecoderHost::setIqAim — the window follows the pass), so a
      *  beacon a few kHz off the figure is still read, and its offset from the prediction is shown. */
     if (beaconSkimmed(t)) { params ="\"width\":" + std::to_string((int)kBeaconSkimHz); return "cwskim"; }
+    /* ★★ 2026-11-24 ORBCOMM: the decoder cuts its own slice at the dial — the bird's listed channel ± Doppler
+     *  (kOrbNarrowHz), or the whole listed band (the mirror's 137.2–137.8 MHz when no single channel is known) — and finds
+     *  every carrier in it; the one that is this bird is named by its own position report (vibe_orbcomm_id.h). */
+    if (t.orbcomm()) {
+        const double w = t.passband() ? std::min(kOrbMaxSliceHz, t.hiHz - t.hz + kOrbNarrowHz) : kOrbNarrowHz;
+        params = "\"width\":" + std::to_string((int)w);
+        return "orbcomm";
+    }
     if (sstvOf(t)) return "sstv";
     return "";
 }
@@ -351,7 +388,7 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
 inline bool passKeepable(const Transmitter& t) {
     std::string p;
     const std::string d = decoderOf(t, p);
-    return d == "lrpt" || d == "sstv" || d == "aprs" || d == "fctlm";
+    return d == "lrpt" || d == "sstv" || d == "aprs" || d == "fctlm" || d == "orbcomm";
 }
 /** The attach message a pick hands the decoder host — the shape a client's audio_extension_attach has. */
 inline std::string decoderAttachMsg(const std::string& ext, const std::string& params) {
@@ -634,6 +671,10 @@ public:
                 const double dop = -c * (b.rrKmS * 1000.0) / kC;
                 SkyLabel L;
                 L.id = d.id; L.name = d.name; L.tx = t.label; L.norad = d.norad; L.labelOnly = b.label; L.elDeg = b.elDeg;
+                /* ★ 2026-11-24: an ORBCOMM bird named over the whole BAND (no single channel known) keeps the beta91 "b" flag on
+                 *  its LABEL — so the clients still merge the birds up at once into ONE band label ("ORBCOMM FM114 +2") rather
+                 *  than four labels over the same 600 kHz. A tap tunes there, as before; picking it is the SATELLITE list's job. */
+                if (t.orbcomm() && t.passband()) L.labelOnly = true;
                 L.mode = b.label ? "nfm" : listenModeOf(t);
                 L.hz = c + dop;
                 L.rateHzS = -c * (b.rrRateKmS2 * 1000.0) / kC;
@@ -715,6 +756,19 @@ public:
     }
     /** A copy: sats.json can replace the list at any time (loadSats). */
     std::vector<SatDef> defs() const { std::lock_guard<std::mutex> lk(m_); return defs_; }
+    /** ★★ 2026-11-24 ORBCOMM: every ORBCOMM bird held (listed, or label-only on an older shape) WITH elements — the
+     *  decoder names carriers by them (vibe_orbcomm_id.h) — and the station's location (false = none set). */
+    struct ElBird { long long norad = 0; std::string name; Elements el; };
+    std::vector<ElBird> orbcommElements() const {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<ElBird> v;
+        for (size_t i = 0; i < defs_.size() && i < sats_.size(); ++i)
+            if (sats_[i].have && orbcommBird(defs_[i])) v.push_back({ defs_[i].norad, defs_[i].name, sats_[i].el });
+        for (size_t i = 0; i < labelDefs_.size() && i < labelSats_.size(); ++i)
+            if (labelSats_[i].have && orbcommBird(labelDefs_[i])) v.push_back({ labelDefs_[i].norad, labelDefs_[i].name, labelSats_[i].el });
+        return v;
+    }
+    bool observer(Observer& o) const { std::lock_guard<std::mutex> lk(m_); o = obs_; return obs_.valid; }
     /** ★ SATELLITE MODE's pick: bird `norad`'s downlink number `txIndex` (the index in sat_list's tx[]). false = no such. */
     bool txAt(long long norad, int txIndex, SatDef& sat, Transmitter& tx) const {
         std::lock_guard<std::mutex> lk(m_);

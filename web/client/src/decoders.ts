@@ -84,7 +84,7 @@ import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 import { parseBandSkim, type BandSkim } from '../../../src/services/bandSkim';   // ★★ beta92 the band skimmer's readable rows
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | 'orbcomm' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -193,6 +193,8 @@ export interface DecoderCallbacks {
   onLrptStatus?: (data: unknown) => void;
   /** ★ V12 METEOR LRPT's map outline for the live preview ({"type":"lrpt_geo"}) — src/utils/lrptOutline.ts */
   onLrptGeo?: (data: unknown) => void;
+  /** ★★ 2026-11-24 ORBCOMM: orbcomm_status / orbcomm_pkt (src/services/orbcomm.ts parses them) — the SATELLITE box */
+  onOrbcomm?: (type: 'orbcomm_status' | 'orbcomm_pkt', data: unknown) => void;
   onSatTlm?: (data: unknown) => void;   // ★ SATELLITE-BEST 1.3: fctlm_status / sat_tlm (src/services/satellites.ts parseSatTelemetry)   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
@@ -269,6 +271,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   balloon: 'balloon',   // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV (vibe_balloon_run.h)
   tones: 'tones',       // ★ V12 DTMF + 5-tone selective calling (vibe_tones_run.h)
   fctlm: 'fctlm',       // ★ SATELLITE-BEST 1.2: AO-73's FUNcube telemetry (attached by a SATELLITE pick only)
+  orbcomm: 'orbcomm',   // ★★ 2026-11-24 ORBCOMM housekeeping, subscriber messages raw only (attached by a SATELLITE pick only)
   lrpt: 'lrpt',         // ★ V12 METEOR-M LRPT weather-satellite pictures (vibe_lrpt_run.h): "symbol_rate" etc.
   vor: 'vor',           // ★ V12 VOR / ILS (vibe_nav_run.h)
   sarsat: 'sarsat',     // ★ V12 406 MHz beacons (vibe_sarsat_run.h)
@@ -543,6 +546,12 @@ export class DecoderClient {
     if (msg.type === 'hell_status' && msg.data) {
       if (this.mode !== 'hell') return;
       this.cb.onHellStatus?.(msg.data);
+      return;
+    }
+    if ((msg.type === 'orbcomm_status' || msg.type === 'orbcomm_pkt') && msg.data) {
+      // ★★ 2026-11-24 ORBCOMM — only while OUR ORBCOMM decoder is attached
+      if (this.mode !== 'orbcomm') return;
+      this.cb.onOrbcomm?.(msg.type, msg.data);
       return;
     }
     if ((msg.type === 'fctlm_status' || msg.type === 'sat_tlm') && msg.data) {

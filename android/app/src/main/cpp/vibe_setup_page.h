@@ -3662,8 +3662,9 @@ const BLOCKABLE = [
    *  identify only. VARA is proprietary and is NEVER decoded; this switch only stops the server looking for its shape. */
   { id: "varatag", label: "VARA HF tag on the spectrum (identify only \u2014 VARA is proprietary and never decoded)" },
   /* ★★ beta91 SATELLITE LABELS (docs/v12/SAT-LABELS.md): satellites in range named on the waterfall at their Doppler-shifted
-   *  downlink (ORBCOMM too — named only, never decoded). This switch stops the server sending them. */
-  { id: "satlabels", label: "Satellite labels on the waterfall (names only \u2014 ORBCOMM is never decoded)" },
+   *  downlink (ORBCOMM too — since 2026-11-24 a regular satellite with its own decoder, docs/v12/ORBCOMM.md). This switch
+   *  stops the server sending the labels. */
+  { id: "satlabels", label: "Satellite labels on the waterfall (names only)" },
   /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). Under it: each spots mode (spotModes), then Band. */
@@ -3735,6 +3736,9 @@ const BLOCKABLE = [
   /* ★ V12 beta90 FUNcube telemetry (vibe_fctlm.h): AO-73's BPSK 1200 frames on 145.935 MHz, decoded into named values
    *  (raw counts where the satellite's document publishes no calibration). A SATELLITE pick of AO-73 attaches it. */
   { id: "fctlm", label: "FUNcube satellite telemetry (AO-73)" },
+  /* ★ V12 2026-11-24 ORBCOMM (docs/v12/ORBCOMM.md): the satellites' own housekeeping decoded (position, clock, channels);
+   *  subscriber messages are never decoded, only shown raw. Feeds the SKY PLOT. A SATELLITE pick of an ORBCOMM bird attaches it. */
+  { id: "orbcomm", label: "ORBCOMM satellites (housekeeping + sky plot; messages not decoded)" },
   /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
    *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
   { id: "vor", label: "VOR bearing and ILS deviation" },

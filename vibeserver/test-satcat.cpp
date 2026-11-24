@@ -93,7 +93,7 @@ int main() {
         vibe::sat::LabelSet ls;
         const std::string orb = readFile("vibeserver/testdata-sat/sats-orbcomm-SYNTHETIC-2026-11-22.json");
         CHECK(vibe::sat::parseSats(orb, d, e, h, m, why) && !d.empty(), "beta91: the validator accepts a sats.json with ORBCOMM label birds (%s)", why.c_str());
-        CHECK(vibe::sat::parseSats(orb, d, e, h, m, why, &ls) && ls.defs.size() == 8, "…and the engine's parse sets them apart (%zu)", ls.defs.size());
+        CHECK(vibe::sat::parseSats(orb, d, e, h, m, why, &ls) && ls.defs.empty(), "…and (2026-11-24) the engine's parse makes them regular ORBCOMM picks (%zu label-only left)", ls.defs.size());
     }
     std::printf("§1 first start, no copy\n");
     CHECK(vssat::loadFromCache() == 0 && g_published == 0, "nothing cached");

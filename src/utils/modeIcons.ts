@@ -174,7 +174,7 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'psk': case 'bpsk31': case 'bpsk63': case 'psk31': case 'psk63': case 'jtty': case 'mfsk': case 'hell': return 'keyboard';
     case 'tones': case 'dtmf': case 'zvei': case 'ccir': return 'keyboard';   // ★ V12 DTMF + 5-tone: a keypad's tones
     case 'lrpt': case 'meteor': return 'picture';   // ★ V12 METEOR LRPT: a weather-satellite picture (the gallery's METEOR kind)
-    case 'sat': case 'satellite': return 'satellite';   // ★ V12 SATELLITE mode (one key for every satellite)
+    case 'sat': case 'satellite': case 'orbcomm': case 'skyplot': return 'satellite';   // ★★ 2026-11-24 ORBCOMM + the sky plot (the gallery's kind)   // ★ V12 SATELLITE mode (one key for every satellite)
     case 'ft8': case 'ft4': case 'wspr': case 'js8': case 'jt65': case 'jt9': case 'q65': case 'fst4': case 'fst4w':
     case 'msk144': case 'digi': case 'spots': case 'spotsband': return 'spots';
     case 'dab': case 'rds': case 'advrds': case 'same': case 'eas': return 'broadcast';

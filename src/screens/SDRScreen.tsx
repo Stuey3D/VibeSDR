@@ -267,6 +267,8 @@ import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay, { galleryReader } from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
+import { orbViewMerge, type OrbView } from '../services/orbcomm';   // ★★ 2026-11-24 ORBCOMM in the SATELLITE box
+import { skyRadioFromBase } from '../utils/skyPlot';
 import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
@@ -2753,6 +2755,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satOrbit, setSatOrbit] = useState<{ geo: GeoPt[]; tcaIdx?: number } | null>(null);
   const satTrackAsk = useRef<{ norad: number; aos: number } | null>(null);
   const [satTlm, setSatTlm] = useState<SatTelemetry | null>(null);
+  /* ★★ 2026-11-24 ORBCOMM (services/orbcomm.ts): the pick's decoder state + recent packets, and the manual fallback under
+   *  AUTO — carriers at most (0 = AUTO), this app session only (a later pick re-attaches with it). */
+  const [satOrb, setSatOrb] = useState<OrbView | null>(null);
+  const [satOrbMax, setSatOrbMax] = useState(0);
+  const satOrbMaxRef = useRef(0);
   /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
    *  decoder on the listener's VFO B host; the app follows it on a SECOND DecoderClient ("vfo":"B", the server's exact
    *  parameters — it JOINS that run; one socket parses one decoder's frames) whose output goes to the SATELLITE box only.
@@ -6295,7 +6302,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       // ★ While RTTY AUTO's tuning guide is up it IS the status; the decoder's own state returns when it clears.
       onStatus: (s: string)  => { decStateText.current = s; if (!tuneHintText.current) queueDecoderStatus(s); },
-      onSatTelemetry: (t) => { if (satDecRef.current) setSatTlm((prev) => satTelemetryMerge(prev, t)); },   // ★★ SATELLITE-BEST 1.3 (fctlm; aprs T# / SONATE-2)
+      onSatTelemetry: (t) => { if (satDecRef.current) setSatTlm((prev) => satTelemetryMerge(prev, t)); },
+      onOrbcomm: (m) => { if (satDecRef.current === 'orbcomm') setSatOrb((prev) => orbViewMerge(prev, m)); },   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE-BEST 1.3 (fctlm; aprs T# / SONATE-2)
       onTuneHint: (audioHz: number) => {
         tuneHintText.current = tuneHintLabel(audioHz, String(client.current?.getStatus().mode ?? ''));
         queueDecoderStatus(tuneHintText.current || decStateText.current);
@@ -7018,7 +7026,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (d !== 'aprs') satPacketRef.current = null;
     const was = satDecRef.current;
     satDecRef.current = d; setSatDec(d);
-    if (d !== was) setSatTlm(null);
+    if (d !== was) { setSatTlm(null); setSatOrb(null); }
     // ★★ beta92 a skimmed CW beacon runs under CW's key (the skimmer is CW's): 'cwskim' → the 'cw' decoder, skimming
     const key = satDecoderKey;
     if (d !== was) setSatBeacon(null);
@@ -8037,6 +8045,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           decoderClient.current.lrptSymbolRate = pk.decoder === 'lrpt' && Number.isFinite(sr) && sr > 0 ? sr : 0;
           // ★★★ beta92 FUNcube telemetry at the pick's own centre and hunt (the wide telemetry pick) — JOINS its run
           decoderClient.current.fctlmParams = pk.decoder === 'fctlm' && pk.params ? pk.params : null;
+          // ★★ 2026-11-24 ORBCOMM at the pick's own slice — JOINS its run (+ "max_carriers" when set by hand this session)
+          decoderClient.current.orbcommParams = pk.decoder === 'orbcomm' && pk.params ? pk.params : null;
+          decoderClient.current.orbcommMaxCarriers = satOrbMaxRef.current;
         }
         /* ★★★ beta92 THE PICK'S OWN PASSBAND (BPSK telemetry: 100–7600 Hz USB, the decoder's centre in the middle) — the
          *  server set it; the app shows and keeps exactly it each time the pick is confirmed. */
@@ -12800,7 +12811,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★★ beta91 SATELLITE LABELS (vibe_sat_engine.h skyLabels — Stuart, 2026-11-22: "we dont even need to be in satellite
    *  mode either"): the last `sat_labels` message — the birds in range in this radio's capture, Doppler-shifted, every 4 s
    *  while one is up — dropped SATLABEL_STALE_MS after the last message. Drawn with the other labels (SIGNAL LABELS).
-   *  ORBCOMM is a name only, never decoded. */
+   *  ★★ 2026-11-24 ORBCOMM's band birds are merged into one label; the label only tunes — ORBCOMM is DECODED from a SATELLITE
+   *  pick (housekeeping; subscriber messages raw only, never decoded). */
   const [satLabels, setSatLabels] = useState<SatLabelEntry[]>([]);
   const satLabelsAtRef = useRef(0);
   useEffect(() => {
@@ -16145,6 +16157,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           rxName={instanceName ?? ''}
           orbit={satOrbit?.geo ?? null} tcaIdx={satOrbit?.tcaIdx}
           telemetry={satTlm}
+          orbcomm={satDec === 'orbcomm' ? satOrb : null}
+          orbMax={satOrbMax}
+          onOrbMax={(k) => {   // ★★ 2026-11-24 the manual fallback under AUTO: re-attach with "max_carriers" (0 = AUTO)
+            markInteract();
+            satOrbMaxRef.current = k; setSatOrbMax(k);
+            const dc = decoderClient.current;
+            if (dc && satDecRef.current === 'orbcomm' && activeDecRef.current === 'orbcomm') { dc.orbcommMaxCarriers = k; dc.start('orbcomm'); }
+          }}
+          skyGet={satGalleryGet}
+          skyRadio={skyRadioFromBase(connectBase)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
           remindLead={satRemLead}
@@ -16598,6 +16620,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         base={connectBase}
         readAuth={radioAuthSuffix || route.params.authSuffix || ''}
         translateTo={txTarget}
+        radioNow={skyRadioFromBase(connectBase)}
         onClose={() => setGalleryOpen(false)}
         onNodesMap={IS_APPLE_TV ? null : (title, nodes, rx, refresh) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx, refresh }); }}
         onNavtexMap={IS_APPLE_TV ? null : () => { setGalleryOpen(false); openShipMap('navtex', '', true); }}

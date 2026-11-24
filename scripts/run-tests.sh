@@ -319,6 +319,10 @@ flags_for() {
     # ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_bpsk_rx.h + vibe_fctlm.h): FEC, noise (0 frames), the whole receiver
     #   from our own transmitter, SIMD = scalar, the values. -O2: ~4 s.
     test-fctlm)            echo "-O2" ;;
+    # ★ V12 ORBCOMM (vibe_orbcomm.h, docs/v12/ORBCOMM.md): Kenny's published packets, the receiver on synthetic SDPSK
+    #   (offsets, Doppler slope, clock error, two carriers, noise), and a synthetic pass end to end through the run + the
+    #   sky plot's store / JSON / PNG (test-orbcomm-run). -O2: ~3 s each.
+    test-orbcomm|test-orbcomm-run) echo "-O2" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
     test-sat-cw)           echo "-O2 -I $VDSP" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
@@ -987,6 +991,10 @@ if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)
 # ★ V12 METEOR LRPT's MAP OUTLINE, the clients' rule (src/utils/lrptOutline.ts): OFF by default, the switch remembered, the
 #   outline parsed defensively, "geo" / "gw", outline items never listed, DOWNLOAD following the switch.
 if npx tsx scripts/test_lrpt_outline.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 2026-11-24 ORBCOMM + THE SKY PLOT, the clients' half (src/services/orbcomm.ts, src/utils/skyPlot.ts): orbcomm_status /
+#    orbcomm_pkt parsed defensively, subscriber messages shown as "not decoded" with raw bytes only, the dome's geometry and the
+#    server's SNR ramp, skyplot.json with radio ids and grey dots, an ORBCOMM pick's decoder and listening mode
+if npx tsx scripts/test_orbcomm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 SILENT DECODERS (src/services/silentDecoder.ts): APRS and METEOR LRPT mute the speaker (or, with VFO B on, the VFO
 #   they decode on) and put it back exactly as it was — the rule run every way, and both clients pinned to it
 if npx tsx scripts/test_silent_decoder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -2022,7 +2030,8 @@ node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta91 SATELLITE LABELS on the waterfall, end to end: a server under the ISS on 2 m (not SATELLITE mode) sends sat_labels
 #    (Doppler-shifted, its capture only, moving), the page draws "ISS Voice/SSTV" in sky blue (headless Edge, --mute-audio),
-#    ORBCOMM never in sat_list, the owner's "satlabels" switch and no location send nothing named. Needs VIBESERVER_BIN.
+#    ORBCOMM in sat_list as regular picks (decoder orbcomm, 2026-11-24), the owner's "satlabels" switch and no location send
+#    nothing named. Needs VIBESERVER_BIN.
 node --max-old-space-size=512 scripts/test-web-sat-labels.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ WHOLE-RADIO MODES HAND BACK THE SERVER'S GEOMETRY (Stuart 11-21, beta89: blank spectrum + the old readout after ADS-B →

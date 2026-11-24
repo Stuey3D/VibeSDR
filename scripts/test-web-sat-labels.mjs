@@ -7,7 +7,8 @@
 // test-server-sat.mjs does), no network (the sync state says "just checked"):
 //   A. where the ISS is now (sat_list), then a server UNDER it on 145.800 NFM (2 m, NOT satellite mode): the spectrum
 //      socket gets `sat_labels` with the ISS's 2 m downlinks at their Doppler-shifted frequency, inside the capture only
-//      (no 70 cm entry), never an ORBCOMM bird outside 137 MHz; they move between messages; sat_list never lists ORBCOMM;
+//      (no 70 cm entry), never an ORBCOMM bird outside 137 MHz; they move between messages; ★★ 2026-11-24 sat_list lists
+//      ORBCOMM as regular picks (decoder "orbcomm"), the other 14 birds as before;
 //   B. THE BINARY'S OWN PAGE in a real headless MUTED Edge: the label "ISS Voice/SSTV" is drawn, in the satellite sky
 //      blue, and a screenshot is written (SAT_LABELS_SHOT, default the OS temp dir);
 //   C. the owner's switch "satlabels" off: only the empty message; and a server with no location sends nothing named.
@@ -123,7 +124,12 @@ try {
     const l = lastOf(sp, 'sat_list');
     const iss = l?.sats?.find((s) => s.id === 'ISS');
     ok(!!iss && Number.isFinite(iss.lat), `ISS sub-point ${iss?.lat}, ${iss?.lon}`);
-    ok(!!l && !l.sats.some((s) => /ORBCOMM/.test(s.name)) && l.sats.length === 14, `★ sat_list never lists ORBCOMM (${l?.sats?.length} birds)`);
+    {   // ★★ 2026-11-24 ORBCOMM is a REGULAR satellite now (docs/v12/ORBCOMM.md): picks with the ORBCOMM decoder, use packet
+      const orb = (l?.sats ?? []).filter((s) => /ORBCOMM/.test(s.name));
+      ok(!!l && l.sats.length - orb.length === 14 && orb.length > 0
+         && orb.every((s) => s.tx.length > 0 && s.tx.every((t) => t.decoder === 'orbcomm' && t.use === 'packet')),
+         `★ sat_list: the 14 birds + ${orb.length} ORBCOMM picks, each with the ORBCOMM decoder (${l?.sats?.length} birds)`);
+    }
     issLoc = iss ? locator(iss.lat, iss.lon) : 'IO92ng';
     sp.close(); S.stop();
   }

@@ -66,6 +66,7 @@ inline const std::vector<const char*>& allModes() {
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
         "lrpt",             // ★ V12 METEOR-M LRPT pictures (docs/v12/LRPT.md): a listener's decoder on a 140 kHz IQ slice, 137 MHz
         "fctlm",            // ★ V12 beta90 FUNcube telemetry (AO-73): a listener's decoder on USB, 145.935 MHz (a SATELLITE pick attaches it)
+        "orbcomm",          // ★ V12 ORBCOMM (docs/v12/ORBCOMM.md): a listener's decoder on an IQ slice, 137.2–137.8 MHz (a SATELLITE pick attaches it)
         "vor",              // ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a listener's decoder on the channel IQ, 108–118 / 329–335 MHz
         "sarsat",           // ★ V12 406 MHz beacons (docs/v12/SARSAT.md): a listener's decoder on the channel IQ, 406.0–406.1 MHz
         "ale",              // ★ V12 2G HF ALE (docs/v12/HF-DATA.md): a listener's decoder on USB, HF

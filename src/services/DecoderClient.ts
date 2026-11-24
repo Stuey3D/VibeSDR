@@ -69,6 +69,7 @@ import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD 
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 import { parseBandSkim, type BandSkim } from './bandSkim';
 import { parseSatTelemetry } from './satellites';   // ★ SATELLITE-BEST 1.3
+import { orbAttachParams, parseOrbcommPkt, parseOrbcommStatus, type OrbPkt, type OrbStatus } from './orbcomm';   // ★★ 2026-11-24 ORBCOMM
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
   | 'hfdl'    // ★ V12 HFDL — a VibeServer's aircraft datalink on the USB dial (vibe_hfdl_run.h): a line per message, hfdl_status
+  | 'orbcomm' // ★★ V12 2026-11-24 ORBCOMM, attached by a SATELLITE pick: orbcomm_status + orbcomm_pkt (orbcomm.ts) — the SATELLITE box draws them
   | 'fctlm'   // ★ V12 SATELLITE-BEST 1.2/1.3 — AO-73's FUNcube telemetry, attached by a SATELLITE pick: text lines, 0x03, fctlm_status (satellites.ts parseSatTelemetry)
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
@@ -220,6 +222,9 @@ function spotTime(ts: unknown): number {
 export interface DecoderCallbacks {
   onText:       (text: string) => void;
   onStatus:     (status: string) => void;
+  /** ★★ 2026-11-24 ORBCOMM: the decoder's state once a second (orbcomm_status) and a packet worth a line (orbcomm_pkt) —
+   *  drawn in the SATELLITE box (subscriber messages as raw bytes only). */
+  onOrbcomm?: (m: { status?: OrbStatus; pkt?: OrbPkt }) => void;
   /** ★ SATELLITE-BEST 1.3: a FUNcube telemetry report (fctlm_status) — drawn in the SATELLITE box. */
   onSatTelemetry?: (t: Partial<import('./satellites').SatTelemetry>) => void;
   /** 'idle' | 'sync' | 'rx' | 'active' — drives the decoder panel dot. */
@@ -370,6 +375,10 @@ export class DecoderClient {
    *  wide telemetry pick), so the app JOINS the server's run instead of restarting it at the old 1200 Hz centre. null = an
    *  older server's pick (no parameters: AUTO). */
   fctlmParams: Record<string, unknown> | null = null;
+  /** ★★ 2026-11-24 ORBCOMM: the parameters the SATELLITE pick attached it with ("width" — one channel's 40 kHz or the band's
+   *  slice), so the app JOINS the server's run; and the manual fallback under AUTO — "max_carriers" 1–6 (0 = AUTO). */
+  orbcommParams: Record<string, unknown> | null = null;
+  orbcommMaxCarriers = 0;
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
   /** ★ V12 VOR / ILS: the server's last status (radial / deviation, ident, station). */
@@ -724,6 +733,16 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if ((m.type === 'orbcomm_status' || m.type === 'orbcomm_pkt') && m.data) {
+            // ★★ 2026-11-24 ORBCOMM — only while OUR ORBCOMM decoder is attached; checked and bounded in orbcomm.ts
+            if (this.active !== 'orbcomm') return;
+            if (m.type === 'orbcomm_status') {
+              const st = parseOrbcommStatus(m.data);
+              if (st) { this.cb.onOrbcomm?.({ status: st }); this.cb.onDot(st.sats.length ? 'active' : st.carriers.some((c) => c.lock) ? 'sync' : 'idle'); }
+            } else {
+              const pk = parseOrbcommPkt(m.data);
+              if (pk) this.cb.onOrbcomm?.({ pkt: pk });
+            }
           } else if ((m.type === 'fctlm_status' || m.type === 'sat_tlm') && m.data) {
             // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts and a frame's values (sat_tlm also from aprs: APRS T#, SONATE-2) —
             //   the SATELLITE box draws them (no decoder box of its own)
@@ -955,6 +974,7 @@ export class DecoderClient {
       case 'lrpt':  return { extension_name: 'lrpt', params: lrptAttachParams(this.lrptSymbolRate) };
       // ★ V12 VOR / ILS and 406 MHz beacons: no parameters (AUTO — the channel says VOR / localiser / glideslope).
       case 'vor':    return { extension_name: 'vor', params: {} };
+      case 'orbcomm': return { extension_name: 'orbcomm', params: orbAttachParams(this.orbcommParams, this.orbcommMaxCarriers) };   // ★★ the pick's own (+ max_carriers by hand)
       case 'fctlm':  return { extension_name: 'fctlm', params: { ...(this.fctlmParams ?? {}) } };   // ★ SATELLITE-BEST 1.2: the pick's own (beta92: wide)
       case 'sarsat': return { extension_name: 'sarsat', params: {} };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
