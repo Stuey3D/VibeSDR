@@ -3012,7 +3012,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   /* ── V12 AIS on a VibeServer (docs/v12/AIS-APRS.md) — ADS-B's shape: the whole radio on 162.000 MHz, both channels
    *  decoded on the server, NO audio, and THE SHIP MAP IS THE MODE'S SCREEN (MapOverlay 'ais', EXIT AIS leaves the mode).
-   *  ★ Offered only where the radio's vibeserver.json says so (aisCap: absent = no key — an HF+, an Icom; ok false =
+   *  ★ Offered only where the radio's vibeserver.json says so (aisCap: absent = no key — an Icom, an HF-only radio; ok false =
    *  greyed with why) and never on Apple TV (no WebView, so no map — a key that opens nothing is a dead control). ── */
   const [aisCap, setAisCap] = useState<AisCap | undefined>(undefined);
   const [aisOn, setAisOn] = useState(false);

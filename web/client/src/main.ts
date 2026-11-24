@@ -10113,7 +10113,7 @@ function ismMapRender() {
  *  on 162.000 MHz and decodes both AIS channels; the page covers itself with the ship map and its live list (tracks.ts
  *  TrackView — the markers, glide, a tapped ship's track and its card are web/mapkit/tracklayer.js). Nothing to tune: the
  *  arrows, zoom and filter are held, and the server ignores them. ★ Offered only where vibeserver.json says so: `ais` true
- *  (live) / false (greyed, `aisWhy` on a tap) / absent (a radio that cannot reach 162 MHz, the HF+ — no control at all). */
+ *  (live) / false (greyed, `aisWhy` on a tap) / absent (a radio that cannot reach 162 MHz, an Icom — no control at all; the HF+ has it since 2026-11-24). */
 let aisCap: { ok: boolean; why: string } | null = null;
 let aisOn = false;
 let aisReport: AisReport | null = null;

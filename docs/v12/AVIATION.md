@@ -424,14 +424,14 @@ FIR it replaced).
 ## Wired (2026-11-16, branch v12-aviation-wire)
 
 **Server** (`local_sdr_shim.cpp`, AIS's shape with ISM's bands):
-- `{"type":"avdata", on, band?|step?}` → `{"type":"avdata", band, bandName, hz, msgs, aircraft[], dropped, gain, gainAuto}`
+- `{"type":"avdata", on, band?|step?}` → `{"type":"avdata", band, bandName, hz, msgs, aircraft[], dropped, gain, gainAuto}` (2026-11-24: `gainNote` in place of gain on the HF+, `rateNote` while ACARS + VDL2 has raised the capture)
   once a second, `avdata_off`, `avdata_error{why}`. Bands (`vibe_avi_mode.h`): **ACARS** radio at 131.675 MHz (131.525,
   131.550, 131.725, 131.825) and **VDL2** at **136.8625** MHz (every channel 136.700–136.975) — both centres between
   channels so the DC remnant hits none (the plan said 136.850, which is itself a channel). Step clamps at the ends.
 - Gain: AIS's 85 % up the radio's own list, `vibeism::GainRule` on the service's clip share (measured on the service
   thread, every 4th sample). One whole-radio mode at a time; tune / zoom / mode held; given back exactly as found; leaves
   when the radio empties and comes back for the same listener (`mode_resume` / arrivalResume, with its band).
-- Reach: a radio that tunes the whole band, not the HF+, not an Icom (`vsAvdataReach`); hwinfo `avdata`, `avdataWhy`,
+- Reach: a radio that tunes the whole band, not an Icom (`vsAvdataReach`; the HF+ too since 2026-11-24 — §The HF+, and ACARS + VDL2 together); hwinfo `avdata`, `avdataWhy`,
   `avdataBands`, `avdataText`; in the directory's `modes`; `vibe_radio_caps.h` `avdata`, `hfdl` (HFDL reads audio, so an
   Icom has it).
 - ⚖ **Message bodies**: only with the owner's `avdata+text` (a "+" token, IN blockedModes when on, off by default, with
@@ -463,6 +463,58 @@ fake rtl_tcp with `test-vdl2 --write-clip`: bands, the table, bodies to the owne
 owner's switch, `/addon/hfdl/*`), `test-web-avdata.mjs` 15/0 (headless Edge `--mute-audio`, desktop + 390 px),
 `test_aviation_app.ts` 11/0, test-bench-decoders, test-radio-caps 227/0, test-setup-radio-caps 71, test-decoder-hosts,
 test-server-ais-aprs 36/0 and test-server-decoder-reach 35/0 unchanged. **Nothing was run on air.**
+
+## The HF+, and ACARS + VDL2 together (2026-11-24, branch `hfplus-avdata`)
+
+**The Airspy HF+ gets the datalink and AIS** (Stuart's XCover: an HF+ at 912 kS/s, VHF 60–260 MHz, no DATALINK key while
+the Pi 500's V4L heard 39 aircraft on VDL2 in 5 min). It was left out "for AIS's reason — its VHF is one fixed-gain front
+end". That was not a reason on its own; what would have made the mode wrong there was its **gain**: 85 % up the radio's
+gain list, stepped down by `vibeism::GainRule`, reported as "gain 43.4 dB auto". The HF+ has no variable gain (preamp,
+8-step attenuator, its own AGC — the owner's, drawn by LocalHardwarePanel). So (`vibe_mode_gain.h`):
+- `burstGains()` is EMPTY on the HF+ (`vibemodegain::steps`), so the enter, the tick and the leave write no gain at all
+  (the leave's `setGain(saved)` is skipped there too); `getTunerGains()` was already empty on it — now it is a rule;
+- the report carries `gainNote` ("HF+ AGC · attenuator 12 dB · preamp", from the source's own state) instead of
+  `gain`/`gainAuto`; the web status line and the app's AvdataPanel print it (`avGainText`); AIS's status shows no gain;
+- the rates: the HF+ runs its one rate (912 kS/s; 768 on older units), pinned — the mode never asks for another. The
+  reach checks now use the RECEIVABLE span (`usableSpanHz`: 768 of 912 kS/s, 648 of 768), and ACARS (0.361 MS/s) and VDL2
+  (0.389 MS/s) both fit with room. The HF+ is low-IF with no DC spike; the band centres between channels cost nothing.
+- `vibe_radio_caps.h`: `ais`, `aisstore`, `avdata` no longer exclude `airspyhf` (sondes still does: it stops at 260 MHz).
+
+**ACARS + VDL2 together** (Stuart: "on a radio wide enough we should allow ACARS and VDL2 together"): a third band,
+`acars+vdl2` ("ACARS + VDL2"), all 16 channels, the radio at **134.25 MHz** (the middle of 131.5125…136.9875 — the DC 2.4 MHz
+from the nearest channel). `minRateHz` 6.083 MS/s. `Band::wide`: **offered only where it can run** (`vibeavi::offered`) —
+the running usable capture already holds it, or the owner's 8 MS/s switch will raise it there. Never an RTL (2.4 MS/s),
+never the HF+. The service runs it as two LANES (`Service::start("acars+vdl2")`): VDL2's 12 channels on their own thread
+and its workers (the heavy half), ACARS's 4 on another, one copy of each block shared by both (8 MS/s × 0.5 s is 32 MB).
+One aircraft heard on both is one row (the tracker's ICAO / registration merge — tested).
+
+**The owner's 8 MS/s switch** (Stuart: "a settings toggle to allow 8 MS/s (for SDRplay, to compensate for the roll-off)"):
+`avdata+8m`, an option under the datalink, IN the modes CSV when ticked (`lora+all`'s convention), on the Setup page and the
+Android server screen. Drawn only where the radio lists 8 MS/s or more (`vibe_radio_caps.h`: an RSP, an Airspy R2, a
+HackRF, a USRP — the row is `cap: true`, answered by the radio, not its parent). With it, picking ACARS + VDL2 on a narrower
+capture raises the rate to 8 MS/s (or the next listed rate above: an R2's 10) — ADS-B's door: the rate guard's marker down
+first (`g_rateGuard.mark(…, "AVDATA")`), the centre stored, then the change; an RSP's IF filter is the rate's own (8 MHz).
+Any single band, or leaving, gives the owner's rate back (`g_avBoostFrom`, before the owner's lock is restored). Never
+while the owner has PINNED the rate, never once the guard recorded a fall-over at a boosted rate (the stall watchdog now
+covers the datalink too and leaves the mode). A crash at 8 MS/s: the mode's rate is never persisted, so a restart opens at
+the owner's own, and the guard holds the switch off until the owner clears it. The report says
+`rateNote: "capture raised to 8 MS/s for ACARS + VDL2 — back to 2 MS/s when you leave"`. Refused politely where it cannot
+run: "ACARS + VDL2 needs a capture of 6.1 MS/s or more — this receiver runs at 2.000 MS/s (its owner can let the aircraft
+datalink raise it to 8 MS/s)". 6.0 MS/s is just short — an RSP at 6 needs the switch.
+- Default: the benchmark's `dec_avboth` row (both decoders at 8 MS/s, real time, hottest thread) with `lora+all`'s
+  INVERTED rule — GREEN ticks it on (on a fresh setup), anything else leaves it off with the figure; never hidden. Measured
+  here (M5 Pro): 3.2 % of a core at the hottest thread (vibe-vdl2), 8.3 % process. The radio's own cost at 8 MS/s (USB, the
+  spectrum) is NOT in the row.
+- ✗ Not built: the R36S handheld's DATALINK keys are fixed to ACARS / VDL2 (its RTL can never be offered the third band).
+
+**Tests**: test-avi-service 41/0 (+ §3 the HF+ at 912 / 768 kS/s — every VDL2 and ACARS channel decodes through the
+service, no gain stepped, the report true; §4 ACARS + VDL2 at 6.144 and 8 MS/s on two threads, the merge, who is offered
+it), test-ais 88/0 (+ the HF+ rates, clean and at 14 dB), test-radio-caps 265/0, test-bench-decoders (`dec_avboth`; its
+`dec_rade` rows are NOT RUN-shaped failures here — no RADE library in this worktree), `test-server-avdata.mjs` 53/0 (+ an RTL
+never sees the band or the switch; a radio listing 8 MS/s — the fake rtl_tcp given an RSP's list with the test-only
+`VIBE_TEST_TCP_RATES` — at 2 MS/s: not offered with the switch off, refused with the numbers; with it on: 8 MS/s on entering,
+2 MS/s back on VDL2, 8 again, 2 on leaving with the dial given back; the rate pinned: not offered), `test_aviation_app.ts`.
+**Nothing on air yet** — owed: the XCover's HF+ on VDL2 / AIS, and an RSP at 8 MS/s near an airport.
 
 ## RESUME HERE
 
@@ -530,7 +582,7 @@ test-vdl2 42/0, test-hfdl 44/0, test_aviation_app 21/0, test-server-avdata 35/0,
 2. **Server, "Aircraft datalink" mode** — copy AIS's shape in `local_sdr_shim.cpp` (`g_ais`, `aisEnter/Leave/Tick/
    Control`, `vsAisReach/WhyNot`, the modes lists at the `"ais"` string sites, the health watch, `mode_resume`,
    the gallery DayLog) with ISM's BANDS (`acars` 131.675, `vdl2` 136.850). The capture feed is AIS's
-   `g_ais.feed(...)` site. Reach: any radio that tunes 131–137 MHz (not the Airspy HF+; not an Icom).
+   `g_ais.feed(...)` site. Reach: any radio that tunes 131–137 MHz (not the Airspy HF+; not an Icom). *(Superseded 2026-11-24: the HF+ is in.)*
    Gain: AIS's 85 %-up rule.
 3. **Owner switches** (the benchmark sets the default, never hides): `vibe_setup_page.h` BLOCKABLE and
    `src/screens/ServerModeScreen.tsx` (ONE list) under "VHF / UHF" → `avdata` (ACARS + VDL2), and under the HF
