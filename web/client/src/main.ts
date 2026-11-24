@@ -4918,7 +4918,9 @@ function updateVts() {
    *  FM station ("C363 Heart" under a DAB ensemble, Stuart's screenshot, 2026-09-07). */
   let dabRt = '';
   let dabSvcSid = 0;
-  if (dabOn && dabState && dabState.sid) {
+  /* ★★ beta93 (Stuart 11-24, the Pi 2 in SATELLITE on 137.9 NFM: the bar read "SId: C555 / Pure Dance"): never a DAB
+   *  service while SATELLITE has the receiver — the two cannot both own it, and a missed "DAB off" left dabOn behind. */
+  if (dabOn && !satActiveSafe() && dabState && dabState.sid) {
     const sv = dabState.services.find(x => x.sid === dabState!.sid);
     if (sv) {
       name = sv.label; src = dabMarkSvg(sv.codec === 'DAB+'); dabSvcSid = sv.sid;
@@ -10422,6 +10424,8 @@ function satMarkerOffset(): number {
 }
 let satCap: { ok: boolean; why: string } | null = null;
 let satPanel: SatPanel | null = null;
+/** ★ SATELLITE has the receiver — safe to call from code above this declaration, even during start-up (the VTS). */
+function satActiveSafe(): boolean { try { return !!satPanel?.active; } catch { return false; } }
 function satReadCap(j: any) { satCap = satCapFrom(j); satPanel?.setCap(satCap); }
 function satPanelGet(): SatPanel | null {
   if (!satCap) return satPanel;
@@ -10432,7 +10436,12 @@ function satPanelGet(): SatPanel | null {
       doppler: (on) => spec?.satDoppler(on),
       drop: () => spec?.satDrop(),
       rxPos: () => myPos(),
-      follow: (d, t, prm, audio) => satFollow(d, t, prm, audio),
+      follow: (d, t, prm, audio) => {
+        /* ★★ beta93 a confirmed pick means the receiver is in SATELLITE: any DAB state this page still holds is stale (the
+         *  server refuses a pick while DAB is on) — clear it as the server's own "DAB off" does (onDab). */
+        if (dabOn) { dabOn = false; dabState = null; wf?.applySettings({ minRangeDb: 30 }); syncStereoLight(); dabSetPane(dabPane); dabRender(); }
+        satFollow(d, t, prm, audio);
+      },
       zoomView: (hz, span) => { if (spec) { spec.zoomSpan(hz, span); updateViewOverlays(); } },   // ★★ beta93 a new pick opens zoomed in
       pickGone: () => satFollow('', null),                           // ★★★ beta92 the server dropped the pick (tuned away)
       left: () => { satFollow('', null); satVfoBDecoder(null); },
