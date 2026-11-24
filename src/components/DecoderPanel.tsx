@@ -33,6 +33,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { screenNavRef } from './ScreenNav';
 import { captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS, useNavFocus, NAV_ADJUST } from './PanelNav';
+import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
@@ -481,6 +483,7 @@ export default function DecoderPanel({
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
+  const lrptOl = useLrptOutline();   // ★ V12 the live METEOR picture's map outline + the viewer's switch
   const [viewingPrev, setViewingPrev] = useState(false);
   const onTogglePrev = () => {
     if (viewingPrev) imageRef?.current?.showLive();
@@ -1536,6 +1539,14 @@ export default function DecoderPanel({
               <DecoderKeyLabel tone="accent">SAVE</DecoderKeyLabel>
             </HBtn>
           )}
+          {/* ★ V12 METEOR LRPT: MAP OUTLINE: OFF / ON — only once the server has sent an outline for this picture (no dead
+              key); one choice with the gallery's and the SATELLITE box's (src/services/lrptOutlineLive.ts) */}
+          {activeDecoder === 'lrpt' && !!lrptOl.outline && !viewingPrev && (
+            <HBtn run hitSlop={6} accessibilityLabel={outlineKeyA11y(lrptOl.on)}
+              onPress={(e: any) => { e?.stopPropagation(); lrptOl.toggle(); }}>
+              <DecoderKeyLabel tone={lrptOl.on ? 'accent' : undefined}>{outlineKeyLabel(lrptOl.on)}</DecoderKeyLabel>
+            </HBtn>
+          )}
           {/* ★★ CLR — image decoders too (2026-10-07, Stuart: "we need a clear button like we used to have and like we do
               for RTTY"). The picture so far goes to PREV, never away, and the next line starts a fresh chart with its own
               auto-align — after a retune, where no start tone tells the decoder a new chart began. Hidden on PREV,
@@ -1693,6 +1704,7 @@ export default function DecoderPanel({
               ref={imageRef}
               maxHeight={bodyH}
               decoderName={activeDecoder ?? 'image'}
+              outline={activeDecoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
               zoom={IMG_ZOOMS[imgZoomI]}
               onInfo={setImageInfo}
               onStatus={(s: string) => onImageStatus?.(s)}

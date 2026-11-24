@@ -60,6 +60,8 @@ import { sameStateText, selcalStateText } from './alertDecoders';
 import { aleStateText, parseAleStatus, type AleStatus } from './aleDecoder';   // ★ V12 2G HF ALE
 import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
 import { lrptAttachParams, lrptStatusText, parseLrptStatus } from './lrpt';   // ★ V12 METEOR LRPT
+import { clearLiveOutline, setLiveOutline } from './lrptOutlineLive';   // ★ V12 METEOR LRPT's live MAP OUTLINE
+import { parseLiveOutline } from '../utils/lrptOutline';
 import { vorSanitise, vorStateText, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from './navaids';   // ★ V12 VOR / ILS, 406 MHz
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
@@ -361,6 +363,9 @@ export class DecoderClient {
   tonesSet: TonesOptions = { ...TONES_DEFAULTS };
   /** ★ V12 METEOR LRPT: the satellite's symbol rate (sats.json — 72000, or 80000 for the 80k mode); 0 = AUTO (both tried). */
   lrptSymbolRate = 0;
+  /** ★ V12 this client's LRPT map outline goes to the app's one live store (lrptOutlineLive.ts) — false for VFO B's client
+   *  (the SATELLITE box's second picture has no outline of its own yet). */
+  outlineStore = true;
   /** ★★★ beta92 FUNcube telemetry: the parameters the SATELLITE pick attached it with ("centre":3800,"afc_range":2600 — the
    *  wide telemetry pick), so the app JOINS the server's run instead of restarting it at the old 1200 Hz centre. null = an
    *  older server's pick (no parameters: AUTO). */
@@ -725,6 +730,11 @@ export class DecoderClient {
             if (this.active !== 'fctlm' && !(m.type === 'sat_tlm' && this.active === 'aprs')) return;
             const tl = parseSatTelemetry(m.data);
             if (tl) { this.cb.onSatTelemetry?.(tl); if (this.active === 'fctlm') this.cb.onDot((tl.good ?? 0) > 0 || !!tl.values?.length ? 'active' : tl.sync ? 'sync' : 'idle'); }
+          } else if (m.type === 'lrpt_geo' && m.data) {
+            // ★ V12 METEOR LRPT: the live picture's map outline (or why there is none), every ~20 s while it grows
+            if (this.active !== 'lrpt' || !this.outlineStore) return;
+            const g = parseLiveOutline(m.data);
+            setLiveOutline(g.outline, g.why);
           } else if (m.type === 'lrpt_status' && m.data) {
             if (this.active !== 'lrpt') return;
             const st = parseLrptStatus(m.data);
@@ -1113,6 +1123,7 @@ export class DecoderClient {
     } else if (name === 'sstv' || name === 'lrpt') {   // ★ V12 LRPT's preview is drawn in SSTV's frames
       if (t === 0x07) {
         const w = v.getUint32(1, false), h = v.getUint32(5, false);
+        if (name === 'lrpt' && this.outlineStore) clearLiveOutline();   // ★ a new picture: the last outline is not its
         this.cb.onImageStart?.(w, h); this.cb.onDot('sync');
       } else if (t === 0x01) {
         const ln = v.getUint32(1, false), w = v.getUint32(5, false);

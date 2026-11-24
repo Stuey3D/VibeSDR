@@ -975,6 +975,9 @@ if npx tsx scripts/test_map_autofit.ts; then pass=$((pass+1)); else fail=$((fail
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 METEOR LRPT, the clients' half (src/services/lrpt.ts): lrpt_status parsed defensively, the status line, the attach
 if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 METEOR LRPT's MAP OUTLINE, the clients' rule (src/utils/lrptOutline.ts): OFF by default, the switch remembered, the
+#   outline parsed defensively, "geo" / "gw", outline items never listed, DOWNLOAD following the switch.
+if npx tsx scripts/test_lrpt_outline.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 SILENT DECODERS (src/services/silentDecoder.ts): APRS and METEOR LRPT mute the speaker (or, with VFO B on, the VFO
 #   they decode on) and put it back exactly as it was — the rule run every way, and both clients pinned to it
 if npx tsx scripts/test_silent_decoder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

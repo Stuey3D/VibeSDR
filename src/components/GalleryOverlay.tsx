@@ -38,7 +38,12 @@ import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type
 import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
 import { navSanitise, type NavReport } from '../services/navtexMap';
 import { dscGalSummary, dscPinsFromGallery, DSC_GAL_WORDS } from '../services/shippingMap';   // ★ beta88 the DSC row
-import { digiGalCard, digiGalQuery, digiGalItemWindow, DIGI_GAL_KINDS } from '../utils/digiMapShared';   // ★ beta92 the DIGI MODES MAP row (the web's words)
+import { digiGalCard, digiGalQuery, digiGalItemWindow, DIGI_GAL_KINDS } from '../utils/digiMapShared';
+// ★ V12 METEOR LRPT's MAP OUTLINE (src/utils/lrptOutline.ts — the web page's rule; the switch is lrptOutlineLive.ts's)
+import Svg, { Path as SvgPath, Text as SvgText } from 'react-native-svg';
+import { parseOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl,
+         outlineLabelSize, OUTLINE_INK, type Outline } from '../utils/lrptOutline';
+import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ beta92 the DIGI MODES MAP row (the web's words)
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -49,6 +54,8 @@ export interface GalleryItem {
   lv?: number; plat?: number; plon?: number;
   /** ★ V12 beta92 the radio id(s) that heard it ("a1b2c3d4[,…]"; absent = unknown — vibe_log_radio.h). */
   ri?: string;
+  /** ★ V12 METEOR LRPT: the pass's map outline item ("geo"), or why it has none ("gw") — lrptOutline.ts outlineOfItem. */
+  geo?: string; gw?: string;
 }
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
@@ -182,7 +189,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       const n = paged ? galleryPageCount(j.total) : 1;
       setPages(n);
       if (paged && page > n && j.total > 0) { setPage(n); return; }   // ★ the gallery shrank under us
-      setItems(Array.isArray(j.items) ? j.items : []);
+      // ★ V12 a METEOR pass's map outline is data for its pictures, never a row of its own (lrptOutline.ts)
+      setItems(Array.isArray(j.items) ? (j.items as GalleryItem[]).filter((it) => !isOutlineItem(it)) : []);
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
       // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
       setNote(j.enabled === false ? 'This server keeps no gallery.'
@@ -269,6 +277,22 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
     } catch { setNote('Could not reach the server.'); }
   };
   const isImage = (it: GalleryItem) => /\.(png|jpg)$/i.test(it.f);   // ★ V12 balloons: SSDV pictures are JPEGs
+  /* ★★ V12 METEOR LRPT's MAP OUTLINE (docs/v12/LRPT-MAP-OVERLAY.md): the open picture's outline, fetched from the item its
+   *  "geo" names, drawn as an SVG over the plain picture while the viewer's switch is ON (one choice with the live picture
+   *  and the SATELLITE box; OFF until switched). OPEN / SAVE follows the switch (?outline=1 = the server's burnt-in copy).
+   *  No key without an outline; a pass that failed its checks says why; an older picture shows nothing extra. */
+  const ol = useLrptOutline();
+  const [openOutline, setOpenOutline] = useState<Outline | null>(null);
+  const [imgW, setImgW] = useState(0);
+  const openOl = open ? outlineOfItem(open) : { geo: '', why: '' };
+  useEffect(() => {
+    setOpenOutline(null);
+    if (!open || !isImage(open) || !openOl.geo) return;
+    let live = true;
+    fetch(withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(openOl.geo)}`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.text() : null)).then((t) => { if (live && t) setOpenOutline(parseOutline(t)); }).catch(() => {});
+    return () => { live = false; };
+  }, [open, b, readAuth, openOl.geo]);   // eslint-disable-line react-hooks/exhaustive-deps
   const show = async (it: GalleryItem) => {
     setOpen(it); setText(''); setTextOk(false);
     if (isImage(it)) return;
@@ -331,7 +355,24 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                 </ScrollView>
               ) : isImage(open) ? (
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={[scrollLane, { alignItems: 'center' }]} maximumZoomScale={4}>
-                  <Image source={{ uri: fileUrl(open) }} style={s.image} resizeMode="contain" />
+                  {!openOl.geo && !!openOl.why && <Text style={s.meta}>{outlineWhyLine(openOl.why)}</Text>}
+                  <View style={[s.imageBox, openOutline && { aspectRatio: openOutline.w / openOutline.h }]}
+                        onLayout={(e) => setImgW(e.nativeEvent.layout.width)}>
+                    <Image source={{ uri: fileUrl(open) }} style={[s.image, openOutline && { aspectRatio: openOutline.w / openOutline.h }]} resizeMode="contain" />
+                    {!!openOutline && ol.on && (
+                      <Svg style={StyleSheet.absoluteFill} viewBox={`0 0 ${openOutline.w} ${openOutline.h}`} preserveAspectRatio="none" pointerEvents="none">
+                        {!!openOutline.grid && <SvgPath d={openOutline.grid} stroke={OUTLINE_INK.grid} strokeWidth={1} vectorEffect="non-scaling-stroke" strokeDasharray="4 3" fill="none" />}
+                        {!!openOutline.border && <SvgPath d={openOutline.border} stroke={OUTLINE_INK.border} strokeWidth={1.2} vectorEffect="non-scaling-stroke" fill="none" />}
+                        {!!openOutline.lake && <SvgPath d={openOutline.lake} stroke={OUTLINE_INK.lake} strokeWidth={1.2} vectorEffect="non-scaling-stroke" fill="none" />}
+                        {!!openOutline.coast && <SvgPath d={openOutline.coast} stroke={OUTLINE_INK.coast} strokeWidth={1.4} vectorEffect="non-scaling-stroke" fill="none" />}
+                        {openOutline.labels.map((l, i) => {
+                          const fs = outlineLabelSize(imgW > 0 ? imgW / openOutline.w : 0.4);
+                          return <SvgText key={i} x={l.x + fs * 0.3} y={l.y + fs * 1.1} fontSize={fs} fill={OUTLINE_INK.grid}
+                                          stroke={OUTLINE_INK.shade} strokeWidth={fs * 0.12}>{l.text}</SvgText>;
+                        })}
+                      </Svg>
+                    )}
+                  </View>
                 </ScrollView>
               ) : (
                 <>
@@ -346,10 +387,20 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                   </ScrollView>
                 </>
               )}
-              <TouchableOpacity onPress={() => { void Linking.openURL(fileUrl(open) + (fileUrl(open).includes('?') ? '&' : '?') + 'download=1'); }}
-                                style={[s.key, { alignSelf: 'flex-start', marginTop: 8 }]} accessibilityRole="button">
-                <Text style={s.keyText}>OPEN / SAVE</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 }}>
+                <TouchableOpacity onPress={() => { void Linking.openURL(outlineDownloadUrl(fileUrl(open), ol.on, !!openOutline)); }}
+                                  style={[s.key, { alignSelf: 'flex-start' }]} accessibilityRole="button"
+                                  accessibilityLabel={openOutline && ol.on ? 'Open or save the picture with its map outline' : undefined}>
+                  <Text style={s.keyText}>OPEN / SAVE</Text>
+                </TouchableOpacity>
+                {!!openOutline && (
+                  <TouchableOpacity onPress={ol.toggle} accessibilityRole="switch" accessibilityState={{ checked: ol.on }}
+                                    accessibilityLabel={outlineKeyA11y(ol.on)}
+                                    style={[s.key, { alignSelf: 'flex-start' }, ol.on && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
+                    <Text style={[s.keyText, ol.on && { color: pt.ink.selected }]}>{outlineKeyLabel(ol.on)}</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
           )}
           {/* ★ The list stays mounted under an open item (display: none), so BACK lands on the same page and scroll. */}
@@ -533,6 +584,7 @@ function makeStyles(pt: PopupTokens) {
     textBox: { flex: 1, borderWidth: 1, borderColor: pt.ink.border, borderRadius: 8, padding: 10, backgroundColor: 'rgba(0,0,0,0.25)' },
     mono: { color: pt.ink.text, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 13, lineHeight: 19 },
     image: { width: '100%', aspectRatio: 1.2, backgroundColor: '#fff' },
+    imageBox: { width: '100%', position: 'relative' },
     pager: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 10 },
     gap: { color: pt.ink.textDim, marginRight: 6, marginBottom: 6 },
     pageLab: { color: pt.ink.textDim, fontSize: 12, marginLeft: 'auto', marginBottom: 6 },
