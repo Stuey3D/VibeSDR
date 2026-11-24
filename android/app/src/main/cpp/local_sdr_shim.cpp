@@ -24083,8 +24083,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "mode_resume") { modeResume(sock, msg); return; }
         // ★★ V12: the listener is leaving ON PURPOSE (back to the server list, the tab closed) — their sockets closing is
         //    the end of the visit, not a suspended phone: never held (see "THE HELD SESSION"). Not gated: it moves nothing.
-        if (type == "leave") {
-            if (sock) { std::lock_guard<std::mutex> lk(clientMtx); noHoldSockLocked(sock.get(), "the listener left on purpose"); }
+        //    ★ V12 PRESENCE (11-24): "bye" is the same message under the name the presence protocol gives it.
+        if (type == "leave" || type == "bye") {
+            if (sock) { std::lock_guard<std::mutex> lk(clientMtx);
+                        const char* why = type == "bye" ? "the app said goodbye — it has closed" : "the listener left on purpose";
+                        auto it = sockSession.find(sock.get());
+                        if (it != sockSession.end() && !it->second.empty())
+                            LOGI("listener %.8s: %s — when its sockets go it is released at once, never held", it->second.c_str(), why);
+                        noHoldSockLocked(sock.get(), why); }
+            return;
+        }
+        // ★★ V12 PRESENCE (Stuart 11-24): the app says when it goes to the background and comes back — see "PRESENCE"
+        //    by holdStartLocked. Not gated: it moves nothing.
+        if (type == "presence") {
+            if (sock) { const std::string st = jsonStr(msg, "state");
+                        std::lock_guard<std::mutex> lk(clientMtx); presenceNoteLocked(sock.get(), st == "background"); }
             return;
         }
         // ★ AIS: one ship's track (the map's tapped ship) — a read, to the asker only
@@ -31873,6 +31886,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             clientFrame(sock, m);
             tuneHold.applied(monoMs());
         };
+        int peerCloseCode = -1;   // ★ V12 PRESENCE: the code in the peer's close frame (1001 = going away), -1 = none sent
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
             const int heldWait = tuneHold.waitMs(monoMs());
@@ -31897,6 +31911,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sendWs(sock, 0x9, nullptr, 0);                // ping
                 continue;
             }
+            if (op == 0x8 && payload.size() >= 2) peerCloseCode = ((uint8_t)payload[0] << 8) | (uint8_t)payload[1];
             if (op < 0 || op == 0x8) break;
             lastRx = monoMs();                                // any frame (incl. pong) = alive (legacy rule)
             if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
@@ -31968,7 +31983,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx);
           // ★★ V12: the session's LAST socket going — hold it (see "THE HELD SESSION"), decided before anything of it is
           //    forgotten below; its channel is then kept rather than retired.
+          // ★★ V12 PRESENCE: the session's last socket closed CLEANLY ("going away") by an app that speaks presence and
+          //    is not in the background — the app has closed, not been suspended: released now, never held.
+          if (peerCloseCode == 1001) presenceCleanCloseLocked(session, sock.get());
           heldNow = holdStartLocked(session, sock.get(), holdHardLeft, sock->peerAddress());
+          if (!heldNow && !session.empty() && !sessionHasOtherSocketLocked(session, sock.get())) presence_.erase(session);
           if (specClient == sock) {
               // Promote the next listener so the survivors keep their stream — every path that
               // uses `specClient` would otherwise go dark for everyone when the first one leaves.
@@ -38174,6 +38193,56 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::vector<std::string>           holdsEnded_;        // ★ clientMtx — released under the lock, finished by holdTick
     std::map<std::string, double>      holdReturnedAt_;    // ★ clientMtx — back from a hold: never landed (see preTuned)
 
+    /* ══ ★★★ PRESENCE (V12, Stuart 2026-11-24) ════════════════════════════════════════════════════════════════════════
+     *  "i also closed down the app a minute ago but its still holding a slot on the xcover … we need the app to identify
+     *   to the server when it has been backgrounded then it holds the slot rather than wait 3 mins after it has closed".
+     *  The hold above cannot tell a closed app from a suspended one or a network blip, so a quit app kept its place (and
+     *  the shared dial's "2/5") for three minutes. Now the app SAYS which it is, on the spectrum socket:
+     *    {"type":"presence","state":"background"|"foreground"} — the app went to / came back from the background;
+     *    {"type":"bye"} (or the older "leave") — the app is closing for good: released NOW, exactly as the hold's end
+     *      would have done (noHoldLocked: its place, decoders, VFO B, a satellite pick it owned);
+     *    a CLEAN close (1001 "going away") of the session's LAST socket, by an app that has spoken presence and is NOT in
+     *      the background — the app closed without managing the bye: released now as well. (1000 is NOT taken as a
+     *      goodbye: the app's own pauses — the spectrum paused in the background, the silent-decoder mute — close with
+     *      1000, and a pause is never an exit.)
+     *  Everything else is held as before: a background notice in effect (the phone suspended the app), and an abnormal
+     *  drop with no word (a Wi-Fi / tunnel blip must never cost a place). An OLDER client says nothing and is held
+     *  exactly as it was. A background hold is the same length as any other (sessionHoldS, 180 s capped by the owner's
+     *  grace): the hold is a courtesy to a pocketed phone that already yields to anyone who arrives at a full radio, and a
+     *  longer one would only keep a free place from a person who is actually here. */
+    struct PresenceState { bool bg = false; double at = 0; };
+    std::map<std::string, PresenceState> presence_;   // ★ clientMtx — sessions that have spoken presence
+    bool sessionHasOtherSocketLocked(const std::string& s, const net::Socket* except) const {
+        if (s.empty()) return false;
+        for (const auto& kv : sockSession) if (kv.first != except && kv.second == s) return true;
+        return false;
+    }
+    void presenceNoteLocked(const net::Socket* sk, bool bg) {
+        auto it = sockSession.find(const_cast<net::Socket*>(sk));
+        if (it == sockSession.end() || it->second.empty()) return;
+        const std::string s = it->second;
+        const double now = nowSecs();
+        if (presence_.size() >= 1024 && !presence_.count(s))   // ★ bounded: a session with no socket and no hold is over
+            for (auto p = presence_.begin(); p != presence_.end(); )
+                p = (!sessionHasSocketLocked(p->first) && !isHeldLocked(p->first)) ? presence_.erase(p) : std::next(p);
+        if (presence_.size() >= 1024 && !presence_.count(s)) return;
+        auto& st = presence_[s];
+        if (st.at > 0 && st.bg == bg) { st.at = now; return; }
+        st.bg = bg; st.at = now;
+        LOGI("listener %.8s's app is now in the %s", s.c_str(), bg ? "background (if the phone suspends it, its place is held)"
+                                                                   : "foreground");
+    }
+    /** The session's last socket closed with "going away" — released now if its app speaks presence and is in the
+     *  foreground (see "PRESENCE"). Call WITH clientMtx held, before holdStartLocked. */
+    void presenceCleanCloseLocked(const std::string& s, const net::Socket* closing) {
+        if (s.empty() || sessionHasOtherSocketLocked(s, closing)) return;
+        auto it = presence_.find(s);
+        if (it == presence_.end() || it->second.bg) return;
+        LOGI("listener %.8s: its app closed its connection cleanly in the foreground — it has closed, not been suspended: "
+             "released at once, never held", s.c_str());
+        noHoldLocked(s, "its app closed its connection cleanly in the foreground — it has closed, not been suspended");
+    }
+
     int  heldCountLocked() const { return (int)heldSessions_.size(); }
     bool isHeldLocked(const std::string& s) const { return !s.empty() && heldSessions_.count(s) > 0; }
     bool sessionHasSocketLocked(const std::string& s) const {
@@ -38269,8 +38338,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
         }
         heldSessions_[sess] = HeldSession{ now, until, addr, cut };
+        const auto pr = presence_.find(sess);
+        const char* why = pr == presence_.end() ? " — no word from the app (an older one, or a dropped connection)"
+                        : pr->second.bg ? " — its app said it went to the background"
+                        : " — the connection dropped with no goodbye (a blip is never charged a place)";
         LOGI("listener %.8s's sockets have all gone — their session is HELD for %.0f s%s%s (mode, dial, decoders and VFO B "
-             "carry on; their place stays counted)", sess.c_str(), until - now, *cut ? " — until " : "", cut);
+             "carry on; their place stays counted)%s", sess.c_str(), until - now, *cut ? " — until " : "", cut, why);
         return true;
     }
     /** ★★ A HELD SESSION THAT HAS ENDED (expired, given way, kicked) — now do the disconnect it postponed: its channel
@@ -38282,6 +38355,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (heldSessions_.count(sess)) return;
           live = sessionHasSocketLocked(sess);
+          if (!live) presence_.erase(sess);
           if (!live) {
               const double nowS = nowSecs();
               for (auto it = clientDsp.begin(); it != clientDsp.end(); ) {

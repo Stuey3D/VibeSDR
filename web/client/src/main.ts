@@ -2344,6 +2344,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
                gainNow, agc, ovlSteps, adcPeak, rateNow) => {
+      // ★★ V12 PRESENCE: every socket says where this page is — a reconnect while hidden must not read as "here" (see
+      //    initPresence). hwinfo arrives once per socket, after the server has registered its session.
+      sendPresence();
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwRateNow = typeof rateNow === 'number' ? rateNow : 0;
       if (typeof gainNow === 'number' && gainNow !== hwGainNow) hwGainChangedAt = performance.now();
@@ -3370,8 +3373,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
    *  purpose — say so, or the server holds their place and runs their decoders for three minutes for nobody. A phone
    *  tab merely backgrounded fires no pagehide: its sockets go, the server holds the session, and the same page coming
    *  back (same session id) carries straight on — the whole-radio mode, the dial, the decoders' gap replayed. */
-  window.addEventListener('pagehide', (e) => { if (!(e as PageTransitionEvent).persisted) { try { spec?.send({ type: 'leave' }); } catch { /* going */ } } });
+  window.addEventListener('pagehide', (e) => { if (!(e as PageTransitionEvent).persisted) { try { spec?.send({ type: 'bye' }); } catch { /* going */ } } });
+  initPresence();
   requestAnimationFrame(loop);
+}
+
+/* ★★ V12 PRESENCE (Stuart 2026-11-24 — the server's "PRESENCE" in local_sdr_shim.cpp): the page KEEPS its sockets while
+ *  hidden (throttleHidden only slows the spectrum), so a hidden tab is a listener who is still here — but a phone browser
+ *  may then suspend it, and its sockets go with no goodbye. Saying "background" tells the server that is what a later
+ *  drop means (held, as before); "foreground" on return. The tab really closing says "bye" on pagehide (above), and the
+ *  browser closes the socket with 1001 "going away" — released at once either way, never held for three minutes.
+ *  A server that does not know the message ignores it. */
+function sendPresence() {
+  try { spec?.send({ type: 'presence', state: document.hidden ? 'background' : 'foreground' }); } catch { /* not open */ }
+}
+function initPresence() {
+  document.addEventListener('visibilitychange', sendPresence);
+  // ★ back from the back-forward cache: the page is here again (its sockets reconnect and their hwinfo says so too)
+  window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) sendPresence(); });
 }
 
 // ── ★★★ V12 R36S HANDHELD (handheld.ts) ──────────────────────────────────────────────────────────────────────────

@@ -817,6 +817,14 @@ if node --no-warnings scripts/test_dab_free_banner.ts; then pass=$((pass+1)); el
 #    read 5/5 for 50 minutes after four listeners left). A held place still counts. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dial-leave.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 PRESENCE (Stuart 11-24: a closed app held a slot on the XCover for 3 minutes): "bye" and a clean 1001 close in the
+#    foreground release a session AT ONCE; "background", an abnormal drop, the app's own 1000 pauses and an older client
+#    that says nothing are held as before (idle grace 12 s → 12 s holds, ~1.5 min). Same VIBESERVER_BIN rule. Silent.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-presence.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the clients' half: the app client says background/foreground (again on every new socket's first hwinfo) and
+#    `leave` on destroy; the web page's presence/bye never raise "not connected" or wake a closed socket.
+if node --no-warnings scripts/test_presence_client.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).

@@ -1540,6 +1540,24 @@ export abstract class VibeServerWsClient {
     this._openSpectrumWs();
   }
 
+  /* ★★ V12 PRESENCE (Stuart 2026-11-24: "we need the app to identify to the server when it has been backgrounded then it
+   *  holds the slot rather than wait 3 mins after it has closed"). The server holds a session whose sockets all drop —
+   *  it cannot tell a suspended phone from a closed app. So the app SAYS: "background" before it pauses its spectrum
+   *  (a later drop is the OS suspending it: held, as before), "foreground" on return, and `leave` (the server also
+   *  takes "bye") when it is going for good — destroy() below, and the native termination hooks on the audio socket.
+   *  ★ Repeated on every new spectrum socket's first hwinfo, so a reconnect never loses it. VibeServer only; an older
+   *    server ignores the message (and holds, exactly as it did). */
+  private presence: 'foreground' | 'background' = 'foreground';
+  setPresence(state: 'foreground' | 'background') {
+    if (this.presence === state) return;
+    this.presence = state;
+    this._sendPresence();
+  }
+  private _sendPresence() {
+    if (!this.isVibe || this.destroyed || this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+    try { this.spectrumWs.send(JSON.stringify({ type: 'presence', state: this.presence })); } catch { /* closing */ }
+  }
+
   /** ★★ V12 HELD SESSION — the server's terms (hwinfo holdS / holdHardS): null until it has said (an older server never
    *  does). `hardAt` = Date.now() at which a hard session limit ends a hold sooner, 0 = none. */
   private holdTerms: { holdS: number; hardAt: number } | null = null;
@@ -3117,6 +3135,8 @@ export abstract class VibeServerWsClient {
        *  first hwinfo of that socket, so that is the only one it reads. */
       const firstOnSocket = !this.hwinfoThisSocket;
       this.hwinfoThisSocket = true;
+      // ★★ V12 PRESENCE: every socket says where the app is — the session is registered by now (see setPresence)
+      if (firstOnSocket) this._sendPresence();
       const icomNow = isIcom(msg.radio);
       if (firstOnSocket && this.hadSession && this.status.frequency > 0 && !this.sharedDial && !icomNow) {
         this.tune(this.status.frequency, this.status.mode, { recenter: true });

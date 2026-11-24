@@ -501,6 +501,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     override fun onDestroy() {
+        goodbyeLocalAudio("the audio service is being destroyed")   // ★ V12 PRESENCE (a no-op after onTaskRemoved)
         stopEngine()
         stopCarConnectionWatch()
         mediaSession?.release()
@@ -518,6 +519,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
      *  "still running" in the shade (GitHub #6). stopForeground alone isn't enough
      *  on a mediaPlayback FGS; we stop the whole service. */
     override fun onTaskRemoved(rootIntent: Intent?) {
+        goodbyeLocalAudio("the app was swiped away")   // ★ V12 PRESENCE — before stopEngine cancels the socket
         stopEngine()
         stopSelf()
         super.onTaskRemoved(rootIntent)
@@ -998,6 +1000,33 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     /** Supersede the current socket (every callback it still delivers finds a stale generation)
      *  and cancel it. Does NOT withdraw the licence — callers that end the session clear laWanted. */
     private fun closeLocalAudioConn() { synchronized(laLock) { closeLocalAudioConnLocked() } }
+
+    /* ★★ V12 PRESENCE — THE GOODBYE WHEN THE APP IS CLOSED (Stuart 2026-11-24: "i also closed down the app a minute ago
+     *  but its still holding a slot on the xcover"). A VibeServer holds a session whose sockets all drop for three
+     *  minutes, because a suspended phone looks the same as a closed app. JS says `leave` when the person leaves the
+     *  server screen (VibeServerWsClient.destroy), but a swipe from Recents never reaches JS. So the audio pump — the one
+     *  VibeServer socket that is ours here, and the one still open in the background — says it, and closes with 1001
+     *  "going away" (closeLocalAudioConn's cancel() would drop the queued frame). The server releases the place at once.
+     *  ★ Only while a session is wanted (laWanted): a pause (data saver, the silent-decoder mute) never comes here.
+     *  ★ Bounded: up to 300 ms for OkHttp's writer to put the frames on the wire — the process may die soon after. */
+    private fun goodbyeLocalAudio(why: String) {
+        val w: WebSocket = synchronized(laLock) {
+            val cur = if (laWanted) localAudioWs else null
+            if (cur != null) {
+                laWanted = false
+                laGen.incrementAndGet()      // ★ supersede its callbacks — nothing reopens it
+                localAudioWs = null
+            }
+            cur
+        } ?: return
+        Log.i(TAG, "presence: $why — telling the server we are leaving")
+        w.send("{\"type\":\"leave\"}")
+        w.close(1001, "going away")
+        val until = android.os.SystemClock.uptimeMillis() + 300
+        while (w.queueSize() > 0 && android.os.SystemClock.uptimeMillis() < until) {
+            try { Thread.sleep(20) } catch (_: InterruptedException) { break }
+        }
+    }
     private fun closeLocalAudioConnLocked() {
         laGen.incrementAndGet()
         localAudioWs?.cancel(); localAudioWs = null

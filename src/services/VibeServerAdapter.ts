@@ -334,6 +334,7 @@ export class VibeServerAdapter implements SDRBackend {
   setPowersaveRate() { this.client.setPowersaveRate(); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }
   resumeSpectrum()         { this.client.resumeSpectrum(); }
+  setPresence(state: 'foreground' | 'background') { this.client.setPresence(state); }   // ★ V12 PRESENCE
   forceResubscribe(reason: string) { this.client.forceResubscribe(reason); }
 
   getStatus(): SDRStatus { return this.client.getStatus(); }
