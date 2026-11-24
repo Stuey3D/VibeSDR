@@ -92,6 +92,15 @@ int main() {
         ok(halfNeeded({}, rf) == 0.0, "no pass: nothing needed");
     }
 
+    {   // ★★ beta93 the opening view (viewSpanHz — Stuart 11-24: ~420 kHz across was "about this level" for a METEOR)
+        const double lrpt = viewSpanHz(tx("LRPT", 137.9e6, "lrpt", "lrpt", 72000));
+        ok(lrpt > 380000.0 && lrpt < 440000.0, std::string("METEOR LRPT opens about 410 kHz wide (" + std::to_string((int)lrpt) + ")").c_str());
+        const double fm = viewSpanHz(tx("FM", 145.8e6, "fm", "nfm", 0));
+        ok(fm >= kViewMinSpanHz && fm < 120000.0, std::string("a voice FM downlink opens narrower (" + std::to_string((int)fm) + ")").c_str());
+        const double cw = viewSpanHz(tx("Beacon", 435.6e6, "cw", "cw", 0));
+        ok(cw >= kViewMinSpanHz, std::string("never under the 50 kHz floor (" + std::to_string((int)cw) + ")").c_str());
+    }
+
     printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }

@@ -112,5 +112,14 @@ ok(satCapFrom({ doppler: 1, dopplerWhy: 'NO SAT DATA — the satellite orbit dat
   ok(!!bs && bs.decoder === 'cwskim' && bs.params.width === 24000, 'sat_vfob with the CW skimmer (beta92, the real server) parsed — decoder cwskim, width 24000');
 }
 
+{ // ★★ beta93 the pick's opening view (Stuart 11-24: a new pick starts zoomed in on the signal and its neighbours)
+  const v = parseSatPicked({ type: 'sat', state: 'picked', norad: 57166, tx: 0, decoder: 'lrpt', view: 406116 });
+  ok(!!v && v.view === 406116, 'picked carries the opening view span (406116 Hz)');
+  const old = parseSatPicked({ type: 'sat', state: 'picked', norad: 57166, tx: 0, decoder: 'lrpt' });
+  ok(!!old && old.view === undefined, 'an older server: no view, no zoom');
+  const silly = parseSatPicked({ type: 'sat', state: 'picked', norad: 57166, tx: 0, decoder: 'lrpt', view: 12 });
+  ok(!!silly && silly.view === undefined, 'a nonsense view is ignored');
+}
+
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

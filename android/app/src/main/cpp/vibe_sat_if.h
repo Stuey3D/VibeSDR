@@ -64,6 +64,9 @@ inline double occupiedHz(const vibe::sat::Transmitter& t, std::string* what = nu
 inline double dopplerHz(double hz) { return std::fabs(hz) * kLeoDopplerFrac + vibe::sat::Engine::kTrimClampHz; }
 
 /** One downlink the filter must hold. */
+inline constexpr double kViewSpanX = 2.5;          ///< the opening view: this many times the region (viewSpanHz)
+inline constexpr double kViewMinSpanHz = 50000.0;  ///< …and never narrower than this
+
 struct Region {
     double centreHz = 0;   // where the signal sits (its nominal centre; the Doppler is in halfHz)
     double halfHz = 0;     // occupied / 2 + Doppler
@@ -81,6 +84,14 @@ inline Region regionOf(const vibe::sat::Transmitter& t, double demodBwHz = 0.0) 
     std::snprintf(b, sizeof b, "%s %.0f kHz + Doppler \xc2\xb1%.1f kHz", what.c_str(), occ / 1e3, dop / 1e3);
     r.why = b;
     return r;
+}
+/** ★★ The span a client's view OPENS at when this downlink is picked (Stuart 11-24, a METEOR on the Pi 500's V4 with the
+ *  pass's 350 kHz IF filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours" —
+ *  his chosen level was ~420 kHz across). 2.5 × what the IF filter has to hold (the signal + its whole Doppler swing):
+ *  METEOR LRPT 150 kHz + ±3.4 kHz → ~410 kHz; the ISS's FM → ~60 kHz; a CW beacon or telemetry → the 50 kHz floor. The
+ *  client caps it at its capture. */
+inline double viewSpanHz(const vibe::sat::Transmitter& t) {
+    return std::max(kViewMinSpanHz, kViewSpanX * 2.0 * regionOf(t).halfHz);
 }
 /** Half the filter width the regions need around a tuner centred at `rfHz` (0 = none). */
 inline double halfNeeded(const std::vector<Region>& rs, double rfHz) {

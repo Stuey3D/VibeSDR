@@ -59,6 +59,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta93 2026-11-24 — SATELLITE OPENS ZOOMED IN (Stuart, a METEOR on the Pi 500's V4 with the pass's 350 kHz IF
+  //    filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours"; ~420 kHz across was
+  //    "about this level"). vibesatif::viewSpanHz → SatPicked.view; once per new pick.
+  { v: 'V12 (experimental)', detail: 'SATELLITE OPENS ZOOMED IN ON THE SIGNAL — picking a satellite now also zooms the waterfall to the signal, its Doppler swing and its neighbours, instead of leaving the whole capture on screen with the satellite a sliver in the middle: about 400 kHz across for a METEOR picture, less for the ISS’s voice or a beacon. It happens once, when you pick; zoom in or out afterwards and it stays where you put it.' },
   // ★★★ V12 beta92 2026-11-23 — APRS FROM IQ (Stuart: "surely aprs needs to be iq based and bypass the nfm processing
   //     completely then it can work the best it can"). RxPipeline::setDecoderTap (pipeline.cpp), vibe_aprs_run.h iq1200_,
   //     DecoderHost::feedChannelIq wide, the shim's pktTapSync; satPacketRef / satPacketMode (the pick's baud kept apart).

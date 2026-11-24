@@ -2453,6 +2453,12 @@ export class SpectrumClient {
     this._sendView(this.view.centerHz, bb);
   }
 
+  /** ★★ beta93 a view `spanHz` wide centred on `centreHz` (SATELLITE's opening view — SatPicked.view). The usual clamps. */
+  zoomSpan(centreHz: number, spanHz: number) {
+    if (!(spanHz > 0)) return;
+    this.zoom(centreHz, spanHz / (this.cfg.binCount || 4096));
+  }
+
   /**
    * Zoom by a factor about an ANCHOR frequency (>1 = zoom in). The anchor stays
    * pinned under the same screen position, so wheel-zooming homes in on whatever

@@ -77,7 +77,7 @@ import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft d
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -5348,6 +5348,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   /** Late-bound: zoomBy is declared further down. */
   const zoomByRef = useRef<((factor: number) => void) | null>(null);
+  const satZoomedPickRef = useRef('');   // ★★ beta93 the pick the view last opened zoomed for (norad/tx)
 
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
@@ -7032,7 +7033,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (satCap || !satOnRef.current) return;
     satOnRef.current = false; setSatOn(false);
     satFollowRef.current('', null);
-    satPendingRef.current = null; setSatPending(null); setSatPicked(null); setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
+    satPendingRef.current = null; setSatPending(null); setSatPicked(null); satZoomedPickRef.current = ''; setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
     setSatCwText(''); satVfoBReset();
   }, [satCap]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ Out of SATELLITE: the drop is ALWAYS sent (a lock must never outlive the mode), its decoder stops, the box closes. */
@@ -7042,7 +7043,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     (client.current as unknown as { satDrop?: () => void } | null)?.satDrop?.();
     satFollow('', null);
     satPendingRef.current = null; setSatPending(null);
-    setSatPicked(null); setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
+    setSatPicked(null); satZoomedPickRef.current = ''; setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
     setSatCwText(''); satVfoBReset();
   }, [satFollow, satVfoBReset]);
 
@@ -8002,7 +8003,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★★ beta92 THE PICK WENT WITH THE LOCK (a tune past its reach, a mode change — the server detached its decoder):
          *  the box stops showing it (it said "TRACK · attached" for a pick that had gone, Stuart 11-23) and says why. */
         if (r.pickGone && satOnRef.current && satPickedRef.current) {
-          setSatPicked(null); setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset();
+          setSatPicked(null); satZoomedPickRef.current = ''; setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset();
           satFollowRef.current('', null);
           setSatWhy(r.why || 'The satellite pick ended');
         }
@@ -8029,6 +8030,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★★ beta92 THE PICK'S OWN PASSBAND (BPSK telemetry: 100–7600 Hz USB, the decoder's centre in the middle) — the
          *  server set it; the app shows and keeps exactly it each time the pick is confirmed. */
         if (pk.audio) client.current?.setBandwidth(pk.audio.lo, pk.audio.hi);
+        /* ★★ beta93 A NEW PICK OPENS ZOOMED IN (Stuart 11-24: "start zoomed in, not all the way but enough to see the signal
+         *  and neighbours") — the server's span for it (SatPicked.view, ~410 kHz for a METEOR), around the downlink. Once per
+         *  pick: a re-confirm of the same pick, or a zoom of your own afterwards, is left alone. */
+        { const ptx = satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx];
+          const key = `${pk.norad}/${pk.tx}`;
+          if (pk.view && ptx && satZoomedPickRef.current !== key) {
+            satZoomedPickRef.current = key;
+            const c = client.current, v = c?.getView();
+            const n = v?.binCount || 1024;
+            if (c) c.zoom(txTuneHz(ptx), Math.max(1, pk.view / n));
+          } }
         satFollowRef.current(pk.decoder, satListRef.current?.sats.find((x) => x.norad === pk.norad)?.tx[pk.tx] ?? null);
       },
       /* ★★★ beta92 OPEN IN VFO B: B on another downlink of the pick (on), a refusal (says why), or B gone */

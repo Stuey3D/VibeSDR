@@ -27,7 +27,7 @@ import {
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
   satCwTail, satDecView, satDecWord, satTextAppend, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY, type SatVfoB,
-  satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList,
+  satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList, txTuneHz,
   type SatPass,
   type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
@@ -45,6 +45,9 @@ export interface SatPanelDeps {
   /** ★★★ beta92 the pick went on the server (a tune past the lock's reach, a mode change): main.ts stops following its
    *  decoder. The mode stays on (the list is there to pick again). */
   pickGone?: () => void;
+  /** ★★ beta93 open the view `spanHz` wide around `hz` (a NEW pick's SatPicked.view — Stuart 11-24: "start zoomed in, not
+   *  all the way but enough to see the signal and neighbours"). Only on a new pick: a zoom of your own afterwards stays. */
+  zoomView?: (hz: number, spanHz: number) => void;
   /** The mode was left: main.ts stops the followed decoder and takes its image canvas back. */
   left: () => void;
   /** Lend the decoder box's image canvas to `slot` (null = take it back). */
@@ -438,6 +441,7 @@ export class SatPanel {
     this.picked = p; this.pending = null; this.refusal = '';
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t, p.params, p.audio);   // ★★ beta92 the server's own parameters (and passband): the page JOINS its run
+    if (changed && t && p.view) this.deps.zoomView?.(txTuneHz(t), p.view);   // ★★ beta93 open at the pick's own view
     this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again)
     this.render();
   }

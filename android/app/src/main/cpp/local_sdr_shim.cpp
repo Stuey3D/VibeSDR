@@ -11697,6 +11697,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   the band label and the catalogue's mode name
             if (tx.passband()) m += ",\"lo\":" + vibe::sat::fmtNum(tx.hz, 0) + ",\"hi\":" + vibe::sat::fmtNum(tx.hiHz, 0);
             if (const std::string b = vibe::sat::bandOf(tx); !b.empty()) m += ",\"band\":\"" + b + "\"";
+            // ★★ beta93 the span the client's view opens at for this pick (vibesatif::viewSpanHz — Stuart 11-24)
+            m += ",\"view\":" + vibe::sat::fmtNum(vibesatif::viewSpanHz(tx), 0);
             if (!tx.modeName.empty()) m += ",\"modeName\":\"" + vibe::sat::jsonEsc(tx.modeName) + "\"";
             /* ★★ beta92 the decoder's attach parameters, so a page following the pick attaches EXACTLY them and JOINS the
              *  pick's run — the web page's LRPT follow sent no symbol rate, the host restarted the decoder under another key,

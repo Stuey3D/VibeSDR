@@ -336,6 +336,10 @@ export interface SatPicked {
   /** ★★★ beta92 the audio passband the server set for this pick (Hz, USB edges) — BPSK telemetry's 100–7600 Hz, the
    *  decoder's centre (3800) in the middle. The client shows and keeps exactly it. Absent = the pick set none. */
   audio?: { lo: number; hi: number };
+  /** ★★ beta93 the span (Hz) the view OPENS at for this pick — the signal, its Doppler swing and its neighbours (the server's
+   *  vibesatif::viewSpanHz: 2.5 × the region the pass's IF filter holds, ≥ 50 kHz; METEOR ≈ 410 kHz). Stuart 11-24: "we need
+   *  to start zoomed in, not all the way but enough to see the signal and neighbours". Absent = an older server: no zoom. */
+  view?: number;
 }
 const satDecoderName = (d: unknown): SatPicked['decoder'] =>
   d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' ? d : '';
@@ -354,6 +358,7 @@ export function parseSatPicked(m: unknown): SatPicked | null {
   { const a = o.audio as Record<string, unknown> | null | undefined;
     const lo = a ? num(a.lo) : undefined, hi = a ? num(a.hi) : undefined;
     if (lo != null && hi != null && hi > lo && hi - lo <= 12000) p.audio = { lo, hi }; }
+  { const v = num(o.view); if (v != null && v >= 5000 && v <= 20e6) p.view = v; }
   return p;
 }
 

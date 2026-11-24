@@ -10433,6 +10433,7 @@ function satPanelGet(): SatPanel | null {
       drop: () => spec?.satDrop(),
       rxPos: () => myPos(),
       follow: (d, t, prm, audio) => satFollow(d, t, prm, audio),
+      zoomView: (hz, span) => { if (spec) { spec.zoomSpan(hz, span); updateViewOverlays(); } },   // ★★ beta93 a new pick opens zoomed in
       pickGone: () => satFollow('', null),                           // ★★★ beta92 the server dropped the pick (tuned away)
       left: () => { satFollow('', null); satVfoBDecoder(null); },
       image: (slot) => satLendImage(slot),
