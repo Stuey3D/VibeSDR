@@ -423,6 +423,9 @@ public:
             return;
         }
     }
+    /** ★ The packet time (ms of day, as the satellite stamped it) of strip `s`'s scan period; −1 when no packet of that
+     *  strip was heard. The map overlay's only clock (vibe_lrpt_geo.h). */
+    int32_t stripTimeMs(int s) const { return s >= 0 && size_t(s) < stripMs_.size() ? stripMs_[size_t(s)] : -1; }
     /** How many rates AUTO is still walking (1 = settled or pinned). */
     size_t rateGroups() const { return groups_.size(); }
     /** Feed soft symbols directly (an archived .s file, or the client-assisted stage): the first chain's path. */
@@ -581,6 +584,14 @@ private:
         if (std::fabs(double(dt) - double(k) * kPeriodMs) > 10.0 + 1.0 * std::fabs(double(k))) { badPackets_++; return; }
         const long strip = lastStrip_ + k;
         if (k > 0) { lastMs_ = ms; lastStrip_ = strip; }
+        /* ★★ THE STRIP'S OWN STAMP, kept for the map overlay (vibe_lrpt_geo.h): the ms of day the satellite put on this
+         *  period's packets — never a stamp computed from the grid, so a wrong on-board clock shows as itself and the
+         *  georeference can refuse it. The first stamp seen for a strip stays (every channel of one period shares it).
+         *  kMaxStrips × 4 bytes = 3.2 KB. */
+        if (strip >= 0 && strip < kMaxStrips) {
+            if (stripMs_.size() <= size_t(strip)) stripMs_.resize(size_t(strip) + 1, -1);
+            if (stripMs_[size_t(strip)] < 0) stripMs_[size_t(strip)] = int32_t(ms);
+        }
         if (ch_.size() >= size_t(kMaxChannels) && !ch_.count(apid)) return;
         uint8_t blocks[kMcuPerPacket][64];
         const int good = decodeMcus(d + 6, n - 6 - 8 - 6, q, blocks);
@@ -602,6 +613,7 @@ private:
     uint64_t rsOkTotal_ = 0, fixedTotal_ = 0, cadusBase_ = 0, rsFailBase_ = 0;
     std::map<int, Channel> ch_;
     bool haveT0_ = false; uint32_t lastMs_ = 0; long lastStrip_ = 0;
+    std::vector<int32_t> stripMs_;   ///< ★ per strip: the period's packet time (ms of day), −1 = none heard
     uint64_t packets_ = 0, badPackets_ = 0, blocks_ = 0, version_ = 0;
     int scid_ = -1; uint32_t ctr_ = 0;
 };
