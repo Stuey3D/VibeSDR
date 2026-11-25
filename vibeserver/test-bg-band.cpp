@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include <chrono>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <map>
@@ -706,18 +707,21 @@ static bool loadIq16(const char* path, std::vector<cf32>& x, uint32_t& rate) {
 static int replayReal(int argc, char** argv) {
     if (argc < 5) { std::printf("usage: test-bg-band real <wav> <utc0> <recCentreHz> [L=40] [centre=6800000] [hw=15000] [vfos=a,b] [secs=]\n"); return 2; }
     const double utc0 = std::atof(argv[3]), recCentre = std::atof(argv[4]);
-    int L = 40; double centre = 6800000, hw = 15000, secs = 1e9;
+    double busyDrop = 0;
+    int L = 40, D = 1; double centre = 6800000, hw = 15000, secs = 1e9;
     std::vector<double> vfos = { 5357000, 3573000, 7074000, 10136000 };
     for (int i = 5; i < argc; ++i) {
         if (!std::strncmp(argv[i], "L=", 2)) L = std::atoi(argv[i] + 2);
+        if (!std::strncmp(argv[i], "D=", 2)) D = std::max(1, std::atoi(argv[i] + 2));   // ★ ×L/D: L=125 D=3 = exactly 8 MS/s from 192 kHz
         if (!std::strncmp(argv[i], "centre=", 7)) centre = std::atof(argv[i] + 7);
         if (!std::strncmp(argv[i], "hw=", 3)) hw = std::atof(argv[i] + 3);
         if (!std::strncmp(argv[i], "secs=", 5)) secs = std::atof(argv[i] + 5);
+        if (!std::strncmp(argv[i], "busydrop=", 9)) busyDrop = std::atof(argv[i] + 9);   // ★ seconds a minute the DSP thread finds the queue busy
         if (!std::strncmp(argv[i], "vfos=", 5)) { vfos.clear(); for (const char* q = argv[i] + 5; *q;) { vfos.push_back(std::atof(q)); q = std::strchr(q, ','); if (!q) break; ++q; } }
     }
     std::vector<cf32> x; uint32_t rate = 0;
     if (!loadIq16(argv[2], x, rate)) { std::printf("cannot read %s\n", argv[2]); return 3; }
-    const double fs = (double)rate * L, hwC = centre + hw;
+    const double fs = (double)rate * L / D, hwC = centre + hw;
     // ★ start at the point of the recording whose UTC, moved on by whole two-minute steps, is now
     double shift = std::floor((vibeUtcNow() - utc0) / 120.0) * 120.0;
     size_t from = (size_t)std::max(0.0, (vibeUtcNow() - utc0 - shift) * rate);
@@ -740,6 +744,13 @@ static int replayReal(int argc, char** argv) {
     p.slots = &slots; p.store = &gs; p.stations = &st; p.lat = 52.29; p.lon = -0.85;
     p.profile.centreHz = centre;
     for (double v : vfos) p.profile.vfos.push_back(bg::Vfo{v, "usb", "spots-band"});
+    if (std::getenv("VIBE_REPLAY_FULL")) {   // ★ the Pi 500's whole profile 1 (11-25): + 3 DSC, RTTY weather, WEFAX stations
+        p.profile.vfos.push_back(bg::Vfo{4205800, "usb", "dsc"}); p.profile.vfos.push_back(bg::Vfo{6310300, "usb", "dsc"});
+        p.profile.vfos.push_back(bg::Vfo{8412800, "usb", "dsc"}); p.profile.vfos.push_back(bg::Vfo{4582000, "usb", "rtty-weather"});
+        bg::Vfo fx{0, "usb", "wefax-stations"}; fx.fax = { 4610000, 8040000, 3855000, 7880000, 4482900, 8106900, 5336000, 6445500 }; p.profile.vfos.push_back(fx);
+    }
+    if (std::getenv("VIBE_REPLAY_LOADED")) p.loaded = [] { return true; };   // ★ the server says it is loaded (every engine light)
+    if (const char* u = std::getenv("VIBE_REPLAY_UNITS")) { const double units = std::atof(u); p.bandBudgetUnits = [units] { return units; }; }
     std::mutex lm; std::vector<std::string> logs;
     p.log = [&](const std::string& l) { std::lock_guard<std::mutex> lk(lm); logs.push_back(l); };
     r.start(p);
@@ -752,24 +763,28 @@ static int replayReal(int argc, char** argv) {
     double ph = 0; const double dph = 2 * M_PI * (recCentre - hwC) / fs;
     const size_t chunk = rate / 25;   // 40 ms of recording a chunk
     const auto w0 = std::chrono::steady_clock::now();
-    uint64_t produced = 0;
+    uint64_t produced = 0, phase = 0;
+    std::mt19937 dropRng(5);
     const double base = utc0 + shift + (double)from / rate;
     for (size_t o = 0; o < x.size(); o += chunk) {
         const size_t k = std::min(chunk, x.size() - o);
-        up.resize(k * (size_t)L);
+        up.clear(); up.reserve(k * (size_t)L / (size_t)D + 2);
         for (size_t i = 0; i < k; ++i) {
             std::memmove(hist.data() + 1, hist.data(), (size_t)(K - 1) * sizeof(cf32));
             hist[0] = x[o + i];
             for (int q = 0; q < L; ++q) {
+                if (phase++ % D) continue;
                 float re = 0, im = 0;
                 for (int t = 0; t < K; ++t) { const float c = h[(size_t)(t * L + q)]; re += c * hist[(size_t)t].real(); im += c * hist[(size_t)t].imag(); }
-                up[i * (size_t)L + (size_t)q] = cf32(re, im) * cf32((float)std::cos(ph), (float)std::sin(ph));
+                up.push_back(cf32(re, im) * cf32((float)std::cos(ph), (float)std::sin(ph)));
                 ph += dph; if (ph > M_PI) ph -= 2 * M_PI;
             }
         }
         produced += up.size();
         const double utc = base + (double)produced / fs;
         std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)(1e6 * (double)produced / fs)));
+        // ★ the Pi's "0.3–0.4 s of IQ dropped a minute": a chunk the DSP thread could not hand over (the worker held the queue)
+        if (busyDrop > 0 && dropRng() < busyDrop / 60.0 * (double)std::numeric_limits<uint32_t>::max()) { auto lk = r.holdQueueForTest(); r.feedIq(up.data(), (int)up.size(), utc); continue; }
         r.feedIq(up.data(), (int)up.size(), utc);
     }
     std::this_thread::sleep_for(std::chrono::seconds(6));
@@ -783,7 +798,7 @@ static int replayReal(int argc, char** argv) {
         if (calls[kv.first].size() <= 12) for (const auto& c : calls[kv.first]) std::printf(" %s", c.c_str());
         std::printf("\n");
     }
-    for (const auto& l : logs) if (l.find("Band decode") != std::string::npos || l.find("paused") != std::string::npos) std::printf("log: %s\n", l.substr(0, 420).c_str());
+    for (const auto& l : logs) if (std::getenv("VIBE_REPLAY_ALLLOG") || l.find("Band decode") != std::string::npos || l.find("paused") != std::string::npos) std::printf("log: %s\n", l.substr(0, 420).c_str());
     (void)status;
     return 0;
 }
