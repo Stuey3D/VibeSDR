@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { EDGE_TAB_H, EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
 import { useIslandSide } from '../hooks/useIslandSide';
+import { avoidRects, useReservedRegions } from '../hooks/useReservedRegions';
 
 export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIcon, label,
                                    frameColour, children }: {
@@ -51,7 +52,11 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
   const insets = useSafeAreaInsets();
   const { width: windowW, height: windowH } = useWindowDimensions();
   const islandSide = useIslandSide();
-  const geo = edgeChipGeometry({ windowW, windowH, insets, cardW: w, cardH: h, top, islandSide });
+  /* ★★ On a hinged display (the Duo) UIKit gives the real camera / status-pill rects: pad for those that reach this
+   *  chip's rows, not for "the island's side" (edgeChipGeometry `rects`). Everywhere else: null, today's rule. */
+  const reserved = useReservedRegions();
+  const rects = reserved.hinge ? avoidRects(reserved) : null;
+  const geo = edgeChipGeometry({ windowW, windowH, insets, cardW: w, cardH: h, top, islandSide, rects });
   const off = geo.cardOff;                          // fully past the screen edge
   const x = useRef(new Animated.Value(tucked ? off : 0)).current;
   const first = useRef(true);
