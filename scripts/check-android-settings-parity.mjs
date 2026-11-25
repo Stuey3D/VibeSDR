@@ -66,6 +66,9 @@ const TABLE = [
   P(['galleryMb'], 'Gallery size', 'galleryMb'),
   P(['galleryPublic'], 'Everyone may see the gallery', 'galleryPublic'),
   P(['gallerySaveLive'], 'Keep listeners', 'gallerySaveLive'),
+  // ★★ V12 beta94 the VibeSDR COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md): the screen's COMMUNITY MAP card (switch + the modes left
+  //    out, communityOff), VibeServerBoot's setCommunityMap
+  P(['communityMap'], 'COMMUNITY MAP', 'communityMap'),
   // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — the screen's PSK REPORTER card, VibeServerBoot's keys
   P(['pskrOn'], 'Send this server', 'pskrOn'),
   P(['pskrCall'], 'Receiver name (required)', 'pskrCall'),   // ★ 11-21: the receiver's NAME (any PSK Reporter name), not only a callsign
