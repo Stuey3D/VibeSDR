@@ -78,7 +78,7 @@ import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft d
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowRemindOk, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2839,9 +2839,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satCapRefreshRef = useRef<() => void>(() => {});   // ★★ beta94 set beside satCapRefresh (declared further down)
   useEffect(() => { AsyncStorage.getItem('vibe.satRemindLead').then((v) => { if (v) setSatRemLead(satRemindLead(v)); }).catch(() => {}); }, []);
   /* ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows — this viewer's, kept by NORAD number so it carries
-   *  from server to server (a satellite this server does not list is ignored); null = All, the default. Reminders follow it. */
+   *  from server to server (a satellite this server does not list is ignored); null = All, the default. SHOW filters the LIST only — a reminder set on a pass always fires (Stuart 11-25). */
   const [satShow, setSatShow] = useState<SatShow>(null);
-  const satShowRef = useRef<SatShow>(null); satShowRef.current = satShow;
   useEffect(() => { AsyncStorage.getItem(SAT_SHOW_KEY).then((v) => setSatShow(satShowParse(v))).catch(() => {}); }, []);
   const satShowSet = useCallback((f: SatShow) => {
     setSatShow(f);
@@ -2860,9 +2859,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
       }
       let ts = satToastsRef.current;
-      const keep = (satPickedRef.current ?? satPendingRef.current)?.norad;
+      // ★★ beta94 (Stuart 11-25) SHOW filters the LIST only: a reminder set on a pass always fires, even one SHOW now hides
       for (const r of satRemRef.current.due(now, lead, conn)) {
-        if (r.norad !== keep && !satShowRemindOk(satShowRef.current, satListRef.current, r.norad)) continue;   // ★★ beta94 hidden by SHOW: no reminder
         ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
       }
       ts = ts.filter((x) => now < x.r.los);   // ★ a pass that is over takes its banner with it
@@ -16473,6 +16471,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           skyRadio={skyRadioFromBase(connectBase)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
+          remindsAll={() => satRemRef.current.all().filter((r) => r.server === satSrvKey)}
           remindLead={satRemLead}
           onRemind={satRemToggle}
           onRemindLead={(v) => { setSatRemLead(v); AsyncStorage.setItem('vibe.satRemindLead', String(v)).catch(() => {}); }}

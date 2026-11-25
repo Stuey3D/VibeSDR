@@ -21,7 +21,7 @@
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import {
-  GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
+  GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead, satRemindOffered,
   satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
@@ -29,8 +29,8 @@ import {
   satCwTail, satDecView, satDecWord, satTextAppend, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY, type SatVfoB,
   satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList, txTuneHz,
   // ★★ beta94 SHOW — which satellites' passes the list shows (one set of rules with the app)
-  SAT_SHOW_EMPTY, SAT_SHOW_GROUPS, SAT_SHOW_KEY, satShowChoices, satShowGroup, satShowGroupsOffered, satShowParse, satShowRemindOk, satShowRows, satShowStore,
-  satShowText, satShowToggle, type SatShow, type SatShowGroup,
+  SAT_SHOW_GROUPS, SAT_SHOW_KEY, SAT_SHOW_QS, satShowChoices, satShowCur, satShowEmptyText, satShowGroup, satShowGroupsOffered, satShowHiddenRemindText,
+  satShowParse, satShowQ, satShowRows, satShowStore, satShowText, satShowToggle, satShowWithQ, type SatShow, type SatShowGroup, type SatShowQ,
   type SatPass,
   type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
@@ -179,6 +179,8 @@ const CSS = `
 #satPanel .sat-shb{border-top:1px solid var(--bar-border,var(--btn-border));padding:6px 8px;display:flex;flex-direction:column;gap:6px}
 #satPanel .sat-shg{display:flex;flex-wrap:wrap;gap:6px}
 #satPanel .sat-shg button{min-height:28px;padding:1px 9px;font-size:12px}
+#satPanel .sat-shn{margin:-2px 0 4px;padding:0 8px;font-size:12px}
+#satPanel .sat-shn[hidden]{display:none}
 #satPanel .sat-sht{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:2px 8px}
 #satPanel .sat-sht button{display:flex;align-items:center;gap:8px;text-align:left;background:transparent;border-color:transparent;padding:3px 4px;min-height:32px;min-width:0}
 #satPanel .sat-sht button > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -314,7 +316,7 @@ export class SatPanel {
   private lead = 2;
   /** ★★ beta94 SHOW — which satellites' passes the list shows (null = All), remembered in this browser by NORAD number */
   private showF: SatShow = null;
-  private sShow!: HTMLDetailsElement; private showKey = '';
+  private sShow!: HTMLDetailsElement; private showKey = ''; private sShowNote!: HTMLElement;
   private remEl: HTMLDivElement;
   private now(): number { return (this.deps.now ? this.deps.now() : Date.now()) / 1000; }
   private srv(): string { return this.deps.serverKey?.() || location.host || 'server'; }
@@ -375,6 +377,7 @@ export class SatPanel {
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary>`
       +   `<details class="sat-show" data-s="show" hidden><summary title="Which satellites' passes the list shows"><span class="sat-shv"></span></summary><div class="sat-shb"></div></details>`
+      +   `<div class="sat-shn sat-dim" data-s="shownote" hidden></div>`
       +   `<div data-s="rows"></div></details>`
       + `<div class="sat-dim sat-credit" data-s="credit"></div></div>`;
     const q = <T extends HTMLElement>(n: string) => this.el.querySelector(`[data-s="${n}"]`) as T;
@@ -383,7 +386,7 @@ export class SatPanel {
     this.sWhy = q('why'); this.sBox = q('box'); this.sRo = q('ro'); this.sName = q('name'); this.sHz = q('hz'); this.sUp = q('up'); this.sCd = q('cd');
     this.sState = q('state'); this.sGlobe = q<HTMLCanvasElement>('globe'); this.sImg = q('img'); this.sPk = q('pk'); this.sSync = q('sync');
     this.sList = q<HTMLDetailsElement>('list'); this.sRows = q('rows'); this.sCredit = q('credit');
-    this.sShow = q<HTMLDetailsElement>('show');
+    this.sShow = q<HTMLDetailsElement>('show'); this.sShowNote = q('shownote');
     this.sKey = q('key'); this.sTlm = q('tlm'); this.sMap = this.el.querySelector('[data-act="map"]') as HTMLButtonElement;
     this.sVb = q('vb'); this.sCw = q('cw'); this.sBImg = q('bimg'); this.bCanvas = this.sBImg.querySelector('canvas') as HTMLCanvasElement;
     this.sOrb = q('orb');
@@ -657,7 +660,8 @@ export class SatPanel {
     if (act === 'orbsky') { this.orbSky = !this.orbSky; this.paintPick(); return; }
     if (act === 'xlisten') { const r = this.xp?.rows.find((x) => x.id === b.dataset.xid); if (r && this.deps.xpdrListen) this.deps.xpdrListen(r); return; }
     if (act === 'orbmax') { this.orbMaxK = Math.max(0, Math.min(6, Number(b.dataset.v) || 0)); this.deps.orbMax?.(this.orbMaxK); this.paintPick(); return; }
-    if (act === 'show') { this.setShow(satShowGroup((b.dataset.g || 'all') as SatShowGroup | 'all')); return; }
+    if (act === 'show') { this.setShow(satShowGroup((b.dataset.g || 'all') as SatShowGroup | 'all', this.showF)); return; }
+    if (act === 'showq') { this.setShow(satShowWithQ(this.showF, (b.dataset.q || null) as SatShowQ | null)); return; }
     if (act === 'showsat') { this.setShow(satShowToggle(this.showF, this.list, Number(b.dataset.norad))); return; }
     if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
     if (act === 'lead') {
@@ -695,14 +699,21 @@ export class SatPanel {
   private paintShow() {
     const choices = satShowChoices(this.showF, this.list);
     this.sShow.hidden = !choices.length;
+    // ★★ beta94 a reminder on a pass SHOW hides still fires — said under SHOW so it is not forgotten (Stuart 11-25)
+    const note = choices.length ? satShowHiddenRemindText(this.showF, this.list, this.rem.all().filter((r) => r.server === this.srv()), this.keepNorad()) : '';
+    if (this.sShowNote.textContent !== note) this.sShowNote.textContent = note;
+    this.sShowNote.hidden = !note;
     if (!choices.length) return;
     const txt = satShowText(this.showF, this.list);
     const groups = satShowGroupsOffered(this.list);
-    const cur = !this.showF ? 'all' : 'group' in this.showF ? this.showF.group : '';
+    const cur = satShowCur(this.showF), curQ = satShowQ(this.showF);
     let h = `<div class="sat-shg" role="group" aria-label="Show a group">`
       + `<button data-act="show" data-g="all" class="${cur === 'all' ? 'on' : ''}" aria-pressed="${cur === 'all'}" title="Every satellite's passes">All</button>`
       + groups.map((g) => { const d = SAT_SHOW_GROUPS.find((x) => x.id === g)!;
           return `<button data-act="show" data-g="${g}" class="${cur === g ? 'on' : ''}" aria-pressed="${cur === g}" title="${esc(d.what)}">${esc(d.label)}</button>`; }).join('')
+      + `</div><div class="sat-shg" role="group" aria-label="Pass quality">`
+      + `<button data-act="showq" data-q="" class="${!curQ ? 'on' : ''}" aria-pressed="${!curQ}" title="Passes of any quality">All passes</button>`
+      + SAT_SHOW_QS.map((x) => `<button data-act="showq" data-q="${x.id}" class="${curQ === x.id ? 'on' : ''}" aria-pressed="${curQ === x.id}" title="${esc(x.what)}">${esc(x.label)}</button>`).join('')
       + `</div><div class="sat-sht">`
       + choices.map((c) => `<button data-act="showsat" data-norad="${c.norad}" role="checkbox" aria-checked="${c.on}" title="${esc(c.name)}"><span class="sat-tick" aria-hidden="true"></span><span>${esc(c.name)}</span></button>`).join('')
       + `</div>`;
@@ -767,7 +778,7 @@ export class SatPanel {
     let h = '';
     if (!this.list) h = `<div class="sat-dim">Asking the server…</div>`;
     else if (!allRows.length) h = `<div class="sat-dim">${esc(this.list.why || (this.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server'))}</div>`;
-    else if (!rows.length) h = `<div class="sat-dim">${esc(SAT_SHOW_EMPTY)}</div>`;
+    else if (!rows.length) h = `<div class="sat-dim">${esc(satShowEmptyText(this.showF, allRows, this.keepNorad()))}</div>`;
     let anyRemind = false;
     const whens: string[] = [];
     for (const r of rows.slice(0, 160)) {   // ★ 2026-11-24 every pass is a row now (was 40)
@@ -784,7 +795,7 @@ export class SatPanel {
         + `><span class="sat-n">${esc(name)}</span><span class="sat-w">\u0000${whens.push(satWhenText(r, now)) - 1}\u0000</span>`
         + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`
         + (offer ? `<button class="sat-rem${held ? ' on' : ''}" data-act="remind" data-norad="${r.sat.norad}" data-tx="${r.i}" aria-pressed="${!!held}"`
-            + ` title="${held ? 'Cancel this reminder' : 'A pop-up shortly before this pass rises — while you are still connected to this server'}">${esc(satRemindKeyText(!!held, this.lead))}</button>` : '')
+            + ` title="${esc(held ? SAT_REMIND_FORGET_WHAT : SAT_REMIND_SET_WHAT)}" aria-label="${esc(held ? SAT_REMIND_FORGET_WHAT : 'Remind me before this pass')}">${esc(satRemindKeyText(!!held))}</button>` : '')
         + `</div>`;
     }
     if (anyRemind) h += `<div class="sat-lead sat-dim"><span>REMIND</span>${[1, 2, 5, 10].map((v) => `<button data-act="lead" data-v="${v}" class="${v === this.lead ? 'on' : ''}" aria-pressed="${v === this.lead}">${v}</button>`).join('')}<span>min before it rises · this page only</span></div>`;
@@ -1046,7 +1057,7 @@ export class SatPanel {
     // ★ a fresh list ~40 s before one fires (with the mode off nobody else is asking) — free, it changes nothing
     if (connected && this.rem.nextIn(now, this.lead) < 40 && (now * 1000 - this.listAt) > 30000) { this.deps.list(); this.listAt = now * 1000; }
     for (const r of this.rem.due(now, this.lead, connected)) {
-      if (r.norad !== this.keepNorad() && !satShowRemindOk(this.showF, this.list, r.norad)) continue;   // ★★ beta94 a satellite SHOW hides: no reminder
+      // ★★ beta94 (Stuart 11-25) SHOW filters the LIST only: a reminder set on a pass always fires, even one SHOW now hides
       const why = satRemindWhy(this.list, r);
       this.toasts.unshift({ r, why, shownAt: now });
       try {

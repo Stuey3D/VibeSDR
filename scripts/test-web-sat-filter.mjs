@@ -4,7 +4,10 @@
 //   no drop-down while the list is empty; "SHOW: All" by default with every pass listed; unticking a satellite hides its
 //   passes; a group shortcut (Weather) shows only its birds; a tick adds one ("2 satellites"); it is kept in localStorage
 //   by NORAD number and is the same after a reload; the satellite picked stays listed when SHOW leaves it out; a reminder
-//   for a satellite SHOW hides does not fire, one it shows does; default / silver / black, desktop and 390 px: legible,
+//   ★ QUALITY (All passes / Marginal or better / Good or better / Excellent only) ANDs with it, reads "SHOW: Weather · Good or
+//   better", is remembered (a value stored before it still loads) and says when nothing is good enough; ★ SHOW filters
+//   the LIST only — every reminder set fires, a hidden one is noted under SHOW; REMIND is a toggle (lit FORGET cancels);
+//   default / silver / black, desktop and 390 px: legible,
 //   nothing off the side. Needs web/dist (node scripts/build-web.mjs). Screenshots to $SAT_SHOTS (default $TMPDIR).
 //     node scripts/test-web-sat-filter.mjs
 import * as esbuild from 'esbuild';
@@ -115,11 +118,17 @@ try {
     names: [...new Set([...document.querySelectorAll('#satPanel .sat-row .sat-n')].map((e) => e.textContent.split(' · ')[0]))],
     rows: document.querySelectorAll('#satPanel .sat-row').length,
     ticks: [...document.querySelectorAll('#satPanel .sat-sht button')].map((b) => b.textContent + '=' + b.getAttribute('aria-checked')),
-    groups: [...document.querySelectorAll('#satPanel .sat-shg button')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')),
+    groups: [...(document.querySelectorAll('#satPanel .sat-shg')[0]?.querySelectorAll('button') ?? [])].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')),
+    quals: [...(document.querySelectorAll('#satPanel .sat-shg')[1]?.querySelectorAll('button') ?? [])].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')),
+    els: [...document.querySelectorAll('#satPanel .sat-row .sat-f')].map((e) => (e.textContent.match(/max (\\d+)°/) || [])[1]).map(Number),
+    empty: document.querySelector('#satPanel [data-s="rows"] > .sat-dim')?.textContent || '',
+    note: (() => { const n = document.querySelector('#satPanel [data-s="shownote"]'); return n.hidden ? '' : n.textContent; })(),
     stored: (() => { try { return localStorage.getItem('vibe.satShow'); } catch { return 'threw'; } })(),
   })`));
   const tick = (norad) => ev(`document.querySelector('#satPanel .sat-sht button[data-norad="${norad}"]').click(); true`);
   const group = (g) => ev(`document.querySelector('#satPanel .sat-shg button[data-g="${g}"]').click(); true`);
+  const qual = (q) => ev(`document.querySelector('#satPanel .sat-shg button[data-act="showq"][data-q="${q}"]').click(); true`);
+  const remKey = (norad) => ev(`(() => { const b = document.querySelector('#satPanel .sat-rem[data-norad="${norad}"]'); return b ? b.textContent + '|' + b.classList.contains('on') + '|' + b.title : 'none'; })()`);
 
   await boot();
   await ev(`(() => { try { localStorage.removeItem('vibe.satShow'); } catch {} return true; })()`);
@@ -193,20 +202,85 @@ try {
   s = await state();
   ok(!s.names.includes('RS-44'), 'out of the mode (no pick): RS-44 is hidden again');
 
-  console.log('— reminders follow SHOW');
+  console.log('— QUALITY: the pass rating, ANDed with the satellites');
   await group('all');
-  await ev(`window.__fake = ${now * 1000}; document.querySelector('#satPanel .sat-rem[data-norad="27607"]').click(); document.querySelector('#satPanel .sat-rem[data-norad="59112"]').click(); true`);
+  s = await state();
+  ok(JSON.stringify(s.quals) === JSON.stringify(['All passes*', 'Marginal or better', 'Good or better', 'Excellent only']), `the quality keys, All passes lit: ${s.quals.join(' / ')}`);
+  await qual('GOOD');
+  s = await state();
+  ok(s.rows === 6 && s.els.every((e) => e >= 30) && !s.names.includes('SONATE-2'), `Good or better: only 30° and up (${s.rows} rows: ${s.els.join(' ')})`);
+  ok(s.sum === 'SHOW: Good or better' && s.quals.includes('Good or better*') && s.groups.includes('All*'), `header "${s.sum}", All still lit`);
+  ok(s.stored === '{"q":"GOOD"}', `stored with the rest: ${s.stored}`);
+  await group('weather');
+  s = await state();
+  ok(s.sum === 'SHOW: Weather · Good or better' && JSON.stringify(s.els) === '[62]', `AND with a group: "${s.sum}" — METEOR's 62° pass only (${s.els.join(' ')})`);
+  ok(s.stored === '{"group":"weather","q":"GOOD"}', `kept together: ${s.stored}`);
+  await qual('MARGINAL');
+  s = await state();
+  ok(JSON.stringify(s.els) === '[62,20]', `Weather · Marginal or better: 62° and 20° (${s.els.join(' ')})`);
+  await qual('EXCELLENT'); await group('all');
+  s = await state();
+  ok(JSON.stringify(s.els.sort()) === '[56,62]' && s.sum === 'SHOW: Excellent only', `Excellent only: 50° and up (${s.els.join(' ')}), "${s.sum}"`);
+  await group('tlm');
+  s = await state();
+  ok(s.rows === 0 && s.empty === 'No Excellent passes in the next 24 h', `nothing good enough says so: "${s.empty}"`);
+  await setList(list().sats.filter((x) => x.norad === 59112));
+  await group('all'); await qual('GOOD');
+  s = await state();
+  ok(s.empty === 'No passes Good or better in the next 24 h', `"${s.empty}"`);
+  await setList();
+  await group('weather');
+  console.log('— QUALITY remembered across a reload; an older stored value still loads');
+  await boot(); await setList();
+  await ev(`document.querySelector('#satPanel details.sat-show').open = true; true`);
+  s = await state();
+  ok(s.sum === 'SHOW: Weather · Good or better' && s.quals.includes('Good or better*') && JSON.stringify(s.els) === '[62]', `after a reload: "${s.sum}" (${s.els.join(' ')})`);
+  await shot('quality-desktop');
+  await ev(`(() => { localStorage.setItem('vibe.satShow', '{"group":"weather"}'); return true; })()`);
+  await boot(); await setList();
+  await ev(`document.querySelector('#satPanel details.sat-show').open = true; true`);
+  s = await state();
+  ok(s.sum === 'SHOW: Weather' && s.quals.includes('All passes*') && s.rows === 2, `a value stored before QUALITY: "${s.sum}", All passes (${s.rows} rows)`);
+  await qual('');
+  await group('all');
+
+  console.log('— REMIND is a toggle: lit FORGET cancels');
+  await ev(`window.__fake = ${now * 1000}; true`);
+  ok((await remKey(57166)).startsWith('REMIND|false|'), 'METEOR: "REMIND"');
+  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="57166"]').click(); true`);
+  let k = await remKey(57166);
+  ok(k === 'FORGET|true|Reminder set — tap to forget it' && await ev(`window.__p.reminders().length`) === 1, `set: lit "FORGET" — ${k}`);
+  ok(await ev(`document.querySelector('#satPanel .sat-rem[data-norad="57166"]').getAttribute('aria-label')`) === 'Reminder set — tap to forget it', '…its accessibility label says so');
+  await sleep(1300);
+  ok((await remKey(57166)).startsWith('FORGET|true'), '…and stays lit through the once-a-second redraw');
+  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="57166"]').click(); true`);
+  ok((await remKey(57166)).startsWith('REMIND|false') && await ev(`window.__p.reminders().length`) === 0, 'FORGET tapped: cancelled, back to "REMIND"');
+
+  console.log('— SHOW filters the LIST only: every reminder set fires');
+  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').click(); document.querySelector('#satPanel .sat-rem[data-norad="59112"]').click(); true`);
   ok(await ev(`window.__p.reminders().length`) === 2, 'REMIND on SO-50 and SONATE-2');
+  s = await state();
+  ok(s.note === '', 'nothing hidden: no note');
   await group('tlm');   // SONATE-2 (APRS) shown, SO-50 (FM voice) hidden
   s = await state();
   ok(!s.names.includes('SO-50 (SaudiSat-1C)') && s.names.includes('SONATE-2'), 'Telemetry: SO-50 hidden, SONATE-2 shown');
+  ok(s.note === '1 reminder set on a hidden pass', `the note under SHOW: "${s.note}"`);
+  await qual('GOOD');   // SONATE-2's 22° pass hidden too
+  s = await state();
+  ok(s.note === '2 reminders set on hidden passes' && !s.names.includes('SONATE-2'), `Telemetry · Good or better hides SONATE-2's 22° pass too: "${s.note}"`);
+  await phone(); await sleep(300);
+  await shot('remind-note-phone');
+  await desk(); await sleep(200);
   await ev(`window.__fake = ${(SO50_AOS - 119) * 1000}; window.__p.remTick(); true`);
-  ok(await ev(`document.querySelectorAll('#satRemind .sat-toast').length`) === 0, 'SO-50\'s time comes: hidden by SHOW, no pop-up');
+  let toast = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
+  ok(/^SO-50/.test(toast), `SO-50's time comes: hidden by SHOW, its pop-up STILL comes — "${toast.slice(0, 40)}"`);
+  await ev(`document.querySelector('#satRemind button[data-act="dismiss"]')?.click(); true`);
   await ev(`window.__fake = ${(SON2_AOS - 119) * 1000}; window.__p.remTick(); true`);
-  const toast = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
-  ok(/^SONATE-2 rises in 1:5\d/.test(toast), `SONATE-2's time comes: its pop-up — "${toast.slice(0, 40)}"`);
+  toast = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
+  ok(/^SONATE-2 rises in 1:5\d/.test(toast), `SONATE-2 (hidden by quality) fires too — "${toast.slice(0, 40)}"`);
   ok(await ev(`window.__p.reminders().length`) === 0, 'both reminders taken out of the book');
   await ev(`document.querySelector('#satRemind button[data-act="dismiss"]')?.click(); window.__fake = null; true`);
+  await qual(''); await group('all');
 
   console.log('— the looks, desktop and 390 px');
   const CONTRAST = `(() => { const out = [];
