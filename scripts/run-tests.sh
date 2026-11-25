@@ -1545,6 +1545,9 @@ if npx tsx scripts/test_landing_markup.ts; then pass=$((pass+1)); else fail=$((f
 # ★★ EDITING A BOOKMARK (V12, discussion #59): the shared form rules both clients use — frequency units, passband or the
 #    mode's default, "what I'm listening to now", the server edit query, an older server's left-behind row, your own list.
 if npx tsx scripts/test_bookmark_edit.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta94 THE RECEIVER'S PLACE (spotsmap-serverloc-v12, Stuart 11-25): spot distances and the time-station guess use the
+#    server's /location first; a VibeServer with one never asks for the phone's; RR73 is never plotted as a grid square.
+if npx tsx scripts/test_receiver_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
