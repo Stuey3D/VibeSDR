@@ -121,6 +121,9 @@ struct Burst {
      *  when the last copy goes (as soon as the decoders return). Empty everywhere else. */
     std::shared_ptr<const std::vector<cf>> bb;
     double bbRate = 0;        ///< its sample rate
+    /** ★ beta94: the closed channel's length, s (pre-roll and the quiet tail included) — the unidentified burst's
+     *  description and the carrier test (vibe_ism_unknown.h) */
+    double durS = 0;
 };
 
 /** ★★ A complex multiply WITHOUT std::complex's NaN/Inf recovery (2026-10-31, the decoder SIMD audit). C99 Annex G,
@@ -401,6 +404,8 @@ public:
     double noiseDb() const { return noiseDb_; }
     /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
     double clipFrac() const { return clipFrac_; }
+    /** ★ beta94 (the ISM AUTO chip): the capture's peak |re|/|im| over the same second, dBFS (−99 before the first) */
+    double peakDb() const { return peakDb_; }
     /** Ignore detections within this many Hz of the capture centre (the DC remnant). */
     void setDcGuardHz(double hz) { dcGuardHz_ = hz; tablesOk_ = false; }
     /** Detect only between these offsets from the capture centre (the band's own span): the tuner's filter skirts
@@ -515,7 +520,7 @@ private:
         const float norm = 1.0f / (float(kN) * float(kN) * 0.375f);   // Hann's power gain, so a bin reads as dBFS-ish
         for (int i = 0; i < kN; ++i) pw_[size_t(i)] = std::norm(fbuf_[size_t(i)]) * norm;
         // ★ the overload meter: a block of capture that neared full scale (an 8-bit RTL clips at 1.0)
-        clipWin_ += blockPeak_ > 0.85f ? 1 : 0; ++clipFrames_; blockPeak_ = 0;
+        clipWin_ += blockPeak_ > 0.85f ? 1 : 0; ++clipFrames_; peakWin_ = std::max(peakWin_, blockPeak_); blockPeak_ = 0;
         if (frames_ < kSeedFrames) {
             seedFrame(ev);
         } else {
@@ -528,7 +533,10 @@ private:
             std::nth_element(t.begin(), t.begin() + kN / 2, t.end());
             noiseDb_ = 10.0 * std::log10(std::max(1e-14f, t[size_t(kN / 2)]));
         }
-        if (clipFrames_ >= int(w_ / hop_)) { clipFrac_ = double(clipWin_) / clipFrames_; clipWin_ = 0; clipFrames_ = 0; }
+        if (clipFrames_ >= int(w_ / hop_)) {
+            clipFrac_ = double(clipWin_) / clipFrames_; clipWin_ = 0; clipFrames_ = 0;
+            peakDb_ = 20.0 * std::log10(std::max(1e-5f, peakWin_)); peakWin_ = 0;
+        }
     }
     /* ★★★ THE SEED, THEN A LOOK BACK (2026-11-12). The floor used to be SEEDED from the first 64 frames by a fast running
      *  mean, detecting as it went. A burst already on the air in those frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s) was
@@ -810,6 +818,13 @@ private:
 public:
     /** Frequencies held right now (kHoldQuietS): carriers and spurs that are being ignored — for the status. */
     int holds() const { int n = 0; for (const auto& hd : hold_) n += hd.on ? 1 : 0; return n; }
+    /** ★ beta94: where each held frequency is (Hz from the capture centre) and its strongest bin power, at most `max` —
+     *  the clients' "steady carrier" lines (vibe_ism_unknown.h CarrierList). Returns how many. */
+    int heldList(double* f, float* pk, int max) const {
+        int n = 0;
+        for (const auto& hd : hold_) if (hd.on && n < max) { f[n] = hd.f; pk[n] = hd.peak; ++n; }
+        return n;
+    }
 private:
     /** The bin tables: scan order (most negative frequency first), each bin's frequency, and whether it may detect. */
     void buildTables() {
@@ -847,7 +862,8 @@ private:
     cf preAcc_{0, 0};
     double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12, moveCapHz_ = 0, chanRateHz_ = 250e3;
     int clipWin_ = 0, clipFrames_ = 0;
-    float blockPeak_ = 0;
+    float blockPeak_ = 0, peakWin_ = 0;
+    double peakDb_ = -99;
     std::vector<cf> hist_;
     const cf* xCur_ = nullptr;
     uint64_t xBase_ = 0, total_ = 0, frames_ = 0;
@@ -1107,6 +1123,7 @@ public:
     void setHoldHogs(bool on) { det_.holdHogs = on; }
     /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
     double clipFrac() const { return det_.clipFrac(); }
+    double peakDb() const { return det_.peakDb(); }
     /** Ignore detections within this many Hz of the capture centre (the DC remnant). */
     void setDcGuardHz(double hz) { det_.setDcGuardHz(hz); }
     /** Detect only between these offsets from the capture centre (the band's own span). */
@@ -1131,12 +1148,20 @@ public:
 
     /** ★ STAGE 3's first half: a mixed channel → a sliced Burst (false = nothing worth decoding). `keepBb`: hand the
      *  baseband on (the 868 band). The service calls this on its decoder thread. */
-    static bool finish(RawBurst&& r, bool keepBb, Burst& b) {
+    /** ★ beta94 `raw`: when given, the channel's baseband is handed back there as well (shared, never copied) — the
+     *  service keeps an unidentified burst's samples for the owner (vibe_ism_unknown.h ClipRing). b.bb stays the 868
+     *  band's alone: a burst carrying it is offered to wM-Bus. */
+    static bool finish(RawBurst&& r, bool keepBb, Burst& b, std::shared_ptr<const std::vector<cf>>* raw = nullptr) {
         b.tSec = r.tSec;
         b.offHz = r.offHz;
         b.clipped = r.peakAbs > 0.85f;
+        b.durS = r.chanRate > 0 ? double(r.bb.size()) / r.chanRate : 0;
         if (!slice(r.bb, r.chanRate, b)) return false;
-        if (keepBb) { b.bb = std::make_shared<const std::vector<cf>>(std::move(r.bb)); b.bbRate = r.chanRate; }
+        if (keepBb || raw) {
+            auto sp = std::make_shared<const std::vector<cf>>(std::move(r.bb));
+            if (keepBb) { b.bb = sp; b.bbRate = r.chanRate; }
+            if (raw) *raw = std::move(sp);
+        }
         return true;
     }
     /** A centred moving average of `w` taps (w odd, ≥ 1). */

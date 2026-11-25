@@ -26,6 +26,7 @@
 #include "vibe_wmbus.h"        // ★ V12 2026-10-26: Wireless M-Bus meters on the 868 band (docs/v12/WMBUS-DECODER.md)
 #include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
 #include "vibe_ism_sink.h"     // ★ V12 2026-10-25: the gallery's copy of every new reading (vibe_ism_gallery.h)
+#include "vibe_ism_unknown.h"  // ★ beta94: unidentified bursts described, steady carriers, the owner's IQ clips
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B
 #include "vibe_lora_track.h"      // ★ V12 2026-10-27: LoRa — LoRaWAN, Meshtastic, MeshCore (docs/v12/LORA-MESH.md)
 #include "vibe_thread.h"          // the threads' names and rungs (vibe-ism, vibe-ism2, vibe-ism3)
@@ -554,7 +555,7 @@ private:
 };
 
 /** One second's measurements for the status line and the gain rule. */
-struct Health { double noiseDb = -99; double clipFrac = 0; uint64_t bursts = 0, decoded = 0; bool valid = false; };
+struct Health { double noiseDb = -99; double clipFrac = 0; double peakDb = -99; uint64_t bursts = 0, decoded = 0; bool valid = false; };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE SERVICE
@@ -588,7 +589,8 @@ public:
             const double mid = band.centreHz - hwCentreHz, half = band.needHz + 40e3;
             det_->setUsableHz(mid - half, mid + half);
         }
-        if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; wm_ = wmbus::Stats{}; }
+        if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; steadyBursts_ = 0; wm_ = wmbus::Stats{};
+                         unk_.clear(); steady_.clear(); }
         fobs_.clear();   // ★ a new front end restarts burst time at 0
         { std::lock_guard<std::mutex> q(qMtx_); queue_.clear(); queued_ = 0; dropped_ = 0; cap_.reset(rateHz, now()); }
         { std::lock_guard<std::mutex> m(mMtx_); mixQ_.clear(); mixQueued_ = 0; droppedMix_ = 0; mixCap_ = size_t(det_->workRate() * 0.5); }
@@ -600,6 +602,8 @@ public:
         { std::lock_guard<std::mutex> d(dMtx_); decQ_.clear(); decQueued_ = 0; droppedDec_ = 0;
           decCap_ = size_t((FeConst::kMaxChans * FeConst::kMaxBurstS + 1.0) * mix_->chanRate()); }
         noiseDb_.store(-99, std::memory_order_relaxed); clipFrac_.store(0, std::memory_order_relaxed); carriers_.store(0, std::memory_order_relaxed);
+        peakDb_.store(-99, std::memory_order_relaxed);
+        { std::lock_guard<std::mutex> h(heldMtx_); heldN_ = 0; }
         health_ = Health{};
         // ★ V12 LoRa (vibe_lora_service.h): its own thread and queue; the band's channel plan, only what the capture
         //   holds, as many detectors as the owner's choice and the benchmark allow. Not on a typed frequency.
@@ -761,6 +765,19 @@ public:
                           (unsigned long long)wm_.damaged, (unsigned long long)wm_.collector, wmGap() ? ",\"wmGap\":1" : "");
             o += b;
         }
+        /* ★ beta94 THE ISM AUTO CHIP (Stuart 11-24 on the Sony: the AGC chip went blank in ISM, read as "VibeAGC not
+         *  reporting" — ISM runs its own gain): what the gain rule judges by — the capture's peak over the last second
+         *  (dBFS) and the share of it near full scale (%). The gain itself is the shim's (sendIsmAll). */
+        if (health_.valid) {
+            std::snprintf(b, sizeof b, ",\"peak\":%.1f,\"clipPct\":%.1f", health_.peakDb, health_.clipFrac * 100.0);
+            o += b;
+        }
+        /* ★★ beta94 UNIDENTIFIED BURSTS, DESCRIBED (vibe_ism_unknown.h): the last 16, newest first, with `iq` where the
+         *  owner can download its samples; and the STEADY CARRIERS — not counted as unidentified (`steadyN` of the bursts
+         *  were carriers). */
+        o += ",\"unk\":" + unk_.json(t);
+        o += ",\"steady\":" + steady_.json(t);
+        o += ",\"steadyN\":" + std::to_string(steadyBursts_);
         return o + "}";
     }
     /** ★ The 868 band, or a typed frequency inside 863-870 MHz: meters are looked for there. */
@@ -772,6 +789,12 @@ public:
      *  ±45 % of the rate around where the radio is tuned. At 0.9 MS/s around 868.6 it reaches 869.005. */
     bool wmGap() const { return meters_ && hwCentre_ + 0.45 * rate_ < 869.05e6; }
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
+    /** ★ beta94 the owner's download (local_sdr_shim.cpp, the admin API's "ism-clip"): an unidentified burst's samples as
+     *  cu8, and the file name that says what they are. False = no such clip (any more). */
+    bool unknownClip(uint32_t id, std::string& name, std::string& data) const { return unk_.clip(id, name, data); }
+    /** Tests: the clip ring's state. */
+    size_t unknownClipCount() const { return unk_.clipCount(); }
+    size_t unknownClipBytes() const { return unk_.clipBytes(); }
     size_t deviceCount() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.size() + mesh_.size(); }
 
     /** ★★ ONE FRAME, TWO CHANNELS. A T1/C1 burst is ~200 kHz wide, and the detector can open a second channel on its
@@ -875,6 +898,10 @@ private:
                 noiseDb_.store(det_->noiseDb(), std::memory_order_relaxed);
                 clipFrac_.store(det_->clipFrac(), std::memory_order_relaxed);
                 carriers_.store(det_->holds(), std::memory_order_relaxed);
+                peakDb_.store(det_->peakDb(), std::memory_order_relaxed);
+                { double f[kHeldMax]; float pk[kHeldMax]; const int n = det_->heldList(f, pk, kHeldMax);
+                  std::lock_guard<std::mutex> h(heldMtx_); heldN_ = n;
+                  for (int i = 0; i < n; ++i) { heldF_[i] = f[i]; heldPk_[i] = pk[i]; } }
                 pushMix(std::move(j));
                 lk.lock();
                 detBusy_ = false;
@@ -956,16 +983,35 @@ private:
     void decodeBatch(std::vector<RawBurst>& raws) {
         const double hc = hwCentre_;
         std::vector<Burst> bs;
-        for (auto& r : raws) { Burst b; if (FrontEnd::finish(std::move(r), keepBb_, b)) bs.push_back(std::move(b)); }
+        std::vector<std::shared_ptr<const std::vector<cf>>> raw;   // ★ beta94 each burst's baseband (shared, not copied)
+        std::vector<double> rawRate;
+        for (auto& r : raws) {
+            Burst b; std::shared_ptr<const std::vector<cf>> sp; const double cr = r.chanRate;
+            if (FrontEnd::finish(std::move(r), keepBb_, b, &sp)) { bs.push_back(std::move(b)); raw.push_back(std::move(sp)); rawRate.push_back(cr); }
+        }
         if (bs.empty()) return;
         std::vector<Reading> got;
         wmbus::Stats wmLocal;
         std::vector<double> tOf;
-        for (const Burst& b : bs) {
+        uint64_t steadyLocal = 0;
+        std::vector<std::pair<double, float>> steadyHeard;
+        for (size_t bi = 0; bi < bs.size(); ++bi) {
+            const Burst& b = bs[bi];
+            const uint64_t coll0 = wmLocal.collector;
             size_t before = got.size(); decodeBurst(b, hc, got, &wmLocal);
             tOf.resize(got.size(), b.tSec);
             if (tap_) tap_(b, std::vector<Reading>(got.begin() + long(before), got.end()));
             if (got.size() != before) continue;
+            /* ★★ beta94: a STEADY CARRIER is not an unidentified burst (Stuart's two drifting carriers near 868.10 / 868.27
+             *  on the Sony, 11-24): listed as a carrier, not counted, not offered to the key-fob watch. Anything else that
+             *  nothing named is described, and its samples kept for the owner (vibe_ism_unknown.h). A wM-Bus collector's
+             *  frame WAS identified (counted below as before), so it is not described. */
+            BurstDesc d = describeBurst(b, hc);
+            if (d.mod == "carrier") { ++steadyLocal; steadyHeard.push_back({d.freqHz, d.levelDb}); continue; }
+            if (wmLocal.collector == coll0) {
+                d.t = now();
+                unk_.add(std::move(d), raw[bi].get(), rawRate[bi], unixNow());
+            }
             ++unknownLocal_;
             Reading sf;
             if (fobs_.offer(b, hc, sf)) { got.push_back(sf); tOf.push_back(b.tSec); }   // ★ an undecoded press: "Suspected key fob"
@@ -978,6 +1024,8 @@ private:
         unknownLocal_ -= std::min<uint64_t>(unknownLocal_, wmLocal.collector);   // ★ a collector's frame was identified
         unknown_ += unknownLocal_; unknownLocal_ = 0;
         const double t = now();
+        steadyBursts_ += steadyLocal;
+        for (const auto& c : steadyHeard) steady_.offer(c.first, c.second, t);
         std::vector<Heard> heard;
         for (auto& r : got) { Heard h; if (tracker_.accept(r, t, sink_ ? &h : nullptr) && sink_) heard.push_back(std::move(h)); }
         // ★ The gallery's copy OUTSIDE the lock: a report() asked for meanwhile never waits on a file.
@@ -1040,7 +1088,15 @@ private:
             winStart = t;
             health_.noiseDb = noiseDb_.load(std::memory_order_relaxed);
             health_.clipFrac = clipFrac_.load(std::memory_order_relaxed);
+            health_.peakDb = peakDb_.load(std::memory_order_relaxed);
             health_.bursts = bursts_;
+            // ★ beta94: the frequencies the detector is holding (carriers it ignores — vibe_ism.h kHoldQuietS) are steady
+            //   carriers too; their bin power reads as dBFS-ish, like the detector's floor
+            {
+                std::lock_guard<std::mutex> h(heldMtx_);
+                for (int i = 0; i < heldN_; ++i) steady_.offer(hwCentre_ + heldF_[i], float(10.0 * std::log10(std::max(1e-14f, heldPk_[i]))), t);
+            }
+            steady_.prune(t);
             health_.decoded = tracker_.decoded();
             health_.valid = true;
             tracker_.prune(t);
@@ -1056,6 +1112,10 @@ private:
     bool keepBb_ = false;
     std::atomic<double> noiseDb_{-99}, clipFrac_{0};   ///< the detector's, for the health (read by vibe-ism3)
     std::atomic<int> carriers_{0};                       ///< the detector's held hogs right now (vibe_ism.h kHoldQuietS)
+    std::atomic<double> peakDb_{-99};                    ///< ★ beta94 the capture's peak over the last second (the chip)
+    static constexpr int kHeldMax = 8;                   ///< FeConst::kMaxHolds
+    std::mutex heldMtx_;                                 ///< ★ beta94 the detector's held frequencies, for the steady list
+    int heldN_ = 0; double heldF_[kHeldMax] = {}; float heldPk_[kHeldMax] = {};
     std::thread detTh_, mixTh_, decTh_;
     bool lossless_ = false;
     std::function<void(const Burst&, const std::vector<Reading>&)> tap_;
@@ -1081,7 +1141,9 @@ private:
     size_t decQueued_ = 0, decCap_ = 0;
     uint64_t droppedDec_ = 0;
     bool decBusy_ = false;
-    uint64_t bursts_ = 0, unknown_ = 0, unknownLocal_ = 0;
+    uint64_t bursts_ = 0, unknown_ = 0, unknownLocal_ = 0, steadyBursts_ = 0;
+    UnknownBook unk_;               ///< ★ beta94 its own lock (the admin API reads a clip from the HTTP thread)
+    CarrierList steady_;            ///< ★ beta94 under mtx_
     std::chrono::steady_clock::time_point t0_;
     Tracker tracker_;
     FobWatch fobs_;
