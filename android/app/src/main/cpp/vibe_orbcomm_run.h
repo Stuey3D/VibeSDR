@@ -49,6 +49,10 @@ public:
         std::function<bool(vibe::sat::Observer&)> observer;             ///< the station's location (false = none)
         std::function<long long()> pickNorad;                           ///< the SATELLITE pick's bird (0 = none / not ORBCOMM)
         std::function<int()> satInRange;                                ///< 1 up · 0 not · −1 no pick
+        /** ★★★ beta94 THE BOX FOLLOWS THE DECODER (Stuart 11-25): the SATELLITE pick on this host — its bird, and whether
+         *  its pass is in progress now by the PREDICTION (1 / 0), not by the Doppler lock (the lock is stopped at LOS and
+         *  absent with AUTO DOPPLER off). false = no pick. Null = no follow is ever reported (tests, an older wiring). */
+        std::function<bool(long long& norad, int& up)> pickNow;
         std::function<double()> now;                                    ///< UTC seconds (test seam); null = the system clock
         std::function<void(const std::vector<vibe::skyplot::Dot>&)> dots;   ///< the sky plot's store
         std::function<std::string(std::string& title)> skyPng;           ///< this radio's ORBCOMM plot as PNG (pass end)
@@ -93,6 +97,8 @@ public:
     }
     // ── for tests ──
     uint64_t good() const { return good_; }
+    long long follow() const { return follow_; }
+    bool pickEnded() const { return pickEnded_; }
     uint64_t messages() const { return msgs_; }
     const std::map<long long, int>& goodBySat() const { return goodBySat_; }
 private:
@@ -273,6 +279,7 @@ private:
         const int up = o_.satInRange ? o_.satInRange() : -1;
         if (lastUp_ == 1 && up == 0) passEnd_(false);   // the pick has set
         lastUp_ = up;
+        followStep_(t);
         if (!o_.json) { liveDots_.clear(); return; }
         std::string j = "{\"type\":\"orbcomm_status\",\"data\":{\"t\":" + fmt("%.0f", t) + ",\"good\":" + std::to_string(good_) + ",\"bad\":" + std::to_string(bad_)
                         + ",\"messages\":" + std::to_string(msgs_) + ",\"dropped\":" + std::to_string(dropped_) + ",\"maxChans\":" + std::to_string(rx_.maxChans())
@@ -332,7 +339,13 @@ private:
             }
         }
         j += "]}";   // ★ candidates the carrier checks turned away
-        j += ",\"pick\":" + std::to_string(o_.pickNorad ? o_.pickNorad() : 0) + ",\"up\":" + std::to_string(up) + ",\"dots\":[";
+        j += ",\"pick\":" + std::to_string(o_.pickNorad ? o_.pickNorad() : 0) + ",\"up\":" + std::to_string(up);
+        // ★★★ beta94 the box's bird once the pick's pass is over: the one this decoder hears now (followStep_)
+        if (o_.pickNow) {
+            j += std::string(",\"ended\":") + (pickEnded_ ? "true" : "false") + ",\"follow\":" + std::to_string(follow_);
+            if (follow_) { auto it = sats_.find(follow_); if (it != sats_.end()) j += ",\"followName\":\"" + jsonEsc(it->second.name) + "\""; }
+        }
+        j += ",\"dots\":[";
         for (size_t i = 0; i < liveDots_.size() && i < 64; i++) {
             const auto& d = liveDots_[i];
             char b[96];
@@ -343,6 +356,37 @@ private:
         liveDots_.clear();
         j += "]}}";
         o_.json(j);
+    }
+    /* ★★★ beta94 THE BOX FOLLOWS THE DECODER (Stuart 11-25: "i left an expired pass open and the next pass started decoding
+     *  as expected but when i selected the correct pass … it reset the pass that was decoding"). The decoder hears the whole
+     *  band, so it carries on with the next birds after the pick sets — the box should show one of THOSE, not the pass that
+     *  ended. Once the pick's pass has been seen up and is now over (`pickEnded_`, by the prediction — pickNow), `follow_`
+     *  is the bird decoding now: the one already followed while it is still heard (no flapping between two birds up at once),
+     *  else the most recently heard named bird (ties: the stronger). Heard = a good packet within kFollowHeardSec. 0 = none:
+     *  the clients then show the next ORBCOMM bird to rise (src/services/orbcomm.ts orbFollowChoice). A new pick, or the
+     *  pick rising again, starts over. One answer per run, so every listener of a shared dial sees the same bird. */
+    static constexpr double kFollowHeardSec = 60;
+    void followStep_(double t) {
+        long long pk = 0; int pu = 0;
+        if (!o_.pickNow || !o_.pickNow(pk, pu)) { pk = 0; pu = 0; }
+        if (pk != followPick_) { followPick_ = pk; pickWasUp_ = false; pickEnded_ = false; follow_ = 0; }
+        if (!pk) return;
+        if (pu == 1) { pickWasUp_ = true; pickEnded_ = false; follow_ = 0; return; }
+        if (pickWasUp_) pickEnded_ = true;
+        if (!pickEnded_) return;
+        auto heard = [&](const Sat& s) { return s.norad > 0 && s.norad != pk && t - s.last <= kFollowHeardSec; };
+        if (follow_) { auto it = sats_.find(follow_); if (it != sats_.end() && heard(it->second)) return; }
+        long long best = 0; double bestLast = -1, bestSnr = -1e9;
+        for (const auto& kv : sats_) {
+            const Sat& s = kv.second;
+            if (!heard(s)) continue;
+            if (s.last > bestLast + 0.5 || (std::fabs(s.last - bestLast) <= 0.5 && s.snr > bestSnr)) { best = s.norad; bestLast = s.last; bestSnr = s.snr; }
+        }
+        if (best != follow_ && best && o_.log) {
+            auto it = sats_.find(best);
+            o_.log("ORBCOMM: the pick's pass is over \xe2\x80\x94 the box follows " + (it != sats_.end() ? it->second.name : std::to_string(best)) + ", decoding now");
+        }
+        follow_ = best;
     }
     void passEnd_(bool partial) {
         bool any = false;
@@ -371,6 +415,8 @@ private:
     std::vector<vibe::skyplot::Dot> pendingDots_, liveDots_;
     double birdsAt_ = 0, statusAt_ = 0, pktSecAt_ = 0, quietFrom_ = 0;
     int pktSec_ = 0, lastUp_ = -1;
+    long long followPick_ = 0, follow_ = 0;   // ★★★ beta94 followStep_
+    bool pickWasUp_ = false, pickEnded_ = false;
     uint64_t good_ = 0, bad_ = 0, msgs_ = 0, dropped_ = 0, dotsWritten_ = 0;
     bool finished_ = false, firstLogged_ = false;
     double minuteLogAt_ = 0;

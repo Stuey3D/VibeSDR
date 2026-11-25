@@ -343,6 +343,10 @@ public:
         /** ★★ beta91 LRPT: is this listener's satellite above the horizon (1), not (0), or is there no pick (−1)? Tests;
          *  empty = the satellite engine's decoderView. With an override the rate comes from the attach only. */
         std::function<int()> satInRange;
+        /** ★★★ beta94 ORBCOMM: the SATELLITE pick on this host (its bird) and whether its pass is in progress by the
+         *  prediction (1 / 0) — the box follows the bird the decoder hears once that pass is over (vibe_orbcomm_run.h
+         *  followStep_). false = no pick. Empty = no follow reported. */
+        std::function<bool(long long& norad, int& up)> satPickNow;
         /** ★★ beta92 the satellite gain hold's note ("Airspy linearity preset 12 (held, 0 clip cuts)") for LRPT's per-pass
          *  summary line. Empty = the summary says the gain is not known. */
         std::function<std::string()> satGainNote;
@@ -1870,6 +1874,7 @@ private:
         o.pickNorad = [sess] { const vibe::sat::DecoderView v = vibe::sat::decoderView(sess); return v.consumer == "orbcomm" ? v.norad : 0LL; };
         if (env_.satInRange) o.satInRange = env_.satInRange;
         else o.satInRange = [sess] { return vibe::sat::inRangeOf(vibe::sat::decoderView(sess)); };
+        if (env_.satPickNow) o.pickNow = env_.satPickNow;   // ★★★ beta94 the box follows the decoder after the pick's LOS
         o.dots = [](const std::vector<vibe::skyplot::Dot>& d) { vibe::skyplot::shared().add(d); };
         o.skyPng = [](std::string& title) {
             vibe::skyplot::Store::Filter f; f.kind = vibe::skyplot::kOrbcomm; f.radio = vibe::logradio::mine();

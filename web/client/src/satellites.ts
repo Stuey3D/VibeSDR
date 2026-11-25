@@ -36,8 +36,8 @@ import {
   satPickTlm,   // ★★★ beta94 a finder that decodes the telemetry too
 } from '../../../src/services/satellites';
 // ★★ 2026-11-24 ORBCOMM + the sky plot — the app's words and dome (src/services/orbcomm.ts, src/utils/skyPlot.ts)
-import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbShownSats, orbViewMerge,
-         parseOrbcommPkt, parseOrbcommStatus, type OrbView } from '../../../src/services/orbcomm';
+import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFollowChoice, orbFollowText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbShownSats, orbViewMerge,
+         parseOrbcommPkt, parseOrbcommStatus, type OrbFollow, type OrbView } from '../../../src/services/orbcomm';
 import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — the app's words and rules (src/services/xpdr.ts)
 import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
@@ -411,6 +411,15 @@ export class SatPanel {
   /** The pick's downlink, once the server confirmed it. */
   pickedTx(): SatTx | undefined { return this.picked ? this.list?.sats.find(s => s.norad === this.picked!.norad)?.tx[this.picked.tx] : undefined; }
   pickedDecoder(): SatPicked['decoder'] | '' { return this.picked?.decoder ?? ''; }
+  /** ★★★ beta94 THE BOX FOLLOWS THE DECODER (src/services/orbcomm.ts orbFollowChoice): the bird the box shows — the pick,
+   *  or, for an ORBCOMM pick whose pass is over, the bird its whole-band decoder hears now (else the next to rise). */
+  followNow(): OrbFollow | null {
+    if (!this.picked) return null;
+    if (this.picked.decoder !== 'orbcomm') return { norad: this.picked.norad, why: 'pick' };
+    return orbFollowChoice(this.picked.norad, this.orb?.status, this.list, this.now());
+  }
+  /** the box's bird's NORAD number (the pick, or the followed ORBCOMM bird) */
+  private boxNorad(): number | null { return this.followNow()?.norad ?? null; }
   /** hwinfo's `doppler` / `dopplerWhy` (satCapFrom). null = no key at all. */
   setCap(c: { ok: boolean; why: string } | null) { this.cap = c; if (!c) this.exit(); else if (this.open) this.render(); }
   /** Into the mode: the window opens, the list is asked for. */
@@ -532,14 +541,17 @@ export class SatPanel {
   onPicked(p: SatPicked) {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
+    /* ★★★ beta94 another ORBCOMM bird keeps the server's whole-band decoder (satPick): its birds, packets and sky dots stay,
+     *  and the view (already the band) is not zoomed again */
+    const orbToOrb = changed && this.picked?.decoder === 'orbcomm' && p.decoder === 'orbcomm';
     if (changed) { this.aText = ''; this.aBeacon = null; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
-    if (changed) { this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++; }
+    if (changed && !orbToOrb) { this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++; }
     this.picked = p; this.pending = null; this.refusal = '';
-    if (changed && p.decoder === 'orbcomm') this.skyLoad();
+    if (changed && !orbToOrb && p.decoder === 'orbcomm') this.skyLoad();
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t, p.params, p.audio);   // ★★ beta92 the server's own parameters (and passband): the page JOINS its run
-    if (changed && t && p.view) this.deps.zoomView?.(p.viewCentre ?? txTuneHz(t), p.view);   // ★★ an ORBCOMM pick: the band's centre   // ★★ beta93 open at the pick's own view
-    this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again)
+    if (changed && !orbToOrb && t && p.view) this.deps.zoomView?.(p.viewCentre ?? txTuneHz(t), p.view);   // ★★ an ORBCOMM pick: the band's centre   // ★★ beta93 open at the pick's own view
+    if (changed) this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again) — ★★★ beta94 only on a NEW pick: the room's pick re-told to a joiner (satTellRoomPick) leaves it as the listener set it
     this.render();
   }
   /** The decoder's own words (LRPT's carrier / frames / lines, SSTV's mode, APRS listening). */
@@ -561,7 +573,7 @@ export class SatPanel {
   }
   /** ★ 1.7 the pass's path: its `geo` is the dotted orbit (an older server sends none — no line). */
   onTrack(t: SatTrack) {
-    if (!this.picked || t.norad !== this.picked.norad) return;
+    if (!this.picked || t.norad !== this.boxNorad()) return;   // ★★★ beta94 the followed ORBCOMM bird's path too
     this.track = t;
     if (this.open) this.paintPick();
   }
@@ -732,7 +744,8 @@ export class SatPanel {
   /** The header's own line — what the folded box still says: "Meteor-M2-3 · AOS 12:05 (in 0:09)" / "ISS · UP · 6:12 left". */
   private headLine(now: number): string {
     const sel = this.picked ?? this.pending;
-    const sat = sel ? this.list?.sats.find(s => s.norad === sel.norad) : undefined;
+    const nr = this.picked ? this.boxNorad() : sel?.norad;   // ★★★ beta94 the followed ORBCOMM bird
+    const sat = sel ? this.list?.sats.find(s => s.norad === nr) : undefined;
     if (!sat) return '';
     const row = satModeRows(this.list, now).find(r => r.sat.norad === sat.norad);
     return row ? `${sat.name} · ${satWhenText(row, now)}` : sat.name;
@@ -811,8 +824,12 @@ export class SatPanel {
   /** The pick's box: COMPACT (voice / packet) or BIG (image; ISS SSTV once a picture starts). */
   private paintPick() {
     const now = this.now();
-    const t = this.pickedTx();
-    const sat = this.picked ? this.list?.sats.find(s => s.norad === this.picked!.norad) : undefined;
+    /* ★★★ beta94 THE BOX FOLLOWS THE DECODER: an ORBCOMM pick whose pass is over shows the bird its decoder hears now (else
+     *  the next to rise) — its name, pass, half-globe and arrows — with no new pick; the line says so */
+    const fol = this.followNow();
+    const following = !!fol && fol.why !== 'pick';
+    const sat = this.picked ? this.list?.sats.find(s => s.norad === (fol?.norad ?? this.picked!.norad)) : undefined;
+    const t = following && sat ? sat.tx.find((x) => x.decoder === 'orbcomm' || x.mode === 'orbcomm') ?? sat.tx[0] : this.pickedTx();
     const pend = this.pending ? this.list?.sats.find(s => s.norad === this.pending!.norad) : undefined;
     if (!t || !sat) {
       this.lend(false);
@@ -854,7 +871,7 @@ export class SatPanel {
     const vb = this.vfob && this.vfob.on ? this.vfob : null;
     const sw = satViewSwitch(this.picked?.decoder, vb);
     const shown = satViewShown(this.picked?.decoder, vb, this.view);
-    const aLine = [lockWord, decWord].filter(Boolean).join(' · ');
+    const aLine = [following ? orbFollowText(fol, sat.name) : lockWord, decWord].filter(Boolean).join(' · ');
     const aText = sw ? `VFO A · ${aLine || t.label}` : aLine;
     if (this.sState.textContent !== aText) this.sState.textContent = aText;
     this.sState.classList.toggle('sw', sw); this.sState.classList.toggle('on', sw && shown === 'A');
@@ -1004,7 +1021,8 @@ export class SatPanel {
   /** ★ 1.7 the pass's path — asked once per pick (the pass in progress, else the next) and again when the next begins. */
   private askTrack() {
     if (!this.picked || !this.deps.track) return;
-    const sat = this.list?.sats.find((x) => x.norad === this.picked!.norad);
+    const nr = this.boxNorad();   // ★★★ beta94 the followed ORBCOMM bird's pass
+    const sat = this.list?.sats.find((x) => x.norad === nr);
     if (!sat) return;
     const row = satModeRows({ ...this.list!, sats: [sat] }, this.now())[0];
     const p = row?.pass;

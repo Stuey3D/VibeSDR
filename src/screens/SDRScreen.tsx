@@ -273,7 +273,7 @@ import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay, { galleryReader } from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
-import { orbViewMerge, type OrbView } from '../services/orbcomm';   // ★★ 2026-11-24 ORBCOMM in the SATELLITE box
+import { orbFollowChoice, orbViewMerge, type OrbView } from '../services/orbcomm';   // ★★ 2026-11-24 ORBCOMM in the SATELLITE box
 import { orbOverlayFrom } from '../utils/orbcommView';
 import { xpdrListen, xpdrOverlayFrom, type XpdrStatus } from '../services/xpdr';   // ★★★ beta94 the transponder finder   // ★★ 2026-11-24 its slice and carriers on the waterfall
 import { skyRadioFromBase } from '../utils/skyPlot';
@@ -2784,6 +2784,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★★ 2026-11-24 the ORBCOMM pick's slice + carriers on the waterfall (from each status — it follows the dial) */
   /** ★★★ beta94 the transponder finder's rows for this pick (services/xpdr.ts) */
   const [satXp, setSatXp] = useState<XpdrStatus | null>(null);
+  /* ★★★ beta94 THE BOX FOLLOWS THE DECODER (services/orbcomm.ts orbFollowChoice — Stuart 11-25): an ORBCOMM pick whose pass
+   *  is over shows the bird its whole-band decoder hears now (else the next ORBCOMM bird to rise) — name, pass, half-globe,
+   *  arrows — with no new pick. Recomputed every render (each status is one a second; the box ticks every second too). */
+  const satBoxFollow = satPicked?.decoder === 'orbcomm' ? orbFollowChoice(satPicked.norad, satOrb?.status, satList, Date.now() / 1000) : null;
+  const satBoxNorad = satBoxFollow?.norad ?? satPicked?.norad ?? 0;
+  const satBoxNoradRef = useRef(0); satBoxNoradRef.current = satBoxNorad;
   const satOrbOverlay = useMemo(() => (satDec === 'orbcomm' ? orbOverlayFrom(satOrb?.status) : satDec === 'xpdr' ? xpdrOverlayFrom(satXp) : null), [satDec, satOrb?.status, satXp]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
    *  decoder on the listener's VFO B host; the app follows it on a SECOND DecoderClient ("vfo":"B", the server's exact
@@ -2812,14 +2818,14 @@ export default function SDRScreen({ route, navigation }: Props) {
                                 [connectBase, radioAuthSuffix, route.params.authSuffix]);
   useEffect(() => {
     if (!satPicked) { satTrackAsk.current = null; setSatOrbit(null); return; }
-    const sat = satList?.sats.find((x) => x.norad === satPicked.norad);
+    const sat = satList?.sats.find((x) => x.norad === satBoxNorad);   // ★★★ beta94 the followed ORBCOMM bird's pass
     if (!sat || !satList) return;
     const p = satModeRows({ ...satList, sats: [sat] }, Date.now() / 1000)[0]?.pass;
     if (!p || (satTrackAsk.current && satTrackAsk.current.norad === sat.norad && satTrackAsk.current.aos === p.aos)) return;
     if (satTrackAsk.current?.norad !== sat.norad) setSatOrbit(null);
     satTrackAsk.current = { norad: sat.norad, aos: p.aos };
     (client.current as unknown as { satTrack?: (n: number, a: number, l: number) => void } | null)?.satTrack?.(sat.norad, p.aos, p.los);
-  }, [satPicked?.norad, satPicked?.tx, satList]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [satPicked?.norad, satPicked?.tx, satList, satBoxNorad]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ SATELLITE-BEST 1.6 REMIND — CLIENT-HELD ONLY (Stuart 11-21): in memory for this app session, keyed to this server;
    *  nothing on the server, nothing stored — leaving the server (this screen unmounts), the session ending or a kick
    *  forgets them, and a reminder whose connection is gone never fires. The pop-up is an IN-APP BANNER (no OS notification
@@ -8274,7 +8280,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (satRemRef.current.size) { satRemRef.current.refresh(satSrvKeyRef.current, l); setSatRemN(satRemRef.current.size); }   // ★ 1.6 a new element set moves the reminder
       },
       /* ★ 1.7 the pick's pass path — its geo is the dotted orbit (an older server sends none: no line) */
-      onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current?.norad === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null); },
+      onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current && satBoxNoradRef.current === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null); },
       onSat: (r) => {
         if (destroyed.current) return;
         // ★ an ending or a refusal says why in the SATELLITE box (a refused pick clears its "Tuning…") — no toast, no flashing
@@ -8296,8 +8302,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       onSatPicked: (pk) => {
         if (destroyed.current || !satOnRef.current) return;
         satPendingRef.current = null; setSatPending(null); setSatWhy('');
+        /* ★★★ beta94 another ORBCOMM bird keeps the server's whole-band decoder (satPick): its birds and packets stay, and the
+         *  view (already the band) is not zoomed again */
+        const orbToOrb = satPickedRef.current?.decoder === 'orbcomm' && pk.decoder === 'orbcomm';
+        if (orbToOrb) satZoomedPickRef.current = `${pk.norad}/${pk.tx}`;
         setSatPicked((prev) => {
-          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); setSatOrb(null); setSatXp(null); }
+          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); if (!orbToOrb) setSatOrb(null); setSatXp(null); }
           return pk;
         });
         /* ★★ beta92 LRPT at the symbol rate the server attached it with, so the app JOINS the pick's run instead of
@@ -16463,6 +16473,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           orbit={satOrbit?.geo ?? null} tcaIdx={satOrbit?.tcaIdx}
           telemetry={satTlm}
           orbcomm={satDec === 'orbcomm' ? satOrb : null}
+          follow={satBoxFollow}
           xpdr={satDec === 'xpdr' ? satXp : null}
           onXpdrListen={(r) => {   // ★★★ beta94 LISTEN: VFO A to the voice (USB) — an ordinary tune — then the finder follows it
             markInteract();

@@ -10,7 +10,8 @@ import { parseSkyDotsLive, parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlot
 import { parseSatList, parseSatPicked, satDecView, satDecWord, satDecoderFor, txListenMode, txUse } from '../src/services/satellites';
 import { REACH_DECODERS } from '../src/services/sdrTypes';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
-import { orbHeldText, orbShownSats, orbViewEmpty, ORB_HOLD_SEC } from '../src/services/orbcomm';
+import { orbFollowChoice, orbFollowText, orbHeldText, orbIsBird, orbShownSats, orbViewEmpty, ORB_HOLD_SEC } from '../src/services/orbcomm';
+import type { SatList, SatTx } from '../src/services/satellites';
 import { orbOverlayFrom, orbOverlayKey, orbOverlayLayout, ORB_NO_TUNE, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
 
 let fail = 0, pass = 0;
@@ -224,8 +225,58 @@ console.log('── the band view and the hold (2026-11-24) ──');
   ok(orbShownSats(h).length === 1 && orbShownSats(h)[0].heldSecs === 399,
      'the pick\'s own bird held too while its carrier is down');
   h = orbViewMerge(h, { status: S(2001, [], 41190) });
-  ok(orbShownSats(h).length === 0, 'a status for another pick: the hold goes (the pick ended)');
+  ok(orbShownSats(h).length === 1, '★★★ beta94 a status for another pick: the hold STAYS (another ORBCOMM pick keeps the same decoder)');
+  h = orbViewMerge(h, { status: S(2002, [], 0) });
+  ok(orbShownSats(h).length === 1, '★★★ beta94 …and at LOS (the lock\'s pick goes to 0) the birds heard stay');
   ok(orbShownSats(orbViewEmpty()).length === 0 && orbShownSats(null).length === 0, 'a fresh box (a new pick) holds nothing');
+}
+
+console.log('── ★★★ beta94 the box follows the decoder after the pick\'s LOS ──');
+{
+  const st0 = parseOrbcommStatus({ t: 1000, good: 1, bad: 0, sats: [], pick: 0, up: -1, dots: [] })!;
+  ok(st0.ended === false && st0.follow === 0 && st0.followName === '', 'an older server (no ended / follow): the pick stays the box\'s');
+  const st1 = parseOrbcommStatus({ t: 1000, good: 1, bad: 0, sats: [], pick: 0, up: -1, dots: [], ended: true, follow: 41186, followName: 'ORBCOMM FM115\u0007' })!;
+  ok(st1.ended && st1.follow === 41186 && st1.followName === 'ORBCOMM FM115', 'ended + follow + its name parsed (control characters cleaned)');
+  ok(parseOrbcommStatus({ t: 1, sats: [], ended: false, follow: 41186 })!.follow === 0, 'follow is read only once the pick has ended');
+  ok(parseOrbcommStatus({ t: 1, sats: [], ended: true, follow: 'x' })!.follow === 0 && parseOrbcommStatus({ t: 1, sats: [], ended: 'yes', follow: 5 })!.ended === false, 'junk → no follow');
+  const now = 100000;
+  const orbTx = [{ label: 'ORBCOMM', hz: 137200000, hiHz: 137800000, mode: 'orbcomm', loop: 'none', reach: true, decoder: 'orbcomm' as const }];
+  const pass = (aos: number, los: number) => ({ aos, tca: (aos + los) / 2, los, maxEl: 30, aosAz: 0, losAz: 180 });
+  const sat = (norad: number, name: string, passes: ReturnType<typeof pass>[], tx: SatTx[] = orbTx) =>
+    ({ id: name, name, norad, note: '', age: 1, ageState: 'fresh', tx, passes });
+  const A = 41188, B = 41186, C = 41190, D = 41191;
+  const L = (sats: ReturnType<typeof sat>[]) => ({ time: 'ok', located: true, now, sats }) as SatList;
+  const list = L([
+    sat(A, 'ORBCOMM FM117', [pass(now + 5000, now + 5600)]),        // the pick: its pass is over, the next one hours away
+    sat(B, 'ORBCOMM FM115', [pass(now - 200, now + 400)]),          // up now (decoding)
+    sat(C, 'ORBCOMM FM118', [pass(now + 120, now + 700)]),          // rises in 2 min
+    sat(D, 'ORBCOMM FM119', [pass(now + 60, now + 600)]),           // rises in 1 min
+    sat(25544, 'ISS', [pass(now + 10, now + 600)], [{ label: 'FM', hz: 437800000, mode: 'nfm', loop: 'fll', reach: true }]),
+  ]);
+  const St = (o: Record<string, unknown>) => parseOrbcommStatus({ t: now, sats: [], pick: 0, up: -1, dots: [], ...o })!;
+  let f = orbFollowChoice(A, St({ ended: true, follow: B, followName: 'ORBCOMM FM115' }), list, now);
+  ok(f.norad === B && f.why === 'decoding', `the pick has set: the box follows the bird DECODING (${f.norad} ${f.why})`);
+  ok(orbFollowText(f, 'ORBCOMM FM115') === 'following ORBCOMM FM115 — now decoding', `the box says so: "${orbFollowText(f, 'ORBCOMM FM115')}"`);
+  f = orbFollowChoice(A, St({ ended: true, follow: 0 }), list, now);
+  ok(f.norad === B && f.why === 'next', `nothing decoding: the ORBCOMM bird already up counts as risen first (${f.norad} ${f.why})`);
+  f = orbFollowChoice(A, St({ ended: true, follow: 0 }), L(list.sats.filter((x) => x.norad !== B)), now);
+  ok(f.norad === D && f.why === 'next', `…else the soonest AOS: FM119 in 1 min before FM118 in 2 (${f.norad})`);
+  ok(orbFollowText(f, 'ORBCOMM FM119') === 'following ORBCOMM FM119 — next to rise', 'next to rise, in words');
+  ok(orbFollowChoice(A, St({ ended: true, follow: 0 }), L(list.sats.filter((x) => x.norad !== B)), now).norad !== 25544, 'never a non-ORBCOMM bird (the ISS rises sooner)');
+  f = orbFollowChoice(A, St({ ended: true, follow: D }), list, now);
+  ok(f.norad === D && f.why === 'decoding', 'the DECODING bird beats the next to rise (and one already up)');
+  f = orbFollowChoice(A, St({ ended: false, follow: 0 }), list, now);
+  ok(f.norad === A && f.why === 'pick' && orbFollowText(f, 'x') === '', 'the pass not over (or not yet risen): the pick\'s own view, no words');
+  f = orbFollowChoice(A, null, list, now);
+  ok(f.norad === A && f.why === 'pick', 'no status yet: the pick');
+  f = orbFollowChoice(A, St({ ended: true, follow: 99999 }), list, now);
+  ok(f.norad === B && f.why === 'next', 'a decoding bird not in the list (no orbit to draw): the next to rise instead');
+  const upAgain = L([sat(A, 'ORBCOMM FM117', [pass(now - 10, now + 500)]), ...list.sats.slice(1)]);
+  f = orbFollowChoice(A, St({ ended: true, follow: B }), upAgain, now);
+  ok(f.norad === A && f.why === 'pick', 'the pick risen again (this clock ahead of the 1-s status): its own pass');
+  f = orbFollowChoice(A, St({ ended: true, follow: 0 }), L([sat(A, 'ORBCOMM FM117', [pass(now + 30, now + 500)]), ...list.sats.slice(2)]), now);
+  ok(f.norad === A && f.why === 'pick', 'the pick itself the next to rise: its own pass, no words');
+  ok(orbIsBird(sat(1, 'ORBCOMM FM1', [], [])) && orbIsBird(sat(2, 'Some name', [], orbTx)) && !orbIsBird(list.sats[4]), 'an ORBCOMM bird: by its decoder or its name');
 }
 
 console.log(`\ntest_orbcomm_app: ${pass} passed, ${fail} failed`);

@@ -125,6 +125,57 @@ int main() {
     CHECK(upLines <= 2, "an unchanged uplink packet is not repeated every frame (%zu lines)", upLines);
     for (auto& l : lines) if (l.find("subscriber") != std::string::npos && l.find("1A") == std::string::npos) { CHECK(false, "a message line without its raw bytes: %s", l.c_str()); break; }
 
+    /* §1b ★★★ beta94 THE BOX FOLLOWS THE DECODER (Stuart 11-25): picked bird A's pass is over while the whole-band decoder
+     *  hears bird B — the status says the pick has ended and that the box follows B; nothing is followed while A is up or
+     *  before A's pass has been seen; a new pick (B, up) starts over — all in ONE run (the decoder is never restarted). */
+    std::printf("§1b the box follows the bird being decoded after the pick's LOS\n");
+    {
+        const long long A = birds[(bi + 1) % birds.size()].norad;
+        long long pick = A; int pickUp = 0;   // A picked ahead of its pass: not up yet
+        std::vector<std::string> fj, logs;
+        Run::Opts q = o;
+        q.json = [&](const std::string& j) { fj.push_back(j); };
+        q.text = nullptr; q.dots = nullptr; q.skyPng = nullptr; q.picture = nullptr;
+        q.log = [&](const std::string& l) { logs.push_back(l); };
+        q.pickNow = [&](long long& n, int& u) { if (!pick) return false; n = pick; u = pickUp; return true; };
+        auto lastStatus = [&]() -> std::string { for (auto it = fj.rbegin(); it != fj.rend(); ++it) if (it->find("orbcomm_status") != std::string::npos) return *it; return std::string(); };
+        Run run(q);
+        const int B = 5000;
+        const size_t third = x.size() / 3;
+        size_t i = 0;
+        auto feedTo = [&](size_t end) {
+            for (; i < end; i += B) {
+                const int n = int(std::min<size_t>(B, end - i));
+                simNow = tStart + double(i + size_t(n)) / fs;
+                run.feedIq(&x[i], n, fs, centre);
+            }
+        };
+        feedTo(third / 2);
+        CHECK(run.follow() == 0 && !run.pickEnded(), "a pick not yet risen: nothing followed (follow %lld)", run.follow());
+        pickUp = 1; feedTo(third);
+        CHECK(run.follow() == 0 && !run.pickEnded(), "the pick up: the box is the pick's (follow %lld)", run.follow());
+        CHECK(lastStatus().find("\"ended\":false,\"follow\":0") != std::string::npos, "status: ended false, follow 0");
+        const uint64_t goodAtLos = run.good();
+        pickUp = 0; feedTo(2 * third);
+        const std::string st = lastStatus();
+        CHECK(run.pickEnded() && run.follow() == bird.norad, "A has set: the box follows %s, decoding now (follow %lld)", bird.name.c_str(), run.follow());
+        CHECK(st.find("\"ended\":true,\"follow\":" + std::to_string(bird.norad) + ",\"followName\":\"" + bird.name + "\"") != std::string::npos,
+              "status: ended, follow + its name (%s)", st.substr(st.find("\"pick\""), 120).c_str());
+        bool said = false; for (auto& l : logs) if (l.find("the box follows " + bird.name) != std::string::npos) said = true;
+        CHECK(said, "the log says so");
+        CHECK(run.good() > goodAtLos, "the decoder carried on through A's LOS (%llu → %llu good)", (unsigned long long)goodAtLos, (unsigned long long)run.good());
+        // B picked from the list (the same run — the server keeps the decoder): B is up, so B is the pick's own view
+        pick = bird.norad; pickUp = 1;
+        const uint64_t goodAtPick = run.good();
+        feedTo(x.size());
+        CHECK(run.follow() == 0 && !run.pickEnded(), "B picked: the pick's own view again (follow %lld)", run.follow());
+        CHECK(run.good() > goodAtPick && run.goodBySat().at(bird.norad) > 0, "the same run counts on (%llu → %llu good: not reset)", (unsigned long long)goodAtPick, (unsigned long long)run.good());
+        // no pick at all: never a follow
+        pick = 0;
+        simNow += 2; run.feedIq(&x[0], B, fs, centre);
+        CHECK(run.follow() == 0 && !run.pickEnded(), "no pick: no follow");
+    }
+
     std::printf("§2 the sky plot\n");
     CHECK(dots.size() >= 5 && dots.size() <= 10, "one dot a satellite per 5 s (%zu for %d s)", dots.size(), seconds);
     double worst = 0;

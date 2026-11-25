@@ -15,6 +15,7 @@
 //     {"type":"orbcomm_pkt","data":{t,norad,type,snr,rf,sat,text,hex,raw,v,fixed}} per packet worth a line
 // ★ Pure — scripts/test_orbcomm_app.ts. Everything from the air is cleaned and bounded here; junk → null, never a throw.
 import { parseSkyDotsLive, type SkyDot } from '../utils/skyPlot';
+import type { SatInfo, SatList } from './satellites';
 
 export type OrbHow = 'position' | 'id' | 'doppler' | '';
 export interface OrbEph { lat: number; lon: number; altKm: number; kmS: number; clock: number; id?: number; week?: number; tow?: number }
@@ -41,6 +42,10 @@ export interface OrbStatus {
   counts: Record<string, number>; sats: OrbSat[]; carriers: OrbCarrier[];
   /** the SATELLITE pick's NORAD (0 none) and whether it is up (1), not (0), or there is no pick (−1) */
   pick: number; up: number;
+  /** ★★★ beta94 THE BOX FOLLOWS THE DECODER (vibe_orbcomm_run.h followStep_): the pick's pass has been seen up and is over
+   *  (`ended`), and the bird the decoder hears now (`follow`, 0 = none; `followName`). An older server sends neither:
+   *  ended false — the box stays on the pick, as before. */
+  ended: boolean; follow: number; followName: string;
   /** the sky dots new since the last status */
   dots: SkyDot[];
   /** ★★ 2026-11-24 where the decoder searches (null = an older server: nothing drawn), its strongest peaks, what it refused */
@@ -131,6 +136,7 @@ export function parseOrbcommStatus(d: unknown): OrbStatus | null {
     t: Math.max(0, n(o.t)), good: cnt(o.good), bad: cnt(o.bad), messages: cnt(o.messages), dropped: cnt(o.dropped),
     maxChans: cnt(o.maxChans), located: o.located === true, birds: cnt(o.birds), counts, sats, carriers,
     pick: cnt(o.pick), up: up === 1 || up === 0 ? up : -1, dots: parseSkyDotsLive(o.dots), slice, peaks, refused,
+    ended: o.ended === true, follow: o.ended === true ? cnt(o.follow) : 0, followName: o.ended === true ? s(o.followName, 40) : '',
   };
 }
 
@@ -158,7 +164,9 @@ export interface OrbView {
   clockOff: Record<number, number>;
   /** ★★ 2026-11-24 THE HOLD (navaids.ts vorHold's pattern — Stuart: a bird's block vanished when its carrier dropped): each
    *  named bird's last block and the server time (status t) it was last listed — kept, drawn dimmed with its age, until
-   *  ORB_HOLD_SEC passes or the pick ends (the box's state is made fresh for a new pick; a status for another pick clears it) */
+   *  ORB_HOLD_SEC passes or the decoder ends (the box's state is made fresh when the decoder changes). ★★★ beta94: NOT on
+   *  a status for another pick — another ORBCOMM pick keeps the same whole-band decoder (and the lock's `pick` goes to 0
+   *  at LOS), so the birds it heard stay. */
   held: Record<number, { sat: OrbSat; t: number }>;
   /** the pick the hold belongs to (status `pick`) */
   heldPick: number;
@@ -173,9 +181,9 @@ export function orbViewMerge(prev: OrbView | null, m: { status?: OrbStatus | nul
   let next = v;
   if (m.status) {
     const st = m.status;
-    // ★ the hold: a status for another pick drops it; each listed, named bird refreshes its entry; one unheard for
-    //   ORB_HOLD_SEC goes
-    const held: OrbView['held'] = st.pick !== (v.heldPick ?? 0) ? {} : { ...(v.held ?? {}) };
+    // ★ the hold: each listed, named bird refreshes its entry; one unheard for ORB_HOLD_SEC goes (★★★ beta94 kept across
+    //   picks: the same decoder runs on)
+    const held: OrbView['held'] = { ...(v.held ?? {}) };
     for (const b of st.sats) if (b.norad > 0) held[b.norad] = { sat: b, t: st.t };
     for (const k of Object.keys(held)) if (st.t - held[Number(k)].t + held[Number(k)].sat.age > ORB_HOLD_SEC) delete held[Number(k)];
     next = { ...next, status: st, held, heldPick: st.pick };
@@ -298,3 +306,47 @@ export function orbAttachParams(pick: Record<string, unknown> | null | undefined
 }
 /** The decoder's word before it has said anything. */
 export const ORB_LISTENING = 'listening for ORBCOMM carriers';
+
+// ── ★★★ beta94 THE BOX FOLLOWS THE DECODER (Stuart 11-25) ─────────────────────────────────────────────────────────────
+/* "i left an expired pass open and the next pass started decoding as expected but when i selected the correct pass to see
+ * the half globe correctly it reset the pass that was decoding. So in orbcomm mode if someone has left it open can the half
+ * globe switch to the next pass when a new orbcomm comes into range and starts decoding."
+ * An ORBCOMM pick runs ONE whole-band decoder: when the picked bird sets it carries on with the next birds. The SATELLITE
+ * box (name, half-globe, pass line, "in range for…", arrows) then FOLLOWS, with no new pick:
+ *   1. the picked bird while its pass is in progress (or before it has been up — a pick made ahead of its pass);
+ *   2. once the server says its pass is over (status `ended`): the bird the decoder hears now (status `follow`) — one
+ *      answer for the whole room, so a listener who joins a shared dial sees the same bird;
+ *   3. nothing decoding yet: the next ORBCOMM bird to rise (the soonest AOS; one already up counts as risen first).
+ * Picking another ORBCOMM bird from the list keeps the decoder (the server's satPick) and starts this over.
+ * Pure — scripts/test_orbcomm_app.ts. Both clients: the web's satellites.ts, the app's SDRScreen / SatellitePanel. */
+export type OrbFollowWhy = 'pick' | 'decoding' | 'next';
+export interface OrbFollow { norad: number; why: OrbFollowWhy }
+/** An ORBCOMM bird in the satellite list (a downlink the ORBCOMM decoder reads, or the constellation's name). */
+export function orbIsBird(sat: Pick<SatInfo, 'name' | 'tx'>): boolean {
+  return /^ORBCOMM\b/i.test(sat.name) || sat.tx.some((t) => t.decoder === 'orbcomm' || t.mode === 'orbcomm' || t.consumer === 'orbcomm');
+}
+/** The bird the box shows for an ORBCOMM pick of `pickNorad`, from the decoder's status and the list, at `nowSec`. */
+export function orbFollowChoice(pickNorad: number, st: OrbStatus | null | undefined, list: SatList | null | undefined, nowSec: number): OrbFollow {
+  const pick: OrbFollow = { norad: pickNorad, why: 'pick' };
+  if (!st || !st.ended || !list) return pick;
+  const sats = list.sats;
+  const picked = sats.find((x) => x.norad === pickNorad);
+  // the pick has risen again (the server's 1-s status can trail this clock): its own pass
+  if (picked && picked.passes.some((p) => p.aos <= nowSec && p.los > nowSec)) return pick;
+  if (st.follow > 0 && st.follow !== pickNorad && sats.some((x) => x.norad === st.follow)) return { norad: st.follow, why: 'decoding' };
+  let best: { sat: SatInfo; aos: number } | null = null;
+  for (const sat of sats) {
+    if (!orbIsBird(sat)) continue;
+    const p = sat.passes.find((q) => q.los > nowSec);
+    if (!p) continue;
+    if (!best || p.aos < best.aos || (p.aos === best.aos && sat.name.localeCompare(best.sat.name) < 0)) best = { sat, aos: p.aos };
+  }
+  if (!best || best.sat.norad === pickNorad) return pick;
+  return { norad: best.sat.norad, why: 'next' };
+}
+/** The box's words for a follow: "following ORBCOMM FM112 — now decoding" / "… — next to rise"; '' for the pick itself. */
+export function orbFollowText(f: OrbFollow | null | undefined, name: string | undefined): string {
+  if (!f || f.why === 'pick') return '';
+  const n = name || `NORAD ${f.norad}`;
+  return f.why === 'decoding' ? `following ${n} — now decoding` : `following ${n} — next to rise`;
+}

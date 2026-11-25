@@ -2098,6 +2098,14 @@ fi
 printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta94 ORBCOMM: another ORBCOMM pick KEEPS the whole-band decoder (no second attach, its counts run on), a joiner who
+#     opens SATELLITE is told the room's pick and joins the same run; then the web box following the decoder after the pick's
+#     LOS (headless Edge, --mute-audio). The follow on a real synthetic pass is test-orbcomm-run §1b.
+printf '\n\033[1m── ORBCOMM: the pick keeps its decoder, the box follows it ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-orbcomm-pick.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+node --max-old-space-size=512 scripts/test-web-orbcomm-follow.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta94 THE TRANSPONDER SIGNAL FINDER end to end (docs/v12/TRANSPONDER-FINDER.md): a synthetic RS-44 clip (test-xpdr
 #     --write-clip: its beacon, G4ABC's CQ, an SSB voice) through the real server — rows, the beacon's pick opening the
 #     transponder, the slice turned by the lock's Doppler, LISTEN → VFO A follows, a manual tune ends it; then the web page.

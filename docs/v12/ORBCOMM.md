@@ -18,6 +18,37 @@ Proven: every packet field against Kenny's own published example packets; the re
 Doppler slope, clock error, two carriers, Es/N0 sweep); a synthetic pass end to end (named by its own position report,
 sky dots within 1° of SGP4). **On-air: see "Real data" below.**
 
+### ★★★ beta94 (11-25, branch `b94-orbview`): THE BOX FOLLOWS THE DECODER; ANOTHER ORBCOMM PICK KEEPS IT
+
+Stuart 11-25: *"i left an expired pass open and the next pass started decoding as expected but when i selected the correct
+pass to see the half globe correctly it reset the pass that was decoding. So in orbcomm mode if someone has left it open
+can the half globe switch to the next pass when a new orbcomm comes into range and starts decoding"*.
+
+- **Another ORBCOMM pick keeps the decoder** (`local_sdr_shim.cpp` satPick): while the earlier pick's `orbcomm` still runs
+  on its host with the same attach parameters (every ORBCOMM pick is the same 640 kHz band slice), it is not detached and
+  not re-attached — counts, carriers and locks run on; the log says `[sat] decoder orbcomm kept for the new ORBCOMM pick`.
+  The Doppler lock re-aims at the new bird. A non-ORBCOMM pick, a different slice, or the decoder replaced by hand → the
+  ordinary new pick (detach + attach). EXIT → drop, as before.
+- **The status says whom to follow** (`vibe_orbcomm_run.h` followStep_, `Opts.pickNow` ← `DecoderHost::Env.satPickNow` ←
+  `decoderEnv`: the pick from `satPicks_`, "up" from `Engine::passAt` — the PREDICTION, because the Doppler lock is stopped
+  at LOS and absent with AUTO DOPPLER off). Once the pick's pass has been seen up and is over: `"ended":true,"follow":N,
+  "followName":"…"` — the bird heard within 60 s (sticky while heard; else the most recently heard, ties by SNR). One answer
+  per run: every listener on a shared dial gets the same.
+- **The clients choose the box's bird** (`src/services/orbcomm.ts` orbFollowChoice): pick while up / not yet risen → the
+  server's `follow` → else the next ORBCOMM bird to rise (soonest AOS; one already up first). Name, pass line, half-globe,
+  arrows and the track ask go with it; the state line says "following ORBCOMM FM112 — now decoding" / "— next to rise".
+  An ORBCOMM → ORBCOMM `picked` keeps the box's birds, packets and sky dots and does not zoom again. The hold no longer
+  drops on a status for another pick.
+- **A joiner on a shared dial** (`satTellRoomPick`): the room's pick was only ever broadcast AT the pick, so a listener who
+  opened SATELLITE later never learnt it (box empty, decoder never joined). Their `sat_list` is now answered with the room's
+  `picked` once per session and pick (their `drop` forgets it).
+- Known, not changed here: `vibe_orbcomm_run.h` passEnd_ waits for `up` 1 → 0, but the lock is stopped (→ −1) on the
+  tracker tick it reaches ENDED, so the pass-end sky-plot picture may only come at the decoder's stop — b94-passprio's area.
+- Tests: `test-orbcomm-run` §1b (follow on the synthetic pass, same run counts on), `test_orbcomm_app.ts` (follow choice),
+  `scripts/test-server-orbcomm-pick.mjs` (real server: kept decoder, no second attach, counts run on, the joiner told once and
+  joins, a non-ORBCOMM pick detaches), `scripts/test-web-orbcomm-follow.mjs` (headless Edge). The end-to-end follow at a
+  real LOS on a live server is not tested (it needs a pass to set during the test) — owed on air.
+
 ## The signal (published facts)
 
 | | |
