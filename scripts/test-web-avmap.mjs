@@ -138,7 +138,7 @@ try {
     ok(await until(`/Ryanair/.test(${rowTxt('a:4CA97B')})`, 15000), `beta91: 4CA97B's row names its operator (${await ev(rowTxt('a:4CA97B'))})`);
     ok(await until(`/Mictronics/.test(${V}?.querySelector('.rows .avCredit')?.textContent || '') && !!${V}?.querySelector('.rows .avCredit a[href="https://opendatacommons.org/licenses/by/1-0/"]')`, 6000),
        `beta91: the ODC-By notice at the list's foot (${await ev(`${V}?.querySelector('.rows .avCredit')?.textContent`)})`);
-    ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,LABELS,⌖',
+    ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,RANGE,LABELS,⌖',   // ★ beta94 + RANGE: the ADS-B layer's range outline key (b94-accard) is the aviation map's too
        `beta90: the ADS-B map's controls on the aviation map (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`)})`);
     ok(await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk[data-key^="a:"]').length === 0`), 'beta90: no aircraft drawn twice (the track layer has only the stations)');
     const scale = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .maplibregl-ctrl-scale, .trkView:not([hidden]) .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);

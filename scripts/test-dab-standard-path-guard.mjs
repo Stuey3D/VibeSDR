@@ -54,7 +54,12 @@ ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged 
  *  into burstGains (getTunerGains as before, empty only on an HF+), and the gain put back on leaving is skipped only on an
  *  HF+ (the mode never set it there). Between ba9afd6ca and its parent, and from it to beta93's head, no gain/AGC line
  *  changed (checked with this gainish pattern when the base moved), so the move hides nothing else. */
-const SHIM_BASE = process.env.SHIM_BASE || 'c0282cfe5';
+/* ★ beta94: moved to 6a4bd8ea9 (the rtltcp-fix-v12 merge on b94-integrate, 11-25). The only gain-ish lines added to the shim
+ *  since c0282cfe5 are rtlDoorApplyGain's S.setGain(-1) / S.setGain(want) / S.setAhfAgc(autoG) — the RTL-TCP front door
+ *  applying an rtl_tcp client's gain commands (0x03 / 0x04 / 0x08 / 0x0d), reached only while a client is on the door,
+ *  never on DAB's path; none was removed (checked with this gainish pattern from c0282cfe5 to the merge). DAB's AGC / gain
+ *  sources are still held to BASE byte for byte above. */
+const SHIM_BASE = process.env.SHIM_BASE || '6a4bd8ea9';
 const shim = git('diff', '-U0', SHIM_BASE, '--', C + 'local_sdr_shim.cpp').split('\n');
 const gainish = /setGain|setTunerGain|g_gain|dabSeedGain|vibeAgc|Agc\(|agc_|rtlAgc|gainSteps|setLna|setIfGain/;
 ok(!shim.some((l) => l.startsWith('-') && !l.startsWith('---') && gainish.test(l)), 'the shim removes no line that touches the gain or AGC');
