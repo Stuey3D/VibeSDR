@@ -138,6 +138,8 @@ export type ServerHealth = {
   usb?: number;
   /** ★ V12 2026-11-24: work eased ON PURPOSE (vibe_health.h Health::notes) — information, not a fault. Absent = none. */
   notes?: string[];
+  /** ★ beta94: whole warning lines in the listener's words (vibe_health.h Health::warns), drawn as sent. Absent = none. */
+  warn?: string[];
 };
 
 /** ★★★ ADDITIVE, SO THE CALLBACK LIVES HERE AND NOT IN THE SHARED SHAPE'S FILE.
@@ -3084,6 +3086,7 @@ export abstract class VibeServerWsClient {
         behind: Array.isArray(msg.behind) ? msg.behind.filter((x: unknown) => typeof x === 'string') : undefined,
         usb: Number(msg.usb) || 0,
         notes: Array.isArray(msg.notes) ? msg.notes.filter((x: unknown) => typeof x === 'string') : undefined,
+        warn: Array.isArray(msg.warn) ? msg.warn.filter((x: unknown) => typeof x === 'string') : undefined,
       });
       return;
     }

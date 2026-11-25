@@ -37666,6 +37666,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed) && !keepAdsb;
         const int want = can ? vibe::bg::activeProfile(cfg, vsBgUtcMinute()) : -1;
         const double now = nowSecs();
+        /* ★★★ beta94 (the Lenovo, Stuart 11-25): WHY it is paused, said HERE and only here — "If it's idle because the SDR
+         *  is in use, the admin menu is enough. The health pill is for genuine server-struggling messages only." Read
+         *  before bgOpMtx_ (the satellite pick's own lock is never taken under it). */
+        bool satPick;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); satPick = !satPicks_.empty(); }
         std::lock_guard<std::mutex> op(bgOpMtx_);
         const bool active = bgActive_.load();
         std::string state, why;
@@ -37681,7 +37686,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         else if (!active && radioReleased.load() && bgNotBefore_ > now) { state = "busy"; retryIn = bgNotBefore_ - now; }
         else if (bgLocked()) state = active ? "running" : "waiting";
-        else if (anyone) state = active ? "listener" : "paused";
+        else if (anyone) {
+            state = active ? "listener" : "paused";
+            if (!active) why = satPick ? "a listener has the radio on a satellite pass"
+                             : cfg.keepInRange ? "a listener has tuned the radio away from its bands \xe2\x80\x94 its VFOs carry on when they are back in the window"
+                             : "a listener is on (set to stop while anyone listens)";
+        }
         else if (active && bgMoved_) state = "running";
         else {
             state = "waiting";
@@ -45669,7 +45679,10 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
         /* ★★★ V12 2026-11-24: background decoding giving way to a listener is the design working (vibe_bg_ease.h) — its drops
          *  are EXCUSED while a listener is on and the easing still has room to act. TOO HEAVY stays for real overload:
          *  drops with nobody on, or drops after everything that may be eased has been. */
-        if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs, p->bgRun_.dropsExcused());
+        /* ★★★ beta94 (the Lenovo, 11-25): background decoding is NOT judged here any more. Its own drops cost a listener
+         *  nothing, and this watch named it on any drop and held the name a minute after it STOPPED — TOO HEAVY on an
+         *  idle i5 during a satellite pass, with background decoding not running at all. The pill mentions it only when
+         *  its load is degrading the listener (vibe_bg_ease.h PillWatch, healthTick); the rest is the admin page's. */
         // ★ V12 DRM: each DRM receiver's queue drops its oldest IQ rather than make the pipeline wait — counted here
         {
             std::shared_ptr<vibe::DrmListener> d;
@@ -45697,6 +45710,9 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     watch.note("dab:aac", "DAB+ audio decoder", g_dab.aacDropped(), nowMs);
     return watch.behind(nowMs);
 }
+
+/** ★★★ beta94: the pill's line when background decoding's load is degrading the listener — said from their side. */
+static const char* const kBgPillWarn = "Server CPU overloaded \xe2\x80\x94 audio or waterfall may stutter";
 
 std::string LocalSdrShim::healthJson() {
     return g_healthValid.load() ? vibehealth::json(g_healthLast) : std::string();
@@ -45726,6 +45742,11 @@ void LocalSdrShim::healthTick() {
     if (p) {
         const std::string en = p->bgRun_.running() ? p->bgRun_.easeNote() : std::string();
         if (!en.empty()) h.notes.push_back("Background decoding: " + en);
+        // ★★★ beta94: on the pill ONLY when its load is what the listener feels (vibe_bg_ease.h PillWatch)
+        static vibe::bg::ease::PillWatch bgPill;
+        const bool on = p->bgRun_.running();
+        if (bgPill.tick(now, on, p->bgRun_.decodingNow(), p->s_streamingCached.load(std::memory_order_relaxed) > 0, p->bgRun_.degradingListener()))
+            h.warns.push_back(kBgPillWarn);
     }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }

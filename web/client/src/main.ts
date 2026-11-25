@@ -15981,6 +15981,7 @@ function renderHealthPill(h: {
   behind?: string[];
   usb?: number;
   notes?: string[];
+  warn?: string[];
 }): void {
   /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
    *  `battery` message, which recreates it — so the old pill reappeared ON TOP of the new one
@@ -16076,7 +16077,11 @@ function renderHealthPill(h: {
    *  Health::notes, e.g. "Background decoding: eased for listeners (3 of 9 paused)") and is drawn as information — the
    *  caption's quiet colour, never the TOO HEAVY amber. TOO HEAVY stays for real overload. */
   const notes = Array.isArray(h.notes) ? h.notes.filter((b) => typeof b === 'string' && b).slice(0, 2) : [];
-  const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('')
+  /* ★★★ beta94: whole lines in the listener's words (vibe_health.h Health::warns) — "Server CPU overloaded — audio or
+   *  waterfall may stutter" when background decoding's load is what they feel. Drawn as sent, as a warning. */
+  const warns = Array.isArray(h.warn) ? h.warn.filter((b) => typeof b === 'string' && b).slice(0, 2) : [];
+  const warn = warns.map((w) => `<div class="hWarn">${esc(w)}</div>`).join('')
+    + behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('')
     + (usb >= 2 ? '<div class="hWarn">RADIO USB: LOSING SAMPLES</div>' : '')
     + notes.map((n) => `<div class="hNote">${esc(n)}</div>`).join('');
   body.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
@@ -16086,6 +16091,7 @@ function renderHealthPill(h: {
        : h.temp.kind === 'none' ? '' : ', throttling')
     + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
     + (usb > 0 ? `, radio USB link ${USB_WORDS[usb]}` : '')
+    + (warns.length ? `. ${warns.join('. ')}` : '')
     + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '')
     + (notes.length ? `. ${notes.join('. ')}` : ''));
 }

@@ -538,6 +538,8 @@ export interface SpectrumCallbacks {
     usb?: number;
     /** ★ V12 2026-11-24: work eased ON PURPOSE (vibe_health.h Health::notes) — information, not a fault. */
     notes?: string[];
+    /** ★ beta94: whole warning lines in the listener's words (vibe_health.h Health::warns), drawn as sent. */
+    warn?: string[];
   }) => void;
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
@@ -1852,6 +1854,7 @@ export class SpectrumClient {
           behind: Array.isArray(msg.behind) ? msg.behind.filter((b: unknown) => typeof b === 'string') : undefined,
           usb: Number(msg.usb) || 0,
           notes: Array.isArray(msg.notes) ? msg.notes.filter((b: unknown) => typeof b === 'string') : undefined,
+          warn: Array.isArray(msg.warn) ? msg.warn.filter((b: unknown) => typeof b === 'string') : undefined,
         });
         break;
       /* ★★★ AN ICOM'S STATUS LINE — mode, FIL, the S-meter (≤4/s), TX, link, scope rate/span/mode. Sent on join,

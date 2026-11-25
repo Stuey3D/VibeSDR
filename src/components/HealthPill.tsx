@@ -44,6 +44,9 @@ export interface Health {
   /** ★★ V12 2026-11-24 — work EASED ON PURPOSE, not a fault (vibe_health.h Health::notes): "Background decoding: eased for
    *  listeners (3 of 9 paused)". Drawn quietly, never as TOO HEAVY (Stuart, 24 Nov: the warning showed while all was well). */
   notes?: string[];
+  /** ★★★ beta94: whole warning lines in the listener's words (vibe_health.h Health::warns) — "Server CPU overloaded —
+   *  audio or waterfall may stutter" when background decoding's load is what they feel. Drawn as sent. */
+  warn?: string[];
 }
 
 /** 0 OK · 1 Elevated · 2 High · 3 Critical. Verbatim from the web client's HEALTH_COLOURS. */
@@ -301,10 +304,12 @@ export default function HealthPill({
    *  2026-10-25: "a little addition to the health card that says something like Decoder too heavy"). */
   const behind = (health.behind ?? []).filter(Boolean).slice(0, 3);
   const notes = (health.notes ?? []).filter(Boolean).slice(0, 2);
+  const warns = (health.warn ?? []).filter(Boolean).slice(0, 2);
   const label = 'Server health: processor ' + HEALTH_WORDS[cpu] + ', memory ' + HEALTH_WORDS[ram]
     + (temp ? `, ${temp.word}` : '')
     + (health.bat.present ? `, battery ${batPct}%${health.bat.charging ? ' on power' : ''}` : '')
     + (usb > 0 ? `, radio USB link ${USB_WORDS[usb]}` : '')
+    + (warns.length ? `. ${warns.join('. ')}` : '')
     + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '')
     + (notes.length ? `. ${notes.join('. ')}` : '');
 
@@ -348,6 +353,7 @@ export default function HealthPill({
           </>
         ) : null}
       </View>
+      {warns.map((w) => <Text key={w} style={styles.warn} numberOfLines={2}>{w}</Text>)}
       {behind.map((b) => <Text key={b} style={styles.warn} numberOfLines={1}>{b}: TOO HEAVY</Text>)}
       {usb >= 2 ? <Text style={styles.warn} numberOfLines={1}>RADIO USB: LOSING SAMPLES</Text> : null}
       {notes.map((n) => <Text key={n} style={styles.note} numberOfLines={2}>{n}</Text>)}

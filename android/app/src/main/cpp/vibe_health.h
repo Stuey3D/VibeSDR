@@ -64,6 +64,11 @@ struct Health {
      *  receiver felt fine). Plain lines in our own fixed words, e.g. "Background decoding: eased for listeners (3 of 9
      *  paused)" — drawn as information (amber text, no alarm), never as "TOO HEAVY". Empty = nothing eased. */
     std::vector<std::string> notes;
+    /** ★★★ beta94 — A WHOLE LINE IN THE LISTENER'S WORDS, drawn as a warning exactly as sent (Stuart 11-25: "the pill is to
+     *  inform users why they might be having a sluggish connection, lagging, broken audio etc."). Today one: background
+     *  decoding's load degrading the listener's own receiver with nothing left to ease (vibe_bg_ease.h PillWatch).
+     *  Our own fixed words. Empty = nothing. */
+    std::vector<std::string> warns;
     /** ★★ THE RADIO'S USB LINK LOSING SAMPLES (Stuart, 2026-11-14: a B210 at 56 MS/s dropped two chunks a second
      *  while the CPU sat at 17 %, so the pill said all was well and DAB kept losing lock — "Maybe put a USB icon to
      *  indicate USB issue"). OK = no hole in the last minute; the slot is only drawn when it is not OK. See UsbWatch. */
@@ -858,6 +863,12 @@ inline std::string json(const Health& h) {
         for (size_t i = 0; i < h.notes.size(); ++i) j += (i ? ",\"" : "\"") + h.notes[i] + "\"";
         j += "]";
     }
+    // ★ beta94: ADDITIVE and omitted when empty — an older client ignores it (says nothing, never something false)
+    if (!h.warns.empty()) {
+        j += ",\"warn\":[";
+        for (size_t i = 0; i < h.warns.size(); ++i) j += (i ? ",\"" : "\"") + h.warns[i] + "\"";
+        j += "]";
+    }
     return j + "}";
 }
 
@@ -865,7 +876,7 @@ inline std::string json(const Health& h) {
 inline bool differs(const Health& a, const Health& b) {
     return a.cpu != b.cpu || a.ram != b.ram || a.temp != b.temp || a.tempKind != b.tempKind
         || a.bat != b.bat || a.batPresent != b.batPresent || a.batCharging != b.batCharging
-        || a.batPct != b.batPct || a.behind != b.behind || a.usb != b.usb || a.notes != b.notes;
+        || a.batPct != b.batPct || a.behind != b.behind || a.usb != b.usb || a.notes != b.notes || a.warns != b.warns;
 }
 
 }  // namespace vibehealth

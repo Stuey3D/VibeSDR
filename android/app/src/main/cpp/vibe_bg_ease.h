@@ -221,6 +221,38 @@ private:
     std::string why_;
 };
 
+/** ★★★ beta94 — WHEN BACKGROUND DECODING BELONGS ON THE HEALTH PILL (the Lenovo, Stuart 11-25). The pill said "Background
+ *  decoding: TOO HEAVY" on an 8-core i5 at load 0.05 while he listened to an ORBCOMM pass at 137.66 MHz — "not even
+ *  background decoding right now either, as I'm tuned away from the background decoders". Two faults:
+ *    1. ANY drop of background decoding's own IQ named it, for a minute. With nobody listening the drops are never
+ *       excused, and they are steady: the DSP thread never waits for background decoding's queue (beta92), which costs
+ *       ~0.5 s of IQ a minute on an idle box (the Lenovo's log, every minute: 0.5 s, beside "decode 0.00 s behind the
+ *       capture" and "IQ blocks dropped 0"; the Pi 500 0.3–0.5 s). That loses background decoding a little — it costs a
+ *       listener nothing.
+ *    2. It STOPPED (the listener's dial left its bands: "no background VFO is inside the radio's window now") and the name
+ *       stayed up for the next minute (vibehealth::BehindWatch holds a name a minute after its last drop, whether or not
+ *       the decoder is still there) — the first thing the listener saw was TOO HEAVY for work that had just ended.
+ *  ★★ Stuart's rule: "the pill is to inform users why they might be having a sluggish connection, lagging, broken audio
+ *     etc." — "background decoding doesn't need to be shown to users, only when the CPU is struggling. If it's idle
+ *     because the SDR is in use, the admin menu is enough." So background decoding is on the pill ONLY when it is running
+ *     with something decoding, a listener is on and the LISTENER's own receiver is falling behind (Governor::listenerHarm —
+ *     their IQ dropped, or their queue past 60 % twice in 10 s: the DSP thread short of CPU). The easing sheds a step
+ *     every 10 s meanwhile; the line goes when the harm does. Everything else — its own drops, paused, idle, tuned away, a satellite pass — is the admin
+ *     page's. Shown at once; held 30 s after the last degraded tick so one calm tick does not blink it; gone AT ONCE when
+ *     it stops, nothing decodes or the listener leaves. Pure: the shim hands in the runner's state every health tick. */
+class PillWatch {
+public:
+    /** @return true = put "the server's CPU is overloaded" on the pill now */
+    bool tick(int64_t nowMs, bool running, int decoding, bool listenerOn, bool degrading) {
+        if (!running || decoding <= 0 || !listenerOn) { lastMs_ = INT64_MIN / 2; return false; }
+        if (degrading) lastMs_ = nowMs;
+        return nowMs - lastMs_ < kHoldMs;
+    }
+    static constexpr int64_t kHoldMs = 30000;
+private:
+    int64_t lastMs_ = INT64_MIN / 2;
+};
+
 }  // namespace ease
 }  // namespace bg
 }  // namespace vibe
