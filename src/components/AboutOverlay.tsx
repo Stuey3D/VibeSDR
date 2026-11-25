@@ -59,6 +59,10 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta94 2026-11-25 — THE SKY PLOT'S HEATMAP (Stuart 11-25: "tracks when less data then a heatmap when it gets more"
+  //     · "you still see a track for the satellite being tracked, once the pass ends it goes to the heatmap"). vibe_skyplot.h
+  //     cells, src/utils/skyPlot.ts, docs/v12/SKY-PLOT.md.
+  { v: 'V12 (experimental)', detail: 'THE SKY PLOT BECOMES A HEATMAP — the ORBCOMM sky plot (the SATELLITE box and the gallery) kept only its newest dots, so with ORBCOMM watched around the clock the older directions scrolled away within a day. The server now also keeps the sky in small patches for 30 days, each with its average signal strength, so the plot shows a month of your aerial. While there is little data you see the passes as tracks, as before; once about a third of the sky has been heard it switches to a HEATMAP — each patch of sky in the colour of its average SNR, grey where satellites were tracked but nothing decoded — with a line under it such as “heatmap · 30 days · 1,240 cells heard · strongest east (az 70–110°)”. With ORBCOMM picked, the satellite you are tracking is drawn as a live track on top of the heatmap until it sets; then it joins the heatmap. AUTO / TRACKS / HEATMAP buttons under the plot choose for yourself. A VibeServer owner can clear a radio’s sky plot (a new aerial) on the Setup page, beside Unattended satellite passes. Needs a VibeServer updated to this beta.' },
   // ★★★ V12 beta94 2026-11-25 — UNATTENDED METEOR + ORBCOMM, TOGETHER (Stuart 11-25: "group meteor and orbcomm then allow the
   //     user to choose a priority" · "on wide enough sample rates you can do both together" · "only drop on something like
   //     the hf+ that cant fit" · "it only needs to log the position and snr"). vibe_sat_pass_sched.h, vibe_orbcomm_sky.h,

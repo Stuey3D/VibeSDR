@@ -84,7 +84,8 @@ int main() {
     o.birds = [&] { return birds; };
     o.observer = [&](vibe::sat::Observer& v) { v = ob; return true; };
     o.pickNorad = [&] { return bird.norad; };
-    o.satInRange = [] { return 1; };
+    int upNow = 1;   // ★ beta94: the pick's lock ENDS at LOS (−1), it does not report 0 first
+    o.satInRange = [&upNow] { return upNow; };
     o.text = [&](const std::string& l) { lines.push_back(l); };
     o.json = [&](const std::string& j) { jsons.push_back(j); };
     o.dots = [&](const std::vector<vibe::skyplot::Dot>& d) { dots.insert(dots.end(), d.begin(), d.end()); };
@@ -99,6 +100,12 @@ int main() {
             simNow = tStart + double(i + size_t(n)) / fs;
             run.feedIq(&x[i], n, fs, centre);
         }
+        // ★★★ beta94 LOS = the tracker stopping the lock: satInRange 1 → −1 (never 0). The pass's sky plot must come then,
+        //     not only when the decoder stops.
+        upNow = -1;
+        simNow += 1.5;
+        { std::vector<std::complex<float>> quiet(5000); run.feedIq(quiet.data(), 5000, fs, centre); }   // a second of nothing: the status tick
+        CHECK(pictures == 1, "LOS seen as the lock ending (1 → −1): the pass's sky plot at once (%d)", pictures);
         run.finish(false);
         std::printf("   good %llu, subscriber messages %llu, lines %zu, status/pkt JSONs %zu, dots %zu\n", (unsigned long long)run.good(),
                     (unsigned long long)run.messages(), lines.size(), jsons.size(), dots.size());
@@ -132,7 +139,7 @@ int main() {
         const auto L = vibe::sat::look(bird.sgp, ob, d.t + 2.5);
         double daz = std::fabs(L.azDeg - d.azDeg); if (daz > 180) daz = 360 - daz;
         worst = std::max(worst, std::max(daz * std::cos(L.elDeg * M_PI / 180), std::fabs(L.elDeg - d.elDeg)));
-        CHECK(d.norad == uint32_t(bird.norad) && d.kind == vibe::skyplot::kOrbcomm && d.snr > 5 && d.snr < 30 && d.count > 10, "a dot's fields (snr %d count %u)", d.snr, d.count);
+        CHECK(d.norad == uint32_t(bird.norad) && d.kind == vibe::skyplot::kOrbcomm && d.snr > 5 && d.snr < 30 && (d.count > 10 || &d == &dots.back()), "a dot's fields (snr %d count %u)", d.snr, d.count);   // ★ beta94 the LOS step's last bucket may hold one packet
     }
     CHECK(worst < 1.0, "each dot at the bird's az/el (worst %.2f°)", worst);
 

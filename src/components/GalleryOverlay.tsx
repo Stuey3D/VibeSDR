@@ -45,7 +45,7 @@ import { parseOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKey
          outlineLabelSize, OUTLINE_INK, type Outline } from '../utils/lrptOutline';
 import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ beta92 the DIGI MODES MAP row (the web's words)
 import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 THE SKY PLOT (src/utils/skyPlot.ts)
-import { parseSkyPlotJson, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyPlotData } from '../utils/skyPlot';
+import { parseSkyPlotJson, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyMode, type SkyPlotData } from '../utils/skyPlot';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -336,13 +336,14 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const [skyRadio, setSkyRadio] = useState<string | null>(null);   // null = not chosen yet: this radio when it is a choice
   const [sky, setSky] = useState<SkyPlotData | null>(null);
   const [skyNote, setSkyNote] = useState('');
+  const [skyMode, setSkyMode] = useState<SkyMode>('auto');   // ★★★ beta94 AUTO / TRACKS / HEATMAP
   useEffect(() => {
     if (!visible || page !== 1 || !SKY_KINDS.includes(kind)) { setSkyRow(null); return; }
     let live = true;
     fetch(withReadAuth(`${b}${skyPlotQuery('orbcomm')}`, readAuth), { cache: 'no-store' } as any)
       .then((r) => (r.ok ? r.json() : null)).then((j) => {
         const d = parseSkyPlotJson(j);
-        if (live) setSkyRow(d && d.dots.length ? skyPlotSummary(d.dots, d.truncated) : null);
+        if (live) setSkyRow(d && d.dots.length ? skySummaryFor('auto', d.cells, d.dots, Date.now() / 1000, d.truncated) : null);
       }).catch(() => { if (live) setSkyRow(null); });
     return () => { live = false; };
   }, [visible, kind, page, b, readAuth]);
@@ -366,7 +367,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   }, [visible, skyOpen, skyRadio, radioNow, b, readAuth]);
   useEffect(() => { if (!visible) { setSkyOpen(false); setSkyRadio(null); setSky(null); } }, [visible]);
   const skyPick = sky?.radios ? (skyRadio ?? radioNow) : '';
-  const skyPngUrl = withReadAuth(`${b}${skyPlotQuery('orbcomm', skyRadio ?? radioNow, 0, 0, true)}`, readAuth);
+  const skyPngUrl = withReadAuth(`${b}${skyPlotQuery('orbcomm', skyRadio ?? radioNow, 0, 0, true, skyMode)}`, readAuth);
+  const skyNow = Math.floor(Date.now() / 10000) * 10;
   const close = () => { setOpen(null); setSkyOpen(false); onClose(); };
 
   return (
@@ -467,8 +469,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
               )}
               {sky ? (<>
                 <SkyPlotView dots={sky.dots} ink={pt.ink.text} muted={pt.ink.textDim} maxW={420}
+                             cells={sky.cells} mode={skyMode} onMode={setSkyMode} nowSec={skyNow}
                              label="Sky plot: where this aerial hears the ORBCOMM satellites" />
-                <Text style={[s.dim, { textAlign: 'center' }]}>{skyPlotSummary(sky.dots, sky.truncated) || 'No dots for this radio yet.'}</Text>
+                <Text style={[s.dim, { textAlign: 'center' }]}>{skySummaryFor(skyMode, sky.cells, sky.dots, skyNow, sky.truncated) || 'No dots for this radio yet.'}</Text>
                 <Text style={s.dim}>{SKY_PLOT_WHAT}</Text>
                 {!!sky.radios && !skyPick && <Text style={s.dim}>Every radio together is only meaningful when they share an aerial.</Text>}
                 <TouchableOpacity onPress={() => { void Linking.openURL(skyPngUrl); }} style={[s.key, { alignSelf: 'flex-start', marginTop: 8 }]} accessibilityRole="button"

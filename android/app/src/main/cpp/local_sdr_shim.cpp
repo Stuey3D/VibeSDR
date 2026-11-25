@@ -29095,6 +29095,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply(200, "OK", LocalSdrShim::instance().afcJson());
                 return;
             }
+            /* ★★★ beta94 THE OWNER'S SKY PLOT RESET (the Setup page, beside Unattended satellite passes): POST = this radio's
+             *  ORBCOMM dots and cells gone (vibe_skyplot.h resetRadio — the other radios' stay). Answered by the RADIO. */
+            if (what == "skyplot-reset") {
+                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                if (!isPost) { reply(405, "Method Not Allowed", "{\"error\":\"POST to reset\"}"); return; }
+                const std::string me = vibe::logradio::mine();
+                const size_t n = vibe::skyplot::shared().resetRadio(me, vibe::skyplot::kOrbcomm);
+                LOGI("admin page: the ORBCOMM sky plot of radio %s reset by %s \xe2\x80\x94 %zu dots and its cells cleared", me.empty() ? "(untagged)" : me.c_str(), ip.c_str(), n);
+                reply(200, "OK", "{\"ok\":true,\"dots\":" + std::to_string(n) + ",\"radio\":\"" + jsonEscape(me) + "\"}");
+                return;
+            }
             if (what == "bandscan") {
                 if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 const std::string band = queryParam(reqLine, "band"), act = queryParam(reqLine, "act");
@@ -30133,11 +30144,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const auto dots = vibe::skyplot::shared().read(f, vibe::skyplot::kMaxOut + 1, &radios);
                 const bool trunc = dots.size() > vibe::skyplot::kMaxOut;
                 std::vector<vibe::skyplot::Dot> v(dots.begin(), dots.begin() + (long)std::min(dots.size(), vibe::skyplot::kMaxOut));
+                // ★★★ beta94 the cells (storage by sky position — 30 days, whatever the dot log still holds): ?mode=auto|tracks|heatmap for the PNG
+                const vibe::skyplot::cells::Map cm = vibe::skyplot::shared().readCells(f.kind, f.radio, days > 0 ? (int)std::min(days, 3650LL) : vibe::skyplot::cells::kWindowDays);
+                const std::string md = qv("mode");
+                const int mode = md == "tracks" ? vibe::skyplot::kTracks : md == "heatmap" ? vibe::skyplot::kHeatmap : vibe::skyplot::kAuto;
                 if (asPng) {
                     std::string title = k + " SKY PLOT - " + std::to_string(v.size()) + " DOTS";
                     if (!f.radio.empty()) title += " - RADIO " + f.radio;
-                    body = vibe::skyplot::png(v, title);
-                } else body = vibe::skyplot::json(v, radios, k, trunc);
+                    for (auto& ch : title) ch = (char)std::toupper((unsigned char)ch);
+                    body = vibe::skyplot::png(v, title, 520, &cm, mode, days > 0 ? (int)std::min(days, 30LL) : vibe::skyplot::cells::kWindowDays);
+                } else body = vibe::skyplot::json(v, radios, k, trunc, cm, days > 0 ? (int)std::min(days, 30LL) : vibe::skyplot::cells::kWindowDays);
             }
             /* ★ beta93: SAVE PNG sends ?download=1, and the page now reads this server DIRECT — cross-origin, where a
              *  browser ignores <a download>. Saying "attachment" here keeps it a download rather than a navigation away. */
@@ -37848,6 +37864,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (orbSkyTh_.joinable()) orbSkyTh_.join();
         std::string brief;
         if (orbSky_) { orbSky_->flush(); brief = orbSky_->brief(); }
+        vibe::skyplot::shared().flushCells();   // ★★★ beta94 the stretch's cells to the file now, not in ≤ 10 min
         orbSkyPicture(true);
         orbSky_.reset();
         const double secs = nowSecs() - orbSkySince_;
@@ -37866,7 +37883,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const auto dots = vibe::skyplot::shared().read(f);
         if (dots.empty()) return;
         const std::string title = "ORBCOMM SKY PLOT - " + std::to_string(dots.size()) + " DOTS" + (f.radio.empty() ? std::string() : " - RADIO " + f.radio);
-        const std::string png = vibe::skyplot::png(dots, title);
+        const vibe::skyplot::cells::Map cm = vibe::skyplot::shared().readCells(vibe::skyplot::kOrbcomm, f.radio);
+        const std::string png = vibe::skyplot::png(dots, title, 520, &cm);   // ★ AUTO: the heatmap once there is enough
         if (png.empty()) return;
         vibe::gallery::Meta m;
         m.kind = "orbcomm"; m.origin = "background"; m.decoder = "orbcomm-sky"; m.freqHz = 137.5e6; m.mode = "nfm";

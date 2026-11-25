@@ -2383,6 +2383,11 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <div id="spBirds"></div>
         <p class="why hide" id="spLockedNote" style="border-left:3px solid var(--amber);padding-left:8px">This radio's range
           is locked, so passes are not followed on it in this version (a pass has to move the radio).</p>
+        <!-- ★★★ beta94 the owner's reset of this radio's ORBCOMM sky plot (POST /vibeserver/admin/skyplot-reset, answered by
+             the radio): a new aerial, or a plot started on the wrong one. Every other radio's plot stays. -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+          <button type="button" class="btn" id="spSkyReset">Clear this radio's sky plot</button>
+          <span class="why" id="spSkyResetNote" style="margin:0">For a new aerial: the ORBCOMM dots and the heatmap start again.</span></div>
       </div>
       <!-- ★★★ V12 THE IDLE DX SCANNER (Stuart's brief, 2026-11-04 — docs/v12/DX-SCANNER.md). Beside Background Decoding:
            the same question, what this radio does when nobody is listening. Default OFF per radio. Its options sit UNDER
@@ -3891,6 +3896,17 @@ async function afcButton(qs) {
     if (qs === "on=0" && $("autoPpm")) { $("autoPpm").checked = false; radio().autoPpm = false; }
   } catch (e) { $("autoPpmNow").textContent = "The radio did not answer \u2014 is it running?"; }
 }
+/* ★★★ beta94 the sky plot's reset — this radio only, after a confirm (it cannot be undone) */
+if ($("spSkyReset")) $("spSkyReset").addEventListener("click", async () => {
+  if (!confirm("Clear this radio's sky plot? Every ORBCOMM dot and the heatmap built from them go; other radios keep theirs.")) return;
+  const note = $("spSkyResetNote");
+  try {
+    const r = await fetch(`${HW_PREFIX}/vibeserver/admin/skyplot-reset?${await authQuery()}`, {method: "POST", cache: "no-store"});
+    const j = await r.json();
+    note.textContent = j && j.ok ? "Cleared \u2014 " + (j.dots || 0) + " dots and the heatmap. It fills again from the next pass."
+                     : j && j.none ? "Start the radio first \u2014 its own process keeps the plot." : "The radio did not clear it.";
+  } catch (e) { note.textContent = "The radio did not answer \u2014 is it running?"; }
+});
 if ($("autoPpmReset")) $("autoPpmReset").addEventListener("click", () => afcButton("reset=1"));
 if ($("autoPpmOff")) $("autoPpmOff").addEventListener("click", () => afcButton("on=0"));
 

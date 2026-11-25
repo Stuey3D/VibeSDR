@@ -115,3 +115,50 @@ ORBCOMM bird).
 **Unproven on a real Pi:** the held capture centre surviving the tracker and auto-IF for a whole pass (the tick re-asserts
 it and logs once a minute if anything moved it); LRPT decoding with the capture off-centre from the dial; the watcher on a
 live sky over hours (channel changes, the 120 s forget); the Pi's CPU figure.
+
+## ★★★ beta94 — storage by SKY POSITION, and the HEATMAP
+
+Stuart (11-25): "could keep it as tracks when less data then a heatmap when it gets more" · "when in user mode you still see
+a track for the satellite being tracked, once the pass ends it goes to the heatmap". Continuous unattended ORBCOMM adds
+~1,500–2,000 dots an hour; the dot log (60,000) would only ever show the last ~day.
+
+**The cells** (`vibe_skyplot.h` `namespace cells`, `Store` cell file): every dot is also counted into a cell of an
+equal-area-ish grid — 3° elevation bands, `round(120·cos(band middle))` cells a band (3° of azimuth at the horizon, 3 cells in
+the top band): **2,292 cells**, every one below the top band within ±30 % of the mean solid angle. Per radio and kind, in
+**3-day buckets kept 30 days** (old buckets expire whole). A cell: dots, grey dots (tracked, nothing decoded), SNR sum (→ mean),
+max, last heard (to the minute). `<gallery>/skycells.dat`: a 136-byte header (16 radio ids) + **16-byte records**; each process
+keeps its new counts in RAM and appends them every 10 min (or at 3,000 cells, or at a stop); over 25,000 records it is
+compacted (merged, expired, then the oldest buckets) to ≤ 23,000 — **≤ 400 KB**. One radio's whole sky for the whole window is
+22,920 records, so it fits; three radios each hearing the whole sky keep their newest buckets. Built from the dot log the
+first time it is missing. The dot log is unchanged and now feeds only the TRACKS view.
+
+**Colour** = the cell's MEAN SNR. Each dot is already the best of its 5 s, so the mean of those maxima is a high-percentile
+figure of the raw signal that one freak burst cannot repaint (a cell's max would). Grey = dots but nothing decoded.
+
+**AUTO** (`cells::heatmapDue`, the clients' `skyCellsHeatDue` with the figures the server sends): the HEATMAP once ≥ 30 % of
+the sky's cells are heard AND they average ≥ 3 dots each; TRACKS before (under ~30 % the heatmap is mostly empty sky with
+single-dot cells — the tracks say more). Continuous monitoring gets there in about a day. **The live pass**: while a pass is
+live (its newest dot < 60 s old — the picked bird's in the SATELLITE box), it is drawn as a track ON TOP of the heatmap, and
+its dots are counted into the client's copy of the cells as they come; at LOS the track goes and the heatmap (with the pass
+in it) is all that shows. TRACKS / HEATMAP buttons override (app: SATELLITE box + gallery; web: the same two); the PNG
+follows `?mode=`. The gallery PNG (unattended or a pass's end) is AUTO.
+
+**The line**: "heatmap · 30 days · 2,100 cells heard · strongest east (az 70–110°) · 12,867 dots" — the strongest 40° of
+azimuth (10° steps, n-weighted mean, ≥ 20 dots), as the server's PNG says it ("STRONGEST EAST AZ 70-110").
+
+**JSON**: `skyplot.json` gains `"cells":{"v":1,"elStep":3,"az":[120,…,3],"total":2292,"days":30,"bucketDays":3,
+"auto":"heatmap|tracks","heatCoverage":0.30,"heatDotsPerCell":3.0,"c":[[index,n,grey,mean×10|null,max|null,lastT]…]}` — the
+clients never keep their own grid.
+
+**Reset**: the Setup page's "Clear this radio's sky plot" (beside Unattended satellite passes) → `POST
+/vibeserver/admin/skyplot-reset` (admin, answered by the radio): this radio's ORBCOMM dots and cells; other radios keep theirs.
+
+**Also fixed**: the pass-end picture never fired at LOS — `vibe_orbcomm_run.h` waited for in-range 1 → 0, but the tracker ends
+the lock on the tick it reaches LOS (1 → −1). Any end from 1 now counts (test-orbcomm-run). The web gallery showed no SKY PLOT
+row while nothing else was in the gallery (unattended monitoring fills the plot before its first PNG) — it does now.
+
+Pictures (SYNTHETIC data, `vibeserver/tool-skyplot-fixtures.cpp`): `skyplot-web-heatmap-auto.png`, `skyplot-web-tracks.png`,
+`skyplot-web-few-auto.png`, `skyplot-server-heatmap.png`. Tests: `test-skyplot-cells` (grid, aggregation, expiry, bounds,
+AUTO, the heatmap PNG's pixels, reset), `scripts/test_skyplot_heat.ts` (cells parsed, the grid the server's, AUTO, pick → live
+track over the heatmap → LOS → heatmap only, overrides, paths), `scripts/shot-web-skyplot.mjs` (the real server + headless
+Edge, both modes).
