@@ -96,17 +96,16 @@ export function rightLimitAt(regions: ReservedRegions, y0: number, y1: number, w
   return x;
 }
 
-/** The insets a bottom-anchored deck takes so no avoid-rect falls on it: a rect in the deck's rows [y0, windowH] on the
- *  right half pushes its right edge in, on the left half its left edge, one across the middle lifts it. */
+/** ★★ How far a bottom-anchored deck LIFTS so no avoid-rect falls on it (Stuart, Duo folded landscape, camera at
+ *  the bottom right on the deck's status line: "simply shift the controls upwards to avoid the camera here"). The deck
+ *  moves as a block — never inset or reshaped round the camera — just enough to sit `gap` above the highest rect in its
+ *  rows [y0, windowH]; the waterfall shows beneath it as it already does. left / right stay 0 (kept for callers). */
 export function deckClearance(regions: ReservedRegions, y0: number, windowW: number, windowH: number, gap = 6):
   { left: number; right: number; bottom: number } {
-  let left = 0, right = 0, bottom = 0;
+  let bottom = 0;
   for (const r of avoidRects(regions)) {
-    if (r.y + r.h <= y0 || r.y >= windowH) continue;
-    const cx = r.x + r.w / 2;
-    if (r.w >= windowW * 0.5) { bottom = Math.max(bottom, windowH - r.y + gap); continue; }
-    if (cx >= windowW / 2) right = Math.max(right, windowW - r.x + gap);
-    else left = Math.max(left, r.x + r.w + gap);
+    if (r.y + r.h <= y0 || r.y >= windowH || r.x >= windowW || r.x + r.w <= 0) continue;
+    bottom = Math.max(bottom, windowH - r.y + gap);
   }
-  return { left: Math.ceil(left), right: Math.ceil(right), bottom: Math.ceil(bottom) };
+  return { left: 0, right: 0, bottom: Math.ceil(bottom) };
 }
