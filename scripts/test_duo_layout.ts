@@ -5,6 +5,7 @@
  *
  * Run: node --no-warnings scripts/test_duo_layout.ts   (run-tests.sh does)
  */
+import { edgeChipGeometry } from '../src/components/edgeChipGeometry.ts';
 import { isFoldedFrontWindow, isFrontScreenWindow, phonePortraitScale, clearBelow, rightLimitAt, deckClearance,
          avoidRects, NO_REGIONS, type ReservedRegions } from '../src/utils/duoGeometry.ts';
 
@@ -60,6 +61,19 @@ ok(deckClearance({ ...NO_REGIONS, occlusion: [{ x: 612, y: 20, w: 37, h: 37 }] }
 ok(rightLimitAt({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 402, h: 62 }] }, 40, 100, 402) === Infinity,
    'an iPhone status band is not a corner: the name is not moved');
 ok(avoidRects({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 10, h: 10 }] }).length === 1, 'the status bar frame is avoided too');
+
+// ── Edge tabs on the front screen, landscape (Stuart: "+ ‹" ~3x wider with the camera bottom-right) ──────────────
+{
+  const ins = { top: 0, right: 84, bottom: 21, left: 0 };
+  const camBR = [{ x: 612, y: 400, w: 37, h: 37 }];
+  const g = edgeChipGeometry({ windowW: 678, windowH: 466, insets: ins, cardW: 0, cardH: 40, top: 60, islandSide: 'right', rects: camBR });
+  const old = edgeChipGeometry({ windowW: 678, windowH: 466, insets: ins, cardW: 0, cardH: 40, top: 60, islandSide: 'right' });
+  ok(g.padRight < old.padRight && g.padRight <= 62, `camera bottom-right, tab at the top: corner only (${g.padRight}, was ${old.padRight})`);
+  const g2 = edgeChipGeometry({ windowW: 678, windowH: 466, insets: ins, cardW: 0, cardH: 40, top: 390, islandSide: 'right', rects: camBR });
+  ok(g2.padRight >= 678 - 612, `a tab in the camera's rows clears it (${g2.padRight})`);
+  const ip = edgeChipGeometry({ windowW: 874, windowH: 402, insets: { top: 0, right: 62, bottom: 21, left: 62 }, cardW: 0, cardH: 40, top: 60, islandSide: 'right' });
+  ok(ip.padRight === 62, 'ordinary iPhone landscape (no rects): unchanged, full island inset');
+}
 
 if (fails) { console.log(`\nduo layout: ${fails} FAILED`); process.exit(1); }
 console.log('\nduo layout: all passed');

@@ -121,7 +121,7 @@ ok(chip.includes('edgeChipGeometry('), 'EdgeChip reads edgeChipGeometry');
 ok(!/right:\s*insets\.right/.test(chip), 'EdgeChip has no right: insets.right');
 ok(!/const edgeRight\s*=/.test(sdr), 'SDRScreen no longer computes edgeRight');
 ok(!/<EdgeChip[^>]*\bright=/.test(sdr), 'no EdgeChip call site passes right=');
-ok(/useIslandSide\(\)/.test(chip) && /islandSide \}\)/.test(chip), 'EdgeChip feeds the island side into the geometry');
+ok(/useIslandSide\(\)/.test(chip) && /islandSide[,}]/.test(chip), 'EdgeChip feeds the island side into the geometry');
 ok(/paddingRight:\s*geo\.tabW - EDGE_TAB_W/.test(chip), 'the tab pads only what its width allows (never wider than the card)');
 
 if (fails) { console.log(`\n✗ ${fails} failed`); process.exit(1); }
