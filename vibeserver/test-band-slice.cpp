@@ -16,6 +16,7 @@
 #include "decoders/digi_tuner.h"
 #include "decoders/digi_activity.h"
 #include "decoders/jtty_decoder.h"
+#include "decoders/ft8_decoder.h"
 #include <random>
 #include <algorithm>
 #include <atomic>
@@ -427,6 +428,8 @@ static double tapToneRun(double fs, double hw, double dial, std::vector<TapTone>
 }
 
 int main(int argc, char** argv) {
+    if (const char* e = getenv("VIBE_FT8_DEEP")) if (*e == '1') vibe::Ft8Decoder::deepTier().store(true);   // ★ b94: the owner's "Dig deeper" on for a replay (VIBE_FT8_DEEP=1), as the Pi 500 runs it
+
     if (argc > 1 && !std::strcmp(argv[1], "tapcost")) {
         bool drain = false; int secs = 30;
         for (int i = 4; i < argc; ++i) { if (!std::strcmp(argv[i], "drain")) drain = true; if (!std::strncmp(argv[i], "secs=", 5)) secs = std::atoi(argv[i] + 5); }

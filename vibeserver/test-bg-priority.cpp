@@ -334,7 +334,9 @@ static void backSeat() {
         ok(bgd, "★★★ a background VFO's demodulator thread is vibe-bgdemod (the host ranks it background — it was vibe-demod, AUDIO, -19)");
         ok(lis, "...and a listener's is still vibe-demod (the audio rung)");
     }
-    {   // ★ feedIq while the worker holds its queue: returns at once, the chunk dropped and counted, the hole bridged
+    {   // ★ feedIq while the worker holds its queue: returns at once; b94 — the chunks are HELD on the DSP thread's side and
+        //   handed over, in order, with the next chunk that finds the queue free (they used to be dropped: hundreds of tiny
+        //   holes a minute on the Pi 500's RSP1B smeared every Band slice — FT8/JS8/WSPR decoded nothing on 40 m and 30 m)
         const std::string dir = tmpDir("seat");
         FileSlots sl(dir, [] { return 8; });
         bg::BgRegistry reg; reg.open(dir, "S");
@@ -349,17 +351,29 @@ static void backSeat() {
         double worstMs = 0;
         {
             auto held = r.holdQueueForTest();          // ★ the worker, preempted in the instant it pops a chunk
-            for (int i = 0; i < 20; i++) {
+            for (int i = 0; i < 6; i++) {             // ★ 48 000 samples: inside the hold's 0.25 s at 250 kS/s
                 const auto t0 = std::chrono::steady_clock::now();
                 r.feedIq(blk.data(), (int)blk.size());
                 worstMs = std::max(worstMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
             }
         }
-        ok(worstMs < 5.0, "★★★ the DSP thread's feed never waited on the held queue (worst " + std::to_string(worstMs) + " ms for 20 chunks)");
-        ok(r.busyDrops() - b0 == 20 && r.droppedSamples() - d0 == 20 * 8000, "★★ background decoding dropped those chunks, counted ("
-           + std::to_string(r.busyDrops() - b0) + " chunks, " + std::to_string(r.droppedSamples() - d0) + " samples)");
+        ok(worstMs < 5.0, "★★★ the DSP thread's feed never waited on the held queue (worst " + std::to_string(worstMs) + " ms for 6 chunks)");
+        ok(r.busyHeld() == 6 && r.heldForTest() == 6 && r.busyDrops() - b0 == 0 && r.droppedSamples() - d0 == 0,
+           "★★★ b94: those chunks were HELD, not dropped (" + std::to_string(r.busyHeld()) + " held, " + std::to_string(r.busyDrops() - b0)
+           + " dropped, " + std::to_string(r.droppedSamples() - d0) + " samples lost)");
         r.feedIq(blk.data(), (int)blk.size());
-        ok(waitFor([&] { return r.queuedForTest() == 0; }, 3000), "...and the next chunk is taken as normal once the queue is free");
+        ok(r.heldForTest() == 0, "...and handed over with the next chunk once the queue is free");
+        ok(waitFor([&] { return r.queuedForTest() == 0; }, 3000) && r.droppedSamples() - d0 == 0, "...and taken as normal, nothing lost");
+        {   // ★ held for longer than kHeldSec: the oldest held chunks go (counted, bridged) — the hold is bounded
+            const uint64_t d1 = r.droppedSamples(), b1 = r.busyDrops();
+            auto held = r.holdQueueForTest();
+            for (int i = 0; i < 40; i++) r.feedIq(blk.data(), (int)blk.size());   // 320 000 samples, 1.28 s at 250 kS/s
+            const size_t keep = r.heldForTest();
+            ok(keep * 8000 <= (size_t)(250000 * bg::BgRunner::kHeldSec) + 8000 && r.busyDrops() - b1 == 40 - keep
+               && r.droppedSamples() - d1 == (40 - keep) * 8000,
+               "★ the hold is bounded at " + std::to_string(bg::BgRunner::kHeldSec) + " s: " + std::to_string(keep) + " chunks held, "
+               + std::to_string(r.busyDrops() - b1) + " oldest dropped and counted");
+        }
         r.stop();
     }
 }

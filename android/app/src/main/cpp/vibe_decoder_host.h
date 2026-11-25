@@ -78,6 +78,7 @@
 #include "vibe_thread.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -2875,6 +2876,7 @@ private:
      *  and the chips. One line a minute, decode thread, spotsMtx_ held. */
     std::mutex diagMtx_;
     std::map<std::string, int> diagSpots_;
+    std::map<std::string, std::array<uint64_t, 3>> diagPer_;   // ★ b94: each slotted mode's live / idle / shed periods at the last minute line
     std::map<std::string, uint64_t> diagCpu_;   // ★ V12 beta91: each IQ chip's engine CPU at the last minute line
     double diagAt_ = 0, diagMain_ = 0, diagExtra_ = 0, diagLagMin_ = 1e9, diagLagMax_ = -1e9;
     double diagCentre_ = 0, diagRate_ = 0;
@@ -2893,13 +2895,24 @@ private:
         for (const auto& m : stAll) {
             chips += " " + m.mode + ":" + digi::stateWord(m.state);
             // ★ V12 beta91: the CW / RTTY chips' own threads, % of one core over the minute (what they cost on this box)
+            /* ★★ b94 (the Pi 500's 40 m FT8, 11-25): a slotted mode's gate periods this minute — decoded / dropped EMPTY by the
+             *  activity gate / SHED over budget ("FT8:active[3/1/0]"). The chip alone is the state at the minute's end: a
+             *  mode whose periods were mostly dropped still read "active", and nothing in the log said its engine was fed
+             *  almost nothing. */
+            if (!m.iq) {
+                auto& w = diagPer_[m.mode];
+                char c[48]; std::snprintf(c, sizeof c, "[%llu/%llu/%llu]", (unsigned long long)(m.live - std::min(m.live, w[0])),
+                                          (unsigned long long)(m.idle - std::min(m.idle, w[1])), (unsigned long long)(m.shed - std::min(m.shed, w[2])));
+                chips += c;
+                w[0] = m.live; w[1] = m.idle; w[2] = m.shed;
+            }
             if (m.iq) {
                 const uint64_t was = diagCpu_[m.mode]; diagCpu_[m.mode] = m.cpuNs;
                 const double span = b.utc - diagAt_;
                 if (span > 0 && m.cpuNs >= was) { char c[32]; std::snprintf(c, sizeof c, "(%.1f%%)", 100.0 * (double)(m.cpuNs - was) / 1e9 / span); chips += c; }
             }
         }
-        char line[640];
+        char line[1024];
         std::snprintf(line, sizeof line,
                       "Band decode, last %.0f s of capture: main slice %.1f s fed (%.0f S/s at %.4f MHz), extra slices %.1f s; "
                       "decode %.2f-%.2f s behind the capture; IQ blocks dropped %llu; gaps bridged %.2f s (all slices); slots decoded %llu, skipped %llu; spots:%s; chips:%s",

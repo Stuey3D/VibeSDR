@@ -1410,6 +1410,7 @@ public:
         startDecoders();
         publish();
         run_.store(true);
+        { std::lock_guard<std::mutex> hl(heldM_); held_.clear(); heldSamples_ = 0; }
         { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; gapSamples_ = 0; missed_.store(0); }
         th_ = std::thread([this] { loop(); });
         running_.store(true);
@@ -1458,6 +1459,7 @@ public:
     void stop(bool sayIt = true) {
         const bool was = running_.exchange(false);
         { std::lock_guard<std::mutex> lk(qm_); run_.store(false); q_.clear(); qSamples_ = 0; }
+        { std::lock_guard<std::mutex> hl(heldM_); held_.clear(); heldSamples_ = 0; }
         qcv_.notify_all();
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
@@ -1487,21 +1489,46 @@ public:
      *  waiting on background decoding. So the DSP thread TRY-locks: busy = this chunk is not taken (counted in dropped_
      *  and busyDrops_, and bridged as a hole before the next chunk that is, exactly like an oldest-dropped one). Background
      *  decoding loses 32 ms; the listener loses nothing. */
+    /* ★★★ b94 (11-25) — …BUT NEVER DROPS FOR IT EITHER. A busy queue used to cost the chunk, and on the Pi 500's RSP1B
+     *  (8 MS/s, a USB packet of ~1–2 k samples per DSP-thread chunk) the worker pops so often that the try-lock missed
+     *  ~0.3–0.4 s of IQ a minute as HUNDREDS of tiny holes. Each hole is a phase step in every Band slice (the channeliser
+     *  is fed the two sides back to back) and its bridge lands up to a hop early; a few a second smear a tone by ~10 Hz —
+     *  FT8 / JS8 (6.25 Hz tones) and WSPR (1.46 Hz) decoded nothing on 40 m and 30 m from the beta92 install on, FT4 (21 Hz)
+     *  and FT2 kept going (replayed: the same 40 m IQ, 1 ms chunks, 1.5 s/min of busy misses: FT8 148 spots → 0).
+     *  Now a chunk the DSP thread cannot hand over is HELD on its side (heldM_ is the DSP thread's own — nobody else takes
+     *  it but start/stop) and goes in, in order, ahead of the next chunk that finds the queue free. Still never waits on
+     *  the worker. Bounded: past kHeldSec the oldest held chunk goes (counted in busyDrops_ and dropped_, bridged as
+     *  before) — a worker preempted for that long is falling behind anyway, and the queue's own cap then decides. */
+    static constexpr double kHeldSec = 0.25;
     void feedIq(const cf32* iq, int n, double captureUtc = NAN) {
         if (!running_.load(std::memory_order_relaxed) || n <= 0) return;
         QItem it; it.v.assign(iq, iq + n);
         it.utc = std::isfinite(captureUtc) ? captureUtc : vibeUtcNow();
+        std::lock_guard<std::mutex> hl(heldM_);   // ★ the DSP thread's own (uncontended but for start/stop)
         {
             std::unique_lock<std::mutex> lk(qm_, std::try_to_lock);
             if (!lk.owns_lock()) {
-                missed_.fetch_add((size_t)n, std::memory_order_relaxed);
-                dropped_.fetch_add((uint64_t)n, std::memory_order_relaxed);
-                busyDrops_.fetch_add(1, std::memory_order_relaxed);
+                busyHeld_.fetch_add(1, std::memory_order_relaxed);
+                heldSamples_ += (size_t)n;
+                held_.push_back(std::move(it));
+                const size_t hcap = (size_t)std::max(16384.0, p_.sampleRate * kHeldSec);
+                while (heldSamples_ > hcap && held_.size() > 1) {   // ★ the oldest held goes: a hole, bridged
+                    const size_t k = held_.front().v.size();
+                    heldSamples_ -= k;
+                    missed_.fetch_add(k + held_.front().missBefore, std::memory_order_relaxed);
+                    dropped_.fetch_add((uint64_t)k, std::memory_order_relaxed);
+                    busyDrops_.fetch_add(1, std::memory_order_relaxed);
+                    held_.pop_front();
+                }
                 return;
             }
-            it.missBefore = missed_.exchange(0, std::memory_order_relaxed);   // ★ the hole sits just before THIS chunk
-            q_.push_back(std::move(it));
-            qSamples_ += (size_t)n;
+            held_.push_back(std::move(it));
+            for (QItem& h : held_) {
+                h.missBefore += missed_.exchange(0, std::memory_order_relaxed);   // ★ the hole sits just before THIS chunk
+                qSamples_ += h.v.size();
+                q_.push_back(std::move(h));
+            }
+            held_.clear(); heldSamples_ = 0;
             const size_t cap = (size_t)std::max(65536.0, p_.sampleRate * 0.5);
             while (qSamples_ > cap && q_.size() > 1) {
                 qSamples_ -= q_.front().v.size();
@@ -1517,6 +1544,10 @@ public:
     std::unique_lock<std::mutex> holdQueueForTest() { return std::unique_lock<std::mutex>(qm_); }
     /** ★ beta92: chunks the DSP thread did not hand over because the worker held the queue at that instant (test seam). */
     uint64_t busyDrops() const { return busyDrops_.load(std::memory_order_relaxed); }
+    /** ★ b94: chunks the DSP thread found the queue busy for and HELD (handed over with the next one) — test seam, admin. */
+    uint64_t busyHeld() const { return busyHeld_.load(std::memory_order_relaxed); }
+    /** ★ b94 test seam: chunks held on the DSP thread's side now. */
+    size_t heldForTest() { std::lock_guard<std::mutex> hl(heldM_); return held_.size(); }
 
     // ── ★★★ V12 2026-11-24 EASING OFF FOR LISTENERS (vibe_bg_ease.h, docs/v12/BG-EASE.md) ─────────────────────────────
     /** One step in effect: which VFO, what was done, and what it cost when taken (% of one core, -1 unknown). */
@@ -2275,6 +2306,10 @@ private:
     struct QItem { std::vector<cf32> v; double utc = 0; size_t missBefore = 0; };   // ★ missBefore: see feedIq (beta92)
     std::atomic<size_t> missed_{0};          // ★ beta92: samples feedIq could not hand over since the last one it did
     std::atomic<uint64_t> busyDrops_{0};
+    std::atomic<uint64_t> busyHeld_{0};      // ★ b94: chunks held for a busy queue (handed over late, not lost)
+    std::mutex heldM_;                       // ★ b94: the DSP thread's side of the hand-over (feedIq; start/stop clear it)
+    std::deque<QItem> held_;
+    size_t heldSamples_ = 0;
     std::deque<QItem> q_;
     size_t qSamples_ = 0;
     size_t gapSamples_ = 0;               // ★ dropped since the worker last took a chunk (bridged for Band VFOs)
