@@ -137,7 +137,12 @@ try {
   const sp = await sock(S, 'sl2m00001');
   ok(await until(() => jsons(sp, 'sat_labels').some((m) => m.sats.length), 12000), `sat_labels arrives under the ISS (${issLoc}), not in satellite mode`);
   const m0 = jsons(sp, 'sat_labels').find((m) => m.sats.length);
-  const v = m0?.sats?.find((s) => s.id === 'ISS' && s.tx === 'Voice / SSTV');
+  // ★ 11-25: the server is put under the ISS's sub-point of a moment ago, so its FIRST label can land at closest approach,
+  //   where the true Doppler is ~0 (23 Hz, then −202 Hz 4 s later — the server now starts within about a second). Judge
+  //   the first label once the bird is past overhead (|shift| > 50 Hz), within the same window.
+  const vOf = (m) => m?.sats?.find((s) => s.id === 'ISS' && s.tx === 'Voice / SSTV');
+  await until(() => jsons(sp, 'sat_labels').some((m) => Math.abs((vOf(m)?.hz ?? 145800000) - 145800000) > 50), 12000);
+  const v = vOf(jsons(sp, 'sat_labels').find((m) => Math.abs((vOf(m)?.hz ?? 145800000) - 145800000) > 50)) ?? vOf(m0);
   ok(!!v && Math.abs(v.hz - 145800000) > 50 && Math.abs(v.hz - 145800000) < 4000 && v.m === 'nfm' && v.el > 30,
      `ISS Voice / SSTV at its Doppler-shifted ${v ? (v.hz / 1e6).toFixed(4) : '?'} MHz (${v ? v.hz - 145800000 : '?'} Hz, el ${v?.el})`);
   ok(!!m0?.sats?.find((s) => s.id === 'ISS' && s.tx === 'APRS'), 'its APRS downlink too');
