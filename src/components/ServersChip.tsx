@@ -25,7 +25,8 @@
  */
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useListNav, noteTouchInteraction } from './PanelNav';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, View, Text, Pressable, StyleSheet } from 'react-native';
+import { EDGE_TAB_W, EDGE_TAB_H } from './edgeChipGeometry';
 import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
@@ -59,6 +60,12 @@ type Props = {
   /** ★ The collapsed chip's width, so the receiver's name opposite can stop short of it (2026-10-16: on an
    *  iPhone 12 "Northampton · 52.31, -0.88 · IO92nh" ran underneath the chip). */
   onChipWidth?: (w: number) => void;
+  /** ★★ TUCKED (SDRScreen: a decoder / DAB / Advanced RDS box would cover the full chip — serversChipCollapse.ts): the
+   *  chip is its icon-only TAB on the left edge, the health / time edge tabs' language mirrored. Same tap (the menu),
+   *  same spoken label. False = the full "‹ Servers" button, as always. */
+  compact?: boolean;
+  /** The window's left safe-area inset: the tab sits on the physical edge and pads by it, as the edge tabs do. */
+  edgeInset?: number;
 };
 
 // Amber pill, shrunk ~12% from the first mockup (which read a touch chunky).
@@ -72,6 +79,8 @@ export default function ServersChip({
   closeToken = 0,
   onExpandedChange,
   onChipWidth,
+  compact = false,
+  edgeInset = 0,
 }: Props) {
   const { theme: t } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -105,6 +114,19 @@ export default function ServersChip({
   const font  = t.font;      // Atkinson (the UI face; Nixie One is only ever the faceplate's, in neon)
 
   const collapse = useCallback(() => setExpanded(false), []);
+
+  /* ★ Full ↔ tab: a short fade-in of the new form (the deck's ease-out); none at all with Reduce Motion. */
+  const fade = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useRef(false);
+  useEffect(() => { AccessibilityInfo.isReduceMotionEnabled().then((v) => { reduceMotion.current = v; }).catch(() => {}); }, []);
+  const firstForm = useRef(true);
+  useEffect(() => {
+    if (firstForm.current) { firstForm.current = false; return; }
+    if (reduceMotion.current) { fade.setValue(1); return; }
+    fade.setValue(0);
+    Animated.timing(fade, { toValue: 1, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [compact, fade]);
+  const tucked = compact && !expanded;
   const onHeader = useCallback(() => { setExpanded(false); onBack(); }, [onBack]);
   // ★ Closes as it fires: the refresh replaces what is on screen, and a menu left open over the
   //   reconnect would read as the refresh not having happened.
@@ -164,9 +186,27 @@ export default function ServersChip({
         />
       )}
 
-      <View ref={anchorRef} collapsable={false} style={[{ position: 'absolute', top, left }, expanded && OPEN_LAYER]}>
-        {!expanded ? (
+      <View ref={anchorRef} collapsable={false}
+        style={[{ position: 'absolute', top, left: tucked ? 0 : left }, expanded && OPEN_LAYER, tucked && TAB_LAYER]}>
+        {tucked ? (
+          // ── Tucked: the icon-only edge tab (the health / time tabs mirrored onto the left edge) ──
+          <Animated.View style={{ opacity: fade }}>
+            <Pressable
+              onPress={() => setExpanded(true)}
+              hitSlop={{ top: 6, bottom: 6, left: 4, right: 44 - EDGE_TAB_W - 4 }}
+              accessibilityRole="button"
+              accessibilityLabel="Servers — tap to switch receiver or return to the list"
+              style={({ pressed }) => [styles.tab, {
+                borderColor: border, width: EDGE_TAB_W + edgeInset, paddingLeft: edgeInset, opacity: pressed ? 0.7 : 1,
+              }]}
+            >
+              <SectionIcon name="instance" size={GLYPH - 2} color={amber} />
+              <Text style={[styles.tabChev, { color: amber }]}>‹</Text>
+            </Pressable>
+          </Animated.View>
+        ) : !expanded ? (
           // ── Collapsed chip ──────────────────────────────────────────────────
+          <Animated.View style={{ opacity: fade }}>
           <Pressable
             onPress={() => setExpanded(true)}
             onLayout={onChipWidth ? (e) => onChipWidth(Math.ceil(e.nativeEvent.layout.width)) : undefined}
@@ -182,6 +222,7 @@ export default function ServersChip({
             <Text style={[styles.chevron, { color: amber, fontFamily: font }]}>‹</Text>
             <Text style={[styles.label, { color: amber, fontFamily: font }]}>Servers</Text>
           </Pressable>
+          </Animated.View>
         ) : (
           // ── Expanded dropdown ───────────────────────────────────────────────
           <View style={[styles.menu, { borderColor: border }]}>
@@ -275,6 +316,8 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
  *  the DAB station strip and the DAB box). Above every layer on the SDR screen; the backdrop sits with it, so a tap
  *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place. */
 const OPEN_LAYER = { zIndex: 300, elevation: 300 } as const;
+/** ★ Tucked, it sits with the edge tabs (EdgeChip, 251) — above the box it is tucked beside, so it can still be tapped. */
+const TAB_LAYER = { zIndex: 251, elevation: 251 } as const;
 
 const styles = StyleSheet.create({
   chip: {
@@ -285,6 +328,11 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 6, shadowOffset: { width: 0, height: 1 },
   },
   chevron:  { fontSize: FONT_SZ, marginTop: -1 },
+  // ★ The tucked tab — EdgeChip's tab mirrored: open and flush on the LEFT (the glass edge), rounded on the right.
+  tab:      { height: EDGE_TAB_H, borderTopRightRadius: 12, borderBottomRightRadius: 12,
+              borderWidth: 1.5, borderLeftWidth: 0, backgroundColor: 'rgba(14,12,8,0.88)',
+              alignItems: 'center', justifyContent: 'center', gap: 2 },
+  tabChev:  { fontSize: 20, fontWeight: '700', lineHeight: 20, marginTop: -2 },
   label:    { fontSize: FONT_SZ, letterSpacing: 0.5 },
   menu: {
     minWidth: 234, borderRadius: 11, borderWidth: 1.2,

@@ -42,7 +42,7 @@
  *   anywhere with Transparency OFF.
  */
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   Animated, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
   type PressableProps, type StyleProp, type TextStyle, type ViewStyle,
@@ -59,6 +59,7 @@ import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
 import type { HalfOpenSplit } from '../utils/duoGeometry';
 import { cornerClearRight, shellPlacement } from '../utils/decoderShellLayout';
+import type { ChipRect } from '../utils/serversChipCollapse';
 
 export type { DecoderTokens } from '../constants/decoderTokens';
 
@@ -138,6 +139,9 @@ export interface DecoderShellProps {
   /** ★★★ The LOWER panel's content when the box is split either side of a fold (useDecoderSplit; half-open BIG on the
    *  iPhone Duo). Ignored everywhere else — the children are the whole box, as they always were. */
   lower?:      React.ReactNode;
+  /** ★ False while the box is on screen but not SHOWN (DecoderPanel stays mounted, faded out, when no decoder runs):
+   *  it then reports no rect to the Servers button (BoxRectsContext). Default true. */
+  shown?:      boolean;
   children:    React.ReactNode;
 }
 
@@ -173,24 +177,64 @@ export function useDecoderSplit(): { upperH: number; lowerH: number; width: numb
            width: sp.x1 - sp.x0 - FRAME_BORDER };
 }
 
+/**
+ * ★★ WHERE THE BOXES ARE, for the Servers button (SDRScreen: it tucks into an edge tab when a box would cover it —
+ * Stuart, 2026-11-25, serversChipCollapse.ts). Each box reports its frame's rect(s) in window coordinates — one, or two
+ * for a split box — and null when it goes or is not shown. Absent (null) = nobody is listening; nothing is measured.
+ */
+export const BoxRectsContext = createContext<((id: number, rects: ChipRect[] | null) => void) | null>(null);
+let nextBoxId = 1;
+function useBoxReport(shown: boolean, count: number) {
+  const report = useContext(BoxRectsContext);
+  const id = useRef(0);
+  if (!id.current) id.current = nextBoxId++;
+  const upper = useRef<View>(null), lowerRef = useRef<View>(null);
+  const rects = useRef<(ChipRect | null)[]>([null, null]);
+  const live = useRef({ shown, count });
+  live.current = { shown, count };
+  const send = useCallback(() => {
+    if (!report) return;
+    const { shown: sh, count: n } = live.current;
+    const out = sh ? rects.current.slice(0, n).filter((r): r is ChipRect => !!r) : [];
+    report(id.current, out.length ? out : null);
+  }, [report]);
+  const measure = useCallback((i: number) => {
+    if (!report) return;
+    const v = (i === 0 ? upper : lowerRef).current as any;
+    v?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+      rects.current[i] = w > 0 && h > 0 ? { x, y, w, h } : null;
+      send();
+    });
+  }, [report, send]);
+  useEffect(() => { send(); }, [shown, count, send]);
+  useEffect(() => () => { report?.(id.current, null); }, [report]);
+  const onUpper = useCallback(() => measure(0), [measure]);
+  const onLower = useCallback(() => measure(1), [measure]);
+  return { upper, lowerRef, onUpper, onLower };
+}
+
 export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, borderColor,
-  wrapStyle, onTouchStart, lower, children }: DecoderShellProps) {
+  wrapStyle, onTouchStart, lower, shown = true, children }: DecoderShellProps) {
   const avoid = useContext(DecoderAvoidContext);
   const [rows, setRows] = useState<{ y: number; h: number } | null>(null);
   const clearRight = rows ? cornerClearRight(avoid.rects, avoid.windowW, rows, maxWidth) : 8;
   const place = shellPlacement(avoid, { tall, bottom, maxWidth, maxHeight, clearRight });
+  const hasLower = place.kind === 'split' && lower != null && lower !== false;
+  const box = useBoxReport(shown, hasLower ? 2 : 1);
   if (place.kind === 'split') {
     /* ★★★ HALF-OPEN BIG: two frames, NOTHING on the crease — the waterfall shows through the gap. The upper one is
      *  anchored just above the fold and grows up to the top (as tall as its content asks); the lower one sits on the
      *  bottom edge and grows up to the fold. Each is the full faceplate frame, so they read as one box in two halves. */
     return (<>
-      <Animated.View style={[sh.wrap, place.upper.wrap, wrapStyle]} pointerEvents="box-none">
+      <Animated.View style={[sh.wrap, place.upper.wrap, wrapStyle]} pointerEvents="box-none" onLayout={box.onUpper}>
         <ShellFrame tall borderColor={borderColor} maxHeight={place.upper.maxHeight}
+                    frameRef={box.upper} onFrameLayout={box.onUpper}
                     onTouchStart={onTouchStart}>{children}</ShellFrame>
       </Animated.View>
-      {lower != null && lower !== false && (
-        <Animated.View style={[sh.wrap, place.lower.wrap, wrapStyle]} pointerEvents="box-none">
+      {hasLower && (
+        <Animated.View style={[sh.wrap, place.lower.wrap, wrapStyle]} pointerEvents="box-none" onLayout={box.onLower}>
           <ShellFrame tall borderColor={borderColor} maxHeight={place.lower.maxHeight}
+                      frameRef={box.lowerRef} onFrameLayout={box.onLower}
                       onTouchStart={onTouchStart}>{lower}</ShellFrame>
         </Animated.View>
       )}
@@ -200,8 +244,9 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
     /* ★ box-none: the wrap spans the screen's width so it can centre the box; without this its
        empty sides ate taps meant for the waterfall on anything wider than the box. */
     <Animated.View style={[sh.wrap, place.wrap, wrapStyle]} pointerEvents="box-none"
-      onLayout={(e) => { const { y, height } = e.nativeEvent.layout; setRows((p) => (p && p.y === y && p.h === height ? p : { y, h: height })); }}>
+      onLayout={(e) => { const { y, height } = e.nativeEvent.layout; setRows((p) => (p && p.y === y && p.h === height ? p : { y, h: height })); box.onUpper(); }}>
       <ShellFrame tall={tall} borderColor={borderColor} onTouchStart={onTouchStart}
+                  frameRef={box.upper} onFrameLayout={box.onUpper}
                   maxWidth={place.maxWidth} maxHeight={place.maxHeight}>
         {children}
       </ShellFrame>
@@ -210,8 +255,10 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
 }
 
 /** The frame itself — border, radius, shadow, glass / plate — drawn once per panel (twice for a split box). */
-function ShellFrame({ tall, borderColor, maxWidth, maxHeight, onTouchStart, children }: {
+function ShellFrame({ tall, borderColor, maxWidth, maxHeight, onTouchStart, frameRef, onFrameLayout, children }: {
   tall: boolean; borderColor?: string; maxWidth?: number; maxHeight?: number; onTouchStart?: () => void;
+  /** The frame itself, measured for BoxRectsContext (the wrap spans the width; the frame is the box). */
+  frameRef?: React.Ref<View>; onFrameLayout?: () => void;
   children: React.ReactNode;
 }) {
   const tk = useDecoderTokens();
@@ -236,7 +283,7 @@ function ShellFrame({ tall, borderColor, maxWidth, maxHeight, onTouchStart, chil
                     solid != null && { backgroundColor: solid },
                     opaque && NO_DROP_SHADOW,
                     maxHeight != null && Number.isFinite(maxHeight) && { maxHeight }]}
-            onTouchStart={onTouchStart}>
+            ref={frameRef} onLayout={onFrameLayout} onTouchStart={onTouchStart}>
         {metal ? (
           // ★ Opaque brushed metal, drawn once (ChassisPlate caches it until the box resizes).
           <ChassisPlate plate={plate} radius={RADIUS} />

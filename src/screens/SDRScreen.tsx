@@ -216,7 +216,8 @@ import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow, UiWindowOver
 import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
 import { halfOpenSplit } from '../utils/duoGeometry';
 import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
-import { DecoderAvoidContext } from '../components/DecoderShell';
+import { DecoderAvoidContext, BoxRectsContext } from '../components/DecoderShell';
+import { chipCollapsed, CHIP_EXPAND_DELAY_MS, type ChipRect } from '../utils/serversChipCollapse';
 import { EDGE_TAB_W, EDGE_TAB_H } from '../components/edgeChipGeometry';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
@@ -3189,6 +3190,36 @@ export default function SDRScreen({ route, navigation }: Props) {
     const y = clearBelow(reserved, serversLeft, serversLeft + Math.max(serversChipW, 120), screenH);
     return Math.max(chromeTop + 46, y > 0 ? y + 8 : 0);
   })();
+  /* ★★★ THE SERVERS BUTTON TUCKS INTO AN EDGE TAB WHEN A BOX WOULD COVER IT (Stuart, 2026-11-25: "I think the servers
+   *  button has always clipped, especially on phones. Wonder if it's worth making it collapsible too" — "in waterfall
+   *  mode it's there fully"; "it will help the SE massively"). Every decoder box, the DAB box and Advanced RDS report
+   *  where they are (DecoderShell BoxRectsContext); when any of them meets the FULL chip's rect the chip becomes its
+   *  icon-only tab on the left edge (ServersChip `compact`), over a plain waterfall it is the full button. It tucks at
+   *  once and comes back only after CHIP_EXPAND_DELAY_MS with nothing over it, so a box resizing never makes it flicker. */
+  const boxRectsRef = useRef(new Map<number, ChipRect[]>());
+  const [boxRectsVer, setBoxRectsVer] = useState(0);
+  const onBoxRects = useCallback((id: number, rects: ChipRect[] | null) => {
+    const m = boxRectsRef.current, prev = m.get(id);
+    if (!rects) { if (!prev) return; m.delete(id); }
+    else {
+      if (prev && prev.length === rects.length && prev.every((r, i) =>
+        Math.abs(r.x - rects[i].x) < 1 && Math.abs(r.y - rects[i].y) < 1 && Math.abs(r.w - rects[i].w) < 1 && Math.abs(r.h - rects[i].h) < 1)) return;
+      m.set(id, rects);
+    }
+    setBoxRectsVer((v) => v + 1);
+  }, []);
+  /** The FULL chip (its last measured width; ~38 pt tall) — never the tab's, or tucking would undo itself. */
+  const chipOverlap = useMemo(() => chipCollapsed(
+    { x: serversLeft, y: serversTop, w: serversChipW > 0 ? serversChipW : 120, h: 38 },
+    [...boxRectsRef.current.values()].flat()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [serversLeft, serversTop, serversChipW, boxRectsVer]);
+  const [chipCompact, setChipCompact] = useState(false);
+  useEffect(() => {
+    if (chipOverlap) { setChipCompact(true); return; }
+    const t = setTimeout(() => setChipCompact(false), CHIP_EXPAND_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [chipOverlap]);
   /** A centred banner's top (muted / paused / reconnect): the same line, clear of a system rect over the middle. */
   const bannerTop = (() => {
     const y = clearBelow(reserved, screenW * 0.2, screenW * 0.8, screenH);
@@ -10472,7 +10503,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers button at the top left is your Back button. While a decoder box covers its spot it tucks into a small tab on the left edge; tap that just the same. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -10540,12 +10571,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  id suggest splitting the data and treat the decoder box as 2 halves"; duoGeometry halfOpenSplit). Only while the
    *  box is beside the deck (halfSide); null = no room for two panels, and BIG is not offered (the box stays below the
    *  fold). */
-  /* ★ The upper panel starts below the SERVERS CHIP (top-left, ours, drawn above the boxes): under it the chip covered
-   *  the panel's first lines and took their taps (seen on the first half-open BIG, 2026-11-25). The chip is ~38 pt. */
+  /* ★ The upper panel runs to the top edge (below any system rect over the column). It used to start below the Servers
+   *  chip, which covered its first lines; the chip now tucks into its edge tab when a box meets it (chipCompact). */
   const halfSplit = useMemo(() => (tableFold && halfSide
     ? halfOpenSplit(reserved, tableFold, screenH, { x0: 8, x1: screenW - (Math.ceil(screenW / 2) + 4) },
-                    { top: controlsHidden ? chromeTop : serversTop + 40, bottomInset })
-    : null), [tableFold, halfSide, reserved, screenH, screenW, chromeTop, bottomInset, controlsHidden, serversTop]);
+                    { top: chromeTop, bottomInset })
+    : null), [tableFold, halfSide, reserved, screenH, screenW, chromeTop, bottomInset]);
   const decoderAvoid = useMemo(() => {
     if (tabletop) {
       const bottom = halfSide ? bottomInset + 8 : pillBottom + 8;
@@ -10562,6 +10593,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   return (
     <DecoderAvoidContext.Provider value={decoderAvoid}>
+    <BoxRectsContext.Provider value={onBoxRects}>
     <View
       style={styles.root}
       // Capture-phase touch sniff (returns false — never steals the touch):
@@ -11735,6 +11767,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
           onChipWidth={setServersChipW}
+          compact={chipCompact}
+          edgeInset={insets.left}
         />
         </PanelBoundary>
       )}
@@ -12783,6 +12817,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       ) : null}
     </View>
+    </BoxRectsContext.Provider>
     </DecoderAvoidContext.Provider>
   );
 }

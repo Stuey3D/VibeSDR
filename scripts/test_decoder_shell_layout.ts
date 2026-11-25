@@ -54,7 +54,7 @@ ok(same === n, `${same} / ${n} placements identical with no hinge`);
   const R: ReservedRegions = { ...NO_REGIONS, division: [fold], statusBar: [{ x: 560, y: 0, w: 109, h: 40 }],
                                hinge: { status: 'partiallyOpen', angleDeg: 110 } };
   const col = { x0: 8, x1: W - (Math.ceil(W / 2) + 4) };
-  const sp = halfOpenSplit(R, fold, H, col, { top: 46 + 40, bottomInset: 21 })!;
+  const sp = halfOpenSplit(R, fold, H, col, { top: 0, bottomInset: 21 })!;
   const frameBottom = 21 + 8, halfTop = Math.ceil(fold.y + fold.h) + 8;
   const avoid: ShellAvoid = { rects: [], windowW: W, frame: { left: 8, right: Math.ceil(W / 2) + 4, bottom: frameBottom,
     maxHeight: H - halfTop - frameBottom, split: { ...sp, windowH: H } } };
@@ -72,7 +72,7 @@ ok(same === n, `${same} / ${n} placements identical with no hinge`);
     const u = span(big.upper), l = span(big.lower);
     ok(u.bottom <= fold.y - 8, `upper panel ends ${fold.y - u.bottom} pt above the fold (y ${u.bottom})`);
     ok(l.top >= fold.y + fold.h + 8, `lower panel starts ${l.top - fold.y - fold.h} pt below it (y ${l.top})`);
-    ok(u.top >= 86 + 8, `upper panel starts below the Servers chip (y ${u.top})`);
+    ok(u.top === 8, `upper panel runs to the top edge (y ${u.top}) — the Servers chip tucks into its tab instead`);
     ok(l.bottom === H - frameBottom, 'lower panel on the bottom line, like SMALL');
     ok(big.upper.wrap.left === 8 && big.upper.wrap.right === W - col.x1 && big.lower.wrap.right === W - col.x1,
        'both panels the left column\'s width');
@@ -124,7 +124,7 @@ ok(same === n, `${same} / ${n} placements identical with no hinge`);
   for (const W of [669, 624, 640, 744, 820]) {
     const H = Math.round(W * 1.42), fold = { x: 0, y: Math.round(H * 0.48), w: W, h: 40 };
     const sp = halfOpenSplit({ ...NO_REGIONS, division: [fold] }, fold, H, { x0: 8, x1: W - (Math.ceil(W / 2) + 4) },
-                             { top: 86, bottomInset: 21 })!;
+                             { top: 0, bottomInset: 21 })!;
     const panelW = sp.x1 - sp.x0 - 2;
     for (const inset of [0, 8]) {
       const body = panelW - 2 * inset;
