@@ -157,6 +157,7 @@
 #include "vibe_sat_if.h"         // ★★ V12 beta92 the satellite pass's IF filter — the narrowest that holds the signal + its Doppler
 /** ★★ V12 the one satellite engine of this process (curated birds, element sets, the server's sky, every lock). */
 static vibe::sat::Engine& satEngine() { return vibe::sat::engine(); }   // ★ the header's singleton: decoders reach it too
+#include "vibe_sat_offer.h"       // ★★ beta94 "sat" in the published modes (the directory's satellite badge)
 #include "vibe_sat_observer.h"    // ★★ beta94 the observer's two sources: the owner's location wins, the phone's fills in
 static std::mutex g_satObsMtx;
 static vibe::sat::ObserverSource g_satObs;   // under g_satObsMtx
@@ -44634,6 +44635,12 @@ static std::string vsSatWhyNot() {
     if (satEngine().timeState(satClock()) == "none") return "NO TIME \xe2\x80\x94 this server's clock has not been checked yet";
     return "";
 }
+/** ★★ beta94 SATELLITE MODE FOR THE DIRECTORY (Stuart 11-25) — "sat" in the published `modes`; the rule, and why, is in
+ *  vibe_sat_offer.h (reach · a location · an NFM / USB / LSB demodulator left on · "sat" not blocked). */
+static bool vsSatOffered() {
+    return vibe::sat::offeredInModes(vsSatAnyReach(), satEngine().haveObserver(),
+                                     [](const char* m) { return vsModeBlocked(m); });
+}
 /** "" = the mode can run here now — on `b`, or (null) on at least one band. */
 static std::string vsSondeWhyNot(const vibers41::Band* b) {
     if (vsModeBlocked("sondes")) return "the server owner has switched radiosondes off on this receiver";
@@ -45458,6 +45465,10 @@ static std::string vsTunableJson() {
             if (k == "rds" && vsModeBlocked("wfm")) continue;   // no FM, no RDS of any kind
             m += (first ? "\"" : ",\"") + k + "\""; first = false;
         }
+        /* ★★ beta94 SATELLITE MODE (vsSatOffered) — not a Setup switch, so not in kOffer's rc.has() path: the directory's
+         *  satellite badge and its "Satellite" filter read it. Every client asks `modes` with includes() for the ids it
+         *  knows, so an id it does not know draws nothing. LAST, after the names an older app keeps. */
+        if (vsSatOffered()) { m += first ? "\"sat\"" : ",\"sat\""; first = false; }
         m += "]";
         j += ",\"modes\":" + m;
         // ★ V12 FreeDV: the sub-modes this server's libcodec2 can run — the clients' manual choices under AUTO
