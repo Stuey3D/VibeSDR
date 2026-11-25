@@ -12,6 +12,10 @@
 //     radial and ident, and is marked as heard in window 3.
 //   • Fresh / faded: a beacon heard this sweep is fresh; one not heard for a whole sweep fades.
 //   • SIMD = scalar: the same window decoded with the scalar twins reads the same radials.
+//   • ★★★ beta94 THE BEARING AS THE SECOND WITNESS (testGeometry): one read of a listed ident + the measured radial matching
+//     the station's expected one (from the two positions and its variation) names it — DTY from Stuart's published position;
+//     off by more than the tolerance, no position, too close / too far → not; the SAME-CHANNEL TRAP (EUR / MAH, 115.20) and a
+//     misread name nothing; the radial wraps at 360°.
 //   • The cost per window (one core's share) is printed (the bench row dec_vormap is the figure the setup page reads).
 #include "vibe_vormap_service.h"
 #include "decoders/nav_tx.h"
@@ -201,6 +205,159 @@ static void testSweep() {
     s.stop();
 }
 
+/** ★★★ beta94 THE BEARING AS THE SECOND WITNESS (vibe_vormap_service.h geoCheck_): one read of a listed ident + the measured
+ *  radial matching the radial THAT station should send to this receiver = identified. Driven through the workers' own
+ *  entry points (wordForTest / bearingForTest) — the decode itself is pinned above. */
+static void testGeometry() {
+    std::printf("\n── beta94: one read + a matching radial (the bearing is the second witness) ──\n");
+    Plan p; plan(2.4e6, p);
+    Service s;
+    const int64_t DTY = 116400000, EURCH = 115200000;
+    const vibevor::StationRec* dty = nullptr;
+    for (const auto& c : vibevor::on(116400, 0, false, 0, 0)) if (std::string(c.r->ident) == "DTY") dty = c.r;
+    ok(dty && std::fabs(dty->lat - 52.1803) < 1e-3 && std::fabs(dty->lon + 1.11389) < 1e-3 && std::fabs(dty->var + 4.007) < 1e-3,
+       "DTY Daventry in the list at 52.180, −1.114, slaved variation 4.0° W");
+    if (!dty) return;
+    char b[320];
+    // ★ the receiver: Stuart's (52.29, −0.85 — the XCover's published position, in IO92ng; test-dab-tii-air's) and IO92nh's centre
+    const double sLat = 52.29, sLon = -0.85, nhLat = 52.3125, nhLon = -0.875;
+    double km = NAN;
+    const double expS = vibevor::expectedRadial(*dty, sLat, sLon, &km);
+    const double expNh = vibevor::expectedRadial(*dty, nhLat, nhLon);
+    std::snprintf(b, sizeof b, "DTY's expected radial: %.1f° at 52.29, −0.85 (%.1f km; want 059.7 — true 055.7 + 4° W), %.1f° at IO92nh's centre (want 051.8); "
+                  "on air 11-24 DTY read 054–055° FROM", expS, km, expNh);
+    ok(std::fabs(expS - 59.7) < 0.3 && std::fabs(expNh - 51.8) < 0.3 && km > 20 && km < 25, b);
+    ok(vibevor::angleDiff(359, 1) == 2 && vibevor::angleDiff(1, 359) == 2 && vibevor::angleDiff(10, 350) == 20 && vibevor::angleDiff(180, 0) == 180,
+       "angleDiff wraps: 359°/001° = 2°, 010°/350° = 20°");
+
+    auto fresh = [&](bool havePos, double la, double lo) { s.start(p, havePos, la, lo); };
+
+    // ① THE XCover CASE: "DTY" read ONCE, radial 054 held — identified, and says why
+    fresh(true, sLat, sLon);
+    s.bearingForTest(DTY, 54.0);
+    ok(s.seenForTest(DTY).ident.empty(), "① a radial alone names nothing (no ident read)");
+    s.wordForTest(DTY, "DTY");
+    Service::Seen g = s.seenForTest(DTY);
+    std::snprintf(b, sizeof b, "① DTY read once + radial 054° (expected %.1f°, allowed ±%.1f° at %.0f km) → identified \"%s\" by \"%s\", reads %d, station %s",
+                  expS, geoTolDeg(km), km, g.ident.c_str(), g.idBy.c_str(), g.reads, g.station.c_str());
+    ok(g.ident == "DTY" && g.idBy == "radial" && g.reads == 1 && g.station == "DTY" && std::fabs(g.expRadial - expS) < 0.2 && std::fabs(g.idRadial - 54.0) < 0.01, b);
+    s.buildReportNow();
+    { const std::string r = s.report();
+      ok(r.find("\"ident\":\"DTY\"") != std::string::npos && r.find("\"idBy\":\"radial\",\"reads\":1,\"expRadial\":59.7,\"idRadial\":54.0") != std::string::npos
+         && r.find("\"station\":{\"ident\":\"DTY\"") != std::string::npos && r.find("\"identified\":1") != std::string::npos,
+         "① the report says why: idBy radial, reads 1, expRadial 59.7, idRadial 54.0 — and DTY is on the map"); }
+    // ★ and once named it stays named (the station does not move): a later wild second does not un-name it
+    s.bearingForTest(DTY, 200.0);
+    ok(s.seenForTest(DTY).ident == "DTY", "① …and stays named when a later second reads wild");
+
+    // ① the other order: the read first, the bearing a second later; IO92nh's centre too
+    fresh(true, nhLat, nhLon);
+    s.wordForTest(DTY, "DTY");
+    ok(s.seenForTest(DTY).ident.empty(), "① the read alone (once) names nothing yet");
+    s.bearingForTest(DTY, 54.5);
+    g = s.seenForTest(DTY);
+    ok(g.ident == "DTY" && g.idBy == "radial", "① read first, radial 054.5° a second later at IO92nh (expected 051.8°) → identified");
+
+    // ② one read + a radial OFF by more than the tolerance → not identified (and two reads still do, today's rule)
+    fresh(true, sLat, sLon);
+    s.wordForTest(DTY, "DTY");
+    s.bearingForTest(DTY, expS + geoTolDeg(km) + 0.5);
+    g = s.seenForTest(DTY);
+    std::snprintf(b, sizeof b, "② DTY read once + radial %.1f° (%.1f° off, allowed %.1f°) → NOT identified (\"%s\")", expS + geoTolDeg(km) + 0.5,
+                  geoTolDeg(km) + 0.5, geoTolDeg(km), g.ident.c_str());
+    ok(g.ident.empty() && g.station.empty(), b);
+    s.wordForTest(DTY, "DTY");
+    g = s.seenForTest(DTY);
+    ok(g.ident == "DTY" && g.idBy == "reads" && g.reads == 2, "② …a second read names it by today's rule (idBy reads, reads 2)");
+
+    // ② the bare ±6°: 150 km out the allowance is 0.4°, so 7° off fails and 5° off passes
+    {
+        double la, lo; vibevor::destination(dty->lat, dty->lon, 200.0, 150.0, la, lo);
+        double k2; const double e2 = vibevor::expectedRadial(*dty, la, lo, &k2);
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, std::fmod(e2 + 7.0, 360.0));
+        const bool off7 = s.seenForTest(DTY).ident.empty();
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, std::fmod(e2 - 5.0 + 360.0, 360.0));
+        const bool in5 = s.seenForTest(DTY).ident == "DTY";
+        std::snprintf(b, sizeof b, "② 150 km SW of DTY (expected %.1f°, allowed ±%.1f°): 7° off → not identified, 5° off → identified", e2, geoTolDeg(k2));
+        ok(off7 && in5, b);
+    }
+
+    // ③ WITHOUT A POSITION: today's rule — one read + any radial is not enough; two reads are
+    fresh(false, 0, 0);
+    s.bearingForTest(DTY, 54.0); s.wordForTest(DTY, "DTY");
+    const bool noPos1 = s.seenForTest(DTY).ident.empty();
+    s.wordForTest(DTY, "DTY");
+    g = s.seenForTest(DTY);
+    ok(noPos1 && g.ident == "DTY" && g.idBy == "reads", "③ no position: one read + radial → not identified; the second read → identified (reads)");
+
+    // ④ ★★ THE TRAP — two listed stations on ONE channel, both in range: EUR (Eurach) and MAH (Maisach) on
+    //    115.20, 59 km apart; a receiver between them. Each is judged on its OWN expected radial.
+    {
+        const double la = 48.0, lo = 11.6;
+        const vibevor::StationRec *eur = nullptr, *mah = nullptr;
+        for (const auto& c : vibevor::on(115200, 0, false, 0, 0)) {
+            if (std::string(c.r->ident) == "EUR") eur = c.r;
+            if (std::string(c.r->ident) == "MAH") mah = c.r;
+        }
+        ok(eur && mah, "④ EUR and MAH both listed on 115.20 MHz");
+        if (eur && mah) {
+            double kE, kM;
+            const double eE = vibevor::expectedRadial(*eur, la, lo, &kE), eM = vibevor::expectedRadial(*mah, la, lo, &kM);
+            std::snprintf(b, sizeof b, "④ at 48.0, 11.6: EUR expected %.1f° (%.0f km), MAH %.1f° (%.0f km) — both in range, far apart in radial",
+                          eE, kE, eM, kM);
+            ok(kE > kGeoMinKm && kE < kGeoMaxKm && kM > kGeoMinKm && kM < kGeoMaxKm && vibevor::angleDiff(eE, eM) > 30, b);
+            // the radial is EUR's; "MAH" read once → MAH's geometry fails → nothing
+            fresh(true, la, lo); s.bearingForTest(EURCH, eE + 1.0); s.wordForTest(EURCH, "MAH");
+            g = s.seenForTest(EURCH);
+            ok(g.ident.empty() && g.station.empty(), "④ TRAP: EUR's radial + \"MAH\" read once → NOT identified (MAH's own radial does not match)");
+            // …and EUR read once with the same radial → EUR (not MAH, though MAH was read too)
+            s.wordForTest(EURCH, "EUR");
+            g = s.seenForTest(EURCH);
+            ok(g.ident == "EUR" && g.station == "EUR" && g.idBy == "radial", "④ …then \"EUR\" read once → EUR, by its radial");
+            // MAH's radial + "MAH" once → MAH
+            fresh(true, la, lo); s.bearingForTest(EURCH, eM - 2.0); s.wordForTest(EURCH, "MAH");
+            g = s.seenForTest(EURCH);
+            ok(g.ident == "MAH" && g.station == "MAH", "④ MAH's radial + \"MAH\" once → MAH");
+            // a misread (listed ident, wrong radial for both) and an unlisted misread → nothing
+            fresh(true, la, lo); s.bearingForTest(EURCH, std::fmod(eE + 90.0, 360.0)); s.wordForTest(EURCH, "MAH"); s.wordForTest(EURCH, "EUR"); s.wordForTest(EURCH, "EUT");
+            g = s.seenForTest(EURCH);
+            ok(g.ident.empty(), "④ a radial matching neither + one read each of MAH, EUR and a misread \"EUT\" → NOTHING identified");
+        }
+        // the same at Northampton: "ALM" (Sweden, also 116.40) read once with DTY's radial — ALM is ~1 000 km away: not picked
+        fresh(true, sLat, sLon); s.bearingForTest(DTY, 54.0); s.wordForTest(DTY, "ALM");
+        g = s.seenForTest(DTY);
+        ok(g.ident.empty(), "④ at Northampton, \"ALM\" (116.40, Sweden) read once with DTY's radial → NOT identified (beyond range, wrong radial)");
+    }
+
+    // ⑤ WRAP-AROUND: a receiver due magnetic north of DTY (expected 359°) — 003° matches, 012° does not
+    {
+        double la, lo; vibevor::destination(dty->lat, dty->lon, std::fmod(359.0 + dty->var + 360.0, 360.0), 50.0, la, lo);
+        double k5; const double e5 = vibevor::expectedRadial(*dty, la, lo, &k5);
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, 3.0);
+        const bool wrapIn = s.seenForTest(DTY).ident == "DTY";
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, 12.0);
+        const bool wrapOut = s.seenForTest(DTY).ident.empty();
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, 356.0);
+        const bool wrapIn2 = s.seenForTest(DTY).ident == "DTY";
+        std::snprintf(b, sizeof b, "⑤ wrap-around: expected %.1f° (50 km N): 003° → identified, 356° → identified, 012° → not", e5);
+        ok(std::fabs(vibevor::angleDiff(e5, 359.0)) < 0.2 && wrapIn && wrapIn2 && wrapOut, b);
+    }
+
+    // ⑥ TOO CLOSE (5 km — a position error swings the radial) and FAR BEYOND (400 km): a matching radial does not count
+    {
+        double la, lo; vibevor::destination(dty->lat, dty->lon, 100.0, 5.0, la, lo);
+        double kc; const double ec = vibevor::expectedRadial(*dty, la, lo, &kc);
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, ec);
+        const bool closeNo = s.seenForTest(DTY).ident.empty();
+        vibevor::destination(dty->lat, dty->lon, 100.0, 400.0, la, lo);
+        const double ef = vibevor::expectedRadial(*dty, la, lo);
+        fresh(true, la, lo); s.wordForTest(DTY, "DTY"); s.bearingForTest(DTY, ef);
+        const bool farNo = s.seenForTest(DTY).ident.empty();
+        ok(closeNo && farNo, "⑥ 5 km from DTY and 400 km from it: one read + an exactly matching radial → NOT identified (repeat read still needed)");
+    }
+    s.stop();
+}
+
 int main() {
     std::printf("test-vormap — the VOR / ILS map mode (SIMD: %s)\n", vibe::nav::simdName());
     testPlan();
@@ -210,6 +367,7 @@ int main() {
     testWindow(2.4e6, "an RTL rate", true, &rScalar);
     ok(std::isfinite(rSimd) && std::isfinite(rScalar) && std::fabs(rSimd - rScalar) < 0.05, "SIMD and scalar read the same radial on PTH");
     testSweep();
+    testGeometry();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

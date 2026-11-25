@@ -7,7 +7,7 @@
  * ★ The report is parsed, and the rows, items and fix are worked out, by the app's own code (src/services/vorMap.ts — one
  *   rule, two readers). Everything escaped here.
  */
-import { esc, mhz, vorAgo, vorFixLine, vorMapRowsOrdered, vorMapStatus, vorName, vorRange, vorReading, vorStationWords, VORMAP_EMPTY,
+import { esc, mhz, vorAgo, vorFixLine, vorIdentWhy, vorMapRowsOrdered, vorMapStatus, vorName, vorRange, vorReading, vorStationWords, VORMAP_EMPTY,
          type VorMapReport } from '../../../src/services/vorMap';
 
 export { vorMapItems, vorMapStatus, vorMapSanitise, vorFixLine } from '../../../src/services/vorMap';
@@ -21,7 +21,7 @@ export function vorMapRows(r: VorMapReport | null): string {
   if (!rows.length) return `${head}<div class="trkEmpty">${esc(VORMAP_EMPTY)}</div>`;
   const nowS = r?.now || Date.now() / 1000;
   return head + rows.map((b) => `<div class="trkRow${b.station ? '' : ' nopos'}${b.fresh ? '' : ' vorOld'}" role="button" tabindex="0" data-key="${b.hz}"`
-    + ` title="${esc(b.station ? 'Show on the map' : b.ident ? 'Not in the published list, so not on the map' : 'No ident read yet, so not on the map')}">`
+    + ` title="${esc([vorIdentWhy(b), b.station ? 'Show on the map' : b.ident ? 'Not in the published list, so not on the map' : 'No ident read yet, so not on the map'].filter(Boolean).join(' — '))}">`
     + `<span class="id"><b>${esc(vorName(b))}</b><small>${esc([`${mhz(b.hz)} ${b.kind === 'loc' ? 'LOC' : 'VOR'}`, vorStationWords(b), vorReading(b)].filter(Boolean).join(' · '))}</small></span>`
     + `<span class="sp">${esc(`${b.level.toFixed(0)} dB`)}</span>`
     + `<span class="rg">${b.station ? esc(vorRange(b)) : '<span class="dim">not on the map</span>'}<small>${esc(vorAgo(nowS, b.last))}</small></span></div>`).join('');

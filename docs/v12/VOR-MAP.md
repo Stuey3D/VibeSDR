@@ -71,6 +71,22 @@ persist across sweeps (the vote keeps 5 minutes), so an unlisted station whose i
 second visit if not its first. Localisers: the open data lists 21 (by airport ICAO code, not their real I-idents), so most
 read "not in the open data".
 
+**beta94 — THE BEARING IS THE SECOND WITNESS** (Stuart, the XCover + HF+ 11-24: DTY 116.40 held 054° FROM at −62 dB, "DTY"
+read once in two sweeps, so it stayed unidentified — the 30 Hz bearing comes through where the 1020 Hz Morse only reads now and
+then). With the receiver's position known, **one** read of an ident listed on the channel **plus** the measured radial within
+`geoTolDeg` of the radial THAT station should send here = identified (`geoCheck_`). The expected radial
+(`vibe_vor_db.h expectedRadial`) is the great-circle bearing station → receiver (true) minus the station's own variation
+(`var`, east +: OurAirports' `slaved_variation_deg` — the declination the station's radials are aligned to — else its
+`magnetic_variation_deg`; DTY is slaved to 4.0° W). The tolerance is ±6° (`kGeoTolDeg`) plus what 1 km of position error
+subtends at the station (`kGeoPosKm`: the app publishes the phone's position coarsened to ~1 km; 2.6° at 22 km, 0.4° at
+150 km). Only stations 10–300 km away (`kGeoMinKm`/`kGeoMaxKm`): closer, a position error swings the radial; further, a
+ground receiver does not hear it and a match is chance. Each same-channel candidate is judged on its OWN expected radial, so
+a read of the other station's ident with this one's bearing names nothing, and a misread with a wrong radial names nothing.
+The ident from the air is still required — the bearing replaces the repeat read, never the read. Once named this way it
+stays named (the station does not move). Without a position: the old rule. The report carries why: `idBy`
+("votes" | "reads" | "radial"), `reads`, and for the bearing `expRadial` / `idRadial`; the card says it in words
+(`vorIdentWhy`: "ident read once · radial matches (054° vs 060° expected)").
+
 **Fresh / faded**: heard within the last sweep (one full pass, plus one dwell — a station heard early in one visit and late in
 the next stays bright); otherwise faded, still listed.
 
@@ -85,7 +101,7 @@ the next stays bright); otherwise faded, still listed.
   `modes` (LAST — an app before beta93 kept only the first 40 names of that list; it now keeps 96).
 - `{"type":"vormap", now, rate, window, windows, wlo, whi, centre, sweep, inWin, dwell, progress, pos, wins:[[lo,hi]…],
   beacons:[{hz, kind:"vor"|"loc", win, ident, reading, votes, held, level, first, last, fresh, wpm?, radial?, sigma?, trueBrg?,
-  ddm?, sdm?, station?:{ident, name, cc, lat, lon, var, dme, km10?, brg?}}], heard, identified, dropped, credit}` once a second
+  ddm?, sdm?, idBy?, reads?, expRadial?, idRadial?, station?:{ident, name, cc, lat, lon, var, dme, km10?, brg?}}], heard, identified, dropped, credit}` once a second
   and at once to a joiner; `vormap_off`; `vormap_error {why}`. Distances to 10 km (`vibe_nav_run.h`'s precision for listeners).
 
 ## The map (both clients)
@@ -123,7 +139,7 @@ spread over its four. The benchmark's row on that box sets the switch's default 
 
 | Suite | What | Result |
 |---|---|---|
-| `test-vormap` | the plan (RTL 5, 2.048 → 6, 3.2 → 4, RSP 8 / 10 → 2, 20 → 1, under 1 MS/s none; one window per channel; centred between channels); one window with 4 VORs (two on ADJACENT channels) and a localiser at 2.4 and 8 MS/s: radials ±2° (worst 0.1°), idents read, the listed one named, the DDM, nothing on the 35 / 95 empty channels; SIMD = scalar; the sweep 0→1→2→3→4→0, a beacon only in window 3 found with its radial and station; fresh → faded after a silent sweep, nothing false on 200 channels | **46 / 0** |
+| `test-vormap` | the plan (RTL 5, 2.048 → 6, 3.2 → 4, RSP 8 / 10 → 2, 20 → 1, under 1 MS/s none; one window per channel; centred between channels); one window with 4 VORs (two on ADJACENT channels) and a localiser at 2.4 and 8 MS/s: radials ±2° (worst 0.1°), idents read, the listed one named, the DDM, nothing on the 35 / 95 empty channels; SIMD = scalar; the sweep 0→1→2→3→4→0, a beacon only in window 3 found with its radial and station; fresh → faded after a silent sweep, nothing false on 200 channels; ★ beta94 the bearing witness — DTY from 52.29, −0.85 expects 059.7° (read 054 on air: one read + 054 → named), off by more than the tolerance → not, 7° off at 150 km → not, no position → two reads, the same-channel TRAP (EUR / MAH on 115.20: a read of one with the other's radial → nothing; a misread → nothing; ALM from Northampton → nothing), wrap-around 359° / 003°, 5 km and 400 km → not | **68 / 0** |
 | `test-server-vormap` | the real server, fake rtl_tcp `--vor` (HON 113.65 in window 3, DTY 116.40 in window 5) at 2.4 MS/s: a radio held off VHF offers none; vormap / 5 windows / modes; entering, window 1, the step to window 2 at the dwell, HON and DTY found in their windows (radials ±2°, Honiley / Daventry, DTY's true bearing and ~20 km), every window visited, nothing else heard, tune ignored, 1 fps, leaving gives the receiver back exactly; ask before tuning refuses a second listener (logged); the only mode lands a listener and refuses their "off" | **32 / 0** |
 | `test_vormap_app` | sanitise, the list, the status, the map items (named only; the radial through the receiver; faded), the FIX (two radials at the receiver within 0.5 km, three a cluster, 1° error inside its claim, one per station, this sweep only, no fix from an unnamed radial, a shallow crossing said), both clients' wiring, the setup screens | **45 / 0** |
 | `test-radio-caps` | `vormap` on RTL / R2 / HackRF / USRP / RSP, the HF+ too (14 windows, 2026-11-24); never an Icom, an RTL behind a 65 MHz up-converter | **262 / 0** |

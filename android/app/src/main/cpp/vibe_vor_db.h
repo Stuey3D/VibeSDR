@@ -39,6 +39,19 @@ inline double crossTrackKm(double sla, double slo, double brg, double la, double
     ahead = std::cos(rad(b13 - brg)) > 0;
     return std::fabs(dx);
 }
+/** The smallest angle between two bearings (deg, 0–180) — 359° and 001° are 2° apart. */
+inline double angleDiff(double a, double b) { return std::fabs(std::fmod(std::fmod(a - b, 360.0) + 540.0, 360.0) - 180.0); }
+/** ★★ The radial a receiver at (lat, lon) should read from station `r`: the radial a VOR sends is the bearing FROM the
+ *  station TO the receiver, MAGNETIC — the great-circle bearing station → receiver (true), less the station's variation
+ *  (`var`, east +: true = magnetic + var, so magnetic = true − var). `var` is the SLAVED variation the station's radials are
+ *  aligned to where OurAirports gives it, else the site's (gen-vor-navaids.mjs) — the figure the station itself uses, which
+ *  can be years behind today's declination (Daventry is slaved to 4° W; the declination there is now about 0°). `km` = the
+ *  distance (km). */
+inline double expectedRadial(const StationRec& r, double lat, double lon, double* km = nullptr) {
+    double d, brg; distBearing(r.lat, r.lon, lat, lon, d, brg);
+    if (km) *km = d;
+    return std::fmod(brg - r.var + 720.0, 360.0);
+}
 /** The stations of `kind` (0 VOR, 1 localiser) on the 50 kHz channel `khz`, nearest first (by name when no position). */
 inline std::vector<Station> on(int khz, int kind, bool havePos, double lat, double lon) {
     std::vector<Station> v;

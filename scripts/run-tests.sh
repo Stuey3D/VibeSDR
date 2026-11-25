@@ -214,7 +214,8 @@ flags_for() {
     # ★★ V12 VOR / ILS MAP MODE (vibe_vormap_service.h, docs/v12/VOR-MAP.md): the window plan (RTL 5, RSP 2, under 1 MS/s none);
     #    one window with every channel decoded at once at 2.4 and 8 MS/s (four VORs, two on adjacent channels, and a
     #    localiser: radials ±2°, idents, the listed one named, nothing on the empty channels); SIMD = scalar; the sweep finds
-    #    a beacon only in window 3; fresh → faded after a sweep. ~15 s.
+    #    a beacon only in window 3; fresh → faded after a sweep; ★ beta94 one read + a matching radial names it (the same-channel
+    #    trap, wrap-around, too close / too far). ~15 s.
     test-vormap)           echo "-O2 -lpthread -I $VDSP -I $KISS" ;;
     # ★★★ beta94 THE TRANSPONDER FINDER (vibe_xpdr.h, vibe_xpdr_run.h — synthetic IQ: voices, CW, the follow, the engine's follow)
     test-xpdr)             echo "-O2 -I $VDSP" ;;

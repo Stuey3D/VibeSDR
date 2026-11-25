@@ -5,7 +5,7 @@
 // wiring in both clients, both setup screens and the copy. Run: npx tsx scripts/test_vormap_app.ts
 import { readFileSync } from 'node:fs';
 import { vorMapSanitise, vorMapRowsOrdered, vorMapStatus, vorMapItems, vorMapTrackRows, vorFix, vorFixLine, fixRadials, vorReading,
-         vorName, vorStationWords, vorRadialPath, vorSweepWords, VORMAP_HINT, VORMAP_EMPTY } from '../src/services/vorMap';
+         vorName, vorStationWords, vorRadialPath, vorSweepWords, vorIdentWhy, vorCard, VORMAP_HINT, VORMAP_EMPTY } from '../src/services/vorMap';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { if (c) pass++; else { fail++; console.log(`FAIL ${what}`); } };
@@ -58,6 +58,23 @@ ok(/^0\d\d° FROM$/.test(vorReading(rows.find((b) => b.ident === 'DTY')!)), `a V
 ok(vorMapStatus(r0) === 'Window 3 of 5 · 112.00–113.95 MHz · 18 of 30 s · sweep 52 % · 5 heard, 4 identified', `status: "${vorMapStatus(r0)}"`);
 ok(vorMapStatus(null).startsWith('starting the sweep') && /108–118 MHz/.test(VORMAP_EMPTY) && /radial/.test(VORMAP_HINT), 'the words before a report');
 ok(vorSweepWords(5, 30) === '2.5 min' && vorSweepWords(2, 30) === '60 s', 'how long a sweep takes');
+// ★★★ beta94 WHY IT WAS TRUSTED (vorIdentWhy): the server's idBy / reads / expRadial / idRadial, in words on the card
+{
+  const why = vorMapSanitise(report([beacon('DTY', { votes: 0, reads: 1, idBy: 'radial', radial: 54.0, expRadial: 59.7, idRadial: 54.0 }),
+    beacon('HON', { votes: 0, reads: 2, idBy: 'reads' }), beacon('BNN', { idBy: 'votes', votes: 3, reads: 0 }),
+    { hz: 112300000, kind: 'vor', win: 2, ident: '', reading: 'TS', votes: 0, held: 1, radial: 200, level: -40, first: 1, last: 1115, fresh: true, idBy: 'radial' },
+    beacon('DTY', { hz: 116450000, idBy: 'bogus<', expRadial: 999 })]));
+  const w = (hz: number) => vorIdentWhy(why!.beacons.find((b) => b.hz === hz)!);
+  ok(w(116400000) === 'ident read once · radial matches (054° vs 060° expected)', `one read + the radial: "${w(116400000)}"`);
+  ok(w(113650000) === 'ident read twice · listed on this channel', `two reads: "${w(113650000)}"`);
+  ok(w(113750000) === 'read 3 times alike', `consensus: "${w(113750000)}"`);
+  ok(w(112300000) === '', 'no ident: no reason, whatever the field says');
+  const bogus = why!.beacons.find((b) => b.hz === 116450000)!;
+  ok(bogus.idBy === '' && bogus.expRadial === null && w(116450000) === '', 'an unknown idBy / an expected radial off the compass: dropped (an older server says nothing)');
+  const card = vorCard(why!.beacons.find((b) => b.hz === 116400000)!, 1120);
+  ok(card.includes('DTY — ident read once · radial matches (054° vs 060° expected)'), 'the card\'s Ident row says why');
+  ok(/radial matches where you are/.test(VORMAP_EMPTY), 'the empty list says one read can do, with the radial');
+}
 
 // ── the map ──
 const items = vorMapItems(r0);
