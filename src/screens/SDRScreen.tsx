@@ -195,6 +195,7 @@ import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type B
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
+import { receiverPos, serverPosFromLocation, shouldAskPhoneForPlace, type LatLon } from '../services/receiverPlace';
 import { tuneHintLabel } from '../utils/tuneHint';
 import { NavtexAssembler } from '../utils/navtex';
 import { countryForCallsign } from '../services/callsignCountry';
@@ -1590,8 +1591,13 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  (which falls back to Region 1) chose 9 (Stuart, 2026-10-04). /location has lon, or a grid. */
             const lon = typeof j?.lon === 'number' ? j.lon : gridToLatLon(j?.grid || j?.locator || '')?.lon;
             if (typeof lon === 'number' && Number.isFinite(lon)) setRecvLon(lon);
+            /* ★★★ AND THE WHOLE POSITION — the spots map's receiver and every spot distance. Only the longitude
+             *  was kept, so the map fell back to the PHONE's GPS: with none (the simulator, a refused prompt) it
+             *  offered SET LOCATION on a server that shows "52.31, -0.88 · IO92nh" under its name (Stuart,
+             *  2026-11-25). null = the server answered and has no position → the phone may be asked. */
+            setServerPos(serverPosFromLocation(j));
           }
-        } catch { if (!cancelled) setReceiverIso(''); }
+        } catch { if (!cancelled) { setReceiverIso(''); setServerPos(null); } }
         return;
       }
       if (isLocal) {
@@ -1605,7 +1611,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
       if (!cancelled) setReceiverIso('');   // network instance: we don't know where it is
     })();
-    return () => { cancelled = true; setReceiverIso(''); };
+    return () => { cancelled = true; setReceiverIso(''); setServerPos(undefined); };
     // ★★ connectBase: re-ask once the RADIO is chosen. On the front door's address /location is the door's page, not
   //    JSON — so every radio behind a door lost its country (RadioDNS logos) and, now, its ITU region.
   }, [isLocal, isRemoteShim, connectBase]);
@@ -4642,17 +4648,26 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Receiver position for FT8 spot distances (+ the on-device-decoder map).
   // Kiwi: server gps=(lat,lon) via onReceiverLoc. Local hardware: the phone's GPS
   // (same permission as instance-list distance sorting); null until resolved.
+  // ★★★ A VibeServer's OWN position (GET /location) WINS over both — see receiverPlace.ts. undefined = not answered yet,
+  //     null = answered with none (only then is the phone asked). rxPos / rxPosNow() are what everything reads.
   const recvLocRef = useRef<{ lat: number; lon: number } | null>(null);
   const [recvLoc, setRecvLoc] = useState<{ lat: number; lon: number } | null>(null);
+  const [serverPos, setServerPos] = useState<LatLon | null | undefined>(undefined);
+  const rxPos = useMemo(() => receiverPos(serverPos, recvLoc), [serverPos, recvLoc]);
+  const serverPosRef = useRef<LatLon | null | undefined>(undefined);
+  serverPosRef.current = serverPos;
+  /** For callbacks and timers: read at the moment, so a Kiwi gps / picked town set a tick ago counts. */
+  const rxPosNow = () => receiverPos(serverPosRef.current, recvLocRef.current);
+  const askPhoneForPlace = shouldAskPhoneForPlace(isLocal, isRemoteShim, serverPos);
   useEffect(() => {
-    if (!isLocal) return;
+    if (!askPhoneForPlace) return;
     let cancelled = false;
     getUserLocation().then(loc => {
       if (cancelled || !loc) return;
       recvLocRef.current = loc; setRecvLoc(loc);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [isLocal]);
+  }, [askPhoneForPlace]);
 
   const stopSpotFlush = useCallback(() => {
     if (spotTimerRef.current) { clearInterval(spotTimerRef.current); spotTimerRef.current = null; }
@@ -4667,7 +4682,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       spotBufRef.current = [];
       // On-device decoder (Local/Kiwi) sends a TX grid + callsign but no distance
       // or country — derive both here. UberSDR spots already carry them.
-      const rx = recvLocRef.current;
+      const rx = rxPosNow();   // ★ the aerial's position (server first), not the phone's
       for (const s of buf) {
         if (s.distKm == null && s.grid && rx) s.distKm = distanceKmToGrid(rx, s.grid);
         if (!s.country && s.call) s.country = countryForCallsign(s.call);
@@ -4732,7 +4747,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   stations and only the receiver's location tells them apart — which not every server
       //   publishes.
       const forced = timeStationPref !== 'auto' ? timeStationPref : '';
-      const st = forced || timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      const st = forced || timeStationFor(status.frequency, rxPosNow()?.lon ?? null);
       if (!st) {
         timeStationRef.current = '';
         setDecoderStatus('Tune to a time signal first — MSF 60kHz, DCF77 77.5kHz, '
@@ -4764,7 +4779,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (activeDecoder !== 'time') return;
     const want = timeStationPref !== 'auto'
       ? timeStationPref
-      : timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      : timeStationFor(status.frequency, rxPosNow()?.lon ?? null);
     if (!want || want === timeStationRef.current) return;
     openDecoder('time');
   }, [activeDecoder, status.frequency, timeStationPref, openDecoder]);
@@ -12239,8 +12254,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={isLocal ? 'https://localhost' : baseUrl}
         wsBaseOverride={decoderBase}
         sessionUuid={sessionUuid}
-        rxLat={recvLoc?.lat ?? 0}
-        rxLon={recvLoc?.lon ?? 0}
+        rxLat={rxPos?.lat ?? 0}
+        rxLon={rxPos?.lon ?? 0}
         spots={spots}
         onPickCity={() => setCityPickerOpen(true)}
         onClose={() => setLocalMapOpen(false)}
