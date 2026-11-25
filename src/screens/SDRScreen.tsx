@@ -8921,9 +8921,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ A decoder box may rise BESIDE the camera / status column (it narrows clear of it — DecoderShell, DecoderAvoid
    *  below — Stuart: "shrink to the left so that it clears the system status"); only a full-width status band (a Split
    *  View share's) holds it below. */
-  /* ★★ Half-open: BIG runs the full height of the LEFT column (Stuart: "it can expand upwards full length no status to
-   *  worry about" — the pill and camera are top-right), still below anything the system reports on the left. */
-  const boxTopSafe = tableFold ? Math.max(chromeTop + 8, (() => { const y = clearBelow(reserved, 0, screenW / 2, screenH); return y > 0 ? y + 8 : 0; })())
+  /* ★★ Half-open: NOTHING on the crease (Stuart: "dont cover over the crease … treat the decoder box as 2 halves"). Until
+   *  the boxes are split into an upper and a lower panel (owed — per-decoder work), a box stays wholly BELOW the fold,
+   *  so BIG and SMALL are the same height there and BIG is not offered. */
+  const boxTopSafe = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8
     : Math.max(insets.top + 6, (() => {
     let y = 0;
     for (const r of avoidRects(reserved)) if (r.w >= screenW * 0.5 && r.y < screenH * 0.25) y = Math.max(y, r.y + r.h);
@@ -11770,7 +11771,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ vtsBarH is forced to 0 alongside, or everything that reserves space above the bar —
           the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
           that is not there. See the vtsBarH rule further up. */}
-      {!controlsHidden && !advRdsOpen && !boxHidesVts && (
+      {/* ★ Half-open with a box open: the label bar would lie over the box (Stuart) — hidden; the box shows the text. */}
+      {!controlsHidden && !advRdsOpen && !boxHidesVts && !(tableFold && (dabBoxOpen || decoderShown)) && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 anchors={drumAnchors}
