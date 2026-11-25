@@ -38,7 +38,9 @@ export interface BgStatus {
              /** ★ V12 2026-11-24 easing for listeners: VFOs paused, bands with extra modes off, and the line. */
              ease?: { paused: number; chips: number; excused?: boolean; note?: string };
              /** ★★★ beta94 nobody listening: background may use more of the machine (absent = today's budget). */
-             fullCpu?: { cores: number; rttyWorkers?: number; extraSlots?: number } };
+             fullCpu?: { cores: number; rttyWorkers?: number; extraSlots?: number };
+             /** ★★★ beta94 the load ladder: the Band VFOs' decode depth now (0 full … 5 the minimum) and its name. */
+             depth?: number; depthName?: string };
 }
 
 const pct = (v: number | null | undefined) =>
@@ -181,6 +183,8 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
   // ★★★ beta94 (Stuart 11-25: "if nobody is using the pi then the full cpu can be allowed for background use")
   const fc = bgFullCpuText(r?.fullCpu);
   if (fc) head += ` · ${fc}`;
+  // ★★★ beta94 (Stuart: "the depth drops before dropping entire bands"): said only while it is below full
+  if (r && typeof r.depth === 'number' && r.depth > 0) head += ` · Band decode depth reduced (${r.depthName || `step ${r.depth} of 5`}) — every band still decoding`;
   const rows = r ? vfos.map(bgVfoLine) : [];
   if (r && running && typeof r.channelsCpuPct === 'number') rows.push(`channels (one FFT for every VFO) · ${pctShort(r.channelsCpuPct)}`);
   return { head: `Background decoding · ${head}`, rows, warn };

@@ -1410,8 +1410,14 @@ void Ft8Decoder::runDecode() {
      *  the Pi 2 build — and decodes more than the old full depth. Spare CPU then buys, as before, the passes and OSD
      *  (now with pairs), and a-priori decoding. The book learns on every decode, loaded or not, so it is ready when the
      *  CPU is. */
-    const bool loadedAtStart = loadProbe ? loadProbe() : false;
-    const bool deep = !loadedAtStart && o.maxPasses >= 2;
+    /* ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h — Stuart: "the depth drops before dropping entire bands"): the
+     *  existing knobs, one more at each step, before Band pauses a whole mode. */
+    const int depth = depthProbe ? std::max(0, std::min(5, depthProbe())) : 0;
+    if (depth >= 3) o.maxPasses = 1;
+    if (depth >= 4) o.maxCandidates = std::min(o.maxCandidates, 70);   // ★ digi::LoadLadder::kFewerCandsN
+    if (depth >= 5) o.minScore = std::max(o.minScore, 14);           // ★ digi::LoadLadder::kStrictMinScore
+    const bool loadedAtStart = (loadProbe ? loadProbe() : false) || depth >= 3;
+    const bool deep = !loadedAtStart && o.maxPasses >= 2 && depth < 2;
     o.fine = 1;
     o.bpStall = kBpStall;
     o.onlyChanged = true;
@@ -1425,13 +1431,13 @@ void Ft8Decoder::runDecode() {
      *  the moment the CPU is. */
     const bool deepOn = deepTier().load(std::memory_order_relaxed);
     o.apRepeatLearn = deepOn;
-    if (deep && deepOn) {
+    if (deep && deepOn && depth < 1) {
         o.apRepeat = true;
         o.apMaxCands = kDeepApCands;
         if (mode_ == FtxMode::FT8) o.fineMinSync = kDeepFineMinSync;   // ★ FT8 only: FT4's 8 of 16 doubled its CPU for +1 %
     }
     o.mayRunPass = [&](int, double elapsedMs, double lastMs) {
-        const bool loaded = loadProbe ? loadProbe() : false;
+        const bool loaded = (loadProbe ? loadProbe() : false) || depth >= 3;
         return passAllowed(slotPeriod * 1000.0, lagMs, elapsedMs, lastMs, loaded);
     };
     std::vector<Ft8Result> res;

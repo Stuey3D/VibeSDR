@@ -1310,6 +1310,8 @@ public:
         p_ = p;
         // ★★★ beta94: background's own view of the slots — extras over the box's limit while nobody listens
         bgSlots_.reset();
+        ladder_ = std::make_shared<digi::LoadLadder>();
+        { auto lg = p_.log; ladder_->setLog([lg](const std::string& l) { if (lg) lg("background decoding: " + l); }); }
         if (p_.cpu && p_.slots) { bgSlots_.reset(new BgSlots(p_.slots, p_.cpu)); p_.slots = bgSlots_.get(); }
         if (!chan_ || chan_->fftSize() != p_.fftSize) { chan_.reset(new vibedsp::Channelizer(p_.fftSize)); fedIn_ = 0; }
         chans_.clear();
@@ -1380,6 +1382,7 @@ public:
             env.log = p_.log;
             env.slots = p_.slots;
             env.bgCpu = p_.cpu;   // ★★★ beta94 nobody listening: RTTY workers, Band cap and pause rule follow it
+            env.bandLadder = ladder_;   // ★★★ beta94 one load ladder for every band: depth drops everywhere before a mode
             // ★★ a WEFAX VFO says what it heard every hour (the decoder's evidence — "no signal" vs "missed the start")
             if (c->vfo.dec == "wefax") { env.wefaxHourly = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + upperMode(c->vfo.mode) + ")"; env.wefaxHourSecs = p_.wefaxHourSecs; }
             // ★ A Band VFO's "dial" is its span's centre: the host sizes the slice and finds the band's extra slices by it.
@@ -1477,7 +1480,7 @@ public:
         }
         startedAt_ = std::time(nullptr);
         { std::lock_guard<std::mutex> ck(cpuMtx_); cpu_.clear(); }
-        easeTaken_.clear(); easeCpu_.clear(); gov_.reset(); easeExcused_.store(false); easePaused_.store(0); easeChips_.store(0);
+        easeTaken_.clear(); easeCpu_.clear(); gov_.reset(); easeExcused_.store(false); easePaused_.store(0); easeChips_.store(0); easeDepth_.store(false);
         easeExhaustedSaid_ = false; vfoCount_.store((int)chans_.size());   // ★ new channels, new counters: the CPU window starts again
         listenerOnFlag_->store(p_.listenerOn);
         startDecoders();
@@ -1535,7 +1538,8 @@ public:
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
         chans_.clear();
-        easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0);
+        easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0); easeDepth_.store(false);
+        if (ladder_) ladder_->forceMin(false);
         if (p_.registry) p_.registry->publish({});
         if (was && sayIt) say("background decoding stopped");
     }
@@ -1636,6 +1640,15 @@ public:
             k.kind = ease::Kind::Pause; k.tier = ease::tierOf(c->vfo.dec);
             cands.push_back(k);
         }
+        /* ★★★ beta94: the FIRST step for a listener — decode depth to the minimum on every band (the load ladder), before
+         *  any band loses its extra modes. Offered while a Band VFO decodes and the depth is not already forced. */
+        if (!ladder_->forced())
+            for (auto& c : chans_)
+                if (c->band && c->decoding && !c->eased && c->inWindow) {
+                    ease::Candidate k; k.vfo = c->index; k.kind = ease::Kind::Depth; k.tier = ease::kTierDepth; k.rank = 0;
+                    cands.push_back(k);
+                    break;
+                }
         bool canShed = false, canSafety = false;
         for (auto& k : cands) { if (k.tier == ease::kTierSafety) canSafety = true; else canShed = true; }
         ease::Signals sg;
@@ -1653,7 +1666,12 @@ public:
                 EaseStep st{ c.index, cands[(size_t)k].kind, costOf(c.index) };
                 char cost[96] = "";
                 if (st.costPct >= 0) std::snprintf(cost, sizeof cost, " (it was costing %.1f %% of one core)", st.costPct);
-                if (st.kind == ease::Kind::Chips) {
+                if (st.kind == ease::Kind::Depth) {
+                    ladder_->forceMin(true);
+                    st.costPct = -1;
+                    say("background decoding: eased for listeners, step " + n + " \xe2\x80\x94 decode depth to the minimum on every band"
+                        " (one pass, fewer candidates, stricter sync; all bands keep decoding) \xe2\x80\x94 " + gov_.why());
+                } else if (st.kind == ease::Kind::Chips) {
                     c.chipsOff->store(true);
                     say("background decoding: eased for listeners, step " + n + " \xe2\x80\x94 VFO " + name(c)
                         + ": its extra modes (CW, RTTY, wide PSK) off, FT8/FT4/WSPR carry on" + cost + " \xe2\x80\x94 " + gov_.why());
@@ -1669,6 +1687,10 @@ public:
         } else if (a == ease::Act::Restore && !easeTaken_.empty()) {
             const EaseStep st = easeTaken_.back();
             easeTaken_.pop_back();
+            if (st.kind == ease::Kind::Depth)
+                say("background decoding: eased step " + std::to_string(easeTaken_.size() + 1) + " given back \xe2\x80\x94 decode depth "
+                    "back to the ladder's own (" + std::string(digi::LoadLadder::name(ladder_->learnt())) + ") \xe2\x80\x94 " + gov_.why());
+            else
             say("background decoding: eased step " + std::to_string(easeTaken_.size() + 1) + " given back \xe2\x80\x94 VFO "
                 + name(*chans_[(size_t)st.vfo]) + (st.kind == ease::Kind::Chips ? ": its extra modes back on" : ": resuming") + " \xe2\x80\x94 " + gov_.why());
             undoEase(st);
@@ -1679,7 +1701,7 @@ public:
         }
         int paused = 0, chips = 0;
         for (auto& c : chans_) { if (c->eased) ++paused; if (c->chipsOff->load()) ++chips; }
-        easePaused_.store(paused); easeChips_.store(chips);
+        easePaused_.store(paused); easeChips_.store(chips); easeDepth_.store(ladder_->forced());
         const bool exh = p_.listenerOn && gov_.exhausted();
         if (exh && !easeExhaustedSaid_)
             say("background decoding: TOO HEAVY even eased \xe2\x80\x94 " + gov_.why() + "; nothing left to ease "
@@ -1694,12 +1716,16 @@ public:
     /** ★ The health card's line while eased, "" when not: "eased for listeners (3 of 9 paused)". Fixed words, no user text. */
     std::string easeNote() const {
         const int pz = easePaused_.load(), ch = easeChips_.load();
-        if (pz <= 0 && ch <= 0) return std::string();
+        const bool dp = easeDepth_.load();
+        if (pz <= 0 && ch <= 0 && !dp) return std::string();
         std::string t = "eased for listeners (";
+        if (dp) t += std::string("decode depth at the minimum") + (pz > 0 || ch > 0 ? ", " : "");
         if (pz > 0) t += std::to_string(pz) + " of " + std::to_string(vfoCount_.load()) + " paused";
         if (ch > 0) t += std::string(pz > 0 ? ", " : "") + "extra modes off on " + std::to_string(ch) + " band" + (ch == 1 ? "" : "s");
         return t + ")";
     }
+    /** ★ beta94 test seam: the profile's load ladder (every Band VFO's). */
+    std::shared_ptr<digi::LoadLadder> ladderForTest() const { return ladder_; }
     int easeStepsForTest() { std::lock_guard<std::mutex> sl(slotMtx_); return (int)easeTaken_.size(); }
     bool vfoEasedForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->eased; }
     bool chipsOffForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->chipsOff->load(); }
@@ -1766,6 +1792,8 @@ public:
         j += "],\"cpuPct\":" + pct(sumNow, sumBase);
         j += ",\"ease\":{\"paused\":" + std::to_string(easePaused_.load()) + ",\"chips\":" + std::to_string(easeChips_.load())
            + ",\"excused\":" + (easeExcused_.load() ? "true" : "false") + ",\"note\":\"" + gallery::jsonEsc(easeNote()) + "\"}";
+        // ★★★ beta94 the load ladder: how deep the Band VFOs decode now (0 full … 5 the minimum)
+        if (ladder_) j += ",\"depth\":" + std::to_string(ladder_->depth()) + ",\"depthName\":\"" + digi::LoadLadder::name(ladder_->depth()) + "\"";
         // ★★★ beta94 nobody listening: what background decoding may use now (absent = today's budget)
         if (p_.cpu && p_.cpu->full.load()) {
             const int c = p_.cpu->cores.load();
@@ -2178,6 +2206,7 @@ private:
     }
     /** ★ Give one eased step back. A paused VFO resumes by the ordinary path (slotTick, a slot permitting), promptly. */
     void undoEase(const EaseStep& st) {
+        if (st.kind == ease::Kind::Depth) { ladder_->forceMin(false); return; }
         if (st.vfo < 0 || (size_t)st.vfo >= chans_.size()) return;
         Chan& c = *chans_[(size_t)st.vfo];
         if (st.kind == ease::Kind::Chips) { c.chipsOff->store(false); return; }
@@ -2367,6 +2396,7 @@ private:
     std::chrono::steady_clock::time_point lastResume_{};
     std::mutex slotMtx_;
     std::unique_ptr<BgSlots> bgSlots_;   // ★ beta94: p_.slots points here while p_.cpu is set
+    std::shared_ptr<digi::LoadLadder> ladder_ = std::make_shared<digi::LoadLadder>();   // ★ beta94: every Band VFO's
     std::mutex chanMtx_;   // ★ the worker's channel cut vs retarget()
     std::shared_ptr<std::atomic<bool>> listenerOnFlag_ = std::make_shared<std::atomic<bool>>(false);   // ★ the worker's slotTick and a test's slotTickForTest
     std::atomic<uint64_t> dropped_{0};
@@ -2386,6 +2416,7 @@ private:
     std::deque<EaseCpu> easeCpu_;         // ★ ≤ 12 samples (2 s apart, 20 s)
     std::atomic<bool> easeExcused_{false};
     std::atomic<int>  easePaused_{0}, easeChips_{0}, vfoCount_{0};
+    std::atomic<bool> easeDepth_{false};   // ★ beta94: the ladder forced to minimum depth for a listener
     bool easeExhaustedSaid_ = false;
 };
 

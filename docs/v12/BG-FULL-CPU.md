@@ -56,6 +56,46 @@ Spare CPU is used only while it is actually spare; another radio's listener simp
 or the temperature level is HIGH or worse, or on battery (a battery present, neither charging nor on mains). Leaving FULL
 for one of those is logged.
 
+## The load ladder: depth drops before whole modes or bands (`decoders/digi_load_ladder.h`)
+
+Stuart, 25 November: *"what should happen in the background is if the cpu is fully loaded the depth drops before
+dropping entire bands"*.
+
+When Band decoding is **behind** — a slotted engine skipped a slot, the decode's backlog over 1.5 s (in FULL mode: a
+skip only without headroom, a backlog only after 10 s), or the governor shed a slotted mode's period (its budget
+exceeded) — the ladder steps **down one depth at a time, one step per 15 s** (an FT8 slot, so each step can show):
+
+| Depth | What it turns off (existing knobs only) |
+|---|---|
+| 0 full | — (passes as the slot allows, OSD, a-priori, "Dig deeper" if the owner has it on) |
+| 1 no Dig deeper | the deep tier (repeats, 8 AP hypotheses, FT8's looser second look); the book still learns |
+| 2 no OSD or a-priori passes | `osdMaxErrors`, `osdPairSpan`, `apTry` off — BP and the second look only |
+| 3 one pass a slot | `maxPasses` 1; every Band engine `loaded` (light) and the governor costs every mode light |
+| 4 fewer candidates | FT8/FT4/FT2 `maxCandidates` 140 → 70 |
+| 5 stricter sync (the minimum) | `minScore` 10 → 14 |
+
+Every band and every mode keeps decoding through all six. **Only at the minimum** does the pause rule take a mode — CW,
+then RTTY, then wide PSK, the slotted modes keeping their slots — and a skip is let through to the governor's "too heavy"
+budget cut (which sheds lowest priority first). Last of all, for a listener, background easing may pause a whole Band
+VFO (`vibe_bg_ease.h`).
+
+**Recovery in reverse:** paused modes come back first (the pause rule's 30 s of calm each, RTTY then CW); depth comes
+back only when nothing on the ladder is paused, one step per 30 s of calm.
+
+**One ladder per host** (a listener's Band: its audio and CW/RTTY spotters share it). A background profile's Band VFOs
+all share **the runner's** — depth drops on every band before any band loses a mode.
+
+**A listener's arrival** (`vibe_bg_ease.h`): easing's first step is now tier −1, *decode depth to the minimum on every
+band* (`LoadLadder::forceMin`), before any band's extra modes go off; given back like any other step.
+
+Log lines: `Band: CPU behind (a slotted mode skipped a slot) — decode depth reduced to one pass a slot (all bands keep
+decoding)` · `Band: depth at minimum — CW paused — the CPU is behind (…); the slotted modes keep their slots` ·
+`Band: decode has caught up — depth back up to fewer candidates` · `background decoding: eased for listeners, step 1 —
+decode depth to the minimum on every band (…)`. The admin line adds `Band decode depth reduced (one pass a slot) — every
+band still decoding` while below full; the runner's JSON carries `depth` / `depthName`.
+
+A Spotter without a ladder (the tests' own, the benchmark) keeps the beta91 pause rule exactly.
+
 ## A listener joins
 
 NORMAL at once (no calm period that way round):
@@ -98,6 +138,10 @@ The runner's status JSON carries `"fullCpu":{"cores":4,"rttyWorkers":4,"extraSlo
   off by nice 19 against the box's other radios). FULL stops it pausing CW/RTTY; it does not make that engine faster.
 - The allowance's thresholds against the real load of four radios; the per-radio share when radios come and go.
 - WEFAX in an extra slot alongside the others on the Pi's real profile.
+- The ladder's 15 s step / 30 s calm against the Pi's real skips; how many decodes each depth step costs on a busy band
+  (depth 4–5 trade weak-signal FT8 decodes for CPU — measured only as knobs in FTX-SENSITIVITY.md, not as a ladder).
+- A box whose benchmark budget is small (a Pi 2) sheds slotted periods every period, so it now sits at minimum depth
+  rather than full depth with modes shed — intended by the rule, unmeasured.
 - Android: no whole-machine load figure, so the half-the-cores cap and the heat/battery rule are the only guards.
 
 ## Tests
@@ -110,6 +154,10 @@ The runner's status JSON carries `"fullCpu":{"cores":4,"rttyWorkers":4,"extraSlo
   slotted mode keeps its slots).
 - `vibeserver/test-bg-priority.cpp` — extra slots (the waiting WEFAX VFO runs), a listener on another radio freeing three
   at once, the extras given back lowest first when a listener joins, `victims()` across radios.
+- `vibeserver/test-digi-spots.cpp` (beta94 load ladder) — two spotters on one ladder: behind → five depth steps with
+  every mode decoding, the engine told each depth and decoding light from one pass; only at the minimum CW, then RTTY
+  pause; calm → RTTY, CW back first, then depth one step per 30 s back to full; `forceMin` for a listener.
+- `vibeserver/test-bg-ease.cpp` — the depth step is easing's first, before a band's extra modes.
 - `scripts/test_admin_bg.ts` — the admin wording.
 
 `VIBE_TESTS="test-bg-fullcpu test-digi-spots test-bg-priority" scripts/run-tests.sh`

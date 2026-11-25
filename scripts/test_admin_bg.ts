@@ -88,6 +88,9 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   const f = bgLines({ ...run, runner: { ...run.runner, fullCpu: { cores: 2, rttyWorkers: 2, extraSlots: 2 } } })!;
   ok(f.head.endsWith(' · nobody listening \u2014 using up to 2 cores (2 RTTY search workers, 2 extra decoder slots)') && !f.warn, `full head: ${f.head}`);
   ok(!bgLines(run)!.head.includes('nobody listening'), 'absent on today\'s budget');
+  const dd = bgLines({ ...run, runner: { ...run.runner, depth: 3, depthName: 'one pass a slot' } })!;
+  ok(dd.head.endsWith(' · Band decode depth reduced (one pass a slot) — every band still decoding'), `depth: ${dd.head}`);
+  ok(!bgLines({ ...run, runner: { ...run.runner, depth: 0, depthName: 'full' } })!.head.includes('depth'), 'full depth: nothing said');
 }
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);

@@ -324,6 +324,9 @@ public:
         /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): background decoding's budget now — the RTTY skimmer's workers,
          *  the Band governor's cap and pause rule follow it live. Null = a listener's host (today's budget, unchanged). */
         std::shared_ptr<const bg::fullcpu::Live> bgCpu;
+        /** ★★★ beta94 THE LOAD LADDER (decoders/digi_load_ladder.h): one shared by every Band VFO of a background profile,
+         *  so depth drops on every band before any band loses a mode. Null = this host's own (a listener's Band). */
+        std::shared_ptr<digi::LoadLadder> bandLadder;
         /** ★ A listener's AUDIO frequency → RF (their dial and mode: USB dial + a, LSB dial − a, this server's CW
          *  dial + a − 600). Empty = dial + audio. A skimmer's IQ carries its own centre. */
         std::function<double(double)> rfOfAudio;
@@ -521,6 +524,11 @@ public:
             }
             const double u = env_.bandBudgetUnits ? env_.bandBudgetUnits() : NAN;
             spotter_->setBudgetCap(std::isfinite(u) && u > 0 ? u : INFINITY);
+            /* ★★★ beta94 THE LOAD LADDER (Stuart: "the depth drops before dropping entire bands"): behind → the slotted
+             *  engines decode shallower step by step first; CW / RTTY / PSKW pause only at the minimum depth. */
+            std::shared_ptr<digi::LoadLadder> ladder = env_.bandLadder;
+            if (!ladder) { ladder = std::make_shared<digi::LoadLadder>(); ladder->setLog([this](const std::string& l) { log(l); }); }
+            spotter_->setLadder(ladder);
             /* ★★★ V12 beta91 — THE CW / RTTY / WIDE-PSK CHIPS RUN IN A SPOTTER OF THEIR OWN (iqSpotter_), fed the same
              *  slices. The audio spotter above is then exactly what it was before the band-skim change — same modes, same
              *  plan, same gate, same governor. With the IQ modes inside it (even with no window, no run), test-server-spots
@@ -534,6 +542,7 @@ public:
                     [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
                     [dial] { return dial ? dial() : 0.0; }, loaded));
                 if (ovf) iqSpotter_->setOverrides(ovf);
+                iqSpotter_->setLadder(ladder);
                 /* ★★ beta91 (Stuart: "make sure the box is not overloaded"): the SAME budget as the audio spotter, less what
                  *  the slotted modes have committed — so on a weak box the chips (PSKW first, then RTTY, then CW: their
                  *  priorities 105 / 110 / 120) are shed by the governor before they add to a full load, as well as paused

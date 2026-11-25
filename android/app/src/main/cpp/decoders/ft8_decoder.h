@@ -379,6 +379,9 @@ public:
     /** ★ The server's load, read before every extra pass: true = loaded, decode ONE pass (today's cost). Set
      *  before audio flows; empty = never loaded (a decoder-only sidecar, the bench). */
     std::function<bool()> loadProbe;
+    /** ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h), read once per slot: 0 full; 1 no Dig deeper; 2 no OSD / a-priori;
+     *  3 one pass; 4 70 candidates (not 140); 5 sync score ≥ 14 (not 10). Empty = 0. */
+    std::function<int()> depthProbe;
     /** Most passes the adaptive gate may grant (1 = the old decoder exactly). */
     std::atomic<int> maxPasses{3};
 

@@ -29,6 +29,7 @@
 #pragma once
 #include "digi_activity.h"
 #include "digi_governor.h"
+#include "digi_load_ladder.h"   // ★ beta94: depth drops before whole modes or bands
 #include "digi_mode.h"
 #include "digi_tuner.h"
 
@@ -81,6 +82,11 @@ public:
      *  before it pauses (a burst no longer sheds). Default (no hook, a listener's own Band): today's rule exactly. */
     struct CpuView { double scale = 1.0; bool skipCounts = true; double behindHoldSec = 0.0; };
     void setCpuView(std::function<CpuView()> f) { std::lock_guard<std::mutex> lk(statMtx_); cpuView_ = std::move(f); }
+    /** ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h — Stuart: "the depth drops before dropping entire bands"): behind =
+     *  first the ladder's depth steps (every slotted engine decodes shallower, every band keeps decoding), and only at its
+     *  minimum the pause rule's CW → RTTY → PSKW. Recovery the other way round. Shared by every spotter of a host (and
+     *  every Band VFO of a background profile). Set before the first block. Null = today's pause rule exactly. */
+    void setLadder(std::shared_ptr<LoadLadder> l) { std::lock_guard<std::mutex> lk(statMtx_); ladder_ = std::move(l); }
     double budgetUnits() const { std::lock_guard<std::mutex> lk(statMtx_); return budget_.units(); }
     /** ★★ V12 beta91: ONE BUDGET FOR TWO SPOTTERS. The units another spotter has committed now (its live runs) — the
      *  CW / RTTY / PSKW spotter is given the audio one's, so the chips get only what the slotted modes leave: on a weak
@@ -262,6 +268,8 @@ private:
     uint64_t pauseSkips_ = 0;
     // ── beta94 nobody listening (setCpuView) — statMtx_ ──
     std::function<CpuView()> cpuView_;
+    std::shared_ptr<LoadLadder> ladder_;
+    uint64_t ladderShed_ = 0;   // ★ the slotted modes' shed periods at the last look (the governor's budget exceeded)
     double baseCap_ = INFINITY, capScale_ = 1.0;
     uint64_t budgetSkipLast_ = 0, budgetSkipIgnored_ = 0;
     double overSince_ = NAN, headroomSaidAt_ = -1e300;
