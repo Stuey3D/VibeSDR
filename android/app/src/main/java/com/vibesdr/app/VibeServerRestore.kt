@@ -175,26 +175,38 @@ object VibeServerRestore {
      *     stamp was written in this same boot: BOOT_COUNT where the OS keeps one (API 24+), otherwise the
      *     boot's own start time (wall minus elapsed) agreeing to within a minute.
      */
-    fun radioGoneForMs(ctx: Context): Long {
-        val p = prefs(ctx)
-        if (!p.contains(K_GONE_ELAPSED)) return -1
-        val el0 = p.getLong(K_GONE_ELAPSED, 0L)
-        val bootWall0 = p.getLong(K_GONE_BOOTWALL, 0L)
-        val bootNo0 = p.getInt(K_GONE_BOOTNO, -1)
+    fun radioGoneForMs(ctx: Context): Long = goneAgeOf(ctx, goneStamp(ctx))
+
+    /** ★★★ THE GONE-STAMP, READ ONCE (2026-11-25, the XCover: a 0.5 s HF+ re-enumeration at 08:37 STOPPED the server
+     *  for good). radioGoneTooLong asked "is there a stamp?" and then, in a second read, "how old is it?" — and between
+     *  the two, the main thread's noteRadioBack (the radio was back) removed it. The age came back -1, "left before a
+     *  restart", and giveUpOnGoneRadio(stamped = true, -1) says give up: "gone for more than 300 s" one millisecond after
+     *  "the server's radio is back". SharedPreferences.getAll() is a copy taken under its own lock, so the three keys
+     *  are read together and the verdict is made on what was ONE moment's stamp; no stamp = nothing to judge. */
+    private class GoneStamp(val elapsed: Long, val bootWall: Long, val bootNo: Int)
+    private fun goneStamp(ctx: Context): GoneStamp? {
+        val all = prefs(ctx).all
+        val el = all[K_GONE_ELAPSED] as? Long ?: return null
+        return GoneStamp(el, all[K_GONE_BOOTWALL] as? Long ?: 0L, all[K_GONE_BOOTNO] as? Int ?: -1)
+    }
+    private fun goneAgeOf(ctx: Context, st: GoneStamp?): Long {
+        if (st == null) return -1
         val el = android.os.SystemClock.elapsedRealtime()
         val bootNo = bootCount(ctx)
-        val sameBoot = if (bootNo0 >= 0 && bootNo >= 0) bootNo0 == bootNo
-                       else kotlin.math.abs((System.currentTimeMillis() - el) - bootWall0) < 60_000L
-        if (!sameBoot || el < el0) return -1
-        return el - el0
+        val sameBoot = if (st.bootNo >= 0 && bootNo >= 0) st.bootNo == bootNo
+                       else kotlin.math.abs((System.currentTimeMillis() - el) - st.bootWall) < 60_000L
+        if (!sameBoot || el < st.elapsed) return -1
+        return el - st.elapsed
     }
 
     /** ★ Has the gone radio outstayed its blip window? False while it is merely away, or never went.
      *  ★★★ AND NEVER, ON THIS BOOT, WITH KEEP RADIO ALIVE ON (2026-10-06) — the verdict is
-     *      vibe_usb_recovery.h's giveUpOnGoneRadio, one tested copy; this only supplies the facts. */
+     *      vibe_usb_recovery.h's giveUpOnGoneRadio, one tested copy; this only supplies the facts.
+     *  ★★★ One read of the stamp (goneStamp): a stamp cleared by the radio coming back is "not gone", never
+     *      "left before a restart" (2026-11-25). */
     fun radioGoneTooLong(ctx: Context): Boolean {
-        if (!prefs(ctx).contains(K_GONE_ELAPSED)) return false
-        return VibeLocalSDR.giveUpOnGoneRadio(true, radioGoneForMs(ctx), keepRadioAlive(ctx))
+        val st = goneStamp(ctx) ?: return false
+        return VibeLocalSDR.giveUpOnGoneRadio(true, goneAgeOf(ctx, st), keepRadioAlive(ctx))
     }
 
     /** ★★ THE OWNER'S SETTINGS CHANGED (the phone's screen, or the /setup page — VibeRemoteSetup): the restore brings
