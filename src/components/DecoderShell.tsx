@@ -145,7 +145,10 @@ export interface DecoderShellProps {
 export const DecoderAvoidContext = createContext<{ rects: { x: number; y: number; w: number; h: number }[]; windowW: number;
   /** ★★ iPhone Duo half-open: the box's whole frame (window coordinates) — beside the deck in the bottom half, never
    *  above the fold. Absent everywhere else. */
-  frame?: { left: number; right: number; bottom: number; maxHeight: number } }>(
+  frame?: { left: number; right: number; bottom: number; maxHeight: number; maxHeightTall?: number;
+            /** The fold (window y / height): a BIG box crossing it draws a divider band there, so no text row sits
+             *  ON the crease — the list scrolls past it. */
+            fold?: { y: number; h: number } } }>(
   { rects: [], windowW: 0 });
 
 export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, borderColor,
@@ -188,7 +191,8 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
                     solid != null && { backgroundColor: solid },
                     opaque && NO_DROP_SHADOW,
                     maxHeight != null && { maxHeight },
-                    avoid.frame && { maxHeight: Math.min(maxHeight ?? Infinity, avoid.frame.maxHeight), maxWidth: undefined }]}
+                    avoid.frame && { maxHeight: tall && avoid.frame.maxHeightTall != null ? avoid.frame.maxHeightTall
+                                                    : Math.min(maxHeight ?? Infinity, avoid.frame.maxHeight), maxWidth: undefined }]}
             onTouchStart={onTouchStart}>
         {metal ? (
           // ★ Opaque brushed metal, drawn once (ChassisPlate caches it until the box resizes).
@@ -209,6 +213,14 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
                 pointerEvents="none" />
         </>)}
         {children}
+        {/* ★ Half-open, a box crossing the fold: a divider band ON the crease, so no text row sits there (the list
+            scrolls past underneath). Stuart accepted BIG crossing the fold; Apple asks for nothing important on it. */}
+        {avoid.frame?.fold && rows && avoid.frame.fold.y > rows.y && avoid.frame.fold.y < rows.y + rows.h && (
+          <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0,
+            top: avoid.frame.fold.y - rows.y, height: Math.max(6, avoid.frame.fold.h),
+            backgroundColor: 'rgba(0,0,0,0.88)', borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth,
+            borderColor: 'rgba(255,255,255,0.18)' }} />
+        )}
       </View>
     </Animated.View>
   );

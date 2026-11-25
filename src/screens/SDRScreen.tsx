@@ -12771,7 +12771,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ A decoder box may rise BESIDE the camera / status column (it narrows clear of it — DecoderShell, DecoderAvoid
    *  below — Stuart: "shrink to the left so that it clears the system status"); only a full-width status band (a Split
    *  View share's) holds it below. */
-  const boxTopSafe = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : Math.max(insets.top + 6, (() => {
+  /* ★★ Half-open: BIG runs the full height of the LEFT column (Stuart: "it can expand upwards full length no status to
+   *  worry about" — the pill and camera are top-right), still below anything the system reports on the left. */
+  const boxTopSafe = tableFold ? Math.max(chromeTop + 8, (() => { const y = clearBelow(reserved, 0, screenW / 2, screenH); return y > 0 ? y + 8 : 0; })())
+    : Math.max(insets.top + 6, (() => {
     let y = 0;
     for (const r of avoidRects(reserved)) if (r.w >= screenW * 0.5 && r.y < screenH * 0.25) y = Math.max(y, r.y + r.h);
     return y > 0 ? Math.ceil(y) + 6 : 0;
@@ -15097,14 +15100,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (tabletop) {
       const bottom = halfSide ? bottomInset + 8 : pillBottom + 8;
       return { rects: [], windowW: screenW, frame: {
-        left: halfSide ? Math.ceil(screenW / 2) + 4 : 8, right: 8, bottom,
-        maxHeight: Math.max(120, screenH - halfTop - bottom) } };
+        left: 8, right: halfSide ? Math.ceil(screenW / 2) + 4 : 8, bottom,
+        maxHeight: Math.max(120, screenH - halfTop - bottom),
+        maxHeightTall: Math.max(120, screenH - boxTopSafe - bottom),
+        fold: tableFold ? { y: tableFold.y, h: tableFold.h } : undefined } };
     }
     const rects = avoidRects(reserved).filter((r) => r.w < screenW * 0.5);
     if (!rects.length) return { rects: [], windowW: screenW };
     if (health || sessionLimitMins) rects.push({ x: screenW - (EDGE_TAB_W + 14), y: rightStackTop, w: EDGE_TAB_W + 14, h: 2 * EDGE_TAB_H + 16 });
     return { rects, windowW: screenW };
-  }, [reserved, screenW, health, sessionLimitMins, rightStackTop, tabletop, halfSide, bottomInset, pillBottom, screenH, halfTop]);
+  }, [reserved, screenW, health, sessionLimitMins, rightStackTop, tabletop, halfSide, bottomInset, pillBottom, screenH, halfTop, boxTopSafe, tableFold]);
 
   /* ★★★ Into SATELLITE (its key, and a REMIND banner's LISTEN): each other whole-radio mode switched OFF properly. */
   satEnterRef.current = () => {
@@ -15703,7 +15708,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★★ And because `availH` is computed from this offset, a taller stack automatically
           // SHRINKS the box rather than pushing it off the top — which is what "in BIG mode on a
           // smaller screen, the box itself gets smaller" asks for, with no separate logic.
-          bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+          bottomOffset={halfSide ? bottomInset + 8 : pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClear={clearDecoderOutput}
           notice={activeDecoder === 'transcribe' && txOffer && txCaps ? (() => {
             const nm = langName(txOffer.code);
@@ -16155,7 +16160,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             ? Math.max(28, insets.left + 8, insets.right + 8) : 8;
           if (tabletop) {
             return [styles.pillWrap, {
-              left: 8, right: halfSide ? Math.ceil(screenW / 2) + 4 : 8,
+              left: halfSide ? Math.ceil(screenW / 2) + 4 : 8, right: 8,
               bottom: halfSide ? bottomInset + 8 : Math.max(bottomInset + 8, Math.round((screenH - halfTop - pillH) / 2)),
             }];
           }
@@ -16536,7 +16541,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           raw={advRdsRaw} onRaw={setAdvRdsRaw}
           tall={advRdsTall} onTall={setAdvRdsTall}
           // ★ Above the VTS bar, like every other box anchored here (see the note at line ~8381).
-          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+          bottomOffset={halfSide ? bottomInset + 8 : pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClose={() => setAdvRdsOpen(false)}
         />
         </PanelBoundary>
@@ -16574,7 +16579,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onScanTune={(ch, sid) => { const b = DAB_BLOCKS[ch]; if (b) dabGoTo(b.hz, sid ?? -1); }}
           scanMayTune={dabScanMayTune({ dialMode: dialState?.mode ?? 'exclusive', admin: adminOk, askLocked: askLocked(dialState), scanLocked: scanLockMine })}
           // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
-          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+          bottomOffset={halfSide ? bottomInset + 8 : pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
           base={connectBase.replace(/\/+$/, '')}
