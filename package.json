@@ -5,7 +5,7 @@
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/slider": "5.2.0",
-    "@react-navigation/native": "^7.5.1",
+    "@react-navigation/native": "^7.5.2",
     "@react-navigation/native-stack": "^7.16.0",
     "@shopify/react-native-skia": "2.6.2",
     "expo": "^57.0.0",
@@ -40,7 +40,7 @@
     "@types/react": "~19.2.2",
     "babel-preset-expo": "~57.0.0",
     "esbuild": "^0.28.2",
-    "jsdom": "^30.1.2",
+    "jsdom": "^31.0.1",
     "patch-package": "^8.0.1",
     "polygon-clipping": "0.15.7",
     "typescript": "~6.0.3"
