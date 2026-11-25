@@ -123,7 +123,8 @@ try {
   ok(Object.keys(hits).slice(0, 3).every((k) => hits[k] === want(k)), `each receiver asked ONCE on load — the two-radio-plus Pi 500 once PER RADIO (${JSON.stringify(Object.fromEntries(Object.entries(hits).slice(0, 3)))})`);
   ok(hits.lenovo === 1 && hits.xcover === 1 && front.lenovo === 1 && front.xcover === 1, '★ a single-radio server: exactly ONE request, at its front door');
   ok(front.pi500 === 0 && PI500_RADIOS.every((r) => byRadio.pi500[r] === 1), `★★ the multi-radio Pi 500: each radio at its own /r/<id>/, the front door not asked twice (${JSON.stringify(byRadio.pi500)})`);
-  ok(c.byKind.aircraft > 0 && Object.keys(c.heardBy).some((k) => k.startsWith('a:') && c.heardBy[k] >= 1) && c.up === 3, `★★ its aircraft (from the V4s, not the front door's DSC radio) are on the map, the server counted ONCE (${c.up} of 3 sharing)`);
+  ok(await js(`DATA.get('pi500').radios.size`) === PI500_RADIOS.length, `★★ every radio's answer kept (they land in parallel: none may overwrite another) — ${await js(`DATA.get('pi500').radios.size`)} of ${PI500_RADIOS.length}`);
+  ok(await js(`[...ITEMS].some(i => i.kind === 'aircraft' && i.heard.some(h => h.sid === 'pi500')) && [...ITEMS].some(i => i.kind === 'dsc' && i.heard.some(h => h.sid === 'pi500'))`) && c.up === 3, `★★ its aircraft (from the V4s, not the front door's DSC radio) are on the map, the server counted ONCE (${c.up} of 3 sharing)`);
   ok(await js(`(() => { const p = [...ITEMS].filter(i => i.heard.some(h => h.sid === 'pi500')); const keys = p.map(i => i.key); return keys.length === new Set(keys).size && p.every(i => i.heard.filter(h => h.sid === 'pi500').length === 1); })()`),
      '★ the two identical V4 answers merged: one item per key, the Pi 500 once in each "heard by"');
   ok(asked.xcover[0].split(',').sort().join() === 'adsb,ais,aprs,hfdl', `…for the layers it shares and that are on (${asked.xcover[0]})`);

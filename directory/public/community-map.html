@@ -230,29 +230,33 @@ function fetchOne(s, layers, t) {
       const u = CM.dataUrl(s, location.protocol, layers, rid);
       if (!u) { s.unreachable = true; s.why = 'no https address'; s._retryAt = Infinity; done(); return; }
       const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), CM.FETCH_TIMEOUT_MS);
-      const d = DATA.get(s.id) || { radios: new Map() };
+      // ★★ the server's entry is looked up AFTER each answer, never held across the await: its radios answer in parallel, and
+      //    a copy taken before would let the last one to land overwrite the others' (the Pi 500's aircraft vanished so, live)
+      const entry = () => DATA.get(s.id) || { radios: new Map() };
       try {
         // ★ no-cache = revalidate: an unchanged answer is a 304 (its ETag) — a quiet minute costs bytes, not a body
         const r = await fetch(u, { signal: ctrl.signal, cache: 'no-cache', credentials: 'omit' });
         const text = r.ok ? await r.text() : '';
         const j = text ? JSON.parse(text) : null;
         if (j && j.on === true) {
+          const d = entry();
           const one = d.radios.get(rid) || { sections: {} };
           for (const k of CM.sectionsOf(layers)) delete one.sections[k];   // ★ what was asked and is absent is now empty
           for (const k of Object.keys(j)) if (!['v', 'on', 'now', 'layers', 'dropped'].includes(k)) one.sections[k] = j[k];
           one.items = CM.itemsOf(Object.assign({ on: true, now: j.now }, one.sections), { id: s.id, name: s.name, rid });
-          d.radios.set(rid, one);
+          d.radios.set(rid, one); DATA.set(s.id, d);
           if (t !== s && Array.isArray(j.layers)) t.layers = j.layers.filter((l) => CM.MODE[l]);   // ★ what this radio shares
           d.now = j.now;
           perf.bytes[s.id] = (perf.bytes[s.id] || 0) + text.length;
           CM.noteResult(t, true, Date.now(), layers);
-        } else { CM.noteResult(t, false, Date.now(), layers); t.why = j && j.why === 'off' ? 'stopped sharing' : 'not responding'; d.radios.delete(rid); }
+        } else { CM.noteResult(t, false, Date.now(), layers); t.why = j && j.why === 'off' ? 'stopped sharing' : 'not responding'; entry().radios.delete(rid); }
       } catch { CM.noteResult(t, false, Date.now(), layers); t.why = 'not responding'; }
       finally {
         clearTimeout(timer);
         // ★ the server is up while any of its radios answers; "not responding" only when none does
         if (t !== s) { const rx = s._rx || []; s.unreachable = rx.length > 0 && rx.every((x) => x.unreachable); s.why = s.unreachable ? (rx[0].why || 'not responding') : ''; }
         else if (!s.unreachable) s.why = '';
+        const d = entry();
         if (d.radios.size) { d.items = CM.mergeRadios([...d.radios.values()].map((x) => x.items || [])); DATA.set(s.id, d); } else DATA.delete(s.id);
         scheduleRender(); done();
       }
