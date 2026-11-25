@@ -50,11 +50,14 @@ our encoder byte for byte against that page's own complete example datagram and 
 ### Batching (the page's rules)
 - A batch every **5 minutes from when the reporter started, + 0–60 s** at first and + 0–30 s after each batch; never
   on the clock's minute ("must not be synchronized to the system clock").
-- **Each station at most once per batch** (the first record kept, a later locator taken).
+- **Each call + band + mode at most once per batch** (the first record kept, a later locator taken). beta94: was each
+  call — a station on two bands or modes in one batch lost the second; PSK Reporter's limit is per call + band + mode.
 - **The same callsign + band + mode not again for an hour** (the page: "Ideally … once per hour if it has not
   'changed'. A change might be a move to a different band"). A new band is reported at once.
 - A full batch splits into datagrams of at most **1400 bytes**, each carrying the receiver record.
-- Bounded: 2000 waiting callsigns, 8192 entries in the hour's memory, 600 WSPR lines.
+- Bounded: 8000 waiting call|band|mode reports (beta94, was 2000; ~270 B each, ~4.3 MB at a full batch's peak), 16384
+  entries in the repeat memory, 600 WSPR lines. What a full batch turns away is counted once per call|band|mode
+  (`droppedHour` / `droppedTotal` in the status; the setup page's line says "dropped: N (queue full)").
 
 ## WSPRnet
 

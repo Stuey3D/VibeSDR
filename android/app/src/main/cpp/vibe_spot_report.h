@@ -377,8 +377,19 @@ constexpr int kStartJitterSec = 60;         ///< + a random 0–60 s from start,
  *  OTHER batch. */
 constexpr int kRepeatSec = 240;
 constexpr int kTemplateEverySec = 3600;
-constexpr size_t kMaxPending = 2000;        ///< callsigns waiting for the next batch (a 5-minute batch is far smaller)
-constexpr size_t kMaxRecent = 8192;         ///< the once-an-hour memory (pruned every batch)
+/** ★★ beta94 reports waiting for the next batch: 8000 (was 2000 — an all-band contest batch passed it and the rest went
+ *  unreported, silently). PSK Reporter's limit is one report per call + band + mode per five minutes, so a batch holds
+ *  every distinct call|band|mode heard in five minutes (a station on two bands = two entries); 8000 is about four times
+ *  the busiest batch we have seen (~2000 calls), with room for the stations heard on more than one band or mode.
+ *  ★ THE MEMORY (the 256 MB floor): a waiting spot is one map node — the call|band|mode key, the Spot (three short
+ *  strings, SNR, frequency, times) and the mode + band strings — about 270 bytes on 64-bit (24-byte strings on 32-bit:
+ *  ~200), the strings inside the small-string buffer (a long call's key spills past it: +32). Full = ~2.2 MB; the flush adds ~0.9 MB of reports, ~0.9 MB of repeat memory
+ *  and ~0.3 MB of datagrams, ~4.3 MB at the peak for a full batch, per radio process. A box that can hear 8000
+ *  stations in five minutes is a wide all-band one; a 2.4 MHz RTL on a Pi 3A+ never comes near it, so the bound costs a
+ *  small board nothing it would ever use. What does not fit is COUNTED (droppedHour on the setup page's line). */
+constexpr size_t kMaxPending = 8000;
+constexpr size_t kMaxDroppedTracked = kMaxPending;   ///< distinct call|band|mode counted as dropped in one batch (bounded too)
+constexpr size_t kMaxRecent = 2 * kMaxPending;       ///< the repeat memory (pruned every batch; ≥ a full batch, so no churn)
 constexpr size_t kMaxWspr = 600;            ///< WSPR lines waiting (a busy band is ~60 per two minutes)
 constexpr size_t kDatagramBytes = 1400;     ///< under every path MTU we will meet
 
@@ -504,7 +515,7 @@ public:
         const bool wasOn = active_();
         cfg_ = c;
         if (!c.wsprnet || !active_() || wsprCallOf(c.wsprCall, c.call).empty()) wspr_.clear();
-        if (!active_()) { pending_.clear(); }
+        if (!active_()) { pending_.clear(); dropped_.clear(); }
         if (active_() && !wasOn) { ranksDue_ = nowS() + 60 + (long)(rng_() % 240); }   // first ranking a few minutes in
         writeStatusLocked_();
     }
@@ -529,16 +540,24 @@ public:
         }
         if (!(s.slotUtc > 0)) s.slotUtc = (double)nowS();
         const std::string band = bandOf(s.rfHz);
-        // ★ once per batch per call (≥ five minutes), and per call + band + mode not within kRepeatSec of its last report
+        /* ★★ beta94 ONCE PER BATCH PER CALL + BAND + MODE (was per call: a station on 40 m and 30 m, or in FT8 and FT4,
+         *  within one batch was reported once and the other lost). PSK Reporter's limit is per call + band + mode every five
+         *  minutes — build to the limit, not the "ideally". Not again within kRepeatSec of its last report either. */
         const std::string rk = s.call + "|" + band + "|" + mode;
         auto it = recent_.find(rk);
         const bool repeat = it != recent_.end() && nowS() - it->second < kRepeatSec;
         if (!repeat) {
-            auto p = pending_.find(s.call);          // ★ each station at most once per batch
+            auto p = pending_.find(rk);              // ★ each call + band + mode at most once per batch
             if (p == pending_.end()) {
-                if (pending_.size() < kMaxPending) pending_[s.call] = Pending{s, mode, band};
+                if (pending_.size() < kMaxPending) pending_[rk] = Pending{s, mode, band};
+                else if (dropped_.size() < kMaxDroppedTracked && dropped_.insert(rk).second) {
+                    // ★★ beta94 the queue was full: counted once per station per batch, never silently. The first drop of a
+                    //    batch shows at once; later ones at most every 10 s (a file write, not one per decode).
+                    const long t = nowS();
+                    if (dropped_.size() == 1 || t - dropWrittenAt_ >= 10) { dropWrittenAt_ = t; writeStatusLocked_(); }
+                }
             } else {
-                // keep the record, take a locator if this one has one
+                // keep the record, take a locator if this one has one (per call + band + mode)
                 if (p->second.spot.grid.empty() && !s.grid.empty()) p->second.spot.grid = s.grid;
             }
         }
@@ -589,7 +608,7 @@ public:
     }
 
     /** The setup page's line: {"on","wsprnet","call","grid","sentHour","lastSent","lastError","wsprHour","wsprLast",
-     *  "wsprError","pending","label"}. */
+     *  "wsprError","droppedHour","droppedTotal","pending","label"}. droppedHour = call|band|mode reports the full queue turned away (beta94). */
     std::string statusJson() const { std::lock_guard<std::mutex> l(m_); return statusJsonLocked_(); }
 
     /** ★ The ranking for the gallery: {"on":true,"call":…,"fetched":<unix s>,"ranks":<the directory's answer>} —
@@ -608,6 +627,7 @@ public:
 
     // ── tests ──
     size_t pendingCount() const { std::lock_guard<std::mutex> l(m_); return pending_.size(); }
+    size_t droppedThisBatch() const { std::lock_guard<std::mutex> l(m_); return dropped_.size(); }
     size_t wsprPendingCount() const { std::lock_guard<std::mutex> l(m_); return wspr_.size(); }
     long nextFlushAt() const { std::lock_guard<std::mutex> l(m_); return nextFlush_; }
     uint32_t sequence() const { std::lock_guard<std::mutex> l(m_); return seq_; }
@@ -626,9 +646,11 @@ private:
             Report r; r.call = p.spot.call; r.locator = p.spot.grid; r.mode = p.mode; r.hz = (uint64_t)std::llround(p.spot.rfHz);
             r.snr = p.spot.snr; r.t = (uint32_t)(p.spot.slotUtc > 0 ? p.spot.slotUtc : now);
             reps.push_back(r);
-            recent_[p.spot.call + "|" + p.band + "|" + p.mode] = now;
+            recent_[kv.first] = now;   // the same call|band|mode key
         }
         pending_.clear();
+        if (!dropped_.empty()) { droppedHourQ_.push_back({now, (long)dropped_.size()}); droppedTotal_ += (long)dropped_.size(); }
+        dropped_.clear();
         // prune the hour's memory (and bound it)
         for (auto it = recent_.begin(); it != recent_.end();) { if (now - it->second >= kRepeatSec) it = recent_.erase(it); else ++it; }
         while (recent_.size() > kMaxRecent) recent_.erase(std::min_element(recent_.begin(), recent_.end(),
@@ -696,6 +718,7 @@ private:
         }
         while (!hour_.empty() && now - hour_.front().first >= 3600) hour_.pop_front();
         while (!whour_.empty() && now - whour_.front().first >= 3600) whour_.pop_front();
+        while (!droppedHourQ_.empty() && now - droppedHourQ_.front().first >= 3600) droppedHourQ_.pop_front();
         writeStatusLocked_();
         // ★★ beta92 the map's SPOTS: what this batch carried, told AFTER our lock is released (the store calls into us)
         if (recs && err.empty() && sentHook_) { const SentHook h = sentHook_; l.unlock(); h(now, recs); l.lock(); }   // ★ the caller goes on holding it
@@ -706,6 +729,8 @@ private:
         const long now = nowS();
         for (const auto& x : hour_) if (now - x.first < 3600) h += x.second;
         for (const auto& x : whour_) if (now - x.first < 3600) w += x.second;
+        long dh = (long)dropped_.size();   // ★ beta94 this batch's so far + the hour's batches
+        for (const auto& x : droppedHourQ_) if (now - x.first < 3600) dh += x.second;
         auto esc = [](const std::string& s) { std::string o; for (char c : s) { if (c == '"' || c == '\\') o += '\\'; if ((unsigned char)c >= 0x20) o += c; } return o; };
         std::string j = "{\"on\":"; j += active_() ? "true" : "false";
         j += ",\"wsprnet\":"; j += (active_() && cfg_.wsprnet) ? "true" : "false";
@@ -719,6 +744,7 @@ private:
         const std::string wErrNow = active_() && cfg_.wsprnet && wcallNow.empty()
             ? std::string("No callsign for WSPRnet: the PSK Reporter name is not a callsign — enter one for WSPRnet") : wError_;
         j += ",\"wsprError\":\"" + esc(wErrNow) + "\",\"wsprErrorAt\":" + std::to_string(wErrorAt_);
+        j += ",\"droppedHour\":" + std::to_string(dh) + ",\"droppedTotal\":" + std::to_string(droppedTotal_ + (long)dropped_.size());
         j += ",\"pending\":" + std::to_string(pending_.size()) + ",\"updated\":" + std::to_string(now) + "}";
         return j;
     }
@@ -754,6 +780,9 @@ private:
     long started_ = 0, nextFlush_ = 0, lastTemplate_ = 0;
     std::map<std::string, Pending> pending_;
     std::map<std::string, long> recent_;
+    std::set<std::string> dropped_;                 ///< ★ beta94 call|band|mode the full queue turned away this batch (≤ kMaxDroppedTracked)
+    std::deque<std::pair<long, long>> droppedHourQ_;
+    long droppedTotal_ = 0, dropWrittenAt_ = 0;
     std::vector<Spot> wspr_;
     std::set<std::string> wsprKeys_;
     std::deque<std::pair<long, long>> hour_, whour_;
@@ -770,7 +799,7 @@ private:
 };
 
 /** ★ The setup page's one line, from every radio process's status file in `dir` (written within `maxAgeSec`):
- *  {"on","wsprnet","call","sentHour","lastSent","lastError","wsprHour","wsprLast","wsprError","radios":[…each…]}. */
+ *  {"on","wsprnet","call","sentHour","droppedHour","lastSent","lastError","wsprHour","wsprLast","wsprError","radios":[…each…]}. */
 inline std::string aggregateStatus(const std::string& dir, long now, long maxAgeSec = 2 * 3600) {
     std::vector<std::string> each;
     if (DIR* d = ::opendir(dir.c_str())) {
@@ -800,12 +829,12 @@ inline std::string aggregateStatus(const std::string& dir, long now, long maxAge
         while (p < j.size() && j[p] != '"') { if (j[p] == '\\' && p + 1 < j.size()) ++p; o += j[p++]; }
         return o;
     };
-    long h = 0, w = 0, last = 0, wlast = 0, errAt = 0, werrAt = 0; bool on = false, wn = false;
+    long h = 0, w = 0, dh = 0, last = 0, wlast = 0, errAt = 0, werrAt = 0; bool on = false, wn = false;
     std::string call, err, werr;
     for (const auto& j : each) {
         if (j.find("\"on\":true") != std::string::npos) on = true;
         if (j.find("\"wsprnet\":true") != std::string::npos) wn = true;
-        h += num(j, "sentHour"); w += num(j, "wsprHour");
+        h += num(j, "sentHour"); w += num(j, "wsprHour"); dh += num(j, "droppedHour");
         last = std::max(last, num(j, "lastSent")); wlast = std::max(wlast, num(j, "wsprLast"));
         if (call.empty()) call = str(j, "call");
         const std::string e = str(j, "lastError"); if (!e.empty() && num(j, "lastErrorAt") >= errAt) { err = e; errAt = num(j, "lastErrorAt"); }
@@ -813,7 +842,7 @@ inline std::string aggregateStatus(const std::string& dir, long now, long maxAge
     }
     auto esc = [](const std::string& s) { std::string o; for (char c : s) { if (c == '"' || c == '\\') o += '\\'; if ((unsigned char)c >= 0x20) o += c; } return o; };
     std::string o = "{\"on\":"; o += on ? "true" : "false"; o += ",\"wsprnet\":"; o += wn ? "true" : "false";
-    o += ",\"call\":\"" + esc(call) + "\",\"sentHour\":" + std::to_string(h) + ",\"lastSent\":" + std::to_string(last);
+    o += ",\"call\":\"" + esc(call) + "\",\"sentHour\":" + std::to_string(h) + ",\"droppedHour\":" + std::to_string(dh) + ",\"lastSent\":" + std::to_string(last);
     o += ",\"lastError\":\"" + esc(err) + "\",\"wsprHour\":" + std::to_string(w) + ",\"wsprLast\":" + std::to_string(wlast);
     o += ",\"wsprError\":\"" + esc(werr) + "\",\"radios\":[";
     for (size_t i = 0; i < each.size(); ++i) { if (i) o += ","; o += each[i]; }

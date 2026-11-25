@@ -2117,7 +2117,7 @@ if(KIND==='digi'||KIND==='cw'){
         aprs:{n:aprsPts.length,on:aprsOn&&aprsPts.length>0,far:ak.length?{km:Math.round(ak[0].km),call:ak[0].call}:null,leg:APRS_LEG,only:false,newest:''},
         svgOk:aprsSvgOk,overlay:dOverlay,
         tot:{srvOk:!!t.srvOk,winWords:dWinWords(),drawn:t.drawn||0,total:t.total||0,trunc:!!t.trunc,unplaced:un,
-             decodesToday:typeof t.decodesToday==='number'?t.decodesToday:-1,falseToday:t.falseToday||0,notKeptToday:t.notKeptToday||0,spotsSent:t.spotsSent||0}});
+             decodesToday:typeof t.decodesToday==='number'?t.decodesToday:-1,falseToday:t.falseToday||0,notKeptToday:t.notKeptToday||0,spotsSent:t.spotsSent||0,radioOnly:!!pick}});
       dEls.stats.querySelector('.dc').innerHTML=pan.stats;
       dEls.legend.querySelector('.dc').innerHTML=pan.legend;
       dEls.summary.querySelector('.dc').innerHTML=pan.summary;

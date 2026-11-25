@@ -1453,10 +1453,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     const look = async () => {
       try {
         const r = await fetch(`http://127.0.0.1:${running.port}/vibeserver/gallery/spotreport.json`, { cache: 'no-store' });
-        const j = await r.json() as { on?: boolean; sentHour?: number; lastSent?: number; lastError?: string; wsprnet?: boolean; wsprHour?: number; wsprLast?: number; wsprError?: string };
+        const j = await r.json() as { on?: boolean; sentHour?: number; droppedHour?: number; lastSent?: number; lastError?: string; wsprnet?: boolean; wsprHour?: number; wsprLast?: number; wsprError?: string };
         if (gone) return;
         if (!j.on) { setPskrStatus(pskrCall.trim() ? '' : 'Not sending: it needs your callsign.'); return; }
         const p = [`${j.sentHour ?? 0} ${j.sentHour === 1 ? 'spot' : 'spots'} sent to PSK Reporter in the last hour` + ((j.lastSent ?? 0) > 0 ? `, last ${hm(j.lastSent!)}` : ', none yet')];
+        p.push(`dropped: ${j.droppedHour ?? 0} (queue full)`);   // ★★ beta94 never silent
         if (j.lastError) p.push(`PSK Reporter: ${j.lastError}`);
         if (j.wsprnet) { p.push(`${j.wsprHour ?? 0} WSPR to WSPRnet` + ((j.wsprLast ?? 0) > 0 ? `, last ${hm(j.wsprLast!)}` : '')); if (j.wsprError) p.push(`WSPRnet: ${j.wsprError}`); }
         setPskrStatus(p.join(' · '));
