@@ -1150,6 +1150,7 @@ private:
         xpdr_.reset();
         iqFixed_.store(0.0, std::memory_order_relaxed);
         fctlm_.reset();
+        fctlmIq_.store(false);
         aprs_.reset();
         if (packetIq_.exchange(false)) packetIqRunning().fetch_sub(1);
         { std::lock_guard<std::mutex> dl(dumpMtx_); dump_.reset(); }   // ★ the capture closes with its decoder
@@ -1436,7 +1437,11 @@ private:
             vibebpsk::RxCfg c;
             double v;
             if (num(msg, "centre", v) && v >= 300 && v <= 7000) c.centreHz = v;
-            if (num(msg, "afc_range", v) && v >= 100 && v <= 3000) c.afcRangeHz = v;
+            /* ★★★ beta94 "iq":true — a satellite pick's decoder reads a Doppler-corrected IQ slice (kTlmIqWidthHz, cut near the
+             *  lock's aim like the CW beacon skimmer's), the carrier predicted "centre" Hz above the dial; no USB edge, a hunt
+             *  to ±4 kHz (vibefc::Run::feedIq). The listener's audio is untouched. */
+            const bool iq = msg.find("\"iq\":true") != std::string::npos;
+            if (num(msg, "afc_range", v) && v >= 100 && v <= (iq ? 4000 : 3000)) c.afcRangeHz = v;
             c.afc = msg.find("\"afc\":false") == std::string::npos;
             const bool inv = msg.find("\"invert\":true") != std::string::npos;
             vibefc::Run::Out o;
@@ -1464,8 +1469,14 @@ private:
             o.trimTo = [lockKey](double target) { vibe::sat::engine().setDecoderTrim(lockKey(), target); };
             o.log = [this](const std::string& l) { log(l); };
             fctlm_.reset(new vibefc::Run(c, inv, std::move(o)));
-            active_.store(true, std::memory_order_relaxed);
-            log("decoder attached: fctlm (FUNcube BPSK 1200) centre " + std::to_string((int)c.centreHz) + " Hz" + (c.afc ? " AFC Â±" + std::to_string((int)c.afcRangeHz) + " Hz" : " no AFC") + (inv ? " inverted" : ""));
+            fctlmIqOffHz_ = iq ? c.centreHz : 0.0;
+            fctlmIq_.store(iq);
+            if (iq) {
+                cwWidth_.store(vibe::sat::kTlmIqWidthHz, std::memory_order_relaxed);
+                if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
+            } else active_.store(true, std::memory_order_relaxed);
+            log("decoder attached: fctlm (FUNcube BPSK 1200) " + std::string(iq ? "on IQ, the carrier " : "centre ") + std::to_string((int)c.centreHz)
+                + (iq ? " Hz above the dial" : " Hz") + (c.afc ? " AFC Â±" + std::to_string((int)c.afcRangeHz) + " Hz" : " no AFC") + (inv ? " inverted" : ""));
             return;
         } else if (ext == "aprs") {
             /* ★★ APRS (V12): 1200 Bd Bell 202 on an NFM channel (VHF), or "baud_rate":300 — HF packet on USB/LSB. Its frames
@@ -2486,6 +2497,7 @@ private:
                     if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && orbcomm_) orbcomm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && xpdr_) xpdr_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && fctlm_ && fctlmIq_) fctlm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.aim, fctlmIqOffHz_);   // ★★★ beta94
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
@@ -2513,6 +2525,7 @@ private:
                 }
                 { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t && bandIq_.load()) t->tick(); }
                 { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; } if (t) t->tick(); }
+                if (fctlmIq_.load(std::memory_order_relaxed)) { if (DecoderTapPtr t = tap()) t->tick(); }   // ★★★ beta94 FUNcube on IQ: its gallery tap
                 cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
                 lk.lock();
                 continue;
@@ -2657,7 +2670,7 @@ private:
                 return;
             }
             if (fctlm_) {
-                fctlm_->feedAudio(data, count);   // ★ FUNcube telemetry: its frames and status are sent from inside
+                if (!fctlmIq_) fctlm_->feedAudio(data, count);   // ★ FUNcube telemetry: its frames and status are sent from inside (★★★ beta94 on IQ: fed from the IQ queue)
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
@@ -2736,6 +2749,8 @@ private:
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
     std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
+    std::atomic<bool> fctlmIq_{false};   // ★★★ beta94 the FUNcube run reads IQ (fctlm_ itself under decMtx_)
+    double fctlmIqOffHz_ = 0;         // …its carrier this far above the dial (the pick's listening offset)
     std::unique_ptr<vibefc::Run> fctlm_;      // ★ V12 beta90 FUNcube BPSK 1200 telemetry (vibe_fctlm.h)
     std::unique_ptr<SitorARun> sitora_;       // ★ SITOR-A: the ARQ listener (buildSitoraLocked_)
     std::unique_ptr<HfdlRun> hfdl_;           // ★ HFDL: the aircraft datalink on the USB dial (buildHfdlLocked_)

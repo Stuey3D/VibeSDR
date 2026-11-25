@@ -505,7 +505,7 @@ static void s12(const std::string& dir) {
     CHECK(e->txAt(44881, 0, sd, tx) && tx.passband() && tx.hz == 145915000 && tx.hiHz == 145935000 && bandOf(tx) == "U/v", "TO-108 (CAS-6) U/v 145.915–145.935");
     // ★★★ beta92 THE WIDE TELEMETRY PICK (Stuart 11-23: AO-73 1.3 kHz above the prediction, 0 frames at the 1200 Hz centre)
     CHECK(e->txAt(39444, 1, sd, tx) && tx.consumer == "fc-bpsk" && tlmWide(tx) && decoderOf(tx, p) == "fctlm"
-          && p == "\"centre\":3000,\"afc_range\":2600", "AO-73: fc-bpsk → fctlm at centre 3000 (beta94; 1500 in beta93, 3800 in beta92), hunting ±2600 (%s)", p.c_str());
+          && p == "\"centre\":3000,\"afc_range\":4000,\"iq\":true", "AO-73: fc-bpsk → fctlm on IQ, the carrier 3000 above the dial (beta94), hunting ±4000 (%s)", p.c_str());
     CHECK(tuneHzOf(tx) == 145935000 - 3000 && listenModeOf(tx) == "usb" && kTlmAudioLoHz == 100 && kTlmAudioHiHz == 6500,
           "…the dial 3000 Hz below the downlink, USB 100–6500 Hz (%.0f)", tuneHzOf(tx));
     CHECK(e->txAt(60209, 1, sd, tx) && tx.consumer == "fox-bpsk" && decoderOf(tx, p).empty() && !tlmWide(tx) && listenOffsetHz(tx) == 0,

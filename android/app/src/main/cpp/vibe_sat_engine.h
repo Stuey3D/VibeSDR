@@ -396,8 +396,15 @@ inline std::string listenModeOf(const Transmitter& t) {
  *  this one 12 / 12 at every offset from −2.0 to +2.0 kHz. The cost: the carrier is heard at 3 kHz, not 1.5 — higher
  *  than beta93, lower than beta92's 3.8 kHz that Stuart called thin. Opening the low edge to 0 Hz would not help: what
  *  is below the dial is not in USB audio at all — only a higher carrier keeps it. */
-constexpr double kTlmCentreHz = 3000.0;   ///< the decoder's audio centre on a telemetry pick (the carrier lands here)
-constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt (vibebpsk::RxCfg::afcRangeHz) — ±2600 (a carrier from 400 to 5600 Hz)
+/* ★★★ beta94 AND THE DECODER READS IQ (Stuart 11-25: "or again use iq"). The pick's decoder no longer depends on the
+ *  audio at all: it reads a Doppler-corrected IQ slice (kTlmIqWidthHz, cut near the lock's aim as the CW beacon
+ *  skimmer's is — DecoderHost setIqAim) with the prediction mixed to 0 Hz, and hunts ±kTlmAfcHz around it — no USB edge,
+ *  no mirror, the carrier's sign known (vibefc::Run::feedIq). Its offset is the satellite's against the prediction, so
+ *  the drift follow trims the lock exactly as before. The audio above is now only what the listener hears (and the box
+ *  on the waterfall): the whole signal for a ±2 kHz error. The decoder's reach is wider than the box: ±4 kHz. */
+constexpr double kTlmCentreHz = 3000.0;   ///< where the carrier lands in the listener's audio (the dial this far below the downlink)
+constexpr double kTlmAfcHz = 4000.0;      ///< the decoder's coarse hunt on IQ (vibebpsk::RxCfg::afcRangeHz) — ±4 kHz of the prediction
+constexpr double kTlmIqWidthHz = 24000.0; ///< the IQ slice the decoder reads (the dial's aim −9 … +15 kHz holds the hunt and the signal)
 constexpr double kTlmAudioLoHz = 100.0;   ///< the USB passband a telemetry pick listens with (the clients' edges)
 constexpr double kTlmAudioHiHz = 6500.0;
 /** ★★ beta92: a downlink whose pick runs the BPSK telemetry decoder on the wide passband (FUNcube "fc-bpsk" — the one
@@ -454,7 +461,8 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     if (t.consumer == "ax25-1200" || t.consumer.rfind("ax25", 0) == 0) { params = "\"packet\":\"1200\",\"baud_rate\":1200"; return "aprs"; }
     // ★ beta90 1.2: FUNcube BPSK 1200, AUTO. ★★ beta92 its centre and hunt on the wide passband (kTlmCentreHz, kTlmAfcHz)
     if (t.consumer == "fc-bpsk") {
-        if (tlmWide(t)) params = "\"centre\":" + std::to_string((int)kTlmCentreHz) + ",\"afc_range\":" + std::to_string((int)kTlmAfcHz);
+        // ★★★ beta94 "iq":true — on the IQ slice, the carrier "centre" Hz above the dial (DecoderHost buildFctlm)
+        if (tlmWide(t)) params = "\"centre\":" + std::to_string((int)kTlmCentreHz) + ",\"afc_range\":" + std::to_string((int)kTlmAfcHz) + ",\"iq\":true";
         return "fctlm";
     }
     /* ★★ beta92 THE CW BEACON IS SKIMMED (Stuart 11-23, RS-44 on the Pi 500's RTL-SDR V4: the beacon sat ~2 kHz below the

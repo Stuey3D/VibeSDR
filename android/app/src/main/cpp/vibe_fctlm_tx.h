@@ -7,6 +7,7 @@
 #include "vibe_fctlm.h"
 
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <functional>
 #include <random>
@@ -22,6 +23,9 @@ struct Cfg {
     double rampHzS = 0;           ///< Doppler residual slope
     /** ★★★ beta94 any frequency curve on top (Hz at time t s — a pass's whole Doppler, say). Optional. */
     std::function<double(double)> hzAt;
+    /** ★★★ beta94 also the COMPLEX baseband (the IQ a slice would carry): A·bb·e^{jφ} at `rate`, the carrier at
+     *  carrierHz + offsets (negative allowed), with complex noise at the same Eb/N0. Optional. */
+    std::vector<std::complex<float>>* iqOut = nullptr;
     double clockPpm = 0;          ///< the satellite's symbol clock error (+ = slower). ★ AO-73 on air: −1400 (1201.6 Bd)
     double phase = 0.3;           ///< carrier start phase (rad)
     double ebn0Db = 99;           ///< noise: Eb/N0 in the 2.4 kHz audio (99 = none)
@@ -68,6 +72,7 @@ inline std::vector<float> modulate(const std::vector<std::vector<uint8_t>>& fram
     const double tsym = (1.0 + c.clockPpm * 1e-6) / c.baud;   // the satellite's symbol period
     const size_t n = (size_t)((sym.size() * tsym) * c.rate) + 1;
     std::vector<float> out(n);
+    if (c.iqOut) c.iqOut->assign(n, std::complex<float>(0, 0));
     std::normal_distribution<double> g(0.0, 1.0);
     // noise: Eb/N0 → per-sample σ. Signal power (real tone, amp A, RC pulses ≈ unit power) = A²/2 · Pp; Eb = Ps·Tb;
     // N0 = σ²/(rate/2) for real white noise.
@@ -84,8 +89,14 @@ inline std::vector<float> modulate(const std::vector<std::vector<uint8_t>>& fram
         for (long long m = kc - 4; m <= kc + 5; ++m) if (m >= 0 && m < (long long)sym.size()) bb += sym[(size_t)m] * rc(k - double(m) - 0.5);
         const double f = c.carrierHz + c.offsetHz + c.rampHzS * t + (c.hzAt ? c.hzAt(t) : 0.0);
         ph += 2 * M_PI * f / c.rate;
-        if (ph > M_PI) ph -= 2 * M_PI;
+        if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
         out[i] = float(c.amp * bb * std::cos(ph) + (sigma > 0 ? sigma * g(rng) : 0.0));
+        if (c.iqOut) {
+            // complex: signal power A²·Pp (twice the real tone's), N0 the same → σ per component √(N0·rate/2)
+            const double sc = c.ebn0Db >= 98 ? 0.0 : std::sqrt(2.0 * ps / c.baud / std::pow(10.0, c.ebn0Db / 10.0) * c.rate / 2.0);
+            (*c.iqOut)[i] = std::complex<float>(float(c.amp * bb * std::cos(ph) + (sc > 0 ? sc * g(rng) : 0.0)),
+                                                float(c.amp * bb * std::sin(ph) + (sc > 0 ? sc * g(rng) : 0.0)));
+        }
     }
     return out;
 }
