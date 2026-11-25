@@ -625,10 +625,18 @@
             font-family: inherit; letter-spacing: .1em; text-transform: uppercase; }
   .fClear:hover { color: var(--text); border-color: var(--accent); }
   a { color: var(--accent); }
-  .commapLink { display: inline-block; margin-top: 10px; padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px;
-                text-decoration: none; font-size: 12px; letter-spacing: .12em; font-weight: 600; }
-  .commapLink span { font-weight: 400; letter-spacing: .04em; color: var(--text); }
-  .commapLink:hover { background: rgba(255,184,51,.1); }
+  /* ★★ THE COMMUNITY MAP BUTTON (Stuart, 2026-11-25: "a nice prominent button for it") — the page's one filled button
+   *  near the top, the directory's own amber; the line under it says what is on the map and how many share. */
+  .commap { margin: 16px auto 0; display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 100%; }
+  .commapBtn { display: inline-flex; align-items: center; gap: 10px; padding: 11px 22px; border-radius: 8px;
+               background: var(--accent); color: #120a00; text-decoration: none; font-weight: 700; font-size: 14px;
+               letter-spacing: .18em; text-indent: .18em; box-shadow: 0 0 22px rgba(255,170,0,.28); max-width: 100%;
+               box-sizing: border-box; white-space: nowrap; }
+  .commapBtn svg { flex: none; }
+  .commapBtn:hover, .commapBtn:focus-visible { background: #ffc95c; box-shadow: 0 0 30px rgba(255,170,0,.45); }
+  .commapBtn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+  .commapSub { color: var(--dim); font-size: 11.5px; letter-spacing: .04em; max-width: 520px; line-height: 1.45; }
+  .commapSub b { color: var(--accent); font-weight: 600; }
   footer { color: var(--dim); font-size: 11px; text-align: center; padding: 0 20px 30px;
            letter-spacing: .06em; }
   .battWrap{display:inline-flex;align-items:center;margin-left:6px}
@@ -644,8 +652,14 @@
   <div class="sub">PUBLIC RECEIVER DIRECTORY</div>
   <div class="blurb">Receivers you can listen to right now. Anyone running VibeServer can list
     theirs from the app — see <a href="https://vibesdr.net">vibesdr.net</a>.</div>
-  <!-- ★★ V12 beta94 THE COMMUNITY MAP (Stuart, 2026-11-25: "A link to the map can show on the directory page"). -->
-  <a class="commapLink" href="/community-map">COMMUNITY MAP <span>· aircraft, shipping, NAVTEX, sondes and more, heard by VibeServers ▸</span></a>
+  <!-- ★★ V12 beta94 THE COMMUNITY MAP (Stuart, 2026-11-25: "A link to the map can show on the directory page"; then "a nice
+       prominent button for it"). The count is read from the /api/directory answer this page already loads — no request of its own. -->
+  <div class="commap">
+    <a class="commapBtn" href="/community-map"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/>
+       <path d="M2.5 12h19M12 2.5c2.6 2.8 3.9 6 3.9 9.5s-1.3 6.7-3.9 9.5M12 2.5C9.4 5.3 8.1 8.5 8.1 12s1.3 6.7 3.9 9.5"/></svg>COMMUNITY MAP</a>
+    <div class="commapSub">Aircraft, shipping, NAVTEX, sondes and more, heard by VibeServers on one world map<span id="commapCount"></span></div>
+  </div>
 </header>
 
 <div class="legend">
@@ -828,6 +842,7 @@
 <script src="/mapgl/vendor/vibemapgl.js"></script>
 <script src="/mapgl/vendor/vibemapgl-compat.js"></script>
 <script src="/mapgl/vibemap-style.js"></script>
+<script src="/mapgl/vibemap-water.js"></script>
 <script>
 // ★★★ THE GREYLINE IS NOT DECORATION FOR THIS AUDIENCE — IT IS INFORMATION. A DXer can see which
 //     receivers are sitting in enhanced propagation right now, which is a reason to click one
@@ -1017,6 +1032,13 @@ function setCountLine(online, shown, active) {
     ? `${sv(online)} online · <u class="jump">showing ${shown} that meet the current search</u>`
     : `${sv(online)} online · no search criteria — <u class="jump">showing all ${sv(online)}</u>`;
 }
+/** ★ "· 5 servers sharing" under the COMMUNITY MAP button — from the listing already loaded (communityMap is in it), real
+ *  servers only (counted before the demo ones are added); nothing said while nobody shares. */
+function setCommapCount(servers) {
+  const el = document.getElementById('commapCount'); if (!el) return;
+  const n = servers.filter((s) => s && s.communityMap === true).length;
+  el.innerHTML = n ? ` · <b>${n} server${n === 1 ? '' : 's'} sharing</b>` : '';
+}
 function jumpToList() {
   document.getElementById('list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -1048,6 +1070,8 @@ if (window.VibeMapGL && window.VibeMapGLCompat && window.VM_STYLE) {
       window.L = VibeMapGLCompat.install(GLVM);
       L.control.zoom({ position: 'topleft' }).addTo();
       GLVM.ready.catch((e) => console.error('GPU map: ' + e));
+      // ★★ the wide rivers, canals and docks as water (the community map's waterways, Stuart 11-25) — mapgl/vibemap-water.js
+      if (window.VibeWater) VibeWater.attach(GLVM, location.origin + '/mapgl/vibemap-water.pmtiles');
     }
   } catch (e) { console.error('GPU map unavailable: ' + e); GLVM = null; window.L = LEAFLET; }
 }
@@ -3981,7 +4005,7 @@ function ownAddresses(servers) {
 function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
-    .then((d) => { YOU = (d && d.you) || null; return withLiveCounts(ownAddresses(Array.isArray(d.servers) ? d.servers : [])); })
+    .then((d) => { YOU = (d && d.you) || null; const list = Array.isArray(d.servers) ? d.servers : []; setCommapCount(list); return withLiveCounts(ownAddresses(list)); })
     // ★ Real servers first, then the invented ones — so a demo run still shows the estate as it
     //   actually is, with the simulation around it.
     .then(async (servers) => DEMO_ON ? servers.concat(await demoServers()) : servers)

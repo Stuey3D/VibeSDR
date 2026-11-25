@@ -136,6 +136,7 @@
 <script src="/mapgl/vendor/pmtiles.js"></script>
 <script src="/mapgl/vendor/vibemapgl.js"></script>
 <script src="/mapgl/vibemap-style.js"></script>
+<script src="/mapgl/vibemap-water.js"></script>
 <script src="/community-kit.js"></script>
 <script src="/community-map.js"></script>
 <script>
@@ -152,6 +153,8 @@ try {
   const load = (p, kind) => fetch(p).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
   GLVM = VibeMapGL.createNow($('map'), { style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/', profile: 'aero', center: [0, 40], zoom: 1.4 });
   gl = GLVM && GLVM.map;
+  // ★★ the wide rivers, canals and docks as WATER, so ships sit on it (Stuart 11-25) — mapgl/vibemap-water.js
+  if (GLVM && window.VibeWater) VibeWater.attach(GLVM, location.origin + '/mapgl/vibemap-water.pmtiles');
   if (gl) gl.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 } catch (e) { console.error('GPU map unavailable: ' + e); }
 if (!gl) { $('empty').hidden = false; $('empty').textContent = 'This map needs WebGL 2, which this browser does not offer.'; }
