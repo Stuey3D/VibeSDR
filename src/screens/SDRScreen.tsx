@@ -16108,7 +16108,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           const left = Math.max(edge, deckClear.left);
           const right = Math.max(edge, deckClear.right) + (frontScreen ? GRAB_GUTTER : 0);
           return [styles.pillWrap, {
-            bottom: bottomInset + 8 + deckClear.bottom, right,
+            /* ★ Folded landscape on the Duo (Stuart: "the controls could drop slightly here"): the deck sits half the
+             *  home-indicator inset + 4 from the bottom instead of the whole inset + 8 — the indicator is a thin bar
+             *  at the very bottom, and the one-row deck clears it. A camera there lifts it instead (deckClear). */
+            bottom: deckClear.bottom > 0 ? deckClear.bottom
+              : fullBleed && isLandscape ? Math.round(bottomInset / 2) + 4 : bottomInset + 8,
+            right,
             left: frontScreen
               ? deckReach.progress.interpolate({ inputRange: [0, 1], outputRange: [left, left + deckReachShift] })
               : left,
