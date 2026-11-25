@@ -2655,10 +2655,27 @@ function WaterfallView({
       const x1 = Math.min(width, hzToX(b.hi));
       const px = x1 - x0;
       if (px <= 0) continue;
-      const label = px < 28 ? '' : px < 60 ? (b.bandLabel ?? b.name.split(' ')[0]) : b.name;
-      segs.push({ x0, x1, color: bandColor(b), label, key: `${b.lo}-${b.hi}` });
+      segs.push({ x0, x1, color: bandColor(b), label: '', key: `${b.lo}-${b.hi}`, lx0: x0, lx1: x1, band: b } as any);
     }
-    return segs;
+    /* ★★ EACH LABEL IN ITS OWN BAND'S VISIBLE PIECE, NEVER OVERPRINTED (Stuart, 2026-11-25, 225.648 MHz: "DAB / DAB+
+     *  (Band III)" and "UHF Military Airband" printed on top of each other). A band's colour bar is drawn under every
+     *  narrower band that sits on it (widest first), so its label belongs only in the part still showing: its span
+     *  less every later segment, the widest such piece. Too narrow for even the short name → no label. */
+    for (let i = 0; i < segs.length; i++) {
+      const sg: any = segs[i];
+      let pieces: [number, number][] = [[sg.x0, sg.x1]];
+      for (let j = i + 1; j < segs.length; j++) {
+        const o = segs[j];
+        pieces = pieces.flatMap(([a, z]) => (o.x1 <= a || o.x0 >= z ? [[a, z]]
+          : [[a, Math.min(z, o.x0)], [Math.max(a, o.x1), z]].filter(([p, q]) => q - p > 0)) as [number, number][]);
+      }
+      const best = pieces.reduce<[number, number] | null>((m, p) => (!m || p[1] - p[0] > m[1] - m[0] ? p : m), null);
+      const px = best ? best[1] - best[0] : 0;
+      const b: Band = sg.band;
+      sg.label = px < 28 ? '' : px < 60 ? (b.bandLabel ?? b.name.split(' ')[0]) : b.name;
+      if (best) { sg.lx0 = best[0]; sg.lx1 = best[1]; }
+    }
+    return segs as Array<{ x0: number; x1: number; color: string; label: string; key: string; lx0: number; lx1: number }>;
   }, [visStart, bwHz, width, ituRegion, hzToX]);
 
   // ── Frequency ticks ─────────────────────────────────────────────────────────
@@ -3184,7 +3201,7 @@ function WaterfallView({
         {bandSegs.filter(s => s.label).map(s => (
           <View key={'bl' + s.key} pointerEvents="none"
                 style={[styles.bandLabelWrap,
-                        { left: s.x0 + 2, width: s.x1 - s.x0 - 4, height: BAND_H }]}>
+                        { left: s.lx0 + 2, width: s.lx1 - s.lx0 - 4, height: BAND_H }]}>
             <Text numberOfLines={1}
                   style={[styles.bandLabel, { fontFamily }]}>{s.label}</Text>
           </View>
