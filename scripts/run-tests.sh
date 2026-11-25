@@ -2088,7 +2088,7 @@ if [ -x "$OUT/test-xpdr" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-xpdr" -
    && "$OUT/test-xpdr" --write-clip-tlm "$OUT/xpdr-tlm-clip.u8" 2400000 145950000 145935700 145958000; then
   VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" VIBE_XPDR_TLM_CLIP="$OUT/xpdr-tlm-clip.u8" node --max-old-space-size=512 scripts/test-server-xpdr.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-web-xpdr.mjs; rc=$?
+  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" VIBE_XPDR_TLM_CLIP="$OUT/xpdr-tlm-clip.u8" node --max-old-space-size=512 scripts/test-web-xpdr.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/xpdr-clip.u8" "$OUT/xpdr-tlm-clip.u8"
 else

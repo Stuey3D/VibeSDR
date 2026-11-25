@@ -416,6 +416,11 @@ export interface SatPicked {
    *  centre, 137.5 MHz, while the dial sits on the listed channel). Absent = centre on the downlink, as before. */
   viewCentre?: number;
 }
+/** ★★★ beta94 does this pick decode FUNcube telemetry? A telemetry pick ('fctlm'), or a transponder finder whose span holds
+ *  the bird's telemetry ('xpdr' with "tlm" — JO-97, AO-73: Stuart 11-25 "handled as one") — the SATELLITE box then shows
+ *  the telemetry line and CHARTS beside the finder's rows. */
+export const satPickTlm = (pk: SatPicked | null | undefined): boolean =>
+  !!pk && (pk.decoder === 'fctlm' || (pk.decoder === 'xpdr' && typeof pk.params?.tlm === 'number' && (pk.params.tlm as number) > 0));
 function satDecoderName(d: unknown): SatPicked['decoder'] {
   return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' || d === 'xpdr' ? d : '';
 }

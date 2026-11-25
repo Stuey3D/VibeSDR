@@ -789,7 +789,8 @@ export class DecoderClient {
           } else if ((m.type === 'fctlm_status' || m.type === 'sat_tlm') && m.data) {
             // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts and a frame's values (sat_tlm also from aprs: APRS T#, SONATE-2) —
             //   the SATELLITE box draws them (no decoder box of its own)
-            if (this.active !== 'fctlm' && !(m.type === 'sat_tlm' && this.active === 'aprs')) return;
+            //   ★★★ beta94 …and the transponder finder's, when its span holds the bird's FUNcube telemetry (JO-97, AO-73)
+            if (this.active !== 'fctlm' && this.active !== 'xpdr' && !(m.type === 'sat_tlm' && this.active === 'aprs')) return;
             const tl = parseSatTelemetry(m.data);
             if (tl) { this.cb.onSatTelemetry?.(tl); if (this.active === 'fctlm') this.cb.onDot((tl.good ?? 0) > 0 || !!tl.values?.length ? 'active' : tl.sync ? 'sync' : 'idle'); }
           } else if (m.type === 'lrpt_geo' && m.data) {

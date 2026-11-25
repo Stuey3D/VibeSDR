@@ -47,6 +47,38 @@ never speech), ≈ 1 s of speech to confirm. The **suppressed carrier** = the sp
 **Status** `{"type":"xpdr_status","data":{slice,span,beacon,dop,rows:[{id,kind,hz,dial,snr,ago,on,beacon,call,text,wpm}],follow}}`
 once a second; rows bounded at 40.
 
+## Transponder + telemetry (beta94, branch b94-xpdrtlm)
+
+Stuart 11-25: *"the transponder and telemetry are close together so they can also be handled as one"* · *"allow the audio
+from the telemetry to also be listenable too"*. JO-97's FUNcube BPSK (145.840) sits 15 kHz below its transponder
+(145.855–145.875), AO-73's (145.935) below 145.950–145.970.
+
+- **Linked** (`linkXpdr`): an `fc-bpsk` downlink within `kXpdrBeaconReachHz` of a transponder → `Transmitter::tlmHz` on the
+  transponder; the span (and so the slice) covers it (AO-73 ~53 kHz); `decoderOf` adds `"tlm":<Hz>`; `xpdrOwnerOf` routes a
+  pick of the telemetry to the transponder. The telemetry downlink itself keeps `decoderOf` "fctlm" — an unattended pass of it
+  is unchanged, and a bird with telemetry and **no** transponder in reach keeps the telemetry-only pick (on IQ). MO-122's Fox
+  telemetry (heard, not decoded) is not linked.
+- **Decoded from the slice**: the finder owns a `vibefc::Run` fed the same turned IQ (`Run::feedIq`), aimed at the
+  telemetry's satellite-frame place. `sat_tlm` / `fctlm_status` go to the decoder socket exactly as a telemetry pick's
+  (DecoderHost `fctlmOut_`), and the gallery keeps the per-pass CSV + day log (`galleryKindFor("xpdr")` with "tlm" → fctlm).
+  The clients accept them while "xpdr" is attached; `satPickTlm` shows the telemetry line + CHARTS beside the rows.
+- **Its own trim**: the engine takes a decoder's trim only on a telemetry lock, and a transponder lock's shift belongs to
+  VFO A's follow — so the decoder's `TrimFollow` moves only where the run aims it (slewed 50 Hz/s). The lock, the slice and
+  VFO A never feel it; VFO A's follow never moves the decoder.
+- **One TELEMETRY row**: a CW or voice detection within ±1.5 kHz of the telemetry's carrier (listing + trim, + the decoder's
+  offset once frames decode) is folded into one row `{"id":"t1","kind":"tlm","car":…,"dial":car−1500,"frames":…}`;
+  `xpdr_status` carries `"tlm"`. The arrow is labelled TELEMETRY.
+- **LISTEN on it**: USB, the dial 1.5 kHz below the carrier (heard at ~1.5 kHz); the follow is measured by the decoder
+  (`src:"tlm"`), else held — the satellite's own transmitter has no uplink drift to guess. A manual tune still wins. A finder
+  lock's nominal may now sit anywhere in the span ± 6 kHz (`nominalLo/Hi` — start and nudge), so the tune lands there instead
+  of being clamped into the passband.
+- Tests: test-xpdr §7–§8, `test-xpdr --write-clip-tlm`, test-server-xpdr (AO-73 half), test-web-xpdr (AO-73 half),
+  test_xpdr_app. test-server-sat's telemetry-only checks moved to a test bird (TEST-139444, AO-73's elements, telemetry
+  only); test-server-fctlm-iq makes AO-73 telemetry-only in its fixture.
+- **Owed on air**: a JO-97 / AO-73 pass — do frames decode from the wide slice as they did from the 24 kHz one (CPU on a Pi:
+  the BPSK receiver's first filter now at the finder's slice rate)? Is the TELEMETRY row's suppression right on the real
+  spin-fading signal? Does LISTEN on it sound right (and AO-73's transponder only runs in eclipse, its telemetry in sunlight).
+
 ## VFO A follows the person
 
 The slice corrects OUR downlink Doppler from the orbit. A station's own uplink drift is theirs: it depends where they are

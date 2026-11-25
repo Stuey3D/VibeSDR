@@ -5,6 +5,10 @@
 // titled "TRANSPONDER · every signal found here" with an arrow per signal (ORBCOMM's drawing), LISTEN snaps VFO A to the
 // voice and the box says VFO A follows it; 390 px with no sideways scroll. Needs the page BUILT INTO the server
 // (node scripts/build-web.mjs, then the server rebuilt). Screenshots to $TMPDIR/vibesdr-xpdr-*.png.
+//   ★★★ beta94 + TRANSPONDER + TELEMETRY (VIBE_XPDR_TLM_CLIP — test-xpdr --write-clip-tlm: AO-73's FUNcube BPSK 700 Hz off
+//   its listing beside an SSB voice): SATELLITE → AO-73's TELEMETRY → the finder's box, with the telemetry line + CHARTS
+//   beside the rows, a TELEMETRY row with LISTEN, its arrow on the waterfall; LISTEN → VFO A 1.5 kHz below the carrier,
+//   followed by the decoder.
 //   VIBESERVER_BIN=… VIBE_XPDR_CLIP=… node scripts/test-web-xpdr.mjs
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -47,16 +51,16 @@ function seedOrbits(dataDir) {
 
 const CLIP = process.env.VIBE_XPDR_CLIP || '';
 if (!CLIP || !fs.existsSync(CLIP)) { console.log('   not run — VIBE_XPDR_CLIP needed (vibeserver/test-xpdr --write-clip c.u8 2400000 435640000 12)'); process.exit(3); }
-async function startServerX(dir, loc) {
+async function startServerX(dir, loc, clip = CLIP, centre = 435640000) {
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d), { recursive: true });
   seedOrbits(path.join(dir, 'data'));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Transponder web test', locator: loc, adminPass: 'xpdr-web-admin',
     radios: [{ serial: 'xpdrweb', label: 'Test radio', enabled: true, configured: true, users: 1 }] }));
   const rtlPort = await freePort(), port = await freePort();
-  const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', CLIP, '--hf-centre', '435640000'], { stdio: 'ignore' });
+  const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', clip, '--hf-centre', String(centre)], { stdio: 'ignore' });
   await sleep(300);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
-  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', '435640000', '--mode', 'usb', '--users', '1'],
+  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', String(centre), '--mode', 'usb', '--users', '1'],
                     { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), fs.openSync(path.join(dir, 'server.log'), 'a')] });
   for (let i = 0; i < 100; i++) { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(1000) }); if (r.ok) break; } catch {} await sleep(150); }
   return { port, log: () => { try { return fs.readFileSync(path.join(dir, 'server.log'), 'utf8'); } catch { return ''; } }, stop: () => { try { srv.kill('SIGTERM'); } catch {} try { rtl.kill('SIGTERM'); } catch {} } };
@@ -232,6 +236,99 @@ finally {
   edge.kill(); S.stop();
   await sleep(600);
   if (!fail) fs.rmSync(dir, { recursive: true, force: true }); else console.log(`   (kept ${dir})`);
+}
+
+// ── ★★★ beta94 TRANSPONDER + TELEMETRY on the page (AO-73) ──
+const TCLIP = process.env.VIBE_XPDR_TLM_CLIP || '';
+if (!TCLIP || !fs.existsSync(TCLIP)) console.log('   (transponder + telemetry not run — VIBE_XPDR_TLM_CLIP: test-xpdr --write-clip-tlm c.u8 2400000 145950000 145935700 145958000)');
+else {
+  console.log('── transponder + telemetry (AO-73) on the page ──');
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webxptlm-'));
+  // ★ a place where AO-73 is at its closest now, ~14° to the side of its track: little Doppler, a small rate
+  let T = await startServerX(path.join(dir2, 'a'), 'IO92ng', TCLIP, 145950000);
+  const a1 = await birdNow(T.port, 39444); await sleep(8000); const a2 = await birdNow(T.port, 39444);
+  T.stop(); await sleep(500);
+  let loc2 = 'IO92ng';
+  if (a1 && a2 && Number.isFinite(a1.lat) && Number.isFinite(a2.lat)) {
+    const k = Math.cos(a2.lat * Math.PI / 180);
+    let dy = a2.lat - a1.lat, dx = (((a2.lon - a1.lon + 540) % 360) - 180) * k;
+    const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
+    loc2 = locator(Math.max(-75, Math.min(75, a2.lat + 14 * dx)), (((a2.lon - 14 * dy / Math.max(0.2, k)) + 540) % 360) - 180);
+  }
+  T = await startServerX(path.join(dir2, 'b'), loc2, TCLIP, 145950000);
+  const dbg2 = await freePort();
+  fs.mkdirSync(path.join(dir2, 'edge'));
+  const edge2 = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg2}`, '--no-first-run', '--no-default-browser-check',
+    `--user-data-dir=${path.join(dir2, 'edge')}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+  let wc;
+  const f0 = fail;
+  try {
+    await sleep(3000);
+    const list = await (await fetch(`http://127.0.0.1:${dbg2}/json/list`)).json();
+    wc = new WebSocket(list.find((t) => t.type === 'page').webSocketDebuggerUrl);
+    let id = 0; const pend = new Map();
+    wc.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } };
+    await new Promise((r) => { wc.onopen = r; });
+    const send = (method, params = {}) => new Promise((res) => { const i = ++id; pend.set(i, res); wc.send(JSON.stringify({ id: i, method, params })); });
+    const ev = async (x) => { const r = await send('Runtime.evaluate', { expression: x, awaitPromise: true, returnByValue: true }); return r.result?.result?.value ?? r.result?.exceptionDetails?.text; };
+    const shot = async (name) => { const s = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(os.tmpdir(), `vibesdr-xpdr-${name}.png`); fs.writeFileSync(f, Buffer.from(s.result.data, 'base64')); return f; };
+    const until = async (x, ms) => { for (let i = 0; i < ms / 250; i++) { if (await ev(x)) return true; await sleep(250); } return false; };
+    await send('Page.enable'); await send('Runtime.enable');
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { window.__ft = []; const f = CanvasRenderingContext2D.prototype.fillText;
+      CanvasRenderingContext2D.prototype.fillText = function (t) { if (window.__ft.length > 4000) window.__ft.splice(0, 2000); window.__ft.push(String(t)); return f.apply(this, arguments); };
+      window.__tunes = []; const W = window.WebSocket;
+      window.WebSocket = class extends W { send(d) { if (typeof d === 'string' && d.includes('"type":"tune"')) { if (window.__tunes.length > 500) window.__tunes.splice(0, 250);
+        try { window.__tunes.push(JSON.parse(d)); } catch {} } return super.send(d); } }; })();` });
+    await send('Page.navigate', { url: `http://127.0.0.1:${T.port}/` });
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await until(`!![...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()))`, 15000);
+    await ev(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim())); b && b.click(); return !!b; })()`);
+    await until(`!!document.querySelector('#audioGate button')`, 15000);
+    {
+      const r = JSON.parse(await ev(`JSON.stringify(document.querySelector('#audioGate button').getBoundingClientRect())`));
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    }
+    await sleep(2500);
+    await ev(`document.getElementById('mMode')?.click()`);
+    await sleep(700);
+    await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SATELLITE'); b && b.click(); return !!b; })()`);
+    ok(await until(`!![...document.querySelectorAll('#satPanel button.sat-row')].find(x => /AO-73/.test(x.textContent) && /Telemetry/i.test(x.textContent))`, 8000), `AO-73's telemetry is listed (${loc2})`);
+    await ev(`(() => { const b = [...document.querySelectorAll('#satPanel button.sat-row')].find(x => /AO-73/.test(x.textContent) && /Telemetry/i.test(x.textContent)); b && b.click(); return !!b; })()`);
+    ok(await until(`!document.querySelector('#satPanel .sat-xp').hidden`, 8000), "★ picking the TELEMETRY opens the transponder finder's panel");
+    ok(await until(`/telemetry decodes here too/.test(document.querySelector('#satPanel .sat-xp').textContent)`, 4000), 'its line says the telemetry decodes here too');
+    ok(await until(`/TELEMETRY · [0-9]+ frame/.test(document.querySelector('#satPanel .sat-xp').textContent)`, 45000),
+       `★ a TELEMETRY row with frames (${(await ev(`document.querySelector('#satPanel .sat-xp').textContent`) || '').slice(0, 260)})`);
+    ok(await until(`!document.querySelector('#satPanel .sat-tlm').hidden && /CHARTS/.test(document.querySelector('#satPanel .sat-tlm').textContent)`, 8000),
+       `★ the telemetry line + CHARTS beside the rows (${(await ev(`document.querySelector('#satPanel .sat-tlm').textContent`) || '').slice(0, 160)})`);
+    ok(await until(`/VOICE/.test(document.querySelector('#satPanel .sat-xp').textContent)`, 20000), '…and the transponder\'s voice is a row of its own');
+    ok(await until(`window.__ft.includes('TELEMETRY')`, 6000), "the waterfall: the telemetry's arrow, labelled TELEMETRY");
+    const car = Number(await ev(`(() => { const r = [...document.querySelectorAll('#satPanel .sat-xp .sat-xr')].find(x => /TELEMETRY/.test(x.textContent)); return r ? r.querySelector('.sat-xf').textContent : '0'; })()`));
+    ok(await ev(`!![...document.querySelectorAll('#satPanel .sat-xp .sat-xr')].find(x => /TELEMETRY/.test(x.textContent))?.querySelector('button[data-act="xlisten"]')`) === true, 'the TELEMETRY row has LISTEN');
+    await shot('tlm-rows');
+    const nT = Number(await ev(`window.__tunes.length`));
+    await ev(`[...document.querySelectorAll('#satPanel .sat-xp .sat-xr')].find(x => /TELEMETRY/.test(x.textContent)).querySelector('button[data-act="xlisten"]').click()`);
+    ok(await until(`window.__tunes.length > ${nT}`, 3000), 'LISTEN sent a tune');
+    const tn = JSON.parse(await ev(`JSON.stringify(window.__tunes[window.__tunes.length - 1])`));
+    ok(car > 0 && Math.abs(tn.frequency - (car * 1e6 - 1500)) < 120 && /usb/i.test(tn.mode || 'usb'), `★ LISTEN: VFO A in USB 1.5 kHz below the carrier (${tn.frequency} ${tn.mode} for ${car} MHz)`);
+    ok(await until(`/measured by the telemetry decoder/.test(document.querySelector('#satPanel .sat-xp').textContent)`, 12000),
+       `★ VFO A follows, measured by the telemetry decoder ("${await ev(`document.querySelector('#satPanel .sat-xp .sat-note')?.textContent || ''`)}")`);
+    ok(await until(`/LISTENING/.test(document.querySelector('#satPanel .sat-xp').textContent)`, 3000), 'the row says LISTENING');
+    ok(/TRANSPONDER: LISTEN t1 \(telemetry\)/.test(T.log()) && !/Doppler lock ended/.test(T.log()), 'the server: LISTEN on the telemetry, the lock kept');
+    await shot('tlm-listen');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await sleep(800);
+    const fit = JSON.parse(await ev(`JSON.stringify({ sw: document.documentElement.scrollWidth, w: innerWidth })`));
+    ok(fit.sw <= fit.w + 1, `390 px with the telemetry: no sideways scroll (${fit.sw} / ${fit.w})`);
+    await shot('tlm-phone');
+  } catch (e) { ok(false, `driver: ${e}`); }
+  finally {
+    try { wc?.close(); } catch {}
+    edge2.kill(); T.stop();
+    await sleep(600);
+    if (fail === f0) fs.rmSync(dir2, { recursive: true, force: true }); else console.log(`   (kept ${dir2})`);
+  }
 }
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
