@@ -213,7 +213,7 @@ import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow } from '../hooks/useUiScale';
 import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
-import { useDeckReach, DeckGrabBar, REACH_SHARE, GRAB_GUTTER } from '../components/DeckReach';
+import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
@@ -10122,6 +10122,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  block, to sit just above it. The camera may sit over the spectrum or the waterfall, never a control or readout. */
   const deckClear = deckClearance(reserved, pillY != null && pillY > 0 ? pillY : screenH * 0.5, screenW, screenH);
   const deckReachShift = Math.round(screenW * REACH_SHARE);
+  const reachChoose = deckReach.choose;
+  const reachToggle = useMemo(() => ({ reach: deckReach.reach, onToggle: () => reachChoose(!deckReach.reach) }),
+    [deckReach.reach, reachChoose]);
   const deckOcclusion = useMemo(() => (
     !controlsHidden && deckFrame && deckFrame.W === screenW && deckFrame.H === screenH ? deckFrame : null
   ), [controlsHidden, deckFrame, screenW, screenH]);
@@ -11343,7 +11346,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const edge = Platform.OS === 'android' && isLandscape && !isTablet
             ? Math.max(28, insets.left + 8, insets.right + 8) : 8;
           const left = Math.max(edge, deckClear.left);
-          const right = Math.max(edge, deckClear.right) + (frontScreen ? GRAB_GUTTER : 0);
+          const right = Math.max(edge, deckClear.right);
           return [styles.pillWrap, {
             /* ★ Folded landscape on the Duo (Stuart: "the controls could drop slightly here"): the deck sits half the
              *  home-indicator inset + 4 from the bottom instead of the whole inset + 8 — the indicator is a thin bar
@@ -11365,6 +11368,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         {/* ★ The recording timer ticks in RecElapsed (re-renders the bar, not this screen). */}
         <RecElapsed startedAt={recStartedAt} render={(recSeconds) => (
         <ControlsBar
+          /* ★★★ REACH (iPhone Duo, folded front screen in portrait): the SHRINK / EXPAND key between the drums. */
+          reachToggle={frontScreen ? reachToggle : undefined}
+          measureKey={`${deckClear.bottom}|${screenW}x${screenH}|${bottomInset}`}
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
           readOnly={readOnly}
@@ -11454,12 +11460,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         )} />
         </PanelBoundary>
-        {/* ★★★ REACH (iPhone Duo, folded front screen only) — see components/DeckReach.tsx. */}
-        {frontScreen && (
-          <DeckGrabBar progress={deckReach.progress} reach={deckReach.reach} choose={deckReach.choose}
-                       settle={deckReach.settle} shift={deckReachShift} colour="rgba(255,255,255,0.42)"
-                       onMoving={onDeckMoving} />
-        )}
       </Animated.View>}
 
       {/* Servers chip — the discoverable route back to the instance list (§brief).
