@@ -75,5 +75,23 @@ ok(avoidRects({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 10, h: 10 }] }).leng
   ok(ip.padRight === 62, 'ordinary iPhone landscape (no rects): unchanged, full island inset');
 }
 
+// ── Split View shares on the open screen (landscape only on the Duo). UIKit gives the rects in the WINDOW's own
+//    coordinates (native converts the status bar frame from the scene), so a share containing the pill avoids it and
+//    one that doesn't, doesn't. Inner landscape 951 × 669, halves ~475 wide; pill assumed at the screen's top-right.
+{
+  const RIGHT_HALF: ReservedRegions = { ...NO_REGIONS, statusBar: [{ x: 475 - 90, y: 0, w: 90, h: 40 }], hinge: { status: 'fullyOpen', angleDeg: 180 } };
+  ok(isFrontScreenWindow(475, 669, 951, 669) === false, 'a share is never the front screen');
+  ok(rightLimitAt(RIGHT_HALF, 0, 64, 475) === 385, 'right-hand share: the name stops left of the pill');
+  ok(clearBelow(RIGHT_HALF, 475 - 180, 475, 669) === 40, 'right-hand share: the stack starts below the pill');
+  const tab = edgeChipGeometry({ windowW: 475, windowH: 669, insets: { top: 0, right: 0, bottom: 21, left: 0 }, cardW: 0, cardH: 40, top: 10, rects: RIGHT_HALF.statusBar });
+  ok(tab.padRight >= 90, `right-hand share: a tab in the pill's rows clears it (${tab.padRight})`);
+  const LEFT_HALF: ReservedRegions = { ...NO_REGIONS, hinge: { status: 'fullyOpen', angleDeg: 180 } };
+  ok(rightLimitAt(LEFT_HALF, 0, 64, 475) === Infinity && clearBelow(LEFT_HALF, 295, 475, 669) === 0,
+     'left-hand share (no pill in it): nothing moves');
+  // A rect reported outside the window (another share's) never moves anything.
+  const OUTSIDE: ReservedRegions = { ...NO_REGIONS, statusBar: [{ x: 500, y: 0, w: 90, h: 40 }] };
+  ok(clearBelow(OUTSIDE, 295, 475, 669) === 0, "a rect beyond the window's right edge is ignored");
+}
+
 if (fails) { console.log(`\nduo layout: ${fails} FAILED`); process.exit(1); }
 console.log('\nduo layout: all passed');
