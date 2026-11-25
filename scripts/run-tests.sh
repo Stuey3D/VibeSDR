@@ -1805,6 +1805,14 @@ printf '\n\033[1m── raw IQ out + saturating background decoders: the listene
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-iq-priority.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ beta94 THE RTL-TCP FRONT DOOR (rtltcp-fix-v12, Sloper 11-25: "connected", "Good", then nothing on a non-RTL radio):
+#     RAW IQ OUT's full-rate stream served as rtl_tcp by the engine (--rtltcp-port) — header only with IQ, the client's rate,
+#     SET_FREQUENCY, every command, VibeAGC / manual gain, one client, a non-RTL rate list resampled, LAN only (8.8.8.8
+#     refused, 169.254 link-local served). Loopback, silent. ~60 s.
+printf '\n\033[1m── RTL-TCP front door (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-rtltcp.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ beta94 A CLEAN STOP WITH BACKGROUND DECODING EXITS CLEANLY: ~BgRunner published to the shim's BgRegistry after it
 #     was destroyed — SIGABRT on every apt upgrade / restart once background decoding had run (beta93 too). Running, and
 #     stopped by a listener first; exit 0, no std::terminate. Same VIBESERVER_BIN rule. ~40 s.

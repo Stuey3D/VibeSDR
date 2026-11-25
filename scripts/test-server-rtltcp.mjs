@@ -13,6 +13,7 @@
 //   · NON-RTL: the same with the source given a fixed rate list (VIBE_TEST_TCP_RATES "2000000,3000000"), so a 1.024 MS/s
 //     ask is served by the next rate up (2 MS/s) and RESAMPLED to exactly 1.024 MS/s;
 //   · LAN ONLY: a client from a public address (VIBE_TEST_RTLTCP_PEER=8.8.8.8) is refused — no header, no bytes;
+//     ★★ beta94 one from 169.254/16 link-local (169.254.10.20) is served (vibe_ipclass.h isPrivateV4);
 //   · the server's CPU while streaming 2.4 MS/s (printed: the figure to weigh against the old librtlsdr pass-through).
 // ★ SILENT: no audio anywhere — bytes are counted and one tone measured. Loopback only.
 // usage: VIBESERVER_BIN=… node scripts/test-server-rtltcp.mjs   (~60 s)
@@ -206,6 +207,19 @@ const within = (got, want, pct) => Math.abs(got - want) <= want * pct / 100;
     const st = (await S.status())?.rtltcp;
     ok((st?.refused ?? 0) >= 1 && /local network/.test(st?.lastRefusal ?? ''), `…and said why (${st?.lastRefusal})`);
     ok(/RTL-TCP: refused 8\.8\.8\.8/.test(S.L()), 'the refusal is in the log');
+  } finally { S.stop(); }
+}
+
+// ── 4. ★★ beta94 (Stuart 11-25) 169.254/16 LINK-LOCAL IS THE LOCAL NETWORK — a laptop cabled straight to the box, no DHCP ──
+{
+  const S = await server({ label: 'a client from a link-local address (VIBE_TEST_RTLTCP_PEER=169.254.10.20)', env: { VIBE_TEST_RTLTCP_PEER: '169.254.10.20' } });
+  try {
+    const c = client(S.door);
+    await sleep(2500);
+    ok(!!c.hdr && c.bytes > 100000, `served: the header and IQ (${c.bytes} bytes)`);
+    const st = (await S.status())?.rtltcp;
+    ok((st?.refused ?? 0) === 0 && !/RTL-TCP: refused 169\.254/.test(S.L()), 'never refused');
+    c.end();
   } finally { S.stop(); }
 }
 
