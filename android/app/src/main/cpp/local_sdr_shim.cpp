@@ -11965,9 +11965,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (const std::string rw = vsSatReachWhy(tx.hz, tx.passband() ? tx.hiHz : tx.hz); !rw.empty()) { satRefuse(sock, "pick", rw); return; }
         std::string key, session; std::shared_ptr<ClientDsp> me;
         if (!satPickKey(sock, key, session, me)) return;
+        /* ★★★ beta94 ANOTHER ORBCOMM BIRD KEEPS THE DECODER (Stuart 11-25: "when i selected the correct pass to see the half
+         *  globe correctly it reset the pass that was decoding"). An ORBCOMM pick runs ONE whole-band decoder that hears every
+         *  bird at once; picking another ORBCOMM bird only changes which bird the box shows and where the Doppler lock aims.
+         *  So while the earlier pick's "orbcomm" still runs on its host with the SAME slice (the same attach parameters), it
+         *  stays attached — its counts, carriers and locks untouched; no "decoder attached" again. Anything else (another
+         *  kind of satellite, a different slice, the decoder replaced by hand) is the ordinary new pick below. */
+        SatPick keepOrb; bool keepingOrb = false;
+        {
+            std::string np;
+            if (vibe::sat::decoderOf(tx, np) == "orbcomm") {
+                SatPick prev; bool have = false;
+                { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(key); if (it != satPicks_.end()) { prev = it->second; have = true; } }
+                if (have && prev.decoder == "orbcomm" && !prev.decoderKey.empty()
+                    && prev.decoderKey == DecoderHost::startKeyFor("orbcomm", vibe::sat::decoderAttachMsg("orbcomm", np))) {
+                    std::shared_ptr<DecoderHost> host = prev.perVfo ? decoders_.find(prev.owner) : decoders_.shared();
+                    if (host && vibesatgain::pickStillRuns(prev.decoder, prev.decoderKey, host->startKey())) { keepOrb = prev; keepingOrb = true; }
+                }
+            }
+        }
         // 1. what an earlier pick left: its lock (quietly — this pick moves the dial itself) and its decoder
         satQuietUnlock(key, me);
-        satDetachPick(key, "a new pick");
+        if (keepingOrb) {
+            satVfoBCloseFor(key, "The satellite pick changed \xe2\x80\x94 VFO B closed");   // ★ as satDetachPick does
+            LOGI("[sat] decoder orbcomm kept for the new ORBCOMM pick (the whole band is already decoded)");
+        } else satDetachPick(key, "a new pick");
         // 2. ★ the tune — the listener's own tune frame through the ordinary handler (handleControl), so every rule a tune
         //    has (the locked window, band defaults on a person's tune, the shared dial's config to the room, the RDS
         //    owner …) applies unchanged. The gate this frame would meet has already been met by this `sat` frame.
@@ -12000,7 +12022,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         SatPick p; p.norad = (long long)nv; p.tx = (int)tv; p.owner = session; p.perVfo = perClientDsp() && !decoderOnly;
         std::string params, decoderWhy;
         const std::string ext = vibe::sat::decoderOf(tx, params);
-        if (!ext.empty()) {
+        if (keepingOrb) {   // ★★★ beta94 the running whole-band decoder is this pick's now (its owner and host unchanged)
+            p.decoder = keepOrb.decoder; p.decoderKey = keepOrb.decoderKey; p.owner = keepOrb.owner; p.perVfo = keepOrb.perVfo;
+        } else if (!ext.empty()) {
             decoderWhy = satAttach(sock, p.perVfo, session, ext, params, p.decoderKey);
             if (decoderWhy.empty()) p.decoder = ext;
         }
@@ -33544,6 +33568,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const bool onB = watchDecBSplit(key, session);
         DecoderHost::Env e;
         e.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
+        /* ★★★ beta94 ORBCOMM: the SATELLITE pick this host decodes for (the listener's own, or the room's on the shared host)
+         *  and whether its pass is in progress by the prediction — the box follows the bird the decoder hears once it is over
+         *  (vibe_orbcomm_run.h followStep_). Not VFO B's host: a pick is always VFO A's. */
+        if (!onB) {
+            const std::string pk = session.empty() ? std::string(kSatShared) : session;
+            e.satPickNow = [this, pk](long long& norad, int& up) {
+                { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(pk); if (it == satPicks_.end()) return false; norad = it->second.norad; }
+                vibe::sat::Pass ps;
+                up = satEngine().passAt(norad, satClock().unix, ps) ? 1 : 0;
+                return true;
+            };
+        }
         // ★★ V12 beta90 THE STATION STORE (the DIGI MODES MAP, PSK Reporter): a listener's spots, labelled live. Never the
         //    decoder-only sidecar's (it decodes a NETWORK radio for this phone's own app — not this server's stations).
         if (!decoderOnly) { e.stations = &vsStations(); e.stationOrigin = vibestations::kLive; }
