@@ -168,6 +168,11 @@ layer.destroy()
   (the app: its page already draws the HFDL receiver marker) skips the house only — the position still
   drives rings, distances and the camera. `maplibregl` must be global
   for the aircraft card.
+- **The card** (beta94, Stuart's greyed ×): its text scrolls in the layer's own `.vsadsb-sc`, never in the popup's
+  content box — MapLibre puts its × at the top-right of that box, where an overlay scroll bar (macOS) lay over it and
+  took the press. The × and the fold key sit above the scroller (z-index) and never move. On the GPU map a refresh
+  refills `.vsadsb-sc` only (`renderCard`), so MapLibre's × is made once per card; `setHTML` is used only to open it.
+  `node scripts/test-web-adsb-card.mjs` (headless Edge, silent) holds it.
 - Defaults `{autoZoom: true, fit: true, rings: true}`; `onPrefs` fires only when a person flips a toggle.
   The host persists them. A camera move the layer did not start, within 1 s of a touch/click/wheel/key on
   the map (or carrying MapLibre's `originalEvent`), **pauses** auto-zoom (AUTO shows hatched) until AUTO or

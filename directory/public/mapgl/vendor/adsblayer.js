@@ -711,8 +711,16 @@
       + p + ' button:focus-visible{outline:1px solid rgba(' + T.hi + ',0.8);outline-offset:-2px}'
       + '.vsadsb-pop-' + th + ' .maplibregl-popup-content,.vsadsb-pop-' + th + ' .leaflet-popup-content-wrapper{background:rgba(' + T.bg + ',0.96);'
       + 'border:1px solid rgba(' + T.border + ',0.30);color:rgba(' + T.ink + ',0.90);font:13px ui-monospace,"SF Mono",Menlo,Consolas,monospace;'
-      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5);max-height:min(46vh,360px);overflow-y:auto}'
+      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5)}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-content{margin:0}'
+      /* ★★ THE CARD SCROLLS INSIDE ITS OWN BOX, NOT THE POPUP'S (Stuart, 2026-11-25: "sometimes the x button to close it
+       *  greys out. work around is to minimise it and then press x"). The scroller used to be MapLibre's popup content —
+       *  the very element MapLibre puts its x in, at top:0 right:0. A card taller than the box (a phone, a short window,
+       *  Comm-B rows, the aviation map's source lines) is a scroller, and an OVERLAY scrollbar (macOS, Edge and Safari
+       *  with a trackpad) is drawn over its right edge: the grey thumb sat on the x and took the press. Folded, the card
+       *  does not scroll, so its x worked. Scrolled, the x scrolled away with the text. Now the text scrolls in
+       *  .vsadsb-sc, the x and the fold key sit above it (z-index) and never move. */
+      + '.vsadsb-pop-' + th + ' .vsadsb-sc{max-height:min(46vh,360px);overflow-y:auto;overscroll-behavior:contain}'
       // ★ MORE ABOVE / BELOW (moreCue): zero-height sticky rows, a small pill in the readout colour centred on the edge
       + '.vsadsb-pop-' + th + ' .vsadsb-more{position:sticky;height:0;z-index:3;pointer-events:none;display:none}'
       + '.vsadsb-pop-' + th + ' .vsadsb-more.up{top:0}.vsadsb-pop-' + th + ' .vsadsb-more.dn{bottom:0}'
@@ -725,10 +733,11 @@
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-top .maplibregl-popup-tip{border-bottom-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(' + T.bg + ',0.96)}'
-      + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button,.vsadsb-pop-' + th + ' .leaflet-popup-close-button{color:rgba(' + T.ink + ',0.5);font-size:16px}'
+      + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button,.vsadsb-pop-' + th + ' .leaflet-popup-close-button{color:rgba(' + T.ink + ',0.5);font-size:16px;z-index:4}'
+      + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button:hover,.vsadsb-pop-' + th + ' .leaflet-popup-close-button:hover{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .t{font-size:15px;font-weight:600;color:rgba(' + T.hi + ',1);margin-bottom:6px;letter-spacing:0.8px;padding-right:38px}'
       + '.vsadsb-pop-' + th + ' .t.mn{margin:0}'
-      + '.vsadsb-pop-' + th + ' .vsadsb-min{position:absolute;top:3px;right:24px;background:none;border:0;padding:2px 6px;cursor:pointer;'
+      + '.vsadsb-pop-' + th + ' .vsadsb-min{position:absolute;z-index:4;top:3px;right:24px;background:none;border:0;padding:2px 6px;cursor:pointer;'
       + 'font:16px ui-monospace,"SF Mono",Menlo,Consolas,monospace;line-height:1;color:rgba(' + T.ink + ',0.5)}'
       + '.vsadsb-pop-' + th + ' .vsadsb-min:hover{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .t i{font-style:normal;font-size:12px;font-weight:400;color:rgba(' + T.ink + ',0.65);margin-left:6px}'
@@ -1265,12 +1274,12 @@
     /* ★★ MORE ABOVE / MORE BELOW (Stuart, 2026-10-25: "on the little popup cards for the aircraft can you put a little down
      *  arrow/up arrow or some way of showing that there is more info to scroll"). Two sticky markers, the first and last
      *  thing in the card's scroller, shown only when there IS more that way; re-judged on every scroll, every refresh of
-     *  the card (setHTML makes a new scroller) and every resize. Zero height, so they never move the card's contents. */
+     *  the card and every resize. Zero height, so they never move the card's contents. */
     const MORE_UP = '<div class="vsadsb-more up" aria-hidden="true"><span>▲</span></div>';
     const MORE_DN = '<div class="vsadsb-more dn" aria-hidden="true"><span>▼</span></div>';
     function moreCue() {
       const el = popup && popup.getElement ? popup.getElement() : null;
-      const sc = el ? el.querySelector('.maplibregl-popup-content, .leaflet-popup-content-wrapper') : null;
+      const sc = el ? el.querySelector('.vsadsb-sc') : null;
       if (!sc) return;
       const up = sc.scrollTop > 2, dn = sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2;
       sc.classList.toggle('vsadsb-more-up', up);
@@ -1279,7 +1288,7 @@
     // ★ scroll does not bubble: caught on the way down, for whichever card is open
     container.addEventListener('scroll', (e) => {
       const t = e.target;
-      if (t && t.classList && (t.classList.contains('maplibregl-popup-content') || t.classList.contains('leaflet-popup-content-wrapper'))) moreCue();
+      if (t && t.classList && t.classList.contains('vsadsb-sc')) moreCue();
     }, true);
     window.addEventListener('resize', () => requestAnimationFrame(moreCue));
     function select(hex) {
@@ -1297,13 +1306,13 @@
          *  report — so the keyboard's and the controller's next Enter closed the card instead of pressing what
          *  was highlighted (web client, ADS-B list, 2026-10-24). The x is still a button anyone can reach. */
         const p = new ML.Popup({ closeButton: true, closeOnClick: false, focusAfterOpen: false, className: 'vsadsb-pop-' + th, maxWidth: '280px', offset: 16 })
-          .setLngLat([s.disp.lon, s.disp.lat]).setHTML(popupHtml);
+          .setLngLat([s.disp.lon, s.disp.lat]).setHTML(SC_OPEN + popupHtml + SC_CLOSE);
         // ★ Only THIS card's close clears the selection — closePopup() forgets the card before removing it.
         p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.addTo(gl);
       } else {
         const p = LL.popup({ className: 'vsadsb-pop-' + th, maxWidth: 280, offset: [0, -10], autoPan: false, closeOnClick: false })
-          .setLatLng([s.disp.lat, s.disp.lon]).setContent(popupHtml);
+          .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);
         p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.openOn(lm);
       }
@@ -1401,7 +1410,25 @@
         if (d) { d.innerHTML = n.dyn; popupHtml = h; moreCue(); return; }
       }
       popupHtml = h;
-      if (gl) popup.setHTML(h); else popup.setContent(h);
+      renderCard(h);
+    }
+    /* ★★ THE x IS MADE ONCE PER CARD (Stuart, 2026-11-25, the greyed x). MapLibre's setHTML empties the popup and makes a
+     *  NEW close button every time — so a card refreshed between a press and its release (a route or a logo arriving,
+     *  the fold) lost the click, and threw away the reader's scroll position. On the GPU map only the card's own scroller
+     *  is refilled: MapLibre's x stays the node that was pressed. Leaflet keeps its x outside the content anyway; there
+     *  setContent re-lays the popup's width (a folded card is narrow), and the scroll position is put back. */
+    const SC_OPEN = '<div class="vsadsb-sc">', SC_CLOSE = '</div>';
+    function renderCard(h) {
+      if (!popup) return;
+      const el = popup.getElement ? popup.getElement() : null;
+      const sc = el ? el.querySelector('.vsadsb-sc') : null;
+      if (gl && sc) sc.innerHTML = h;
+      else {
+        const top = sc ? sc.scrollTop : 0;
+        if (gl) popup.setHTML(SC_OPEN + h + SC_CLOSE); else popup.setContent(SC_OPEN + h + SC_CLOSE);
+        const sc2 = top && popup.getElement ? popup.getElement().querySelector('.vsadsb-sc') : null;
+        if (sc2) sc2.scrollTop = top;
+      }
       moreCue();
     }
     function onMinClick(e) {
@@ -1411,8 +1438,7 @@
       cardMin = !cardMin;
       if (selected && popup && ac.has(selected)) {
         popupHtml = cardHtml(ac.get(selected));
-        if (gl) popup.setHTML(popupHtml); else popup.setContent(popupHtml);
-        moreCue();
+        renderCard(popupHtml);
       }
     }
     container.addEventListener('click', onMinClick, true);
