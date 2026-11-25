@@ -905,6 +905,20 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="communityMap" style="width:16px;height:16px;accent-color:var(--amber)">
           <span>Share to the VibeSDR community map</span></label>
+        <!-- ★ beta94: the modes it shares — every mode this server runs unless the owner leaves one out (config communityOff) -->
+        <div id="communityModes" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin:6px 0 2px 24px;font-size:12px">
+          <span class="hint" style="width:100%;margin:0">Share these (only what this server's radios decode ever appears):</span>
+          <b style="width:100%;font-size:11px;letter-spacing:.08em">AVIATION</b>
+          <label><input type="checkbox" data-cm="adsb"> ADS-B</label><label><input type="checkbox" data-cm="acars"> ACARS</label>
+          <label><input type="checkbox" data-cm="vdl2"> VDL2</label><label><input type="checkbox" data-cm="hfdl"> HFDL</label>
+          <label><input type="checkbox" data-cm="ndb"> NDB</label><label><input type="checkbox" data-cm="vor"> VOR map</label>
+          <b style="width:100%;font-size:11px;letter-spacing:.08em">MARITIME</b>
+          <label><input type="checkbox" data-cm="ais"> AIS</label><label><input type="checkbox" data-cm="dsc"> DSC</label>
+          <label><input type="checkbox" data-cm="navtex"> NAVTEX</label>
+          <b style="width:100%;font-size:11px;letter-spacing:.08em">MISC</b>
+          <label><input type="checkbox" data-cm="sondes"> Radiosondes</label><label><input type="checkbox" data-cm="aprs"> APRS</label>
+          <label><input type="checkbox" data-cm="mesh"> MeshCore nodes</label>
+        </div>
         <div class="hint">Shared: what the stations themselves broadcast &mdash; aircraft and ships' own positions, the
           NAVTEX stations and NDB beacons this server heard, and positions sent in DSC calls &mdash; with this server's
           name and its four-character grid square from the directory. Never this server's exact position. Only what
@@ -7312,6 +7326,8 @@ function fill() {
   $("gallerySaveLive").checked = cfg.gallerySaveLive !== false;
   // ★★ V12 beta94 the community map — absent = OFF (what an older config means)
   if ($("communityMap")) $("communityMap").checked = cfg.communityMap === true;
+  { const off = String(cfg.communityOff || "").split(",");
+    document.querySelectorAll("#communityModes [data-cm]").forEach((b) => { b.checked = !off.includes(b.dataset.cm); }); }
   // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = OFF (what an older config means).
   if ($("pskrOn")) {
     $("pskrOn").checked = cfg.pskrOn === true;
@@ -8975,6 +8991,7 @@ function stashServer() {
   cfg.galleryPublic = $("galleryPublic").checked;
   cfg.gallerySaveLive = $("gallerySaveLive").checked;
   if ($("communityMap")) cfg.communityMap = $("communityMap").checked;
+  if ($("communityModes")) cfg.communityOff = [...document.querySelectorAll("#communityModes [data-cm]")].filter((b) => !b.checked).map((b) => b.dataset.cm).join(",");
   if ($("pskrOn")) {
     cfg.pskrOn = $("pskrOn").checked; cfg.pskrCall = pskrCallValue(); cfg.pskrAntenna = $("pskrAntenna").value.trim();
     cfg.wsprnetOn = $("wsprnetOn").checked; cfg.wsprnetCall = wsprnetCallValue(); cfg.dmrIdLookup = $("dmrIdLookup").checked;
@@ -9018,6 +9035,7 @@ function collect() {
     galleryPublic:    $("galleryPublic").checked,
     gallerySaveLive:  $("gallerySaveLive").checked,
     communityMap:     $("communityMap") ? $("communityMap").checked : false,   // ★★ V12 beta94 the community map
+    communityOff:     $("communityModes") ? [...document.querySelectorAll("#communityModes [data-cm]")].filter((b) => !b.checked).map((b) => b.dataset.cm).join(",") : "",
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (machine-level)
     pskrOn:           $("pskrOn") ? $("pskrOn").checked : false,
     pskrCall:         $("pskrOn") ? pskrCallValue() : "",

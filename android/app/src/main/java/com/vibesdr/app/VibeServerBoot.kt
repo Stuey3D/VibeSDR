@@ -329,6 +329,7 @@ object VibeServerBoot {
                                 cfg.s("radioLabel").trim().ifEmpty { lastUsbModel }, lastUsbSerial)
         // ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the owner's "Share to the VibeSDR community map" — absent = OFF.
         VibeLocalSDR.setCommunityMap(cfg.b("communityMap", false))
+        VibeLocalSDR.setCommunityModesOff(cfg.s("communityOff"))   // ★ the modes the owner leaves out ("" = all)
         /* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (Server mode → PSK REPORTER) — the calls main.cpp makes
          *  from the server's pskrOn / pskrCall / pskrAntenna / wsprnetOn / dmrIdLookup. Always a definite value: absent =
          *  OFF. The grid comes from RECEIVER LOCATION (a manual place only); no place = no grid, said on the screen. */

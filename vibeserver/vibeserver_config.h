@@ -974,6 +974,9 @@ struct ServerConfig {
      *  /vibeserver/community.json, and the directory lists the server as a contributor. A PIN or a private gallery still
      *  rules (vibe_community.h). */
     bool        communityMap = false;
+    /** ★ The modes the owner leaves OUT of the community map (comma-separated: adsb acars vdl2 hfdl ndb vor ais dsc navtex
+     *  sondes aprs mesh). "" = every mode this server runs (the default). */
+    std::string communityOff;
     /** ★★ V12 beta90 PSK REPORTER (android/app/src/main/cpp/vibe_spot_report.h, docs/v12/PSK-REPORTER.md) — MACHINE-level,
      *  beside Background Decoding on the setup page: every radio's digital spots go to PSK Reporter under ONE receiver
      *  callsign. OFF by default; nothing is sent without `pskrCall`. `pskrAntenna` is free text ("" = each radio's own

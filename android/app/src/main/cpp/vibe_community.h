@@ -47,7 +47,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <mutex>
+#include <set>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <string>
 #include <vector>
 
@@ -56,20 +62,24 @@ namespace vibecommunity {
 static constexpr int64_t kCacheSec = 30;                 ///< one build per 30 s per process, whoever asks
 static constexpr size_t  kMaxBytes = 640 * 1024;          ///< the whole answer, at most
 static constexpr size_t  kAircraftMax = 600;
-static constexpr int64_t kAircraftAgeSec = 900;          ///< a position older than 15 min is not "now" for anybody
-static constexpr size_t  kShipsMax = 400;
+static constexpr int64_t kAircraftAgeSec = 300;          ///< ★ live: a position older than 5 min is not "now" (Stuart 11-25)
+static constexpr size_t  kShipsMax = 300;
 static constexpr int64_t kShipsSinceSec = 6 * 3600;      ///< the shipping map's own SHIP_KEEP_SEC
 static constexpr size_t  kDscMax = 150;
-static constexpr int64_t kDscSinceSec = 7 * 86400;       ///< the shipping map's DSC_ALERT_KEEP_SEC (the page applies the day rule)
-static constexpr int64_t kNavtexSinceSec = 7 * 86400;
+static constexpr int64_t kDscSinceSec = 86400;           ///< ★ 24 h (Stuart 11-25: "optimise everything")
+static constexpr int64_t kNavtexSinceSec = 86400;         ///< ★ NAVTEX: the last 24 h only (Stuart 11-25)
 static constexpr size_t  kNdbMax = 300;
 static constexpr int64_t kNdbSinceSec = 86400;
 
 /** The layer names, in the order the page lists them. */
 inline const std::vector<std::string>& layerOrder() {
-    static const std::vector<std::string> v = { "adsb", "acars", "vdl2", "hfdl", "ais", "dsc", "navtex", "ndb" };
+    // ★ beta94 pass 2 (Stuart 11-25: "anything that we map now should be able to be contributed … sondes etc too" —
+    //   "amateur spots excluded"): AVIATION adsb acars vdl2 hfdl ndb vor · MARITIME ais dsc navtex · MISC sondes aprs mesh
+    static const std::vector<std::string> v = { "adsb", "acars", "vdl2", "hfdl", "ndb", "vor", "ais", "dsc", "navtex", "sondes", "aprs", "mesh" };
     return v;
 }
+
+inline std::set<std::string> offSet(const std::string& csv);   // ★ below
 
 /** One part of the answer: its key, its JSON value (an object or array, already built) and the layers it carries. */
 struct Section {
@@ -105,7 +115,7 @@ inline std::string assemble(int64_t now, const std::vector<Section>& in, size_t 
     }
     std::vector<std::string> ordered;
     for (const auto& l : layerOrder()) if (std::find(have.begin(), have.end(), l) != have.end()) ordered.push_back(l);
-    std::string o = "{\"v\":1,\"on\":true,\"now\":" + std::to_string((long long)now) + ",\"layers\":[";
+    std::string o = "{\"v\":2,\"on\":true,\"now\":" + std::to_string((long long)now) + ",\"layers\":[";
     for (size_t i = 0; i < ordered.size(); i++) o += (i ? ",\"" : "\"") + ordered[i] + "\"";
     o += "]" + body;
     if (!dropped.empty()) o += ",\"dropped\":[" + dropped + "]";
@@ -149,13 +159,13 @@ struct NdbRow {
     float best = 0;
     int64_t first = 0, last = 0;
 };
-/** {"now":N,"log":[…]} — placed beacons heard within `sinceSec`, newest first, at most `maxRows`; "" when there are none. */
-inline std::string ndbJson(std::vector<NdbRow> rows, int64_t now, size_t maxRows = kNdbMax, int64_t sinceSec = kNdbSinceSec) {
+/** ★ Compact NDB rows — [ident, hz, lat, lon, last, name, cc] — placed beacons heard within `sinceSec`, newest first, one
+ *  per ident + frequency, at most `maxRows`; "" when there are none. No distance or bearing from the receiver. */
+inline std::string ndbRows(std::vector<NdbRow> rows, int64_t now, size_t maxRows = kNdbMax, int64_t sinceSec = kNdbSinceSec) {
     rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const NdbRow& r) {
         return r.ident.empty() || !std::isfinite(r.lat) || !std::isfinite(r.lon) || now - r.last > sinceSec;
     }), rows.end());
     std::sort(rows.begin(), rows.end(), [](const NdbRow& a, const NdbRow& b) { return a.last > b.last; });
-    // ★ one per ident + frequency (the cards of two days name the same beacon): the newest
     std::vector<NdbRow> uniq;
     for (const auto& r : rows) {
         bool dup = false;
@@ -163,17 +173,65 @@ inline std::string ndbJson(std::vector<NdbRow> rows, int64_t now, size_t maxRows
         if (!dup) uniq.push_back(r);
         if (uniq.size() >= maxRows) break;
     }
-    if (uniq.empty()) return "";
-    std::string o = "{\"now\":" + std::to_string((long long)now) + ",\"log\":[";
-    char b[256];
+    std::string o;
+    char b[160];
     for (size_t i = 0; i < uniq.size(); i++) {
         const NdbRow& r = uniq[i];
-        std::snprintf(b, sizeof b, "%s{\"ident\":\"%s\",\"hz\":%.0f,\"lat\":%.4f,\"lon\":%.4f,\"best\":%.0f,\"first\":%lld,\"last\":%lld",
-                      i ? "," : "", jsonEsc(r.ident).c_str(), r.hz, r.lat, r.lon, (double)r.best, (long long)r.first, (long long)r.last);
+        std::snprintf(b, sizeof b, "%s[\"%s\",%.0f,%.4f,%.4f,%lld,\"", i ? "," : "", jsonEsc(r.ident).c_str(), r.hz, r.lat, r.lon, (long long)r.last);
         o += b;
-        o += ",\"name\":\"" + jsonEsc(r.name.substr(0, 80)) + "\",\"cc\":\"" + jsonEsc(r.cc.substr(0, 4)) + "\"}";
+        o += jsonEsc(r.name.substr(0, 60)) + "\",\"" + jsonEsc(r.cc.substr(0, 3)) + "\"]";
     }
-    return o + "]}";
+    return o;
+}
+
+/** ★ Compact aircraft rows — [key, lat, lon, position age s, alt ft|null, track|null, speed kt|null, sources (bit mask: 1 ADS-B,
+ *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type]. The rows as aircraftRows() chose them. */
+inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, int64_t nowMs) {
+    std::string o;
+    char b[200];
+    for (size_t i = 0; i < rows.size(); i++) {
+        const auto& w = rows[i];
+        char key[40];
+        if (w.icao) std::snprintf(key, sizeof key, "%06X", w.icao);
+        else std::snprintf(key, sizeof key, "%s", jsonEsc(!w.reg.empty() ? "r:" + w.reg : "f:" + w.flight).substr(0, 30).c_str());
+        auto opt = [](bool has, double v, char* out, size_t n) { if (has) std::snprintf(out, n, "%.0f", v); else std::snprintf(out, n, "null"); };
+        char alt[16], trk[16], gs[16];
+        opt(w.flags & 2, w.altFt, alt, sizeof alt); opt(w.flags & 4, w.trk, trk, sizeof trk); opt(w.flags & 8, w.gs, gs, sizeof gs);
+        std::snprintf(b, sizeof b, "%s[\"%s\",%.4f,%.4f,%lld,%s,%s,%s,%u,\"", i ? "," : "", key, w.lat, w.lon,
+                      (long long)std::max<int64_t>(0, (nowMs - w.posMs) / 1000), alt, trk, gs, (unsigned)w.srcMask);
+        o += b;
+        o += jsonEsc(w.flight.substr(0, 10)) + "\",\"" + jsonEsc(w.reg.substr(0, 10)) + "\",\"" + jsonEsc(w.type.substr(0, 8)) + "\"]";
+    }
+    return o;
+}
+
+/** Round to 4 decimals (≈ 11 m) as text. */
+inline std::string c4(double v) { char b[24]; std::snprintf(b, sizeof b, "%.4f", v); return b; }
+
+/** Which sections a layer needs (the ?s= parameter speaks layers). */
+inline std::vector<std::string> sectionsOfLayer(const std::string& l) {
+    if (l == "adsb" || l == "acars" || l == "vdl2" || l == "hfdl") return { "a" };
+    if (l == "ais") return { "s" };
+    if (l == "dsc") return { "d" };
+    if (l == "navtex") return { "ns", "nw", "nm", "nx" };
+    if (l == "ndb") return { "b" };
+    if (l == "vor") return { "o" };
+    if (l == "sondes") return { "z" };
+    if (l == "aprs") return { "p" };
+    if (l == "mesh") return { "m" };
+    return {};
+}
+/** The sections a request asks for: ?s=adsb,ais,… (layer words); absent or empty = every section. Sorted, unique. */
+inline std::vector<std::string> sectionsOfQuery(const std::string& csv) {
+    std::set<std::string> out;
+    const auto ls = offSet(csv);   // ★ the same word list (unknown words dropped)
+    if (ls.empty()) for (const auto& l : layerOrder()) for (const auto& x : sectionsOfLayer(l)) out.insert(x);
+    for (const auto& l : ls) for (const auto& x : sectionsOfLayer(l)) out.insert(x);
+    return std::vector<std::string>(out.begin(), out.end());
+}
+/** ★ How long a built section is good for: the live ones 30 s, the slow ones (NAVTEX, NDB, VOR, sondes) 120 s. */
+inline int64_t sectionTtl(const std::string& k) {
+    return (k == "a" || k == "s" || k == "d" || k == "p" || k == "m") ? 30 : 120;
 }
 
 /** FNV-1a 64 of the body, hex — the ETag. */
@@ -212,4 +270,272 @@ private:
     unsigned builds_ = 0;
 };
 
+
+// ══ beta94 pass 2 — the owner's per-mode tick boxes, the live (in-process) sections, MeshCore, NAVTEX messages ══════════
+
+/** ★ The owner's "leave this mode out" list (config communityOff, comma-separated layer words). Unknown words ignored. */
+inline std::set<std::string> offSet(const std::string& csv) {
+    std::set<std::string> out;
+    std::string w;
+    for (size_t i = 0; i <= csv.size(); ++i) {
+        const char c = i < csv.size() ? csv[i] : ',';
+        if (c == ',' || c == ' ' || c == ';') {
+            if (std::find(layerOrder().begin(), layerOrder().end(), w) != layerOrder().end()) out.insert(w);
+            w.clear();
+        } else if (w.size() < 12) w += (char)std::tolower((unsigned char)c);
+    }
+    return out;
+}
+
+static constexpr size_t kSondesMax = 32, kSondePts = 120;
+static constexpr int64_t kSondesSinceSec = 12 * 3600;  // ★ the current and the last flight (Stuart 11-25)
+static constexpr size_t kAprsMax = 300;
+static constexpr int64_t kAprsSinceSec = 6 * 3600;
+static constexpr size_t kMeshMax = 300;
+static constexpr int64_t kMeshSinceSec = 86400;
+static constexpr size_t kVorMax = 200;
+static constexpr size_t kNavWarnMax = 300;
+static constexpr int64_t kNavWarnSinceSec = 86400;
+static constexpr int64_t kNavMetSinceSec = 86400;
+static constexpr size_t kNavMsgMax = 300;
+static constexpr int64_t kNavMsgSinceSec = 86400;
+static constexpr size_t kNavMsgText = 1600;              ///< one message's text, at most (a real one: 560 B mean, 3.2 KB max)
+static constexpr size_t kNavMsgBytes = 220 * 1024;       ///< the messages section, at most (a real Lenovo day: ~150 KB)
+
+/* ── THE REMEMBERED SECTIONS: sondes, APRS and the VOR map are decoded inside ONE radio PROCESS (a whole-radio mode, a
+ *    decoder run) and have no store of their own in the gallery. So each radio keeps what it last decoded as one small file
+ *    per section beside the gallery (<gallery>/.community/) — written only when it changed and at most every
+ *    kLiveWriteSec, never per message (an SD card) — and whichever process answers community.json joins them. So a
+ *    server shows its recent sondes and APRS stations after a restart, and while the mode is not running, within each
+ *    section's window (the rows carry their own times). A file is comma-joined compact ROWS ("[…],[…]"), ≤ kLiveFileMax;
+ *    one untouched for kLiveDropSec is removed. No gallery: this process's own memory alone. ── */
+static constexpr size_t kLiveFileMax = 192 * 1024;
+static constexpr int64_t kLiveWriteSec = 120;
+static constexpr int64_t kLiveDropSec = 2 * 86400;
+inline std::string liveTag(const std::string& raw) {
+    std::string t;
+    for (char c : raw) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') t += c;
+    return t.empty() ? std::string("radio") : t.substr(0, 40);
+}
+inline std::string liveName(const std::string& section, const std::string& tag) { return "live-" + section + "-" + liveTag(tag) + ".json"; }
+/** Write (an empty body: remove) this radio's file for `section` in `dir`. Atomic: a temporary file renamed over it. */
+inline bool writeLive(const std::string& dir, const std::string& section, const std::string& tag, const std::string& body) {
+    if (dir.empty()) return false;
+    ::mkdir(dir.c_str(), 0755);
+    const std::string path = dir + "/" + liveName(section, tag);
+    if (body.empty()) { ::unlink(path.c_str()); return true; }
+    if (body.size() > kLiveFileMax) return false;
+    const std::string tmp = path + ".tmp";
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0) return false;
+    size_t done = 0;
+    while (done < body.size()) { const ssize_t n = ::write(fd, body.data() + done, body.size() - done); if (n <= 0) break; done += (size_t)n; }
+    ::close(fd);
+    if (done != body.size() || ::rename(tmp.c_str(), path.c_str()) != 0) { ::unlink(tmp.c_str()); return false; }
+    return true;
+}
+/** Every radio's rows for `section`, comma-joined — at most `maxBytes` (whole files only). */
+inline std::string readLive(const std::string& dir, const std::string& section, int64_t nowSec, size_t maxBytes = 2 * kLiveFileMax) {
+    std::string out;
+    if (dir.empty()) return out;
+    DIR* d = ::opendir(dir.c_str());
+    if (!d) return out;
+    const std::string pre = "live-" + section + "-";
+    int files = 0;
+    while (struct dirent* e = ::readdir(d)) {
+        const std::string n = e->d_name;
+        if (n.rfind(pre, 0) != 0 || n.size() < 5 || n.compare(n.size() - 5, 5, ".json") != 0 || ++files > 32) continue;
+        const std::string path = dir + "/" + n;
+        struct stat st{};
+        if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || (size_t)st.st_size > kLiveFileMax) continue;
+        if (nowSec - (int64_t)st.st_mtime > kLiveDropSec) { ::unlink(path.c_str()); continue; }
+        if (out.size() + (size_t)st.st_size + 1 > maxBytes) continue;
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) continue;
+        std::string b((size_t)st.st_size, '\0');
+        size_t got = 0;
+        while (got < b.size()) { const ssize_t k = ::read(fd, &b[got], b.size() - got); if (k <= 0) break; got += (size_t)k; }
+        ::close(fd);
+        b.resize(got);
+        if (b.size() < 2 || b.front() != '[' || b.back() != ']') continue;   // ★ an array of rows: a torn file is skipped
+        b = b.substr(1, b.size() - 2);                                        // ★ its rows, comma-joined
+        if (b.empty()) continue;
+        if (!out.empty()) out += ',';
+        out += b;
+    }
+    ::closedir(d);
+    return out;
+}
+
+/** ★ Keep the rows (comma-joined top-level arrays) whose field `idx` (a number: a UTC time) is ≥ `minT`, at most `maxRows`.
+ *  A tiny scanner, strings and nesting respected — the rows are ours, but a torn one is simply dropped. */
+inline std::string rowsSince(const std::string& rows, int idx, double minT, size_t maxRows) {
+    std::string out;
+    size_t n = 0, i = 0;
+    while (i < rows.size() && n < maxRows) {
+        while (i < rows.size() && rows[i] != '[') ++i;
+        if (i >= rows.size()) break;
+        const size_t start = i;
+        int depth = 0, field = 0; bool str = false; size_t fieldAt = std::string::npos;
+        for (; i < rows.size(); ++i) {
+            const char c = rows[i];
+            if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
+            if (c == '"') { str = true; continue; }
+            if (c == '[') { if (++depth == 1 && field == idx) fieldAt = i + 1; continue; }
+            if (c == ']') { if (--depth == 0) { ++i; break; } continue; }
+            if (c == ',' && depth == 1 && ++field == idx) fieldAt = i + 1;
+        }
+        if (depth != 0 || fieldAt == std::string::npos) continue;
+        const double t = std::atof(rows.c_str() + fieldAt);
+        if (t >= minT) { if (n++) out += ','; out.append(rows, start, i - start); }
+    }
+    return out;
+}
+
+/* ── MESH (the ISM map's MeshCore nodes, Stuart 11-25: "ism is only showing meshcore stations anyway") — from the gallery's
+ *    "ismnodes-<band>-<date>" cards (vibe_ism_gallery.h writeNodes; the same 12 fields its restoreNodes reads). ONLY
+ *    MeshCore nodes, which put their own position in a public advert; never any other ISM device, never the card's
+ *    "Receiver:" line. A companion (a person) is rounded to 0.01° (~1 km), as every reader of the card does. ── */
+struct MeshNode {
+    std::string node, name, type;
+    double lat = NAN, lon = NAN, mhz = 0; float snr = 0;
+    int hops = -1; bool approx = false;
+    int64_t first = 0, last = 0; uint64_t count = 0;
+};
+inline std::vector<MeshNode> meshNodesOfCard(const std::string& body, int64_t day) {
+    std::vector<MeshNode> out;
+    static const std::string dot = " \xc2\xb7 ";
+    const size_t at = body.find("Each node, most recent first");
+    if (at == std::string::npos) return out;
+    auto hms = [&](const std::string& s, int64_t& o) { int h, m, sec; if (s.size() != 8 || std::sscanf(s.c_str(), "%2d:%2d:%2d", &h, &m, &sec) != 3) return false; o = day * 86400 + h * 3600 + m * 60 + sec; return true; };
+    size_t p = body.find('\n', at);
+    while (p != std::string::npos && p + 1 < body.size() && out.size() < 2000) {
+        const size_t e = body.find('\n', p + 1);
+        const std::string row = body.substr(p + 1, e == std::string::npos ? std::string::npos : e - p - 1);
+        p = e;
+        std::vector<std::string> f; size_t q = 0;
+        for (;;) { const size_t d = row.find(dot, q); if (d == std::string::npos) { f.push_back(row.substr(q)); break; } f.push_back(row.substr(q, d - q)); q = d + dot.size(); }
+        if (f.size() != 12 || f[4] != "MeshCore") continue;
+        MeshNode n;
+        if (!hms(f[0], n.last) || !hms(f[1], n.first)) continue;
+        n.count = std::strtoull(f[2].c_str(), nullptr, 10);
+        n.type = f[5]; n.name = f[6].substr(0, 40); n.node = f[7] == "-" ? std::string() : f[7].substr(0, 16);
+        n.approx = f[8].find("approx") != std::string::npos;
+        if (!n.count || std::sscanf(f[8].c_str(), "%lf, %lf", &n.lat, &n.lon) != 2 || !(std::fabs(n.lat) <= 90) || !(std::fabs(n.lon) <= 180)) continue;
+        if (n.type == "companion") { n.lat = std::round(n.lat * 100) / 100; n.lon = std::round(n.lon * 100) / 100; n.approx = true; }
+        n.hops = f[9] == "-" ? -1 : std::atoi(f[9].c_str());
+        n.snr = float(std::atof(f[10].c_str())); n.mhz = std::atof(f[11].c_str());
+        out.push_back(std::move(n));
+    }
+    return out;
+}
+/** ★ Compact MeshCore rows — [id, name, type, lat, lon, last, times heard, approx 0|1] — one per node id (else name), the
+ *  newest, heard within `sinceSec`, at most `maxRows`. */
+inline std::string meshRows(std::vector<MeshNode> v, int64_t now, size_t maxRows = kMeshMax, int64_t sinceSec = kMeshSinceSec) {
+    std::sort(v.begin(), v.end(), [](const MeshNode& a, const MeshNode& b) { return a.last > b.last; });
+    std::set<std::string> seen;
+    std::string o;
+    char b[160];
+    size_t n = 0;
+    for (const auto& x : v) {
+        if (now - x.last > sinceSec || x.last - now > 3600) continue;
+        if (!seen.insert(x.node.empty() ? "n:" + x.name : x.node).second) continue;
+        o += std::string(n ? "," : "") + "[\"" + jsonEsc(x.node) + "\",\"" + jsonEsc(x.name) + "\",\"" + jsonEsc(x.type) + "\"";
+        std::snprintf(b, sizeof b, ",%.4f,%.4f,%lld,%llu,%d]", x.lat, x.lon, (long long)x.last, (unsigned long long)x.count, x.approx ? 1 : 0);
+        o += b;
+        if (++n >= maxRows) break;
+    }
+    return o;
+}
+
+/* ── NAVTEX MESSAGES (Stuart 11-25: "the community map needs all the maritime details from the navtex map we have") — every
+ *    message heard in kNavMsgSinceSec, ONE per message id (B1 B2 B3B4, "GA98"), the CLEANEST copy (fewest lost characters,
+ *    then the newest) as its text, with how many times it was heard; plus any message a shared warning or forecast names
+ *    (its best copy), whatever its age. Text capped at kNavMsgText, the section at kNavMsgBytes. ── */
+struct NavMsg {
+    std::string id, file, title, text, st, sc, iso;
+    int64_t first = 0, last = 0, issued = 0;
+    int lost = 0; uint32_t n = 0; double khz = 0; bool pinned = false;
+};
+/** "GA98" from "ZCZC GA98", or "". */
+inline std::string navMsgId(const std::string& text) {
+    const size_t z = text.find("ZCZC");
+    if (z == std::string::npos) return "";
+    size_t i = z + 4;
+    while (i < text.size() && (text[i] == ' ' || text[i] == '\t')) ++i;
+    if (i + 4 > text.size()) return "";
+    const std::string id = text.substr(i, 4);
+    if (!std::isupper((unsigned char)id[0]) || !std::isupper((unsigned char)id[1]) || !std::isdigit((unsigned char)id[2]) || !std::isdigit((unsigned char)id[3])) return "";
+    return id;
+}
+inline int navLost(const std::string& b) { int n = 0; for (char c : b) n += c == '*' || c == '_'; return n; }
+/** Fold copies into messages: one per id (an id-less copy is its own), the cleanest copy's text. */
+inline std::vector<NavMsg> navFold(const std::vector<NavMsg>& copies) {
+    std::vector<NavMsg> out;
+    std::map<std::string, size_t> at;
+    for (const auto& c : copies) {
+        const std::string k = c.id.empty() ? "f:" + c.file : c.id + "@" + std::to_string((long long)std::lround(c.khz));
+        auto it = at.find(k);
+        if (it == at.end()) { at[k] = out.size(); out.push_back(c); out.back().n = 1; continue; }
+        NavMsg& m = out[it->second];
+        ++m.n;
+        m.first = std::min(m.first, c.first); m.pinned = m.pinned || c.pinned;
+        const int64_t last = std::max(m.last, c.last);
+        if (c.lost < m.lost || (c.lost == m.lost && c.last > m.last)) {   // ★ the cleanest copy, then the newest
+            const uint32_t n = m.n; const int64_t first = m.first; const bool pin = m.pinned;
+            m = c; m.n = n; m.first = first; m.pinned = pin;
+        }
+        m.last = last;
+    }
+    return out;
+}
+/** ★ The message's TITLE: its first line after the ZCZC header, ≤ 80 characters (the text is fetched when opened). */
+inline std::string navTitle(const std::string& text) {
+    size_t p = text.find("ZCZC");
+    p = p == std::string::npos ? 0 : text.find('\n', p);
+    p = p == std::string::npos ? 0 : p + 1;
+    while (p < text.size()) {
+        size_t e = text.find('\n', p);
+        if (e == std::string::npos) e = text.size();
+        std::string l = text.substr(p, e - p);
+        while (!l.empty() && (l.back() == '\r' || l.back() == ' ')) l.pop_back();
+        size_t a = 0; while (a < l.size() && l[a] == ' ') ++a;
+        l = l.substr(a);
+        if (!l.empty() && l != "NNNN") {
+            if (l.size() > 80) { l.resize(80); while (!l.empty() && ((unsigned char)l.back() & 0xC0) == 0x80) l.pop_back(); if (!l.empty() && ((unsigned char)l.back() & 0xC0) == 0xC0) l.pop_back(); }
+            return l;
+        }
+        p = e + 1;
+    }
+    return std::string();
+}
+/** ★ Compact NAVTEX messages — [id, kHz, first, last, times heard, lost characters, station, conf, iso, file, title] —
+ *  newest first, pinned ones (named by a shared warning or forecast) first in line, at most `maxRows` / `maxBytes`. */
+inline std::string navMsgRows(std::vector<NavMsg> v, size_t maxRows = kNavMsgMax, size_t maxBytes = kNavMsgBytes) {
+    std::stable_sort(v.begin(), v.end(), [](const NavMsg& a, const NavMsg& b) { return a.pinned != b.pinned ? a.pinned : a.last > b.last; });
+    std::string o;
+    size_t n = 0;
+    char b[160];
+    for (const auto& m : v) {
+        if (n >= maxRows) break;
+        std::snprintf(b, sizeof b, ",%g,%lld,%lld,%u,%d,\"", m.khz, (long long)m.first, (long long)m.last, m.n, m.lost);
+        const std::string one = "[\"" + jsonEsc(m.id) + "\"" + b + jsonEsc(m.st) + "\",\"" + jsonEsc(m.sc) + "\",\"" + jsonEsc(m.iso) + "\",\""
+                              + jsonEsc(m.file) + "\",\"" + jsonEsc(navTitle(m.text)) + "\"]";
+        if (o.size() + one.size() + 2 > maxBytes) break;
+        if (n) o += ',';
+        o += one; ++n;
+    }
+    return o;
+}
+/** ★ A JSON object text without one string field (",\"key\":\"…\"" removed, escapes respected) — a forecast's text out of
+ *  the poll (it is fetched when opened). */
+inline std::string dropStrField(std::string j, const std::string& key) {
+    const std::string k = ",\"" + key + "\":\"";
+    for (size_t p; (p = j.find(k)) != std::string::npos;) {
+        size_t i = p + k.size();
+        while (i < j.size() && j[i] != '"') i += j[i] == '\\' ? 2 : 1;
+        j.erase(p, std::min(j.size(), i + 1) - p);
+    }
+    return j;
+}
 }  // namespace vibecommunity
