@@ -57,13 +57,24 @@ export function answers(n = 3) {
   return out;
 }
 
+export const PI500_RADIOS = ['8c02e830', '370b773e', '370b72d8'];
+/** ★ What radio `rid` of a server answers (null: no such radio). A MULTI-RADIO server (`multi`: its listing has `radios`) —
+ *  the Pi 500: its front door (and /r/8c02e830/) is the RSP1B, DSC only; its V4s answer everything, the same body each. A
+ *  single-radio server: its body at the front door, nothing at /r/. */
+export function radioAnswer(body, rid, multi) {
+  if (!multi) return rid ? null : body;
+  if (!rid || rid === PI500_RADIOS[0]) return { v: 2, on: true, now: body.now, layers: ['dsc'], d: body.d };
+  return PI500_RADIOS.includes(rid) ? body : null;
+}
 /** The contributors list as /api/community answers it (contributorOf's shape), aimed at `urlOf(id)`. */
 export function contributors(urlOf, n = 3) {
   const one = (id, name, grid, lat, lon, country, layers, extra = {}) => ({ id, name, country, slug: id, address: `${id}.vibeserver.vibesdr.net`, url: urlOf(id),
     grid, lat, lon, layers, listeners: 0, maxListeners: 4, pin: false, temporary: false, updatedAt: 0, ...extra });
   const servers = [
     one('lenovo', 'Stuart’s Lenovo (NAVTEX + NDB)', 'IO92', 52.5, -1, 'GB', ['ndb', 'dsc', 'navtex', 'sondes', 'aprs', 'mesh'], { listeners: 1 }),
-    one('pi500', 'Pi 500 — RSP1B + V4', 'IO91', 51.5, -1, 'GB', ['adsb', 'dsc', 'navtex'], { listeners: 4 }),
+    // ★★ MULTI-RADIO, as the real Pi 500 lists itself: its front door's radio (the RSP1B) says DSC only; the two V4s behind
+    //    /r/<id>/ answer the rest — identically (server-wide stores). See radioAnswer().
+    one('pi500', 'Pi 500 — RSP1B + V4', 'IO91', 51.5, -1, 'GB', ['dsc'], { listeners: 4, radios: PI500_RADIOS }),
     one('xcover', 'XCover portable', 'IO90', 50.5, -1, 'GB', ['adsb', 'hfdl', 'ais', 'aprs']),
   ];
   for (let i = 3; i < n; i++) { const b = servers[i % 3]; servers.push({ ...b, id: 'rx' + i, slug: 'rx' + i, address: `rx${i}.vibeserver.vibesdr.net`, url: urlOf('rx' + i), name: `Receiver ${i}`, lon: b.lon + 2 + i, lat: b.lat + (i % 5) * 0.3 }); }

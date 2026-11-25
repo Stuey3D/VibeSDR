@@ -40,7 +40,7 @@ console.log('== 1. the Worker: who contributes');
   add('plainhttp', { name: 'Port-forwarded', url: 'http://203.0.113.9:8073', status: { communityMap: true, communityLayers: ['ais'] } });
   add('expired', { name: 'Gone', expires: T - 10, status: { communityMap: true, communityLayers: ['ais'] } });
   add('unverified', { name: 'Unproven', verified: 0, status: { communityMap: true, communityLayers: ['ais'] } });
-  add('noalias', { name: 'No alias', status: { communityMap: true, communityLayers: ['ais', 'dsc'] } });
+  add('noalias', { name: 'No alias', status: { communityMap: true, communityLayers: ['ais', 'dsc'], radios: [{ id: '8c02e830', driver: 'sdrplay' }, { id: '370b773e' }, { id: '370b773e' }, { id: '<b>' }, { name: 'no id' }] } });
   try { db.prepare("UPDATE servers SET alias = 0 WHERE id = 'noalias'").run(); } catch { /* no alias column: migration absent */ }
   const req = (p) => new Request('https://vibeserver.vibesdr.net' + p, { headers: { 'cf-connecting-ip': '198.51.100.7' } });
   const r = await worker.fetch(req('/api/community'), env, {});
@@ -54,6 +54,7 @@ console.log('== 1. the Worker: who contributes');
   ok(s && !('lan' in s) && !('status_json' in s) && !('key_hash' in s), 'no LAN, no raw status, no key');
   const na = j.servers.find((x) => x.id === 'noalias');
   ok(!na || (na.address === null || na.address === 'noalias.vibeserver.vibesdr.net'), 'an owner without the vibesdr.net address gets none (where the column exists)');
+  ok(na && JSON.stringify(na.radios) === '["8c02e830","370b773e"]' && s && !('radios' in s), `a MULTI-RADIO server lists its radio ids (deduped, checked); a single-radio one none (${na && na.radios})`);
   ok(/max-age=120/.test(r.headers.get('cache-control') || '') && r.headers.get('access-control-allow-origin') === '*', 'cacheable for two minutes, CORS open');
   await worker.fetch(req('/api/community'), env, {});
   ok(cachePuts === 1, 'the second ask is the edge cache (one D1 read)');
@@ -140,6 +141,66 @@ console.log('== 2. the page logic (public/community-map.js + the server maps\' o
   ok(sv._retryAt === 1800000, '…never more than 30 min apart');
   ok(CM.FAST_SEC >= 30 && CM.SLOW_SEC >= 300 && CM.LIST_SEC >= 600 && CM.CONCURRENT <= 6, 'floors: live ≥ 30 s, slow ≥ 5 min, the list ≥ 10 min, ≤ 6 at once');
   ok(CM.fade({ modes: ['navtex'], t: now }, now) === 1 && CM.fade({ modes: ['navtex'], t: now - 86000 }, now) < 0.4, 'old things fade, as the servers’ maps do');
+
+  // ── the pills' totals: the BREAKDOWN of the status line's (Stuart 11-25) ──
+  {
+    const its = CM.merge([CM.itemsOf({ on: true, now, a: [['406A91', 51.5, -0.4, 3, 5000, 90, 200, 1 | 4, 'EZY47TW'], ['4CA000', 52, 0, 3, 35000, 92, 441, 1, 'BAW696'], ['A1B2C3', 54, -30, 200, 37000, null, null, 8, 'UAL917']],
+      s: [[235000001, 50.79, -1.31, now - 25, 12, 181, 'cargo', 'A', 'X', '']] }, { id: 'a', name: 'A' })]);
+    const cnt = CM.modeCounts(its, { maxAge: 86400, server: '', nav: {}, off: new Set() }, now);
+    ok(cnt.by.adsb === 2 && cnt.by.vdl2 === 0 && cnt.by.hfdl === 1 && cnt.by.adsb + cnt.by.acars + cnt.by.vdl2 + cnt.by.hfdl === 3 && cnt.by.ais === 1,
+       `★ an aircraft on ADS-B AND VDL2 counts ONCE, under the source it is drawn in — the pills add up to the 3 aircraft (${JSON.stringify(cnt.by)})`);
+    const off = CM.modeCounts(its, { maxAge: 86400, server: '', nav: {}, off: new Set(['adsb']) }, now);
+    const sh = CM.merge([CM.itemsOf({ on: true, now, s: [[235000001, 50.79, -1.31, now - 25, 12, 181, 'cargo', 'A', 'X', ''], [235000002, 50.7, -1.2, now - 25, 0, 0, 'cargo', 'A', 'Y', '']],
+      d: [[now - 100, 50.8, -1.3, 3, 'DISTRESS · MMSI 235000001 (UK)', 'a.txt'], [now - 50, 50.8, -1.3, 0, 'Call · MMSI 235000001', 'b.txt'], [now - 60, 40, 1, 3, 'DISTRESS · MMSI 215402000 (Malta)', 'c.txt'], [now - 70, 41, 2, 1, 'safety, no MMSI', 'd.txt']] }, { id: 'a', name: 'A' })]);
+    const sc = CM.shipsCombined(sh), shc = CM.modeCounts(sh, { maxAge: 86400, server: '', nav: {}, off: new Set() }, now);
+    ok(sc.ships === 4 && sc.both === 1 && shc.by.ais === 2 && shc.by.dsc === 2 && shc.by.ais + shc.by.dsc === sc.ships,
+       `★ a ship on AIS AND DSC is ONE ship: 2 AIS + 2 more by DSC = ${sc.ships} ships combined; the pills (AIS ${shc.by.ais}, DSC ${shc.by.dsc}) add up to it`);
+    ok(CM.modeCounts(sh, { maxAge: 86400, server: '', nav: {}, off: new Set(['ais']) }, now).by.dsc === 3, '…AIS switched off: the DSC pill counts that ship again');
+    ok(off.by.vdl2 === 1 && off.by.adsb === 1 && CM.primaryMode(its[0], new Set(['adsb'])) === 'vdl2', `…ADS-B switched off: it is drawn and counted as VDL2 (${JSON.stringify(off.by)})`);
+  }
+  // ── MULTI-RADIO servers (Stuart 11-25: "pi 500 should be sending adsb too") ──
+  const one = { url: 'https://a.trycloudflare.com', layers: ['ais'] };
+  ok(CM.targets(one).length === 1 && CM.targets(one)[0] === one && CM.targets({ ...one, radios: ['abc'] }).length === 1, 'a single-radio server: ONE target, itself');
+  const multi = { url: 'https://demo.example.net', layers: ['dsc'], radios: ['8c02e830', '370b773e', 'bad/id', '370b72d8'] };
+  const tg = CM.targets(multi);
+  ok(tg.length === 3 && tg.map((t) => t.rid).join() === '8c02e830,370b773e,370b72d8' && CM.targets(multi)[1] === tg[1], 'a multi-radio server: a target per radio (bad ids dropped), kept across list reloads');
+  ok(CM.dataUrl(multi, 'https:', ['adsb'], '370b773e') === 'https://demo.example.net/r/370b773e/vibeserver/community.json?s=adsb' && CM.dataUrl(multi, 'https:', ['adsb'], '../x') === 'https://demo.example.net/vibeserver/community.json?s=adsb'
+     && /\/r\/370b773e\/vibeserver\/community\/navtex\?f=/.test(CM.textUrl(multi, 'https:', 'a.txt', '370b773e')), "each radio at /r/<id>/ on the server's own tunnel");
+  ok(CM.askFor(tg[1], multi, ['adsb', 'dsc', 'navtex'], 0).join() === 'adsb,dsc,navtex', 'a radio not heard from yet: asked for every layer switched on');
+  tg[1].layers = ['adsb', 'dsc', 'mesh']; CM.noteResult(tg[1], true, 0, ['adsb', 'dsc']);
+  ok(CM.askFor(tg[1], multi, ['adsb', 'dsc', 'navtex'], 30000).length === 0 && CM.askFor(tg[1], multi, ['adsb', 'dsc', 'navtex'], 60000).join() === 'adsb,dsc', '…then only what it shares, under its own 60 s floor');
+  ok(CM.askFor(one, one, ['adsb', 'ais'], 0).join() === 'ais', 'a single-radio server: its listing’s layers, as before');
+  ok(CM.serverLayers(multi).sort().join() === 'adsb,dsc,mesh', 'what a multi-radio server shares: its front door’s and its radios’');
+  const ra = CM.itemsOf({ on: true, now, a: [['4CA2C1', 51.7, -1.8, 2, 26000, 298, 437, 1, 'RYR6VG']] }, { id: 'pi', name: 'Pi', rid: '370b773e' });
+  const rb = CM.itemsOf({ on: true, now, a: [['4CA2C1', 51.7, -1.8, 2, 26000, 298, 437, 1, 'RYR6VG']] }, { id: 'pi', name: 'Pi', rid: '370b72d8' });
+  const mr = CM.mergeRadios([ra, rb]);
+  ok(mr.length === 1 && mr[0].heard.length === 1 && mr[0].heard[0].rid, 'two radios answering the same aircraft: one item, the server heard once');
+  ok(CM.merge([mr, CM.itemsOf({ on: true, now, a: [['4CA2C1', 51.7, -1.8, 2, 26000, 298, 437, 1, 'RYR6VG']] }, { id: 'other', name: 'O' })])[0].heard.length === 2, '…and with another server, "heard by 2"');
+
+  // ── the SEA AREAS (Stuart 11-25: "can we draw all the shipping areas onto it like we do for navtex?") ──
+  ok(CM.seaSeverity(null) === 0 && CM.seaSeverity({ gale: 8, fmax: 6 }) === 2 && CM.seaSeverity({ gale: 0, fmax: 7 }) === 1 && CM.seaSeverity({ gale: 0, fmax: 6, wind: { sev: 2, sev2: 0 } }) === 2
+     && CM.seaSeverity({ gale: 0, fmax: 5, wind: { sev: 0, sev2: 1 } }) === 1 && CM.seaSeverity({ gale: 0, fmax: 6 }) === 0, 'sea-area tint: the server map’s rule (red at a gale, amber at 7)');
+  const fcs = CM.seaForecasts([{ kind: 'navmet', d: { id: 'dogger', stale: false, fc: [{ gale: 9, fmax: 9 }] } }, { kind: 'navmet', d: { id: 'shannon', stale: true, fc: [{ gale: 9, fmax: 9 }] } },
+    { kind: 'navmet', d: { id: 'rockall', stale: false, fc: [{ gale: 0, fmax: 7 }] } }, { kind: 'ship', d: {} }]);
+  ok(fcs.get('dogger') === 2 && fcs.get('rockall') === 1 && fcs.get('shannon') === 0 && fcs.size === 3, '…an area with an arrow drawn loses its own name; a stale forecast tints nothing');
+  const P = ['ais', 'navtex', 'adsb'];
+  ok(CM.seaShown(new Set(['maritime']), P, undefined) && !CM.seaShown(new Set(['maritime']), P, false) && !CM.seaShown(new Set(['aviation']), P, true) && !CM.seaShown(new Set(['maritime']), ['adsb'], true),
+     'SEA AREAS: on by default with MARITIME, off when switched off, MARITIME off, or no maritime row to hold the toggle');
+  const SEAJ = JSON.parse(readFileSync(new URL('public/community-sea-areas.json', dir), 'utf8'));
+  const seaSize = readFileSync(new URL('public/community-sea-areas.json', dir)).length;
+  const polys = SEAJ.features.filter((f) => f.geometry.type === 'MultiPolygon'), labs = SEAJ.features.filter((f) => f.geometry.type === 'Point');
+  ok(SEAJ.type === 'FeatureCollection' && polys.length > 800 && labs.length === polys.length, `the sea-areas file: GeoJSON, ${polys.length} areas, each with a label point`);
+  ok(['viking', 'dogger', 'fisher', 'gbight', 'shannon', 'rockall', 'malin', 'irishsea', 'fastnet', 'ie-12-valentia', 'no-inner-skagerrak', 'de-hel'].every((id) => polys.some((f) => f.properties.id === id)),
+     '…the UK shipping areas, Ireland’s, Norway’s and the German Bight’s are in it');
+  ok(polys.every((f) => ['s', 'o', 'c'].includes(f.properties.k) && f.geometry.coordinates.every((pg) => pg[0].length >= 4 && pg[0].every(([x, y]) => Math.abs(x) <= 360 && Math.abs(y) <= 90)
+     && pg[0][0][0] === pg[0][pg[0].length - 1][0] && pg[0][0][1] === pg[0][pg[0].length - 1][1])), '…every ring closed and on the globe (past ±180° where an area crosses the date line, as MapLibre draws it)');
+  const dog = polys.find((f) => f.properties.id === 'dogger'), dogL = labs.find((f) => f.properties.id === 'dogger');
+  ok(dogL.properties.n === 'DOGGER' && dogL.geometry.coordinates[0] > 0 && dogL.geometry.coordinates[0] < 4 && dogL.geometry.coordinates[1] > 54 && dogL.geometry.coordinates[1] < 56.5 && dog, 'Dogger: named in capitals, its label in the North Sea');
+  ok(seaSize < 700000, `…small: ${seaSize} bytes (one static file, compressed on the wire)`);
+  const srcs = Object.keys(SEAJ.attribution || {});
+  ok(['uk', 'ie', 'no', 'de', 'us', 'ca'].every((s) => srcs.includes(s)) && /Met Office/.test(CM.seaAttribution(SEAJ)) && /Open Government Licence – Canada/.test(CM.seaAttribution(SEAJ))
+     && /MET Norway/.test(CM.seaAttribution(SEAJ)) && (CM.seaAttribution(SEAJ).match(/Sea areas:/g) || []).length === 1, '…every source credited, as on the server map (one "Sea areas:" line)');
+  ok(CM.SEA.url === '/community-sea-areas.json' && !/^https?:/.test(CM.SEA.url), 'served beside the page (no other request)');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

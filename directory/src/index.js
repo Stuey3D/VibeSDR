@@ -1139,6 +1139,12 @@ export function communityOf(status) {
   const said = Array.isArray(status.communityLayers) ? status.communityLayers : [];
   return { communityMap: true, communityLayers: COMMUNITY_LAYERS.filter((l) => said.includes(l)) };
 }
+/** {radios:[id, …]} for a server with two or more addressable radios (ids as /r/<id>/ takes them, at most 8); else {}. */
+export function radioIdsOf(status) {
+  const ids = [...new Set((Array.isArray(status && status.radios) ? status.radios : []).slice(0, 32)
+    .map((r) => (r && typeof r.id === 'string' && /^[A-Za-z0-9_-]{1,24}$/.test(r.id) ? r.id : '')).filter(Boolean))].slice(0, 8);
+  return ids.length > 1 ? { radios: ids } : {};
+}
 /** One contributor as the map page sees it — or null when it cannot be one (not sharing, no usable https address). */
 export function contributorOf(r, aliased = true) {
   let status = {};
@@ -1158,6 +1164,10 @@ export function contributorOf(r, aliased = true) {
     url: dataUrl,
     grid: pos ? g4 : '', lat: pos ? pos.lat : null, lon: pos ? pos.lon : null,
     layers: c.communityLayers,
+    // ★★ A MULTI-RADIO server's radios (Stuart 11-25: "pi 500 should be sending adsb too"): its front door answers for ONE
+    //    radio, so the page reads each radio's own /r/<id>/vibeserver/community.json on the same tunnel. Ids only (the ones
+    //    /api/directory already shows), and only when there is more than one — a single-radio server stays one request.
+    ...radioIdsOf(status),
     listeners: Number(status.listeners || 0), maxListeners: Number(status.maxListeners || 0),
     pin: !!status.pin, temporary: Number(r.until) > 0,
     updatedAt: r.updated_at,

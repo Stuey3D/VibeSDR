@@ -58,7 +58,7 @@
     const out = [];
     if (!c || typeof c !== 'object' || c.on !== true) return out;
     const now = num(c.now) || Math.floor(Date.now() / 1000);
-    const seen = (t, extra) => Object.assign({ sid: sv.id, name: sv.name, t }, extra || {});
+    const seen = (t, extra) => Object.assign({ sid: sv.id, name: sv.name, t }, sv.rid ? { rid: sv.rid } : {}, extra || {});   // ★ rid: the radio that answered (a message's text is read there)
     for (const r of arr(c.a, 1000)) {                       // aircraft [k, lat, lon, age, alt, trk, gs, mask, flight, reg, type]
       if (!Array.isArray(r)) continue;
       const lat = num(r[1]), lon = num(r[2]), mask = num(r[7]) || 0;
@@ -191,7 +191,14 @@
     const hs = it.heard.filter((h) => h.f);
     if (!hs.length) return null;
     hs.sort((a, b) => (a.lost ?? 0) - (b.lost ?? 0) || b.t - a.t);
-    return { sid: hs[0].sid, f: hs[0].f };
+    return { sid: hs[0].sid, f: hs[0].f, rid: hs[0].rid || '' };
+  }
+  /** ★★ ONE SERVER'S RADIOS, MERGED (a multi-radio server — several radios often answer the same server-wide stores, the
+   *  Pi 500's three RTLs alike): one item per key, the newest copy wins; nothing summed (it is one receiver, not two). */
+  function mergeRadios(lists) {
+    const by = new Map();
+    for (const list of lists) for (const it of list) { const h = by.get(it.key); if (!h || it.t > h.t) by.set(it.key, it); }
+    return [...by.values()];
   }
 
   /** ★ The filter: the groups on, the chips on, the age, one receiver or none, and NAVTEX's own (its layers, message types,
@@ -212,12 +219,56 @@
       return true;
     });
   }
+  /** ★ THE PILLS' TOTALS (Stuart 11-25: "maybe a little total in the pills for each displayed mode"): per mode, the items it
+   *  draws on the map under the HEARD IN window, ONLY THIS and NAVTEX's type / station filters — counted as if its chip and
+   *  group were on, so a pill switched off still says what it would show; NAVTEX's messages (a list, not the map) apart. Per
+   *  NAVTEX layer too. The same numbers as the status line's when everything is on. */
+  /** The mode an item is drawn (and counted) as: its first source not switched off, else its first. */
+  const primaryMode = (it, off) => it.modes.find((x) => !(off && off.has(x))) || it.modes[0];
+  function modeCounts(items, f, now) {
+    const all = { groups: new Set(GROUPS.map((g) => g.id)), modes: new Set(MODES.map((m) => m.id)), maxAge: f.maxAge, server: f.server,
+                  nav: Object.assign({}, f.nav || {}, { layers: null }) };
+    const by = Object.fromEntries(MODES.map((m) => [m.id, 0]));
+    const nav = { stations: 0, warnings: 0, weather: 0, messages: 0 };
+    for (const it of filter(items, all, now)) {
+      if (it.kind === 'navmsg') { nav.messages++; continue; }
+      if (it.kind === 'navst') nav.stations++; else if (it.kind === 'navwarn') nav.warnings++; else if (it.kind === 'navmet') nav.weather++;
+      // ★★ ONE ITEM, ONE PILL (Stuart 11-25: the pills are the BREAKDOWN of the status line's totals): an aircraft heard on
+      //    ADS-B and VDL2 counts once, under the source it is DRAWN in — the first of its sources switched on (ADS-B, ACARS,
+      //    VDL2, HFDL: iconOf's colour) — so the aviation pills add up to the aircraft on the map.
+      if (it.kind === 'dsc') continue;   // ★ counted below: by MMSI, with the ships
+      const m = primaryMode(it, f.off);
+      if (m in by) by[m]++;
+    }
+    // ★★ A SHIP HEARD ON AIS AND DSC IS ONE SHIP: the DSC pill counts the MMSIs AIS has not drawn (AIS's position is the
+    //    current one), each MMSI once however many calls — so AIS + DSC is the status line's combined ships
+    const sh = shipsCombined(filter(items, all, now), !(f.off && f.off.has('ais')));
+    by.dsc = sh.dscOnly;
+    return { by, nav };
+  }
+  /** ★ The ships on the map, AIS and DSC COMBINED by MMSI (a DSC call with no MMSI is its own). `aisOn`: AIS's ships count. */
+  function shipsCombined(items, aisOn = true) {
+    const ais = new Set(), dsc = new Set();
+    for (const it of items) {
+      if (it.kind === 'ship' && aisOn) ais.add(it.d.mmsi);
+      else if (it.kind === 'dsc') dsc.add(it.d.mmsi || it.key);
+    }
+    let dscOnly = 0;
+    for (const k of dsc) if (!ais.has(k)) dscOnly++;
+    return { ships: ais.size + dscOnly, ais: ais.size, dscOnly, both: dsc.size - dscOnly };
+  }
   /** The modes somebody shares: from the contributors' layers and what actually arrived. */
   function modesPresent(servers, items) {
     const s = new Set();
-    for (const v of servers) for (const l of v.layers || []) if (MODE[l]) s.add(l);
+    for (const v of servers) for (const l of serverLayers(v)) if (MODE[l]) s.add(l);
     for (const it of items) for (const m of it.modes) s.add(m);
     return MODES.filter((m) => s.has(m.id)).map((m) => m.id);
+  }
+  /** What a server shares: its listing's words (its front door's radio) and what each of its radios said it shares. */
+  function serverLayers(v) {
+    const s = new Set(v.layers || []);
+    for (const r of v._rx || []) for (const l of r.layers || []) s.add(l);
+    return [...s].filter((l) => MODE[l]);
   }
   /** NAVTEX's own filters, from what arrived: the message types (B2) and the stations named. */
   function navtexFacets(items) {
@@ -249,14 +300,33 @@
     const ok = /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/.test(u) || (pageProto === 'http:' && /^http:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/.test(u));
     return ok ? u : '';
   }
-  function dataUrl(s, pageProto, layers) {
+  const RID_OK = /^[A-Za-z0-9_-]{1,24}$/;
+  /** ★ `rid`: one radio of a multi-radio server — its own /r/<id>/ on the SAME tunnel (the front door answers for one radio). */
+  const radioPath = (rid) => (rid && RID_OK.test(rid) ? '/r/' + encodeURIComponent(rid) : '');
+  function dataUrl(s, pageProto, layers, rid) {
     const b = dataBase(s, pageProto);
     if (!b) return '';
-    return b + '/vibeserver/community.json' + (layers && layers.length ? '?s=' + layers.filter((l) => MODE[l]).join(',') : '');
+    return b + radioPath(rid) + '/vibeserver/community.json' + (layers && layers.length ? '?s=' + layers.filter((l) => MODE[l]).join(',') : '');
   }
-  function textUrl(s, pageProto, f) {
+  function textUrl(s, pageProto, f, rid) {
     const b = dataBase(s, pageProto);
-    return b && /^[A-Za-z0-9._ -]{1,128}$/.test(f) ? b + '/vibeserver/community/navtex?f=' + encodeURIComponent(f) : '';
+    return b && /^[A-Za-z0-9._ -]{1,128}$/.test(f) ? b + radioPath(rid) + '/vibeserver/community/navtex?f=' + encodeURIComponent(f) : '';
+  }
+  /** ★★ WHAT TO ASK, PER RADIO. A single-radio server (no `radios` in its listing): ONE target, the server itself, exactly as
+   *  before. A multi-radio one: a target per radio (kept across list reloads — each with its OWN floor and back-off), asked at
+   *  /r/<id>/. A radio not yet heard from is asked for every layer switched on (`want`: the listing names the front door's
+   *  only); after that, only what its answer said it shares. */
+  function targets(s) {
+    const ids = Array.isArray(s.radios) ? s.radios.filter((x) => typeof x === 'string' && RID_OK.test(x)).slice(0, 8) : [];
+    if (ids.length < 2) { s._rx = null; return [s]; }
+    const old = new Map((s._rx || []).map((r) => [r.rid, r]));
+    s._rx = ids.map((rid) => old.get(rid) || { rid, layers: null });
+    return s._rx;
+  }
+  /** The layers target `t` (of server `s`) should be asked for now, out of `want` (every layer switched on). */
+  function askFor(t, s, want, nowMs) {
+    const can = t === s ? want.filter((l) => (s.layers || []).includes(l)) : t.layers ? want.filter((l) => t.layers.includes(l)) : want;
+    return dueLayers(t, can, nowMs);
   }
   /** ★ The directory's state() words for a receiver. */
   function stateOf(s) {
@@ -310,11 +380,47 @@
     const a = Math.max(0, now - it.t), w = m.id === 'adsb' ? ADSB_STALE_SEC * 5 : m.win;
     return a <= w / 5 ? 1 : Math.max(0.35, 1 - 0.65 * (a - w / 5) / (w * 0.8));
   }
+  // ── the SEA AREAS (Stuart 11-25: "can we draw all the shipping areas onto it like we do for navtex?") ─────────────────
+  /* ★ The server's NAVTEX / shipping map's own layer (V12 src/services/seaAreas.ts), its data one static file beside the page
+   *   (community-sea-areas.json — directory/scripts/build-sea-areas.mjs, from V12's seaAreas.generated.ts), fetched ONCE, only
+   *   while drawn. The same look: a thin outline, the name in small capitals at its label point; tinted AMBER at force 7 and
+   *   RED at a gale while a current forecast for it is on the map — and then no name of its own (the forecast's arrow names
+   *   it). DECLUTTER as the server's: names before outlines. ★ The zooms are the server map's Leaflet zooms less one
+   *   (MapLibre's 512 px tiles): a UK / offshore area's name from 3 / 4, a coastal zone's outline from 5 and its name from 7. */
+  const SEA = {
+    url: '/community-sea-areas.json',
+    colours: { line: '#8fb4d4', amber: '#ffb74d', red: '#ff5a4a', name: '#a9c7e2', halo: '#04101c' },
+    nameZoom: { s: 3, o: 4, c: 7 }, lineZoom: { s: 0, o: 2, c: 5 },
+  };
+  /** seaAreas.ts seaSeverity: 2 = a gale (8+, forecast or warned), 1 = force 7, 0 = no tint. */
+  function seaSeverity(f) {
+    if (!f) return 0;
+    if (f.gale >= 8 || f.fmax >= 8 || (f.wind && (f.wind.sev === 2 || f.wind.sev2 === 2))) return 2;
+    if (f.fmax === 7 || (f.wind && (f.wind.sev === 1 || f.wind.sev2 === 1))) return 1;
+    return 0;
+  }
+  /** ★ From the items SHOWN: the forecasts drawn (area id → severity). Each such area loses its own name — the forecast's
+   *  arrow label names it, so the name is never on the map twice — and is tinted by its forecast; a stale one (over a day
+   *  old, the NAVTEX map's rule: never shown as the conditions now) tints nothing (0). */
+  function seaForecasts(shown) {
+    const by = new Map();
+    for (const it of shown) if (it.kind === 'navmet' && it.d && it.d.fc && it.d.fc.length) by.set(it.d.id, it.d.stale ? 0 : seaSeverity(it.d.fc[0]));
+    return by;
+  }
+  /** SEA AREAS is drawn: MARITIME on, its row present (somebody shares a maritime mode — the toggle lives there), and the
+   *  viewer has not switched it off (ON by default). */
+  const seaShown = (groups, present, pref) => pref !== false && groups.has('maritime') && present.some((m) => MODE[m] && MODE[m].group === 'maritime');
+  /** The map's credit line for the file's sources (seaAreas.ts seaAttribution, one "Sea areas:" however many sources). */
+  function seaAttribution(j) {
+    const a = j && j.attribution && typeof j.attribution === 'object' ? Object.values(j.attribution).filter((x) => typeof x === 'string') : [];
+    return a.length ? 'Sea areas: ' + a.map((x) => x.replace(/^Sea areas:\s*/, '')).join(' · ') : '';
+  }
+
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const api = { GROUPS, MODES, MODE, AGES, ADSB_STALE_SEC, FAST_SEC, SLOW_SEC, RETRY_SEC, RETRY_MAX_SEC, LIST_SEC, FETCH_TIMEOUT_MS, CONCURRENT,
-                itemsOf, merge, textSource, filter, modesPresent, navtexFacets, perServer, listenUrl, dataBase, dataUrl, textUrl, stateOf,
-                dueLayers, noteResult, sectionsOf, ago, fade, esc, modeTip, ADDRESS_OK };
+                itemsOf, merge, mergeRadios, modeCounts, primaryMode, shipsCombined, serverLayers, targets, askFor, textSource, filter, modesPresent, navtexFacets, perServer, listenUrl, dataBase, dataUrl, textUrl, stateOf,
+                dueLayers, noteResult, sectionsOf, ago, fade, esc, modeTip, ADDRESS_OK, SEA, seaSeverity, seaForecasts, seaShown, seaAttribution };
   root.CommunityMap = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
