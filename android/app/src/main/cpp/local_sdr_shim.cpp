@@ -29090,6 +29090,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply(200, "OK", LocalSdrShim::instance().afcJson());
                 return;
             }
+            /* ★★ V12 beta94 THE ADS-B RANGE OUTLINE on the admin page (vibe_adsb_range.h; Stuart 11-25: "in the admin section
+             *  with the aircraft settings an option to reset the adsb range ring"). GET = this radio's outline as the map gets
+             *  it, plus "available" (the radio could run ADS-B — a row only there, AGENTS.md); POST ?reset=1 clears it, ?window=
+             *  7|30|90|0 picks the days it is drawn over. Answered by the RADIO (/r/<serial>/…). */
+            if (what == "adsbrange") {
+                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                const int64_t utc = (int64_t)time(nullptr);
+                if (isPost) {
+                    if (queryParam(reqLine, "reset") == "1") {
+                        vibeadsb::rangeStore().clear(-1, utc);
+                        LOGI("admin page: ADS-B range outline reset by %s", ip.c_str());
+                    }
+                    const std::string w = queryParam(reqLine, "window");
+                    if (!w.empty() && !vibeadsb::rangeStore().setWindow(-1, std::atoi(w.c_str()), utc)) {
+                        reply(400, "Bad Request", "{\"error\":\"the window is 7, 30, 90 or 0 (all time) days\"}"); return;
+                    }
+                }
+                std::string j = vibeadsb::rangeStore().json(vibeadsb::kRangeAdsb, utc);
+                j.pop_back();
+                // ★ a radio that could run ADS-B — or one that has an outline from before (its settings changed since)
+                const bool avail = vsAdsbHwWhyNot().empty() || j.find("\"record\":null") == std::string::npos;
+                j += std::string(",\"available\":") + (avail ? "true" : "false") + "}";
+                reply(200, "OK", j);
+                return;
+            }
             if (what == "bandscan") {
                 if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 const std::string band = queryParam(reqLine, "band"), act = queryParam(reqLine, "act");
@@ -30455,6 +30480,41 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    An SVG goes out sandboxed (CSP), so an owner's file can never script this server's origin.
         // ── ★★ V12 ADS-B: one aircraft's TRAIL — GET /adsb/trail/<hex>, the map's rainbow line when it is tapped (vibe_adsb.h
         //    kTrailStepNm). THIS radio's decoder, so not a front-door path. The hex is parsed, never used as a path.
+        /* ── ★★ V12 beta94 THE RANGE OUTLINE (vibe_adsb_range.h; Stuart 11-25 — Virtual Radar Server's range plot) ─────────
+         *  GET /adsb/range[?src=adsb] — the outline over the owner's window, the all-time one and the furthest catch ever
+         *  (the map). CORS open, PIN-gated like aircraft.json. The owner's RESET and window: /vibeserver/admin/adsbrange. */
+        } else if (reqLine.rfind("GET /adsb/range", 0) == 0 && (reqLine.size() == 15 || reqLine[15] == ' ' || reqLine[15] == '?')) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            const size_t sp = reqLine.find(' ', 4);
+            const std::string target = reqLine.substr(4, sp == std::string::npos ? std::string::npos : sp - 4);
+            int src = vibeadsb::kRangeAdsb;
+            { const size_t q = target.find("src="); if (q != std::string::npos) { const size_t e = target.find('&', q);
+                src = vibeadsb::rangeSrcOf(target.substr(q + 4, e == std::string::npos ? std::string::npos : e - q - 4)); } }
+            const std::string body = src < 0 ? std::string("{\"ok\":0,\"error\":\"unknown source\"}") : vibeadsb::rangeStore().json(src, (int64_t)time(nullptr));
+            sock->sendstr(std::string(src < 0 ? "HTTP/1.1 404 Not Found" : "HTTP/1.1 200 OK") + "\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
+        /* ★ …and the same two owner actions for the app's SERVER screen on the phone that IS this server (Android): it asks
+         *  over loopback, which vsAdminHttpOk lets through (the host is the operator) — the admin API above does not.
+         *  POST /vibeserver/adsb-range?reset=1 | ?window=7|30|90|0. Anyone else needs the admin proof. */
+        } else if (reqLine.rfind("POST /vibeserver/adsb-range", 0) == 0 && (reqLine[27] == '?' || reqLine[27] == ' ')) {
+            auto reply = [&](const char* status, const std::string& body) {
+                sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                              "X-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ it already said 401
+            const int64_t utc = (int64_t)time(nullptr);
+            if (queryParam(reqLine, "reset") == "1") {
+                vibeadsb::rangeStore().clear(-1, utc);
+                LOGI("[ADS-B] range outline reset by %s", sock->peerAddress().c_str());
+            }
+            const std::string w = queryParam(reqLine, "window");
+            if (!w.empty() && !vibeadsb::rangeStore().setWindow(-1, std::atoi(w.c_str()), utc)) {
+                reply("400 Bad Request", "{\"ok\":false,\"error\":\"the window is 7, 30, 90 or 0 (all time) days\"}"); return;
+            }
+            reply("200 OK", vibeadsb::rangeStore().json(vibeadsb::kRangeAdsb, utc));
+            return;
         } else if (reqLine.rfind("GET /adsb/trail/", 0) == 0) {
             size_t to = reqLine.find_first_of(" ?#", 16);
             if (to == std::string::npos) to = reqLine.size();
@@ -46100,6 +46160,9 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         /* ★★ V12 AUTO-PPM's store on the PHONE (the Android server and Lite): beside the bookmarks, one radio, and — like the
          *  R36S — the switch is kept in it, because the phone's server has no config file for it. On by default. The
          *  standalone server and the handheld name theirs per radio serial in main.cpp. */
+        /* ★ V12 beta94 the ADS-B range outline (vibe_adsb_range.h) beside them: the phone's server has one radio. */
+        { static bool rangeSet = false;
+          if (!rangeSet) { rangeSet = true; setAdsbRangeFiles((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/adsb-range"); } }
         if (g_afcFile.empty()) {
             setAfcFile((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/afc.txt", /*keepSwitch=*/true);
             instance().setAutoPpm(afcHandheldOn(true));
@@ -50545,6 +50608,7 @@ void LocalSdrShim::afcSyncHw(bool allowMove) {
          g_ppmNow.load(std::memory_order_relaxed) + have, g_ppmNow.load(std::memory_order_relaxed) + want,
          g_ppmNow.load(std::memory_order_relaxed), want, g_afc.target() - want);
 }
+void LocalSdrShim::setAdsbRangeFiles(const std::string& prefix) { vibeadsb::rangeStore().setFiles(prefix); }
 void LocalSdrShim::setAfcFile(const std::string& path, bool handheld) {
     std::lock_guard<std::mutex> lk(g_afcMtx);
     g_afcFile = path; g_afcHandheld = handheld;

@@ -217,6 +217,7 @@ import { saveServerName, PUBLIC_NAME_KEY, NAME_KEY } from '../services/rtlTcpSer
 import { getServerSettings, onServerSettings, putServerSettings, remoteSettingsSupported, MIRROR_STORAGE_KEYS,
          setRemoteAccess as setRemoteAccessNative, storageFromSettings } from '../services/serverSettingsMirror';
 import { readPrefs } from '../services/serverPrefs';
+import { adsbRangeLine, parseAdsbRange, type AdsbRangeInfo } from '../services/adsbTypes';   // ★ beta94 the range outline
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
@@ -1465,6 +1466,32 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     const t = setInterval(() => void look(), 60000);
     return () => { gone = true; clearInterval(t); };
   }, [running, pskrOn, pskrCall]);
+  /* ★★ V12 beta94 THE ADS-B RANGE OUTLINE (vibe_adsb_range.h; Stuart 11-25: "an option to reset the adsb range ring") —
+   *  read from the running server (GET /adsb/range over loopback) when the screen opens and every minute; RESET and the
+   *  window go to POST /vibeserver/adsb-range, which takes loopback as the owner (the host is the operator). */
+  const [adsbRange, setAdsbRange] = useState<AdsbRangeInfo | null>(null);
+  const [adsbRangeBusy, setAdsbRangeBusy] = useState(false);
+  const adsbRangeLook = useCallback(async (port: number) => {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/adsb/range`, { cache: 'no-store' });
+      setAdsbRange(r.ok ? parseAdsbRange(await r.json()) : null);
+    } catch { setAdsbRange(null); }
+  }, []);
+  useEffect(() => {
+    if (!running) { setAdsbRange(null); return; }
+    void adsbRangeLook(running.port);
+    const t = setInterval(() => void adsbRangeLook(running.port), 60000);
+    return () => clearInterval(t);
+  }, [running, adsbRangeLook]);
+  const adsbRangePost = useCallback(async (q: string) => {
+    if (!running) return;
+    setAdsbRangeBusy(true);
+    try {
+      const r = await fetch(`http://127.0.0.1:${running.port}/vibeserver/adsb-range?${q}`, { method: 'POST' });
+      if (r.ok) setAdsbRange(parseAdsbRange(await r.json()));
+    } catch { /* the next look says what is true */ }
+    setAdsbRangeBusy(false);
+  }, [running]);
   /* ★★ AN ICOM'S FACTS — read once while stopped (is the permission held? can this Android prove which input it
    *  records?), and every 3 s while serving (capture starting, Android routing it away, the engine's preflight). Only
    *  for an Icom: no other radio's screen makes this call. A reading identical to the last one changes nothing. */
@@ -4005,6 +4032,38 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>
                 {`ADS-B cannot run on this radio with these settings (it needs 2.4 MS/s, or the rate switch), so it will not be the landing \u2014 listeners will start on ${plainLandingWords()} instead.`}
               </Text>
+            )}
+            {/* ★★ V12 beta94 THE ADS-B RANGE OUTLINE — only while the server runs and has one (an older engine answers 404),
+                on a radio that can reach 1090 MHz (AGENTS.md). The window it is drawn over and RESET, confirmed. */}
+            {running && adsbRange && !!radio && radio.driver !== 'airspyhf' && !isIcom && (
+              <View style={[styles.card, { borderColor: C.border, marginBottom: 8 }]}>
+                <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>ADS-B range outline</Text>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  {adsbRangeLine(adsbRange, Date.now() / 1000)}
+                </Text>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>Drawn over</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                  {([[7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'All time']] as const).map(([d, l]) => (
+                    <TouchableOpacity key={d} disabled={adsbRangeBusy} accessibilityRole="button" accessibilityState={{ selected: adsbRange.window === d }}
+                      style={{ borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
+                               borderColor: adsbRange.window === d ? C.keySelBorder : C.border }}
+                      onPress={() => { if (adsbRange.window !== d) void adsbRangePost(`window=${d}`); }}>
+                      <Text style={{ color: adsbRange.window === d ? C.text : C.textDim, fontFamily: F, fontSize: 12 }}>{l}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity disabled={adsbRangeBusy} accessibilityRole="button"
+                  style={{ alignSelf: 'flex-start', borderWidth: 1, borderColor: C.border, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 6, marginTop: 10 }}
+                  onPress={() => Alert.alert('Reset range outline',
+                    `Clear the range outline for ${radioLabel.trim() || 'this radio'}? It starts again from the next aircraft heard.`,
+                    [{ text: 'Cancel', style: 'cancel' }, { text: 'Reset', style: 'destructive', onPress: () => void adsbRangePost('reset=1') }])}>
+                  <Text style={{ color: C.text, fontFamily: F, fontSize: 12 }}>Reset range outline</Text>
+                </TouchableOpacity>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  The map's RANGE outline: the furthest aircraft heard on each bearing over that many days, so one day's
+                  exceptional range fades out again. The furthest catch ever is kept until you reset it.
+                </Text>
+              </View>
             )}
             {adsbLandOn && (
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>

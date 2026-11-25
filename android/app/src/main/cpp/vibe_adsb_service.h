@@ -13,6 +13,8 @@
 #include "vibe_adsb_capture.h"   // ★ CaptureMeter — the live "capture N %"
 #include "vibe_aircraft_share.h"   // ★ V12 2026-11-16 the shared table every radio on the machine writes (the AVIATION MAP)
 #include "vibe_adsb_data.h"     // what an aircraft IS (registration, type, operator, route) — V12 aircraft data
+#include "vibe_adsb_range.h"    // ★ V12 beta94 the RANGE OUTLINE: the furthest position per bearing (rangeStore())
+#include <ctime>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -56,6 +58,8 @@ public:
         tracker_.setCommB(commb);                      // as dump1090-fa: a position further than this is a bad decode
         if (lat == lat && lon == lon) tracker_.setReceiver(lat, lon);
         rxLat_ = lat; rxLon_ = lon;
+        // ★ the outline is this site's: a receiver moved more than a few km starts a new one (vibe_adsb_range.h)
+        if (lat == lat && lon == lon) rangeStore().setCentre(lat, lon, (int64_t)std::time(nullptr));
         queue_.clear();
         queued_ = 0;
         dropped_ = 0;
@@ -75,6 +79,7 @@ public:
         }
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        rangeStore().flush((int64_t)std::time(nullptr));   // ★ the last minute's growth is not lost when ADS-B ends
         std::lock_guard<std::mutex> il(infoMtx_);
         work_.clear(); infoJson_.clear(); infoDelta_.clear();
     }
@@ -248,11 +253,20 @@ private:
                 //    and report() — on the DSP thread — must never wait for that.
                 std::vector<Seen> snap;
                 snap.reserve(tracker_.aircraft().size());
+                /* ★★ V12 beta94 THE RANGE OUTLINE: once a second, each aircraft's position from the last 2 s (a repeat is
+                 *  harmless — it is a maximum), only once it has had two consistent fixes in a row (posOk): one bad decode
+                 *  never makes a spike. */
+                std::vector<std::pair<double, double>> fresh;
                 for (const auto& kv : tracker_.aircraft()) {
                     const Aircraft& a = kv.second;
                     snap.push_back({a.icao, a.nonIcao, a.callsign, a.hasPos && t - a.seenPos <= 60, a.lat, a.lon});
+                    if (a.hasPos && a.posOk >= 1 && t - a.seenPos <= 2.0) fresh.emplace_back(a.lat, a.lon);
                 }
                 lk.unlock();
+                if (!fresh.empty() && rxLat_ == rxLat_) {
+                    const int64_t utc = (int64_t)std::time(nullptr);
+                    for (const auto& p : fresh) rangeStore().offer(kRangeAdsb, p.first, p.second, utc);
+                }
                 enrich(snap, t);
                 lk.lock();
             }

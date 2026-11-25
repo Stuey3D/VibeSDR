@@ -1086,6 +1086,73 @@ async function renderAfc(): Promise<void> {
   } finally { afcBusy = false; }
 }
 
+/* ── ★★ V12 beta94 THE ADS-B RANGE OUTLINE, per radio (admin page → WHAT THIS RECEIVER HAS LEARNED) ────────────────────
+ *  Stuart, 2026-11-25: "in the admin section with the aircraft settings an option to reset the adsb range ring". Each radio
+ *  answers GET /vibeserver/admin/adsbrange (vibe_adsb_range.h json + available); a row only where it can run ADS-B. The
+ *  window it is drawn over (7 / 30 / 90 days, all time) and RESET RANGE OUTLINE, confirmed first. */
+const RANGE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export function adsbRangeLine(d: any, nowSec: number): string {
+  const day = (t: number) => { const x = new Date(t * 1000); return `${x.getUTCDate()} ${RANGE_MONTHS[x.getUTCMonth()]}`; };
+  const c = (o: any) => (o && Number(o.km) > 0 ? `${Math.round(Number(o.km))} km at ${Math.round(Number(o.brg))}\u00b0, ${day(Number(o.at))}` : '');
+  if (!d || !d.record) return 'Nothing heard yet \u2014 it builds as aircraft are heard in ADS-B.';
+  const since = Number(d.since) || 0;
+  const days = since > 0 ? Math.max(1, Math.ceil((nowSec - since) / 86400)) : 0;
+  const parts = [days ? `Built over ${days} ${days === 1 ? 'day' : 'days'}` : 'Built'];
+  const f = c(d.far);
+  parts.push(f ? `furthest ${f}` : `nothing in the last ${d.window} days`);
+  const r = c(d.record);
+  if (r && r !== f) parts.push(`furthest ever ${r}`);
+  return parts.join(' \u00b7 ');
+}
+let rangeBusy = false;
+async function renderAdsbRange(): Promise<void> {
+  const box = document.getElementById('admAdsbRange');
+  if (!box || rangeBusy) return;
+  if (box.contains(document.activeElement) && document.activeElement?.tagName === 'SELECT') return;   // ★ never redrawn under an open choice
+  rangeBusy = true;
+  try {
+    const all = await fromEveryRadio('adsbrange');
+    const rows = all.filter((r) => r.data && !r.data.none && r.data.available);
+    const many = rows.length > 1;
+    const nowSec = Date.now() / 1000;
+    box.innerHTML = rows.map((r) => {
+      const d = r.data;
+      const w = Number(d.window);
+      const opt = (v: number, l: string) => `<option value="${v}"${w === v ? ' selected' : ''}>${l}</option>`;
+      return `<div class="admScanRow"><b>ADS-B RANGE OUTLINE${many ? ` \u2014 ${esc(r.radio)}` : ''}</b>`
+        + `<p class="wrap">${esc(adsbRangeLine(d, nowSec))}</p>`
+        + `<div class="aActions"><label class="dim">DRAWN OVER <select data-serial="${esc(r.serial)}" data-rangewin>`
+        + opt(7, 'the last 7 days') + opt(30, 'the last 30 days') + opt(90, 'the last 90 days') + opt(0, 'all time') + `</select></label>`
+        + `<button class="btn" data-serial="${esc(r.serial)}" data-radio="${esc(r.radio)}" data-rangereset>RESET RANGE OUTLINE</button></div>`
+        + `<p class="dim wrap">The map's RANGE outline: the furthest aircraft this radio has heard on each bearing over that many days, `
+        + `so one day's exceptional range fades out again. The furthest catch ever is kept until you reset it.</p></div>`;
+    }).join('');
+    const post = async (serial: string, extra: string) => {
+      const qs = serial ? await qCached() : await q();
+      const root = serial ? `${machineBase()}/r/${encodeURIComponent(serial)}` : base();
+      await fetch(`${root}/vibeserver/admin/adsbrange?${qs}&${extra}`, { method: 'POST', body: '{}' });
+    };
+    box.querySelectorAll<HTMLButtonElement>('button[data-rangereset]').forEach((b) => {
+      b.onclick = async () => {
+        const who = b.dataset.radio ? b.dataset.radio : 'this radio';
+        if (!window.confirm(`Clear the range outline for ${who}? It starts again from the next aircraft heard.`)) return;
+        b.disabled = true;
+        try { await post(b.dataset.serial || '', 'reset=1'); } catch { /* the next refresh says what is true */ }
+        rangeBusy = false;
+        void renderAdsbRange();
+      };
+    });
+    box.querySelectorAll<HTMLSelectElement>('select[data-rangewin]').forEach((sel) => {
+      sel.onchange = async () => {
+        sel.disabled = true;
+        try { await post(sel.dataset.serial || '', `window=${encodeURIComponent(sel.value)}`); } catch { /* as above */ }
+        rangeBusy = false;
+        void renderAdsbRange();
+      };
+    });
+  } finally { rangeBusy = false; }
+}
+
 async function qCached(): Promise<string> {
   const have = adminTicketQuery();
   if (have) return have;
@@ -1761,6 +1828,7 @@ async function refresh() {
       { const ls = document.getElementById('secLearned'); if (ls) ls.hidden = false; }
       void renderScans();   // ★★ V12: the owner's DAB / FM scans, per radio
       void renderAfc();     // ★★ V12: auto-PPM, per radio
+      void renderAdsbRange();   // ★★ V12 beta94: the ADS-B range outline, per radio
       const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
       const sec = document.getElementById('secMaintenance');
       // ★ High Detail Maps live here too, and a server can offer them with no package actions at

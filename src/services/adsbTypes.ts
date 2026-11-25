@@ -259,8 +259,9 @@ export function adsbStatusText(r: AdsbReport | null): string {
 }
 
 /** The map's in-map toggles (the shared layer draws them; the app remembers them per device). */
-export interface AdsbMapPrefs { autoZoom: boolean; fit: boolean; rings: boolean; labels: boolean }
-export const ADSB_MAP_PREFS_DEFAULT: AdsbMapPrefs = { autoZoom: true, fit: false, rings: true, labels: true };
+/** ★ beta94 range: the RANGE outline (default on); rangeAll: its all-time dotted line behind it (default off). */
+export interface AdsbMapPrefs { autoZoom: boolean; fit: boolean; rings: boolean; labels: boolean; range: boolean; rangeAll: boolean }
+export const ADSB_MAP_PREFS_DEFAULT: AdsbMapPrefs = { autoZoom: true, fit: false, rings: true, labels: true, range: true, rangeAll: false };
 export function parseAdsbMapPrefs(s: string | null | undefined): AdsbMapPrefs {
   try {
     const j = s ? JSON.parse(s) : null;
@@ -269,7 +270,9 @@ export function parseAdsbMapPrefs(s: string | null | undefined): AdsbMapPrefs {
     return { autoZoom: b(j.autoZoom, ADSB_MAP_PREFS_DEFAULT.autoZoom),
              fit: b(j.fit, ADSB_MAP_PREFS_DEFAULT.fit),
              rings: b(j.rings, ADSB_MAP_PREFS_DEFAULT.rings),
-             labels: b(j.labels, ADSB_MAP_PREFS_DEFAULT.labels) };
+             labels: b(j.labels, ADSB_MAP_PREFS_DEFAULT.labels),
+             range: b(j.range, ADSB_MAP_PREFS_DEFAULT.range),
+             rangeAll: b(j.rangeAll, ADSB_MAP_PREFS_DEFAULT.rangeAll) };
   } catch { return { ...ADSB_MAP_PREFS_DEFAULT }; }
 }
 
@@ -323,4 +326,32 @@ export const ADSB_GAIN_TOUCH_MS = 2500;
 export function adsbGainStep(view: AdsbGainView, last: { idx: number; at: number } | null, now: number, dir: -1 | 1): number {
   const from = last && now - last.at < ADSB_GAIN_TOUCH_MS ? last.idx : view.idx;
   return Math.max(0, Math.min(view.maxIdx, from + dir));
+}
+
+/* ── ★★ V12 beta94 THE ADS-B RANGE OUTLINE's line for the owner (the app's server screen; the web admin page has the same
+ *  words in admin.ts adsbRangeLine): "Built over 23 days · furthest 412 km at 152°, 8 Nov · furthest ever 512 km at 160°,
+ *  3 Nov". `d` is GET /adsb/range (vibe_adsb_range.h). */
+const RANGE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export interface AdsbRangeCatch { km: number; brg: number; at: number }
+export interface AdsbRangeInfo { window: number; since: number; far: AdsbRangeCatch | null; record: AdsbRangeCatch | null }
+export function parseAdsbRange(j: unknown): AdsbRangeInfo | null {
+  const o = j as Record<string, unknown> | null;
+  if (!o || typeof o !== 'object' || !o.ok || !Array.isArray(o.km)) return null;
+  const c = (x: unknown): AdsbRangeCatch | null => {
+    const y = x as Record<string, unknown> | null;
+    return y && typeof y === 'object' && Number(y.km) > 0 ? { km: Number(y.km), brg: Number(y.brg) || 0, at: Number(y.at) || 0 } : null;
+  };
+  return { window: Number(o.window) || 0, since: Number(o.since) || 0, far: c(o.far), record: c(o.record) };
+}
+export function adsbRangeLine(d: AdsbRangeInfo | null, nowSec: number): string {
+  const day = (t: number) => { const x = new Date(t * 1000); return `${x.getUTCDate()} ${RANGE_MONTHS[x.getUTCMonth()]}`; };
+  const c = (o: AdsbRangeCatch | null) => (o ? `${Math.round(o.km)} km at ${Math.round(o.brg)}\u00b0, ${day(o.at)}` : '');
+  if (!d || !d.record) return 'Nothing heard yet \u2014 it builds as aircraft are heard in ADS-B.';
+  const days = d.since > 0 ? Math.max(1, Math.ceil((nowSec - d.since) / 86400)) : 0;
+  const parts = [days ? `Built over ${days} ${days === 1 ? 'day' : 'days'}` : 'Built'];
+  const f = c(d.far);
+  parts.push(f ? `furthest ${f}` : `nothing in the last ${d.window} days`);
+  const r = c(d.record);
+  if (r && r !== f) parts.push(`furthest ever ${r}`);
+  return parts.join(' \u00b7 ');
 }
