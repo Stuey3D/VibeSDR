@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
         return std::string(R"({
         "name":"Allotment Moto","advertise":false,"landingMessage":"Hello","landingLinkUrl":"https://example.org",
         "landingLinkLabel":"Club","uncompressedAudio":1,"trustedProxies":"10.0.0.0/8","oneRadioPerIp":false,
-        "decoderMax":3,"rttySkimWorkers":2,"galleryMb":250,"galleryPublic":false,"gallerySaveLive":false,
+        "decoderMax":3,"rttySkimWorkers":2,"galleryMb":250,"galleryPublic":false,"gallerySaveLive":false,"communityMap":true,
         "batteryPauseAt":15,"batteryResumeAt":35,
         "pskrOn":true,"pskrCall":"G4ABC","pskrAntenna":"Discone on the mast","wsprnetOn":true,"wsprnetCall":"G4ABC","dmrIdLookup":true,
         "serverLocation":{"mode":"manual","lat":52.25,"lon":-0.9,"label":"Moulton","country":"GB","moving":true},
@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
             {"name","name"},{"mdns","mdnsAdvertise"},{"landingMessage","landingMessage"},{"landingLinkUrl","landingLinkUrl"},
             {"landingLinkLabel","landingLinkLabel"},{"uncompressed","uncompressed"},{"trustedProxies","trustedProxies"},
             {"maxRadiosPerIp","maxRadiosPerIp"},{"decoderMax","decoderMax"},{"rttySkimWorkers","rttySkimWorkers"},{"galleryMb","galleryMb"},
-            {"galleryPublic","galleryPublic"},{"gallerySaveLive","gallerySaveLive"},{"batteryPauseAt","batteryPauseAt"},
+            {"galleryPublic","galleryPublic"},{"gallerySaveLive","gallerySaveLive"},{"communityMap","communityMap"},{"batteryPauseAt","batteryPauseAt"},
             // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup
             {"pskrOn","pskrOn"},{"pskrCall","pskrCall"},{"pskrAntenna","pskrAntenna"},{"wsprnetOn","wsprnetOn"},{"wsprnetCall","wsprnetCall"},{"dmrIdLookup","dmrIdLookup"},
             {"place","place"},{"lat","lat"},{"lon","lon"},{"locFollow","locFollow"},{"country","country"},{"locator","locator"},

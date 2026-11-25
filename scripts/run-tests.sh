@@ -265,7 +265,7 @@ flags_for() {
     # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
-    test-ndb|test-ndb-suspect) echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
+    test-ndb|test-ndb-suspect|test-community) echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
     # ★★ V12 the one-time NDB card clean-up (vibe_ndb_gallery_clean.h, 2026-11-04): all-dot / all-dash unlisted idents set
     #    aside on REAL cards (vibeserver/testdata-ndb-gallery), counts / furthest / best / titles recomputed, the marker,
     #    an open card skipped, the day's writer keeping the section after a restart. Fast.
@@ -535,7 +535,7 @@ deps_for() {
     test-dab-faad|test-dab-faad-queue|test-dab-tii-air) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
     test-xpdr) echo "android/app/src/main/cpp/decoders/cw_skimmer.cpp" ;;   # ★ pffft from cobjs_for (the ndb group)
     test-vormap) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ IdentVote + the datalink's front end; pffft + kiss from cobjs_for
-    test-ndb|test-ndb-suspect) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
+    test-ndb|test-ndb-suspect|test-community) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
     # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
@@ -560,7 +560,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-vormap|test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr)
+    test-vormap|test-ndb|test-ndb-suspect|test-community|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"

@@ -1793,6 +1793,10 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGallery(JNIEnv* env, jobject, jstring
     vibe::LocalSdrShim::setGallery(jstr(env, dir), (double)limitMb, publicRead == JNI_TRUE, saveLive == JNI_TRUE);
     vibe::LocalSdrShim::setGalleryRadioLabel(jstr(env, label));
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetCommunityMap(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setCommunityMap(on == JNI_TRUE);   // ★★ V12 beta94 the community map (vibe_community.h)
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeBackgroundCaps(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::LocalSdrShim::backgroundCapsJson().c_str());

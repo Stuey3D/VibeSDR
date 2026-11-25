@@ -663,6 +663,14 @@ object VibeTunnel {
                 j.optString(k).takeIf { it.isNotEmpty() }?.let { out.put(k, it) }
             // ★ The machine — CPU, cores, clock, RAM, instruction set — as the server measured it (vibe_hwinfo.h).
             j.optJSONObject("hw")?.let { out.put("hw", it) }
+            /* ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): present only while the owner shares — copied as directory.cpp
+             *  does, the known layer words only, so the directory lists this phone as a contributor. */
+            if (j.optBoolean("communityMap", false)) {
+                val known = setOf("adsb", "acars", "vdl2", "hfdl", "ais", "dsc", "navtex", "ndb")
+                val lay = org.json.JSONArray()
+                j.optJSONArray("communityLayers")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it in known }?.let { lay.put(it) } }
+                out.put("communityMap", true); out.put("communityLayers", lay)
+            }
             // ★ The phone's battery, as the server publishes it — the badge beside the entry.
             if (j.has("batteryLevel")) out.put("battery", JSONObject().apply {
                 put("level", j.optInt("batteryLevel", -1)); put("charging", j.optBoolean("batteryCharging", false))

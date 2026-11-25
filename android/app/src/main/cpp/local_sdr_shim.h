@@ -399,6 +399,9 @@ public:
     /** ★★ THE GALLERY (vibe_gallery.h): its directory (shared by every radio on the machine), the owner's size in MB
      *  (0 = keep nothing), whether listeners may read it, and whether a listener's own decodes are kept. */
     static void setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive);
+    /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the owner's "Share to the VibeSDR community map" switch — default
+     *  OFF. On: GET /vibeserver/community.json answers, and vibeserver.json says "communityMap":true (the directory lists it). */
+    static void setCommunityMap(bool on);
     /** ★★ V12 2026-11-16 THE SHARED AIRCRAFT TABLE (vibe_aircraft_share.h): the directory every radio process on the box
      *  shares for it — the runtime directory (a tmpfs on a Linux server), never the SD card. Unset: in this process only. */
     static void setAircraftShareDir(const std::string& dir);
