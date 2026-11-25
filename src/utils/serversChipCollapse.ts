@@ -31,3 +31,10 @@ export const CHIP_EXPAND_DELAY_MS = 400;
  *  drawn over the box and takes its own taps; the box's rows still scroll everywhere else. */
 export const DECODER_BOX_Z = 200;
 export const SERVERS_TAB_Z = 251;
+/** ★★ THE SERVERS MENU IS THE TOP LAYER (Stuart: "when collapsed, when pressed it opens the menu as the top layer above
+ *  all, as that is how we manage multiple servers too"). Open — from the full button or the tab, the same menu — the
+ *  chip's whole layer sits above every box, the edge cards and tabs (EdgeChip 250 / 251), the notices (≤ 240) and the
+ *  deck (no layer). */
+export const SERVERS_MENU_Z = 300;
+/** Every other layer on the SDR screen the menu must clear (EdgeChip card / tab, the shared-dial banners, notices). */
+export const SDR_SCREEN_LAYERS_BELOW_MENU = [DECODER_BOX_Z, SERVERS_TAB_Z, 250, 240, 215, 210];

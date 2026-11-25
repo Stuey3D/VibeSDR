@@ -27,7 +27,7 @@ import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useListNav, noteTouchInteraction } from './PanelNav';
 import { AccessibilityInfo, Animated, Easing, View, Text, Pressable, StyleSheet } from 'react-native';
 import { EDGE_TAB_W, EDGE_TAB_H } from './edgeChipGeometry';
-import { SERVERS_TAB_Z } from '../utils/serversChipCollapse';
+import { SERVERS_MENU_Z, SERVERS_TAB_Z } from '../utils/serversChipCollapse';
 import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
@@ -175,8 +175,10 @@ export default function ServersChip({
 
   return (
     // Full-screen, box-none so only the chip / dropdown / catch-layer take touches.
-    /* ★ Tucked, the chip's whole layer rises above the boxes (SERVERS_TAB_Z), whatever order the screen mounts them in. */
-    <View style={[StyleSheet.absoluteFill, tucked && TAB_LAYER]} pointerEvents="box-none" onTouchStart={noteTouchInteraction}>
+    /* ★ The chip's whole layer: OPEN, the top of the screen (SERVERS_MENU_Z — above every box, card, tab and the deck,
+       from the full button or the tab alike); tucked, above the boxes (SERVERS_TAB_Z). Whatever order the screen
+       mounts things in — a child's zIndex alone only orders it inside this layer. */
+    <View style={[StyleSheet.absoluteFill, expanded ? OPEN_LAYER : tucked && TAB_LAYER]} pointerEvents="box-none" onTouchStart={noteTouchInteraction}>
       {/* Catch-layer: swallows the outside tap so dismissing never tunes/pans the
           waterfall, and carries a faint backdrop tint. Behind the dropdown. */}
       {expanded && (
@@ -317,7 +319,7 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
 /* ★★ OPEN, IT IS TOPMOST (Stuart, 2026-10-30: "when the servers chip is open it needs to be topmost" — it opened behind
  *  the DAB station strip and the DAB box). Above every layer on the SDR screen; the backdrop sits with it, so a tap
  *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place. */
-const OPEN_LAYER = { zIndex: 300, elevation: 300 } as const;
+const OPEN_LAYER = { zIndex: SERVERS_MENU_Z, elevation: SERVERS_MENU_Z } as const;
 /** ★ Tucked, it sits with the edge tabs (EdgeChip, 251) — above the box it is tucked beside, so it can still be tapped. */
 const TAB_LAYER = { zIndex: SERVERS_TAB_Z, elevation: SERVERS_TAB_Z } as const;
 

@@ -7,7 +7,7 @@
  * half-open split's upper panel from the top edge).
  * Run: node --no-warnings scripts/test_servers_chip.ts   (run-tests.sh does)
  */
-import { chipCollapsed, CHIP_EXPAND_DELAY_MS, DECODER_BOX_Z, SERVERS_TAB_Z, type ChipRect } from '../src/utils/serversChipCollapse.ts';
+import { chipCollapsed, CHIP_EXPAND_DELAY_MS, DECODER_BOX_Z, SERVERS_TAB_Z, SERVERS_MENU_Z, SDR_SCREEN_LAYERS_BELOW_MENU, type ChipRect } from '../src/utils/serversChipCollapse.ts';
 
 let fails = 0;
 function ok(cond: boolean, what: string) {
@@ -39,6 +39,8 @@ ok(!chipCollapsed(chipAt(62), []), 'plain waterfall (no box): the full "‹ Serv
   ok(dabBig.y < chip.y && dabBig.y + dabBig.h > chip.y + chip.h && dabBig.x <= chip.x, 'Pro Max, DAB BIG covers the whole chip rect');
   ok(chipCollapsed(chip, [dabBig]), 'Pro Max, DAB BIG: tucked');
   ok(SERVERS_TAB_Z > DECODER_BOX_Z, `…and the tab's layer (${SERVERS_TAB_Z}) is above the box's (${DECODER_BOX_Z}): drawn on top, tappable`);
+  ok(SDR_SCREEN_LAYERS_BELOW_MENU.every((z) => SERVERS_MENU_Z > z),
+     `…and tapping it opens the Servers menu as the TOP layer (${SERVERS_MENU_Z}, above ${Math.max(...SDR_SCREEN_LAYERS_BELOW_MENU)})`);
   ok(chipCollapsed(chip, [box(W, 760, 62 + 6, deckTop - 8)]), 'Pro Max, decoder BIG: tucked');
   ok(!chipCollapsed(chip, [box(W, 560, deckTop - 8 - 276, deckTop - 8)]), 'Pro Max, DAB SMALL above the deck: full button');
 }
