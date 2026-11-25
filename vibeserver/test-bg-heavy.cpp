@@ -108,7 +108,8 @@ int main() {
         oldAfter = oldAfter || pill.oldSays; newAfter = newAfter || pill.newSays;
         wireClean = wireClean && pill.json.find("warn") == std::string::npos && pill.json.find("ackground") == std::string::npos;
     }
-    ok(oldAfter, "the OLD rule keeps it on the pill after it STOPPED, through the satellite pass (the fault reproduced)");
+    // ★ BehindWatch itself now forgets a key the tick it is not fed (its decoder stopped) — the hold was the second fault
+    ok(!oldAfter, "BehindWatch (the old path) no longer holds a STOPPED decoder's name either");
     ok(!newAfter && wireClean, "the new rule: stopped = no background entry in the health JSON at all");
 
     std::printf("\n── a real shortfall the listener feels still says so ──\n");

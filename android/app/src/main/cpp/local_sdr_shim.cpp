@@ -45672,10 +45672,27 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
             if (hst->spotsOn() && hst->spotsScope() == "band")
                 watch.note("spotshed:" + kv.first, "Band skimmer (modes shed)", hst->spotPeriodsShed(), nowMs);
         }
-        /* ★★ V12 (2026-10-27, Stuart's Pi 2): the one-pipeline radio's slice tap (vibe_wide_tap.h) drops the radio's IQ when
-         *  it falls half a second behind — Band then loses whole slots without a single "slot skipped". Named here too. */
-        if (p->skimTap_.running())
-            watch.note("bandtap", "Digital spots / skimmer slice (radio-rate tap)", p->skimTap_.droppedBlocks(), nowMs);
+        /* ★★★ beta94 (the Sony Bravia, Stuart 11-25: "Digital spots / skimmer slice (radio-rate tap): TOO HEAVY" in SATELLITE
+         *  mode on ORBCOMM, no skimmer open, the CPU with plenty of headroom). This tap (vibe_wide_tap.h) is not only the
+         *  skimmers': ANY wide-IQ decoder on the shared host runs it (skimTapFeed: skimmersRunning() — ORBCOMM's 750 kS/s
+         *  slice included). What was counted was its own queue overflowing — its thread half a second behind the radio,
+         *  every drop named for a minute — under a label naming a decoder that was not open. Drops alone are lost decodes
+         *  for that one decoder, never lag or broken audio for a listener, so NOT the pill (Stuart: "the pill is to inform
+         *  users why they might be having a sluggish connection, lagging, broken audio etc."). Said in the server log once
+         *  a minute instead, naming the decoder it feeds. */
+        {
+            static uint64_t tapLast = 0; static int64_t tapLogAt = 0;
+            const uint64_t d = p->skimTap_.droppedBlocks();
+            if (d < tapLast) tapLast = d;
+            if (p->skimTap_.running() && d > tapLast && nowMs - tapLogAt >= 60000) {
+                std::shared_ptr<DecoderHost> h = p->decoders_.shared();
+                const std::string who = h ? decoderLabel(h->name(), h->spotsOn()) : std::string();
+                LOGI("wide-IQ slice tap: %llu block(s) dropped since the last report \xe2\x80\x94 %s lost that input (its thread fell "
+                     "half a second behind the radio); listeners' audio is not affected", (unsigned long long)(d - tapLast),
+                     who.empty() ? "the decoder it feeds" : who.c_str());
+                tapLast = d; tapLogAt = nowMs;
+            } else if (!p->skimTap_.running()) tapLast = d;
+        }
         /* ★★★ V12 2026-11-24: background decoding giving way to a listener is the design working (vibe_bg_ease.h) — its drops
          *  are EXCUSED while a listener is on and the easing still has room to act. TOO HEAVY stays for real overload:
          *  drops with nobody on, or drops after everything that may be eased has been. */

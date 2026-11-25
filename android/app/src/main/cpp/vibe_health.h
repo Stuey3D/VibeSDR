@@ -101,7 +101,8 @@ private:
  *  drops its oldest input rather than make audio wait (Network > Audio > Spectrum > Decoders), and counts the drop.
  *  A busy box that keeps up shows nothing; a decoder that lost input in the last minute is named, whatever the
  *  CPU figure says. Fed every health tick with each decoder's running drop count; a count that goes DOWN is a
- *  decoder restarted (a fresh baseline, not a drop). Keys not fed for two minutes are forgotten. */
+ *  decoder restarted (a fresh baseline, not a drop). A key not fed on the tick that reads it is forgotten at once
+ *  (its decoder has stopped) — feed every running decoder with the same `nowMs`, then call behind(nowMs). */
 class BehindWatch {
 public:
     /** ★★ V12 2026-11-24 `excused`: the drops since the last note were PLANNED — background decoding giving way to a
@@ -119,7 +120,11 @@ public:
     std::vector<std::string> behind(int64_t nowMs) {
         std::vector<std::string> out;
         for (auto it = m_.begin(); it != m_.end();) {
-            if (nowMs - it->second.seenMs > 2 * kHoldMs) { it = m_.erase(it); continue; }
+            /* ★★★ beta94 (the Lenovo and the Sony, 11-25): NOT NOTED THIS TICK = ITS DECODER IS NOT RUNNING — forgotten at
+             *  once. Every running decoder is noted with the same `nowMs` just before this is read; one that stopped was
+             *  held up for the rest of its minute ("TOO HEAVY" for background decoding after it had stopped, during a
+             *  satellite pass). A stopped decoder cannot be too heavy. */
+            if (it->second.seenMs != nowMs) { it = m_.erase(it); continue; }
             if (nowMs - it->second.lastDropMs < kHoldMs
                 && std::find(out.begin(), out.end(), it->second.label) == out.end()) out.push_back(it->second.label);
             ++it;
