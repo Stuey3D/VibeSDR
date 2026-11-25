@@ -37213,6 +37213,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     //    runner and never stop it; that is why the runner knows nothing about listeners.
     // ★ While a profile is due (bgWanted_), the idle park is held off: parking and waking a radio is the most dangerous
     //   thing this server does to it (see g_vsIdleGraceSec), and doing it five minutes before taking it back is waste.
+    vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
+    // ★★★ beta94 declared BEFORE bgRun_ so it is destroyed AFTER it (members go in reverse): the runner's teardown may
+    //     still reach it — publishing to a destroyed registry aborted every clean shutdown (vibe_bgdecode.h ~BgRunner).
     vibe::bg::BgRunner bgRun_;
     /** ★★ V12 2026-10-25: a CW skimmer on a one-pipeline radio (no ClientDsp, no channeliser) — see vibe_wide_tap.h. Fed
      *  on the DSP thread only while the shared host's skimmer runs; started and stopped there too (a rare event). */
@@ -37532,7 +37535,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
     }
-    vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
     std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival
     std::atomic<bool>  bgActive_{false};        // the runner is running (read by the DSP thread on every block)
     std::atomic<bool>  bgWanted_{false};        // a profile is due or running: hold the idle park off

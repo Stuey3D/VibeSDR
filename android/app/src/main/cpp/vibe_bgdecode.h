@@ -1236,7 +1236,16 @@ public:
         double wefaxHourSecs = 3600.0;
     };
     BgRunner() = default;
-    ~BgRunner() { stop(false); }
+    /** ★★★ beta94 THE SHUTDOWN ABORT (beta93 too; the Mac 11-25 15:27, every clean stop once background decoding had run —
+     *  an apt upgrade, a restart, a settings save): the shim stops the runner itself, then `delete impl` ran this a second
+     *  time, and stop() published to p_.registry — the shim's BgRegistry, ALREADY destroyed (declared after the runner).
+     *  Its dead mutex threw "mutex lock failed: Invalid argument" out of a noexcept destructor: std::terminate, SIGABRT.
+     *  Now: the registry is told only by a stop that stopped something; the destructor never reaches it (whoever owns
+     *  the runner stops it while the registry lives); and nothing thrown leaves here. test-server-bg-stop.mjs. */
+    ~BgRunner() {
+        p_.registry = nullptr;
+        try { stop(false); } catch (...) {}
+    }
 
     /** Build every VFO's channel, start every decoder, start the worker. */
     void start(const Params& p) {
@@ -1468,7 +1477,7 @@ public:
         for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
         chans_.clear();
         easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0);
-        if (p_.registry) p_.registry->publish({});
+        if (was && p_.registry) p_.registry->publish({});   // ★ beta94 only a stop that stopped something (see ~BgRunner)
         if (was && sayIt) say("background decoding stopped");
     }
     bool running() const { return running_.load(); }

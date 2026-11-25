@@ -1805,6 +1805,13 @@ printf '\n\033[1m── raw IQ out + saturating background decoders: the listene
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-iq-priority.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ beta94 A CLEAN STOP WITH BACKGROUND DECODING EXITS CLEANLY: ~BgRunner published to the shim's BgRegistry after it
+#     was destroyed — SIGABRT on every apt upgrade / restart once background decoding had run (beta93 too). Running, and
+#     stopped by a listener first; exit 0, no std::terminate. Same VIBESERVER_BIN rule. ~40 s.
+printf '\n\033[1m── a clean stop with background decoding on: exit 0, no abort (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-bg-stop.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ RAW IQ OUT IS THE REAL IQ (V12, docs/v12/IQOUT-WIDE.md): a carrier 100 kHz off a USB dial is IN a 250 kHz stream, at its
 #     exact rate, nothing dropped — one-pipeline radio and a listener's own VFO. Same VIBESERVER_BIN rule. ~80 s.
 printf '\n\033[1m── raw IQ out is the real IQ, not the listener'"'"'s passband (end to end) ──\033[0m\n'
