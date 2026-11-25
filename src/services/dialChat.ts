@@ -246,6 +246,36 @@ export function askBannerText(d: AskState, tight: boolean, clock?: (ms: number) 
   return `${pre}ASK IN CHAT TO TUNE`;
 }
 
+/** The room's head-count for the SHARED TUNER banner: "3/5 👤", or "(You+N)" where the server counts us in and has no
+ *  cap (FM-DX). ONE copy for the plain and the ask-before-tuning lines (Stuart, 2026-11-25: "the user count is missing
+ *  on the ask in chat to tune message"). */
+export function bannerCount(st: { listeners: number; max: number; youPlus?: boolean }): string {
+  return st.youPlus ? `(You+${Math.max(1, st.listeners - 1)})` : `${st.listeners}${st.max > 1 ? `/${st.max}` : ''} 👤`;
+}
+
+/** The longest line the narrowest layout was fitted to: "SHARED TUNER · ASK TO TUNE · 2/5 👤". */
+export const BANNER_FITTED_LEN = 'SHARED TUNER · ASK TO TUNE · 2/5 👤'.length;
+
+/**
+ * The SHARED TUNER banner's words (ControlsBar's bar banner and its LED / analogue twin), count included in every
+ * state. ★ Words are never truncated mid-word: on a `tight` layout (every phone-width window up to 415 pt — the SE in
+ * Display Zoom included) the "SHARED TUNER · " prefix goes first, which keeps each ask line within BANNER_FITTED_LEN.
+ */
+export function sharedBannerWords(st: { said?: string | null; alone?: boolean; youPlus?: boolean; listeners: number;
+                                        max: number; ask?: AskState | null }, tight: boolean,
+                                  clock?: (ms: number) => string): string {
+  if (st.said) return st.said;
+  const askLine = st.ask ? askBannerText(st.ask, true, clock) : null;   // the words, without the prefix
+  if (askLine) {
+    const tail = st.alone ? '' : (st.youPlus ? ` ${bannerCount(st)}` : ` · ${bannerCount(st)}`);
+    return `${tight ? '' : 'SHARED TUNER · '}${askLine}${tail}`;
+  }
+  if (st.alone) return 'SHARED TUNER · FREE TO TUNE';
+  return st.youPlus
+    ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning ${bannerCount(st)}`
+    : `SHARED TUNER · ASK TO TUNE · ${bannerCount(st)}`;
+}
+
 /** True when this receiver shares one dial between its listeners. */
 export function isSharedDial(d: DialState | null): boolean {
   return !!d && d.mode !== 'exclusive';
