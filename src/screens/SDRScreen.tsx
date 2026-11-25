@@ -214,6 +214,8 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow } from '../hooks/useUiScale';
 import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
 import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
+import { DecoderAvoidContext } from '../components/DecoderShell';
+import { EDGE_TAB_W, EDGE_TAB_H } from '../components/edgeChipGeometry';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
@@ -8896,7 +8898,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const TIME_TAB = ['#ffb833', '#ffe14d', '#ff6b6b'];
   /* ★ BIG reaches the status row, never past it — "make sure we respect the status row at the top of the screen
    *  so we can still use our buttons without fouling the OS". */
-  const boxTopSafe = Math.max(insets.top + 6, (() => { const y = clearBelow(reserved, 0, screenW, screenH); return y > 0 ? y + 6 : 0; })());
+  /* ★★ A decoder box may rise BESIDE the camera / status column (it narrows clear of it — DecoderShell, DecoderAvoid
+   *  below — Stuart: "shrink to the left so that it clears the system status"); only a full-width status band (a Split
+   *  View share's) holds it below. */
+  const boxTopSafe = Math.max(insets.top + 6, (() => {
+    let y = 0;
+    for (const r of avoidRects(reserved)) if (r.w >= screenW * 0.5 && r.y < screenH * 0.25) y = Math.max(y, r.y + r.h);
+    return y > 0 ? Math.ceil(y) + 6 : 0;
+  })());
   /* ★ (2026-10-06) No `edgeRight` here any more: it was `insets.right`, which put the health / time cards ~43 pt
    *  inside the glass in landscape. EdgeChip now anchors at the physical edge and pads by the inset itself
    *  (edgeChipGeometry) — one rule, read in one place. */
@@ -10470,8 +10479,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Layout ────────────────────────────────────────────────────────────────
 
   const bottomInset = insets.bottom;
+  /* ★★ The decoder boxes' right edge keeps clear of the system's corner rects and the right-hand edge tabs
+   *  (DecoderShell). Only rects narrower than half the window (a full-width band holds the box below it instead). */
+  const decoderAvoid = useMemo(() => {
+    const rects = avoidRects(reserved).filter((r) => r.w < screenW * 0.5);
+    if (!rects.length) return { rects: [], windowW: screenW };
+    if (health || sessionLimitMins) rects.push({ x: screenW - (EDGE_TAB_W + 14), y: rightStackTop, w: EDGE_TAB_W + 14, h: 2 * EDGE_TAB_H + 16 });
+    return { rects, windowW: screenW };
+  }, [reserved, screenW, health, sessionLimitMins, rightStackTop]);
 
   return (
+    <DecoderAvoidContext.Provider value={decoderAvoid}>
     <View
       style={styles.root}
       // Capture-phase touch sniff (returns false — never steals the touch):
@@ -12675,6 +12693,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       ) : null}
     </View>
+    </DecoderAvoidContext.Provider>
   );
 }
 

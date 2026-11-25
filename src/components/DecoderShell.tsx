@@ -42,7 +42,7 @@
  *   anywhere with Transparency OFF.
  */
 
-import React, { createContext, useContext } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import {
   Animated, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View,
   type PressableProps, type StyleProp, type TextStyle, type ViewStyle,
@@ -136,9 +136,28 @@ export interface DecoderShellProps {
   children:    React.ReactNode;
 }
 
+/**
+ * ★★ WHAT A DECODER BOX KEEPS ITS RIGHT EDGE CLEAR OF (iPhone Duo, Stuart 2026-11-25: "the decoder box needs to shrink
+ * to the left so that it clears the system status"). SDRScreen provides the system's corner rects (the camera, the
+ * status column) plus the right-hand edge tabs, in window coordinates; a box whose rows reach one ends its right edge
+ * 8 pt left of it — off-centre, by design ("it means it will be off centre but should work"). Empty everywhere else.
+ */
+export const DecoderAvoidContext = createContext<{ rects: { x: number; y: number; w: number; h: number }[]; windowW: number }>(
+  { rects: [], windowW: 0 });
+
 export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, borderColor,
   wrapStyle, onTouchStart, children }: DecoderShellProps) {
   const tk = useDecoderTokens();
+  const avoid = useContext(DecoderAvoidContext);
+  const [rows, setRows] = useState<{ y: number; h: number } | null>(null);
+  let clearRight = 8;
+  if (rows && avoid.rects.length && avoid.windowW > 0) {
+    for (const r of avoid.rects) {
+      if (r.y >= rows.y + rows.h || r.y + r.h <= rows.y) continue;
+      if (r.x + r.w / 2 < avoid.windowW / 2) continue;
+      clearRight = Math.max(clearRight, Math.ceil(avoid.windowW - r.x) + 8);
+    }
+  }
   /* ★★ NO CORNER SCREWS on a decoder box (Stuart, 2026-10-04, silver chassis: "the screws are merged into the button and
    *  indicator for the decoder box" — the top screws sat on the status dot and the × key, the bottom ones on the window's
    *  corners). The menus and pop-ups already have none (popupPlate), and the black chassis never showed them; insetting
@@ -154,7 +173,8 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
   return (
     /* ★ box-none: the wrap spans the screen's width so it can centre the box; without this its
        empty sides ate taps meant for the waterfall on anything wider than the box. */
-    <Animated.View style={[sh.wrap, { bottom }, wrapStyle]} pointerEvents="box-none">
+    <Animated.View style={[sh.wrap, { bottom }, clearRight > 8 ? { right: clearRight } : null, wrapStyle]} pointerEvents="box-none"
+      onLayout={(e) => { const { y, height } = e.nativeEvent.layout; setRows((p) => (p && p.y === y && p.h === height ? p : { y, h: height })); }}>
       <View style={[sh.inner, { maxWidth, borderColor: borderColor ?? tk.border },
                     // Silver / black, Transparency ON: the controls-colour glow round the glass
                     // (mockup `0 0 8px L(.18)`) as well as the drop shadow.
