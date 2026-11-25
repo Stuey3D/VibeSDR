@@ -20,7 +20,7 @@ import { NativeEventEmitter, NativeModules, Platform, useWindowDimensions } from
 
 import { NO_REGIONS as NONE, type HingeState, type RegionRect, type ReservedRegions } from '../utils/duoGeometry';
 export type { HingeState, RegionRect, ReservedRegions } from '../utils/duoGeometry';
-export { avoidRects, clearBelow, rightLimitAt, deckClearance } from '../utils/duoGeometry';
+export { avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../utils/duoGeometry';
 
 const M: { getReservedRegions?(): Promise<any> } | undefined =
   Platform.OS === 'ios' ? (NativeModules as any).VibeInterfaceOrientation : undefined;

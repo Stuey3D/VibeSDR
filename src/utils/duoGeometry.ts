@@ -110,3 +110,27 @@ export function deckClearance(regions: ReservedRegions, y0: number, windowW: num
   }
   return { left: 0, right: 0, bottom: Math.ceil(bottom) };
 }
+
+/**
+ * ★★★ WHERE THE RECEIVER'S NAME GOES on a full-bleed window (Stuart, Duo Split View, right-hand share: "name still
+ * displays under the system status pill"). Two shapes of system rect cross the name's rows [y0, y0 + rowsH]:
+ *   • a CORNER rect (the camera / the folded screen's status column, narrower than half the window): the name's right
+ *     edge ends `gap` left of it — `right` is the distance from the window's right edge;
+ *   • a full-width STATUS BAND (a Split View share reports its status bar frame across the whole share, with the
+ *     clock + Wi-Fi pill drawn somewhere along it — the frame does not say where): the name drops below the band,
+ *     `minTop`, and keeps its usual right edge.
+ * `crowded` = either applied, and the name then fades after showing (WaterfallView stationIdFadeMs).
+ */
+export function namePlacement(regions: ReservedRegions, y0: number, rowsH: number, windowW: number,
+                              baseRight: number, gap = 8): { right: number; minTop: number; crowded: boolean } {
+  let right = baseRight, minTop = 0, crowded = false;
+  for (const r of avoidRects(regions)) {
+    if (r.y >= y0 + rowsH || r.y + r.h <= y0) continue;
+    if (r.x >= windowW || r.x + r.w <= 0) continue;
+    if (r.w >= windowW * 0.5) { minTop = Math.max(minTop, Math.ceil(r.y + r.h) + 4); crowded = true; continue; }
+    if (r.x + r.w / 2 < windowW / 2) continue;
+    right = Math.max(right, Math.ceil(windowW - r.x) + gap);
+    crowded = true;
+  }
+  return { right, minTop, crowded };
+}

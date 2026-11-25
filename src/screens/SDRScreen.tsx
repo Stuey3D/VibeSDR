@@ -212,7 +212,7 @@ import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow } from '../hooks/useUiScale';
-import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance } from '../hooks/useReservedRegions';
+import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
 import { useDeckReach, DeckGrabBar, REACH_SHARE, GRAB_GUTTER } from '../components/DeckReach';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
@@ -3154,15 +3154,16 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  receiver's name and the SERVER HEALTH pill, folded and open). The receiver's name stops short of any system rect
    *  in its rows; the right-hand stack starts below any in its column. Both read UIKit's own rects (useReservedRegions)
    *  — no rect, no change, which is every other device. */
-  const nameRightLimit = rightLimitAt(reserved, chromeTop, chromeTop + 64, screenW);
-  const stationIdRightClear = Number.isFinite(nameRightLimit)
-    ? Math.max(rightInset, Math.ceil(screenW - nameRightLimit) + 8) : rightInset;
+  const namePlace = fullBleed ? namePlacement(reserved, chromeTop, 64, screenW, rightInset)
+    : { right: rightInset, minTop: 0, crowded: false };
+  const stationIdRightClear = namePlace.right;
   /** ★★ THE TOP OF THE RIGHT-HAND HEADER STACK, in one place — the health pill, the session clock,
    *  the listener count and the admin note all hang off it, and three of them used to write the same
    *  expression out for themselves. Two readers of one rule is how one of them ends up wrong. */
   const rightColClear = clearBelow(reserved, screenW - 180, screenW, screenH);
   const rightStackTop = Math.max(chromeTop + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
-                                 rightColClear > 0 ? rightColClear + 8 : 0);
+                                 rightColClear > 0 ? rightColClear + 8 : 0,
+                                 namePlace.minTop > 0 && stationIdH > 0 ? namePlace.minTop + stationIdH + 8 : 0);
   /** The Servers chip's top: 46 below the furniture line, and below any system rect over its corner. */
   const serversLeft = Math.max(12, insets.left + 8);
   const serversTop = (() => {
@@ -10827,7 +10828,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ Same edge as the session clock and the listener count below it — see rightInset.
         stationIdRight={stationIdRightClear}
         /* ★★ Crowded by a system rect (the Duo's camera + status pill): shown on connect, then faded (Stuart). */
-        stationIdFadeMs={Number.isFinite(nameRightLimit) ? 6000 : undefined}
+        stationIdFadeMs={namePlace.crowded ? 6000 : undefined}
+        stationIdMinTop={namePlace.minTop || undefined}
         stationIdWake={`${baseUrl}|${connected ? 1 : 0}`}
         // ★ …and it stops short of the Servers chip opposite (2026-10-16: on an iPhone 12 a long location line
         //   ran underneath it). Only while the chip is drawn.
