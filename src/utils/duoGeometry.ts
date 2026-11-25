@@ -143,3 +143,40 @@ export function namePlacement(regions: ReservedRegions, y0: number, rowsH: numbe
   }
   return { right, minTop, crowded };
 }
+
+/**
+ * ★★★ HALF-OPEN: THE DECODER BOX AS TWO PANELS (iPhone Duo, Stuart 2026-11-25: "dont cover over the crease. id suggest
+ * splitting the data and treat the decoder box as 2 halves"). While the hinge is partially open the box lives in the
+ * LEFT column (the deck has the right). BIG is then two separately framed panels in that column:
+ *   • UPPER — from the top (below anything the system draws over the column: the status pill and camera are top-RIGHT
+ *     on the Duo, so normally the top edge) down to `gap` above the fold;
+ *   • LOWER — from `gap` below the fold down to the bottom (above the home indicator).
+ * Nothing of ours is on the crease: the waterfall shows through the gap between them. Rects in the column above the
+ * fold push the upper panel's top down; rects below it lift the lower panel's bottom (an inner camera, a share's pill).
+ * Window coordinates (y down). null = no usable split (either panel under `minH`) — the box then stays below the fold
+ * and BIG is not offered, as before.
+ */
+export interface HalfOpenSplit {
+  /** The column's left and right edges (window x). */
+  x0: number; x1: number;
+  upper: { top: number; bottom: number };
+  lower: { top: number; bottom: number };
+}
+export function halfOpenSplit(regions: ReservedRegions, fold: RegionRect, windowH: number,
+                              col: { x0: number; x1: number }, opts: { top: number; bottomInset: number; gap?: number; minH?: number }):
+  HalfOpenSplit | null {
+  const gap = opts.gap ?? 8, minH = opts.minH ?? 96;
+  const foldTop = fold.y, foldBottom = fold.y + fold.h;
+  let top = opts.top + gap;
+  let bottom = windowH - Math.max(opts.bottomInset, 0) - gap;
+  for (const r of avoidRects(regions)) {
+    if (r.x + r.w <= col.x0 || r.x >= col.x1 || r.y >= windowH || r.y + r.h <= 0) continue;
+    const mid = r.y + r.h / 2;
+    if (mid < foldTop) top = Math.max(top, Math.ceil(r.y + r.h) + gap);
+    else if (mid > foldBottom) bottom = Math.min(bottom, Math.floor(r.y) - gap);
+  }
+  const upper = { top, bottom: Math.floor(foldTop) - gap };
+  const lower = { top: Math.ceil(foldBottom) + gap, bottom };
+  if (upper.bottom - upper.top < minH || lower.bottom - lower.top < minH) return null;
+  return { x0: col.x0, x1: col.x1, upper, lower };
+}
