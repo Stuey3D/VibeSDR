@@ -26,6 +26,10 @@ extern "C" {
 }
 
 #include <chrono>
+#include <mutex>
+#include <set>
+#include <map>
+#include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -609,13 +613,190 @@ static void oldConfigs() {
     ok(bg::validate(c, 2400000, err), "…and is valid at 2.4 MS/s (" + err + ")");
 }
 
-int main() {
+/* ── ★★ b94 A CROWDED FT8 SLOT THROUGH THE BACKGROUND BAND PATH (the Pi 500's "almost no FT8 on a busy 40 m") ──────────
+ *  40 FT8 stations in one slot on 7.074 (and again in the next), 80 Hz apart, from +25 dB down to −15 dB (2500 Hz), through
+ *  BgRunner's channeliser → the Band slice → DecoderHost → the governor and gate → the FT8 engine → the stations store.
+ *  A busy slot must give its decodes — above all the strong ones (a local at +17 dB is never missed). */
+static void crowdedSlot() {
+    std::printf("\n── b94: a crowded 40 m FT8 slot (40 stations, +25 … −15 dB) through the background Band path ──\n");
+    gallery::Store gs; gs.setDir(tmpDir("crowd"));
+    vibestations::Store st(nullptr, false);
+    std::mutex hm; std::set<std::string> heard;
+    const int sub = st.subscribe([&](const vibestations::Reception& r) { if (r.mode == "FT8") { std::lock_guard<std::mutex> lk(hm); heard.insert(r.call); } });
+    FileSlots slots("", [] { return 4; });
+    const double fs = 250000, centre = 7000000;
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.fftSize = 8192; p.slots = &slots; p.store = &gs; p.stations = &st;
+    p.lat = 52.29; p.lon = -0.85;
+    p.profile.centreHz = centre;
+    p.profile.vfos = { bg::Vfo{7074000, "usb", "spots-band"} };
+    p.log = [](const std::string&) {};
+    r.start(p);
+    const double utc0 = std::floor(1793000000.0 / 15.0) * 15.0, secs = 32.0;
+    std::vector<cf32> cap((size_t)(secs * fs));
+    const float sigma = 0.01f;
+    std::mt19937 g(23); std::normal_distribution<float> n(0.0f, sigma);
+    for (auto& v : cap) v = cf32(n(g), n(g));
+    const char* pfx[] = { "G4", "DL1", "F5", "EA4", "I2", "ON4", "PA3", "OK1", "SP9", "HA5", "OE3", "HB9", "LA9", "SM5", "OZ1", "OH2",
+                          "EI4", "GM4", "GW4", "CT1", "9A3", "S51", "YO3", "LZ1", "SV1", "YU1", "UR5", "ES1", "YL2", "LY2", "M0", "2E0",
+                          "DK2", "F4", "EA7", "IK4", "ON7", "PD0", "OK2", "SP3" };
+    const char* grids[] = { "IO91", "JO62", "JN18", "IN80", "JN45", "JO20", "JO22", "JO70", "JO90", "JN97" };
+    std::vector<std::string> strong, all;
+    for (int k = 0; k < 40; ++k) {
+        const std::string call = std::string(pfx[k]) + (char)('A' + k % 26) + (char)('B' + (k * 7) % 25) + (char)('C' + (k * 3) % 24);
+        const std::string msg = "CQ " + call + " " + grids[k % 10];
+        const double snr = 25.0 - k;                                  // ★ +25 … −14 dB
+        const double amp = std::sqrt(std::pow(10.0, snr / 10.0) * 2 * sigma * sigma / fs * 2500.0);
+        const double off = 74000 + 250 + 80.0 * ((k * 17) % 40);    // ★ strong and weak interleaved across the passband
+        const auto tones = ft8Tones(msg.c_str());
+        if (tones.empty()) continue;
+        for (double t0 : { 0.5 + 0.02 * (k % 5), 15.5 + 0.02 * (k % 5) }) addFt8(cap, fs, off, t0, tones, amp);
+        all.push_back(call);
+        if (snr >= 0) strong.push_back(call);
+    }
+    const auto w0 = std::chrono::steady_clock::now();
+    size_t fed = 0;
+    for (size_t o = 0; o < cap.size(); o += 16384) {
+        const int k = (int)std::min<size_t>(16384, cap.size() - o);
+        fed += (size_t)k;
+        r.feedIq(&cap[o], k, utc0 + (double)fed / fs);
+        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)fed / fs / 4.0 * 1e6)));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+    r.stop();
+    st.unsubscribe(sub);
+    int s = 0, a = 0; std::string missed;
+    { std::lock_guard<std::mutex> lk(hm);
+      for (const auto& c : strong) { if (heard.count(c)) ++s; else missed += " " + c; }
+      for (const auto& c : all) if (heard.count(c)) ++a; }
+    char b[200];
+    std::snprintf(b, sizeof b, "every station at 0 dB or stronger decoded (%d of %zu)%s", s, strong.size(), missed.empty() ? "" : " — missed:");
+    ok(s == (int)strong.size(), b + missed);
+    std::snprintf(b, sizeof b, "the slot gives most of its 40 stations (%d; at least 30)", a);
+    ok(a >= 30, b);
+}
+
+/* ── `test-bg-band real <wav> <utc0> <recCentreHz> [L=40] [centre=6800000] [hw=15000] [vfos=7074000,...] [secs=]` ──
+ *  A DEVELOPER'S REPLAY (b94, the Pi 500's "almost no FT8 on 40 m"): a stereo int16 I/Q recording (UberSDR iq192) interpolated
+ *  ×L into a radio's capture centred `centre` + `hw` (the Pi 500's RSP1B: 6.800 MHz + 15 kHz, 8 MS/s ≈ L=40 → 7.68 MS/s),
+ *  through the REAL BgRunner (its channeliser, the Band slices, DecoderHost, the governor) with the Pi's Band VFOs, played
+ *  in REAL TIME on stamps moved on by whole two-minute steps (so the FT8 pass budget sees a live slot). Prints what the
+ *  stations store heard per mode and band, and the runner's log. */
+static bool loadIq16(const char* path, std::vector<cf32>& x, uint32_t& rate) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    std::vector<uint8_t> raw; { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) raw.insert(raw.end(), b, b + k); }
+    std::fclose(f);
+    uint16_t chans = 0; size_t data = 0, dlen = 0; rate = 0;
+    for (size_t p = 12; p + 8 <= raw.size();) {
+        const uint32_t len = raw[p + 4] | raw[p + 5] << 8 | raw[p + 6] << 16 | (uint32_t)raw[p + 7] << 24;
+        if (!std::memcmp(&raw[p], "fmt ", 4)) { chans = raw[p + 10] | raw[p + 11] << 8; rate = raw[p + 12] | raw[p + 13] << 8 | raw[p + 14] << 16 | (uint32_t)raw[p + 15] << 24; }
+        if (!std::memcmp(&raw[p], "data", 4)) { data = p + 8; dlen = std::min<size_t>(len, raw.size() - data); break; }
+        p += 8 + len + (len & 1);
+    }
+    if (chans != 2 || !rate || !data) return false;
+    x.resize(dlen / 4);
+    for (size_t i = 0; i < x.size(); ++i) {
+        const int16_t a = (int16_t)(raw[data + 4 * i] | raw[data + 4 * i + 1] << 8), b = (int16_t)(raw[data + 4 * i + 2] | raw[data + 4 * i + 3] << 8);
+        x[i] = cf32(a / 32768.0f, b / 32768.0f);
+    }
+    return true;
+}
+static int replayReal(int argc, char** argv) {
+    if (argc < 5) { std::printf("usage: test-bg-band real <wav> <utc0> <recCentreHz> [L=40] [centre=6800000] [hw=15000] [vfos=a,b] [secs=]\n"); return 2; }
+    const double utc0 = std::atof(argv[3]), recCentre = std::atof(argv[4]);
+    int L = 40; double centre = 6800000, hw = 15000, secs = 1e9;
+    std::vector<double> vfos = { 5357000, 3573000, 7074000, 10136000 };
+    for (int i = 5; i < argc; ++i) {
+        if (!std::strncmp(argv[i], "L=", 2)) L = std::atoi(argv[i] + 2);
+        if (!std::strncmp(argv[i], "centre=", 7)) centre = std::atof(argv[i] + 7);
+        if (!std::strncmp(argv[i], "hw=", 3)) hw = std::atof(argv[i] + 3);
+        if (!std::strncmp(argv[i], "secs=", 5)) secs = std::atof(argv[i] + 5);
+        if (!std::strncmp(argv[i], "vfos=", 5)) { vfos.clear(); for (const char* q = argv[i] + 5; *q;) { vfos.push_back(std::atof(q)); q = std::strchr(q, ','); if (!q) break; ++q; } }
+    }
+    std::vector<cf32> x; uint32_t rate = 0;
+    if (!loadIq16(argv[2], x, rate)) { std::printf("cannot read %s\n", argv[2]); return 3; }
+    const double fs = (double)rate * L, hwC = centre + hw;
+    // ★ start at the point of the recording whose UTC, moved on by whole two-minute steps, is now
+    double shift = std::floor((vibeUtcNow() - utc0) / 120.0) * 120.0;
+    size_t from = (size_t)std::max(0.0, (vibeUtcNow() - utc0 - shift) * rate);
+    if (from + (size_t)(30 * rate) > x.size()) { shift += 120.0; from = 0; }
+    while (vibeUtcNow() < utc0 + shift + (double)from / rate) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    x.erase(x.begin(), x.begin() + (std::ptrdiff_t)from);
+    if (x.size() > secs * rate) x.resize((size_t)(secs * rate));
+    std::printf("replay: %.0f s from %.1f s into the recording, capture %.0f S/s centred %.3f MHz (+%.0f Hz), %zu Band VFOs\n",
+                x.size() / (double)rate, from / (double)rate, fs, centre / 1e6, hw, vfos.size());
+    gallery::Store gs; gs.setDir(tmpDir("real"));
+    vibestations::Store st(nullptr, false);
+    std::mutex hm; std::map<std::string, std::set<std::string>> calls; std::map<std::string, int> spots;
+    const int sub = st.subscribe([&](const vibestations::Reception& r) { std::lock_guard<std::mutex> lk(hm); const std::string k = r.mode + " " + r.band; spots[k]++; calls[k].insert(r.call);
+        if (std::getenv("VIBE_REPLAY_SHOW")) std::printf("  heard %s %s %s %.0f Hz %+d dB\n", r.mode.c_str(), r.band.c_str(), r.call.c_str(), r.rfHz, r.snr); });
+    FileSlots slots("", [] { return 16; });
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.hwOffsetHz = hw;
+    { int n = 4096; while (n < 65536 && n < fs / 40.0) n <<= 1; p.fftSize = n; }   // ★ the shim's bgParams
+    p.slots = &slots; p.store = &gs; p.stations = &st; p.lat = 52.29; p.lon = -0.85;
+    p.profile.centreHz = centre;
+    for (double v : vfos) p.profile.vfos.push_back(bg::Vfo{v, "usb", "spots-band"});
+    std::mutex lm; std::vector<std::string> logs;
+    p.log = [&](const std::string& l) { std::lock_guard<std::mutex> lk(lm); logs.push_back(l); };
+    r.start(p);
+    // ×L polyphase interpolation (Blackman-windowed sinc, 16 taps a phase) and the shift to where the capture holds it
+    const int K = 16, NT = L * K;
+    std::vector<float> h((size_t)NT);
+    { const double fc = 0.47 / L; for (int k = 0; k < NT; ++k) { const double m = k - (NT - 1) / 2.0; const double sn = m == 0 ? 2 * fc : std::sin(2 * M_PI * fc * m) / (M_PI * m);
+        h[(size_t)k] = (float)(sn * (0.42 - 0.5 * std::cos(2 * M_PI * k / (NT - 1)) + 0.08 * std::cos(4 * M_PI * k / (NT - 1))) * L); } }
+    std::vector<cf32> hist((size_t)K, cf32(0, 0)), up;
+    double ph = 0; const double dph = 2 * M_PI * (recCentre - hwC) / fs;
+    const size_t chunk = rate / 25;   // 40 ms of recording a chunk
+    const auto w0 = std::chrono::steady_clock::now();
+    uint64_t produced = 0;
+    const double base = utc0 + shift + (double)from / rate;
+    for (size_t o = 0; o < x.size(); o += chunk) {
+        const size_t k = std::min(chunk, x.size() - o);
+        up.resize(k * (size_t)L);
+        for (size_t i = 0; i < k; ++i) {
+            std::memmove(hist.data() + 1, hist.data(), (size_t)(K - 1) * sizeof(cf32));
+            hist[0] = x[o + i];
+            for (int q = 0; q < L; ++q) {
+                float re = 0, im = 0;
+                for (int t = 0; t < K; ++t) { const float c = h[(size_t)(t * L + q)]; re += c * hist[(size_t)t].real(); im += c * hist[(size_t)t].imag(); }
+                up[i * (size_t)L + (size_t)q] = cf32(re, im) * cf32((float)std::cos(ph), (float)std::sin(ph));
+                ph += dph; if (ph > M_PI) ph -= 2 * M_PI;
+            }
+        }
+        produced += up.size();
+        const double utc = base + (double)produced / fs;
+        std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)(1e6 * (double)produced / fs)));
+        r.feedIq(up.data(), (int)up.size(), utc);
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(6));
+    const std::string status = r.statusJson();
+    const uint64_t dropped = r.droppedSamples();
+    r.stop();
+    st.unsubscribe(sub);
+    std::printf("IQ dropped by the runner: %.2f s\n", dropped / fs);
+    for (auto& kv : spots) {
+        std::printf("%-10s %4d spots, %3zu calls", kv.first.c_str(), kv.second, calls[kv.first].size());
+        if (calls[kv.first].size() <= 12) for (const auto& c : calls[kv.first]) std::printf(" %s", c.c_str());
+        std::printf("\n");
+    }
+    for (const auto& l : logs) if (l.find("Band decode") != std::string::npos || l.find("paused") != std::string::npos) std::printf("log: %s\n", l.substr(0, 420).c_str());
+    (void)status;
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 2 && !std::strcmp(argv[1], "real")) return replayReal(argc, argv);
     config();
     oldConfigs();
     endToEnd();
     cwRttyChips();
     livePath();
     switchedOff();
+    crowdedSlot();
     if (!std::getenv("VIBE_BG_BAND_NO_COST")) cost();
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
