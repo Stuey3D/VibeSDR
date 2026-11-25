@@ -48,6 +48,7 @@ protected:
                 o.mode = "RTTY";
                 o.call = p.call; o.how = p.how;
                 o.text = p.how + " " + p.call + (p.mode.empty() ? std::string() : " (" + p.mode + ")");
+                o.textMade = true;   // ★ beta94 a summary, not the message sent — never the spot's "msg"
                 o.snr = std::isfinite(p.snrDb) ? (int)std::lround(p.snrDb) : 0;
                 o.rfHz = centre + p.offsetHz;
                 o.slotUtc = p.utcMs / 1000.0;

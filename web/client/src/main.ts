@@ -18328,16 +18328,17 @@ function renderSpotsRowsInto(host: HTMLElement) {
       // joined with · and any missing piece simply DROPS OUT — a report or a 73 carries no locator,
       // so the row must not leave a gap where the grid would have been. (The app's rule, verbatim.)
       (spotsExpanded
-        // ★★ NO MESSAGE HERE for the slotted modes: the server's spot payload is {mode,callsign,snr,frequency,band,grid,
-        // timestamp} — it never sends the decoded text. ★★ beta92: a CW / RTTY spot's text comes from the band_skim frame
-        // (its signal's last 120 characters), drawn on its own line below.
+        // ★★ beta94 THE MESSAGE (Stuart 11-25, UberSDR's "Message" column): a slotted mode's spot (FT8, FT4, FT2, JS8, WSPR,
+        // FST4W, Q65 …) carries its decoded text as `msg` — drawn on its own line under the detail line (spotMsgHtml); an
+        // older server sends none and the line is simply not there. ★★ beta92: a CW / RTTY spot's text comes from the
+        // band_skim frame (its signal's last 120 characters), drawn the same way — the skim text wins when both exist.
         ? `<span class="sdetail">${escapeHtml([
             sp.mode, sp.grid,
             bearing != null ? `${Math.round(bearing)}°` : '',
             fmtSpotTimeSec(sp.timestamp),
             skimSig ? `${(skimSig.hz / 1e3).toFixed(2)} kHz` : '',
           ].filter(Boolean).join(' · '))}</span>`
-          + (skimSig ? bandSkimTextHtml(skimSig) : '')
+          + (skimSig ? bandSkimTextHtml(skimSig) : spotMsgHtml(sp))
         : '');
     wireQrz(row);   // ★ V12: the callsign opens its QRZ.COM page — its own click, not the row's tune
     padListRow(row);   // ★★★ beta92 one pad stop: enter tunes (padList.ts)
@@ -18348,6 +18349,12 @@ function renderSpotsRowsInto(host: HTMLElement) {
     };
     host.appendChild(row);
   }
+}
+/** ★★ beta94 an expanded spot's message line — the decoded text as sent, dim (to READ, not scan); '' when the spot has
+ *  none (an older server, a skimmer's spot), so no empty gap. */
+function spotMsgHtml(sp: Spot): string {
+  const m = typeof sp.msg === 'string' ? sp.msg.trim() : '';
+  return m ? `<span class="smsg"><bdi>${escapeHtml(m)}</bdi></span>` : '';
 }
 /** ★★ beta92 an expanded CW / RTTY row's message line: its text in the signal's confidence colour (the CW skimmer's rule),
  *  through EXPLAIN when that is on. */

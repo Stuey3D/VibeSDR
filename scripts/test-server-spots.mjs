@@ -178,6 +178,17 @@ try {
       const j = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4JTY'), p = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4PSK');
       ok(j && j.data.how === 'CQ' && /England/.test(j.data.country), `JTTY's spot says CQ and the country (${j && j.data.how} ${j && j.data.country})`);
       ok(p && (p.data.how === 'CQ' || p.data.how === 'DE') && p.data.mode === 'PSK31', `PSK's spot is PSK31, how ${p && p.data.how}`);
+      // ★★ beta94 THE MESSAGE (Stuart 11-25): the slotted modes' spots carry the decoded text as `msg`; a skimmer's (JTTY,
+      //    PSK) none — through the real server's socket
+      {
+        const all = jsons(L.dx, 'digital_spot'), by = (c) => all.find((x) => x.data.callsign === c);
+        const want = { G4ABC: 'CQ G4ABC IO92', DL1XYZ: 'CQ DL1XYZ JO31', K1ABC: 'CQ K1ABC FN42', JA1QRS: 'CQ JA1QRS PM95', EA4TUV: 'CQ EA4TUV IN80', IU8AAA: 'CQ IU8AAA JN70' };
+        const wrong = Object.entries(want).filter(([c, m]) => !by(c) || by(c).data.msg !== m);
+        ok(wrong.length === 0, `beta94: FT8 / FT4 / FT2 spots carry their message (${all.filter((x) => x.data.msg).map((x) => x.data.mode + ' ' + x.data.msg).join(' | ')})`);
+        const js8 = by('G4JSN');
+        ok(js8 && typeof js8.data.msg === 'string' && js8.data.msg.includes('G4JSN') && js8.data.msg.length <= 48, `beta94: JS8's spot carries its frame (${js8 && js8.data.msg})`);
+        ok(!('msg' in (j ? j.data : {})) && !('msg' in (p ? p.data : {})), 'beta94: JTTY / PSK spots carry no msg');
+      }
       ok(/digital spots: Band started/.test(S.log()), 'the server logged "digital spots: Band started"');
       // ★ Single on the same radio: back to the button there always was — the listener's own audio (FT8 dial in USB).
       L.dx.txt.length = 0;

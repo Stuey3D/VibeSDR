@@ -42,6 +42,10 @@ struct Spot {
     std::string call;     ///< the SENDER's callsign as decoded (no brackets, no hash placeholders)
     std::string grid;     ///< the sender's OWN 4- or 6-character locator, or "" (never a report such as "-12" or "RR73")
     std::string text;     ///< the decoded message, if the engine has it ("" = none)
+    /** ★★ V12 beta94: `text` is the ENGINE'S OWN SUMMARY ("CQ G4ABC" from a skimmer's how + call), not what was sent — so it
+     *  is not the spot's "msg" (the listener's expanded row). The skimmers (CW, RTTY, PSK, PSKW, JTTY) set it; their own
+     *  text reaches the clients another way (band_skim, their own decoder's text frames). */
+    bool textMade = false;
     /** ★ V12 (2026-10-27): what the station was doing, for the modes that say — "CQ" (calling), "QSO" (in an exchange),
      *  "DE" / "TEST" (identifying) — JTTY and PSK. "" for the slotted modes, whose text already says it. */
     std::string how;

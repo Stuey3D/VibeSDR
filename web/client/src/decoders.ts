@@ -121,6 +121,10 @@ export interface Spot {
   country?: string;
   /** ★ V12 (R36S handheld "Align to FT8"): WSJT-X's DT in seconds — absent from an older server. */
   dt?: number;
+  /** ★★ V12 beta94 (Stuart 11-25, UberSDR's "Message" column): the decoded message as sent — "CQ IW2FAC JN45",
+   *  "ZL1RKO W9DHI -16", WSPR's "K1ABC FN42 37", a JS8 frame. Absent from an older server and from the skimmers (CW / RTTY
+   *  read theirs from band_skim). Display only: the expanded row's message line. */
+  msg?: string;
 }
 
 /** ★★ V12 (R36S handheld "Set clock from <station>"): one time-station minute that passed its parity AND agreed with the
@@ -645,6 +649,8 @@ export class DecoderClient {
         how: typeof d.how === 'string' ? d.how.replace(/[^A-Z]/g, '').slice(0, 8) : '',
         country: typeof d.country === 'string' ? d.country.replace(/[^ -~]/g, '').slice(0, 40) : '',
         ...(typeof d.dt === 'number' && Number.isFinite(d.dt) ? { dt: d.dt } : {}),
+        // ★★ beta94 off the air: printable ASCII, bounded (the server cuts at 48; 64 here leaves room, never trusts it)
+        ...(typeof d.msg === 'string' && d.msg.replace(/[^ -~]/g, '').trim() ? { msg: d.msg.replace(/[^ -~]/g, '').trim().slice(0, 64) } : {}),
       });
     }
     if (msg.type === 'time_sync' && msg.data) {

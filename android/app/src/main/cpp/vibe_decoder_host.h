@@ -2271,15 +2271,43 @@ private:
             const unsigned char u = (unsigned char)ch;
             if (u >= 0x20 && u < 0x7f && u != '"' && u != '\\' && ctry.size() < 40) ctry.push_back(ch);
         }
-        char buf[512];
+        /* ★★ V12 beta94 THE MESSAGE AS DECODED (Stuart 11-25, UberSDR's "Message" column): "CQ IW2FAC JN45",
+         *  "ZL1RKO W9DHI -16", a WSPR "K1ABC FN42 37", a JS8 frame — for the listener's EXPANDED spot row, display only
+         *  (PSK Reporter and the station store above get the call/grid/SNR as before, never this). What the station put
+         *  on the air for everyone, as the callsign is. "" (and the field left out) when the engine has none, or its
+         *  text is its own summary (textMade: the skimmers — their text goes out on band_skim / their own frames). */
+        const std::string msg = sp.textMade ? std::string() : spotMsgJson(sp.text);
+        char buf[640];
         const int n = std::snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
-            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu,\"dt\":%.2f}}",
+            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu,\"dt\":%.2f%s%s%s}}",
             m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), how.c_str(), ctry.c_str(), (unsigned long long)ts,
             // ★ V12 (R36S handheld "Align to FT8", 2026-11-05): WSJT-X's DT, additive — a client that does not read it ignores it.
-            std::isfinite(sp.dt) ? (double)sp.dt : 0.0);
+            std::isfinite(sp.dt) ? (double)sp.dt : 0.0,
+            msg.empty() ? "" : ",\"msg\":\"", msg.c_str(), msg.empty() ? "" : "\"");
         if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1), GapSpots);
     }
+public:
+    /** ★★ V12 beta94: a spot's decoded message as the BODY of a JSON string — OFF THE AIR, so anyone may have sent anything:
+     *  printable ASCII only (a control byte or a non-ASCII byte is dropped; runs of spaces become one), '"' and '\\'
+     *  escaped, at most kSpotMsgMax characters BEFORE escaping (FT8's longest standard message is 22 — ≤ 37 with a
+     *  compound call; JS8's frame text plus its " (Normal)" submode fits; anything longer is cut, never split mid-escape).
+     *  Static and pure so the tests can read it. */
+    static constexpr size_t kSpotMsgMax = 48;
+    static std::string spotMsgJson(const std::string& in) {
+        std::string o; size_t chars = 0; bool space = false;
+        for (char ch : in) {
+            const unsigned char u = (unsigned char)ch;
+            if (u < 0x20 || u >= 0x7f) { if (u == '\t' || u == '\n' || u == '\r') space = !o.empty(); continue; }
+            if (u == ' ') { space = !o.empty(); continue; }
+            if (chars >= kSpotMsgMax) break;
+            if (space) { if (chars + 1 >= kSpotMsgMax) break; o.push_back(' '); ++chars; space = false; }
+            if (u == '"' || u == '\\') o.push_back('\\');
+            o.push_back(ch); ++chars;
+        }
+        return o;
+    }
+private:
     /** ★ V12 beta90: one spot into the station store (Env::stations — null = nowhere). The store validates the call and
      *  the grid itself and costs a map insert; its PSK Reporter listeners run here, on the decode thread, queued by them. */
     void toStations_(const std::string& mode, const std::string& call, const std::string& grid, int snr, double rfHz, int64_t utc) {
