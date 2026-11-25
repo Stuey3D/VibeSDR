@@ -618,8 +618,9 @@ static void oldConfigs() {
  *  40 FT8 stations in one slot on 7.074 (and again in the next), 80 Hz apart, from +25 dB down to −15 dB (2500 Hz), through
  *  BgRunner's channeliser → the Band slice → DecoderHost → the governor and gate → the FT8 engine → the stations store.
  *  A busy slot must give its decodes — above all the strong ones (a local at +17 dB is never missed). */
-static void crowdedSlot() {
-    std::printf("\n── b94: a crowded 40 m FT8 slot (40 stations, +25 … −15 dB) through the background Band path ──\n");
+static void crowdedSlot(bool chopped) {
+    if (!chopped) std::printf("\n── b94: a crowded 40 m FT8 slot (40 stations, +25 … −15 dB) through the background Band path ──\n");
+    else std::printf("\n── b94: the same slot fed as the Pi 500's RSP1B feeds it — 1 ms chunks, the worker's queue busy for 1 in 30 ──\n");
     gallery::Store gs; gs.setDir(tmpDir("crowd"));
     vibestations::Store st(nullptr, false);
     std::mutex hm; std::set<std::string> heard;
@@ -657,15 +658,22 @@ static void crowdedSlot() {
         if (snr >= 0) strong.push_back(call);
     }
     const auto w0 = std::chrono::steady_clock::now();
-    size_t fed = 0;
-    for (size_t o = 0; o < cap.size(); o += 16384) {
-        const int k = (int)std::min<size_t>(16384, cap.size() - o);
+    size_t fed = 0, nChunk = 0;
+    /* ★★ `chopped`: the DSP thread's real pattern on an RSP — a USB packet a chunk (here 1 ms) — with the worker holding its
+     *  queue at the moment of 1 chunk in 30 (it pops a chunk at a time, so on a busy box it often does). Before b94 each of
+     *  those was a hole (≈ 33 a second here): FT8 decoded nothing. */
+    const size_t step = chopped ? (size_t)(fs / 1000) : 16384;
+    for (size_t o = 0; o < cap.size(); o += step) {
+        const int k = (int)std::min<size_t>(step, cap.size() - o);
         fed += (size_t)k;
-        r.feedIq(&cap[o], k, utc0 + (double)fed / fs);
+        if (chopped && ++nChunk % 30 == 0) { auto held = r.holdQueueForTest(); r.feedIq(&cap[o], k, utc0 + (double)fed / fs); }
+        else r.feedIq(&cap[o], k, utc0 + (double)fed / fs);
         std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)((double)fed / fs / 4.0 * 1e6)));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+    const uint64_t lost = r.droppedSamples();
     r.stop();
+    if (chopped) ok(lost == 0, "★★★ no IQ lost to a busy queue (" + std::to_string(lost) + " samples; " + std::to_string(r.busyHeld()) + " chunks held and handed over)");
     st.unsubscribe(sub);
     int s = 0, a = 0; std::string missed;
     { std::lock_guard<std::mutex> lk(hm);
@@ -772,7 +780,7 @@ static int replayReal(int argc, char** argv) {
         h[(size_t)k] = (float)(sn * (0.42 - 0.5 * std::cos(2 * M_PI * k / (NT - 1)) + 0.08 * std::cos(4 * M_PI * k / (NT - 1))) * L); } }
     std::vector<cf32> hist((size_t)K, cf32(0, 0)), up;
     double ph = 0; const double dph = 2 * M_PI * (recCentre - hwC) / fs;
-    const size_t chunk = rate / 25;   // 40 ms of recording a chunk
+    const size_t chunk = std::getenv("VIBE_REPLAY_CHUNK") ? (size_t)std::atoi(std::getenv("VIBE_REPLAY_CHUNK")) : rate / 25;   // 40 ms of recording a chunk (VIBE_REPLAY_CHUNK: input samples)
     const auto w0 = std::chrono::steady_clock::now();
     uint64_t produced = 0, phase = 0;
     std::mt19937 dropRng(5);
@@ -802,6 +810,8 @@ static int replayReal(int argc, char** argv) {
     for (size_t o = 0; o < x.size(); o += chunk) {
         const size_t k = std::min(chunk, x.size() - o);
         up.clear(); up.reserve(k * (size_t)L / (size_t)D + 2);
+        // ★ the shift as a rotator (a cos/sin a sample was most of the replay's own CPU on a Pi), set exactly each chunk
+        cf32 rot((float)std::cos(ph), (float)std::sin(ph)); const cf32 drot((float)std::cos(dph), (float)std::sin(dph));
         for (size_t i = 0; i < k; ++i) {
             std::memmove(hist.data() + 1, hist.data(), (size_t)(K - 1) * sizeof(cf32));
             hist[0] = x[o + i];
@@ -809,10 +819,11 @@ static int replayReal(int argc, char** argv) {
                 if (phase++ % D) continue;
                 float re = 0, im = 0;
                 for (int t = 0; t < K; ++t) { const float c = h[(size_t)(t * L + q)]; re += c * hist[(size_t)t].real(); im += c * hist[(size_t)t].imag(); }
-                up.push_back(cf32(re, im) * cf32((float)std::cos(ph), (float)std::sin(ph)));
-                ph += dph; if (ph > M_PI) ph -= 2 * M_PI;
+                up.push_back(cf32(re, im) * rot);
+                rot *= drot;
             }
         }
+        ph = std::fmod(ph + dph * (double)up.size(), 2 * M_PI);
         if (!bcast.empty()) for (size_t i = 0; i < up.size(); ++i) up[i] += bcast[(size_t)((produced + i) & (bcast.size() - 1))];
         produced += up.size();
         const double utc = base + (double)produced / fs;
@@ -848,7 +859,8 @@ int main(int argc, char** argv) {
     cwRttyChips();
     livePath();
     switchedOff();
-    crowdedSlot();
+    crowdedSlot(false);
+    crowdedSlot(true);
     if (!std::getenv("VIBE_BG_BAND_NO_COST")) cost();
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
