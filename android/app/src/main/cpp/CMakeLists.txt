@@ -97,7 +97,7 @@ set(AIRSPY_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/libairspy/iqconverter_int16.c")
 
 add_library(vibelocalsdr SHARED
-    vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
+    vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp
     mdns_responder.cpp vibe_affinity.cpp
     # ★ V12 TRANSCRIBE: the recogniser feed (vibedsp/ssb_offset — resample to 16 kHz, SSB auto-tune), shared with iOS.
     vibe_ssb_jni.cpp

@@ -1411,21 +1411,12 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        /* ★★★ AN RTL-SDR ONLY (Sloper, 2026-11-25). This took the first isLocalRadio — an Airspy HF+ / R2, a
-         *     HackRF or an RSP too — and handed it to rtl_tcp_server.cpp, which opens it with librtlsdr. That
-         *     open SUCCEEDS on any USB device (no tuner found, return 0), so the server bound, sent its "RTL0"
-         *     header and then not one IQ byte: SDR# / SDR++ said "connected", the app said "Good", and there was
-         *     no waterfall and no audio. The rtl_tcp server streams a dongle's own 8-bit IQ and nothing else;
-         *     the other radios are served by VibeServer (whose RAW IQ OUT is the rtl_tcp format). The server
-         *     screen hides RTL-TCP for them; this is the refusal if anything still asks. */
-        val radio = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
+        /* ★★★ EVERY RADIO THE SERVER DRIVES (Sloper, 2026-11-25). This once handed any radio to a librtlsdr-only server,
+         *     which "opened" an Airspy or an RSP and sent a header and then nothing ("connected", no waterfall). RTL-TCP
+         *     is now the engine's front door (VibeServerOps.rtlStart → LocalSdrShim::startRtlTcpDoor): the radio opened
+         *     with its own driver, served as rtl_tcp — so every radio is served, and an Icom (no IQ) is refused there. */
+        val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
             ?: run { promise.reject("no_device", "No SDR found"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) } ?: run {
-            promise.reject("not_rtl", "RTL-TCP can only share an RTL-SDR dongle, and the radio plugged in is " +
-                "${radioModelName(radio)}. Choose VibeServer instead — it serves this radio, and its RAW IQ OUT " +
-                "(in the web page's audio menu) is the rtl_tcp format SDR# and SDR++ read.")
-            return
-        }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(dev, opts, promise) }
             return
@@ -1452,8 +1443,6 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         ask("rtl.stop", JSONObject(), promise, serial = true) { null }
     }
 
-    @ReactMethod
-    fun setServerSampleRate(rate: Double) { tell("rtlRate", JSONObject().put("rate", rate)) }
 
     @ReactMethod
     fun getServerStatus(promise: Promise) {
@@ -1469,6 +1458,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             // ★ Is IQ actually flowing? The screen's LINK line reads these (rtl_tcp_server.h Status).
             m.putDouble("iqBytes", o.optLong("iqBytes", 0).toDouble())
             m.putBoolean("usbEnded", o.optBoolean("usbEnded", false))
+            // ★ The engine's door (rtlTcpDoorStatus): the client's rate, the gain and whose AGC holds it, refusals.
+            m.putDouble("clientRate", o.optLong("clientRate", 0).toDouble())
+            m.putDouble("freq", o.optLong("freq", 0).toDouble())
+            m.putDouble("drops", o.optLong("drops", 0).toDouble())
+            m.putBoolean("agc", o.optBoolean("agc", false))
+            m.putString("agcName", o.optString("agcName", ""))
+            m.putInt("gainTenthDb", o.optInt("gainTenthDb", -1))
+            m.putString("driver", o.optString("driver", ""))
+            m.putDouble("refused", o.optLong("refused", 0).toDouble())
+            m.putString("lastRefusal", o.optString("lastRefusal", ""))
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", r.optString("ip", ""))
             m.putDouble("cpu", r.optDouble("cpu", 0.0))
