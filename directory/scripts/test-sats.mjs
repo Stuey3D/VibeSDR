@@ -72,7 +72,7 @@ async function fakeFetch(url, opt) {
 let now = 1795600000;
 const run = (extra = {}) => M.runMirror(env, { fetch: fakeFetch, now, curated, ...extra });
 const state = async () => M.loadState(env);
-const sats = async () => JSON.parse((await env.DB.prepare("SELECT v FROM sat_mirror WHERE k='sats'").first()).v.replace(/^/, '')).body;
+const sats = async () => JSON.parse((await env.DB.prepare("SELECT v FROM sat_mirror WHERE k='sats'").first()).v).body;
 const satsDoc = async () => JSON.parse(await sats());
 
 console.log('§1 CSV parsing');
