@@ -603,27 +603,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   }
 }
 
-/* ★★★ THE STATUS BAR, HIDDEN ON REQUEST (iPhone Duo, Stuart 2026-11-25: hide the clock and Wi-Fi in LANDSCAPE on the
- *  Duo — folded, open and in Split View). UIApplication -setStatusBarHidden: (React Native's StatusBar module) is a
- *  no-op from iOS 27, so the window's root view controller answers it: Info.plist
- *  UIViewControllerBasedStatusBarAppearance is YES and this is the root. JS sets the flag (VibePowerModule
- *  setStatusBarHidden). RN Modals ask UIStatusBarManager whether the bar is hidden, so they follow. The style is
- *  left to the system: dark interface style ⇒ light status text, which is what the app always asked for. */
-final class VibeRootViewController: UIViewController {
-  static var statusBarHiddenWanted = false
-  override var prefersStatusBarHidden: Bool { VibeRootViewController.statusBarHiddenWanted }
-  override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
-  override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
-}
-
 class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
   // Extension point for config-plugins
-
-  /// The root is VibeRootViewController unless an Expo module supplies its own (then that one decides).
-  override func createRootViewController() -> UIViewController {
-    let vc = super.createRootViewController()
-    return type(of: vc) == UIViewController.self ? VibeRootViewController() : vc
-  }
 
   override func sourceURL(for bridge: RCTBridge) -> URL? {
     // needed to return the correct URL for expo-dev-client.
