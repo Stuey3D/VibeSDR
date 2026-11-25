@@ -10517,10 +10517,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  id suggest splitting the data and treat the decoder box as 2 halves"; duoGeometry halfOpenSplit). Only while the
    *  box is beside the deck (halfSide); null = no room for two panels, and BIG is not offered (the box stays below the
    *  fold). */
+  /* ★ The upper panel starts below the SERVERS CHIP (top-left, ours, drawn above the boxes): under it the chip covered
+   *  the panel's first lines and took their taps (seen on the first half-open BIG, 2026-11-25). The chip is ~38 pt. */
   const halfSplit = useMemo(() => (tableFold && halfSide
     ? halfOpenSplit(reserved, tableFold, screenH, { x0: 8, x1: screenW - (Math.ceil(screenW / 2) + 4) },
-                    { top: chromeTop, bottomInset })
-    : null), [tableFold, halfSide, reserved, screenH, screenW, chromeTop, bottomInset]);
+                    { top: controlsHidden ? chromeTop : serversTop + 40, bottomInset })
+    : null), [tableFold, halfSide, reserved, screenH, screenW, chromeTop, bottomInset, controlsHidden, serversTop]);
   const decoderAvoid = useMemo(() => {
     if (tabletop) {
       const bottom = halfSide ? bottomInset + 8 : pillBottom + 8;
