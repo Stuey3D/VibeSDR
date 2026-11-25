@@ -1217,6 +1217,133 @@ export class SatReminders {
   }
 }
 
+// ══ ★★ beta94 SHOW — WHICH SATELLITES' PASSES THE LIST SHOWS (Stuart 11-25: "on the satellite list can we have a dropdown
+// to show only passes from certain satellites") ══════════════════════════════════════════════════════════════════════════
+/* One set of rules for both clients (the web's satellites.ts, the app's SatellitePanel + SDRScreen's reminders):
+ *   · a tick box per satellite in the list, and group shortcuts — All, Weather, Transponders, FM voice, Telemetry. The groups
+ *     come from what the list already says about each downlink (its use, mode, passband, decoder) — no satellite is named
+ *     here, so a bird the mirror adds tomorrow falls into its group by itself. A satellite is in a group when ANY of its
+ *     downlinks is (the ISS: FM voice AND Telemetry, for its APRS).
+ *   · only passes of the ticked satellites are listed; the satellite picked (or being picked) always stays.
+ *   · a reminder for a hidden satellite does not fire.
+ *   · remembered per viewer (web localStorage / app AsyncStorage, SAT_SHOW_KEY), keyed by NORAD number so it carries from
+ *     server to server; a satellite the current server does not list is simply ignored. A group shortcut is kept AS the
+ *     group, so "Weather" on another server means that server's weather birds.
+ *   · default (nothing stored) = All: nothing changes for someone who never touches it. */
+export type SatShowGroup = 'weather' | 'xpdr' | 'fm' | 'tlm';
+export const SAT_SHOW_GROUPS: ReadonlyArray<{ id: SatShowGroup; label: string; what: string }> = [
+  { id: 'weather', label: 'Weather', what: 'Weather satellites: pictures (METEOR LRPT)' },
+  { id: 'xpdr', label: 'Transponders', what: 'Linear transponders: a band of SSB and CW contacts' },
+  { id: 'fm', label: 'FM voice', what: 'FM repeaters and FM voice downlinks' },
+  { id: 'tlm', label: 'Telemetry', what: 'Data downlinks: telemetry, beacons and packet (APRS)' },
+];
+/** what is shown: null = All; a group; or the ticked NORAD numbers (others' too — a list from another server is kept). */
+export type SatShow = null | { group: SatShowGroup } | { norads: number[] };
+export const SAT_SHOW_KEY = 'vibe.satShow';
+const SAT_SHOW_MAX = 200;   // bounded: what is stored never grows without end
+
+/** The groups ONE downlink belongs to (none for an unknown kind — it still shows under All and its own tick). */
+export function satTxShowGroups(t: SatTx): SatShowGroup[] {
+  const out: SatShowGroup[] = [];
+  const use = txUse(t);
+  if (use === 'image') out.push('weather');
+  if ((t.hiHz != null && t.hiHz > t.hz) || t.decoder === 'xpdr') out.push('xpdr');
+  if (use === 'voice' && t.mode === 'nfm') out.push('fm');
+  if (use === 'packet' || t.mode === 'cw' || t.decoder === 'fctlm' || t.decoder === 'cw' || t.decoder === 'cwskim' || t.decoder === 'aprs'
+      || (!!t.consumer && use !== 'image')) out.push('tlm');
+  return out;
+}
+/** A satellite's groups: any of its downlinks' (each once, in SAT_SHOW_GROUPS order). */
+export function satShowGroupsOf(sat: Pick<SatInfo, 'tx'>): SatShowGroup[] {
+  const s = new Set<SatShowGroup>();
+  for (const t of sat.tx) for (const g of satTxShowGroups(t)) s.add(g);
+  return SAT_SHOW_GROUPS.map((g) => g.id).filter((g) => s.has(g));
+}
+/** Stored text → a SatShow (anything unreadable = All). */
+export function satShowParse(raw: string | null | undefined): SatShow {
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    if (o && typeof o === 'object') {
+      if (typeof o.group === 'string' && SAT_SHOW_GROUPS.some((g) => g.id === o.group)) return { group: o.group as SatShowGroup };
+      if (Array.isArray(o.norads)) {
+        const n = [...new Set(o.norads.filter((x): x is number => typeof x === 'number' && Number.isInteger(x) && x > 0))].slice(0, SAT_SHOW_MAX);
+        return { norads: n };
+      }
+    }
+  } catch { /* unreadable: All */ }
+  return null;
+}
+/** A SatShow → the text to store (null = remove the key: All). */
+export function satShowStore(f: SatShow): string | null {
+  if (!f) return null;
+  return 'group' in f ? JSON.stringify({ group: f.group }) : JSON.stringify({ norads: f.norads.slice(0, SAT_SHOW_MAX) });
+}
+/** The satellites the list names, once each, in the list's order. */
+function satShowSats(l: SatList | null): SatInfo[] {
+  const seen = new Set<number>(), out: SatInfo[] = [];
+  for (const s of l?.sats ?? []) if (!seen.has(s.norad)) { seen.add(s.norad); out.push(s); }
+  return out;
+}
+/** Is this satellite ticked? (Its own data decides a group; a NORAD list decides by number.) */
+export function satShowTicked(f: SatShow, sat: Pick<SatInfo, 'norad' | 'tx'>): boolean {
+  if (!f) return true;
+  if ('group' in f) return satShowGroupsOf(sat).includes(f.group);
+  return f.norads.includes(sat.norad);
+}
+/** ★ Does the list show this satellite? Ticked, or the one picked / being picked (it always stays). */
+export function satShowShows(f: SatShow, sat: Pick<SatInfo, 'norad' | 'tx'>, keepNorad?: number | null): boolean {
+  return (keepNorad != null && sat.norad === keepNorad) || satShowTicked(f, sat);
+}
+/** The timetable's rows under SHOW (satModeRows' order kept). */
+export function satShowRows<R extends { sat: Pick<SatInfo, 'norad' | 'tx'> }>(rows: R[], f: SatShow, keepNorad?: number | null): R[] {
+  return f ? rows.filter((r) => satShowShows(f, r.sat, keepNorad)) : rows;
+}
+/** ★ A reminder as it fires: does SHOW still allow it? A satellite the list no longer has is let through (the fire-time
+ *  check says why it cannot be picked); a group needs the list to know the bird's downlinks. */
+export function satShowRemindOk(f: SatShow, l: SatList | null, norad: number): boolean {
+  if (!f) return true;
+  if ('norads' in f) return f.norads.includes(norad);
+  const sat = l?.sats.find((s) => s.norad === norad);
+  return !sat || satShowTicked(f, sat);
+}
+/** The group shortcuts worth drawing on this list — a group no listed satellite is in is not drawn (it could never act). */
+export function satShowGroupsOffered(l: SatList | null): SatShowGroup[] {
+  const s = new Set<SatShowGroup>();
+  for (const sat of satShowSats(l)) for (const g of satShowGroupsOf(sat)) s.add(g);
+  return SAT_SHOW_GROUPS.map((g) => g.id).filter((g) => s.has(g));
+}
+/** The menu's tick boxes: every satellite in the list, in its order, with whether it is ticked. */
+export function satShowChoices(f: SatShow, l: SatList | null): Array<{ norad: number; name: string; on: boolean }> {
+  return satShowSats(l).map((s) => ({ norad: s.norad, name: s.name, on: satShowTicked(f, s) }));
+}
+/** A group shortcut (or 'all'). */
+export function satShowGroup(g: SatShowGroup | 'all'): SatShow { return g === 'all' ? null : { group: g }; }
+/** ★ A tick box pressed: flips that satellite. From All or a group it becomes the list's ticked set with this one flipped;
+ *  a NORAD list keeps the numbers this server does not list (they belong to another server). Every listed satellite
+ *  ticked (and nothing else kept) = back to All. */
+export function satShowToggle(f: SatShow, l: SatList | null, norad: number): SatShow {
+  const sats = satShowSats(l);
+  const listed = new Set(sats.map((s) => s.norad));
+  const set = new Set<number>(f && 'norads' in f ? f.norads : []);
+  if (!f || 'group' in f) for (const s of sats) if (satShowTicked(f, s)) set.add(s.norad);
+  if (set.has(norad)) set.delete(norad); else set.add(norad);
+  if (sats.length && sats.every((s) => set.has(s.norad)) && [...set].every((n) => listed.has(n))) return null;
+  return { norads: [...set].slice(0, SAT_SHOW_MAX) };
+}
+/** The header's words: "All" / "Weather" / "ISS" (one) / "3 satellites" / "None". On THIS list: every listed satellite
+ *  ticked reads "All" (it is all of them here). */
+export function satShowText(f: SatShow, l: SatList | null): string {
+  if (!f) return 'All';
+  if ('group' in f) return SAT_SHOW_GROUPS.find((g) => g.id === f.group)?.label ?? 'All';
+  const sats = satShowSats(l), on = sats.filter((s) => satShowTicked(f, s));
+  if (sats.length && on.length === sats.length) return 'All';
+  if (on.length === 1) return on[0].name;
+  return on.length ? `${on.length} satellites` : 'None';
+}
+/** The note under a list SHOW has emptied (none of the chosen satellites has a row here). */
+export const SAT_SHOW_EMPTY = 'None of the satellites chosen under SHOW are listed on this server';
+
 // ══ ★★ SATELLITE-BEST 1.3 — TELEMETRY TURNED INTO VALUES (the client half) ═══════════════════════════════════════════════
 /* The server's decoder (AO-73 FUNcube `fctlm`; SONATE-2 / APRS later) sends {"type":"fctlm_status","data":{…}} on the decoder
  * socket — frames, good / failed, the bird's mode, and named values with units; a channel with no published calibration

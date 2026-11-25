@@ -78,7 +78,7 @@ import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft d
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowRemindOk, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2830,6 +2830,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** into SATELLITE the way its key goes in (set beside the key, below — it leaves the other whole-radio modes) */
   const satEnterRef = useRef<() => void>(() => {});
   useEffect(() => { AsyncStorage.getItem('vibe.satRemindLead').then((v) => { if (v) setSatRemLead(satRemindLead(v)); }).catch(() => {}); }, []);
+  /* ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows — this viewer's, kept by NORAD number so it carries
+   *  from server to server (a satellite this server does not list is ignored); null = All, the default. Reminders follow it. */
+  const [satShow, setSatShow] = useState<SatShow>(null);
+  const satShowRef = useRef<SatShow>(null); satShowRef.current = satShow;
+  useEffect(() => { AsyncStorage.getItem(SAT_SHOW_KEY).then((v) => setSatShow(satShowParse(v))).catch(() => {}); }, []);
+  const satShowSet = useCallback((f: SatShow) => {
+    setSatShow(f);
+    const v = satShowStore(f);
+    (v == null ? AsyncStorage.removeItem(SAT_SHOW_KEY) : AsyncStorage.setItem(SAT_SHOW_KEY, v)).catch(() => {});
+  }, []);
   const satSetToasts = useCallback((ts: SatRemindToast[]) => { satToastsRef.current = ts; setSatToasts(ts); }, []);
   const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); }, [satSetToasts]);
   const satRemBusy = satRemN > 0 || satToasts.length > 0;
@@ -2842,7 +2852,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
       }
       let ts = satToastsRef.current;
-      for (const r of satRemRef.current.due(now, lead, conn)) ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
+      const keep = (satPickedRef.current ?? satPendingRef.current)?.norad;
+      for (const r of satRemRef.current.due(now, lead, conn)) {
+        if (r.norad !== keep && !satShowRemindOk(satShowRef.current, satListRef.current, r.norad)) continue;   // ★★ beta94 hidden by SHOW: no reminder
+        ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
+      }
       ts = ts.filter((x) => now < x.r.los);   // ★ a pass that is over takes its banner with it
       satSetToasts(ts);
       setSatRemN(satRemRef.current.size);
@@ -16384,6 +16398,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           remindLead={satRemLead}
           onRemind={satRemToggle}
           onRemindLead={(v) => { setSatRemLead(v); AsyncStorage.setItem('vibe.satRemindLead', String(v)).catch(() => {}); }}
+          show={satShow} onShow={(f) => { markInteract(); satShowSet(f); }}
           mapOffered={satMapNow}
           onMap={() => { markInteract(); if (satPickedSat) openDigiModesMap({ layer: 'aprs', overlay: satMapOverlay(satPickedSat.name, satOrbit?.geo,
             { lat: satPickedSat.lat, lon: satPickedSat.lon, altKm: satAltKm(satPickedSat.rangeKm, satPickedSat.el) }) }); }}

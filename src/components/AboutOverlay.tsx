@@ -59,6 +59,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta94 2026-11-25 — SHOW (src/services/satellites.ts satShow*). Stuart 11-25: "on the satellite list can we have a
+  //     dropdown to show only passes from certain satellites".
+  { v: 'V12 (experimental)', detail: 'SATELLITE: a SHOW drop-down above the satellite list picks whose passes it lists — tick the satellites you want, or tap All, Weather, Transponders, FM voice or Telemetry — and it is remembered on this device for every server; a satellite it hides gives no pass reminder, and the one you have picked always stays in the list. In the app and on the web page.' },
   // ★★★ V12 beta94 2026-11-25 — THE TRANSPONDER SIGNAL FINDER (docs/v12/TRANSPONDER-FINDER.md; vibe_xpdr.h, vibe_xpdr_run.h,
   //     src/services/xpdr.ts). Stuart 11-24 on RS-44: "open the satellite in iq mode and as soon as a carrier is detected it
   //     gives you a button to listen to it" · no separate VFO for the beacon · "vfo a tracks the signal". Synthetic tests
