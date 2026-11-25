@@ -10,6 +10,7 @@
  */
 import { cornerClearRight, shellPlacement, type ShellAvoid } from '../src/utils/decoderShellLayout.ts';
 import { halfOpenSplit, NO_REGIONS, type ReservedRegions } from '../src/utils/duoGeometry.ts';
+import { advRdsPlotLayout, advRdsPlotsWidth } from '../src/utils/advRdsPlotLayout.ts';
 
 let fails = 0, n = 0;
 function ok(cond: boolean, what: string) {
@@ -112,6 +113,36 @@ ok(same === n, `${same} / ${n} placements identical with no hinge`);
   // A rect the centred box would come within 8 pt of (not overlap) still moves it.
   ok(cornerClearRight([{ x: 870, y: 0, w: 60, h: 40 }], W, { y: 0, h: 500 }, 800) === W - 870 + 8,
      'a rect within 8 pt of the centred box still moves it');
+}
+
+// ── 4. The LOWER panel's content is never wider than the panel (Stuart, half-open, Advanced RDS BIG: "labels getting
+//    cut off" — the plots were laid out for a box, 330 pt, in a ~296 pt panel). Panel width from halfOpenSplit (the
+//    left column), minus the frame's border, the metal window's side margins (0 on glass, 8 on metal) and the body's
+//    padding (12 left, 12 scroll lane right). ────────────────────────────────────────────────────────────────────
+{
+  // 624 = the narrowest window that puts the box beside the deck (half the width − 12 >= 300).
+  for (const W of [669, 624, 640, 744, 820]) {
+    const H = Math.round(W * 1.42), fold = { x: 0, y: Math.round(H * 0.48), w: W, h: 40 };
+    const sp = halfOpenSplit({ ...NO_REGIONS, division: [fold] }, fold, H, { x0: 8, x1: W - (Math.ceil(W / 2) + 4) },
+                             { top: 86, bottomInset: 21 })!;
+    const panelW = sp.x1 - sp.x0 - 2;
+    for (const inset of [0, 8]) {
+      const body = panelW - 2 * inset;
+      const contentW = body - 12 - 12;
+      const l = advRdsPlotLayout(contentW);
+      ok(advRdsPlotsWidth(l) <= contentW,
+         `${W} pt window, ${inset ? 'metal' : 'glass'}: Advanced RDS plots ${advRdsPlotsWidth(l)} pt in ${contentW} pt (${l.stacked ? 'stacked' : 'side by side'}, trace ${l.eyeW})`);
+      // Spots, compact (the lower panel): time 36 + band 34 + mode 35 + SNR 30 + distance 48 (+4) + call margin 6, five
+      // 4 pt gaps, 10 + 10 row padding, no country column; the callsign takes the rest — at least 48 pt (six characters; a longer one ends in an ellipsis, never clipped).
+      const spotsFixed = 36 + 34 + 35 + 30 + 48 + 4 + 6 + 5 * 4 + 20;
+      ok(body - spotsFixed >= 48, `${W} pt, ${inset ? 'metal' : 'glass'}: spots table fits, callsign ${body - spotsFixed} pt`);
+      // ADS-B: flag 22 + altitude 78 + distance 82, three 8 pt gaps, 10 + 10 padding; the callsign takes the rest.
+      const adsbFixed = 22 + 78 + 82 + 3 * 8 + 20;
+      ok(body - adsbFixed >= 48, `${W} pt, ${inset ? 'metal' : 'glass'}: ADS-B table fits, callsign ${body - adsbFixed} pt`);
+    }
+  }
+  const box = advRdsPlotLayout(null);
+  ok(box.constSize === 120 && box.plotW === 180 && box.eyeW === 310 && !box.stacked, 'every other layout: the plots exactly as before');
 }
 
 if (fails) { console.log(`\ndecoder shell layout: ${fails} FAILED`); process.exit(1); }

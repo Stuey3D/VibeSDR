@@ -138,9 +138,12 @@ function fmtSpotTimeSec(t: number): string {
 
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
 // render, and unchanged rows skip re-render entirely when new spots flush in.
-const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded }: {
+const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded, compact = false }: {
   s: SpotRow; isCW: boolean; font: string; callColor: string; expanded: boolean;
   onTuneHz?: (hz: number) => void;
+  /** ★ Half-open lower panel (~300 pt): tighter cells and no country column — it moves to the expanded line — so the
+   *  CALLSIGN keeps its room (at full width it was left ~30 pt). Everywhere else false: the row as always. */
+  compact?: boolean;
 }) {
   const dp = useDecoderStyles(makeDp);
   // Line 1: Time · Call · Band · Mode · SNR · Country · Distance.
@@ -155,32 +158,34 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
   return (
     <TouchableOpacity style={expanded ? dp.spotRowTall : dp.spotRow}
       onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
-      <View style={dp.spotLine}>
-        <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
+      <View style={[dp.spotLine, compact && dp.spotLineCompact]}>
+        <Text style={[dp.spotCell, dp.spotTime, compact && dp.spotTimeCompact, { fontFamily: font }]}>
           {fmtSpotTime(s.time)}
         </Text>
         <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
               numberOfLines={1}>
           {s.call}
         </Text>
-        <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
-        <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
+        <Text style={[dp.spotCell, dp.spotBand, compact && dp.spotBandCompact, { fontFamily: font }]}>{s.band}</Text>
+        <Text style={[dp.spotCell, dp.spotMode, compact && dp.spotModeCompact, { fontFamily: font }]}>
           {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
         </Text>
         <Text style={[dp.spotCell, dp.spotSnr,
           (s.snr ?? -99) >= 0 ? dp.snrOk : dp.snrLow, { fontFamily: font }]}>
           {s.snr !== undefined ? s.snr : ''}
         </Text>
+        {!compact && (
         <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
           {abbrCountry(s.country)}
         </Text>
+        )}
         {/* Distance-to-receiver (FT8: from the TX grid). Its own cell so country +
             distance both show; blank when unknown.
             ★ ROUND IT. UberSDR sends distance_km as a raw float, so this printed
             "8231.437291841km" and blew the column apart. Sub-kilometre precision is
             meaningless anyway — a Maidenhead grid square is ~100 km across, so every
             digit after the point is invented. */}
-        <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>
+        <Text style={[dp.spotCell, dp.spotDist, compact && dp.spotDistCompact, { fontFamily: font }]} numberOfLines={1}>
           {s.distKm != null ? `${Math.round(s.distKm)}km` : ''}
         </Text>
       </View>
@@ -191,6 +196,7 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         <Text style={[dp.spotDetail, { fontFamily: font }]} numberOfLines={1}>
           {[
             s.msg,
+            compact ? abbrCountry(s.country) : undefined,
             s.grid,
             s.bearing != null ? `${Math.round(s.bearing)}°` : undefined,
             fmtSpotTimeSec(s.time),
@@ -336,11 +342,13 @@ export default function DecoderPanel({
       (cutoff === 0 || s.time >= cutoff));
   }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge]);
 
+  /** Half-open BIG: the spots table is in the lower panel, ~300 pt wide (SpotRowView compact). */
+  const spotsCompact = tall && !!split;
   const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
     <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
                  callColor={tk.accent}
-                 onTuneHz={onTuneHz} expanded={spotsExpanded} />
-  ), [spotsKind, onTuneHz, spotsExpanded, tk.accent]);
+                 onTuneHz={onTuneHz} expanded={spotsExpanded} compact={spotsCompact} />
+  ), [spotsKind, onTuneHz, spotsExpanded, tk.accent, spotsCompact]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -1753,6 +1761,12 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   // Widened with the font step from 10pt to 11pt — the old widths were cut for 10pt and clip
   // "20:14"/"FT8" at the larger size. Check on the SE in Display Zoom before trimming these.
   spotTime:    { width: 42 },
+  // ★ Half-open lower panel (SpotRowView compact): see the prop.
+  spotLineCompact: { gap: 4 },
+  spotTimeCompact: { width: 36 },
+  spotBandCompact: { width: 34 },
+  spotModeCompact: { width: 35 },
+  spotDistCompact: { width: 48 },
   spotBand:    { width: 38 },
   spotMode:    { width: 40 },
   spotSnr:     { width: 30, textAlign: 'right' },
