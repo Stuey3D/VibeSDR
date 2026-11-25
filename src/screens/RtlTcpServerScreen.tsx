@@ -56,6 +56,8 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const [persist, setPersist] = useState(false);     // keep sharing after leaving
   const startedRef = useRef(false);
   const lastDropRef = useRef(0);
+  const lastIqRef = useRef(-1);
+  const [iqStalled, setIqStalled] = useState(false);
   // The unmount cleanup closes over the first render, so it can't read `persist`
   // state. Mirror it into a ref that the cleanup can see.
   const persistRef = useRef(false);
@@ -105,8 +107,10 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       } catch (e: any) {
         if (cancelled) return;
         setStarting(false);
-        // ★ An Airspy HF+ shares over rtl_tcp too — do not name the one radio this used to support.
-        setError(e?.message ?? 'Could not start the server. Is a radio plugged in via USB OTG?');
+        // ★★ WRONG UNTIL 2026-11-25: this said an Airspy HF+ "shares over rtl_tcp too". It never did — the
+        //    server opened it through librtlsdr, sent the header and then no IQ at all (Sloper). RTL-TCP is
+        //    an RTL-SDR's; the native start now refuses anything else and its message says what to use.
+        setError(e?.message ?? 'Could not start the server. Is an RTL-SDR plugged in via USB OTG?');
       }
     })();
     return () => { cancelled = true; };
@@ -131,6 +135,10 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       const dropped = s.droppedBytes ?? 0;
       setDropping(dropped > lastDropRef.current);
       lastDropRef.current = dropped;
+      // ★ IQ FLOWING is its own test — "nothing dropped" alone read "Good" for a client getting nothing.
+      const iq = s.iqBytes;
+      setIqStalled(typeof iq === 'number' && iq === lastIqRef.current);
+      lastIqRef.current = iq ?? -1;
       setStatus(s);
     }, 2000);
     return () => clearInterval(t);
@@ -168,10 +176,17 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     : '—';
 
   const dropped = status?.droppedBytes ?? 0;
-  const linkLine = !status?.client ? '—'
+  /* ★★★ "Good" ONLY WHEN IQ IS MOVING (Sloper, 2026-11-25). This said Good whenever nothing was dropped, and
+   *     nothing is dropped when nothing is sent: a server whose radio delivered no IQ at all showed
+   *     "Connected … Good" over a client with no waterfall. */
+  const noIq = !!status?.usbEnded || (!!status?.client && iqStalled);
+  const linkLine = status?.usbEnded ? 'The radio stopped sending — press STOP and start again'
+    : !status?.client ? '—'
+    : iqStalled ? 'No IQ from the radio'
     : dropped === 0 ? 'Good'
     : `${formatBytes(dropped)} dropped`;
-  const linkColor = !status?.client ? C.textDim
+  const linkColor = noIq ? C.bad
+    : !status?.client ? C.textDim
     : dropping ? C.bad
     : dropped > 0 ? C.warn
     : C.green;

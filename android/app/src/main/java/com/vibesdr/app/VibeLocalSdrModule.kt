@@ -1268,8 +1268,20 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+        /* ★★★ AN RTL-SDR ONLY (Sloper, 2026-11-25). This took the first isSupportedRadio — an Airspy HF+ / R2 or a
+         *     HackRF too — and handed it to rtl_tcp_server.cpp, which opens it with librtlsdr. That open SUCCEEDS on
+         *     any USB device (no tuner found, return 0), so the server bound, sent its "RTL0" header and then not
+         *     one IQ byte: SDR# / SDR++ said "connected", the app said "Good", and there was no waterfall and no
+         *     audio. The other radios are served by VibeServer (whose RAW IQ OUT is the rtl_tcp format). The
+         *     server screen hides RTL-TCP for them; this is the refusal if anything still asks. */
+        val radio = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No SDR found"); return }
+        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) } ?: run {
+            promise.reject("not_rtl", "RTL-TCP can only share an RTL-SDR dongle, and the radio plugged in is " +
+                "${radioModelName(radio)}. Choose VibeServer instead — it serves this radio, and its RAW IQ OUT " +
+                "(in the web page's audio menu) is the rtl_tcp format SDR# and SDR++ read.")
+            return
+        }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
             return
@@ -1335,6 +1347,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putDouble("overrideRate", o.optLong("overrideRate", 0).toDouble())
             m.putDouble("droppedBytes", o.optLong("droppedBytes", 0).toDouble())
+            // ★ Is IQ actually flowing? The screen's LINK line reads these (rtl_tcp_server.h Status).
+            m.putDouble("iqBytes", o.optLong("iqBytes", 0).toDouble())
+            m.putBoolean("usbEnded", o.optBoolean("usbEnded", false))
             // ip/port let the UI re-adopt a server that is ALREADY running (persist
             // mode: the server outlives the screen, so the screen must attach to it
             // rather than start a second one on the same dongle).

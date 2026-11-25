@@ -783,6 +783,8 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
     j += ",\"overrideRate\":" + std::to_string(s.overrideRate);
     j += ",\"droppedBytes\":" + std::to_string(s.droppedBytes);
     j += ",\"port\":"         + std::to_string(s.port);
+    j += ",\"iqBytes\":"      + std::to_string(s.iqBytes);
+    j += ",\"usbEnded\":"     + std::string(s.usbEnded ? "true" : "false");
     j += "}";
     return env->NewStringUTF(j.c_str());
 }
