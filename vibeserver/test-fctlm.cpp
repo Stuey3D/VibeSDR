@@ -734,7 +734,34 @@ static void s13() {
     }
 }
 
+/** ★★★ beta94 `test-fctlm --write-clip FILE RATE CENTRE_HZ TLM_HZ`: 10.0 s of unsigned 8-bit IQ for the fake rtl_tcp (--hf
+ *  FILE --hf-centre CENTRE_HZ) — FUNcube BPSK 1200 at TLM_HZ (two frames, WO1 and WO2, seq 777; exactly 12 000 symbols at
+ *  1200 Bd and whole carrier cycles, so the loop is seamless), on a little noise. What scripts/test-server-fctlm-iq.mjs
+ *  feeds the real server. */
+static int writeClip(const char* path, double rate, double centre, double tlmHz) {
+    std::vector<std::vector<uint8_t>> fr = { tx::sampleFrame(0, 777), tx::sampleFrame(1, 777) };
+    std::vector<std::complex<float>> z;
+    tx::Cfg c; c.rate = rate; c.carrierHz = tlmHz - centre; c.amp = 0.05; c.phase = 0; c.iqOut = &z;
+    (void)tx::modulate(fr, c, 0.0, 0.0);
+    const size_t n = (size_t)std::llround(10.0 * rate);
+    if (z.size() < n) return 3;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 2;
+    std::mt19937 rng(9); std::normal_distribution<float> nd(0.0f, 0.012f);
+    std::vector<uint8_t> out; out.reserve(1 << 20);
+    for (size_t i = 0; i < n; ++i) {
+        const float re = z[i].real() + nd(rng), im = z[i].imag() + nd(rng);
+        out.push_back((uint8_t)std::max(0.0f, std::min(255.0f, std::round(127.5f + 127.0f * re))));
+        out.push_back((uint8_t)std::max(0.0f, std::min(255.0f, std::round(127.5f + 127.0f * im))));
+        if (out.size() >= (1 << 20)) { std::fwrite(out.data(), 1, out.size(), f); out.clear(); }
+    }
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 6 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]));
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--quick") g_quick = true;
     s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9(); s10(); s11(); s12(); s13();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

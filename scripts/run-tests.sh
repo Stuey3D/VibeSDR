@@ -2092,6 +2092,16 @@ if [ -x "$OUT/test-xpdr" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-xpdr" -
 else
   echo '   not run — needs VIBESERVER_BIN and the test-xpdr build'; notrun=$((notrun+1))
 fi
+# ★★★ beta94 FUNCUBE TELEMETRY ON IQ end to end (Stuart 11-25: "or again use iq"): a synthetic FUNcube clip (test-fctlm
+#     --write-clip: two frames 0.7 kHz above AO-73's listing) through the real server — the pick's fctlm reads the IQ slice.
+printf '\n\033[1m── FUNcube telemetry on IQ (end to end) ──\033[0m\n'
+if [ -x "$OUT/test-fctlm" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-fctlm" --write-clip "$OUT/fctlm-clip.u8" 2400000 145935000 145935700; then
+  VIBE_FCTLM_CLIP="$OUT/fctlm-clip.u8" node --max-old-space-size=512 scripts/test-server-fctlm-iq.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/fctlm-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-fctlm build'; notrun=$((notrun+1))
+fi
 # ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
