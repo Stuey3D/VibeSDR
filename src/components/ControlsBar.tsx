@@ -548,6 +548,10 @@ function Unit({ id, onUnit, gap = 0, children }:
 }
 
 // ── SVG paths (from mockup HTML) ──────────────────────────────────────────────
+/* ★ REACH key legends (iPhone Duo front screen): SHRINK = two chevrons pointing in at a centre bar; EXPAND = the
+ *  same chevrons pointing out. 20-unit box, stroked like the other legends. */
+const SHRINK_PATH = Skia.Path.MakeFromSVGString('M3 6l4 4-4 4M17 6l-4 4 4 4M10 4v12')!;
+const EXPAND_PATH = Skia.Path.MakeFromSVGString('M7 6l-4 4 4 4M13 6l4 4-4 4M10 4v12')!;
 const CHAT_PATH   = Skia.Path.MakeFromSVGString('M3 4.5A1.5 1.5 0 0 1 4.5 3h11A1.5 1.5 0 0 1 17 4.5v8A1.5 1.5 0 0 1 15.5 14H7l-4 3V4.5Z')!;
 const SHARE_LINES = Skia.Path.MakeFromSVGString('M13.3 5L6.7 9M13.3 15L6.7 11')!;
 const SHARE_C1    = Skia.Path.MakeFromSVGString('M15 4m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0')!;
@@ -744,6 +748,11 @@ export interface ControlsBarProps {
   /** ★★ The deck's frame in WINDOW coordinates + corner radius while it is OPAQUE and settled (Transparency off, or a
    *  metal plate), else null — the waterfall skips shading what it hides (WaterfallView deckOcclusion). */
   onDeckFrame?: (f: (Rect & { r: number }) | null) => void;
+  /** Changes whenever the caller moves the deck's wrapper (a lift clear of the camera): the deck re-measures. */
+  measureKey?: string | number;
+  /** ★★ iPhone Duo, folded front screen in portrait: the REACH key between the drums (DeckReach owns the state).
+   *  Undefined = no key, the drums sit as they always have. */
+  reachToggle?: { reach: boolean; onToggle: () => void };
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -2053,6 +2062,8 @@ const AUDIO_MUTED_STROKES: IconStroke[] = [
   { path: MUTE_RING, width: 1.5 }, { path: MUTE_SLASH, width: 1.5 },
 ];
 const CHAT_STROKES:  IconStroke[] = [{ path: CHAT_PATH }];
+const SHRINK_STROKES: IconStroke[] = [{ path: SHRINK_PATH }];
+const EXPAND_STROKES: IconStroke[] = [{ path: EXPAND_PATH }];
 
 function Cog({ size, progress }: { size: number; progress?: SharedValue<number> }) {
   return <DomeIcon size={size} k={size / 24} strokes={COG_STROKES} progress={progress} />;
@@ -2227,7 +2238,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
-  vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onControlRects, plateInset }: any) {
+  vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onControlRects, plateInset, reachToggle }: any) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const handbackFlash = useHandbackFlash();
 
@@ -2545,6 +2556,18 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
                          vfoLetter={vfoAB} onTrapHold={onVfoSwap} />}
           <AskLockShield st={sharedDial} />
         </ControlSlot>
+        {/* ★★★ REACH (iPhone Duo, folded front screen in portrait only — Stuart 2026-11-25): a small key BETWEEN the
+            drums. Tap: the whole deck shrinks and lines up on the right (SHRINK legend → EXPAND); tap again: full
+            size, centred. The caller owns the state (DeckReach); absent everywhere else, so the drums sit as today. */}
+        {reachToggle && (
+          <DomeKey style={{ width: Math.max(s.r(30), 30), alignSelf: 'stretch' }} height={DRUM_H} lightReach={keyProps.lightReach}
+            hitSlop={{ top: 4, bottom: 4, left: Math.floor(COL_GAP / 2), right: Math.floor(COL_GAP / 2) }}
+            onPress={reachToggle.onToggle}
+            accessibilityLabel={reachToggle.reach ? 'Expand controls' : 'Shrink controls'}>
+            {p => <DomeIcon size={Math.round(s.r(18))} k={Math.round(s.r(18)) / 20}
+                            strokes={reachToggle.reach ? EXPAND_STROKES : SHRINK_STROKES} progress={p} />}
+          </DomeKey>
+        )}
         {!singleDrum && (
           <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
             {zoomKeys
@@ -3326,6 +3349,7 @@ function useRotateSlide(W: number, H: number, onSettled?: React.MutableRefObject
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function ControlsBar({
+  reachToggle, measureKey,
   srvTzOffsetMin = null, srvTzAbbr = '', srvTzId = '',
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
@@ -3479,6 +3503,15 @@ function ControlsBar({
   }, [onDeckFrame, deckOpaque, deckAway, RADIUS]);
   deckSettled.current = measureDeck;
   useEffect(() => { measureDeck(); }, [measureDeck]);
+  /* ★★ RE-MEASURE WHEN THE DECK'S PARENT MOVES IT (Stuart, Duo folded landscape: "our avoidance has left a large black
+   *  gap"). Lifting the deck clear of a camera moves its wrapper, not the deck inside it, so the deck's own onLayout
+   *  never fires and the waterfall kept its hole where the deck USED to be — a black band under the lifted deck.
+   *  The caller bumps `measureKey` whenever it moves the deck; one frame later the hole follows. */
+  useEffect(() => {
+    if (measureKey == null) return;
+    const t = setTimeout(() => deckSettled.current?.(), 34);
+    return () => clearTimeout(t);
+  }, [measureKey]);
   useEffect(() => () => onDeckFrame?.(null), [onDeckFrame]);
   const onDeckLayout = useCallback(() => { rot.onLayout(); measureDeck(); }, [rot.onLayout, measureDeck]);
 
@@ -3538,6 +3571,8 @@ function ControlsBar({
      *  ★★ The same silence covers the bar's session clock, the lightning badge, read-only and admin: the props
      *     exist, are typed `any`, and go nowhere. A prop list written twice is a fact stored twice. */
     readOnly, sharedDial, storms, adminMode,
+    /** iPhone Duo front screen: the REACH key between the drums (PortraitBar only); undefined everywhere else. */
+    reachToggle: band ? undefined : reachToggle,
     /** The plate's padding and corner, for the panels that run to its edge (black's gloss panel). */
     plateInset: { top: PAD_TOP, h: PAD_H, radius: RADIUS },
   };
