@@ -1804,6 +1804,22 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private static let runsOnMac: Bool =
     ProcessInfo.processInfo.isiOSAppOnMac || ProcessInfo.processInfo.isMacCatalystApp
 
+  /// iPhone Duo landscape: ask the root view controller to hide (or show) the status bar. See VibeRootViewController.
+  @objc func setStatusBarHidden(_ hidden: Bool) {
+    onMain {
+      guard VibeRootViewController.statusBarHiddenWanted != hidden else { return }
+      VibeRootViewController.statusBarHiddenWanted = hidden
+      for scene in UIApplication.shared.connectedScenes {
+        guard let ws = scene as? UIWindowScene else { continue }
+        for w in ws.windows {
+          w.rootViewController?.setNeedsStatusBarAppearanceUpdate()
+          var p = w.rootViewController?.presentedViewController
+          while let pv = p { pv.setNeedsStatusBarAppearanceUpdate(); p = pv.presentedViewController }
+        }
+      }
+    }
+  }
+
   @objc func setMacOutputGain(_ gain: NSNumber) {
     let g = VibePowerModule.runsOnMac ? Float(max(0, min(1, gain.doubleValue))) : 1
     onMain {

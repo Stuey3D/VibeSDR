@@ -3,7 +3,8 @@ import { detailAsked, detailInstalled, downloadDetail, markDetailAsked } from '.
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, Animated, ActivityIndicator, AppState, Dimensions, LogBox, NativeModules, Text, View } from 'react-native';
+import { useDuoStatusBar } from './src/hooks/useDuoStatusBar';
+import { Alert, Animated, ActivityIndicator, AppState, Dimensions, LogBox, NativeModules, Platform, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -297,6 +298,7 @@ export default function App() {
    *  scene crumbs either side, says which of those the black screen is. */
   crumb('App() render');
   useEffect(() => { crumb('App mounted'); }, []);
+  useDuoStatusBar();   // ★ iPhone Duo: no clock / Wi-Fi in landscape (src/hooks/useDuoStatusBar.ts)
 
   // Install the global JS crash guard once — flaky SDR servers must never abort
   // the whole app; recover to the picker with a server-attributed message.
@@ -1008,7 +1010,10 @@ export default function App() {
               crumb(`nav: [${names}] index=${st?.index ?? '?'}`);
             } catch {}
           }}>
-          <StatusBar style="light" />
+          {/* ★ Android only: on iOS the status bar is the root view controller's (UIViewControllerBasedStatusBarAppearance
+              YES, AppDelegate VibeRootViewController — iPhone Duo), and React Native's StatusBar module refuses to run
+              there (a red box in a debug build). The style it set is the system's own on a dark interface. */}
+          {Platform.OS === 'android' && <StatusBar style="light" />}
           {/* ★ Legacy com.vibesdr.app build only — draws nothing anywhere else. */}
           <LegacyPackageNotice />
           <Stack.Navigator

@@ -10484,7 +10484,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) =>
         setRootH(e.nativeEvent.layout.height)}
     >
-      <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
+      {/* ★ Android only — on iOS the root view controller owns the status bar (App.tsx, useDuoStatusBar). */}
+      {Platform.OS === 'android' && <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />}
 
       {/* ── WHICH RADIO? The landing page, for a multi-radio server ───────────────────────
           ★★★ IT MUST SCROLL. On a phone, and especially in landscape, a list that cannot
