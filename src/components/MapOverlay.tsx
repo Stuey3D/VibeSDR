@@ -75,8 +75,9 @@ interface MapOverlayProps {
   local?:   boolean;
   /** ws://127.0.0.1:<port> of the local shim/sidecar (local mode). */
   wsBaseOverride?: string | null;
-  /** Injected receiver position (Kiwi gps / device GPS / picked city). 0,0 =
-   *  Null Island = location unknown → the map offers a "set location" button. */
+  /** Injected receiver position — the RADIO's own first (VibeServer /location, Kiwi gps), else this
+   *  phone's GPS / a picked city (SDRScreen, receiverPlace.ts). 0,0 = Null Island = location unknown →
+   *  the map offers a "set location" button, and only then. */
   rxLat?:   number | null;
   rxLon?:   number | null;
   /** local mode: user tapped "set location" (no GPS) → open the RN city picker. */
@@ -449,6 +450,7 @@ var RX_LAT=${rxLat || 0}, RX_LON=${rxLon || 0};
 function gridLL(g){
   if(!g)return null; g=String(g).trim().toUpperCase();
   if(!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g))return null;
+  if(g==='RR73')return null; // FT8's sign-off, not a square near the Pole (grid.ts gridToLatLon, same rule)
   var lon=(g.charCodeAt(0)-65)*20-180, lat=(g.charCodeAt(1)-65)*10-90;
   lon+=(g.charCodeAt(2)-48)*2; lat+=(g.charCodeAt(3)-48);
   if(g.length===6){lon+=(g.charCodeAt(4)-65)*(2/24)+(1/24);lat+=(g.charCodeAt(5)-65)*(1/24)+(0.5/24);}
