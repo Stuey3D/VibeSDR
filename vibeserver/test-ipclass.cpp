@@ -105,6 +105,16 @@ int main() {
         }
     }
 
+    std::printf("\nWhich IPv4 addresses are the local network (RAW IQ OUT's Local only, the RTL-TCP door)\n");
+    ok(vibeip::isPrivateV4("10.1.2.3") && vibeip::isPrivateV4("172.16.0.1") && vibeip::isPrivateV4("172.31.255.254") && vibeip::isPrivateV4("192.168.1.20"),
+       "10/8, 172.16/12, 192.168/16");
+    ok(vibeip::isPrivateV4("169.254.12.34") && vibeip::isPrivateV4("169.254.0.1") && vibeip::isPrivateV4("::ffff:169.254.7.7"),
+       "★★ beta94 169.254/16 link-local is local (a laptop cabled straight to the box, no DHCP)");
+    ok(!vibeip::isPrivateV4("8.8.8.8") && !vibeip::isPrivateV4("::ffff:8.8.8.8"), "★ 8.8.8.8 is still refused");
+    ok(!vibeip::isPrivateV4("169.253.1.1") && !vibeip::isPrivateV4("169.255.1.1") && !vibeip::isPrivateV4("172.15.0.1") && !vibeip::isPrivateV4("172.32.0.1")
+       && !vibeip::isPrivateV4("11.0.0.1") && !vibeip::isPrivateV4("192.169.0.1"), "the neighbours of each range are not");
+    ok(!vibeip::isPrivateV4("10.foo") && !vibeip::isPrivateV4("") && !vibeip::isPrivateV4("fe80::1"), "rubbish and IPv6 are not (IPv6 has its own rule)");
+
     std::printf("\nWhich IPv6 addresses are the local network\n");
     using namespace vibeip;
     ok(isLinkLocalOrUla("fe80::1") && isLinkLocalOrUla("febf:ffff::1"), "fe80::/10 is link-local");

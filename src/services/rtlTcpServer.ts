@@ -2,8 +2,8 @@ import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Thin JS wrapper over the Android RTL-TCP SERVER native methods (VibeLocalSDR).
-// The server shares this device's USB RTL-SDR over the LAN so another VibeSDR /
-// SDR# can use it. Android-only (iOS has no USB host SDR).
+// The server shares this device's USB radio — any radio the server drives — over the LAN as rtl_tcp,
+// for SDR# / SDR++ / SDR Console or another VibeSDR. Local network only. Android-only.
 
 const Local: any = (NativeModules as any).VibeLocalSDR;
 
@@ -15,30 +15,21 @@ export type ServerStatus = {
   running: boolean;
   client: boolean;
   clientAddr: string;
-  sampleRate: number;
-  overrideRate: number;   // 0 = client-controlled
-  droppedBytes: number;   // IQ dropped since the current client connected
+  sampleRate: number;     // the radio's capture rate
+  clientRate?: number;    // what the client asked for (the stream is resampled to it when the radio cannot run it)
+  freq?: number;          // the client's centre frequency
+  drops?: number;         // IQ blocks dropped behind a slow client
   port: number;           // bound port (0 when not running)
   ip: string;             // this device's LAN address ('' when not running)
+  iqBytes?: number;       // IQ bytes sent to the client
+  usbEnded?: boolean;     // the radio stopped answering under a running server
+  agc?: boolean;          // automatic gain in force (the client asked for it, and the radio has an AGC)
+  agcName?: string;       // 'VibeAGC', 'AGC' (the radio's own), '' (none — a HackRF)
+  gainTenthDb?: number;   // the gain now, tenths of a dB (-1 unknown)
+  driver?: string;        // rtl, sdrplay, airspyhf, airspy, hackrf, usrp
+  refused?: number;       // clients turned away (not on the local network, one at a time, …)
+  lastRefusal?: string;
 };
-
-// Human-readable byte count for the drop counter.
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-// Bandwidth override options. value 0 = client-controlled (default).
-export const BANDWIDTH_OPTIONS: { label: string; value: number }[] = [
-  { label: 'Client-controlled', value: 0 },
-  { label: '3.2 MHz',           value: 3_200_000 },
-  { label: '2.4 MHz',           value: 2_400_000 },
-  { label: '2.048 MHz',         value: 2_048_000 },
-  { label: '1.024 MHz',         value: 1_024_000 },
-  { label: '0.25 MHz',          value: 250_000 },
-];
 
 /** ★ Exported so the server screen can read it in its ONE batched read (serverPrefs.ts). */
 export const NAME_KEY = 'vsdr_rtltcp_server_name';
@@ -76,21 +67,16 @@ export async function saveServerName(name: string): Promise<void> {
 }
 
 export async function startRtlTcpServer(opts: {
-  name: string; port?: number; overrideRate?: number;
+  name: string; port?: number;
 }): Promise<ServerInfo> {
   return Local.startRtlTcpServer({
     name: opts.name,
     port: opts.port ?? 1234,
-    overrideRate: opts.overrideRate ?? 0,
   });
 }
 
 export async function stopRtlTcpServer(): Promise<void> {
   try { await Local?.stopRtlTcpServer?.(); } catch {}
-}
-
-export function setServerSampleRate(rate: number): void {
-  try { Local?.setServerSampleRate?.(rate); } catch {}
 }
 
 export async function getServerStatus(): Promise<ServerStatus | null> {

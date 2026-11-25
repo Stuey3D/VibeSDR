@@ -7170,8 +7170,10 @@ static std::atomic<int> g_vsRawIqLanMaxHz{0};
 static bool isPrivateIp(const std::string& ip) {
     if (isLoopback(ip)) return true;
     std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
-    if (v.rfind("10.", 0) == 0 || v.rfind("192.168.", 0) == 0) return true;
-    if (v.rfind("172.", 0) == 0) { const int o = atoi(v.c_str() + 4); if (o >= 16 && o <= 31) return true; }
+    /* ★★ beta94 10/8, 172.16/12, 192.168/16 and 169.254/16 LINK-LOCAL (Stuart 11-25: a laptop cabled straight to the box
+     *  with no DHCP; no router forwards 169.254, so it cannot arrive from the internet) — vibe_ipclass.h isPrivateV4.
+     *  RAW IQ OUT's "Local only" and the RTL-TCP door both read this. */
+    if (vibeip::isPrivateV4(v)) return true;
     /* ★★ IPv6 (2026-10-25, the listener is dual-stack): fc00::/7 ULA and fe80::/10 link-local (the old text test
      *  caught only fd… and fe80…), and a GLOBAL address inside one of this box's own on-link prefixes — IPv6 has no
      *  NAT, so the laptop beside the box has a public address in the box's /64. See vibe_ipclass.h. */
@@ -10252,6 +10254,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  everybody. Stuart, 2026-09-09: "the RSP1B gets the 250K option, the single user
          *  RTL-SDRs get 2.4MHz" — Trunk Recorder needs a whole trunked system in one window. */
         bool full = false;
+        /* ★★★ THE RTL-TCP FRONT DOOR's stream (startRtlTcpDoor): always full rate, LAN only, its own command set, and
+         *  its header is sent by the WRITER with the first IQ frame (hdrPending) — never "connected" with nothing behind
+         *  it. `wantRate` is the client's SET_SAMPLE_RATE, taken by the writer (iqConvert), the one thread that reads
+         *  `rate` for the conversion. */
+        bool door = false;
+        std::atomic<bool> hdrPending{false};
+        std::atomic<int>  wantRate{0};
         int  port = 0;                           // LAN TCP port, 0 when WebSocket-only (public)
         bool pub  = false;                       // through the tunnel: code + token, no port
         std::string code, token, host;
@@ -33496,6 +33505,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!conn || !conn->isOpen()) continue;
             const std::vector<uint8_t>& frame = iqConvert(iq, blk);
             if (frame.empty()) continue;
+            // ★ The door's header rides with the first IQ it has: a client is never told "RTL0" by a radio sending nothing.
+            if (iq->door && iq->hdrPending.exchange(false) && !isWs) rtlDoorHeader(conn);
             int r;
             if (isWs) { sendWs(conn, 0x2, frame.data(), frame.size(), Out::Audio); r = (int)frame.size(); }
             else        r = conn->send(frame.data(), frame.size());
@@ -33732,6 +33743,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int n = (int)blk.v.size();
         const double inRate = blk.rate;
         iq->out.clear();
+        if (const int w = iq->wantRate.exchange(0); w > 0) iq->rate = w;   // ★ the door's SET_SAMPLE_RATE (startRtlTcpDoor)
         if (n <= 0 || inRate <= 0.0) return iq->out;
         const cf32* in = blk.v.data();
         // ★ Full rate: rotate the capture down by the hardware offset (on the tap's copy — the pipeline
@@ -33786,7 +33798,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     void iqStopDirect() {
         std::shared_ptr<IqOut> iq;
-        { std::lock_guard<std::mutex> lk(iqDirectMtx); iq = iqDirect; iqDirect.reset(); iqDirectSock.reset(); }
+        { std::lock_guard<std::mutex> lk(iqDirectMtx);
+          if (iqDirect && iqDirect->door) return;   // ★ the RTL-TCP door is stopped by rtlDoorStop only
+          iq = iqDirect; iqDirect.reset(); iqDirectSock.reset(); }
         if (!iq) return;
         // ★★★ V12: the tap goes; the listener's channel was never widened, so there is nothing to give back (this used to
         //     be setIqMinRate(0) — which also dropped a DRM listener's 24 kHz floor when their IQ stream ended).
@@ -33871,6 +33885,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Direct mode (one listener, no per-client channel): the tap is on the pipeline itself.
         const bool direct = !c && !perClientDsp();
         if (!c && !direct) return refuse("no channel for this session yet");
+        if (rtlDoorOn()) return refuse("this radio is serving RTL-TCP — its raw IQ is already going to an rtl_tcp client");
         const int mode = g_vsRawIqMode.load(std::memory_order_relaxed);
         if (mode == 0) return refuse("the owner has raw IQ out switched off on this receiver");
         const std::string peer = sock->peerAddress();
@@ -33967,6 +33982,275 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!iq->code.empty()) j += ",\"code\":\"" + iq->code + "\"";
         return j + "}";
     }
+    // ── ★★★ THE RTL-TCP FRONT DOOR (LocalSdrShim::startRtlTcpDoor) ──────────────────────────────────────────────────
+    // Sloper, 2026-11-25: the Android app's RTL-TCP server sent "RTL0" and then nothing for an Airspy or an RSP — it
+    // opened every radio through librtlsdr, which "opens" anything and streams only from an RTL2832U. Stuart's ruling:
+    // "rtl-tcp is all based on our raw iq with vibe agc and all of our quality of life fixes. It is local network only,
+    // no vibe iq over the internet." So the door is RAW IQ OUT's FULL-RATE stream (iqTapFull: the capture cleaned of DC
+    // and image, auto-PPM's clock correction, the gain-step smoother, the offset rotation that keeps DC off the centre)
+    // through RAW IQ OUT's writer and 8-bit converter, resampled to whatever rate the client asks for — for EVERY radio
+    // this engine drives — with the rtl_tcp commands mapped onto the engine's own controls.
+    //   • LAN ONLY: isPrivateIp, the same test as RAW IQ OUT's "Local only"; anything else is refused at accept, logged.
+    //     No tunnel route reaches it (cloudflared carries the HTTP port only) and nothing lists it.
+    //   • ONE CLIENT at a time, like rtl_tcp. The header (R820T, its 29 gains — what every client builds its gain slider
+    //     from) goes out with the FIRST IQ frame (IqOut::hdrPending), never before.
+    //   • While a client is connected the radio is in use (nobodyWatchingLocked) — no idle park, no background decoding.
+    //   • The demodulator does not run (spectrum only): the FFT stays, because VibeAGC reads the floor it measures.
+    std::shared_ptr<IqOut> rtlDoor_;
+    std::mutex rtlDoorMtx_;                       // rtlDoor_, rtlDoorPeer_, rtlDoorLastRefusal_
+    std::atomic<bool> rtlDoorClient_{false};
+    std::string rtlDoorPeer_, rtlDoorLastRefusal_;
+    std::atomic<long long> rtlDoorRefused_{0};
+    std::atomic<int> rtlDoorGainMode_{0};         // rtl_tcp 0x03: 0 = automatic, 1 = manual
+    std::atomic<int> rtlDoorChipAgc_{0};          // rtl_tcp 0x08: "RTL AGC" — automatic too, here
+    std::atomic<int> rtlDoorManual_{-1};          // the client's last manual gain, tenths of a dB on the R820T scale
+    std::atomic<double> rtlDoorFreq_{0.0};
+    std::atomic<int> rtlDoorClientRate_{0};
+
+    bool rtlDoorOn() { std::lock_guard<std::mutex> lk(rtlDoorMtx_); return (bool)rtlDoor_; }
+
+    /** The R820T's gain table in tenths — the header promises 29 gains, and 0x0d indexes this. */
+    static const int* rtlDoorGains() {
+        static const int g[29] = { 0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254,
+                                   280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496 };
+        return g;
+    }
+    static void rtlDoorHeader(const std::shared_ptr<net::Socket>& s) {
+        const uint8_t hdr[12] = { 'R','T','L','0', 0,0,0,5, 0,0,0,29 };   // R820T, 29 gains
+        s->send(hdr, sizeof hdr);
+    }
+    const char* rtlDoorDriver() const {
+        if (useSdrplay()) return "sdrplay";
+        if (useAirspyHf()) return "airspyhf";
+        if (useAirspy()) return "airspy";
+        if (useHackRf()) return "hackrf";
+        if (useUsrp()) return "usrp";
+        if (useSpy()) return "spyserver";
+        return "rtl";
+    }
+    /** The automatic gain this radio has: VibeAGC (RTL, the RSP with VibeAGC on), the radio's own (Airspy R2 / Mini,
+     *  HF+, USRP), or none (HackRF — it has no AGC of any kind). */
+    std::string rtlDoorAgcName() const {
+        if (useHackRf()) return "";
+        if (useSdrplay()) return g_vibeAgcRspOn.load(std::memory_order_relaxed) ? "VibeAGC" : "AGC";
+        if (useAirspyHf() || useAirspy() || useUsrp()) return "AGC";
+        return "VibeAGC";
+    }
+    bool rtlDoorAuto() const {
+        return !rtlDoorAgcName().empty() && (rtlDoorGainMode_.load() == 0 || rtlDoorChipAgc_.load() != 0);
+    }
+    /** ★ The client's gain wish, applied the way this radio takes gain. AUTO (0x03 = 0, or 0x08 on) runs VibeAGC where
+     *  the radio has it; a manual gain (0x04 / 0x0d, on the R820T's 0–49.6 dB scale) stops it and HOLDS. */
+    void rtlDoorApplyGain() {
+        auto& S = LocalSdrShim::instance();
+        const bool autoG = rtlDoorAuto();
+        const int man = rtlDoorManual_.load();
+        if (useAirspyHf()) {
+            S.setAhfAgc(autoG);
+            if (!autoG && man >= 0) {
+                // 0–49.6 dB onto the attenuator (0–48 dB in 6 dB steps) and the preamp: the top of the scale is preamp
+                // on, nothing attenuated; the bottom is every step in.
+                S.setAhfAttenuation(std::max(0, std::min(8, (int)std::lround((496 - man) / 62.0))));
+                S.setAhfLna(man >= 300);
+            }
+            LOGI("RTL-TCP: HF+ gain %s", autoG ? "AGC" : (std::to_string(man / 10.0) + " dB").c_str());
+            return;
+        }
+        if (useHackRf()) {
+            if (man < 0) return;                       // no AGC on a HackRF: nothing to do until a gain is given
+            const double total = man / 496.0 * 102.0;  // LNA 0–40 (8 dB steps) + VGA 0–62 (2 dB steps)
+            const int lna = std::min(40, (int)(total * 40.0 / 102.0 / 8.0) * 8);
+            const int vga = std::max(0, std::min(62, (int)std::lround((total - lna) / 2.0) * 2));
+            S.setHackRfLna(lna); S.setHackRfVga(vga);
+            LOGI("RTL-TCP: HackRF gain LNA %d + VGA %d dB", lna, vga);
+            return;
+        }
+        if (autoG) { S.setGain(-1); LOGI("RTL-TCP: gain AUTO — %s", rtlDoorAgcName().c_str()); return; }
+        int want = man;
+        if (want < 0) { want = S.currentGainTenthDb(); if (want < 0) return; }   // manual, no figure yet: hold where it is
+        else if (useAirspy()) want = (int)std::lround(want / 496.0 * 21.0) * 10;   // the 22 preset positions, ×10
+        S.setGain(want);
+        if (man < 0) LOGI("RTL-TCP: manual gain — held at %.1f dB until the client gives one", want / 10.0);
+        else         LOGI("RTL-TCP: manual gain %.1f dB (asked %.1f)", want / 10.0, man / 10.0);
+    }
+    /** SET_FREQUENCY: the CENTRE of the client's window, exactly — as RAW IQ OUT's full-rate consumer does
+     *  (requestConsumerCentre: the hardware sits at its offset and the writer rotates it back). */
+    void rtlDoorTune(double hz) {
+        if (hz <= 0) return;
+        audioFreq.store(hz);
+        requestConsumerCentre(hz);
+        rtlDoorFreq_.store(hz);
+    }
+    /** SET_SAMPLE_RATE: the radio's own rate where it has it (an RTL takes any rate in its two bands), otherwise the next
+     *  one up from what this radio offers, resampled to exactly what was asked (IqOutResampler, on the writer). */
+    void rtlDoorRate(uint32_t v) {
+        std::shared_ptr<IqOut> iq;
+        { std::lock_guard<std::mutex> lk(rtlDoorMtx_); iq = rtlDoor_; }
+        if (!iq || v < 8000 || v > 100000000u) return;
+        rtlDoorClientRate_.store((int)v);
+        double hw = 0.0;
+        /* ★ An RTL takes any rate in its two bands. TESTS ONLY: an rtl_tcp source given VIBE_TEST_TCP_RATES (a wider radio's
+         *  list, as test-server-avdata uses it) is treated as a radio with a fixed list, so the next-rate-up + resample path
+         *  is exercised end to end without an RSP on the bench (scripts/test-server-rtltcp.mjs). */
+        static const bool testList = [] { const char* e = std::getenv("VIBE_TEST_TCP_RATES"); return e && *e; }();
+        const bool rtl = !useSdrplay() && !useAirspyHf() && !useAirspy() && !useHackRf() && !useUsrp() && !useSpy()
+                      && !(useTcp() && testList);
+        const double hwMax = maxAdvertisedRateHz();
+        /* ★ Not 225–300 kS/s, though the chip lists it: the resampler register is 28 bits and the ratio for those rates
+         *  does not fit (rtlActualRate: 250 000 asked is 562 500 delivered). They are served from the lowest rate on the
+         *  menu, resampled — exact, and cheap at that size. */
+        if (rtl && v > 900000 && (hwMax <= 0 || v <= hwMax)) hw = v;
+        else {
+            std::vector<double> rates;
+            const std::string csv = supportedRatesImpl();
+            for (size_t i = 0; i < csv.size(); ) {
+                size_t j = csv.find(',', i); if (j == std::string::npos) j = csv.size();
+                const double r = std::atof(csv.substr(i, j - i).c_str()); if (r > 0) rates.push_back(r);
+                i = j + 1;
+            }
+            std::sort(rates.begin(), rates.end());
+            for (double r : rates) if (r >= v) { hw = r; break; }
+            if (hw <= 0 && !rates.empty()) hw = rates.back();
+        }
+        if (hw > 0 && !useAirspyHf() && std::fabs(hw - sampleRate) >= 1.0) LocalSdrShim::instance().setSampleRate(hw);
+        // ★ Within 0.01 % of the ask = the radio's own rate, passed straight through (a real rtl_tcp delivers the
+        //   dongle's actual rate too); otherwise resampled to exactly v.
+        const double cap = sampleRate;
+        const int out = std::fabs(cap - (double)v) < 1e-4 * (double)v ? (int)std::lround(cap) : (int)v;
+        iq->wantRate.store(out);
+        LOGI("RTL-TCP: rate %u asked — radio at %.0f, stream %d%s", v, cap, out, out == (int)std::lround(cap) ? " (passed through)" : " (resampled)");
+    }
+    void rtlDoorRefuse(const std::shared_ptr<net::Socket>& conn, const std::string& peer, const std::string& why) {
+        LOGI("RTL-TCP: refused %s — %s", peer.c_str(), why.c_str());
+        rtlDoorRefused_.fetch_add(1);
+        { std::lock_guard<std::mutex> lk(rtlDoorMtx_); rtlDoorLastRefusal_ = peer + ": " + why; }
+        conn->close();
+    }
+    /** The 5-byte [code][BE u32] commands. Not recv(forceLen) — that waits for ever on a quiet client, and the radio
+     *  going away must end the session even while the client says nothing. */
+    void rtlDoorReadCommands(const std::shared_ptr<IqOut>& iq, const std::shared_ptr<net::Socket>& conn) {
+        uint8_t cmd[5]; int have = 0;
+        while (iq->run.load() && conn->isOpen()) {
+            if (deviceLost.load()) { LOGI("RTL-TCP: the radio stopped answering — the client is let go"); break; }
+            const int r = conn->recv(cmd + have, 5 - have, false, 500);
+            if (r < 0) break;
+            if (r == 0) { if (!conn->isOpen()) break; continue; }
+            have += r;
+            if (have < 5) continue;
+            have = 0;
+            const uint32_t v = (uint32_t(cmd[1]) << 24) | (uint32_t(cmd[2]) << 16) | (uint32_t(cmd[3]) << 8) | cmd[4];
+            auto& S = LocalSdrShim::instance();
+            switch (cmd[0]) {
+                case 0x01: rtlDoorTune((double)v); break;                                   // SET_FREQUENCY
+                case 0x02: rtlDoorRate(v); break;                                           // SET_SAMPLE_RATE
+                case 0x03: rtlDoorGainMode_.store(v ? 1 : 0); rtlDoorApplyGain(); break;    // SET_GAIN_MODE (0 auto)
+                case 0x04: rtlDoorManual_.store(std::max(0, std::min(496, (int)(int32_t)v)));   // SET_GAIN (tenths)
+                           if (!rtlDoorAuto()) rtlDoorApplyGain(); break;
+                case 0x05: S.setPpm((int)(int32_t)v); break;                                // SET_FREQ_CORRECTION
+                case 0x06: break;                                                           // IF gain (E4000): none here
+                case 0x07: break;                                                           // test mode: never
+                case 0x08: rtlDoorChipAgc_.store(v ? 1 : 0); rtlDoorApplyGain(); break;     // SET_AGC_MODE → VibeAGC
+                case 0x09: if (!strcmp(rtlDoorDriver(), "rtl")) S.setDirectSampling((int)v); break;   // DIRECT_SAMPLING
+                case 0x0a: break;                                  // offset tuning: the engine already keeps DC off-centre
+                case 0x0d: if (v < 29) { rtlDoorManual_.store(rtlDoorGains()[v]); if (!rtlDoorAuto()) rtlDoorApplyGain(); }
+                           break;                                                           // SET_GAIN_BY_INDEX
+                case 0x0e: S.setBiasTee(v != 0); break;                                     // SET_BIAS_TEE
+                default:   LOGI("RTL-TCP: command 0x%02x (%u) not used here", cmd[0], v); break;
+            }
+        }
+    }
+    void rtlDoorAcceptLoop(std::shared_ptr<IqOut> iq) {
+        vibeNetThread("vibe-rtltcp");
+        static const char* testPeer = std::getenv("VIBE_TEST_RTLTCP_PEER");   // ★ TESTS ONLY: pretend the client is here
+        /* ★ The session runs on its OWN thread, so this one keeps accepting — and so can turn a second client away at
+         *  once. (It was one thread: the second sat in the listen backlog, "connected" as far as its app could tell, and
+         *  was served the moment the first left.) One session at a time; joined before the next and at the end. */
+        std::thread session;
+        while (iq->run.load()) {
+            auto conn = iq->lis->accept(nullptr, 1000);
+            if (!conn) continue;
+            std::string peer = conn->peerAddress();
+            if (testPeer && *testPeer) peer = testPeer;
+            if (!isPrivateIp(peer)) { rtlDoorRefuse(conn, peer, "not on the local network (RTL-TCP is local network only)"); continue; }
+            if (deviceLost.load()) { rtlDoorRefuse(conn, peer, "the radio is not answering"); continue; }
+            if (!iq->claim(conn, false)) { rtlDoorRefuse(conn, peer, "another client is connected (one at a time)"); continue; }
+            if (session.joinable()) session.join();   // ★ the last one has released the slot, so it is finishing
+            if (!conn->setSendBufferSize(1 << 20)) LOGI("RTL-TCP: SO_SNDBUF not honoured (kernel default kept)");
+            { std::lock_guard<std::mutex> lk(rtlDoorMtx_); rtlDoorPeer_ = peer; }
+            rtlDoorClient_.store(true);
+            resumeCaptureIdle();                 // ★ a parked radio is taken back for them
+            iq->hdrPending.store(true);          // ★ the header goes with the first IQ frame (iqWriteLoop)
+            LOGI("RTL-TCP: client %s connected", peer.c_str());
+            session = std::thread([this, iq, conn, peer] {
+                vibeNetThread("vibe-rtltcp-c");
+                rtlDoorReadCommands(iq, conn);
+                rtlDoorClient_.store(false);
+                { std::lock_guard<std::mutex> lk(rtlDoorMtx_); rtlDoorPeer_.clear(); }
+                iq->release(conn.get());
+                conn->close();
+                LOGI("RTL-TCP: client %s left (%lld bytes sent so far)", peer.c_str(), (long long)iq->bytesSent.load());
+            });
+        }
+        if (session.joinable()) session.join();
+    }
+    std::string rtlDoorStart(int port) {
+        if (useIcom()) return "an Icom sends no IQ — share it with VibeServer";
+        if (!anySource()) return "no radio is open";
+        if (port <= 0 || port > 65535) return "no port";
+        std::lock_guard<std::mutex> lk(rtlDoorMtx_);
+        if (rtlDoor_) return rtlDoor_->port == port ? "" : "already serving RTL-TCP on port " + std::to_string(rtlDoor_->port);
+        auto iq = std::make_shared<IqOut>();
+        iq->door = true; iq->full = true; iq->rate = (int)std::lround(sampleRate);
+        try { iq->lis = net::listen("0.0.0.0", port); iq->port = port; }
+        catch (const std::exception& e) { return std::string("port ") + std::to_string(port) + " is not free (" + e.what() + ")"; }
+        if (!iq->lis) return "port " + std::to_string(port) + " is not free";
+        iqStopDirect();                          // ★ a web listener's own raw IQ stream, if one was on
+        g_vsRawIqActive.fetch_add(1);            // ★ iqTearDown gives it back
+        { std::lock_guard<std::mutex> dl(iqDirectMtx); iqDirect = iq; iqDirectSock.reset(); }
+        rtlDoor_ = iq;
+        rtlDoorGainMode_.store(0); rtlDoorChipAgc_.store(0); rtlDoorManual_.store(-1);
+        rtlDoorClientRate_.store(iq->rate); rtlDoorFreq_.store(audioFreq.load());
+        { std::lock_guard<std::recursive_mutex> ml(modeMtx); if (!perClientDsp()) rx.setSpectrumOnly(true); }
+        iq->writeTh  = std::thread([this, iq]{ iqWriteLoop(iq); });
+        iq->acceptTh = std::thread([this, iq]{ rtlDoorAcceptLoop(iq); });
+        requestConsumerCentre(audioFreq.load());
+        LOGI("RTL-TCP: serving %s on 0.0.0.0:%d (local network only) at %d S/s", rtlDoorDriver(), port, iq->rate);
+        return "";
+    }
+    void rtlDoorStop() {
+        std::shared_ptr<IqOut> iq;
+        { std::lock_guard<std::mutex> lk(rtlDoorMtx_); iq = rtlDoor_; rtlDoor_.reset(); }
+        if (!iq) return;
+        { std::lock_guard<std::mutex> dl(iqDirectMtx); if (iqDirect == iq) { iqDirect.reset(); iqDirectSock.reset(); } }
+        iqTearDown(iq);
+        rtlDoorClient_.store(false);
+        { std::lock_guard<std::recursive_mutex> ml(modeMtx); if (!perClientDsp()) rx.setSpectrumOnly(false); }
+        LOGI("RTL-TCP: stopped");
+    }
+    std::string rtlDoorStatusJson() {
+        std::shared_ptr<IqOut> iq; std::string peer, refusal;
+        { std::lock_guard<std::mutex> lk(rtlDoorMtx_); iq = rtlDoor_; peer = rtlDoorPeer_; refusal = rtlDoorLastRefusal_; }
+        const bool client = iq && rtlDoorClient_.load();
+        const bool autoG = rtlDoorAuto();
+        std::string j = "{\"running\":" + std::string(iq ? "true" : "false");
+        j += ",\"port\":" + std::to_string(iq ? iq->port : 0);
+        j += ",\"client\":" + std::string(client ? "true" : "false");
+        j += ",\"clientAddr\":\"" + jsonEscape(client ? peer : std::string()) + "\"";
+        j += ",\"sampleRate\":" + std::to_string((long long)std::llround(sampleRate));
+        j += ",\"clientRate\":" + std::to_string(rtlDoorClientRate_.load());
+        j += ",\"freq\":" + std::to_string((long long)std::llround(rtlDoorFreq_.load()));
+        j += ",\"iqBytes\":" + std::to_string(iq ? (long long)iq->bytesSent.load() : 0LL);
+        j += ",\"drops\":" + std::to_string(iq ? (long long)iq->drops.load() : 0LL);
+        j += ",\"usbEnded\":" + std::string(deviceLost.load() ? "true" : "false");
+        j += ",\"agc\":" + std::string(autoG ? "true" : "false");
+        j += ",\"agcName\":\"" + rtlDoorAgcName() + "\"";
+        j += ",\"gainTenthDb\":" + std::to_string(LocalSdrShim::instance().currentGainTenthDb());
+        j += ",\"driver\":\"" + std::string(rtlDoorDriver()) + "\"";
+        j += ",\"refused\":" + std::to_string(rtlDoorRefused_.load());
+        j += ",\"lastRefusal\":\"" + jsonEscape(refusal) + "\"";
+        return j + "}";
+    }
+
     /** /ws/iq?tok=… — the tunnel form: the same rtl_tcp bytes as binary frames; commands come back
      *  as 5-byte binary frames or `iqtune` text frames from the VibeIQ bridge. */
     void acceptIqWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, const std::string& tok) {
@@ -37407,6 +37691,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★★ …or a HELD session (V12): a listener the phone has suspended is still here for sessionHoldS() — so the
         //     whole-radio mode is not left, the radio is not parked, and background decoding does not take it.
         if (!heldSessions_.empty()) return false;
+        // ★★★ …or an RTL-TCP client (startRtlTcpDoor): taking IQ is using the radio — no park, no background decoding.
+        if (rtlDoorClient_.load(std::memory_order_relaxed)) return false;
         return true;
     }
 
@@ -46194,6 +46480,11 @@ static std::string vsTunableJson() {
         //   themselves get it as a "FULL" entry in the rate picker.
         j += ",\"rawIqFull\":" + std::to_string(LocalSdrShim::instance().rawIqFullRate());
     }
+    {   // ★ THE RTL-TCP DOOR, when it serves: its state for the owner's screens and the tests (rtlTcpDoorStatus).
+        //   Absent otherwise. The address of a client is only ever on the LAN (the door refuses anything else).
+        const std::string d = LocalSdrShim::instance().rtlTcpDoorStatus();
+        if (d.find("\"running\":true") != std::string::npos) j += ",\"rtltcp\":" + d;
+    }
     /* ★★★ WHAT THIS RECEIVER OFFERS, BY NAME — so a directory can badge and filter on it. The
      *  owner's "Modes and decoders" switches (blockedModes) were enforced here and published
      *  nowhere: a visitor searching for a WEFAX-capable receiver in Europe had no way to ask
@@ -48120,6 +48411,7 @@ void LocalSdrShim::stopLocked() {
      *     running) 1.3 s after that — status=6/ABRT on every settings save. The flag was set
      *     AFTER the clients were stopped, which is exactly too late. */
     impl->stopping.store(true);
+    impl->rtlDoorStop();   // ★ the RTL-TCP door first: its threads read this engine (startRtlTcpDoor)
     // ★★★ V12: the DX scanner stops (the radio is the teardown's now) and its log is written — before the DAB wait below.
     impl->dxShutdown();
     // ★ V12: a DAB band scan sees `stopping` within 100 ms and leaves the radio alone — wait for it (bounded).
@@ -52558,6 +52850,19 @@ LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
     return s;
 }
 
+std::string LocalSdrShim::startRtlTcpDoor(int port) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (!p) return "no radio is open";
+    return p->rtlDoorStart(port);
+}
+void LocalSdrShim::stopRtlTcpDoor() {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) p->rtlDoorStop();
+}
+std::string LocalSdrShim::rtlTcpDoorStatus() {
+    if (!p) return "{\"running\":false}";
+    return p->rtlDoorStatusJson();
+}
 LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
     VibeServerStatus s;
     s.compressed = g_vsCompressAudio.load();

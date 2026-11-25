@@ -1430,6 +1430,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
+        /* ★★★ EVERY RADIO THE SERVER DRIVES (Sloper, 2026-11-25). This once handed any radio to a librtlsdr-only server,
+         *     which "opened" an Airspy or an RSP and sent a header and then nothing ("connected", no waterfall). RTL-TCP
+         *     is now the engine's front door (VibeServerOps.rtlStart → LocalSdrShim::startRtlTcpDoor): the radio opened
+         *     with its own driver, served as rtl_tcp — so every radio is served, and an Icom (no IQ) is refused there. */
         val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
             ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
@@ -1458,8 +1462,6 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         ask("rtl.stop", JSONObject(), promise, serial = true) { null }
     }
 
-    @ReactMethod
-    fun setServerSampleRate(rate: Double) { tell("rtlRate", JSONObject().put("rate", rate)) }
 
     @ReactMethod
     fun getServerStatus(promise: Promise) {
@@ -1472,6 +1474,19 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putDouble("overrideRate", o.optLong("overrideRate", 0).toDouble())
             m.putDouble("droppedBytes", o.optLong("droppedBytes", 0).toDouble())
+            // ★ Is IQ actually flowing? The screen's LINK line reads these (rtl_tcp_server.h Status).
+            m.putDouble("iqBytes", o.optLong("iqBytes", 0).toDouble())
+            m.putBoolean("usbEnded", o.optBoolean("usbEnded", false))
+            // ★ The engine's door (rtlTcpDoorStatus): the client's rate, the gain and whose AGC holds it, refusals.
+            m.putDouble("clientRate", o.optLong("clientRate", 0).toDouble())
+            m.putDouble("freq", o.optLong("freq", 0).toDouble())
+            m.putDouble("drops", o.optLong("drops", 0).toDouble())
+            m.putBoolean("agc", o.optBoolean("agc", false))
+            m.putString("agcName", o.optString("agcName", ""))
+            m.putInt("gainTenthDb", o.optInt("gainTenthDb", -1))
+            m.putString("driver", o.optString("driver", ""))
+            m.putDouble("refused", o.optLong("refused", 0).toDouble())
+            m.putString("lastRefusal", o.optString("lastRefusal", ""))
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", r.optString("ip", ""))
             m.putDouble("cpu", r.optDouble("cpu", 0.0))

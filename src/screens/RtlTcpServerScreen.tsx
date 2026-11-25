@@ -10,8 +10,8 @@ import { themeFor, Colors } from '../constants/theme';
 import { useGlassTheme } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import {
-  startRtlTcpServer, stopRtlTcpServer, setServerSampleRate, getServerStatus,
-  getServerName, saveServerName, formatBytes, BANDWIDTH_OPTIONS,
+  startRtlTcpServer, stopRtlTcpServer, getServerStatus,
+  getServerName, saveServerName,
   getServerPersist, saveServerPersist,
   type ServerInfo, type ServerStatus,
 } from '../services/rtlTcpServer';
@@ -49,13 +49,14 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const [name, setName]       = useState(route.params?.name ?? 'VibeSDR RTL-SDR');
   const [info, setInfo]       = useState<ServerInfo | null>(null);
   const [status, setStatus]   = useState<ServerStatus | null>(null);
-  const [override, setOverride] = useState(0);
   const [starting, setStarting] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);   // drops grew since the last poll
   const [persist, setPersist] = useState(false);     // keep sharing after leaving
   const startedRef = useRef(false);
   const lastDropRef = useRef(0);
+  const lastIqRef = useRef(-1);
+  const [iqStalled, setIqStalled] = useState(false);
   // The unmount cleanup closes over the first render, so it can't read `persist`
   // state. Mirror it into a ref that the cleanup can see.
   const persistRef = useRef(false);
@@ -80,9 +81,8 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
         if (cancelled) return;
         setName(adoptedName);
         setInfo({ ip: existing.ip || '0.0.0.0', port: existing.port, name: adoptedName });
-        setOverride(existing.overrideRate ?? 0);
         setStatus(existing);
-        lastDropRef.current = existing.droppedBytes ?? 0;
+        lastDropRef.current = existing.drops ?? 0;
         setStarting(false);
         adv(adoptedName, existing.port);   // idempotent; IP may have changed
         return;
@@ -105,7 +105,9 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       } catch (e: any) {
         if (cancelled) return;
         setStarting(false);
-        // ★ An Airspy HF+ shares over rtl_tcp too — do not name the one radio this used to support.
+        // ★★ WRONG UNTIL 2026-11-25: this said an Airspy HF+ "shares over rtl_tcp too". It never did — the
+        //    server opened it through librtlsdr, sent the header and then no IQ at all (Sloper). RTL-TCP is
+        //    an RTL-SDR's; the native start now refuses anything else and its message says what to use.
         setError(e?.message ?? 'Could not start the server. Is a radio plugged in via USB OTG?');
       }
     })();
@@ -128,9 +130,13 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     const t = setInterval(async () => {
       const s = await getServerStatus();
       if (!s) return;
-      const dropped = s.droppedBytes ?? 0;
+      const dropped = s.drops ?? 0;
       setDropping(dropped > lastDropRef.current);
       lastDropRef.current = dropped;
+      // ★ IQ FLOWING is its own test — "nothing dropped" alone read "Good" for a client getting nothing.
+      const iq = s.iqBytes;
+      setIqStalled(typeof iq === 'number' && iq === lastIqRef.current);
+      lastIqRef.current = iq ?? -1;
       setStatus(s);
     }, 2000);
     return () => clearInterval(t);
@@ -142,10 +148,6 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     saveServerPersist(on);
   }, []);
 
-  const applyOverride = useCallback((value: number) => {
-    setOverride(value);
-    setServerSampleRate(value);
-  }, []);
 
   const commitName = useCallback(() => {
     const n = name.trim() || 'VibeSDR RTL-SDR';
@@ -163,15 +165,33 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const clientLine = status?.client
     ? (status.clientAddr ? `Connected: ${status.clientAddr}` : 'Client connected')
     : 'Waiting for a client to connect…';
-  const bwActual = status?.sampleRate
-    ? `${(status.sampleRate / 1e6).toFixed(3).replace(/\.?0+$/, '')} MHz`
-    : '—';
+  const mhz = (hz: number) => hz >= 1e6 ? `${(hz / 1e6).toFixed(3).replace(/\.?0+$/, '')} MS/s` : `${(hz / 1e3).toFixed(1).replace(/\.0$/, '')} kS/s`;
+  /* ★ THE CLIENT'S RATE, and the radio's when it differs: the radio runs the next rate it has and the stream is resampled
+   *  to exactly what the client asked for (LocalSdrShim::startRtlTcpDoor). */
+  const rateLine = !status?.sampleRate ? '—'
+    : status.clientRate && Math.abs(status.clientRate - status.sampleRate) > 1
+      ? `${mhz(status.clientRate)} (radio at ${mhz(status.sampleRate)})`
+      : mhz(status.sampleRate);
+  /* ★★★ GAIN, AS THE DECK'S AGC CHIP SAYS IT (Stuart, 2026-11-25): "VibeAGC <dB>" while the client has asked for
+   *  automatic gain on a radio that has VibeAGC, the radio's own "AGC" where it has only that, else the manual figure. */
+  const gainDb = status && (status.gainTenthDb ?? -1) >= 0 ? `${((status.gainTenthDb ?? 0) / 10).toFixed(1)} dB` : '';
+  const gainLine = !status ? '—'
+    : status.agc ? `${status.agcName || 'AGC'}${gainDb ? ` ${gainDb}` : ''}`
+    : status.driver === 'hackrf' && !gainDb ? 'Manual (this radio has no AGC)'
+    : `Manual${gainDb ? ` ${gainDb}` : ''}`;
 
-  const dropped = status?.droppedBytes ?? 0;
-  const linkLine = !status?.client ? '—'
+  const dropped = status?.drops ?? 0;
+  /* ★★★ "Good" ONLY WHEN IQ IS MOVING (Sloper, 2026-11-25). This said Good whenever nothing was dropped, and
+   *     nothing is dropped when nothing is sent: a server whose radio delivered no IQ at all showed
+   *     "Connected … Good" over a client with no waterfall. */
+  const noIq = !!status?.usbEnded || (!!status?.client && iqStalled);
+  const linkLine = status?.usbEnded ? 'The radio stopped sending — press STOP and start again'
+    : !status?.client ? '—'
+    : iqStalled ? 'No IQ from the radio'
     : dropped === 0 ? 'Good'
-    : `${formatBytes(dropped)} dropped`;
-  const linkColor = !status?.client ? C.textDim
+    : `${dropped} block${dropped === 1 ? '' : 's'} dropped`;
+  const linkColor = noIq ? C.bad
+    : !status?.client ? C.textDim
     : dropping ? C.bad
     : dropped > 0 ? C.warn
     : C.green;
@@ -181,9 +201,10 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
         <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>RTL-TCP Server</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          {persist
-            ? "Sharing this phone's RTL-SDR over your network. Sharing continues in the background until you press STOP."
-            : "Sharing this phone's RTL-SDR over your network. Leaving this screen stops the server and frees the dongle for use on this device."}
+          {(persist
+            ? "Sharing this phone's radio with SDR software on your network (SDR#, SDR++, SDR Console). Sharing continues in the background until you press STOP."
+            : "Sharing this phone's radio with SDR software on your network (SDR#, SDR++, SDR Console). Leaving this screen stops the server and frees the radio for use on this device.")
+           + ' Local network only: nothing outside your network can connect, and it is never listed or sent through the internet.'}
         </Text>
 
         {starting && (
@@ -208,10 +229,12 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
                 <Text style={[styles.value, { color: C.value, fontFamily: F }]}>{info.ip}:{info.port}</Text>
               </View>
               <View style={styles.rowBetween}>
-                <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>BANDWIDTH</Text>
-                <Text style={[styles.value, { color: C.value, fontFamily: F }]}>
-                  {bwActual}{override > 0 ? ' (capped)' : ''}
-                </Text>
+                <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>SAMPLE RATE</Text>
+                <Text style={[styles.value, { color: C.value, fontFamily: F }]}>{rateLine}</Text>
+              </View>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>GAIN</Text>
+                <Text style={[styles.value, { color: C.value, fontFamily: F }]}>{gainLine}</Text>
               </View>
               <View style={styles.rowBetween}>
                 <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>STATUS</Text>
@@ -225,8 +248,13 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
               </View>
               {dropping && (
                 <Text style={[styles.hint, { ...meaningText(C.m, C.bad), fontFamily: F, marginTop: 6 }]}>
-                  ⚠ The network can't keep up — try a lower bandwidth setting, or move
+                  ⚠ The network can't keep up — choose a lower sample rate in your SDR program, or move
                   closer to the router.
+                </Text>
+              )}
+              {(status?.refused ?? 0) > 0 && !!status?.lastRefusal && (
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  {`Turned away: ${status.lastRefusal}`}
                 </Text>
               )}
             </View>
@@ -264,29 +292,11 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                 {persist
-                  ? 'Sharing continues when you leave this screen. The dongle stays busy, so this device can’t receive on it. Use STOP to end sharing.'
-                  : 'Sharing stops when you leave this screen, freeing the dongle for use on this device.'}
+                  ? 'Sharing continues when you leave this screen. The radio stays busy, so this device can’t receive on it. Use STOP to end sharing.'
+                  : 'Sharing stops when you leave this screen, freeing the radio for use on this device.'}
               </Text>
             </View>
 
-            {/* Bandwidth override */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BANDWIDTH OVERRIDE</Text>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
-              Default lets the client choose. Force a lower rate here if the connection struggles.
-            </Text>
-            {BANDWIDTH_OPTIONS.map(opt => {
-              const active = override === opt.value;
-              return (
-                <TouchableOpacity key={opt.value}
-                  style={[styles.optRow, { borderColor: active ? C.borderBright : C.border }]}
-                  onPress={() => applyOverride(opt.value)}>
-                  <Text style={{ color: active ? C.key : C.keyIdle, fontFamily: F, fontSize: 15 }}>
-                    {opt.label}
-                  </Text>
-                  {active && <Text style={{ color: C.key, fontFamily: F }}>✓</Text>}
-                </TouchableOpacity>
-              );
-            })}
           </>
         )}
 

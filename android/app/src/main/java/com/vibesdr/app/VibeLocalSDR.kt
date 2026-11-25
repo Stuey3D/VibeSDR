@@ -108,18 +108,10 @@ object VibeLocalSDR {
     fun setDecoderFreq(hz: Double) { if (loaded) nativeSetDecoderFreq(hz) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 
-    // ── RTL-TCP server (share this device's dongle over the network) ──────────
-    // overrideRate 0.0 = client-controlled bandwidth; >0 forces that rate.
-    fun startServer(
-        fd: Int, vid: Int, pid: Int,
-        sampleRate: Double, centerFreq: Double, gainTenthDb: Int,
-        port: Int, overrideRate: Double
-    ): Int {
-        ensureLoaded()
-        return nativeStartServer(fd, vid, pid, sampleRate, centerFreq, gainTenthDb, port, overrideRate)
-    }
-    fun stopServer() { if (loaded) nativeStopServer() }
-    fun setServerSampleRate(rate: Double) { if (loaded) nativeSetServerSampleRate(rate) }
+    // ── RTL-TCP server: the engine's front door (LocalSdrShim::startRtlTcpDoor) ──────────
+    // Start the engine on the radio first (VibeServerBoot.applyAndStart), then open the door. "" = listening, else why not.
+    fun startRtlTcpDoor(port: Int): String { ensureLoaded(); return if (loaded) nativeStartRtlTcpDoor(port) else "the native library did not load" }
+    fun stopRtlTcpDoor() { if (loaded) nativeStopRtlTcpDoor() }
     fun getServerStatus(): String { return if (loaded) nativeGetServerStatus() else "{\"running\":false}" }
     fun getVibeServerStatus(): String { return if (loaded) nativeGetVibeServerStatus() else "{\"running\":false}" }
     /** ★ The server benchmark — see VibeBenchmark, which stops the radio first and calls this off the main
@@ -631,13 +623,8 @@ object VibeLocalSDR {
     private external fun nativeFeedDecoderPcm(b64: String, rate: Double)   // ★ exact Kiwi rate (≈12001.1), never rounded
     private external fun nativeSetDecoderFreq(hz: Double)
     private external fun nativeGetTunerGains(): IntArray?
-    private external fun nativeStartServer(
-        fd: Int, vid: Int, pid: Int,
-        sampleRate: Double, centerFreq: Double, gainTenthDb: Int,
-        port: Int, overrideRate: Double
-    ): Int
-    private external fun nativeStopServer()
-    private external fun nativeSetServerSampleRate(rate: Double)
+    private external fun nativeStartRtlTcpDoor(port: Int): String
+    private external fun nativeStopRtlTcpDoor()
     private external fun nativeGetServerStatus(): String
     private external fun nativeGetVibeServerStatus(): String
     private external fun nativeRunBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double,

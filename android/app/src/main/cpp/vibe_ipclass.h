@@ -10,7 +10,8 @@
 //         prefixes — on IPv6 there is no NAT, so the laptop beside the box has a public address in the same /64.
 //         Without this, the person setting up a box over IPv6 would be told "the first password can only be set from
 //         the box's own network" while standing next to it.
-//     ★ IPv4 is NOT changed by any of this: callers keep their own IPv4 rules exactly as they were.
+//     ★ IPv4 is NOT changed by any of this: callers keep their own IPv4 rules exactly as they were. (beta94: the shim's
+//       isPrivateIp reads its IPv4 rule from isPrivateV4 below, which adds 169.254/16 link-local.)
 // ★★ THE BRUTE-FORCE LOCKOUT KEY. One IPv6 subscriber holds a whole /64 (2^64 addresses) and a client can pick a new
 //    one per attempt, so a lockout keyed on the full address would never bite. lockKey() turns a global IPv6
 //    address into its /64; IPv4 (and everything else) keys exactly as before.
@@ -50,6 +51,18 @@ inline bool parse6(const std::string& s, uint8_t out[16]) {
 inline bool isV4Mapped(const uint8_t a[16]) {
     static const uint8_t pre[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
     return std::memcmp(a, pre, 12) == 0;
+}
+
+/** ★★ beta94 (Stuart 11-25) an IPv4 address on the LOCAL network for RAW IQ OUT's "Local only" and the RTL-TCP door
+ *  (the shim's isPrivateIp): 10/8, 172.16/12, 192.168/16 — and 169.254/16 LINK-LOCAL, which no router forwards, so it
+ *  cannot arrive from the internet (a laptop cabled straight to the box with no DHCP gets one). A "::ffff:" prefix is
+ *  read through. Loopback is the caller's own test. Anything else — a public address, rubbish — is not local. */
+inline bool isPrivateV4(const std::string& ip) {
+    const std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
+    in_addr a{};
+    if (::inet_pton(AF_INET, v.c_str(), &a) != 1) return false;
+    const uint32_t h = ntohl(a.s_addr);
+    return (h >> 24) == 10 || (h >> 20) == 0xAC1 || (h >> 16) == 0xC0A8 || (h >> 16) == 0xA9FE;
 }
 
 /** fe80::/10 link-local or fc00::/7 unique-local — the local network by definition. */

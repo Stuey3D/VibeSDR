@@ -1290,6 +1290,20 @@ public:
     };
     VibeServerStatus getVibeServerStatus();
 
+    /* ★★★ THE RTL-TCP FRONT DOOR (Sloper, 2026-11-25; Stuart: "rtl-tcp is all based on our raw iq with vibe agc and all of
+     *  our quality of life fixes. It is local network only"). The radio this engine has open, served as a plain rtl_tcp
+     *  server on `port` — RAW IQ OUT's full-rate tap (the capture cleaned, auto-PPM, the gain-step smoother, the offset
+     *  rotation) and its 8-bit converter, resampled to the rate the client asks for, for EVERY radio the engine drives.
+     *  Commands map onto the engine's own controls: frequency moves the hardware centre, gain AUTO is VibeAGC (or the
+     *  radio's own AGC where VibeAGC does not exist), a manual gain holds. LAN clients only (isPrivateIp — the same rule as
+     *  RAW IQ OUT's "Local only"); one at a time; the 12-byte header goes out only with the first IQ block.
+     *  Returns "" when listening, else why not. Call after the radio has started. */
+    std::string startRtlTcpDoor(int port);
+    void stopRtlTcpDoor();
+    /** JSON: running, port, client, clientAddr, sampleRate (capture), clientRate, freq, iqBytes, drops, usbEnded, agc,
+     *  agcName, gainTenthDb, driver, refused, lastRefusal. */
+    std::string rtlTcpDoorStatus();
+
 private:
     LocalSdrShim() = default;
     void stopLocked();      // teardown; caller must hold g_lifecycle

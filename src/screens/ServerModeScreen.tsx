@@ -256,8 +256,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens
 type Proto = 'vibeserver' | 'rtltcp';
 type PinMode = 'random' | 'custom' | 'off';
 
-// 0 = CLIENT-CONTROLLED: the client picks the span live (the same convention as the
-// RTL-TCP server's overrideRate). Anything else PINS the rate — the client's picker
+// 0 = CLIENT-CONTROLLED: the client picks the span live. Anything else PINS the rate — the client's picker
 // is then hidden and told the server set it, because a rate it can't change is a
 // rate it shouldn't offer.
 // ★★ PER RADIO. These were a dongle's rates offered to whatever was plugged in, so an Airspy
@@ -1080,7 +1079,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   // ★ An Icom serves ONE dial (the radio's), so the locked-centre questions do not exist for it.
   const radioUseEff: 'single' | 'locked' = isIcom ? 'single' : radioUse;
   // ★ RTL-TCP is raw IQ, which an Icom does not give (the rtl_tcp server never opens its CP2102).
+  /* ★★ EVERY OTHER RADIO IS SERVED (Sloper, 2026-11-25). RTL-TCP was briefly offered for an RTL-SDR only, because the
+   *  old server opened everything through librtlsdr and an Airspy or an RSP sent nothing. It is now the engine's front
+   *  door (LocalSdrShim::startRtlTcpDoor) — the radio's own driver, RAW IQ OUT's stream — so it serves them all. */
   const protoEff: Proto = isIcom ? 'vibeserver' : proto;
+  /** ★ RAW IQ OUT is refused on a shared dial — several listeners on one VFO. Simple mode serves one listener, so only
+   *  an Advanced, unlocked receiver with more than one listener is shared. */
+  const rawIqShared = advanced && maxUsers > 1 && radioUseEff !== 'locked';
   const hasHwSetup = !isAhf && !isIcom;
   /** ★ The Icom's five settings (the start config's icom* keys), stored as one value (K.icom). The CI-V address is
    *  held as TEXT while typed, and only a valid one reaches the settings. */
@@ -2472,7 +2477,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
     //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
     //   should be in the GUI on the app screen on the phone").
-    rawIq: (maxUsers > 1 && radioUseEff !== 'locked') ? 0 : live.current.rawIq,
+    rawIq: (advanced && maxUsers > 1 && radioUseEff !== 'locked') ? 0 : live.current.rawIq,
     // ★ One stream on a one-listener radio; the count only means something on a locked window.
     rawIqMax: radioUseEff === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
     rawIqLanMaxHz: radioUseEff !== 'locked' ? live.current.rawIqLanMaxHz : 0,
@@ -3271,7 +3276,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         <ProtoCard C={C} F={F} active={proto === 'rtltcp'}
           onPress={() => { setProto('rtltcp'); void AsyncStorage.setItem(K.proto, 'rtltcp'); }}
           title="RTL-TCP" tag="Compatible"
-          desc="Raw IQ, maximum compatibility. Needs a fast, stable network. No PIN." />
+          desc="Raw IQ for SDR#, SDR++ or SDR Console, with VibeAGC. Local network only. Needs a fast, stable network. No PIN." />
         )}
         </>)}
 
@@ -3782,6 +3787,87 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               your UPLINK, and listening on the same device never touches it.
             </Text>
             )}
+
+            {/* ★★ AUDIO, NOT IQ (Sloper, 2026-11-25: he took this section for raw IQ). One line saying where the IQ is. */}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              This is audio, not IQ. For SDR#, SDR++ or SDR Console, use the RTL-TCP protocol above, or RAW IQ OUT below.
+            </Text>
+
+            {/* ★ Not in Lite: an rtl_tcp stream for external decoders — Lite is a VibeServer only (Stuart, 2026-09-18),
+                and the extra IQ stream is weight a small box should not carry. */}
+            {/* ★ …nor for an Icom, which has no IQ to send. */}
+            {!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq') && (<>
+            {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
+                channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
+                250 kHz on the local network — for a decoder the browser cannot run (DSD, a
+                DMR/P25 decoder, a data mode). Never on a shared dial: an rtl_tcp client's
+                tune would move everybody (Stuart, 2026-09-09).
+                ★★★ IN SIMPLE MODE TOO (Sloper and Stuart, 2026-11-25: neither could find it — it sat inside the
+                Advanced sections, so Simple showed no trace of it, and Sloper took UNCOMPRESSED AUDIO for it).
+                The choice is here in both modes; the local-network ceiling and the locked window's stream count
+                stay Advanced. */}
+            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>RAW IQ OUT</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                {/* ★ On a shared dial the server refuses it, so the choice is held at Off and
+                    the buttons are inert — shown, so the owner sees why, never enable-able. */}
+                {([[0, 'Off'], [1, 'Local only'], [2, 'Local & public']] as const).map(([n, lbl]) => {
+                  const shared = rawIqShared;
+                  const sel = (shared ? 0 : rawIq) === n;
+                  return (
+                  <TouchableOpacity key={n} disabled={shared} onPress={() => setRawIq(n)}
+                    style={[styles.card, { borderColor: sel ? C.keySelBorder : C.border,
+                                           backgroundColor: sel ? C.keySelBg : 'transparent',
+                                           paddingHorizontal: 14, opacity: shared && !sel ? 0.4 : 1 }]}>
+                    <Text style={{ color: sel ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
+                      {lbl}
+                    </Text>
+                  </TouchableOpacity>);
+                })}
+              </View>
+              {advanced && rawIq > 0 && !rawIqShared && radioUseEff !== 'locked' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Local network up to</Text>
+                  {/* ★ The radio's own rates — no choice needs a resampler. */}
+                  {rateOptions.filter(o => o.value > 0).map(o => {
+                    const sel = (rawIqLanMaxHz || rateOptions[rateOptions.length - 1]?.value) === o.value;
+                    return (
+                    <TouchableOpacity key={o.value} onPress={() => setRawIqLanMaxHz(o.value)}
+                      style={[styles.card, { borderColor: sel ? C.keySelBorder : C.border,
+                                             backgroundColor: sel ? C.keySelBg : 'transparent',
+                                             paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
+                      <Text style={{ color: sel ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
+                    </TouchableOpacity>); })}
+                </View>
+              )}
+              {advanced && rawIq > 0 && radioUseEff === 'locked' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Streams at once</Text>
+                  <TextInput
+                    value={rawIqMax > 0 ? String(rawIqMax) : ''}
+                    onChangeText={(t) => setRawIqMax(Math.max(0, Math.min(16, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0)))}
+                    keyboardType="number-pad" placeholder="1" placeholderTextColor={C.placeholderDim}
+                    style={[styles.input, { width: 64, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
+                  <TouchableOpacity onPress={() => setRawIqMax(0)}
+                    style={[styles.card, { borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
+                    <Text style={{ color: C.key, fontFamily: F, fontSize: 12 }}>Default</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                A listener can take the channel they are tuned to as an rtl_tcp stream, for a
+                decoder that does not run in a browser — they switch it on under RAW IQ OUT in the
+                audio menu of the web page or the app. Always 48 kHz through the tunnel, paired
+                by a six-character code in the VibeIQ bridge — that is the rate that stays
+                reliable end to end. On your own network the ceiling is yours: 250 kHz suits any
+                device and any Wi-Fi; the full span is about 40 Mb/s at 2.4 MHz and wants a wired
+                link. The port only opens while somebody has it on, and closes with their session.
+                {rawIqShared
+                  ? '\n\nNOT AVAILABLE IN SHARED VFO MODE: an rtl_tcp client\'s tune would move every listener. Set one listener, or a locked centre, to offer it.'
+                  : ''}
+              </Text>
+            </View>
+            </>)}
 
             {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
                 controls, because that is the only half of this screen it affects. It used to lead
@@ -4913,77 +4999,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </View>
                 </>)}
 
-                {/* ★ Not in Lite: an rtl_tcp stream for external decoders — Lite is a VibeServer only (Stuart, 2026-09-18),
-                    and the extra IQ stream is weight a small box should not carry. */}
-                {/* ★ …nor for an Icom, which has no IQ to send. */}
-                {!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq') && (<>
-                {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
-                    channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
-                    250 kHz on the local network — for a decoder the browser cannot run (DSD, a
-                    DMR/P25 decoder, a data mode). Never on a shared dial: an rtl_tcp client's
-                    tune would move everybody, so it is only shown where the server would not
-                    refuse it (Stuart, 2026-09-09). */}
-                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>RAW IQ OUT</Text>
-                <View style={[styles.card, { borderColor: C.border }]}>
-                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                    {/* ★ On a shared dial the server refuses it, so the choice is held at Off and
-                        the buttons are inert — shown, so the owner sees why, never enable-able. */}
-                    {([[0, 'Off'], [1, 'Local only'], [2, 'Local & public']] as const).map(([n, lbl]) => {
-                      const shared = maxUsers > 1 && radioUseEff !== 'locked';
-                      const sel = (shared ? 0 : rawIq) === n;
-                      return (
-                      <TouchableOpacity key={n} disabled={shared} onPress={() => setRawIq(n)}
-                        style={[styles.card, { borderColor: sel ? C.keySelBorder : C.border,
-                                               backgroundColor: sel ? C.keySelBg : 'transparent',
-                                               paddingHorizontal: 14, opacity: shared && !sel ? 0.4 : 1 }]}>
-                        <Text style={{ color: sel ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
-                          {lbl}
-                        </Text>
-                      </TouchableOpacity>);
-                    })}
-                  </View>
-                  {rawIq > 0 && radioUseEff !== 'locked' && maxUsers <= 1 && (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Local network up to</Text>
-                      {/* ★ The radio's own rates — no choice needs a resampler. */}
-                      {rateOptions.filter(o => o.value > 0).map(o => {
-                        const sel = (rawIqLanMaxHz || rateOptions[rateOptions.length - 1]?.value) === o.value;
-                        return (
-                        <TouchableOpacity key={o.value} onPress={() => setRawIqLanMaxHz(o.value)}
-                          style={[styles.card, { borderColor: sel ? C.keySelBorder : C.border,
-                                                 backgroundColor: sel ? C.keySelBg : 'transparent',
-                                                 paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
-                          <Text style={{ color: sel ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
-                        </TouchableOpacity>); })}
-                    </View>
-                  )}
-                  {rawIq > 0 && radioUseEff === 'locked' && (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Streams at once</Text>
-                      <TextInput
-                        value={rawIqMax > 0 ? String(rawIqMax) : ''}
-                        onChangeText={(t) => setRawIqMax(Math.max(0, Math.min(16, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0)))}
-                        keyboardType="number-pad" placeholder="1" placeholderTextColor={C.placeholderDim}
-                        style={[styles.input, { width: 64, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
-                      <TouchableOpacity onPress={() => setRawIqMax(0)}
-                        style={[styles.card, { borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
-                        <Text style={{ color: C.key, fontFamily: F, fontSize: 12 }}>Default</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                    A listener can take the channel they are tuned to as an rtl_tcp stream, for a
-                    decoder that does not run in a browser. Always 48 kHz through the tunnel, paired
-                    by a six-character code in the VibeIQ bridge — that is the rate that stays
-                    reliable end to end. On your own network the ceiling is yours: 250 kHz suits any
-                    device and any Wi-Fi; the full span is about 40 Mb/s at 2.4 MHz and wants a wired
-                    link. The port only opens while somebody has it on, and closes with their session.
-                    {maxUsers > 1 && radioUseEff !== 'locked'
-                      ? '\n\nNOT AVAILABLE IN SHARED VFO MODE: an rtl_tcp client\'s tune would move every listener. Set one listener, or a locked centre, to offer it.'
-                      : ''}
-                  </Text>
-                </View>
-                </>)}
                 {/* ★★★ HOW MANY — ON EITHER KIND OF RECEIVER, and on an unlocked one this is the
                     control that turns it into an FM-DX receiver. It used to live inside the
                     locked-range block, so an unlocked radio was stuck at one listener and the

@@ -50,7 +50,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
-#include "rtl_tcp_server.h"
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -1080,46 +1079,23 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderFreq(JNIEnv*, jobject, jdouble
     vibe::LocalSdrShim::instance().setDecoderFreq((double)hz);
 }
 
-// ── RTL-TCP SERVER (share this device's USB dongle over the network) ─────────
-extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartServer(
-        JNIEnv* /*env*/, jobject, jint fd, jint vid, jint pid,
-        jdouble sampleRate, jdouble centerFreq, jint gainTenthDb,
-        jint port, jdouble overrideRate) {
-    std::string err;
-    int bound = vibe::RtlTcpServer::instance().start(
-        fd, vid, pid, (uint32_t)sampleRate, (uint32_t)centerFreq, gainTenthDb,
-        port, (uint32_t)overrideRate, err);
-    if (bound < 0) LOGE("startServer failed: %s", err.c_str());
-    return bound;
+// ── RTL-TCP SERVER — the engine's front door (LocalSdrShim::startRtlTcpDoor) ─────────────────────────────────────
+// ★★★ The librtlsdr-only server (rtl_tcp_server.cpp) is retired (Sloper, 2026-11-25): it "opened" an Airspy or an RSP
+//     and sent nothing. The engine now opens the radio with its own driver, and the door serves RAW IQ OUT's stream.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStartRtlTcpDoor(JNIEnv* env, jobject, jint port) {
+    const std::string why = vibe::LocalSdrShim::instance().startRtlTcpDoor((int)port);
+    if (!why.empty()) LOGE("RTL-TCP door did not start: %s", why.c_str());
+    return env->NewStringUTF(why.c_str());
 }
-
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStopServer(JNIEnv*, jobject) {
-    // Detached like nativeStopSpectrum so the JS/bridge caller never blocks on the
-    // teardown (socket closes + thread joins).
-    std::thread([]{ vibe::RtlTcpServer::instance().stop(); }).detach();
+Java_com_vibesdr_app_VibeLocalSDR_nativeStopRtlTcpDoor(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::instance().stopRtlTcpDoor();
 }
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetServerSampleRate(JNIEnv*, jobject, jdouble rate) {
-    vibe::RtlTcpServer::instance().setSampleRateOverride((uint32_t)rate);
-}
-
-// Returns a small JSON status string for the UI + notification.
+// Returns the door's JSON status for the UI + notification (rtlTcpDoorStatus).
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
-    auto s = vibe::RtlTcpServer::instance().getStatus();
-    std::string j = "{";
-    j += "\"running\":"       + std::string(s.running ? "true" : "false");
-    j += ",\"client\":"       + std::string(s.clientConnected ? "true" : "false");
-    j += ",\"clientAddr\":\"" + s.clientAddr + "\"";
-    j += ",\"sampleRate\":"   + std::to_string(s.sampleRate);
-    j += ",\"overrideRate\":" + std::to_string(s.overrideRate);
-    j += ",\"droppedBytes\":" + std::to_string(s.droppedBytes);
-    j += ",\"port\":"         + std::to_string(s.port);
-    j += "}";
-    return env->NewStringUTF(j.c_str());
+    return env->NewStringUTF(vibe::LocalSdrShim::instance().rtlTcpDoorStatus().c_str());
 }
 
 /* ★★★ THE SERVER BENCHMARK ON ANDROID (vibe_benchmark.h). What this box can carry, measured here rather than

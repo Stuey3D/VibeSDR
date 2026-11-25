@@ -231,6 +231,9 @@ void armShutdownWatchdog() {
 
 struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
+    /** ★★★ RTL-TCP SERVER MODE (--rtltcp-port N): the radio also served as a plain rtl_tcp server on N, LAN clients
+     *  only — the same front door the Android app's RTL-TCP protocol uses (LocalSdrShim::startRtlTcpDoor). 0 = off. */
+    int         rtlTcpPort = 0;
     bool        useUsb  = true;          // default: drive the dongle directly
     int         radio   = 0;             // index into the FLAT list (dongles, then RSPs, then HF+)
     std::string radioSerial;             // ★ preferred: identity that does not move
@@ -450,6 +453,7 @@ void usage() {
         "                              cost, so it pays from about three listeners up.\n"
         "                    Both give the same detail at high zoom.\n"
         "  --no-web          do not serve the browser client at GET /\n"
+        "  --rtltcp-port N   also serve the radio as an rtl_tcp server on port N (local network only)\n"
         "  --icom PORT          an Icom transceiver, RECEIVE ONLY: usb | usb:<bus>-<ports> | /dev/… (with --icom-tty-ok)\n"
         "  --icom-baud N        the radio's CI-V USB Baud Rate (default 115200)\n"
         "  --icom-civ HEX       CI-V address (default: the model's own, 94 on an IC-7300)\n"
@@ -613,6 +617,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--rf-notch")   o.rfNotch  = true;
         else if (a == "--dab-notch")  o.dabNotch = true;
         else if (a == "--no-web")    o.web      = false;
+        else if (a == "--rtltcp-port") o.rtlTcpPort = std::atoi(need(i));
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--agc-lock")       o.agcLock         = 1;   // ★ the owner's AGC lock, from the command line (tests)
         else if (a == "--trusted-proxies") o.trustedProxies = need(i);
@@ -5190,6 +5195,13 @@ int main(int argc, char** argv) {
         if (!o.useUsb && err.find("port") == std::string::npos)
             std::fprintf(stderr, "Is there an rtl_tcp listening on %s:%d?\n", o.tcpHost.c_str(), o.tcpPort);
         return 1;
+    }
+    /* ★★★ THE RTL-TCP FRONT DOOR, once the radio is open (see LocalSdrShim::startRtlTcpDoor). A door that cannot open is
+     *  a refusal to start, said plainly — never a server that looks up with nothing behind it. */
+    if (o.rtlTcpPort > 0) {
+        const std::string why = shim.startRtlTcpDoor(o.rtlTcpPort);
+        if (!why.empty()) { std::fprintf(stderr, "VibeServer: the RTL-TCP server did not start: %s\n", why.c_str()); LocalSdrShim::stopMdns(); shim.stop(); return 1; }
+        std::printf("VibeServer: RTL-TCP server on port %d (local network only)\n", o.rtlTcpPort);
     }
 
     // ★★ V12 the radio opened: its failure count (and the backoff it drives) starts again from nothing — see the fail path

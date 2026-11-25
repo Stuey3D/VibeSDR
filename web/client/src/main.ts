@@ -734,6 +734,9 @@ let firstConfigDone = false;   // ★ the landing (restore / adopt) runs once pe
 /* ★ RAW IQ OUT — the owner's policy from /vibeserver.json, and this session's stream once it is on. */
 let srvRawIq: 'off' | 'local' | 'public' = 'off';
 let srvRawIqMax = 0, srvRawIqActive = 0;
+/* ★ Does this server report raw IQ out at all? An older one has no `rawIq` key — the row stays away there,
+ *   because "the owner switched it off" would be untrue of a server that never had it. */
+let srvRawIqKnown = false;
 /* ★ Full-rate raw IQ on offer: the capture rate in Hz (a single-listener radio, LAN only), or 0. */
 let srvRawIqFull = 0;
 let iqState: { on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean; full?: boolean } = { on: false };
@@ -771,8 +774,22 @@ function refreshIqRow() {
   // ★ Offered only where it can work: the owner has it on, and this is not a shared dial (a tune
   //   from the other app would move everybody). The server re-checks everything on the request.
   const show = srvRawIq !== 'off' && !srvSharedDial && !isFrontDoor;
-  row.hidden = !show; note.hidden = !show;
+  /* ★★★ NOT A SILENT ABSENCE (Sloper, 2026-11-25: looked for "raw IQ" in the audio menu, found nothing, and
+   *     could not tell why). Where this server HAS raw IQ out but it cannot be had here, the row stays, dimmed,
+   *     with the reason and where the owner turns it on. Hidden only on the front door and on a server that
+   *     does not report it at all. */
+  const why = show || isFrontDoor || !srvRawIqKnown ? ''
+    : srvSharedDial ? 'Raw IQ out is not available on this receiver: every listener here shares one dial, and a tune from your rtl_tcp program would move everybody. It needs a receiver set to one listener (or a locked range).'
+    : 'Raw IQ out is switched off on this receiver. Its owner turns it on in the server settings (on an Android phone: Use as server → VibeServer → RAW IQ OUT, under Uncompressed audio).';
+  row.hidden = !show && !why; note.hidden = !show && !why;
+  if (why) {
+    btn.disabled = true; sel.hidden = true; row.style.opacity = '0.45';
+    btn.textContent = 'OFF'; btn.classList.remove('on');
+    note.textContent = why;
+    return;
+  }
   if (!show) return;
+  btn.disabled = false; row.style.opacity = '';
   if (!iqWired) {
     iqWired = true;
     btn.onclick = () => { if (!spec) return; if (iqState.on) spec.iqOut(false); else spec.iqOut(true, Number(sel.value) || 48000); };
@@ -951,6 +968,7 @@ async function loadAudioPolicy(httpBase: string) {
     if (j.uncompressed === 'choice' || j.uncompressed === 'compat' || j.uncompressed === 'off')
       srvUncompressed = j.uncompressed;
     srvRawIq = j.rawIq === 'local' || j.rawIq === 'public' ? j.rawIq : 'off';
+    srvRawIqKnown = typeof j.rawIq === 'string';
     srvRawIqMax = Number(j.rawIqMax) || 0; srvRawIqActive = Number(j.rawIqActive) || 0;
     srvRawIqFull = Number(j.rawIqFull) || 0;
     srvLocal = j.local === true;

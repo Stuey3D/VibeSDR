@@ -293,7 +293,6 @@ object VibeServerOps {
             "antennaBands"     -> VibeLocalSDR.setAntennaBands(a.optString("ranges", ""), a.optString("filters", ""))
             "antennaPortNames" -> VibeLocalSDR.setAntennaPortNames(a.optString("json", ""))
             "antennaSwitch"    -> VibeLocalSDR.setAntennaSwitch(a.optString("json", ""), a.optString("map", ""), a.optBoolean("locked", false))
-            "rtlRate"          -> VibeLocalSDR.setServerSampleRate(a.optDouble("rate", 0.0))
             else               -> return fail("unknown_setting", "the server does not know \"${a.optString("what")}\"")
         }
         return ok()
@@ -310,42 +309,91 @@ object VibeServerOps {
 
     // ── The rtl_tcp server — the same service, mode "rtltcp" ──────────────────────────────────────────────────────
 
-    private var rtlConn: android.hardware.usb.UsbDeviceConnection? = null
 
+    /** ★★★ RTL-TCP = THE ENGINE + ITS FRONT DOOR (Sloper, 2026-11-25). The librtlsdr-only server opened every radio
+     *  as a dongle and sent an Airspy's or an RSP's owner a header and then nothing. Now the radio is opened exactly as
+     *  VibeServer opens it — its own driver, the RSP through OpenRSP — and the engine serves it on the rtl_tcp port
+     *  (LocalSdrShim::startRtlTcpDoor): RAW IQ OUT's stream with VibeAGC and every capture fix, LOCAL NETWORK ONLY.
+     *  The engine runs with the owner's saved radio settings (ppm, auto-PPM, notches, the RSP's VibeAGC choice…) and
+     *  NONE of the serving: no web page on the LAN (loopback only), no listing, no tunnel, no background decoding, no
+     *  restore — one LAN client drives the radio. A radio that will not open, or a port that is taken, is a refusal
+     *  with the reason, never a server that looks up. */
     @Synchronized
-    private fun rtlStart(ctx: Context, a: JSONObject): JSONObject {
-        val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return fail("no_usb", "USB service unavailable")
-        val dev = findDevice(mgr, a) ?: return fail("no_device", "No SDR found")
-        if (!mgr.hasPermission(dev)) return fail("no_permission", "Allow this app to use the radio, then press Start again")
+    private fun rtlStart(ctx: Context, a: JSONObject): JSONObject = stallWatched("RTL-TCP start") {
+        val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return@stallWatched fail("no_usb", "USB service unavailable")
+        val dev = findDevice(mgr, a) ?: return@stallWatched fail("no_device", "No SDR found")
+        if (!mgr.hasPermission(dev)) return@stallWatched fail("no_permission", "Allow this app to use the radio, then press Start again")
+        if (VibeIcom.isIcom(dev)) return@stallWatched fail("icom", "An Icom sends no IQ — share it with VibeServer")
         val o = a.optJSONObject("opts") ?: JSONObject()
-        // ★ An rtl_tcp server is not restorable: a VibeServer armed earlier must not be brought back over it by the
-        //   restore or the watchdog.
+        // ★ An rtl_tcp server is not restorable: a VibeServer armed earlier must not be brought back over it.
         VibeServerRestore.disarm(ctx)
         VibeServerWatchdog.cancel(ctx)
         stopEngine(ctx)
         rtlStop(ctx)
-        val conn = mgr.openDevice(dev) ?: return fail("open_failed", "openDevice returned null")
+        unadvertise(ctx)
+        VibeServerBoot.otherServerOnDevice()?.let { return@stallWatched fail("other_server", VibeServerBoot.otherServerMessage(it)) }
+        val conn = mgr.openDevice(dev) ?: return@stallWatched fail("open_failed", "The radio could not be opened")
         val fd = conn.fileDescriptor
-        if (fd < 0) { conn.close(); return fail("bad_fd", "Invalid file descriptor") }
-        rtlConn = conn
-        val name = o.optString("name", "VibeSDR RTL-SDR").ifEmpty { "VibeSDR RTL-SDR" }
-        val bound = VibeLocalSDR.startServer(fd, dev.vendorId, dev.productId,
-            o.optDouble("sampleRate", 2_400_000.0), o.optDouble("centerFreq", 100_000_000.0),
-            o.optInt("gainTenthDb", -1), o.optInt("port", 1234), o.optDouble("overrideRate", 0.0))
-        if (bound <= 0) { conn.close(); rtlConn = null; return fail("start_failed", "native startServer failed (see logcat)") }
+        if (fd < 0) { conn.close(); return@stallWatched fail("bad_fd", "Invalid file descriptor") }
+        if (VibeRsp.isRsp(dev)) VibeRsp.attach(ctx, conn, dev)?.let { conn.close(); return@stallWatched fail("rsp", it) }
+        VibeServerRestore.holdServerConn(conn, dev)   // ★ released by stopEngine, as for VibeServer
+
+        val name = o.optString("name", "VibeSDR").ifEmpty { "VibeSDR" }
+        val port = o.optInt("port", 1234)
+        val cfg = rtlTcpConfig(ctx, dev)
+        VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
+        val enginePort = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = false,
+                                                      keepRadioAlive = VibeServerBoot.keepRadioAlive(ctx, cfg))
+        if (enginePort <= 0) {
+            stopEngine(ctx)
+            return@stallWatched fail("start_failed", "The radio did not start — unplug it, plug it back in and try again")
+        }
+        val why = VibeLocalSDR.startRtlTcpDoor(port)
+        if (why.isNotEmpty()) {
+            stopEngine(ctx)
+            return@stallWatched fail("door_failed", "The RTL-TCP server did not start: $why")
+        }
+        rtlRunning = true
         val ip = localIp() ?: "0.0.0.0"
-        RtlTcpServerService.start(ctx, name, ip, bound)
-        Log.i(TAG, "RTL-TCP server started $ip:$bound as \"$name\"")
-        return ok().put("ip", ip).put("port", bound).put("name", name)
+        RtlTcpServerService.start(ctx, name, ip, port)
+        Log.i(TAG, "RTL-TCP server started $ip:$port as \"$name\" on ${VibeServerBoot.usbModelName(dev)} (local network only)")
+        ok().put("ip", ip).put("port", port).put("name", name)
     }
+
+    /** The engine's settings for RTL-TCP: the owner's saved radio settings, with everything that SERVES turned off. */
+    private fun rtlTcpConfig(ctx: Context, dev: UsbDevice): JSONObject {
+        val cfg = try { JSONObject(VibeRemoteSetup.settings(ctx).toString()) } catch (_: Throwable) { JSONObject() }
+        // ★ The starting rate is this radio's lightest sensible one; the client sets its own at once.
+        val rate = when {
+            VibeRsp.isRsp(dev) -> 2_000_000.0
+            dev.vendorId == VibeRadioIds.AIRSPYHF_VID && dev.productId == VibeRadioIds.AIRSPYHF_PID -> 912_000.0
+            dev.vendorId == VibeRadioIds.AIRSPY_VID && dev.productId == VibeRadioIds.AIRSPY_PID -> 3_000_000.0
+            dev.vendorId == VibeRadioIds.HACKRF_VID && dev.productId == VibeRadioIds.HACKRF_PID -> 2_000_000.0
+            else -> 2_400_000.0
+        }
+        cfg.put("sampleRate", rate)
+        cfg.put("gainTenthDb", -1)                  // ★ VibeAGC (or the radio's AGC) until the client says otherwise
+        cfg.put("advanced", false)                  // ★ one listener: the rtl_tcp client
+        cfg.put("webServer", false)
+        cfg.put("bgDecode", ""); cfg.put("dxScan", "")
+        cfg.put("rawIq", 0); cfg.put("rawIqMax", 0)
+        cfg.put("pskrOn", false); cfg.put("wsprnetOn", false)
+        cfg.put("landingAdsb", false); cfg.put("adsbKeepRunning", false)
+        cfg.put("spectrogram", false)
+        cfg.put("lockedCentre", 0.0); cfg.put("lockedRate", 0.0); cfg.put("rateLock", false)
+        cfg.put("fftRate", 10.0)                    // ★ the spectrum only feeds VibeAGC here — nobody watches it
+        return cfg
+    }
+
+    @Volatile private var rtlRunning = false
 
     @Synchronized
     internal fun rtlStop(ctx: Context) {
-        val had = rtlConn != null
-        try { VibeLocalSDR.stopServer() } catch (_: Throwable) {}
-        rtlConn?.let { try { it.close() } catch (_: Exception) {} }
-        rtlConn = null
-        if (had) try { RtlTcpServerService.stop(ctx) } catch (_: Throwable) {}
+        if (!rtlRunning) return
+        rtlRunning = false
+        try { VibeLocalSDR.stopRtlTcpDoor() } catch (_: Throwable) {}
+        stopEngine(ctx)
+        try { RtlTcpServerService.stop(ctx) } catch (_: Throwable) {}
     }
 
     private fun rtlStatus(): JSONObject {
