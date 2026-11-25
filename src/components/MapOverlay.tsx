@@ -136,7 +136,7 @@ function buildHtml(
    *  signal-strength dots, the band colours, the aircraft's yellow selection ring and its signal meter. The
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: isHfdl ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
-  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+  const TITLE = isHfdl ? 'HFDL MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isHfdl
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
