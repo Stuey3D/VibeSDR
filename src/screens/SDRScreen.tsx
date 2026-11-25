@@ -86,7 +86,7 @@ import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSu
 import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
 import { ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
          ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode,
-         ismIsNodeCard, ismNodeCardBand, ismNodesParse, ismGalMerge, ismGalCard } from '../services/ism';
+         ismIsNodeCard, ismNodeCardBand, ismNodesParse, ismGalMerge, ismGalCard, ismGainChip } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
 // ★ V12 held session: the "VibeSDR paused" note (docs/v12/BACKGROUND-DECODING.md, "The held session")
@@ -3039,6 +3039,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ Everything ISM leaves behind, in one place — EXIT, the key, a mode pick, the server's ism_off. */
   const ismUiOff = useCallback((keepBox = false) => {
     ismOnRef.current = false;
+    // ★ beta94 the ISM AUTO status item goes with the mode (the server's hwinfo after ism_off repaints the ordinary one)
+    { const b = meterBus.current; if (b && /^ISM /.test(b.value.agcText ?? '')) b.emit({ ...b.value, agcText: '' }); }
     ismHopReset();   // ★ V12 hop keys: a burst still settling, or an unanswered ask, goes with the mode
     setIsmOn(false); setIsmReport(null); setIsmMapOpen(false);   // ★ V12: the map is ISM's view — leaving ISM closes it
     if (!keepBox) { setIsmBoxOpen(false); setIsmError(undefined); }
@@ -8197,6 +8199,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!ismOnRef.current) { ismOnRef.current = true; setIsmBoxOpen(true); setIsmError(undefined); }
         setIsmOn(true);
         setIsmReport(r);
+        /* ★★ beta94 THE ISM AUTO STATUS ITEM (Stuart 11-24 on the Sony: the gain item went blank in ISM — "VibeAGC not
+         *  reporting"). ISM turns VibeAGC off and runs its own gain rule; the report's gain is the truth, in the same place.
+         *  '' where the report has no gain (no gain list for the rule to walk) — nothing claimed (AGENTS.md). */
+        { const b = meterBus.current, t = ismGainChip(r);
+          if (b && t && b.value.agcText !== t) b.emit({ ...b.value, agcText: t }); }
         /* ★ V12 hop keys: the band the keys show lets go to the server's once the server names the band we asked for,
          *  the hold runs out (a refused band snaps back) or somebody else moves the dial — never mid-burst. */
         if (ismHopIdxRef.current >= 0 && (ismStepper.current?.s.pending() ?? -1) < 0
@@ -8450,10 +8457,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHwVibeAgc(on);
         if (adoptHw) setHwAutoGain(on);
         const b = meterBus.current;
+        if (ismOnRef.current && ismGainChip(ismReportRef.current)) return;   // ★ beta94 ISM's own gain item stays
         if (b) b.emit({ ...b.value, agcText: on ? b.value.agcText || 'AGC' : '' });
       },
       onOverload: ({ gainTenthDb, dir, agc }) => {
         if (destroyed.current) return;
+        if (ismOnRef.current && ismGainChip(ismReportRef.current)) return;   // ★ beta94 VibeAGC is off in ISM: its item is ISM's
         const b = meterBus.current;
         if (!b) return;
         const arrow = dir > 0 ? '↑' : dir < 0 ? '↓' : '·';
@@ -16590,6 +16599,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           tall={ismTall} onTall={onIsmTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           onMap={IS_APPLE_TV ? null : (key?: string) => { markInteract(); setIsmFocus(key ?? ''); setIsmMapOpen(true); }}
+          /* ★★ beta94 an unidentified burst's IQ — the OWNER's (the admin API's ism-clip; it could hold a fixed-code remote's
+           *  code). Only with a minted ticket (a nonce pair is single-use); opened in the browser, which saves the file
+           *  (Content-Disposition), named for rtl_433 -r. No ticket, no link: a listener sees the description only. */
+          onClip={pageTicketQ && !IS_APPLE_TV
+            ? (id: number) => { Linking.openURL(`${connectBase.replace(/\/+$/, '')}/vibeserver/admin/ism-clip?id=${id}&${pageTicketQ}`).catch(() => {}); }
+            : undefined}
           rx={serverPos ?? recvLoc ?? null}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />

@@ -236,6 +236,9 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
+    # ★★ beta94 ISM's unidentified bursts (vibe_ism_unknown.h): OOK PWM/PPM/Manchester and FSK described right, a steady
+    #    carrier told from a burst, the owner's clip ring bounded, the service's report and clip by id.
+    test-ism-unknown)      echo "-O2 -lpthread" ;;
     test-ais|test-aprs|test-ais-store|test-ais-binary|test-ax25hs) echo "-O2 -lpthread" ;;
     # ★★ V12 beta90 THE STATION STORE (vibe_station_store.h — the DIGI MODES MAP + PSK Reporter): validation, RAM, the day
     #    files, four processes flushing one day (fork), windows, the caps and pruning, subscribe(), cost. Header-only.
@@ -1968,6 +1971,16 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   [ -x "$OUT/test-wmbus" ] && "$OUT/test-wmbus" --write-clip "$OUT/wmbus-clip.u8" 868800000 2400000 >/dev/null
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-server-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ beta94 UNIDENTIFIED BURSTS + the ISM AUTO chip: described on the wire, the carrier listed as steady (not counted),
+  #    gain/peak on the report, and the IQ clip the OWNER's alone (401 without / with a wrong password, the named file with it)
+  if [ -x "$OUT/test-ism-unknown" ]; then
+    "$OUT/test-ism-unknown" --write-clip "$OUT/ism-unk-clip.u8" 434130000 2400000 >/dev/null
+    VIBE_ISM_UNK_CLIP="$OUT/ism-unk-clip.u8" node scripts/test-server-ism-unknown.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+    rm -f "$OUT/ism-unk-clip.u8"
+  else
+    echo '   not run — needs the test-ism-unknown build'; notrun=$((notrun+1))
+  fi
   # ★ V12 "Use 2.56 MS/s sample rate for ISM" (ism256): the rate up on entry, back on leaving, MeshCom 433.175 then fits
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism256.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

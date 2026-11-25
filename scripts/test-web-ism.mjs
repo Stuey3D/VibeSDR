@@ -78,6 +78,17 @@ try {
   const card = await ev(`(document.getElementById('mFreq')?.textContent || '') + ' / ' + (document.getElementById('mChan')?.textContent || '')`);
   ok(/433\.920/.test(card || '') && /ISM 433/.test(card || ''), `the readout shows the band: ${card}`);
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === true`), 'zoom is held');
+  // ★★ beta94 THE ISM AUTO CHIP (Stuart 11-24: the AGC chip went blank in ISM): ISM's own gain, where the AGC chip sits
+  ok(await until(`/^ISM AUTO \\d+\\.\\d dB/.test(document.getElementById('ovlChip')?.textContent || '') && document.getElementById('ovlChip').classList.contains('set')`, 6000),
+     `the chip says ISM's gain: "${await ev(`document.getElementById('ovlChip')?.textContent`)}"`);
+  // ★★ beta94 UNIDENTIFIED: the chip, its list (described bursts / steady carriers, or the empty words), no IQ link for a listener
+  await ev(`document.querySelector('#ismChips [data-k="unk"]')?.click()`);
+  await sleep(400);
+  { const u = JSON.parse(await ev(`JSON.stringify({ chip: document.querySelector('#ismChips [data-k="unk"]')?.textContent, rows: document.querySelectorAll('#ismList .ismRow.k-unk, #ismList .ismRow.k-steady').length,
+        empty: document.querySelector('#ismList .ismEmpty')?.textContent || '', iq: document.querySelectorAll('#ismList .ismIq').length, first: document.querySelector('#ismList .ismTxt')?.textContent || '' })`) || '{}');
+    ok(u.chip === 'UNIDENTIFIED' && (u.rows > 0 ? /^(OOK|FSK|\d)/.test(u.first) : /Nothing unidentified/.test(u.empty)), `UNIDENTIFIED lists what was not named: ${u.rows} rows, "${u.first || u.empty}"`);
+    ok(u.iq === 0, 'a listener gets no IQ link'); }
+  await ev(`document.querySelector('#ismChips [data-k="all"]').click()`);
   console.log('   screenshot', await shot('433'));
   // ★ phone width too (no visible polish gaps): the box must fit with a 16 px gutter
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
@@ -183,6 +194,7 @@ try {
   const after = await ev(`document.getElementById('mFreq')?.textContent`);
   ok(/96\.100/.test(after || ''), `the dial is back: ${after}`);
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === false`), 'zoom is given back');
+  ok(!/^ISM/.test(await ev(`document.getElementById('ovlChip')?.textContent || ''`) || ''), 'the ISM chip goes with the mode');
 } catch (e) { ok(false, `driver: ${e}`); }
 finally {
   try { wsC?.close(); } catch {}

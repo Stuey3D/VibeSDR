@@ -38,10 +38,23 @@ export interface IsmLora { chans: number; plan: number; dets: number; frames: nu
   found: number; foundKnown: number }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number; region?: string }   // ★ region: beta72, the BANDS list
+/** ★ beta94 an UNIDENTIFIED burst, described by the server (vibe_ism_unknown.h): modulation, coding, rate (bit/s for PWM /
+ *  PPM, symbols/s for NRZ / Manchester), the shortest run (µs), marks, length (ms), level and SNR (dB), FSK's deviation;
+ *  `iq` 1 = its samples are kept, `kb` big — the OWNER may download them (admin ism-clip?id=…); `cut` = only its start. */
+export interface IsmUnk { id: number; ago: number; hz: number; mod: string; code?: string; rate?: number; unit?: number; n?: number;
+  ms: number; lvl: number; snr: number; dev?: number; clipped?: number; iq?: number; kb?: number; cut?: number }
+/** ★ beta94 a STEADY CARRIER (not a burst — not counted as unidentified): where it is now, how far it has drifted (lo–hi),
+ *  its level, seconds since last seen and how long it has been seen for. */
+export interface IsmSteady { hz: number; lvl: number; lo: number; hi: number; age: number; for: number }
 export interface IsmReport {
   type: 'ism'; band?: string; bandName?: string; centre: number; custom?: number; rate?: number; now?: number;
   bursts?: number; decoded?: number; unknown?: number; noise?: number; dropped?: number; capture?: number;
   gain?: number; gainAuto?: number;
+  /** ★ beta94 THE ISM AUTO CHIP: the capture's peak over the last second (dBFS) and the share near full scale (%) — what
+   *  ISM's own gain rule judges by (vibe_ism_service.h GainRule). */
+  peak?: number; clipPct?: number;
+  /** ★ beta94 the unidentified bursts (newest first), the steady carriers, and how many bursts were carriers */
+  unk?: IsmUnk[]; steady?: IsmSteady[]; steadyN?: number;
   /** ★ V12 meters (868 band only): how many are listed, frames whose later block failed, collectors' frames, and
    *  wmGap = 1 when the capture cannot hold 868.95 MHz's meters (0.9 MS/s). */
   meters?: number; damaged?: number; collector?: number; wmGap?: number;
@@ -61,6 +74,8 @@ export const ISM_KINDS: Array<{ id: string; label: string }> = [
   // ★ V12 2026-11-16: the amateur LoRa networks and FANET's paragliders (vibe_lora_ham.h)
   { id: 'loraaprs', label: 'LORA APRS' }, { id: 'meshcom', label: 'MESHCOM' }, { id: 'fanet', label: 'FANET' },
   { id: 'msgs', label: 'MESSAGES' },
+  // ★ beta94 (Stuart 11-24, "65 bursts (65 unidentified)" on 868): what was heard but not named, described, and the carriers
+  { id: 'unk', label: 'UNIDENTIFIED' },
 ];
 export const LORA_KINDS = ['meshtastic', 'meshcore', 'lorawan', 'lora', 'loraaprs', 'meshcom', 'fanet'];
 
@@ -97,8 +112,56 @@ export function ismSanitise(msg: any): IsmReport | null {
                  texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0,
                  found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0 } : undefined,
     msgs: lo ? msgsOf(msg.msgs) : undefined,
+    peak: num(msg.peak), clipPct: num(msg.clipPct),
+    unk: Array.isArray(msg.unk) ? ismUnkSanitise(msg.unk, num, str) : undefined,
+    steady: Array.isArray(msg.steady) ? msg.steady.slice(0, 16).filter((c: any) => c && num(c.hz) !== undefined)
+      .map((c: any) => ({ hz: num(c.hz)!, lvl: num(c.lvl) ?? -99, lo: num(c.lo) ?? num(c.hz)!, hi: num(c.hi) ?? num(c.hz)!, age: num(c.age) ?? 0, for: num(c.for) ?? 0 })) : undefined,
+    steadyN: num(msg.steadyN),
     devices,
   };
+}
+const UNK_MODS = ['OOK', 'FSK', 'carrier'], UNK_CODES = ['PWM', 'PPM', 'NRZ/Manchester'];
+function ismUnkSanitise(a: any[], num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): IsmUnk[] {
+  return a.slice(0, 32).filter((u: any) => u && num(u.id) !== undefined && num(u.hz) !== undefined && UNK_MODS.includes(u.mod))
+    .map((u: any) => ({ id: num(u.id)!, ago: num(u.ago) ?? 0, hz: num(u.hz)!, mod: str(u.mod, 8)!, code: UNK_CODES.includes(u.code) ? u.code : undefined,
+                        rate: num(u.rate), unit: num(u.unit), n: num(u.n), ms: num(u.ms) ?? 0, lvl: num(u.lvl) ?? -99, snr: num(u.snr) ?? 0,
+                        dev: num(u.dev), clipped: num(u.clipped), iq: num(u.iq), kb: num(u.kb), cut: num(u.cut) }));
+}
+/** ★ beta94 a rate as people say it: "1.0 kbit/s", "4.8 kBd", "512 bit/s" — bits for PWM / PPM (a bit a mark), BAUD for
+ *  NRZ / Manchester (the shortest run's rate: NRZ's bit rate, twice a Manchester signal's). */
+export function ismRateText(u: { rate?: number; code?: string }): string {
+  if (!u.rate || !(u.rate > 0)) return '';
+  const unit = u.code === 'NRZ/Manchester' ? 'Bd' : 'bit/s';
+  return u.rate >= 1000 ? `${(u.rate / 1000).toFixed(1)} k${unit}` : `${Math.round(u.rate)} ${unit}`;
+}
+/** ★ beta94 one unidentified burst: "OOK · PWM · 1.0 kbit/s · 64 pulses · 63 ms · 434.040 MHz · −10 dBFS". The app says
+ *  it in the same words (src/services/ism.ts). */
+export function ismUnkLine(u: IsmUnk): string {
+  const p: string[] = [u.mod === 'FSK' && u.dev ? `FSK ±${(u.dev / 1e3).toFixed(0)} kHz` : u.mod];
+  if (u.code) p.push(u.code);
+  const r = ismRateText(u); if (r) p.push(r);
+  if (u.n) p.push(`${u.n} ${u.mod === 'FSK' ? (u.n === 1 ? 'high tone' : 'high tones') : (u.n === 1 ? 'pulse' : 'pulses')}`);
+  p.push(`${u.ms < 10 ? u.ms.toFixed(1) : Math.round(u.ms)} ms`);
+  p.push(`${(u.hz / 1e6).toFixed(3)} MHz`);
+  p.push(`${Math.round(u.lvl)} dBFS${u.clipped ? ' (clipped)' : ''}`);
+  return p.join(' · ');
+}
+/** ★ beta94 a steady carrier: "868.100 MHz · steady carrier · −31 dBFS · drifting 868.095–868.112 MHz". */
+export function ismSteadyLine(c: IsmSteady): string {
+  const drift = c.hi - c.lo >= 2000 ? ` · drifting ${(c.lo / 1e6).toFixed(3)}–${(c.hi / 1e6).toFixed(3)} MHz` : '';
+  return `${(c.hz / 1e6).toFixed(3)} MHz · steady carrier · ${Math.round(c.lvl)} dBFS${drift} · probably local interference, not a device`;
+}
+/** ★ beta94 THE ISM AUTO CHIP — the AGC chip's words while ISM's own gain rule holds the radio (VibeAGC is off there, so
+ *  the AGC chip used to go BLANK — Stuart 11-24 on the Sony read it as "VibeAGC not reporting"). "ISM AUTO 29.7 dB ·
+ *  pk −8.1 dBFS", near full scale "· 3.0% NEAR FULL SCALE"; a gain a listener set by hand "ISM GAIN 29.7 dB (manual)".
+ *  ★ Only where ISM's rule runs: the report carries `gain` only when the radio has a gain list for it to walk (RTL, RSP,
+ *    Airspy R2 / Mini…); an HF+ reaches no ISM band at all. No gain on the report → '' (the chip says nothing). */
+export function ismGainChip(r: IsmReport | null): string {
+  if (!r || r.gain === undefined || !(r.gain >= 0)) return '';
+  const head = r.gainAuto === 1 ? `ISM AUTO ${r.gain.toFixed(1)} dB` : `ISM GAIN ${r.gain.toFixed(1)} dB (manual)`;
+  const pk = r.clipPct !== undefined && r.clipPct >= 1 ? ` · ${r.clipPct.toFixed(1)}% NEAR FULL SCALE`
+    : r.peak !== undefined && r.peak > -90 ? ` · pk ${r.peak.toFixed(1)} dBFS` : '';
+  return head + pk;
 }
 /** ★ V12 LoRa: a mesh node's / LoRaWAN device's own fields, sanitised. A position must be a real one. */
 function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): Partial<IsmDevice> {
@@ -257,7 +320,9 @@ export function ismLine(d: IsmDevice, u: IsmUnits): string {
  *  (many meters) is sent every 5 s rather than every second (local_sdr_shim.cpp ismTick), so the list ages itself. */
 export function ismAged(r: IsmReport, sec: number): IsmReport {
   if (!(sec > 0)) return r;
-  return { ...r, devices: r.devices.map((d) => ({ ...d, seen: d.seen + sec })) };
+  return { ...r, devices: r.devices.map((d) => ({ ...d, seen: d.seen + sec })),
+           ...(r.unk ? { unk: r.unk.map((u) => ({ ...u, ago: u.ago + sec })) } : {}),
+           ...(r.steady ? { steady: r.steady.map((c) => ({ ...c, age: c.age + sec })) } : {}) };
 }
 
 /** "now", "12 s", "3 min", "1 h 5 min" — how long since the device was last heard. */
@@ -276,7 +341,11 @@ export function ismStatus(r: IsmReport): string {
   parts.push(`${r.devices.length} ${r.devices.length === 1 ? 'device' : 'devices'}`);
   if (r.meters) parts.push(`${r.meters} ${r.meters === 1 ? 'meter' : 'meters'}`);
   if (r.wmGap === 1 && r.rate) parts.push(`868.95 not covered at ${(r.rate / 1e6).toFixed(r.rate % 1e6 ? 1 : 0)} MS/s`);
-  if (r.bursts !== undefined) parts.push(`${r.bursts} bursts${r.unknown ? ` (${r.unknown} unidentified)` : ''}`);
+  // ★ beta94: carriers are not unidentified bursts — said apart
+  if (r.bursts !== undefined) {
+    const sub = [r.unknown ? `${r.unknown} unidentified` : '', r.steadyN ? `${r.steadyN} carrier${r.steadyN === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ');
+    parts.push(`${r.bursts} bursts${sub ? ` (${sub})` : ''}`);
+  }
   // ★ V12 LoRa: frames decoded, and how many of the band's LoRa channels this capture holds
   //   ★ V12 2026-11-12 + the channels FOUND ON AIR (vibe_lora_discover.h), and any the CPU budget holds back — said honestly
   if (r.lora) parts.push(`LoRa ${r.lora.frames} ${r.lora.frames === 1 ? 'frame' : 'frames'} · ${r.lora.chans} of ${r.lora.plan} channels`
@@ -305,8 +374,9 @@ export function ismBandLabel(freq: number | undefined, bands: IsmBand[]): string
 
 /** The list's HTML: newest first (the server's order), filtered by kind. */
 export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = '', rx: { lat: number; lon: number } | null = null,
-                            bands: IsmBand[] = []): string {
+                            bands: IsmBand[] = [], owner = false): string {
   if (filter === 'msgs') return ismMsgsHtml(r, bands);
+  if (filter === 'unk') return ismUnkHtml(r, bands, owner);
   // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob;
   //   LORAWAN shows the LoRa frames we cannot name as well
   const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob')
@@ -353,12 +423,30 @@ export function ismMsgsHtml(r: IsmReport, bands: IsmBand[] = []): string {
   return m.map((x) => `<div class="ismRow k-msg"><span class="ismAgo">${esc(ismAgo(x.ago))}</span><span class="ismBand">${esc(ismBandLabel(x.freq, bands))}</span><span class="ismTxt">`
     + `${esc(ismNetName(x.net || ''))}${x.ch ? ' ' + esc(x.ch) : ''} · <b>${esc(x.from || x.node || '?')}</b>: ${esc(x.text)}</span></div>`).join('');
 }
+/** ★ beta94 UNIDENTIFIED: the steady carriers first (they explain a busy waterfall with nothing decoded), then the bursts
+ *  nobody named, newest first, each described. The OWNER gets an IQ link on a burst whose samples are kept (main.ts
+ *  downloads it with the admin proof); a listener sees the description only. */
+export function ismUnkHtml(r: IsmReport, bands: IsmBand[] = [], owner = false): string {
+  const st = r.steady ?? [], un = r.unk ?? [];
+  if (!st.length && !un.length) return `<div class="ismEmpty">${esc(ismEmptyText('unk'))}</div>`;
+  const rows = st.map((c) => `<div class="ismRow k-steady"><span class="ismAgo">${esc(ismAgo(c.age))}</span><span class="ismBand">${esc(ismBandLabel(c.hz, bands))}</span>`
+    + `<span class="ismTxt">${esc(ismSteadyLine(c))}</span></div>`);
+  for (const u of un) {
+    const tip = `${u.unit ? `shortest run ${Math.round(u.unit)} µs · ` : ''}${Math.round(u.snr)} dB over the noise${u.iq ? ` · IQ kept (${u.kb} KB${u.cut ? ', its start' : ''})` : ''}`;
+    const dl = owner && u.iq ? `<a class="qrz ismIq" href="#" role="button" data-clip="${u.id}" title="Download its IQ (cu8, for rtl_433 -r) — owner only">IQ ${u.kb ?? ''} KB</a>` : '';
+    rows.push(`<div class="ismRow k-unk" title="${esc(tip)}"><span class="ismAgo">${esc(ismAgo(u.ago))}</span><span class="ismBand">${esc(ismBandLabel(u.hz, bands))}</span>`
+      + `<span class="ismTxt">${esc(ismUnkLine(u))}${dl ? ' ' + dl : ''}</span>`
+      + `<span class="ismSnr${u.snr >= 20 ? ' ok' : u.snr >= 10 ? ' warn' : ' bad'}" title="signal over the band's noise">${Math.round(u.snr)} dB</span></div>`);
+  }
+  return rows.join('');
+}
 /** What an empty list says (the app's ismEmptyText — the same words). */
 export function ismEmptyText(filter: string): string {
   if (filter === 'meter') return 'No meters heard yet — they send every 16 s to a few minutes, on the 868 MHz band only.';
   if (filter === 'meshtastic' || filter === 'meshcore') return 'No mesh nodes heard yet — most send their name every few hours and their position every 15 min to an hour.';
   if (filter === 'lorawan') return 'No LoRaWAN heard yet — devices send every few minutes to an hour. Payloads are encrypted; only headers are shown.';
   if (filter === 'msgs') return "No public messages yet — only the mesh networks’ public channels are shown; private channels and direct messages never are.";
+  if (filter === 'unk') return 'Nothing unidentified — every burst heard so far was named. Bursts no decoder knows are described here, with steady carriers.';
   return `${filter === 'all' ? 'No sensors heard yet' : 'Nothing of that kind heard yet'} — most send every 30–60 s; tyres only while the car moves.`;
 }
 
@@ -437,7 +525,9 @@ export class IsmBox {
   constructor(private onExit: () => void, private onPick: (id: string) => void, private onMap: (key?: string) => void = () => {},
               private rx: () => { lat: number; lon: number } | null = () => null,
               /** ★ beta72: the bands this radio reaches and the one it is on (or heading for) — the BANDS list */
-              private bandList: () => { bands: IsmBand[]; current: string } = () => ({ bands: [], current: '' })) {}
+              private bandList: () => { bands: IsmBand[]; current: string } = () => ({ bands: [], current: '' }),
+              /** ★ beta94: is this the OWNER (the IQ links drawn), and their download of an unidentified burst's IQ */
+              private owner: () => boolean = () => false, private onClip: (id: number) => void = () => {}) {}
 
   private mount(): HTMLElement {
     if (this.el) return this.el;
@@ -474,6 +564,8 @@ export class IsmBox {
       // ★ a position link: the map, on that node — not the row's detail
       const pos = (e.target as HTMLElement).closest('.ismPos') as HTMLElement | null;
       if (pos) { e.preventDefault(); e.stopPropagation(); this.onMap(pos.dataset.pos || ''); return; }
+      const iq = (e.target as HTMLElement).closest('.ismIq') as HTMLElement | null;
+      if (iq) { e.preventDefault(); e.stopPropagation(); const id = Number(iq.dataset.clip); if (id > 0) this.onClip(id); return; }
       const row = (e.target as HTMLElement).closest('.ismTap') as HTMLElement | null;
       if (!row) return;
       this.openKey = this.openKey === row.dataset.key ? '' : (row.dataset.key || '');
@@ -579,7 +671,7 @@ export class IsmBox {
   private drawList() {
     if (!this.el || !this.last) return;
     const r = ismAged(this.last, Math.floor((Date.now() - this.at) / 1000));
-    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx(), this.bandList().bands);
+    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx(), this.bandList().bands, this.owner());
     if (html !== this.lastHtml) {
       const list = this.el.querySelector('#ismList') as HTMLElement;
       // ★ a focused position link survives the redraw (the ages tick every second) — keyboard and pad keep their place
