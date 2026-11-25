@@ -142,7 +142,10 @@ export interface DecoderShellProps {
  * status column) plus the right-hand edge tabs, in window coordinates; a box whose rows reach one ends its right edge
  * 8 pt left of it — off-centre, by design ("it means it will be off centre but should work"). Empty everywhere else.
  */
-export const DecoderAvoidContext = createContext<{ rects: { x: number; y: number; w: number; h: number }[]; windowW: number }>(
+export const DecoderAvoidContext = createContext<{ rects: { x: number; y: number; w: number; h: number }[]; windowW: number;
+  /** ★★ iPhone Duo half-open: the box's whole frame (window coordinates) — beside the deck in the bottom half, never
+   *  above the fold. Absent everywhere else. */
+  frame?: { left: number; right: number; bottom: number; maxHeight: number } }>(
   { rects: [], windowW: 0 });
 
 export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, borderColor,
@@ -173,7 +176,9 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
   return (
     /* ★ box-none: the wrap spans the screen's width so it can centre the box; without this its
        empty sides ate taps meant for the waterfall on anything wider than the box. */
-    <Animated.View style={[sh.wrap, { bottom }, clearRight > 8 ? { right: clearRight } : null, wrapStyle]} pointerEvents="box-none"
+    <Animated.View style={[sh.wrap, { bottom }, clearRight > 8 ? { right: clearRight } : null,
+                           avoid.frame ? { left: avoid.frame.left, right: avoid.frame.right, bottom: avoid.frame.bottom } : null,
+                           wrapStyle]} pointerEvents="box-none"
       onLayout={(e) => { const { y, height } = e.nativeEvent.layout; setRows((p) => (p && p.y === y && p.h === height ? p : { y, h: height })); }}>
       <View style={[sh.inner, { maxWidth, borderColor: borderColor ?? tk.border },
                     // Silver / black, Transparency ON: the controls-colour glow round the glass
@@ -182,7 +187,8 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
                     metal && { backgroundColor: plate.base },
                     solid != null && { backgroundColor: solid },
                     opaque && NO_DROP_SHADOW,
-                    maxHeight != null && { maxHeight }]}
+                    maxHeight != null && { maxHeight },
+                    avoid.frame && { maxHeight: Math.min(maxHeight ?? Infinity, avoid.frame.maxHeight), maxWidth: undefined }]}
             onTouchStart={onTouchStart}>
         {metal ? (
           // ★ Opaque brushed metal, drawn once (ChassisPlate caches it until the box resizes).

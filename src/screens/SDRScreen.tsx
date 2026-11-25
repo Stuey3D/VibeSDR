@@ -335,7 +335,7 @@ import { noteRecordingServer } from '../services/recordingsIndex';
 import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
-import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow } from '../hooks/useUiScale';
+import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow, UiWindowOverride } from '../hooks/useUiScale';
 import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
 import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
 import { DecoderAvoidContext } from '../components/DecoderShell';
@@ -2286,6 +2286,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const fullBleed = frontScreen || reserved.hinge != null;
   /** Where the screen's own furniture is measured from: the top inset, or the glass's edge when full bleed. */
   const chromeTop = fullBleed ? 0 : insets.top;
+  /* ★★★ HALF-OPEN — "TABLETOP" (iPhone Duo, Stuart 2026-11-25, an experiment he asked for): UIKit says the hinge is
+   *  partially open AND gives the fold as a division region across a portrait window. Then the TOP half is the
+   *  spectrum and waterfall only (stopping at the fold) and the BOTTOM half holds the deck — beside the open decoder
+   *  box, or centred on its own. Nothing of ours sits on the fold. Flat or folded: exactly as before (Apple reserves the
+   *  fold only while partially open). The waterfall, the connection and the audio are untouched by the switch. */
+  const tableFold = !isLandscape && reserved.hinge?.status === 'partiallyOpen'
+    ? reserved.division.find((r) => r.w >= screenW * 0.5 && r.y > screenH * 0.2 && r.y + r.h < screenH * 0.8)
+    : undefined;
+  const tabletop = !!tableFold;
   /** The waterfall's top inset: the new orientation's settled value from a rotation's first render (useOrientationInset). */
   const wfInsetTop = useOrientationInset(chromeTop, isLandscape);
   /* ★★★ ANDROID: THE WINDOW DOES NOT DRAW THROUGH A ROTATION UNTIL THIS SCREEN HAS RE-RENDERED AT THE NEW SIZE
@@ -6319,6 +6328,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  and the VTS bar (anchored at pillBottom + 8) drawn behind the controls: "missing". Keep the
    *  two measurements separate and combine them here, so whichever lands last, the sum is right. */
   const [pillY,          setPillY]          = useState<number | null>(null); // pill's top, root coords
+  const [pillH,          setPillH]          = useState(0);                   // the deck's height (half-open centring)
   const pillBottom = pillY == null ? 200 : (rootH > 0 ? rootH : screenH) - pillY;
 
   // Real decoders — UberSDR server audio extensions over /ws/dxcluster,
@@ -12713,7 +12723,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  short portrait window the listener count and the admin note are not drawn (the health and time cards TUCK —
    *  see EdgeChip below), and SMALL fills from the server-name row (boxTopLimit); BIG reaches the status row.
    *  Minimise or close it and they come back. */
-  const boxTopLimit = boxHidesVts ? rightStackTop + 8 : undefined;
+  const boxTopLimit = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : boxHidesVts ? rightStackTop + 8 : undefined;
   useEffect(() => { if (boxHidesVts) setVtsBarH(0); }, [boxHidesVts]);
 
   /* ★★★ THE HEALTH AND TIME CARDS TUCK INTO THE EDGE (Stuart, 2026-10-03: "the health and time chips when slid off
@@ -12728,6 +12738,15 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Opening a box puts a card the user had brought out back on 'auto', so it tucks for the box. */
   const boxesDrawn = !isLandscape || isTablet;
   const anyBoxOpen = boxesDrawn && (dabBoxOpen || decoderShown || (advRdsOpen && status.mode === 'wfm'));
+  /* ★★ HALF-OPEN geometry (see tableFold). The bottom half starts 8 pt below the fold. With a decoder box open the deck
+   *  takes the LEFT half and the box the RIGHT, both on the bottom edge — unless half the width would be under 300 pt,
+   *  when the box stacks over the deck instead. The deck is laid out for the room it really has (UiWindowOverride), so
+   *  it is a phone deck in a half, a one-row deck across a wide short half. */
+  const halfTop = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : 0;
+  const halfSide = tabletop && anyBoxOpen && screenW / 2 - 12 >= 300;
+  const halfDeckW = halfSide ? Math.floor(screenW / 2) - 12 : screenW - 16;
+  const halfDeckWin = useMemo(() => (tabletop ? { W: halfDeckW + 16, H: Math.max(200, screenH - halfTop) } : null),
+    [tabletop, halfDeckW, screenH, halfTop]);
   const hs = health ? healthSummary(health) : null;
   const healthHot = !!hs && hs.worst >= 3;
   const timeStage = useCountdownStage(sessionEndsAt != null && !adminOk ? sessionEndsAt : null, limitSoft || borrowed);
@@ -12752,7 +12771,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ A decoder box may rise BESIDE the camera / status column (it narrows clear of it — DecoderShell, DecoderAvoid
    *  below — Stuart: "shrink to the left so that it clears the system status"); only a full-width status band (a Split
    *  View share's) holds it below. */
-  const boxTopSafe = Math.max(insets.top + 6, (() => {
+  const boxTopSafe = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : Math.max(insets.top + 6, (() => {
     let y = 0;
     for (const r of avoidRects(reserved)) if (r.w >= screenW * 0.5 && r.y < screenH * 0.25) y = Math.max(y, r.y + r.h);
     return y > 0 ? Math.ceil(y) + 6 : 0;
@@ -15075,11 +15094,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ The decoder boxes' right edge keeps clear of the system's corner rects and the right-hand edge tabs
    *  (DecoderShell). Only rects narrower than half the window (a full-width band holds the box below it instead). */
   const decoderAvoid = useMemo(() => {
+    if (tabletop) {
+      const bottom = halfSide ? bottomInset + 8 : pillBottom + 8;
+      return { rects: [], windowW: screenW, frame: {
+        left: halfSide ? Math.ceil(screenW / 2) + 4 : 8, right: 8, bottom,
+        maxHeight: Math.max(120, screenH - halfTop - bottom) } };
+    }
     const rects = avoidRects(reserved).filter((r) => r.w < screenW * 0.5);
     if (!rects.length) return { rects: [], windowW: screenW };
     if (health || sessionLimitMins) rects.push({ x: screenW - (EDGE_TAB_W + 14), y: rightStackTop, w: EDGE_TAB_W + 14, h: 2 * EDGE_TAB_H + 16 });
     return { rects, windowW: screenW };
-  }, [reserved, screenW, health, sessionLimitMins, rightStackTop]);
+  }, [reserved, screenW, health, sessionLimitMins, rightStackTop, tabletop, halfSide, bottomInset, pillBottom, screenH, halfTop]);
 
   /* ★★★ Into SATELLITE (its key, and a REMIND banner's LISTEN): each other whole-radio mode switched OFF properly. */
   satEnterRef.current = () => {
@@ -15457,7 +15482,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfCoarse={wfCoarse}
         colormap={colormap}
         width={screenW}
-        height={screenH - wfInsetTop}
+        height={tableFold ? Math.max(120, tableFold.y - wfInsetTop) : screenH - wfInsetTop}
         // Block waterfall tune/pan/pinch in the bottom gap (home-indicator
         // zone): the whole strip below the pill when controls show, else just
         // the home bar. Preserves swipe-up-to-minimise + menu Modals.
@@ -15529,7 +15554,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Sits at the display centre until the dongle locks; then the view pans
         // on across the captured band and the marker slides off to the side.
         centerMarkerHz={localRf?.rf ?? status.centerHz}
-        deckOcclusion={deckOcclusion}
+        deckOcclusion={tabletop ? null : deckOcclusion}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
         dcSpikeHz={dcSpikeShown ? hwDcHz : 0}
         orbOverlay={satOrbOverlay}
@@ -16128,6 +16153,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         style={(() => {
           const edge = Platform.OS === 'android' && isLandscape && !isTablet
             ? Math.max(28, insets.left + 8, insets.right + 8) : 8;
+          if (tabletop) {
+            return [styles.pillWrap, {
+              left: 8, right: halfSide ? Math.ceil(screenW / 2) + 4 : 8,
+              bottom: halfSide ? bottomInset + 8 : Math.max(bottomInset + 8, Math.round((screenH - halfTop - pillH) / 2)),
+            }];
+          }
           const left = Math.max(edge, deckClear.left);
           const right = Math.max(edge, deckClear.right);
           return [styles.pillWrap, {
@@ -16145,8 +16176,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
           setPillY(e.nativeEvent.layout.y);
+          setPillH(Math.round(e.nativeEvent.layout.height));
         }}
       >
+        <UiWindowOverride.Provider value={halfDeckWin}>
         <PanelBoundary name="Controls" autoRetry noticeTop={0}>
         {/* ★ The recording timer ticks in RecElapsed (re-renders the bar, not this screen). */}
         <RecElapsed startedAt={recStartedAt} render={(recSeconds) => (
@@ -16259,6 +16292,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         )} />
         </PanelBoundary>
+        </UiWindowOverride.Provider>
       </Animated.View>}
 
       {/* Servers chip — the discoverable route back to the instance list (§brief).

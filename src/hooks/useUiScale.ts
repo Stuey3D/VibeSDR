@@ -62,8 +62,15 @@ export function uprightBandScale(base: UiScale): UiScale {
            drumW: r(140), drumH: r(44), pxStep: r(22) };
 }
 
+/** ★★ A SUBTREE LAID OUT FOR A SMALLER "WINDOW" THAN THE REAL ONE (iPhone Duo, half-open: the deck lives in the bottom
+ *  half, or half of it beside a decoder box). useUiScale then sizes for that area exactly as it would for a window of
+ *  that size — layout follows the space it is given. null = the real window (everywhere else). */
+export const UiWindowOverride = createContext<{ W: number; H: number } | null>(null);
+
 export function useUiScale(): UiScale {
-  const { width: W, height: H } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const ovr = useContext(UiWindowOverride);
+  const W = ovr?.W ?? win.width, H = ovr?.H ?? win.height;
   const override = useContext(UiScaleOverride);
 
   const own = useMemo(() => {
