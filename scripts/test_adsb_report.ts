@@ -10,7 +10,7 @@
  * Run: node --no-warnings scripts/test_adsb_report.ts   (run-tests.sh does)
  */
 import { parseAdsbCapability, parseAdsbMessage, adsbToAircraft, adsbStatusText,
-         parseAdsbMapPrefs, ADSB_MAP_PREFS_DEFAULT, ADSB_MAX_AIRCRAFT,
+         parseAdsbMapPrefs, ADSB_MAP_PREFS_DEFAULT, parseAdsbRange, adsbRangeLine, ADSB_MAX_AIRCRAFT,
          adsbGainView, adsbGainStep, gainCapIdx, nearestGainIdx } from '../src/services/adsbTypes.ts';
 import { readFileSync } from 'node:fs';
 
@@ -87,9 +87,18 @@ eq('status: none yet', adsbStatusText(null), 'starting…');
 eq('status: listening', adsbStatusText(parseAdsbMessage({ aircraft: [], msgRate: 3.4 })), 'listening… · 3 msg/s');
 eq('status: counts', adsbStatusText(r), '4 aircraft (2 placed) · 210 msg/s');
 eq('prefs default', parseAdsbMapPrefs(null), ADSB_MAP_PREFS_DEFAULT);
-eq('prefs kept', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false,"labels":false}'), { autoZoom: false, fit: true, rings: false, labels: false });
-eq('an old save without labels keeps them on', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false}'), { autoZoom: false, fit: true, rings: false, labels: true });
-eq('prefs junk → defaults per key', parseAdsbMapPrefs('{"autoZoom":"no","fit":true}'), { autoZoom: true, fit: true, rings: true, labels: true });
+eq('prefs kept', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false,"labels":false,"range":false,"rangeAll":true}'), { autoZoom: false, fit: true, rings: false, labels: false, range: false, rangeAll: true });
+eq('prefs from before beta94: the range outline on, its all-time line off', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false,"labels":false}'), { autoZoom: false, fit: true, rings: false, labels: false, range: true, rangeAll: false });
+// ── beta94 the range outline's owner line ──
+{
+  const T0 = 1762128000;   // 3 Nov 2025 00:00 UTC
+  const d = parseAdsbRange({ ok: 1, window: 30, since: T0, km: [], far: { km: 412.3, brg: 152, at: T0 + 5 * 86400 }, record: { km: 512, brg: 160, at: T0 + 3600 } });
+  eq('range line', adsbRangeLine(d, T0 + 22.5 * 86400), 'Built over 23 days \u00b7 furthest 412 km at 152\u00b0, 8 Nov \u00b7 furthest ever 512 km at 160\u00b0, 3 Nov');
+  eq('range line: nothing yet', adsbRangeLine(parseAdsbRange({ ok: 1, window: 30, since: 0, km: [], far: null, record: null }), T0), 'Nothing heard yet \u2014 it builds as aircraft are heard in ADS-B.');
+  eq('range: an older server', parseAdsbRange({ error: 'x' }), null);
+}
+eq('an old save without labels keeps them on', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false}'), { autoZoom: false, fit: true, rings: false, labels: true, range: true, rangeAll: false });
+eq('prefs junk → defaults per key', parseAdsbMapPrefs('{"autoZoom":"no","fit":true}'), { autoZoom: true, fit: true, rings: true, labels: true, range: true, rangeAll: false });
 eq('prefs unparseable', parseAdsbMapPrefs('{'), ADSB_MAP_PREFS_DEFAULT);
 
 // ── ★★ V12 THE GAIN KEY (19f2d603) — shown only where the radio has a gain list and the owner has not fixed it ──

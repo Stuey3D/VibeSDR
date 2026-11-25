@@ -1154,6 +1154,8 @@ public:
      *  setAutoPpm: the owner's switch (the config's autoPpm; on by default). afcTick: the housekeeping reading (2 s).
      *  afcReset / afcSetOn: the owner's Reset and Turn off/on (socket, HTTP, handheld) — persisted. afcJson: hwinfo's. */
     static void setAfcFile(const std::string& path, bool handheld);
+    /** ★ V12 beta94 THE ADS-B RANGE OUTLINE's files (vibe_adsb_range.h): `<prefix>-adsb.bin`, this radio's — read at once. */
+    static void setAdsbRangeFiles(const std::string& prefix);
     void setAutoPpm(bool on);
     void afcTick();
     void afcReset();

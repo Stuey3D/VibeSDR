@@ -304,6 +304,20 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(capped.l <= 480 && capped.b <= 360, 'an inset never takes more than 60 % of the view');
 }
 
+// ── V12 beta94 THE RANGE OUTLINE's ring (rangeRing): one vertex per heard bearing, on its bin's middle, closed ──
+{
+  const km = new Array(360).fill(0);
+  ok(M.rangeRing(52.29, -0.85, km) === null, 'range outline: nothing heard = no ring');
+  km[0] = 100; km[90] = 200;
+  ok(M.rangeRing(52.29, -0.85, km) === null, 'range outline: two bearings are not an outline');
+  km[180] = 300; km[270] = 50;
+  const r = M.rangeRing(52.29, -0.85, km);
+  ok(r && r.length === 5 && r[0][0] === r[4][0] && r[0][1] === r[4][1], 'range outline: four bearings → a closed ring of four');
+  near(M.distNm(52.29, -0.85, r[2][1], r[2][0]) * 1.852, 300, 0.5, 'range outline: bin 180 drawn at its 300 km');
+  near(M.bearingDeg(52.29, -0.85, r[1][1], r[1][0]), 90.5, 0.05, 'range outline: …on its bin\'s middle bearing');
+  ok(M.rangeRing(NaN, 0, km) === null && M.rangeRing(1, 1, null) === null, 'range outline: no centre or no bins = none');
+}
+
 // ── the generated copies (scripts/gen-adsblayer-source.mjs) ──
 {
   const copies = [['directory/public/mapgl/vendor/adsblayer.js', (t) => t],

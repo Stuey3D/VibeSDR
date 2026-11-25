@@ -636,6 +636,8 @@ struct Aircraft {
     int      emergency = 0;            ///< TC 28 emergency state, 0 = none
     double   seen = 0, seenPos = 0;    ///< seconds (the tracker's clock) of the last message / last position
     double   trackedNm = 0;            ///< how far we have followed it: the sum of its position steps (setPos)
+    uint32_t posOk = 0;                ///< ★ V12 beta94 consecutive positions each within flying distance of the one before
+                                       ///<   (setPos) — the range outline counts an aircraft only from the 2nd (≥ 1)
     std::vector<TrailPt> trail;        ///< where it has been — see kTrailStepNm
     uint32_t messages = 0;
     float    level = -99;              ///< dBFS, smoothed
@@ -817,6 +819,10 @@ public:
         return it != ac_.end() && now - it->second.seen < 60;
     }
 
+    /** ★ A believed fix applied to `a` (the trail, TRACKED, posOk) — the same door position() uses; public for
+     *  test-adsb-range (the range outline's ≥ 2 consistent positions rule). */
+    static void applyFix(Aircraft& a, double lat, double lon, double now) { setPos(a, lat, lon, now); }
+
 private:
 
     Aircraft& touch(uint32_t addr, const Frame& f, double now) {
@@ -969,9 +975,9 @@ private:
             //    trail even for the SAME fix twice), and a block's stamp is only as fine as the block. A bad fix is
             //    miles out, far past 1 200 kt × 1 s = 0.33 NM, so the floor lets nothing real through.
             const double d = distanceNm(a.lat, a.lon, lat, lon), dt = std::max(1.0, now - a.seenPos);
-            if (d / dt * 3600.0 <= 1200.0) a.trackedNm += d;
-            else a.trail.clear();          // ★ a jump that is not flight: the old trail would draw a line across the map
-        }
+            if (d / dt * 3600.0 <= 1200.0) { a.trackedNm += d; ++a.posOk; }
+            else { a.trail.clear(); a.posOk = 0; }   // ★ a jump that is not flight: the old trail would draw a line across the map
+        } else a.posOk = 0;                // ★ a first fix proves nothing on its own (vibe_adsb_range.h)
         a.hasPos = true; a.lat = lat; a.lon = lon; a.seenPos = now;
         const int32_t alt = a.onGround ? 0 : a.hasAlt ? int32_t(a.altBaro) : kTrailNoAlt;
         bool add = a.trail.empty();

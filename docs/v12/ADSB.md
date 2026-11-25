@@ -168,6 +168,13 @@ layer.destroy()
   (the app: its page already draws the HFDL receiver marker) skips the house only — the position still
   drives rings, distances and the camera. `maplibregl` must be global
   for the aircraft card.
+- **The range outline** (beta94) — see "The range outline" below. `prefs.range` (default true) and `prefs.rangeAll`
+  (default false) join the prefs; `layer.rangeShown()` is a test's view. The layer fetches `<imageBase>range` itself.
+- **The card** (beta94, Stuart's greyed ×): its text scrolls in the layer's own `.vsadsb-sc`, never in the popup's
+  content box — MapLibre puts its × at the top-right of that box, where an overlay scroll bar (macOS) lay over it and
+  took the press. The × and the fold key sit above the scroller (z-index) and never move. On the GPU map a refresh
+  refills `.vsadsb-sc` only (`renderCard`), so MapLibre's × is made once per card; `setHTML` is used only to open it.
+  `node scripts/test-web-adsb-card.mjs` (headless Edge, silent) holds it.
 - Defaults `{autoZoom: true, fit: true, rings: true}`; `onPrefs` fires only when a person flips a toggle.
   The host persists them. A camera move the layer did not start, within 1 s of a touch/click/wheel/key on
   the map (or carrying MapLibre's `originalEvent`), **pauses** auto-zoom (AUTO shows hatched) until AUTO or
@@ -294,3 +301,52 @@ reconnect inside the leave grace).
 
 **A/B on real hardware**: `scripts/ab-adsb-gain.py` — arms (dump1090-fa, a VibeServer build) alternated in windows on
 the one dongle, one CSV row per window (the 10-25 `fa.csv` columns + `noise_med`, `why`, `warn`). Stdlib only.
+
+
+## The range outline (beta94) — `vibe_adsb_range.h`, `adsblayer.js` rangeRing
+
+Stuart, 2026-11-25: *"can our adsb maps for the server put a jagged ring around the receiver showing the maximum range
+detected. my virtual radar is setup like that"* — Virtual Radar Server's range plot. Then: *"an expiry so one super strong
+signal one day doesn't permanently skew the ring"*, *"make the line thicker and a bolder colour"*, and the reset *"in the
+admin section with the aircraft settings"*.
+
+**Server.** Per radio (each radio is its own process): for each 1° bearing (bin *i* = [*i*, *i*+1)°) the furthest believed
+position per UTC DAY, for the last 90 days (a ring of day slots, slot = day mod 90, wiped when reused), plus the all-time
+maximum per bearing (with when) and the furthest catch ever. The outline served is the maximum per bearing over the owner's
+WINDOW: 7, **30 (default)**, 90 days, or 0 = all time — a one-day tropo opening leaves it when its day leaves the window.
+- Counted: a position from an aircraft with **two consistent fixes in a row** (`Aircraft::posOk ≥ 1`, set by `setPos`:
+  the second within 1 200 kt of the first; a jump resets it), at most **650 km** from the receiver, offered once a second
+  (`Service::loop`). After the Tracker's own checks (CPR pairs, 360 NM cap, single-frame wait).
+- Centre: the server's location at ADS-B start. Moved > 5 km → a new outline (a different site's).
+- Storage: `<data>/adsb-range-<serial>-adsb.bin` (the phone: `adsb-range-adsb.bin` beside its bookmarks) — binary,
+  versioned, 69 KB whatever the sky, written atomically (temp + rename) at most once a minute and when ADS-B stops.
+- `RangeStore` is per SOURCE; only ADS-B exists. ACARS / VDL2 outlines were asked for and then held (they rarely carry a
+  position) — a source is one more `RangeSrc` with its name and distance limit. HFDL (worldwide) would never have one.
+
+| Endpoint | |
+|---|---|
+| `GET /adsb/range[?src=adsb]` | `{ok, window, lat, lon, since, now, km[360], day[360], allKm[360], days, far{km,brg,at}, record{km,brg,at}}` — km 0 = nothing heard that way; `far` is the window's furthest (`at` = its UTC day), `record` the furthest ever. PIN-gated like aircraft.json, CORS open. ~7 KB. |
+| `GET/POST /vibeserver/admin/adsbrange` | the admin page, per radio (`/r/<serial>/…`), admin proof: the same JSON + `available`; POST `?reset=1` (clears the outline, its all-time line and record; window kept), `?window=7\|30\|90\|0` (400 otherwise). |
+| `POST /vibeserver/adsb-range?reset=1 \| ?window=N` | the same for the app's server screen on the phone that IS the server (loopback = the owner, `vsAdminHttpOk`). |
+
+**Map.** `RANGE` beside RINGS (default on; drawn only once the server has answered — an older server: no button). A 3 px
+magenta edge (`THEME.range`: 255,56,210 dark / 205,0,150 light — clear of the aircraft tones and the amber rings) over a 9 % /
+7 % fill, under the rings and every aircraft; the all-time outline as a dotted 1.5 px line behind it (off; the key's tick
+box). A bearing with nothing heard is skipped (the line joins its neighbours). The key: the window, *Furthest: 402 km at
+141°, 8 Nov*, *Furthest ever: 512 km at 160°, 3 Nov*. Fetched on open, then every 5 minutes while shown and the page is
+visible — never per report.
+
+**Owner.** Web admin page → WHAT THIS RECEIVER HAS LEARNED → ADS-B RANGE OUTLINE, one row per radio that can run ADS-B
+("Built over 23 days · furthest … · furthest ever …", DRAWN OVER, RESET RANGE OUTLINE with *"Clear the range outline for
+<radio>? It starts again from the next aircraft heard."*). The app's server screen: the same card while the server runs.
+
+**Tests.** `vibeserver/test-adsb-range.cpp` (bins, limit, the window and expiry, slot reuse, bounded file, damage, reset,
+moved site, store persistence, posOk) · `scripts/test_adsb_layer.mjs` (rangeRing) · `scripts/test_adsb_report.ts` (prefs,
+the owner's line) · `scripts/test-web-adsb-range.mjs` (headless Edge: the polygon from fixture bins, order, bold edge,
+toggle remembered, key, all-time line, no button on an older server, both themes; `VIBE_SHOTS=dir` saves screenshots) ·
+`scripts/test-server-adsb-range.mjs` (a real vibeserver + synthetic 1090 clip: fills, admin 401/200, window, restart,
+reset → served empty, the loopback door).
+
+**RESUME HERE.** Not yet seen on air: the outline from a real sky (Pi 500 / Lenovo ADS-B) over a few days — check the
+shape against the owner's own expectation and that nothing spikes. Not built: ACARS/VDL2 outlines (held by Stuart),
+the outline on the setup page (it is on the admin page and the app's server screen).

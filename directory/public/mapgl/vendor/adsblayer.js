@@ -23,7 +23,8 @@
  *                                               drawReceiver: true });   // false = the host draws its own
  *     layer.update(aircraftArray)    // ADSB.md aircraft objects, the server's whole list each time
  *     layer.setReceiver(lat, lon)
- *     layer.setPrefs({autoZoom, fit, rings, labels})
+ *     layer.setPrefs({autoZoom, fit, rings, labels, range, rangeAll})
+ *     layer.rangeShown()             // ★ beta94 the RANGE OUTLINE drawn: {window, points, allPoints, far, record} | null
  *     layer.setObstacle({corner:'bottom-left', w, h} | null)   — the host's live list, kept clear of aircraft
  *     layer.toggleLegend(on?)   — the colour key, opened above that list (the host's (i) button)
  *     layer.focus(hex)               // select an aircraft and open its card (a list row was tapped)
@@ -225,6 +226,24 @@
                                             'left', ['literal', [0.4, 0]], ['literal', [-0.4, 0]]],
                             'text-allow-overlap': true, 'text-ignore-placement': true },
                   paint: { 'text-color': T.ringLbl, 'text-halo-color': T.halo, 'text-halo-width': 1.2 } });
+  }
+  /* ★★ V12 beta94 THE RANGE OUTLINE (Stuart, 2026-11-25: "a jagged ring around the receiver showing the maximum range
+   *  detected" — Virtual Radar Server's range plot). The server keeps the furthest believed position per 1° bearing
+   *  (vibe_adsb_range.h); this turns its 360 distances (km, 0 = nothing heard that way) into a closed ring of [lon, lat],
+   *  each vertex on its bin's middle bearing. A bearing nothing was heard on is skipped — the line joins its neighbours
+   *  rather than diving to the receiver. Fewer than three bearings is not an outline: null. */
+  function rangeRing(lat, lon, km) {
+    if (!isFinite(lat) || !isFinite(lon) || !Array.isArray(km)) return null;
+    const pts = [];
+    for (let i = 0; i < km.length; i++) {
+      const k = Number(km[i]);
+      if (!(k > 0)) continue;
+      const d = destination(lat, lon, (i + 0.5) * 360 / km.length, k * 1000 / NM_M);
+      pts.push([d.lon, d.lat]);
+    }
+    if (pts.length < 3) return null;
+    pts.push(pts[0].slice());
+    return pts;
   }
   /** Put rings (or none: null) on the GPU map's ring sources. */
   function setRingData(gl, idp, rings) {
@@ -542,7 +561,7 @@
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
-                  wrapLon, distNm, bearingDeg, destination, cardinal, deadReckon, iconFor, altText, altShort,
+                  wrapLon, distNm, bearingDeg, destination, rangeRing, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
@@ -684,9 +703,9 @@
   /* ══ STYLE — the toggles and the card, injected once per theme ══════════════════════════════════ */
   const THEME = {
     dark:  { bg: '9,6,2', ink: '255,184,51', hi: '255,229,102', border: '255,160,0', ring: 'rgba(255,160,0,0.30)', ringLbl: 'rgba(255,184,51,0.6)',
-             label: 'rgba(225,238,228,0.88)', halo: 'rgba(0,0,0,0.9)' },
+             label: 'rgba(225,238,228,0.88)', halo: 'rgba(0,0,0,0.9)', range: '255,56,210' },
     light: { bg: '250,247,240', ink: '120,78,0', hi: '60,40,0', border: '160,100,0', ring: 'rgba(150,90,0,0.40)', ringLbl: 'rgba(120,78,0,0.75)',
-             label: 'rgba(30,30,30,0.9)', halo: 'rgba(255,255,255,0.95)' },
+             label: 'rgba(30,30,30,0.9)', halo: 'rgba(255,255,255,0.95)', range: '205,0,150' },
   };
   function css(th) {
     const T = THEME[th];
@@ -711,8 +730,16 @@
       + p + ' button:focus-visible{outline:1px solid rgba(' + T.hi + ',0.8);outline-offset:-2px}'
       + '.vsadsb-pop-' + th + ' .maplibregl-popup-content,.vsadsb-pop-' + th + ' .leaflet-popup-content-wrapper{background:rgba(' + T.bg + ',0.96);'
       + 'border:1px solid rgba(' + T.border + ',0.30);color:rgba(' + T.ink + ',0.90);font:13px ui-monospace,"SF Mono",Menlo,Consolas,monospace;'
-      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5);max-height:min(46vh,360px);overflow-y:auto}'
+      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5)}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-content{margin:0}'
+      /* ★★ THE CARD SCROLLS INSIDE ITS OWN BOX, NOT THE POPUP'S (Stuart, 2026-11-25: "sometimes the x button to close it
+       *  greys out. work around is to minimise it and then press x"). The scroller used to be MapLibre's popup content —
+       *  the very element MapLibre puts its x in, at top:0 right:0. A card taller than the box (a phone, a short window,
+       *  Comm-B rows, the aviation map's source lines) is a scroller, and an OVERLAY scrollbar (macOS, Edge and Safari
+       *  with a trackpad) is drawn over its right edge: the grey thumb sat on the x and took the press. Folded, the card
+       *  does not scroll, so its x worked. Scrolled, the x scrolled away with the text. Now the text scrolls in
+       *  .vsadsb-sc, the x and the fold key sit above it (z-index) and never move. */
+      + '.vsadsb-pop-' + th + ' .vsadsb-sc{max-height:min(46vh,360px);overflow-y:auto;overscroll-behavior:contain}'
       // ★ MORE ABOVE / BELOW (moreCue): zero-height sticky rows, a small pill in the readout colour centred on the edge
       + '.vsadsb-pop-' + th + ' .vsadsb-more{position:sticky;height:0;z-index:3;pointer-events:none;display:none}'
       + '.vsadsb-pop-' + th + ' .vsadsb-more.up{top:0}.vsadsb-pop-' + th + ' .vsadsb-more.dn{bottom:0}'
@@ -725,10 +752,11 @@
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-top .maplibregl-popup-tip{border-bottom-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(' + T.bg + ',0.96)}'
-      + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button,.vsadsb-pop-' + th + ' .leaflet-popup-close-button{color:rgba(' + T.ink + ',0.5);font-size:16px}'
+      + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button,.vsadsb-pop-' + th + ' .leaflet-popup-close-button{color:rgba(' + T.ink + ',0.5);font-size:16px;z-index:4}'
+      + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button:hover,.vsadsb-pop-' + th + ' .leaflet-popup-close-button:hover{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .t{font-size:15px;font-weight:600;color:rgba(' + T.hi + ',1);margin-bottom:6px;letter-spacing:0.8px;padding-right:38px}'
       + '.vsadsb-pop-' + th + ' .t.mn{margin:0}'
-      + '.vsadsb-pop-' + th + ' .vsadsb-min{position:absolute;top:3px;right:24px;background:none;border:0;padding:2px 6px;cursor:pointer;'
+      + '.vsadsb-pop-' + th + ' .vsadsb-min{position:absolute;z-index:4;top:3px;right:24px;background:none;border:0;padding:2px 6px;cursor:pointer;'
       + 'font:16px ui-monospace,"SF Mono",Menlo,Consolas,monospace;line-height:1;color:rgba(' + T.ink + ',0.5)}'
       + '.vsadsb-pop-' + th + ' .vsadsb-min:hover{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .t i{font-style:normal;font-size:12px;font-weight:400;color:rgba(' + T.ink + ',0.65);margin-left:6px}'
@@ -841,7 +869,11 @@
 
     let rx = opts.receiver && isFinite(opts.receiver.lat) && isFinite(opts.receiver.lon) ? { lat: +opts.receiver.lat, lon: +opts.receiver.lon } : null;
     if (rx && rx.lat === 0 && rx.lon === 0) rx = null;      // ★ Null Island is "unknown", as on the HFDL map
-    const prefs = Object.assign({ autoZoom: true, fit: true, rings: true, labels: true }, opts.prefs || {});
+    const prefs = Object.assign({ autoZoom: true, fit: true, rings: true, labels: true, range: true, rangeAll: false }, opts.prefs || {});
+    /* ★ opts.imageBase: where this server serves the OWNER's logos and silhouettes ("…/adsb/"), or absent = none —
+     *   and (beta94) this radio's range outline and the trails.
+     *   The server names a key (a.logo / a.sil) only when the file exists, so nothing here hunts through 404s. */
+    const imageBase = typeof opts.imageBase === 'string' ? opts.imageBase : null;
     const onPrefs = typeof opts.onPrefs === 'function' ? opts.onPrefs : null;
     /* ★ drawReceiver:false — the host draws its own receiver marker (the app's page already has the HFDL
      *  house); the layer still uses the position for rings, distances and the camera. Default true. */
@@ -876,6 +908,10 @@
     const bAuto = mk('AUTO', 'Auto-zoom: keep every aircraft in view');
     const bFit = mk('FIT', 'Fit to aircraft: the receiver need not be in the middle');
     const bRings = mk('RINGS', 'Range rings in nautical miles around the receiver');
+    /* ★★ V12 beta94 RANGE — the range outline (rangeRing). Drawn only once this server has answered with one (an older
+     *  server has none: no button — AGENTS.md, never a control that cannot act). */
+    const bRange = mk('RANGE', 'Range outline: the furthest aircraft heard on each bearing');
+    bRange.hidden = true;
     /* ★ LABELS (Stuart, 2026-10-24: "on a busy screen they may be a bit of a mess"): off = no labels, except the aircraft
      *  you have selected, which keeps its own so you can still read it. */
     const bLabels = mk('LABELS', 'Callsign and altitude beside each aircraft');
@@ -904,7 +940,13 @@
       + '<div class="t">ALTITUDE (the text and its arrow)</div>'
       + '<div class="r"><span class="g">\u25B2</span>Climbing \u00b7 <span class="g">\u25BC</span>descending \u00b7 <span class="g">\u25CF</span>level</div>'
       + '<div class="bar" style="background:linear-gradient(90deg,' + grad + ')"></div>'
-      + '<div class="ax"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k ft</span></div>';
+      + '<div class="ax"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k ft</span></div>'
+      // ★ beta94 the range outline's key: what it is, the furthest in its window and ever, and the all-time line's switch
+      + '<div class="vsadsb-rg" hidden><div class="t">RANGE OUTLINE</div>'
+      + '<div class="r"><span class="g" style="color:rgb(' + T.range + ')">\u25AC</span><span class="vsadsb-rg-w"></span></div>'
+      + '<div class="r vsadsb-rg-far" style="white-space:normal"></div>'
+      + '<label class="r" style="cursor:pointer"><input type="checkbox" class="vsadsb-rg-all" style="margin:0"> All-time outline (dotted)</label>'
+      + '<div class="r vsadsb-rg-rec" style="white-space:normal;opacity:.8"></div></div>';
     for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) leg.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     container.appendChild(leg);
     function placeLegend() { leg.style.bottom = ((obstacle ? obstacle.h : 0) + 8) + 'px'; }
@@ -916,6 +958,9 @@
       bFit.classList.toggle('on', !!prefs.fit || !rx);
       bRings.classList.toggle('on', !!prefs.rings && !!rx);
       bLabels.classList.toggle('on', prefs.labels !== false);
+      bRange.hidden = !rangeData;
+      bRange.classList.toggle('on', !!prefs.range);
+      bRange.title = rangeTitle();
       // ★ A control that cannot do anything is shown disabled with the reason, never left inert (AGENTS.md).
       bFit.disabled = !rx; bRings.disabled = !rx;
       if (!rx) { bFit.title = bRings.title = 'The receiver’s position is not known on this server'; }
@@ -935,7 +980,90 @@
     bFit.addEventListener('click', () => { setPref('fit', !prefs.fit); az.reset(); paintCtl(); if (prefs.autoZoom && !paused) cameraStep(true); });
     bRings.addEventListener('click', () => { setPref('rings', !prefs.rings); paintCtl(); drawRings(); });
     bLabels.addEventListener('click', () => { setPref('labels', prefs.labels === false); paintCtl(); labelAt = 0; kick(); });
+    bRange.addEventListener('click', () => { setPref('range', !prefs.range); paintCtl(); drawRange(); if (prefs.range) fetchRange(false); });
     bCentre.addEventListener('click', () => { paused = false; az.reset(); paintCtl(); cameraStep(true); });
+    /* ── ★★ V12 beta94 THE RANGE OUTLINE (vibe_adsb_range.h; ADSB.md "The range outline") ─────────────────────────────
+     *  GET <imageBase>range — this radio's outline over the owner's window (7 / 30 / 90 days or all time), the all-time
+     *  one and the furthest catch ever. Fetched when the map opens, then every 5 minutes while it is shown and the page
+     *  is visible (it grows slowly; a poll is floored, never per report — memory: cloudflare_workers_limit_incident).
+     *  ★★ BOLD, NOT CALM (Stuart, 11-25: "make the line thicker and a bolder colour too so its easier to see on the
+     *  map"): a 3 px magenta edge — clear of the aircraft's green/amber/grey/red/blue tones and the amber rings, on both
+     *  themes — over a faint fill so the aircraft beneath stay readable. The all-time outline is a thin dotted line of
+     *  the same colour, behind it, off unless asked for (the key's tick box). */
+    const RANGE_POLL_MS = 5 * 60 * 1000;
+    let rangeData = null, rangeAt = 0, rangeBusy = false, rangeTimer = 0, llRange = null;
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    function dayText(utc) { const d = new Date(utc * 1000); return d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()]; }
+    function catchText(c) { return c && c.km > 0 ? Math.round(c.km) + ' km at ' + Math.round(c.brg) + '\u00b0, ' + dayText(c.at) : ''; }
+    function windowText(w) { return w === 0 ? 'all time' : w === 1 ? 'the last day' : 'the last ' + w + ' days'; }
+    function rangeTitle() {
+      if (!rangeData) return '';
+      const f = catchText(rangeData.far);
+      return (prefs.range ? 'Range outline on' : 'Range outline off') + ' \u2014 the furthest aircraft heard on each bearing over '
+        + windowText(rangeData.window) + (f ? ' \u00b7 furthest ' + f : ' \u00b7 nothing heard yet');
+    }
+    function paintRangeKey() {
+      const box = leg.querySelector('.vsadsb-rg');
+      if (!box) return;
+      box.hidden = !rangeData;
+      if (!rangeData) return;
+      const f = catchText(rangeData.far), r = catchText(rangeData.record);
+      box.querySelector('.vsadsb-rg-w').textContent = 'Furthest per bearing, ' + windowText(rangeData.window);
+      box.querySelector('.vsadsb-rg-far').textContent = f ? 'Furthest: ' + f : 'Nothing heard yet in this window';
+      box.querySelector('.vsadsb-rg-rec').textContent = r ? 'Furthest ever: ' + r : '';
+      box.querySelector('.vsadsb-rg-all').checked = !!prefs.rangeAll;
+    }
+    leg.addEventListener('change', (e) => {
+      if (!e.target || !e.target.classList || !e.target.classList.contains('vsadsb-rg-all')) return;
+      setPref('rangeAll', !!e.target.checked); drawRange();
+    });
+    function rangeGeo() {
+      if (!rangeData || rangeData.lat == null || rangeData.lon == null) return { w: null, a: null };
+      return { w: prefs.range ? rangeRing(rangeData.lat, rangeData.lon, rangeData.km) : null,
+               a: prefs.range && prefs.rangeAll && rangeData.window !== 0 ? rangeRing(rangeData.lat, rangeData.lon, rangeData.allKm) : null };
+    }
+    function drawRange() {
+      if (destroyed) return;
+      const g = rangeGeo();
+      if (gl) {
+        const src = glReady && gl.getSource('vsadsb-range');
+        if (!src) return;
+        const f = [];
+        if (g.a) f.push({ type: 'Feature', properties: { k: 'a' }, geometry: { type: 'LineString', coordinates: g.a } });
+        if (g.w) f.push({ type: 'Feature', properties: { k: 'w' }, geometry: { type: 'Polygon', coordinates: [g.w] } });
+        src.setData({ type: 'FeatureCollection', features: f });
+      } else {
+        if (llRange) { lm.removeLayer(llRange); llRange = null; }
+        if (!g.w && !g.a) return;
+        const col = 'rgb(' + T.range + ')', grp = LL.layerGroup();
+        if (g.a) LL.polyline(g.a.map((p) => [p[1], p[0]]), { color: col, weight: 1.5, opacity: 0.85, dashArray: '1 5', lineCap: 'round', interactive: false }).addTo(grp);
+        if (g.w) LL.polygon(g.w.map((p) => [p[1], p[0]]), { color: col, weight: 3, opacity: 0.95, fillColor: col, fillOpacity: 0.08, interactive: false }).addTo(grp);
+        llRange = grp.addTo(lm);
+      }
+    }
+    function fetchRange(force) {
+      if (destroyed || rangeBusy || imageBase == null || typeof fetch !== 'function') return;
+      if (!force && now() - rangeAt < RANGE_POLL_MS - 1000) return;
+      rangeBusy = true; rangeAt = now();
+      fetch(imageBase + 'range', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          rangeBusy = false;
+          if (destroyed || !j || !j.ok || !Array.isArray(j.km)) return;
+          rangeData = { window: Number(j.window) || 0, lat: j.lat == null ? null : Number(j.lat), lon: j.lon == null ? null : Number(j.lon),
+                        km: j.km, allKm: Array.isArray(j.allKm) ? j.allKm : [], far: j.far || null, record: j.record || null, days: j.days };
+          paintCtl(); paintRangeKey(); drawRange();
+        })
+        .catch(() => { rangeBusy = false; });   // ★ an older server (404) or no network: no outline, no button
+    }
+    function rangeTick() {
+      if (prefs.range && !(doc.visibilityState === 'hidden')) fetchRange(false);
+    }
+    const onVis = () => { if (doc.visibilityState !== 'hidden') rangeTick(); };
+    if (imageBase != null) {
+      rangeTimer = setInterval(rangeTick, 30000);   // ★ looks every 30 s; asks only when 5 min have passed
+      doc.addEventListener('visibilitychange', onVis);
+    }
     paintCtl();
 
     /* ── camera ─────────────────────────────────────────────────────────────────────────────── */
@@ -1076,6 +1204,16 @@
       if (destroyed || gl.getSource('vsadsb-ac')) return;
       const empty = { type: 'FeatureCollection', features: [] };
       for (const id of ['vsadsb-ac', 'vsadsb-rx']) gl.addSource(id, { type: 'geojson', data: empty });
+      // ★ beta94 the range outline, under the rings and every aircraft: a faint fill, the all-time dotted line, the bold edge
+      gl.addSource('vsadsb-range', { type: 'geojson', data: empty });
+      gl.addLayer({ id: 'vsadsb-range-fill', type: 'fill', source: 'vsadsb-range', filter: ['==', ['get', 'k'], 'w'],
+                    paint: { 'fill-color': 'rgb(' + T.range + ')', 'fill-opacity': th === 'light' ? 0.07 : 0.09 } });
+      gl.addLayer({ id: 'vsadsb-range-all', type: 'line', source: 'vsadsb-range', filter: ['==', ['get', 'k'], 'a'],
+                    layout: { 'line-cap': 'round', 'line-join': 'round' },
+                    paint: { 'line-color': 'rgb(' + T.range + ')', 'line-width': 1.5, 'line-opacity': 0.85, 'line-dasharray': [0.1, 3] } });
+      gl.addLayer({ id: 'vsadsb-range-line', type: 'line', source: 'vsadsb-range', filter: ['==', ['get', 'k'], 'w'],
+                    layout: { 'line-join': 'round' },
+                    paint: { 'line-color': 'rgb(' + T.range + ')', 'line-width': 3, 'line-opacity': 0.95 } });
       addRingLayers(gl, 'vsadsb-', T);
       gl.addLayer({ id: 'vsadsb-rx', type: 'symbol', source: 'vsadsb-rx',
                     layout: { 'icon-image': 'vsadsb-rx', 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
@@ -1104,7 +1242,7 @@
                     paint: { 'text-color': T.label, 'text-halo-color': T.halo, 'text-halo-width': 1.2, 'text-opacity': ['get', 'lo'] } });
       rxImage();
       glReady = true;
-      drawRx(); drawRings();
+      drawRx(); drawRings(); drawRange();
       kick();
     }
     function hitHex(point) {
@@ -1147,12 +1285,10 @@
     } else {
       drawRx(); drawRings();
     }
+    fetchRange(true);
 
     /* ── the card ───────────────────────────────────────────────────────────────────────────── */
     let popup = null, popupHex = null, popupHtml = '';
-    /* ★ opts.imageBase: where this server serves the OWNER's logos and silhouettes ("…/adsb/"), or absent = none.
-     *   The server names a key (a.logo / a.sil) only when the file exists, so nothing here hunts through 404s. */
-    const imageBase = typeof opts.imageBase === 'string' ? opts.imageBase : null;
     /* ★★★ PHOTOS ARE OFF — TODO(Stuart): read and save the Planespotters.net photo API terms
      *     (https://www.planespotters.net/photo/api — behind a Cloudflare check that no script of ours can pass, so not
      *     confirmed at first hand; research §2.5). The code below follows the terms as reported: fetched BY THIS SCREEN
@@ -1265,12 +1401,12 @@
     /* ★★ MORE ABOVE / MORE BELOW (Stuart, 2026-10-25: "on the little popup cards for the aircraft can you put a little down
      *  arrow/up arrow or some way of showing that there is more info to scroll"). Two sticky markers, the first and last
      *  thing in the card's scroller, shown only when there IS more that way; re-judged on every scroll, every refresh of
-     *  the card (setHTML makes a new scroller) and every resize. Zero height, so they never move the card's contents. */
+     *  the card and every resize. Zero height, so they never move the card's contents. */
     const MORE_UP = '<div class="vsadsb-more up" aria-hidden="true"><span>▲</span></div>';
     const MORE_DN = '<div class="vsadsb-more dn" aria-hidden="true"><span>▼</span></div>';
     function moreCue() {
       const el = popup && popup.getElement ? popup.getElement() : null;
-      const sc = el ? el.querySelector('.maplibregl-popup-content, .leaflet-popup-content-wrapper') : null;
+      const sc = el ? el.querySelector('.vsadsb-sc') : null;
       if (!sc) return;
       const up = sc.scrollTop > 2, dn = sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2;
       sc.classList.toggle('vsadsb-more-up', up);
@@ -1279,7 +1415,7 @@
     // ★ scroll does not bubble: caught on the way down, for whichever card is open
     container.addEventListener('scroll', (e) => {
       const t = e.target;
-      if (t && t.classList && (t.classList.contains('maplibregl-popup-content') || t.classList.contains('leaflet-popup-content-wrapper'))) moreCue();
+      if (t && t.classList && t.classList.contains('vsadsb-sc')) moreCue();
     }, true);
     window.addEventListener('resize', () => requestAnimationFrame(moreCue));
     function select(hex) {
@@ -1297,13 +1433,13 @@
          *  report — so the keyboard's and the controller's next Enter closed the card instead of pressing what
          *  was highlighted (web client, ADS-B list, 2026-10-24). The x is still a button anyone can reach. */
         const p = new ML.Popup({ closeButton: true, closeOnClick: false, focusAfterOpen: false, className: 'vsadsb-pop-' + th, maxWidth: '280px', offset: 16 })
-          .setLngLat([s.disp.lon, s.disp.lat]).setHTML(popupHtml);
+          .setLngLat([s.disp.lon, s.disp.lat]).setHTML(SC_OPEN + popupHtml + SC_CLOSE);
         // ★ Only THIS card's close clears the selection — closePopup() forgets the card before removing it.
         p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.addTo(gl);
       } else {
         const p = LL.popup({ className: 'vsadsb-pop-' + th, maxWidth: 280, offset: [0, -10], autoPan: false, closeOnClick: false })
-          .setLatLng([s.disp.lat, s.disp.lon]).setContent(popupHtml);
+          .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);
         p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.openOn(lm);
       }
@@ -1401,7 +1537,25 @@
         if (d) { d.innerHTML = n.dyn; popupHtml = h; moreCue(); return; }
       }
       popupHtml = h;
-      if (gl) popup.setHTML(h); else popup.setContent(h);
+      renderCard(h);
+    }
+    /* ★★ THE x IS MADE ONCE PER CARD (Stuart, 2026-11-25, the greyed x). MapLibre's setHTML empties the popup and makes a
+     *  NEW close button every time — so a card refreshed between a press and its release (a route or a logo arriving,
+     *  the fold) lost the click, and threw away the reader's scroll position. On the GPU map only the card's own scroller
+     *  is refilled: MapLibre's x stays the node that was pressed. Leaflet keeps its x outside the content anyway; there
+     *  setContent re-lays the popup's width (a folded card is narrow), and the scroll position is put back. */
+    const SC_OPEN = '<div class="vsadsb-sc">', SC_CLOSE = '</div>';
+    function renderCard(h) {
+      if (!popup) return;
+      const el = popup.getElement ? popup.getElement() : null;
+      const sc = el ? el.querySelector('.vsadsb-sc') : null;
+      if (gl && sc) sc.innerHTML = h;
+      else {
+        const top = sc ? sc.scrollTop : 0;
+        if (gl) popup.setHTML(SC_OPEN + h + SC_CLOSE); else popup.setContent(SC_OPEN + h + SC_CLOSE);
+        const sc2 = top && popup.getElement ? popup.getElement().querySelector('.vsadsb-sc') : null;
+        if (sc2) sc2.scrollTop = top;
+      }
       moreCue();
     }
     function onMinClick(e) {
@@ -1411,8 +1565,7 @@
       cardMin = !cardMin;
       if (selected && popup && ac.has(selected)) {
         popupHtml = cardHtml(ac.get(selected));
-        if (gl) popup.setHTML(popupHtml); else popup.setContent(popupHtml);
-        moreCue();
+        renderCard(popupHtml);
       }
     }
     container.addEventListener('click', onMinClick, true);
@@ -1712,6 +1865,9 @@
         if (!p) return;
         let moved = false;
         if (typeof p.labels === 'boolean' && prefs.labels !== p.labels) { prefs.labels = p.labels; paintCtl(); labelAt = 0; kick(); }
+        let rg = false;
+        for (const k of ['range', 'rangeAll']) if (typeof p[k] === 'boolean' && prefs[k] !== p[k]) { prefs[k] = p[k]; rg = true; }
+        if (rg) { paintCtl(); paintRangeKey(); drawRange(); if (prefs.range) fetchRange(false); }
         for (const k of ['autoZoom', 'fit', 'rings']) if (typeof p[k] === 'boolean' && prefs[k] !== p[k]) { prefs[k] = p[k]; moved = true; }
         if (!moved) return;
         paused = false; az.reset(); paintCtl(); drawRings();
@@ -1731,9 +1887,18 @@
         return true;
       },
       prefs() { return Object.assign({}, prefs); },
+      /** ★ beta94 what the range outline draws (a test's view): null until the server has answered. */
+      rangeShown() {
+        if (!rangeData) return null;
+        const g = rangeGeo();
+        return { window: rangeData.window, points: g.w ? g.w.length - 1 : 0, allPoints: g.a ? g.a.length - 1 : 0,
+                 far: rangeData.far, record: rangeData.record, title: rangeTitle() };
+      },
       destroy() {
         destroyed = true;
         if (rafId) cancelAnimationFrame(rafId);
+        if (rangeTimer) clearInterval(rangeTimer);
+        doc.removeEventListener('visibilitychange', onVis);
         closePopup();
         try { ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }
         for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) container.removeEventListener(ev, onInput, { capture: true });
@@ -1741,12 +1906,14 @@
         container.removeEventListener('error', onCardImgError, true);
         if (gl) {
           gl.off('movestart', onMoveStart); gl.off('moveend', onMoveEnd); gl.off('click', onGlClick); gl.off('mousemove', onGlHover);
-          for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-trail', 'vsadsb-trail-glow', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
-          for (const id of ['vsadsb-ac', 'vsadsb-trail', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getSource && gl.getSource(id)) gl.removeSource(id);
+          for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-trail', 'vsadsb-trail-glow', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings',
+                            'vsadsb-range-line', 'vsadsb-range-all', 'vsadsb-range-fill']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
+          for (const id of ['vsadsb-ac', 'vsadsb-trail', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings', 'vsadsb-range']) if (gl.getSource && gl.getSource(id)) gl.removeSource(id);
         } else {
           lm.off('movestart', onMoveStart); lm.off('moveend', onMoveEnd);
           for (const s of ac.values()) removeLl(s);
           if (llRings) lm.removeLayer(llRings);
+          if (llRange) lm.removeLayer(llRange);
           if (llRx) lm.removeLayer(llRx);
           if (trail.ll) lm.removeLayer(trail.ll);
         }

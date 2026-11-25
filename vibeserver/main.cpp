@@ -5249,6 +5249,12 @@ int main(int argc, char** argv) {
             afcPath = tag.empty() ? vsDataDir() + "/afc.txt" : vsDataDir() + "/afc-" + tag + ".txt";
         }
         LocalSdrShim::setAfcFile(afcPath, g_handheldChild);
+        /* ★ V12 beta94 the ADS-B range outline (vibe_adsb_range.h): one set of files per radio serial, beside the AFC store. */
+        {
+            std::string tag;
+            for (char c : g_myRadioSerial) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') tag += c;
+            LocalSdrShim::setAdsbRangeFiles(vsDataDir() + (tag.empty() ? std::string("/adsb-range") : "/adsb-range-" + tag));
+        }
         LocalSdrShim::instance().setAutoPpm(g_handheldChild ? LocalSdrShim::afcHandheldOn(g_runtimeConfig.autoPpm)
                                                             : g_runtimeConfig.autoPpm);
     }
