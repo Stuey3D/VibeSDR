@@ -720,7 +720,17 @@ static int replayReal(int argc, char** argv) {
         if (!std::strncmp(argv[i], "vfos=", 5)) { vfos.clear(); for (const char* q = argv[i] + 5; *q;) { vfos.push_back(std::atof(q)); q = std::strchr(q, ','); if (!q) break; ++q; } }
     }
     std::vector<cf32> x; uint32_t rate = 0;
-    if (!loadIq16(argv[2], x, rate)) { std::printf("cannot read %s\n", argv[2]); return 3; }
+    const size_t pl = std::strlen(argv[2]);
+    if (pl > 3 && !std::strcmp(argv[2] + pl - 3, ".u8")) {
+        // ★ a server's raw IQ out (rtl_tcp u8, its 12-byte header already stripped) at u8rate= (default 250 kHz)
+        FILE* f = std::fopen(argv[2], "rb"); if (!f) { std::printf("cannot read %s\n", argv[2]); return 3; }
+        std::vector<uint8_t> u; { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) u.insert(u.end(), b, b + k); }
+        std::fclose(f);
+        rate = 250000;
+        for (int i = 5; i < argc; ++i) if (!std::strncmp(argv[i], "u8rate=", 7)) rate = (uint32_t)std::atof(argv[i] + 7);
+        x.resize(u.size() / 2);
+        for (size_t i = 0; i < x.size(); ++i) x[i] = cf32((u[2 * i] - 127.5f) / 128.0f, (u[2 * i + 1] - 127.5f) / 128.0f);
+    } else if (!loadIq16(argv[2], x, rate)) { std::printf("cannot read %s\n", argv[2]); return 3; }
     const double fs = (double)rate * L / D, hwC = centre + hw;
     // ★ start at the point of the recording whose UTC, moved on by whole two-minute steps, is now
     double shift = std::floor((vibeUtcNow() - utc0) / 120.0) * 120.0;
@@ -767,6 +777,26 @@ static int replayReal(int argc, char** argv) {
     uint64_t produced = 0, phase = 0;
     std::mt19937 dropRng(5);
     const bool nowStamp = std::getenv("VIBE_REPLAY_NOWSTAMP") != nullptr;
+    /* ★ VIBE_REPLAY_BCAST=<dBFS>: the rest of an HF capture — 60 strong carriers (each that level, AM-ish: carrier only) in
+     *  the 49 m, 41 m and 31 m broadcast bands and white noise 60 dB under them — a 2^20-sample periodic table added to
+     *  the interpolated recording (which on its own fills only ±rate/2 round its centre). */
+    std::vector<cf32> bcast;
+    if (const char* e = std::getenv("VIBE_REPLAY_BCAST")) {
+        const double a = std::pow(10.0, std::atof(e) / 20.0);
+        const size_t N = (size_t)1 << 20; bcast.assign(N, cf32(0, 0));
+        std::mt19937 g(9); std::uniform_real_distribution<double> u(0, 1); std::normal_distribution<float> nd(0, 1);
+        const double bands[3][2] = { { 5.90e6, 6.20e6 }, { 7.20e6, 7.60e6 }, { 9.40e6, 9.90e6 } };
+        for (int k = 0; k < 60; ++k) {
+            const double* b = bands[k % 3];
+            const double f = b[0] + u(g) * (b[1] - b[0]);
+            const long long bin = std::llround((f - hwC) / fs * (double)N);          // ★ periodic in the table
+            const double ph0 = u(g) * 2 * M_PI;
+            for (size_t i = 0; i < N; ++i) { const double ph = ph0 + 2 * M_PI * (double)((bin * (long long)i) % (long long)N) / (double)N;
+                bcast[i] += cf32((float)(a * std::cos(ph)), (float)(a * std::sin(ph))); }
+        }
+        const float ns = (float)(a * 1e-3 / std::sqrt(2.0));
+        for (auto& v : bcast) v += cf32(ns * nd(g), ns * nd(g));
+    }
     const int jitterMs = std::getenv("VIBE_REPLAY_JITTER") ? std::atoi(std::getenv("VIBE_REPLAY_JITTER")) : 0;
     const double base = utc0 + shift + (double)from / rate;
     for (size_t o = 0; o < x.size(); o += chunk) {
@@ -783,6 +813,7 @@ static int replayReal(int argc, char** argv) {
                 ph += dph; if (ph > M_PI) ph -= 2 * M_PI;
             }
         }
+        if (!bcast.empty()) for (size_t i = 0; i < up.size(); ++i) up[i] += bcast[(size_t)((produced + i) & (bcast.size() - 1))];
         produced += up.size();
         const double utc = base + (double)produced / fs;
         std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)(1e6 * (double)produced / fs)));
