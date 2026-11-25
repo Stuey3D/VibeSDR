@@ -152,7 +152,7 @@ export default function ServersChip({
 
   return (
     // Full-screen, box-none so only the chip / dropdown / catch-layer take touches.
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" onTouchStart={noteTouchInteraction}>
+    <View style={[StyleSheet.absoluteFill, expanded && OPEN_LAYER]} pointerEvents="box-none" onTouchStart={noteTouchInteraction}>
       {/* Catch-layer: swallows the outside tap so dismissing never tunes/pans the
           waterfall, and carries a faint backdrop tint. Behind the dropdown. */}
       {expanded && (
@@ -273,8 +273,11 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
 
 /* ★★ OPEN, IT IS TOPMOST (Stuart, 2026-10-30: "when the servers chip is open it needs to be topmost" — it opened behind
  *  the DAB station strip and the DAB box). Above every layer on the SDR screen; the backdrop sits with it, so a tap
- *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place. */
-const OPEN_LAYER = { zIndex: 300, elevation: 300 } as const;
+ *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place.
+ * ★★★ It must be on the chip's ROOT view (11-25: it still opened under the DAB box) — zIndex / elevation only order a view
+ *  among its own siblings, so on the rows alone it never left this component. 9000: above the boxes, the chat layer
+ *  (300) and the crash card (999); below the tour (9999). scripts/check-servers-menu-layer.mjs holds it. */
+const OPEN_LAYER = { zIndex: 9000, elevation: 9000 } as const;
 
 const styles = StyleSheet.create({
   chip: {
