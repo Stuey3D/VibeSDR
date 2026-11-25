@@ -60,11 +60,24 @@ struct Profile {
  *  `minEl` with nobody here, the current background decode PAUSES, the pass is picked (tune + Doppler + its decoder, into
  *  the gallery) and at LOS exactly the paused decode RESUMES. A listener arriving takes the radio, as ever. */
 struct SatPassBird { long long norad = 0; std::string label; };
+/* ★★★ beta94 THE TWO GROUPS + THEIR PRIORITY (Stuart 11-25: "for satellite passes group meteor and orbcomm then allow the
+ *  user to choose a priority. so meteor first for images and orbcomm 2nd for antenna plotting"):
+ *   · meteor — EVERY Meteor-M LRPT downlink in the catalogue (the owner no longer ticks each bird; a bird ticked in
+ *     `birds` before beta94 still counts — the pages turn such ticks into this switch).
+ *   · orbcomm — ORBCOMM SKY-PLOT MONITORING whenever an ORBCOMM bird is above the horizon (the light watcher,
+ *     vibe_orbcomm_sky.h: positions + SNR into skyplot.json, no packets).
+ *   · orbcommFirst — the priority, which matters ONLY where one capture cannot hold both (vibe_sat_pass_sched.h — an
+ *     Airspy HF+); everywhere else both run together. Default Meteor first.
+ *  Absent in the JSON = false (every setting before beta94 reads back exactly as it was). */
 struct SatPasses {
     bool on = false;
     int minEl = 20;                       ///< degrees; a pass that peaks lower is not taken
-    std::vector<SatPassBird> birds;       ///< ≤ kMaxSatPassBirds
-    bool any() const { return on && !birds.empty(); }
+    std::vector<SatPassBird> birds;       ///< ≤ kMaxSatPassBirds — the other downlinks (ISS SSTV, APRS, FUNcube …)
+    bool meteor = false;                  ///< ★ beta94 every Meteor LRPT pass
+    bool orbcomm = false;                 ///< ★ beta94 ORBCOMM sky-plot monitoring
+    bool orbcommFirst = false;            ///< ★ beta94 the priority where both cannot run together
+    bool anyPicked() const { return meteor || orbcomm || !birds.empty(); }
+    bool any() const { return on && anyPicked(); }
 };
 constexpr size_t kMaxSatPassBirds = 8;
 struct Config {
@@ -268,6 +281,9 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
                 b.label = bj.str("label", "").substr(0, 48);
                 if (b.norad > 0 && !b.label.empty()) out.sat.birds.push_back(b);
             }
+        if (const auto* v = sp->get("meteor")) out.sat.meteor = v->kind == antswitch::Json::Bool && v->b;
+        if (const auto* v = sp->get("orbcomm")) out.sat.orbcomm = v->kind == antswitch::Json::Bool && v->b;
+        out.sat.orbcommFirst = sp->str("first", "meteor") == "orbcomm";
     }
     if (out.waitSec < 0) out.waitSec = 0;
     if (out.waitSec > 24 * 3600) out.waitSec = 24 * 3600;
@@ -340,13 +356,18 @@ inline std::string toJson(const Config& c) {
     }
     o += "]";
     // ★ V12 beta90: absent unless the owner has set satellite passes up, so older settings read back unchanged
-    if (c.sat.on || !c.sat.birds.empty()) {
+    if (c.sat.on || c.sat.anyPicked()) {
         o += std::string(",\"satPasses\":{\"on\":") + (c.sat.on ? "true" : "false") + ",\"minEl\":" + std::to_string(c.sat.minEl) + ",\"birds\":[";
         for (size_t i = 0; i < c.sat.birds.size(); ++i) {
             std::snprintf(b, sizeof b, "%lld", c.sat.birds[i].norad);
             o += std::string(i ? "," : "") + "{\"norad\":" + b + ",\"label\":\"" + gallery::jsonEsc(c.sat.birds[i].label) + "\"}";
         }
-        o += "]}";
+        o += "]";
+        // ★ beta94: absent unless set (an older setting reads back byte for byte)
+        if (c.sat.meteor) o += ",\"meteor\":true";
+        if (c.sat.orbcomm) o += ",\"orbcomm\":true";
+        if (c.sat.orbcommFirst) o += ",\"first\":\"orbcomm\"";
+        o += "}";
     }
     return o + "}";
 }

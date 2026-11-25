@@ -128,7 +128,7 @@ import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, r
 import { orbAttachParams } from '../../../src/services/orbcomm';
 import { orbOverlayFrom } from '../../../src/utils/orbcommView';
 import { xpdrListen, xpdrOverlayFrom } from '../../../src/services/xpdr';   // ★★★ beta94 the transponder finder (its slice + arrows, LISTEN)   // ★★ 2026-11-24 the ORBCOMM slice on the waterfall   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
-import { parseSkyPlotJson, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, skyRadioFromBase, SKY_LEGEND, SKY_PLOT_WHAT, type SkyPlotData } from '../../../src/utils/skyPlot';   // ★★ 2026-11-24 THE SKY PLOT
+import { parseSkyPlotJson, skyModeOf, skyModesHtml, skyPlotQuery, skyPlotSvg, skyRadioFromBase, skySceneFor, skySummaryFor, SKY_LEGEND, SKY_PLOT_WHAT, type SkyMode, type SkyPlotData } from '../../../src/utils/skyPlot';   // ★★ 2026-11-24 THE SKY PLOT
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
          dxTuneTarget, dxWhen, dxWhere, type DxAlert, type DxEntry, type DxPage, type DxSort } from '../../../src/utils/dxLog';
@@ -19721,6 +19721,7 @@ function galShowTlm(it: GalleryItem, body: string): boolean {
  *  #galText); the radio chips — a sky plot is about an AERIAL — appear when 2+ radios hold dots, and it opens on THIS radio
  *  (its /r/<id>) when it is one of them. DOWNLOAD saves the server's own PNG of the same view. */
 let galSkyRadio: string | null = null;   // null = not chosen yet: this radio when it is a choice
+let galSkyMode: SkyMode = 'auto';          // ★★★ beta94 AUTO / TRACKS / HEATMAP
 let galSkySeq = 0;
 function galSkyEl(): HTMLElement {
   let el = document.getElementById('galSky');
@@ -19731,7 +19732,9 @@ function galSkyEl(): HTMLElement {
     st.textContent = `#galSky svg{display:block;width:100%;max-width:420px;height:auto;margin:6px auto;color:var(--btn-text,#ddd)}`
       + `#galSky .galSkyLeg{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 12px;font-size:12px;color:var(--text-dim)}`
       + `#galSky .galSkyLeg i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}`
-      + `#galSky .galSkySum{text-align:center;margin-top:4px}`;
+      + `#galSky .galSkySum{text-align:center;margin-top:4px}`
+      + `#galSky .sky-modes{display:flex;justify-content:center;gap:6px;margin:4px 0}`
+      + `#galSky .sky-modes .btn{font-size:12px;padding:2px 10px;min-height:0}`;
     document.head.appendChild(st);
   }
   return el;
@@ -19760,7 +19763,7 @@ async function openGallerySky() {
   if (d && pick && !ok(pick) && d.radios) { galSkyRadio = ''; void openGallerySky(); return; }
   const shown = d?.radios ? pick : '';
   const dl = $('galDl') as HTMLAnchorElement;
-  const png = galUrl(skyPlotQuery('orbcomm', pick, 0, 0, true));
+  const png = galUrl(skyPlotQuery('orbcomm', pick, 0, 0, true, galSkyMode));
   dl.href = png + (png.includes('?') ? '&' : '?') + 'download=1'; dl.download = 'ORBCOMM sky plot.png';
   el.innerHTML = '';
   if (!d) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = err; el.appendChild(h); return; }
@@ -19778,11 +19781,14 @@ async function openGallerySky() {
     el.appendChild(row);
   }
   const fig = document.createElement('div');
-  fig.innerHTML = skyPlotSvg(skyPlotScene(d.dots, 300, 6000), 'Sky plot: where this aerial hears the ORBCOMM satellites')
+  const now = Date.now() / 1000;
+  fig.innerHTML = skyPlotSvg(skySceneFor(galSkyMode, d.cells, d.dots, now, 300, 6000), 'Sky plot: where this aerial hears the ORBCOMM satellites')
+    + (d.cells ? skyModesHtml(galSkyMode) : '')
     + `<div class="galSkyLeg">${SKY_LEGEND.map((k) => `<span><i style="background:${k.css}"></i>${k.label.replace(/[<>&]/g, '')}</span>`).join('')}</div>`;
+  fig.onclick = (e) => { const b = (e.target as HTMLElement).closest('button[data-act="skymode"]') as HTMLButtonElement | null; if (b) { galSkyMode = skyModeOf(b.dataset.v); void openGallerySky(); } };
   el.appendChild(fig);
   const sum = document.createElement('div'); sum.className = 'hint galSkySum';
-  sum.textContent = skyPlotSummary(d.dots, d.truncated) || 'No dots for this radio yet.';
+  sum.textContent = skySummaryFor(galSkyMode, d.cells, d.dots, now, d.truncated) || 'No dots for this radio yet.';
   el.appendChild(sum);
   const what = document.createElement('div'); what.className = 'hint';
   what.textContent = SKY_PLOT_WHAT + (d.radios && !shown ? ' Every radio together is only meaningful when they share an aerial.' : '');
@@ -19846,6 +19852,37 @@ async function renderGallery(page = galPage) {
     const chip = galKind ? $('galFilter').querySelector(`[data-kind="${galKind}"]`) : null;
     note.textContent = j.enabled === false ? 'This server keeps no gallery.'
       : galleryRangeFooter(j, galKind, (chip?.textContent || galKind).trim(), galRange, formatSize, items.length);
+    /* ★★★ beta94 the sky plot's row is a function now: an owner whose unattended ORBCOMM monitoring has filled the plot
+     *  before anything else reached the gallery saw "Nothing decoded yet" and no way to the plot. */
+    const skyRow = () => {
+      /* ★★ 2026-11-24 THE SKY PLOT — a standing row on the first page of ALL and ORBCOMM once the server holds dots (an older
+       *  server, or none yet: no row). VIEW opens the dome (openGallerySky). */
+      if ((galKind === '' || galKind === 'orbcomm') && galPage === 1) {
+        const kindAt = galKind;
+        void fetch(galUrl(skyPlotQuery('orbcomm')), { cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : null)).then((j) => {
+            const d = parseSkyPlotJson(j);
+            if (!d || !d.dots.length || host.querySelector('.galSky') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
+            const row = document.createElement('div'); row.className = 'sres galSky'; row.tabIndex = 0; row.setAttribute('role', 'button');
+            const f = document.createElement('span'); f.className = 'f'; f.textContent = 'SKY PLOT';
+            const n = document.createElement('span'); n.className = 'n';
+            n.appendChild(document.createTextNode(`ORBCOMM · ${skySummaryFor('auto', d.cells, d.dots, Date.now() / 1000, d.truncated)}`));
+            n.appendChild(document.createElement('br'));
+            const src = document.createElement('span'); src.className = 'src';
+            src.textContent = 'Where this server’s aerials hear the satellites, by SNR — grey where tracked but nothing decoded';
+            n.appendChild(src);
+            const go = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = -1; void openGallerySky(); };
+            const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'VIEW';
+            mb.title = 'The sky plot'; mb.setAttribute('aria-label', 'Open the ORBCOMM sky plot');
+            mb.onclick = (e) => { e.stopPropagation(); go(); };
+            mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+            row.onclick = go;
+            row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+            row.appendChild(f); row.appendChild(n); row.appendChild(mb);
+            host.insertBefore(row, host.firstChild);
+          }).catch(() => {});
+      }
+    };
     if (!items.length) {
       const row = document.createElement('div'); row.className = 'sres';
       const n = document.createElement('span'); n.className = 'n';
@@ -19853,6 +19890,7 @@ async function renderGallery(page = galPage) {
       n.textContent = rangeWords ? `Nothing ${galKind ? 'from this decoder ' : ''}kept ${rangeWords} — try a longer range.`
         : galKind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.';
       row.appendChild(n); host.appendChild(row);
+      skyRow();   // ★★★ beta94 the sky plot can be there when nothing else is
       if (paged && pages > 1) renderGalleryPager(pages);   // ★ an emptied page still offers the way back
       return;
     }
@@ -19969,33 +20007,7 @@ async function renderGallery(page = galPage) {
           host.insertBefore(row, host.firstChild);
         }).catch(() => {});
     }
-    /* ★★ 2026-11-24 THE SKY PLOT — a standing row on the first page of ALL and ORBCOMM once the server holds dots (an older
-     *  server, or none yet: no row). VIEW opens the dome (openGallerySky). */
-    if ((galKind === '' || galKind === 'orbcomm') && galPage === 1) {
-      const kindAt = galKind;
-      void fetch(galUrl(skyPlotQuery('orbcomm')), { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : null)).then((j) => {
-          const d = parseSkyPlotJson(j);
-          if (!d || !d.dots.length || host.querySelector('.galSky') || galKind !== kindAt || galPage !== 1 || !$('galView').hidden) return;
-          const row = document.createElement('div'); row.className = 'sres galSky'; row.tabIndex = 0; row.setAttribute('role', 'button');
-          const f = document.createElement('span'); f.className = 'f'; f.textContent = 'SKY PLOT';
-          const n = document.createElement('span'); n.className = 'n';
-          n.appendChild(document.createTextNode(`ORBCOMM · ${skyPlotSummary(d.dots, d.truncated)}`));
-          n.appendChild(document.createElement('br'));
-          const src = document.createElement('span'); src.className = 'src';
-          src.textContent = 'Where this server’s aerials hear the satellites, by SNR — grey where tracked but nothing decoded';
-          n.appendChild(src);
-          const go = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = -1; void openGallerySky(); };
-          const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'VIEW';
-          mb.title = 'The sky plot'; mb.setAttribute('aria-label', 'Open the ORBCOMM sky plot');
-          mb.onclick = (e) => { e.stopPropagation(); go(); };
-          mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
-          row.onclick = go;
-          row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
-          row.appendChild(f); row.appendChild(n); row.appendChild(mb);
-          host.insertBefore(row, host.firstChild);
-        }).catch(() => {});
-    }
+    skyRow();   // ★★ the sky plot's standing row (below — beta94: also when the gallery is otherwise empty)
     /* ★★ beta88 THE DSC CALLS WITH A POSITION (Stuart, 2026-11-20: "i have no map button to view them from the gallery on
      *  the pi500") — NAVTEX's standing row's shape, on the first page of ALL or DSC: MAP opens the SHIPPING MAP, DSC first.
      *  Drawn only when the gallery holds a pinned DSC call (dscGalSummary; no dead control). */

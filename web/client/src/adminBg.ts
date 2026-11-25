@@ -170,3 +170,34 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
   if (r && running && typeof r.channelsCpuPct === 'number') rows.push(`channels (one FFT for every VFO) · ${pctShort(r.channelsCpuPct)}`);
   return { head: `Background decoding · ${head}`, rows, warn };
 }
+
+/* ── ★★★ beta94 THE UNATTENDED SATELLITE LINE (adminStatusJson → "satPass", Impl::satPassStatusJson) ────────────────────
+ *  What runs and why, in the server's own words ("now"): "METEOR-M2 4 LRPT pass + ORBCOMM monitoring (sky plot) together —
+ *  one capture holds both", "ORBCOMM monitoring (sky plot) — no Meteor pass for 1 h 12 min", "METEOR-M2 4 LRPT pass —
+ *  ORBCOMM paused (priority; …)". Rows: the pass's LOS, the sky plot's dots this stretch, and the last of each. */
+export interface SatPassStatus {
+  state: 'off' | 'waiting' | 'blocked' | 'running';
+  why?: string; now?: string; birds?: number; minEl?: number;
+  meteor?: boolean; orbcomm?: boolean; first?: 'meteor' | 'orbcomm'; both?: boolean; centre?: number;
+  name?: string; label?: string; decoder?: string; los?: number; maxEl?: number; pausedBg?: boolean;
+  orbSky?: { since: number; dots: number };
+  last?: string; orbLast?: string;
+}
+export function satPassLines(sp: SatPassStatus | null | undefined, nowSec = Date.now() / 1000): { head: string; rows: string[]; warn: boolean } | null {
+  if (!sp || (sp.state === 'off' && !sp.meteor && !sp.orbcomm && !sp.birds)) return null;
+  let head: string;
+  if (sp.state === 'off') head = 'off';
+  else if (sp.state === 'running' || sp.state === 'waiting') head = sp.now || (sp.state === 'running' ? 'running' : sp.why || 'waiting');
+  else head = `cannot run — ${sp.why || sp.now || 'not on this radio now'}`;
+  const rows: string[] = [];
+  if (sp.state === 'running' && sp.name) {
+    rows.push(`${sp.name} ${sp.label ?? ''} · max ${Math.round(sp.maxEl ?? 0)}° · ${sp.decoder || 'no decoder'}`
+      + (typeof sp.los === 'number' && sp.los > nowSec ? ` · LOS in ${bgDuration(sp.los - nowSec)}` : '')
+      + (sp.pausedBg ? ' · background decoding paused' : ''));
+  }
+  if (sp.orbSky) rows.push(`ORBCOMM sky plot · ${sp.orbSky.dots} dot${sp.orbSky.dots === 1 ? '' : 's'} since ${hhmm(sp.orbSky.since)} (positions + SNR, no packets)`);
+  if (typeof sp.centre === 'number' && sp.centre > 0 && sp.state === 'running') rows.push(`capture held at ${(sp.centre / 1e6).toFixed(4)} MHz`);
+  if (sp.last) rows.push(`last pass: ${sp.last}`);
+  if (sp.orbLast) rows.push(`last: ${sp.orbLast}`);
+  return { head: `Unattended satellites · ${head}`, rows, warn: sp.state === 'blocked' };
+}

@@ -340,6 +340,12 @@ flags_for() {
     #   (offsets, Doppler slope, clock error, two carriers, noise), and a synthetic pass end to end through the run + the
     #   sky plot's store / JSON / PNG (test-orbcomm-run). -O2: ~3 s each.
     test-orbcomm|test-orbcomm-run) echo "-O2" ;;
+    # ★★★ beta94 the LIGHT ORBCOMM sky plot (vibe_orbcomm_sky.h): named by its Doppler curve, wrong places refused, the cost
+    #   against the full decoder (~8 s); and which unattended satellite work runs — Meteor, ORBCOMM, both (vibe_sat_pass_sched.h)
+    test-orbcomm-sky)      echo "-O2" ;;
+    # ★★★ beta94 the sky plot by POSITION (vibe_skyplot.h cells): grid, aggregation, expiry, ≤ 400 KB, AUTO, the heatmap PNG, reset
+    test-skyplot-cells)    echo "-O2" ;;
+    test-sat-pass-sched)   echo "-O2 -lpthread" ;;
     # ★ ORBCOMM through the server's OWN slice paths (shared FFT + one-pipeline WideTap) at an HF+'s 912/768/456 kS/s, float IQ, a dial move
     test-orbcomm-slice)    echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
@@ -1041,6 +1047,8 @@ if npx tsx scripts/test_lrpt_outline.ts; then pass=$((pass+1)); else fail=$((fai
 #    orbcomm_pkt parsed defensively, subscriber messages shown as "not decoded" with raw bytes only, the dome's geometry and the
 #    server's SNR ramp, skyplot.json with radio ids and grey dots, an ORBCOMM pick's decoder and listening mode
 if npx tsx scripts/test_orbcomm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta94 the sky plot's heatmap in the clients (src/utils/skyPlot.ts): the server's cells, AUTO, the live pass, the overrides
+if npx tsx scripts/test_skyplot_heat.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta94 THE TRANSPONDER FINDER, the clients' half (src/services/xpdr.ts): xpdr_status parsed defensively, the rows' order
 #    and words, LISTEN only on voices (USB + xpdr_follow), the waterfall overlay through ORBCOMM's layout, the pick's decoder
 if npx tsx scripts/test_xpdr_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

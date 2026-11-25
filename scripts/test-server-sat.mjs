@@ -11,6 +11,8 @@
 //      the tracker (no AGC reset), and the lock is the listener's own.
 //   4. no orbit data: doppler advertised GREYED with the reason, a lock refused in words. ★★ beta94 4a: no location →
 //      `dopplerNeed: "location"` (the app's Local Hardware position prompt); a located server has none.
+//   9b. ★★★ beta94 UNATTENDED ORBCOMM MONITORING: started with nobody here under an ORBCOMM bird, the dial + capture +
+//      IF filter on the band, the admin line, a listener arriving takes it back.
 //  10. ★★★ beta92 OPEN IN VFO B: ISS 145.800 → 145.825 APRS only (437.x outside the capture); nothing offered with VFO B
 //      switched off; a locked window's listener alone. ★★★ beta94: RS-44's beacon is NOT offered (a row of the transponder
 //      finder — scripts/test-server-xpdr.mjs has the finder itself); a hand-opened VFO B still closes on a pick.
@@ -83,16 +85,18 @@ function locator(lat, lon) {
 /** vibesdr.net's sats.json fixture (built by the mirror's own code from CelesTrak's 2026-11-19 data, plus TEST-101095:
  *  ERMINAZ-2V's real elements under a test-only downlink) with every EPOCH moved to an hour ago.
  *  ★★★ beta94 + TEST-139444: AO-73's elements with ONLY a FUNcube telemetry downlink (145.700, no transponder within
- *  reach) — AO-73's own telemetry now opens its transponder's finder, so the telemetry-only pick is checked on this one. */
-function freshSats() {
+ *  reach) — AO-73's own telemetry now opens its transponder's finder, so the telemetry-only pick is checked on this one.
+ *  `file` (beta94 passprio): another fixture in vibeserver/testdata-sat (one without AO-73 gets no TEST-139444). */
+function freshSats(file = 'sats-6digit-2026-11-19.json') {
   const iso = new Date(Date.now() - 3600e3).toISOString().replace('Z', '');
-  const d = JSON.parse(fs.readFileSync(path.join(root, 'vibeserver/testdata-sat/sats-6digit-2026-11-19.json'), 'utf8'));
+  const d = JSON.parse(fs.readFileSync(path.join(root, 'vibeserver/testdata-sat', file), 'utf8'));
   const ao = d.satellites.find((s) => s.norad === 39444);
   if (ao) d.satellites.push({ id: 'TEST-139444', name: 'TEST telemetry only (AO-73 elements)', norad: 139444, group: 'amateur', note: 'TEST ONLY \u2014 not a real downlink',
     transmitters: [{ label: 'Telemetry', downlink: 145700000, mode: 'usb', loop: 'none', consumer: 'fc-bpsk', baud: 1200 }],
     omm: { ...ao.omm, NORAD_CAT_ID: 139444, OBJECT_NAME: 'TEST-139444' } });
   for (const s of d.satellites) if (s.omm) s.omm.EPOCH = iso;
   for (const g of Object.keys(d.orbits)) d.orbits[g].fetched = new Date(Date.now() - 2 * 3600e3).toISOString();
+  for (const g of Object.keys(d.labelOrbits || {})) d.labelOrbits[g].fetched = new Date(Date.now() - 2 * 3600e3).toISOString();
   return JSON.stringify(d);
 }
 async function adminGet(port, p) {
@@ -108,10 +112,10 @@ function syncState(extra = '') {
   return `checked ${t}\nattempt ${t}\nseed 0\n${extra}`;
 }
 
-async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, freq = 437800000, mode = 'nfm', state = '', env: extraEnv = {}, args = [] } = {}) {
+async function server(tag, { loc = 'IO92ng', radio = {}, orbits = true, satsFile = undefined, freq = 437800000, mode = 'nfm', state = '', env: extraEnv = {}, args = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-${tag}-`));
   for (const d of ['data', 'run', 'data/sat']) fs.mkdirSync(path.join(dir, d), { recursive: true });
-  if (orbits) fs.writeFileSync(path.join(dir, 'data/sat', 'sats.json'), freshSats());
+  if (orbits) fs.writeFileSync(path.join(dir, 'data/sat', 'sats.json'), freshSats(satsFile));
   fs.writeFileSync(path.join(dir, 'data/sat', 'sync-state'), state || syncState());
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'Satellite test', locator: loc, adminPass: PASS,
@@ -583,6 +587,43 @@ try {
       const sp = await sock(S, 'satpass01');
       ok(await until(() => /unattended pass: ISS Voice \/ SSTV, max [0-9]+° — ended \(a listener arrived\)/.test(S.L()), 4000), 'a listener arriving gives the pass up');
       ok(await until(() => lastOf(sp, 'config')?.vfo === 437800000, 4000), `…and gets the radio back where the pass found it (vfo ${lastOf(sp, 'config')?.vfo})`);
+      sp.close();
+    } finally { S.stop(); }
+  }
+
+  // ── 9b. ★★★ beta94 UNATTENDED ORBCOMM MONITORING (the light sky plot): nobody here, an ORBCOMM bird overhead (the
+  //        synthetic ORBCOMM set) → monitoring starts on the band (dial 137.5 MHz NFM, the capture placed, the IF filter
+  //        holding the band); the admin line says so; a listener arriving stops it and gets the radio back ──
+  {
+    let orbLoc = '';
+    {
+      const S = await server('orbfind', { satsFile: 'sats-orbcomm-SYNTHETIC-2026-11-22.json' });
+      try {
+        const sp = await sock(S, 'orbfind01');
+        sp.send({ type: 'sat_list' });
+        await until(() => !!lastOf(sp, 'sat_list'), 4000);
+        const o = lastOf(sp, 'sat_list')?.sats?.find((x) => /^ORBCOMM/.test(x.name || x.id) && Number.isFinite(x.lat));
+        if (o) orbLoc = locator(o.lat, o.lon);
+        ok(!!o, `an ORBCOMM bird in the list to stand under (${o?.name} at ${orbLoc})`);
+        sp.close();
+      } finally { S.stop(); }
+    }
+    console.log(`── beta94 ORBCOMM monitoring, nobody here (${orbLoc}) ──`);
+    const bg = JSON.stringify({ on: false, waitMin: 5, profiles: [], satPasses: { on: true, minEl: 20, birds: [], orbcomm: true } });
+    const S = await server('orbmon', { loc: orbLoc || 'IO92ng', satsFile: 'sats-orbcomm-SYNTHETIC-2026-11-22.json', radio: { bgDecode: bg }, freq: 437800000 });
+    try {
+      ok(await until(() => /\[sat\] ORBCOMM monitoring \(sky plot\) started — the light watcher/.test(S.L()), 12000), 'with nobody here ORBCOMM monitoring starts by itself');
+      ok(/retune -> 137500\.000 kHz/.test(S.L()), 'the dial on the band\'s middle, 137.5 MHz');
+      ok(await until(() => /\[sat\] the capture to 137\.\d{4} MHz \(was [0-9.]+\) — it holds the ORBCOMM band/.test(S.L()), 4000),
+         `the capture placed to hold the band (${(S.L().match(/\[sat\] the capture to [^\n]*/) || [''])[0]})`);
+      ok(await until(() => /satellite pass: IF filter [^\n]*ORBCOMM sky plot 137\.19/.test(S.L()), 4000), 'the IF filter holds the ORBCOMM band');
+      const st = await adminGet(S.port, '/vibeserver/admin/status');
+      const sp0 = st?.satPass;
+      ok(sp0 && sp0.state === 'running' && sp0.orbcomm === true && sp0.meteor === false && sp0.first === 'meteor' && /^ORBCOMM monitoring \(sky plot\) — no passes set up/.test(sp0.now || '')
+         && sp0.orbSky && sp0.orbSky.since > 0, `the admin line: ${JSON.stringify(sp0)}`);
+      const sp = await sock(S, 'orbmon001');
+      ok(await until(() => /ORBCOMM monitoring, [^\n]*sky dots — stopped \(a listener arrived\)/.test(S.L()), 4000), 'a listener arriving stops it');
+      ok(await until(() => lastOf(sp, 'config')?.vfo === 437800000, 4000), `…and gets the radio back where it was found (vfo ${lastOf(sp, 'config')?.vfo})`);
       sp.close();
     } finally { S.stop(); }
   }

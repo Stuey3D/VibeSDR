@@ -5,7 +5,7 @@ import {
   parseBg, collectBg, parseBgCaps, bgNewProfile, bgHalfWindow, bgNdbSegment, bgNdbHint, bgBandReach, bgBandHint,
   bgDscWatch, bgLocal, bgTime, bgReach, bgDecoderSetsFreq, type BgSpotBand,
   bgSkimPoints, bgSkimPointAt, bgSkimPointLabel, bgSkimFits, bgSkimFirstFit, bgSkimHint, bgSkimDecoderChange, parseSkimBands, type BgVfo,
-  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX,
+  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX, bgSatBothFits,
 } from '../src/services/bgDecode.ts';
 
 let pass = 0, fail = 0;
@@ -68,10 +68,22 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
 // ── ★ V12 beta90 unattended satellite passes (the Setup page's satPasses, its own switch) ──
 {
   const m = parseBg('{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":30,"birds":[{"norad":57166,"label":"LRPT"},{"norad":-1,"label":"x"}]}}');
-  ok(m.sat.on && m.sat.minEl === 30 && m.sat.birds.length === 1 && m.sat.birds[0].label === 'LRPT', 'satPasses read; a bad entry dropped');
-  ok(collectBg(m) === '{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":30,"birds":[{"norad":57166,"label":"LRPT"}]}}', `stored with background off: ${collectBg(m)}`);
+  // ★★★ beta94: the Meteor tick is the Meteor group now (stored as "meteor":true)
+  ok(m.sat.on && m.sat.minEl === 30 && m.sat.birds.length === 0 && m.sat.meteor, 'satPasses read; a bad entry dropped; the Meteor tick = the group');
+  ok(collectBg(m) === '{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":30,"birds":[],"meteor":true}}', `stored with background off: ${collectBg(m)}`);
   const e = parseBg('');
   ok(!e.sat.on && e.sat.birds.length === 0 && collectBg(e) === '', 'untouched: nothing stored');
+  // ★★★ beta94 the groups: an old Meteor tick becomes the Meteor group; ORBCOMM + the priority round-trip; absent = unchanged
+  const g = parseBg('{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":20,"birds":[{"norad":59051,"label":"LRPT"},{"norad":39444,"label":"Telemetry"}]}}');
+  ok(g.sat.meteor && !g.sat.orbcomm && g.sat.first === 'meteor' && g.sat.birds.length === 1 && g.sat.birds[0].norad === 39444, 'an old Meteor tick = the Meteor group');
+  ok(collectBg(g) === '{"on":false,"waitMin":5,"profiles":[],"satPasses":{"on":true,"minEl":20,"birds":[{"norad":39444,"label":"Telemetry"}],"meteor":true}}', `saved as the group: ${collectBg(g)}`);
+  g.sat.orbcomm = true; g.sat.first = 'orbcomm';
+  const g2 = parseBg(collectBg(g));
+  ok(g2.sat.orbcomm && g2.sat.first === 'orbcomm' && collectBg(g2) === collectBg(g), `ORBCOMM + ORBCOMM first round-trip: ${collectBg(g2)}`);
+  const capsB = parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}],"satBoth":{"needHz":791000,"minRate":915000,"narrow":["airspyhf"]}}')!;
+  ok(!!capsB.satBoth && bgSatBothFits(capsB.satBoth, 'rtlsdr', 2400000) === true && bgSatBothFits(capsB.satBoth, 'sdrplay', 2000000) === true
+     && bgSatBothFits(capsB.satBoth, 'airspyhf', 912000) === false && bgSatBothFits(capsB.satBoth, 'rtlsdr', 900000) === false, 'satBoth: both on an RTL / RSP, the priority on an HF+ and a slow RTL');
+  ok(bgSatBothFits(null, 'rtlsdr', 2400000) === null && parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}]}')!.satBoth === null, 'an older engine: not known');
   const c2 = parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}],"satPasses":[{"norad":57166,"label":"LRPT","name":"Meteor-M2-3","what":"weather pictures (LRPT)"}]}');
   ok(!!c2 && c2.satPasses.length === 1 && c2.satPasses[0].name === 'Meteor-M2-3', 'the engine\'s keepable downlinks reach the editor');
   ok(parseBgCaps('{"decoders":[{"id":"navtex","label":"NAVTEX","modes":["usb"],"tone":500}]}')!.satPasses.length === 0, 'an older engine: none (the section is not drawn)');

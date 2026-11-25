@@ -649,6 +649,18 @@ static void s13(const std::string& dir) {
     many += ",{\"norad\":-4,\"label\":\"y\"},{\"norad\":5}]}}";
     vibe::bg::Config m;
     CHECK(vibe::bg::parse(many, m, err) && m.sat.birds.size() == vibe::bg::kMaxSatPassBirds && m.sat.minEl == 90, "bounded: ≤ 8 downlinks, elevation clamped, bad entries dropped");
+    // ★★★ beta94 the two groups + the priority: read, written back only when set, an older setting unchanged
+    {
+        vibe::bg::Config g;
+        CHECK(vibe::bg::parse("{\"satPasses\":{\"on\":true,\"minEl\":20,\"birds\":[],\"meteor\":true,\"orbcomm\":true,\"first\":\"orbcomm\"}}", g, err)
+              && g.sat.meteor && g.sat.orbcomm && g.sat.orbcommFirst && g.sat.any(), "beta94 groups parsed (%s)", err.c_str());
+        const std::string gb = vibe::bg::toJson(g);
+        CHECK(gb.find("\"satPasses\":{\"on\":true,\"minEl\":20,\"birds\":[],\"meteor\":true,\"orbcomm\":true,\"first\":\"orbcomm\"}") != std::string::npos, "…written back (%s)", gb.c_str());
+        vibe::bg::Config o;
+        CHECK(vibe::bg::parse("{\"satPasses\":{\"on\":false,\"minEl\":20,\"birds\":[],\"orbcomm\":true}}", o, err) && !o.sat.meteor && o.sat.orbcomm && !o.sat.orbcommFirst
+              && !o.sat.any() && o.sat.anyPicked() && vibe::bg::toJson(o).find("\"orbcomm\":true}") != std::string::npos, "ORBCOMM alone, switched off: kept, not run");
+        CHECK(back.find("meteor") == std::string::npos && back.find("first") == std::string::npos, "a beta90 setting writes back without the new keys");
+    }
     // the keepable downlinks = the setup page's SAT_PASS_DOWNLINKS (by norad + label), no more, no fewer
     const std::string page = readFile("android/app/src/main/cpp/vibe_setup_page.h");
     const size_t a = page.find("const SAT_PASS_DOWNLINKS"), b = page.find("];", a);

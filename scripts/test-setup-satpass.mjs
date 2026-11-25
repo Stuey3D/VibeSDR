@@ -24,38 +24,62 @@ class El {
 const mkSelect = (vals) => { const s = new El('select'); let v = ''; Object.defineProperty(s, 'value', { get: () => v, set: (x) => { v = s.children.some((o) => o.value === x) ? x : (s.children[0]?.value ?? ''); }, configurable: true });
   for (const w of vals) { const o = new El('option'); o.value = w; s.appendChild(o); } return s; };
 const els = { bgProfiles: new El('div'), hwBg: new El('div'), bgOn: new El('input'), bgWait: mkSelect(['1', '2', '5', '10', '15', '30', '60']),
-              hwSatPass: new El('div'), spOn: new El('input'), spMinEl: mkSelect(['10', '20', '30', '45']), spBirds: new El('div'), spLockedNote: new El('p') };
+              hwSatPass: new El('div'), spOn: new El('input'), spMinEl: mkSelect(['10', '20', '30', '45']), spBirds: new El('div'), spLockedNote: new El('p'),
+              // ★★★ beta94 the groups and their priority
+              spMeteor: new El('input'), spOrbcomm: new El('input'), spBothNote: new El('p'), spFirstRow: new El('label'), spFirst: mkSelect(['meteor', 'orbcomm']) };
 const document = { createElement: (t) => (t === 'select' ? mkSelect([]) : new El(t)) };
 const $ = (id) => els[id];
 const cfg = { serverUtcOffsetMin: 0 };
-const api = new Function('$', 'document', 'cfg', `${src.slice(a, b)}\nreturn { bgLoad, bgCollect, sp: () => spModel, list: SAT_PASS_DOWNLINKS };`)($, document, cfg);
+const api = new Function('$', 'document', 'cfg', `${src.slice(a, b)}\nreturn { bgLoad, bgCollect, sp: () => spModel, list: SAT_PASS_DOWNLINKS, minRate: SAT_BOTH_MIN_RATE };`)($, document, cfg);
 const boxes = () => els.spBirds.all().filter((e) => e.tag === 'input');
 
-api.bgLoad({ driver: 'rtlsdr', mode: 'open', bgDecode: '' });
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 2400000, bgDecode: '' });
 ok(api.bgCollect() === '', 'untouched (background off, passes off): stores nothing');
-ok(!els.hwSatPass.classList.contains('hide') && boxes().length === api.list.length && boxes().every((c) => c.disabled), `${api.list.length} downlinks drawn, disabled while the switch is off`);
+const others = api.list.filter((d) => d.label !== 'LRPT');
+ok(!els.hwSatPass.classList.contains('hide') && boxes().length === others.length && boxes().every((c) => c.disabled) && els.spMeteor.disabled && els.spOrbcomm.disabled,
+   `${others.length} other downlinks drawn (Meteor is its own group), all disabled while the switch is off`);
 els.spOn.checked = true; els.spOn.onchange();
-ok(boxes().every((c) => !c.disabled), 'switched on: the ticks are live');
-const meteor = api.list.findIndex((d) => d.norad === 57166), ao73 = api.list.findIndex((d) => d.norad === 39444);
-boxes()[meteor].checked = true; boxes()[meteor].onchange();
+ok(boxes().every((c) => !c.disabled) && !els.spMeteor.disabled && els.spMeteor.checked && !els.spOrbcomm.checked, 'switched on: live, Meteor ticked to start with, ORBCOMM not');
+const ao73 = others.findIndex((d) => d.norad === 39444);
 boxes()[ao73].checked = true; boxes()[ao73].onchange();
 els.spMinEl.value = '30'; els.spMinEl.onchange();
 let j = JSON.parse(api.bgCollect() || '{}');
-ok(j.on === false && j.satPasses && j.satPasses.on === true && j.satPasses.minEl === 30
-   && JSON.stringify(j.satPasses.birds) === JSON.stringify([{ norad: 57166, label: 'LRPT' }, { norad: 39444, label: 'Telemetry' }]),
-   `its own switch: background off, passes on, stored (${api.bgCollect()})`);
-boxes()[meteor].checked = false; boxes()[meteor].onchange();
+ok(j.on === false && j.satPasses && j.satPasses.on === true && j.satPasses.minEl === 30 && j.satPasses.meteor === true && !('orbcomm' in j.satPasses) && !('first' in j.satPasses)
+   && JSON.stringify(j.satPasses.birds) === JSON.stringify([{ norad: 39444, label: 'Telemetry' }]),
+   `its own switch: background off, passes on, Meteor as a group, stored (${api.bgCollect()})`);
+// ★★★ beta94 ORBCOMM + the priority, per radio
+els.spOrbcomm.checked = true; els.spOrbcomm.onchange();
+ok(els.spBothNote.textContent.startsWith('On this radio both run together') && els.spFirstRow.classList.contains('hide'),
+   `an RTL at 2.4 MS/s: "both run together", no priority drawn (${els.spBothNote.textContent})`);
 j = JSON.parse(api.bgCollect());
-ok(j.satPasses.birds.length === 1 && j.satPasses.birds[0].norad === 39444, 'unticked: removed');
-// round trip with a background profile beside it
+ok(j.satPasses.meteor === true && j.satPasses.orbcomm === true && !('first' in j.satPasses), 'both groups stored, Meteor first (absent = the default)');
+els.spMeteor.checked = false; els.spMeteor.onchange();
+ok(els.spBothNote.classList.contains('hide') && els.spFirstRow.classList.contains('hide'), 'ORBCOMM alone: no note, no priority');
+j = JSON.parse(api.bgCollect());
+ok(!('meteor' in j.satPasses) && j.satPasses.orbcomm === true, `Meteor unticked: ${JSON.stringify(j.satPasses)}`);
+boxes()[ao73].checked = false; boxes()[ao73].onchange();
+j = JSON.parse(api.bgCollect());
+ok(j.satPasses.birds.length === 0, 'unticked: removed');
+// round trip with a background profile beside it — a beta90–93 Meteor tick becomes the Meteor group
 const BOTH = { on: true, waitMin: 5, profiles: [{ centre: 500000, from: '00:00', to: '00:00', vfos: [{ hz: 517500, mode: 'usb', dec: 'navtex' }] }],
                satPasses: { on: true, minEl: 20, birds: [{ norad: 59051, label: 'LRPT' }] } };
-api.bgLoad({ driver: 'airspyhf', mode: 'open', bgDecode: JSON.stringify(BOTH) });
-ok(els.spOn.checked && els.spMinEl.value === '20' && boxes()[api.list.findIndex((d) => d.norad === 59051)].checked, 'loads: on, 20°, Meteor-M2-4 ticked');
-{ // ★ the profile editor itself is test-setup-bgdecode.mjs's; here: satPasses rides beside the profile untouched
+api.bgLoad({ driver: 'airspyhf', mode: 'open', rate: 912000, bgDecode: JSON.stringify(BOTH) });
+ok(els.spOn.checked && els.spMinEl.value === '20' && els.spMeteor.checked && !els.spOrbcomm.checked, 'loads: on, 20°, an old Meteor-M2-4 tick = the Meteor group');
+{ // ★ the profile editor itself is test-setup-bgdecode.mjs's; here: satPasses rides beside the profile
   const back = JSON.parse(api.bgCollect());
-  ok(JSON.stringify(back.satPasses) === JSON.stringify(BOTH.satPasses) && back.on === true && back.profiles.length === 1 && back.profiles[0].centre === 500000,
-     `saved back beside a profile: ${JSON.stringify(back.satPasses)}`); }
+  ok(JSON.stringify(back.satPasses) === JSON.stringify({ on: true, minEl: 20, birds: [], meteor: true }) && back.on === true && back.profiles.length === 1 && back.profiles[0].centre === 500000,
+     `saved back beside a profile, the old tick as the group: ${JSON.stringify(back.satPasses)}`); }
+// ★★★ the HF+: too narrow for both — the priority drawn and saved
+els.spOrbcomm.checked = true; els.spOrbcomm.onchange();
+ok(els.spBothNote.textContent.startsWith("This radio's capture is too narrow") && !els.spFirstRow.classList.contains('hide'),
+   `an Airspy HF+: "too narrow", the priority drawn (${els.spBothNote.textContent})`);
+els.spFirst.value = 'orbcomm'; els.spFirst.onchange();
+j = JSON.parse(api.bgCollect());
+ok(j.satPasses.first === 'orbcomm', 'ORBCOMM first stored');
+api.bgLoad({ driver: 'airspyhf', mode: 'open', rate: 912000, bgDecode: JSON.stringify({ ...BOTH, satPasses: { ...j.satPasses } }) });
+ok(els.spFirst.value === 'orbcomm' && JSON.stringify(JSON.parse(api.bgCollect()).satPasses) === JSON.stringify(j.satPasses), 'ORBCOMM first loads and saves back unchanged');
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 900000, bgDecode: JSON.stringify({ ...BOTH, satPasses: { on: true, minEl: 20, birds: [], meteor: true, orbcomm: true } }) });
+ok(!els.spFirstRow.classList.contains('hide') && els.spBothNote.textContent.includes('at its sample rate'), `an RTL at 900 kS/s (under ${api.minRate}): the priority decides`);
 api.bgLoad({ driver: 'icom', mode: 'open', bgDecode: JSON.stringify(BOTH) });
 ok(els.hwSatPass.classList.contains('hide'), 'hidden on an Icom');
 api.bgLoad({ driver: 'rtlsdr', mode: 'locked', bgDecode: JSON.stringify(BOTH) });

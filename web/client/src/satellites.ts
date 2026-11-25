@@ -41,7 +41,7 @@ import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFo
 import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — the app's words and rules (src/services/xpdr.ts)
 import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
-import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, SKY_LEGEND, SKY_PLOT_WHAT, type SkyDot } from '../../../src/utils/skyPlot';
+import { parseSkyPlotJson, skyCellsAddDots, skyModeOf, skyModesHtml, skyPlotMerge, skyPlotQuery, skyPlotSvg, skySceneFor, skySummaryFor, SKY_LEGEND, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../../../src/utils/skyPlot';
 
 export interface SatPanelDeps {
   /** ★★★ beta94 the transponder finder's LISTEN on a voice row: tune VFO A there (USB) and ask the finder to follow it */
@@ -237,6 +237,8 @@ const CSS = `
 #satPanel .sat-orb .sat-sky[hidden]{display:none}
 #satPanel .sat-orb .sat-sky svg{display:block;width:100%;max-width:260px;height:auto;margin:4px auto 0;color:var(--btn-text)}
 #satPanel.big .sat-orb .sat-sky svg{max-width:360px}
+#satPanel .sat-orb .sky-modes{display:flex;justify-content:center;gap:6px;margin:4px 0;font-family:system-ui,sans-serif;font-size:12px}
+#satPanel .sat-orb .sky-modes button{min-height:26px;padding:1px 8px}
 #satPanel .sat-orb .sat-leg{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 10px;font:11px system-ui,sans-serif;color:var(--text-dim);margin-top:2px}
 #satPanel .sat-orb .sat-leg i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 #satPanel .sat-orb .sat-skys{text-align:center;font:11px system-ui,sans-serif;color:var(--text-dim)}
@@ -345,6 +347,9 @@ export class SatPanel {
   private orbSky = true;
   private skyDots: SkyDot[] = [];
   private skyNote = '';
+  // ★★★ beta94 the sky by position + the view (AUTO: the heatmap once there is enough, the live pass a track on top)
+  private skyCells: SkyCells | null = null;
+  private skyMode: SkyMode = 'auto';
   private skySeq = 0;
   private oTxtKey = ''; private oSkyKey = ''; private oPkKey = '';
 
@@ -446,7 +451,7 @@ export class SatPanel {
     this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
     this.track = null; this.trackAsk = null; this.tlm = null;
     this.aText = ''; this.aBeacon = null; this.vfobClear();
-    this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
+    this.orb = null; this.xp = null; this.skyDots = []; this.skyCells = null; this.skyNote = ''; this.skySeq++;
     this.lend(false);
   }
   private vfobClear() {
@@ -529,7 +534,7 @@ export class SatPanel {
     if (r.pickGone && this.picked) {
       this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
       this.track = null; this.trackAsk = null; this.tlm = null; this.aText = ''; this.aBeacon = null; this.vfobClear(); this.lend(false);
-      this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
+      this.orb = null; this.xp = null; this.skyDots = []; this.skyCells = null; this.skyNote = ''; this.skySeq++;
       this.refusal = r.why || 'The satellite pick ended';
       this.deps.pickGone?.();
       this.sList.open = true;
@@ -545,7 +550,7 @@ export class SatPanel {
      *  and the view (already the band) is not zoomed again */
     const orbToOrb = changed && this.picked?.decoder === 'orbcomm' && p.decoder === 'orbcomm';
     if (changed) { this.aText = ''; this.aBeacon = null; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
-    if (changed && !orbToOrb) { this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++; }
+    if (changed && !orbToOrb) { this.orb = null; this.xp = null; this.skyDots = []; this.skyCells = null; this.skyNote = ''; this.skySeq++; }
     this.picked = p; this.pending = null; this.refusal = '';
     if (changed && !orbToOrb && p.decoder === 'orbcomm') this.skyLoad();
     const t = this.pickedTx();
@@ -592,7 +597,7 @@ export class SatPanel {
       const st = parseOrbcommStatus(data);
       if (!st) return;
       this.orb = orbViewMerge(this.orb, { status: st });
-      if (st.dots.length) this.skyDots = skyPlotMerge(this.skyDots, st.dots);
+      if (st.dots.length) { this.skyDots = skyPlotMerge(this.skyDots, st.dots); this.skyCells = skyCellsAddDots(this.skyCells, st.dots); }
     } else {
       const pk = parseOrbcommPkt(data);
       if (!pk) return;
@@ -619,7 +624,7 @@ export class SatPanel {
     this.deps.skyGet(skyPlotQuery('orbcomm', this.deps.skyRadio?.() ?? '')).then((txt) => {
       if (seq !== this.skySeq) return;
       let d = null; try { d = txt ? parseSkyPlotJson(JSON.parse(txt)) : null; } catch { d = null; }
-      if (d) this.skyDots = skyPlotMerge(d.dots, this.skyDots); else this.skyNote = 'The stored sky plot could not be read — live dots only';
+      if (d) { this.skyDots = skyPlotMerge(d.dots, this.skyDots); this.skyCells = d.cells; } else this.skyNote = 'The stored sky plot could not be read — live dots only';
       if (this.open) this.paintPick();
     }).catch(() => { if (seq === this.skySeq) { this.skyNote = 'The stored sky plot could not be read — live dots only'; if (this.open) this.paintPick(); } });
   }
@@ -668,6 +673,7 @@ export class SatPanel {
     if (act === 'tlmcharts') { this.tlmCharts = !this.tlmCharts; if (this.tlmCharts) { this.tlmRaw = false; this.tlmLoad(); } this.paintPick(); return; }
     if (act === 'tlmall') { this.tlmAll = !this.tlmAll; this.paintPick(); return; }
     if (act === 'orbsky') { this.orbSky = !this.orbSky; this.paintPick(); return; }
+    if (act === 'skymode') { this.skyMode = skyModeOf(b.dataset.v); this.paintPick(); return; }
     if (act === 'xlisten') { const r = this.xp?.rows.find((x) => x.id === b.dataset.xid); if (r && this.deps.xpdrListen) this.deps.xpdrListen(r); return; }
     if (act === 'orbmax') { this.orbMaxK = Math.max(0, Math.min(6, Number(b.dataset.v) || 0)); this.deps.orbMax?.(this.orbMaxK); this.paintPick(); return; }
     if (act === 'show') { this.setShow(satShowGroup((b.dataset.g || 'all') as SatShowGroup | 'all')); return; }
@@ -970,11 +976,13 @@ export class SatPanel {
     if (h !== this.oTxtKey) { this.oTxtKey = h; this.oTxt.innerHTML = h; }
     this.oSky.hidden = !this.orbSky;
     if (this.orbSky) {
-      const sum = [skyPlotSummary(this.skyDots) || 'No dots yet — they appear as the birds are heard', this.skyNote].filter(Boolean).join(' · ');
-      const key = `${this.skyDots.length}|${this.skyDots[0]?.t ?? 0}|${sum}|${this.big ? 1 : 0}`;
+      const now = Math.floor(Date.now() / 10000) * 10, norad = this.picked?.norad ?? 0;
+      const sum = [skySummaryFor(this.skyMode, this.skyCells, this.skyDots, now, false, norad) || 'No dots yet — they appear as the birds are heard', this.skyNote].filter(Boolean).join(' · ');
+      const key = `${this.skyDots.length}|${this.skyDots[0]?.t ?? 0}|${sum}|${this.big ? 1 : 0}|${this.skyMode}|${now}|${this.skyCells?.cells.size ?? -1}`;
       if (key !== this.oSkyKey) {
         this.oSkyKey = key;
-        this.oSky.innerHTML = skyPlotSvg(skyPlotScene(this.skyDots, 300, 3000), 'Sky plot: where this aerial hears the ORBCOMM satellites')
+        this.oSky.innerHTML = skyPlotSvg(skySceneFor(this.skyMode, this.skyCells, this.skyDots, now, 300, 3000, norad), 'Sky plot: where this aerial hears the ORBCOMM satellites')
+          + (this.skyCells ? skyModesHtml(this.skyMode) : '')
           + `<div class="sat-leg">${SKY_LEGEND.map((k) => `<span><i style="background:${k.css}"></i>${esc(k.label)}</span>`).join('')}</div>`
           + `<div class="sat-skys">${esc(sum)}</div>` + (this.big ? `<div class="sat-skys">${esc(SKY_PLOT_WHAT)}</div>` : '');
       }

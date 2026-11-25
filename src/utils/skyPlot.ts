@@ -80,6 +80,8 @@ export interface SkyPlotData {
   /** dots the server holds that carry no radio */
   radioUnknown: number;
   count: number; truncated: boolean;
+  /** ★★★ beta94 the sky by POSITION (30 days, whatever the dot log still holds) — null = an older server */
+  cells: SkyCells | null;
 }
 /** The stored view's cap (vibe_skyplot.h kMaxOut). */
 export const SKY_MAX_DOTS = 20000;
@@ -104,7 +106,148 @@ export function parseSkyPlotJson(j: unknown): SkyPlotData | null {
     dots, radios: logRadioChoices(o.radios),
     radioUnknown: fin(o.radioUnknown) && o.radioUnknown > 0 ? Math.floor(o.radioUnknown) : 0,
     count: fin(o.count) && o.count >= 0 ? Math.floor(o.count) : dots.length, truncated: o.truncated === true,
+    cells: parseSkyCells(o.cells),
   };
+}
+
+/* ══ ★★★ beta94 THE HEATMAP (Stuart 11-25: "could keep it as tracks when less data then a heatmap when it gets more" ·
+ *  "when in user mode you still see a track for the satellite being tracked, once the pass ends it goes to the heatmap").
+ *  The server keeps every dot counted into a CELL of the sky for 30 days (vibe_skyplot.h namespace cells — an
+ *  equal-area-ish grid, its per-band counts sent here, never copied). A cell is coloured by the MEAN of its dots' SNRs
+ *  (each dot already the best of its 5 s, so the mean of those maxima is a high-percentile figure one freak burst cannot
+ *  repaint); a cell tracked with nothing decoded is grey. AUTO (the default) = the server's rule: tracks until ≥ 30 % of
+ *  the sky's cells are heard, averaging ≥ 3 dots each, then the heatmap — and while a pass is LIVE (its newest dot under
+ *  SKY_LIVE_SEC old) that pass is drawn as a track on top; at LOS it has been merged into the cells and the heatmap is
+ *  all that shows. TRACKS / HEATMAP override. ══ */
+export interface SkyCell { n: number; grey: number; mean: number | null; max: number | null; lastT: number }
+export interface SkyCells {
+  elStep: number; az: number[]; start: number[]; total: number; days: number; bucketDays: number;
+  /** the server's verdict, and its rule (re-judged here after live dots join) */
+  auto: 'heatmap' | 'tracks'; heatCoverage: number; heatDotsPerCell: number;
+  cells: Map<number, SkyCell>;
+}
+/** A newest dot younger than this = the pass is live (a status every second; a dot per 5 s; LOS leaves it to age out). */
+export const SKY_LIVE_SEC = 60;
+export type SkyMode = 'auto' | 'tracks' | 'heatmap';
+export const SKY_MODES: { id: SkyMode; label: string }[] = [{ id: 'auto', label: 'AUTO' }, { id: 'tracks', label: 'TRACKS' }, { id: 'heatmap', label: 'HEATMAP' }];
+
+export function parseSkyCells(v: unknown): SkyCells | null {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== 'object' || !Array.isArray(o.az) || !Array.isArray(o.c)) return null;
+  const az = (o.az as unknown[]).map((x) => (fin(x) && x >= 1 && x <= 720 ? Math.floor(x) : 0));
+  if (!az.length || az.some((x) => !x) || az.length > 90) return null;
+  const elStep = fin(o.elStep) && o.elStep > 0 ? o.elStep : 90 / az.length;
+  const start: number[] = []; let k = 0; for (const n of az) { start.push(k); k += n; } start.push(k);
+  const cells = new Map<number, SkyCell>();
+  for (const r of (o.c as unknown[]).slice(0, k)) {
+    if (!Array.isArray(r) || !fin(r[0]) || r[0] < 0 || r[0] >= k) continue;
+    const n = fin(r[1]) && r[1] > 0 ? Math.floor(r[1]) : 0, grey = fin(r[2]) && r[2] > 0 ? Math.floor(r[2]) : 0;
+    if (!n && !grey) continue;
+    cells.set(Math.floor(r[0]), { n, grey, mean: n && fin(r[3]) ? r[3] / 10 : null, max: n && fin(r[4]) ? r[4] : null, lastT: fin(r[5]) ? r[5] : 0 });
+  }
+  return {
+    elStep, az, start, total: k, days: fin(o.days) && o.days > 0 ? Math.floor(o.days) : 30, bucketDays: fin(o.bucketDays) && o.bucketDays > 0 ? Math.floor(o.bucketDays) : 3,
+    auto: o.auto === 'heatmap' ? 'heatmap' : 'tracks',
+    heatCoverage: fin(o.heatCoverage) && o.heatCoverage > 0 ? o.heatCoverage : 0.3,
+    heatDotsPerCell: fin(o.heatDotsPerCell) && o.heatDotsPerCell > 0 ? o.heatDotsPerCell : 3,
+    cells,
+  };
+}
+/** The cell of an az/el on the server's grid. */
+export function skyCellIndex(c: SkyCells, azDeg: number, elDeg: number): number {
+  const b = Math.max(0, Math.min(c.az.length - 1, Math.floor(Math.max(0, elDeg) / c.elStep)));
+  const n = c.az[b];
+  const a = ((azDeg % 360) + 360) % 360;
+  return c.start[b] + Math.max(0, Math.min(n - 1, Math.floor(a / 360 * n)));
+}
+/** A cell's corners (degrees). */
+export function skyCellBounds(c: SkyCells, idx: number): { az0: number; az1: number; el0: number; el1: number } {
+  let b = 0; while (b + 1 < c.az.length && c.start[b + 1] <= idx) b++;
+  const n = c.az[b], k = idx - c.start[b];
+  return { az0: 360 * k / n, az1: 360 * (k + 1) / n, el0: b * c.elStep, el1: (b + 1) * c.elStep };
+}
+/** Live dots counted into a copy of the cells (the box's own pass joins the heatmap as it is heard — at LOS it is in). */
+export function skyCellsAddDots(c: SkyCells | null, dots: SkyDot[]): SkyCells | null {
+  if (!c || !dots.length) return c;
+  const cells = new Map(c.cells);
+  for (const d of dots) {
+    const i = skyCellIndex(c, d.az, d.el);
+    const x = { ...(cells.get(i) ?? { n: 0, grey: 0, mean: null, max: null, lastT: 0 }) };
+    if (d.snr == null) x.grey++;
+    else { x.mean = ((x.mean ?? 0) * x.n + d.snr) / (x.n + 1); x.n++; x.max = Math.max(x.max ?? -128, d.snr); }
+    x.lastT = Math.max(x.lastT, d.t);
+    cells.set(i, x);
+  }
+  return { ...c, cells, auto: skyCellsHeatDue({ ...c, cells }) ? 'heatmap' : 'tracks' };
+}
+/** The server's AUTO rule (vibe_skyplot.h cells::heatmapDue), with the figures it sent. */
+export function skyCellsHeatDue(c: SkyCells): boolean {
+  let heard = 0, dots = 0;
+  for (const x of c.cells.values()) if (x.n + x.grey > 0) { heard++; dots += x.n + x.grey; }
+  return heard > 0 && heard >= c.heatCoverage * c.total && dots / heard >= c.heatDotsPerCell;
+}
+/** The pass being heard NOW: the dots of `norad` (0 = the newest dot's bird), newest back through gaps under 2 min — only
+ *  when its newest dot is under SKY_LIVE_SEC old. [] = nothing live (after LOS). */
+export function skyLivePass(dots: SkyDot[], nowSec: number, norad = 0): SkyDot[] {
+  const mine = dots.filter((d) => d.t > 0 && (norad ? d.norad === norad : true));
+  if (!mine.length) return [];
+  let newest = mine[0]; for (const d of mine) if (d.t > newest.t) newest = d;
+  if (nowSec - newest.t > SKY_LIVE_SEC) return [];
+  const bird = norad || newest.norad;
+  const v = mine.filter((d) => d.norad === bird).sort((a, b) => b.t - a.t);
+  const out: SkyDot[] = [];
+  for (const d of v) { if (out.length && out[out.length - 1].t - d.t > 120) break; out.push(d); }
+  return out;
+}
+/** What to draw: the base (tracks of every dot, or the heatmap) and the track on top (the live pass). */
+export function skyViewOf(choice: SkyMode, cells: SkyCells | null, dots: SkyDot[], nowSec: number, norad = 0): { base: 'tracks' | 'heatmap'; overlay: SkyDot[]; live: boolean } {
+  const live = skyLivePass(dots, nowSec, norad);
+  const heat = !!cells && (choice === 'heatmap' || (choice === 'auto' && cells.auto === 'heatmap'));
+  return heat ? { base: 'heatmap', overlay: live, live: live.length > 0 } : { base: 'tracks', overlay: [], live: live.length > 0 };
+}
+const COMPASS8 = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+/** The 40° azimuth window (10° steps) whose heard cells have the best n-weighted mean SNR (≥ 20 dots) — the server's
+ *  cells::strongest. null = not enough yet. */
+export function skyStrongest(c: SkyCells): { azLo: number; azHi: number; name: string } | null {
+  let best = -1e9, at = -1;
+  for (let ctr = 0; ctr < 360; ctr += 10) {
+    let sum = 0, n = 0;
+    for (const [i, x] of c.cells) {
+      if (!x.n || x.mean == null) continue;
+      const b = skyCellBounds(c, i), mid = (b.az0 + b.az1) / 2;
+      const d = Math.abs(((mid - ctr + 540) % 360) - 180);
+      if (d <= 20) { sum += x.mean * x.n; n += x.n; }
+    }
+    if (n < 20) continue;
+    if (sum / n > best + 1e-9) { best = sum / n; at = ctr; }
+  }
+  if (at < 0) return null;
+  const azLo = (at - 20 + 360) % 360, azHi = (at + 20) % 360;
+  return { azLo, azHi, name: COMPASS8[Math.floor((at + 22) / 45) % 8] };
+}
+/** "heatmap · 30 days · 1,240 cells heard · strongest east (az 70–110°) · 12,345 dots" (tracks: the dot summary). */
+export function skyHeatSummary(c: SkyCells, dotCount: number): string {
+  let heard = 0; for (const x of c.cells.values()) if (x.n + x.grey > 0) heard++;
+  const st = skyStrongest(c);
+  return [`heatmap · ${c.days} days · ${heard.toLocaleString('en-GB')} cell${heard === 1 ? '' : 's'} heard`,
+          st ? `strongest ${st.name} (az ${st.azLo}–${st.azHi}°)` : '',
+          `${dotCount.toLocaleString('en-GB')} dot${dotCount === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+}
+/** The heatmap as SVG paths, ONE PER COLOUR (a dB step each, and grey) — a phone draws ~20 paths, not 2,000 cells. */
+export function skyHeatPaths(c: SkyCells, cx: number, cy: number, R: number): { d: string; fill: string }[] {
+  const by = new Map<string, string[]>();
+  const f = (n: number) => n.toFixed(1);
+  for (const [i, x] of c.cells) {
+    if (!(x.n + x.grey)) continue;
+    const fill = skySnrCss(x.n && x.mean != null ? Math.round(x.mean) : null);
+    const b = skyCellBounds(c, i);
+    const ro = R * (90 - b.el0) / 90, ri = R * (90 - Math.min(90, b.el1)) / 90;
+    const p = (az: number, r: number) => { const a = az * Math.PI / 180; return `${f(cx + r * Math.sin(a))} ${f(cy - r * Math.cos(a))}`; };
+    const seg = `M${p(b.az0, ro)}A${f(ro)} ${f(ro)} 0 0 1 ${p(b.az1, ro)}L${p(b.az1, ri)}` + (ri > 0.05 ? `A${f(ri)} ${f(ri)} 0 0 0 ${p(b.az0, ri)}` : '') + 'Z';
+    const list = by.get(fill) ?? []; list.push(seg); by.set(fill, list);
+  }
+  // grey first (underneath, as the grey dots), then the ramp low → high
+  return [...by.entries()].sort((a, b) => (a[0] === skySnrCss(null) ? -1 : b[0] === skySnrCss(null) ? 1 : 0)).map(([fill, segs]) => ({ fill, d: segs.join('') }));
 }
 
 /** Live dots joined to what is shown: newest first, bounded. */
@@ -115,8 +258,9 @@ export function skyPlotMerge(prev: SkyDot[], add: SkyDot[], max = SKY_MAX_DOTS):
 }
 
 /** "/vibeserver/skyplot.json?kind=orbcomm&radio=a1b2c3d4" (radio '' = every radio; days 0 = all kept). */
-export function skyPlotQuery(kind: string, radio = '', days = 0, norad = 0, png = false): string {
+export function skyPlotQuery(kind: string, radio = '', days = 0, norad = 0, png = false, mode: SkyMode = 'auto'): string {
   let q = `/vibeserver/skyplot.${png ? 'png' : 'json'}?kind=${encodeURIComponent(kind || 'orbcomm')}`;
+  if (png && mode !== 'auto') q += `&mode=${mode}`;   // ★★★ beta94 the server's picture in the view chosen
   if (radio && /^[0-9a-z]{1,16}$/.test(radio)) q += `&radio=${radio}`;
   if (days > 0) q += `&days=${Math.floor(days)}`;
   if (norad > 0) q += `&norad=${Math.floor(norad)}`;
@@ -133,6 +277,9 @@ export function skyRadioFromBase(base: string | null | undefined): string {
 // ── the picture (one geometry, drawn by react-native-svg in the app and as an SVG string on the web page) ──────────────
 export interface SkyScene {
   size: number; cx: number; cy: number; R: number;
+  /** ★★★ beta94 the heatmap's cells (one path per colour), under the rings; [] in TRACKS */
+  cells: { d: string; fill: string }[];
+  mode: 'tracks' | 'heatmap';
   rings: { r: number; el: number }[];
   /** the N–S and E–W lines through the zenith */
   cross: string;
@@ -142,7 +289,8 @@ export interface SkyScene {
 }
 /** The scene in a size×size box (the dome inset by `pad` for the N/E/S/W labels). Dots past `maxDraw` (the oldest) are left
  *  out — a phone draws a few thousand circles comfortably, not twenty thousand. */
-export function skyPlotScene(dots: SkyDot[], size = 300, maxDraw = 4000): SkyScene {
+export function skyPlotScene(dots: SkyDot[], size = 300, maxDraw = 4000,
+                             heat?: { cells: SkyCells; overlay: SkyDot[] } | null): SkyScene {
   const pad = Math.round(size * 0.07);
   const cx = size / 2, cy = size / 2, R = size / 2 - pad;
   const rings = [0, 30, 60].map((el) => ({ el, r: R * (90 - el) / 90 }));
@@ -153,7 +301,10 @@ export function skyPlotScene(dots: SkyDot[], size = 300, maxDraw = 4000): SkySce
     { text: 'E', x: cx + R + off, y: cy, anchor: 'middle' }, { text: 'W', x: cx - R - off, y: cy, anchor: 'middle' },
     { text: '30°', x: cx + 3, y: cy - R * 60 / 90 - 3, anchor: 'start' }, { text: '60°', x: cx + 3, y: cy - R * 30 / 90 - 3, anchor: 'start' },
   ];
-  const shown = dots.length > maxDraw ? dots.slice(0, maxDraw) : dots;   // newest first → the newest kept
+  // ★★★ beta94 HEATMAP: the cells, and on top only the live pass's track (Stuart: "you still see a track for the satellite
+  //     being tracked, once the pass ends it goes to the heatmap")
+  const src = heat ? heat.overlay : dots;
+  const shown = src.length > maxDraw ? src.slice(0, maxDraw) : src;   // newest first → the newest kept
   const rd = Math.max(1.6, size / 150), rg = Math.max(1, rd * 0.6);
   const out: SkyScene['dots'] = [];
   for (const pass of [0, 1])
@@ -163,7 +314,12 @@ export function skyPlotScene(dots: SkyDot[], size = 300, maxDraw = 4000): SkySce
       const [x, y] = skyPlotXY(d.az, d.el, cx, cy, R);
       out.push({ x, y, r: pass === 0 ? rg : rd, fill: skySnrCss(d.snr), grey: pass === 0 });
     }
-  return { size, cx, cy, R, rings, cross, labels, dots: out };
+  return { size, cx, cy, R, rings, cross, labels, dots: out, cells: heat ? skyHeatPaths(heat.cells, cx, cy, R) : [], mode: heat ? 'heatmap' : 'tracks' };
+}
+/** The scene for a view choice — skyViewOf + skyPlotScene in one (every client calls this). */
+export function skySceneFor(choice: SkyMode, cells: SkyCells | null, dots: SkyDot[], nowSec: number, size = 300, maxDraw = 4000, norad = 0): SkyScene {
+  const v = skyViewOf(choice, cells, dots, nowSec, norad);
+  return skyPlotScene(dots, size, maxDraw, v.base === 'heatmap' && cells ? { cells, overlay: v.overlay } : null);
 }
 
 /** The scene as an SVG string (the web page) — the dome and its lines in `ink` (currentColor by default, so it follows
@@ -172,6 +328,8 @@ export function skyPlotSvg(s: SkyScene, label = 'Sky plot', ink = 'currentColor'
   const f = (n: number) => n.toFixed(1);
   let h = `<svg viewBox="0 0 ${s.size} ${s.size}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${label.replace(/[<>&"]/g, '')}">`;
   h += `<circle cx="${f(s.cx)}" cy="${f(s.cy)}" r="${f(s.R)}" fill="${ink}" fill-opacity="0.07"/>`;
+  // ★★★ beta94 the heatmap, under the lines — each path stroked in its own colour so no hairline seams show between cells
+  for (const c of s.cells) h += `<path d="${c.d}" fill="${c.fill}" stroke="${c.fill}" stroke-width="0.6" stroke-linejoin="round" data-heat="1"/>`;
   h += `<path d="${s.cross}" stroke="${ink}" stroke-opacity="0.18" stroke-width="1" fill="none"/>`;
   for (const r of s.rings) h += `<circle cx="${f(s.cx)}" cy="${f(s.cy)}" r="${f(r.r)}" fill="none" stroke="${ink}" stroke-opacity="${r.el === 0 ? 0.6 : 0.28}" stroke-width="1"/>`;
   for (const d of s.dots) h += `<circle cx="${f(d.x)}" cy="${f(d.y)}" r="${f(d.r)}" fill="${d.fill}"/>`;
@@ -205,3 +363,20 @@ export function skyPlotSummary(dots: SkyDot[], truncated = false): string {
           birds ? `${birds} satellite${birds === 1 ? '' : 's'}` : '', grey ? `${grey.toLocaleString('en-GB')} grey` : '',
           since ? `since ${since}` : ''].filter(Boolean).join(' · ');
 }
+
+/** ★★★ beta94 the line under the plot for a view choice: the heatmap's ("heatmap · 30 days · 1,240 cells heard · strongest
+ *  east (az 70–110°) · 12,345 dots", "· the live pass on top" while one is), or the tracks' dot summary. */
+export function skySummaryFor(choice: SkyMode, cells: SkyCells | null, dots: SkyDot[], nowSec: number, truncated = false, norad = 0): string {
+  const v = skyViewOf(choice, cells, dots, nowSec, norad);
+  if (v.base === 'heatmap' && cells) return skyHeatSummary(cells, dots.length) + (v.live ? ' · the live pass on top' : '');
+  return skyPlotSummary(dots, truncated);
+}
+/** ★★★ beta94 the web page's AUTO / TRACKS / HEATMAP buttons (data-act="skymode", data-v = the mode). */
+export function skyModesHtml(mode: SkyMode): string {
+  return '<div class="sky-modes" role="group" aria-label="Sky plot view">'
+    + SKY_MODES.map((m) => `<button type="button" data-act="skymode" data-v="${m.id}" class="btn${m.id === mode ? ' on' : ''}" aria-pressed="${m.id === mode}"`
+      + ` title="${m.id === 'auto' ? 'Tracks until there is enough data, then the heatmap — with a live pass drawn on top' : m.id === 'tracks' ? 'Every dot along each pass' : 'Each patch of sky coloured by its average SNR over 30 days'}">${m.label}</button>`).join('')
+    + '</div>';
+}
+/** The SKY_MODES value of a button's data-v ('auto' when not one). */
+export const skyModeOf = (v: string | undefined): SkyMode => (v === 'tracks' || v === 'heatmap' ? v : 'auto');

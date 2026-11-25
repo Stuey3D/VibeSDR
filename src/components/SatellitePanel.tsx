@@ -38,7 +38,7 @@ import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFo
 import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
-import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
+import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
@@ -362,21 +362,29 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const [orbSky, setOrbSky] = useState(true);
   const [skyDots, setSkyDots] = useState<SkyDot[]>([]);
   const [skyNote, setSkyNote] = useState('');
+  // ★★★ beta94 the sky by position + the view (AUTO: the heatmap once there is enough, the live pass as a track on top)
+  const [skyCells, setSkyCells] = useState<SkyCells | null>(null);
+  const [skyMode, setSkyMode] = useState<SkyMode>('auto');
   const skyGet = p.skyGet;
   useEffect(() => {
-    setSkyDots([]); setSkyNote('');
+    setSkyDots([]); setSkyNote(''); setSkyCells(null);
     if (!orbDec) return;
     if (!skyGet) { setSkyNote('This server has no sky plot to read'); return; }
     let live = true;
     skyGet(skyPlotQuery('orbcomm', p.skyRadio ?? '')).then((txt) => {
       if (!live) return;
       let d = null; try { d = txt ? parseSkyPlotJson(JSON.parse(txt)) : null; } catch { d = null; }
-      if (d) setSkyDots((prev) => skyPlotMerge(d!.dots, prev)); else setSkyNote('The stored sky plot could not be read — live dots only');
+      if (d) { setSkyDots((prev) => skyPlotMerge(d!.dots, prev)); setSkyCells(d.cells); } else setSkyNote('The stored sky plot could not be read — live dots only');
     }).catch(() => { if (live) setSkyNote('The stored sky plot could not be read — live dots only'); });
     return () => { live = false; };
   }, [orbDec, p.picked?.norad, p.picked?.tx, skyGet, p.skyRadio]);   // eslint-disable-line react-hooks/exhaustive-deps
   const orbStatus = p.orbcomm?.status ?? null;
-  useEffect(() => { if (orbDec && orbStatus?.dots.length) setSkyDots((prev) => skyPlotMerge(prev, orbStatus.dots)); }, [orbStatus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!orbDec || !orbStatus?.dots.length) return;
+    setSkyDots((prev) => skyPlotMerge(prev, orbStatus.dots));
+    setSkyCells((c) => skyCellsAddDots(c, orbStatus.dots));   // ★★★ beta94 the live pass joins the heatmap as it is heard
+  }, [orbStatus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const skyNow = Math.floor(now / 10) * 10;   // ★ the live pass judged to 10 s (the heatmap is not re-laid every second)
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
   // ★★★ beta92 OPEN IN VFO B — B's line and the line switch; with no B this is exactly the one-downlink box
   const vb = p.vfob && p.vfob.on && confirmed && p.vfob.norad === p.picked?.norad ? p.vfob : null;
@@ -591,8 +599,9 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   {orbSky && (
                     <View style={s.orbSky}>
                       <SkyPlotView dots={skyDots} ink={tk.value} muted={tk.muted} font={F} maxW={big ? 360 : 260} maxDraw={1500}
+                                   cells={skyCells} mode={skyMode} onMode={setSkyMode} nowSec={skyNow} norad={p.picked?.norad ?? 0}
                                    label="Sky plot: where this aerial hears the ORBCOMM satellites" />
-                      <Text style={[s.detailNp, s.center]}>{[skyPlotSummary(skyDots) || 'No dots yet — they appear as the birds are heard', skyNote].filter(Boolean).join(' · ')}</Text>
+                      <Text style={[s.detailNp, s.center]}>{[skySummaryFor(skyMode, skyCells, skyDots, skyNow, false, p.picked?.norad ?? 0) || 'No dots yet — they appear as the birds are heard', skyNote].filter(Boolean).join(' · ')}</Text>
                       {big && <Text style={[s.detailNp, s.center]}>{SKY_PLOT_WHAT}</Text>}
                     </View>
                   )}

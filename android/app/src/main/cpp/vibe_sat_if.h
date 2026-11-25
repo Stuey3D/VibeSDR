@@ -91,6 +91,15 @@ inline Region regionOf(const vibe::sat::Transmitter& t, double demodBwHz = 0.0) 
     r.why = b;
     return r;
 }
+/** ★★★ beta94 UNATTENDED ORBCOMM MONITORING (vibe_sat_pass_sched.h, vibe_orbcomm_sky.h): the sky-plot watcher's band —
+ *  137.19–137.81 MHz, every channel in use with its Doppler — held by the filter beside a Meteor pass when both run on one
+ *  capture (a pass's own region alone would narrow the filter to ~350–500 kHz round the Meteor downlink and cut the band). */
+inline Region orbcommSkyRegion() {
+    Region r;
+    r.centreHz = 137.5e6; r.halfHz = 310000.0 + 10000.0;
+    r.why = "ORBCOMM sky plot 137.19\xe2\x80\x93" "137.81 MHz";
+    return r;
+}
 /** ★★ The span a client's view OPENS at when this downlink is picked (Stuart 11-24, a METEOR on the Pi 500's V4 with the
  *  pass's 350 kHz IF filter: "we need to start zoomed in, not all the way but enough to see the signal and neighbours" —
  *  his chosen level was ~420 kHz across). 2.5 × what the IF filter has to hold (the signal + its whole Doppler swing):

@@ -155,6 +155,8 @@
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
 #include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
 #include "vibe_sat_if.h"         // ★★ V12 beta92 the satellite pass's IF filter — the narrowest that holds the signal + its Doppler
+#include "vibe_sat_pass_sched.h"  // ★★★ beta94 unattended passes: Meteor + ORBCOMM, together where one capture holds both, else the priority
+#include "vibe_orbcomm_sky.h"     // ★★★ beta94 unattended ORBCOMM monitoring — the light sky plot (positions + SNR, no packets)
 /** ★★ V12 the one satellite engine of this process (curated birds, element sets, the server's sky, every lock). */
 static vibe::sat::Engine& satEngine() { return vibe::sat::engine(); }   // ★ the header's singleton: decoders reach it too
 #include "vibe_sat_offer.h"       // ★★ beta94 "sat" in the published modes (the directory's satellite badge)
@@ -12380,6 +12382,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
             if (satPass_.on) consider("pass:" + std::to_string(satPass_.norad) + ":" + std::to_string(satPass_.tx), satPass_.norad, satPass_.tx, "", rxBwHz);
         }
+        /* ★★★ beta94 unattended ORBCOMM monitoring holds the whole ORBCOMM band in the filter — beside a Meteor pass too (both
+         *  on one capture: the pass's region alone would have narrowed the filter round the Meteor downlink and cut the band). */
+        if (orbSkyOn_.load()) rs.push_back(vibesatif::orbcommSkyRegion());
         std::vector<std::pair<std::string, SatPick>> picks;
         { std::lock_guard<std::mutex> lk(satPickMtx_); for (auto& kv : satPicks_) picks.push_back(kv); }
         for (const auto& kv : picks) {
@@ -29174,6 +29179,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply(200, "OK", j);
                 return;
             }
+            /* ★★★ beta94 THE OWNER'S SKY PLOT RESET (the Setup page, beside Unattended satellite passes): POST = this radio's
+             *  ORBCOMM dots and cells gone (vibe_skyplot.h resetRadio — the other radios' stay). Answered by the RADIO. */
+            if (what == "skyplot-reset") {
+                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                if (!isPost) { reply(405, "Method Not Allowed", "{\"error\":\"POST to reset\"}"); return; }
+                const std::string me = vibe::logradio::mine();
+                const size_t n = vibe::skyplot::shared().resetRadio(me, vibe::skyplot::kOrbcomm);
+                LOGI("admin page: the ORBCOMM sky plot of radio %s reset by %s \xe2\x80\x94 %zu dots and its cells cleared", me.empty() ? "(untagged)" : me.c_str(), ip.c_str(), n);
+                reply(200, "OK", "{\"ok\":true,\"dots\":" + std::to_string(n) + ",\"radio\":\"" + jsonEscape(me) + "\"}");
+                return;
+            }
             if (what == "bandscan") {
                 if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 const std::string band = queryParam(reqLine, "band"), act = queryParam(reqLine, "act");
@@ -30231,11 +30247,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const auto dots = vibe::skyplot::shared().read(f, vibe::skyplot::kMaxOut + 1, &radios);
                 const bool trunc = dots.size() > vibe::skyplot::kMaxOut;
                 std::vector<vibe::skyplot::Dot> v(dots.begin(), dots.begin() + (long)std::min(dots.size(), vibe::skyplot::kMaxOut));
+                // ★★★ beta94 the cells (storage by sky position — 30 days, whatever the dot log still holds): ?mode=auto|tracks|heatmap for the PNG
+                const vibe::skyplot::cells::Map cm = vibe::skyplot::shared().readCells(f.kind, f.radio, days > 0 ? (int)std::min(days, 3650LL) : vibe::skyplot::cells::kWindowDays);
+                const std::string md = qv("mode");
+                const int mode = md == "tracks" ? vibe::skyplot::kTracks : md == "heatmap" ? vibe::skyplot::kHeatmap : vibe::skyplot::kAuto;
                 if (asPng) {
                     std::string title = k + " SKY PLOT - " + std::to_string(v.size()) + " DOTS";
                     if (!f.radio.empty()) title += " - RADIO " + f.radio;
-                    body = vibe::skyplot::png(v, title);
-                } else body = vibe::skyplot::json(v, radios, k, trunc);
+                    for (auto& ch : title) ch = (char)std::toupper((unsigned char)ch);
+                    body = vibe::skyplot::png(v, title, 520, &cm, mode, days > 0 ? (int)std::min(days, 30LL) : vibe::skyplot::cells::kWindowDays);
+                } else body = vibe::skyplot::json(v, radios, k, trunc, cm, days > 0 ? (int)std::min(days, 30LL) : vibe::skyplot::cells::kWindowDays);
             }
             /* ★ beta93: SAVE PNG sends ?download=1, and the page now reads this server DIRECT — cross-origin, where a
              *  browser ignores <a download>. Saying "attachment" here keeps it a download rather than a navigation away. */
@@ -36452,6 +36473,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (dxFmFeed_.load(std::memory_order_relaxed)) dxFm_.feed(buf.data(), (int)buf.size());
             // ★★ V12: a CW skimmer on a ONE-PIPELINE radio — its own slice, cut off this thread (vibe_wide_tap.h).
             if (!perClientDsp()) skimTapFeed(buf.data(), (int)buf.size());
+            // ★★★ beta94 unattended ORBCOMM monitoring: a frame twice a second, copied (vibe_orbcomm_sky.h) — one atomic when off
+            if (!perClientDsp()) orbSkyFeed(buf.data(), (int)buf.size());
             {
                 const auto t1 = std::chrono::steady_clock::now();
                 const double wideMs = std::chrono::duration<double,std::milli>(tMid - t0).count();
@@ -37845,18 +37868,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool on = false; long long norad = 0; int tx = -1;
         std::string name, label, decoder, decoderKey;
         double aos = 0, los = 0, maxEl = 0, startedAt = 0;
-        bool pausedBg = false;                       // background decoding was running and is paused for this pass
-        bool saved = false; double centre = 0, view = 0, audio = 0; std::string mode;   // the radio before (when background had not saved it)
+        double regionLo = 0, regionHi = 0;           // ★ beta94 its signal + Doppler (the capture fit, vibe_sat_pass_sched.h)
     };
     std::recursive_mutex satPassMtx_;                // ★ recursive: the pass's own tune runs through handleControl
     SatPassRun satPass_;
-    std::atomic<bool> satPassBusy_{false};
-    std::string satPassWhy_, satPassLast_;
+    std::atomic<bool> satPassBusy_{false};           // ★ beta94: a SESSION of unattended satellite work holds the radio
+    std::string satPassWhy_, satPassLast_, satPassNow_;
     double satPassRetryAt_ = 0;
+    bool satPassBoth_ = false;                       // ★ beta94 the pass and ORBCOMM run together on one capture now
+    double satPassCentre_ = 0, satPassCentreLogAt_ = 0;   // ★ beta94 where the capture is held for them (0 = not held)
     static bool& satPassInternal() { static thread_local bool v = false; return v; }   // ★ our own tune is not an arrival
     std::string satPassWhyNot(const vibe::bg::SatPasses& sp) {
         if (!sp.on) return "switched off";
-        if (sp.birds.empty()) return "no satellite picked yet";
+        if (!sp.anyPicked()) return "nothing picked yet (Meteor, ORBCOMM or a downlink)";
         if (frontDoorOnly || decoderOnly) return "not a radio process";
         if (g_benchHold.load()) return "the benchmark is measuring this machine";
         if (g_vsHandheld.load()) return "satellites are not on the handheld";
@@ -37869,6 +37893,200 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (satEngine().timeState(satClock()) == "none") return "this server's clock has not been checked yet";
         return "";
     }
+
+    /* ══ ★★★ beta94 THE SESSION (Stuart 11-25 — "group meteor and orbcomm then allow the user to choose a priority"): whatever
+     *  unattended satellite work runs — a pass, ORBCOMM sky-plot monitoring, or both on one capture — holds the radio as ONE
+     *  thing: background decoding paused once, the radio's state saved once, both given back once (at the last LOS, when
+     *  ORBCOMM monitoring stops, or when somebody arrives). A Meteor pass inside it hands ORBCOMM back at LOS without the
+     *  radio going home in between. beta90–93's pass did the same for itself; it now runs inside this. ══════════════════ */
+    struct SatWork { bool on = false, pausedBg = false, saved = false; double centre = 0, view = 0, audio = 0, since = 0; std::string mode; };
+    SatWork satWork_;
+    bool satWorkBeginLocked(const std::string& what) {
+        if (satWork_.on) return true;
+        SatWork w;
+        {
+            std::lock_guard<std::mutex> op(bgOpMtx_);
+            w.pausedBg = bgActive_.load();
+            if (w.pausedBg) bgStopLocked((what + " \xe2\x80\x94 it resumes afterwards").c_str(), false);
+            w.saved = !bgSaved_.valid;
+            if (w.saved) { w.centre = rtlCenter.load(); w.view = viewCenter.load(); w.audio = audioFreq.load(); std::lock_guard<std::recursive_mutex> ml(modeMtx); w.mode = mode; }
+        }
+        satPassBusy_.store(true);
+        bgWanted_.store(true);                       // ★ the park is held off; the DX scanner stands aside
+        dxYieldToBg();
+        resumeCaptureIdle(/*fromBg=*/true);
+        w.on = true; w.since = nowSecs();
+        satWork_ = w;
+        if (radioReleased.load()) {
+            LOGI("[sat] unattended satellite work: %s is due but another program has the radio \xe2\x80\x94 trying again in 60 s", what.c_str());
+            satWorkEndLocked("another program has the radio", true, true);
+            satPassRetryAt_ = nowSecs() + 60;
+            return false;
+        }
+        return true;
+    }
+    /** The session's end: the radio back where it was found (`restore`, when background decoding had not saved it itself);
+     *  `resume` lets background decoding start again at once on the profile it was running. */
+    void satWorkEndLocked(const std::string& why, bool restore, bool resume) {
+        if (satPass_.on) satPassEndLocked(why);
+        if (orbSkyOn_.load()) orbSkyStopLocked(why);
+        satPassBoth_ = false; satPassCentre_ = 0;
+        if (!satWork_.on) { satPassBusy_.store(false); return; }
+        const SatWork w = satWork_;
+        if (restore && w.saved && w.audio > 0) {
+            satPassInternal() = true;
+            bgPlace(w.centre, w.view, w.audio);
+            if (!w.mode.empty()) handleControl(nullptr, "{\"type\":\"mode\",\"mode\":\"" + w.mode + "\"}");
+            satPassInternal() = false;
+        }
+        if (resume && w.pausedBg) {
+            vibe::bg::Config cfg;
+            { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+            std::lock_guard<std::mutex> op(bgOpMtx_);
+            bgEmptySince_ = nowSecs() - vsBgWaitSec(cfg) - 1;   // ★ its wait was served before: it resumes now
+        }
+        satWork_ = SatWork{};
+        satPassBusy_.store(false);
+        if (!resume) bgWanted_.store(false);
+        LOGI("[sat] unattended satellite work over (%s)%s", why.c_str(), resume && w.pausedBg ? "; background decoding resumes" : "");
+    }
+
+    /* ══ ★★★ beta94 UNATTENDED ORBCOMM MONITORING — THE LIGHT SKY PLOT (vibe_orbcomm_sky.h; Stuart 11-25: "if orbcomm is
+     *  drawing an antenna plot it only needs to log the position and snr"). The DSP thread copies one frame of the capture
+     *  twice a second into a buffer (no allocation once running; a frame the worker is still busy with is dropped, never
+     *  queued); a thread at DECODER priority (Network > Audio > Spectrum > Decoders) does the FFT and the orbit looks.
+     *  Its dots go to the same skyplot.json as the full decoder's. A listener picking ORBCOMM runs the full decoder, as ever.
+     *  ★ One-pipeline radios only — and a session only ever runs on one (a locked range is refused: satPassWhyNot). ══ */
+    std::atomic<bool> orbSkyOn_{false};
+    std::unique_ptr<vibeorb::SkyWatch> orbSky_;
+    std::thread orbSkyTh_;
+    std::mutex orbSkyM_;
+    std::condition_variable orbSkyCv_;
+    bool orbSkyRun_ = false, orbSkyHave_ = false;    // orbSkyM_
+    std::vector<cf32> orbSkyReady_;                  // orbSkyM_
+    double orbSkyRate_ = 0, orbSkyHw_ = 0, orbSkyUtc_ = 0;   // orbSkyM_
+    std::vector<cf32> orbSkyFill_;                   // the DSP thread's own
+    long long orbSkySkip_ = 0;                       // the DSP thread's own
+    double orbSkySince_ = 0, orbSkySinceUtc_ = 0, orbSkyPngAt_ = 0;
+    std::atomic<uint64_t> orbSkyDots_{0};
+    std::string orbSkyLast_;
+    void orbSkyStartLocked() {
+        if (orbSkyOn_.load()) return;
+        vibeorb::SkyWatch::Opts o;
+        o.birds = [] {
+            std::vector<vibeorb::SkyBird> v;
+            for (auto& e : satEngine().orbcommElements()) {
+                vibeorb::SkyBird b; b.norad = e.norad; b.name = e.name; b.ok = b.sgp.init(e.el); b.epochUnix = e.el.epochUnix();
+                v.push_back(std::move(b));
+            }
+            return v;
+        };
+        o.observer = [](vibe::sat::Observer& ob) { return satEngine().observer(ob); };
+        o.dots = [this](const std::vector<vibe::skyplot::Dot>& d) { vibe::skyplot::shared().add(d); orbSkyDots_.fetch_add(d.size()); };
+        o.log = [](const std::string& l) { LOGI("%s", l.c_str()); };
+        orbSky_.reset(new vibeorb::SkyWatch(std::move(o)));
+        { std::lock_guard<std::mutex> lk(orbSkyM_); orbSkyRun_ = true; orbSkyHave_ = false; }
+        orbSkyTh_ = std::thread([this] {
+            vibeDecoderThread("vibe-orbsky");
+            std::vector<cf32> x;
+            std::unique_lock<std::mutex> lk(orbSkyM_);
+            while (true) {
+                orbSkyCv_.wait(lk, [this] { return orbSkyHave_ || !orbSkyRun_; });
+                if (!orbSkyRun_) break;
+                x.swap(orbSkyReady_);
+                const double rate = orbSkyRate_, hw = orbSkyHw_, utc = orbSkyUtc_;
+                lk.unlock();
+                orbSky_->frame(x.data(), (int)x.size(), rate, hw, utc);
+                lk.lock();
+                x.clear(); orbSkyReady_.swap(x);   // ★ the buffer goes back: steady state allocates nothing
+                orbSkyHave_ = false;
+            }
+        });
+        orbSkySince_ = nowSecs(); orbSkySinceUtc_ = vibe::vibeUtcNow(); orbSkyPngAt_ = orbSkySince_; orbSkyDots_.store(0);
+        orbSkyOn_.store(true);
+        LOGI("[sat] ORBCOMM monitoring (sky plot) started \xe2\x80\x94 the light watcher: positions from the orbits and the SNR "
+             "from the spectrum, no packets decoded; %d ORBCOMM birds up", satEngine().orbcommUp(satClock().unix));
+    }
+    void orbSkyStopLocked(const std::string& why) {
+        if (!orbSkyOn_.exchange(false)) return;
+        { std::lock_guard<std::mutex> lk(orbSkyM_); orbSkyRun_ = false; }
+        orbSkyCv_.notify_all();
+        if (orbSkyTh_.joinable()) orbSkyTh_.join();
+        std::string brief;
+        if (orbSky_) { orbSky_->flush(); brief = orbSky_->brief(); }
+        vibe::skyplot::shared().flushCells();   // ★★★ beta94 the stretch's cells to the file now, not in ≤ 10 min
+        orbSkyPicture(true);
+        orbSky_.reset();
+        const double secs = nowSecs() - orbSkySince_;
+        orbSkyLast_ = "ORBCOMM monitoring, " + vibe::satsched::dur(secs) + " \xe2\x80\x94 " + std::to_string((unsigned long long)orbSkyDots_.load())
+                    + " sky dots \xe2\x80\x94 stopped (" + why + ")";
+        LOGI("[sat] %s; %s", orbSkyLast_.c_str(), brief.c_str());
+    }
+    /** ★ The gallery's copy: this radio's ORBCOMM sky plot as a PNG when a stretch of monitoring ends (≥ 10 min, ≥ 10 new
+     *  dots), and once a day while it runs on — never a picture per pass (it runs nearly all the time). */
+    void orbSkyPicture(bool ending) {
+        const double now = nowSecs();
+        if (!ending && now - orbSkyPngAt_ < 86400) return;
+        if (orbSkyDots_.load() < 10 || now - orbSkySince_ < 600 || !vibe::gallery::shared().enabled()) return;
+        orbSkyPngAt_ = now;
+        vibe::skyplot::Store::Filter f; f.kind = vibe::skyplot::kOrbcomm; f.radio = vibe::logradio::mine();
+        const auto dots = vibe::skyplot::shared().read(f);
+        if (dots.empty()) return;
+        const std::string title = "ORBCOMM SKY PLOT - " + std::to_string(dots.size()) + " DOTS" + (f.radio.empty() ? std::string() : " - RADIO " + f.radio);
+        const vibe::skyplot::cells::Map cm = vibe::skyplot::shared().readCells(vibe::skyplot::kOrbcomm, f.radio);
+        const std::string png = vibe::skyplot::png(dots, title, 520, &cm);   // ★ AUTO: the heatmap once there is enough
+        if (png.empty()) return;
+        vibe::gallery::Meta m;
+        m.kind = "orbcomm"; m.origin = "background"; m.decoder = "orbcomm-sky"; m.freqHz = 137.5e6; m.mode = "nfm";
+        m.radio = vibe::gallery::shared().radioLabel(); m.utc = (int64_t)orbSkySinceUtc_; m.partial = false;
+        m.title = "ORBCOMM \xc2\xb7 sky plot \xc2\xb7 unattended monitoring, " + vibe::satsched::dur(now - orbSkySince_) + ", "
+                + std::to_string((unsigned long long)orbSkyDots_.load()) + " new dots (positions + SNR)";
+        vibe::gallery::shared().add(m, "png", png);
+    }
+    /** The DSP thread: a frame of the capture twice a second, copied and handed over — or dropped if the worker is busy. */
+    void orbSkyFeed(const cf32* iq, int n) {
+        if (!orbSkyOn_.load(std::memory_order_relaxed)) { if (!orbSkyFill_.empty()) orbSkyFill_.clear(); orbSkySkip_ = 0; return; }
+        const double rate = (double)sampleRate;
+        const int N = vibeorb::SkyWatch::fftFor(rate);
+        int i = 0;
+        if (orbSkySkip_ > 0) { const long long k = std::min<long long>(orbSkySkip_, n); orbSkySkip_ -= k; i = (int)k; }
+        if (i >= n) return;
+        if ((int)orbSkyFill_.capacity() < N) orbSkyFill_.reserve((size_t)N);
+        if ((int)orbSkyFill_.size() > N) orbSkyFill_.clear();   // ★ the rate went down
+        const int take = std::min(n - i, N - (int)orbSkyFill_.size());
+        orbSkyFill_.insert(orbSkyFill_.end(), iq + i, iq + i + take);
+        if ((int)orbSkyFill_.size() < N) return;
+        {
+            std::unique_lock<std::mutex> lk(orbSkyM_, std::try_to_lock);
+            if (lk.owns_lock() && !orbSkyHave_ && orbSkyRun_) {
+                orbSkyReady_.swap(orbSkyFill_);
+                orbSkyHave_ = true; orbSkyRate_ = rate; orbSkyHw_ = rtlCenter.load() + hwOffsetHz(); orbSkyUtc_ = vibe::vibeUtcNow();
+            }
+        }
+        orbSkyFill_.clear();
+        orbSkyCv_.notify_one();
+        orbSkySkip_ = std::max<long long>(0, (long long)(rate / vibeorb::SkyWatch::kFramesPerSec) - N - (n - i - take));
+    }
+    /** ★ Hold the capture where both fit (or ORBCOMM alone sits best) — re-asserted if something moved it (once a minute in
+     *  the log). The dial is not moved: the pass's own tune put it on the downlink; ORBCOMM alone tuned 137.5 MHz. */
+    void satHoldCentreLocked(double centre) {
+        if (!(centre > 0)) return;
+        const double cur = rtlCenter.load();
+        if (std::fabs(cur - centre) <= 2000.0) { satPassCentre_ = centre; return; }
+        const double now = nowSecs();
+        if (satPassCentre_ == centre && now - satPassCentreLogAt_ < 60) { /* quiet */ }
+        else {
+            satPassCentreLogAt_ = now;
+            LOGI("[sat] the capture to %.4f MHz (was %.4f) \xe2\x80\x94 %s", centre / 1e6, cur / 1e6,
+                 satPassBoth_ ? "it holds the pass's downlink and the ORBCOMM band, its DC clear of the pass" : "it holds the ORBCOMM band");
+        }
+        satPassCentre_ = centre;
+        satPassInternal() = true;
+        bgPlace(centre, viewCenter.load(), audioFreq.load());
+        satPassInternal() = false;
+    }
+
+    /** ★★★ THE TICK (every 2 s, housekeeping) — vibe::satsched::decide says what runs; this makes it so. */
     void satPassTick() {
         if (stopping.load() || frontDoorOnly || decoderOnly) return;
         vibe::bg::Config cfg;
@@ -37878,51 +38096,92 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         const vibe::sat::Clock clk = satClock();
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
-        if (satPass_.on) {
-            if (!why.empty()) { satPassEndLocked(why, true, true); return; }
-            if (anyone) { satPassEndLocked("a listener arrived", true, false); return; }
-            if (clk.unix >= satPass_.los + 5) satPassEndLocked("LOS", true, true);
-            return;
-        }
+        // 1. what ends regardless: blocked, a listener, a pass's LOS
+        if (satWork_.on && !why.empty()) { satWorkEndLocked(why, true, true); satPassNow_ = why; satPassWhy_ = why; return; }
+        if (satWork_.on && anyone) { satWorkEndLocked("a listener arrived", true, false); satPassNow_ = "a listener has the radio"; return; }
+        if (satPass_.on && clk.unix >= satPass_.los + 5) satPassEndLocked("LOS");
         satPassWhy_ = why;
-        if (!why.empty() || anyone || nowSecs() < satPassRetryAt_) return;
-        if (g_dabMode.load() || g_adsbMode.load() || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
-            satPassWhy_ = "waiting for the last listener's mode to close"; return;
+        if (!why.empty() || anyone) { satPassNow_ = !why.empty() ? why : "a listener has the radio"; return; }
+        if (!satWork_.on) {
+            if (nowSecs() < satPassRetryAt_) { satPassNow_ = "another program has the radio \xe2\x80\x94 trying again shortly"; return; }
+            if (g_dabMode.load() || g_adsbMode.load() || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
+                satPassWhy_ = satPassNow_ = "waiting for the last listener's mode to close"; return;
+            }
         }
-        // the best pass above the owner's elevation, in progress now, with a minute left
-        long long bn = 0; int bt = -1; vibe::sat::Pass bp; vibe::sat::SatDef bsd; vibe::sat::Transmitter btx;
+        // 2. the best pass due now: a Meteor pass (the group), or a picked downlink — the highest above the owner's elevation
+        struct Cand { long long norad = 0; int tx = -1; vibe::sat::Pass ps; vibe::sat::SatDef sd; vibe::sat::Transmitter t; };
+        Cand best; double nextAos = 0;
+        auto consider = [&](long long norad, int ti, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t) {
+            if (!vibe::sat::passKeepable(t) || t.orbcomm()) return;   // ★ ORBCOMM is the monitoring, not a pass
+            if (!vsSatReachWhy(t.hz, t.passband() ? t.hiHz : t.hz).empty()) return;
+            vibe::sat::Pass np;
+            if (satEngine().nextPass(norad, clk.unix, cfg.sat.minEl, np) && np.aos > clk.unix && (nextAos == 0 || np.aos < nextAos)) nextAos = np.aos;
+            vibe::sat::Pass ps;
+            if (!satEngine().passAt(norad, clk.unix, ps) || ps.maxElDeg < cfg.sat.minEl || ps.los - clk.unix < 60) return;
+            if (best.tx < 0 || ps.maxElDeg > best.ps.maxElDeg) { best.norad = norad; best.tx = ti; best.ps = ps; best.sd = sd; best.t = t; }
+        };
         for (const auto& b : cfg.sat.birds) {
             const int ti = satEngine().txIndex(b.norad, b.label);
             vibe::sat::SatDef sd; vibe::sat::Transmitter t;
-            if (ti < 0 || !satEngine().txAt(b.norad, ti, sd, t) || !vibe::sat::passKeepable(t)) continue;
-            if (!vsSatReachWhy(t.hz, t.passband() ? t.hiHz : t.hz).empty()) continue;
-            vibe::sat::Pass ps;
-            if (!satEngine().passAt(b.norad, clk.unix, ps) || ps.maxElDeg < cfg.sat.minEl || ps.los - clk.unix < 60) continue;
-            if (bt < 0 || ps.maxElDeg > bp.maxElDeg) { bn = b.norad; bt = ti; bp = ps; bsd = sd; btx = t; }
+            if (ti >= 0 && satEngine().txAt(b.norad, ti, sd, t)) consider(b.norad, ti, sd, t);
         }
-        if (bt < 0) { satPassWhy_ = "waiting for a pass above " + std::to_string(cfg.sat.minEl) + "\xc2\xb0"; return; }
-        satPassStartLocked(cfg, bn, bt, bsd, btx, bp, clk);
-    }
-    void satPassStartLocked(const vibe::bg::Config& cfg, long long norad, int tx, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t,
-                            const vibe::sat::Pass& ps, const vibe::sat::Clock& clk) {
-        SatPassRun r;
-        {
-            std::lock_guard<std::mutex> op(bgOpMtx_);
-            r.pausedBg = bgActive_.load();
-            if (r.pausedBg) bgStopLocked(("a satellite pass (" + sd.name + " " + t.label + ") \xe2\x80\x94 it resumes at LOS").c_str(), false);
-            r.saved = !bgSaved_.valid;
-            if (r.saved) { r.centre = rtlCenter.load(); r.view = viewCenter.load(); r.audio = audioFreq.load(); std::lock_guard<std::recursive_mutex> ml(modeMtx); r.mode = mode; }
+        if (cfg.sat.meteor)
+            for (const auto& sd : satEngine().defs())
+                for (size_t k = 0; k < sd.tx.size(); ++k) {
+                    std::string pr;
+                    if (vibe::sat::decoderOf(sd.tx[k], pr) == "lrpt") consider(sd.norad, (int)k, sd, sd.tx[k]);
+                }
+        // 3. decide (a pass already running stays the pass — until LOS, a listener, or ORBCOMM first takes the radio)
+        vibe::satsched::In in;
+        in.meteorOn = cfg.sat.meteor; in.orbcommOn = cfg.sat.orbcomm; in.orbcommFirst = cfg.sat.orbcommFirst;
+        in.anyPasses = cfg.sat.meteor || !cfg.sat.birds.empty();
+        in.now = clk.unix; in.nextPassAos = nextAos;
+        in.usableHz = std::min(usableSpan(), (double)sampleRate * vibe::kBandFlatFrac);
+        in.loaded = vibetune::paceMs(serverLoad()) > 0;
+        if (satPass_.on) {
+            in.passUp = true; in.passName = satPass_.name + " " + satPass_.label;
+            in.passRegion.lo = satPass_.regionLo; in.passRegion.hi = satPass_.regionHi;
+        } else if (best.tx >= 0) {
+            in.passUp = true; in.passName = best.sd.name + " " + best.t.label;
+            const vibesatif::Region r = vibesatif::regionOf(best.t);
+            in.passRegion.lo = r.centreHz - r.halfHz; in.passRegion.hi = r.centreHz + r.halfHz;
         }
-        satPassBusy_.store(true);
-        bgWanted_.store(true);                       // ★ the park is held off; the DX scanner stands aside
-        dxYieldToBg();
-        resumeCaptureIdle(/*fromBg=*/true);
-        if (radioReleased.load()) {
-            LOGI("[sat] unattended pass: %s is up but another program has the radio \xe2\x80\x94 trying again in 60 s", sd.name.c_str());
-            satPass_ = r; satPass_.on = true; satPassEndLocked("another program has the radio", true, true);
-            satPassRetryAt_ = nowSecs() + 60;
+        if (cfg.sat.orbcomm) {
+            in.orbcommReachWhy = vsSatReachWhy(vibe::satsched::kOrbLoHz, vibe::satsched::kOrbHiHz);
+            in.orbcommUp = satEngine().orbcommUp(clk.unix) > 0;
+        }
+        const vibe::satsched::Out o = vibe::satsched::decide(in);
+        satPassNow_ = o.state;
+        // 4. stop what no longer runs
+        if (satPass_.on && !o.runPass) satPassEndLocked("ORBCOMM first (priority) \xe2\x80\x94 this radio's capture cannot hold both");
+        if (orbSkyOn_.load() && !o.runOrbcomm) orbSkyStopLocked(o.orbcommWhyNot.empty() ? "not wanted now" : o.orbcommWhyNot);
+        if (!o.runPass && !o.runOrbcomm) {
+            if (satWork_.on) satWorkEndLocked(satPassLast_.empty() ? "nothing due" : "nothing due now", true, true);
+            if (satPassWhy_.empty()) satPassWhy_ = o.state.rfind("waiting", 0) == 0 ? o.state : "waiting \xe2\x80\x94 " + o.state;
             return;
         }
+        // 5. start what runs
+        if (!satWork_.on && !satWorkBeginLocked(o.runPass ? in.passName + " pass" : std::string("ORBCOMM monitoring"))) return;
+        satPassBoth_ = o.both;
+        if (o.runPass && !satPass_.on && best.tx >= 0) satPassStartLocked(best.norad, best.tx, best.sd, best.t, best.ps, clk);
+        if (o.runOrbcomm && !satPass_.on) {
+            // ORBCOMM alone: the dial on the band's middle (NFM — what a listener hears there), once
+            const double mid = 0.5 * (vibe::satsched::kOrbLoHz + vibe::satsched::kOrbHiHz);
+            if (std::fabs(audioFreq.load() - mid) > 1000.0) {
+                satPassInternal() = true;
+                handleControl(nullptr, "{\"type\":\"tune\",\"frequency\":" + vibe::sat::fmtNum(mid, 0) + ",\"mode\":\"nfm\",\"modeSet\":1}");
+                satPassInternal() = false;
+            }
+        }
+        if (o.placeCentre) satHoldCentreLocked(o.centreHz);
+        else satPassCentre_ = 0;
+        if (o.runOrbcomm && !orbSkyOn_.load()) orbSkyStartLocked();
+        if (orbSkyOn_.load()) orbSkyPicture(false);
+        satPassWhy_.clear();
+    }
+    void satPassStartLocked(long long norad, int tx, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t,
+                            const vibe::sat::Pass& ps, const vibe::sat::Clock& clk) {
+        SatPassRun r;
         satPassInternal() = true;
         const double hz = vibe::sat::tuneHzOf(t);
         const std::string md = vibe::sat::listenModeOf(t);
@@ -37938,70 +38197,75 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string params;
         r.decoder = vibe::sat::decoderOf(t, params);
         if (!r.decoder.empty()) {
+            /* ★ beta94 our own attach is not an arrival: satAttach wakes the capture (resumeCaptureIdle), which would read as a
+             *  listener and give the session up before the pass had begun (beta90's check looked at satPass_, not yet set) */
+            satPassInternal() = true;
             const std::string w = satAttach(nullptr, false, "", r.decoder, params, r.decoderKey);
+            satPassInternal() = false;
             if (!w.empty()) { LOGI("[sat] unattended pass: the %s decoder did not start \xe2\x80\x94 %s", r.decoder.c_str(), w.c_str()); r.decoder.clear(); }
         }
+        const vibesatif::Region reg = vibesatif::regionOf(t);
+        r.regionLo = reg.centreHz - reg.halfHz; r.regionHi = reg.centreHz + reg.halfHz;
         r.on = true; r.norad = norad; r.tx = tx; r.name = sd.name; r.label = t.label;
         r.aos = ps.aos; r.los = ps.los; r.maxEl = ps.maxElDeg; r.startedAt = clk.unix;
         satPass_ = r;
         satPassWhy_.clear();
-        LOGI("[sat] unattended pass: %s %s (max %.0f\xc2\xb0, LOS in %.0f s) \xe2\x80\x94 %.3f MHz %s, Doppler %s, decoder %s%s", sd.name.c_str(), t.label.c_str(),
+        LOGI("[sat] unattended pass: %s %s (max %.0f\xc2\xb0, LOS in %.0f s) \xe2\x80\x94 %.3f MHz %s, Doppler %s, decoder %s%s%s", sd.name.c_str(), t.label.c_str(),
              ps.maxElDeg, ps.los - clk.unix, hz / 1e6, md.c_str(), tr.state == vibe::sat::LockState::Off ? ("refused: " + tr.why).c_str() : vibe::sat::lockName(tr.state),
-             r.decoder.empty() ? "none" : r.decoder.c_str(), r.pausedBg ? "; background decoding paused" : "");
-        (void)cfg;
+             r.decoder.empty() ? "none" : r.decoder.c_str(), satWork_.pausedBg ? "; background decoding paused" : "",
+             satPassBoth_ ? "; ORBCOMM monitoring carries on beside it (one capture holds both)" : orbSkyOn_.load() ? "" : "");
     }
     /** End the pass: its decoder (only if the shared host still runs the one the pass started — its gallery copy is
-     *  written as it stops), its lock; `restore` puts the radio back where the pass found it (when background decoding had
-     *  not saved it itself); `resume` lets background decoding start again at once on the profile it was running. */
-    void satPassEndLocked(const std::string& why, bool restore, bool resume) {
-        if (!satPass_.on) { satPassBusy_.store(false); return; }
+     *  written as it stops) and its lock. The radio and background decoding are the SESSION's (satWorkEndLocked). */
+    void satPassEndLocked(const std::string& why) {
+        if (!satPass_.on) return;
         const SatPassRun r = satPass_;
         if (!r.decoderKey.empty()) {
             std::shared_ptr<DecoderHost> host = decoders_.shared();
             if (host && host->startKey() == r.decoderKey) { host->stop(); navWideSync(); }
         }
         if (satEngine().active(kSatShared)) { satEngine().stop(kSatShared); satSharedShift_.store(0.0); }
-        if (restore && r.saved && r.audio > 0) {
-            satPassInternal() = true;
-            bgPlace(r.centre, r.view, r.audio);
-            if (!r.mode.empty()) handleControl(nullptr, "{\"type\":\"mode\",\"mode\":\"" + r.mode + "\"}");
-            satPassInternal() = false;
-        }
-        if (resume && r.pausedBg) {
-            vibe::bg::Config cfg;
-            { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
-            std::lock_guard<std::mutex> op(bgOpMtx_);
-            bgEmptySince_ = nowSecs() - vsBgWaitSec(cfg) - 1;   // ★ its wait was served before the pass: it resumes now
-        }
         char b[200];
         std::snprintf(b, sizeof b, "%s %s, max %.0f\xc2\xb0 \xe2\x80\x94 ended (%s)", r.name.c_str(), r.label.c_str(), r.maxEl, why.c_str());
         satPassLast_ = b;
-        LOGI("[sat] unattended pass: %s%s", b, resume && r.pausedBg ? "; background decoding resumes" : "");
+        LOGI("[sat] unattended pass: %s%s", b, orbSkyOn_.load() ? "; ORBCOMM monitoring carries on" : "");
         satPass_ = SatPassRun{};
-        satPassBusy_.store(false);
-        if (!resume) bgWanted_.store(false);
     }
-    /** ★ A listener (or a decoder socket) arrived: the pass is given up — the radio back as the pass found it. */
+    /** ★ A listener (or a decoder socket) arrived: the session is given up — the radio back as it was found. */
     void satPassGiveUp(const char* who) {
         if (!satPassBusy_.load() || satPassInternal()) return;
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
-        if (satPass_.on) satPassEndLocked(who ? who : "a listener arrived", true, false);
+        if (satWork_.on) satWorkEndLocked(who ? who : "a listener arrived", true, false);
     }
-    /** The admin page's line: "off" · "waiting" (and why) · "running" (the pass), with the last one's outcome. */
+    /** The admin page's line: "off" · "waiting" (and why) · "running" (the pass, ORBCOMM monitoring, or both — and why),
+     *  with the last pass's and the last monitoring stretch's outcome. */
     std::string satPassStatusJson() {
         vibe::bg::Config cfg;
         { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
-        const char* st = satPass_.on ? "running" : !cfg.sat.on ? "off" : satPassWhy_.empty() || satPassWhy_.rfind("waiting", 0) == 0 ? "waiting" : "blocked";
-        std::string j = std::string("{\"state\":\"") + st + "\",\"why\":\"" + vibe::gallery::jsonEsc(satPass_.on ? std::string() : satPassWhy_) + "\"";
+        const bool orb = orbSkyOn_.load();
+        const char* st = (satPass_.on || orb) ? "running" : !cfg.sat.on ? "off" : satPassWhy_.empty() || satPassWhy_.rfind("waiting", 0) == 0 ? "waiting" : "blocked";
+        std::string j = std::string("{\"state\":\"") + st + "\",\"why\":\"" + vibe::gallery::jsonEsc((satPass_.on || orb) ? std::string() : satPassWhy_) + "\"";
         j += ",\"birds\":" + std::to_string(cfg.sat.birds.size()) + ",\"minEl\":" + std::to_string(cfg.sat.minEl);
+        // ★ beta94 the groups and the priority, and the line that says what runs and why
+        j += std::string(",\"meteor\":") + (cfg.sat.meteor ? "true" : "false") + ",\"orbcomm\":" + (cfg.sat.orbcomm ? "true" : "false")
+           + ",\"first\":\"" + (cfg.sat.orbcommFirst ? "orbcomm" : "meteor") + "\",\"both\":" + (satPassBoth_ ? "true" : "false");
+        if (!satPassNow_.empty() && cfg.sat.on) j += ",\"now\":\"" + vibe::gallery::jsonEsc(satPassNow_) + "\"";
+        if (satPassCentre_ > 0) { char c[64]; std::snprintf(c, sizeof c, ",\"centre\":%.0f", satPassCentre_); j += c; }
         if (satPass_.on) {
             char b[160];
-            std::snprintf(b, sizeof b, ",\"los\":%.0f,\"maxEl\":%.1f,\"pausedBg\":%s", satPass_.los, satPass_.maxEl, satPass_.pausedBg ? "true" : "false");
+            std::snprintf(b, sizeof b, ",\"los\":%.0f,\"maxEl\":%.1f,\"pausedBg\":%s", satPass_.los, satPass_.maxEl, satWork_.pausedBg ? "true" : "false");
             j += ",\"name\":\"" + vibe::gallery::jsonEsc(satPass_.name) + "\",\"label\":\"" + vibe::gallery::jsonEsc(satPass_.label) + "\",\"decoder\":\""
                + vibe::gallery::jsonEsc(satPass_.decoder) + "\"" + b;
         }
+        if (orb) {
+            char b[96];
+            std::snprintf(b, sizeof b, ",\"orbSky\":{\"since\":%.0f,\"dots\":%llu", orbSkySinceUtc_, (unsigned long long)orbSkyDots_.load());
+            j += b;
+            j += "}";
+        }
         if (!satPassLast_.empty()) j += ",\"last\":\"" + vibe::gallery::jsonEsc(satPassLast_) + "\"";
+        if (!orbSkyLast_.empty()) j += ",\"orbLast\":\"" + vibe::gallery::jsonEsc(orbSkyLast_) + "\"";
         return j + "}";
     }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
@@ -45182,6 +45446,30 @@ std::string LocalSdrShim::backgroundCapsJson() {
             first = false;
         }
     j += "]";
+    /* ★★★ beta94 METEOR + ORBCOMM TOGETHER (vibe_sat_pass_sched.h): the span one capture needs for the widest Meteor
+     *  downlink and the ORBCOMM band, and the lowest sample rate that holds it — the settings say "both run together" at or
+     *  above it, "the priority decides" below it and on an Airspy HF+ (its edges are cropped: 768 kHz usable at 912). */
+    {
+        double need = 0;
+        for (const auto& sd : satEngine().defs())
+            for (const auto& t : sd.tx) {
+                std::string pr;
+                if (vibe::sat::decoderOf(t, pr) != "lrpt") continue;
+                const vibesatif::Region r = vibesatif::regionOf(t);
+                vibe::satsched::Region pr2; pr2.lo = r.centreHz - r.halfHz; pr2.hi = r.centreHz + r.halfHz;
+                need = std::max(need, vibe::satsched::bothNeedHz(pr2));
+            }
+        if (need <= 0) {   // ★ no catalogue yet: METEOR's 137.9 MHz as the figure
+            vibe::sat::Transmitter t; t.hz = 137.9e6; t.consumer = "lrpt"; t.mode = "lrpt"; t.baud = 72000;
+            const vibesatif::Region r = vibesatif::regionOf(t);
+            vibe::satsched::Region pr2; pr2.lo = r.centreHz - r.halfHz; pr2.hi = r.centreHz + r.halfHz;
+            need = vibe::satsched::bothNeedHz(pr2);
+        }
+        char b[160];
+        std::snprintf(b, sizeof b, ",\"satBoth\":{\"needHz\":%.0f,\"minRate\":%.0f,\"narrow\":[\"airspyhf\"]}", need,
+                      vibe::satsched::bothMinRate(need, vibe::kBandFlatFrac));
+        j += b;
+    }
     j += "}";
     return j;
 }
@@ -47764,6 +48052,9 @@ void LocalSdrShim::stopLocked() {
     //    CLEAN shutdown, so a restart for an update loses nothing that was decoded.
     { std::lock_guard<std::mutex> op(impl->bgOpMtx_);
       if (impl->bgActive_.exchange(false)) { impl->bgRun_.stop(false); LOGI("background decoding stopped — the server is stopping"); } }
+    // ★★★ beta94 unattended ORBCOMM monitoring: its worker joined and its last dots written (the radio is not moved back —
+    //     the server is stopping)
+    { std::lock_guard<std::recursive_mutex> pl(impl->satPassMtx_); impl->orbSkyStopLocked("the server is stopping"); }
     // ★★ V12: ISM's decoder too — its day's log is held in RAM, and a clean shutdown (an update, a restart) writes it.
     g_ism.stop();
     g_ndb.stop();   // ★ …and NDB's day (the card and the map)

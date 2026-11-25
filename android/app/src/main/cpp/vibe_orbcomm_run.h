@@ -277,7 +277,7 @@ private:
         quietDot_(t);
         flushDots_(t);
         const int up = o_.satInRange ? o_.satInRange() : -1;
-        if (lastUp_ == 1 && up == 0) passEnd_(false);   // the pick has set
+        if (lastUp_ == 1 && up != 1) passEnd_(false);   // the pick has set — ★ beta94: or its lock stopped at LOS (1 → −1)
         lastUp_ = up;
         followStep_(t);
         if (!o_.json) { liveDots_.clear(); return; }

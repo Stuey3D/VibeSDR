@@ -1881,7 +1881,9 @@ private:
             const auto dots = vibe::skyplot::shared().read(f);
             if (dots.empty()) return std::string();
             title = "ORBCOMM SKY PLOT - " + std::to_string(dots.size()) + " DOTS" + (f.radio.empty() ? std::string() : " - RADIO " + f.radio);
-            return vibe::skyplot::png(dots, title);
+            vibe::skyplot::shared().flushCells();   // ★★★ beta94 the pass's cells in, then the picture: AUTO → the heatmap once there is enough
+            const vibe::skyplot::cells::Map cm = vibe::skyplot::shared().readCells(vibe::skyplot::kOrbcomm, f.radio);
+            return vibe::skyplot::png(dots, title, 520, &cm);
         };
         o.picture = [this](const std::string& name, const std::string& png, int pw, int ph, bool partial) {
             if (DecoderTapPtr t = tap()) t->picture(name, png, pw, ph, partial);
