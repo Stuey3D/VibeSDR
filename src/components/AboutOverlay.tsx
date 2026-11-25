@@ -805,15 +805,15 @@ const CREDITS: { name: string; detail: string; url?: string }[] = [
   { name: 'EiBi',
     detail: 'Shortwave broadcast schedules used for live station bookmarks and the directory’s station finder.' },
   { name: 'Ofcom',
-    detail: 'The UK DAB transmitter list that names the transmitter you are hearing. Contains public sector information licensed under the Open Government Licence v3.0.' },
+    detail: 'The UK DAB transmitter list that names the transmitter you are hearing, with its power (ERP) and its aerial’s height above the ground. Contains public sector information licensed under the Open Government Licence v3.0.' },
   /* ★ The other countries' DAB sites (2026-10-06) — each a regulator's own list under a licence that
    *  lets a public repository carry it; docs/DAB-SITES-SOURCES.md has the survey and who was left out. */
   { name: 'BAKOM — Federal Office of Communications, Switzerland',
-    detail: 'Switzerland’s DAB+ transmitter sites (“Swiss radio and TV broadcasters”, opendata.swiss, open use), shown as “BAKOM record” under Licensed sites.' },
+    detail: 'Switzerland’s DAB+ transmitter sites (“Swiss radio and TV broadcasters”, opendata.swiss, open use), shown as “BAKOM record” under Licensed sites, with the power (ERP) where a site carries DAB alone.' },
   { name: 'ČTÚ — Czech Telecommunication Office',
-    detail: 'Czechia’s DAB transmitter sites (“Rozhlasové vysílače”, data.gov.cz; no copyright or database right claimed), shown as “ČTÚ record”.' },
+    detail: 'Czechia’s DAB transmitter sites (“Rozhlasové vysílače”, data.gov.cz; no copyright or database right claimed), shown as “ČTÚ record”, with each site’s power (ERP) and its height above sea level.' },
   { name: 'RDI — Rijksinspectie Digitale Infrastructuur, the Netherlands',
-    detail: 'The Netherlands’ DAB transmitter sites (“Overzicht DAB en DVB‑T2 zenders”, CC0 1.0), shown as “RDI record”.' },
+    detail: 'The Netherlands’ DAB transmitter sites (“Overzicht DAB en DVB‑T2 zenders”, CC0 1.0), shown as “RDI record”, with each site’s power (ERP) and RDI’s effective height.' },
   /* ★★ V12 ADS-B AIRCRAFT DATA (docs/v12/ADSB-DATA-RESEARCH.md §3) — the Mictronics line is ODC-By 1.0 §4.3's
    *  notice, a CONDITION wherever its fields are shown (the map's card carries it too). Same list as the web client's
    *  About and vibeserver/adsb-data/CREDITS.md. Each VibeServer downloads these itself, weekly. */

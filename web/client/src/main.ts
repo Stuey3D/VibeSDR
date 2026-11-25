@@ -103,7 +103,7 @@ import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { serverZoneAt } from '../../../src/utils/serverZone';   // ★ the receiver's clock from OUR tz rules (2026-11-12)
 import { buildBookmarkHoverIndex, bookmarkAt, newBookmarkHit, type BookmarkHoverIndex } from '../../../src/utils/bookmarkHover';
-import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
+import { dabServiceStereo, dabLicensedTail, dabTxSpecsTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
 import { hopStrip, ismHopIndex, ismHopStrip, spotsHopIndex, spotsHopStrip, spotsShortName, type HopStrip } from '../../../src/services/hopKeys';
 import { parseDabScan, parseFmScan, dabScanKey, dabUnscannedLine, dabScanMayTune, scanLocked, scanLockLine, SCAN_LOCK_FLIP_MS, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
@@ -8541,7 +8541,7 @@ function dabRender() {
      *    dabLicensedTail, the app's own copy; escaped here because the server's text is untrusted. */
     + (d.licensed && d.licensed.length && !dabTxRemember(d).some(e => !!e.t.site)   // ★ a NAMED site EVER seen on this multiplex is the real thing, faded or not — the record must not swap in and out beneath it
         ? d.licensed.map((l, i) => row(i === 0 ? 'Licensed sites' : '',
-            `<span class="dls"><span class="dlsIn">${escapeHtml(l.site)}${l.area && l.area !== l.site ? ` (${escapeHtml(l.area)})` : ''}${l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi (${l.km.toFixed(l.km < 10 ? 1 : 0)} km)` : ''}${escapeHtml(dabLicensedTail(l))}</span></span>`)).join('')
+            `<span class="dls"><span class="dlsIn">${escapeHtml(l.site)}${l.area && l.area !== l.site ? ` (${escapeHtml(l.area)})` : ''}${l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi (${l.km.toFixed(l.km < 10 ? 1 : 0)} km)` : ''}${escapeHtml(dabTxSpecsTail(l) + dabLicensedTail(l))}</span></span>`)).join('')
         : '')
     /* ★ Always present: a row that comes and goes with its value rebuilds the pane and jumps it. */
     + row('Now playing', d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '—')
@@ -8941,7 +8941,8 @@ function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
              : t.c === 2 ? `${code} · one of several on a shared Sub Id`
              : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
-  return `${name}${dist} · ${t.db.toFixed(0)} dB${t.site ? ` <span style="opacity:.5">${code}</span>` : ''}`;
+  const specs = t.site ? escapeHtml(dabTxSpecsTail(t)) : '';
+  return `${name}${dist}${specs} · ${t.db.toFixed(0)} dB${t.site ? ` <span style="opacity:.5">${code}</span>` : ''}`;
 }
 /** The same in two parts: the text that scrolls (stable) and the level that changes every block. */
 function dabTxParts(t: NonNullable<DabState['tii']>[number]): { text: string; level: string } {
@@ -8952,9 +8953,12 @@ function dabTxParts(t: NonNullable<DabState['tii']>[number]): { text: string; le
              : t.c === 2 ? `${code} · one of several on a shared Sub Id`
              : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
+  /* ★★ The regulator's ERP and height after the distance (2026-11-25: why a farther site is stronger) —
+   *  dabTxSpecsTail, shared with the app. Nothing is dropped on a narrow window: the line scrolls. */
+  const specs = t.site ? escapeHtml(dabTxSpecsTail(t)) : '';
   /* ★ The code scrolls with the name; only the level is fixed, so every level lines up on the right
    *  (Stuart, 2026-09-08). */
-  return { text: `${name}${dist}${t.site ? ` · <span style="opacity:.5">${code}</span>` : ''}`, /* ★ Padded to two figures with a FIGURE SPACE, so 9 dB and 10 dB are the same width and the
+  return { text: `${name}${dist}${specs}${t.site ? ` · <span style="opacity:.5">${code}</span>` : ''}`, /* ★ Padded to two figures with a FIGURE SPACE, so 9 dB and 10 dB are the same width and the
           transmitter line does not wobble as the level alternates between them (Stuart). */
           level: `${String(Math.round(t.db)).padStart(2, '\u2007')} dB` };
 }

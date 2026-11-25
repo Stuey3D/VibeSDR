@@ -312,10 +312,10 @@ DRM's own AAC. The iPhone and iPad app carries none of these decoders.
 | **FAA NASR** (US Government) | public domain | US NDBs in the NDB beacon list |
 | **NGA World Port Index** | public domain | Sea ports |
 | **© OpenStreetMap contributors** | **ODbL** | Detailed coastline (built in, never fetched; the derived data is published with every release), NDB beacons the other lists lack (the merged beacon list, `vibe_ndb_navaids.h`, is offered under ODbL) and Nominatim geocoding of a server's location |
-| **Ofcom** | **OGL v3** — contains public sector information licensed under the Open Government Licence v3.0 | UK DAB transmitter identification |
-| **BAKOM** (Federal Office of Communications, Switzerland) | opendata.swiss **"Open use"** | Swiss DAB+ licensed sites ([survey](docs/DAB-SITES-SOURCES.md)) |
-| **ČTÚ** (Czech Telecommunication Office) | data.gov.cz terms — no copyright or database right (CC0) | Czech DAB licensed sites |
-| **RDI** (Rijksinspectie Digitale Infrastructuur, NL) | **CC0 1.0** | Dutch DAB licensed sites |
+| **Ofcom** | **OGL v3** — contains public sector information licensed under the Open Government Licence v3.0 | UK DAB transmitter identification, with each site's ERP and aerial height above ground |
+| **BAKOM** (Federal Office of Communications, Switzerland) | opendata.swiss **"Open use"** | Swiss DAB+ licensed sites, ERP where a site carries DAB alone ([survey](docs/DAB-SITES-SOURCES.md)) |
+| **ČTÚ** (Czech Telecommunication Office) | data.gov.cz terms — no copyright or database right (CC0) | Czech DAB licensed sites, ERP and site height above sea level |
+| **RDI** (Rijksinspectie Digitale Infrastructuur, NL) | **CC0 1.0** | Dutch DAB licensed sites, ERP and effective height |
 | **EiBi** | — | Shortwave schedules: live bookmarks and the directory's station finder |
 | **[Signal Identification Wiki](https://www.sigidwiki.com/)** (sigidwiki.com, a public-benefit project funded by its own advertising) | linked, never copied — contributors' content stays theirs | "What is this signal?": every chat answer and the SIGNAL ID WIKI key open its pages, unmodified, with the site's own address and ads |
 | **RadioDNS** and **radio-browser.info** | — / community | Station logos |
