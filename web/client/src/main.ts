@@ -629,7 +629,7 @@ function refreshIqRow() {
    *     does not report it at all. */
   const why = show || isFrontDoor || !srvRawIqKnown ? ''
     : srvSharedDial ? 'Raw IQ out is not available on this receiver: every listener here shares one dial, and a tune from your rtl_tcp program would move everybody. It needs a receiver set to one listener (or a locked range).'
-    : 'Raw IQ out is switched off on this receiver. Its owner turns it on in the server settings (on an Android phone: Use as server → VibeServer → MODE Advanced → RAW IQ OUT).';
+    : 'Raw IQ out is switched off on this receiver. Its owner turns it on in the server settings (on an Android phone: Use as server → VibeServer → RAW IQ OUT, under Uncompressed audio).';
   row.hidden = !show && !why; note.hidden = !show && !why;
   if (why) {
     btn.disabled = true; sel.hidden = true; row.style.opacity = '0.45';
