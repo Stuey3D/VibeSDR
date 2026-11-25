@@ -180,3 +180,28 @@ export function halfOpenSplit(regions: ReservedRegions, fold: RegionRect, window
   if (upper.bottom - upper.top < minH || lower.bottom - lower.top < minH) return null;
   return { x0: col.x0, x1: col.x1, upper, lower };
 }
+
+/**
+ * ★★ WHERE THE SERVERS BUTTON GOES (Stuart, Duo folded landscape, camera top-left: "it's avoiding the camera by coming in
+ * too far, so just do what we did with the health chips and drop it lower"). Its x is the ordinary left margin, the same
+ * in every pose; if a system rect (the camera, the status bar) would meet it there, it DROPS below the rect, `gap`
+ * clear — the way the health and time cards drop below the status column. Never shifted sideways.
+ * `left` is the caller's margin: 12 on a full-bleed (hinged) window, where the camera comes as a reserved rect, not a
+ * safe-area inset; the inset + 8 everywhere else (an iPhone's Dynamic Island side), exactly as before.
+ */
+export function serversChipPlacement(regions: ReservedRegions, base: { left: number; top: number }, chipW: number, chipH: number,
+                                     windowW: number, windowH: number, gap = 8): { left: number; top: number } {
+  let top = base.top;
+  // Drop past every rect in the chip's column that it would meet (a rect may sit below another: repeat until clear).
+  for (let i = 0; i < 4; i++) {
+    let moved = false;
+    for (const r of avoidRects(regions)) {
+      if (r.x >= windowW || r.x + r.w <= 0 || r.y >= windowH) continue;
+      if (r.x >= base.left + chipW + gap || r.x + r.w <= base.left - gap) continue;   // not in the chip's column
+      if (r.y >= top + chipH + gap || r.y + r.h + gap <= top) continue;               // not in its rows
+      top = Math.ceil(r.y + r.h) + gap; moved = true;
+    }
+    if (!moved) break;
+  }
+  return { left: base.left, top };
+}

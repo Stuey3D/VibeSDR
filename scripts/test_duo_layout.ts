@@ -8,7 +8,7 @@
 import { edgeChipGeometry } from '../src/components/edgeChipGeometry.ts';
 import { namePlacement } from '../src/utils/duoGeometry.ts';
 import { isFoldedFrontWindow, isFrontScreenWindow, phonePortraitScale, clearBelow, rightLimitAt, deckClearance,
-         avoidRects, NO_REGIONS, halfOpenSplit, type ReservedRegions, type RegionRect } from '../src/utils/duoGeometry.ts';
+         avoidRects, NO_REGIONS, halfOpenSplit, serversChipPlacement, type ReservedRegions, type RegionRect } from '../src/utils/duoGeometry.ts';
 
 let fails = 0;
 function ok(cond: boolean, what: string) {
@@ -152,6 +152,42 @@ ok(avoidRects({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 10, h: 10 }] }).leng
   // No room for two panels (a fold near the top): no split — the box stays below the fold and BIG is not offered.
   ok(halfOpenSplit(NO_REGIONS, { x: 0, y: 80, w: W, h: 30 }, H, COL, { top: 0, bottomInset: 21 }) === null,
      'a fold too near the top: no split (null)');
+}
+
+// ── The Servers button: the ordinary left margin in every pose, DROPPED below a camera / status rect that would meet it
+//    (Stuart, folded landscape, camera top-left: "it's avoiding the camera by coming in too far, so just do what we did
+//    with the health chips and drop it lower"). Full bleed (the Duo): margin 12, top 46. Chip ~120 x 38. ──────────────
+{
+  const place = (R: ReservedRegions, W: number, H: number, base = { left: 12, top: 46 }) => serversChipPlacement(R, base, 120, 38, W, H);
+  const meets = (p: { left: number; top: number }, r: RegionRect) =>
+    r.x < p.left + 120 && p.left < r.x + r.w && r.y < p.top + 38 && p.top < r.y + r.h;
+  const poses: [string, ReservedRegions, number, number, number][] = [
+    // name, regions, window W, H, expected top
+    ['folded portrait (camera + status column top-right)', FOLDED, 466, 678, 46],
+    ['folded landscape, camera TOP-LEFT', { ...NO_REGIONS, occlusion: [{ x: 29, y: 29, w: 37, h: 37 }] }, 678, 466, 29 + 37 + 8],
+    ['folded landscape, camera top-left with the status column beside it',
+      { ...NO_REGIONS, occlusion: [{ x: 29, y: 29, w: 37, h: 37 }], statusBar: [{ x: 0, y: 0, w: 84, h: 174 }] }, 678, 466, 174 + 8],
+    ['folded landscape, camera bottom-right', LAND, 678, 466, 46],
+    ['folded landscape, camera bottom-left', LANDL, 678, 466, 46],
+    ['open portrait (pill top-right)', { ...NO_REGIONS, statusBar: [{ x: 560, y: 0, w: 109, h: 40 }], hinge: { status: 'fullyOpen', angleDeg: 180 } }, 669, 951, 46],
+    ['open landscape (pill top-right)', { ...NO_REGIONS, statusBar: [{ x: 860, y: 0, w: 91, h: 34 }], hinge: { status: 'fullyOpen', angleDeg: 180 } }, 951, 669, 46],
+    ['half-open portrait (pill top-right, the fold)', { ...NO_REGIONS, statusBar: [{ x: 560, y: 0, w: 109, h: 40 }],
+      division: [{ x: 0, y: 455, w: 669, h: 41 }], hinge: { status: 'partiallyOpen', angleDeg: 110 } }, 669, 951, 46],
+    ['Split View share with a full-width status band', { ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 469, h: 32 }] }, 469, 669, 46],
+  ];
+  for (const [name, R, W, H, top] of poses) {
+    const p = place(R, W, H);
+    ok(p.left === 12, `Servers button, Duo ${name}: x = the ordinary margin (12)`);
+    ok(p.top === top, `…top ${p.top} (expected ${top})`);
+    ok(avoidRects(R).every((r) => !meets(p, r)), '…clear of every reserved rect');
+  }
+  // Ordinary iPhones in landscape (no rects): the caller's inset margin, untouched — the Dynamic Island side.
+  const islandLeft = serversChipPlacement(NO_REGIONS, { left: 62 + 8, top: 0 + 46 }, 120, 38, 874, 402);
+  ok(islandLeft.left === 70 && islandLeft.top === 46, 'iPhone landscape, Dynamic Island on the left: inset + 8 (70), top 46 — as before');
+  const islandRight = serversChipPlacement(NO_REGIONS, { left: 12, top: 46 }, 120, 38, 874, 402);
+  ok(islandRight.left === 12 && islandRight.top === 46, 'iPhone landscape, Dynamic Island on the right: 12, top 46 — as before');
+  const portrait = serversChipPlacement(NO_REGIONS, { left: 12, top: 62 + 46 }, 120, 38, 402, 874);
+  ok(portrait.left === 12 && portrait.top === 108, 'iPhone portrait: 12, under the status row — as before');
 }
 
 if (fails) { console.log(`\nduo layout: ${fails} FAILED`); process.exit(1); }

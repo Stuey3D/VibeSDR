@@ -214,7 +214,7 @@ import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow, UiWindowOverride } from '../hooks/useUiScale';
 import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
-import { halfOpenSplit } from '../utils/duoGeometry';
+import { halfOpenSplit, serversChipPlacement } from '../utils/duoGeometry';
 import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
 import { DecoderAvoidContext, BoxRectsContext } from '../components/DecoderShell';
 import { chipCollapsed, CHIP_EXPAND_DELAY_MS, type ChipRect } from '../utils/serversChipCollapse';
@@ -3185,11 +3185,16 @@ export default function SDRScreen({ route, navigation }: Props) {
                                  rightColClear > 0 ? rightColClear + 8 : 0,
                                  namePlace.minTop > 0 && stationIdH > 0 ? namePlace.minTop + stationIdH + 8 : 0);
   /** The Servers chip's top: 46 below the furniture line, and below any system rect over its corner. */
-  const serversLeft = Math.max(12, insets.left + 8);
-  const serversTop = (() => {
-    const y = clearBelow(reserved, serversLeft, serversLeft + Math.max(serversChipW, 120), screenH);
-    return Math.max(chromeTop + 46, y > 0 ? y + 8 : 0);
-  })();
+  /* ★★ The ordinary left margin in every pose, DROPPED below a corner camera or status rect that would meet it — never
+   *  shifted sideways (Stuart, Duo folded landscape, camera top-left: "it's avoiding the camera by coming in too far, so
+   *  just do what we did with the health chips and drop it lower"). On a hinged (full-bleed) window the camera comes as a
+   *  reserved rect, and the safe-area inset on its side is what pushed the chip in past the dB scale, so the margin there
+   *  is a plain 12; every other device keeps the inset + 8 (the Dynamic Island side), exactly as before. */
+  const serversPlace = serversChipPlacement(reserved,
+    { left: fullBleed ? 12 : Math.max(12, insets.left + 8), top: chromeTop + 46 },
+    Math.max(serversChipW, 120), 38, screenW, screenH);
+  const serversLeft = serversPlace.left;
+  const serversTop = serversPlace.top;
   /* ★★★ THE SERVERS BUTTON TUCKS INTO AN EDGE TAB WHEN A BOX WOULD COVER IT (Stuart, 2026-11-25: "I think the servers
    *  button has always clipped, especially on phones. Wonder if it's worth making it collapsible too" — "in waterfall
    *  mode it's there fully"; "it will help the SE massively"). Every decoder box, the DAB box and Advanced RDS report
@@ -10957,7 +10962,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         stationIdWake={`${baseUrl}|${connected ? 1 : 0}`}
         // ★ …and it stops short of the Servers chip opposite (2026-10-16: on an iPhone 12 a long location line
         //   ran underneath it). Only while the chip is drawn.
-        stationIdLeft={!controlsHidden && serversChipW > 0 ? Math.max(12, insets.left + 8) + serversChipW + 10 : undefined}
+        stationIdLeft={!controlsHidden && serversChipW > 0 ? serversLeft + serversChipW + 10 : undefined}
         specFrac={specFrac}
         panLoHz={walls?.loHz}
         panHiHz={walls?.hiHz}
