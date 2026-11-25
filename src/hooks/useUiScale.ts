@@ -28,7 +28,7 @@
  */
 
 import { useWindowDimensions } from 'react-native';
-import { useMemo } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import { TABLET_MIN_SIDE, phonePortraitScale } from '../utils/duoGeometry';
 
 export interface UiScale {
@@ -47,8 +47,15 @@ export interface UiScale {
   pxStep:      number;    // scaled BASE_LSV_PX_STEP (22)
 }
 
+/** ★★ A SUBTREE LAID OUT FOR A SMALLER "WINDOW" THAN THE REAL ONE (iPhone Duo, half-open: the deck lives in the bottom
+ *  half, or half of it beside a decoder box). useUiScale then sizes for that area exactly as it would for a window of
+ *  that size — layout follows the space it is given. null = the real window (everywhere else). */
+export const UiWindowOverride = createContext<{ W: number; H: number } | null>(null);
+
 export function useUiScale(): UiScale {
-  const { width: W, height: H } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const ovr = useContext(UiWindowOverride);
+  const W = ovr?.W ?? win.width, H = ovr?.H ?? win.height;
 
   return useMemo(() => {
     const isPortrait  = H >= W;
