@@ -77,7 +77,7 @@ import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
+import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
          SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
@@ -15218,7 +15218,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerHz={status.centerHz}
         bwHz={status.bwHz}
         tuneHz={status.frequency}
-        needleOffsetHz={satRo && (satRo.state === 'TRACK' || satRo.state === 'COAST') ? (satRo.offset ?? 0) : 0}
+        needleOffsetHz={satMarkerShiftHz(satRo) /* ★★★ beta94 offset less the follow: the dial already carries it */}
         /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25) — drawn only, never sent (cwList cwDrawnPassband);
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */

@@ -27,7 +27,7 @@ import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
 import { vorMapSanitise, type VorMapReport } from '../../../src/services/vorMap';   // ★ V12 the VOR / ILS map
-import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB } from '../../../src/services/satellites';   // ★ V12 satellites
+import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, SatFollowDial, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB } from '../../../src/services/satellites';   // ★ V12 satellites
 import { parseDecShared, type SharedDecoder } from '../../../src/services/sharedDecoders';   // ★★★ the room's decoder (2026-11-24)
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { heartbeat } from './keepAlive';   // ★★★ the ping on a worker's clock — a hidden tab's timers are throttled (WEB-KEEPALIVE.md)
@@ -1135,6 +1135,16 @@ export class SpectrumClient {
    *  ONCE. A tune just before it must not have its 1.5 s echo window swallow that config (the readout stayed on the old
    *  dial — Stuart, 2026-11-21). The app's VibeServerWsClient.serverTakesDial, the same rule. */
   private serverTakesDial() { this.lastLocalTuneAt = -Infinity; }
+  /** ★★★ beta94 THE DIAL FOLLOWS THE FOLLOWED STATION (src/services/satellites.ts SatFollowDial — the app's same rule):
+   *  while the transponder finder follows, VFO A's dial reads nominal + follow. Set here, LOCALLY — the readout, the step
+   *  base, bookmarks — and never sent: a tune would end the follow, and a joiner never transmits what it was told. The
+   *  page redraws in onSat (renderFreq); the marker reads satMarkerShiftHz. */
+  readonly satFollow = new SatFollowDial();
+  private satFollowApply(r: SatReadout) {
+    const hz = this.satFollow.onReadout(r, performance.now() - this.lastLocalTuneAt, this.vfoA().frequency);
+    if (hz == null) return;
+    if (this.abOn && this.abSel === 'B') this.abOther.frequency = hz; else this.frequency = hz;
+  }
   private lastSendAt = -Infinity;
   /** ★★★ The 5 s ping's stop() — it runs on keepAlive.ts's WORKER clock, not window.setInterval (WEB-KEEPALIVE.md). */
   private stopPing: (() => void) | null = null;
@@ -1581,7 +1591,7 @@ export class SpectrumClient {
       case 'sat': {
         const pk = parseSatPicked(msg);   // ★★★ SATELLITE MODE: {"state":"picked"} is the pick's answer, not a readout
         if (pk) { this.cb.onSatPicked?.(pk); return; }
-        const r = parseSatReadout(msg); if (r) this.cb.onSat?.(r); return;
+        const r = parseSatReadout(msg); if (r) { this.satFollowApply(r); this.cb.onSat?.(r); } return;
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.cb.onSatTrack?.(t); return; }
       case 'dec_shared': { const l = parseDecShared(msg); if (l) this.cb.onDecShared?.(l); return; }   // ★★★ the room's decoder
@@ -1668,7 +1678,8 @@ export class SpectrumClient {
           //     kHz wide) never registered, so a mirror lagged and then settled on the wrong
           //     frequency — found on the phone, fixed in both clients (2026-08-20).
           const moved = cfg.serverVfo ? Math.abs(cfg.serverVfo - this.frequency) : 0;
-          if (settled && cfg.serverVfo && moved > 100) {
+          // ★★★ beta94 …but not the followed lock's nominal: the digits show nominal + follow (satFollowApply)
+          if (settled && cfg.serverVfo && moved > 100 && !this.satFollow.holds(cfg.serverVfo)) {
             this.frequency = Math.round(cfg.serverVfo);
             if (cfg.serverMode && cfg.serverMode !== this.mode) {
               this.mode = cfg.serverMode as SDRMode;

@@ -104,6 +104,7 @@ import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
 import { VfoABCore, watchOffered, watchBalOffered, watchMaxOf, vfoB, RESYNC_MS, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
+import { SatFollowDial, type SatReadout } from './satellites';   // ★★★ beta94 the dial follows the followed station
 import { parseAutoBwModes } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
@@ -1672,6 +1673,22 @@ export abstract class VibeServerWsClient {
    *  left the readout on the old dial for good (Stuart, 2026-11-21: 1090000 kHz in NFM after ADS-B; 216928 in SATELLITE
    *  after DAB). Called by VibeServerClient as each such request is sent. */
   protected serverTakesDial() { this.lastLocalTuneAt = 0; }
+  /** ★★★ beta94 THE DIAL FOLLOWS THE FOLLOWED STATION (satellites.ts SatFollowDial — the web page's same rule): while
+   *  the transponder finder follows, VFO A's dial reads nominal + follow — set LOCALLY (readout, step base, bookmarks),
+   *  never sent: a tune would end the follow, and a joiner never transmits what it was told (the shared-dial contract).
+   *  ★★ The audio socket forwards every frequency the screen holds unless it is the server's own dial
+   *     (audioTuneForward.ts), so `serverDial` says the followed value too, in the same snapshot — the follow IS the
+   *     server's word about where VFO A listens. VibeServerClient calls this on every `sat` readout. */
+  protected satFollow = new SatFollowDial();
+  protected satFollowApply(r: SatReadout) {
+    const aS = this.aSlot;
+    const hz = this.satFollow.onReadout(r, Date.now() - this.lastLocalTuneAt, Number(aS.frequency));
+    if (hz == null) return;
+    aS.frequency = hz;
+    if (this.status.serverDial) this.status.serverDial = { ...this.status.serverDial, frequency: hz };
+    this.callbacks.onStatus({ ...this.status });
+    this._abSlotMoved();
+  }
   private lastLocalModeAt = 0;
   /** When this client last moved the passband itself — the same guard, for the room's passband. */
   private lastLocalBwAt = 0;
@@ -3390,7 +3407,8 @@ export abstract class VibeServerWsClient {
           const pbOk = typeof msg.bandwidthLow === 'number' && typeof msg.bandwidthHigh === 'number'
                     && Number.isFinite(bl) && Number.isFinite(bh) && bl < bh;
           this.status.serverDial = {
-            frequency: sv,
+            // ★★★ beta94 while the digits follow the followed station, the server's dial IS that (satFollowApply)
+            frequency: this.satFollow.holds(sv) && this.satFollow.dial > 0 ? this.satFollow.dial : sv,
             ...(typeof msg.mode === 'string' && msg.mode ? { mode: msg.mode } : {}),
             ...(pbOk ? { bandwidthLow: bl, bandwidthHigh: bh } : {}),
           };
@@ -3461,7 +3479,8 @@ export abstract class VibeServerWsClient {
          *     the About screen already exports, so a reproduction can be read instead of guessed
          *     at. See protocolLog.noteDecision. */
         const wouldAdopt = (sharedNow || !this.wantTune) && settled
-                        && Number.isFinite(sv) && sv > 0 && moved > 100;
+                        && Number.isFinite(sv) && sv > 0 && moved > 100
+                        && !this.satFollow.holds(sv);   // ★★★ beta94 the followed lock's nominal: the digits show + follow
         if (!wouldAdopt && Number.isFinite(sv) && sv > 0 && moved > 100) {
           noteDecision('vibe', `dial NOT adopted ${sv} (moved ${Math.round(moved)})`
             + ` shared=${sharedNow ? 1 : 0} settled=${settled ? 1 : 0}`

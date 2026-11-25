@@ -62,7 +62,25 @@ and whether they correct. So after LISTEN:
    Between overs: the last measurement + the guessed drift since. Source shown: wait / guess / voice / cw / held.
 4. **Applied** — `Engine::setFollow`: an offset from the nominal (±6 kHz, slewed 150 Hz/s) that is PART of the lock's
    shift, like the trim — so the channel, the skimmer aim, the needle and the sat message's `offset` all move together;
-   `follow` appears in the sat message. The dial READOUT stays where LISTEN put it.
+   `follow` appears in the sat message (Hz, part of `offset`).
+6. **The digits follow** (DECIDED 11-25, Stuart: "yes") — while `follow` is in the sat message (TRACK / COAST), the
+   frequency READOUT (web and app, every readout style) shows where the followed station is in the satellite frame:
+   round(`nominal` + `follow`), not the LISTEN point. Both clients run one rule, `SatFollowDial` in
+   `src/services/satellites.ts` (web `spectrum.ts` satFollowApply, app `VibeServerWsClient.satFollowApply`):
+   - the value is set LOCALLY — readout, the step / drum / bookmark base — and NEVER sent: a tune would go through the
+     nudge and end the follow, and a joiner on a shared dial never transmits what it was told. In the app the audio
+     socket forwards any frequency that is not the server's own dial (`audioTuneForward.ts`), so `serverDial` carries
+     the followed value in the same snapshot;
+   - a `config` whose `vfo` is the followed lock's nominal (the server's dial never includes the follow) is not adopted
+     over it (`holds`);
+   - updated at the sat message's rate, to the hertz, only on a change;
+   - the marker is drawn at dial + (`offset` − `follow`) — never counted twice — and the dashed nominal line sits on the
+     (following) dial; the Doppler words beside the digits say `offset` − `follow` (the Doppler, not the person's drift);
+   - a manual step from the followed position lands relative to where the station is (the step base IS the following
+     dial), and ends the follow as before;
+   - the follow ends WITHOUT our tune (the finder stopped, `clearFollow` easing the channel back, the lock gone): the
+     digits ease back with it and finish on the `nominal` — only if they still show the follow's value;
+   - within 1.5 s of THIS client's own tune nothing is touched (a sat message in flight with the old follow).
 5. **A manual nudge always wins** — any tune (waterfall tap, steps, drum) goes through `Engine::nudge`, which ends the
    follow and bumps its `seq`; the finder sees the seq move and stops ("the listener tuned").
 
@@ -93,7 +111,9 @@ Web: `decoders.ts` / `main.ts` / `satellites.ts` (the finder's panel). App: `Dec
   USRP, HackRF and relayed streams stay as their owner set them, as for every pass). test-server-xpdr 26/0.
 - ~~PSK Reporter~~ DECIDED 11-25: satellite CW stays OFF PSK Reporter (no "via satellite" field; it would read as a direct
   70 cm path). Our own map with "via <bird>" is proposed, not built.
-- **The dial readout** shows where LISTEN put it while the channel follows the station (the needle shows where it is).
-  Should the digits follow too?
-- **"inverting"** is assumed for every linear bird we list (true for all of them today); a mirror entry would need
-  "non-inverting" in its note to say otherwise.
+- ~~The dial readout~~ DECIDED 11-25 (Stuart: "yes"): the digits follow — nominal + follow while VFO A follows a
+  station (step 6 above). test_xpdr_app (the rule, the audio socket's echo rule) and test-web-xpdr (the real page: digits
+  follow, no tune sent, the marker on the channel, a step from the followed position ends it, a stop without a tune
+  puts the digits back on the nominal).
+- ~~"inverting"~~ DECIDED 11-25 (Stuart: yes, assume inverting): every linear bird we list is inverting today; no
+  change — a mirror entry would need "non-inverting" in its note to say otherwise.

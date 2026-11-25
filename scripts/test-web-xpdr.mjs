@@ -113,7 +113,19 @@ try {
   await send('Page.enable'); await send('Runtime.enable');
   // ★ every canvas fillText recorded (the waterfall's overlay words), bounded
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { window.__ft = []; const f = CanvasRenderingContext2D.prototype.fillText;
-    CanvasRenderingContext2D.prototype.fillText = function (t) { if (window.__ft.length > 4000) window.__ft.splice(0, 2000); window.__ft.push(String(t)); return f.apply(this, arguments); }; })();` });
+    CanvasRenderingContext2D.prototype.fillText = function (t) { if (window.__ft.length > 4000) window.__ft.splice(0, 2000); window.__ft.push(String(t)); return f.apply(this, arguments); };
+    /* ★★★ beta94 every socket's sent tunes and the last sat readout (the dial-follows half): bounded */
+    window.__tunes = []; window.__sat = null; window.__socks = [];
+    const W = window.WebSocket;
+    window.WebSocket = class extends W {
+      constructor(...a) {
+        super(...a); window.__socks.push(this);
+        this.addEventListener('message', (e) => { if (typeof e.data === 'string' && e.data.includes('"type":"sat"') && !e.data.includes('"picked"')) {
+          try { const m = JSON.parse(e.data); if (m.type === 'sat') window.__sat = { ...m, at: performance.now() }; } catch {} } });
+      }
+      send(d) { if (typeof d === 'string' && d.includes('"type":"tune"')) { if (window.__tunes.length > 500) window.__tunes.splice(0, 250);
+        try { window.__tunes.push({ ...JSON.parse(d), at: performance.now() }); } catch {} } return super.send(d); }
+    }; })();` });
   await send('Page.navigate', { url: `http://127.0.0.1:${S.port}/` });
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await until(`!![...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()))`, 15000);
@@ -149,6 +161,63 @@ try {
   ok(want > 0 && dial.replace(/[^0-9.]/g, '').startsWith(want.toFixed(3)), `VFO A snapped to the voice (${dial} for ${want})`);
   ok(/TRANSPONDER: VFO A follows/.test(S.log()), 'the server says so in its log');
   await shot('listen');
+
+  /* ── ★★★ THE DIGITS FOLLOW (Stuart 11-25: "yes"): while VFO A follows, the dial reads the lock's nominal + follow,
+   *  set on the page and never sent; the marker is not double-counted; a step lands from the followed position and ends
+   *  the follow; a follow ended without a tune puts the digits back on the nominal. */
+  const dialNow = `(() => { const v = window.__vibeWf(); return v ? Math.round(v.spec.vfoA().frequency) : 0; })()`;
+  const mFreqHz = `(() => { const t = (document.getElementById('mFreq')?.textContent || '').replace(/[^0-9.]/g, ''); return Math.round(Number(t) * 1e6); })()`;
+  const followOn = `(() => { const m = window.__sat; return !!m && m.state === 'TRACK' && typeof m.follow === 'number' && Math.abs(m.follow) >= 40; })()`;
+  ok(await until(followOn, 15000), `the lock carries a follow (${await ev(`JSON.stringify(window.__sat && { n: window.__sat.nominal, f: window.__sat.follow })`)})`);
+  const tunesAt = Number(await ev(`window.__tunes.length`));
+  await sleep(4000);   // ★ a few sat messages: the dial must move with them and nothing may go out
+  const fo = JSON.parse(await ev(`JSON.stringify({ n: window.__sat.nominal, f: window.__sat.follow, off: window.__sat.offset, rate: window.__sat.rate || 0, dt: (performance.now() - window.__sat.at) / 1000,
+    dial: ${dialNow}, card: ${mFreqHz}, vfo: window.__vibeWf().wf.vfoHz, nom: window.__vibeWf().wf.nominalHz })`));
+  ok(fo.f != null && fo.dial === Math.round(fo.n + fo.f), `★ the digits follow: the dial ${fo.dial} = nominal ${fo.n} + follow ${fo.f}`);
+  ok(Math.abs(fo.card - fo.dial) < 1000, `…and the readout shows it (${fo.card} — to its own resolution)`);
+  ok(Number(await ev(`window.__tunes.length`)) === tunesAt, `★ no tune sent by the follow (${await ev(`JSON.stringify(window.__tunes.slice(${tunesAt}).map(t => t.frequency))`)})`);
+  {
+    const chan = fo.n + fo.off + fo.rate * Math.min(1, fo.dt);   // where the channel really is
+    ok(Math.abs(fo.vfo - chan) <= Math.abs(fo.rate) + 50, `★ the marker sits on the channel, the follow not counted twice (${Math.round(fo.vfo)} vs ${Math.round(chan)}; twice would be ${Math.round(chan + fo.f)})`);
+    ok(fo.nom === fo.dial, 'the dashed nominal line sits on the (following) dial');
+  }
+  // a manual step: '>' tunes one step from the followed position — and ends the follow
+  // the finest step (the menu on #mStep), so the step's landing shows where it was taken from
+  await ev(`document.getElementById('mStep').click()`);
+  await sleep(300);
+  const stepHz = Number(await ev(`(() => { const bs = [...document.querySelectorAll('#stepMenu button')].filter(b => /Hz$/.test(b.textContent.trim()));
+    const v = (b) => { const t = b.textContent.trim(); return /kHz$/.test(t) ? parseFloat(t) * 1000 : parseFloat(t); };
+    bs.sort((a, b) => v(a) - v(b)); if (!bs.length) return 0; const x = v(bs[0]); bs[0].click(); return x; })()`));
+  ok(stepHz > 0 && stepHz <= 100, `the finest step chosen (${stepHz} Hz)`);
+  // ★ the station far enough from the LISTEN point that a step from either lands on a different grid point
+  ok(await until(`Math.abs(${dialNow} - window.__sat.nominal) >= ${1.6 * stepHz}`, 30000), `the followed station is over ${1.6 * stepHz} Hz from the LISTEN point`);
+  const before = Number(await ev(dialNow)), nomNow = Number(await ev(`window.__sat.nominal`));
+  const nT = Number(await ev(`window.__tunes.length`));
+  await ev(`document.activeElement && document.activeElement.blur && document.activeElement.blur()`);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: '.', code: 'Period', text: '.', windowsVirtualKeyCode: 190 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: '.', code: 'Period', windowsVirtualKeyCode: 190 });
+  ok(await until(`window.__tunes.length > ${nT}`, 3000), 'the step key sent a tune (a person)');
+  const sent = JSON.parse(await ev(`JSON.stringify(window.__tunes.slice(${nT}))`));
+  const landed = sent.length ? sent[sent.length - 1].frequency : 0;
+  const snap = (hz) => Math.round(hz / stepHz) * stepHz;
+  ok(landed === snap(before + stepHz) && landed !== snap(nomNow + stepHz),
+     `★ the step lands from the followed position (${before} + ${stepHz} → ${landed}; from the LISTEN point it would be ${snap(nomNow + stepHz)})`);
+  ok(await until(`!window.__sat.follow`, 5000), 'the lock has no follow any more');
+  ok(/TRANSPONDER: follow ended \(the listener tuned\)/.test(S.log()), '…the finder stopped: the listener tuned');
+  await sleep(2500);
+  ok(Number(await ev(dialNow)) === landed, `the digits stay where the step put them (${await ev(dialNow)}) — no snap back`);
+  // LISTEN again, then stop the follow WITHOUT a tune ({"type":"xpdr_follow","id":""} on the decoder socket): back to the nominal
+  await ev(`document.querySelector('#satPanel .sat-xp button[data-act="xlisten"]')?.click()`);
+  ok(await until(followOn, 15000), 'LISTEN again: following');
+  await sleep(1500);
+  const n2 = Number(await ev(`window.__tunes.length`));
+  ok(await ev(`(() => { const s = window.__socks.find(x => /dxcluster/i.test(x.url) && x.readyState === 1); if (!s) return false; s.send(JSON.stringify({ type: 'xpdr_follow', id: '' })); return true; })()`) === true,
+     'the finder told to stop following (no tune)');
+  ok(await until(`!!window.__sat && window.__sat.state === 'TRACK' && window.__sat.follow == null`, 60000), 'the channel eased back: the lock has no follow');
+  await sleep(800);
+  const back = JSON.parse(await ev(`JSON.stringify({ n: window.__sat.nominal, dial: ${dialNow} })`));
+  ok(back.dial === Math.round(back.n), `★ the follow ended without a tune: the digits back on the nominal (${back.dial} / ${back.n})`);
+  ok(Number(await ev(`window.__tunes.length`)) === n2, '…and still no tune sent');
   // a phone
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

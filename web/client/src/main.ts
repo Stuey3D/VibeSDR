@@ -66,7 +66,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
-import { parseSatTelemetry, satCapFrom, satDopplerBadge, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
+import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -10645,7 +10645,8 @@ function satMarkerOffset(): number {
   const r = satPanel?.readout();
   if (!r || (r.state !== 'TRACK' && r.state !== 'COAST') || r.offset == null) return 0;
   const dt = Math.min(1, Math.max(0, (performance.now() - (satPanel?.readoutAt ?? 0)) / 1000));
-  return r.offset + (r.rate ?? 0) * dt;
+  // ★★★ beta94 less the finder's follow: the dial already shows it (spectrum.ts satFollowApply) — never counted twice
+  return satMarkerShiftHz(r) + (r.rate ?? 0) * dt;
 }
 let satCap: { ok: boolean; why: string } | null = null;
 let satPanel: SatPanel | null = null;

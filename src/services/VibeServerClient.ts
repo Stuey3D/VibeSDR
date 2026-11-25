@@ -650,7 +650,7 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'sat': {
         const pk = parseSatPicked(msg);   // ★★★ SATELLITE MODE: {"state":"picked"} answers a pick — not a readout
         if (pk) { this.callbacks.onSatPicked?.(pk); return true; }
-        const r = parseSatReadout(msg); if (r) this.callbacks.onSat?.(r); return true;
+        const r = parseSatReadout(msg); if (r) { this.satFollowApply(r); this.callbacks.onSat?.(r); } return true;   // ★★★ beta94 the dial follows
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.callbacks.onSatTrack?.(t); return true; }
       case 'dec_shared': { const l = parseDecShared(msg); if (l) this.callbacks.onDecShared?.(l); return true; }   // ★★★ the room's decoder

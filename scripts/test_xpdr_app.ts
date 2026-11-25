@@ -6,7 +6,9 @@
 import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrListen, xpdrOverlayFrom, xpdrRowsSorted, xpdrWhat,
          XPDR_FADE_SEC, XPDR_SLICE_LABEL } from '../src/services/xpdr';
 import { orbOverlayKey, orbOverlayLayout, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
-import { parseSatPicked, satDecView, satDecWord } from '../src/services/satellites';
+import { parseSatPicked, parseSatReadout, satChanText, satDecView, satDecWord, satDopplerBadge, satFollowHz, satMarkerShiftHz,
+         SatFollowDial, SAT_FOLLOW_TUNE_GUARD_MS } from '../src/services/satellites';
+import { shouldForwardTune } from '../src/services/audioTuneForward';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
 
 let fail = 0, pass = 0;
@@ -68,6 +70,55 @@ const pk = parseSatPicked({ type: 'sat', state: 'picked', norad: 44909, tx: 0, d
 ok(pk?.decoder === 'xpdr', 'picked decoder "xpdr" is understood (an older client reads "" — voice, as before)');
 ok(satDecView('xpdr') === 'xpdr' && satDecWord('xpdr', 'voice', false, false).length > 0, 'the box has a view and words for it');
 ok((CLIENT_DECODERS as readonly string[]).includes('xpdr'), 'the mode box knows the decoder');
+
+console.log('── the dial follows the followed station (Stuart 11-25: "yes") ──');
+{
+  const NOM = 435626765;
+  const sat = (follow: number | undefined, extra: Record<string, unknown> = {}) => parseSatReadout({ type: 'sat', state: 'TRACK', name: 'RS-44', norad: 44909,
+    nominal: NOM, offset: -4804 + (follow ?? 0), rate: -12, ...(follow != null ? { follow } : {}), ...extra })!;
+  const r = sat(-1234.5);
+  ok(r.follow === -1234.5 && satFollowHz(r) === -1234.5, 'the sat message\'s follow parses');
+  ok(parseSatReadout({ type: 'sat', state: 'TRACK', nominal: NOM, offset: 1, follow: 'x' })!.follow === undefined
+     && parseSatReadout({ type: 'sat', state: 'TRACK', nominal: NOM, offset: 1, follow: 9e9 })!.follow === undefined
+     && parseSatReadout({ type: 'sat', state: 'TRACK', nominal: NOM, offset: 1, follow: 0 })!.follow === undefined, 'junk / wild / zero follow = none');
+  ok(satFollowHz(parseSatReadout({ type: 'sat', state: 'ARMED', nominal: NOM, offset: 0, follow: 50 })) === 0, 'no follow outside TRACK / COAST');
+  ok(satMarkerShiftHz(r) === -4804, `★ the marker: offset less the follow — the dial carries it, never counted twice (${satMarkerShiftHz(r)})`);
+  ok(satMarkerShiftHz(sat(undefined)) === -4804 && satMarkerShiftHz(null) === 0, '…no follow: the offset as before; no lock: 0');
+  ok(/▼ 4\.80 kHz/.test(satChanText(r)) && /4\.80 kHz/.test(satDopplerBadge(r)!.label) && satDopplerBadge(r)!.dir === -1, 'the Doppler words say the Doppler, not Doppler + follow');
+
+  const d = new SatFollowDial();
+  let dial = NOM;   // LISTEN put the dial here
+  const step = (m: ReturnType<typeof sat> | null, since = 60000) => { const hz = d.onReadout(m, since, dial); if (hz != null) dial = hz; return hz; };
+  ok(step(sat(undefined)) === null && dial === NOM, 'no follow yet: the dial stays where LISTEN put it');
+  ok(step(sat(-300.4)) === NOM - 300 && dial === NOM - 300, `★ following: the digits read nominal + follow (${dial})`);
+  ok(step(sat(-300.2)) === null, 'unchanged to the hertz: nothing to redraw');
+  ok(step(sat(-375)) === NOM - 375, 'the follow slews: the digits move with it');
+  ok(d.holds(NOM) && !d.holds(NOM + 5000), "a config's vfo = the lock's nominal is the server restating its dial, not a move to adopt");
+  // the follow ends WITHOUT a tune (the finder stopped / clearFollow: the channel eases back) → the nominal
+  ok(step(sat(-150)) === NOM - 150 && step(sat(undefined)) === NOM && dial === NOM && !d.holds(NOM), '★ the follow ends without a tune: the digits go back to the nominal');
+  // a manual step from the followed position, then the race
+  step(sat(-800)); const followed = dial;
+  ok(followed === NOM - 800, 'following again');
+  dial = followed + 100;   // ★ the person steps +100 from where the station is (the step base IS the following dial)
+  const NEWNOM = dial;     // the server's nudge re-bases the nominal at the tune and ends the follow
+  ok(step(sat(-800), 200) === null && dial === followed + 100, '★ a sat message in flight with the old follow, just after our tune: ignored (no snap back)');
+  ok(step(sat(undefined, { nominal: NEWNOM, offset: -4804 }), SAT_FOLLOW_TUNE_GUARD_MS + 10) === null && dial === followed + 100,
+     '★ the step landed from the followed position (station + 100 Hz) and stays: the follow ended by OUR tune');
+  // somebody else moved the dial while it followed (a config adopt): the end of the follow does not pull it back
+  step(sat(-500)); dial = NOM + 20000;
+  ok(step(sat(undefined)) === null && dial === NOM + 20000, 'the dial moved by something else: the end of the follow leaves it alone');
+  // the lock goes while following: back to the nominal (only while the digits still show the follow)
+  step(sat(-600));
+  ok(step(parseSatReadout({ type: 'sat', state: 'OFF', why: 'x' })) === NOM && dial === NOM, 'the lock ends while following: the digits back to the nominal');
+
+  // ★★ the app's audio socket never sends what the follow put on the screen: serverDial carries the followed value
+  const asked = { frequency: NOM - 375, mode: 'usb', bandwidthLow: 0, bandwidthHigh: 2800 };
+  const base = { asked, seqAdvanced: false, sealed: false, helloTune: '', askedJson: JSON.stringify(asked), msSinceSend: 60000 };
+  ok(!shouldForwardTune({ ...base, serverDial: { frequency: NOM - 375, mode: 'usb' } }).send, '★ the app: a follow-driven dial is NOT forwarded as a tune (serverDial says it)');
+  ok(!shouldForwardTune({ ...base, sealed: true, serverDial: { frequency: NOM - 375, mode: 'usb' } }).send, '…nor by a sealed joiner on a shared dial');
+  ok(shouldForwardTune({ ...base, seqAdvanced: true, asked: { ...asked, frequency: NOM - 275 }, serverDial: { frequency: NOM - 375, mode: 'usb' } }).send,
+     '…while a person\'s step from it is');
+}
 
 console.log(`\n${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

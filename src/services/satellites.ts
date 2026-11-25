@@ -15,6 +15,8 @@
  *
  * ★★ THE DIAL SHOWS THE NOMINAL (brief §10): the main digits stay on the published frequency; `offset` is where the
  *    channel actually is relative to it — the waterfall marker goes there (marker TRAP), bookmarks store the nominal.
+ *    ★★★ beta94 EXCEPT WHILE THE TRANSPONDER FINDER FOLLOWS A STATION (`follow`, Stuart 11-25 "yes"): the digits show
+ *    where the station is in the satellite frame, nominal + follow — SatFollowDial below, set locally, never sent.
  * ★ No flashing anywhere: COAST only dims the readout.
  */
 import { tlmLivePush, type TlmLiveFrame } from '../utils/tlmCharts';
@@ -65,6 +67,9 @@ export interface SatReadout {
   id?: string; name?: string; norad?: number; tx?: string; loop?: string; consumer?: string;
   nominal?: number; offset?: number; rate?: number; trim?: number; az?: number; el?: number;
   aos?: number; los?: number; maxEl?: number; age?: number; ageState?: string; time: string;
+  /** ★★★ beta94 the transponder finder's follow (Hz, PART of `offset`): VFO A's channel this far from the nominal, where
+   *  the followed station is. Absent = not following. The dial readout shows nominal + follow (SatFollowDial). */
+  follow?: number;
   /** ★★★ beta92 the PICK went with this ending (a tune past the lock's reach, a mode change): its decoder is detached on
    *  the server — the box must stop showing it (it said "TRACK · attached" for a pick that had gone, Stuart 11-23). */
   pickGone?: boolean;
@@ -142,7 +147,67 @@ export function parseSatReadout(m: unknown): SatReadout | null {
     rate: num(o.rate), trim: num(o.trim), az: num(o.az), el: num(o.el), aos: num(o.aos), los: num(o.los), maxEl: num(o.maxEl),
     age: num(o.age), ageState: str(o.ageState, 10), time: str(o.time, 8) ?? 'ok',
     ...(o.pickGone === true ? { pickGone: true } : {}),
+    // ★★★ beta94 bounded like the server's clamp (±6 kHz) with room to spare: a wild figure is no follow at all
+    ...((() => { const f = num(o.follow); return f != null && f !== 0 && Math.abs(f) <= SAT_FOLLOW_MAX_HZ ? { follow: f } : {}; })()),
   };
+}
+
+/* ── ★★★ beta94 THE DIAL FOLLOWS THE FOLLOWED STATION (docs/v12/TRANSPONDER-FINDER.md, Stuart 11-25: "yes") ──────────
+ *  While the finder follows a station, the server moves VFO A's CHANNEL (the lock's `follow`, part of `offset`) and its
+ *  dial stays the nominal (config `vfo`). The person reads the DIGITS, so they show where the station really is in the
+ *  satellite frame: nominal + follow. That value is set LOCALLY — readout, step base, bookmarks — and NEVER sent: a tune
+ *  would go through the server's nudge and end the follow (the shared-dial contract too: a client transmits only on a
+ *  person's action). Both clients run this one state machine (web spectrum.ts, app VibeServerWsClient):
+ *   · following → the dial is round(nominal + follow), only when it changed (the readout moves at the sat message's
+ *     rate, ≤150 Hz/s of slew, 1 Hz steps);
+ *   · the follow ends WITHOUT our tune (finder stopped, lock gone) → the dial goes back to the nominal — only if it still
+ *     shows the follow's value (anything else moved it: a config adopt, a person);
+ *   · within SAT_FOLLOW_TUNE_GUARD_MS of OUR OWN tune nothing is touched: a sat message in flight still carries the old
+ *     follow, and our tune already set the dial (the server's nudge ends the follow and re-bases the nominal there);
+ *   · `holds(vfo)`: a config whose vfo is the followed lock's nominal is NOT another listener moving the dial — the
+ *     clients skip their adopt for it (it would snap the digits back to the LISTEN point between sat messages).
+ *  The marker is drawn at dial + satMarkerShiftHz (offset − follow): the dial already carries the follow. */
+export const SAT_FOLLOW_MAX_HZ = 20000;
+export const SAT_FOLLOW_TUNE_GUARD_MS = 1500;
+function satLive(r: SatReadout | null | undefined): r is SatReadout {
+  return !!r && (r.state === 'TRACK' || r.state === 'COAST');
+}
+/** The follow in Hz while the lock is live, else 0. */
+export function satFollowHz(r: SatReadout | null | undefined): number {
+  return satLive(r) ? (r.follow ?? 0) : 0;
+}
+/** Where the marker sits from the DIAL: the lock's offset less the follow (the dial shows the follow already). 0 off. */
+export function satMarkerShiftHz(r: SatReadout | null | undefined): number {
+  return satLive(r) && r.offset != null ? r.offset - (r.follow ?? 0) : 0;
+}
+export class SatFollowDial {
+  /** The followed lock's nominal (the server's dial) while the digits follow; null otherwise. */
+  nominal: number | null = null;
+  /** The value the follow last put on the dial (0 = none). */
+  dial = 0;
+  /** A readout → the value to put on VFO A's dial locally, or null to leave it. `sinceLocalTuneMs` = since this client
+   *  last tuned VFO A itself; `curDial` = VFO A's dial now. */
+  onReadout(r: SatReadout | null, sinceLocalTuneMs: number, curDial: number): number | null {
+    if (sinceLocalTuneMs < SAT_FOLLOW_TUNE_GUARD_MS) { this.nominal = null; this.dial = 0; return null; }
+    const f = satFollowHz(r);
+    if (satLive(r) && r.nominal != null && r.nominal > 0 && f !== 0) {
+      const hz = Math.round(r.nominal + f);
+      this.nominal = r.nominal;
+      if (hz === this.dial && Math.round(curDial) === hz) return null;
+      this.dial = hz;
+      return hz;
+    }
+    if (this.nominal == null) return null;
+    const back = r && r.nominal != null && r.nominal > 0 ? Math.round(r.nominal) : Math.round(this.nominal);
+    const mine = Math.round(curDial) === this.dial;
+    this.nominal = null; this.dial = 0;
+    return mine && back !== Math.round(curDial) ? back : null;
+  }
+  /** True when a config's `vfo` is the followed lock's nominal — the server restating its dial, not a move to adopt. */
+  holds(serverVfo: number): boolean {
+    return this.nominal != null && Math.abs(serverVfo - this.nominal) < 1;
+  }
+  reset() { this.nominal = null; this.dial = 0; }
 }
 
 export function parseSatTrack(m: unknown): SatTrack | null {
@@ -180,7 +245,7 @@ export function satCapFrom(j: Record<string, unknown> | null | undefined): { ok:
 export function satChanText(r: SatReadout | null): string {
   if (!r || r.state === 'OFF' || !r.name) return '';
   if (r.state === 'ARMED') return `${r.name} · AOS ${clockIn(r.aos, Date.now() / 1000)}`;
-  const off = r.offset ?? 0;
+  const off = (r.offset ?? 0) - satFollowHz(r);   // ★★★ beta94 the Doppler — the digits carry the follow
   const arrow = off >= 0 ? '▲' : '▼';   // ▲ approaching (received high) · ▼ receding
   return `${r.name} · ${arrow} ${Math.abs(off / 1000).toFixed(2)} kHz`;
 }
@@ -622,7 +687,7 @@ export function satDopplerBadge(r: SatReadout | null): SatDopBadge | null {
   if (!r || r.state === 'OFF' || r.state === 'ENDED') return null;
   const who = r.name ? ` · ${r.name}` : '';
   if (r.state === 'ARMED') return { dir: 0, dim: true, label: `Auto Doppler armed${who}, waiting for the pass` };
-  const off = r.offset ?? 0;
+  const off = (r.offset ?? 0) - satFollowHz(r);   // ★★★ beta94 the Doppler — the digits carry the follow
   const dir: 1 | -1 = off >= 0 ? 1 : -1;
   const dim = r.state === 'COAST' || r.ageState === 'stale' || r.time === 'none';
   return { dir, dim, label: `Auto Doppler ${satStateWord(r)}${who} · ${dir > 0 ? 'approaching' : 'receding'} ${Math.abs(off / 1000).toFixed(2)} kHz` };
