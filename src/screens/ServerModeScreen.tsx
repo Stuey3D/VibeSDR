@@ -586,6 +586,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    * ★ Where a listener LANDS is not hardware and applies to both — it stays on show.
    */
   const isAhf = radio?.driver === 'airspyhf';
+  /* ★★★ RTL-TCP IS AN RTL-SDR'S ONLY (Sloper, 2026-11-25). The rtl_tcp server streams a dongle's own 8-bit IQ through
+   *     librtlsdr, and librtlsdr "opens" an Airspy HF+ / R2 or a HackRF without complaint — then not one sample
+   *     arrives: SDR# / SDR++ said "connected" and drew nothing. So for those radios the choice is not offered
+   *     (AGENTS.md: a control that only works on one radio should not be there); VibeServer serves them, and its
+   *     RAW IQ OUT is the rtl_tcp stream. `radio` null = not known yet: the native start refuses a non-RTL radio
+   *     anyway (VibeLocalSdrModule.startRtlTcpServer). The stored choice is kept for the next radio. */
+  const rtlTcpRadio = !radio || radio.driver === 'rtl';
+  const protoEff: Proto = rtlTcpRadio ? proto : 'vibeserver';
   const hasHwSetup = !isAhf;
   /* ★★★ THE GAIN + AGC + IF-FILTER BLOCK IS THE DONGLE'S, AND ONLY THE DONGLE'S.
    *   Every control in it is an R820T fact: a 29-step gain TABLE (RTL_GAINS, hardcoded),
@@ -1799,7 +1807,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   server already holds, so asking again would be asking twice.
               ★★ VibeServer only: RTL-TCP has no landing page, no PIN and no session limits, so it
                  has nothing to put in front of the public. */}
-            {publicSupported && proto === 'vibeserver' ? (
+            {publicSupported && protoEff === 'vibeserver' ? (
             <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
               <Text style={[styles.section, { color: C.section, fontFamily: F, marginTop: 0 }]}>
                 ADVERTISE ON VIBESDR.NET
@@ -2178,14 +2186,22 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 been committed by AsyncStorage's SQLite when the process churns is lost, which
                 fits the one start tonight that did not stick while the next one did. Writing on
                 selection means the value is already on disk long before any of that. */}
-        <ProtoCard C={C} F={F} active={proto === 'vibeserver'}
+        <ProtoCard C={C} F={F} active={protoEff === 'vibeserver'}
           onPress={() => { setProto('vibeserver'); void AsyncStorage.setItem(K.proto, 'vibeserver'); }}
           title="VibeServer" tag="Recommended"
           desc="More secure, less data. Server-side DSP, compressed audio + waterfall, PIN protected." />
+        {!rtlTcpRadio ? (
+          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0, marginBottom: 8 }]}>
+            {`RTL-TCP shares an RTL-SDR dongle only, so it is not offered for ${radio?.model || 'this radio'}. ` +
+             'For SDR# or SDR++, use VibeServer: set MODE to Advanced, HOW MANY LISTENERS to 1, and RAW IQ OUT to ' +
+             'Local only. Then turn IQ on in the web page\'s audio menu — it is the same rtl_tcp stream.'}
+          </Text>
+        ) : (
         <ProtoCard C={C} F={F} active={proto === 'rtltcp'}
           onPress={() => { setProto('rtltcp'); void AsyncStorage.setItem(K.proto, 'rtltcp'); }}
           title="RTL-TCP" tag="Compatible"
           desc="Raw IQ, maximum compatibility. Needs a fast, stable network. No PIN." />
+        )}
         </>)}
 
         {/* ★★ "LOCAL NAME", not "advertised name" — it names this server ON THIS NETWORK, and
@@ -2211,11 +2227,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {advertise
               ? 'This server appears automatically on other VibeSDR devices on the network.'
               : "Hidden — clients must enter this device's address by hand. Good on a public hotspot" +
-                (proto === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
+                (protoEff === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
         </View>
 
-        {proto === 'vibeserver' ? (
+        {protoEff === 'vibeserver' ? (
           <>
             {/* ─── SERVER SETTINGS ───────────────────────────────────────────────────────────
                 ★★ Everything from here to RADIO SETTINGS belongs to the SERVER — who may reach it,

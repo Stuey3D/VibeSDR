@@ -262,6 +262,18 @@ int RtlTcpServer::start(int fd, int /*vid*/, int /*pid*/,
         ::close(impl->usbFd); delete impl; return -1;
     }
 
+    /* ★★★ AN RTL-SDR OR NOTHING (Sloper, 2026-11-25). librtlsdr's open RETURNS 0 ON ANY USB DEVICE: an
+     *     Airspy HF+ / R2 or a HackRF fails the dummy write ("Resetting device…"), no tuner answers ("No
+     *     supported tuner found"), and the open still succeeds. The server then bound, sent "RTL0" with
+     *     tuner 0, and rtlsdr_read_async waited on a bulk endpoint those radios never fill — the client
+     *     said "connected" and showed nothing, for ever. No tuner = not a dongle: refuse, with a reason.
+     *     (Kotlin only hands us RTL VID/PIDs now; this is the line that holds if that ever slips.)
+     *     Test: tools/rtltcp-server-test/run.sh. */
+    if (rtlsdr_get_tuner_type(impl->dev) == RTLSDR_TUNER_UNKNOWN) {
+        err = "not an RTL-SDR (no RTL tuner answered) — RTL-TCP serves RTL-SDR dongles only";
+        rtlsdr_close(impl->dev); ::close(impl->usbFd); delete impl; return -1;
+    }
+
     uint32_t initRate = overrideRate ? overrideRate : sampleRate;
     rtlsdr_set_sample_rate(impl->dev, initRate);
     impl->sampleRate = rtlsdr_get_sample_rate(impl->dev);
