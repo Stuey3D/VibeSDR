@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta94 2026-11-25 — THE TRANSPONDER SIGNAL FINDER (docs/v12/TRANSPONDER-FINDER.md; vibe_xpdr.h, vibe_xpdr_run.h,
+  //     src/services/xpdr.ts). Stuart 11-24 on RS-44: "open the satellite in iq mode and as soon as a carrier is detected it
+  //     gives you a button to listen to it" · no separate VFO for the beacon · "vfo a tracks the signal". Synthetic tests
+  //     only — not yet tried on a real pass.
+  { v: 'V12 (experimental)', detail: 'SATELLITE: EVERY SIGNAL ON A LINEAR TRANSPONDER, FOUND FOR YOU — a linear transponder (RS-44, FO-29, AO-7, AO-73, JO-97, MO-122, TO-108) carries many contacts at once, CW and SSB, all over its passband. Picking one now listens to the WHOLE passband and its CW beacon at once, Doppler-corrected, drawn on the waterfall like ORBCOMM: a shaded band labelled “TRANSPONDER · every signal found here”, with a small arrow over each signal it finds, labelled VOICE, CW or the callsign once read. Every CW signal is decoded — the beacon is simply one of them, so it no longer needs a VFO of its own — and each voice gets a LISTEN key in the SATELLITE box: VFO A snaps to it in USB, and then FOLLOWS the station: the satellite’s own Doppler is corrected as before, and the other station’s drift (their uncorrected uplink) is first predicted from the pass, then measured from their voice — held between overs — so they stay put in your speaker. Tap the waterfall, the step keys or the dial at any time to tune yourself: that always wins, and the following stops. A row fades after a minute without a signal. Needs a VibeServer that has it; in the app and on the web page.' },
   // ★★★ V12 beta93 2026-11-24 — THE NR ECHO STORM + ONE NR / NOTCH / BLANKER SET PER VFO (Stuart, XCover web page: the NR
   //     slider slid by itself and the spectrum socket ran at ~1 MB/s; "maybe needs two sets of nr/nb controls for each vfo").
   //     vfoDsp.ts, local_sdr_shim.cpp deferHwInfo + WatchDsp, test-server-vfo-dsp.mjs, test-vfo-dsp.ts.
