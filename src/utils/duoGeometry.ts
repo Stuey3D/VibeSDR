@@ -89,6 +89,7 @@ export function rightLimitAt(regions: ReservedRegions, y0: number, y1: number, w
   let x = Infinity;
   for (const r of avoidRects(regions)) {
     if (r.y >= y1 || r.y + r.h <= y0) continue;
+    if (r.x >= windowW || r.x + r.w <= 0) continue;  // another Split View share's, not this window's
     if (r.w >= windowW * 0.5) continue;           // a full-width bar (a status band) is not a corner
     if (r.x + r.w / 2 < windowW / 2) continue;   // a region on the left half is not this edge's
     x = Math.min(x, r.x);
