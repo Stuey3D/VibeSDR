@@ -285,6 +285,40 @@ export function askBannerText(d: AskState, tight: boolean, clock?: (ms: number) 
   return `${pre}${chatT('bannerAskInChat')}`;
 }
 
+/** The room's head-count for the SHARED TUNER banner: "3/5 👤", or "(You+N)" where the server counts us in and has no
+ *  cap (FM-DX). ONE copy for the plain and the ask-before-tuning lines (Stuart, 2026-11-25: "the user count is missing
+ *  on the ask in chat to tune message"). '' while the count is not known yet (listeners < 0). */
+export function bannerCount(st: { listeners: number; max: number; youPlus?: boolean }): string {
+  if (!(st.listeners >= 0)) return '';
+  return st.youPlus ? `(You+${Math.max(1, st.listeners - 1)})` : `${st.listeners}${st.max > 1 ? `/${st.max}` : ''} 👤`;
+}
+
+/** The longest English line the narrowest layout was fitted to: "SHARED TUNER · ASK TO TUNE · 2/5 👤". */
+export const BANNER_FITTED_LEN = 'SHARED TUNER · ASK TO TUNE · 2/5 👤'.length;
+
+/**
+ * The SHARED TUNER banner's words (ControlsBar's bar banner and its LED / analogue twin), count included in every
+ * state, in the chat's language. ★ Words are never truncated mid-word: on a `tight` layout the "SHARED TUNER · "
+ * prefix goes first. V12: the DAB own-stations line and the scanner lock stay in ControlsBar, ahead of this.
+ */
+export function sharedBannerWords(st: { said?: string | null; alone?: boolean; youPlus?: boolean; listeners: number;
+                                        max: number; ask?: AskState | null; dabOwn?: boolean }, tight: boolean,
+                                  clock?: (ms: number) => string): string {
+  if (st.said) return st.said;
+  const askLine = st.ask ? askBannerText(st.ask, true, clock) : null;   // the words, without the prefix
+  if (askLine) {
+    const n = st.alone ? '' : bannerCount(st);
+    const tail = !n ? '' : (st.youPlus ? ` ${n}` : ` · ${n}`);
+    return `${tight ? '' : `${chatT('bannerShared')} · `}${askLine}${tail}`;
+  }
+  if (st.alone) return sharedTunerText(true, st.listeners, st.max);
+  return st.youPlus
+    /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out whether they are in it. No
+     *  "/max" — FM-DX has no cap to report. On the narrowest layouts the prefix goes, never the words that matter. */
+    ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning ${bannerCount(st)}`
+    : sharedTunerText(false, st.listeners, st.max, false, !!st.dabOwn);
+}
+
 /** ★★ The SHARED TUNER banner's standing words when the ask lock is not in force — one copy for the app's bar and the
  *  browser's: FREE TO TUNE alone, ASK TO TUNE · 3/5 👤 with company, ASK BEFORE TUNING before the count is known
  *  (listeners < 0). `tight` drops the prefix (SE in Display Zoom), never the words that matter. */

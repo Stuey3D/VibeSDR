@@ -43,7 +43,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
-import { askBannerText, askLocked, sharedTunerText, dabFreeText, chatT, type AskState } from '../services/dialChat';
+import { askLocked, sharedBannerWords, dabFreeText, chatT, type AskState } from '../services/dialChat';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -548,10 +548,10 @@ function Unit({ id, onUnit, gap = 0, children }:
 }
 
 // ── SVG paths (from mockup HTML) ──────────────────────────────────────────────
-/* ★ REACH key legends (iPhone Duo front screen): SHRINK = two chevrons pointing in at a centre bar; EXPAND = the
- *  same chevrons pointing out. 20-unit box, stroked like the other legends. */
-const SHRINK_PATH = Skia.Path.MakeFromSVGString('M3 6l4 4-4 4M17 6l-4 4 4 4M10 4v12')!;
-const EXPAND_PATH = Skia.Path.MakeFromSVGString('M7 6l-4 4 4 4M13 6l4 4-4 4M10 4v12')!;
+/* ★ REACH key legends (iPhone Duo front screen, Stuart): the action the tap will do. SHRINK = four corner arrows
+ *  pointing IN to the centre; EXPAND = the same four pointing OUT. 20-unit box, stroked like the other legends. */
+const SHRINK_PATH = Skia.Path.MakeFromSVGString('M3 3l5 5M8 4.5V8H4.5M17 3l-5 5M12 4.5V8h3.5M3 17l5-5M8 15.5V12H4.5M17 17l-5-5M12 15.5V12h3.5')!;
+const EXPAND_PATH = Skia.Path.MakeFromSVGString('M8 8L3 3M3 6.5V3h3.5M12 8l5-5M17 6.5V3h-3.5M8 12l-5 5M3 13.5V17h3.5M12 12l5 5M17 13.5V17h-3.5')!;
 const CHAT_PATH   = Skia.Path.MakeFromSVGString('M3 4.5A1.5 1.5 0 0 1 4.5 3h11A1.5 1.5 0 0 1 17 4.5v8A1.5 1.5 0 0 1 15.5 14H7l-4 3V4.5Z')!;
 const SHARE_LINES = Skia.Path.MakeFromSVGString('M13.3 5L6.7 9M13.3 15L6.7 11')!;
 const SHARE_C1    = Skia.Path.MakeFromSVGString('M15 4m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0')!;
@@ -1289,18 +1289,9 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
   if (st.said) return st.said;
   // ★★ V12 beta83 the stations line, alternating with whatever the ask line is (a pick is not a dial move — dialChat).
   if (st.dabOwn && st.dabFree && !st.alone) return dabFreeText();
-  // ★★ Ask before tuning: while locked the banner says what to do now (ask / waiting / when it is yours).
-  const ask = st.ask ? askBannerText(st.ask, tight) : null;
-  if (ask) return ask;
-  // ★ In the chat's language (dialChat sharedTunerText) — the banner is where a chat line lands, so it speaks it too.
-  return st.alone ? sharedTunerText(true, st.listeners, st.max)
-    : st.youPlus
-      /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
-       *  whether they are in it. No "/max" — FM-DX has no cap to report. */
-      //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
-      //    that matter — truncating mid-word is the one outcome that is not allowed.
-      ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, st.listeners - 1)})`
-      : sharedTunerText(false, st.listeners, st.max, false, !!st.dabOwn);
+  // ★★ ONE helper for every other state, so the head-count is never dropped from the ask-before-tuning lines, in the
+  //    chat's language (dialChat sharedBannerWords).
+  return sharedBannerWords(st as any, tight);
 }
 function sharedBannerLabel(st: SharedTuner): string {
   // ★ V12 beta83 a screen reader gets both halves of the alternation at once.
@@ -1311,7 +1302,10 @@ function sharedBannerLabel(st: SharedTuner): string {
 function sharedBannerLabelBase(st: SharedTuner): string {
   if (st.scanLock) return 'The owner triggered a scan of this receiver. Please wait — the controls come back, and the radio returns to where it was, when it ends.';
   if (st.said) return `Chat: ${st.said}`;
-  if (askLocked(st.ask)) return 'Shared tuner. Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.';
+  const who = st.alone ? '' : st.youPlus
+    ? ` You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening.`
+    : ` ${st.listeners}${st.max > 1 ? ` of ${st.max}` : ''} listening.`;
+  if (askLocked(st.ask)) return `Shared tuner.${who} Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.`;
   return st.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
     : st.youPlus
       ? `Shared tuner. You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
