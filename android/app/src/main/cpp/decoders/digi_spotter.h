@@ -73,7 +73,14 @@ public:
     /** ★ The owner's word per mode (Always / Off / Auto), asked at each gate period's start. Null = Auto for all. */
     void setOverrides(std::function<Override(const std::string& mode)> f) { std::lock_guard<std::mutex> lk(statMtx_); override_ = std::move(f); }
     /** ★ The benchmark's budget for this machine, in FT8 units (∞ = none). */
-    void setBudgetCap(double units) { std::lock_guard<std::mutex> lk(statMtx_); budget_.setCap(units); }
+    void setBudgetCap(double units) { std::lock_guard<std::mutex> lk(statMtx_); baseCap_ = units; budget_.setCap(units * capScale_); }
+    /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): what background decoding may use now, asked every block.
+     *  `scale` multiplies the benchmark's cap (one core's green rung → that many cores' worth); `skipCounts` false = a
+     *  skipped slot neither pauses CW / RTTY nor cuts the budget (the machine has headroom: pausing them would free
+     *  nothing the slow slotted engine could use); `behindHoldSec` > 0 = a backlog over the pause line must LAST that long
+     *  before it pauses (a burst no longer sheds). Default (no hook, a listener's own Band): today's rule exactly. */
+    struct CpuView { double scale = 1.0; bool skipCounts = true; double behindHoldSec = 0.0; };
+    void setCpuView(std::function<CpuView()> f) { std::lock_guard<std::mutex> lk(statMtx_); cpuView_ = std::move(f); }
     double budgetUnits() const { std::lock_guard<std::mutex> lk(statMtx_); return budget_.units(); }
     /** ★★ V12 beta91: ONE BUDGET FOR TWO SPOTTERS. The units another spotter has committed now (its live runs) — the
      *  CW / RTTY / PSKW spotter is given the audio one's, so the chips get only what the slotted modes leave: on a weak
@@ -253,6 +260,11 @@ private:
     int pauseLevel_ = 0;
     double pauseAt_ = -1e300, calmSince_ = NAN, pauseCheck_ = -1e300;
     uint64_t pauseSkips_ = 0;
+    // ── beta94 nobody listening (setCpuView) — statMtx_ ──
+    std::function<CpuView()> cpuView_;
+    double baseCap_ = INFINITY, capScale_ = 1.0;
+    uint64_t budgetSkipLast_ = 0, budgetSkipIgnored_ = 0;
+    double overSince_ = NAN, headroomSaidAt_ = -1e300;
     double bandStartUtc_ = NAN;          // ★ the capture time of this run's first block (kIqStartSec)
 
     std::function<double()> others_;      // ★ beta91: another spotter's committed units (setBudgetOthers) — statMtx_

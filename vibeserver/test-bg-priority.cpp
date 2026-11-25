@@ -415,7 +415,66 @@ static void eased() {
     ok(slots.inUse() == 0, "stopped: every slot back");
 }
 
+// ── ★★★ beta94 nobody listening: background's extra slots over the box's limit, given back for a listener ──────────
+static void fullCpu() {
+    std::printf("── beta94: nobody listening — background takes slots over the box's limit; a listener gets one at once ──\n");
+    const std::string dir = tmpDir("fullcpu");
+    FileSlots sa(dir, [] { return 2; }), lis(dir, [] { return 2; });
+    bg::BgRegistry reg; reg.open(dir, "F");
+    auto live = std::make_shared<bg::fullcpu::Live>();
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sa; p.registry = &reg; p.cpu = live;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{490000, "usb", "navtex"}, bg::Vfo{505000, "usb", "rtty-weather"}, bg::Vfo{512000, "usb", "wefax"},
+                       bg::Vfo{518000, "usb", "navtex"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    ok(r.decodersRunning() == 2 && logged("VFO 3 (512.0 kHz WEFAX (120 LPM)) waiting \xe2\x80\x94 no decoder slot free (listeners come first)"),
+       "today's budget: the box's 2 slots, the WEFAX VFO waits (listeners come first)");
+    // nobody listening: 2 cores' worth → 2 extra slots
+    bg::fullcpu::Budget b; b.full = true; b.cores = 2; b.share = 4; b.rttyWorkers = 2; b.extraSlots = 2; b.spare = 2.0;
+    bg::fullcpu::Policy::store(*live, b);
+    ok(waitFor([&] { r.slotTickForTest(); return r.decodersRunning() == 4; }, 3000), "★ nobody listening: the waiting VFOs take 2 slots OVER the limit — all 4 decode");
+    ok(sa.inUse() == 4 && r.vfoDecodingForTest(2), "...the WEFAX VFO among them (box: 4 held of a limit of 2)");
+    const std::string js = r.statusJson();
+    ok(js.find("\"fullCpu\":{\"cores\":2,\"rttyWorkers\":2,\"extraSlots\":2}") != std::string::npos, "the admin JSON says what it may use");
+    // a listener on another radio of the box: one slot needs THREE given back (4 held, limit 2)
+    ok(lis.claim() < 0, "a listener's plain claim is refused (the box is over its limit)");
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool room = bg::BgRegistry::makeRoomForListener(lis, dir);
+    const int tok = room ? lis.claim() : -1;
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ok(tok >= 0 && ms < 1500, "★ ...but making room frees as many as the listener needs, at once (" + std::to_string((int)ms) + " ms)");
+    ok(!r.vfoDecodingForTest(3) && !r.vfoDecodingForTest(2) && r.vfoDecodingForTest(0), "★ lowest first: VFO 4, then 3, then 2 — VFO 1 decodes on");
+    lis.release(tok);
+    // a listener joins THIS radio: today's budget again — the extras go back, the lowest first
+    ok(waitFor([&] { r.slotTickForTest(); return r.decodersRunning() == 4; }, 5000), "the listener's decoder stops: nobody listening still — all 4 back");
+    bg::fullcpu::Policy::store(*live, bg::fullcpu::Budget());
+    for (int i = 0; i < 6; i++) r.slotTickForTest();
+    ok(sa.inUse() == 2 && r.decodersRunning() == 2 && r.vfoDecodingForTest(0) && r.vfoDecodingForTest(1),
+       "★ a listener joined: the 2 slots over the limit go back — the lowest VFOs (4, 3) pause, 1 and 2 decode on");
+    ok(logged("paused \xe2\x80\x94 background back to the normal budget"), "logged in plain words");
+    ok(r.statusJson().find("fullCpu") == std::string::npos, "the admin JSON no longer claims the whole machine");
+    r.stop();
+    ok(sa.inUse() == 0, "stopped: every slot back");
+
+    std::printf("── beta94: makeRoomForListener's victims across radios ──\n");
+    {
+        const std::string d2 = tmpDir("victims");
+        bg::BgRegistry a, bb; a.open(d2, "A"); bb.open(d2, "B");
+        a.publishState({ {1, true, false}, {2, true, false}, {3, true, true} });
+        bb.publishState({ {1, true, false}, {4, true, false} });
+        const auto v = bg::BgRegistry::victims(d2, 3);
+        ok(v.size() == 3 && v[0] == "B" && v[1] == "A" && v[2] == "A", "3 needed: B's rank 4, then A's rank 2 (A's rank 3 is mid-picture, passed over), then a rank-1 tie to the radio running more");
+        ok(bg::BgRegistry::victims(d2, 9).size() == 5, "never more than are running");
+    }
+}
+
 int main() {
+    fullCpu();
     eased();
     backSeat();
     inRange();

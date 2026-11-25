@@ -13190,6 +13190,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    before the listener can want it; a DISCONNECT is only noticed at the next status pass,
      *    so the receiver idles down a moment late rather than a moment early. */
     static std::atomic<int> s_listenersCached;
+    /** ★★★ beta94 (vibe_bg_fullcpu.h): the same count LESS the held sessions — listeners actually streaming. A held place
+     *  is somebody who may come back (background decoding's wait honours it), but nobody is using the CPU for them, so
+     *  it does not keep background decoding at the listener budget. Published beside s_listenersCached. */
+    static std::atomic<int> s_streamingCached;
     int specListenerCountLocked() {
         int n = (specClient && specClient->isOpen()) ? 1 : 0;
         for (auto& s : specExtra) if (s && s->isOpen()) ++n;
@@ -13265,6 +13269,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12: AND EVERY HELD SESSION — a listener the phone suspended keeps their place (Stuart: "their listener slot
         //    stays counted"). They have no socket open, so nothing above counted them; a held session that is back
         //    has already stopped being held (holdArrivalLocked).
+        s_streamingCached.store(n, std::memory_order_relaxed);
         n += heldCountLocked();
         s_listenersCached.store(n, std::memory_order_relaxed);
         return n;
@@ -37234,6 +37239,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
     vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
+    // ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): what background decoding may use now, the policy behind it, and
+    //     this radio's line on the box board (how many radios share the machine's spare CPU)
+    std::shared_ptr<vibe::bg::fullcpu::Live> bgCpu_ = std::make_shared<vibe::bg::fullcpu::Live>();
+    vibe::bg::fullcpu::Policy bgCpuPolicy_;
+    vibe::bg::fullcpu::Board  bgCpuBoard_;
     std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival
     std::atomic<bool>  bgActive_{false};        // the runner is running (read by the DSP thread on every block)
     std::atomic<bool>  bgWanted_{false};        // a profile is due or running: hold the idle park off
@@ -37302,6 +37312,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         p.lat = g_bgLat.load(); p.lon = g_bgLon.load();
         p.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
         p.listenerOn = listenerOn;
+        p.cpu = bgCpu_;   // ★★★ beta94 nobody listening: the whole machine (bgFullCpuTick)
         /* ★★ A LOCKED RADIO'S USER SLOTS (Stuart: "10 user slots if my RSP1B is running 0 users then treat each slot as an
          *  idle radio"): background may run as many VFO channels as there are FREE listener slots — so a listener is never
          *  refused or told "full" because of it; the lowest VFO gives up its channel the moment one is needed. Read from
@@ -37604,6 +37615,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         in.machineBusyPct = machineBusyPct; in.cores = cores;
         in.listenerHz = audioFreq.load();
         bgRun_.easeTick(in);
+    }
+    /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h, Stuart 11-25: "if nobody is using the pi then the full cpu can be
+     *  allowed for background use, soon as a listener joins … the background gets cut back as needed"). Every health tick
+     *  (~2 s, the housekeeping thread): who is streaming, the machine's measured load, how many radios on the box are idle
+     *  with background running (the board beside the decoder slots), heat and battery → what background may use now,
+     *  written where its threads read it. A state change is one plain log line. Lock-free reads only. */
+    void bgFullCpuTick(int64_t nowMs, double machineBusyPct, int cores, bool hot, bool onBattery) {
+        namespace fc = vibe::bg::fullcpu;
+        const bool running = bgActive_.load() && bgRun_.running();
+        const int streaming = std::max(0, s_streamingCached.load(std::memory_order_relaxed));
+        const std::string dir = vsDecoderSlotDir();
+        if (!bgCpuBoard_.isOpen() && !dir.empty()) bgCpuBoard_.open(dir, std::to_string((long long)::getpid()));
+        const bool idleHere = running && streaming == 0;
+        bgCpuBoard_.publish(idleHere);
+        fc::Inputs in;
+        in.nowMs = nowMs; in.streaming = streaming; in.bgRunning = running;
+        in.cores = cores > 0 ? cores : (int)std::max(1u, std::thread::hardware_concurrency());
+        in.machineBusyPct = machineBusyPct;
+        in.idleRadios = std::max(idleHere ? 1 : 0, bgCpuBoard_.isOpen() ? fc::Board::countIdle(dir) : (idleHere ? 1 : 0));
+        in.hot = hot; in.onBattery = onBattery;
+        in.graceSec = g_vsIdleGraceSec.load();
+        in.rttyFloor = LocalSdrShim::rttySkimWorkers();
+        const fc::Budget b = bgCpuPolicy_.tick(in);
+        fc::Policy::store(*bgCpu_, b);
+        if (!bgCpuPolicy_.said().empty()) LOGI("%s", bgCpuPolicy_.said().c_str());
     }
     /** ★★ V12 2026-11-24 the admin line's honest CPU figure: the background threads counted, the busiest named, the cores. */
     std::string bgThreadsJson() {
@@ -45681,6 +45717,11 @@ void LocalSdrShim::healthTick() {
     // ★★ V12 2026-11-24: background decoding's easing governor first (it decides whether its drops are planned), then who
     //    is behind; an EASED background is a line of information, not a fault (vibe_bg_ease.h)
     if (p) p->bgEaseTick(now, g_health.machineBusyPct, g_health.cores);
+    // ★★★ beta94: nobody listening — background may use the whole machine (never hot, never on battery: phones, the R36S)
+    if (p) p->bgFullCpuTick(now, g_health.machineBusyPct, g_health.cores,
+                            h.tempKind == vibehealth::TempKind::ThrottleThermal || h.tempKind == vibehealth::TempKind::ThrottlePower
+                                || h.tempKind == vibehealth::TempKind::ThrottleUnknown || h.temp >= vibehealth::HIGH,
+                            h.batPresent && !h.batCharging);
     h.behind = decodersBehind(now);
     if (p) {
         const std::string en = p->bgRun_.running() ? p->bgRun_.easeNote() : std::string();
@@ -46211,6 +46252,7 @@ void LocalSdrShim::setLocationJson(const std::string& json) {
 
 /* ★ Out-of-line definition for the cached listener count — see specListenerCountLocked(). */
 std::atomic<int> LocalSdrShim::Impl::s_listenersCached{0};
+std::atomic<int> LocalSdrShim::Impl::s_streamingCached{0};
 
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }
 

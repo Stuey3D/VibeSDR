@@ -287,7 +287,15 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     {
         std::lock_guard<std::mutex> lk(statMtx_);
         loadedNow_ = loaded_ ? loaded_() : false;
-        budget_.tick(captureUtc, skippedLocked(), unitsInUse());
+        /* ★★★ beta94 NOBODY LISTENING (setCpuView): the cap follows the cores background decoding may use now, and a
+         *  skip that does not count (headroom) is kept out of the governor's "too heavy" cut as well as the pause rule. */
+        const CpuView v = cpuView_ ? cpuView_() : CpuView();
+        const double sc = std::isfinite(v.scale) && v.scale >= 1.0 ? v.scale : 1.0;
+        if (sc != capScale_) { budget_.rescale(baseCap_ * sc, sc / capScale_); capScale_ = sc; }
+        const uint64_t skNow = skippedLocked();
+        if (!v.skipCounts && skNow > budgetSkipLast_) budgetSkipIgnored_ += skNow - budgetSkipLast_;
+        budgetSkipLast_ = skNow;
+        budget_.tick(captureUtc, skNow - std::min(skNow, budgetSkipIgnored_), unitsInUse());
         pauseTick(captureUtc);
     }
     S.endUtc = captureUtc; S.lastGated = gated;
@@ -611,14 +619,27 @@ void Spotter::pauseTick(double utc) {
     const double ext = behind_ ? behind_() : 0.0;
     const double b = std::max(ext, backlog);
     const uint64_t sk = skippedHook_ ? skippedHook_() : skippedLocked();
-    const bool skipped = sk > pauseSkips_;
+    /* ★★★ beta94 NOBODY LISTENING (setCpuView, vibe_bg_fullcpu.h): with the machine's headroom a skipped slot does not
+     *  count (CW / RTTY run on threads of their own; pausing them frees nothing for the slow slotted engine), and a backlog
+     *  over the line must have lasted behindHoldSec. A listener's Band, or any listener on this radio: today's rule. */
+    const CpuView view = cpuView_ ? cpuView_() : CpuView();
+    const bool skippedRaw = sk > pauseSkips_;
+    const bool skipped = skippedRaw && view.skipCounts;
     pauseSkips_ = sk;
+    const bool overNow = b > kPauseBehindSec;
+    if (!overNow) overSince_ = NAN;
+    else if (!std::isfinite(overSince_)) overSince_ = utc;
+    const bool overLong = overNow && utc - overSince_ >= view.behindHoldSec - 1e-9;
+    if (skippedRaw && !view.skipCounts && pauseLevel_ < maxRank && log_ && utc - headroomSaidAt_ >= 600.0) {
+        headroomSaidAt_ = utc;
+        log_("Band: a slotted mode skipped a slot \xe2\x80\x94 the continuous modes carry on (nobody listening, the CPU has headroom)");
+    }
     auto names = [&](int rank) {
         std::string o;
         for (const ModeDef& m : modes_) if (m.pauseRank == rank) o += (o.empty() ? "" : "/") + m.name;
         return o;
     };
-    if ((b > kPauseBehindSec || skipped) && pauseLevel_ < maxRank) {
+    if ((overLong || skipped) && pauseLevel_ < maxRank) {
         calmSince_ = NAN;
         if (utc - pauseAt_ < kPauseStepSec) return;
         ++pauseLevel_; pauseAt_ = utc;
@@ -631,13 +652,13 @@ void Spotter::pauseTick(double utc) {
                 }
         if (log_) {
             char why[160];
-            if (skipped && !(b > kPauseBehindSec)) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
+            if (skipped && !overLong) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
             else std::snprintf(why, sizeof why, "the decode is %.1f s behind the capture", b);
             log_("Band: " + names(pauseLevel_) + " paused \xe2\x80\x94 the CPU is behind (" + why + "); the slotted modes keep their slots");
         }
         return;
     }
-    if (b > kPauseBehindSec || skipped) { calmSince_ = NAN; return; }
+    if (overNow || skipped) { calmSince_ = NAN; return; }
     if (pauseLevel_ == 0) return;
     if (b >= kResumeBehindSec) { calmSince_ = NAN; return; }
     if (!std::isfinite(calmSince_)) { calmSince_ = utc; return; }

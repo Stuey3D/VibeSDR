@@ -36,7 +36,9 @@ export interface BgStatus {
               *  busiest single thread (Linux; absent elsewhere and on older servers). */
              threads?: number; cores?: number; hottestPct?: number; hottestName?: string;
              /** ★ V12 2026-11-24 easing for listeners: VFOs paused, bands with extra modes off, and the line. */
-             ease?: { paused: number; chips: number; excused?: boolean; note?: string } };
+             ease?: { paused: number; chips: number; excused?: boolean; note?: string };
+             /** ★★★ beta94 nobody listening: background may use more of the machine (absent = today's budget). */
+             fullCpu?: { cores: number; rttyWorkers?: number; extraSlots?: number } };
 }
 
 const pct = (v: number | null | undefined) =>
@@ -133,6 +135,16 @@ export function bgVfoLine(v: BgVfo): string {
 
 /** The radio's line, and one line per VFO (none when nothing is running). null = nothing to show for this radio
  *  (background decoding not set up on it). */
+/** ★★★ beta94 — NOBODY LISTENING: what background decoding may use now. "nobody listening — using up to 4 cores
+ *  (4 RTTY search workers, 4 extra decoder slots)". Empty when the server is on today's budget (or does not say). */
+export function bgFullCpuText(f: { cores: number; rttyWorkers?: number; extraSlots?: number } | null | undefined): string {
+  if (!f || typeof f.cores !== 'number' || !(f.cores > 0)) return '';
+  const extras: string[] = [];
+  if (typeof f.rttyWorkers === 'number' && f.rttyWorkers > 0) extras.push(`${f.rttyWorkers} RTTY search worker${f.rttyWorkers === 1 ? '' : 's'}`);
+  if (typeof f.extraSlots === 'number' && f.extraSlots > 0) extras.push(`${f.extraSlots} extra decoder slot${f.extraSlots === 1 ? '' : 's'}`);
+  return `nobody listening — using up to ${f.cores} core${f.cores === 1 ? '' : 's'}` + (extras.length ? ` (${extras.join(', ')})` : '');
+}
+
 export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: string[]; warn: boolean } | null {
   if (!bg || !bg.profiles) return null;
   const r = bg.runner;
@@ -166,6 +178,9 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
   if (r) head += ` · ${bgCpuText(r)}`;
   // ★ V12 2026-11-24: background decoding stepping back for listeners — on purpose, said as such (not a warning)
   if (r?.ease?.note) head += ` · ${r.ease.note}`;
+  // ★★★ beta94 (Stuart 11-25: "if nobody is using the pi then the full cpu can be allowed for background use")
+  const fc = bgFullCpuText(r?.fullCpu);
+  if (fc) head += ` · ${fc}`;
   const rows = r ? vfos.map(bgVfoLine) : [];
   if (r && running && typeof r.channelsCpuPct === 'number') rows.push(`channels (one FFT for every VFO) · ${pctShort(r.channelsCpuPct)}`);
   return { head: `Background decoding · ${head}`, rows, warn };

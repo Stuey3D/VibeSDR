@@ -1253,6 +1253,57 @@ int main(int argc, char** argv) {
         sk->n = 1;
         run2(2);
         ok(sp2.pauseLevel() == 1, "a slotted mode SKIPPED a slot (nothing queued): CW pauses so it gets the CPU back");
+
+        /* ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): the looser pause rule while the machine has headroom, and the
+         *  cut back the moment a listener joins — CW then RTTY, the slotted mode keeps its slots. */
+        std::printf("── ★★★ beta94: nobody listening — the pause rule loosens with headroom, tightens when a listener joins ──\n");
+        digi::Spotter::CpuView view; view.scale = 4; view.skipCounts = false; view.behindHoldSec = 10;
+        auto cs3 = std::make_shared<CountShared>();
+        auto sk3 = std::make_shared<SkipShared>();
+        digi::ModeDef sm3 = countingMode("FT8S", 14074000, "20m", 15, 10, 1, 1, cs3);
+        { auto mk = sm3.make; sm3.make = [mk, sk3] {
+            struct W : digi::Engine { std::unique_ptr<digi::Engine> in; std::shared_ptr<SkipShared> s;
+                void process(const float* a, int n, double u) override { in->process(a, n, u); }
+                uint64_t slotsSkipped() const override { return s->n.load(); } };
+            auto w = new W(); w->in = mk(); w->s = sk3; return std::unique_ptr<digi::Engine>(w); }; }
+        auto nCw3 = std::make_shared<std::atomic<uint64_t>>(0), nRt3 = std::make_shared<std::atomic<uint64_t>>(0);
+        std::vector<digi::ModeDef> ms3 = { sm3, iqMode("CWX", 1, 120, 14010000, 14030000, nCw3), iqMode("RTX", 2, 110, 14040000, 14050000, nRt3) };
+        digi::Spotter sp3(digi::Spotter::Scope::Band, ms3, nullptr, nullptr, nullptr);
+        double behind3 = 0; std::vector<std::string> logs3;
+        sp3.setBehind([&] { return behind3; });
+        sp3.setLog([&](const std::string& l) { logs3.push_back(l); });
+        sp3.setBudgetCap(2.0);
+        sp3.setCpuView([&] { return view; });
+        double t3 = 0;
+        auto run3 = [&](double secs) { for (double end = t3 + secs; t3 < end; t3 += 0.01) sp3.feedIq(z.data(), 960, rate, centre, utc0 + t3 + 0.01, nullptr, 0, 0, 0); };
+        auto st3 = [&](const char* m) { for (auto& x : sp3.status()) if (x.mode == m) return std::string(digi::stateWord(x.state)); return std::string("-"); };
+        run3(23);
+        ok(std::fabs(sp3.budgetUnits() - 8.0) < 1e-9, "nobody listening on 4 cores: the Band cap is 4 × the benchmark's (2 → " + std::to_string(sp3.budgetUnits()) + " units)");
+        sk3->n = 1; run3(3); sk3->n = 2; run3(3);
+        ok(sp3.pauseLevel() == 0 && st3("CWX") == "active" && st3("RTX") == "active",
+           "headroom: skipped slots pause NOTHING — CW and RTTY carry on (" + st3("CWX") + ", " + st3("RTX") + ")");
+        ok(std::fabs(sp3.budgetUnits() - 8.0) < 1e-9, "…and the skips do not cut the governor's budget either");
+        bool said3 = false; for (auto& l : logs3) if (l.find("the continuous modes carry on (nobody listening, the CPU has headroom)") != std::string::npos) said3 = true;
+        ok(said3, "the log says why nothing paused");
+        behind3 = 1.8; run3(6);
+        ok(sp3.pauseLevel() == 0, "a 6 s burst over the line (1.8 s behind): nothing pauses — it must last 10 s");
+        behind3 = 0; run3(2);
+        behind3 = 1.8; run3(11.5);
+        ok(sp3.pauseLevel() == 1 && st3("CWX") == "paused" && st3("RTX") == "active", "behind for over 10 s: CW pauses first (" + st3("CWX") + ")");
+        behind3 = 0; run3(70);
+        ok(sp3.pauseLevel() == 0, "caught up: resumed as before (30 s of calm)");
+        // ★ a listener joins: today's rule at once — the cap back to the benchmark's, a skip pauses CW, then RTTY
+        view = digi::Spotter::CpuView();
+        run3(1);
+        ok(sp3.budgetUnits() <= 2.0 + 1e-9, "a listener joined: the Band cap falls back to the benchmark's 2 units at once (" + std::to_string(sp3.budgetUnits()) + ")");
+        const uint64_t ft3 = cs3->total;
+        sk3->n = 3; run3(2);
+        ok(sp3.pauseLevel() == 1 && st3("CWX") == "paused" && st3("RTX") != "paused",
+           "a listener on: one skipped slot pauses CW FIRST, RTTY not yet paused (" + st3("CWX") + ", " + st3("RTX") + " — the governor's cut may shed it)");
+        run3(4); sk3->n = 4; run3(3);   // ★ the next skip after the 5 s step (one inside it is consumed — beta91's rule)
+        ok(sp3.pauseLevel() == 2 && st3("RTX") == "paused", "…another skip: then RTTY");
+        run3(16);
+        ok(cs3->total > ft3 && st3("FT8S") != "paused", "the slotted mode keeps its slots throughout");
     }
 
     std::printf("── ★ V12 beta91: ONE BUDGET — a weak box sheds the CW / RTTY / PSKW chips before it is overloaded ──\n");

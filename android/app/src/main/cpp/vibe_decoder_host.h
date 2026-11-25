@@ -74,6 +74,7 @@
 #include "vibe_nav_run.h"      // ★ V12 VOR bearing + ILS deviation on the channel IQ — docs/v12/VOR-ILS.md
 #include "vibe_sarsat_run.h"   // ★ V12 COSPAS-SARSAT 406 MHz beacons on the channel IQ — docs/v12/SARSAT.md
 #include "vibe_clock.h"
+#include "vibe_bg_fullcpu.h"   // ★★★ beta94 nobody listening: background decoding may use the whole machine
 #include "vibe_spot_report.h"   // ★ V12 beta90: the spots to PSK Reporter / WSPRnet (owner switch, off by default)
 #include "vibe_thread.h"
 
@@ -117,6 +118,10 @@ public:
     virtual int  max() const = 0;
     /** Slots held right now — box-wide where the implementation can see the box. */
     virtual int  inUse() const = 0;
+    /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): claim under `limit` instead of max() — BACKGROUND decoding's extra
+     *  slots over the box's limit while its radio is idle. Listeners never call it; one arriving to a full box makes room
+     *  (BgRegistry::makeRoomForListener). Default: no such thing, an ordinary claim. */
+    virtual int  claimWithin(int limit) { (void)limit; return claim(); }
 };
 
 /** ★★ THE BOX-WIDE SLOTS: slot i is the file <dir>/decoder-slot-<i>.lock, held by an exclusive
@@ -143,8 +148,9 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         if (held_.empty() && local_ == 0) dir_ = d;
     }
-    int claim() override {
-        const int m = max();
+    int claim() override { return claimWithin(max()); }
+    int claimWithin(int limit) override {
+        const int m = std::max(1, std::min(limit, 64));   // ★ 64: inUseLocked's probe range
         std::lock_guard<std::mutex> lk(m_);
         if (dir_.empty()) {
             if (local_ >= m) return -1;
@@ -315,6 +321,9 @@ public:
         /** ★ The RTTY skimmer's search workers (the owner's vibeserver.json "rttySkimWorkers", else the benchmark's / the
          *  hardware's default — rttySkimDefaultWorkers). Empty = the hardware default. */
         std::function<int()> rttySkimWorkers;
+        /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): background decoding's budget now — the RTTY skimmer's workers,
+         *  the Band governor's cap and pause rule follow it live. Null = a listener's host (today's budget, unchanged). */
+        std::shared_ptr<const bg::fullcpu::Live> bgCpu;
         /** ★ A listener's AUDIO frequency → RF (their dial and mode: USB dial + a, LSB dial − a, this server's CW
          *  dial + a − 600). Empty = dial + audio. A skimmer's IQ carries its own centre. */
         std::function<double(double)> rfOfAudio;
@@ -538,6 +547,18 @@ public:
                 iqSpotter_->setSkipped([audio] { return audio->slotsSkipped(); });
                 iqSpotter_->setLog([this](const std::string& l) { log(l); });
                 iqSpotter_->setCpu([this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); });
+            }
+            /* ★★★ beta94 NOBODY LISTENING: background decoding's Band follows what it may use now — the cap × the cores
+             *  allowed, and the looser pause rule while the machine has headroom (vibe_bg_fullcpu.h). */
+            if (env_.bgCpu) {
+                auto L = env_.bgCpu;
+                auto view = [L] {
+                    digi::Spotter::CpuView v;
+                    v.scale = L->budgetScale(); v.skipCounts = L->skipCounts(); v.behindHoldSec = L->behindHoldSec();
+                    return v;
+                };
+                spotter_->setCpuView(view);
+                if (iqSpotter_) iqSpotter_->setCpuView(view);
             }
             statusSent_ = ~0ull; statusAt_ = 0;
             skimSent_.clear(); skimAt_ = 0;   // ★ beta92: the band skimmer's frame starts again with the run
@@ -1697,7 +1718,14 @@ private:
         o.cpu = [this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); };
         o.log = [this](const std::string& l) { log(l); };
         const int nw = env_.rttySkimWorkers ? env_.rttySkimWorkers() : rttySkimDefaultWorkers();
-        rttySkim_.reset(new RttySkimRun(w, nw > 0 ? nw : rttySkimDefaultWorkers(), std::move(o)));
+        const int floorW = nw > 0 ? nw : rttySkimDefaultWorkers();
+        if (env_.bgCpu) {
+            // ★★★ beta94: background's skimmer spreads to the cores nobody is using, never below the owner's / default figure
+            auto L = env_.bgCpu;
+            o.workersNow = [L, floorW] { return std::max(floorW, L->rttyWorkers.load(std::memory_order_relaxed)); };
+            o.background = true;
+        }
+        rttySkim_.reset(new RttySkimRun(w, floorW, std::move(o)));
         cwWidth_.store(w, std::memory_order_relaxed);
         if (env_.rttySkimSpotTap) { DecoderTapPtr t = env_.rttySkimSpotTap(); std::lock_guard<std::mutex> tl(tapMtx_); cwTap_ = std::move(t); }
         if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);

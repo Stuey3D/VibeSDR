@@ -1,5 +1,5 @@
 // test_admin_bg.ts — the admin page's background-decoding line (web/client/src/adminBg.ts, V12 beta 4).
-import { bgLines, bgVfoLine, bgDuration, bgCpuText } from '../web/client/src/adminBg.ts';
+import { bgLines, bgVfoLine, bgDuration, bgCpuText, bgFullCpuText } from '../web/client/src/adminBg.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -78,6 +78,16 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   ok(e.head.endsWith('busiest thread 33 % (vibe-bgdsp) · eased for listeners (2 of 9 paused, extra modes off on 1 band)') && !e.warn, `eased head, not a warning: ${e.head}`);
   ok(e.rows[0].includes('Band skimmer 40 m · CW / RTTY / PSK eased off for listeners · running'), `chips eased: ${e.rows[0]}`);
   ok(e.rows[1] === '10100.8 RTTY weather · paused (eased for listeners)', `paused for listeners: ${e.rows[1]}`);
+}
+
+// ★★★ beta94 nobody listening — background may use the whole machine
+{
+  ok(bgFullCpuText(undefined) === '' && bgFullCpuText({ cores: 0 }) === '', 'today\'s budget: nothing said');
+  ok(bgFullCpuText({ cores: 4, rttyWorkers: 4, extraSlots: 4 }) === 'nobody listening \u2014 using up to 4 cores (4 RTTY search workers, 4 extra decoder slots)', 'four cores');
+  ok(bgFullCpuText({ cores: 1, rttyWorkers: 2, extraSlots: 1 }) === 'nobody listening \u2014 using up to 1 core (2 RTTY search workers, 1 extra decoder slot)', 'one core, singular');
+  const f = bgLines({ ...run, runner: { ...run.runner, fullCpu: { cores: 2, rttyWorkers: 2, extraSlots: 2 } } })!;
+  ok(f.head.endsWith(' · nobody listening \u2014 using up to 2 cores (2 RTTY search workers, 2 extra decoder slots)') && !f.warn, `full head: ${f.head}`);
+  ok(!bgLines(run)!.head.includes('nobody listening'), 'absent on today\'s budget');
 }
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);
