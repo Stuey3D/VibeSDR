@@ -29,7 +29,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View, ViewStyle, type LayoutChangeEvent,} from 'react-native';
+  View, ViewStyle, type LayoutChangeEvent, useWindowDimensions,} from 'react-native';
 import { useRegionHandback, useNavFocus } from './PanelNav';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
@@ -3244,7 +3244,14 @@ function ControlsBar({
   const solidDeck = fpTheme.opaque && !ct.plate;
   const s = useUiScale();
   const deckSettled = useRef<(() => void) | undefined>(undefined);
-  const rot = useRotateSlide(s.W, s.H, deckSettled);
+  /* ★★★ A ROTATION IS THE WINDOW'S, NOT THE LAYOUT'S. useUiScale's W / H follow a UiWindowOverride (iPhone Duo,
+   *  half-open: the deck laid out for its half), so turning the phone from half-open portrait to landscape was NOT a
+   *  width / height swap here (669 x 447 → 951 x 669) while it was one for the window — the deck never went away and
+   *  came back, so it never called notifyRevealed, and everything waiting on that (RotateFade: the decoder box; the
+   *  station strip) stayed invisible. Stuart, open inner screen in landscape: "decoder box should be in landscape mode".
+   *  The real window here, as RotateFade and the strip read it. With no override the two are the same numbers. */
+  const win = useWindowDimensions();
+  const rot = useRotateSlide(win.width, win.height, deckSettled);
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
    *  8.33 kHz channel's name is not its frequency (118.010 tunes 118.0083 MHz), and the name is what a
