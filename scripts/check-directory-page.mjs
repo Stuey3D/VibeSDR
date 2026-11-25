@@ -102,7 +102,7 @@ const api = new Function(src + `
            set NEEDLE(v){ needleV = v; vfoLive = true; }, set ANCHOR(v){ needleA = v; },
            set RANGE(v){ rangeSet = v; }, bandsOn, countriesOn,
            learnBands, renderDial, renderCountries, matches, activeRegion, planBandList,
-           demoServers, DEMO_PLACES,
+           demoServers, DEMO_PLACES, satBadge, adsbBadge, serverCapBadges, modesTag, modesOf,
            get ROWS(){ return DIAL_ROWS; } };`)();
 
 api.PLANv = PLAN;
@@ -153,6 +153,22 @@ api.ALLv = dir.servers.concat(demo);
 api.learnBands(api.ALLv ?? []);
 api.renderDial();
 ok(api.ROWS.length === 2, 'the dial still draws with the demo estate');
+
+// ★★ THE SATELLITE BADGE (beta94, Stuart 11-25) — said by the radio's `modes` ("sat"), never guessed: drawn for a radio that
+//    lists it, on its server's collapsed row after ADS-B, and nothing at all for a radio (or an older server) that does not.
+const SAT_TITLE = 'Satellite mode: tracks passes, Doppler-corrected';
+const satRadio = { id: 'sat', modes: ['nfm', 'usb', 'adsb', 'sat'] };
+ok(api.satBadge(satRadio).includes('class="capSat"') && api.satBadge(satRadio).includes(`title="${SAT_TITLE}"`),
+   'a radio listing "sat": the satellite badge, with its tooltip');
+ok(api.satBadge({ id: 'x', modes: ['nfm', 'usb'] }) === '', 'a radio not listing "sat": no satellite badge');
+ok(api.satBadge({ id: 'old' }) === '' && api.satBadge(null) === '', 'an older server (no modes at all): no satellite badge');
+ok(api.modesOf(satRadio).includes('sat') && api.modesTag(api.modesOf(satRadio)).includes('Satellite'),
+   '"sat" counts as a mode and is named in the MODES list ("Satellite")');
+const rowCaps = api.serverCapBadges({ radios: [{ id: 'a', modes: ['wfm'] }, satRadio] });
+ok(rowCaps.includes('capSat') && rowCaps.indexOf('capAdsb') < rowCaps.indexOf('capSat'),
+   'the server row: the satellite badge from any radio, after ADS-B');
+ok(!api.serverCapBadges({ radios: [{ id: 'a', modes: ['wfm', 'adsb'] }] }).includes('capSat'),
+   'the server row: no satellite badge when no radio lists "sat"');
 
 // ★★ A PHONE-WIDTH PASS. The dial is drawn in pixels, so a narrow window is a different drawing,
 //    not the same one scaled — and the numerals, the band labels and the tick ladder all have to

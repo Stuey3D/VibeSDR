@@ -298,6 +298,8 @@
            border-radius:4px; color:var(--phosphor); font:700 11px/1 ui-monospace,monospace; letter-spacing:.08em; flex:none; }
   .capRds { display:inline-block; flex:none; width:64px; height:24px; line-height:0; color:var(--phosphor); }
   .capAdsb { display:inline-flex; align-items:center; justify-content:center; flex:none; width:24px; height:21px; color:var(--phosphor); }
+  /* ★ beta94 the satellite beside it — the same box, so the row's heights and gaps do not move. */
+  .capSat { display:inline-flex; align-items:center; justify-content:center; flex:none; width:24px; height:21px; color:var(--phosphor); cursor:help; }
   /* ★ The RDS mark ships with black fills in inline styles; the badge colour wins. */
   .capRds svg path, .capRds svg g { fill: currentColor !important; stroke: none; }
   .modesTag { font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--line); color:var(--dim);
@@ -1388,11 +1390,12 @@ const MODE_NAMES = {
   usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
   dab: 'DAB', drm: 'DRM', rds: 'Advanced RDS',
   adsb: 'ADS-B', avdata: 'Aviation datalink', hfdl: 'HFDL', ais: 'AIS', ism: 'ISM', ndb: 'NDB', sondes: 'Radiosondes',
-  aprs: 'APRS', lrpt: 'METEOR LRPT', fctlm: 'FUNcube telemetry',
+  aprs: 'APRS', lrpt: 'METEOR LRPT', fctlm: 'FUNcube telemetry', orbcomm: 'ORBCOMM',
+  sat: 'Satellite',   // ★ beta94 SATELLITE mode (the server's vsSatOffered) — the satellite badge reads it, as ADS-B's reads "adsb"
   freedv: 'FreeDV', m17: 'M17', dvsig: 'DMR / D-STAR / YSF / NXDN',
   rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX', sstv: 'SSTV', ft8: 'FT8 / FT4', jtty: 'JTTY', mfsk: 'MFSK / Olivia / THOR', hell: 'Feld Hell',
   dsc: 'DSC', sitora: 'SITOR-A', same: 'EAS / SAME', selcal: 'SELCAL', ale: 'ALE', tones: 'DTMF / 5-tone',
-  vor: 'VOR / ILS', sarsat: '406 MHz beacons', ncdxf: 'NCDXF beacons', balloon: 'Balloons', time: 'Time signals',
+  vor: 'VOR / ILS', vormap: 'VOR / ILS map', sarsat: '406 MHz beacons', ncdxf: 'NCDXF beacons', balloon: 'Balloons', time: 'Time signals',
   iq48: 'IQ48',   // ★ not a mode the radio lists — derived from rawIq === 'public' (capsOf)
 };
 const MODE_ORDER = Object.keys(MODE_NAMES);
@@ -1435,14 +1438,16 @@ function serverCaps(s) {
   const union = new Set();
   for (const r of rs) for (const m of modesOf(r)) union.add(m);
   const any = (k) => rs.some((r) => r[k] === true);
-  return { dab: any('dab'), rdsx: any('rdsx'), iq: rs.some((r) => r.rawIq === 'public'), adsb: union.has('adsb'), modes: [...union] };
+  return { dab: any('dab'), rdsx: any('rdsx'), iq: rs.some((r) => r.rawIq === 'public'), adsb: union.has('adsb'),
+           sat: union.has('sat'), modes: [...union] };
 }
 function serverCapBadges(s) {
   const c = serverCaps(s);
-  // ★ One order, open or closed: modes · IQ48 · Advanced RDS · DAB · ADS-B (Stuart, 2026-09-15; ADS-B 2026-10-24).
+  // ★ One order, open or closed: modes · IQ48 · Advanced RDS · DAB · ADS-B · satellite (Stuart, 2026-09-15; ADS-B 2026-10-24;
+  //   satellite 2026-11-25).
   const parts = [modesTag(c.modes), c.iq ? iqBadge({ rawIq: 'public' }) : '',
                  c.rdsx ? advRdsBadge({ rdsx: true }) : '', c.dab ? dabBadge({ dab: true }) : '',
-                 c.adsb ? adsbBadge({ modes: ['adsb'] }) : ''].filter(Boolean);
+                 c.adsb ? adsbBadge({ modes: ['adsb'] }) : '', c.sat ? satBadge({ modes: ['sat'] }) : ''].filter(Boolean);
   return parts.length ? `<span class="caps">${parts.join('')}</span>` : '';
 }
 
@@ -1571,7 +1576,7 @@ function radioLine(r, s) {
   //   of its own at the bottom (Stuart, 2026-09-15).
   const card = `<div class="rcard">
       <div class="rcTop"><span class="rcName">${esc(cleanRadioName(r.name || r.driver || 'Radio'))}</span>
-        <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}${adsbBadge(r)}</span></div>
+        <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}${adsbBadge(r)}${satBadge(r)}</span></div>
       <div class="rcSub" title="${esc(kindTitle)}">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
       ${bands.covers ? `<div class="rcSub rcBands">${esc(bands.covers)}</div>` : ''}
@@ -1623,6 +1628,21 @@ const DABPLUS_LOGO_SVG = `<svg style="width:100%;height:100%;display:block" vers
 function adsbBadge(r) {
   if (!r || !modesOf(r).includes('adsb')) return '';
   return `<span class="capAdsb" title="ADS-B — aircraft on 1090 MHz, decoded by this receiver, with a live map"><svg viewBox="0 0 26 26" width="20" height="20" aria-hidden="true"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="currentColor"/></svg></span>`;
+}
+/** ★ SATELLITE (Stuart, 2026-11-25: "the directory page should have a little satellite icon for servers that have
+ *  satellite mode enabled") — the receiver offers SATELLITE mode: pick a pass, the dial follows its Doppler. Said by the
+ *  radio's `modes` ("sat" — a beta94 server lists it only where a downlink is in reach, a location is set and a
+ *  demodulator is left on), never guessed: an older server never says it, so its card shows nothing. Drawn in the
+ *  ADS-B badge's box and colour. */
+const SAT_SVG = `<svg viewBox="0 0 26 26" width="20" height="20" aria-hidden="true"><g transform="rotate(-45 13 13)" fill="currentColor">`
+  + `<rect x="10" y="8.5" width="6" height="8" rx="1"/>`
+  + `<rect x="1.5" y="9.5" width="3" height="6" rx=".4"/><rect x="5" y="9.5" width="3" height="6" rx=".4"/>`
+  + `<rect x="18" y="9.5" width="3" height="6" rx=".4"/><rect x="21.5" y="9.5" width="3" height="6" rx=".4"/>`
+  + `<rect x="8" y="12" width="2" height="1"/><rect x="16" y="12" width="2" height="1"/>`
+  + `<rect x="12.4" y="16.5" width="1.2" height="2.2"/><path d="M8.6,22.6 Q13,17.4 17.4,22.6 Z"/></g></svg>`;
+function satBadge(r) {
+  if (!r || !modesOf(r).includes('sat')) return '';
+  return `<span class="capSat" title="Satellite mode: tracks passes, Doppler-corrected" aria-label="Satellite mode: tracks passes, Doppler-corrected" role="img">${SAT_SVG}</span>`;
 }
 function dabBadge(r) {
   if (!r || r.dab !== true) return '';
