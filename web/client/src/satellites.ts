@@ -35,9 +35,13 @@ import {
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbShownSats, orbViewMerge,
          parseOrbcommPkt, parseOrbcommStatus, type OrbView } from '../../../src/services/orbcomm';
 import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
+// ★★★ beta94 THE TRANSPONDER FINDER — the app's words and rules (src/services/xpdr.ts)
+import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrRowsSorted, xpdrWhat, XPDR_HINT, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, SKY_LEGEND, SKY_PLOT_WHAT, type SkyDot } from '../../../src/utils/skyPlot';
 
 export interface SatPanelDeps {
+  /** ★★★ beta94 the transponder finder's LISTEN on a voice row: tune VFO A there (USB) and ask the finder to follow it */
+  xpdrListen?: (row: XpdrRow) => void;
   list: () => void;
   /** {"op":"pick"} (spectrum.ts satPick — false = the ask-before-tuning gate held it). */
   pick: (norad: number, tx: number, doppler: boolean) => boolean;
@@ -183,6 +187,17 @@ const CSS = `
 #satPanel .sat-tlm[hidden]{display:none}
 #satPanel .sat-tlm .sat-tk{display:inline-flex;gap:6px;margin-left:6px}
 #satPanel .sat-tlm .sat-tv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1px 12px;margin-top:3px}
+/* ★★★ beta94 THE TRANSPONDER FINDER: a row per signal — frequency, what it is, SNR and when heard; LISTEN on a voice; a CW
+   row's decoded text under it; a row unheard for a minute faded; the followed row lit */
+#satPanel .sat-xp{margin-top:6px;font:12px/1.35 ui-monospace,Menlo,monospace}
+#satPanel .sat-xp[hidden]{display:none}
+#satPanel .sat-xp .sat-cav{font-family:system-ui,sans-serif;margin:2px 0}
+#satPanel .sat-xp .sat-note{font-family:system-ui,sans-serif;color:var(--amber);font-size:12px}
+#satPanel .sat-xp .sat-xr{border-top:1px solid var(--bar-border,var(--btn-border));padding:3px 0;overflow-wrap:anywhere}
+#satPanel .sat-xp .sat-xr.faded{opacity:.45}
+#satPanel .sat-xp .sat-xr.on .sat-xf{color:var(--amber)}
+#satPanel .sat-xp .sat-xr button{min-height:26px;padding:1px 8px;margin-left:4px}
+#satPanel .sat-xp .sat-xt{color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* ★★ 2026-11-24 ORBCOMM: the birds, the carriers' manual fallback, the sky plot, the packets (subscriber messages raw) */
 #satPanel .sat-orb{margin-top:6px;font:12px/1.35 ui-monospace,Menlo,monospace}
 #satPanel .sat-orb[hidden]{display:none}
@@ -296,6 +311,7 @@ export class SatPanel {
   private bText = ''; private bPackets: string[] = []; private bStatus = ''; private bPicture = false; private bPictureDone = false;
   // ★★ 2026-11-24 ORBCOMM — the decoder's state + packets, the manual fallback, the sky plot (stored dots + live)
   private sOrb!: HTMLElement; private oTxt!: HTMLElement; private oSky!: HTMLElement; private oPk!: HTMLElement;
+  private sXp!: HTMLElement; private xp: XpdrStatus | null = null; private xpKey = '';   // ★★★ beta94 the transponder finder
   private orb: OrbView | null = null;
   private orbMaxK = 0;
   private orbSky = true;
@@ -327,6 +343,7 @@ export class SatPanel {
       +   `<div class="sat-key sat-dim" data-s="key" hidden></div></div></div>`
       + `<div class="sat-img" data-s="img" hidden></div><div class="sat-cw" data-s="cw" hidden></div><div class="sat-pk" data-s="pk" hidden></div><div class="sat-tlm" data-s="tlm" hidden></div>`
       + `<div class="sat-orb" data-s="orb" hidden><div data-o="txt"></div><div class="sat-sky" data-o="sky"></div><div data-o="pk"></div></div>`
+      + `<div class="sat-xp" data-s="xp" hidden></div>`
       + `<div class="sat-img sat-bimg" data-s="bimg" hidden><canvas width="320" height="256" aria-label="The picture VFO B is receiving"></canvas></div></div>`
       + `<div class="sat-sync sat-dim" data-s="sync"></div>`
       + `<details class="sat-list" data-s="list" open><summary>SATELLITES</summary><div data-s="rows"></div></details>`
@@ -340,6 +357,7 @@ export class SatPanel {
     this.sKey = q('key'); this.sTlm = q('tlm'); this.sMap = this.el.querySelector('[data-act="map"]') as HTMLButtonElement;
     this.sVb = q('vb'); this.sCw = q('cw'); this.sBImg = q('bimg'); this.bCanvas = this.sBImg.querySelector('canvas') as HTMLCanvasElement;
     this.sOrb = q('orb');
+    this.sXp = q('xp');
     this.oTxt = this.sOrb.querySelector('[data-o="txt"]') as HTMLElement; this.oSky = this.sOrb.querySelector('[data-o="sky"]') as HTMLElement;
     this.oPk = this.sOrb.querySelector('[data-o="pk"]') as HTMLElement;
     // ★ 1.6 the reminders' pop-ups — their own place at the top of the window (they fire with the mode off too)
@@ -387,7 +405,7 @@ export class SatPanel {
     this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
     this.track = null; this.trackAsk = null; this.tlm = null;
     this.aText = ''; this.aBeacon = null; this.vfobClear();
-    this.orb = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
+    this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
     this.lend(false);
   }
   private vfobClear() {
@@ -470,7 +488,7 @@ export class SatPanel {
     if (r.pickGone && this.picked) {
       this.picked = null; this.pending = null; this.picture = false; this.pictureDone = false; this.decLine = ''; this.packets = [];
       this.track = null; this.trackAsk = null; this.tlm = null; this.aText = ''; this.aBeacon = null; this.vfobClear(); this.lend(false);
-      this.orb = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
+      this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++;
       this.refusal = r.why || 'The satellite pick ended';
       this.deps.pickGone?.();
       this.sList.open = true;
@@ -483,7 +501,7 @@ export class SatPanel {
     if (!this.on) return;
     const changed = !this.picked || this.picked.norad !== p.norad || this.picked.tx !== p.tx;
     if (changed) { this.aText = ''; this.aBeacon = null; this.vfobClear(); this.picture = false; this.pictureDone = false; this.packets = []; this.decLine = ''; this.sized = false; this.track = null; this.trackAsk = null; this.tlm = null; if (this.big !== this.handBig) this.setBig(this.handBig, false); if (this.tlmCharts) this.tlmLoad(); }
-    if (changed) { this.orb = null; this.skyDots = []; this.skyNote = ''; this.skySeq++; }
+    if (changed) { this.orb = null; this.xp = null; this.skyDots = []; this.skyNote = ''; this.skySeq++; }
     this.picked = p; this.pending = null; this.refusal = '';
     if (changed && p.decoder === 'orbcomm') this.skyLoad();
     const t = this.pickedTx();
@@ -538,6 +556,16 @@ export class SatPanel {
     }
     if (this.open) this.paintPick();
   }
+  /** ★★★ beta94 {"type":"xpdr_status","data":…} from the pick's transponder finder (parsed in src/services/xpdr.ts) */
+  xpdr(data: unknown) {
+    if (this.picked?.decoder !== 'xpdr') return;
+    const st = parseXpdrStatus(data);
+    if (!st) return;
+    this.xp = st;
+    if (this.open) this.paintPick();
+  }
+  /** the transponder finder's state now (tests, and the waterfall's overlay) */
+  xpdrNow(): XpdrStatus | null { return this.picked?.decoder === 'xpdr' ? this.xp : null; }
   /** the ORBCOMM state now (tests) */
   orbNow(): OrbView | null { return this.orb; }
   /** This radio's stored ORBCOMM dots (the server's skyplot.json), read once per pick; live dots join as they come. */
@@ -596,6 +624,7 @@ export class SatPanel {
     if (act === 'tlmcharts') { this.tlmCharts = !this.tlmCharts; if (this.tlmCharts) { this.tlmRaw = false; this.tlmLoad(); } this.paintPick(); return; }
     if (act === 'tlmall') { this.tlmAll = !this.tlmAll; this.paintPick(); return; }
     if (act === 'orbsky') { this.orbSky = !this.orbSky; this.paintPick(); return; }
+    if (act === 'xlisten') { const r = this.xp?.rows.find((x) => x.id === b.dataset.xid); if (r && this.deps.xpdrListen) this.deps.xpdrListen(r); return; }
     if (act === 'orbmax') { this.orbMaxK = Math.max(0, Math.min(6, Number(b.dataset.v) || 0)); this.deps.orbMax?.(this.orbMaxK); this.paintPick(); return; }
     if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
     if (act === 'lead') {
@@ -795,6 +824,7 @@ export class SatPanel {
     }
     // ★★ 2026-11-24 ORBCOMM — its own panel
     this.paintOrb(showA && this.picked?.decoder === 'orbcomm');
+    this.paintXpdr(showA && this.picked?.decoder === 'xpdr');   // ★★★ beta94
     // ★★ 1.9 the MAP key — a packet downlink, once a station with a position is heard (no dead key)
     this.sMap.hidden = !satMapOffered(t, this.deps.mapStations?.() ?? 0) || !this.deps.openMap;
     // ★★★ beta92 after A's area: B's line, and B's area when B's line is the one shown (A's parts are hidden then)
@@ -806,6 +836,30 @@ export class SatPanel {
   /** ★★ 2026-11-24 THE ORBCOMM PANEL: the head (+ SKY PLOT), the caveat (subscriber messages are never decoded), each bird
    *  with its housekeeping, CARRIERS AUTO / 1–6, the sky plot (redrawn only when its dots change), the packets. Each part is
    *  written only when its text changed — this runs every second with the countdowns. */
+  /** ★★★ beta94 THE TRANSPONDER FINDER's rows (Stuart 11-24): every signal it has found — voices first while on air, each
+   *  with LISTEN (VFO A snaps there and follows the person), every CW row with what it decoded (the beacon one of them);
+   *  a row unheard for a minute fades. The follow's state in words. Written only when it changed. */
+  private paintXpdr(show: boolean) {
+    this.sXp.hidden = !show;
+    if (!show) return;
+    const st = this.xp;
+    let h = `<div class="sat-cav">${esc(XPDR_HINT)}</div>`;
+    const fw = xpdrFollowText(st?.follow ?? null);
+    if (fw) h += `<div class="sat-note">${esc(fw)}</div>`;
+    const rows = xpdrRowsSorted(st?.rows ?? []);
+    if (!rows.length) h += `<div class="sat-dim">no signals found yet</div>`;
+    for (const r of rows.slice(0, 16)) {
+      const following = st?.follow?.id === r.id;
+      h += `<div class="sat-xr${xpdrFaded(r) ? ' faded' : ''}${following ? ' on' : ''}" data-xid="${esc(r.id)}">`
+        + `<span class="sat-xf">${esc(xpdrFreqText(r))}</span> <b>${esc(xpdrWhat(r))}</b> <span class="sat-dim">${esc(`${Math.round(r.snr)} dB · ${xpdrAgo(r)}`)}</span>`
+        + (r.kind === 'voice' && this.deps.xpdrListen
+          ? ` <button data-act="xlisten" data-xid="${esc(r.id)}" class="${following ? 'on' : ''}" aria-pressed="${following}" title="Put VFO A on this voice (USB) — it follows the station while they drift">${following ? 'LISTENING' : 'LISTEN'}</button>`
+          : '')
+        + (r.kind === 'cw' && r.text ? `<div class="sat-xt">${esc(r.text)}</div>` : '')
+        + `</div>`;
+    }
+    if (h !== this.xpKey) { this.xpKey = h; this.sXp.innerHTML = h; }
+  }
   private paintOrb(show: boolean) {
     this.sOrb.hidden = !show;
     if (!show) return;

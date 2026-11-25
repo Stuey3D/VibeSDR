@@ -69,7 +69,8 @@ import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD 
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 import { parseBandSkim, type BandSkim } from './bandSkim';
 import { parseSatTelemetry } from './satellites';   // ★ SATELLITE-BEST 1.3
-import { orbAttachParams, parseOrbcommPkt, parseOrbcommStatus, type OrbPkt, type OrbStatus } from './orbcomm';   // ★★ 2026-11-24 ORBCOMM
+import { orbAttachParams, parseOrbcommPkt, parseOrbcommStatus, type OrbPkt, type OrbStatus } from './orbcomm';
+import { parseXpdrStatus, type XpdrStatus } from './xpdr';   // ★★★ beta94 the transponder finder   // ★★ 2026-11-24 ORBCOMM
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
   | 'hfdl'    // ★ V12 HFDL — a VibeServer's aircraft datalink on the USB dial (vibe_hfdl_run.h): a line per message, hfdl_status
   | 'orbcomm' // ★★ V12 2026-11-24 ORBCOMM, attached by a SATELLITE pick: orbcomm_status + orbcomm_pkt (orbcomm.ts) — the SATELLITE box draws them
+  | 'xpdr'    // ★★★ beta94 THE TRANSPONDER FINDER, attached by a SATELLITE pick of a linear transponder: xpdr_status (xpdr.ts)
   | 'fctlm'   // ★ V12 SATELLITE-BEST 1.2/1.3 — AO-73's FUNcube telemetry, attached by a SATELLITE pick: text lines, 0x03, fctlm_status (satellites.ts parseSatTelemetry)
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
@@ -225,6 +227,8 @@ export interface DecoderCallbacks {
   /** ★★ 2026-11-24 ORBCOMM: the decoder's state once a second (orbcomm_status) and a packet worth a line (orbcomm_pkt) —
    *  drawn in the SATELLITE box (subscriber messages as raw bytes only). */
   onOrbcomm?: (m: { status?: OrbStatus; pkt?: OrbPkt }) => void;
+  /** ★★★ beta94 the transponder finder's rows once a second (xpdr_status) — the SATELLITE box and the waterfall draw them. */
+  onXpdr?: (st: XpdrStatus) => void;
   /** ★ SATELLITE-BEST 1.3: a FUNcube telemetry report (fctlm_status) — drawn in the SATELLITE box. */
   onSatTelemetry?: (t: Partial<import('./satellites').SatTelemetry>) => void;
   /** 'idle' | 'sync' | 'rx' | 'active' — drives the decoder panel dot. */
@@ -379,6 +383,8 @@ export class DecoderClient {
    *  slice), so the app JOINS the server's run; and the manual fallback under AUTO — "max_carriers" 1–6 (0 = AUTO). */
   orbcommParams: Record<string, unknown> | null = null;
   orbcommMaxCarriers = 0;
+  /** ★★★ beta94 the transponder finder: the parameters the SATELLITE pick attached it with (its slice), so the app JOINS it. */
+  xpdrParams: Record<string, unknown> | null = null;
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
   /** ★ V12 VOR / ILS: the server's last status (radial / deviation, ident, station). */
@@ -558,6 +564,12 @@ export class DecoderClient {
       try { this.ws.send(JSON.stringify({ type: 'chat_leave' })); } catch {}
     }
     this.chatUser = null;
+  }
+
+  /** ★★★ beta94 the transponder finder's LISTEN: VFO A follows that row ("" = stop). Only while the finder is attached. */
+  xpdrFollow(id: string) {
+    if (this.active !== 'xpdr' || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'xpdr_follow', id: id.slice(0, 12) }));
   }
 
   sendChat(text: string) {
@@ -759,6 +771,11 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'xpdr_status' && m.data) {
+            // ★★★ beta94 the transponder finder — only while OUR finder is attached; checked and bounded in xpdr.ts
+            if (this.active !== 'xpdr') return;
+            const st = parseXpdrStatus(m.data);
+            if (st) { this.cb.onXpdr?.(st); this.cb.onDot(st.rows.some((r) => r.on) ? 'active' : 'idle'); }
           } else if ((m.type === 'orbcomm_status' || m.type === 'orbcomm_pkt') && m.data) {
             // ★★ 2026-11-24 ORBCOMM — only while OUR ORBCOMM decoder is attached; checked and bounded in orbcomm.ts
             if (this.active !== 'orbcomm') return;
@@ -1003,7 +1020,8 @@ export class DecoderClient {
       case 'lrpt':  return { extension_name: 'lrpt', params: lrptAttachParams(this.lrptSymbolRate) };
       // ★ V12 VOR / ILS and 406 MHz beacons: no parameters (AUTO — the channel says VOR / localiser / glideslope).
       case 'vor':    return { extension_name: 'vor', params: {} };
-      case 'orbcomm': return { extension_name: 'orbcomm', params: orbAttachParams(this.orbcommParams, this.orbcommMaxCarriers) };   // ★★ the pick's own (+ max_carriers by hand)
+      case 'orbcomm': return { extension_name: 'orbcomm', params: orbAttachParams(this.orbcommParams, this.orbcommMaxCarriers) };
+      case 'xpdr':   return { extension_name: 'xpdr', params: { ...(this.xpdrParams ?? {}) } };   // ★★★ beta94 the pick's own slice   // ★★ the pick's own (+ max_carriers by hand)
       case 'fctlm':  return { extension_name: 'fctlm', params: { ...(this.fctlmParams ?? {}) } };   // ★ SATELLITE-BEST 1.2: the pick's own (beta92: wide)
       case 'sarsat': return { extension_name: 'sarsat', params: {} };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.

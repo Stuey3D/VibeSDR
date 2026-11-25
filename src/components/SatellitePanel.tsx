@@ -35,6 +35,8 @@ import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky 
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
          type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
+// ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
+import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrRowsSorted, xpdrWhat, XPDR_HINT, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
@@ -116,6 +118,10 @@ export interface SatellitePanelProps {
    *  under AUTO — carriers at most (0 = AUTO) — and its press (the app re-attaches with "max_carriers"); the server's sky
    *  plot read through `skyGet` (the gallery's reader) for THIS radio (`skyRadio`, '' = the server's only one). */
   orbcomm?: OrbView | null;
+  /** ★★★ beta94 the transponder finder's rows for this pick (services/xpdr.ts) and LISTEN on a voice row (the app tunes
+   *  VFO A there in USB and asks the finder to follow it). */
+  xpdr?: XpdrStatus | null;
+  onXpdrListen?: (row: XpdrRow) => void;
   orbMax?: number;
   onOrbMax?: (k: number) => void;
   skyGet?: ((path: string) => Promise<string | null>) | null;
@@ -446,6 +452,35 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   : !!p.telemetry?.values.length && <View style={s.tlmGrid}>
                     {p.telemetry.values.map((v, i) => <Text key={i} style={[s.mono, s.tlmCell]} numberOfLines={1}>{satTelemetryLine(v)}</Text>)}
                   </View>}
+                </View>
+              )}
+              {/* ★★★ beta94 THE TRANSPONDER FINDER (Stuart 11-24): every signal found — voices first while on air, each with
+                   LISTEN (VFO A snaps there and follows the person), every CW row with what it decoded (the beacon one of
+                   them); a row unheard for a minute fades; the follow's state in words */}
+              {confirmed && showA && p.picked?.decoder === 'xpdr' && (
+                <View style={s.pk}>
+                  <Text style={[s.detailNp, s.caveat]}>{XPDR_HINT}</Text>
+                  {!!xpdrFollowText(p.xpdr?.follow ?? null) && <Text style={[s.detailNp, s.orbName]}>{xpdrFollowText(p.xpdr?.follow ?? null)}</Text>}
+                  {xpdrRowsSorted(p.xpdr?.rows ?? []).slice(0, 16).map((r) => {
+                    const following = p.xpdr?.follow?.id === r.id;
+                    return (
+                      <View key={r.id} style={[s.orbBird, xpdrFaded(r) && s.orbHeld]}>
+                        <View style={s.nameRow}>
+                          <Text style={[s.mono, { flexShrink: 1 }, following && s.orbName]} numberOfLines={1}>
+                            {`${xpdrFreqText(r)}  ${xpdrWhat(r)}  ${Math.round(r.snr)} dB · ${xpdrAgo(r)}`}
+                          </Text>
+                          {r.kind === 'voice' && !!p.onXpdrListen && (
+                            <View style={s.keys}>
+                              <DecoderKey label={following ? 'LISTENING' : 'LISTEN'} active={following} onPress={() => p.onXpdrListen!(r)}
+                                          accessibilityLabel={`Put VFO A on the voice at ${xpdrFreqText(r)} MHz — it follows the station while they drift`} />
+                            </View>
+                          )}
+                        </View>
+                        {r.kind === 'cw' && !!r.text && <Text style={[s.mono, s.hex]} numberOfLines={1}>{r.text}</Text>}
+                      </View>
+                    );
+                  })}
+                  {!(p.xpdr?.rows.length) && <Text style={s.detailNp}>no signals found yet</Text>}
                 </View>
               )}
               {/* ★★ 2026-11-24 ORBCOMM: the birds, their housekeeping, the carriers' manual fallback, the sky plot and the

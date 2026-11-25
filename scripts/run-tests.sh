@@ -1032,6 +1032,9 @@ if npx tsx scripts/test_lrpt_outline.ts; then pass=$((pass+1)); else fail=$((fai
 #    orbcomm_pkt parsed defensively, subscriber messages shown as "not decoded" with raw bytes only, the dome's geometry and the
 #    server's SNR ramp, skyplot.json with radio ids and grey dots, an ORBCOMM pick's decoder and listening mode
 if npx tsx scripts/test_orbcomm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta94 THE TRANSPONDER FINDER, the clients' half (src/services/xpdr.ts): xpdr_status parsed defensively, the rows' order
+#    and words, LISTEN only on voices (USB + xpdr_follow), the waterfall overlay through ORBCOMM's layout, the pick's decoder
+if npx tsx scripts/test_xpdr_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 SILENT DECODERS (src/services/silentDecoder.ts): APRS and METEOR LRPT mute the speaker (or, with VFO B on, the VFO
 #   they decode on) and put it back exactly as it was — the rule run every way, and both clients pinned to it
 if npx tsx scripts/test_silent_decoder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

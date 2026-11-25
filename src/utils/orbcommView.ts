@@ -18,6 +18,8 @@ export const ORB_OVERLAY_COLOUR = '#a8d8ff';
 export interface OrbOverlay {
   lo: number; hi: number;
   carriers: { rf: number; locked: boolean; label: string }[];
+  /** ★★★ beta94 the band's label when it is not ORBCOMM's — the transponder finder's (src/services/xpdr.ts) */
+  title?: string;
 }
 /** The overlay for a status — null when there is no slice to draw (an older server, before the first status). */
 export function orbOverlayFrom(st: OrbStatus | null | undefined): OrbOverlay | null {
@@ -32,7 +34,7 @@ export function orbOverlayFrom(st: OrbStatus | null | undefined): OrbOverlay | n
 /** A cheap identity for redraw decisions (changes when anything drawn changes, to 100 Hz). */
 export function orbOverlayKey(ov: OrbOverlay | null): string {
   if (!ov) return '';
-  return `${Math.round(ov.lo / 100)}|${Math.round(ov.hi / 100)}|${ov.carriers.map((c) => `${Math.round(c.rf / 100)}${c.locked ? 'L' : 'h'}${c.label}`).join(',')}`;
+  return `${ov.title ?? ''}|${Math.round(ov.lo / 100)}|${Math.round(ov.hi / 100)}|${ov.carriers.map((c) => `${Math.round(c.rf / 100)}${c.locked ? 'L' : 'h'}${c.label}`).join(',')}`;
 }
 
 export interface OrbOverlayLayout {

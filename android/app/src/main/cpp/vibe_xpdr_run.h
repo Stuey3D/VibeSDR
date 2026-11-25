@@ -46,7 +46,9 @@ namespace cw = vibe::cw;
 class Run {
 public:
     static constexpr double kEdgeHz = 3000.0;       ///< searched beyond the span's ends (a station at the very edge)
-    static constexpr double kBeaconNearHz = 3000.0; ///< a CW row this close to the listed beacon IS the beacon
+    /** ★ the beacon = the ONE CW row nearest the listed figure, within this — listed beacon figures are approximate (RS-44 ~2 kHz
+     *  off on 11-23, AO-7's Mode B beacon has drifted ~4.5 kHz); only one row is ever called the beacon */
+    static constexpr double kBeaconNearHz = 4000.0;
     static constexpr double kListenNearHz = 600.0;  ///< the dial within this of the chosen row = the LISTEN tune has landed
     static constexpr double kPendingSec = 10.0;     ///< a follow asked for whose tune never lands is forgotten
     static constexpr double kMeasuredSec = 1.5;     ///< a measurement newer than this steers; older = held + the guess
@@ -159,9 +161,14 @@ private:
             r.offset = s.offsetHz; r.dialSat = o_.centreHz + s.offsetHz;
             if (tone_ && fid_ == r.id && tone_->measured()) r.dialSat = o_.centreHz + tone_->hz();
             r.ago = std::max(0.0, (nowMs - s.lastMs) / 1000.0); r.snr = s.snrDb; r.wpm = s.wpm;
-            r.beacon = o_.beaconHz > 0 && std::fabs(r.dialSat - o_.beaconHz) <= kBeaconNearHz;
+            r.beacon = false;   // ★ marked below: the nearest one only
             r.call = clean_(s.call, 12); r.text = clean_(s.text, 60);
             v.push_back(std::move(r));
+        }
+        if (o_.beaconHz > 0) {
+            Row* best = nullptr;
+            for (auto& r : v) if (std::fabs(r.dialSat - o_.beaconHz) <= kBeaconNearHz && (!best || std::fabs(r.dialSat - o_.beaconHz) < std::fabs(best->dialSat - o_.beaconHz))) best = &r;
+            if (best) best->beacon = true;
         }
         for (const auto& s : vf_->voices()) {
             Row r; r.id = "v" + std::to_string(s.id); r.voice = true; r.on = s.active;

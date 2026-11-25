@@ -329,7 +329,7 @@ export interface SatPicked {
   /** ★★ beta92 a CW beacon is 'cwskim' (the CW skimmer over 24 kHz centred on the corrected prediction); 'cw' = an older
    *  server's one-signal CW decoder. */
   /** ★★ 2026-11-24 'orbcomm' — ORBCOMM is a regular satellite now: every carrier in the pick's slice decoded (orbcomm.ts). */
-  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm' | 'orbcomm';
+  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm' | 'orbcomm' | 'xpdr';
   /** ★★ beta92 OPEN IN VFO B: the other downlinks of this bird THIS listener may open in VFO B now (the server decides:
    *  inside the capture with their Doppler, VFO B allowed here). Absent = none (or an older server: no key). */
   vfob?: number[];
@@ -349,7 +349,7 @@ export interface SatPicked {
   viewCentre?: number;
 }
 function satDecoderName(d: unknown): SatPicked['decoder'] {
-  return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' ? d : '';
+  return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' || d === 'xpdr' ? d : '';
 }
 export function parseSatPicked(m: unknown): SatPicked | null {
   const o = m as Record<string, unknown> | null;
@@ -422,9 +422,10 @@ export function satVfoBHz(nominalB: number, r: SatReadout | null): number {
 }
 /** What a decoder shows in the box's decoder area: a picture, text (CW), packet lines, telemetry values — '' = nothing. */
 /** ★★ 2026-11-24 'orbcomm': the ORBCOMM panel (orbcomm.ts — birds, housekeeping, the packet list, the sky plot). */
-export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry' | 'orbcomm';
+/** ★★★ beta94 'xpdr': the transponder finder's rows (src/services/xpdr.ts — every CW and voice signal, LISTEN on the voices). */
+export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry' | 'orbcomm' | 'xpdr';
 export function satDecView(d: SatPicked['decoder'] | undefined): SatDecView {
-  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : d === 'orbcomm' ? 'orbcomm' : '';
+  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : d === 'orbcomm' ? 'orbcomm' : d === 'xpdr' ? 'xpdr' : '';
 }
 /** ★ The line switch exists only while B is open AND both lines have a decoder view (Stuart: "when switching between the
  *  lines all it does is change what is shown in the decoder box"). */
@@ -441,6 +442,7 @@ export function satViewShown(aDec: SatPicked['decoder'] | undefined, b: SatVfoB 
 export function satDecWord(decoder: SatPicked['decoder'] | undefined, use: SatUse, sstv: boolean | undefined, big: boolean): string {
   if (decoder === 'fctlm') return 'listening for telemetry';
   if (decoder === 'orbcomm') return ORB_LISTENING;
+  if (decoder === 'xpdr') return 'searching the transponder for signals';   // ★★★ beta94 the finder, before its first rows
   if (decoder === 'cw') return 'CW decoder listening for the beacon';
   if (decoder === 'cwskim') return SAT_BEACON_WORD;
   if (use === 'image') return big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG';

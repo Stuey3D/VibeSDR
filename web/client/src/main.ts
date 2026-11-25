@@ -126,7 +126,8 @@ import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery,
          galleryRangeFooter } from '../../../src/utils/galleryPager';
 import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, radioChipLabel, type LogRadio } from '../../../src/utils/logRadio';
 import { orbAttachParams } from '../../../src/services/orbcomm';
-import { orbOverlayFrom } from '../../../src/utils/orbcommView';   // ★★ 2026-11-24 the ORBCOMM slice on the waterfall   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
+import { orbOverlayFrom } from '../../../src/utils/orbcommView';
+import { xpdrListen, xpdrOverlayFrom } from '../../../src/services/xpdr';   // ★★★ beta94 the transponder finder (its slice + arrows, LISTEN)   // ★★ 2026-11-24 the ORBCOMM slice on the waterfall   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
 import { parseSkyPlotJson, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, skyRadioFromBase, SKY_LEGEND, SKY_PLOT_WHAT, type SkyPlotData } from '../../../src/utils/skyPlot';   // ★★ 2026-11-24 THE SKY PLOT
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
@@ -10679,6 +10680,14 @@ function satPanelGet(): SatPanel | null {
       openMap: (o) => openDigiModesMap(o),                           // ★ 1.9
       galleryGet: galleryText,                                       // ★★ beta91 TELEMETRY CHARTS: the saved passes
       vfobOpen: (norad, tx) => spec?.satVfoB(norad, tx),             // ★★★ beta92 OPEN IN VFO B
+      /* ★★★ beta94 THE TRANSPONDER FINDER's LISTEN (Stuart: "the vfo a that snaps to the chosen voice signal"): the dial to the
+       *  voice's carrier in USB — an ordinary tune — then the finder follows it (the server waits for the tune to land). */
+      xpdrListen: (r) => {
+        const l = xpdrListen(r);
+        if (!l || !spec) return;
+        spec.tune(clampTune(l.hz), l.mode as SDRMode, { recenter: false, retarget: true });
+        decoders?.xpdrFollow(l.follow.id);
+      },
       // ★★ 2026-11-24 ORBCOMM: CARRIERS AUTO / 1–6 re-attaches with "max_carriers"; the sky plot of THIS radio (its /r/<id>)
       orbMax: (k) => {
         satOrbMax = k;
@@ -10713,7 +10722,7 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
    *  hand ran "1200 Bd", not AUTO — the pick had OVERWRITTEN the listener's packet choice). The pick's baud is the pick's
    *  alone: held apart (satPacketMode) and gone the moment the pick's decoder is no longer APRS. */
   if (d !== 'aprs') satPacketMode = null;
-  if (d !== 'orbcomm' && wf) wf.orbOverlay = null;   // ★★ 2026-11-24 the ORBCOMM slice goes with its pick
+  if (d !== 'orbcomm' && d !== 'xpdr' && wf) wf.orbOverlay = null;   // ★★ 2026-11-24 the ORBCOMM slice goes with its pick (★★★ beta94 the finder's too)
   satDec = d;
   if (!d || !t || !decoders) { satBeaconOn = false; return; }
   if (activeDec === satDecKey(d) && (d !== 'cwskim' || satBeaconOn)) return;
@@ -10736,6 +10745,8 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
   }
   // ★★ 2026-11-24 ORBCOMM: the pick's slice — JOINS its run — with "max_carriers" when it was set by hand on this page
   else if (d === 'orbcomm') { satOrbPrm = prm ?? null; decoders.attach('orbcomm', orbAttachParams(prm, satOrbMax) as DecoderParams, decVfo); }
+  // ★★★ beta94 THE TRANSPONDER FINDER: exactly the pick's parameters — this JOINS its run
+  else if (d === 'xpdr') decoders.attach('xpdr', (prm ?? {}) as DecoderParams, decVfo);
   // ★★ beta92 the server's own parameters when it sent them (the pick's symbol rate): this JOINS its run, never restarts it
   else decoders.attach(decExt(d), prm ? (prm as DecoderParams) : decParams(d), decVfo);
   syncDecButtons();
@@ -14018,7 +14029,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | 'orbcomm' | null = null;   // ★ fctlm: SATELLITE-BEST 1.2, only ever followed from a SATELLITE pick (★★ orbcomm: 2026-11-24, likewise)
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | 'orbcomm' | 'xpdr' | null = null;   // ★ fctlm: SATELLITE-BEST 1.2, only ever followed from a SATELLITE pick (★★ orbcomm: 2026-11-24, likewise)
 /* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
  *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
  *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
@@ -15231,6 +15242,11 @@ function initDecoders(host: string, auth: AuthState) {
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
     onSatTlm: (d) => { if (satDec && activeDec === satDec) satPanel?.telemetry(parseSatTelemetry(d)); },
+    onXpdr: (d) => {   // ★★★ beta94 the transponder finder: the box's rows, and its slice + arrows on the waterfall
+      if (satDec !== 'xpdr' || activeDec !== 'xpdr') return;
+      satPanel?.xpdr(d);
+      if (wf) wf.orbOverlay = xpdrOverlayFrom(satPanel?.xpdrNow());
+    },
     onOrbcomm: (type, d) => {
       if (satDec !== 'orbcomm' || activeDec !== 'orbcomm') return;
       satPanel?.orbcomm(type, d);

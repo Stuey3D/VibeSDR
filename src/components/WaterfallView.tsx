@@ -2813,7 +2813,7 @@ function WaterfallView({
   }, [showCenterMarker, centerMarkerHz, hzToX, width, height, bwHz]);
 
   // ★★ 2026-11-24 the ORBCOMM slice and its carriers, laid out for this view (orbcommView.ts — the web's geometry)
-  const orbLayout = useMemo(() => (orbOverlay && bwHz > 0 ? orbOverlayLayout(orbOverlay, hzToX, width, estimateLabelWidth(ORB_SLICE_LABEL, 10, 3, 0.6) + 8) : null),
+  const orbLayout = useMemo(() => (orbOverlay && bwHz > 0 ? orbOverlayLayout(orbOverlay, hzToX, width, estimateLabelWidth(orbOverlay.title || ORB_SLICE_LABEL, 10, 3, 0.6) + 8) : null),
                             [orbOverlay, hzToX, width, bwHz]);
   // ★ V12 beta25: the DC spike's x, or null when there is none or it is off screen
   const dcSpikeX = useMemo(() => {
@@ -3472,7 +3472,7 @@ function WaterfallView({
             {orbLayout.band.hiIn && <View pointerEvents="none" style={[styles.orbEdge, { left: orbLayout.band.x1 - 1, top: specTop, height: Math.max(0, height - specTop) }]} />}
             {orbLayout.label && orbLayout.band.x1 - orbLayout.band.x0 >= 24 && (
               <Text pointerEvents="none" numberOfLines={1} accessibilityLabel="ORBCOMM: every carrier in this band is decoded"
-                    style={[styles.orbLabel, { fontFamily, left: orbLayout.label.x, top: wfTop + 3 }]}>{ORB_SLICE_LABEL}</Text>
+                    style={[styles.orbLabel, { fontFamily, left: orbLayout.label.x, top: wfTop + 3 }]}>{orbOverlay?.title || ORB_SLICE_LABEL}</Text>
             )}
           </React.Fragment>
         )}
