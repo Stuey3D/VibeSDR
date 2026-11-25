@@ -7156,8 +7156,10 @@ static std::atomic<int> g_vsRawIqLanMaxHz{0};
 static bool isPrivateIp(const std::string& ip) {
     if (isLoopback(ip)) return true;
     std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
-    if (v.rfind("10.", 0) == 0 || v.rfind("192.168.", 0) == 0) return true;
-    if (v.rfind("172.", 0) == 0) { const int o = atoi(v.c_str() + 4); if (o >= 16 && o <= 31) return true; }
+    /* ★★ beta94 10/8, 172.16/12, 192.168/16 and 169.254/16 LINK-LOCAL (Stuart 11-25: a laptop cabled straight to the box
+     *  with no DHCP; no router forwards 169.254, so it cannot arrive from the internet) — vibe_ipclass.h isPrivateV4.
+     *  RAW IQ OUT's "Local only" and the RTL-TCP door both read this. */
+    if (vibeip::isPrivateV4(v)) return true;
     /* ★★ IPv6 (2026-10-25, the listener is dual-stack): fc00::/7 ULA and fe80::/10 link-local (the old text test
      *  caught only fd… and fe80…), and a GLOBAL address inside one of this box's own on-link prefixes — IPv6 has no
      *  NAT, so the laptop beside the box has a public address in the box's /64. See vibe_ipclass.h. */
