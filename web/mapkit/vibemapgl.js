@@ -265,20 +265,16 @@
 
     /* ★★ AN AIRPORT'S FULL NAME ON HOVER (or tap). The Leaflet map put it in a DOM title; here the codes are
      *  drawn on the GPU, so the map shows it itself (Stuart, 2026-09-28, the directory: "the hover over
-     *  airport codes to show the full name is not working"). One small popup, reused. */
+     *  airport codes to show the full name is not working"). One small popup, reused.
+     *  ★★ ITS LOOK IS OURS, not MapLibre's white box (Stuart 11-25, the Sony's RADIOSONDES page: "Cranfield
+     *  Airport / EGTC" in faint light grey on white, almost unreadable — the page's own light text colour
+     *  inherited into the library's white panel). See AIRPORT_TIP_CSS below. */
     function installAirportNames() {
       const ids = map.getStyle().layers.filter((l) => l['source-layer'] === 'airports').map((l) => l.id);
       if (!ids.length) return;
+      installAirportTipCss(container.ownerDocument || document);
       const tip = new ml.Popup({ closeButton: false, closeOnClick: false, className: 'vs-airport-tip', offset: 10, maxWidth: '260px' });
-      const text = (p) => {
-        const code = [p.icao, p.iata].filter(Boolean).join(' / ');
-        const el = document.createElement('div');
-        // ★ Wraps: "Charles de Gaulle International Airport" overflowed a nowrap box on a phone (2026-09-28).
-        el.style.cssText = 'font-size:12px;line-height:1.35;white-space:normal;overflow-wrap:anywhere';
-        el.textContent = p.name || code;          // ★ textContent: a name is data, never markup
-        if (p.name && code) { const c = document.createElement('div'); c.style.opacity = '0.6'; c.textContent = code; el.appendChild(c); }
-        return el;
-      };
+      const text = airportTipContent;
       const show = (e) => {
         const f = e.features && e.features[0];
         if (!f || !(f.properties.name || f.properties.icao)) return;
@@ -331,6 +327,61 @@
       destroy() { clearInterval(this._nightT); map.remove(); },
     };
   }
+  /* ★★ THE AIRPORT NAME POPUP'S LOOK (Stuart 11-25: "can we improve the font when hovering over airports, this
+   *  affects the aviation map too"). MapLibre's default popup is a WHITE panel that sets no text colour, so it
+   *  took the host page's — light grey on the dark pages — and read as nearly nothing. Now a dark panel like
+   *  the aircraft card (adsblayer.js vsadsb-pop) on every map that draws airports (sondes, aviation, NDB, VOR,
+   *  AIS / NAVTEX, the directory, the app's WebViews): the code BOLD in the airport label's own colour and
+   *  font (JetBrains Mono, amber; grey-blue for a heliport, as drawn), the name under it in near-white, and
+   *  the tip in the panel's colour. Contrast on the panel (#0b0f0c): amber 9.8:1, grey-blue 8.9:1, name
+   *  16:1 — WCAG AA (4.5:1) with room to spare (scripts/test-map-airport-tip.mjs measures them). The map has
+   *  one look (no light theme), so neither does this. Selectors sit one class deeper than MapLibre's and the
+   *  app's generic .maplibregl-popup rules (MapOverlay.tsx), so the order of the sheets never matters. */
+  const AIRPORT_TIP_BG = 'rgba(11,15,12,0.96)';
+  const AIRPORT_TIP_CSS = (() => {
+    const P = '.maplibregl-popup.vs-airport-tip';
+    const tip = (anchors, side) => anchors.map((a) => P + '.maplibregl-popup-anchor-' + a + ' .maplibregl-popup-tip').join(',')
+      + '{border-' + side + '-color:' + AIRPORT_TIP_BG + '}';
+    return P + ' .maplibregl-popup-content{background:' + AIRPORT_TIP_BG + ';color:#e8e8d0;'
+      + 'border:1px solid rgba(232,177,58,0.35);border-radius:7px;padding:6px 10px;box-shadow:0 4px 18px rgba(0,0,0,0.55);'
+      + 'font-family:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,"Courier New",monospace;font-size:12px;line-height:1.35;'
+      + 'white-space:normal;overflow-wrap:anywhere;text-align:left}'
+      + P + ' .vs-at-code{font-weight:700;color:#e8b13a;letter-spacing:0.6px}'
+      + P + ' .vs-at-code.heli{color:#9fb3c8}'
+      + P + ' .vs-at-name{font-weight:400;color:#e8e8d0;margin-top:1px}'
+      + tip(['bottom', 'bottom-left', 'bottom-right'], 'top')
+      + tip(['top', 'top-left', 'top-right'], 'bottom')
+      + tip(['left'], 'right') + tip(['right'], 'left');
+  })();
+  function installAirportTipCss(doc) {
+    if (!doc || !doc.head || doc.getElementById('vs-airport-tip-css')) return;
+    const st = doc.createElement('style');
+    st.id = 'vs-airport-tip-css';
+    st.textContent = AIRPORT_TIP_CSS;
+    doc.head.appendChild(st);
+  }
+  /** The popup's content: the code (ICAO / IATA) bold, the name under it. textContent only — a name is data,
+   *  never markup. Wraps: "Charles de Gaulle International Airport" overflowed a nowrap box on a phone
+   *  (2026-09-28). A feature with no code shows the name alone, and one with no name the code alone. */
+  function airportTipContent(p) {
+    const code = [p.icao, p.iata].filter(Boolean).join(' / ');
+    const el = document.createElement('div');
+    el.className = 'vs-at';
+    if (code) {
+      const c = document.createElement('div');
+      c.className = 'vs-at-code' + (Number(p.cls) === 3 ? ' heli' : '');
+      c.textContent = code;
+      el.appendChild(c);
+    }
+    if (p.name) {
+      const n = document.createElement('div');
+      n.className = 'vs-at-name';
+      n.textContent = p.name;
+      el.appendChild(n);
+    }
+    return el;
+  }
+
   /** The same, for a host that can wait: resolves once the style is in. */
   async function create(container, o) {
     const vm = createNow(container, o);
@@ -339,5 +390,7 @@
     return vm;
   }
 
-  global.VibeMapGL = { create, createNow, prepareStyle, webgl2, nightRing };
+  global.VibeMapGL = { create, createNow, prepareStyle, webgl2, nightRing,
+    // ★ For scripts/test-map-airport-tip.mjs: the airport popup's sheet and content, as the map uses them.
+    airportTip: { css: AIRPORT_TIP_CSS, install: installAirportTipCss, content: airportTipContent } };
 })(typeof window !== 'undefined' ? window : globalThis);
