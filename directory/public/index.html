@@ -3661,11 +3661,79 @@ async function fetchStatus(host) {
   }
 }
 
+/* ══ LIVE-READS BEGIN (directory/scripts/test-live-direct.mjs slices this block out and runs it) ══════════════════════
+ * ★★★ THE OCCUPANCY READS GO TO THE RECEIVER ITSELF, NOT THROUGH THE WORKER (Stuart 2026-11-25: "the Worker only
+ *     establishes the connection"). Every minute every open tab asked every listed server, and each radio of a
+ *     multi-radio one, for vibeserver.json at its <slug>.vibeserver.vibesdr.net — the directory's own Worker, ~20–25
+ *     Worker requests a minute per tab, growing with servers × tabs, on a paid plan after the 11-24 incident. The
+ *     listing already carries each server's own https address (`url`, its tunnel), and every VibeServer answers CORS
+ *     for these two public reads (measured 11-25 with Origin: https://vibeserver.vibesdr.net, all ten listed servers,
+ *     /vibeserver.json and /r/<id>/vibeserver.json), so the page asks the server directly — as community-map.js does.
+ * ★★ THE SLUG IS THE FALLBACK, ONCE. The listed `url` can be up to fifteen minutes behind a tunnel that rotated, and an
+ *    owner's own firewall can refuse a foreign Origin (the Worker strips it on these reads). A direct read that does not
+ *    give a real answer is asked ONCE more at the slug for that load, and that direct address is left alone for
+ *    DIRECT_RETRY_MS, doubling to DIRECT_RETRY_MAX_MS. ★ Keyed by HOST + PATH: a rotated tunnel is a new host and is
+ *    tried directly at once, and one radio whose route fails (an older server's 503 carries no CORS header) does not
+ *    send its siblings back through the Worker.
+ * ★★ CodeQL js/request-forgery (#100, #105): every URL here is built from a host that passed DIRECT_OK or ADDRESS_OK
+ *    at the fetch itself, and a path that passed STATUS_PATH_OK — nothing in a listing can aim it anywhere else.
+ * ★ DIRECT_OK: a Cloudflare quick tunnel (*.trycloudflare.com) or a single-label *.vibesdr.net name (a named tunnel,
+ *   demo.vibesdr.net) — never vibeserver.vibesdr.net or its slugs, which ARE the Worker. Any other address (an owner's
+ *   own domain) keeps reading through the slug as before. */
+const DIRECT_OK = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.trycloudflare\.com|(?!vibeserver\.)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.vibesdr\.net)$/;
+const STATUS_PATH_OK = /^\/(?:r\/[A-Za-z0-9._~%-]{1,64}\/)?vibeserver\.json$/;
+const DIRECT_RETRY_MS = 5 * 60 * 1000, DIRECT_RETRY_MAX_MS = 30 * 60 * 1000;
+const directBackoff = new Map();        // host + path → { fails, until }
+
+/** The server's own tunnel host from the listing's `url` (https, host only, no port, no path), or null. */
+function directHostOf(s) {
+  const m = s && typeof s.url === 'string' ? /^https:\/\/([A-Za-z0-9.-]{1,253})\/?$/.exec(s.url) : null;
+  const h = m ? m[1].toLowerCase() : '';
+  return DIRECT_OK.test(h) ? h : null;
+}
+
+/** One GET of a status path at `host`, 4 s timeout. The host and the path are tested HERE, at the fetch. */
+async function statusGet(host, path) {
+  if (!(DIRECT_OK.test(String(host)) || ADDRESS_OK.test(String(host)))) throw new Error('not a VibeServer address');
+  if (!STATUS_PATH_OK.test(String(path))) throw new Error('not a status path');
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 4000);
+  try { return await fetch(`https://${host}${path}`, { signal: ctrl.signal, cache: 'no-store' }); }
+  finally { clearTimeout(t); }
+}
+
+/** ★ A REAL ANSWER from the receiver: OK, or the front door's own 404 (no per-radio route: a phone server) / 503 (the
+ *  radio's process is not up). Anything else — a throw (CORS, DNS, timeout), 403 from an owner's firewall, a 502/530
+ *  from a dead tunnel — is not the receiver speaking, so the slug is asked. */
+const directAnswered = (r) => r && (r.ok || r.status === 404 || r.status === 503);
+
+/** Read `path` from server `s`: its own tunnel first, the slug once if that gives no real answer. `slugRetry` keeps the
+ *  machine read's ONE RETRY when it goes to the slug only (fetchStatus). Throws when nothing answered. */
+async function liveRead(s, path, slugRetry) {
+  const dh = directHostOf(s);
+  const slug = s && ADDRESS_OK.test(String(s.address)) ? s.address : null;
+  const key = dh ? dh + path : '';
+  const b = dh ? directBackoff.get(key) : null;
+  if (dh && !(b && b.until > Date.now())) {
+    let r = null;
+    try { r = await statusGet(dh, path); } catch { r = null; }
+    if (directAnswered(r)) { directBackoff.delete(key); return r; }
+    const fails = (b ? b.fails : 0) + 1;
+    directBackoff.set(key, { fails, until: Date.now() + Math.min(DIRECT_RETRY_MAX_MS, DIRECT_RETRY_MS * 2 ** (fails - 1)) });
+    if (!slug) { if (r) return r; throw new Error('direct read failed'); }
+    return statusGet(slug, path);                       // ★ the slug, ONCE, for this read on this load
+  }
+  if (!slug) throw new Error('no address');
+  if (slugRetry && path === '/vibeserver.json') return fetchStatus(slug);
+  return statusGet(slug, path);
+}
+/* ══ LIVE-READS END ═══════════════════════════════════════════════════════════════════════════════════════════════════ */
+
 async function withLiveCounts(servers) {
   await Promise.all(servers.map(async (s) => {
     if (!s.address) return;
     try {
-      const r = await fetchStatus(s.address);
+      const r = await liveRead(s, '/vibeserver.json', true);
       if (!r.ok) return;
       const j = await r.json();
       if (Number.isFinite(j.listeners)) s.listeners = Number(j.listeners);
@@ -3704,11 +3772,8 @@ async function withLiveCounts(servers) {
       //    a later refactor could drop. The test here is the one that cannot be bypassed.
       if (radios.length === 1 && radios[0] && radios[0].id && ADDRESS_OK.test(String(s.address))) {
         try {
-          const c3 = new AbortController();
-          const t3 = setTimeout(() => c3.abort(), 4000);
-          const r3 = await fetch(`https://${s.address}/r/${encodeURIComponent(radios[0].id)}/vibeserver.json`,
-                                 { signal: c3.signal, cache: 'no-store' });
-          clearTimeout(t3);
+          // ★ The receiver's own tunnel first, the slug once (liveRead, LIVE-READS above).
+          const r3 = await liveRead(s, `/r/${encodeURIComponent(radios[0].id)}/vibeserver.json`, false);
           if (r3.ok) {
             const rj = await r3.json();
             if (Number.isFinite(rj.listeners)) { radios[0].listeners = Number(rj.listeners); soloFromRadio = true; }
@@ -3742,11 +3807,7 @@ async function withLiveCounts(servers) {
         await Promise.all(radios.slice(0, 6).map(async (rad) => {
           if (!rad || !rad.id) return;
           try {
-            const c2 = new AbortController();
-            const t2 = setTimeout(() => c2.abort(), 4000);
-            const rr = await fetch(`https://${s.address}/r/${encodeURIComponent(rad.id)}/vibeserver.json`,
-                                   { signal: c2.signal, cache: 'no-store' });
-            clearTimeout(t2);
+            const rr = await liveRead(s, `/r/${encodeURIComponent(rad.id)}/vibeserver.json`, false);
             // ★ 503 = the door is up and this radio's process is not (see the single-radio note above).
             if (!rr.ok) { if (rr.status === 503) rad.radioDown = true; return; }
             const rj = await rr.json();
@@ -3936,11 +3997,16 @@ load(true);
  *  Every refresh asks EVERY listed server (and each radio of a multi-radio one) for its vibeserver.json through the tunnel
  *  Worker — ~20–30 requests a minute per open tab, ~30–45k a day for a tab left in the background, and the free plan is
  *  100k a day for the whole account. A tab nobody can see refreshes nothing; it refreshes at once when it is looked at
- *  again (if a minute has passed), so a viewer never sees a stale page. */
+ *  again (if a minute has passed), so a viewer never sees a stale page.
+ *  ★ 11-25: those reads now go to each receiver's own tunnel (LIVE-READS above), not the Worker; the pause stays —
+ *    a hidden tab costs the receivers nothing either.
+ *  (directory/scripts/test-live-direct.mjs slices REFRESH-BEGIN…REFRESH-END and runs it.) */
+/* REFRESH-BEGIN */
 let lastLoad = Date.now();
 const loadIfSeen = () => { if (document.hidden) return; lastLoad = Date.now(); load(false); };
 setInterval(loadIfSeen, 60000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastLoad >= 60000) loadIfSeen(); });
+/* REFRESH-END */
 
 /* ★ The MODES pill's list, for touch (and click): it sits inside the card's link, so the tap is stopped from opening
  *  the receiver. One panel at a time; a tap elsewhere, Escape or scrolling closes it. */
