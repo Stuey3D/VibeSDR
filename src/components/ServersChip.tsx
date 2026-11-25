@@ -378,7 +378,7 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
  *  9000 is above all of those and the crash card (PanelBoundary, 999), and BELOW the first-run tour (Coachmark, 9999),
  *  the keyboard focus ring (ScreenNav, 9999) and the controller notice (PadNotice, 9600), which must still draw over
  *  an open menu. scripts/check-servers-menu-layer.mjs holds it there. */
-export const TOP_MENU_LAYER = { zIndex: 9000, elevation: 9000 } as const;
+export const TOP_MENU_LAYER = { zIndex: 9000, elevation: 9000 } as const;   // = SERVERS_MENU_Z (serversChipCollapse)
 /** ★ Tucked, it sits with the edge tabs (EdgeChip, 251) — above the box it is tucked beside, so it can still be tapped.
  *  On the ROOT too (as TOP_MENU_LAYER), since a child's zIndex only orders it inside this layer. */
 const TAB_LAYER = { zIndex: SERVERS_TAB_Z, elevation: SERVERS_TAB_Z } as const;

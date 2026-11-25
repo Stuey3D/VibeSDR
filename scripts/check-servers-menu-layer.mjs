@@ -10,7 +10,8 @@
  *   1. An open layer is applied to ServersChip's ROOT view (the one SDRScreen stacks against the boxes), and the
  *      outside-tap backdrop is inside that root (so an outside tap closes the menu, never reaches a box).
  *   2. SDRScreen renders the chip as a DIRECT child of the screen's root view (only PanelBoundary, a fragment, in
- *      between), so that band competes with the boxes — inside a wrapper it would be confined to that wrapper again.
+ *      between; context providers render no view and are skipped), so that band competes with the boxes — inside a
+ *      wrapper it would be confined to that wrapper again.
  *   3. Its zIndex AND elevation beat every other zIndex / elevation in the app's screens and components, except the
  *      few layers that must draw over an open menu (the tour, the keyboard focus ring, the controller notice, the
  *      debug perf overlay).
@@ -58,7 +59,10 @@ else { fail(`could not read ${bandName}'s { zIndex, elevation } numbers`); proce
   const found = [];
   const walk = (n, anc) => {
     if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText() === 'ServersChip') found.push(anc.join(' > '));
-    const next = ts.isJsxElement(n) ? anc.concat(n.openingElement.tagName.getText()) : anc;
+    // ★ A context provider renders no view and makes no layer (the Duo port: DecoderAvoidContext / BoxRectsContext wrap
+    //   the screen), so it does not count as an ancestor here.
+    const tag = ts.isJsxElement(n) ? n.openingElement.tagName.getText() : '';
+    const next = tag && !/\.Provider$/.test(tag) ? anc.concat(tag) : anc;
     ts.forEachChild(n, (c) => walk(c, next));
   };
   walk(sf, []);
