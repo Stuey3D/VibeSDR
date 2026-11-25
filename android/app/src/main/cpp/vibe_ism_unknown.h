@@ -1,21 +1,21 @@
-// vibe_ism_unknown.h — beta94: what ISM says about a burst it could NOT identify, the steady carriers it should not
-// count as bursts at all, and a small ring of unidentified bursts' samples the OWNER can download.
+// vibe_ism_unknown.h — beta94: what ISM says about a burst it could NOT identify, and the steady carriers it should not
+// count as bursts at all.
 //
 // ★★ WHY (Stuart, 2026-11-24 22:35, the Sony on 868 MHz): the box said "0 devices · 65 bursts (65 unidentified)". The
 //    detector heard plenty; nothing matched; and "868 is usually very active". A count says nothing anybody can act on.
 //    Each unidentified burst is now DESCRIBED — how it is modulated (OOK / FSK), how it is coded (PWM / PPM / NRZ or
-//    Manchester), its rate, length, frequency and level — and the last few are KEPT as IQ, so a protocol can be identified
-//    (rtl_433 -r reads the file as it is named) and then added here.
+//    Manchester), its rate, length, frequency and level — shape only, never the bits.
 // ★★ A STEADY CARRIER IS NOT A BURST. Two drifting carriers near 868.10 and 868.27 MHz on the Sony were local
 //    interference, not devices. A burst that is one long unbroken mark with no FSK data in it is labelled a carrier and
 //    listed as one (frequency, level, how far it has drifted); it is not counted as unidentified. The detector's held
 //    frequencies (vibe_ism.h kHoldQuietS — what it already ignores) go on the same list.
-// ★★★ PRIVACY: the descriptions carry no bits — only shape. The IQ COULD hold a fixed-code remote's code, which is why
-//     the clips are the OWNER's alone (the admin API, local_sdr_shim.cpp "ism-clip"); listeners see the descriptions.
-// ★★★ BOUNDED (the 256 MB rule): at most kMaxClips clips, each at most kMaxClipBytes, all of them at most kMaxBytes, as
-//     8-bit IQ (cu8, 2 bytes a sample) — 1.5 MB in the worst case, the oldest dropped first. Descriptions: the last 16.
+// ★★★ NO SAMPLES ARE KEPT, NO BITS ARE SENT (Stuart 2026-11-25 21:31: "remove it please, i dont want vibesdr used to steal
+//     cars with keyless entry"). beta94 as first built also kept the last few unidentified bursts as IQ for the owner to
+//     download; a burst nothing names may be a car's keyless entry or a remote's code, so that was removed before release.
+//     Describe the SHAPE only. Do not add a way to capture, store or download a burst's samples or bits.
+// ★★ BOUNDED (the 256 MB rule): the last 16 descriptions.
 // ★ Runs on vibe-ism3 (the slicer's thread), never the DSP or audio thread. Per unidentified burst: a sort of its run
-//   lengths and, when kept, one pass converting its baseband to bytes. Nothing here is per-capture-sample.
+//   lengths. Nothing here is per-capture-sample.
 #pragma once
 
 #include "vibe_ism.h"
@@ -166,37 +166,6 @@ inline BurstDesc describeBurst(const Burst& b, double hwCentreHz) {
     return d;
 }
 
-/** The burst's channel baseband as unsigned 8-bit IQ (rtl_433's cu8), scaled so its peak sits at ±100 of 127.5 — the
- *  most resolution 8 bits can give a burst whatever its level (the level is in the description). At most `maxSamples`
- *  from the start (the pre-roll and the burst's beginning, where a protocol's preamble and sync are). */
-inline std::vector<uint8_t> toCu8(const std::vector<cf>& x, size_t maxSamples) {
-    const size_t n = std::min(x.size(), maxSamples);
-    float pk = absPeakRun(x.data(), n, 0.0f);   // ★ NEON / SSE2 (vibe_ism.h)
-    const float k = pk > 0 ? 100.0f / pk : 1.0f;
-    std::vector<uint8_t> o(2 * n);
-    for (size_t i = 0; i < n; ++i) {
-        o[2 * i]     = uint8_t(std::max(0.0f, std::min(255.0f, std::round(127.5f + x[i].real() * k))));
-        o[2 * i + 1] = uint8_t(std::max(0.0f, std::min(255.0f, std::round(127.5f + x[i].imag() * k))));
-    }
-    return o;
-}
-
-/** "ism_868.2715M_500k_20261124T223512Z.cu8" — the frequency, the sample rate, when (UTC) and the format, in the shape
- *  rtl_433 reads from a file's name (-r: "_<freq>M_", "_<rate>k_", the extension), so it plays as it is. */
-inline std::string clipName(double freqHz, double rateHz, double unixSec) {
-    const time_t tt = time_t(unixSec);
-    struct tm g{};
-#if defined(_WIN32)
-    gmtime_s(&g, &tt);
-#else
-    gmtime_r(&tt, &g);
-#endif
-    char b[96];
-    std::snprintf(b, sizeof b, "ism_%.4fM_%.0fk_%04d%02d%02dT%02d%02d%02dZ.cu8", freqHz / 1e6, rateHz / 1e3,
-                  g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min, g.tm_sec);
-    return b;
-}
-
 inline std::string unkFmt(double v, int dp) { char b[32]; std::snprintf(b, sizeof b, "%.*f", dp, v); return b; }
 
 /** The steady carriers: merged by frequency (a drifting one stays one line, its drift range kept), forgotten after two
@@ -244,46 +213,26 @@ private:
     std::vector<C> list_;
 };
 
-/** The last unidentified bursts, described, and the samples of the last few, for the owner. Its own lock: the HTTP
- *  thread reads a clip while vibe-ism3 adds. */
+/** The last unidentified bursts, described (shape only — no samples, no bits). Its own lock: report() reads it from
+ *  another thread while vibe-ism3 adds. */
 class UnknownBook {
 public:
-    struct Limits { size_t descs = 16, clips = 12, clipBytes = 256 * 1024, bytes = 1536 * 1024; };
+    struct Limits { size_t descs = 16; };
     UnknownBook() = default;
     explicit UnknownBook(Limits l) : lim_(l) {}
-    struct Clip { uint32_t id = 0; std::string name; std::vector<uint8_t> data; bool cut = false; };
 
-    /** Keep `d` (its id is set here) and, when `bb` is given, a clip of it. Returns the id. */
-    uint32_t add(BurstDesc d, const std::vector<cf>* bb, double rateHz, double unixSec) {
-        std::vector<uint8_t> bytes; bool cut = false;
-        if (bb && !bb->empty() && rateHz > 0 && lim_.clips > 0) {
-            const size_t maxS = lim_.clipBytes / 2;
-            cut = bb->size() > maxS;
-            bytes = toCu8(*bb, maxS);   // ★ outside the lock
-        }
+    /** Keep `d` (its id is set here). Returns the id. */
+    uint32_t add(BurstDesc d) {
         std::lock_guard<std::mutex> lk(m_);
         d.id = ++next_;
         descs_.push_front(d);
         while (descs_.size() > lim_.descs) descs_.pop_back();
-        if (!bytes.empty()) {
-            Clip c; c.id = d.id; c.name = clipName(d.freqHz, rateHz, unixSec); c.data = std::move(bytes); c.cut = cut;
-            bytes_ += c.data.size();
-            clips_.push_front(std::move(c));
-            while (!clips_.empty() && (clips_.size() > lim_.clips || bytes_ > lim_.bytes)) { bytes_ -= clips_.back().data.size(); clips_.pop_back(); }
-        }
         return d.id;
     }
-    bool clip(uint32_t id, std::string& name, std::string& data) const {
-        std::lock_guard<std::mutex> lk(m_);
-        for (const auto& c : clips_) if (c.id == id) { name = c.name; data.assign(c.data.begin(), c.data.end()); return true; }
-        return false;
-    }
-    size_t clipCount() const { std::lock_guard<std::mutex> lk(m_); return clips_.size(); }
-    size_t clipBytes() const { std::lock_guard<std::mutex> lk(m_); return bytes_; }
     size_t descCount() const { std::lock_guard<std::mutex> lk(m_); return descs_.size(); }
-    void clear() { std::lock_guard<std::mutex> lk(m_); descs_.clear(); clips_.clear(); bytes_ = 0; }
+    void clear() { std::lock_guard<std::mutex> lk(m_); descs_.clear(); }
     /** [{"id":7,"ago":2.1,"hz":…,"mod":"OOK","code":"PWM","rate":1000,"unit":250,"n":64,"ms":64.0,"lvl":-22.0,"snr":24.1,
-     *    "dev":…,"clipped":1,"iq":1,"kb":64,"cut":1}] — newest first; `iq` 1 = the owner can download it (ism-clip?id=7) */
+     *    "dev":…,"clipped":1}] — newest first (`clipped` = the radio's ADC neared full scale, not a sample clip) */
     std::string json(double t) const {
         std::lock_guard<std::mutex> lk(m_);
         std::string o = "[";
@@ -298,11 +247,6 @@ public:
             o += ",\"ms\":" + unkFmt(d.durMs, 1) + ",\"lvl\":" + unkFmt(d.levelDb, 1) + ",\"snr\":" + unkFmt(d.snrDb, 1);
             if (d.devHz > 0) o += ",\"dev\":" + unkFmt(d.devHz, 0);
             if (d.clipped) o += ",\"clipped\":1";
-            for (const auto& c : clips_) if (c.id == d.id) {
-                o += ",\"iq\":1,\"kb\":" + std::to_string((c.data.size() + 1023) / 1024);
-                if (c.cut) o += ",\"cut\":1";
-                break;
-            }
             o += "}";
         }
         return o + "]";
@@ -311,8 +255,6 @@ private:
     Limits lim_;
     mutable std::mutex m_;
     std::deque<BurstDesc> descs_;
-    std::deque<Clip> clips_;
-    size_t bytes_ = 0;
     uint32_t next_ = 0;
 };
 

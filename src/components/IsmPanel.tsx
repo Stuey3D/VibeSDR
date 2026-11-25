@@ -64,8 +64,6 @@ export interface IsmPanelProps {
   remembered?: boolean;
   /** The receiver's position (range and bearing in a node's detail). */
   rx?: { lat: number; lon: number } | null;
-  /** ★ beta94 the OWNER's download of an unidentified burst's IQ (absent = not the owner: no link drawn). */
-  onClip?: (id: number) => void;
 }
 
 export default function IsmPanel(p: IsmPanelProps) {
@@ -222,10 +220,7 @@ export default function IsmPanel(p: IsmPanelProps) {
               <Text style={s.ago} numberOfLines={1}>{ismAgo(u.ago)}</Text>
               <Text style={s.rowBand} numberOfLines={1}>{ismBandLabel(u.hz, p.bands)}</Text>
               <View style={s.txtCol}>
-                <Text style={s.txt}>{u.text}{p.onClip && u.clip ? (
-                  <Text style={[s.txt, s.posLink]} accessibilityRole="link" suppressHighlighting={false}
-                        accessibilityLabel={`Download this burst's samples, ${u.kb ?? ''} kilobytes`}
-                        onPress={() => { if (u.clip) p.onClip?.(u.clip); }}>{`  IQ ${u.kb ?? ''} KB`}</Text>) : null}</Text>
+                <Text style={s.txt}>{u.text}</Text>
               </View>
               <Text style={[s.snr, u.snr != null && { color: u.snr >= 20 ? tk.good : u.snr >= 10 ? tk.warn : tk.bad }]}
                     numberOfLines={1}>{u.snr != null ? `${Math.round(u.snr)} dB` : ''}</Text>

@@ -26,7 +26,7 @@
 #include "vibe_wmbus.h"        // ★ V12 2026-10-26: Wireless M-Bus meters on the 868 band (docs/v12/WMBUS-DECODER.md)
 #include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
 #include "vibe_ism_sink.h"     // ★ V12 2026-10-25: the gallery's copy of every new reading (vibe_ism_gallery.h)
-#include "vibe_ism_unknown.h"  // ★ beta94: unidentified bursts described, steady carriers, the owner's IQ clips
+#include "vibe_ism_unknown.h"  // ★ beta94: unidentified bursts described (shape only), steady carriers
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B
 #include "vibe_lora_track.h"      // ★ V12 2026-10-27: LoRa — LoRaWAN, Meshtastic, MeshCore (docs/v12/LORA-MESH.md)
 #include "vibe_thread.h"          // the threads' names and rungs (vibe-ism, vibe-ism2, vibe-ism3)
@@ -772,8 +772,8 @@ public:
             std::snprintf(b, sizeof b, ",\"peak\":%.1f,\"clipPct\":%.1f", health_.peakDb, health_.clipFrac * 100.0);
             o += b;
         }
-        /* ★★ beta94 UNIDENTIFIED BURSTS, DESCRIBED (vibe_ism_unknown.h): the last 16, newest first, with `iq` where the
-         *  owner can download its samples; and the STEADY CARRIERS — not counted as unidentified (`steadyN` of the bursts
+        /* ★★ beta94 UNIDENTIFIED BURSTS, DESCRIBED (vibe_ism_unknown.h): the last 16, newest first, shape only; and the
+         *  STEADY CARRIERS — not counted as unidentified (`steadyN` of the bursts
          *  were carriers). */
         o += ",\"unk\":" + unk_.json(t);
         o += ",\"steady\":" + steady_.json(t);
@@ -789,12 +789,8 @@ public:
      *  ±45 % of the rate around where the radio is tuned. At 0.9 MS/s around 868.6 it reaches 869.005. */
     bool wmGap() const { return meters_ && hwCentre_ + 0.45 * rate_ < 869.05e6; }
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
-    /** ★ beta94 the owner's download (local_sdr_shim.cpp, the admin API's "ism-clip"): an unidentified burst's samples as
-     *  cu8, and the file name that says what they are. False = no such clip (any more). */
-    bool unknownClip(uint32_t id, std::string& name, std::string& data) const { return unk_.clip(id, name, data); }
-    /** Tests: the clip ring's state. */
-    size_t unknownClipCount() const { return unk_.clipCount(); }
-    size_t unknownClipBytes() const { return unk_.clipBytes(); }
+    /** Tests: how many unidentified bursts are described. */
+    size_t unknownDescCount() const { return unk_.descCount(); }
     size_t deviceCount() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.size() + mesh_.size(); }
 
     /** ★★ ONE FRAME, TWO CHANNELS. A T1/C1 burst is ~200 kHz wide, and the detector can open a second channel on its
@@ -983,12 +979,7 @@ private:
     void decodeBatch(std::vector<RawBurst>& raws) {
         const double hc = hwCentre_;
         std::vector<Burst> bs;
-        std::vector<std::shared_ptr<const std::vector<cf>>> raw;   // ★ beta94 each burst's baseband (shared, not copied)
-        std::vector<double> rawRate;
-        for (auto& r : raws) {
-            Burst b; std::shared_ptr<const std::vector<cf>> sp; const double cr = r.chanRate;
-            if (FrontEnd::finish(std::move(r), keepBb_, b, &sp)) { bs.push_back(std::move(b)); raw.push_back(std::move(sp)); rawRate.push_back(cr); }
-        }
+        for (auto& r : raws) { Burst b; if (FrontEnd::finish(std::move(r), keepBb_, b)) bs.push_back(std::move(b)); }
         if (bs.empty()) return;
         std::vector<Reading> got;
         wmbus::Stats wmLocal;
@@ -1004,13 +995,13 @@ private:
             if (got.size() != before) continue;
             /* ★★ beta94: a STEADY CARRIER is not an unidentified burst (Stuart's two drifting carriers near 868.10 / 868.27
              *  on the Sony, 11-24): listed as a carrier, not counted, not offered to the key-fob watch. Anything else that
-             *  nothing named is described, and its samples kept for the owner (vibe_ism_unknown.h). A wM-Bus collector's
+             *  nothing named is described — its shape only, never its samples or bits (vibe_ism_unknown.h). A wM-Bus collector's
              *  frame WAS identified (counted below as before), so it is not described. */
             BurstDesc d = describeBurst(b, hc);
             if (d.mod == "carrier") { ++steadyLocal; steadyHeard.push_back({d.freqHz, d.levelDb}); continue; }
             if (wmLocal.collector == coll0) {
                 d.t = now();
-                unk_.add(std::move(d), raw[bi].get(), rawRate[bi], unixNow());
+                unk_.add(std::move(d));
             }
             ++unknownLocal_;
             Reading sf;
@@ -1142,7 +1133,7 @@ private:
     uint64_t droppedDec_ = 0;
     bool decBusy_ = false;
     uint64_t bursts_ = 0, unknown_ = 0, unknownLocal_ = 0, steadyBursts_ = 0;
-    UnknownBook unk_;               ///< ★ beta94 its own lock (the admin API reads a clip from the HTTP thread)
+    UnknownBook unk_;               ///< ★ beta94 its own lock (report() reads it)
     CarrierList steady_;            ///< ★ beta94 under mtx_
     std::chrono::steady_clock::time_point t0_;
     Tracker tracker_;

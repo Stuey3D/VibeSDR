@@ -16619,12 +16619,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           tall={ismTall} onTall={onIsmTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           onMap={IS_APPLE_TV ? null : (key?: string) => { markInteract(); setIsmFocus(key ?? ''); setIsmMapOpen(true); }}
-          /* ★★ beta94 an unidentified burst's IQ — the OWNER's (the admin API's ism-clip; it could hold a fixed-code remote's
-           *  code). Only with a minted ticket (a nonce pair is single-use); opened in the browser, which saves the file
-           *  (Content-Disposition), named for rtl_433 -r. No ticket, no link: a listener sees the description only. */
-          onClip={pageTicketQ && !IS_APPLE_TV
-            ? (id: number) => { Linking.openURL(`${connectBase.replace(/\/+$/, '')}/vibeserver/admin/ism-clip?id=${id}&${pageTicketQ}`).catch(() => {}); }
-            : undefined}
           rx={serverPos ?? recvLoc ?? null}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />

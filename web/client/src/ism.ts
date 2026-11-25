@@ -39,10 +39,10 @@ export interface IsmLora { chans: number; plan: number; dets: number; frames: nu
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number; region?: string }   // ★ region: beta72, the BANDS list
 /** ★ beta94 an UNIDENTIFIED burst, described by the server (vibe_ism_unknown.h): modulation, coding, rate (bit/s for PWM /
- *  PPM, symbols/s for NRZ / Manchester), the shortest run (µs), marks, length (ms), level and SNR (dB), FSK's deviation;
- *  `iq` 1 = its samples are kept, `kb` big — the OWNER may download them (admin ism-clip?id=…); `cut` = only its start. */
+ *  PPM, symbols/s for NRZ / Manchester), the shortest run (µs), marks, length (ms), level and SNR (dB), FSK's deviation.
+ *  ★★★ Shape only — no samples, no bits, for anybody (Stuart 2026-11-25: no keyless-entry capture). */
 export interface IsmUnk { id: number; ago: number; hz: number; mod: string; code?: string; rate?: number; unit?: number; n?: number;
-  ms: number; lvl: number; snr: number; dev?: number; clipped?: number; iq?: number; kb?: number; cut?: number }
+  ms: number; lvl: number; snr: number; dev?: number; clipped?: number }
 /** ★ beta94 a STEADY CARRIER (not a burst — not counted as unidentified): where it is now, how far it has drifted (lo–hi),
  *  its level, seconds since last seen and how long it has been seen for. */
 export interface IsmSteady { hz: number; lvl: number; lo: number; hi: number; age: number; for: number }
@@ -374,9 +374,9 @@ export function ismBandLabel(freq: number | undefined, bands: IsmBand[]): string
 
 /** The list's HTML: newest first (the server's order), filtered by kind. */
 export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = '', rx: { lat: number; lon: number } | null = null,
-                            bands: IsmBand[] = [], owner = false): string {
+                            bands: IsmBand[] = []): string {
   if (filter === 'msgs') return ismMsgsHtml(r, bands);
-  if (filter === 'unk') return ismUnkHtml(r, bands, owner);
+  if (filter === 'unk') return ismUnkHtml(r, bands);
   // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob;
   //   LORAWAN shows the LoRa frames we cannot name as well
   const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob')
@@ -424,18 +424,16 @@ export function ismMsgsHtml(r: IsmReport, bands: IsmBand[] = []): string {
     + `${esc(ismNetName(x.net || ''))}${x.ch ? ' ' + esc(x.ch) : ''} · <b>${esc(x.from || x.node || '?')}</b>: ${esc(x.text)}</span></div>`).join('');
 }
 /** ★ beta94 UNIDENTIFIED: the steady carriers first (they explain a busy waterfall with nothing decoded), then the bursts
- *  nobody named, newest first, each described. The OWNER gets an IQ link on a burst whose samples are kept (main.ts
- *  downloads it with the admin proof); a listener sees the description only. */
-export function ismUnkHtml(r: IsmReport, bands: IsmBand[] = [], owner = false): string {
+ *  nobody named, newest first, each described by its shape only. */
+export function ismUnkHtml(r: IsmReport, bands: IsmBand[] = []): string {
   const st = r.steady ?? [], un = r.unk ?? [];
   if (!st.length && !un.length) return `<div class="ismEmpty">${esc(ismEmptyText('unk'))}</div>`;
   const rows = st.map((c) => `<div class="ismRow k-steady"><span class="ismAgo">${esc(ismAgo(c.age))}</span><span class="ismBand">${esc(ismBandLabel(c.hz, bands))}</span>`
     + `<span class="ismTxt">${esc(ismSteadyLine(c))}</span></div>`);
   for (const u of un) {
-    const tip = `${u.unit ? `shortest run ${Math.round(u.unit)} µs · ` : ''}${Math.round(u.snr)} dB over the noise${u.iq ? ` · IQ kept (${u.kb} KB${u.cut ? ', its start' : ''})` : ''}`;
-    const dl = owner && u.iq ? `<a class="qrz ismIq" href="#" role="button" data-clip="${u.id}" title="Download its IQ (cu8, for rtl_433 -r) — owner only">IQ ${u.kb ?? ''} KB</a>` : '';
+    const tip = `${u.unit ? `shortest run ${Math.round(u.unit)} µs · ` : ''}${Math.round(u.snr)} dB over the noise`;
     rows.push(`<div class="ismRow k-unk" title="${esc(tip)}"><span class="ismAgo">${esc(ismAgo(u.ago))}</span><span class="ismBand">${esc(ismBandLabel(u.hz, bands))}</span>`
-      + `<span class="ismTxt">${esc(ismUnkLine(u))}${dl ? ' ' + dl : ''}</span>`
+      + `<span class="ismTxt">${esc(ismUnkLine(u))}</span>`
       + `<span class="ismSnr${u.snr >= 20 ? ' ok' : u.snr >= 10 ? ' warn' : ' bad'}" title="signal over the band's noise">${Math.round(u.snr)} dB</span></div>`);
   }
   return rows.join('');
@@ -525,9 +523,7 @@ export class IsmBox {
   constructor(private onExit: () => void, private onPick: (id: string) => void, private onMap: (key?: string) => void = () => {},
               private rx: () => { lat: number; lon: number } | null = () => null,
               /** ★ beta72: the bands this radio reaches and the one it is on (or heading for) — the BANDS list */
-              private bandList: () => { bands: IsmBand[]; current: string } = () => ({ bands: [], current: '' }),
-              /** ★ beta94: is this the OWNER (the IQ links drawn), and their download of an unidentified burst's IQ */
-              private owner: () => boolean = () => false, private onClip: (id: number) => void = () => {}) {}
+              private bandList: () => { bands: IsmBand[]; current: string } = () => ({ bands: [], current: '' })) {}
 
   private mount(): HTMLElement {
     if (this.el) return this.el;
@@ -564,8 +560,6 @@ export class IsmBox {
       // ★ a position link: the map, on that node — not the row's detail
       const pos = (e.target as HTMLElement).closest('.ismPos') as HTMLElement | null;
       if (pos) { e.preventDefault(); e.stopPropagation(); this.onMap(pos.dataset.pos || ''); return; }
-      const iq = (e.target as HTMLElement).closest('.ismIq') as HTMLElement | null;
-      if (iq) { e.preventDefault(); e.stopPropagation(); const id = Number(iq.dataset.clip); if (id > 0) this.onClip(id); return; }
       const row = (e.target as HTMLElement).closest('.ismTap') as HTMLElement | null;
       if (!row) return;
       this.openKey = this.openKey === row.dataset.key ? '' : (row.dataset.key || '');
@@ -671,7 +665,7 @@ export class IsmBox {
   private drawList() {
     if (!this.el || !this.last) return;
     const r = ismAged(this.last, Math.floor((Date.now() - this.at) / 1000));
-    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx(), this.bandList().bands, this.owner());
+    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx(), this.bandList().bands);
     if (html !== this.lastHtml) {
       const list = this.el.querySelector('#ismList') as HTMLElement;
       // ★ a focused position link survives the redraw (the ages tick every second) — keyboard and pad keep their place

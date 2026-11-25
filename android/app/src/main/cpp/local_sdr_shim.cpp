@@ -29550,24 +29550,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->close();
                 return;
             }
-            if (!isPost && what == "ism-clip") {
-                /* ★★ beta94 AN UNIDENTIFIED ISM BURST'S SAMPLES (vibe_ism_unknown.h). Admin only (the gate above): the IQ
-                 *  of a burst nothing could name might hold a fixed-code remote's code, so listeners get the description and
-                 *  only the owner the file. cu8 at the burst channel's own rate, named for rtl_433 -r
-                 *  (ism_<MHz>M_<rate>k_<UTC>.cu8). Held in memory only, a bounded ring — never on disk here. */
-                const long id = atol(queryParam(reqLine, "id").c_str());
-                std::string name, data;
-                if (id <= 0 || !g_ism.unknownClip(uint32_t(id), name, data)) {
-                    reply(404, "Not Found", "{\"error\":\"that burst is no longer kept\"}"); return;
-                }
-                LOGI("admin ISM clip %ld downloaded by %s (%zu KB, %s)", id, ip.c_str(), data.size() / 1024, name.c_str());
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
-                              "Content-Disposition: attachment; filename=\"" + name + "\"\r\n"
-                              "X-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n"
-                              "Content-Length: " + std::to_string(data.size()) + "\r\n\r\n" + data);
-                sock->close();
-                return;
-            }
             if (!isPost && what == "history") {
                 // ★ ?after=<epoch>: only the new tail — see History::json.
                 reply(200, "OK", g_vsHistory.json(atoll(queryParam(reqLine, "after").c_str())));

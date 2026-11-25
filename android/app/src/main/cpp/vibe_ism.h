@@ -1148,20 +1148,13 @@ public:
 
     /** ★ STAGE 3's first half: a mixed channel → a sliced Burst (false = nothing worth decoding). `keepBb`: hand the
      *  baseband on (the 868 band). The service calls this on its decoder thread. */
-    /** ★ beta94 `raw`: when given, the channel's baseband is handed back there as well (shared, never copied) — the
-     *  service keeps an unidentified burst's samples for the owner (vibe_ism_unknown.h ClipRing). b.bb stays the 868
-     *  band's alone: a burst carrying it is offered to wM-Bus. */
-    static bool finish(RawBurst&& r, bool keepBb, Burst& b, std::shared_ptr<const std::vector<cf>>* raw = nullptr) {
+    static bool finish(RawBurst&& r, bool keepBb, Burst& b) {
         b.tSec = r.tSec;
         b.offHz = r.offHz;
         b.clipped = r.peakAbs > 0.85f;
         b.durS = r.chanRate > 0 ? double(r.bb.size()) / r.chanRate : 0;
         if (!slice(r.bb, r.chanRate, b)) return false;
-        if (keepBb || raw) {
-            auto sp = std::make_shared<const std::vector<cf>>(std::move(r.bb));
-            if (keepBb) { b.bb = sp; b.bbRate = r.chanRate; }
-            if (raw) *raw = std::move(sp);
-        }
+        if (keepBb) { b.bb = std::make_shared<const std::vector<cf>>(std::move(r.bb)); b.bbRate = r.chanRate; }
         return true;
     }
     /** A centred moving average of `w` taps (w odd, ≥ 1). */

@@ -9762,8 +9762,7 @@ function ismUiOn() {
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
   if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (id) => ismPickBand(id), (key) => ismMapOpen(key), () => myPos(),
-                                   () => ({ bands: ismCap?.bands ?? [], current: ismCap?.bands[ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport)]?.id ?? '' }),
-                                   () => adminUnlocked, (id) => void ismClipDownload(id));
+                                   () => ({ bands: ismCap?.bands ?? [], current: ismCap?.bands[ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport)]?.id ?? '' }));
   ismBox.show();
   ismLockControls(true);
   if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
@@ -9913,20 +9912,6 @@ function ismChipClear() {
   delete chip.dataset.ism;
   chip.textContent = '';
   chip.classList.remove('set', 'easing', 'fault');
-}
-/* ★★ beta94 AN UNIDENTIFIED BURST'S IQ, FOR THE OWNER (vibe_ism_unknown.h; the admin API's ism-clip). Signed exactly as the
- *  admin panel signs (admin.ts q()): the password's challenge proof, else the admin ticket. A plain GET answered with a FILE
- *  (Content-Disposition), so every browser saves it — named for rtl_433 -r by the server. */
-async function ismClipDownload(id: number) {
-  if (!adminUnlocked) { showPill('Only the receiver’s owner can download a burst’s samples', 5000); return; }
-  const base = httpBase(currentHost);
-  const q = adminPassword ? await resolveAdminOverride(base, adminPassword) : adminTicketQuery();
-  if (!q) { showPill('Unlock the owner controls again to download samples', 6000); return; }
-  const a = document.createElement('a');
-  a.href = `${base}/vibeserver/admin/ism-clip?id=${encodeURIComponent(String(id))}&${q}`;
-  a.download = '';
-  a.rel = 'noopener';
-  document.body.appendChild(a); a.click(); a.remove();
 }
 /** ★ A report (on) or the server's `ism_off` (null). */
 function onIsmReport(r: IsmReport | null) {

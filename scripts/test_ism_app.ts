@@ -345,7 +345,7 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
 // ★★ beta94 unidentified bursts, steady carriers and the ISM AUTO chip — one rule, two readers
 {
   const r = { ...report, bursts: 65, unknown: 60, steadyN: 5, gain: 29.7, gainAuto: 1, peak: -8.14, clipPct: 0,
-    unk: [{ id: 7, ago: 2.1, hz: 868_271_500, mod: 'OOK', code: 'PWM', rate: 999, unit: 250, n: 64, ms: 63.3, lvl: -10.4, snr: 24.6, iq: 1, kb: 64 },
+    unk: [{ id: 7, ago: 2.1, hz: 868_271_500, mod: 'OOK', code: 'PWM', rate: 999, unit: 250, n: 64, ms: 63.3, lvl: -10.4, snr: 24.6 },
           { id: 6, ago: 9, hz: 868_300_000, mod: 'FSK', code: 'NRZ/Manchester', rate: 4808, unit: 208, n: 36, ms: 33.7, lvl: -22, snr: 9, dev: 30286, clipped: 1 },
           { id: 5, hz: 1, mod: 'nonsense' }, { mod: 'OOK' }, 'x'],
     steady: [{ hz: 868_100_000, lvl: -31.2, lo: 868_095_000, hi: 868_112_000, age: 1, for: 42 }, { hz: 868_270_000, lvl: -40, lo: 868_270_000, hi: 868_270_000, age: 3, for: 9 }, { lvl: 1 }] };
@@ -364,9 +364,9 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('the UNIDENTIFIED chip', [app.ISM_KINDS.at(-1), web.ISM_KINDS.at(-1)], [{ id: 'unk', label: 'UNIDENTIFIED' }, { id: 'unk', label: 'UNIDENTIFIED' }]);
   eq('UNIDENTIFIED lists no devices', app.ismRows(a, 'unk'), []);
   const rows = app.ismUnkRows(a);
-  eq('app rows: carriers first, then bursts; the clip only where kept', rows.map((x) => [x.key, x.clip ?? null]), [['c868095000', null], ['c868270000', null], ['u7', 7], ['u6', null]]);
-  eq('web list: an IQ link for the owner only', [(web.ismListHtml(w, 'unk', { mph: false, pressure: 'psi' }, '', null, [], true).match(/class="qrz ismIq"/g) || []).length,
-                                                  (web.ismListHtml(w, 'unk', { mph: false, pressure: 'psi' }, '', null, [], false).match(/ismIq/g) || []).length], [1, 0]);
+  eq('app rows: carriers first, then bursts', rows.map((x) => x.key), ['c868095000', 'c868270000', 'u7', 'u6']);
+  eq('app rows carry no sample download', rows.some((x) => 'clip' in x || 'kb' in x), false);
+  eq('web list: no IQ link for anybody (removed before beta94 shipped)', (web.ismListHtml(w, 'unk', { mph: false, pressure: 'psi' }, '', null, []).match(/ismIq|ism-clip|data-clip/g) || []).length, 0);
   eq('empty words agree', app.ismEmptyText('unk'), web.ismEmptyText('unk'));
   eq('aged: the bursts and carriers age too', [web.ismAged(w, 5).unk![0].ago, app.ismAged(a, 5).steady![0].age], [7.1, 6]);
   // the chip

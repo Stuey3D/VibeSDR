@@ -1,13 +1,13 @@
 // test-ism-unknown.cpp — beta94 (vibe_ism_unknown.h): ISM's UNIDENTIFIED bursts described, steady carriers told from
-// bursts, the owner's IQ clip ring kept bounded, and the gain chip's figures in the report.
+// bursts, the descriptions kept bounded and carrying no samples, and the gain chip's figures in the report.
 //   1. Synthetic bursts with a KNOWN shape through the real front end (detector → channel → slicer) at 2.4 MS/s: OOK PWM,
 //      OOK PPM, OOK Manchester and FSK NRZ — the description says the modulation, the coding, the rate (±5 %), the length
 //      (±3 ms), the pulse count and the frequency (±10 kHz).
 //   2. A steady carrier (drifting 2 kHz) for 1.8 s → "carrier", never OOK/FSK; a long FSK DATA burst is not a carrier.
-//   3. The clip ring: at most N clips, each at most its byte cap (cut and flagged), all at most the total, the oldest gone
-//      first; the default limits under 1.6 s bursts at 500 kS/s; cu8 scaling; the file name rtl_433 reads.
-//   4. The service on the 433 band (lossless, no threads racing): unidentified bursts described in the report with `iq`,
-//      the carrier listed under `steady` and NOT counted as unidentified, the clip fetchable by id, the chip's peak/clipPct.
+//   3. The descriptions: at most N kept, oldest gone first, and NO SAMPLES — no `iq`/`kb` (the owner's IQ clips were removed
+//      before beta94 shipped, Stuart 2026-11-25: no keyless-entry capture).
+//   4. The service on the 433 band (lossless, no threads racing): unidentified bursts described in the report (shape only),
+//      the carrier listed under `steady` and NOT counted as unidentified, the chip's peak/clipPct.
 // ★ Silent: no audio anywhere.
 //   --write-clip <out.u8> <radio centre Hz> <rate>: a few seconds of rtl_tcp u8 IQ for scripts/test-server-ism-unknown.mjs
 //   (an OOK NRZ burst at 433.80, an FSK burst at 434.05, a steady carrier at 433.65 MHz — nothing any decoder names).
@@ -110,7 +110,7 @@ static int writeClip(const char* out, double centre, double rate) {
 
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
-    printf("test-ism-unknown — unidentified ISM bursts described, steady carriers, the owner's clip ring\n");
+    printf("test-ism-unknown — unidentified ISM bursts described (shape only), steady carriers\n");
     const double C = 433.92e6;
 
     // 1. Known shapes → the right description
@@ -189,39 +189,20 @@ int main(int argc, char** argv) {
         CHECK(cl.size() == 0, "carriers forgotten after %.0f s", CarrierList::kForgetS);
     }
 
-    // 3. The clip ring
+    // 3. The descriptions: bounded, shape only
     {
-        printf(" clip ring\n");
-        UnknownBook::Limits lim; lim.descs = 4; lim.clips = 3; lim.clipBytes = 1000; lim.bytes = 2500;
+        printf(" descriptions\n");
+        UnknownBook::Limits lim; lim.descs = 4;
         UnknownBook bk(lim);
-        std::vector<cf> bb(2000, cf(0.1f, -0.1f));
-        uint32_t first = 0, last = 0;
-        for (int i = 0; i < 10; ++i) { BurstDesc d; d.freqHz = 433.9e6; d.mod = "OOK"; last = bk.add(d, &bb, 250e3, 1795559712.0 + i); if (!i) first = last; }
+        for (int i = 0; i < 10; ++i) { BurstDesc d; d.freqHz = 433.9e6; d.mod = "OOK"; bk.add(d); }
         CHECK(bk.descCount() == 4, "descriptions kept: %zu (want 4)", bk.descCount());
-        CHECK(bk.clipCount() <= 3 && bk.clipBytes() <= 2500, "clips %zu, %zu bytes (caps 3, 2500)", bk.clipCount(), bk.clipBytes());
-        CHECK(bk.clipCount() == 2, "two 1000-byte clips fit 2500 bytes: %zu", bk.clipCount());
-        std::string name, data;
-        CHECK(!bk.clip(first, name, data), "the oldest clip dropped");
-        CHECK(bk.clip(last, name, data) && data.size() == 1000, "the newest clip kept, cut to its cap (%zu)", data.size());
         const std::string js = bk.json(0);
-        CHECK(js.find("\"cut\":1") != std::string::npos && js.find("\"iq\":1") != std::string::npos, "json flags the cut clip: %s", js.substr(0, 160).c_str());
         CHECK(std::count(js.begin(), js.end(), '{') == 4, "json lists the 4 kept descriptions");
-        // the default limits, under the worst bursts the front end makes (1.6 s at the 868 band's ~500 kS/s)
+        CHECK(js.find("\"id\":10") != std::string::npos && js.find("\"id\":6,") == std::string::npos, "the newest kept, the oldest gone");
+        CHECK(js.find("\"iq\"") == std::string::npos && js.find("\"kb\"") == std::string::npos, "no samples: %s", js.substr(0, 160).c_str());
         UnknownBook big;
-        std::vector<cf> worst(size_t(1.6 * 500e3), cf(0.3f, 0.2f));
-        for (int i = 0; i < 40; ++i) { BurstDesc d; d.freqHz = 868.3e6; big.add(d, &worst, 500e3, 0); }
-        CHECK(big.clipCount() <= 12 && big.clipBytes() <= 1536 * 1024, "default ring: %zu clips, %zu bytes", big.clipCount(), big.clipBytes());
+        for (int i = 0; i < 40; ++i) { BurstDesc d; d.freqHz = 868.3e6; big.add(d); }
         CHECK(big.descCount() == 16, "default descriptions: %zu", big.descCount());
-        printf("   default ring under 40 worst bursts: %zu clips, %.0f KB\n", big.clipCount(), big.clipBytes() / 1024.0);
-        // cu8: the peak at ±100 around 127.5
-        std::vector<cf> tone(100);
-        for (size_t i = 0; i < tone.size(); ++i) tone[i] = cf(0.01f * std::cos(0.3f * i), 0.01f * std::sin(0.3f * i));
-        const auto u = toCu8(tone, 1000);
-        int mx = 0, mn = 255; for (uint8_t b : u) { mx = std::max(mx, int(b)); mn = std::min(mn, int(b)); }
-        CHECK(u.size() == 200 && mx >= 226 && mx <= 228 && mn >= 27 && mn <= 29, "cu8 scaling %d..%d", mn, mx);
-        // the name: frequency, rate, UTC, format — rtl_433's shape
-        const std::string nm = clipName(868.27154e6, 500e3, 1795559712.0);   // 2026-11-24 22:35:12 UTC
-        CHECK(nm == "ism_868.2715M_500k_20261124T223512Z.cu8", "clip name %s", nm.c_str());
     }
 
     // 4. The service end to end on the 433 band
@@ -253,17 +234,10 @@ int main(int argc, char** argv) {
         const std::string st = ps == std::string::npos ? "" : r.substr(ps, r.find(']', ps) - ps);
         CHECK(unk.find("\"mod\":\"OOK\"") != std::string::npos && unk.find("\"mod\":\"FSK\"") != std::string::npos, "both bursts described: %s", unk.substr(0, 300).c_str());
         CHECK(unk.find("\"mod\":\"carrier\"") == std::string::npos, "no carrier among the unidentified");
-        CHECK(unk.find("\"iq\":1") != std::string::npos, "their samples kept for the owner");
+        CHECK(unk.find("\"iq\"") == std::string::npos && unk.find("\"kb\"") == std::string::npos, "no samples kept or offered");
         CHECK(st.find("\"hz\":43365") != std::string::npos || st.find("\"hz\":43364") != std::string::npos, "the carrier at 433.65 listed as steady: %s", st.c_str());
         CHECK(unknown >= 2 && unknown <= bursts - field("steadyN"), "unidentified %.0f excludes carriers (bursts %.0f)", unknown, bursts);
         CHECK(field("peak") > -30 && field("peak") < 0.1 && field("clipPct") >= 0, "the chip's peak %.1f dBFS, clip %.1f %%", field("peak"), field("clipPct"));
-        // the clip by id: the first described burst's
-        const size_t pid = unk.find("\"id\":");
-        const uint32_t id = pid == std::string::npos ? 0 : uint32_t(std::atoi(unk.c_str() + pid + 5));
-        std::string name, data;
-        CHECK(svc.unknownClip(id, name, data) && !data.empty() && data.size() % 2 == 0, "clip %u fetched (%zu bytes)", id, data.size());
-        CHECK(std::regex_match(name, std::regex("ism_43[34]\\.\\d{4}M_\\d+k_\\d{8}T\\d{6}Z\\.cu8")), "clip name %s", name.c_str());
-        CHECK(!svc.unknownClip(id + 1000, name, data), "an unknown id is refused");
     }
 
     printf("%d checks, %d failed\n", checks, fails);

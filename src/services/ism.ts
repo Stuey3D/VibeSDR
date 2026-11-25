@@ -40,10 +40,10 @@ export interface IsmLora { chans: number; plan: number; dets: number; frames: nu
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 /** ★ `region` (beta72): where the band is used — the BANDS list's second line; absent from an older server. */
 export interface IsmBand { id: string; name: string; hz: number; region?: string }
-/** ★ beta94 an UNIDENTIFIED burst, described by the server (vibe_ism_unknown.h) — the web's IsmUnk exactly. `iq` 1 = its
- *  samples are kept for the OWNER (admin ism-clip?id=…). */
+/** ★ beta94 an UNIDENTIFIED burst, described by the server (vibe_ism_unknown.h) — the web's IsmUnk exactly. Shape only:
+ *  no samples, no bits (Stuart 2026-11-25: no keyless-entry capture). */
 export interface IsmUnk { id: number; ago: number; hz: number; mod: string; code?: string; rate?: number; unit?: number; n?: number;
-  ms: number; lvl: number; snr: number; dev?: number; clipped?: number; iq?: number; kb?: number; cut?: number }
+  ms: number; lvl: number; snr: number; dev?: number; clipped?: number }
 /** ★ beta94 a STEADY CARRIER (not counted as unidentified) — the web's IsmSteady. */
 export interface IsmSteady { hz: number; lvl: number; lo: number; hi: number; age: number; for: number }
 export interface IsmReport {
@@ -178,13 +178,12 @@ export function ismSteadyLine(c: IsmSteady): string {
   const drift = c.hi - c.lo >= 2000 ? ` · drifting ${(c.lo / 1e6).toFixed(3)}–${(c.hi / 1e6).toFixed(3)} MHz` : '';
   return `${(c.hz / 1e6).toFixed(3)} MHz · steady carrier · ${Math.round(c.lvl)} dBFS${drift} · probably local interference, not a device`;
 }
-/** ★ beta94 the UNIDENTIFIED chip's rows: steady carriers first, then the bursts (IsmPanel draws them; `iq` = the owner's
- *  download link). */
-export function ismUnkRows(r: IsmReport | null): Array<{ key: string; ago: number; hz: number; text: string; snr?: number; clip?: number; kb?: number }> {
+/** ★ beta94 the UNIDENTIFIED chip's rows: steady carriers first, then the bursts (IsmPanel draws them). */
+export function ismUnkRows(r: IsmReport | null): Array<{ key: string; ago: number; hz: number; text: string; snr?: number }> {
   if (!r) return [];
-  const out: Array<{ key: string; ago: number; hz: number; text: string; snr?: number; clip?: number; kb?: number }> = [];
+  const out: Array<{ key: string; ago: number; hz: number; text: string; snr?: number }> = [];
   for (const c of r.steady ?? []) out.push({ key: `c${Math.round(c.lo)}`, ago: c.age, hz: c.hz, text: ismSteadyLine(c) });
-  for (const u of r.unk ?? []) out.push({ key: `u${u.id}`, ago: u.ago, hz: u.hz, text: ismUnkLine(u), snr: u.snr, clip: u.iq ? u.id : undefined, kb: u.kb });
+  for (const u of r.unk ?? []) out.push({ key: `u${u.id}`, ago: u.ago, hz: u.hz, text: ismUnkLine(u), snr: u.snr });
   return out;
 }
 /** ★ beta94 THE ISM AUTO STATUS ITEM — the web's ismGainChip, the same words: VibeAGC is off in ISM (its own gain rule
