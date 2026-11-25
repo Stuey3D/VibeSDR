@@ -36,5 +36,14 @@ export function useRotateAway(W: number, H: number): boolean {
     revealSubs.add(f);
     return () => { revealSubs.delete(f); };
   }, []);
+  /* ★★ NEVER AWAY FOR GOOD. The bar reveals within its own 1.5 s cap; if it never says so (not mounted — controls
+   *  hidden through the turn — or it did not see the turn), a follower would stay invisible until the next rotation:
+   *  the decoder box gone on the Duo's inner screen in landscape (Stuart, 2026-11-25). 2.5 s, after the bar's cap. */
+  const isAway = away.current;
+  useEffect(() => {
+    if (!isAway) return;
+    const t = setTimeout(() => { if (away.current) { away.current = false; force(); } }, 2500);
+    return () => clearTimeout(t);
+  }, [isAway, W, H]);
   return away.current;
 }
