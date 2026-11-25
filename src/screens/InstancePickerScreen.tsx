@@ -3284,7 +3284,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                           {serving.running
                             ? `${serving.listeners}/${serving.maxUsers} connected — tap for the server screen`
-                            : 'serve this dongle to other devices on your Wi-Fi'}
+                            : 'serve this radio to other devices on your Wi-Fi'}
                         </Text>
                       </View>
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.keyDim, marginLeft: 8 }}>›</Text>
