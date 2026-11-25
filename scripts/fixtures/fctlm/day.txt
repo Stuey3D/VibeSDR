@@ -1,69 +1,69 @@
 AO-73 · FUNcube telemetry · 2026-11-22 (UTC)
-One line a good frame, every pass this server decoded (every radio, background passes and listeners alike, each frame once). Each pass's every channel is its own .csv item. raw = sent uncalibrated (no published calibration).
+One line a good frame, every pass this server decoded (every radio, background passes and listeners alike, each frame once). Each pass's every channel is its own .csv item, in the units of AMSAT-UK's published equations.
 
-14:02:30  AO-73  WO1 · seq 4000 · Eclipse · battery 1433 raw · el 5° · RS fixed 0
-14:02:35  AO-73  WO2 · seq 4001 · Eclipse · battery 1431 raw · el 10° · RS fixed 0
-14:02:40  AO-73  WO3 · seq 4002 · Eclipse · battery 1429 raw · el 16° · RS fixed 0
-14:02:45  AO-73  WO4 · seq 4003 · Eclipse · battery 1429 raw · el 21° · RS fixed 0
-14:02:50  AO-73  WO5 · seq 4004 · Eclipse · battery 1430 raw · el 26° · RS fixed 0
-14:02:55  AO-73  WO6 · seq 4005 · Eclipse · battery 1431 raw · el 30° · RS fixed 0
-14:03:00  AO-73  WO7 · seq 4006 · Eclipse · battery 1433 raw · el 34° · RS fixed 0
-14:03:05  AO-73  WO8 · seq 4007 · Eclipse · battery 1436 raw · el 38° · RS fixed 0
-14:03:10  AO-73  WO9 · seq 4008 · Eclipse · battery 1440 raw · el 41° · RS fixed 0
-14:03:15  AO-73  WO10 · seq 4009 · Eclipse · battery 1444 raw · el 43° · RS fixed 0
-14:03:20  AO-73  WO11 · seq 4010 · Eclipse · battery 1447 raw · el 44° · RS fixed 0
-14:03:25  AO-73  WO12 · seq 4011 · Eclipse · battery 1451 raw · el 45° · RS fixed 0
-14:03:30  AO-73  HR1 · seq 4012 · Eclipse · battery 1454 raw · el 45° · RS fixed 0
-14:03:35  AO-73  FM1 · seq 4013 · Eclipse · battery 1456 raw · el 44° · RS fixed 0 · "5<CJQX_fmt{.................."
-14:03:40  AO-73  FM2 · seq 4014 · Eclipse · battery 1458 raw · el 43° · RS fixed 0 · "6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-14:03:45  AO-73  FM3 · seq 4015 · Eclipse · battery 1459 raw · el 41° · RS fixed 0 · "7>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-14:03:50  AO-73  HR2 · seq 4016 · Eclipse · battery 1459 raw · el 38° · RS fixed 0
-14:03:55  AO-73  FM4 · seq 4017 · Eclipse · battery 1458 raw · el 34° · RS fixed 0 · "9@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-14:04:00  AO-73  FM5 · seq 4018 · Eclipse · battery 1456 raw · el 30° · RS fixed 0 · ":AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-14:04:05  AO-73  FM6 · seq 4019 · Eclipse · battery 1453 raw · el 26° · RS fixed 0 · ";BIPW^elsz.................... ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{......."
-14:04:10  AO-73  HR3 · seq 4020 · Eclipse · battery 1450 raw · el 21° · RS fixed 0
-14:04:15  AO-73  FM7 · seq 4021 · Eclipse · battery 1447 raw · el 16° · RS fixed 0 · "=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-14:04:20  AO-73  FM8 · seq 4022 · Eclipse · battery 1443 raw · el 10° · RS fixed 0 · ">ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-14:04:25  AO-73  FM9 · seq 4023 · Eclipse · battery 1439 raw · el 5° · RS fixed 0 · "?FMT[bipw~................... ...&-4;BIPW^elsz.................... ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx........"
-15:42:30  AO-73  WO1 · seq 4100 · Eclipse · battery 1432 raw · el 5° · RS fixed 0
-15:42:35  AO-73  WO2 · seq 4101 · Eclipse · battery 1430 raw · el 10° · RS fixed 0
-15:42:40  AO-73  WO3 · seq 4102 · Eclipse · battery 1428 raw · el 16° · RS fixed 0
-15:42:45  AO-73  WO4 · seq 4103 · Eclipse · battery 1428 raw · el 21° · RS fixed 0
-15:42:50  AO-73  WO5 · seq 4104 · Eclipse · battery 1429 raw · el 26° · RS fixed 0
-15:42:55  AO-73  WO6 · seq 4105 · Eclipse · battery 1430 raw · el 30° · RS fixed 0
-15:43:00  AO-73  WO7 · seq 4106 · Eclipse · battery 1432 raw · el 34° · RS fixed 0
-15:43:05  AO-73  WO8 · seq 4107 · Eclipse · battery 1435 raw · el 38° · RS fixed 0
-15:43:10  AO-73  WO9 · seq 4108 · Eclipse · battery 1439 raw · el 41° · RS fixed 0
-15:43:15  AO-73  WO10 · seq 4109 · Eclipse · battery 1443 raw · el 43° · RS fixed 0
-15:43:50  AO-73  HR2 · seq 4116 · Eclipse · battery 1458 raw · el 38° · RS fixed 0
-15:43:55  AO-73  FM4 · seq 4117 · Eclipse · battery 1457 raw · el 34° · RS fixed 0 · "................ ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-15:44:00  AO-73  FM5 · seq 4118 · Eclipse · battery 1455 raw · el 30° · RS fixed 0 · ".............."
-15:44:05  AO-73  FM6 · seq 4119 · Eclipse · battery 1452 raw · el 26° · RS fixed 0 · "...................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-15:44:10  AO-73  HR3 · seq 4120 · Eclipse · battery 1449 raw · el 21° · RS fixed 0
-15:44:15  AO-73  FM7 · seq 4121 · Eclipse · battery 1446 raw · el 16° · RS fixed 0 · "............... ...&-4;BIPW^elsz.................... ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx......................"
-15:44:20  AO-73  FM8 · seq 4122 · Eclipse · battery 1442 raw · el 10° · RS fixed 0 · ".................. '.5<CJQX_fmt{.................."
-15:44:25  AO-73  FM9 · seq 4123 · Eclipse · battery 1438 raw · el 5° · RS fixed 0 · "..................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:22:30  AO-73  WO1 · seq 4200 · Eclipse · battery 1431 raw · el 5° · RS fixed 0
-17:22:35  AO-73  WO2 · seq 4201 · Eclipse · battery 1429 raw · el 10° · RS fixed 0
-17:22:40  AO-73  WO3 · seq 4202 · Eclipse · battery 1427 raw · el 16° · RS fixed 0
-17:22:45  AO-73  WO4 · seq 4203 · Eclipse · battery 1427 raw · el 21° · RS fixed 0
-17:22:50  AO-73  WO5 · seq 4204 · Eclipse · battery 1428 raw · el 26° · RS fixed 0
-17:22:55  AO-73  WO6 · seq 4205 · Eclipse · battery 1429 raw · el 30° · RS fixed 0
-17:23:00  AO-73  WO7 · seq 4206 · Eclipse · battery 1431 raw · el 34° · RS fixed 0
-17:23:05  AO-73  WO8 · seq 4207 · Eclipse · battery 1434 raw · el 38° · RS fixed 0
-17:23:10  AO-73  WO9 · seq 4208 · Eclipse · battery 1438 raw · el 41° · RS fixed 0
-17:23:15  AO-73  WO10 · seq 4209 · Eclipse · battery 1442 raw · el 43° · RS fixed 0
-17:23:20  AO-73  WO11 · seq 4210 · Eclipse · battery 1445 raw · el 44° · RS fixed 0
-17:23:25  AO-73  WO12 · seq 4211 · Eclipse · battery 1449 raw · el 45° · RS fixed 0
-17:23:30  AO-73  HR1 · seq 4212 · Eclipse · battery 1452 raw · el 45° · RS fixed 0
-17:23:35  AO-73  FM1 · seq 4213 · Eclipse · battery 1454 raw · el 44° · RS fixed 0 · "..... '.5<CJQX_fmt{.................."
-17:23:40  AO-73  FM2 · seq 4214 · Eclipse · battery 1456 raw · el 43° · RS fixed 0 · ".....!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:23:45  AO-73  FM3 · seq 4215 · Eclipse · battery 1457 raw · el 41° · RS fixed 0 · ".. ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:23:50  AO-73  HR2 · seq 4216 · Eclipse · battery 1457 raw · el 38° · RS fixed 0
-17:23:55  AO-73  FM4 · seq 4217 · Eclipse · battery 1456 raw · el 34° · RS fixed 0 · ".....$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:24:00  AO-73  FM5 · seq 4218 · Eclipse · battery 1454 raw · el 30° · RS fixed 0 · ".....%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:24:05  AO-73  FM6 · seq 4219 · Eclipse · battery 1451 raw · el 26° · RS fixed 0 · ". ...&-4;BIPW^elsz.................... ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt"
-17:24:10  AO-73  HR3 · seq 4220 · Eclipse · battery 1448 raw · el 21° · RS fixed 0
-17:24:15  AO-73  FM7 · seq 4221 · Eclipse · battery 1445 raw · el 16° · RS fixed 0 · "....!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:24:20  AO-73  FM8 · seq 4222 · Eclipse · battery 1441 raw · el 10° · RS fixed 0 · ". ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx....................... '.5<CJQX_fmt{.................."
-17:24:25  AO-73  FM9 · seq 4223 · Eclipse · battery 1437 raw · el 5° · RS fixed 0 · "....#*18?FMT[bipw~................... ...&-4;BIPW^elsz.................... ..")07>ELSZahov}.......................%,3:AHOV]dkry.......................!(/6=DKRY`gnu|.......................$+29@GNU\cjqx"
+14:02:30  AO-73  WO1 · seq 4000 · Sunlight · battery 7.762 V · el 5° · RS fixed 0
+14:02:35  AO-73  WO2 · seq 4001 · Sunlight · battery 7.742 V · el 10° · RS fixed 0
+14:02:40  AO-73  WO3 · seq 4002 · Sunlight · battery 7.729 V · el 16° · RS fixed 0
+14:02:45  AO-73  WO4 · seq 4003 · Sunlight · battery 7.726 V · el 21° · RS fixed 0
+14:02:50  AO-73  WO5 · seq 4004 · Sunlight · battery 7.732 V · el 26° · RS fixed 0
+14:02:55  AO-73  WO6 · seq 4005 · Sunlight · battery 7.747 V · el 30° · RS fixed 0
+14:03:00  AO-73  WO7 · seq 4006 · Sunlight · battery 7.770 V · el 34° · RS fixed 0
+14:03:05  AO-73  WO8 · seq 4007 · Sunlight · battery 7.800 V · el 38° · RS fixed 0
+14:03:10  AO-73  WO9 · seq 4008 · Sunlight · battery 7.834 V · el 41° · RS fixed 0
+14:03:15  AO-73  WO10 · seq 4009 · Sunlight · battery 7.871 V · el 43° · RS fixed 0
+14:03:20  AO-73  WO11 · seq 4010 · Sunlight · battery 7.908 V · el 44° · RS fixed 0
+14:03:25  AO-73  WO12 · seq 4011 · Sunlight · battery 7.944 V · el 45° · RS fixed 0
+14:03:30  AO-73  HR1 · seq 4012 · Sunlight · battery 7.975 V · el 45° · RS fixed 0
+14:03:35  AO-73  FM1 · seq 4013 · Sunlight · battery 7.999 V · el 44° · RS fixed 0
+14:03:40  AO-73  FM2 · seq 4014 · Sunlight · battery 8.017 V · el 43° · RS fixed 0
+14:03:45  AO-73  FM3 · seq 4015 · Sunlight · battery 8.025 V · el 41° · RS fixed 0
+14:03:50  AO-73  HR2 · seq 4016 · Sunlight · battery 8.024 V · el 38° · RS fixed 0
+14:03:55  AO-73  FM4 · seq 4017 · Sunlight · battery 8.014 V · el 34° · RS fixed 0
+14:04:00  AO-73  FM5 · seq 4018 · Sunlight · battery 7.996 V · el 30° · RS fixed 0
+14:04:05  AO-73  FM6 · seq 4019 · Sunlight · battery 7.970 V · el 26° · RS fixed 0
+14:04:10  AO-73  HR3 · seq 4020 · Sunlight · battery 7.938 V · el 21° · RS fixed 0
+14:04:15  AO-73  FM7 · seq 4021 · Sunlight · battery 7.902 V · el 16° · RS fixed 0
+14:04:20  AO-73  FM8 · seq 4022 · Sunlight · battery 7.865 V · el 10° · RS fixed 0
+14:04:25  AO-73  FM9 · seq 4023 · Sunlight · battery 7.828 V · el 5° · RS fixed 0
+15:42:30  AO-73  WO1 · seq 4100 · Sunlight · battery 7.752 V · el 5° · RS fixed 0
+15:42:35  AO-73  WO2 · seq 4101 · Sunlight · battery 7.732 V · el 10° · RS fixed 0
+15:42:40  AO-73  WO3 · seq 4102 · Sunlight · battery 7.719 V · el 16° · RS fixed 0
+15:42:45  AO-73  WO4 · seq 4103 · Sunlight · battery 7.716 V · el 21° · RS fixed 0
+15:42:50  AO-73  WO5 · seq 4104 · Sunlight · battery 7.722 V · el 26° · RS fixed 0
+15:42:55  AO-73  WO6 · seq 4105 · Sunlight · battery 7.737 V · el 30° · RS fixed 0
+15:43:00  AO-73  WO7 · seq 4106 · Sunlight · battery 7.760 V · el 34° · RS fixed 0
+15:43:05  AO-73  WO8 · seq 4107 · Sunlight · battery 7.790 V · el 38° · RS fixed 0
+15:43:10  AO-73  WO9 · seq 4108 · Sunlight · battery 7.824 V · el 41° · RS fixed 0
+15:43:15  AO-73  WO10 · seq 4109 · Sunlight · battery 7.861 V · el 43° · RS fixed 0
+15:43:50  AO-73  HR2 · seq 4116 · Sunlight · battery 8.014 V · el 38° · RS fixed 0
+15:43:55  AO-73  FM4 · seq 4117 · Sunlight · battery 8.004 V · el 34° · RS fixed 0
+15:44:00  AO-73  FM5 · seq 4118 · Sunlight · battery 7.986 V · el 30° · RS fixed 0
+15:44:05  AO-73  FM6 · seq 4119 · Sunlight · battery 7.960 V · el 26° · RS fixed 0
+15:44:10  AO-73  HR3 · seq 4120 · Sunlight · battery 7.928 V · el 21° · RS fixed 0
+15:44:15  AO-73  FM7 · seq 4121 · Sunlight · battery 7.892 V · el 16° · RS fixed 0
+15:44:20  AO-73  FM8 · seq 4122 · Sunlight · battery 7.855 V · el 10° · RS fixed 0
+15:44:25  AO-73  FM9 · seq 4123 · Sunlight · battery 7.818 V · el 5° · RS fixed 0
+17:22:30  AO-73  WO1 · seq 4200 · Sunlight · battery 7.742 V · el 5° · RS fixed 0
+17:22:35  AO-73  WO2 · seq 4201 · Sunlight · battery 7.722 V · el 10° · RS fixed 0
+17:22:40  AO-73  WO3 · seq 4202 · Sunlight · battery 7.709 V · el 16° · RS fixed 0
+17:22:45  AO-73  WO4 · seq 4203 · Sunlight · battery 7.706 V · el 21° · RS fixed 0
+17:22:50  AO-73  WO5 · seq 4204 · Sunlight · battery 7.712 V · el 26° · RS fixed 0
+17:22:55  AO-73  WO6 · seq 4205 · Sunlight · no EPS data · el 30° · RS fixed 0
+17:23:00  AO-73  WO7 · seq 4206 · Sunlight · no EPS data · el 34° · RS fixed 0
+17:23:05  AO-73  WO8 · seq 4207 · Sunlight · no EPS data · el 38° · RS fixed 0
+17:23:10  AO-73  WO9 · seq 4208 · Sunlight · battery 7.814 V · el 41° · RS fixed 0
+17:23:15  AO-73  WO10 · seq 4209 · Sunlight · battery 7.851 V · el 43° · RS fixed 0
+17:23:20  AO-73  WO11 · seq 4210 · Sunlight · battery 7.888 V · el 44° · RS fixed 0
+17:23:25  AO-73  WO12 · seq 4211 · Sunlight · battery 7.924 V · el 45° · RS fixed 0
+17:23:30  AO-73  HR1 · seq 4212 · Sunlight · battery 7.955 V · el 45° · RS fixed 0
+17:23:35  AO-73  FM1 · seq 4213 · Sunlight · battery 7.979 V · el 44° · RS fixed 0
+17:23:40  AO-73  FM2 · seq 4214 · Sunlight · battery 7.997 V · el 43° · RS fixed 0
+17:23:45  AO-73  FM3 · seq 4215 · Sunlight · battery 8.005 V · el 41° · RS fixed 0
+17:23:50  AO-73  HR2 · seq 4216 · Sunlight · battery 8.004 V · el 38° · RS fixed 0
+17:23:55  AO-73  FM4 · seq 4217 · Sunlight · battery 7.994 V · el 34° · RS fixed 0
+17:24:00  AO-73  FM5 · seq 4218 · Sunlight · battery 7.976 V · el 30° · RS fixed 0
+17:24:05  AO-73  FM6 · seq 4219 · Sunlight · battery 7.950 V · el 26° · RS fixed 0
+17:24:10  AO-73  HR3 · seq 4220 · Sunlight · battery 7.918 V · el 21° · RS fixed 0
+17:24:15  AO-73  FM7 · seq 4221 · Sunlight · battery 7.882 V · el 16° · RS fixed 0
+17:24:20  AO-73  FM8 · seq 4222 · Sunlight · battery 7.845 V · el 10° · RS fixed 0
+17:24:25  AO-73  FM9 · seq 4223 · Sunlight · battery 7.808 V · el 5° · RS fixed 0

@@ -3,7 +3,8 @@
 // ★★ WHAT THIS PINS (frames from vibe_fctlm_tx.h's sample frames through the REAL parser, on a fake clock — FIXTURE data,
 //    nothing here was heard on air):
 //    §1 THE PASS CSV: one .csv item a pass — the comment head, ONE header row whose column count every row matches, every
-//       channel the frame carries, "[raw]" on the uncalibrated ones and nothing on counts, the values exactly the parser's.
+//       channel the frame carries, "[unit]" on the calibrated ones (beta94: V, mA, °C …), "[raw]" only where no conversion
+//       is published, nothing on counts, the values exactly the parser's.
 //       Its title ("AO-73 telemetry · pass 14:02 UTC · N frames · max el 54°") and download name ride in the index.
 //    §2 NEVER A WRITE PER FRAME: nothing on disk inside the first minute; then ONE append a minute; finish() writes the rest.
 //    §3 PASSES: a new AOS = a new file; no AOS known = a gap over 20 minutes; another satellite = another file.
@@ -16,6 +17,8 @@
 //       pass at once — one CSV, one day log, one index item each, every frame once, no torn lines.
 //    §5 BOUNDED: a pass past 256 KB goes on in "part 2"; no file passes the cap by more than one flush.
 //    §6 SERVED: a .csv resolves as text/csv.
+//    §7 ★★ beta94 DATA-VALID FLAGS: a frame whose EPS says "not valid" writes BLANK EPS cells (the columns stay — no new
+//       file), its log line says "no EPS data"; a JY1Sat pass gets JY1Sat's own columns.
 #include "vibe_fctlm_tx.h"
 #include "vibe_fctlm_gallery.h"
 
@@ -92,12 +95,18 @@ static void s1_s2() {
     CHECK(L.size() == 3 + 1 + 30, "3 comment lines + a header + 30 rows (got %zu lines)", L.size());
     CHECK(L.size() > 3 && L[0].rfind("# FUNcube telemetry \xc2\xb7 AO-73 \xc2\xb7 145.9350 MHz USB", 0) == 0, "the head names the satellite and the dial: %s", L.empty() ? "" : L[0].c_str());
     CHECK(L.size() > 3 && L[1].find("AOS 14:01") != std::string::npos && L[1].find("LOS 14:13 UTC") != std::string::npos, "the pass's AOS and LOS: %s", L.size() > 1 ? L[1].c_str() : "");
-    CHECK(L.size() > 3 && L[2].find("[raw] = sent uncalibrated") != std::string::npos, "the head says what [raw] means");
+    CHECK(L.size() > 3 && L[2].find("Units from AMSAT-UK's published telemetry equations") != std::string::npos
+          && L[2].find("[raw] = that channel has no published conversion") != std::string::npos && L[2].find("blank cell") != std::string::npos,
+          "the head says where the units come from, what [raw] means and what a blank cell means");
     const std::string hdr = L.size() > 3 ? L[3] : "";
     const vibefc::Decoded d0 = frame(0, 1000);
     CHECK(cols(hdr) == 7 + (int)d0.values.size(), "the header: 7 fixed columns + %zu channels (got %d)", d0.values.size(), cols(hdr));
     CHECK(hdr.rfind("utc,unix,frame,seq,mode,elevation [deg],rs fixed,", 0) == 0, "the fixed columns first");
-    CHECK(hdr.find(",Battery voltage [raw],") != std::string::npos, "Battery voltage is labelled [raw] (no published calibration)");
+    CHECK(hdr.find(",Battery voltage [V],") != std::string::npos && hdr.find(",Battery temp [\xc2\xb0" "C],") != std::string::npos
+          && hdr.find(",Total photo current [mA],") != std::string::npos && hdr.find(",PA forward power [mW],") != std::string::npos
+          && hdr.find(",Sun sensor X+ [lux],") != std::string::npos, "units in the headings: Battery voltage [V], Battery temp [°C], [mA], [mW], [lux]");
+    CHECK(hdr.find(",Receiver RSSI [raw],") != std::string::npos && count(hdr, "[raw]") == 2,
+          "only Doppler and RSSI are [raw] (the sheet: \"use raw values\") — %d", count(hdr, "[raw]"));
     CHECK(hdr.find(",Reboot count,") != std::string::npos && hdr.find("Reboot count [") == std::string::npos, "a count has no bracket");
     bool same = true; for (size_t i = 4; i < L.size(); ++i) same &= cols(L[i]) == cols(hdr);
     CHECK(same, "every row has the header's column count");
@@ -105,7 +114,7 @@ static void s1_s2() {
     if (L.size() > 4) {
         std::vector<std::string> cells; std::stringstream ss(L[4]); std::string x; while (std::getline(ss, x, ',')) cells.push_back(x);
         bool eq = cells.size() == 7 + d0.values.size();
-        for (size_t i = 0; eq && i < d0.values.size(); ++i) eq &= cells[7 + i] == vibefc::num(d0.values[i].v);
+        for (size_t i = 0; eq && i < d0.values.size(); ++i) eq &= cells[7 + i] == vibefc::num(d0.values[i].v, d0.values[i].dp);
         CHECK(eq, "row 1's channels are the parser's values, in order");
         CHECK(cells.size() > 5 && cells[0] == "2026-11-22T14:02:00Z" && cells[1] == std::to_string(T0) && cells[2] == "WO1" && cells[3] == "1000" && cells[5] == "10.0",
               "row 1: UTC, unix, frame, seq, elevation (%s,%s,%s,%s,%s)", cells.size() > 5 ? cells[0].c_str() : "", cells.size() > 5 ? cells[1].c_str() : "",
@@ -152,8 +161,8 @@ static void s3_s4() {
     for (auto& n : txt) if (st.field(n, "title").rfind("AO-73", 0) == 0) ao = n;
     std::string body; st.readItem(ao, body);
     CHECK(count(body, "  AO-73  ") == 65, "AO-73's log holds every frame of every pass: 65 lines (got %d)", count(body, "  AO-73  "));
-    CHECK(body.find("14:02:00  AO-73  WO1 \xc2\xb7 seq 2000 \xc2\xb7 ") != std::string::npos && body.find(" raw \xc2\xb7 RS fixed 0") != std::string::npos,
-          "a log line: UTC time, satellite, frame, seq, mode, battery raw, RS");
+    CHECK(body.find("14:02:00  AO-73  WO1 \xc2\xb7 seq 2000 \xc2\xb7 ") != std::string::npos && body.find(" \xc2\xb7 battery 1.444 V \xc2\xb7 RS fixed 0") != std::string::npos
+          && body.find(" raw") == std::string::npos, "a log line: UTC time, satellite, frame, seq, mode, battery in volts, RS");
     CHECK(st.field(ao, "title") == "AO-73 telemetry log \xc2\xb7 22 Nov \xc2\xb7 65 frames", "its title counts the day: %s", st.field(ao, "title").c_str());
     // a restart: the same day's log, counted on
     {
@@ -348,8 +357,66 @@ static void s5() {
     rmDir(dir);
 }
 
-/** ★ `--write-fixture <dir>`: three passes of SYNTHETIC readings (the sample frame with its analogue values swung along a
- *  pass — a battery sagging, panels warming) written exactly as the server writes them, for the clients' chart tests
+static void s7() {
+    std::printf("§7 ★★ beta94 data-valid flags: blank cells, \"no EPS data\"; JY1Sat's own columns\n");
+    const std::string dir = tmpDir("valid");
+    gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
+    Clock ck;
+    {
+        bg::FcTlmGalleryTap tap(st, meta(), [&] { return ck.t; });
+        vibefc::TlmCtx c; c.sat = "AO-73"; c.aos = T0 - 60; c.los = T0 + 660;
+        for (int i = 0; i < 6; ++i) {
+            ck.t = T0 + 5 * i; c.unix = (double)ck.t;
+            std::vector<uint8_t> f = vibefc::tx::sampleFrame(i, 3000 + i);
+            if (i == 2) f[54] &= uint8_t(~0x04);   // the EPS data-valid bit (bit 437 of the frame: 400 + 24 + 12 + 1) off in the third frame
+            tap.satTlm(vibefc::parse(f.data()), c);
+        }
+        // a JY1Sat frame: the extended header 0xC0 | type, 0x10 — the rest the sample's bytes (JY1Sat's layout reads them)
+        vibefc::TlmCtx j; j.sat = "JO-97"; j.aos = T0 + 7000; j.los = T0 + 7600;
+        for (int i = 0; i < 3; ++i) {
+            ck.t = T0 + 7000 + 5 * i; j.unix = (double)ck.t;
+            std::vector<uint8_t> f = vibefc::tx::sampleFrame(i, 600000 + i);
+            f[0] = uint8_t(0xC0 | i); f[1] = 0x10;
+            tap.satTlm(vibefc::parse(f.data(), "JO-97"), j);
+        }
+        tap.finish(false);
+    }
+    std::string ao, jo;
+    for (auto& n : itemsOf(st, ".csv")) { std::string b; st.readItem(n, b); (b.find("JO-97") != std::string::npos ? jo : ao) = b; }
+    auto L = lines(ao);
+    CHECK(itemsOf(st, ".csv").size() == 2 && L.size() == 3 + 1 + 6, "one AO-73 pass of 6 rows (an EPS-less frame is NOT a new file) + one JO-97 pass");
+    if (L.size() == 10) {
+        auto split = [](const std::string& l) { std::vector<std::string> c; std::stringstream ss(l); std::string x; while (std::getline(ss, x, ',')) c.push_back(x); if (!l.empty() && l.back() == ',') c.push_back(""); return c; };
+        const auto h = split(L[3]), r2 = split(L[6]), r1 = split(L[5]);
+        int bat = -1, v33 = -1;
+        for (size_t k = 0; k < h.size(); ++k) { if (h[k] == "Battery voltage [V]") bat = (int)k; if (h[k] == "3.3 V bus voltage [V]") v33 = (int)k; }
+        CHECK(bat > 0 && v33 > 0 && r2.size() == h.size() && r2[(size_t)bat].empty() && !r1[(size_t)bat].empty() && !r2[(size_t)v33].empty(),
+              "the EPS-less frame: its EPS cells BLANK (battery '%s'), the frame before '%s', the ASIB's 3.3 V bus still '%s'",
+              bat > 0 && r2.size() > (size_t)bat ? r2[(size_t)bat].c_str() : "?", bat > 0 && r1.size() > (size_t)bat ? r1[(size_t)bat].c_str() : "?",
+              v33 > 0 && r2.size() > (size_t)v33 ? r2[(size_t)v33].c_str() : "?");
+    }
+    std::string day;
+    for (auto& n : itemsOf(st, ".txt")) if (st.field(n, "title").rfind("AO-73", 0) == 0) st.readItem(n, day);
+    CHECK(count(day, "no EPS data") == 1 && count(day, "battery 1.444 V") == 5, "the day log: \"no EPS data\" once, \"battery 1.444 V\" five times");
+    auto J = lines(jo);
+    CHECK(J.size() == 3 + 1 + 3 && J[3].find(",Photo current 1 [mA],") != std::string::npos && J[3].find(",Sun sensor Z- [lux],") != std::string::npos
+          && J[3].find(",iMTQ uptime [h],") != std::string::npos && J[3].find("Solar panel temp") == std::string::npos,
+          "the JO-97 pass: JY1Sat's columns (three photo currents, six sun sensors, iMTQ) — no FUNcube-1 panel temps");
+    rmDir(dir);
+}
+
+/** ★ beta94 the fixture's base: AO-73's own real-time block as it sent it (FM7 of seq 1023471, 2026-11-24 — test-fctlm
+ *  §10's recording), so the charts' readings are a real bird's (7.88 V, 22 °C …); its type and sequence number rewritten. */
+static vibefc::Decoded realFrame(int type, uint32_t seq) {
+    static const char* hx = "950f7b0e200e2b014c1ec400d705c3000016161616000003010340402a9da52b8a3b3323f3a9db5c629331850d07ebc8e8ff0f9def8c1fe42e2e";
+    std::vector<uint8_t> f(256, 0);
+    for (size_t i = 0; i < 56; ++i) f[i] = (uint8_t)std::stoul(std::string(hx + 2 * i, 2), nullptr, 16);
+    f[0] = uint8_t(0x80 | (type & 0x3F));
+    f[50] = uint8_t(seq >> 16); f[51] = uint8_t(seq >> 8); f[52] = uint8_t(seq);
+    return vibefc::parse(f.data());
+}
+/** ★ `--write-fixture <dir>`: three passes of SYNTHETIC readings (AO-73's real frame with its analogue values swung along
+ *  a pass — a battery sagging, panels warming) written exactly as the server writes them, for the clients' chart tests
  *  (scripts/fixtures/fctlm/). Not on-air data. */
 static int writeFixture(const std::string& out) {
     const std::string dir = tmpDir("fix");
@@ -363,9 +430,17 @@ static int writeFixture(const std::string& out) {
             for (int i = 0; i < 24; ++i) {
                 if (p == 1 && i >= 10 && i < 16) continue;   // a fade: six frames lost mid-pass
                 ck.t = aos + 30 + 5 * i; c.unix = (double)ck.t; c.elDeg = 5 + 40 * std::sin(3.14159 * i / 23.0);
-                vibefc::Decoded d = frame(i % 24, 4000 + p * 100 + i);
-                for (size_t k = 0; k < d.values.size(); ++k)
-                    if (d.values[k].raw) d.values[k].v = std::round(d.values[k].v + (k % 5 + 1) * 3 * std::sin(0.25 * i + k) - p * (k % 3));
+                vibefc::Decoded d = realFrame(i % 24, 4000 + p * 100 + i);
+                // ★ beta94 the readings in their units: swung by a step of their own size (volts by centivolts …)
+                for (size_t k = 0; k < d.values.size(); ++k) {
+                    vibefc::Value& v = d.values[k];
+                    if (!v.raw && v.unit.empty()) continue;
+                    const double step = v.unit == "V" ? 0.01 : 1.0, q = std::pow(10.0, v.dp);
+                    v.v = std::round((v.v + step * ((k % 5 + 1) * 3 * std::sin(0.25 * i + k) - p * (k % 3))) * q) / q;
+                    if (v.unit == "lux" || v.unit == "mA" || v.unit == "mW") v.v = std::max(0.0, v.v);   // never below nothing
+                }
+                // ★★ a stretch with the EPS's data-valid flag off (pass 3, frames 5–7): blank EPS cells, never zeros
+                if (p == 2 && i >= 5 && i < 8) { d.absent.push_back("EPS"); for (auto& v : d.values) if (v.section == "EPS") v.valid = false; }
                 tap.satTlm(d, c);
             }
         }
@@ -394,6 +469,7 @@ int main(int argc, char** argv) {
     s4c();
     s4d();
     s5();
+    s7();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

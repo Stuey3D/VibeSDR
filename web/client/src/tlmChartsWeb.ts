@@ -4,8 +4,8 @@
  * (each pass's mean, its min–max shaded). One hue — the page's amber — the text in the page's text inks, so it follows
  * every theme (dark / light faceplates) through the same CSS variables the panel already uses.
  */
-import { tlmAcross, tlmAcrossHead, tlmChartOrder, tlmPassHead, tlmRangeText, tlmSpark, tlmValueText, TLM_FIRST,
-         type TlmChannel, type TlmPass } from '../../../src/utils/tlmCharts';
+import { tlmAbsentText, tlmAcross, tlmAcrossHead, tlmChartOrder, tlmFootNote, tlmMinSpan, tlmPassHead, tlmRangeText, tlmSpark,
+         tlmValueText, TLM_FIRST, type TlmChannel, type TlmPass } from '../../../src/utils/tlmCharts';
 
 export const TLM_CSS = `
 .tlm{margin-top:4px;font:12px/1.35 ui-monospace,Menlo,monospace}
@@ -34,7 +34,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const H = 34;
 
 function cell(ch: TlmChannel, t: number[], v: (number | null)[], w: number, band?: { lo: (number | null)[]; hi: (number | null)[] }): string {
-  const sp = tlmSpark(t, v, w, H, 3, band ? Infinity : undefined, band?.lo, band?.hi);
+  const sp = tlmSpark(t, v, w, H, 3, band ? Infinity : undefined, band?.lo, band?.hi, tlmMinSpan(ch));
   const range = sp.n ? tlmRangeText(band?.lo ?? v, ch, band?.hi) : '';
   const label = `${ch.name}${ch.raw ? ', raw' : ''}: ${sp.n} ${band ? 'passes' : 'readings'}${range ? `, ${range}` : ''}, latest ${tlmValueText(sp.lastV, ch)}`;
   return `<div class="tlm-c" role="img" aria-label="${esc(label)}" title="${esc(label)}">`
@@ -59,6 +59,9 @@ export function tlmChartsHtml(o: { pass: TlmPass | null; live: boolean; across: 
   const shown = o.all ? order : order.slice(0, TLM_FIRST);
   const grid = (cells: string[]) => `<div class="tlm-g" style="grid-template-columns:repeat(${cols},${cw}px)">${cells.join('')}</div>`;
   let h = `<div class="tlm"><div class="tlm-h">${esc(tlmPassHead(o.pass, o.live))}</div>`;
+  // ★★ beta94 a board whose data-valid flag is off: said, never charted as zeros
+  const absent = o.live ? tlmAbsentText(o.pass?.absent) : '';
+  if (absent) h += `<div class="tlm-note tlm-absent" style="margin-top:0">${esc(absent)}</div>`;
   const p = o.pass;
   if (p && p.t.length) {
     h += grid(shown.map((i) => cell(p.channels[i], p.t, p.v[i], cw)));
@@ -68,5 +71,5 @@ export function tlmChartsHtml(o: { pass: TlmPass | null; live: boolean; across: 
   if (o.across && o.across.length && ref) {
     h += grid(shown.map((i) => { const a = tlmAcross(o.across!, ref.channels[i].name); return cell(ref.channels[i], a.t, a.mean, cw, { lo: a.min, hi: a.max }); }));
   }
-  return h + `<div class="tlm-note">raw = sent uncalibrated (no published calibration) · times UTC · saved to the gallery a pass at a time</div></div>`;
+  return h + `<div class="tlm-note">${esc(tlmFootNote(ref))}</div></div>`;
 }

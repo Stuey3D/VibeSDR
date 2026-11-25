@@ -6,6 +6,49 @@ be good to have" → "especially for those who background decode it every pass".
 ★★ **Built and tested on SYNTHETIC frames only.** Nothing here has been checked against a real AO-73 pass. The fixtures
 (`scripts/fixtures/fctlm/`) are the server's own writer fed the transmitter's sample frame with its analogue values swung.
 
+## ★★★ beta94 — UNITS, JY1SAT'S OWN LAYOUT, DATA-VALID FLAGS (2026-11-25)
+
+Stuart on a JO-97 pass (Pi 500, 3 good frames): *"charts are useless what is the voltage not raw?"* — every value said
+`raw`, and JY1Sat read as FUNcube-1 gave "battery 0" with panel "temperatures" swinging 520 counts in two minutes.
+
+**Sources** (AMSAT-UK's public documents, read for facts; no one's code read or copied):
+- FUNcube-1 telemetry equations, `telemetry_equations_b1.xls` (Sept 2013) — linked from
+  https://funcube.org.uk/working-documents/project-documents/ :
+  https://funcube.org.uk/wp-content/uploads/2010/11/funcube-1_-telemetry_equations_b1.xls
+- JY1Sat "data budget with tlm equations 2F" (Nov 2018) — linked from https://funcube.org.uk/2018/11/15/jy1sat/ :
+  https://funcube.org.uk/wp-content/uploads/2018/11/jy1sat_data_budget-with-tlm-equations-2f.xls
+- ESEO Downlink Data 1.2 §3, the extended satellite id: https://funcube.org.uk/wp-content/uploads/2018/11/eseo_downlink_data_1_21a.pdf
+- FUNcube-1 Downlink Data (as flown) — field widths only: https://funcube.org.uk/wp-content/uploads/2010/11/funcube-1-downlink-data-spec_ver1-as_flown.pdf
+
+**Units now** (vibe_fctlm.h `parseFc1` / `parseJy1`): EPS "real values are transmitted" — photo / battery voltages V
+(mV ÷ 1000), currents mA, temperatures °C (signed byte); solar panel temps °C (one line per face); bus voltages V (the count
+is mV ÷ 4 / ÷ 6 — checked on air: 819 → 3.276 V, 826 → 4.956 V); 3.3 V bus current mA; RF temperature °C (FUNcube-1
+−0.857 n + 193.672, JY1Sat −0.98 n + 234.58); receive / transmit currents mA (0.636 / 1.272 a count); PA forward and reverse
+power mW (0.005 n^2.0629); PA temperature °C (the sheet's table); PA current mA (0.5496 n + 2.5435); antenna temps °C (the
+AntS curve — ★ the count taken as 0–3.3 V, which the sheets do not state; said in the channel's note); sun sensors lux (the
+log-lux table; 984 = the sensor's limit); reset cause, PPT mode and iMTQ mode in words; iMTQ uptime h. **Raw**, each with
+its own note: receiver Doppler and RSSI (both sheets: "use raw values" / "no conversion required"), JY1Sat's iMTQ error code
+("not translated").
+
+**JY1Sat**: satellite id 3 = extended — 16 header bits (byte 1 = S0–S5 F0 F1; JY1Sat's id 0x13 from its 0x10), then its own
+432-bit block. Its software block (seq, flags) lands at bit 400 like FUNcube-1's. Confirmed on the 11-25 values (rebuilt in
+test-fctlm §12 from the printout): sun sensors where the "panel temps" were, iMTQ MCU temp = 85 (the sheet's "invalid"), EPS
+and iMTQ flagged not valid. An unknown extended id shows no values (on the JO-97 pick it is read as JY1Sat).
+
+**Data-valid flags**: a board whose flag is off → its values `!valid`: left out of `sat_tlm` with `"absent":["EPS"]` (the box
+says "No EPS data in this frame (its data-valid flag is off)"), BLANK in the pass CSV (the columns stay — no new file), and the
+charts get no reading (a gap; a channel with no reading in the pass gets no chart). Charts lead with battery, currents,
+temperatures, solar, then the radio; raw channels last and named in the note; each unit has a minimum axis span (V 0.1, °C 2,
+mA / mW 10, lux 100) so one count of noise is not a cliff.
+
+**Contract additions** (`sat_tlm`, format `funcube-rt`): `layout` ("FUNcube-1" / "JY1Sat"), `absent` [board names], per value
+`unit` (UTF-8 "°C"), `text` (an enumerated value's words), `note` (why raw / how converted). Old clients ignore them.
+
+Tests: test-fctlm 97/0 (§10 the real AO-73 frames in their units; §11 FUNcube-1 known counts → the sheet's values, EPS/PA/ANTS
+flags; §12 JY1Sat synthetic + the 11-25 pass rebuilt), test-fctlm-gallery 54/0 (§7 blank cells, "no EPS data", JY1Sat's
+columns), test_tlm_charts 64/0, test-web-satellite-mode 145/0, test-web-fctlm-gallery 18/0. The fixtures are now AO-73's real
+frame with its readings swung (pass 3 frames 5–7 have the EPS flag off).
+
 ## RESUME HERE
 
 - Done: server saving (per-pass .csv + day log), shared reading/geometry, app (SATELLITE box + gallery), web (SATELLITE
@@ -104,7 +147,6 @@ decoder's stop. The owner's gallery space bounds the whole (oldest first). `.csv
   once a pass has a few frames?
 - 8 channels first (battery, battery temp, photo current, system current, photo voltages, a panel temp), the rest behind
   `+ N MORE`. Right eight?
-- All analogue channels are **raw** (FUNcube publishes no calibration). If AMSAT-UK's Dashboard calibrations are
-  wanted, they would need a source we may use.
+- ~~All analogue channels are **raw**~~ — beta94: AMSAT-UK's published equation sheets give units (above).
 - ANSWERED 11-22: values list stays the default (CHARTS one tap away); the first eight are fine; ONE day log per
   satellite per day and ONE pass file / chart whoever decoded — every radio on the server included (built as above).

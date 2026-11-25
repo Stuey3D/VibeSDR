@@ -7,9 +7,12 @@
  *  • ACROSS PASSES — the last TLM_PASSES passes in the gallery, one point per pass: its mean, with its min–max as a band.
  *
  * ★ Where the data comes from: the server writes a .csv item per pass (android/app/src/main/cpp/vibe_fctlm_gallery.h).
- *   Its headings are the channel's name, then "[raw]" (sent uncalibrated — no unit, never a guessed conversion), "[unit]"
- *   for a calibrated one, or nothing for a count / flag. Counts and flags are not charted (a reboot count is a number to
- *   read, not a curve); every analogue channel is.
+ *   Its headings are the channel's name, then "[unit]" (beta94: AMSAT-UK's published equations — V, mA, °C, mW, lux),
+ *   "[raw]" only for a channel with NO published conversion (named in the charts' note), or nothing for a count / flag.
+ *   Counts and flags are not charted (a reboot count is a number to read, not a curve); every analogue channel is.
+ * ★★ beta94 (Stuart 11-25 "charts are useless"): a board whose data-valid flag is off sends no values — a blank cell in
+ *   the CSV, no value live — so a channel with NO reading in the pass gets no chart (never a flat line of zeros), and the
+ *   live pass says which boards the latest frame left out.
  * ★ Bounded: a pass is read to TLM_MAX_ROWS rows; the live history holds TLM_LIVE_MAX frames (an hour at one per 5 s).
  */
 
@@ -20,9 +23,11 @@ export interface TlmPass {
   channels: TlmChannel[];
   t: number[];
   v: (number | null)[][];
+  /** ★ beta94 the boards the latest live frame said had no valid data ("EPS", …) */
+  absent?: string[];
 }
 /** A live frame as the client keeps it (satTelemetryMerge's history). */
-export interface TlmLiveFrame { t: number; values: { name: string; value: string; unit: string; raw: boolean }[] }
+export interface TlmLiveFrame { t: number; values: { name: string; value: string; unit: string; raw: boolean }[]; absent?: string[] }
 
 export const TLM_MAX_ROWS = 2000;
 export const TLM_LIVE_MAX = 720;
@@ -93,7 +98,8 @@ export function tlmLivePass(frames: TlmLiveFrame[] | undefined, sat = ''): TlmPa
     for (const x of f.values) { const n = Number(x.value); const k = idx.get(x.name); if (k != null && isFinite(n)) row[k] = n; }
     row.forEach((n, k) => v[k].push(n));
   }
-  return { sat, start: t[0], channels: order, t, v };
+  const absent = frames[frames.length - 1].absent;
+  return { sat, start: t[0], channels: order, t, v, ...(absent?.length ? { absent: absent.slice() } : {}) };
 }
 
 /** The history the live box keeps: a frame with values and a time appended, oldest dropped past TLM_LIVE_MAX. */
@@ -107,16 +113,25 @@ export function tlmLivePush(hist: TlmLiveFrame[] | undefined, f: TlmLiveFrame | 
 }
 
 /** ★ The order the charts come in: the power system first (what someone watching a bird's health looks at), then the
- *  rest as the frame carries them. Only chartable channels. */
+ *  temperatures, the solar side, the radio — then the rest as the frame carries them; raw channels (no published
+ *  conversion) last. Only chartable channels that have at least one reading. */
 const PRIORITY = [
-  'Battery voltage', 'Battery temp', 'Total photo current', 'Total system current', 'Photo voltage 1', 'Photo voltage 2',
-  'Photo voltage 3', 'Solar panel temp X+', 'Solar panel temp X-', 'Solar panel temp Y+', 'Solar panel temp Y-',
-  'RF temperature', 'PA board temperature', 'Receiver RSSI',
+  'Battery voltage', 'Total photo current', 'Total system current', 'Battery temp', 'Photo voltage 1', 'Photo voltage 2',
+  'Photo voltage 3', 'Photo current 1', 'Photo current 2', 'Photo current 3',
+  'Solar panel temp X+', 'Solar panel temp X-', 'Solar panel temp Y+', 'Solar panel temp Y-',
+  'PA board temperature', 'RF temperature', 'PA forward power', 'PA board current', '3.3 V bus voltage', '5.0 V bus voltage',
+  'Sun sensor X+', 'Sun sensor X-', 'Sun sensor Y+', 'Sun sensor Y-', 'Sun sensor Z+', 'Sun sensor Z-',
 ];
+export function tlmHasReading(vals: (number | null)[] | undefined): boolean {
+  return !!vals && vals.some((x) => x != null && isFinite(x));
+}
 export function tlmChartOrder(p: TlmPass | null): number[] {
   if (!p) return [];
-  const ok = p.channels.map((c, i) => i).filter((i) => tlmChartable(p.channels[i]));
-  const rank = (i: number) => { const r = PRIORITY.indexOf(p.channels[i].name); return r < 0 ? PRIORITY.length + i : r; };
+  const ok = p.channels.map((c, i) => i).filter((i) => tlmChartable(p.channels[i]) && tlmHasReading(p.v[i]));
+  const rank = (i: number) => {
+    if (p.channels[i].raw) return 2 * PRIORITY.length + 1000 + i;
+    const r = PRIORITY.indexOf(p.channels[i].name); return r < 0 ? PRIORITY.length + i : r;
+  };
   return ok.sort((a, b) => rank(a) - rank(b));
 }
 
@@ -133,6 +148,30 @@ export function tlmRangeText(vals: (number | null)[], c: TlmChannel, hiVals?: (n
   if (!lo.length || !hi.length) return '';
   const a = tlmValueText(Math.min(...lo), { name: '', unit: '', raw: false }), b = tlmValueText(Math.max(...hi), c);
   return `${a}\u2013${b}`;
+}
+/** ★ beta94 The charts' note: the raw channels BY NAME (no blanket "raw" footnote), then times and saving. */
+export function tlmFootNote(p: TlmPass | null): string {
+  const raw = p ? tlmChartOrder(p).filter((i) => p.channels[i].raw).map((i) => p.channels[i].name) : [];
+  return (raw.length ? `raw (no published conversion): ${raw.join(', ')} · ` : '') + 'times UTC · saved to the gallery a pass at a time';
+}
+/** ★ beta94 "No EPS data in the latest frame (its data-valid flag is off)" — '' when every board sent data. */
+export function tlmAbsentText(absent: string[] | undefined, where = 'the latest frame'): string {
+  const a = (absent ?? []).filter((x) => typeof x === 'string' && x).slice(0, 6);
+  if (!a.length) return '';
+  const list = a.length === 1 ? a[0] : `${a.slice(0, -1).join(', ')} or ${a[a.length - 1]}`;
+  return `No ${list} data in ${where} (${a.length === 1 ? 'its data-valid flag is' : 'their data-valid flags are'} off)`;
+}
+/** ★ beta94 the smallest span a chart's axis shows, by unit — so one count of ADC noise on a steady battery is not drawn
+ *  as a cliff (a 7.876 V battery's axis spans at least 0.1 V). 0 = the old rule (±5 % around a flat channel). */
+export function tlmMinSpan(c: TlmChannel | undefined): number {
+  switch (c?.raw ? '' : c?.unit) {
+    case 'V': return 0.1;
+    case '\u00b0C': return 2;
+    case 'mA': case 'mW': return 10;
+    case 'lux': return 100;
+    case 'h': return 1;
+    default: return 0;
+  }
 }
 /** "14:02" UTC */
 export function tlmHm(t: number): string {
@@ -170,10 +209,11 @@ export interface Spark {
 }
 const f1 = (x: number) => (Math.round(x * 10) / 10).toString();
 /** y range with a little headroom; a flat channel sits on the middle. */
-export function tlmRange(vals: (number | null)[], extra: (number | null)[] = []): { lo: number; hi: number } {
+export function tlmRange(vals: (number | null)[], extra: (number | null)[] = [], minSpan = 0): { lo: number; hi: number } {
   let lo = Infinity, hi = -Infinity;
   for (const a of [vals, extra]) for (const x of a) if (x != null && isFinite(x)) { if (x < lo) lo = x; if (x > hi) hi = x; }
   if (!isFinite(lo)) return { lo: 0, hi: 1 };
+  if (minSpan > 0 && hi - lo < minSpan) { const m = (lo + hi) / 2; return { lo: m - minSpan / 2, hi: m + minSpan / 2 }; }
   if (hi - lo < 1e-9) { const d = Math.max(1, Math.abs(lo) * 0.05); return { lo: lo - d, hi: hi + d }; }
   return { lo, hi };
 }
@@ -182,8 +222,8 @@ export function tlmRange(vals: (number | null)[], extra: (number | null)[] = [])
  * more than `gap` s apart. `bandLo`/`bandHi` (across passes) draw the min–max band, and widen the range to hold it.
  */
 export function tlmSpark(t: number[], vals: (number | null)[], w: number, h: number, pad = 3, gap = TLM_GAP_SEC,
-                         bandLo?: (number | null)[], bandHi?: (number | null)[]): Spark {
-  const { lo, hi } = tlmRange(vals, [...(bandLo ?? []), ...(bandHi ?? [])]);
+                         bandLo?: (number | null)[], bandHi?: (number | null)[], minSpan = 0): Spark {
+  const { lo, hi } = tlmRange(vals, [...(bandLo ?? []), ...(bandHi ?? [])], minSpan);
   const t0 = t.length ? t[0] : 0, t1 = t.length ? t[t.length - 1] : 1;
   const span = t1 - t0 > 0 ? t1 - t0 : 1;
   const X = (ts: number) => (t.length < 2 ? w / 2 : pad + ((ts - t0) / span) * (w - 2 * pad));
