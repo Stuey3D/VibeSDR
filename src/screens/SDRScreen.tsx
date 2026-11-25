@@ -6330,7 +6330,6 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  and the VTS bar (anchored at pillBottom + 8) drawn behind the controls: "missing". Keep the
    *  two measurements separate and combine them here, so whichever lands last, the sum is right. */
   const [pillY,          setPillY]          = useState<number | null>(null); // pill's top, root coords
-  const [pillH,          setPillH]          = useState(0);                   // the deck's height (half-open centring)
   const pillBottom = pillY == null ? 200 : (rootH > 0 ? rootH : screenH) - pillY;
 
   // Real decoders — UberSDR server audio extensions over /ws/dxcluster,
@@ -12747,14 +12746,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   const halfTop = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : 0;
   const halfSide = tabletop && anyBoxOpen && screenW / 2 - 12 >= 300;
   const halfDeckW = halfSide ? Math.floor(screenW / 2) - 12 : screenW - 16;
-  const halfDeckWin = useMemo(() => (tabletop ? { W: halfDeckW + 16, H: Math.max(200, screenH - halfTop) } : null),
-    [tabletop, halfDeckW, screenH, halfTop]);
-  /* ★★ HALF-OPEN, A BOX OPEN: the DLS / RDS label bar over the deck in the RIGHT column — only when it fits between the
-   *  fold and the deck's top (its last measured height, 46 until it has been seen). Otherwise it stays hidden: it
-   *  would lie over the box, and the box shows the text anyway (Stuart). */
+  /* ★★★ HALF-OPEN, NO BOX: THE PORTRAIT DECK (Stuart: "controls with no decoder box could be the portrait version" —
+   *  "in actual portrait they are"). Exactly the flat-open portrait deck (the real window: no override), at the bottom
+   *  with the home-indicator margin. Only if it would reach the fold is it scaled down — still the portrait deck, laid
+   *  out for a portrait window of the same width and a shorter height (useUiScale sizes a tablet by its long side), so
+   *  its top keeps 8 pt below the division rect. With a box open: the deck in the right half, as before. */
+  const [halfDeckK, setHalfDeckK] = useState(1);
+  useEffect(() => { setHalfDeckK(1); }, [tabletop, screenW, screenH, halfTop]);
+  const halfDeckWin = useMemo(() => (!tabletop ? null
+    : halfSide || anyBoxOpen ? { W: halfDeckW + 16, H: Math.max(200, screenH - halfTop) }   // a box: as before
+    : halfDeckK < 1 ? { W: screenW, H: Math.max(screenW, Math.round(screenH * halfDeckK)) } : null),
+    [tabletop, halfSide, anyBoxOpen, halfDeckW, screenH, screenW, halfTop, halfDeckK]);
+  /* ★★ HALF-OPEN: the DLS / RDS label bar over the deck — in the RIGHT column when a box is open — only when it fits
+   *  between the fold and the deck's top (its last measured height, 46 until it has been seen). Otherwise it stays
+   *  hidden: never on the crease, never over the box (Stuart); the box shows the text anyway. */
   const vtsLastH = useRef(46);
   const onVtsHeight = useCallback((h: number) => { if (h > 0) vtsLastH.current = h; setVtsBarH(h); }, []);
-  const halfVtsFits = halfSide && pillY != null && pillY - 8 - halfTop >= vtsLastH.current;
+  const halfVtsFits = tabletop && pillY != null && pillY - 8 - halfTop >= vtsLastH.current;
   const halfVtsInset = useMemo(() => (halfSide ? { left: Math.ceil(screenW / 2) + 4 + 6, right: 14 } : null), [halfSide, screenW]);
   const hs = health ? healthSummary(health) : null;
   const healthHot = !!hs && hs.worst >= 3;
@@ -16178,9 +16186,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           const edge = Platform.OS === 'android' && isLandscape && !isTablet
             ? Math.max(28, insets.left + 8, insets.right + 8) : 8;
           if (tabletop) {
+            // ★ On the bottom line in both half-open layouts (no box: the portrait deck, full width; a box: the right half).
             return [styles.pillWrap, {
-              left: halfSide ? Math.ceil(screenW / 2) + 4 : 8, right: 8,
-              bottom: halfSide ? bottomInset + 8 : Math.max(bottomInset + 8, Math.round((screenH - halfTop - pillH) / 2)),
+              left: halfSide ? Math.ceil(screenW / 2) + 4 : 8, right: 8, bottom: bottomInset + 8,
             }];
           }
           const left = Math.max(edge, deckClear.left);
@@ -16200,7 +16208,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
           setPillY(e.nativeEvent.layout.y);
-          setPillH(Math.round(e.nativeEvent.layout.height));
+          // ★ Half-open, no box: a portrait deck that would reach the fold is scaled down until it keeps 8 pt below it.
+          if (tabletop && !anyBoxOpen) {
+            const room = screenH - halfTop - (bottomInset + 8), h = e.nativeEvent.layout.height;
+            if (h > room + 0.5) setHalfDeckK((k) => Math.max(0.5, Math.floor(k * (room / h) * 100) / 100));
+          }
         }}
       >
         <UiWindowOverride.Provider value={halfDeckWin}>
@@ -16210,7 +16222,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         <ControlsBar
           /* ★★★ REACH (iPhone Duo, folded front screen in portrait): the SHRINK / EXPAND key between the drums. */
           reachToggle={frontScreen ? reachToggle : undefined}
-          measureKey={`${deckClear.bottom}|${screenW}x${screenH}|${bottomInset}`}
+          /* ★ Half-open: the deck's place and size are in the key too, so the waterfall's hole follows it (a hole left
+           *  where the deck first landed was the black band under it — Stuart, half-open, 2026-11-25). */
+          measureKey={`${deckClear.bottom}|${screenW}x${screenH}|${bottomInset}${tabletop ? `|half:${halfSide ? 1 : 0}:${halfDeckK}` : ''}`}
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
           srvTzId={srvTz.id}
@@ -16829,9 +16843,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ vtsBarH is forced to 0 alongside, or everything that reserves space above the bar —
           the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
           that is not there. See the vtsBarH rule further up. */}
-      {/* ★ Half-open with a box open: the label bar comes back only in the RIGHT column, over the deck, and only if it
-          fits between the fold and the deck (halfVtsFits) — otherwise hidden; the box shows the text (Stuart). */}
-      {!controlsHidden && !advRdsOpen && !boxHidesVts && !(tableFold && (dabBoxOpen || decoderShown) && !halfVtsFits) && (
+      {/* ★ Half-open: the label bar sits over the deck only where it fits between the fold and the deck's top
+          (halfVtsFits) — never on the crease; with a box open, in the RIGHT column over the deck. Otherwise hidden. */}
+      {!controlsHidden && !advRdsOpen && !boxHidesVts && !(tableFold && !halfVtsFits) && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 anchors={drumAnchors}
