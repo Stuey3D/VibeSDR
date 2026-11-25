@@ -628,6 +628,8 @@ if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1
 # ★ V12 the USRP's owner options and its radio AGC, hwinfo → Setup page / app / web, from fake capability objects.
 printf '\n\033[1m── USRP options (hwinfo → controls) ──\033[0m\n'
 if node scripts/check-usrp-options.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ The open ‹ Servers menu is the top layer — it opened under the DAB box twice (10-30, beta93).
+if node scripts/check-servers-menu-layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The August RTL stutter fixes (gain write off modeMtx/the DSP, one transfer, the client's hwinfo
 #     signature skip) — a gain change must never again stall the audio. See check-gain-write-path.mjs.
 printf '\n\033[1m── RSP hwinfo -> controls, per model ──\033[0m\n'
