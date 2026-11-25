@@ -1046,6 +1046,8 @@ async function list(env, url, request) {
                  .includes(status.flavour) ? status.flavour : '',
       // ★★ A COMMUNITY FORK, said by the fork itself (vibe_fork.h) — see forkOf.
       ...forkOf(status),
+      // ★★ V12 beta94 THE COMMUNITY MAP — said by the server only while its owner shares (see communityOf).
+      ...communityOf(status),
       /* ★ V11 betas carry a label — 11.0.0~b1 (dpkg's pre-release form). Digits and dots only threw
        *  away every B1 server's version the moment the estate moved (2026-09-28). */
       version: typeof status.version === 'string' && /^[0-9][0-9.]{0,15}(~[A-Za-z0-9]{1,8})?$/.test(status.version)
@@ -1115,6 +1117,66 @@ async function list(env, url, request) {
   }
   return json({ servers, count: servers.length, pingSec: PING_SEC, you }, 200,
               personal ? { 'cache-control': 'private, no-store' } : {});
+}
+
+/* ══ V12 beta94 THE VibeSDR COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md on v12-experimental) ══════════════════════════════
+ * ★★★ STUART (2026-11-25): "a combined world map that everyone can contribute to with a simple toggle. A link to the map can
+ *     show on the directory page and the main website too."
+ * ★★★ THIS WORKER ONLY SAYS WHO CONTRIBUTES. The page (public/community-map.html) asks /api/community ONCE (and again every
+ *     ten minutes while it is looked at), then reads each contributor's /vibeserver/community.json STRAIGHT FROM THAT SERVER'S
+ *     OWN TUNNEL (its `url`, https only) — never through this Worker, never through a slug. Cost to this account: one
+ *     request per page load plus one per ten minutes per visible tab, answered from the edge cache (CONTRIB_CACHE_SEC) so
+ *     D1 is read at most once per two minutes per colo. Request maths in the doc.
+ * ★★ PRIVACY: only servers that SAY "communityMap":true (the owner's switch, off by default) are listed, with what the
+ *    directory already shows publicly — and the grid CUT TO FOUR CHARACTERS (≈ 100 × 200 km) with its centre, never the
+ *    six-character square or the listing's lat/lon. No LAN address, nothing per visitor. */
+// ★ beta94 pass 2: every mode a server maps (Stuart 11-25) — amateur digital spots excluded (PSK Reporter has them)
+export const COMMUNITY_LAYERS = ['adsb', 'acars', 'vdl2', 'hfdl', 'ndb', 'vor', 'ais', 'dsc', 'navtex', 'sondes', 'aprs', 'mesh'];
+const CONTRIB_CACHE_SEC = 120;
+/** {communityMap:true, communityLayers:[…known words…]} when the server says it shares; else {} (nothing said). */
+export function communityOf(status) {
+  if (!status || status.communityMap !== true) return {};
+  const said = Array.isArray(status.communityLayers) ? status.communityLayers : [];
+  return { communityMap: true, communityLayers: COMMUNITY_LAYERS.filter((l) => said.includes(l)) };
+}
+/** One contributor as the map page sees it — or null when it cannot be one (not sharing, no usable https address). */
+export function contributorOf(r, aliased = true) {
+  let status = {};
+  try { status = JSON.parse(r.status_json) || {}; } catch { status = {}; }
+  const c = communityOf(status);
+  if (!c.communityMap) return null;
+  // ★★ The DATA address: the server's own https URL (a tunnel, or an owner's https address). A plain-http server cannot be
+  //    read from an https page (mixed content), and the slug is never used for data (it is this Worker).
+  const dataUrl = typeof r.url === 'string' && /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/?$/.test(r.url.trim()) ? r.url.trim().replace(/\/$/, '') : null;
+  if (!dataUrl) return null;
+  const g4 = String(r.grid || '').toUpperCase().slice(0, 4);
+  const pos = gridToLatLon(g4);
+  return {
+    id: r.id, name: r.name, country: r.country || '',
+    slug: aliased ? r.slug || null : null,
+    address: aliased && r.slug ? `${r.slug}.${PUBLIC_ZONE}` : null,
+    url: dataUrl,
+    grid: pos ? g4 : '', lat: pos ? pos.lat : null, lon: pos ? pos.lon : null,
+    layers: c.communityLayers,
+    listeners: Number(status.listeners || 0), maxListeners: Number(status.maxListeners || 0),
+    pin: !!status.pin, temporary: Number(r.until) > 0,
+    updatedAt: r.updated_at,
+  };
+}
+async function community(env, url) {
+  const cache = caches.default;
+  const key = new Request(new URL('/api/community', url).toString(), { method: 'GET' });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  // ★ A LIKE pre-filter keeps the read small; contributorOf() is the real test.
+  const { results } = await withAliasCol((sql) => env.DB.prepare(sql).bind(now()).all(),
+    `SELECT id, name, url, grid, country, status_json, updated_at, slug, until /*ALIAS*/
+       FROM servers WHERE ${LIVE_WHERE} AND status_json LIKE '%"communityMap":true%' ORDER BY country, name`);
+  const servers = (results || []).map((r) => contributorOf(r, aliasOn(r))).filter(Boolean).slice(0, 500);
+  const res = json({ servers, count: servers.length, layers: COMMUNITY_LAYERS, at: now() }, 200,
+                   { 'cache-control': `public, max-age=${CONTRIB_CACHE_SEC}` });
+  try { await cache.put(key, res.clone()); } catch { /* no cache here: answered anyway */ }
+  return res;
 }
 
 /**
@@ -2097,6 +2159,7 @@ async function handle(request, env) {
     try {
       if (p === '/api/directory' && request.method === 'GET') return await list(env, url, request);
       if (p === '/api/directory/name' && request.method === 'GET') return await checkName(url, env);
+      if (p === '/api/community' && request.method === 'GET') return await community(env, url);   // ★★ V12 beta94 the community map's contributors
       if (p === '/api/directory/register' && request.method === 'POST') return await register(request, env);
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
       if (p === '/api/directory/delist' && request.method === 'POST') return await delist(request, env);

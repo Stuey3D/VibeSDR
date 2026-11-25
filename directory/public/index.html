@@ -625,6 +625,10 @@
             font-family: inherit; letter-spacing: .1em; text-transform: uppercase; }
   .fClear:hover { color: var(--text); border-color: var(--accent); }
   a { color: var(--accent); }
+  .commapLink { display: inline-block; margin-top: 10px; padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px;
+                text-decoration: none; font-size: 12px; letter-spacing: .12em; font-weight: 600; }
+  .commapLink span { font-weight: 400; letter-spacing: .04em; color: var(--text); }
+  .commapLink:hover { background: rgba(255,184,51,.1); }
   footer { color: var(--dim); font-size: 11px; text-align: center; padding: 0 20px 30px;
            letter-spacing: .06em; }
   .battWrap{display:inline-flex;align-items:center;margin-left:6px}
@@ -640,6 +644,8 @@
   <div class="sub">PUBLIC RECEIVER DIRECTORY</div>
   <div class="blurb">Receivers you can listen to right now. Anyone running VibeServer can list
     theirs from the app — see <a href="https://vibesdr.net">vibesdr.net</a>.</div>
+  <!-- ★★ V12 beta94 THE COMMUNITY MAP (Stuart, 2026-11-25: "A link to the map can show on the directory page"). -->
+  <a class="commapLink" href="/community-map">COMMUNITY MAP <span>· aircraft, shipping, NAVTEX, sondes and more, heard by VibeServers ▸</span></a>
 </header>
 
 <div class="legend">
