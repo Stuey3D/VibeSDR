@@ -544,6 +544,9 @@ object VibeLocalSDR {
     fun setStationsJson(json: String) { ensureLoaded(); nativeSetStationsJson(json) }
     /** Receiver coarse location, served at GET /location. */
     fun setLocationJson(json: String) { ensureLoaded(); nativeSetLocationJson(json) }
+    /** ★★ beta94 Local Hardware: this phone's position (grid-square centre) for the SATELLITE engine only — never published
+     *  (LocalSdrShim::setSatObserver). have = false clears it. The owner's server location, when set, wins in the engine. */
+    fun setSatObserver(have: Boolean, lat: Double, lon: Double) { ensureLoaded(); nativeSetSatObserver(have, lat, lon) }
     /** Learned RDS station bookmarks (served at GET /bookmarks). The shim learns them
      *  from RDS; the app persists them across restarts. */
     fun setBookmarksJson(json: String) { ensureLoaded(); nativeSetBookmarksJson(json) }
@@ -586,6 +589,7 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerIdleGrace(sec: Double)
     private external fun nativeSetStationsJson(json: String)
     private external fun nativeSetLocationJson(json: String)
+    private external fun nativeSetSatObserver(have: Boolean, lat: Double, lon: Double)
 
     private external fun nativeGetNetStatus(): String
     private external fun nativeHello(): String

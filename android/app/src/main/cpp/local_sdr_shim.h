@@ -910,6 +910,9 @@ public:
      *  It's the SERVER's position — distances, map centring and the ITU region are
      *  properties of the antenna, not of whoever happens to be listening. */
     static void setLocationJson(const std::string& json);
+    /** ★★ beta94 Local Hardware: THIS DEVICE's position for the satellite engine only (have = false: cleared). Never
+     *  published (not /location, vibeserver.json, the listing, DAB, the ITU region); the owner's location wins. */
+    static void setSatObserver(bool have, double lat, double lon);
     /** ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): one CelesTrak GP group's OMM JSON for the curated birds.
      *  Returns how many listed satellites it updated (-1 = not GP JSON). Thread-safe; call whenever a group arrives. */
     static int satLoadOmm(const std::string& group, const std::string& json);

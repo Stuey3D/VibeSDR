@@ -157,6 +157,13 @@
 #include "vibe_sat_if.h"         // ★★ V12 beta92 the satellite pass's IF filter — the narrowest that holds the signal + its Doppler
 /** ★★ V12 the one satellite engine of this process (curated birds, element sets, the server's sky, every lock). */
 static vibe::sat::Engine& satEngine() { return vibe::sat::engine(); }   // ★ the header's singleton: decoders reach it too
+#include "vibe_sat_observer.h"    // ★★ beta94 the observer's two sources: the owner's location wins, the phone's fills in
+static std::mutex g_satObsMtx;
+static vibe::sat::ObserverSource g_satObs;   // under g_satObsMtx
+static void satObsApply(const vibe::sat::ObserverSource::Apply& a) {
+    if (a.kind == vibe::sat::ObserverSource::Apply::Set) satEngine().setObserver(a.lat, a.lon);
+    else if (a.kind == vibe::sat::ObserverSource::Apply::Clear) satEngine().clearObserver();
+}
 /** ★ The engine reads the corrected UTC FT8 reads (brief §5), and whether SNTP has measured it. */
 static vibe::sat::Clock satClock() { return vibe::sat::Clock{vibe::vibeUtcNow(), vibe::clockMeasured().load(std::memory_order_relaxed)}; }
 static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared dial's lock key (vibe_sat_engine.h)
@@ -45224,6 +45231,9 @@ static std::string vsTunableJson() {
         j += ",\"doppler\":1";
         const std::string why = vsSatWhyNot();
         if (!why.empty()) j += ",\"dopplerWhy\":\"" + dabEscape(why) + "\"";
+        // ★★ beta94 the machine-readable half of "no location": the app's own Local Hardware session offers its position
+        //    prompt on it (SatellitePanel); a listener on a real server reads dopplerWhy as before.
+        if (!g_vsHandheld.load() && !satEngine().haveObserver()) j += ",\"dopplerNeed\":\"location\"";
     }
     /* ★★ V12 SONDES (RS41, a whole-radio mode): offered, or DISABLED with its reason — and NOT AT ALL where the radio cannot
      *  reach 400–406 MHz (HF-only radios, the HF+, an Icom: AGENTS.md). `sondesBands`: the bands THIS radio runs now. */
@@ -46135,6 +46145,18 @@ void LocalSdrShim::setSatSupplyHooks(std::function<long long()> synced, std::fun
     g_satSyncedFn = std::move(synced); g_satFetchingFn = std::move(fetching); g_satKickFn = std::move(kick);
 }
 
+/* ★★ beta94 LOCAL HARDWARE's OWN POSITION for the satellite engine ONLY (tester Mac Ha: no SATELLITE on an OTG RTL with no
+ *  server location). The app hands the phone's position — its GPS, or a town / locator typed in the satellite box — snapped
+ *  to the grid-square centre. Deliberately NOT setLocationJson: nothing here reaches /location, vibeserver.json, the
+ *  directory, the receiver name, the DAB position or the ITU region. The owner's location, when there is one, wins. */
+void LocalSdrShim::setSatObserver(bool have, double lat, double lon) {
+    if (have && !(std::isfinite(lat) && std::isfinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 && (lat != 0.0 || lon != 0.0)))
+        return;
+    std::lock_guard<std::mutex> lk(g_satObsMtx);
+    satObsApply(g_satObs.device(have, lat, lon));
+    LOGI("[sat] this device's position %s%s", have ? "given" : "cleared", g_satObs.ownerSet() ? " (the owner's location is in use)" : "");
+}
+
 void LocalSdrShim::setLocationJson(const std::string& json) {
     {
         std::lock_guard<std::mutex> lk(g_locMtx);
@@ -46152,7 +46174,8 @@ void LocalSdrShim::setLocationJson(const std::string& json) {
     if (haveLL) setReceiverPosition(lat, lon);
     // ★★ V12 SATELLITES: the server's sky is computed for this same published position (brief §7: the grid-square centre
     //    is ample — a 6-character square shifts AOS/LOS by about a second)
-    if (haveLL) satEngine().setObserver(lat, lon);
+    //    ★★ beta94 through ObserverSource: the owner's position wins over Local Hardware's own (setSatObserver)
+    { std::lock_guard<std::mutex> lk(g_satObsMtx); satObsApply(g_satObs.owner(haveLL, lat, lon)); }
 #if defined(__ANDROID__)
     /* ★★ V12 (2026-11-03) AND THE ITU REGION, on the app's own server — the Linux and Mac servers set it from their
      *  config in main.cpp; nothing on Android ever did, so it stayed Region 1 and unknown. Known here = the region

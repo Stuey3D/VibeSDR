@@ -617,6 +617,14 @@ public:
         for (auto& s : sats_) s.passesAt = 0;
         skyAt_ = 0;
     }
+    /** ★ beta94 No observer any more (Local Hardware's CLEAR with no phone position — vibe_sat_observer.h): the sky goes,
+     *  "no location" comes back. Passes are dropped as setObserver does. */
+    void clearObserver() {
+        std::lock_guard<std::mutex> lk(m_);
+        obs_ = Observer();
+        for (auto& s : sats_) s.passesAt = 0;
+        skyAt_ = 0;
+    }
     bool haveObserver() const { std::lock_guard<std::mutex> lk(m_); return obs_.valid; }
     /** ★ This server's place (false = not set) — LRPT's map outline checks the satellite was above our horizon. */
     bool observer(Observer& o) const { std::lock_guard<std::mutex> lk(m_); o = obs_; return obs_.valid; }

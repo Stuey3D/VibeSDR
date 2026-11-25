@@ -1066,6 +1066,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // Receiving a multi-Mbit IQ stream is as power-save-sensitive as serving one.
         tcpWifiLock.acquire()
         Log.i(TAG, "rtl_tcp $host:$port started on port $bound")
+        // ★★ beta94 the satellite orbit data (VibeMapGL.start wires the supply into this process's engine) — the USB path
+        //    always had it; without it SATELLITE on rtl_tcp / SpyServer said "no orbit data" for ever. Idempotent.
+        VibeMapGL.start(reactApplicationContext)
         val res = Arguments.createMap()
         res.putInt("port", bound)
         res.putString("wsBaseUrl", "http://127.0.0.1:$bound")
@@ -1090,6 +1093,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         if (bound <= 0) { promise.reject("start_failed", "could not connect to SpyServer $host:$port (see logcat)"); return }
         tcpWifiLock.acquire()
         Log.i(TAG, "SpyServer $host:$port started on port $bound")
+        // ★★ beta94 the satellite orbit data (VibeMapGL.start wires the supply into this process's engine) — the USB path
+        //    always had it; without it SATELLITE on rtl_tcp / SpyServer said "no orbit data" for ever. Idempotent.
+        VibeMapGL.start(reactApplicationContext)
         val res = Arguments.createMap()
         res.putInt("port", bound)
         res.putString("wsBaseUrl", "http://127.0.0.1:$bound")
@@ -1315,6 +1321,19 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ Local Hardware's own engine wants it too (its spots map), and the server's (its listeners').
         try { VibeLocalSDR.setLocationJson(json) } catch (_: Throwable) {}
         if (serverProcessUp()) tell("location", JSONObject().put("json", json))
+    }
+
+    /** ★★ beta94 LOCAL HARDWARE's position for SATELLITE (tester Mac Ha): the phone's GPS or a town / locator the user
+     *  entered, already snapped to its grid-square centre by the app. THIS PROCESS's engine only — the one Local Hardware
+     *  listens through (docs/v12/ANDROID-SERVER-PROCESS.md). Deliberately never told to the server process: a position given
+     *  here is not the server's location and must not reach its listeners, vibeserver.json or the directory. */
+    @ReactMethod
+    fun setSatObserver(lat: Double, lon: Double) {
+        try { VibeLocalSDR.setSatObserver(true, lat, lon) } catch (_: Throwable) {}
+    }
+    @ReactMethod
+    fun clearSatObserver() {
+        try { VibeLocalSDR.setSatObserver(false, 0.0, 0.0) } catch (_: Throwable) {}
     }
 
     /** Learned station bookmarks (RDS). The shim learns them; JS persists them. */

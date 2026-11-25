@@ -936,6 +936,12 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetLocationJson(JNIEnv* env, jobject, js
     if (json && s) env->ReleaseStringUTFChars(json, s);
 }
 
+// ★★ beta94 Local Hardware: this device's position for the satellite engine only (never published — see the shim).
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetSatObserver(JNIEnv*, jobject, jboolean have, jdouble lat, jdouble lon) {
+    vibe::LocalSdrShim::setSatObserver(have == JNI_TRUE, (double)lat, (double)lon);
+}
+
 /** ★★★ TEAR DOWN AND WAIT. The async sibling below returns before the radio is closed, and the
  *  Kotlin caller then closes the UsbDeviceConnection — pulling the FILE DESCRIPTOR OUT FROM
  *  UNDER libusb while it is still closing the device.
