@@ -114,6 +114,12 @@ try {
   ok(dty && dty.win === 4 && angDiff(dty.radial, DTY_RADIAL) <= 2 && dty.station && dty.station.ident === 'DTY' && dty.station.name === 'Daventry'
      && dty.station.km10 === 20 && Math.abs(dty.trueBrg - (DTY_RADIAL - 4.0)) < 0.2,
      `…radial ${dty && dty.radial}° magnetic (want ${DTY_RADIAL} ±2), true ${dty && dty.trueBrg}°, Daventry ~${dty && dty.station && dty.station.km10} km`);
+  // ★★★ beta94 the report says WHY it was trusted. The server knows its place (IO92nh), and the fake sends DTY's radial from
+  //    there, so once "DTY" has been read the bearing is a second witness: idBy is 'radial' (one read + the radial, the
+  //    expected 051.8°), or 'reads' / 'votes' when a second reading came first — every way carries its count of reads.
+  ok(dty && ['radial', 'reads', 'votes'].includes(dty.idBy) && (dty.reads >= 1 || dty.votes >= 3)
+     && (dty.idBy !== 'radial' || (dty.reads === 1 && Math.abs(dty.expRadial - DTY_RADIAL) < 0.3 && angDiff(dty.idRadial, DTY_RADIAL) <= 2)),
+     `★ beta94 why DTY was trusted: idBy ${dty && dty.idBy}, reads ${dty && dty.reads}, expected ${dty && dty.expRadial}°, measured ${dty && dty.idRadial}°`);
   const seen = [...new Set((s.log().match(/\[VORMAP\] window (\d) of 5/g) || []))].join(', ');
   ok(/window 2 of 5/.test(seen) && /window 3 of 5/.test(seen) && /window 4 of 5/.test(seen) && /window 5 of 5/.test(seen), `every window visited: ${seen}`);
   ok(L.last && L.last.heard === 2 && L.last.beacons.length === 2, `nothing else heard on 200 channels (dropped ${L.last && L.last.dropped}; ${L.last && L.last.heard}: ${L.last && L.last.beacons.map((b) => `${b.hz}/${b.ident || b.reading}`).join(' ')})`);

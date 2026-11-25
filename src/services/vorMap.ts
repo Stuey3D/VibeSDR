@@ -6,6 +6,10 @@
  *
  * ★★ A NAME IS EARNED ON AIR: the server names a beacon only by the ident it read from it, matched to a station published on
  *    that channel; one with no ident read is "unidentified" and has no place on the map (the list only) — never a guess.
+ * ★★★ beta94 THE BEARING IS THE SECOND WITNESS: a listed ident read ONCE plus the measured radial matching the radial THAT
+ *    station should send to the receiver (its position and the station's, the station's variation) names it too — the server
+ *    says why (idBy / reads / expRadial / idRadial) and the card says it in words (vorIdentWhy), so a person sees why it was
+ *    trusted: "ident read once · radial matches (054° vs 060° expected)".
  * ★★ THE FIX: two or more VOR radials from DIFFERENT stations, heard this sweep, cross where the receiver is (radialFix).
  *    Several crossings make a cluster: their weighted centre and how far they spread. The words say how sure it is — each
  *    radial is good to about a degree and a half (the station's own alignment and our reading), so the error grows with the
@@ -22,6 +26,9 @@ export interface VorMapBeacon {
   hz: number; kind: 'vor' | 'loc'; win: number; ident: string; reading: string; votes: number; held: 0 | 1 | 2;
   radial: number | null; sigma: number | null; trueBrg: number | null; ddm: number | null; sdm: number | null;
   level: number; first: number; last: number; fresh: boolean; wpm: number | null; station: VorMapStation | null;
+  /** ★ beta94 why the ident was trusted: 'votes' (three readings alike), 'reads' (a listed ident read twice), 'radial' (read
+   *  once + the radial matched the station's expected one); '' = not identified / an older server. */
+  idBy: '' | 'votes' | 'reads' | 'radial'; reads: number; expRadial: number | null; idRadial: number | null;
 }
 export interface VorMapReport {
   now: number; rate: number; window: number; windows: number; wlo: number; whi: number; centre: number; sweep: number;
@@ -56,6 +63,8 @@ export function vorMapSanitise(m: any): VorMapReport | null {
       votes: num(b.votes, 0, 1e4) ?? 0, held, radial: num(b.radial, 0, 360), sigma: num(b.sigma, 0, 180), trueBrg: num(b.trueBrg, 0, 360),
       ddm: num(b.ddm, -1, 1), sdm: num(b.sdm, 0, 2), level: num(b.level, -250, 50) ?? -200, first: num(b.first, 0, 1e11) ?? 0,
       last: num(b.last, 0, 1e11) ?? 0, fresh: b.fresh === true, wpm: num(b.wpm, 1, 40), station: stationOf(b.station),
+      idBy: b.idBy === 'votes' || b.idBy === 'reads' || b.idBy === 'radial' ? b.idBy : '', reads: num(b.reads, 0, 1e4) ?? 0,
+      expRadial: num(b.expRadial, 0, 360), idRadial: num(b.idRadial, 0, 360),
     } as VorMapBeacon];
   });
   const wins: Array<[number, number]> = (Array.isArray(m.wins) ? m.wins : []).slice(0, 64)
@@ -96,6 +105,18 @@ export function vorStationWords(b: VorMapBeacon): string {
   if (b.ident) return b.kind === 'loc' ? 'not in the open data (most runways are not)' : 'not in the published list';
   return b.reading ? `reading “${b.reading}”…` : 'ident not read yet';
 }
+const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
+/** ★★ beta94 WHY IT WAS TRUSTED, in words (the card's Ident row, the web row's tooltip): "ident read once · radial matches
+ *  (054° vs 060° expected)", "ident read twice · listed on this channel", "read 3 times alike". '' = not identified, or a
+ *  server from before beta94 (which does not say). */
+export function vorIdentWhy(b: VorMapBeacon): string {
+  if (!b.ident) return '';
+  const geo = b.expRadial != null && b.idRadial != null ? `radial matches (${pad3(b.idRadial)}° vs ${pad3(b.expRadial)}° expected)` : '';
+  if (b.idBy === 'radial') return `ident read ${times(Math.max(1, b.reads))} · ${geo || 'radial matches'}`;
+  if (b.idBy === 'reads') return [`ident read ${times(Math.max(2, b.reads))} · listed on this channel`, geo].filter(Boolean).join(' · ');
+  if (b.idBy === 'votes') return [`read ${times(Math.max(3, b.votes))} alike`, geo].filter(Boolean).join(' · ');
+  return '';
+}
 /** Distance in nautical miles from the server's place, as the server gives it (to 10 km). */
 export function vorRange(b: VorMapBeacon): string {
   const k = b.station?.km10;
@@ -124,7 +145,8 @@ export function vorSweepWords(windows: number, dwell: number): string {
   return s < 90 ? `${Math.round(s)} s` : `${(s / 60).toFixed(s % 60 ? 1 : 0)} min`;
 }
 export const VORMAP_EMPTY = 'Sweeping the navaid band, 108–118 MHz, a window at a time — each VOR or localiser appears as it is heard, '
-  + 'named once its Morse ident is read (twice for a listed station, about 20 s; three times otherwise). A whole sweep takes a few minutes.';
+  + 'named once its Morse ident is read (twice for a listed station, about 20 s — or once, when its radial matches where you are; '
+  + 'three times otherwise). A whole sweep takes a few minutes.';
 /** ★ Said on the key (Mode / DECODERS) and in the mode list. */
 export const VORMAP_HINT = 'VOR / ILS map — the whole navaid band (108–118 MHz) swept window by window, every VOR and localiser decoded at once: '
   + 'each station on the map with its radial towards you, and your position where radials from two stations cross.';
@@ -271,7 +293,8 @@ export function vorCard(b: VorMapBeacon, nowS: number): string {
   if (b.station?.dme) h += row('DME', b.station.dme);
   const rg = vorRange(b);
   if (rg) h += row('Distance', `${rg}${b.station?.brg != null ? ` ${compass8(b.station.brg)}` : ''} (to 10 km)`);
-  h += row('Ident', b.ident ? `${b.ident} — read off the air${b.votes ? ` (${b.votes}× alike)` : ''}` : b.reading ? `reading “${b.reading}” — not confirmed yet` : 'not read yet');
+  const why = vorIdentWhy(b);
+  h += row('Ident', b.ident ? `${b.ident} — ${why || `read off the air${b.votes ? ` (${b.votes}× alike)` : ''}`}` : b.reading ? `reading “${b.reading}” — not confirmed yet` : 'not read yet');
   h += row('Level', `${b.level.toFixed(0)} dBFS`);
   h += row('Heard', `${b.fresh ? 'this sweep' : 'an earlier sweep'} · ${vorAgo(nowS, b.last)} ago`);
   return h;

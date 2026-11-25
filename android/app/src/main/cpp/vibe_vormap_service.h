@@ -27,6 +27,14 @@
 //    FFT bins each), one NavRx per channel of the WINDOW only (a few tens of KB each), 200 small beacon records.
 // ★★ A NAME IS EARNED ON AIR: a beacon is named only by an ident read from it, matched to a station published on THAT
 //    channel near the receiver. A channel with no ident read stays "unidentified" — never named from the list alone.
+// ★★★ THE BEARING IS THE SECOND WITNESS (Stuart, beta94 — the XCover + HF+ 11-24: DTY 116.40 held at 054° FROM, −62 dB, "DTY"
+//     read ONCE and never again over two sweeps, so it stayed unidentified). The 30 Hz bearing comes through at levels where
+//     the 1020 Hz Morse only reads now and then. So: ONE read of a station listed on the channel, PLUS the measured radial
+//     within ±6° (+ what 1 km of position error subtends, geoTolDeg) of the radial that station should send to THIS receiver
+//     (expectedRadial: the great-circle bearing station → receiver, less the station's own variation) = identified. ★ The ident from the air is still required — the
+//     bearing replaces the REPEAT read, never the read. ★ Only with the receiver's position; only kGeoMinKm–kGeoMaxKm from the
+//     station (closer, a small error in the position swings the radial; further, the station is beyond what a ground
+//     receiver hears, so a match there is chance). Without a position: today's rule (two reads, or three by consensus).
 #pragma once
 #include "decoders/nav_rx.h"
 #include "decoders/ndb_skimmer.h"   // ndb::IdentVote — the NDB skimmer's consensus
@@ -73,6 +81,20 @@ constexpr double  kUsable      = 0.90;
  *  HF+ is in — 912 kS/s = 14 windows (~7 min a sweep), 768 kS/s = 16 (~8 min). VORs do not move, so a slow sweep still
  *  draws a true map; the status words say how long a sweep takes. (Was 12 and 1 MS/s, which left the HF+ out.) */
 constexpr int     kMaxWindows  = 20;
+/** ★★ THE GEOMETRY WITNESS (beta94, Stuart: "about ±6°"). The measured radial must be within this of the expected one. */
+constexpr double  kGeoTolDeg   = 6.0;
+/** ★★ PLUS the angle the receiver's own position error subtends at the station: the app publishes the phone's position
+ *  COARSENED to about 1 km (setLocationJson), and an owner types a town or a locator. 1 km at 20 km is 2.9°, at 100 km
+ *  0.6°. Measured, 11-24: DTY held 054–055° at Stuart's; the radial expected at the XCover's published position (52.29,
+ *  −0.85) is 059.7° — 5.7° off, a hair inside a bare ±6°; with the allowance (8.6° at 21.7 km) it is safely in. */
+constexpr double  kGeoPosKm    = 1.0;
+inline double geoTolDeg(double km) { return kGeoTolDeg + std::atan2(kGeoPosKm, km) * 180.0 / M_PI; }
+/** ★ Closer than this the expected radial is not trusted: 1 km of error in the receiver's position is already ~6° at 10 km
+ *  (a Maidenhead 6-character square is ~5 × 4.6 km). The repeat read is then still needed. */
+constexpr double  kGeoMinKm    = 10.0;
+/** ★ Further than this a station is beyond what a receiver on the ground hears (a VOR's coverage is for aircraft; on the
+ *  ground the horizon is tens of km, a hill or a lift a few hundred) — a radial "matching" one that far off is chance. */
+constexpr double  kGeoMaxKm    = 300.0;
 /** ★ The lowest running rate offered: ≥ 700 kS/s keeps the sweep to 20 windows (~10 min) at most. */
 constexpr double  kMinRateHz   = 0.70e6;
 
@@ -242,7 +264,8 @@ public:
     // ── test seams ──
     void setClockForTest(std::function<int64_t()> c) { std::lock_guard<std::mutex> lk(m_); clock_ = std::move(c); }
     /** One beacon's record, for the tests: what was decoded on channel `hz`. */
-    struct Seen { bool heard = false; int held = 0; double radial = NAN, sigma = NAN, ddm = NAN; std::string ident, reading, station; int64_t lastMs = -1; };
+    struct Seen { bool heard = false; int held = 0; double radial = NAN, sigma = NAN, ddm = NAN, expRadial = NAN, idRadial = NAN; int reads = 0;
+                  std::string ident, reading, station, idBy; int64_t lastMs = -1; };
     Seen seenForTest(int64_t hz) const {
         std::lock_guard<std::mutex> lk(m_);
         Seen s;
@@ -251,9 +274,17 @@ public:
         const Beacon& b = it->second;
         s.heard = b.heard; s.held = b.held; s.radial = b.radial; s.sigma = b.sigma; s.ddm = b.ddm;
         s.ident = identOf_(b); s.reading = b.reading; s.lastMs = b.lastStreamMs;
+        s.idBy = idBy_(b); s.reads = readsOf_(b, s.ident); s.expRadial = b.geoExp; s.idRadial = b.geoMeas;
         const vibevor::Station* st = stationOf_(b);
         if (st) s.station = st->r->ident;
         return s;
+    }
+    /** ★ Tests: a word of Morse read on channel `hz`, and a held VOR bearing — as a worker would report them. */
+    void wordForTest(int64_t hz, const std::string& w) { Live L; L.hz = hz; L.rate = 1; onWord_(L, w, 10.0); }
+    void bearingForTest(int64_t hz, double radial, double sigma = 0.5) {
+        Live L; L.hz = hz; L.rate = 1;
+        vibe::nav::Report r; r.kind = vibe::nav::Report::Vor; r.bearing = radial; r.sigma = sigma; r.seconds = 3; r.last.carrier = 1e-3;
+        onSecond_(L, r);
     }
     /** Channel rate the current window runs at (0 before one). */
     double chanRate() const { std::lock_guard<std::mutex> wk(work_); return mc_ ? mc_->chanRate() : 0.0; }
@@ -271,6 +302,10 @@ private:
         int held = 0, heldSecs = 0;        ///< 1 VOR bearing, 2 ILS deviation — the last one held
         double radial = NAN, sigma = NAN, ddm = NAN, sdm = NAN, levelDb = -200;
         int64_t firstUtc = 0, lastUtc = 0, lastStreamMs = -1;
+        /** ★★ The geometry witness, once it has spoken (it stays: the station does not move): the candidate it named, the
+         *  radial expected of it and the one measured then. geoIdx −1 = not (yet). */
+        int geoIdx = -1;
+        double geoExp = NAN, geoMeas = NAN;
     };
     /** One channel of the window being decoded (its worker's own). */
     struct Live {
@@ -286,18 +321,53 @@ private:
         return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
     /** ★ The ident: the NDB skimmer's consensus (three clean identical readings …), OR a reading that IS a station
-     *  published on this channel, read twice (the list is the second witness) — vibe_nav_run.h's rule. */
+     *  published on this channel, read twice (the list is the second witness) — vibe_nav_run.h's rule — OR (beta94) read
+     *  ONCE with the measured radial matching that station's expected one (the bearing is the second witness, geoCheck_). */
     static std::string identOf_(const Beacon& b) {
         if (!b.vote.ident().empty()) return b.vote.ident();
         for (const auto& kv : b.seen) if (kv.second >= 2) return kv.first;
+        if (b.geoIdx >= 0) return b.cands[(size_t)b.geoIdx].r->ident;
         return std::string();
     }
-    /** The published station the ident read names (nearest first), or null. Never one the air has not named. */
+    /** Why it was trusted — "votes" (three alike), "reads" (a listed ident read twice), "radial" (read once + the bearing),
+     *  "" (not). Follows identOf_'s order. */
+    static const char* idBy_(const Beacon& b) {
+        if (!b.vote.ident().empty()) return "votes";
+        for (const auto& kv : b.seen) if (kv.second >= 2) return "reads";
+        if (b.geoIdx >= 0) return "radial";
+        return "";
+    }
+    static int readsOf_(const Beacon& b, const std::string& id) {
+        auto it = b.seen.find(id);
+        return it == b.seen.end() ? 0 : it->second;
+    }
+    /** The published station the ident read names, or null. Never one the air has not named. The one the bearing
+     *  confirmed when it did (same ident), else the nearest of that ident. */
     static const vibevor::Station* stationOf_(const Beacon& b) {
         const std::string id = identOf_(b);
         if (id.empty()) return nullptr;
+        if (b.geoIdx >= 0 && id == b.cands[(size_t)b.geoIdx].r->ident) return &b.cands[(size_t)b.geoIdx];
         for (const auto& s : b.cands) if (id == s.r->ident) return &s;
         return nullptr;
+    }
+    /** ★★★ THE GEOMETRY WITNESS (beta94). A listed ident read at least once on this channel + a held VOR radial within
+     *  geoTolDeg of the radial THAT station (kGeoMinKm–kGeoMaxKm away) should send here = that station. Each candidate is
+     *  judged on its OWN expected radial, so a read of another same-channel station's ident does not borrow this one's
+     *  bearing, and a misread with the wrong radial names nothing. Needs the receiver's position. (Under m_.) */
+    void geoCheck_(Beacon& b) {
+        if (!havePos_ || b.geoIdx >= 0 || b.held != 1 || b.expect != 1 || !std::isfinite(b.radial)) return;
+        int best = -1; double bestErr = 1e9, bestExp = NAN;
+        for (size_t i = 0; i < b.cands.size(); ++i) {
+            const vibevor::Station& s = b.cands[i];
+            if (readsOf_(b, s.r->ident) < 1) continue;
+            double km = NAN;
+            const double exp = vibevor::expectedRadial(*s.r, lat_, lon_, &km);
+            if (!(km >= kGeoMinKm && km <= kGeoMaxKm)) continue;
+            const double err = vibevor::angleDiff(b.radial, exp);
+            if (err <= geoTolDeg(km) && err < bestErr) { best = (int)i; bestErr = err; bestExp = exp; }
+        }
+        if (best < 0) return;
+        b.geoIdx = best; b.geoExp = bestExp; b.geoMeas = b.radial;
     }
 
     // ── the decoder thread ──
@@ -387,7 +457,7 @@ private:
         b.heard = true; b.lastUtc = u; b.lastStreamMs = L.ms();
         b.levelDb = r.last.carrier > 0 ? 20.0 * std::log10(r.last.carrier) : -200;
         b.heldSecs = r.seconds;
-        if (r.kind == vibe::nav::Report::Vor) { b.held = 1; b.radial = r.bearing; b.sigma = r.sigma; }
+        if (r.kind == vibe::nav::Report::Vor) { b.held = 1; b.radial = r.bearing; b.sigma = r.sigma; geoCheck_(b); }
         else { b.held = 2; b.ddm = r.ddm; b.sdm = r.sdm; }
     }
     /** A word of Morse off a channel: a ballot for its ident. */
@@ -402,7 +472,7 @@ private:
         bool listed = false;
         for (const auto& s : b.cands) if (w == s.r->ident) listed = true;
         b.vote.add(w, L.ms());
-        if (listed) ++b.seen[w];
+        if (listed) { ++b.seen[w]; geoCheck_(b); }
         if (!identOf_(b).empty()) {
             const int64_t u = nowUtc();
             if (!b.heard) b.firstUtc = u;
@@ -448,6 +518,14 @@ private:
                               first ? "" : ",", (long long)x.hz, x.expect == 2 ? "loc" : "vor", x.win, id.c_str(), cleanIdent(x.reading).c_str(),
                               x.vote.votes(), x.held, x.levelDb, (long long)x.firstUtc, (long long)x.lastUtc, fresh ? "true" : "false");
                 o += b; first = false;
+                if (!id.empty()) {
+                    // ★★ WHY it was trusted (the clients' card says it in words): by what, how many reads, and for the
+                    //    bearing witness the radial expected of the station and the one measured when it spoke.
+                    std::snprintf(b, sizeof b, ",\"idBy\":\"%s\",\"reads\":%d", idBy_(x), readsOf_(x, id)); o += b;
+                    if (x.geoIdx >= 0 && id == x.cands[(size_t)x.geoIdx].r->ident) {
+                        std::snprintf(b, sizeof b, ",\"expRadial\":%.1f,\"idRadial\":%.1f", x.geoExp, x.geoMeas); o += b;
+                    }
+                }
                 if (x.wpm > 0) { std::snprintf(b, sizeof b, ",\"wpm\":%.1f", x.wpm); o += b; }
                 if (std::isfinite(x.radial)) {
                     std::snprintf(b, sizeof b, ",\"radial\":%.1f,\"sigma\":%.2f", x.radial, x.sigma); o += b;
