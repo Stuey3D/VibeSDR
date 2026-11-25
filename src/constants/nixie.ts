@@ -583,7 +583,11 @@ export function nixieGeometry(w: number, h: number, spec: NixieSpec, design: Tub
   const fit = naturalW > fixed && w > fixed ? Math.min(1, (w - fixed) / (naturalW - fixed)) : 1;
   tw *= fit;
   const bw = Math.max(2, bw0 * fit);
-  const glassMax = (design.th + GLASS_GAIN) * sc;
+  /* ★★ NEVER SQUASHED (Stuart, 2026-11-25, the Duo's folded front screen in landscape: "frequency readout is a bit
+   *  squished … the nixies can shrink slightly if needed"). When the row is too narrow for the tubes (fit < 1) they
+   *  used to get only NARROWER, the glass kept its full height and the tubes turned into slivers. The glass now
+   *  shrinks by the same factor, so a tube that has to be smaller is smaller all over — uniformly, never distorted. */
+  const glassMax = (design.th + GLASS_GAIN) * sc * Math.min(1, fit);
   const glassH = Math.max(MIN_GLASS * sc, Math.min(glassMax, h - (PIP_H + COLLAR_SHOWN + 2 * CLEAR) * sc));
   // ★ The glass the base gave up (GLASS_GAIN) grows the digit with it, so the numbers get bigger in the
   //   same readout height wherever the glass did (Stuart, 2026-10-16).

@@ -33,6 +33,12 @@ export interface SpecRatioOverlayProps {
   bottomOffset:    number;         // px from bottom of screen (pillTop - 10)
   onChange:        (portrait: number, landscape: number) => void;
   onClose:         () => void;
+  /** ★★ iPhone Duo: which of the four cases this is ("FRONT · PORTRAIT"); absent = PORTRAIT / LANDSCAPE as before. */
+  caseLabel?:      string;
+  /** ★★ System rects (the camera, the status pill) the panel must not sit under: it is narrowed clear of any that
+   *  reach its rows (measured on layout). Absent / empty = full width, as before. */
+  avoid?:          { x: number; y: number; w: number; h: number }[];
+  windowW?:        number;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -46,8 +52,17 @@ const MAX   = 0.65;
 export default function SpecRatioOverlay({
   visible, isLandscape,
   portraitRatio, landscapeRatio,
-  bottomOffset, onChange, onClose,
+  bottomOffset, onChange, onClose, caseLabel, avoid, windowW = 0,
 }: SpecRatioOverlayProps) {
+  const [frame, setFrame] = useState<{ y: number; h: number } | null>(null);
+  let clearRight = 8, clearLeft = 8;
+  if (frame && avoid?.length && windowW > 0) {
+    for (const r of avoid) {
+      if (r.y + r.h <= frame.y || r.y >= frame.y + frame.h) continue;
+      if (r.x + r.w / 2 >= windowW / 2) clearRight = Math.max(clearRight, Math.ceil(windowW - r.x) + 6);
+      else clearLeft = Math.max(clearLeft, Math.ceil(r.x + r.w) + 6);
+    }
+  }
 
   const { theme: t } = useTheme();
   /* ★★ IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if possible").
@@ -101,7 +116,8 @@ export default function SpecRatioOverlay({
 
   return (
     <Animated.View
-      style={[sro.wrap, { bottom: bottomOffset, borderColor: bdr, opacity, transform: [{ translateY }] }]}
+      onLayout={(e) => { const { y, height } = e.nativeEvent.layout; setFrame((f) => (f && f.y === y && f.h === height ? f : { y, h: height })); }}
+      style={[sro.wrap, { bottom: bottomOffset, left: clearLeft, right: clearRight, borderColor: bdr, opacity, transform: [{ translateY }] }]}
       pointerEvents="auto"
     >
       {/* Header */}
@@ -111,7 +127,7 @@ export default function SpecRatioOverlay({
         </Text>
         <View style={[sro.badge, { backgroundColor: badgeBg, borderColor: badgeBdr }]}>
           <Text style={[sro.badgeTxt, { color: label, fontFamily: t.font }]}>
-            {isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}
+            {caseLabel ?? (isLandscape ? 'LANDSCAPE' : 'PORTRAIT')}
           </Text>
         </View>
         <TouchableOpacity
