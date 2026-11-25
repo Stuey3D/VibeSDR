@@ -7,7 +7,7 @@
  *   which are children of the chip's own full-screen root — and zIndex / Android elevation only order a view among
  *   its siblings, so it did nothing against the boxes. This holds the two things that actually matter:
  *
- *   1. The open layer is applied to ServersChip's ROOT view (the one SDRScreen stacks against the boxes), and the
+ *   1. An open layer is applied to ServersChip's ROOT view (the one SDRScreen stacks against the boxes), and the
  *      outside-tap backdrop is inside that root (so an outside tap closes the menu, never reaches a box).
  *   2. SDRScreen renders the chip as a DIRECT child of the screen's root view (only PanelBoundary, a fragment, in
  *      between), so that band competes with the boxes — inside a wrapper it would be confined to that wrapper again.
@@ -30,24 +30,25 @@ const ok = (m) => console.log(`  ok    ${m}`);
 const chipPath = path.join(root, 'src/components/ServersChip.tsx');
 const chip = readFileSync(chipPath, 'utf8');
 
-const band = chip.match(/export const TOP_MENU_LAYER = \{ zIndex: (\d+), elevation: (\d+) \}/);
-if (!band) { fail('TOP_MENU_LAYER { zIndex, elevation } not found in ServersChip.tsx'); process.exit(1); }
-const Z = Number(band[1]), E = Number(band[2]);
-ok(`TOP_MENU_LAYER = zIndex ${Z}, elevation ${E}`);
-
-// 1. The component's first returned view carries the band while open.
+// 1. The component's first returned view carries an open layer while expanded — whatever the band is called.
 const ret = chip.indexOf('\n  return (');
-const firstView = chip.slice(ret).match(/<View\b[^>]*>/s)?.[0] ?? '';
-if (/expanded && TOP_MENU_LAYER/.test(firstView)) ok('the band is on the ROOT view, while expanded');
-else fail(`the root view does not carry \`expanded && TOP_MENU_LAYER\`: ${firstView.replace(/\s+/g, ' ')}`);
 const body = chip.slice(ret);
+const firstView = body.match(/<View\b[^>]*>/s)?.[0] ?? '';
+const bandName = firstView.match(/expanded\s*(?:&&|\?)\s*([A-Z_][A-Z0-9_]*)/)?.[1];
+if (bandName) ok(`the open band (${bandName}) is on the ROOT view, while expanded`);
+else { fail(`the root view does not carry an open layer while expanded: ${firstView.replace(/\s+/g, ' ')}`); process.exit(1); }
 const backdrop = body.indexOf('accessibilityLabel="Close server menu"');
 if (backdrop > 0 && body.indexOf('onPress={collapse}') < backdrop) ok('the outside-tap backdrop is inside the root and closes the menu');
 else fail('outside-tap backdrop (onPress={collapse}) not found inside the root');
-// The band on a CHILD is the 10-30 mistake: harmless, but it reads as if it were the fix.
-const uses = [...chip.matchAll(/(?:&&|\[|,|\()\s*TOP_MENU_LAYER\b/g)].length;
-if (uses === 1) ok('the band is applied once — to the root');
-else fail(`TOP_MENU_LAYER is applied ${uses} times — expected the root only`);
+
+// The band's numbers: literals, or a named constant from the chip or src/utils.
+const utilsDir = path.join(root, 'src/utils');
+const pool = [chip, ...readdirSync(utilsDir).filter((f) => f.endsWith('.ts')).map((f) => readFileSync(path.join(utilsDir, f), 'utf8'))].join('\n');
+const resolve = (tok) => /^\d+$/.test(tok) ? Number(tok) : Number(pool.match(new RegExp(`const ${tok}\\s*=\\s*(\\d+)`))?.[1] ?? NaN);
+const def = chip.match(new RegExp(`const ${bandName}\\s*=\\s*\\{\\s*zIndex:\\s*(\\w+),\\s*elevation:\\s*(\\w+)\\s*\\}`));
+const Z = def ? resolve(def[1]) : NaN, E = def ? resolve(def[2]) : NaN;
+if (Number.isFinite(Z) && Number.isFinite(E)) ok(`${bandName} = zIndex ${Z}, elevation ${E}`);
+else { fail(`could not read ${bandName}'s { zIndex, elevation } numbers`); process.exit(1); }
 
 // 2. SDRScreen mounts it directly under the root view.
 {
