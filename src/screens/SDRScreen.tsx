@@ -337,6 +337,7 @@ import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow, UiWindowOverride } from '../hooks/useUiScale';
 import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
+import { halfOpenSplit } from '../utils/duoGeometry';
 import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
 import { DecoderAvoidContext } from '../components/DecoderShell';
 import { EDGE_TAB_W, EDGE_TAB_H } from '../components/edgeChipGeometry';
@@ -12772,9 +12773,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ A decoder box may rise BESIDE the camera / status column (it narrows clear of it — DecoderShell, DecoderAvoid
    *  below — Stuart: "shrink to the left so that it clears the system status"); only a full-width status band (a Split
    *  View share's) holds it below. */
-  /* ★★ Half-open: NOTHING on the crease (Stuart: "dont cover over the crease … treat the decoder box as 2 halves"). Until
-   *  the boxes are split into an upper and a lower panel (owed — per-decoder work), a box stays wholly BELOW the fold,
-   *  so BIG and SMALL are the same height there and BIG is not offered. */
+  /* ★★ Half-open: NOTHING on the crease (Stuart: "dont cover over the crease … treat the decoder box as 2 halves"). A
+   *  single box (SMALL) stays wholly BELOW the fold; BIG is two panels either side of it (halfSplit, DecoderShell) and
+   *  each panel offers BIG from that split, not from this. */
   const boxTopSafe = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8
     : Math.max(insets.top + 6, (() => {
     let y = 0;
@@ -15098,20 +15099,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bottomInset = insets.bottom;
   /* ★★ The decoder boxes' right edge keeps clear of the system's corner rects and the right-hand edge tabs
    *  (DecoderShell). Only rects narrower than half the window (a full-width band holds the box below it instead). */
+  /* ★★★ HALF-OPEN BIG = TWO PANELS in the left column, either side of the fold (Stuart: "dont cover over the crease.
+   *  id suggest splitting the data and treat the decoder box as 2 halves"; duoGeometry halfOpenSplit). Only while the
+   *  box is beside the deck (halfSide); null = no room for two panels, and BIG is not offered (the box stays below the
+   *  fold). */
+  const halfSplit = useMemo(() => (tableFold && halfSide
+    ? halfOpenSplit(reserved, tableFold, screenH, { x0: 8, x1: screenW - (Math.ceil(screenW / 2) + 4) },
+                    { top: chromeTop, bottomInset })
+    : null), [tableFold, halfSide, reserved, screenH, screenW, chromeTop, bottomInset]);
   const decoderAvoid = useMemo(() => {
     if (tabletop) {
       const bottom = halfSide ? bottomInset + 8 : pillBottom + 8;
       return { rects: [], windowW: screenW, frame: {
         left: 8, right: halfSide ? Math.ceil(screenW / 2) + 4 : 8, bottom,
         maxHeight: Math.max(120, screenH - halfTop - bottom),
-        maxHeightTall: Math.max(120, screenH - boxTopSafe - bottom),
-        fold: tableFold ? { y: tableFold.y, h: tableFold.h } : undefined } };
+        split: halfSplit ? { ...halfSplit, windowH: screenH } : undefined } };
     }
     const rects = avoidRects(reserved).filter((r) => r.w < screenW * 0.5);
     if (!rects.length) return { rects: [], windowW: screenW };
     if (health || sessionLimitMins) rects.push({ x: screenW - (EDGE_TAB_W + 14), y: rightStackTop, w: EDGE_TAB_W + 14, h: 2 * EDGE_TAB_H + 16 });
     return { rects, windowW: screenW };
-  }, [reserved, screenW, health, sessionLimitMins, rightStackTop, tabletop, halfSide, bottomInset, pillBottom, screenH, halfTop, boxTopSafe, tableFold]);
+  }, [reserved, screenW, health, sessionLimitMins, rightStackTop, tabletop, halfSide, bottomInset, pillBottom, screenH, halfTop, halfSplit]);
 
   /* ★★★ Into SATELLITE (its key, and a REMIND banner's LISTEN): each other whole-radio mode switched OFF properly. */
   satEnterRef.current = () => {

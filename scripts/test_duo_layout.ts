@@ -8,7 +8,7 @@
 import { edgeChipGeometry } from '../src/components/edgeChipGeometry.ts';
 import { namePlacement } from '../src/utils/duoGeometry.ts';
 import { isFoldedFrontWindow, isFrontScreenWindow, phonePortraitScale, clearBelow, rightLimitAt, deckClearance,
-         avoidRects, NO_REGIONS, type ReservedRegions } from '../src/utils/duoGeometry.ts';
+         avoidRects, NO_REGIONS, halfOpenSplit, type ReservedRegions, type RegionRect } from '../src/utils/duoGeometry.ts';
 
 let fails = 0;
 function ok(cond: boolean, what: string) {
@@ -110,6 +110,48 @@ ok(avoidRects({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 10, h: 10 }] }).leng
   // Nothing there: unchanged, no fade.
   const z = namePlacement(NO_REGIONS, 0, 64, 469, 28);
   ok(z.right === 28 && z.minTop === 0 && !z.crowded, 'no rects: the name is where it always was, and does not fade');
+}
+
+// ── HALF-OPEN: BIG as two panels either side of the fold (Stuart: "dont cover over the crease … treat the decoder box as
+//    2 halves"). Inner portrait 669 × 951; the fold as UIKit's division region across the middle; the box in the LEFT
+//    column (x 8 … 669 − (335 + 4) = 330), the deck in the right. Pill + camera top-RIGHT. ───────────────────────────
+{
+  const W = 669, H = 951, COL = { x0: 8, x1: W - (Math.ceil(W / 2) + 4) };
+  const hit = (a: RegionRect, x0: number, x1: number, y0: number, y1: number) =>
+    a.x < x1 && x0 < a.x + a.w && a.y < y1 && y0 < a.y + a.h;
+  const pill = { x: 560, y: 0, w: 109, h: 40 }, cam = { x: 600, y: 8, w: 37, h: 37 };
+  for (const fold of [{ x: 0, y: 455, w: W, h: 41 }, { x: 0, y: 470, w: W, h: 12 }, { x: 0, y: 400, w: W, h: 60 }]) {
+    const R: ReservedRegions = { ...NO_REGIONS, division: [fold], statusBar: [pill], occlusion: [cam],
+                                 hinge: { status: 'partiallyOpen', angleDeg: 110 } };
+    const sp = halfOpenSplit(R, fold, H, COL, { top: 0, bottomInset: 21 });
+    ok(!!sp, `fold at ${fold.y}+${fold.h}: a split is offered`);
+    if (!sp) continue;
+    ok(!hit(fold, sp.x0, sp.x1, sp.upper.top, sp.upper.bottom) && !hit(fold, sp.x0, sp.x1, sp.lower.top, sp.lower.bottom),
+       `fold at ${fold.y}+${fold.h}: neither panel touches the division rect (upper ends ${sp.upper.bottom}, lower starts ${sp.lower.top})`);
+    ok(sp.upper.bottom <= fold.y - 8 && sp.lower.top >= fold.y + fold.h + 8, '…with an 8 pt gap each side (the waterfall shows through)');
+    ok(sp.upper.top === 8, `the pill and camera are top-RIGHT: the upper panel reaches the top edge (${sp.upper.top})`);
+    ok(sp.lower.bottom === H - 21 - 8, `the lower panel sits on the home-indicator line (${sp.lower.bottom})`);
+    ok(sp.x1 <= W / 2 && sp.x0 >= 8, `both panels in the left column (${sp.x0}…${sp.x1}), the deck's half untouched`);
+    ok(avoidRects(R).every((r) => !hit(r, sp.x0, sp.x1, sp.upper.top, sp.upper.bottom) && !hit(r, sp.x0, sp.x1, sp.lower.top, sp.lower.bottom)),
+       'no reserved region falls on either panel');
+  }
+  const fold = { x: 0, y: 455, w: W, h: 41 };
+  // A rect over the column's top (an active inner camera top-left; a share's band) pushes the upper panel's top down.
+  const camTL: ReservedRegions = { ...NO_REGIONS, division: [fold], occlusion: [{ x: 20, y: 10, w: 40, h: 40 }] };
+  const a = halfOpenSplit(camTL, fold, H, COL, { top: 0, bottomInset: 21 })!;
+  ok(a.upper.top === 58, `a camera over the column's top: the upper panel starts below it (${a.upper.top})`);
+  const band: ReservedRegions = { ...NO_REGIONS, division: [fold], statusBar: [{ x: 0, y: 0, w: W, h: 44 }] };
+  ok(halfOpenSplit(band, fold, H, COL, { top: 0, bottomInset: 21 })!.upper.top === 52, 'a full-width status band: below it');
+  // One below the fold lifts the lower panel's bottom.
+  const camBL: ReservedRegions = { ...NO_REGIONS, division: [fold], occlusion: [{ x: 20, y: 880, w: 40, h: 40 }] };
+  ok(halfOpenSplit(camBL, fold, H, COL, { top: 0, bottomInset: 21 })!.lower.bottom === 872, 'a rect low in the column lifts the lower panel');
+  // A rect in the deck's half moves nothing.
+  const right: ReservedRegions = { ...NO_REGIONS, division: [fold], occlusion: [{ x: 500, y: 600, w: 40, h: 40 }] };
+  const r0 = halfOpenSplit(right, fold, H, COL, { top: 0, bottomInset: 21 })!;
+  ok(r0.upper.top === 8 && r0.lower.bottom === H - 29, "a rect in the deck's half leaves both panels alone");
+  // No room for two panels (a fold near the top): no split — the box stays below the fold and BIG is not offered.
+  ok(halfOpenSplit(NO_REGIONS, { x: 0, y: 80, w: W, h: 30 }, H, COL, { top: 0, bottomInset: 21 }) === null,
+     'a fold too near the top: no split (null)');
 }
 
 if (fails) { console.log(`\nduo layout: ${fails} FAILED`); process.exit(1); }
