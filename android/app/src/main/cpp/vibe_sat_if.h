@@ -50,6 +50,8 @@ inline double occupiedHz(const vibe::sat::Transmitter& t, std::string* what = nu
     }
     // ★ 2026-11-24 ORBCOMM: the decoder's own slice (one channel ± its neighbours, or the band + the same margin)
     if (t.orbcomm()) { say("ORBCOMM"); return vibe::sat::kOrbMaxSliceHz; }   // ★ always the whole band's slice (decoderOf)
+    // ★★★ beta94 the transponder finder's span: the passband AND its beacon (one slice — vibe_sat_engine.h linkXpdr)
+    if (t.xpdr()) { say("transponder + beacon"); return (t.xpdrHi - t.xpdrLo) + 3000.0; }
     if (t.passband()) { say("transponder"); return (t.hiHz - t.hz) + 3000.0; }
     if (vibe::sat::beaconSkimmed(t)) { say("CW beacon (skimmed)"); return vibe::sat::kBeaconSkimHz; }
     if (t.consumer == "ax25-9600") { say("9600 packet"); return 25000.0; }
@@ -82,7 +84,7 @@ inline Region regionOf(const vibe::sat::Transmitter& t, double demodBwHz = 0.0) 
     std::string what;
     const double occ = std::max(occupiedHz(t, &what), demodBwHz);
     const double dop = dopplerHz(t.centre());
-    r.centreHz = t.orbcomm() ? vibe::sat::orbcommBandCentreHz(t) : t.centre();   // ★ ORBCOMM: the band, not the listed channel
+    r.centreHz = t.orbcomm() ? vibe::sat::orbcommBandCentreHz(t) : t.xpdr() ? t.xpdrCentre() : t.centre();   // ★ ORBCOMM: the band; ★★★ beta94 a finder: its span
     r.halfHz = occ * 0.5 + dop;
     char b[160];
     std::snprintf(b, sizeof b, "%s %.0f kHz + Doppler \xc2\xb1%.1f kHz", what.c_str(), occ / 1e3, dop / 1e3);

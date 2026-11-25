@@ -57,6 +57,7 @@ public:
     static constexpr double kMaxWideHz = 4000.0;  ///< wider = two voices touching, or something else
     static constexpr double kBridgeHz = 110.0;    ///< gaps in speech this narrow are bridged
     static constexpr double kPeakShare = 0.5;     ///< a run whose strongest 100 Hz holds more of its energy = a carrier
+    static constexpr double kEdgeShare = 0.03;    ///< the speech's edges: this share of its energy beyond each
     static constexpr double kMatchHz = 1500.0;    ///< a frame's run within this of a voice's centre is that voice
     static constexpr int kConfirmFrames = 4;      ///< ≈ 1 s of speech
     static constexpr double kTentativeSec = 3.0;  ///< an unconfirmed voice not heard again within this goes
@@ -172,7 +173,19 @@ private:
                 }
                 if (best > kPeakShare * sw) continue;
             }
-            const double centre = swf / sw, lo = (k0 + r.a) * binHz_, hi = (k0 + r.b) * binHz_;
+            /* ★ the speech's EDGES by energy (3 % and 97 % of the run's energy above the floor), not its first and last bins
+             *  over the threshold: a strong voice's window skirts stand over the threshold 50–100 Hz beyond its real edge,
+             *  and the carrier estimate is read off the low edge (the first version sat ~180 Hz low, more when moving). */
+            double lo = (k0 + r.a) * binHz_, hi = (k0 + r.b) * binHz_;
+            {
+                double c = 0; bool haveLo = false;
+                for (int i = r.a; i <= r.b; ++i) {
+                    c += std::max(0.0, (double)p_[(size_t)i] - floor_);
+                    if (!haveLo && c >= kEdgeShare * sw) { lo = (k0 + i) * binHz_ - 0.5 * binHz_; haveLo = true; }
+                    if (c >= (1.0 - kEdgeShare) * sw) { hi = (k0 + i) * binHz_ + 0.5 * binHz_; break; }
+                }
+            }
+            const double centre = swf / sw;
             const float snr = (float)(10.0 * std::log10(std::max(1e-12, sp / (r.b - r.a + 1) / floor_)));
             // match: the nearest voice by centre
             int best = -1; double bd = kMatchHz;
@@ -193,7 +206,7 @@ private:
             if (hit[(size_t)best]) continue;   // one run a voice a frame
             hit[(size_t)best] = true;
             // ★ smoothed — speech's edges move syllable to syllable; the carrier is the slow part of them
-            const double a = v.frames < kConfirmFrames ? 0.5 : 0.15;
+            const double a = v.frames < kConfirmFrames ? 0.5 : 0.3;   // ★ ~0.7 s: follows a pass's Doppler rate with little lag
             v.centreHz += a * (centre - v.centreHz);
             v.loHz += a * (lo - v.loHz); v.hiHz += a * (hi - v.hiHz);
             v.carrierHz = usb_ ? v.loHz - kSpeechAboveCarrierHz : v.hiHz + kSpeechAboveCarrierHz;

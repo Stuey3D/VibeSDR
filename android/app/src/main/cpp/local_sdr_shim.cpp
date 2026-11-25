@@ -11951,6 +11951,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             satRefuse(sock, "pick", "That satellite or downlink is not in this server's list");
             return;
         }
+        /* ★★★ beta94 THE TRANSPONDER FINDER (Stuart 11-24: "we wont need a separate vfo for the cw beacon … any cw gets
+         *  decoded"): a CW beacon beside a linear transponder is one more CW row in the transponder's finder — picking it
+         *  picks the transponder (vibe_sat_engine.h linkXpdr / xpdrOwnerOf), whose slice holds both. */
+        if (const int own = vibe::sat::xpdrOwnerOf(sd, (int)tv); own >= 0) { tv = own; tx = sd.tx[(size_t)own]; }
         if (const std::string rw = vsSatReachWhy(tx.hz, tx.passband() ? tx.hiHz : tx.hz); !rw.empty()) { satRefuse(sock, "pick", rw); return; }
         std::string key, session; std::shared_ptr<ClientDsp> me;
         if (!satPickKey(sock, key, session, me)) return;
@@ -12084,6 +12088,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string satVfoBWhyNot(const std::shared_ptr<net::Socket>& sock, const std::string& sess, const vibe::sat::Transmitter& tx) {
         if (sess.empty()) return "VFO B needs a listening session";
         if (tx.labelOnly()) return "That downlink is only named on the waterfall";
+        // ★★★ beta94 (Stuart 11-24: "we wont need a separate vfo for the cw beacon"): a beacon beside a linear transponder is
+        //   decoded by the transponder finder on VFO A — one more CW row there, never a VFO B of its own
+        if (tx.xpdr() && !tx.passband()) return "The beacon is decoded with the transponder \xe2\x80\x94 pick the transponder and it is one of the CW rows";
         if (const std::string w = watchWhyNotFor(sock); !w.empty()) return w;
         if (g_scanLock.load() && !adminNow(sock)) return "The owner's band scan is running on this receiver";
         if (const std::string rw = vsSatReachWhy(tx.hz, tx.passband() ? tx.hiHz : tx.hz); !rw.empty()) return rw;
@@ -12115,6 +12122,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string j;
         for (int k = 0; k < (int)sd.tx.size(); ++k) {
             if (k == p.tx) continue;
+            if (vibe::sat::xpdrOwnerOf(sd, k) == p.tx) continue;   // ★★★ beta94 the beacon is a row of this pick's finder
             if (!satVfoBWhyNot(sock, sess, sd.tx[(size_t)k]).empty()) continue;
             j += (j.empty() ? "" : ",") + std::to_string(k);
         }
@@ -33926,6 +33934,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 icomDecReconcile();   // ★ an Icom goes back as the decoder found it
                 navWideSync();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
+            } else if (type == "xpdr_follow") {
+                /* ★★★ beta94 THE TRANSPONDER FINDER's LISTEN (docs/v12/TRANSPONDER-FINDER.md): VFO A follows that row (the
+                 *  client has tuned the dial to it — the follow waits for that tune to land), "" = stop. Only ever the finder
+                 *  this socket's VFO A host runs; anything else ignores it. The follow moves the listener's OWN lock (or the
+                 *  room's, which only a listener allowed to tune can have picked). */
+                std::string id = jsonStr(payload, "id");
+                if (id.size() > 12) id.clear();
+                if (host) host->xpdrFollow(id);
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
                  *  the button, but an old client or a hand-rolled tool must meet the same wall.

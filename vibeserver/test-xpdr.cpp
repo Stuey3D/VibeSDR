@@ -59,7 +59,54 @@ struct Voice {
     }
 };
 
-int main() {
+/** ★ `test-xpdr --write-clip FILE RATE CENTRE_HZ SECONDS`: unsigned 8-bit IQ for the fake rtl_tcp (--hf FILE --hf-centre
+ *  CENTRE_HZ) — RS-44's beacon keyed at 435.605 MHz, a CQ at 435.650 MHz and an SSB voice (carrier 435.622 MHz), on a
+ *  little noise: what scripts/test-server-xpdr.mjs and scripts/test-web-xpdr.mjs feed the real server. No Doppler in the
+ *  clip: the finder turns the LOCK's Doppler out, so with a lock the rows sit that far from these figures, without one on them. */
+static int writeClip(const char* path, double rate, double centre, double sec) {
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 2;
+    struct Sig { double hz, a; std::vector<uint8_t> keys; double unit, ph; };
+    auto cwOf = [&](double hz, double a, const std::string& text, double wpm) {
+        Sig s{hz, a, {}, 1.2 / wpm, 0.0};
+        for (char ch : text) {
+            if (ch == ' ') { for (int i = 0; i < 4; ++i) s.keys.push_back(0); continue; }
+            for (char e : vibe::cw::morseCode(std::string(1, ch))) { int n = e == '.' ? 1 : 3; for (int i = 0; i < n; ++i) s.keys.push_back(1); s.keys.push_back(0); }
+            s.keys.push_back(0); s.keys.push_back(0);
+        }
+        for (int i = 0; i < 7; ++i) s.keys.push_back(0);
+        return s;
+    };
+    std::vector<Sig> cws = { cwOf(435605000 - centre, 0.10, "RS44 RS44 BEACON ", 16), cwOf(435650000 - centre, 0.08, "CQ SAT DE G4ABC G4ABC K ", 22) };
+    std::vector<double> vf, vp; std::mt19937 rng(5);
+    for (int i = 0; i < 20; ++i) { vf.push_back(435622000 - centre + 300 + i * 120.0 + (rng() % 30)); vp.push_back((rng() % 1000) / 159.0); }
+    std::normal_distribution<float> nd(0.0f, 0.012f);
+    double nextAt = 0, g = 1; bool on = true;
+    const long long N = (long long)(sec * rate);
+    std::vector<uint8_t> out; out.reserve(1 << 20);
+    for (long long n = 0; n < N; ++n) {
+        const double t = n / rate;
+        double re = nd(rng), im = nd(rng);
+        for (auto& s : cws) {
+            s.ph += 2 * M_PI * s.hz / rate;
+            if (s.keys[(size_t)(t / s.unit) % s.keys.size()]) { re += s.a * std::cos(s.ph); im += s.a * std::sin(s.ph); }
+        }
+        if (t >= nextAt) { on = (rng() % 10) < 7; nextAt = t + 0.2 + (rng() % 300) / 1000.0; g = 0.6 + (rng() % 40) / 100.0; }
+        for (size_t i = 0; i < vf.size(); ++i) {
+            vp[i] += 2 * M_PI * vf[i] / rate;
+            if (on) { re += 0.016 * g * std::cos(vp[i]); im += 0.016 * g * std::sin(vp[i]); }
+        }
+        out.push_back((uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + 127.0 * re))));
+        out.push_back((uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + 127.0 * im))));
+        if (out.size() >= (1u << 20)) { std::fwrite(out.data(), 1, out.size(), f); out.clear(); }
+    }
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 6 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]));
     using namespace vibe::sat;
     // ── 1. the catalogue ──
     std::printf("── 1. the catalogue: transponder + beacon = one span ──\n");

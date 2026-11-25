@@ -2071,6 +2071,19 @@ fi
 printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta94 THE TRANSPONDER SIGNAL FINDER end to end (docs/v12/TRANSPONDER-FINDER.md): a synthetic RS-44 clip (test-xpdr
+#     --write-clip: its beacon, G4ABC's CQ, an SSB voice) through the real server — rows, the beacon's pick opening the
+#     transponder, the slice turned by the lock's Doppler, LISTEN → VFO A follows, a manual tune ends it; then the web page.
+printf '\n\033[1m── Transponder finder (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-xpdr" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-xpdr" --write-clip "$OUT/xpdr-clip.u8" 2400000 435640000 12; then
+  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-server-xpdr.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-web-xpdr.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/xpdr-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-xpdr build'; notrun=$((notrun+1))
+fi
 # ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
