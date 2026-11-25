@@ -58,7 +58,7 @@ import { popupPlate } from './PopupShell';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
 import type { HalfOpenSplit } from '../utils/duoGeometry';
-import { shellPlacement } from '../utils/decoderShellLayout';
+import { cornerClearRight, shellPlacement } from '../utils/decoderShellLayout';
 
 export type { DecoderTokens } from '../constants/decoderTokens';
 
@@ -177,14 +177,7 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
   wrapStyle, onTouchStart, lower, children }: DecoderShellProps) {
   const avoid = useContext(DecoderAvoidContext);
   const [rows, setRows] = useState<{ y: number; h: number } | null>(null);
-  let clearRight = 8;
-  if (rows && avoid.rects.length && avoid.windowW > 0) {
-    for (const r of avoid.rects) {
-      if (r.y >= rows.y + rows.h || r.y + r.h <= rows.y) continue;
-      if (r.x + r.w / 2 < avoid.windowW / 2) continue;
-      clearRight = Math.max(clearRight, Math.ceil(avoid.windowW - r.x) + 8);
-    }
-  }
+  const clearRight = rows ? cornerClearRight(avoid.rects, avoid.windowW, rows, maxWidth) : 8;
   const place = shellPlacement(avoid, { tall, bottom, maxWidth, maxHeight, clearRight });
   if (place.kind === 'split') {
     /* ★★★ HALF-OPEN BIG: two frames, NOTHING on the crease — the waterfall shows through the gap. The upper one is
