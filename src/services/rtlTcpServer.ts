@@ -18,6 +18,8 @@ export type ServerStatus = {
   sampleRate: number;
   overrideRate: number;   // 0 = client-controlled
   droppedBytes: number;   // IQ dropped since the current client connected
+  iqBytes?: number;       // IQ bytes the radio has delivered since start (absent on an older native build)
+  usbEnded?: boolean;     // the radio's stream ended under a running server — no IQ until restarted
   port: number;           // bound port (0 when not running)
   ip: string;             // this device's LAN address ('' when not running)
 };

@@ -6,6 +6,7 @@
 //            SUCCEEDS (the dummy write fails -> "Resetting device", no tuner found -> direct
 //            sampling, return 0, librtlsdr.c:1534/1634), tuner type 0, no gains, and
 //            rtlsdr_read_async posts bulk reads on 0x81 that the radio never fills.
+//   rtl_dies — an RTL-SDR whose USB stream fails after ~0.4 s (unplugged / reset under the server).
 #pragma once
 #include <cstdint>
 extern "C" {
