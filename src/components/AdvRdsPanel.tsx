@@ -26,6 +26,7 @@ import { useBusValue, type ValueBus } from '../services/valueBus';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT,
+         useDecoderSplit, decoderBodyInset, useDecoderTokens,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { DECODER_MEANING, meaningText } from '../constants/decoderTokens';
 import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, Skia,
@@ -1098,7 +1099,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *  on the phone, a proper reflow").
    *  ★ 820 = the fields column (~340) plus the plots (~330) plus padding and the gap. Below that
    *  they would be squeezed rather than placed, which is worse than stacking. */
-  const wideCols = p.tall && winW >= 820;
+  const split = useDecoderSplit();
+  const splitOn = p.tall && !!split;
+  const inset = decoderBodyInset(useDecoderTokens());
+  const wideCols = p.tall && winW >= 820 && !splitOn;
   // ★★ LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
   // straight up past the notch, covering the clock and battery (Stuart's screenshot,
   // 2026-07-27). The available height has to stop at the safe area, not at the window edge.
@@ -1110,62 +1114,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // the seven fields you glance at while tuning and nothing else; BIG is the full instrument.
   const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.34);
 
-  return (
-    <DecoderShell bottom={p.bottomOffset} maxHeight={maxH} maxWidth={wideCols ? 800 : 600}
-                  tall={p.tall}>
-      {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
-          column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
-          stacked where only the fields and the 310-wide symbol trace have to fit. */}
-        {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
-            it. The control island next to it has used BlurView since it was built, which is
-            exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
-            plus a light tint: the spectrum reads through it, the text still reads on top. */}
-        {/* ★★★ NO BLUR IN BIG — A BACKDROP BLUR OVER THE SPECTRUM IS THE EXPENSIVE CASE, AND IT
-            IS THE SPECTRUM SPECIFICALLY, NOT THE AREA. Stuart pinned it exactly: "it's only when
-            it covers the spectrum part; in small mode when it's over the waterfall only, no
-            issues" (2026-08-02). The two are drawn by completely different means and the blur
-            costs accordingly:
-              • the WATERFALL is a Shader/ImageShader — a GPU texture blit, nearly free to resample;
-              • the SPECTRUM is a Skia vector Path REBUILT EVERY FRAME (buildSpecPathRef →
-                Skia.Path.Make) and filled.
-            A backdrop blur forces whatever sits beneath it into an offscreen buffer to sample. Over
-            a texture that is cheap; over a live per-frame vector path it is not, and at 20 fps it
-            stutters — on an M4, which is the tell that this is a compositing cost and not raw GPU
-            power. Stuart: "I'd like to hope that the glass effect of the box isn't causing a GPU
-            issue on an M4 MacBook."
-            ★★ AND IT IS WHY SLOWING THE RDS PAYLOAD DID NOT FIX THIS. The blur redraws because the
-            content BENEATH it moved, not because the analyser updated — so the analyser's rate was
-            never the lever. That rate was genuinely wrong and worth fixing on its own; it was not
-            this bug, and I said it was.
-            ★ BIG is exactly the mode that reaches up over the spectrum; SMALL sits over the
-            waterfall alone and has never stuttered. So SMALL keeps its blur — the original
-            complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
-            and BIG, where you are reading an instrument rather than watching through it, takes a
-            near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
-        {/* ★ Blur and tint are DecoderShell's now, from TRANSPARENCY EFFECTS: with it ON, 35 in
-            SMALL and 0 in BIG, iOS only — never on silver / black, and never with it OFF. */}
-        <DecoderHeader>
-          {/* ★ Matches the button that opens it — an abbreviation in one place and the full
-              name in the other reads as two different features. */}
-          <DecoderTitle>ADVANCED RDS</DecoderTitle>
-          <View style={{ flex: 1 }} />
-          {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
-              fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
-              but in the field the raw and confirmed values were always identical, so the
-              data never changed and only three labels ever went green (Stuart). A
-              control that appears to do nothing is worse than no control.
-              ★ The server still sends both sets, so this is a UI removal: reinstating it
-              means making it cover more than five fields, not re-adding a button. */}
-          {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
-              was broken it also appeared to do nothing at all. */}
-          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} hitSlop={6}
-                      label={p.tall ? 'SMALL' : 'BIG'} />
-          <DecoderKey tone="close" onPress={p.onClose} hitSlop={8} label="✕" />
-        </DecoderHeader>
-
-        <DecoderBody>
-        <ScrollView contentContainerStyle={[s.body, scrollLane, wideCols && s.bodyWide]}>
-          <View style={wideCols ? s.colFields : undefined}>
+  /* ★ The rows in three pieces — the summary you watch while tuning, the BIG reference rows, the plots — so the
+   *  half-open split can place them; everywhere else they are put back exactly where they were. */
+  const summaryRows = (<>
           {/* ★ RAW mode needs saying, not just showing — a panel full of red labels with no
               explanation reads as breakage rather than as "arriving but not yet trusted". */}
           {raw && (
@@ -1204,8 +1155,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="RadioText"   value={p.rt || DASH} />
           <Row raw={raw} label="Rate"        value={rateTxt} />
 
-          {/* ── Everything below is BIG only. ───────────────────────────────────────── */}
-          {p.tall && <>
+  </>);
+  const extraRows = (<>
           {/* ★ U+21D4 ⇔, NOT U+2194 ↔. The latter has EMOJI presentation by default and iOS
               rendered it as a blue tile mid-label (Stuart's screenshot, 2026-07-28). U+21D4
               has no emoji form, so it stays a glyph on every platform without a variation
@@ -1260,13 +1211,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="AF MHz"      value={afTxt} />
           <Row raw={raw} label="Group share" value={groupShareTxt} />
 
-          </>}
-          </View>
-
-          {/* ★ The plots are their own column when wide, and simply the next thing down the page
-              when not. Splitting them out of the BIG-only fragment above is what makes both
-              layouts expressible without duplicating the field list. */}
-          {p.tall && (
+  </>);
+  const plots = (
           <View style={wideCols ? s.colPlots : undefined}>
           <Text style={s.section}>PLOTS</Text>
           <View style={s.plots}>
@@ -1411,9 +1357,93 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             </View>
           )}
           </View>
-          )}
+  );
+  /* ★★★ HALF-OPEN BIG (iPhone Duo; Stuart: "treat the decoder box as 2 halves"): the header and the summary rows above
+   *  the fold, the reference rows and the plots below it (DecoderShell, useDecoderSplit). One column, never two. */
+  const upperBody = splitOn && split ? (
+    <DecoderBody>
+      <ScrollView style={{ maxHeight: Math.max(60, split.upperH - 46 - inset) }} contentContainerStyle={[s.body, scrollLane]}>
+        {summaryRows}
+      </ScrollView>
+    </DecoderBody>
+  ) : null;
+  const lowerBody = splitOn && split ? (
+    <DecoderBody style={{ marginTop: inset }}>
+      <ScrollView style={{ height: Math.max(60, split.lowerH - 2 * inset) }} contentContainerStyle={[s.body, scrollLane]}>
+        {extraRows}
+        {plots}
+      </ScrollView>
+    </DecoderBody>
+  ) : undefined;
+
+  return (
+    <DecoderShell bottom={p.bottomOffset} maxHeight={maxH} maxWidth={wideCols ? 800 : 600}
+                  tall={p.tall} lower={lowerBody}>
+      {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
+          column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
+          stacked where only the fields and the 310-wide symbol trace have to fit. */}
+        {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
+            it. The control island next to it has used BlurView since it was built, which is
+            exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
+            plus a light tint: the spectrum reads through it, the text still reads on top. */}
+        {/* ★★★ NO BLUR IN BIG — A BACKDROP BLUR OVER THE SPECTRUM IS THE EXPENSIVE CASE, AND IT
+            IS THE SPECTRUM SPECIFICALLY, NOT THE AREA. Stuart pinned it exactly: "it's only when
+            it covers the spectrum part; in small mode when it's over the waterfall only, no
+            issues" (2026-08-02). The two are drawn by completely different means and the blur
+            costs accordingly:
+              • the WATERFALL is a Shader/ImageShader — a GPU texture blit, nearly free to resample;
+              • the SPECTRUM is a Skia vector Path REBUILT EVERY FRAME (buildSpecPathRef →
+                Skia.Path.Make) and filled.
+            A backdrop blur forces whatever sits beneath it into an offscreen buffer to sample. Over
+            a texture that is cheap; over a live per-frame vector path it is not, and at 20 fps it
+            stutters — on an M4, which is the tell that this is a compositing cost and not raw GPU
+            power. Stuart: "I'd like to hope that the glass effect of the box isn't causing a GPU
+            issue on an M4 MacBook."
+            ★★ AND IT IS WHY SLOWING THE RDS PAYLOAD DID NOT FIX THIS. The blur redraws because the
+            content BENEATH it moved, not because the analyser updated — so the analyser's rate was
+            never the lever. That rate was genuinely wrong and worth fixing on its own; it was not
+            this bug, and I said it was.
+            ★ BIG is exactly the mode that reaches up over the spectrum; SMALL sits over the
+            waterfall alone and has never stuttered. So SMALL keeps its blur — the original
+            complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
+            and BIG, where you are reading an instrument rather than watching through it, takes a
+            near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
+        {/* ★ Blur and tint are DecoderShell's now, from TRANSPARENCY EFFECTS: with it ON, 35 in
+            SMALL and 0 in BIG, iOS only — never on silver / black, and never with it OFF. */}
+        <DecoderHeader>
+          {/* ★ Matches the button that opens it — an abbreviation in one place and the full
+              name in the other reads as two different features. */}
+          <DecoderTitle>ADVANCED RDS</DecoderTitle>
+          <View style={{ flex: 1 }} />
+          {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
+              fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
+              but in the field the raw and confirmed values were always identical, so the
+              data never changed and only three labels ever went green (Stuart). A
+              control that appears to do nothing is worse than no control.
+              ★ The server still sends both sets, so this is a UI removal: reinstating it
+              means making it cover more than five fields, not re-adding a button. */}
+          {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
+              was broken it also appeared to do nothing at all. */}
+          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} hitSlop={6}
+                      label={p.tall ? 'SMALL' : 'BIG'} />
+          <DecoderKey tone="close" onPress={p.onClose} hitSlop={8} label="✕" />
+        </DecoderHeader>
+
+        {splitOn ? upperBody : (<DecoderBody>
+        <ScrollView contentContainerStyle={[s.body, scrollLane, wideCols && s.bodyWide]}>
+          <View style={wideCols ? s.colFields : undefined}>
+          {summaryRows}
+
+          {/* ── Everything below is BIG only. ───────────────────────────────────────── */}
+          {p.tall && extraRows}
+          </View>
+
+          {/* ★ The plots are their own column when wide, and simply the next thing down the page
+              when not. Splitting them out of the BIG-only fragment above is what makes both
+              layouts expressible without duplicating the field list. */}
+          {p.tall && plots}
         </ScrollView>
-        </DecoderBody>
+        </DecoderBody>)}
     </DecoderShell>
   );
 }
