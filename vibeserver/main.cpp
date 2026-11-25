@@ -3444,6 +3444,7 @@ int main(int argc, char** argv) {
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", next.galleryMb, next.galleryPublic, next.gallerySaveLive);
             LocalSdrShim::setCommunityMap(next.communityMap);   // ★★ V12 beta94 the community map (the radios re-read the file)
+            LocalSdrShim::setCommunityModesOff(next.communityOff);
             LocalSdrShim::setGalleryRedact(gallerySerials(next));
             applySpotReporting(next, nullptr);   // ★ V12 beta90 PSK Reporter: the front door's own process (the radios re-read the file)
             // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
@@ -5606,6 +5607,7 @@ int main(int argc, char** argv) {
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
                                      g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
             LocalSdrShim::setCommunityMap(g_serverConfig.communityMap);   // ★★ V12 beta94 the community map — off unless the owner says
+            LocalSdrShim::setCommunityModesOff(g_serverConfig.communityOff);
             // ★★ V12 2026-11-16 THE SHARED AIRCRAFT TABLE (vibe_aircraft_share.h): every radio process of this machine writes
             //    ADS-B, ACARS, VDL2 and HFDL into one file in the RUNTIME directory (a tmpfs here: /run/vibeserver), so the
             //    AVIATION MAP on any radio shows each aircraft once with every source that heard it — never the SD card.
@@ -6219,6 +6221,7 @@ int main(int argc, char** argv) {
                                 LocalSdrShim::instance().setIcomPowerOptions(mine->icomPowerOn, mine->icomAutoOff, mine->icomOffDelayMin);
                             LocalSdrShim::setGalleryRedact(gallerySerials(fresh));
                             LocalSdrShim::setCommunityMap(fresh.communityMap);   // ★★ V12 beta94 live (it ignores an unchanged value)
+                            LocalSdrShim::setCommunityModesOff(fresh.communityOff);
                             if (!frontDoorOnly) applySpotReporting(fresh, mine);   // ★ V12 beta90 PSK Reporter, live
                             const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");
                             if (gk != lastGallery) {

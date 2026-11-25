@@ -30,6 +30,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
@@ -74,6 +75,49 @@ struct Station {
     std::deque<Pt> trail;
 };
 struct Message { double t; std::string from, to, text, id, kind; };
+
+/* ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): every APRS station heard WITH A POSITION by any run in this process
+ *  (a listener's decoder or a background VFO), its latest, as a compact row — [key, from, lat, lon, wall time heard, symbol
+ *  (2 chars), kind, readable line] — for the owner who shares. Bounded: kMax rows, the oldest out; kKeepSec unheard = gone. */
+class CommunityTable {
+public:
+    static constexpr size_t kMax = 600;
+    static constexpr double kKeepSec = 6 * 3600;
+    void note(const Station& s, double wall) {
+        if (!(s.lat == s.lat) || !(s.lon == s.lon) || s.posAt < 0) return;
+        const char sym[3] = { s.symTable, s.symCode, 0 };
+        char b[160];
+        std::snprintf(b, sizeof b, "\",%.4f,%.4f,%.0f,\"", s.lat, s.lon, wall);
+        std::string row = "[\"" + jsonEsc(utf8Clean(s.key)) + "\",\"" + jsonEsc(utf8Clean(s.from)) + b + jsonEsc(utf8Clean(sym)) + "\",\"" + jsonEsc(s.kind)
+                        + "\",\"" + jsonEsc(utf8Clean(s.line.substr(0, 160))) + "\"]";
+        std::lock_guard<std::mutex> lk(m_);
+        rows_[s.key] = { wall, std::move(row) };
+        if (rows_.size() > kMax) {
+            auto old = rows_.begin();
+            for (auto it = rows_.begin(); it != rows_.end(); ++it) if (it->second.first < old->second.first) old = it;
+            rows_.erase(old);
+        }
+    }
+    /** Rows heard since `wall - sinceSec`, newest first, at most `maxRows`, comma-joined. */
+    std::string rows(double wall, double sinceSec, size_t maxRows) {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<const std::pair<double, std::string>*> v;
+        for (auto it = rows_.begin(); it != rows_.end();) {
+            if (wall - it->second.first > kKeepSec) { it = rows_.erase(it); continue; }
+            if (wall - it->second.first <= sinceSec) v.push_back(&it->second);
+            ++it;
+        }
+        std::sort(v.begin(), v.end(), [](auto* a, auto* b) { return a->first > b->first; });
+        std::string o;
+        for (size_t i = 0; i < v.size() && i < maxRows; ++i) { if (i) o += ','; o += v[i]->second; }
+        return o;
+    }
+    void clear() { std::lock_guard<std::mutex> lk(m_); rows_.clear(); }
+private:
+    std::mutex m_;
+    std::map<std::string, std::pair<double, std::string>> rows_;
+};
+inline CommunityTable& communityTable() { static CommunityTable t; return t; }
 
 class Run {
 public:
@@ -394,6 +438,7 @@ private:
         if (!p.status.empty() && (p.kind == "status" || p.kind == "other")) s.status = p.status;
         s.killed = p.killed;
         s.line = readable(p);
+        if (p.hasPos) communityTable().note(s, tlmNow_());   // ★★ V12 beta94 the community map (its owner's switch decides what leaves)
         dirty_ = true;
         prune(t);
         if (o_.json) {

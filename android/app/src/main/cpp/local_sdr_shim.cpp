@@ -7004,7 +7004,6 @@ static std::atomic<bool>   g_galleryPublic{true};     // ★ the gallery is ever
 /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h, docs/v12/COMMUNITY-MAP.md): the owner's "Share to the VibeSDR community
  *  map" switch — OFF unless the owner turns it on. One build of what is shared per vibecommunity::kCacheSec, per process. */
 static std::atomic<bool>   g_communityMap{false};
-static vibecommunity::Cache g_communityCache;
 // ★ This server's position, for the FT8 summary's "furthest" (setReceiverPosition). NaN = none set.
 static std::atomic<double> g_bgLat{NAN}, g_bgLon{NAN};
 /** ★★ V12 beta90 THE STATION STORE (vibe_station_store.h, docs/v12/DIGI-MODES-MAP.md): every station this radio's
@@ -7578,9 +7577,17 @@ using vsnav::navShared; using vsnav::navSyncLocked; using vsnav::navPlacedFreshL
 using vsnav::g_navWarmFirstTick; using vsnav::navWarmNow; using vsnav::navWarmWorker;
 
 /* ══ V12 beta94 THE COMMUNITY MAP — what this server shares (vibe_community.h; docs/v12/COMMUNITY-MAP.md) ═══════════════
- * ★★★ Every source is the MACHINE's — the shared aircraft table, the gallery and its ship store, the NDB day cards — so the
- *     front door and every radio answer the same. Each section reuses its own endpoint's format and caps (vibe_community.h).
- * ★★ Locked by a PIN → nothing; a private gallery → aircraft only; a mode the owner switched off → left out. */
+ * ★★★ Every section comes from what the server STORES (Stuart 11-25: "we can use existing data that is on the servers too"):
+ *     the shared aircraft table, the gallery (NAVTEX, DSC, the NDB day cards, the ISM nodes cards), the ship store, and
+ *     the remembered sondes / APRS / VOR files beside the gallery (vibe_community.h writeLive) — so a mode that is not
+ *     running still shows its window. The front door and every radio answer the same.
+ * ★★ LEAN (Stuart 11-25: "optimise everything"): compact rows with short keys, 4 decimals, each section built at most once
+ *    per its TTL (30 s live, 120 s slow) whoever asks, only the sections asked for (?s=), gzip when the client takes it.
+ * ★★ Locked by a PIN → nothing; a private gallery → aircraft only; a mode the owner blocked, or left out of the map
+ *    (communityOff), is left out. */
+static std::mutex g_communityMtx;
+static std::mutex& g_communitySecsMtx() { static std::mutex m; return m; }
+static std::string g_communityOffCsv;   // ★ the owner's per-mode "leave this out" (config communityOff)
 static bool communityPinLocked() {
     std::lock_guard<std::mutex> lk(g_vsMtx);
     return !g_vsSecret.empty() || !g_vsRadioSecret.empty();
@@ -7591,83 +7598,254 @@ static std::string communityWhyNot() {
     if (communityPinLocked()) return "pin";
     return "";
 }
-static std::string communityBuild(std::vector<std::string>& layersOut) {
+/** A layer this server may share now: not blocked by the owner's modes list, not left out of the map. */
+static bool communityLayerOk(const std::string& l, const std::set<std::string>& off) {
+    if (off.count(l)) return false;
+    if (l == "adsb") return !vsModeBlocked("adsb");
+    if (l == "acars" || l == "vdl2") return !vsModeBlocked("avdata");
+    if (l == "hfdl") return !vsModeBlocked("hfdl");
+    if (l == "ais") return !vsModeBlocked("ais") && !vsModeBlocked("aisstore");
+    if (l == "vor") return !vsModeBlocked("vormap") && !vsModeBlocked("vor");
+    if (l == "mesh") return !vsModeBlocked("ism");
+    return !vsModeBlocked(l);
+}
+static std::string communityLiveDir() {
+    const std::string d = vibe::gallery::shared().dir();
+    return d.empty() ? d : d + "/.community";
+}
+/* ── the remembered rows of THIS process (sondes, APRS, VOR): kept here, and written beside the gallery when changed ── */
+static std::string g_liveRows[3];                 // z sondes · p APRS · o VOR
+static int64_t g_liveWritten[3] = { 0, 0, 0 };
+static uint64_t g_liveHash[3] = { 0, 0, 0 };
+static void communityLiveTick() {
+    static int64_t last = 0;
+    const int64_t now = vibeavshare::wallMs() / 1000;
+    if (now - last < 20) return;
+    last = now;
+    if (!g_communityMap.load()) return;
+    std::string rows[3];
+    if (g_sd.running()) rows[0] = g_sd.tracker().communityRows((double)vibeavshare::wallMs() / 1000.0, vibecommunity::kSondesSinceSec, vibecommunity::kSondesMax, 60);
+    rows[1] = vibeaprs::communityTable().rows((double)now, vibecommunity::kAprsSinceSec, vibecommunity::kAprsMax);
+    if (g_vormap.running()) rows[2] = g_vormap.communityRows(now - 86400, vibecommunity::kVorMax);
+    static const char* kSec[3] = { "z", "p", "o" };
+    const std::string dir = communityLiveDir();
+    for (int i = 0; i < 3; ++i) {
+        if (rows[i].empty()) continue;   // ★ nothing new (the mode is not running): what was remembered stays
+        const uint64_t h = std::hash<std::string>()(rows[i]);
+        { std::lock_guard<std::mutex> lk(g_communityMtx); g_liveRows[i] = rows[i]; }
+        if (h == g_liveHash[i] || now - g_liveWritten[i] < vibecommunity::kLiveWriteSec) continue;
+        if (vibecommunity::writeLive(dir, kSec[i], vibe::logradio::mine(), "[" + rows[i] + "]")) { g_liveHash[i] = h; g_liveWritten[i] = now; }
+    }
+}
+/** Every radio's remembered rows for one of z / p / o, within the window (the row's time field), bounded. */
+static std::string communityLive(int i, int64_t now) {
+    static const char* kSec[3] = { "z", "p", "o" };
+    static const int kTimeField[3] = { 6, 4, 4 };
+    static const int64_t kWin[3] = { vibecommunity::kSondesSinceSec, vibecommunity::kAprsSinceSec, 86400 };
+    static const size_t kMax[3] = { vibecommunity::kSondesMax, vibecommunity::kAprsMax, vibecommunity::kVorMax };
+    std::string rows = vibecommunity::readLive(communityLiveDir(), kSec[i], now);
+    { std::lock_guard<std::mutex> lk(g_communityMtx); if (!g_liveRows[i].empty()) rows = rows.empty() ? g_liveRows[i] : g_liveRows[i] + "," + rows; }
+    return vibecommunity::rowsSince(rows, kTimeField[i], (double)(now - kWin[i]), kMax[i] * 2);
+}
+
+/* ── the sections ── */
+struct CommunitySec { std::string json; std::vector<std::string> layers; int64_t at = -1; std::string offKey; };
+static std::map<std::string, CommunitySec> g_communitySecs;
+static std::string communityRowsOrEmpty(const std::string& rows) { return rows.empty() ? std::string() : "[" + rows + "]"; }
+/** NAVTEX: ns (stations), nw (warnings, in the NAVTEX map's own format), nm (forecasts: the newest per area, no text), nx (the
+ *  messages: one per id, the cleanest copy, a title — the text by /vibeserver/community/navtex?f=). The last 24 h. */
+static void communityNavtex(int64_t now, std::map<std::string, CommunitySec>& out) {
     using namespace vibecommunity;
-    const int64_t nowMs = vibeavshare::wallMs(), now = nowMs / 1000;
-    std::vector<Section> secs;
-    // ── aircraft (ADS-B, ACARS, VDL2, HFDL — the shared table, /vibeserver/aircraft.json's format) ──
-    if (!(vsModeBlocked("adsb") && vsModeBlocked("avdata") && vsModeBlocked("hfdl"))) {
-        std::vector<vibeavshare::GsHeard> gs;
-        int64_t adsbLiveMs = 0;
-        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - kAircraftAgeSec * 1000, &gs, &adsbLiveMs), nowMs);
-        if (vsModeBlocked("adsb")) rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return w.srcMask == (1u << vibeavshare::kAdsb); }), rows.end());
-        if (!rows.empty()) {
-            Section a; a.key = "aircraft"; a.layers = aircraftLayers(rows);
-            a.json = vibeavshare::toJson(rows, gs, nowMs, [](const std::string& l) { return std::string(vibeavi::labelName(l)); },
-                [](int id, std::string& name, double& lat, double& lon) {
-                    for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
-                    return false;
-                }, adsbLiveMs, vsModeBlocked("adsb"), vibeavinfo::extraFn());
-            secs.push_back(std::move(a));
-        }
-    }
     auto& g = vibe::gallery::shared();
-    // ★★ THE GALLERY'S SECTIONS ONLY WHEN THE GALLERY IS EVERYONE'S (galleryPublic)
-    if (g_galleryPublic.load() && !g.dir().empty()) {
-        // ── ships (the shared ship store, /vibeserver/gallery/ais-ships.json's format) ──
-        if (!vsModeBlocked("ais") && !vsModeBlocked("aisstore")) {
-            vibeais::store::Query q;
-            q.sinceUtc = now - kShipsSinceSec; q.rangeKm = 0; q.rxLat = NAN; q.rxLon = NAN; q.tracks = false; q.limit = kShipsMax;
-            size_t total = 0;
-            const auto v = vibeais::store::read(g.dir(), q, &total);
-            bool placed = false;
-            for (const auto& r : v) if (r.lat != vibeais::store::kNoPos) { placed = true; break; }
-            if (placed) { Section sh; sh.key = "ships"; sh.layers = { "ais" }; sh.json = vibeais::store::toJson(v, now, false, total, g.dir()); secs.push_back(std::move(sh)); }
-        }
-        // ── DSC (the gallery's DSC items, /vibeserver/gallery.json?kind=dsc's format) ──
-        if (!vsModeBlocked("dsc")) {
-            std::string j = g.listJson("dsc", kDscMax, -1, std::string(), kDscSinceSec);
-            if (j.find("\"plat\":") != std::string::npos) { Section d; d.key = "dsc"; d.layers = { "dsc" }; d.json = std::move(j); secs.push_back(std::move(d)); }
-        }
-        // ── NAVTEX stations (navtex-stations.json's format, rx = null) ──
-        if (!vsModeBlocked("navtex")) {
-            bool hit = false;
-            std::string j = navStationsJson(kNavtexSinceSec, now, &hit, /*fromClient=*/false, /*withRx=*/false);
-            if (j.find("\"stations\":[{") != std::string::npos) { Section n; n.key = "navtex"; n.layers = { "navtex" }; n.json = std::move(j); secs.push_back(std::move(n)); }
-        }
-        // ── NDB (today's and yesterday's day cards — the server's day, every radio — in the NdbLog shape, no km / brg) ──
-        if (!vsModeBlocked("ndb")) {
-            std::vector<NdbRow> rows;
-            for (int64_t day = now / 86400 - 1; day <= now / 86400; ++day) {
-                const std::string slot = "ndbsum-" + vibe::gallery::utcStamp(day * 86400, "%Y-%m-%d");
-                std::string f;
-                g.forEachLive("ndb", [&](const std::string& l) { if (vibe::gallery::lineStr(l, "s") == slot) f = vibe::gallery::lineStr(l, "f"); });
-                std::string body;
-                if (f.empty() || !g.readItem(f, body, 1u << 20)) continue;
-                const size_t sa = body.find(std::string("\n") + vibe::ndbgal::kSetAsideHeading + "\n");
-                if (sa != std::string::npos) body.resize(sa + 1);
-                for (const auto& c : vibe::ndbgal::parseCard(body, day)) {
-                    if (!c.unlikely.empty()) continue;   // ★ a listed match the server itself doubts is not put on a public map
-                    NdbRow r; r.ident = c.ident; r.name = c.name; r.cc = c.cc; r.hz = c.hz; r.lat = c.lat; r.lon = c.lon;
-                    r.best = c.best; r.first = c.first; r.last = c.last;
-                    rows.push_back(std::move(r));
-                }
-            }
-            std::string j = ndbJson(std::move(rows), now);
-            if (!j.empty()) { Section n; n.key = "ndb"; n.layers = { "ndb" }; n.json = std::move(j); secs.push_back(std::move(n)); }
-        }
+    bool hit = false;
+    { std::string j = navStationsJson(kNavtexSinceSec, now, &hit, /*fromClient=*/false, /*withRx=*/false);
+      if (j.find("\"stations\":[{") != std::string::npos) out["ns"] = { j, { "navtex" } }; else out["ns"] = {}; }
+    auto& ns = navShared();
+    std::lock_guard<std::mutex> wl(ns.wMtx);
+    std::unordered_set<uint64_t> live;
+    const auto sr = navSyncLocked(400, true, &live);
+    if (sr.pending == 0 || ns.placedKey.empty()) navPlacedFreshLocked(navKey(g.kindStamp("navtex")));
+    const auto& placed = ns.placed;
+    std::set<std::string> pinned;
+    // warnings: the newest kNavWarnMax heard in the window (cancelled / replaced / expired ones are marked; the page never draws them)
+    {
+        auto q = vibe::navwarn::query(g.dir() + "/navtex-warn.idx", live, now - kNavWarnSinceSec, now);
+        if (q.shown.size() > kNavWarnMax) q.shown.resize(kNavWarnMax);
+        for (const auto& w : q.shown) pinned.insert(w.best);
+        std::string j = q.shown.empty() ? std::string() : vibe::navwarn::toJson(q, now, sr, &placed);
+        out["nw"] = { j, j.empty() ? std::vector<std::string>() : std::vector<std::string>{ "navtex" } };
     }
-    return assemble(now, secs, kMaxBytes, &layersOut);
+    // forecasts: the newest per sea area, its text left out (fetched when opened)
+    {
+        auto mq = vibe::navmet::query(g.dir() + "/navtex-met.idx", live, now - kNavMetSinceSec);
+        for (auto& a : mq) { if (a.hist.size() > 1) a.hist.resize(1); if (!a.hist.empty()) pinned.insert(a.hist[0].file); }
+        const vibe::navmet::StationOf so = [&](const std::string& f) {
+            auto it = placed.find(vibe::navmap::fileHash(f));
+            return it == placed.end() ? std::pair<std::string, std::string>() : std::make_pair(it->second.name, it->second.conf);
+        };
+        std::string j = mq.empty() ? std::string() : dropStrField(vibe::navmet::toJson(mq, now, so), "txt");
+        if (j.find("\"areas\":[{") == std::string::npos) j.clear();
+        out["nm"] = { j, j.empty() ? std::vector<std::string>() : std::vector<std::string>{ "navtex" } };
+    }
+    // messages: every copy in the window (and those a warning or forecast names), folded to one per id
+    {
+        struct Copy { std::string f; int64_t t; double hz; };
+        std::vector<Copy> copies;
+        g.forEachLive("navtex", [&](const std::string& l) {
+            const int64_t t = (int64_t)vibe::gallery::lineNum(l, "t");
+            const std::string f = vibe::gallery::lineStr(l, "f");
+            if (f.empty() || (t < now - kNavMsgSinceSec && !pinned.count(f))) return;
+            if (copies.size() < 4000) copies.push_back({ f, t, vibe::gallery::lineNum(l, "hz") });
+        });
+        std::vector<NavMsg> cs;
+        for (const auto& c : copies) {
+            NavMsg m; m.file = c.f; m.first = m.last = c.t; m.khz = std::round(c.hz / 500.0) / 2.0; m.pinned = pinned.count(c.f) > 0;
+            m.text = vsnav::navReadText(c.f);
+            if (m.text.size() > 16384) m.text.resize(16384);
+            m.id = navMsgId(m.text); m.lost = navLost(m.text);
+            m.issued = vibe::navwarn::issuedOf(m.text, c.t);
+            auto p = placed.find(vibe::navmap::fileHash(c.f));
+            if (p != placed.end()) { m.st = p->second.name; m.sc = p->second.conf; m.iso = p->second.iso; }
+            cs.push_back(std::move(m));
+        }
+        std::string rows = navMsgRows(navFold(cs));
+        out["nx"] = { communityRowsOrEmpty(rows), rows.empty() ? std::vector<std::string>() : std::vector<std::string>{ "navtex" } };
+    }
+}
+static CommunitySec communitySection(const std::string& k, int64_t now, const std::set<std::string>& off) {
+    using namespace vibecommunity;
+    CommunitySec r;
+    const int64_t nowMs = vibeavshare::wallMs();
+    auto& g = vibe::gallery::shared();
+    const bool gal = g_galleryPublic.load() && !g.dir().empty();
+    if (k == "a") {
+        uint8_t keep = 0;
+        if (communityLayerOk("adsb", off)) keep |= 1u << vibeavshare::kAdsb;
+        if (communityLayerOk("acars", off)) keep |= 1u << vibeavshare::kAcars;
+        if (communityLayerOk("vdl2", off)) keep |= 1u << vibeavshare::kVdl2;
+        if (communityLayerOk("hfdl", off)) keep |= 1u << vibeavshare::kHfdl;
+        if (!keep) return r;
+        keep |= 1u << vibeavshare::kAdsc;
+        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - kAircraftAgeSec * 1000), nowMs);
+        for (auto& w : rows) w.srcMask &= keep;
+        rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return !(w.srcMask & 0x0F); }), rows.end());
+        const std::string c = aircraftCompact(rows, nowMs);
+        if (!c.empty()) { r.json = "[" + c + "]"; r.layers = aircraftLayers(rows); }
+    } else if (k == "s" && gal && communityLayerOk("ais", off)) {
+        vibeais::store::Query q;
+        q.sinceUtc = now - kShipsSinceSec; q.rangeKm = 0; q.rxLat = NAN; q.rxLon = NAN; q.tracks = false; q.limit = kShipsMax;
+        std::string o; char b[200]; size_t n = 0;
+        for (const auto& rec : vibeais::store::read(g.dir(), q)) {
+            if (rec.lat == vibeais::store::kNoPos) continue;
+            const vibeais::Vessel v = vibeais::store::toVessel(rec);
+            auto opt = [](double x, char* t, size_t m) { if (std::isfinite(x)) std::snprintf(t, m, "%.1f", x); else std::snprintf(t, m, "null"); };
+            char sog[16], cog[16]; opt(v.sog, sog, sizeof sog); opt(v.cog, cog, sizeof cog);
+            std::snprintf(b, sizeof b, "%s[%u,%.4f,%.4f,%u,%s,%s,\"%s\",\"%s\",\"", n ? "," : "", rec.mmsi, v.lat, v.lon, rec.seen, sog, cog,
+                          v.shipType >= 0 ? vibeais::shipFamily(v.shipType) : "", v.kind.c_str());
+            o += b; o += jsonEsc(v.name.substr(0, 24)) + "\",\"" + jsonEsc(v.callsign.substr(0, 8)) + "\"]";
+            ++n;
+        }
+        if (n) { r.json = "[" + o + "]"; r.layers = { "ais" }; }
+    } else if (k == "d" && gal && communityLayerOk("dsc", off)) {
+        std::vector<std::string> rows;
+        g.forEachLive("dsc", [&](const std::string& l) {
+            const int64_t t = (int64_t)vibe::gallery::lineNum(l, "t");
+            if (t < now - kDscSinceSec || l.find("\"plat\":") == std::string::npos) return;
+            const double lat = vibe::gallery::lineNum(l, "plat"), lon = vibe::gallery::lineNum(l, "plon");
+            if (!(std::fabs(lat) <= 90 && std::fabs(lon) <= 180)) return;
+            std::string title = vibe::gallery::lineStr(l, "title");   // ★ already JSON-escaped in the index
+            if (title.size() > 160) { title.resize(160); while (!title.empty() && (title.back() == '\\' || ((unsigned char)title.back() & 0xC0) == 0x80)) title.pop_back(); if (!title.empty() && ((unsigned char)title.back() & 0xC0) == 0xC0) title.pop_back(); }
+            char b[120];
+            std::snprintf(b, sizeof b, "[%lld,%.4f,%.4f,%d,\"", (long long)t, lat, lon, (int)vibe::gallery::lineNum(l, "lv"));
+            rows.push_back(b + title + "\",\"" + vibe::gallery::lineStr(l, "f") + "\"]");
+        });
+        std::string o;
+        for (size_t i = rows.size(), n = 0; i-- > 0 && n < kDscMax; ++n) { if (n) o += ','; o += rows[i]; }   // ★ newest first
+        if (!o.empty()) { r.json = "[" + o + "]"; r.layers = { "dsc" }; }
+    } else if (k == "b" && gal && communityLayerOk("ndb", off)) {
+        std::vector<NdbRow> rows;
+        for (int64_t day = now / 86400 - 1; day <= now / 86400; ++day) {
+            const std::string slot = "ndbsum-" + vibe::gallery::utcStamp(day * 86400, "%Y-%m-%d");
+            std::string f;
+            g.forEachLive("ndb", [&](const std::string& l) { if (vibe::gallery::lineStr(l, "s") == slot) f = vibe::gallery::lineStr(l, "f"); });
+            std::string body;
+            if (f.empty() || !g.readItem(f, body, 1u << 20)) continue;
+            const size_t sa = body.find(std::string("\n") + vibe::ndbgal::kSetAsideHeading + "\n");
+            if (sa != std::string::npos) body.resize(sa + 1);
+            for (const auto& c : vibe::ndbgal::parseCard(body, day)) {
+                if (!c.unlikely.empty()) continue;   // ★ a listed match the server itself doubts is not put on a public map
+                NdbRow x; x.ident = c.ident; x.name = c.name; x.cc = c.cc; x.hz = c.hz; x.lat = c.lat; x.lon = c.lon; x.best = c.best; x.first = c.first; x.last = c.last;
+                rows.push_back(std::move(x));
+            }
+        }
+        const std::string c = ndbRows(std::move(rows), now);
+        if (!c.empty()) { r.json = "[" + c + "]"; r.layers = { "ndb" }; }
+    } else if (k == "m" && gal && communityLayerOk("mesh", off)) {
+        std::vector<std::pair<std::string, int64_t>> cards;
+        g.forEachLive("ism", [&](const std::string& l) {
+            const std::string slot = vibe::gallery::lineStr(l, "s");
+            const int64_t t = (int64_t)vibe::gallery::lineNum(l, "t");
+            if (slot.rfind("ismnodes-", 0) == 0 && t >= now - 2 * 86400 && cards.size() < 16) cards.push_back({ vibe::gallery::lineStr(l, "f"), t });
+        });
+        std::vector<MeshNode> nodes;
+        for (const auto& c : cards) {
+            std::string body;
+            if (!g.readItem(c.first, body, 1u << 20)) continue;
+            for (auto& n : meshNodesOfCard(body, c.second / 86400)) nodes.push_back(std::move(n));
+        }
+        const std::string c = meshRows(std::move(nodes), now);
+        if (!c.empty()) { r.json = "[" + c + "]"; r.layers = { "mesh" }; }
+    } else if ((k == "z" && communityLayerOk("sondes", off)) || (k == "p" && communityLayerOk("aprs", off)) || (k == "o" && communityLayerOk("vor", off))) {
+        // ★ the remembered rows live beside the gallery; a private gallery keeps them too
+        if (!g_galleryPublic.load()) return r;
+        const int i = k == "z" ? 0 : k == "p" ? 1 : 2;
+        const std::string c = communityLive(i, now);
+        if (!c.empty()) { r.json = "[" + c + "]"; r.layers = { k == "z" ? "sondes" : k == "p" ? "aprs" : "vor" }; }
+    }
+    return r;
+}
+/** The sections asked for, each from the cache while it is within its TTL (and the owner's choices are unchanged). */
+static std::string communityBody(const std::vector<std::string>& want, std::vector<std::string>* layersOut = nullptr) {
+    using namespace vibecommunity;
+    const int64_t now = vibeavshare::wallMs() / 1000;
+    std::string offCsv;
+    { std::lock_guard<std::mutex> lk(g_communityMtx); offCsv = g_communityOffCsv; }
+    const auto off = offSet(offCsv);
+    offCsv += g_galleryPublic.load() ? "|g" : "|-";   // ★ the cache key: the owner's choices (a private gallery rebuilds at once)
+    std::vector<Section> secs;
+    std::lock_guard<std::mutex> lk(g_communitySecsMtx());
+    bool navDone = false;
+    for (const auto& k : want) {
+        auto it = g_communitySecs.find(k);
+        if (it == g_communitySecs.end() || it->second.at < 0 || now - it->second.at >= sectionTtl(k) || now < it->second.at || it->second.offKey != offCsv) {
+            if (k == "ns" || k == "nw" || k == "nm" || k == "nx") {
+                if (!navDone) {
+                    std::map<std::string, CommunitySec> nav;
+                    const bool ok = g_galleryPublic.load() && !vibe::gallery::shared().dir().empty() && communityLayerOk("navtex", off);
+                    if (ok) communityNavtex(now, nav);
+                    for (const char* s : { "ns", "nw", "nm", "nx" }) { CommunitySec c = nav[s]; c.at = now; c.offKey = offCsv; g_communitySecs[s] = c; }
+                    navDone = true;
+                }
+            } else { CommunitySec c = communitySection(k, now, off); c.at = now; c.offKey = offCsv; g_communitySecs[k] = c; }
+            it = g_communitySecs.find(k);
+        }
+        if (!it->second.json.empty()) secs.push_back({ k, it->second.json, it->second.layers });
+    }
+    return assemble(now, secs, kMaxBytes, layersOut);
 }
 /** ★ What vibeserver.json says (and the directory publishes): `,"communityMap":true,"communityLayers":[…]` — only while the
- *  server shares. The layers come from the last build, at most 10 minutes old (a status read never forces a fresh one
- *  sooner). Nothing at all when it does not share, so an owner's "off" leaves no trace in the listing. */
+ *  server shares; the layers from a full build at most 10 minutes old. Nothing at all when it does not share. */
 static std::string vsCommunityStatusJson() {
     if (!communityWhyNot().empty()) return std::string();
-    const auto c = g_communityCache.get(vibeavshare::wallMs() / 1000, 600, communityBuild);
-    std::string j = ",\"communityMap\":true,\"communityLayers\":[";
-    for (size_t i = 0; i < c.layers.size(); i++) j += (i ? ",\"" : "\"") + c.layers[i] + "\"";
-    return j + "]";
+    static std::mutex m; static int64_t at = -1; static std::vector<std::string> layers;
+    const int64_t now = vibeavshare::wallMs() / 1000;
+    {
+        std::lock_guard<std::mutex> lk(m);
+        if (at < 0 || now - at >= 600 || now < at) { communityBody(vibecommunity::sectionsOfQuery(""), &layers); at = now; }
+        std::string j = ",\"communityMap\":true,\"communityLayers\":[";
+        for (size_t i = 0; i < layers.size(); i++) j += (i ? ",\"" : "\"") + layers[i] + "\"";
+        return j + "]";
+    }
 }
 /** ★ Called by the housekeeping tick (every ~2 s): starts the warm-up thread once, then kicks it. Costs a few atomics. */
 static void vsNavWarmTick() {
@@ -27687,7 +27865,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★★ V12: the GALLERY is the machine's — one directory every radio writes into (vibe_gallery.h).
                 || path0.rfind("/vibeserver/gallery", 0) == 0
                 // ★★ V12 beta94 the COMMUNITY MAP — the machine's shared tables and gallery, like the two above
-                || path0.rfind("/vibeserver/community.json", 0) == 0
+                || path0.rfind("/vibeserver/community", 0) == 0
                 // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
                 //   shared by every radio process, and the setup page that asks for it is served
                 //   by this door. Refusing it here made the page report "could not reach the
@@ -30237,23 +30415,53 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             reply("404 Not Found", "{\"ok\":false,\"error\":\"unknown DX log request\"}");
             return;
-        } else if (reqLine.rfind("GET /vibeserver/community.json", 0) == 0 || reqLine.rfind("HEAD /vibeserver/community.json", 0) == 0) {
+        } else if (reqLine.rfind("GET /vibeserver/community", 0) == 0 || reqLine.rfind("HEAD /vibeserver/community", 0) == 0) {
             /* ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h, docs/v12/COMMUNITY-MAP.md): what this server shares — only
-             *  while the owner's switch is on and no PIN locks it. Off = 404 with {"on":false,"why":…} and nothing else.
-             *  ★ One build per kCacheSec whoever asks; the browser keeps it as long (Cache-Control), and an unchanged body
-             *    answers If-None-Match with 304. CORS: `*` here, and vibe_cors.h echoes the directory's own origin. */
+             *  while the owner's switch is on and no PIN locks it. Off = 404 {"on":false,"why":…} and nothing else.
+             *    /vibeserver/community.json[?s=adsb,ais,…]  the sections those layers need (absent = all), compact rows
+             *    /vibeserver/community/navtex?f=<item>     ONE NAVTEX message's text, when a viewer opens it
+             *  ★ Each section built at most once per its TTL whoever asks; gzip when the client takes it; ETag → 304;
+             *    Cache-Control lets the browser keep it as long. CORS: `*` here, and vibe_cors.h echoes the directory. */
             const bool head = reqLine.rfind("HEAD", 0) == 0;
+            const size_t sp0 = reqLine.find(' '), sp1 = reqLine.find(' ', sp0 + 1);
+            const std::string target = reqLine.substr(sp0 + 1, sp1 == std::string::npos ? std::string::npos : sp1 - sp0 - 1);
+            const size_t qm = target.find('?');
+            const std::string path = target.substr(0, qm), query = qm == std::string::npos ? std::string() : target.substr(qm + 1);
+            auto qv = [&](const char* k) {
+                const std::string key = std::string(k) + "=";
+                for (size_t p = 0; (p = query.find(key, p)) != std::string::npos; p += key.size())
+                    if (p == 0 || query[p - 1] == '&') { const size_t e = query.find('&', p); return query.substr(p + key.size(), e == std::string::npos ? std::string::npos : e - p - key.size()); }
+                return std::string();
+            };
             const std::string why = communityWhyNot();
-            std::string status = "200 OK", body, extra;
-            if (!why.empty()) { status = "404 Not Found"; body = vibecommunity::offJson(why); extra = "Cache-Control: no-store\r\n"; }
-            else {
-                const auto c = g_communityCache.get(vibeavshare::wallMs() / 1000, vibecommunity::kCacheSec, communityBuild);
-                const std::string& inm = ifNoneMatch;
-                extra = "Cache-Control: public, max-age=" + std::to_string((long long)vibecommunity::kCacheSec) + "\r\nETag: " + c.tag + "\r\n";
-                if (!inm.empty() && inm.find(c.tag) != std::string::npos) status = "304 Not Modified";
-                else body = c.body;
+            std::string status = "200 OK", body, extra, ctype = "application/json";
+            if (path != "/vibeserver/community.json" && path != "/vibeserver/community/navtex") { status = "404 Not Found"; body = "{\"error\":\"unknown\"}"; extra = "Cache-Control: no-store\r\n"; }
+            else if (!why.empty()) { status = "404 Not Found"; body = vibecommunity::offJson(why); extra = "Cache-Control: no-store\r\n"; }
+            else if (path == "/vibeserver/community/navtex") {
+                // ★ one message's text: a LIVE NAVTEX item of the gallery (looked up, never a path), only when the gallery is everyone's
+                const std::string f = urlDecode(qv("f"));
+                auto& g = vibe::gallery::shared();
+                std::string fpath, ct;
+                if (!g_galleryPublic.load() || vsModeBlocked("navtex") || f.size() > 128 || !g.resolve(f, fpath, ct) || g.field(f, "k") != "navtex") {
+                    status = "404 Not Found"; body = "{\"error\":\"no such message\"}"; extra = "Cache-Control: no-store\r\n";
+                } else {
+                    std::string t = vsnav::navReadText(f);
+                    if (t.size() > 16384) t.resize(16384);
+                    body = "{\"f\":\"" + vibecommunity::jsonEsc(f) + "\",\"txt\":\"" + vibecommunity::jsonEsc(t) + "\"}";
+                    extra = "Cache-Control: public, max-age=3600\r\n";
+                }
+            } else {
+                const std::string sq = urlDecode(qv("s"));
+                const auto want = vibecommunity::sectionsOfQuery(sq.size() > 200 ? std::string() : sq);
+                body = communityBody(want);
+                const std::string tag = vibecommunity::etag(body);
+                int64_t ttl = 120;
+                for (const auto& k : want) ttl = std::min(ttl, vibecommunity::sectionTtl(k));
+                extra = "Cache-Control: public, max-age=" + std::to_string((long long)ttl) + "\r\nETag: " + tag + "\r\nVary: Accept-Encoding\r\n";
+                if (!ifNoneMatch.empty() && ifNoneMatch.find(tag) != std::string::npos) { status = "304 Not Modified"; body.clear(); }
             }
-            sock->sendstr("HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+            if (acceptsGzip && body.size() > 1024) { body = vibegz::gzip(body); extra += "Content-Encoding: gzip\r\n"; }
+            sock->sendstr("HTTP/1.1 " + status + "\r\nContent-Type: " + ctype + "\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Access-Control-Expose-Headers: ETag\r\nX-Content-Type-Options: nosniff\r\n" + extra
                           + "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + (head ? std::string() : body));
             sock->close();
@@ -41314,6 +41522,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ── ★★ V12 2026-11-20: the SHIPPING MAP kept built — a kick; the work is on vibe-navwarm at idle priority,
                 //    and only while the CPU gate says there is room (vsNavWarmTick, vibe_navtex_warm.h) ──
                 vsNavWarmTick();
+                // ── ★★ V12 beta94 the COMMUNITY MAP's remembered sondes / APRS / VOR rows (vibe_community.h writeLive) ──
+                communityLiveTick();
 
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
@@ -43566,10 +43776,14 @@ void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publi
 }
 void LocalSdrShim::setCommunityMap(bool on) {
     if (g_communityMap.exchange(on) != on) {
-        g_communityCache.clear();
         LOGI("community map: %s", on ? "this server SHARES what it hears (aircraft, ships, DSC, NAVTEX, NDB) to the VibeSDR community map"
                                      : "off (nothing shared)");
     }
+}
+void LocalSdrShim::setCommunityModesOff(const std::string& csv) {
+    std::lock_guard<std::mutex> lk(g_communityMtx);
+    if (csv != g_communityOffCsv) LOGI("community map: left out by the owner: %s", csv.empty() ? "(nothing)" : csv.c_str());
+    g_communityOffCsv = csv.substr(0, 200);
 }
 void LocalSdrShim::setGalleryCardLayout(const std::string& filesDir) {
     auto& c = vibe::gallery::cardLayout();

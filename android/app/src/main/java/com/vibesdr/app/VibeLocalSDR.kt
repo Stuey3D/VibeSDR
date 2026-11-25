@@ -398,6 +398,8 @@ object VibeLocalSDR {
     /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the owner's switch — off by default. Live. */
     fun setCommunityMap(on: Boolean) { ensureLoaded(); nativeSetCommunityMap(on) }
     private external fun nativeSetCommunityMap(on: Boolean)
+    fun setCommunityModesOff(csv: String) { ensureLoaded(); nativeSetCommunityModesOff(csv) }
+    private external fun nativeSetCommunityModesOff(csv: String)
     /** ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h): the owner's switch, the receiver callsign (required), the
      *  server's position (NaN = none; the grid is worked out from it), the antenna text ("" = the radio's port name from
      *  antennaNames), and the second switch "Also send WSPR spots to WSPRnet". Live. */

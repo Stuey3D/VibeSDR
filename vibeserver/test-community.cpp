@@ -12,6 +12,7 @@
 // set (the directory's map-page test reads the same shape).
 #include "vibe_community.h"
 #include "vibe_ndb_gallery.h"
+#include "vibe_gzip.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -42,7 +43,7 @@ int main() {
         std::vector<std::string> layers;
         const std::string j = assemble(now, { { "ndb", "{\"log\":[]}", { "ndb" } }, { "aircraft", "{\"aircraft\":[]}", { "hfdl", "adsb" } },
                                               { "empty", "", { "dsc" } } }, kMaxBytes, &layers);
-        CHECK(j.rfind("{\"v\":1,\"on\":true,\"now\":1764072000,\"layers\":[\"adsb\",\"hfdl\",\"ndb\"]", 0) == 0, "envelope/order: %s", j.c_str());
+        CHECK(j.rfind("{\"v\":2,\"on\":true,\"now\":1764072000,\"layers\":[\"adsb\",\"hfdl\",\"ndb\"]", 0) == 0, "envelope/order: %s", j.c_str());
         CHECK(layers.size() == 3 && layers[0] == "adsb" && layers[2] == "ndb", "layersOut in layerOrder");
         CHECK(j.find("\"empty\"") == std::string::npos && j.find("\"dsc\"") == std::string::npos, "an empty section is skipped, its layer not named");
         CHECK(j.find("\"dropped\"") == std::string::npos, "nothing dropped under the cap");
@@ -76,15 +77,15 @@ int main() {
         const auto capped = aircraftRows(lots, nowMs);
         CHECK(capped.size() == kAircraftMax && capped.front().icao == 0x500000, "1000 → the newest kAircraftMax");
 
-        std::printf("== 3. the aircraft JSON — aircraft.json's own format, 600 rows within the cap\n");
-        const std::string aj = vibeavshare::toJson(capped, {}, nowMs);
-        CHECK(aj.rfind("{\"now\":1764072000,\"count\":600,\"aircraft\":[{\"key\":\"500000\",\"icao\":\"500000\"", 0) == 0, "aircraft.json's shape");
-        CHECK(count(aj, "\"lat\":") == 600, "every row placed");
-        CHECK(aj.find("\"rx\"") == std::string::npos && aj.find("\"km\"") == std::string::npos, "nothing about the receiver");
+        std::printf("== 3. the aircraft rows — compact, 600 within the cap\n");
+        const std::string aj = "[" + aircraftCompact(capped, nowMs) + "]";
+        CHECK(aj.rfind("[[\"500000\",", 0) == 0, "compact rows, the ICAO first: %.60s", aj.c_str());
+        CHECK(count(aj, "],[") == 599, "600 rows");
+        CHECK(aj.find("\"rx\"") == std::string::npos && aj.find("km") == std::string::npos, "nothing about the receiver");
         std::vector<std::string> layers;
-        const std::string all = assemble(now, { { "aircraft", aj, aircraftLayers(capped) } }, kMaxBytes, &layers);
+        const std::string all = assemble(now, { { "a", aj, aircraftLayers(capped) } }, kMaxBytes, &layers);
         CHECK(all.find("\"dropped\"") == std::string::npos && all.size() < kMaxBytes, "600 aircraft fit (%zu bytes)", all.size());
-        std::printf("   (600 aircraft = %zu bytes)\n", aj.size());
+        std::printf("   (600 aircraft = %zu bytes raw, %zu gzipped)\n", aj.size(), vibegz::gzip(aj).size());
     }
 
     std::printf("== 4. NDB — the day card, placed from the published list, no distance or bearing\n");
@@ -111,15 +112,14 @@ int main() {
         // yesterday's card names WOD again (older) and an old beacon past the day
         NdbRow y = rows[0]; y.last -= 86400; y.first -= 86400; rows.push_back(y);
         NdbRow old = rows[0]; old.ident = "OLD"; old.last = now - kNdbSinceSec - 60; rows.push_back(old);
-        const std::string j = ndbJson(rows, now);
-        CHECK(count(j, "\"ident\":") == 1 && j.find("\"ident\":\"WOD\"") != std::string::npos, "one WOD, no unplaced, no old: %s", j.c_str());
-        CHECK(j.find("\"km\"") == std::string::npos && j.find("\"brg\"") == std::string::npos && j.find("\"deg\"") == std::string::npos,
-              "no distance or bearing from the receiver");
-        CHECK(j.find("\"name\":\"Woodley\"") != std::string::npos && j.find("\"cc\":\"GB\"") != std::string::npos && j.find("\"hz\":352000") != std::string::npos, "the NdbLog fields");
-        CHECK(ndbJson({}, now).empty(), "nothing → no section");
+        const std::string j = ndbRows(rows, now);
+        CHECK(count(j, "[\"") == 1 && j.rfind("[\"WOD\",352000,51.4528,-0.8789,", 0) == 0, "one WOD row, no unplaced, no old: %s", j.c_str());
+        CHECK(j.find("94") == std::string::npos && j.find("181") == std::string::npos, "no distance or bearing from the receiver");
+        CHECK(j.find("\"Woodley\",\"GB\"]") != std::string::npos, "name and country");
+        CHECK(ndbRows({}, now).empty(), "nothing → no section");
         std::vector<NdbRow> many;
         for (int i = 0; i < 1000; i++) { NdbRow r = rows[0]; r.ident = "B" + std::to_string(i); r.last = now - i; many.push_back(r); }
-        CHECK(count(ndbJson(many, now), "\"ident\":") == kNdbMax, "capped at kNdbMax");
+        CHECK(count(ndbRows(many, now), "[\"") == kNdbMax, "capped at kNdbMax");
     }
 
     std::printf("== 5. the cache: one build per TTL\n");
@@ -141,6 +141,71 @@ int main() {
         CHECK(c.get(now - 1000, kCacheSec, build).body == "{\"n\":4}", "a clock that went back rebuilds rather than serving for ever");
     }
 
+    std::printf("== 7. MeshCore nodes from the ISM gallery card — MeshCore only, a person rounded, no receiver line\n");
+    {
+        const char* dot = " \xc2\xb7 ";
+        auto row = [&](std::vector<std::string> f) { std::string o; for (size_t i = 0; i < f.size(); i++) o += (i ? dot : "") + f[i]; return o + "\n"; };
+        const std::string card = std::string("ISM nodes heard \xc2\xb7 868 \xc2\xb7 2025-11-25\nReceiver:     52.3456, -1.2345\n\nEach node, most recent first (last heard \xc2\xb7 first heard \xc2\xb7 times heard \xc2\xb7 heard by \xc2\xb7 network \xc2\xb7 type \xc2\xb7 name \xc2\xb7 id \xc2\xb7 position \xc2\xb7 hops \xc2\xb7 SNR dB \xc2\xb7 MHz):\n")
+            + row({ "11:50:00", "08:00:00", "12\xc3\x97", "background", "MeshCore", "repeater", "Hilltop RPT", "a1b2c3d4", "52.12345, -1.54321", "0", "7.5", "869.525" })
+            + row({ "11:40:00", "09:00:00", "3\xc3\x97", "live", "MeshCore", "companion", "Bob's phone", "ffee0011", "52.98765, -1.11111", "1", "2.0", "869.525" })
+            + row({ "11:30:00", "09:00:00", "5\xc3\x97", "live", "Meshtastic", "router", "MT node", "!abcd", "51.5, -0.1", "0", "3.0", "869.525" })
+            + "Acurite 5n1 weather sensor at 52.3, -1.2\n";
+        const int64_t day = now / 86400;
+        const auto nodes = meshNodesOfCard(card, day);
+        CHECK(nodes.size() == 2, "two MeshCore nodes, the Meshtastic one and the sensor left out (%zu)", nodes.size());
+        CHECK(nodes.size() == 2 && std::fabs(nodes[1].lat - 52.99) < 1e-9 && std::fabs(nodes[1].lon + 1.11) < 1e-9 && nodes[1].approx, "a companion (a person) rounded to 0.01°");
+        CHECK(nodes.size() == 2 && std::fabs(nodes[0].lat - 52.12345) < 1e-9, "a repeater exact");
+        const std::string j = meshRows(nodes, now);
+        CHECK(count(j, "[\"") == 2 && j.find("52.3456") == std::string::npos && j.find("Receiver") == std::string::npos, "rows: no receiver position: %s", j.c_str());
+        CHECK(meshRows(nodes, now + 2 * 86400).empty(), "older than the 24 h window → nothing");
+    }
+    std::printf("== 8. NAVTEX messages: one per id, the cleanest copy, a title, bounded\n");
+    {
+        std::vector<NavMsg> cs;
+        auto copy = [&](const char* f, int64_t t, const std::string& text) { NavMsg m; m.file = f; m.first = m.last = t; m.khz = 518; m.text = text; m.id = navMsgId(text); m.lost = navLost(text); cs.push_back(m); };
+        copy("a.txt", now - 3000, "ZCZC GA98\n251200 UTC NOV\nNAVAREA I 1*3/25\nWIGHT. BUOY UNL*T\nNNNN\n");
+        copy("b.txt", now - 1000, "ZCZC GA98\n251200 UTC NOV\nNAVAREA I 123/25\nWIGHT. BUOY UNLIT\nNNNN\n");
+        copy("c.txt", now - 500, "ZCZC GA98\n251200 UTC NOV\nNAVAREA I 1**/25\nWIGHT. BUOY ****T\nNNNN\n");
+        copy("d.txt", now - 200, "ZCZC GE45\nSHIPPING FORECAST\nNNNN\n");
+        copy("e.txt", now - 100, "start lost and no header\n");
+        const auto m = navFold(cs);
+        CHECK(m.size() == 3, "GA98 three copies → one; GE45; the header-less one stands alone (%zu)", m.size());
+        const NavMsg* ga = nullptr; for (const auto& x : m) if (x.id == "GA98") ga = &x;
+        CHECK(ga && ga->file == "b.txt" && ga->n == 3 && ga->lost == 0 && ga->first == now - 3000 && ga->last == now - 500, "the cleanest copy (b, 0 lost) is the text; heard 3 times; first/last span all");
+        CHECK(navTitle("ZCZC GA98\n251200 UTC NOV\nNAVAREA I 123/25\n") == "251200 UTC NOV", "the title: the first line after the header");
+        const std::string rows = navMsgRows(m);
+        CHECK(rows.find("\"GA98\",518,") != std::string::npos && rows.find("WIGHT") == std::string::npos, "rows carry the title, never the text: %s", rows.substr(0, 120).c_str());
+        std::vector<NavMsg> lots;
+        for (int i = 0; i < 1000; i++) { NavMsg x = m[0]; x.id = "GA" + std::to_string(i % 100); x.khz = i; x.last = now - i; lots.push_back(x); }
+        CHECK(count(navMsgRows(lots), "],[") + 1 == (int)kNavMsgMax, "capped at kNavMsgMax");
+        CHECK(dropStrField("{\"a\":1,\"txt\":\"x\\\"y\",\"b\":2}", "txt") == "{\"a\":1,\"b\":2}", "a forecast's text taken out of the poll");
+    }
+    std::printf("== 9. the remembered rows (sondes / APRS / VOR) beside the gallery, bounded by their windows\n");
+    {
+        char tmpl[] = "/tmp/vs-commlive-XXXXXX";
+        const std::string dir = std::string(mkdtemp(tmpl)) + "/.community";
+        CHECK(writeLive(dir, "p", "radio-1", "[[\"G4ABC\",\"G4ABC\",52.1,-1.2," + std::to_string(now - 60) + ",\"/>\",\"position\",\"car\"]]"), "radio 1 writes its APRS rows");
+        CHECK(writeLive(dir, "p", "radio/2", "[[\"OLD\",\"OLD\",52.1,-1.2," + std::to_string(now - 30000) + ",\"/>\",\"position\",\"old\"],[\"M0XYZ\",\"M0XYZ\",51,-1," + std::to_string(now - 10) + ",\"/-\",\"position\",\"home\"]]"), "radio 2 writes its rows (a hostile tag is cleaned)");
+        { std::ofstream(dir + "/live-p-torn.json") << "[[\"X\",1,"; }
+        const std::string all = readLive(dir, "p", now);
+        CHECK(count(all, "[\"") == 3, "both radios' rows joined, the torn file skipped (%s)", all.c_str());
+        const std::string win = rowsSince(all, 4, now - kAprsSinceSec, 100);
+        CHECK(count(win, "[\"") == 2 && win.find("OLD") == std::string::npos, "the 6 h window drops the old one: %s", win.c_str());
+        CHECK(rowsSince("[\"a\",\"x,]\",9],[\"b\",\"y\",1]", 2, 5, 10) == "[\"a\",\"x,]\",9]", "the row scanner respects strings");
+        CHECK(writeLive(dir, "p", "radio-1", ""), "an empty body removes the file");
+        CHECK(count(readLive(dir, "p", now), "[\"") == 2, "…and its rows are gone");
+    }
+    std::printf("== 10. the owner's per-mode choices and the ?s= sections\n");
+    {
+        const auto off = offSet("vor, APRS,bogus,ndb");
+        CHECK(off.size() == 3 && off.count("vor") && off.count("aprs") && off.count("ndb"), "communityOff read, unknown words dropped");
+        const auto all = sectionsOfQuery("");
+        CHECK(all.size() == 12, "no ?s= = every section (%zu)", all.size());
+        const auto some = sectionsOfQuery("adsb,acars,navtex");
+        CHECK(some.size() == 5 && some[0] == "a", "adsb+acars = one aircraft section; navtex = four");
+        CHECK(sectionTtl("a") == 30 && sectionTtl("nx") == 120 && sectionTtl("z") == 120, "live 30 s, slow 120 s");
+    }
+
     std::printf("== 6. off\n");
     CHECK(offJson("off") == "{\"v\":1,\"on\":false,\"why\":\"off\"}", "off");
     CHECK(offJson("pin\"x") == "{\"v\":1,\"on\":false,\"why\":\"pin\\\"x\"}", "escaped");
@@ -148,8 +213,7 @@ int main() {
     if (const char* fx = std::getenv("COMMUNITY_FIXTURE")) {
         std::vector<vibeavshare::Row> rows;
         for (uint32_t i = 0; i < 3; i++) rows.push_back(plane(0x4CA000 + i, nowMs - i * 4000, true));
-        const std::string aj = vibeavshare::toJson(rows, {}, nowMs);
-        std::ofstream(fx) << assemble(now, { { "aircraft", aj, aircraftLayers(rows) } });
+        std::ofstream(fx) << assemble(now, { { "a", "[" + aircraftCompact(rows, nowMs) + "]", aircraftLayers(rows) } });
         std::printf("   (fixture written to %s)\n", fx);
     }
 

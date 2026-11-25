@@ -402,6 +402,9 @@ public:
     /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the owner's "Share to the VibeSDR community map" switch — default
      *  OFF. On: GET /vibeserver/community.json answers, and vibeserver.json says "communityMap":true (the directory lists it). */
     static void setCommunityMap(bool on);
+    /** ★★ …and the modes the owner leaves out of it (comma-separated layer words: adsb acars vdl2 hfdl ndb vor ais dsc navtex
+     *  sondes aprs mesh). "" = every mode the server runs. */
+    static void setCommunityModesOff(const std::string& csv);
     /** ★★ V12 2026-11-16 THE SHARED AIRCRAFT TABLE (vibe_aircraft_share.h): the directory every radio process on the box
      *  shares for it — the runtime directory (a tmpfs on a Linux server), never the SD card. Unset: in this process only. */
     static void setAircraftShareDir(const std::string& dir);

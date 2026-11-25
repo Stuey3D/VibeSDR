@@ -196,7 +196,7 @@ const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandMode
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
-  StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
+  StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler, Pressable,
   unstable_batchedUpdates,
 } from 'react-native';
 // ★ On a TV the remote must be able to move PAST a text field — see TvTextInput (Kiko, Android 6 box).
@@ -365,6 +365,9 @@ const ANT_ICONS = [
   { key: 'dish',        label: 'Dish' },
 ];
 
+/** ★★ V12 beta94 the community map's modes, as the Setup page lists them (AVIATION · MARITIME · MISC). */
+const COMMUNITY_MODES: Array<[string, string]> = [['adsb', 'ADS-B'], ['acars', 'ACARS'], ['vdl2', 'VDL2'], ['hfdl', 'HFDL'], ['ndb', 'NDB'], ['vor', 'VOR map'],
+  ['ais', 'AIS'], ['dsc', 'DSC'], ['navtex', 'NAVTEX'], ['sondes', 'Radiosondes'], ['aprs', 'APRS'], ['mesh', 'MeshCore']];
 const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
@@ -409,7 +412,7 @@ const K = {
   /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
   /** ★★ V12 beta94 the COMMUNITY MAP (vibe_community.h) — the owner's switch. Absent = off. */
-  communityMap: 'vs_communitymap',
+  communityMap: 'vs_communitymap', communityOff: 'vs_communityoff',
   /** ★★ V12 beta90 PSK Reporter (switch, receiver callsign, antenna text), "Also send WSPR spots to WSPRnet", and the
    *  DMR ID lookup (RadioID.net). Absent = off / empty. */
   pskrOn: 'vs_pskron', pskrCall: 'vs_pskrcall', pskrAntenna: 'vs_pskrantenna', wsprnetOn: 'vs_wsprneton', wsprnetCall: 'vs_wsprnetcall', dmrIdLookup: 'vs_dmridlookup',
@@ -692,6 +695,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [galleryPublic, setGalleryPublic] = useState(true);
   const [gallerySaveLive, setGallerySaveLive] = useState(true);
   const [communityMap, setCommunityMap] = useState(false);   // ★★ V12 beta94 off unless the owner says
+  const [communityOff, setCommunityOff] = useState('');      // ★ the modes left out ('' = all)
   const [galDisk, setGalDisk] = useState<{ freeBytes: number; usedBytes: number } | null>(null);
   /** ★★ V12 beta90 PSK REPORTER — off by default; the callsign is required (nothing is sent without one). */
   const [pskrOn, setPskrOn] = useState(false);
@@ -1763,6 +1767,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
           { const cm = g(K.communityMap); if (cm != null) setCommunityMap(cm === '1'); }
+          { const co = g(K.communityOff); if (co != null) setCommunityOff(co); }
           // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = off
           setPskrOn(g(K.pskrOn) === '1'); setPskrCall(g(K.pskrCall) ?? ''); setPskrAntenna(g(K.pskrAntenna) ?? '');
           setWsprnetOn(g(K.wsprnetOn) === '1'); setWsprnetCall(g(K.wsprnetCall) ?? ''); setDmrIdLookup(g(K.dmrIdLookup) === '1');
@@ -2383,7 +2388,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
-    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
+    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, communityOff, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson,
     rspCard, ppbText,
@@ -2439,7 +2444,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★★ V12 the idle DX scanner (RadioConfig::dxScan) — VibeServerBoot applies it; the private DAB scan engine drops it
     dxScan: live.current.dxJson,
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
-    communityMap: live.current.communityMap,   // ★★ V12 beta94
+    communityMap: live.current.communityMap, communityOff: live.current.communityOff,   // ★★ V12 beta94
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — VibeServerBoot applies them on every start
     pskrOn: live.current.pskrOn, pskrCall: live.current.pskrCall, pskrAntenna: live.current.pskrAntenna,
     wsprnetOn: live.current.wsprnetOn, wsprnetCall: live.current.wsprnetCall, dmrIdLookup: live.current.dmrIdLookup,
@@ -2622,7 +2627,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
       [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
-      [K.communityMap, live.current.communityMap ? '1' : '0'],
+      [K.communityMap, live.current.communityMap ? '1' : '0'], [K.communityOff, live.current.communityOff],
       [K.pskrOn, live.current.pskrOn ? '1' : '0'], [K.pskrCall, live.current.pskrCall], [K.pskrAntenna, live.current.pskrAntenna],
       [K.wsprnetOn, live.current.wsprnetOn ? '1' : '0'], [K.wsprnetCall, live.current.wsprnetCall], [K.dmrIdLookup, live.current.dmrIdLookup ? '1' : '0'],
       [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
@@ -3638,6 +3643,25 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   onValueChange={(v) => { setCommunityMap(v); AsyncStorage.setItem(K.communityMap, v ? '1' : '0'); }}
                   trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
               </View>
+              {/* ★ the modes it shares — every one this server runs unless the owner leaves it out (Setup's tick boxes) */}
+              {communityMap && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                  {COMMUNITY_MODES.map(([id, label]) => {
+                    const on = !communityOff.split(',').includes(id);
+                    return (
+                      <Pressable key={id} accessibilityRole="checkbox" accessibilityState={{ checked: on }}
+                        onPress={() => {
+                          const set = new Set(communityOff.split(',').filter(Boolean));
+                          if (on) set.add(id); else set.delete(id);
+                          const v = [...set].join(','); setCommunityOff(v); AsyncStorage.setItem(K.communityOff, v);
+                        }}
+                        style={{ borderWidth: 1, borderColor: on ? C.trackOn : C.border, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10, opacity: on ? 1 : 0.55 }}>
+                        <Text style={{ color: C.text, fontFamily: F, fontSize: 12 }}>{on ? '\u2713 ' : ''}{label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
                 One world map of aircraft and shipping that every VibeServer owner can add to, linked from the directory page.
                 Shared: what the stations themselves broadcast {'—'} aircraft and ships{'’'} own positions, the NAVTEX stations

@@ -135,6 +135,34 @@ public:
     void clear() { std::lock_guard<std::mutex> lk(m_); rows_.clear(); frames_ = 0; }
     uint64_t frames() { std::lock_guard<std::mutex> lk(m_); return frames_; }
     size_t size() { std::lock_guard<std::mutex> lk(m_); return rows_.size(); }
+    /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the sondes with a position, heard within `maxAge` s, newest first,
+     *  as compact rows — [serial, type, lat, lon, alt m, climb m/s, last heard (UTC s), max alt m, temp °C|null, [[lat,lon]…]] — the
+     *  track thinned to ≤ `maxPts` points (first and last kept), 4 decimals. Comma-joined ELEMENTS, no brackets. */
+    std::string communityRows(double now, double maxAge, size_t maxRows, size_t maxPts) {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<const SondeRow*> v;
+        for (const auto& r : rows_) if (now - r.last <= maxAge && std::isfinite(r.lat) && std::isfinite(r.lon)) v.push_back(&r);
+        std::sort(v.begin(), v.end(), [](const SondeRow* a, const SondeRow* b) { return a->last > b->last; });
+        std::string o;
+        char b[320];
+        auto f = [](double x, const char* fmt) { char t[32]; if (!std::isfinite(x)) return std::string("null"); std::snprintf(t, sizeof t, fmt, x); return std::string(t); };
+        for (size_t i = 0; i < v.size() && i < maxRows; ++i) {
+            const SondeRow* r = v[i];
+            std::snprintf(b, sizeof b, "%s[\"%s\",\"%s\",%.4f,%.4f,%s,%s,%.0f,%s,%s,[", i ? "," : "", jsonEsc(r->serial).c_str(),
+                          jsonEsc(r->model.empty() ? std::string(r->kind) : r->model).c_str(), r->lat, r->lon, f(r->alt, "%.0f").c_str(), f(r->vU, "%.1f").c_str(),
+                          r->last, f(r->maxAlt, "%.0f").c_str(), f(r->temp, "%.1f").c_str());
+            o += b;
+            const size_t n = r->track.size(), step = n > maxPts && maxPts > 1 ? (n + maxPts - 2) / (maxPts - 1) : 1;
+            bool first = true;
+            for (size_t k = 0; k < n; k += step) {
+                const size_t j = (k + step >= n) ? n - 1 : k;
+                std::snprintf(b, sizeof b, "%s[%.4f,%.4f]", first ? "" : ",", r->track[j].lat, r->track[j].lon); o += b; first = false;
+                if (j == n - 1) break;
+            }
+            o += "]]";
+        }
+        return o;
+    }
     /** `"frames":N,"sondes":[…]` (no braces) — heard within `maxAge` s, the newest first; each track ≤ `maxPts` points. */
     std::string json(double now, double maxAge = 3 * 3600, size_t maxPts = 120) {
         std::lock_guard<std::mutex> lk(m_);

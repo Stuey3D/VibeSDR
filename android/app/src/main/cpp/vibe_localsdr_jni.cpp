@@ -1797,6 +1797,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetCommunityMap(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::setCommunityMap(on == JNI_TRUE);   // ★★ V12 beta94 the community map (vibe_community.h)
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetCommunityModesOff(JNIEnv* env, jobject, jstring csv) {
+    vibe::LocalSdrShim::setCommunityModesOff(jstr(env, csv));
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeBackgroundCaps(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::LocalSdrShim::backgroundCapsJson().c_str());

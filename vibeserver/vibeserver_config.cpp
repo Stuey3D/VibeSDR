@@ -926,6 +926,7 @@ std::string toJson(const ServerConfig& c) {
     // ★★ V12 the gallery — machine-level, read below too.
     N("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     B("communityMap", c.communityMap);   // ★★ V12 beta94 the community map — off unless the owner says
+    S("communityOff", c.communityOff);
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — machine-level, see ServerConfig.
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);
     B("dmrIdLookup", c.dmrIdLookup);
@@ -1023,7 +1024,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("rttySkimWorkers", c.rttySkimWorkers);
     c.rttySkimWorkers = std::max(0, std::min(8, c.rttySkimWorkers));
     I("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
-    B("communityMap", c.communityMap);
+    B("communityMap", c.communityMap); S("communityOff", c.communityOff);
     if (c.galleryMb < 0) c.galleryMb = 0;
     if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);

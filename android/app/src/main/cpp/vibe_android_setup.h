@@ -277,7 +277,7 @@ inline const std::vector<Control>& controlTable() {
         { "decoderMax rttySkimWorkers",                  D_ANY,   0 },
         { "galleryMb galleryPublic gallerySaveLive",     D_ANY,   0 },
         // ★★ V12 beta94 the community map (vibe_community.h) — the owner's switch, off by default
-        { "communityMap",                                D_ANY,   0 },
+        { "communityMap communityModes",                 D_ANY,   0 },
         // ★ V12 beta90 PSK Reporter + WSPRnet (every radio's digital spots); the DMR ID lookup only where DV ID can run
         { "pskrOn pskrCall pskrAntenna wsprnetOn wsprnetCall", D_ANY, 0 },
         { "dmrIdLookup",                                 D_RADIO, 0 },
@@ -463,6 +463,7 @@ inline std::string pageConfig(const std::string& raw) {
     out.set("galleryPublic", J::boolean(boolOr(S("galleryPublic"), true)));
     out.set("gallerySaveLive", J::boolean(boolOr(S("gallerySaveLive"), true)));
     out.set("communityMap", J::boolean(boolOr(S("communityMap"), false)));   // ★★ V12 beta94 absent = OFF
+    out.set("communityOff", J::str(strOr(S("communityOff"), "")));
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = OFF
     out.set("pskrOn", J::boolean(boolOr(S("pskrOn"), false)));
     out.set("pskrCall", J::str(strOr(S("pskrCall"), "")));
@@ -693,6 +694,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
     flag(&b, "galleryPublic", "galleryPublic");
     flag(&b, "gallerySaveLive", "gallerySaveLive");
     flag(&b, "communityMap", "communityMap");   // ★★ V12 beta94 the community map
+    str(&b, "communityOff", "communityOff", 200);
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (the page refuses "on" without a callsign itself)
     flag(&b, "pskrOn", "pskrOn");
     str(&b, "pskrCall", "pskrCall", 20);   // ★ the receiver's NAME (vibe_spot_report.h kMaxReceiverName)

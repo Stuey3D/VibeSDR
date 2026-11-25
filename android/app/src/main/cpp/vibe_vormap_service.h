@@ -255,6 +255,26 @@ public:
 
     /** The last report — {"type":"vormap",…} — or "" before the first. A copy: never waits on the decoder. */
     std::string report() const { std::lock_guard<std::mutex> lk(rm_); return report_; }
+    /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the beacons NAMED by an ident read off the air and placed from the
+     *  published list, heard since `sinceUtc` — [ident, hz, lat, lon, last UTC, name, cc, "vor"|"loc"] — and NOTHING about
+     *  the receiver: no radial, no bearing, no distance (a radial and a station is a fix of the server). Comma-joined. */
+    std::string communityRows(int64_t sinceUtc, size_t maxRows) {
+        std::lock_guard<std::mutex> lk(m_);
+        std::string o;
+        char b[300];
+        size_t n = 0;
+        for (const auto& kv : beacons_) {
+            const Beacon& x = kv.second;
+            if (!x.heard || x.lastUtc < sinceUtc || identOf_(x).empty()) continue;
+            const vibevor::Station* st = stationOf_(x);
+            if (!st) continue;
+            std::snprintf(b, sizeof b, "%s[\"%s\",%lld,%.4f,%.4f,%lld,\"%s\",\"%s\",\"%s\"]", n ? "," : "", jsonEsc(st->r->ident).c_str(), (long long)x.hz,
+                          st->r->lat, st->r->lon, (long long)x.lastUtc, jsonEsc(st->name()).c_str(), jsonEsc(st->r->cc).c_str(), x.expect == 2 ? "loc" : "vor");
+            o += b;
+            if (++n >= maxRows) break;
+        }
+        return o;
+    }
     /** For the admin line / the bench. */
     int heardNow() const { return heard_.load(); }
     int identifiedNow() const { return identified_.load(); }
