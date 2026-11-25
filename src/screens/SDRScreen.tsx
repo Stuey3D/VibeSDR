@@ -1951,8 +1951,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const chromeTop = fullBleed ? 0 : insets.top;
   /* ★★★ HALF-OPEN — "TABLETOP" (iPhone Duo, Stuart 2026-11-25, an experiment he asked for): UIKit says the hinge is
    *  partially open AND gives the fold as a division region across a portrait window. Then the TOP half is the
-   *  spectrum and waterfall only (stopping at the fold) and the BOTTOM half holds the deck — beside the open decoder
-   *  box, or centred on its own. Nothing of ours sits on the fold. Flat or folded: exactly as before (Apple reserves the
+   *  spectrum and waterfall only, and the BOTTOM half holds the deck — beside the open decoder box, or centred on its
+   *  own. The waterfall runs THROUGH the fold and on down behind the deck and box, as flat (Stuart: "spectrum can
+   *  cross and fill the screen"); only controls and text keep off the fold. Flat or folded: exactly as before (Apple reserves the
    *  fold only while partially open). The waterfall, the connection and the audio are untouched by the switch. */
   const tableFold = !isLandscape && reserved.hinge?.status === 'partiallyOpen'
     ? reserved.division.find((r) => r.w >= screenW * 0.5 && r.y > screenH * 0.2 && r.y + r.h < screenH * 0.8)
@@ -10835,7 +10836,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfCoarse={wfCoarse}
         colormap={colormap}
         width={screenW}
-        height={tableFold ? Math.max(120, tableFold.y - wfInsetTop) : screenH - wfInsetTop}
+        height={screenH - wfInsetTop}
         // Block waterfall tune/pan/pinch in the bottom gap (home-indicator
         // zone): the whole strip below the pill when controls show, else just
         // the home bar. Preserves swipe-up-to-minimise + menu Modals.
@@ -10892,7 +10893,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Sits at the display centre until the dongle locks; then the view pans
         // on across the captured band and the marker slides off to the side.
         centerMarkerHz={localRf?.rf ?? status.centerHz}
-        deckOcclusion={tabletop ? null : deckOcclusion}
+        deckOcclusion={deckOcclusion}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
       />
       </PanelBoundary>
