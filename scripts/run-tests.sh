@@ -380,6 +380,7 @@ if node --no-warnings scripts/test_server_prefs.ts; then pass=$((pass+1)); else 
 if node --no-warnings scripts/test_bounded_inflate.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ The map WebView page parses, for all three kinds (a template-literal page tsc cannot check).
 if node scripts/check-map-overlay.mjs >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ node scripts/check-map-overlay.mjs"; fi
+if node scripts/check-servers-menu-layer.mjs >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ node scripts/check-servers-menu-layer.mjs"; fi
 # ★★ The DAB transmitter-site importers (2026-10-06): coordinates, the three regulators' file shapes,
 #    provenance in every generated header. Fixtures only — no network. (test-dab-txdb.cpp above is the matching.)
 if python3 scripts/dab-sites/test_dabsites.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ python3 scripts/dab-sites/test_dabsites.py"; fi

@@ -318,7 +318,12 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
 
 /* ★★ OPEN, IT IS TOPMOST (Stuart, 2026-10-30: "when the servers chip is open it needs to be topmost" — it opened behind
  *  the DAB station strip and the DAB box). Above every layer on the SDR screen; the backdrop sits with it, so a tap
- *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place. */
+ *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place.
+ * ★★★ It must be on the chip's ROOT view (11-25: it still opened under the DAB box) — zIndex / elevation only order a view
+ *  among its own siblings, so on the rows alone it never left this component. 9000: above the boxes, the chat layer
+ *  (300) and the crash card (999); below the tour (9999) — SERVERS_MENU_Z, serversChipCollapse.ts.
+ *  scripts/check-servers-menu-layer.mjs holds it. */
+
 const OPEN_LAYER = { zIndex: SERVERS_MENU_Z, elevation: SERVERS_MENU_Z } as const;
 /** ★ Tucked, it sits with the edge tabs (EdgeChip, 251) — above the box it is tucked beside, so it can still be tapped. */
 const TAB_LAYER = { zIndex: SERVERS_TAB_Z, elevation: SERVERS_TAB_Z } as const;
