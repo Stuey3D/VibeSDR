@@ -1429,7 +1429,8 @@ private:
              *  (default 1200 Hz); "afc":false / "invert":true are the manual fallback under AUTO. sat_tlm per good frame,
              *  fctlm_status once a second, a readable line to the gallery.
              *  ★★★ beta92 a SATELLITE pick attaches it WIDE — "afc_range":2600 on a wide passband (★★ beta93: "centre":1500 on
-             *  100–5000 Hz, the carrier where a hand-tuned USB signal sits; beta92 was 3800 on 100–7600)
+             *  100–5000 Hz, the carrier where a hand-tuned USB signal sits; beta92 was 3800 on 100–7600; ★★★ beta94 3000 on 100–6500,
+             *  so a carrier 2 kHz low still has its lower half above the dial)
              *  (vibe_sat_engine.h kTlmCentreHz) — and, once frames decode, it steers the pick's Doppler trim to where the
              *  signal really is (vibefc::TrimFollow → Engine::setDecoderTrim). */
             vibebpsk::RxCfg c;

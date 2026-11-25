@@ -27,6 +27,7 @@
 //    · the frame TYPE counts 0–23, not 1–24: the sequence number steps on type 0, which follows type 23 (WO1 = 0).
 //    · the carrier sat ~3.2 kHz into the audio (centre 3800, AFC ≈ −600 Hz); the passband (0–7.4 kHz) cut nothing.
 //      ★★ beta93 the pick puts it at ~1.5 kHz instead (vibe_sat_engine.h kTlmCentreHz) — the same frames decode.
+//      ★★★ beta94 at ~3.0 kHz (JO-97 0.9 kHz low at 1.5 kHz: its lower half was below the dial) — they still decode.
 // ★ The Viterbi, the Reed–Solomon (255,223) and the PN are vibe_lrpt_fec.h's — the same code, field, roots and
 //   scrambler (LRPT is CCSDS too); only the shortening, the de-interleaver and the sync are new here.
 // ★ Content: FUNcube is an AMATEUR satellite; its telemetry and fitter messages are amateur transmissions meant to be

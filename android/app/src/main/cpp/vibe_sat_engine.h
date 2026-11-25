@@ -384,10 +384,22 @@ inline std::string listenModeOf(const Transmitter& t) {
  *  below 0 Hz there is no USB audio, and the window must not hold the carrier's mirror). On air so far the bird has
  *  been +1.3 kHz (11-23) and −0.6 kHz (11-24) from the prediction — both inside. A signal more than ~1.2 kHz BELOW the
  *  prediction is no longer found (at 3800 it was, to −2.6 kHz): the trade for a natural-sounding pick. */
-constexpr double kTlmCentreHz = 1500.0;   ///< the decoder's audio centre on a telemetry pick (the carrier lands here)
-constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt (vibebpsk::RxCfg::afcRangeHz) — up 2600, down to a 300 Hz carrier
+/* ★★★ beta94 (11-25) THE CARRIER AT 3.0 kHz, IN 100–6500 Hz (Stuart, the Pi 500 V4L, a JO-97 pass at 28°: "i think the
+ *  telemetry signal is just outside our passband"). The bird sat ~0.9 kHz BELOW the prediction, so at the 1500 Hz centre
+ *  its carrier landed at ~550 Hz audio: inside the hunt (≥ 300 Hz) but with the lower half of the BPSK (carrier
+ *  −0.9 kHz, raised cosine α 0.5 at 1200 Bd) below the dial, where USB has no audio — the real audio's mirror sits on top
+ *  of it. "1 frame · 0 good · 1 failed". He nudged the dial 500 Hz down (carrier ~1.05 kHz) and 3 of 4 frames decoded.
+ *  On air so far: +1.3 kHz (AO-73 11-23), −0.6 kHz (AO-73 11-24), −0.9 kHz (JO-97 11-25) — a dongle's ppm, the listed
+ *  figure, the orbit. The rule now: a ±2 kHz error keeps the WHOLE signal (carrier ±0.9 kHz) inside the passband —
+ *  3000 − 2000 − 900 = 100 Hz, the low edge; 3000 + 2600 (the hunt's top) + 900 = 6500 Hz, the high edge. Synthetic
+ *  frames through the pick's path (test-fctlm §11, Eb/N0 8 dB): the 1500 Hz pick 0 / 12 at −0.9, −1.5 and −2.0 kHz;
+ *  this one 12 / 12 at every offset from −2.0 to +2.0 kHz. The cost: the carrier is heard at 3 kHz, not 1.5 — higher
+ *  than beta93, lower than beta92's 3.8 kHz that Stuart called thin. Opening the low edge to 0 Hz would not help: what
+ *  is below the dial is not in USB audio at all — only a higher carrier keeps it. */
+constexpr double kTlmCentreHz = 3000.0;   ///< the decoder's audio centre on a telemetry pick (the carrier lands here)
+constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt (vibebpsk::RxCfg::afcRangeHz) — ±2600 (a carrier from 400 to 5600 Hz)
 constexpr double kTlmAudioLoHz = 100.0;   ///< the USB passband a telemetry pick listens with (the clients' edges)
-constexpr double kTlmAudioHiHz = 5000.0;
+constexpr double kTlmAudioHiHz = 6500.0;
 /** ★★ beta92: a downlink whose pick runs the BPSK telemetry decoder on the wide passband (FUNcube "fc-bpsk" — the one
  *  BPSK telemetry format we decode; Fox "fox-bpsk" is heard, not decoded, so it keeps the voice passband). */
 inline bool tlmWide(const Transmitter& t) { return t.consumer == "fc-bpsk" && t.mode == "usb"; }

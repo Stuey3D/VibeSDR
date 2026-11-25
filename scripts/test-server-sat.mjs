@@ -394,18 +394,18 @@ try {
       ok(await until(() => lastPicked(sp)?.norad === 39444, 4000), 'AO-73 telemetry picked');
       p = lastPicked(sp);
       // ★★★ beta92 THE WIDE TELEMETRY PICK (Stuart 11-23: AO-73 1.3 kHz above the prediction, 0 frames at the 1200 Hz centre)
-      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145933500 && p.use === 'packet', `AO-73: fctlm, USB 1500 Hz low (${p?.decoder} ${p?.hz})`);
-      ok(p?.params?.centre === 1500 && p?.params?.afc_range === 2600, `★ picked carries fctlm's wide centre and hunt ${JSON.stringify(p?.params)}`);
-      ok(p?.audio?.lo === 100 && p?.audio?.hi === 5000, `★ picked carries the passband it set ${JSON.stringify(p?.audio)}`);
-      ok(/decoder attached: fctlm \(FUNcube BPSK 1200\) centre 1500 Hz AFC .{1,2}2600 Hz/.test(S.L()) && /\[sat\] decoder xpdr detached/.test(S.L()),
-         'fctlm runs at 1500 Hz, hunting ±2600 Hz; the finder the previous pick started detached');
-      ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === 100 && lastOf(sp, 'config')?.bandwidthHigh === 5000, 3000),
-         `the audio passband 100–5000 Hz USB (config ${lastOf(sp, 'config')?.bandwidthLow}…${lastOf(sp, 'config')?.bandwidthHigh})`);
+      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145932000 && p.use === 'packet', `AO-73: fctlm, USB 3000 Hz low (beta94) (${p?.decoder} ${p?.hz})`);
+      ok(p?.params?.centre === 3000 && p?.params?.afc_range === 2600, `★ picked carries fctlm's wide centre and hunt ${JSON.stringify(p?.params)}`);
+      ok(p?.audio?.lo === 100 && p?.audio?.hi === 6500, `★ picked carries the passband it set ${JSON.stringify(p?.audio)}`);
+      ok(/decoder attached: fctlm \(FUNcube BPSK 1200\) centre 3000 Hz AFC .{1,2}2600 Hz/.test(S.L()) && /\[sat\] decoder xpdr detached/.test(S.L()),
+         'fctlm runs at 3000 Hz, hunting ±2600 Hz; the finder the previous pick started detached');
+      ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === 100 && lastOf(sp, 'config')?.bandwidthHigh === 6500, 3000),
+         `the audio passband 100–6500 Hz USB (config ${lastOf(sp, 'config')?.bandwidthLow}…${lastOf(sp, 'config')?.bandwidthHigh})`);
       // ★★★ beta92 A HAND NUDGE KEEPS THE PICK (11-23: a 700 Hz nudge dropped it, the box still said TRACK · attached)
       {
         const before = S.L().length;
         sp.txt.length = 0;
-        sp.send({ type: 'tune', frequency: 145931900, mode: 'usb' });
+        sp.send({ type: 'tune', frequency: 145931300, mode: 'usb' });
         await sleep(900);
         const after = S.L().slice(before);
         ok(!jsons(sp, 'sat').some((m) => m.state === 'OFF') && !/decoder fctlm detached/.test(after) && !/Doppler lock ended/.test(after),

@@ -11867,7 +11867,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  and the satellite watch lost the pick (the AOS bug, vibesatgain::pickStillRuns). */
             std::string dp;
             if (!p.decoder.empty() && vibe::sat::decoderOf(tx, dp) == p.decoder) m += ",\"params\":{" + dp + "}";
-            /* ★★★ beta92 the audio passband the pick set (a telemetry pick's 100–5000 Hz since beta93), so a client shows and keeps
+            /* ★★★ beta92 the audio passband the pick set (a telemetry pick's 100–6500 Hz since beta94), so a client shows and keeps
              *  exactly it — it is the server's, not a default the client should put back. */
             if (vibe::sat::tlmWide(tx))
                 m += ",\"audio\":{\"lo\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioLoHz, 0) + ",\"hi\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioHiHz, 0) + "}";
@@ -11990,6 +11990,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                 + ",\"bandwidthHigh\":" + vibe::sat::fmtNum(vibe::sat::kBeaconAudioHalfHz, 0) + "}");
         // ★★★ beta92 BPSK TELEMETRY's audio: a wide USB passband for the decoder's hunt (vibe_sat_engine.h kTlmCentreHz).
         //    ★★ beta93: 100–5000 Hz with the carrier at 1500 (it was 100–7600 at 3800 — "thin and high-pitched").
+        //    ★★★ beta94: 100–6500 Hz at 3000 — JO-97 0.9 kHz low put a 1500 Hz pick's carrier half below the dial.
         //    The same ordinary bandwidth frame.
         if (vibe::sat::tlmWide(tx))
             handleControl(sock, "{\"type\":\"bandwidth\",\"bandwidthLow\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioLoHz, 0)
@@ -12176,7 +12177,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // 1. ★ the ordinary VFO B — every rule handleWatch has (the window, FM broadcast, the slots); never moves a shared dial
         const double hz = vibe::sat::tuneHzOf(tx);
         const std::string md = vibe::sat::listenModeOf(tx);
-        // ★★★ beta92 BPSK telemetry on B listens on the same wide passband as on A (its decoder's centre: kTlmCentreHz, 1500 Hz)
+        // ★★★ beta92 BPSK telemetry on B listens on the same wide passband as on A (its decoder's centre: kTlmCentreHz, 3000 Hz)
         const std::string bwB = vibe::sat::tlmWide(tx) ? ",\"bandwidthLow\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioLoHz, 0)
                                                          + ",\"bandwidthHigh\":" + vibe::sat::fmtNum(vibe::sat::kTlmAudioHiHz, 0) : std::string();
         handleWatch(sock, "{\"type\":\"watch\",\"id\":1,\"frequency\":" + vibe::sat::fmtNum(hz, 0) + ",\"mode\":\"" + md + "\"" + bwB + "}");

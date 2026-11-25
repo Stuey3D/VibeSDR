@@ -10,7 +10,8 @@
 // ★★★ beta92 THE WIDE SEARCH (Stuart 11-23, AO-73 on the Pi 500's RTL-SDR V4: the bird sat 1.2–1.4 kHz ABOVE the
 //    Doppler-corrected prediction all pass — 2.4 kHz audio, outside the ±900 Hz hunt and half cut by the 2.7 kHz USB
 //    edge: 0 frames). A satellite pick now listens at a 3800 Hz centre in a 100–7600 Hz passband with afcRangeHz 2600
-//    (★★ beta93: a 1500 Hz centre in 100–5000 Hz — the search window floored at a 300 Hz carrier, RxCfg::minCarrierHz)
+//    (★★ beta93: a 1500 Hz centre in 100–5000 Hz — the search window floored at a 300 Hz carrier, RxCfg::minCarrierHz;
+//    ★★★ beta94: a 3000 Hz centre in 100–6500 Hz, ±2600 — JO-97 0.9 kHz low put the carrier at ~550 Hz, half below the dial)
 //    (vibe_sat_engine.h kTlmCentreHz / kTlmAfcHz). A wider range changes three things here, and nothing at the default:
 //      · the first low-pass opens to range + 0.75 × baud (the signal 2.6 kHz off still passes it whole);
 //      · the decimation drops so the squared signal's line (2Δf, up to 5.2 kHz) stays under Nyquist (48 k / 4 = 12 k);
@@ -135,8 +136,9 @@ struct RxCfg {
     /** ★★★ 11-24: the lowest audio frequency the CARRIER may be looked for at. USB audio has nothing below 0 Hz, and a
      *  real carrier at f has its mirror at −f, whose squared line the hunt would take just as readily. With the window's
      *  low side at (minCarrierHz − centre) > −centre, a carrier inside the window always has its mirror outside it. A
-     *  satellite pick's centre at 1500 Hz reaches −1200 Hz (a carrier at 300 Hz); its high side keeps the whole
-     *  afcRangeHz. By hand (centre 1200, ±900) the window is unchanged. */
+     *  satellite pick's centre at 1500 Hz (beta93) reached −1200 Hz (a carrier at 300 Hz); at 3000 Hz (beta94) the floor
+     *  is below the range, so the window is the whole ±afcRangeHz (a carrier from 400 Hz). By hand (centre 1200, ±900)
+     *  the window is unchanged. */
     double minCarrierHz = 300;
 };
 
@@ -180,6 +182,8 @@ public:
     uint64_t samples() const { return nIn_; }
     /** The symbol rate the timing loop has learnt (baud × sps / (sps + period)). */
     double baudHz() const { return fs2_ / (sps_ + period_); }
+    /** ★★★ beta94 how often the lock check found the loop off the carrier and moved it (a test seam and the status). */
+    uint64_t relocks() const { return relocks_; }
 
     void feed(const float* x, int n) {
         for (int i = 0; i < n; ++i) {
@@ -207,6 +211,10 @@ private:
         if (c_.afc && !locked_ && n2_ >= huntHold_) {
             sq_.push_back(z * z);
             if (sq_.size() >= kFft) { hunt(); sq_.clear(); }
+        } else if (c_.afc && locked_ && n2_ >= checkAt_) {
+            // ★★★ beta94 THE LOCK CHECK — one look every kCheckSec while locked (below)
+            sq_.push_back(z * z);
+            if (sq_.size() >= kFft) { hunt(true); sq_.clear(); checkAt_ = n2_ + (uint64_t)(kCheckSec * fs2_); }
         } else if (!sq_.empty()) sq_.clear();
         // Costas rotation (phase p2, frequency w2 per sample)
         const std::complex<float> rot((float)std::cos(p2_), (float)-std::sin(p2_));
@@ -271,8 +279,15 @@ private:
         return at(i0) * (1.0f - f) + at(i0 + 1) * f;
     }
     /** ★ The coarse AFC: z² removes the BPSK modulation and leaves a line at 2Δf — its FFT peak, if it stands well
-     *  above the floor, moves the NCO (the Costas loop then pulls in the rest). */
-    void hunt() {
+     *  above the floor, moves the NCO (the Costas loop then pulls in the rest).
+     *  ★★★ beta94 `check`: the same look WHILE LOCKED (Stuart 11-25, JO-97: the dial nudged 500 Hz, then the trim — a
+     *  step the Costas loop cannot follow, ±~60 Hz pull-in). It slips to the loop's false lock HALF A BAUD (600 Hz) off
+     *  the carrier, where the differential decode still reads every bit (inverted; the framer tries both), so frames
+     *  keep coming — but afcHz() is 600 Hz wrong, the drift follow (vibefc::TrimFollow) steers by it, and the signal
+     *  sat 500 Hz off the centre for the rest of the pass (test-fctlm §12). At a true lock z²'s line is at DC (the
+     *  "already on a signal" test below returns); a false lock has none there and a clear one at 2Δf — the NCO moves
+     *  to it. Only a move of ≥ kRelockHz: smaller is the Costas loop's (a Doppler residual). */
+    void hunt(bool check = false) {
         std::vector<std::complex<float>> a(sq_);
         for (size_t i = 0; i < a.size(); ++i) a[i] *= (float)(0.5 - 0.5 * std::cos(2 * M_PI * i / (a.size() - 1)));
         fft(a);
@@ -306,6 +321,8 @@ private:
         const double df = 0.5 * (bi + std::max(-0.5, std::min(0.5, d))) * binHz;   // Δf = (line)/2
         const double resid = df + w2_ * fs2_ / (2 * M_PI);
         if (std::fabs(resid) < 8.0) return;   // already there
+        if (check && std::fabs(df) < kRelockHz) return;   // ★★★ beta94 locked: small is the Costas loop's
+        if (check) ++relocks_;
         coarse_ = std::max(lo_, std::min(hi_, coarse_ + df));
         w2_ = 0; p2_ = 0;
         setNco1();
@@ -335,6 +352,11 @@ private:
      *  frame by then: hunt again. Before, ONE hunt ran — only if the first block was ≥ 53 ms (20 ms server blocks: none). */
     static constexpr double kHoldSec = 6.0;
     uint64_t huntHold_ = 0;
+    /* ★★★ beta94 the lock check: one 512-sample look (~43 ms) every kCheckSec while locked — ~25 FFTs a minute; a
+     *  false lock is 600 Hz off (half a baud), so anything from kRelockHz up is not the Costas loop's to fix. */
+    static constexpr double kCheckSec = 2.0, kRelockHz = 200.0;
+    uint64_t checkAt_ = 0;
+    uint64_t relocks_ = 0;
     std::vector<std::complex<float>> sq_;
 };
 

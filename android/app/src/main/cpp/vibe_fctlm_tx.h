@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <random>
 #include <vector>
 
@@ -19,6 +20,8 @@ struct Cfg {
     double carrierHz = 1200;      ///< where the signal sits in the audio
     double offsetHz = 0;          ///< a residual the receiver must find
     double rampHzS = 0;           ///< Doppler residual slope
+    /** ★★★ beta94 any frequency curve on top (Hz at time t s — a pass's whole Doppler, say). Optional. */
+    std::function<double(double)> hzAt;
     double clockPpm = 0;          ///< the satellite's symbol clock error (+ = slower). ★ AO-73 on air: −1400 (1201.6 Bd)
     double phase = 0.3;           ///< carrier start phase (rad)
     double ebn0Db = 99;           ///< noise: Eb/N0 in the 2.4 kHz audio (99 = none)
@@ -79,7 +82,7 @@ inline std::vector<float> modulate(const std::vector<std::vector<uint8_t>>& fram
         const long long kc = (long long)std::floor(k);
         double bb = 0;
         for (long long m = kc - 4; m <= kc + 5; ++m) if (m >= 0 && m < (long long)sym.size()) bb += sym[(size_t)m] * rc(k - double(m) - 0.5);
-        const double f = c.carrierHz + c.offsetHz + c.rampHzS * t;
+        const double f = c.carrierHz + c.offsetHz + c.rampHzS * t + (c.hzAt ? c.hzAt(t) : 0.0);
         ph += 2 * M_PI * f / c.rate;
         if (ph > M_PI) ph -= 2 * M_PI;
         out[i] = float(c.amp * bb * std::cos(ph) + (sigma > 0 ? sigma * g(rng) : 0.0));
