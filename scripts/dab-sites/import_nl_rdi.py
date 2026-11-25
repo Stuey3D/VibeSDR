@@ -19,7 +19,7 @@ Writes android/app/src/main/cpp/vibe_dab_txdb_nl.h.
 import argparse, os, re, sys, time, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dabsites import SOURCES, BY_BLOCK, Site, is_block, tidy_name, write_header  # noqa: E402
+from dabsites import HT_EFFECTIVE, number, SOURCES, BY_BLOCK, Site, is_block, tidy_name, write_header  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 OUT = os.path.join(ROOT, 'android', 'app', 'src', 'main', 'cpp', 'vibe_dab_txdb_nl.h')
@@ -77,9 +77,14 @@ def normalise(text: str) -> list:
         if not site or (site, block) in seen:
             continue
         seen.add((site, block))
+        # ★ ERP(kW) and Eff.Hoogte (metres; RDI's "effective height", labelled as RDI names it).
+        kw = number(c[ix['ERP(kW)']]) if 'ERP(kW)' in ix else 0.0
+        h = number(c[ix['Eff.Hoogte']]) if 'Eff.Hoogte' in ix else 0.0
+        h = int(round(h)) if 0 < h < 2000 else 0
         rows.append(Site(eid=src['eid_nibble'] << 12, main=0, sub=0, site=site,
                          area=tidy_name(c[ix['Provincie']]), lat=round(lat, 5), lon=round(lon, 5),
-                         block=block, src=src['id'], flags=BY_BLOCK))
+                         block=block, src=src['id'], flags=BY_BLOCK,
+                         erp_kw=kw if kw < 10000 else 0.0, height_m=h, height_ref=HT_EFFECTIVE if h else 0))
     rows.sort(key=lambda x: (x.block, x.site))
     return rows
 

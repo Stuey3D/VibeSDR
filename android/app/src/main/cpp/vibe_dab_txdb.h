@@ -6,8 +6,8 @@
 //     table, keyed by the ensemble's ECC (country) and EId, then Main/Sub.
 // ★★ ONE COUNTRY PER TABLE, KEYED BY ECC (Stuart, 2026-09-07): the UK (E1) is compiled in from
 //    tools/gen-dab-txdb.py; any other country's list can be compiled the same way, or dropped
-//    into the data directory as dab-tii-<ecc>.csv (eid,main,sub,site,area,lat,lon) and loaded at
-//    start without a rebuild. Where no directory covers the ensemble the codes stand alone —
+//    into the data directory as dab-tii-<ecc>.csv (eid,main,sub,site,area,lat,lon[,erp_kw,height_m])
+//    and loaded at start without a rebuild. Where no directory covers the ensemble the codes stand alone —
 //    the fallback is the bare TII, never a wrong name.
 // ★★ MORE THAN ONE REGULATOR, AND NOT EVERY ONE PUBLISHES TII (2026-10-06). Stuart asked for the
 //    world's DAB sites "without breaking any licencing agreements" — so only a regulator's own
@@ -67,6 +67,25 @@ enum : uint8_t {
     kDabTxEidAndBlock = 0x02,
 };
 
+/** ★★ WHAT A ROW'S HEIGHT IS MEASURED FROM (2026-11-25). Regulators do not publish the same height, and
+ *  the panel must say which one it is showing — a site 600 m above the sea and an aerial 106 m above
+ *  the ground are not comparable numbers. */
+enum : uint8_t {
+    kDabHtNone      = 0,   ///< no height published: heightM means nothing
+    kDabHtAerialAgl = 1,   ///< the aerial above the ground at the site (Ofcom "In-Use Ae Ht"; an owner's list)
+    kDabHtSiteAsl   = 2,   ///< the ground at the site above sea level (ČTÚ "Výška nad mořem")
+    kDabHtEffective = 3,   ///< the effective aerial height, as the regulator calls it (RDI "Eff.Hoogte")
+};
+/** The JSON spelling of a height reference — "agl", "asl", "eff" — and the clients' wording keys off it. */
+inline const char* dabHeightRefKey(uint8_t ref) {
+    switch (ref) {
+        case kDabHtAerialAgl: return "agl";
+        case kDabHtSiteAsl:   return "asl";
+        case kDabHtEffective: return "eff";
+        default:              return "";
+    }
+}
+
 struct DabTx {
     uint16_t    eid;
     uint8_t     mainId, subId;      ///< 0/0 when the source publishes no TII
@@ -76,6 +95,14 @@ struct DabTx {
     const char* block;
     uint8_t     src   = kDabSrcOfcom;
     uint8_t     flags = 0;
+    /** ★★ POWER AND HEIGHT (Stuart, 2026-11-25: why is a farther site stronger?). The regulator's own
+     *  figures, never estimated: 0 kW = not published, kDabHtNone = no height. Ofcom gives the in-use
+     *  ERP and the aerial's height above ground; BAKOM the ERP (one figure per site, so only where the
+     *  site carries one service); ČTÚ the ERP and the site's altitude; RDI the ERP and an effective
+     *  height. docs/DAB-SITES-SOURCES.md has the columns. */
+    float       erpKw     = 0;
+    int16_t     heightM   = 0;
+    uint8_t     heightRef = kDabHtNone;
 };
 
 /** ★ ISO 3166 alpha-2 → ECC, for the per-row country column of an owner's own TII list (the
@@ -103,7 +130,21 @@ struct DabTxMatch {
     std::string site, area;
     double      lat = 0, lon = 0;
     double      km  = -1;            ///< from the receiver, or -1 when its position is unknown
+    float       erpKw = 0;           ///< 0 = not published
+    int         heightM = 0;
+    uint8_t     heightRef = kDabHtNone;
 };
+
+/** ★ The power/height fields of one JSON object — `,"erpKw":9.55,"htM":106,"htRef":"agl"` — or nothing
+ *  for what the source does not publish. One copy for the TII lines and the licensed sites. */
+inline std::string dabTxSpecsJson(float erpKw, int heightM, uint8_t heightRef) {
+    std::string j; char b[64];
+    if (erpKw > 0 && std::isfinite(erpKw)) { std::snprintf(b, sizeof b, ",\"erpKw\":%.4g", double(erpKw)); j += b; }
+    if (heightRef != kDabHtNone) {
+        std::snprintf(b, sizeof b, ",\"htM\":%d,\"htRef\":\"%s\"", heightM, dabHeightRefKey(heightRef)); j += b;
+    }
+    return j;
+}
 
 inline double dabHaversineKm(double lat1, double lon1, double lat2, double lon2) {
     const double R = 6371.0088, d2r = M_PI / 180.0;
@@ -120,7 +161,10 @@ public:
 
     /** ★ Load <dir>/dab-tii-<ecc>.csv if present: eid,main,sub,site,area,lat,lon (hex for the
      *  first three, a '#' line is a comment). Rows here take precedence over the built-in table
-     *  for that country, so a corrected or newer list needs no rebuild. */
+     *  for that country, so a corrected or newer list needs no rebuild.
+     *  ★ Two OPTIONAL columns after lon (2026-11-25): erp_kw and height_m, the aerial's height
+     *    above the ground in metres — eid,main,sub,site,area,lat,lon,erp_kw,height_m. Either may be
+     *    left empty; a file with seven columns loads exactly as before. */
     int loadCountryFile(const std::string& dir, int ecc) {
         char name[64]; std::snprintf(name, sizeof name, "/dab-tii-%02x.csv", ecc & 0xFF);
         FILE* f = std::fopen((dir + name).c_str(), "r");
@@ -130,9 +174,11 @@ public:
             if (line[0] == '#' || line[0] == '\n') continue;
             unsigned eid = 0, m = 0, s = 0; char site[128] = {0}, area[128] = {0}; double lat = 0, lon = 0;
             // site/area may not contain commas in this simple format
-            if (std::sscanf(line, "%x,%x,%x,%127[^,],%127[^,],%lf,%lf", &eid, &m, &s, site, area, &lat, &lon) == 7) {
+            int used = 0;
+            if (std::sscanf(line, "%x,%x,%x,%127[^,],%127[^,],%lf,%lf%n", &eid, &m, &s, site, area, &lat, &lon, &used) == 7) {
                 Row r; r.ecc = ecc; r.eid = uint16_t(eid); r.mainId = uint8_t(m); r.subId = uint8_t(s);
                 r.site = site; r.area = area; r.lat = lat; r.lon = lon;
+                parseCountrySpecs(line + used, r);
                 loaded_.push_back(r);
                 ++n;
             }
@@ -158,6 +204,7 @@ public:
             if (!r.ok) continue;
             Row x; x.ecc = r.ecc; x.eid = r.eid; x.mainId = r.mainId; x.subId = r.subId;
             x.site = r.site; x.area = r.label; x.lat = r.lat; x.lon = r.lon; x.block = r.block;
+            x.erpKw = r.erpKw; x.heightM = r.heightM; x.heightRef = r.heightRef;
             loaded_.push_back(x);
             ++n;
         }
@@ -165,10 +212,28 @@ public:
         return n;
     }
 
-    /** One line of the dab-tx-list.csv layout, parsed — public so a test can hold it to the format. */
+    /** The optional `,erp_kw,height_m` tail of a dab-tii-<ecc>.csv line (after lon). Empty, missing,
+     *  non-numeric or non-positive fields are simply not set: never a guessed figure. Public for the test. */
+    template <class R> static void parseCountrySpecs(const char* p, R& r) {
+        if (!p || *p != ',') return;
+        ++p;
+        char* end = nullptr;
+        const double kw = std::strtod(p, &end);
+        if (end != p && kw > 0 && kw < 10000) r.erpKw = float(kw);
+        p = std::strchr(p, ',');
+        if (!p) return;
+        ++p;
+        const long h = std::strtol(p, &end, 10);
+        if (end != p && h > 0 && h < 2000) { r.heightM = int16_t(h); r.heightRef = kDabHtAerialAgl; }
+    }
+
+    /** One line of the dab-tx-list.csv layout, parsed — public so a test can hold it to the format.
+     *  ★ alt/height/kW (columns 9, 10, 13) are read when present (2026-11-25): height is the aerial's
+     *    above the ground, kW the ERP. Empty or zero = not known. */
     struct DabTxListRow {
         bool ok = false; int ecc = -1; uint16_t eid = 0; uint8_t mainId = 0, subId = 0;
         std::string site, label, block; double lat = 0, lon = 0;
+        float erpKw = 0; int16_t heightM = 0; uint8_t heightRef = kDabHtNone;
     };
     static DabTxListRow parseTxListLine(const char* line) {
         DabTxListRow r;
@@ -199,6 +264,16 @@ public:
         r.mainId = uint8_t(tii / 100); r.subId = uint8_t(tii % 100);
         r.site = trim(c[6]).substr(0, 127); r.label = trim(c[3]).substr(0, 127); r.block = trim(c[2]).substr(0, 7);
         r.lat = lat; r.lon = lon; r.ok = !r.site.empty();
+        if (c.size() > 10) {
+            const std::string hS = trim(c[10]);
+            const long h = hS.empty() ? 0 : std::strtol(hS.c_str(), &end, 10);
+            if (!hS.empty() && h > 0 && h < 2000) { r.heightM = int16_t(h); r.heightRef = kDabHtAerialAgl; }
+        }
+        if (c.size() > 13) {
+            const std::string kS = trim(c[13]);
+            const double kw = kS.empty() ? 0 : std::strtod(kS.c_str(), &end);
+            if (!kS.empty() && kw > 0 && kw < 10000) r.erpKw = float(kw);
+        }
         return r;
     }
 
@@ -206,22 +281,26 @@ public:
     DabTxMatch lookup(int ecc, uint16_t eid, int mainId, int subId, double rxLat, double rxLon) const {
         DabTxMatch best; int nMatch = 0;
         const bool havePos = !std::isnan(rxLat) && !std::isnan(rxLon);
-        auto consider = [&](const std::string& site, const std::string& area, double lat, double lon) {
+        auto consider = [&](const std::string& site, const std::string& area, double lat, double lon,
+                            float erpKw, int heightM, uint8_t heightRef) {
             ++nMatch;
             const double km = havePos ? dabHaversineKm(rxLat, rxLon, lat, lon) : -1;
             if (!best.found || (havePos && km < best.km)) {
                 best.found = true; best.site = site; best.area = area; best.lat = lat; best.lon = lon; best.km = km;
+                best.erpKw = erpKw; best.heightM = heightM; best.heightRef = heightRef;
             }
         };
         for (const auto& r : loaded_)
-            if (eccMatches(r.ecc, ecc) && r.eid == eid && r.mainId == mainId && r.subId == subId) consider(r.site, r.area, r.lat, r.lon);
+            if (eccMatches(r.ecc, ecc) && r.eid == eid && r.mainId == mainId && r.subId == subId)
+                consider(r.site, r.area, r.lat, r.lon, r.erpKw, r.heightM, r.heightRef);
         if (!best.found)
             for (const auto& t : builtin_)
                 if (t.ecc == ecc)
                     for (size_t i = 0; i < t.n; ++i) {
                         const DabTx& r = t.rows[i];
                         if ((r.flags & kDabTxByBlock) || r.subId == 0) continue;   // no TII in that source: nothing to match
-                        if (r.eid == eid && r.mainId == mainId && r.subId == subId) consider(r.site, r.area, r.lat, r.lon);
+                        if (r.eid == eid && r.mainId == mainId && r.subId == subId)
+                            consider(r.site, r.area, r.lat, r.lon, r.erpKw, r.heightM, r.heightRef);
                     }
         best.ambiguous = nMatch > 1 && !havePos;
         return best;
@@ -234,20 +313,26 @@ public:
      *  Nearest first when the receiver's position is known.
      *  ★ `block` is the block we are tuned to ("12C"): a by-block source (no EIds) matches on the
      *    EId's country nibble and that block. Null or empty skips those rows. */
-    struct Site { std::string site, area; int mainId = 0, subId = 0; double km = -1; uint8_t src = kDabSrcOfcom; };
+    struct Site {
+        std::string site, area; int mainId = 0, subId = 0; double km = -1; uint8_t src = kDabSrcOfcom;
+        float erpKw = 0; int heightM = 0; uint8_t heightRef = kDabHtNone;
+    };
     std::vector<Site> sitesFor(int ecc, uint16_t eid, double rxLat, double rxLon, size_t maxN = 4,
                                const char* block = nullptr) const {
         std::vector<Site> out;
         const bool havePos = !std::isnan(rxLat) && !std::isnan(rxLon);
-        auto add = [&](const std::string& site, const std::string& area, int m, int s, double lat, double lon, uint8_t src) {
+        auto add = [&](const std::string& site, const std::string& area, int m, int s, double lat, double lon, uint8_t src,
+                       float erpKw, int heightM, uint8_t heightRef) {
             for (const auto& o : out) if (o.site == site) return;
             Site x; x.site = site; x.area = area; x.mainId = m; x.subId = s; x.src = src;
+            x.erpKw = erpKw; x.heightM = heightM; x.heightRef = heightRef;
             x.km = havePos ? dabHaversineKm(rxLat, rxLon, lat, lon) : -1;
             out.push_back(x);
         };
         const bool haveBlock = block && block[0];
         for (const auto& r : loaded_)
-            if (eccMatches(r.ecc, ecc) && r.eid == eid) add(r.site, r.area, r.mainId, r.subId, r.lat, r.lon, kDabSrcUser);
+            if (eccMatches(r.ecc, ecc) && r.eid == eid)
+                add(r.site, r.area, r.mainId, r.subId, r.lat, r.lon, kDabSrcUser, r.erpKw, r.heightM, r.heightRef);
         for (const auto& t : builtin_) if (t.ecc == ecc)
             for (size_t i = 0; i < t.n; ++i) {
                 const DabTx& r = t.rows[i];
@@ -255,7 +340,7 @@ public:
                 const bool hit = (r.flags & kDabTxByBlock)
                     ? sameBlock && (r.eid >> 12) == (eid >> 12)
                     : r.eid == eid && (!(r.flags & kDabTxEidAndBlock) || !haveBlock || sameBlock);
-                if (hit) add(r.site, r.area, r.mainId, r.subId, r.lat, r.lon, r.src);
+                if (hit) add(r.site, r.area, r.mainId, r.subId, r.lat, r.lon, r.src, r.erpKw, r.heightM, r.heightRef);
             }
         if (havePos) std::sort(out.begin(), out.end(), [](const Site& a, const Site& b) { return a.km < b.km; });
         if (out.size() > maxN) out.resize(maxN);
@@ -292,6 +377,7 @@ private:
     struct Row {
         int ecc = -1; uint16_t eid = 0; uint8_t mainId = 0, subId = 0;
         std::string site, area; double lat = 0, lon = 0; std::string block;
+        float erpKw = 0; int16_t heightM = 0; uint8_t heightRef = kDabHtNone;
     };
     std::vector<Table> builtin_;
     std::vector<Row>   loaded_;

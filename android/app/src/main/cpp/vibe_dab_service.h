@@ -1647,6 +1647,8 @@ public:
                         j += kb;
                         if (m.km >= 0) { snprintf(kb, sizeof kb, ",\"km\":%.1f", m.km); j += kb; }
                         if (m.ambiguous) j += ",\"ambiguous\":true";
+                        // ★ The regulator's ERP and height, when it publishes them (2026-11-25, vibe_dab_txdb.h DabTx).
+                        j += dabTxSpecsJson(m.erpKw, m.heightM, m.heightRef);
                     }
                 }
                 j += "}";
@@ -1679,6 +1681,9 @@ public:
                             snprintf(sb, sizeof sb, "\",\"code\":\"\",\"km\":%.1f,\"src\":\"%s\"}",
                                      st.km, dabTxSourceLabel(st.src));
                         j += "{\"site\":\"" + esc(st.site) + "\",\"area\":\"" + esc(st.area) + sb;
+                        // ★ ERP and height inside the object: sb closed it, so open it again (2026-11-25).
+                        const std::string specs = dabTxSpecsJson(st.erpKw, st.heightM, st.heightRef);
+                        if (!specs.empty()) { j.pop_back(); j += specs; j += '}'; }
                     }
                     j += "]";
                     licB = j.size();

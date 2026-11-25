@@ -122,6 +122,53 @@ class Netherlands(unittest.TestCase):
             NL.normalise('Site;Block\nX;5A\n')
 
 
+class PowerAndHeight(unittest.TestCase):
+    """★★ 2026-11-25: each regulator's ERP and height, only as published — never borrowed or guessed."""
+
+    def test_parse_power(self):
+        self.assertAlmostEqual(D.parse_power_kw('270 W'), 0.27)
+        self.assertAlmostEqual(D.parse_power_kw('1.2 kW'), 1.2)
+        self.assertAlmostEqual(D.parse_power_kw('1,2 kW'), 1.2)
+        for bad in ('', None, '?', '12 dBW', '0 W'):
+            self.assertEqual(D.parse_power_kw(bad), 0.0, bad)
+        self.assertEqual(D.fmt_kw(5), '5.0f')
+        self.assertEqual(D.fmt_kw(0.316), '0.316f')
+
+    def test_switzerland_power_only_for_a_single_service_site(self):
+        f1 = _ch_feature(2679520, 1244780, 'KERNS STEINACHER', 'DAB+', 'SRG  D01', '12C')
+        f1['properties']['power'] = '270 W'
+        f2 = _ch_feature(2611000, 1268000, 'BETTINGEN S CHRISCHONA', 'DAB+,RADIO', 'SRG  D01,Radio X', '12C,94.2 MHz')
+        f2['properties']['power'] = '180 kW'                     # the FM's figure, not the DAB's
+        rows = {r.site: r for r in CH.normalise({'features': [f1, f2]})}
+        self.assertAlmostEqual(rows['Kerns Steinacher'].erp_kw, 0.27)
+        self.assertEqual(rows['Bettingen s Chrischona'].erp_kw, 0.0)
+        self.assertEqual(rows['Kerns Steinacher'].height_ref, D.HT_NONE)
+
+    def test_czechia_erp_watts_and_site_altitude(self):
+        rows = CZ.normalise(CZ_HEADER +
+            'BEROUN,12C,V,"Vysílací síť A",0x2005,402,316.00,227.36,14,3,22,49,58,15,"DAB Final Lic",14.0561,49.9708,2\n')
+        self.assertAlmostEqual(rows[0].erp_kw, 0.316)
+        self.assertEqual((rows[0].height_m, rows[0].height_ref), (402, D.HT_SITE_ASL))
+
+    def test_netherlands_erp_and_effective_height(self):
+        rows = NL.normalise('Opstelpunt;Coord OL;Coord NB;Kanaal;Bandgrenzen;ERP(kW);Eff.Hoogte;Polarisatie;Provincie\n'
+                            'LOPIK;005E03 14.00;52N00 40.00;7D;193.296 - 194.832;3.16;332;V;Utrecht\n'
+                            'Blank;005E03 14.00;52N00 40.00;5A;174.160 - 175.696;;;V;Utrecht\n')
+        r = {x.block: x for x in rows}
+        self.assertAlmostEqual(r['7D'].erp_kw, 3.16)
+        self.assertEqual((r['7D'].height_m, r['7D'].height_ref), (332, D.HT_EFFECTIVE))
+        self.assertEqual((r['5A'].erp_kw, r['5A'].height_ref), (0.0, D.HT_NONE))
+
+    def test_header_tail_only_when_known(self):
+        buf = io.StringIO()
+        D.write_header(buf, [D.Site(0x8000, 0, 0, 'Lopik', 'Utrecht', 52.0, 5.05, '7D', 3, D.BY_BLOCK,
+                                    erp_kw=3.16, height_m=332, height_ref=D.HT_EFFECTIVE),
+                             D.Site(0x8000, 0, 0, 'Blank', 'Utrecht', 52.0, 5.05, '5A', 3, D.BY_BLOCK)], 'NL', 'rdi', 'n')
+        t = buf.getvalue()
+        self.assertIn('"7D", 3, 1, 3.16f, 332, 3 },', t)
+        self.assertIn('"5A", 3, 1 },', t)
+
+
 class Header(unittest.TestCase):
     def test_provenance_and_rows(self):
         buf = io.StringIO()
