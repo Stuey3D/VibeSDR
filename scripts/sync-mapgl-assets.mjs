@@ -71,7 +71,12 @@ console.log(`assets/mapgl: ${files.length} files, ${(total / 1048576).toFixed(1)
  *   directory over-zooms the basic pack, as the app does without the download.
  * ★★ RUN BEFORE `wrangler deploy` in directory/ — a stale copy deploys as happily as a fresh one. */
 const DIR_OUT = path.join(root, 'directory/public/mapgl');
+/* ★★ THE DIRECTORY-ONLY WATER OVERLAY (2026-11-25, the community map) is not one of the shared files — it is built by V12
+ *  scripts/gen-river-areas.mjs --overlay and committed here — so the wipe below keeps it. */
+const DIR_ONLY = ['vibemap-water.pmtiles', 'vibemap-water.js'].filter((f) => existsSync(path.join(DIR_OUT, f)))
+  .map((f) => [f, readFileSync(path.join(DIR_OUT, f))]);
 rmSync(DIR_OUT, { recursive: true, force: true }); mkdirSync(path.join(DIR_OUT, 'vendor'), { recursive: true });
+for (const [f, buf] of DIR_ONLY) writeFileSync(path.join(DIR_OUT, f), buf);
 for (const f of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles', 'icons', 'fonts']) cpSync(path.join(BUILD, f), path.join(DIR_OUT, f), { recursive: true });
 for (const [src, name] of [['web/mapkit/vendor/maplibre-gl.js', 'maplibre-gl.js'], ['web/mapkit/vendor/maplibre-gl.css', 'maplibre-gl.css'],
                            ['web/mapkit/vendor/pmtiles.js', 'pmtiles.js'], ['web/mapkit/vibemapgl.js', 'vibemapgl.js'],
