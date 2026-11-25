@@ -969,6 +969,11 @@ struct ServerConfig {
     int         galleryMb = 100;
     bool        galleryPublic = true;
     bool        gallerySaveLive = true;
+    /** ★★ V12 beta94 THE COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md): "Share to the VibeSDR community map" — MACHINE-level, the
+     *  owner's choice, OFF by default. On: aircraft, ships, DSC, NAVTEX and NDB this server heard are offered at
+     *  /vibeserver/community.json, and the directory lists the server as a contributor. A PIN or a private gallery still
+     *  rules (vibe_community.h). */
+    bool        communityMap = false;
     /** ★★ V12 beta90 PSK REPORTER (android/app/src/main/cpp/vibe_spot_report.h, docs/v12/PSK-REPORTER.md) — MACHINE-level,
      *  beside Background Decoding on the setup page: every radio's digital spots go to PSK Reporter under ONE receiver
      *  callsign. OFF by default; nothing is sent without `pskrCall`. `pskrAntenna` is free text ("" = each radio's own

@@ -243,6 +243,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_mapdata.h"   // the bundled vector map, served from DISK — see the header
 #include "vibe_mapgl.h"     // the GPU map's files (renderer, style, glyphs, PMTiles) — see the header
 #include "vibe_proxy.h"
+#include "vibe_community.h"     // ★ V12 beta94 the COMMUNITY MAP: what this server shares, when the owner says so
 #include "vibe_cors.h"          // ★ beta93: who may read this server cross-origin (the page reads direct)
 #include "vibe_admin_ticket.h"
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
@@ -7000,6 +7001,10 @@ static vibe::bg::Config    g_bgCfg;
 static std::atomic<int>    g_bgCfgGen{0};             // ★ bumped on every change — a running profile restarts on it
 static std::atomic<bool>   g_gallerySaveLive{true};   // ★ keep a LISTENER's decodes too (Stuart: default ON)
 static std::atomic<bool>   g_galleryPublic{true};     // ★ the gallery is everyone's to read unless the owner says not
+/** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h, docs/v12/COMMUNITY-MAP.md): the owner's "Share to the VibeSDR community
+ *  map" switch — OFF unless the owner turns it on. One build of what is shared per vibecommunity::kCacheSec, per process. */
+static std::atomic<bool>   g_communityMap{false};
+static vibecommunity::Cache g_communityCache;
 // ★ This server's position, for the FT8 summary's "furthest" (setReceiverPosition). NaN = none set.
 static std::atomic<double> g_bgLat{NAN}, g_bgLon{NAN};
 /** ★★ V12 beta90 THE STATION STORE (vibe_station_store.h, docs/v12/DIGI-MODES-MAP.md): every station this radio's
@@ -7472,11 +7477,14 @@ bool navStationsValid(const NavShared::Stations& c, const std::string& key, long
     return c.key == key && (since <= 0 || now - c.at < navStationsTtl(since));
 }
 /** ★ The stations map for `since` — from the cache when it is good (*hit), else scanned now (as before the warm-up). */
-std::string navStationsJson(long since, int64_t now, bool* hit, bool fromClient = true) {
+/** ★★ V12 beta94 `withRx` false (the COMMUNITY MAP, vibe_community.h): the same scan and cache, answered with rx = null — no
+ *  receiver position, no distances from it (the scan itself still places with the receiver, as for every reader). */
+std::string navStationsJson(long since, int64_t now, bool* hit, bool fromClient = true, bool withRx = true) {
     auto& g = vibe::gallery::shared();
     auto& s = navShared();
     const std::string key = navKey(g.kindStamp("navtex"));
-    const double rxLat = g_bgLat.load(), rxLon = g_bgLon.load();
+    const double scanLat = g_bgLat.load(), scanLon = g_bgLon.load();
+    const double rxLat = withRx ? scanLat : NAN, rxLon = withRx ? scanLon : NAN;
     {
         std::lock_guard<std::mutex> lk(s.cMtx);
         if (fromClient) { s.asked[since] = now; if (s.asked.size() > 8) s.asked.erase(s.asked.begin()); }
@@ -7489,7 +7497,7 @@ std::string navStationsJson(long since, int64_t now, bool* hit, bool fromClient 
     const vibe::navmap::EachLine each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
     const auto keys = vibe::navwarn::seriesKeys(g.dir() + "/navtex-warn.idx");
     const vibe::navmap::SeriesOf seriesOf = [&keys](const std::string& f) { auto it = keys.find(vibe::navwarn::nameHash(f)); return it == keys.end() ? std::string() : it->second; };
-    auto r = have ? vibe::navmap::scan(each, rxLat, rxLon, since ? now - since : 0, [](const std::string& f) { return navReadText(f); }, seriesOf) : vibe::navmap::Result{};
+    auto r = have ? vibe::navmap::scan(each, scanLat, scanLon, since ? now - since : 0, [](const std::string& f) { return navReadText(f); }, seriesOf) : vibe::navmap::Result{};
     std::string j = vibe::navmap::toJson(r, rxLat, rxLon, now);
     std::lock_guard<std::mutex> lk(s.cMtx);
     if (s.stations.size() > 8) s.stations.clear();
@@ -7568,6 +7576,99 @@ vibe::navwarm::Worker& navWarmWorker() {
 }  // namespace vsnav
 using vsnav::navShared; using vsnav::navSyncLocked; using vsnav::navPlacedFreshLocked; using vsnav::navKey; using vsnav::navStationsJson;
 using vsnav::g_navWarmFirstTick; using vsnav::navWarmNow; using vsnav::navWarmWorker;
+
+/* ══ V12 beta94 THE COMMUNITY MAP — what this server shares (vibe_community.h; docs/v12/COMMUNITY-MAP.md) ═══════════════
+ * ★★★ Every source is the MACHINE's — the shared aircraft table, the gallery and its ship store, the NDB day cards — so the
+ *     front door and every radio answer the same. Each section reuses its own endpoint's format and caps (vibe_community.h).
+ * ★★ Locked by a PIN → nothing; a private gallery → aircraft only; a mode the owner switched off → left out. */
+static bool communityPinLocked() {
+    std::lock_guard<std::mutex> lk(g_vsMtx);
+    return !g_vsSecret.empty() || !g_vsRadioSecret.empty();
+}
+/** "" = shares; else the word the answer gives ("off", "pin"). */
+static std::string communityWhyNot() {
+    if (!g_communityMap.load()) return "off";
+    if (communityPinLocked()) return "pin";
+    return "";
+}
+static std::string communityBuild(std::vector<std::string>& layersOut) {
+    using namespace vibecommunity;
+    const int64_t nowMs = vibeavshare::wallMs(), now = nowMs / 1000;
+    std::vector<Section> secs;
+    // ── aircraft (ADS-B, ACARS, VDL2, HFDL — the shared table, /vibeserver/aircraft.json's format) ──
+    if (!(vsModeBlocked("adsb") && vsModeBlocked("avdata") && vsModeBlocked("hfdl"))) {
+        std::vector<vibeavshare::GsHeard> gs;
+        int64_t adsbLiveMs = 0;
+        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - kAircraftAgeSec * 1000, &gs, &adsbLiveMs), nowMs);
+        if (vsModeBlocked("adsb")) rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return w.srcMask == (1u << vibeavshare::kAdsb); }), rows.end());
+        if (!rows.empty()) {
+            Section a; a.key = "aircraft"; a.layers = aircraftLayers(rows);
+            a.json = vibeavshare::toJson(rows, gs, nowMs, [](const std::string& l) { return std::string(vibeavi::labelName(l)); },
+                [](int id, std::string& name, double& lat, double& lon) {
+                    for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
+                    return false;
+                }, adsbLiveMs, vsModeBlocked("adsb"), vibeavinfo::extraFn());
+            secs.push_back(std::move(a));
+        }
+    }
+    auto& g = vibe::gallery::shared();
+    // ★★ THE GALLERY'S SECTIONS ONLY WHEN THE GALLERY IS EVERYONE'S (galleryPublic)
+    if (g_galleryPublic.load() && !g.dir().empty()) {
+        // ── ships (the shared ship store, /vibeserver/gallery/ais-ships.json's format) ──
+        if (!vsModeBlocked("ais") && !vsModeBlocked("aisstore")) {
+            vibeais::store::Query q;
+            q.sinceUtc = now - kShipsSinceSec; q.rangeKm = 0; q.rxLat = NAN; q.rxLon = NAN; q.tracks = false; q.limit = kShipsMax;
+            size_t total = 0;
+            const auto v = vibeais::store::read(g.dir(), q, &total);
+            bool placed = false;
+            for (const auto& r : v) if (r.lat != vibeais::store::kNoPos) { placed = true; break; }
+            if (placed) { Section sh; sh.key = "ships"; sh.layers = { "ais" }; sh.json = vibeais::store::toJson(v, now, false, total, g.dir()); secs.push_back(std::move(sh)); }
+        }
+        // ── DSC (the gallery's DSC items, /vibeserver/gallery.json?kind=dsc's format) ──
+        if (!vsModeBlocked("dsc")) {
+            std::string j = g.listJson("dsc", kDscMax, -1, std::string(), kDscSinceSec);
+            if (j.find("\"plat\":") != std::string::npos) { Section d; d.key = "dsc"; d.layers = { "dsc" }; d.json = std::move(j); secs.push_back(std::move(d)); }
+        }
+        // ── NAVTEX stations (navtex-stations.json's format, rx = null) ──
+        if (!vsModeBlocked("navtex")) {
+            bool hit = false;
+            std::string j = navStationsJson(kNavtexSinceSec, now, &hit, /*fromClient=*/false, /*withRx=*/false);
+            if (j.find("\"stations\":[{") != std::string::npos) { Section n; n.key = "navtex"; n.layers = { "navtex" }; n.json = std::move(j); secs.push_back(std::move(n)); }
+        }
+        // ── NDB (today's and yesterday's day cards — the server's day, every radio — in the NdbLog shape, no km / brg) ──
+        if (!vsModeBlocked("ndb")) {
+            std::vector<NdbRow> rows;
+            for (int64_t day = now / 86400 - 1; day <= now / 86400; ++day) {
+                const std::string slot = "ndbsum-" + vibe::gallery::utcStamp(day * 86400, "%Y-%m-%d");
+                std::string f;
+                g.forEachLive("ndb", [&](const std::string& l) { if (vibe::gallery::lineStr(l, "s") == slot) f = vibe::gallery::lineStr(l, "f"); });
+                std::string body;
+                if (f.empty() || !g.readItem(f, body, 1u << 20)) continue;
+                const size_t sa = body.find(std::string("\n") + vibe::ndbgal::kSetAsideHeading + "\n");
+                if (sa != std::string::npos) body.resize(sa + 1);
+                for (const auto& c : vibe::ndbgal::parseCard(body, day)) {
+                    if (!c.unlikely.empty()) continue;   // ★ a listed match the server itself doubts is not put on a public map
+                    NdbRow r; r.ident = c.ident; r.name = c.name; r.cc = c.cc; r.hz = c.hz; r.lat = c.lat; r.lon = c.lon;
+                    r.best = c.best; r.first = c.first; r.last = c.last;
+                    rows.push_back(std::move(r));
+                }
+            }
+            std::string j = ndbJson(std::move(rows), now);
+            if (!j.empty()) { Section n; n.key = "ndb"; n.layers = { "ndb" }; n.json = std::move(j); secs.push_back(std::move(n)); }
+        }
+    }
+    return assemble(now, secs, kMaxBytes, &layersOut);
+}
+/** ★ What vibeserver.json says (and the directory publishes): `,"communityMap":true,"communityLayers":[…]` — only while the
+ *  server shares. The layers come from the last build, at most 10 minutes old (a status read never forces a fresh one
+ *  sooner). Nothing at all when it does not share, so an owner's "off" leaves no trace in the listing. */
+static std::string vsCommunityStatusJson() {
+    if (!communityWhyNot().empty()) return std::string();
+    const auto c = g_communityCache.get(vibeavshare::wallMs() / 1000, 600, communityBuild);
+    std::string j = ",\"communityMap\":true,\"communityLayers\":[";
+    for (size_t i = 0; i < c.layers.size(); i++) j += (i ? ",\"" : "\"") + c.layers[i] + "\"";
+    return j + "]";
+}
 /** ★ Called by the housekeeping tick (every ~2 s): starts the warm-up thread once, then kicks it. Costs a few atomics. */
 static void vsNavWarmTick() {
     if (g_navWarmFirstTick.load() <= 0) g_navWarmFirstTick.store(navWarmNow());
@@ -27585,6 +27686,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/conditions", 0) == 0
                 // ★★ V12: the GALLERY is the machine's — one directory every radio writes into (vibe_gallery.h).
                 || path0.rfind("/vibeserver/gallery", 0) == 0
+                // ★★ V12 beta94 the COMMUNITY MAP — the machine's shared tables and gallery, like the two above
+                || path0.rfind("/vibeserver/community.json", 0) == 0
                 // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
                 //   shared by every radio process, and the setup page that asks for it is served
                 //   by this door. Refusing it here made the page report "could not reach the
@@ -29581,6 +29684,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              //       must read a MISSING key as "ordinary receiver" — which is
                              //       what `!== true` gives for free.
                              + (frontDoorOnly ? std::string(",\"frontDoor\":true") : std::string())
+                             // ★★ V12 beta94 the COMMUNITY MAP: present only while the owner shares (vibe_community.h)
+                             + vsCommunityStatusJson()
                              // ★ The R36S handheld profile (setHandheld): the page drops every server-only piece of UI.
                              + (g_vsHandheld.load() ? std::string(",\"handheld\":true") : std::string())
                              + ",\"rangeLo\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
@@ -30131,6 +30236,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply("200 OK", "{\"ok\":true,\"removed\":" + std::to_string(n) + "}"); return;
             }
             reply("404 Not Found", "{\"ok\":false,\"error\":\"unknown DX log request\"}");
+            return;
+        } else if (reqLine.rfind("GET /vibeserver/community.json", 0) == 0 || reqLine.rfind("HEAD /vibeserver/community.json", 0) == 0) {
+            /* ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h, docs/v12/COMMUNITY-MAP.md): what this server shares — only
+             *  while the owner's switch is on and no PIN locks it. Off = 404 with {"on":false,"why":…} and nothing else.
+             *  ★ One build per kCacheSec whoever asks; the browser keeps it as long (Cache-Control), and an unchanged body
+             *    answers If-None-Match with 304. CORS: `*` here, and vibe_cors.h echoes the directory's own origin. */
+            const bool head = reqLine.rfind("HEAD", 0) == 0;
+            const std::string why = communityWhyNot();
+            std::string status = "200 OK", body, extra;
+            if (!why.empty()) { status = "404 Not Found"; body = vibecommunity::offJson(why); extra = "Cache-Control: no-store\r\n"; }
+            else {
+                const auto c = g_communityCache.get(vibeavshare::wallMs() / 1000, vibecommunity::kCacheSec, communityBuild);
+                const std::string& inm = ifNoneMatch;
+                extra = "Cache-Control: public, max-age=" + std::to_string((long long)vibecommunity::kCacheSec) + "\r\nETag: " + c.tag + "\r\n";
+                if (!inm.empty() && inm.find(c.tag) != std::string::npos) status = "304 Not Modified";
+                else body = c.body;
+            }
+            sock->sendstr("HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Access-Control-Expose-Headers: ETag\r\nX-Content-Type-Options: nosniff\r\n" + extra
+                          + "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + (head ? std::string() : body));
+            sock->close();
             return;
         } else if (reqLine.rfind("GET /vibeserver/aircraft.json", 0) == 0) {
             /* ★★ V12 2026-11-16 THE AVIATION MAP's aircraft (vibe_aircraft_share.h): every aircraft ANY radio on this machine
@@ -43435,6 +43561,13 @@ void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publi
     //    unlisted idents (data carriers read as Morse) on the cards already written are set aside (vibe_ndb_gallery_clean.h).
     //    After the first pass this is one stat().
     vibe::ndbgal::cleanUniformIdents(g);
+}
+void LocalSdrShim::setCommunityMap(bool on) {
+    if (g_communityMap.exchange(on) != on) {
+        g_communityCache.clear();
+        LOGI("community map: %s", on ? "this server SHARES what it hears (aircraft, ships, DSC, NAVTEX, NDB) to the VibeSDR community map"
+                                     : "off (nothing shared)");
+    }
 }
 void LocalSdrShim::setGalleryCardLayout(const std::string& filesDir) {
     auto& c = vibe::gallery::cardLayout();

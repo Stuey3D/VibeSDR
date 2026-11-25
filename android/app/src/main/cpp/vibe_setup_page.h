@@ -895,6 +895,24 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         or by a listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.</div>
     </div>
 
+      <!-- ★★ V12 beta94 THE VibeSDR COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md, vibe_community.h). MACHINE-level, OFF by
+           default — the owner's choice. Beside the gallery because it is the same question: where what the decoders hear goes. -->
+      <div class="card" id="communityCard">
+        <h2>VibeSDR community map</h2>
+        <p class="why">One world map of aircraft and shipping that every VibeServer owner can add to: ADS-B, ACARS, VDL2 and
+          HFDL aircraft, AIS ships, DSC positions, the NAVTEX stations and NDB beacons heard. A link to it is on the
+          directory page.</p>
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="communityMap" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Share to the VibeSDR community map</span></label>
+        <div class="hint">Shared: what the stations themselves broadcast &mdash; aircraft and ships' own positions, the
+          NAVTEX stations and NDB beacons this server heard, and positions sent in DSC calls &mdash; with this server's
+          name and its four-character grid square from the directory. Never this server's exact position. Only what
+          this server's radios actually decode appears. A PIN on the server, or a gallery that only you may see, still
+          rules: a PIN shares nothing, a private gallery shares aircraft only. The server must be listed in the
+          directory (with a tunnel or an https address) for the map to find it.</div>
+      </div>
+
       <!-- ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md). MACHINE-level:
            every radio's digital spots, one receiver callsign. Beside the gallery (and named under Background Decoding on
            the radio tab), because it is the same question — where what the decoders hear goes. OFF by default. -->
@@ -7330,6 +7348,8 @@ function fill() {
   $("galleryMb").value = String(cfg.galleryMb != null ? cfg.galleryMb : 100);
   $("galleryPublic").checked = cfg.galleryPublic !== false;
   $("gallerySaveLive").checked = cfg.gallerySaveLive !== false;
+  // ★★ V12 beta94 the community map — absent = OFF (what an older config means)
+  if ($("communityMap")) $("communityMap").checked = cfg.communityMap === true;
   // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = OFF (what an older config means).
   if ($("pskrOn")) {
     $("pskrOn").checked = cfg.pskrOn === true;
@@ -9033,6 +9053,7 @@ function stashServer() {
   cfg.galleryMb = Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0);
   cfg.galleryPublic = $("galleryPublic").checked;
   cfg.gallerySaveLive = $("gallerySaveLive").checked;
+  if ($("communityMap")) cfg.communityMap = $("communityMap").checked;
   if ($("pskrOn")) {
     cfg.pskrOn = $("pskrOn").checked; cfg.pskrCall = pskrCallValue(); cfg.pskrAntenna = $("pskrAntenna").value.trim();
     cfg.wsprnetOn = $("wsprnetOn").checked; cfg.wsprnetCall = wsprnetCallValue(); cfg.dmrIdLookup = $("dmrIdLookup").checked;
@@ -9075,6 +9096,7 @@ function collect() {
     galleryMb:        Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0),
     galleryPublic:    $("galleryPublic").checked,
     gallerySaveLive:  $("gallerySaveLive").checked,
+    communityMap:     $("communityMap") ? $("communityMap").checked : false,   // ★★ V12 beta94 the community map
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (machine-level)
     pskrOn:           $("pskrOn") ? $("pskrOn").checked : false,
     pskrCall:         $("pskrOn") ? pskrCallValue() : "",

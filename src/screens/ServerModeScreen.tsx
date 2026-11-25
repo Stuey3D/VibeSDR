@@ -408,6 +408,8 @@ const K = {
   dxScan: 'vs_dxscan',
   /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
+  /** ★★ V12 beta94 the COMMUNITY MAP (vibe_community.h) — the owner's switch. Absent = off. */
+  communityMap: 'vs_communitymap',
   /** ★★ V12 beta90 PSK Reporter (switch, receiver callsign, antenna text), "Also send WSPR spots to WSPRnet", and the
    *  DMR ID lookup (RadioID.net). Absent = off / empty. */
   pskrOn: 'vs_pskron', pskrCall: 'vs_pskrcall', pskrAntenna: 'vs_pskrantenna', wsprnetOn: 'vs_wsprneton', wsprnetCall: 'vs_wsprnetcall', dmrIdLookup: 'vs_dmridlookup',
@@ -689,6 +691,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [galleryMb, setGalleryMb] = useState(100);
   const [galleryPublic, setGalleryPublic] = useState(true);
   const [gallerySaveLive, setGallerySaveLive] = useState(true);
+  const [communityMap, setCommunityMap] = useState(false);   // ★★ V12 beta94 off unless the owner says
   const [galDisk, setGalDisk] = useState<{ freeBytes: number; usedBytes: number } | null>(null);
   /** ★★ V12 beta90 PSK REPORTER — off by default; the callsign is required (nothing is sent without one). */
   const [pskrOn, setPskrOn] = useState(false);
@@ -1759,6 +1762,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
+          { const cm = g(K.communityMap); if (cm != null) setCommunityMap(cm === '1'); }
           // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = off
           setPskrOn(g(K.pskrOn) === '1'); setPskrCall(g(K.pskrCall) ?? ''); setPskrAntenna(g(K.pskrAntenna) ?? '');
           setWsprnetOn(g(K.wsprnetOn) === '1'); setWsprnetCall(g(K.wsprnetCall) ?? ''); setDmrIdLookup(g(K.dmrIdLookup) === '1');
@@ -2379,7 +2383,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
-    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
+    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson,
     rspCard, ppbText,
@@ -2435,6 +2439,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★★ V12 the idle DX scanner (RadioConfig::dxScan) — VibeServerBoot applies it; the private DAB scan engine drops it
     dxScan: live.current.dxJson,
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
+    communityMap: live.current.communityMap,   // ★★ V12 beta94
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — VibeServerBoot applies them on every start
     pskrOn: live.current.pskrOn, pskrCall: live.current.pskrCall, pskrAntenna: live.current.pskrAntenna,
     wsprnetOn: live.current.wsprnetOn, wsprnetCall: live.current.wsprnetCall, dmrIdLookup: live.current.dmrIdLookup,
@@ -2617,6 +2622,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
       [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
+      [K.communityMap, live.current.communityMap ? '1' : '0'],
       [K.pskrOn, live.current.pskrOn ? '1' : '0'], [K.pskrCall, live.current.pskrCall], [K.pskrAntenna, live.current.pskrAntenna],
       [K.wsprnetOn, live.current.wsprnetOn ? '1' : '0'], [K.wsprnetCall, live.current.wsprnetCall], [K.dmrIdLookup, live.current.dmrIdLookup ? '1' : '0'],
       [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
@@ -3617,6 +3623,27 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
                 Off: only background decoding is kept. Each item says whether it was decoded in the background or by a
                 listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.
+              </Text>
+            </View>
+
+            {/* ★★ V12 beta94 THE VibeSDR COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md) — the Setup page's card, the same words.
+                Off by default; saved on the next Start, like its neighbours. */}
+            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>COMMUNITY MAP</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Share to the VibeSDR community map
+                </Text>
+                <Switch value={communityMap}
+                  onValueChange={(v) => { setCommunityMap(v); AsyncStorage.setItem(K.communityMap, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                One world map of aircraft and shipping that every VibeServer owner can add to, linked from the directory page.
+                Shared: what the stations themselves broadcast {'—'} aircraft and ships{'’'} own positions, the NAVTEX stations
+                and NDB beacons heard, positions sent in DSC calls {'—'} with this server{'’'}s name and its four-character grid
+                square. Never this server{'’'}s exact position. Only what this server{'’'}s radio actually decodes appears. A PIN
+                shares nothing; a gallery only you may see shares aircraft only. The server must be listed in the directory.
               </Text>
             </View>
 

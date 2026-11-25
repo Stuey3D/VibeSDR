@@ -679,6 +679,20 @@ std::string buildStatus(int port) {
         const std::string raw = jsonRawStr(ident, k);
         if (!raw.empty()) j += std::string(",\"") + k + "\":\"" + raw + "\"";
     }
+    /* ★★ V12 beta94 THE COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md): a server whose owner shares says so, with the layers it
+     *  carries, so the directory can list it as a contributor. Absent when it does not share — copied only when true, and
+     *  only the known layer words (the Worker checks them again). */
+    if (jsonBool(ident, "communityMap")) {
+        std::string layers;
+        const size_t a = ident.find("\"communityLayers\":[");
+        const size_t b = a == std::string::npos ? a : ident.find(']', a);
+        if (b != std::string::npos) {
+            const std::string list = ident.substr(a, b - a);
+            for (const char* w : { "adsb", "acars", "vdl2", "hfdl", "ais", "dsc", "navtex", "ndb" })
+                if (list.find(std::string("\"") + w + "\"") != std::string::npos) layers += std::string(layers.empty() ? "\"" : ",\"") + w + "\"";
+        }
+        j += ",\"communityMap\":true,\"communityLayers\":[" + layers + "]";
+    }
     // ★ The contract this server speaks (docs/PROTOCOL.md) — a client greys a server out by these.
     if (jsonNum(ident, "proto", -1) >= 0)
         j += ",\"proto\":" + std::to_string((int)jsonNum(ident, "proto", 0))

@@ -90,6 +90,44 @@ inline std::vector<std::vector<std::pair<float, float>>> outlines(const std::str
     return rings;
 }
 
+/** ★★ V12 beta94 ONE READER OF THE DAY'S CARD (the COMMUNITY MAP, docs/v12/COMMUNITY-MAP.md, reads it too): each beacon line
+ *  "last · first · ident · kHz · best SNR · distance · bearing · country · station" of `whole` (the card's text, the set-aside
+ *  section already cut off by the caller), its times on UTC day `day`. The position comes from the published list (the card
+ *  does not carry it) — NaN when the ident is not listed on that frequency. A line that does not parse is skipped. */
+struct CardBeacon {
+    std::string ident, name, cc, unlikely;
+    double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN;
+    float best = -99;
+    int64_t first = 0, last = 0;
+};
+inline std::vector<CardBeacon> parseCard(const std::string& b, int64_t day) {
+    std::vector<CardBeacon> out;
+    const size_t at = b.find("Each beacon, most recently heard first");
+    if (at == std::string::npos) return out;
+    auto hms = [&](const std::string& s, int64_t& o) { int h, m, sec; if (std::sscanf(s.c_str(), "%2d:%2d:%2d", &h, &m, &sec) != 3) return false; o = day * 86400 + h * 3600 + m * 60 + sec; return true; };
+    size_t p = b.find('\n', at);
+    while (p != std::string::npos && p + 1 < b.size() && out.size() < 4096) {
+        const size_t e = b.find('\n', p + 1);
+        const std::string line = b.substr(p + 1, e == std::string::npos ? std::string::npos : e - p - 1);
+        p = e;
+        std::vector<std::string> f; size_t q = 0;
+        for (;;) { const size_t d = line.find(kDot, q); if (d == std::string::npos) { f.push_back(line.substr(q)); break; } f.push_back(line.substr(q, d - q)); q = d + std::strlen(kDot); }
+        if (f.size() != 9) continue;
+        CardBeacon r;
+        if (!hms(f[0], r.last) || !hms(f[1], r.first)) continue;
+        r.ident = vibendb::cleanText(f[2], 6); r.hz = std::atof(f[3].c_str()) * 1e3; r.best = (float)std::atof(f[4].c_str());
+        if (r.ident.empty() || r.hz <= 0) continue;
+        if (f[5] != "-") { r.km = std::atof(f[5].c_str()); r.deg = std::atof(f[6].c_str()); }
+        r.cc = f[7] == "-" ? std::string() : f[7];
+        r.name = f[8].rfind("(not in", 0) == 0 ? std::string() : f[8];
+        { const size_t u = r.name.find(" (unlikely: "); if (u != std::string::npos) { r.unlikely = r.name.substr(u + 12, r.name.size() - u - 13); r.name.resize(u); } }
+        // ★ the position comes back from the published list (the card does not carry it)
+        for (const auto& n : vibendb::onFrequency(r.hz)) if (n.ident() == r.ident) { r.lat = n.lat(); r.lon = n.lon(); break; }
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
 class DayLog : public vibendb::Sink {
 public:
     static constexpr int64_t kCardSec = 60, kMapSec = 600;
@@ -254,27 +292,10 @@ private:
             if (!setAside_.empty() && setAside_.back() != '\n') setAside_ += '\n';
         }
         const std::string b = sa == std::string::npos ? whole : whole.substr(0, sa + 1);
-        const size_t at = b.find("Each beacon, most recently heard first");
-        if (at == std::string::npos) return;
-        auto hms = [&](const std::string& s, int64_t& out) { int h, m, sec; if (std::sscanf(s.c_str(), "%2d:%2d:%2d", &h, &m, &sec) != 3) return false; out = day_ * 86400 + h * 3600 + m * 60 + sec; return true; };
-        size_t p = b.find('\n', at);
-        while (p != std::string::npos && p + 1 < b.size()) {
-            const size_t e = b.find('\n', p + 1);
-            const std::string line = b.substr(p + 1, e == std::string::npos ? std::string::npos : e - p - 1);
-            p = e;
-            std::vector<std::string> f; size_t q = 0;
-            for (;;) { const size_t d = line.find(kDot, q); if (d == std::string::npos) { f.push_back(line.substr(q)); break; } f.push_back(line.substr(q, d - q)); q = d + std::strlen(kDot); }
-            if (f.size() != 9) continue;
+        for (const CardBeacon& c : parseCard(b, day_)) {
             Row r;
-            if (!hms(f[0], r.last) || !hms(f[1], r.first)) continue;
-            r.ident = vibendb::cleanText(f[2], 6); r.hz = std::atof(f[3].c_str()) * 1e3; r.best = (float)std::atof(f[4].c_str());
-            if (r.ident.empty() || r.hz <= 0) continue;
-            if (f[5] != "-") { r.km = std::atof(f[5].c_str()); r.deg = std::atof(f[6].c_str()); }
-            r.cc = f[7] == "-" ? std::string() : f[7];
-            r.name = f[8].rfind("(not in", 0) == 0 ? std::string() : f[8];
-            { const size_t u = r.name.find(" (unlikely: "); if (u != std::string::npos) { r.unlikely = r.name.substr(u + 12, r.name.size() - u - 13); r.name.resize(u); } }
-            // ★ the position comes back from the published list (the card does not carry it)
-            for (const auto& n : vibendb::onFrequency(r.hz)) if (n.ident() == r.ident) { r.lat = n.lat(); r.lon = n.lon(); break; }
+            r.ident = c.ident; r.hz = c.hz; r.best = c.best; r.first = c.first; r.last = c.last; r.km = c.km; r.deg = c.deg;
+            r.cc = c.cc; r.name = c.name; r.unlikely = c.unlikely; r.lat = c.lat; r.lon = c.lon;
             rows_[r.ident + "@" + std::to_string((long long)std::lround(r.hz / 500.0))] = r;
         }
     }

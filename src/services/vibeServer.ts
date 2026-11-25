@@ -165,6 +165,8 @@ export type VibeServerConfig = {
   galleryMb?: number;
   galleryPublic?: boolean;
   gallerySaveLive?: boolean;
+  /** ★★ V12 beta94 THE COMMUNITY MAP (vibe_community.h): the owner's "Share to the VibeSDR community map" (default OFF). */
+  communityMap?: boolean;
   /** ★★ V12 beta90 PSK Reporter: the owner's switch (default off), the receiver callsign (required), the antenna text
    *  ("" = the radio's port name), "Also send WSPR spots to WSPRnet" (default off); and the DMR ID lookup (default off). */
   pskrOn?: boolean;
@@ -398,6 +400,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,
+    communityMap: cfg.communityMap === true,   // ★★ V12 beta94 absent = OFF
     pskrOn: cfg.pskrOn === true,
     // ★ the RECEIVER's name as typed — case kept, letters/digits/'/'/'-', ≤ 20 (vibe_spot_report.h cleanCall; Stuart 11-21)
     pskrCall: (cfg.pskrCall ?? '').trim().replace(/[^A-Za-z0-9/-]/g, '').slice(0, 20),
