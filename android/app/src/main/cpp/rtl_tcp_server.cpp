@@ -80,10 +80,17 @@ struct RtlTcpServer::Impl {
     // IQ bytes dropped because the client's queue was full. Reset per client, so
     // the UI reports "this session" rather than a number the user can't clear.
     std::atomic<uint64_t> droppedBytes{0};
+    // ★ IQ bytes the RADIO has delivered since start, and whether its stream has ENDED (rtlsdr_read_async
+    //   returned while the server was still up — the dongle went away or the USB transfer failed). Both
+    //   exist so a server that is not streaming can say so: before them the screen showed "Good" for a
+    //   client receiving nothing, because "nothing dropped" was the only test (Sloper, 2026-11-25).
+    std::atomic<uint64_t> iqBytes{0};
+    std::atomic<bool>     usbEnded{false};
 
     // Fan the raw u8 IQ buffer to the connected client's send queue (drop-newest
     // if the client is too slow — never blocks the USB callback thread).
     void fanoutIq(const uint8_t* buf, size_t len) {
+        iqBytes.fetch_add(len, std::memory_order_relaxed);
         std::shared_ptr<Client> c;
         { std::lock_guard<std::mutex> lk(clientMtx); c = client; }
         if (!c || !c->alive.load()) return;
@@ -313,10 +320,20 @@ int RtlTcpServer::start(int fd, int /*vid*/, int /*pid*/,
         uint32_t bufLen = (uint32_t)((r * 2.0 * 0.032) / 512.0 + 0.5) * 512;
         if (bufLen < 16384)  bufLen = 16384;
         if (bufLen > 262144) bufLen = 262144;
-        rtlsdr_read_async(self->dev,
+        int rr = rtlsdr_read_async(self->dev,
             [](unsigned char* buf, uint32_t len, void* ctx) {
                 static_cast<Impl*>(ctx)->fanoutIq(buf, len);
             }, self, 0, bufLen);
+        if (self->running.load()) {
+            // ★ Not a stop: the radio's stream ended under a running server. Say so in the status (the
+            //   screen shows it) and drop the client, so its app reports a lost connection instead of a
+            //   live one that never draws anything.
+            self->usbEnded.store(true);
+            LOGE("the radio's IQ stream ended (rtlsdr_read_async returned %d) — the server sends no IQ until restarted", rr);
+            std::shared_ptr<Impl::Client> c;
+            { std::lock_guard<std::mutex> lk(self->clientMtx); c = self->client; }
+            if (c) { c->alive.store(false); c->qcv.notify_all(); if (c->sock) c->sock->close(); }
+        }
     });
 
     // Accept loop: single client; reap dead client each iteration.
@@ -330,6 +347,7 @@ int RtlTcpServer::start(int fd, int /*vid*/, int /*pid*/,
             { std::lock_guard<std::mutex> lk(self->clientMtx);
               haveClient = (self->client != nullptr); }
             if (haveClient) { sock->close(); continue; }   // single-client: refuse extras
+            if (self->usbEnded.load()) { sock->close(); continue; }   // ★ no radio stream: no "connected"
             std::string addr = sock->peerAddress();
             self->startClient(sock, addr.empty() ? std::string("client") : addr);
         }
@@ -393,6 +411,8 @@ RtlTcpServer::Status RtlTcpServer::getStatus() const {
     s.overrideRate = impl->overrideRate.load();
     s.droppedBytes = impl->droppedBytes.load(std::memory_order_relaxed);
     s.port         = impl->port;
+    s.iqBytes      = impl->iqBytes.load(std::memory_order_relaxed);
+    s.usbEnded     = impl->usbEnded.load();
     std::lock_guard<std::mutex> lk(impl->clientMtx);
     if (impl->client && impl->client->alive.load()) {
         s.clientConnected = true;

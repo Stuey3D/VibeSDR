@@ -79,5 +79,34 @@ try:
 except Exception:
     p.kill()
 
+print("rtl_dies: an RTL-SDR whose USB stream ends under a running server")
+p, first = run("rtl_dies", 41236)
+check(first.startswith("START OK"), f"server starts ({first})")
+if first.startswith("START OK"):
+    s = socket.create_connection(("127.0.0.1", 41236), timeout=3)
+    s.settimeout(0.5)
+    t0, eof = time.time(), False
+    while time.time() - t0 < 3:
+        try:
+            b = s.recv(65536)
+        except socket.timeout:
+            continue
+        except OSError:
+            eof = True; break
+        if not b:
+            eof = True; break
+    s.close()
+    check(eof, "the client is disconnected when the radio stops (not left 'connected' with no IQ)")
+    time.sleep(0.6)
+    try:
+        s = socket.create_connection(("127.0.0.1", 41236), timeout=3); s.settimeout(1.5)
+        try: b = s.recv(16)
+        except OSError: b = b""
+        s.close()
+    except OSError:
+        b = b""
+    check(b == b"", "a new client is not handed a header with no radio behind it")
+p.stdin.close(); p.wait(timeout=5)
+
 print("PASS" if not fails else f"FAILED: {len(fails)}")
 sys.exit(1 if fails else 0)

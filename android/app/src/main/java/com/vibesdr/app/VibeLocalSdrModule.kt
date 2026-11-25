@@ -1466,6 +1466,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putDouble("overrideRate", o.optLong("overrideRate", 0).toDouble())
             m.putDouble("droppedBytes", o.optLong("droppedBytes", 0).toDouble())
+            // ★ Is IQ actually flowing? The screen's LINK line reads these (rtl_tcp_server.h Status).
+            m.putDouble("iqBytes", o.optLong("iqBytes", 0).toDouble())
+            m.putBoolean("usbEnded", o.optBoolean("usbEnded", false))
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", r.optString("ip", ""))
             m.putDouble("cpu", r.optDouble("cpu", 0.0))
