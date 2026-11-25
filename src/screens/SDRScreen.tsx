@@ -77,8 +77,8 @@ import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satDopplerBadge, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowRemindOk, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -274,7 +274,8 @@ import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay, { galleryReader } from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
 import { orbViewMerge, type OrbView } from '../services/orbcomm';   // ★★ 2026-11-24 ORBCOMM in the SATELLITE box
-import { orbOverlayFrom } from '../utils/orbcommView';   // ★★ 2026-11-24 its slice and carriers on the waterfall
+import { orbOverlayFrom } from '../utils/orbcommView';
+import { xpdrListen, xpdrOverlayFrom, type XpdrStatus } from '../services/xpdr';   // ★★★ beta94 the transponder finder   // ★★ 2026-11-24 its slice and carriers on the waterfall
 import { skyRadioFromBase } from '../utils/skyPlot';
 import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
@@ -2781,7 +2782,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satOrbMax, setSatOrbMax] = useState(0);
   const satOrbMaxRef = useRef(0);
   /** ★★ 2026-11-24 the ORBCOMM pick's slice + carriers on the waterfall (from each status — it follows the dial) */
-  const satOrbOverlay = useMemo(() => (satDec === 'orbcomm' ? orbOverlayFrom(satOrb?.status) : null), [satDec, satOrb?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★★ beta94 the transponder finder's rows for this pick (services/xpdr.ts) */
+  const [satXp, setSatXp] = useState<XpdrStatus | null>(null);
+  const satOrbOverlay = useMemo(() => (satDec === 'orbcomm' ? orbOverlayFrom(satOrb?.status) : satDec === 'xpdr' ? xpdrOverlayFrom(satXp) : null), [satDec, satOrb?.status, satXp]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
    *  decoder on the listener's VFO B host; the app follows it on a SECOND DecoderClient ("vfo":"B", the server's exact
    *  parameters — it JOINS that run; one socket parses one decoder's frames) whose output goes to the SATELLITE box only.
@@ -2835,6 +2838,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satEnterRef = useRef<() => void>(() => {});
   const satCapRefreshRef = useRef<() => void>(() => {});   // ★★ beta94 set beside satCapRefresh (declared further down)
   useEffect(() => { AsyncStorage.getItem('vibe.satRemindLead').then((v) => { if (v) setSatRemLead(satRemindLead(v)); }).catch(() => {}); }, []);
+  /* ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows — this viewer's, kept by NORAD number so it carries
+   *  from server to server (a satellite this server does not list is ignored); null = All, the default. Reminders follow it. */
+  const [satShow, setSatShow] = useState<SatShow>(null);
+  const satShowRef = useRef<SatShow>(null); satShowRef.current = satShow;
+  useEffect(() => { AsyncStorage.getItem(SAT_SHOW_KEY).then((v) => setSatShow(satShowParse(v))).catch(() => {}); }, []);
+  const satShowSet = useCallback((f: SatShow) => {
+    setSatShow(f);
+    const v = satShowStore(f);
+    (v == null ? AsyncStorage.removeItem(SAT_SHOW_KEY) : AsyncStorage.setItem(SAT_SHOW_KEY, v)).catch(() => {});
+  }, []);
   const satSetToasts = useCallback((ts: SatRemindToast[]) => { satToastsRef.current = ts; setSatToasts(ts); }, []);
   const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); }, [satSetToasts]);
   const satRemBusy = satRemN > 0 || satToasts.length > 0;
@@ -2847,7 +2860,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
       }
       let ts = satToastsRef.current;
-      for (const r of satRemRef.current.due(now, lead, conn)) ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
+      const keep = (satPickedRef.current ?? satPendingRef.current)?.norad;
+      for (const r of satRemRef.current.due(now, lead, conn)) {
+        if (r.norad !== keep && !satShowRemindOk(satShowRef.current, satListRef.current, r.norad)) continue;   // ★★ beta94 hidden by SHOW: no reminder
+        ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
+      }
       ts = ts.filter((x) => now < x.r.los);   // ★ a pass that is over takes its banner with it
       satSetToasts(ts);
       setSatRemN(satRemRef.current.size);
@@ -6371,7 +6388,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ While RTTY AUTO's tuning guide is up it IS the status; the decoder's own state returns when it clears.
       onStatus: (s: string)  => { decStateText.current = s; if (!tuneHintText.current) queueDecoderStatus(s); },
       onSatTelemetry: (t) => { if (satDecRef.current) setSatTlm((prev) => satTelemetryMerge(prev, t)); },
-      onOrbcomm: (m) => { if (satDecRef.current === 'orbcomm') setSatOrb((prev) => orbViewMerge(prev, m)); },   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE-BEST 1.3 (fctlm; aprs T# / SONATE-2)
+      onOrbcomm: (m) => { if (satDecRef.current === 'orbcomm') setSatOrb((prev) => orbViewMerge(prev, m)); },
+      onXpdr: (st) => { if (satDecRef.current === 'xpdr') setSatXp(st); },   // ★★★ beta94 the transponder finder   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE-BEST 1.3 (fctlm; aprs T# / SONATE-2)
       onTuneHint: (audioHz: number) => {
         tuneHintText.current = tuneHintLabel(audioHz, String(client.current?.getStatus().mode ?? ''));
         queueDecoderStatus(tuneHintText.current || decStateText.current);
@@ -8272,7 +8290,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current || !satOnRef.current) return;
         satPendingRef.current = null; setSatPending(null); setSatWhy('');
         setSatPicked((prev) => {
-          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); setSatOrb(null); }
+          if (!prev || prev.norad !== pk.norad || prev.tx !== pk.tx) { setSatPicture(false); setSatPictureDone(false); setSatCwText(''); satVfoBReset(); setSatOrb(null); setSatXp(null); }
           return pk;
         });
         /* ★★ beta92 LRPT at the symbol rate the server attached it with, so the app JOINS the pick's run instead of
@@ -8286,6 +8304,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★★ 2026-11-24 ORBCOMM at the pick's own slice — JOINS its run (+ "max_carriers" when set by hand this session)
           decoderClient.current.orbcommParams = pk.decoder === 'orbcomm' && pk.params ? pk.params : null;
           decoderClient.current.orbcommMaxCarriers = satOrbMaxRef.current;
+          // ★★★ beta94 the transponder finder at the pick's own slice — JOINS its run
+          decoderClient.current.xpdrParams = pk.decoder === 'xpdr' && pk.params ? pk.params : null;
         }
         /* ★★★ beta92 THE PICK'S OWN PASSBAND (BPSK telemetry: 100–7600 Hz USB, the decoder's centre in the middle) — the
          *  server set it; the app shows and keeps exactly it each time the pick is confirmed. */
@@ -15282,7 +15302,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerHz={status.centerHz}
         bwHz={status.bwHz}
         tuneHz={status.frequency}
-        needleOffsetHz={satRo && (satRo.state === 'TRACK' || satRo.state === 'COAST') ? (satRo.offset ?? 0) : 0}
+        needleOffsetHz={satMarkerShiftHz(satRo) /* ★★★ beta94 offset less the follow: the dial already carries it */}
         /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25) — drawn only, never sent (cwList cwDrawnPassband);
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
@@ -16434,6 +16454,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           orbit={satOrbit?.geo ?? null} tcaIdx={satOrbit?.tcaIdx}
           telemetry={satTlm}
           orbcomm={satDec === 'orbcomm' ? satOrb : null}
+          xpdr={satDec === 'xpdr' ? satXp : null}
+          onXpdrListen={(r) => {   // ★★★ beta94 LISTEN: VFO A to the voice (USB) — an ordinary tune — then the finder follows it
+            markInteract();
+            const l = xpdrListen(r);
+            if (!l) return;
+            client.current?.tune(l.hz, l.mode as SDRMode);
+            decoderClient.current?.xpdrFollow(l.follow.id);
+          }}
           orbMax={satOrbMax}
           onOrbMax={(k) => {   // ★★ 2026-11-24 the manual fallback under AUTO: re-attach with "max_carriers" (0 = AUTO)
             markInteract();
@@ -16448,6 +16476,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           remindLead={satRemLead}
           onRemind={satRemToggle}
           onRemindLead={(v) => { setSatRemLead(v); AsyncStorage.setItem('vibe.satRemindLead', String(v)).catch(() => {}); }}
+          show={satShow} onShow={(f) => { markInteract(); satShowSet(f); }}
           mapOffered={satMapNow}
           onMap={() => { markInteract(); if (satPickedSat) openDigiModesMap({ layer: 'aprs', overlay: satMapOverlay(satPickedSat.name, satOrbit?.geo,
             { lat: satPickedSat.lat, lon: satPickedSat.lon, altKm: satAltKm(satPickedSat.rangeKm, satPickedSat.el) }) }); }}

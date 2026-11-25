@@ -68,6 +68,16 @@ struct Transmitter {
     /** ★★ V12 2026-11-24 ORBCOMM (docs/v12/ORBCOMM.md): a downlink the ORBCOMM decoder reads (vibe_orbcomm.h) — the
      *  satellite's own broadcast housekeeping decoded, subscriber messages shown RAW (never decoded). */
     bool orbcomm() const { return consumer == "orbcomm" || mode == "orbcomm"; }
+    /** ★★★ beta94 THE TRANSPONDER SIGNAL FINDER (docs/v12/TRANSPONDER-FINDER.md — Stuart 11-24, RS-44 with CW and SSB
+     *  contacts all over its passband: "open the satellite in iq mode and as soon as a carrier is detected it gives you a
+     *  button to listen to it"). A linear transponder and the bird's CW beacon beside it are ONE slice (linkXpdr): the
+     *  satellite-frame span both cover (xpdrLo…xpdrHi), the beacon in it (beaconHz, 0 = none), and whether the
+     *  transponder inverts (an LSB uplink comes down USB — every linear bird we list does; a note saying "non-inverting"
+     *  says otherwise). Set on BOTH the transponder and its beacon: picking either runs the finder over the whole span. */
+    double xpdrLo = 0, xpdrHi = 0, beaconHz = 0;
+    bool inverting = true;
+    bool xpdr() const { return xpdrHi > xpdrLo; }
+    double xpdrCentre() const { return 0.5 * (xpdrLo + xpdrHi); }
 };
 struct SatDef {
     std::string id, name;
@@ -84,6 +94,7 @@ struct SatDef {
  *  TEVEL-2 (downlinks unconfirmed), CAS-4A / XW-2 (re-entered), QO-100 (geostationary, no Doppler to correct).
  *  ★ Meteor frequencies and modes CHANGE ON ORBIT (brief §6.2 TRAP) — these are today's; a vibesdr.net sats.json
  *  (phase 2) replaces this list. */
+inline void linkXpdr(std::vector<SatDef>& defs);   // ★★★ beta94 (below): each transponder + its beacon = one finder span
 inline std::vector<SatDef> curatedCatalogue() {
     auto fm = [](const char* label, double hz, const char* note = "", double up = 0, double ctcss = 0) {
         Transmitter t; t.label = label; t.hz = hz; t.mode = "nfm"; t.loop = "fll"; t.upHz = up; t.ctcss = ctcss; t.note = note; return t; };
@@ -139,7 +150,47 @@ inline std::vector<SatDef> curatedCatalogue() {
                  {dig("LRPT", 137900000, "lrpt", "lrpt", 72000, "costas")}});
     v.push_back({"METEOR-M2-4", "Meteor-M2-4", 59051, "weather", "Weather images (LRPT); mode and frequency can change",
                  {dig("LRPT", 137900000, "lrpt", "lrpt", 72000, "costas")}});
+    linkXpdr(v);   // ★★★ beta94 each transponder and its beacon: one finder span
     return v;
+}
+
+/** ★★★ beta94 TRANSPONDER FINDER: join each linear transponder with its bird's CW beacon (the same band, within
+ *  kXpdrBeaconReachHz of the passband, the same catalogue mode name when both have one — AO-7's Mode B beacon goes with
+ *  Mode B) into one satellite-frame span, set on both (Transmitter::xpdrLo/xpdrHi/beaconHz). A transponder with no beacon
+ *  near it is a span of its own passband. "non-inverting" in the bird's or the downlink's note clears `inverting`. Called
+ *  on the built-in list and on every sats.json the mirror sends (the mirror knows nothing of it). */
+constexpr double kXpdrBeaconReachHz = 30000.0;
+inline void linkXpdr(std::vector<SatDef>& defs) {
+    auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
+    for (auto& d : defs) {
+        const bool nonInv = lower(d.note).find("non-inverting") != std::string::npos;
+        for (auto& t : d.tx) { t.xpdrLo = t.xpdrHi = t.beaconHz = 0; }
+        for (auto& t : d.tx) {
+            if (!t.passband() || !(t.mode == "usb" || t.mode == "lsb")) continue;
+            t.inverting = !(nonInv || lower(t.note).find("non-inverting") != std::string::npos);
+            double lo = t.hz, hi = t.hiHz;
+            Transmitter* beacon = nullptr;
+            for (auto& b : d.tx) {
+                if (&b == &t || b.passband() || b.mode != "cw" || !b.consumer.empty()) continue;
+                if (!t.modeName.empty() && !b.modeName.empty() && t.modeName != b.modeName) continue;
+                if (b.hz < t.hz - kXpdrBeaconReachHz || b.hz > t.hiHz + kXpdrBeaconReachHz) continue;
+                if (b.xpdr()) continue;   // ★ already another transponder's
+                beacon = &b; break;
+            }
+            if (beacon) { lo = std::min(lo, beacon->hz); hi = std::max(hi, beacon->hz); }
+            t.xpdrLo = lo; t.xpdrHi = hi; t.beaconHz = beacon ? beacon->hz : 0;
+            if (beacon) { beacon->xpdrLo = lo; beacon->xpdrHi = hi; beacon->beaconHz = beacon->hz; beacon->inverting = t.inverting; }
+        }
+    }
+}
+/** The transponder a linked beacon belongs to (its index), or −1 — a pick of the beacon opens the transponder's finder. */
+inline int xpdrOwnerOf(const SatDef& d, int txi) {
+    if (txi < 0 || txi >= (int)d.tx.size()) return -1;
+    const Transmitter& b = d.tx[(size_t)txi];
+    if (!b.xpdr() || b.passband()) return -1;
+    for (size_t k = 0; k < d.tx.size(); ++k)
+        if (d.tx[k].passband() && d.tx[k].xpdr() && d.tx[k].beaconHz == b.hz && d.tx[k].xpdrLo == b.xpdrLo) return (int)k;
+    return -1;
 }
 
 /** ★★ V12 2026-11-24 ORBCOMM: a bird of the ORBCOMM constellation (by name — the mirror's "ORBCOMM FM114"). */
@@ -262,6 +313,7 @@ inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::v
         defs.push_back(std::move(d)); els.push_back(e); haveEl.push_back(have);
     }
     if (defs.empty()) { err = "no satellite with a usable downlink"; return false; }
+    linkXpdr(defs);   // ★★★ beta94 each transponder and its beacon: one finder span (the mirror knows nothing of it)
     return true;
 }
 
@@ -358,6 +410,15 @@ constexpr double kOrbMaxSliceHz = 640000.0;
 constexpr double kOrbBandLoHz = 137.2e6, kOrbBandHiHz = 137.8e6;   ///< the channels in use (the directory's band listing)
 /** The band an ORBCOMM pick decodes: the listed band when the downlink is one, else the channels in use — its centre. */
 inline double orbcommBandCentreHz(const Transmitter& t) { return t.passband() ? t.centre() : 0.5 * (kOrbBandLoHz + kOrbBandHiHz); }
+/** ★★★ beta94 THE TRANSPONDER FINDER'S SLICE: the span (passband + beacon) and, either side, the whole Doppler swing (the
+ *  slice is cut FIXED on the span's satellite-frame centre — DecoderHost iqFixed — and the finder turns the Doppler out
+ *  itself, so every signal keeps its satellite-frame place all pass) plus kXpdrMarginHz for a dongle's error and a
+ *  station at the very edge. RS-44 (65 kHz with its beacon, 435 MHz): ~99 kHz. */
+constexpr double kXpdrMarginHz = 5000.0;
+constexpr double kXpdrDopplerFrac = 2.7e-5;   ///< vibe_sat_if.h kLeoDopplerFrac (the largest a low orbit gives)
+inline double xpdrSliceHz(const Transmitter& t) {
+    return (t.xpdrHi - t.xpdrLo) + 2.0 * (std::fabs(t.xpdrCentre()) * kXpdrDopplerFrac + kXpdrMarginHz);
+}
 /** ★★ beta92: half the CW passband a beacon pick listens with, centred on the prediction (so ±3 kHz is heard). */
 constexpr double kBeaconAudioHalfHz = 3000.0;
 /** ★★ beta92: a downlink whose pick runs the CW skimmer over kBeaconSkimHz (a satellite CW beacon). */
@@ -389,6 +450,18 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
      *  "treat it like the cw skimmer and have a wider filter of say 24k"). The CW SKIMMER over kBeaconSkimHz of IQ centred
      *  on the Doppler-corrected prediction (the host's IQ aim, DecoderHost::setIqAim — the window follows the pass), so a
      *  beacon a few kHz off the figure is still read, and its offset from the prediction is shown. */
+    /* ★★★ beta94 THE TRANSPONDER FINDER (docs/v12/TRANSPONDER-FINDER.md): a linear transponder — and its beacon, which is
+     *  one more CW row in it, not a pick of its own — runs "xpdr": every CW signal in the span skimmed and decoded, every
+     *  voice found and offered to LISTEN, on one Doppler-corrected slice (xpdrSliceHz) FIXED on the span's centre. */
+    if (t.xpdr()) {
+        char b[320];
+        std::snprintf(b, sizeof b, "\"width\":%d,\"centre\":%lld,\"lo\":%lld,\"hi\":%lld,\"beacon\":%lld,\"up\":%lld,\"inv\":%d,\"sb\":\"%s\"",
+                      (int)std::lround(xpdrSliceHz(t)), (long long)std::llround(t.xpdrCentre()), (long long)std::llround(t.xpdrLo),
+                      (long long)std::llround(t.xpdrHi), (long long)std::llround(t.beaconHz), (long long)std::llround(t.upHz),
+                      t.inverting ? 1 : 0, t.mode == "lsb" ? "lsb" : "usb");
+        params = b;
+        return "xpdr";
+    }
     if (beaconSkimmed(t)) { params ="\"width\":" + std::to_string((int)kBeaconSkimHz); return "cwskim"; }
     /* ★★ 2026-11-24 ORBCOMM: the decoder cuts its own slice at the dial — the bird's listed channel ± Doppler
      *  (kOrbNarrowHz), or the whole listed band (the mirror's 137.2–137.8 MHz when no single channel is known) — and finds
@@ -585,6 +658,7 @@ struct Track {
     double nominalHz = 0;          // the dial
     double shiftHz = 0;            // applied: model + trim (0 unless TRACK/COAST)
     double modelHz = 0, trimHz = 0, rateHzS = 0;
+    double followHz = 0;           // ★★★ beta94 the transponder finder's follow (part of shiftHz): where the person is
     double azDeg = 0, elDeg = -90, rangeKm = 0;
     double aos = 0, los = 0, maxElDeg = 0;   // the pass being tracked / armed for
     double ageDays = -1;
@@ -601,7 +675,11 @@ public:
     /** ★★ beta92 a telemetry decoder's trim (setDecoderTrim) moves slower still: 2 Hz a tick — a ramp its Costas loop
      *  follows with a degree or two of phase error, so a frame being read is not lost while the channel moves. */
     static constexpr double kDecTrimSlewHzS = 50.0;
-    static constexpr double kEndTuneHz = 15000.0;    // brief §9: a tune further than this ends the lock (single channels)
+    static constexpr double kEndTuneHz = 15000.0;
+    /** ★★★ beta94 the finder's follow: at most this far from the nominal (a station's own uplink drift over a pass at
+     *  2 m is ~±3.5 kHz on a 70 cm downlink, plus their error), moved at most this fast (a few Hz a 25 Hz tick). */
+    static constexpr double kFollowClampHz = 6000.0;
+    static constexpr double kFollowSlewHzS = 150.0;    // brief §9: a tune further than this ends the lock (single channels)
     static constexpr double kPassbandSlackHz = 3000.0;   // beta90 1.4: a passband's edge allowance beyond the Doppler
     static constexpr double kPassCacheSec = 300.0;
     static constexpr double kGeoMarginSec = 600.0;   // beta90 1.7: the dotted path runs 10 min either side of the pass
@@ -926,6 +1004,8 @@ public:
         if (it == locks_.end()) return false;
         Lock& L = it->second;
         const Transmitter& t = defs_[L.s].tx[L.t];
+        ++L.seq;                                          // ★★★ beta94 the listener tuned: a follow ends, the dial is theirs
+        L.following = false; L.follow = L.followTarget = 0;
         if (t.passband()) {
             const double edge = std::fabs(L.last.shiftHz) + std::fabs(L.last.modelHz - L.last.shiftHz) + kPassbandSlackHz;
             if (newDialHz < t.hz - edge || newDialHz > t.hiHz + edge) return false;
@@ -975,6 +1055,40 @@ public:
         if (!tlmWide(defs_[L.s].tx[L.t]) || (L.state != LockState::Track && L.state != LockState::Coast)) return false;
         L.trimTarget = std::max(-kTrimClampHz, std::min(kTrimClampHz, targetHz));
         return true;
+    }
+    /** ★★★ beta94 THE TRANSPONDER FINDER'S FOLLOW (docs/v12/TRANSPONDER-FINDER.md): VFO A's channel goes to `satHz` (a
+     *  satellite-frame frequency — where the station the listener chose with LISTEN really is), as an offset from the
+     *  nominal clamped to ±kFollowClampHz and slewed by tick(). Only on a linear transponder, only while TRACK / COAST.
+     *  The listener's own tune (nudge) ends it and bumps `seq`. */
+    bool setFollow(const std::string& key, double satHz) {
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = locks_.find(key);
+        if (it == locks_.end() || !std::isfinite(satHz)) return false;
+        Lock& L = it->second;
+        if (!defs_[L.s].tx[L.t].passband() || (L.state != LockState::Track && L.state != LockState::Coast)) return false;
+        L.followTarget = std::max(-kFollowClampHz, std::min(kFollowClampHz, satHz - L.nominal));
+        L.following = true;
+        return true;
+    }
+    /** Stop following (the dial's channel eases back to the nominal). */
+    void clearFollow(const std::string& key) {
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = locks_.find(key);
+        if (it == locks_.end()) return;
+        it->second.following = false; it->second.followTarget = 0;
+    }
+    /** The follow's state: the nominal (the dial), whether it follows, the offset applied now and the tune count. */
+    struct FollowState { bool lock = false, passband = false, following = false; double nominal = 0, follow = 0; unsigned seq = 0; };
+    FollowState followState(const std::string& key) const {
+        std::lock_guard<std::mutex> lk(m_);
+        FollowState f;
+        auto it = locks_.find(key);
+        if (it == locks_.end()) return f;
+        const Lock& L = it->second;
+        f.lock = L.state == LockState::Track || L.state == LockState::Coast;
+        f.passband = defs_[L.s].tx[L.t].passband();
+        f.following = L.following; f.nominal = L.nominal; f.follow = L.follow; f.seq = L.seq;
+        return f;
     }
     /** This tick's state for `key` — what to apply and what to show. ★ Call at the tracker's rate (25 Hz); it advances
      *  the slew-limited trim, the ARMED → TRACK step at AOS and LOS. */
@@ -1198,6 +1312,7 @@ public:
             j += ",\"tx\":\"" + jsonEsc(t.txLabel) + "\",\"loop\":\"" + t.loop + "\"";
             if (!t.consumer.empty()) j += ",\"consumer\":\"" + t.consumer + "\"";
             j += ",\"nominal\":" + fmtNum(t.nominalHz, 0) + ",\"offset\":" + fmtNum(t.shiftHz, 1) + ",\"rate\":" + fmtNum(t.rateHzS, 1);
+            if (t.followHz != 0) j += ",\"follow\":" + fmtNum(t.followHz, 1);   // ★★★ beta94 part of offset: the finder's follow
             j += ",\"trim\":" + fmtNum(t.trimHz, 1) + ",\"az\":" + fmtNum(t.azDeg, 1) + ",\"el\":" + fmtNum(t.elDeg, 1);
             j += ",\"aos\":" + fmtNum(t.aos, 0) + ",\"los\":" + fmtNum(t.los, 0) + ",\"maxEl\":" + fmtNum(t.maxElDeg, 1);
             j += ",\"age\":" + fmtNum(t.ageDays, 2) + ",\"ageState\":\"" + t.ageState + "\"";
@@ -1218,6 +1333,12 @@ private:
         LockState state = LockState::Track;
         Pass pass;
         double trimTarget = 0, trim = 0, trimRate = 0, lastMeasure = 0, lastTick = 0, belowSince = 0;
+        // ★★★ beta94 VFO A FOLLOWS THE PERSON (setFollow): the channel's offset from the nominal towards where the followed
+        //   station really is (their own uplink drift), slewed; `seq` counts the listener's own tunes (nudge) — the finder
+        //   stops following the moment it changes. A manual nudge always wins.
+        double follow = 0, followTarget = 0;
+        bool following = false;
+        unsigned seq = 0;
         Track last;
     };
 
@@ -1293,7 +1414,12 @@ private:
                     const double step = kDecTrimSlewHzS * dt;
                     L.trim += std::max(-step, std::min(step, L.trimTarget - L.trim));
                 }
-                out.modelHz = m; out.trimHz = L.trim; out.shiftHz = m + L.trim;
+                // ★★★ beta94 the finder's follow (passband only): slewed at kFollowSlewHzS, part of the shift like the trim
+                if (tx.passband()) {
+                    const double step = kFollowSlewHzS * dt;
+                    L.follow += std::max(-step, std::min(step, L.followTarget - L.follow));
+                }
+                out.modelHz = m; out.trimHz = L.trim; out.followHz = L.follow; out.shiftHz = m + L.trim + L.follow;
             } else {
                 // ★ ENDED (LOS): frozen where it was — the caller moves the dial there (brief §9: never snap back)
                 out.modelHz = L.last.modelHz; out.trimHz = L.last.trimHz; out.shiftHz = L.last.shiftHz; out.rateHzS = 0;

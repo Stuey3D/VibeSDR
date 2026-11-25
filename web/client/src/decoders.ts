@@ -84,7 +84,7 @@ import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 import { parseBandSkim, type BandSkim } from '../../../src/services/bandSkim';   // ★★ beta92 the band skimmer's readable rows
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | 'orbcomm' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | 'fctlm' | 'orbcomm' | 'xpdr' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -195,6 +195,8 @@ export interface DecoderCallbacks {
   onLrptGeo?: (data: unknown) => void;
   /** ★★ 2026-11-24 ORBCOMM: orbcomm_status / orbcomm_pkt (src/services/orbcomm.ts parses them) — the SATELLITE box */
   onOrbcomm?: (type: 'orbcomm_status' | 'orbcomm_pkt', data: unknown) => void;
+  /** ★★★ beta94 THE TRANSPONDER FINDER: xpdr_status (src/services/xpdr.ts parses it) — the SATELLITE box and the waterfall */
+  onXpdr?: (data: unknown) => void;
   onSatTlm?: (data: unknown) => void;   // ★ SATELLITE-BEST 1.3: fctlm_status / sat_tlm (src/services/satellites.ts parseSatTelemetry)   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
@@ -272,6 +274,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   tones: 'tones',       // ★ V12 DTMF + 5-tone selective calling (vibe_tones_run.h)
   fctlm: 'fctlm',       // ★ SATELLITE-BEST 1.2: AO-73's FUNcube telemetry (attached by a SATELLITE pick only)
   orbcomm: 'orbcomm',   // ★★ 2026-11-24 ORBCOMM housekeeping, subscriber messages raw only (attached by a SATELLITE pick only)
+  xpdr: 'xpdr',         // ★★★ beta94 the transponder finder: every CW and voice signal on a linear transponder (a SATELLITE pick only)
   lrpt: 'lrpt',         // ★ V12 METEOR-M LRPT weather-satellite pictures (vibe_lrpt_run.h): "symbol_rate" etc.
   vor: 'vor',           // ★ V12 VOR / ILS (vibe_nav_run.h)
   sarsat: 'sarsat',     // ★ V12 406 MHz beacons (vibe_sarsat_run.h)
@@ -391,6 +394,11 @@ export class DecoderClient {
     this._drop();
   }
 
+  /** ★★★ beta94 the transponder finder's LISTEN: VFO A follows that row ("" = stop following). Only while it is attached. */
+  xpdrFollow(id: string) {
+    if (this.mode !== 'xpdr') return;
+    this._send({ type: 'xpdr_follow', id: id.slice(0, 12) });
+  }
   private _send(o: Record<string, unknown>) {
     const ws = this.ws;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o));
@@ -563,6 +571,12 @@ export class DecoderClient {
     if (msg.type === 'hell_status' && msg.data) {
       if (this.mode !== 'hell') return;
       this.cb.onHellStatus?.(msg.data);
+      return;
+    }
+    if (msg.type === 'xpdr_status' && msg.data) {
+      // ★★★ beta94 the transponder finder — only while OUR finder is attached
+      if (this.mode !== 'xpdr') return;
+      this.cb.onXpdr?.(msg.data);
       return;
     }
     if ((msg.type === 'orbcomm_status' || msg.type === 'orbcomm_pkt') && msg.data) {

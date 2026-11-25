@@ -214,6 +214,8 @@ flags_for() {
     #    localiser: radials ±2°, idents, the listed one named, nothing on the empty channels); SIMD = scalar; the sweep finds
     #    a beacon only in window 3; fresh → faded after a sweep. ~15 s.
     test-vormap)           echo "-O2 -lpthread -I $VDSP -I $KISS" ;;
+    # ★★★ beta94 THE TRANSPONDER FINDER (vibe_xpdr.h, vibe_xpdr_run.h — synthetic IQ: voices, CW, the follow, the engine's follow)
+    test-xpdr)             echo "-O2 -I $VDSP" ;;
     # ★★ V12 COSPAS-SARSAT 406 MHz (docs/v12/SARSAT.md): C/S T.001 Annex B's worked examples, the BCH codes, the protocols,
     #    the modem down to 34 dB-Hz, an hour of noise and beacon-shaped random bursts → nothing. `clip …` writes the e2e clip.
     test-sarsat)           echo "-O2" ;;
@@ -531,6 +533,7 @@ deps_for() {
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
     test-drm-xaac) echo "$XAAC_LIB" ;;   # ★ after the source, like FAAD2   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue|test-dab-tii-air) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
+    test-xpdr) echo "android/app/src/main/cpp/decoders/cw_skimmer.cpp" ;;   # ★ pffft from cobjs_for (the ndb group)
     test-vormap) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ IdentVote + the datalink's front end; pffft + kiss from cobjs_for
     test-ndb|test-ndb-suspect) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
@@ -557,7 +560,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-vormap|test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice)
+    test-vormap|test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -1029,6 +1032,9 @@ if npx tsx scripts/test_lrpt_outline.ts; then pass=$((pass+1)); else fail=$((fai
 #    orbcomm_pkt parsed defensively, subscriber messages shown as "not decoded" with raw bytes only, the dome's geometry and the
 #    server's SNR ramp, skyplot.json with radio ids and grey dots, an ORBCOMM pick's decoder and listening mode
 if npx tsx scripts/test_orbcomm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta94 THE TRANSPONDER FINDER, the clients' half (src/services/xpdr.ts): xpdr_status parsed defensively, the rows' order
+#    and words, LISTEN only on voices (USB + xpdr_follow), the waterfall overlay through ORBCOMM's layout, the pick's decoder
+if npx tsx scripts/test_xpdr_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 SILENT DECODERS (src/services/silentDecoder.ts): APRS and METEOR LRPT mute the speaker (or, with VFO B on, the VFO
 #   they decode on) and put it back exactly as it was — the rule run every way, and both clients pinned to it
 if npx tsx scripts/test_silent_decoder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1041,6 +1047,9 @@ if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fa
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SATELLITE IN LOCAL HARDWARE: the key / the position prompt / which position / nothing published (satPlace.ts)
 if npx tsx scripts/test_sat_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows — groups from the downlinks, tick boxes, stored by
+#    NORAD across servers, the pick always stays, reminders follow it (src/services/satellites.ts, both clients)
+if TZ=UTC npx tsx scripts/test_sat_filter.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta91 TELEMETRY CHARTS (src/utils/tlmCharts.ts): the server's pass CSVs read back, the chart geometry, across passes
 if TZ=UTC npx tsx scripts/test_tlm_charts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
@@ -2070,6 +2079,19 @@ fi
 printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta94 THE TRANSPONDER SIGNAL FINDER end to end (docs/v12/TRANSPONDER-FINDER.md): a synthetic RS-44 clip (test-xpdr
+#     --write-clip: its beacon, G4ABC's CQ, an SSB voice) through the real server — rows, the beacon's pick opening the
+#     transponder, the slice turned by the lock's Doppler, LISTEN → VFO A follows, a manual tune ends it; then the web page.
+printf '\n\033[1m── Transponder finder (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-xpdr" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-xpdr" --write-clip "$OUT/xpdr-clip.u8" 2400000 435640000 12; then
+  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-server-xpdr.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-web-xpdr.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/xpdr-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-xpdr build'; notrun=$((notrun+1))
+fi
 # ★ …then the web client (headless Edge, --mute-audio): the SATELLITE entry, the timetable, a pick, the readout beside the digits, 390 px
 node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -2089,6 +2111,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★★ SATELLITE MODE's web window alone against a fake sat_list (no server): order, greying, the synced line, the pick box sizes
 #     (compact / big with the decoder canvas lent / ISS SSTV growing), APRS lines, AUTO DOPPLER, EXIT → drop; 390 px. Needs Edge + web/dist.
 node --max-old-space-size=512 scripts/test-web-satellite-mode.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta94 SHOW on the web window (fake sat_list): a tick hides the others' passes, a group shortcut, kept across a reload,
+#    the pick stays, reminders follow it; default/silver/black, 390 px. Needs Edge + web/dist.
+node --max-old-space-size=512 scripts/test-web-sat-filter.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by

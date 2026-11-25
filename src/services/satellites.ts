@@ -15,6 +15,8 @@
  *
  * ★★ THE DIAL SHOWS THE NOMINAL (brief §10): the main digits stay on the published frequency; `offset` is where the
  *    channel actually is relative to it — the waterfall marker goes there (marker TRAP), bookmarks store the nominal.
+ *    ★★★ beta94 EXCEPT WHILE THE TRANSPONDER FINDER FOLLOWS A STATION (`follow`, Stuart 11-25 "yes"): the digits show
+ *    where the station is in the satellite frame, nominal + follow — SatFollowDial below, set locally, never sent.
  * ★ No flashing anywhere: COAST only dims the readout.
  */
 import { tlmLivePush, type TlmLiveFrame } from '../utils/tlmCharts';
@@ -65,6 +67,9 @@ export interface SatReadout {
   id?: string; name?: string; norad?: number; tx?: string; loop?: string; consumer?: string;
   nominal?: number; offset?: number; rate?: number; trim?: number; az?: number; el?: number;
   aos?: number; los?: number; maxEl?: number; age?: number; ageState?: string; time: string;
+  /** ★★★ beta94 the transponder finder's follow (Hz, PART of `offset`): VFO A's channel this far from the nominal, where
+   *  the followed station is. Absent = not following. The dial readout shows nominal + follow (SatFollowDial). */
+  follow?: number;
   /** ★★★ beta92 the PICK went with this ending (a tune past the lock's reach, a mode change): its decoder is detached on
    *  the server — the box must stop showing it (it said "TRACK · attached" for a pick that had gone, Stuart 11-23). */
   pickGone?: boolean;
@@ -142,7 +147,67 @@ export function parseSatReadout(m: unknown): SatReadout | null {
     rate: num(o.rate), trim: num(o.trim), az: num(o.az), el: num(o.el), aos: num(o.aos), los: num(o.los), maxEl: num(o.maxEl),
     age: num(o.age), ageState: str(o.ageState, 10), time: str(o.time, 8) ?? 'ok',
     ...(o.pickGone === true ? { pickGone: true } : {}),
+    // ★★★ beta94 bounded like the server's clamp (±6 kHz) with room to spare: a wild figure is no follow at all
+    ...((() => { const f = num(o.follow); return f != null && f !== 0 && Math.abs(f) <= SAT_FOLLOW_MAX_HZ ? { follow: f } : {}; })()),
   };
+}
+
+/* ── ★★★ beta94 THE DIAL FOLLOWS THE FOLLOWED STATION (docs/v12/TRANSPONDER-FINDER.md, Stuart 11-25: "yes") ──────────
+ *  While the finder follows a station, the server moves VFO A's CHANNEL (the lock's `follow`, part of `offset`) and its
+ *  dial stays the nominal (config `vfo`). The person reads the DIGITS, so they show where the station really is in the
+ *  satellite frame: nominal + follow. That value is set LOCALLY — readout, step base, bookmarks — and NEVER sent: a tune
+ *  would go through the server's nudge and end the follow (the shared-dial contract too: a client transmits only on a
+ *  person's action). Both clients run this one state machine (web spectrum.ts, app VibeServerWsClient):
+ *   · following → the dial is round(nominal + follow), only when it changed (the readout moves at the sat message's
+ *     rate, ≤150 Hz/s of slew, 1 Hz steps);
+ *   · the follow ends WITHOUT our tune (finder stopped, lock gone) → the dial goes back to the nominal — only if it still
+ *     shows the follow's value (anything else moved it: a config adopt, a person);
+ *   · within SAT_FOLLOW_TUNE_GUARD_MS of OUR OWN tune nothing is touched: a sat message in flight still carries the old
+ *     follow, and our tune already set the dial (the server's nudge ends the follow and re-bases the nominal there);
+ *   · `holds(vfo)`: a config whose vfo is the followed lock's nominal is NOT another listener moving the dial — the
+ *     clients skip their adopt for it (it would snap the digits back to the LISTEN point between sat messages).
+ *  The marker is drawn at dial + satMarkerShiftHz (offset − follow): the dial already carries the follow. */
+export const SAT_FOLLOW_MAX_HZ = 20000;
+export const SAT_FOLLOW_TUNE_GUARD_MS = 1500;
+function satLive(r: SatReadout | null | undefined): r is SatReadout {
+  return !!r && (r.state === 'TRACK' || r.state === 'COAST');
+}
+/** The follow in Hz while the lock is live, else 0. */
+export function satFollowHz(r: SatReadout | null | undefined): number {
+  return satLive(r) ? (r.follow ?? 0) : 0;
+}
+/** Where the marker sits from the DIAL: the lock's offset less the follow (the dial shows the follow already). 0 off. */
+export function satMarkerShiftHz(r: SatReadout | null | undefined): number {
+  return satLive(r) && r.offset != null ? r.offset - (r.follow ?? 0) : 0;
+}
+export class SatFollowDial {
+  /** The followed lock's nominal (the server's dial) while the digits follow; null otherwise. */
+  nominal: number | null = null;
+  /** The value the follow last put on the dial (0 = none). */
+  dial = 0;
+  /** A readout → the value to put on VFO A's dial locally, or null to leave it. `sinceLocalTuneMs` = since this client
+   *  last tuned VFO A itself; `curDial` = VFO A's dial now. */
+  onReadout(r: SatReadout | null, sinceLocalTuneMs: number, curDial: number): number | null {
+    if (sinceLocalTuneMs < SAT_FOLLOW_TUNE_GUARD_MS) { this.nominal = null; this.dial = 0; return null; }
+    const f = satFollowHz(r);
+    if (satLive(r) && r.nominal != null && r.nominal > 0 && f !== 0) {
+      const hz = Math.round(r.nominal + f);
+      this.nominal = r.nominal;
+      if (hz === this.dial && Math.round(curDial) === hz) return null;
+      this.dial = hz;
+      return hz;
+    }
+    if (this.nominal == null) return null;
+    const back = r && r.nominal != null && r.nominal > 0 ? Math.round(r.nominal) : Math.round(this.nominal);
+    const mine = Math.round(curDial) === this.dial;
+    this.nominal = null; this.dial = 0;
+    return mine && back !== Math.round(curDial) ? back : null;
+  }
+  /** True when a config's `vfo` is the followed lock's nominal — the server restating its dial, not a move to adopt. */
+  holds(serverVfo: number): boolean {
+    return this.nominal != null && Math.abs(serverVfo - this.nominal) < 1;
+  }
+  reset() { this.nominal = null; this.dial = 0; }
 }
 
 export function parseSatTrack(m: unknown): SatTrack | null {
@@ -183,7 +248,7 @@ export type SatCap = { ok: boolean; why: string; need?: 'location' };
 export function satChanText(r: SatReadout | null): string {
   if (!r || r.state === 'OFF' || !r.name) return '';
   if (r.state === 'ARMED') return `${r.name} · AOS ${clockIn(r.aos, Date.now() / 1000)}`;
-  const off = r.offset ?? 0;
+  const off = (r.offset ?? 0) - satFollowHz(r);   // ★★★ beta94 the Doppler — the digits carry the follow
   const arrow = off >= 0 ? '▲' : '▼';   // ▲ approaching (received high) · ▼ receding
   return `${r.name} · ${arrow} ${Math.abs(off / 1000).toFixed(2)} kHz`;
 }
@@ -332,7 +397,7 @@ export interface SatPicked {
   /** ★★ beta92 a CW beacon is 'cwskim' (the CW skimmer over 24 kHz centred on the corrected prediction); 'cw' = an older
    *  server's one-signal CW decoder. */
   /** ★★ 2026-11-24 'orbcomm' — ORBCOMM is a regular satellite now: every carrier in the pick's slice decoded (orbcomm.ts). */
-  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm' | 'orbcomm';
+  norad: number; tx: number; decoder: '' | 'lrpt' | 'sstv' | 'aprs' | 'cw' | 'cwskim' | 'fctlm' | 'orbcomm' | 'xpdr';
   /** ★★ beta92 OPEN IN VFO B: the other downlinks of this bird THIS listener may open in VFO B now (the server decides:
    *  inside the capture with their Doppler, VFO B allowed here). Absent = none (or an older server: no key). */
   vfob?: number[];
@@ -352,7 +417,7 @@ export interface SatPicked {
   viewCentre?: number;
 }
 function satDecoderName(d: unknown): SatPicked['decoder'] {
-  return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' ? d : '';
+  return d === 'lrpt' || d === 'sstv' || d === 'aprs' || d === 'cw' || d === 'cwskim' || d === 'fctlm' || d === 'orbcomm' || d === 'xpdr' ? d : '';
 }
 export function parseSatPicked(m: unknown): SatPicked | null {
   const o = m as Record<string, unknown> | null;
@@ -425,9 +490,10 @@ export function satVfoBHz(nominalB: number, r: SatReadout | null): number {
 }
 /** What a decoder shows in the box's decoder area: a picture, text (CW), packet lines, telemetry values — '' = nothing. */
 /** ★★ 2026-11-24 'orbcomm': the ORBCOMM panel (orbcomm.ts — birds, housekeeping, the packet list, the sky plot). */
-export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry' | 'orbcomm';
+/** ★★★ beta94 'xpdr': the transponder finder's rows (src/services/xpdr.ts — every CW and voice signal, LISTEN on the voices). */
+export type SatDecView = '' | 'image' | 'text' | 'packet' | 'telemetry' | 'orbcomm' | 'xpdr';
 export function satDecView(d: SatPicked['decoder'] | undefined): SatDecView {
-  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : d === 'orbcomm' ? 'orbcomm' : '';
+  return d === 'lrpt' || d === 'sstv' ? 'image' : d === 'cw' || d === 'cwskim' ? 'text' : d === 'aprs' ? 'packet' : d === 'fctlm' ? 'telemetry' : d === 'orbcomm' ? 'orbcomm' : d === 'xpdr' ? 'xpdr' : '';
 }
 /** ★ The line switch exists only while B is open AND both lines have a decoder view (Stuart: "when switching between the
  *  lines all it does is change what is shown in the decoder box"). */
@@ -444,6 +510,7 @@ export function satViewShown(aDec: SatPicked['decoder'] | undefined, b: SatVfoB 
 export function satDecWord(decoder: SatPicked['decoder'] | undefined, use: SatUse, sstv: boolean | undefined, big: boolean): string {
   if (decoder === 'fctlm') return 'listening for telemetry';
   if (decoder === 'orbcomm') return ORB_LISTENING;
+  if (decoder === 'xpdr') return 'searching the transponder for signals';   // ★★★ beta94 the finder, before its first rows
   if (decoder === 'cw') return 'CW decoder listening for the beacon';
   if (decoder === 'cwskim') return SAT_BEACON_WORD;
   if (use === 'image') return big ? 'waiting for the picture' : 'waiting for the picture — it opens BIG';
@@ -623,7 +690,7 @@ export function satDopplerBadge(r: SatReadout | null): SatDopBadge | null {
   if (!r || r.state === 'OFF' || r.state === 'ENDED') return null;
   const who = r.name ? ` · ${r.name}` : '';
   if (r.state === 'ARMED') return { dir: 0, dim: true, label: `Auto Doppler armed${who}, waiting for the pass` };
-  const off = r.offset ?? 0;
+  const off = (r.offset ?? 0) - satFollowHz(r);   // ★★★ beta94 the Doppler — the digits carry the follow
   const dir: 1 | -1 = off >= 0 ? 1 : -1;
   const dim = r.state === 'COAST' || r.ageState === 'stale' || r.time === 'none';
   return { dir, dim, label: `Auto Doppler ${satStateWord(r)}${who} · ${dir > 0 ? 'approaching' : 'receding'} ${Math.abs(off / 1000).toFixed(2)} kHz` };
@@ -1152,6 +1219,133 @@ export class SatReminders {
     return n;
   }
 }
+
+// ══ ★★ beta94 SHOW — WHICH SATELLITES' PASSES THE LIST SHOWS (Stuart 11-25: "on the satellite list can we have a dropdown
+// to show only passes from certain satellites") ══════════════════════════════════════════════════════════════════════════
+/* One set of rules for both clients (the web's satellites.ts, the app's SatellitePanel + SDRScreen's reminders):
+ *   · a tick box per satellite in the list, and group shortcuts — All, Weather, Transponders, FM voice, Telemetry. The groups
+ *     come from what the list already says about each downlink (its use, mode, passband, decoder) — no satellite is named
+ *     here, so a bird the mirror adds tomorrow falls into its group by itself. A satellite is in a group when ANY of its
+ *     downlinks is (the ISS: FM voice AND Telemetry, for its APRS).
+ *   · only passes of the ticked satellites are listed; the satellite picked (or being picked) always stays.
+ *   · a reminder for a hidden satellite does not fire.
+ *   · remembered per viewer (web localStorage / app AsyncStorage, SAT_SHOW_KEY), keyed by NORAD number so it carries from
+ *     server to server; a satellite the current server does not list is simply ignored. A group shortcut is kept AS the
+ *     group, so "Weather" on another server means that server's weather birds.
+ *   · default (nothing stored) = All: nothing changes for someone who never touches it. */
+export type SatShowGroup = 'weather' | 'xpdr' | 'fm' | 'tlm';
+export const SAT_SHOW_GROUPS: ReadonlyArray<{ id: SatShowGroup; label: string; what: string }> = [
+  { id: 'weather', label: 'Weather', what: 'Weather satellites: pictures (METEOR LRPT)' },
+  { id: 'xpdr', label: 'Transponders', what: 'Linear transponders: a band of SSB and CW contacts' },
+  { id: 'fm', label: 'FM voice', what: 'FM repeaters and FM voice downlinks' },
+  { id: 'tlm', label: 'Telemetry', what: 'Data downlinks: telemetry, beacons and packet (APRS)' },
+];
+/** what is shown: null = All; a group; or the ticked NORAD numbers (others' too — a list from another server is kept). */
+export type SatShow = null | { group: SatShowGroup } | { norads: number[] };
+export const SAT_SHOW_KEY = 'vibe.satShow';
+const SAT_SHOW_MAX = 200;   // bounded: what is stored never grows without end
+
+/** The groups ONE downlink belongs to (none for an unknown kind — it still shows under All and its own tick). */
+export function satTxShowGroups(t: SatTx): SatShowGroup[] {
+  const out: SatShowGroup[] = [];
+  const use = txUse(t);
+  if (use === 'image') out.push('weather');
+  if ((t.hiHz != null && t.hiHz > t.hz) || t.decoder === 'xpdr') out.push('xpdr');
+  if (use === 'voice' && t.mode === 'nfm') out.push('fm');
+  if (use === 'packet' || t.mode === 'cw' || t.decoder === 'fctlm' || t.decoder === 'cw' || t.decoder === 'cwskim' || t.decoder === 'aprs'
+      || (!!t.consumer && use !== 'image')) out.push('tlm');
+  return out;
+}
+/** A satellite's groups: any of its downlinks' (each once, in SAT_SHOW_GROUPS order). */
+export function satShowGroupsOf(sat: Pick<SatInfo, 'tx'>): SatShowGroup[] {
+  const s = new Set<SatShowGroup>();
+  for (const t of sat.tx) for (const g of satTxShowGroups(t)) s.add(g);
+  return SAT_SHOW_GROUPS.map((g) => g.id).filter((g) => s.has(g));
+}
+/** Stored text → a SatShow (anything unreadable = All). */
+export function satShowParse(raw: string | null | undefined): SatShow {
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    if (o && typeof o === 'object') {
+      if (typeof o.group === 'string' && SAT_SHOW_GROUPS.some((g) => g.id === o.group)) return { group: o.group as SatShowGroup };
+      if (Array.isArray(o.norads)) {
+        const n = [...new Set(o.norads.filter((x): x is number => typeof x === 'number' && Number.isInteger(x) && x > 0))].slice(0, SAT_SHOW_MAX);
+        return { norads: n };
+      }
+    }
+  } catch { /* unreadable: All */ }
+  return null;
+}
+/** A SatShow → the text to store (null = remove the key: All). */
+export function satShowStore(f: SatShow): string | null {
+  if (!f) return null;
+  return 'group' in f ? JSON.stringify({ group: f.group }) : JSON.stringify({ norads: f.norads.slice(0, SAT_SHOW_MAX) });
+}
+/** The satellites the list names, once each, in the list's order. */
+function satShowSats(l: SatList | null): SatInfo[] {
+  const seen = new Set<number>(), out: SatInfo[] = [];
+  for (const s of l?.sats ?? []) if (!seen.has(s.norad)) { seen.add(s.norad); out.push(s); }
+  return out;
+}
+/** Is this satellite ticked? (Its own data decides a group; a NORAD list decides by number.) */
+export function satShowTicked(f: SatShow, sat: Pick<SatInfo, 'norad' | 'tx'>): boolean {
+  if (!f) return true;
+  if ('group' in f) return satShowGroupsOf(sat).includes(f.group);
+  return f.norads.includes(sat.norad);
+}
+/** ★ Does the list show this satellite? Ticked, or the one picked / being picked (it always stays). */
+export function satShowShows(f: SatShow, sat: Pick<SatInfo, 'norad' | 'tx'>, keepNorad?: number | null): boolean {
+  return (keepNorad != null && sat.norad === keepNorad) || satShowTicked(f, sat);
+}
+/** The timetable's rows under SHOW (satModeRows' order kept). */
+export function satShowRows<R extends { sat: Pick<SatInfo, 'norad' | 'tx'> }>(rows: R[], f: SatShow, keepNorad?: number | null): R[] {
+  return f ? rows.filter((r) => satShowShows(f, r.sat, keepNorad)) : rows;
+}
+/** ★ A reminder as it fires: does SHOW still allow it? A satellite the list no longer has is let through (the fire-time
+ *  check says why it cannot be picked); a group needs the list to know the bird's downlinks. */
+export function satShowRemindOk(f: SatShow, l: SatList | null, norad: number): boolean {
+  if (!f) return true;
+  if ('norads' in f) return f.norads.includes(norad);
+  const sat = l?.sats.find((s) => s.norad === norad);
+  return !sat || satShowTicked(f, sat);
+}
+/** The group shortcuts worth drawing on this list — a group no listed satellite is in is not drawn (it could never act). */
+export function satShowGroupsOffered(l: SatList | null): SatShowGroup[] {
+  const s = new Set<SatShowGroup>();
+  for (const sat of satShowSats(l)) for (const g of satShowGroupsOf(sat)) s.add(g);
+  return SAT_SHOW_GROUPS.map((g) => g.id).filter((g) => s.has(g));
+}
+/** The menu's tick boxes: every satellite in the list, in its order, with whether it is ticked. */
+export function satShowChoices(f: SatShow, l: SatList | null): Array<{ norad: number; name: string; on: boolean }> {
+  return satShowSats(l).map((s) => ({ norad: s.norad, name: s.name, on: satShowTicked(f, s) }));
+}
+/** A group shortcut (or 'all'). */
+export function satShowGroup(g: SatShowGroup | 'all'): SatShow { return g === 'all' ? null : { group: g }; }
+/** ★ A tick box pressed: flips that satellite. From All or a group it becomes the list's ticked set with this one flipped;
+ *  a NORAD list keeps the numbers this server does not list (they belong to another server). Every listed satellite
+ *  ticked (and nothing else kept) = back to All. */
+export function satShowToggle(f: SatShow, l: SatList | null, norad: number): SatShow {
+  const sats = satShowSats(l);
+  const listed = new Set(sats.map((s) => s.norad));
+  const set = new Set<number>(f && 'norads' in f ? f.norads : []);
+  if (!f || 'group' in f) for (const s of sats) if (satShowTicked(f, s)) set.add(s.norad);
+  if (set.has(norad)) set.delete(norad); else set.add(norad);
+  if (sats.length && sats.every((s) => set.has(s.norad)) && [...set].every((n) => listed.has(n))) return null;
+  return { norads: [...set].slice(0, SAT_SHOW_MAX) };
+}
+/** The header's words: "All" / "Weather" / "ISS" (one) / "3 satellites" / "None". On THIS list: every listed satellite
+ *  ticked reads "All" (it is all of them here). */
+export function satShowText(f: SatShow, l: SatList | null): string {
+  if (!f) return 'All';
+  if ('group' in f) return SAT_SHOW_GROUPS.find((g) => g.id === f.group)?.label ?? 'All';
+  const sats = satShowSats(l), on = sats.filter((s) => satShowTicked(f, s));
+  if (sats.length && on.length === sats.length) return 'All';
+  if (on.length === 1) return on[0].name;
+  return on.length ? `${on.length} satellites` : 'None';
+}
+/** The note under a list SHOW has emptied (none of the chosen satellites has a row here). */
+export const SAT_SHOW_EMPTY = 'None of the satellites chosen under SHOW are listed on this server';
 
 // ══ ★★ SATELLITE-BEST 1.3 — TELEMETRY TURNED INTO VALUES (the client half) ═══════════════════════════════════════════════
 /* The server's decoder (AO-73 FUNcube `fctlm`; SONATE-2 / APRS later) sends {"type":"fctlm_status","data":{…}} on the decoder

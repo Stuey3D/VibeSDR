@@ -1824,7 +1824,8 @@ export class Waterfall {
     const font = `${10 * dpr}px system-ui, sans-serif`;
     ctx.save();
     ctx.font = font;
-    const L = orbOverlayLayout(this.orbOverlay, (hz) => this.hzToX(hz, W), W, ctx.measureText(ORB_SLICE_LABEL).width + 8 * dpr);
+    const title = this.orbOverlay?.title || ORB_SLICE_LABEL;   // ★★★ beta94 the transponder finder draws the same way, its own words
+    const L = orbOverlayLayout(this.orbOverlay, (hz) => this.hzToX(hz, W), W, ctx.measureText(title).width + 8 * dpr);
     if (L.band) {
       const { x0, x1 } = L.band;
       ctx.fillStyle = ORB_OVERLAY_COLOUR;
@@ -1840,7 +1841,7 @@ export class Waterfall {
         const y = join + 14 * dpr;
         ctx.globalAlpha = 0.75; ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(L.label.x, y - 10 * dpr, L.label.w, 13 * dpr);
         ctx.globalAlpha = 1; ctx.fillStyle = ORB_OVERLAY_COLOUR; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
-        ctx.fillText(ORB_SLICE_LABEL, L.label.x + 4 * dpr, y);
+        ctx.fillText(title, L.label.x + 4 * dpr, y);
       }
     }
     // the carriers: a triangle on the join pointing down at the waterfall — solid locked, hollow acquiring

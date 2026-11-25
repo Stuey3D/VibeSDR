@@ -78,7 +78,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | 'hfdl' | 'fctlm' | 'orbcomm' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | 'hfdl' | 'fctlm' | 'orbcomm' | 'xpdr' | null;
 // ★ V12 FELD HELL is drawn, so it is a picture here (PREV, SAVE, CLR, zoom) — plainly, without WEFAX's ADJ
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv', 'hell', 'lrpt'];   // ★ V12 METEOR LRPT: the preview in the picture box
 
@@ -338,6 +338,7 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   lrpt:    'METEOR LRPT',     // ★ V12 METEOR-M weather-satellite pictures (services/lrpt.ts)
   fctlm:   'TELEMETRY',       // ★ SATELLITE-BEST 1.2: AO-73's FUNcube telemetry (only ever attached by a SATELLITE pick)
   orbcomm: 'ORBCOMM',         // ★★ 2026-11-24 ORBCOMM housekeeping (only ever attached by a SATELLITE pick — services/orbcomm.ts)
+  xpdr:    'TRANSPONDER',     // ★★★ beta94 the transponder finder (only ever attached by a SATELLITE pick — services/xpdr.ts)
   vor:     'VOR / ILS',       // ★ V12 VOR radial / ILS deviation
   sarsat:  '406 MHz BEACONS', // ★ V12 COSPAS-SARSAT
   // ★ V12: a VibeServer's HFDL on the listener's USB dial — one line per message; the aircraft go on the HFDL MAP

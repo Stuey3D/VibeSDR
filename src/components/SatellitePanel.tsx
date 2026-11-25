@@ -36,6 +36,8 @@ import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky 
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
          type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
+// ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
+import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrRowsSorted, xpdrWhat, XPDR_HINT, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
@@ -43,7 +45,10 @@ import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowP
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          satCwTail, satDecView, satDecWord, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY,
          satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList,
-         type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB } from '../services/satellites';
+         type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB,
+         // ★★ beta94 SHOW — which satellites' passes the list shows (one set of rules with the web page)
+         SAT_SHOW_EMPTY, SAT_SHOW_GROUPS, satShowChoices, satShowGroup, satShowGroupsOffered, satShowRows, satShowText, satShowToggle,
+         type SatShow } from '../services/satellites';
 
 const SAT_MAX_W = 760;
 /** ★ The half-globe's drawing size (viewBox); on screen it is the box's width, capped at GLOBE_MAX_W (Stuart 11-20). */
@@ -117,8 +122,16 @@ export interface SatellitePanelProps {
    *  under AUTO — carriers at most (0 = AUTO) — and its press (the app re-attaches with "max_carriers"); the server's sky
    *  plot read through `skyGet` (the gallery's reader) for THIS radio (`skyRadio`, '' = the server's only one). */
   orbcomm?: OrbView | null;
+  /** ★★★ beta94 the transponder finder's rows for this pick (services/xpdr.ts) and LISTEN on a voice row (the app tunes
+   *  VFO A there in USB and asks the finder to follow it). */
+  xpdr?: XpdrStatus | null;
+  onXpdrListen?: (row: XpdrRow) => void;
   orbMax?: number;
   onOrbMax?: (k: number) => void;
+  /** ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows (null = All) and its change — the screen keeps it
+   *  (AsyncStorage, by NORAD number; its reminders follow it). Absent onShow = no SHOW drop-down. */
+  show?: SatShow;
+  onShow?: (f: SatShow) => void;
   skyGet?: ((path: string) => Promise<string | null>) | null;
   skyRadio?: string;
   /** ★★ beta94 LOCAL HARDWARE's POSITION (this app's own engine only — absent on a server): `need` = the engine has none, the
@@ -304,7 +317,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const greyed = !p.cap.ok;
   const placeNeed = !!p.place?.need;          // ★★ beta94 no position on this phone's engine: the prompt, not the timetable
   const [placeEdit, setPlaceEdit] = useState(false);
-  const rows = satModeRows(p.list, now);
+  const allRows = satModeRows(p.list, now);
+  // ★★ beta94 SHOW: only the ticked satellites' passes — the one picked (or being picked) always stays
+  const show = p.show ?? null;
+  const rows = satShowRows(allRows, show, (p.picked ?? p.pending)?.norad ?? null);
+  const showChoices = p.onShow ? satShowChoices(show, p.list) : [];
+  const [showOpen, setShowOpen] = useState(false);
   const sync = satSyncedText(p.list, now);
   const credit = satCreditText(p.list, now), txc = satTxCreditText(p.list);
 
@@ -496,6 +514,35 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>}
                 </View>
               )}
+              {/* ★★★ beta94 THE TRANSPONDER FINDER (Stuart 11-24): every signal found — voices first while on air, each with
+                   LISTEN (VFO A snaps there and follows the person), every CW row with what it decoded (the beacon one of
+                   them); a row unheard for a minute fades; the follow's state in words */}
+              {confirmed && showA && p.picked?.decoder === 'xpdr' && (
+                <View style={s.pk}>
+                  <Text style={[s.detailNp, s.caveat]}>{XPDR_HINT}</Text>
+                  {!!xpdrFollowText(p.xpdr?.follow ?? null) && <Text style={[s.detailNp, s.orbName]}>{xpdrFollowText(p.xpdr?.follow ?? null)}</Text>}
+                  {xpdrRowsSorted(p.xpdr?.rows ?? []).slice(0, 16).map((r) => {
+                    const following = p.xpdr?.follow?.id === r.id;
+                    return (
+                      <View key={r.id} style={[s.orbBird, xpdrFaded(r) && s.orbHeld]}>
+                        <View style={s.nameRow}>
+                          <Text style={[s.mono, { flexShrink: 1 }, following && s.orbName]} numberOfLines={1}>
+                            {`${xpdrFreqText(r)}  ${xpdrWhat(r)}  ${Math.round(r.snr)} dB · ${xpdrAgo(r)}`}
+                          </Text>
+                          {r.kind === 'voice' && !!p.onXpdrListen && (
+                            <View style={s.keys}>
+                              <DecoderKey label={following ? 'LISTENING' : 'LISTEN'} active={following} onPress={() => p.onXpdrListen!(r)}
+                                          accessibilityLabel={`Put VFO A on the voice at ${xpdrFreqText(r)} MHz — it follows the station while they drift`} />
+                            </View>
+                          )}
+                        </View>
+                        {r.kind === 'cw' && !!r.text && <Text style={[s.mono, s.hex]} numberOfLines={1}>{r.text}</Text>}
+                      </View>
+                    );
+                  })}
+                  {!(p.xpdr?.rows.length) && <Text style={s.detailNp}>no signals found yet</Text>}
+                </View>
+              )}
               {/* ★★ 2026-11-24 ORBCOMM: the birds, their housekeeping, the carriers' manual fallback, the sky plot and the
                    packets — subscriber messages as raw bytes only, said so */}
               {confirmed && showA && orbDec && (
@@ -578,8 +625,43 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                      style={s.sumRow}>
             <Text style={s.sum}>{`${listOpen ? '▾' : '▸'} ${p.picked ? 'ALL SATELLITES' : 'SATELLITES'}`}</Text>
           </Pressable>
+          {/* ★★ beta94 SHOW — the drop-down above the rows: group shortcuts, then a tick box per satellite. Not drawn while the
+               list has no satellites. */}
+          {listOpen && showChoices.length > 0 && !!p.onShow && (() => {
+            const txt = satShowText(show, p.list);
+            const cur = !show ? 'all' : 'group' in show ? show.group : '';
+            const set = (f: SatShow) => p.onShow!(f);
+            return (
+              <View style={s.show}>
+                <Pressable onPress={() => setShowOpen((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showOpen }}
+                           accessibilityLabel={`Show: ${txt}. Which satellites' passes the list shows`} style={s.showSum}>
+                  <Text style={[s.txt, !!show && txt !== 'All' && s.up]} numberOfLines={1}>{`SHOW: ${txt}`}</Text>
+                  <Text style={s.detailNp}>{showOpen ? '▴' : '▾'}</Text>
+                </Pressable>
+                {showOpen && (
+                  <View style={s.showBody}>
+                    <View style={s.leadRowNp}>
+                      <DecoderKey label="All" active={cur === 'all'} onPress={() => set(null)} accessibilityLabel="Show every satellite's passes" />
+                      {satShowGroupsOffered(p.list).map((g) => { const d = SAT_SHOW_GROUPS.find((x) => x.id === g)!;
+                        return <DecoderKey key={g} label={d.label} active={cur === g} onPress={() => set(satShowGroup(g))} accessibilityLabel={`Show only: ${d.what}`} />; })}
+                    </View>
+                    <View style={s.ticks}>
+                      {showChoices.map((c) => (
+                        <Pressable key={c.norad} onPress={() => set(satShowToggle(show, p.list, c.norad))} style={s.tickRow}
+                                   accessibilityRole="checkbox" accessibilityState={{ checked: c.on }} accessibilityLabel={c.name}>
+                          <View style={[s.tick, c.on && s.tickOn]}>{c.on && <Text style={s.tickMark}>✓</Text>}</View>
+                          <Text style={s.txt} numberOfLines={1}>{c.name}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </View>
+            );
+          })()}
           {listOpen && (!p.list ? <Text style={s.note}>Asking the server…</Text>
-            : !rows.length ? <Text style={s.note}>{p.list.why || (p.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server')}</Text>
+            : !allRows.length ? <Text style={s.note}>{p.list.why || (p.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server')}</Text>
+            : !rows.length ? <Text style={s.note}>{SAT_SHOW_EMPTY}</Text>
             : rows.slice(0, 160).map((r) => {
                 const on = !r.later && !!sel && sel.norad === r.sat.norad && sel.tx === r.i;   // ★ 2026-11-24 a later pass: no highlight
                 const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
@@ -667,6 +749,15 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   vbKey:   { alignSelf: 'flex-start', paddingLeft: 8, paddingTop: 2 },
   mono:    { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.value },
   sumRow:  { paddingHorizontal: 10, paddingVertical: 8, minHeight: 36, justifyContent: 'center' },
+  // ★★ beta94 SHOW — the drop-down above the rows
+  show:    { marginHorizontal: 8, marginBottom: 4, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: T.muted },
+  showSum: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 8, paddingVertical: 6, minHeight: 36 },
+  showBody:{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.divider, paddingHorizontal: 8, paddingBottom: 6, gap: 4 },
+  ticks:   { flexDirection: 'row', flexWrap: 'wrap' },
+  tickRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36, paddingVertical: 4, paddingRight: 10, minWidth: 150, flexBasis: '48%', flexGrow: 1 },
+  tick:    { width: 16, height: 16, borderRadius: 3, borderWidth: 1, borderColor: T.muted, alignItems: 'center', justifyContent: 'center' },
+  tickOn:  { borderColor: T.accent, backgroundColor: T.rowActive },
+  tickMark:{ fontSize: 11, lineHeight: 13, color: T.accent, fontWeight: '700' },
   sum:     { fontFamily: F, fontSize: 12, letterSpacing: 1, color: T.value },
   rw:      { flexDirection: 'row', alignItems: 'center' },
   remKey:  { paddingRight: 6 },
