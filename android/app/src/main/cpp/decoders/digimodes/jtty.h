@@ -36,6 +36,7 @@ public:
             Spot s;
             s.mode = "JTTY"; s.call = j.call; s.how = j.how; s.grid = j.grid;   // ★ the caller's own, after its CQ (or "")
             s.text = j.how == "CQ" ? "CQ " + j.call : j.call;
+            s.textMade = true;   // ★ beta94 a summary, not the message sent — never the spot's "msg"
             s.snr = (int)std::lround(j.snrDb);
             s.audioHz = (float)j.audioHz;     // ★ tone 0, as WSJT-X reports a JTTY station (RN4AQ: 1088 Hz ↔ PSKReporter 14091088)
             s.slotUtc = j.utcMs / 1000.0;                           // ★ the frame's own start — no slots to name

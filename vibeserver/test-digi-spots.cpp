@@ -945,11 +945,12 @@ int main(int argc, char** argv) {
         const std::vector<uint8_t> ft8 = tonesFor("CQ M0FTE IO91", false);
         ok(ft8.size() == FT8_NN, "the FT8 neighbour encodes");
         std::mt19937 g(4242); std::normal_distribution<float> nd(0.0f, (float)sigma);
-        std::vector<std::string> got; std::mutex gm;
+        std::vector<std::string> got; std::mutex gm; std::string wsprText;
         digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
             [&](const digi::Spot& s, double rf) {
                 char b[200]; std::snprintf(b, sizeof b, "%s %s %.1f %s %d", s.mode.c_str(), s.call.c_str(), rf, s.grid.c_str(), s.snr);
                 std::lock_guard<std::mutex> lk(gm); got.push_back(b);
+                if (s.mode == "WSPR") wsprText = s.text;
             }, nullptr, nullptr);
         const double wStart = (slot + wspr::kStartSec - t0) * rate, sps = rate * 8192.0 / 12000.0;
         double wph = 0, fph = 0;
@@ -986,6 +987,9 @@ int main(int argc, char** argv) {
         std::printf("    engines %zu (%s); slots %llu; %s\n", sp.engines(), sp.describe().c_str(), (unsigned long long)sp.slotsDecoded(), ws.empty() ? "no WSPR spot" : ws.c_str());
         ok(std::string(call) == "G4ABC" && std::string(grid) == "IO92" && near(rf, wRf, 1.0),
            "WSPR G4ABC IO92 spotted as \"WSPR\" at its RF (dial 14.0956 + 1523 Hz): " + ws);
+        { std::lock_guard<std::mutex> lk(gm);
+          ok(wsprText == "G4ABC IO92 37" && DecoderHost::spotMsgJson(wsprText) == "G4ABC IO92 37",
+             "beta94: the WSPR spot's message (its \"msg\") is CALL GRID dBm — \"" + wsprText + "\""); }
         ok(std::abs(sn - snr) <= 2, "…its SNR (WSPRnet scale) within 2 dB of the " + std::to_string((int)snr) + " dB it was sent at: " + std::to_string(sn));
         bool ft8ok = false; { std::lock_guard<std::mutex> lk(gm); for (auto& s : got) if (s.rfind("FT8 M0FTE", 0) == 0) ft8ok = true; }
         ok(ft8ok, "…while FT8 on its own dial in the same slice still decodes");
@@ -1046,6 +1050,18 @@ int main(int argc, char** argv) {
         ok(n == 0 && sp.slotsDecoded() >= 6, "31 s of noise on 20 m (FT8, FT4, FT2, JS8 engines): " + std::to_string(sp.slotsDecoded()) + " slots decoded, " + std::to_string(n) + " spots");
     }
 
+    std::printf("── beta94: a spot's message is off the air — escaped, ASCII, bounded (DecoderHost::spotMsgJson) ──\n");
+    {
+        ok(DecoderHost::spotMsgJson("CQ IW2FAC JN45") == "CQ IW2FAC JN45", "a plain FT8 message passes unchanged");
+        ok(DecoderHost::spotMsgJson("A \"B\" C\\D") == "A \\\"B\\\" C\\\\D", "a quote and a backslash are JSON-escaped");
+        ok(DecoderHost::spotMsgJson("  AB\x01\x7f\xc3\xa9  CD\n\tEF  ") == "AB CD EF", "control and non-ASCII bytes dropped, spaces collapsed and trimmed");
+        const std::string longIn(200, 'X'), lq(100, '"');
+        ok(DecoderHost::spotMsgJson(longIn).size() == DecoderHost::kSpotMsgMax, "200 characters cut to kSpotMsgMax (" + std::to_string(DecoderHost::kSpotMsgMax) + ")");
+        const std::string q = DecoderHost::spotMsgJson(lq);
+        ok(q.size() == 2 * DecoderHost::kSpotMsgMax && q.back() == '"' && q[q.size() - 2] == '\\', "100 quotes: 48 kept, each escaped — never cut mid-escape");
+        ok(DecoderHost::spotMsgJson("").empty() && DecoderHost::spotMsgJson("\x02\x03").empty(), "nothing printable: \"\" (the field is left out)");
+    }
+
     std::printf("── the host: Single still FT8+FT4 on the listener's audio, and the spot frame names its mode ──\n");
     {
         DecoderHost::Env env;
@@ -1072,16 +1088,24 @@ int main(int argc, char** argv) {
             }
         };
         put("CQ M0SGL IO91", 1200);
+        put("G4XYZ M0RPT -12", 1800);   // ★ beta94: a report (no grid) — the message carries it
         for (auto& v : a) v += nz(g);
         for (size_t o = 0; o < a.size(); o += 960) {
             const int k = (int)std::min<size_t>(960, a.size() - o);
             h.feed(&a[o], k, 1, slot0 + (double)(o + k) / 48000.0);
             while (h.queued() > 96000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        std::string spot;
-        for (int i = 0; i < 200 && spot.empty(); ++i) { auto v = peer->spots(); if (!v.empty()) spot = v[0]; else std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+        std::string spot, rpt;
+        for (int i = 0; i < 200 && (spot.empty() || rpt.empty()); ++i) {
+            for (auto& v : peer->spots()) { if (field(v, "callsign") == "M0SGL") spot = v; if (field(v, "callsign") == "M0RPT") rpt = v; }
+            if (spot.empty() || rpt.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
         ok(field(spot, "mode") == "FT8" && field(spot, "callsign") == "M0SGL" && field(spot, "band") == "20m"
            && near(std::atof(field(spot, "frequency").c_str()), 14075200, 8), "Single: the spot frame names FT8, the call, 20m, dial + audio: " + spot);
+        // ★★ beta94 THE MESSAGE (Stuart 11-25, UberSDR's "Message" column): the decoded text, as WSJT-X prints it
+        ok(field(spot, "msg") == "CQ M0SGL IO91", "beta94: the FT8 spot carries its decoded message — msg \"" + field(spot, "msg") + "\"");
+        ok(field(rpt, "msg") == "G4XYZ M0RPT -12" && field(rpt, "grid").empty(),
+           "beta94: a report spot: no grid, but the message keeps the report as sent — " + rpt);
         h.stopSpots();
     }
 
@@ -1117,6 +1141,10 @@ int main(int argc, char** argv) {
             for (auto& v : peer->spots()) if (field(v, "mode") == (isJs8 ? "JS8" : "FT2")) { spot = v; break; }
             if (spot.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
+        // ★★ beta94: FT2's message as WSJT-X prints it; JS8's frame text (with its submode)
+        ok(isJs8 ? (field(spot, "msg").find("M0JSS") != std::string::npos && field(spot, "msg").find("(Normal)") != std::string::npos)
+                 : field(spot, "msg") == "CQ IU8SGL JN70",
+           std::string("beta94: ") + (isJs8 ? "JS8" : "FT2") + " spot carries its message — msg \"" + field(spot, "msg") + "\"");
         ok(field(spot, "callsign") == (isJs8 ? "M0JSS" : "IU8SGL") && field(spot, "band") == (isJs8 ? "40m" : "20m")
            && field(spot, "grid") == (isJs8 ? "IO92" : "JN70") && near(std::atof(field(spot, "frequency").c_str()), dial + f0, isJs8 ? 4 : 12),
            std::string("Single at ") + (isJs8 ? "JS8 7.078" : "FT2 14.084") + ": " + spot);

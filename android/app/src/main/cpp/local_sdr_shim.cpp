@@ -30050,7 +30050,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★ V12 beta90 THE DIGI MODES MAP's stations (vibe_station_store.h): every station any radio on this machine
              *  heard in digital spots / CW / PSK / RTTY — background decoding and listeners — ONE ENTRY PER CALL over
              *  ?window=1h|24h|7d|30d|all (default 24h); ?since=<UTC s> = only the calls heard since (the map's live poll).
-             *  Callsigns, grids, modes, bands, SNRs and times only (what a station sends to be heard). The gallery's
+             *  Callsigns, grids, modes, bands, SNRs and times only (what a station sends to be heard) — never the decoded
+             *  message, which (beta94) only a listener's live digital_spot frame carries, for display. The gallery's
              *  privacy applies: a private gallery's stations are the owner's. CORS open, as the rest of the read API. */
             if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
             const size_t sp = reqLine.find(' ', 4);

@@ -352,6 +352,10 @@ public:
      *  the signal started from where OUR clock put the slot's nominal start. ★★ FT8 never sent it until 2026-11-14:
      *  every FT8 spot went out with dt 0, so the R36S's FT8 clock auto-set always found the clock "synchronised". */
     float decodingDt() const { return curDt_; }
+    /** ★★ V12 beta94 (Stuart 11-25, UberSDR's "Message" column): the decoded message of the spot being reported, as WSJT-X
+     *  prints it — "CQ IW2FAC JN45", "F5MXH N2XSG RR73", "ZL1RKO W9DHI -16" (read inside onSpot, like decodingDt). Display
+     *  only: the host sends it as the digital_spot's "msg"; PSK Reporter and the station store never see it. */
+    const std::string& decodingText() const { return curText_; }
 
     /* ★★★ THE CLOCK HUNT (2026-11-14, Stuart's R36S 4.1 s slow after a fresh card — 1 FT8 decode where the same audio
      *  gives 67). A window cut at slot + 0 holds a signal only if our clock is within ~±2 s of the senders'; past that
@@ -446,6 +450,7 @@ private:
     double  workSlotUtc_ = NAN;    // ★ that window's slot boundary (UTC) — the spots' time
     double  workHunt_ = 0;         // ★ the clock-hunt lead that window was cut at (added to every DT)
     float   curDt_ = 0;            // the DT of the spot onSpot is reporting
+    std::string curText_;          // ★ beta94 its message as decoded (the worker's; read inside onSpot)
     std::atomic<double> huntLead_{0.0};
     std::atomic<bool>   huntReset_{false};
     HuntState hunt_;               // the worker's

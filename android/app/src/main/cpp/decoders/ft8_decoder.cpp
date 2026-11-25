@@ -1457,6 +1457,14 @@ void Ft8Decoder::runDecode() {
         if (rc != FTX_MESSAGE_RC_OK) continue;
         std::string deCall;
         if (!spotCallsign(callDe, deCall)) continue;   // ★ empty or an unresolved "<...>": not a spot
+        /* ★★ beta94 THE MESSAGE AS SENT (WSJT-X's text: to, de, then the grid OR report — "CQ IW2FAC JN45",
+         *  "ZL1RKO W9DHI -16") — built BEFORE the grid field is cleared below, so a report or an RR73 shows as sent. */
+        curText_.clear();
+        for (const char* f : {(const char*)callTo, (const char*)callDe, (const char*)grid}) {
+            if (!f[0]) continue;
+            if (!curText_.empty()) curText_.push_back(' ');
+            curText_ += f;
+        }
         // ★★ ft8_lib's third field is "grid OR report": "IO92", but also "-12", "R-12", "73", "RRR" and
         //    "RR73". Only a real 4-character locator is a grid (B10: the map warned about ~40 "unparseable
         //    grids" on every update, and every RR73 sign-off — a VALID-LOOKING square near the North Pole —

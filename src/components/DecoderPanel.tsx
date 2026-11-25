@@ -16,6 +16,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { spotRowKey, skimWaitKey, spotsNavKey, spotsNavFollow, type SpotsZone } from '../utils/spotsNav';
 import { digiModeStyle } from '../utils/digiModes';
 import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
+import { spotDetailLine, spotMsgLine } from '../utils/spotMessage';   // ★★ beta94 the expanded row's message line
 import {
   Animated,
   FlatList,
@@ -261,13 +262,18 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         // joined with · and any missing piece simply drops out — a report or a 73 carries no
         // locator, so the row must not leave a gap where the grid would have been.
         <Text style={[dp.spotDetail, { fontFamily: font }]} numberOfLines={1}>
-          {[
-            s.msg,
+          {spotDetailLine([
             s.grid,
             s.bearing != null ? `${Math.round(s.bearing)}°` : undefined,
             fmtSpotTimeSec(s.time),
-          ].filter(Boolean).join(' · ')}
+          ])}
         </Text>
+      )}
+      {/* ★★ beta94 THE MESSAGE on its own line under the detail line (Stuart 11-25, UberSDR's "Message" column) — it led
+          the one-line detail and was cut off there; now WRAPPED, dim, as the web draws it (main.ts spotMsgHtml). A
+          VibeServer sends it for the slotted modes, UberSDR for its spots; none = no line, no gap. */}
+      {expanded && !!spotMsgLine(s.msg, skimText) && (
+        <Text style={[dp.spotMsg, { fontFamily: font }]}>{spotMsgLine(s.msg, skimText)}</Text>
       )}
       {/* ★★ beta92 BAND SKIMMER (Stuart: "when expanded we should also be able to read the cw message like we do in the
           cw skimmer, same for rtty"): the message, WRAPPED, in its signal's confidence colour (the CW skimmer's). */}
@@ -2059,6 +2065,8 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   skimWait:    { flex: 1, minWidth: 0, color: T.muted, fontStyle: 'italic', fontSize: 11 },
   skimText:    { fontSize: 12, lineHeight: 16, marginLeft: 44, marginTop: 3, color: T.value },
   skimWaitText: { color: T.muted, fontStyle: 'italic' },
+  // ★★ beta94 an expanded spot's decoded message: the skim line's size and wrap, the detail line's dim colour
+  spotMsg:     { fontSize: 12, lineHeight: 16, marginLeft: 44, marginTop: 3, color: T.muted },
   /* ★ NAVTEX's title line: what the message is on the left, how it arrived on the right; wraps rather than
    *  clipping on the SE. A hairline under it, as the list rows have. */
   nvHead:      { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10, rowGap: 2,

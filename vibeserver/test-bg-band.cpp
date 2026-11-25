@@ -559,6 +559,11 @@ static void livePath() {
     ok(peer->count("\"mode\":\"RTTY\",\"callsign\":\"G4RTY\"", "digital_spot") > 0, "a digital_spot frame: RTTY G4RTY — " + peer->last("G4RTY").substr(0, 240));
     ok(peer->count("\"mode\":\"PSK63\",\"callsign\":\"G4PSK\"", "digital_spot") > 0, "a digital_spot frame: PSK63 G4PSK (wide PSK) — " + peer->last("G4PSK").substr(0, 240));
     ok(peer->count("\"callsign\":\"G4IRX\"", "\"mode\":\"FT8\"") > 0, "…and FT8 G4IRX as ever");
+    // ★★ beta94 THE MESSAGE: background decoding's FT8 spot carries what was sent; a skimmer's (CW/RTTY/PSK) never — its
+    //    own text goes out on band_skim, and its Spot::text is only a summary (textMade)
+    ok(peer->count("\"callsign\":\"G4IRX\"", "\"msg\":\"CQ G4IRX IO91\"") > 0, "beta94: FT8 G4IRX's spot carries msg \"CQ G4IRX IO91\" — " + peer->last("G4IRX").substr(0, 260));
+    ok(peer->count("\"callsign\":\"G4CWX\"", "\"msg\"") == 0 && peer->count("\"callsign\":\"G4RTY\"", "\"msg\"") == 0
+       && peer->count("\"callsign\":\"G4PSK\"", "\"msg\"") == 0, "beta94: the CW / RTTY / PSK spots carry no msg");
     /* ★★ beta92 THE BAND SKIMMER'S FRAME (Stuart 2026-11-23): the CW and RTTY windows being skimmed (the VFO's width), and
      *  each signal followed with its frequency, call and readable text (EXPAND, the waterfall marks) — bounded. */
     {

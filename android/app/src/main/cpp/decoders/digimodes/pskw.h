@@ -60,6 +60,7 @@ protected:
                 s.mode = spotModeOf(p.mode);
                 s.call = p.call; s.how = p.how;
                 s.text = p.how + " " + p.call;
+                s.textMade = true;   // ★ beta94 a summary, not the message sent — never the spot's "msg"
                 s.snr = (int)std::lround(p.snrDb - es0To2500Db(p.mode));   // ★ Es/N0 → dB in 2500 Hz, as psk.h
                 s.rfHz = rf;
                 s.slotUtc = p.utcMs / 1000.0;

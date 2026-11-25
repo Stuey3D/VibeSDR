@@ -3737,8 +3737,12 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 #spotList .sskim.q-low { color: #FF8A3D; }
 #spotList .sskim.q-poor { color: #FF4B4B; }
 #spotList .sskim.wait { color: var(--text-dim); font-style: italic; font-family: inherit; }
+/* ★★ beta94 an expanded FT8 / FT4 / WSPR / JS8 … row's message as decoded (main.ts spotMsgHtml — Stuart 11-25, UberSDR's
+   "Message" column): the skim line's monospace and wrap, in the detail line's dim colour — context to read. */
+#spotList .smsg { grid-column: 1 / -1; font-size: 12px; line-height: 1.35; white-space: normal; overflow-wrap: anywhere;
+                  font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text-dim); }
 @container decbox (max-width: 400px) {
-  #spotList .sskim { flex: 1 1 100%; }
+  #spotList .sskim, #spotList .smsg { flex: 1 1 100%; }
 }
 
 /* Recordings. */

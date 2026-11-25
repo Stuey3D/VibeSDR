@@ -20,6 +20,7 @@ public:
             if (!onSpot) return;
             Spot s; s.mode = "FT2"; s.call = de; s.grid = grid; s.snr = snr; s.audioHz = hz;
             s.slotUtc = d_.decodingSlotUtc();   // ★ the slot's start
+            s.text = d_.decodingText();         // ★★ beta94 the message as decoded (the spot's "msg")
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };

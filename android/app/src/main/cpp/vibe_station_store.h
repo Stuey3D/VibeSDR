@@ -28,7 +28,9 @@
 //    of <gallery>/radios.idx. Merged by OR under the same flock as the counts, so a station two radios heard lists both.
 //    The file stays one per day for the whole machine — the mask only lets the map FILTER by radio.
 // ⚖ What is in it: callsigns, Maidenhead grids, modes, bands, SNRs and times — what an amateur station sends to be heard
-//   by everyone, the same fields every public spotting network shows. No message text.
+//   by everyone, the same fields every public spotting network shows. No message text. (★ beta94: a listener's LIVE
+//   digital_spot frame now carries the decoded message, "msg" — what the station transmitted to everyone, for the expanded
+//   spot row only. It is never handed to this store, to stations.json or to PSK Reporter — vibe_decoder_host.h emitSpot.)
 #pragma once
 #include <algorithm>
 #include <atomic>

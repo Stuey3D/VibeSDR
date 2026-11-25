@@ -974,6 +974,9 @@ if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$(
 # ★★ V12 APP PARITY 2: the app's digital spots — the server's mode list, Band mode's capability and title, the governor's chips —
 #    against the web's own code cut out of main.ts / decoders.ts.
 if npx tsx scripts/test_spots_band_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta94 A SPOT'S MESSAGE (src/utils/spotMessage.ts): the app's parser keeps `msg`, cleaned and bounded; the expanded
+#    row's own message line (none = no line); the web's parser cut out of decoders.ts and run on the same frames.
+if npx tsx scripts/test_spot_message_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta92 THE BAND SKIMMER (src/services/bandSkim.ts): its name, the band_skim frame (and an older server's), the VFO's
 #    width, the waterfall marks, "waiting for callsign" and the expanded CW / RTTY text — one rule for the web and the app.
 if npx tsx scripts/test_band_skim.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

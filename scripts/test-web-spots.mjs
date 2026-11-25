@@ -164,6 +164,29 @@ try {
   ok(rows.length >= 8 && rows.every((r) => styleOf(r.mode) && r.letter === styleOf(r.mode).letter && hex(r.bg) === styleOf(r.mode).colour && r.band === '20m'),
      `every row's MODE column in its mode's colour and letter: ${rows.map((r) => `${r.mode}/${r.letter}/${hex(r.bg)} ${r.call}`).join(', ')}`);
   ok(!rows.some((r) => r.call === 'ZL3LSB'), 'the lower-sideband station is never listed');
+  // ★★ beta94 THE MESSAGE (Stuart 11-25, UberSDR's "Message" column): a slotted mode's row shows its decoded text when
+  //    EXPANDED, on its own dim line — and never when collapsed; JTTY / PSK (a skimmer's spot) carry none.
+  {
+    const msgRows = () => ev(`JSON.stringify([...document.querySelectorAll('#spotList .sres.spot')].map(r => ({ mode: r.querySelector('.mode').textContent.replace(/^./, ''),
+        call: r.querySelector('.call').textContent, msg: (r.querySelector('.smsg') || {}).textContent ?? null })))`).then(JSON.parse);
+    const collapsed = await msgRows();
+    ok(!(await ev(`document.getElementById('spotList').classList.contains('expanded')`)) && collapsed.every((r) => r.msg === null),
+       `beta94: collapsed, no row has a message line (${collapsed.length} rows)`);
+    await ev(`document.getElementById('sfExpand').click()`);
+    ok(await until(`[...document.querySelectorAll('#spotList .sres.spot .smsg')].some(m => m.textContent === 'CQ G4ABC IO92')`, 5000), 'beta94: EXPANDED, FT8 G4ABC reads "CQ G4ABC IO92"');
+    const ex = await msgRows();
+    const want = { G4ABC: 'CQ G4ABC IO92', DL1XYZ: 'CQ DL1XYZ JO31', K1ABC: 'CQ K1ABC FN42', JA1QRS: 'CQ JA1QRS PM95', IU8AAA: 'CQ IU8AAA JN70' };
+    const bad = Object.entries(want).filter(([c, m]) => { const r = ex.find((x) => x.call === c); return r && r.msg !== m; });
+    ok(bad.length === 0 && ex.filter((r) => want[r.call]).length >= 4, `beta94: FT8 / FT4 / FT2 rows read their own message (${ex.filter((r) => r.msg).map((r) => `${r.mode} ${r.call}: ${r.msg}`).join(' | ')})`);
+    ok(ex.filter((r) => r.mode === 'JTTY' || /^PSK/.test(r.mode)).every((r) => r.msg === null), 'beta94: JTTY / PSK rows (a skimmer\'s spot) have no message line — no empty gap');
+    const js8 = ex.find((r) => r.mode === 'JS8');
+    ok(!js8 || (js8.msg && js8.msg.includes('G4JSN')), `beta94: the JS8 row reads its frame: ${js8 ? js8.msg : '(no JS8 row)'}`);
+    const st = JSON.parse(await ev(`JSON.stringify((() => { const m = document.querySelector('#spotList .smsg'), d = m && m.parentElement.querySelector('.sdetail');
+        return { c: m && getComputedStyle(m).color, dc: d && getComputedStyle(d).color, after: !!(m && d && (d.compareDocumentPosition(m) & 4)) }; })())`));
+    ok(st.c && st.c === st.dc && st.after, `beta94: the message line sits under the detail line, in its dim colour (${st.c})`);
+    await ev(`document.getElementById('sfExpand').click()`);
+    ok(await until(`!document.querySelector('#spotList .smsg')`, 3000), 'beta94: collapsed again, the message lines go');
+  }
   // ★ M7EIW: the time is HH:MM:SS UTC — the slot's start (FT8/JS8 :00/:15/:30/:45; FT4 7.5 s → :00/:07/:15/:22 …;
   //   FT2 3.75 s → :00/:03/:07/:11 within each 15 s)
   const times = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#spotList .sres.spot')].map(r => [r.querySelector('.mode').textContent.replace(/^./, ''), r.querySelector('.t').textContent]))`));

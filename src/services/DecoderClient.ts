@@ -49,6 +49,7 @@ import { USER_AGENT } from '../constants/version';
 import { rttyFraming, RTTY_WEATHER } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
+import { spotMsgOf } from '../utils/spotMessage';   // ★★ beta94 a spot's decoded message
 import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
 import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type JttySpot } from './jtty';
 import { ncdxfSanitise, ncdxfStatus, type NcdxfReport } from './ncdxf';   // ★ V12 NCDXF beacons
@@ -187,7 +188,7 @@ export interface SpotRow {
   country: string;
   /** The full decoded message — "CQ DX JA8KSF QN03". The primary payload of a spot: it is what
    *  distinguishes a CQ from a signal report from a completed QSO. UberSDR has always sent this
-   *  and we discarded it. */
+   *  and we discarded it. ★★ beta94 a VibeServer sends it too (`msg`, the slotted modes) — utils/spotMessage.ts. */
   msg?:     string;
   /** Degrees from the receiver. Server-supplied on UberSDR; derived from `grid` on-device. */
   bearing?: number;
@@ -195,11 +196,6 @@ export interface SpotRow {
   radios?: string[];
 }
 
-/** Trimmed string, or undefined — so an empty field never renders as a blank line. */
-function spotStr(v: unknown): string | undefined {
-  const s = typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
-  return s ? s : undefined;
-}
 /** A finite number, or undefined. Accepts the numeric-string form some servers send. */
 function spotNum(v: unknown): number | undefined {
   if (typeof v === 'number') return isFinite(v) ? v : undefined;
@@ -725,11 +721,13 @@ export class DecoderClient {
               distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
               grid: cleanText(d.grid, 8) || undefined,
               country: cleanText(d.country, 48),
-              // ★ The wire key is NOT confirmed — the UberSDR web UI's column headings ("Message",
+              // ★ The wire key is NOT confirmed for UberSDR — the web UI's column headings ("Message",
               // "Bearing") are not necessarily the field names. Accept the plausible spellings
               // rather than betting on one and silently showing nothing; the cost of the extra
               // `??`s is nil and the cost of guessing wrong is a feature that looks broken.
-              msg: spotStr(d.message ?? d.msg ?? d.text),
+              // ★★ beta94 a VibeServer sends `msg` (the slotted modes' decoded text) — cleaned and bounded
+              // there (utils/spotMessage.ts): it came off the air.
+              msg: spotMsgOf(d),
               bearing: spotNum(d.bearing ?? d.bearing_deg ?? d.azimuth),
             });
           } else if ((m.type === 'aprs_list' || m.type === 'aprs_packet' || m.type === 'aprs_frame') && m.data) {

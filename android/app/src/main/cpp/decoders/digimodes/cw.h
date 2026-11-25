@@ -46,6 +46,7 @@ protected:
                 s.mode = "CW";
                 s.call = p.call; s.how = p.how;
                 s.text = p.how + " " + p.call;
+                s.textMade = true;   // ★ beta94 a summary, not the message sent — never the spot's "msg"
                 s.snr = std::isfinite(p.snrDb) ? (int)std::lround(p.snrDb) : 0;
                 s.rfHz = centre_ + p.offsetHz;
                 s.slotUtc = p.utcMs / 1000.0;
