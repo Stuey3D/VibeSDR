@@ -1668,7 +1668,7 @@ export default function DecoderPanel({
   );
 
   return (
-    <DecoderShell bottom={bottomOffset} maxWidth={PANEL_MAX_W} tall={tall} lower={lowerBody}
+    <DecoderShell bottom={bottomOffset} maxWidth={PANEL_MAX_W} tall={tall} lower={lowerBody} shown={panelOn}
                   borderColor={kbZone ? focusC.ring : undefined}
                   wrapStyle={{ opacity, transform: [{ translateY: slideY }] }}
                   onTouchStart={noteTouchInteraction}>
