@@ -57,13 +57,34 @@ const pan = lib.digiStatsHtml(st, {
   tot: { srvOk: true, winWords: 'the last 24 hours', drawn: 6, total: 9, trunc: true, unplaced: 3, decodesToday: 1234, falseToday: 2, notKeptToday: 0, spotsSent: 15000 },
 });
 for (const w of ['DISTANCE', 'BEARING', 'RANGE', 'TOP COUNTRIES', 'BY MODE', 'BY BAND', 'APRS', 'TOTALS', 'Decodes today (UTC)',
-                 'Heard without a locator', 'the newest 6 of 9', 'Set aside as false decodes'])
+                 '+ heard without a locator', 'the newest 6 of 9', 'Set aside as false decodes'])
   ok(pan.stats.includes(w), `stats: ${w}`);
 for (const w of ['Receiver', 'FT8', 'FST4W', 'APRS (its symbol where it sends one)', 'ISS PASS', 'Colour + letter = mode · size = SNR'])
   ok(pan.legend.includes(w), `legend: ${w}`);
 ok(/data-mode="FST4W"[^]*?<span class="lc">2<\/span>/.test(pan.legend), 'a mode the server did not list still gets its row, with its count');
-for (const w of ['LATEST', 'RAREST COUNTRY', 'Australia (1)', 'SPOTS', '15,000', 'from 6 transmitters · 5 countries'])
+for (const w of ['LATEST', 'RAREST COUNTRY', 'Australia (1)', 'SPOTS', '15,000', 'from 9 transmitters (6 on the map) · 5 countries'])
   ok(pan.summary.includes(w), `summary: ${w}`);
+// ★★ beta94 (Stuart 11-24: "still not showing total spots", "2889 stations is too low our pskr stats are over 12k")
+console.log('── beta94 the TOTALS: spots sent, transmitters ON THE MAP, + without a locator ──');
+const totRow = (h: string, label: string) => { const m = new RegExp('<span>' + label.replace(/[+]/g, '\\+') + '</span><b>([^<]*)</b>').exec(h); return m ? m[1] : null; };
+ok(totRow(pan.stats, 'Spots sent to PSK Reporter') === '15,000', 'TOTALS: "Spots sent to PSK Reporter 15,000"');
+ok(totRow(pan.stats, 'Transmitters on the map') === '6' && !/<span>Stations<\/span>/.test(pan.stats.slice(pan.stats.indexOf('TOTALS'))), 'TOTALS: "Transmitters on the map 6" — no bare "Stations" row to be read as everything heard');
+ok(totRow(pan.stats, '+ heard without a locator') === '3', 'TOTALS: "+ heard without a locator 3"');
+ok(pan.stats.indexOf('Spots sent to PSK Reporter') < pan.stats.indexOf('Transmitters on the map')
+   && pan.stats.indexOf('Transmitters on the map') < pan.stats.indexOf('+ heard without a locator'), '…in that order: spots, then transmitters on the map, then the unplaced');
+ok(pan.stats.includes('every radio on this server') && !pan.stats.includes('not split by radio'), 'the spots are the whole server\'s (one log per server across radios)');
+const tot0 = { srvOk: true, winWords: 'the last 24 hours', drawn: 6, total: 6, trunc: false, unplaced: 0, decodesToday: 10, falseToday: 0, notKeptToday: 0, spotsSent: 0 };
+const noSent = lib.digiStatsHtml(st, { tot: tot0 });
+ok(!noSent.stats.includes('Spots sent to PSK Reporter') && !noSent.stats.includes('heard without a locator') && totRow(noSent.stats, 'Transmitters on the map') === '6',
+   'nothing sent (reporting off) and nothing unplaced: neither row, transmitters still said');
+ok(noSent.summary.includes('TRANSMITTERS') && !noSent.summary.includes('SPOTS'), 'the summary: TRANSMITTERS when no spot was sent');
+const oneRadio = lib.digiStatsHtml(st, { tot: { ...tot0, spotsSent: 15473, unplaced: 999, radioOnly: true } });
+ok(oneRadio.stats.includes('reports are not split by radio') && oneRadio.summary.includes('SPOTS · ALL RADIOS'),
+   'filtered to one radio: the spots are still said to be every radio\'s, in the panel and the summary');
+ok(oneRadio.summary.includes('from 1,005 transmitters (6 on the map)'), 'the summary counts the unplaced transmitters too (6 + 999)');
+const app94 = readFileSync('src/components/MapOverlay.tsx', 'utf8'), web94 = readFileSync('web/client/src/main.ts', 'utf8');
+ok(/radioOnly:!!pick/.test(app94) && /radioOnly: !!radioPick/.test(web94), 'both pages tell the panel when the map is filtered to one radio');
+
 const noRx = lib.digiStatsHtml(lib.digiStats(items.map((x) => ({ ...x, km: null })), null), {});
 ok(noRx.stats.includes('No receiver location published') && !noRx.stats.includes('BEARING') && !noRx.stats.includes('DISTANCE'),
    'no receiver: no distances, no bearing, and it says why');

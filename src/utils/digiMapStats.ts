@@ -114,7 +114,8 @@ function digiCell(k,v,sub){
 }
 /* o: { modes:[{m,colour,ink,letter}], modeColour(m), rx:'<svg…>' or '', aprs:{n,on,far:{km,call}|null,leg:[{svg,words}],only},
  *      svgOk(s), overlay:{label,colour}|null, tot:{srvOk,winWords,drawn,total,trunc,unplaced,decodesToday,falseToday,
- *      notKeptToday,spotsSent} } */
+ *      notKeptToday,spotsSent,radioOnly} } — radioOnly: the map is filtered to one radio (the stations are that radio's;
+ *      spotsSent is always the whole server's: the reports, like every decoder log, are one per server across radios) */
 function digiStatsHtml(st,o){
   o=o||{};var tot=o.tot||{},ap=o.aprs||{n:0,on:false,far:null,leg:[],only:false};
   var h='';
@@ -142,9 +143,16 @@ function digiStatsHtml(st,o){
   }
   h+='<div class="sect">TOTALS</div>'+
     (tot.srvOk?'<div class="sub">'+digiEsc(tot.winWords||'')+' · background decoding and every listener</div>':'')+
-    '<div class="row"><span>Stations</span><b>'+digiNum(st.n)+'</b></div>'+
+    /* ★★ beta94 (Stuart 11-24 on the Pi 500: "still not showing total spots", "2889 stations is too low our pskr stats are
+     *  over 12k") — PSK Reporter counts REPORTS (each call + band + mode at most once a batch), the map draws TRANSMITTERS
+     *  that sent a locator. Both are said here, each by its own name, so neither is read as the other. */
+    (tot.spotsSent>0?'<div class="row"><span>Spots sent to PSK Reporter</span><b>'+digiNum(tot.spotsSent)+'</b></div>'+
+      '<div class="sub">'+(tot.radioOnly?'every radio on this server (reports are not split by radio)':'every radio on this server')+
+      ' · each call + band + mode at most once every five minutes, the figure PSK Reporter counts</div>':'')+
+    '<div class="row"><span>Transmitters on the map</span><b>'+digiNum(st.n)+'</b></div>'+
     (tot.srvOk&&tot.trunc&&tot.total>tot.drawn?'<div class="sub">the newest '+digiNum(tot.drawn)+' of '+digiNum(tot.total)+' in this window are drawn</div>':'')+
-    (tot.unplaced?'<div class="row"><span>Heard without a locator</span><b>'+digiNum(tot.unplaced)+'</b></div>':'')+
+    (tot.unplaced?'<div class="row"><span>+ heard without a locator</span><b>'+digiNum(tot.unplaced)+'</b></div>'+
+      '<div class="sub">decoded (and sent to PSK Reporter when it is on) but not drawn: no locator to place them</div>':'')+
     (tot.srvOk&&tot.decodesToday>=0?'<div class="row"><span>Decodes today (UTC)</span><b>'+digiNum(tot.decodesToday)+'</b></div>':'')+
     (tot.srvOk&&tot.falseToday>0?'<div class="row"><span>Set aside as false decodes</span><b>'+digiNum(tot.falseToday)+'</b></div><div class="sub">today (UTC): calls no country was allocated — decoded out of noise, never kept or reported. A real call at a locator its country cannot be at is kept, without the locator.</div>':'')+
     (tot.srvOk&&tot.notKeptToday>0?'<div class="row"><span>Not kept today</span><b>'+digiNum(tot.notKeptToday)+'</b></div><div class="sub">the day’s list was full — these were decoded (and sent to PSK Reporter when it is on) but are not on the map</div>':'')+
@@ -166,7 +174,8 @@ function digiStatsHtml(st,o){
     var l=st.latest;
     sm=digiCell('LATEST',(l.country||l.call)+' · '+l.band,l.call+' · '+l.mode+(l.snr!=null&&isFinite(Number(l.snr))?' · '+l.snr+'dB':''))+
       (st.rarest?digiCell('RAREST COUNTRY',st.rarest[0]+' ('+st.rarest[1]+')',''):'')+
-      (tot.spotsSent>0?digiCell('SPOTS',digiNum(tot.spotsSent),'from '+digiNum(st.n)+' transmitters · '+st.nCountries+' countries')
+      (tot.spotsSent>0?digiCell(tot.radioOnly?'SPOTS · ALL RADIOS':'SPOTS',digiNum(tot.spotsSent),
+        'from '+digiNum(st.n+(tot.unplaced||0))+' transmitters'+(tot.unplaced?' ('+digiNum(st.n)+' on the map)':'')+' · '+st.nCountries+' countries')
                       :digiCell('TRANSMITTERS',digiNum(st.n),st.nCountries+' countries'))+
       (ap.n?digiCell('APRS',digiNum(ap.n)+' station'+(ap.n===1?'':'s'),ap.newest?'newest '+ap.newest:''):'');
   /* ★ beta93 (Stuart 11-24: an APRS station on the map and the card said "no spots yet") — APRS stations are not digital

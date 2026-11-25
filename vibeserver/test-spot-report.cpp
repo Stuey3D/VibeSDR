@@ -101,6 +101,7 @@ struct UdpSink {
         ::bind(fd, (sockaddr*)&a, sizeof a);
         socklen_t l = sizeof a; ::getsockname(fd, (sockaddr*)&a, &l); port = ntohs(a.sin_port);
         timeval tv{0, 300000}; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        int rb = 4 << 20; setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rb, sizeof rb);   // ★ beta94 a full 8000-station batch at once
     }
     ~UdpSink() { if (fd >= 0) ::close(fd); }
     std::vector<std::vector<uint8_t>> drain(int* srcPort = nullptr) {
@@ -231,7 +232,7 @@ int main() {
         Spot junk = s; junk.call = "CQ"; rp.note(junk); junk.call = "12345"; rp.note(junk); // not callsigns
         junk.call = "132XQA"; junk.grid = "PC46"; rp.note(junk); junk.call = "1H7IJH"; rp.note(junk);   // ★ beta92: no administration
         Spot hfar = s; hfar.call = "W1AW"; hfar.rfHz = 0; rp.note(hfar);
-        CHECK(rp.pendingCount() == 2, "one record per callsign per batch; FT2, non-callsigns, false decodes (132XQA) and no frequency dropped");
+        CHECK(rp.pendingCount() == 2, "one record per call + band + mode per batch; FT2, non-callsigns, false decodes (132XQA) and no frequency dropped");
         const long first = rp.nextFlushAt();
         CHECK(first - now >= kBatchSec && first - now <= kBatchSec + kStartJitterSec, "the first batch 5 minutes from start, + 0–60 s");
         now += 299; rp.tick();
@@ -382,6 +383,86 @@ int main() {
         c.on = true; c.call = "G4ABC"; rp.configure(c); rp.forceRanksDue(); rp.tick();
         CHECK(rp.ranksJson().find("\"40m\":{\"reports\":5}") != std::string::npos && rp.ranksJson().find("<html>") == std::string::npos,
               "an answer that is not the directory's JSON never replaces the last good one");
+        std::string rm = "rm -rf '" + dir + "'"; if (!dir.empty()) (void)!std::system(rm.c_str());
+    }
+
+    std::printf("── beta94 once per batch per CALL + BAND + MODE (PSK Reporter's limit, not per call) ──\n");
+    {
+        UdpSink sink;
+        long now = 1'800'000'000;
+        Reporter rp; rp.setClock([&] { return now; }); rp.setRandomSeed(5);
+        Config c; c.on = true; c.call = "G4ABC"; c.grid = "IO91wm"; c.pskHost = "127.0.0.1"; c.pskPort = sink.port;
+        rp.configure(c);
+        auto reportsIn = [&] { std::map<uint16_t, Template> k; std::vector<std::vector<std::string>> tx;
+                               for (auto& g : sink.drain()) { Decoded d = decode(g, k); tx.insert(tx.end(), d.tx.begin(), d.tx.end()); } return tx; };
+        Spot s; s.mode = "FT8"; s.call = "DL1XYZ"; s.snr = -10; s.slotUtc = now; s.rfHz = 7074500; rp.note(s);   // 40 m FT8
+        s.rfHz = 10136500; rp.note(s);                                                                      // 30 m FT8
+        rp.flushNow();
+        auto tx = reportsIn();
+        CHECK(tx.size() == 2 && tx[0][0] == "DL1XYZ" && tx[1][0] == "DL1XYZ" && tx[0][1] != tx[1][1], "the same call on 40 m FT8 and 30 m FT8 in one batch: 2 reports");
+        now += kBatchSec;
+        s.rfHz = 7074500; rp.note(s); s.rfHz = 7075100; s.grid = "JO62"; rp.note(s);                         // twice on 40 m FT8
+        rp.flushNow(); tx = reportsIn();
+        CHECK(tx.size() == 1 && tx[0][5] == "JO62", "the same call twice on 40 m FT8 in one batch: 1 report, the later locator kept");
+        now += 60;
+        rp.note(s); s.rfHz = 10136500; rp.note(s);
+        CHECK(rp.pendingCount() == 1, "40 m again within kRepeatSec of its report: none; 30 m (last reported a batch ago) is due");
+        Spot f4 = s; f4.mode = "FT4"; f4.rfHz = 7047500; rp.note(f4);
+        CHECK(rp.pendingCount() == 2, "the same call in another MODE on the same band is its own report");
+        rp.flushNow(); (void)reportsIn();
+        now += 30; s.rfHz = 7074500; rp.note(s); s.rfHz = 10136500; rp.note(s); rp.note(f4);
+        CHECK(rp.pendingCount() == 0, "a repeat within kRepeatSec still gives none, on every band and mode");
+    }
+
+    std::printf("── beta94 the queue's bound and the DROPPED count (an all-band contest batch) ──\n");
+    {
+        UdpSink sink;
+        long now = 1'800'000'000;
+        char tmpl[] = "/tmp/vibe-spotdrop-XXXXXX";
+        const std::string dir = mkdtemp(tmpl) ? tmpl : "";
+        Reporter rp; rp.setClock([&] { return now; }); rp.setRandomSeed(3);
+        rp.setStatusDir(dir); rp.setRadioLabel("All-band");
+        Config c; c.on = true; c.call = "G4ABC"; c.grid = "IO91wm"; c.software = "VibeServer 12.0.0-test";
+        c.pskHost = "127.0.0.1"; c.pskPort = sink.port;
+        rp.configure(c);
+        CHECK(kMaxPending == 8000, "the queue holds 8000 stations (was 2000)");
+        // ★ the memory bound: a waiting spot's node, estimated from the types (key + Spot + mode + band + the tree's node)
+        const size_t perSpot = sizeof(std::string) * 3 + sizeof(Spot) + 4 * sizeof(void*) + 16;
+        std::printf("        ~%zu bytes a waiting spot here; full queue ~%.2f MB\n", perSpot, perSpot * kMaxPending / 1048576.0);
+        CHECK(perSpot <= 320 && perSpot * kMaxPending <= 3u * 1024 * 1024, "a full queue stays under 3 MB (the 256 MB floor: bounded, small)");
+        CHECK(kMaxRecent >= kMaxPending && kMaxDroppedTracked <= kMaxPending, "the repeat memory holds a full batch; the dropped set is bounded too");
+        auto callOf = [](int k) {   // DL0AAA… — distinct, plausible, Germany's prefix
+            return std::string("DL") + char('0' + k % 10) + char('A' + (k / 10) % 26) + char('A' + (k / 260) % 26) + char('A' + (k / 6760) % 26);
+        };
+        const int over = 1234;
+        Spot s; s.mode = "FT8"; s.snr = -10; s.slotUtc = now;
+        for (int k = 0; k < (int)kMaxPending + over; ++k) { s.call = callOf(k); s.rfHz = 14074000 + (k % 3000); rp.note(s); }
+        CHECK(rp.pendingCount() == kMaxPending, "overfilled by 1234: the queue stops at its cap");
+        CHECK(rp.droppedThisBatch() == (size_t)over, "…and the 1234 turned away are counted");
+        for (int k = (int)kMaxPending; k < (int)kMaxPending + over; ++k) { s.call = callOf(k); rp.note(s); }   // heard again
+        CHECK(rp.droppedThisBatch() == (size_t)over, "a dropped station heard again in the batch is counted once, not per decode");
+        CHECK(rp.statusJson().find("\"droppedHour\":1234") != std::string::npos, "the status line says dropped: 1234 before the batch goes");
+        auto aggDropped = [&] { const std::string a = aggregateStatus(dir, (long)std::time(nullptr)); const size_t p = a.find("\"droppedHour\":");
+                                return p == std::string::npos ? -1L : std::atol(a.c_str() + p + 14); };
+        CHECK(!dir.empty() && aggDropped() > 0, "the setup page's line shows the drop at once (written at the first drop, not only at the batch)");
+        now += 10; s.call = callOf(kMaxPending + over); rp.note(s); now -= 10;
+        CHECK(aggregateStatus(dir, (long)std::time(nullptr)).find("\"droppedHour\":1235") != std::string::npos,
+              "…and kept current while drops go on (rewritten at most every 10 s)");
+        now = rp.nextFlushAt(); rp.tick();
+        size_t recs = 0; std::map<uint16_t, Template> k2; for (auto& g : sink.drain()) recs += decode(g, k2).tx.size();
+        CHECK(recs == kMaxPending, "the batch carries the full 8000");
+        const std::string st = rp.statusJson();
+        CHECK(st.find("\"sentHour\":8000") != std::string::npos && st.find("\"droppedHour\":1235") != std::string::npos && rp.droppedThisBatch() == 0,
+              "after the batch: 8000 sent, 1235 dropped in the hour, the batch's set emptied");
+        CHECK(aggDropped() == 1235, "the setup page's line after the batch: dropped 1235");
+        // the next batch: room again — the dropped ones are reported now (they were not reported, so no repeat window)
+        for (int k = (int)kMaxPending; k < (int)kMaxPending + over; ++k) { s.call = callOf(k); rp.note(s); }
+        CHECK(rp.pendingCount() == (size_t)over && rp.droppedThisBatch() == 0, "the next batch takes the stations dropped before");
+        now += 3601; rp.flushNow(); (void)sink.drain();
+        CHECK(rp.statusJson().find("\"droppedHour\":0") != std::string::npos && rp.statusJson().find("\"droppedTotal\":1235") != std::string::npos,
+              "an hour on: dropped in the hour back to 0; the total since start kept");
+        c.on = false; rp.configure(c);
+        CHECK(rp.droppedThisBatch() == 0, "switched off: nothing kept");
         std::string rm = "rm -rf '" + dir + "'"; if (!dir.empty()) (void)!std::system(rm.c_str());
     }
 

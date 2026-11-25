@@ -181,9 +181,18 @@ try {
     // ★★ beta92 (Stuart 11-23): the card says SPOTS (reports sent) FROM the transmitters (the points)
     const card = await mev(`(document.getElementById('summary') || {}).textContent || ''`);
     ok(/SPOTS\s*1,234\s*from 4 transmitters/.test(card), `the card: 1,234 spots from 4 transmitters (${card})`);
+    // ★★ beta94 (Stuart 11-24: "still not showing total spots") — the TOTALS panel says the spots sent and the transmitters ON THE MAP
+    const totals = () => mev(`(() => { const t = (document.getElementById('stats') || {}).textContent || ''; const i = t.indexOf('TOTALS'); return i < 0 ? '' : t.slice(i); })()`);
+    let tt = await totals();
+    ok(/Spots sent to PSK Reporter\s*1,234/.test(tt) && /every radio on this server/.test(tt) && !/not split by radio/.test(tt), `TOTALS: spots sent to PSK Reporter 1,234, every radio (${tt.slice(0, 160)})`);
+    ok(/Transmitters on the map\s*4/.test(tt) && !/Stations\s*\d/.test(tt), 'TOTALS: "Transmitters on the map 4", no bare "Stations" row');
     await mev(`document.querySelector('#rads [data-radio="${A}"]').click()`);
     for (let i = 0; i < 20; i++) { m = await mstate(); if (!/M0BONE/.test(m.calls)) break; await sleep(150); }
     ok(m.calls === 'G4AONE G4BOTH OH2OLD' && /HF loop · 2\*/.test(m.rads || ''), `HF loop: its two + the old one (${m.calls})`);
+    for (let i = 0; i < 20; i++) { tt = await totals(); if (/Transmitters on the map\s*3/.test(tt)) break; await sleep(150); }
+    const card1 = await mev(`(document.getElementById('summary') || {}).textContent || ''`);
+    ok(/Transmitters on the map\s*3/.test(tt) && /Spots sent to PSK Reporter\s*1,234/.test(tt) && /not split by radio/.test(tt) && /SPOTS · ALL RADIOS/.test(card1),
+       'one radio picked: its 3 transmitters on the map, the spots still the whole server\'s and said so (one log per server)');
     await mev(`document.querySelector('#rads [data-radio=""]').click()`);
     for (let i = 0; i < 20; i++) { m = await mstate(); if (/M0BONE/.test(m.calls)) break; await sleep(150); }
     ok(m.calls === 'G4AONE G4BOTH M0BONE OH2OLD', 'ALL RADIOS again: every station');

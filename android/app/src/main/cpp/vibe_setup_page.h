@@ -10634,6 +10634,8 @@ function pskrStatusShow(st) {
   const parts = [];
   parts.push((st.sentHour || 0) + (st.sentHour === 1 ? " spot" : " spots") + " sent to PSK Reporter in the last hour"
     + (st.lastSent > 0 ? ", last " + hm(st.lastSent) : ", none yet (the first batch goes about five minutes after a start)"));
+  // ★★ beta94 stations the full queue turned away (UberSDR's "dropped queue full") — said, never silent
+  parts.push("dropped: " + (st.droppedHour || 0) + " (queue full)");
   if (st.lastError) parts.push("PSK Reporter: " + st.lastError);
   if (st.wsprnet) {
     parts.push((st.wsprHour || 0) + " WSPR " + (st.wsprHour === 1 ? "spot" : "spots") + " sent to WSPRnet in the last hour"

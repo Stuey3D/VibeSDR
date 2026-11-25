@@ -19271,7 +19271,8 @@ const pan = digiStatsHtml(st, {
           only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '' },
   svgOk: okSvg, overlay: overlay,
   tot: { srvOk: srvOk, winWords: (WINDOWS.find((w) => w.id === win) || { words: '' }).words, drawn: stored.size, total: srvTotal, trunc: srvTrunc,
-         unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent },
+         unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent,
+         radioOnly: !!radioPick },
 });
 document.getElementById('stats').innerHTML = pan.stats;
 document.getElementById('legend').innerHTML = pan.legend;
