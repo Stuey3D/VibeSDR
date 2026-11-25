@@ -4,15 +4,16 @@
  * with its min–max shaded). The geometry and the words are src/utils/tlmCharts.ts (the web draws the same).
  *
  * ★ One hue (the faceplate's line colour), the text in the faceplate's text inks — a single series needs no legend; the
- *   chart's name says what it is, the reading and its range say the numbers (units on them: "1433 raw", "8.13 V").
+ *   chart's name says what it is, the reading and its range say the numbers (units on them: "7.88 V", "37.1 °C"; beta94
+ *   a channel with no published conversion says "raw", and the note names it).
  * ★ The power system first, TLM_FIRST charts, then "+ N MORE CHANNELS" — no control anywhere else (the control deck
  *   stays minimal); this sits inside the SATELLITE box and the gallery's pass item only.
  */
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
-import { tlmAcross, tlmAcrossHead, tlmChartOrder, tlmPassHead, tlmRangeText, tlmSpark, tlmValueText, TLM_FIRST,
-         type TlmChannel, type TlmPass } from '../utils/tlmCharts';
+import { tlmAbsentText, tlmAcross, tlmAcrossHead, tlmChartOrder, tlmFootNote, tlmMinSpan, tlmPassHead, tlmRangeText, tlmSpark,
+         tlmValueText, TLM_FIRST, type TlmChannel, type TlmPass } from '../utils/tlmCharts';
 
 export interface TlmChartsInk { text: string; muted: string; line: string; grid: string; font?: string }
 
@@ -22,7 +23,7 @@ function Cell({ ch, t, v, w, ink, band }: {
   ch: TlmChannel; t: number[]; v: (number | null)[]; w: number; ink: TlmChartsInk;
   band?: { lo: (number | null)[]; hi: (number | null)[] };
 }) {
-  const sp = useMemo(() => tlmSpark(t, v, w, CH_H, 3, band ? Infinity : undefined, band?.lo, band?.hi), [t, v, w, band]);
+  const sp = useMemo(() => tlmSpark(t, v, w, CH_H, 3, band ? Infinity : undefined, band?.lo, band?.hi, tlmMinSpan(ch)), [t, v, w, band, ch]);
   const range = sp.n ? tlmRangeText(band?.lo ?? v, ch, band?.hi) : '';
   const s = styles;
   const f = ink.font ? { fontFamily: ink.font } : null;
@@ -68,6 +69,8 @@ export default function TlmCharts({ pass, live, across, acrossNote, ink }: {
   return (
     <View onLayout={onLayout} style={styles.wrap}>
       <Text style={[styles.head, f, { color: ink.text }]}>{tlmPassHead(pass, live)}</Text>
+      {/* ★★ beta94 a board whose data-valid flag is off: said, never charted as zeros */}
+      {live && !!tlmAbsentText(pass?.absent) && <Text style={[styles.note, f, { color: ink.muted, marginTop: 0 }]}>{tlmAbsentText(pass?.absent)}</Text>}
       {cw > 0 && !!pass && pass.t.length > 0 && (
         <View style={[styles.grid, { columnGap: gap }]}>
           {shown.map((i) => <Cell key={`p${i}`} ch={pass.channels[i]} t={pass.t} v={pass.v[i]} w={cw} ink={ink} />)}
@@ -86,7 +89,7 @@ export default function TlmCharts({ pass, live, across, acrossNote, ink }: {
           ))}
         </View>
       )}
-      <Text style={[styles.note, f, { color: ink.muted }]}>raw = sent uncalibrated (no published calibration) · times UTC · saved to the gallery a pass at a time</Text>
+      <Text style={[styles.note, f, { color: ink.muted }]}>{tlmFootNote(ref)}</Text>
     </View>
   );
 }

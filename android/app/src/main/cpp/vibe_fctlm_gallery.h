@@ -9,11 +9,12 @@
 //  • A PASS — one .csv item (kind "fctlm"), every channel the frame carries, a row a frame (one every 5 s):
 //        # FUNcube telemetry · AO-73 · 145.9350 MHz USB
 //        # Pass from 2026-11-22 14:02:16 UTC · AOS 14:01 · LOS 14:14 UTC
-//        # [raw] = sent uncalibrated: the FUNcube-1 Downlink Data document publishes no calibration. Times are UTC.
-//        utc,unix,frame,seq,mode,elevation [deg],rs fixed,Photo voltage 1 [raw],…,Reboot count,…
-//        2026-11-22T14:02:16Z,1795442536,WO1,123456,Sunlight,23.4,0,512,…
-//    A column's heading is the channel's NAME, then "[raw]" (no published calibration — never a guessed unit), "[unit]"
-//    for a calibrated one, or nothing for a count / flag. Names carry no commas, so it opens as-is in a spreadsheet; the
+//        # Units from AMSAT-UK's published telemetry equations (…). [raw] = that channel has no published conversion. …
+//        utc,unix,frame,seq,mode,elevation [deg],rs fixed,Photo voltage 1 [V],…,Reboot count,…
+//        2026-11-22T14:02:16Z,1795442536,WO1,123456,Sunlight,23.4,0,3.963,…
+//    A column's heading is the channel's NAME, then "[unit]" (★ beta94: V, mA, °C, mW, lux — AMSAT-UK's published
+//    equations, vibe_fctlm.h), "[raw]" only where no conversion is published, or nothing for a count / flag. A board whose
+//    data-valid flag is off in a frame leaves its cells BLANK (never 0). Names carry no commas, so it opens as-is in a spreadsheet; the
 //    charts (src/utils/tlmCharts.ts, both clients) read the same headings.
 //    Titled "AO-73 telemetry · pass 14:02 UTC · 23 frames" (the clients find a satellite's passes by that prefix), and
 //    downloaded as "AO-73 telemetry 2026-11-22 1402 UTC.csv".
@@ -24,7 +25,7 @@
 //    profile's pass and a listener's pick of the same satellite write into the SAME day's log — Store::adoptSlot with
 //    anyWriter — and every RADIO on the server too: the slot "day-YYYYMMDD-<sat>" alone finds it, never the radio, the
 //    profile, the origin or the dial):
-//        14:02:16  AO-73  WO1 · seq 123456 · Sunlight · battery 1234 raw · el 23° · RS fixed 0
+//        14:02:16  AO-73  WO1 · seq 123456 · Sunlight · battery 7.876 V · el 23° · RS fixed 0   (or "no EPS data")
 //    Titled "AO-73 telemetry log · 22 Nov · 180 frames" — the count is the FILE's lines after each append, so two writers
 //    keep it right; a restart reads the day back and counts on.
 //    ★★ TWO WRITERS, ONE FILE, NO HALF LINES: every tap in the process writing a satellite's day shares ONE DayFile (below),
@@ -77,7 +78,8 @@ inline std::string column(const vibefc::Value& v) {
     if (n.empty()) n = v.key;
     if (v.raw) return n + " [raw]";
     if (!v.unit.empty()) {
-        std::string u; for (unsigned char c : v.unit) if (c >= 0x20 && c < 0x7F && c != ',' && c != '"' && c != '[' && c != ']') u += char(c);
+        // ★ beta94 UTF-8 kept ("°C"); ASCII controls, commas, quotes and brackets dropped
+        std::string u; for (unsigned char c : v.unit) if (c >= 0x20 && c != 0x7F && c != ',' && c != '"' && c != '[' && c != ']') u += char(c);
         if (!u.empty()) return n + " [" + u + "]";
     }
     return n;
@@ -97,7 +99,8 @@ inline std::string csvRow(const vibefc::Decoded& d, const vibefc::TlmCtx& c, int
                   + (d.seq >= 0 ? std::to_string(d.seq) : std::string()) + "," + cell(d.mode) + ",";
     if (std::isfinite(c.elDeg)) { char b[16]; std::snprintf(b, sizeof b, "%.1f", c.elDeg); r += b; }
     r += "," + std::to_string(d.rsFixed);
-    for (const auto& v : d.values) r += "," + vibefc::num(v.v);
+    // ★★ beta94 a board whose data-valid flag is off: a BLANK cell (never a 0 to chart); readings to their decimals
+    for (const auto& v : d.values) r += "," + (v.valid ? vibefc::num(v.v, v.dp) : std::string());
     return r + "\n";
 }
 /** What the columns are: a frame whose channel set differs starts a new file (its header would not fit). */
@@ -109,10 +112,9 @@ inline std::string satToken(const std::string& sat) {
 }
 /** The day log's readable line (its time added by the writer). */
 inline std::string dayLine(const vibefc::Decoded& d, const vibefc::TlmCtx& c, const std::string& sat) {
-    double bat = 0; bool have = false;
-    for (const auto& v : d.values) if (v.key == "eps.vbat") { bat = v.v; have = true; break; }
     std::string l = gallery::printable(sat, 24) + "  " + cell(d.frameName) + " \xc2\xb7 seq " + std::to_string(d.seq) + " \xc2\xb7 " + cell(d.mode);
-    if (have) l += " \xc2\xb7 battery " + vibefc::num(bat) + " raw";
+    const std::string bat = vibefc::batteryText(d);   // ★ beta94 "battery 7.876 V" / "no EPS data"
+    if (!bat.empty()) l += " \xc2\xb7 " + bat;
     if (std::isfinite(c.elDeg)) { char b[24]; std::snprintf(b, sizeof b, " \xc2\xb7 el %.0f\xc2\xb0", c.elDeg); l += b; }
     l += " \xc2\xb7 RS fixed " + std::to_string(d.rsFixed);
     if (!d.fitter.empty()) l += " \xc2\xb7 \"" + d.fitter.substr(0, 200) + "\"";
@@ -229,7 +231,9 @@ inline std::string passHead(const PassFile& p) {
     if (p.aos > 0) h += " \xc2\xb7 AOS " + gallery::utcStamp((int64_t)p.aos, "%H:%M");
     if (p.los > 0) h += " \xc2\xb7 LOS " + gallery::utcStamp((int64_t)p.los, "%H:%M") + " UTC";
     if (p.part > 1) h += " \xc2\xb7 part " + std::to_string(p.part);
-    h += "\n# [raw] = sent uncalibrated: the FUNcube-1 Downlink Data document publishes no calibration. Times are UTC.\n";
+    h += "\n# Units from AMSAT-UK's published telemetry equations (FUNcube-1 telemetry_equations_b1; JY1Sat data budget 2F)."
+         " [raw] = that channel has no published conversion. A blank cell = the frame's data-valid flag for that board was off."
+         " Times are UTC.\n";
     return h + p.header;
 }
 /** @return true when it CREATED an item. */
@@ -392,7 +396,7 @@ inline bool flushDay(DayFile& d, int64_t now) {
     d.frames = total;
     const std::string head = d.sat + " \xc2\xb7 FUNcube telemetry \xc2\xb7 " + gallery::utcStamp(at, "%Y-%m-%d") + " (UTC)\n"
         + "One line a good frame, every pass this server decoded (every radio, background passes and listeners alike, each frame once). "
-          "Each pass's every channel is its own .csv item. raw = sent uncalibrated (no published calibration).\n\n";
+          "Each pass's every channel is its own .csv item, in the units of AMSAT-UK's published equations.\n\n";
     d.name = st.create(dayMeta(d, at), "txt", head + lines);
     d.pending.clear();
     return !d.name.empty();

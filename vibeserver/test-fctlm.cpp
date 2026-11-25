@@ -21,12 +21,16 @@
 //      −2.0 … +2.0 kHz from the prediction through the 3000 Hz pick's whole path at Eb/N0 8 dB — every one decodes.
 //   §12 ★★★ beta94 a NUDGE and the TRIM through TCA (55 Hz/s, the model 0.5 s late): nudge-then-trim is one correction,
 //      the right way; trim-then-nudge (a 500 Hz step while locked) no longer leaves the loop on its half-baud false lock.
+//   §14 ★★★ beta94 FUNcube-1's UNITS: known counts → AMSAT-UK's published equations; a board's data-valid flag off → hidden
+//   §15 ★★★ beta94 JY1Sat: the extended id, its own layout (data budget 2F), the 11-25 JO-97 pass rebuilt from its printout
 // Silent: no audio device. `--quick` shortens §3/§4.
 #include "vibe_fctlm_tx.h"
 #include "vibe_sat_orbit.h"   // its json:: parser (for the §6 checks)
 #include "vibe_sat_engine.h"  // ★ beta92 the pick's numbers (kTlmCentreHz …) and the trim's clamp and slew
 
 #include <chrono>
+#include <cmath>
+#include <map>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -199,8 +203,10 @@ static void s6() {
     CHECK(frameName(0) == "WO1" && frameName(11) == "WO12" && frameName(12) == "HR1" && frameName(16) == "HR2" && frameName(20) == "HR3"
           && frameName(23) == "FM9" && frameName(24) == "type 24", "the schedule 0–23: WO1–12, HR1, FM1–3, HR2, FM4–6, HR3, FM7–9");
     CHECK(d.seq == 0x123456 && d.mode == "Eclipse", "sequence %lld, mode %s", d.seq, d.mode.c_str());
-    CHECK(d.values.size() == 58 && d.values[4].key == "eps.vbat" && d.values[4].v == 1444 && d.values[4].raw, "58 values; battery voltage raw 1444");
-    CHECK(d.values[6].key == "eps.reboots" && !d.values[6].raw, "a count is exact, not raw");
+    CHECK(d.values.size() == 58 && d.values[4].key == "eps.vbat" && std::fabs(d.values[4].v - 1.444) < 1e-9 && d.values[4].unit == "V"
+          && !d.values[4].raw, "58 values; battery voltage 1.444 V (the EPS sends millivolts: 1444)");
+    CHECK(d.values[6].key == "eps.reboots" && !d.values[6].raw && d.values[6].unit.empty(), "a count is exact, no unit, not raw");
+    CHECK(d.layout == "FUNcube-1" && d.absent.empty(), "FUNcube-1's layout; every board's data valid");
     CHECK(d.fitter == "HELLO FROM THE TEST.", "fitter text, whitelisted (%s)", d.fitter.c_str());
     const std::string j = tlmJson(d, f.data(), f.size(), "AO-73", 1795600000.0);
     json::Value v;
@@ -518,14 +524,43 @@ static void s10() {
     const bool sched = got.size() >= 4 && got[0].frameName == "FM7" && got[0].seq == 1023471 && got[1].frameName == "FM8"
                        && got[2].frameName == "FM9" && got[3].frameName == "WO1" && got[3].seq == 1023472;
     CHECK(sched, "FM7 · FM8 · FM9 of seq 1023471, then WO1 of seq 1023472 (types 21, 22, 23, 0)");
-    // sane values: the battery in its raw range, the reboot count steady across the frames, sunlit
+    // sane values: the battery in volts, the reboot count steady across the frames, sunlit
     bool sane = !got.empty();
     for (auto& d : got) {
-        sane = sane && d.values.size() == 58 && d.values[4].key == "eps.vbat" && d.values[4].v > 7000 && d.values[4].v < 9000;
+        sane = sane && d.values.size() == 58 && d.values[4].key == "eps.vbat" && d.values[4].v > 7.0 && d.values[4].v < 9.0;
         sane = sane && d.values[6].key == "eps.reboots" && d.values[6].v == got[0].values[6].v && d.mode == "Sunlight";
     }
-    CHECK(sane, "battery raw %.0f (≈ 7.9 V read as mV), reboot count %.0f in every frame, sunlit",
+    CHECK(sane, "battery %.3f V, reboot count %.0f in every frame, sunlit",
           got.empty() ? 0.0 : got[0].values[4].v, got.empty() ? 0.0 : got[0].values[6].v);
+    /* ★★ beta94 THE UNITS ON THE AIR: every frame of the real pass, in AMSAT-UK's published units, inside what a healthy
+     * sunlit FUNcube-1 reads (the handbook: 6.8–8.2 V battery, 300 mW beacon in sunlight; the EPS's own 22 °C). */
+    bool units = !got.empty();
+    std::string why;
+    auto in = [&](const Decoded& d, const char* k, const char* unit, double lo, double hi) {
+        const vibefc::Value* v = d.find(k);
+        const bool ok = v && v->valid && v->unit == unit && !v->raw && v->v >= lo && v->v <= hi;
+        if (!ok && why.empty()) why = std::string(k) + "=" + (v ? std::to_string(v->v) + " " + v->unit : "missing");
+        return ok;
+    };
+    for (auto& d : got) {
+        units = units && d.layout == "FUNcube-1" && d.absent.empty();
+        units = units && in(d, "eps.vbat", "V", 7.5, 8.3) && in(d, "eps.pv1", "V", 3.0, 5.5) && in(d, "eps.ipv", "mA", 100, 500);
+        units = units && in(d, "eps.isys", "mA", 100, 400) && in(d, "eps.tbat", "\xc2\xb0" "C", 0, 40);
+        for (const char* k : {"bob.tpxp", "bob.tpxm", "bob.tpyp", "bob.tpym"}) units = units && in(d, k, "\xc2\xb0" "C", 0, 45);
+        units = units && in(d, "bob.v33", "V", 3.2, 3.4) && in(d, "bob.v50", "V", 4.8, 5.1) && in(d, "bob.i33", "mA", 50, 300);
+        units = units && in(d, "rf.temp", "\xc2\xb0" "C", 10, 40) && in(d, "pa.temp", "\xc2\xb0" "C", 20, 50);
+        units = units && in(d, "pa.fwd", "mW", 250, 350) && in(d, "pa.i", "mA", 60, 160);
+        units = units && in(d, "ant.t0", "\xc2\xb0" "C", 10, 40) && in(d, "ant.t1", "\xc2\xb0" "C", 10, 40);
+        const vibefc::Value* rc = d.find("eps.reset");
+        units = units && rc && rc->text == "Watchdog reset";
+        const vibefc::Value* rs = d.find("rf.rssi");
+        units = units && rs && rs->raw && !rs->note.empty();   // the one kind left raw: the sheet says "use raw values"
+    }
+    const vibefc::Value* b0 = got.empty() ? nullptr : got[0].find("eps.vbat");
+    const vibefc::Value* f0 = got.empty() ? nullptr : got[0].find("pa.fwd");
+    CHECK(units, "%zu real frames in their units: battery %.3f V, PA forward %.0f mW (the 300 mW sunlit beacon), panels, buses "
+                 "3.28 / 4.96 V, temperatures 14–37 \xc2\xb0" "C; RSSI raw with its reason%s%s", got.size(), b0 ? b0->v : 0.0,
+          f0 ? f0->v : 0.0, why.empty() ? "" : " — first out: ", why.c_str());
     const double baud = run.rx().baudHz();
     CHECK(baud > 1201.0 && baud < 1202.5, "the timing loop learnt the satellite's clock: %.2f Bd (1200 nominal)", baud);
     /* ★★ THE SAME AIR, AS THE NEW PICK HEARS IT. The recording was made with the dial 3800 Hz below the downlink; the
@@ -760,10 +795,189 @@ static int writeClip(const char* path, double rate, double centre, double tlmHz)
     return 0;
 }
 
+// ── §14 / §15 ★★★ beta94 UNITS AND JY1SAT ──────────────────────────────────────────────────────────────────────────
+/** A frame written field by field (MSB first) from a layout list: each (key, width) takes `vals[key]` or 0. */
+struct FieldW { const char* k; int w; };
+static std::vector<uint8_t> writeFrame(uint8_t b0, int b1, const std::vector<FieldW>& lay, const std::map<std::string, uint32_t>& vals) {
+    std::vector<uint8_t> d(256, 0);
+    size_t pos = 0;
+    auto put = [&](uint32_t v, int w) { for (int i = w - 1; i >= 0; --i, ++pos) if ((v >> i) & 1u) d[pos >> 3] |= uint8_t(0x80 >> (pos & 7)); };
+    put(b0, 8);
+    if (b1 >= 0) put((uint32_t)b1, 8);
+    for (const FieldW& f : lay) { auto it = vals.find(f.k); put(it == vals.end() ? 0u : it->second, f.w); }
+    return d;
+}
+/** The software block, both layouts (48 bits): seq, DTMF ×3, the seven data-valid flags, eclipse, safe, three flags. */
+static const std::vector<FieldW> kSw = {{"seq", 24}, {"dtmfn", 6}, {"dtmflast", 5}, {"dtmfok", 1}, {"vasib", 1}, {"veps", 1},
+    {"vpa", 1}, {"vrf", 1}, {"v5", 1}, {"vantb", 1}, {"vanta", 1}, {"eclipse", 1}, {"safe", 1}, {"habf", 1}, {"sabf", 1}, {"dep", 1}};
+/** FUNcube-1's real-time block — the Downlink Data document's order and widths (440 bits). */
+static std::vector<FieldW> fc1Layout() {
+    std::vector<FieldW> l = {{"pv1", 16}, {"pv2", 16}, {"pv3", 16}, {"ipv", 16}, {"vbat", 16}, {"isys", 16}, {"reboots", 16}, {"swerr", 16},
+        {"tb1", 8}, {"tb2", 8}, {"tb3", 8}, {"tbat", 8}, {"lu5", 8}, {"lu33", 8}, {"reset", 8}, {"ppt", 8},
+        {"sunx", 10}, {"suny", 10}, {"sunz", 10}, {"tpxp", 10}, {"tpxm", 10}, {"tpyp", 10}, {"tpym", 10}, {"v33", 10}, {"i33", 10}, {"v50", 10},
+        {"dop", 8}, {"rssi", 8}, {"rft", 8}, {"irx", 8}, {"itx33", 8}, {"itx50", 8}, {"rev", 8}, {"fwd", 8}, {"pat", 8}, {"pai", 8},
+        {"at0", 8}, {"at1", 8}, {"d0", 1}, {"d1", 1}, {"d2", 1}, {"d3", 1}};
+    l.insert(l.end(), kSw.begin(), kSw.end());
+    return l;
+}
+/** JY1Sat's real-time block — its "data budget with tlm equations 2F" sheet, row by row (432 bits). */
+static std::vector<FieldW> jy1Layout() {
+    std::vector<FieldW> l = {{"pv1", 14}, {"pv2", 14}, {"pv3", 14}, {"vbat", 14}, {"ip1", 10}, {"ip2", 10}, {"ip3", 10}, {"ipv", 10},
+        {"isys", 10}, {"reboots", 8}, {"tb1", 8}, {"tb2", 8}, {"tb3", 8}, {"tbat", 8}, {"lu5", 8}, {"i5", 8}, {"reset", 4}, {"ppt", 4},
+        {"imode", 2}, {"ierr", 3}, {"icfg", 1}, {"itemp", 8},
+        {"sxp", 10}, {"sxm", 10}, {"syp", 10}, {"sym", 10}, {"szp", 10}, {"szm", 10}, {"v33", 10}, {"iup", 20}, {"v50", 10},
+        {"dop", 8}, {"rssi", 8}, {"rft", 8}, {"irx", 8}, {"itx33", 8}, {"itx50", 8}, {"rev", 8}, {"fwd", 8}, {"pat", 8}, {"pai", 8},
+        {"at0", 8}, {"at1", 8}, {"d0", 1}, {"d1", 1}, {"d2", 1}, {"d3", 1}};
+    l.insert(l.end(), kSw.begin(), kSw.end());
+    return l;
+}
+static bool near(const Decoded& d, const char* k, double want, double tol, const char* unit) {
+    const vibefc::Value* v = d.find(k);
+    const bool ok = v && v->valid && !v->raw && v->unit == unit && std::fabs(v->v - want) <= tol;
+    if (!ok) std::printf("      (%s: %s)\n", k, v ? (std::to_string(v->v) + " " + v->unit + (v->valid ? "" : " invalid") + (v->raw ? " raw" : "")).c_str() : "missing");
+    return ok;
+}
+static const char* kDeg = "\xc2\xb0" "C";
+
+static void s14() {
+    std::printf("§14 ★★★ beta94 FUNcube-1's units: known counts → AMSAT-UK's published equations (telemetry_equations_b1)\n");
+    {
+        size_t bits = 8; for (auto& f : fc1Layout()) bits += (size_t)f.w;
+        size_t jb = 16; for (auto& f : jy1Layout()) jb += (size_t)f.w;
+        CHECK(bits == 448 && jb == 448, "both layouts end at bit 448 (FUNcube-1 8 + 440, JY1Sat 16 + 432; payload from byte 56)");
+    }
+    std::map<std::string, uint32_t> v = {{"pv1", 3963}, {"ipv", 332}, {"vbat", 7876}, {"isys", 215}, {"reboots", 1475}, {"tbat", 0xF6},
+        {"tb1", 22}, {"reset", 3}, {"ppt", 1}, {"sunx", 100}, {"suny", 4}, {"sunz", 990}, {"tpxp", 669}, {"tpxm", 660}, {"tpyp", 696},
+        {"tpym", 654}, {"v33", 819}, {"i33", 143}, {"v50", 826}, {"dop", 157}, {"rssi", 181}, {"rft", 198}, {"irx", 41}, {"itx33", 51},
+        {"itx50", 24}, {"rev", 80}, {"fwd", 208}, {"pat", 126}, {"pai", 188}, {"at0", 142}, {"at1", 166}, {"d0", 1}, {"d1", 1}, {"d2", 1},
+        {"d3", 1}, {"seq", 1023471}, {"vasib", 1}, {"veps", 1}, {"vpa", 1}, {"vrf", 1}, {"v5", 1}, {"vantb", 1}, {"vanta", 1}};
+    std::vector<uint8_t> f = writeFrame(0x80 | 21, -1, fc1Layout(), v);
+    Decoded d = parse(f.data());
+    CHECK(d.satId == 2 && d.layout == "FUNcube-1" && d.frameName == "FM7" && d.seq == 1023471 && d.absent.empty(), "FUNcube-1, FM7, seq 1023471");
+    CHECK(near(d, "eps.vbat", 7.876, 1e-9, "V") && near(d, "eps.pv1", 3.963, 1e-9, "V") && near(d, "eps.ipv", 332, 0, "mA")
+          && near(d, "eps.isys", 215, 0, "mA"), "EPS \"real values are transmitted\": 7876 mV = 7.876 V, 3963 mV = 3.963 V, 332 / 215 mA");
+    CHECK(near(d, "eps.tbat", -10, 0, kDeg) && near(d, "eps.tboost1", 22, 0, kDeg), "EPS temperatures are signed bytes: 0xF6 = −10 °C, 22 = 22 °C");
+    CHECK(d.find("eps.reset")->text == "Watchdog reset" && d.find("eps.ppt")->text == "MPPT", "reset cause 3 = watchdog, PPT mode 1 = MPPT (the sheet's words)");
+    CHECK(near(d, "bob.tpxp", -0.2073 * 669 + 158.239, 1e-9, kDeg) && near(d, "bob.tpxm", -0.2083 * 660 + 159.227, 1e-9, kDeg)
+          && near(d, "bob.tpyp", -0.2076 * 696 + 158.656, 1e-9, kDeg) && near(d, "bob.tpym", -0.2087 * 654 + 159.045, 1e-9, kDeg),
+          "panel temps, each face its own line: X+ 669 = 19.6 °C, X− 660 = 21.7, Y+ 696 = 14.2, Y− 654 = 22.6");
+    CHECK(near(d, "bob.v33", 3.276, 1e-9, "V") && near(d, "bob.v50", 4.956, 1e-9, "V") && near(d, "bob.i33", 143, 0, "mA"),
+          "buses: 819 counts = 3.276 V (mV ÷ 4), 826 = 4.956 V (mV ÷ 6), 3.3 V current 1 mA a count");
+    CHECK(near(d, "bob.sunx", 1096, 0.5, "lux") && near(d, "bob.suny", 0, 0, "lux") && near(d, "bob.sunz", 26303, 0.5, "lux")
+          && !d.find("bob.sunz")->note.empty(), "sun sensors (log-lux table): 100 = 10^3.04 = 1096 lux, 4 = noise (0), 990 = the 984 limit");
+    CHECK(near(d, "rf.temp", -0.857 * 198 + 193.672, 1e-9, kDeg) && near(d, "rf.irx", 0.636 * 41, 1e-9, "mA")
+          && near(d, "rf.itx33", 0.636 * 51, 1e-9, "mA") && near(d, "rf.itx50", 1.272 * 24, 1e-9, "mA"),
+          "RF: 198 = 24.0 °C, receive 41 = 26.1 mA, transmit 3.3 V 51 = 32.4 mA, 5.0 V 24 = 30.5 mA (× 1.272)");
+    CHECK(near(d, "pa.fwd", 302.62, 0.01, "mW") && near(d, "pa.rev", 0.005 * std::pow(80.0, 2.0629), 1e-9, "mW")
+          && near(d, "pa.temp", 37.125, 1e-9, kDeg) && near(d, "pa.i", 0.5496 * 188 + 2.5435, 1e-9, "mA"),
+          "PA: forward 208 = 302.6 mW (0.005 × n^2.0629), reverse 80 = 42.2 mW, temp 126 = 37.1 °C (the table), current 188 = 105.9 mA");
+    CHECK(near(d, "ant.t0", 24.39, 0.02, kDeg) && near(d, "ant.t1", -4.43, 0.05, kDeg) && !d.find("ant.t0")->note.empty(),
+          "antenna temps (the AntS curve, count as 0–3.3 V, said in its note): 142 = 24.4 °C, 166 = −4.4 °C");
+    const vibefc::Value* dop = d.find("rf.doppler"); const vibefc::Value* rssi = d.find("rf.rssi");
+    CHECK(dop && dop->raw && dop->v == 157 && !dop->note.empty() && rssi && rssi->raw && rssi->v == 181 && !rssi->note.empty(),
+          "Doppler and RSSI stay raw — the sheet: \"use raw values\" — each with its own note");
+    int raws = 0; for (auto& x : d.values) raws += x.raw;
+    CHECK(raws == 2, "%d channels raw (FUNcube-1 publishes a conversion for every other analogue channel)", raws);
+    // the JSON: units, words, notes
+    const std::string j = tlmJson(d, f.data(), f.size(), "AO-73", 1795600000.0);
+    json::Value jv;
+    CHECK(json::parseValue(j, jv) && jv.get("data") && jv.get("data")->str("layout") == "FUNcube-1" && jv.get("data")->get("absent")
+          && jv.get("data")->get("absent")->a.empty(), "sat_tlm: layout FUNcube-1, absent []");
+    CHECK(j.find("\"k\":\"eps.vbat\",\"name\":\"Battery voltage\",\"v\":7.876,\"unit\":\"V\"}") != std::string::npos
+          && j.find("\"unit\":\"\xc2\xb0" "C\"") != std::string::npos && j.find("\"text\":\"Watchdog reset\"") != std::string::npos
+          && j.find("\"k\":\"rf.rssi\",\"name\":\"Receiver RSSI\",\"v\":181,\"raw\":true,\"note\":") != std::string::npos,
+          "the JSON carries 7.876 V, \"°C\", the reset cause's words and RSSI raw with its note");
+
+    // ★★ a frame whose EPS says its data is NOT valid: no EPS values shown, said so
+    v["veps"] = 0; v["vbat"] = 0; v["pv1"] = 0;
+    std::vector<uint8_t> f2 = writeFrame(0x80, -1, fc1Layout(), v);
+    Decoded e = parse(f2.data());
+    const vibefc::Value* vb = e.find("eps.vbat");
+    CHECK(e.absent.size() == 1 && e.absent[0] == "EPS" && vb && !vb->valid && !e.find("eps.pv1")->valid && e.find("bob.v33")->valid,
+          "EPS data valid 0: the EPS values marked invalid, absent [EPS]; the ASIB's still valid");
+    const std::string j2 = tlmJson(e, f2.data(), f2.size(), "AO-73", 1795600000.0);
+    CHECK(j2.find("eps.vbat") == std::string::npos && j2.find("eps.reboots") == std::string::npos && j2.find("\"absent\":[\"EPS\"]") != std::string::npos
+          && j2.find("bob.v33") != std::string::npos, "the JSON leaves every EPS value out and says \"absent\":[\"EPS\"]");
+    CHECK(batteryText(e) == "no EPS data" && batteryText(d) == "battery 7.876 V", "the log line: \"battery 7.876 V\" / \"no EPS data\"");
+    v["veps"] = 1; v["vanta"] = 0; v["vantb"] = 0; v["vpa"] = 0;
+    Decoded g = parse(writeFrame(0x80, -1, fc1Layout(), v).data());
+    CHECK(g.absent.size() == 2 && !g.find("ant.t0")->valid && !g.find("pa.fwd")->valid && g.find("eps.vbat")->valid,
+          "PA and both ANTS buses not valid: those hidden, absent [PA, ANTS]; one ANTS bus valid is enough to show them");
+}
+
+static void s15() {
+    std::printf("§15 ★★★ beta94 JY1Sat (JO-97): the extended id, its OWN layout (data budget 2F), the 11-25 pass\n");
+    // synthetic: every JY1Sat field a known count
+    std::map<std::string, uint32_t> v = {{"pv1", 4321}, {"pv2", 16383}, {"vbat", 8050}, {"ip1", 120}, {"ip2", 7}, {"ip3", 1023}, {"ipv", 250},
+        {"isys", 180}, {"reboots", 42}, {"tb1", 5}, {"tbat", 0xFB}, {"lu5", 2}, {"i5", 33}, {"reset", 1}, {"ppt", 2},
+        {"imode", 2}, {"ierr", 5}, {"icfg", 1}, {"itemp", 21}, {"sxp", 100}, {"sym", 1001}, {"v33", 825}, {"iup", 720}, {"v50", 833},
+        {"dop", 160}, {"rssi", 200}, {"rft", 220}, {"irx", 50}, {"itx33", 60}, {"itx50", 70}, {"rev", 20}, {"fwd", 150}, {"pat", 203},
+        {"pai", 100}, {"at0", 150}, {"at1", 150}, {"d0", 1}, {"d1", 1}, {"d2", 1}, {"d3", 1}, {"seq", 640952},
+        {"vasib", 1}, {"veps", 1}, {"vpa", 1}, {"vrf", 1}, {"v5", 1}, {"vantb", 1}, {"vanta", 1}, {"eclipse", 1}};
+    std::vector<uint8_t> f = writeFrame(0xC0 | 13, 0x10, jy1Layout(), v);
+    Decoded d = parse(f.data());
+    CHECK(d.satId == 3 && d.extId == kExtIdJy1Sat && d.layout == "JY1Sat" && d.frameName == "FM1" && d.seq == 640952 && d.mode == "Eclipse"
+          && satIdText(d) == "JY1Sat (extended id 19)", "extended header 0xCD 0x10 = id 19 (JY1Sat), FM1, seq 640952, eclipse");
+    CHECK(near(d, "eps.pv1", 4.321, 1e-9, "V") && near(d, "eps.pv2", 16.383, 1e-9, "V") && near(d, "eps.vbat", 8.050, 1e-9, "V")
+          && near(d, "eps.ipv1", 120, 0, "mA") && near(d, "eps.ipv3", 1023, 0, "mA") && near(d, "eps.ipv", 250, 0, "mA") && near(d, "eps.isys", 180, 0, "mA"),
+          "EPS: 14-bit millivolts (8050 = 8.050 V, 16383 the top), 10-bit milliamps, the three photo currents of its own");
+    CHECK(d.find("eps.reboots")->v == 42 && near(d, "eps.tbat", -5, 0, kDeg) && near(d, "eps.i5sw1", 33, 0, "mA")
+          && d.find("eps.reset")->text == "External reset" && d.find("eps.ppt")->text == "Fixed software PPT",
+          "reboots 42 (8 bits), battery −5 °C, 5 V switch 33 mA, reset 1 = external, PPT 2 = fixed software (4 bits each)");
+    CHECK(d.find("imtq.mode")->text == "Detumbling" && d.find("imtq.err")->raw && near(d, "imtq.temp", 21, 0, kDeg)
+          && near(d, "imtq.up", 1.0, 1e-9, "h"), "iMTQ: mode 2 = detumbling, error code raw (\"not translated\"), MCU 21 °C, uptime 720 × 5 s = 1.0 h");
+    CHECK(near(d, "asib.sunxp", 1096, 0.5, "lux") && near(d, "asib.sunym", 26303, 0.5, "lux") && near(d, "asib.sunxm", 0, 0, "lux")
+          && near(d, "bob.v33", 3.3, 1e-9, "V") && near(d, "bob.v50", 4.998, 1e-9, "V"),
+          "six sun sensors in lux, the 3.3 V bus 825 = 3.300 V and the 5 V bus 833 = 4.998 V — ASIB's own order (uptime between)");
+    {   const std::string jj = tlmJson(d, f.data(), f.size(), "JO-97", 1795600000.0);
+        json::Value jv; const bool okj = json::parseValue(jj, jv) && jv.get("data") && jv.get("data")->get("values");
+        CHECK(d.values.size() == 63 && okj && jv.get("data")->get("values")->a.size() == 63 && jj.find("sw.depwait") != std::string::npos,
+              "all 63 JY1Sat values reach the JSON, the last flag included");
+    }
+    CHECK(near(d, "rf.temp", -0.98 * 220 + 234.58, 1e-9, kDeg) && near(d, "rf.itx50", 0.636 * 70, 1e-9, "mA"),
+          "RF: JY1Sat's own temperature line (−0.98 n + 234.58: 220 = 19.0 °C) and 0.636 mA a count on the 5 V transmitter");
+    CHECK(near(d, "pa.temp", 10, 1e-9, kDeg) && near(d, "pa.fwd", 0.005 * std::pow(150.0, 2.0629), 1e-9, "mW"), "PA: \"Treat as FC1\" — 203 = 10 °C, forward 150 = 155 mW");
+    v["itemp"] = 85;
+    Decoded i85 = parse(writeFrame(0xC0 | 13, 0x10, jy1Layout(), v).data());
+    CHECK(!i85.find("imtq.temp")->valid && i85.find("imtq.mode")->valid, "iMTQ MCU temperature 85 = invalid (the sheet) — hidden alone");
+    // an extended id we do not know: no values guessed — unless the pick says JO-97
+    Decoded unk = parse(writeFrame(0xC0 | 13, 0x24, jy1Layout(), v).data());
+    Decoded hint = parse(writeFrame(0xC0 | 13, 0x24, jy1Layout(), v).data(), "JO-97");
+    CHECK(unk.layout.empty() && unk.values.empty() && unk.seq < 0 && hint.layout == "JY1Sat" && hint.seq == 640952,
+          "an unknown extended id: no values (no layout guessed); on the JO-97 pick: JY1Sat's");
+
+    /* ★★★ THE 11-25 PASS (Stuart, the Pi 500, 09:53 UTC, 3 good frames). We have its values as the FUNcube-1 reading
+     * printed them, not its bytes: the frame is rebuilt here from those printed values (fields not printed = 0; both ANTS
+     * flags taken as 1), then read the right way. Read as FUNcube-1 it said "battery 0", "panel temp X− 92" (= 140 °C),
+     * "photo voltage 1 4096" — the header's second byte. */
+    std::map<std::string, uint32_t> air = {{"pv1", 4096}, {"reset", 27}, {"ppt", 85}, {"sunx", 1001}, {"suny", 67}, {"sunz", 403},
+        {"tpxp", 993}, {"tpxm", 92}, {"tpyp", 475}, {"tpym", 511}, {"v33", 68}, {"i33", 273}, {"v50", 0}, {"dop", 187}, {"rssi", 255},
+        {"rft", 241}, {"irx", 64}, {"itx33", 125}, {"itx50", 55}, {"rev", 57}, {"fwd", 95}, {"pat", 202}, {"pai", 255}, {"at0", 166},
+        {"at1", 166}, {"d0", 1}, {"d1", 1}, {"d2", 1}, {"d3", 1}, {"seq", 640952}, {"dtmfn", 11}, {"vasib", 1}, {"veps", 0}, {"vpa", 1},
+        {"vrf", 1}, {"v5", 0}, {"vantb", 1}, {"vanta", 1}, {"eclipse", 1}, {"safe", 0}};
+    std::vector<uint8_t> fa = writeFrame(0xC0 | 5, -1, fc1Layout(), air);
+    CHECK(fa[1] == 0x10 && fa[2] == 0x00, "rebuilt: its second byte is 0x10 (FUNcube-1's \"photo voltage 1 = 4096\")");
+    Decoded a = parse(fa.data(), "JO-97");
+    const std::string ja = tlmJson(a, fa.data(), fa.size(), "JO-97", 1795600000.0);
+    CHECK(a.layout == "JY1Sat" && a.extId == kExtIdJy1Sat && a.seq == 640952 && a.mode == "Eclipse", "JY1Sat's layout, id 19, seq 640952, eclipse");
+    CHECK(a.absent.size() == 2 && a.absent[0] == "EPS" && a.absent[1] == "iMTQ" && !a.find("eps.vbat")->valid
+          && ja.find("eps.vbat") == std::string::npos && ja.find("\"absent\":[\"EPS\",\"iMTQ\"]") != std::string::npos,
+          "EPS and iMTQ not valid: no battery shown at all (was \"battery 0 raw\"), said as absent");
+    CHECK(a.find("imtq.temp") && a.find("imtq.temp")->v == 85 && !a.find("imtq.temp")->valid, "the iMTQ MCU temperature reads 85 — the sheet's own \"invalid\" (FUNcube-1's \"PPT mode 85\")");
+    CHECK(near(a, "asib.sunxp", 26303, 0.5, "lux") && near(a, "asib.sunyp", std::pow(10.0, 3.58 + (403 - 400) / 67.0 * 0.11), 0.5, "lux")
+          && near(a, "asib.sunym", 26303, 0.5, "lux") && near(a, "asib.sunzp", std::pow(10.0, 2.889 + 36.0 / 44.0 * 0.151), 0.5, "lux"),
+          "what read as swinging \"panel temps\" are SUN SENSORS (X+ and Y− at the limit, Y+ 403, Z+ 92) — a spinning bird");
+    CHECK(a.find("imtq.up") && !a.find("imtq.up")->valid && std::fabs(a.find("imtq.up")->v - 69905 * 5 / 3600.0) < 1e-9, "the iMTQ uptime (FUNcube-1's \"3.3 V bus\" voltage + current pair: 97 h) hidden with the iMTQ");
+    CHECK(near(a, "rf.temp", -0.98 * 241 + 234.58, 1e-9, kDeg) && near(a, "rf.irx", 0.636 * 64, 1e-9, "mA") && near(a, "pa.fwd", 60.09, 0.01, "mW")
+          && near(a, "pa.temp", 12.6 - 6.0 / 7.0 * 2.6, 1e-9, kDeg) && near(a, "ant.t0", -4.43, 0.05, kDeg),
+          "the radio: RF −1.6 °C, receive 40.7 mA, PA forward 60 mW (the low-power beacon), PA 10.4 °C, antennas −4.4 °C (eclipse)");
+    CHECK(a.find("rf.rssi")->raw && a.find("rf.doppler")->raw, "Doppler and RSSI raw — JY1Sat's sheet: \"no conversion required\"");
+}
+
 int main(int argc, char** argv) {
     if (argc >= 6 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]));
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--quick") g_quick = true;
-    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9(); s10(); s11(); s12(); s13();
+    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9(); s10(); s11(); s12(); s13(); s14(); s15();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

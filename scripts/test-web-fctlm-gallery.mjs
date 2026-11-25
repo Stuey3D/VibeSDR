@@ -121,6 +121,12 @@ try {
   ok(st.head === 'THE PASS · 18 frames · 15:42–15:44 UTC', `the pass's head (${st.head})`);
   ok(st.lines[0] === 2, `the fade in this pass breaks its line: two runs (${st.lines[0]})`);
   ok(st.dl === items[1].dn, `DOWNLOAD saves the CSV under its name (${st.dl})`);
+  // ★★ beta94 the gallery's charts in their units (AMSAT-UK's published equations); raw only where none is published
+  const gv = JSON.parse(await ev(`JSON.stringify({ v: [...document.querySelectorAll('#galCharts .tlm-c')].slice(0, 8).map((c) => c.querySelector('.tlm-v')?.textContent),
+    first: document.querySelector('#galCharts .tlm-c')?.getAttribute('aria-label'), note: document.querySelector('#galCharts .tlm-note')?.textContent })`));
+  ok(gv.v.every((x) => / (V|mA|\u00b0C|mW|lux)$/.test(x || '')) && /^Battery voltage: 18 readings, [78]\.\d+–[78]\.\d+ V, latest [78]\.\d+ V$/.test(gv.first || ''),
+     `every chart's reading carries its unit (${gv.v.join(' · ')}; ${gv.first})`);
+  ok(/^raw \(no published conversion\): Receiver Doppler, Receiver RSSI · /.test(gv.note || ''), `the note names the raw channels (${gv.note})`);
   await shot('pass-desktop');
   await ev(`document.querySelector('#galCharts [data-act="tlmall"]').click(); true`);
   ok(await ev(`document.querySelectorAll('#galCharts .tlm-c').length`) > 16, '+ MORE CHANNELS: every analogue channel');

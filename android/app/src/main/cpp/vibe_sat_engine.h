@@ -141,11 +141,11 @@ inline std::vector<SatDef> curatedCatalogue() {
                  {lin("Transponder", 145950000, 145970000, 435130000), dig("Telemetry", 145935000, "usb", "fc-bpsk", 1200, "none")}});
     // ★★ 2026-11-24 + its TELEMETRY BEACON (Stuart heard it at ~145.841 MHz on the Pi 500's V4, the FUNcube 5 s frame rhythm
     //   plain on the waterfall): JY1Sat is built on the FUNcube design — 1200 bit/s BPSK, the same AO-40 FEC — so the fctlm
-    //   decoder frames it. Its satellite id is not FUNcube-1's ("extended"), and its value fields are laid out as FUNcube-1's,
-    //   so the note says the names are FUNcube-1's until JY1Sat's own layout is mapped.
+    //   decoder frames it. ★★ beta94 its OWN layout is read (vibe_fctlm.h parseJy1 — AMSAT-UK's "JY1SAT data budget with
+    //   tlm equations 2F"): the extended satellite id (16 header bits), then JY1Sat's 432-bit block, in its units.
     {
         Transmitter t = dig("Telemetry", 145840000, "usb", "fc-bpsk", 1200, "none");
-        t.note = "FUNcube-format beacon; values use FUNcube-1's field names for now";
+        t.note = "FUNcube-format beacon; JY1Sat's own telemetry layout and units";
         v.push_back({"JO-97", "JO-97 (JY1Sat)", 43803, "amateur", "Linear transponder; FUNcube-format telemetry beacon",
                      {lin("Transponder", 145855000, 145875000, 435100000), t}});
     }

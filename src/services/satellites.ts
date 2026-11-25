@@ -19,7 +19,7 @@
  *    where the station is in the satellite frame, nominal + follow — SatFollowDial below, set locally, never sent.
  * ★ No flashing anywhere: COAST only dims the readout.
  */
-import { tlmLivePush, type TlmLiveFrame } from '../utils/tlmCharts';
+import { tlmAbsentText, tlmLivePush, type TlmLiveFrame } from '../utils/tlmCharts';
 import { GLOBE_COAST } from './globeCoast';
 import { ORB_LISTENING } from './orbcomm';
 
@@ -1356,7 +1356,7 @@ export const SAT_SHOW_EMPTY = 'None of the satellites chosen under SHOW are list
 /* The server's decoder (AO-73 FUNcube `fctlm`; SONATE-2 / APRS later) sends {"type":"fctlm_status","data":{…}} on the decoder
  * socket — frames, good / failed, the bird's mode, and named values with units; a channel with no published calibration
  * comes RAW, labelled "raw" (never a guessed conversion). Whitelisted ASCII / numbers only — cleaned again here. */
-export interface SatTlmValue { name: string; value: string; unit: string; raw: boolean }
+export interface SatTlmValue { name: string; value: string; unit: string; raw: boolean; note?: string }
 /** The box's telemetry: the decoder's counts (fctlm_status, once a second) and the last frame's values (sat_tlm — from
  *  fctlm for AO-73, from aprs for APRS T# and SONATE-2), merged; a field a message does not carry keeps its last value. */
 export interface SatTelemetry {
@@ -1366,6 +1366,10 @@ export interface SatTelemetry {
   hex: string;
   /** ★★ beta91 TELEMETRY CHARTS: every frame of this pick, oldest first (bounded — src/utils/tlmCharts.ts) */
   hist?: TlmLiveFrame[];
+  /** ★★ beta94 the boards whose data-valid flag is off in the last frame ("EPS", "iMTQ" …) — their values are not sent */
+  absent?: string[];
+  /** ★ beta94 whose field layout the server read the frame with ("FUNcube-1", "JY1Sat") */
+  layout?: string;
 }
 /** {"type":"fctlm_status","data":{sync,frames,good,failed,afcHz,snrDb,…}} or {"type":"sat_tlm","data":{sat,format,t,mode,
  *  values:[{k,name,v,unit,raw}],hex}} (docs/v12/SATELLITE-BEST.md "Contract additions") → one shape. */
@@ -1384,17 +1388,22 @@ export function parseSatTelemetry(d: unknown): Partial<SatTelemetry> | null {
   if (str(o.mode, 24)) out.mode = str(o.mode, 24);
   const at = num(o.t) ?? num(o.at); if (at != null) out.at = at;
   if (typeof o.hex === 'string') out.hex = o.hex.replace(/[^0-9a-fA-F]/g, '').slice(0, 512);
+  if (str(o.layout, 24)) out.layout = str(o.layout, 24);
+  if (Array.isArray(o.absent)) out.absent = (o.absent as unknown[]).map((x) => str(x, 8)).filter((x): x is string => !!x).slice(0, 8);
   if (Array.isArray(o.values)) {
     const values: SatTlmValue[] = [];
-    for (const v0 of (o.values as unknown[]).slice(0, 64)) {
+    for (const v0 of (o.values as unknown[]).slice(0, 96)) {   // ★ beta94 JY1Sat sends 63 values, FUNcube-1 58 — room above both
       const v = v0 as Record<string, unknown>;
       const name = str(v?.name ?? v?.n ?? v?.k, 32);
       const val = v?.v ?? v?.value;
       if (!name || (typeof val !== 'number' && typeof val !== 'string')) continue;
-      const value = typeof val === 'number' ? (isFinite(val) ? String(Math.round(val * 1000) / 1000) : '') : str(val, 24) ?? '';
+      // ★ beta94 an enumerated value comes with its words ("Watchdog reset") — shown instead of the code
+      const text = str(v.text, 24);
+      const value = text ?? (typeof val === 'number' ? (isFinite(val) ? String(Math.round(val * 1000) / 1000) : '') : str(val, 24) ?? '');
       if (!value) continue;
       const raw = v.raw === true;
-      values.push({ name, value, unit: raw ? '' : str(v.unit ?? v.u, 8) ?? '', raw });   // ★ raw: the count, no unit
+      const note = str(v.note, 80);
+      values.push({ name, value, unit: raw || text ? '' : str(v.unit ?? v.u, 8) ?? '', raw, ...(note ? { note } : {}) });   // ★ raw: the count, no unit
     }
     out.values = values;
   }
@@ -1407,7 +1416,7 @@ export function satTelemetryMerge(prev: SatTelemetry | null, m: Partial<SatTelem
   const next = { ...base } as SatTelemetry;
   for (const [k, v] of Object.entries(m)) if (v !== undefined) (next as unknown as Record<string, unknown>)[k] = v;
   // ★★ beta91 a frame (values + its time) joins the pick's history — the THIS PASS charts
-  if (m.values?.length && m.at) next.hist = tlmLivePush(base.hist, { t: m.at, values: m.values });
+  if (m.values?.length && m.at) next.hist = tlmLivePush(base.hist, { t: m.at, values: m.values, ...(m.absent ? { absent: m.absent } : {}) });
   return next;
 }
 /** The block's first line: "TELEMETRY · 14 frames · 13 good · 1 failed · Safe" ("waiting for a frame" until one). */
@@ -1418,7 +1427,9 @@ export function satTelemetryHead(t: SatTelemetry | null): string {
   if (t.mode) parts.push(t.mode);
   return parts.join(' · ');
 }
-/** A value in words: "Battery voltage 8.13 V" / "Reboots 14" / "Battery temperature 143 raw". */
+/** ★★ beta94 "No EPS data in this frame (its data-valid flag is off)" — '' when every board sent data. */
+export function satTelemetryAbsentText(t: SatTelemetry | null): string { return tlmAbsentText(t?.absent, 'this frame'); }
+/** A value in words: "Battery voltage 7.876 V" / "Reboot count 14" / "Receiver RSSI 181 raw" (no published conversion). */
 export function satTelemetryLine(v: SatTlmValue): string { return `${v.name} ${v.value}${v.unit ? ' ' + v.unit : ''}${v.raw ? ' raw' : ''}`; }
 /** The RAW switch's text: the payload hex in groups of 4 bytes. */
 export function satTelemetryHex(t: SatTelemetry | null): string { return (t?.hex ?? '').replace(/(.{8})/g, '$1 ').trim(); }

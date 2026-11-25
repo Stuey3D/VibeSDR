@@ -9,8 +9,9 @@ import { join } from 'path';
 import {
   tlmHeading, tlmChartable, tlmParseCsv, tlmLivePass, tlmLivePush, tlmChartOrder, tlmValueText, tlmPassHead, tlmAcrossHead,
   tlmSpark, tlmRange, tlmAcross, tlmPassItems, tlmSatOfTitle, tlmLoadPasses, TLM_LIVE_MAX, type TlmLiveFrame,
+  tlmFootNote, tlmAbsentText, tlmMinSpan, tlmHasReading,
 } from '../src/utils/tlmCharts';
-import { satTelemetryMerge, parseSatTelemetry } from '../src/services/satellites';
+import { satTelemetryMerge, parseSatTelemetry, satTelemetryLine, satTelemetryAbsentText } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (c) pass++; else fail++; };
@@ -33,7 +34,14 @@ const p1 = tlmParseCsv(csv(1))!, p2 = tlmParseCsv(csv(2))!, p3 = tlmParseCsv(csv
   ok(p1.t.length === 24 && p2.t.length === 18 && p3.t.length === 24, `rows: 24 / 18 (a fade) / 24 (${p1.t.length}/${p2.t.length}/${p3.t.length})`);
   ok(p1.channels.length === 58 && p1.v.every((col) => col.length === p1.t.length), 'every channel, a reading per row');
   const bi = p1.channels.findIndex((c) => c.name === 'Battery voltage');
-  ok(bi >= 0 && p1.channels[bi].raw && p1.v[bi][0] === 1433, `Battery voltage raw, row 1 = 1433 (${p1.v[bi]?.[0]})`);
+  ok(bi >= 0 && !p1.channels[bi].raw && p1.channels[bi].unit === 'V' && p1.v[bi][0] === 7.762, `★ beta94 Battery voltage [V], row 1 = 7.762 (${p1.v[bi]?.[0]})`);
+  const units = new Set(p1.channels.filter((c) => !c.raw).map((c) => c.unit).filter(Boolean));
+  ok(['V', 'mA', '\u00b0C', 'mW', 'lux'].every((u) => units.has(u)), `units in the headings: ${[...units].join(' ')}`);
+  ok(p1.channels.filter((c) => c.raw).map((c) => c.name).join() === 'Receiver Doppler,Receiver RSSI', 'only Doppler and RSSI raw (no published conversion)');
+  // ★★ pass 3 frames 5–7: the EPS's data-valid flag off → blank cells → null (never 0)
+  const b3 = p3.channels.findIndex((c) => c.name === 'Battery voltage'), s3 = p3.channels.findIndex((c) => c.name === 'Sun sensor X+');
+  ok(p3.v[b3][5] === null && p3.v[b3][6] === null && p3.v[b3][7] === null && p3.v[b3][4] != null && p3.v[s3][6] != null,
+     'an EPS-less frame reads as null, not 0 (the ASIB\'s sun sensor still read)');
   ok(p1.start === 1795356150 && p1.t[1] - p1.t[0] === 5, 'times from the unix column, 5 s a frame');
   ok(tlmParseCsv('hello') === null && tlmParseCsv('') === null && tlmParseCsv('# x\na,b\n1,2') === null, 'not a pass CSV → null');
   ok(tlmParseCsv(csv(1), 5)!.t.length === 5, 'bounded: read to maxRows');
@@ -44,13 +52,44 @@ console.log('§3 what is charted, in which order');
 {
   const o = tlmChartOrder(p1);
   const names = o.map((i) => p1.channels[i].name);
-  ok(names[0] === 'Battery voltage' && names[1] === 'Battery temp' && names[2] === 'Total photo current', `the power system first (${names.slice(0, 3).join(', ')})`);
+  ok(names[0] === 'Battery voltage' && names[1] === 'Total photo current' && names[2] === 'Total system current' && names[3] === 'Battery temp',
+     `the power system first (${names.slice(0, 4).join(', ')})`);
+  ok(names.slice(-2).join() === 'Receiver Doppler,Receiver RSSI', `raw channels last (${names.slice(-2).join(', ')})`);
   ok(!names.includes('Reboot count') && !names.includes('Sequence number') && !names.includes('In eclipse mode'), 'counts and flags are not charted');
   ok(names.length === p1.channels.filter(tlmChartable).length, `every analogue channel charted (${names.length})`);
   ok(tlmValueText(1433, { name: '', unit: '', raw: true }) === '1433 raw' && tlmValueText(8.134, { name: '', unit: 'V', raw: false }) === '8.13 V'
      && tlmValueText(null, { name: '', unit: '', raw: true }) === '—', 'values in words: "1433 raw", "8.13 V", "—"');
   ok(tlmPassHead(p1, false) === 'THE PASS · 24 frames · 14:02–14:04 UTC', tlmPassHead(p1, false));
   ok(tlmPassHead(null, true) === 'THIS PASS · waiting for a frame' && tlmAcrossHead(0).includes('none saved'), 'heads before there is data');
+  ok(tlmValueText(37.1, { name: '', unit: '\u00b0C', raw: false }) === '37.1 \u00b0C' && tlmValueText(302.6, { name: '', unit: 'mW', raw: false }) === '303 mW',
+     'the chart labels carry the unit: "37.1 °C", "303 mW"');
+  // ★★ beta94 the note names the raw channels — no blanket "raw = uncalibrated"
+  ok(tlmFootNote(p1) === 'raw (no published conversion): Receiver Doppler, Receiver RSSI · times UTC · saved to the gallery a pass at a time', tlmFootNote(p1));
+  ok(!tlmFootNote(null).includes('raw'), 'no raw channel: the note says nothing about raw');
+  // ★★ a channel with NO reading in the pass (its board never valid) is not charted — no flat line of zeros
+  const blank = { ...p1, v: p1.v.map((col, i) => (p1.channels[i].name === 'Battery voltage' ? col.map(() => null) : col)) };
+  const bn = tlmChartOrder(blank).map((i) => blank.channels[i].name);
+  ok(!bn.includes('Battery voltage') && bn[0] === 'Total photo current' && !tlmHasReading([null, null]) && tlmHasReading([null, 0]),
+     'a channel with no valid reading gets no chart (a 0 that WAS sent still counts)');
+}
+
+console.log('§3b ★★ beta94 units and absent boards, live');
+{
+  const f = { sat: 'JO-97', t: 2000, layout: 'JY1Sat', absent: ['EPS', 'iMTQ'], values: [
+    { k: 'asib.sunxp', name: 'Sun sensor X+', v: 26303, unit: 'lux' }, { k: 'rf.temp', name: 'RF temperature', v: -1.6, unit: '\u00b0C' },
+    { k: 'rf.rssi', name: 'Receiver RSSI', v: 255, raw: true, note: '"no conversion required" in the published sheet' },
+    { k: 'eps.reset', name: 'Reset cause', v: 3, text: 'Watchdog reset' }] };
+  const t = satTelemetryMerge(null, parseSatTelemetry(f))!;
+  ok(t.layout === 'JY1Sat' && t.absent!.join() === 'EPS,iMTQ', 'layout and absent boards parsed');
+  ok(satTelemetryAbsentText(t) === 'No EPS or iMTQ data in this frame (their data-valid flags are off)', satTelemetryAbsentText(t));
+  ok(tlmAbsentText(['EPS']) === 'No EPS data in the latest frame (its data-valid flag is off)' && tlmAbsentText([]) === '', 'one board / none');
+  const lines = t.values.map(satTelemetryLine);
+  ok(lines.join(' | ') === 'Sun sensor X+ 26303 lux | RF temperature -1.6 \u00b0C | Receiver RSSI 255 raw | Reset cause Watchdog reset', lines.join(' | '));
+  ok(t.values[2].note === '"no conversion required" in the published sheet', 'a raw channel keeps its own reason');
+  const lp = tlmLivePass(t.hist, 'JO-97')!;
+  ok(lp.absent!.join() === 'EPS,iMTQ' && lp.channels[1].unit === '\u00b0C', 'the live pass carries the absent boards and the units');
+  const t2 = satTelemetryMerge(t, parseSatTelemetry({ ...f, t: 2005, absent: [] }))!;
+  ok(!satTelemetryAbsentText(t2) && !tlmLivePass(t2.hist)!.absent, 'the next frame with every board valid: nothing said');
 }
 
 console.log('§4 the live history');
@@ -89,6 +128,11 @@ console.log('§5 the geometry');
   ok(tlmSpark([], [], W, H).line === '' && tlmSpark([1, 2], [null, null], W, H).last === null, 'nothing to draw → nothing drawn');
   const r = tlmRange([1, 2], [0, 10]);
   ok(r.lo === 0 && r.hi === 10, 'the band widens the range');
+  // ★★ beta94 a sensible axis: one ADC step on a steady battery is not a cliff
+  const bat = tlmRange([7.876, 7.886, 7.866], [], tlmMinSpan({ name: '', unit: 'V', raw: false }));
+  ok(Math.abs(bat.hi - bat.lo - 0.1) < 1e-9 && Math.abs((bat.hi + bat.lo) / 2 - 7.876) < 1e-9, `a 7.87–7.89 V battery: the axis spans 0.1 V (${bat.lo.toFixed(3)}–${bat.hi.toFixed(3)})`);
+  ok(tlmMinSpan({ name: '', unit: '\u00b0C', raw: false }) === 2 && tlmMinSpan({ name: '', unit: '', raw: true }) === 0
+     && tlmRange([10, 50], [], 2).lo === 10, 'per unit (°C 2); raw none; a wide channel keeps its own range');
 }
 
 console.log('§6 across passes');

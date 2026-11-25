@@ -39,7 +39,7 @@ import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
-import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
+import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -509,9 +509,14 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   {tlmCharts ? <TlmCharts pass={tlmLive} live across={tlmAcross} acrossNote={tlmAcrossNote}
                                           ink={{ text: tk.value, muted: tk.muted, line: tk.accent, grid: tk.border, font: F }} />
                   : tlmRaw && !!tlmHex ? <Text style={s.mono} selectable>{tlmHex}</Text>
-                  : !!p.telemetry?.values.length && <View style={s.tlmGrid}>
-                    {p.telemetry.values.map((v, i) => <Text key={i} style={[s.mono, s.tlmCell]} numberOfLines={1}>{satTelemetryLine(v)}</Text>)}
-                  </View>}
+                  : <>
+                    {/* ★★ beta94 a board whose data-valid flag is off: said, not shown as zeros */}
+                    {!!satTelemetryAbsentText(p.telemetry ?? null) && <Text style={s.detailNp}>{satTelemetryAbsentText(p.telemetry ?? null)}</Text>}
+                    {!!p.telemetry?.values.length && <View style={s.tlmGrid}>
+                      {p.telemetry.values.map((v, i) => <Text key={i} style={[s.mono, s.tlmCell]} numberOfLines={1}
+                        accessibilityLabel={v.note ? `${satTelemetryLine(v)}: ${v.note}` : undefined}>{satTelemetryLine(v)}</Text>)}
+                    </View>}
+                  </>}
                 </View>
               )}
               {/* ★★★ beta94 THE TRANSPONDER FINDER (Stuart 11-24): every signal found — voices first while on air, each with

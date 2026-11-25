@@ -1,11 +1,23 @@
-// vibe_fctlm.h — V12 beta90: FUNcube telemetry (AO-73 / FUNcube-1), docs/v12/SATELLITE-BEST.md 1.2 + 1.3. Our own code.
+// vibe_fctlm.h — V12 beta90: FUNcube telemetry (AO-73 / FUNcube-1; beta94 JY1Sat / JO-97, units), docs/v12/SATELLITE-BEST.md 1.2 + 1.3. Our own code.
 //
 // ★★★ SOURCES (published, read for facts only):
 //   · AMSAT-UK, "FUNcube-1 Downlink Data", issue 1.0 final as flown (2015-03-05), "unlimited public release":
 //     1200 bps BPSK with the AO-40 FEC; a 256-byte frame = 2-bit satellite id + 6-bit frame type (MSB first) + 440 bits
 //     of real-time telemetry + 1600 bits (200 bytes) of payload; one frame every 5 s; the 24-frame schedule (WO1–12,
-//     HR1–3, FM1–9); the real-time field list and widths (EPS 192, BOB 100, RF 48, PA 32, ANTS 20, SW 48). ★ The
-//     document publishes NO calibration for any channel — every analogue channel is sent RAW, labelled raw.
+//     HR1–3, FM1–9); the real-time field list and widths (EPS 192, BOB 100, RF 48, PA 32, ANTS 20, SW 48). It gives
+//     no calibration itself. funcube.org.uk/wp-content/uploads/2010/11/funcube-1-downlink-data-spec_ver1-as_flown.pdf
+//   · ★★ beta94 AMSAT-UK, "FUNcube-1 telemetry_equations_b1" (G. Shirville, Sept 2013 — the handbook: "All telemetry
+//     calibration equations are on the FUNcube website"), funcube.org.uk/wp-content/uploads/2010/11/funcube-1_-telemetry_
+//     equations_b1.xls: per real-time channel the equation or "real values are transmitted" (the EPS: mV, mA, °C), the
+//     PA temperature table, the AntS sensor curve, the sun sensors' log(lux) table, reset-cause and PPT words.
+//   · ★★ beta94 AMSAT-UK, "JY1SAT data budget with tlm equations 2F" (Nov 2018), funcube.org.uk/wp-content/uploads/2018/
+//     11/jy1sat_data_budget-with-tlm-equations-2f.xls: JY1Sat's OWN 432-bit real-time layout, field by field, with its
+//     conversions ("Treat as FC1" = FUNcube-1's) — linked from funcube.org.uk/2018/11/15/jy1sat/.
+//   · ★★ beta94 AMSAT-UK, "ESEO Downlink Data" issue 1.2 §3 "Extended Sat Id/Frame Types", funcube.org.uk/wp-content/
+//     uploads/2018/11/eseo_downlink_data_1_21a.pdf: satellite id 3 = an extended 16-bit header (S6 S7 F2–F7 | S0–S5 F0
+//     F1), then 432 bits of real-time data — the scheme JY1Sat uses.
+//   · AMSAT-UK, "The FUNcube Handbook" v1.3 (the PA: forward / reverse power mW, current mA, temperature °C; 300 mW sunlit).
+//   All four are AMSAT-UK's public documents, read for facts; no code of anyone else's was read or copied.
 //   · P. Karn KA9Q, "AO-40 FEC telemetry" (ka9q.net/papers/ao40tlm.html): two RS(160,128) words (even data bytes → word
 //     0, odd → word 1), shortened from CCSDS (255,223) by 95 leading zeros, field x⁸+x⁷+x²+x+1, roots α^(11j)
 //     j = 112…143, CONVENTIONAL basis; the PN h(x)=x⁸+x⁷+x⁵+x³+1 from all ones over the 320 RS bytes, its first bit on the
@@ -38,6 +50,7 @@
 #include "vibe_lrpt_fec.h"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <deque>
 #include <functional>
@@ -136,15 +149,44 @@ inline int decodeFrame(const int8_t* soft, uint8_t* data256, int* orderOut = nul
     return -1;
 }
 
-// ── The frame's meaning (the Downlink Data document) ─────────────────────────────────────────────────────────────
-struct Value { std::string key, name, unit; double v = 0; bool raw = false; };
+// ── The frame's meaning ─────────────────────────────────────────────────────────────────────────────────────────
+// ★★★ beta94 UNITS AND JY1SAT (Stuart 11-25 on a JO-97 pass: "charts are useless what is the voltage not raw?").
+//   Every channel now carries its engineering unit from AMSAT-UK's OWN published equations (the sources in the file
+//   header): FUNcube-1's "telemetry_equations_b1" sheet and JY1Sat's "data budget with tlm equations 2F" sheet. A channel
+//   is labelled raw only where those sheets say "use raw values" / "no conversion required" / "not translated".
+//   ★ Checked on AO-73's own frames (test-fctlm §10, the 11-24 recording): battery 7.876 V, panels 14–23 °C, the
+//     internal temperatures 22–37 °C, PA forward power 303 mW (the handbook's 300 mW sunlit beacon), buses 3.28 V /
+//     4.96 V. ★ The sheets' "3v3 voltage = ADC count divided by 4" / "5v0 … divided by 6" read as the COUNT being the
+//     millivolts ÷ 4 (÷ 6): 819 counts = 3.276 V, 826 = 4.956 V on air; the other reading (204.75, 137.7) is no voltage.
+//   ★★ JY1SAT IS NOT FUNcube-1's LAYOUT. It uses the extended satellite id (ESEO Downlink Data §3): 16 header bits, then
+//     JY1Sat's own 432-bit real-time block (its sheet, field by field — 14-bit voltages, 10-bit currents, three photo
+//     currents, an iMTQ magnetorquer block, six sun sensors). Read as FUNcube-1 it was one byte out from the start:
+//     "battery 0", "panel temps" that swung 520 counts in two minutes (they were SUN SENSORS on a spinning bird), the
+//     second header byte (0x10) as a photo voltage of 4096. Its data-valid bits sit where FUNcube-1's do; the 11-25 pass
+//     said EPS 0 — so no battery was ever sent, and none is shown.
+//   ★★ DATA-VALID FLAGS ARE OBEYED: a board whose flag is off in a frame has its values marked !valid — left out of the
+//     JSON (with "absent":["EPS"] so the box says "no EPS data in this frame"), blank in the CSV, never charted as 0.
+struct Value {
+    std::string key, name, unit;
+    double v = 0;
+    bool raw = false;       ///< no published conversion: the count as sent, labelled raw
+    bool valid = true;      ///< false = its board's data-valid flag is off in this frame (not shown, not charted, blank in CSV)
+    int dp = 0;             ///< the decimals a reading needs (V 3, °C 1, mA 1 …)
+    std::string text;       ///< an enumerated value in words ("Watchdog reset"), else ""
+    std::string note;       ///< per channel: why it is raw, or how the conversion was made
+    std::string section;    ///< the board whose data-valid flag governs it ("EPS", "ASIB", "RF", "PA", "ANTS", "iMTQ"), "" = always
+};
 struct Decoded {
     int satId = 0, frameType = 0;
+    int extId = -1;         ///< the extended satellite id (satId 3), else −1
     int rsFixed = 0;        ///< RS bytes corrected in this frame (the run fills it in)
     std::string frameName, mode;
+    std::string layout;     ///< "FUNcube-1" / "JY1Sat" / "" (not known: no values)
     long long seq = -1;
     std::vector<Value> values;
+    std::vector<std::string> absent;   ///< boards whose data-valid flag is off in this frame
     std::string fitter;     ///< a fitter message frame's text (printable ASCII only), else ""
+    const Value* find(const char* key) const { for (const auto& v : values) if (v.key == key) return &v; return nullptr; }
 };
 /** MSB-first bit reader. */
 struct Bits {
@@ -161,48 +203,218 @@ inline std::string frameName(int t) {
     return "type " + std::to_string(t);
 }
 inline bool isFitterType(int t) { return t >= 13 && t <= 23 && t != 16 && t != 20; }
+/** ★★ The extended satellite id JY1Sat sends: its second header byte 0x10 (the 11-25 JO-97 pass) = S0–S5 000100, with
+ *  byte 0's S6 S7 = 11 → 0b00010011. ESEO Downlink Data §3 gives the scheme; no list of ids is published. */
+inline constexpr int kExtIdJy1Sat = 0x13;
 inline const char* satIdName(int id) {
     switch (id) { case 0: return "FUNcube-1 engineering model"; case 1: return "FUNcube-2 (UKube-1)"; case 2: return "FUNcube-1"; default: return "extended"; }
 }
-/** ★★ Real-time telemetry, field by field in the document's order. Analogue channels: RAW (no published calibration).
- *  Counts, flags and the sequence number are exact (not raw). */
-inline Decoded parse(const uint8_t* d) {
+inline std::string satIdText(const struct Decoded& d) {
+    if (d.satId != 3) return satIdName(d.satId);
+    if (d.extId == kExtIdJy1Sat) return "JY1Sat (extended id " + std::to_string(d.extId) + ")";
+    return "extended id " + std::to_string(d.extId);
+}
+
+// ── The published conversions ───────────────────────────────────────────────────────────────────────────────────
+namespace cal {
+/** Piecewise-linear through (x, y) points, x ascending; held flat past either end. */
+inline double interp(const double (*t)[2], int n, double x) {
+    if (x <= t[0][0]) return t[0][1];
+    for (int i = 1; i < n; ++i)
+        if (x <= t[i][0]) { const double f = (x - t[i - 1][0]) / (t[i][0] - t[i - 1][0]); return t[i - 1][1] + f * (t[i][1] - t[i - 1][1]); }
+    return t[n - 1][1];
+}
+/** PA board temperature, °C, from its 8-bit count — the FC1 sheet's "PA TEMP lookup table" (measured 79–252, its ends
+ *  continued as the sheet gives them; JY1Sat's sheet: "See PA TEMP lookup table from FC1"). */
+inline double paTempC(double adc) {
+    static const double t[][2] = {{0, 87.983}, {79, 55.3}, {91, 49.6}, {103, 45.3}, {115, 41.1}, {125, 37.6}, {129, 35.7},
+        {137, 33.6}, {145, 30.6}, {154, 27.6}, {161, 25.1}, {169, 22.6}, {176, 20}, {183, 17.6}, {189, 15.1}, {196, 12.6},
+        {203, 10}, {208, 7.5}, {214, 5}, {220, 2.4}, {224, 0}, {230, -2.9}, {233, -5}, {237, -7.5}, {241, -10},
+        {244, -12.3}, {247, -15}, {252, -20}, {255, -22.846}};
+    return interp(t, (int)(sizeof t / sizeof t[0]), adc);
+}
+/** Antenna temperature, °C — "see ISIS AntS User Manual Appendix C": the FC1 sheet's copy of that curve (sensor mV
+ *  against °C, −50…150; every 5 °C here). ★ The sheets do not say how the 8-bit count maps to mV: taken as the AntS
+ *  ADC's 0–3.3 V full scale (count × 3300 / 255). On AO-73 it reads 24–25 °C beside the EPS's 22 °C. */
+inline double antTempC(double adc) {
+    static const double t[][2] = {{420, 150}, {479, 145}, {537, 140}, {595, 135}, {653, 130}, {711, 125}, {769, 120},
+        {826, 115}, {883, 110}, {940, 105}, {997, 100}, {1054, 95}, {1110, 90}, {1167, 85}, {1223, 80}, {1279, 75},
+        {1335, 70}, {1391, 65}, {1448, 60}, {1503, 55}, {1558, 50}, {1613, 45}, {1668, 40}, {1723, 35}, {1777, 30},
+        {1831, 25}, {1885, 20}, {1939, 15}, {1993, 10}, {2047, 5}, {2100, 0}, {2154, -5}, {2207, -10}, {2260, -15},
+        {2313, -20}, {2366, -25}, {2418, -30}, {2470, -35}, {2522, -40}, {2571, -45}, {2616, -50}};
+    return interp(t, (int)(sizeof t / sizeof t[0]), adc * 3300.0 / 255.0);
+}
+inline constexpr double kSunMaxAdc = 984;   ///< the sheets' table ends in four rows at 984: the sensor's limit
+/** Sun sensor, lux — the sheets' "Raw ADC reading to log (Lux)" table (JY1Sat's copy: FC1's has 3.980 at 400, out of
+ *  order between 3.475 and 3.690; JY1Sat's corrects it to 3.58). 5 counts and below = noise, "0". */
+inline double sunLux(double adc) {
+    static const double t[][2] = {{9, 2.158}, {19, 2.477}, {23, 2.640}, {33, 2.80}, {50, 2.881}, {56, 2.889}, {100, 3.04},
+        {133, 3.14}, {200, 3.25}, {265, 3.346}, {333, 3.475}, {400, 3.58}, {467, 3.69}, {533, 3.81}, {600, 3.92},
+        {666, 4.03}, {700, 4.079}, {732, 4.13}, {800, 4.245}, {866, 4.325}, {933, 4.38}, {984, 4.42}};
+    if (adc <= 5) return 0;
+    if (adc < 9) return std::pow(10.0, 2.158) * (adc - 5) / 4.0;   // between the noise floor and the table's first row
+    return std::pow(10.0, interp(t, (int)(sizeof t / sizeof t[0]), adc));
+}
+/** PA forward / reverse power, mW: 0.005 × count^2.0629 (both sheets). */
+inline double paPowerMw(double adc) { return 0.005 * std::pow(adc, 2.0629); }
+/** Two's complement 8-bit (the EPS's temperatures; JY1Sat's sheet: "int16 to int8 conversion (as batt temp)"). */
+inline double s8(uint32_t v) { return (double)(int8_t)(uint8_t)v; }
+inline const char* resetCause(int v) {
+    static const char* n[] = {"Power-on reset", "External reset", "Brown-out reset", "Watchdog reset", "JTAG reset", "Other"};
+    return v >= 0 && v <= 5 ? n[v] : "";
+}
+inline const char* pptMode(int v) {
+    static const char* n[] = {"Hardware", "MPPT", "Fixed software PPT"};
+    return v >= 0 && v <= 2 ? n[v] : "";
+}
+inline const char* imtqMode(int v) {
+    static const char* n[] = {"Idle", "Self-test", "Detumbling"};
+    return v >= 0 && v <= 2 ? n[v] : "Invalid";
+}
+} // namespace cal
+
+/** Fills Value rows from a bit reader: one helper per kind of channel, so each layout below reads like its sheet. */
+struct Reader {
+    Bits b; Decoded& o; std::string sec;
+    Reader(const uint8_t* d, size_t start, Decoded& out) : b(d, start), o(out) {}
+    Value& add(const char* k, const char* n, double v, const char* unit, int dp) {
+        Value x; x.key = k; x.name = n; x.v = v; x.unit = unit; x.dp = dp; x.section = sec; o.values.push_back(x); return o.values.back();
+    }
+    // "real values are transmitted": millivolts → V, milliamps, °C as signed bytes
+    void mV(const char* k, const char* n, int w) { add(k, n, b.get(w) / 1000.0, "V", 3); }
+    void mA(const char* k, const char* n, int w) { add(k, n, b.get(w), "mA", 0); }
+    void degS8(const char* k, const char* n) { add(k, n, cal::s8(b.get(8)), "\xc2\xb0" "C", 0); }
+    void count(const char* k, const char* n, int w) { add(k, n, b.get(w), "", 0); }
+    void scaled(const char* k, const char* n, int w, double m, double c, const char* unit, int dp) { add(k, n, m * b.get(w) + c, unit, dp); }
+    void rawCount(const char* k, const char* n, int w, const char* why) { Value& v = add(k, n, b.get(w), "", 0); v.raw = true; v.note = why; }
+    void sun(const char* k, const char* n) {
+        const double a = b.get(10);
+        Value& v = add(k, n, std::round(cal::sunLux(a)), "lux", 0);
+        if (a >= cal::kSunMaxAdc) v.note = "at the sensor's limit (984 counts = 26 klux or more)";
+    }
+    void en(const char* k, const char* n, int w, const char* (*words)(int)) { const uint32_t x = b.get(w); Value& v = add(k, n, x, "", 0); v.text = words((int)x); }
+};
+
+/** ★★ FUNcube-1 (AO-73): the Downlink Data document's real-time block, 440 bits from bit 8, with the FC1 sheet's units. */
+inline void parseFc1(const uint8_t* d, Decoded& o) {
+    Reader r(d, 8, o);
+    r.sec = "EPS";   // 192 — "real values are transmitted": mV, mA, °C
+    r.mV("eps.pv1", "Photo voltage 1", 16); r.mV("eps.pv2", "Photo voltage 2", 16); r.mV("eps.pv3", "Photo voltage 3", 16);
+    r.mA("eps.ipv", "Total photo current", 16); r.mV("eps.vbat", "Battery voltage", 16); r.mA("eps.isys", "Total system current", 16);
+    r.count("eps.reboots", "Reboot count", 16); r.count("eps.swerr", "EPS software errors", 16);
+    r.degS8("eps.tboost1", "Boost converter temp 1"); r.degS8("eps.tboost2", "Boost converter temp 2"); r.degS8("eps.tboost3", "Boost converter temp 3");
+    r.degS8("eps.tbat", "Battery temp"); r.count("eps.lu5", "Latch-up count 5 V", 8); r.count("eps.lu33", "Latch-up count 3.3 V", 8);
+    r.en("eps.reset", "Reset cause", 8, cal::resetCause); r.en("eps.ppt", "Power point tracking mode", 8, cal::pptMode);
+    r.sec = "ASIB";  // 100 (the document's "BOB")
+    r.sun("bob.sunx", "Sun sensor X+"); r.sun("bob.suny", "Sun sensor Y+"); r.sun("bob.sunz", "Sun sensor Z+");
+    r.scaled("bob.tpxp", "Solar panel temp X+", 10, -0.2073, 158.239, "\xc2\xb0" "C", 1);
+    r.scaled("bob.tpxm", "Solar panel temp X-", 10, -0.2083, 159.227, "\xc2\xb0" "C", 1);
+    r.scaled("bob.tpyp", "Solar panel temp Y+", 10, -0.2076, 158.656, "\xc2\xb0" "C", 1);
+    r.scaled("bob.tpym", "Solar panel temp Y-", 10, -0.2087, 159.045, "\xc2\xb0" "C", 1);
+    r.scaled("bob.v33", "3.3 V bus voltage", 10, 0.004, 0, "V", 3); r.mA("bob.i33", "3.3 V bus current", 10);
+    r.scaled("bob.v50", "5.0 V bus voltage", 10, 0.006, 0, "V", 3);
+    r.sec = "RF";    // 48
+    r.rawCount("rf.doppler", "Receiver Doppler", 8, "uncalibrated in the published sheet (about 163 = no signal)");
+    r.rawCount("rf.rssi", "Receiver RSSI", 8, "uncalibrated in the published sheet (\"use raw values\")");
+    r.scaled("rf.temp", "RF temperature", 8, -0.857, 193.672, "\xc2\xb0" "C", 1);
+    r.scaled("rf.irx", "Receive current", 8, 0.636, 0, "mA", 1); r.scaled("rf.itx33", "Transmit current 3.3 V bus", 8, 0.636, 0, "mA", 1);
+    r.scaled("rf.itx50", "Transmit current 5.0 V bus", 8, 1.272, 0, "mA", 1);
+    r.sec = "PA";    // 32 (as flown: reverse then forward)
+    r.add("pa.rev", "PA reverse power", cal::paPowerMw(r.b.get(8)), "mW", 1); r.add("pa.fwd", "PA forward power", cal::paPowerMw(r.b.get(8)), "mW", 1);
+    r.add("pa.temp", "PA board temperature", cal::paTempC(r.b.get(8)), "\xc2\xb0" "C", 1);
+    r.scaled("pa.i", "PA board current", 8, 0.5496, 2.5435, "mA", 1);
+    r.sec = "ANTS";  // 20
+    r.add("ant.t0", "Antenna temp 0", cal::antTempC(r.b.get(8)), "\xc2\xb0" "C", 1).note = "the count taken as 0-3.3 V (not stated)";
+    r.add("ant.t1", "Antenna temp 1", cal::antTempC(r.b.get(8)), "\xc2\xb0" "C", 1).note = "the count taken as 0-3.3 V (not stated)";
+    r.count("ant.dep0", "Antenna 0 deployed", 1); r.count("ant.dep1", "Antenna 1 deployed", 1);
+    r.count("ant.dep2", "Antenna 2 deployed", 1); r.count("ant.dep3", "Antenna 3 deployed", 1);
+}
+/** ★★ JY1Sat (JO-97): its own sheet's real-time block, 432 bits from bit 16 (the extended header). Widths, order and
+ *  conversions as the sheet gives them; "Treat as FC1" = FUNcube-1's conversion. */
+inline void parseJy1(const uint8_t* d, Decoded& o) {
+    Reader r(d, 16, o);
+    r.sec = "EPS";   // 170 — 14-bit mV ("Delete 2 MSB"), 10-bit mA ("Delete 4 MSB")
+    r.mV("eps.pv1", "Photo voltage 1", 14); r.mV("eps.pv2", "Photo voltage 2", 14); r.mV("eps.pv3", "Photo voltage 3", 14);
+    r.mV("eps.vbat", "Battery voltage", 14);
+    r.mA("eps.ipv1", "Photo current 1", 10); r.mA("eps.ipv2", "Photo current 2", 10); r.mA("eps.ipv3", "Photo current 3", 10);
+    r.mA("eps.ipv", "Total photo current", 10); r.mA("eps.isys", "Total system current", 10);
+    r.count("eps.reboots", "Reboot count", 8);
+    r.degS8("eps.tboost1", "Boost converter temp 1"); r.degS8("eps.tboost2", "Boost converter temp 2"); r.degS8("eps.tboost3", "Boost converter temp 3");
+    r.degS8("eps.tbat", "Battery temp"); r.count("eps.lu5", "Latch-up count 5 V", 8);
+    r.mA("eps.i5sw1", "5 V switch 1 current", 8);
+    r.en("eps.reset", "Reset cause", 4, cal::resetCause); r.en("eps.ppt", "Power point tracking mode", 4, cal::pptMode);
+    r.sec = "iMTQ";  // 14 — the magnetorquer
+    r.en("imtq.mode", "iMTQ mode", 2, cal::imtqMode);
+    r.rawCount("imtq.err", "iMTQ error code", 3, "\"not translated\" in the published sheet");
+    r.count("imtq.cfg", "iMTQ configuration set", 1);
+    {   const uint32_t t = r.b.get(8);
+        Value& v = r.add("imtq.temp", "iMTQ MCU temperature", cal::s8(t), "\xc2\xb0" "C", 0);
+        if (t == 85) { v.valid = false; v.note = "85 = invalid (the sheet)"; } }
+    r.sec = "ASIB";  // 100 — six sun sensors, the 3.3 V bus, the iMTQ's uptime, the 5 V bus
+    r.sun("asib.sunxp", "Sun sensor X+"); r.sun("asib.sunxm", "Sun sensor X-"); r.sun("asib.sunyp", "Sun sensor Y+");
+    r.sun("asib.sunym", "Sun sensor Y-"); r.sun("asib.sunzp", "Sun sensor Z+"); r.sun("asib.sunzm", "Sun sensor Z-");
+    r.scaled("bob.v33", "3.3 V bus voltage", 10, 0.004, 0, "V", 3);
+    r.sec = "iMTQ";
+    r.scaled("imtq.up", "iMTQ uptime", 20, 5.0 / 3600.0, 0, "h", 1);   // "20 bit count of 5 sec period"
+    r.sec = "ASIB";
+    r.scaled("bob.v50", "5.0 V bus voltage", 10, 0.006, 0, "V", 3);
+    r.sec = "RF";    // 48
+    r.rawCount("rf.doppler", "Receiver Doppler", 8, "\"no conversion required\" in the published sheet");
+    r.rawCount("rf.rssi", "Receiver RSSI", 8, "\"no conversion required\" in the published sheet");
+    r.scaled("rf.temp", "RF temperature", 8, -0.98, 234.58, "\xc2\xb0" "C", 1);
+    r.scaled("rf.irx", "Receive current", 8, 0.636, 0, "mA", 1); r.scaled("rf.itx33", "Transmit current 3.3 V bus", 8, 0.636, 0, "mA", 1);
+    r.scaled("rf.itx50", "Transmit current 5.0 V bus", 8, 0.636, 0, "mA", 1);
+    r.sec = "PA";    // 32
+    r.add("pa.rev", "PA reverse power", cal::paPowerMw(r.b.get(8)), "mW", 1); r.add("pa.fwd", "PA forward power", cal::paPowerMw(r.b.get(8)), "mW", 1);
+    r.add("pa.temp", "PA board temperature", cal::paTempC(r.b.get(8)), "\xc2\xb0" "C", 1);
+    r.scaled("pa.i", "PA board current", 8, 0.5496, 2.5435, "mA", 1);
+    r.sec = "ANTS";  // 20
+    r.add("ant.t0", "Antenna temp 0", cal::antTempC(r.b.get(8)), "\xc2\xb0" "C", 1).note = "the count taken as 0-3.3 V (not stated)";
+    r.add("ant.t1", "Antenna temp 1", cal::antTempC(r.b.get(8)), "\xc2\xb0" "C", 1).note = "the count taken as 0-3.3 V (not stated)";
+    r.count("ant.dep0", "Antenna 0 deployed", 1); r.count("ant.dep1", "Antenna 1 deployed", 1);
+    r.count("ant.dep2", "Antenna 2 deployed", 1); r.count("ant.dep3", "Antenna 3 deployed", 1);
+}
+
+/** ★★ The frame: its header (plain or extended id), the satellite's layout, the software block (the same 48 bits at the
+ *  same place — bit 400 — in both layouts) and the data-valid flags applied. `satHint` = the pick's catalogue name: an
+ *  extended id we do not know yet, heard on the JO-97 pick, is read as JY1Sat. */
+inline Decoded parse(const uint8_t* d, const std::string& satHint = std::string()) {
     Decoded o;
-    o.satId = d[0] >> 6; o.frameType = d[0] & 0x3F; o.frameName = frameName(o.frameType);
-    Bits b(d, 8);
-    auto raw = [&](const char* k, const char* n, int w) { Value v; v.key = k; v.name = n; v.v = b.get(w); v.raw = true; o.values.push_back(v); };
-    auto cnt = [&](const char* k, const char* n, int w) { Value v; v.key = k; v.name = n; v.v = b.get(w); o.values.push_back(v); };
-    // EPS 192
-    raw("eps.pv1", "Photo voltage 1", 16); raw("eps.pv2", "Photo voltage 2", 16); raw("eps.pv3", "Photo voltage 3", 16);
-    raw("eps.ipv", "Total photo current", 16); raw("eps.vbat", "Battery voltage", 16); raw("eps.isys", "Total system current", 16);
-    cnt("eps.reboots", "Reboot count", 16); cnt("eps.swerr", "EPS software errors", 16);
-    raw("eps.tboost1", "Boost converter temp 1", 8); raw("eps.tboost2", "Boost converter temp 2", 8); raw("eps.tboost3", "Boost converter temp 3", 8);
-    raw("eps.tbat", "Battery temp", 8); cnt("eps.lu5", "Latch-up count 5 V", 8); cnt("eps.lu33", "Latch-up count 3.3 V", 8);
-    cnt("eps.reset", "Reset cause", 8); cnt("eps.ppt", "Power point tracking mode", 8);
-    // BOB 100
-    raw("bob.sunx", "Sun sensor X+", 10); raw("bob.suny", "Sun sensor Y+", 10); raw("bob.sunz", "Sun sensor Z+", 10);
-    raw("bob.tpxp", "Solar panel temp X+", 10); raw("bob.tpxm", "Solar panel temp X-", 10); raw("bob.tpyp", "Solar panel temp Y+", 10);
-    raw("bob.tpym", "Solar panel temp Y-", 10); raw("bob.v33", "3.3 V bus voltage", 10); raw("bob.i33", "3.3 V bus current", 10);
-    raw("bob.v50", "5.0 V bus voltage", 10);
-    // RF 48
-    raw("rf.doppler", "Receiver Doppler", 8); raw("rf.rssi", "Receiver RSSI", 8); raw("rf.temp", "RF temperature", 8);
-    raw("rf.irx", "Receive current", 8); raw("rf.itx33", "Transmit current 3.3 V bus", 8); raw("rf.itx50", "Transmit current 5.0 V bus", 8);
-    // PA 32 (as flown: reverse then forward)
-    raw("pa.rev", "PA reverse power", 8); raw("pa.fwd", "PA forward power", 8); raw("pa.temp", "PA board temperature", 8); raw("pa.i", "PA board current", 8);
-    // ANTS 20
-    raw("ant.t0", "Antenna temp 0", 8); raw("ant.t1", "Antenna temp 1", 8);
-    cnt("ant.dep0", "Antenna 0 deployed", 1); cnt("ant.dep1", "Antenna 1 deployed", 1); cnt("ant.dep2", "Antenna 2 deployed", 1); cnt("ant.dep3", "Antenna 3 deployed", 1);
-    // SW 48
-    const uint32_t seq = b.get(24);
-    { Value v; v.key = "sw.seq"; v.name = "Sequence number"; v.v = seq; o.values.push_back(v); o.seq = seq; }
-    cnt("sw.dtmfn", "DTMF command count", 6); cnt("sw.dtmflast", "DTMF last command", 5); cnt("sw.dtmfok", "DTMF command success", 1);
-    cnt("sw.vasib", "Data valid ASIB", 1); cnt("sw.veps", "Data valid EPS", 1); cnt("sw.vpa", "Data valid PA", 1); cnt("sw.vrf", "Data valid RF", 1);
-    cnt("sw.vmse", "Data valid MSE", 1); cnt("sw.vantb", "Data valid ANTS bus B", 1); cnt("sw.vanta", "Data valid ANTS bus A", 1);
-    const uint32_t eclipse = b.get(1), safe = b.get(1);
-    { Value v; v.key = "sw.eclipse"; v.name = "In eclipse mode"; v.v = eclipse; o.values.push_back(v); }
-    { Value v; v.key = "sw.safe"; v.name = "In safe mode"; v.v = safe; o.values.push_back(v); }
-    cnt("sw.habf", "Hardware ABF on", 1); cnt("sw.sabf", "Software ABF on", 1); cnt("sw.depwait", "Deployment wait at next boot", 1);
-    o.mode = safe ? "Safe" : eclipse ? "Eclipse" : "Sunlight";
+    o.satId = d[0] >> 6; o.frameType = d[0] & 0x3F;
+    if (o.satId == 3) {   // ESEO Downlink Data §3: byte 1 = S0–S5 F0 F1; the id's low bits are byte 0's two
+        o.extId = ((d[1] >> 2) << 2) | 3;
+        o.frameType |= (d[1] & 3) << 6;
+    }
+    o.frameName = frameName(o.frameType);
+    const bool jyHint = satHint.find("JO-97") != std::string::npos || satHint.find("JY1") != std::string::npos;
+    if (o.satId == 3 && (o.extId == kExtIdJy1Sat || jyHint)) { o.layout = "JY1Sat"; parseJy1(d, o); }
+    else if (o.satId != 3) { o.layout = "FUNcube-1"; parseFc1(d, o); }
+    // the software block (48 bits) ends both real-time blocks: FUNcube-1 8 + 392, JY1Sat 16 + 384
+    Reader r(d, 400, o);
+    const uint32_t seq = r.b.get(24);
+    if (!o.layout.empty()) {
+        r.count("sw.seq", "Sequence number", 0); o.values.back().v = seq;
+        o.seq = seq;
+        r.count("sw.dtmfn", "DTMF command count", 6); r.count("sw.dtmflast", "DTMF last command", 5); r.count("sw.dtmfok", "DTMF command success", 1);
+        const bool jy = o.layout == "JY1Sat";
+        r.count("sw.vasib", "Data valid ASIB", 1); r.count("sw.veps", "Data valid EPS", 1); r.count("sw.vpa", "Data valid PA", 1);
+        r.count("sw.vrf", "Data valid RF", 1); r.count(jy ? "sw.vimtq" : "sw.vmse", jy ? "Data valid iMTQ" : "Data valid MSE", 1);
+        r.count("sw.vantb", "Data valid ANTS bus B", 1); r.count("sw.vanta", "Data valid ANTS bus A", 1);
+        const uint32_t eclipse = r.b.get(1), safe = r.b.get(1);
+        r.add("sw.eclipse", "In eclipse mode", eclipse, "", 0); r.add("sw.safe", "In safe mode", safe, "", 0);
+        r.count("sw.habf", "Hardware ABF on", 1); r.count("sw.sabf", "Software ABF on", 1); r.count("sw.depwait", "Deployment wait at next boot", 1);
+        o.mode = safe ? "Safe" : eclipse ? "Eclipse" : "Sunlight";
+        // ★★ the flags, applied: a board that says its data is not valid has none shown
+        auto flag = [&](const char* k) { const Value* v = o.find(k); return v && v->v != 0; };
+        struct F { const char* sec; bool ok; };
+        const F fl[] = {{"ASIB", flag("sw.vasib")}, {"EPS", flag("sw.veps")}, {"PA", flag("sw.vpa")}, {"RF", flag("sw.vrf")},
+                        {"iMTQ", jy && flag("sw.vimtq")}, {"ANTS", flag("sw.vanta") || flag("sw.vantb")}};
+        for (const F& f : fl) {
+            if (f.ok || (!jy && std::string(f.sec) == "iMTQ")) continue;
+            o.absent.push_back(f.sec);
+            for (auto& v : o.values) if (v.section == f.sec) v.valid = false;
+        }
+    }
     // ★ a fitter message frame: its 200 payload bytes are the message, copied verbatim on board, NUL-terminated.
     //   ★★ 11-24 ON AIR: an empty slot is sent as ".." and FM9 (type 23) carries binary — so a message is shown only
     //   when it is text (≥ 90 % printable) and says something (not only dots and spaces).
@@ -231,25 +443,58 @@ inline std::string esc(const std::string& s) {
     }
     return o;
 }
+/** UTF-8 kept (the units' "°"), quotes / backslashes escaped, controls dropped. */
+inline std::string escU(const std::string& s) {
+    std::string o;
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\') { o += '\\'; o += char(c); }
+        else if (c >= 0x20 && c != 0x7F) o += char(c);
+    }
+    return o;
+}
 inline std::string num(double v) {
     char b[32];
     if (v == std::floor(v) && std::fabs(v) < 1e15) std::snprintf(b, sizeof b, "%.0f", v); else std::snprintf(b, sizeof b, "%.3f", v);
     return b;
 }
-/** `{"type":"sat_tlm","data":{…}}` — the contract shape (docs/v12/SATELLITE-BEST.md "Contract additions (beta90)"). */
+/** A reading to `dp` decimals (−0 printed as 0). */
+inline std::string num(double v, int dp) {
+    if (dp <= 0) return num(std::round(v) == 0 ? 0.0 : std::round(v));
+    char b[32]; std::snprintf(b, sizeof b, "%.*f", dp > 4 ? 4 : dp, v);
+    std::string s = b;
+    if (s[0] == '-' && s.find_first_not_of("-0.") == std::string::npos) s.erase(0, 1);
+    return s;
+}
+/** The day log's / the gallery line's battery: "battery 7.876 V", or "no EPS data". */
+inline std::string batteryText(const Decoded& d) {
+    const Value* b = d.find("eps.vbat");
+    if (!b) return "";
+    if (!b->valid) return "no EPS data";
+    return "battery " + num(b->v, b->dp) + " V";
+}
+/** `{"type":"sat_tlm","data":{…}}` — the contract shape (docs/v12/SATELLITE-BEST.md "Contract additions (beta90)").
+ *  ★ beta94: values in their units ("unit"), "raw":true only with no published conversion (+ "note" saying so), an
+ *  enumerated value's words in "text"; a board whose data-valid flag is off is left out and named in "absent". */
 inline std::string tlmJson(const Decoded& d, const uint8_t* bytes, size_t n, const std::string& sat, double unixNow) {
     std::string j = "{\"type\":\"sat_tlm\",\"data\":{\"sat\":\"" + esc(sat) + "\",\"format\":\"funcube-rt\",\"t\":" + num(std::floor(unixNow))
-                  + ",\"frame\":\"" + esc(d.frameName) + "\",\"satId\":\"" + esc(satIdName(d.satId)) + "\"";
+                  + ",\"frame\":\"" + esc(d.frameName) + "\",\"satId\":\"" + esc(satIdText(d)) + "\"";
+    if (!d.layout.empty()) j += ",\"layout\":\"" + esc(d.layout) + "\"";
     if (d.seq >= 0) j += ",\"seq\":" + std::to_string(d.seq);
     if (!d.mode.empty()) j += ",\"mode\":\"" + d.mode + "\"";
     if (!d.fitter.empty()) j += ",\"fitter\":\"" + esc(d.fitter) + "\"";
-    j += ",\"values\":[";
-    for (size_t i = 0; i < d.values.size() && i < 64; ++i) {
+    j += ",\"absent\":[";
+    for (size_t i = 0; i < d.absent.size(); ++i) j += (i ? ",\"" : "\"") + esc(d.absent[i]) + "\"";
+    j += "],\"values\":[";
+    int k = 0;
+    for (size_t i = 0; i < d.values.size() && k < 96; ++i) {   // ★ beta94 JY1Sat sends 63, FUNcube-1 58 — room above both
         const Value& v = d.values[i];
-        if (i) j += ",";
-        j += "{\"k\":\"" + v.key + "\",\"name\":\"" + esc(v.name) + "\",\"v\":" + num(v.v);
-        if (!v.unit.empty()) j += ",\"unit\":\"" + esc(v.unit) + "\"";
+        if (!v.valid) continue;
+        if (k++) j += ",";
+        j += "{\"k\":\"" + v.key + "\",\"name\":\"" + esc(v.name) + "\",\"v\":" + num(v.v, v.dp);
+        if (!v.unit.empty()) j += ",\"unit\":\"" + escU(v.unit) + "\"";
         if (v.raw) j += ",\"raw\":true";
+        if (!v.text.empty()) j += ",\"text\":\"" + esc(v.text) + "\"";
+        if (!v.note.empty()) j += ",\"note\":\"" + esc(v.note) + "\"";
         j += "}";
     }
     j += "],\"hex\":\"";
@@ -497,9 +742,9 @@ private:
         }
     }
     void frame(const uint8_t* d, int fixed, int form) {
-        const Decoded p = parse(d);
         std::string sat = o_.satName ? o_.satName() : std::string();
         if (sat.empty()) sat = "AO-73";
+        const Decoded p = parse(d, sat);   // ★ beta94 the pick's name picks the layout of an extended id not yet known
         const double now = o_.unixNow ? o_.unixNow() : 0.0;
         if (o_.json) o_.json(tlmJson(p, d, kDataBytes, sat, now));
         if (o_.record) {
@@ -510,7 +755,7 @@ private:
         }
         if (o_.line) {
             std::string l = sat + " telemetry " + p.frameName + " \xc2\xb7 seq " + std::to_string(p.seq) + " \xc2\xb7 " + p.mode
-                          + " \xc2\xb7 battery " + num(p.values.size() > 4 ? p.values[4].v : 0) + " (raw) \xc2\xb7 RS fixed " + std::to_string(fixed);
+                          + (batteryText(p).empty() ? std::string() : " \xc2\xb7 " + batteryText(p)) + " \xc2\xb7 RS fixed " + std::to_string(fixed);
             if (!p.fitter.empty()) l += " \xc2\xb7 \"" + p.fitter.substr(0, 200) + "\"";
             o_.line(l);
         }

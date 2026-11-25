@@ -374,6 +374,14 @@ try {
     values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.21, unit: 'V' }, { k: 'pa.t', name: 'PA temp', v: 930, unit: 'C', raw: true }] })); true`);
   const tl = await ev(`document.querySelector('#satPanel .sat-tlm').innerText`);
   ok(/3 frames · 2 good · 1 failed · Safe/.test(tl) && /Battery voltage 8\.21 V/.test(tl) && /PA temp 930 raw/.test(tl) && !/930 C/.test(tl), `1.3 values with units, raw labelled with no unit (${tl.replace(/\n/g, ' / ')})`);
+  // ★★ beta94 a frame whose EPS data is not valid: said, its values not shown
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ sat: 'JO-97', format: 'funcube-rt', t: 1795600005, absent: ['EPS', 'iMTQ'],
+    values: [{ k: 'rf.temp', name: 'RF temperature', v: -1.6, unit: '\u00b0C' }, { k: 'rf.rssi', name: 'Receiver RSSI', v: 255, raw: true, note: 'no conversion' }] })); true`);
+  const tla = await ev(`document.querySelector('#satPanel .sat-tlm').innerText`);
+  ok(/No EPS or iMTQ data in this frame \(their data-valid flags are off\)/.test(tla) && /RF temperature -1\.6 \u00b0C/.test(tla) && !/Battery voltage/.test(tla),
+     `a board with no valid data is said, not shown as zeros (${tla.replace(/\n/g, ' / ')})`);
+  await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ frames: 3, good: 2, failed: 1, sync: true, sat: 'AO-73', format: 'funcube-rt', mode: 'Safe', t: 1795600010, absent: [],
+    values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.21, unit: 'V' }, { k: 'pa.t', name: 'PA temp', v: 930, unit: 'C', raw: true }] })); true`);
   await ev(`document.querySelector('#satPanel [data-act="tlmraw"]').click(); true`);
   ok(/0a1b2c3d 4e5f/.test(await ev(`document.querySelector('#satPanel .sat-tlm').innerText`)), '1.3 RAW shows the frame\'s bytes');
   await ev(`document.querySelector('#satPanel [data-act="tlmraw"]').click(); true`);
@@ -387,8 +395,10 @@ try {
   const framesOf = (csv) => {
     const L = csv.split('\n').filter((l) => l && !l.startsWith('#'));
     const head = L[0].split(',');
-    return L.slice(1).map((l) => { const c = l.split(','); return { sat: 'AO-73', format: 'funcube-rt', t: Number(c[1]), mode: c[4],
-      values: head.slice(7).map((h, k) => { const m = /^(.*?) \[(.*)\]$/.exec(h); return { k: `c${k}`, name: m ? m[1] : h, v: Number(c[7 + k]), ...(m && m[2] === 'raw' ? { raw: true } : m ? { unit: m[2] } : {}) }; }) }; });
+    // ★ beta94 as the server sends them: a blank cell (the board's data-valid flag off) is NOT sent, and named in "absent"
+    return L.slice(1).map((l) => { const c = l.split(','); const eps = c[7 + head.slice(7).indexOf('Battery voltage [V]')] === '';
+      return { sat: 'AO-73', format: 'funcube-rt', t: Number(c[1]), mode: c[4], absent: eps ? ['EPS'] : [],
+      values: head.slice(7).map((h, k) => { const m = /^(.*?) \[(.*)\]$/.exec(h); return c[7 + k] === '' ? null : { k: `c${k}`, name: m ? m[1] : h, v: Number(c[7 + k]), ...(m && m[2] === 'raw' ? { raw: true } : m ? { unit: m[2] } : {}) }; }).filter(Boolean) }; });
   };
   const galItems = [1, 2, 3].map((n) => { const t = Number(fx(n).split('\n').find((l) => /^\d{4}-/.test(l)).split(',')[1]);
     return { f: `p${n}.csv`, k: 'fctlm', t, title: `AO-73 telemetry · pass ${n} UTC · x frames` }; });
@@ -408,11 +418,14 @@ try {
       lines: t.querySelectorAll('path.tlm-l').length, bands: t.querySelectorAll('path.tlm-b').length, label: c[0]?.getAttribute('aria-label'),
       text: t.innerText }; })())`));
   ok(ch.n === 16 && ch.lines === 16 && ch.bands === 8, `8 charts this pass + 8 across passes, a line each, the across ones banded (${ch.n}/${ch.lines}/${ch.bands})`);
-  ok(ch.first === 'Battery voltage' && /^\d+ raw$/.test(ch.firstV || ''), `the power system first, raw labelled, no unit (${ch.first} ${ch.firstV})`);
+  ok(ch.first === 'Battery voltage' && /^\d+\.\d+ V$/.test(ch.firstV || ''), `★ beta94 the power system first, in volts (${ch.first} ${ch.firstV})`);
   ok(/^THIS PASS · 24 frames · 17:2\d–17:2\d UTC$/.test(ch.heads[0] || ''), `this pass's head (${ch.heads[0]})`);
   ok(/^\+ \d+ MORE CHANNELS$/.test(ch.more || ''), `the rest behind one key (${ch.more})`);
-  ok(/Battery voltage, raw: 24 readings, \d+–\d+ raw, latest \d+ raw/.test(ch.label || ''), `each chart says itself (${ch.label})`);
-  ok(!/Reboot count/.test(ch.text) && /raw = sent uncalibrated/.test(ch.text), 'counts are not charted; what raw means is said');
+  ok(/^Battery voltage: 21 readings, [\d.]+–[\d.]+ V, latest [\d.]+ V$/.test(ch.label || ''), `each chart says itself, in its unit — the 3 EPS-less frames are no readings, not zeros (${ch.label})`);
+  ok(!/Reboot count/.test(ch.text) && /raw \(no published conversion\): Receiver Doppler, Receiver RSSI/.test(ch.text) && !/uncalibrated/.test(ch.text),
+     'counts are not charted; the raw channels are named (no blanket footnote)');
+  const tl3 = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .tlm-c')].map((c) => c.querySelector('.tlm-v')?.textContent))`));
+  ok(tl3.slice(0, 8).every((v) => / (V|mA|\u00b0C|mW|lux)$/.test(v)), `the first eight charts' readings carry their unit (${tl3.slice(0, 8).join(' · ')})`);
   const asks = await ev(`JSON.stringify(window.__galAsks)`);
   ok(JSON.parse(asks).length === 4 && /kind=fctlm/.test(asks), `one list + one file a pass, one at a time (${JSON.parse(asks).length} asks)`);
   // the geometry inside its boxes

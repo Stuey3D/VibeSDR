@@ -22,7 +22,7 @@ import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlm
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import {
   GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, satRemindLead, satRemindOffered,
-  satRemindText, satRemindWhy, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
+  satRemindText, satRemindWhy, satTelemetryAbsentText, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
   satStateWord, satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -891,7 +891,9 @@ export class SatPanel {
         + (this.tlmCharts ? tlmChartsHtml({ pass: tlmLivePass(this.tlm?.hist, this.tlm?.sat || ''), live: true, across: this.tlmAcross,
                                             acrossNote: this.tlmAcrossNote, width: this.sTlm.clientWidth || 300, all: this.tlmAll })
           : this.tlmRaw && hex ? `<div class="sat-dim" style="word-break:break-all">${esc(hex)}</div>`
-          : this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : '');
+          // ★★ beta94 values in their units; a raw one carries its reason (title); a board with no valid data is SAID
+          : (satTelemetryAbsentText(this.tlm) ? `<div class="sat-dim">${esc(satTelemetryAbsentText(this.tlm))}</div>` : '')
+            + (this.tlm?.values.length ? `<div class="sat-tv">${this.tlm.values.map((v) => `<span${v.note ? ` title="${esc(v.note)}"` : ''}>${esc(satTelemetryLine(v))}</span>`).join('')}</div>` : ''));
     }
     // ★★ 2026-11-24 ORBCOMM — its own panel
     this.paintOrb(showA && this.picked?.decoder === 'orbcomm');
