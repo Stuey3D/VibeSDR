@@ -32,9 +32,18 @@ export const SHORT_REF_H = 650;
  *  678 / 466 = 1.46; the squarest iPhone (SE, 8, 8 Plus) is 1.78. */
 export const FRONT_SCREEN_MAX_ASPECT = 1.6;
 
-/** The deck's portrait scale for a phone window: width / 390, and no more than height / SHORT_REF_H (useUiScale). */
+/** ★★ A further, uniform shrink of the whole deck on a SHORT portrait window (Stuart, Duo folded front screen: "the
+ *  main controls could have an all round shrink as they look huge"): keys, drums, tubes, text, paddings and radii
+ *  together, because every one of them is drawn through the same scale. */
+export const SHORT_WINDOW_DECK_K = 0.78;
+
+/** The deck's portrait scale for a phone window: width / 390 — and on a SHORT window (height under
+ *  FRONT_SCREEN_MAX_ASPECT × width: the Duo's front screen, a share of the same shape; no iPhone is) no more than
+ *  height / SHORT_REF_H, then × SHORT_WINDOW_DECK_K. Every other window: exactly width / 390, as always. */
 export function phonePortraitScale(W: number, H: number): number {
-  return Math.max(0.75, Math.min(1.45, W / 390, H / SHORT_REF_H));
+  const byWidth = Math.min(1.45, W / 390);
+  if (!(W > 0) || H / W >= FRONT_SCREEN_MAX_ASPECT) return Math.max(0.75, byWidth);
+  return Math.max(0.75, Math.min(byWidth, H / SHORT_REF_H) * SHORT_WINDOW_DECK_K);
 }
 
 /**

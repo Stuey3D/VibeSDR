@@ -40,7 +40,8 @@ for (const [w, h, name] of [[402, 874, 'iPhone 17 Pro'], [440, 956, 'Pro Max'], 
   ok(phonePortraitScale(w, h) === old(w), `${name}: deck scale unchanged (${old(w).toFixed(3)})`);
 }
 const front = phonePortraitScale(466, 678);
-ok(Math.abs(front / old(466) - 0.873) < 0.01, `front screen: deck at ${(front / old(466) * 100).toFixed(0)} % of before (${front.toFixed(3)})`);
+ok(Math.abs(front / old(466) - 0.681) < 0.01, `front screen: deck at ${(front / old(466) * 100).toFixed(0)} % of 11.0.16's (${front.toFixed(3)})`);
+ok(front >= 0.75, 'front screen: never below the 0.75 floor');
 
 // ── Reserved regions ─────────────────────────────────────────────────────────────────────────────
 const FOLDED: ReservedRegions = { ...NO_REGIONS, occlusion: [{ x: 400, y: 29, w: 37, h: 37 }, { x: 382, y: 0, w: 84, h: 174 }],
