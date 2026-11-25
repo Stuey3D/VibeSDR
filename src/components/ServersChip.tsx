@@ -29,6 +29,7 @@ import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useListNav, noteTouchInteraction } from './PanelNav';
 import { AccessibilityInfo, Animated, Easing, View, Text, Pressable, StyleSheet } from 'react-native';
 import { EDGE_TAB_W, EDGE_TAB_H } from './edgeChipGeometry';
+import { SERVERS_TAB_Z } from '../utils/serversChipCollapse';
 import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
@@ -380,7 +381,7 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
 export const TOP_MENU_LAYER = { zIndex: 9000, elevation: 9000 } as const;
 /** ★ Tucked, it sits with the edge tabs (EdgeChip, 251) — above the box it is tucked beside, so it can still be tapped.
  *  On the ROOT too (as TOP_MENU_LAYER), since a child's zIndex only orders it inside this layer. */
-const TAB_LAYER = { zIndex: 251, elevation: 251 } as const;
+const TAB_LAYER = { zIndex: SERVERS_TAB_Z, elevation: SERVERS_TAB_Z } as const;
 
 const styles = StyleSheet.create({
   chip: {
@@ -393,7 +394,9 @@ const styles = StyleSheet.create({
   chevron:  { fontSize: FONT_SZ, marginTop: -1 },
   // ★ The tucked tab — EdgeChip's tab mirrored: open and flush on the LEFT (the glass edge), rounded on the right.
   tab:      { height: EDGE_TAB_H, borderTopRightRadius: 12, borderBottomRightRadius: 12,
-              borderWidth: 1.5, borderLeftWidth: 0, backgroundColor: 'rgba(14,12,8,0.88)',
+              // ★ Near-opaque, with a cast shadow: it sits OVER a box's rows and must read over them.
+              borderWidth: 1.5, borderLeftWidth: 0, backgroundColor: 'rgba(14,12,8,0.96)',
+              shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 6, shadowOffset: { width: 1, height: 1 },
               alignItems: 'center', justifyContent: 'center', gap: 2 },
   tabChev:  { fontSize: 20, fontWeight: '700', lineHeight: 20, marginTop: -2 },
   label:    { fontSize: FONT_SZ, letterSpacing: 0.5 },

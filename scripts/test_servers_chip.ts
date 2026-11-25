@@ -7,7 +7,7 @@
  * half-open split's upper panel from the top edge).
  * Run: node --no-warnings scripts/test_servers_chip.ts   (run-tests.sh does)
  */
-import { chipCollapsed, CHIP_EXPAND_DELAY_MS, type ChipRect } from '../src/utils/serversChipCollapse.ts';
+import { chipCollapsed, CHIP_EXPAND_DELAY_MS, DECODER_BOX_Z, SERVERS_TAB_Z, type ChipRect } from '../src/utils/serversChipCollapse.ts';
 
 let fails = 0;
 function ok(cond: boolean, what: string) {
@@ -29,6 +29,18 @@ ok(!chipCollapsed(chipAt(62), []), 'plain waterfall (no box): the full "‹ Serv
   ok(!chipCollapsed(chip, [box(W, 760, deckTop - 8 - 246, deckTop - 8)]), 'iPhone 17 Pro, SMALL box above the deck: full button');
   ok(chipCollapsed(chip, [box(W, 760, 62 + 6, deckTop - 8)]), 'iPhone 17 Pro, BIG box up to the status row: tucked');
   ok(chipCollapsed(chip, [box(W, 560, 62 + 6, deckTop - 8)]), 'iPhone 17 Pro, DAB BIG: tucked');
+}
+
+// ── iPhone 17 Pro Max, portrait 440 x 956 (status row 62) — Stuart's real phone, DAB BIG: "the BIG DAB box COMPLETELY
+//    covers the Servers button". The chip must tuck AND its tab must be drawn above the box. ───────────────────────
+{
+  const W = 440, chip = chipAt(62), deckTop = 956 - 34 - 8 - 270;
+  const dabBig = box(W, 560, 62 + 6, deckTop - 8);
+  ok(dabBig.y < chip.y && dabBig.y + dabBig.h > chip.y + chip.h && dabBig.x <= chip.x, 'Pro Max, DAB BIG covers the whole chip rect');
+  ok(chipCollapsed(chip, [dabBig]), 'Pro Max, DAB BIG: tucked');
+  ok(SERVERS_TAB_Z > DECODER_BOX_Z, `…and the tab's layer (${SERVERS_TAB_Z}) is above the box's (${DECODER_BOX_Z}): drawn on top, tappable`);
+  ok(chipCollapsed(chip, [box(W, 760, 62 + 6, deckTop - 8)]), 'Pro Max, decoder BIG: tucked');
+  ok(!chipCollapsed(chip, [box(W, 560, deckTop - 8 - 276, deckTop - 8)]), 'Pro Max, DAB SMALL above the deck: full button');
 }
 
 // ── iPhone SE 375 x 667 and Display Zoom 320 x 568 (status row 20): a short portrait window, so SMALL fills from the

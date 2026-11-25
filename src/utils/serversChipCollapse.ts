@@ -24,3 +24,10 @@ export function chipCollapsed(chip: ChipRect, overlays: ChipRect[], gap = 12): b
 
 /** How long nothing must overlap before the full button comes back (ms). */
 export const CHIP_EXPAND_DELAY_MS = 400;
+
+/** ★★ LAYERS (Stuart, iPhone 17 Pro Max, DAB BIG: "the BIG DAB box COMPLETELY covers the Servers button" — the chip
+ *  showed faded under the station list and could not be reached). A decoder box's wrap sits at DECODER_BOX_Z; the
+ *  tucked tab — and the chip's whole layer while tucked — at SERVERS_TAB_Z, above it, with the edge tabs, so the tab is
+ *  drawn over the box and takes its own taps; the box's rows still scroll everywhere else. */
+export const DECODER_BOX_Z = 200;
+export const SERVERS_TAB_Z = 251;

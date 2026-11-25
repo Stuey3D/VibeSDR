@@ -59,7 +59,7 @@ import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
 import type { HalfOpenSplit } from '../utils/duoGeometry';
 import { cornerClearRight, shellPlacement } from '../utils/decoderShellLayout';
-import type { ChipRect } from '../utils/serversChipCollapse';
+import { DECODER_BOX_Z, type ChipRect } from '../utils/serversChipCollapse';
 
 export type { DecoderTokens } from '../constants/decoderTokens';
 
@@ -523,7 +523,7 @@ export const DecoderKey = React.forwardRef<View, DecoderKeyProps>(function Decod
 });
 
 const sh = StyleSheet.create({
-  wrap:  { position: 'absolute', left: 8, right: 8, zIndex: 200, alignItems: 'center' },
+  wrap:  { position: 'absolute', left: 8, right: 8, zIndex: DECODER_BOX_Z, alignItems: 'center' },
   inner: {
     width: '100%',
     borderWidth: 1, borderRadius: RADIUS,
