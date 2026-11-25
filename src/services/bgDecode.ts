@@ -18,7 +18,12 @@ export type BgVfo = { hz: number; mode: string; dec: string; own?: boolean;
   fax?: number[] };
 export type BgProfile = { centre: number; from: string; to: string; vfos: BgVfo[]; ism?: string; ais?: boolean };
 /** ★★ V12 beta90 UNATTENDED SATELLITE PASSES — its own switch, carried in the same JSON as "satPasses" (vibe::bg::SatPasses). */
-export type BgSatPasses = { on: boolean; minEl: number; birds: { norad: number; label: string }[] };
+export type BgSatPasses = { on: boolean; minEl: number; birds: { norad: number; label: string }[];
+  /** ★★★ beta94 the two groups (vibe::bg::SatPasses): every Meteor-M pass · ORBCOMM sky-plot monitoring · which wins where
+   *  one capture cannot hold both (absent in the JSON = false / Meteor first). */
+  meteor: boolean; orbcomm: boolean; first: 'meteor' | 'orbcomm' };
+/** ★★★ beta94 one capture holds a Meteor pass and the ORBCOMM band (backgroundCapsJson "satBoth"; null = an older engine). */
+export type BgSatBoth = { needHz: number; minRate: number; narrow: string[] };
 export type BgModel = { on: boolean; waitMin: number; keepInRange: boolean; profiles: BgProfile[]; sat: BgSatPasses };
 /** One downlink an unattended pass can keep (backgroundCapsJson "satPasses" — the engine's passKeepable list). */
 export type BgSatDownlink = { norad: number; label: string; name: string; what: string };
@@ -47,6 +52,8 @@ export type BgCaps = {
   decoderSlotsDefault: number;
   /** ★ V12 beta90: the downlinks an unattended pass can keep (empty = an older engine: the section is not drawn). */
   satPasses: BgSatDownlink[];
+  /** ★★★ beta94: Meteor + ORBCOMM together at or above this rate (null = an older engine: no groups drawn). */
+  satBoth: BgSatBoth | null;
   /** ★ V12 2026-11-22: the WEFAX stations the engine offers (vibe_wefax_stations.h — only what the radio tunes). */
   wefaxStations: BgWefaxStation[];
 };
@@ -84,9 +91,18 @@ export const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB
 export const DSC_HF = [2187500, 4207500, 6312000, 8414500, 12577000, 16804500];
 export const DSC_VHF = 156525000;
 
-export const emptyBgModel = (): BgModel => ({ on: false, waitMin: 5, keepInRange: true, profiles: [], sat: { on: false, minEl: 20, birds: [] } });
+export const emptyBgModel = (): BgModel => ({ on: false, waitMin: 5, keepInRange: true, profiles: [], sat: { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: 'meteor' } });
 export const bgNewProfile = (): BgProfile => ({ centre: 0, from: '00:00', to: '00:00', vfos: [{ hz: 0, mode: 'usb', dec: 'navtex' }] });
 
+/** ★★★ beta94 a Meteor LRPT downlink — the Meteor group, not a tick of its own. */
+export const bgSatIsMeteor = (b: { label: string }): boolean => b.label === 'LRPT';
+/** ★★★ beta94 does one capture of this radio hold a Meteor pass AND the ORBCOMM band (the engine's satBoth)? Then both run
+ *  together and the priority is not drawn; else the priority decides. null = not known (an older engine). */
+export function bgSatBothFits(both: BgSatBoth | null, driver: string, rate: number): boolean | null {
+  if (!both) return null;
+  if (both.narrow.includes(driver)) return false;
+  return rate >= both.minRate;
+}
 /** Read a stored bgDecode string — the Setup page's bgLoad. An unreadable one is off with no profiles. */
 export function parseBg(json: string | null | undefined): BgModel {
   const m = emptyBgModel();
@@ -97,8 +113,13 @@ export function parseBg(json: string | null | undefined): BgModel {
       m.waitMin = j.waitMin > 0 ? +j.waitMin : 5;
       m.keepInRange = j.keepInRange !== false;
       const sp = j.satPasses && typeof j.satPasses === 'object' ? j.satPasses : null;
-      if (sp) m.sat = { on: !!sp.on, minEl: sp.minEl >= 0 ? +sp.minEl : 20,
-        birds: Array.isArray(sp.birds) ? sp.birds.filter((b: any) => b && +b.norad > 0 && typeof b.label === 'string').map((b: any) => ({ norad: +b.norad, label: String(b.label) })) : [] };
+      if (sp) {
+        const birds: { norad: number; label: string }[] = Array.isArray(sp.birds)
+          ? sp.birds.filter((b: any) => b && +b.norad > 0 && typeof b.label === 'string').map((b: any) => ({ norad: +b.norad, label: String(b.label) })) : [];
+        // ★★★ beta94 a Meteor bird ticked before the groups existed IS the Meteor group now (the Setup page's bgLoad)
+        m.sat = { on: !!sp.on, minEl: sp.minEl >= 0 ? +sp.minEl : 20, birds: birds.filter((b) => !bgSatIsMeteor(b)),
+                  meteor: sp.meteor === true || birds.some(bgSatIsMeteor), orbcomm: sp.orbcomm === true, first: sp.first === 'orbcomm' ? 'orbcomm' : 'meteor' };
+      }
       m.profiles = Array.isArray(j.profiles) ? j.profiles.map((p: any): BgProfile => {
         const q: BgProfile = {
           centre: +p.centre || 0, from: p.from || '00:00', to: p.to || '00:00',
@@ -121,7 +142,7 @@ export function parseBg(json: string | null | undefined): BgModel {
 /** The string to store — the Setup page's bgCollect. Off with nothing set up stores nothing at all (''). */
 export function collectBg(m: BgModel): string {
   const anything = m.profiles.some((p) => p.ism || p.ais || p.centre > 0 || p.vfos.some((v) => v.hz > 0 || v.dec === 'ndb-skim' || v.dec === 'wefax-stations'));
-  const satAny = !!m.sat && (m.sat.on || m.sat.birds.length > 0);
+  const satAny = !!m.sat && (m.sat.on || m.sat.birds.length > 0 || m.sat.meteor || m.sat.orbcomm);
   if (!m.on && !anything && !satAny) return '';
   const out: any = { on: m.on, waitMin: m.waitMin, profiles: m.profiles.map((p) => {
     const q: any = { centre: p.centre, from: p.from, to: p.to, vfos: p.vfos.map((v) => (v.fax ? { hz: v.hz, mode: v.mode, dec: v.dec, fax: v.fax } : { hz: v.hz, mode: v.mode, dec: v.dec })) };
@@ -130,7 +151,12 @@ export function collectBg(m: BgModel): string {
     return q;
   }) };
   if (!m.keepInRange) out.keepInRange = false;   // ★ absent = on, as the engine reads it
-  if (satAny) out.satPasses = { on: m.sat.on, minEl: m.sat.minEl, birds: m.sat.birds };   // ★ V12 beta90, the Setup page's order
+  if (satAny) {
+    out.satPasses = { on: m.sat.on, minEl: m.sat.minEl, birds: m.sat.birds };   // ★ V12 beta90, the Setup page's order
+    if (m.sat.meteor) out.satPasses.meteor = true;            // ★★★ beta94, absent unless set
+    if (m.sat.orbcomm) out.satPasses.orbcomm = true;
+    if (m.sat.first === 'orbcomm') out.satPasses.first = 'orbcomm';
+  }
   return JSON.stringify(out);
 }
 
@@ -152,6 +178,8 @@ export function parseBgCaps(json: string | null | undefined): BgCaps | null {
       decoderSlotsDefault: j.decoderSlotsDefault > 0 ? j.decoderSlotsDefault : 0,
       satPasses: Array.isArray(j.satPasses) ? j.satPasses.filter((d: any) => d && +d.norad > 0 && typeof d.label === 'string')
         .map((d: any) => ({ norad: +d.norad, label: String(d.label), name: String(d.name || d.norad), what: String(d.what || d.label) })) : [],
+      satBoth: j.satBoth && +j.satBoth.minRate > 0
+        ? { needHz: +j.satBoth.needHz || 0, minRate: +j.satBoth.minRate, narrow: Array.isArray(j.satBoth.narrow) ? j.satBoth.narrow.map(String) : [] } : null,
       wefaxStations: Array.isArray(j.wefaxStations) ? j.wefaxStations.filter((x: any) => x && typeof x.id === 'string' && Array.isArray(x.freqs))
         .map((x: any) => ({ id: x.id, call: String(x.call || ''), name: String(x.name || x.id), country: String(x.country || ''),
                             freqs: x.freqs.map(Number).filter((f: number) => f > 0) })).filter((x: BgWefaxStation) => x.freqs.length > 0) : [],

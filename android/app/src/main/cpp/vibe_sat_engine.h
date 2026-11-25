@@ -1147,6 +1147,29 @@ public:
         }
         return false;
     }
+    /** ★★★ beta94: how many ORBCOMM birds are above the horizon at `t` (one SGP4 look each — ~60 birds, every 2 s on the
+     *  housekeeping thread: unattended ORBCOMM monitoring runs while this is > 0). 0 with no location. */
+    int orbcommUp(double t) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!obs_.valid) return 0;
+        int n = 0;
+        for (size_t i = 0; i < defs_.size() && i < sats_.size(); ++i)
+            if (sats_[i].have && orbcommBird(defs_[i])) { const Look L = look(sats_[i].sgp, obs_, t); if (L.ok && L.elDeg > 0) n++; }
+        for (size_t i = 0; i < labelDefs_.size() && i < labelSats_.size(); ++i)
+            if (labelSats_[i].have && orbcommBird(labelDefs_[i])) { const Look L = look(labelSats_[i].sgp, obs_, t); if (L.ok && L.elDeg > 0) n++; }
+        return n;
+    }
+    /** ★★★ beta94: the next pass of `norad` (in progress, or to come in the next day) peaking at ≥ `minElDeg` — the admin
+     *  line's "no Meteor pass for 1 h 12 min". false = none. */
+    bool nextPass(long long norad, double now, double minElDeg, Pass& out) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!obs_.valid) return false;
+        for (size_t i = 0; i < defs_.size(); ++i) {
+            if (defs_[i].norad != norad || !sats_[i].have) continue;
+            for (auto& p : passesLocked(i, now)) if (p.los > now && p.maxElDeg >= minElDeg) { out = p; return true; }
+        }
+        return false;
+    }
     /** ★ The brief's orphan rule: with nobody connected, an ARMED lock more than 30 minutes from its AOS goes. Returns
      *  the keys removed. Active locks run to LOS unattended. */
     std::vector<std::string> dropOrphanArms(const Clock& clk) {

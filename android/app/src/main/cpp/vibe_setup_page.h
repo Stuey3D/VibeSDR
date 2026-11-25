@@ -2358,6 +2358,28 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           and nobody is listening, the radio follows it &mdash; tuned, Doppler-corrected and decoding &mdash; and what it
           decodes goes to the gallery (Server tab). Background decoding pauses for the pass and carries on when the
           satellite has set. The moment anybody connects, the pass is given up and the radio is theirs.</p>
+        <!-- ★★★ beta94 THE TWO GROUPS + THEIR PRIORITY (Stuart 11-25: "group meteor and orbcomm then allow the user to choose a
+             priority. so meteor first for images and orbcomm 2nd for antenna plotting"). Meteor = every Meteor-M pass;
+             ORBCOMM = sky-plot monitoring whenever a bird is up. Where one capture holds both (spBothNote) they run TOGETHER
+             and the priority is not drawn (AGENTS.md: no control that does nothing on this radio). -->
+        <div id="spGroups" style="margin:6px 0 2px 0">
+          <p class="why" style="margin:4px 0 2px 0"><b>Satellite passes</b></p>
+          <label style="display:flex;gap:8px;align-items:center;margin:3px 0 3px 24px">
+            <input type="checkbox" id="spMeteor" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span><b>Meteor</b> &middot; weather pictures (LRPT) from every Meteor-M pass</span></label>
+          <label style="display:flex;gap:8px;align-items:center;margin:3px 0 3px 24px">
+            <input type="checkbox" id="spOrbcomm" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span><b>ORBCOMM</b> &middot; the sky plot &mdash; where your aerial hears satellites, filled in whenever an
+              ORBCOMM satellite is up (nearly always). Only each satellite's position and signal strength are logged, no
+              messages, so it is light on the processor.</span></label>
+          <p class="why" id="spBothNote" style="margin:4px 0 2px 24px"></p>
+          <label id="spFirstRow" class="hide" style="display:flex;gap:8px;align-items:center;margin:3px 0 3px 24px">
+            <span>When both are due:</span>
+            <select id="spFirst" style="width:auto;display:inline-block">
+              <option value="meteor">Meteor first &mdash; ORBCOMM pauses until the pass has set</option>
+              <option value="orbcomm">ORBCOMM first &mdash; the sky plot is never interrupted for a pass</option></select></label>
+          <p class="why" style="margin:8px 0 2px 0"><b>Other downlinks</b></p>
+        </div>
         <div id="spBirds"></div>
         <p class="why hide" id="spLockedNote" style="border-left:3px solid var(--amber);padding-left:8px">This radio's range
           is locked, so passes are not followed on it in this version (a pass has to move the radio).</p>
@@ -8085,13 +8107,21 @@ const SAT_PASS_DOWNLINKS = [
   { norad: 39444, label: "Telemetry", name: "AO-73 (FUNcube-1)", what: "FUNcube telemetry" },
   { norad: 43803, label: "Telemetry", name: "JO-97 (JY1Sat)", what: "FUNcube-format telemetry" },
 ];
-let spModel = { on: false, minEl: 20, birds: [] };
+let spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor" };
+/* ★★★ beta94 one capture holds a Meteor pass AND the ORBCOMM band at or above this sample rate (the server's
+ *  backgroundCapsJson "satBoth".minRate — vibe_sat_pass_sched.h bothMinRate, test-sat-pass-sched §8 holds the two equal);
+ *  an Airspy HF+ never does (its edges are cropped: 768 kHz usable at 912). Below it the priority decides. */
+const SAT_BOTH_MIN_RATE = 915000;
+function spBothFits(r) { return !!r && String(r.driver || "") !== "airspyhf" && (Number(r.rate) || 0) >= SAT_BOTH_MIN_RATE; }
+/** ★ A Meteor LRPT downlink: the Meteor group, not a tick of its own (beta94). */
+function spIsMeteor(b) { return b && b.label === "LRPT"; }
 function spHas(b) { return spModel.birds.some(function (x) { return x.norad === b.norad && x.label === b.label; }); }
 function spRender() {
   const box = $("spBirds");
   if (!box) return;
   box.innerHTML = "";
   SAT_PASS_DOWNLINKS.forEach(function (b) {
+    if (spIsMeteor(b)) return;   // ★ beta94 the Meteor group above holds every Meteor-M pass
     const l = document.createElement("label");
     l.style.cssText = "display:flex;gap:8px;align-items:center;margin:3px 0 3px 24px";
     const c = document.createElement("input");
@@ -8105,6 +8135,19 @@ function spRender() {
     l.appendChild(c); l.appendChild(t); box.appendChild(l);
   });
   if ($("spMinEl")) $("spMinEl").disabled = !spModel.on;
+  // ★★★ beta94 the groups: live with the switch; the priority only where one capture cannot hold both
+  if ($("spMeteor")) { $("spMeteor").checked = spModel.meteor; $("spMeteor").disabled = !spModel.on; }
+  if ($("spOrbcomm")) { $("spOrbcomm").checked = spModel.orbcomm; $("spOrbcomm").disabled = !spModel.on; }
+  const fits = spBothFits(bgRadio);
+  const both = spModel.meteor && spModel.orbcomm;
+  if ($("spBothNote")) {
+    $("spBothNote").textContent = !both ? ""
+      : fits ? "On this radio both run together: one capture holds the Meteor downlink and the whole ORBCOMM band, so the sky plot keeps filling right through every Meteor pass."
+             : "This radio's capture is too narrow to hold a Meteor pass and the ORBCOMM band at once" + (String((bgRadio && bgRadio.driver) || "") === "airspyhf" ? "" : " at its sample rate") + " \u2014 the order below decides which runs.";
+    $("spBothNote").classList.toggle("hide", !both);
+  }
+  if ($("spFirstRow")) $("spFirstRow").classList.toggle("hide", !both || fits);
+  if ($("spFirst")) { $("spFirst").value = spModel.first; $("spFirst").disabled = !spModel.on; }
   const locked = bgRadio && (bgRadio.mode === "locked" || +bgRadio.lockedCentre > 0 || +bgRadio.lockCentre > 0);
   if ($("spLockedNote")) $("spLockedNote").classList.toggle("hide", !locked);
 }
@@ -8113,7 +8156,7 @@ function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: 
 function bgLoad(r) {
   bgRadio = r || null;
   bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
-  spModel = { on: false, minEl: 20, birds: [] };
+  spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor" };
   try {
     const j = r && r.bgDecode ? JSON.parse(r.bgDecode) : null;
     if (j && typeof j === "object") {
@@ -8121,9 +8164,13 @@ function bgLoad(r) {
       bgModel.waitMin = j.waitMin > 0 ? j.waitMin : 5;
       // ★ V12 beta90: unattended satellite passes, carried in the same setting
       const sp = j.satPasses && typeof j.satPasses === "object" ? j.satPasses : null;
+      const birds = sp && Array.isArray(sp.birds) ? sp.birds.filter(function (b) { return b && +b.norad > 0 && typeof b.label === "string"; })
+                                                              .map(function (b) { return { norad: +b.norad, label: b.label }; }) : [];
+      // ★★★ beta94 a Meteor bird ticked before the groups existed IS the Meteor group now (saved back as "meteor":true)
       spModel = { on: !!(sp && sp.on), minEl: sp && sp.minEl >= 0 ? +sp.minEl : 20,
-                  birds: sp && Array.isArray(sp.birds) ? sp.birds.filter(function (b) { return b && +b.norad > 0 && typeof b.label === "string"; })
-                                                                  .map(function (b) { return { norad: +b.norad, label: b.label }; }) : [] };
+                  birds: birds.filter(function (b) { return !spIsMeteor(b); }),
+                  meteor: !!(sp && (sp.meteor === true || birds.some(spIsMeteor))), orbcomm: !!(sp && sp.orbcomm === true),
+                  first: sp && sp.first === "orbcomm" ? "orbcomm" : "meteor" };
       bgModel.keepInRange = j.keepInRange !== false;
       bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
         const q = { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
@@ -8159,7 +8206,14 @@ function bgLoad(r) {
     if (!$("spMinEl").__wired) {
       $("spMinEl").__wired = 1;
       $("spMinEl").addEventListener("change", function () { spModel.minEl = parseInt($("spMinEl").value, 10) || 20; });
-      $("spOn").addEventListener("change", function () { spModel.on = $("spOn").checked; spRender(); });
+      $("spOn").addEventListener("change", function () {
+        // ★★★ beta94 switched on with nothing chosen yet: Meteor ticked (the images Stuart asked for first)
+        spModel.on = $("spOn").checked;
+        if (spModel.on && !spModel.meteor && !spModel.orbcomm && !spModel.birds.length) spModel.meteor = true;
+        spRender(); });
+      if ($("spMeteor")) $("spMeteor").addEventListener("change", function () { spModel.meteor = $("spMeteor").checked; spRender(); });
+      if ($("spOrbcomm")) $("spOrbcomm").addEventListener("change", function () { spModel.orbcomm = $("spOrbcomm").checked; spRender(); });
+      if ($("spFirst")) $("spFirst").addEventListener("change", function () { spModel.first = $("spFirst").value === "orbcomm" ? "orbcomm" : "meteor"; });
     }
   }
   spRender();
@@ -8265,13 +8319,22 @@ function bgCollect() {
   // ★ V12 beta90: unattended satellite passes ride along (absent unless set up — the server reads it the same way)
   spModel.on = !!($("spOn") && $("spOn").checked);
   if ($("spMinEl")) spModel.minEl = parseInt($("spMinEl").value, 10) || 20;
-  const spAny = spModel.on || spModel.birds.length > 0;
+  if ($("spMeteor")) spModel.meteor = !!$("spMeteor").checked;
+  if ($("spOrbcomm")) spModel.orbcomm = !!$("spOrbcomm").checked;
+  if ($("spFirst")) spModel.first = $("spFirst").value === "orbcomm" ? "orbcomm" : "meteor";
+  const spAny = spModel.on || spModel.birds.length > 0 || spModel.meteor || spModel.orbcomm;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
   if (!spAny && !bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim" || v.dec === "wefax-stations"; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
-  if (spAny) out.satPasses = { on: spModel.on, minEl: spModel.minEl, birds: spModel.birds };
+  if (spAny) {
+    out.satPasses = { on: spModel.on, minEl: spModel.minEl, birds: spModel.birds };
+    // ★★★ beta94 absent unless set — the server's own order (vibe_bgdecode_config.h toJson)
+    if (spModel.meteor) out.satPasses.meteor = true;
+    if (spModel.orbcomm) out.satPasses.orbcomm = true;
+    if (spModel.first === "orbcomm") out.satPasses.first = "orbcomm";
+  }
   return JSON.stringify(out, function (k, v) { return k.indexOf("__") === 0 ? undefined : v; });   // ★ the page's own notes stay here
 }
 /** "13:00" from "12:00" and the server's offset — the server's local time, which is not the browser's. */

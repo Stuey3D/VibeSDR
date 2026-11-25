@@ -1,5 +1,5 @@
 // test_admin_bg.ts — the admin page's background-decoding line (web/client/src/adminBg.ts, V12 beta 4).
-import { bgLines, bgVfoLine, bgDuration, bgCpuText } from '../web/client/src/adminBg.ts';
+import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines } from '../web/client/src/adminBg.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -78,6 +78,25 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   ok(e.head.endsWith('busiest thread 33 % (vibe-bgdsp) · eased for listeners (2 of 9 paused, extra modes off on 1 band)') && !e.warn, `eased head, not a warning: ${e.head}`);
   ok(e.rows[0].includes('Band skimmer 40 m · CW / RTTY / PSK eased off for listeners · running'), `chips eased: ${e.rows[0]}`);
   ok(e.rows[1] === '10100.8 RTTY weather · paused (eased for listeners)', `paused for listeners: ${e.rows[1]}`);
+}
+
+// ── ★★★ beta94 the unattended satellite line: which runs and why ──
+{
+  ok(satPassLines(null) === null && satPassLines({ state: 'off', birds: 0 }) === null, 'never set up: nothing');
+  const now = 1795600000;
+  const both = satPassLines({ state: 'running', now: 'METEOR-M2 4 LRPT pass + ORBCOMM monitoring (sky plot) together \u2014 one capture holds both',
+    meteor: true, orbcomm: true, both: true, centre: 137992200, name: 'METEOR-M2 4', label: 'LRPT', decoder: 'lrpt', los: now + 400, maxEl: 61, pausedBg: true,
+    orbSky: { since: now - 3600, dots: 412 } }, now)!;
+  ok(both.head === 'Unattended satellites \u00b7 METEOR-M2 4 LRPT pass + ORBCOMM monitoring (sky plot) together \u2014 one capture holds both', `both: ${both.head}`);
+  ok(both.rows[0] === 'METEOR-M2 4 LRPT · max 61° · lrpt · LOS in 6 min 40 s · background decoding paused', `the pass row: ${both.rows[0]}`);
+  ok(/^ORBCOMM sky plot · 412 dots since \d\d:\d\d \(positions \+ SNR, no packets\)$/.test(both.rows[1]) && both.rows[2] === 'capture held at 137.9922 MHz', `the sky plot rows: ${both.rows.slice(1).join(' | ')}`);
+  const orb = satPassLines({ state: 'running', now: 'ORBCOMM monitoring (sky plot) \u2014 no Meteor pass for 1 h 12 min', orbcomm: true, orbSky: { since: now - 60, dots: 3 } }, now)!;
+  ok(orb.head.endsWith('ORBCOMM monitoring (sky plot) \u2014 no Meteor pass for 1 h 12 min') && !orb.warn, `ORBCOMM alone: ${orb.head}`);
+  const pr = satPassLines({ state: 'running', now: 'METEOR-M2 3 LRPT pass \u2014 ORBCOMM paused (priority; this radio\'s capture is too narrow for both (768 kHz usable, 791 kHz needed))',
+    meteor: true, orbcomm: true, name: 'METEOR-M2 3', label: 'LRPT', decoder: 'lrpt', los: now + 60, maxEl: 33, orbLast: 'ORBCOMM monitoring, 3 h 4 min \u2014 980 sky dots \u2014 stopped (paused for the METEOR-M2 3 LRPT pass)' }, now)!;
+  ok(pr.head.includes('ORBCOMM paused (priority;') && pr.rows.some((r) => r.startsWith('last: ORBCOMM monitoring, 3 h 4 min')), `the priority on an HF+: ${pr.head}`);
+  const bl = satPassLines({ state: 'blocked', why: 'ADS-B is kept running on this radio when nobody is connected', meteor: true }, now)!;
+  ok(bl.warn && bl.head === 'Unattended satellites \u00b7 cannot run \u2014 ADS-B is kept running on this radio when nobody is connected', `blocked, warned: ${bl.head}`);
 }
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);

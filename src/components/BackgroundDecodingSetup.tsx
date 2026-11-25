@@ -23,7 +23,7 @@ import { meaningText } from '../constants/decoderTokens';
 import {
   type BgCaps, type BgModel, type BgProfile, type BgVfo, BG_DEMODS, BG_ISM_WORDS, BG_WAIT_CHOICES,
   bgBandHint, bgBandReach, bgDecoderSetsFreq, bgFaxHint, bgFaxIn, bgFaxKhz, bgFaxDefault, BG_FAX_MAX, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
-  bgHalfWindow, BG_SAT_MIN_EL, bgSkimPointAt, bgSkimPoints, bgSkimPointLabel, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
+  bgHalfWindow, BG_SAT_MIN_EL, bgSatBothFits, bgSatIsMeteor, bgSkimPointAt, bgSkimPoints, bgSkimPointLabel, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
 } from '../services/bgDecode';
 
 type Props = {
@@ -373,7 +373,10 @@ export default function BackgroundDecodingSetup(p: Props) {
       {caps.satPasses && caps.satPasses.length > 0 && (<>
         <View style={[st.row, { justifyContent: 'space-between', marginTop: 10 }]}>
           <Text style={{ color: C.text, fontFamily: F, fontSize: 15, flex: 1 }}>Unattended satellite passes</Text>
-          <Switch value={model.sat.on} onValueChange={(v) => set((m) => { m.sat.on = v; })}
+          <Switch value={model.sat.on} onValueChange={(v) => set((m) => {
+            m.sat.on = v;
+            // ★★★ beta94 switched on with nothing chosen yet: Meteor ticked (the Setup page does the same)
+            if (v && caps.satBoth && !m.sat.meteor && !m.sat.orbcomm && !m.sat.birds.length) m.sat.meteor = true; })}
             trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
         </View>
         <Text style={hint}>When a satellite you tick below passes higher than</Text>
@@ -384,7 +387,38 @@ export default function BackgroundDecodingSetup(p: Props) {
         <Text style={hint}>and nobody is listening, the radio follows it {'—'} tuned, Doppler-corrected and decoding {'—'} and what it
           decodes goes to the gallery. Background decoding pauses for the pass and carries on when the satellite has set. The
           moment anybody connects, the pass is given up and the radio is theirs.</Text>
-        {caps.satPasses.map((d) => {
+        {/* ★★★ beta94 THE TWO GROUPS + THEIR PRIORITY (Stuart 11-25; the Setup page's spGroups, the same words). Where one
+             capture holds both (caps.satBoth) they run together and the priority is not drawn (AGENTS.md: no control that
+             does nothing on this radio). An older engine (no satBoth) keeps the beta90 ticks. */}
+        {caps.satBoth && (() => {
+          const fits = bgSatBothFits(caps.satBoth, p.driver, p.rate);
+          const both = model.sat.meteor && model.sat.orbcomm;
+          const row = (label: string, what: string, v: boolean, f: (m: BgModel, v: boolean) => void) => (
+            <View style={[st.row, { justifyContent: 'space-between', paddingLeft: 12 }]}>
+              <Text style={{ color: model.sat.on ? C.text : C.textDim, fontFamily: F, fontSize: 13, flex: 1 }}>
+                <Text style={{ fontWeight: '700' }}>{label}</Text>{' \u00b7 ' + what}</Text>
+              <Switch value={v} disabled={!model.sat.on} onValueChange={(x) => set((m) => f(m, x))}
+                trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+            </View>);
+          return (<>
+            <Text style={[hint, { color: C.text }]}>Satellite passes</Text>
+            {row('Meteor', 'weather pictures (LRPT) from every Meteor-M pass', model.sat.meteor, (m, x) => { m.sat.meteor = x; })}
+            {row('ORBCOMM', 'the sky plot — where your aerial hears satellites, filled in whenever an ORBCOMM satellite is up (nearly always). Only each satellite\u2019s position and signal strength are logged, no messages, so it is light on the processor.',
+                 model.sat.orbcomm, (m, x) => { m.sat.orbcomm = x; })}
+            {both && fits !== false && <Text style={hint}>On this radio both run together: one capture holds the Meteor downlink and the whole ORBCOMM band, so the sky plot keeps filling right through every Meteor pass.</Text>}
+            {both && fits === false && (<>
+              <Text style={hint}>{'This radio\u2019s capture is too narrow to hold a Meteor pass and the ORBCOMM band at once'
+                + (caps.satBoth!.narrow.includes(p.driver) ? '' : ' at its sample rate') + ' \u2014 the order below decides which runs.'}</Text>
+              <View style={[st.row, { flexWrap: 'wrap', paddingLeft: 12 }]}>
+                {key('Meteor first', () => set((m) => { m.sat.first = 'meteor'; }), model.sat.first === 'meteor', !model.sat.on)}
+                {key('ORBCOMM first', () => set((m) => { m.sat.first = 'orbcomm'; }), model.sat.first === 'orbcomm', !model.sat.on)}
+              </View>
+              <Text style={hint}>{model.sat.first === 'orbcomm' ? 'ORBCOMM first: the sky plot is never interrupted for a pass.' : 'Meteor first: ORBCOMM pauses until the pass has set.'}</Text>
+            </>)}
+            <Text style={[hint, { color: C.text }]}>Other downlinks</Text>
+          </>);
+        })()}
+        {caps.satPasses.filter((d) => !caps.satBoth || !bgSatIsMeteor(d)).map((d) => {
           const on = model.sat.birds.some((b) => b.norad === d.norad && b.label === d.label);
           return (
             <View key={d.norad + ':' + d.label} style={[st.row, { justifyContent: 'space-between', paddingLeft: 12 }]}>

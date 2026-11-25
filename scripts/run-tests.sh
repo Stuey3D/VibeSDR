@@ -334,6 +334,10 @@ flags_for() {
     #   (offsets, Doppler slope, clock error, two carriers, noise), and a synthetic pass end to end through the run + the
     #   sky plot's store / JSON / PNG (test-orbcomm-run). -O2: ~3 s each.
     test-orbcomm|test-orbcomm-run) echo "-O2" ;;
+    # ★★★ beta94 the LIGHT ORBCOMM sky plot (vibe_orbcomm_sky.h): named by its Doppler curve, wrong places refused, the cost
+    #   against the full decoder (~8 s); and which unattended satellite work runs — Meteor, ORBCOMM, both (vibe_sat_pass_sched.h)
+    test-orbcomm-sky)      echo "-O2" ;;
+    test-sat-pass-sched)   echo "-O2 -lpthread" ;;
     # ★ ORBCOMM through the server's OWN slice paths (shared FFT + one-pipeline WideTap) at an HF+'s 912/768/456 kS/s, float IQ, a dial move
     test-orbcomm-slice)    echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
