@@ -7,7 +7,9 @@
 process.env.TZ = 'UTC';
 import {
   parseSatList, satModeRows, SAT_SHOW_GROUPS, satShowChoices, satShowGroup, satShowGroupsOf, satShowGroupsOffered, satShowParse,
-  satShowRemindOk, satShowRows, satShowShows, satShowStore, satShowText, satShowToggle, satTxShowGroups, type SatList, type SatShow, type SatTx,
+  satShowRows, satShowShows, satShowStore, satShowText, satShowToggle, satTxShowGroups, type SatList, type SatShow, type SatTx,
+  SAT_SHOW_EMPTY, SAT_SHOW_QS, satShowCur, satShowEmptyText, satShowHiddenRemindText, satShowHidesPass, satShowPassOk, satShowQ, satShowWithQ,
+  SatReminders, satRemindKeyText, SAT_REMIND_FORGET_WHAT, type SatPass,
 } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -104,11 +106,76 @@ ok(satShowRows(rows, W, 25544).some((r) => r.sat.norad === 25544), 'Weather, ISS
 ok(satShowShows(W, L.sats[1], 25544) && !satShowShows(W, L.sats[1], null), 'satShowShows: kept only while picked');
 ok(satShowRows(rows, { norads: [] }, 44909).every((r) => r.sat.norad === 44909) && satShowRows(rows, { norads: [] }, 44909).length > 0, 'None ticked, RS-44 picked: only RS-44');
 
-console.log('— reminders follow SHOW');
-ok(satShowRemindOk(null, L, 25544), 'All: every reminder fires');
-ok(!satShowRemindOk(W, L, 25544) && satShowRemindOk(W, L, 57166), 'Weather: the ISS reminder does not, METEOR\'s does');
-ok(!satShowRemindOk({ norads: [57166] }, L, 25544) && satShowRemindOk({ norads: [25544] }, L, 25544), 'a list: only ticked birds');
-ok(satShowRemindOk(W, L, 12345), 'a bird the list no longer has is let through (the fire-time check says why)');
+console.log('— SHOW filters the LIST only: every reminder set fires (Stuart 11-25)');
+ok(!satShowHidesPass(null, L, 25544, now + 20 * 60), 'All: no pass hidden');
+ok(satShowHidesPass(W, L, 25544, now + 20 * 60) && !satShowHidesPass(W, L, 57166, now + 10 * 60), 'Weather: an ISS pass is hidden, METEOR\'s is not');
+ok(!satShowHidesPass(W, L, 25544, now + 20 * 60, 25544), '…the picked bird is never hidden');
+ok(!satShowHidesPass(W, L, 12345, now), 'a bird the list does not have is not "hidden" (its fire-time check says why)');
+ok(satShowHiddenRemindText(null, L, [{ norad: 25544, aos: now + 20 * 60 }]) === '', 'no note when nothing is hidden');
+ok(satShowHiddenRemindText(W, L, [{ norad: 25544, aos: now + 20 * 60 }, { norad: 57166, aos: now + 10 * 60 }]) === '1 reminder set on a hidden pass', 'Weather + an ISS reminder: "1 reminder set on a hidden pass"');
+ok(satShowHiddenRemindText({ norads: [] }, L, [{ norad: 25544, aos: now + 20 * 60 }, { norad: 27607, aos: now + 50 * 60 }]) === '2 reminders set on hidden passes', 'two: "2 reminders set on hidden passes"');
+// the book itself never looks at SHOW: a reminder set, SHOW then hiding its pass, still comes due
+{
+  const book = new SatReminders(), so = satModeRows(L, now).find((r) => r.sat.norad === 27607 && !r.later)!;
+  ok(book.add('srv', so, now), 'a reminder set on SO-50\'s next pass');
+  const f2: SatShow = { group: 'weather', q: 'EXCELLENT' };   // SHOW then hides it (not weather, and a 40° pass)
+  ok(satShowRows(rows, f2).every((r) => r.sat.norad !== 27607), '…SHOW then hides that pass');
+  const due = book.due(so.next!.aos - 120, 2, true);
+  ok(due.length === 1 && due[0].norad === 27607, '…and it still fires (hiding never cancels a reminder)');
+}
+
+console.log('— REMIND is a toggle: REMIND / lit FORGET');
+{
+  const book = new SatReminders(), so = satModeRows(L, now).find((r) => r.sat.norad === 27607 && !r.later)!;
+  ok(satRemindKeyText(false) === 'REMIND' && satRemindKeyText(!!book.find('srv', 27607, 0)) === 'REMIND', 'not set: "REMIND"');
+  book.add('srv', so, now);
+  ok(satRemindKeyText(!!book.find('srv', 27607, 0)) === 'FORGET' && SAT_REMIND_FORGET_WHAT === 'Reminder set — tap to forget it', 'set: "FORGET", "Reminder set — tap to forget it"');
+  book.add('srv', so, now);   // pressed again through add (a double tap that missed the toggle) — still one
+  ok(book.size === 1, 'adding the same pass twice holds ONE reminder, not two');
+  const held = book.find('srv', 27607, 0)!; book.cancel(held.key);   // what FORGET does (both clients: find → cancel)
+  ok(book.size === 0 && satRemindKeyText(!!book.find('srv', 27607, 0)) === 'REMIND', 'FORGET: cancelled, back to "REMIND"');
+  ok(book.due(so.next!.aos - 120, 2, true).length === 0, '…and nothing fires');
+}
+
+console.log('— QUALITY: the pass\'s rating, at or above a level');
+// a list whose passes cover every rating: 10° POOR, 20° MARGINAL, 40° GOOD, 60° EXCELLENT — one bird each
+const pp = (inMin: number, maxEl: number): SatPass => ({ aos: now + inMin * 60, tca: now + inMin * 60 + 300, los: now + inMin * 60 + 600, maxEl, aosAz: 0, losAz: 180 });
+const Q = parseSatList(raw([{ ...METEOR, passes: [pp(10, 10), pp(110, 60)] }, { ...ISS, passes: [pp(20, 20)] }, { ...SO50, passes: [pp(30, 40)] }]))!;
+const qr = satModeRows(Q, now);
+const els = (f: SatShow, keep?: number | null) => satShowRows(qr, f, keep).map((r) => Math.round(r.pass!.maxEl)).sort((a, b) => a - b);
+ok(eq(SAT_SHOW_QS.map((x) => x.label), ['Marginal or better', 'Good or better', 'Excellent only']), 'the choices\' words');
+ok(eq(els(null), [10, 20, 20, 40, 60]), `All passes: every row (${els(null)})`);
+ok(eq([...new Set(els({ q: 'MARGINAL' }))], [20, 40, 60]), 'Marginal or better: 15° and up');
+ok(eq([...new Set(els({ q: 'GOOD' }))], [40, 60]), 'Good or better: 30° and up');
+ok(eq(els({ q: 'EXCELLENT' }), [60]), 'Excellent only: 50° and up');
+ok(satShowPassOk({ q: 'GOOD' }, 30) && !satShowPassOk({ q: 'GOOD' }, 29.9) && satShowPassOk({ q: 'EXCELLENT' }, 50) && !satShowPassOk({ q: 'MARGINAL' }, 14.9),
+   'the thresholds are satPassQuality\'s (15 / 30 / 50°)');
+ok(!satShowPassOk({ q: 'MARGINAL' }, undefined) && satShowPassOk(null, undefined), 'a row with no pass to rate goes only while a floor is set');
+ok(eq(els({ group: 'weather', q: 'EXCELLENT' }), [60]) && eq(els({ group: 'weather', q: 'GOOD' }), [60]), 'AND with a group: Weather · Good or better = METEOR\'s 60° pass only');
+ok(eq(els({ norads: [25544, 27607], q: 'GOOD' }), [40]), 'AND with ticked satellites: ISS + SO-50, Good or better = SO-50\'s 40°');
+ok(eq(els({ q: 'EXCELLENT' }, 25544), [20, 20, 60]), 'the picked bird keeps its passes whatever their quality');
+ok(satShowText({ group: 'weather', q: 'GOOD' }, Q) === 'Weather · Good or better', 'header: "Weather · Good or better"');
+ok(satShowText({ q: 'EXCELLENT' }, Q) === 'Excellent only' && satShowText({ norads: [25544], q: 'MARGINAL' }, Q) === 'ISS · Marginal or better', 'header: "Excellent only" / "ISS · Marginal or better"');
+ok(satShowCur({ q: 'GOOD' }) === 'all' && satShowCur({ group: 'fm', q: 'GOOD' }) === 'fm' && satShowCur({ norads: [1], q: 'GOOD' }) === '', 'the lit shortcut ignores the quality');
+console.log('— QUALITY keeps the satellite choice, and the other way round');
+ok(eq(satShowWithQ(W, 'GOOD'), { group: 'weather', q: 'GOOD' }) && eq(satShowWithQ({ group: 'weather', q: 'GOOD' }, null), W), 'setting / clearing quality keeps the group');
+ok(eq(satShowWithQ(null, 'GOOD'), { q: 'GOOD' }) && satShowWithQ({ q: 'GOOD' }, null) === null, 'from All: { q } alone; cleared = All (null)');
+ok(eq(satShowGroup('fm', { q: 'GOOD' }), { group: 'fm', q: 'GOOD' }) && eq(satShowGroup('all', { group: 'fm', q: 'GOOD' }), { q: 'GOOD' }), 'a group shortcut keeps the quality');
+ok(eq(satShowToggle({ q: 'GOOD' }, L, 27607), { norads: [57166, 25544, 44909, 39444], q: 'GOOD' }), 'a tick box keeps the quality');
+ok(eq(satShowToggle({ norads: [57166, 25544, 44909, 39444], q: 'GOOD' }, L, 27607), { q: 'GOOD' }), '…and ticking every bird back = All satellites, quality kept');
+ok(satShowQ(W) === null && satShowQ({ group: 'weather', q: 'EXCELLENT' }) === 'EXCELLENT', 'satShowQ');
+console.log('— QUALITY remembered (same key), older stored values still load');
+for (const f of [{ q: 'GOOD' }, { group: 'weather', q: 'EXCELLENT' }, { norads: [25544, 99999], q: 'MARGINAL' }] as SatShow[])
+  ok(eq(satShowParse(satShowStore(f)), f), `round trip ${satShowStore(f)}`);
+ok(satShowStore({ q: 'GOOD' }) === '{"q":"GOOD"}', 'stored as { q } alongside the rest');
+ok(eq(satShowParse('{"group":"weather"}'), { group: 'weather' }) && eq(satShowParse('{"norads":[25544]}'), { norads: [25544] }), 'a value stored before QUALITY (no q) loads as it did');
+ok(eq(satShowParse('{"group":"weather","q":"POOR"}'), { group: 'weather' }) && eq(satShowParse('{"q":"nope"}'), null), 'an unknown / POOR quality is dropped (every pass)');
+console.log('— QUALITY: the empty list says why');
+ok(satShowEmptyText({ q: 'GOOD' }, satModeRows(parseSatList(raw([{ ...ISS, passes: [pp(20, 20)] }])), now)) === 'No passes Good or better in the next 24 h', '"No passes Good or better in the next 24 h"');
+ok(satShowEmptyText({ q: 'EXCELLENT' }, qr.filter((r) => r.pass!.maxEl < 50)) === 'No Excellent passes in the next 24 h', '"No Excellent passes in the next 24 h"');
+ok(satShowEmptyText({ norads: [] , q: 'GOOD' }, qr) === SAT_SHOW_EMPTY && satShowEmptyText({ norads: [] }, qr) === SAT_SHOW_EMPTY, 'no satellites chosen at all: the satellite note, not the quality one');
+ok(satShowHidesPass({ q: 'GOOD' }, Q, 25544, now + 20 * 60) && !satShowHidesPass({ q: 'GOOD' }, Q, 27607, now + 30 * 60), 'a 20° pass is hidden under Good or better (for the reminder note)');
+ok(satShowHiddenRemindText({ q: 'GOOD' }, Q, [{ norad: 25544, aos: now + 20 * 60 }]) === '1 reminder set on a hidden pass', '…so its reminder is noted (and still fires)');
 
 console.log('— the empty list');
 ok(satShowChoices(null, parseSatList(raw([]))).length === 0 && satShowChoices(null, null).length === 0, 'no satellites → no tick boxes (the drop-down is not drawn)');

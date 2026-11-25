@@ -39,7 +39,7 @@ import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
-import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
+import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -47,8 +47,8 @@ import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowP
          satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList, satPickTlm,
          type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB,
          // ★★ beta94 SHOW — which satellites' passes the list shows (one set of rules with the web page)
-         SAT_SHOW_EMPTY, SAT_SHOW_GROUPS, satShowChoices, satShowGroup, satShowGroupsOffered, satShowRows, satShowText, satShowToggle,
-         type SatShow } from '../services/satellites';
+         SAT_SHOW_GROUPS, SAT_SHOW_QS, satShowChoices, satShowCur, satShowEmptyText, satShowGroup, satShowGroupsOffered, satShowHiddenRemindText,
+         satShowQ, satShowRows, satShowText, satShowToggle, satShowWithQ, type SatShow } from '../services/satellites';
 
 const SAT_MAX_W = 760;
 /** ★ The half-globe's drawing size (viewBox); on screen it is the box's width, capped at GLOBE_MAX_W (Stuart 11-20). */
@@ -97,6 +97,8 @@ export interface SatellitePanelProps {
   galleryGet?: ((path: string) => Promise<string | null>) | null;
   /** ★★ 1.6 REMIND — held in this app session only; `held` = the reminder on that downlink, if any */
   remindHeld?: (norad: number, tx: number) => boolean;
+  /** ★★ beta94 every reminder held for this server — SHOW's note counts those on a pass the list hides (they still fire) */
+  remindsAll?: () => ReadonlyArray<{ norad: number; aos: number }>;
   remindLead?: number;
   onRemind?: (norad: number, tx: number) => void;
   onRemindLead?: (min: number) => void;
@@ -650,8 +652,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                list has no satellites. */}
           {listOpen && showChoices.length > 0 && !!p.onShow && (() => {
             const txt = satShowText(show, p.list);
-            const cur = !show ? 'all' : 'group' in show ? show.group : '';
+            const cur = satShowCur(show), curQ = satShowQ(show);
             const set = (f: SatShow) => p.onShow!(f);
+            // ★★ beta94 a reminder on a pass SHOW hides still fires — said here so it is not forgotten (Stuart 11-25)
+            const hidRem = p.remindsAll ? satShowHiddenRemindText(show, p.list, p.remindsAll(), (p.picked ?? p.pending)?.norad ?? null) : '';
             return (
               <View style={s.show}>
                 <Pressable onPress={() => setShowOpen((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showOpen }}
@@ -659,12 +663,19 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <Text style={[s.txt, !!show && txt !== 'All' && s.up]} numberOfLines={1}>{`SHOW: ${txt}`}</Text>
                   <Text style={s.detailNp}>{showOpen ? '▴' : '▾'}</Text>
                 </Pressable>
+                {!!hidRem && <Text style={[s.detail, s.showNote]}>{hidRem}</Text>}
                 {showOpen && (
                   <View style={s.showBody}>
                     <View style={s.leadRowNp}>
-                      <DecoderKey label="All" active={cur === 'all'} onPress={() => set(null)} accessibilityLabel="Show every satellite's passes" />
+                      <DecoderKey label="All" active={cur === 'all'} onPress={() => set(satShowGroup('all', show))} accessibilityLabel="Show every satellite's passes" />
                       {satShowGroupsOffered(p.list).map((g) => { const d = SAT_SHOW_GROUPS.find((x) => x.id === g)!;
-                        return <DecoderKey key={g} label={d.label} active={cur === g} onPress={() => set(satShowGroup(g))} accessibilityLabel={`Show only: ${d.what}`} />; })}
+                        return <DecoderKey key={g} label={d.label} active={cur === g} onPress={() => set(satShowGroup(g, show))} accessibilityLabel={`Show only: ${d.what}`} />; })}
+                    </View>
+                    {/* ★★ beta94 QUALITY — the pass's rating (its highest elevation), ANDed with the choice above (Stuart 11-25) */}
+                    <View style={s.leadRowNp} accessibilityRole="radiogroup" accessibilityLabel="Pass quality">
+                      <DecoderKey label="All passes" active={!curQ} onPress={() => set(satShowWithQ(show, null))} accessibilityLabel="Show passes of any quality" />
+                      {SAT_SHOW_QS.map((q) => (
+                        <DecoderKey key={q.id} label={q.label} active={curQ === q.id} onPress={() => set(satShowWithQ(show, q.id))} accessibilityLabel={q.what} />))}
                     </View>
                     <View style={s.ticks}>
                       {showChoices.map((c) => (
@@ -682,7 +693,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
           })()}
           {listOpen && (!p.list ? <Text style={s.note}>Asking the server…</Text>
             : !allRows.length ? <Text style={s.note}>{p.list.why || (p.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server')}</Text>
-            : !rows.length ? <Text style={s.note}>{SAT_SHOW_EMPTY}</Text>
+            : !rows.length ? <Text style={s.note}>{satShowEmptyText(show, allRows, (p.picked ?? p.pending)?.norad ?? null)}</Text>
             : rows.slice(0, 160).map((r) => {
                 const on = !r.later && !!sel && sel.norad === r.sat.norad && sel.tx === r.i;   // ★ 2026-11-24 a later pass: no highlight
                 const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
@@ -707,8 +718,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </Pressable>
                   {offer && (
                     <View style={s.remKey}>
-                      <DecoderKey label={satRemindKeyText(held, p.remindLead ?? 2)} active={held} onPress={() => p.onRemind!(r.sat.norad, r.i)}
-                                  accessibilityLabel={held ? `Cancel the reminder for ${name}` : `Remind me shortly before ${name} rises — while still connected to this server`} />
+                      <DecoderKey label={satRemindKeyText(held)} active={held} onPress={() => p.onRemind!(r.sat.norad, r.i)}
+                                  accessibilityLabel={held ? `${name}: ${SAT_REMIND_FORGET_WHAT}` : `Remind me shortly before ${name} rises — while still connected to this server`} />
                     </View>
                   )}
                   </View>
@@ -773,6 +784,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   // ★★ beta94 SHOW — the drop-down above the rows
   show:    { marginHorizontal: 8, marginBottom: 4, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: T.muted },
   showSum: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 8, paddingVertical: 6, minHeight: 36 },
+  showNote:{ paddingHorizontal: 8, paddingBottom: 4 },
   showBody:{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.divider, paddingHorizontal: 8, paddingBottom: 6, gap: 4 },
   ticks:   { flexDirection: 'row', flexWrap: 'wrap' },
   tickRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36, paddingVertical: 4, paddingRight: 10, minWidth: 150, flexBasis: '48%', flexGrow: 1 },

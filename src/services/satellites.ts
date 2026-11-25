@@ -1139,8 +1139,13 @@ export interface SatReminder { key: string; server: string; norad: number; tx: n
 export function satRemindOffered(l: SatList | null, r: Pick<SatRow, 'grey' | 'up' | 'next'>): boolean {
   return l?.source?.pickPrivate === true && !r.grey && !r.up && !!r.next;
 }
-/** The key's words: "REMIND" / "REMINDING · 2 min". */
-export function satRemindKeyText(on: boolean, lead: number): string { return on ? `REMINDING · ${lead} min` : 'REMIND'; }
+/** The key's words — a toggle (Stuart 11-25: "when a reminder is set the button changes to unremind or whatever the
+ *  correct term would be", then "FORGET"): "REMIND" / lit "FORGET" while one is set on that pass; a tap on FORGET cancels
+ *  it. (`lead` is kept for callers; the minutes are the lead row's.) */
+export function satRemindKeyText(on: boolean, _lead?: number): string { return on ? 'FORGET' : 'REMIND'; }
+/** The lit key's tooltip / accessibility label, and the unlit one's. */
+export const SAT_REMIND_FORGET_WHAT = 'Reminder set — tap to forget it';
+export const SAT_REMIND_SET_WHAT = 'A pop-up shortly before this pass rises — while you are still connected to this server';
 /** ★ The re-check as it fires: why it can no longer be picked ('' = it can). The server's own words where it gave them. */
 export function satRemindWhy(l: SatList | null, r: Pick<SatReminder, 'norad' | 'tx' | 'name'>): string {
   if (!l) return '';
@@ -1233,7 +1238,9 @@ export class SatReminders {
  *     here, so a bird the mirror adds tomorrow falls into its group by itself. A satellite is in a group when ANY of its
  *     downlinks is (the ISS: FM voice AND Telemetry, for its APRS).
  *   · only passes of the ticked satellites are listed; the satellite picked (or being picked) always stays.
- *   · a reminder for a hidden satellite does not fire.
+ *   · ★ SHOW filters the LIST only: a reminder set on a pass always fires, even if SHOW later hides it (Stuart 11-25 —
+ *     hiding never cancels one silently); the header notes "1 reminder set on a hidden pass" (satShowHiddenRemindText).
+ *   · a pass-quality floor (SAT_SHOW_QS) ANDs with the satellite / group choice.
  *   · remembered per viewer (web localStorage / app AsyncStorage, SAT_SHOW_KEY), keyed by NORAD number so it carries from
  *     server to server; a satellite the current server does not list is simply ignored. A group shortcut is kept AS the
  *     group, so "Weather" on another server means that server's weather birds.
@@ -1245,8 +1252,20 @@ export const SAT_SHOW_GROUPS: ReadonlyArray<{ id: SatShowGroup; label: string; w
   { id: 'fm', label: 'FM voice', what: 'FM repeaters and FM voice downlinks' },
   { id: 'tlm', label: 'Telemetry', what: 'Data downlinks: telemetry, beacons and packet (APRS)' },
 ];
-/** what is shown: null = All; a group; or the ticked NORAD numbers (others' too — a list from another server is kept). */
-export type SatShow = null | { group: SatShowGroup } | { norads: number[] };
+/* ★★ beta94 SHOW BY PASS QUALITY (Stuart 11-25: "we should add a filter to show passes based on quality too so a user could
+ *  filter by good or above for instance"). The pass's own rating (satPassQuality — its highest elevation) at or above a
+ *  level; ANDed with the satellite / group choice; null (no `q`) = every pass. Stored in the same SAT_SHOW_KEY object as
+ *  `q` — a value stored before this (no `q`) still reads exactly as it did. */
+export type SatShowQ = Exclude<SatPassQ, 'POOR'>;
+export const SAT_SHOW_QS: ReadonlyArray<{ id: SatShowQ; label: string; what: string; none: string }> = [
+  { id: 'MARGINAL', label: 'Marginal or better', what: 'Passes rated MARGINAL or better (highest point 15° or more)', none: 'No passes Marginal or better in the next 24 h' },
+  { id: 'GOOD', label: 'Good or better', what: 'Passes rated GOOD or better (highest point 30° or more)', none: 'No passes Good or better in the next 24 h' },
+  { id: 'EXCELLENT', label: 'Excellent only', what: 'Only passes rated EXCELLENT (highest point 50° or more)', none: 'No Excellent passes in the next 24 h' },
+];
+const SAT_Q_RANK: Record<SatPassQ, number> = { POOR: 0, MARGINAL: 1, GOOD: 2, EXCELLENT: 3 };
+/** what is shown: null = All; a group; or the ticked NORAD numbers (others' too — a list from another server is kept) —
+ *  each with an optional pass-quality floor `q`; `{ q }` alone = every satellite, only passes that good. */
+export type SatShow = null | { group: SatShowGroup; q?: SatShowQ } | { norads: number[]; q?: SatShowQ } | { q: SatShowQ };
 export const SAT_SHOW_KEY = 'vibe.satShow';
 const SAT_SHOW_MAX = 200;   // bounded: what is stored never grows without end
 
@@ -1267,17 +1286,37 @@ export function satShowGroupsOf(sat: Pick<SatInfo, 'tx'>): SatShowGroup[] {
   for (const t of sat.tx) for (const g of satTxShowGroups(t)) s.add(g);
   return SAT_SHOW_GROUPS.map((g) => g.id).filter((g) => s.has(g));
 }
-/** Stored text → a SatShow (anything unreadable = All). */
+/** The pass-quality floor SHOW holds (null = every pass). */
+export function satShowQ(f: SatShow): SatShowQ | null { return f && 'q' in f && f.q ? f.q : null; }
+/** SHOW with its quality floor set (null = every pass), the satellite / group choice kept; nothing left = All (null). */
+export function satShowWithQ(f: SatShow, q: SatShowQ | null): SatShow {
+  const base = !f ? null : 'group' in f ? { group: f.group } : 'norads' in f ? { norads: f.norads } : null;
+  return !q ? base : base ? { ...base, q } : { q };
+}
+/** Does a pass whose highest point is `maxEl` meet SHOW's quality floor? (No floor: yes. No pass to rate: no.) */
+export function satShowPassOk(f: SatShow, maxEl: number | null | undefined): boolean {
+  const q = satShowQ(f);
+  if (!q) return true;
+  return maxEl != null && Number.isFinite(maxEl) && SAT_Q_RANK[satPassQuality(maxEl)] >= SAT_Q_RANK[q];
+}
+/** Which shortcut is lit: 'all' (every satellite — whatever the quality), a group, or '' (a tick-box list). */
+export function satShowCur(f: SatShow): SatShowGroup | 'all' | '' {
+  return !f ? 'all' : 'group' in f ? f.group : 'norads' in f ? '' : 'all';
+}
+/** Stored text → a SatShow (anything unreadable = All; a value stored before the quality floor has no `q` and reads as before). */
 export function satShowParse(raw: string | null | undefined): SatShow {
   if (!raw) return null;
   try {
     const o = JSON.parse(raw) as Record<string, unknown>;
     if (o && typeof o === 'object') {
-      if (typeof o.group === 'string' && SAT_SHOW_GROUPS.some((g) => g.id === o.group)) return { group: o.group as SatShowGroup };
-      if (Array.isArray(o.norads)) {
+      const q = typeof o.q === 'string' && SAT_SHOW_QS.some((x) => x.id === o.q) ? o.q as SatShowQ : null;
+      let f: SatShow = null;
+      if (typeof o.group === 'string' && SAT_SHOW_GROUPS.some((g) => g.id === o.group)) f = { group: o.group as SatShowGroup };
+      else if (Array.isArray(o.norads)) {
         const n = [...new Set(o.norads.filter((x): x is number => typeof x === 'number' && Number.isInteger(x) && x > 0))].slice(0, SAT_SHOW_MAX);
-        return { norads: n };
+        f = { norads: n };
       }
+      return satShowWithQ(f, q);
     }
   } catch { /* unreadable: All */ }
   return null;
@@ -1285,7 +1324,10 @@ export function satShowParse(raw: string | null | undefined): SatShow {
 /** A SatShow → the text to store (null = remove the key: All). */
 export function satShowStore(f: SatShow): string | null {
   if (!f) return null;
-  return 'group' in f ? JSON.stringify({ group: f.group }) : JSON.stringify({ norads: f.norads.slice(0, SAT_SHOW_MAX) });
+  const q = satShowQ(f);
+  const o: Record<string, unknown> = 'group' in f ? { group: f.group } : 'norads' in f ? { norads: f.norads.slice(0, SAT_SHOW_MAX) } : {};
+  if (q) o.q = q;
+  return JSON.stringify(o);
 }
 /** The satellites the list names, once each, in the list's order. */
 function satShowSats(l: SatList | null): SatInfo[] {
@@ -1297,23 +1339,37 @@ function satShowSats(l: SatList | null): SatInfo[] {
 export function satShowTicked(f: SatShow, sat: Pick<SatInfo, 'norad' | 'tx'>): boolean {
   if (!f) return true;
   if ('group' in f) return satShowGroupsOf(sat).includes(f.group);
-  return f.norads.includes(sat.norad);
+  if ('norads' in f) return f.norads.includes(sat.norad);
+  return true;   // { q } alone: every satellite
 }
-/** ★ Does the list show this satellite? Ticked, or the one picked / being picked (it always stays). */
+/** ★ Does the list show this satellite? (The satellite choice only — a pass's quality is satShowPassOk.) Ticked, or the one picked / being picked (it always stays). */
 export function satShowShows(f: SatShow, sat: Pick<SatInfo, 'norad' | 'tx'>, keepNorad?: number | null): boolean {
   return (keepNorad != null && sat.norad === keepNorad) || satShowTicked(f, sat);
 }
-/** The timetable's rows under SHOW (satModeRows' order kept). */
-export function satShowRows<R extends { sat: Pick<SatInfo, 'norad' | 'tx'> }>(rows: R[], f: SatShow, keepNorad?: number | null): R[] {
-  return f ? rows.filter((r) => satShowShows(f, r.sat, keepNorad)) : rows;
+/** The timetable's rows under SHOW (satModeRows' order kept): the satellite ticked AND its pass up to the quality floor
+ *  (a row with no pass to rate goes while a floor is set). The one picked / being picked keeps every row. */
+export function satShowRows<R extends { sat: Pick<SatInfo, 'norad' | 'tx'>; pass?: { maxEl: number } }>(rows: R[], f: SatShow, keepNorad?: number | null): R[] {
+  return f ? rows.filter((r) => (keepNorad != null && r.sat.norad === keepNorad) || (satShowTicked(f, r.sat) && satShowPassOk(f, r.pass?.maxEl))) : rows;
 }
-/** ★ A reminder as it fires: does SHOW still allow it? A satellite the list no longer has is let through (the fire-time
- *  check says why it cannot be picked); a group needs the list to know the bird's downlinks. */
-export function satShowRemindOk(f: SatShow, l: SatList | null, norad: number): boolean {
-  if (!f) return true;
-  if ('norads' in f) return f.norads.includes(norad);
+/** ★ Does SHOW hide this pass from the list? (Stuart 11-25: "when selected it shows the list with only the satellites that
+ *  match and then users can choose to be reminded per pass" — SHOW filters the LIST only. A reminder set on a pass ALWAYS
+ *  fires, even when a later SHOW change hides it: hiding never cancels one silently. This is only for the note that says
+ *  so — satShowHiddenRemindText.) A satellite the list does not have is not "hidden" (the reminder's own fire-time check
+ *  says why it cannot be picked); the pass is the list's at the reminder's AOS (within 5 min — orbits are refreshed). */
+export function satShowHidesPass(f: SatShow, l: SatList | null, norad: number, aos: number, keepNorad?: number | null): boolean {
+  if (!f || (keepNorad != null && norad === keepNorad)) return false;
   const sat = l?.sats.find((s) => s.norad === norad);
-  return !sat || satShowTicked(f, sat);
+  if (!sat) return false;
+  if (!satShowTicked(f, sat)) return true;
+  if (!satShowQ(f)) return false;
+  const p = sat.passes.find((x) => Math.abs(x.aos - aos) <= 300);
+  return !!p && !satShowPassOk(f, p.maxEl);
+}
+/** The SHOW header's reminder note: "1 reminder set on a hidden pass" / "2 reminders set on hidden passes" ('' = none) —
+ *  so a reminder the list no longer shows is not forgotten (it still fires). */
+export function satShowHiddenRemindText(f: SatShow, l: SatList | null, rems: ReadonlyArray<{ norad: number; aos: number }>, keepNorad?: number | null): string {
+  const n = rems.filter((r) => satShowHidesPass(f, l, r.norad, r.aos, keepNorad)).length;
+  return !n ? '' : n === 1 ? '1 reminder set on a hidden pass' : `${n} reminders set on hidden passes`;
 }
 /** The group shortcuts worth drawing on this list — a group no listed satellite is in is not drawn (it could never act). */
 export function satShowGroupsOffered(l: SatList | null): SatShowGroup[] {
@@ -1325,8 +1381,8 @@ export function satShowGroupsOffered(l: SatList | null): SatShowGroup[] {
 export function satShowChoices(f: SatShow, l: SatList | null): Array<{ norad: number; name: string; on: boolean }> {
   return satShowSats(l).map((s) => ({ norad: s.norad, name: s.name, on: satShowTicked(f, s) }));
 }
-/** A group shortcut (or 'all'). */
-export function satShowGroup(g: SatShowGroup | 'all'): SatShow { return g === 'all' ? null : { group: g }; }
+/** A group shortcut (or 'all') — the quality floor of `cur` (SHOW as it is) kept. */
+export function satShowGroup(g: SatShowGroup | 'all', cur?: SatShow): SatShow { return satShowWithQ(g === 'all' ? null : { group: g }, satShowQ(cur ?? null)); }
 /** ★ A tick box pressed: flips that satellite. From All or a group it becomes the list's ticked set with this one flipped;
  *  a NORAD list keeps the numbers this server does not list (they belong to another server). Every listed satellite
  *  ticked (and nothing else kept) = back to All. */
@@ -1334,16 +1390,24 @@ export function satShowToggle(f: SatShow, l: SatList | null, norad: number): Sat
   const sats = satShowSats(l);
   const listed = new Set(sats.map((s) => s.norad));
   const set = new Set<number>(f && 'norads' in f ? f.norads : []);
-  if (!f || 'group' in f) for (const s of sats) if (satShowTicked(f, s)) set.add(s.norad);
+  if (!f || !('norads' in f)) for (const s of sats) if (satShowTicked(f, s)) set.add(s.norad);
   if (set.has(norad)) set.delete(norad); else set.add(norad);
-  if (sats.length && sats.every((s) => set.has(s.norad)) && [...set].every((n) => listed.has(n))) return null;
-  return { norads: [...set].slice(0, SAT_SHOW_MAX) };
+  const q = satShowQ(f);   // ★ the quality floor is kept
+  if (sats.length && sats.every((s) => set.has(s.norad)) && [...set].every((n) => listed.has(n))) return satShowWithQ(null, q);
+  return satShowWithQ({ norads: [...set].slice(0, SAT_SHOW_MAX) }, q);
 }
-/** The header's words: "All" / "Weather" / "ISS" (one) / "3 satellites" / "None". On THIS list: every listed satellite
+/** The header's words: "All" / "Weather" / "ISS" (one) / "3 satellites" / "None", then the quality floor if one is set:
+ *  "Weather · Good or better", or just "Good or better" for every satellite. On THIS list: every listed satellite
  *  ticked reads "All" (it is all of them here). */
 export function satShowText(f: SatShow, l: SatList | null): string {
+  const q = satShowQ(f), ql = q ? SAT_SHOW_QS.find((x) => x.id === q)!.label : '';
+  const sat = satShowSatText(f, l);
+  return !ql ? sat : sat === 'All' ? ql : `${sat} · ${ql}`;
+}
+function satShowSatText(f: SatShow, l: SatList | null): string {
   if (!f) return 'All';
   if ('group' in f) return SAT_SHOW_GROUPS.find((g) => g.id === f.group)?.label ?? 'All';
+  if (!('norads' in f)) return 'All';
   const sats = satShowSats(l), on = sats.filter((s) => satShowTicked(f, s));
   if (sats.length && on.length === sats.length) return 'All';
   if (on.length === 1) return on[0].name;
@@ -1351,6 +1415,13 @@ export function satShowText(f: SatShow, l: SatList | null): string {
 }
 /** The note under a list SHOW has emptied (none of the chosen satellites has a row here). */
 export const SAT_SHOW_EMPTY = 'None of the satellites chosen under SHOW are listed on this server';
+/** ★ The note under an emptied list: the quality floor's ("No passes Good or better in the next 24 h") when the chosen
+ *  satellites DO have passes and it is the floor that hid them all; SAT_SHOW_EMPTY otherwise. */
+export function satShowEmptyText<R extends { sat: Pick<SatInfo, 'norad' | 'tx'>; pass?: { maxEl: number } }>(f: SatShow, rows: R[], keepNorad?: number | null): string {
+  const q = satShowQ(f);
+  if (q && satShowRows(rows, satShowWithQ(f, null), keepNorad).length > 0) return SAT_SHOW_QS.find((x) => x.id === q)!.none;
+  return SAT_SHOW_EMPTY;
+}
 
 // ══ ★★ SATELLITE-BEST 1.3 — TELEMETRY TURNED INTO VALUES (the client half) ═══════════════════════════════════════════════
 /* The server's decoder (AO-73 FUNcube `fctlm`; SONATE-2 / APRS later) sends {"type":"fctlm_status","data":{…}} on the decoder

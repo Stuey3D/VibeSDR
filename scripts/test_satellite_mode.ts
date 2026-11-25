@@ -230,7 +230,7 @@ console.log('— 1.6 REMIND: offered only where a pick is private');
   ok(!satRemindOffered(priv, iss2p), 'a greyed row → hidden');
   ok(!satRemindOffered(priv, issUp), 'up now → nothing to remind of');
   ok(!satRemindOffered(priv, ao7p), 'no pass → hidden');
-  ok(satRemindKeyText(false, 2) === 'REMIND' && satRemindKeyText(true, 5) === 'REMINDING · 5 min', 'the key\'s words');
+  ok(satRemindKeyText(false, 2) === 'REMIND' && satRemindKeyText(true, 5) === 'FORGET', 'the key\'s words (a toggle: REMIND / lit FORGET)');
   ok(satRemindLead('5') === 5 && satRemindLead(3) === 2 && satRemindLead(null) === 2 && satRemindLead(10) === 10, 'lead 1 / 2 / 5 / 10, default 2');
 }
 

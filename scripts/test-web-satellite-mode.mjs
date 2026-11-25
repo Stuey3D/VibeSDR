@@ -321,7 +321,7 @@ try {
   ok(rem.length === 2 && rem.includes('27607:REMIND') && rem.includes('59112:REMIND'), `private: a REMIND key on each pass still to come, none on the up-now rows (${rem.join(', ')})`);
   ok(/REMIND.*1.*2.*5.*10.*min before it rises/.test(await ev(`document.querySelector('#satPanel .sat-lead').textContent`)), 'the lead choice 1 / 2 / 5 / 10 min');
   await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').click(); true`);
-  ok(await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').textContent`) === 'REMINDING · 2 min' && await ev('window.__p.reminders().length') === 1, 'pressed: "REMINDING · 2 min", one held');
+  ok(await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').textContent`) === 'FORGET' && await ev('window.__p.reminders().length') === 1, 'pressed: lit "FORGET", one held');
   await shot('remind-list');
   await ev(`document.querySelector('#satPanel [data-act="exit"]').click(); true`);
   ok(await ev('window.__p.reminders().length') === 1, 'leaving the mode keeps it (this page still on this server)');
