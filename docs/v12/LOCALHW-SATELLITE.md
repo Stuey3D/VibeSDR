@@ -58,4 +58,8 @@ rule (hidden). Making it work needs an iOS orbit fetch (URLSession → satLoadSa
 - `scripts/test-server-sat.mjs` 197/0 with the new 4a (real server: no location → `dopplerNeed:"location"`, /location has
   no position; located → none).
 - `scripts/test_sat_place.ts` 39/0 (the key, the prompt, which position, the words, nothing-published source guards).
-- tsc: no errors under src/. `./gradlew assembleRelease`: see the commit that adds this file.
+- tsc: no errors under src/ (the existing node-types noise in scripts/ and handheld-ui/ is unchanged).
+- `./gradlew assembleRelease -x requireUploadKey` (both flavours, armeabi-v7a + arm64-v8a, R8 on): BUILD SUCCESSFUL;
+  `Java_com_vibesdr_app_VibeLocalSDR_nativeSetSatObserver` exported from libvibelocalsdr.so. The upload-key gate was
+  skipped because keystore.properties is a secret not in the worktree — the debug-signed APKs were deleted, never
+  installed. Mac vibeserver (Release) built clean via the build lock.
