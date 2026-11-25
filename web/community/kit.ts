@@ -13,3 +13,10 @@ export { aprsIcon, aprsColour } from '../../src/utils/aprsSymbols';
 export { sondeIcon } from '../../src/services/sondes';
 export { ismMapIcon } from '../../src/services/ism';
 export { dscIcon } from '../../src/services/shippingMap';
+// ★★ V12 beta94 THE KEY (Stuart 11-25: "missing the legend for what the icons mean"): the server maps' OWN legend rows and
+//    glyphs — the shipping / NAVTEX map's KEY (shipKeyHtml: shipLegendRows, the hazards, the not-working marks, the wind
+//    arrows, the sea areas) — so the community map's KEY says exactly what the servers' does, with the same drawings.
+export { shipLegendRows, windLegendRows } from '../../src/services/shippingMap';
+export { seaLegendRows } from '../../src/services/seaAreas';
+export { NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../../src/services/navtexIcons';
+export { AIS_COLOURS } from '../../src/services/tracks';
