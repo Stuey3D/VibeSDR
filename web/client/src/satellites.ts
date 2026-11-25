@@ -550,7 +550,7 @@ export class SatPanel {
     const t = this.pickedTx();
     if (t) this.deps.follow(p.decoder, t, p.params, p.audio);   // ★★ beta92 the server's own parameters (and passband): the page JOINS its run
     if (changed && !orbToOrb && t && p.view) this.deps.zoomView?.(p.viewCentre ?? txTuneHz(t), p.view);   // ★★ an ORBCOMM pick: the band's centre   // ★★ beta93 open at the pick's own view
-    this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again)
+    if (changed) this.sList.open = false;   // ★ the list folds away under the box once a bird is picked (one tap opens it again) — ★★★ beta94 only on a NEW pick: the room's pick re-told to a joiner (satTellRoomPick) leaves it as the listener set it
     this.render();
   }
   /** The decoder's own words (LRPT's carrier / frames / lines, SSTV's mode, APRS listening). */

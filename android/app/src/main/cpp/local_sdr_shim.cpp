@@ -11841,8 +11841,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
     bool satLockActive(const std::string& key) { return satEngine().active(key); }
-    /** `{"type":"sat","state":"picked",…}` — to the listener, or (the room's pick) to everybody with "shared":true. */
-    void satSendPicked(const std::shared_ptr<net::Socket>& sock, const std::string& key, const SatPick& p, const std::string& decoderWhy) {
+    /** ★★★ beta94 THE ROOM'S PICK FOR A JOINER (Stuart 11-25: a listener who joins a shared dial sees the bird the ORBCOMM box
+     *  follows). The room's "picked" went to everybody AT the pick; a listener who arrives later — or opens SATELLITE later —
+     *  never heard it, so their box stayed empty and never joined the pick's decoder. Their sat_list (asked as the mode opens,
+     *  then every 30 s) is answered with the room's pick once per session and pick ("norad/tx"); their `drop` forgets it, so a
+     *  re-opened mode is told again. The broadcast at the pick is not counted (most of the room is not in SATELLITE then).
+     *  Bounded (cleared past 512 sessions). */
+    std::mutex satToldMtx_;
+    std::map<std::string, std::string> satTold_;
+    static std::string satPickTag(const SatPick& p) { return std::to_string(p.norad) + "/" + std::to_string(p.tx); }
+    void satToldSet(const std::string& sess, const std::string& tag) {
+        if (sess.empty()) return;
+        std::lock_guard<std::mutex> lk(satToldMtx_);
+        if (satTold_.size() > 512) satTold_.clear();
+        if (tag.empty()) satTold_.erase(sess); else satTold_[sess] = tag;
+    }
+    void satTellRoomPick(const std::shared_ptr<net::Socket>& sock) {
+        if (perClientDsp()) return;   // ★ per-listener picks: each listener's own (they made it)
+        SatPick p; bool have = false;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(kSatShared); if (it != satPicks_.end()) { p = it->second; have = true; } }
+        if (!have) return;
+        const std::string sess = sessionOfSock(sock.get());
+        { std::lock_guard<std::mutex> lk(satToldMtx_); auto it = satTold_.find(sess); if (!sess.empty() && it != satTold_.end() && it->second == satPickTag(p)) return; }
+        satSendPicked(sock, kSatShared, p, "", true);
+    }
+    /** `{"type":"sat","state":"picked",…}` — to the listener, or (the room's pick) to everybody with "shared":true
+     *  (★★★ beta94 `onlyThis`: the room's pick to this one socket — satTellRoomPick). */
+    void satSendPicked(const std::shared_ptr<net::Socket>& sock, const std::string& key, const SatPick& p, const std::string& decoderWhy, bool onlyThis = false) {
         vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
         const bool have = satEngine().txAt(p.norad, p.tx, sd, tx);
         std::string m = "{\"type\":\"sat\",\"state\":\"picked\"";
@@ -11875,8 +11900,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!decoderWhy.empty()) m += ",\"decoderWhy\":\"" + vibe::sat::jsonEsc(decoderWhy) + "\"";
         const std::string tail = ",\"time\":\"" + satEngine().timeState(satClock()) + "\"}";
         // ★★ beta92 "vfob": the other downlinks of this bird THIS listener may open in VFO B now (satVfoBOfferJson)
-        if (key == kSatShared) { for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m + satVfoBOfferJson(k, p) + tail); }
-        else sendText(sock, m + satVfoBOfferJson(sock, p) + tail);
+        if (key == kSatShared && !onlyThis) {
+            // ★ not remembered as told: most of the room is not in SATELLITE (their pages ignore it) — satTellRoomPick tells
+            //   each again, once, at its next sat_list
+            for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m + satVfoBOfferJson(k, p) + tail);
+        } else {
+            sendText(sock, m + satVfoBOfferJson(sock, p) + tail);
+            if (key == kSatShared) satToldSet(sessionOfSock(sock.get()), satPickTag(p));
+        }
     }
     /** A refusal of a SATELLITE op — the existing OFF shape, with `op` so the box knows which press it answers. */
     void satRefuse(const std::shared_ptr<net::Socket>& sock, const char* op, const std::string& why) {
@@ -12065,6 +12096,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void satDrop(const std::shared_ptr<net::Socket>& sock) {
         std::string key, session; std::shared_ptr<ClientDsp> me;
         if (!satPickKey(sock, key, session, me)) return;
+        satToldSet(session, "");   // ★★★ beta94 a re-opened SATELLITE is told the room's pick again
         if (satLockActive(key)) {
             if (key == kSatShared) satEndShared("Satellite mode left", true);
             else satEndListener(me, "Satellite mode left", true);
@@ -24459,6 +24491,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (supply.fetching && why.rfind("NO SAT DATA", 0) == 0) why = "Fetching orbit data\xe2\x80\xa6";
             if (!why.empty()) j.insert(j.size() - 1, ",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"");
             sendText(sock, j);
+            satTellRoomPick(sock);   // ★★★ beta94 a joiner's box shows the room's pick (and follows its ORBCOMM decoder)
             return;
         }
         // ★★ A returning listener asking for the whole-radio mode it left in back — see modeResume
