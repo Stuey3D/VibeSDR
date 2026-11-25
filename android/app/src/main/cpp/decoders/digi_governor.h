@@ -113,6 +113,14 @@ public:
         cap_ = capUnits > 0 ? capUnits : std::numeric_limits<double>::infinity();
         if (!(units_ < cap_)) units_ = cap_;
     }
+    /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): the cores background decoding may use changed by `k` (4 = one core
+     *  → four): the cap becomes `capUnits` and what the live budget has learnt scales with it — so a box that had settled
+     *  at 6 of one core's 8 units goes to 24 of 32 at once, and back to 6 the moment a listener joins (never above the
+     *  new cap). An unlimited budget stays unlimited. */
+    void rescale(double capUnits, double k) {
+        if (std::isfinite(units_) && k > 0) units_ = std::max(0.6, units_ * k);
+        setCap(capUnits);
+    }
     double units() const { return units_; }
     double cap() const { return cap_; }
     /** Called every block: `skipped` = every engine's skipped slots so far (monotonic), `inUse` = the units decoding now. */

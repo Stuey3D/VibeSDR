@@ -24,6 +24,7 @@ public:
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };
+        d_.depthProbe = [this] { return depth ? depth() : 0; };   // ★ beta94 the load ladder (digi_load_ladder.h)
     }
     void process(const float* audio, int n, double captureUtc) override { d_.process(audio, n, captureUtc); }
     uint64_t slotsSkipped() const override { return d_.slotsSkipped.load(); }

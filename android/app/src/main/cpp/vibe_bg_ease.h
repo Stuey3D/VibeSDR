@@ -37,8 +37,10 @@ namespace vibe {
 namespace bg {
 namespace ease {
 
-enum class Kind { Chips, Pause };
-enum Tier : int { kTierChips = 0, kTierPictures = 1, kTierText = 2, kTierSkimmers = 3, kTierSafety = 4 };
+enum class Kind { Chips, Pause, Depth };
+/* ★★★ beta94 (Stuart: "the depth drops before dropping entire bands"): tier −1 comes before everything — every Band VFO's
+ *  decode depth to the minimum (digi::LoadLadder::forceMin), all bands and all their modes still decoding. */
+enum Tier : int { kTierDepth = -1, kTierChips = 0, kTierPictures = 1, kTierText = 2, kTierSkimmers = 3, kTierSafety = 4 };
 
 /** ★ Which tier a VFO's decoder pauses in (its id from vibe_bgdecode_config.h). Unknown ids are text (tier 2). */
 inline int tierOf(const std::string& dec) {

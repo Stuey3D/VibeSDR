@@ -119,6 +119,9 @@ public:
     /** ★ The server's load, asked before any OPTIONAL extra work (a second decode pass, OSD): true = loaded, do the
      *  cheapest decode. Empty = never loaded. */
     std::function<bool()> loaded;
+    /** ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h): how deep to decode now, 0 full … 5 the minimum — asked per slot by
+     *  an engine with finer settings than light/full (FT8, FT4, FT2). Empty = 0. */
+    std::function<int()> depth;
 };
 
 /** Everything the spotter needs to know about a mode. Plain data and a factory — no global state. */

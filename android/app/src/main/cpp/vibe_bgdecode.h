@@ -38,6 +38,7 @@
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
 #include "vibe_bgdecode_band.h"     // ★ V12: a Band digital-spots VFO's span (installBandSpan)
 #include "vibe_bg_ease.h"           // ★ V12 2026-11-24: easing off for listeners, on purpose, before it hurts
+#include "vibe_bg_fullcpu.h"        // ★★★ beta94: nobody listening — background may use the whole machine
 #include "vibe_band_slice.h"        // ★ …and its slices: sized, tapered and placed as a listener's Band (one rule)
 #include "vibe_clock.h"             // ★ the capture time a Band slice's slots are cut by
 #include "vibe_decoder_host.h"
@@ -1129,6 +1130,29 @@ public:
         if (rankOut) *rankOut = rank;
         return id;
     }
+    /** ★ beta94: the radios whose background gives way for `need` slots — one entry per VFO to pause (a radio may appear
+     *  more than once), lowest-ranked running first, idle before mid-picture (victim()'s rule, repeated). */
+    static std::vector<std::string> victims(const std::string& dir, int need) {
+        auto v = all(dir);
+        std::vector<std::string> out;
+        while ((int)out.size() < need) {
+            std::map<std::string, int> running;
+            bool idle = false;
+            for (auto& e : v) if (e.running) { running[e.id]++; if (!e.busy) idle = true; }
+            int at = -1;
+            for (int i = 0; i < (int)v.size(); ++i) {
+                const auto& e = v[(size_t)i];
+                if (!e.running || (idle && e.busy)) continue;
+                if (at < 0) { at = i; continue; }
+                const auto& b = v[(size_t)at];
+                if (e.rank > b.rank || (e.rank == b.rank && running[e.id] > running[b.id])) at = i;
+            }
+            if (at < 0) break;
+            out.push_back(v[(size_t)at].id);
+            v[(size_t)at].running = false;
+        }
+        return out;
+    }
     /** The best rank PAUSED anywhere on the box (0 = none) — a radio resumes its own only if nobody waits ahead of it. */
     static int bestPaused(const std::string& dir) {
         int best = 0;
@@ -1146,9 +1170,12 @@ public:
      *  running anywhere (the box is full of LISTENERS' decoders), or none freed in time. */
     static bool makeRoomForListener(DecoderSlots& slots, const std::string& dir, int timeoutMs = 3000) {
         if (slots.inUse() < slots.max()) return true;
-        const std::string id = victim(dir);
-        if (id.empty()) return false;
-        requestDrop(dir, id);
+        /* ★★★ beta94: an idle radio's background may hold slots OVER the box's limit (vibe_bg_fullcpu.h) — so the listener
+         *  may need more than one given back. As many as it takes, each from the lowest-ranked running VFO left. */
+        const int need = std::max(1, slots.inUse() - slots.max() + 1);
+        const auto picks = victims(dir, need);
+        if (picks.empty()) return false;
+        for (const auto& id : picks) requestDrop(dir, id);
         for (int t = 0; t < timeoutMs; t += 50) {
             if (slots.inUse() < slots.max()) return true;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1183,6 +1210,44 @@ public:
     virtual std::string brief() const = 0;       ///< "12 beacons identified of 41 carriers"
 };
 struct NdbStart { int profileIdx = 0; double rate = 0, hwCentreHz = 0, loHz = 0, hiHz = 0, lat = NAN, lon = NAN; };
+
+// ── ★★★ beta94 background decoding's view of the box's decoder slots ──────────────────────────────────────────────
+/** ★★ NOBODY LISTENING (vibe_bg_fullcpu.h): while this radio is idle its background may hold `extraSlots` decoder slots
+ *  OVER the box's limit (a WEFAX VFO that waited "for a decoder slot" runs). An ordinary claim first; only when that is
+ *  refused, one under the raised limit — counted, so the runner knows to give them back when a listener comes. A listener
+ *  is never refused for them: BgRegistry::makeRoomForListener asks for as many as it needs. */
+class BgSlots : public DecoderSlots {
+public:
+    BgSlots(DecoderSlots* inner, std::shared_ptr<const fullcpu::Live> live) : in_(inner), live_(std::move(live)) {}
+    int extra() const { return live_ && live_->full.load(std::memory_order_relaxed) ? std::max(0, live_->extraSlots.load(std::memory_order_relaxed)) : 0; }
+    int claim() override {
+        const int t = in_->claim();
+        if (t >= 0) return t;
+        const int x = extra();
+        if (x <= 0) return -1;
+        const int u = in_->claimWithin(in_->max() + x);
+        if (u >= 0) { std::lock_guard<std::mutex> lk(m_); extraTok_.push_back(u); }
+        return u;
+    }
+    void release(int token) override {
+        { std::lock_guard<std::mutex> lk(m_);
+          auto it = std::find(extraTok_.begin(), extraTok_.end(), token);
+          if (it != extraTok_.end()) extraTok_.erase(it); }
+        in_->release(token);
+    }
+    int max() const override { return in_->max() + extra(); }
+    int inUse() const override { return in_->inUse(); }
+    int claimWithin(int limit) override { return in_->claimWithin(limit); }
+    /** Slots this runner took over the box's limit, still held. */
+    int extraHeld() const { std::lock_guard<std::mutex> lk(m_); return (int)extraTok_.size(); }
+    /** The box holds more than its limit (somebody's extras). */
+    bool boxOver() const { return in_->inUse() > in_->max(); }
+private:
+    DecoderSlots* in_;
+    std::shared_ptr<const fullcpu::Live> live_;
+    mutable std::mutex m_;
+    std::vector<int> extraTok_;
+};
 
 // ── The engine ──────────────────────────────────────────────────────────────────────────────────────────────────
 class BgRunner {
@@ -1234,6 +1299,10 @@ public:
         std::function<std::string()> ndbWhyNot;
         /** ★ The WEFAX VFOs' hourly log line's "hour" (DecoderHost::Env::wefaxHourSecs) — a test shortens it. */
         double wefaxHourSecs = 3600.0;
+        /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): what background decoding may use now — the shim's health tick
+         *  writes it; every VFO's host reads it (RTTY workers, Band cap and pause rule) and the slots take extras by it.
+         *  Null = today's budget throughout (the tests, a host without the policy). */
+        std::shared_ptr<fullcpu::Live> cpu;
     };
     BgRunner() = default;
     /** ★★★ beta94 THE SHUTDOWN ABORT (beta93 too; the Mac 11-25 15:27, every clean stop once background decoding had run —
@@ -1251,6 +1320,11 @@ public:
     void start(const Params& p) {
         stop(false);
         p_ = p;
+        // ★★★ beta94: background's own view of the slots — extras over the box's limit while nobody listens
+        bgSlots_.reset();
+        ladder_ = std::make_shared<digi::LoadLadder>();
+        { auto lg = p_.log; ladder_->setLog([lg](const std::string& l) { if (lg) lg("background decoding: " + l); }); }
+        if (p_.cpu && p_.slots) { bgSlots_.reset(new BgSlots(p_.slots, p_.cpu)); p_.slots = bgSlots_.get(); }
         if (!chan_ || chan_->fftSize() != p_.fftSize) { chan_.reset(new vibedsp::Channelizer(p_.fftSize)); fedIn_ = 0; }
         chans_.clear();
         installBandSpan();
@@ -1319,6 +1393,8 @@ public:
             DecoderHost::Env env;
             env.log = p_.log;
             env.slots = p_.slots;
+            env.bgCpu = p_.cpu;   // ★★★ beta94 nobody listening: RTTY workers, Band cap and pause rule follow it
+            env.bandLadder = ladder_;   // ★★★ beta94 one load ladder for every band: depth drops everywhere before a mode
             // ★★ a WEFAX VFO says what it heard every hour (the decoder's evidence — "no signal" vs "missed the start")
             if (c->vfo.dec == "wefax") { env.wefaxHourly = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + upperMode(c->vfo.mode) + ")"; env.wefaxHourSecs = p_.wefaxHourSecs; }
             // ★ A Band VFO's "dial" is its span's centre: the host sizes the slice and finds the band's extra slices by it.
@@ -1416,7 +1492,7 @@ public:
         }
         startedAt_ = std::time(nullptr);
         { std::lock_guard<std::mutex> ck(cpuMtx_); cpu_.clear(); }
-        easeTaken_.clear(); easeCpu_.clear(); gov_.reset(); easeExcused_.store(false); easePaused_.store(0); easeChips_.store(0);
+        easeTaken_.clear(); easeCpu_.clear(); gov_.reset(); easeExcused_.store(false); easePaused_.store(0); easeChips_.store(0); easeDepth_.store(false);
         easeExhaustedSaid_ = false; vfoCount_.store((int)chans_.size());   // ★ new channels, new counters: the CPU window starts again
         listenerOnFlag_->store(p_.listenerOn);
         startDecoders();
@@ -1476,7 +1552,8 @@ public:
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
         chans_.clear();
-        easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0);
+        easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0); easeDepth_.store(false);
+        if (ladder_) ladder_->forceMin(false);
         if (was && p_.registry) p_.registry->publish({});   // ★ beta94 only a stop that stopped something (see ~BgRunner)
         if (was && sayIt) say("background decoding stopped");
     }
@@ -1606,6 +1683,15 @@ public:
             k.kind = ease::Kind::Pause; k.tier = ease::tierOf(c->vfo.dec);
             cands.push_back(k);
         }
+        /* ★★★ beta94: the FIRST step for a listener — decode depth to the minimum on every band (the load ladder), before
+         *  any band loses its extra modes. Offered while a Band VFO decodes and the depth is not already forced. */
+        if (!ladder_->forced())
+            for (auto& c : chans_)
+                if (c->band && c->decoding && !c->eased && c->inWindow) {
+                    ease::Candidate k; k.vfo = c->index; k.kind = ease::Kind::Depth; k.tier = ease::kTierDepth; k.rank = 0;
+                    cands.push_back(k);
+                    break;
+                }
         bool canShed = false, canSafety = false;
         for (auto& k : cands) { if (k.tier == ease::kTierSafety) canSafety = true; else canShed = true; }
         ease::Signals sg;
@@ -1623,7 +1709,12 @@ public:
                 EaseStep st{ c.index, cands[(size_t)k].kind, costOf(c.index) };
                 char cost[96] = "";
                 if (st.costPct >= 0) std::snprintf(cost, sizeof cost, " (it was costing %.1f %% of one core)", st.costPct);
-                if (st.kind == ease::Kind::Chips) {
+                if (st.kind == ease::Kind::Depth) {
+                    ladder_->forceMin(true);
+                    st.costPct = -1;
+                    say("background decoding: eased for listeners, step " + n + " \xe2\x80\x94 decode depth to the minimum on every band"
+                        " (one pass, fewer candidates, stricter sync; all bands keep decoding) \xe2\x80\x94 " + gov_.why());
+                } else if (st.kind == ease::Kind::Chips) {
                     c.chipsOff->store(true);
                     say("background decoding: eased for listeners, step " + n + " \xe2\x80\x94 VFO " + name(c)
                         + ": its extra modes (CW, RTTY, wide PSK) off, FT8/FT4/WSPR carry on" + cost + " \xe2\x80\x94 " + gov_.why());
@@ -1639,6 +1730,10 @@ public:
         } else if (a == ease::Act::Restore && !easeTaken_.empty()) {
             const EaseStep st = easeTaken_.back();
             easeTaken_.pop_back();
+            if (st.kind == ease::Kind::Depth)
+                say("background decoding: eased step " + std::to_string(easeTaken_.size() + 1) + " given back \xe2\x80\x94 decode depth "
+                    "back to the ladder's own (" + std::string(digi::LoadLadder::name(ladder_->learnt())) + ") \xe2\x80\x94 " + gov_.why());
+            else
             say("background decoding: eased step " + std::to_string(easeTaken_.size() + 1) + " given back \xe2\x80\x94 VFO "
                 + name(*chans_[(size_t)st.vfo]) + (st.kind == ease::Kind::Chips ? ": its extra modes back on" : ": resuming") + " \xe2\x80\x94 " + gov_.why());
             undoEase(st);
@@ -1649,7 +1744,7 @@ public:
         }
         int paused = 0, chips = 0;
         for (auto& c : chans_) { if (c->eased) ++paused; if (c->chipsOff->load()) ++chips; }
-        easePaused_.store(paused); easeChips_.store(chips);
+        easePaused_.store(paused); easeChips_.store(chips); easeDepth_.store(ladder_->forced());
         const bool exh = p_.listenerOn && gov_.exhausted();
         if (exh && !easeExhaustedSaid_)
             say("background decoding: TOO HEAVY even eased \xe2\x80\x94 " + gov_.why() + "; nothing left to ease "
@@ -1664,12 +1759,16 @@ public:
     /** ★ The health card's line while eased, "" when not: "eased for listeners (3 of 9 paused)". Fixed words, no user text. */
     std::string easeNote() const {
         const int pz = easePaused_.load(), ch = easeChips_.load();
-        if (pz <= 0 && ch <= 0) return std::string();
+        const bool dp = easeDepth_.load();
+        if (pz <= 0 && ch <= 0 && !dp) return std::string();
         std::string t = "eased for listeners (";
+        if (dp) t += std::string("decode depth at the minimum") + (pz > 0 || ch > 0 ? ", " : "");
         if (pz > 0) t += std::to_string(pz) + " of " + std::to_string(vfoCount_.load()) + " paused";
         if (ch > 0) t += std::string(pz > 0 ? ", " : "") + "extra modes off on " + std::to_string(ch) + " band" + (ch == 1 ? "" : "s");
         return t + ")";
     }
+    /** ★ beta94 test seam: the profile's load ladder (every Band VFO's). */
+    std::shared_ptr<digi::LoadLadder> ladderForTest() const { return ladder_; }
     int easeStepsForTest() { std::lock_guard<std::mutex> sl(slotMtx_); return (int)easeTaken_.size(); }
     bool vfoEasedForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->eased; }
     bool chipsOffForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->chipsOff->load(); }
@@ -1736,6 +1835,14 @@ public:
         j += "],\"cpuPct\":" + pct(sumNow, sumBase);
         j += ",\"ease\":{\"paused\":" + std::to_string(easePaused_.load()) + ",\"chips\":" + std::to_string(easeChips_.load())
            + ",\"excused\":" + (easeExcused_.load() ? "true" : "false") + ",\"note\":\"" + gallery::jsonEsc(easeNote()) + "\"}";
+        // ★★★ beta94 the load ladder: how deep the Band VFOs decode now (0 full … 5 the minimum)
+        if (ladder_) j += ",\"depth\":" + std::to_string(ladder_->depth()) + ",\"depthName\":\"" + digi::LoadLadder::name(ladder_->depth()) + "\"";
+        // ★★★ beta94 nobody listening: what background decoding may use now (absent = today's budget)
+        if (p_.cpu && p_.cpu->full.load()) {
+            const int c = p_.cpu->cores.load();
+            j += ",\"fullCpu\":{\"cores\":" + std::to_string(c) + ",\"rttyWorkers\":" + std::to_string(p_.cpu->rttyWorkers.load())
+               + ",\"extraSlots\":" + std::to_string(p_.cpu->extraSlots.load()) + "}";
+        }
         return j + extra + "}";
     }
 
@@ -2095,6 +2202,11 @@ private:
             if (!low) break;
             pauseOne(*low, "a listener took this radio's last user slot"); changed = true;
         }
+        /* ★★★ beta94: a listener came (or the machine got hot) — slots this runner took OVER the box's limit while nobody
+         *  listened go back, the lowest VFO first, one a tick, until the box is within its limit again. */
+        if (bgSlots_ && !(p_.cpu && p_.cpu->full.load(std::memory_order_relaxed)) && bgSlots_->extraHeld() > 0 && bgSlots_->boxOver()) {
+            if (Chan* low = pausePick()) { pauseOne(*low, "background back to the normal budget"); changed = true; }
+        }
         // ★★ An NDB skimmer that may not run now (a listener's own NDB mode has the band; the owner switched NDB off): paused,
         //    said why — it resumes by the ordinary path once the reason is gone.
         std::string ndbWhy;
@@ -2137,6 +2249,7 @@ private:
     }
     /** ★ Give one eased step back. A paused VFO resumes by the ordinary path (slotTick, a slot permitting), promptly. */
     void undoEase(const EaseStep& st) {
+        if (st.kind == ease::Kind::Depth) { ladder_->forceMin(false); return; }
         if (st.vfo < 0 || (size_t)st.vfo >= chans_.size()) return;
         Chan& c = *chans_[(size_t)st.vfo];
         if (st.kind == ease::Kind::Chips) { c.chipsOff->store(false); return; }
@@ -2329,6 +2442,8 @@ private:
     std::atomic<bool> run_{false}, running_{false};
     std::chrono::steady_clock::time_point lastResume_{};
     std::mutex slotMtx_;
+    std::unique_ptr<BgSlots> bgSlots_;   // ★ beta94: p_.slots points here while p_.cpu is set
+    std::shared_ptr<digi::LoadLadder> ladder_ = std::make_shared<digi::LoadLadder>();   // ★ beta94: every Band VFO's
     std::mutex chanMtx_;   // ★ the worker's channel cut vs retarget()
     std::shared_ptr<std::atomic<bool>> listenerOnFlag_ = std::make_shared<std::atomic<bool>>(false);   // ★ the worker's slotTick and a test's slotTickForTest
     std::atomic<uint64_t> dropped_{0};
@@ -2348,6 +2463,7 @@ private:
     std::deque<EaseCpu> easeCpu_;         // ★ ≤ 12 samples (2 s apart, 20 s)
     std::atomic<bool> easeExcused_{false};
     std::atomic<int>  easePaused_{0}, easeChips_{0}, vfoCount_{0};
+    std::atomic<bool> easeDepth_{false};   // ★ beta94: the ladder forced to minimum depth for a listener
     bool easeExhaustedSaid_ = false;
 };
 

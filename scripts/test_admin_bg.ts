@@ -1,5 +1,5 @@
 // test_admin_bg.ts — the admin page's background-decoding line (web/client/src/adminBg.ts, V12 beta 4).
-import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines } from '../web/client/src/adminBg.ts';
+import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines, bgFullCpuText } from '../web/client/src/adminBg.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -97,6 +97,18 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   ok(pr.head.includes('ORBCOMM paused (priority;') && pr.rows.some((r) => r.startsWith('last: ORBCOMM monitoring, 3 h 4 min')), `the priority on an HF+: ${pr.head}`);
   const bl = satPassLines({ state: 'blocked', why: 'ADS-B is kept running on this radio when nobody is connected', meteor: true }, now)!;
   ok(bl.warn && bl.head === 'Unattended satellites \u00b7 cannot run \u2014 ADS-B is kept running on this radio when nobody is connected', `blocked, warned: ${bl.head}`);
+}
+// ★★★ beta94 nobody listening — background may use the whole machine
+{
+  ok(bgFullCpuText(undefined) === '' && bgFullCpuText({ cores: 0 }) === '', 'today\'s budget: nothing said');
+  ok(bgFullCpuText({ cores: 4, rttyWorkers: 4, extraSlots: 4 }) === 'nobody listening \u2014 using up to 4 cores (4 RTTY search workers, 4 extra decoder slots)', 'four cores');
+  ok(bgFullCpuText({ cores: 1, rttyWorkers: 2, extraSlots: 1 }) === 'nobody listening \u2014 using up to 1 core (2 RTTY search workers, 1 extra decoder slot)', 'one core, singular');
+  const f = bgLines({ ...run, runner: { ...run.runner, fullCpu: { cores: 2, rttyWorkers: 2, extraSlots: 2 } } })!;
+  ok(f.head.endsWith(' · nobody listening \u2014 using up to 2 cores (2 RTTY search workers, 2 extra decoder slots)') && !f.warn, `full head: ${f.head}`);
+  ok(!bgLines(run)!.head.includes('nobody listening'), 'absent on today\'s budget');
+  const dd = bgLines({ ...run, runner: { ...run.runner, depth: 3, depthName: 'one pass a slot' } })!;
+  ok(dd.head.endsWith(' · Band decode depth reduced (one pass a slot) — every band still decoding'), `depth: ${dd.head}`);
+  ok(!bgLines({ ...run, runner: { ...run.runner, depth: 0, depthName: 'full' } })!.head.includes('depth'), 'full depth: nothing said');
 }
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);

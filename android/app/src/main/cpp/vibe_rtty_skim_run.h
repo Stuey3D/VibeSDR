@@ -68,10 +68,26 @@ public:
         std::function<void(const rttysk::Spot&, double rfHz)> spot;
         std::function<void(uint64_t ns)> cpu;               ///< the workers' CPU, added to the host's (health)
         std::function<void(const std::string&)> log;        ///< ★ one line per signal set (which settings are on the air)
+        /** ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): how many search workers this run may use NOW — asked every
+         *  2 s of stream; more are started as needed (up to 8), and the ones above the figure stop taking jobs. Empty = the
+         *  constructor's figure for the whole run (a listener's skimmer). */
+        std::function<int()> workersNow;
+        bool background = false;                            ///< ★ background decoding's: its workers on the back seat
     };
     RttySkimRun(double widthHz, int workers, Out out) : width_(widthHz), out_(std::move(out)) {
         nWorkers_ = std::max(1, std::min(8, workers));
+        active_ = nWorkers_;
         for (int i = 0; i < nWorkers_; ++i) th_.emplace_back([this, i] { worker(i); });
+    }
+    /** ★ beta94: let `n` search workers take jobs (1…8). Threads are added, never removed mid-run: one above the figure
+     *  finishes the job in hand and then waits. Any thread. */
+    void setWorkers(int n) {
+        n = std::max(1, std::min(8, n));
+        std::lock_guard<std::mutex> lk(m_);
+        if (stop_ || n == active_) return;
+        while ((int)th_.size() < n) { const int i = (int)th_.size(); th_.emplace_back([this, i] { worker(i); }); }
+        active_ = n; nWorkers_ = n;
+        cv_.notify_all();
     }
     ~RttySkimRun() {
         { std::lock_guard<std::mutex> lk(m_); stop_ = true; } cv_.notify_all();
@@ -80,7 +96,7 @@ public:
     RttySkimRun(const RttySkimRun&) = delete;
     RttySkimRun& operator=(const RttySkimRun&) = delete;
 
-    int workers() const { return nWorkers_; }
+    int workers() const { std::lock_guard<std::mutex> lk(m_); return nWorkers_; }
 
     /** The segment's IQ: `rate` Hz, centred on `centreRfHz`. A different rate (or a jump of half the segment) rebuilds. */
     void feedIq(const cf32* x, int n, double rate, double centreRfHz) {
@@ -98,6 +114,10 @@ public:
         }
         centre_ = centreRfHz;
         sk_->feedIq(x, n);
+        if (out_.workersNow) {
+            const int64_t now = sk_->nowMs();
+            if (now - workersAt_ >= 2000 || workersAt_ == 0) { workersAt_ = now; setWorkers(out_.workersNow()); }
+        }
         after();
     }
     double searchedHz() const { return sk_ ? sk_->binsSearched() * sk_->binHz() : 0.0; }
@@ -110,7 +130,7 @@ private:
     void build() {
         rttysk::Skimmer::Config c;
         c.rate = rate_; c.loHz = -half(); c.hiHz = half();
-        c.workers = nWorkers_;
+        c.workers = std::max(1, nWorkers_);   // ★ > 0 = jobs go to the workers (how many take them is active_)
         // ★ THE CAP: RTTY at 170 Hz shift needs ≈ 400 Hz; 64 channels hold a busy contest's 96 kHz
         c.maxSignals = std::max(16, std::min(64, (int)(2.0 * half() / 400.0)));
         std::shared_ptr<rttysk::Skimmer> s(new rttysk::Skimmer(c));
@@ -124,19 +144,20 @@ private:
                           v.settings.c_str(), secs, firstTry ? "first try, 45 baud" : "full search");
             out_.log(b);
         };
-        s->onWork = [this] { { std::lock_guard<std::mutex> lk(m_); ++wake_; } cv_.notify_one(); };
+        // ★ notify_all: a worker above active_ (beta94 setWorkers) would swallow a notify_one and go back to sleep
+        s->onWork = [this] { { std::lock_guard<std::mutex> lk(m_); ++wake_; } cv_.notify_all(); };
         { std::lock_guard<std::mutex> lk(m_); sk_ = s; }   // ★ workers hold their own reference: the old one dies with its last job
         lastList_.clear(); pinned_.clear();
     }
     /** ★ A search worker: decoder priority, takes queued jobs from whichever engine is current. */
     void worker(int i) {
-        char name[16]; std::snprintf(name, sizeof name, "vibe-rttysk%d", i);
-        vibeDecoderThread(name);
+        char name[16]; std::snprintf(name, sizeof name, out_.background ? "vibe-bgrttysk%d" : "vibe-rttysk%d", i);
+        if (out_.background) vibeBackgroundThread(name); else vibeDecoderThread(name);
         for (;;) {
             std::shared_ptr<rttysk::Skimmer> s;
             {
                 std::unique_lock<std::mutex> lk(m_);
-                cv_.wait(lk, [&] { return stop_ || wake_ > 0; });
+                cv_.wait(lk, [&] { return stop_ || (wake_ > 0 && i < active_); });
                 if (stop_) return;
                 --wake_;
                 s = sk_;
@@ -205,7 +226,8 @@ private:
 
     double width_;
     Out out_;
-    int nWorkers_ = 1;
+    int nWorkers_ = 1, active_ = 1;   // ★ m_: threads started (th_.size()) ≥ active_ = those taking jobs
+    int64_t workersAt_ = 0;
     std::shared_ptr<rttysk::Skimmer> sk_;
     double rate_ = 0, centre_ = 0;
     std::unordered_map<int, double> pinned_;
@@ -214,7 +236,7 @@ private:
     uint8_t state_ = 255;
     unsigned long spots_ = 0;
     // workers
-    std::mutex m_;
+    mutable std::mutex m_;
     std::condition_variable cv_;
     bool stop_ = false;
     int wake_ = 0;

@@ -58,7 +58,7 @@ void Spotter::planSingle(double dialHz) {
     }
 }
 
-Spotter::~Spotter() = default;
+Spotter::~Spotter() { if (ladder_) ladder_->forget(this); }
 
 void Spotter::wire(Run& r) {
     ++made_;
@@ -83,7 +83,13 @@ void Spotter::wire(Run& r) {
     if (single) { r.eng->loaded = loaded_; return; }
     // ★ Band: the governor's depth OR the server's load — either says "one pass".
     auto light = r.light; auto ld = loaded_;
-    r.eng->loaded = [light, ld] { return light->load(std::memory_order_relaxed) || (ld && ld()); };
+    // ★ ladder_ is set before the first block (setLadder) and never changed after; wire() runs inside plan(), which may
+    //   hold statMtx_ already — so it is read here without the lock (taking it deadlocked test-bg-band)
+    std::shared_ptr<LoadLadder> lad = ladder_;
+    r.eng->loaded = [light, ld, lad] {
+        return light->load(std::memory_order_relaxed) || (ld && ld()) || (lad && lad->depth() >= LoadLadder::kOnePass);
+    };
+    if (lad) r.eng->depth = [lad] { return lad->depth(); };   // ★ beta94 the load ladder: FT8/FT4/FT2's finer steps
 }
 
 void Spotter::feedAudio48k(const float* x, int n, double captureUtc) {
@@ -287,7 +293,17 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     {
         std::lock_guard<std::mutex> lk(statMtx_);
         loadedNow_ = loaded_ ? loaded_() : false;
-        budget_.tick(captureUtc, skippedLocked(), unitsInUse());
+        /* ★★★ beta94 NOBODY LISTENING (setCpuView): the cap follows the cores background decoding may use now, and a
+         *  skip that does not count (headroom) is kept out of the governor's "too heavy" cut as well as the pause rule. */
+        const CpuView v = cpuView_ ? cpuView_() : CpuView();
+        const double sc = std::isfinite(v.scale) && v.scale >= 1.0 ? v.scale : 1.0;
+        if (sc != capScale_) { budget_.rescale(baseCap_ * sc, sc / capScale_); capScale_ = sc; }
+        const uint64_t skNow = skippedLocked();
+        // ★ beta94 the load ladder: a skip goes to depth first — the governor's own cut (which sheds modes) only at minimum
+        const bool skipCuts = v.skipCounts && (!ladder_ || ladder_->atMin());
+        if (!skipCuts && skNow > budgetSkipLast_) budgetSkipIgnored_ += skNow - budgetSkipLast_;
+        budgetSkipLast_ = skNow;
+        budget_.tick(captureUtc, skNow - std::min(skNow, budgetSkipIgnored_), unitsInUse());
         pauseTick(captureUtc);
     }
     S.endUtc = captureUtc; S.lastGated = gated;
@@ -401,7 +417,8 @@ RunState Spotter::ask(Run& who, bool wants) {
     // ★ beta91: what another spotter (the audio one, for the CW / RTTY / PSKW chips) has committed is not ours to spend
     double units = budget_.units();
     if (others_ && std::isfinite(units)) units = std::max(0.0, units - others_());
-    const std::vector<RunState> out = govern(in, units, loadedNow_);
+    // ★ beta94: the ladder at "one pass" or deeper = every mode light (the chips say "light")
+    const std::vector<RunState> out = govern(in, units, loadedNow_ || (ladder_ && ladder_->depth() >= LoadLadder::kOnePass));
     RunState mine = RunState::Idle;
     for (size_t i = 0; i < rs.size(); ++i) {
         Run& r = *rs[i];
@@ -607,18 +624,54 @@ void Spotter::pauseTick(double utc) {
             maxRank = std::max(maxRank, r.def->pauseRank);
             if (r.def->iq && r.gate && r.gate->st == Gate::Live) backlog = std::max(backlog, r.eng->backlogSec());
         }
-    if (maxRank == 0) { pauseLevel_ = 0; return; }
+    if (maxRank == 0 && !ladder_) { pauseLevel_ = 0; return; }
     const double ext = behind_ ? behind_() : 0.0;
     const double b = std::max(ext, backlog);
     const uint64_t sk = skippedHook_ ? skippedHook_() : skippedLocked();
-    const bool skipped = sk > pauseSkips_;
+    /* ★★★ beta94 NOBODY LISTENING (setCpuView, vibe_bg_fullcpu.h): with the machine's headroom a skipped slot does not
+     *  count (CW / RTTY run on threads of their own; pausing them frees nothing for the slow slotted engine), and a backlog
+     *  over the line must have lasted behindHoldSec. A listener's Band, or any listener on this radio: today's rule. */
+    const CpuView view = cpuView_ ? cpuView_() : CpuView();
+    const bool skippedRaw = sk > pauseSkips_;
+    const bool skipped = skippedRaw && view.skipCounts;
     pauseSkips_ = sk;
+    const bool overNow = b > kPauseBehindSec;
+    if (!overNow) overSince_ = NAN;
+    else if (!std::isfinite(overSince_)) overSince_ = utc;
+    const bool overLong = overNow && utc - overSince_ >= view.behindHoldSec - 1e-9;
+    if (skippedRaw && !view.skipCounts && pauseLevel_ < maxRank && log_ && utc - headroomSaidAt_ >= 600.0) {
+        headroomSaidAt_ = utc;
+        log_("Band: a slotted mode skipped a slot \xe2\x80\x94 the continuous modes carry on (nobody listening, the CPU has headroom)");
+    }
     auto names = [&](int rank) {
         std::string o;
         for (const ModeDef& m : modes_) if (m.pauseRank == rank) o += (o.empty() ? "" : "/") + m.name;
         return o;
     };
-    if ((b > kPauseBehindSec || skipped) && pauseLevel_ < maxRank) {
+    /* ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h): the slotted modes' periods SHED for budget count as behind too (the
+     *  governor's budget exceeded), and every "behind" goes to the ladder FIRST — depth drops a step, every band keeps
+     *  decoding. Only at the minimum depth does the pause rule below take a mode (CW, then RTTY, then wide PSK) — for this
+     *  spotter's own signals, or for another spotter's on the same ladder that has no continuous mode of its own to give. */
+    bool shedGrew = false;
+    if (ladder_) {
+        uint64_t sh = retiredShed_;
+        for (auto& kv : chans_) for (const Run& r : kv.second.runs) if (r.gate && r.def->pauseRank == 0) sh += r.gate->shedN;
+        shedGrew = sh > ladderShed_;
+        ladderShed_ = sh;
+    }
+    bool trigger = overLong || skipped || shedGrew;
+    if (ladder_) {
+        if (trigger) {
+            char why[96];
+            if (overLong) std::snprintf(why, sizeof why, "the decode is %.1f s behind the capture", b);
+            else if (skipped) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
+            else std::snprintf(why, sizeof why, "the decode budget was exceeded");
+            if (!ladder_->behind(utc, why)) { calmSince_ = NAN; return; }   // ★ a depth step (or one too recent to judge)
+        } else if (maxRank > 0 && pauseLevel_ < maxRank && ladder_->behindAtMin(utc)) {
+            trigger = true;   // ★ another spotter on the ladder is behind at minimum depth: our continuous modes go next
+        }
+    }
+    if (trigger && pauseLevel_ < maxRank) {
         calmSince_ = NAN;
         if (utc - pauseAt_ < kPauseStepSec) return;
         ++pauseLevel_; pauseAt_ = utc;
@@ -631,13 +684,17 @@ void Spotter::pauseTick(double utc) {
                 }
         if (log_) {
             char why[160];
-            if (skipped && !(b > kPauseBehindSec)) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
-            else std::snprintf(why, sizeof why, "the decode is %.1f s behind the capture", b);
-            log_("Band: " + names(pauseLevel_) + " paused \xe2\x80\x94 the CPU is behind (" + why + "); the slotted modes keep their slots");
+            if (overLong) std::snprintf(why, sizeof why, "the decode is %.1f s behind the capture", b);
+            else if (skipped) std::snprintf(why, sizeof why, "a slotted mode skipped a slot");
+            else std::snprintf(why, sizeof why, "still behind");
+            log_("Band: " + std::string(ladder_ ? "depth at minimum \xe2\x80\x94 " : "") + names(pauseLevel_)
+                 + " paused \xe2\x80\x94 the CPU is behind (" + why + "); the slotted modes keep their slots");
         }
         return;
     }
-    if (b > kPauseBehindSec || skipped) { calmSince_ = NAN; return; }
+    if (overNow || trigger) { calmSince_ = NAN; return; }
+    // ★ beta94: a calm second for the ladder — depth comes back only when nothing is paused anywhere on it
+    if (ladder_ && b < kResumeBehindSec) ladder_->calm(utc, this, pauseLevel_);
     if (pauseLevel_ == 0) return;
     if (b >= kResumeBehindSec) { calmSince_ = NAN; return; }
     if (!std::isfinite(calmSince_)) { calmSince_ = utc; return; }

@@ -1281,6 +1281,133 @@ int main(int argc, char** argv) {
         sk->n = 1;
         run2(2);
         ok(sp2.pauseLevel() == 1, "a slotted mode SKIPPED a slot (nothing queued): CW pauses so it gets the CPU back");
+
+        /* ★★★ beta94 NOBODY LISTENING (vibe_bg_fullcpu.h): the looser pause rule while the machine has headroom, and the
+         *  cut back the moment a listener joins — CW then RTTY, the slotted mode keeps its slots. */
+        std::printf("── ★★★ beta94: nobody listening — the pause rule loosens with headroom, tightens when a listener joins ──\n");
+        digi::Spotter::CpuView view; view.scale = 4; view.skipCounts = false; view.behindHoldSec = 10;
+        auto cs3 = std::make_shared<CountShared>();
+        auto sk3 = std::make_shared<SkipShared>();
+        digi::ModeDef sm3 = countingMode("FT8S", 14074000, "20m", 15, 10, 1, 1, cs3);
+        { auto mk = sm3.make; sm3.make = [mk, sk3] {
+            struct W : digi::Engine { std::unique_ptr<digi::Engine> in; std::shared_ptr<SkipShared> s;
+                void process(const float* a, int n, double u) override { in->process(a, n, u); }
+                uint64_t slotsSkipped() const override { return s->n.load(); } };
+            auto w = new W(); w->in = mk(); w->s = sk3; return std::unique_ptr<digi::Engine>(w); }; }
+        auto nCw3 = std::make_shared<std::atomic<uint64_t>>(0), nRt3 = std::make_shared<std::atomic<uint64_t>>(0);
+        std::vector<digi::ModeDef> ms3 = { sm3, iqMode("CWX", 1, 120, 14010000, 14030000, nCw3), iqMode("RTX", 2, 110, 14040000, 14050000, nRt3) };
+        digi::Spotter sp3(digi::Spotter::Scope::Band, ms3, nullptr, nullptr, nullptr);
+        double behind3 = 0; std::vector<std::string> logs3;
+        sp3.setBehind([&] { return behind3; });
+        sp3.setLog([&](const std::string& l) { logs3.push_back(l); });
+        sp3.setBudgetCap(2.0);
+        sp3.setCpuView([&] { return view; });
+        double t3 = 0;
+        auto run3 = [&](double secs) { for (double end = t3 + secs; t3 < end; t3 += 0.01) sp3.feedIq(z.data(), 960, rate, centre, utc0 + t3 + 0.01, nullptr, 0, 0, 0); };
+        auto st3 = [&](const char* m) { for (auto& x : sp3.status()) if (x.mode == m) return std::string(digi::stateWord(x.state)); return std::string("-"); };
+        run3(23);
+        ok(std::fabs(sp3.budgetUnits() - 8.0) < 1e-9, "nobody listening on 4 cores: the Band cap is 4 × the benchmark's (2 → " + std::to_string(sp3.budgetUnits()) + " units)");
+        sk3->n = 1; run3(3); sk3->n = 2; run3(3);
+        ok(sp3.pauseLevel() == 0 && st3("CWX") == "active" && st3("RTX") == "active",
+           "headroom: skipped slots pause NOTHING — CW and RTTY carry on (" + st3("CWX") + ", " + st3("RTX") + ")");
+        ok(std::fabs(sp3.budgetUnits() - 8.0) < 1e-9, "…and the skips do not cut the governor's budget either");
+        bool said3 = false; for (auto& l : logs3) if (l.find("the continuous modes carry on (nobody listening, the CPU has headroom)") != std::string::npos) said3 = true;
+        ok(said3, "the log says why nothing paused");
+        behind3 = 1.8; run3(6);
+        ok(sp3.pauseLevel() == 0, "a 6 s burst over the line (1.8 s behind): nothing pauses — it must last 10 s");
+        behind3 = 0; run3(2);
+        behind3 = 1.8; run3(11.5);
+        ok(sp3.pauseLevel() == 1 && st3("CWX") == "paused" && st3("RTX") == "active", "behind for over 10 s: CW pauses first (" + st3("CWX") + ")");
+        behind3 = 0; run3(70);
+        ok(sp3.pauseLevel() == 0, "caught up: resumed as before (30 s of calm)");
+        // ★ a listener joins: today's rule at once — the cap back to the benchmark's, a skip pauses CW, then RTTY
+        view = digi::Spotter::CpuView();
+        run3(1);
+        ok(sp3.budgetUnits() <= 2.0 + 1e-9, "a listener joined: the Band cap falls back to the benchmark's 2 units at once (" + std::to_string(sp3.budgetUnits()) + ")");
+        const uint64_t ft3 = cs3->total;
+        sk3->n = 3; run3(2);
+        ok(sp3.pauseLevel() == 1 && st3("CWX") == "paused" && st3("RTX") != "paused",
+           "a listener on: one skipped slot pauses CW FIRST, RTTY not yet paused (" + st3("CWX") + ", " + st3("RTX") + " — the governor's cut may shed it)");
+        run3(4); sk3->n = 4; run3(3);   // ★ the next skip after the 5 s step (one inside it is consumed — beta91's rule)
+        ok(sp3.pauseLevel() == 2 && st3("RTX") == "paused", "…another skip: then RTTY");
+        run3(16);
+        ok(cs3->total > ft3 && st3("FT8S") != "paused", "the slotted mode keeps its slots throughout");
+
+        /* ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h — Stuart: "the depth drops before dropping entire bands"). Two
+         *  spotters on ONE ladder, as a host builds them: the slotted mode in one, CW and RTTY in the other. */
+        std::printf("── ★★★ beta94: the LOAD LADDER — depth drops first (every band keeps decoding), then CW, then RTTY; back in reverse ──\n");
+        auto ladder = std::make_shared<digi::LoadLadder>();
+        std::vector<std::string> llog;
+        ladder->setLog([&](const std::string& l) { llog.push_back(l); });
+        auto cs4 = std::make_shared<CountShared>();
+        auto seenDepth = std::make_shared<std::atomic<int>>(0);   // ★ a bit per depth the engine was told
+        digi::ModeDef sm4 = countingMode("FT8S", 14074000, "20m", 15, 10, 1, 0.6, cs4);
+        { auto mk = sm4.make; sm4.make = [mk, seenDepth] {
+            struct W : digi::Engine { std::unique_ptr<digi::Engine> in; std::shared_ptr<std::atomic<int>> d;
+                void process(const float* a, int n, double u) override { in->loaded = loaded; in->process(a, n, u); d->fetch_or(1 << (depth ? depth() : 0)); } };
+            auto w = new W(); w->in = mk(); w->d = seenDepth; return std::unique_ptr<digi::Engine>(w); }; }
+        auto nCw4 = std::make_shared<std::atomic<uint64_t>>(0), nRt4 = std::make_shared<std::atomic<uint64_t>>(0);
+        digi::Spotter audio4(digi::Spotter::Scope::Band, { sm4 }, nullptr, nullptr, nullptr);
+        digi::Spotter iq4(digi::Spotter::Scope::Band, { iqMode("CWX", 1, 120, 14010000, 14030000, nCw4), iqMode("RTX", 2, 110, 14040000, 14050000, nRt4) },
+                          nullptr, nullptr, nullptr);
+        audio4.setLadder(ladder); iq4.setLadder(ladder);
+        double behind4 = 0;
+        iq4.setBehind([&] { return behind4; });
+        iq4.setSkipped([&] { return audio4.slotsSkipped(); });
+        std::vector<std::string> plog;
+        iq4.setLog([&](const std::string& l) { plog.push_back(l); });
+        double t4 = 0;
+        auto run4 = [&](double secs) { for (double end = t4 + secs; t4 < end; t4 += 0.01) {
+            audio4.feedIq(z.data(), 960, rate, centre, utc0 + t4 + 0.01, nullptr, 0, 0, 0);
+            iq4.feedIq(z.data(), 960, rate, centre, utc0 + t4 + 0.01, nullptr, 0, 0, 0); } };
+        auto st4 = [&](const char* m) { for (auto& x : iq4.status()) if (x.mode == m) return std::string(digi::stateWord(x.state)); return std::string("-"); };
+        int depthAtPause = -1;
+        iq4.setLog([&](const std::string& l) { plog.push_back(l); if (depthAtPause < 0 && l.find(" paused ") != std::string::npos) depthAtPause = ladder->depth(); });
+        run4(25);
+        ok(ladder->depth() == 0 && iq4.pauseLevel() == 0 && (seenDepth->load() & 1), "caught up: full depth, nothing paused");
+        behind4 = 3.0;
+        run4(2);
+        ok(ladder->depth() == 1 && iq4.pauseLevel() == 0 && st4("CWX") == "active", "★ behind: FIRST a depth step (no Dig deeper) — CW and RTTY carry on");
+        ok(!llog.empty() && llog.back().find("Band: CPU behind (the decode is 3.0 s behind the capture) \xe2\x80\x94 decode depth reduced to no Dig deeper (all bands keep decoding)") == 0,
+           "logged: " + (llog.empty() ? std::string() : llog.back()));
+        run4(15);
+        ok(ladder->depth() == 2 && iq4.pauseLevel() == 0, "15 s later, still behind: the next step (no OSD or a-priori passes), nothing paused");
+        run4(15);
+        ok(ladder->depth() == 3 && iq4.pauseLevel() == 0, "then one pass a slot — still nothing paused");
+        run4(15);
+        ok(ladder->depth() == 4 && iq4.pauseLevel() == 0 && st4("CWX") != "paused" && st4("RTX") != "paused",
+           "then fewer candidates — every mode still decoding (" + st4("CWX") + ", " + st4("RTX") + " — light from one pass a slot)");
+        run4(25);
+        ok(ladder->depth() == 5 && iq4.pauseLevel() == 2 && st4("CWX") == "paused" && st4("RTX") == "paused", "minimum depth, then CW, then RTTY paused");
+        ok(depthAtPause == 5, "★ the first pause came only at the MINIMUM depth (depth " + std::to_string(depthAtPause) + " when CW paused)");
+        bool depthSaid = false; for (auto& l : plog) if (l.find("Band: depth at minimum \xe2\x80\x94 CWX paused") == 0) depthSaid = true;
+        ok(depthSaid, "logged: Band: depth at minimum — CWX paused …");
+        const int seen = seenDepth->load();
+        ok((seen & (1 << 3)) && (seen & (1 << 5)) && cs4->light > 0, "the slotted engine was told each depth (3 … 5) and decoded LIGHT from one pass a slot");
+        const uint64_t ft4 = cs4->total;
+        run4(5);
+        ok(cs4->total > ft4, "the slotted mode keeps its slots");
+        // ★ calm: modes back first (RTTY, then CW), THEN depth step by step
+        behind4 = 0;
+        run4(33);
+        ok(iq4.pauseLevel() == 1 && ladder->depth() == 5, "★ calm 30 s: RTTY back first — depth still at the minimum");
+        run4(30);
+        ok(iq4.pauseLevel() == 0 && ladder->depth() >= 4, "another 30 s: CW back (depth " + std::to_string(ladder->depth()) + ")");
+        bool upSaid = false; for (auto& l : llog) if (l.find("Band: decode has caught up \xe2\x80\x94 depth back up to fewer candidates") == 0) upSaid = true;
+        run4(31);
+        for (auto& l : llog) if (l.find("Band: decode has caught up \xe2\x80\x94 depth back up to fewer candidates") == 0) upSaid = true;
+        ok(upSaid && ladder->depth() <= 4, "nothing paused and calm: depth comes back one step at a time (logged)");
+        seenDepth->store(0);
+        run4(30.5 * 4);
+        ok(ladder->depth() == 0, "…one step every 30 s of calm, back to full depth");
+        // ★ easing for a listener: the minimum at once, all modes still decoding; given back to the ladder's own figure
+        ladder->forceMin(true);
+        run4(2);
+        seenDepth->store(0);
+        run4(1);
+        ok(ladder->depth() == 5 && iq4.pauseLevel() == 0 && (seenDepth->load() & (1 << 5)), "forced to minimum (a listener's first easing step): every mode still decodes");
+        ladder->forceMin(false);
+        ok(ladder->depth() == 0, "given back: the ladder's own depth (full)");
     }
 
     std::printf("── ★ V12 beta91: ONE BUDGET — a weak box sheds the CW / RTTY / PSKW chips before it is overloaded ──\n");

@@ -87,6 +87,13 @@ static void order() {
     ok(pickNext(pics, false) == 1, "two WEFAX VFOs: the idle one before the one mid-chart (even though it ranks higher)");
     pics[1].busy = true;
     ok(pickNext(pics, false) == 1, "both mid-chart: the owner's lower row (VFO 2) goes first");
+    // ★★★ beta94 (Stuart: "the depth drops before dropping entire bands"): decode depth to the minimum comes FIRST
+    std::vector<Candidate> d = { { 0, Kind::Chips, kTierChips, 9000, 1, false }, { 2, Kind::Pause, kTierPictures, 0, 3, false },
+                                 { 0, Kind::Depth, kTierDepth, 0, 0, false } };
+    const int kd = pickNext(d, false);
+    ok(kd == 2 && d[(size_t)kd].kind == Kind::Depth, "★ beta94: the first easing step is decode depth to the minimum on every band — before any band's extra modes");
+    d.erase(d.begin() + 2);
+    ok(pickNext(d, false) == 0, "…then a band's extra modes, as before");
 }
 
 // ── the governor ─────────────────────────────────────────────────────────────────────────────────────────────────
