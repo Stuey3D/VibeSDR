@@ -820,6 +820,7 @@ var STORE_WIN=${storeWindows ? 'true' : 'false'};   // ★ beta90 the DIGI MODES
 function gridLL(g){
   if(!g)return null; g=String(g).trim().toUpperCase();
   if(!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g))return null;
+  if(g==='RR73')return null; // FT8's sign-off, not a square near the Pole (grid.ts gridToLatLon, same rule)
   var lon=(g.charCodeAt(0)-65)*20-180, lat=(g.charCodeAt(1)-65)*10-90;
   lon+=(g.charCodeAt(2)-48)*2; lat+=(g.charCodeAt(3)-48);
   if(g.length===6){lon+=(g.charCodeAt(4)-65)*(2/24)+(1/24);lat+=(g.charCodeAt(5)-65)*(1/24)+(0.5/24);}
