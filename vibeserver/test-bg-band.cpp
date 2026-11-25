@@ -744,6 +744,7 @@ static int replayReal(int argc, char** argv) {
     p.slots = &slots; p.store = &gs; p.stations = &st; p.lat = 52.29; p.lon = -0.85;
     p.profile.centreHz = centre;
     for (double v : vfos) p.profile.vfos.push_back(bg::Vfo{v, "usb", "spots-band"});
+    if (const char* e = std::getenv("VIBE_FT8_DEEP")) if (*e == '1') Ft8Decoder::deepTier().store(true);   // ★ "Dig deeper", as the Pi 500 runs
     if (std::getenv("VIBE_REPLAY_FULL")) {   // ★ the Pi 500's whole profile 1 (11-25): + 3 DSC, RTTY weather, WEFAX stations
         p.profile.vfos.push_back(bg::Vfo{4205800, "usb", "dsc"}); p.profile.vfos.push_back(bg::Vfo{6310300, "usb", "dsc"});
         p.profile.vfos.push_back(bg::Vfo{8412800, "usb", "dsc"}); p.profile.vfos.push_back(bg::Vfo{4582000, "usb", "rtty-weather"});
@@ -765,6 +766,8 @@ static int replayReal(int argc, char** argv) {
     const auto w0 = std::chrono::steady_clock::now();
     uint64_t produced = 0, phase = 0;
     std::mt19937 dropRng(5);
+    const bool nowStamp = std::getenv("VIBE_REPLAY_NOWSTAMP") != nullptr;
+    const int jitterMs = std::getenv("VIBE_REPLAY_JITTER") ? std::atoi(std::getenv("VIBE_REPLAY_JITTER")) : 0;
     const double base = utc0 + shift + (double)from / rate;
     for (size_t o = 0; o < x.size(); o += chunk) {
         const size_t k = std::min(chunk, x.size() - o);
@@ -783,9 +786,12 @@ static int replayReal(int argc, char** argv) {
         produced += up.size();
         const double utc = base + (double)produced / fs;
         std::this_thread::sleep_until(w0 + std::chrono::microseconds((long long)(1e6 * (double)produced / fs)));
+        // ★ VIBE_REPLAY_JITTER=<max ms>: the DSP thread late now and then (a stall of 100…max ms about every 2 s, then the
+        //   backlog fed at once) — with now-stamps this is what a busy box's feed looks like
+        if (jitterMs > 0 && dropRng() % 50 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(100 + (int)(dropRng() % (uint32_t)std::max(1, jitterMs - 100))));
         // ★ the Pi's "0.3–0.4 s of IQ dropped a minute": a chunk the DSP thread could not hand over (the worker held the queue)
-        if (busyDrop > 0 && dropRng() < busyDrop / 60.0 * (double)std::numeric_limits<uint32_t>::max()) { auto lk = r.holdQueueForTest(); r.feedIq(up.data(), (int)up.size(), utc); continue; }
-        r.feedIq(up.data(), (int)up.size(), utc);
+        if (busyDrop > 0 && dropRng() < busyDrop / 60.0 * (double)std::numeric_limits<uint32_t>::max()) { auto lk = r.holdQueueForTest(); r.feedIq(up.data(), (int)up.size(), nowStamp ? NAN : utc); continue; }
+        r.feedIq(up.data(), (int)up.size(), nowStamp ? NAN : utc);   // ★ VIBE_REPLAY_NOWSTAMP: stamped "now", as the shim does
     }
     std::this_thread::sleep_for(std::chrono::seconds(6));
     const std::string status = r.statusJson();
