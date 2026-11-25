@@ -176,19 +176,21 @@ export default function ServersChip({
 
   return (
     // Full-screen, box-none so only the chip / dropdown / catch-layer take touches.
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" onTouchStart={noteTouchInteraction}>
+    // ★★★ The open layer goes on THIS view, the one SDRScreen actually stacks — see TOP_MENU_LAYER.
+    <View style={[StyleSheet.absoluteFill, expanded && TOP_MENU_LAYER]} pointerEvents="box-none"
+          onTouchStart={noteTouchInteraction}>
       {/* Catch-layer: swallows the outside tap so dismissing never tunes/pans the
           waterfall, and carries a faint backdrop tint. Behind the dropdown. */}
       {expanded && (
         <Pressable /* nav-skip: the outside-tap catch layer */
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.18)' }, OPEN_LAYER]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.18)' }]}
           onPress={collapse}
           accessibilityRole="button"
           accessibilityLabel="Close server menu"
         />
       )}
 
-      <View ref={anchorRef} collapsable={false} style={[{ position: 'absolute', top, left }, expanded && OPEN_LAYER]}>
+      <View ref={anchorRef} collapsable={false} style={{ position: 'absolute', top, left }}>
         {!expanded ? (
           // ── Collapsed chip ──────────────────────────────────────────────────
           <Pressable
@@ -321,10 +323,20 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
 }
 
 /* ★★ OPEN, IT IS TOPMOST (Stuart, 2026-10-30: "when the servers chip is open it needs to be topmost" — it opened behind
- *  the DAB station strip on the Mac and the DAB box on the iPhone). Above every layer on the SDR screen (the highest there
- *  is 240); the backdrop sits with it, so a tap outside closes it rather than reaching a box. Closed, the chip keeps its
- *  ordinary place. */
-const OPEN_LAYER = { zIndex: 300, elevation: 300 } as const;
+ *  the DAB station strip on the Mac and the DAB box on the iPhone). Above every layer on the SDR screen; the backdrop
+ *  sits with it, so a tap outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place.
+ *
+ * ★★★ ON THE ROOT, NOT THE ROWS (Stuart, beta93, 2026-11-25: "I can't exit the server when DAB is running" — the menu
+ *  still opened UNDER the DAB box, BIG and SMALL). The 10-30 fix put zIndex 300 on the backdrop and the dropdown, which
+ *  are children of this component's full-screen root. zIndex (and Android's elevation) only orders a view among its
+ *  OWN SIBLINGS — so 300 lifted the menu above the chip's own backdrop and nothing else, while the root itself sat at
+ *  0, in render order, before the DAB / Advanced RDS / decoder boxes' RotateFade wrappers that SDRScreen draws after
+ *  it. The band now goes on the root while open: that is the view SDRScreen's root stacks against the boxes, the edge
+ *  tabs, the deck, the banners and the chat layer (300 / elevation 40).
+ *  9000 is above all of those and the crash card (PanelBoundary, 999), and BELOW the first-run tour (Coachmark, 9999),
+ *  the keyboard focus ring (ScreenNav, 9999) and the controller notice (PadNotice, 9600), which must still draw over
+ *  an open menu. scripts/check-servers-menu-layer.mjs holds it there. */
+export const TOP_MENU_LAYER = { zIndex: 9000, elevation: 9000 } as const;
 
 const styles = StyleSheet.create({
   chip: {
