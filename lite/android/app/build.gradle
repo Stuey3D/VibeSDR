@@ -56,7 +56,7 @@ android {
         buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'false'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
-        versionCode 119            // ★ V12 beta92 (118 = beta91, 117 = beta90, 116 = beta89, 115 = beta88, 114 = beta87, 113 = beta84 — beta85/86 were VibeServer only, 112 = beta83, 111 = beta81 — beta82 was VibeServer only, 110 = beta80, 109 = beta79, 108 = beta78, 107 = beta77, 106 = beta76, 105 = beta75, 104 = beta74, 103 = beta73, 102 = beta72, 101 = beta71, 100 = beta70, 99 = beta69, 98 = beta68, 97 = beta67, 96 = beta66, 95 = beta65, 94 = beta64, 93 = beta63, 92 = beta61, 91 = beta60): above V11 11.0.16's Lite 90 (one shared sequence, GitHub only)
+        versionCode 120            // ★ V12 beta93 (119 = beta92, 118 = beta91, 117 = beta90, 116 = beta89, 115 = beta88, 114 = beta87, 113 = beta84 — beta85/86 were VibeServer only, 112 = beta83, 111 = beta81 — beta82 was VibeServer only, 110 = beta80, 109 = beta79, 108 = beta78, 107 = beta77, 106 = beta76, 105 = beta75, 104 = beta74, 103 = beta73, 102 = beta72, 101 = beta71, 100 = beta70, 99 = beta69, 98 = beta68, 97 = beta67, 96 = beta66, 95 = beta65, 94 = beta64, 93 = beta63, 92 = beta61, 91 = beta60): above V11 11.0.16's Lite 90 (one shared sequence, GitHub only)
         versionName serverVersion + "-lite"
         ndk { abiFilters 'armeabi-v7a' }
         externalNativeBuild {
