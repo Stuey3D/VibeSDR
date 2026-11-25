@@ -58,6 +58,7 @@ import { popupPlate } from './PopupShell';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
 import type { HalfOpenSplit } from '../utils/duoGeometry';
+import { shellPlacement } from '../utils/decoderShellLayout';
 
 export type { DecoderTokens } from '../constants/decoderTokens';
 
@@ -184,21 +185,19 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
       clearRight = Math.max(clearRight, Math.ceil(avoid.windowW - r.x) + 8);
     }
   }
-  const sp = tall ? avoid.frame?.split : undefined;
-  if (sp) {
+  const place = shellPlacement(avoid, { tall, bottom, maxWidth, maxHeight, clearRight });
+  if (place.kind === 'split') {
     /* ★★★ HALF-OPEN BIG: two frames, NOTHING on the crease — the waterfall shows through the gap. The upper one is
      *  anchored just above the fold and grows up to the top (as tall as its content asks); the lower one sits on the
      *  bottom edge and grows up to the fold. Each is the full faceplate frame, so they read as one box in two halves. */
-    const wrapAt = (span: { top: number; bottom: number }) =>
-      [sh.wrap, { left: sp.x0, right: avoid.windowW - sp.x1, bottom: sp.windowH - span.bottom }, wrapStyle];
     return (<>
-      <Animated.View style={wrapAt(sp.upper)} pointerEvents="box-none">
-        <ShellFrame tall borderColor={borderColor} maxHeight={sp.upper.bottom - sp.upper.top}
+      <Animated.View style={[sh.wrap, place.upper.wrap, wrapStyle]} pointerEvents="box-none">
+        <ShellFrame tall borderColor={borderColor} maxHeight={place.upper.maxHeight}
                     onTouchStart={onTouchStart}>{children}</ShellFrame>
       </Animated.View>
       {lower != null && lower !== false && (
-        <Animated.View style={wrapAt(sp.lower)} pointerEvents="box-none">
-          <ShellFrame tall borderColor={borderColor} maxHeight={sp.lower.bottom - sp.lower.top}
+        <Animated.View style={[sh.wrap, place.lower.wrap, wrapStyle]} pointerEvents="box-none">
+          <ShellFrame tall borderColor={borderColor} maxHeight={place.lower.maxHeight}
                       onTouchStart={onTouchStart}>{lower}</ShellFrame>
         </Animated.View>
       )}
@@ -207,13 +206,10 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
   return (
     /* ★ box-none: the wrap spans the screen's width so it can centre the box; without this its
        empty sides ate taps meant for the waterfall on anything wider than the box. */
-    <Animated.View style={[sh.wrap, { bottom }, clearRight > 8 ? { right: clearRight } : null,
-                           avoid.frame ? { left: avoid.frame.left, right: avoid.frame.right, bottom: avoid.frame.bottom } : null,
-                           wrapStyle]} pointerEvents="box-none"
+    <Animated.View style={[sh.wrap, place.wrap, wrapStyle]} pointerEvents="box-none"
       onLayout={(e) => { const { y, height } = e.nativeEvent.layout; setRows((p) => (p && p.y === y && p.h === height ? p : { y, h: height })); }}>
       <ShellFrame tall={tall} borderColor={borderColor} onTouchStart={onTouchStart}
-                  maxWidth={avoid.frame ? undefined : maxWidth}
-                  maxHeight={avoid.frame ? Math.min(maxHeight ?? Infinity, avoid.frame.maxHeight) : maxHeight}>
+                  maxWidth={place.maxWidth} maxHeight={place.maxHeight}>
         {children}
       </ShellFrame>
     </Animated.View>
