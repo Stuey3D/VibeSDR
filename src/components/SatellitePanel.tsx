@@ -33,8 +33,8 @@ import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
 import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky plot
-import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
-         type OrbView } from '../services/orbcomm';
+import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFollowText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
+         type OrbFollow, type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrRowsSorted, xpdrWhat, XPDR_HINT, type XpdrRow, type XpdrStatus } from '../services/xpdr';
@@ -122,6 +122,9 @@ export interface SatellitePanelProps {
    *  under AUTO — carriers at most (0 = AUTO) — and its press (the app re-attaches with "max_carriers"); the server's sky
    *  plot read through `skyGet` (the gallery's reader) for THIS radio (`skyRadio`, '' = the server's only one). */
   orbcomm?: OrbView | null;
+  /** ★★★ beta94 THE BOX FOLLOWS THE DECODER (services/orbcomm.ts orbFollowChoice): the bird the box shows for an ORBCOMM pick
+   *  — the pick, or once its pass is over the bird the decoder hears now (else the next to rise). null = the pick. */
+  follow?: OrbFollow | null;
   /** ★★★ beta94 the transponder finder's rows for this pick (services/xpdr.ts) and LISTEN on a voice row (the app tunes
    *  VFO A there in USB and asks the finder to follow it). */
   xpdr?: XpdrStatus | null;
@@ -327,8 +330,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const credit = satCreditText(p.list, now), txc = satTxCreditText(p.list);
 
   const sel = p.picked ?? p.pending;
-  const sat = sel ? p.list?.sats.find((x) => x.norad === sel.norad) : undefined;
-  const tx = sel ? sat?.tx[sel.tx] : undefined;
+  /* ★★★ beta94 an ORBCOMM pick whose pass is over shows the bird its decoder hears now (else the next to rise): its name,
+   *  pass, half-globe and arrows, with no new pick — the state line says so */
+  const following = !!p.picked && !!p.follow && p.follow.why !== 'pick' && p.follow.norad !== p.picked.norad;
+  const folSat = following ? p.list?.sats.find((x) => x.norad === p.follow!.norad) : undefined;
+  const sat = folSat ?? (sel ? p.list?.sats.find((x) => x.norad === sel.norad) : undefined);
+  const tx = folSat ? folSat.tx.find((x) => x.decoder === 'orbcomm' || x.mode === 'orbcomm') ?? folSat.tx[0] : sel ? sat?.tx[sel.tx] : undefined;
   const confirmed = !!p.picked && !!tx;
   const mine = p.readout && p.readout.state !== 'OFF' && p.readout.norad === sat?.norad ? p.readout : null;
   // ★ the picture area only once a picture has started (or finished), and only BIG — never an empty black frame
@@ -397,7 +404,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   // the folded header still says the pick: "ISS · UP · 6:12 left"
   const selRow = sat ? rows.find((r) => r.sat.norad === sat.norad) : undefined;
   const headLine = minimised && sat ? (selRow ? `${sat.name} · ${satWhenText(selRow, now)}` : sat.name) : '';
-  const stateLine0 = [confirmed ? lockWord : '', decWord].filter(Boolean).join(' · ');
+  const stateLine0 = [folSat ? orbFollowText(p.follow, folSat.name) : confirmed ? lockWord : '', decWord].filter(Boolean).join(' · ');
   const stateLine = sw ? `VFO A · ${stateLine0 || tx?.label || ''}` : stateLine0;
   // ★ beta91 "In range for 4:12 · heading south" — from the pick's track (time order), only where certain
   const countdown = satCountdownText(sat, now, confirmed ? p.orbit : null);
