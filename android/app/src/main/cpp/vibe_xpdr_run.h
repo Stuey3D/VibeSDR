@@ -24,9 +24,24 @@
 //      wpm}], follow {id,src:"wait"|"guess"|"voice"|"cw"|"held",off (Hz from the dial)} while VFO A follows somebody.
 //    A client's LISTEN = tune the dial to the row's `dial` (USB) and send {"type":"xpdr_follow","id":"v3"} on the
 //    decoder socket; {"type":"xpdr_follow","id":""} stops following.
+//
+// ★★★ beta94 TRANSPONDER + TELEMETRY (Stuart 11-25 on JO-97 / AO-73: "the transponder and telemetry are close together so
+//    they can also be handled as one" · "allow the audio from the telemetry to also be listenable too"). When the span holds
+//    the bird's FUNcube telemetry ("tlm" — vibe_sat_engine.h linkXpdr), this run ALSO owns the FUNcube decoder
+//    (vibefc::Run) and feeds it the same turned IQ, aimed at the telemetry's satellite-frame place: sat_tlm per frame and
+//    fctlm_status once a second, exactly as a telemetry pick sends them (the SATELLITE box's telemetry line and CHARTS).
+//    ★ ITS TRIM IS ITS OWN: the engine takes a decoder's trim only on a telemetry lock, and on a transponder lock the
+//      lock's shift belongs to VFO A (the follow). So the decoder's drift follow (vibefc::TrimFollow) moves only where
+//      THIS run aims the decoder (slewed at kTlmTrimSlewHzS, as the engine would) — the lock, the slice and VFO A never
+//      feel it, and VFO A's follow never moves the decoder: the two cannot fight.
+//    ★ A carrier within kTlmNearHz of the telemetry is not a CW or VOICE row: it is the TELEMETRY row ("kind":"tlm",
+//      id "t1", "car" its carrier, satellite frame — measured by the decoder once frames decode). Its LISTEN puts the dial
+//      kTlmListenBelowHz BELOW the carrier in USB (the carrier heard at ~1.5 kHz) and VFO A follows the decoder's
+//      measurement ("src":"tlm"); a manual tune still wins. Decoding stays on the slice — listening never touches it.
 #pragma once
 
 #include "decoders/cw_skimmer.h"
+#include "vibe_fctlm.h"
 #include "vibe_xpdr.h"
 
 #include <algorithm>
@@ -53,6 +68,12 @@ public:
     static constexpr double kPendingSec = 10.0;     ///< a follow asked for whose tune never lands is forgotten
     static constexpr double kMeasuredSec = 1.5;     ///< a measurement newer than this steers; older = held + the guess
     static constexpr double kFollowEverySec = 0.25; ///< the follow's target is renewed this often
+    // ★★★ beta94 the telemetry riding in the span
+    static constexpr double kTlmNearHz = 1500.0;        ///< a carrier this close to the telemetry IS the telemetry (no CW / VOICE row)
+    static constexpr double kTlmListenBelowHz = 1500.0; ///< LISTEN on the telemetry: the dial this far below its carrier (USB)
+    static constexpr double kTlmAfcHz = 4000.0;         ///< the decoder's hunt about the prediction (vibe_sat_engine.h kTlmAfcHz)
+    static constexpr double kTlmTrimClampHz = 4000.0;   ///< the run's own trim for the decoder: never beyond its hunt
+    static constexpr double kTlmTrimSlewHzS = 50.0;     ///< slewed as the engine slews a decoder's trim (kDecTrimSlewHzS)
 
     struct FollowLink {
         std::function<bool(double& nominal, bool& following, unsigned& seq)> state;   ///< the lock's (false = no passband lock)
@@ -69,8 +90,22 @@ public:
         std::function<double(double satHz)> dopplerHz;   ///< the model's Doppler at satHz now (0 = no lock: nothing turned out)
         FollowLink follow;
         std::function<void(const cw::Spot&, double rfHz)> spot;   ///< a CW callsign (the gallery's summary / PSK Reporter)
+        /** ★★★ beta94 the bird's FUNcube telemetry in the span (satellite frame, 0 = none) and where its frames go (the host's
+         *  sat_tlm / fctlm_status / gallery — vibefc::Run::Out; its trimNow / trimTo are this run's own, set here). */
+        double tlmHz = 0;
+        vibefc::Run::Out tlmOut;
     };
-    explicit Run(Opts o) : o_(std::move(o)) {}
+    explicit Run(Opts o) : o_(std::move(o)) {
+        if (o_.tlmHz > 0) {
+            vibebpsk::Rx::Cfg c;
+            c.afc = true; c.afcRangeHz = kTlmAfcHz;
+            vibefc::Run::Out out = o_.tlmOut;
+            // ★ the decoder's drift follow moves THIS run's aim only (never the lock — see the header)
+            out.trimNow = [this](double& applied, double& target) { applied = tlmTrim_; target = tlmTrimTarget_; return true; };
+            out.trimTo = [this](double target) { tlmTrimTarget_ = std::max(-kTlmTrimClampHz, std::min(kTlmTrimClampHz, target)); };
+            tlm_.reset(new vibefc::Run(c, false, std::move(out)));
+        }
+    }
 
     /** One IQ block from the host (decode thread): `rate`, centred on `centreRfHz` (the fixed slice, clamped into the capture). */
     void feedIq(const cf32* x, int n, double rate, double centreRfHz) {
@@ -80,7 +115,8 @@ public:
         const double aim = o_.centreHz + dop_;
         // ★ turn the block so the span's satellite-frame centre sits at 0 Hz (phase carried between blocks)
         const double d = aim - centreRfHz;
-        if (std::fabs(d) < rate * 0.45) {
+        const bool turned = std::fabs(d) < rate * 0.45;
+        if (turned) {
             if (mix_.size() < (size_t)n) mix_.resize((size_t)n);
             const double w = -2.0 * M_PI * d / rate;
             const std::complex<double> step(std::cos(w), std::sin(w));
@@ -97,6 +133,14 @@ public:
         sk_->feedIq(x, n);
         vf_->feed(x, n);
         if (tone_) tone_->feed(x, n);
+        if (tlm_) {
+            // ★★★ beta94 the telemetry: its own slewed trim, then the decoder aimed at its place in this (turned) stream —
+            //   turned, 0 Hz = the span's satellite-frame centre; not turned (no lock), 0 Hz = the slice's own centre
+            const double step = kTlmTrimSlewHzS * (double)n / rate;
+            tlmTrim_ += std::max(-step, std::min(step, tlmTrimTarget_ - tlmTrim_));
+            const double frame0 = turned ? o_.centreHz + dop_ : centreRfHz;
+            tlm_->feedIq(x, n, rate, frame0, o_.tlmHz + dop_ + tlmTrim_, 0.0);
+        }
         t_ += (double)n / rate;
         if (!firstLogged_ && o_.log) {
             firstLogged_ = true;
@@ -104,6 +148,7 @@ public:
             std::snprintf(b, sizeof b, "TRANSPONDER: IQ arriving \xe2\x80\x94 a %.0f kS/s slice, searching %.4f\xe2\x80\x93%.4f MHz (satellite frame), Doppler %+.0f Hz",
                           rate / 1000, (o_.centreHz + lo_) / 1e6, (o_.centreHz + hi_) / 1e6, dop_);
             o_.log(b);
+            if (tlm_) { std::snprintf(b, sizeof b, "TRANSPONDER: FUNcube telemetry at %.4f MHz decoded from the same slice", o_.tlmHz / 1e6); o_.log(b); }
         }
         if (t_ - followAt_ >= kFollowEverySec) { followAt_ = t_; followTick_(); }
         if (t_ - statusAt_ >= 1.0) { statusAt_ = t_; status_(); }
@@ -113,22 +158,33 @@ public:
         if (id.empty() || id.size() > 12) { stopFollow_("stopped"); return; }
         Row r;
         if (!rowOf_(id, r)) { stopFollow_("gone"); return; }
-        fid_ = id; fKind_ = r.voice ? 1 : 2;
+        fid_ = id; fKind_ = r.tlm ? 3 : r.voice ? 1 : 2;
         fPendingAt_ = t_; fActive_ = false;
-        fMeasSat_ = r.dialSat; fMeasT_ = wall_(); fMeasDrift_ = guessDrift_(r.dialSat);
+        fMeasSat_ = r.dialSat; fMeasT_ = wall_(); fMeasDrift_ = r.tlm ? 0.0 : guessDrift_(r.dialSat);
         fSrc_ = "wait";
-        if (!r.voice && sk_) { if (!tone_) tone_.reset(new ToneTracker(rate_, r.dialSat - o_.centreHz)); else tone_->reset(r.dialSat - o_.centreHz); }
+        if (!r.voice && !r.tlm && sk_) { if (!tone_) tone_.reset(new ToneTracker(rate_, r.dialSat - o_.centreHz)); else tone_->reset(r.dialSat - o_.centreHz); }
         else tone_.reset();
-        if (o_.log) o_.log("TRANSPONDER: LISTEN " + id + (r.voice ? " (voice)" : " (CW)"));
+        if (o_.log) o_.log("TRANSPONDER: LISTEN " + id + (r.tlm ? " (telemetry)" : r.voice ? " (voice)" : " (CW)"));
     }
     /** The last status JSON (tests). */
     const std::string& lastStatus() const { return last_; }
     int cwRows() const { return sk_ ? (int)sk_->signals(false).size() : 0; }
     int voiceRows() const { return vf_ ? (int)vf_->voices().size() : 0; }
+    /** ★★★ beta94 the telemetry decoder riding in the span (null = none) and its own trim (tests). */
+    const vibefc::Run* tlm() const { return tlm_.get(); }
+    double tlmTrim() const { return tlmTrim_; }
+    /** The telemetry's carrier, satellite frame: the listing + this run's trim, + the decoder's offset once frames decode. */
+    double tlmCarrierSat() const {
+        if (!tlm_) return 0.0;
+        double c = o_.tlmHz + tlmTrim_;
+        if (tlm_->locked() && std::isfinite(tlm_->rx().afcHz())) c += tlm_->rx().afcHz();
+        return c;
+    }
 
 private:
     struct Row {
-        std::string id; bool voice = false, on = false, beacon = false;
+        std::string id; bool voice = false, on = false, beacon = false, tlm = false;
+        double car = 0; unsigned long long frames = 0;
         double offset = 0, dialSat = 0, ago = 0; float snr = 0, wpm = 0;
         std::string call, text;
     };
@@ -156,7 +212,16 @@ private:
         std::vector<Row> v;
         if (!sk_ || !vf_) return v;
         const int64_t nowMs = sk_->nowMs();
+        // ★★★ beta94 the telemetry's carrier: anything this close to it is folded into ONE TELEMETRY row
+        const double tcar = tlmCarrierSat();
+        Row tr; tr.id = "t1"; tr.tlm = true; tr.ago = 1e9;
+        bool tseen = false;
+        auto fold = [&](bool on, double ago, float snr) {
+            tseen = true; tr.on = tr.on || on; tr.ago = std::min(tr.ago, ago); tr.snr = std::max(tr.snr, snr);
+        };
+        auto nearTlm = [&](double satHz) { return tlm_ && std::fabs(satHz - tcar) <= kTlmNearHz; };
         for (const auto& s : sk_->signals(true)) {
+            if (nearTlm(o_.centreHz + s.offsetHz)) { fold(s.active, std::max(0.0, (nowMs - s.lastMs) / 1000.0), s.snrDb); continue; }
             Row r; r.id = "c" + std::to_string(s.id); r.voice = false; r.on = s.active;
             r.offset = s.offsetHz; r.dialSat = o_.centreHz + s.offsetHz;
             if (tone_ && fid_ == r.id && tone_->measured()) r.dialSat = o_.centreHz + tone_->hz();
@@ -171,10 +236,20 @@ private:
             if (best) best->beacon = true;
         }
         for (const auto& s : vf_->voices()) {
+            if (nearTlm(o_.centreHz + s.centreHz) || nearTlm(o_.centreHz + s.carrierHz)) { fold(s.active, std::max(0.0, vf_->now() - s.lastT), s.snrDb); continue; }
             Row r; r.id = "v" + std::to_string(s.id); r.voice = true; r.on = s.active;
             r.offset = s.centreHz; r.dialSat = o_.centreHz + s.carrierHz;
             r.ago = std::max(0.0, vf_->now() - s.lastT); r.snr = s.snrDb;
             v.push_back(std::move(r));
+        }
+        if (tlm_) {
+            if (tlm_->locked()) fold(true, tlm_->sinceGoodSec(), (float)tlm_->rx().snrDb());
+            else if (tlm_->framer().good() > 0) fold(false, tlm_->sinceGoodSec(), 0.0f);
+            if (tseen) {
+                tr.car = tcar; tr.dialSat = tcar - kTlmListenBelowHz; tr.offset = tcar - o_.centreHz;
+                tr.frames = (unsigned long long)tlm_->framer().good();
+                v.push_back(std::move(tr));
+            }
         }
         return v;
     }
@@ -210,7 +285,11 @@ private:
         } else if (seq != fSeq_) { fActive_ = false; stopFollow_("the listener tuned"); return; }   // ★ a manual nudge always wins
         // the target: measured while they are heard; between overs the last measurement + the guessed drift since
         bool measured = false;
-        if (have && r.on) {
+        if (have && r.tlm) {
+            // ★★★ beta94 the telemetry is the SATELLITE's own transmitter: no uplink drift to guess — measured by the decoder
+            //   while frames decode, else held where it was last measured
+            if (tlm_ && tlm_->locked()) { fMeasSat_ = r.dialSat; fMeasT_ = wall_(); measured = true; fSrc_ = "tlm"; }
+        } else if (have && r.on) {
             if (r.voice) {
                 VoiceView_ vv;
                 if (voiceMeasured_(r.id, vv)) { fMeasSat_ = r.dialSat; fMeasT_ = wall_(); fMeasDrift_ = guessDrift_(r.dialSat); measured = true; fSrc_ = "voice"; }
@@ -219,7 +298,8 @@ private:
             }
         }
         double target = fMeasSat_;
-        if (!measured) {
+        if (!measured && fKind_ == 3) fSrc_ = "held";   // ★ the telemetry: no guess — where it was last measured
+        else if (!measured) {
             target = fMeasSat_ + (guessDrift_(fMeasSat_) - fMeasDrift_);
             if (fSrc_ != "guess") fSrc_ = "held";
         }
@@ -242,6 +322,7 @@ private:
         j += "\"slice\":{\"lo\":" + num_(rfC + lo_, 0) + ",\"hi\":" + num_(rfC + hi_, 0) + "}";
         j += ",\"span\":{\"lo\":" + num_(o_.spanLoHz, 0) + ",\"hi\":" + num_(o_.spanHiHz, 0) + "}";
         if (o_.beaconHz > 0) j += ",\"beacon\":" + num_(o_.beaconHz, 0);
+        if (tlm_) j += ",\"tlm\":" + num_(o_.tlmHz, 0);   // ★★★ beta94 the listed telemetry (satellite frame)
         j += ",\"dop\":" + num_(dop_, 1) + ",\"rows\":[";
         auto rows = rows_();
         // ★ bounded: the 40 freshest
@@ -251,11 +332,12 @@ private:
         for (const auto& r : rows) {
             if (!first) j += ',';
             first = false;
-            j += "{\"id\":\"" + r.id + "\",\"kind\":\"" + (r.voice ? "voice" : "cw") + "\",\"hz\":" + num_(rfC + (r.voice ? r.offset : r.dialSat - o_.centreHz), 0)
+            j += "{\"id\":\"" + r.id + "\",\"kind\":\"" + (r.tlm ? "tlm" : r.voice ? "voice" : "cw") + "\",\"hz\":" + num_(rfC + (r.voice || r.tlm ? r.offset : r.dialSat - o_.centreHz), 0)
                + ",\"dial\":" + num_(r.dialSat, 0) + ",\"snr\":" + num_(r.snr, 1) + ",\"ago\":" + num_(r.ago, 0)
                + ",\"on\":" + (r.on ? "true" : "false");
             if (r.beacon) j += ",\"beacon\":true";
-            if (!r.voice) {
+            if (r.tlm) j += ",\"car\":" + num_(r.car, 0) + ",\"frames\":" + std::to_string(r.frames);
+            else if (!r.voice) {
                 if (r.wpm > 0) j += ",\"wpm\":" + num_(r.wpm, 0);
                 if (!r.call.empty()) j += ",\"call\":\"" + r.call + "\"";
                 if (!r.text.empty()) j += ",\"text\":\"" + r.text + "\"";
@@ -273,6 +355,8 @@ private:
     std::unique_ptr<cw::Skimmer> sk_;
     std::unique_ptr<VoiceFinder> vf_;
     std::unique_ptr<ToneTracker> tone_;
+    std::unique_ptr<vibefc::Run> tlm_;          // ★★★ beta94 the telemetry riding in the span (null = none)
+    double tlmTrim_ = 0, tlmTrimTarget_ = 0;    //     its own trim (applied, target) — never the lock's
     std::vector<cf32> mix_;
     std::complex<double> mixPh_{1, 0};
     double rate_ = 0, lo_ = 0, hi_ = 0, dop_ = 0, t_ = 0, statusAt_ = 0, followAt_ = 0;

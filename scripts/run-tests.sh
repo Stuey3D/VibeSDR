@@ -2083,12 +2083,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     --write-clip: its beacon, G4ABC's CQ, an SSB voice) through the real server — rows, the beacon's pick opening the
 #     transponder, the slice turned by the lock's Doppler, LISTEN → VFO A follows, a manual tune ends it; then the web page.
 printf '\n\033[1m── Transponder finder (end to end: server, then the web client) ──\033[0m\n'
-if [ -x "$OUT/test-xpdr" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-xpdr" --write-clip "$OUT/xpdr-clip.u8" 2400000 435640000 12; then
-  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-server-xpdr.mjs; rc=$?
+#     ★★★ + TRANSPONDER + TELEMETRY (--write-clip-tlm: AO-73's FUNcube BPSK 700 Hz off its listing beside an SSB voice).
+if [ -x "$OUT/test-xpdr" ] && [ -n "${VIBESERVER_BIN:-}" ] && "$OUT/test-xpdr" --write-clip "$OUT/xpdr-clip.u8" 2400000 435640000 12 \
+   && "$OUT/test-xpdr" --write-clip-tlm "$OUT/xpdr-tlm-clip.u8" 2400000 145950000 145935700 145958000; then
+  VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" VIBE_XPDR_TLM_CLIP="$OUT/xpdr-tlm-clip.u8" node --max-old-space-size=512 scripts/test-server-xpdr.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_XPDR_CLIP="$OUT/xpdr-clip.u8" node --max-old-space-size=512 scripts/test-web-xpdr.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  rm -f "$OUT/xpdr-clip.u8"
+  rm -f "$OUT/xpdr-clip.u8" "$OUT/xpdr-tlm-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-xpdr build'; notrun=$((notrun+1))
 fi

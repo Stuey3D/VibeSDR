@@ -238,6 +238,9 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "lrpt") return "lrpt";      // ★ V12 METEOR-M LRPT: each pass's channels and composite as PNGs
     if (ext == "orbcomm") return "orbcomm"; // ★ V12 ORBCOMM: this radio's sky plot as a PNG at each pass's end
     if (ext == "fctlm") return "fctlm";    // ★ V12 beta90 FUNcube telemetry — beta91: a CSV per pass + the day's log (vibe_fctlm_gallery.h)
+    // ★★★ beta94 a transponder finder whose span holds the bird's FUNcube telemetry (JO-97, AO-73) decodes it too: the same
+    //   per-pass CSV and day's log as a telemetry pick (the finder's CW and voice rows are not kept)
+    if (ext == "xpdr") return msg.find("\"tlm\":") != std::string::npos ? "fctlm" : "";
     return "";
 }
 

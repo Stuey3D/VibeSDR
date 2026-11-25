@@ -7,6 +7,12 @@
 //      the beacon's CW row marked, G4ABC's CQ decoded; the slice covers the span.
 //   2. the lock: the BEACON's pick opens the transponder; the slice turned by the lock's Doppler; the voice in the satellite
 //      frame; LISTEN (tune + xpdr_follow) → VFO A follows (the lock carries "follow"); a manual tune ends it.
+//   3. ★★★ beta94 TRANSPONDER + TELEMETRY (Stuart 11-25, AO-73 / JO-97: "handled as one" · "the audio from the telemetry …
+//      listenable too") with VIBE_XPDR_TLM_CLIP (test-xpdr --write-clip-tlm: FUNcube BPSK 700 Hz above AO-73's 145.935 and
+//      an SSB voice at 145.958, no Doppler): picking the TELEMETRY opens the transponder's finder with "tlm"; frames decode
+//      (sat_tlm, fctlm_status) on the decoder socket while the voice is its own row; the BPSK is one TELEMETRY row; then
+//      with the lock (a place where AO-73 is far off and near its closest — little Doppler, little rate): LISTEN on the
+//      telemetry tunes 1.5 kHz below its carrier, VFO A follows it, a manual tune ends it.
 // Silent: no audio socket is opened.   VIBESERVER_BIN=… VIBE_XPDR_CLIP=… node scripts/test-server-xpdr.mjs
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -218,6 +224,109 @@ try {
       ok(await until(() => { const m = jsons(sp, 'sat').filter((x) => x.state === 'TRACK').slice(-1)[0]; return m && !m.follow; }, 3000), 'the lock has no follow any more');
       dx.close(); sp.close();
     } finally { S.stop(); }
+  }
+  // ── 3. transponder + telemetry (AO-73) ──
+  const TCLIP = process.env.VIBE_XPDR_TLM_CLIP || '';
+  if (!TCLIP || !fs.existsSync(TCLIP)) console.log('   (transponder + telemetry not run — set VIBE_XPDR_TLM_CLIP: test-xpdr --write-clip-tlm c.u8 2400000 145950000 145935700 145958000)');
+  else {
+    const tArgs = ['--hf', TCLIP, '--hf-centre', '145950000'];
+    const tlmRows = (d) => rowsOf(d).filter((x) => x.kind === 'tlm');
+    const nearTlm = (d) => rowsOf(d).filter((x) => x.kind !== 'tlm' && Math.abs(x.dial - 145935700) <= 1500);
+    {
+      console.log('── transponder + telemetry without the lock (AO-73, the clip\'s own frequencies) ──');
+      const S = await server('xptlm', { freq: 145950000, mode: 'usb', rtlArgs: tArgs });
+      try {
+        const sp = await sock(S, 'xptl00001');
+        sp.send({ type: 'sat_list' });
+        await until(() => !!lastOf(sp, 'sat_list'), 4000);
+        sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: false });   // ★ the TELEMETRY — it opens the transponder
+        ok(await until(() => lastPicked(sp)?.norad === 39444, 4000) && lastPicked(sp)?.tx === 0, `★ the telemetry's pick opened the transponder (tx ${lastPicked(sp)?.tx})`);
+        const p = lastPicked(sp);
+        ok(p?.decoder === 'xpdr' && p?.params?.tlm === 145935000 && p?.params?.lo === 145935000 && p?.params?.width > 50000,
+           `the finder carries the telemetry: ${JSON.stringify(p?.params)}`);
+        ok(!(p?.vfob || []).includes(1), 'the telemetry is not offered in VFO B (it is in the finder)');
+        const dx = ws(S.port, '/ws/dxcluster?user_session_id=xptl00001');
+        await until(() => dx.open, 3000); await sleep(300);
+        dx.send({ type: 'audio_extension_attach', extension_name: 'xpdr', ...p.params });
+        ok(await until(() => dx.txt.some((t) => t.includes('"audio_extension_attached"')), 3000), 'the decoder socket attached (joined)');
+        ok(/TRANSPONDER FINDER[^\n]*\+ FUNcube telemetry/.test(S.L()), 'the log: the finder + FUNcube telemetry');
+        ok(await until(() => jsons(dx, 'sat_tlm').length >= 2, 40000), `★ FUNcube frames decode from the finder's slice (${jsons(dx, 'sat_tlm').length} sat_tlm)`);
+        const fs1 = lastOf(dx, 'fctlm_status')?.data;
+        ok(fs1 && fs1.good >= 2 && fs1.failed === 0, `fctlm_status as a telemetry pick's (${JSON.stringify(fs1)})`);
+        const tl = jsons(dx, 'sat_tlm').slice(-1)[0]?.data;
+        ok(tl && /AO-73/.test(JSON.stringify(tl)), 'the frame names AO-73');
+        ok(await until(() => rowsOf(lastStatus(dx)).some((x) => x.kind === 'voice' && Math.abs(x.dial - 145958000) < 250), 20000), '★ the SSB voice is its own row (while frames decode)');
+        const d = lastStatus(dx);
+        ok(d?.tlm === 145935000, `xpdr_status carries the listed telemetry (${d?.tlm})`);
+        const t = tlmRows(d)[0];
+        ok(!!t && t.on && Math.abs(t.car - 145935700) < 80 && Math.abs(t.dial - (t.car - 1500)) < 2, `★ one TELEMETRY row on the carrier (${JSON.stringify(t)})`);
+        ok(nearTlm(d).length === 0, `no CW or VOICE row on the BPSK (${JSON.stringify(nearTlm(d))})`);
+        dx.close(); sp.close();
+      } finally { S.stop(); }
+    }
+    {
+      // ★ a place where AO-73 is at its closest now, ~14° to the side of its track: Doppler near 0, a small rate
+      let loc = '';
+      {
+        const S = await server('xptwhere');
+        try {
+          const sp = await sock(S, 'xptw00001');
+          sp.send({ type: 'sat_list' });
+          await until(() => !!lastOf(sp, 'sat_list'), 4000);
+          const a = lastOf(sp, 'sat_list')?.sats?.find((x) => x.norad === 39444);
+          await sleep(8000);
+          sp.txt.length = 0;
+          sp.send({ type: 'sat_list' });
+          await until(() => !!lastOf(sp, 'sat_list'), 4000);
+          const b = lastOf(sp, 'sat_list')?.sats?.find((x) => x.norad === 39444);
+          if (a && b && Number.isFinite(a.lat) && Number.isFinite(b.lat)) {
+            const k = Math.cos(b.lat * Math.PI / 180);
+            let dy = b.lat - a.lat, dx = (((b.lon - a.lon + 540) % 360) - 180) * k;
+            const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
+            const lat = Math.max(-75, Math.min(75, b.lat + 14 * dx)), lon = (((b.lon - 14 * dy / Math.max(0.2, k)) + 540) % 360) - 180;
+            loc = locator(lat, lon);
+          }
+          sp.close();
+        } finally { S.stop(); }
+      }
+      console.log(`── transponder + telemetry with the lock: LISTEN on the telemetry (${loc}) ──`);
+      const S = await server('xptlock', { loc, freq: 145950000, mode: 'usb', rtlArgs: tArgs });
+      try {
+        const sp = await sock(S, 'xptk00001');
+        sp.send({ type: 'sat_list' });
+        await until(() => !!lastOf(sp, 'sat_list'), 4000);
+        const ao = lastOf(sp, 'sat_list')?.sats?.find((x) => x.norad === 39444);
+        ok(ao && ao.el > 0, `AO-73 up here (el ${ao?.el})`);
+        sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: true });
+        ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && m.tx === 'Transponder'), 5000), 'TRACK on the transponder (the telemetry\'s pick)');
+        const p = lastPicked(sp);
+        const dx = ws(S.port, '/ws/dxcluster?user_session_id=xptk00001');
+        await until(() => dx.open, 3000); await sleep(300);
+        dx.send({ type: 'audio_extension_attach', extension_name: 'xpdr', ...p.params });
+        const tr0 = jsons(sp, 'sat').filter((m) => m.state === 'TRACK').slice(-1)[0];
+        console.log(`     the lock's Doppler ${tr0?.offset} Hz, rate ${tr0?.rate} Hz/s`);
+        ok(await until(() => jsons(dx, 'sat_tlm').length >= 1 && tlmRows(lastStatus(dx)).some((x) => x.frames > 0), 40000),
+           `★ frames decode with the lock (${jsons(dx, 'sat_tlm').length} sat_tlm) — a TELEMETRY row (${JSON.stringify(tlmRows(lastStatus(dx)))})`);
+        const ds = lastStatus(dx), t = tlmRows(ds)[0];
+        ok(t && Math.abs(t.car - (145935700 - ds.dop)) < 60 && Math.abs(t.hz - 145935700) < 60,
+           `its carrier in the satellite frame = the clip's RF − the Doppler (${t?.car} vs ${(145935700 - ds.dop).toFixed(0)}), its arrow on the RF (${t?.hz})`);
+        // LISTEN on the telemetry: the client tunes 1.5 kHz below its carrier (USB) and asks the finder to follow it
+        sp.send({ type: 'tune', frequency: Math.round(t.dial), mode: 'usb' });
+        await sleep(300);
+        dx.send({ type: 'xpdr_follow', id: t.id });
+        ok(await until(() => lastStatus(dx)?.follow?.src === 'tlm', 8000), `★ LISTEN on the telemetry: VFO A follows it, measured by the decoder (${JSON.stringify(lastStatus(dx)?.follow)})`);
+        ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && typeof m.follow === 'number'), 8000) || Math.abs(lastStatus(dx)?.follow?.off ?? 99) < 30,
+           `the lock carries the follow (${jsons(sp, 'sat').filter((m) => m.follow != null).slice(-1)[0]?.follow ?? 'none — the dial already on it'})`);
+        ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && Math.abs(m.nominal - Math.round(t.dial)) < 2), 3000),
+           `★ the lock stands with its dial 1.5 kHz below the telemetry (nominal ${jsons(sp, 'sat').filter((m) => m.state === 'TRACK').slice(-1)[0]?.nominal}, not clamped into the passband)`);
+        ok(!jsons(sp, 'sat').some((m) => m.state === 'OFF'), 'the lock never dropped');
+        const n1 = jsons(dx, 'sat_tlm').length;
+        ok(await until(() => jsons(dx, 'sat_tlm').length > n1, 15000), `★ listening never touches the decoding: frames go on (${jsons(dx, 'sat_tlm').length})`);
+        sp.send({ type: 'tune', frequency: 145960000, mode: 'usb' });
+        ok(await until(() => { const s = lastStatus(dx); return s && !s.follow; }, 4000), '★ a manual tune ends the telemetry\'s follow');
+        dx.close(); sp.close();
+      } finally { S.stop(); }
+    }
   }
 } catch (e) { console.log('   FAIL threw:', e?.stack || e); fail++; }
 console.log(`\n${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);

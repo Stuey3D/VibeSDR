@@ -1444,22 +1444,7 @@ private:
             if (num(msg, "afc_range", v) && v >= 100 && v <= (iq ? 4000 : 3000)) c.afcRangeHz = v;
             c.afc = msg.find("\"afc\":false") == std::string::npos;
             const bool inv = msg.find("\"invert\":true") != std::string::npos;
-            vibefc::Run::Out o;
-            o.json = [this](const std::string& j) { broadcastText(j); };
-            o.line = [this](const std::string& l) { if (DecoderTapPtr t = tap()) t->text(l + "\n"); };
-            o.satName = [s = session_]() {
-                const vibe::sat::DecoderView dv = vibe::sat::decoderView(s);
-                return dv.state.empty() ? std::string() : dv.satName.substr(0, 40);
-            };
-            o.unixNow = [] { return (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); };
-            // ★★ beta91 TELEMETRY CHARTS: each frame, parsed, to the gallery's per-pass CSV (the pass from the satellite lock)
-            o.record = [this](const vibefc::Decoded& d, const vibefc::TlmCtx& cx) { if (DecoderTapPtr t = tap()) t->satTlm(d, cx); };
-            o.pass = [s = session_](vibefc::TlmCtx& cx) {
-                const vibe::sat::DecoderView dv = vibe::sat::decoderView(s);
-                if (dv.state.empty()) return;
-                cx.aos = dv.aos; cx.los = dv.los;
-                if (dv.on) cx.elDeg = dv.elDeg;
-            };
+            vibefc::Run::Out o = fctlmOut_();
             // ★★★ beta92 DRIFT FOLLOW: this listener's lock (else the shared dial's), and only a telemetry downlink's
             //     (Engine::decoderTrim refuses any other) — a hand-started decoder on a voice lock steers nothing
             auto lockKey = [s = session_]() {
@@ -1785,6 +1770,30 @@ private:
      *  wide (the span + the whole Doppler swing), every CW signal skimmed and every voice found in it; xpdr_status once a
      *  second. The Doppler is turned out by the run from the satellite engine's model (this listener's lock, else the
      *  room's); VFO A's follow goes through the same lock (Engine::setFollow). */
+    /** ★★★ beta94 where a FUNcube decoder's frames go — a telemetry pick's fctlm and the transponder finder's telemetry
+     *  (vibe_xpdr_run.h) alike: sat_tlm per good frame and fctlm_status once a second to the decoder socket's peers, a
+     *  readable line and the CHARTS' per-pass CSV to the gallery, the pass from the satellite lock. No trim here: each
+     *  caller says what its decoder's drift follow may move. */
+    vibefc::Run::Out fctlmOut_() {
+        vibefc::Run::Out o;
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        o.line = [this](const std::string& l) { if (DecoderTapPtr t = tap()) t->text(l + "\n"); };
+        o.satName = [s = session_]() {
+            const vibe::sat::DecoderView dv = vibe::sat::decoderView(s);
+            return dv.state.empty() ? std::string() : dv.satName.substr(0, 40);
+        };
+        o.unixNow = [] { return (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); };
+        // ★★ beta91 TELEMETRY CHARTS: each frame, parsed, to the gallery's per-pass CSV (the pass from the satellite lock)
+        o.record = [this](const vibefc::Decoded& d, const vibefc::TlmCtx& cx) { if (DecoderTapPtr t = tap()) t->satTlm(d, cx); };
+        o.pass = [s = session_](vibefc::TlmCtx& cx) {
+            const vibe::sat::DecoderView dv = vibe::sat::decoderView(s);
+            if (dv.state.empty()) return;
+            cx.aos = dv.aos; cx.los = dv.los;
+            if (dv.on) cx.elDeg = dv.elDeg;
+        };
+        o.log = [this](const std::string& l) { log(l); };
+        return o;
+    }
     void buildXpdrLocked_(const std::string& msg) {
         vibexpdr::Run::Opts o;
         double w = 100000; num(msg, "width", w);
@@ -1797,6 +1806,11 @@ private:
         if (num(msg, "up", v) && v > 1e6) o.upHz = v;
         o.inverting = !(num(msg, "inv", v) && v == 0);
         o.usb = str(msg, "sb") != "lsb";
+        // ★★★ beta94 the bird's FUNcube telemetry inside the span: decoded from the same slice (sat_tlm, fctlm_status)
+        if (num(msg, "tlm", v) && v > 1e6 && (!(o.spanHiHz > o.spanLoHz) || (v >= o.spanLoHz - 3000 && v <= o.spanHiHz + 3000))) {
+            o.tlmHz = v;
+            o.tlmOut = fctlmOut_();
+        }
         if (!(o.centreHz > 0)) { o.centreHz = env_.dialHz ? env_.dialHz() : 0.0; }
         if (!(o.spanHiHz > o.spanLoHz)) { o.spanLoHz = o.centreHz - o.widthHz / 4; o.spanHiHz = o.centreHz + o.widthHz / 4; }
         iqFixed_.store(o.centreHz > 1e6 ? o.centreHz : 0.0, std::memory_order_relaxed);   // ★ the span's centre: the slice stays there
@@ -1828,7 +1842,8 @@ private:
         xpdr_.reset(new vibexpdr::Run(std::move(o)));
         cwWidth_.store(std::max(20000.0, std::min(400000.0, w)), std::memory_order_relaxed);
         if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
-        log("decoder attached: TRANSPONDER FINDER, a " + std::to_string((int)std::lround(w / 1000)) + " kHz slice centred " + std::to_string((long long)std::llround(cen)) + " Hz");
+        log("decoder attached: TRANSPONDER FINDER, a " + std::to_string((int)std::lround(w / 1000)) + " kHz slice centred " + std::to_string((long long)std::llround(cen)) + " Hz"
+            + (xpdr_->tlm() ? " + FUNcube telemetry" : ""));
     }
     /** ★★ V12 2026-11-24 ORBCOMM (vibe_orbcomm_run.h, docs/v12/ORBCOMM.md): an IQ slice of the dial ("width": one listed
      *  channel ± Doppler = 40 kHz, a listed band up to 640 kHz — vibe_sat_engine.h decoderOf), every ORBCOMM carrier in it

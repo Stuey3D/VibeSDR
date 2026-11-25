@@ -460,6 +460,10 @@ public:
         return b;
     }
     const Framer& framer() const { return fr_; }
+    /** ★★★ beta94 frames decoding (a good one in the last 10 s) — the transponder finder's TELEMETRY row (vibe_xpdr_run.h). */
+    bool locked() const { return fr_.good() > 0 && fr_.sinceGood() < 12000; }
+    /** Seconds since the last good frame (1200 symbols a second); a large figure before the first. */
+    double sinceGoodSec() const { return fr_.good() > 0 ? (double)fr_.sinceGood() / 1200.0 : 1e9; }
     const vibebpsk::Rx& rx() const { return rx_; }
     vibebpsk::Rx& rxMut() { return rx_; }
 private:

@@ -2,6 +2,9 @@
 //   The fake rtl_tcp replays VIBE_FCTLM_CLIP (vibeserver/test-fctlm --write-clip: two FUNcube frames at 145.935 700 MHz,
 //   0.7 kHz above AO-73's listed telemetry). The pick attaches fctlm with "iq":true; the host cuts the IQ slice and the
 //   decoder reads it — frames arrive, its offset is the signal's from the listing, and the listener's passband is the pick's.
+//   ★★★ beta94 AO-73's own telemetry now opens its transponder's finder (vibe_sat_engine.h linkXpdr — the finder decodes it
+//   too: scripts/test-server-xpdr.mjs), so here AO-73's transponder is taken out of the fixture: a bird with telemetry and
+//   NO transponder within reach keeps the telemetry-only pick, on IQ.
 // Silent: no audio socket is opened.   VIBESERVER_BIN=… VIBE_FCTLM_CLIP=… node scripts/test-server-fctlm-iq.mjs
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -74,6 +77,8 @@ function freshSats() {
   const iso = new Date(Date.now() - 3600e3).toISOString().replace('Z', '');
   const d = JSON.parse(fs.readFileSync(path.join(root, 'vibeserver/testdata-sat/sats-6digit-2026-11-19.json'), 'utf8'));
   for (const s of d.satellites) if (s.omm) s.omm.EPOCH = iso;
+  const ao = d.satellites.find((s) => s.norad === 39444);   // ★★★ beta94 telemetry only (see the header)
+  if (ao) ao.transmitters = ao.transmitters.filter((t) => t.consumer === 'fc-bpsk');
   for (const g of Object.keys(d.orbits)) d.orbits[g].fetched = new Date(Date.now() - 2 * 3600e3).toISOString();
   return JSON.stringify(d);
 }
@@ -128,7 +133,7 @@ try {
     const sp = await sock(S, 'fciq00001');
     sp.send({ type: 'sat_list' });
     await until(() => !!lastOf(sp, 'sat_list'), 4000);
-    sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: false });
+    sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 0, doppler: false });   // ★★★ beta94 the telemetry is AO-73's only downlink here
     ok(await until(() => lastPicked(sp)?.norad === 39444, 4000), 'AO-73 telemetry picked, Doppler off');
     const p = lastPicked(sp);
     ok(p?.decoder === 'fctlm' && p?.params?.iq === true, `the pick's decoder reads IQ ${JSON.stringify(p?.params)}`);

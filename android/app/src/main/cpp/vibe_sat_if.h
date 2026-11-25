@@ -51,7 +51,7 @@ inline double occupiedHz(const vibe::sat::Transmitter& t, std::string* what = nu
     // ★ 2026-11-24 ORBCOMM: the decoder's own slice (one channel ± its neighbours, or the band + the same margin)
     if (t.orbcomm()) { say("ORBCOMM"); return vibe::sat::kOrbMaxSliceHz; }   // ★ always the whole band's slice (decoderOf)
     // ★★★ beta94 the transponder finder's span: the passband AND its beacon (one slice — vibe_sat_engine.h linkXpdr)
-    if (t.xpdr()) { say("transponder + beacon"); return (t.xpdrHi - t.xpdrLo) + 3000.0; }
+    if (t.xpdr()) { say(t.tlmHz > 0 ? "transponder + telemetry" : "transponder + beacon"); return (t.xpdrHi - t.xpdrLo) + 3000.0; }   // ★★★ beta94 + its telemetry
     if (t.passband()) { say("transponder"); return (t.hiHz - t.hz) + 3000.0; }
     if (vibe::sat::beaconSkimmed(t)) { say("CW beacon (skimmed)"); return vibe::sat::kBeaconSkimHz; }
     if (t.consumer == "ax25-9600") { say("9600 packet"); return 25000.0; }
