@@ -1552,6 +1552,7 @@ public:
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); if (c->fax) { stopFax(*c); for (auto& sb : c->subs) sb->host->shutdown(); } }
         chans_.clear();
+        decodingNow_.store(0); degrading_.store(false);
         easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0); easeDepth_.store(false);
         if (ladder_) ladder_->forceMin(false);
         if (was && p_.registry) p_.registry->publish({});   // ★ beta94 only a stop that stopped something (see ~BgRunner)
@@ -1566,6 +1567,9 @@ public:
     size_t queuedForTest() { std::lock_guard<std::mutex> lk(qm_); return qSamples_; }
     int  decodersRunning() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     uint64_t droppedSamples() const { return dropped_.load(); }
+    /** ★ beta94: VFOs decoding as of the last publish (≤ 0.5 s old) — LOCK-FREE, for the health tick on another thread
+     *  (decodersRunning() walks chans_, which stop() clears). 0 when stopped. */
+    int decodingNow() const { return running_.load() ? decodingNow_.load() : 0; }
     uint64_t fedSamples() const { uint64_t n = 0; for (auto& c : chans_) if (c->host) n += c->host->fedSamples(); return n; }
 
     /** ★ THE DSP THREAD'S WHOLE COST: a copy into a bounded queue. Never waits; past half a second the oldest goes. */
@@ -1752,10 +1756,16 @@ public:
                              : "(every background VFO is paused or eased)"));
         easeExhaustedSaid_ = exh;
         easeExcused_.store(p_.listenerOn && !exh);
+        degrading_.store(p_.listenerOn && gov_.listenerHarm());   // ★ beta94: the pill's only case (ease::PillWatch)
         publish();
     }
     /** ★ For the health card: a listener is on and background decoding's drops are the planned give-way (not a fault). */
     bool dropsExcused() const { return easeExcused_.load(); }
+    /** ★★ beta94: a listener on and THEIR receiver falling behind (their IQ dropped, or their queue past 60 % twice in 10 s)
+     *  while background decoding runs — its load is what they feel (sluggish, audio breaking up) until the easing has
+     *  shed enough. The health pill's only reason to mention it (vibe_bg_ease.h PillWatch). */
+    bool degradingListener() const { return running_.load() && degrading_.load(); }
+
     /** ★ The health card's line while eased, "" when not: "eased for listeners (3 of 9 paused)". Fixed words, no user text. */
     std::string easeNote() const {
         const int pz = easePaused_.load(), ch = easeChips_.load();
@@ -2170,6 +2180,7 @@ private:
         return std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + " " + (d ? d->label : "?") + ")";
     }
     void publish() {
+        { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; decodingNow_.store(n); }   // ★ the health tick's lock-free read
         if (!p_.registry) return;
         std::vector<BgRegistry::Pub> v;
         // ★ out of the window (or switched off here) = not waiting; nor is a VFO EASED for a listener (vibe_bg_ease.h) — it
@@ -2435,6 +2446,8 @@ private:
     std::mutex heldM_;                       // ★ b94: the DSP thread's side of the hand-over (feedIq; start/stop clear it)
     std::deque<QItem> held_;
     size_t heldSamples_ = 0;
+    std::atomic<int> decodingNow_{0};
+    std::atomic<bool> degrading_{false};
     std::deque<QItem> q_;
     size_t qSamples_ = 0;
     size_t gapSamples_ = 0;               // ★ dropped since the worker last took a chunk (bridged for Band VFOs)

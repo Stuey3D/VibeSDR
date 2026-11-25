@@ -25,6 +25,9 @@ ok(l.rows[3] === 'channels (one FFT for every VFO) \u00b7 0.8 %', 'the shared FF
 const lis = bgLines({ ...run, state: 'listener' })!;
 ok(lis.head.includes('carrying on with a listener on \u00b7 1 of 3 VFOs running'), 'carrying on with a listener');
 ok(bgLines({ state: 'paused', profiles: 1, profile: 1 })!.head.includes('paused \u2014 a listener is on'), 'paused for a listener');
+// ★ beta94 (the Lenovo, 11-25): the reason it is idle is said here — the health pill says nothing about it
+ok(bgLines({ state: 'paused', why: 'a listener has the radio on a satellite pass', profiles: 1, profile: 1 })!.head
+   === 'Background decoding \u00b7 profile 1 \u00b7 idle \u2014 a listener has the radio on a satellite pass', 'idle: a satellite pass, said why');
 ok(bgLines({ ...run, runner: { ...run.runner, cpuPct: null } })!.head.endsWith('measuring\u2026'), 'no CPU yet → measuring…');
 ok(bgVfoLine({ hz: 490000, dec: 'navtex', label: 'NAVTEX', state: 'running', last: 0 }).includes('nothing yet'), 'nothing decoded yet');
 ok(bgVfoLine({ hz: 1840000, dec: 'ft8', label: 'FT8', state: 'running', spots: 142, countries: 23, cpuPct: 0.9 })

@@ -163,7 +163,8 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
     // ★ an ISM profile this radio cannot run now (ISM blocked, the rate, the band out of its allowed ranges …)
     case 'blocked':  head = `${p}${bg.ism ? ` (ISM ${bg.ism.name})` : ''} cannot run — ${bg.why || 'not on this radio now'}`
                           + (bg.retryIn ? ` · tried again in ${bgDuration(bg.retryIn)}` : ''); warn = true; break;
-    case 'paused':   head = `${p} · paused — a listener is on`; break;
+    // ★ beta94: the server says WHY (a satellite pass, tuned away from its bands) — here only, never on the health pill
+    case 'paused':   head = bg.why ? `${p} · idle — ${bg.why}` : `${p} · paused — a listener is on`; break;
     case 'waiting':
       head = bg.locked ? `${p} · starting`
            : `${p} starts in ${bgDuration(bg.startsIn ?? 0)} unless somebody arrives`

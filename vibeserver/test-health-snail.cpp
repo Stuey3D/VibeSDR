@@ -281,6 +281,17 @@ int main() {
         ok(w.behind(66000).empty(), "a count that goes down is a restart, not a drop");
         w.note("dec:a", "RTTY", 20, 68000); w.note("dec:b", "RTTY", 0, 68000); w.note("dec:b", "RTTY", 5, 70000);
         ok(w.behind(70000).size() == 1, "two listeners on the same decoder: named once");
+        /* ★★★ beta94 (the Lenovo, the Sony 11-25): a decoder that STOPS is forgotten at once — not held for the rest of
+         *  its minute. "Digital spots / skimmer slice" and "Background decoding" stayed TOO HEAVY after they had stopped. */
+        {
+            vibehealth::BehindWatch s;
+            s.note("bandtap", "Digital spots / skimmer slice (radio-rate tap)", 0, 0);
+            s.note("bandtap", "Digital spots / skimmer slice (radio-rate tap)", 40, 2000);
+            ok(s.behind(2000).size() == 1, "a running tap that dropped is named");
+            ok(s.behind(4000).empty(), "the tick it is not fed (stopped): its name goes AT ONCE, no minute's hold");
+            s.note("bandtap", "Digital spots / skimmer slice (radio-rate tap)", 40, 6000);
+            ok(s.behind(6000).empty(), "started again with the same count: a fresh baseline, not a drop");
+        }
         vibehealth::Health h; h.behind = {"ADS-B", "RTTY"};
         const std::string j = vibehealth::json(h);
         ok(j.find("\"behind\":[\"ADS-B\",\"RTTY\"]") != std::string::npos, "the health message carries the names");

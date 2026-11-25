@@ -147,7 +147,7 @@ flags_for() {
     test-vfo-dc)           echo "-O2" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
     # ★★ …and the RTTY skimmer (V12 2026-11-14, test-rtty-skimmer): the engine and "rttyskim" through a DecoderHost.
-    test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-band|test-bg-skim|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
+    test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-heavy|test-bg-band|test-bg-skim|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ V12 2026-10-27: …and the NDB skimmer as a background VFO, beside NAVTEX on one capture (ndb_synth.h's beacons)
     test-bg-ndb)           echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib -I tools/ndb-bench -lpthread" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
@@ -417,7 +417,7 @@ deps_for() {
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
     # ★ V12 2026-10-27: test-bg-ndb — the same, plus the NDB skimmer (the background NDB skimmer VFO, vibe_bgdecode_ndb.h)
-    test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-heavy|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
@@ -563,7 +563,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-dec-dump|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer|test-shared-decoders)
+    test-decoder-hosts|test-dec-dump|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-lrpt-geo|test-fctlm-gallery|test-bg-priority|test-bg-heavy|test-bg-band|test-bg-skim|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer|test-shared-decoders)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
