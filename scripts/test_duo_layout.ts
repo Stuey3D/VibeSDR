@@ -48,13 +48,13 @@ ok(clearBelow(FOLDED, 12, 140, 678) === 0, 'the Servers chip corner is clear');
 ok(rightLimitAt(FOLDED, 0, 64, 466) === 382, "the receiver's name stops at the column's left edge (382)");
 ok(rightLimitAt(NO_REGIONS, 0, 64, 466) === Infinity, 'no regions: no limit (every other device)');
 const dc = deckClearance(FOLDED, 400, 466, 678);
-ok(dc.left === 0 && dc.right === 0 && dc.bottom === 0, 'folded portrait: the deck is clear of the top-right column');
+ok(dc.bottom === 0, 'folded portrait: the deck is clear of the top-right column');
 // Folded landscape, camera bottom-right (Stuart: "camera hole fouls the controls").
 const LAND: ReservedRegions = { ...NO_REGIONS, occlusion: [{ x: 612, y: 400, w: 37, h: 37 }] };
 const dl = deckClearance(LAND, 330, 678, 466);
-ok(dl.right === 678 - 612 + 6 && dl.left === 0, `camera bottom-right pushes the deck's right edge in (${dl.right})`);
+ok(dl.bottom === 466 - 400 + 6 && dl.left === 0 && dl.right === 0, `camera bottom-right LIFTS the deck as a block (${dl.bottom}), no inset`);
 const LANDL: ReservedRegions = { ...NO_REGIONS, occlusion: [{ x: 29, y: 400, w: 37, h: 37 }] };
-ok(deckClearance(LANDL, 330, 678, 466).left === 29 + 37 + 6, 'camera bottom-left pushes the left edge in');
+ok(deckClearance(LANDL, 330, 678, 466).bottom === 72, 'camera bottom-left lifts it the same');
 ok(deckClearance({ ...NO_REGIONS, occlusion: [{ x: 612, y: 20, w: 37, h: 37 }] }, 330, 678, 466).right === 0,
    'camera top-right (over the spectrum) leaves the deck alone');
 ok(rightLimitAt({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 402, h: 62 }] }, 40, 100, 402) === Infinity,

@@ -10117,8 +10117,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [onDeckFrame]);
   const deckReach = useDeckReach(frontScreen, onDeckMoving);
   /* ★★ THE DECK KEEPS CLEAR OF THE CAMERA AND THE STATUS PILL (Stuart, Duo folded landscape: "camera hole fouls the
-   *  controls"). Any system rect in the deck's rows pushes that side of the deck in (or lifts it, if it spans the
-   *  middle). The camera may sit over the spectrum or the waterfall, never over a control or a readout. */
+   *  controls … simply shift the controls upwards"). Any system rect in the deck's rows lifts the whole deck, as a
+   *  block, to sit just above it. The camera may sit over the spectrum or the waterfall, never a control or readout. */
   const deckClear = deckClearance(reserved, pillY != null && pillY > 0 ? pillY : screenH * 0.5, screenW, screenH);
   const deckReachShift = Math.round(screenW * REACH_SHARE);
   const deckOcclusion = useMemo(() => (
