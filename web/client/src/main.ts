@@ -37,7 +37,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
-import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
+import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
@@ -2400,8 +2400,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *     though its polarity were inverted. The button now reads exactly what it writes. */
       // ★ Paint the chip from STATE, so it is right on arrival and after a reload — not only after
       //   the loop happens to move while you are watching.
-      {
+      if (ismChipOwns()) ismChipPaint();   // ★ beta94 ISM's own gain rule holds the radio — its chip, not a blank
+      else {
         const chip = $('ovlChip');
+        delete chip.dataset.ism;
         const dB = (hwGainNow / 10).toFixed(1);
         const pk = pkText();
         if (hwDsActive) {
@@ -2529,6 +2531,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onOverload: (steps: number, dir: number, gainTenthDb: number, agc: boolean,
                  adcPeak?: number) => {
       if (hwDsActive) return;   // ★ no gain to move in direct sampling — the server has stood the loop down
+      if (ismChipOwns()) return;   // ★ beta94 ISM's chip (its own gain rule; VibeAGC is off)
       const chip = $('ovlChip');
       const dB = (gainTenthDb / 10).toFixed(1);
       const pk = pkText();
@@ -2546,6 +2549,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       chip.classList.toggle('easing', dir > 0);
       chip.classList.add('set');
       ovlClearTimer = window.setTimeout(() => {
+        if (ismChipOwns()) return;   // ★ beta94 ISM came on meanwhile: the chip is ISM's
         // ★ hwAgcOn, NOT the captured `agc` — see its declaration.
         // ★ And hwDsActive, read live: a crossover inside the 4 s must not be painted over with a gain.
         if (hwDsActive) {
@@ -2660,7 +2664,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  ★ Only the MAIN-SCREEN chip is suppressed. `rspOverload` in the gain panel below keeps
        *    showing it: an owner looking at the gain controls wants the unvarnished state, and that
        *    is the one place where acting on it makes sense. */
-      $('ovlChip').classList.toggle('set', overload && !rspInit);
+      if (!ismChipOwns()) $('ovlChip').classList.toggle('set', overload && !rspInit);   // ★ beta94 not over ISM's chip
       // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
       // dongle where it has to be guessed from the spectrum.
       $<HTMLElement>('rspOverload').hidden = !overload;
@@ -2855,6 +2859,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *     correction, which is the moment Stuart screenshotted.
        *  ★ Only while the loop owns the gain and is settled — mid-move the chip is saying which
        *    way it is going, and that is the more urgent message. */
+      if (ismChipOwns()) return;   // ★ beta94 ISM's chip says ISM's own peak
       if (!hwAgcOn || hwGainNow < 0) return;
       const chip = $('ovlChip');
       if (!chip.classList.contains('easing')) return;   // a move is being announced; leave it
@@ -9739,7 +9744,8 @@ function ismUiOn() {
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
   if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (id) => ismPickBand(id), (key) => ismMapOpen(key), () => myPos(),
-                                   () => ({ bands: ismCap?.bands ?? [], current: ismCap?.bands[ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport)]?.id ?? '' }));
+                                   () => ({ bands: ismCap?.bands ?? [], current: ismCap?.bands[ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport)]?.id ?? '' }),
+                                   () => adminUnlocked, (id) => void ismClipDownload(id));
   ismBox.show();
   ismLockControls(true);
   if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
@@ -9749,6 +9755,7 @@ function ismUiOff() {
   ismOn = false; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   ismReport = null;
+  ismChipClear();   // ★ beta94 the ISM AUTO chip goes with the mode; hwinfo repaints the ordinary one
   ismHopReset();   // ★ V12: a burst still settling goes with the mode — never a band sent after it
   if (spec) spec.ismHeld = false;
   ismBox?.hide();
@@ -9862,12 +9869,54 @@ function onNdbReport(r: NdbReport | null) {
   if (!ndbOn) ndbUiOn();   // ★ somebody else put the receiver in NDB (or we joined it)
   ndbView?.update(r);
 }
+/* ★★ beta94 THE ISM AUTO CHIP (Stuart 11-24 on the Sony: the AGC chip went BLANK in ISM mode and read as "VibeAGC not
+ *  reporting"). ISM switches VibeAGC off and runs its own gain rule (vibe_ism_service.h GainRule), so hwinfo says agc false
+ *  and every writer of #ovlChip cleared it. While ISM's report carries a gain, the chip is ISM's: "ISM AUTO 29.7 dB · IF … ·
+ *  pk −8.1 dBFS" — and the other writers (hwinfo, ovl, adcstat, rspstat) leave it alone (ismChipOwns).
+ *  ★ AGENTS.md, one radio's control: the report carries `gain` only where ISM's rule walks the radio's own gain list (RTL,
+ *    RSP, Airspy R2 / Mini…); an HF+ reaches no ISM band. No gain → nothing is claimed: the chip is cleared as before. */
+function ismChipOwns(): boolean { return ismOn && !!ismGainChip(ismReport); }
+function ismChipPaint() {
+  const chip = document.getElementById('ovlChip');
+  if (!chip) return;
+  const t = ismGainChip(ismReport);
+  if (!t) { if (chip.dataset.ism) ismChipClear(); return; }
+  // ★ the IF beside it, as the AGC chip does — but only the IF (the ADC peak is ISM's own, in t)
+  const sp = t.indexOf(' · ');
+  const text = sp > 0 ? `${t.slice(0, sp)}${ifText()}${t.slice(sp)}` : `${t}${ifText()}`;
+  if (chip.textContent !== text) chip.textContent = text;
+  chip.dataset.ism = '1';
+  chip.classList.add('set', 'easing');
+  chip.classList.toggle('fault', (ismReport?.clipPct ?? 0) >= 1);
+}
+function ismChipClear() {
+  const chip = document.getElementById('ovlChip');
+  if (!chip || !chip.dataset.ism) return;
+  delete chip.dataset.ism;
+  chip.textContent = '';
+  chip.classList.remove('set', 'easing', 'fault');
+}
+/* ★★ beta94 AN UNIDENTIFIED BURST'S IQ, FOR THE OWNER (vibe_ism_unknown.h; the admin API's ism-clip). Signed exactly as the
+ *  admin panel signs (admin.ts q()): the password's challenge proof, else the admin ticket. A plain GET answered with a FILE
+ *  (Content-Disposition), so every browser saves it — named for rtl_433 -r by the server. */
+async function ismClipDownload(id: number) {
+  if (!adminUnlocked) { showPill('Only the receiver’s owner can download a burst’s samples', 5000); return; }
+  const base = httpBase(currentHost);
+  const q = adminPassword ? await resolveAdminOverride(base, adminPassword) : adminTicketQuery();
+  if (!q) { showPill('Unlock the owner controls again to download samples', 6000); return; }
+  const a = document.createElement('a');
+  a.href = `${base}/vibeserver/admin/ism-clip?id=${encodeURIComponent(String(id))}&${q}`;
+  a.download = '';
+  a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+}
 /** ★ A report (on) or the server's `ism_off` (null). */
 function onIsmReport(r: IsmReport | null) {
   if (!r) { if (ismOn) { audio?.holdHealing(6000); ismUiOff(); } return; }
   const bandChanged = r.band !== ismReport?.band || r.custom !== ismReport?.custom;
   ismReport = r;
   if (!ismOn) ismUiOn();   // ★ somebody else put the receiver in ISM (or we joined it)
+  ismChipPaint();   // ★ beta94 the ISM AUTO chip
   audio?.holdHealing(8000);   // ★ nothing to hear on a band: the server sends no audio (as in ADS-B)
   const n = ismNeighbours();
   ismBox?.update(r, !!(n.prev || n.next), ismStoredBand === r.band && ismStored.length > 0);   // ★ beta72: BANDS while there is another band

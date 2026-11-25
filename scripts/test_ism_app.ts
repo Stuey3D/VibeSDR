@@ -342,5 +342,40 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('details agree', aa.devices.map((d) => app.ismLoraDetail(d)), wa.devices.map((d) => web.ismLoraDetail(d)));
 }
 
+// ★★ beta94 unidentified bursts, steady carriers and the ISM AUTO chip — one rule, two readers
+{
+  const r = { ...report, bursts: 65, unknown: 60, steadyN: 5, gain: 29.7, gainAuto: 1, peak: -8.14, clipPct: 0,
+    unk: [{ id: 7, ago: 2.1, hz: 868_271_500, mod: 'OOK', code: 'PWM', rate: 999, unit: 250, n: 64, ms: 63.3, lvl: -10.4, snr: 24.6, iq: 1, kb: 64 },
+          { id: 6, ago: 9, hz: 868_300_000, mod: 'FSK', code: 'NRZ/Manchester', rate: 4808, unit: 208, n: 36, ms: 33.7, lvl: -22, snr: 9, dev: 30286, clipped: 1 },
+          { id: 5, hz: 1, mod: 'nonsense' }, { mod: 'OOK' }, 'x'],
+    steady: [{ hz: 868_100_000, lvl: -31.2, lo: 868_095_000, hi: 868_112_000, age: 1, for: 42 }, { hz: 868_270_000, lvl: -40, lo: 868_270_000, hi: 868_270_000, age: 3, for: 9 }, { lvl: 1 }] };
+  const w = web.ismSanitise(r)!, a = app.ismSanitise(r)!;
+  eq('unidentified: the sanitisers agree', a.unk, w.unk);
+  eq('unidentified: junk dropped', a.unk!.map((u) => u.id), [7, 6]);
+  eq('steady: the sanitisers agree', a.steady, w.steady);
+  eq('steady: junk dropped', a.steady!.length, 2);
+  eq('a burst described', web.ismUnkLine(w.unk![0]), 'OOK · PWM · 999 bit/s · 64 pulses · 63 ms · 868.271 MHz · -10 dBFS');
+  eq('an FSK burst described', web.ismUnkLine(w.unk![1]), 'FSK ±30 kHz · NRZ/Manchester · 4.8 kBd · 36 high tones · 34 ms · 868.300 MHz · -22 dBFS (clipped)');
+  eq('burst lines agree', a.unk!.map(app.ismUnkLine), w.unk!.map(web.ismUnkLine));
+  eq('a drifting carrier', web.ismSteadyLine(w.steady![0]), '868.100 MHz · steady carrier · -31 dBFS · drifting 868.095–868.112 MHz · probably local interference, not a device');
+  eq('carrier lines agree', a.steady!.map(app.ismSteadyLine), w.steady!.map(web.ismSteadyLine));
+  eq('status says carriers apart', web.ismStatus(w).includes('65 bursts (60 unidentified, 5 carriers)'), true);
+  eq('status agrees', app.ismStatus(a), web.ismStatus(w));
+  eq('the UNIDENTIFIED chip', [app.ISM_KINDS.at(-1), web.ISM_KINDS.at(-1)], [{ id: 'unk', label: 'UNIDENTIFIED' }, { id: 'unk', label: 'UNIDENTIFIED' }]);
+  eq('UNIDENTIFIED lists no devices', app.ismRows(a, 'unk'), []);
+  const rows = app.ismUnkRows(a);
+  eq('app rows: carriers first, then bursts; the clip only where kept', rows.map((x) => [x.key, x.clip ?? null]), [['c868095000', null], ['c868270000', null], ['u7', 7], ['u6', null]]);
+  eq('web list: an IQ link for the owner only', [(web.ismListHtml(w, 'unk', { mph: false, pressure: 'psi' }, '', null, [], true).match(/class="qrz ismIq"/g) || []).length,
+                                                  (web.ismListHtml(w, 'unk', { mph: false, pressure: 'psi' }, '', null, [], false).match(/ismIq/g) || []).length], [1, 0]);
+  eq('empty words agree', app.ismEmptyText('unk'), web.ismEmptyText('unk'));
+  eq('aged: the bursts and carriers age too', [web.ismAged(w, 5).unk![0].ago, app.ismAged(a, 5).steady![0].age], [7.1, 6]);
+  // the chip
+  eq('ISM AUTO chip', web.ismGainChip(w), 'ISM AUTO 29.7 dB · pk -8.1 dBFS');
+  eq('chip agrees', app.ismGainChip(a), web.ismGainChip(w));
+  eq('near full scale', web.ismGainChip(web.ismSanitise({ ...r, clipPct: 3 })), 'ISM AUTO 29.7 dB · 3.0% NEAR FULL SCALE');
+  eq('a hand-set gain', app.ismGainChip(app.ismSanitise({ ...r, gainAuto: 0 })), 'ISM GAIN 29.7 dB (manual) · pk -8.1 dBFS');
+  eq('no gain on the report (no gain list for ISM to walk) = nothing claimed', [web.ismGainChip(web.ismSanitise({ ...r, gain: undefined })), app.ismGainChip(null)], ['', '']);
+}
+
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

@@ -29,7 +29,7 @@ import { scrollLane } from '../constants/popupTokens';
 import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
 import { ISM_KINDS, ismAged, ismAgo, ismBandLabel, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
-         ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
+         ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, ismUnkRows, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
          type IsmUnits, type IsmBand } from '../services/ism';
 import IsmBandSheet from './IsmBandSheet';
 
@@ -64,6 +64,8 @@ export interface IsmPanelProps {
   remembered?: boolean;
   /** The receiver's position (range and bearing in a node's detail). */
   rx?: { lat: number; lon: number } | null;
+  /** ★ beta94 the OWNER's download of an unidentified burst's IQ (absent = not the owner: no link drawn). */
+  onClip?: (id: number) => void;
 }
 
 export default function IsmPanel(p: IsmPanelProps) {
@@ -103,6 +105,7 @@ export default function IsmPanel(p: IsmPanelProps) {
   const r = p.report && arrived ? ismAged(p.report, Math.floor((Date.now() - arrived) / 1000)) : p.report;
   const rows = ismRows(r, filter);
   const msgLines = filter === 'msgs' ? ismMsgLines(r, p.bands) : [];
+  const unkRows = filter === 'unk' ? ismUnkRows(r) : [];   // ★ beta94 UNIDENTIFIED
   const canMap = !!p.onMap && !p.error && !!r && (!!p.remembered || r.devices.some(ismOnMap));
   // ★ a row with a detail: a meter, or a LoRa row (a node / a LoRaWAN device)
   const detailOf = (d: IsmDevice): string[] => (d.kind === 'meter' ? ismMeterDetail(d) : LORA_KINDS.includes(d.kind) ? ismLoraDetail(d, p.rx ?? null) : []);
@@ -213,6 +216,21 @@ export default function IsmPanel(p: IsmPanelProps) {
             <Text style={s.note}>{p.error}</Text>
           ) : !r ? (
             <Text style={s.note}>Taking the receiver to the ISM band…</Text>
+          ) : filter === 'unk' ? (unkRows.length ? unkRows.map((u, i) => (
+            /* ★★ beta94 UNIDENTIFIED: steady carriers, then the bursts nothing named — each described; the owner's IQ link */
+            <View key={u.key} style={[s.row, i % 2 === 0 && s.rowAlt]}>
+              <Text style={s.ago} numberOfLines={1}>{ismAgo(u.ago)}</Text>
+              <Text style={s.rowBand} numberOfLines={1}>{ismBandLabel(u.hz, p.bands)}</Text>
+              <View style={s.txtCol}>
+                <Text style={s.txt}>{u.text}{p.onClip && u.clip ? (
+                  <Text style={[s.txt, s.posLink]} accessibilityRole="link" suppressHighlighting={false}
+                        accessibilityLabel={`Download this burst's samples, ${u.kb ?? ''} kilobytes`}
+                        onPress={() => { if (u.clip) p.onClip?.(u.clip); }}>{`  IQ ${u.kb ?? ''} KB`}</Text>) : null}</Text>
+              </View>
+              <Text style={[s.snr, u.snr != null && { color: u.snr >= 20 ? tk.good : u.snr >= 10 ? tk.warn : tk.bad }]}
+                    numberOfLines={1}>{u.snr != null ? `${Math.round(u.snr)} dB` : ''}</Text>
+            </View>
+          )) : <Text style={s.note}>{ismEmptyText(filter)}</Text>
           ) : filter === 'msgs' ? (msgLines.length ? msgLines.map((m, i) => (
             <View key={i} style={[s.row, i % 2 === 0 && s.rowAlt]}>
               <Text style={s.ago} numberOfLines={1}>{m.ago}</Text>
