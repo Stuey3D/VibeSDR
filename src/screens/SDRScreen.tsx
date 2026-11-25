@@ -318,6 +318,7 @@ import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon, gridCentre, latLonToGrid } from '../services/grid';
+import { receiverPos, serverPosFromLocation, shouldAskPhoneForPlace, type LatLon } from '../services/receiverPlace';
 import { tuneHintLabel } from '../utils/tuneHint';
 import { NavtexAssembler } from '../utils/navtex';
 import { countryForCallsign } from '../services/callsignCountry';
@@ -1902,11 +1903,12 @@ export default function SDRScreen({ route, navigation }: Props) {
             const lon = typeof j?.lon === 'number' ? j.lon : gridToLatLon(j?.grid || j?.locator || '')?.lon;
             if (typeof lon === 'number' && Number.isFinite(lon)) setRecvLon(lon);
             // ★ V12: and the whole position, for naming a NAVTEX station from its letter (DecoderPanel receiverPos).
-            const lat = typeof j?.lat === 'number' ? j.lat : gridToLatLon(j?.grid || j?.locator || '')?.lat;
-            setServerPos(typeof lat === 'number' && typeof lon === 'number' && Number.isFinite(lat) && Number.isFinite(lon)
-                         && (lat !== 0 || lon !== 0) ? { lat, lon } : null);
+            //   ★★★ It is also THE receiver for the spots map and every spot distance (receiverPlace.ts): 11.0.16 kept
+            //   only the longitude, so its map offered SET LOCATION on a server showing "52.31, -0.88 · IO92nh" (Stuart,
+            //   2026-11-25). null = answered with no position → only then is this phone asked for its own.
+            setServerPos(serverPosFromLocation(j));
           }
-        } catch { if (!cancelled) setReceiverIso(''); }
+        } catch { if (!cancelled) { setReceiverIso(''); setServerPos(null); } }
         return;
       }
       if (isLocal) {
@@ -1920,7 +1922,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
       if (!cancelled) setReceiverIso('');   // network instance: we don't know where it is
     })();
-    return () => { cancelled = true; setReceiverIso(''); };
+    return () => { cancelled = true; setReceiverIso(''); setServerPos(undefined); };
     // ★★ connectBase: re-ask once the RADIO is chosen. On the front door's address /location is the door's page, not
   //    JSON — so every radio behind a door lost its country (RadioDNS logos) and, now, its ITU region.
   }, [isLocal, isRemoteShim, connectBase]);
@@ -6606,6 +6608,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (same permission as instance-list distance sorting); null until resolved.
   const recvLocRef = useRef<{ lat: number; lon: number } | null>(null);
   const [recvLoc, setRecvLoc] = useState<{ lat: number; lon: number } | null>(null);
+  /** ★ V12: a VibeServer's own position from /location (lat/lon or its locator) — names NAVTEX stations, and it is THE
+   *  receiver for the maps and spot distances (receiverPlace.ts: the server first, then this phone's place).
+   *  undefined = not answered yet, null = answered with none (only then is this phone asked). */
+  const [serverPos, setServerPos] = useState<LatLon | null | undefined>(undefined);
+  const serverPosRef = useRef<LatLon | null | undefined>(undefined);
+  serverPosRef.current = serverPos;
+  /** For callbacks and timers: read at the moment, so a Kiwi gps / picked town set a tick ago counts. */
+  const rxPosNow = () => receiverPos(serverPosRef.current, recvLocRef.current);
+  const askPhoneForPlace = shouldAskPhoneForPlace(isLocal, isRemoteShim, serverPos);
   /* ★★ beta94 LOCAL HARDWARE's POSITION (Stuart 11-25: "in local hardware mode the location goes nowhere anyway"): a town
    *  or locator the user ENTERED (kept on this phone — their choice wins), else the phone's location. The same one feeds
    *  the spot distances, the maps and THIS app's satellite engine (setSatObserver, grid-square centre) — never a server. */
@@ -6621,7 +6632,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (satOwnHere) { sendSatObserver(p); satCapRefresh(); }
   }, [satOwnHere, satCapRefresh]);
   useEffect(() => {
-    if (!isLocal) return;
+    if (!askPhoneForPlace) return;   // ★ a VibeServer with its own position never prompts for this phone's
     let cancelled = false;
     (async () => {
       // ★ the one stored place (the server list's MY LOCATION too) — spots and maps in any Local Hardware; satellites on the own engine
@@ -6633,7 +6644,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       else { recvLocRef.current = { lat: p.lat, lon: p.lon }; setRecvLoc({ lat: p.lat, lon: p.lon }); }
     })().catch(() => {});
     return () => { cancelled = true; };
-  }, [isLocal]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [askPhoneForPlace]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ★ the engine may answer before the position does (or restart): hand it over again once the radio's answer is in
   useEffect(() => { if (satOwnHere && localPlace && satCap?.need === 'location') { sendSatObserver(localPlace); satCapRefresh(); } },
     [satCap?.need]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -6683,7 +6694,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       spotBufRef.current = [];
       // On-device decoder (Local/Kiwi) sends a TX grid + callsign but no distance
       // or country — derive both here. UberSDR spots already carry them.
-      const rx = recvLocRef.current;
+      const rx = rxPosNow();   // ★ the aerial's position (server first), not the phone's
       for (const s of buf) {
         if (s.distKm == null && s.grid && rx) s.distKm = distanceKmToGrid(rx, s.grid);
         if (!s.country && s.call) s.country = countryForCallsign(s.call);
@@ -7068,7 +7079,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★★★ the room's time decoder names its own station (the web page sends 'time' + station, the app the station's name)
       const roomSt = roomJoin ? (roomJoin.ext === 'time' ? String(roomJoin.params.station ?? '') : roomJoin.ext) : '';
       const forced = roomSt || (timeStationPref !== 'auto' ? timeStationPref : '');
-      const st0 = forced || timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      const st0 = forced || timeStationFor(status.frequency, rxPosNow()?.lon ?? null);
       const st = st0 === 'tdf' && !timeTdfCapable ? null : st0;   // ★ V12 TDF only where the server reads it
       if (!st) {
         timeStationRef.current = '';
@@ -7155,7 +7166,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (activeDecoder !== 'time') return;
     const want = timeStationPref !== 'auto'
       ? timeStationPref
-      : timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      : timeStationFor(status.frequency, rxPosNow()?.lon ?? null);
     if (!want || want === timeStationRef.current) return;
     openDecoder('time');
   }, [activeDecoder, status.frequency, timeStationPref, openDecoder]);
@@ -12226,8 +12237,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // status page (recvLon via onReceiverLon — OWRX/UberSDR /status.json,
   // KiwiSDR /status). NOT the device location.
   const [recvLon, setRecvLon] = useState<number | null>(null);
-  /** ★ V12: a VibeServer's own position from /location (lat/lon or its locator) — names NAVTEX stations. */
-  const [serverPos, setServerPos] = useState<{ lat: number; lon: number } | null>(null);
+  // (serverPos — a VibeServer's own /location — is declared beside recvLoc: the place effect there reads it.)
   /* ★★ V12 AIS / APRS: what the map is handed — remade only when a report or the position changes (each push is an
    *  injection into the page). The receiver is the server's own /location (the ADS-B map's rule). */
   const trkRx = (serverPos ?? recvLoc) ?? null;
