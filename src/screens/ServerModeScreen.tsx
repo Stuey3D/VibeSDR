@@ -1072,7 +1072,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   // ★ An Icom serves ONE dial (the radio's), so the locked-centre questions do not exist for it.
   const radioUseEff: 'single' | 'locked' = isIcom ? 'single' : radioUse;
   // ★ RTL-TCP is raw IQ, which an Icom does not give (the rtl_tcp server never opens its CP2102).
-  const protoEff: Proto = isIcom ? 'vibeserver' : proto;
+  /* ★★★ …AND ONLY AN RTL-SDR'S (Sloper, 2026-11-25). The rtl_tcp server streams a dongle's own 8-bit IQ through
+   *     librtlsdr, and librtlsdr "opens" an Airspy HF+ / R2, a HackRF or an RSP without complaint — then not one
+   *     sample arrives: SDR# / SDR++ said "connected" and drew nothing. So for those radios the choice is not
+   *     offered (AGENTS.md: a control that only works on one radio should not be there); VibeServer serves them,
+   *     and its RAW IQ OUT is the rtl_tcp stream. `radio` null = not known yet: the native start refuses a non-RTL
+   *     radio anyway (VibeLocalSdrModule.startRtlTcpServer). The stored choice is kept for the next radio. */
+  const rtlTcpRadio = !radio || radio.driver === 'rtl';
+  const protoEff: Proto = isIcom || !rtlTcpRadio ? 'vibeserver' : proto;
   const hasHwSetup = !isAhf && !isIcom;
   /** ★ The Icom's five settings (the start config's icom* keys), stored as one value (K.icom). The CI-V address is
    *  held as TEXT while typed, and only a valid one reaches the settings. */
@@ -3227,6 +3234,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         {isIcom ? (
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0, marginBottom: 8 }]}>
             An Icom is shared through VibeServer only: RTL-TCP sends a radio&rsquo;s raw IQ, and an Icom has none.
+          </Text>
+        ) : !rtlTcpRadio ? (
+          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0, marginBottom: 8 }]}>
+            {`RTL-TCP shares an RTL-SDR dongle only, so it is not offered for ${radio?.model || 'this radio'}. ` +
+             'For SDR# or SDR++, use VibeServer: set MODE to Advanced, HOW MANY LISTENERS to 1, and RAW IQ OUT to ' +
+             'Local only. Then turn IQ on in the web page\'s audio menu — it is the same rtl_tcp stream.'}
           </Text>
         ) : (
         <ProtoCard C={C} F={F} active={proto === 'rtltcp'}

@@ -1411,8 +1411,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
+        /* ★★★ AN RTL-SDR ONLY (Sloper, 2026-11-25). This took the first isLocalRadio — an Airspy HF+ / R2, a
+         *     HackRF or an RSP too — and handed it to rtl_tcp_server.cpp, which opens it with librtlsdr. That
+         *     open SUCCEEDS on any USB device (no tuner found, return 0), so the server bound, sent its "RTL0"
+         *     header and then not one IQ byte: SDR# / SDR++ said "connected", the app said "Good", and there was
+         *     no waterfall and no audio. The rtl_tcp server streams a dongle's own 8-bit IQ and nothing else;
+         *     the other radios are served by VibeServer (whose RAW IQ OUT is the rtl_tcp format). The server
+         *     screen hides RTL-TCP for them; this is the refusal if anything still asks. */
+        val radio = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
             ?: run { promise.reject("no_device", "No SDR found"); return }
+        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) } ?: run {
+            promise.reject("not_rtl", "RTL-TCP can only share an RTL-SDR dongle, and the radio plugged in is " +
+                "${radioModelName(radio)}. Choose VibeServer instead — it serves this radio, and its RAW IQ OUT " +
+                "(in the web page's audio menu) is the rtl_tcp format SDR# and SDR++ read.")
+            return
+        }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(dev, opts, promise) }
             return

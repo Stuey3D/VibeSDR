@@ -105,8 +105,10 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       } catch (e: any) {
         if (cancelled) return;
         setStarting(false);
-        // ★ An Airspy HF+ shares over rtl_tcp too — do not name the one radio this used to support.
-        setError(e?.message ?? 'Could not start the server. Is a radio plugged in via USB OTG?');
+        // ★★ WRONG UNTIL 2026-11-25: this said an Airspy HF+ "shares over rtl_tcp too". It never did — the
+        //    server opened it through librtlsdr, sent the header and then no IQ at all (Sloper). RTL-TCP is
+        //    an RTL-SDR's; the native start now refuses anything else and its message says what to use.
+        setError(e?.message ?? 'Could not start the server. Is an RTL-SDR plugged in via USB OTG?');
       }
     })();
     return () => { cancelled = true; };
