@@ -20,7 +20,8 @@
  *    ★ No flashing: COAST dims the readout.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { SAT_PLACE_TITLE, SAT_PLACE_TEXT, SAT_PLACE_PRIVATE, SAT_PLACE_ENTRY_HINT } from '../services/satPlace';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
@@ -120,6 +121,46 @@ export interface SatellitePanelProps {
   onOrbMax?: (k: number) => void;
   skyGet?: ((path: string) => Promise<string | null>) | null;
   skyRadio?: string;
+  /** ★★ beta94 LOCAL HARDWARE's POSITION (this app's own engine only — absent on a server): `need` = the engine has none, the
+   *  box shows the prompt instead of the timetable; `line` = which position is in use ("" = none); `entered` = typed by the
+   *  user (CLEAR offered). Kept on this phone, never published (services/localPlace.ts). */
+  place?: SatPlaceProps;
+}
+export interface SatPlaceProps {
+  need: boolean;
+  line: string;
+  entered: boolean;
+  busy: boolean;
+  onEnable: () => void;
+  /** a town or locator; true = found and in use */
+  onEnter: (text: string) => Promise<boolean>;
+  onClear: () => void;
+}
+
+/** ★★ beta94 the position prompt (Stuart 11-25): why satellites need it, ENABLE LOCATION, or a town / locator. */
+function SatPlacePrompt({ place, s, change, onDone }: { place: SatPlaceProps; s: ReturnType<typeof makeStyles>; change?: boolean; onDone?: () => void }) {
+  const tk = useDecoderTokens();
+  const [text, setText] = useState('');
+  const go = async () => { if (!text.trim() || place.busy) return; if (await place.onEnter(text)) { setText(''); onDone?.(); } };
+  return (
+    <View style={s.box} accessibilityLabel={change ? 'Change the position satellites are worked out from' : `${SAT_PLACE_TITLE}. ${SAT_PLACE_TEXT}`}>
+      {!change && <Text style={s.sum}>{SAT_PLACE_TITLE}</Text>}
+      {!change && <Text style={s.txt}>{SAT_PLACE_TEXT}</Text>}
+      <View style={s.keys}>
+        <DecoderKey label={place.busy ? 'ASKING…' : 'ENABLE LOCATION'} disabled={place.busy} onPress={() => { place.onEnable(); onDone?.(); }}
+                    accessibilityLabel="Use this phone's location (approximate; snapped to its grid square)" />
+      </View>
+      <Text style={s.detailNp}>or the nearest town, or your locator:</Text>
+      <View style={s.placeRow}>
+        <TextInput value={text} onChangeText={setText} placeholder={SAT_PLACE_ENTRY_HINT} placeholderTextColor={tk.muted}
+                   style={[s.placeIn, { color: tk.value, borderColor: tk.muted }]} autoCorrect={false} autoCapitalize="words"
+                   returnKeyType="done" onSubmitEditing={go} editable={!place.busy}
+                   accessibilityLabel="Nearest town or Maidenhead locator" />
+        <DecoderKey label="USE" disabled={place.busy || !text.trim()} onPress={go} accessibilityLabel="Use this town or locator" />
+      </View>
+      <Text style={s.detailNp}>{SAT_PLACE_PRIVATE}</Text>
+    </View>
+  );
 }
 
 /** ★ The half-globe (spec item 4): the scene's paths in react-native-svg — the dotted orbit (1.7), the drawn bird, the green
@@ -261,6 +302,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   useEffect(() => { if (p.picked) setListOpen(false); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
   const greyed = !p.cap.ok;
+  const placeNeed = !!p.place?.need;          // ★★ beta94 no position on this phone's engine: the prompt, not the timetable
+  const [placeEdit, setPlaceEdit] = useState(false);
   const rows = satModeRows(p.list, now);
   const sync = satSyncedText(p.list, now);
   const credit = satCreditText(p.list, now), txc = satTxCreditText(p.list);
@@ -361,8 +404,13 @@ export default function SatellitePanel(p: SatellitePanelProps) {
         <DecoderKey label={minimised ? '□' : '−'} onPress={() => setMinimised((v) => !v)}
                     accessibilityLabel={minimised ? 'Restore' : 'Minimise'} />
       </DecoderHeader>
-      {!minimised && (greyed || !!p.why) && <Text style={s.note}>{greyed ? p.cap.why : p.why}</Text>}
-      {!minimised && <DecoderBody>
+      {!minimised && ((greyed && !placeNeed) || !!p.why) && <Text style={s.note}>{greyed && !placeNeed ? p.cap.why : p.why}</Text>}
+      {!minimised && placeNeed && !!p.place && <DecoderBody>
+        <ScrollView style={{ maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
+          <SatPlacePrompt place={p.place} s={s} />
+        </ScrollView>
+      </DecoderBody>}
+      {!minimised && !placeNeed && <DecoderBody>
         {/* ★ beta91 (Stuart 11-22, a screenshot: BIG with the list folded and nothing decoded yet, half the box empty) the box
              holds its full BIG height only while a picture is on show; otherwise it fits what is in it, up to that height */}
         <ScrollView style={big && showPic ? { height: bodyH } : { maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
@@ -573,6 +621,17 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               <Text style={s.detailNp}>min before it rises · this app session only</Text>
             </View>
           )}
+          {/* ★★ beta94 Local Hardware: which position is in use, CHANGE / CLEAR (an entered one) */}
+          {!!p.place && !!p.place.line && (
+            <View style={s.leadRow}>
+              <Text style={s.detailNp}>{p.place.line}</Text>
+              <DecoderKey label={placeEdit ? 'CANCEL' : 'CHANGE'} onPress={() => setPlaceEdit((v) => !v)}
+                          accessibilityLabel={placeEdit ? 'Keep this position' : 'Change the position satellites are worked out from'} />
+              {p.place.entered && <DecoderKey label="CLEAR" onPress={() => { setPlaceEdit(false); p.place!.onClear(); }}
+                                              accessibilityLabel="Forget the entered position (the phone's location is used where it is allowed)" />}
+            </View>
+          )}
+          {!!p.place && placeEdit && <SatPlacePrompt place={p.place} s={s} change onDone={() => setPlaceEdit(false)} />}
           {p.list?.time === 'system' && <Text style={s.detail}>TIME: SYSTEM — this server's clock has not been checked against a time server</Text>}
           {!!credit && <Text style={s.detail}>{credit}{txc ? ` · ${txc}` : ''}</Text>}
         </ScrollView>
@@ -643,4 +702,8 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   txtCol:  { flex: 1, minWidth: 0, gap: 1 },
   detail:  { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted, flexShrink: 1, paddingHorizontal: 10 },
   note:    { fontFamily: F, fontSize: 13, color: T.muted, padding: 12, lineHeight: 18 },
+  // ★★ beta94 the position prompt's entry row
+  placeRow:{ flexDirection: 'row', alignItems: 'center', gap: 6 },
+  placeIn: { flex: 1, minWidth: 0, minHeight: 36, fontFamily: F, fontSize: 13, paddingHorizontal: 8, paddingVertical: 6,
+             borderRadius: 6, borderWidth: StyleSheet.hairlineWidth },
 });

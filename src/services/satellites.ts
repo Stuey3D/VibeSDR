@@ -169,11 +169,14 @@ export function parseSatTrack(m: unknown): SatTrack | null {
 }
 
 /** hwinfo → the button: absent = no button at all (the radio reaches no listed downlink); else live or greyed. */
-export function satCapFrom(j: Record<string, unknown> | null | undefined): { ok: boolean; why: string } | null {
+export function satCapFrom(j: Record<string, unknown> | null | undefined): SatCap | null {
   if (!j || typeof j.doppler !== 'number' || j.doppler < 1) return null;
   const why = str(j.dopplerWhy, 200) ?? '';
-  return { ok: !why, why };
+  // ★★ beta94 `dopplerNeed: "location"` = the engine has no position (Local Hardware offers its own — satPlace.ts)
+  return { ok: !why, why, ...(!why || j.dopplerNeed !== 'location' ? {} : { need: 'location' as const }) };
 }
+/** hwinfo's satellite capability: `need` = what is missing, where the client can supply it (beta94: a position). */
+export type SatCap = { ok: boolean; why: string; need?: 'location' };
 
 // ── words ──────────────────────────────────────────────────────────────────────────────────────────────────────
 /** The white text beside the digits: "ISS · ▼ 3.21 kHz" (brief §10: name · direction · offset, 2 dp kHz). */

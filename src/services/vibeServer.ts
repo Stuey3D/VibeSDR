@@ -2,7 +2,7 @@ import { NativeModules, Platform } from 'react-native';
 import { loadActiveEibi } from './eibi';
 import { getUserLocation } from './instancesApi';
 import { getServerName, PUBLIC_NAME_KEY } from './rtlTcpServer';
-import { latLonToGrid, gridToLatLon } from './grid';
+import { latLonToGrid, gridToLatLon, gridCentre } from './grid';
 import type { ServerBookmark } from './stations';
 import { bookmarkPassband, parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -980,10 +980,7 @@ export async function setServerLocationMoving(on: boolean): Promise<void> {
  *  ★ Now used for the HOME location only — the entered city or locator. A moving server never publishes a square
  *    derived from the phone (see resolveMovingLocation).
  */
-function gridCentre(lat: number, lon: number): { lat: number; lon: number } {
-  const c = gridToLatLon(latLonToGrid(lat, lon));
-  return c ? { lat: Math.round(c.lat * 10000) / 10000, lon: Math.round(c.lon * 10000) / 10000 } : { lat, lon };
-}
+// ★ beta94 gridCentre moved to grid.ts (Local Hardware's satellite position snaps the same way) — imported above.
 
 /** What a moving server publishes: a PLACE, never the phone. `region` = no town, city or village of 1,000+
  *  answered, so this is a county / state / province and its centre. */

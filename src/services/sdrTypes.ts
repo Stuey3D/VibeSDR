@@ -501,7 +501,7 @@ export interface ServerOccupancy {
    *  the running rate, `dwell` seconds each. */
   vormap?: { ok: boolean; why: string; wins: number; dwell: number };
   /** ★★ V12 satellites: `doppler` (a version) — absent where the radio reaches no listed downlink (no entry at all). */
-  sat?: { ok: boolean; why: string };
+  sat?: { ok: boolean; why: string; need?: 'location' };   // ★★ beta94 need: the engine has no position (satPlace.ts)
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
    *  first) — textModes.ts. */
   mfsk?: boolean;

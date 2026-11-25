@@ -77,6 +77,14 @@ export function gridToLatLon(grid?: string | null): { lat: number; lon: number }
   return { lat, lon };
 }
 
+/** ★ A position snapped to its 6-character GRID SQUARE'S CENTRE (about 5.6 × 4.6 km in the UK), rounded to 4 dp —
+ *  the privacy rule for every position the app hands on (vibeServer.ts publishLocation's home location; beta94 Local
+ *  Hardware's satellite position). Moved here from vibeServer.ts so pure code and tests can use it. */
+export function gridCentre(lat: number, lon: number): { lat: number; lon: number } {
+  const c = gridToLatLon(latLonToGrid(lat, lon));
+  return c ? { lat: Math.round(c.lat * 10000) / 10000, lon: Math.round(c.lon * 10000) / 10000 } : { lat, lon };
+}
+
 const R_KM = 6371.0088;
 const toRad = (d: number) => (d * Math.PI) / 180;
 

@@ -9,7 +9,8 @@
 //      sky track for a pass.
 //   3. a locked window (per-listener channels): the listener's channel is built ONCE at the lock and never rebuilt by
 //      the tracker (no AGC reset), and the lock is the listener's own.
-//   4. no orbit data: doppler advertised GREYED with the reason, a lock refused in words.
+//   4. no orbit data: doppler advertised GREYED with the reason, a lock refused in words. ★★ beta94 4a: no location →
+//      `dopplerNeed: "location"` (the app's Local Hardware position prompt); a located server has none.
 //  10. ★★★ beta92 OPEN IN VFO B: RS-44 transponder → its CW beacon in VFO B (CW on the B host, B's shift = A's × fB/fA,
 //      a B socket joins, off / new pick / drop close it quietly); ISS 145.800 → 145.825 APRS only (437.x outside the
 //      capture); nothing offered with VFO B switched off; a locked window's listener alone.
@@ -255,6 +256,25 @@ try {
       ok(await until(() => { const m = lastOf(sp, 'sat'); return m && m.state === 'OFF' && /Mode changed/.test(m.why || ''); }, 3000), `a mode change ends it: ${lastOf(sp, 'sat')?.why}`);
       sp.close();
     } finally { S.stop(); }
+  }
+
+  // ── 4a. ★★ beta94 no location: `dopplerNeed: "location"` beside the reason (the app's Local Hardware prompt reads it) ──
+  {
+    console.log('── no location (beta94 dopplerNeed) ──');
+    const S = await server('satnoloc', { loc: '' });
+    try {
+      const st = await S.status();
+      ok(st && st.doppler === 1 && st.dopplerNeed === 'location' && /no location set/.test(st.dopplerWhy || ''),
+         `no location: doppler 1, dopplerNeed ${st && st.dopplerNeed}, why "${st && st.dopplerWhy}"`);
+      const loc = await fetch(`http://127.0.0.1:${S.port}/location`, { signal: AbortSignal.timeout(3000) }).then((r) => r.text()).catch(() => '');
+      ok(!/"lat"/.test(loc), `…and /location publishes no position: ${loc.slice(0, 80)}`);
+    } finally { S.stop(); }
+    const T = await server('satloc', { loc: 'IO92ng' });
+    try {
+      const st = await T.status();
+      ok(st && st.doppler === 1 && st.dopplerNeed === undefined && !/no location/.test(st.dopplerWhy || ''),
+         `a located server: no dopplerNeed (why "${st && (st.dopplerWhy || '')}")`);
+    } finally { T.stop(); }
   }
 
   // ── 4. no orbit data ──

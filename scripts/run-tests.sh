@@ -1039,6 +1039,8 @@ if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((f
 if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 SATELLITE MODE, the clients' pure half: the timetable's order + greying, the words, the box size, the half-globe
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta94 SATELLITE IN LOCAL HARDWARE: the key / the position prompt / which position / nothing published (satPlace.ts)
+if npx tsx scripts/test_sat_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta91 TELEMETRY CHARTS (src/utils/tlmCharts.ts): the server's pass CSVs read back, the chart geometry, across passes
 if TZ=UTC npx tsx scripts/test_tlm_charts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).

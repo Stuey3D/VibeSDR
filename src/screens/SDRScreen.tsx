@@ -131,7 +131,11 @@ import { toHttpUrl } from '../utils/serverUrl';
 import { localSessionGen, newLocalSession } from '../services/localSession';
 import { doorVisit, backToDoor, doorReturnParams, type DoorVisit } from '../utils/doorReturn';
 import { startBookmarkAutosave, stopBookmarkAutosave,
-         getLearnedBookmarksNow } from '../services/vibeServer';
+         getLearnedBookmarksNow, resolveLocation } from '../services/vibeServer';
+// ★★ beta94 Local Hardware's own position (satellites, spot distances, maps) — never published
+import { satOwnEngine, satNeedsPlace, satOffer, satPlaceLine, localPlaceChoose, SAT_PLACE_DENIED, SAT_PLACE_NOT_FOUND,
+         type LocalPlace } from '../services/satPlace';
+import { getEnteredPlace, setEnteredPlace, phoneLocationIfAllowed, satObserverNative, sendSatObserver } from '../services/localPlace';
 import { setReceiverIso, receiverIsoFromGrid } from '../services/rdsCountry';
 import { watchProvider } from '../services/watchProvider';
 
@@ -312,7 +316,7 @@ import { dabBlockSignals, dabMuxNames, dabFreshGrades, type DabBlockGrade } from
 import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
-import { distanceKmToGrid, gridToLatLon } from '../services/grid';
+import { distanceKmToGrid, gridToLatLon, gridCentre, latLonToGrid } from '../services/grid';
 import { tuneHintLabel } from '../utils/tuneHint';
 import { NavtexAssembler } from '../utils/navtex';
 import { countryForCallsign } from '../services/callsignCountry';
@@ -1342,6 +1346,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★★★ V12 PAGING'S GATE (docs/v12/DECODERS-WAVE2.md "PAGING"): Android, and the radio plugged into THIS phone — a
    *  loopback session (no localHost), not rtl_tcp, not a SpyServer. The engine says the same from its side. */
   const pagingHere = Platform.OS === 'android' && isLocal && !route.params.localHost && !route.params.isTcp && !isSpy;
+  /** ★★ beta94 THIS APP's OWN ENGINE (Local Hardware: USB, rtl_tcp or SpyServer through this phone's shim) — where a
+   *  position the user gives may go to the satellite engine (satPlace.ts). Never a server's engine. */
+  const satOwnHere = satOwnEngine({ os: Platform.OS, isLocal, localHost: route.params.localHost, hasNative: satObserverNative() });
   // Session limit (minutes) from the directory. The server enforces it; we just
   // warn up front and count down, rather than letting it look like a crash.
   // ★★ Route param FIRST (SpyServer passes one), then the directory, keyed off the
@@ -2743,7 +2750,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  asks {"op":"pick"}; the server tunes, locks the Doppler and attaches the decoder, answering {"state":"picked"}; the app
    *  follows that decoder on its decoder socket (satFollow) with the box as its view; leaving sends {"op":"drop"}. The lock's
    *  readout beside the digits (ControlsBar satTag) is what the server last said. */
-  const [satCap, setSatCap] = useState<{ ok: boolean; why: string } | undefined>(undefined);
+  const [satCap, setSatCap] = useState<{ ok: boolean; why: string; need?: 'location' } | undefined>(undefined);
   const [satOn, setSatOn] = useState(false);
   const satOnRef = useRef(false);
   const [satList, setSatList] = useState<SatList | null>(null);
@@ -2826,6 +2833,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satSrvKeyRef = useRef(satSrvKey); satSrvKeyRef.current = satSrvKey;
   /** into SATELLITE the way its key goes in (set beside the key, below — it leaves the other whole-radio modes) */
   const satEnterRef = useRef<() => void>(() => {});
+  const satCapRefreshRef = useRef<() => void>(() => {});   // ★★ beta94 set beside satCapRefresh (declared further down)
   useEffect(() => { AsyncStorage.getItem('vibe.satRemindLead').then((v) => { if (v) setSatRemLead(satRemindLead(v)); }).catch(() => {}); }, []);
   const satSetToasts = useCallback((ts: SatRemindToast[]) => { satToastsRef.current = ts; setSatToasts(ts); }, []);
   const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); }, [satSetToasts]);
@@ -2846,6 +2854,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 1000);
     return () => clearInterval(t);
   }, [satRemBusy, satSetToasts]);
+  /* ★★ beta94 Local Hardware: in SATELLITE while this phone's engine is not ready (no position yet, orbit data arriving):
+   *  re-read its answer every 3 s — loopback only (satCapRefresh), so it costs no server and no Worker anything. */
+  const satCapNotOk = !!satCap && !satCap.ok;
+  useEffect(() => {
+    if (!satOn || !satCapNotOk) return;
+    const t = setInterval(() => satCapRefreshRef.current(), 3000);
+    return () => clearInterval(t);
+  }, [satOn, satCapNotOk]);
   /* ★ while in the mode: the list now, then every 30 s — every 3 s while the server is fetching orbit data (the contract) */
   const satFetching = !!satList?.source?.fetching;
   useEffect(() => {
@@ -6566,15 +6582,68 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (same permission as instance-list distance sorting); null until resolved.
   const recvLocRef = useRef<{ lat: number; lon: number } | null>(null);
   const [recvLoc, setRecvLoc] = useState<{ lat: number; lon: number } | null>(null);
+  /* ★★ beta94 LOCAL HARDWARE's POSITION (Stuart 11-25: "in local hardware mode the location goes nowhere anyway"): a town
+   *  or locator the user ENTERED (kept on this phone — their choice wins), else the phone's location. The same one feeds
+   *  the spot distances, the maps and THIS app's satellite engine (setSatObserver, grid-square centre) — never a server. */
+  const [localPlace, setLocalPlace] = useState<LocalPlace | null>(null);
+  const satCapRefresh = useCallback(() => {
+    if (!satOwnHere) return;   // ★ loopback only: this phone's own engine (no Worker, no remote server asked)
+    fetchOccupancy(connectBase.replace(/\/+$/, '')).then(o => { if (!destroyed.current && o?.sat) setSatCap(o.sat); }).catch(() => {});
+  }, [satOwnHere, connectBase]);   // eslint-disable-line react-hooks/exhaustive-deps
+  satCapRefreshRef.current = satCapRefresh;
+  const applyLocalPlace = useCallback((p: LocalPlace | null) => {
+    setLocalPlace(p);
+    recvLocRef.current = p ? { lat: p.lat, lon: p.lon } : null; setRecvLoc(p ? { lat: p.lat, lon: p.lon } : null);
+    if (satOwnHere) { sendSatObserver(p); satCapRefresh(); }
+  }, [satOwnHere, satCapRefresh]);
   useEffect(() => {
     if (!isLocal) return;
     let cancelled = false;
-    getUserLocation().then(loc => {
-      if (cancelled || !loc) return;
-      recvLocRef.current = loc; setRecvLoc(loc);
-    }).catch(() => {});
+    (async () => {
+      const entered = satOwnHere ? await getEnteredPlace() : null;
+      const gps = entered ? null : await getUserLocation();
+      const p = localPlaceChoose(entered, gps);
+      if (cancelled || !p) return;
+      if (satOwnHere) applyLocalPlace(p);
+      else { recvLocRef.current = { lat: p.lat, lon: p.lon }; setRecvLoc({ lat: p.lat, lon: p.lon }); }
+    })().catch(() => {});
     return () => { cancelled = true; };
-  }, [isLocal]);
+  }, [isLocal]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ★ the engine may answer before the position does (or restart): hand it over again once the radio's answer is in
+  useEffect(() => { if (satOwnHere && localPlace && satCap?.need === 'location') { sendSatObserver(localPlace); satCapRefresh(); } },
+    [satCap?.need]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [satPlaceBusy, setSatPlaceBusy] = useState(false);
+  /** ENABLE LOCATION: the OS permission, then the phone's location (an entered one is dropped — this is the user's choice now). */
+  const satPlaceEnable = useCallback(async () => {
+    markInteract();
+    setSatPlaceBusy(true);
+    try {
+      const g = await getUserLocation();
+      if (!g) { appAlert('Location not allowed', SAT_PLACE_DENIED); return; }
+      await setEnteredPlace(null);
+      applyLocalPlace({ lat: g.lat, lon: g.lon, src: 'gps' });
+    } finally { if (!destroyed.current) setSatPlaceBusy(false); }
+  }, [applyLocalPlace]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** A TOWN OR LOCATOR (a locator decodes offline; a town asks the geocoder once) — kept on this phone, never published. */
+  const satPlaceEnter = useCallback(async (text: string): Promise<boolean> => {
+    markInteract();
+    setSatPlaceBusy(true);
+    try {
+      const r = await resolveLocation(text);
+      if (!r) { appAlert('Not found', SAT_PLACE_NOT_FOUND); return false; }
+      const v = await setEnteredPlace(r);
+      const c = v ?? { ...gridCentre(r.lat, r.lon), label: r.label };
+      applyLocalPlace({ lat: c.lat, lon: c.lon, label: c.label, src: 'entered' });
+      return true;
+    } finally { if (!destroyed.current) setSatPlaceBusy(false); }
+  }, [applyLocalPlace]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** CLEAR an entered position: the phone's location where it is already allowed (no prompt), else none. */
+  const satPlaceClear = useCallback(async () => {
+    markInteract();
+    await setEnteredPlace(null);
+    const g = await phoneLocationIfAllowed();
+    applyLocalPlace(g ? { lat: g.lat, lon: g.lon, src: 'gps' } : null);
+  }, [applyLocalPlace]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopSpotFlush = useCallback(() => {
     if (spotTimerRef.current) { clearInterval(spotTimerRef.current); spotTimerRef.current = null; }
@@ -14863,7 +14932,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   /* ★★★ Into SATELLITE (its key, and a REMIND banner's LISTEN): each other whole-radio mode switched OFF properly. */
   satEnterRef.current = () => {
-    if (!satCap || !satCap.ok || satOnRef.current) return;
+    if (!satCap || (!satCap.ok && !satNeedsPlace(satCap, satOwnHere)) || satOnRef.current) return;   // ★★ beta94 no position: in, on the prompt
     const c = client.current as unknown as { sondes?: (on: boolean) => void; avdata?: (on: boolean) => void } | null;
     if (dabOn) toggleDab();
     if (adsbOnRef.current) toggleAdsb();
@@ -16347,6 +16416,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Satellite" onClose={satModeOff}>
         <SatellitePanel
           list={satList} readout={satRo} cap={satCap} autoDoppler={satAutoDoppler}
+          /* ★★ beta94 Local Hardware's position: the prompt while the engine has none, then which one is in use */
+          place={satOwnHere ? {
+            need: satNeedsPlace(satCap, true),
+            line: satPlaceLine(localPlace, localPlace ? latLonToGrid(localPlace.lat, localPlace.lon) : ''),
+            entered: localPlace?.src === 'entered',
+            busy: satPlaceBusy,
+            onEnable: satPlaceEnable, onEnter: satPlaceEnter, onClear: satPlaceClear,
+          } : undefined}
           picked={satPicked} pending={satPending} why={satWhy}
           picture={satPicture} pictureDone={satPictureDone}
           decLine={satDec && activeDecoder === satDec ? satDecLineShown(decoderStatus) : ''}
@@ -17081,13 +17158,17 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★★ V12 SATELLITE — a whole-radio mode (Stuart, 2026-11-20: "next to ism sondes etc"). Only where the server sends
            *  `doppler` (the radio reaches a listed downlink), with the menu's rule (refused = not drawn, see ADS-B above)
            *  unless on, so it can always be left. Entering leaves whichever whole-radio mode is on; the key again leaves. */
-          satAvail: !!satCap && (satCap.ok || satOn) && !!(client.current as any)?.isVibe,
-          satWhy: !satOn && satCap && !satCap.ok ? satCap.why : undefined,
+          /*    ★★ beta94 (tester Mac Ha, Stuart 11-25): on THIS APP's own engine (Local Hardware) with no position, the key is
+           *    SELECTABLE and the box opens on the position prompt (satPlace.ts satOffer) — elsewhere the rule above. */
+          ...(() => {
+            const so = satOffer({ cap: satCap, on: satOn, isVibe: !!(client.current as any)?.isVibe, ownEngine: satOwnHere });
+            return { satAvail: so.avail, satWhy: !satOn && !so.prompt && satCap && !satCap.ok ? satCap.why : undefined };
+          })(),
           satOn,
           onSat: () => {
             markInteract(); setModeSelOpen(false);
             if (satOnRef.current) { satModeOff(); return; }
-            if (satCap && !satCap.ok) { appAlert('SATELLITE unavailable', satCap.why); return; }
+            if (satCap && !satCap.ok && !satNeedsPlace(satCap, satOwnHere)) { appAlert('SATELLITE unavailable', satCap.why); return; }
             satEnterRef.current();
           },
           sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
@@ -17642,9 +17723,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={cityPickerOpen}
         onClose={() => setCityPickerOpen(false)}
         onPick={(c) => {
+          setCityPickerOpen(false);
+          // ★★ beta94 Local Hardware: kept on this phone (entered = it wins) and given to its satellite engine too
+          if (satOwnHere) { setEnteredPlace({ lat: c.lat, lon: c.lon, label: c.name }).then((v) => {
+            applyLocalPlace({ lat: v?.lat ?? c.lat, lon: v?.lon ?? c.lon, label: c.name, src: 'entered' }); }).catch(() => {}); return; }
           recvLocRef.current = { lat: c.lat, lon: c.lon };
           setRecvLoc({ lat: c.lat, lon: c.lon });
-          setCityPickerOpen(false);
         }}
       />
       </PanelBoundary>
