@@ -21,6 +21,26 @@ Built, unit-tested, Android release APK compiled. **Not yet run on a phone.** Ow
 6. While the phone ALSO serves as a VibeServer with a location: the server's listeners see the server location only;
    nothing typed in Local Hardware shows on vibeserver.json, /location or the directory.
 
+## MY LOCATION on the server list (Stuart 11-25, same branch)
+
+- A **MY LOCATION** row at the foot of the server list (InstancePickerScreen's footer, above PREFILL KIWISDR CALL SIGN —
+  the screen's settings rows; the ⚙ is factory reset only). It shows "Northampton IO92 (entered)", "This phone's
+  location" or "Not set — tap to set". The tap opens a box: type a town or locator (resolveLocation — a locator offline,
+  a town via Nominatim once), USE THIS PHONE'S LOCATION (the OS permission), CLEAR (only with an entered place), Close.
+- It is the SAME stored value (`vibe.localPlace`) as the SATELLITE box and the spots map's city picker;
+  `onEnteredPlaceChange` (localPlace.ts) tells whoever is listening, so the list follows a change made in the box.
+- The list's position: entered wins, else the phone's GPS where allowed, else none (`directoryPlace` in myPlace.ts —
+  the same rule as `localPlaceChoose`). With an entered place the phone is not asked at launch. A change re-works the
+  distances on the phone (`relocate` / `relocateMeta`: haversine against each listing's own position, nearest first),
+  the NEAR sort and the favourites' km at once — no re-fetch, nothing sent.
+- SDRScreen now reads the stored place in ANY Local Hardware session for spots and maps (it was satellite-engine
+  sessions only), and the map's city picker saves there in any Local Hardware session — so the row's helper text is true.
+- Never fed to publishLocation / setLocationJson / the server location: test_sat_place.ts §7 guards the picker, myPlace.ts
+  and that no directory request carries lat/lon. About (beta94 note + PRIVACY) and PRIVACY.md say where it is.
+- **Owed on a device:** the row and box on default / silver / black at phone width; type IO92nh → the row and the NEAR
+  order change with no restart; change it in the SATELLITE box → BACK to the list shows it; CLEAR with location denied
+  → "Not set", NEAR gone.
+
 ## Root cause (verified)
 
 - The satellite engine's observer came only from `LocalSdrShim::setLocationJson` (the owner's published server

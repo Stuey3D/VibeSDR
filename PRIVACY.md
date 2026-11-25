@@ -73,8 +73,15 @@ the directories are unsorted, and spots still appear on the map but with no
 distance or bearing, because the app has no position of its own to measure from
 (it holds 0° latitude, 0° longitude — "Null Island" — as the marker for
 "unknown", draws no receiver on the map, and offers a *Set location* button). You
-can fix that without sharing your real location at all: enter the nearest city or
-a Maidenhead grid reference by hand and the app uses that instead.
+can fix that without sharing your real location at all: enter the nearest town or
+a Maidenhead grid reference by hand (*My location* at the foot of the server list,
+the SATELLITE box, or the map's *Set location*) and the app uses that instead. It
+is one setting, kept on the device and snapped to the centre of its grid square;
+an entered place wins over the device's location. With an SDR plugged into an
+Android phone it is also what satellite passes and Doppler are worked out from.
+It is never sent to a server or published. A grid reference is decoded on the
+device; a typed town name is looked up once with OpenStreetMap's Nominatim service
+(below), which receives only the name you typed.
 
 **Serving.** Listing a server publicly is the one thing that needs a position,
 because the directory exists to sort receivers by distance. With the default

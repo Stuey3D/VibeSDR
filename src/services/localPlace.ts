@@ -7,6 +7,9 @@
  *     setLocationJson, not the directory. The native call reaches this process's engine only (VibeLocalSdrModule
  *     .setSatObserver — the server process is never told). Grid-square centre before it leaves JS (grid.ts gridCentre).
  * The pure rules and words are in satPlace.ts.
+ * ★★ ONE value for the whole app: the server list's MY LOCATION row (InstancePickerScreen — its distances and NEAR sort;
+ *    rules in myPlace.ts), the SATELLITE box and the spots map's city picker all read and write it, and hear each other
+ *    through onEnteredPlaceChange.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
@@ -28,13 +31,26 @@ export async function getEnteredPlace(): Promise<EnteredPlace | null> {
   } catch { return null; }
 }
 
+/** ★ ONE value, three places to change it (the server list's MY LOCATION, the SATELLITE box, the spots map's city
+ *  picker): whoever is on screen hears a change made in another, with no restart. null = cleared. */
+type PlaceListener = (p: EnteredPlace | null) => void;
+const placeListeners = new Set<PlaceListener>();
+export function onEnteredPlaceChange(fn: PlaceListener): () => void {
+  placeListeners.add(fn);
+  return () => { placeListeners.delete(fn); };
+}
+function tellPlace(p: EnteredPlace | null): void {
+  for (const fn of [...placeListeners]) { try { fn(p); } catch {} }
+}
+
 /** Kept snapped to the grid-square centre — what is stored is no finer than what is used. null = CLEAR. */
 export async function setEnteredPlace(p: EnteredPlace | null): Promise<EnteredPlace | null> {
   try {
-    if (!p) { await AsyncStorage.removeItem(LOCAL_PLACE_KEY); return null; }
+    if (!p) { await AsyncStorage.removeItem(LOCAL_PLACE_KEY); tellPlace(null); return null; }
     const c = gridCentre(p.lat, p.lon);
     const v: EnteredPlace = { lat: c.lat, lon: c.lon, ...(p.label ? { label: p.label.slice(0, 60) } : {}) };
     await AsyncStorage.setItem(LOCAL_PLACE_KEY, JSON.stringify(v));
+    tellPlace(v);
     return v;
   } catch { return null; }
 }

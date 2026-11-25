@@ -121,7 +121,12 @@ import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { watchTargetPending } from '../services/watchBoot';
 import { watchProvider } from '../services/watchProvider';
 import { isMacHost } from '../services/macAudio';
-import { findVibeServerPort } from '../services/vibeServer';
+import { findVibeServerPort, resolveLocation } from '../services/vibeServer';
+// ★★ beta94 MY LOCATION — the one stored place (also the SATELLITE box's and the spots map's), never published
+import { getEnteredPlace, setEnteredPlace, onEnteredPlaceChange, phoneLocationIfAllowed } from '../services/localPlace';
+import { directoryPlace, myPlaceLine, relocate, relocateMeta, myPlaceDenied,
+         MY_PLACE_TITLE, MY_PLACE_HELP, MY_PLACE_ENTRY_HINT, MY_PLACE_NOT_FOUND } from '../services/myPlace';
+import type { LocalPlace } from '../services/satPlace';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          saveFavourites, registerFavouriteVisit,
          updateFavourite, favIsCustom,
@@ -224,7 +229,8 @@ function normUrl(u: string): string {
 
 // Live per-favourite metrics, keyed by normUrl, harvested from the directories (server-provided
 // distance works even with no device-location permission; snr = best band condition).
-type FavMeta = Record<string, { dist: number | null; snr: number | null }>;
+// ★ beta94: the server's own lat/lon kept too, so MY LOCATION changing works the distances out again (relocateMeta).
+type FavMeta = Record<string, { dist: number | null; snr: number | null; lat?: number | null; lon?: number | null }>;
 function favDist(f: Favourite, meta: FavMeta, loc: { lat: number; lon: number } | null): number {
   const m = meta[normUrl(f.url)];
   if (m?.dist != null) return m.dist;                                   // server-computed, preferred
@@ -349,6 +355,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // Whether we have a usable location (GPS permission granted, or a manual city/grid entered).
   // Gates the 'nearest' sort — no location means no distances to sort by.
   const [hasLocation, setHasLocation]   = useState(false);
+  /* ★★ beta94 MY LOCATION (Stuart 11-25) — the position the list's distances come from: a town or locator ENTERED (wins),
+   *  else the phone's location where allowed, else none. The same stored place as the SATELLITE box and the spots map
+   *  (localPlace.ts); stays on this phone. The row is in the footer, above PREFILL KIWISDR CALL SIGN. */
+  const [myPlace, setMyPlace]           = useState<LocalPlace | null>(null);
+  const [placeOpen, setPlaceOpen]       = useState(false);
+  const [placeText, setPlaceText]       = useState('');
+  const [placeBusy, setPlaceBusy]       = useState(false);
+  const placeInputRef = useRef<TextInput | null>(null);
+  /** Assigned below, once the lists it re-works exist (the launch effect reaches it through this). */
+  const applyPlaceRef = useRef<(p: LocalPlace | null) => void>(() => {});
   // How the FAVOURITES list is ordered (default Most Used). Persisted; cycled from the fav header.
   const [favSort, setFavSortState] = useState<FavSort>('used');
   useEffect(() => { getFavSort().then(setFavSortState).catch(() => {}); }, []);
@@ -523,7 +539,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // Learn the user's location for distance sorting (used when a directory is
       // opened), but DON'T fetch any directory here — the landing view is the
       // chooser (favourites + directory cards). Directories load on tap.
-      try { const loc = await getUserLocation(); if (!cancelled && loc) { userLocRef.current = loc; setHasLocation(true); } } catch {}
+      // ★★ beta94 an ENTERED place (MY LOCATION) wins — then the phone is not asked at all.
+      try {
+        const entered = await getEnteredPlace();
+        const gps = entered ? null : await getUserLocation();
+        if (!cancelled) applyPlaceRef.current(directoryPlace(entered, gps));
+      } catch {}
       if (!cancelled) { setLoading(false); }
 
       // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
@@ -730,7 +751,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         const dist = i.distance ?? (i.latitude != null && i.longitude != null && userLocRef.current
           ? haversineKm(userLocRef.current.lat, userLocRef.current.lon, i.latitude, i.longitude) : null);
         const cur = next[k];
-        next[k] = { dist: dist ?? cur?.dist ?? null, snr: snr ?? cur?.snr ?? null };
+        next[k] = { dist: dist ?? cur?.dist ?? null, snr: snr ?? cur?.snr ?? null,
+                    lat: i.latitude ?? cur?.lat ?? null, lon: i.longitude ?? cur?.lon ?? null };
       }
       return next;
     });
@@ -738,6 +760,53 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   // Merge whatever directory the user opens.
   useEffect(() => { mergeMeta(instances); }, [instances, mergeMeta]);
+
+  /* ★★ beta94 MY LOCATION in use: the distances, the NEAR sort and the favourites' km follow it at once — worked out again
+   *  here from each server's own position (no re-fetch, nothing sent anywhere). */
+  const applyPlace = useCallback((p: LocalPlace | null) => {
+    setMyPlace(p);
+    const loc = p ? { lat: p.lat, lon: p.lon } : null;
+    userLocRef.current = loc;
+    setHasLocation(!!loc);
+    setInstances(list => relocate(list, loc));
+    setFavMeta(m => relocateMeta(m, loc));
+  }, []);
+  applyPlaceRef.current = applyPlace;
+  // ★ Changed in the SATELLITE box or the spots map's city picker (or here): this list hears it, no restart.
+  useEffect(() => onEnteredPlaceChange((e) => {
+    if (e) { applyPlaceRef.current({ ...e, src: 'entered' }); return; }
+    phoneLocationIfAllowed().then(g => applyPlaceRef.current(directoryPlace(null, g))).catch(() => {});
+  }), []);
+  const closePlace = useCallback(() => { setPlaceOpen(false); setPlaceText(''); }, []);
+  /** A town or locator: a locator decodes offline; a town asks the geocoder once (resolveLocation, as everywhere). */
+  const placeUseText = useCallback(async () => {
+    const t = placeText.trim();
+    if (!t || placeBusy) return;
+    setPlaceBusy(true);
+    try {
+      const r = await resolveLocation(t);
+      if (!r) { appAlert('Not found', MY_PLACE_NOT_FOUND); return; }
+      await setEnteredPlace(r);   // → onEnteredPlaceChange → applyPlace
+      closePlace();
+    } finally { setPlaceBusy(false); }
+  }, [placeText, placeBusy, closePlace]);
+  /** The phone's location (the OS asks if it has not yet); an entered place is dropped — this is the user's choice now. */
+  const placeUsePhone = useCallback(async () => {
+    if (placeBusy) return;
+    setPlaceBusy(true);
+    try {
+      const g = await getUserLocation();
+      if (!g) { appAlert('Location not allowed', myPlaceDenied(Platform.OS)); return; }
+      await setEnteredPlace(null);
+      applyPlaceRef.current(directoryPlace(null, g));
+      closePlace();
+    } finally { setPlaceBusy(false); }
+  }, [placeBusy, closePlace]);
+  /** CLEAR an entered place: the phone's location where already allowed (no prompt), else none. */
+  const placeClear = useCallback(async () => {
+    await setEnteredPlace(null);
+    closePlace();
+  }, [closePlace]);
 
   // Eagerly harvest ALL directories once on mount so Nearest/SNR have data the moment the user taps
   // the chip — the chooser itself never opens a directory, so favourites would otherwise be blank.
@@ -2173,6 +2242,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     onField: (i) => { if (i === 2) { void forgetEditPin(); return; } [editNameField, editUrlField][i]?.open(); },
     onBack: () => setEditFav(null),
   });
+  // ★★ beta94 MY LOCATION's box: the town / locator field, then THIS PHONE'S LOCATION (a second row, as FORGET is above),
+  //    then the keys — Close, Clear (only with an entered place), Use.
+  const placeTextRef = useRef(placeText); placeTextRef.current = placeText;
+  const placeUseRef = useRef(placeUseText); placeUseRef.current = placeUseText;
+  const placeField = usePadField({
+    ref: placeInputRef, mode: 'text', title: 'Town or locator',
+    getValue: () => placeTextRef.current, setValue: setPlaceText,
+    onSubmit: () => { setTimeout(() => { void placeUseRef.current(); }, 60); },
+  });
+  const placeEntered = myPlace?.src === 'entered';
+  const placeNav = useFieldPopupNav(placeOpen, {
+    name: 'my location', fields: 2,
+    keys: placeEntered
+      ? [closePlace, () => { void placeClear(); }, () => { void placeUseText(); }]
+      : [closePlace, () => { void placeUseText(); }],
+    onField: (i) => { if (i === 1) { void placeUsePhone(); return; } placeField.open(); },
+    onBack: closePlace,
+  });
   // ★ Recordings over the list: it has its own list nav; this makes the list beneath yield and Back close it.
   useOverlay(recordingsOpen, { name: 'recordings', onBack: () => setRecordingsOpen(false) });
 
@@ -2926,6 +3013,56 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           </View>
         </View>
       </Modal>
+      {/* ★★ beta94 MY LOCATION (Stuart 11-25): a town or locator, or this phone's location, or CLEAR. The same stored place
+          as the SATELLITE box and the spots map; it stays on this phone and never reaches a server (myPlace.ts). */}
+      <Modal visible={placeOpen} transparent animationType="fade" onRequestClose={closePlace}>
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={styles.tcpBackdrop}>
+          <View style={[styles.tcpCard, { borderColor: C.borderBright }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text, letterSpacing: 1, marginBottom: 6 }}>{MY_PLACE_TITLE}</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(13), color: myPlace ? C.value : C.textDim, marginBottom: 10 }}>
+              In use: {myPlaceLine(myPlace)}
+            </Text>
+            <TextInput ref={placeInputRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, placeNav.field(0) && { borderColor: placeNav.ring, borderWidth: 2 }]}
+              placeholder={MY_PLACE_ENTRY_HINT} placeholderTextColor={C.textDim}
+              value={placeText} onChangeText={setPlaceText} autoCorrect={false} autoCapitalize="words"
+              returnKeyType="done" onSubmitEditing={() => { void placeUseText(); }} editable={!placeBusy}
+              accessibilityLabel="Nearest town or Maidenhead locator" {...placeField.fieldProps} />
+            <NavWrap on={placeNav.field(1)} color={placeNav.ring} style={{ alignSelf: 'flex-start' }}>
+            <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border, alignSelf: 'flex-start' }]} disabled={placeBusy}
+              onPress={() => { void placeUsePhone(); }} accessibilityRole="button"
+              accessibilityLabel="Use this phone's location (approximate)">
+              <Text style={{ fontFamily: F, fontSize: fs(13), color: C.key }}>
+                {placeBusy ? 'Asking…' : (IS_TV ? '⌖ Use this device’s location' : '⌖ Use this phone’s location')}
+              </Text>
+            </TouchableOpacity>
+            </NavWrap>
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, marginTop: 10, lineHeight: fs(16) }}>{MY_PLACE_HELP}</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
+              <NavWrap on={placeNav.key(0)} color={placeNav.ring}>
+              <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={closePlace}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Close</Text>
+              </TouchableOpacity>
+              </NavWrap>
+              {placeEntered && (
+                <NavWrap on={placeNav.key(1)} color={placeNav.ring}>
+                <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => { void placeClear(); }}
+                  accessibilityLabel="Clear the entered place">
+                  <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Clear</Text>
+                </TouchableOpacity>
+                </NavWrap>
+              )}
+              <NavWrap on={placeNav.key(placeEntered ? 2 : 1)} color={placeNav.ring}>
+              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.keyFill, opacity: placeText.trim() && !placeBusy ? 1 : 0.5 }]}
+                disabled={!placeText.trim() || placeBusy} onPress={() => { void placeUseText(); }}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Use</Text>
+              </TouchableOpacity>
+              </NavWrap>
+            </View>
+          </View>
+        </View>
+        </KeyboardAvoidingView>
+      </Modal>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
         {/* Header */}
@@ -3395,6 +3532,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             }
             ListFooterComponent={
               <View style={{ marginTop: 14 }}>
+                {/* ★★ beta94 MY LOCATION — where the list's distances (and Local Hardware's satellites, spots and maps)
+                    are worked out from. Shows which is in use; tap to type a town / locator, use the phone's, or clear. */}
+                <ChooserRow zone="footer"
+                  style={[styles.row, { borderColor: C.border, marginBottom: 6 }]}
+                  onPress={() => { setPlaceText(''); setPlaceOpen(true); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`My location: ${myPlaceLine(myPlace)}. Tap to change.`}
+                >
+                  <View style={styles.rowMain}>
+                    <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.section, letterSpacing: 1 }} numberOfLines={1}>{MY_PLACE_TITLE}</Text>
+                    <Text style={{ fontFamily: F, fontSize: fs(16), color: myPlace ? C.value : C.textDim, marginTop: 3 }} numberOfLines={1}>
+                      {myPlaceLine(myPlace)}
+                    </Text>
+                  </View>
+                  <View style={styles.rowRight}>
+                    <Text style={{ fontFamily: F, fontSize: fs(18), color: C.keyDim }}>✎</Text>
+                  </View>
+                </ChooserRow>
                 {/* KiwiSDR call sign — saved once, sent automatically on every Kiwi connect.
                     Sits above the directories because that's where Kiwi lives; tap to add/edit. */}
                 <ChooserRow zone="footer"

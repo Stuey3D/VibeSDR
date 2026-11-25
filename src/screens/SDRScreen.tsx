@@ -6600,7 +6600,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!isLocal) return;
     let cancelled = false;
     (async () => {
-      const entered = satOwnHere ? await getEnteredPlace() : null;
+      // ★ the one stored place (the server list's MY LOCATION too) — spots and maps in any Local Hardware; satellites on the own engine
+      const entered = await getEnteredPlace();
       const gps = entered ? null : await getUserLocation();
       const p = localPlaceChoose(entered, gps);
       if (cancelled || !p) return;
@@ -17725,8 +17726,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onPick={(c) => {
           setCityPickerOpen(false);
           // ★★ beta94 Local Hardware: kept on this phone (entered = it wins) and given to its satellite engine too
+          //   ★ the same stored place as the server list's MY LOCATION, so it shows there too (any Local Hardware)
           if (satOwnHere) { setEnteredPlace({ lat: c.lat, lon: c.lon, label: c.name }).then((v) => {
             applyLocalPlace({ lat: v?.lat ?? c.lat, lon: v?.lon ?? c.lon, label: c.name, src: 'entered' }); }).catch(() => {}); return; }
+          if (isLocal) setEnteredPlace({ lat: c.lat, lon: c.lon, label: c.name }).catch(() => {});
           recvLocRef.current = { lat: c.lat, lon: c.lon };
           setRecvLoc({ lat: c.lat, lon: c.lon });
         }}

@@ -61,7 +61,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    radio should not be there".
   // ★★ V12 beta94 2026-11-25 — SATELLITE IN LOCAL HARDWARE (tester Mac Ha; Stuart: "allow it to be selected if no location
   //     and give the user the ability to enable location or add their own"). satPlace.ts, localPlace.ts, vibe_sat_observer.h.
-  { v: 'V12 (experimental)', detail: 'SATELLITE WITH A RADIO PLUGGED INTO THIS PHONE (Android) \u2014 Local Hardware had no SATELLITE key unless the phone was also set up as a VibeServer with a location. It is there now: satellites need your location to work out the passes and correct the Doppler shift, so if VibeSDR has none yet the box asks for one \u2014 ENABLE LOCATION uses the phone\u2019s approximate location, or type the nearest town or your locator (it does not need to be exact; a locator works offline). The position is snapped to its grid square, kept on this phone so you are not asked again, and also used for spot distances and the maps; the box says which one is in use, with CHANGE and CLEAR. It is never sent to a server or published. Also with an rtl_tcp or SpyServer connection made from this phone.' },
+  { v: 'V12 (experimental)', detail: 'SATELLITE WITH A RADIO PLUGGED INTO THIS PHONE (Android) \u2014 Local Hardware had no SATELLITE key unless the phone was also set up as a VibeServer with a location. It is there now: satellites need your location to work out the passes and correct the Doppler shift, so if VibeSDR has none yet the box asks for one \u2014 ENABLE LOCATION uses the phone\u2019s approximate location, or type the nearest town or your locator (it does not need to be exact; a locator works offline). The position is snapped to its grid square, kept on this phone so you are not asked again, and also used for spot distances and the maps; the box says which one is in use, with CHANGE and CLEAR. It is never sent to a server or published. Also with an rtl_tcp or SpyServer connection made from this phone. MY LOCATION ON THE SERVER LIST \u2014 the same place has its own row at the foot of the server list, above the KiwiSDR call sign: it shows what is in use (a town or locator you entered, this phone\u2019s location, or not set), and a tap lets you type the nearest town or your locator, use the phone\u2019s location, or clear an entered one. The list\u2019s distances and NEAR sort use it (an entered place wins over the phone\u2019s) and follow a change at once. It is one setting: change it there, in the SATELLITE box or on the spots map and all three show it.' },
   // ★★★ V12 beta93 2026-11-24 — THE NR ECHO STORM + ONE NR / NOTCH / BLANKER SET PER VFO (Stuart, XCover web page: the NR
   //     slider slid by itself and the spectrum socket ran at ~1 MB/s; "maybe needs two sets of nr/nb controls for each vfo").
   //     vfoDsp.ts, local_sdr_shim.cpp deferHwInfo + WatchDsp, test-server-vfo-dsp.mjs, test-vfo-dsp.ts.
@@ -1030,8 +1030,10 @@ function AboutBody({ onClose }: AboutOverlayProps) {
           <Text style={styles.section}>PRIVACY</Text>
           <Text style={styles.body}>
             VibeSDR collects no personal data — no analytics, ads, or tracking.
-            Location is optional and used only to sort servers by distance; deny it
-            and everything still works. Your bookmarks and settings stay on your device.
+            Location is optional — this phone’s, or a town or locator you type under
+            My location on the server list — and stays on this device: it sorts servers by
+            distance and, in Local Hardware, works out satellite passes and spot distances.
+            Without it everything else still works. Your bookmarks and settings stay on your device.
           </Text>
           <TouchableOpacity onPress={() => Linking.openURL('https://github.com/Stuey3D/VibeSDR/blob/main/PRIVACY.md')}>
             <Text style={styles.link}>Full privacy policy</Text>
