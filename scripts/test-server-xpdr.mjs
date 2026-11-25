@@ -189,6 +189,8 @@ try {
       ok(await until(() => lastPicked(sp)?.norad === 44909, 4000) && lastPicked(sp)?.tx === 0, `the beacon's pick opened the transponder (tx ${lastPicked(sp)?.tx})`);
       const p = lastPicked(sp);
       ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'TRACK' && m.tx === 'Transponder'), 4000), 'TRACK on the transponder');
+      ok(await until(() => /satellite gain: RS-44 Transponder — (a pass starts|armed before the rise)/.test(S.L()), 6000),
+         `★ beta94 the pass's gain hold covers the finder: ${(S.L().match(/satellite gain: RS-44[^\n]*/) || [''])[0]}`);
       const dx = ws(S.port, '/ws/dxcluster?user_session_id=xplk00001');
       await until(() => dx.open, 3000); await sleep(300);
       dx.send({ type: 'audio_extension_attach', extension_name: 'xpdr', ...p.params });

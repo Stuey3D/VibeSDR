@@ -12281,7 +12281,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  is the satellite up? (vibe_sat_gain.h Watch.) Every 2 s on the housekeeping thread, just before overloadTick; it
      *  publishes g_satGainOn / g_satGainSeq and each radio's own loop does the measuring, setting and holding.
      *  Counted: an unattended pass's decoder, a pick's decoder (lrpt · sstv · fctlm · aprs — the ones a pick attaches for
-     *  pictures, telemetry and packets; never a CW beacon or a voice downlink) while its host still runs the very decoder
+     *  pictures, telemetry and packets — and beta94's transponder finder; never a single CW beacon or FM voice downlink) while its host still runs the very decoder
      *  the pick started, and LRPT / FUNcube telemetry started by hand (satellite-only decoders, no orbit to ask: held while
      *  they run). A listener's own APRS or SSTV on a terrestrial frequency is not a pass and changes nothing. */
     /** ★★★ V12 beta92 THE SATELLITE PASS's IF FILTER (vibe_sat_if.h) — which downlinks the tuner's filter must hold now.
@@ -12357,7 +12357,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void satGainWatchTick() {
         if (frontDoorOnly || decoderOnly || stopping.load()) return;
         satIfTick();   // ★★ beta92 the pass's IF filter first — the gain is measured behind it
-        auto satDec = [](const std::string& d) { return d == "lrpt" || d == "sstv" || d == "fctlm" || d == "aprs" || d == "orbcomm"; };
+        /* ★★ beta94 "xpdr" counts too (Stuart 11-25, "gain do what you feel is best"): the transponder finder judges every
+         *  signal by its level over the pass, so a gain step would fade a row or invent one, and a weak bird wants the
+         *  headroom the hold measures. Set once, cut only on a clip, as for a picture. */
+        auto satDec = [](const std::string& d) { return d == "lrpt" || d == "sstv" || d == "fctlm" || d == "aprs" || d == "orbcomm" || d == "xpdr"; };
         bool running = false; std::string key, what; long long norad = 0;
         {   // 1. an unattended pass (its decoder on the shared host)
             std::lock_guard<std::recursive_mutex> pl(satPassMtx_);

@@ -88,7 +88,11 @@ Web: `decoders.ts` / `main.ts` / `satellites.ts` (the finder's panel). App: `Dec
 
 - **PSK Reporter**: CW callsigns heard through the satellite are NOT reported (nor put on the digi map). Should they be, at
   the downlink frequency?
-- **The pass's gain hold** is not applied to a transponder pick (unchanged; still his open question about holding the gain).
+- ~~The pass's gain hold~~ DECIDED 11-25 (Stuart: "gain do what you feel is best"): a transponder pick's finder counts as a
+  pass decoder, so the hold measures headroom, sets the gain once and cuts only on a clip (RTL, Airspy R2/Mini, RSP; the HF+,
+  USRP, HackRF and relayed streams stay as their owner set them, as for every pass). test-server-xpdr 26/0.
+- ~~PSK Reporter~~ DECIDED 11-25: satellite CW stays OFF PSK Reporter (no "via satellite" field; it would read as a direct
+  70 cm path). Our own map with "via <bird>" is proposed, not built.
 - **The dial readout** shows where LISTEN put it while the channel follows the station (the needle shows where it is).
   Should the digits follow too?
 - **"inverting"** is assumed for every linear bird we list (true for all of them today); a mirror entry would need
