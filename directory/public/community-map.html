@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Community Map — VibeSDR</title>
-<meta name="description" content="Aircraft and shipping heard by VibeServer receivers around the world, on one map.">
+<meta name="description" content="Aircraft, shipping, NAVTEX, radiosondes, APRS and MeshCore heard by VibeServer receivers around the world, on one map.">
 <!-- ★★★ THE VibeSDR COMMUNITY MAP (Stuart, 2026-11-25). docs/v12/COMMUNITY-MAP.md (v12-experimental) has the design.
-     ★★★ THIS PAGE IS THE ONLY THING THE WORKER SERVES FOR IT, plus one small list (/api/community). Every aircraft, ship and
-         beacon comes STRAIGHT FROM THE RECEIVER THAT HEARD IT, over that receiver's own tunnel — community-map.js dataUrl().
-     ★ Leaflet and the GPU map are the directory's own copies (no CDN), exactly as index.html loads them. -->
-<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+     ★★★ THIS PAGE IS THE ONLY THING THE WORKER SERVES FOR IT, plus one small list (/api/community). Everything drawn comes
+         STRAIGHT FROM THE RECEIVER THAT HEARD IT, over that receiver's own tunnel (community-map.js dataUrl).
+     ★★ LAYERED: the map and the receivers draw at once; each receiver's sections arrive in parallel (≤ 6 at a time) and are
+        drawn as they come; a slow or dead one never holds up the rest. Numerous things are GPU layers (MapLibre GeoJSON),
+        clustered when zoomed out. The icons and cards are the server maps' own (community-kit.js). -->
 <link rel="stylesheet" href="/mapgl/vendor/maplibre-gl.css">
 <style>
   :root {
-    /* ★ The directory's palette, to the value (index.html :root). */
     --bg: #080601; --panel: #0d0a02; --line: rgba(255,176,0,.22);
     --text: #ffcc88; --dim: rgba(255,160,0,.55); --accent: #ffb833;
     --free: #28A745; --busy: #e05050; --temp: #4fc3f7; --down: #6b7785;
@@ -23,40 +23,40 @@
                font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; touch-action: manipulation; }
   body { display: flex; flex-direction: column; }
   a { color: var(--accent); }
-  header { display: flex; align-items: center; gap: 10px; padding: max(10px, env(safe-area-inset-top)) 14px 8px;
-           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header { display: flex; align-items: center; gap: 8px; padding: max(10px, env(safe-area-inset-top)) 14px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 4px; white-space: nowrap; }
   header .back { font-size: 11px; letter-spacing: .08em; text-decoration: none; white-space: nowrap; }
   .grow { flex: 1; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  .seg button, .chip, .btn { font: inherit; font-size: 11px; letter-spacing: .08em; color: var(--text); background: var(--panel);
-             border: 0; padding: 6px 10px; cursor: pointer; }
-  .seg button + button { border-left: 1px solid var(--line); }
-  .seg button[aria-pressed="true"] { background: var(--accent); color: #140d00; font-weight: 700; }
-  .btn { border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); }
+  button { font: inherit; }
+  .grp, .btn, .chip { font-size: 11px; letter-spacing: .08em; color: var(--text); background: var(--panel); cursor: pointer; }
+  .grp { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  .grp[aria-pressed="true"] { background: var(--accent); color: #140d00; font-weight: 700; border-color: var(--accent); }
+  .btn { border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); padding: 6px 10px; }
   .btn[aria-pressed="true"] { background: var(--accent); color: #140d00; font-weight: 700; }
-  .bar { display: flex; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
-  .bar .lbl { font-size: 10px; color: var(--dim); letter-spacing: .1em; margin-right: 2px; }
-  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 6px; }
+  .bar { display: flex; gap: 5px; padding: 5px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+  .bar .lbl { font-size: 10px; color: var(--dim); letter-spacing: .1em; margin: 0 2px 0 6px; }
+  .bar .lbl:first-child { margin-left: 0; }
+  .bar .set { display: inline-flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .bar .set.off { opacity: .35; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; display: inline-flex; align-items: center; gap: 6px; }
   .chip .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
   .chip[aria-pressed="false"] { opacity: .45; }
   .chip[aria-pressed="false"] .dot { background: transparent !important; border: 1px solid currentColor; }
   .chip.only { border-color: var(--accent); color: var(--accent); }
+  select.chip { padding: 3px 6px; }
   main { position: relative; flex: 1; min-height: 0; }
   #map { position: absolute; inset: 0; background: #123049; }
   #status { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: rgba(13,10,2,.88); border: 1px solid var(--line);
             border-radius: 6px; padding: 6px 9px; font-size: 11px; max-width: calc(100% - 20px); pointer-events: none; line-height: 1.45; }
   #status b { color: var(--accent); font-weight: 600; }
   #empty { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 5; background: rgba(13,10,2,.92);
-           border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 12px; max-width: min(420px, calc(100% - 32px));
-           text-align: center; line-height: 1.5; }
-  /* ── the receivers list: a drawer on a wide window, a sheet from the bottom on a phone ── */
-  #rx { position: absolute; top: 0; right: 0; bottom: 0; width: 370px; max-width: 100%; z-index: 8; background: rgba(13,10,2,.97);
-        border-left: 1px solid var(--line); display: flex; flex-direction: column; }
-  #rx[hidden] { display: none; }
-  #rx .head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  #rx .head h2 { margin: 0; font-size: 13px; letter-spacing: .12em; font-weight: 600; flex: 1; }
-  #rx .list { overflow: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+           border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 12px; max-width: min(420px, calc(100% - 32px)); text-align: center; line-height: 1.5; }
+  .panel { position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 100%; z-index: 8; background: rgba(13,10,2,.97);
+           border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  .panel[hidden] { display: none; }
+  .panel .head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .panel .head h2 { margin: 0; font-size: 13px; letter-spacing: .12em; font-weight: 600; flex: 1; }
+  .panel .list { overflow: auto; flex: 1; -webkit-overflow-scrolling: touch; }
   .row { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
   .row:hover, .row:focus-visible { background: rgba(255,176,0,.06); outline: none; }
   .row.sel { background: rgba(255,176,0,.12); box-shadow: inset 3px 0 0 var(--accent); }
@@ -68,23 +68,18 @@
   .row .st { font-size: 11px; }
   .row .st.free { color: var(--free); } .row .st.busy { color: var(--busy); } .row .st.temp { color: var(--temp); } .row .st.down { color: var(--down); }
   .row .acts { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-  .listen { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .1em; padding: 6px 10px; border-radius: 6px;
-            background: var(--accent); color: #140d00; text-decoration: none; white-space: nowrap; }
+  .msg { padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 12px; }
+  .msg .mt { color: var(--accent); font-weight: 600; } .msg .md { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .msg pre { white-space: pre-wrap; margin: 6px 0 0; font-size: 11px; color: var(--text); max-height: 260px; overflow: auto; }
+  .listen { font-size: 11px; font-weight: 700; letter-spacing: .1em; padding: 6px 10px; border-radius: 6px; background: var(--accent); color: #140d00; text-decoration: none; white-space: nowrap; }
   .row.down .listen { background: transparent; color: var(--dim); border: 1px solid var(--line); }
-  .onlyBtn { font: inherit; font-size: 10px; letter-spacing: .08em; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);
-             background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
+  .onlyBtn { font-size: 10px; letter-spacing: .08em; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
   .onlyBtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  /* receiver markers on the map */
-  .rxm { width: 14px; height: 14px; border: 2px solid #fff; background: #0d0a02; border-radius: 3px; box-shadow: 0 0 0 1px #000a; }
-  .rxm.sel { width: 18px; height: 18px; border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 4px rgba(255,184,51,.35); }
-  .rxm.down { border-color: var(--down); }
-  /* popups */
-  .maplibregl-popup-content, .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); border: 1px solid var(--line);
-       font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .maplibregl-popup-content { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 60vh; overflow: auto; }
   .maplibregl-popup-tip { border-top-color: var(--line) !important; border-bottom-color: var(--line) !important; }
   .maplibregl-popup-close-button { color: var(--dim); font-size: 16px; }
-  .pc .t { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
-  .pc .r { display: flex; gap: 8px; } .pc .k { color: var(--dim); min-width: 62px; }
+  .pc .t, .trkCard .t { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .pc .r, .trkCard .r { display: flex; gap: 8px; } .pc .k, .trkCard .k { color: var(--dim); min-width: 70px; }
   .pc .hb { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 5px; }
   .pc .hb div { display: flex; justify-content: space-between; gap: 10px; }
   .maplibregl-ctrl-group { background: var(--panel); border: 1px solid var(--line); }
@@ -92,11 +87,16 @@
   .maplibregl-ctrl-attrib a { color: var(--dim); }
   footer { color: var(--dim); font-size: 10px; padding: 6px 14px max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); line-height: 1.5; }
   @media (max-width: 600px) {
-    header { padding: max(8px, env(safe-area-inset-top)) 12px 6px; gap: 8px; }
+    header { padding: max(8px, env(safe-area-inset-top)) 12px 6px; gap: 6px; }
     header h1 { font-size: 14px; letter-spacing: 3px; }
-    .bar { padding: 5px 12px; gap: 5px; }
-    .seg button, .chip, .btn { padding: 6px 8px; }
-    #rx { top: auto; left: 0; width: 100%; height: 62%; border-left: 0; border-top: 1px solid var(--accent); border-radius: 12px 12px 0 0; }
+    /* ★ a phone: each bar one row that scrolls sideways (the map keeps the screen), NAVTEX types by their letter */
+    .bar { padding: 4px 12px; gap: 4px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .bar::-webkit-scrollbar { display: none; }
+    .bar > *, .bar .set { flex: none; } .bar .set { flex-wrap: nowrap; }
+    .chip .long { display: none; }
+    .grp, .btn { padding: 6px 8px; }
+    .chip { padding: 4px 7px; }
+    .panel { top: auto; left: 0; width: 100%; height: 62%; border-left: 0; border-top: 1px solid var(--accent); border-radius: 12px 12px 0 0; }
     footer { display: none; }
   }
 </style>
@@ -106,22 +106,25 @@
   <h1>COMMUNITY MAP</h1>
   <a class="back" href="/">◂ DIRECTORY</a>
   <span class="grow"></span>
-  <div class="seg" role="group" aria-label="Show" id="scope">
-    <button type="button" data-scope="both" aria-pressed="true">BOTH</button>
-    <button type="button" data-scope="aviation" aria-pressed="false">AVIATION</button>
-    <button type="button" data-scope="maritime" aria-pressed="false">MARITIME</button>
-  </div>
+  <!-- ★★ THREE INDEPENDENT GROUPS (Stuart: "all layers can be on at once aviation/maritime/misc") — any combination -->
+  <span id="groups" role="group" aria-label="Show"></span>
+  <button type="button" class="btn" id="msgBtn" aria-pressed="false" aria-controls="msgs" hidden>MESSAGES</button>
   <button type="button" class="btn" id="rxBtn" aria-pressed="false" aria-controls="rx">RECEIVERS</button>
 </header>
-<div class="bar" id="modes" aria-label="Modes"><span class="lbl">MODES</span></div>
+<div class="bar" id="modes" aria-label="Modes"></div>
+<div class="bar" id="navbar" aria-label="NAVTEX" hidden></div>
 <div class="bar" id="ages" aria-label="Heard in the last"><span class="lbl">HEARD IN</span></div>
 <main>
   <div id="map" role="region" aria-label="Map"></div>
   <div id="status" aria-live="polite">Finding the receivers that share…</div>
   <div id="empty" hidden></div>
-  <aside id="rx" hidden aria-label="Contributing receivers">
-    <div class="head"><h2 id="rxTitle">RECEIVERS</h2><button type="button" class="onlyBtn" id="rxClose">CLOSE ✕</button></div>
+  <aside id="rx" class="panel" hidden aria-label="Contributing receivers">
+    <div class="head"><h2 id="rxTitle">RECEIVERS</h2><button type="button" class="onlyBtn" data-close="rx">CLOSE ✕</button></div>
     <div class="list" id="rxList"></div>
+  </aside>
+  <aside id="msgs" class="panel" hidden aria-label="NAVTEX messages">
+    <div class="head"><h2 id="msgTitle">NAVTEX MESSAGES</h2><button type="button" class="onlyBtn" data-close="msgs">CLOSE ✕</button></div>
+    <div class="list" id="msgList"></div>
   </aside>
 </main>
 <footer>
@@ -129,243 +132,430 @@
   read straight from each receiver; a receiver is drawn at the centre of its four-character grid square, never its address.
 </footer>
 
-<script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/mapgl/vendor/maplibre-gl.js"></script>
 <script src="/mapgl/vendor/pmtiles.js"></script>
 <script src="/mapgl/vendor/vibemapgl.js"></script>
-<script src="/mapgl/vendor/vibemapgl-compat.js"></script>
 <script src="/mapgl/vibemap-style.js"></script>
+<script src="/community-kit.js"></script>
 <script src="/community-map.js"></script>
 <script>
 'use strict';
-const CM = window.CommunityMap;
+const T0 = performance.now();
+const CM = window.CommunityMap, KIT = window.CommunityKit;
 const $ = (id) => document.getElementById(id);
 const esc = CM.esc;
+const perf = { listDraw: 0, firstData: 0, firstDraw: 0, full: 0, bytes: {} };   // ★ ms from the page starting: the receivers listed, the first receiver's data in, the GPU map's first draw, every receiver in
 
-/* ══ THE MAP — the directory's own switch (index.html): the GPU map with Leaflet's API on top, Leaflet if no WebGL 2 ══ */
-let L = window.L, GLVM = null;
-if (window.VibeMapGL && window.VibeMapGLCompat && window.VM_STYLE) {
-  try {
-    const load = (p, kind) => fetch(p).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
-    GLVM = VibeMapGL.createNow($('map'), { style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/',
-                                            profile: 'aero', center: [0, 40], zoom: 1.4 });
-    if (GLVM) { L = window.L = VibeMapGLCompat.install(GLVM); L.control.zoom({ position: 'topleft' }).addTo(); GLVM.ready.catch((e) => console.error('GPU map: ' + e)); }
-  } catch (e) { console.error('GPU map unavailable: ' + e); GLVM = null; }
-}
-const map = L.map('map', { worldCopyJump: true }).setView([40, 0], 2);
-const layer = L.layerGroup().addTo(map);
-const rxLayer = L.layerGroup().addTo(map);
+/* ══ THE MAP — the directory's GPU map (VibeMapGL), drawn with MapLibre layers directly ══ */
+let gl = null, GLVM = null;
+try {
+  const load = (p, kind) => fetch(p).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
+  GLVM = VibeMapGL.createNow($('map'), { style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/', profile: 'aero', center: [0, 40], zoom: 1.4 });
+  gl = GLVM && GLVM.map;
+  if (gl) gl.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+} catch (e) { console.error('GPU map unavailable: ' + e); }
+if (!gl) { $('empty').hidden = false; $('empty').textContent = 'This map needs WebGL 2, which this browser does not offer.'; }
 
-/* ══ STATE ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
-const PREF_KEY = 'vibesdr.communityMap.v1';
+/* ══ STATE (remembered per viewer, try/catch) ══ */
+const PREF_KEY = 'vibesdr.communityMap.v2';
 let prefs = {};
 try { prefs = JSON.parse(localStorage.getItem(PREF_KEY) || '{}') || {}; } catch { prefs = {}; }
 const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* private window */ } };
-const F = { scope: ['both', 'aviation', 'maritime'].includes(prefs.scope) ? prefs.scope : 'both',
-            off: new Set(Array.isArray(prefs.off) ? prefs.off : []),
-            maxAge: CM.AGES.some((a) => a.s === prefs.maxAge) ? prefs.maxAge : 86400, server: '' };
-let SERVERS = [];            // the contributors (/api/community), each with its last answer
-const ANSWERS = new Map();   // server id → items
-let listAt = 0, selected = '';
+const F = {
+  groups: new Set(Array.isArray(prefs.groups) ? prefs.groups.filter((g) => CM.GROUPS.some((x) => x.id === g)) : CM.GROUPS.map((g) => g.id)),
+  off: new Set(Array.isArray(prefs.off) ? prefs.off : []),   // ★ chips switched off — remembered even while their group is off
+  maxAge: CM.AGES.some((a) => a.s === prefs.maxAge) ? prefs.maxAge : 86400, server: '',
+  nav: { layers: new Set(Array.isArray(prefs.navLayers) ? prefs.navLayers : ['stations', 'warnings', 'weather', 'messages']), types: null, station: '' },
+};
+if (Array.isArray(prefs.navTypes)) F.nav.types = new Set(prefs.navTypes);
+let SERVERS = [];
+const DATA = new Map();   // server id → { sections: {key → value}, items }
+let listAt = 0, selected = '', ITEMS = [], SHOWN = [], PRESENT = [];
 
-/* ══ READING — /api/community once (then every LIST_SEC), each receiver directly, at most once a minute ══════════════ */
+/** The layers switched on now (group on, chip on, somebody shares it). */
+const layersOn = () => PRESENT.filter((m) => F.groups.has(CM.MODE[m].group) && !F.off.has(m));
+
+/* ══ READING — /api/community once (then every LIST_SEC), each receiver directly, ≤ CONCURRENT at a time ══ */
 async function loadList() {
   try {
     const r = await fetch('/api/community', { cache: 'no-cache' });
     const j = await r.json();
     const keep = new Map(SERVERS.map((s) => [s.id, s]));
     SERVERS = (Array.isArray(j.servers) ? j.servers : []).filter((s) => s && typeof s.id === 'string').map((s) => Object.assign(keep.get(s.id) || {}, s));
-    for (const id of [...ANSWERS.keys()]) if (!SERVERS.some((s) => s.id === id)) ANSWERS.delete(id);
+    for (const id of [...DATA.keys()]) if (!SERVERS.some((s) => s.id === id)) DATA.delete(id);
     listAt = Date.now();
-  } catch (e) { if (!SERVERS.length) $('status').textContent = 'The directory could not be reached. Trying again shortly.'; }
+  } catch { if (!SERVERS.length) $('status').textContent = 'The directory could not be reached. Trying again shortly.'; }
 }
-async function fetchOne(s) {
-  const u = CM.dataUrl(s, location.protocol);
-  if (!u) { s.unreachable = true; s._next = Infinity; s.why = 'no https address'; return; }
-  const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), CM.FETCH_TIMEOUT_MS);
-  try {
-    // ★ no-cache = revalidate: the receiver answers 304 when nothing changed (its ETag), so a quiet minute costs bytes, not a body
-    const r = await fetch(u, { signal: ctrl.signal, cache: 'no-cache', credentials: 'omit' });
-    const j = r.ok ? await r.json() : null;
-    if (r.ok && j && j.on === true) { ANSWERS.set(s.id, CM.itemsOf(j, s)); s.layersNow = j.layers || []; CM.noteResult(s, true, Date.now()); }
-    else { ANSWERS.delete(s.id); CM.noteResult(s, false, Date.now()); s.why = j && j.why === 'off' ? 'stopped sharing' : 'not responding'; }
-  } catch { ANSWERS.delete(s.id); CM.noteResult(s, false, Date.now()); s.why = 'not responding'; }
-  finally { clearTimeout(t); }
+let inFlight = 0; const queue = [];
+function pump() {
+  while (inFlight < CM.CONCURRENT && queue.length) { const job = queue.shift(); inFlight++; job().finally(() => { inFlight--; pump(); }); }
+}
+function fetchOne(s, layers) {
+  return new Promise((done) => {
+    queue.push(async () => {
+      const u = CM.dataUrl(s, location.protocol, layers);
+      if (!u) { s.unreachable = true; s.why = 'no https address'; s._retryAt = Infinity; done(); return; }
+      const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), CM.FETCH_TIMEOUT_MS);
+      try {
+        // ★ no-cache = revalidate: an unchanged answer is a 304 (its ETag) — a quiet minute costs bytes, not a body
+        const r = await fetch(u, { signal: ctrl.signal, cache: 'no-cache', credentials: 'omit' });
+        const text = r.ok ? await r.text() : '';
+        const j = text ? JSON.parse(text) : null;
+        if (j && j.on === true) {
+          const d = DATA.get(s.id) || { sections: {} };
+          for (const k of CM.sectionsOf(layers)) delete d.sections[k];   // ★ what was asked and is absent is now empty
+          for (const k of Object.keys(j)) if (!['v', 'on', 'now', 'layers', 'dropped'].includes(k)) d.sections[k] = j[k];
+          d.now = j.now;
+          d.items = CM.itemsOf(Object.assign({ on: true, now: j.now }, d.sections), s);
+          DATA.set(s.id, d);
+          perf.bytes[s.id] = (perf.bytes[s.id] || 0) + text.length;
+          CM.noteResult(s, true, Date.now(), layers); s.why = '';
+        } else { CM.noteResult(s, false, Date.now(), layers); s.why = j && j.why === 'off' ? 'stopped sharing' : 'not responding'; DATA.delete(s.id); }
+      } catch { CM.noteResult(s, false, Date.now(), layers); s.why = 'not responding'; }
+      finally { clearTimeout(t); scheduleRender(); done(); }
+    });
+    pump();
+  });
 }
 let busy = false;
-async function tick(force) {
-  if (busy || (document.hidden && !force)) return;   // ★★★ nothing while nobody is looking
+async function tick(force, only) {
+  if (document.hidden && !force) return;   // ★★★ nothing while nobody is looking
+  if (busy && !only) return;
   busy = true;
   try {
-    if (!listAt || Date.now() - listAt >= CM.LIST_SEC * 1000) await loadList();
-    const nowMs = Date.now();
-    await Promise.all(SERVERS.filter((s) => CM.due(s, nowMs)).map(fetchOne));
-    lastFetch = Date.now();
-    render();
-  } finally { busy = false; }
+    if (!listAt || Date.now() - listAt >= CM.LIST_SEC * 1000) { await loadList(); PRESENT = CM.modesPresent(SERVERS, ITEMS); drawBars(); render(); }
+    const on = layersOn(), nowMs = Date.now();
+    const jobs = [];
+    for (const s of SERVERS) {
+      const want = only ? (s._retryAt > nowMs ? [] : only.filter((l) => (s.layers || []).includes(l))) : CM.dueLayers(s, on.filter((l) => (s.layers || []).includes(l)), nowMs);
+      if (want.length) jobs.push(fetchOne(s, want));
+    }
+    await Promise.all(jobs);
+    if (!perf.full && SERVERS.length && SERVERS.every((s) => DATA.has(s.id) || s.unreachable)) perf.full = Math.round(performance.now() - T0);
+  } finally { if (!only) busy = false; }
 }
-let lastFetch = 0;
 
-/* ══ DRAWING ═════════════════════════════════════════════════════════════════════════════════════════════════════════ */
-const handles = new Map();   // item key → circle
-let ITEMS = [], SHOWN = [];
-function styleOf(it, now) {
-  const m = CM.MODE[it.modes.find((x) => !F.off.has(x)) || it.modes[0]];
-  const stale = it.kind === 'aircraft' && it.modes.length === 1 && it.modes[0] === 'adsb' && now - it.t > CM.ADSB_STALE_SEC;
-  const r = it.kind === 'dsc' ? (it.d.level >= 2 ? 9 : 6) : it.kind === 'navtex' ? 7 : it.kind === 'ndb' ? 4 : 5;
-  return { radius: r, color: it.kind === 'dsc' && it.d.level >= 3 ? '#ffffff' : '#000000', weight: it.kind === 'dsc' && it.d.level >= 2 ? 2 : 1,
-           opacity: stale ? 0.4 : 0.9, fillColor: m.colour, fillOpacity: stale ? 0.35 : 0.9 };
+/* ══ ICONS → GPU images (the server maps' own SVGs, rasterised once each) ══ */
+const iconNames = new Map(); const iconWaits = [];
+function icon(html) {
+  // ★ a rotation or opacity in the SVG's style becomes the layer's icon-rotate / icon-opacity, so one image serves every angle
+  const plain = String(html).replace(/\sstyle="[^"]*"/, '');
+  let name = iconNames.get(plain);
+  if (name) return name;
+  name = 'ic' + iconNames.size;
+  iconNames.set(plain, name);
+  const svg = plain.includes('xmlns=') ? plain : plain.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+  const w = Number((/width="(\d+(?:\.\d+)?)"/.exec(svg) || [])[1]) || 24, h = Number((/height="(\d+(?:\.\d+)?)"/.exec(svg) || [])[1]) || 24;
+  iconWaits.push(new Promise((res) => {
+    const img = new Image(w * 2, h * 2);
+    img.onload = () => {
+      try { const c = document.createElement('canvas'); c.width = w * 2; c.height = h * 2; const x = c.getContext('2d'); x.drawImage(img, 0, 0, w * 2, h * 2);
+            if (gl && !gl.hasImage(name)) gl.addImage(name, x.getImageData(0, 0, w * 2, h * 2), { pixelRatio: 2 }); } catch (e) { console.warn('icon', e); }
+      res();
+    };
+    img.onerror = () => res();
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }));
+  return name;
 }
-function cardOf(it, now) {
-  const rows = [];
-  const add = (k, v) => { if (v !== '' && v !== null && v !== undefined) rows.push(`<div class="r"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>`); };
-  const d = it.d;
-  if (it.kind === 'aircraft') {
-    add('ICAO', it.icao); add('Flight', d.flight); add('Reg', d.reg); add('Type', d.type); add('Operator', d.operator);
-    if (d.alt !== null) add('Altitude', d.ground ? 'on the ground' : d.alt.toLocaleString('en-GB') + ' ft');
-    if (d.gs !== null) add('Speed', Math.round(d.gs) + ' kt' + (d.trk !== null ? ' · ' + Math.round(d.trk) + '°' : ''));
-    add('Position', (d.posSrc || it.modes.map((m) => CM.MODE[m].label).join(', ')) + ', ' + CM.ago(now - it.t) + ' ago');
-  } else if (it.kind === 'ship') {
-    add('MMSI', d.mmsi); add('Call', d.call); add('Type', d.type); add('Flag', d.country || d.flag); add('Destination', d.dest);
-    if (d.sog !== null) add('Speed', d.sog.toFixed(1) + ' kn' + (d.cog !== null ? ' · ' + Math.round(d.cog) + '°' : ''));
-    add('Heard', CM.ago(now - it.t) + ' ago');
-  } else if (it.kind === 'dsc') {
-    add('MMSI', d.mmsi); add('Heard', new Date(it.t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'); rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`);
-  } else if (it.kind === 'navtex') {
-    add('Station', `${d.b1} · ${d.name}`); add('Country', d.country); add('kHz', d.khz.join(', ')); add('Messages', String(d.n)); add('Placed', d.conf);
-    add('Last', CM.ago(now - it.t) + ' ago');
-  } else if (it.kind === 'ndb') {
-    add('Ident', d.ident); add('Station', d.name); add('Country', d.cc); add('Last', CM.ago(now - it.t) + ' ago');
+const rotOf = (html) => Number((/rotate\((-?[\d.]+)deg\)/.exec(html) || [])[1]) || 0;
+const AC_SVG = (c) => `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path d="M12 2 L13.4 9 L21 13.5 L21 15.2 L13.4 12.8 L13 18.5 L15.5 20.3 L15.5 21.6 L12 20.7 L8.5 21.6 L8.5 20.3 L11 18.5 L10.6 12.8 L3 15.2 L3 13.5 L10.6 9 Z" fill="${c}" stroke="#0b1014" stroke-width="1.1"/></svg>`;
+const RX_SVG = (sel, down) => `<svg xmlns="http://www.w3.org/2000/svg" width="${sel ? 20 : 15}" height="${sel ? 20 : 15}" viewBox="0 0 20 20"><rect x="2" y="2" width="16" height="16" rx="3" fill="${sel ? '#ffb833' : '#0d0a02'}" stroke="${down ? '#6b7785' : sel ? '#ffe0a0' : '#ffffff'}" stroke-width="2.5"/></svg>`;
+/** The icon an item draws, and its rotation — the servers' own (kit), aircraft a silhouette in its mode's colour. */
+function iconOf(it) {
+  const m = CM.MODE[it.modes.find((x) => !F.off.has(x)) || it.modes[0]];
+  if (it.kind === 'aircraft') return { ic: icon(AC_SVG(m.colour)), rot: it.d.trk || 0 };
+  if (!KIT) return { ic: icon(`<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="${m.colour}" stroke="#000"/></svg>`), rot: 0 };
+  let h;
+  if (it.kind === 'ship') h = KIT.aisIcon({ kind: it.d.vkind, family: it.d.family, sog: it.d.sog, cog: it.d.cog, mmsi: it.d.mmsi }).html;
+  else if (it.kind === 'aprs') h = KIT.aprsIcon({ kind: it.d.akind, sym: it.d.sym }).html;
+  else if (it.kind === 'mesh') h = KIT.ismMapIcon({ kind: 'meshcore', ntype: it.d.ntype, approx: it.d.approx ? 1 : undefined, seen: 0 }).html;
+  else if (it.kind === 'sonde') h = KIT.sondeIcon({ climb: it.d.climb }).html;
+  else if (it.kind === 'dsc') h = KIT.dscIcon(it.d.level).html;
+  else if (it.kind === 'navst') { const site = KIT.navSites({ stations: [Object.assign({}, it.d, { seen: 0 })] })[0]; h = KIT.navIcon(site).html; }
+  else h = `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L13 7 L7 13 L1 7 Z" fill="${m.colour}" stroke="#0b1014" stroke-width="1.2"/></svg>`;   // NDB / VOR
+  return { ic: icon(h), rot: rotOf(h) };
+}
+
+/* ══ DRAWING (GPU) ══ */
+const DENSE = new Set(['aircraft', 'ship', 'aprs', 'mesh']);
+let layersReady = false;
+function ensureLayers() {
+  if (!gl || layersReady || !gl.isStyleLoaded()) return layersReady;
+  const empty = { type: 'FeatureCollection', features: [] };
+  gl.addSource('cm-shapes', { type: 'geojson', data: empty });
+  gl.addSource('cm-dense', { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 6, clusterRadius: 40 });
+  gl.addSource('cm-pts', { type: 'geojson', data: empty });
+  gl.addSource('cm-rx', { type: 'geojson', data: empty });
+  gl.addLayer({ id: 'cm-area', type: 'fill', source: 'cm-shapes', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.16 } });
+  gl.addLayer({ id: 'cm-line', type: 'line', source: 'cm-shapes', paint: { 'line-color': ['get', 'c'], 'line-width': ['coalesce', ['get', 'w'], 1.6], 'line-opacity': ['coalesce', ['get', 'op'], 0.85], 'line-dasharray': [3, 2] } });
+  gl.addLayer({ id: 'cm-clusters', type: 'circle', source: 'cm-dense', filter: ['has', 'point_count'],
+    paint: { 'circle-color': 'rgba(255,184,51,0.78)', 'circle-stroke-color': '#140d00', 'circle-stroke-width': 1.5,
+             'circle-radius': ['step', ['get', 'point_count'], 12, 20, 16, 100, 21, 500, 26] } });
+  gl.addLayer({ id: 'cm-cluster-n', type: 'symbol', source: 'cm-dense', filter: ['has', 'point_count'],
+    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 11, 'text-allow-overlap': true },
+    paint: { 'text-color': '#140d00' } });
+  const sym = (id, src, extra) => gl.addLayer(Object.assign({ id, type: 'symbol', source: src,
+    layout: { 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+    paint: { 'icon-opacity': ['get', 'op'] } }, extra || {}));
+  sym('cm-dense-pts', 'cm-dense', { filter: ['!', ['has', 'point_count']] });
+  sym('cm-pts', 'cm-pts');
+  sym('cm-rx', 'cm-rx');
+  for (const id of ['cm-dense-pts', 'cm-pts', 'cm-rx', 'cm-area', 'cm-line']) {
+    gl.on('click', id, (e) => openCard(e));
+    gl.on('mouseenter', id, () => { gl.getCanvas().style.cursor = 'pointer'; });
+    gl.on('mouseleave', id, () => { gl.getCanvas().style.cursor = ''; });
   }
-  const by = it.heard.slice(0, 8).map((h) => {
+  gl.on('click', 'cm-clusters', (e) => {
+    const f = e.features[0];
+    gl.getSource('cm-dense').getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
+  });
+  layersReady = true;
+  return true;
+}
+let renderQueued = false;
+function scheduleRender() { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); } }
+const metMarkers = new Map();
+let fitted = false;
+async function render() {
+  const now = Math.floor(Date.now() / 1000);
+  ITEMS = CM.merge([...DATA.values()].map((d) => d.items || []));
+  PRESENT = CM.modesPresent(SERVERS, ITEMS);
+  drawBars();
+  SHOWN = CM.filter(ITEMS, { groups: F.groups, modes: new Set(layersOn()), maxAge: F.maxAge, server: F.server, nav: F.nav }, now);
+  drawList(); drawMessages(now); drawStatus();
+  if (!perf.listDraw && SERVERS.length) perf.listDraw = Math.round(performance.now() - T0);
+  if (!perf.firstData && DATA.size) perf.firstData = Math.round(performance.now() - T0);
+  if (!ensureLayers()) { if (gl) gl.once('idle', scheduleRender); return; }
+  const dense = [], pts = [], shapes = [], rx = [];
+  const byKey = new Map();
+  for (const it of SHOWN) {
+    if (it.lat === null || it.kind === 'navmet') continue;
+    byKey.set(it.key, it);
+    const op = CM.fade(it, now);
+    if (it.kind === 'navwarn' && KIT) {
+      // ★ the NAVTEX map's own markers: one an item for a named list, its shape (area / route / points) in its hazard's colour
+      for (const m of KIT.navWarnItems([it.d], now)) {
+        pts.push({ type: 'Feature', properties: { id: it.key, ic: icon(m._ic.html), rot: 0, op }, geometry: { type: 'Point', coordinates: [m.lon, m.lat] } });
+        if (m._sh) {
+          const ring = m._sh.pts.map((p) => [p[1], p[0]]);
+          if (m._sh.kind === 'area') shapes.push({ type: 'Feature', properties: { id: it.key, c: m._sh.colour, op }, geometry: { type: 'Polygon', coordinates: [ring.concat([ring[0]])] } });
+          else if (m._sh.kind === 'route') shapes.push({ type: 'Feature', properties: { id: it.key, c: m._sh.colour, op }, geometry: { type: 'LineString', coordinates: ring } });
+          else for (const p of ring.slice(1)) pts.push({ type: 'Feature', properties: { id: it.key, ic: icon(m._ic.html), rot: 0, op }, geometry: { type: 'Point', coordinates: p } });
+        }
+      }
+      continue;
+    }
+    const { ic, rot } = iconOf(it);
+    const f = { type: 'Feature', properties: { id: it.key, ic, rot, op }, geometry: { type: 'Point', coordinates: [it.lon, it.lat] } };
+    (DENSE.has(it.kind) ? dense : pts).push(f);
+    if (it.kind === 'sonde' && it.d.track.length > 1) shapes.push({ type: 'Feature', properties: { id: it.key, c: it.d.climb < -2 ? '#ff8a4d' : '#7fd4ff', w: 2, op }, geometry: { type: 'LineString', coordinates: it.d.track.map((p) => [p[1], p[0]]) } });
+  }
+  for (const s of SERVERS) if (typeof s.lat === 'number') rx.push({ type: 'Feature', properties: { id: 'rx:' + s.id, ic: icon(RX_SVG(s.id === selected, s.unreachable)), rot: 0, op: 1 }, geometry: { type: 'Point', coordinates: [s.lon, s.lat] } });
+  ITEM_BY_KEY = byKey;
+  await Promise.all(iconWaits.splice(0));
+  gl.getSource('cm-dense').setData({ type: 'FeatureCollection', features: dense });
+  gl.getSource('cm-pts').setData({ type: 'FeatureCollection', features: pts });
+  gl.getSource('cm-shapes').setData({ type: 'FeatureCollection', features: shapes });
+  window.__cmShapes = shapes.map((f) => ({ id: f.properties.id, type: f.geometry.type }));
+  gl.getSource('cm-rx').setData({ type: 'FeatureCollection', features: rx });
+  // ★ the NAVTEX forecasts: the NAVTEX map's own pills / wind arrows, a DOM marker each (a few dozen at most)
+  const keep = new Set();
+  for (const it of SHOWN) if (it.kind === 'navmet' && KIT) {
+    keep.add(it.key);
+    const ic = KIT.navMetIcon(it.d);
+    let mk = metMarkers.get(it.key);
+    if (!mk) { const el = document.createElement('div'); el.style.cursor = 'pointer'; el.addEventListener('click', (e) => { e.stopPropagation(); showCard(it.key, [it.lon, it.lat]); });
+               mk = new maplibregl.Marker({ element: el }).setLngLat([it.lon, it.lat]).addTo(gl); metMarkers.set(it.key, mk); }
+    mk.getElement().innerHTML = ic.html; mk.getElement().style.opacity = CM.fade(it, now);
+    ITEM_BY_KEY.set(it.key, it);
+  }
+  for (const [k, mk] of metMarkers) if (!keep.has(k)) { mk.remove(); metMarkers.delete(k); }
+  metZoom();
+  if (!perf.firstDraw && rx.length) perf.firstDraw = Math.round(performance.now() - T0);
+  if (!fitted && (SHOWN.length || rx.length)) { fitted = true; fitTo(SHOWN.filter((i) => i.lat !== null), SERVERS); }
+  window.__cm = { servers: SERVERS.length, up: SERVERS.filter((s) => DATA.has(s.id)).length, items: ITEMS.length, shown: SHOWN.length,
+    byKind: SHOWN.reduce((a, i) => (a[i.kind] = (a[i.kind] || 0) + 1, a), {}), modes: PRESENT, on: layersOn(),
+    heardBy: Object.fromEntries(ITEMS.map((i) => [i.key, i.heard.length])), selected, server: F.server, groups: [...F.groups],
+    gpu: { dense: dense.length, pts: pts.length, shapes: shapes.length, rx: rx.length, met: metMarkers.size }, perf };
+}
+let ITEM_BY_KEY = new Map();
+/* ★ The forecast pills give way when zoomed out (the NAVTEX map's rule: the weather labels yield first) — from zoom 4. */
+const MET_MIN_ZOOM = 4;
+function metZoom() { if (!gl) return; const on = gl.getZoom() >= MET_MIN_ZOOM; for (const mk of metMarkers.values()) mk.getElement().style.display = on ? '' : 'none'; }
+if (gl) gl.on('zoomend', metZoom);
+function fitTo(items, servers) {
+  const pts = items.map((i) => [i.lon, i.lat]).concat(servers.filter((x) => typeof x.lat === 'number').map((x) => [x.lon, x.lat]));
+  if (!pts.length || !gl) return;
+  let w = 180, s = 90, e = -180, n = -90;
+  for (const [lo, la] of pts) { w = Math.min(w, lo); e = Math.max(e, lo); s = Math.min(s, la); n = Math.max(n, la); }
+  try { gl.fitBounds([[w, s], [e, n]], { padding: 50, maxZoom: 6, duration: 0 }); } catch { /* keeps its view */ }
+}
+
+/* ══ CARDS — the servers' own where they have one, then who heard it ══ */
+function heardBlock(it, now) {
+  const n = it.heard.length;
+  return `<div class="pc"><div class="hb"><div class="k">Heard by ${n} receiver${n === 1 ? '' : 's'}</div>` + it.heard.slice(0, 8).map((h) => {
     const s = SERVERS.find((x) => x.id === h.sid); const u = s ? CM.listenUrl(s) : '';
     return `<div><span>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(h.name)}</a>` : esc(h.name)}</span><span>${esc(CM.ago(now - h.t))} ago</span></div>`;
-  }).join('');
-  const n = it.heard.length;
-  return `<div class="pc"><div class="t">${esc(it.title)}</div>${rows.join('')}<div class="hb"><div class="k">Heard by ${n} receiver${n === 1 ? '' : 's'}</div>${by}</div></div>`;
+  }).join('') + '</div></div>';
 }
-function render() {
+function cardOf(it, now) {
+  if (it.kind === 'navwarn' && KIT) return KIT.navWarnCard(it.d, now, 'web');
+  if (it.kind === 'navmet' && KIT) return KIT.navMetCard(it.d, now, 'web');
+  if (it.kind === 'navst' && KIT) { const site = KIT.navSites({ stations: [Object.assign({}, it.d, { seen: now - it.d.last })] })[0]; return KIT.navCard(site, 'web'); }
+  const rows = [], d = it.d;
+  const add = (k, v) => { if (v !== '' && v !== null && v !== undefined) rows.push(`<div class="r"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>`); };
+  if (it.kind === 'aircraft') { add('ICAO', d.icao); add('Flight', d.flight); add('Reg', d.reg); add('Type', d.type);
+    if (d.alt !== null) add('Altitude', d.alt.toLocaleString('en-GB') + ' ft'); if (d.gs !== null) add('Speed', `${d.gs} kt${d.trk !== null ? ' · ' + d.trk + '°' : ''}`);
+    add('Position', `${it.modes.map((m) => CM.MODE[m].label).join(', ')}${d.adsc ? ' (ADS-C)' : ''}, ${CM.ago(now - it.t)} ago`); }
+  else if (it.kind === 'ship') { add('MMSI', d.mmsi); add('Call', d.call); add('Type', d.family); if (d.sog !== null) add('Speed', `${d.sog} kn${d.cog !== null ? ' · ' + Math.round(d.cog) + '°' : ''}`); add('Heard', CM.ago(now - it.t) + ' ago'); }
+  else if (it.kind === 'dsc') { add('MMSI', d.mmsi); add('Heard', new Date(it.t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'); rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`); }
+  else if (it.kind === 'ndb' || it.kind === 'vor') { add('Ident', d.ident); add('Station', d.name); add('Country', d.cc); add('Last', CM.ago(now - it.t) + ' ago'); }
+  else if (it.kind === 'sonde') { add('Type', d.type); if (d.alt !== null) add('Altitude', Math.round(d.alt).toLocaleString('en-GB') + ' m');
+    if (d.climb !== null) add('Climb', `${d.climb > 0 ? '+' : ''}${d.climb} m/s`); if (d.climb !== null && d.climb < -2 && d.maxAlt) add('Burst', `near ${Math.round(d.maxAlt).toLocaleString('en-GB')} m — descending`);
+    if (d.temp !== null) add('Temp', d.temp + ' °C'); add('Last', CM.ago(now - it.t) + ' ago'); }
+  else if (it.kind === 'aprs') { add('From', d.from); add('Kind', d.akind); add('Last', CM.ago(now - it.t) + ' ago'); if (d.line) rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`); }
+  else if (it.kind === 'mesh') { add('Node', d.node ? d.node + '…' : ''); add('Type', d.ntype); add('Heard', `${d.count} times · last ${CM.ago(now - it.t)} ago`); if (d.approx) add('Position', 'approximate (~1 km): a companion node is a person'); }
+  return `<div class="pc"><div class="t">${esc(it.title)}</div>${rows.join('')}</div>`;
+}
+let popup = null;
+function showCard(key, ll) {
+  const it = ITEM_BY_KEY.get(key);
+  if (!it || !gl) return;
   const now = Math.floor(Date.now() / 1000);
-  ITEMS = CM.merge([...ANSWERS.values()]);
-  const present = CM.modesPresent(SERVERS, ITEMS);
-  drawModes(present);
-  const on = new Set(present.filter((m) => !F.off.has(m)));
-  SHOWN = CM.filter(ITEMS, { scope: F.scope, modes: on, maxAge: F.maxAge, server: F.server }, now).slice(0, 5000);
-  const keep = new Set();
-  for (const it of SHOWN) {
-    keep.add(it.key);
-    let h = handles.get(it.key);
-    if (!h) { h = L.circleMarker([it.lat, it.lon], styleOf(it, now)).addTo(layer); handles.set(it.key, h); }
-    else { h.setLatLng([it.lat, it.lon]); h.setStyle(styleOf(it, now)); }
-    h.bindPopup(cardOf(it, now), { maxWidth: 300 });
-  }
-  for (const [k, h] of handles) if (!keep.has(k)) { layer.removeLayer(h); handles.delete(k); }
-  drawReceivers();
-  drawList();
-  // ★ The first time there is something to see, the map goes to it (the receivers and what they heard), once.
-  if (!fitted && (SHOWN.length || SERVERS.some((x) => typeof x.lat === 'number'))) { fitted = true; fitTo(SHOWN, SERVERS); }
-  // ★ the status line
-  const by = { aircraft: 0, ship: 0, dsc: 0, navtex: 0, ndb: 0 };
-  for (const it of SHOWN) by[it.kind]++;
-  const up = SERVERS.filter((s) => ANSWERS.has(s.id)).length;
-  const words = [['aircraft', 'aircraft'], ['ship', 'ships'], ['dsc', 'DSC'], ['navtex', 'NAVTEX'], ['ndb', 'NDB']].filter(([k]) => by[k]).map(([k, w]) => `<b>${by[k]}</b> ${w}`);
-  $('status').innerHTML = `<b>${up}</b> of ${SERVERS.length} receiver${SERVERS.length === 1 ? '' : 's'} sharing · ${words.join(' · ') || 'nothing in this filter'}`
-    + (F.server ? ` · only <b>${esc((SERVERS.find((s) => s.id === F.server) || {}).name || '')}</b>` : '');
-  const empty = $('empty');
-  if (!SERVERS.length && listAt) { empty.hidden = false; empty.innerHTML = 'No receiver shares to the community map yet.<br>A VibeServer owner turns on <b>Share to the VibeSDR community map</b> in Setup (or in the app’s Server mode) to add theirs.'; }
-  else empty.hidden = true;
-  $('rxBtn').textContent = `RECEIVERS (${SERVERS.length})`;
-  window.__cm = { servers: SERVERS.length, up, items: ITEMS.length, shown: SHOWN.length, byKind: by, modes: present,
-                  heardBy: Object.fromEntries(ITEMS.map((i) => [i.key, i.heard.length])), selected, server: F.server };
+  if (popup) popup.remove();
+  popup = new maplibregl.Popup({ maxWidth: '340px' }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
+  // ★ a NAVTEX card's message: fetched now, from the receiver that holds its cleanest copy (never in the poll)
+  const pre = popup.getElement().querySelector('.nvTx');
+  if (pre) fillText(pre, CM.textSource(it));
 }
-let fitted = false;
-function fitTo(items, servers) {
-  const pts = items.map((i) => [i.lat, i.lon]).concat(servers.filter((x) => typeof x.lat === 'number').map((x) => [x.lat, x.lon]));
-  if (!pts.length) return;
-  try { map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 7 }); } catch { /* a map not ready yet keeps its view */ }
+async function fillText(pre, src) {
+  const s = src && SERVERS.find((x) => x.id === src.sid);
+  const u = s ? CM.textUrl(s, location.protocol, src.f) : '';
+  if (!u) { pre.textContent = 'The message is not available.'; return; }
+  try { const j = await (await fetch(u, { credentials: 'omit' })).json(); pre.textContent = typeof j.txt === 'string' ? j.txt : 'The message is not available.'; }
+  catch { pre.textContent = 'The receiver did not answer.'; }
 }
-const rxMarks = new Map();
-function drawReceivers() {
-  const keep = new Set();
-  for (const s of SERVERS) {
-    if (!(typeof s.lat === 'number' && typeof s.lon === 'number')) continue;
-    keep.add(s.id);
-    const cls = 'rxm' + (s.id === selected ? ' sel' : '') + (s.unreachable ? ' down' : '');
-    const icon = L.divIcon({ className: '', html: `<div class="${cls}" title="${esc(s.name)}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
-    let m = rxMarks.get(s.id);
-    if (!m) { m = L.marker([s.lat, s.lon], { icon }).addTo(rxLayer); rxMarks.set(s.id, m); }
-    else m.setIcon(icon);
-    const u = CM.listenUrl(s), st = CM.stateOf(s);
-    m.bindPopup(`<div class="pc"><div class="t">${esc(s.name)}</div><div class="r"><span class="k">Where</span><span>${esc(s.country)} · ${esc(s.grid)} (grid square)</span></div>`
-      + `<div class="r"><span class="k">Shares</span><span>${esc((s.layers || []).map((l) => CM.MODE[l] ? CM.MODE[l].label : l).join(', '))}</span></div>`
-      + `<div class="r"><span class="k">Now</span><span>${esc(st.label)}</span></div>`
-      + (u ? `<div style="margin-top:6px"><a class="listen" href="${esc(u)}" target="_blank" rel="noopener noreferrer">LISTEN</a></div>` : '') + '</div>', { maxWidth: 280 });
-  }
-  for (const [id, m] of rxMarks) if (!keep.has(id)) { rxLayer.removeLayer(m); rxMarks.delete(id); }
+function openCard(e) {
+  const f = e.features && e.features[0];
+  if (!f) return;
+  const id = f.properties.id;
+  if (id.startsWith('rx:')) { pick(id.slice(3), true); return; }
+  showCard(id, e.lngLat);
 }
 
-/* ══ THE RECEIVERS LIST (Stuart, 2026-11-25: "a button to show the contributing servers as a list then a user can select it
- *    to listen to"). Name, where (country · grid), what it shares, how many items it is giving now, how busy it is as the
- *    directory says, and the directory's own LISTEN link. A row picks the receiver: highlighted and flown to; ONLY THIS
- *    narrows the map to what it heard. ═════════════════════════════════════════════════════════════════════════════════ */
+/* ══ THE RECEIVERS LIST (Stuart: "a button to show the contributing servers as a list then a user can select it to listen to") ══ */
 function drawList() {
-  const n = CM.perServer(ITEMS);
+  const n = CM.perServer(SHOWN);
   const rows = SERVERS.slice().sort((a, b) => (n.get(b.id) || 0) - (n.get(a.id) || 0) || String(a.name).localeCompare(b.name));
   $('rxTitle').textContent = `RECEIVERS · ${SERVERS.length}`;
+  $('rxBtn').textContent = `RECEIVERS (${SERVERS.length})`;
   $('rxList').innerHTML = rows.map((s) => {
     const st = CM.stateOf(s), u = CM.listenUrl(s), c = n.get(s.id) || 0;
-    const busy = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` : '';
+    const bz = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` : '';
     const lays = (s.layers || []).filter((l) => CM.MODE[l]).map((l) => `<span class="lay"><i style="background:${CM.MODE[l].colour}"></i>${esc(CM.MODE[l].label)}</span>`).join('');
+    const loading = !DATA.has(s.id) && !s.unreachable;
     return `<div class="row${s.id === selected ? ' sel' : ''}${s.unreachable ? ' down' : ''}" role="button" tabindex="0" data-id="${esc(s.id)}">`
       + `<div><div class="nm">${s.pin ? '🔒 ' : ''}${esc(s.name)}</div><div class="where">${esc(s.country || '')}${s.grid ? ' · ' + esc(s.grid) : ''}</div></div>`
       + `<div class="acts">${u ? `<a class="listen" href="${esc(u)}" target="_blank" rel="noopener noreferrer">LISTEN</a>` : ''}`
       + `<button type="button" class="onlyBtn" data-only="${esc(s.id)}" aria-pressed="${F.server === s.id}">ONLY THIS</button></div>`
-      + `<div class="now">${s.unreachable ? esc(s.why || 'not responding') : `${c} on the map now`}</div>`
-      + `<div class="st ${st.cls}">${esc(st.label)}${busy ? ' · ' + esc(busy) : ''}</div>`
-      + `<div class="lays">${lays}</div></div>`;
+      + `<div class="now">${s.unreachable ? esc(s.why || 'not responding') : loading ? 'loading…' : `${c} on the map now`}</div>`
+      + `<div class="st ${st.cls}">${esc(st.label)}${bz ? ' · ' + esc(bz) : ''}</div><div class="lays">${lays}</div></div>`;
   }).join('') || '<div class="row"><div class="now">No receiver shares yet.</div></div>';
 }
 $('rxList').addEventListener('click', (e) => {
-  if (e.target.closest('a')) return;   // ★ LISTEN opens the receiver; nothing else
+  if (e.target.closest('a')) return;
   const only = e.target.closest('[data-only]');
-  if (only) { const id = only.dataset.only; F.server = F.server === id ? '' : id; selected = id; render();
-              if (F.server) fitTo(SHOWN, SERVERS.filter((x) => x.id === id)); return; }
-  const row = e.target.closest('.row[data-id]');
-  if (row) pick(row.dataset.id);
+  if (only) { const id = only.dataset.only; F.server = F.server === id ? '' : id; selected = id; render().then(() => { if (F.server) fitTo(SHOWN.filter((i) => i.lat !== null), SERVERS.filter((x) => x.id === id)); }); return; }
+  const row = e.target.closest('.row[data-id]'); if (row) pick(row.dataset.id);
 });
 $('rxList').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[data-id]')) { e.preventDefault(); pick(e.target.dataset.id); } });
-function pick(id) {
-  selected = selected === id ? '' : id;
+function pick(id, open) {
+  selected = selected === id && !open ? '' : id;
   const s = SERVERS.find((x) => x.id === id);
-  if (selected && s && typeof s.lat === 'number') map.flyTo([s.lat, s.lon], Math.max(map.getZoom(), 6));
+  if (selected && s && typeof s.lat === 'number' && gl) gl.flyTo({ center: [s.lon, s.lat], zoom: Math.max(gl.getZoom(), 5), duration: 800 });
+  if (open) setPanel('rx', true);
   render();
 }
-function setPanel(open) { $('rx').hidden = !open; $('rxBtn').setAttribute('aria-pressed', String(open)); }
-$('rxBtn').addEventListener('click', () => setPanel($('rx').hidden));
-$('rxClose').addEventListener('click', () => setPanel(false));
 
-/* ══ FILTERS ═════════════════════════════════════════════════════════════════════════════════════════════════════════ */
-for (const b of $('scope').querySelectorAll('button')) {
-  b.setAttribute('aria-pressed', String(b.dataset.scope === F.scope));
-  b.addEventListener('click', () => { F.scope = b.dataset.scope; prefs.scope = F.scope; savePrefs();
-    for (const x of $('scope').querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b)); render(); });
+/* ══ NAVTEX MESSAGES — every message in the filter, by type, its station and time, the text when opened ══ */
+function drawMessages(now) {
+  const navOn = layersOn().includes('navtex');
+  $('msgBtn').hidden = !navOn;
+  const msgs = SHOWN.filter((i) => i.kind === 'navmsg').sort((a, b) => b.t - a.t);
+  $('msgBtn').textContent = `MESSAGES (${msgs.length})`;
+  $('msgTitle').textContent = `NAVTEX MESSAGES · ${msgs.length}`;
+  const open = new Set([...document.querySelectorAll('#msgList .msg[data-open="1"]')].map((e) => e.dataset.key));
+  $('msgList').innerHTML = msgs.slice(0, 400).map((m) => {
+    const subj = m.b2 && KIT ? KIT.navtexSubject(m.b2) : '';
+    const st = m.d.st ? (KIT ? KIT.navName(m.d.st, m.d.sc) : m.d.st) : 'station not placed';
+    return `<div class="msg" role="button" tabindex="0" data-key="${esc(m.key)}"${open.has(m.key) ? ' data-open="1"' : ''}><div class="mt">${esc(m.d.id || '—')} · ${esc(subj || 'message')}</div>`
+      + `<div>${esc(m.title)}</div><div class="md">${esc(st)} · ${m.d.khz} kHz · ${esc(CM.ago(now - m.t))} ago · heard ${m.d.n}× by ${m.heard.length} receiver${m.heard.length === 1 ? '' : 's'}${m.d.lost ? ` · best copy ${m.d.lost} lost` : ''}</div>`
+      + `${open.has(m.key) ? '<pre class="nvTx">Loading the message…</pre>' : ''}</div>`;
+  }).join('') || '<div class="msg"><div class="md">No NAVTEX message in this filter.</div></div>';
+  for (const el of document.querySelectorAll('#msgList .msg[data-open="1"] pre')) { const it = SHOWN.find((i) => i.key === el.parentElement.dataset.key); if (it) fillText(el, CM.textSource(it)); }
 }
-let modesDrawn = '';
-function drawModes(present) {
-  const key = present.join(',') + '|' + F.scope + '|' + [...F.off].join(',') + '|' + F.server;
-  if (key === modesDrawn) return;
-  modesDrawn = key;
-  const bar = $('modes');
-  bar.innerHTML = '<span class="lbl">MODES</span>' + present.filter((id) => F.scope === 'both' || CM.MODE[id].group === F.scope).map((id) => {
-    const m = CM.MODE[id];
-    return `<button type="button" class="chip" data-mode="${id}" aria-pressed="${!F.off.has(id)}" title="${esc(m.words)}"><span class="dot" style="background:${m.colour};color:${m.colour}"></span>${esc(m.label)}</button>`;
-  }).join('') + (F.server ? `<button type="button" class="chip only" id="onlyChip">ONLY ${esc((SERVERS.find((s) => s.id === F.server) || {}).name || '')} ✕</button>` : '');
+$('msgList').addEventListener('click', (e) => {
+  const el = e.target.closest('.msg[data-key]'); if (!el || e.target.closest('pre')) return;
+  if (el.dataset.open === '1') { el.dataset.open = ''; el.querySelector('pre')?.remove(); return; }
+  el.dataset.open = '1'; const pre = document.createElement('pre'); pre.className = 'nvTx'; pre.textContent = 'Loading the message…'; el.appendChild(pre);
+  const it = SHOWN.find((i) => i.key === el.dataset.key); fillText(pre, it && CM.textSource(it));
+});
+function setPanel(id, open) {
+  for (const p of ['rx', 'msgs']) { const on = p === id ? open : false; $(p).hidden = !on; $(p === 'rx' ? 'rxBtn' : 'msgBtn').setAttribute('aria-pressed', String(on)); }
 }
+$('rxBtn').addEventListener('click', () => setPanel('rx', $('rx').hidden));
+$('msgBtn').addEventListener('click', () => setPanel('msgs', $('msgs').hidden));
+document.addEventListener('click', (e) => { const c = e.target.closest('[data-close]'); if (c) setPanel(c.dataset.close, false); });
+
+/* ══ THE BARS: three groups, their chips, NAVTEX's own filters, the age ══ */
+let barsKey = '';
+function drawBars() {
+  const facets = CM.navtexFacets(ITEMS);
+  const key = JSON.stringify([PRESENT, [...F.groups], [...F.off], F.server, facets, F.nav.types && [...F.nav.types], F.nav.station, [...F.nav.layers]]);
+  if (key === barsKey) return;
+  barsKey = key;
+  $('groups').innerHTML = CM.GROUPS.map((g) => `<button type="button" class="grp" data-group="${g.id}" aria-pressed="${F.groups.has(g.id)}">${g.label}</button>`).join(' ');
+  $('modes').innerHTML = CM.GROUPS.map((g) => {
+    const ms = PRESENT.filter((id) => CM.MODE[id].group === g.id);
+    if (!ms.length) return '';
+    return `<span class="lbl">${g.label}</span><span class="set${F.groups.has(g.id) ? '' : ' off'}">` + ms.map((id) => {
+      const m = CM.MODE[id];
+      return `<button type="button" class="chip" data-mode="${id}" aria-pressed="${!F.off.has(id)}" title="${esc(CM.modeTip(m))}"><span class="dot" style="background:${m.colour};color:${m.colour}"></span>${esc(m.label)}</button>`;
+    }).join('') + '</span>';
+  }).join('') + (F.server ? `<button type="button" class="chip only" id="onlyChip">ONLY ${esc((SERVERS.find((s) => s.id === F.server) || {}).name || '')} ✕</button>` : '')
+    || '<span class="lbl">MODES — waiting for the receivers…</span>';
+  // ★ NAVTEX's own filters (the NAVTEX map's): its layers, the message types (B2), a station — under MARITIME → NAVTEX
+  const navOn = layersOn().includes('navtex');
+  $('navbar').hidden = !navOn;
+  if (navOn) {
+    const L = [['stations', 'STATIONS'], ['warnings', 'WARNINGS'], ['weather', 'WEATHER'], ['messages', 'MESSAGES']];
+    $('navbar').innerHTML = '<span class="lbl">NAVTEX</span>' + L.map(([id, w]) => `<button type="button" class="chip" data-navl="${id}" aria-pressed="${F.nav.layers.has(id)}">${w}</button>`).join('')
+      + (facets.types.length ? '<span class="lbl">TYPE</span>' + facets.types.map((b) => `<button type="button" class="chip" data-navt="${b}" aria-pressed="${!F.nav.types || F.nav.types.has(b)}" title="${esc(KIT ? KIT.navtexSubject(b) : b)}">${b}<span class="long"> ${esc(KIT ? KIT.navtexSubject(b) : '')}</span></button>`).join('') : '')
+      + (facets.stations.length ? `<span class="lbl">STATION</span><select class="chip" id="navSt"><option value="">all ${facets.stations.length}</option>${facets.stations.map((s) => `<option${s === F.nav.station ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select>` : '');
+  }
+}
+$('groups').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-group]'); if (!b) return;
+  const g = b.dataset.group; if (F.groups.has(g)) F.groups.delete(g); else F.groups.add(g);
+  prefs.groups = [...F.groups]; savePrefs(); render(); tick(true, layersOn().filter((l) => CM.MODE[l].group === g && !anyData(l)));
+});
 $('modes').addEventListener('click', (e) => {
   const c = e.target.closest('[data-mode]');
-  if (c) { const id = c.dataset.mode; if (F.off.has(id)) F.off.delete(id); else F.off.add(id); prefs.off = [...F.off]; savePrefs(); render(); return; }
+  if (c) { const id = c.dataset.mode; if (F.off.has(id)) F.off.delete(id); else F.off.add(id); prefs.off = [...F.off]; savePrefs(); render();
+           if (!F.off.has(id) && !anyData(id)) tick(true, [id]); return; }   // ★ switched on: fetch it then
   if (e.target.closest('#onlyChip')) { F.server = ''; render(); }
 });
+$('navbar').addEventListener('click', (e) => {
+  const l = e.target.closest('[data-navl]'), t = e.target.closest('[data-navt]');
+  if (l) { const id = l.dataset.navl; if (F.nav.layers.has(id)) F.nav.layers.delete(id); else F.nav.layers.add(id); prefs.navLayers = [...F.nav.layers]; }
+  else if (t) { const all = CM.navtexFacets(ITEMS).types; if (!F.nav.types) F.nav.types = new Set(all); const b = t.dataset.navt;
+                if (F.nav.types.has(b)) F.nav.types.delete(b); else F.nav.types.add(b); if (all.every((x) => F.nav.types.has(x))) F.nav.types = null; prefs.navTypes = F.nav.types ? [...F.nav.types] : null; }
+  else return;
+  savePrefs(); render();
+});
+$('navbar').addEventListener('change', (e) => { if (e.target.id === 'navSt') { F.nav.station = e.target.value; render(); } });
 $('ages').innerHTML += CM.AGES.map((a) => `<button type="button" class="chip" data-age="${a.s}" aria-pressed="${a.s === F.maxAge}">${a.label}</button>`).join('');
 $('ages').addEventListener('click', (e) => {
   const c = e.target.closest('[data-age]'); if (!c) return;
@@ -373,13 +563,27 @@ $('ages').addEventListener('click', (e) => {
   for (const x of $('ages').querySelectorAll('[data-age]')) x.setAttribute('aria-pressed', String(Number(x.dataset.age) === F.maxAge));
   render();
 });
+const anyData = (layer) => [...DATA.values()].some((d) => CM.sectionsOf([layer]).some((k) => k in (d.sections || {})));
 
-/* ══ THE CLOCK — a floor on every fetch, nothing while hidden (the directory's rule, index.html loadIfSeen) ══════════ */
+function drawStatus() {
+  const by = {}; for (const it of SHOWN) by[it.kind] = (by[it.kind] || 0) + 1;
+  const up = SERVERS.filter((s) => DATA.has(s.id)).length;
+  const words = [['aircraft', 'aircraft'], ['ship', 'ships'], ['dsc', 'DSC'], ['navst', 'NAVTEX stations'], ['navwarn', 'warnings'], ['navmet', 'forecasts'],
+    ['navmsg', 'messages'], ['ndb', 'NDB'], ['vor', 'VOR'], ['sonde', 'sondes'], ['aprs', 'APRS'], ['mesh', 'MeshCore']].filter(([k]) => by[k]).map(([k, w]) => `<b>${by[k]}</b> ${w}`);
+  $('status').innerHTML = `<b>${up}</b> of ${SERVERS.length} receiver${SERVERS.length === 1 ? '' : 's'} sharing · ${words.join(' · ') || (up ? 'nothing in this filter' : 'loading…')}`
+    + (F.server ? ` · only <b>${esc((SERVERS.find((s) => s.id === F.server) || {}).name || '')}</b>` : '');
+  const empty = $('empty');
+  if (gl && !SERVERS.length && listAt) { empty.hidden = false; empty.innerHTML = 'No receiver shares to the community map yet.<br>A VibeServer owner turns on <b>Share to the VibeSDR community map</b> in Setup (or in the app’s Server mode) to add theirs.'; }
+  else if (gl) empty.hidden = true;
+}
+
+/* ══ THE CLOCK — a floor on every fetch, nothing while hidden ══ */
+if (gl) gl.on('load', scheduleRender);
 tick(true);
-setInterval(() => tick(false), 15000);   // ★ wakes every 15 s, but each receiver is asked only when it is due (≥ 60 s)
-setInterval(() => { if (!document.hidden) render(); }, 30000);   // ages and fading move on between fetches
+setInterval(() => tick(false), 15000);   // ★ wakes every 15 s; each receiver is asked only when its layers are due (60 s / 5 min)
+setInterval(() => { if (!document.hidden) scheduleRender(); }, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(false); });
-if (new URLSearchParams(location.search).get('receivers') === '1') setPanel(true);
+if (new URLSearchParams(location.search).get('receivers') === '1') setPanel('rx', true);
 </script>
 </body>
 </html>

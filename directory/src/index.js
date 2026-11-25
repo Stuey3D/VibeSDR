@@ -1130,7 +1130,8 @@ async function list(env, url, request) {
  * ★★ PRIVACY: only servers that SAY "communityMap":true (the owner's switch, off by default) are listed, with what the
  *    directory already shows publicly — and the grid CUT TO FOUR CHARACTERS (≈ 100 × 200 km) with its centre, never the
  *    six-character square or the listing's lat/lon. No LAN address, nothing per visitor. */
-export const COMMUNITY_LAYERS = ['adsb', 'acars', 'vdl2', 'hfdl', 'ais', 'dsc', 'navtex', 'ndb'];
+// ★ beta94 pass 2: every mode a server maps (Stuart 11-25) — amateur digital spots excluded (PSK Reporter has them)
+export const COMMUNITY_LAYERS = ['adsb', 'acars', 'vdl2', 'hfdl', 'ndb', 'vor', 'ais', 'dsc', 'navtex', 'sondes', 'aprs', 'mesh'];
 const CONTRIB_CACHE_SEC = 120;
 /** {communityMap:true, communityLayers:[…known words…]} when the server says it shares; else {} (nothing said). */
 export function communityOf(status) {
