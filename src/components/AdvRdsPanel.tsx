@@ -35,7 +35,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
 import { mpxPowerParts } from '../services/mpxPower';
-import { scrollLane } from '../constants/popupTokens';
+import { scrollLane, SCROLL_LANE } from '../constants/popupTokens';
+import { advRdsPlotLayout } from '../utils/advRdsPlotLayout';
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component reads
  *  `useDecoderStyles(makeStyles)`, so a chassis / colour / Decoder-background change reaches the
@@ -1103,6 +1104,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const splitOn = p.tall && !!split;
   const inset = decoderBodyInset(useDecoderTokens());
   const wideCols = p.tall && winW >= 820 && !splitOn;
+  /* ★★ The plots at the LOWER PANEL's own width when split (Stuart: "labels getting cut off in advanced rds mode" —
+   *  they were laid out for a box, 330 pt, in a ~296 pt panel). null = the box, exactly as before. */
+  const pl = advRdsPlotLayout(splitOn && split ? split.width - 2 * inset - 12 - SCROLL_LANE : null);
   // ★★ LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
   // straight up past the notch, covering the clock and battery (Stuart's screenshot,
   // 2026-07-27). The available height has to stop at the safe area, not at the window edge.
@@ -1215,7 +1219,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const plots = (
           <View style={wideCols ? s.colPlots : undefined}>
           <Text style={s.section}>PLOTS</Text>
-          <View style={s.plots}>
+          <View style={[s.plots, pl.stacked && s.plotsStacked]}>
             {/* ★★ THE COLUMN'S WIDTH MUST NOT FOLLOW ITS VERDICT. It was content-sized, so it was ~120 pt for
                 "RDS no lock", wider for "clean · 12% scatter" and ~50 pt wider again for "rotating — unlocked
                 encoder" — and a station whose coherence sits near the 0.35 line flips that several times a
@@ -1227,7 +1231,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 layout, never by the text. */}
             <View style={s.constCol}>
               <Text style={s.plotLbl}>CONSTELLATION</Text>
-              <Constellation xy={plotXy} size={120} />
+              <Constellation xy={plotXy} size={pl.constSize} />
               <View>
                 <Text style={[s.verdict, { opacity: 0 }]} aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                   {CONST_VERDICT_ROTATING}
@@ -1237,13 +1241,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             </View>
             {/* ★ 200 = the figures' block below (devGrid, L/R rows, devVerdict), so this column is never
                 narrower than what it draws; it takes any extra width, and the constellation gives way first. */}
-            <View style={s.mpxCol}>
+            <View style={[s.mpxCol, pl.stacked && s.mpxColStacked]}>
               <Text style={s.plotLbl}>MPX</Text>
-              <Mpx mpx={plotMpx} width={180} height={72} />
+              <Mpx mpx={plotMpx} width={pl.plotW} height={72} />
               <Text style={[s.plotLbl, { marginTop: 4 }]}>SCOPE VIEW · PILOT · STEREO · RDS</Text>
               {scopeBands.map((b) => (
                 <View key={b.name} style={{ marginBottom: 3 }}>
-                  <ScopeBox grid={b.g} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={180} height={40} colour={b.colour} />
+                  <ScopeBox grid={b.g} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={pl.plotW} height={40} colour={b.colour} />
                   <Text style={[s.scopeLbl, { color: `rgb(${b.colour[0]},${b.colour[1]},${b.colour[2]})` }]}>
                     {b.name}{b.khz > 0.05 ? `  ${b.khz.toFixed(1)} kHz` : ''}
                   </Text>
@@ -1260,7 +1264,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                     • the TICK  = mpxHold, the 6 s excursion memory — also what the digits quote;
                     • the LINE at 75 % = the limit.
                   0-100 kHz, so 1 kHz = 1 %. Drawn dim when the reading is not trusted. */}
-              <View style={{ width: 180, height: 8, marginTop: 4, borderRadius: 2,
+              <View style={{ width: pl.plotW, height: 8, marginTop: 4, borderRadius: 2,
                              backgroundColor: C.devBarBg,
                              borderWidth: 1, borderColor: C.devBarBorder,
                              overflow: 'hidden' }}>
@@ -1345,7 +1349,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           {/* ★ Its name is SYMBOL TRACE — what the website and the About note call it. It became "SYMBOL EYE"
               when the duplicate went (above), and Stuart could not remember the original (2026-09-19). */}
           <Text style={s.plotLbl}>SYMBOL TRACE</Text>
-          <Eye xy={plotXy} width={310} height={70} />
+          <Eye xy={plotXy} width={pl.eyeW} height={70} />
           <Text style={s.plotNote}>
             Two clear bands = every bit decided with margin. A filled gap means symbols are
             landing on the decision line, and the errors follow.
@@ -1369,7 +1373,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   ) : null;
   const lowerBody = splitOn && split ? (
     <DecoderBody style={{ marginTop: inset }}>
-      <ScrollView style={{ height: Math.max(60, split.lowerH - 2 * inset) }} contentContainerStyle={[s.body, scrollLane]}>
+      <ScrollView style={{ height: Math.max(60, split.lowerH - 2 * inset) }} contentContainerStyle={[s.body, scrollLane, { paddingBottom: 16 }]}>
         {extraRows}
         {plots}
       </ScrollView>
@@ -1507,6 +1511,9 @@ const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const 
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
   constCol: { flexShrink: 1, minWidth: 120 },
+  // ★ Half-open lower panel (advRdsPlotLayout): the constellation above the figures, not beside them.
+  plotsStacked:  { flexDirection: 'column', gap: 4 },
+  mpxColStacked: { flexGrow: 0, flexBasis: 'auto' },
   mpxCol:   { flexGrow: 1, flexShrink: 0, flexBasis: 200 },
   plotLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
   scopeLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, marginTop: 1 },
