@@ -37,6 +37,19 @@ int main() {
         ok(effectiveBlocked("lora+all,wefax", 1) == "lora+all,wefax,same", "a mid-token + (lora+all) is the owner's option, kept");
         ok(effectiveBlocked("SAME", 1) == "same", "case-insensitive, no doubled entry");
 
+        {   // ★★ beta93 the NEW-MODE default: VOR MAP off where the owner's list blocks every demodulator (only-mode radios)
+            const std::string D = "wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig";
+            const std::string adsbOnly = D + ",dab,ism,ndb,ais,avdata,sondes";
+            ok(effectiveBlocked(adsbOnly, 0) == adsbOnly + ",vormap", "★ an ADS-B-only list saved before VOR MAP: VOR MAP off, still ADS-B only");
+            ok(effectiveBlocked(adsbOnly + ",+vormap", 0) == adsbOnly, "…the owner ticked VOR MAP on: on, and the + token is not published");
+            ok(effectiveBlocked(adsbOnly + ",vormap", 0) == adsbOnly + ",vormap", "…the owner switched it off themselves: off once, not doubled");
+            ok(effectiveBlocked("wfm,nfm,dab", 0) == "wfm,nfm,dab", "a list that leaves a demodulator on: VOR MAP left alone");
+            ok(effectiveBlocked("", 0) == "", "a fresh config: VOR MAP on");
+            ok(effectiveBlocked(D, 1) == D + ",same,vormap", "every demodulator off, Region 1: SAME's default and VOR MAP's");
+            const std::string vorOnly = adsbOnly + ",adsb";
+            ok(effectiveBlocked(vorOnly, 0) == vorOnly, "★ every other whole-radio mode off too: VOR only, on purpose — left on");
+        }
+
         ok(regionJson(0).empty(), "region unknown: no region JSON at all");
         const std::string j1 = regionJson(1), j2 = regionJson(2);
         ok(has(j1, "\"region\":1") && has(j1, "\"id\":\"same\"") && !has(j1, "\"id\":\"dab\""), "Region 1 JSON: SAME's default only");

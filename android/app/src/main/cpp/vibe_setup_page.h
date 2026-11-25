@@ -3971,17 +3971,35 @@ function modeOwnerSet() {
  *  outside the Americas, DAB off by default in them. Only a DEFAULT: the owner's tick always wins — off is the id in the
  *  list as ever, ON against the default is "+id". Empty when the region is unknown (an older server, no position). */
 let REGION_DEFAULTS = {};
-/** True when `id` is off here only because of its region default (the owner has said nothing either way). */
+/** ★★ beta93 THE NEW-MODE DEFAULTS — the server's rule (vibe_decoder_reach.h newModeOff): a whole-radio mode added after
+ *  the owner switched every listening mode off starts OFF, so an only-mode radio (ADS-B only) stays one after an update.
+ *  The owner's tick wins either way ("+vormap" on, "vormap" off). */
+const NEW_MODE_DEFAULTS = { vormap: "Off by default on this radio: it was set up with every listening mode switched off before VOR MAP existed" };
+const NEW_MODE_DEMODS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
+                         "drm", "freedv", "m17", "dvsig"];
+const NEW_MODE_WHOLE = ["dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes"];
+function modeNewOff(id, own) {
+  const o = own || modeOwnerSet();
+  return !!NEW_MODE_DEFAULTS[id] && !o.has(id) && !o.has("+" + id) && NEW_MODE_DEMODS.every(d => o.has(d))
+      && NEW_MODE_WHOLE.some(w => !o.has(w));   // ★ another whole-radio mode still on (every one off = VOR only, on purpose)
+}
+/** The words beside a switch with a default (region or new-mode), or "" — said whichever way the owner has set it. */
+function modeDefaultWhy(id, own) {
+  const o = own || modeOwnerSet();
+  if (REGION_DEFAULTS[id]) return REGION_DEFAULTS[id];
+  return NEW_MODE_DEFAULTS[id] && (o.has("+" + id) || modeNewOff(id, o)) ? NEW_MODE_DEFAULTS[id] : "";
+}
+/** True when `id` is off here only because of a default (the owner has said nothing either way). */
 function modeRegionOff(id, own) {
   const o = own || modeOwnerSet();
-  return !!REGION_DEFAULTS[id] && !o.has(id) && !o.has("+" + id);
+  return (!!REGION_DEFAULTS[id] && !o.has(id) && !o.has("+" + id)) || modeNewOff(id, o);
 }
 /** The list as the server ENFORCES it — the owner's, plus each region default the owner has said nothing about, minus
  *  the "+id" words (they only mean "not off"). Every question "is X off?" reads this. */
 function modeBlockSet() {
   const own = modeOwnerSet(), out = new Set();
   for (const t of own) if (t[0] !== "+") out.add(t);
-  for (const id of Object.keys(REGION_DEFAULTS)) if (modeRegionOff(id, own)) out.add(id);
+  for (const id of [...Object.keys(REGION_DEFAULTS), ...Object.keys(NEW_MODE_DEFAULTS)]) if (modeRegionOff(id, own)) out.add(id);
   return out;
 }
 
@@ -4174,7 +4192,7 @@ function modeBlockRender() {
     const ticked = m.id === "ft8+deep" ? (ft8DeepOwner() > 0 || (!ft8DeepOwner() && ft8DeepAuto() === true))
                  : m.on ? modeOwnerSet().has(m.id) : !off.has(m.id);
     // ★★ V12 a region default: the reason beside the switch, said whichever way the owner has set it
-    const rd = !m.on && REGION_DEFAULTS[m.id];
+    const rd = !m.on && modeDefaultWhy(m.id);
     return `<label class="row modeBox" style="gap:6px;flex:0 0 auto;align-items:center`
     + (dead ? ";opacity:.5" : "") + `"${dead ? ' title="this server has no DAB+ audio decoder"' : ""}>`
     + `<input type="checkbox" data-mode="${esc(m.id)}"${m.on ? ' data-on="1"' : ""}${ticked ? " checked" : ""}`
@@ -4240,7 +4258,7 @@ function modeBlockRender() {
         return;
       }
       if (el.dataset.on) { if (el.checked) set.add(id); else set.delete(id); }
-      else if (el.checked) { set.delete(id); if (REGION_DEFAULTS[id]) set.add("+" + id); }
+      else if (el.checked) { set.delete(id); if (REGION_DEFAULTS[id] || NEW_MODE_DEFAULTS[id]) set.add("+" + id); }
       else { set.delete("+" + id); set.add(id); }
       radio().blockedModes = [...set].join(",");
       modeBlockSummary();
@@ -4631,7 +4649,7 @@ function modeBlockSummary() {
     .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
   const own = modeOwnerSet();
   el.textContent = (off.length
-    ? `Switched off: ${off.map(id => name(id) + (modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
+    ? `Switched off: ${off.map(id => name(id) + (modeNewOff(id, own) ? " (by default on this radio)" : modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band skimmer: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")

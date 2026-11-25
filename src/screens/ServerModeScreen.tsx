@@ -496,6 +496,21 @@ function benchProfileBlocks(j: any): { head: string; lines: string[]; usb?: stri
   return out;
 }
 
+
+/** ★★ beta93 THE NEW-MODE DEFAULTS — the engine's rule (vibe_decoder_reach.h newModeOff) and the Setup page's
+ *  (NEW_MODE_DEFAULTS): a whole-radio mode added after the owner switched every listening mode off starts OFF, so an
+ *  only-mode radio (ADS-B only) stays one after an update. The owner's tap wins either way ("+vormap" on, "vormap" off). */
+const NEW_MODE_DEFAULTS: Record<string, string> = {
+  vormap: 'Off by default on this radio: it was set up with every listening mode switched off before VOR MAP existed',
+};
+const NEW_MODE_DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl',
+                         'drm', 'freedv', 'm17', 'dvsig'];
+const NEW_MODE_WHOLE = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes'];
+export function newModeOff(id: string, own: Set<string>): boolean {
+  return !!NEW_MODE_DEFAULTS[id] && !own.has(id) && !own.has('+' + id) && NEW_MODE_DEMODS.every((d) => own.has(d))
+    && NEW_MODE_WHOLE.some((w) => !own.has(w));   // ★ another whole-radio mode still on (every one off = VOR only, on purpose)
+}
+
 export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const { font: F } = themeFor();
   /* ★★★ IN THE USER'S COLOURS (Stuart, 2026-10-12: "Follow the text colour except for when the colours have a
@@ -1134,6 +1149,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
     const off = new Set([...own].filter((t) => t[0] !== '+'));
     for (const id of Object.keys(regionDefaults)) if (!own.has(id) && !own.has('+' + id)) off.add(id);
+    for (const id of Object.keys(NEW_MODE_DEFAULTS)) if (newModeOff(id, own)) off.add(id);
     return off;
   })();
   const bgR = bgReach(bgDriver, autoDs, directSampling === 'off' ? 0 : 1);
@@ -5064,10 +5080,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   const tree = full.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).filter((m) => modeCapShown(full, m));
                   const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
                   // ★★ V12 off here only by its REGION DEFAULT — the owner has said nothing either way
-                  const regionOff = (id: string) => !!regionDefaults[id] && !own.has(id) && !own.has('+' + id);
+                  const regionOff = (id: string) => (!!regionDefaults[id] && !own.has(id) && !own.has('+' + id)) || newModeOff(id, own);
                   // ★ the list as the server ENFORCES it: the owner's, plus the region defaults, minus the "+id" words
                   const off = new Set([...own].filter((t) => t[0] !== '+'));
-                  for (const id of Object.keys(regionDefaults)) if (regionOff(id)) off.add(id);
+                  for (const id of [...Object.keys(regionDefaults), ...Object.keys(NEW_MODE_DEFAULTS)]) if (regionOff(id)) off.add(id);
                   const kids = (id: string) => tree.filter((m) => m.parent === id);
                   const deepOwn = own.has('ft8+deep') ? 1 : own.has('ft8-deep') ? -1 : 0;
                   const deepAuto = ft8DeepAutoFrom(benchRows);
@@ -5087,7 +5103,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     //    default never overwrites it.
                     const wasOff = m.on ? !set.has(m.id) : off.has(m.id);
                     if (m.on) { if (wasOff) set.add(m.id); else set.delete(m.id); }
-                    else if (wasOff) { set.delete(m.id); if (regionDefaults[m.id]) set.add('+' + m.id); }
+                    else if (wasOff) { set.delete(m.id); if (regionDefaults[m.id] || NEW_MODE_DEFAULTS[m.id]) set.add('+' + m.id); }
                     else { set.delete('+' + m.id); set.add(m.id); }
                     const v = [...set].join(',');
                     setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
@@ -5178,7 +5194,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     }
                     const k = kids(m.id);
                     const self = !m.on && off.has(m.id) ? m : null;
-                    const rdWhy = !m.on ? regionDefaults[m.id] : undefined;
+                    const rdWhy = m.on ? undefined : regionDefaults[m.id]
+                      || (NEW_MODE_DEFAULTS[m.id] && (own.has('+' + m.id) || newModeOff(m.id, own)) ? NEW_MODE_DEFAULTS[m.id] : undefined);
                     const box = rdWhy ? (
                       <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
                         {chip(m, inert)}

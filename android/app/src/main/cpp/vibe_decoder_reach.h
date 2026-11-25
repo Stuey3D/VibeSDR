@@ -241,6 +241,39 @@ inline std::vector<std::string> tokens(const std::string& csv) {
     return out;
 }
 
+// ── NEW-MODE DEFAULT ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/** ★★ beta93 (11-25) A WHOLE-RADIO MODE ADDED AFTER THE OWNER MADE THE RADIO SINGLE-PURPOSE starts OFF on it. The only-mode
+ *  rule (local_sdr_shim.cpp onlyModeNow) needs every demodulator and every OTHER whole-radio mode blocked; a list saved
+ *  before VOR MAP existed cannot name "vormap", so on update an ADS-B-only receiver (the Almere radio the rule was built
+ *  for, 11-18) would quietly stop being ADS-B-only and its listeners could leave ADS-B again. Off by default where the
+ *  owner's own list blocks EVERY demodulator; the owner's tick always wins (off = "vormap", on = "+vormap" — the region
+ *  defaults' words). Same rule in the Setup page (NEW_MODE_DEFAULTS) and the app (ServerModeScreen newModeOff). */
+inline const std::vector<RegionDefault>& newModeDefaults() {
+    static const std::vector<RegionDefault> t = {
+        { "vormap", 0u, "Off by default on this radio: it was set up with every listening mode switched off before VOR MAP existed" },
+    };
+    return t;
+}
+inline const std::vector<const char*>& listeningDemods() {
+    static const std::vector<const char*> t = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
+                                                "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
+    return t;
+}
+/** The new-mode default that switches `id` off on a radio whose owner list is `t`, or nullptr. */
+inline const RegionDefault* newModeOff(const std::string& id, const std::vector<std::string>& t) {
+    auto has = [&](const std::string& k) { for (const auto& x : t) if (x == k) return true; return false; };
+    for (const auto& d : newModeDefaults()) {
+        if (id != d.id || has(d.id) || has(std::string("+") + d.id)) continue;
+        for (const char* m : listeningDemods()) if (!has(m)) return nullptr;
+        // ★ …and another whole-radio mode is still on: the list then offered exactly that, and keeps offering only that.
+        //   Every other one off too = the owner left VOR MAP as the one thing on purpose (VOR only) — not a default.
+        for (const char* w : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes" }) if (!has(w)) return &d;
+        return nullptr;
+    }
+    return nullptr;
+}
+
 /** ★★★ THE LIST THE SERVER ENFORCES: the owner's own CSV, plus each region default that is off here and that the owner
  *  has said nothing about (neither "same" nor "+same"). The "+id" tokens are the owner's word and are dropped from the
  *  result — they mean only "not off", and no reader of the effective list (hwinfo's `blocked`, every vsModeBlocked
@@ -258,6 +291,8 @@ inline std::string effectiveBlocked(const std::string& ownerCsv, int region) {
         if (has(d.id) || has(std::string("+") + d.id)) continue;
         out += (out.empty() ? "" : ",") + std::string(d.id);
     }
+    for (const auto& d : newModeDefaults())   // ★★ beta93 a mode added after the owner made the radio single-purpose
+        if (newModeOff(d.id, t)) out += (out.empty() ? "" : ",") + std::string(d.id);
     return out;
 }
 
