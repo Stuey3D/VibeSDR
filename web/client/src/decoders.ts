@@ -591,7 +591,8 @@ export class DecoderClient {
     }
     if ((msg.type === 'fctlm_status' || msg.type === 'sat_tlm') && msg.data) {
       // ★ SATELLITE-BEST 1.2/1.3: fctlm's counts, and a frame's values (sat_tlm — also from aprs: APRS T#, SONATE-2)
-      if (this.mode !== 'fctlm' && !(msg.type === 'sat_tlm' && this.mode === 'aprs')) return;
+      //   ★★★ beta94 …and from the transponder finder when its span holds the bird's FUNcube telemetry (JO-97, AO-73)
+      if (this.mode !== 'fctlm' && this.mode !== 'xpdr' && !(msg.type === 'sat_tlm' && this.mode === 'aprs')) return;
       this.cb.onSatTlm?.(msg.data);
       return;
     }

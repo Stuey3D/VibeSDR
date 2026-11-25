@@ -27,6 +27,7 @@
 //    · the frame TYPE counts 0–23, not 1–24: the sequence number steps on type 0, which follows type 23 (WO1 = 0).
 //    · the carrier sat ~3.2 kHz into the audio (centre 3800, AFC ≈ −600 Hz); the passband (0–7.4 kHz) cut nothing.
 //      ★★ beta93 the pick puts it at ~1.5 kHz instead (vibe_sat_engine.h kTlmCentreHz) — the same frames decode.
+//      ★★★ beta94 at ~3.0 kHz (JO-97 0.9 kHz low at 1.5 kHz: its lower half was below the dial) — they still decode.
 // ★ The Viterbi, the Reed–Solomon (255,223) and the PN are vibe_lrpt_fec.h's — the same code, field, roots and
 //   scrambler (LRPT is CCSDS too); only the shortening, the de-interleaver and the sync are new here.
 // ★ Content: FUNcube is an AMATEUR satellite; its telemetry and fitter messages are amateur transmissions meant to be
@@ -400,18 +401,54 @@ public:
         /** A line for the server's log (the follow's moves). Optional. */
         std::function<void(const std::string&)> log;
     };
-    Run(const vibebpsk::Rx::Cfg& cfg, bool invert, Out o) : rx_(cfg), inv_(invert), o_(std::move(o)) {
+    Run(const vibebpsk::Rx::Cfg& cfg, bool invert, Out o) : cfg_(cfg), rx_(cfg), inv_(invert), o_(std::move(o)) {
+        prevRate_ = cfg.rate > 0 ? cfg.rate : 48000;
         rx_.onSymbol = [this](float s) { fr_.push(inv_ ? -s : s); };
         fr_.onFrame = [this](const uint8_t* d, int fixed, int form) { frame(d, fixed, form); };
     }
     void feedAudio(const float* x, int n) {
         rx_.feed(x, n);
-        // ★ ten seconds without a frame: hunt again. ★★ AND NO FRAME YET = hunting: sinceGood() counts from 0 before the
-        //   first frame, so without good() > 0 a fresh run thought itself locked for its first 10 s and never found a
-        //   signal more than the Costas loop's ~60 Hz off (the benchmark row decoded 0; 20 ms blocks lost frames).
-        rx_.setLocked(fr_.good() > 0 && fr_.sinceGood() < 12000);
-        if (rx_.samples() - lastStatus_ >= 48000) { lastStatus_ = rx_.samples(); follow(); status(); }
+        after();
     }
+    /** ★★★ beta94 THE IQ INPUT (Stuart 11-25, JO-97 0.9 kHz low cut by the USB edge: "or again use iq"). A satellite pick
+     *  feeds a Doppler-corrected IQ slice (DecoderHost feedIq — the slice cut near the lock's aim, as the CW beacon
+     *  skimmer's): `centreRfHz` the slice's centre, `aimRfHz` where the listener's channel is now (dial + Doppler + trim;
+     *  0 = no lock — the slice centre stands in), and the predicted carrier `offsetHz` above it (the pick's listening
+     *  offset, kTlmCentreHz). Mixed phase-continuously so the prediction sits at 0 Hz, then the receiver (complexIn)
+     *  hunts ±afcRangeHz around it — no audio edge, no USB mirror, no dependence on where in the audio the dial put it.
+     *  Its offset is then the satellite's against the prediction, exactly as the audio decoder's against its centre, so
+     *  the drift follow and the lock's trim work unchanged. A new slice rate rebuilds the receiver. */
+    void feedIq(const std::complex<float>* x, int n, double rate, double centreRfHz, double aimRfHz, double offsetHz) {
+        if (n <= 0 || !(rate > 0)) return;
+        if (!cfg_.complexIn || std::fabs(rate - cfg_.rate) > 0.5) {
+            vibebpsk::Rx::Cfg c = cfg_;
+            c.complexIn = true; c.rate = rate; c.centreHz = 0;
+            cfg_ = c;
+            const uint64_t was = rx_.samples();
+            rx_ = vibebpsk::Rx(c);
+            rx_.onSymbol = [this](float s) { fr_.push(inv_ ? -s : s); };
+            base_ += (double)was / prevRate_;   // ★ the run's clock (status, follow) carries on across a rebuild
+            lastStatus_ = 0; prevRate_ = rate;
+        }
+        const double target = (aimRfHz > 0 && std::isfinite(aimRfHz) ? aimRfHz : centreRfHz) + offsetHz;
+        const double d = target - centreRfHz;
+        if (std::fabs(d) > 0.5 * rate) return;   // ★ the slice does not hold the prediction (a moment before it follows)
+        if (mix_.size() < (size_t)n) mix_.resize((size_t)n);
+        const double w = -2.0 * M_PI * d / rate;
+        const std::complex<double> step(std::cos(w), std::sin(w));
+        std::complex<double> ph = mixPh_;
+        for (int i = 0; i < n; ++i) {
+            mix_[(size_t)i] = std::complex<float>((float)(x[i].real() * ph.real() - x[i].imag() * ph.imag()),
+                                                  (float)(x[i].real() * ph.imag() + x[i].imag() * ph.real()));
+            ph *= step;
+        }
+        mixPh_ = ph / std::abs(ph);
+        rx_.feedIq(mix_.data(), n);
+        after();
+    }
+    /** The run's clock (s): audio samples at 48 kHz, or IQ at the slice's rate. */
+    double clockSec() const { return base_ + (double)rx_.samples() / prevRate_; }
+    bool iq() const { return cfg_.complexIn; }
     const TrimFollow& follower() const { return follow_; }
     std::string statusJson() const {
         char b[320];
@@ -423,17 +460,28 @@ public:
         return b;
     }
     const Framer& framer() const { return fr_; }
+    /** ★★★ beta94 frames decoding (a good one in the last 10 s) — the transponder finder's TELEMETRY row (vibe_xpdr_run.h). */
+    bool locked() const { return fr_.good() > 0 && fr_.sinceGood() < 12000; }
+    /** Seconds since the last good frame (1200 symbols a second); a large figure before the first. */
+    double sinceGoodSec() const { return fr_.good() > 0 ? (double)fr_.sinceGood() / 1200.0 : 1e9; }
     const vibebpsk::Rx& rx() const { return rx_; }
     vibebpsk::Rx& rxMut() { return rx_; }
 private:
     void status() { if (o_.json) o_.json(statusJson()); }
+    void after() {
+        // ★ ten seconds without a frame: hunt again. ★★ AND NO FRAME YET = hunting: sinceGood() counts from 0 before the
+        //   first frame, so without good() > 0 a fresh run thought itself locked for its first 10 s and never found a
+        //   signal more than the Costas loop's ~60 Hz off (the benchmark row decoded 0; 20 ms blocks lost frames).
+        rx_.setLocked(fr_.good() > 0 && fr_.sinceGood() < 12000);
+        if ((double)(rx_.samples() - lastStatus_) >= prevRate_) { lastStatus_ = rx_.samples(); follow(); status(); }
+    }
     /** ★★★ beta92 once a second: the locked decoder's offset → the lock's trim (TrimFollow says when and how far). */
     void follow() {
         if (!o_.trimNow || !o_.trimTo) return;
         double applied = 0, target = 0;
         const bool ok = o_.trimNow(applied, target);
         const bool locked = fr_.good() > 0 && fr_.sinceGood() < 12000;
-        const double t = (double)rx_.samples() / 48000.0;
+        const double t = clockSec();
         const double want = follow_.step(t, locked, rx_.afcHz(), ok, applied, target);
         if (!std::isfinite(want)) return;
         o_.trimTo(want);
@@ -469,8 +517,12 @@ private:
         (void)form;
         status();
     }
+    vibebpsk::Rx::Cfg cfg_;
     vibebpsk::Rx rx_;
     Framer fr_;
+    double prevRate_ = 48000, base_ = 0;            // ★★★ beta94 the clock across an IQ rate change
+    std::vector<std::complex<float>> mix_;
+    std::complex<double> mixPh_{1.0, 0.0};
     bool inv_;
     Out o_;
     uint64_t lastStatus_ = 0;

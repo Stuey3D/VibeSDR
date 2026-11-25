@@ -37,14 +37,14 @@ import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHe
          type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
-import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrRowsSorted, xpdrWhat, XPDR_HINT, type XpdrRow, type XpdrStatus } from '../services/xpdr';
+import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotSummary, SKY_PLOT_WHAT, type SkyDot } from '../utils/skyPlot';
 import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, satRemindOffered, satRemindText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          satCwTail, satDecView, satDecWord, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY,
-         satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList,
+         satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList, satPickTlm,
          type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB,
          // ★★ beta94 SHOW — which satellites' passes the list shows (one set of rules with the web page)
          SAT_SHOW_EMPTY, SAT_SHOW_GROUPS, satShowChoices, satShowGroup, satShowGroupsOffered, satShowRows, satShowText, satShowToggle,
@@ -336,7 +336,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const use = tx ? txUse(tx) : 'voice';
   const imageDec = p.picked?.decoder === 'lrpt' || p.picked?.decoder === 'sstv';
   const lockWord = !p.autoDoppler ? 'DOPPLER OFF' : mine ? satStateWord(mine) : '';
-  const tlmDec = p.picked?.decoder === 'fctlm' || !!p.telemetry?.values.length;
+  const tlmDec = satPickTlm(p.picked) || !!p.telemetry?.values.length;   // ★★★ beta94 + a finder that decodes the telemetry too
   const tlmHex = satTelemetryHex(p.telemetry ?? null);
   const tlmSat = p.telemetry?.sat || '';
   const tlmLive = useMemo(() => tlmLivePass(p.telemetry?.hist, tlmSat), [p.telemetry?.hist, tlmSat]);
@@ -387,7 +387,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   // B's picture grows the box once, as A's does (unless SMALL was chosen for this pick)
   useEffect(() => { if (p.bPicture && !showA && !sized.current) { setBigPick(true); setMinimised(false); } }, [p.bPicture]);   // eslint-disable-line react-hooks/exhaustive-deps
   const decWord = !confirmed ? 'Tuning…'
-    : tlmDec && !p.decLine ? 'listening for telemetry'
+    : tlmDec && p.picked?.decoder !== 'xpdr' && !p.decLine ? 'listening for telemetry'
     // ★★ 2026-11-24 ORBCOMM says what it is decoding (its status), never the socket's "listening…"
     : orbDec ? (orbStatus?.sats.length ? `decoding ${orbStatus.sats.length} ORBCOMM bird${orbStatus.sats.length === 1 ? '' : 's'}` : satDecWord('orbcomm', use, false, big))
     // ★★ beta91: LRPT's own line is the live state (it says a filed pass itself) — never a stale "picture complete"
@@ -519,7 +519,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                    them); a row unheard for a minute fades; the follow's state in words */}
               {confirmed && showA && p.picked?.decoder === 'xpdr' && (
                 <View style={s.pk}>
-                  <Text style={[s.detailNp, s.caveat]}>{XPDR_HINT}</Text>
+                  <Text style={[s.detailNp, s.caveat]}>{xpdrHint(p.xpdr)}</Text>
                   {!!xpdrFollowText(p.xpdr?.follow ?? null) && <Text style={[s.detailNp, s.orbName]}>{xpdrFollowText(p.xpdr?.follow ?? null)}</Text>}
                   {xpdrRowsSorted(p.xpdr?.rows ?? []).slice(0, 16).map((r) => {
                     const following = p.xpdr?.follow?.id === r.id;
@@ -529,10 +529,10 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                           <Text style={[s.mono, { flexShrink: 1 }, following && s.orbName]} numberOfLines={1}>
                             {`${xpdrFreqText(r)}  ${xpdrWhat(r)}  ${Math.round(r.snr)} dB · ${xpdrAgo(r)}`}
                           </Text>
-                          {r.kind === 'voice' && !!p.onXpdrListen && (
+                          {xpdrListenable(r) && !!p.onXpdrListen && (
                             <View style={s.keys}>
                               <DecoderKey label={following ? 'LISTENING' : 'LISTEN'} active={following} onPress={() => p.onXpdrListen!(r)}
-                                          accessibilityLabel={`Put VFO A on the voice at ${xpdrFreqText(r)} MHz — it follows the station while they drift`} />
+                                          accessibilityLabel={xpdrListenLabel(r)} />
                             </View>
                           )}
                         </View>

@@ -3,10 +3,10 @@
 // never a throw), the rows' order and words, LISTEN only on voices (USB, the follow message), the waterfall overlay
 // (ORBCOMM's: the slice titled, an arrow per signal, faded ones hollow). The server side is vibeserver/test-xpdr.cpp and
 // scripts/test-server-xpdr.mjs. Silent. Run: npx tsx scripts/test_xpdr_app.ts
-import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrListen, xpdrOverlayFrom, xpdrRowsSorted, xpdrWhat,
-         XPDR_FADE_SEC, XPDR_SLICE_LABEL } from '../src/services/xpdr';
+import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListen, xpdrListenable, xpdrListenLabel, xpdrOverlayFrom, xpdrRowsSorted, xpdrWhat,
+         XPDR_FADE_SEC, XPDR_HINT, XPDR_HINT_TLM, XPDR_SLICE_LABEL } from '../src/services/xpdr';
 import { orbOverlayKey, orbOverlayLayout, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
-import { parseSatPicked, parseSatReadout, satChanText, satDecView, satDecWord, satDopplerBadge, satFollowHz, satMarkerShiftHz,
+import { parseSatPicked, parseSatReadout, satPickTlm, satChanText, satDecView, satDecWord, satDopplerBadge, satFollowHz, satMarkerShiftHz,
          SatFollowDial, SAT_FOLLOW_TUNE_GUARD_MS } from '../src/services/satellites';
 import { shouldForwardTune } from '../src/services/audioTuneForward';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
@@ -118,6 +118,39 @@ console.log('── the dial follows the followed station (Stuart 11-25: "yes") 
   ok(!shouldForwardTune({ ...base, sealed: true, serverDial: { frequency: NOM - 375, mode: 'usb' } }).send, '…nor by a sealed joiner on a shared dial');
   ok(shouldForwardTune({ ...base, seqAdvanced: true, asked: { ...asked, frequency: NOM - 275 }, serverDial: { frequency: NOM - 375, mode: 'usb' } }).send,
      '…while a person\'s step from it is');
+}
+
+console.log('── ★★★ beta94 transponder + telemetry (Stuart 11-25: "handled as one" · "the audio from the telemetry … listenable") ──');
+{
+  // what vibe_xpdr_run.h sends for AO-73 with its telemetry decoding (test-server-xpdr's figures)
+  const t = parseXpdrStatus({ slice: { lo: 145929500, hi: 145970500 }, span: { lo: 145935000, hi: 145970000 }, tlm: 145935000, dop: -2500,
+    rows: [
+      { id: 'c3', kind: 'cw', hz: 145962000, dial: 145964500, snr: 20, ago: 3, on: false, wpm: 18 },
+      { id: 't1', kind: 'tlm', hz: 145933200, dial: 145934200, snr: 37.5, ago: 0, on: true, car: 145935700, frames: 5 },
+      { id: 'v2', kind: 'voice', hz: 145956978, dial: 145958048, snr: 27.2, ago: 0, on: true },
+    ], follow: { id: 't1', src: 'tlm', off: 4 } });
+  ok(!!t && t.tlm === 145935000, 'xpdr_status\'s "tlm" (the listed telemetry) parses');
+  ok(parseXpdrStatus({ rows: [] })!.tlm === 0 && parseXpdrStatus({ tlm: 'x', rows: [] })!.tlm === 0, '…absent / junk = none (an RS-44 finder)');
+  const tr = t!.rows.find((r) => r.kind === 'tlm')!;
+  ok(!!tr && tr.car === 145935700 && tr.dial === 145934200 && tr.frames === 5, 'a TELEMETRY row: its carrier, LISTEN dial and frames');
+  ok(xpdrFreqText(tr) === '145.9357', 'its frequency is the CARRIER (what the listing names), not the LISTEN dial');
+  ok(xpdrWhat(tr) === 'TELEMETRY · 5 frames' && xpdrWhat({ ...tr, frames: 0 }) === 'TELEMETRY' && xpdrWhat({ ...tr, frames: 1 }) === 'TELEMETRY · 1 frame', 'TELEMETRY · 5 frames');
+  ok(xpdrRowsSorted(t!.rows).map((r) => r.id).join(',') === 'v2,t1,c3', 'on air: voices, then the telemetry, then CW');
+  const l = xpdrListen(tr, 'lsb');
+  ok(!!l && l.hz === 145934200 && l.mode === 'usb' && l.follow.id === 't1', '★ LISTEN on the telemetry: VFO A in USB 1.5 kHz below its carrier (always USB), then follow it');
+  ok(xpdrListenable(tr) && xpdrListenable(t!.rows[2]) && !xpdrListenable(t!.rows[0]), 'LISTEN on voices and the telemetry, never CW');
+  ok(/telemetry/.test(xpdrListenLabel(tr)) && /voice/.test(xpdrListenLabel(t!.rows[2])), 'LISTEN says what it does');
+  ok(xpdrFollowText(t!.follow) === 'VFO A follows · measured by the telemetry decoder', 'the follow in words (src tlm)');
+  ok(xpdrHint(t) === XPDR_HINT_TLM && xpdrHint(st) === XPDR_HINT && xpdrHint(null) === XPDR_HINT, 'the box\'s line says the telemetry decodes here too (only when it does)');
+  ok(xpdrOverlayFrom(t)!.carriers.find((c) => c.rf === 145933200)?.label === 'TELEMETRY', 'its arrow is labelled TELEMETRY');
+  // the bad: a tlm row with no carrier falls back to dial + 1.5 kHz; junk kinds are dropped
+  const b = parseXpdrStatus({ rows: [{ id: 't1', kind: 'tlm', hz: 145935000, dial: 145933500 }, { id: 'z', kind: 'tlmx', hz: 1, dial: 1 }] });
+  ok(b!.rows.length === 1 && b!.rows[0].car === 145935000, 'a TELEMETRY row with no "car": dial + 1.5 kHz; an unknown kind dropped');
+  // the pick: a finder with "tlm" shows the telemetry line and CHARTS too
+  const pk2 = parseSatPicked({ type: 'sat', state: 'picked', norad: 39444, tx: 0, decoder: 'xpdr', params: { width: 52881, tlm: 145935000 } });
+  ok(satPickTlm(pk2) && satPickTlm(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: 'fctlm' })), '★ a finder with "tlm" decodes telemetry (as a telemetry pick does)');
+  ok(!satPickTlm(pk) && !satPickTlm(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: 'xpdr', params: { tlm: 'x' } })) && !satPickTlm(null),
+     '…RS-44\'s finder (no "tlm") and junk do not');
 }
 
 console.log(`\n${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);

@@ -75,9 +75,20 @@ struct Transmitter {
      *  transponder inverts (an LSB uplink comes down USB — every linear bird we list does; a note saying "non-inverting"
      *  says otherwise). Set on BOTH the transponder and its beacon: picking either runs the finder over the whole span. */
     double xpdrLo = 0, xpdrHi = 0, beaconHz = 0;
+    /** ★★★ beta94 TRANSPONDER + TELEMETRY (Stuart 11-25: "the transponder and telemetry are close together so they can also
+     *  be handled as one"): on a TRANSPONDER only — the bird's FUNcube telemetry downlink (fc-bpsk) inside the span, 0 =
+     *  none. JO-97 145.840 below 145.855–145.875, AO-73 145.935 below 145.950–145.970. The telemetry downlink itself keeps
+     *  its own decoder (an unattended pass of it still runs fctlm); a PICK of it opens the transponder (xpdrOwnerOf). */
+    double tlmHz = 0;
     bool inverting = true;
     bool xpdr() const { return xpdrHi > xpdrLo; }
     double xpdrCentre() const { return 0.5 * (xpdrLo + xpdrHi); }
+    /** ★★★ beta94 where a transponder lock's NOMINAL (the dial, satellite frame) may sit: its passband — or, for a finder's
+     *  span, the span ± kXpdrNominalEdgeHz, so LISTEN can put the dial on the beacon side or 1.5 kHz below the telemetry's
+     *  carrier without the lock clamping it back into the passband (the listener's tune there would never "land"). */
+    static constexpr double kXpdrNominalEdgeHz = 6000.0;
+    double nominalLo() const { return xpdr() ? std::min(hz, xpdrLo - kXpdrNominalEdgeHz) : hz; }
+    double nominalHi() const { return xpdr() ? std::max(hiHz, xpdrHi + kXpdrNominalEdgeHz) : hiHz; }
 };
 struct SatDef {
     std::string id, name;
@@ -164,7 +175,7 @@ inline void linkXpdr(std::vector<SatDef>& defs) {
     auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
     for (auto& d : defs) {
         const bool nonInv = lower(d.note).find("non-inverting") != std::string::npos;
-        for (auto& t : d.tx) { t.xpdrLo = t.xpdrHi = t.beaconHz = 0; }
+        for (auto& t : d.tx) { t.xpdrLo = t.xpdrHi = t.beaconHz = t.tlmHz = 0; }
         for (auto& t : d.tx) {
             if (!t.passband() || !(t.mode == "usb" || t.mode == "lsb")) continue;
             t.inverting = !(nonInv || lower(t.note).find("non-inverting") != std::string::npos);
@@ -178,15 +189,33 @@ inline void linkXpdr(std::vector<SatDef>& defs) {
                 beacon = &b; break;
             }
             if (beacon) { lo = std::min(lo, beacon->hz); hi = std::max(hi, beacon->hz); }
-            t.xpdrLo = lo; t.xpdrHi = hi; t.beaconHz = beacon ? beacon->hz : 0;
+            // ★★★ beta94 the bird's FUNcube telemetry within reach: one more signal in the span (its own decoder rides along)
+            const Transmitter* tlm = nullptr;
+            for (auto& b : d.tx) {
+                if (&b == &t || b.passband() || b.consumer != "fc-bpsk") continue;
+                if (b.hz < t.hz - kXpdrBeaconReachHz || b.hz > t.hiHz + kXpdrBeaconReachHz) continue;
+                bool taken = false;
+                for (auto& o : d.tx) if (&o != &t && o.tlmHz == b.hz) taken = true;
+                if (taken) continue;
+                tlm = &b; break;
+            }
+            if (tlm) { lo = std::min(lo, tlm->hz); hi = std::max(hi, tlm->hz); }
+            t.xpdrLo = lo; t.xpdrHi = hi; t.beaconHz = beacon ? beacon->hz : 0; t.tlmHz = tlm ? tlm->hz : 0;
             if (beacon) { beacon->xpdrLo = lo; beacon->xpdrHi = hi; beacon->beaconHz = beacon->hz; beacon->inverting = t.inverting; }
         }
     }
 }
-/** The transponder a linked beacon belongs to (its index), or −1 — a pick of the beacon opens the transponder's finder. */
+/** The transponder a linked beacon belongs to (its index), or −1 — a pick of the beacon opens the transponder's finder.
+ *  ★★★ beta94 so does a linked FUNcube telemetry downlink (Transmitter::tlmHz): its pick opens the transponder, whose
+ *  finder decodes the telemetry too. */
 inline int xpdrOwnerOf(const SatDef& d, int txi) {
     if (txi < 0 || txi >= (int)d.tx.size()) return -1;
     const Transmitter& b = d.tx[(size_t)txi];
+    if (b.consumer == "fc-bpsk" && !b.passband()) {
+        for (size_t k = 0; k < d.tx.size(); ++k)
+            if (d.tx[k].passband() && d.tx[k].xpdr() && d.tx[k].tlmHz > 0 && d.tx[k].tlmHz == b.hz) return (int)k;
+        return -1;
+    }
     if (!b.xpdr() || b.passband()) return -1;
     for (size_t k = 0; k < d.tx.size(); ++k)
         if (d.tx[k].passband() && d.tx[k].xpdr() && d.tx[k].beaconHz == b.hz && d.tx[k].xpdrLo == b.xpdrLo) return (int)k;
@@ -384,10 +413,29 @@ inline std::string listenModeOf(const Transmitter& t) {
  *  below 0 Hz there is no USB audio, and the window must not hold the carrier's mirror). On air so far the bird has
  *  been +1.3 kHz (11-23) and −0.6 kHz (11-24) from the prediction — both inside. A signal more than ~1.2 kHz BELOW the
  *  prediction is no longer found (at 3800 it was, to −2.6 kHz): the trade for a natural-sounding pick. */
-constexpr double kTlmCentreHz = 1500.0;   ///< the decoder's audio centre on a telemetry pick (the carrier lands here)
-constexpr double kTlmAfcHz = 2600.0;      ///< its coarse hunt (vibebpsk::RxCfg::afcRangeHz) — up 2600, down to a 300 Hz carrier
+/* ★★★ beta94 (11-25) THE CARRIER AT 3.0 kHz, IN 100–6500 Hz (Stuart, the Pi 500 V4L, a JO-97 pass at 28°: "i think the
+ *  telemetry signal is just outside our passband"). The bird sat ~0.9 kHz BELOW the prediction, so at the 1500 Hz centre
+ *  its carrier landed at ~550 Hz audio: inside the hunt (≥ 300 Hz) but with the lower half of the BPSK (carrier
+ *  −0.9 kHz, raised cosine α 0.5 at 1200 Bd) below the dial, where USB has no audio — the real audio's mirror sits on top
+ *  of it. "1 frame · 0 good · 1 failed". He nudged the dial 500 Hz down (carrier ~1.05 kHz) and 3 of 4 frames decoded.
+ *  On air so far: +1.3 kHz (AO-73 11-23), −0.6 kHz (AO-73 11-24), −0.9 kHz (JO-97 11-25) — a dongle's ppm, the listed
+ *  figure, the orbit. The rule now: a ±2 kHz error keeps the WHOLE signal (carrier ±0.9 kHz) inside the passband —
+ *  3000 − 2000 − 900 = 100 Hz, the low edge; 3000 + 2600 (the hunt's top) + 900 = 6500 Hz, the high edge. Synthetic
+ *  frames through the pick's path (test-fctlm §11, Eb/N0 8 dB): the 1500 Hz pick 0 / 12 at −0.9, −1.5 and −2.0 kHz;
+ *  this one 12 / 12 at every offset from −2.0 to +2.0 kHz. The cost: the carrier is heard at 3 kHz, not 1.5 — higher
+ *  than beta93, lower than beta92's 3.8 kHz that Stuart called thin. Opening the low edge to 0 Hz would not help: what
+ *  is below the dial is not in USB audio at all — only a higher carrier keeps it. */
+/* ★★★ beta94 AND THE DECODER READS IQ (Stuart 11-25: "or again use iq"). The pick's decoder no longer depends on the
+ *  audio at all: it reads a Doppler-corrected IQ slice (kTlmIqWidthHz, cut near the lock's aim as the CW beacon
+ *  skimmer's is — DecoderHost setIqAim) with the prediction mixed to 0 Hz, and hunts ±kTlmAfcHz around it — no USB edge,
+ *  no mirror, the carrier's sign known (vibefc::Run::feedIq). Its offset is the satellite's against the prediction, so
+ *  the drift follow trims the lock exactly as before. The audio above is now only what the listener hears (and the box
+ *  on the waterfall): the whole signal for a ±2 kHz error. The decoder's reach is wider than the box: ±4 kHz. */
+constexpr double kTlmCentreHz = 3000.0;   ///< where the carrier lands in the listener's audio (the dial this far below the downlink)
+constexpr double kTlmAfcHz = 4000.0;      ///< the decoder's coarse hunt on IQ (vibebpsk::RxCfg::afcRangeHz) — ±4 kHz of the prediction
+constexpr double kTlmIqWidthHz = 24000.0; ///< the IQ slice the decoder reads (the dial's aim −9 … +15 kHz holds the hunt and the signal)
 constexpr double kTlmAudioLoHz = 100.0;   ///< the USB passband a telemetry pick listens with (the clients' edges)
-constexpr double kTlmAudioHiHz = 5000.0;
+constexpr double kTlmAudioHiHz = 6500.0;
 /** ★★ beta92: a downlink whose pick runs the BPSK telemetry decoder on the wide passband (FUNcube "fc-bpsk" — the one
  *  BPSK telemetry format we decode; Fox "fox-bpsk" is heard, not decoded, so it keeps the voice passband). */
 inline bool tlmWide(const Transmitter& t) { return t.consumer == "fc-bpsk" && t.mode == "usb"; }
@@ -442,7 +490,8 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
     if (t.consumer == "ax25-1200" || t.consumer.rfind("ax25", 0) == 0) { params = "\"packet\":\"1200\",\"baud_rate\":1200"; return "aprs"; }
     // ★ beta90 1.2: FUNcube BPSK 1200, AUTO. ★★ beta92 its centre and hunt on the wide passband (kTlmCentreHz, kTlmAfcHz)
     if (t.consumer == "fc-bpsk") {
-        if (tlmWide(t)) params = "\"centre\":" + std::to_string((int)kTlmCentreHz) + ",\"afc_range\":" + std::to_string((int)kTlmAfcHz);
+        // ★★★ beta94 "iq":true — on the IQ slice, the carrier "centre" Hz above the dial (DecoderHost buildFctlm)
+        if (tlmWide(t)) params = "\"centre\":" + std::to_string((int)kTlmCentreHz) + ",\"afc_range\":" + std::to_string((int)kTlmAfcHz) + ",\"iq\":true";
         return "fctlm";
     }
     /* ★★ beta92 THE CW BEACON IS SKIMMED (Stuart 11-23, RS-44 on the Pi 500's RTL-SDR V4: the beacon sat ~2 kHz below the
@@ -460,6 +509,8 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
                       (long long)std::llround(t.xpdrHi), (long long)std::llround(t.beaconHz), (long long)std::llround(t.upHz),
                       t.inverting ? 1 : 0, t.mode == "lsb" ? "lsb" : "usb");
         params = b;
+        // ★★★ beta94 the bird's FUNcube telemetry in the span: the finder decodes it too (vibe_xpdr_run.h — sat_tlm, fctlm_status)
+        if (t.tlmHz > 0) params += ",\"tlm\":" + std::to_string((long long)std::llround(t.tlmHz));
         return "xpdr";
     }
     if (beaconSkimmed(t)) { params ="\"width\":" + std::to_string((int)kBeaconSkimHz); return "cwskim"; }
@@ -978,7 +1029,7 @@ public:
             //   satellite-frame frequency that puts the channel exactly there now (no jump on engagement).
             double nom = dialHz;
             if (c.el >= 0) { Look lk2 = look(sats_[c.s].sgp, obs_, clk.unix); if (lk2.ok) nom = dialHz - lk2.dopplerHz(dialHz); }
-            L.nominal = std::max(t.hz, std::min(t.hiHz, nom));
+            L.nominal = std::max(t.nominalLo(), std::min(t.nominalHi(), nom));   // ★★★ beta94 a finder's span (nominalLo/Hi)
         }
         L.state = c.el >= 0 ? LockState::Track : LockState::Armed;
         locks_[key] = L;
@@ -1008,8 +1059,8 @@ public:
         L.following = false; L.follow = L.followTarget = 0;
         if (t.passband()) {
             const double edge = std::fabs(L.last.shiftHz) + std::fabs(L.last.modelHz - L.last.shiftHz) + kPassbandSlackHz;
-            if (newDialHz < t.hz - edge || newDialHz > t.hiHz + edge) return false;
-            L.nominal = std::max(t.hz, std::min(t.hiHz, newDialHz));
+            if (newDialHz < t.nominalLo() - edge || newDialHz > t.nominalHi() + edge) return false;
+            L.nominal = std::max(t.nominalLo(), std::min(t.nominalHi(), newDialHz));   // ★★★ beta94 a finder's span: beacon / telemetry side too
             return true;
         }
         if (std::fabs(newDialHz - L.nominal) > kEndTuneHz) return false;

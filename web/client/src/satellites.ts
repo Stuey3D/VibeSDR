@@ -33,13 +33,14 @@ import {
   satShowText, satShowToggle, type SatShow, type SatShowGroup,
   type SatPass,
   type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatTx,
+  satPickTlm,   // ★★★ beta94 a finder that decodes the telemetry too
 } from '../../../src/services/satellites';
 // ★★ 2026-11-24 ORBCOMM + the sky plot — the app's words and dome (src/services/orbcomm.ts, src/utils/skyPlot.ts)
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbShownSats, orbViewMerge,
          parseOrbcommPkt, parseOrbcommStatus, type OrbView } from '../../../src/services/orbcomm';
 import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — the app's words and rules (src/services/xpdr.ts)
-import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrRowsSorted, xpdrWhat, XPDR_HINT, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
+import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
 import { parseSkyPlotJson, skyPlotMerge, skyPlotQuery, skyPlotScene, skyPlotSummary, skyPlotSvg, SKY_LEGEND, SKY_PLOT_WHAT, type SkyDot } from '../../../src/utils/skyPlot';
 
 export interface SatPanelDeps {
@@ -880,7 +881,7 @@ export class SatPanel {
     this.sPk.hidden = !pkt;
     if (pkt) this.sPk.innerHTML = this.packets.length ? this.packets.slice(0, 12).map(l => `<div>${esc(l)}</div>`).join('') : `<div class="sat-dim">no packets yet</div>`;
     // ★★ 1.3 the telemetry, as values with units (a channel with no published calibration says "raw")
-    const tl = showA && (this.picked?.decoder === 'fctlm' || !!this.tlm?.values.length);
+    const tl = showA && (satPickTlm(this.picked) || !!this.tlm?.values.length);   // ★★★ beta94 + a finder that decodes the telemetry too
     this.sTlm.hidden = !tl;
     if (tl) {
       const hex = satTelemetryHex(this.tlm);
@@ -913,7 +914,7 @@ export class SatPanel {
     this.sXp.hidden = !show;
     if (!show) return;
     const st = this.xp;
-    let h = `<div class="sat-cav">${esc(XPDR_HINT)}</div>`;
+    let h = `<div class="sat-cav">${esc(xpdrHint(st))}</div>`;
     const fw = xpdrFollowText(st?.follow ?? null);
     if (fw) h += `<div class="sat-note">${esc(fw)}</div>`;
     const rows = xpdrRowsSorted(st?.rows ?? []);
@@ -922,8 +923,8 @@ export class SatPanel {
       const following = st?.follow?.id === r.id;
       h += `<div class="sat-xr${xpdrFaded(r) ? ' faded' : ''}${following ? ' on' : ''}" data-xid="${esc(r.id)}">`
         + `<span class="sat-xf">${esc(xpdrFreqText(r))}</span> <b>${esc(xpdrWhat(r))}</b> <span class="sat-dim">${esc(`${Math.round(r.snr)} dB · ${xpdrAgo(r)}`)}</span>`
-        + (r.kind === 'voice' && this.deps.xpdrListen
-          ? ` <button data-act="xlisten" data-xid="${esc(r.id)}" class="${following ? 'on' : ''}" aria-pressed="${following}" title="Put VFO A on this voice (USB) — it follows the station while they drift">${following ? 'LISTENING' : 'LISTEN'}</button>`
+        + (xpdrListenable(r) && this.deps.xpdrListen   // ★★★ beta94 voices and the telemetry
+          ? ` <button data-act="xlisten" data-xid="${esc(r.id)}" class="${following ? 'on' : ''}" aria-pressed="${following}" title="${esc(xpdrListenLabel(r))}">${following ? 'LISTENING' : 'LISTEN'}</button>`
           : '')
         + (r.kind === 'cw' && r.text ? `<div class="sat-xt">${esc(r.text)}</div>` : '')
         + `</div>`;

@@ -17,6 +17,10 @@
 //      the satellite's clock is ~1400 ppm fast (the timing loop now integrates), a 1 is no phase change (the test
 //      transmitter's default now), the frame type counts 0–23. Frames, their schedule, sane values, the learnt clock.
 //      ★★ beta93: the same air moved as the 1500 Hz pick hears it (dial shifted in the test) — the frames hold.
+//   §11 ★★★ beta94 (JO-97 0.9 kHz low, 11-25: the 1500 Hz pick's carrier at ~550 Hz, half below the dial, 0 good): frames
+//      −2.0 … +2.0 kHz from the prediction through the 3000 Hz pick's whole path at Eb/N0 8 dB — every one decodes.
+//   §12 ★★★ beta94 a NUDGE and the TRIM through TCA (55 Hz/s, the model 0.5 s late): nudge-then-trim is one correction,
+//      the right way; trim-then-nudge (a 500 Hz step while locked) no longer leaves the loop on its half-baud false lock.
 // Silent: no audio device. `--quick` shortens §3/§4.
 #include "vibe_fctlm_tx.h"
 #include "vibe_sat_orbit.h"   // its json:: parser (for the §6 checks)
@@ -233,20 +237,25 @@ static void s7() {
 
 // ── §8 / §9 ──────────────────────────────────────────────────────────────────────────────────────────────────────
 /** The pick's listening setup (old or new). */
-struct Pick { double centre, range, bw; const char* name; };
-static const Pick kOld{1200, 900, 2650, "OLD 1200 Hz / ±900 Hz / 2.65 kHz USB"};
-static const Pick kNew{vibe::sat::kTlmCentreHz, vibe::sat::kTlmAfcHz, vibe::sat::kTlmAudioHiHz - vibe::sat::kTlmAudioLoHz, "NEW 1500 Hz / +2600 −900 Hz / 4.9 kHz USB"};
-/** A USB demodulator with a 0..bw passband: x (real, the "RF" at 48 kHz) × e^{−jφ_LO}, then only 0..bw kept (a complex
- *  band-pass: shift by −bw/2, low-pass at bw/2, shift back) — what the server's SsbDemod does. The LO's frequency is
- *  set per block (the dial + the trim): phase-continuous. */
+struct Pick { double centre, range, lo, hi; const char* name; };
+static const Pick kOld{1200, 900, 0, 2650, "OLD 1200 Hz / ±900 Hz / 2.65 kHz USB"};
+/** ★★★ beta94 the beta93 pick, kept to show what it did (JO-97 0.9 kHz low, 11-25: its carrier at ~550 Hz, 0 good). */
+static const Pick kB93{1500, 2600, 100, 5000, "beta93 1500 Hz / +2600 −1200 Hz / 100–5000 Hz USB"};
+/** ★★★ beta94 the pick's AUDIO (what the listener hears) with the decoder on it at ±2600 — the audio path a hand-attached
+ *  decoder takes; a satellite pick's decoder reads IQ (§13, ±kTlmAfcHz). */
+static const Pick kNew{vibe::sat::kTlmCentreHz, 2600, vibe::sat::kTlmAudioLoHz, vibe::sat::kTlmAudioHiHz, "NEW 3000 Hz / ±2600 Hz / 100–6500 Hz USB"};
+/** A USB demodulator with a lo..hi passband: x (real, the "RF" at 48 kHz) × e^{−jφ_LO}, then only lo..hi kept (a complex
+ *  band-pass: shift by −(lo+hi)/2, low-pass at (hi−lo)/2, shift back) — what the server's SsbDemod does. The LO's
+ *  frequency is set per block (the dial + the trim): phase-continuous. ★★★ beta94 the low edge is modelled (it was
+ *  0..bw): a telemetry pick's 100 Hz is part of what a low carrier loses. */
 struct UsbChannel {
-    double rate = 48000, bw = 2650, ph = 0, ph2 = 0;
+    double rate = 48000, mid = 1325, half = 1325, ph = 0, ph2 = 0;
     std::vector<float> h; vibebpsk::Ring r;
-    explicit UsbChannel(double bwHz) : bw(bwHz) { h = vibebpsk::lowpass(128, bw / 2, rate); r.init(h.size()); }
+    UsbChannel(double loHz, double hiHz) : mid((loHz + hiHz) / 2), half((hiHz - loHz) / 2) { h = vibebpsk::lowpass(128, half, rate); r.init(h.size()); }
     void run(const float* x, float* y, int n, double loHz) {
-        const double w = 2 * M_PI * loHz / rate, w2 = 2 * M_PI * (bw / 2) / rate;
+        const double w = 2 * M_PI * loHz / rate, w2 = 2 * M_PI * mid / rate;
         for (int i = 0; i < n; ++i) {
-            // down by the LO and by bw/2 (the passband's middle to DC), low-pass, back up by bw/2, the real part
+            // down by the LO and by the passband's middle (to DC), low-pass, back up by the middle, the real part
             const double a = ph + ph2;
             r.push(float(x[i] * std::cos(a)), float(-x[i] * std::sin(a)));
             const float zr = vibebpsk::dot(r.wr(), h.data(), h.size()), zi = vibebpsk::dot(r.wi(), h.data(), h.size());
@@ -264,18 +273,30 @@ struct TrimModel {
     void ask(double t) { target = std::max(-vibe::sat::Engine::kTrimClampHz, std::min(vibe::sat::Engine::kTrimClampHz, t)); }
 };
 struct PassResult {
-    int good = 0, moves = 0, reversals = 0; double afc = 0, trim = 0, errEnd = 0, maxOver = 0, lastMv = 0; std::string log;
+    int good = 0, moves = 0, reversals = 0; uint64_t relocks = 0; double afc = 0, trim = 0, errEnd = 0, maxOver = 0, lastMv = 0; std::string log;
     std::vector<double> offs;   // the signal against the channel's centre, once a second
+    std::vector<double> goodAt; // ★★★ beta94 when each good frame came (s)
 };
 static constexpr double kPredHz = 12000;   // the prediction, as an "RF" tone in the 48 kHz test signal
+/** ★★★ beta94 more of a real pass (Stuart 11-25, JO-97): the listener's NUDGE of the dial (`nudgeHz` at `nudgeAtSec`, the
+ *  lock kept — Engine::nudge moves the nominal), and the pass's whole DOPPLER — the signal carries −A·tanh((t − tca)/τ)
+ *  (its steepest, A/τ Hz/s, at TCA) and the channel takes out the MODEL's, the same curve `modelLagSec` late (an
+ *  element set / clock error: the residual is largest exactly at TCA), as the 25 Hz tracker does. */
+struct PassOpts {
+    double nudgeHz = 0, nudgeAtSec = 0;
+    bool doppler = false; double tcaSec = 60, dopA = 3300, dopTau = 60, modelLagSec = 0.5;
+    double dop(double t) const { return doppler ? -dopA * std::tanh((t - tcaSec) / dopTau) : 0.0; }
+};
 /** One pass: frames sent at kPredHz + errHz (+ driftHzS·t), heard through the pick `pk`. `follow`: the locked decoder
  *  steers the trim (the new pick's behaviour); otherwise the channel stays on the prediction. */
-static PassResult pass(const Pick& pk, double errHz, double driftHzS, int nFrames, bool follow, double ebn0 = 14, uint32_t seed = 5) {
+static PassResult pass(const Pick& pk, double errHz, double driftHzS, int nFrames, bool follow, double ebn0 = 14, uint32_t seed = 5,
+                       const PassOpts& po = PassOpts{}) {
     std::vector<std::vector<uint8_t>> fr;
     for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(i % 24, 2000 + (uint32_t)i));
     tx::Cfg tc; tc.carrierHz = kPredHz; tc.offsetHz = errHz; tc.rampHzS = driftHzS; tc.ebn0Db = ebn0; tc.seed = seed;
+    if (po.doppler) tc.hzAt = [po](double t) { return po.dop(t); };
     const std::vector<float> rf = tx::modulate(fr, tc);
-    UsbChannel ch(pk.bw);
+    UsbChannel ch(pk.lo, pk.hi);
     TrimModel tm;
     vibebpsk::Rx::Cfg rc; rc.centreHz = pk.centre; rc.afcRangeHz = pk.range;
     PassResult res;
@@ -293,6 +314,8 @@ static PassResult pass(const Pick& pk, double errHz, double driftHzS, int nFrame
         o.log = [&](const std::string& l) { if (res.log.empty()) res.log = l; };
         o.satName = [] { return std::string("AO-73"); };
     }
+    double tNow = 0;
+    o.record = [&](const Decoded&, const TlmCtx&) { res.goodAt.push_back(tNow); };
     Run run(rc, false, std::move(o));
     const int blk = 960;   // the server's 20 ms blocks
     const int lagBlk = 15; // ★ the trim reaches the audio 0.3 s after the engine applies it (the pipeline)
@@ -302,20 +325,25 @@ static PassResult pass(const Pick& pk, double errHz, double driftHzS, int nFrame
         const int n = (int)std::min<size_t>(blk, rf.size() - i);
         tm.tick(n / 48000.0);
         hist.push_back(tm.applied); hist.pop_front();
-        const double lo = kPredHz - pk.centre + hist.front();   // the dial (downlink − centre) + the trim (late)
+        const double t0 = (double)i / 48000.0;
+        const double nudge = (po.nudgeHz != 0 && t0 >= po.nudgeAtSec) ? po.nudgeHz : 0.0;
+        // the dial (downlink − centre, + a nudge) + the model's Doppler (25 Hz ticks: per 20 ms block) + the trim (late)
+        const double lo = kPredHz - pk.centre + nudge + po.dop(t0 - po.modelLagSec) + hist.front();
         ch.run(rf.data() + i, a.data(), n, lo);
+        tNow = (double)(i + n) / 48000.0;
         const uint64_t before = run.rx().samples() / 48000;
         run.feedAudio(a.data(), n);
         if (run.rx().samples() / 48000 != before) {
             const double t = (double)(i + n) / 48000.0;
-            const double truth = errHz + driftHzS * t;          // the signal against the prediction
+            const double nudge = (po.nudgeHz != 0 && t >= po.nudgeAtSec) ? po.nudgeHz : 0.0;
+            const double truth = errHz + driftHzS * t + po.dop(t) - po.dop(t - po.modelLagSec) - nudge;   // against the nominal
             res.offs.push_back(truth - hist.front());           // …against the channel's centre
             if (follow) res.maxOver = std::max(res.maxOver, (errHz >= 0 ? 1 : -1) * (hist.front() - truth));
         }
     }
-    res.good = (int)run.framer().good(); res.afc = run.rx().afcHz(); res.trim = tm.applied;
+    res.good = (int)run.framer().good(); res.afc = run.rx().afcHz(); res.relocks = run.rx().relocks(); res.trim = tm.applied;
     const double tEnd = rf.size() / 48000.0;
-    res.errEnd = errHz + driftHzS * tEnd - tm.applied;
+    res.errEnd = errHz + driftHzS * tEnd - ((po.nudgeHz != 0 && tEnd >= po.nudgeAtSec) ? po.nudgeHz : 0.0) - tm.applied;
     return res;
 }
 
@@ -325,7 +353,8 @@ static void s8() {
     struct Case { double err, drift; const char* what; };
     /* ★★ beta93 the carrier at 1500 Hz (Stuart: 3800 "sounds thin and high-pitched"): below the centre the hunt now reaches
      *  a 300 Hz carrier (−1200) — −2.0 kHz (beta92's case) would be below 0 Hz in USB audio. −0.8 kHz: a 700 Hz carrier,
-     *  its mirror at −700 Hz, never taken (the trim converges to −800, not to the mirror). The 11-24 pass was −0.6. */
+     *  its mirror at −700 Hz, never taken (the trim converges to −800, not to the mirror). The 11-24 pass was −0.6.
+     *  ★★★ beta94 the carrier at 3000 Hz (JO-97 −0.9 kHz on 11-25): −0.8 kHz is now a 2.2 kHz carrier; §11 sweeps ±2 kHz. */
     const Case cases[] = { {1300, 0, "+1.3 kHz (Stuart's 11-23 pass)"}, {-800, 0, "−0.8 kHz (11-24 was −0.6)"} };
     for (const Case& c : cases) {
         PassResult o = pass(kOld, c.err, c.drift, nf, false);
@@ -343,15 +372,17 @@ static void s8() {
               "  no ringing: %d move(s), %d reversal(s), overshoot %.0f Hz", f.moves, f.reversals, f.maxOver);
         if (!f.log.empty()) std::printf("     log: %s\n", f.log.c_str());
     }
-    {   // ★★ beta93 ON the prediction: the carrier at 1500 Hz in the audio, the AFC at ~0 from the start
+    {   // ★★ ON the prediction: the carrier at the centre (3000 Hz since beta94) in the audio, the AFC at ~0 from the start
         PassResult z = pass(kNew, 0, 0, nf, false);
         CHECK(z.good >= nf - 1 && std::fabs(z.afc) < 40, "on the prediction, the NEW pick: %d / %d frames, the carrier at %.0f Hz audio (AFC %+.0f)",
               z.good, nf, kNew.centre + z.afc, z.afc);
-        PassResult b = pass(kNew, -1000, 0, nf, false);
-        CHECK(b.good >= nf - 2, "−1.0 kHz (a 500 Hz carrier, low in the audio): %d / %d frames (AFC %+.0f)", b.good, nf, b.afc);
+        PassResult b = pass(kNew, -2000, 0, nf, false);
+        CHECK(b.good >= nf - 2, "−2.0 kHz (a 1000 Hz carrier, its lower half still above the dial): %d / %d frames (AFC %+.0f)", b.good, nf, b.afc);
         vibebpsk::Rx::Cfg rc; rc.centreHz = kNew.centre; rc.afcRangeHz = kNew.range;
         vibebpsk::Rx rx(rc);
-        CHECK(rx.afcLoHz() == -1200 && rx.afcHiHz() == 2600, "the NEW pick's search window: %+.0f … %+.0f Hz (a carrier from 300 to 4100 Hz)", rx.afcLoHz(), rx.afcHiHz());
+        CHECK(rx.afcLoHz() == -2600 && rx.afcHiHz() == 2600, "the NEW pick's search window: %+.0f … %+.0f Hz (a carrier from 400 to 5600 Hz)", rx.afcLoHz(), rx.afcHiHz());
+        CHECK(kNew.centre - 2000 - 900 >= kNew.lo && kNew.centre + kNew.range + 900 <= kNew.hi,
+              "★★★ beta94 a ±2 kHz error keeps the whole signal (carrier ±0.9 kHz) in %.0f–%.0f Hz, and the hunt's top too", kNew.lo, kNew.hi);
         vibebpsk::Rx::Cfg hc; vibebpsk::Rx hand(hc);
         CHECK(hand.afcLoHz() == -900 && hand.afcHiHz() == 900, "by hand (centre 1200, ±900): %+.0f … %+.0f Hz — as before", hand.afcLoHz(), hand.afcHiHz());
     }
@@ -367,7 +398,7 @@ static void s8() {
         CHECK(newAt6 >= nf * 3 / 4, "Eb/N0 6 dB, 1.3 kHz out, wide + following: %d / %d frames", newAt6, nf);
     }
     {   // the passband alone was not the fix: the old ±900 Hz hunt in a wide passband still cannot reach +1.3 kHz
-        PassResult n0 = pass(Pick{1200, 900, 7500, "1200 / ±900 / 7.5 kHz"}, 1300, 0, nf, false);
+        PassResult n0 = pass(Pick{1200, 900, 0, 7500, "1200 / ±900 / 7.5 kHz"}, 1300, 0, nf, false);
         /* ★ beta93: with the 11-24 receiver this case decodes SOME frames — the hunt, capped at +900, takes the squared
          *  signal's side line (2Δf − baud) and the loop sits half a baud (600 Hz) off the carrier, where the differential
          *  decode still reads every bit inverted. Real frames (RS-checked), at the wrong AFC — so the satellite pick's own
@@ -393,14 +424,14 @@ static void s9() {
     std::printf("§9 ★ noise at the wide range: no frame, the trim never moves\n");
     std::mt19937 rng(23);
     std::normal_distribution<double> g(0, 1);
-    vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = vibe::sat::kTlmAfcHz;
+    vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = kNew.range;
     int frames = 0, asks = 0;
     Run::Out o{ [&](const std::string& j) { if (j.find("sat_tlm") != std::string::npos) ++frames; }, nullptr, nullptr, nullptr };
     o.trimNow = [](double& a, double& t) { a = 0; t = 0; return true; };
     o.trimTo = [&](double) { ++asks; };
     Run run(c, false, std::move(o));
     const int secs = g_quick ? 120 : 600;
-    UsbChannel ch(kNew.bw);
+    UsbChannel ch(kNew.lo, kNew.hi);
     std::vector<float> w(960), a(960);
     for (int s = 0; s < secs * 50; ++s) {
         for (auto& v : w) v = float(0.1 * g(rng));
@@ -410,7 +441,7 @@ static void s9() {
     CHECK(frames == 0 && asks == 0, "%d s of white noise through the 7.5 kHz passband and the ±2600 Hz hunt: %d frames, %d trim requests (%llu syncs refused)",
           secs, frames, asks, (unsigned long long)run.framer().syncs());
     vibebpsk::Rx rx(c);
-    CHECK(rx.afcRangeHz() == vibe::sat::kTlmAfcHz, "the wide receiver's range: %.0f Hz", rx.afcRangeHz());
+    CHECK(rx.afcRangeHz() == kNew.range, "the wide receiver's range: %.0f Hz", rx.afcRangeHz());
 }
 
 /** Real USB audio heard with the dial `shiftHz` HIGHER: only [lo, hi] Hz kept (a complex band-pass — the analytic
@@ -473,7 +504,7 @@ static void s10() {
     const bool ok = readWav16(fn, a, rate);
     CHECK(ok && rate == 48000 && a.size() > 48000 * 20, "the recording reads (%s, %zu samples at %d Hz)", fn, a.size(), rate);
     if (!ok) return;
-    vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = vibe::sat::kTlmAfcHz;
+    vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = kNew.range;
     std::vector<Decoded> got; int falseIds = 0;
     Run::Out o{ nullptr, nullptr, nullptr, nullptr };
     o.record = [&](const Decoded& d, const TlmCtx&) { got.push_back(d); if (d.satId != 2) ++falseIds; };
@@ -497,29 +528,242 @@ static void s10() {
           got.empty() ? 0.0 : got[0].values[4].v, got.empty() ? 0.0 : got[0].values[6].v);
     const double baud = run.rx().baudHz();
     CHECK(baud > 1201.0 && baud < 1202.5, "the timing loop learnt the satellite's clock: %.2f Bd (1200 nominal)", baud);
-    /* ★★ beta93 THE SAME AIR, AS THE NEW PICK HEARS IT. The recording was made with the dial 3800 Hz below the downlink;
-     * the pick now sits 1500 below, i.e. 2300 Hz higher — the same as moving every audio frequency 2300 Hz down (only
-     * what was above the new 100 Hz edge kept). Then the carrier lands where THAT pass's error puts it (~880 Hz: the
-     * bird was ~0.6 kHz below the prediction), and, moved 1700 Hz, where a pass ON the prediction would (~1480 Hz). */
-    struct Sh { double hz; const char* what; double afcLo, afcHi; };
-    for (const Sh& sh : {Sh{2300, "as the 1500 Hz pick would have heard this pass (carrier ~880 Hz)", -700, -500},
-                         Sh{1700, "the carrier moved to ~1480 Hz (a pass ON the prediction)", -100, 100}}) {
+    /* ★★ THE SAME AIR, AS THE NEW PICK HEARS IT. The recording was made with the dial 3800 Hz below the downlink; the
+     * pick now sits kTlmCentreHz (3000, beta94) below, i.e. 800 Hz higher — the same as moving every audio frequency
+     * 800 Hz down (only what was above the 100 Hz edge kept). Then the carrier lands where THAT pass's error puts it
+     * (~2.4 kHz: the bird was ~0.6 kHz below the prediction), and, moved 200 Hz, where a pass ON the prediction would.
+     * ★★★ beta94 and moved 2200 Hz: the carrier at ~1.0 kHz, as a bird 2.0 kHz low puts it on the new pick — and, for
+     * the record, moved 2650 Hz as the beta93 1500 Hz pick heard JO-97 0.9 kHz low on 11-25 (carrier ~550 Hz). */
+    struct Sh { double hz; const char* what; double afcLo, afcHi; double centre; bool must; };
+    for (const Sh& sh : {Sh{800, "as the 3000 Hz pick would have heard this pass (carrier ~2.4 kHz)", -700, -500, vibe::sat::kTlmCentreHz, true},
+                         Sh{200, "the carrier moved to ~3.0 kHz (a pass ON the prediction)", -100, 100, vibe::sat::kTlmCentreHz, true},
+                         Sh{2200, "★★★ the carrier moved to ~1.0 kHz (a bird 2.0 kHz low, on the 3000 Hz pick)", -2100, -1900, vibe::sat::kTlmCentreHz, true},
+                         Sh{2650, "(before) the beta93 1500 Hz pick, the carrier at ~550 Hz (JO-97 0.9 kHz low, 11-25)", -1050, -850, 1500, false}}) {
         const std::vector<float> b = shiftDown(a, 48000, sh.hz, sh.hz + 100, 7400);
         std::vector<Decoded> g2;
         Run::Out o2{ nullptr, nullptr, nullptr, nullptr };
         o2.record = [&](const Decoded& d, const TlmCtx&) { g2.push_back(d); };
-        Run r2(c, false, std::move(o2));
+        vibebpsk::Rx::Cfg c2 = c; c2.centreHz = sh.centre;
+        Run r2(c2, false, std::move(o2));
         double afcAtFirst = NAN;
         for (size_t i = 0; i + 960 <= b.size(); i += 960) { r2.feedAudio(&b[i], 960); if (std::isnan(afcAtFirst) && !g2.empty()) afcAtFirst = r2.rx().afcHz(); }
         std::string n2; for (auto& d : g2) n2 += d.frameName + " ";
-        CHECK(g2.size() >= 4 && g2[0].seq == 1023471 && g2.back().frameName == "WO1" && afcAtFirst > sh.afcLo && afcAtFirst < sh.afcHi,
-              "%s: %zu frames (%s), AFC %+.0f Hz at the first", sh.what, g2.size(), n2.c_str(), afcAtFirst);
+        if (!sh.must) { std::printf("     %s: %zu frames (%s), %llu syncs, AFC %+.0f Hz\n", sh.what, g2.size(), n2.c_str(),
+                                    (unsigned long long)r2.framer().syncs(), r2.rx().afcHz()); continue; }
+        /* ★★★ beta94 at a ~1.0 kHz carrier the hunt takes one frame longer on this 23 s cut (FM8 is missed; 0.9 and
+         *  1.1 kHz give all four) — 3 frames, every one RS-checked, none failed: the signal is whole, not cut. */
+        const size_t need = sh.hz >= 2000 ? 3 : 4;
+        CHECK(g2.size() >= need && g2.back().frameName == "WO1" && r2.framer().failed() == 0 && afcAtFirst > sh.afcLo && afcAtFirst < sh.afcHi,
+              "%s: %zu frames (%s), %llu failed, AFC %+.0f Hz at the first", sh.what, g2.size(), n2.c_str(),
+              (unsigned long long)r2.framer().failed(), afcAtFirst);
     }
 }
 
+static void s11() {
+    std::printf("§11 ★★★ beta94 ±2 kHz FROM THE PREDICTION (JO-97 0.9 kHz low, 11-25: the beta93 pick's carrier at ~550 Hz, 0 good)\n");
+    /* Frames at −2.0 … +2.0 kHz from the prediction through the pick's whole path (dial, USB lo..hi, decoder, follow) at
+     * Eb/N0 8 dB — a modest pass, not a strong one (at 14 dB the beta93 pick still decoded −0.9). */
+    const int nf = g_quick ? 8 : 12;
+    const double eb = 8;
+    const double errs[] = {-2000, -1500, -900, 0, 900, 1500, 2000};
+    std::string row = "     beta93 (1500 Hz, 100–5000):";
+    for (double e : errs) {
+        PassResult r = pass(kNew, e, 0, nf, true, eb, 11);
+        CHECK(r.good >= nf - 1, "%+5.0f Hz (carrier at %4.0f Hz audio) on the NEW pick, following: %d / %d frames (AFC %+.0f, trim %+.0f)",
+              e, kNew.centre + e, r.good, nf, r.afc, r.trim);
+        if (e == 0) CHECK(std::fabs(r.afc) < 40 && r.moves == 0, "  exactly predicted: the decoder locks ON its centre (AFC %+.0f Hz), the trim never moves", r.afc);
+        if (!g_quick) { PassResult b = pass(kB93, e, 0, nf, true, eb, 11); char t[40]; std::snprintf(t, sizeof t, " %+.0f:%d", e, b.good); row += t; }
+    }
+    if (!g_quick) std::printf("%s (of %d)\n", row.c_str(), nf);
+}
+
+static void s12() {
+    std::printf("§12 ★★★ beta94 A NUDGE AND THE TRIM, THROUGH TCA (JO-97 11-25: nudged 500 Hz down, 3 frames, trim −518, then nothing)\n");
+    /* The bird 950 Hz below the prediction; the listener tunes the dial 500 Hz DOWN (the lock kept, its nominal moved);
+     * the locked decoder's follow (vibefc::TrimFollow) trims the rest. All of it through the pass's steepest Doppler —
+     * TCA at 60 s, 3.3 kHz × tanh(t/60 s): 55 Hz/s at TCA (an overhead LEO pass at 145 MHz), the model 0.5 s late (a
+     * ~28 Hz residual at TCA). Two orders:
+     *  (a) Stuart's: the nudge FIRST (1 s in, before any frame), then the trim — measured against the NUDGED channel, so
+     *      one correction the right way: the trim ends at err − nudge = −450 Hz, the signal at the decoder's centre.
+     *  (b) the trim first, then a nudge at 15 s: a 500 Hz STEP while locked. Before beta94 the Costas loop slipped to its
+     *      half-baud false lock (frames still came — the differential decode survives it — but the reported offset was
+     *      600 Hz wrong, so the follow left the signal 500 Hz off for the rest of the pass). The lock check
+     *      (vibebpsk::Rx, hunt(check)) moves it back; the follow then trims the nudge out again (one reversal: the
+     *      listener moved it away from the signal). */
+    const int nf = 24;   // 120 s, TCA in the middle
+    for (double eb : {14.0, 8.0}) {
+        PassOpts pa; pa.nudgeHz = -500; pa.nudgeAtSec = 1; pa.doppler = true; pa.tcaSec = 60;
+        PassResult f = pass(kNew, -950, 0, nf, true, eb, 17, pa);
+        int afterTca = 0; for (double t : f.goodAt) if (t > pa.tcaSec) ++afterTca;
+        CHECK(f.good >= nf - 1 && afterTca >= nf / 2 - 1, "(a) Eb/N0 %.0f, nudge then trim, NEW pick: %d / %d frames, %d after TCA", eb, f.good, nf, afterTca);
+        CHECK(std::fabs(f.trim - (-450)) < 60 && std::fabs(f.errEnd) < 60 && f.moves == 1 && f.reversals == 0,
+              "  the trim %+.0f Hz (err − nudge = −450): one correction, the right way — the signal ends %+.0f Hz from the centre (%d move)",
+              f.trim, f.errEnd, f.moves);
+        double worst = 0; for (size_t i = f.offs.size() / 3; i < f.offs.size(); ++i) worst = std::max(worst, std::fabs(f.offs[i]));
+        CHECK(worst < 60, "  through TCA (55 Hz/s) the signal stays within %.0f Hz of the centre — the trim and the Doppler never fight", worst);
+        if (!f.log.empty()) std::printf("     log: %s\n", f.log.c_str());
+        PassResult b = pass(kB93, -950, 0, nf, true, eb, 17, pa);
+        int bTca = 0; for (double t : b.goodAt) if (t > pa.tcaSec) ++bTca;
+        std::printf("     (beta93 1500 Hz pick, the same: %d / %d frames, %d after TCA; trim %+.0f, ends %+.0f Hz from its centre)\n",
+                    b.good, nf, bTca, b.trim, b.errEnd);
+        PassOpts pb = pa; pb.nudgeAtSec = 15;
+        PassResult g = pass(kNew, -950, 0, nf, true, eb, 17, pb);
+        int gTca = 0; for (double t : g.goodAt) if (t > pb.tcaSec) ++gTca;
+        CHECK(g.good >= nf - 1 && gTca >= nf / 2 - 1 && g.relocks >= 1, "(b) Eb/N0 %.0f, trim then a nudge: %d / %d frames, %d after TCA, the lock check moved the loop %llu time(s)",
+              eb, g.good, nf, gTca, (unsigned long long)g.relocks);
+        CHECK(std::fabs(g.trim - (-450)) < 60 && std::fabs(g.errEnd) < 60 && g.reversals <= 1,
+              "  it ends at the centre (%+.0f Hz), the trim %+.0f (%d moves, %d reversal)", g.errEnd, g.trim, g.moves, g.reversals);
+    }
+}
+
+// ── §13 ★★★ beta94 ON IQ ─────────────────────────────────────────────────────────────────────────────────────────
+/** One pass on the IQ input, as DecoderHost feeds it: a slice at kIqRate centred `sliceOffHz` from the aim (the shim cuts
+ *  it in whole bins near the aim), the aim = the dial + the model's Doppler + the trim (late), the carrier kTlmCentreHz
+ *  above the aim plus `errHz` (+ the pass's Doppler, the model's taken out). */
+static constexpr double kIqRate = 24576;   // a 24 kHz slice's rate off a 2.4 MS/s capture (not a multiple of 9.6 k)
+static PassResult iqPass(double errHz, int nFrames, bool follow, double ebn0, uint32_t seed, const PassOpts& po = PassOpts{},
+                         double sliceOffHz = 1234) {
+    std::vector<std::vector<uint8_t>> fr;
+    for (int i = 0; i < nFrames; ++i) fr.push_back(tx::sampleFrame(i % 24, 3000 + (uint32_t)i));
+    std::vector<std::complex<float>> iq;
+    tx::Cfg tc; tc.rate = kIqRate; tc.carrierHz = vibe::sat::kTlmCentreHz - sliceOffHz; tc.offsetHz = errHz; tc.ebn0Db = ebn0; tc.seed = seed;
+    tc.iqOut = &iq;
+    if (po.doppler) tc.hzAt = [po](double t) { return po.dop(t); };
+    (void)tx::modulate(fr, tc);
+    TrimModel tm; PassResult res;
+    vibebpsk::Rx::Cfg rc; rc.centreHz = vibe::sat::kTlmCentreHz; rc.afcRangeHz = vibe::sat::kTlmAfcHz;
+    Run::Out o{};
+    if (follow) {
+        o.trimNow = [&](double& a, double& t) { a = tm.applied; t = tm.target; return true; };
+        o.trimTo = [&](double t) {
+            const double was = tm.target; tm.ask(t); const double mv = tm.target - was;
+            if (res.lastMv != 0 && mv != 0 && (mv > 0) != (res.lastMv > 0)) ++res.reversals;
+            if (mv != 0) res.lastMv = mv;
+            ++res.moves;
+        };
+    }
+    double tNow = 0;
+    o.record = [&](const Decoded&, const TlmCtx&) { res.goodAt.push_back(tNow); };
+    Run run(rc, false, std::move(o));
+    const double slice = 145.9e6;            // the slice's centre (RF)
+    const int blk = 512;
+    std::deque<double> hist(16, 0.0);
+    double ph = 0;                           // the channel's own move (aim − its start) applied to the samples
+    std::vector<std::complex<float>> b(blk);
+    for (size_t i = 0; i < iq.size(); i += blk) {
+        const int n = (int)std::min<size_t>(blk, iq.size() - i);
+        tm.tick(n / kIqRate);
+        hist.push_back(tm.applied); hist.pop_front();
+        const double t0 = (double)i / kIqRate;
+        const double nudge = (po.nudgeHz != 0 && t0 >= po.nudgeAtSec) ? po.nudgeHz : 0.0;
+        // the slice is FIXED here; the aim (where the channel is) moves with the model, the trim and a nudge
+        const double aimMove = nudge + po.dop(t0 - po.modelLagSec) + hist.front();
+        const double aim = slice - sliceOffHz + aimMove;
+        for (int k = 0; k < n; ++k) b[(size_t)k] = iq[i + (size_t)k];
+        (void)ph;
+        tNow = (double)(i + n) / kIqRate;
+        run.feedIq(b.data(), n, kIqRate, slice, aim, vibe::sat::kTlmCentreHz);
+    }
+    res.good = (int)run.framer().good(); res.afc = run.rx().afcHz(); res.trim = tm.applied; res.relocks = run.rx().relocks();
+    const double tEnd = iq.size() / kIqRate;
+    res.errEnd = errHz + (po.dop(tEnd) - po.dop(tEnd - po.modelLagSec)) - ((po.nudgeHz != 0 && tEnd >= po.nudgeAtSec) ? po.nudgeHz : 0.0) - tm.applied;
+    return res;
+}
+
+static void s13() {
+    std::printf("§13 ★★★ beta94 THE DECODER ON IQ (Stuart 11-25: \"or again use iq\") — no USB edge, the hunt ±%.0f Hz\n", vibe::sat::kTlmAfcHz);
+    const int nf = g_quick ? 8 : 12;
+    for (double e : {-3500.0, -2500.0, -1500.0, -900.0, 0.0, 900.0, 1500.0, 2500.0, 3500.0}) {
+        PassResult r = iqPass(e, nf, true, 8, 21);
+        CHECK(r.good >= nf - 1, "%+5.0f Hz from the prediction, IQ, Eb/N0 8, following: %d / %d frames (AFC %+.0f, trim %+.0f)", e, r.good, nf, r.afc, r.trim);
+        if (e == 0) CHECK(std::fabs(r.afc) < 40 && r.moves == 0, "  exactly predicted: locked ON the prediction (AFC %+.0f Hz), the trim never moves", r.afc);
+        if (e == -900) CHECK(std::fabs(r.trim - e) < 120 && std::fabs(r.errEnd) < 120, "  JO-97's −0.9 kHz: the trim %+.0f, the signal ends %+.0f Hz from the prediction", r.trim, r.errEnd);
+    }
+    {   // the nudge and the trim through TCA, on IQ
+        PassOpts pa; pa.nudgeHz = -500; pa.nudgeAtSec = 1; pa.doppler = true; pa.tcaSec = 60;
+        PassResult f = iqPass(-950, 24, true, 8, 23, pa);
+        int afterTca = 0; for (double t : f.goodAt) if (t > pa.tcaSec) ++afterTca;
+        CHECK(f.good >= 22 && afterTca >= 11 && std::fabs(f.trim + 450) < 60 && std::fabs(f.errEnd) < 60 && f.reversals == 0,
+              "a nudge −500 then the trim, through TCA (55 Hz/s): %d / 24 frames, %d after TCA, trim %+.0f (−450), ends %+.0f Hz", f.good, afterTca, f.trim, f.errEnd);
+        pa.nudgeAtSec = 15;
+        PassResult g = iqPass(-950, 24, true, 8, 23, pa);
+        CHECK(g.good >= 22 && std::fabs(g.errEnd) < 60, "the trim then a nudge: %d / 24 frames, ends %+.0f Hz (%llu relock)", g.good, g.errEnd, (unsigned long long)g.relocks);
+    }
+    {   // noise only: no frame, no trim
+        std::mt19937 rng(31); std::normal_distribution<double> g(0, 1);
+        vibebpsk::Rx::Cfg c; c.centreHz = vibe::sat::kTlmCentreHz; c.afcRangeHz = vibe::sat::kTlmAfcHz;
+        int frames = 0, asks = 0;
+        Run::Out o{ [&](const std::string& j) { if (j.find("sat_tlm") != std::string::npos) ++frames; }, nullptr, nullptr, nullptr };
+        o.trimNow = [](double& a, double& t) { a = 0; t = 0; return true; };
+        o.trimTo = [&](double) { ++asks; };
+        Run run(c, false, std::move(o));
+        const int secs = g_quick ? 120 : 600;
+        std::vector<std::complex<float>> w(512);
+        for (long k = 0; k < (long)(secs * kIqRate / 512); ++k) {
+            for (auto& v : w) v = std::complex<float>(float(0.1 * g(rng)), float(0.1 * g(rng)));
+            run.feedIq(w.data(), 512, kIqRate, 145.9e6, 145.9e6 - 1234, vibe::sat::kTlmCentreHz);
+        }
+        CHECK(frames == 0 && asks == 0 && run.iq(), "%d s of IQ noise, the ±%.0f Hz hunt: %d frames, %d trim requests", secs, vibe::sat::kTlmAfcHz, frames, asks);
+    }
+    {   // the real AO-73 audio as IQ: its analytic signal (100–7400 Hz) is the slice a USB dial 3800 Hz below would cut
+        std::vector<float> a; int rate = 0;
+        const char* fn = std::getenv("VIBE_FCTLM_REAL"); if (!fn) fn = "test/fixtures/funcube/ao73-v4l-2026-11-24-23s.wav";
+        if (readWav16(fn, a, rate) && rate == 48000) {
+            // analytic: the band 100–7400 Hz as complex (a Hilbert band-pass, the same taps shiftDown uses), at 48 kHz
+            const int nt = 256; const std::vector<float> h = vibebpsk::lowpass(nt, 3650, 48000);
+            std::vector<std::complex<float>> z(a.size());
+            for (size_t k = 0; k < a.size(); ++k) {
+                double zr = 0, zi = 0;
+                for (int i = 0; i < nt; ++i) {
+                    const long j = (long)k - i + nt / 2; if (j < 0 || j >= (long)a.size()) continue;
+                    const double ang = 2 * M_PI * 3750.0 / 48000 * (i - (nt - 1) / 2.0);
+                    zr += a[(size_t)j] * h[(size_t)i] * std::cos(ang); zi += a[(size_t)j] * h[(size_t)i] * std::sin(ang);
+                }
+                z[k] = std::complex<float>(float(2 * zr), float(2 * zi));
+            }
+            // the dial was 3800 below the downlink; the slice centred on the dial (aim = slice): the carrier ~3.2 kHz up
+            vibebpsk::Rx::Cfg c; c.centreHz = 3800; c.afcRangeHz = vibe::sat::kTlmAfcHz;
+            std::vector<Decoded> got; Run::Out o{ nullptr, nullptr, nullptr, nullptr };
+            o.record = [&](const Decoded& d, const TlmCtx&) { got.push_back(d); };
+            Run run(c, false, std::move(o));
+            for (size_t k = 0; k + 960 <= z.size(); k += 960) run.feedIq(&z[k], 960, 48000, 145.9e6, 145.9e6, 3800);
+            std::string names; for (auto& d : got) names += d.frameName + " ";
+            CHECK(got.size() >= 4 && run.framer().failed() == 0, "the real AO-73 pass as IQ: %zu frames (%s), %llu failed, AFC %+.0f Hz, %llu relocks, %llu syncs",
+                  got.size(), names.c_str(), (unsigned long long)run.framer().failed(), run.rx().afcHz(), (unsigned long long)run.rx().relocks(), (unsigned long long)run.framer().syncs());
+        }
+    }
+}
+
+/** ★★★ beta94 `test-fctlm --write-clip FILE RATE CENTRE_HZ TLM_HZ`: 10.0 s of unsigned 8-bit IQ for the fake rtl_tcp (--hf
+ *  FILE --hf-centre CENTRE_HZ) — FUNcube BPSK 1200 at TLM_HZ (two frames, WO1 and WO2, seq 777; exactly 12 000 symbols at
+ *  1200 Bd and whole carrier cycles, so the loop is seamless), on a little noise. What scripts/test-server-fctlm-iq.mjs
+ *  feeds the real server. */
+static int writeClip(const char* path, double rate, double centre, double tlmHz) {
+    std::vector<std::vector<uint8_t>> fr = { tx::sampleFrame(0, 777), tx::sampleFrame(1, 777) };
+    std::vector<std::complex<float>> z;
+    tx::Cfg c; c.rate = rate; c.carrierHz = tlmHz - centre; c.amp = 0.05; c.phase = 0; c.iqOut = &z;
+    (void)tx::modulate(fr, c, 0.0, 0.0);
+    const size_t n = (size_t)std::llround(10.0 * rate);
+    if (z.size() < n) return 3;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 2;
+    std::mt19937 rng(9); std::normal_distribution<float> nd(0.0f, 0.012f);
+    std::vector<uint8_t> out; out.reserve(1 << 20);
+    for (size_t i = 0; i < n; ++i) {
+        const float re = z[i].real() + nd(rng), im = z[i].imag() + nd(rng);
+        out.push_back((uint8_t)std::max(0.0f, std::min(255.0f, std::round(127.5f + 127.0f * re))));
+        out.push_back((uint8_t)std::max(0.0f, std::min(255.0f, std::round(127.5f + 127.0f * im))));
+        if (out.size() >= (1 << 20)) { std::fwrite(out.data(), 1, out.size(), f); out.clear(); }
+    }
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 6 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]));
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--quick") g_quick = true;
-    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9(); s10();
+    s1(); s2(); s3(); s4(); s5(); s6(); s7(); s8(); s9(); s10(); s11(); s12(); s13();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

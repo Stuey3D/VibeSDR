@@ -81,10 +81,16 @@ function locator(lat, lon) {
 }
 
 /** vibesdr.net's sats.json fixture (built by the mirror's own code from CelesTrak's 2026-11-19 data, plus TEST-101095:
- *  ERMINAZ-2V's real elements under a test-only downlink) with every EPOCH moved to an hour ago. */
+ *  ERMINAZ-2V's real elements under a test-only downlink) with every EPOCH moved to an hour ago.
+ *  ★★★ beta94 + TEST-139444: AO-73's elements with ONLY a FUNcube telemetry downlink (145.700, no transponder within
+ *  reach) — AO-73's own telemetry now opens its transponder's finder, so the telemetry-only pick is checked on this one. */
 function freshSats() {
   const iso = new Date(Date.now() - 3600e3).toISOString().replace('Z', '');
   const d = JSON.parse(fs.readFileSync(path.join(root, 'vibeserver/testdata-sat/sats-6digit-2026-11-19.json'), 'utf8'));
+  const ao = d.satellites.find((s) => s.norad === 39444);
+  if (ao) d.satellites.push({ id: 'TEST-139444', name: 'TEST telemetry only (AO-73 elements)', norad: 139444, group: 'amateur', note: 'TEST ONLY \u2014 not a real downlink',
+    transmitters: [{ label: 'Telemetry', downlink: 145700000, mode: 'usb', loop: 'none', consumer: 'fc-bpsk', baud: 1200 }],
+    omm: { ...ao.omm, NORAD_CAT_ID: 139444, OBJECT_NAME: 'TEST-139444' } });
   for (const s of d.satellites) if (s.omm) s.omm.EPOCH = iso;
   for (const g of Object.keys(d.orbits)) d.orbits[g].fetched = new Date(Date.now() - 2 * 3600e3).toISOString();
   return JSON.stringify(d);
@@ -160,7 +166,7 @@ try {
       sp.send({ type: 'sat_list' });
       await until(() => !!lastOf(sp, 'sat_list'), 4000);
       const l = lastOf(sp, 'sat_list');
-      ok(l && l.sats.length === 15 && l.located === true && l.time !== 'none', `the list: ${l?.sats?.length} birds (14 + the six-digit test bird), located ${l?.located}, time ${l?.time}`);
+      ok(l && l.sats.length === 16 && l.located === true && l.time !== 'none', `the list: ${l?.sats?.length} birds (14 + the six-digit test bird + the telemetry-only test bird), located ${l?.located}, time ${l?.time}`);
       ok(l?.source && /CelesTrak/.test(l.source.orbits) && l.source.via === 'vibesdr.net' && Math.abs(Date.now() / 1000 - 2 * 3600 - l.source.fetched) < 120
          && /SatNOGS/.test(l.source.transmitters || ''), `the credit + the data's age: ${JSON.stringify(l?.source)}`);
       const six = l?.sats?.find((s) => s.norad === 101095);
@@ -390,28 +396,37 @@ try {
       ok(p && p.tx === 0 && p.decoder === 'xpdr' && p.mode === 'usb', `★ the beacon's pick opens the transponder's finder (tx ${p?.tx} ${p?.decoder} ${p?.mode})`);
       ok(/decoder attached: TRANSPONDER FINDER, a 99 kHz slice centred 435637500 Hz/.test(S.L()) && /\[sat\] decoder xpdr attached for the shared dial/.test(S.L()),
          'the finder runs over ~99 kHz, centred on the span (the pick\'s)');
+      // ★★★ beta94 TRANSPONDER + TELEMETRY (Stuart 11-25: "handled as one"): AO-73's telemetry opens its transponder's finder,
+      //   which decodes the telemetry too ("tlm")
       sp.send({ type: 'sat', op: 'pick', norad: 39444, tx: 1, doppler: true });
       ok(await until(() => lastPicked(sp)?.norad === 39444, 4000), 'AO-73 telemetry picked');
       p = lastPicked(sp);
+      ok(p && p.tx === 0 && p.decoder === 'xpdr' && p.mode === 'usb' && p.params?.tlm === 145935000 && p.params?.lo === 145935000,
+         `★ AO-73's telemetry opens the transponder's finder, the telemetry in it (tx ${p?.tx} ${p?.decoder} ${JSON.stringify(p?.params)})`);
+      ok(await until(() => /decoder attached: TRANSPONDER FINDER, a 53 kHz slice centred 145952500 Hz \+ FUNcube telemetry/.test(S.L()), 3000), 'the finder over ~53 kHz with the telemetry');
+      // the telemetry-only pick (a bird with no transponder within reach — the test bird with AO-73's elements)
+      sp.send({ type: 'sat', op: 'pick', norad: 139444, tx: 0, doppler: true });
+      ok(await until(() => lastPicked(sp)?.norad === 139444, 4000), 'a telemetry-only bird\'s telemetry picked');
+      p = lastPicked(sp);
       // ★★★ beta92 THE WIDE TELEMETRY PICK (Stuart 11-23: AO-73 1.3 kHz above the prediction, 0 frames at the 1200 Hz centre)
-      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145933500 && p.use === 'packet', `AO-73: fctlm, USB 1500 Hz low (${p?.decoder} ${p?.hz})`);
-      ok(p?.params?.centre === 1500 && p?.params?.afc_range === 2600, `★ picked carries fctlm's wide centre and hunt ${JSON.stringify(p?.params)}`);
-      ok(p?.audio?.lo === 100 && p?.audio?.hi === 5000, `★ picked carries the passband it set ${JSON.stringify(p?.audio)}`);
-      ok(/decoder attached: fctlm \(FUNcube BPSK 1200\) centre 1500 Hz AFC .{1,2}2600 Hz/.test(S.L()) && /\[sat\] decoder xpdr detached/.test(S.L()),
-         'fctlm runs at 1500 Hz, hunting ±2600 Hz; the finder the previous pick started detached');
-      ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === 100 && lastOf(sp, 'config')?.bandwidthHigh === 5000, 3000),
-         `the audio passband 100–5000 Hz USB (config ${lastOf(sp, 'config')?.bandwidthLow}…${lastOf(sp, 'config')?.bandwidthHigh})`);
+      ok(p && p.decoder === 'fctlm' && p.mode === 'usb' && p.hz === 145697000 && p.use === 'packet', `telemetry only: fctlm, USB 3000 Hz low (beta94) (${p?.decoder} ${p?.hz})`);
+      ok(p?.params?.centre === 3000 && p?.params?.afc_range === 4000 && p?.params?.iq === true, `★ picked carries fctlm's wide centre and hunt ${JSON.stringify(p?.params)}`);
+      ok(p?.audio?.lo === 100 && p?.audio?.hi === 6500, `★ picked carries the passband it set ${JSON.stringify(p?.audio)}`);
+      ok(/decoder attached: fctlm \(FUNcube BPSK 1200\) on IQ, the carrier 3000 Hz above the dial AFC .{1,2}4000 Hz/.test(S.L()) && /\[sat\] decoder xpdr detached/.test(S.L()),
+         'fctlm runs on IQ (the carrier 3000 Hz above the dial), hunting ±4000 Hz; the finder the previous pick started detached');
+      ok(await until(() => lastOf(sp, 'config')?.bandwidthLow === 100 && lastOf(sp, 'config')?.bandwidthHigh === 6500, 3000),
+         `the audio passband 100–6500 Hz USB (config ${lastOf(sp, 'config')?.bandwidthLow}…${lastOf(sp, 'config')?.bandwidthHigh})`);
       // ★★★ beta92 A HAND NUDGE KEEPS THE PICK (11-23: a 700 Hz nudge dropped it, the box still said TRACK · attached)
       {
         const before = S.L().length;
         sp.txt.length = 0;
-        sp.send({ type: 'tune', frequency: 145931900, mode: 'usb' });
+        sp.send({ type: 'tune', frequency: 145696300, mode: 'usb' });
         await sleep(900);
         const after = S.L().slice(before);
         ok(!jsons(sp, 'sat').some((m) => m.state === 'OFF') && !/decoder fctlm detached/.test(after) && !/Doppler lock ended/.test(after),
            `a 700 Hz nudge keeps the pick: no OFF, the lock and fctlm kept (${jsons(sp, 'sat').slice(-2).map((m) => m.state).join(' ')})`);
         sp.txt.length = 0;
-        sp.send({ type: 'tune', frequency: 145990000, mode: 'usb' });
+        sp.send({ type: 'tune', frequency: 145755000, mode: 'usb' });
         ok(await until(() => jsons(sp, 'sat').some((m) => m.state === 'OFF' && /Tuned away/.test(m.why || '') && m.pickGone === true), 3000),
            'a tune 58 kHz away ends the lock AND the pick: OFF with pickGone');
         ok(await until(() => /\[sat\] decoder fctlm detached \(SATELLITE drop: the dial left it\)/.test(S.L()), 2000), '…its decoder detached, the drop said why');
