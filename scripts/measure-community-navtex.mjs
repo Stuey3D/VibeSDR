@@ -38,3 +38,4 @@ const j = JSON.parse(cold.body);
 console.log(`a real day: ${set.length} receptions (UTC day ${new Date(day * 86400000).toISOString().slice(0, 10)})`);
 for (const k of ['ns', 'nw', 'nm', 'nx']) if (j[k]) console.log(`  ${k}: ${JSON.stringify(j[k]).length} B raw, ${zlib.gzipSync(JSON.stringify(j[k])).length} B gzipped${k === 'nx' ? `, ${j.nx.length} messages` : k === 'nw' ? `, ${j.nw.warnings.length} warnings` : k === 'nm' ? `, ${j.nm.areas.length} areas` : `, ${j.ns.stations.length} stations`}`);
 console.log(`  all NAVTEX: ${cold.body.length} B raw, ${cold.gz} B gzipped on the wire; a rebuild ${cold.ms} ms, from the cache ${warm.ms} ms`);
+process.exit(0);

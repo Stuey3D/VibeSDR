@@ -7737,8 +7737,8 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
             const vibeais::Vessel v = vibeais::store::toVessel(rec);
             auto opt = [](double x, char* t, size_t m) { if (std::isfinite(x)) std::snprintf(t, m, "%.1f", x); else std::snprintf(t, m, "null"); };
             char sog[16], cog[16]; opt(v.sog, sog, sizeof sog); opt(v.cog, cog, sizeof cog);
-            std::snprintf(b, sizeof b, "%s[%u,%.4f,%.4f,%u,%s,%s,%d,\"%s\",\"", n ? "," : "", rec.mmsi, v.lat, v.lon, rec.seen, sog, cog, v.shipType,
-                          v.kind.c_str());
+            std::snprintf(b, sizeof b, "%s[%u,%.4f,%.4f,%u,%s,%s,\"%s\",\"%s\",\"", n ? "," : "", rec.mmsi, v.lat, v.lon, rec.seen, sog, cog,
+                          v.shipType >= 0 ? vibeais::shipFamily(v.shipType) : "", v.kind.c_str());
             o += b; o += jsonEsc(v.name.substr(0, 24)) + "\",\"" + jsonEsc(v.callsign.substr(0, 8)) + "\"]";
             ++n;
         }
