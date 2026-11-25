@@ -8898,6 +8898,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const halfDeckW = halfSide ? Math.floor(screenW / 2) - 12 : screenW - 16;
   const halfDeckWin = useMemo(() => (tabletop ? { W: halfDeckW + 16, H: Math.max(200, screenH - halfTop) } : null),
     [tabletop, halfDeckW, screenH, halfTop]);
+  /* ★★ HALF-OPEN, A BOX OPEN: the DLS / RDS label bar over the deck in the RIGHT column — only when it fits between the
+   *  fold and the deck's top (its last measured height, 46 until it has been seen). Otherwise it stays hidden: it
+   *  would lie over the box, and the box shows the text anyway (Stuart). */
+  const vtsLastH = useRef(46);
+  const onVtsHeight = useCallback((h: number) => { if (h > 0) vtsLastH.current = h; setVtsBarH(h); }, []);
+  const halfVtsFits = halfSide && pillY != null && pillY - 8 - halfTop >= vtsLastH.current;
+  const halfVtsInset = useMemo(() => (halfSide ? { left: Math.ceil(screenW / 2) + 4 + 6, right: 14 } : null), [halfSide, screenW]);
   const hs = health ? healthSummary(health) : null;
   const healthHot = !!hs && hs.worst >= 3;
   const timeStage = useCountdownStage(sessionEndsAt != null && !adminOk ? sessionEndsAt : null, limitSoft || borrowed);
@@ -11779,12 +11786,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ vtsBarH is forced to 0 alongside, or everything that reserves space above the bar —
           the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
           that is not there. See the vtsBarH rule further up. */}
-      {/* ★ Half-open with a box open: the label bar would lie over the box (Stuart) — hidden; the box shows the text. */}
-      {!controlsHidden && !advRdsOpen && !boxHidesVts && !(tableFold && (dabBoxOpen || decoderShown)) && (
+      {/* ★ Half-open with a box open: the label bar comes back only in the RIGHT column, over the deck, and only if it
+          fits between the fold and the deck (halfVtsFits) — otherwise hidden; the box shows the text (Stuart). */}
+      {!controlsHidden && !advRdsOpen && !boxHidesVts && !(tableFold && (dabBoxOpen || decoderShown) && !halfVtsFits) && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 anchors={drumAnchors}
-                serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH}
+                inset={halfVtsInset}
+                serverType={isLocal ? 'local' : route.params.serverType} onHeight={onVtsHeight}
                 onHoldExtended={onVtsHoldExtended}
                 onTimedEnd={onVtsTimedEnd}
                 /* ★ What a VFD display shows for a name it cannot draw (faceplates §7). */
