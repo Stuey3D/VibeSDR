@@ -307,6 +307,8 @@ export interface WaterfallViewProps {
   stationIdFadeMs?: number;
   /** Changes whenever the name should be shown again (a connect, a reconnect, a server switch). */
   stationIdWake?: string;
+  /** ★ The name's top may not be above this (window y) — below a system status band it would otherwise sit under. */
+  stationIdMinTop?: number;
   /** ★ How tall this overlay ended up, so the parent can put the session countdown UNDER it
    *  instead of on top of it. Measured rather than assumed: one line and two lines differ, and a
    *  constant here would have to be kept in step with a font size nobody would think to check. */
@@ -690,7 +692,7 @@ function WaterfallView({
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   needleHidden = false, wideVfo = false, needleLabel, tunedStation = null, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
-  stationIdFadeMs, stationIdWake,
+  stationIdFadeMs, stationIdWake, stationIdMinTop,
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null, orbOverlay = null,
@@ -3698,7 +3700,7 @@ function WaterfallView({
         {stationId != null && specShow && specH > 40 && (
           <Animated.View pointerEvents="none"
                 onLayout={(e) => onStationIdHeight?.(e.nativeEvent.layout.height)}
-                style={[styles.stationId, { top: specTop + 6, right: stationIdRight, opacity: nameOpacity },
+                style={[styles.stationId, { top: Math.max(specTop + 6, stationIdMinTop ?? 0), right: stationIdRight, opacity: nameOpacity },
                         stationIdLeft != null ? { left: stationIdLeft } : null]}>
             <Text style={[styles.stationIdL1, { color: stationId.color }]} numberOfLines={1}>
               {stationId.line1}

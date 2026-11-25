@@ -6,6 +6,7 @@
  * Run: node --no-warnings scripts/test_duo_layout.ts   (run-tests.sh does)
  */
 import { edgeChipGeometry } from '../src/components/edgeChipGeometry.ts';
+import { namePlacement } from '../src/utils/duoGeometry.ts';
 import { isFoldedFrontWindow, isFrontScreenWindow, phonePortraitScale, clearBelow, rightLimitAt, deckClearance,
          avoidRects, NO_REGIONS, type ReservedRegions } from '../src/utils/duoGeometry.ts';
 
@@ -91,6 +92,23 @@ ok(avoidRects({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 10, h: 10 }] }).leng
   // A rect reported outside the window (another share's) never moves anything.
   const OUTSIDE: ReservedRegions = { ...NO_REGIONS, statusBar: [{ x: 500, y: 0, w: 90, h: 40 }] };
   ok(clearBelow(OUTSIDE, 295, 475, 669) === 0, "a rect beyond the window's right edge is ignored");
+}
+
+// ── The receiver's name (Stuart: "name still displays under the system status pill", right-hand share) ─────────────
+{
+  // A share reports its status bar across its whole width: both lines of the name drop below it and it fades.
+  const SHARE_BAND: ReservedRegions = { ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 469, h: 32 }], hinge: { status: 'fullyOpen', angleDeg: 180 } };
+  const n = namePlacement(SHARE_BAND, 0, 64, 469, 28);
+  ok(n.minTop >= 36 && n.right === 28 && n.crowded, `share: the name (both lines) starts below the status band (top ${n.minTop}) and fades`);
+  // Folded front screen: the status column at the right — the name ends >= 8 pt left of it, both lines, and fades.
+  const f = namePlacement(FOLDED, 0, 64, 466, 28);
+  ok(466 - f.right <= 382 - 8 && f.minTop === 0 && f.crowded, `folded: the name's right edge is at x ${466 - f.right}, 8+ pt left of the column (382)`);
+  // A pill given as a corner rect in a share: right edge clears it.
+  const p = namePlacement({ ...NO_REGIONS, statusBar: [{ x: 380, y: 0, w: 89, h: 60 }] }, 0, 64, 469, 28);
+  ok(469 - p.right <= 380 - 8, `share with a corner pill rect: the name ends at x ${469 - p.right}`);
+  // Nothing there: unchanged, no fade.
+  const z = namePlacement(NO_REGIONS, 0, 64, 469, 28);
+  ok(z.right === 28 && z.minTop === 0 && !z.crowded, 'no rects: the name is where it always was, and does not fade');
 }
 
 if (fails) { console.log(`\nduo layout: ${fails} FAILED`); process.exit(1); }
