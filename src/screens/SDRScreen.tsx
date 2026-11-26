@@ -353,7 +353,8 @@ import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, keep
 import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguageMissing, PREFERRED_MAX, type LikelyWhy } from '../services/transcribeOrder';
 import { translateRows } from '../services/translateTargets';
 import { dabOnlyFrom } from '../services/dabOnly';   // ★★ V12 DAB only — the web page's rule
-import { onlyModeFrom, onlyModeNote, onlyModeWhy } from '../services/onlyMode';   // ★★ V12 the only mode — the web page's rule
+import { onlyModeFrom, onlyModeNote, onlyModeWhy } from '../services/onlyMode';
+import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo, type SatSingle } from '../services/satSingle';   // ★★★ beta96 single mode: satellites (the web page's rules)   // ★★ V12 the only mode — the web page's rule
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
@@ -969,6 +970,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSatCap(undefined);                         // ★ V12 satellites — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
     setHwOnlyMode(null); onlyToldRef.current.clear();   // ★★ V12 the only mode — likewise
+    setHwSingleMode(''); setSatSingle(null); setSatHybrid(null);   // ★★★ beta96 single mode: satellites — likewise
     setAprsCap({ on: false, hz: 144.8e6 });
     setDecWhy({});   // ★ V12 decoder reach: a new radio says its own
     setAntBands(null);
@@ -2802,6 +2804,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satCap, setSatCap] = useState<{ ok: boolean; why: string; need?: 'location' } | undefined>(undefined);
   const [satOn, setSatOn] = useState(false);
   const satOnRef = useRef(false);
+  /* ★★★ beta96 SINGLE MODE: SATELLITES — hwinfo singleMode, the watch view's facts (sat_single), the transponder hybrid */
+  const [hwSingleMode, setHwSingleMode] = useState('');
+  const [satSingle, setSatSingle] = useState<SatSingle | null>(null);
+  const [satHybrid, setSatHybrid] = useState<SatHybridInfo | null>(null);
+  const satWatchRef = useRef(false);
   const [satList, setSatList] = useState<SatList | null>(null);
   const satListRef = useRef<SatList | null>(null);
   const [satRo, setSatRo] = useState<SatReadout | null>(null);
@@ -7385,6 +7392,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ Out of SATELLITE: the drop is ALWAYS sent (a lock must never outlive the mode), its decoder stops, the box closes. */
   const satModeOff = useCallback(() => {
     if (!satOnRef.current) return;
+    if (satWatchRef.current) { setSatWhy(SAT_SINGLE_WHY); return; }   // ★★★ beta96 single mode: satellites — no way out for a listener
     satOnRef.current = false; setSatOn(false);
     (client.current as unknown as { satDrop?: () => void } | null)?.satDrop?.();
     satFollow('', null);
@@ -7392,6 +7400,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSatPicked(null); satZoomedPickRef.current = ''; setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
     setSatCwText(''); satVfoBReset();
   }, [satFollow, satVfoBReset]);
+  /* ★★★ beta96 SINGLE MODE: SATELLITES (services/satSingle.ts) — a listener (not the signed-in admin) lands straight in
+   *  SATELLITE and watches: satModeOff refuses while this holds, and the box draws the watch view. */
+  const satWatch = satSingleWatch(hwSingleMode, adminOk);
+  satWatchRef.current = satWatch;
+  useEffect(() => { if (satWatch && satCap && !satOnRef.current) satEnterRef.current(); }, [satWatch, satCap]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopSpots = useCallback(() => {
     if (spotsKindRef.current === 'digi') roomFollowRef.current.noteClosed('spots', null);   // ★★★ shared decoders: closed for me
@@ -8694,6 +8707,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
       onHwDabOnly: (v: boolean) => { if (!destroyed.current) setHwDabOnly(v); },
       onHwOnlyMode: (m: string) => { if (!destroyed.current) setHwOnlyMode(m); },   // ★★ V12 the only mode
+      onHwSingleMode: (m: string) => { if (!destroyed.current) setHwSingleMode(m); },   // ★★★ beta96 single mode
+      onSatSingle: (s1: SatSingle) => { if (!destroyed.current) { setSatSingle(s1); setSatHybrid(s1.hybrid ?? null); } },
+      onSatHybrid: (h: SatHybridInfo | null) => { if (!destroyed.current) setSatHybrid(h); },
       onHwGainLocked: (v: boolean) => { if (!destroyed.current) setHwGainLocked(v); },
       onHwIfGrFloor: (v: number) => { if (!destroyed.current) setHwIfGrFloor(v); },
       onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
@@ -16852,6 +16868,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             onEnable: satPlaceEnable, onEnter: satPlaceEnter, onClear: satPlaceClear,
           } : undefined}
           picked={satPicked} pending={satPending} why={satWhy}
+          watch={satWatch ? { single: satSingle, hybrid: satHybrid, onGallery: () => { markInteract(); setGalleryOpen(true); } } : null}
           picture={satPicture} pictureDone={satPictureDone}
           decLine={satDec && activeDecoder === satDec ? satDecLineShown(decoderStatus) : ''}
           packets={satDec === 'aprs' ? aprsLog.map((x) => x.line) : []}

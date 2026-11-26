@@ -576,6 +576,11 @@ export interface SDRCallbacks {
   onHwDabOnly?: (on: boolean) => void;
   /** ★★ V12 THE ONLY MODE: the one whole-radio mode a listener may not leave ("adsb", …; "" none, "" for the admin). */
   onHwOnlyMode?: (mode: string) => void;
+  /** ★★★ beta96 hwinfo `singleMode` ("" = General; "sat" = SATELLITES — this listener watches unless signed in) */
+  onHwSingleMode?: (mode: string) => void;
+  /** ★★★ beta96 single mode: satellites — the watch view's facts, and the linear-transponder hybrid (null = over) */
+  onSatSingle?: (s: import('./satSingle').SatSingle) => void;
+  onSatHybrid?: (h: import('./satSingle').SatHybridInfo | null) => void;
   /** ★★★ The owner has FIXED the gain on the band being listened to — every gain message is
    *  refused, so the panel must show no gain controls at all rather than ones that spring back.
    *  Distinct from onHwGainCap, which is a working control with a lower ceiling. Per band: it

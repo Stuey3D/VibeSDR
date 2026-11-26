@@ -65,7 +65,8 @@ import { type VorMapReport } from '../../../src/services/vorMap';
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel, satSchedStored } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { SatPanel, satSchedStored } from './satellites';
+import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -2066,6 +2067,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
     onSondes: (r) => onSdReport(r),
     onSatList: (l) => satPanelGet()?.onList(l),
+    onSatSingle: (s1) => { satPanelGet()?.onSingle(s1); },                                    // ★★★ beta96 the watch view
+    onSatHybrid: (h) => { satHybridNow = h; satPanelGet()?.onHybrid(h); },                   // ★★★ beta96 the transponder pass
     onSat: (r) => {
       const p = satPanelGet();
       const was = !!p?.readout();
@@ -2224,6 +2227,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       adminUnlocked = ok;
       syncDabOnly();   // ★★ V12 the admin keeps EXIT DAB
       syncOnlyMode();  // ★★ …and every other EXIT
+      satSingleSync(); // ★★★ beta96 …and SATELLITE's (single mode: satellites)
       syncMediaSkip();   // ★ the owner may skip on their own spectator dial
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
       if (ok) clearTimeLeft();
@@ -2391,6 +2395,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
     onDabOnly: (on) => { hwDabOnlyKnown = true; hwDabOnly = on; syncDabOnly(); },
     onOnlyMode: (m) => { hwOnlyMode = m; syncOnlyMode(); },   // ★★ V12 the only mode, any whole-radio mode
+    onSingleMode: (m) => { if (m !== hwSingleMode) { hwSingleMode = m; } satSingleSync(); },   // ★★★ beta96 single mode: satellites
     onServerClock: (offsetMin, abbr, tz) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; srvTzId = tz; },
     onDsActive: (on, setting) => {
       hwDsActive = on;
@@ -10797,6 +10802,8 @@ function satPanelGet(): SatPanel | null {
       session: () => ({ sharedDial: dialModeNow !== 'exclusive', listeners: listenerCount > 0 ? listenerCount : undefined, locked: hwLockedCentre > 0 }),
       here: () => ({ hz: Math.round(spec?.frequency ?? 0), mode: String(spec?.mode ?? '') }),
       back: (hz, mode) => { if (spec && hz > 0) { spec.tune(clampTune(hz), (mode || spec.mode) as SDRMode, { recenter: true, retarget: true }); updateViewOverlays(); } },
+      // ★★★ beta96 single mode: satellites — the watch view's GALLERY key
+      openGallery: () => { if (!isPanelOpen('galleryPanel')) { togglePanel('galleryPanel'); galPage = 1; void renderGallery(1); } },
     });
     satPanel.setCap(satCap);
   }
@@ -11033,9 +11040,22 @@ function satImgFollowStart(wrap: HTMLElement) {
 /** Leave SATELLITE (another whole-radio mode is starting) — the drop is sent, the decoder stops. */
 function satModeOff() { if (satPanel?.active) satPanel.exit(); }
 /** The SATELLITE key: in (leaving whichever whole-radio mode is on, as each of them does) or out. */
+/* ★★★ beta96 SINGLE MODE: SATELLITES (src/services/satSingle.ts, docs/v12/SAT-SINGLE.md) — a listener on a SATELLITES radio
+ *  lands straight in SATELLITE and WATCHES: no EXIT (a note says why), no picks; the radio makes them. The signed-in admin is
+ *  never held. Synced on every hwinfo and when the admin signs in or out. */
+let hwSingleMode = '';
+let satHybridNow: SatHybridInfo | null = null;
+function satSingleSync() {
+  const watch = satSingleWatch(hwSingleMode, adminUnlocked);
+  const p = watch ? satPanelGet() : satPanel;
+  if (!p) return;
+  p.setWatch(watch);
+  if (watch && !p.active) toggleSatMode();
+}
 function toggleSatMode() {
   const p = satPanelGet();
   if (!p) return;
+  if (p.active && p.watching) { showPill(SAT_SINGLE_WHY, 6000); return; }   // ★★★ beta96 no way out for a listener
   if (!p.active) {
     // ★ each switched OFF properly (its own toggle tells the server), not just its view — SATELLITE takes the receiver
     if (dabOn) toggleDabMode(); if (adsbOn) toggleAdsbMode(); if (ismOn) toggleIsmMode(); if (aisOn) toggleAisMode();
