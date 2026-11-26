@@ -2101,8 +2101,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <label class="row" id="dabRateBoostRow" style="gap:8px;margin-top:10px">
         <input type="checkbox" id="dabRateBoost" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Change the sample rate when a mode needs it</span></label>
-      <!-- ★★★ THE RADIO FELL OVER AT A RATE A MODE BOOSTED TO (vibe_rate_guard.h): said in red beside the switch it
-           disables, with the owner's way back (rateGuardShow). -->
+      <!-- ★★★ THE RADIO FELL OVER AT A RATE A MODE BOOSTED TO (vibe_rate_guard.h): said beside the switch — noted on one
+           stop, a rate held one rung down on a second within 24 h (red), tried again after 24 h — with the owner's way
+           back (rateGuardShow). beta95: it never greys or unticks the switch; the owner's choice stays theirs. -->
       <div class="row hide" id="rateGuardRow" style="gap:8px;margin:6px 0 0 24px;align-items:center">
         <span class="note" id="rateGuardText" style="margin:0;flex:1;min-width:200px;color:var(--bad)"></span>
         <button type="button" class="ghost" id="rateGuardClear" style="padding:4px 12px;font-size:13px">Clear</button>
@@ -5745,8 +5746,8 @@ function modeRateShow(r) {
   $("ism256Row").style.opacity = live ? "" : "0.45";
   if (typeof rateGuardShow === "function") rateGuardShow();
 }
-/** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
- *  disabled until the owner clears it. ONE RULE, TWO READERS: the app's src/services/rateGuard.ts rateGuardLine draws
+/** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the line beside the switch and
+ *  the owner's Clear (beta95: noted / held one rung down / retrying — the switch itself is never touched). ONE RULE, TWO READERS: the app's src/services/rateGuard.ts rateGuardLine draws
  *  the same sentence; the SERVER keeps the switch off itself while the fault stands. */
 function rateGuardLine(st) {
   if (!st || !st.fault) return "";
@@ -5758,11 +5759,9 @@ function rateGuardShow() {
   const line = rateGuardLine(st);
   $("rateGuardRow").classList.toggle("hide", !line);
   $("rateGuardText").textContent = line;
-  if (line) {
-    $("dabRateBoost").disabled = true;
-    $("dabRateBoost").checked = false;   // ★ shown off: the server has switched it off
-    $("dabRateBoostRow").style.opacity = "0.45";
-  }
+  // ★★★ beta95: the switch is NEVER greyed or unticked by it — it shows the OWNER's choice, which the guard only caps
+  //     (vibe_rate_guard.h). Red while it holds a rate back; a plain note while it has only noted a stop or is retrying.
+  $("rateGuardText").style.color = st && st.latched ? "var(--bad)" : "";
 }
 async function rateGuardClear() {
   try {

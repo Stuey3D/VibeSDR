@@ -1890,8 +1890,23 @@ static std::atomic<bool>   g_dabWide{false};
  *  config still says on), so nobody's next tap on the mode sends the radio back to the rate it died at. The marker it
  *  writes before every boost is what survives a whole-process crash. */
 static vibe::RateGuard     g_rateGuard;
+/** ★★★ beta95 THE GUARD IS AN OVERRIDE, NEVER A WRITE TO THE OWNER'S CONFIG: may a mode boost the radio to `hz` now?
+ *  The owner's switches (g_dabRateBoost, g_adsb256, g_ism256, avdata+8m) keep what the owner set; this caps them. */
+static bool vsGuardAllows(double hz) { return g_rateGuard.allows(hz, (long long)::time(nullptr)); }
+/** ★ This binary's identity for the crash marker (vibe_rate_guard.h rule a): the version AND the compile stamp, so an
+ *  update — even a rebuilt package of the same version — is never read as a crash. */
+static std::string vsGuardBuild() {
+#ifdef VIBESERVER_VERSION_STR
+    return std::string(VIBESERVER_VERSION_STR) + "@" __DATE__ "_" __TIME__;
+#else
+    return std::string("dev@") + __DATE__ "_" __TIME__;
+#endif
+}
 /** ★ Set when boot() found a crash before the persist handler existed — see setConfigPersistHandler. */
-static std::atomic<bool>   g_rateGuardUnpersisted{false};
+static std::string        g_rateGuardLatePatch;   // ★ guarded by g_vsConfigMtx — see setRateGuardBase
+/** ★ The pre-beta95 give-back (setRateGuardBase): 1 = the rate switch, 2 = ISM at 2.56 — read once by the daemon,
+ *  whose config was loaded before the patch landed (rateGuardGaveBack). */
+static std::atomic<int>    g_rateGuardGaveBack{0};
 /* ★★ ADS-B AT 2.56 MS/s ON AN RTL (Stuart, 2026-10-24: "a simple use 2.56MSPS sample rate for ADSB (May Drop some
  *  Samples)") — the rate his OpenWebRX ADS-B profile ran this V4L at. Never the default; an owner's switch of its own,
  *  not tied to the rate switch (the switch IS the owner allowing ADS-B this rate). Other radios ignore it.
@@ -17640,19 +17655,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    must not loop. */
     void rateBoostStalled(double rate, const std::string& mode, const char* why) {
         if (rateBoostFellBack_.exchange(true)) return;
-        LOGE("[rate] %s at %.3f MS/s during %s — leaving %s, the radio back at its own rate, and the rate switch OFF",
-             why, rate / 1e6, mode.c_str(), mode.c_str());
-        g_rateGuard.recordStall(rate, mode, (long long)vsNowEpoch());
-        if (mode == "ISM") {   // ★ V12 ISM's own 2.56 switch is what boosted it: that one goes off
-            g_ism256.store(false, std::memory_order_relaxed);
-            vsPersist("{\"ism256\":false}");
-        } else if (mode == "AVDATA") {
-            // ★ V12 the datalink's 8 MS/s ("avdata+8m", a token in the modes CSV): the guard's record (blocked()) is what
-            //   holds it off from here — vsAvdataBoostRate asks it — until the owner clears it; the CSV stays theirs
-        } else {
-            g_dabRateBoost.store(false, std::memory_order_relaxed);
-            vsPersist("{\"dabRateBoost\":false}");
-        }
+        // ★★★ beta95: NOTED ON THE FIRST, LATCHED (one rung down) ON A SECOND WITHIN 24 h — and the owner's switches are
+        //     never written: the guard's override (vsGuardAllows) is what holds a boost back (vibe_rate_guard.h).
+        const bool latched = g_rateGuard.recordStall(rate, mode, (long long)vsNowEpoch());
+        LOGE("[rate] %s at %.3f MS/s during %s — leaving %s, the radio back at its own rate; %s",
+             why, rate / 1e6, mode.c_str(), mode.c_str(),
+             latched ? ("the second stop there in 24 h: boosts held at " + vibe::RateFault::rateText(g_rateGuard.fault().ceiling)
+                        + " or below").c_str()
+                     : "noted (the first): that rate is allowed again");
         vsSayVts("The radio stopped responding at " + vibe::RateFault::rateText(rate) + " during " + mode
                  + " \xe2\x80\x94 " + mode + " has ended and the radio is back at its own rate.");
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
@@ -17707,16 +17717,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double adsbTargetRate() {
         const double cur = sampleRate;
         const bool rtl = dev != nullptr || useTcp();
-        if (rtl && g_adsb256.load(std::memory_order_relaxed) && !g_rateGuard.blocked()) return 2.56e6;
-        if (!g_dabRateBoost.load(std::memory_order_relaxed)) return cur;
+        const bool own256 = rtl && g_adsb256.load(std::memory_order_relaxed);
+        if (own256 && vsGuardAllows(2.56e6)) return 2.56e6;
+        // ★★★ beta95 ONE RUNG DOWN (Stuart 2026-11-25 "adsb should be there at 2.4"): the guard holding 2.56 back leaves an
+        //     owner who allowed ADS-B its 2.56 at 2.4, the ADS-B floor — never the radio's own 2.048 that removes ADS-B.
+        const bool may = g_dabRateBoost.load(std::memory_order_relaxed) || own256;
+        if (!may) return cur;
         if (cur >= vibeadsb::Service::kMinRateHz) return cur;
-        if (useSdrplay()) return 3.0e6;
+        if (useSdrplay()) return vsGuardAllows(3.0e6) ? 3.0e6 : cur;
         double best = 0;
         const std::string list = supportedRates();
         for (size_t i = 0; i < list.size();) {
             size_t j = list.find(',', i); if (j == std::string::npos) j = list.size();
             const double v = strtod(list.substr(i, j - i).c_str(), nullptr);
-            if (v >= vibeadsb::Service::kMinRateHz && (best == 0 || v < best)) best = v;
+            if (v >= vibeadsb::Service::kMinRateHz && vsGuardAllows(v) && (best == 0 || v < best)) best = v;
             i = j + 1;
         }
         return best > 0 ? best : cur;
@@ -18238,7 +18252,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  put back by ismLeave from s.rate. ismTune then places the band for the new rate. */
         {
             const bool rtl = dev != nullptr || useTcp();
-            if (rtl && g_ism256.load(std::memory_order_relaxed) && !g_rateGuard.blocked() && std::fabs(2.56e6 - sampleRate) > 1000.0) {
+            if (rtl && g_ism256.load(std::memory_order_relaxed) && vsGuardAllows(2.56e6) && std::fabs(2.56e6 - sampleRate) > 1000.0) {
                 LOGI("[ISM] rate %.3f -> 2.560 MS/s (the owner's ISM 2.56 MS/s switch)", sampleRate / 1e6);
                 g_rateGuard.mark(2.56e6, "ISM", (long long)vsNowEpoch());
                 rateBoostFellBack_.store(false);
@@ -25268,8 +25282,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *  a radio's samples to the decoder as if they were 2.048, and nothing ever locked. */
                     LOGI("[DAB] ★ asked for 2.048 MS/s and the radio reports %.3f MS/s — capturing at "
                          "2.4 and resampling instead", gotRate / 1e6);
-                    if (std::fabs(2400000.0 - sampleRate) > 1000.0) g_rateGuard.mark(2400000.0, "DAB", (long long)vsNowEpoch());
-                    LocalSdrShim::instance().setSampleRate(2400000.0);
+                    if (vsGuardAllows(2400000.0)) {   // ★ beta95 a radio held below 2.4 keeps what it gave
+                        if (std::fabs(2400000.0 - sampleRate) > 1000.0) g_rateGuard.mark(2400000.0, "DAB", (long long)vsNowEpoch());
+                        LocalSdrShim::instance().setSampleRate(2400000.0);
+                    }
                 } else if (std::fabs(gotRate - wantRate) > 1000.0) {
                     LOGI("[DAB] the radio gives %.3f MS/s for 2.048 — resampled to 2.048 in software", gotRate / 1e6);
                 }
@@ -28891,7 +28907,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!noRadio && !lost) j += ",\"caps\":" + vibecaps::toJson(vsRadioCaps());
             // ★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h) — the red line beside the setup page's
             //    rate switch. Nothing private in it.
-            if (!noRadio) j += ",\"rateGuard\":" + g_rateGuard.json();
+            if (!noRadio) j += ",\"rateGuard\":" + g_rateGuard.json((long long)vsNowEpoch());
             // ★★ V12 auto-PPM: what it is doing on this radio — the setup page's line beside the ppm (vibe_afc.h)
             if (!noRadio && !lost) j += ",\"afc\":" + LocalSdrShim::instance().afcJson();
             j += "}";
@@ -28933,7 +28949,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("rate switch: the owner cleared \"%s\"", g_rateGuard.fault().say().c_str());
                 g_rateGuard.clear();
             }
-            const std::string j = g_rateGuard.json();
+            const std::string j = g_rateGuard.json((long long)vsNowEpoch());
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
@@ -45086,29 +45102,51 @@ void LocalSdrShim::setVibeServerRateLock(bool on) {
 void LocalSdrShim::setVibeServerDabRateBoost(bool on) {
     // ★★ A RECORDED STALL OR CRASH AT A BOOSTED RATE OUTRANKS THE SAVED SWITCH — the config may still say on (the
     //    persist may not have landed; on Android the app keeps its own copy). Off until the owner clears it.
-    if (on && g_rateGuard.blocked()) {
-        LOGI("rate switch: left OFF — %s", g_rateGuard.fault().say().c_str());
-        on = false;
-    }
+    // ★★★ beta95: ALWAYS THE OWNER'S VALUE. A recorded stop no longer switches it off — the guard caps the boosts it
+    //     allows (vsGuardAllows), so clearing the record gives back exactly what the owner had.
+    if (on && g_rateGuard.latched((long long)vsNowEpoch()))
+        LOGI("rate switch: ON, boosts capped by the rate guard — %s", g_rateGuard.fault().say().c_str());
     g_dabRateBoost.store(on, std::memory_order_relaxed);
 }
 void LocalSdrShim::setRateGuardBase(const std::string& base) {
-    g_rateGuard.setBase(base);
-    if (g_rateGuard.boot((long long)vsNowEpoch())) {
-        /* ★★★ THE LAST RUN DIED AT A BOOSTED RATE. Its marker was still there, so whatever killed the process — the libusb
-         *  ABORT of a re-rate teardown, a wedged reader — happened while ADS-B or DAB had the radio at (or going to) that
-         *  rate. Start at the base rate: with the switch off no mode can boost it, and a remembered DAB multiplex cannot
-         *  resume at 2.048 on start (which would be a crash loop). Persisted, and said in red beside the switch. */
-        const vibe::RateFault f = g_rateGuard.fault();
-        LOGE("the last run of this server died while the radio was at %s%s — the rate switch is OFF until the owner "
-             "clears it", vibe::RateFault::rateText(f.rate).c_str(), f.mode.empty() ? "" : (" during " + f.mode).c_str());
-        g_dabRateBoost.store(false, std::memory_order_relaxed);
-        ConfigPersistFn fn;
-        { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsConfigPersist; }
-        if (fn) fn("{\"dabRateBoost\":false}"); else g_rateGuardUnpersisted.store(true);
+    g_rateGuard.setBase(base, vsGuardBuild());
+    /* ★★ A PRE-beta95 RECORD switched the owner's setting off itself (persisted dabRateBoost:false, or ism256:false after
+     *  an ISM stall), and the old pages greyed the switch so the owner could not have changed it since. Give it back
+     *  once; the record is kept as a single noted stop (vibe_rate_guard.h loadLocked). */
+    std::string legacyMode;
+    if (g_rateGuard.takeLegacy(&legacyMode)) {
+        const std::string patch = legacyMode == "ISM" ? "{\"ism256\":true}" : legacyMode == "AVDATA" ? "" : "{\"dabRateBoost\":true}";
+        if (!patch.empty()) {
+            LOGI("rate guard: a record from before beta95 had switched %s off — given back (now one noted stop)",
+                 legacyMode == "ISM" ? "ISM at 2.56 MS/s" : "the rate switch");
+            // ★ Persisted only: on Linux the old latch HAD written false there (the daemon applies the give-back to the
+            //   config it already read — rateGuardGaveBack); on Android the persist never carried these keys, so the app's
+            //   own copy still holds the owner's choice and nothing needs giving back.
+            g_rateGuardGaveBack.store(legacyMode == "ISM" ? 2 : 1);
+            ConfigPersistFn fn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsConfigPersist; }
+            if (fn) fn(patch); else { std::lock_guard<std::mutex> lk(g_vsConfigMtx); g_rateGuardLatePatch = patch; }
+        }
     }
+    std::string why;
+    const auto b = g_rateGuard.boot((long long)vsNowEpoch(), &why);
+    const vibe::RateFault f = g_rateGuard.fault();
+    const std::string where = vibe::RateFault::rateText(f.rate) + (f.mode.empty() ? "" : " during " + f.mode);
+    /* ★★★ beta95: THE LAST RUN STOPPED AT A BOOSTED RATE (its marker was still there). An update is not a crash (the
+     *  marker names another build); one stop is noted and the rate allowed again; a second within 24 h holds the boosts
+     *  one rung down. The owner's switches are NEVER written — vsGuardAllows is the override. */
+    if (b == vibe::RateGuard::Boot::Explained)
+        LOGI("rate guard: the last run stopped at a boosted rate, but its marker was %s — not counted as a crash", why.c_str());
+    else if (b == vibe::RateGuard::Boot::Noted)
+        LOGE("the last run of this server died while the radio was at %s — noted once; that rate is allowed again, and "
+             "only a second stop there within 24 hours holds it lower", where.c_str());
+    else if (b == vibe::RateGuard::Boot::Latched)
+        LOGE("the last run of this server died while the radio was at %s — the second time in 24 hours: boosts held at "
+             "%s or below until it retries after 24 hours or the owner clears it", where.c_str(),
+             vibe::RateFault::rateText(f.ceiling).c_str());
 }
-std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
+int LocalSdrShim::rateGuardGaveBack() { return g_rateGuardGaveBack.exchange(0); }
+std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json((long long)vsNowEpoch()); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
 void LocalSdrShim::setVibeServerAdsb256(bool on) { g_adsb256.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerIsm256(bool on) { g_ism256.store(on, std::memory_order_relaxed); }
@@ -45412,7 +45450,10 @@ static std::string vsAdsbWhyNot() {
     if (!reach) return "this radio cannot tune to 1090 MHz";
     // ★★ THE OWNER'S SWITCH (Setup: "change the sample rate when a mode needs it", stored as dabRateBoost): with it on,
     //    ADS-B may raise the rate itself, so the question is only whether the radio CAN capture at 2.4 MS/s.
-    if (g_dabRateBoost.load(std::memory_order_relaxed)) {
+    // ★★★ beta95 …unless the rate guard holds the boosts below 2.4 (the radio stopped twice AT 2.4 — vibe_rate_guard.h).
+    //     Above that it never does: a stop at 2.56 holds the boosts at 2.4 and ADS-B stays.
+    const bool guardHolds = !vsGuardAllows(2.4e6);
+    if (g_dabRateBoost.load(std::memory_order_relaxed) && !guardHolds) {
         if (g_vsHwMaxRate.load(std::memory_order_relaxed) == 0) LocalSdrShim::instance().maxSampleRateHz();
         if (double(g_vsHwMaxRate.load(std::memory_order_relaxed)) < vibeadsb::Service::kMinRateHz)
             return "this radio cannot capture at 2.4 MS/s, which ADS-B needs";
@@ -45429,6 +45470,9 @@ static std::string vsAdsbWhyNot() {
             std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 the radio runs at %.3f MS/s. "
                           "Turn on DECODER RATE BOOST (MENU \xe2\x86\x92 SDR HARDWARE, under SAMPLE RATE), "
                           "or choose 2.4 MS/s there", running / 1e6);
+        else if (guardHolds && g_dabRateBoost.load(std::memory_order_relaxed))
+            std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this radio stopped twice at "
+                          "2.4 MS/s, so the server holds it at %.3f MS/s for now (its owner can clear that in Setup)", running / 1e6);
         else
         std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s "
                       "(its owner can let it change rate for ADS-B in Setup)", running / 1e6);
@@ -45578,8 +45622,9 @@ static double vsAvdataRunning() {
 /** The rate entering ACARS + VDL2 would raise this radio to (the owner's "avdata+8m" switch), or 0. */
 static double vsAvdataBoostRate() {
     if (g_icomOn.load()) return 0;
-    return vibeavi::wideBoostRate(vsModeBlocked("avdata+8m"), g_vsRateLock.load(std::memory_order_relaxed), g_rateGuard.blocked(),
-                                  LocalSdrShim::instance().listedRatesHz());
+    const std::vector<double> rates = LocalSdrShim::instance().listedRatesHz();
+    return vibeavi::wideBoostRate(vsModeBlocked("avdata+8m"), g_vsRateLock.load(std::memory_order_relaxed),
+                                  !vsGuardAllows(vibeavi::boostRateFrom(rates)), rates);
 }
 static bool vsAvdataTunes(const vibeavi::Band& b) {
     if (g_icomOn.load()) return false;
@@ -45981,7 +46026,7 @@ static bool vsDabCapableHw() {
     if (running > 0 && running < cap) cap = running;
     /* ★★ …unless the owner has allowed DAB to borrow the rate. Then only the HARDWARE limits it;
      *  see g_dabRateBoost. */
-    if (g_dabRateBoost.load(std::memory_order_relaxed)) cap = hw;
+    if (g_dabRateBoost.load(std::memory_order_relaxed) && vsGuardAllows(2.048e6)) cap = hw;   // ★ beta95 the guard's cap
     /* ★ DAB now CAPTURES at 2.4 and resamples to 2.048, so the question is whether the radio can
      *  reach the capture rate — but a receiver that can only manage 2.048 is still perfectly
      *  usable, because the service resamples only when it is actually given 2.4. So the gate
@@ -47128,12 +47173,13 @@ static void vsSetTrustedProxiesCsv(const std::string& csv) {
 
 void LocalSdrShim::setConfigPersistHandler(ConfigPersistFn fn) {
     ConfigPersistFn late;
+    std::string latePatch;
     {
         std::lock_guard<std::mutex> lk(g_vsConfigMtx);
         g_vsConfigPersist = std::move(fn);
-        if (g_vsConfigPersist && g_rateGuardUnpersisted.exchange(false)) late = g_vsConfigPersist;
+        if (g_vsConfigPersist && !g_rateGuardLatePatch.empty()) { late = g_vsConfigPersist; latePatch.swap(g_rateGuardLatePatch); }
     }
-    if (late) late("{\"dabRateBoost\":false}");   // ★ the crash boot() found — see setRateGuardBase
+    if (late) late(latePatch);   // ★ the pre-beta95 give-back setRateGuardBase found — see there
 }
 void LocalSdrShim::setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc) {
     g_vsSavedLna.store(lnaState); g_vsSavedIfGr.store(ifGr); g_vsSavedIfAgc.store(ifAgc);
