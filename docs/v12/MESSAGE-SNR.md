@@ -23,6 +23,12 @@ Branch `b96-msgsnr` (from `b96-integrate` fe9bae62a + the ACARS/VDL2 msg/min com
   - **ADS-B.** The reply's SNR is measured per reply (`Frame::snr`) and smoothed per aircraft. It travels in `"snr"` and
     in a new ADS-B delta column `cSnr`. That column is a beta96-only protocol change: flight, category and Comm-B move up
     one bit. Delta is new in beta96, so no released client or server is affected.
+  - **The delta column is coarse** (Stuart 11-26: "use coarser to save resources"). It carries 3 dB BANDS on ADS-B's
+    colour edges: k = floor((snr − 10) / 3), and the client shows 11.5 + 3k. So rounding never changes a colour
+    (test-adsb-delta checks 701 figures), and the column goes out only when an aircraft's band changes.
+  - **Delta bytes a tick, 172-aircraft stream (test_adsb_delta, `VIBE_ADSB_SNR_STEP=0|10|30`):** no SNR column
+    **2.52 KB** · whole dB 2.80 KB (+11 %) · **3 dB bands 2.61 KB (+3.6 %)**, as shipped. The full report (and so the
+    card on a non-delta client) keeps 0.1 dB.
   - **APRS.** The IQ paths measure each frame's SNR (`vibe_aprs_run.h` `frameSnr_`).
   - **Datalink and LoRa.** Datalink rows carry the last message's SNR and its scale. LoRa messages carry SNR + SF.
 - **Next / not done:** see "Not done" at the bottom.
@@ -72,7 +78,7 @@ scratch copy of the tree; the "Cost" column says where.
 
 | Mode (key) | Source (server) | What the number is | `thr` (dB) | Where `thr` came from | Cost |
 |---|---|---|---|---|---|
-| ADS-B (`adsb`) | `vibe_adsb.h` `Frame::snr`, aircraft `snr` (×0.25 a reply, like `rssi`) | Preamble pulse power over the demodulator's floor (`noiseP_`). Reads ~2 dB under the transmitted pulse SNR. | 10 | test-adsb: the preamble gate is 9 dB; at the 50 % point (2.4 MS/s, 12 dB transmitted) decoded replies report ~10 | One log per DECODED reply. Delta stream +0.25 KB a tick at 172 aircraft (2.55 → 2.80 KB, test_adsb_delta) |
+| ADS-B (`adsb`) | `vibe_adsb.h` `Frame::snr`, aircraft `snr` (×0.25 a reply, like `rssi`) | Preamble pulse power over the demodulator's floor (`noiseP_`). Reads ~2 dB under the transmitted pulse SNR. | 10 | test-adsb: the preamble gate is 9 dB; at the 50 % point (2.4 MS/s, 12 dB transmitted) decoded replies report ~10 | One log per DECODED reply. Delta: 3 dB bands, 2.52 → 2.61 KB a tick at 172 aircraft (+3.6 %; whole dB would be 2.80) |
 | AIS (`ais`) | `vibe_ais.h` `burstSnr_` (NEW: it replaces the floor-after-frame reading) | Frame's mean power over the channel floor, S/N | 9 | test-ais: 50 % at Eb/N0 ≈ 8.5; decoded frames report 8.6 / 10.0 / 11.6 / 13.3 / 16.5 at 8 / 10 / 12 / 14 / 18 | One add a sample into a per-bit ring (8 KB a channel); ≤ ~1,100 adds a frame. test-ais CPU row 0.7 % of a core before and after (0.017 → 0.017–0.018 s per 2.6 s) |
 | ACARS (`acars`) | `vibe_acars.h` `Block.snrDb` | AM carrier over the channel floor. Reads C/N0 − 38.5 clear of the threshold; low near it (the floor follower). | 2 | test-acars: 27–67 % at 45 dB-Hz, those blocks report 1.6–2.6 dB | None new: it was measured and dropped; now sent |
 | VDL2 (`vdl2`) | `vibe_vdl2.h` `Frame.snrDb` | Burst power over the channel floor, (S+N)/N. Within ~1 dB of the transmitted SNR. | 14 | test-vdl2: 1 of 24 at 14 dB, 17 of 24 at 16; decoded bursts report 12.6–14.9 | None new |
@@ -132,14 +138,29 @@ NAVTEX keeps its beta96 strip, timeline and line (now on this scale).
 
 Decoder logs are one per server across radios.
 
-- **AIS, aviation (aircraft-live), the ISM gallery and sondes (posgal):** no per-message store gained the SNR in this
-  change. The live tables carry it.
-- **Station store:** it already keeps `snr`, `lastSnr` and `bestSnr` (FT8 / skimmers). The NAVTEX gallery keeps its SNR
-  (beta96). The LoRa mesh `NodeFix.snr` was already stored. The APRS frame log (`aprs_frame` / the in-memory log) now
-  carries `snr`.
-- **ORBCOMM:** the sky plot keeps the best SNR per bucket. Its gallery text line is unchanged.
+Stuart 11-26: *"yes save snr history"*. Every store that keeps decoded messages and has room now keeps the SNR. Each
+change is version-safe for older readers and writers, and the history views draw the same chip.
 
-**Open:** add `snr` to the AIS store and the sonde day files (posgal) if Stuart wants history of it.
+| Store | How the SNR is kept | Older readers / writers | History view | Test |
+|---|---|---|---|---|
+| Ship store `ais-ships.dat` (`vibe_ais_store.h`) | The 512 B record's `spare` HIGH byte = SNR + 64 (1–255 → −63…191 dB), 0 = none. The answer says `"snrv":2`; a ship with none has no `"snr"` (never a fake 0). | Older readers only read bits 0–1. Older writers leave 0, and the merge keeps the stored value. | Stored ship rows (AIR & SEA) | test-ais-store +5 (round trip, older record, merge, bounds), test_shipping_map +3 |
+| Sondes day card (`vibe_posgal.h`) | A block of its own BELOW the 10-field table: `kSnrHead` then `id · dB` lines (two fields). | An older `galPosParse` / restore skips any line that is not 10 fields: checked ("an older reader still sees exactly the 2 rows"). | Stored sonde rows, per type | test-posgal +3 (block, older reader, restart), test_stored_layers +4 (read, rows, merge, types) |
+| AIS and APRS day logs (`vibe_station_log.h`) | Each line ends `" · SNR 18 dB"` (`vibe_station_sink.h` `snrToken`: whole dB, U+2212 minus, −99…199). | Plain text: an older viewer shows it as words. The server-wide dedupe compares lines WITHOUT it (`vibe_gallery_shared.h` `withoutSnr`), so one message two radios heard is still one line, carrying the first radio's SNR. | The gallery text view: web `snrLogHtml`, app `SnrLogText`. Chips for line-end tokens only; plain over 200 000 characters, a translation or NAVTEX. | test-shared-day +2, test_snr_colour +6 |
+| ISM day log (`vibe_ism_gallery.h`) | The same token on sensor lines. A reading with no measured SNR (0) writes none. | as above | as above | test-ism-gallery +2 |
+| ORBCOMM packet lines (the decoder box and the gallery log) | The same token, before a message's raw bytes. | as above | as above | test-orbcomm-run +1 |
+
+Already kept before this change:
+- The station store (`snr`, `lastSnr`, `bestSnr`: FT8 and the skimmers).
+- The NAVTEX gallery (beta96).
+- The LoRa mesh `NodeFix.snr` (the ISM nodes card).
+- The APRS in-memory frame log (`aprs_frame`, this change).
+- ORBCOMM's sky plot (the best SNR per bucket).
+
+**Not kept, and why:**
+- **Datalink (ACARS / VDL2 / HFDL):** no store keeps its messages. Bodies are never in a public gallery, and
+  `aircraft-live.dat` is a live share of positions with no per-message room. The live MESSAGES rows have the SNR.
+- **LoRa text messages:** they do not go to the ISM day log. The nodes card keeps each node's SNR.
+- **ISM meters:** their lines already carry their own signal words, so no token is added.
 
 ## Tests (all green on this Mac, 11-26)
 
@@ -203,5 +224,5 @@ components, `DecoderPanel`, `SatellitePanel` and web `main.ts`; all clean. `SDRS
 - **The watch** (`ios/VibeSDRWatch`, `spike/WristSDR`) still shows an ADS-B aircraft's `rssi` dB as grey text (not bars).
   It was not changed.
 - **R36S native UI:** not touched.
-- **Message stores:** the AIS and sonde day files do not keep the SNR (see "Stored / logged").
+- **Message stores:** datalink has no message store, and LoRa text messages are not in the ISM day log (see "Stored / logged").
 - **The NDB** keeps its own 3-bar meter. Stuart's request was ADS-B's.
