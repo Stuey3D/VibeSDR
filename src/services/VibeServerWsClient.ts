@@ -2836,6 +2836,7 @@ export abstract class VibeServerWsClient {
         mine: msg.mine === true,
         you: Number(msg.you) || 0,
         listeners: Number(msg.listeners) || 0,
+        away: Number(msg.away) || 0,   // ★ beta96 held places (dialChat DialState.away)
         decoding: msg.decoding === true,
         ...ask,
       });

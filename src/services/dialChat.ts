@@ -218,6 +218,10 @@ export function phraseText(id: string): string | null {
 export type DialState = {
   mode: string; tuner: number; mine: boolean; you: number;
   listeners: number; decoding: boolean;
+  /** ★ beta96 how many of `listeners` are HELD places — a dropped phone's slot, kept for three minutes and still
+   *  counted, but nobody there to ask (the server's awayCountLocked; the ask lock already leaves them out). Absent /
+   *  0 on an older server. FREE TO TUNE when listeners − away ≤ 1 (blindTuneGate dialAlone). */
+  away?: number;
 } & AskState;
 
 /* ── ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md, 2026-10-21) ─────────────────────────────────────────────
