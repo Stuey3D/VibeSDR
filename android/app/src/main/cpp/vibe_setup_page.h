@@ -4410,6 +4410,15 @@ function newModesState(own) {
                           return LISTEN_DEMODS.every(seenOff) && WHOLE_MODES.filter(w => !seenOff(w)).length <= 1; };
   // ★★ no "seen@": a single-mode list is dated by its newest token; any other restricted list counts as having seen
   //    MODE_GEN_UNSTAMPED (the server's kUnstampedRestrictedSeen) — "dab" alone must not switch off everything since 11.x
+  // ★★ …and a single-mode list is also dated by the mode it LEFT ON (vibe_decoder_reach.h): every demodulator and whole-radio
+  //    mode but the VOR MAP (93) blocked names nothing newer than 87 — the oldest whole-radio mode left on dates it
+  if (!stamped && restricted && singleAt(evidence)) {
+    const left = WHOLE_MODES.filter(w => w in MODE_GENS && !o.has(w));
+    if (!left.some(w => MODE_GENS[w] <= evidence)) {
+      const newer = left.map(w => MODE_GENS[w]).filter(g => g > evidence);
+      if (newer.length) evidence = Math.min(...newer);
+    }
+  }
   if (!stamped) seen = !restricted ? MODE_GEN_NOW : singleAt(evidence) ? evidence : Math.max(evidence, MODE_GEN_UNSTAMPED);
   const single = singleAt(seen);
   return { seen, stamped, restricted, single, policy, off: single || policy < 0 || (policy === 0 && restricted) };

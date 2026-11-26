@@ -31,7 +31,10 @@ Branch `b96-newmodes` (off v12-experimental = beta95). Stuart 11-26, from Paul's
   * or automatic and the owner blocked ANY switch of the table (restricted). Nothing blocked = new modes ON, as ever.
 * **Migration (no `seen@`)**: unrestricted → everything seen. Restricted AND single-mode → `seen` = the newest generation
   any token in the list names (switches, `+id`, and the options `lora+all`, `avdata+8m`, `ft8±deep` …) — a single-mode
-  list names everything of its era, so that dates it (Paul's: 80). Restricted but NOT single-mode → `seen` =
+  list names everything of its era, so that dates it (Paul's: 80). ★ Unless NONE of that era's whole-radio modes is
+  left on: then the one left on is newer, and the list is dated by the oldest whole-radio mode it did not block
+  (test-server-vormap's VOR-MAP-only list names nothing past dvsig 87 — dated 87, the VOR map (93) itself came in "new"
+  and off, leaving no modes and no lock; found by the beta96 integration run). Restricted but NOT single-mode → `seen` =
   max(that, `kUnstampedRestrictedSeen` = 95): a short list ("dab", a benchmark's "rade,spotsband") cannot be dated, and
   dating it by its newest token switched off every mode since 11.x (ADS-B, ISM, SAM …) on servers whose owners chose
   none of that — found by test-setup-radio-caps' Icom ("dab,wfm,rtty" → seen 0). So on such a radio only the switches

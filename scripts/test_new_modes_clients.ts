@@ -46,6 +46,8 @@ const onlyLeft = (off: Set<string>) => {
   ok(JSON.stringify(Object.entries(ctx.MODE_GENS).sort()) === JSON.stringify(Object.entries(GENS).sort()), 'page MODE_GENS = the server’s table');
 }
 
+// ★★ every demodulator and whole-radio mode but the VOR MAP (93): its newest blocked token is 87 — dated by the mode it left on
+const VOR_ONLY = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig,dab,adsb,ism,ndb,ais,avdata,sondes';
 // ── the same answers, page and app ──
 const cases: [string, string][] = [
   ['', 'unrestricted, no stamp'],
@@ -57,10 +59,16 @@ const cases: [string, string][] = [
   ['seen@87,newmodes@off', 'stamped 87, "leave them off"'],
   ['dab,seen@87,newmodes@on', 'restricted, stamped 87, "switch them on"'],
   [allOffAt(63, ['dab']), 'DAB only from 63'],
+  [VOR_ONLY, 'VOR MAP only (newer than every blocked token)'],
 ];
 for (const [csv, what] of cases) {
   const p = [...pageOff(csv)].sort().join(','), q = [...appOff(csv)].sort().join(',');
   ok(p === q, `${what}: page and app enforce the same list`);
+}
+{
+  const off = pageOff(VOR_ONLY);
+  ok(!off.has('vormap') && off.has('sat'), 'VOR MAP only: the VOR map stays on, SATELLITE off');
+  ok(onlyLeft(off) === 'vormap' && onlyLeft(appOff(VOR_ONLY)) === 'vormap', '★★ VOR MAP only: the only mode, page and app');
 }
 {
   const off = pageOff(PAUL);
