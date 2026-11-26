@@ -39782,7 +39782,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             last = satPassLast_;
             state = satPassWhy_.empty() ? satPassNow_ : satPassWhy_;
-            if (satHybrid_.on) hyb = satHybridMsgLocked();
+            if (satHybrid_.on) {   // ★ the hybrid inside, without its own "type" (a reader matching on the type sees one message)
+                hyb = satHybridMsgLocked();
+                const std::string ty = "\"type\":\"sat_hybrid\",";
+                if (hyb.compare(1, ty.size(), ty) == 0) hyb.erase(1, ty.size());
+            }
         }
         std::string plan;
         {
