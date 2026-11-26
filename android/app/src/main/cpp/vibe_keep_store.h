@@ -23,11 +23,11 @@ inline bool mapKnown(const std::string& m) { return m == kMapAvMar || m == kMapA
 inline const char* mapTitle(const std::string& m) { return m == kMapAvMar ? "Aviation & Maritime" : m == kMapAmateur ? "Amateur" : ""; }
 
 struct Mode {
-    const char* id;      ///< the config's word: "adsb" | "vdl2" | "acars" | "vor" | "ais"
+    const char* id;      ///< the config's word: "adsb" | "vdl2" | "acars" | "vor" | "ais" | "aisdsc" | "ism"
     const char* name;    ///< what the page says
     const char* group;   ///< "aviation" | "maritime" — the heading it sits under
     Kind kind;
-    const char* band;    ///< the datalink band (Avdata only)
+    const char* band;    ///< the datalink band (Avdata), or "ais+dsc" (the maritime combination)
     const char* bench;   ///< the benchmark row that prices it (prefix for ADS-B's per-rate rows)
     const char* map = kMapAvMar;   ///< the landing map it belongs to
     const char* block = nullptr;   ///< the modes-card switch it stands on (nullptr = its id)
@@ -39,6 +39,10 @@ inline const std::vector<Mode>& modes() {
         { "acars", "ACARS",          "aviation", Avdata, "acars", "dec_acars", kMapAvMar, "avdata" },
         { "vor",   "VOR / ILS map",  "aviation", Vormap, "",      "dec_vormap", kMapAvMar, "vormap" },
         { "ais",   "AIS",            "maritime", Ais,    "",      "dec_ais" },
+        /* ★★★ beta96 THE MARITIME COMBINATION (vibe_maritime_combo.h): AIS + DSC channel 70 from one wide capture — ONE choice
+         *  (one whole-radio mode decodes both), drawn only where the server says the capture holds it (hwinfo mapModes "hw":
+         *  ~6.2 MS/s usable — an RSP at 8, an R2 at 10, a HackRF, a USRP); it stands on the AIS switch. */
+        { "aisdsc", "AIS + DSC",     "maritime", Ais,    "ais+dsc", "dec_aisdsc", kMapAvMar, "ais" },
         // ★★ the band is the owner's pick from ISM's own plan, carried in the token: "ism:868" (no frequency typed)
         { "ism",   "ISM",            "ism",      Ism,    "",      "dec_ism", kMapAmateur },
     };
@@ -131,7 +135,8 @@ inline bool entryFor(const std::vector<std::string>& ids, Entry& e) {
     }
     if (m->kind == Adsb) e.msg = "{\"type\":\"adsb\",\"on\":1}";
     else if (m->kind == Avdata) e.msg = std::string("{\"type\":\"avdata\",\"on\":1,\"band\":\"") + m->band + "\"}";
-    else if (m->kind == Ais) e.msg = "{\"type\":\"ais\",\"on\":1}";
+    else if (m->kind == Ais) e.msg = *m->band ? std::string("{\"type\":\"ais\",\"on\":1,\"band\":\"") + m->band + "\"}"   // ★ beta96 AIS + DSC
+                                              : std::string("{\"type\":\"ais\",\"on\":1}");
     else if (m->kind == Vormap) e.msg = "{\"type\":\"vormap\",\"on\":1}";
     return true;
 }

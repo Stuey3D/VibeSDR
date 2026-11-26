@@ -147,6 +147,7 @@
 #include "vibe_ndb_service.h"   // ★★ V12 2026-10-26: NDB skimmer — every beacon in the LF band, idents by consensus (docs/v12/NDB-SKIMMER.md)
 #include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_ais_service.h"   // ★★ V12 AIS (both VHF channels, M.1371) — our own decoder, docs/v12/AIS-APRS.md
+#include "vibe_maritime_combo.h"   // ★★★ beta96 AIS + DSC ch 70 from one wide capture (docs/v12/MARITIME-COMBO.md)
 #include "vibe_avi_service.h"   // ★★ V12 AIRCRAFT DATALINK (ACARS, VDL2; HFDL via the decoder host) — docs/v12/AVIATION.md
 #include "vibe_aircraft_info.h"  // ★★ V12 beta91 the ADS-B aircraft data for every aviation-map row (VDL2 / ACARS / HFDL too)
 #include "vibe_avi_mode.h"
@@ -1015,6 +1016,8 @@ static vibendb::Service    g_ndb;
 /* ★★★ AIS MODE (V12). The fourth whole-radio mode: the radio on 162.000 MHz, both AIS channels (161.975 / 162.025) decoded
  *  from the one capture (vibe_ais_service.h), ships on the map. Fixed tuning — nothing to step. No rate change, ever. */
 static std::atomic<bool>   g_aisMode{false};
+/** ★★★ beta96 the AIS mode runs as THE MARITIME COMBINATION — AIS + DSC channel 70 from one wide capture (vibe_maritime_combo.h). */
+static std::atomic<bool>   g_aisDsc{false};
 static vibeais::Service    g_ais;
 /* ★★★ AIRCRAFT DATALINK MODE (V12, docs/v12/AVIATION.md). A whole-radio mode in AIS's shape with ISM's BANDS: ACARS
  *  (131.675 MHz, four channels) or VDL2 (136.8625 MHz, every channel 136.700–136.975) — or BOTH at once on a wide
@@ -2007,7 +2010,8 @@ static std::string vsEnforcedBlocked(const std::string& owner, int region) {
     std::string out, tok;
     for (size_t i = 0; i <= csv.size(); ++i) {   // ★ the single mode itself is never blocked, whatever the owner's list says
         const char c = i < csv.size() ? csv[i] : ',';
-        if (c == ',' || c == ' ' || c == ';') { if (!tok.empty() && tok != keep) out += (out.empty() ? "" : ",") + tok; tok.clear(); }
+        // ★★★ beta96 single mode AIS + DSC stands on AIS AND the DSC switch (the combination needs both)
+        if (c == ',' || c == ' ' || c == ';') { if (!tok.empty() && tok != keep && !(g_vsSingleMode == "aisdsc" && tok == "dsc")) out += (out.empty() ? "" : ",") + tok; tok.clear(); }
         else tok += char(std::tolower((unsigned char)c));
     }
     std::vector<const char*> all(vibereach::listeningDemods().begin(), vibereach::listeningDemods().end());
@@ -2115,6 +2119,8 @@ static std::string vsIsmWhyNot();    // "" = ISM can run here now — see its de
 static bool vsIsmReach(const vibeism::Band& b);   // this radio can tune the whole of the band
 static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz (not an Icom; the HF+ too since 2026-11-24) — by vsIsmReach
 static std::string vsAisWhyNot();    // "" = AIS can run here now
+static std::string vsAisDscWhyNot(); // ★★★ beta96 "" = the maritime combination (AIS + DSC) can run here now
+static bool vsAisDscTunes();         // ★★★ beta96 …this radio tunes channel 70 and AIS together (the hw half)
 static bool vsAvdataReach(const vibeavi::Band& b);   // ★ V12 Aircraft datalink: this radio tunes the whole band (not an Icom) and may run it
 static double vsAvdataBoostRate();   // ★ the rate ACARS + VDL2 would raise the capture to (the owner's 8 MS/s switch), or 0
 static bool vsAvdataAnyBand();       // false = not offered at all
@@ -18264,7 +18270,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!g_avMode.load(std::memory_order_relaxed) || !avBand_) return false;
             return vsMapEntry().band == avBand_->id;
         }
-        if (k == vibekeep::Ais) return g_aisMode.load(std::memory_order_relaxed);
+        // ★★★ beta96 AIS, or the maritime combination: on in the kept variant (a listener's switch to the other is somebody's use)
+        if (k == vibekeep::Ais) return g_aisMode.load(std::memory_order_relaxed) && g_aisDsc.load(std::memory_order_relaxed) == (vsMapEntry().band == vibemar::kBand);
         if (k == vibekeep::Vormap) return g_vorMode.load(std::memory_order_relaxed);
         // ★★ the Amateur map's ISM: on its kept band (a custom frequency a listener picked is not the keep's)
         if (k == vibekeep::Ism) return g_ismMode.load(std::memory_order_relaxed) && ismBand_ && ismCustomHz_ <= 0 && vsMapEntry().band == ismBand_->id;
@@ -18277,7 +18284,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const vibeavi::Band* b = vibeavi::bandById(e.band);
             return b ? vsAvdataWhyNot(b) : std::string("there is no such datalink band");
         }
-        if (e.kind == vibekeep::Ais) return vsAisWhyNot();
+        if (e.kind == vibekeep::Ais) return e.band == vibemar::kBand ? vsAisDscWhyNot() : vsAisWhyNot();   // ★★★ beta96
         if (e.kind == vibekeep::Vormap) return vsVormapWhyNot();
         if (e.kind == vibekeep::Ism) {
             const vibeism::Band* b = vibeism::bandById(e.band);
@@ -19036,8 +19043,50 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& sk : socks) sendText(sk, r);
     }
 
-    void aisEnter() {
-        if (g_aisMode.load()) { sendAisAll(); return; }
+    /** ★★★ beta96 THE MARITIME COMBINATION's pre-front (vibe_maritime_combo.h): channel 70's calls into the gallery's DSC
+     *  log and items exactly as a DSC decoder's (vibe_dsc_gallery.h — the day's log per frequency, distress / urgency /
+     *  positioned calls pinned, which the SHIPPING / AIR & SEA map's DSC layer and the community map read), on the same
+     *  terms as AIS's own day log (the gallery keeps anything; a listener's only while the owner keeps listeners' decodes). */
+    std::unique_ptr<vibeais::PreFront> aisMakeCombo(double rate, double hw) {
+        vibe::DecoderTapPtr tap;
+        auto& g = vibe::gallery::shared();
+        if (!(frontDoorOnly || decoderOnly) && g.enabled() && (aisOrigin_ == "background" || g_gallerySaveLive.load())) {
+            vibe::gallery::Meta m;
+            m.kind = "dsc"; m.origin = aisOrigin_ == "background" ? "background" : "live"; m.decoder = "dsc";
+            m.freqHz = vibemar::kDscHz; m.mode = "nfm"; m.profile = aisProfile_;
+            m.lat = g_bgLat.load(); m.lon = g_bgLon.load();
+            tap = vibe::bg::makeGalleryTap(g, m);
+        }
+        vibemar::Combo::Hooks h;
+        h.call = [tap](const vibe::dsc::Call& c, const std::string& line, const std::string& j, bool rep) { if (tap) tap->dscCall(c, line, j, rep); };
+        h.tick = [tap] { if (tap) tap->tick(); };
+        h.finish = [tap] { if (tap) tap->finish(false); };
+        return std::unique_ptr<vibeais::PreFront>(new vibemar::ComboFront(rate, hw, std::move(h)));
+    }
+    /** ★★★ beta96 AIS ↔ AIS + DSC while the mode is on: the radio moves (162.000 ↔ 159.2625 MHz) and the service restarts
+     *  keeping its ships — what the listener had is still saved from the first entry. */
+    void aisRetarget(bool dsc) {
+        g_aisDsc.store(dsc);
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
+        const double hw = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
+        const double logical = hw - hwOffsetHz();
+        rtlCenter.store(logical);
+        audioFreq.store(hw);
+        viewCenter.store(hw);
+        noteHwMoved();
+        g_ais.start(hw, rate, /*keepList=*/true, aisMakeLog(), dsc ? aisMakeCombo(rate, hw) : nullptr);
+        tuneHw(logical);
+        applyAutoIf();
+        updateZoomView();
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); }
+        LOGI("[AIS] now %s: radio at %.4f MHz, %.3f MS/s", dsc ? "AIS + DSC (channel 70 too)" : "AIS alone", hw / 1e6, rate / 1e6);
+        sendAisAll();
+    }
+
+    void aisEnter(bool dsc = false) {
+        if (g_aisMode.load()) { if (g_aisDsc.load() != dsc) aisRetarget(dsc); else sendAisAll(); return; }
         AdsbSaved& s = aisSaved_;
         s.lockedCentre = g_vsLockedCentre.load(); s.lockedRate = g_vsLockedRate.load();
         s.gainTarget = g_gainTarget.load(std::memory_order_relaxed);
@@ -19079,7 +19128,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         aisLastReport_ = aisLastGain_ = aisQuietSince_ = nowSecs();
         applyAutoIf();
         const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
-        const double hw = vibeais::kCentreHz;
+        // ★★★ beta96 the maritime combination sits between channel 70 and AIS (159.2625 MHz); AIS alone on 162.000
+        g_aisDsc.store(dsc);
+        const double hw = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
         const double logical = hw - hwOffsetHz();
         rtlCenter.store(logical);
         audioFreq.store(hw);
@@ -19088,7 +19139,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_ais.stop();
         g_ais.setStore(aisMakeStore());
         g_ais.setReceiver(g_bgLat.load(), g_bgLon.load());   // ★ beta95 the DX rule (vibe_ais_service.h kDxNm): far = unconfirmed until two agree
-        g_ais.start(hw, rate, /*keepList=*/false, aisMakeLog());
+        g_ais.start(hw, rate, /*keepList=*/false, aisMakeLog(), dsc ? aisMakeCombo(rate, hw) : nullptr);
         tuneHw(logical);
         zoomFactor.store(1.0);
         std::vector<std::shared_ptr<ClientDsp>> views;
@@ -19101,7 +19152,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& v : views) clientRetune(v.get());
         updateZoomView();
         for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); }
-        LOGI("[AIS] mode ON: radio at %.3f MHz, %.3f MS/s (both channels, 161.975 + 162.025)", hw / 1e6, rate / 1e6);
+        LOGI("[AIS] mode ON: radio at %.4f MHz, %.3f MS/s (both channels, 161.975 + 162.025%s)", hw / 1e6, rate / 1e6,
+             dsc ? ", and DSC channel 70 — the maritime combination" : "");
         sendAisAll();
     }
 
@@ -19116,6 +19168,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         g_ais.stop();                                   // ★ the gallery's buffer and card are written here (Service::stop)
+        g_aisDsc.store(false);                          // ★★★ beta96 (the combination's DSC log was written by the stop)
         aisOrigin_ = "live"; aisProfile_.clear();
         const AdsbSaved& s = aisSaved_;
         rx.setSpectrumOnly(false);
@@ -19191,7 +19244,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!g_aisMode.load()) { aisOrigin_ = "live"; aisProfile_.clear(); }
         if (onV == 0 && onlyModeRefusesLeave(sock, "ais", "AIS", "ais_error")) return;   // ★★ V12 the only mode
         if (onV == 0) { aisLeave(true); return; }
-        const std::string why = vsAisWhyNot();
+        // ★★★ beta96 "band":"ais+dsc" = the maritime combination (only where the capture holds it — said, never half-run)
+        const bool dsc = jsonStr(msg, "band") == vibemar::kBand;
+        const std::string why = dsc ? vsAisDscWhyNot() : vsAisWhyNot();
         if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"ais_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
         if (!g_aisMode.load()) {
             // ★ One whole-radio mode at a time: the other leaves through its own door (which tells every listener)
@@ -19203,8 +19258,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
             if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         }
-        LOGI("[AIS] ON asked%s", sock ? " by a client" : " internally");
-        aisEnter();
+        LOGI("[AIS] ON asked%s%s", dsc ? " (AIS + DSC)" : "", sock ? " by a client" : " internally");
+        aisEnter(dsc);
     }
 
     /* ★★★ AIRCRAFT DATALINK MODE (V12, docs/v12/AVIATION.md) — AIS's shape, ISM's BANDS. Save what the listener had, put the
@@ -46668,6 +46723,34 @@ static std::string vsAisWhyNot() {
     return {};
 }
 
+/* ★★★ beta96 THE MARITIME COMBINATION (vibe_maritime_combo.h, docs/v12/MARITIME-COMBO.md; Stuart 11-26: "do this for HackRFs,
+ *  SDRplay etc"): AIS + VHF DSC channel 70 from ONE capture centred at 159.2625 MHz — only where the running capture's USABLE
+ *  span holds both (~6.2 MS/s: an RSP at 8, an Airspy R2 at 10, a HackRF, a USRP), never on an RTL, an HF+, an RSP at 2 / 6 or
+ *  an Airspy Mini. Elsewhere it is NOT DRAWN AT ALL (AGENTS.md: no dead control) and AIS stays as it was. No rate change:
+ *  the mode runs at the rate it finds, as AIS does. Needs the owner's AIS AND DSC switches on. */
+static bool vsAisDscTunes() {
+    if (!vsAisReach()) return false;
+    const vibebands::Ranges t = vsTunableRanges();
+    for (const auto& x : t) if (double(x.lo) <= vibemar::loHz() && double(x.hi) >= vibemar::hiHz()) return true;
+    return false;
+}
+static double vsAisDscRunning() {
+    double running = LocalSdrShim::instance().usableSpanHz();
+    if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
+    return running;
+}
+static std::string vsAisDscWhyNot() {
+    const std::string a = vsAisWhyNot();
+    if (!a.empty()) return a;
+    if (vsModeBlocked("dsc")) return "the server owner has switched DSC off on this receiver";
+    if (!vsAisDscTunes()) return "this radio cannot tune channel 70 (156.525 MHz) and AIS (162 MHz) together";
+    const double running = vsAisDscRunning();
+    if (!vibemar::fits(running)) return vibemar::rateWhy(running);
+    return {};
+}
+/** ★ Drawn (offered) only where it can run now — or while it runs, so it can be left. */
+static bool vsAisDscOffered() { return g_aisDsc.load(std::memory_order_relaxed) || vsAisDscWhyNot().empty(); }
+
 /** ★★ V12 AIRCRAFT DATALINK: does this radio tune the whole band (every channel, 12.5 kHz each side)? An Icom is a
  *  transceiver's audio. ★★ The Airspy HF+ IS IN (2026-11-24) — AIS's reasoning above: nothing in the mode steps its gain
  *  (burstGains is empty there), the report names its AGC / attenuator instead of a dB figure, its 912 kS/s holds either
@@ -47041,9 +47124,16 @@ static std::string vsMapModesJson() {
     std::string j = "[";
     bool first = true;
     for (const auto& m : vibekeep::modes()) {
-        bool hw = false; std::string why;
+        bool hw = false; std::string why, extra;
         if (m.kind == vibekeep::Adsb) { hw = vsAdsbHwWhyNot().empty(); why = vsAdsbWhyNot(); }
         else if (m.kind == vibekeep::Avdata) { const vibeavi::Band* b = vibeavi::bandById(m.band); hw = b && vsAvdataTunes(*b); why = b ? vsAvdataWhyNot(b) : "no such band"; }
+        else if (m.kind == vibekeep::Ais && *m.band) {
+            /* ★★★ beta96 AIS + DSC: "hw" only where the capture holds it NOW (or it runs) — not drawn elsewhere (no dead row);
+             *  `minRate` lets the Setup page follow a rate the owner is editing before it is saved. */
+            hw = vsAisDscTunes() && (g_aisDsc.load(std::memory_order_relaxed) || vibemar::fits(vsAisDscRunning()));
+            why = hw ? vsAisDscWhyNot() : std::string();   // ★ the owner's AIS / DSC switch off: greyed, with the reason
+            extra = ",\"minRate\":" + std::to_string((long long)std::ceil(vibemar::minRateHz())) + ",\"tunes\":" + (vsAisDscTunes() ? "true" : "false");
+        }
         else if (m.kind == vibekeep::Ais) { hw = vsAisReach(); why = vsAisWhyNot(); }
         else if (m.kind == vibekeep::Vormap) { hw = vsVormapReach(); why = vsVormapWhyNot(); }
         else if (m.kind == vibekeep::Ism) {   // ★★ the bands themselves are hwinfo's ismHwBands (ISM's own plan, this radio's reach)
@@ -47053,7 +47143,7 @@ static std::string vsMapModesJson() {
         const double pct = vsBenchRowPct(m.bench);
         char b[64]; std::snprintf(b, sizeof b, ",\"pct\":%.1f", pct);
         j += std::string(first ? "" : ",") + "{\"id\":\"" + m.id + "\",\"name\":\"" + dabEscape(m.name) + "\",\"map\":\"" + m.map + "\",\"group\":\"" + m.group
-           + "\",\"hw\":" + (hw ? "true" : "false") + ",\"why\":\"" + dabEscape(why) + "\"" + (pct >= 0 ? std::string(b) : std::string()) + "}";
+           + "\",\"hw\":" + (hw ? "true" : "false") + ",\"why\":\"" + dabEscape(why) + "\"" + (pct >= 0 ? std::string(b) : std::string()) + extra + "}";
         first = false;
     }
     j += "]";
@@ -47511,6 +47601,12 @@ static std::string vsTunableJson() {
         const std::string why = vsAisWhyNot();
         j += std::string(",\"ais\":") + (why.empty() ? "true" : "false");
         if (!why.empty()) j += ",\"aisWhy\":\"" + dabEscape(why) + "\"";
+        // ★★★ beta96 the MARITIME combination (AIS + DSC ch 70): true where the capture holds both, ABSENT elsewhere (no greyed
+        //     key — a radio that cannot hold it simply has AIS, as before). `aisDscOn`: it is what runs now.
+        if (vsAisDscOffered()) {
+            j += ",\"aisDsc\":true";
+            if (g_aisMode.load(std::memory_order_relaxed) && g_aisDsc.load(std::memory_order_relaxed)) j += ",\"aisDscOn\":true";
+        }
     }
     /* ★★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered, or DISABLED with its reason — and NOT AT ALL
      *  where the radio reaches neither band (HF-only radios, an Icom: AGENTS.md; the HF+ reaches both, since 2026-11-24).

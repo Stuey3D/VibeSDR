@@ -2732,7 +2732,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
   ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_fctlm", "FUNcube telemetry"], ["dec_ale", "ALE"], ["dec_vor", "VOR / ILS"], ["dec_vormap", "VOR / ILS map"], ["dec_sarsat", "406 MHz beacons"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
-  ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
+  ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_aisdsc", "AIS + DSC together"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_avboth", "ACARS + VDL2 together"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"], ["dec_dvsig", "DMR / D-STAR / YSF signalling"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
@@ -4511,7 +4511,7 @@ function singleBlockOf(t) {
 function singleWords(t) {
   if (!t || t === "general") return "";
   if (t === "sat") return "SATELLITES";
-  const named = { dab: "DAB", ndb: "NDB", sondes: "SONDES", wfm: "WFM", nfm: "NFM", am: "AM", usb: "USB", lsb: "LSB", drm: "DRM" };
+  const named = { dab: "DAB", ndb: "NDB", sondes: "SONDES", wfm: "WFM", nfm: "NFM", am: "AM", usb: "USB", lsb: "LSB", drm: "DRM", aisdsc: "MARITIME (AIS + DSC)" };
   return named[t] || keepTokName(t);
 }
 /** What THIS radio can be single-mode in: [{tok, label, why}] — the server's facts (mapModes, ismHwBands, dab, ndbHw, the caps
@@ -4521,7 +4521,7 @@ function singleOptions(r) {
   const F = keepFacts(r);
   const av = id => F.avail.find(a => a.id === id) || { hw: false };
   const rateWhy = id => { const a = av(id); return a.why && !/switched off/.test(a.why) ? a.why : ""; };
-  for (const id of ["adsb", "vdl2", "acars", "ais", "vor"]) if (av(id).hw) out.push({ tok: id, label: id === "vdl2" ? "DATALINK: VDL2" : id === "acars" ? "DATALINK: ACARS" : id === "vor" ? "VOR MAP" : keepTokName(id), why: rateWhy(id) });
+  for (const id of ["adsb", "vdl2", "acars", "ais", "aisdsc", "vor"]) if (av(id).hw) out.push({ tok: id, label: id === "vdl2" ? "DATALINK: VDL2" : id === "acars" ? "DATALINK: ACARS" : id === "vor" ? "VOR MAP" : id === "aisdsc" ? "MARITIME: AIS + DSC (channel 70)" : keepTokName(id), why: rateWhy(id) });
   if (av("ism").hw) for (const b of (typeof bgIsmBands === "function" ? bgIsmBands() : [])) out.push({ tok: "ism:" + b.id, label: "ISM " + b.label, why: "" });
   if (typeof dabLandHwCan === "function" && dabLandHwCan() && DAB_DECODER) out.push({ tok: "dab", label: "DAB", why: "" });
   const hw = typeof HW !== "undefined" && HW && !HW.offline ? HW : null;
@@ -4867,12 +4867,16 @@ const KEEP_MODES = [
   { id: "acars", name: "ACARS",         group: "aviation", block: "avdata" },
   { id: "vor",   name: "VOR / ILS map", group: "aviation", block: "vormap" },
   { id: "ais",   name: "AIS",           group: "maritime", block: "ais" },
+  // ★★★ beta96 THE MARITIME COMBINATION: AIS + DSC channel 70 from one wide capture — one choice, drawn only where the capture
+  //     holds it (the server's mapModes "hw"; minRate follows a rate being edited)
+  { id: "aisdsc", name: "AIS + DSC (channel 70)", group: "maritime", block: "ais" },
   { id: "ism",   name: "ISM",           group: "ism",      block: "ism", map: "amateur" },
 ];
 const KEEP_GROUP_WORDS = { aviation: "AVIATION", maritime: "MARITIME", ism: "ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)" };
 function keepMapOf(m) { return m.map || "avmar"; }
 function keepBase(t) { return String(t).split(":")[0]; }
 const KEEP_COMBO_MIN = 6083334;   // ★ the wide band's own figure (vibeavi minRateHz) — the server's mapCombo.minRate wins
+const KEEP_MARITIME_MIN = 6166667;   // ★★★ beta96 AIS + DSC (vibemar::minRateHz) — the server's mapModes aisdsc.minRate wins
 function keepParse(csv) {
   const got = [];
   for (let t of String(csv || "").split(/[,;\t\n]/)) {
@@ -4933,6 +4937,13 @@ function keepFacts(r) {
     if (m.id === "adsb") {   // ★ ADS-B's own rule with the form's rate and switch (adsbLandOffer — beta95's, unchanged)
       const o = adsbLandOffer(r, HW, f);
       hw = o.hw; why = o.offer ? "" : o.why;
+    } else if (m.id === "aisdsc") {
+      // ★★★ beta96 drawn only where the capture holds both (the server's word, or the form's new rate against its minRate)
+      const need = s && s.minRate ? s.minRate : KEEP_MARITIME_MIN;
+      const tunes = s ? s.tunes !== false : drv !== "icom" && drv !== "airspyhf";
+      hw = s && !(rate > 0 && rate !== (HW && HW.mapRate)) ? !!s.hw : tunes && rate >= need;
+      why = blocks.has("ais") ? "AIS is switched off for this radio (Modes offered to listeners)."
+          : blocks.has("dsc") ? "DSC is switched off for this radio (Modes offered to listeners)." : (s && s.hw && s.why && !/needs a capture/.test(s.why) ? s.why : "");
     } else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (Modes offered to listeners).`;
     else if (s && s.why && /needs a capture|runs at/.test(s.why) && rate > 0 && rate !== (HW && HW.mapRate)) why = "";   // ★ the form's new rate decides
     return { id: m.id, hw, why, pct: s && typeof s.pct === "number" ? s.pct : -1 };

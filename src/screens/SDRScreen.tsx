@@ -3156,6 +3156,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const aisOnRef = useRef(false);
   useEffect(() => { aisOnRef.current = aisOn; }, [aisOn]);
   const [aisReport, setAisReport] = useState<AisReport | null>(null);
+  const aisReportRef = useRef<AisReport | null>(null);   // ★★★ beta96 which AIS runs (combo) for the keys' callbacks
+  useEffect(() => { aisReportRef.current = aisReport; }, [aisReport]);
   const [aisViewOpen, setAisViewOpen] = useState(false);
   /** ★ A ship's track asked for by the map's card, waiting for the server's ais_trail (mmsi → resolve). */
   const aisTrailWait = useRef(new Map<number, (pts: [number, number][]) => void>());
@@ -3704,7 +3706,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  away (a refused exit on a locked dial) it brings the map back; otherwise it leaves. Entering opens the map AT ONCE.
    *  The SERVER tunes (162.000 MHz) and leaves DAB / ADS-B / ISM itself — their screens are put away here as the web's
    *  toggleAis does, so two whole-radio screens never stand at once. */
-  const toggleAis = useCallback(() => {
+  const toggleAis = useCallback((band?: string) => {
     const c = client.current;
     if (!c?.ais) return;
     if (aisOnRef.current) {
@@ -3722,7 +3724,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time
     setAprsMapOpen(false);
     setAisReport(null); setAisViewOpen(true);
-    c.ais(true);
+    c.ais(true, band);
     aisOnRef.current = true;
     setAisOn(true);
   }, [aisUiOff, adsbUiOff, ismUiOff, ndbUiOff, aisViewOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -17622,7 +17624,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★ V12 AIS, beside ISM — the same three states; never on Apple TV (no map there: the mode's screen is the map). */
           aisAvail: !IS_APPLE_TV && (aisCap?.ok === true || aisOn),   // ★ refused = not drawn (see ADS-B above)
           aisWhy: !aisOn && aisCap && !aisCap.ok ? aisCap.why : undefined,
-          aisOn,
+          aisOn: aisOn && aisReport?.combo !== 'ais+dsc',
+          /* ★★★ beta96 MARITIME (AIS + DSC channel 70 from one wide capture) — beside AIS, only where the server offers
+           *  `aisDsc` (the capture holds both); absent elsewhere (no dead key). The same AIS mode and map. */
+          marAvail: !IS_APPLE_TV && aisCap?.ok === true && !!aisCap.dsc,
+          marOn: aisOn && aisReport?.combo === 'ais+dsc',
+          onMar: () => {
+            markInteract();
+            satModeOff();
+            setModeSelOpen(false);
+            const c = client.current;
+            if (!c?.ais) return;
+            if (aisOnRef.current && aisReport?.combo === 'ais+dsc') { toggleAis(); return; }   // ★ lit: leave (toggleAis's rules)
+            if (aisOnRef.current) { if (!askGate()) { c.ais(true, 'ais+dsc'); setAisViewOpen(true); } return; }   // ★ from AIS alone: wider
+            toggleAis('ais+dsc');
+          },
           /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
           /* ★★ V12 RADIOSONDES — the datalink's three states, VibeServer only (the capability is per radio). */
           /* ★★★ V12 SATELLITE — a whole-radio mode (Stuart, 2026-11-20: "next to ism sondes etc"). Only where the server sends
@@ -17704,6 +17720,8 @@ export default function SDRScreen({ route, navigation }: Props) {
             satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             if (!aisOnRef.current && aisCap && !aisCap.ok) { appAlert('AIS unavailable', aisCap.why || 'AIS is not available on this receiver'); return; }
             setModeSelOpen(false);
+            // ★★★ beta96 the AIS key while MARITIME (AIS + DSC) runs: AIS alone — the same mode, the radio moves back to 162.000
+            if (aisOnRef.current && aisReportRef.current?.combo === 'ais+dsc') { const c = client.current; if (c?.ais && !askGate()) { c.ais(true); setAisViewOpen(true); } return; }
             toggleAis();
           },
           /* ★★ V12 APRS — only where the radio's vibeserver.json says "aprs": true (an older server: no key). TUNE puts the
