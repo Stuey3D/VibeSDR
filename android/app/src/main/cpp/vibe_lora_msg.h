@@ -31,6 +31,10 @@ struct Msg {
     bool found = false;       ///< ★ V12 2026-11-12: heard on a channel FOUND ON AIR (vibe_lora_discover.h), not a standard one
     std::string route;        ///< MeshCore: "flood" / "direct"; Meshtastic: "via MQTT"
     int pathLen = -1;
+    /** ★ beta96 MeshCore FLOOD packets: the relays it passed through, in order (first relay first), each the first 1-3
+     *  bytes of that repeater's public key as lowercase hex, space-separated ("a3 9f 1c"). Empty: heard first-hand, a
+     *  direct-routed packet (whose path is the route still to go, not the one travelled), or not MeshCore. ≤ 64 hops. */
+    std::string relays;
     // ── LoRaWAN ──
     std::string mtype;        ///< "Unconfirmed up", "Confirmed up", "Join request", …
     bool uplink = true; int fcnt = -1, fport = -1, foptsLen = 0, encLen = -1;

@@ -238,7 +238,7 @@ try {
   // ★ the seeded day (several radios' cards may stand side by side — this run's own live card is one of them)
   const seeded = `[...document.querySelectorAll('#galList .sres')].find(r => r.querySelector('.galMap') && /MeshCore \\+ Meshtastic/.test(r.textContent) && /1\\d nodes heard/.test(r.textContent))`;
   const row = await ev(`${seeded}?.textContent || ''`);
-  ok(/LoRa \/ MeshCore \+ Meshtastic 868 MHz/.test(row) && /1\d nodes heard/.test(row) && /repeaters/.test(row) && /furthest \d+ km/.test(row), `the card: ${row.slice(0, 160)}`);
+  ok(/LoRa \/ MeshCore \+ Meshtastic 868 MHz/.test(row) && /1\d nodes heard/.test(row) && /repeaters/.test(row) && /furthest (direct|via mesh) \d+ km/.test(row), `the card: ${row.slice(0, 160)}`);
   console.log('   screenshot', await shot('ismmap-gallery-card.png'));
   await ev(`${seeded}.querySelector('.galMap').click()`);
   ok(await until(`!!${view} && ${view}.querySelectorAll('.trkRow').length >= 10`, 10000), `its MAP: ${await ev(`${view} ? ${view}.querySelectorAll('.trkRow').length : 0`)} nodes listed`);
