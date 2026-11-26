@@ -169,7 +169,22 @@ static void satObsApply(const vibe::sat::ObserverSource::Apply& a) {
     else if (a.kind == vibe::sat::ObserverSource::Apply::Clear) satEngine().clearObserver();
 }
 /** ★ The engine reads the corrected UTC FT8 reads (brief §5), and whether SNTP has measured it. */
-static vibe::sat::Clock satClock() { return vibe::sat::Clock{vibe::vibeUtcNow(), vibe::clockMeasured().load(std::memory_order_relaxed)}; }
+/** ★ TEST-ONLY (beta96 single mode: satellites — the fake PASS clock): VIBESERVER_SAT_TEST_CLOCK names a file holding a
+ *  number of seconds the satellite engine's clock is moved by (AOS / LOS become a file write, not a wait for a real pass).
+ *  Read at most once a second; unset (every shipped run) it costs one getenv at the first call. Only the SATELLITE clock
+ *  moves — FT8, the gallery and the logs keep the real one. */
+static double vsSatTestOffset() {
+    static const char* f = std::getenv("VIBESERVER_SAT_TEST_CLOCK");
+    if (!f || !*f) return 0.0;
+    static std::mutex m; static double at = -1e9, off = 0;
+    std::lock_guard<std::mutex> lk(m);
+    const double now = (double)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() / 1e3;
+    if (now - at < 1.0) return off;
+    at = now;
+    if (FILE* fp = std::fopen(f, "r")) { char b[48] = {0}; if (std::fgets(b, sizeof b, fp)) off = std::atof(b); std::fclose(fp); }
+    return off;
+}
+static vibe::sat::Clock satClock() { return vibe::sat::Clock{vibe::vibeUtcNow() + vsSatTestOffset(), vibe::clockMeasured().load(std::memory_order_relaxed)}; }
 static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared dial's lock key (vibe_sat_engine.h)
 #include "vibe_ais_store.h"     // ★★ V12 2026-11-02 the ship store in the shared gallery (the SHIPPING MAP, docs/v12/SHIPPING-MAP.md)
 #include "vibe_aprs.h"           // ★ V12 APRS — the region's frequency for the capability (the decoder itself: vibe_decoder_host.h)
@@ -12283,10 +12298,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (perClientDsp()) return;   // ★ per-listener picks: each listener's own (they made it)
         SatPick p; bool have = false;
         { std::lock_guard<std::mutex> lk(satPickMtx_); auto it = satPicks_.find(kSatShared); if (it != satPicks_.end()) { p = it->second; have = true; } }
+        if (!have) have = satSinglePassPick(p);   // ★★★ beta96 single mode: satellites — the radio's own pass is the room's pick
         if (!have) return;
         const std::string sess = sessionOfSock(sock.get());
         { std::lock_guard<std::mutex> lk(satToldMtx_); auto it = satTold_.find(sess); if (!sess.empty() && it != satTold_.end() && it->second == satPickTag(p)) return; }
         satSendPicked(sock, kSatShared, p, "", true);
+    }
+    /** ★★★ beta96 the radio's own pass, as the room's pick, to every listener at AOS (watch only — satTellRoomPick tells an
+     *  arrival). */
+    void satSingleTellPickAll() {
+        SatPick p;
+        if (!satSinglePassPick(p)) return;
+        std::vector<std::shared_ptr<net::Socket>> spec;
+        { std::lock_guard<std::mutex> lk(clientMtx); spec = allSpecClientsLocked(); }
+        for (auto& s : spec) { satSendPicked(s, kSatShared, p, "", true); satToldSet(sessionOfSock(s.get()), satPickTag(p)); }
     }
     /** `{"type":"sat","state":"picked",…}` — to the listener, or (the room's pick) to everybody with "shared":true
      *  (★★★ beta94 `onlyThis`: the room's pick to this one socket — satTellRoomPick). */
@@ -14315,6 +14340,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "hackrf_control", "antenna", "tunerbw", "sampleRate", "directSampling", "freedv_sub", "icom_control", "watch" };
         if (!kMoves.count(type)) return false;
         if (type == "sat") { const std::string op = jsonStr(msg, "op"); if (op == "drop" || op == "unlock") return false; }
+        /* ★★★ beta96 THE HYBRID (a linear transponder pass): each listener has their own VFO, so what moves only THEIR channel
+         *  is theirs — a tune inside the window (passband ± Doppler), SSB / CW, the filter, their AUTO DOPPLER and a pick of
+         *  this bird. A tune outside the window is refused in words; everything that moves the radio still is. */
+        std::string why = "This receiver follows the satellite passes itself \xe2\x80\x94 watch what it decodes; the owner has set it up that way.";
+        if (satHybridOn_.load() && perClientDsp()) {
+            if (type == "bandwidth") return false;
+            if (type == "mode") { const std::string m = jsonStr(msg, "mode"); if (m == "usb" || m == "lsb" || m == "cw") return false; }
+            if (type == "sat") {
+                const std::string op = jsonStr(msg, "op");
+                double nv = 0; jsonNum(msg, "norad", nv);
+                long long hn = 0; { std::lock_guard<std::recursive_mutex> pl(satPassMtx_); hn = satHybrid_.norad; }
+                if (op == "doppler" || op == "lock" || ((op == "pick") && (long long)nv == hn)) return false;
+            }
+            if (type == "tune") {
+                const std::string m = jsonStr(msg, "mode");
+                double f = 0;
+                const bool modeOk = m.empty() || m == "usb" || m == "lsb" || m == "cw";
+                const bool inWin = !jsonNum(msg, "frequency", f) || (f >= satHybLo_.load() && f <= satHybHi_.load());
+                if (modeOk && inWin) return false;
+                char b[200];
+                std::snprintf(b, sizeof b, "Outside this pass's transponder \xe2\x80\x94 tune between %.3f and %.3f MHz (the passband and its Doppler) until LOS",
+                              satHybLo_.load() / 1e6, satHybHi_.load() / 1e6);
+                why = modeOk ? b : "SSB or CW on the transponder until LOS \xe2\x80\x94 the radio is a satellite receiver";
+            } else why = "Your own VFO on the transponder until LOS \xe2\x80\x94 the radio itself follows the passes";
+        }
         bool notice = false;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
@@ -14324,11 +14374,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (singleSatNoticeAt_.size() > 512) singleSatNoticeAt_.clear();
         }
         LOGI("[SINGLE] satellites: a listener's \"%s\" refused \xe2\x80\x94 the radio follows the passes itself", type.c_str());
-        if (type == "sat") satRefuse(sock, "pick", "this receiver follows the satellite passes itself \xe2\x80\x94 its owner has set it up to watch them");
+        if (type == "sat") satRefuse(sock, "pick", satHybridOn_.load() ? why : std::string("this receiver follows the satellite passes itself \xe2\x80\x94 its owner has set it up to watch them"));
         else sendFullState(sock);
-        if (notice)
-            sendText(sock, "{\"type\":\"notice\",\"single\":\"sat\",\"why\":\"This receiver follows the satellite passes itself "
-                           "\xe2\x80\x94 watch what it decodes; the owner has set it up that way.\"}");
+        if (notice || (satHybridOn_.load() && type == "tune"))   // ★ the hybrid's window: said every time (it is the listener's own tune)
+            sendText(sock, "{\"type\":\"notice\",\"single\":\"sat\",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"}");
         return true;
     }
 
@@ -14613,6 +14662,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★★ SHARED DECODERS (Stuart 11-24): the decoder the room has open — an arrival's box opens on it (the client
          *  joins the run with the parameters given). Always sent here (an empty list too), so a client knows the state. */
         decSharedBroadcast(sock);
+        /* ★★★ beta96 SINGLE MODE: SATELLITES — the watch view's facts (the pass now / next, the timetable, the last pass)
+         *  and, during a linear transponder pass, the hybrid's window */
+        { const std::string sj = satSingleJson();
+          if (!sj.empty()) {
+              sendText(sock, sj);
+              std::string hj; { std::lock_guard<std::recursive_mutex> pl(satPassMtx_); if (satHybrid_.on) hj = satHybridMsgLocked(); }
+              if (!hj.empty()) sendText(sock, hj);
+          } }
         /* ★ A receiver already on a multiplex tells the client NOW, not at the next half-second
          *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
          *  the second listener on a shared radio got audio and no box). */
@@ -25160,6 +25217,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (supply.fetching && why.rfind("NO SAT DATA", 0) == 0) why = "Fetching orbit data\xe2\x80\xa6";
             if (!why.empty()) j.insert(j.size() - 1, ",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"");
             sendText(sock, j);
+            { const std::string sj = satSingleJson(); if (!sj.empty()) sendText(sock, sj); }   // ★★★ beta96 the watch view's timetable
             satTellRoomPick(sock);   // ★★★ beta94 a joiner's box shows the room's pick (and follows its ORBCOMM decoder)
             return;
         }
@@ -33167,6 +33225,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 c->bwHz = resumed && resume.bwHz > 0 ? resume.bwHz : paramsFor(c->mode).bandwidth;
                 if (resumed)
                     LOGI("listener %s returned — resuming their own VFO, not the landing", session.c_str());
+                /* ★★★ beta96 THE HYBRID (a linear transponder pass on a SATELLITES radio): every listener — a joiner, or one
+                 *  the AOS switch reconnected — starts at the passband centre; satHybridJoin then gives them their own pick
+                 *  (AUTO DOPPLER) once the channel runs. */
+                if (satHybridOn_.load()) {
+                    std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+                    if (satHybrid_.on) { c->vfoHz = satHybrid_.tuneHz; c->mode = satHybrid_.mode; c->bwHz = paramsFor(c->mode).bandwidth; }
+                }
                 { std::lock_guard<std::mutex> lk(clientMtx); clientDsp[sock.get()] = c; }
                 clientRetune(c.get());
                 startClientThread(c);            // its own DSP thread, from here on
@@ -33177,6 +33242,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      session.empty() ? "(anon)" : session.c_str(), c->vfoHz / 1e3, c->mode.c_str());
             }
             sendFullState(sock);
+            satHybridJoin(sock);       // ★★★ beta96 the hybrid: this listener's own pick of the transponder (no-op otherwise)
             broadcastUsers();          // ★ everyone learns someone joined, including the joiner
             if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
@@ -39038,7 +39104,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_benchHold.load()) return "the benchmark is measuring this machine";
         if (g_vsHandheld.load()) return "satellites are not on the handheld";
         if (useIcom()) return "not on an Icom radio (background work never runs there)";
-        if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 an unattended pass would have to move it (not on a locked range in this version)";
+        if (bgLocked() && !satHybridOn_.load()) return "this radio's range is locked \xe2\x80\x94 an unattended pass would have to move it (not on a locked range in this version)";
         // ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): ADS-B kept running no longer refuses the passes — a pass takes the
         //    radio from it and gives it back at LOS (satPassTick, satKeepPaused_; the warning is satKeepWarn()).
         if (g_ownerScan.load()) return "the owner's band scan has the radio";
@@ -39337,12 +39403,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (singleSatNow()) anyone = false;
         const vibe::sat::Clock clk = satClock();
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+        satHybridCycleTickLocked();   // ★★★ beta96 the hybrid's switch: the listeners' sockets recycled ~2 s after the notice
         keepOrbRiderTickLocked(cfg, why);   // ★★★ beta96 the sky plot beside kept VDL2 (no session, any listener welcome)
         // 1. what ends regardless: blocked, a listener, a pass's LOS
         if (satWork_.on && !why.empty()) { satWorkEndLocked(why, true, true); satPassNow_ = why; satPassWhy_ = why; return; }
         if (satWork_.on && anyone) { satWorkEndLocked("a listener arrived", true, false); satPassNow_ = "a listener has the radio"; return; }
         if (satPass_.on && clk.unix >= satPass_.los + 5) satPassEndLocked("LOS");
         satPassWhy_ = why;
+        /* ★★★ beta96 THE HYBRID HOLDS THE RADIO AS IT IS until LOS: a locked range over the passband — the scheduler's capture
+         *  placement (satHoldCentreLocked) and ORBCOMM must not move it under the listeners' own VFOs */
+        if (satHybrid_.on && satPass_.on && why.empty()) {
+            satPassNow_ = satPass_.name + " " + satPass_.label + " \xe2\x80\x94 listeners have their own VFO across the passband until LOS";
+            return;
+        }
         if (!why.empty() || anyone) { satPassNow_ = !why.empty() ? why : "a listener has the radio"; return; }
         if (!satWork_.on) {
             if (nowSecs() < satPassRetryAt_) { satPassNow_ = "another program has the radio \xe2\x80\x94 trying again shortly"; return; }
@@ -39356,9 +39429,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // 2. the best pass due now: a Meteor pass (the group), or a picked downlink — the highest above the owner's elevation
         struct Cand { long long norad = 0; int tx = -1; vibe::sat::Pass ps; vibe::sat::SatDef sd; vibe::sat::Transmitter t; };
+        const bool singleNow = singleSatNow();
         Cand best; double nextAos = 0;
         auto consider = [&](long long norad, int ti, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t) {
-            if (!vibe::sat::passKeepable(t) || t.orbcomm()) return;   // ★ ORBCOMM is the monitoring, not a pass
+            // ★★★ beta96 a SATELLITES radio also runs LINEAR TRANSPONDER passes (the hybrid: a VFO per listener for the pass)
+            if (!(vibe::sat::passKeepable(t) || (singleNow && vibe::sat::passHybrid(t))) || t.orbcomm()) return;   // ★ ORBCOMM is the monitoring, not a pass
             if (!vsSatReachWhy(t.hz, t.passband() ? t.hiHz : t.hz).empty()) return;
             vibe::sat::Pass np;
             if (satEngine().nextPass(norad, clk.unix, cfg.sat.minEl, np) && np.aos > clk.unix && (nextAos == 0 || np.aos < nextAos)) nextAos = np.aos;
@@ -39517,6 +39592,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         r.aos = ps.aos; r.los = ps.los; r.maxEl = ps.maxElDeg; r.startedAt = clk.unix;
         satPass_ = r;
         satPassWhy_.clear();
+        // ★★★ beta96 single mode: satellites — a linear transponder becomes the hybrid; every watcher is told (sat_single,
+        //     and the pass as the room's pick so their box opens on it and joins its decoder)
+        if (singleSatNow() && vibe::sat::passHybrid(t)) satHybridBeginLocked(norad, tx, sd, t, ps);
+        if (singleSatNow()) { satSingleBroadcast(); if (!satHybrid_.on) satSingleTellPickAll(); }
         LOGI("[sat] unattended pass: %s %s (max %.0f\xc2\xb0, LOS in %.0f s) \xe2\x80\x94 %.3f MHz %s, Doppler %s, decoder %s%s%s", sd.name.c_str(), t.label.c_str(),
              ps.maxElDeg, ps.los - clk.unix, hz / 1e6, md.c_str(), tr.state == vibe::sat::LockState::Off ? ("refused: " + tr.why).c_str() : vibe::sat::lockName(tr.state),
              r.decoder.empty() ? "none" : r.decoder.c_str(), satWork_.pausedBg ? "; background decoding paused" : "",
@@ -39526,6 +39605,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  written as it stops) and its lock. The radio and background decoding are the SESSION's (satWorkEndLocked). */
     void satPassEndLocked(const std::string& why) {
         if (!satPass_.on) return;
+        satHybridEndLocked(why);   // ★★★ beta96 the hybrid ends with its pass (no-op otherwise)
         const SatPassRun r = satPass_;
         if (!r.decoderKey.empty()) {
             std::shared_ptr<DecoderHost> host = decoders_.shared();
@@ -39537,6 +39617,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         satPassLast_ = b;
         LOGI("[sat] unattended pass: %s%s", b, orbSkyOn_.load() ? "; ORBCOMM monitoring carries on" : "");
         satPass_ = SatPassRun{};
+        if (singleSatNow()) {   // ★★★ beta96 the watchers' box: the pick goes (with the pass's words), the timetable moves on
+            std::vector<std::shared_ptr<net::Socket>> spec;
+            { std::lock_guard<std::mutex> lk(clientMtx); spec = allSpecClientsLocked(); }
+            const std::string off = "{\"type\":\"sat\",\"state\":\"OFF\",\"why\":\"" + vibe::sat::jsonEsc(std::string(b)) + "\",\"pickGone\":true,\"single\":true,\"time\":\"ok\"}";
+            for (auto& s2 : spec) { sendText(s2, off); satToldSet(sessionOfSock(s2.get()), ""); }
+            satSingleBroadcast();
+        }
     }
     /** ★ A listener (or a decoder socket) arrived: the session is given up — the radio back as it was found. */
     void satPassGiveUp(const char* who) {
@@ -39544,6 +39631,230 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (singleSatNow()) return;   // ★★★ beta96 single mode: satellites — an arrival watches, it never takes the radio
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
         if (satWork_.on) satWorkEndLocked(who ? who : "a listener arrived", true, false);
+    }
+
+    /* ══ ★★★ beta96 SINGLE MODE: SATELLITES — WATCH ONLY + THE LINEAR-TRANSPONDER HYBRID (docs/v12/SAT-SINGLE.md) ═══════
+     *  WATCH: listeners land in SATELLITE and see the pass on now (or the next, with its countdown), live, with no way to
+     *  retune — the radio makes the picks (the unattended scheduler). `sat_single` tells them: the pass now, the next, the
+     *  radio's timetable (the owner's picks, ≤ 12 passes in the next 24 h) and the last pass's outcome. It goes to everyone
+     *  at AOS and LOS, to an arrival in sendFullState, and with every sat_list answer.
+     *  HYBRID (Stuart 11-26): during a LINEAR TRANSPONDER pass the radio is a LOCKED RANGE over the passband (+ Doppler):
+     *  g_vsLockedCentre / g_vsLockedRate are set at AOS and given back at LOS, so perClientDsp() — the existing locked-range
+     *  machinery, nothing new — gives every listener their own VFO, and each gets their own pick of the transponder (the
+     *  existing per-listener satPick: their own AUTO DOPPLER, the finder) at the passband centre. Tuning outside the window
+     *  is refused (singleSatRefuses).
+     *  ★★★ THE SWITCH OF CONNECTED LISTENERS. A listener's channel (ClientDsp) is built where their spectrum socket connects
+     *  (the accept path) — and their audio socket is bound to the shared stream or to that channel there too. Rebuilding
+     *  both under a live socket would be a second copy of the accept path's ~200 lines. So the server does what a change of
+     *  the radio's arrangement has always meant for a client: it tells them (`sat_hybrid`, the words to show), then closes
+     *  their sockets ~2 s later; every client already reconnects 3 s after a server close (spectrum.ts / audio.ts / the
+     *  app), and the reconnect goes through the ordinary accept path — which now sees a locked range (AOS) or a shared dial
+     *  (LOS) and builds exactly what it always builds there. Old clients need nothing new. The cost: ~5 s without audio at
+     *  AOS and at LOS. "Always per-listener DSP" on a SATELLITES radio was weighed and refused: on a locked range the
+     *  shared pipeline is not fed (the Meteor / SSTV / APRS pass decoders and the ORBCOMM sky plot run on it), so every
+     *  watch-only pass would have needed a second, listener-independent feed. ═══════════════════════════════════════════ */
+    struct SatHybrid {
+        bool on = false; long long norad = 0; int tx = -1;
+        std::string name, label, mode;
+        double lo = 0, hi = 0, passLo = 0, passHi = 0, tuneHz = 0, los = 0;
+        double savedCentre = 0, savedRate = 0;
+    };
+    SatHybrid satHybrid_;                              // under satPassMtx_
+    std::atomic<bool> satHybridOn_{false};             // read on the accept path and by singleSatRefuses
+    std::atomic<double> satHybLo_{0}, satHybHi_{0};    // the window a listener may tune in (passband ± Doppler)
+    std::vector<std::shared_ptr<net::Socket>> satHybCycle_;   // under satPassMtx_: closed at satHybCycleAt_
+    double satHybCycleAt_ = 0;
+    std::string satHybridMsgLocked() const {
+        const SatHybrid& h = satHybrid_;
+        if (!h.on) return "{\"type\":\"sat_hybrid\",\"on\":false}";
+        return "{\"type\":\"sat_hybrid\",\"on\":true,\"norad\":" + std::to_string(h.norad) + ",\"tx\":" + std::to_string(h.tx)
+             + ",\"name\":\"" + vibe::sat::jsonEsc(h.name) + "\",\"label\":\"" + vibe::sat::jsonEsc(h.label) + "\",\"mode\":\"" + h.mode
+             + "\",\"lo\":" + vibe::sat::fmtNum(h.lo, 0) + ",\"hi\":" + vibe::sat::fmtNum(h.hi, 0)
+             + ",\"passLo\":" + vibe::sat::fmtNum(h.passLo, 0) + ",\"passHi\":" + vibe::sat::fmtNum(h.passHi, 0)
+             + ",\"centre\":" + vibe::sat::fmtNum(h.tuneHz, 0) + ",\"los\":" + vibe::sat::fmtNum(h.los, 0) + "}";
+    }
+    /** Every listener socket now (spectrum + audio, shared or per-listener) — the ones a hybrid switch recycles.
+     *  Decoder sockets are not listeners and are left alone. Call WITHOUT clientMtx held. */
+    std::vector<std::shared_ptr<net::Socket>> satHybListenerSocks() {
+        std::vector<std::shared_ptr<net::Socket>> out;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        out = allSpecClientsLocked();
+        if (audioClient && audioClient->isOpen()) out.push_back(audioClient);
+        for (auto& a : audioExtra) if (a && a->isOpen()) out.push_back(a);
+        for (auto& kv : clientDsp) if (kv.second && kv.second->audio && kv.second->audio->isOpen()) out.push_back(kv.second->audio);
+        std::sort(out.begin(), out.end()); out.erase(std::unique(out.begin(), out.end()), out.end());
+        return out;
+    }
+    /** Tell every listener and recycle their sockets (closed on the tick ~2 s on — the notice must reach them first). */
+    void satHybridAnnounceLocked(const std::string& words) {
+        const std::string m = satHybridMsgLocked();
+        const std::string n = "{\"type\":\"notice\",\"single\":\"sat\",\"hybrid\":" + std::string(satHybrid_.on ? "1" : "0")
+                            + ",\"why\":\"" + vibe::sat::jsonEsc(words) + "\"}";
+        std::vector<std::shared_ptr<net::Socket>> spec;
+        { std::lock_guard<std::mutex> lk(clientMtx); spec = allSpecClientsLocked(); }
+        for (auto& s : spec) { sendText(s, m); sendText(s, n); }
+        satHybCycle_ = satHybListenerSocks();
+        satHybCycleAt_ = nowSecs() + 2.0;
+    }
+    void satHybridCycleTickLocked() {
+        if (satHybCycle_.empty() || nowSecs() < satHybCycleAt_) return;
+        int n = 0;
+        for (auto& s : satHybCycle_) if (s && s->isOpen()) { s->close(); n++; }
+        satHybCycle_.clear();
+        if (n) LOGI("[sat] hybrid: %d listener socket(s) closed \xe2\x80\x94 the clients reconnect into the %s", n,
+                    satHybridOn_.load() ? "per-listener VFOs (locked range over the passband)" : "watch-only view (one shared dial)");
+    }
+    /** AOS of a linear-transponder pass on a SATELLITES radio: the radio becomes a locked range over the passband. */
+    void satHybridBeginLocked(long long norad, int tx, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t, const vibe::sat::Pass& ps) {
+        if (satHybrid_.on) return;
+        if (g_vsMaxUsers.load() <= 1 || useIcom() || useSpy()) {
+            LOGI("[sat] hybrid: not on this radio (%s) \xe2\x80\x94 the pass runs on the one dial", useIcom() ? "an Icom" : useSpy() ? "a SpyServer" : "one listener at a time");
+            return;
+        }
+        const double margin = vibe::sat::hybridMarginHz(t);
+        const double lo = t.hz - margin, hi = t.hiHz + margin, mid = 0.5 * (lo + hi);
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
+        const double half = std::min(usableSpan(), rate * vibe::kBandFlatFrac) / 2;
+        if (hi - lo > 2 * half) {
+            LOGI("[sat] hybrid: %s %s needs %.0f kHz and this capture holds %.0f \xe2\x80\x94 the pass runs on the one dial",
+                 sd.name.c_str(), t.label.c_str(), (hi - lo) / 1e3, 2 * half / 1e3);
+            return;
+        }
+        double hw = rtlCenter.load() + hwOffsetHz();
+        if (hw - half > lo || hw + half < hi) {   // ★ centre the capture on the window (the pass's tune left it elsewhere)
+            const double logical = mid - hwOffsetHz();
+            rtlCenter.store(logical); noteHwMoved(); tuneHw(logical);
+            hw = mid;
+        }
+        // ★ the shared dial's lock ends: on a locked range the shared pipeline is not fed — each listener locks their own
+        if (satEngine().active(kSatShared)) { satEngine().stop(kSatShared); satSharedShift_.store(0.0); }
+        SatHybrid h;
+        h.on = true; h.norad = norad; h.tx = tx; h.name = sd.name; h.label = t.label; h.mode = vibe::sat::listenModeOf(t);
+        h.lo = lo; h.hi = hi; h.passLo = t.hz; h.passHi = t.hiHz; h.tuneHz = vibe::sat::tuneHzOf(t); h.los = ps.los;
+        h.savedCentre = g_vsLockedCentre.load(); h.savedRate = g_vsLockedRate.load();
+        satHybrid_ = h;
+        satHybLo_.store(lo); satHybHi_.store(hi);
+        g_vsLockedCentre.store(rtlCenter.load());
+        g_vsLockedRate.store(sampleRate);
+        satHybridOn_.store(true);
+        LOGI("[sat] hybrid ON: %s %s \xe2\x80\x94 a locked range at %.4f MHz, listeners tune %.4f\xe2\x80\x93%.4f MHz (passband %.4f\xe2\x80\x93%.4f + %.1f kHz Doppler), each with their own VFO and AUTO DOPPLER",
+             sd.name.c_str(), t.label.c_str(), hw / 1e6, lo / 1e6, hi / 1e6, t.hz / 1e6, t.hiHz / 1e6, margin / 1e3);
+        satHybridAnnounceLocked(sd.name + " " + t.label + " is up: your own VFO across the passband for this pass, with AUTO DOPPLER "
+                                "\xe2\x80\x94 reconnecting you to it now");
+    }
+    /** LOS (or the session's end): the radio back to one dial, watch only. */
+    void satHybridEndLocked(const std::string& why) {
+        if (!satHybrid_.on) return;
+        const SatHybrid h = satHybrid_;
+        satHybridOn_.store(false);
+        // ★ every listener's own lock and pick on the transponder goes (their channels go with the recycled sockets)
+        std::vector<std::shared_ptr<ClientDsp>> chans;
+        { std::lock_guard<std::mutex> lk(clientMtx); for (auto& kv : clientDsp) if (kv.second) chans.push_back(kv.second); }
+        for (auto& c : chans) if (satEngine().active(c->session)) satEndListener(c, "the transponder pass is over", false);
+        std::vector<std::string> keys;
+        { std::lock_guard<std::mutex> lk(satPickMtx_); for (auto& kv : satPicks_) if (kv.first != kSatShared) keys.push_back(kv.first); }
+        for (auto& k : keys) satDetachPick(k, "the transponder pass is over");
+        g_vsLockedCentre.store(h.savedCentre);
+        g_vsLockedRate.store(h.savedRate);
+        satHybrid_ = SatHybrid{};
+        satHybLo_.store(0); satHybHi_.store(0);
+        LOGI("[sat] hybrid OFF (%s): %s %s \xe2\x80\x94 back to one dial, listeners watch", why.c_str(), h.name.c_str(), h.label.c_str());
+        satHybridAnnounceLocked(h.name + " " + h.label + " has set (" + why + ") \xe2\x80\x94 back to watching what this receiver decodes");
+    }
+
+    /** ★ The watch view's facts (`sat_single`): the pass now, the next, the timetable, the last pass. Cached 30 s (the plan
+     *  is ≤ 3 SGP4 pass searches a candidate). Call WITHOUT satPassMtx_ held (it takes it). "" = not a SATELLITES radio. */
+    std::mutex satSingleMtx_;
+    std::string satSinglePlan_; double satSinglePlanAt_ = -1e9;
+    std::string satSingleJson() {
+        if (!singleSatNow()) return "";
+        vibe::bg::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+        const vibe::sat::Clock clk = satClock();
+        std::string now, last, hyb, state;
+        {
+            std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+            if (satPass_.on) {
+                now = "{\"norad\":" + std::to_string(satPass_.norad) + ",\"tx\":" + std::to_string(satPass_.tx) + ",\"name\":\""
+                    + vibe::sat::jsonEsc(satPass_.name) + "\",\"label\":\"" + vibe::sat::jsonEsc(satPass_.label) + "\",\"aos\":"
+                    + vibe::sat::fmtNum(satPass_.aos, 0) + ",\"los\":" + vibe::sat::fmtNum(satPass_.los, 0) + ",\"maxEl\":"
+                    + vibe::sat::fmtNum(satPass_.maxEl, 1) + ",\"decoder\":\"" + satPass_.decoder + "\"}";
+            }
+            last = satPassLast_;
+            state = satPassWhy_.empty() ? satPassNow_ : satPassWhy_;
+            if (satHybrid_.on) hyb = satHybridMsgLocked();
+        }
+        std::string plan;
+        {
+            std::lock_guard<std::mutex> lk(satSingleMtx_);
+            if (nowSecs() - satSinglePlanAt_ >= 30.0) {
+                struct Row { double aos, los, el; long long norad; int tx; std::string name, label; };
+                std::vector<Row> rows;
+                auto add = [&](long long norad, int ti, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t) {
+                    if (!vsSatReachWhy(t.hz, t.passband() ? t.hiHz : t.hz).empty()) return;
+                    double from = clk.unix;
+                    for (int k = 0; k < 3; ++k) {
+                        vibe::sat::Pass p;
+                        if (!satEngine().nextPass(norad, from, cfg.sat.minEl, p) || p.aos > clk.unix + 86400) break;
+                        rows.push_back(Row{p.aos, p.los, p.maxElDeg, norad, ti, sd.name, t.label});
+                        from = p.los + 1;
+                    }
+                };
+                for (const auto& b : cfg.sat.birds) {
+                    const int ti = satEngine().txIndex(b.norad, b.label);
+                    vibe::sat::SatDef sd; vibe::sat::Transmitter t;
+                    if (ti >= 0 && satEngine().txAt(b.norad, ti, sd, t) && !t.orbcomm() && (vibe::sat::passKeepable(t) || vibe::sat::passHybrid(t))) add(b.norad, ti, sd, t);
+                }
+                if (cfg.sat.meteor)
+                    for (const auto& sd : satEngine().defs())
+                        for (size_t k = 0; k < sd.tx.size(); ++k) { std::string pr; if (vibe::sat::decoderOf(sd.tx[k], pr) == "lrpt") add(sd.norad, (int)k, sd, sd.tx[k]); }
+                std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.aos < b.aos; });
+                if (rows.size() > 12) rows.resize(12);
+                std::string j = "[";
+                for (size_t i = 0; i < rows.size(); ++i) {
+                    const Row& r = rows[i];
+                    j += std::string(i ? "," : "") + "{\"norad\":" + std::to_string(r.norad) + ",\"tx\":" + std::to_string(r.tx) + ",\"name\":\""
+                       + vibe::sat::jsonEsc(r.name) + "\",\"label\":\"" + vibe::sat::jsonEsc(r.label) + "\",\"aos\":" + vibe::sat::fmtNum(r.aos, 0)
+                       + ",\"los\":" + vibe::sat::fmtNum(r.los, 0) + ",\"maxEl\":" + vibe::sat::fmtNum(r.el, 1) + "}";
+                }
+                satSinglePlan_ = j + "]";
+                satSinglePlanAt_ = nowSecs();
+            }
+            plan = satSinglePlan_;
+        }
+        std::string j = "{\"type\":\"sat_single\",\"on\":" + std::string(cfg.sat.on ? "true" : "false") + ",\"t\":" + vibe::sat::fmtNum(clk.unix, 0)
+                      + ",\"plan\":" + plan;
+        if (!now.empty()) j += ",\"now\":" + now;
+        if (!last.empty()) j += ",\"last\":\"" + vibe::sat::jsonEsc(last) + "\"";
+        if (!state.empty()) j += ",\"state\":\"" + vibe::sat::jsonEsc(state) + "\"";
+        if (!hyb.empty()) j += ",\"hybrid\":" + hyb;
+        return j + "}";
+    }
+    void satSingleBroadcast() {
+        { std::lock_guard<std::mutex> lk(satSingleMtx_); satSinglePlanAt_ = -1e9; }   // ★ AOS / LOS: the plan moves on
+        const std::string j = satSingleJson();
+        if (j.empty()) return;
+        std::vector<std::shared_ptr<net::Socket>> spec;
+        { std::lock_guard<std::mutex> lk(clientMtx); spec = allSpecClientsLocked(); }
+        for (auto& s : spec) sendText(s, j);
+    }
+    /** ★ The pass running now as the room's pick (what a watcher's box shows and joins the decoder of) — false = none, or
+     *  the hybrid (each listener has their own pick then). */
+    bool satSinglePassPick(SatPick& p) {
+        if (!singleSatNow()) return false;
+        std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+        if (!satPass_.on || satHybrid_.on) return false;
+        p.norad = satPass_.norad; p.tx = satPass_.tx; p.decoder = satPass_.decoder; p.decoderKey = satPass_.decoderKey; p.perVfo = false;
+        return true;
+    }
+    /** ★ A listener joining mid-hybrid: their channel was built at the passband centre (the accept path); now their own pick
+     *  of the transponder — the ordinary per-listener satPick, so their AUTO DOPPLER and the finder are the usual ones. */
+    void satHybridJoin(const std::shared_ptr<net::Socket>& sock) {
+        if (!satHybridOn_.load() || !perClientDsp() || !dspFor(sock)) return;
+        long long norad = 0; int tx = -1;
+        { std::lock_guard<std::recursive_mutex> pl(satPassMtx_); if (!satHybrid_.on) return; norad = satHybrid_.norad; tx = satHybrid_.tx; }
+        LOGI("[sat] hybrid: a listener joins \xe2\x80\x94 their own VFO at the passband centre, their own AUTO DOPPLER");
+        satPick(sock, "{\"type\":\"sat\",\"op\":\"pick\",\"norad\":" + std::to_string(norad) + ",\"tx\":" + std::to_string(tx) + ",\"doppler\":true}");
     }
     /** The admin page's line: "off" · "waiting" (and why) · "running" (the pass, ORBCOMM monitoring, or both — and why),
      *  with the last pass's and the last monitoring stretch's outcome. */

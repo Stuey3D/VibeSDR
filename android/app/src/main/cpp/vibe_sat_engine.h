@@ -536,6 +536,16 @@ inline bool passKeepable(const Transmitter& t) {
     const std::string d = decoderOf(t, p);
     return d == "lrpt" || d == "sstv" || d == "aprs" || d == "fctlm" || d == "orbcomm";
 }
+/** ★★★ beta96 SINGLE MODE: SATELLITES — THE LINEAR-TRANSPONDER HYBRID (docs/v12/SAT-SINGLE.md). A downlink a SATELLITES
+ *  radio may run a pass of although it has nothing to keep: a linear transponder's passband (SSB / CW contacts all over
+ *  it). For its pass the radio becomes a locked range over the passband and every listener tunes their own VFO across it
+ *  with their own AUTO DOPPLER. Only on a single-mode SATELLITES radio (the scheduler asks), never an ordinary one. */
+inline bool passHybrid(const Transmitter& t) {
+    return t.passband() && (t.mode == "usb" || t.mode == "lsb") && t.consumer.empty() && !t.labelOnly() && !t.orbcomm();
+}
+/** The Doppler margin either side of a hybrid's passband: the largest LEO Doppler at its frequency (~2.7e-5·f — the
+ *  per-listener lock's own figure) + the lock's trim clamp. */
+inline double hybridMarginHz(const Transmitter& t) { return t.hiHz * 2.7e-5 + 2500.0; }
 /** The attach message a pick hands the decoder host — the shape a client's audio_extension_attach has. */
 inline std::string decoderAttachMsg(const std::string& ext, const std::string& params) {
     return "{\"type\":\"audio_extension_attach\",\"extension_name\":\"" + ext + "\"" + (params.empty() ? "" : "," + params) + "}";
