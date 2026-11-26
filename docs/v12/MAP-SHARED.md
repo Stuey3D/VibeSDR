@@ -20,18 +20,39 @@ rule, and the menu consolidation.
 Server: `local_sdr_shim.cpp` — `avdataBands[].chLo/chHi`, `vormapLo/vormapHi` in `vibeserver.json` (no behaviour change).
 Web: the shared banner's count now also follows the `dial` message's `listeners` (the server's beta83 leave fix — `users` lagged).
 
+## The maps' scope: OTHER RADIOS ON THIS SERVER · THIS SESSION (coordinator's asks, built 11-26)
+
+| Piece | Where |
+|---|---|
+| The rule (one, pure) | `src/services/mapScope.ts` — `otherRadiosOffered` (a map on a radio, an id, and 2+ sources: `radioCount >= 2` or an entry tagged by another source, e.g. a feed), `scopeRadioOk` (OFF = this radio's own; an UNTAGGED entry is unknown and stays — the logs' rule), `scopeSessionOk` / `FirstSeen` / `sessionStart` (reset on (re)opening and on a live-mode change) / `sessionWindow` (the polls' covering window) / `withSession` (THIS SESSION beside the window, ALL \| THIS SESSION where a map has none) |
+| AIR & SEA sources | `src/services/airSeaScope.ts` — the DATA goes through the scope before anything is composed, so SHOW counts, tabs, items and rows follow. Server times are moved onto the viewer's clock by each answer's skew. Every entry is OBSERVED on every pass (FirstSeen), so THIS SESSION picked later knows what came before |
+| Server | `vibe_aircraft_share.h`: `Rec::radios` (padding → a mask, bit = `<runtime dir>/radios.idx` line, vibe_log_radio.h's registry), set by `Table::write` from this process's id (`asId` for a feed — **b96-sbsfeed should write with `asId = "feed"`** so OFF hides it); `aircraft.json` per row `"radios"` + `"first"`; `vibeserver.json` `radioId` + `radioCount`. Ships, NAVTEX stations, stations and gallery items already carried radios (beta92); the clients now keep them (sanitisers) |
+| Web | `TrackView.setScope` (the chip after SHOW, never dial-locked) + `setScopeNote`; `main.ts asScoped / asRender` (AIR & SEA), `ismMapRender` (mesh map: remembered nodes carry their card's `ri`), the AMATEUR window (`#scope`, THIS SESSION in `#wins`, SHOW label + colour dots + counts on `#layers`; the radio keys hide when OFF). `localStorage vibesdr.mapOtherRadios` ("0" = off) |
+| App | `SDRScreen` (`asSrcS` → the map region reads `*S` names; `ismTrk`), `TrackLiveList` chips with `n` + `colour` (SHOW label), `DigiMapKeys` (THIS SESSION, SHOW with counts, OTHER RADIOS) + `MapOverlay amData` / page `__amScope` on the AMATEUR map. `AsyncStorage lsv_map_other_radios` |
+| AIR & SEA LIVE while lit | REOPENS the map (web `toggleAirSeaLive` → `asOpen({by:'mode'})`, app likewise); EXIT in the map leaves |
+| Viewer alias | `window.openAirSeaViewer` (b96-sbsfeed's name) and `window.__vibeOpenAirSeaViewer` are ONE function |
+| AMATEUR TUNE | none: no amateur map entry retunes the radio (a spot is a station heard) — said on SHOW's title / the tour |
+
+Known limits (honest): NAVTEX warnings / weather carry no radio yet (shown under every radio); HFDL ground stations carry none (the
+GsRec has no spare bytes); an entry with no server first-heard time that was already in a report when the map opened counts as new
+(ADS-B aircraft unknown to the shared table, sondes, VOR without a first, NDB, APRS, beacons); on the app's SONDES live state the
+band keys hold the window row (no THIS SESSION there while SONDES runs); a stored station / node is "this radio's" if its day card or
+row lists this radio (a card two radios wrote lists both).
+
 ## Whole-radio air/sea modes found (report to Stuart)
 ADS-B · datalink bands `acars`, `vdl2`, `acars+vdl2` (wide, ≥ 6.1 MS/s) · VOR MAP · NDB · AIS, `ais+dsc` (MARITIME) · sondes
 `lo` / `mid` / `hi` / `all` (≥ 6.7 MS/s). No 1680 MHz sonde band exists in `vibers41::bands()`. DSC alone and HFDL are decoders.
 
 ## RESUME HERE
-1. **Not done (coordinator's later asks):** "OTHER RADIOS ON THIS SERVER" toggle and "THIS SESSION" time window (maps on a
-   radio only); SHOW counts on the app's TrackLiveList chips; the AMATEUR map's TUNE/SHOW (the web AMATEUR map is a separate
-   window — its page keeps the bar — and its spots do not retune); a real two-radio server test (no fake HackRF/HF+ exists:
-   the per-radio shapes are unit-tested from the server's gates instead).
-2. b96-sbsfeed's standalone landing map: set `window.__vibeMapStandalone = true` (or open through `openAirSeaViewer`) and the
-   map shows no shared line and no TUNE chip. The app's viewer is `asViewer` (SDRScreen).
-3. Device run of the app strip (phone width, pad order with the list, chat over the map in the Modal) — not run on a device.
+1. **Done 11-26 (scope branch work):** OTHER RADIOS ON THIS SERVER, THIS SESSION, SHOW counts on the app's chips, the AMATEUR map's
+   SHOW chips (web window + app), AIR & SEA LIVE reopening the map, the viewer alias — see the section above.
+2. **Open:** b96-sbsfeed's feed writes must pass `asId = "feed"` to `vibeavshare::Table::write` (else a feed's aircraft count as
+   this radio's); NAVTEX warnings / weather and HFDL ground stations are untagged; a device run of the app (chips with counts at
+   phone width, DigiMapKeys wrapping with SHOW + THIS SESSION + OTHER RADIOS, the pad walking them) — not run on a device.
+3. b96-sbsfeed's standalone landing map: `window.__vibeMapStandalone = true` (or `openAirSeaViewer`) → no shared line, no TUNE,
+   no scope keys. The app's viewer is `asViewer` (SDRScreen).
+4. `scripts/test-web-avmap.mjs` was stale (the DATALINK key and chip labels predate SHOW counts / AIR & SEA LIVE) — fixed; its
+   VDL2 half did not decode on this busy Mac in two runs (see Tested how).
 
 ## Tested how
 This Mac; vibeserver built from this worktree through the build lock; headless Edge `--mute-audio`; fake rtl_tcp (no clip).

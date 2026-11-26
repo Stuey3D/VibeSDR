@@ -11,7 +11,8 @@ import { storeSanitise, dscPinsFromGallery } from '../src/services/shippingMap';
 import { navSanitise } from '../src/services/navtexMap';
 import { storedMerge, storedLoader } from '../src/services/storedLayers';
 import { ismGalMerge } from '../src/services/ism';
-import { amMeshLoader } from '../src/utils/amateurMap';
+import { amMeshLoader, amMeshPoints } from '../src/utils/amateurMap';
+import { airSeaScope, airSeaLiveOk } from '../src/services/airSeaScope';
 
 let pass = 0, fail = 0;
 const ok = (c: unknown, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -103,6 +104,38 @@ const ok = (c: unknown, what: string) => { c ? pass++ : fail++; console.log(`   
   });
   const mn = await ml('24h', now);
   ok(mn?.[0]?.radios?.join() === 'bbbb0002', `the AMATEUR map's MESH loader tags each node with its card's radios (${JSON.stringify(mn)})`);
+
+  console.log('── the AIR & SEA sources through the scope (airSeaScope) ──');
+  {
+    const NOW = 100000, MINE = 'aaaa0001';
+    const shared = sharedSanitise({ now: NOW + 30, count: 3, aircraft: [   // ★ the server's clock 30 s ahead of ours
+      { key: 'A1', icao: 'A1', src: ['VDL2'], srcAge: { VDL2: 1 }, age: 1, first: 10, n: 1, radios: [MINE] },
+      { key: 'B2', icao: 'B2', src: ['VDL2'], srcAge: { VDL2: 1 }, age: 1, first: 10, n: 1, radios: ['bbbb0002'] },
+      { key: 'C3', icao: 'C3', src: ['VDL2'], srcAge: { VDL2: 1 }, age: 1, first: 5000, n: 1 },
+    ], stations: [] })!;
+    const raw = { shared, sharedSkew: 30, ships: null, nav: null, warn: null, met: null, dscG: [], navSkew: 0,
+      adsb: { aircraft: [{ hex: 'a1' }, { hex: 'c3' }, { hex: 'zz9' }] }, ais: { vessels: [{ mmsi: 1, age: 5 }, { mmsi: 2, age: 9000 }] },
+      av: null, sd: { sondes: [{ serial: 'S1' }] }, vm: null, sdStored: [], vmStored: [] };
+    const fs = new FirstSeen();
+    const all = airSeaScope(raw, { mine: MINE, others: true, t0: 0 }, NOW, fs);
+    ok(all === raw, 'nothing filtering: the same sources back');
+    ok(fs.size >= 2, `…but the live entries are OBSERVED (FirstSeen ${fs.size}) so THIS SESSION picked later knows what came before`);
+    const off = airSeaScope(raw, { mine: MINE, others: false, t0: 0 }, NOW, fs);
+    ok(off.shared!.aircraft.map((p) => p.key).join() === 'A1,C3', `OFF: ours + the untagged (${off.shared!.aircraft.map((p) => p.key).join()})`);
+    ok(off.adsb === raw.adsb, 'OFF: this radio\'s live report untouched');
+    const t0 = NOW - 60;
+    const ses = airSeaScope(raw, { mine: MINE, others: true, t0 }, NOW, fs);
+    ok(ses.shared!.aircraft.map((p) => p.key).join() === 'A1,B2', `THIS SESSION: first heard 10 s ago (on our clock) in, 5000 s ago out (${ses.shared!.aircraft.map((p) => p.key).join()})`);
+    ok(ses.adsb!.aircraft.map((a) => a.hex).join() === 'a1,zz9', `THIS SESSION: ADS-B live — A1 by the table's first, C3 out, zz9 (unknown to the table) by when we first saw it (${ses.adsb!.aircraft.map((a) => a.hex).join()})`);
+    ok(ses.ais!.vessels.map((v) => v.mmsi).join() === '1', 'THIS SESSION: a live ship by its own age');
+    const fs2 = new FirstSeen();
+    airSeaScope(raw, SCOPE_ALL, NOW - 600, fs2);   // ★ observed 10 minutes before the session starts
+    const late = airSeaScope(raw, { mine: '', others: true, t0: NOW - 60 }, NOW, fs2);
+    ok(late.sd!.sondes.length === 0, 'a sonde first seen BEFORE the session (no server time) is not in it');
+    ok(airSeaLiveOk('ndb:1', null, SCOPE_ALL, 50, fs2) && fs2.first('ndb:1', 999) === 50, 'airSeaLiveOk observes even with no session');
+    const pts = amMeshPoints([], [{ kind: 'meshcore', node: 'n1', name: 'R1', lat: 51, lon: 0, first: NOW - 100, last: NOW - 10, radios: ['bbbb0002'] }], NOW);
+    ok(pts[0]?.radios?.join() === 'bbbb0002' && pts[0]?.fa === 100, `MESH points carry the card's radios and first heard (${JSON.stringify(pts[0])})`);
+  }
 
   console.log(`test_map_scope: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
