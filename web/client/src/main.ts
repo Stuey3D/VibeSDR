@@ -10206,10 +10206,11 @@ function trkFlagHtml(flag: string | undefined): string {
   const iso = String.fromCharCode(...cps.map((c) => c - 0x1F1E6 + 65));
   return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
 }
-function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean }): string {
+function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean;
+                     snr?: number; snrMode?: string }): string {   // ★ beta96 snr: the message's SNR chip (stored ships, sondes …)
   return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
     + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
-    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
+    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${snrChipHtml(x.snrMode, x.snr)}${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
 function shipDscPins(now: number, src: ShipSrc = shipSrcRaw()): DscPin2[] {

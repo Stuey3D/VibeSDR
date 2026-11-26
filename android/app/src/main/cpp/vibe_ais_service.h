@@ -96,6 +96,7 @@ struct Vessel {
     double first = 0, last = 0, posAt = -1;
     int count = 0, ch = 0;
     float level = -120, snr = 0;
+    bool hasSnr = true;   ///< ★ beta96 false = a stored ship with no SNR kept (an older store): "snr" is left out
     // ★ the speed trend (the card's ▲/▼): the speed a minute ago
     double sogRef = NAN, sogRefAt = -1; int trend = 0;
     struct Pt { double t, lat, lon; };
@@ -601,8 +602,11 @@ public:
         if (v.fakes > 0) o += ",\"fakes\":" + std::to_string(v.fakes);
         o += ",\"line\":\"" + jsonEsc(readable(v)) + "\"";
         char b[160];
-        std::snprintf(b, sizeof b, ",\"ch\":\"%s\",\"level\":%.1f,\"snr\":%.1f,\"seen\":%.0f,\"age\":%.0f,\"posAge\":%.0f,\"count\":%d,\"trail\":%zu}",
-                      v.ch ? "B" : "A", v.level, v.snr, t - v.last, t - v.first, v.posAt >= 0 ? t - v.posAt : -1.0, v.count, v.trail.size());
+        std::snprintf(b, sizeof b, ",\"ch\":\"%s\",\"level\":%.1f", v.ch ? "B" : "A", v.level);
+        o += b;
+        if (v.hasSnr) { std::snprintf(b, sizeof b, ",\"snr\":%.1f", v.snr); o += b; }
+        std::snprintf(b, sizeof b, ",\"seen\":%.0f,\"age\":%.0f,\"posAge\":%.0f,\"count\":%d,\"trail\":%zu}",
+                      t - v.last, t - v.first, v.posAt >= 0 ? t - v.posAt : -1.0, v.count, v.trail.size());
         o += b;
     }
 private:

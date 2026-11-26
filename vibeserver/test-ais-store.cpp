@@ -54,7 +54,7 @@ static void testRoundTrip() {
     const std::string d = tmpDir("rt");
     vibeais::Vessel v; v.mmsi = 235012345; v.kind = "A"; v.name = "WILSON GOOLE"; v.callsign = "MXYZ7"; v.dest = "ROTTERDAM";
     v.shipType = 70; v.nav = 0; v.heading = 246; v.lat = 50.8 + kOff; v.lon = -1.3 - kOff; v.sog = 12.3; v.cog = 245.6; v.bow = 100; v.stern = 20; v.port = 10; v.stbd = 10;
-    v.first = 10; v.last = 100; v.posAt = 100; v.count = 7; v.etaMonth = 11; v.etaDay = 3; v.etaHour = 14; v.etaMin = 30;
+    v.first = 10; v.last = 100; v.posAt = 100; v.count = 7; v.snr = 17.6f; v.etaMonth = 11; v.etaDay = 3; v.etaHour = 14; v.etaMin = 30;
     for (int i = 0; i < 100; ++i) v.trail.push_back({ 10.0 + i * 60.0 / 1.0 * 0.5, 50.7 + i * 0.001, -1.3 - kOff });   // every 30 s, 111 m apart
     const int64_t wall = 1'800'000'000;
     st::Rec r = st::fromVessel(v, 100.0, wall);
@@ -74,6 +74,11 @@ static void testRoundTrip() {
     CHECK(j.find("\"seen\":60") != std::string::npos && j.find("\"lat\":50.80000") != std::string::npos && j.find("\"len\":120") != std::string::npos, "ages from now, position, size");
     CHECK(j.find("\"eta\":\"11-03 14:30\"") != std::string::npos && j.find("\"stored\":1") != std::string::npos && j.find("\"pts\":[[") != std::string::npos, "ETA, stored, the track");
     CHECK(j.find("WILSON GOOLE \xc2\xb7 cargo \xc2\xb7 12 kn SW \xe2\x86\x92 ROTTERDAM") != std::string::npos, "the readable line, as the live list");
+    // ★★ beta96 the ship's last SNR kept (the spare's high byte) and given back, the answer says snrv 2
+    CHECK(j.find("\"snr\":18.0") != std::string::npos && j.find("\"snrv\":2") != std::string::npos && (got[0].spare & 3) == 0, "the SNR round-trips (17.6 → 18 dB), snrv 2");
+    { st::Rec old = r; old.spare = int16_t(old.spare & 0xFF);   // an older store's record: high byte 0
+      const std::string jo = st::toJson({ old }, wall + 60, false, 1);
+      CHECK(jo.find("\"snr\":") == std::string::npos, "an older store's ship: no SNR claimed (not a fake 0)"); }
     q.tracks = false;
     CHECK(st::toJson(st::read(d, q), wall, false, 1).find("\"pts\"") == std::string::npos, "no track unless asked");
     rmDir(d);
@@ -98,6 +103,17 @@ static void testMerge() {
     st::Rec dup = ship(1, 210, 50.1, -1.1); dup.trk[0] = { 210, E7(50.1), E7(-1.1) };
     st::merge(a, dup);
     CHECK(a.nTrk == 3, "the same fix 10 s later (another radio) is one point");
+    {   // ★ beta96 the SNR: the newer record's; one without (an older writer) keeps what the store had; DX/coarse untouched
+        st::Rec x = ship(2, 100, 50, -1); x.spare = int16_t((30 + 64) << 8 | 1);
+        st::Rec y = ship(2, 200, 50, -1); y.spare = 0;
+        st::merge(x, y);
+        CHECK(((uint16_t(x.spare) >> 8) & 0xFF) == 94, "a newer record with no SNR keeps the stored one (%d)", (uint16_t(x.spare) >> 8) & 0xFF);
+        st::Rec z = ship(2, 300, 50, -1); z.spare = int16_t((5 + 64) << 8);
+        st::merge(x, z);
+        CHECK(((uint16_t(x.spare) >> 8) & 0xFF) == 69, "a newer SNR replaces it");
+        vibeais::Vessel lo; lo.snr = -200; vibeais::Vessel hi; hi.snr = 400; vibeais::Vessel no; no.hasSnr = false;
+        CHECK(st::snrCode(lo) == 1 && st::snrCode(hi) == 255 && st::snrCode(no) == 0, "bounded: −63…191 dB, 0 = none");
+    }
 }
 
 static void testBounded() {

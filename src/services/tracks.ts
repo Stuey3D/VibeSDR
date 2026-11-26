@@ -114,7 +114,7 @@ export function aisSanitise(m: any): AisReport | null {
       cog: num(v.cog) ?? undefined, hdg: num(v.hdg) ?? undefined, rot: num(v.rot) ?? undefined, turn: num(v.turn) ?? undefined,
       draught: num(v.draught) ?? undefined, len: num(v.len) ?? undefined, beam: num(v.beam) ?? undefined, eta: str(v.eta, 16),
       alt: num(v.alt) ?? undefined, trend: num(v.trend) ?? undefined, line: str(v.line, 200), ch: str(v.ch, 2),
-      level: num(v.level) ?? undefined, snr: num(v.snr) ?? undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
+      level: num(v.level) ?? undefined, snr: (num(m.snrv) ?? 0) >= 2 ? num(v.snr) ?? undefined : undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
       posAge: num(v.posAge) ?? -1, count: num(v.count) ?? 0, trail: num(v.trail) ?? undefined,
       light: num(v.light) ?? undefined, racon: num(v.racon) ?? undefined, alarm: num(v.alarm) ?? undefined, met: aisMetSanitise(v.met),
       ...aisDxSanitise(v),   // ★ beta95 DX / unconfirmed / held / implausible
@@ -397,7 +397,7 @@ export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] 
       : dxs === 'implausible' ? AIS_DX_SHORT.implausible : 'no position',
     brg: rb ? compass8(rb.brg) : ub ? compass8(ub.brg) : '',
     noPos: v.lat == null, age: '', em: v.kind === 'sart',
-    ...(v.snr != null && (r.snrv ?? 0) >= 2 ? { snr: v.snr, snrMode: 'ais' } : {}),   // ★ beta96 the ship's last frame's SNR
+    ...(v.snr != null ? { snr: v.snr, snrMode: 'ais' } : {}),   // ★ beta96 the ship's last frame's SNR (live, or the store's: aisSanitise keeps it only from snrv ≥ 2)
   }; });
 }
 /** ★ The safety strip: the newest safety-related broadcasts (types 12/14), at most three, newest first. */

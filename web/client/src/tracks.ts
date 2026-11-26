@@ -108,7 +108,7 @@ export function aisSanitise(m: any): AisReport | null {
       cog: num(v.cog) ?? undefined, hdg: num(v.hdg) ?? undefined, rot: num(v.rot) ?? undefined, turn: num(v.turn) ?? undefined,
       draught: num(v.draught) ?? undefined, len: num(v.len) ?? undefined, beam: num(v.beam) ?? undefined, eta: str(v.eta, 16),
       alt: num(v.alt) ?? undefined, trend: num(v.trend) ?? undefined, line: str(v.line, 200), ch: str(v.ch, 2),
-      level: num(v.level) ?? undefined, snr: num(v.snr) ?? undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
+      level: num(v.level) ?? undefined, snr: (num(m.snrv) ?? 0) >= 2 ? num(v.snr) ?? undefined : undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
       posAge: num(v.posAge) ?? -1, count: num(v.count) ?? 0, trail: num(v.trail) ?? undefined,
       light: num(v.light) ?? undefined, racon: num(v.racon) ?? undefined, alarm: num(v.alarm) ?? undefined, met: aisMetSanitise(v.met),
       ...aisDxSanitise(v),   // ★ beta95 DX / unconfirmed / held / implausible
@@ -306,7 +306,7 @@ export function aisRows(r: AisReport, rx: LatLon | null): string {
     // ★★ beta95 DX (aisDx.ts): the tag in the range column, which never truncates; unconfirmed / implausible say so there
     const dxs = aisDxState(v);
     const ub = dxs === 'unconf' && rx && v.uLat != null && v.uLon != null ? rangeBearing(rx, v.uLat, v.uLon) : null;
-    const where = snrChipHtml('ais', (r.snrv ?? 0) >= 2 ? v.snr : undefined) + (rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
+    const where = snrChipHtml('ais', v.snr) + (rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
       : v.lat != null ? (dxs === 'dx' ? '<span class="dxTag">DX</span>' : '')
       : dxs === 'unconf' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.unconf}${ub ? ` ${Math.round(ub.nm)} NM ${compass8(ub.brg)}` : ''}</span>`
       : dxs === 'implausible' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.implausible}</span>`
