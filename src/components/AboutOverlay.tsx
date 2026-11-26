@@ -59,6 +59,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta96 2026-11-26 — NAVTEX decode quality + SNR (Stuart 11-26; docs/v12/NAVTEX-QUALITY.md). Display only. Wording
+  //    checked against navtexQuality.ts (the colours, "weak" = under 5 dB, 100 Hz), NavtexQuality.tsx / navtexSnrDom.ts.
+  { v: 'V12 (experimental)', detail: 'NAVTEX SHOWS HOW WELL EACH MESSAGE WAS RECEIVED — every character is sent twice, and each message now says how many came through clean (both copies agreed), how many were rebuilt from one copy (FEC) and how many were lost, with a small bar, and when the two copies disagreed. A coloured strip down the left of the text shows the signal-to-noise ratio while each line was decoded — red under 5 dB (that text may be wrong), amber 5–10, green above — so a fade in the middle shows beside the lines it hit; the decoder status grows the same timeline as a message arrives, and gallery messages keep it (“SNR 8 dB avg · 22 % weak”). Decoding itself is unchanged. Needs a VibeServer updated to this beta; in the app and on the web page.' },
   // ★★ V12 beta95 2026-11-26 — THE 11.0.17 iPHONE DUO WORK, PORTED (b95-duo), and the FM-DX screen on the Duo (never checked
   //    for 11.0.17). Locations checked against the code: the reach key sits between the drums (ControlsBar reachToggle);
   //    the Servers tab tucks to the left edge (ServersChip); BIG half-open = two panels (DecoderShell lower).
