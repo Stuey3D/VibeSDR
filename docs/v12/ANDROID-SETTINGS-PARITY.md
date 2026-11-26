@@ -91,6 +91,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Setup page | Why not on Android |
 |---|---|
 | Sign-in, first-run claim | the screen is on the device itself |
+| One-time setup code sign-in, its first admin password, Finish / remote access (beta96) | the page's door for setting a TV or phone up from another device; on the device itself the screen is the setup |
 | Pocket Wi-Fi, hotspot, SSH, Wi-Fi country | Android owns its network |
 | CPU governor | an app cannot set one |
 | Server port | the phone takes the first free port of 48000–48049 |
