@@ -2929,13 +2929,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (conn && satRemRef.current.nextIn(now, lead) < 40 && now - satRemListAt.current > 30) {
         satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
       }
+      satSchedTickRef.current(now, conn);   // ★★★ beta96 the schedule's second FIRST (it may add banners to satToastsRef)
       let ts = satToastsRef.current;
       // ★★ beta94 (Stuart 11-25) SHOW filters the LIST only: a reminder set on a pass always fires, even one SHOW now hides
       for (const r of satRemRef.current.due(now, lead, conn)) {
         ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
       }
-      satSchedTickRef.current(now, conn);   // ★★★ beta96 the schedule's second (it may add banners: read them back)
-      ts = satToastsRef.current === ts ? ts : satToastsRef.current;
       ts = ts.filter((x) => now < x.r.los);   // ★ a pass that is over takes its banner with it
       satSetToasts(ts);
       setSatRemN(satRemRef.current.size);
