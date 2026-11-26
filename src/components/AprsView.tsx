@@ -32,16 +32,20 @@ export interface AprsViewProps {
   onMap: ((key: string) => void) | null;
   scrollRef?: React.RefObject<ScrollView | null>;
   onScrollY?: (y: number) => void;
+  /** ★★ beta96 iPhone Duo half-open BIG: 'upper' = the stations (the pad's rows), 'lower' = MESSAGES, PACKETS and FRAMES
+   *  — each panel its own scroll. Absent = all of it, as always. */
+  part?: 'upper' | 'lower';
 }
 
-export default function AprsView({ rows, messages, log, baud, frames = [], idle, bodySize, focusIdx, onMap, scrollRef, onScrollY }: AprsViewProps) {
+export default function AprsView({ rows, messages, log, baud, frames = [], idle, bodySize, focusIdx, onMap, scrollRef, onScrollY, part }: AprsViewProps) {
+  const showRows = part !== 'lower', showLog = part !== 'upper';
   const tk = useDecoderTokens();
   const s = useDecoderStyles(makeS);
   const own = useRef<ScrollView | null>(null);
   const sv = scrollRef ?? own;
   const rowY = useRef<number[]>([]);
   useEffect(() => {
-    if (focusIdx < 0) return;
+    if (focusIdx < 0 || !showRows) return;   // ★ the station rows are the pad's; the lower panel has none
     const y = rowY.current[focusIdx];
     if (y == null) return;
     try { sv.current?.scrollTo({ y: Math.max(0, y - 40), animated: false }); } catch { /* detached */ }
@@ -52,12 +56,12 @@ export default function AprsView({ rows, messages, log, baud, frames = [], idle,
     <ScrollView ref={sv as any} style={[s.body, bodySize]} contentContainerStyle={[s.content, scrollLane]}
                 showsVerticalScrollIndicator scrollEventThrottle={32}
                 onScroll={(e) => onScrollY?.(e.nativeEvent.contentOffset.y)}>
-      {!rows.length && (
+      {showRows && !rows.length && (
         <Text style={[s.idle, { color: tk.muted }]}>
           {`listening — ${idle ?? (baud === 300 ? 'HF packet, 300 Bd' : 'APRS, 1200 Bd')}; stations appear with their first packet`}
         </Text>
       )}
-      {rows.map((r, i) => {
+      {showRows && rows.map((r, i) => {
         const body = (
           <>
             <View style={s.line}>
@@ -78,21 +82,21 @@ export default function AprsView({ rows, messages, log, baud, frames = [], idle,
             onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}>{body}</View>
         );
       })}
-      {messages.length > 0 && (
+      {showLog && messages.length > 0 && (
         <View style={[s.head, { borderBottomColor: tk.divider }]}><Text style={[s.headTxt, { color: tk.label }]}>MESSAGES</Text></View>
       )}
-      {messages.map((m, i) => <Text key={i} style={[s.msg, { color: tk.value }]} selectable>{m}</Text>)}
-      <View style={[s.head, { borderBottomColor: tk.divider }]}><Text style={[s.headTxt, { color: tk.label }]}>PACKETS</Text></View>
-      {!log.length && <Text style={[s.idle, { color: tk.muted }]}>no packets yet</Text>}
-      {log.slice(0, 40).map((p, i) => (
+      {showLog && messages.map((m, i) => <Text key={i} style={[s.msg, { color: tk.value }]} selectable>{m}</Text>)}
+      {showLog && <View style={[s.head, { borderBottomColor: tk.divider }]}><Text style={[s.headTxt, { color: tk.label }]}>PACKETS</Text></View>}
+      {showLog && !log.length && <Text style={[s.idle, { color: tk.muted }]}>no packets yet</Text>}
+      {showLog && log.slice(0, 40).map((p, i) => (
         <Text key={`${p.t}-${i}`} style={[s.pk, { color: tk.value }]} selectable>
           <Text style={{ color: tk.muted }}>{aprsLogTime(p.t)} </Text>{p.line}
         </Text>
       ))}
-      {frames.length > 0 && (
+      {showLog && frames.length > 0 && (
         <View style={[s.head, { borderBottomColor: tk.divider }]}><Text style={[s.headTxt, { color: tk.label }]}>FRAMES</Text></View>
       )}
-      {frames.slice(0, 30).map(({ f, t }, i) => (
+      {showLog && frames.slice(0, 30).map(({ f, t }, i) => (
         <View key={`${t}-${i}`} style={s.fr}>
           <Text style={[s.pk, { color: tk.value }]} selectable>
             <Text style={{ color: tk.muted }}>{aprsLogTime(t)} </Text>{packetFrameHead(f)}
