@@ -25,6 +25,7 @@ const typical: Record<SnrMode, { good: number; edge: number; some: number }> = {
   hfdl600: { good: 12, edge: 3, some: 6 },
   hfdl1200: { good: 14, edge: 4, some: 8 },
   hfdl1800: { good: 16, edge: 7, some: 11 },
+  orbcomm: { good: 14, edge: 6, some: 9 },        // FM116 live 11-24: 12–14 dB carriers
 };
 for (const k of Object.keys(SNR_SCALES) as SnrMode[]) {
   const t = typical[k];

@@ -66,6 +66,9 @@ export const SNR_SCALES = {
   hfdl600: { thr: 2.5, what: 'the HFDL equaliser’s SNR (600 bit/s)', src: 'test-hfdl --sens 1: 20 % at −6 dB (2.0), all at −4 (3.2)' },
   hfdl1200: { thr: 4, what: 'the HFDL equaliser’s SNR (1200 bit/s)', src: 'test-hfdl --sens 2: none at −4 dB, all at −2 (4.2)' },
   hfdl1800: { thr: 7, what: 'the HFDL equaliser’s SNR (1800 bit/s)', src: 'test-hfdl --sens 3: none at 0 dB, 9/10 at +2 (7.1)' },
+  /** ORBCOMM: the carrier's M2M4 estimate, Es/N0 (vibe_orbcomm.h snrDb) — reads the transmitted Es/N0 to 0.1 dB. */
+  orbcomm: { thr: 5.5, what: 'Es/N0 of the satellite carrier (M2M4 estimate)',
+             src: 'test-orbcomm: 69 % of packets at Es/N0 6 dB (reported 6.0), 93 % at 8; ORBCOMM.md: 50 % at ~6' },
 } satisfies Record<string, SnrScale>;
 export type SnrMode = keyof typeof SNR_SCALES;
 

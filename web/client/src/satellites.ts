@@ -20,6 +20,7 @@
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
+import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per packet
 import {
   GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeGlyph, globeLayers, satReadoutLayout, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead,
   satRemindText, satRemindWhy, satTelemetryAbsentText, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
@@ -1134,7 +1135,7 @@ export class SatPanel {
       }
     }
     const pk = `<div class="sat-pkh">RECENT PACKETS</div><div class="sat-pks">`
-      + (v?.pkts.length ? v.pkts.slice(0, 20).map((k) => `<div>${esc(orbPktLine(k))}</div>` + (k.raw && k.hex ? `<div class="sat-hex">${esc(k.hex)}</div>` : '')).join('')
+      + (v?.pkts.length ? v.pkts.slice(0, 20).map((k) => `<div>${esc(orbPktLine(k))}${snrChipHtml('orbcomm', k.snr)}</div>` + (k.raw && k.hex ? `<div class="sat-hex">${esc(k.hex)}</div>` : '')).join('')
         : `<div class="sat-dim">no packets yet</div>`) + `</div>`;
     if (pk !== this.oPkKey) { this.oPkKey = pk; this.oPk.innerHTML = pk; }
   }

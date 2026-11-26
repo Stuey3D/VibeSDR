@@ -34,6 +34,7 @@ import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
 import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky plot
+import { SnrChip } from './SnrChip';   // ★ beta96 the colour-coded SNR per packet
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFollowText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
          type OrbFollow, type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
@@ -674,7 +675,11 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <Text style={[s.detailNp, s.orbHead]}>RECENT PACKETS</Text>
                   {p.orbcomm?.pkts.length ? p.orbcomm.pkts.slice(0, 20).map((k, i) => (
                     <View key={`${k.t}.${i}`}>
-                      <Text style={s.mono} numberOfLines={2}>{orbPktLine(k)}</Text>
+                      {/* ★ beta96 the packet's SNR (Es/N0), colour-coded by its margin over ORBCOMM's threshold */}
+                      <View style={s.orbPktRow}>
+                        <Text style={[s.mono, s.orbPktTxt]} numberOfLines={2}>{orbPktLine(k)}</Text>
+                        <SnrChip mode="orbcomm" db={k.snr} />
+                      </View>
                       {k.raw && !!orbPktHex(k) && <Text style={[s.mono, s.hex]} selectable>{orbPktHex(k)}</Text>}
                     </View>
                   )) : <Text style={s.detailNp}>no packets yet</Text>}
@@ -894,6 +899,8 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   orbHeld: { opacity: 0.5 },
   orbSky:  { marginVertical: 4, gap: 2 },
   orbHead: { letterSpacing: 1, marginTop: 4 },
+  orbPktRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  orbPktTxt: { flex: 1, minWidth: 0 },
   hex:     { color: T.muted, paddingLeft: 10 },
   center:  { textAlign: 'center' },
   leadRowNp:{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingVertical: 4 },

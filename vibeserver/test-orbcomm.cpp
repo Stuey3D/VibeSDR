@@ -4,6 +4,7 @@
 // Silent (no audio). Run: scripts/run-tests.sh (VIBE_TESTS="test-orbcomm").
 #include "vibe_orbcomm_tx.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -98,13 +99,22 @@ static void testReceiver(bool quick) {
         { -47500, 0, 0, 25, n * 3 / 4, "−47.5 kHz in the slice" },
         { 61234, -35, 40, 18, n * 7 / 10, "+61 kHz, −35 Hz/s Doppler, 40 ppm clock, 18 dB" },
         { -12000, 30, -60, 12, n * 6 / 10, "12 dB, +30 Hz/s, −60 ppm" },
+        // ★ beta96 the message-SNR threshold (docs/v12/MESSAGE-SNR.md): printed, not held to a count
+        { 15000, 0, 0, 8, 0, "8 dB (the SNR table)" },
+        { 15000, 0, 0, 6, 0, "6 dB (the SNR table: ~50 % in ORBCOMM.md)" },
     };
     for (const Case& c : cs) {
         tx::Signal s; s.fs = fs; s.offsetHz = c.off; s.slopeHzS = c.slope; s.clockPpm = c.ppm; s.esn0Db = c.esn0; s.seed = unsigned(c.off + 1000);
         auto x = tx::modulate(bytes, s);
         Got g = run(x, fs);
         int sync = g.types[kSync], eph = g.types[kEphemeris];
-        std::printf("   %-48s ok %d (of ~%d) bad %d repaired %d · sync %d eph %d\n", c.what, g.ok, n, g.bad, g.repaired, sync, eph);
+        std::vector<double> sn; for (auto& r : g.rx) if (r.p.ok) sn.push_back(r.snrDb);
+        std::sort(sn.begin(), sn.end());
+        const double med = sn.empty() ? -99 : sn[sn.size() / 2];
+        std::printf("   %-48s ok %d (of ~%d) bad %d repaired %d · sync %d eph %d · reported SNR %.1f dB\n", c.what, g.ok, n, g.bad, g.repaired, sync, eph, med);
+        if (c.minOk == 0) continue;
+        // ★ beta96 the packet's reported SNR (the carrier's M2M4 estimate, Es/N0) is honest: within 3 dB of the transmitted
+        if (c.esn0 <= 18) CHECK(std::fabs(med - c.esn0) <= 3.0, "%s: reported SNR %.1f dB", c.what, med);
         CHECK(g.ok >= c.minOk, "%s: %d good packets (want ≥ %d)", c.what, g.ok, c.minOk);
         CHECK(sync >= 3 && eph >= 1, "%s: sync %d, ephemeris %d", c.what, sync, eph);
         bool rfOk = false;
