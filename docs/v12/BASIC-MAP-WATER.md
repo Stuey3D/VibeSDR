@@ -65,7 +65,9 @@ passed, 0 failed** — a new fetch test of the server's `/mapgl/vibemap-basic.pm
 `Content-Range …/18177938`, HEAD length), the three old phases, and two new ones: **app range path** (261 reads, 1.46 MB
 for every sample) and **app range path + detail** (387 reads, 2.08 MB) — every water/land point the same as the server's
 map. `MEASURE_MEM=1 … test-server-map-water-nl.mjs`: 5/0. `check-map-overlay.mjs`: all checks passed. Lite
-`assembleDebug` (release needs the rotation keys) built; app `assembleCurrentRelease` built with a throwaway
+`assembleDebug -x bundleJs` built (release needs the rotation keys; Lite's Metro cannot resolve through a worktree's
+symlinked node_modules, and the JS bundle does not touch the map): 73.5 MB, `assets/mapgl/` once, no `res/` map copies,
+the new `vibemapgl.js` inside; app `assembleCurrentRelease` built with a throwaway
 keystore.properties pointing at the debug key (deleted after).
 
 **Open (one line each):**
