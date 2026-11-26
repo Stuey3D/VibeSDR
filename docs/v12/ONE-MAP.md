@@ -245,8 +245,22 @@ live (`slot('top' | 'head' | 'over')`); `adsbChromePark` puts it back. The app's
 - ✓ Focus on the item it was opened for (DSC call, gallery row)
 
 ### NDB / VOR maps
-- ☐ NDB: beacons at published positions, 3-bar meter, Find, stats, owner confirm (NdbLiveList); EXIT NDB — NOT YET (see
-  RESUME HERE: it has its own layer, ndblayer.js, and its own view / list / dialogs on both clients)
+- ✓ NDB (stage 8, web + app): NDB is a live state of the AIR & SEA map; `#ndbView` / the app's 'ndb' page are retired.
+  - web: `ndb.ts NdbView.mount(asView)` moves NDB's pieces into the map's slots — RINGS · UNHEARD in the top bar, the tiles,
+    HEARD LOG · FIND NDB · STATS and the beacon list (`#ndbList`, the readings streaming per row) under the NAVAIDS tab's
+    header (`setTab`: hidden on the other tabs), the card over the map — and `park()` puts them back in `#ndbView` (never
+    shown now). `NdbMap.openOn` makes `ndblayer.js` on the map's OWN map (`TrackView.whenMap`, gone with it); its new host
+    options: `autoFit:false` (the map's FIT frames the beacons through `TrackView.morePoints`), `drawReceiver:false` (the
+    track layer's house), `yieldClick` (an aircraft under the press wins — §5b). The NDB chip hides the beacons (the list
+    stays — it is the mode's). KEY: `NDB_LEGEND`. EXIT NDB → `asExit` → `ndbSetMode(false)`. test-web-ndb 32/0.
+  - app: `shownMapOf` ndbView → 'airsea'; `airSeaMode` 'ndb' (EXIT NDB, NAVAIDS, the chip `ndbChip`, status `ndbStatText`);
+    the 'airsea' page loads NDB_LAYER_JS, `__ndbPush` makes the layer (autoFit:false, drawReceiver:false, `acLayer.pickAt`
+    first), `__ndbOff` when NDB ends; the page auto fit's points include `ndbLayer.points()`. `NdbLiveList` → `useNdbBody`,
+    the NAVAIDS tab's body inside TrackLiveList (`ndb` prop): tiles, RINGS · UNHEARD · HEARD LOG · FIND NDB · STATS, rows,
+    the card, the dialogs (an open dialog takes the pad). The RN FIT chip is gone (the page's FIT). test_ndb_app 204/0,
+    test_map_page_kind 72/0, test_map_autofit 64/0. ◐ not run on a device.
+  - Fixed on the way: the app 'airsea' page's ⓘ legend was the SPOTS map's (BAND COLOUR). It is now aviation + maritime,
+    with NDB / VOR / SONDES sections shown only while that layer is live (`.lgLive`, `legShow`) — the app KEY's VOR row.
 - ◐ VOR (stage 8): radials, FIX crosshair + words (heading the NAVAIDS list), NAVAIDS tab, KEY (VORMAP_LEGEND), EXIT VOR MAP
   — web asRender (`vor:` keys) and app airSeaTrk; test_vormap_app 52/0 (wiring). No browser test of the VOR map exists
   (test-server-vormap is the server's). The app's KEY on the 'airsea' page has no VOR row yet.
@@ -254,7 +268,8 @@ live (`slot('top' | 'head' | 'over')`); `adsbChromePark` puts it back. The app's
 ### Radiosondes
 - ✓ (stage 8) Sondes at last position, a chosen sonde's track (from the report), band control, EXIT SONDES, on the AIR & SEA
   map under WEATHER ALOFT — web test-web-sondes 22/0; app airSeaTrk (`sd:` keys), test_sondes_app ok. ◐ app not run on a device.
-- ☐ Stored sondes (from the gallery) when SONDES is not the mode: not drawn yet (only live)
+- ☐ Stored sondes (from the gallery) when SONDES is not the mode: not drawn yet (only live) — no gallery reader for sonde
+  positions exists yet (the ISM nodes' card parser is the pattern: `ismNodesParse`)
 
 ### AMATEUR (the DIGI MODES MAP grown; web popup window `spotsMapHtml`, app MapOverlay 'digi')
 ★★★ Stuart 11-26 (via the coordinator): the AMATEUR map shows ANY spot in the window its filter picks (HEARD IN / age keys)
@@ -263,14 +278,26 @@ only what the current mode decodes; the live layer is only emphasised. The stati
 (`vibe_station_store.h` origin kBackground / kLive, `src` in stations.json); test-station-store now proves it: one background
 FT8 spot and one listener CW skimmer spot both in 1 h, both gone two hours later, both in 24 h (150/0). The map's other
 sources (APRS box stations, mesh nodes, NCDXF) must follow the same window when they become layers.
-- ☐ SPOTS from the station store (1H/24H/7D/30D/ALL) + live, coloured by mode, MODE filter + legend (this server's modes)
-- ☐ Stats panel (range / countries / bands / modes), totals, radio filter (2+ radios), FIT/AUTO
-- ☐ APRS layer (the box's stations), focus a station
-- ☐ Satellite pass overlay (digiOverlay)
-- ☐ MESH layer (ISM nodes + the remembered ones, gallery node cards)
-- ☐ CW / RTTY skimmer spots (already in the station store, by mode family)
-- ☐ NCDXF BEACONS layer
-- ☐ Tabs SPOTS / APRS / MESH / BEACONS
+Stage 7 (`src/utils/amateurMap.ts` — one rule for the web window, the app page and the tests: `amKeep` / `AMATEUR_JS`):
+- ✓ SPOTS from the station store (1H/24H/7D/30D/ALL) + live, coloured by mode, MODE filter + legend — unchanged; a stored
+  station now also leaves at once when it ages out of a sliding window (web `mergeSpots` → `amKeep`)
+- ✓ Stats panel (range / countries / bands / modes), TOTALS incl. the APRS line (now the window's APRS), radio filter, FIT/AUTO
+  — unchanged (DIGI_STATS_JS); FIT frames MESH and BEACONS too
+- ✓ ★ Stuart's window rule: APRS, MESH and BEACONS follow the SAME HEARD IN window as the spots, whoever heard them (web
+  `aprsIn` / `meshIn` / `beaconsIn`; app `amWin()` from the age keys). Tests: test_amateur_map 146/0 (the rule, the page text =
+  TS, a background src-1 and a listener src-2 spot in 1 H / gone 2 h later / back in 24 H, the same for APRS, MESH, BEACONS);
+  test-web-ais-aprs 38/0 drives it in the real window (two stored stations, src 1 and 2, and the APRS stations).
+- ✓ The LIVE layer (`amLiveOf`: the spots box / CW / PSK / RTTY → SPOTS, APRS box → APRS, ISM mode → MESH, NCDXF → BEACONS):
+  its key first with a red dot (web `#layers .live`; app "● " on its key). Only emphasised — every layer stays shown.
+- ✓ MESH layer (web + app): ISM's live report + the remembered nodes (`ismStored` — this band's last 24 h), `amMeshPoints`
+- ✓ NCDXF BEACONS layer (web + app): the tracker's report, beacons heard on any band at their sites, a line from the receiver
+- ✓ (web) Tabs SPOTS / APRS / MESH / BEACONS — the list in the window's corner (`#amList`, `amList()`), rows capped 300, each
+  spot row saying who heard it (the store's `src`: background decoding / a listener's decoder); a row centres its station
+- ☐ (app) the tabs: the app page has the MESH / BEACONS keys but no list yet. The right shape is TrackLiveList's tabs over the
+  'digi' page (RN-drawn, so the pad reaches it) — the in-page HTML list the web uses would be touch-only
+- ☐ Satellite pass overlay (digiOverlay) — unchanged, still drawn (not re-tested this stage)
+- ✓ Titles: AMATEUR MAP (web window and app page, `storeWindows`); VIEWS' key reads AMATEUR (web `#mapBtn`, app mapLabel)
+- ◐ The web map stays a WINDOW (not moved into the page as a TrackView) — see Decisions
 
 ## STAGING (the order of the build, each stage committed and mergeable)
 
@@ -293,56 +320,33 @@ sources (APRS box stations, mesh nodes, NCDXF) must follow the same window when 
 
 ## RESUME HERE
 
-**State 2026-11-26 late (branch `b96-onemap`, b96-integrate merged in again at fd34f605d, not pushed).** Stages 6, 8 (SONDES + VOR) and the Leaflet polish done this session; NDB and stage 7 not started.
+**State 2026-11-26 night (branch `b96-onemap`, b96-integrate merged in again incl. b96-basicrivers, not pushed).** Stage 8 is
+complete (NDB done, web + app); stage 7 (AMATEUR) is done on the web and in part in the app; step 3 (stored sondes / VOR
+from the gallery) not started — the app KEY's VOR row is done (the 'airsea' legend's live sections).
 
 | Stage | State | Where |
 |---|---|---|
-| 1 rules | ✓ `test_live_maps` 63/0 | `src/services/liveMaps.ts`, `scripts/test_live_maps.ts` |
-| 2 TrackView | ✓ chrome, tabs, sort, filter, grouped chips + LIVE, ranges, camera, mixed, onSel; beta96 stage 4 adds `slot()`, `liveIds`, the press remembered across a redraw, the pad highlight / focus kept, the phone top bar scrolling (`.scr`) | `web/client/src/tracks.ts` |
-| 2b basemap | ✓ `airsea` / `airsea-plain` | `web/mapkit/vibemap-style.json`, `vibemap.js` |
-| 3 web AIR & SEA | ✓ one `asView` | `web/client/src/main.ts` (`asOpen`, `asRender`, `asMode`, `asExit`) |
-| 5b click order | ✓ GPU and (now) the Leaflet fallback (`pickAt`) | `adsblayer.js`, `tracklayer.js` |
-| 5c range shape | ✓ `rangeShape` | `adsblayer.js` |
-| merge b96-integrate | ✓ `shownMapOf` → 'airsea' for AIS / NAVTEX-shipping MAP / aviation MAP (DSC its own, ADS-B its own until stage 6), page-id-per-kind + wholeMapYield kept; SEA AREAS default = coastal AND maritime here | `src/utils/mapPage.ts`, `scripts/test_map_page_kind.ts` 57/0 |
-| 4 web ADS-B → AIR & SEA | ✓ `#adsbView` + `AdsbMap` retired | `main.ts` `adsbUiOn`/`adsbUiOff`, `adsbChromeMount`/`adsbChromePark`, `asRender` (live `_adsb` items, `adsbListHtml(…,'adsb:')`), `index.html #adsbChrome` |
-| 5 app AIR & SEA | ✓ built, tsc clean, **not run on a device** | `MapOverlay.tsx` 'airsea', `TrackLiveList.tsx`, `SDRScreen.tsx` `airSeaTrk` |
-| copy | ✓ About beta96 note (+ web ADS-B, + the range shape), web tutorial (ADS-B opens the same map) | |
-| 6 app ADS-B → 'airsea' | ✓ built, tsc clean, test_map_page_kind 72/0, **not run on a device**; kind 'adsb' retired | `SDRScreen` `adsbLiveHere` / `airSeaTrk`, `MapOverlay` 'airsea' (+ capwarn / feedwarn, ADS-B prefs, obstacle), `TrackLiveList` `adsb`, `AdsbLiveList.useAdsbBody` |
-| 8 NDB / VOR / SONDES live states | ◐ SONDES + VOR MAP done (web + app); **NDB not started** | web `sdUiOn`/`vmUiOn` → `asOpen`, `asRender`; app `airSeaTrk`, `shownMapOf` |
-| polish (Leaflet) | ✓ the ADS-B card kept inside the map (sideways, clear of the zoom keys, never taller than the room above the aircraft); a pixel-ratio change redraws the Leaflet canvas | `adsblayer.js llClamp`, `dprWatch` |
-| 7 AMATEUR map | ☐ NOT STARTED | |
-
-**Fixed on the way (this session):** the UK declutter "regression" was the auto fit: on the AIR & SEA map it is poked on
-every feed, so a ROW chosen flew in and the next tick glided straight back out (the declutter was measured mid-glide). A
-row chosen now pauses it (mapAutoFit's own documented rule; the app already did). FIT resumes it with a glide.
+| 1 rules | ✓ `test_live_maps` 63/0 | `src/services/liveMaps.ts` |
+| 2 TrackView | ✓ + beta96 stage 8: `whenMap(cb)`, `morePoints`, `pickAircraft`, `pokeFit` / `pauseFit` (a host layer on the map) | `web/client/src/tracks.ts` |
+| 3/4 web AIR & SEA (+ ADS-B) | ✓ | `main.ts` `asOpen` / `asRender` / `asExit` |
+| 5/6 app AIR & SEA (+ ADS-B) | ✓ built, **not run on a device** | `MapOverlay.tsx` 'airsea', `SDRScreen` `airSeaTrk` |
+| 8 SONDES · VOR · NDB | ✓ web + app (NDB this session — see the checklist) | web `ndbUiOn` → `asOpen`, `NdbView.mount`; app `airSeaMode` 'ndb', `useNdbBody` |
+| 7 AMATEUR | ✓ web (layers, window rule, live, tabs, title); ◐ app (MESH / BEACONS keys, window rule, title — no tabs) | `src/utils/amateurMap.ts`, `main.ts spotsMapHtml`, `MapOverlay` 'digi' |
+| copy | ✓ About beta96 (AIR & SEA + SONDES / VOR / NDB; THE AMATEUR MAP), web tutorial, the app's MODE tour card, VIEWS → AMATEUR | |
 
 **Next, in order:**
-1. ✓ Stage 6 (app) — done (see the table). Copy: the app's MODE tour card (sdrTour: ADS-B opens the same map, its list
-   and GAIN key) and the About beta96 note ("on the web page and in the app").
-2. Stage 8: ✓ SONDES and VOR MAP. ☐ NDB: the plan — TrackView exposes its map (a `whenMap(cb)` hook giving the VibeMapGL
-   instance or the Leaflet map); `NdbMap.openOn(handle, …)` makes the ndblayer on it (no map of its own; close() leaves the
-   host map); NdbView's keys (RINGS · UNHEARD · FIT · the count) go into `asView.slot('top')`, its HEARD LOG / FIND NDB /
-   STATS and its row list (meters) into the NAVAIDS tab (`slot('head')`, the rows area hidden while NDB's list shows), its
-   card and dialogs into `slot('over')`; asMode already says 'ndb'; asExit → ndbSetMode(false). The camera: the ndblayer's
-   own auto fit while NDB is live (setCamera needs a third owner). App: the 'airsea' page loads NDB_LAYER_JS, __ndbPush etc.
-   move into the track block on GLVM||map, NdbLiveList is the NAVAIDS tab's body (as useAdsbBody). test-web-ndb and
-   test_ndb_app must follow. Stored VOR / sondes / NDB from the gallery when not live: not drawn yet.
-3. Stage 7: AMATEUR (spots map grown: MESH, BEACONS, tabs SPOTS / APRS / MESH; CW/RTTY skimmer families) — with
-   Stuart's window rule above (ANY spot in the HEARD IN window, background and listeners alike; the store test proves the
-   store side). Not started.
-4. A device run of the app's 'airsea' page (AIS → exit → ADS-B and back, ADS-B's GAIN key and list, SONDES and VOR MAP,
-   DATALINK MAP, NAVTEX MAP, 4" phone, the Duo).
-5. ✓ Polish (Leaflet): done (c4053a924).
-6. The scratch clips in the session scratchpad (vdl2, adsb-syn, ais, aprs, rs41) stay until every stage is done.
+1. App AMATEUR tabs: TrackLiveList (tabs SPOTS / APRS / MESH / BEACONS) over the 'digi' page, rows from SDRScreen's
+   `digiSpots` / `digiAprs` / `amateur` through `amKeep` with the page's window (`digiWin`), a row → `__digiFocus`-style
+   injection. Mind the corner: the phone's SUMMARY strip / STATS sheet are bottom-left (DigiMapKeys).
+2. Step 3: stored sondes and VOR stations from the gallery when the mode is not running (needs a reader of their gallery
+   cards, as `ismNodesParse` is for ISM).
+3. A device run of the app's 'airsea' page: NDB (NAVAIDS body, dialogs with a pad, the chip), AIS → exit → ADS-B and back,
+   SONDES, VOR MAP, DATALINK MAP, NAVTEX MAP, the ⓘ legend's live sections; the AMATEUR map's MESH / BEACONS keys. 4" phone, Duo.
+4. The scratch clips in the session scratchpad are deleted (this session's end).
 
-**Tested how (this Mac, headless Edge `--mute-audio`, a server built from this worktree via the build lock; synthetic
-clips and fixtures only, nothing on air):** see the end-of-session numbers in the commit messages; the stage-4 run:
-`test-web-avmap` (with its new ADS-B-mode section on radio A), `test-web-avdata`, `test-web-navtex-map`,
-`test-web-shipping-map` (42/1: Humber's arrow, failing on v12-experimental too), `test-web-ais-aprs`, `test-web-only-mode`,
-`test-web-adsb-range` 37/0, `test_adsb_layer` 202/0, `test-only-mode-clients` 96/0, `test_map_page_kind` 57/0, and the
-unit map suites (test_live_maps 63/0, test_aviation_map 92/0, test_shipping_map 57/0, test_navtex_map 73/0,
-test_sea_areas 77/0, test_ais_aprs_app 181/0, test_aviation_app, test_nav_coverage, test_map_autofit 64/0,
-check-map-overlay). `tsc` (4 GB): only the 45 existing node-type errors under scripts/ and handheld-ui/test.
+**Tested how (this Mac, headless Edge `--mute-audio`, a server built from this worktree via the build lock; synthetic clips
+and fixtures only, nothing on air):** see the commit messages for each stage's numbers; the last full run is in the report.
+`tsc` (4 GB): only the 45 existing errors under scripts/ and handheld-ui/test.
 
 ## Decisions for Stuart
 - The datalink list's THIS RADIO / OTHER SOURCES sections were replaced by the MESSAGES tab and source badges. Keep it that way?
@@ -352,3 +356,8 @@ check-map-overlay). `tsc` (4 GB): only the 45 existing node-type errors under sc
 - VIEWS keeps both AVIATION and SHIPPING (each opens the one map on its tab). Merge them into one AIR & SEA key?
 - Web ADS-B mode is now the AIR & SEA map (its AVIATION MAP key is gone: the other sources are on it). Its list keeps ADS-B's own order (emergencies, military, nearest) with no NEAREST | LATEST chip. OK?
 - The range outline's spread: ±8° (as asked) leaves petals around a lone far aircraft; spread until the taper meets the core (triangles, range implied ±25°)?
+- NDB on the AIR & SEA map lost its own FIT key: the map's FIT frames the beacons (and the other layers). OK?
+- The NDB chip off hides the beacons but keeps the NDB list (it is the mode's). OK?
+- The web AMATEUR map stays a separate WINDOW (as the digi modes map was) rather than moving into the page as a TrackView. OK, or move it?
+- The AMATEUR map now opens with EVERY layer on (spots, APRS, MESH, BEACONS — each only where it has something in the window); before, APRS was off when opened on the spots and vice versa. OK?
+- MESH on the amateur map is ISM's live nodes plus the remembered ones of the band ISM last used (`ismStored`) — other bands' remembered nodes need ISM to visit them. Load every band's?
