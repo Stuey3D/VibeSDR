@@ -148,6 +148,14 @@
    "airports-6"
   ],
   "vibesdr:basicOnlyNote": "Without the optional detail pack every 'detail' layer is dropped and these basic layers lose their maxzoom, so the basic data carries on over-zoomed rather than leaving a hole.",
+  "vibesdr:basicOnlyZ5": [
+   "lakes-b",
+   "rivers-b",
+   "islands",
+   "reefs",
+   "playas"
+  ],
+  "vibesdr:basicOnlyZ5Note": "These read tier1 data the basic pack holds for z4-5 only (gen-map-tiles TIER_STEP: the detail pack takes over at z6), while the basic source runs to z6. Without the detail pack they are moved to a second source on the same pack capped at maxzoom 5 (vs-basic-z5, the id the directory's own stopgap in vibemap-water.js checks for, so it stands down), so the z5 tiles over-zoom to every zoom above instead of the empty z6 ones: the IJsselmeer and every other lake stay water from z6 up (Stuart 11-26).",
   "vibesdr:textScale": 1.2
  },
  "glyphs": "GLYPHS_URL",
