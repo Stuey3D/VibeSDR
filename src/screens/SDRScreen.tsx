@@ -269,7 +269,8 @@ import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
-         askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, type DialState } from '../services/dialChat';
+         askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, mapSharedLine, type DialState } from '../services/dialChat';
+import { airSeaTuneRows, airSeaTuneChip } from '../services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE chip
 import { pickChatLanguage } from '../services/chatLangNative';
 import { shareFromBookmark, shareSummary, parseShared, sharedStationText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
@@ -2797,7 +2798,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const sdUiOff = useCallback(() => { sdOnRef.current = false; setSdOn(false); setSdReport(null); setSdBoxOpen(false); setSdMapOpen(false); setSdError(undefined); }, []);
   /* ★★ V12 THE VOR / ILS MAP (docs/v12/VOR-MAP.md) — NDB's rules, the sondes' map: the mode IS its map (MapOverlay 'vormap',
    *  the shared track layer). None on the Apple TV (no maps there), as NDB. */
-  const [vmCap, setVmCap] = useState<{ ok: boolean; why: string; wins: number; dwell: number } | undefined>(undefined);
+  const [vmCap, setVmCap] = useState<{ ok: boolean; why: string; wins: number; dwell: number; lo?: number; hi?: number } | undefined>(undefined);
   const [vmOn, setVmOn] = useState(false);
   const vmOnRef = useRef(false);
   const [vmReport, setVmReport] = useState<VorMapReport | null>(null);
@@ -12941,6 +12942,91 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAdsbViewOpen(false); setAisViewOpen(false); setAvMapOpen(false); setSdMapOpen(false); setVmMapOpen(false); setNdbViewOpen(false);
     if (navMapOpen) closeNavMap();
   }, [adsbViewOpen, aisViewOpen, sdMapOpen, vmMapOpen, ndbViewOpen, airSeaTrk?.exitLabel, navMapOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta96 (Stuart 11-26) THE SHARED TUNER ON THE FULL-SCREEN MAPS, TUNE, AND AIR & SEA LIVE — the web's mapSharedSync /
+   *  asTuneRows / toggleAirSeaLive. ONE SOURCE: the controls bar's own inputs (sharedDial, dialState, the ask lock, the scan,
+   *  a tuning line in chat) through dialChat.mapSharedLine; the TUNE rows from THIS radio's vibeserver.json (airSeaTune.ts). */
+  const [asViewer, setAsViewer] = useState(false);   // ★ VIEWS' AIR & SEA: the map as a viewer (no TUNE, no shared line)
+  useEffect(() => { if (!airSeaUp) setAsViewer(false); }, [airSeaUp]);
+  const asLastRef = useRef('');
+  useEffect(() => { void AsyncStorage.getItem('lsv_airsea_last').then((v) => { if (v) asLastRef.current = v; }).catch(() => {}); }, []);
+  const asLiveMode = adsbOn ? 'adsb' : avOn ? 'avdata' : vmOn ? 'vormap' : ndbOn ? 'ndb' : aisOn ? 'ais' : sdOn ? 'sondes' : '';
+  useEffect(() => {   // ★ the last air / sea mode used here — AIR & SEA LIVE lands on it
+    const k = asLiveMode === 'ais' ? (aisReport?.combo === 'ais+dsc' ? 'maritime' : 'ais') : asLiveMode === 'avdata' ? 'av' : asLiveMode === 'sondes' ? 'sd' : asLiveMode;
+    if (k && k !== asLastRef.current) { asLastRef.current = k; void AsyncStorage.setItem('lsv_airsea_last', k).catch(() => {}); }
+  }, [asLiveMode, aisReport?.combo]);
+  const asMenuOne = !IS_APPLE_TV && !!(client.current as any)?.isVibe;   // ★ the Mode sheet's AIR & SEA LIVE in place of seven keys
+  const airSeaRows = useMemo(() => (!(client.current as any)?.isVibe || IS_APPLE_TV) ? [] : airSeaTuneRows({
+    adsb: adsbCap ? { ok: adsbCap.ok, why: adsbCap.why ?? '' } : undefined, avdata: avCap, avBands: avCap?.bands, vormap: vmCap, vormapLo: vmCap?.lo, vormapHi: vmCap?.hi,
+    ndb: ndbCap, ndbLo: ndbCap?.lo, ndbHi: ndbCap?.hi, ais: aisCap, aisDsc: !!aisCap?.dsc, sondes: sdCap, sondeBands: sdCap?.bands, only: onlyModeHere || '',
+  }, { mode: asLiveMode as any, avBand: avReport?.band, sdBand: sdReport?.band, aisDsc: aisReport?.combo === 'ais+dsc' }),
+  [adsbCap, avCap, vmCap, ndbCap, aisCap, sdCap, onlyModeHere, asLiveMode, avReport?.band, sdReport?.band, aisReport?.combo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** A TUNE row picked (or AIR & SEA LIVE's landing): the mode, through the Mode sheet's own steps; the ask gate first. */
+  const airSeaTune = useCallback((id: string) => {
+    markInteract();
+    if (askGate()) return;
+    satModeOff();
+    const c = client.current as any;
+    if (!c) return;
+    if (id === 'adsb') { if (!adsbOnRef.current) toggleAdsb(); return; }
+    if (id === 'ndb') { if (!ndbOnRef.current) toggleNdb(); return; }
+    if (id === 'ais') { if (aisOnRef.current) { if (aisReportRef.current?.combo === 'ais+dsc') { c.ais?.(true); setAisViewOpen(true); } return; } toggleAis(); return; }
+    if (id === 'maritime') { if (aisOnRef.current) { c.ais?.(true, 'ais+dsc'); setAisViewOpen(true); return; } toggleAis('ais+dsc'); return; }
+    const leaveOthers = (k: 'avdata' | 'sondes' | 'vormap') => {
+      if (adsbOnRef.current) adsbUiOff(); if (aisOnRef.current) aisUiOff(); if (ndbOnRef.current) ndbUiOff();
+      if (k !== 'sondes' && sdOnRef.current) sdUiOff(); if (k !== 'vormap' && vmOnRef.current) vmUiOff(); if (k !== 'avdata' && avOnRef.current) avUiOff();
+    };
+    if (id.startsWith('av:')) {
+      const band = id.slice(3) || undefined;
+      if (avOnRef.current) { if (band) c.avdata?.(true, band); return; }
+      leaveOthers('avdata');
+      setAvError(undefined); setAvReport(null); setAvMapFocus('datalink'); setAvMapOpen(true);
+      avOnRef.current = true; setAvOn(true);
+      c.avdata?.(true, band); return;
+    }
+    if (id.startsWith('sd:')) {
+      const band = id.slice(3) || undefined;
+      if (sdOnRef.current) { if (band) c.sondes?.(true, band); return; }
+      leaveOthers('sondes');
+      setSdError(undefined); setSdReport(null); setSdMapOpen(true);
+      sdOnRef.current = true; setSdOn(true);
+      c.sondes?.(true, band); return;
+    }
+    if (id === 'vormap') {
+      if (vmOnRef.current) return;
+      leaveOthers('vormap');
+      setVmReport(null); setVmMapOpen(true);
+      vmOnRef.current = true; setVmOn(true);
+      c.vormap?.(true);
+    }
+  }, [askGate, toggleAdsb, toggleNdb, toggleAis, adsbUiOff, aisUiOff, ndbUiOff, sdUiOff, vmUiOff, avUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const airSeaOn = adsbOn || aisOn || avOn || sdOn || ndbOn || vmOn;
+  /** AIR & SEA LIVE pressed: lit → leave the live air / sea mode (each EXIT's own rules); off → the last one used here, else
+   *  ADS-B, else the first reachable (the TUNE rows — this radio's, with the cover rule). */
+  const toggleAirSeaLive = useCallback(() => {
+    if (adsbOnRef.current) { if (!adsbViewOpenRef.current) { setAdsbViewOpen(true); return; } exitAdsb(); return; }
+    if (aisOnRef.current) { if (!aisViewOpen) { setAisViewOpen(true); return; } exitAis(); return; }
+    if (sdOnRef.current) { if (!sdMapOpen) { setSdMapOpen(true); return; } exitSondes(); return; }
+    if (vmOnRef.current) { if (!vmMapOpen) { setVmMapOpen(true); return; } exitVormap(); return; }
+    if (ndbOnRef.current) { if (!ndbViewOpen) { setNdbViewOpen(true); return; } exitNdb(); return; }
+    if (avOnRef.current) { if (askGate() || onlyRefuses('avdata')) return; (client.current as any)?.avdata?.(false); avUiOff(); return; }
+    const rows = airSeaRows.filter((r) => !r.why);
+    const last = asLastRef.current;
+    const pick = rows.find((r) => r.id === last || (last === 'av' && r.id.startsWith('av:')) || (last === 'sd' && r.id.startsWith('sd:')))
+      ?? rows.find((r) => r.id === 'adsb') ?? rows[0];
+    if (pick) airSeaTune(pick.id.startsWith('av:') && last === 'av' ? 'av:' : pick.id.startsWith('sd:') && last === 'sd' ? 'sd:' : pick.id);
+  }, [airSeaRows, airSeaTune, exitAdsb, exitAis, exitSondes, exitVormap, exitNdb, aisViewOpen, sdMapOpen, vmMapOpen, ndbViewOpen, askGate, avUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** What the open map's EXIT does: leaves a whole-radio mode (retunes the shared radio) or only puts the map away. */
+  const mapExitMoves = shownMap === 'airsea' ? /^EXIT /.test(airSeaTrk?.exitLabel ?? '') : shownMap === 'ais' || shownMap === 'sondes' || shownMap === 'vormap';
+  const mapLine = useMemo(() => mapSharedLine({
+    shared: !!sharedDial, standalone: shownMap === 'airsea' && asViewer,
+    listeners: dialState?.listeners ?? 0, max: occMaxUsers,
+    ask: dialState?.askFirst ? { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState, askUntil: dialState.askUntil } : null,
+    scanLocked: !!scanLockText, said: scanLockText || bannerSaidShown || null, exitMoves: mapExitMoves,
+  }), [sharedDial, shownMap, asViewer, dialState?.listeners, occMaxUsers, dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil,
+       scanLockText, bannerSaidShown, mapExitMoves, chatLangNow]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const mapTune = shownMap === 'airsea' && !asViewer && airSeaRows.length > 1
+    ? { rows: airSeaRows, chip: airSeaTuneChip(airSeaRows), onPick: airSeaTune, onRefused: (why: string) => appAlert('Not available on this radio', why) } : null;
+  const mapLockWhy = mapLine.show || scanLockText ? mapLine.why : '';
   const closeIsmMap = useCallback(() => {
     if (ismGal) { setIsmGal(null); setGalleryOpen(true); return; }   // ★ back to the gallery it came from
     setIsmMapOpen(false); setIsmFocus('');
@@ -15602,6 +15688,61 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satMapNow = satDec === 'aprs' && satMapOffered(satPickedSat?.tx[satPicked?.tx ?? -1],
     aprsList ? aprsList.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0);
 
+  // ★★★ beta96 the chat drawer, one element: under the receiver screen, or inside the full-screen map (see MapOverlay overlay)
+  const chatDrawerEl = (
+      <PanelBoundary name="Chat" onClose={closeChat} resetKey={chatOpen}>
+      <ChatDrawer
+        visible={chatOpen}
+        messages={chatMessages}
+        myCallsign={myCallsign}
+        onJoin={handleChatJoin}
+        onSend={handleChatSend}
+        onClose={closeChat}
+        onMute={() => setChatMuted((p: boolean) => !p)}
+        muted={chatMuted}
+        users={chatUsers}
+        syncedUser={syncedUser}
+        zoomSync={zoomSync}
+        onToggleSync={toggleUserSync}
+        onToggleZoomSync={() => setZoomSync((p: boolean) => !p)}
+        onUserTap={chatUserTap}
+        textOnly={isOwrx}
+        onChangeName={() => setMyCallsign(null)}
+        // ★★ ONE DRAWER, TWO WAYS OF SPEAKING. A shared-dial VibeServer has no names and no text
+        //    box; everything else about the chat — the transcript, the unread pulse, the open and
+        //    close — is the same component it has always been.
+        canned={sharedDial ? padPhrases(questionOpenUntil > Date.now(), status.frequency) : undefined}
+        onSay={(id: string) => client.current?.say?.(id)}
+        onOpenWiki={(url: string) => { openWebPage(url); }}
+        /* ★ The mode sheet's own rule for which decoders this receiver runs (ModeSelector clientDecs), so DECODE is
+         *  never a dead key. Opening goes through onDecToggle exactly as the sheet does; already open = nothing. */
+        canDecode={(d: string) => {
+          if (blockedModes.has(d)) return false;
+          const ext = srvExtensions;
+          if (!ext || !ext.length) return true;
+          return ext.includes(d === 'rtty' ? 'fsk' : d === 'time' ? 'clock' : d);
+        }}
+        onDecode={(d: string) => {
+          if (activeDecRef.current === d) return;
+          onDecToggle(d as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time');
+        }}
+        dialLine={dialState ? dialSummary(dialState) : undefined}
+        chatLang={chatLangNow}
+        onPickLang={pickChatLanguage}
+        shareEnabled={sharedDial}
+        onPickShare={onPickShare}
+        shareDraft={shareDraft}
+        onClearShareDraft={() => setShareDraft(null)}
+        manualStartHz={dabOn && dabState?.channel ? 0 : status.frequency}
+        manualStartMode={String(status.mode)}
+        onShare={onShare}
+        onShareTune={onShareTune}
+        hiddenUsers={chatHidden}
+        onHideUser={(name: string) => hideChatUser(name, myCallsign)}
+        onShowHidden={showChatHidden}
+      />
+      </PanelBoundary>
+  );
   return (
     <DecoderAvoidContext.Provider value={decoderAvoid}>
     <BoxRectsContext.Provider value={onBoxRects}>
@@ -17727,7 +17868,15 @@ export default function SDRScreen({ route, navigation }: Props) {
            *      lock on a shared radio, a radio that cannot tune there, a capture rate below the mode's — is one a
            *      listener cannot change from this sheet (the owner changes it in Setup); none is a benchmark / load
            *      choice. ON = always drawn, so the mode can always be left. */
-          adsbAvail: adsbCap?.ok === true || adsbOn,
+          /* ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): ONE AIR & SEA LIVE key for ADS-B, the DATALINK, AIS, MARITIME, NDB,
+           *  VOR MAP and SONDES (the map's TUNE chip switches between them) — the separate keys below are then not passed. Not on
+           *  Apple TV (no maps there: its boxes keep their own keys). VIEWS' AIR & SEA beside GALLERY is the viewer. */
+          airSeaAvail: asMenuOne && (airSeaRows.some((r) => !r.why) || airSeaOn),
+          airSeaOn,
+          onAirSea: () => { markInteract(); setModeSelOpen(false); toggleAirSeaLive(); },
+          airSeaViewAvail: asMenuOne && (!!adsbCap?.ok || !!avCap?.ok || hfdlCapable || !!aisCap?.ok || dscCapable || navAvail),
+          onAirSeaView: () => { markInteract(); setModeSelOpen(false); setAsViewer(true); setAvMapFocus(adsbCap?.ok ? 'adsb' : hfdlCapable && !avCap?.ok ? 'hfdl' : 'adsb'); setAvMapOpen(true); },
+          adsbAvail: !asMenuOne && (adsbCap?.ok === true || adsbOn),
           adsbWhy: !adsbOn && adsbCap && !adsbCap.ok ? adsbCap.why : undefined,
           adsbOn,
           onAdsb: () => {
@@ -17749,9 +17898,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           dxLogAvail: dxLogOk && !!(client.current as any)?.isVibe,
           /* ★★★ V12 beta90 VIEWS' AVIATION and SHIPPING keys — only where this server has something for them (a mode it
            *  offers, or NAVTEX stations in its gallery). AVIATION opens the one aircraft map (the source it can hear first). */
-          avMapAvail: !IS_APPLE_TV && !!(client.current as any)?.isVibe && (!!adsbCap?.ok || !!avCap?.ok || hfdlCapable),
+          avMapAvail: !asMenuOne && !IS_APPLE_TV && !!(client.current as any)?.isVibe && (!!adsbCap?.ok || !!avCap?.ok || hfdlCapable),
           onAvMap: () => { markInteract(); setModeSelOpen(false); setAvMapFocus(avOn ? 'datalink' : adsbCap?.ok ? 'adsb' : hfdlCapable && !avCap?.ok ? 'hfdl' : 'adsb'); setAvMapOpen(true); },
-          shipMapAvail: !IS_APPLE_TV && !!(client.current as any)?.isVibe && (!!aisCap?.ok || dscCapable || navAvail),
+          shipMapAvail: !asMenuOne && !IS_APPLE_TV && !!(client.current as any)?.isVibe && (!!aisCap?.ok || dscCapable || navAvail),
           onShipMap: () => { markInteract(); setModeSelOpen(false); openShipMap(aisCap?.ok ? 'ships' : dscCapable ? 'dsc' : 'navtex'); },
           onDxLog: () => { markInteract(); setModeSelOpen(false); setDxLogOpen(true); },
           /* ★★ V12 CW — the server's own decoder and skimmer, only where its vibeserver.json says `"cw": true` (an older
@@ -17770,7 +17919,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           },
           /* ★★ V12 NDB, beside ISM — the same three states (absent / greyed with the server's reason / live); never on Apple
            *  TV, which has no WebView for the map that IS the mode (a key that opened nothing would be a dead control). */
-          ndbAvail: !IS_APPLE_TV && (ndbCap?.ok === true || ndbOn),   // ★ refused = not drawn (see ADS-B above)
+          ndbAvail: !asMenuOne && !IS_APPLE_TV && (ndbCap?.ok === true || ndbOn),   // ★ refused = not drawn (see ADS-B above)
           ndbWhy: !ndbOn && ndbCap && !ndbCap.ok ? ndbCap.why : undefined,
           ndbOn,
           onNdb: () => {
@@ -17851,12 +18000,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDscChan: (ch: { hz: number; vhf: boolean }) => { markInteract(); onDscTune(ch); },
           tunedHz: status.frequency,
           /* ★★ V12 AIS, beside ISM — the same three states; never on Apple TV (no map there: the mode's screen is the map). */
-          aisAvail: !IS_APPLE_TV && (aisCap?.ok === true || aisOn),   // ★ refused = not drawn (see ADS-B above)
+          aisAvail: !asMenuOne && !IS_APPLE_TV && (aisCap?.ok === true || aisOn),   // ★ refused = not drawn (see ADS-B above)
           aisWhy: !aisOn && aisCap && !aisCap.ok ? aisCap.why : undefined,
           aisOn: aisOn && aisReport?.combo !== 'ais+dsc',
           /* ★★★ beta96 MARITIME (AIS + DSC channel 70 from one wide capture) — beside AIS, only where the server offers
            *  `aisDsc` (the capture holds both); absent elsewhere (no dead key). The same AIS mode and map. */
-          marAvail: !IS_APPLE_TV && aisCap?.ok === true && !!aisCap.dsc,
+          marAvail: !asMenuOne && !IS_APPLE_TV && aisCap?.ok === true && !!aisCap.dsc,
           marOn: aisOn && aisReport?.combo === 'ais+dsc',
           onMar: () => {
             markInteract();
@@ -17887,7 +18036,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (satCap && !satCap.ok && !satNeedsPlace(satCap, satOwnHere)) { appAlert('SATELLITE unavailable', satCap.why); return; }
             satEnterRef.current();
           },
-          sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
+          sondesAvail: !asMenuOne && (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
           sondesWhy: !sdOn && sdCap && !sdCap.ok ? sdCap.why : undefined,
           sondesOn: sdOn,
           onSondes: () => {
@@ -17910,7 +18059,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             c.sondes(true);
           },
           /* ★★ V12 THE VOR / ILS MAP — NDB's three states, beside it; none on the Apple TV (no maps there), as NDB. */
-          vormapAvail: (vmCap?.ok === true || vmOn) && !!(client.current as any)?.isVibe && !IS_APPLE_TV,
+          vormapAvail: !asMenuOne && (vmCap?.ok === true || vmOn) && !!(client.current as any)?.isVibe && !IS_APPLE_TV,
           vormapWhy: !vmOn && vmCap && !vmCap.ok ? vmCap.why : undefined,
           vormapOn: vmOn,
           onVormap: () => {
@@ -17927,7 +18076,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             vmOnRef.current = true; setVmOn(true);
             c.vormap(true);
           },
-          avdataAvail: (avCap?.ok === true || avOn) && !!(client.current as any)?.isVibe,
+          avdataAvail: !asMenuOne && (avCap?.ok === true || avOn) && !!(client.current as any)?.isVibe,
           avdataWhy: !avOn && avCap && !avCap.ok ? avCap.why : undefined,
           avdataOn: avOn,
           onAvdata: () => {
@@ -18391,15 +18540,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         } : undefined}
         adsbList={shownMap === 'airsea' && adsbLiveHere && airSeaTrk?.toggled?.adsb !== false ? aircraft : undefined}   /* ★ the ADS-B chip off: no list (the web's on('adsb')) */
         adsbStarted={!!adsbReport}
+        /* ★★★ beta96 (Stuart 11-26) the SHARED TUNER line + CHAT, the TUNE chip, and the dial lock on EXIT (MapTopStrip) */
+        shared={mapLine.show ? { line: mapLine, chatDisabled: isKiwi || (isVibeServer && !sharedDial), chatUnread: chatUnread || askNudge, onChat: openChat } : null}
+        tune={mapTune}
+        dialLock={mapLockWhy ? { why: mapLockWhy, exitMoves: mapExitMoves, onDialLocked: () => { nudgeAsk(); } } : null}
         safeInsets={insets}
-        overlay={!!dualMyId && dualShape.phase === 'paired' ? (
+        overlay={(!!dualMyId && dualShape.phase === 'paired') || (chatOpen && mapLine.show) ? (<>{chatOpen && mapLine.show ? chatDrawerEl : null}{!!dualMyId && dualShape.phase === 'paired' ? (
           // ★★ V12 the second server's card over the map too (Stuart, 2026-10-30: "the 2nd server chip control should also
           //   be accessible here too … with the ability to minimise it the same as in waterfall mode") — the same card,
           //   tucking to its tab as over the waterfall; under the map's own header bar.
           <PanelBoundary name="Second server (map)">
             <DualServerCard myId={dualMyId} top={insets.top + 64} onSwap={onDualSwap} safeInsets={insets} />
           </PanelBoundary>
-        ) : undefined}
+        ) : null}</>) : undefined}
         /></PanelBoundary>}
 
       {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
@@ -18554,59 +18707,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★ B19 ONLY — the perf overlay (src/constants/perfOverlay.ts: flip PERF_OVERLAY_THIS_BUILD off next build). */}
       {PERF_OVERLAY_THIS_BUILD && <PerfOverlay />}
 
-      {/* Chat drawer */}
-      <PanelBoundary name="Chat" onClose={closeChat} resetKey={chatOpen}>
-      <ChatDrawer
-        visible={chatOpen}
-        messages={chatMessages}
-        myCallsign={myCallsign}
-        onJoin={handleChatJoin}
-        onSend={handleChatSend}
-        onClose={closeChat}
-        onMute={() => setChatMuted((p: boolean) => !p)}
-        muted={chatMuted}
-        users={chatUsers}
-        syncedUser={syncedUser}
-        zoomSync={zoomSync}
-        onToggleSync={toggleUserSync}
-        onToggleZoomSync={() => setZoomSync((p: boolean) => !p)}
-        onUserTap={chatUserTap}
-        textOnly={isOwrx}
-        onChangeName={() => setMyCallsign(null)}
-        // ★★ ONE DRAWER, TWO WAYS OF SPEAKING. A shared-dial VibeServer has no names and no text
-        //    box; everything else about the chat — the transcript, the unread pulse, the open and
-        //    close — is the same component it has always been.
-        canned={sharedDial ? padPhrases(questionOpenUntil > Date.now(), status.frequency) : undefined}
-        onSay={(id: string) => client.current?.say?.(id)}
-        onOpenWiki={(url: string) => { openWebPage(url); }}
-        /* ★ The mode sheet's own rule for which decoders this receiver runs (ModeSelector clientDecs), so DECODE is
-         *  never a dead key. Opening goes through onDecToggle exactly as the sheet does; already open = nothing. */
-        canDecode={(d: string) => {
-          if (blockedModes.has(d)) return false;
-          const ext = srvExtensions;
-          if (!ext || !ext.length) return true;
-          return ext.includes(d === 'rtty' ? 'fsk' : d === 'time' ? 'clock' : d);
-        }}
-        onDecode={(d: string) => {
-          if (activeDecRef.current === d) return;
-          onDecToggle(d as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time');
-        }}
-        dialLine={dialState ? dialSummary(dialState) : undefined}
-        chatLang={chatLangNow}
-        onPickLang={pickChatLanguage}
-        shareEnabled={sharedDial}
-        onPickShare={onPickShare}
-        shareDraft={shareDraft}
-        onClearShareDraft={() => setShareDraft(null)}
-        manualStartHz={dabOn && dabState?.channel ? 0 : status.frequency}
-        manualStartMode={String(status.mode)}
-        onShare={onShare}
-        onShareTune={onShareTune}
-        hiddenUsers={chatHidden}
-        onHideUser={(name: string) => hideChatUser(name, myCallsign)}
-        onShowHidden={showChatHidden}
-      />
-      </PanelBoundary>
+      {/* Chat drawer — ★★★ beta96 drawn INSIDE the full-screen map (its overlay) while one with the SHARED TUNER line is up: a
+          Modal is its own native root, so a drawer out here would open under the map */}
+      {!(shownMap !== null && mapLine.show) && chatDrawerEl}
 
       {/* Bypass password — rate-limit recovery (replaces the session) */}
       <PanelBoundary name="Password" resetKey={pwPrompt}>

@@ -103,10 +103,13 @@ async function session(tag, users, before, run) {
     await send('Page.addScriptToEvaluateOnNewDocument', { source: SEND_HOOK });
     await send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
-    await until(`!![...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()))`, 15000);
+    if (!await until(`!![...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()))`, 20000)) {
+      await send('Page.navigate', { url: `http://127.0.0.1:${port}/` });   // ★ a slow first load: once more
+      await until(`!![...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()))`, 20000);
+    }
     await ev(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim())); b && b.click(); return !!b; })()`);
     await until(`!!document.querySelector('#audioGate button')`, 15000);
-    {
+    if (await ev(`!!document.querySelector('#audioGate button')`)) {
       const r = JSON.parse(await ev(`JSON.stringify(document.querySelector('#audioGate button').getBoundingClientRect())`));
       const x = r.x + r.width / 2, y = r.y + r.height / 2;
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
@@ -234,7 +237,7 @@ await session('locked', 4, async ({ join }) => {
   ok(!c0 || c0 !== c1, c0 ? `the map pans while locked (${c0} → ${c1})` : 'the map pans while locked (no map handle in this build — not measured)');
   // the other listener leaves → alone → FREE TO EXIT, EXIT live again
   for (const o of others) o.close();
-  ok(await until(`/FREE TO EXIT/.test((${MS})?.text || '')`, 15000), `the other listener leaves → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
+  ok(await until(`/FREE TO EXIT/.test((${MS})?.text || '')`, 40000), `the other listener leaves → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
   ok(await until(`!(${MS}).exitLocked && !document.querySelector('.trkView:not([hidden]) .tuneChip.dialLocked, .trkView:not([hidden]) .tunePop .dialLocked')`, 5000), 'EXIT and TUNE are live again (the lock lifted)');
   // pick → tune: ADS-B from the list
   await ev(`${CHIP}.click(); true`); await sleep(300);

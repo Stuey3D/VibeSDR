@@ -503,6 +503,11 @@ interface ModeSelectorProps {
     /** ★★★ V12 beta90 VIEWS' map keys (Stuart, 2026-11-21): AVIATION (every aircraft source on the ADS-B map) and SHIPPING
      *  (AIS, DSC, NAVTEX) — each only where this server has something for it (no dead keys). */
     avMapAvail?: boolean; onAvMap?: () => void;
+    /** ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): ONE AIR & SEA LIVE key for every air / sea whole-radio mode (ADS-B, the
+     *  DATALINK, AIS, MARITIME, NDB, VOR MAP, SONDES — the map's TUNE chip switches between them), and VIEWS' AIR & SEA beside
+     *  GALLERY (the map as a viewer). Given = the separate keys are not passed (SDRScreen). */
+    airSeaAvail?: boolean; airSeaOn?: boolean; onAirSea?: () => void;
+    airSeaViewAvail?: boolean; onAirSeaView?: () => void;
     shipMapAvail?: boolean; onShipMap?: () => void;
     /** ★★ V12 CW — a VibeServer's own decoder: ONE SIGNAL (the passband) or SKIMMER (a 24/48/96 kHz segment centred on
      *  the dial). Only where the server's vibeserver.json says `"cw": true`; its settings drop in under the row. */
@@ -720,7 +725,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const sdShown = !!decoderControls?.sondesAvail && !isBlocked('sondes');   // ★ V12 radiosondes
   const vmShown = !!decoderControls?.vormapAvail && !isBlocked('vormap');   // ★ V12 the VOR / ILS map
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown || aisShown || avShown || sdShown;
+  const airSeaShown = !!decoderControls?.airSeaAvail && !!decoderControls.onAirSea;   // ★★★ beta96 AIR & SEA LIVE
+  const wholeAvail = !!decoderControls?.dabAvail || airSeaShown || adsbShown || ismShown || ndbShown || aisShown || avShown || sdShown;
   const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !srvDecShown && !scanShown;
   const decSectionShown = !!decoderControls && !dabInGrid
     && (clientDecs.length > 0 || advRdsShown || wholeAvail || srvDecShown || scanShown || spotsShown);
@@ -771,6 +777,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!legendSpecs.some((l) => l.label === label)) legendSpecs.push({ label, icon: icon && modeIconFor(icon) ? icon : null });
   };
   if (decSectionShown && decoderControls) {
+    if (airSeaShown) addLegend('AIR & SEA LIVE', 'adsb');
     if (adsbShown) addLegend('ADS-B', 'adsb');
     if (aisShown) addLegend('AIS', 'ais');
     if (avShown) addLegend('DATALINK', 'acars');
@@ -798,6 +805,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (scanShown) addLegend('SCANNER');
   }
   if (spotsShown && spotsControls?.showMap) addLegend(spotsControls.mapLabel || 'MAP', 'map');
+  if (decoderControls?.airSeaViewAvail) addLegend('AIR & SEA', 'adsb');   // ★★★ beta96 VIEWS' AIR & SEA (the viewer)
   if (decoderControls?.avMapAvail) addLegend('AVIATION', 'acars');   // ★ beta90 VIEWS' three map keys
   if (decoderControls?.shipMapAvail) addLegend('SHIPPING', 'ais');
   if (owrxPages) { addLegend('MAP', 'map'); addLegend('FILES', 'files'); }
@@ -1052,6 +1060,30 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★★ V12 THE AIRCRAFT DATALINK KEY — AIS's key, for ACARS / VDL2. */
   const avOff = !!decoderControls?.avdataWhy;
   const avLit = !!decoderControls?.avdataOn;
+  /** ★★★ beta96 AIR & SEA LIVE — DATALINK's kind of key: lit while any air / sea whole-radio mode runs. */
+  const airSeaKey = () => {
+    const dc = decoderControls!;
+    const lit = !!dc.airSeaOn;
+    return (
+      <NavItem key="airsea" onPress={() => dc.onAirSea?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="AIR & SEA LIVE" active={lit} pip iconId="adsb" stack={stackIco}
+          onPress={() => dc.onAirSea?.()} fontSize={12} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel="AIR & SEA LIVE — the radio on aircraft or ships (ADS-B, the datalink, AIS, maritime, NDB, VOR, sondes), on one map; its TUNE chip switches between them"
+        accessibilityState={{ selected: lit }}
+        style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
+                lit && { backgroundColor: decBg },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onAirSea?.()} activeOpacity={0.8}>
+        <ModeLabel id="adsb" stack={stackIco} numberOfLines={1} color={lit ? dec : t.btnText}
+              style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>
+          AIR & SEA LIVE
+        </ModeLabel>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   const avKey = () => {
     const dc = decoderControls!;
     return (
@@ -1332,6 +1364,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  tabs, never dimmed, in utils/decoderBands' order. Availability is each key's own rule, as before. */
   const wholeKeys: { id: string; node: React.ReactNode }[] = !decoderControls ? [] : WHOLE_RADIO_IDS.map(id => {
     switch (id) {
+      case 'airsea': return { id, node: airSeaShown ? airSeaKey() : null };   // ★★★ beta96 AIR & SEA LIVE
       case 'adsb': return { id, node: adsbShown ? adsbKey(false) : null };
       case 'ais':  return { id, node: aisShown ? (marShown ? <>{aisKey(false)}{marKey(false)}</> : aisKey(false)) : null };   // ★★★ beta96 MARITIME beside AIS
       case 'avdata': return { id, node: avShown ? avKey() : null };
@@ -2024,6 +2057,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         ? viewKey('owrxfiles', 'FILES', 'files', owrxPages.onFiles, 'OpenWebRX files — the decoded pictures') : null },
     ...serverMapKeys.map((m) => ({ id: `srvmap-${m.kind}`, node: viewKey(`srvmap-${m.kind}`, m.label, m.icon,
                                                                          () => onServerMap!(m.kind), m.a11y) })),
+    // ★★★ beta96 VIEWS' AIR & SEA right beside GALLERY (Stuart 11-26)
+    { id: 'airseaview', node: decoderControls?.airSeaViewAvail && decoderControls.onAirSeaView
+        ? viewKey('airseaview', 'AIR & SEA', 'adsb', () => decoderControls.onAirSeaView?.(), 'AIR & SEA — every aircraft, ship, NAVTEX station, sonde and navaid this server holds, on one map. A viewer: nothing here moves the radio') : null },
     { id: 'gallery', node: decoderControls?.galleryAvail ? galleryKey() : null },
     { id: 'dxlog', node: decoderControls?.dxLogAvail ? dxLogKey() : null },
     { id: 'transcribe', node: txShown ? transcribeKey : null },

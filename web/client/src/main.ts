@@ -1935,6 +1935,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         // ★★ ASK BEFORE TUNING — adopt the server's word; say so when the room lets this listener in.
         const was = askNow;
         askNow = d.askFirst ? { askFirst: true, tuneLocked: d.tuneLocked, askState: d.askState, askUntil: d.askUntil } : null;
+        /* ★★★ beta96 THE DIAL CARRIES THE COUNT (the server's beta83 fix: `dial` goes out on a LEAVE as well as a join; `users`
+         *  can lag a held session's end). The shared-tuner banner and the full-screen maps' line read the dial's `listeners`,
+         *  as the app's bar does — a leave no longer leaves "ASK TO TUNE · 2/4" standing with one listener. */
+        if (Number.isFinite(d.listeners) && d.listeners > 0) listenerCount = d.listeners;
         document.body.classList.toggle('askLocked', askLocked(askNow));
         if (askLocked(was) && !askLocked(askNow) && askNow && was?.askState) flashSharedBanner('GO AHEAD — YOURS TO TUNE');
         updateSharedBanner();

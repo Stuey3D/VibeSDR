@@ -32,6 +32,7 @@ import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle, spotsListModes } from 
 import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the digi map's radio filter
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay, usePanelNav } from './PanelNav';
+import MapTopStrip, { mapTopStripShown, type MapSharedProps, type MapTuneProps } from './MapTopStrip';   // ★★★ beta96 the shared line, CHAT, TUNE
 import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
@@ -214,6 +215,14 @@ interface MapOverlayProps {
           sort?: string | null; onSort?: (s: string) => void; filter?: string; onFilterClear?: () => void;
           /** ★ beta96 a row chosen (an aircraft → MESSAGES filtered to it) */
           onPick?: (key: string) => string | void } | null;
+  /** ★★★ beta96 (Stuart 11-26) THE SHARED TUNER line + CHAT over a full-screen map that holds the radio (MapTopStrip) — null =
+   *  not shown (an unshared dial, a one-listener server, a viewer). */
+  shared?: MapSharedProps | null;
+  /** ★★★ beta96 the TUNE chip and its list (airSeaTune.ts rows) — null / one row = none. */
+  tune?: MapTuneProps | null;
+  /** ★★★ beta96 THE DIAL LOCK: the reason ('' = free) the radio may not be moved now, and whether this map's EXIT moves it.
+   *  EXIT, Android back and the TUNE chip are refused with `onDialLocked(why)` while it holds; never the map itself. */
+  dialLock?: { why: string; exitMoves: boolean; onDialLocked: (why: string) => void } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
@@ -2334,6 +2343,10 @@ if(KIND==='digi'||KIND==='cw'){
     connect();
   }
 }
+/* ★★★ beta96 the shared-dial lock greys EXIT (React Native refuses the press — closeGuarded); the top bar's height for the strip */
+window.__backLock=function(on,why){var b=document.getElementById('back');if(!b)return;b.style.opacity=on?'0.4':'';b.setAttribute('aria-disabled',on?'true':'false');b.title=on?String(why||''):'';};
+(function(){var f=function(){var t=document.getElementById('topbar');if(t&&window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'mapTop',y:Math.round(t.getBoundingClientRect().bottom)}));};
+  window.addEventListener('resize',f);setTimeout(f,60);setTimeout(f,700);})();
 </script>
 </body></html>`;
 }
@@ -2357,6 +2370,7 @@ function spotToData(s: SpotRow) {
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
+    shared, tune, dialLock,
     storeWindows, onDigiWindow, aprsPoints, aprsFocus, amateur, digiOverlay, digiRadios, digiWindow, digiTotals }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
@@ -2631,6 +2645,17 @@ export default function MapOverlay(
   /* ★ V12 AIS / APRS: the items each report (they REPLACE — the server's list is the truth), double-encoded as ADS-B's are
    *  (a ship's name can never become source). Parked in __pendingTrk until the page's handler exists. */
   const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap' || kind === 'airsea';
+  /* ★★★ beta96 THE DIAL LOCK ON THE MAP (Stuart 11-26): EXIT (the page's key, Android back, a pad's Back) leaves a whole-radio
+   *  mode, which retunes the shared radio — refused with the reason while the server says this listener may not move it. */
+  const exitLocked = !!dialLock?.why && dialLock.exitMoves;
+  const closeGuarded = () => { if (exitLocked && dialLock) { dialLock.onDialLocked(dialLock.why); return; } onClose(); };
+  // ★ the page's own top bar's height (the strip sits under it) — reported by the page (mapTop)
+  const [mapTop, setMapTop] = useState(0);
+  // ★ one pad order for the strip and the live list (TrackLiveList), as the AMATEUR map's keys share theirs
+  const stripOn = mapTopStripShown({ shared, tune });
+  const trkNav = usePanelNav(visible && isTrkKind && !!trk && stripOn, { flat: true });
+  useEffect(() => { webRef.current?.injectJavaScript(`window.__backLock&&window.__backLock(${exitLocked},${JSON.stringify(dialLock?.why ?? '')});true;`); },
+            [exitLocked, dialLock?.why, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
   const trkRef = useRef(trk); trkRef.current = trk;
   /* ★★ V12 2026-11-01 THE NAVTEX CARDS' TEXT AND TRANSLATE: the page asks for a card's gallery file (only one of the
    *  items' own, by its safe name), React Native fetches it (the read auth) and sends it back as TEXT; then the gallery's
@@ -2742,7 +2767,7 @@ export default function MapOverlay(
       visible
       transparent={false}
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={closeGuarded}
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
       {/* ★ A Modal is its own native root: the Mac's pinch detector below needs a gesture root inside it. */}
@@ -2824,14 +2849,14 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); webRef.current?.injectJavaScript(`window.__backLock&&window.__backLock(${exitLocked},${JSON.stringify(dialLock?.why ?? '')});true;`); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
                                                     webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
                                               if (trkRef.current?.focus) trkFocus(trkRef.current.focus); } }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;
-            if (d === 'close') return onClose();
+            if (d === 'close') return closeGuarded();
             if (d === 'pickCity') return onPickCity?.();
             /* ★★ THE PAGE ASKING US FOR BASEMAP DATA. Anything that is not one of the two legacy
              *  bare-string messages is JSON; an unparseable message is ignored rather than thrown,
@@ -2851,6 +2876,11 @@ export default function MapOverlay(
             if (m && (m as any).t === 'digiPanel') {   // ★ beta92 a panel's ✕ (narrow windows)
               const id = String((m as any).id ?? '');
               if (id === 'stats' || id === 'summary' || id === 'legend') setDigiPanel(id, (m as any).on === true);
+              return;
+            }
+            if (m && (m as any).t === 'mapTop') {   // ★★★ beta96 the strip goes under the page's top bar
+              const y = Number((m as any).y);
+              if (Number.isFinite(y) && y >= 0 && y < 400) setMapTop(Math.round(y));
               return;
             }
             if (m && (m as any).t === 'digiTop') {
@@ -3027,7 +3057,14 @@ export default function MapOverlay(
                            ndb, selected: ndbSel, onSelect: (id: number) => ndbChoose(id, true),
                            prefs: ndbPrefs ?? parseNdbMapPrefs(null), onPrefs: ndbSetPrefs,
                          } : null}
+                         nav={stripOn ? { navCtx: trkNav.navCtx, scrollProps: trkNav.scrollProps } : undefined}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
+        )}
+        {/* ★★★ beta96 the SHARED TUNER line, CHAT and TUNE under the page's top bar (MapTopStrip) — one pad order with the list */}
+        {isTrkKind && !!pageUri && !packError && mapTop > 0 && stripOn && (
+          <MapTopStrip top={mapTop} left={safeInsets?.left ?? 0} shared={shared} tune={tune}
+                       lockWhy={dialLock?.why ?? ''} onLocked={(why) => dialLock?.onDialLocked(why)}
+                       navCtx={trk ? trkNav.navCtx : undefined} />
         )}
         {disconnected && !ignored && (
           <View style={mo.discWrap} pointerEvents="box-none">

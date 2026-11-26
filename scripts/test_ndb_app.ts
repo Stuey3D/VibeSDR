@@ -206,7 +206,7 @@ eq('live: quiet', app.ndbRowLive(a.beacons[3], NOW * 1000), false);
   const shn = readFileSync(new URL('../src/services/sessionHoldNotice.ts', import.meta.url), 'utf8');
   ok('screen: audio released in NDB', sc.includes('const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn')
      && /export function audioQuietFor[^{]*\{\s*return [^;]*m\.ndb/.test(shn));
-  ok('screen: no NDB key on Apple TV', sc.includes('ndbAvail: !IS_APPLE_TV'));
+  ok('screen: no NDB key on Apple TV (beta96: and under AIR & SEA LIVE elsewhere)', sc.includes('ndbAvail: !asMenuOne && !IS_APPLE_TV'));
   ok('screen: a mode pick leaves NDB', sc.includes('c.ndb?.(false);\n      ndbUiOff();'));
   const gal = readFileSync(new URL('../src/components/GalleryOverlay.tsx', import.meta.url), 'utf8');
   ok('gallery: the NDB chip', gal.includes("{ id: 'ndb', label: 'NDB' }"));
