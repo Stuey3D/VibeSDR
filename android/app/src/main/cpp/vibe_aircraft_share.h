@@ -512,6 +512,12 @@ public:
     /** ★ beta88: "is this process's ADS-B decoder running now?" — asked each flush; true stamps the header (kAdsbLiveSec),
      *  so every radio's map knows whether ANY radio on the server is decoding ADS-B. Cheap (an atomic read). */
     void adsbLive(std::function<bool()> f) { std::lock_guard<std::mutex> lk(m_); adsbLive_ = std::move(f); }
+    /** ★ beta96 …and another answer beside the decoder's: the server-level aircraft feeds (vibe_feeds.h) — an ADS-B feed
+     *  source that is live counts as "decoding ADS-B now". nullptr removes it. */
+    void adsbLiveExtra(const std::string& name, std::function<bool()> f) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (f) liveExtra_[name] = std::move(f); else liveExtra_.erase(name);
+    }
     /** Write now (a test; a mode leaving, so its last updates are not lost). Never from a DSP thread. */
     void flushNow() { std::lock_guard<std::mutex> fl(flushMtx_); flush_(); }
     void stop() {
@@ -552,8 +558,11 @@ private:
             ups.insert(ups.end(), std::make_move_iterator(u.begin()), std::make_move_iterator(u.end()));
         }
         std::function<bool()> live;
-        { std::lock_guard<std::mutex> lk(m_); for (auto& p : ps) { auto it = prov_.find(p.first); if (it != prov_.end()) it->second.lastMs = now; } live = adsbLive_; }
-        const bool adsbOn = live && live();
+        std::vector<std::function<bool()>> extra;
+        { std::lock_guard<std::mutex> lk(m_); for (auto& p : ps) { auto it = prov_.find(p.first); if (it != prov_.end()) it->second.lastMs = now; } live = adsbLive_;
+          for (auto& kv : liveExtra_) extra.push_back(kv.second); }
+        bool adsbOn = live && live();
+        for (auto& f : extra) if (!adsbOn && f && f()) adsbOn = true;
         if (ups.empty() && gs.empty() && !adsbOn) return;
         table().write(ups, gs, now, adsbOn);
     }
@@ -562,6 +571,7 @@ private:
     std::condition_variable cv_;
     std::map<std::string, P> prov_;
     std::function<bool()> adsbLive_;
+    std::map<std::string, std::function<bool()>> liveExtra_;
     bool run_ = false;
     std::thread th_;
 };

@@ -164,7 +164,9 @@ constexpr int kMaxFeeds = 8;
 constexpr int kMaxReaders = 8;
 constexpr int kDefaultPort = 30005;
 
-struct Dest { std::string host; int port = 0; bool on = true; std::string uuid; };
+/** `own` (beta96, the server-level hub): true = only this server's own radios' decodes go there; false (the default) =
+ *  everything ADS-B the server has, its feed sources' raw frames included. */
+struct Dest { std::string host; int port = 0; bool on = true; std::string uuid; bool own = false; };
 
 /** A station UUID as the aggregators issue them (8-4-4-4-12 hex), lower-cased; "" if it is not one. */
 inline std::string cleanUuid(const std::string& u) {
@@ -205,6 +207,7 @@ struct Config {
     int  port = kDefaultPort;     ///< its port
     bool open = false;            ///< false = loopback + LAN only (the default); true = any address
     bool push = false;            ///< send to the destinations below
+    bool serveOwn = false;        ///< ★ beta96 the local server: only this server's own radios (false = everything)
     std::vector<Dest> feeds;
     bool any() const { return serve || (push && std::any_of(feeds.begin(), feeds.end(), [](const Dest& d) { return d.on; })); }
 };
@@ -231,6 +234,7 @@ inline bool parseConfig(const std::string& text, Config& out, std::string& err) 
     out.serve = bo(j, "serve", false);
     out.open = bo(j, "open", false);
     out.push = bo(j, "push", false);
+    out.serveOwn = bo(j, "serveOwn", false);
     const double p = num(j, "port", kDefaultPort);
     if (p < 1024 || p > 65535 || p != std::floor(p)) { err = "the Beast port must be a whole number from 1024 to 65535"; return false; }
     out.port = int(p);
@@ -243,6 +247,7 @@ inline bool parseConfig(const std::string& text, Config& out, std::string& err) 
             d.host = e.str("host");
             const double dp = num(e, "port", 0);
             d.on = bo(e, "on", true);
+            d.own = bo(e, "own", false);
             const std::string u = e.str("uuid");
             if (!u.empty()) { d.uuid = cleanUuid(u); if (d.uuid.empty()) { err = "the station UUID for " + e.str("host").substr(0, 60) + " is not a UUID (8-4-4-4-12 hex)"; return false; } }
             if (!hostOk(d.host)) { err = "\"" + d.host.substr(0, 60) + "\" is not a host name or address"; return false; }
@@ -266,11 +271,12 @@ inline std::string jsonEsc(const std::string& s) {
 
 inline std::string toJson(const Config& c) {
     std::string o = std::string("{\"serve\":") + (c.serve ? "true" : "false") + ",\"port\":" + std::to_string(c.port)
-                  + ",\"open\":" + (c.open ? "true" : "false") + ",\"push\":" + (c.push ? "true" : "false") + ",\"feeds\":[";
+                  + ",\"open\":" + (c.open ? "true" : "false") + ",\"push\":" + (c.push ? "true" : "false")
+                  + (c.serveOwn ? ",\"serveOwn\":true" : "") + ",\"feeds\":[";
     for (size_t i = 0; i < c.feeds.size(); ++i) {
         if (i) o += ',';
         o += "{\"host\":\"" + jsonEsc(c.feeds[i].host) + "\",\"port\":" + std::to_string(c.feeds[i].port)
-           + ",\"on\":" + (c.feeds[i].on ? "true" : "false")
+           + ",\"on\":" + (c.feeds[i].on ? "true" : "false") + (c.feeds[i].own ? ",\"own\":true" : "")
            + (c.feeds[i].uuid.empty() ? std::string() : ",\"uuid\":\"" + c.feeds[i].uuid + "\"") + "}";
     }
     return o + "]}";
@@ -315,9 +321,14 @@ public:
     /** ★★ THE LOOP GUARD (beta96): the host this radio's ADS-B comes FROM, when it is a Beast feed radio. A push feed to
      *  that same host is never sent (it would hand the receiver its own replies back, or an aggregator its own data):
      *  shown as "skipped". Compared as written, case-insensitive — a different name for the same machine is not caught. */
-    void setInputHost(const std::string& h) {
-        std::string l; for (char c : h) l += char(std::tolower((unsigned char)c));
-        std::lock_guard<std::mutex> lk(mtx_); inputHost_ = l; ++gen_;
+    void setInputHost(const std::string& h) { setInputHosts(h.empty() ? std::vector<std::string>{} : std::vector<std::string>{h}); }
+    /** ★★ beta96 THE HUB'S LOOP GUARDS: every host a feed source reads from (or, for a source that listens, the address
+     *  that connected to it). A destination on any of them is never sent to ("skipped"), and a local reader connecting
+     *  from one gets only this server's own radios — never its own frames back. */
+    void setInputHosts(const std::vector<std::string>& hs) {
+        std::vector<std::string> v;
+        for (const auto& h : hs) { std::string l; for (char c : h) l += char(std::tolower((unsigned char)c)); if (!l.empty()) v.push_back(l); }
+        std::lock_guard<std::mutex> lk(mtx_); inputHosts_ = v; ++gen_;
     }
     /** For a log line, the radio's name in the status. */
     void setLabel(const std::string& s) { std::lock_guard<std::mutex> lk(mtx_); label_ = s; }
@@ -345,15 +356,52 @@ public:
     /** ★ ON THE DECODER THREAD: encode, append, return. Never blocks on a socket. */
     /** `addr` = the aircraft's address (for the push feeds' reduce); `now` = seconds on any steady clock (the frame's). */
     void frame(const uint8_t* msg, int len, uint64_t ts12, float dbfs, uint32_t addr, double now) {
+        put(msg, len, ts12, signalByte(dbfs), addr, now, true);
+    }
+    /** ★★ beta96 A FEED SOURCE'S REPLY, BYTE-FAITHFUL: the timestamp and signal byte exactly as the upstream receiver sent
+     *  them (the Beast escaping is deterministic, so the bytes on the wire are the bytes received). `own` false: a
+     *  destination set to "only my own radios" never gets it. From the source's network thread. */
+    void frameRaw(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig, uint32_t addr, double now, bool own = false) {
+        put(msg, len, ts12, sig, addr, now, own);
+    }
+    /** Frames refused as the same reply already sent by another input (the de-duplication window). */
+    uint64_t duplicates() const { std::lock_guard<std::mutex> lk(mtx_); return dups_; }
+
+private:
+    /** ★★ beta96 DE-DUPLICATION: the same reply (same bytes) from two of our inputs — two receivers hearing one aircraft,
+     *  or a source that is also fed by one of our radios — is sent once. A reply is a duplicate when the same 7 or 14
+     *  bytes were taken within kDupSec. A genuine repeat (an aircraft squitters the same identification) a moment later
+     *  is still sent: the window is shorter than any squitter interval that repeats bytes exactly (DF17 positions change
+     *  every frame; identity squitters repeat every ~5 s). Bounded at 50 000 keys. */
+    static constexpr double kDupSec = 1.0;
+    static uint64_t frameKey(const uint8_t* m, int len) {
+        uint64_t h = 1469598103934665603ull;
+        for (int i = 0; i < len; ++i) { h ^= m[i]; h *= 1099511628211ull; }
+        return h ^ uint64_t(len);
+    }
+    void put(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig, uint32_t addr, double now, bool own) {
         if (!wanted_.load(std::memory_order_relaxed)) return;
         std::lock_guard<std::mutex> lk(mtx_);
         ++framesIn_;
-        if (pending_.size() >= timing_.pendingCap) { ++pendingDropped_; return; }
-        const uint8_t sig = signalByte(dbfs);
-        if (!appendFrame(pending_, msg, len, ts12, sig)) return;
-        ++pendingMsgs_;
+        {
+            const uint64_t k = frameKey(msg, len);
+            auto it = seen_.find(k);
+            if (it != seen_.end() && now >= it->second && now - it->second < kDupSec) { ++dups_; return; }
+            if (seen_.size() >= 50000) {
+                for (auto i = seen_.begin(); i != seen_.end();) i = (now - i->second > kDupSec || now < i->second) ? seen_.erase(i) : std::next(i);
+                if (seen_.size() >= 50000) seen_.clear();
+            }
+            seen_[k] = now;
+        }
+        std::vector<uint8_t>& P = own ? pending_ : pendingF_;
+        std::vector<uint8_t>& PR = own ? pendingR_ : pendingFR_;
+        uint32_t& PM = own ? pendingMsgs_ : pendingFMsgs_;
+        uint32_t& PRM = own ? pendingRMsgs_ : pendingFRMsgs_;
+        if (P.size() >= timing_.pendingCap) { ++pendingDropped_; return; }
+        if (!appendFrame(P, msg, len, ts12, sig)) return;
+        ++PM;
         // ★ the reduced copy for the push feeds (built only while one is wanted)
-        if (cfg_.push && pendingR_.size() < timing_.pendingCap) {
+        if (cfg_.push && PR.size() < timing_.pendingCap) {
             bool send = timing_.reduceSec <= 0;
             if (!send) {
                 const uint64_t k = reduceKey(msg, len, addr);
@@ -367,10 +415,12 @@ public:
                     lastSent_[k] = now;
                 }
             }
-            if (send && appendFrame(pendingR_, msg, len, ts12, sig)) ++pendingRMsgs_;
+            if (send && appendFrame(PR, msg, len, ts12, sig)) ++PRM;
         }
-        if (pending_.size() >= 4096) wakeLocked();
+        if (P.size() >= 4096) wakeLocked();
     }
+
+public:
 
     /** {"on","adsb","frames","serve":{…},"push","feeds":[…],"line"} — the admin page's and the Setup card's status. */
     std::string statusJson() const { std::lock_guard<std::mutex> lk(mtx_); return status_.empty() ? idleStatus() : status_; }
@@ -564,8 +614,9 @@ private:
         double lastStatus = 0;
         for (;;) {
             const double now = mono();
-            std::shared_ptr<const std::vector<uint8_t>> chunk, chunkR; uint32_t chunkMsgs = 0, chunkRMsgs = 0;
-            bool active; double lastActive; std::string inHost;
+            std::shared_ptr<const std::vector<uint8_t>> chunk, chunkR, chunkF, chunkFR;
+            uint32_t chunkMsgs = 0, chunkRMsgs = 0, chunkFMsgs = 0, chunkFRMsgs = 0;
+            bool active; double lastActive; std::vector<std::string> inHosts;
             {
                 std::lock_guard<std::mutex> lk(mtx_);
                 if (!run_) break;
@@ -599,20 +650,36 @@ private:
                     pendingR_ = std::vector<uint8_t>();
                     chunkRMsgs = pendingRMsgs_; pendingRMsgs_ = 0;
                 }
-                active = active_.load(std::memory_order_relaxed);
+                if (!pendingF_.empty()) {
+                    chunkF = std::make_shared<const std::vector<uint8_t>>(std::move(pendingF_));
+                    pendingF_ = std::vector<uint8_t>();
+                    chunkFMsgs = pendingFMsgs_; pendingFMsgs_ = 0;
+                }
+                if (!pendingFR_.empty()) {
+                    chunkFR = std::make_shared<const std::vector<uint8_t>>(std::move(pendingFR_));
+                    pendingFR_ = std::vector<uint8_t>();
+                    chunkFRMsgs = pendingFRMsgs_; pendingFRMsgs_ = 0;
+                }
+                active = active_.load(std::memory_order_relaxed) || pendingFMsgs_ || chunkF;
+                if (chunkF) lastActive_ = now;   // ★ a feed source keeps the push links up like a running ADS-B decoder
                 lastActive = lastActive_;
-                inHost = inputHost_;
+                inHosts = inputHosts_;
             }
+            auto isInput = [&](const std::string& h) {
+                std::string l; for (char ch : h) l += char(std::tolower((unsigned char)ch));
+                return std::find(inHosts.begin(), inHosts.end(), l) != inHosts.end();
+            };
             // ── hand the new frames to every connected link ──
             if (chunk) for (auto& r : readers) if (r.fd >= 0) enqueue(r, chunk, chunkMsgs, t.linkCap);
+            if (chunkF && !c.serveOwn) for (auto& r : readers) if (r.fd >= 0 && !isInput(r.peer)) enqueue(r, chunkF, chunkFMsgs, t.linkCap);
             if (chunkR) for (auto& p : pushes) if (p.st == Link::Up) enqueue(p, chunkR, chunkRMsgs, t.linkCap);
+            if (chunkFR) for (auto& p : pushes) if (p.st == Link::Up && !p.d.own) enqueue(p, chunkFR, chunkFRMsgs, t.linkCap);
             // ── the server ──
             if (c.serve && listenFd_ < 0 && now >= listenRetryAt_) openListener(c, now, t);
             // ── the push links ──
             const bool pushWanted = c.push && (active || (lastActive > 0 && now - lastActive < t.activeGrace));
             for (auto& p : pushes) {
-                std::string ph; for (char ch : p.d.host) ph += char(std::tolower((unsigned char)ch));
-                p.loop = !inHost.empty() && ph == inHost;
+                p.loop = isInput(p.d.host);
                 const bool want = pushWanted && p.d.on && !p.loop;
                 if (!want) { if (p.st != Link::Off) { closeFd(p.fd); p.q.clear(); p.qBytes = 0; p.st = Link::Off; p.backoff = 0; p.err.clear(); } continue; }
                 if ((p.st == Link::Off || p.st == Link::Wait) && now >= p.nextTry) startConnect(p, now, t);
@@ -712,7 +779,7 @@ private:
                + ",\"retryIn\":" + std::to_string(p.st == Link::Wait ? std::max(0L, std::lround(p.nextTry - now)) : 0L) + "}";
             if (!c.push || !p.d.on) continue;
             std::string w = p.d.host + ": ";
-            if (p.loop) w += "not sent \xe2\x80\x94 this radio's ADS-B comes from there";
+            if (p.loop) w += "not sent \xe2\x80\x94 ADS-B comes into this server from there";
             else if (p.st == Link::Up) w += "connected, " + std::to_string(p.msgs) + " messages";
             else if (p.st == Link::Connecting) w += "connecting";
             else if (p.st == Link::Wait) w += "retrying in " + std::to_string(std::max(0L, std::lround(p.nextTry - now))) + " s (" + p.err + ")";
@@ -734,10 +801,13 @@ private:
     }
 
     mutable std::mutex mtx_;
-    Config cfg_; uint64_t gen_ = 0; Timing timing_; std::string label_, inputHost_;
+    Config cfg_; uint64_t gen_ = 0; Timing timing_; std::string label_;
+    std::vector<std::string> inputHosts_;
     std::atomic<bool> wanted_{false}, active_{false};
     double lastActive_ = 0;
     std::vector<uint8_t> pending_, pendingR_; uint32_t pendingMsgs_ = 0, pendingRMsgs_ = 0;
+    std::vector<uint8_t> pendingF_, pendingFR_; uint32_t pendingFMsgs_ = 0, pendingFRMsgs_ = 0;   // ★ beta96 feed sources' frames
+    std::unordered_map<uint64_t, double> seen_; uint64_t dups_ = 0;                                 // ★ beta96 de-duplication
     std::unordered_map<uint64_t, double> lastSent_;   // the reduce's memory (bounded in frame())
     uint64_t framesIn_ = 0, pendingDropped_ = 0;
     std::string status_;
@@ -857,19 +927,33 @@ struct Outage {
 class BeastInput {
 public:
     using Sink = std::function<void(const std::vector<Decoded>&)>;
+    /** ★ beta96 (server-level aircraft feeds, vibe_feeds.h): the bytes as they come, for a text format (BaseStation);
+     *  returns how many messages they completed (the status line's count). */
+    using RawSink = std::function<size_t(const uint8_t*, size_t)>;
     ~BeastInput() { stop(); }
+    /** ★ beta96 the same connection, reconnects, outage rules and words for a feed that is not Beast: `name` heads the
+     *  status and log lines ("BaseStation feed"), `hint` is what to check when nothing listens ("is dumphfdl's
+     *  basestation output on?"), `silentAfter` 0 = never drop a quiet link (a datalink source reports minutes apart). */
+    void startRaw(const std::string& host, int port, RawSink raw, const std::string& name, const std::string& hint, double silentAfter) {
+        stop();
+        std::lock_guard<std::mutex> lk(mtx_);
+        host_ = host; port_ = port; sink_ = nullptr; raw_ = std::move(raw); name_ = name; hint_ = hint;
+        t_.silentAfter = silentAfter;
+        run_ = true; st_ = "connecting"; err_.clear();
+        th_ = std::thread([this] { loop(); });
+    }
     void setTiming(const InputTiming& t) { std::lock_guard<std::mutex> lk(mtx_); t_ = t; }
     /** Where the outage lines go (the shim: LOGI). */
     void setLog(std::function<void(const std::string&)> f) { std::lock_guard<std::mutex> lk(mtx_); log_ = std::move(f); }
     /** 0 = up (or never down); else the wall-clock second the feed was lost — the listeners' banner. */
     long downSinceUtc() const { std::lock_guard<std::mutex> lk(mtx_); return out_.down() ? downSinceUtc_ : 0; }
     /** Connected but nothing for kQuietSec: shown as "stalled" before the reconnect at kStallSec. */
-    bool stalled() const { std::lock_guard<std::mutex> lk(mtx_); return st_ == "connected" && mono() - lastData_ > kQuietSec; }
+    bool stalled() const { std::lock_guard<std::mutex> lk(mtx_); return st_ == "connected" && t_.silentAfter > 0 && mono() - lastData_ > kQuietSec; }
     /** Start reading host:port; frames go to `sink` (on this class's thread). */
     void start(const std::string& host, int port, Sink sink) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
-        host_ = host; port_ = port; sink_ = std::move(sink);
+        host_ = host; port_ = port; sink_ = std::move(sink); raw_ = nullptr;
         run_ = true; st_ = "connecting"; err_.clear();
         th_ = std::thread([this] { loop(); });
     }
@@ -890,9 +974,9 @@ public:
                       (unsigned long long)connects_, st_ == "waiting" ? std::max(0L, std::lround(nextTry_ - now)) : 0L);
         std::string line;
         const std::string where = hostPortText(host_, port_);
-        const bool stall = st_ == "connected" && now - lastData_ > kQuietSec;
-        if (stall) line = "Beast feed from " + where + ": connected but nothing received for " + spanWords(now - lastData_) + " (stalled)";
-        else if (st_ == "connected") { char x[96]; std::snprintf(x, sizeof x, "connected, %.0f messages a second", perSec_); line = "Beast feed from " + where + ": " + x; }
+        const bool stall = st_ == "connected" && t_.silentAfter > 0 && now - lastData_ > kQuietSec;
+        if (stall) line = name_ + " from " + where + ": connected but nothing received for " + spanWords(now - lastData_) + " (stalled)";
+        else if (st_ == "connected") { char x[96]; std::snprintf(x, sizeof x, "connected, %.0f messages a second", perSec_); line = name_ + " from " + where + ": " + x; }
         else if (st_ == "waiting") line = err_ + " \xe2\x80\x94 trying again in " + std::to_string(std::max(0L, std::lround(nextTry_ - now))) + " s"
                                         + (out_.down() ? " (down " + spanWords(std::time(nullptr) - downSinceUtc_) + ", " + std::to_string(out_.attempts) + " attempts)" : "");
         else line = "connecting to " + where;
@@ -911,7 +995,7 @@ private:
     /** In words an owner can act on. */
     std::string why(int e) const {
         const std::string where = hostPortText(host_, port_);
-        if (e == ECONNREFUSED) return "nothing is listening on " + where + " \xe2\x80\x94 is dump1090's Beast output on?";
+        if (e == ECONNREFUSED) return "nothing is listening on " + where + " \xe2\x80\x94 " + hint_;
         if (e == ETIMEDOUT || e == EHOSTUNREACH || e == ENETUNREACH)
             return "no answer from " + where + " \xe2\x80\x94 is that machine on and on this network?";
         return where + ": " + std::strerror(e);
@@ -932,7 +1016,7 @@ private:
         if (l.empty()) return;
         std::function<void(const std::string&)> f; std::string where;
         { std::lock_guard<std::mutex> lk(mtx_); f = log_; where = hostPortText(host_, port_); }
-        if (f) f("Beast feed " + where + ": " + l);
+        if (f) f(name_ + " " + where + ": " + l);
     }
     void loop() {
         std::vector<uint8_t> buf(16 * 1024);
@@ -1000,7 +1084,7 @@ private:
                 const double now = mono();
                 if (now - rateT >= 2.0) { std::lock_guard<std::mutex> lk(mtx_); perSec_ = rateN / (now - rateT); rateN = 0; rateT = now; }
                 if (pr <= 0) {
-                    if (now - lastData > t.silentAfter) { endWhy = hostPortText(host, port) + " sent nothing for " + spanWords(t.silentAfter) + " (stalled)"; break; }
+                    if (t.silentAfter > 0 && now - lastData > t.silentAfter) { endWhy = hostPortText(host, port) + " sent nothing for " + spanWords(t.silentAfter) + " (stalled)"; break; }
                     continue;
                 }
                 const ssize_t n = ::recv(fd, buf.data(), buf.size(), 0);
@@ -1013,8 +1097,15 @@ private:
                     std::string l; { std::lock_guard<std::mutex> lk(mtx_); out_.up(now, l); downSinceUtc_ = 0; }
                     logLine(l);
                 }
+                RawSink raw; { std::lock_guard<std::mutex> lk(mtx_); raw = raw_; bytes_ += uint64_t(n); }
+                if (raw) {   // ★ beta96 a text feed: its own parser counts the messages
+                    const size_t k = raw(buf.data(), size_t(n));
+                    if (k) { std::lock_guard<std::mutex> lk(mtx_); msgs_ += k; }
+                    rateN += k;
+                    continue;
+                }
                 out.clear();
-                { std::lock_guard<std::mutex> lk(mtx_); reader_.feed(buf.data(), size_t(n), out); bytes_ += uint64_t(n); }
+                { std::lock_guard<std::mutex> lk(mtx_); reader_.feed(buf.data(), size_t(n), out); }
                 // Mode A/C (type '1') is not ADS-B: left out
                 out.erase(std::remove_if(out.begin(), out.end(), [](const Decoded& d) { return d.type == '1'; }), out.end());
                 if (out.empty()) continue;
@@ -1032,6 +1123,8 @@ private:
     InputTiming t_;
     std::string host_; int port_ = kDefaultPort;
     Sink sink_;
+    RawSink raw_;
+    std::string name_ = "Beast feed", hint_ = "is dump1090's Beast output on?";
     bool run_ = false; std::thread th_;
     std::string st_ = "off", err_;
     double nextTry_ = 0, perSec_ = 0, lastData_ = 0;
