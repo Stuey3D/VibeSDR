@@ -614,12 +614,13 @@ function drawList() {
     const st = CM.stateOf(s), u = CM.listenUrl(s), c = n.get(s.id) || 0;
     const bz = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` : '';
     const lays = CM.serverLayers(s).map((l) => `<span class="lay"><i style="background:${CM.MODE[l].colour}"></i>${esc(CM.MODE[l].label)}</span>`).join('');
-    const loading = !DATA.has(s.id) && !s.unreachable;
+    // ★ a server sharing no layer right now is never asked (nothing to fetch), so it is not "loading…" (Stuart 11-26, the Sony)
+    const loading = !DATA.has(s.id) && !s.unreachable && CM.serverLayers(s).length > 0;
     return `<div class="row${s.id === selected ? ' sel' : ''}${s.unreachable ? ' down' : ''}" role="button" tabindex="0" data-id="${esc(s.id)}">`
       + `<div><div class="nm">${s.pin ? '🔒 ' : ''}${esc(s.name)}</div><div class="where">${esc(s.country || '')}${s.grid ? ' · ' + esc(s.grid) : ''}</div></div>`
       + `<div class="acts">${u ? `<a class="listen" href="${esc(u)}" target="_blank" rel="noopener noreferrer">LISTEN</a>` : ''}`
       + `<button type="button" class="onlyBtn" data-only="${esc(s.id)}" aria-pressed="${F.server === s.id}">ONLY THIS</button></div>`
-      + `<div class="now">${s.unreachable ? esc(s.why || 'not responding') : loading ? 'loading…' : `${c} on the map now`}</div>`
+      + `<div class="now">${s.unreachable ? esc(s.why || 'not responding') : loading ? 'loading…' : c ? `${c} on the map now` : 'nothing on the map right now'}</div>`
       + `<div class="st ${st.cls}">${esc(st.label)}${bz ? ' · ' + esc(bz) : ''}</div><div class="lays">${lays}</div></div>`;
   }).join('') || '<div class="row"><div class="now">No receiver shares yet.</div></div>';
 }

@@ -27,9 +27,9 @@
   const H = 3600;
   const MODES = [
     { id: 'adsb',   label: 'ADS-B',  group: 'aviation', colour: '#ffb000', sec: 'a', win: 300,     slow: false, words: 'Aircraft positions from ADS-B (1090 MHz)' },
-    { id: 'acars',  label: 'ACARS',  group: 'aviation', colour: '#f472b6', sec: 'a', win: 300,     slow: false, words: 'Aircraft positions from VHF ACARS' },
-    { id: 'vdl2',   label: 'VDL2',   group: 'aviation', colour: '#e879f9', sec: 'a', win: 300,     slow: false, words: 'Aircraft positions from VDL Mode 2' },
-    { id: 'hfdl',   label: 'HFDL',   group: 'aviation', colour: '#c084fc', sec: 'a', win: 300,     slow: false, words: 'Aircraft positions from HF datalink' },
+    { id: 'acars',  label: 'ACARS',  group: 'aviation', colour: '#f472b6', sec: 'a', win: 1800,    slow: false, words: 'Aircraft positions from VHF ACARS' },
+    { id: 'vdl2',   label: 'VDL2',   group: 'aviation', colour: '#e879f9', sec: 'a', win: 1800,    slow: false, words: 'Aircraft positions from VDL Mode 2' },
+    { id: 'hfdl',   label: 'HFDL',   group: 'aviation', colour: '#c084fc', sec: 'a', win: 1800,    slow: false, words: 'Aircraft positions from HF datalink' },
     { id: 'ndb',    label: 'NDB',    group: 'aviation', colour: '#a3e635', sec: 'b', win: 24 * H,  slow: true,  words: 'Non-directional beacons heard, placed from the published list' },
     { id: 'vor',    label: 'VOR',    group: 'aviation', colour: '#93c5fd', sec: 'o', win: 24 * H,  slow: true,  words: 'VOR / ILS beacons identified on the VOR map, placed from the published list' },
     { id: 'ais',    label: 'AIS',    group: 'maritime', colour: '#22d3ee', sec: 's', win: 6 * H,   slow: false, words: 'Ships, from AIS' },
@@ -377,7 +377,11 @@
   function fade(it, now) {
     const m = MODE[it.modes[0]];
     if (!m) return 1;
-    const a = Math.max(0, now - it.t), w = m.id === 'adsb' ? ADSB_STALE_SEC * 5 : m.win;
+    const a = Math.max(0, now - it.t);
+    // ★ Aircraft (Stuart 11-26: datalink positions "hold them for 30 … faded to show older"): full strength under 5 min,
+    //   fading to 35 % at 30 min — by the POSITION's age, whichever source gave it (the server keeps ADS-B 5 min, datalink 30).
+    if (it.kind === 'aircraft') return a <= 300 ? 1 : Math.max(0.35, 1 - 0.65 * (a - 300) / 1500);
+    const w = m.id === 'adsb' ? ADSB_STALE_SEC * 5 : m.win;
     return a <= w / 5 ? 1 : Math.max(0.35, 1 - 0.65 * (a - w / 5) / (w * 0.8));
   }
   // ── the SEA AREAS (Stuart 11-25: "can we draw all the shipping areas onto it like we do for navtex?") ─────────────────
