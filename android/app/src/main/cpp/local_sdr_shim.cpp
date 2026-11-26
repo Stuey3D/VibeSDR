@@ -47279,6 +47279,19 @@ std::string LocalSdrShim::backgroundCapsJson() {
             first = false;
         }
     j += "]";
+    /* ★★★ beta96 SINGLE MODE: SATELLITES — the linear transponders such a radio may follow (vibe::sat::passHybrid; the Setup
+     *  page's SAT_XPDR_DOWNLINKS is the same list, test-sat-engine §13b). The app draws them only on a SATELLITES radio. */
+    j += ",\"satXpdrPasses\":[";
+    first = true;
+    for (const auto& sd : satEngine().defs())
+        for (const auto& t : sd.tx) {
+            if (!vibe::sat::passHybrid(t)) continue;
+            char w[96]; std::snprintf(w, sizeof w, "%.3f\xe2\x80\x93%.3f MHz", t.hz / 1e6, t.hiHz / 1e6);
+            j += std::string(first ? "" : ",") + "{\"norad\":" + std::to_string(sd.norad) + ",\"label\":\"" + vibe::sat::jsonEsc(t.label)
+               + "\",\"name\":\"" + vibe::sat::jsonEsc(sd.name) + "\",\"what\":\"" + vibe::sat::jsonEsc(w) + "\"}";
+            first = false;
+        }
+    j += "]";
     /* ★★★ beta94 METEOR + ORBCOMM TOGETHER (vibe_sat_pass_sched.h): the span one capture needs for the widest Meteor
      *  downlink and the ORBCOMM band, and the lowest sample rate that holds it — the settings say "both run together" at or
      *  above it, "the priority decides" below it and on an Airspy HF+ (its edges are cropped: 768 kHz usable at 912). */

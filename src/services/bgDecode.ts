@@ -52,6 +52,9 @@ export type BgCaps = {
   decoderSlotsDefault: number;
   /** ★ V12 beta90: the downlinks an unattended pass can keep (empty = an older engine: the section is not drawn). */
   satPasses: BgSatDownlink[];
+  /** ★★★ beta96 the LINEAR TRANSPONDERS a Single mode: SATELLITES radio may follow (the engine's passHybrid list; empty = an
+   *  older engine). Drawn only where the radio's single mode is "sat" (docs/v12/SAT-SINGLE.md). */
+  satXpdr: BgSatDownlink[];
   /** ★★★ beta94: Meteor + ORBCOMM together at or above this rate (null = an older engine: no groups drawn). */
   satBoth: BgSatBoth | null;
   /** ★ V12 2026-11-22: the WEFAX stations the engine offers (vibe_wefax_stations.h — only what the radio tunes). */
@@ -177,6 +180,8 @@ export function parseBgCaps(json: string | null | undefined): BgCaps | null {
       maxProfiles: j.maxProfiles > 0 ? j.maxProfiles : 4,
       decoderSlotsDefault: j.decoderSlotsDefault > 0 ? j.decoderSlotsDefault : 0,
       satPasses: Array.isArray(j.satPasses) ? j.satPasses.filter((d: any) => d && +d.norad > 0 && typeof d.label === 'string')
+        .map((d: any) => ({ norad: +d.norad, label: String(d.label), name: String(d.name || d.norad), what: String(d.what || d.label) })) : [],
+      satXpdr: Array.isArray(j.satXpdrPasses) ? j.satXpdrPasses.filter((d: any) => d && +d.norad > 0 && typeof d.label === 'string')
         .map((d: any) => ({ norad: +d.norad, label: String(d.label), name: String(d.name || d.norad), what: String(d.what || d.label) })) : [],
       satBoth: j.satBoth && +j.satBoth.minRate > 0
         ? { needHz: +j.satBoth.needHz || 0, minRate: +j.satBoth.minRate, narrow: Array.isArray(j.satBoth.narrow) ? j.satBoth.narrow.map(String) : [] } : null,

@@ -676,6 +676,26 @@ static void s13(const std::string& dir) {
         }
     for (size_t p = list.find("norad:"); p != std::string::npos; p = list.find("norad:", p + 1)) ++onPage;
     CHECK(all && keep == onPage, "every keepable downlink is on the page and nothing else (%d engine, %d page)", keep, onPage);
+    {   // ★★★ beta96 §13b the linear transponders a SATELLITES radio may follow = the page's SAT_XPDR_DOWNLINKS
+        const size_t xa = page.find("const SAT_XPDR_DOWNLINKS"), xb = page.find("];", xa);
+        CHECK(xa != std::string::npos && xb != std::string::npos, "§13b the page's transponder list found");
+        const std::string xl = xa != std::string::npos ? page.substr(xa, xb - xa) : std::string();
+        int hyb = 0, onP = 0; bool every = true;
+        for (const auto& sd : curatedCatalogue())
+            for (const auto& t : sd.tx) {
+                if (!passHybrid(t)) continue;
+                ++hyb;
+                CHECK(!passKeepable(t), "§13b %s %s is a hybrid, never a keepable downlink", sd.name.c_str(), t.label.c_str());
+                const std::string want = "norad: " + std::to_string(sd.norad) + ", label: \"" + t.label + "\"";
+                if (xl.find(want) == std::string::npos) { every = false; std::printf("   missing on the page: %s\n", want.c_str()); }
+            }
+        for (size_t q = xl.find("norad:"); q != std::string::npos; q = xl.find("norad:", q + 1)) ++onP;
+        CHECK(every && hyb == onP && hyb >= 6, "§13b every linear transponder is on the page and nothing else (%d engine, %d page)", hyb, onP);
+        Transmitter beacon; beacon.hz = 435605000; beacon.mode = "cw";
+        Transmitter lrpt; lrpt.hz = 137900000; lrpt.mode = "lrpt"; lrpt.consumer = "lrpt";
+        Transmitter fm; fm.hz = 437800000; fm.mode = "nfm";
+        CHECK(!passHybrid(beacon) && !passHybrid(lrpt) && !passHybrid(fm), "§13b a CW beacon, LRPT and an FM repeater are not hybrids");
+    }
     std::unique_ptr<Engine> e(makeEngine(dir, kIoLat, kIoLon));
     CHECK(e->txIndex(57166, "LRPT") == 0 && e->txIndex(39444, "Telemetry") == 1 && e->txIndex(39444, "nope") < 0 && e->txIndex(1, "LRPT") < 0, "txIndex by label");
     Pass p;
