@@ -3120,6 +3120,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decImgWrap { overflow: auto; max-height: calc(100dvh - var(--decBoxBottom, 14px) - 150px); position: relative; }
 /* ★ ALIGN: the picture becomes a drag target. A dark pill so the hint reads on white paper and black alike. */
 #decImgWrap.aligning { min-height: 72px; }
+/* ★★★ beta96 the keys over the picture (channel, MAP OUTLINE) never clipped by a picture still only a few rows tall */
+#decImgWrap:has(> #decOutlineBar:not([hidden])) { min-height: 44px; }
 #decAlignCover { position: absolute; inset: 0; cursor: ew-resize; touch-action: none; display: flex;
                  justify-content: center; align-items: flex-start; padding-top: 8px; }
 #decAlignHint { background: rgba(0,0,0,0.62); color: #fff; border: 1px solid rgba(255,255,255,0.35); border-radius: 14px;

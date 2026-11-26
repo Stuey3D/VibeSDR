@@ -56,8 +56,16 @@ geometry. VFO B's LRPT picture (the SATELLITE box's second picture) stays the co
   CH 4 = extra, a row whose 0x09 has not come is composite-only, hatch for a missing channel, AUTO day → composite / night →
   CH 4 IR, 1-2-5 night → CH 5, no composite, manual picks at night, a pick the pass lacks, cycle order, stored pick, status.
 - `scripts/test-web-lrpt-channels.mjs` (headless Edge, --mute-audio, a real vibeserver, fake rtl_tcp replaying a synthetic
-  NIGHT clip from `test-lrpt --write-clip … 960000 night 48`): see RESUME HERE for the result.
-- `test_nav_coverage` ok; `tsc --noEmit` clean.
+  NIGHT clip from `test-lrpt --write-clip … 960000 night 48`) **19/0**: the wire (every 0x01 followed by its 0x09, 65/64 + ch 4,
+  +34 % bytes); the key appears and reads `AUTO · CH 4 IR (NIGHT)`; the picture is grey with a picture in it (ch 4); the key
+  cycles COMPOSITE (70 % coloured speckle) → CH 1 → CH 2 → CH 4 IR; the pick in localStorage survives a reload; back round to
+  AUTO; 390 px no sideways scroll; no exception. LRPT has had no DECODERS key since SATELLITE took it over, so the test
+  re-adds one IN THE TEST PAGE ONLY (the same 'lrpt' AUTO attach a SATELLITE pick sends). It found one real fault, fixed:
+  while the picture was only a few rows tall the wrapper clipped the keys over it (MAP OUTLINE too) — `#decImgWrap` now has a
+  44 px floor while that bar shows. Run: `VIBESERVER_BIN=… VIBE_LRPT_CLIP=…/lrpt-night.cu8 node scripts/test-web-lrpt-channels.mjs`
+  (not in run-tests.sh yet — it needs the clip; the coordinator may add it as test-web-hell is).
+- `test_nav_coverage` ok; `tsc --noEmit` clean. The app's key and repaint were NOT run on a device or simulator (type-checked and
+  unit-tested only).
 
 ## RESUME HERE
 - On a real NIGHT pass (NickB's HF+ evenings, or any pass after dark): the key should read `AUTO · CH 4 IR (NIGHT)` and show

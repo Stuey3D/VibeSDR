@@ -3,7 +3,7 @@
 // --write-clip: channels 1, 2, 4 as Meteor-M2-3 sends them, channels 1 and 2 DARK — the sensor's noise, as NickB's 19:43 UTC
 // pass) at 137.9 MHz. Headless Edge then:
 //   • the wire: every 0x01 preview row is followed by its 0x09 (R = ch 2, B = ch 1, + ch 4);
-//   • METEOR LRPT opens as a picture; the channel key appears beside MAP OUTLINE and reads "AUTO · CH 4 IR (NIGHT)";
+//   • METEOR LRPT opens as a picture (its key re-added in the test page only — see addScriptToEvaluateOnNewDocument); the channel key appears beside MAP OUTLINE and reads "AUTO · CH 4 IR (NIGHT)";
 //     the visible picture is GREY (R = G = B) with a picture in it — channel 4, not the speckled composite;
 //   • the key cycles COMPOSITE (colour: R ≠ B somewhere) → CH 1 → CH 2 → CH 4 IR → AUTO, the whole pass redrawn each time;
 //   • the pick is remembered (localStorage) across a reload; no exception; 390 px: no sideways scroll.
@@ -74,12 +74,20 @@ try {
   const until = async (x, ms) => { for (let t = 0; t < ms; t += 250) { if (await ev(x)) return true; await sleep(250); } return !!(await ev(x)); };
   const shot = async (name) => { const r = await send('Page.captureScreenshot', { format: 'png' }); const p = path.join(SHOTS, name); fs.writeFileSync(p, Buffer.from(r.result.data, 'base64')); return p; };
   const trustedClick = async (sel) => {
+    await ev(`document.querySelector(${JSON.stringify(sel)})?.scrollIntoView({ block: 'center' })`);
     const r = JSON.parse(await ev(`JSON.stringify(document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect() || {x:0,y:0,width:0,height:0})`));
     const x = r.x + r.width / 2, y = r.y + r.height / 2;
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
   };
   await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
+  /* ★ METEOR LRPT has no decoder key of its own since SATELLITE took it over (2026-11-20) — a pick there attaches it, which
+   *  needs the satellite engine, elements and a pass overhead. So this test puts the key back IN THE TEST PAGE ONLY, before
+   *  the page's script binds the DECODERS keys: the very attach a SATELLITE pick sends ('lrpt', AUTO), and the box shown
+   *  the way any picture decoder's is. Nothing in the product changes. */
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `new MutationObserver((_, o) => { const p = document.getElementById('decodersPanel');
+    if (p && !p.querySelector('[data-dec="lrpt"]')) { const b = document.createElement('button'); b.className = 'btn'; b.dataset.dec = 'lrpt'; b.textContent = 'METEOR LRPT'; p.appendChild(b); o.disconnect(); } })
+    .observe(document, { childList: true, subtree: true });` });
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   const start = async () => {
     await send('Page.navigate', { url: `${H}/index.html?join` });
@@ -130,9 +138,11 @@ try {
   console.log('── reload: the pick is remembered ──');
   await start();
   ok(await until(`document.getElementById('decChan') && !document.getElementById('decChan').hidden && document.getElementById('decChan').textContent === 'CH 4 IR'`, 60000), `after a reload: "${await key()}"`);
+  const hit = await ev(`(() => { const k = document.getElementById('decChan'); k.scrollIntoView({ block: 'center' }); const r = k.getBoundingClientRect();
+     const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return (e && (e.id || e.className || e.tagName)) + ' @' + Math.round(r.x) + ',' + Math.round(r.y); })()`);
+  console.log(`   (the key's centre hits: ${hit})`);
   await trustedClick('#decChan');   // → AUTO (CH 4 IR was the last choice)
-  await sleep(300);
-  ok(/^AUTO/.test(await key()), `and the cycle comes back round to AUTO: "${await key()}"`);
+  ok(await until(`/^AUTO/.test(document.getElementById('decChan').textContent)`, 3000), `and the cycle comes back round to AUTO: "${await key()}"`);
 
   console.log('── phone width ──');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
