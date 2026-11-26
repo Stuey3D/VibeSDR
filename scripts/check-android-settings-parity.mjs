@@ -43,6 +43,9 @@ const TABLE = [
   // ★★ V12 2026-11-12 how listeners reach it: the phone's server can only register a Cloudflare tunnel (VibeTunnel.kt
   //    sends kind:"tunnel"; there is no address box), so the three-way choice and the alias opt-out cannot work there.
   N(['reachAuto', 'reachOwn', 'reachHttps', 'dirAlias'], 'the phone server is always the Automatic tunnel (VibeTunnel.kt) — an own address and the vibesdr.net alias opt-out need a direct listing it cannot make'),
+  // ★★ V12 beta96 an "ADS-B Beast feed (from another receiver)" radio: the phone serves the one radio it holds; a radio with
+  //    no hardware beside it is a desktop server's (Stuart 11-26 — the Lenovo reading a PiAware Pi on the LAN)
+  N(['beastAddAddr', 'beastAddLabel', 'beastAddr'], 'an ADS-B Beast feed radio is a radio entry of its own on a multi-radio server; the phone serves the one radio it holds'),
   N(['srvPort'], 'the phone takes the first free port of 48000-48049 itself (one VibeServer per device)'),
   N(['rtlSerialNow', 'serialA', 'serialB'], 'radio serials that tell several radios apart on one box — a phone serves one radio'),
   N(['radioPin', 'radioPinClear'], 'a per-radio PIN on a multi-radio box — the phone has the server PIN (PIN — WHO MAY CONNECT)'),

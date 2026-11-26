@@ -96,5 +96,31 @@ for (const c of fx) {
   const got = afBlob(c.serve, c.port, c.open, c.push, rs, !!c.stored);
   ok(c.blob !== undefined ? got.blob === c.blob : (got.error || '').includes(c.error), `fixture "${c.name}": ${got.blob ?? got.error}`);
 }
+// ── ★★ the Beast feed radio's address check (the page's beastAddrWhy; the server checks again) ──
+const why = new Function(`${grab('beastAddrWhy')} return beastAddrWhy;`)();
+ok(why('192.168.86.12:30005') === '' && why('127.0.0.1:30005') === '' && why('piaware.local') === '' && why('[fd00::12]:30005') === '',
+   'IPv4:port, a name, [IPv6]:port are taken');
+ok(/IPv4/.test(why('192.168.86:30005')) && /IPv4/.test(why('300.1.1.1')), 'a short or out-of-range IPv4 is refused');
+ok(/port/.test(why('pi:99999')) && /e\.g\./.test(why('')) && /not a host/.test(why('my pi')), 'bad port, empty, a space: refused in words');
+ok(/id="beastAddOpen"/.test(src) && /ADS-B Beast feed \(from another receiver\)/.test(src), 'ADD RADIO offers "ADS-B Beast feed (from another receiver)"');
+ok(/value="127\.0\.0\.1:30005"/.test(src), 'its address starts at 127.0.0.1:30005');
+// ★ the tab: every SDR card hidden, the name, its own card and the flight-tracker card kept
+{
+  const mk = (id, extra = '') => ({ id, dataset: {}, cls: new Set(extra ? [extra] : []), inner: id === 'name' ? '#radioName' : '',
+    classList: { toggle(c, on) { on ? this.o.cls.add(c) : this.o.cls.delete(c); }, contains(c) { return this.o.cls.has(c); }, add(c) { this.o.cls.add(c); }, remove(c) { this.o.cls.delete(c); } },
+    querySelector(q) { return q === '#radioName' && this.inner ? {} : null; } });
+  const cards = [mk('name'), mk('beastCard', 'hide'), mk('usageCard'), mk('startCard'), mk('adsbFeedCard')];
+  for (const c of cards) c.classList.o = c;
+  const pane = { querySelectorAll: () => cards, querySelector: () => cards.find((c) => c.id !== 'beastCard') };
+  const fields = { radioPane: pane, beastAddr: { value: '' }, beastAddrMsg: { textContent: '' }, beastStatus: { textContent: '' } };
+  const apply = new Function('$', 'beastStatusPoll', `${grab('beastTabApply')} return beastTabApply;`)((id) => fields[id], () => {});
+  apply({ driver: 'beast', beastIn: '192.168.86.12:30005', serial: 'beast-1' });
+  const shown = cards.filter((c) => !c.cls.has('hide')).map((c) => c.id).join(',');
+  ok(shown === 'name,beastCard,adsbFeedCard', `a Beast feed tab: only the name, its own card and the flight-tracker card: ${shown}`);
+  ok(fields.beastAddr.value === '192.168.86.12:30005', 'its address is shown');
+  apply({ driver: 'rtlsdr' });
+  const back = cards.filter((c) => !c.cls.has('hide')).map((c) => c.id).join(',');
+  ok(back === 'name,usageCard,startCard,adsbFeedCard', `an SDR's tab after it: every card it had is back (${back})`);
+}
 console.log(`test-setup-adsb-feed: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

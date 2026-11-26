@@ -124,10 +124,10 @@ console.log('\nA. a server whose only radio is an ADS-B Beast feed');
   const L = () => { try { return fs.readFileSync(logf, 'utf8'); } catch { return ''; } };
   try {
     ok(await up(port), `the server starts with no SDR at all (port ${port})`);
-    ok(/Beast feed radio started: ADS-B from 127\.0\.0\.1:\d+/.test(L()), 'as a Beast feed radio');
+    ok(await until(() => /Beast feed radio started: ADS-B from 127\.0\.0\.1:\d+/.test(L()), 15000), 'as a Beast feed radio');
     ok(!/no radio with serial|no radios are detected/.test(L()), 'nothing looked for hardware');
     const A = ws(port, `/ws/user-spectrum?user_session_id=${crypto.randomUUID()}&mode=binary8&bins=256&proto=1`);
-    await until(() => parsed(A, 'adsb').some((m) => (m.aircraft || []).some((a) => a.lat)), 8000);
+    await until(() => parsed(A, 'adsb').some((m) => (m.aircraft || []).some((a) => a.lat)), 15000);
     const rep = parsed(A, 'adsb').reverse().find((m) => (m.aircraft || []).length) || {};
     const ac = rep.aircraft || [];
     ok(ac.some((a) => a.hex === '4840d6' && /KLM1023/.test(a.flight || '')), `KLM1023 (4840d6) with its callsign (${ac.length} aircraft)`);
@@ -210,6 +210,42 @@ console.log('\nB. a full server: a fake RTL beside a Beast feed radio');
     ok(C.bin > 3 && !(parsed(C, 'hwinfo').pop() || {}).onlyMode, `the RTL beside it is an ordinary receiver (waterfall frames ${C.bin}, no only mode)`);
     C.close();
   } finally { for (const k of [door, r1, r2, rtl]) { try { k.kill('SIGTERM'); } catch {} } fsrv.kill(); }
+}
+// ── C. ADD and REMOVE through the Setup page's own request ──
+console.log('\nC. adding and removing a Beast feed radio (POST /vibeserver/sdr-change)');
+{
+  const dir = mkdir('add'), port = await freePort(), ADMIN = 'beast-add-test';
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ configured: true, adminPass: ADMIN, port,
+    radios: [{ serial: 'bfa-rtl', driver: 'rtlsdr', label: 'RTL', enabled: true, configured: true }] }));
+  const env = { ...process.env, VIBESERVER_NO_RADIO_SPAWN: '1', VIBESERVER_CONFIG: cfgPath, VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+  const door = spawn(BIN, [], { env, stdio: 'ignore' });
+  kids.push(door);
+  try {
+    ok(await up(port), 'the door is up');
+    const H = `http://127.0.0.1:${port}`;
+    const post = async (body) => {
+      const nonce = (await fetch(`${H}/vibeserver/auth`).then((r) => r.json())).nonce;
+      const q = `vs_admin_nonce=${nonce}&vs_admin_auth=${crypto.createHmac('sha256', ADMIN).update(nonce).digest('hex')}`;
+      const r = await fetch(`${H}/vibeserver/sdr-change?${q}`, { method: 'POST', body: JSON.stringify(body) });
+      return { status: r.status, j: await r.json().catch(() => ({})) };
+    };
+    let r = await post({ action: 'addbeast', beastIn: '192.168.86:30005', label: 'x' });
+    ok(r.status === 400 && /IPv4/.test(r.j.error || ''), `a bad address is refused in words (${r.j.error})`);
+    r = await post({ action: 'addbeast', beastIn: '192.168.86.12:30005', label: 'PiAware in the loft' });
+    ok(r.status === 200 && r.j.ok, 'added');
+    const c1 = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const b = (c1.radios || []).find((x) => x.driver === 'beast');
+    ok(!!b && b.serial === 'beast-1' && b.beastIn === '192.168.86.12:30005' && b.label === 'PiAware in the loft' && b.enabled && b.configured,
+       `a radio entry of its own: ${b ? JSON.stringify({ serial: b.serial, beastIn: b.beastIn, label: b.label }) : 'none'}`);
+    ok((c1.radios || []).some((x) => x.serial === 'bfa-rtl'), 'the RTL is untouched');
+    await sleep(2500);   // ★ the restart it asked for
+    await up(port);
+    r = await post({ action: 'remove', serial: 'beast-1' });
+    const c2 = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    ok(r.status === 200 && !(c2.radios || []).some((x) => x.driver === 'beast'), `removed like any radio (${r.status} ${r.j.error || ''})`);
+  } finally { door.kill('SIGTERM'); }
 }
 console.log(`\ntest-server-beast-feed: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

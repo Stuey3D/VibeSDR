@@ -3730,8 +3730,52 @@ int main(int argc, char** argv) {
             const std::string action = field("action");
             const std::string serial = field("serial");
             const std::string newSerial = field("newSerial");
+            /* ★★ V12 beta96 ADD AN "ADS-B BEAST FEED (from another receiver)" RADIO (Stuart 11-26): added by hand — nothing
+             *  to detect. {"action":"addbeast","beastIn":"host:port","label":"…"} → a radio entry of its own, driver "beast",
+             *  serial beast-N, served at once (the restart). Allowed on every platform: it is not hardware. */
+            if (action == "addbeast" || action == "beastaddr") {
+                std::string h; int bp = 0;
+                std::string why;
+                if (!vibe::beast::parseHostPort(field("beastIn"), h, bp, why)) return fail(400, why);
+                vsconfig::ServerConfig next; std::string err;
+                if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
+                std::string label = field("label");
+                if (label.size() > 40) label.resize(40);
+                if (action == "beastaddr") {   // ★ a Beast feed radio's address changed on its tab
+                    vsconfig::RadioConfig* t = nullptr;
+                    for (auto& r : next.radios) if (r.serial == serial && r.driver == "beast") t = &r;
+                    if (!t) return fail(400, "no Beast feed radio with that serial");
+                    t->beastIn = vibe::beast::hostPortText(h, bp);
+                    if (!label.empty()) t->label = label;
+                } else {
+                    if (next.radios.size() >= 16) return fail(400, "too many radios");
+                    std::string ser;
+                    for (int n = 1; n < 100 && ser.empty(); ++n) {
+                        const std::string c = "beast-" + std::to_string(n);
+                        bool used = false; for (const auto& r : next.radios) if (r.serial == c) used = true;
+                        if (!used) ser = c;
+                    }
+                    vsconfig::RadioConfig r;
+                    r.serial = ser; r.driver = "beast"; r.enabled = true; r.configured = true;
+                    r.label = label.empty() ? "ADS-B from " + h : label;
+                    r.beastIn = vibe::beast::hostPortText(h, bp);
+                    r.users = 10;
+                    next.radios.push_back(r);
+                }
+                if (!vsconfig::saveServer(g_configPath, next, err)) return fail(400, err);
+                g_serverConfig = next;
+                if (g_applyDirectory) g_applyDirectory(next, true);
+                g_restartNotBefore.store(nowMonoSecs() + 1.5);
+                g_restartRequested.store(true);
+                return std::string("{\"ok\":true,\"restart\":true}");
+            }
 #if defined(__APPLE__)
-            if (action != "order") return fail(409, "radios on a Mac are added and removed in the VibeServer app");
+            {   // ★ beta96 a Beast feed radio is not hardware the Mac app manages: pause, resume and remove it here like elsewhere
+                bool beast = false;
+                for (const auto& r : g_serverConfig.radios) if (r.serial == serial && r.driver == "beast") beast = true;
+                if (action != "order" && !(beast && (action == "remove" || action == "pause" || action == "resume")))
+                    return fail(409, "radios on a Mac are added and removed in the VibeServer app");
+            }
 #endif
 
             // ★★★ RE-READ BEFORE WRITING — the same rule as the config save: other radio processes

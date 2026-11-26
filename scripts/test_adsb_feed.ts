@@ -36,5 +36,9 @@ ok(lines.length === 3 && /this network only\): 1 reader · 192\.168\.1\.4/.test(
 ok(/connected, 500 messages, 12 kB · 3 dropped/.test(lines[1]) && /retrying in 40 s \(Connection refused\)/.test(lines[2]), 'admin: each site, its counters and its last error');
 ok(adsbFeedLines({ on: true, adsb: false, serve: { on: false }, push: false, feeds: [] })[0].includes('not running'), 'admin: ADS-B not running is said');
 ok(adsbFeedLines({ on: false }).length === 0, 'admin: off = no row');
+ok(adsbFeedLines({ on: false, input: { line: 'Beast feed from 192.168.86.12:30005: connected, 1450 messages a second' } })[0].includes('192.168.86.12:30005: connected'),
+   'admin: a Beast feed radio shows its input even with sharing off');
+ok(/loop guard/.test(adsbFeedLines({ on: true, adsb: true, serve: { on: false }, push: true, feeds: [{ host: 'h', port: 1, on: true, state: 'skipped' }] })[0]),
+   'admin: a push to the input\'s own host says it is skipped');
 console.log(`test_adsb_feed: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

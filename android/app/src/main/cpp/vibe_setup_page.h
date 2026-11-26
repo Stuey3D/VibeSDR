@@ -310,7 +310,25 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div id="sdrChanges"></div>
       <div style="display:flex;gap:10px;align-items:center">
         <button type="button" class="ghost" id="sdrCheckAgain" style="padding:6px 12px;font-size:13px">Check again</button>
+        <button type="button" class="ghost" id="beastAddOpen" style="padding:6px 12px;font-size:13px">Add an ADS-B Beast feed&hellip;</button>
         <span class="hint" id="sdrCheckMsg" style="margin:0"></span>
+      </div>
+      <!-- ★★ V12 beta96 ADD RADIO: "ADS-B Beast feed (from another receiver)" (Stuart 11-26). Added by hand — there is no
+           hardware to detect. A radio entry of its own that drives the ADS-B map only: an address and a name, nothing else. -->
+      <div id="beastAddBox" class="card hide" style="margin-top:10px">
+        <h2>ADS-B Beast feed (from another receiver)</h2>
+        <p class="why">The aircraft another ADS-B receiver hears &mdash; dump1090-fa beside FlightAware&rsquo;s PiAware, for one &mdash;
+          as a radio of its own here: the map and the list, nothing to tune. VibeServer only reads it, so that receiver
+          and its own feeds carry on untouched.</p>
+        <label><span class="lbl">Address of its Beast output</span>
+          <input type="text" id="beastAddAddr" value="127.0.0.1:30005" maxlength="120" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px">
+          <div class="hint">host:port &mdash; e.g. <b>192.168.1.20:30005</b> for a Pi on your network, <b>127.0.0.1:30005</b>
+            on this machine. dump1090-fa offers Beast on port 30005.</div></label>
+        <label><span class="lbl">Name</span>
+          <input type="text" id="beastAddLabel" maxlength="40" placeholder="e.g. PiAware in the loft" style="max-width:280px"></label>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+          <button type="button" class="btn" id="beastAddGo">Add this feed</button>
+          <span class="hint" id="beastAddMsg" style="margin:0"></span></div>
       </div>
     </div>
 
@@ -1068,6 +1086,21 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          single-user one has neither and gets the allow/block lists instead. Asking it last, as
          this page used to, means answering questions that the next answer makes irrelevant. -->
     <div id="radioPane">
+      <!-- ★★ V12 beta96 A BEAST FEED RADIO'S OWN CARD — its address and its status. Only on such a radio's tab; every SDR card
+           is hidden there (beastTabApply — AGENTS.md: no dead controls). -->
+      <div class="card hide" id="beastCard">
+        <h2>ADS-B Beast feed</h2>
+        <p class="why">This radio is another receiver&rsquo;s ADS-B: listeners get the aircraft map and list, nothing to tune.</p>
+        <label><span class="lbl">Address of its Beast output</span>
+          <input type="text" id="beastAddr" maxlength="120" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px"></label>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+          <button type="button" class="ghost" id="beastAddrSave">Change the address</button>
+          <span class="hint" id="beastAddrMsg" style="margin:0"></span></div>
+        <div class="hint" id="beastStatus" style="color:var(--amber)"></div>
+        <div class="hint">If it says nothing is listening: on that machine dump1090-fa (or readsb) must be running with its
+          Beast output on port 30005, and reachable from here (the same network, no firewall in the way). To stop using
+          it, pause or remove this radio above.</div>
+      </div>
       <!-- ★★★ THE RADIO'S NAME — what listeners see on the waterfall, in the radio list and in the
            directory. Display only: nothing is written to the device. It was always stored (the
            `label` in config.json) but could only be changed by editing that file by hand, which is
@@ -6042,6 +6075,7 @@ async function renderHw() {
   // ★★ V12 the running radio's own answer outranks the door's config-only one — for THIS tab only (radioCaps)
   HW_CAPS = { serial: String(r.serial || ""), caps: liveCaps };
   modeRateShow(r);   // ★ the rate switch's red line reads HW.rateGuard, which has only now arrived
+  if (typeof beastTabApply === "function") beastTabApply(r);   // ★★ beta96 after anything the radio's answer re-showed
   /* ★★ V12 2026-10-28: and the background-decoding editor reads HW.spotBands (a Band VFO's band picker) — drawn by
    *  bgLoad BEFORE this answer arrived, so a Band row showed a typed frequency until something redrew it (Stuart,
    *  beta27). Drawn again now, for the radio it shows. */
@@ -7624,6 +7658,7 @@ function fill() {
   bgLoad(r);   // ★ V12 background decoding — see bgLoad
   dxLoad(r);   // ★★★ V12 the idle DX scanner — see dxLoad
   if ($("adsbFeedCard")) afLoad(r);   // ★★ V12 beta96 sharing ADS-B with flight trackers — see afLoad
+  if (typeof beastTabApply === "function") beastTabApply(r);   // ★★ beta96 a Beast feed radio: its own card only
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   if ($("askFirst")) $("askFirst").checked = !!r.askBeforeTuning;   // ★ absent = off, as on every older config
@@ -8463,7 +8498,7 @@ function afRender() {
   $("afPushBox").classList.toggle("hide", !$("afPush").checked);
   $("afPortEcho").textContent = String(Number($("afPort").value) || 30005);
   $("afHost").textContent = location.hostname || "this-server";
-  $("afKeepNote").classList.toggle("hide", !!(r && r.landingAdsb && r.adsbKeepRunning));
+  $("afKeepNote").classList.toggle("hide", !!(r && ((r.landingAdsb && r.adsbKeepRunning) || r.driver === "beast")));   // ★ a Beast feed radio always runs
   afRowsDraw();
 }
 function afCollect() {
@@ -8480,6 +8515,76 @@ async function afStatusPoll() {
     el.textContent = j && j.on ? "Now: " + (j.line || "") + (j.frames ? ` · ${j.frames} messages decoded since this server started` : "") : "";
   } catch (e) { el.textContent = ""; }
   afTimer = setTimeout(() => { if (document.visibilityState === "visible") afStatusPoll(); else afTimer = setTimeout(afStatusPoll, 15000); }, 15000);
+}
+
+/* ── ★★ V12 beta96 THE ADS-B BEAST FEED RADIO (driver "beast"; docs/v12/ADSB-FEED.md) ───────────────────────────────────
+ *  Added by hand (POST /vibeserver/sdr-change {"action":"addbeast","beastIn","label"}); on its tab every SDR card is hidden
+ *  and its own card shows the address and the input's status (GET /r/<serial>/vibeserver/admin/adsbfeed → input). */
+/** The address the owner typed → "" if it is fine, else why (the server checks it again: vibe_beast.h parseHostPort). */
+function beastAddrWhy(t) {
+  const v = String(t || "").trim();
+  if (!v) return "give the other receiver's address, e.g. 192.168.1.20:30005";
+  let host = v, port = "";
+  const m6 = v.match(/^\[([0-9a-fA-F:.]+)\](?::(\d+))?$/);
+  if (m6) { host = m6[1]; port = m6[2] || ""; }
+  else if ((v.match(/:/g) || []).length === 1) { host = v.split(":")[0]; port = v.split(":")[1]; }
+  if (port !== "" && !(/^\d{1,5}$/.test(port) && +port >= 1 && +port <= 65535)) return "the port must be 1 to 65535";
+  if (/^[\d.]+$/.test(host) && !/^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(host)) return `“${host}” is not an IPv4 address`;
+  if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host)) return `“${host}” is not a host name or address`;
+  return "";
+}
+function beastTabApply(r) {
+  const BEAST_KEEP = ["beastCard", "adsbFeedCard"];
+  const beast = !!r && r.driver === "beast";
+  const pane = $("radioPane"); if (!pane) return;
+  for (const c of pane.querySelectorAll(":scope > .card")) {
+    if (c.id === "beastCard") { c.classList.toggle("hide", !beast); continue; }
+    if (BEAST_KEEP.includes(c.id)) continue;   // ★ the flight-tracker card follows its own rule (afRender)
+    if (beast) { if (!c.classList.contains("hide")) { c.dataset.beastHid = "1"; c.classList.add("hide"); } }
+    else if (c.dataset.beastHid) { delete c.dataset.beastHid; c.classList.remove("hide"); }
+  }
+  // ★ the name card stays (the first card); the flight-tracker card follows its own rule (afRender)
+  const first = pane.querySelector(":scope > .card:not(#beastCard)");
+  if (beast && first && first.querySelector("#radioName")) { delete first.dataset.beastHid; first.classList.remove("hide"); }
+  if (!beast) return;
+  $("beastAddr").value = r.beastIn || "";
+  $("beastAddrMsg").textContent = "";
+  beastStatusPoll(r);
+}
+async function beastStatusPoll(r) {
+  const el = $("beastStatus"); if (!el || !r || r.driver !== "beast") return;
+  try {
+    const j = await (await fetch(`/r/${encodeURIComponent(r.serial)}/vibeserver/admin/adsbfeed?${await authQuery()}`, {cache: "no-store"})).json();
+    el.textContent = j && j.input ? "Now: " + (j.input.line || "") : "Not running yet — it starts when the server restarts.";
+  } catch (e) { el.textContent = ""; }
+}
+if ($("beastAddOpen")) {
+  $("beastAddOpen").onclick = () => { $("beastAddBox").classList.toggle("hide"); $("beastAddAddr").focus(); };
+  $("beastAddGo").onclick = async () => {
+    const why = beastAddrWhy($("beastAddAddr").value);
+    if (why) { $("beastAddMsg").textContent = "Not added — " + why + "."; return; }
+    $("beastAddMsg").textContent = "Adding…";
+    try {
+      const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), { method: "POST",
+        body: JSON.stringify({ action: "addbeast", beastIn: $("beastAddAddr").value.trim(), label: $("beastAddLabel").value.trim() }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { $("beastAddMsg").textContent = "Not added — " + (j.error || r.status) + "."; return; }
+      $("beastAddMsg").textContent = "Added. VibeServer is restarting so it goes on air…";
+      setTimeout(() => location.reload(), 8000);
+    } catch (e) { $("beastAddMsg").textContent = "Failed — " + ((e && e.message) || e); }
+  };
+  $("beastAddrSave").onclick = async () => {
+    const r0 = radio();
+    const why = beastAddrWhy($("beastAddr").value);
+    if (why) { $("beastAddrMsg").textContent = "Not changed — " + why + "."; return; }
+    try {
+      const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), { method: "POST",
+        body: JSON.stringify({ action: "beastaddr", serial: r0.serial, beastIn: $("beastAddr").value.trim() }) });
+      const j = await r.json().catch(() => ({}));
+      $("beastAddrMsg").textContent = r.ok ? "Changed. The radio restarts with the new address…" : "Not changed — " + (j.error || r.status) + ".";
+      if (r.ok) r0.beastIn = $("beastAddr").value.trim();
+    } catch (e) { $("beastAddrMsg").textContent = "Failed — " + ((e && e.message) || e); }
+  };
 }
 /* ── ★★★ V12 THE IDLE DX SCANNER (RadioConfig::dxScan — one JSON blob, as bgDecode; the server's vibe_dxscan.h reads it) ── */
 let dxRadio = null, dxKeep = {};

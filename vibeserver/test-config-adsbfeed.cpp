@@ -3,6 +3,7 @@
 // oversized blob is dropped rather than half-applied, and what is stored parses with vibe_beast.h.
 #include "vibeserver_config.h"
 #include "vibe_beast.h"
+#include "vibe_radio_caps.h"
 
 #include <cstdio>
 #include <string>
@@ -39,6 +40,18 @@ int main() {
                            + std::string(5000, 'x') + R"("}]})";
     vsconfig::ServerConfig h;
     ok(vsconfig::fromJson(huge, h, err) && h.radios.size() == 1 && h.radios[0].adsbFeed.empty(), "an oversized blob is dropped, never half-applied");
+    // ★★ the Beast feed radio: ADS-B its only mode, none of an SDR's settings (AGENTS.md — no dead controls)
+    vibecaps::Facts bf; bf.driver = "beast";
+    const vibecaps::Caps bc = vibecaps::compute(bf);
+    ok(bc.modes.size() == 1 && bc.modes[0] == "adsb", "a Beast feed radio's modes: adsb only");
+    ok(!bc.s.usage && !bc.s.gain && !bc.s.hardware && !bc.s.landing && !bc.s.rawIq && !bc.s.vfoB && !bc.s.bgDecode && !bc.s.dxScan
+       && !bc.s.adsbLanding && !bc.iq, "…and no SDR setting (gain, hardware, landing, raw IQ, VFO B, background, DX, satellite-bearing cards)");
+    vsconfig::ServerConfig bs; bs.configured = true;
+    vsconfig::RadioConfig br; br.serial = "beast-1"; br.driver = "beast"; br.configured = true; br.beastIn = "192.168.86.12:30005";
+    bs.radios = {br};
+    vsconfig::ServerConfig bb;
+    ok(vsconfig::fromJson(vsconfig::toJson(bs), bb, err) && bb.radios.size() == 1 && bb.radios[0].driver == "beast"
+       && bb.radios[0].beastIn == "192.168.86.12:30005", "the Beast feed radio's entry round-trips (driver, beastIn)");
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;
 }
