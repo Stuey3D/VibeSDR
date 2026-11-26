@@ -327,6 +327,31 @@ Java_com_vibesdr_app_VibeMapGL_nativeSetBundleDir(JNIEnv* env, jclass, jstring j
     env->ReleaseStringUTFChars(jDir, d);
 }
 
+/* ★★★ beta96: a big pack served straight out of the APK (vibe_mapgl.h setBundleSlice) — VibeMapGL.kt passes the APK
+ *  file and the stored entry's offset/length (AssetFileDescriptor). Returns "" when accepted, else why not (the
+ *  caller then unpacks that file as before). */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeMapGL_nativeSetBundleSlice(JNIEnv* env, jclass, jstring jRel, jstring jPath,
+                                                   jlong offset, jlong length) {
+    auto str = [env](jstring j) {
+        std::string s;
+        if (!j) return s;
+        const char* c = env->GetStringUTFChars(j, nullptr);
+        if (c) { s = c; env->ReleaseStringUTFChars(j, c); }
+        return s;
+    };
+    const std::string rel = str(jRel), path = str(jPath);
+    std::string why;
+    if (vibemapgl::setBundleSlice(rel, path, (int64_t)offset, (int64_t)length, &why)) {
+        LOGI("mapgl: %s served from %s @%lld+%lld", rel.c_str(), path.c_str(), (long long)offset, (long long)length);
+        why.clear();
+    } else {
+        LOGE("mapgl: %s cannot be served from the APK — %s", rel.c_str(), why.c_str());
+        if (why.empty()) why = "refused";
+    }
+    return env->NewStringUTF(why.c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeInitRadioDns(JNIEnv* env, jobject /*thiz*/,
                                                     jstring jDir, jstring jIso) {

@@ -77,6 +77,13 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         }, "vibe-mapgl-app").start()
     }
 
+    /** ★★★ beta96: a byte range of a bundled GPU-map pack for the app's own map (mapglPack.ts readPackRange), read
+     *  straight out of the APK (VibeMapGL.readPackRange — the packs are no longer unpacked). Base64, or null.
+     *  Synchronous: the map page's bridge handler answers in the same tick, as the iOS FileHandle read does. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun mapglPackRange(name: String, offset: Double, length: Double): String? =
+        VibeMapGL.readPackRange(reactApplicationContext, name, offset.toLong(), length.toInt())
+
     /** ★ True only in the memory diagnostics build (VibeDiag.kt) — App.tsx then logs the JS heap every 10 s. */
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun isDiagBuild(): Boolean = BuildConfig.VIBE_DIAG
