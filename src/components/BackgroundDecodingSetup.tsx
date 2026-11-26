@@ -351,9 +351,8 @@ export default function BackgroundDecodingSetup(p: Props) {
           trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
       </View>
       {(!!p.keepName || p.adsbKeeps) && (
-        <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>{p.keepName || 'ADS-B'} is kept running on this radio
-          when nobody is connected (Where listeners start), so these profiles do not run. Untick it there to decode in the
-          background instead.</Text>
+        <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>{p.keepName || 'ADS-B'} is this radio's background
+          mode (BACKGROUND DECODING, above), so these profiles do not run. Choose Manual there to decode them instead.</Text>
       )}
       {model.on && (<>
         {locked && (

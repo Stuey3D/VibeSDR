@@ -300,7 +300,7 @@ inline const std::vector<Control>& controlTable() {
         { "idleGrace",                                   D_ANY,   0 },
         { "spectrogram",                                 D_RADIO, P_ADV },
         { "rate rateLock maxFps",                        D_RADIO, 0 },
-        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
+        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick singleWindow modeSingleUse", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
         { "dabRateBoost",                                D_RADIO, 0 },
         { "adsb256 ism256",                              D_RTL,   0 },
         { "dabScanLabels",                               D_RADIO, P_LITE },
@@ -310,7 +310,7 @@ inline const std::vector<Control>& controlTable() {
           "bandCopyFrom gainList gainAdd",               D_RADIO, P_ADV },
         { "gainIfBw",                                    D_RTL,   P_ADV },
         { "allowPick allowLo allowHi blockPick blockLo blockHi", D_ANY, P_ADV },
-        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList mapKeep", D_RADIO, 0 },   // ★★★ beta96 the landing map
+        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList landKindPlain landKindDab landKindMap bgKindManual bgKindWhole bgModeList", D_RADIO, 0 },   // ★★★ beta96 the landing map; b96-bgsplit the landing choice + the background mode
         { "fmDeemph fmStereo fmNr fmIms fmCeq fmAutoBw fmNb fmReturn fmRemember", D_RADIO, 0 },
         { "antRangePreset antFilterPreset antPortNames", D_ANY,   0 },
         { "swYes swNo swBroker swUser swPass swLocked swAntennas", D_ANY, 0 },

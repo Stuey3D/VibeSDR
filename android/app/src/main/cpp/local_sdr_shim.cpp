@@ -47480,6 +47480,13 @@ std::string LocalSdrShim::backgroundCapsJson() {
     first = true;
     for (const auto& b : vibeism::bands()) { j += std::string(first ? "\"" : ",\"") + b.id + "\""; first = false; }
     j += "]";
+    /* ★★★ b96-bgsplit ISM IS WORLDWIDE: the server's region's own bands, most used first (vibeism::regionBands — the ISM mode's
+     *  landing order) — the app's background / landing ISM choice lists these first and defaults to the first it reaches. */
+    { const vibeism::Region rg = vibeism::regionAt(g_bgLat.load(), g_bgLon.load());
+      j += std::string(",\"ismRegion\":\"") + vibeism::regionName(rg) + "\",\"ismOwn\":[";
+      bool f2 = true;
+      for (const char* id : vibeism::regionBands(rg)) { j += std::string(f2 ? "\"" : ",\"") + id + "\""; f2 = false; }
+      j += "]"; }
     std::vector<vibe::digi::Span> spans = vsSpotSpans();
     const bool radioOpen = !spans.empty();
     if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::allModes(), [](double, double) { return true; });

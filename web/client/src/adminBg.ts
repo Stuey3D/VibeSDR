@@ -249,29 +249,45 @@ export function behindLines(list: string[] | null | undefined): { head: string; 
   };
 }
 
-/* ── ★★★ beta96 THE LANDING MAP / KEEP-RUNNING LINE (adminStatusJson "keepRun", Impl::keepRunJson — Stuart 11-26: "I thought I'd
- *    be able to set VDL2 as the Sony's background mode"). What new listeners land in, whether it is kept running and is now,
- *    WHY NOT in the server's words (the rate, a block, a lock), what it costs (the setup benchmark — the default, never a gate)
- *    and the satellites beside it. Admin only: an idle kept mode is nothing a listener feels. ── */
+/* ── ★★★ beta96 → b96-bgsplit THE BACKGROUND LINE (adminStatusJson "keepRun", Impl::keepRunJson). Stuart 11-26: background
+ *    decoding and where new listeners land are two choices now — this line is the BACKGROUND whole-radio mode (what the radio
+ *    does with nobody connected: running, paused for listeners, why not in the server's words, its cost, the satellites
+ *    beside it) and, as a row, where new listeners land. "bg":false = manual background decoding (bgLines says that one).
+ *    Admin only: an idle background mode is nothing a listener feels (feedback_health_pill_genuine_only). ── */
 export interface KeepRunStatus {
+  bg?: boolean;
   map?: string; title?: string; mode?: string; keep?: boolean; on?: boolean;
   state?: 'running' | 'listeners' | 'cannot' | 'pass' | 'starting' | 'landing';
   why?: string; cost?: string; heavy?: boolean; shared?: string; paused?: string; orbRider?: boolean; riding?: boolean; centre?: number;
+  land?: 'map' | 'dab' | 'plain'; landTitle?: string; landMode?: string; landHz?: number; landDemod?: string;
+}
+/** "on the Aviation & Maritime map in ADS-B" · "on DAB 12B" · "on 96.100 MHz WFM" · "" (an older server). */
+export function landWords(k: KeepRunStatus): string {
+  if (k.land === 'map') return `on the ${k.landTitle || 'landing'} map in ${k.landMode || 'its mode'}`;
+  if (k.land === 'dab') return `on ${k.landMode || 'a DAB station'}`;
+  if (k.land === 'plain') {
+    const hz = Number(k.landHz) || 0;
+    const f = hz >= 1e6 ? `${(hz / 1e6).toFixed(3)} MHz` : hz > 0 ? `${(hz / 1e3).toFixed(1)} kHz` : '';
+    return [f ? `on ${f}` : 'on the radio\u2019s own frequency', (k.landDemod || '').toUpperCase()].filter(Boolean).join(' ');
+  }
+  return '';
 }
 export function keepRunLines(k: KeepRunStatus | null | undefined): { head: string; rows: string[]; warn: boolean } | null {
-  if (!k || !k.map || !k.mode) return null;
-  const what = k.keep ? `${k.mode} kept running` : `lands in ${k.mode}`;
-  const st = k.state === 'running' ? (k.keep ? 'running (nobody needs to be connected)' : 'running')
-    : k.state === 'listeners' ? (k.on ? 'running, with listeners' : 'listeners have the radio on something else — it comes back when they leave')
-    : k.state === 'pass' ? (k.shared ? `sharing the capture with a satellite pass` : `paused for a satellite pass — it resumes after LOS`)
+  if (!k || k.bg === false || !k.map || !k.mode) return null;
+  const sameAsLanding = k.land === 'map' && k.landMode === k.mode;
+  const st = k.state === 'running' ? 'running (nobody needs to be connected)'
+    : k.state === 'listeners' ? (k.on ? 'running, with listeners' : 'paused \u2014 listeners have the radio; it comes back when the last one leaves')
+    : k.state === 'pass' ? (k.shared ? `sharing the capture with a satellite pass` : `paused for a satellite pass \u2014 it resumes after LOS`)
     : k.state === 'starting' ? 'starting within a few seconds'
     : k.state === 'landing' ? 'new listeners land in it'
-    : `cannot run now — ${k.why || 'not on this radio now'}`;
+    : `cannot run now \u2014 ${k.why || 'not on this radio now'}`;
   const rows: string[] = [];
-  if (k.cost) rows.push(`cost: ${k.cost}${k.heavy ? ' — heavy for this machine; your choice (the benchmark never hides it)' : ''}`);
-  if (typeof k.centre === 'number' && k.centre > 0) rows.push(`capture held at ${(k.centre / 1e6).toFixed(4)} MHz — VDL2 and the ORBCOMM band on one capture`);
+  const lw = landWords(k);
+  if (lw) rows.push(`new listeners land ${lw}${sameAsLanding ? ' \u2014 they join it already populated' : ` \u2014 ${k.mode} pauses while they are on`}`);
+  if (k.cost) rows.push(`cost: ${k.cost}${k.heavy ? ' \u2014 heavy for this machine; your choice (the benchmark never hides it)' : ''}`);
+  if (typeof k.centre === 'number' && k.centre > 0) rows.push(`capture held at ${(k.centre / 1e6).toFixed(4)} MHz \u2014 VDL2 and the ORBCOMM band on one capture`);
   if (k.orbRider) rows.push('ORBCOMM sky plot building beside it');
   if (k.riding) rows.push('VDL2 riding the satellite pass\u2019s capture');
-  if (k.state === 'cannot' && k.keep) rows.push('until it can, the radio idles as it would without it (parked, background decoding)');
-  return { head: `${k.title || 'Landing map'} · ${what} · ${st}`, rows, warn: k.state === 'cannot' || !!k.heavy };
+  if (k.state === 'cannot') rows.push('until it can, the radio idles as it would without it (parked, or handed to another program)');
+  return { head: `Background decoding \u00b7 ${k.mode} \u00b7 ${st}`, rows, warn: k.state === 'cannot' || !!k.heavy };
 }
