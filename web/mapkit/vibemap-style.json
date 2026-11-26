@@ -182,7 +182,12 @@
    "playas"
   ],
   "vibesdr:basicOnlyZ5Note": "These read tier1 data the basic pack holds for z4-5 only (gen-map-tiles TIER_STEP: the detail pack takes over at z6), while the basic source runs to z6. Without the detail pack they are moved to a second source on the same pack capped at maxzoom 5 (vs-basic-z5, the id the directory's own stopgap in vibemap-water.js checks for, so it stands down), so the z5 tiles over-zoom to every zoom above instead of the empty z6 ones: the IJsselmeer and every other lake stay water from z6 up (Stuart 11-26).",
-  "vibesdr:textScale": 1.2
+  "vibesdr:basicRivers": [
+   "riverareas-b"
+  ],
+  "vibesdr:basicRiversNote": "The basic pack's river areas (beta96, Stuart 11-26: Rotterdam's AIS ships 'on land' without High Detail Maps): Overture river/canal/tidal/dock areas >= 200 m wide, in the basic pack's tiles z5-8 (gen-river-areas.mjs --basic, joined by lib/basic-water.mjs). These layers read the SAME pack through their own source, vs-basic-rivers (maxzoom 8, so the z8 tiles over-zoom above), while the basic source stays maxzoom 6. With the detail pack they stop where its riverareas-d starts (z8), so nothing is drawn twice.",
+  "vibesdr:textScale": 1.2,
+  "vibesdr:basicRev": "319a8e477c"
  },
  "glyphs": "GLYPHS_URL",
  "sources": {
@@ -190,7 +195,7 @@
    "type": "vector",
    "url": "BASIC_URL",
    "maxzoom": 6,
-   "attribution": "Natural Earth · OurAirports · NGA World Port Index"
+   "attribution": "Natural Earth · OurAirports · NGA World Port Index · © OpenStreetMap contributors (rivers via Overture Maps) · ODbL"
   },
   "detail": {
    "type": "vector",
@@ -483,6 +488,16 @@
    "source": "detail",
    "source-layer": "lakes",
    "minzoom": 6,
+   "paint": {
+    "fill-color": "#1b4a6b"
+   }
+  },
+  {
+   "id": "riverareas-b",
+   "type": "fill",
+   "source": "basic",
+   "source-layer": "riverareas",
+   "minzoom": 5,
    "paint": {
     "fill-color": "#1b4a6b"
    }

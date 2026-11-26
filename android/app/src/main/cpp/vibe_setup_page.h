@@ -326,8 +326,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <input type="text" id="beastAddLabel" maxlength="40" placeholder="what listeners see, e.g. PiAware in the loft" style="max-width:280px"></label>
         <label><span class="lbl">How many users</span>
           <input type="number" id="beastAddUsers" min="1" max="200" step="1" value="10" style="max-width:100px">
-          <div class="hint" id="beastAddUsersHint">The most listeners at once on this feed. Each one on the map takes about 0.2&nbsp;KB/s of
-            upload per aircraft shown (about 12&nbsp;KB/s with 60 aircraft) &mdash; set it from your upload speed.</div></label>
+          <div class="hint" id="beastAddUsersHint">The most listeners at once on this feed. Each one on the map takes about 2.5&nbsp;KB/s of upload
+            with 150 aircraft (about 1&nbsp;KB/s with 60) in the current app and web page; an app or page from before beta96
+            takes about 0.2&nbsp;KB/s per aircraft (30&nbsp;KB/s with 150) &mdash; set it from your upload speed.</div></label>
         <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
           <button type="button" class="btn" id="beastAddGo">ADD</button>
           <span class="hint" id="beastAddMsg" style="margin:0"></span></div>
@@ -1607,7 +1608,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             <code>sudo piaware-config receiver-type other</code>, <code>sudo piaware-config receiver-host <span id="afHost">this-server</span></code>,
             <code>sudo piaware-config receiver-port <span id="afPortEcho">30005</span></code>, <code>sudo systemctl restart piaware</code>,
             then claim the feeder on flightaware.com. Step by step: <i>Feed FlightAware from a VibeServer</i> in the VibeServer guide.
-            <b>ADS-B Exchange</b> and other sites with their own feed program can read this port the same way.</div>
+            Sites with their own feed program (ADS-B Exchange's, for its MLAT and stats page) can read this port the same way.</div>
         </div>
         <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
           <input type="checkbox" id="afPush" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -1618,7 +1619,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <div class="hint">Each site gets a stream with repeats thinned to two a second per aircraft and message kind, as
             their own feed programs send. A <b>station UUID</b> identifies your feed to the site (the ones that use one make
             it yours on their stats pages). VibeServer makes one for you where the site's own program would; for
-            map.flights paste the one from your station page there.</div>
+            map.flights paste the one from your station page there. <b>ADS-B Exchange:</b> your aircraft reach their map
+            this way, but their MLAT and their feeder stats page need their own feed program (it can read the Beast port
+            above instead).</div>
         </div>
         <div class="hint" id="afStatus" style="color:var(--amber)"></div>
         <div class="hint">What is sent: the replies aircraft broadcast (identity, position, altitude, speed, squawk and the
@@ -9042,14 +9045,16 @@ function bgLoad(r) {
 
 /* ── ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (RadioConfig::adsbFeed — one JSON blob; vibe_beast.h parseConfig) ──
  *  The presets are the sites whose published feed set-ups give a host and port that take a plain Beast stream
- *  (docs/v12/ADSB-FEED.md says where each came from, and when it was read). ADS-B Exchange is not one: its published route
- *  is its own feed program, which can read our Beast port. Pure parts (afBlob/afRowsFrom) are tested by
+ *  (docs/v12/ADSB-FEED.md says where each came from, and when it was read). ★ ADS-B Exchange added 11-26 (Stuart): its own
+ *  feed client sends reduced Beast to feed1.adsbexchange.com:30004 with a UUID — the same thing; MLAT and its stats page
+ *  still need its client. Pure parts (afBlob/afRowsFrom) are tested by
  *  scripts/test-setup-adsb-feed.mjs. */
 const AF_PRESETS = [
   { name: "adsb.lol", host: "feed.adsb.lol", port: 30004, uuid: "auto" },
   { name: "adsb.fi", host: "feed.adsb.fi", port: 30004, uuid: "auto" },
   { name: "airplanes.live", host: "feed.airplanes.live", port: 30004, uuid: "auto" },
   { name: "map.flights", host: "feed.map.flights", port: 30004, uuid: "paste" },
+  { name: "ADS-B Exchange", host: "feed1.adsbexchange.com", port: 30004, uuid: "auto" },
 ];
 const AF_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 let afRadio = null, afRowsModel = [], afTimer = 0;

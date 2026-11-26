@@ -5,6 +5,15 @@
 //      the IJsselmeer, the Markermeer and every lake drew as LAND from z6 up. Fixed in the SHARED renderer
 //      (vibemapgl.js prepareStyle, vibesdr:basicOnlyZ5 → source vs-basic-z5) — the server web map, the app and the
 //      directory all run it. The directory's own check is directory/scripts/test-map-water-nl.mjs (main).
+//   ★★ beta96 too (Stuart 11-26, a tester's 600 AIS ships at Rotterdam all "on land"): the RIVERS >= 200 m now in the
+//      basic pack (gen-river-areas.mjs --basic, layer riverareas, z5–8; style riverareas-b on source vs-basic-rivers,
+//      stopping at z8 where the detail pack's riverareas-d starts). Points checked against the Overture polygons first
+//      (DuckDB ST_Contains; mean width in brackets):
+//      water: Rotterdam Erasmusbrug (266 m) · Nieuwe Waterweg (468) · Thames at Tower Bridge (208) and London Bridge (208)
+//             · Antwerp Het Steen (273) and south (272) · Saigon Bach Dang (372) and Thanh Da (230)
+//      land:  Rotterdam Coolsingel, Rotterdam Zuid, Rozenburg, the City of London, Southwark, Antwerp centre, Saigon D1
+//      at z8–11 (z7 too for the Nieuwe Waterweg, wide enough for z7; Thanh Da from z9 — at z8 its 230 m is 0.77 px at
+//      10°N, drawn but sub-pixel, so no pixel is blue, with or without the detail pack), in all three phases.
 //   Samples the rendered PIXEL at fixed points, z5–10, as the server page builds its map (mapgl.ts probeMapGL:
 //   the style and the files from the server's /mapgl/, HEAD vibemap-detail.pmtiles decides the detail pack):
 //      water: IJsselmeer 52.75N 5.35E · Markermeer 52.55N 5.20E · Wadden Sea 53.20N 5.30E
@@ -41,7 +50,7 @@ const procs = [];
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-mapwater-'));
 const cleanup = () => { for (const p of procs) { try { p.kill('SIGKILL'); } catch {} } try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
 process.on('exit', cleanup);
-setTimeout(() => { console.log('   FAIL deadline (300 s)'); process.exit(1); }, 300000).unref();
+setTimeout(() => { console.log('   FAIL deadline (900 s)'); process.exit(1); }, 900000).unref();
 
 // ── the server: this checkout's /mapgl/, a data dir whose mapgl/ may hold the detail pack ──
 for (const d of ['data/mapgl', 'run', 'edge']) fs.mkdirSync(path.join(dir, d), { recursive: true });
@@ -87,11 +96,20 @@ const js = async (expr) => { const r = await call('Runtime.evaluate', { expressi
 const until = async (expr, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { if ((await js(expr)) === true) return true; await sleep(200); } return false; };
 await call('Runtime.enable'); await call('Page.enable');
 
+const NL = [5, 6, 7, 8, 9, 10], RIV = [8, 9, 10, 11];
 const POINTS = [
-  ['IJsselmeer', 52.75, 5.35, 'water'], ['Markermeer', 52.55, 5.20, 'water'], ['Wadden Sea', 53.20, 5.30, 'water'],
-  ['Lelystad', 52.50, 5.47, 'land'], ['Emmeloord', 52.71, 5.75, 'land'],
+  ['IJsselmeer', 52.75, 5.35, 'water', NL], ['Markermeer', 52.55, 5.20, 'water', NL], ['Wadden Sea', 53.20, 5.30, 'water', NL],
+  ['Lelystad', 52.50, 5.47, 'land', NL], ['Emmeloord', 52.71, 5.75, 'land', NL],
+  ['Rotterdam Erasmusbrug', 51.9078, 4.4868, 'water', RIV], ['Nieuwe Waterweg', 51.9460, 4.1800, 'water', [7, ...RIV]],
+  ['Thames Tower Bridge', 51.5055, -0.0754, 'water', RIV], ['Thames London Bridge', 51.5080, -0.0870, 'water', RIV],
+  ['Antwerp Het Steen', 51.2240, 4.3930, 'water', RIV], ['Antwerp Scheldt south', 51.2150, 4.3900, 'water', RIV],
+  ['Saigon Bach Dang', 10.7745, 106.7075, 'water', RIV], ['Saigon Thanh Da', 10.8160, 106.7260, 'water', [9, 10, 11]],
+  ['Rotterdam Coolsingel', 51.9200, 4.4790, 'land', RIV], ['Rotterdam Zuid', 51.8950, 4.4950, 'land', RIV],
+  ['Rozenburg', 51.9050, 4.2500, 'land', RIV], ['City of London', 51.5140, -0.0900, 'land', RIV],
+  ['Southwark', 51.5000, -0.0800, 'land', RIV], ['Antwerp centre', 51.2170, 4.4100, 'land', RIV],
+  ['Saigon D1', 10.7760, 106.7000, 'land', RIV],
 ];
-const ZOOMS = [5, 6, 7, 8, 9, 10];
+const ZOOMS = [...new Set(POINTS.flatMap((p) => p[4]))].sort((a, b) => a - b);
 const detailLink = path.join(dir, 'data/mapgl/vibemap-detail.pmtiles');
 
 // ★ the map as the server page makes it (mapgl.ts probeMapGL + loadMapGLScripts + VibeMapGL.create), on a bare page
@@ -123,15 +141,21 @@ try {
     const opened = await js(OPEN(phase === 'app path'));
     if (opened !== true || !(await until(`!!window.VM && VM.map.loaded()`, 30000))) { ok(false, `${phase}: the GPU map came up (${opened})`); continue; }
     const want = phase === 'detail pack';
-    const st = await js(`JSON.stringify({ d: VM_DETAIL, z5: !!VM.map.getSource('vs-basic-z5'), lakes: VM.map.getLayer('lakes-b') ? VM.map.getLayer('lakes-b').source : null })`);
+    const st = await js(`JSON.stringify({ d: VM_DETAIL, z5: !!VM.map.getSource('vs-basic-z5'), lakes: VM.map.getLayer('lakes-b') ? VM.map.getLayer('lakes-b').source : null,
+      riv: VM.map.getLayer('riverareas-b') ? VM.map.getLayer('riverareas-b').source : null, rivMax: VM.map.getLayer('riverareas-b') ? VM.map.getLayer('riverareas-b').maxzoom : null,
+      rivSrcMax: VM.map.getSource('vs-basic-rivers') ? VM.map.getSource('vs-basic-rivers').maxzoom : null })`);
     const S = JSON.parse(st);
     ok(S.d === want, `the server says detail pack ${S.d ? 'installed' : 'not installed'}`);
     ok(want ? (!S.z5 && S.lakes === 'basic') : (S.z5 && S.lakes === 'vs-basic-z5'),
        want ? `with it, no vs-basic-z5 source (lakes-b reads ${S.lakes})` : `without it, lakes-b reads ${S.lakes} (capped at z5)`);
+    ok(S.riv === 'vs-basic-rivers' && S.rivSrcMax === 8, `riverareas-b reads ${S.riv} (source maxzoom ${S.rivSrcMax})`);
+    ok(want ? S.rivMax === 8 : S.rivMax === 24 || S.rivMax == null,
+       want ? `with it, riverareas-b stops at z${S.rivMax} where riverareas-d starts` : `without it, riverareas-b over-zooms (maxzoom ${S.rivMax})`);
     // ★ labels off (a country name sits on the Markermeer at z5): this tests the ground, not the lettering
     await js(`VM.map.getStyle().layers.filter(l => l.type === 'symbol').forEach(l => VM.map.setLayoutProperty(l.id, 'visibility', 'none')), true`);
     for (const z of ZOOMS) {
-      for (const [pn, lat, lon, wantKind] of POINTS) {
+      for (const [pn, lat, lon, wantKind, zs] of POINTS) {
+        if (!zs.includes(z)) continue;
         await js(`VM.map.jumpTo({ center: [${lon}, ${lat}], zoom: ${z} }), true`);
         await sleep(200);
         await until(`VM.map.loaded() && VM.map.areTilesLoaded() && !VM.map.isMoving()`, 20000);
@@ -143,11 +167,12 @@ try {
         const fills = await js(`VM.map.queryRenderedFeatures(VM.map.project([${lon}, ${lat}])).filter(f => f.layer.type === 'fill').map(f => f.layer.id).slice(0, 4).join('>')`);
         ok(is === wantKind, `${phase} z${z} ${pn}: ${is} (rgb ${r},${g},${b}; top fills ${fills || 'none'})`);
       }
-      if (SHOTS && z === 7) {
-        await js(`VM.map.jumpTo({ center: [5.4, 52.75], zoom: 7 }), true`);
+      for (const [name, lon, lat, zz] of [['nl', 5.4, 52.75, 7], ['rotterdam', 4.35, 51.92, 9], ['london', -0.08, 51.505, 9]]) {
+        if (!SHOTS || z !== zz) continue;
+        await js(`VM.map.jumpTo({ center: [${lon}, ${lat}], zoom: ${zz} }), true`);
         await js(`new Promise((r) => { VM.map.once('idle', () => r(true)); VM.map.triggerRepaint(); setTimeout(() => r(false), 8000); })`);
         const s = await call('Page.captureScreenshot', { format: 'png' });
-        fs.writeFileSync(path.join(SHOTS, `server-map-${phase.replace(/ /g, '-')}-z7.png`), Buffer.from(s.result.data, 'base64'));
+        fs.writeFileSync(path.join(SHOTS, `server-map-${phase.replace(/ /g, '-')}-${name}-z${zz}.png`), Buffer.from(s.result.data, 'base64'));
       }
     }
   }

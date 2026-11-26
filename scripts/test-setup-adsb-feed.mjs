@@ -24,12 +24,15 @@ for (const id of ['afServe', 'afPort', 'afOpen', 'afPush', 'afRows', 'afAdd', 'a
 ok(/receiver-type other/.test(src) && /receiver-host/.test(src) && /receiver-port/.test(src), 'the FlightAware lines (piaware-config receiver-type other / host / port)');
 ok(/MLAT \(multilateration\) is not supported/.test(src), 'MLAT: said NOT supported');
 ok(/Nothing about your listeners/.test(src) && /never sends this receiver&rsquo;s position|never sends this receiver's position/.test(src), 'the privacy lines');
-ok(AF_PRESETS.map((p) => p.host).join(',') === 'feed.adsb.lol,feed.adsb.fi,feed.airplanes.live,feed.map.flights', 'the presets');
-ok(!AF_PRESETS.some((p) => /adsbexchange/.test(p.host)), 'no ADS-B Exchange preset (its published route is its own feed program)');
+ok(AF_PRESETS.map((p) => p.host).join(',') === 'feed.adsb.lol,feed.adsb.fi,feed.airplanes.live,feed.map.flights,feed1.adsbexchange.com', 'the presets');
+// ★ 11-26 ADS-B Exchange: its feed client's own target (adsbexchange/feedclient configure.sh: feed1.adsbexchange.com,30004,
+//   beast_reduce_out, --uuid-file) — a UUID we make when ticked, as the others
+ok(JSON.stringify(AF_PRESETS.find((p) => /adsbexchange/.test(p.host))) === '{"name":"ADS-B Exchange","host":"feed1.adsbexchange.com","port":30004,"uuid":"auto"}', 'the ADS-B Exchange preset: feed1:30004, UUID made for you');
+ok(/ADS-B Exchange:<\/b> your aircraft reach their map/.test(src) && /MLAT and their feeder stats page need their own feed program/.test(src), 'the card says ADS-B Exchange MLAT and stats need their client');
 
 // ── off by default ──
 let rows = afRowsFrom({});
-ok(rows.length === 4 && rows.every((r) => !r.on), 'a radio that never set it: every preset unticked');
+ok(rows.length === 5 && rows.every((r) => !r.on), 'a radio that never set it: every preset unticked');
 ok(afBlob(false, 30005, false, false, rows, false).blob === '', 'and nothing is stored (the radio entry stays as before)');
 ok(JSON.parse(afBlob(false, 30005, false, false, rows, true).blob).serve === false, 'once set, switched off is stored as off');
 
@@ -42,7 +45,7 @@ ok(out.blob === '{"serve":true,"port":30005,"open":false,"push":true,"feeds":[{"
 const back = afRowsFrom(JSON.parse(out.blob));
 ok(back[0].on && back[0].uuid === '0f3c3a2b-1234-4abc-9def-0123456789ab' && !back[1].on, 'and it reads back into the same rows');
 rows = afRowsFrom({ feeds: [{ host: '192.168.1.40', port: 30004, on: false }] });
-ok(rows.length === 5 && rows[4].host === '192.168.1.40' && !rows[4].on, 'a custom destination keeps its row (ticked or not)');
+ok(rows.length === 6 && rows[5].host === '192.168.1.40' && !rows[5].on, 'a custom destination keeps its row (ticked or not)');
 ok(JSON.parse(afBlob(false, 30005, false, true, rows, true).blob).feeds[0].on === false, '…and is stored unticked');
 
 // ── refusals in words ──
