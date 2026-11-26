@@ -32,7 +32,8 @@ nearest first and latest first"*. Before this the list was nearest first only.
 - `scripts/test_nav_coverage.ts` +3 (the sort keys are pad keys; MapOverlay hands them; both ISM maps give them).
 - `scripts/test-web-ism-map.mjs` (headless Edge, --mute-audio, real server): the key in the header, NEAREST distances
   never go down, LATEST orders the fake nodes by their seen, remembered, the map unchanged, NEAREST again by keyboard;
-  the gallery map's key with the kept pick and LATEST by last heard.
+  the gallery map's key with the kept pick and LATEST by last heard. 77/0 on a vibeserver built from this branch (its one
+  stale line — the live map's ranges now include beta96's THIS SESSION — corrected).
 
 ## RESUME HERE
 Done and committed on b96-meshsort. Open: the AMATEUR map's MESH tab (above) if Stuart wants NEAREST there too.

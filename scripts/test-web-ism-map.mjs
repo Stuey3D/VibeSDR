@@ -168,8 +168,8 @@ try {
   console.log('   screenshot', await shot('ismmap.png'));
 
   console.log('── the time filter ──');
-  ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ') === '1 H:false 24 H:true',
-     'the live map offers 1 H · 24 H (the receiver keeps 24 h), 24 H chosen');
+  ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ') === '1 H:false 24 H:true THIS SESSION:false',
+     'the live map offers 1 H · 24 H (the receiver keeps 24 h) and beta96\'s THIS SESSION, 24 H chosen');
   const n24 = await ev(`document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length`);
   await ev(`${view}.querySelector('[data-rng="1h"]').focus()`);
   await key('Enter', 'Enter');
