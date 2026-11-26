@@ -145,7 +145,7 @@ for (const [csv, what] of cases) {
 // ── the page wires it (source contracts) ──
 {
   ok(/function collect\(\) \{\n  stashRadio\(\);\n  newModesStampDrawn\(\);/.test(page), 'collect() stamps the drawn radios before every save');
-  ok((page.match(/if \(modesStop\(\)\) return;/g) || []).length === 2, 'both save buttons refuse a radio with no modes');
+  ok((page.match(/if \(secSaveStops\((?:true|false)\)\) return;/g) || []).length === 2 && /modesWhy\(list\[i\]\)\) return stop\(i, "radio:modes-and-decoders", modesStop\)/.test(page), 'both save buttons refuse a radio with no modes (★ beta96 7ba7dda24: through secSaveStops, which runs modesStop)');
   ok(/\$\("modeAllOn"\)\.addEventListener\("click"/.test(page) && /\$\("modeAllOff"\)\.addEventListener\("click"/.test(page), 'All on / All off wired');
   ok(/<button type="button" class="ghost" id="modeAllOn">All on<\/button>/.test(page), 'All on is a real <button> (keyboard / pad reachable)');
   ok(!/function modeAllSet[\s\S]{0,2500}fetch\(/.test(page.slice(page.indexOf('function modeAllSet'), page.indexOf('function modeAllSet') + 2600)), 'All on / All off save nothing (no fetch)');
