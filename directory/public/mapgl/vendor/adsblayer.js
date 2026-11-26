@@ -1981,9 +1981,23 @@
       /** ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a host whose AREA marker took a press asks whether an
        *  aircraft is under it (client px; more slack on touch) — true = this layer selected it and the area must not. */
       pickAt(clientX, clientY, touch) {
-        if (!gl || !glReady) return false;
-        const r = gl.getCanvas().getBoundingClientRect();
-        const h = hitHexR({ x: clientX - r.left, y: clientY - r.top }, touch ? 20 : 12);
+        if (clientX == null || clientY == null) return false;
+        const rad = touch ? 20 : 12;
+        let h = null;
+        if (gl) {
+          if (!glReady) return false;
+          const r = gl.getCanvas().getBoundingClientRect();
+          h = hitHexR({ x: clientX - r.left, y: clientY - r.top }, rad);
+        } else if (lm) {
+          // ★ the Leaflet fallback (a server without a map pack): the nearest drawn aircraft within the slack
+          const r = lm.getContainer().getBoundingClientRect(), x = clientX - r.left, y = clientY - r.top;
+          let bd = rad;
+          for (const s of ac.values()) {
+            if (!s.disp || s.goneAt || !s.ll) continue;
+            const p = lm.latLngToContainerPoint([s.disp.lat, s.disp.lon]), d = Math.hypot(p.x - x, p.y - y);
+            if (d <= bd) { bd = d; h = s.hex; }
+          }
+        }
         if (!h) return false;
         select(h);
         return true;

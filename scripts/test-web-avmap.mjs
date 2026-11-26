@@ -171,21 +171,34 @@ try {
       const got = await until(`!!${areaSel}`, 12000);
       ok(got, 'SEA AREAS on: a sea area\'s marker in view');
       if (got) {
-        const pt = JSON.parse(await ev(`(() => {
-          const el = ${areaSel}; const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
-          el.setAttribute('data-test-area', '1');
-          const gl = window.__vibeTrkMap._gl || window.__vibeTrkMap; const c = gl.getCanvas().getBoundingClientRect();
-          const ll = gl.unproject([x - c.left, y - c.top]);
-          window.__vibeAcLayer.update([{ hex: '~a5ea00', flight: 'OVERSEA', lat: ll.lat, lon: ll.lng, alt_baro: 30000, seen_pos: 1 }]);
-          return JSON.stringify({ x, y });
-        })()`) || '{}');
+        // ★ the camera held still (AUTO off), so the marker and the aircraft stay where they are put
+        await ev(`window.__vibeAcLayer.setPrefs({ autoZoom: false })`);
         await sleep(1500);
+        const put = `(() => { try {
+          const el = document.querySelector('[data-test-area="1"]') || ${areaSel}; if (!el) return JSON.stringify({ err: 'no area marker' });
+          el.setAttribute('data-test-area', '1');
+          const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+          // ★ GPU map (a map pack) or the Leaflet fallback (none in this test's data dir) — both press the same way
+          const m = window.__vibeTrkMap, gl = m._gl; let ll;
+          if (gl) { const c = gl.getCanvas().getBoundingClientRect(); ll = gl.unproject([x - c.left, y - c.top]); }
+          else { const c = m.getContainer().getBoundingClientRect(); ll = m.containerPointToLatLng([x - c.left, y - c.top]); }
+          // ★ the feed hands the layer the WHOLE list each time — the test's aircraft rides along with every update
+          const A = window.__vibeAcLayer; window.__testOversea = { hex: '~a5ea00', flight: 'OVERSEA', lat: ll.lat, lon: ll.lng, alt_baro: 30000, seen_pos: 1 };
+          if (!A.__upd) { A.__upd = A.update; A.update = (list) => A.__upd([...(list || []).filter((a) => a.hex !== '~a5ea00'), ...(window.__testOversea ? [window.__testOversea] : [])]); }
+          A.update([...A.shown().filter((a) => a.hex !== '~a5ea00').map((a) => ({ hex: a.hex, lat: a.lat, lon: a.lon, seen_pos: 1 })), window.__testOversea]);
+          return JSON.stringify({ x, y });
+        } catch (e) { return JSON.stringify({ err: String(e) }); } })()`;
+        let pt = JSON.parse(await ev(put) || '{}');
+        await sleep(1500);
+        pt = JSON.parse(await ev(put) || '{}');   // ★ again, where it now is (a glide in, a declutter)
+        await sleep(600);
         await ev(`document.querySelectorAll('.vtl-card .vtl-x').forEach((b) => b.click())`);
-        await ev(`(() => { const el = document.querySelector('[data-test-area="1"]'); el && el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: ${pt.x}, clientY: ${pt.y}, view: window })); })()`);
+        await ev(`(() => { const el = document.querySelector('[data-test-area="1"]'); el && el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: ${pt.x || 0}, clientY: ${pt.y || 0}, view: window })); })()`);
         await sleep(800);
         const res = JSON.parse(await ev(`(() => { const ac = document.querySelector('.vsadsb-pop-dark'); const vc = document.querySelector('.vtl-card:not([hidden])');
           return JSON.stringify({ ac: ac ? ac.textContent.slice(0, 80) : '', area: vc ? vc.textContent.slice(0, 60) : '' }); })()`) || '{}');
-        ok(/OVERSEA/.test(res.ac || '') && !res.area, `beta96: a press on a sea area with an aircraft over it opens the aircraft (${JSON.stringify(res)})`);
+        ok(!pt.err && /OVERSEA/.test(res.ac || '') && !res.area, `beta96: a press on a sea area with an aircraft over it opens the aircraft (${JSON.stringify({ pt, res })})`);
+        await ev(`(() => { const A = window.__vibeAcLayer; window.__testOversea = null; if (A.__upd) { A.update = A.__upd; delete A.__upd; } A.setPrefs({ autoZoom: true }); })()`);
         await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button, .vsadsb-pop-dark [class*="close"]').forEach((b) => b.click())`);
         await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'SEA AREAS')?.click()`);
       }
