@@ -61,6 +61,7 @@
   #key .kr > :first-child { flex: none; width: 24px; display: flex; justify-content: center; align-items: center; }
   #key .kr > span:last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   #key .kr svg { max-width: 24px; max-height: 24px; }
+  #key .kr svg[viewBox="0 0 40 40"] { max-width: 28px; max-height: 28px; margin: -2px; }   /* ★ the aircraft glyphs' 40-unit box */
   select.chip { padding: 3px 6px; }
   main { position: relative; flex: 1; min-height: 0; }
   #map { position: absolute; inset: 0; background: #123049; }
@@ -327,10 +328,18 @@ function RX_SVG(s, sel) {
     + `<g fill="none" stroke="rgba(0,0,0,0.85)" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round">${P('')}</g>`
     + `<g fill="none" stroke="${col}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${P(col)}</g></svg>`;
 }
-/** The icon an item draws, and its rotation — the servers' own (kit), aircraft a silhouette in its mode's colour. */
+/* ★★ beta96 THE AIRCRAFT's OWN GLYPH (Stuart 11-26: "can they be the correct icon for the aircraft type like the ADS-B map"):
+ *  the ADS-B map's class silhouettes — jet, heavy, 757, regional / turboprop, light, helicopter, fast jet, glider, balloon … —
+ *  chosen by its own rule (KIT.aircraftIconClass = adsblayer.js iconClassOf: the aircraft data a beta96 server sends, else
+ *  the type alone, else the jet), the same shapes (KIT.aircraftIconSvg), in the mode's colour, pointing along its track.
+ *  AC_SIZE: the 40-unit box at 34 px puts the airliner at the old silhouette's 22 px; a heavy reads bigger, a Cessna smaller. */
+const AC_SIZE = 34, AC_NO_ROT = new Set(['balloon', 'parachute', 'obstacle']);
+const acClass = (d) => (KIT && KIT.aircraftIconClass ? KIT.aircraftIconClass(d || {}) : 'jet');
+const acGlyph = (cls, colour, size) => (KIT && KIT.aircraftIconSvg ? KIT.aircraftIconSvg(cls, colour, size || AC_SIZE, 0) : AC_SVG(colour));
+/** The icon an item draws, and its rotation — the servers' own (kit), aircraft its class's glyph in its mode's colour. */
 function iconOf(it) {
   const m = CM.MODE[CM.primaryMode(it, F.off)];   // ★ the same rule as the pills' totals
-  if (it.kind === 'aircraft') return { ic: icon(AC_SVG(m.colour)), rot: it.d.trk || 0 };
+  if (it.kind === 'aircraft') { const c = acClass(it.d); return { ic: icon(acGlyph(c, m.colour)), rot: AC_NO_ROT.has(c) ? 0 : (it.d.trk || 0) }; }
   if (!KIT) return { ic: icon(`<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="${m.colour}" stroke="#000"/></svg>`), rot: 0 };
   let h;
   if (it.kind === 'ship') h = KIT.aisIcon({ kind: it.d.vkind, family: it.d.family, sog: it.d.sog, cog: it.d.cog, mmsi: it.d.mmsi }).html;
@@ -752,7 +761,7 @@ function drawCounts(now) {
 }
 
 /* ══ THE KEY — the server maps' own rows and glyphs (KIT: shipLegendRows, the hazards and marks, windLegendRows,
- *  seaLegendRows), plus what this page draws itself (the receivers' radio, the aircraft silhouette, the NDB / VOR diamond);
+ *  seaLegendRows, the aircraft glyphs and their names), plus what this page draws itself (the receivers' radio, the NDB / VOR diamond);
  *  a section only for a layer switched on ══ */
 const kr = (g, w) => `<div class="kr"><span>${g}</span><span>${esc(w)}</span></div>`;
 const krh = (rows) => rows.map(([g, w]) => kr(g, w)).join('');
@@ -765,8 +774,11 @@ function drawKey() {
     + kr(RX_SVG({ listeners: 0, maxListeners: 4 }, true), 'Chosen (in the RECEIVERS list)');
   const air = ['adsb', 'acars', 'vdl2', 'hfdl'].filter((m) => on.has(m));
   if (air.length) {
-    h += sec('AIRCRAFT') + air.map((m) => kr(AC_SVG(CM.MODE[m].colour), `Aircraft whose position came from ${CM.MODE[m].label}, pointing along its track`)).join('')
-      + kr(`<span style="opacity:.45;display:flex">${AC_SVG(CM.MODE.adsb.colour)}</span>`, 'Faded: an older position (ADS-B not heard for a minute or more; a datalink fix over a minute old) — dropped at five minutes')
+    // ★ beta96 the colour says the SOURCE, the shape says WHAT the aircraft is — the ADS-B map's own classes (KIT)
+    const kc = CM.MODE[air[0]].colour, shapes = ['jet', 'heavy', 'b757', 'regional', 'light', 'heli', 'fighter', 'glider', 'balloon', 'ultralight', 'uav'];
+    h += sec('AIRCRAFT') + air.map((m) => kr(acGlyph('jet', CM.MODE[m].colour, 28), `Aircraft whose position came from ${CM.MODE[m].label}, pointing along its track`)).join('')
+      + (KIT && KIT.AIRCRAFT_CLASS_NAMES ? shapes.map((c) => kr(acGlyph(c, kc, 28), `${KIT.AIRCRAFT_CLASS_NAMES[c]}${c === 'jet' ? ' (also: type not known)' : ''}`)).join('') : '')
+      + kr(`<span style="opacity:.45;display:flex">${acGlyph('jet', CM.MODE.adsb.colour, 28)}</span>`, 'Faded: a datalink position (ACARS, VDL2, HFDL) over five minutes old, fading until it is dropped at 30 minutes — ADS-B positions are dropped at five')
       + kr(`<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(255,184,51,0.78)" stroke="#140d00" stroke-width="1.5"/><text x="12" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="#140d00">12</text></svg>`, 'A number: aircraft, ships, APRS or MeshCore gathered when zoomed out — click to zoom in');
   }
   const dia = (c) => `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L13 7 L7 13 L1 7 Z" fill="${c}" stroke="#0b1014" stroke-width="1.2"/></svg>`;

@@ -53,13 +53,27 @@
   const placed = (lat, lon) => lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0);
   const arr = (x, n) => (Array.isArray(x) ? x.slice(0, n) : []);
 
+  /** ★★ beta96 an aircraft row's field 11, "wake|description letter|engines|m" (the server's aircraft data — Stuart 11-26:
+   *  "the correct icon for the aircraft type like the ADS-B map"): what the glyph rule (CommunityKit.aircraftIconClass, the
+   *  ADS-B map's own iconClassOf) needs besides the type. Absent (a server before beta96) or malformed = nothing: the rule
+   *  then has the type alone, else the jet. */
+  function whatOf(v) {
+    if (typeof v !== 'string' || !v || v.length > 16) return {};
+    const [wtc = '', species = '', eng = '', mil = ''] = v.split('|');
+    const o = {};
+    if (/^[LMHJ]$/.test(wtc)) o.wtc = wtc;
+    if (/^[LSAHGT]$/.test(species)) o.species = species;
+    if (/^[1-8C][JTPER]?$/.test(eng)) o.eng = eng;
+    if (mil === 'm') o.mil = 1;
+    return o;
+  }
   /** ★ One server's answer (v2, compact) → items, each with that server's sighting. `sv` = the contributor ({id, name}). */
   function itemsOf(c, sv) {
     const out = [];
     if (!c || typeof c !== 'object' || c.on !== true) return out;
     const now = num(c.now) || Math.floor(Date.now() / 1000);
     const seen = (t, extra) => Object.assign({ sid: sv.id, name: sv.name, t }, sv.rid ? { rid: sv.rid } : {}, extra || {});   // ★ rid: the radio that answered (a message's text is read there)
-    for (const r of arr(c.a, 1000)) {                       // aircraft [k, lat, lon, age, alt, trk, gs, mask, flight, reg, type]
+    for (const r of arr(c.a, 1000)) {                       // aircraft [k, lat, lon, age, alt, trk, gs, mask, flight, reg, type, what]
       if (!Array.isArray(r)) continue;
       const lat = num(r[1]), lon = num(r[2]), mask = num(r[7]) || 0;
       if (!placed(lat, lon)) continue;
@@ -67,7 +81,8 @@
       if (!modes.length) continue;
       const k = str(r[0], 32), t = now - Math.max(0, num(r[3]) || 0);
       out.push({ key: 'a:' + k, kind: 'aircraft', modes, lat, lon, t, title: str(r[8], 10) || str(r[9], 10) || k,
-        d: { icao: /^[0-9A-F]{6}$/.test(k) ? k : '', alt: num(r[4]), trk: num(r[5]), gs: num(r[6]), flight: str(r[8], 10), reg: str(r[9], 10), type: str(r[10], 8), adsc: !!(mask & 16) },
+        d: Object.assign({ icao: /^[0-9A-F]{6}$/.test(k) ? k : '', alt: num(r[4]), trk: num(r[5]), gs: num(r[6]), flight: str(r[8], 10), reg: str(r[9], 10), type: str(r[10], 8), adsc: !!(mask & 16) },
+                         whatOf(r[11])),
         heard: [seen(t)] });
     }
     for (const r of arr(c.s, 1000)) {                       // ships [mmsi, lat, lon, seen UTC, sog, cog, family, kind, name, call]
@@ -163,6 +178,9 @@
 
   /** ★★ The merge: one item per key (a DSC call heard by two servers — same position, within two minutes — once). The newest
    *  sighting's position and details win; a NAVTEX message keeps its CLEANEST copy as the text; every server is kept. */
+  /** An aircraft's fields without the empty strings (an empty type or flight never overwrites a known one; a null — no
+   *  altitude in the newer fix — still does, as before). */
+  function known(d) { const o = {}; for (const k in d) if (d[k] !== '' && d[k] !== undefined) o[k] = d[k]; return o; }
   function merge(lists) {
     const by = new Map(), dsc = [];
     for (const list of lists) for (const it of list) {
@@ -180,7 +198,10 @@
         have.t = Math.max(have.t, it.t);
         continue;
       }
-      if (it.t > have.t) { have.lat = it.lat; have.lon = it.lon; have.t = it.t; have.title = it.title; have.d = it.kind === 'navwarn' || it.kind === 'navmet' || it.kind === 'navst' ? it.d : Object.assign({}, have.d, it.d); }
+      if (it.t > have.t) { have.lat = it.lat; have.lon = it.lon; have.t = it.t; have.title = it.title; have.d = it.kind === 'navwarn' || it.kind === 'navmet' || it.kind === 'navst' ? it.d : Object.assign({}, have.d, it.kind === 'aircraft' ? known(it.d) : it.d); }
+      // ★ beta96 an aircraft's type and what-it-is from ANY server that knows them (an older server sends none; the newest
+      //   position must not blank the glyph another server's aircraft data gave it)
+      else if (it.kind === 'aircraft') have.d = Object.assign({}, known(it.d), known(have.d));
     }
     const out = [...by.values()];
     for (const it of out) it.heard.sort((a, b) => b.t - a.t);

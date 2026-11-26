@@ -128,6 +128,25 @@ try {
   ok(await js(`(() => { const p = [...ITEMS].filter(i => i.heard.some(h => h.sid === 'pi500')); const keys = p.map(i => i.key); return keys.length === new Set(keys).size && p.every(i => i.heard.filter(h => h.sid === 'pi500').length === 1); })()`),
      '★ the two identical V4 answers merged: one item per key, the Pi 500 once in each "heard by"');
   ok(asked.xcover[0].split(',').sort().join() === 'adsb,ais,aprs,hfdl', `…for the layers it shares and that are on (${asked.xcover[0]})`);
+  // ★★ beta96 EACH AIRCRAFT ITS OWN GLYPH (Stuart 11-26: "the correct icon for the aircraft type like the ADS-B map"): the
+  //    ADS-B map's classes (KIT = adsblayer.js iconClassOf + its shapes), from a beta96 row's aircraft data (field 11) or, from
+  //    an older server (the XCover's rows: no field 11), the type alone; the merge never blanks what another server knew
+  const acs = await js(`(() => { const rev = new Map([...iconNames].map(([svg, n]) => [n, svg])); const f = gl.getSource('cm-dense').serialize().data.features;
+    const o = {}; for (const k of ['a:4CA000', 'a:4CA001', 'a:4CA002', 'a:A1B2C3']) { const it = ITEM_BY_KEY.get(k), ft = f.find((x) => x.properties.id === k);
+      const col = CM.MODE[CM.primaryMode(it, F.off)].colour, cls = acClass(it.d);
+      o[k] = { cls, glyph: !!ft && rev.get(ft.properties.ic) === KIT.aircraftIconSvg(cls, col, 34, 0), rot: ft && ft.properties.rot, type: it.d.type, wtc: it.d.wtc || '' }; }
+    return o; })()`);
+  ok(acs && acs['a:4CA000'].cls === 'heavy' && acs['a:4CA000'].type === 'B77W' && acs['a:4CA000'].wtc === 'H', `★★ BAW696 (B77W, wake H — a beta96 server's field 11) draws the HEAVY glyph; the XCover's newer row with no type did not blank it (${JSON.stringify(acs && acs['a:4CA000'])})`);
+  ok(acs && acs['a:4CA001'].cls === 'heli', `★★ an EC35 (description letter H) draws the HELICOPTER (${JSON.stringify(acs && acs['a:4CA001'])})`);
+  ok(acs && acs['a:4CA002'].cls === 'jet', `nothing known: the jet (${JSON.stringify(acs && acs['a:4CA002'])})`);
+  ok(acs && acs['a:A1B2C3'].cls === 'heavy', `★ an older server's row (no field 11): its type alone, B77W → heavy (${JSON.stringify(acs && acs['a:A1B2C3'])})`);
+  ok(acs && Object.values(acs).every((a) => a.glyph), '★ every one is DRAWN with its class\'s own shape from the kit, in its mode\'s colour, on the GPU layer');
+  ok(acs && acs['a:4CA000'].rot === 92 && acs['a:4CA001'].rot === 90 && acs['a:A1B2C3'].rot === 0, `…pointing along its track (the newest fix's 92°; no track = north): ${acs && acs['a:4CA000'].rot}, ${acs && acs['a:A1B2C3'].rot}`);
+  await js(`document.getElementById('keyBtn').click()`); await sleep(200);
+  ok(await js(`(() => { const k = document.getElementById('key'); return !k.hidden && /Heavy \\(wide-body\\)/.test(k.textContent) && /Helicopter or gyroplane/.test(k.textContent) && /Light aircraft/.test(k.textContent) && k.querySelectorAll('svg[viewBox="0 0 40 40"]').length >= 11; })()`),
+     '★ the KEY shows the glyph classes, drawn from the kit');
+  await js(`document.getElementById('keyBtn').click()`); await sleep(100);
+
   await sleep(4000);
   await shot('community-all-groups-desktop.png');
 
