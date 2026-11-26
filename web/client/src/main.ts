@@ -10637,7 +10637,7 @@ function asRender() {
   syncOnlyMode();
 }
 /** ★ beta96 stage 8 the KEY's NDB rows (the beacon marker: dot + 3-bar meter, ndblayer.js's colours). */
-const NDB_LEGEND = '<div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ffb000;margin-right:6px"></i>Beacon heard, at its published position — bars: signal (1 red · 2 amber · 3 green)</div>'
+const NDB_LEGEND = '<div><b>NDB beacons</b></div><div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ffb000;margin-right:6px"></i>Beacon heard, at its published position — bars: signal (1 red · 2 amber · 3 green)</div>'
   + '<div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ffe066;margin-right:6px"></i>Read one letter off the published ident (≈)</div>'
   + '<div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:rgba(255,184,51,0.55);margin-right:6px"></i>Not read yet — the published beacon nearest on that frequency (IDENT?)</div>'
   + '<div><i style="display:inline-block;width:7px;height:7px;border-radius:50%;border:1.5px dashed #8fc3ff;margin-right:6px"></i>Not in the published list — the airfield it is suspected to be</div>'

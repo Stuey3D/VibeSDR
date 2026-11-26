@@ -220,6 +220,7 @@ export class NdbMap {
             yieldClick: (x: number, y: number, touch: boolean) => host.pickAircraft(x, y, touch),
             onSelect: (k: string | null) => { try { this.onSelect?.(k); } catch (e) { console.error('[ndb] onSelect', e); } } });
         } catch (e) { console.error('[ndb] the beacon layer could not start', e); this.layer = null; return; }
+        (window as any).__vibeNdbLayer = this.layer;   // ★ a handle for drivers (scripts/test-web-ndb.mjs), as __vibeAcLayer
         const p = this.pending; this.pending = null; p?.();
       })().catch((e) => console.error('[ndb] layer', e));
     });
