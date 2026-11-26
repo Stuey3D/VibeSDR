@@ -358,7 +358,8 @@ inline std::string noticeLine(const Notice& n) {
     if (!n.text.empty()) s += (s.empty() ? "" : ": ") + n.text;
     if (n.shape >= 0) {
         s += dot; s += shapeName(n.shape);
-        if (n.sizeM == n.sizeM && n.sizeM > 0) s += " " + (n.sizeM >= 1000 ? fmt1(n.sizeM / 1000, n.sizeM < 10000 ? 1 : 0) + " km" : std::to_string(long(n.sizeM)) + " m");
+        // ★ beta95 NM on the shipping maps (Stuart 11-25) — under a cable (185 m) in metres, as a chart would
+        if (n.sizeM == n.sizeM && n.sizeM > 0) s += " " + (n.sizeM >= 185.2 ? fmt1(n.sizeM / 1852.0, n.sizeM < 18520 ? 1 : 0) + " NM" : std::to_string(long(n.sizeM)) + " m");
         s += " at " + fmt1(n.lat, 4) + " " + fmt1(n.lon, 4);
     }
     if (n.what >= 0 && n.day >= 1 && n.hour <= 23 && n.minute <= 59) {

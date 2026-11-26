@@ -39,7 +39,7 @@ const aisMsg = {
       sog: {}, seen: 900, age: 900, count: 1 },
   ],
   safety: [{ age: 30, mmsi: 970123456, name: 'SART TEST', text: 'SART ACTIVE' }, { age: 400, mmsi: 235012345, name: '', text: 'NAV WARNING <x>' }],
-  notices: [{ age: 120, mmsi: 2320123, name: 'SOLENT VTS', text: 'Caution: fairway closed · circle 1.5 km at 50.7900 -1.1100', fi: 22, what: 18, lat: 50.79, lon: -1.11 }],
+  notices: [{ age: 120, mmsi: 2320123, name: 'SOLENT VTS', text: 'Caution: fairway closed · circle 0.8 NM at 50.7900 -1.1100', fi: 22, what: 18, lat: 50.79, lon: -1.11 }],
   gain: 33.8, gainAuto: 1,
 };
 
@@ -87,7 +87,7 @@ ok('AIS met card: the far site says where it is', atCard.includes('at 51°12.000
 ok('AIS met card: the near site does not', (atCard.match(/at 5\d°/g) || []).length === 1);
 eq('AIS met short (the list)', app.aisMetShort(at.met?.[0]), 'SW 14 kn · tide 3.21 m');
 ok('AIS met in the list row', (ar.find((r) => r.key === '992351234')?.second || '').includes('SW 14 kn'));
-eq('AIS notices after the safety strip', app.aisSafetyLines(aa)[2], 'ℹ SOLENT VTS: Caution: fairway closed · circle 1.5 km at 50.7900 -1.1100 · 2 min ago');
+eq('AIS notices after the safety strip', app.aisSafetyLines(aa)[2], 'ℹ SOLENT VTS: Caution: fairway closed · circle 0.8 NM at 50.7900 -1.1100 · 2 min ago');
 ok('AIS notices in the web strip too', web.aisSafetyHtml(wa).includes('fairway closed'));
 eq('AIS met rows = web', app.aisMetRows(at.met![0]), web.aisMetRows(wa.vessels.find((v) => v.mmsi === 992351234)!.met![0]));
 
