@@ -149,6 +149,12 @@ if (stray.length) {
     const v = (have.match(/MAPGL_VERSION = "([^"]*)"/) || [])[1] || '(none)';
     fail(`src/generated/mapglAssets.ts is STALE (version ${v}, assets/mapgl is ${want.version}) — installed apps would keep the old pack; run node scripts/sync-mapgl-assets.mjs --scripts`);
   } else ok(`GPU-map manifest matches assets/mapgl (${want.version})`);
+  // ★★ beta96 Android's twin: same version, NO require()s — one require there puts the file in the APK a second time.
+  let haveA = '';
+  try { haveA = readFileSync(path.join(repo, 'src/generated/mapglAssets.android.ts'), 'utf8'); } catch { /* missing = stale */ }
+  if (haveA !== want.androidText) fail('src/generated/mapglAssets.android.ts is STALE or missing — run node scripts/sync-mapgl-assets.mjs --scripts');
+  else if (/require\(/.test(haveA)) fail('src/generated/mapglAssets.android.ts requires files — the APK would carry the GPU map twice');
+  else ok('Android manifest: same version, no embedded files (the APK carries the map once, in assets/mapgl)');
 }
 
 /* ★★ THE BASIC PACK: ONE MAP EVERYWHERE (beta96, the rivers). The app bundles assets/mapgl's copy; servers, the Mac app and
