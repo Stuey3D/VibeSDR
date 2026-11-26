@@ -11,8 +11,9 @@
 //  · ★ ITS OWN TOGGLE, "SEA AREAS", beside WEATHER (not inside it): the outlines are geography — useful with no forecast
 //    at all (which area is that ship in?) — and the forecasts are weather. Switching the arrows off must not take Dogger
 //    away, and the reverse. The TINT is the weather's (it says what the forecast says), so it follows WEATHER.
-//  · ABSENT WHERE THERE IS NO DATA: the toggle is drawn only when an area lies within reach of this map (the receiver,
-//    or a forecast's area) — an inland server gets no SEA AREAS toggle (seaAreasNear / seaAreasFor).
+//  · ★★ beta96 ON EVERY SERVER (Stuart 11-26: "Sea areas on all servers since community map is on them"): the toggle is
+//    on every shipping and NAVTEX map. An area within reach of the receiver (seaAreasNear / seaAreasFor) now only sets
+//    its DEFAULT — on near the coast, off inland — until the listener chooses (shippingMap.ts shipLayersFor).
 //  · ★★ beta95 DRAWN WORLDWIDE (Stuart 11-25: "worldwide shipping areas are fantastic… only seen the uk ones"): with the
 //    toggle on, EVERY area in the current view is drawn (as the community map does) — each item carries its box (_vb)
 //    and the map layer (tracklayer.js) makes only those on screen, again as the map moves. The forecast tints stay the

@@ -178,7 +178,7 @@ import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChan
          dscItems, dscListRows, dscKey, DSC_MAP_EMPTY, type DscCall } from '../services/dsc';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — AIS, DSC and NAVTEX on one map, the rules the web shares (docs/v12/SHIPPING-MAP.md)
 import { seaCompose, seaAreasFor, seaPlaceMet } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
-import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+import { shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type StoredShips, type DscPin } from '../services/shippingMap';
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
@@ -12563,20 +12563,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     const live = aisOn ? aisReport : null;
     const vessels = shipShips(live, shipStore);
     const pins = dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls), dscGal), now);
+    const nearAreas = seaAreasFor(rx, navMetRep).length;
     const present = shipLayersPresent({ ships: vessels.length, dsc: pins.length, stations: navReport?.stations.length ?? 0,
       warnings: navWarnRep ? navWarnRep.list.length + navWarnRep.pending : 0, weather: navMetRep?.areas.length ?? 0, aisMode: aisOn,
-      areas: seaAreasFor(rx, navMetRep).length }, focus);
-    const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
+      areas: nearAreas }, focus);
+    // ★★ beta96 SEA AREAS on every server: on by default near the coast, off inland, the listener's choice once made
+    const eff = shipLayersFor(shipLayers, nearAreas > 0);
+    const on = (id: ShipLayerId) => shipOn(id, present, eff);
     // ★ the SEA AREAS (services/seaAreas.ts — the web's shipCompose draws the same): outlines + names; the tint is WEATHER's
     const sea = on('areas') ? seaCompose(rx, navMetRep, on('weather'), 'app', shipView).items : [];   // ★ beta95 the areas in view
     const extra = liveView && live ? vessels.filter((v) => !live.vessels.some((x) => x.mmsi === v.mmsi)) : vessels;
     return {
-      present, on, now,
+      present, on, now, layers: eff,
       items: [...sea, ...(on('ships') ? shipItems(extra, rx) : []), ...(on('dsc') ? dscPinItems(pins, rx, now, 'app') : [])],
       rows: [...(on('ships') ? shipRows(extra, rx) : []), ...(on('dsc') ? dscPinRows(pins, rx, now) : [])],
       status: [on('ships') && !liveView ? shipStatus(vessels, shipStore, live) : '', on('dsc') ? dscStatus(pins) : ''].filter(Boolean).join(' · '),
       toggles: shipToggles(present),
-      onToggle: (id: string, v: boolean) => setShipLayers((cur) => { const nx = { ...cur, [id]: v }; AsyncStorage.setItem('lsv_ship_map_layers', JSON.stringify(nx)).catch(() => {}); return nx; }),
+      onToggle: (id: string, v: boolean) => setShipLayers((cur) => { const nx = shipToggle(shipLayersFor(cur, nearAreas > 0), id, v); AsyncStorage.setItem('lsv_ship_map_layers', JSON.stringify(nx)).catch(() => {}); return nx; }),
     };
   };
   const navTrk = useMemo(() => {
@@ -12608,7 +12611,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       trail: () => Promise.resolve([] as [number, number][]),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
+      toggles: sc.toggles, toggled: sc.layers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
       // ★ a card's gallery text, with the read auth (the gallery viewer's own fetch)
       cardText: async (f: string) => {
         try {
@@ -12635,7 +12638,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       status: [aisTrk.status, sc.status, navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : ''].filter(Boolean).join(' · '),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
+      toggles: sc.toggles, toggled: sc.layers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
       trail: (key: string) => (key.startsWith('s:') ? Promise.resolve(shipStore?.pts.get(Number(key.slice(2))) ?? []) : aisTrk.trail(key)),
       cardText: navTrk.cardText, translateTo: txTarget,
     };

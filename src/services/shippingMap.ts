@@ -24,7 +24,9 @@ export const SHIPPING_TITLE = 'SHIPPING MAP';
 
 // ── the layers ─────────────────────────────────────────────────────────────────────────────────────────────────────
 export type ShipLayerId = 'ships' | 'dsc' | 'stations' | 'warnings' | 'weather' | 'areas';
-export type ShipLayers = Record<ShipLayerId, boolean>;
+/** ★ beta96 `areasSet`: the listener chose SEA AREAS on or off themselves. Until they do, its default follows the coast
+ *  (shipLayersFor): on where an area lies near the receiver, off inland. */
+export type ShipLayers = Record<ShipLayerId, boolean> & { areasSet?: boolean };
 export type ShipFocus = 'ships' | 'dsc' | 'navtex';
 export const SHIP_LAYERS: Array<{ id: ShipLayerId; label: string; words: string }> = [
   { id: 'ships', label: 'SHIPS', words: 'Show the ships (AIS)' },
@@ -36,11 +38,30 @@ export const SHIP_LAYERS: Array<{ id: ShipLayerId; label: string; words: string 
 /** Saved toggles (every layer on by default). The NAVTEX map's own saved toggles are read too, so a listener who switched
  *  WEATHER off there finds it off here. */
 export function shipLayersOf(saved: string | null | undefined, navSaved?: string | null): ShipLayers {
-  const d: ShipLayers = { ships: true, dsc: true, stations: true, warnings: true, weather: true, areas: true };
+  const d: ShipLayers = { ships: true, dsc: true, stations: true, warnings: true, weather: true, areas: true, areasSet: false };
   for (const s of [navSaved, saved]) {
-    try { const j = s ? JSON.parse(s) : null; if (j && typeof j === 'object') for (const k of Object.keys(d) as ShipLayerId[]) if (typeof j[k] === 'boolean') d[k] = j[k]; } catch { /* default */ }
+    try {
+      const j = s ? JSON.parse(s) : null;
+      if (j && typeof j === 'object') {
+        for (const k of Object.keys(d) as ShipLayerId[]) if (k !== ('areasSet' as ShipLayerId) && typeof j[k] === 'boolean') d[k] = j[k];
+        // ★ beta96: a saved choice; a beta95 save carried `areas` with no flag — only an OFF there can have been the listener's
+        //   (the default was on, and an inland server had no switch to turn)
+        if (typeof j.areasSet === 'boolean') d.areasSet = j.areasSet;
+        else if (j.areas === false) d.areasSet = true;
+      }
+    } catch { /* default */ }
   }
   return d;
+}
+/** ★★ beta96 SEA AREAS ON EVERY SERVER (Stuart 11-26: "Sea areas on all servers since community map is on them"): the
+ *  layers as drawn — SEA AREAS on by default for a COASTAL receiver (an area near it, seaAreasFor), off by default
+ *  inland, and whatever the listener chose once they have touched the switch. */
+export function shipLayersFor(layers: ShipLayers, coastal: boolean): ShipLayers {
+  return layers.areasSet ? layers : { ...layers, areas: coastal };
+}
+/** The listener flips a layer: SEA AREAS remembers that it was their choice. */
+export function shipToggle(layers: ShipLayers, id: string, on: boolean): ShipLayers {
+  return { ...layers, [id]: on, ...(id === 'areas' ? { areasSet: true } : {}) };
 }
 /** ★ What each layer has on this server now (counts, not the data). */
 export interface ShipHave { ships: number; dsc: number; stations: number; warnings: number; weather: number; aisMode: boolean; areas?: number }
@@ -59,8 +80,9 @@ export function shipLayersPresent(have: ShipHave, focus: ShipFocus): ShipLayerId
     if (have.warnings > 0) add('warnings');
     if (have.weather > 0) add('weather');
   }
-  // ★ the SEA AREAS: present when an area lies within reach of this map (seaAreasNear) — last, after the weather
-  if ((have.areas ?? 0) > 0) add('areas');
+  // ★★ beta96 the SEA AREAS: on EVERY server's map, inland too (they are drawn worldwide) — last, after the weather.
+  //    `have.areas` (the areas near the receiver) now only sets the default (shipLayersFor).
+  add('areas');
   return out;
 }
 /** The toggles for the view (the map's TOGGLES row), in the order present. One layer alone draws no toggle row at all. */
