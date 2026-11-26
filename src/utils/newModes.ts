@@ -8,7 +8,7 @@
  * radio is single-mode by their ticks (always), or they said "off", or (automatic) they had blocked anything at all.
  * No table (an older engine) = nothing is new. Pure functions only — scripts/test_new_modes_clients.ts drives them. */
 
-export type ModeGens = { now: number; gens: Record<string, number> };
+export type ModeGens = { now: number; gens: Record<string, number>; unstamped?: number };
 export const NO_MODE_GENS: ModeGens = { now: 0, gens: {} };
 
 /** The options' generations — evidence of when a list was written, never a NEW switch. Same as the server's table. */
@@ -28,7 +28,8 @@ export function parseModeGens(j: any): ModeGens {
     const id = String(k).toLowerCase().replace(/[^0-9a-z-]/g, '').slice(0, 16);
     if (id && typeof v === 'number' && v >= 0) gens[id] = Math.floor(v);
   }
-  return { now: Math.max(0, Math.floor(j.modeGen)), gens };
+  const unstamped = typeof j.modeGenUnstamped === 'number' ? Math.max(0, Math.floor(j.modeGenUnstamped)) : undefined;
+  return { now: Math.max(0, Math.floor(j.modeGen)), gens, ...(unstamped === undefined ? {} : { unstamped }) };
 }
 
 export const ownSet = (csv: string) => new Set(String(csv || '').split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
@@ -50,9 +51,14 @@ export function newModesState(own: Set<string>, mg: ModeGens): NewModesState {
       if (t[0] !== '+' && id in mg.gens) restricted = true;
     }
   }
-  if (!stamped) seen = restricted ? evidence : mg.now;
-  const seenOff = (id: string) => !(id in mg.gens) || mg.gens[id] > seen || own.has(id);
-  const single = LISTEN_DEMODS.every(seenOff) && WHOLE_MODES.filter((w) => !seenOff(w)).length <= 1;
+  const singleAt = (g: number) => {
+    const seenOff = (id: string) => !(id in mg.gens) || mg.gens[id] > g || own.has(id);
+    return LISTEN_DEMODS.every(seenOff) && WHOLE_MODES.filter((w) => !seenOff(w)).length <= 1;
+  };
+  // ★★ no "seen@": a single-mode list is dated by its newest token; any other restricted list counts as having seen
+  //    mg.unstamped (the server's kUnstampedRestrictedSeen) — "dab" alone must not switch off everything since 11.x
+  if (!stamped) seen = !restricted ? mg.now : singleAt(evidence) ? evidence : Math.max(evidence, Math.min(mg.now, mg.unstamped ?? mg.now - 1));
+  const single = singleAt(seen);
   return { seen, stamped, restricted, single, policy, off: single || policy < 0 || (policy === 0 && restricted) };
 }
 export const modeIsNew = (id: string, own: Set<string>, mg: ModeGens) => id in mg.gens && mg.gens[id] > newModesState(own, mg).seen;

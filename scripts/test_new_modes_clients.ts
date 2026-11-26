@@ -18,7 +18,8 @@ const h = read('android/app/src/main/cpp/vibe_decoder_reach.h');
 const GENS: Record<string, number> = {};
 for (const m of h.matchAll(/\{"([a-z0-9+-]+)",(\d+),(true|false)\}/g)) if (m[3] === 'false') GENS[m[1]] = Number(m[2]);
 const NOW = Number((h.match(/constexpr int kModeGenNow = (\d+);/) || [])[1]);
-const MG: NM.ModeGens = { now: NOW, gens: GENS };
+const UNSTAMPED = Number((h.match(/constexpr int kUnstampedRestrictedSeen = (\d+);/) || [])[1]);
+const MG: NM.ModeGens = { now: NOW, gens: GENS, unstamped: UNSTAMPED };
 ok(NOW >= 96 && Object.keys(GENS).length > 60, `the server's table: generation ${NOW}, ${Object.keys(GENS).length} switches`);
 const allOffAt = (g: number, except: string[]) => Object.keys(GENS).filter((id) => GENS[id] <= g && !except.includes(id)).join(',');
 const PAUL = allOffAt(80, ['adsb', 'commb']);
@@ -70,6 +71,8 @@ for (const [csv, what] of cases) {
   ok(onlyLeft(appOff(PAUL)) === 'adsb', 'the app agrees: ADS-B only');
   ok(!pageOff('').has('sat') && !pageOff('').has('vormap'), 'unrestricted: new switches on');
   ok(pageOff('dab,drm').has('sat') && !pageOff('dab,drm,newmodes@on').has('sat'), 'restricted: SATELLITE off unless "switch them on"');
+  ok(!pageOff('dab,drm').has('adsb') && !pageOff('dab,drm').has('dvsig'), '★ a short restricted list keeps ADS-B and DV signalling on (only this update’s switch is new)');
+  ok(NM.parseModeGens({ modeGen: 96, modeGenUnstamped: 95, modeGens: { sat: 96 } }).unstamped === 95, 'the app reads modeGenUnstamped');
   ctx.R = { blockedModes: PAUL };
   ok(ctx.modeDefaultWhy('vormap') === 'NEW (off until you tick it)', 'the Setup page marks a new switch "NEW (off until you tick it)"');
   ctx.R = { blockedModes: '' };

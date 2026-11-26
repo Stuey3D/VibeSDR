@@ -47,7 +47,7 @@ int main() {
             ok(effectiveBlocked(adsbOnly + ",+vormap", 0) == adsbOnly + ",sat", "…the owner ticked VOR MAP on (beta93's word, so the list is from 93+: nothing newer is new): on, and the + token is not published");
             ok(effectiveBlocked(adsbOnly + ",vormap", 0) == adsbOnly + ",vormap,sat", "…the owner switched it off themselves: off once, not doubled");
             ok(effectiveBlocked("", 0) == "", "a fresh config: nothing off");
-            ok(effectiveBlocked(D, 1) == D + ",same" + NEW, "every demodulator off, Region 1: SAME's default and the new switches'");
+            ok(effectiveBlocked(D, 1) == D + ",same,sat", "every demodulator off but every whole-radio mode on (not single-mode), Region 1: SAME's default and only this update's switch");
             const std::string vorOnly = adsbOnly + ",adsb";
             ok(effectiveBlocked(vorOnly, 0) == vorOnly + NEW, "★ every whole-radio mode it names off: VOR MAP is newer than the list, so off too");
         }

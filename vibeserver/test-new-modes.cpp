@@ -44,17 +44,20 @@ int main() {
         CHECK(effectiveBlocked("lora+all,avdata+text", 0) == "lora+all,avdata+text", "options alone are not a restriction");
         CHECK(effectiveBlocked("+same", 1) == "", "a region tick alone is not a restriction");
     }
-    {   // restricted, several modes still on: everything newer than the newest id it names is new → off
-        const std::string own = "dab,drm";   // generations 0 and 63
+    {   // restricted, several modes still on, no stamp: a short list cannot be dated, so it counts as having seen the
+        // previous release's list (kUnstampedRestrictedSeen) — only the switches new in THIS update (SATELLITE) come in off
+        const std::string own = "dab,drm";
         const NewModesState s = newModesState(tokens(own));
-        CHECK(s.restricted && !s.single && s.seen == 63 && s.off, "restricted (dab,drm): seen = 63, new modes off, not single");
+        CHECK(s.restricted && !s.single && s.seen == kUnstampedRestrictedSeen && s.off, "restricted (dab,drm): seen = %d, new modes off, not single", s.seen);
         const std::string e = effectiveBlocked(own, 0);
-        CHECK(in(e, "dvsig") && in(e, "vormap") && in(e, "freedv") && in(e, "sondes"), "…modes from 80 on are off: %s", e.c_str());
-        CHECK(!in(e, "adsb") && !in(e, "ism") && !in(e, "wfm"), "…modes of 63 and before keep the owner's ticks");
+        CHECK(e == "dab,drm,sat", "…only SATELLITE (new in 96) off: %s", e.c_str());
+        CHECK(!in(e, "adsb") && !in(e, "ism") && !in(e, "dvsig") && !in(e, "vormap"), "…★ ADS-B, ISM, DV signalling, VOR MAP keep the owner's ticks (on)");
         CHECK(only(e).empty(), "…several modes left: no exit lock");
-        CHECK(!in(effectiveBlocked(own + ",newmodes@on", 0), "dvsig"), "…the owner's 'switch them on': on");
-        CHECK(!in(effectiveBlocked(own + ",+dvsig", 0), "dvsig"), "…ticked by the owner (+dvsig): on");
-        CHECK(in(effectiveBlocked("rade", 0), "dvsig") && !in(effectiveBlocked("rade", 0), "m17"), "a list naming an 80 switch: 87 on is new, 80 is not");
+        CHECK(!in(effectiveBlocked(own + ",newmodes@on", 0), "sat"), "…the owner's 'switch them on': on");
+        CHECK(!in(effectiveBlocked(own + ",+sat", 0), "sat"), "…ticked by the owner (+sat): on");
+        CHECK(effectiveBlocked("rade", 0) == "rade,sat", "a benchmark-style list (rade): only SATELLITE off");
+        CHECK(newModesState(tokens("dab,seen@80")).seen == 80 && in(effectiveBlocked("dab,seen@80", 0), "dvsig"),
+              "…but a STAMPED restricted list is judged from its stamp (80: DV signalling new, off)");
     }
     {   // ★★★ PAUL — every switch off except ADS-B, saved by a beta of generation 80 (11-18 build of the only-mode lock)
         const std::string paul = allOffAt(80, {"adsb", "commb"});
@@ -145,6 +148,7 @@ int main() {
             }
             for (const auto& m : modeGens()) if (!m.option) CHECK(pageIds.count(m.id), "page MODE_GENS has %s", m.id);
             CHECK(page.find("const MODE_GEN_NOW = " + std::to_string(kModeGenNow) + ";") != std::string::npos, "page MODE_GEN_NOW = %d", kModeGenNow);
+            CHECK(page.find("const MODE_GEN_UNSTAMPED = " + std::to_string(kUnstampedRestrictedSeen) + ";") != std::string::npos, "page MODE_GEN_UNSTAMPED = %d", kUnstampedRestrictedSeen);
         }
         // the app's switch list (ServerModeScreen BLOCKABLE) is covered too
         const std::string app = readFile("src/screens/ServerModeScreen.tsx");

@@ -4080,6 +4080,7 @@ let REGION_DEFAULTS = {};
  *  to the newest switch the list names. ★ MODE_GENS is a COPY of the server's table (modeGens) — test-new-modes.cpp
  *  holds the two equal, and fails on a switch in BLOCKABLE that has no generation. */
 const MODE_GEN_NOW = 96;
+const MODE_GEN_UNSTAMPED = 95;   // ★ the server's kUnstampedRestrictedSeen
 const MODE_GENS = {
   wfm: 0, nfm: 0, am: 0, usb: 0, lsb: 0, cwu: 0, cwl: 0, dab: 0, rds: 0, rtty: 0, navtex: 0, wefax: 0, sstv: 0,
   ft8: 0, time: 0, spots: 0, tone: 63, sam: 63, sau: 63, sal: 63, ecssu: 63, ecssl: 63, amst: 63, drm: 63,
@@ -4111,9 +4112,12 @@ function newModesState(own) {
       if (t[0] !== "+" && id in MODE_GENS) restricted = true;
     }
   }
-  if (!stamped) seen = restricted ? evidence : MODE_GEN_NOW;
-  const seenOff = id => !(id in MODE_GENS) || MODE_GENS[id] > seen || o.has(id);
-  const single = LISTEN_DEMODS.every(seenOff) && WHOLE_MODES.filter(w => !seenOff(w)).length <= 1;
+  const singleAt = g => { const seenOff = id => !(id in MODE_GENS) || MODE_GENS[id] > g || o.has(id);
+                          return LISTEN_DEMODS.every(seenOff) && WHOLE_MODES.filter(w => !seenOff(w)).length <= 1; };
+  // ★★ no "seen@": a single-mode list is dated by its newest token; any other restricted list counts as having seen
+  //    MODE_GEN_UNSTAMPED (the server's kUnstampedRestrictedSeen) — "dab" alone must not switch off everything since 11.x
+  if (!stamped) seen = !restricted ? MODE_GEN_NOW : singleAt(evidence) ? evidence : Math.max(evidence, MODE_GEN_UNSTAMPED);
+  const single = singleAt(seen);
   return { seen, stamped, restricted, single, policy, off: single || policy < 0 || (policy === 0 && restricted) };
 }
 /** Is `id` a NEW switch on this radio — newer than the owner has seen? */

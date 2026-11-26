@@ -26,6 +26,7 @@
 #pragma once
 #include "vibe_bands.h"
 #include "decoders/digi_bands.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -269,6 +270,8 @@ struct ModeGen { const char* id; int gen; bool option; };
 /** ★ The generation of THIS build's list. Adding a switch to BLOCKABLE (vibe_setup_page.h, ServerModeScreen.tsx)? Add it
  *  below with the release it ships in and raise this to match — test-new-modes.cpp fails on a switch missing here. */
 constexpr int kModeGenNow = 96;
+/** ★★ An old restricted list that is NOT single-mode counts as having seen this generation (see newModesState). */
+constexpr int kUnstampedRestrictedSeen = 95;
 inline const std::vector<ModeGen>& modeGens() {
     static const std::vector<ModeGen> t = {
         // 0 — the list as 11.x shipped it (vibeserver-mac-v11.0.16)
@@ -347,15 +350,20 @@ inline NewModesState newModesState(const std::vector<std::string>& t) {
             if (x[0] != '+' && !g->option) s.restricted = true;
         }
     }
-    if (!s.stamped) s.seen = s.restricted ? evidence : kModeGenNow;
-    auto seenOff = [&](const char* id) { const ModeGen* g = modeGen(id); return !g || g->gen > s.seen || has(id); };
-    bool demodsOff = true;
-    for (const char* d : listeningDemods()) if (!seenOff(d)) { demodsOff = false; break; }
-    if (demodsOff) {
+    auto singleAt = [&](int seen) {
+        auto seenOff = [&](const char* id) { const ModeGen* g = modeGen(id); return !g || g->gen > seen || has(id); };
+        for (const char* d : listeningDemods()) if (!seenOff(d)) return false;
         int left = 0;
         for (const char* w : wholeRadioModes()) if (!seenOff(w)) ++left;
-        s.single = left <= 1;
-    }
+        return left <= 1;
+    };
+    /* ★★ MIGRATION (no "seen@"). A single-mode list names everything of its era, so its newest token dates it. A list that
+     *  restricts only a few switches does not ("dab" alone could be from 11.x or beta95) — dating it from its newest token
+     *  would switch OFF every mode since (ADS-B, ISM, SAM … for a "dab" list), on servers whose owners chose none of that.
+     *  So such a list counts as having seen this build's predecessor's list (kUnstampedRestrictedSeen): only switches new
+     *  in THIS update come in off. One constant, three copies (vibe_setup_page.h, src/utils/newModes.ts). */
+    if (!s.stamped) s.seen = !s.restricted ? kModeGenNow : singleAt(evidence) ? evidence : std::max(evidence, kUnstampedRestrictedSeen);
+    s.single = singleAt(s.seen);
     s.off = s.single || s.policy < 0 || (s.policy == 0 && s.restricted);
     return s;
 }
@@ -373,7 +381,8 @@ inline bool newModeOff(const std::string& id, const std::vector<std::string>& t)
 }
 /** `,"modeGen":96,"modeGens":{"wfm":0,…}` — the table, for the Setup page and the app (one table, three readers). */
 inline std::string modeGensJson() {
-    std::string j = ",\"modeGen\":" + std::to_string(kModeGenNow) + ",\"modeGens\":{";
+    std::string j = ",\"modeGen\":" + std::to_string(kModeGenNow) + ",\"modeGenUnstamped\":" + std::to_string(kUnstampedRestrictedSeen)
+                  + ",\"modeGens\":{";
     bool first = true;
     for (const auto& m : modeGens()) {
         if (m.option) continue;
