@@ -344,7 +344,8 @@ export interface SDRBackend {
   readonly inNdb?: boolean;
   /** ★ V12 AIS on a VibeServer (docs/v12/AIS-APRS.md): the whole radio to 162.000 MHz, both AIS channels decoded on the
    *  server; tune/zoom/mode are refused while it runs. `aisTrail` asks for one ship's track (answered by onAisTrail). */
-  ais?(on: boolean): void;
+  /** ★★★ beta96 `band` 'ais+dsc' = the maritime combination (AIS + DSC channel 70), where the capability says `aisDsc`. */
+  ais?(on: boolean, band?: string): void;
   aisTrail?(mmsi: number): void;
   /** True while the receiver is in AIS. */
   readonly inAis?: boolean;

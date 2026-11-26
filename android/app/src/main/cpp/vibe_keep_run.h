@@ -9,8 +9,9 @@
 //   · GATED BY THE RADIO'S RATE, AS THE SERVER SAYS (feedback_app_no_hardcoded_settings): at an ordinary rate ONE mode at a
 //     time ("for a one radio server you can only choose 1 at a time"), the others greyed WITH THE REASON; a combination only
 //     where one capture holds both. The one combination a single whole-radio mode decodes today is ACARS + VDL2 (the
-//     datalink's wide band, ~6.1 MS/s — vibe_avi_mode.h). ✗ AIS + DSC is NOT offered: DSC is a VFO decoder (background
-//     decoding's), not a whole-radio mode, so ticking both could only half-work (AGENTS.md: no dead controls).
+//     datalink's wide band, ~6.1 MS/s — vibe_avi_mode.h). ★★★ beta96 AIS + DSC is ONE choice ("aisdsc", vibe_maritime_combo.h:
+//     one whole-radio mode decodes both from a ~6.2 MS/s capture), drawn only where the server says the capture holds it
+//     — never a tick of AIS plus a tick of DSC (DSC alone is a VFO decoder, not a whole-radio mode).
 //   · Picking VDL2 is THE WHOLE SETUP: the centre and every 25 kHz channel come from the datalink's own table
 //     (vibeavi::bands) — no frequency, no VFO typed by the owner.
 //   · Each radio of a multi-radio server has its own (the config is per radio).

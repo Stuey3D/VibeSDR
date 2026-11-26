@@ -35,6 +35,7 @@ import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
 import { parseSondeReport } from './sondes';   // ★ V12 radiosondes (RS41)
 import { vorMapSanitise } from './vorMap';     // ★ V12 the VOR / ILS map
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG } from './satellites';   // ★ V12 satellites
+import { parseSatHybrid, parseSatSingle } from './satSingle';   // ★★★ beta96 single mode: satellites
 import { parseDecShared } from './sharedDecoders';   // ★★★ the room's decoder on a shared dial (2026-11-24)
 import { parseDabScan, parseFmScan } from './dabBandScan';
 import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
@@ -312,7 +313,7 @@ export class VibeServerClient extends VibeServerWsClient {
   private aisHealHeldAt = 0;
   static readonly AIS_HOLD_MS = 8_000;
 
-  ais(on: boolean) {
+  ais(on: boolean, band?: string) {
     if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to 162 MHz
     holdNativeHealing(VibeServerClient.AIS_HOLD_MS, on ? 'AIS on' : 'AIS off');
     if (on) { this.aisExit.entered(); this.cancelPacedTune(); }
@@ -321,7 +322,7 @@ export class VibeServerClient extends VibeServerWsClient {
     this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ais = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     if (on) this.wholeAskAt.ais = Date.now();
-    this.sendSpectrum({ type: 'ais', on: on ? 1 : 0 });
+    this.sendSpectrum(on && band ? { type: 'ais', on: 1, band } : { type: 'ais', on: on ? 1 : 0 });   // ★★★ beta96 'ais+dsc' 
   }
   /* ── V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md) — AIS's pattern with ISM's bands: the server puts the radio on the
    *  band (ACARS 131.675 / VDL2 136.8625 MHz), decodes every channel, ignores tune / zoom / mode while it runs. ── */
@@ -653,6 +654,9 @@ export class VibeServerClient extends VibeServerWsClient {
         const r = parseSatReadout(msg); if (r) { this.satFollowApply(r); this.callbacks.onSat?.(r); } return true;   // ★★★ beta94 the dial follows
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.callbacks.onSatTrack?.(t); return true; }
+      // ★★★ beta96 single mode: satellites — the watch view (services/satSingle.ts)
+      case 'sat_single': { const s1 = parseSatSingle(msg); if (s1) this.callbacks.onSatSingle?.(s1); return true; }
+      case 'sat_hybrid': this.callbacks.onSatHybrid?.(parseSatHybrid(msg)); return true;
       case 'dec_shared': { const l = parseDecShared(msg); if (l) this.callbacks.onDecShared?.(l); return true; }   // ★★★ the room's decoder
       case 'sat_vfob': { const b = parseSatVfoB(msg); if (b) this.callbacks.onSatVfoB?.(b); return true; }   // ★★★ beta92 OPEN IN VFO B
       case 'ais_off':

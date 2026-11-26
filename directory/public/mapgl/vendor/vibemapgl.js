@@ -66,6 +66,21 @@
       st.layers = st.layers.filter((l) => l.source !== 'detail');
       const extend = new Set((st.metadata && st.metadata['vibesdr:basicOnlyExtend']) || []);
       for (const l of st.layers) if (extend.has(l.id)) delete l.maxzoom;
+      /* ★★★ THE LAKES WENT AT z6 (Stuart 11-26: "the Netherlands now doesn't have enough water" — the IJsselmeer,
+       *  the Markermeer and every lake drawn as LAND from z6 up). The basic pack's lakes, rivers, islands, reefs and
+       *  playas are tier1 data cut for z4–5 only (gen-map-tiles TIER_STEP: the detail pack takes over at z6), while
+       *  its land/cover/urban run to z6 and the basic source's maxzoom is 6. Over-zoomed, the z6 tiles carry NO
+       *  lakes. So these layers (the style's vibesdr:basicOnlyZ5) read the SAME pack through a second source capped
+       *  at z5: the z5 tiles — lake islands and all, Flevoland stays land — over-zoom to every zoom above. Same
+       *  data, order and paint; no pack rebuild, no extra bytes (the one pmtiles instance serves both sources).
+       *  ★ Only here, with no detail pack: with it, its own lakes/rivers take over at z6.
+       *  ★ 'vs-basic-z5' is the id the directory's stopgap (vibemap-water.js keepZ5Layers, main dc449eb7b) looks
+       *    for, so it stands down rather than doing the same job twice. */
+      const z5 = new Set((st.metadata && st.metadata['vibesdr:basicOnlyZ5']) || []);
+      if (z5.size && st.sources.basic) {
+        st.sources['vs-basic-z5'] = Object.assign({}, st.sources.basic, { maxzoom: 5 });
+        for (const l of st.layers) if (z5.has(l.id) && l.source === 'basic') l.source = 'vs-basic-z5';
+      }
     }
     applyProfileToStyle(st, profile);
     applyTextScale(st);

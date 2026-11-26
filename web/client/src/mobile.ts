@@ -127,6 +127,10 @@ export type MobileDeps = {
   aisCap: () => { ok: boolean; why: string } | null;
   aisOn: () => boolean;
   toggleAis: () => void;
+  /** ★★★ beta96 MARITIME — AIS + DSC channel 70 from one wide capture: null = not offered on this radio (no key at all). */
+  marCap?: () => { ok: boolean; why: string } | null;
+  marOn?: () => boolean;
+  toggleMar?: () => void;
   /** ★ V12 the aircraft datalink (ACARS / VDL2) — AIS's three states. */
   avCap?: () => { ok: boolean; why: string } | null;
   avOn?: () => boolean;
@@ -447,12 +451,23 @@ export function initMobileControls(deps: MobileDeps) {
     const aic = deps.aisCap();
     if (aic && (aic.ok || deps.aisOn())) {   // ★ refused = not drawn (see ADS-B above)
       const aisRow = document.createElement('button');
-      aisRow.className = 'mModeOpt' + (deps.aisOn() ? ' on' : '') + (aic.ok ? '' : ' dis');
+      aisRow.className = 'mModeOpt' + (deps.aisOn() && !deps.marOn?.() ? ' on' : '') + (aic.ok ? '' : ' dis');
       setModeLabel(aisRow, 'ais', 'AIS');
       aisRow.title = aic.ok ? 'AIS — ships on 161.975 and 162.025 MHz, with a map' : `AIS is not available: ${aic.why}`;
       if (!aic.ok) aisRow.setAttribute('aria-disabled', 'true');
       aisRow.onclick = () => { deps.toggleAis(); close(); refresh(); };
       grid.appendChild(aisRow);
+    }
+    /* ★★★ beta96 MARITIME beside AIS — AIS + DSC channel 70 together; drawn only where the server offers it (the capture holds both). */
+    const mrc = deps.marCap?.();
+    if (mrc && deps.toggleMar && (mrc.ok || deps.marOn?.())) {
+      const marRow = document.createElement('button');
+      marRow.className = 'mModeOpt' + (deps.marOn?.() ? ' on' : '') + (mrc.ok ? '' : ' dis');
+      setModeLabel(marRow, 'ais', 'MARITIME');
+      marRow.title = mrc.ok ? 'Maritime — AIS ships and DSC calls on channel 70 together, from one wide capture, with a map' : `Maritime is not available: ${mrc.why}`;
+      if (!mrc.ok) marRow.setAttribute('aria-disabled', 'true');
+      marRow.onclick = () => { deps.toggleMar!(); close(); refresh(); };
+      grid.appendChild(marRow);
     }
     /* ★★ V12 THE AIRCRAFT DATALINK beside AIS — the same three states; absent where no band is reachable. */
     const avc = deps.avCap?.();

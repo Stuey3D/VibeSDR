@@ -7,7 +7,7 @@
  *   has (its driver, the rate the owner picked, the modes ticked off) — the one place the app may have its own settings
  *   (feedback_app_no_hardcoded_settings). The engine checks every one again at the moment it enters a mode.
  */
-export type KeepModeId = 'adsb' | 'vdl2' | 'acars' | 'vor' | 'ais' | 'ism';
+export type KeepModeId = 'adsb' | 'vdl2' | 'acars' | 'vor' | 'ais' | 'aisdsc' | 'ism';
 export type KeepMap = 'avmar' | 'amateur';
 /** ★★ The Amateur map's ISM (Stuart 11-26: 868 MHz all day for MeshCore repeaters) — its band from ISM's own plan, carried in
  *  the token "ism:868". LoRa coverage follows ISM's own "every channel" setting. No IQ capture of ISM bursts, ever. */
@@ -17,6 +17,9 @@ export const KEEP_MODES: { id: KeepModeId; name: string; group: 'aviation' | 'ma
   { id: 'acars', name: 'ACARS',         group: 'aviation', block: 'avdata' },
   { id: 'vor',   name: 'VOR / ILS map', group: 'aviation', block: 'vormap' },
   { id: 'ais',   name: 'AIS',           group: 'maritime', block: 'ais' },
+  // ★★★ beta96 THE MARITIME COMBINATION (vibe_maritime_combo.h): AIS + DSC channel 70 from one wide capture — one choice, drawn
+  //     only where the capture holds both (KEEP_MARITIME_MIN)
+  { id: 'aisdsc', name: 'AIS + DSC (channel 70)', group: 'maritime', block: 'ais' },
   { id: 'ism',   name: 'ISM',           group: 'ism',      block: 'ism', map: 'amateur' },
 ];
 export const KEEP_GROUP_WORDS: Record<string, string> = { aviation: 'AVIATION', maritime: 'MARITIME', ism: 'ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)' };
@@ -26,6 +29,8 @@ export const keepBase = (t: string) => String(t).split(':')[0];
 /** ACARS + VDL2 together: the datalink's wide band (vibeavi minRateHz, ~6.1 MS/s). */
 export const KEEP_COMBO_MIN = 6_083_334;
 export const MAP_AVMAR = 'avmar';
+/** ★★★ beta96 AIS + DSC together (vibemar::minRateHz, ~6.17 MS/s). */
+export const KEEP_MARITIME_MIN = 6_166_667;
 
 /** Tokens in table order, one per mode: "vdl2", "acars", "ism:868" (ISM only with its band). */
 export function keepParse(csv: string | null | undefined): string[] {
@@ -92,7 +97,10 @@ export function keepAvailLocal(f: {
     if (m.id === 'ism') hw = !f.isIcom && (f.ismBands ?? []).length > 0;
     if (f.lockedOwnVfos) hw = false;   // ★ a locked centre with its own-VFO listeners: a whole-radio mode would move the window
     let why = '';
-    if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (modes offered to listeners).`;
+    // ★★★ beta96 AIS + DSC: only a wide radio whose rate holds both (an RSP at 8, an R2 at 10, a HackRF, a USRP) — not drawn elsewhere
+    if (m.id === 'aisdsc') hw = hw && !hf && ['sdrplay', 'airspy', 'hackrf', 'usrp'].includes(f.driver) && f.rate >= KEEP_MARITIME_MIN;
+    if (m.id === 'aisdsc' && blocks.has('dsc')) why = 'DSC is switched off for this radio (modes offered to listeners).';
+    else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (modes offered to listeners).`;
     else if (m.id === 'adsb' && f.rate > 0 && f.rate < 2_400_000 && !f.dabRateBoost)
       why = 'ADS-B needs a capture of 2.4 MS/s — set the rate to 2.4 MS/s or more, or let modes change the rate.';
     return { id: m.id, hw, why };
@@ -148,8 +156,8 @@ export function singleOptionsLocal(f: { avail: KeepAvail[]; ismBands: string[]; 
   const out: SingleOption[] = [];
   const av = (id: string) => f.avail.find((a) => a.id === id);
   const rateWhy = (id: string) => { const a = av(id); return a && a.why && !/switched off/.test(a.why) ? a.why : ''; };
-  for (const id of ['adsb', 'vdl2', 'acars', 'ais', 'vor'])
-    if (av(id)?.hw) out.push({ tok: id, label: id === 'vdl2' ? 'DATALINK: VDL2' : id === 'acars' ? 'DATALINK: ACARS' : id === 'vor' ? 'VOR MAP' : keepName([id]), why: rateWhy(id) });
+  for (const id of ['adsb', 'vdl2', 'acars', 'ais', 'aisdsc', 'vor'])
+    if (av(id)?.hw) out.push({ tok: id, label: id === 'vdl2' ? 'DATALINK: VDL2' : id === 'acars' ? 'DATALINK: ACARS' : id === 'vor' ? 'VOR MAP' : id === 'aisdsc' ? 'MARITIME: AIS + DSC (channel 70)' : keepName([id]), why: rateWhy(id) });
   if (av('ism')?.hw) for (const b of f.ismBands) out.push({ tok: 'ism:' + b, label: 'ISM ' + (f.ismWords?.[b] ?? b + ' MHz'), why: '' });
   if (f.dab) out.push({ tok: 'dab', label: 'DAB', why: '' });
   if (f.ndb) out.push({ tok: 'ndb', label: 'NDB', why: '' });
@@ -174,6 +182,6 @@ export function singleFromTicks(blockedModes: string, landingModes: string, ismB
 export function singleWords(t: string, ismWords?: Record<string, string>): string {
   if (!t || t === 'general') return '';
   if (t === 'sat') return 'SATELLITES';
-  const named: Record<string, string> = { dab: 'DAB', ndb: 'NDB', sondes: 'SONDES', wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', drm: 'DRM' };
+  const named: Record<string, string> = { dab: 'DAB', ndb: 'NDB', sondes: 'SONDES', wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', drm: 'DRM', aisdsc: 'MARITIME (AIS + DSC)' };
   return named[t] ?? keepName([t], ismWords);
 }

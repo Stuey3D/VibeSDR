@@ -70,7 +70,8 @@ import { type VorMapReport } from '../../../src/services/vorMap';
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel, satSchedStored } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { SatPanel, satSchedStored } from './satellites';
+import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -2071,6 +2072,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
     onSondes: (r) => onSdReport(r),
     onSatList: (l) => satPanelGet()?.onList(l),
+    onSatSingle: (s1) => { satPanelGet()?.onSingle(s1); },                                    // ★★★ beta96 the watch view
+    onSatHybrid: (h) => { satHybridNow = h; satPanelGet()?.onHybrid(h); },                   // ★★★ beta96 the transponder pass
     onSat: (r) => {
       const p = satPanelGet();
       const was = !!p?.readout();
@@ -2229,6 +2232,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       adminUnlocked = ok;
       syncDabOnly();   // ★★ V12 the admin keeps EXIT DAB
       syncOnlyMode();  // ★★ …and every other EXIT
+      satSingleSync(); // ★★★ beta96 …and SATELLITE's (single mode: satellites)
       syncMediaSkip();   // ★ the owner may skip on their own spectator dial
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
       if (ok) clearTimeLeft();
@@ -2396,6 +2400,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
     onDabOnly: (on) => { hwDabOnlyKnown = true; hwDabOnly = on; syncDabOnly(); },
     onOnlyMode: (m) => { hwOnlyMode = m; syncOnlyMode(); },   // ★★ V12 the only mode, any whole-radio mode
+    onSingleMode: (m) => { if (m !== hwSingleMode) { hwSingleMode = m; } satSingleSync(); },   // ★★★ beta96 single mode: satellites
     onServerClock: (offsetMin, abbr, tz) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; srvTzId = tz; },
     onDsActive: (on, setting) => {
       hwDsActive = on;
@@ -10250,11 +10255,17 @@ function ismMapRender() {
  *  arrows, zoom and filter are held, and the server ignores them. ★ Offered only where vibeserver.json says so: `ais` true
  *  (live) / false (greyed, `aisWhy` on a tap) / absent (a radio that cannot reach 162 MHz, an Icom — no control at all; the HF+ has it since 2026-11-24). */
 let aisCap: { ok: boolean; why: string } | null = null;
+/* ★★★ beta96 THE MARITIME COMBINATION (docs/v12/MARITIME-COMBO.md): AIS + DSC channel 70 from one wide capture — vibeserver.json
+ *  `aisDsc` true only where the radio's capture holds both (an RSP at 8 MS/s, an R2 at 10, a HackRF, a USRP); absent elsewhere,
+ *  so no MARITIME key is drawn (AGENTS.md). The same AIS mode and map; the report's `combo` says which runs. */
+let aisDscCap = false;
+function aisDscOn(): boolean { return aisOn && aisReport?.combo === 'ais+dsc'; }
 let aisOn = false;
 let aisReport: AisReport | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
 function trackViewUp(): boolean { return !!asView?.open; }   // ★ V12 nothing drawn behind it, as NDB (beta96: the VOR map and SONDES are the AIR & SEA map's)
 function aisReadCap(j: any) {
+  aisDscCap = j?.aisDsc === true;
   if (j?.ais === true) aisCap = { ok: true, why: '' };
   else if (j?.ais === false) {
     const why = typeof j.aisWhy === 'string' ? j.aisWhy.trim().slice(0, 200) : '';
@@ -10282,15 +10293,15 @@ function aisUiOff() {
   asModeEnded();
   renderFreq();
 }
-function aisSetMode(on: boolean) {
+function aisSetMode(on: boolean, band?: string) {
   if (!on && onlyModeRefuses('ais')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (aisCap && !aisCap.ok) { showPill(aisCap.why, 7000); return; }
-    if (spec?.isTuneLocked()) { spec.ais(true); return; }   // ★ ask before tuning: spec says why
+    if (spec?.isTuneLocked()) { spec.ais(true, band); return; }   // ★ ask before tuning: spec says why
     if (dabOn) { dabRestore = null; dabOn = false; dabState = null; syncStereoLight(); wf?.applySettings({ minRangeDb: 30 }); dabUiOff(); dabSetPane(dabPane); }
     audio?.holdHealing(6000);
     aisUiOn();
-    spec?.ais(true);
+    spec?.ais(true, band);
   } else {
     audio?.holdHealing(6000);
     spec?.ais(false);
@@ -10795,6 +10806,8 @@ function satPanelGet(): SatPanel | null {
       session: () => ({ sharedDial: dialModeNow !== 'exclusive', listeners: listenerCount > 0 ? listenerCount : undefined, locked: hwLockedCentre > 0 }),
       here: () => ({ hz: Math.round(spec?.frequency ?? 0), mode: String(spec?.mode ?? '') }),
       back: (hz, mode) => { if (spec && hz > 0) { spec.tune(clampTune(hz), (mode || spec.mode) as SDRMode, { recenter: true, retarget: true }); updateViewOverlays(); } },
+      // ★★★ beta96 single mode: satellites — the watch view's GALLERY key
+      openGallery: () => { if (!isPanelOpen('galleryPanel')) { togglePanel('galleryPanel'); galPage = 1; void renderGallery(1); } },
     });
     satPanel.setCap(satCap);
   }
@@ -11031,9 +11044,22 @@ function satImgFollowStart(wrap: HTMLElement) {
 /** Leave SATELLITE (another whole-radio mode is starting) — the drop is sent, the decoder stops. */
 function satModeOff() { if (satPanel?.active) satPanel.exit(); }
 /** The SATELLITE key: in (leaving whichever whole-radio mode is on, as each of them does) or out. */
+/* ★★★ beta96 SINGLE MODE: SATELLITES (src/services/satSingle.ts, docs/v12/SAT-SINGLE.md) — a listener on a SATELLITES radio
+ *  lands straight in SATELLITE and WATCHES: no EXIT (a note says why), no picks; the radio makes them. The signed-in admin is
+ *  never held. Synced on every hwinfo and when the admin signs in or out. */
+let hwSingleMode = '';
+let satHybridNow: SatHybridInfo | null = null;
+function satSingleSync() {
+  const watch = satSingleWatch(hwSingleMode, adminUnlocked);
+  const p = watch ? satPanelGet() : satPanel;
+  if (!p) return;
+  p.setWatch(watch);
+  if (watch && !p.active) toggleSatMode();
+}
 function toggleSatMode() {
   const p = satPanelGet();
   if (!p) return;
+  if (p.active && p.watching) { showPill(SAT_SINGLE_WHY, 6000); return; }   // ★★★ beta96 no way out for a listener
   if (!p.active) {
     // ★ each switched OFF properly (its own toggle tells the server), not just its view — SATELLITE takes the receiver
     if (dabOn) toggleDabMode(); if (adsbOn) toggleAdsbMode(); if (ismOn) toggleIsmMode(); if (aisOn) toggleAisMode();
@@ -11401,7 +11427,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : vmOn ? 'VOR MAP' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? (aisDscOn() ? 'MARITIME' : 'AIS') : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : vmOn ? 'VOR MAP' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -11470,6 +11496,9 @@ function buildControls() {
     ismOn:         () => ismOn,
     toggleIsm:     toggleIsmMode,
     aisCap:        () => aisCap,
+    marCap:        () => (aisDscCap ? aisCap : null),   // ★★★ beta96 MARITIME (AIS + DSC) — absent where the capture cannot hold it
+    marOn:         () => aisDscOn(),
+    toggleMar:     toggleMarMode,
     aisOn:         () => aisOn,
     toggleAis:     toggleAisMode,
     avCap:         () => avCap,          // ★ V12 the aircraft datalink
@@ -16182,7 +16211,16 @@ function anyDecoderLeft(): boolean {
 function toggleDabMode() { satModeOff(); if (vmOn && !dabOn) vmUiOff(); if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
 function toggleAdsbMode() { satModeOff(); if (vmOn && !adsbOn) vmUiOff(); if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
 function toggleIsmMode() { satModeOff(); if (vmOn && !ismOn) vmUiOff(); if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
-function toggleAisMode() { satModeOff(); if (vmOn && !aisOn) vmUiOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleAisMode() {
+  if (aisDscOn()) { spec?.ais(true); return; }   // ★★★ beta96 from AIS + DSC to AIS alone: the same mode, the radio moves
+  satModeOff(); if (vmOn && !aisOn) vmUiOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn);
+}
+/** ★★★ beta96 MARITIME: AIS + DSC channel 70 together (only where the server offers `aisDsc`). Lit = on; pressed lit = leave. */
+function toggleMarMode() {
+  if (aisDscOn()) { aisSetMode(false); return; }
+  if (aisOn) { spec?.ais(true, 'ais+dsc'); return; }   // ★ from AIS alone: the same mode, wider
+  satModeOff(); if (vmOn) vmUiOff(); if (adsbOn) adsbUiOff(); if (ismOn) ismUiOff(); if (ndbOn) ndbUiOff(); aisSetMode(true, 'ais+dsc');
+}
 function toggleAvMode() { satModeOff(); if (vmOn && !avOn) vmUiOff(); if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
 function toggleSdMode() { satModeOff(); if (vmOn && !sdOn) vmUiOff(); if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
 function toggleNdbMode() { satModeOff(); if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); if (vmOn && !ndbOn) vmUiOff(); ndbSetMode(!ndbOn); }
@@ -16197,7 +16235,8 @@ setWholeRadioKeys(() => {
                 press: () => { toggle(); closePanels(); } });
   };
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
-  add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  add('ais', 'AIS', aisCap, aisOn && !aisDscOn(), toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  if (aisDscCap) add('maritime', 'MARITIME', aisCap, aisDscOn(), toggleMarMode, 'Maritime — AIS ships and DSC calls on channel 70 together, from one wide capture, with a map');
   add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
   add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB — digital radio, Band III',

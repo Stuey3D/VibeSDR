@@ -357,7 +357,8 @@ import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, keep
 import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguageMissing, PREFERRED_MAX, type LikelyWhy } from '../services/transcribeOrder';
 import { translateRows } from '../services/translateTargets';
 import { dabOnlyFrom } from '../services/dabOnly';   // ★★ V12 DAB only — the web page's rule
-import { onlyModeFrom, onlyModeNote, onlyModeWhy } from '../services/onlyMode';   // ★★ V12 the only mode — the web page's rule
+import { onlyModeFrom, onlyModeNote, onlyModeWhy } from '../services/onlyMode';
+import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo, type SatSingle } from '../services/satSingle';   // ★★★ beta96 single mode: satellites (the web page's rules)   // ★★ V12 the only mode — the web page's rule
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
@@ -973,6 +974,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSatCap(undefined);                         // ★ V12 satellites — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
     setHwOnlyMode(null); onlyToldRef.current.clear();   // ★★ V12 the only mode — likewise
+    setHwSingleMode(''); setSatSingle(null); setSatHybrid(null);   // ★★★ beta96 single mode: satellites — likewise
     setAprsCap({ on: false, hz: 144.8e6 });
     setDecWhy({});   // ★ V12 decoder reach: a new radio says its own
     setAntBands(null);
@@ -2806,6 +2808,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [satCap, setSatCap] = useState<{ ok: boolean; why: string; need?: 'location' } | undefined>(undefined);
   const [satOn, setSatOn] = useState(false);
   const satOnRef = useRef(false);
+  /* ★★★ beta96 SINGLE MODE: SATELLITES — hwinfo singleMode, the watch view's facts (sat_single), the transponder hybrid */
+  const [hwSingleMode, setHwSingleMode] = useState('');
+  const [satSingle, setSatSingle] = useState<SatSingle | null>(null);
+  const [satHybrid, setSatHybrid] = useState<SatHybridInfo | null>(null);
+  const satWatchRef = useRef(false);
   const [satList, setSatList] = useState<SatList | null>(null);
   const satListRef = useRef<SatList | null>(null);
   const [satRo, setSatRo] = useState<SatReadout | null>(null);
@@ -3153,6 +3160,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const aisOnRef = useRef(false);
   useEffect(() => { aisOnRef.current = aisOn; }, [aisOn]);
   const [aisReport, setAisReport] = useState<AisReport | null>(null);
+  const aisReportRef = useRef<AisReport | null>(null);   // ★★★ beta96 which AIS runs (combo) for the keys' callbacks
+  useEffect(() => { aisReportRef.current = aisReport; }, [aisReport]);
   const [aisViewOpen, setAisViewOpen] = useState(false);
   /** ★ A ship's track asked for by the map's card, waiting for the server's ais_trail (mmsi → resolve). */
   const aisTrailWait = useRef(new Map<number, (pts: [number, number][]) => void>());
@@ -3701,7 +3710,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  away (a refused exit on a locked dial) it brings the map back; otherwise it leaves. Entering opens the map AT ONCE.
    *  The SERVER tunes (162.000 MHz) and leaves DAB / ADS-B / ISM itself — their screens are put away here as the web's
    *  toggleAis does, so two whole-radio screens never stand at once. */
-  const toggleAis = useCallback(() => {
+  const toggleAis = useCallback((band?: string) => {
     const c = client.current;
     if (!c?.ais) return;
     if (aisOnRef.current) {
@@ -3719,7 +3728,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time
     setAprsMapOpen(false);
     setAisReport(null); setAisViewOpen(true);
-    c.ais(true);
+    c.ais(true, band);
     aisOnRef.current = true;
     setAisOn(true);
   }, [aisUiOff, adsbUiOff, ismUiOff, ndbUiOff, aisViewOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -7390,6 +7399,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ Out of SATELLITE: the drop is ALWAYS sent (a lock must never outlive the mode), its decoder stops, the box closes. */
   const satModeOff = useCallback(() => {
     if (!satOnRef.current) return;
+    if (satWatchRef.current) { setSatWhy(SAT_SINGLE_WHY); return; }   // ★★★ beta96 single mode: satellites — no way out for a listener
     satOnRef.current = false; setSatOn(false);
     (client.current as unknown as { satDrop?: () => void } | null)?.satDrop?.();
     satFollow('', null);
@@ -7397,6 +7407,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSatPicked(null); satZoomedPickRef.current = ''; setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
     setSatCwText(''); satVfoBReset();
   }, [satFollow, satVfoBReset]);
+  /* ★★★ beta96 SINGLE MODE: SATELLITES (services/satSingle.ts) — a listener (not the signed-in admin) lands straight in
+   *  SATELLITE and watches: satModeOff refuses while this holds, and the box draws the watch view. */
+  const satWatch = satSingleWatch(hwSingleMode, adminOk);
+  satWatchRef.current = satWatch;
+  useEffect(() => { if (satWatch && satCap && !satOnRef.current) satEnterRef.current(); }, [satWatch, satCap]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopSpots = useCallback(() => {
     if (spotsKindRef.current === 'digi') roomFollowRef.current.noteClosed('spots', null);   // ★★★ shared decoders: closed for me
@@ -8699,6 +8714,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
       onHwDabOnly: (v: boolean) => { if (!destroyed.current) setHwDabOnly(v); },
       onHwOnlyMode: (m: string) => { if (!destroyed.current) setHwOnlyMode(m); },   // ★★ V12 the only mode
+      onHwSingleMode: (m: string) => { if (!destroyed.current) setHwSingleMode(m); },   // ★★★ beta96 single mode
+      onSatSingle: (s1: SatSingle) => { if (!destroyed.current) { setSatSingle(s1); setSatHybrid(s1.hybrid ?? null); } },
+      onSatHybrid: (h: SatHybridInfo | null) => { if (!destroyed.current) setSatHybrid(h); },
       onHwGainLocked: (v: boolean) => { if (!destroyed.current) setHwGainLocked(v); },
       onHwIfGrFloor: (v: number) => { if (!destroyed.current) setHwIfGrFloor(v); },
       onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
@@ -17008,6 +17026,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             onEnable: satPlaceEnable, onEnter: satPlaceEnter, onClear: satPlaceClear,
           } : undefined}
           picked={satPicked} pending={satPending} why={satWhy}
+          watch={satWatch ? { single: satSingle, hybrid: satHybrid, onGallery: () => { markInteract(); setGalleryOpen(true); } } : null}
           picture={satPicture} pictureDone={satPictureDone}
           decLine={satDec && activeDecoder === satDec ? satDecLineShown(decoderStatus) : ''}
           packets={satDec === 'aprs' ? aprsLog.map((x) => x.line) : []}
@@ -17761,7 +17780,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★ V12 AIS, beside ISM — the same three states; never on Apple TV (no map there: the mode's screen is the map). */
           aisAvail: !IS_APPLE_TV && (aisCap?.ok === true || aisOn),   // ★ refused = not drawn (see ADS-B above)
           aisWhy: !aisOn && aisCap && !aisCap.ok ? aisCap.why : undefined,
-          aisOn,
+          aisOn: aisOn && aisReport?.combo !== 'ais+dsc',
+          /* ★★★ beta96 MARITIME (AIS + DSC channel 70 from one wide capture) — beside AIS, only where the server offers
+           *  `aisDsc` (the capture holds both); absent elsewhere (no dead key). The same AIS mode and map. */
+          marAvail: !IS_APPLE_TV && aisCap?.ok === true && !!aisCap.dsc,
+          marOn: aisOn && aisReport?.combo === 'ais+dsc',
+          onMar: () => {
+            markInteract();
+            satModeOff();
+            setModeSelOpen(false);
+            const c = client.current;
+            if (!c?.ais) return;
+            if (aisOnRef.current && aisReport?.combo === 'ais+dsc') { toggleAis(); return; }   // ★ lit: leave (toggleAis's rules)
+            if (aisOnRef.current) { if (!askGate()) { c.ais(true, 'ais+dsc'); setAisViewOpen(true); } return; }   // ★ from AIS alone: wider
+            toggleAis('ais+dsc');
+          },
           /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
           /* ★★ V12 RADIOSONDES — the datalink's three states, VibeServer only (the capability is per radio). */
           /* ★★★ V12 SATELLITE — a whole-radio mode (Stuart, 2026-11-20: "next to ism sondes etc"). Only where the server sends
@@ -17843,6 +17876,8 @@ export default function SDRScreen({ route, navigation }: Props) {
             satModeOff();   // ★★★ another whole-radio mode leaves SATELLITE (its drop sent)
             if (!aisOnRef.current && aisCap && !aisCap.ok) { appAlert('AIS unavailable', aisCap.why || 'AIS is not available on this receiver'); return; }
             setModeSelOpen(false);
+            // ★★★ beta96 the AIS key while MARITIME (AIS + DSC) runs: AIS alone — the same mode, the radio moves back to 162.000
+            if (aisOnRef.current && aisReportRef.current?.combo === 'ais+dsc') { const c = client.current; if (c?.ais && !askGate()) { c.ais(true); setAisViewOpen(true); } return; }
             toggleAis();
           },
           /* ★★ V12 APRS — only where the radio's vibeserver.json says "aprs": true (an older server: no key). TUNE puts the

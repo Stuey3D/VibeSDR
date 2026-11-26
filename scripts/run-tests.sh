@@ -331,6 +331,7 @@ flags_for() {
     test-pll-iq)           echo "-O2" ;;
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
+    test-maritime-combo)   echo "-O2 -lpthread" ;;   # ★ beta96 AIS + DSC ch 70 from one wide capture (vibe_maritime_combo.h)
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
@@ -561,6 +562,7 @@ deps_for() {
     # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
+    test-maritime-combo) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;
     # ★ V12 RS41: the same channeliser / FFT / half-bands (vibe_rs41_rx.h); pffft + kiss_fft from cobjs_for.
     test-rs41|test-rs41-service|test-sondes-types) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
@@ -581,7 +583,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-vormap|test-ndb|test-ndb-suspect|test-community|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr)
+    test-vormap|test-ndb|test-ndb-suspect|test-community|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr|test-maritime-combo)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -1085,6 +1087,8 @@ if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fa
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 SCHEDULE A PASS, the pure half: which key, the book, overlaps + PRIORITISE, the runner, degrade (satSchedule.ts)
 if TZ=UTC npx tsx scripts/test_sat_schedule.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 SINGLE MODE: SATELLITES, the pure half: who watches, the messages, the header / line / hybrid words, the timetable
+if TZ=UTC npx tsx scripts/test_sat_single.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta96 satellite box polish: no address on the globe, SMALL without words + the glyph, the readout layout, opaque text
 if npx tsx scripts/test_sat_layout.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SATELLITE IN LOCAL HARDWARE: the key / the position prompt / which position / nothing published (satPlace.ts)
@@ -2136,6 +2140,19 @@ else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
 fi
 
+# ★★★ beta96 THE MARITIME COMBINATION (AIS + DSC ch 70) through the server: a fake rtl_tcp at 8 MS/s with an RSP's rate list
+#     replays `test-maritime-combo --write-clip` (16 MB, deleted after): not offered on an RTL; offered, entered, 4 ships + the
+#     DSC call, the gallery's pin + day log, AIS alone in place, leave; kept at start; single mode. Needs VIBESERVER_BIN.
+printf '\n\033[1m── Maritime: AIS + DSC together (end to end: the server) ──\033[0m\n'
+if [ -x "$OUT/test-maritime-combo" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-maritime-combo" --write-clip "$OUT/maritime-clip.cu8" 8000000 >/dev/null 2>&1
+  VIBE_MARITIME_CLIP="$OUT/maritime-clip.cu8" node --max-old-space-size=512 scripts/test-server-maritime.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/maritime-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-maritime-combo build'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 SONDES (docs/v12/RS41.md): the real server on a fake rtl_tcp replaying a synthetic 403.005 MHz capture
 #     (test-rs41 --write-clip: three RS41s from our own transmitter): the capability and bands, the sonde table, no
 #     temperature before the calibration is whole, the band step, the receiver given back, the owner's switch; then the web
@@ -2172,6 +2189,11 @@ fi
 #     the freeze, the greyed state with no orbit data. Needs VIBESERVER_BIN (exit 3 = not run). ★ No satellite on air here.
 printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 SINGLE MODE: SATELLITES end to end (fake rtl_tcp + VIBESERVER_SAT_TEST_CLOCK): watch-only before AOS, the
+#     linear-transponder HYBRID at AOS (own VFO + AUTO DOPPLER each, independent tuning, outside refused, a joiner), LOS back.
+printf '\n\033[1m── Single mode: SATELLITES (watch only + the transponder hybrid) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-sat-single.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta94 ORBCOMM: another ORBCOMM pick KEEPS the whole-band decoder (no second attach, its counts run on), a joiner who
 #     opens SATELLITE is told the room's pick and joins the same run; then the web box following the decoder after the pick's
@@ -2225,6 +2247,9 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★★ SATELLITE MODE's web window alone against a fake sat_list (no server): order, greying, the synced line, the pick box sizes
 #     (compact / big with the decoder canvas lent / ISS SSTV growing), APRS lines, AUTO DOPPLER, EXIT → drop; 390 px. Needs Edge + web/dist.
 node --max-old-space-size=512 scripts/test-web-satellite-mode.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 the web window's WATCH view (single mode: satellites): no EXIT / list, refusals, LIVE, the hybrid, the admin; 390 px
+node --max-old-space-size=512 scripts/test-web-sat-single.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SHOW on the web window (fake sat_list): a tick hides the others' passes, a group shortcut, kept across a reload,
 #    the pick stays, reminders follow it; default/silver/black, 390 px. Needs Edge + web/dist.

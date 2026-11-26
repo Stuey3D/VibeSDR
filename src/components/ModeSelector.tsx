@@ -515,6 +515,8 @@ interface ModeSelectorProps {
     /** ★★ V12 AIS — ISM's kind of key, beside it, and the same three states: absent (`aisAvail` false — the radio cannot
      *  reach 162 MHz, an Icom; or Apple TV, which has no map — the HF+ is offered it since 2026-11-24), dimmed with the server's reason (`aisWhy`), live. */
     aisAvail?: boolean; aisWhy?: string; aisOn?: boolean; onAis?: () => void;
+    /** ★★★ beta96 MARITIME — AIS + DSC channel 70 from one wide capture: drawn only where the server offers it (`marAvail`). */
+    marAvail?: boolean; marOn?: boolean; onMar?: () => void;
     /** ★★ V12 AIRCRAFT DATALINK (ACARS / VDL2) — AIS's three states: absent (no band reachable), dimmed with the reason, live. */
     avdataAvail?: boolean; avdataWhy?: string; avdataOn?: boolean; onAvdata?: () => void;
     /** ★★ V12 RADIOSONDES (RS41) — the same three states: absent (no 400 MHz reach), dimmed with the reason, live. */
@@ -713,6 +715,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
   const ndbShown = !!decoderControls?.ndbAvail && !isBlocked('ndb');   // ★ V12 NDB
   const aisShown = !!decoderControls?.aisAvail && !isBlocked('ais');   // ★ V12 AIS
+  const marShown = aisShown && !!decoderControls?.marAvail && !isBlocked('dsc');   // ★★★ beta96 MARITIME (AIS + DSC)
   const avShown = !!decoderControls?.avdataAvail && !isBlocked('avdata');   // ★ V12 Aircraft datalink
   const sdShown = !!decoderControls?.sondesAvail && !isBlocked('sondes');   // ★ V12 radiosondes
   const vmShown = !!decoderControls?.vormapAvail && !isBlocked('vormap');   // ★ V12 the VOR / ILS map
@@ -1023,6 +1026,29 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★★ beta96 THE MARITIME KEY — AIS's key, for AIS + DSC channel 70 together (never greyed: absent where it cannot run). */
+  const marLit = !!decoderControls?.marOn;
+  const marKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="maritime" onPress={() => dc.onMar?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="MARITIME" active={marLit} pip iconId="ais" stack={stackIco}
+          onPress={() => dc.onMar?.()} fontSize={inGrid ? 13 : 12} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel="Maritime: AIS ships and DSC channel 70 together"
+        style={[st.btn, { borderColor: marLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : inGrid && isWhite ? 12 : 10 },
+                marLit && { backgroundColor: decBg },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onMar?.()} activeOpacity={0.8}>
+        <ModeLabel id="ais" stack={stackIco} numberOfLines={1} color={marLit ? dec : t.btnText}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: marLit ? dec : t.btnText }]}>
+          MARITIME
+        </ModeLabel>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   /* ★★ V12 THE AIRCRAFT DATALINK KEY — AIS's key, for ACARS / VDL2. */
   const avOff = !!decoderControls?.avdataWhy;
   const avLit = !!decoderControls?.avdataOn;
@@ -1307,7 +1333,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const wholeKeys: { id: string; node: React.ReactNode }[] = !decoderControls ? [] : WHOLE_RADIO_IDS.map(id => {
     switch (id) {
       case 'adsb': return { id, node: adsbShown ? adsbKey(false) : null };
-      case 'ais':  return { id, node: aisShown ? aisKey(false) : null };
+      case 'ais':  return { id, node: aisShown ? (marShown ? <>{aisKey(false)}{marKey(false)}</> : aisKey(false)) : null };   // ★★★ beta96 MARITIME beside AIS
       case 'avdata': return { id, node: avShown ? avKey() : null };
       case 'sondes': return { id, node: sdShown ? sdKey() : null };
       case 'sat':  return { id, node: decoderControls.satAvail ? satKey() : null };   // ★★★ V12 SATELLITE beside SONDES
@@ -2120,6 +2146,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           {dabInGrid && ismShown && ismKey(true)}
           {dabInGrid && ndbShown && ndbKey(true)}
           {dabInGrid && aisShown && aisKey(true)}
+          {dabInGrid && aisShown && marShown && marKey(true)}
         </View></NavRow>
         {dabInGrid && adsbShown && adsbWhyLine}
         {dabInGrid && ismShown && ismWhyLine}

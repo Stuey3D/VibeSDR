@@ -27,6 +27,7 @@ import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
 import { vorMapSanitise, type VorMapReport } from '../../../src/services/vorMap';   // ★ V12 the VOR / ILS map
+import { parseSatHybrid, parseSatSingle, type SatHybridInfo, type SatSingle } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites
 import { parseSatList, parseSatPicked, parseSatReadout, parseSatTrack, parseSatVfoB, SatFollowDial, satPickMsg, satDopplerMsg, satVfoBMsg, SAT_DROP_MSG, SAT_VFOB_OFF_MSG, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB } from '../../../src/services/satellites';   // ★ V12 satellites
 import { parseDecShared, type SharedDecoder } from '../../../src/services/sharedDecoders';   // ★★★ the room's decoder (2026-11-24)
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
@@ -679,6 +680,11 @@ export interface SpectrumCallbacks {
   onDabOnly?: (on: boolean) => void;
   /** ★★ V12 THE ONLY MODE: the one whole-radio mode a listener may not leave ("adsb", …; "" none, "" for the admin). */
   onOnlyMode?: (mode: string) => void;
+  /** ★★★ beta96 hwinfo `singleMode` ("" = General, "sat" = SATELLITES: this listener watches unless signed in) */
+  onSingleMode?: (mode: string) => void;
+  /** ★★★ beta96 single mode: satellites — the watch view's facts, and the linear-transponder hybrid (null = over) */
+  onSatSingle?: (s: SatSingle) => void;
+  onSatHybrid?: (h: SatHybridInfo | null) => void;
   /** ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner gain is bypassed
    *  and VibeAGC stands down. Its own callback, like onTunerBw — onHwInfo's list is long enough.
    *  Called BEFORE onHwInfo so the chip paints right on the same message. */
@@ -1596,6 +1602,8 @@ export class SpectrumClient {
         const r = parseSatReadout(msg); if (r) { this.satFollowApply(r); this.cb.onSat?.(r); } return;
       }
       case 'sat_track': { const t = parseSatTrack(msg); if (t) this.cb.onSatTrack?.(t); return; }
+      case 'sat_single': { const s1 = parseSatSingle(msg); if (s1) this.cb.onSatSingle?.(s1); return; }   // ★★★ beta96
+      case 'sat_hybrid': this.cb.onSatHybrid?.(parseSatHybrid(msg)); return;                            // ★★★ beta96
       case 'dec_shared': { const l = parseDecShared(msg); if (l) this.cb.onDecShared?.(l); return; }   // ★★★ the room's decoder
       case 'sat_vfob': { const b = parseSatVfoB(msg); if (b) this.cb.onSatVfoB?.(b); return; }   // ★★★ beta92 OPEN IN VFO B
       case 'ais_trail': {
@@ -1993,6 +2001,7 @@ export class SpectrumClient {
           this.cb.onDigitalAgc?.(msg.digitalAgc === 1 || msg.digitalAgc === true);
         if (msg.dabOnly !== undefined) this.cb.onDabOnly?.(msg.dabOnly === true);
         if (typeof msg.onlyMode === 'string') this.cb.onOnlyMode?.(msg.onlyMode);   // ★★ V12 the only mode ("" none)
+        this.cb.onSingleMode?.(typeof msg.singleMode === 'string' ? msg.singleMode : '');   // ★★★ beta96 (absent = General)
         if (Array.isArray(msg.blocked)) this.cb.onBlockedModes?.(msg.blocked as string[]);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.({
@@ -2674,14 +2683,15 @@ export class SpectrumClient {
   /** ★★ AIS HOLDS THE DIAL AND THE VIEW as ISM does — two fixed channels, nothing to step. */
   aisHeld = false;
   private aisQuietUntil = 0;
-  ais(on: boolean) {
+  /** ★★★ beta96 `band` 'ais+dsc' = the maritime combination (vibeserver.json aisDsc) — AIS + DSC channel 70 together. */
+  ais(on: boolean, band?: string) {
     if (this.askBlocked()) return;     // ★★ ask before tuning — AIS takes the whole shared radio
     if (on) this.tunePacer.cancel();
     this.aisQuietUntil = on ? 0 : Date.now() + 5000;
     this.aisHeld = on;
     this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ais = Date.now();
-    this._send({ type: 'ais', on: on ? 1 : 0 });
+    this._send(on && band ? { type: 'ais', on: 1, band } : { type: 'ais', on: on ? 1 : 0 });
   }
   /* ★★ V12 AIRCRAFT DATALINK: `band` 'acars' | 'vdl2' (vibeserver.json avdataBands); omitted = where it last was. */
   avHeld = false;

@@ -249,7 +249,7 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_dxscan") return Need::Wfm;   // ★★★ V12 the DX scanner's FM sweep: only where a radio reaches Broadcast FM
     if (id == "dab" || is("dab_")) return Need::Dab;
     if (is("adsb")) return Need::Adsb;
-    if (id == "dec_ais") return Need::Ais;
+    if (id == "dec_ais" || id == "dec_aisdsc") return Need::Ais;   // ★ beta96 the maritime combination too
     if (id == "dec_vdl2" || id == "dec_acars") return Need::Avdata;
     if (id == "dec_rs41" || id == "dec_dfm" || id == "dec_m10") return Need::Sondes;
     if (id == "dec_vormap") return Need::Vormap;

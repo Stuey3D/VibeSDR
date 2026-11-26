@@ -34,7 +34,7 @@ const $ = (id) => (els[id] ||= new El(id));
 
 const fnNames = ['singleBlockOf', 'singleWords', 'singleOptions', 'singleFromTicks', 'singleRender', 'singleKeepable', 'modeLandingId', 'keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
                  'mapLandRender', 'keepSetModes', 'keepMirror', 'keepMigrate', 'adsbLandOffer'];
-const body = constOf('LISTEN_DEMODS') + constOf('WHOLE_MODES') + constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
+const body = constOf('LISTEN_DEMODS') + constOf('WHOLE_MODES') + constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('KEEP_MARITIME_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
 const make = new Function('env', `
   let { $, radio, HW, adsbLandForm, modeBlockSet, plainLandingWords, esc, bgIsmBands, modeTree, modeCapShown, dabLandHwCan, DAB_DECODER } = env;
   const setHW = (h) => { HW = h; };
@@ -130,6 +130,32 @@ console.log('── the card: an RSP1B at 8 MS/s');
   ok(/8 MS\/s detected: one mode at a time, or ACARS & VDL2 together/.test($('mapRateNote').textContent), `the rate line: ${$('mapRateNote').textContent}`);
   ok($('mapKeepLbl').textContent === 'Keep ACARS + VDL2 running when nobody is connected', 'keep names the pair');
   ok(/data-keep="ais"[^>]* disabled/.test($('mapModeList').innerHTML), 'AIS greyed beside the pair');
+}
+
+console.log('── ★★★ beta96 the MARITIME row (AIS + DSC channel 70)');
+{
+  const withMar = (rate, hw, why = '') => { const h = hwRtl(rate); h.mapModes.push({ id: 'aisdsc', hw, why, minRate: 6166667, tunes: true }); return h; };
+  P.setHW(withMar(2400000, false)); FORM = { users: 1, rate: 2400000, boost: false, blocked: false }; BLOCKS = new Set();
+  RADIO = { driver: 'rtlsdr', landingMap: 'avmar', landingModes: '', mapKeep: false };
+  P.mapLandRender();
+  ok(!/data-keep="aisdsc"/.test($('mapModeList').innerHTML) && /data-keep="ais"/.test($('mapModeList').innerHTML), 'RTL at 2.4: AIS drawn, AIS + DSC not drawn at all');
+  ok(!P.singleOptions(RADIO).some((o) => o.tok === 'aisdsc'), '…nor in the single-mode list');
+  P.setHW(withMar(8000000, true)); FORM = { users: 1, rate: 8000000, boost: false, blocked: false };
+  RADIO = { driver: 'sdrplay', landingMap: 'avmar', landingModes: '', mapKeep: false };
+  P.mapLandRender();
+  ok(/data-keep="aisdsc"/.test($('mapModeList').innerHTML) && /AIS \+ DSC \(channel 70\)/.test($('mapModeList').innerHTML), 'RSP at 8: "AIS + DSC (channel 70)" drawn under MARITIME');
+  P.keepSetModes(['aisdsc']); P.mapLandRender();
+  ok(RADIO.landingModes === 'aisdsc' && /data-keep="ais"[^>]* disabled/.test($('mapModeList').innerHTML), 'ticked and stored as aisdsc; AIS greyed beside it (one choice)');
+  ok($('mapKeepLbl').textContent === 'Keep AIS + DSC (channel 70) running when nobody is connected', `keep names it: ${$('mapKeepLbl').textContent}`);
+  ok(P.singleOptions(RADIO).some((o) => o.tok === 'aisdsc' && /MARITIME/.test(o.label)), 'single mode offers MARITIME: AIS + DSC');
+  BLOCKS = new Set(['dsc']); P.mapLandRender();
+  ok(/data-keep="aisdsc"[^>]* disabled/.test($('mapModeList').innerHTML) && /DSC is switched off/.test($('mapModeList').innerHTML), 'DSC switched off: greyed with the reason');
+  BLOCKS = new Set();
+  // the owner raises an RSP from 2 to 8 MS/s in the form before saving: the row appears (the server's minRate)
+  P.setHW(withMar(2000000, false)); FORM = { users: 1, rate: 8000000, boost: false, blocked: false };
+  RADIO = { driver: 'sdrplay', landingMap: 'avmar', landingModes: '', mapKeep: false };
+  P.mapLandRender();
+  ok(/data-keep="aisdsc"/.test($('mapModeList').innerHTML), 'the form raised to 8 MS/s: drawn before the save');
 }
 
 console.log('── an Airspy HF+ and an Icom');

@@ -66,6 +66,8 @@ export interface AisReport {
   dropped: number; capture: number; noise: number; vessels: AisVessel[]; safety: { age: number; mmsi: number; name: string; text: string; to?: number }[];
   gain?: number; gainAuto?: number;
   notices?: AisNotice[];
+  /** ★★★ beta96 the maritime combination: "ais+dsc" while AIS runs with DSC channel 70 (vibe_maritime_combo.h); its calls so far. */
+  combo?: 'ais+dsc'; dscCalls?: number;
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
@@ -111,7 +113,8 @@ export function aisSanitise(m: any): AisReport | null {
   return { notices, type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
            chA: num(m.chA) ?? 0, chB: num(m.chB) ?? 0, repaired: num(m.repaired) ?? 0, dropped: num(m.dropped) ?? 0,
            capture: num(m.capture) ?? -1, noise: num(m.noise) ?? 0, vessels: vs, safety,
-           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined };
+           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined,
+           ...(m.combo === 'ais+dsc' ? { combo: 'ais+dsc' as const, dscCalls: num(m.dsc?.calls) ?? 0 } : {}) };
 }
 export function aprsSanitise(d: any): AprsList | null {
   if (!d || !Array.isArray(d.stations)) return null;
@@ -282,7 +285,9 @@ export function aisStatus(r: AisReport | null): string {
   if (!r) return 'listening on 161.975 and 162.025 MHz…';
   const pos = r.vessels.filter((v) => v.lat != null).length;
   const cap = r.capture >= 0 && r.capture < 97 ? ` · capture ${Math.round(r.capture)} %` : '';
-  return `${r.vessels.length} heard · ${pos} on the map · ${r.msgRate.toFixed(r.msgRate < 10 ? 1 : 0)} msg/min${cap}`;
+  // ★★★ beta96 the maritime combination: channel 70's calls beside the ships (each call is on the map's DSC layer)
+  const dsc = r.combo === 'ais+dsc' ? ` · DSC ch 70: ${r.dscCalls ?? 0} ${(r.dscCalls ?? 0) === 1 ? 'call' : 'calls'}` : '';
+  return `${r.vessels.length} heard · ${pos} on the map · ${r.msgRate.toFixed(r.msgRate < 10 ? 1 : 0)} msg/min${cap}${dsc}`;
 }
 export function aisRows(r: AisReport, rx: LatLon | null): string {
   if (!r.vessels.length) return '<div class="trkEmpty">No ships heard yet. Each one appears as its transponder is decoded — a class A ship reports every few seconds under way, every three minutes at anchor.</div>';

@@ -149,7 +149,9 @@ const STEPS: Step[] = [
         // ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md)
         + 'another downlink of the same satellite inside the window (RS-44\u2019s CW beacon beside its transponder) gets OPEN IN VFO B in the box \u2014 VFO B there, decoded and Doppler-corrected, a line of its own, tap a line to choose which decoder the box shows \u2014 and on a pass '
         // ★★★ beta96 SCHEDULE / REMIND (docs/v12/SAT-SCHEDULE.md, Stuart 11-26)
-        + 'to come SCHEDULE (where tuning moves nobody else: a radio of your own, a locked range, or you alone on it) tunes there at AOS and goes back to what you were on after LOS, PRIORITISE choosing which of two overlapping passes wins, while on a shared dial REMIND pops up shortly before it rises with LISTEN. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
+        + 'to come SCHEDULE (where tuning moves nobody else: a radio of your own, a locked range, or you alone on it) tunes there at AOS and goes back to what you were on after LOS, PRIORITISE choosing which of two overlapping passes wins, while on a shared dial REMIND pops up shortly before it rises with LISTEN. '
+        // ★★★ beta96 SINGLE MODE: SATELLITES (docs/v12/SAT-SINGLE.md) — the watch view; the box's note replaces EXIT
+        + 'On a receiver its owner has set to SATELLITES only, you land in SATELLITE and watch the radio\u2019s own passes \u2014 the one on now or the next, its timetable, the last pass and GALLERY; during a linear transponder pass you get your own VFO across it with your own AUTO DOPPLER. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION & MARITIME map, SELCAL, and on the VHF '
         + 'and UHF tabs VOR / ILS: tune a VOR in AM for the radial you are on FROM it, its ident and the station, with a compass card in the box '
         + '(two VORs\u2019 radials cross where you are), or an ILS localiser or glideslope for how far off the approach you are), Maritime (on the UHF tab '

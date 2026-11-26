@@ -2563,6 +2563,15 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <p class="why" style="margin:8px 0 2px 0"><b>Other downlinks</b></p>
         </div>
         <div id="spBirds"></div>
+        <!-- ★★★ beta96 SINGLE MODE: SATELLITES — linear transponders (vibe_sat_engine.h passHybrid; test-sat-engine §13b holds
+             SAT_XPDR_DOWNLINKS to the engine). Drawn ONLY on a radio set to Single mode: SATELLITES (AGENTS.md: a control that
+             only works on one radio should not be there) — for its pass the radio becomes a locked range over the passband
+             and every listener tunes their own VFO across it with their own AUTO DOPPLER (docs/v12/SAT-SINGLE.md). -->
+        <div id="spXpdrWrap" class="hide">
+          <p class="why" style="margin:8px 0 2px 0"><b>Linear transponders</b> &mdash; for the pass every listener gets their
+            own VFO across the passband, SSB or CW, with their own AUTO DOPPLER; at loss of signal everyone is back to watching.</p>
+          <div id="spXpdr"></div>
+        </div>
         <!-- ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): with ADS-B kept running (Where listeners start) both run — the server
              pauses ADS-B for a pass and resumes it after LOS. The app's server screen says the same. -->
         <p class="why hide" id="spKeepNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is kept
@@ -2723,7 +2732,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
   ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_fctlm", "FUNcube telemetry"], ["dec_ale", "ALE"], ["dec_vor", "VOR / ILS"], ["dec_vormap", "VOR / ILS map"], ["dec_sarsat", "406 MHz beacons"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
-  ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
+  ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_aisdsc", "AIS + DSC together"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_avboth", "ACARS + VDL2 together"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"], ["dec_dvsig", "DMR / D-STAR / YSF signalling"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
@@ -4502,7 +4511,7 @@ function singleBlockOf(t) {
 function singleWords(t) {
   if (!t || t === "general") return "";
   if (t === "sat") return "SATELLITES";
-  const named = { dab: "DAB", ndb: "NDB", sondes: "SONDES", wfm: "WFM", nfm: "NFM", am: "AM", usb: "USB", lsb: "LSB", drm: "DRM" };
+  const named = { dab: "DAB", ndb: "NDB", sondes: "SONDES", wfm: "WFM", nfm: "NFM", am: "AM", usb: "USB", lsb: "LSB", drm: "DRM", aisdsc: "MARITIME (AIS + DSC)" };
   return named[t] || keepTokName(t);
 }
 /** What THIS radio can be single-mode in: [{tok, label, why}] — the server's facts (mapModes, ismHwBands, dab, ndbHw, the caps
@@ -4512,7 +4521,7 @@ function singleOptions(r) {
   const F = keepFacts(r);
   const av = id => F.avail.find(a => a.id === id) || { hw: false };
   const rateWhy = id => { const a = av(id); return a.why && !/switched off/.test(a.why) ? a.why : ""; };
-  for (const id of ["adsb", "vdl2", "acars", "ais", "vor"]) if (av(id).hw) out.push({ tok: id, label: id === "vdl2" ? "DATALINK: VDL2" : id === "acars" ? "DATALINK: ACARS" : id === "vor" ? "VOR MAP" : keepTokName(id), why: rateWhy(id) });
+  for (const id of ["adsb", "vdl2", "acars", "ais", "aisdsc", "vor"]) if (av(id).hw) out.push({ tok: id, label: id === "vdl2" ? "DATALINK: VDL2" : id === "acars" ? "DATALINK: ACARS" : id === "vor" ? "VOR MAP" : id === "aisdsc" ? "MARITIME: AIS + DSC (channel 70)" : keepTokName(id), why: rateWhy(id) });
   if (av("ism").hw) for (const b of (typeof bgIsmBands === "function" ? bgIsmBands() : [])) out.push({ tok: "ism:" + b.id, label: "ISM " + b.label, why: "" });
   if (typeof dabLandHwCan === "function" && dabLandHwCan() && DAB_DECODER) out.push({ tok: "dab", label: "DAB", why: "" });
   const hw = typeof HW !== "undefined" && HW && !HW.offline ? HW : null;
@@ -4858,12 +4867,16 @@ const KEEP_MODES = [
   { id: "acars", name: "ACARS",         group: "aviation", block: "avdata" },
   { id: "vor",   name: "VOR / ILS map", group: "aviation", block: "vormap" },
   { id: "ais",   name: "AIS",           group: "maritime", block: "ais" },
+  // ★★★ beta96 THE MARITIME COMBINATION: AIS + DSC channel 70 from one wide capture — one choice, drawn only where the capture
+  //     holds it (the server's mapModes "hw"; minRate follows a rate being edited)
+  { id: "aisdsc", name: "AIS + DSC (channel 70)", group: "maritime", block: "ais" },
   { id: "ism",   name: "ISM",           group: "ism",      block: "ism", map: "amateur" },
 ];
 const KEEP_GROUP_WORDS = { aviation: "AVIATION", maritime: "MARITIME", ism: "ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)" };
 function keepMapOf(m) { return m.map || "avmar"; }
 function keepBase(t) { return String(t).split(":")[0]; }
 const KEEP_COMBO_MIN = 6083334;   // ★ the wide band's own figure (vibeavi minRateHz) — the server's mapCombo.minRate wins
+const KEEP_MARITIME_MIN = 6166667;   // ★★★ beta96 AIS + DSC (vibemar::minRateHz) — the server's mapModes aisdsc.minRate wins
 function keepParse(csv) {
   const got = [];
   for (let t of String(csv || "").split(/[,;\t\n]/)) {
@@ -4924,6 +4937,13 @@ function keepFacts(r) {
     if (m.id === "adsb") {   // ★ ADS-B's own rule with the form's rate and switch (adsbLandOffer — beta95's, unchanged)
       const o = adsbLandOffer(r, HW, f);
       hw = o.hw; why = o.offer ? "" : o.why;
+    } else if (m.id === "aisdsc") {
+      // ★★★ beta96 drawn only where the capture holds both (the server's word, or the form's new rate against its minRate)
+      const need = s && s.minRate ? s.minRate : KEEP_MARITIME_MIN;
+      const tunes = s ? s.tunes !== false : drv !== "icom" && drv !== "airspyhf";
+      hw = s && !(rate > 0 && rate !== (HW && HW.mapRate)) ? !!s.hw : tunes && rate >= need;
+      why = blocks.has("ais") ? "AIS is switched off for this radio (Modes offered to listeners)."
+          : blocks.has("dsc") ? "DSC is switched off for this radio (Modes offered to listeners)." : (s && s.hw && s.why && !/needs a capture/.test(s.why) ? s.why : "");
     } else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (Modes offered to listeners).`;
     else if (s && s.why && /needs a capture|runs at/.test(s.why) && rate > 0 && rate !== (HW && HW.mapRate)) why = "";   // ★ the form's new rate decides
     return { id: m.id, hw, why, pct: s && typeof s.pct === "number" ? s.pct : -1 };
@@ -5370,8 +5390,9 @@ for (const id of ["radioUseGeneral", "radioUseSingle"])
     if ($("radioUseGeneral").checked) r.singleMode = "general";
     else { const o = singleOptions(r).find(x => !x.why); r.singleMode = ($("singlePick").value && !$("singlePick").selectedOptions[0]?.disabled ? $("singlePick").value : o ? o.tok : "general"); }
     modeBlockRender(); dabLandRender();
+    if (typeof spRender === "function") spRender();   // ★★★ beta96 the linear transponders follow Single mode: SATELLITES
   });
-if ($("singlePick")) $("singlePick").addEventListener("change", () => { const r = radio(); r._singleDerived = false; r.singleMode = $("singlePick").value; modeBlockRender(); dabLandRender(); });
+if ($("singlePick")) $("singlePick").addEventListener("change", () => { const r = radio(); r._singleDerived = false; r.singleMode = $("singlePick").value; modeBlockRender(); dabLandRender(); if (typeof spRender === "function") spRender(); });
 for (const id of ["newModesPolOn", "newModesPolOff"])
   if ($(id)) $(id).addEventListener("change", (e) => { if (e.target.checked) newModesPolicySet(e.target.value); });
 /** ★ Save refused when a drawn radio would have no modes at all (both save buttons ask). */
@@ -8849,6 +8870,18 @@ const SAT_PASS_DOWNLINKS = [
   { norad: 39444, label: "Telemetry", name: "AO-73 (FUNcube-1)", what: "FUNcube telemetry" },
   { norad: 43803, label: "Telemetry", name: "JO-97 (JY1Sat)", what: "FUNcube-format telemetry" },
 ];
+/* ★★★ beta96 SINGLE MODE: SATELLITES — the linear transponders a SATELLITES radio may follow (vibe_sat_engine.h passHybrid over
+ *  the built-in catalogue — test-sat-engine §13b fails if this copy drifts). Offered only where the radio's single mode is "sat". */
+const SAT_XPDR_DOWNLINKS = [
+  { norad: 44909, label: "Transponder", name: "RS-44", what: "435.610\u2013435.670 MHz, inverting" },
+  { norad: 24278, label: "Transponder", name: "FO-29 (JAS-2)", what: "435.800\u2013435.900 MHz, on a schedule" },
+  { norad: 7530, label: "Mode B transponder", name: "AO-7", what: "145.925\u2013145.975 MHz, sunlight only" },
+  { norad: 7530, label: "Mode A transponder", name: "AO-7", what: "29.400\u201329.500 MHz, sunlight only" },
+  { norad: 39444, label: "Transponder", name: "AO-73 (FUNcube-1)", what: "145.950\u2013145.970 MHz, in eclipse" },
+  { norad: 43803, label: "Transponder", name: "JO-97 (JY1Sat)", what: "145.855\u2013145.875 MHz" },
+  { norad: 60209, label: "Transponder", name: "MO-122 (MESAT1)", what: "435.810\u2013435.840 MHz" },
+  { norad: 44881, label: "Transponder", name: "TO-108 (CAS-6)", what: "145.915\u2013145.935 MHz, on intermittently" },
+];
 let spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor" };
 /* ★★★ beta94 one capture holds a Meteor pass AND the ORBCOMM band at or above this sample rate (the server's
  *  backgroundCapsJson "satBoth".minRate — vibe_sat_pass_sched.h bothMinRate, test-sat-pass-sched §8 holds the two equal);
@@ -8876,6 +8909,28 @@ function spRender() {
     const t = document.createElement("span"); t.textContent = b.name + " \u00b7 " + b.what;
     l.appendChild(c); l.appendChild(t); box.appendChild(l);
   });
+  // ★★★ beta96 the linear transponders — only on a SATELLITES radio (single mode "sat"); a tick made elsewhere is kept but not drawn
+  {
+    const sat = !!bgRadio && bgRadio.singleMode === "sat";
+    if ($("spXpdrWrap")) $("spXpdrWrap").classList.toggle("hide", !sat);
+    const xb = $("spXpdr");
+    if (xb) {
+      xb.innerHTML = "";
+      if (sat) SAT_XPDR_DOWNLINKS.forEach(function (b) {
+        const l = document.createElement("label");
+        l.style.cssText = "display:flex;gap:8px;align-items:center;margin:3px 0 3px 24px";
+        const c = document.createElement("input");
+        c.type = "checkbox"; c.checked = spHas(b); c.disabled = !spModel.on;
+        c.style.cssText = "width:16px;height:16px;accent-color:var(--amber)";
+        c.addEventListener("change", function () {
+          spModel.birds = spModel.birds.filter(function (x) { return !(x.norad === b.norad && x.label === b.label); });
+          if (c.checked) spModel.birds.push({ norad: b.norad, label: b.label });
+        });
+        const t = document.createElement("span"); t.textContent = b.name + " \u00b7 " + b.label + " \u00b7 " + b.what;
+        l.appendChild(c); l.appendChild(t); xb.appendChild(l);
+      });
+    }
+  }
   if ($("spMinEl")) $("spMinEl").disabled = !spModel.on;
   // ★★★ beta94 the groups: live with the switch; the priority only where one capture cannot hold both
   if ($("spMeteor")) { $("spMeteor").checked = spModel.meteor; $("spMeteor").disabled = !spModel.on; }

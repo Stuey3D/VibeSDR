@@ -32,7 +32,7 @@ static std::vector<Avail> rtlAvail() { return { {"adsb"}, {"vdl2"}, {"acars"}, {
 int main() {
     std::printf("── §1 table, CSV, entries\n");
     {
-        CHECK(modes().size() == 6, "six modes (five on Aviation & Maritime, ISM on Amateur)");
+        CHECK(modes().size() == 7, "seven modes (six on Aviation & Maritime — AIS + DSC since beta96 — ISM on Amateur)");
         CHECK(toCsv(parseCsv(" VDL2 , acars,bogus,vdl2")) == "vdl2,acars", "table order, known, no repeats: %s", toCsv(parseCsv(" VDL2 , acars,bogus,vdl2")).c_str());
         CHECK(toCsv(parseCsv("acars+vdl2")) == "vdl2,acars", "the combination's word reads as both");
         // ★ table order is adsb, vdl2, acars, vor, ais — so isCombo wants {vdl2, acars}? No: acars comes AFTER vdl2 in the table.
@@ -221,7 +221,7 @@ int main() {
         std::vector<Avail> av = { {"ism"} };
         auto g = gate(av, false, "", 2.4e6, {"ism:868"}, kMapAmateur);
         CHECK(g.size() == 1 && g[0].id == "ism" && g[0].on && g[0].tok == "ism:868", "the amateur map draws ISM only, ticked as ism:868");
-        CHECK(gate(rtlAvail(), false, "", 2.4e6, {"vdl2"}).size() == 5, "the aviation map still draws its five");
+        CHECK(gate(rtlAvail(), false, "", 2.4e6, {"vdl2"}).size() == 6, "the aviation & maritime map still lists its six (AIS + DSC undrawn where hw is false)");
         CHECK(toCsv(normalise({"ism:433"}, av, false, kMapAmateur)) == "ism:433", "normalise keeps the band");
         std::vector<Avail> blk = { {"ism", true, "the server owner has switched ISM off on this receiver"} };
         CHECK(!gate(blk, false, "", 2.4e6, {"ism:868"}, kMapAmateur)[0].on, "ISM blocked: not on, greyed");
@@ -259,6 +259,40 @@ int main() {
         // satellites: the demodulators stay (the passes tune), every whole mode off, sat on
         CHECK(!singleBlocks("sat", "nfm", D, W) && !singleBlocks("sat", "sat", D, W) && singleBlocks("sat", "adsb", D, W) && singleBlocks("sat", "dab", D, W),
               "SATELLITES single: whole modes off, the passes' demodulators and SATELLITE on (listeners held by the server's gate)");
+    }
+
+    std::printf("── §9 beta96 THE MARITIME COMBINATION (AIS + DSC channel 70 — one choice)\n");
+    {
+        Entry e;
+        CHECK(entryFor({"aisdsc"}, e) && e.kind == Ais && e.band == "ais+dsc" && e.msg == "{\"type\":\"ais\",\"on\":1,\"band\":\"ais+dsc\"}"
+              && e.bench == "dec_aisdsc" && e.name == "AIS + DSC", "AIS + DSC → AIS's key with the combination's band: %s", e.msg.c_str());
+        CHECK(entryFor({"ais"}, e) && e.msg == "{\"type\":\"ais\",\"on\":1}", "AIS alone unchanged");
+        CHECK(toCsv(parseCsv("aisdsc")) == "aisdsc" && toCsv(parseCsv("ais,aisdsc")) == "ais,aisdsc", "the CSV reads it");
+        CHECK(!entryFor({"ais", "aisdsc"}, e), "AIS ticked AND AIS + DSC: not one mode (the gate never allows it)");
+        Stored s; s.landingMap = kMapAvMar; s.landingModes = "ais,aisdsc"; migrate(s);
+        CHECK(s.landingModes == "ais", "a bad pair keeps its first (%s)", s.landingModes.c_str());
+        // the gate: an RTL (the server says hw false — not drawn at all); an RSP at 8 (drawn, one at a time with AIS)
+        std::vector<Avail> rtl = rtlAvail(); rtl.push_back({ "aisdsc", false });
+        auto g = gate(rtl, false, "", 2.4e6, {});
+        CHECK(find(g, "aisdsc") && !find(g, "aisdsc")->drawn, "RTL 2.4: AIS + DSC not drawn (no dead row)");
+        CHECK(find(g, "ais")->drawn && find(g, "ais")->enabled, "…AIS as before");
+        std::vector<Avail> rsp = rtlAvail(); rsp.push_back({ "aisdsc" });
+        g = gate(rsp, true, "", 8e6, {});
+        CHECK(find(g, "aisdsc")->drawn && find(g, "aisdsc")->enabled && find(g, "aisdsc")->group == "maritime", "RSP 8: drawn under MARITIME");
+        g = gate(rsp, true, "", 8e6, {"aisdsc"});
+        CHECK(find(g, "aisdsc")->on && !find(g, "ais")->enabled && find(g, "ais")->why.find("AIS + DSC is ticked") != std::string::npos,
+              "ticked: AIS greyed — %s", find(g, "ais")->why.c_str());
+        CHECK(normalise({"aisdsc"}, rsp, true) == std::vector<std::string>{"aisdsc"} && normalise({"aisdsc"}, rtl, false).empty(),
+              "saved where it runs; dropped where the server says it cannot");
+        rsp.back().why = "the server owner has switched DSC off on this receiver";
+        g = gate(rsp, true, "", 8e6, {});
+        CHECK(find(g, "aisdsc")->drawn && !find(g, "aisdsc")->enabled && find(g, "aisdsc")->why.find("DSC off") != std::string::npos, "DSC switched off: greyed with the reason");
+        // single mode
+        CHECK(singleOk("aisdsc") && singleBlockOf("aisdsc") == "ais" && singleKeepable("aisdsc") && singleMap("aisdsc") == kMapAvMar,
+              "single mode AIS + DSC: a token, stands on the AIS switch, kept running on Aviation & Maritime");
+        const std::vector<const char*> D = { "wfm", "nfm", "am", "usb", "lsb", "drm" }, W = { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" };
+        CHECK(!singleBlocks("aisdsc", "ais", D, W) && singleBlocks("aisdsc", "adsb", D, W) && singleBlocks("aisdsc", "nfm", D, W),
+              "…AIS stays on, every other mode off");
     }
 
     std::printf("── §6 cost words\n");

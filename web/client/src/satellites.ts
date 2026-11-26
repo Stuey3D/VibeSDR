@@ -44,6 +44,9 @@ import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_PRIO_WHAT, SAT_SCHED_REMIND_NOTE, SAT_SCHED_SET_WHAT,
          SatSchedule, satPassKey, satSchedDegradedText, satSchedKeyText, satSchedNowText, satSchedPlan, satSchedPrioText, satSchedRemindDue, satSchedRowText,
          satSchedStep, satSchedWhy, satSession, satSessionLine, type SatSchedPrev, type SatSchedRun, type SatSessionFacts } from '../../../src/services/satSchedule';
+// ★★★ beta96 SINGLE MODE: SATELLITES — the watch-only view (src/services/satSingle.ts — one set of rules with the app)
+import { SAT_SINGLE_ONLY, SAT_SINGLE_WHY, satHybridText, satSingleHead, satSingleLastText, satSinglePlanRows, satSingleSub,
+         type SatHybridInfo, type SatSingle } from '../../../src/services/satSingle';
 import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyModeOf, skyModesHtml, skyPlotMerge, skyPlotQuery, skyPlotSvg, skySceneFor, skySummaryFor, SKY_LEGEND, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../../../src/utils/skyPlot';
 
@@ -98,6 +101,8 @@ export interface SatPanelDeps {
   session?: () => SatSessionFacts;
   here?: () => { hz: number; mode: string };
   back?: (hz: number, mode: string) => void;
+  /** ★★★ beta96 single mode: satellites — GALLERY on the watch view (the last pass's pictures and packets) */
+  openGallery?: () => void;
 }
 /** ★★★ beta96 a schedule is stored for this server — main.ts makes the panel at start-up so it runs with the mode off. */
 export function satSchedStored(server: string): boolean {
@@ -228,6 +233,12 @@ const CSS = `
 #satPanel .sat-row .sat-s.skip{color:var(--text-dim)}
 #satPanel .sat-sk{display:flex;flex-direction:column;gap:4px;align-self:center}
 #satPanel .sat-sline{font-size:12px;margin:6px 0 2px}
+#satPanel .sat-watch{margin:2px 0 8px;padding:6px 8px;border:1px solid var(--btn-border);border-radius:6px}
+#satPanel .sat-watch .sat-wh{font-weight:600;font-size:13px}
+#satPanel .sat-watch .sat-wp{font-size:12px;margin:2px 0;opacity:.85}
+#satPanel .sat-watch .sat-wp.live{opacity:1;font-weight:600}
+#satPanel .sat-watch .sat-wk{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+#satPanel .sat-only{font-size:11px;opacity:.75;padding:0 4px}
 #satPanel .sat-lead{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px;font-size:12px}
 #satPanel .sat-lead button{min-height:26px;padding:1px 8px}
 #satPanel .sat-key{font-size:11px;text-align:center;margin-top:2px}
@@ -313,6 +324,11 @@ export class SatPanel {
   private picked: SatPicked | null = null;
   private pending: { norad: number; tx: number } | null = null;
   private refusal = '';
+  /** ★★★ beta96 single mode: satellites — this listener watches (no picks, no EXIT); the radio's timetable; the hybrid */
+  private watch = false;
+  private single: SatSingle | null = null;
+  private hybrid: SatHybridInfo | null = null;
+  private watchKey = '';
   private picture = false;
   private pictureDone = false;
   private decLine = '';
@@ -371,6 +387,7 @@ export class SatPanel {
   private bText = ''; private bPackets: string[] = []; private bStatus = ''; private bPicture = false; private bPictureDone = false;
   // ★★ 2026-11-24 ORBCOMM — the decoder's state + packets, the manual fallback, the sky plot (stored dots + live)
   private sOrb!: HTMLElement; private oTxt!: HTMLElement; private oSky!: HTMLElement; private oPk!: HTMLElement;
+  private sWatch!: HTMLElement; private sOnly!: HTMLElement;   // ★★★ beta96 the watch view, the note in place of EXIT
   private sXp!: HTMLElement; private xp: XpdrStatus | null = null; private xpKey = '';   // ★★★ beta94 the transponder finder
   private orb: OrbView | null = null;
   private orbMaxK = 0;
@@ -396,8 +413,10 @@ export class SatPanel {
       + `<button data-act="doppler" class="on" aria-pressed="true" title="AUTO DOPPLER: keep the satellite centred for the whole pass">AUTO DOPPLER</button>`
       + `<button data-act="size" class="sat-size" title="Bigger panel" aria-label="Bigger panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3"/></svg></button>`
       + `<button data-act="exit" title="Leave SATELLITE (the Doppler lock and the decoder stop)">EXIT</button>`
+      + `<span class="sat-only" data-s="only" hidden title="${esc(SAT_SINGLE_WHY)}">${esc(SAT_SINGLE_ONLY)}</span>`
       + `<button data-act="min" title="Minimise" aria-label="Minimise">–</button></div>`
       + `<div class="sat-body">`
+      + `<div class="sat-watch" data-s="watch" hidden></div>`
       + `<div class="sat-why" data-s="why" hidden></div>`
       + `<div class="sat-box" data-s="box" hidden><div class="sat-ro" data-s="ro"><div>`
       +   `<div class="sat-name" data-s="name"></div><div class="sat-big" data-s="hz"></div><div class="sat-dim" data-s="up" hidden></div>`
@@ -425,6 +444,7 @@ export class SatPanel {
     this.sVb = q('vb'); this.sCw = q('cw'); this.sBImg = q('bimg'); this.bCanvas = this.sBImg.querySelector('canvas') as HTMLCanvasElement;
     this.sOrb = q('orb');
     this.sXp = q('xp');
+    this.sWatch = q('watch'); this.sOnly = q('only');
     this.oTxt = this.sOrb.querySelector('[data-o="txt"]') as HTMLElement; this.oSky = this.sOrb.querySelector('[data-o="sky"]') as HTMLElement;
     this.oPk = this.sOrb.querySelector('[data-o="pk"]') as HTMLElement;
     // ★ 1.6 the reminders' pop-ups — their own place at the top of the window (they fire with the mode off too)
@@ -459,7 +479,20 @@ export class SatPanel {
   /** the box's bird's NORAD number (the pick, or the followed ORBCOMM bird) */
   private boxNorad(): number | null { return this.followNow()?.norad ?? null; }
   /** hwinfo's `doppler` / `dopplerWhy` (satCapFrom). null = no key at all. */
-  setCap(c: { ok: boolean; why: string } | null) { this.cap = c; if (!c) this.exit(); else if (this.open) this.render(); }
+  setCap(c: { ok: boolean; why: string } | null) { this.cap = c; if (!c) this.exit(true); else if (this.open) this.render(); }
+  /** ★★★ beta96 single mode: satellites — watch only (hwinfo singleMode "sat", not the admin): no picks, no EXIT. */
+  setWatch(on: boolean) {
+    if (on === this.watch) return;
+    this.watch = on; this.watchKey = '';
+    if (!on) this.refusal = '';
+    if (this.open) this.render();
+  }
+  get watching(): boolean { return this.watch; }
+  /** {"type":"sat_single"} — the radio's pass now / next, its timetable, the last pass */
+  onSingle(s: SatSingle) { this.single = s; this.hybrid = s.hybrid ?? null; if (this.open) this.render(); }
+  /** {"type":"sat_hybrid"} — a linear transponder pass: this listener's own VFO across the passband (null = over) */
+  onHybrid(h: SatHybridInfo | null) { this.hybrid = h; this.watchKey = ''; if (this.open) this.render(); }
+  hybridNow(): SatHybridInfo | null { return this.hybrid; }
   /** Into the mode: the window opens, the list is asked for. */
   show() {
     if (!this.cap) return;
@@ -470,7 +503,9 @@ export class SatPanel {
     this.render();
   }
   /** ★ Out of the mode — the drop is always sent (a lock must never outlive the mode), the decoder stops, the canvas goes home. */
-  exit() {
+  exit(force = false) {
+    // ★★★ beta96 single mode: satellites — no way out for a listener (the signed-in admin is never `watch`)
+    if (this.watch && this.on && !force && this.cap) { this.refusal = SAT_SINGLE_WHY; if (this.open) this.render(); return; }
     const was = this.on;
     this.on = false;
     this.el.hidden = true;
@@ -703,6 +738,7 @@ export class SatPanel {
     if (!b || b.disabled) return;
     const act = b.dataset.act;
     if (act === 'exit') { this.exit(); return; }
+    if ((act === 'remind' || act === 'sched' || act === 'prio') && this.watch) { this.refusal = SAT_SINGLE_WHY; this.render(); return; }
     if (act === 'min') { this.setMin(!this.min); return; }
     if (act === 'size') { this.setBig(!this.big, true); return; }
     if (act === 'map') { this.openMap(); return; }
@@ -730,6 +766,8 @@ export class SatPanel {
       if (this.picked) this.deps.doppler(this.autoDoppler);
       this.render(); return;
     }
+    if (act === 'gallery') { this.deps.openGallery?.(); return; }
+    if (act === 'pick' && this.watch && !(this.hybrid && Number(b.dataset.norad) === this.hybrid.norad)) { this.refusal = SAT_SINGLE_WHY; this.render(); return; }
     if (act === 'pick') {
       if (b.getAttribute('aria-disabled') === 'true') { this.refusal = b.dataset.why || ''; this.render(); return; }   // ★ greyed: says why, starts nothing
       const norad = Number(b.dataset.norad), i = Number(b.dataset.tx);
@@ -797,6 +835,7 @@ export class SatPanel {
   }
   /** The header's own line — what the folded box still says: "Meteor-M2-3 · AOS 12:05 (in 0:09)" / "ISS · UP · 6:12 left". */
   private headLine(now: number): string {
+    if (this.watch && !this.picked) return satSingleHead(this.single, now);   // ★★★ beta96 folded, the watch view still counts down
     const sel = this.picked ?? this.pending;
     const nr = this.picked ? this.boxNorad() : sel?.norad;   // ★★★ beta94 the followed ORBCOMM bird
     const sat = sel ? this.list?.sats.find(s => s.norad === nr) : undefined;
@@ -817,6 +856,12 @@ export class SatPanel {
     const dop = this.sHead.querySelector('[data-act="doppler"]') as HTMLButtonElement;
     dop.classList.toggle('on', this.autoDoppler); dop.setAttribute('aria-pressed', String(this.autoDoppler));
     dop.disabled = !!cw;
+    // ★★★ beta96 single mode: satellites — watching: no EXIT (the note says why), AUTO DOPPLER only on a hybrid's own VFO
+    { const ex = this.sHead.querySelector('[data-act="exit"]') as HTMLButtonElement;
+      ex.hidden = this.watch; this.sOnly.hidden = !this.watch;
+      dop.hidden = this.watch && !this.hybrid;
+      this.sList.hidden = this.watch; }
+    this.paintWatch(now);
     const live = this.readout();
     this.sDot.classList.toggle('on', !!live && live.state === 'TRACK');
     const hs = this.min ? this.headLine(now) : '';
@@ -896,6 +941,29 @@ export class SatPanel {
     const credit = satCreditText(this.list, now), txc = satTxCreditText(this.list);
     this.sCredit.textContent = credit ? credit + (txc ? ' · ' + txc : '') : '';
   }
+
+  /** ★★★ beta96 THE WATCH VIEW (single mode: satellites): the pass now / next with its countdown, what the radio is doing,
+   *  the last pass + GALLERY, and the radio's timetable — rebuilt only when something but the countdowns changed. */
+  private paintWatch(now: number) {
+    if (!this.watch) { if (!this.sWatch.hidden) { this.sWatch.hidden = true; this.sWatch.innerHTML = ''; this.watchKey = ''; } return; }
+    const s = this.single ? { ...this.single, ...(this.hybrid ? { hybrid: this.hybrid } : {}) } : null;
+    const rows = satSinglePlanRows(s, now);
+    const last = satSingleLastText(s);
+    let h = `<div class="sat-wh" data-w="head"></div><div class="sat-dim sat-ln" data-w="sub"></div>`;
+    if (last) h += `<div class="sat-dim sat-ln">${esc(last)}</div>`;
+    h += `<div class="sat-wk"><button data-act="gallery" title="The pictures, packets and telemetry this receiver has kept">GALLERY</button></div>`;
+    if (rows.length) h += `<div class="sat-dim" style="margin-top:6px">THIS RECEIVER'S PASSES</div>`
+      + rows.map((r) => `<div class="sat-wp${r.live ? ' live' : ''}">${esc(r.text)}</div>`).join('');
+    this.sWatch.hidden = false;
+    if (h !== this.watchKey) { this.watchKey = h; this.sWatch.innerHTML = h; }
+    const head = satSingleHead(s, now);
+    const sub = this.hybrid ? satHybridText(this.hybrid, now) : satSingleSub(s, now);
+    const he = this.sWatch.querySelector('[data-w="head"]') as HTMLElement, se = this.sWatch.querySelector('[data-w="sub"]') as HTMLElement;
+    if (he.textContent !== head) he.textContent = head;
+    if (se.textContent !== sub) se.textContent = sub;
+  }
+  /** what the watch header says now (tests) */
+  watchHead(): string { return this.watch ? satSingleHead(this.single, this.now()) : ''; }
 
   /** The pick's box: COMPACT (voice / packet) or BIG (image; ISS SSTV once a picture starts). */
   private paintPick() {
