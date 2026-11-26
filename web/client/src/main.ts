@@ -160,6 +160,7 @@ import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayCle
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';
 import { DIGI_STATS_JS } from '../../../src/utils/digiMapStats';
 import { digiGalCard, digiGalQuery, digiGalItemWindow } from '../../../src/utils/digiMapShared';   // ★ beta92 the gallery's digi map row (the app's same words)   // ★ beta92 the digi map's stats / legend / summary (the app's same code)   // ★ beta92 the digi map's FIT key (the app's same code)
+import { bandLabelPieces } from '../../../src/utils/bandLabelPiece';   // ★ beta95 the band strip's label room (the app's rule)
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★★★ beta92 ONE auto fit for every map — the ADS-B map's glide
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../../../src/utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend
 import { bandSkimTitle, bandSkimPassband, bandSkimLabels, withSkimLabels, bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../../../src/services/bandSkim';   // ★★ beta92 the BAND SKIMMER
@@ -4321,16 +4322,25 @@ function drawBands() {
 
   const region = ituRegion();
 
-  for (const b of BAND_PLAN_DRAW_ORDER) {                        // ★ widest first — see BAND_PLAN_DRAW_ORDER
+  // ★ the segments in view, widest first — see BAND_PLAN_DRAW_ORDER
+  const segs: Array<{ b: Band; x0: number; x1: number; lx0: number; lx1: number }> = [];
+  for (const b of BAND_PLAN_DRAW_ORDER) {
     if (b.hi < lo || b.lo > hi) continue;                       // not in view
     // Region-scoped: an 80m edge or an AM band-top from the wrong ITU region is
     // simply the wrong information.
     if (b.regions && b.regions.length && !b.regions.includes(region)) continue;
-
     const x0 = Math.max(0, xOf(b.lo));
     const x1 = Math.min(w, xOf(b.hi));
     if (x1 - x0 < 1) continue;
+    segs.push({ b, x0, x1, lx0: x0, lx1: x1 });
+  }
+  /* ★★ beta95 EACH LABEL IN ITS OWN BAND'S VISIBLE PIECE, NEVER OVERPRINTED — the app's rule (WaterfallView, main
+   *  35459577a; Stuart, 225.648 MHz: "DAB / DAB+ (Band III)" and "UHF Military Airband" printed on top of each other). A
+   *  band's bar is drawn under every narrower band on it, so its label belongs only in the part still showing: its span
+   *  less every later segment, the widest such piece. Too narrow for even the short name → no label. */
+  bandLabelPieces(segs).forEach(([p0, p1], i) => { segs[i].lx0 = p0; segs[i].lx1 = p1; });
 
+  for (const { b, x0, x1, lx0, lx1 } of segs) {
     ctx.fillStyle = bandColour(b);
     ctx.fillRect(x0, 0, x1 - x0, h);
 
@@ -4340,7 +4350,7 @@ function drawBands() {
     const short = b.bandLabel || b.name;
     const wFull = ctx.measureText(full).width;
     const wShort = ctx.measureText(short).width;
-    const room = x1 - x0;
+    const room = lx1 - lx0;   // ★ beta95 its visible piece, not its whole span
 
     let label = '';
     let tw = 0;
@@ -4353,15 +4363,15 @@ function drawBands() {
       //    way — so on a phone the last letter of "FM Broadcast Band" leaked into the band next
       //    to it. A label that escapes its block reads as belonging to the WRONG BAND, which on
       //    a band plan is not cosmetic. Clipping makes the overflow impossible rather than
-      //    unlikely, whatever the width, dpr or rounding.
+      //    unlikely, whatever the width, dpr or rounding. ★ beta95 clipped to its visible piece.
       ctx.save();
       ctx.beginPath();
-      ctx.rect(x0, 0, x1 - x0, h);
+      ctx.rect(lx0, 0, lx1 - lx0, h);
       ctx.clip();
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillText(label, (x0 + x1) / 2 - tw / 2 + dpr, h / 2 + dpr);
+      ctx.fillText(label, (lx0 + lx1) / 2 - tw / 2 + dpr, h / 2 + dpr);
       ctx.fillStyle = 'rgba(255,255,255,0.95)';
-      ctx.fillText(label, (x0 + x1) / 2 - tw / 2, h / 2);
+      ctx.fillText(label, (lx0 + lx1) / 2 - tw / 2, h / 2);
       ctx.restore();
     }
   }
