@@ -6,7 +6,7 @@
  *   npx tsx scripts/test_stored_layers.ts
  */
 import { readFileSync, existsSync } from 'node:fs';
-import { galPosParse, storedCardPick, storedMerge, storedLoader, storedSondeItems, storedVorItems, storedSondeRows, storedVorRows, storedStatus,
+import { SNR_HEAD, sondeTypeSnrMode, galPosParse, storedCardPick, storedMerge, storedLoader, storedSondeItems, storedVorItems, storedSondeRows, storedVorRows, storedStatus,
          STORED_ROWS_MAX, type GalPos } from '../src/services/storedLayers';
 
 let pass = 0, fail = 0;
@@ -32,6 +32,13 @@ const runAll = async () => {
     eq(rows.map((r) => r.id), ['S1234567', 'T7654321'], 'the server\'s card read back: both sondes, newest first');
     eq([rows[0].last - DAY, rows[0].first - DAY], [10 * 3600 + 12 * 60, 9 * 3600 + 50 * 60], 'last and first heard on the card\'s day');
     eq([rows[0].lat, rows[0].lon, rows[0].alt, rows[0].top, rows[0].mhz, rows[0].type, rows[0].name, rows[0].cc], [51.7, -1.1, 2000, 9000, 403, 'RS41-SGP', '', ''], 'the fields; "-" is empty');
+    // ★★ beta96 the card's SNR block: read for the rows it names, never a row itself; the stored row's chip per type
+    { const withSnr = SAMPLE.replace(/\n*$/, '\n') + `\n${SNR_HEAD}\nS1234567 · 12.5\nNOSUCH · 9.0\nT7654321 · junk\n`;
+      const rs = galPosParse(withSnr, DAY, DAY + 11 * 3600);
+      eq(rs.map((r) => [r.id, r.snr]), [['S1234567', 12.5], ['T7654321', undefined]], 'the SNR block: the named row gets it, junk and strangers do not');
+      eq(storedSondeRows(rs, DAY + 11 * 3600, null).map((r) => [r.snr, r.snrMode]), [[12.5, 'rs41'], [undefined, undefined]], 'the stored sonde row carries the chip (RS41 scale)');
+      eq(storedMerge([rs, galPosParse(SAMPLE, DAY, DAY + 11 * 3600)], 'sondes', DAY + 11 * 3600).find((r) => r.id === 'S1234567')?.snr, 12.5, 'a merge keeps the SNR a card without the block lacks');
+      eq([sondeTypeSnrMode('RS41-SGP'), sondeTypeSnrMode('DFM-09'), sondeTypeSnrMode('M10+'), sondeTypeSnrMode('M20'), sondeTypeSnrMode('iMS-100')], ['rs41', 'dfm', 'm10', 'm20', null], 'types → scales'); }
     const vor = `x\nEach, most recent first (…):\n08:00:00 · 07:00:00 · DTY/116400 · DAVENTRY · vor · 52.1800, -1.1140 · - · - · 116.400 · GB\n`;
     const v = galPosParse(vor, DAY, DAY + 9 * 3600);
     eq(v.map((r) => [r.id, r.name, r.type, r.alt, r.top, r.mhz, r.cc]), [['DTY/116400', 'DAVENTRY', 'vor', null, null, 116.4, 'GB']], 'a VOR row');

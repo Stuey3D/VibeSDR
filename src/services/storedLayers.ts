@@ -14,6 +14,11 @@
 import { radiosOf } from './mapScope';
 import { compass8, rangeBearing, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { fadeOf } from './liveMaps';
+/** ★ beta96 a stored sonde's scale from its card type ("RS41-SGP", "DFM-09", "M10+", "M20") — src/utils/snrColour.ts. */
+export function sondeTypeSnrMode(type: string): 'rs41' | 'dfm' | 'm10' | 'm20' | null {
+  const t = String(type || '').toUpperCase();
+  return t.startsWith('RS41') ? 'rs41' : t.startsWith('DFM') ? 'dfm' : t.startsWith('M10') ? 'm10' : t.startsWith('M20') ? 'm20' : null;
+}
 
 /** One row of a day card (vibe_posgal.h Row). Times in UTC seconds; null = "-" on the card. */
 export interface GalPos {
@@ -22,6 +27,8 @@ export interface GalPos {
   first: number; last: number;
   /** ★★★ beta96 (mapScope.ts) the radios whose cards held it (the card's "ri"; absent = unknown) */
   radios?: string[];
+  /** ★ beta96 its last frame's SNR, dB (the card's SNR block, vibe_posgal.h kSnrHead) — absent on an older card */
+  snr?: number;
 }
 export type StoredKind = 'sondes' | 'vormap';
 export const STORED_ROWS_MAX = 300;
@@ -30,6 +37,8 @@ export const STORED_SPEC: Record<StoredKind, { slot: RegExp; keepSec: number; ca
   vormap: { slot: /^vor-\d{4}-\d\d-\d\d$/, keepSec: 7 * 86400, cards: 8 },
 };
 const DOT = ' · ';
+/** ★ beta96 vibe_posgal.h kSnrHead — keep the two the same. */
+export const SNR_HEAD = "SNR, dB (each one's last frame, in the receiver's scan box):";
 const okTxt = (v: unknown, n: number) => String(v ?? '').replace(/[<>&"'`\\\u0000-\u001f]/g, '').trim().slice(0, n);
 
 /** ★★ The card's table → its rows (the C++ restore's rule: 10 fields, " · " between; a damaged row costs that row). */
@@ -40,7 +49,16 @@ export function galPosParse(body: string, dayUtc: number, nowSec: number): GalPo
   const day = Math.floor(dayUtc / 86400) * 86400;
   const hms = (s: string) => { const m = /^(\d\d):(\d\d):(\d\d)$/.exec(s); return m && +m[1] < 24 && +m[2] < 60 && +m[3] < 60 ? day + +m[1] * 3600 + +m[2] * 60 + +m[3] : NaN; };
   const num = (s: string, lo: number, hi: number) => { if (s === '-') return null; const v = Number(s); return Number.isFinite(v) && v >= lo && v <= hi ? v : null; };
-  for (const ln of body.slice(at).split('\n').slice(1)) {
+  // ★ beta96 the card's SNR block below the table ("id · dB" lines after vibe_posgal.h kSnrHead) — two fields, never a row
+  const snr = new Map<string, number>();
+  const sAt = body.indexOf(SNR_HEAD);
+  if (sAt >= 0) for (const ln of body.slice(sAt).split('\n').slice(1, 1 + STORED_ROWS_MAX)) {
+    const f = ln.split(DOT);
+    if (f.length !== 2) continue;
+    const v = Number(f[1]);
+    if (/^-?\d{1,3}(\.\d)?$/.test(f[1]) && v > -100 && v < 200) snr.set(f[0], v);
+  }
+  for (const ln of body.slice(at, sAt > at ? sAt : undefined).split('\n').slice(1)) {
     if (out.length >= STORED_ROWS_MAX) break;
     const f = ln.split(DOT);
     if (f.length !== 10) continue;
@@ -53,7 +71,8 @@ export function galPosParse(body: string, dayUtc: number, nowSec: number): GalPo
     if (last > nowSec + 300) continue;   // ★ a clock that ran ahead: not drawn as "heard in the future"
     const dash = (s: string) => (s === '-' ? '' : s);
     out.push({ id, name: dash(okTxt(f[3], 40)), type: dash(okTxt(f[4], 24)), cc: /^[A-Z]{2}$/.test(f[9]) ? f[9] : '',
-      lat, lon, alt: num(f[6], -500, 60000), top: num(f[7], -500, 60000), mhz: num(f[8], 0.01, 100000), first: Math.min(first, last), last });
+      lat, lon, alt: num(f[6], -500, 60000), top: num(f[7], -500, 60000), mhz: num(f[8], 0.01, 100000), first: Math.min(first, last), last,
+      ...(snr.has(id) ? { snr: snr.get(id)! } : {}) });
   }
   return out;
 }
@@ -74,7 +93,8 @@ export function storedMerge(per: readonly GalPos[][], kind: StoredKind, nowSec: 
     const newer = r.last >= had.last ? r : had;
     const tops = [had.top, r.top].filter((x): x is number => x != null);
     const radios = [...new Set([...(had.radios ?? []), ...(r.radios ?? [])])];
-    by.set(r.id, { ...newer, first: Math.min(had.first, r.first), top: tops.length ? Math.max(...tops) : null, ...(radios.length && had.radios && r.radios ? { radios } : { radios: undefined }) });
+    const snr = newer.snr ?? (newer === r ? had : r).snr;   // ★ beta96 the newest card's SNR, else the other's
+    by.set(r.id, { ...newer, first: Math.min(had.first, r.first), top: tops.length ? Math.max(...tops) : null, ...(snr != null ? { snr } : {}), ...(radios.length && had.radios && r.radios ? { radios } : { radios: undefined }) });
   }
   const since = nowSec - STORED_SPEC[kind].keepSec;
   return [...by.values()].filter((r) => r.last >= since).sort((a, b) => b.last - a.last).slice(0, STORED_ROWS_MAX);
@@ -160,7 +180,8 @@ export function storedSondeRows(rows: readonly GalPos[], nowSec: number, rx: Lat
   return rows.slice(0, STORED_ROWS_MAX).map((r) => {
     const rb = rangeOf(rx, r);
     return { key: `sds:${r.id}`, colour: SONDE_COLOUR, flag: '', name: r.id, second: [r.type, 'remembered', r.alt != null ? mFmt(r.alt) : ''].filter(Boolean).join(' · '),
-      sp: r.mhz != null ? `${r.mhz.toFixed(3)}` : '', trend: 0, range: rb ? nm(rb.nm) : '', brg: rb ? compass8(rb.brg) : '', noPos: false, age: storedAgo(nowSec - r.last), em: false };
+      sp: r.mhz != null ? `${r.mhz.toFixed(3)}` : '', trend: 0, range: rb ? nm(rb.nm) : '', brg: rb ? compass8(rb.brg) : '', noPos: false, age: storedAgo(nowSec - r.last), em: false,
+      ...(r.snr != null && sondeTypeSnrMode(r.type) ? { snr: r.snr, snrMode: sondeTypeSnrMode(r.type)! } : {}) };   // ★ beta96 the kept SNR
   });
 }
 export function storedVorRows(rows: readonly GalPos[], nowSec: number, rx: LatLon | null): TrackRow[] {

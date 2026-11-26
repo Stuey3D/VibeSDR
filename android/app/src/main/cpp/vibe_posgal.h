@@ -29,12 +29,15 @@ namespace vibe {
 namespace posgal {
 
 static const char* const kDot = " \xc2\xb7 ";   // " · "
+/** ★ beta96 the heading of the card's SNR block (body / restore; src/services/storedLayers.ts galPosParse reads it too). */
+static const char* const kSnrHead = "SNR, dB (each one's last frame, in the receiver's scan box):";
 
 /** One thing heard at a place. `id` keys the row (a sonde's serial; a VOR's ident and channel). */
 struct Row {
     std::string id, name, type, cc;
     double lat = NAN, lon = NAN, altM = NAN, topM = NAN, mhz = 0;
     int64_t first = 0, last = 0;
+    double snr = NAN;   ///< ★ beta96 the last frame's SNR, dB (sondes) — the card's own block below the table, NAN = none
 };
 
 /** What the card is: the gallery kind, the slot's prefix (the clients know a card by it), the words. */
@@ -175,6 +178,15 @@ private:
                + r->type + kDot + pos + kDot + num(r->altM, "%.0f") + kDot + num(r->topM, "%.0f") + kDot + num(r->mhz > 0 ? r->mhz : NAN, "%.3f")
                + kDot + r->cc + "\n";
         }
+        /* ★★ beta96 (Stuart 11-26: "yes save snr history") EACH ROW'S LAST SNR — a block of its own BELOW the table, two
+         *  fields a line ("id · dB"), so a reader of the 10-field table (an older client's galPosParse, an older server's
+         *  restore) skips these lines as it skips any line that is not a row. Only rows that have one. */
+        bool any = false;
+        for (const Row* r : v) if (std::isfinite(r->snr)) {
+            if (!any) { o += "\n" + std::string(kSnrHead) + "\n"; any = true; }
+            char b[24]; std::snprintf(b, sizeof b, "%.1f", r->snr);
+            o += r->id + kDot + b + "\n";
+        }
         return o;
     }
     /** ★ The card is its own record: a damaged row costs that row, never the process. */
@@ -203,6 +215,20 @@ private:
             r.id = f[2]; r.name = f[3]; r.type = f[4]; r.altM = dbl(f[6]); r.topM = dbl(f[7]);
             const double mhz = dbl(f[8]); r.mhz = std::isfinite(mhz) ? mhz : 0; r.cc = f[9];
             if (rows_.size() < kMaxRows) rows_[r.id] = r;
+        }
+        // ★ beta96 the SNR block (body): "id · dB" lines after its heading
+        if (const size_t sp = b.find(kSnrHead); sp != std::string::npos) {
+            size_t p2 = b.find('\n', sp);
+            while (p2 != std::string::npos && p2 + 1 < b.size()) {
+                const size_t e = b.find('\n', p2 + 1);
+                const std::string ln = b.substr(p2 + 1, e == std::string::npos ? std::string::npos : e - p2 - 1);
+                p2 = e;
+                const size_t d = ln.find(dot);
+                if (d == std::string::npos || ln.find(dot, d + dot.size()) != std::string::npos) continue;
+                auto it = rows_.find(ln.substr(0, d));
+                const double v = std::atof(ln.c_str() + d + dot.size());
+                if (it != rows_.end() && std::isfinite(v) && v > -100 && v < 200) it->second.snr = v;
+            }
         }
         if (const size_t np = b.find("Not listed:"); np != std::string::npos) { unsigned long long d = 0; if (std::sscanf(b.c_str() + np, "Not listed: %llu", &d) == 1) dropped_ = d; }
     }
