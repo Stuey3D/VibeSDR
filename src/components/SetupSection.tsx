@@ -63,4 +63,19 @@ const s = StyleSheet.create({
   title: { fontSize: 12, letterSpacing: 1, lineHeight: 18 },
   sum: { fontSize: 11.5, lineHeight: 16, marginTop: 1 },
   body: { paddingHorizontal: 12, paddingBottom: 12 },
+  allRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
+  allBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
 });
+
+/** ★★★ OPEN ALL / CLOSE ALL — at the top of the screen; two D-pad stops with their own focus ring. */
+export function SectionAllRow({ C, F, onAll }: { C: any; F: string; onAll: (open: boolean) => void }) {
+  const [focused, setFocused] = useState<'' | 'open' | 'close'>('');
+  const btn = (k: 'open' | 'close', label: string) => (
+    <TouchableOpacity key={k} focusable={Platform.OS === 'android'} accessibilityRole="button"
+      onFocus={() => setFocused(k)} onBlur={() => setFocused('')} onPress={() => onAll(k === 'open')}
+      style={[s.allBtn, { borderColor: focused === k ? C.keySelBorder : C.border, backgroundColor: focused === k ? C.keySelBg : 'transparent' }]}>
+      <Text style={{ color: C.key, fontFamily: F, fontSize: 12, letterSpacing: 1 }}>{label}</Text>
+    </TouchableOpacity>
+  );
+  return <View style={s.allRow}>{btn('open', 'OPEN ALL')}{btn('close', 'CLOSE ALL')}</View>;
+}
