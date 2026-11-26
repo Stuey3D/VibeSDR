@@ -169,11 +169,13 @@ try {
   console.log('   screenshot', await shot('sea-areas-close.png'));
   // ★ V12 2026-11-02 (pass 2) over France / Biscay and over Norway / Skagerrak: one step out, the map dragged (a real
   //   mouse drag, as a person pans) until the area's marker is in the middle
-  ok(await until(`${aria('/Inner Skagerrak sea area: gale in force/')}.length === 1`, 5000), 'Inner Skagerrak (MET Norway\'s outline): a gale — red');
-  ok(await until(`${aria('/^Biscay sea area: gale in force/')}.length === 1`, 3000), 'Biscay: a gale (storm 10) — red');
   ok(await until(`${aria('/^(Loop Head to Slyne Head|Mizen Head to Valentia) sea area: near gale/')}.length === 2`, 3000), 'the Irish stretches of a ROCHES POINT TO SLYNE HEAD TO MALIN HEAD forecast at force 7: amber');
   await ev(`(() => { const v = ${view}; const b = [...document.querySelectorAll('.maplibregl-ctrl-zoom-out, .leaflet-control-zoom-out')].find(x => v.contains(x)); b && b.click(); })()`);
   await sleep(1500);
+  // ★★ beta95 SEA AREAS WORLDWIDE (b95-webfix): the layer makes only the areas whose box meets the padded VIEW, so the
+  //    Skagerrak's and Biscay's markers exist once the map is out again — not while it is zoomed in on Humber.
+  ok(await until(`${aria('/Inner Skagerrak sea area: gale in force/')}.length === 1`, 5000), 'Inner Skagerrak (MET Norway\'s outline): a gale — red');
+  ok(await until(`${aria('/^Biscay sea area: gale in force/')}.length === 1`, 3000), 'Biscay: a gale (storm 10) — red');
   const centreOn = async (re) => {
     for (let k = 0; k < 4; k++) {
       const r = JSON.parse(await ev(`JSON.stringify((() => { const v = ${view}; const host = v.querySelector('.maplibregl-map, .leaflet-container') || v; const hb = host.getBoundingClientRect();
