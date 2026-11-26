@@ -84,8 +84,9 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   await ev(`localStorage.setItem('vibesdr.airSeaLast', 'av'); document.getElementById('mModeAirSea')?.click(); true`);
   ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'the datalink view opens');
   // ★ the server lands on the first band (ACARS) — pick VDL2, where the clip's aircraft are
-  ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) button')].some(b => b.textContent.trim() === 'VDL2')`, 8000), 'the band control offers VDL2');
-  await ev(`[...document.querySelectorAll('.trkView:not([hidden]) button')].find(b => b.textContent.trim() === 'VDL2')?.click()`);
+  // ★★★ beta96 (b96-mapchat) the band is a row of the map's TUNE list (data-tune="av:vdl2"), as test-web-avmap picks it
+  ok(await until(`!!document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="av:vdl2"]')`, 8000), 'the TUNE list offers VDL2');
+  await ev(`(() => { const r = document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="av:vdl2"]'); if (r && r.getAttribute('aria-checked') !== 'true') r.click(); return !!r; })()`);
   // ★★ beta96 the AIR & SEA map opens on MESSAGES for the DATALINK; the aircraft are its AIRCRAFT tab
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkRow.trkMsg').length >= 3`, 30000), 'MESSAGES: the datalink feed');
   await ev(`document.querySelector('.trkView:not([hidden]) .trkList .hd .tab[data-tab="aircraft"]')?.click()`);
