@@ -31,7 +31,7 @@ static std::vector<Avail> rtlAvail() { return { {"adsb"}, {"vdl2"}, {"acars"}, {
 int main() {
     std::printf("── §1 table, CSV, entries\n");
     {
-        CHECK(modes().size() == 5, "five modes");
+        CHECK(modes().size() == 6, "six modes (five on Aviation & Maritime, ISM on Amateur)");
         CHECK(toCsv(parseCsv(" VDL2 , acars,bogus,vdl2")) == "vdl2,acars", "table order, known, no repeats: %s", toCsv(parseCsv(" VDL2 , acars,bogus,vdl2")).c_str());
         CHECK(toCsv(parseCsv("acars+vdl2")) == "vdl2,acars", "the combination's word reads as both");
         // ★ table order is adsb, vdl2, acars, vor, ais — so isCombo wants {vdl2, acars}? No: acars comes AFTER vdl2 in the table.
@@ -200,6 +200,30 @@ int main() {
         In i4 = in; i4.hold.clear();
         o = decide(i4);
         CHECK(o.runPass && o.runOrbcomm && o.both && o.state.find("VDL2") == std::string::npos, "no hold: beta94's both");
+    }
+
+    std::printf("── §7 ISM under the AMATEUR map (Stuart 11-26: 868 ISM for MeshCore repeaters, all day)\n");
+    {
+        CHECK(toCsv(parseCsv("ism:868")) == "ism:868", "the band rides in the token");
+        CHECK(parseCsv("ism").empty() && parseCsv("ism:").empty() && parseCsv("ism:86 8x!").empty(), "ISM without a (clean) band is nothing");
+        CHECK(toCsv(parseCsv("ism:868,ism:433")) == "ism:868", "one band: the first");
+        Entry e;
+        CHECK(entryFor({"ism:868"}, e) && e.kind == Ism && e.band == "868" && e.map == kMapAmateur
+              && e.msg == "{\"type\":\"ism\",\"on\":1,\"band\":\"868\"}", "ISM 868 → ISM's own key on its own band: %s", e.msg.c_str());
+        CHECK(e.name == "ISM 868 MHz" && e.bench == "dec_ism" && e.kindWord() == "ism", "named, priced by dec_ism");
+        Stored a; a.landingMap = "amateur"; a.landingModes = "ism:868"; a.mapKeep = true; migrate(a);
+        CHECK(a.landingMap == "amateur" && a.landingModes == "ism:868" && a.mapKeep && !a.landingAdsb, "the amateur map keeps ISM 868");
+        Stored b; b.landingMap = "avmar"; b.landingModes = "ism:868"; b.mapKeep = true; migrate(b);
+        CHECK(b.landingMap.empty() && !b.mapKeep, "ISM is not an Aviation & Maritime mode");
+        Stored c; c.landingMap = "amateur"; c.landingModes = "vdl2"; migrate(c);
+        CHECK(c.landingMap.empty(), "VDL2 is not an Amateur mode");
+        std::vector<Avail> av = { {"ism"} };
+        auto g = gate(av, false, "", 2.4e6, {"ism:868"}, kMapAmateur);
+        CHECK(g.size() == 1 && g[0].id == "ism" && g[0].on && g[0].tok == "ism:868", "the amateur map draws ISM only, ticked as ism:868");
+        CHECK(gate(rtlAvail(), false, "", 2.4e6, {"vdl2"}).size() == 5, "the aviation map still draws its five");
+        CHECK(toCsv(normalise({"ism:433"}, av, false, kMapAmateur)) == "ism:433", "normalise keeps the band");
+        std::vector<Avail> blk = { {"ism", true, "the server owner has switched ISM off on this receiver"} };
+        CHECK(!gate(blk, false, "", 2.4e6, {"ism:868"}, kMapAmateur)[0].on, "ISM blocked: not on, greyed");
     }
 
     std::printf("── §6 cost words\n");

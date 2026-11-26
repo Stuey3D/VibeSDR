@@ -141,10 +141,10 @@ console.log('\nKeep VDL2 running when nobody is connected');
     await waitFor(() => parsed(B, 'avdata').length > 0, 2500);
     ok(parsed(B, 'avdata').some((m) => m.band === 'vdl2'), 'and the next client is in VDL2 at once');
     // ★ a band step is somebody's use of the radio: ACARS and back, then leave — the kept VDL2 stays and is the keep's again
-    B.send({ type: 'avdata', on: 1, step: 1 });
+    B.send({ type: 'avdata', on: 1, band: 'acars' });
     await waitFor(() => parsed(B, 'avdata').some((m) => m.band === 'acars'), 3000);
     ok(parsed(B, 'avdata').some((m) => m.band === 'acars'), 'a listener may step the band (ACARS)');
-    B.send({ type: 'avdata', on: 1, step: -1 });
+    B.send({ type: 'avdata', on: 1, band: 'vdl2' });
     await waitFor(() => parsed(B, 'avdata').slice(-1)[0]?.band === 'vdl2', 3000);
     const nOff = (S.log().match(/\[AVDATA\] mode OFF/g) || []).length;
     B.close();
@@ -216,6 +216,23 @@ console.log('\nACARS + VDL2 kept on a 2.4 MS/s radio; AIS kept');
     await waitFor(() => /\[MAP\] keep running: nobody is connected \(the server has started\) — entering AIS/.test(T.log()), 8000);
     ok(/\[MAP\] keep running: nobody is connected \(the server has started\) — entering AIS/.test(T.log()), 'AIS kept: entered with nobody connected');
   } finally { T.stop(); }
+}
+
+// ── 7b. THE AMATEUR MAP: ISM 868 KEPT (Stuart 11-26: MeshCore repeaters all day) ──────────────────────────────────────
+console.log('\nKeep ISM 868 running (the Amateur map)');
+{
+  const S = await server({ landingMap: 'amateur', landingModes: 'ism:868', mapKeep: true }, 'ism');
+  try {
+    await waitFor(() => /\[MAP\] keep running: nobody is connected \(the server has started\) — entering ISM 868/.test(S.log()), 8000);
+    ok(/\[MAP\] keep running: nobody is connected \(the server has started\) — entering ISM 868/.test(S.log()), '★ ISM 868 entered with nobody connected (the band from its own plan)');
+    ok(/\[MAP\] landing: a new listener lands on the Amateur map in ISM 868/.test(S.log()), 'the landing is the Amateur map');
+    const A = spectrum(S.port, crypto.randomUUID());
+    await waitFor(() => parsed(A, 'ism').length > 0, 3000);
+    ok(parsed(A, 'ism').length > 0, 'a new client gets ISM reports at once');
+    A.close();
+    await sleep(7000);
+    ok(!/\[ISM\] last listener left — the receiver goes back/.test(S.log()), 'the last listener leaving does not take kept ISM away');
+  } finally { S.stop(); }
 }
 
 // ── 8. A beta95 CONFIG ────────────────────────────────────────────────────────────────────────────────────────────

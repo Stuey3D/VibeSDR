@@ -8,7 +8,7 @@ import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
 import DxScanSetup, { collectDxScan, parseDxScan, type DxScanModel } from '../components/DxScanSetup';   // ★★★ V12
 import RspSetupCard from '../components/RspSetupCard';
 import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
-import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
+import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps, BG_ISM_WORDS } from '../services/bgDecode';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
 /** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
  *  V12"). false hides the antenna-switch setup; a server already configured keeps working AND keeps the section, so its
@@ -243,7 +243,7 @@ import {
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
 import { rateGuardLine, type RateGuardState } from '../services/rateGuard';
-import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse, keepSatWords, keepRateWords, MAP_AVMAR } from '../utils/keepRun';
+import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse, keepSatWords, keepRateWords, keepBase, MAP_AVMAR, MAP_AMATEUR, KEEP_GROUP_WORDS, type KeepMap } from '../utils/keepRun';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -976,6 +976,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  the map on/off, the mode(s) it opens in (VDL2, ADS-B, ACARS, ACARS + VDL2, the VOR map, AIS) and keep-running. ADS-B is
    *  one of its modes now — landingAdsb / adsbKeep above are MIRRORED from these (an older engine reads the same landing). */
   const [mapOn, setMapOn]       = useState(false);
+  const [mapWhich, setMapWhich] = useState<KeepMap>('avmar');   // ★★ Aviation & Maritime, or Amateur (ISM — Stuart 11-26)
   const [mapModes, setMapModes] = useState('');
   const [mapKeep, setMapKeep]   = useState(false);
   const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
@@ -1762,7 +1763,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           {   // ★★★ beta96 the landing map — beta95's ADS-B pair migrates in once (keepMigrate), unchanged
             const mig = keepMigrate({ map: g(K.landingMap), landingAdsb: g(K.landingAdsb) === '1', adsbKeep: g(K.adsbKeep) === '1' });
             if (mig) { setMapOn(mig.map); setMapModes(mig.modes); setMapKeep(mig.keep); }
-            else { setMapOn(g(K.landingMap) === MAP_AVMAR); setMapModes(s(K.landingModes)); setMapKeep(g(K.mapKeep) === '1'); }
+            else {
+              const lm = g(K.landingMap);
+              setMapOn(lm === MAP_AVMAR || lm === MAP_AMATEUR); setMapWhich(lm === MAP_AMATEUR ? 'amateur' : 'avmar');
+              setMapModes(s(K.landingModes)); setMapKeep(g(K.mapKeep) === '1');
+            }
           }
           { const ru = g(K.radioUse); if (ru === 'locked' || ru === 'single') setRadioUse(ru); }
           { const lhz = g(K.landingHz); if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz)); }
@@ -2309,21 +2314,23 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     && (rate === 0 || rate >= 2_400_000 || dabRateBoost);
   /* ── ★★★ beta96 THE LANDING MAP — the gate (one mode at a time; ACARS + VDL2 where the capture holds both) on this radio ── */
   const keepFacts = keepAvailLocal({ driver: radio?.driver ?? '', isIcom, blockedModes, rate, dabRateBoost,
+                                     ismBands: bgReachNow.ismOk && bgCaps ? bgCaps.ismBands : [],
                                      lockedOwnVfos: advanced && radioUseEff === 'locked' && maxUsers > 1 });
   if (!adsbLandOffered) { const a = keepFacts.avail.find((x) => x.id === 'adsb'); if (a && a.hw && !a.why) a.why = 'ADS-B cannot run on this radio with these settings'; }
-  const mapOffers = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, keepParse(mapModes));
-  const mapChosen = mapOffers.filter((o) => o.on).map((o) => o.id);
-  const mapOffered = !!radio && mapOffers.some((o) => o.drawn);
+  const mapOffers = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, keepParse(mapModes), mapWhich);
+  const mapChosen = mapOffers.filter((o) => o.on).map((o) => o.tok);
+  const mapIsmBands = bgReachNow.ismOk && bgCaps ? bgCaps.ismBands : [];
+  const mapOffered = !!radio && keepFacts.avail.some((a) => a.hw);
   const mapLandOn = mapOffered && mapOn && mapChosen.length > 0;
   const mapKeepOn = mapLandOn && mapKeep;
   const mapLost = mapOn && keepParse(mapModes).length > 0 && !mapChosen.length;
   /** Write the map; the ADS-B pair mirrors it (an older engine reads the same ADS-B landing). */
-  const setMap = (on: boolean, modes: string, keep: boolean) => {
+  const setMap = (on: boolean, modes: string, keep: boolean, which: KeepMap = mapWhich) => {
     const k = on && modes ? keep : false;
-    setMapOn(on); setMapModes(on ? modes : ''); setMapKeep(k);
-    const mir = keepMirror(on, on ? modes : '', k);
+    setMapOn(on); setMapModes(on ? modes : ''); setMapKeep(k); setMapWhich(which);
+    const mir = keepMirror(on && which === 'avmar', on ? modes : '', k);
     setLandingAdsb(mir.landingAdsb); setAdsbKeep(mir.adsbKeepRunning);
-    AsyncStorage.multiSet([[K.landingMap, on ? MAP_AVMAR : ''], [K.landingModes, on ? modes : ''], [K.mapKeep, k ? '1' : '0'],
+    AsyncStorage.multiSet([[K.landingMap, on ? which : ''], [K.landingModes, on ? modes : ''], [K.mapKeep, k ? '1' : '0'],
                            [K.landingAdsb, mir.landingAdsb ? '1' : '0'], [K.adsbKeep, mir.adsbKeepRunning ? '1' : '0']]);
   };
   const adsbLandOn = mapLandOn && mapChosen.length === 1 && mapChosen[0] === 'adsb';
@@ -2425,7 +2432,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
-    landingAdsb, adsbKeep, fmDef, mapOn, mapModes, mapKeep,
+    landingAdsb, adsbKeep, fmDef, mapOn, mapModes, mapKeep, mapWhich,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, communityOff, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson,
@@ -2475,7 +2482,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingAdsb: !!live.current.landingAdsb,
     adsbKeepRunning: !!live.current.landingAdsb && !!live.current.adsbKeep,
     // ★★★ beta96 the landing map — the engine reads these off the config (vsMapFromConfigJson); the ADS-B pair above mirrors it
-    landingMap: live.current.mapOn && live.current.mapModes ? MAP_AVMAR : '',
+    landingMap: live.current.mapOn && live.current.mapModes ? live.current.mapWhich : '',
     landingModes: live.current.mapOn ? live.current.mapModes : '',
     mapKeep: !!(live.current.mapOn && live.current.mapModes && live.current.mapKeep),
     fmDefaults: live.current.fmDef,
@@ -2667,7 +2674,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
-      [K.landingMap, live.current.mapOn ? MAP_AVMAR : ''], [K.landingModes, live.current.mapOn ? live.current.mapModes : ''],
+      [K.landingMap, live.current.mapOn ? live.current.mapWhich : ''], [K.landingModes, live.current.mapOn ? live.current.mapModes : ''],
       [K.mapKeep, live.current.mapKeep ? '1' : '0'],
       [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
@@ -4181,7 +4188,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               <View style={[styles.card, { borderColor: mapLandOn ? C.keySelBorder : C.border, marginBottom: 8 }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
-                    Start new listeners on the Aviation &amp; Maritime map?
+                    Start new listeners on a map?
                   </Text>
                   <Switch value={mapOn}
                     onValueChange={(v) => {
@@ -4190,6 +4197,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     }} />
                 </View>
                 {mapOn && (<>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                    {([['avmar', 'Aviation & Maritime'], ['amateur', 'Amateur']] as [KeepMap, string][])
+                      .filter(([m]) => keepFacts.avail.some((a) => a.hw && (a.id === 'ism') === (m === 'amateur')))
+                      .map(([m, label]) => (
+                        <TouchableOpacity key={m} onPress={() => setMap(true, '', false, m)}
+                          style={[styles.card, { borderColor: mapWhich === m ? C.keySelBorder : C.border, paddingVertical: 6 }]}>
+                          <Text style={{ color: mapWhich === m ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                  </View>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                     Tick the mode the map opens in. The radio is set up from the mode itself {'\u2014'} VDL2 is every 25 kHz
                     channel from 136.700 to 136.975 MHz {'\u2014'} so there are no frequencies to type. EXIT takes a listener
@@ -4204,7 +4221,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   {mapOffers.filter((o) => o.drawn).map((o, i, arr) => (
                     <React.Fragment key={o.id}>
                       {(i === 0 || arr[i - 1].group !== o.group) && (
-                        <Text style={{ color: C.section, fontFamily: F, fontSize: 11, marginTop: 8 }}>{o.group === 'aviation' ? 'AVIATION' : 'MARITIME'}</Text>
+                        <Text style={{ color: C.section, fontFamily: F, fontSize: 11, marginTop: 8 }}>{KEEP_GROUP_WORDS[o.group] ?? o.group}</Text>
                       )}
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, opacity: o.enabled ? 1 : 0.5 }}>
                         <View style={{ flex: 1 }}>
@@ -4214,16 +4231,28 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         <Switch value={o.on} disabled={!o.enabled}
                           onValueChange={(v) => {
                             const cur = keepParse(mapModes);
-                            const next = v ? [o.id, ...cur.filter((x) => x !== o.id)] : cur.filter((x) => x !== o.id);
-                            const g = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, next);
-                            setMap(true, g.filter((x) => x.on).map((x) => x.id).join(','), mapKeep);
+                            // ★ ISM: the band from its own plan — 868 (MeshCore in Europe) where this radio has it, else 433, else the first
+                            const tok = o.id !== 'ism' ? o.id : 'ism:' + (mapIsmBands.includes('868') ? '868' : mapIsmBands.includes('433') ? '433' : mapIsmBands[0] ?? '868');
+                            const next = v ? [tok, ...cur.filter((x) => keepBase(x) !== o.id)] : cur.filter((x) => keepBase(x) !== o.id);
+                            const g = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, next, mapWhich);
+                            setMap(true, g.filter((x) => x.on).map((x) => x.tok).join(','), mapKeep);
                           }} />
                       </View>
+                      {o.id === 'ism' && o.on && (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4, marginLeft: 12 }}>
+                          {mapIsmBands.map((b) => (
+                            <TouchableOpacity key={b} onPress={() => setMap(true, 'ism:' + b, mapKeep)}
+                              style={[styles.card, { borderColor: o.tok === 'ism:' + b ? C.keySelBorder : C.border, paddingVertical: 4 }]}>
+                              <Text style={{ color: o.tok === 'ism:' + b ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{BG_ISM_WORDS[b] ?? b + ' MHz'}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
                     </React.Fragment>
                   ))}
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, opacity: mapChosen.length ? 1 : 0.5 }}>
                     <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
-                      {mapChosen.length ? `Keep ${keepName(mapChosen)} running when nobody is connected` : 'Keep it running when nobody is connected'}
+                      {mapChosen.length ? `Keep ${keepName(mapChosen, BG_ISM_WORDS)} running when nobody is connected` : 'Keep it running when nobody is connected'}
                     </Text>
                     <Switch value={mapKeepOn} disabled={!mapChosen.length}
                       onValueChange={(v) => setMap(true, mapModes, v)} />
@@ -4892,8 +4921,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   dscOk={!bgOff.has('dsc')} rate={bgRate} lockCentre={bgLockCentre}
                   skimOk={(k) => !isIcom && !bgOff.has(k)}
                   users={advanced ? maxUsers : 1} decoderMax={decoderMax}
-                  adsbKeeps={landingAdsb && adsbKeep} keepName={mapKeepOn ? keepName(mapChosen) : ''}
-                  keepSat={mapKeepOn ? keepSatWords(mapChosen.join(','), true) : ''} problem={bgProblem} />
+                  adsbKeeps={landingAdsb && adsbKeep} keepName={mapKeepOn ? keepName(mapChosen, BG_ISM_WORDS) : ''}
+                  keepSat={mapKeepOn ? keepSatWords(mapChosen.join(','), true, BG_ISM_WORDS) : ''} problem={bgProblem} />
               </View>
             )}
 

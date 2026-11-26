@@ -52,6 +52,7 @@ struct Avail {
 };
 struct Offer {
     std::string id, name, group;
+    std::string tok;         ///< the stored word when ticked ("ism:868"), else the id
     bool drawn = true;       ///< false = not offered on this radio (hw false)
     bool enabled = true;     ///< may be ticked now
     bool on = false;         ///< ticked
@@ -70,15 +71,19 @@ inline std::string rateWords(double hz) {
  *  nothing ticked every mode the radio can run is enabled. With one ticked, the others are greyed — "2.4 MS/s: one mode
  *  at a time on this radio" — except the other half of ACARS + VDL2 where the capture holds both. */
 inline std::vector<Offer> gate(const std::vector<Avail>& avail, bool comboOk, const std::string& comboWhy, double rateHz,
-                               const std::vector<std::string>& chosenIn) {
-    std::vector<std::string> chosen;
-    for (const auto& id : parseCsv(toCsv(chosenIn))) {
-        for (const auto& a : avail) if (a.id == id && a.hw && a.why.empty()) chosen.push_back(id);
+                               const std::vector<std::string>& chosenIn, const std::string& map = kMapAvMar) {
+    std::vector<std::string> chosen, chosenTok;
+    for (const auto& t : parseCsv(toCsv(chosenIn))) {
+        const Mode* md = modeById(t);
+        if (!md || md->map != map) continue;
+        for (const auto& a : avail) if (a.id == md->id && a.hw && a.why.empty()) { chosen.push_back(md->id); chosenTok.push_back(t); }
     }
-    if (chosen.size() > 1 && !(isCombo(chosen) && comboOk)) chosen.resize(1);
+    if (chosen.size() > 1 && !(isCombo(chosen) && comboOk)) { chosen.resize(1); chosenTok.resize(1); }
     std::vector<Offer> out;
     for (const auto& m : modes()) {
-        Offer o; o.id = m.id; o.name = m.name; o.group = m.group;
+        if (m.map != map) continue;   // ★ each landing map draws its own modes
+        Offer o; o.id = m.id; o.name = m.name; o.group = m.group; o.tok = m.id;
+        for (size_t i = 0; i < chosen.size(); ++i) if (chosen[i] == m.id) o.tok = chosenTok[i];
         const Avail* a = nullptr;
         for (const auto& x : avail) if (x.id == m.id) a = &x;
         if (!a || !a->hw) { o.drawn = false; o.enabled = false; out.push_back(o); continue; }
@@ -102,9 +107,10 @@ inline std::vector<Offer> gate(const std::vector<Avail>& avail, bool comboOk, co
     return out;
 }
 /** The set a save may store: ticked AND runnable, one mode or the combination (where it fits) — the first otherwise. */
-inline std::vector<std::string> normalise(const std::vector<std::string>& chosen, const std::vector<Avail>& avail, bool comboOk) {
+inline std::vector<std::string> normalise(const std::vector<std::string>& chosen, const std::vector<Avail>& avail, bool comboOk,
+                                          const std::string& map = kMapAvMar) {
     std::vector<std::string> v;
-    for (const auto& o : gate(avail, comboOk, "", 0, chosen)) if (o.on) v.push_back(o.id);
+    for (const auto& o : gate(avail, comboOk, "", 0, chosen, map)) if (o.on) v.push_back(o.tok);
     return v;
 }
 

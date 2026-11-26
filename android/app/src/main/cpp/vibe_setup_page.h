@@ -1458,11 +1458,14 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <div id="mapLandWrap" class="hide">
           <label style="display:flex;align-items:center;gap:10px">
             <input type="checkbox" id="mapLandOn">
-            <span>Start new listeners on the <b>Aviation &amp; Maritime map</b>?</span></label>
+            <span>Start new listeners on a <b>map</b>?</span></label>
           <div id="mapLandBox" class="hide" style="margin-top:10px">
+            <!-- ★★ beta96 (Stuart 11-26): the AMATEUR map's ISM too — 868 MHz all day for MeshCore repeaters, the band from ISM's own plan -->
+            <label><span class="lbl">Map</span>
+              <select id="mapLandWhich"><option value="avmar">Aviation &amp; Maritime</option><option value="amateur">Amateur</option></select></label>
             <div class="hint">Tick the mode the map opens in. The radio is set up from the mode itself &mdash; VDL2 is every
-              25&nbsp;kHz channel from 136.700 to 136.975&nbsp;MHz &mdash; so there are no frequencies to type. EXIT takes a
-              listener to the frequency below.</div>
+              25&nbsp;kHz channel from 136.700 to 136.975&nbsp;MHz, ISM is the band you pick from its own plan &mdash; so there are
+              no frequencies to type. EXIT takes a listener to the frequency below.</div>
             <div class="hint" id="mapRateNote" style="margin-top:8px"></div>
             <div id="mapModeList" style="margin-top:6px"></div>
             <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
@@ -4576,26 +4579,38 @@ const KEEP_MODES = [
   { id: "acars", name: "ACARS",         group: "aviation", block: "avdata" },
   { id: "vor",   name: "VOR / ILS map", group: "aviation", block: "vormap" },
   { id: "ais",   name: "AIS",           group: "maritime", block: "ais" },
+  { id: "ism",   name: "ISM",           group: "ism",      block: "ism", map: "amateur" },
 ];
+const KEEP_GROUP_WORDS = { aviation: "AVIATION", maritime: "MARITIME", ism: "ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)" };
+function keepMapOf(m) { return m.map || "avmar"; }
+function keepBase(t) { return String(t).split(":")[0]; }
 const KEEP_COMBO_MIN = 6083334;   // ★ the wide band's own figure (vibeavi minRateHz) — the server's mapCombo.minRate wins
 function keepParse(csv) {
-  const got = new Set();
+  const got = [];
   for (let t of String(csv || "").split(/[,;\t\n]/)) {
     t = t.trim().toLowerCase();
-    if (t === "acars+vdl2") { got.add("acars"); got.add("vdl2"); } else if (KEEP_MODES.some(m => m.id === t)) got.add(t);
+    if (t === "acars+vdl2") { got.push("acars", "vdl2"); continue; }
+    const b = keepBase(t), band = t.includes(":") ? t.slice(t.indexOf(":") + 1) : "";
+    const m = KEEP_MODES.find(x => x.id === b);
+    if (!m) continue;
+    if (b === "ism" ? /^[a-z0-9]{1,8}$/.test(band) : t === b) got.push(t);   // ★ ISM only with its band: "ism:868"
   }
-  return KEEP_MODES.filter(m => got.has(m.id)).map(m => m.id);
+  const out = [];
+  for (const m of KEEP_MODES) { const g = got.find(t => keepBase(t) === m.id); if (g) out.push(g); }
+  return out;
 }
 function keepIsCombo(ids) { return ids.length === 2 && ids.includes("acars") && ids.includes("vdl2"); }
 function keepRateWords(hz) { let s = (hz / 1e6).toFixed(3); s = s.replace(/0+$/, "").replace(/\.$/, ""); return s + " MS/s"; }
 /** vibekeep::gate. avail: [{id, hw, why, pct}]; returns [{id, name, group, drawn, enabled, on, why, pct}]. */
-function keepGate(avail, comboOk, comboWhy, rateHz, chosenIn, comboMin) {
+function keepGate(avail, comboOk, comboWhy, rateHz, chosenIn, comboMin, map) {
+  map = map || "avmar";
   const av = id => avail.find(a => a.id === id);
-  let chosen = keepParse(chosenIn.join(",")).filter(id => { const a = av(id); return a && a.hw && !a.why; });
-  if (chosen.length > 1 && !(keepIsCombo(chosen) && comboOk)) chosen = chosen.slice(0, 1);
+  let toks = keepParse(chosenIn.join(",")).filter(t => { const m = KEEP_MODES.find(x => x.id === keepBase(t)); const a = av(keepBase(t)); return m && keepMapOf(m) === map && a && a.hw && !a.why; });
+  let chosen = toks.map(keepBase);
+  if (chosen.length > 1 && !(keepIsCombo(chosen) && comboOk)) { chosen = chosen.slice(0, 1); toks = toks.slice(0, 1); }
   const name = id => (KEEP_MODES.find(m => m.id === id) || {}).name || id;
-  return KEEP_MODES.map(m => {
-    const o = { id: m.id, name: m.name, group: m.group, drawn: true, enabled: true, on: false, why: "", pct: -1 };
+  return KEEP_MODES.filter(m => keepMapOf(m) === map).map(m => {
+    const o = { id: m.id, tok: toks.find(t => keepBase(t) === m.id) || m.id, name: m.name, group: m.group, drawn: true, enabled: true, on: false, why: "", pct: -1 };
     const a = av(m.id);
     if (!a || !a.hw) { o.drawn = false; o.enabled = false; return o; }
     if (typeof a.pct === "number") o.pct = a.pct;
@@ -4626,6 +4641,7 @@ function keepFacts(r) {
     const s = srv ? srv.find(x => x.id === m.id) : null;
     let hw = s ? !!s.hw : drv !== "icom" && !(m.id === "adsb" && drv === "airspyhf") && !(m.id === "vor" && drv === "airspyhf");
     let why = s && s.why ? s.why : "";
+    if (m.id === "ism" && !s) hw = drv !== "icom" && drv !== "airspyhf";   // ★ the running server's answer decides when it has one
     if (m.id === "adsb") {   // ★ ADS-B's own rule with the form's rate and switch (adsbLandOffer — beta95's, unchanged)
       const o = adsbLandOffer(r, HW, f);
       hw = o.hw; why = o.offer ? "" : o.why;
@@ -4640,10 +4656,14 @@ function keepFacts(r) {
   return { avail, comboOk, comboWhy, rate, comboMin, comboPct: c && typeof c.pct === "number" ? c.pct : -1 };
 }
 /** The words for the satellites beside a kept mode (the server's satKeepWarn, said before it is saved). */
+function keepTokName(t) {
+  if (keepBase(t) === "ism") { const b = t.slice(4); const x = (typeof bgIsmBands === "function" ? bgIsmBands() : []).find(y => y.id === b); return "ISM " + (x ? x.label : b + " MHz"); }
+  return (KEEP_MODES.find(m => m.id === t) || {}).name || t;
+}
 function keepSatWords(r) {
   const ids = keepParse(r.landingModes);
   if (!r.landingMap || !r.mapKeep || !ids.length) return "";
-  const name = keepIsCombo(ids) ? "ACARS + VDL2" : (KEEP_MODES.find(m => m.id === ids[0]) || {}).name || ids[0];
+  const name = keepIsCombo(ids) ? "ACARS + VDL2" : keepTokName(ids[0]);
   if (ids.length === 1 && ids[0] === "vdl2")
     return "VDL2 is kept running on this radio: a Meteor or NOAA pass SHARES its 137 MHz capture — VDL2 keeps decoding through the "
       + "pass (a few seconds' gap as it starts and ends), the tuner's IF filter opens over 136.7–138.0 MHz for the pass and closes "
@@ -4659,28 +4679,44 @@ function mapLandRender() {
   const F = keepFacts(r);
   const anyHw = F.avail.some(a => a.hw);
   wrap.classList.toggle("hide", !anyHw);
-  const on = anyHw && r.landingMap === "avmar";
+  const on = anyHw && (r.landingMap === "avmar" || r.landingMap === "amateur");
   $("mapLandOn").checked = on;
   $("mapLandBox").classList.toggle("hide", !on);
-  const offers = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, keepParse(r.landingModes), F.comboMin);
-  const chosen = offers.filter(o => o.on).map(o => o.id);
+  const map = r.landingMap === "amateur" ? "amateur" : "avmar";
+  if ($("mapLandWhich")) {
+    $("mapLandWhich").value = map;
+    // ★ a map with nothing this radio can run is not offered (an Icom has neither; an HF+ has both)
+    for (const o of $("mapLandWhich").options || []) o.disabled = !F.avail.some(a => a.hw && keepMapOf(KEEP_MODES.find(m => m.id === a.id) || {}) === o.value);
+  }
+  const offers = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, keepParse(r.landingModes), F.comboMin, map);
+  const chosen = offers.filter(o => o.on).map(o => o.tok);
   const list = $("mapModeList");
   if (on) {
     let html = "", group = "";
     for (const o of offers) {
       if (!o.drawn) continue;
-      if (o.group !== group) { group = o.group; html += `<div class="lbl" style="margin-top:8px">${group === "aviation" ? "AVIATION" : "MARITIME"}</div>`; }
+      if (o.group !== group) { group = o.group; html += `<div class="lbl" style="margin-top:8px">${esc(KEEP_GROUP_WORDS[group] || group)}</div>`; }
       const cost = keepCostWords(o.pct);
       html += `<label style="display:flex;align-items:flex-start;gap:10px;margin-top:4px;${o.enabled ? "" : "opacity:.5"}">`
         + `<input type="checkbox" data-keep="${o.id}"${o.on ? " checked" : ""}${o.enabled ? "" : " disabled"}>`
         + `<span>${esc(o.name)}${cost ? ` <span class="hint" style="display:inline">· ${esc(cost)}</span>` : ""}`
         + (o.why ? `<br><span class="hint" style="display:inline">${esc(o.why)}</span>` : "") + `</span></label>`;
+      // ★★ ISM: the band from ISM's own plan, the ones THIS radio reaches (hwinfo ismHwBands — bgIsmBands); LoRa coverage follows
+      //    ISM's own "every channel" setting (Modes offered to listeners), not this card
+      if (o.id === "ism" && o.on) {
+        const bands = typeof bgIsmBands === "function" ? bgIsmBands() : [];
+        const cur = o.tok.includes(":") ? o.tok.slice(4) : "";
+        html += `<label style="margin:4px 0 0 28px"><span class="lbl">Band</span><select data-keepband="ism">`
+          + bands.map(b => `<option value="${esc(b.id)}"${b.id === cur ? " selected" : ""}>${esc(b.label)}</option>`).join("") + `</select></label>`;
+      }
     }
     list.innerHTML = html;
+    for (const sel of list.querySelectorAll("select[data-keepband]")) sel.addEventListener("change", () => { keepSetModes(["ism:" + sel.value]); dabLandRender(); });
     for (const cb of list.querySelectorAll("input[data-keep]")) cb.addEventListener("change", () => {
       const cur = keepParse(radio().landingModes);
-      const id = cb.dataset.keep;
-      const next = cb.checked ? [...cur, id] : cur.filter(x => x !== id);
+      let id = cb.dataset.keep;
+      if (id === "ism") { const bs = typeof bgIsmBands === "function" ? bgIsmBands() : []; const b = bs.find(x => x.id === "868") || bs.find(x => x.id === "433") || bs[0]; id = "ism:" + (b ? b.id : "868"); }
+      const next = cb.checked ? [...cur, id] : cur.filter(x => keepBase(x) !== keepBase(id));
       keepSetModes(next);
       dabLandRender();
     });
@@ -4693,7 +4729,7 @@ function mapLandRender() {
   const keep = on && chosen.length > 0 && !!r.mapKeep;
   $("mapKeep").checked = keep;
   $("mapKeep").disabled = !chosen.length;
-  const nm = keepIsCombo(chosen) ? "ACARS + VDL2" : chosen.length ? (KEEP_MODES.find(m => m.id === chosen[0]) || {}).name : "";
+  const nm = keepIsCombo(chosen) ? "ACARS + VDL2" : chosen.length ? keepTokName(chosen[0]) : "";
   $("mapKeepLbl").textContent = nm ? `Keep ${nm} running when nobody is connected` : "Keep it running when nobody is connected";
   const cost = keepCostWords(keepIsCombo(chosen) ? F.comboPct : (offers.find(o => o.on) || {}).pct);
   $("mapKeepNote").innerHTML = !nm ? "Tick a mode above first." :
@@ -4706,8 +4742,8 @@ function mapLandRender() {
         : "Unattended satellite passes still run: a pass takes the radio, the mode pauses for it (about 10–15 min) and resumes after.");
   // ★ a stored landing the radio cannot run now: say so (the plain landing applies)
   const stored = keepParse(r.landingModes);
-  const lost = r.landingMap === "avmar" && stored.length && !chosen.length;
-  $("mapLandNote").textContent = lost ? `This radio cannot run ${stored.map(i => (KEEP_MODES.find(m => m.id === i) || {}).name).join(" + ")} with its `
+  const lost = on && stored.length && !chosen.length;
+  $("mapLandNote").textContent = lost ? `This radio cannot run ${stored.map(keepTokName).join(" + ")} with its `
     + `current settings, so listeners start on ${plainLandingWords()} until it can.` : "";
   $("mapPlainHead").style.display = on ? "" : "none";
   if ($("adsbPlainHead")) $("adsbPlainHead").style.display = "none";
@@ -4729,15 +4765,18 @@ function keepSetModes(ids) {
   // ★ the newest tick wins where only one fits: put it first, the gate keeps the first
   const last = ids[ids.length - 1];
   const ordered = last ? [last, ...ids.filter(x => x !== last)] : ids;
-  const g = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, ordered, F.comboMin);
-  let keep = g.filter(o => o.on).map(o => o.id);
-  if (!keep.length && ids.length) keep = keepParse(ids.join(",")).slice(0, 1);   // ★ not runnable now: kept as chosen, said in mapLandNote
+  const g = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, ordered, F.comboMin, r.landingMap === "amateur" ? "amateur" : "avmar");
+  let keep = g.filter(o => o.on).map(o => o.tok);
+  const mp = r.landingMap === "amateur" ? "amateur" : "avmar";
+  if (!keep.length && ids.length)   // ★ not runnable now: kept as chosen (this map's own modes only), said in mapLandNote
+    keep = keepParse(ids.join(",")).filter(t => keepMapOf(KEEP_MODES.find(m => m.id === keepBase(t)) || {}) === mp).slice(0, 1);
   r.landingModes = keep.join(",");
   keepMirror(r);
 }
 function keepMirror(r) {
   const ids = keepParse(r.landingModes);
-  if (r.landingMap !== "avmar" || !ids.length) { r.mapKeep = r.landingMap === "avmar" ? !!r.mapKeep : false; }
+  const known = r.landingMap === "avmar" || r.landingMap === "amateur";
+  if (!known || !ids.length) { r.mapKeep = known ? !!r.mapKeep : false; }
   r.landingAdsb = r.landingMap === "avmar" && ids.length === 1 && ids[0] === "adsb";
   r.adsbKeepRunning = r.landingAdsb && !!r.mapKeep;
 }
@@ -4892,9 +4931,14 @@ function dabLandInit() {
   // ★★★ beta96 the landing map: on clears a DAB landing (one landing at a time); off clears the modes and keep-running
   $("mapLandOn").addEventListener("change", () => {
     const r = radio();
-    if ($("mapLandOn").checked) { r.landingMap = "avmar"; r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = ""; }
+    if ($("mapLandOn").checked) { r.landingMap = ($("mapLandWhich") && $("mapLandWhich").value) || "avmar"; r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = ""; }
     else { r.landingMap = ""; r.landingModes = ""; r.mapKeep = false; }
     keepMirror(r);
+    dabLandRender(); if (typeof spRender === "function") spRender();
+  });
+  // ★★ the map itself: its modes are its own, so a change starts the choice afresh
+  if ($("mapLandWhich")) $("mapLandWhich").addEventListener("change", () => {
+    const r = radio(); r.landingMap = $("mapLandWhich").value; r.landingModes = ""; r.mapKeep = false; keepMirror(r);
     dabLandRender(); if (typeof spRender === "function") spRender();
   });
   $("mapKeep").addEventListener("change", () => { const r = radio(); r.mapKeep = $("mapKeep").checked; keepMirror(r); dabLandRender(); if (typeof spRender === "function") spRender(); });
@@ -9110,9 +9154,9 @@ function collectRadio() {
     landingAdsb: !!radio().landingAdsb,
     adsbKeepRunning: !!radio().landingAdsb && !!radio().adsbKeepRunning,
     // ★★★ beta96 the landing map — edited straight onto the radio (mapLandRender / keepSetModes), the ADS-B pair mirrored
-    landingMap: radio().landingMap === "avmar" ? "avmar" : "",
-    landingModes: radio().landingMap === "avmar" ? String(radio().landingModes || "") : "",
-    mapKeep: radio().landingMap === "avmar" && !!radio().mapKeep,
+    landingMap: radio().landingMap === "avmar" || radio().landingMap === "amateur" ? radio().landingMap : "",
+    landingModes: radio().landingMap === "avmar" || radio().landingMap === "amateur" ? String(radio().landingModes || "") : "",
+    mapKeep: (radio().landingMap === "avmar" || radio().landingMap === "amateur") && !!radio().mapKeep,
     ...fmDefCollect(),   // ★ the Broadcast FM defaults card
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,

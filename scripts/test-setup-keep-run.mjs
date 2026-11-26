@@ -9,7 +9,8 @@ const src = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_setup_page
 let fail = 0, pass = 0;
 const ok = (c, what) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (c) pass++; else fail++; };
 const grab = (name) => {
-  const m = src.match(new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`));
+  // ★ a one-line function first (its closing brace on the same line), else up to the first top-level "}"
+  const m = src.match(new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{[^\\n]*\\}\\n`)) || src.match(new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`));
   if (!m) { console.log(`   FAIL ${name} not found in the page`); process.exit(1); }
   return m[0];
 };
@@ -31,11 +32,11 @@ class El {
 const els = {};
 const $ = (id) => (els[id] ||= new El(id));
 
-const fnNames = ['keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
+const fnNames = ['keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
                  'mapLandRender', 'keepSetModes', 'keepMirror', 'keepMigrate', 'adsbLandOffer'];
-const body = constOf('KEEP_MODES') + constOf('KEEP_COMBO_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
+const body = constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
 const make = new Function('env', `
-  let { $, radio, HW, adsbLandForm, modeBlockSet, plainLandingWords, esc } = env;
+  let { $, radio, HW, adsbLandForm, modeBlockSet, plainLandingWords, esc, bgIsmBands } = env;
   const setHW = (h) => { HW = h; };
   ${body}
   return { ${fnNames.join(', ')}, setHW };`);
@@ -44,7 +45,8 @@ let RADIO = {};
 let FORM = { users: 1, rate: 2400000, boost: false, blocked: false };
 let BLOCKS = new Set();
 const P = make({ $, radio: () => RADIO, HW: null, adsbLandForm: () => FORM, modeBlockSet: () => BLOCKS,
-                 plainLandingWords: () => '96.100 MHz WFM', esc: (t) => String(t) });
+                 plainLandingWords: () => '96.100 MHz WFM', esc: (t) => String(t),
+                 bgIsmBands: () => [{ id: '433', label: '433.92 MHz' }, { id: '868', label: '868 MHz SRD' }] });
 const all = () => ['adsb', 'vdl2', 'acars', 'vor', 'ais'].map(id => ({ id, hw: true, why: '', pct: -1 }));
 const find = (v, id) => v.find(o => o.id === id);
 
@@ -77,7 +79,7 @@ console.log('── the gate (vibekeep::gate\'s cases)');
 
 const hwRtl = (rate) => ({ offline: false, adsbHw: true, mapRate: rate,
   mapModes: [{ id: 'adsb', hw: true, why: '', pct: 13.2 }, { id: 'vdl2', hw: true, why: '', pct: 9.4 }, { id: 'acars', hw: true, why: '', pct: 3 },
-             { id: 'vor', hw: true, why: '', pct: 20 }, { id: 'ais', hw: true, why: '', pct: 2 }],
+             { id: 'vor', hw: true, why: '', pct: 20 }, { id: 'ais', hw: true, why: '', pct: 2 }, { id: 'ism', hw: true, why: '', pct: 11 }],
   mapCombo: { minRate: 6083334, ok: rate >= 6083334, why: rate >= 6083334 ? '' : `ACARS + VDL2 needs a capture of 6.1 MS/s or more — this receiver runs at ${(rate / 1e6).toFixed(3)} MS/s` } });
 
 console.log('── the card: an RTL at 2.4 MS/s (the Sony)');
@@ -153,7 +155,30 @@ console.log('── migration of a beta95 radio');
 }
 
 // ★ the save carries the three (and the mirrored pair)
-ok(/landingMap: radio\(\)\.landingMap === "avmar" \? "avmar" : ""/.test(src) && /mapKeep: radio\(\)\.landingMap === "avmar" && !!radio\(\)\.mapKeep/.test(src), 'the save writes landingMap / landingModes / mapKeep');
+ok(/landingMap: radio\(\)\.landingMap === "avmar" \|\| radio\(\)\.landingMap === "amateur" \? radio\(\)\.landingMap : ""/.test(src) && /landingModes: /.test(src) && /mapKeep: \(radio\(\)\.landingMap === "avmar"/.test(src), 'the save writes landingMap / landingModes / mapKeep (either map)');
+
+console.log('── the AMATEUR map: ISM on 868 for MeshCore (Stuart 11-26)');
+{
+  P.setHW(hwRtl(2400000)); FORM = { users: 1, rate: 2400000, boost: false, blocked: false }; BLOCKS = new Set();
+  RADIO = { driver: 'rtlsdr', landingMap: 'amateur' };
+  P.keepSetModes(['ism']);
+  ok(RADIO.landingModes === '' , 'ISM without a band is not stored');
+  P.keepSetModes(['ism:868']);
+  ok(RADIO.landingModes === 'ism:868' && !RADIO.landingAdsb, `ISM 868 stored as its token: ${RADIO.landingModes}`);
+  RADIO.mapKeep = true; P.keepMirror(RADIO); P.mapLandRender();
+  const h = $('mapModeList').innerHTML;
+  ok(/data-keep="ism" checked/.test(h) && !/data-keep="vdl2"/.test(h), 'the Amateur map draws ISM only (ticked)');
+  ok(/select data-keepband="ism"/.test(h) && /value="868" selected/.test(h) && /value="433"/.test(h), "the band from ISM's own plan (this radio's), 868 selected");
+  ok(/MeshCore, Meshtastic, LoRaWAN/.test(h) && /about 11 % of one core/.test(h), 'grouped with the LoRa words, priced by dec_ism');
+  ok($('mapKeepLbl').textContent === 'Keep ISM 868 MHz SRD running when nobody is connected', $('mapKeepLbl').textContent);
+  ok(/ISM 868 MHz SRD pauses for the pass/.test(P.keepSatWords(RADIO)), 'the satellites words: ISM pauses for a pass');
+  BLOCKS = new Set(['ism']); P.mapLandRender();
+  ok(/data-keep="ism"[^>]* disabled/.test($('mapModeList').innerHTML), 'ISM switched off: greyed, said');
+  BLOCKS = new Set();
+  RADIO = { driver: 'rtlsdr', landingMap: 'avmar' }; P.keepSetModes(['ism:868']);
+  ok(RADIO.landingModes === '', 'ISM is not an Aviation & Maritime mode');
+  ok(P.keepParse('ism:868,ism:433,vdl2').join() === 'vdl2,ism:868', 'tokens in table order, one ISM band');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -310,7 +310,7 @@ inline const std::vector<Control>& controlTable() {
           "bandCopyFrom gainList gainAdd",               D_RADIO, P_ADV },
         { "gainIfBw",                                    D_RTL,   P_ADV },
         { "allowPick allowLo allowHi blockPick blockLo blockHi", D_ANY, P_ADV },
-        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapModeList mapKeep", D_RADIO, 0 },   // ★★★ beta96 the landing map
+        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList mapKeep", D_RADIO, 0 },   // ★★★ beta96 the landing map
         { "fmDeemph fmStereo fmNr fmIms fmCeq fmAutoBw fmNb fmReturn fmRemember", D_RADIO, 0 },
         { "antRangePreset antFilterPreset antPortNames", D_ANY,   0 },
         { "swYes swNo swBroker swUser swPass swLocked swAntennas", D_ANY, 0 },

@@ -28,7 +28,7 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
 {
   const base = { driver: 'rtlsdr', isIcom: false, blockedModes: '', rate: 2_400_000, dabRateBoost: false, lockedOwnVfos: false };
   let f = keepAvailLocal(base);
-  ok(f.avail.every((a) => a.hw && !a.why) && !f.comboOk, 'RTL at 2.4: every mode, no pair');
+  ok(f.avail.filter((a) => a.id !== 'ism').every((a) => a.hw && !a.why) && !f.comboOk, 'RTL at 2.4: every aviation & maritime mode, no pair (ISM needs its bands)');
   f = keepAvailLocal({ ...base, rate: 2_048_000 });
   ok(/2\.4 MS\/s/.test(f.avail[0].why), 'RTL at 2.048: ADS-B says the rate');
   f = keepAvailLocal({ ...base, rate: 2_048_000, dabRateBoost: true });
@@ -52,6 +52,19 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
   ok(m.map && m.modes === 'adsb' && m.keep, 'beta95 ADS-B + keep migrates unchanged');
   ok(keepMigrate({ map: '1', landingAdsb: true, adsbKeep: true }) === null, 'a stored map is never overwritten');
   ok(/SHARES its 137 MHz capture/.test(keepSatWords('vdl2', true)) && /ADS-B pauses/.test(keepSatWords('adsb', true)) && keepSatWords('vdl2', false) === '', 'the satellites words');
+}
+// ★★ the Amateur map's ISM (Stuart 11-26: 868 for MeshCore repeaters)
+{
+  ok(keepParse('ism:868,ism:433').join() === 'ism:868' && keepParse('ism').length === 0, 'ISM: one band, never without one');
+  const base = { driver: 'rtlsdr', isIcom: false, blockedModes: '', rate: 2_400_000, dabRateBoost: false, lockedOwnVfos: false };
+  const f = keepAvailLocal({ ...base, ismBands: ['433', '868'] });
+  const g = keepGate(f.avail, f.comboOk, f.comboWhy, 2_400_000, ['ism:868'], 'amateur');
+  ok(g.length === 1 && g[0].on && g[0].tok === 'ism:868', 'the amateur map: ISM only, ticked on 868');
+  ok(keepGate(f.avail, f.comboOk, f.comboWhy, 2_400_000, ['ism:868']).every((o) => !o.on && o.id !== 'ism'), 'not an Aviation & Maritime mode');
+  ok(!keepAvailLocal({ ...base, ismBands: [] }).avail.find((a) => a.id === 'ism')!.hw, 'no band in reach: no ISM row');
+  ok(/switched off/.test(keepAvailLocal({ ...base, ismBands: ['868'], blockedModes: 'ism' }).avail.find((a) => a.id === 'ism')!.why), 'ISM switched off: greyed');
+  ok(keepName(['ism:868'], { '868': '868 MHz SRD' }) === 'ISM 868 MHz SRD' && /ISM 868 MHz SRD pauses/.test(keepSatWords('ism:868', true, { '868': '868 MHz SRD' })), 'named from ISM\'s own words; pauses for a pass');
+  ok(!keepMirror(true, 'ism:868', true).landingAdsb, 'no ADS-B pair');
 }
 console.log(`keep run (app): ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

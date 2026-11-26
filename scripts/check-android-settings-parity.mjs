@@ -89,7 +89,7 @@ const TABLE = [
   P(['adsbLandOn'], 'landingAdsb', 'landingAdsb'),
   P(['adsbKeep'], 'adsbKeep', 'adsbKeepRunning'),
   // ★★★ beta96 the landing map + keep-running modes (utils/keepRun.ts on the screen; the engine reads them off the config)
-  P(['mapLandOn'], 'landingMap', 'landingMap'),
+  P(['mapLandOn', 'mapLandWhich'], 'landingMap', 'landingMap'),
   P(['mapKeep'], 'mapKeep', 'mapKeep'),
   P(['dabLandOn', 'dabLandBlock', 'dabLandStation'], 'landingDabCh', 'landingDabChannel'),
   P(['landingFreq', 'demodMode'], 'WHERE LISTENERS START', { sent: 'centerFreq: landingHz', applied: 'setVibeServerLanding(centerFreq, mode)' }),

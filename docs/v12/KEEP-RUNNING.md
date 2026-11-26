@@ -24,10 +24,28 @@ memory `map_landing_toggles.md` specifies.
 | Copy | About beta96 note (+ the old ADS-B note pointed at the new control) | done; tours do not mention keep-running (checked) |
 | `vibe_web_page.h` | not changed: the only web-client change is `admin.ts` / `adminBg.ts` | **regenerate at integration** (the admin page ships in it) |
 
+## ★★ The AMATEUR map: ISM (coordinator / Stuart 11-26, added on this branch)
+
+*"keep-running must also offer ISM (868 MHz and 433 MHz bands, incl. LoRa: MeshCore / Meshtastic / LoRaWAN) under the AMATEUR
+landing map, so a radio can run 868 ISM for MeshCore repeaters continuously and feed the community map's MeshCore layer."*
+Stuart's estate plan: Sony → VDL2; a Pi 500 RTL-SDR V4 → 868 ISM for MeshCore; ADS-B from a PiAware Beast feed.
+
+- `landingMap` "amateur", `landingModes` "ism:<band>" — the band id from ISM's own plan (`vibeism::bands()`: 868, 433, 915 …),
+  offered only where this radio reaches it (hwinfo `ismHwBands`); the page and the app pick 868, else 433, else the first.
+- The kept mode enters ISM exactly as its key does (`{"type":"ism","on":1,"band":"868"}`), so LoRa coverage is ISM's own
+  setting (the "every channel" tick under ISM in Modes offered). Nothing here records or offers IQ of ISM bursts — the
+  standing policy (no IQ capture/download of ISM, ever) is untouched.
+- One mode at a time (a radio has one landing map; Amateur has one mode). A listener's band change or custom frequency is
+  somebody's use; the keep puts its band back when they leave. ISM blocked → greyed with why. Cost: `dec_ism`.
+- A satellite pass pauses kept ISM and resumes it (beta95's rule).
+- Tested: test-keep-run §7, test-setup-keep-run (the Amateur card), test_keep_run, and **e2e** (test-server-keep-run 7b: kept
+  ISM 868 entered at start, a client gets ISM reports, the last listener leaving does not take it away).
+- Live check owed: the Pi 500 V4 on 868, MeshCore repeaters on the community map with nobody connected.
+
 ## What the owner sees
 
-Setup page, **Where new listeners start**: *"Start new listeners on the **Aviation & Maritime map**?"* Ticked, the radio's
-modes are listed under AVIATION (ADS-B, VDL2, ACARS, VOR / ILS map) and MARITIME (AIS), each with its setup-benchmark cost.
+Setup page, **Where new listeners start**: *"Start new listeners on a **map**?"*, then the map (Aviation & Maritime, or Amateur). On
+Aviation & Maritime the radio's modes are listed under AVIATION (ADS-B, VDL2, ACARS, VOR / ILS map) and MARITIME (AIS), each with its setup-benchmark cost.
 The facts come from the SERVER (`hwinfo.mapModes`): a mode this radio can never do is not drawn (an HF+ has no ADS-B or VOR
 row); one it cannot do now is greyed with the server's reason (blocked, the rate). The form's own rate and blocks apply on
 top, so the gate follows edits before they are saved.
@@ -96,13 +114,13 @@ Stuart 11-25: VDL2 136.7–136.975, ORBCOMM 137.2–137.8 and Meteor 137.1 / 137
 
 | Test | Result | What |
 |---|---|---|
-| `vibeserver/test-keep-run.cpp` | 83/83 | table, CSV, entries; migration; the gate at 2.048 / 2.4 / 2.56 / 8 MS/s; multi-radio (the Pi 500 shape); the shared fit (Meteor 137.9 / 137.1 at 2.4 and 2.56, NOAA, 2.048, an HF+); the scheduler's hold; cost words |
+| `vibeserver/test-keep-run.cpp` | 95/95 | table, CSV, entries; migration; the gate at 2.048 / 2.4 / 2.56 / 8 MS/s; multi-radio (the Pi 500 shape); the shared fit (Meteor 137.9 / 137.1 at 2.4 and 2.56, NOAA, 2.048, an HF+); the scheduler's hold; cost words |
 | `vibeserver/test-sat-pass-sched.cpp` | 43/43 | unchanged behaviour with no hold |
 | `vibeserver/test-config-radios.cpp` | 278 checks, 0 fail | the three fields over every hop; beta95 migration; old writer vs new |
 | `vibeserver/test-android-setup.cpp` | all passed | the bridge's identity round trip with the new keys; the mirror; a beta95 phone config on the page |
-| `scripts/test-server-keep-run.mjs` | see the report | **e2e on the Mac binary**: kept VDL2 at start, listener joins, EXIT to the plain landing, back after leaving, a band step then the hand-back, landing-only, negative, the shared centre, ACARS + VDL2 refused at 2.4 with the reason, AIS kept, a beta95 ADS-B config |
-| `scripts/test-setup-keep-run.mjs` | 38/38 | the page's real functions on the C++ cases; the card for an RTL at 2.4, an RSP at 8, an HF+, an Icom |
-| `scripts/test_keep_run.ts` | 21/21 | the app's rule, same cases |
+| `scripts/test-server-keep-run.mjs` | 32/32 | **e2e on the Mac binary**: kept VDL2 at start, listener joins, EXIT to the plain landing, back after leaving, a band step then the hand-back, landing-only, negative, the shared centre, ACARS + VDL2 refused at 2.4 with the reason, AIS kept, a beta95 ADS-B config |
+| `scripts/test-setup-keep-run.mjs` | 48/48 | the page's real functions on the C++ cases; the card for an RTL at 2.4, an RSP at 8, an HF+, an Icom |
+| `scripts/test_keep_run.ts` | 28/28 | the app's rule, same cases |
 | `scripts/test_admin_bg.ts` | 63/63 | the admin keep-run line, the shared / rider satellite rows |
 | `check-android-settings-parity`, `check-setup-page`, `test-setup-adsb-landing` | clean | |
 
@@ -123,5 +141,5 @@ Not tested here: a real pass (orbit data), the ORBCOMM rider running, the narrow
 - AIS + DSC "together": DSC is background decoding's VFO, not a whole-radio mode — not offered. Make a combined AIS + DSC
   whole-radio mode later, or leave DSC in background decoding (it cannot run while a mode is kept)?
 - Kept VDL2's narrow IF filter applies on RTLs only, and only while KEPT (a listener-entered VDL2 keeps the whole capture).
-- The landing map is one ("avmar"); the AMATEUR map (b96-onemap) is not a landing choice here yet.
+- The Amateur map offers ISM only; MeshCore/LoRa follow ISM's own settings. Other Amateur modes (APRS, spots) are VFO decoders, not whole-radio modes — not offered.
 - Landing without keep-running for VDL2 / AIS works like ADS-B's (a new listener lands in it); OK, or keep-only?

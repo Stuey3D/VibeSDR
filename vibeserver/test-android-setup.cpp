@@ -390,7 +390,7 @@ int main(int argc, char** argv) {
             {"allowPick","r:allowRanges"},{"allowLo","r:allowRanges"},{"allowHi","r:allowRanges"},
             {"blockPick","r:blockRanges"},{"blockLo","r:blockRanges"},{"blockHi","r:blockRanges"},
             {"dabLandOn","r:landingDabChannel"},{"dabLandBlock","r:landingDabChannel"},{"dabLandStation","r:landingDabSid"},
-            {"adsbLandOn","r:landingAdsb"},{"adsbKeep","r:adsbKeepRunning"},{"mapLandOn","r:landingMap"},{"mapModeList","r:landingModes"},{"mapKeep","r:mapKeep"},
+            {"adsbLandOn","r:landingAdsb"},{"adsbKeep","r:adsbKeepRunning"},{"mapLandOn","r:landingMap"},{"mapLandWhich","r:landingMap"},{"mapModeList","r:landingModes"},{"mapKeep","r:mapKeep"},
             {"fmDeemph","r:fmDeemph"},{"fmStereo","r:fmStereo"},{"fmNr","r:fmNr"},{"fmIms","r:fmIms"},{"fmCeq","r:fmCeq"},
             {"fmAutoBw","r:fmAutoBw"},{"fmNb","r:fmNb"},{"fmReturn","r:fmRemember"},{"fmRemember","r:fmRemember"},
             {"antRangePreset","r:antennaRanges"},{"antFilterPreset","r:antennaFilters"},{"antPortNames","r:antennaNames"},
