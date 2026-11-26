@@ -642,6 +642,7 @@ NavtexRx::NavtexRx(int sr, double cf, double sh, double baud, bool inv, const Na
         }
         for (double& h : rcH_) h /= sum;
         for (auto& b : rcBuf_) b.assign(2 * rcH_.size(), 0.0);
+        { double e = 0; for (double h : rcH_) e += h * h; enbw_ = e * mixRate_; }   // ★ beta96 SNR: Σh²·fs (Parseval)
     } else {
         // the RTTY decoder's front end, as it was (Q ≈ 3 bandpasses with ka9q's qv offset, 140 Hz envelope lowpass)
         frontRate_ = mixRate_ = fs_;
@@ -727,7 +728,41 @@ void NavtexRx::process(const int16_t* samples, int count) {
         frontSample(m, s, (2 / M_PI) * std::max(m, s));
     }
 }
+/* ★★ beta96 SNR (Stuart 11-26) — DISPLAY ONLY: reads the front end, writes nothing the decoder reads.
+ *  At the centre of each bit (the middle of its prompt integration window, which the early/late clock centres on the
+ *  bit as the filters deliver it) the tone the bit chose carries signal + noise, the other tone noise alone (the
+ *  raised cosine is zero at 140 Hz; the tones are 170 Hz apart). Over many bits:
+ *    noise per channel  Nc = ⟨off²⟩ = 2·N0·Σh²·fs   (complex baseband, m = 2|out|, so a tone of amplitude A reads A)
+ *    signal             A² = ⟨on²⟩ − Nc,  power A²/2
+ *    noise in the bit bandwidth = N0 · baud.
+ *  At high SNR the off tone is clean; at low SNR choosing "on" by the bit's sign picks a little noise up, but the
+ *  decoder only runs where the per-channel SNR is well above 0 dB. Measured on synthetic FSK at known SNRs
+ *  (test-navtex-snr). */
+void NavtexRx::measureBit(double bit) {
+    if (enbw_ <= 0) return;
+    const int back = (int)std::lround(bitSamples_ / 2);
+    if (back >= kRing) return;
+    const int i = (ringPos_ - 1 - back + 2 * kRing) % kRing;
+    const double on = bit > 0 ? ringM_[i] : ringS_[i], off = bit > 0 ? ringS_[i] : ringM_[i];
+    for (Counts* k : { &total, &message, &slice_ }) { k->on += on; k->off += off; k->bits++; }
+    if (slice_.bits >= (unsigned long)std::max(1.0, std::round(baud_))) {
+        double sg, nz;
+        if (onSlice && snrOf(slice_, sg, nz)) onSlice(sg, nz);
+        slice_ = Counts();
+    }
+}
+bool NavtexRx::snrOf(const Counts& c, double& sigDbfs, double& noiseDbfs) const {
+    if (c.bits == 0 || enbw_ <= 0) return false;
+    const double on = c.on / c.bits, off = std::max(c.off / c.bits, 1e-6);
+    const double a2 = std::max(on - off, off * 1e-4);          // never log(0): no signal reads 40 dB under the noise
+    const double n0 = off / (2 * enbw_);
+    const double fs2 = 32767.0 * 32767.0 / 2;                  // a full-scale sine's power
+    sigDbfs = 10 * std::log10((a2 / 2) / fs2);
+    noiseDbfs = 10 * std::log10((n0 * baud_) / fs2);
+    return true;
+}
 void NavtexRx::frontSample(double m, double s, double level) {
+    ringM_[ringPos_] = m * m; ringS_[ringPos_] = s * s; ringPos_ = (ringPos_ + 1) % kRing;   // ★ beta96 SNR
     audioAverage_ += (level - audioAverage_) * audioTC_;
     audioAverage_ = std::max(0.1, audioAverage_);
     const double bs = bitSamples_;
@@ -791,6 +826,7 @@ void NavtexRx::frontSample(double m, double s, double level) {
             avgPrompt_ = decayAvg(avgPrompt_, std::fabs(prompt_), 64); nextPrompt_ += bs;
             const double bit = prompt_; prompt_ = 0;
             sampleCount_++;
+            measureBit(bit);
             pushBit(bit);
             return;
         }
@@ -892,13 +928,21 @@ void NavtexRx::processRx(int pos) {
     }
     int code = -1;
     const int r = Ccir476::decodeSoft(rx, haveDx ? dx : nullptr, o_.softFec, code, o_.fecVote, o_.fecMl);
+    /* ★★ beta96 (display only): how the two copies stood — read from the same soft bits, after the decision and
+     *  without touching it. Agreed = both valid and the same word; disagreed = both valid, different words. */
+    const int hr = Ccir476::hardCode(rx), hd = haveDx ? Ccir476::hardCode(dx) : -1;
+    const bool bothOk = hd >= 0 && Ccir476::fourMarkBits((uint8_t)hr) && Ccir476::fourMarkBits((uint8_t)hd);
     lastRxAbs_ = absBit_ - kBits + pos;
     if (code >= 0 || r == -2) {
         bool phaseWrong = false;
         const char32_t c = coder_.emit(code, phaseWrong);
         if (code >= 0 ? code != 0x66 && code != 0x0f : c != 0) {   // count characters, not phasing
             Counts* cs[2] = { &total, &message };
-            for (Counts* k : cs) { if (r == 1) k->clean++; else if (r == -2) k->failed++; else k->repaired++; }
+            for (Counts* k : cs) {
+                if (r == 1) k->clean++; else if (r == -2) k->failed++; else k->repaired++;
+                if (bothOk && hr == hd) k->agreed++;
+                else if (bothOk) k->disagreed++;
+            }
         }
         // ★ fldigi's process_char: a second phasing rep in an RX slot means DX/RX are swapped — step one slot
         if (phaseWrong) alphaPhase_ = false;
@@ -906,7 +950,7 @@ void NavtexRx::processRx(int pos) {
             tail_ += (char)(c < 128 ? c : '?');
             if (tail_.size() > 4) tail_.erase(0, tail_.size() - 4);
             const bool ended = tail_ == "NNNN";
-            if (tail_ == "ZCZC") message = Counts();
+            if (tail_ == "ZCZC") message = Counts();   // ★ the SNR sums too: the message is measured from its header
             else if (ended) { lastMessage = message; message = Counts(); }
             if (onChar) onChar(c);
             if (ended && onMessageEnd) onMessageEnd(lastMessage);   // ★ after the 'N', so the text is ahead of it

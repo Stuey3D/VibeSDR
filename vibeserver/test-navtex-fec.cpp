@@ -196,6 +196,48 @@ int main() {
       ok(r.text.find('\x07') == std::string::npos, "no BEL (0x07) in the output: " + show(r.text));
       ok(r.text == "ZCZC GA43\r\n'NNNN\r\n", "printed as an apostrophe, as fldigi does"); }
 
+    std::printf("── 7. beta96: the decode-quality split (clean / FEC / lost + copies disagreed) — display only ──\n");
+    {
+      auto split = [](const NavtexRx::Counts& c) {
+          const unsigned long n = c.clean + c.repaired + c.failed;
+          return std::to_string(c.agreed) + " clean · " + std::to_string(c.clean + c.repaired - c.agreed) + " FEC · "
+               + std::to_string(c.failed) + " lost · " + std::to_string(c.disagreed) + " disagreed (of " + std::to_string(n) + ")"; };
+      const Run r0 = decode(clean);
+      const unsigned long n0 = r0.last.clean + r0.last.repaired + r0.last.failed;
+      ok(r0.last.agreed == n0 && r0.last.disagreed == 0, "clean stream: every character both copies agreeing — " + split(r0.last));
+      // single-copy errors: RX lost on one character, DX lost on another → 2 FEC, the rest clean
+      size_t iW = 0; for (size_t i = iS + 1; i < codes.size(); i++) if (codes[i] == find(LT, 'W')) { iW = i; break; }
+      { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iW), w);
+        const Run r = decode(b);
+        ok(r.text == msg, "one RX copy and one DX copy unreadable: text exact");
+        ok(r.last.agreed == n0 - 2 && r.last.clean + r.last.repaired - r.last.agreed == 2 && r.last.failed == 0 && r.last.disagreed == 0,
+           "...2 FEC, 0 lost, 0 disagreed — " + split(r.last));
+        ok(r.ended.agreed == r.last.agreed, "...and onMessageEnd carries the split (the host's 0x07)"); }
+      // both copies lost → 1 lost
+      { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iS), w);
+        const Run r = decode(b);
+        ok(r.last.failed == 1 && r.last.agreed == n0 - 1 && r.last.clean + r.last.repaired - r.last.agreed == 0,
+           "both copies lost: 1 lost, nothing FEC — " + split(r.last)); }
+      // ★ disagreement: RX a different VALID word, weakly; DX sure → printed from DX: FEC, and counted disagreed
+      { auto b = clean; softWord(S, 1, w);
+        int mk = -1, sp = -1; for (int i = 0; i < 7; i++) { if ((S >> i & 1) && mk < 0) mk = i; if (!(S >> i & 1) && sp < 0) sp = i; }
+        w[mk] = -0.3; w[sp] = 0.3; setSlot(b, rxSlot(P, iS), w);
+        const Run r = decode(b);
+        ok(r.text == msg && r.last.disagreed == 1 && r.last.agreed == n0 - 1 && r.last.failed == 0,
+           "copies disagree (RX valid but wrong, weak): DX printed, 1 disagreed, counted FEC — " + split(r.last)); }
+      // ★ disagreement the other way: DX a different valid word, weakly; RX sure → RX printed, still 1 disagreed + FEC
+      { auto b = clean; softWord(S, 1, w);
+        int mk = -1, sp = -1; for (int i = 0; i < 7; i++) { if ((S >> i & 1) && mk < 0) mk = i; if (!(S >> i & 1) && sp < 0) sp = i; }
+        w[mk] = -0.3; w[sp] = 0.3; setSlot(b, dxSlot(P, iS), w);
+        const Run r = decode(b);
+        ok(r.text == msg && r.last.disagreed == 1 && r.last.agreed == n0 - 1 && r.last.clean == n0,
+           "copies disagree (DX valid but wrong): RX printed (still 'clean' to the lock), split says 1 FEC + 1 disagreed — " + split(r.last)); }
+      // ★ the split is DISPLAY ONLY: text and the old counts identical with it (nothing reads it back)
+      { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, iS), w);
+        const Run r = decode(b);
+        ok(r.last.repaired == 1 && r.last.failed == 0 && r.last.clean == n0 - 1, "the old clean/repaired/lost counts are unchanged"); }
+    }
+
     if (fails) { std::printf("  %d FAILED\n", fails); return 1; }
     std::printf("  all passed\n");
     return 0;
