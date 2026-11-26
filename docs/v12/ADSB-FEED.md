@@ -1,44 +1,55 @@
-# Share ADS-B with flight trackers, and the ADS-B Beast feed radio (V12 beta96)
+# Aircraft feeds, flight trackers and the standalone AIR & SEA map (V12 beta96)
 
-Stuart, 2026-11-26: feed ADS-B to flight trackers, built "like we did for PSKReporter". Paul (PE1RJV) has a dedicated
-ADS-B radio and wants to feed aggregators such as map.flights. Stuart runs PiAware on a Raspberry Pi 3 and must keep his
-FlightAware Enterprise account, which depends on feeding FlightAware. Then (same day) Stuart added the **ADS-B Beast
-feed radio**: a radio entry of its own that reads another receiver's Beast output, so his Lenovo VibeServer can show the
-aircraft his PiAware Pi hears (192.168.86.12:30005) without touching that Pi.
+Stuart, 2026-11-26, in steps:
 
-Branch `b96-adsbfeed`, off v12-experimental (beta95).
+1. Feed ADS-B to flight trackers, built "like we did for PSKReporter" (branch `b96-adsbfeed`).
+2. The ADS-B Beast feed radio: another receiver's Beast output as a radio entry (`b96-adsbfeed`).
+3. **"Feeds are NOT radios"** (branch `b96-sbsfeed`): aircraft feeds become SERVER-LEVEL SOURCES — Beast or BaseStation
+   (SBS) text, connecting out or listening, labelled ADS-B / HFDL / VDL2 / ACARS — feeding the machine's shared aircraft
+   table directly. His case: his UberSDR's dumphfdl sends HFDL aircraft as BaseStation text, and his PiAware Pi 3 serves
+   Beast; both should show on the Lenovo's AIR & SEA map and the community map.
+4. **VibeServer as a middle man**: the flight-tracker destinations are server-level too, fed by every radio's own ADS-B
+   AND every ADS-B feed source, de-duplicated, with loop guards.
+5. **A landing-page AIR & SEA MAP button**: the combined map with no radio taken.
 
 ## RESUME HERE
 
-- **Built, tested and committed:**
-  - the Beast encoder and reader
-  - the local Beast server
-  - push feeds with presets, UUID, reduce and the loop guard
-  - the Beast input client
-  - the Beast feed radio (`driver: "beast"`), server side
-  - the Setup page: the card, ADD RADIO and the Beast radio's own tab
-  - the admin page rows
-  - the Android server-screen card and its plumbing
-  - the About note
-
-  The test list is below.
-- **Not yet built or verified:**
-  - **Gradle / Android build not run.** The JNI, Kotlin and TSX changes were type-checked and covered by the parity
-    script only.
-  - **The web client and the app with no spectrum at all.** The Beast radio sends no waterfall frames. Listeners land on
-    the ADS-B map through the existing *only mode* (hwinfo `onlyMode:"adsb"`, which hides EXIT). The server side is
-    proven by `test-server-beast-feed`: the reports arrive, EXIT is refused, and a tune changes nothing. The browser
-    itself has **not** been driven headless against a Beast radio. Check whether the web client's or the app's spectrum
-    watchdog reconnects when no binary frames ever arrive.
-  - **The Linux systemd path.** A `vibeserver@beast-1` unit starts the radio by serial, the same as any radio, and
-    main.cpp's `beastRadioFor` takes it before any USB detection. This was tested with a front door plus spawned
-    processes on macOS, not under systemd.
-  - **A save from a Beast radio's tab.** `stashRadio` copies the SDR form fields into the entry. They are harmless keys
-    for a Beast radio, but a full Setup save from that tab has not been run end to end.
-  - **The SIMPLE-mode path** (one process, primary radio = Beast) is coded (`beastRadioFor`) but not run. The tests ran
-    the Full layout.
-- **Never sent to a real aggregator or read from a real receiver** (by the rules). Every test uses 127.0.0.1 sockets.
-  The live checks a person needs to make are under "Live checks" at the end.
+- **Built, tested, committed on `b96-sbsfeed`:**
+  - `vibe_sbs.h`: the BaseStation parser (MSG 1–8; junk, partial lines, over-long lines, binary bytes), a per-source
+    table tagged by label, positions absolute, the fix's own time, impossible jumps refused.
+  - `vibe_feeds.h`: server-level sources (Beast | SBS × connect | listen × ADS-B | HFDL | VDL2 | ACARS), the LAN-only
+    listener (refused peers logged once per address, then once per 10 min), down/stall rules, the banner text, the status
+    file other processes read, the shared-table provider ("feeds"), the loopback ingest for the radios' own ADS-B.
+  - The hub (`vibe_beast.h Hub`) as a middle man: foreign frames byte-faithful (`frameRaw`), de-duplication across
+    inputs, "only my own radios" per destination and for the Beast output, loop guards from every source host.
+  - Config: `ServerConfig::aircraftFeeds` + `ServerConfig::adsbShare`; `migrateAircraftFeeds` on every read (a feed
+    radio → a source, its entry dropped; per-radio `adsbFeed` → the server-level hub, duplicates once).
+  - Server wiring (`main.cpp applyAircraftFeeds`): the front door / a Simple server owns sources and hub; radios behind
+    the door forward their own ADS-B to the door's loopback ingest; `aircraft.json` (served by the door now too) carries
+    `feeds` (labels, never addresses) and `feedWarn`; `admin/adsbfeed` at the door lists the sources; `addbeast` adds a
+    source; a left-over `beast-N` radio process exits 0 saying why; `--beast-in host:port` keeps the old ADS-B-only process
+    as a diagnostic (test-server-adsb-delta uses it).
+  - Setup page SERVER tab: "Aircraft feeds from other receivers" and "Share ADS-B with flight trackers" (moved there).
+    Admin page: one server-level row. The AIR & SEA map's banner (web + app) from `aircraft.json feedWarn`.
+  - The standalone AIR & SEA map on the web landing page: **`openAirSeaViewer()`** (also `window.openAirSeaViewer`).
+- **Not done (honest):**
+  - **The app**: no AIR & SEA button on the app's server landing and no navigation target yet (the app's map lives inside
+    SDRScreen, bound to a connected radio). The web entry point is `openAirSeaViewer()`; the app needs a screen that hosts
+    `MapOverlay kind="airsea"` fed by `aircraft.json` polls with no `VibeServerClient`.
+  - **The map's own limits** ("Map viewers", "Map time limit", the admin count, the visitor stats) — not built. The viewer
+    is plain HTTP polling today, so there is no viewer session to count yet (see Open questions).
+  - **Ships in the button's gate**: the landing button is shown when the server has aircraft or an aircraft feed; a
+    ships-only server does not get it yet.
+  - **The landing on the HFDL layer**: the standalone map opens on AIRCRAFT with every layer; no per-source landing.
+  - **Android**: the phone server keeps its own per-radio flight-tracker card (`AdsbFeedSetup`); server-level SOURCES are
+    not wired on the phone (`LocalSdrShim::setAircraftFeeds` exists; Kotlin/JNI/RN settings do not call it). The new
+    headers compile with the NDK (aarch64, armv7); Gradle was not run.
+  - **Feed aircraft use aircraft.json, not the delta stream**: a feed's aircraft reach a radio's AIR & SEA map through the
+    3-second `aircraft.json` poll (the full list), not the ADS-B delta protocol, which carries only a radio's own decode.
+  - **"Other" as a label** is not offered: the shared table, the clients and the community feed know five sources
+    (ADS-B, ACARS, VDL2, HFDL, ADS-C); an "Other" aircraft would be drawn by no map. VDL2 and ACARS were offered instead
+    (dumpvdl2 and acarsdec-family tools also write BaseStation). Open question below.
+- **Never connected to a real receiver or aggregator** (by the rules). Everything ran on 127.0.0.1.
 
 ## What is sent (Beast)
 
@@ -127,54 +138,59 @@ How the push works:
 
 ## Sharing runs while ADS-B runs
 
-A radio's sharing sends while ADS-B is running on it. To feed all day, use **ADS-B as the landing** with **Keep ADS-B
-running when nobody is connected**; the card says this until it is ticked. A Beast feed radio always runs.
+A radio's own replies reach the hub while ADS-B runs on it. To feed all day from a radio, make ADS-B its landing with
+**Keep ADS-B running when nobody is connected**. Beast feed sources always run. Frames arriving keep the push links up
+(with the 2-minute grace); a server with no ADS-B running anywhere and no feed frames sends nothing.
 
 ## Settings
 
 | Where | |
 |---|---|
-| `RadioConfig::adsbFeed` | one JSON blob per radio, as `dxScan`: `{"serve","port","open","push","feeds":[{"host","port","on","uuid"}]}`. Empty = off. Checked at the save (`vibe::beast::parseConfig`, refused in words), applied live (`LocalSdrShim::setAdsbFeed`, main.cpp's re-read like dxScan). |
-| `RadioConfig::beastIn` + `driver:"beast"` | the Beast feed radio: "host:port" (`parseHostPort`: IPv4, `[IPv6]:port`, a name; no port = 30005). |
-| Setup page | radio tab → **Share ADS-B with flight trackers** (`#adsbFeedCard`, drawn only where `adsbLandOffer(...).hw`); top, under the detected radios and before the tabs (Stuart's layout 11-26) → **Add ADS-B feed from another receiver** (`#beastAddBox`: Address host:port, Name, How many users, ADD → POST `/vibeserver/sdr-change {"action":"addbeast","beastIn","label","users"}`); a Beast radio's tab → its own card (`#beastCard`: address via `{"action":"beastaddr"}`, status line with aircraft, REMOVE); every SDR card hidden there (`beastTabApply`) except the flight-tracker card. |
-| Admin page | `GET /r/<serial>/vibeserver/admin/adsbfeed` (admin-gated) → `admin.ts renderAdsbFeed` rows. |
-| Android | `vibe_android_setup.h` (afServe afPort afOpen afPush → adsbFeed), `vibeServer.ts adsbFeed`, `serverSettingsMirror`, `ServerModeScreen` + `components/AdsbFeedSetup.tsx`, `VibeServerBoot` → `VibeLocalSDR.setAdsbFeed` (JNI), loopback status `GET /vibeserver/adsb-feed`. A Beast feed radio is not offered on the phone (it serves the one radio it holds). |
+| `ServerConfig::aircraftFeeds` | the server-level sources (JSON list, `vibe::feeds::parseSources`; checked at the save, refused in words; applied live by `applyAircraftFeeds` → `LocalSdrShim::setAircraftFeeds`). |
+| `ServerConfig::adsbShare` | the server-level hub: `{"serve","port","open","serveOwn","push","feeds":[{"host","port","on","uuid","own"}]}` (`vibe::beast::parseConfig`), applied by the owning process with `LocalSdrShim::setAdsbFeed`. |
+| `RadioConfig::adsbFeed` / `beastIn` + `driver:"beast"` | **migrated away on read** (`migrateAircraftFeeds`); still read so an older file loads. |
+| Setup page | SERVER tab, after the community map: **Aircraft feeds from other receivers** (`#feedsCard`: list + status + REMOVE, `+ Add aircraft feed` — format, direction, address or port, label for SBS only, name) and **Share ADS-B with flight trackers** (`#adsbFeedCard`, drawn when the server has ADS-B: a radio that could run it or an ADS-B feed). Saved with Save (`aircraftFeeds`, `adsbShare` at the top of the config). |
+| Admin page | `GET /vibeserver/admin/adsbfeed` at the door (admin-gated) → the hub status + `sources` → `admin.ts renderAdsbFeed` (one row). |
+| `aircraft.json` | `feeds` [{title, label, state, aircraft, perSec, msgs, down}] (no addresses) and `feedWarn`. |
+| Android | unchanged: the phone's one radio keeps its own flight-tracker card (`vibe_android_setup.h` afServe… → adsbFeed → `setAdsbFeed`, `AdsbFeedSetup`). Server-level sources are not wired on the phone yet. |
 
-## The ADS-B Beast feed radio
+## Feed sources (server-level)
 
-Decided by Stuart, 11-26:
+`android/app/src/main/cpp/vibe_feeds.h`. Configured as `ServerConfig::aircraftFeeds`, a JSON list (at most 8):
 
-- It is a radio entry of its own, added by hand (nothing to detect). It has a host:port and a label, nothing else.
-- In the radio list and to listeners it behaves like an ADS-B-only radio. It can sit beside real SDRs.
+```json
+[{"fmt":"beast","dir":"connect","host":"192.168.86.12","port":30005,"label":"adsb","name":"PiAware"},
+ {"fmt":"sbs","dir":"listen","port":32010,"label":"hfdl","name":"UberSDR HFDL"}]
+```
 
-How it is built:
+- **Where it runs:** ONE process per machine — the front door (Full layout), the only process of a Simple server, or the
+  Android server. Radio processes behind the door run none of it: they read the shared table and the status file
+  (`<runtime dir>/aircraft-feeds.json`, written every 2 s, stale after 15 s).
+- **Beast** is Mode S, so always ADS-B. Its replies go through our own `vibeadsb::Tracker` (CRC, CPR, plausibility), its
+  aircraft into the shared table with the ADS-B bit, and — when believed — to the hub byte-faithfully.
+- **BaseStation (SBS)** is text with absolute positions (`vibe_sbs.h`). The label decides the shared table's bit: an HFDL
+  source's aircraft carry the HFDL bit and an HFDL position, never ADS-B; the community feed then keeps their positions
+  30 minutes (its datalink window) and fades them by age. SBS is never forwarded to flight trackers.
+- **connect:** `BeastInput` (the same client as before: keepalive, 8 s connect deadline, 2 s → 60 s backoff with jitter,
+  forever). For SBS sources labelled HFDL / VDL2 / ACARS a quiet link is never dropped (they report minutes apart).
+- **listen:** a TCP listener on the port, **LAN only** (`beast::peerAllowed`, the RAW IQ OUT rule), at most 4 clients,
+  keepalive on accepted sockets; a refused address is logged once, then at most once per 10 minutes, and counted.
+- **Down:** a connect source whose link has been lost (at once), a listen source with nobody connected for 90 s, or an
+  ADS-B source with no data for 90 s. The banner on the AIR & SEA map lists every down source and the live ones:
+  `PiAware lost — reconnecting… (2 min) · UberSDR HFDL still live`.
+- **Status** per source: state (opening / listening / connected / stalled / reconnecting / down / error), messages a
+  second, aircraft, connected-from address, refused count, last error. The owner's view (Setup, admin) has addresses;
+  `aircraft.json` has labels and states only.
+- **Live**: a save re-applies at once; a source whose settings did not change keeps its connection and aircraft.
 
-- **Server** (`vibeserver/main.cpp beastRadioFor` → `LocalSdrShim::startBeast`): no hardware is opened or detected.
-  The listener and housekeeping run as on an Icom, with no DSP loop. The housekeeping thread sends the 1 fps report.
-- **Decoding:** `beastEnter` starts `vibeadsb::Service` with rate 0 (no demodulator). `BeastInput` replies go through
-  `Service::injectFrames`, into the **same Tracker**, which applies its own CRC checks and drops and counts failures.
-  From there they reach the same report, range outline, shared aviation table (and so the community map), and the
-  flight-tracker sink.
-- **Listeners:**
-  - hwinfo `onlyMode:"adsb"`, always. The existing only-mode clients hide EXIT, and a new listener lands on the map.
-  - A listener's EXIT is refused in words, even the admin's, because there is nothing else.
-  - Radio caps (`vibe_radio_caps.h`, driver "beast") give `modes:["adsb"]` and every SDR setting off, so there is no
-    gain, rate, waterfall, tuning or satellite control (AGENTS.md).
-- **The input** (`BeastInput`):
-  - TCP keepalive (30 s idle);
-  - an 8 s connect deadline;
-  - reconnect with backoff, 2 s doubling to 60 s, back to 2 s after a minute up, so a Pi that reboots is picked up again
-    by itself;
-  - a link silent for 2 minutes is dropped and reconnected (a half-open TCP connection after a power cut);
-  - garbage resynced and counted;
-  - one 16 KB read at a time, and up to 30 000 replies waiting in the service, oldest dropped and counted.
-- **Errors, in the owner's words:**
-  - "nothing is listening on 192.168.86.12:30005 — is dump1090's Beast output on?"
-  - "no answer from … — is that machine on and on this network?"
-  - "… closed the connection (restarting?)"
-  - "cannot find piaware.local (…)"
+## The former ADS-B Beast feed radio
 
-### When the receiver goes away
+A radio entry with `driver: "beast"` (from `b96-adsbfeed`) is migrated on load into a source (Beast, connect, its
+`beastIn`, ADS-B, named after the radio) and the entry is dropped. A process started for it (`vibeserver@beast-1`) exits 0
+with a line saying where the feed went. The ADS-B-only process itself survives as `--beast-in host:port` (diagnostic and
+tests). The outage rules below are the Beast client's, unchanged, and apply to every connect source.
+
+### When a receiver goes away
 
 Stuart, 11-26: his PiAware sometimes drops for hours.
 
@@ -212,6 +228,77 @@ core** on Stuart's M5 Pro, with peak RSS about 4 MB for the whole test process.
 A Pi 3 core is very roughly 8–15× slower, so we expect about 2–3 % of a Pi 3 core. **This has not been measured on a
 Pi 3.**
 
+## BaseStation / HFDL from UberSDR (dumphfdl)
+
+What dumphfdl sends (read 2026-11-26 from its README and its basestation formatter on GitHub):
+
+- `--output decoded:basestation:tcp:address=<host>,port=<port>` — the **tcp output CONNECTS OUT** to that address and
+  retries every 10 s if it drops. So VibeServer **listens**.
+- Only `MSG,3` lines: the ICAO address (6 upper-case hex digits), the callsign when known (HFDL's are 6 characters),
+  latitude and longitude (6 decimals), altitude / speed / track **empty**, squawk `0` (or the HF channel in kHz with
+  `--freq-as-squawk`, which VibeServer shows as "HFDL 8977"), on-ground `0`, and the position's own time in the
+  "generated" fields (VibeServer keeps it as the fix time when it is believable).
+- A line only for an aircraft whose ICAO address it knows (from a logon) and only from positions under 5 minutes old,
+  taken from performance data, frequency data and ADS-C basic reports.
+- Nothing in a line says HFDL — so the source's label does. dumphfdl asks that this feed is kept local and not sent to
+  public ADS-B networks: VibeServer never forwards SBS to flight trackers.
+
+**Stuart's set-up** (the Lenovo VibeServer is 192.168.86.13):
+
+1. On the Lenovo's Setup page, SERVER tab, **Aircraft feeds from other receivers → + Add aircraft feed**: Format
+   *BaseStation / SBS text*, Direction *It connects to this server (listen on a port)*, Port **32010**, What it is
+   **HFDL**, Name *UberSDR HFDL*. ADD, then **Save**.
+2. On the UberSDR, the dumphfdl service in its docker-compose file:
+
+   ```yaml
+       environment:
+         - EXTRA_ARGS=--output decoded:basestation:tcp:address=192.168.86.13,port=32010
+   ```
+
+   (in the list form, no quotes — they would become part of the value; add `--freq-as-squawk` to the same line to see the
+   HF channel on each aircraft). If the service already has `EXTRA_ARGS`, add this to the end of it. Then
+   `docker compose up -d` for that service.
+3. The feed's line on the Setup page becomes "connected from 192.168.86.x …"; HFDL aircraft with positions appear on the
+   AIR & SEA map's HFDL layer and, with the community map on, on the community map labelled HFDL.
+
+The Lenovo's firewall (if any) must allow TCP 32010 from the LAN.
+
+## VibeServer as a hub
+
+Stuart's Lenovo, all at once:
+
+```
+ PiAware Pi 3 (192.168.86.12) ── Beast :30005 ──►┐
+ UberSDR dumphfdl ── BaseStation → :32010 ───────►├─ Lenovo VibeServer ── shared aircraft table ──► AIR & SEA map, community map
+ the Lenovo's own ADS-B radio (if any) ──────────►┘          │
+                                                             └─ the hub (ADS-B only) ──► adsb.lol, map.flights (+ Beast out :30105)
+```
+
+- **Inputs to the hub:** every radio's own believed replies (behind the door: over the loopback ingest the door opens and
+  writes in `adsb-ingest.port`; the radio's hub pushes there, unreduced) and every **Beast** source's believed replies,
+  passed on **byte-faithful** — the upstream timestamp and signal byte exactly as received.
+- **Never into the hub:** SBS sources (HFDL, VDL2, ACARS, or SBS labelled ADS-B — their positions are not Mode S frames).
+- **De-duplication:** the same 7 or 14 bytes from a DIFFERENT input within 2 s is sent once (`Hub::put`, one steady
+  clock). Repeats from the same input always go (DF11 replies and identity squitters repeat byte for byte).
+- **Loop guards:** a destination on any source's host is never connected (shown "skipped": "ADS-B comes into this
+  server from there"); a local Beast reader connecting from a source's address gets only our own radios.
+- **Own only:** each destination, and the local Beast output, can be set to "Only this server's own radios" (default:
+  everything).
+- **Migration:** every radio's old flight-tracker settings merge into the server-level list (the local server on if any
+  radio served, its port; push on if any pushed; each host:port once, any case, the first UUID wins).
+- **Do not** serve Beast on 30005 on the Lenovo if a dump1090 runs there; for Stuart's case the Pi keeps its own FlightAware
+  feed, and the Lenovo should not push to FlightAware for it.
+
+## The standalone AIR & SEA map
+
+**One entry point: `openAirSeaViewer()`** in `web/client/src/main.ts` (also on `window`), for the landing page's AIR & SEA
+MAP button (`#splashAirSea`) and the menu entry beside GALLERY (b96-mapchat). It opens the same AIR & SEA map (`asOpen`)
+with no radio: no WebSocket, no tuner — only this server's HTTP reads, which the map already makes (`aircraft.json`
+every 3 s, the ship store, the gallery's remembered sondes and VOR), so it is **live** and keeps working when every radio
+is busy or there are none. It controls nothing (CLOSE MAP goes back to the landing). The door serves `aircraft.json`
+itself. The button is drawn only when the server has aircraft or an aircraft feed (one read when the landing draws its
+radios, never polled). Not yet: the app, ships in the gate, and the viewer limits (Open questions).
+
 ## Running VibeServer beside PiAware
 
 Stuart's case: keep FlightAware fed, and do not take the dongle.
@@ -228,13 +315,13 @@ Enterprise status are untouched.
    Verified from FlightAware's dump1090 source on GitHub (2026-11-26), not from a docs page. A firewall on the Pi
    (ufw, say) would still have to allow 30005.
 2. Give the Pi a fixed address (Stuart's: 192.168.86.12).
-3. On the VibeServer's Setup page (the Lenovo in Stuart's case), in the box **Add ADS-B feed from another receiver**
-   under the detected radios, enter Address `192.168.86.12:30005`, a Name and How many users, then press **ADD**.
-   VibeServer restarts and the new radio is on air as a tab of its own.
-4. Its tab shows "Now: Beast feed from 192.168.86.12:30005: connected, N messages a second". If it shows "nothing is
-   listening on …", check that dump1090-fa is running on the Pi and that nothing blocks 30005.
-5. Leave **Send to flight-tracking sites** off for this radio unless you mean it: the Pi already feeds FlightAware. The
-   loop guard stops a feed back to the Pi itself, not a feed to another site.
+3. On the VibeServer's Setup page (the Lenovo in Stuart's case), SERVER tab, **Aircraft feeds from other receivers → + Add
+   aircraft feed**: Format *Beast*, *This server connects to it*, Address `192.168.86.12:30005`, Name *PiAware*. ADD, then
+   **Save**. No restart; no radio entry.
+4. Its line shows "Now: Beast feed from 192.168.86.12:30005: connected, N messages a second · N aircraft". If it shows
+   "nothing is listening on …", check that dump1090-fa is running on the Pi and that nothing blocks 30005.
+5. **Send to flight-tracking sites** (server-level) now includes the Pi's aircraft unless a site is set to "Only this
+   server's own radios". The loop guard stops a feed back to the Pi itself, not a feed to another site.
 
 If VibeServer runs **on the Pi itself**, use `127.0.0.1:30005`. Do **not** turn on "Serve a Beast feed" on port 30005
 on that radio: dump1090-fa already holds that port.
@@ -306,12 +393,15 @@ The Setup page's "How many users" hint quotes the new figure: about 2.5 KB/s per
 
 | Test | Result | Covers |
 |---|---|---|
-| `vibeserver/test-adsb-feed.cpp` | **107/107** | Hand-worked Beast bytes with escapes; 4,000 random frames round-tripped in odd TCP-sized pieces with junk and a broken frame; signal byte; 48-bit counter; settings and every refusal; LAN rule; the local server with a test reader (all 300 frames in order; a taken port named; switched off closes readers); push to a 127.0.0.1 endpoint (UUID first, reduce, reconnect after a drop, backoff with nothing listening, the bounded queue dropping and counting on a stalled reader, ADS-B stopping takes the link down after its grace); the service end to end on modulated IQ (a 1-bit error sent corrected, counter spacing within 0.25 µs); host:port parsing; the Beast input against a synthetic dump1090 (owner's words when nothing listens, aircraft + positions + callsign through the Tracker, junk and bad CRC counted, reconnect when the feeder returns, a silent link dropped); the loop guard; the cost at ~1,500 msg/s. |
-| `vibeserver/test-config-adsbfeed.cpp` | 11/11 | Config round trip; off by default; an older file; an oversized blob dropped; Beast radio caps (adsb only, no SDR setting) and its entry round trip. |
-| `scripts/test-server-beast-feed.mjs` | **28/28** (and 23/23 ×3 before the outage checks were added) | The REAL binary: (A) a server whose only radio is a Beast feed (starts with no SDR, aircraft + position + callsign, onlyMode adsb, EXIT refused, tune ignored, admin status connected and counting noise, the feeder going away said); (B) a Full server with a fake RTL beside a Beast radio (both up, status through the door, the RTL ordinary); (C) add (a bad address refused) and remove through POST `/vibeserver/sdr-change`. |
-| `scripts/test-setup-adsb-feed.mjs` | 50/50 | The page's real `afRowsFrom`, `afBlob`, `afRender`, `beastAddrWhy` and `beastTabApply` against stand-ins, plus the shared fixture. |
-| `scripts/test_adsb_feed.ts` | 17/17 | The app's copy on the same fixture; admin rows (input, skipped). |
-| Checks | | `test-android-setup` all passed; `check-android-settings-parity` 206/0; `check-remote-keys` 486; `check-setup-page` green; `tsc` clean for these files. |
+| `vibeserver/test-aircraft-feeds.cpp` | **80/80** (×6 runs, ASan clean) | SBS parsing (dumphfdl's own MSG,3 line, dump1090 MSG 1/3/4/6, flags, CRLF, junk: binary, 5 000-byte line, split across reads, `~` and 000000 addresses, (0,0), nan/inf/hex numbers, other record kinds, 20 000 random lines); the table (HFDL never ADS-B, freq-as-squawk, the fix's own time, an impossible jump refused, bounded, expiry); the list (defaults, every refusal, Beast forced to ADS-B); a LISTEN source (stream, split line, status, shared-table row HFDL-only, never "ADS-B now", reconnect clears the banner, a refused address counted and logged once); two sources (Beast connect + SBS listen) merged into ONE row with both bits, banner "PiAware lost … · HFDL source still live", the status file and staleness; the hub (two Beast sources + our radio → one destination gets each reply once, byte-identical with the upstream timestamp/signal, HFDL never, the loop guard, own-only). |
+| `vibeserver/test-adsb-feed.cpp` | **107/107** | The Beast encoder/reader/server/push as before (the de-dup only across inputs keeps its repeated-frame checks). |
+| `vibeserver/test-config-adsbfeed.cpp` | **15/15** | Migration: a radio's blob → `adsbShare` and cleared; idempotent; two radios merged (duplicates once, any case); a Beast feed radio → a source, entry dropped, not twice; sources round-trip. |
+| `scripts/test-server-aircraft-feeds.mjs` | **18/18** | The REAL binary, Full layout, a fake RTL radio: the feed radio migrated; a left-over `beast-1` process exits 0; the door's admin lists both sources; dumphfdl lines (connecting in) + a synthetic dump1090 → one row with ADS-B+HFDL, an HFDL-only row with "HFDL 8977"; `aircraft.json` feeds without addresses, at the door and through the radio; the hub forwards the Beast replies byte-faithfully and nothing else, skips the source's host; the banner when the Pi goes; `addbeast` adds a source with no restart; the saved config. |
+| `scripts/test-web-airsea-standalone.mjs` | **11/11** | Headless Edge (`--mute-audio`): the landing's AIR & SEA MAP with the only radio not running; the map with the feed's aircraft and **no WebSocket**; a new aircraft appears live; CLOSE MAP back to the landing; no button with nothing to show. |
+| `scripts/test-server-adsb-delta.ts` | **11/11** | Now on `--beast-in`: older 32.12 KB/s vs delta 2.41 KB/s at 155 aircraft. |
+| `scripts/test-setup-adsb-feed.mjs` | **68/68** | The server-tab cards: placement, the old boxes gone, own-only switches and blob, the gate (a radio that could run ADS-B or an ADS-B feed; HFDL-only not), afRender, the feeds form (defaults, Stuart's two sources, refusals, round trip, the label only for SBS, dumphfdl's option). |
+| `scripts/test_adsb_feed.ts` | **19/19** | The app's copy on the shared fixture; the admin rows (a source line). |
+| Checks | | `check-setup-page` green. Not run here: `scripts/run-tests.sh` (the coordinator's). |
 
 ## Live checks (a person, not an agent)
 
@@ -328,7 +418,21 @@ The Setup page's "How many users" hint quotes the new figure: about 2.5 KB/s per
 4. **Pi 3 CPU:** a VibeServer on the Pi 3 with only a Beast feed radio at ~1,450 msg/s. Watch `top`; we expect a few % of
    a core.
 
+5. **The Lenovo with both feeds**: PiAware (Beast connect 192.168.86.12:30005) and the UberSDR's dumphfdl (the
+   docker-compose line above, SBS listen 32010, HFDL). Check: both lines connected on the Setup page; HFDL aircraft on the
+   AIR & SEA map's HFDL layer and on the community map; one aircraft heard both ways is one row; stop dumphfdl's
+   container → after 90 s the banner names it and says PiAware is still live; start it → the banner clears.
+6. **The landing page's AIR & SEA MAP** on the Lenovo from a phone browser while every radio is busy.
+
 ## Open questions for Stuart
+
+4. "Other" as a feed label: offer it (needs a sixth source bit in the shared table, a file version bump, and a badge in
+   every map) or keep ADS-B / HFDL / VDL2 / ACARS?
+5. The standalone map's limits ("Map viewers", "Map time limit"): count viewers by a lightweight session (a ticket from a
+   `/vibeserver/airsea/join` the polls carry), or by distinct addresses polling `aircraft.json` in the last 10 s? The
+   second needs no client change but miscounts shared NAT.
+6. Feed aircraft on a radio's live ADS-B layer (the delta stream) instead of the 3-second aircraft.json: worth it for a
+   server that is mainly feeds?
 
 1. ~~Offer ADS-B Exchange as a preset?~~ Done 11-26 (Stuart): a preset, with MLAT and stats left to their client.
 2. Put the push feeds on the phone's server screen too? They are there now. Is that wanted for phones on mobile data?
