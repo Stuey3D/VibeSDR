@@ -8,8 +8,7 @@ for the next store update.
 - Everything below is committed on `b95-duo`; nothing pushed or merged.
 - Owed: a look on the Duo simulator / a real Duo at the half-open BIG boxes for the V12-only decoders (they stay one box
   below the fold, BIG not offered — see "Not split"), and at the FM-DX screen in every pose with a live FM-DX server
-  (the simulator shots were taken without a server connected, so the dial and deck are drawn but the station card is
-  empty).
+  (no simulator shots were possible — see "How it was tested").
 - Not done on either branch (pre-existing, from the 11.0.17 notes): the band-label overprint rule in the WEB client
   (`web/client/src/main.ts` drawBandBar). The app's rule (WaterfallView, 35459577a) is ported.
 
@@ -55,4 +54,9 @@ No rects (every iPhone / iPad / Mac / Android) = all zero, layout unchanged.
 - test_duo_layout (with 8 new rowClearance checks), test_edge_chip, test_shared_banner, test_servers_chip,
   test_decoder_shell_layout, test_receiver_place (tsx) 29/0, test_chat_i18n 102/0, test_faceplate_nixie 18347/0,
   check-servers-menu-layer: all pass.
-- Simulator: see the report / ~/Desktop/duo-fmdx-check/.
+- Simulator: NOT run. A local iOS simulator build is not possible from this tree as it stands: the committed
+  `ios/VibeSDR/opus/libopus.a` and `modules/vibe-local-sdr/libs/libvibelocalsdr_ios.a` are DEVICE-only arm64 (platform
+  IOS), so a simulator link fails (Release; Debug failed earlier on RCTEventEmitter / a Swift 6.4.2-vs-5.10 module
+  mismatch). Retagging the objects (vtool) failed (no room for the load commands); rebuilding opus for the simulator from
+  the xiph source was refused by the permission system. The FM-DX fix rests on geometry reasoning with the simulator's
+  measured rects (test_duo_layout) — a device / sim look is owed.
