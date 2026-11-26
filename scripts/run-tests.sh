@@ -198,6 +198,10 @@ flags_for() {
     # ★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): Beast round trip, settings, the local server and a push
     #   feed against 127.0.0.1 test sockets only (never a real aggregator), the service's sink end to end.
     test-adsb-feed)        echo "-O2 -pthread" ;;
+    # ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (vibe_feeds.h, vibe_sbs.h): BaseStation parsing (dumphfdl's line + junk),
+    #    labels (HFDL never ADS-B), a LISTEN source, two sources merged in the shared table, the banner, and the hub as a
+    #    middle man (each reply once, byte-faithful, HFDL never forwarded, the loop guard, own-only). 127.0.0.1 only. ~12 s.
+    test-aircraft-feeds)   echo "-O2 -pthread" ;;
     # ★★ V12 beta96 the ADS-B DELTA protocol's encoder (vibe_adsb_delta.h): quantising, the header walk, ids, keyframes, the
     #    150-aircraft synthetic sky's bytes and cost. scripts/test_adsb_delta.ts runs its --stream against the clients' store.
     test-adsb-delta)       echo "-O2" ;;

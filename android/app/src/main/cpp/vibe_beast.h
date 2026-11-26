@@ -356,42 +356,43 @@ public:
     /** ★ ON THE DECODER THREAD: encode, append, return. Never blocks on a socket. */
     /** `addr` = the aircraft's address (for the push feeds' reduce); `now` = seconds on any steady clock (the frame's). */
     void frame(const uint8_t* msg, int len, uint64_t ts12, float dbfs, uint32_t addr, double now) {
-        put(msg, len, ts12, signalByte(dbfs), addr, now, true);
+        put(msg, len, ts12, signalByte(dbfs), addr, now, true, 0);
     }
     /** ★★ beta96 A FEED SOURCE'S REPLY, BYTE-FAITHFUL: the timestamp and signal byte exactly as the upstream receiver sent
      *  them (the Beast escaping is deterministic, so the bytes on the wire are the bytes received). `own` false: a
      *  destination set to "only my own radios" never gets it. From the source's network thread. */
-    void frameRaw(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig, uint32_t addr, double now, bool own = false) {
-        put(msg, len, ts12, sig, addr, now, own);
+    void frameRaw(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig, uint32_t addr, double now, bool own = false, uintptr_t input = 1) {
+        put(msg, len, ts12, sig, addr, now, own, input);
     }
     /** Frames refused as the same reply already sent by another input (the de-duplication window). */
     uint64_t duplicates() const { std::lock_guard<std::mutex> lk(mtx_); return dups_; }
 
 private:
-    /** ★★ beta96 DE-DUPLICATION: the same reply (same bytes) from two of our inputs — two receivers hearing one aircraft,
-     *  or a source that is also fed by one of our radios — is sent once. A reply is a duplicate when the same 7 or 14
-     *  bytes were taken within kDupSec. A genuine repeat (an aircraft squitters the same identification) a moment later
-     *  is still sent: the window is shorter than any squitter interval that repeats bytes exactly (DF17 positions change
-     *  every frame; identity squitters repeat every ~5 s). Bounded at 50 000 keys. */
-    static constexpr double kDupSec = 1.0;
+    /** ★★ beta96 DE-DUPLICATION: the same reply (same bytes) from two DIFFERENT inputs — two receivers hearing one
+     *  aircraft, or a source that is also fed by one of our radios — is sent once: a duplicate is the same 7 or 14 bytes
+     *  taken from ANOTHER input within kDupSec. Repeats from the SAME input always go (a DF11 all-call reply or an
+     *  identification squitter repeats byte for byte, and an aggregator counts them). `input` 0 = this process's own
+     *  decoder, else the feed source (vibe_feeds.h passes its address). Bounded at 50 000 keys. */
+    static constexpr double kDupSec = 2.0;
     static uint64_t frameKey(const uint8_t* m, int len) {
         uint64_t h = 1469598103934665603ull;
         for (int i = 0; i < len; ++i) { h ^= m[i]; h *= 1099511628211ull; }
         return h ^ uint64_t(len);
     }
-    void put(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig, uint32_t addr, double now, bool own) {
+    void put(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig, uint32_t addr, double now, bool own, uintptr_t input) {
         if (!wanted_.load(std::memory_order_relaxed)) return;
         std::lock_guard<std::mutex> lk(mtx_);
         ++framesIn_;
-        {
+        {   // ★ one clock for every input (each source's own `now` starts at its own zero)
+            const double now = mono();
             const uint64_t k = frameKey(msg, len);
             auto it = seen_.find(k);
-            if (it != seen_.end() && now >= it->second && now - it->second < kDupSec) { ++dups_; return; }
+            if (it != seen_.end() && it->second.input != input && now >= it->second.t && now - it->second.t < kDupSec) { ++dups_; return; }
             if (seen_.size() >= 50000) {
-                for (auto i = seen_.begin(); i != seen_.end();) i = (now - i->second > kDupSec || now < i->second) ? seen_.erase(i) : std::next(i);
+                for (auto i = seen_.begin(); i != seen_.end();) i = (now - i->second.t > kDupSec || now < i->second.t) ? seen_.erase(i) : std::next(i);
                 if (seen_.size() >= 50000) seen_.clear();
             }
-            seen_[k] = now;
+            seen_[k] = Seen{now, input};
         }
         std::vector<uint8_t>& P = own ? pending_ : pendingF_;
         std::vector<uint8_t>& PR = own ? pendingR_ : pendingFR_;
@@ -807,7 +808,8 @@ private:
     double lastActive_ = 0;
     std::vector<uint8_t> pending_, pendingR_; uint32_t pendingMsgs_ = 0, pendingRMsgs_ = 0;
     std::vector<uint8_t> pendingF_, pendingFR_; uint32_t pendingFMsgs_ = 0, pendingFRMsgs_ = 0;   // ★ beta96 feed sources' frames
-    std::unordered_map<uint64_t, double> seen_; uint64_t dups_ = 0;                                 // ★ beta96 de-duplication
+    struct Seen { double t; uintptr_t input; };
+    std::unordered_map<uint64_t, Seen> seen_; uint64_t dups_ = 0;                                 // ★ beta96 de-duplication
     std::unordered_map<uint64_t, double> lastSent_;   // the reduce's memory (bounded in frame())
     uint64_t framesIn_ = 0, pendingDropped_ = 0;
     std::string status_;

@@ -58,6 +58,8 @@ constexpr int kSbsPort = 32010;                       ///< the port Stuart's dum
 constexpr const char* kStatusFile = "aircraft-feeds.json";
 constexpr const char* kIngestPortFile = "adsb-ingest.port";
 constexpr double kStatusEverySec = 2.0;
+/** How long without a link (or, ADS-B, without data) makes a source DOWN: beast::kStallSec (90 s). A test shortens it. */
+inline double& stallSec() { static double s = beast::kStallSec; return s; }
 
 /** One source as the owner set it. */
 struct SourceCfg {
@@ -132,6 +134,8 @@ public:
     using Sink = std::function<size_t(int id, const uint8_t*, size_t)>;
     ~Listener() { stop(); }
     void setLog(std::function<void(const std::string&)> f) { std::lock_guard<std::mutex> lk(m_); log_ = std::move(f); }
+    /** A test's own rule in place of the LAN rule (nullptr = beast::peerAllowed, LAN only). */
+    void setAllow(std::function<bool(const std::string&)> f) { std::lock_guard<std::mutex> lk(m_); allow_ = std::move(f); }
     /** `loopbackOnly`: the radios' own ADS-B ingest (127.0.0.1 only). `port` 0 = any free port (the ingest). */
     void start(int port, bool loopbackOnly, Sink sink, const std::string& name) {
         stop();
@@ -226,6 +230,7 @@ private:
             if (pf.empty()) { std::this_thread::sleep_for(std::chrono::milliseconds(200)); continue; }
             if (::poll(pf.data(), nfds_t(pf.size()), 200) <= 0) continue;
             size_t k = 0;
+            const size_t polled = cs.size();   // ★ clients accepted below were not in this poll
             if (lfd >= 0) {
                 if (pf[0].revents & POLLIN) {
                     for (int n = 0; n < 4; ++n) {
@@ -233,7 +238,8 @@ private:
                         const int fd = ::accept(lfd, (sockaddr*)&ss, &sl);
                         if (fd < 0) break;
                         const std::string peer = peerOf(ss);
-                        const bool ok = loop_ ? (peer == "::1" || peer.rfind("127.", 0) == 0) : beast::peerAllowed(peer, false);
+                        std::function<bool(const std::string&)> al; { std::lock_guard<std::mutex> lk(m_); al = allow_; }
+                        const bool ok = al ? al(peer) : loop_ ? (peer == "::1" || peer.rfind("127.", 0) == 0) : beast::peerAllowed(peer, false);
                         if (!ok || (int)cs.size() >= kMaxClients) {
                             ::close(fd);
                             std::string why = !ok ? peer + " is not on this network \xe2\x80\x94 refused" : peer + " refused: " + std::to_string(kMaxClients) + " connected already";
@@ -268,7 +274,7 @@ private:
                 }
                 k = 1;
             }
-            for (size_t i = 0; i < cs.size(); ++i, ++k) {
+            for (size_t i = 0; i < polled; ++i, ++k) {
                 if (!(pf[k].revents & (POLLIN | POLLHUP | POLLERR))) continue;
                 const ssize_t n = ::recv(cs[i].fd, buf.data(), buf.size(), 0);
                 if (n > 0) {
@@ -299,6 +305,7 @@ private:
     int port_ = 0, bound_ = 0; bool loop_ = false, run_ = false;
     Sink sink_; std::string name_, err_, lastRefused_;
     std::function<void(const std::string&)> log_;
+    std::function<bool(const std::string&)> allow_;
     std::thread th_;
     std::vector<std::string> peers_;
     double startMono_ = 0, lastClient_ = 0, lastData_ = 0, perSec_ = 0;
@@ -337,6 +344,7 @@ public:
     }
     void stop() { in_.stop(); ln_.stop(); }
     int boundPort() const { return ln_.boundPort(); }
+    Listener& listener() { return ln_; }
 
     /** ★ The shared table's provider: rows heard since `sinceMs`, tagged with this source's label. */
     void shareSince(int64_t sinceMs, std::vector<vibeavshare::Update>& out) {
@@ -381,12 +389,12 @@ public:
         if (c_.dir == "connect") {
             const long ds = in_.downSinceUtc();
             if (ds > 0) { secs = double(std::time(nullptr) - ds); return true; }
-            if (adsb && in_.connected() && in_.secsSinceData() > beast::kStallSec) { secs = in_.secsSinceData(); return true; }
+            if (adsb && in_.connected() && in_.secsSinceData() > stallSec()) { secs = in_.secsSinceData(); return true; }
             return false;
         }
         const double noClient = ln_.secsWithoutClient();
-        if (noClient > beast::kStallSec) { secs = noClient; return true; }
-        if (adsb && ln_.clients() && ln_.secsSinceData() > beast::kStallSec) { secs = ln_.secsSinceData(); return true; }
+        if (noClient > stallSec()) { secs = noClient; return true; }
+        if (adsb && ln_.clients() && ln_.secsSinceData() > stallSec()) { secs = ln_.secsSinceData(); return true; }
         return false;
     }
     /** The hosts this source's data comes from (the hub's loop guards): its upstream, or who connected to it. */
@@ -414,6 +422,7 @@ public:
             perSec = ln_.perSec(); msgs = ln_.msgs(); err = ln_.error();
             const auto ps = ln_.peers();
             if (!err.empty()) { st = "error"; line = "cannot listen on " + where + ": " + err; }
+            else if (ln_.boundPort() <= 0) { st = "opening"; line = "opening " + where; }
             else if (ps.empty()) { st = "listening"; line = "listening on " + where + " \xe2\x80\x94 nothing connected" + (ln_.connects() ? " (the sender left " + beast::spanWords(ln_.secsWithoutClient()) + " ago)" : " yet"); }
             else {
                 st = c_.label == "adsb" && ln_.secsSinceData() > beast::kQuietSec ? "stalled" : "connected";
@@ -450,7 +459,7 @@ private:
                 const uint8_t* m = d.msg.data();
                 const int df = m[0] >> 3;
                 const uint32_t addr = (df == 11 || df == 17 || df == 18) ? (uint32_t(m[1]) << 16 | uint32_t(m[2]) << 8 | m[3]) : vibeadsb::syndrome(m, len);
-                hub_->frameRaw(m, len, d.ts, d.sig, addr, t, c_.internal);
+                hub_->frameRaw(m, len, d.ts, d.sig, addr, t, c_.internal, uintptr_t(this));
             }
         }
     }
@@ -507,6 +516,8 @@ public:
     /** ★ Full layout: the radios' own ADS-B comes in on a loopback port (their hub pushes there) — the server-level
      *  destinations get every radio's decodes plus the feeds. */
     void setIngest(bool on) { std::lock_guard<std::mutex> lk(m_); ingest_ = on; }
+    /** A test's address rule for every listen source (nullptr = the LAN rule). */
+    void setAllow(std::function<bool(const std::string&)> f) { std::lock_guard<std::mutex> lk(m_); allow_ = std::move(f); key_ = "\x01"; }
 
     /** Apply the owner's list (restarts the sources only when it changed). */
     bool configure(const std::vector<SourceCfg>& list) {
@@ -517,18 +528,24 @@ public:
         std::string k; for (const auto& c : want) k += key(c) + ";";
         {
             std::lock_guard<std::mutex> lk(m_);
-            if (k == key_ && (run_ || want.empty())) return true;
+            if (k == key_) return true;
             key_ = k;
         }
         stopSources();
         std::vector<std::unique_ptr<Source>> made;
         beast::Hub* hub; std::function<void(const std::string&)> log; double la, lo;
         { std::lock_guard<std::mutex> lk(m_); hub = hub_; log = log_; la = rxLat_; lo = rxLon_; }
-        for (const auto& c : want) { made.emplace_back(new Source(c, hub, log)); made.back()->start(la, lo); }
+        std::function<bool(const std::string&)> allow; { std::lock_guard<std::mutex> lk(m_); allow = allow_; }
+        for (const auto& c : want) {
+            made.emplace_back(new Source(c, hub, log));
+            if (allow && !c.internal) made.back()->listener().setAllow(allow);
+            made.back()->start(la, lo);
+        }
         {
             std::lock_guard<std::mutex> lk(m_);
             src_ = std::move(made);
         }
+        if (hub) hub->setInputHosts(inputHosts());   // ★ the loop guards before any destination can connect
         if (!want.empty()) {
             vibeavshare::sharer().provide("feeds", [this](int64_t since, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>&) {
                 std::lock_guard<std::mutex> lk(m_);
@@ -632,10 +649,11 @@ private:
     }
     std::mutex m_;
     std::vector<std::unique_ptr<Source>> src_;
-    std::string key_, dir_;
+    std::string key_, dir_;   // ★ key_ "" = configured empty (the start)
     beast::Hub* hub_ = nullptr;
     std::function<void(const std::string&)> log_;
     double rxLat_ = NAN, rxLon_ = NAN;
+    std::function<bool(const std::string&)> allow_;
     bool ingest_ = false, run_ = false;
     std::thread hk_;
 };
