@@ -24,13 +24,14 @@
  *   optional download). MapLibre over-zooms the basic pack where the detail one is absent, so a
  *   device without it still draws a complete, coarser map — never a hole.
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, statSync, rmSync } from 'node:fs';
 import { createWriteStream } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { encodePng } from './lib/relief.mjs';
+import { joinBasicWater } from './lib/basic-water.mjs';
 
 /** ★ --only=relief rebuilds just the relief (seconds) without the vector packs (minutes). */
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7);
@@ -293,9 +294,17 @@ for (const pack of ['vibemap-basic', 'vibemap-runways', 'vibemap-detail']) {
     if (!existsSync(ra)) { console.error('no build/maptiles/riverareas.ndjson — run scripts/gen-river-areas.mjs first (or pass --no-riverareas)'); process.exit(1); }
     extra.push(ra);
   }
-  execFileSync('tippecanoe', ['-o', out, '--force', `-Z${pack === 'vibemap-runways' ? 8 : 0}`, `-z${pack === 'vibemap-basic' ? 7 : MAXZ}`,
+  /* ★★ THE BASIC PACK'S RIVERS (beta96): gen-river-areas.mjs --basic writes them as their own pack, joined in below
+   *  (lib/basic-water.mjs). A basic pack without them puts Rotterdam's ships back on land on every server and app
+   *  without High Detail Maps, so it is refused (--no-basicwater to build one on purpose). */
+  const basicWater = path.join(OUT, 'vibemap-basicwater.pmtiles');
+  const joinWater = pack === 'vibemap-basic' && !process.argv.includes('--no-basicwater');
+  if (joinWater && !existsSync(basicWater)) { console.error('no build/maptiles/vibemap-basicwater.pmtiles — run scripts/gen-river-areas.mjs --basic first (or pass --no-basicwater)'); process.exit(1); }
+  const tOut = joinWater ? path.join(OUT, 'vibemap-basic.nowater.pmtiles') : out;
+  execFileSync('tippecanoe', ['-o', tOut, '--force', `-Z${pack === 'vibemap-runways' ? 8 : 0}`, `-z${pack === 'vibemap-basic' ? 7 : MAXZ}`,
     '--no-feature-limit', '--no-tile-size-limit', '--quiet',
     '-P', path.join(OUT, `${pack}.ndjson`), ...extra], { stdio: 'inherit' });
+  if (joinWater) { joinBasicWater(tOut, basicWater, out); rmSync(tOut, { force: true }); }
   console.log(`${pack}.pmtiles  ${(statSync(out).size / 1048576).toFixed(1)} MB`);
 }
 }   // end vector packs

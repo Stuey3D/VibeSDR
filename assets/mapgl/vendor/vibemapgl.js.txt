@@ -82,6 +82,21 @@
         for (const l of st.layers) if (z5.has(l.id) && l.source === 'basic') l.source = 'vs-basic-z5';
       }
     }
+    /* ★★★ SHIPS ON WATER WITHOUT HIGH DETAIL MAPS (beta96, Stuart 11-26 — a tester's 600 AIS ships at Rotterdam all
+     *  "on land"). The basic pack now carries the river areas >= 200 m in its z5–8 tiles (gen-river-areas.mjs --basic).
+     *  The style's vibesdr:basicRivers layers read them through their OWN source on the same pack, maxzoom 8, so the
+     *  z8 tiles over-zoom above; the basic source stays maxzoom 6, so the land never asks for the river-only z7/z8
+     *  tiles. With the detail pack they stop where its riverareas-d starts (z8): one river drawn once, never twice. */
+    const rivers = new Set((st.metadata && st.metadata['vibesdr:basicRivers']) || []);
+    if (rivers.size && st.sources.basic) {
+      st.sources['vs-basic-rivers'] = Object.assign({}, st.sources.basic, { minzoom: 5, maxzoom: 8 });
+      const dRiv = hasDetail && st.layers.find((l) => l.id === 'riverareas-d');
+      for (const l of st.layers) {
+        if (!rivers.has(l.id) || l.source !== 'basic') continue;
+        l.source = 'vs-basic-rivers';
+        if (dRiv && dRiv.minzoom != null) l.maxzoom = dRiv.minzoom;
+      }
+    }
     applyProfileToStyle(st, profile);
     applyTextScale(st);
     return st;
