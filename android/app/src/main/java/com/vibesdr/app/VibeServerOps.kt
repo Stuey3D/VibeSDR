@@ -90,6 +90,7 @@ object VibeServerOps {
         "setupCode.issue"  -> VibeRemoteSetup.setupCodeIssue(ctx)
         "setupCode.cancel" -> VibeRemoteSetup.setupCodeCancel(ctx)
         "setupCode.state"  -> VibeRemoteSetup.setupCodeState(ctx)
+        "reset.all"        -> VibeRemoteSetup.resetAll(ctx, a)   // ★★★ beta96 device only — no HTTP route reaches this
         else               -> fail("unknown_method", "the server does not know \"$method\"")
     }
 
@@ -408,6 +409,8 @@ object VibeServerOps {
     }
 
     @Volatile private var rtlRunning = false
+    /** ★ For RESET ALL SETTINGS (VibeRemoteSetup.resetAll). */
+    fun rtlStopPublic(ctx: Context) = rtlStop(ctx)
 
     @Synchronized
     internal fun rtlStop(ctx: Context) {

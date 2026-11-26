@@ -328,6 +328,46 @@ object VibeRemoteSetup {
     // The TV shows a one-time code; a laptop on the same network opens /setup, types it, and its first and only step is
     // to SET the first admin password (typed there, twice). Then remote access to /setup is switched ON — the point of
     // it — and the laptop carries on as an ordinary admin. With a password already set, no code is issued at all.
+    /* ★★★ beta96 RESET ALL SETTINGS AND START AGAIN — DEVICE ONLY (Stuart, 2026-11-26). Reached only through the app's own
+     *  binder (VibeServerOps "reset.all"); there is no HTTP route, and a /setup save naming it is refused
+     *  (vibe_android_setup.h settingsPatch). Confirmed with the ADMIN PASSWORD (or, where none was ever set, the word
+     *  RESET) — a slow TV must not do this by accident. What it wipes is listed in docs/v12/SERVER-CHOICE.md and in the
+     *  screen's confirm text; the app's own listening things are not touched. */
+    fun resetAll(ctx: Context, a: JSONObject): JSONObject {
+        remember(ctx)
+        val stored = settings(ctx).optString("adminPassword", "")
+        val typed = a.optString("password", "")
+        val okPw = if (stored.isNotEmpty()) ctEq(stored, typed) else a.optString("confirmWord", "") == "RESET"
+        if (!okPw) return VibeServerOps.fail("wrong_password",
+            if (stored.isNotEmpty()) "That is not the admin password. Nothing was changed." else "Type RESET to confirm. Nothing was changed.")
+        Log.i(TAG, "RESET ALL SETTINGS confirmed on the device (data too: ${a.optBoolean("wipeData", false)})")
+        try { VibeServerOps.stopVibeServer(ctx) } catch (t: Throwable) { Log.w(TAG, "reset: stop: $t") }
+        try { VibeServerOps.rtlStopPublic(ctx) } catch (_: Throwable) {}
+        try { VibeLocalSDR.setupCodeCancel() } catch (_: Throwable) {}
+        setupWindow = false
+        try { VibeTunnel.delist(ctx) } catch (t: Throwable) { Log.w(TAG, "reset: delist: $t") }
+        synchronized(this) {
+            java.io.File(ctx.filesDir, STORE).delete()
+            java.io.File(ctx.filesDir, FLAG).delete()
+        }
+        try { VibeServerRestore.forgetAll(ctx) } catch (t: Throwable) { Log.w(TAG, "reset: restore prefs: $t") }
+        try { VibeLocalSDR.setVibeServerAdminSecret(""); VibeLocalSDR.setVibeServerAuth("") } catch (_: Throwable) {}
+        applySwitch(ctx)
+        if (a.optBoolean("wipeData", false)) {
+            // ★ Only with the owner's tick (off by default): the gallery, the DX log and the learned bookmarks.
+            try { VibeServerBoot.galleryDir(ctx.filesDir).deleteRecursively() } catch (_: Throwable) {}
+            for (f in listOf("dxlog.json", "vibe_bookmarks.json")) try { java.io.File(ctx.filesDir, f).delete() } catch (_: Throwable) {}
+        }
+        VibeServerOps.emit("reset", JSONObject().put("wipeData", a.optBoolean("wipeData", false)))
+        return VibeServerOps.ok()
+    }
+    private fun ctEq(x: String, y: String): Boolean {
+        val a = x.toByteArray(Charsets.UTF_8); val b = y.toByteArray(Charsets.UTF_8)
+        var d = a.size xor b.size
+        for (i in 0 until maxOf(a.size, b.size)) d = d or ((if (i < a.size) a[i].toInt() else 0) xor (if (i < b.size) b[i].toInt() else 0))
+        return d == 0
+    }
+
     @JvmStatic private external fun nativeSetupInit()
     /** ★ The remote first-time setup window is open: /setup stays served until the TV's screen closes it. */
     @Volatile private var setupWindow = false

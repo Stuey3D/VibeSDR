@@ -663,6 +663,9 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
      *  turns it on or off. */
     for (const char* k : {"remoteAccess", "remoteSetup", "remote"})
         if (b.get(k)) { err = "Remote access to server settings can only be changed on the device itself."; return false; }
+    // ★★★ …and RESET ALL SETTINGS is the device's alone too: never offered here, refused if a save names it.
+    for (const char* k : {"factoryReset", "resetAll", "reset"})
+        if (b.get(k)) { err = "Reset all settings can only be done on the device itself."; return false; }
     J cur; if (!parse(current, cur) || cur.t != J::Obj) cur = J::obj();
     J noSettings = J::obj();
     const J* curS = cur.get("settings"); if (!curS || curS->t != J::Obj) curS = &noSettings;

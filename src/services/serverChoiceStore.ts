@@ -88,3 +88,20 @@ export async function savePinOnDevice(pin: string): Promise<void> {
   try { await Local?.serverSettingsPut?.(JSON.stringify({ pin }), false); } catch { /* the next Start sends it */ }
   try { Local?.setVibeServerPin?.(pin); } catch { /* not running */ }
 }
+
+/* ★★★ beta96 RESET ALL SETTINGS AND START AGAIN — device only (VibeRemoteSetup.resetAll). The server side checks the
+ *  admin password (or the word RESET where none was ever set) and wipes its store, the restore, remote access and the
+ *  listing; this side then wipes the app's copy of the SERVER settings — every 'vs_' key, the server's location and the
+ *  local name — and nothing of the app's own listening (favourites, the directory, the receiver's own settings).
+ *  `wipeData` (the owner's tick, off by default) also deletes the gallery, the DX log and the learned bookmarks. */
+export const RESET_EXTRA_KEYS = ['lsv_server_location', 'vsdr_rtltcp_server_name', 'vsdr_rtltcp_server_persist'];
+export function serverKeysToWipe(all: readonly string[], wipeData: boolean): string[] {
+  return all.filter((k) => (k.startsWith('vs_') && (wipeData || k !== 'vs_learned_bookmarks')) || RESET_EXTRA_KEYS.includes(k));
+}
+export async function resetAllServerSettings(password: string, confirmWord: string, wipeData: boolean): Promise<void> {
+  if (typeof Local?.resetAllServerSettings !== 'function') throw new Error('This build cannot reset the server.');
+  await Local.resetAllServerSettings(password, confirmWord, wipeData);   // ★ rejects with the server's words
+  const all = await AsyncStorage.getAllKeys();
+  const wipe = serverKeysToWipe(all, wipeData);
+  if (wipe.length) await AsyncStorage.multiRemove(wipe);
+}

@@ -1195,6 +1195,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         if (!serverProcessUp()) { promise.resolve(null); return }
         ask("setupCode.cancel", JSONObject(), promise) { null }
     }
+    /** ★★★ RESET ALL SETTINGS AND START AGAIN — device only. Rejects with the server's words (wrong password). */
+    @ReactMethod
+    fun resetAllServerSettings(password: String, confirmWord: String, wipeData: Boolean, promise: Promise) =
+        ask("reset.all", JSONObject().put("password", password).put("confirmWord", confirmWord).put("wipeData", wipeData),
+            promise, serial = true) { true }
     /** {state, hasAdminPassword, remote} as JSON. */
     @ReactMethod
     fun setupCodeState(promise: Promise) = ask("setupCode.state", JSONObject(), promise) { it.toString() }

@@ -130,6 +130,11 @@ int main() {
             const bool okSave = vibe::androidsetup::settingsPatch(body, patch, restart, err);
             ok(!okSave && err.find("on the device itself") != std::string::npos, "a remote save touching remote access is refused, with the reason");
         }
+        for (const char* body : {R"({"factoryReset":true})", R"({"resetAll":1})"}) {
+            std::string patch, err; bool restart = false;
+            ok(!vibe::androidsetup::settingsPatch(body, patch, restart, err) && err.find("device itself") != std::string::npos,
+               "RESET ALL SETTINGS is refused from the remote page");
+        }
         std::string patch, err; bool restart = false;
         ok(vibe::androidsetup::settingsPatch(R"({"radios":[]})", patch, restart, err), "an ordinary save still goes through");
     }

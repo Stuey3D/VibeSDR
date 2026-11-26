@@ -367,6 +367,9 @@ object VibeServerRestore {
     }
 
     /** ★ Disarming also spends any gone-stamp: a stopped server has no radio to wait for. */
+    /** ★★ beta96 RESET ALL SETTINGS (device only) — forget everything this file keeps: the config, the radio, the stamps. */
+    fun forgetAll(ctx: Context) { disarm(ctx); prefs(ctx).edit().clear().commit() }
+
     fun disarm(ctx: Context) {
         prefs(ctx).edit().putBoolean(K_ARMED, false)
             .remove(K_GONE_ELAPSED).remove(K_GONE_BOOTWALL).remove(K_GONE_BOOTNO).apply()
