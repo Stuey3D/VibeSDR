@@ -12,7 +12,11 @@
 //    at all (which area is that ship in?) — and the forecasts are weather. Switching the arrows off must not take Dogger
 //    away, and the reverse. The TINT is the weather's (it says what the forecast says), so it follows WEATHER.
 //  · ABSENT WHERE THERE IS NO DATA: the toggle is drawn only when an area lies within reach of this map (the receiver,
-//    or a forecast's area) — a server in Japan gets no SEA AREAS toggle that would draw nothing (seaAreasNear).
+//    or a forecast's area) — an inland server gets no SEA AREAS toggle (seaAreasNear / seaAreasFor).
+//  · ★★ beta95 DRAWN WORLDWIDE (Stuart 11-25: "worldwide shipping areas are fantastic… only seen the uk ones"): with the
+//    toggle on, EVERY area in the current view is drawn (as the community map does) — each item carries its box (_vb)
+//    and the map layer (tracklayer.js) makes only those on screen, again as the map moves. The forecast tints stay the
+//    receiver's own (its NAVTEX forecasts); the attribution follows the areas in view (seaAreasInView).
 //  · DECLUTTER: names drop before outlines — a UK / offshore area's name from zoom 4 / 5, a US coastal zone's outline
 //    from zoom 6 and its name from 8; a name yields to every other icon and label (tracklayer _y), and an area with a
 //    current forecast shows no name of its own (the forecast's arrow label carries it).
@@ -118,6 +122,7 @@ export function seaAreaItems(areas: SeaArea[], fcBy: Map<string, SeaFc>, wrap: '
              minZoom: sev ? 0 : SEA_LINE_ZOOM[a.kind] },
       // ★ an area with a forecast: its own marker never shows (the forecast's is the button), only its outline
       _mz: f ? 99 : SEA_NAME_ZOOM[a.kind], _y: true, _nofit: true, _rk: -1e6 + (a.kind === 's' ? 2 : a.kind === 'o' ? 1 : 0),
+      _vb: a.bbox,   // ★ beta95 drawn while in view (tracklayer.js) — the areas are worldwide
       // ★ the NAME first ("Dogger sea area"): a forecast's marker says "Sea area Dogger: …" — the two never read alike
       _aria: `${a.name} sea area${sev === 2 ? ': gale in force' : sev === 1 ? ': near gale' : ''}. Press Enter for the card.`,
     };
@@ -148,13 +153,31 @@ export function seaAreasFor(rx: { lat: number; lon: number } | null, met: { area
   const ids = met ? met.areas.map((a) => a.id) : [];
   return seaAreasNear(rx ? [rx] : [], ids);
 }
-/** ★ The SEA AREAS layer's items. `weatherOn`: the WEATHER layer is drawn — the current forecasts tint their areas and
- *  carry the names; with WEATHER off the areas are plain outlines with their names. */
-export function seaCompose(rx: { lat: number; lon: number } | null, met: { areas: MetAreaLike[] } | null, weatherOn: boolean, wrap: 'web' | 'app' = 'web'): { items: any[]; attribution: string; count: number } {
-  const areas = seaAreasFor(rx, met);
+/** ★ beta95 the areas whose box meets a view [s, w, n, e] (tracklayer's viewBox; across ±180° too). No view: the near set. */
+export function seaAreasInView(view: [number, number, number, number] | null, rx: { lat: number; lon: number } | null = null, met: { areas: MetAreaLike[] } | null = null): SeaArea[] {
+  if (!view) return seaAreasFor(rx, met);
+  const [s, w, n, e] = view;
+  return seaAreas().filter((a) => {
+    const [y0, x0, y1, x1] = a.bbox;
+    if (s > y1 || n < y0) return false;
+    if (e - w >= 360) return true;
+    for (let sh = -360; sh <= 360; sh += 360) if (w + sh <= x1 && e + sh >= x0) return true;
+    return false;
+  });
+}
+/** ★ The SEA AREAS layer's items — ★ beta95 EVERY area (each with its _vb box: the layer draws those in view). `weatherOn`:
+ *  the WEATHER layer is drawn — the current forecasts tint their areas and carry the names; with WEATHER off the areas
+ *  are plain outlines with their names. `attribution`: the sources near the receiver (the host asks seaAreasInView for
+ *  the view's). */
+export function seaCompose(rx: { lat: number; lon: number } | null, met: { areas: MetAreaLike[] } | null, weatherOn: boolean, wrap: 'web' | 'app' = 'web',
+                           view?: [number, number, number, number] | null): { items: any[]; attribution: string; count: number } {
+  /* ★ `view` (the app): the map's padded view as the WebView last reported it — only those areas cross the bridge (all ~900
+   *  outlines are ~1.5 MB of JSON per update; a phone must not carry that). null = not reported yet: the near set. The web
+   *  page passes nothing: its layer holds every item in-process and draws those in view. */
+  const areas = view === undefined ? seaAreas() : view ? seaAreasInView(view) : seaAreasFor(rx, met);
   const fcBy = new Map<string, SeaFc>();
   if (weatherOn && met) for (const a of met.areas) if (!a.stale && a.fc.length) fcBy.set(a.id, a.fc[0]);
-  return { items: seaAreaItems(areas, fcBy, wrap), attribution: seaAttribution(areas), count: areas.length };
+  return { items: seaAreaItems(areas, fcBy, wrap), attribution: seaAttribution(seaAreasFor(rx, met)), count: areas.length };
 }
 /** ★ A forecast's arrow at its area's label point (inside the outline) when the area has one. */
 export function seaPlaceMet<T extends { id: string; lat: number; lon: number }>(areas: T[]): T[] {
@@ -165,6 +188,8 @@ export function seaLegendHtml(weather: boolean, attribution: string): string {
     + (attribution ? `<div class="kr" style="opacity:.7;font-size:10px"><span>${esc(attribution)}</span></div>` : '');
 }
 /** The words for the map's attribution line: the sources whose areas are drawn. */
+/** ★ beta95 every source's line — for a key that cannot know the view (the app's legend, drawn once in its WebView). */
+export function seaAttributionAll(): string { return seaAttribution(seaAreas()); }
 export function seaAttribution(areas: SeaArea[]): string {
   const srcs = [...new Set(areas.map((a) => a.src))].filter((s) => SEA_AREA_SOURCES[s]);
   return srcs.length ? 'Sea areas: ' + srcs.map((s) => SEA_AREA_SOURCES[s].attribution).join(' · ') : '';

@@ -47,7 +47,7 @@ const items = avTrackItems(apps);
 ok(items.length === 2 && items[0].key === '3C6548' && items[0]._lb === 'LH4567' && items[0]._cd.includes('36,000 ft'), `map items: ${items.map((i) => i.key).join(',')}`);
 ok(!avCard({ reg: '<b>x', level: 0, n: 0, age: 0, via: '<img>' }).includes('<img>'), 'the card is escaped');
 const rows = avTrackRows(apps, { lat: 51.5, lon: -0.12 });
-ok(rows.length === 4 && rows[0].sp === 'FL360' && /km$/.test(rows[0].range) && rows[1].range === 'no position' && rows[1].noPos, `map rows: ${rows.map((r) => `${r.key}:${r.sp}:${r.range}`).join(' ')}`);
+ok(rows.length === 4 && rows[0].sp === 'FL360' && / NM$/.test(rows[0].range) && rows[1].range === 'no position' && rows[1].noPos, `map rows: ${rows.map((r) => `${r.key}:${r.sp}:${r.range}`).join(' ')}`);
 
 // ★★ V12 2026-11-24 the Airspy HF+ (no gain figure: its own AGC / attenuator named) and ACARS + VDL2 at a raised rate
 const hf = parseAvReport({ type: 'avdata', band: 'vdl2', bandName: 'VDL2', hz: 136862500, msgs: 2, dropped: 0, aircraft: [],

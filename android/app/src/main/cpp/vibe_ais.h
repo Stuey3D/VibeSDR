@@ -600,6 +600,13 @@ struct Msg {
     uint32_t mmsi = 0;
     // position
     bool hasPos = false; double lat = NAN, lon = NAN;
+    /// ★★ V12 beta95 THE WHOLE-MINUTE MARK (Stuart 11-25: MMSI 244780619 moored in Schiedam sent 00°15.000′N 008°50.000′E):
+    ///    the raw 1/10 000-minute latitude AND longitude both on whole minutes. A real GPS fix does that about once in
+    ///    10^8 reports; a transponder with no fix sending a default or typed-in position does it every time. Set for the
+    ///    28-bit positions only (type 27's 1/10-minute grid lands on whole minutes one time in a hundred). The service
+    ///    decides what it means (vibe_ais_service.h — a moving station's report is rejected; an AtoN or base station's
+    ///    surveyed position may well be round, so it is kept).
+    bool wholeMin = false;
     double sog = NAN, cog = NAN; int heading = -1;   ///< knots, degrees true; heading 0–359
     int rot = -128;                                  ///< raw ROT_AIS (−127…127; −128 = none)
     int nav = -1;                                    ///< navigational status 0–15
@@ -637,8 +644,12 @@ inline bool decode(const std::vector<uint8_t>& bytes, Msg& m) {
     m = Msg();
     m.type = int(B.u(0, 6)); m.repeat = int(B.u(6, 2)); m.mmsi = B.u(8, 30);
     auto pos28 = [&](size_t lonAt, size_t latAt) {
-        const double lon = posOrNan(B.s(lonAt, 28), 600000.0, 180.0), lat = posOrNan(B.s(latAt, 27), 600000.0, 90.0);
-        if (lon == lon && lat == lat && !(lon == 0 && lat == 0)) { m.lon = lon; m.lat = lat; m.hasPos = true; }
+        const int32_t rawLon = B.s(lonAt, 28), rawLat = B.s(latAt, 27);
+        const double lon = posOrNan(rawLon, 600000.0, 180.0), lat = posOrNan(rawLat, 600000.0, 90.0);
+        if (lon == lon && lat == lat && !(lon == 0 && lat == 0)) {
+            m.lon = lon; m.lat = lat; m.hasPos = true;
+            m.wholeMin = rawLon % 10000 == 0 && rawLat % 10000 == 0;
+        }
     };
     auto sog10 = [&](size_t at) { const uint32_t v = B.u(at, 10); if (v < 1023) m.sog = v / 10.0; };
     auto cog12 = [&](size_t at) { const uint32_t v = B.u(at, 12); if (v < 3600) m.cog = v / 10.0; };

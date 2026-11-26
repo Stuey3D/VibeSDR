@@ -1011,6 +1011,8 @@ if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 AIS + APRS in the app (src/services/tracks.ts) against the web's tracks.ts — one rule, two readers
 if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 beta95 the band-plan strip's label room (src/utils/bandLabelPiece.ts — the web strip, the app's WaterfallView rule)
+if npx tsx scripts/test_band_label_piece.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 NCDXF beacons: the shared client half (src/services/ncdxf.ts) and both clients' keys (2026-11-16).
 if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 balloons: the shared client half (src/services/balloons.ts) and both clients' keys.

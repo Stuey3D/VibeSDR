@@ -36,6 +36,45 @@
 
 namespace vibelrpt {
 
+/* ★★★ V12 beta95 THE GAP IS DRAWN AS A GAP (Stuart, 2026-11-25, a Meteor pass on the Sony: "it did draw but scrolled to
+ *  nothing" — the frames lost in the overhead fade were placed by time, geometry right, as SOLID BLACK, and the panel sat
+ *  on the black). Rows with no picture are a dim diagonal HATCH, never plain black, and a gap tall enough is LABELLED in
+ *  the picture itself — "NO SIGNAL 20:24-20:26" — so both clients and anyone saving the preview see what it is. The
+ *  glyphs are our own 5 × 7 drawings, only the characters that label needs. */
+namespace gapart {
+inline const uint8_t* glyph(char c) {
+    static const uint8_t D[10][7] = {
+        {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14}, {14,17,1,2,4,8,31}, {30,1,1,14,1,1,30}, {2,6,10,18,31,2,2},
+        {31,16,30,1,1,17,14}, {6,8,16,30,17,17,14}, {31,1,2,4,8,8,8}, {14,17,17,14,17,17,14}, {14,17,17,15,1,2,12} };
+    static const uint8_t N[7] = {17,25,21,19,17,17,17}, O[7] = {14,17,17,17,17,17,14}, S[7] = {15,16,16,14,1,1,30},
+        I[7] = {14,4,4,4,4,4,14}, G[7] = {14,17,16,23,17,17,15}, A[7] = {14,17,17,31,17,17,17}, L[7] = {16,16,16,16,16,16,31},
+        C[7] = {0,12,12,0,12,12,0}, H[7] = {0,0,0,31,0,0,0};
+    if (c >= '0' && c <= '9') return D[c - '0'];
+    switch (c) { case 'N': return N; case 'O': return O; case 'S': return S; case 'I': return I; case 'G': return G;
+                 case 'A': return A; case 'L': return L; case ':': return C; case '-': return H; default: return nullptr; }
+}
+/** The hatch for a pixel with no picture: dim diagonal stripes (a gap that reads as one on any screen). */
+inline void hatch(uint8_t* px, int x, int y) {
+    const uint8_t v = ((x + y) % 6) < 2 ? 54 : 26;
+    px[0] = v; px[1] = v; px[2] = uint8_t(v + 10);
+}
+/** "20:24" from a satellite stamp (ms of day); "" for none. */
+inline std::string hhmm(int32_t ms) {
+    if (ms < 0) return std::string();
+    char b[8]; const int m = int(ms / 60000) % 1440; std::snprintf(b, sizeof b, "%02d:%02d", m / 60, m % 60); return b;
+}
+/** Is text pixel (x, y) of `t` drawn at `scale` with its top-left at (x0, y0) lit? */
+inline bool lit(const std::string& t, int scale, int x0, int y0, int x, int y) {
+    if (scale <= 0 || x < x0 || y < y0) return false;
+    const int gx = (x - x0) / scale, gy = (y - y0) / scale;
+    if (gy >= 7) return false;
+    const int ci = gx / 6, col = gx % 6;
+    if (ci >= int(t.size()) || col >= 5) return false;
+    const uint8_t* g = glyph(t[size_t(ci)]);
+    return g && ((g[gy] >> (4 - col)) & 1);
+}
+}   // namespace gapart
+
 class Run {
 public:
     static constexpr double kSliceWidthHz = 140000;    ///< flat width asked for: 72k × 1.6 = 115 kHz occupied, + Doppler
@@ -343,12 +382,31 @@ private:
         const int upto = flush ? s1 : s1 - 1;
         std::vector<uint8_t> line(size_t(kPreviewW) * 3);
         auto lv = [](int v, int lo, int hi) { const int o = (v - lo) * 255 / std::max(1, hi - lo); return uint8_t(o < 0 ? 0 : o > 255 ? 255 : o); };
+        // ★★ beta95 the gap this row is in (gapart): its strips [g0, g1), its label and where the label sits — found once a gap
+        int g0 = -1, g1 = -1, ty0 = 0, tx0 = 0, tScale = 0; std::string label;
         for (int y = sentRows_; ; y++) {
             const int s = previewS0_ + y / kPreviewRowsPerStrip, r = (y % kPreviewRowsPerStrip) * (8 / kPreviewRowsPerStrip);
             if (s >= upto || y >= kPreviewMaxH) break;
+            const bool gap = !stripDecoded(s);
+            if (gap && !(s >= g0 && s < g1)) {
+                g0 = s; while (g0 > previewS0_ && !stripDecoded(g0 - 1)) g0--;
+                g1 = s + 1; while (g1 < s1 && !stripDecoded(g1)) g1++;
+                const int r0 = (g0 - previewS0_) * kPreviewRowsPerStrip, h = (g1 - g0) * kPreviewRowsPerStrip;
+                const std::string a0 = gapart::hhmm(g0 > 0 ? rx_->stripTimeMs(g0 - 1) : -1), a1 = gapart::hhmm(g1 < s1 ? rx_->stripTimeMs(g1) : -1);
+                label = "NO SIGNAL" + (a0.empty() ? std::string() : " " + a0 + (a1.empty() || a1 == a0 ? std::string() : "-" + a1));
+                tScale = h >= 7 * 2 + 6 ? 2 : h >= 9 ? 1 : 0;
+                if (tScale && int(label.size()) * 6 * tScale > kPreviewW - 8) tScale = 1;
+                ty0 = r0 + (h - 7 * tScale) / 2;
+                tx0 = (kPreviewW - (int(label.size()) * 6 - 1) * tScale) / 2;
+            }
             for (int x = 0; x < kPreviewW; x++) {
                 const int px = x * (kLineWidth / kPreviewW), col = px / 8;
-                if (!a->has(s, col) || !b->has(s, col)) { line[size_t(x) * 3] = line[size_t(x) * 3 + 1] = line[size_t(x) * 3 + 2] = 0; continue; }
+                if (!a->has(s, col) || !b->has(s, col)) {
+                    uint8_t* q = &line[size_t(x) * 3];
+                    if (gap && gapart::lit(label, tScale, tx0, ty0, x, y)) { q[0] = 214; q[1] = 214; q[2] = 224; }
+                    else gapart::hatch(q, x, y);
+                    continue;
+                }
                 const size_t pi = (size_t(s) * 8 + size_t(r)) * kLineWidth + size_t(px);
                 uint8_t R = lv(a->pixels()[pi], lo1, hi1), B = lv(b->pixels()[pi], lo2, hi2);
                 if (inv) R = B = uint8_t(255 - R);
@@ -360,6 +418,12 @@ private:
             sentRows_ = y + 1;
         }
         liveGeo();
+    }
+    /** ★ beta95 strip `s` carries any picture in a live channel (else it is a gap: gapart). */
+    bool stripDecoded(int s) const {
+        if (!rx_) return false;
+        for (int a : rx_->liveApids()) { const Channel& c = rx_->channels().at(a); for (int k = 0; k < kMcuPerLine; k++) if (c.has(s, k)) return true; }
+        return false;
     }
     void status(const std::string& why) {
         // ★ the second's average of the demodulator's Es/N0 → (S+N)/N in dB: what the waterfall shows over its floor at
@@ -376,7 +440,11 @@ private:
                + ",\"symbolRate\":" + std::to_string(int(rx_->symbolRate())) + ",\"lock\":" + std::to_string(int(std::lround(rx_->lockMetric() * 100)))
                + ",\"offsetHz\":" + std::to_string(int(std::lround(rx_->carrierHz())))
                + ",\"frames\":" + std::to_string((unsigned long long)s.rsOk) + ",\"bad\":" + std::to_string((unsigned long long)s.rsFail)
-               + ",\"packets\":" + std::to_string((unsigned long long)s.packets) + ",\"lines\":" + std::to_string((s1 - s0) * 8) + ",\"channels\":[";
+               + ",\"packets\":" + std::to_string((unsigned long long)s.packets) + ",\"lines\":" + std::to_string((s1 - s0) * 8);
+            // ★★ beta95 decoded lines apart from the gap's (the "656 lines" of 11-25 held ~450 of no signal)
+            { int dec = 0; for (int k = s0; k < s1; k++) if (stripDecoded(k)) dec++;
+              j += ",\"decoded\":" + std::to_string(dec * 8) + ",\"gapLines\":" + std::to_string((s1 - s0 - dec) * 8); }
+            j += ",\"channels\":[";
             bool first = true;
             for (int a : rx_->liveApids()) { j += std::string(first ? "" : ",") + "\"" + channelName(a) + "\""; first = false; }
             j += "]";

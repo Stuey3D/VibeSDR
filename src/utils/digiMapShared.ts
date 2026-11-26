@@ -59,6 +59,8 @@ export interface DigiAprsPoint {
   key: string; call: string; lat: number; lon: number;
   /** seconds since it was last heard */
   age: number;
+  /** ★ beta95 its packets heard (the TOTALS' APRS line) */
+  count?: number;
   kind: string; symName: string; comment: string; status: string; km: number | null;
   /** a weather station's report, as words ("12.3 °C · 81 % RH · wind 14 km/h SW · 1012.4 hPa"); '' when none */
   wx: string;
@@ -98,7 +100,10 @@ export function digiAprsPoints(stations: any[] | null | undefined, svgOf: (st: a
     if (lat == null || lon == null) continue;
     const trail = (trailOf(String(st.key)) || []).slice(-200).filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
     out.push({
-      key: okTxt(st.key, 40), call: okTxt(st.name || st.from || st.key, 40), lat, lon, age: okNum(st.age, 0, 1e9) ?? 0,
+      // ★ beta95 age = since LAST heard (the station's "seen"; its "age" is since first heard — the comment above was right,
+      //   the field was not), and its packets for the TOTALS' APRS line
+      key: okTxt(st.key, 40), call: okTxt(st.name || st.from || st.key, 40), lat, lon, age: okNum(st.seen ?? st.age, 0, 1e9) ?? 0,
+      count: okNum(st.count, 0, 1e9) ?? 0,
       kind: okTxt(st.kind, 16), symName: okTxt(st.symName, 40), comment: okTxt(st.comment, 120), status: okTxt(st.status, 120),
       km: kmOf(lat, lon), wx: okTxt(digiAprsWx(st.wx), 120), speed: okNum(st.speed, 0, 5000), course: okNum(st.course, 0, 360), alt: okNum(st.alt, -500, 100000),
       svg: digiSvgOk(svgOf(st)), trail,

@@ -158,7 +158,8 @@ export function avTrackRows(r: AvReport | null, rx: LatLon | null): TrackRow[] {
     return {
       key: avKey(a, i), colour: '#ffd34d', flag: '', name: avLine(a), second: avDetail(a),
       sp: a.alt != null ? `FL${String(Math.max(0, Math.round(a.alt / 100))).padStart(3, '0')}` : '', trend: 0 as const,
-      range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : a.lat == null ? 'no position' : '',
+      // ★ beta95 NM on the aviation map (Stuart 11-25: the datalink list said km, its card and the rings NM)
+      range: rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM` : a.lat == null ? 'no position' : '',
       brg: rb ? COMPASS[Math.round(rb.brg / 45) % 8] : '', noPos: a.lat == null, age: avAge(a.age), em: false,
     };
   });

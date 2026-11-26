@@ -116,6 +116,14 @@ function digiCell(k,v,sub){
  *      svgOk(s), overlay:{label,colour}|null, tot:{srvOk,winWords,drawn,total,trunc,unplaced,decodesToday,falseToday,
  *      notKeptToday,spotsSent,radioOnly} } — radioOnly: the map is filtered to one radio (the stations are that radio's;
  *      spotsSent is always the whole server's: the reports, like every decoder log, are one per server across radios) */
+/* ★★ beta95 APRS IN THE TOTALS, ON ITS OWN LINE (Stuart 11-25: "the total was for ft8 etc" — APRS "could count"): the
+ *  stations heard today (UTC) and their packets, never folded into the spot counts. list: the map's APRS points
+ *  ({age: s since last heard, count}); now: ms. */
+function digiAprsToday(list,now){
+  var d=new Date(now||Date.now()),since=(d.getUTCHours()*3600+d.getUTCMinutes()*60+d.getUTCSeconds()),n=0,pk=0;
+  (list||[]).forEach(function(a){if(a&&isFinite(Number(a.age))&&Number(a.age)<=since){n++;pk+=Math.max(0,Number(a.count)||0);}});
+  return {n:n,pk:pk};
+}
 function digiStatsHtml(st,o){
   o=o||{};var tot=o.tot||{},ap=o.aprs||{n:0,on:false,far:null,leg:[],only:false};
   var h='';
@@ -157,7 +165,10 @@ function digiStatsHtml(st,o){
     (tot.srvOk&&tot.falseToday>0?'<div class="row"><span>Set aside as false decodes</span><b>'+digiNum(tot.falseToday)+'</b></div><div class="sub">today (UTC): calls no country was allocated — decoded out of noise, never kept or reported. A real call at a locator its country cannot be at is kept, without the locator.</div>':'')+
     (tot.srvOk&&tot.notKeptToday>0?'<div class="row"><span>Not kept today</span><b>'+digiNum(tot.notKeptToday)+'</b></div><div class="sub">the day’s list was full — these were decoded (and sent to PSK Reporter when it is on) but are not on the map</div>':'')+
     '<div class="row"><span>Countries</span><b>'+digiNum(st.nCountries)+'</b></div>'+
-    '<div class="row"><span>Bands</span><b>'+digiNum(st.nBands)+'</b></div>';
+    '<div class="row"><span>Bands</span><b>'+digiNum(st.nBands)+'</b></div>'+
+    (ap.today&&ap.today.n?'<div class="row"><span>APRS today (UTC)</span><b>'+digiNum(ap.today.n)+' station'+(ap.today.n===1?'':'s')+
+      (ap.today.pk?' · '+digiNum(ap.today.pk)+' packet'+(ap.today.pk===1?'':'s'):'')+'</b></div>'+
+      '<div class="sub">APRS on its own — not digital spots, never in the counts above</div>':'');
   var rows=(o.modes||[]).slice();
   Object.keys(st.modeN).sort().forEach(function(m){if(!rows.some(function(x){return x.m===m;}))rows.push({m:m,colour:'#9E9E9E',ink:'#000000',letter:m.charAt(0)});});
   var svgOk=o.svgOk||function(){return '';};

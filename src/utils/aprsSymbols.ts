@@ -136,6 +136,23 @@ export function aprsGlyphOf(sym: string): string {
   if (!g) return '';
   return table === '/' || APRS_ALT_SAME.includes(code) ? g : '';
 }
+/* ★★ V12 beta95 AN ALTITUDE BEYOND PHYSICAL SENSE FOR THE SYMBOL (Stuart 11-25: G8TMV-9, a car, sent /A=301169 — 91 796 m).
+ *  The ceiling per symbol — ONE RULE, TWO READERS: the server's vibe_aprs.h altCeilingM (which also marks the JSON
+ *  "altBad"); this one for an older server. Ground things above Everest (9 000 m), aircraft above 25 000 m, anything else
+ *  above a balloon's record (60 000 m), a satellite / shuttle none; below −500 m anything. Shown, marked, never as real. */
+const ALT_GROUND = '>jkuvRUaf-KH#&r_WysCY[b<=+h;nP!F', ALT_GROUND_ALT = '#&->_kuvjs';
+export function aprsAltCeiling(sym: string): number {
+  const table = sym[0] || '/', code = sym[1] || '', alt = table !== '/';
+  if (code === 'S') return Infinity;
+  if (code === 'O') return 60000;
+  if ((!alt && (code === '^' || code === "'" || code === 'X' || code === 'g')) || (alt && code === '^')) return 25000;
+  if (code && (alt ? ALT_GROUND_ALT : ALT_GROUND).includes(code)) return 9000;
+  return 60000;
+}
+export function aprsAltPlausible(s: { sym: string; alt?: number; altBad?: number }): boolean {
+  if (s.altBad) return false;
+  return s.alt == null || (s.alt >= -500 && s.alt <= aprsAltCeiling(s.sym));
+}
 /** The network's own furniture (digipeater, gateway, repeater, yagi) — its own colour (aprsColour); kept for callers. */
 export function aprsIsInfra(sym: string): boolean {
   const g = aprsGlyphOf(sym);

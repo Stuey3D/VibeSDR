@@ -75,7 +75,7 @@ struct Rec {
                                                           ///< ★ V12 2026-11-16 flags 4 = AtoN status known, then light (bits 3–4), RACON (5–6), alarm (7)
     uint16_t count = 0; uint8_t nTrk = 0, ch = 0;
     uint32_t imo = 0;
-    int16_t alt = -1, spare = 0;
+    int16_t alt = -1, spare = 0;   ///< ★ beta95 spare bit 0 = DX (Vessel::dx) · bit 1 = coarse (type 27) position
     char name[24] = {}, call[8] = {}, dest[24] = {}, eta[12] = {};
     TrkPt trk[kTrack] = {};                                ///< oldest first
     /** ★ beta92 which radios heard it (bit n = <gallery>/radios.idx line n, vibe_log_radio.h) — the last 4 bytes of the
@@ -113,6 +113,7 @@ inline Rec fromVessel(const Vessel& v, double svcNow, int64_t wallNow) {
     { const asmsg::AtonStatus st = asmsg::atonStatus(v.atonStatus);
       if (st.valid) r.flags |= uint8_t(4 | (st.light << 3) | (st.racon << 5) | (st.alarm ? 128 : 0)); }
     r.count = (uint16_t)std::min(65535, v.count); r.ch = (uint8_t)v.ch; r.imo = v.imo; r.alt = (int16_t)std::min(32767, v.altM);
+    r.spare = int16_t((v.dx ? 1 : 0) | (v.coarse ? 2 : 0));
     putStr(r.name, sizeof r.name, v.name); putStr(r.call, sizeof r.call, v.callsign); putStr(r.dest, sizeof r.dest, v.dest);
     if (v.etaMonth > 0 && v.etaDay > 0) {
         char b[24]; std::snprintf(b, sizeof b, "%02d-%02d %02d:%02d", v.etaMonth, v.etaDay, v.etaHour < 24 ? v.etaHour : 0, v.etaMin < 60 ? v.etaMin : 0);
@@ -140,13 +141,43 @@ inline Vessel toVessel(const Rec& r) {
     v.draught = r.draught10 < 0 ? NAN : r.draught10 / 10.0;
     if (r.len > 0) { v.bow = r.len; v.stern = 0; v.port = r.beam; v.stbd = 0; }
     v.virt = r.flags & 1; v.offPos = r.flags & 2; v.count = r.count; v.ch = r.ch;
+    v.dx = r.spare & 1; v.coarse = r.spare & 2;
     // ★ the status byte back in its IALA A-126 page-7 form (vibe_ais_asm.h atonStatus reads it)
     if (r.flags & 4) v.atonStatus = (7 << 5) | (((r.flags >> 5) & 3) << 3) | (((r.flags >> 3) & 3) << 1) | ((r.flags >> 7) & 1);
     return v;
 }
+/* ★★★ beta95 THE WHOLE-MINUTE SCRUB (vibe_ais_service.h kDxNm): a store written before beta95 may hold a fake — a
+ *  moving station's position with latitude AND longitude on whole minutes (MMSI 244780619's 00°15.000′N 008°50.000′E,
+ *  Stuart 11-25) — as its position or among its track points, which drew a dashed line from Rotterdam to Africa. Read
+ *  and merged records lose them: the position (the ship stays listed, no dot) and each such track point. AtoNs and base
+ *  stations (surveyed, may be round) and type 27's coarse grid are left alone. 1e-7° is 6e-6′: a whole minute stored
+ *  is within 3e-6′ of it, the next real 1/10 000′ value 1e-4′ away (the test: within 1e-5′). */
+inline bool wholeMinE7(int32_t v) {
+    if (v == kNoPos) return false;
+    const double m = v * 1e-7 * 60.0;
+    return std::fabs(m - std::round(m)) < 1e-5;
+}
+inline bool fakePosE7(int32_t lat, int32_t lon) { return wholeMinE7(lat) && wholeMinE7(lon); }
+inline bool movingKind(uint8_t k) { return k == 0 || k == 1 || k == 4 || k == 5; }
+/** True if anything was taken out. */
+inline bool scrub(Rec& r) {
+    if (!movingKind(r.kind) || (r.spare & 2)) return false;
+    bool any = false;
+    if (fakePosE7(r.lat, r.lon)) { r.lat = r.lon = kNoPos; r.posAt = 0; r.spare &= ~1; any = true; }
+    int w = 0;
+    for (int i = 0; i < r.nTrk && i < kTrack; ++i) {
+        if (fakePosE7(r.trk[i].lat, r.trk[i].lon)) { any = true; continue; }
+        r.trk[w++] = r.trk[i];
+    }
+    for (int i = w; i < r.nTrk && i < kTrack; ++i) r.trk[i] = TrkPt{};
+    r.nTrk = (uint8_t)w;
+    return any;
+}
 /** ★ Merge `in` (newer from one radio) into `have` (on disk, perhaps another radio's): the newest state wins field by
  *  field where `in` knows it; the tracks of both, in time order, newest kTrack. */
-inline void merge(Rec& have, const Rec& in) {
+inline void merge(Rec& have, const Rec& in0) {
+    Rec in = in0;
+    scrub(have); scrub(in);   // ★ beta95 an old fake never survives a write
     const bool newer = in.seen >= have.seen;
     Rec out = newer ? in : have;
     const Rec& old = newer ? have : in;
@@ -162,6 +193,7 @@ inline void merge(Rec& have, const Rec& in) {
     if (out.draught10 < 0) out.draught10 = old.draught10;
     if (out.lat == kNoPos || (old.posAt > out.posAt && old.lat != kNoPos)) {
         out.lat = old.lat; out.lon = old.lon; out.posAt = old.posAt; out.sog10 = old.sog10; out.cog10 = old.cog10; out.hdg = old.hdg;
+        out.spare = int16_t((out.spare & ~3) | (old.spare & 3));   // ★ beta95 its DX / coarse marks travel with the position
     }
     if (old.first && (!out.first || old.first < out.first)) out.first = old.first;
     out.count = (uint16_t)std::min<uint32_t>(65535, (uint32_t)std::max(have.count, in.count));
@@ -308,6 +340,7 @@ inline std::vector<Rec> read(const std::string& dir, const Query& q, size_t* tot
     for (uint32_t s : slots) {
         if (out.size() >= q.limit) { if (total) ++*total; continue; }
         if (!preadAll(fd, &r, sizeof r, recAt(h.cap, s)) || r.mmsi != d[s].mmsi) continue;
+        scrub(r);   // ★ beta95 a fake written before the whole-minute check: never drawn
         if (ranged) {
             if (r.lat == kNoPos) continue;
             const double la = de7(r.lat), lo = de7(r.lon);

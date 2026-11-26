@@ -5,7 +5,7 @@
 //   npx tsx scripts/test_sea_areas.ts
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import { seaAreas, seaAreaById, seaAreasFor, seaCompose, seaSeverity, seaPlaceMet, seaLabel, seaLegendRows, seaAttribution, SEA_NAME_ZOOM } from '../src/services/seaAreas.ts';
+import { seaAreas, seaAreaById, seaAreasFor, seaAreasInView, seaAttributionAll, seaCompose, seaSeverity, seaPlaceMet, seaLabel, seaLegendRows, seaAttribution, SEA_NAME_ZOOM } from '../src/services/seaAreas.ts';
 import { shipLayersPresent, shipToggles } from '../src/services/shippingMap.ts';
 
 let pass = 0, fail = 0;
@@ -145,6 +145,26 @@ console.log('── the tint and the names ──');
   ok(seaLegendRows(true).length === 3 && seaLegendRows(false).length === 1, 'KEY: the outline, amber and red rows (tint rows only with WEATHER)');
   ok(/Met Office/.test(seaAttribution(seaAreasFor({ lat: 51.5, lon: -0.1 }, null))), 'attribution names the Met Office definitions for UK areas');
   ok(/Open Government Licence/.test(seaAttribution(seaAreasFor({ lat: 44.65, lon: -63.57 }, null))), 'attribution carries the OGL-Canada line for Canadian areas');
+}
+// ── ★★ beta95 SEA AREAS WORLDWIDE (Stuart 11-25: "only seen the uk ones"): every area composed, each with its view box ──
+{
+  const london = { lat: 51.5, lon: -0.1 };
+  const all = seaCompose(london, null, false);
+  ok(all.items.length === seaAreas().length && all.items.every((x: any) => Array.isArray(x._vb) && x._vb.length === 4), `web: every area composed (${all.items.length}), each with its _vb box for the layer`);
+  ok(all.items.some((x: any) => x.key.startsWith('a:jp')) && all.items.some((x: any) => x.key.startsWith('a:nz')), 'a UK server can draw JMA\'s and the NZ high seas when panned there');
+  ok(/Met Office/.test(all.attribution) && !/気象庁/.test(all.attribution), 'compose\'s own attribution stays the receiver\'s (the host asks for the view\'s)');
+  const japan: [number, number, number, number] = [28, 125, 46, 150];
+  const inJp = seaAreasInView(japan);
+  ok(inJp.length > 20 && inJp.every((a) => a.bbox[2] >= 28 && a.bbox[0] <= 46) && inJp.some((a) => a.src === 'jp') && !inJp.some((a) => a.src === 'uk'), `the view over Japan: JMA's areas, no UK ones (${inJp.length})`);
+  ok(/気象庁/.test(seaAttribution(inJp)) && !/Met Office/.test(seaAttribution(inJp)), 'the attribution follows the areas in view (JMA\'s credit over Japan)');
+  const app = seaCompose(london, null, false, 'app', japan);
+  ok(app.items.length === inJp.length, `app: only the areas in the reported view cross the bridge (${app.items.length})`);
+  ok(seaCompose(london, null, false, 'app', null).items.length === seaAreasFor(london, null).length, 'app: before the map reports a view, the near set');
+  // across the antimeridian: a view 170°E…190°E (Leaflet's unwrapped longitudes) still meets areas at −175°
+  const nzWide = seaAreasInView([-50, 160, -25, 200]);
+  ok(nzWide.some((a) => a.src === 'nz'), `a view across ±180°: the NZ / Fiji high seas (${nzWide.length})`);
+  ok(seaAreasInView([-10, -400, 10, 400]).length >= seaAreas().filter((a) => a.bbox[0] <= 10 && a.bbox[2] >= -10).length, 'a view wider than the world: every area in its latitudes');
+  ok(['Met Office', 'NOAA', 'Canada', 'MET Norway', 'Met Éireann', 'AEMET', '気象庁'].every((w) => seaAttributionAll().includes(w)), 'the app\'s legend credits every source');
 }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

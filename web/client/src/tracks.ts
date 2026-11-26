@@ -17,7 +17,8 @@ import { dataUrl } from './origin';
 import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
-import { aprsColour, aprsIcon as aprsSymIcon } from '../../../src/utils/aprsSymbols';
+import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
+import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
 
 export type LatLon = { lat: number; lon: number };
 
@@ -33,6 +34,8 @@ export interface AisVessel {
   light?: number; racon?: number; alarm?: number;
   /** ★ V12 2026-11-16 the station's weather (binary message 8, Circ.289 met/hydro), newest site first. */
   met?: AisMet[];
+  /** ★ beta95 believed or not (aisDx.ts — the server's rule): dx · unconf (uLat/uLon) · held · fakes */
+  dx?: number; unconf?: number; uLat?: number; uLon?: number; held?: number; fakes?: number;
 }
 /** One met/hydro report (vibe_ais_asm.h metJson): every field optional — a station sends what its sensors have. */
 export interface AisMet {
@@ -65,7 +68,7 @@ export interface AisReport {
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
-  course?: number; speed?: number; alt?: number; comment?: string; status?: string; micE?: string; path?: string; via?: string;
+  course?: number; speed?: number; alt?: number; altBad?: number; comment?: string; status?: string; micE?: string; path?: string; via?: string;
   raw?: string; line?: string; wx?: Record<string, number>; killed?: number; msg?: number; seen: number; age: number; count: number;
   posAge: number; trail?: [number, number][];
 }
@@ -98,6 +101,7 @@ export function aisSanitise(m: any): AisReport | null {
       level: num(v.level) ?? undefined, snr: num(v.snr) ?? undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
       posAge: num(v.posAge) ?? -1, count: num(v.count) ?? 0, trail: num(v.trail) ?? undefined,
       light: num(v.light) ?? undefined, racon: num(v.racon) ?? undefined, alarm: num(v.alarm) ?? undefined, met: aisMetSanitise(v.met),
+      ...aisDxSanitise(v),   // ★ beta95 DX / unconfirmed / held / implausible
     });
   }
   const safety = Array.isArray(m.safety) ? m.safety.slice(0, 20).map((s: any) => ({ age: num(s?.age) ?? 0, mmsi: num(s?.mmsi) ?? 0, name: str(s?.name, 40), text: str(s?.text, 200), to: num(s?.to) ?? undefined })) : [];
@@ -119,7 +123,7 @@ export function aprsSanitise(d: any): AprsList | null {
     const trail = Array.isArray(s.trail) ? s.trail.slice(-200).filter((p: any) => Array.isArray(p) && num(p[0]) != null && num(p[1]) != null).map((p: any) => [Number(p[0]), Number(p[1])] as [number, number]) : undefined;
     st.push({ key, from: str(s.from, 16), kind: str(s.kind, 14), name: str(s.name, 12), sym: str(s.sym, 2).padEnd(2, ' '), symName: str(s.symName, 40),
               lat: num(s.lat) ?? undefined, lon: num(s.lon) ?? undefined, course: num(s.course) ?? undefined, speed: num(s.speed) ?? undefined,
-              alt: num(s.alt) ?? undefined, comment: str(s.comment, 200), status: str(s.status, 200), micE: str(s.micE, 20), path: str(s.path, 80),
+              alt: num(s.alt) ?? undefined, altBad: s.altBad === 1 ? 1 : undefined, comment: str(s.comment, 200), status: str(s.status, 200), micE: str(s.micE, 20), path: str(s.path, 80),
               via: str(s.via, 16), raw: str(s.raw, 400), line: str(s.line, 300), wx: Object.keys(wx).length ? wx : undefined,
               killed: num(s.killed) ?? undefined, msg: num(s.msg) ?? undefined, seen: num(s.seen) ?? 0, age: num(s.age) ?? 0,
               count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail });
@@ -167,6 +171,11 @@ export const AIS_COLOURS: Record<string, string> = {
 };
 function aisMoving(v: AisVessel) { return v.sog != null && v.sog >= 0.5 && v.nav !== 1 && v.nav !== 5 && v.nav !== 6; }
 export function aisIcon(v: AisVessel): { html: string; w: number; h: number } {
+  const ic = aisIconBase(v);
+  // ★ beta95 a DX ship stands out (Stuart: "they are the exciting ones"): a gold halo round whatever it is
+  return v.dx ? { ...ic, html: `<span style="display:inline-block;filter:drop-shadow(0 0 2px ${AIS_DX_COLOUR}) drop-shadow(0 0 3px ${AIS_DX_COLOUR})">${ic.html}</span>` } : ic;
+}
+function aisIconBase(v: AisVessel): { html: string; w: number; h: number } {
   const col = v.kind === 'sart' ? '#ff3b3b' : AIS_COLOURS[v.family || 'other'] || AIS_COLOURS.other;
   if (v.kind === 'aton') {
     const dash = v.virtual ? ' stroke-dasharray="2 2"' : '';
@@ -188,6 +197,8 @@ export function aisIcon(v: AisVessel): { html: string; w: number; h: number } {
   return { w: h, h, html: `<svg width="${w}" height="${h}" viewBox="0 0 14 26" style="transform:rotate(${rot}deg)"><path d="M7 1 C10 5 12 9 12 13 L12 24 L2 24 L2 13 C2 9 4 5 7 1 Z" fill="${col}" stroke="#0b1014" stroke-width="1.3"/><path d="M4.5 17 H9.5" stroke="#0b1014" stroke-width="1" opacity=".7"/></svg>` };
 }
 export function aisName(v: AisVessel): string { return v.name || v.call || `MMSI ${v.mmsi}`; }
+/** ★ beta95 the map's label: the name, and DX when it is one. */
+export function aisLabel(v: AisVessel): string { return v.dx ? `${aisName(v)} · DX` : aisName(v); }
 function aisKindWord(v: AisVessel): string {
   if (v.kind === 'aton') return v.atonName || 'aid to navigation';
   if (v.kind === 'base') return 'base station';
@@ -218,7 +229,10 @@ export function aisCard(v: AisVessel, rx: LatLon | null): string {
   if (v.lat != null && v.lon != null) {
     add('Position', esc(fmtPos(v.lat, v.lon)));
     if (rx) { const rb = rangeBearing(rx, v.lat, v.lon); add('From here', `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM ${compass8(rb.brg)}`); }
+  } else if (v.unconf && v.uLat != null && v.uLon != null) {
+    add('Claims', esc(fmtPos(v.uLat, v.uLon)) + (rx ? ` · ${Math.round(rangeBearing(rx, v.uLat, v.uLon).nm)} NM ${compass8(rangeBearing(rx, v.uLat, v.uLon).brg)}` : ''));
   }
+  { const w = aisDxWords(v); if (w) add(v.dx ? '<b style="color:' + AIS_DX_COLOUR + '">DX</b>' : 'Position?', esc(w)); }   // ★ beta95
   // ★ V12 2026-11-16 the AtoN's own status (type 21) and its weather (binary message 8)
   if (v.light) add('Light', v.light === 3 ? '<b style="color:#ff6b5e">FAULT</b>' : v.light === 1 ? 'on' : 'off');
   if (v.racon) add('RACON', v.racon === 3 ? '<b style="color:#ff6b5e">FAULT</b>' : v.racon === 2 ? 'working' : 'fitted');
@@ -276,9 +290,17 @@ export function aisRows(r: AisReport, rx: LatLon | null): string {
   return rows.map(({ v, rb }) => {
     const col = v.kind === 'sart' ? '#ff3b3b' : AIS_COLOURS[v.family || 'other'] || AIS_COLOURS.other;
     const sp = v.sog != null && v.sog >= 0.1 ? `${v.sog.toFixed(v.sog < 10 ? 1 : 0)} kn${v.cog != null && v.sog >= 0.5 ? ' ' + compass8(v.cog) : ''}` : v.lat != null ? 'still' : '';
-    const where = rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>` : v.lat != null ? '' : '<span class="dim">no position</span>';
-    const second = [aisKindWord(v), v.navName && v.nav !== 0 && v.nav !== 15 ? v.navName : '', v.dest ? '→ ' + v.dest : '', aisMetShort(v.met?.[0])].filter(Boolean).map(esc).join(' · ');
-    return `<div class="trkRow${v.lat == null ? ' nopos' : ''}${v.kind === 'sart' ? ' em' : ''}" role="button" tabindex="0" data-key="${esc(v.mmsi)}">`
+    // ★★ beta95 DX (aisDx.ts): the tag in the range column, which never truncates; unconfirmed / implausible say so there
+    const dxs = aisDxState(v);
+    const ub = dxs === 'unconf' && rx && v.uLat != null && v.uLon != null ? rangeBearing(rx, v.uLat, v.uLon) : null;
+    const where = rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
+      : v.lat != null ? (dxs === 'dx' ? '<span class="dxTag">DX</span>' : '')
+      : dxs === 'unconf' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.unconf}${ub ? ` ${Math.round(ub.nm)} NM ${compass8(ub.brg)}` : ''}</span>`
+      : dxs === 'implausible' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.implausible}</span>`
+      : '<span class="dim">no position</span>';
+    const second = [aisKindWord(v), dxs === 'unconf' ? 'unconfirmed position' : dxs === 'implausible' ? 'position implausible' : '',
+      v.navName && v.nav !== 0 && v.nav !== 15 ? v.navName : '', v.dest ? '→ ' + v.dest : '', aisMetShort(v.met?.[0])].filter(Boolean).map(esc).join(' · ');
+    return `<div class="trkRow${v.lat == null ? ' nopos' : ''}${v.kind === 'sart' ? ' em' : ''}${dxs === 'dx' ? ' dx' : ''}" role="button" tabindex="0" data-key="${esc(v.mmsi)}">`
       + `<span class="id"><b><i class="sw" style="background:${col}"></i>${flagHtml(v.flag)}${esc(aisName(v))}</b><small>${second || 'MMSI ' + esc(v.mmsi)}</small></span>`
       + `<span class="sp">${esc(sp)}${trendMark(v.trend)}</span><span class="rg">${where}</span></div>`;
   }).join('');
@@ -311,7 +333,9 @@ export function aprsCard(s: AprsStation, rx: LatLon | null): string {
   if (s.killed) add('State', 'removed by its owner');
   if (s.micE) add('Mic-E', esc(s.micE));
   if (s.speed != null && s.speed >= 1) add('Speed', `${Math.round(s.speed)} km/h${s.course != null ? ` ${compass8(s.course)} (${Math.round(s.course)}°)` : ''}`);
-  if (s.alt != null) add('Altitude', `${Math.round(s.alt)} m${aprsAltCue(s)}`);
+  // ★★ beta95 an altitude beyond sense for the symbol (aprsAltPlausible): shown, marked, never as real — no ▲/▼ for it
+  if (s.alt != null) add('Altitude', aprsAltPlausible(s) ? `${Math.round(s.alt)} m${aprsAltCue(s)}`
+    : `<span style="opacity:.6;text-decoration:line-through">${Math.round(s.alt).toLocaleString('en-GB')} m</span> <b style="color:#ffad42">implausible${s.symName ? ' for a ' + esc(s.symName) : ''}</b>`);
   const w = s.wx;
   if (w) {
     const parts: string[] = [];
@@ -405,6 +429,8 @@ const CSS = `
 .trkRow .sp,.trkRow .rg,.trkRow .ag{font:12px/1.2 ui-monospace,Menlo,monospace;color:#cfd9e3;white-space:nowrap;text-align:right}
 .trkRow .ag{color:#8596a7}
 .trkRow .brg,.trkRow .dim{color:#8596a7}
+.trkRow.dx{box-shadow:inset 3px 0 0 #ffd34d}.trkRow.dx.sel{box-shadow:inset 3px 0 0 #ffd34d}
+.trkRow .dxTag{display:inline-block;margin-right:5px;padding:0 4px;border-radius:3px;background:#ffd34d;color:#111;font:700 9.5px/14px ui-monospace,Menlo,monospace;letter-spacing:.6px;vertical-align:1px}
 .trkView i.up{color:#6dd36d;font-style:normal}
 .trkView i.dn{color:#ff8a6b;font-style:normal}
 .trkEmpty{padding:12px;color:#9fb0c2;font-size:12px}
@@ -641,6 +667,8 @@ export class TrackView {
   private autoFitCheck(_items?: any[]) { try { this.af?.poke(); } catch (e) { console.error('[tracks] auto fit', e); } }
   /** ★ The card again from its item (a fetched text arrived for it). */
   refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
+  /** ★ beta95 the padded view [s, w, n, e] (the sea areas drawn worldwide are those in it), null before the map is made. */
+  viewBox(): [number, number, number, number] | null { try { return this.layer?.viewBox?.() ?? null; } catch { return null; } }
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
     this.refit = false;

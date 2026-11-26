@@ -1029,6 +1029,30 @@ inline std::string symbolName(char table, char code) {
         default: return "";
     }
 }
+/* ★★ V12 beta95 AN ALTITUDE BEYOND PHYSICAL SENSE FOR THE SYMBOL (Stuart 11-25: G8TMV-9, a car, sent /A=301169 —
+ *  91 796 m — and the list showed it as real). The ceiling per symbol: things on the ground (cars, houses, joggers, ships,
+ *  digipeaters, weather stations…) above Mount Everest, 9 000 m; aircraft above 25 000 m; anything else above a balloon's
+ *  record, 60 000 m; a satellite / shuttle, none. Below the Dead Sea shore, −500 m, for anything. The figure is still
+ *  shown — marked "implausible", never presented as real. ONE RULE, TWO READERS: src/utils/aprsSymbols.ts aprsAltCeiling. */
+inline double altCeilingM(char table, char code) {
+    const bool alt = table != '/';
+    if (code == 'S') return INFINITY;                                       // shuttle / satellite
+    if (code == 'O') return 60000;                                          // balloon (either table)
+    if (!alt && (code == '^' || code == '\'' || code == 'X' || code == 'g')) return 25000;   // aircraft, helicopter, glider
+    if (alt && code == '^') return 25000;                                   // aircraft (the alternate table's)
+    static const char* ground = ">jkuvRUaf-KH#&r_WysCY[b<=+h;nP!F";      // the primary table's ground things
+    static const char* groundAlt = "#&->_kuvjs";                            // the alternate codes that mean the same kind
+    if (std::strchr(alt ? groundAlt : ground, code) && code != ' ') return 9000;
+    return 60000;
+}
+inline bool altPlausible(char table, char code, double metres) {
+    return !(metres == metres) || (metres >= -500 && metres <= altCeilingM(table, code));
+}
+/** "car" → "for a car"; '' → "here" — the word after "implausible". */
+inline std::string altWhy(char table, char code) {
+    const std::string n = symbolName(table, code);
+    return n.empty() ? std::string() : " for a " + n;
+}
 /** The station list's line: "M0ABC-9 · car · 45 km/h NE · 120 m · Mic-E En Route · going to the club". Metric. */
 inline std::string readable(const Packet& p) {
     static const std::string dot = " \xc2\xb7 ";
@@ -1058,7 +1082,10 @@ inline std::string readable(const Packet& p) {
         s += dot + fmt(p.speedKn * 1.852, 0) + " km/h";
         if (p.course == p.course) { static const char* c8[8] = {"N","NE","E","SE","S","SW","W","NW"}; s += std::string(" ") + c8[int(std::floor(std::fmod(p.course + 22.5, 360) / 45)) & 7]; }
     }
-    if (p.altFt == p.altFt) s += dot + fmt(p.altFt * 0.3048, 0) + " m";
+    if (p.altFt == p.altFt) {
+        s += dot + fmt(p.altFt * 0.3048, 0) + " m";
+        if (!altPlausible(p.symTable, p.symCode, p.altFt * 0.3048)) s += " (implausible" + altWhy(p.symTable, p.symCode) + ")";   // ★ beta95
+    }
     if (!p.micE.empty()) s += dot + "Mic-E " + p.micE;
     if (!p.comment.empty()) s += dot + p.comment;
     if (p.kind == "other" && !p.status.empty()) s += dot + p.status;

@@ -39,7 +39,7 @@ const aisMsg = {
       sog: {}, seen: 900, age: 900, count: 1 },
   ],
   safety: [{ age: 30, mmsi: 970123456, name: 'SART TEST', text: 'SART ACTIVE' }, { age: 400, mmsi: 235012345, name: '', text: 'NAV WARNING <x>' }],
-  notices: [{ age: 120, mmsi: 2320123, name: 'SOLENT VTS', text: 'Caution: fairway closed · circle 1.5 km at 50.7900 -1.1100', fi: 22, what: 18, lat: 50.79, lon: -1.11 }],
+  notices: [{ age: 120, mmsi: 2320123, name: 'SOLENT VTS', text: 'Caution: fairway closed · circle 0.8 NM at 50.7900 -1.1100', fi: 22, what: 18, lat: 50.79, lon: -1.11 }],
   gain: 33.8, gainAuto: 1,
 };
 
@@ -87,7 +87,7 @@ ok('AIS met card: the far site says where it is', atCard.includes('at 51°12.000
 ok('AIS met card: the near site does not', (atCard.match(/at 5\d°/g) || []).length === 1);
 eq('AIS met short (the list)', app.aisMetShort(at.met?.[0]), 'SW 14 kn · tide 3.21 m');
 ok('AIS met in the list row', (ar.find((r) => r.key === '992351234')?.second || '').includes('SW 14 kn'));
-eq('AIS notices after the safety strip', app.aisSafetyLines(aa)[2], 'ℹ SOLENT VTS: Caution: fairway closed · circle 1.5 km at 50.7900 -1.1100 · 2 min ago');
+eq('AIS notices after the safety strip', app.aisSafetyLines(aa)[2], 'ℹ SOLENT VTS: Caution: fairway closed · circle 0.8 NM at 50.7900 -1.1100 · 2 min ago');
 ok('AIS notices in the web strip too', web.aisSafetyHtml(wa).includes('fairway closed'));
 eq('AIS met rows = web', app.aisMetRows(at.met![0]), web.aisMetRows(wa.vessels.find((v) => v.mmsi === 992351234)!.met![0]));
 
@@ -211,6 +211,42 @@ const tour = src('src/screens/SDRScreen.tsx');
 ok('Tour: the Mode card is the overview and names whole-receiver views', /whole-receiver views such as DAB, ADS-B and SATELLITE/.test(tour)
    && /VIEWS holds the maps: DIGI MODES[\s\S]{0,300}AVIATION[\s\S]{0,120}SHIPPING/.test(tour));
 ok('About: EXIT AIS is described', /EXIT AIS/.test(about));
+
+// ── ★★ beta95 DX / unconfirmed / implausible (aisDx.ts — the server's vibe_ais_service.h kDxNm) and the APRS altitude ──
+{
+  const base = { kind: 'A', seen: 1, age: 5, posAge: 1, count: 2, stypeName: 'cargo', family: 'cargo' };
+  const msg = { type: 'ais', rate: 0, now: 0, msgs: 3, msgRate: 1, chA: 1, chB: 1, repaired: 0, dropped: 0, capture: 100, noise: -90, vessels: [
+    { mmsi: 227000001, name: 'FAR AWAY', lat: 48.75532, lon: -2.12245, sog: 12, cog: 30, dx: 1, ...base },
+    { mmsi: 227000002, name: 'MAYBE', unconf: 1, uLat: 40.12345, uLon: -12.54321, ...base },
+    { mmsi: 244780619, name: 'HOOIHANDEL', fakes: 2, ...base },
+    { mmsi: 235000001, name: 'NEAR', lat: 50.91, lon: -1.41, held: 1, ...base },
+  ] };
+  const w = web.aisSanitise(msg)!, a = app.aisSanitise(msg)!;
+  eq('beta95 DX fields: both sanitisers keep them alike', w.vessels.map((v) => [v.dx, v.unconf, v.uLat, v.held, v.fakes]), a.vessels.map((v) => [v.dx, v.unconf, v.uLat, v.held, v.fakes]));
+  const html = web.aisRows(w, rx);
+  ok('web row: a DX ship is tagged and barred', /class="trkRow dx"[\s\S]*?<span class="dxTag">DX<\/span>/.test(html));
+  ok('web row: an unconfirmed one says DX? and where it claims, no position', /DX\? \d+ NM [NESW]+/.test(html) && /unconfirmed position/.test(html));
+  ok('web row: a whole-minute fake says implausible', /position implausible/.test(html) && />implausible</.test(html));
+  const rows = app.aisListRows(a, rx);
+  const byName = (n: string) => rows.find((r) => r.name === n)!;
+  ok('app row: DX flagged', byName('FAR AWAY').dx === true && !byName('NEAR').dx);
+  ok('app row: unconfirmed has no position, its range says DX? and its bearing', byName('MAYBE').noPos && /^DX\? \d+ NM$/.test(byName('MAYBE').range) && !!byName('MAYBE').brg);
+  ok('app row: implausible', byName('HOOIHANDEL').range === 'implausible' && /position implausible/.test(byName('HOOIHANDEL').second));
+  ok('app map: only believed ships are drawn, the DX one labelled', JSON.stringify(app.aisItems(a, rx).map((i) => i._lb)) === JSON.stringify(['FAR AWAY · DX', 'NEAR']));
+  ok('the DX icon has its gold halo (both)', /drop-shadow/.test(web.aisIcon(w.vessels[0]).html) && /drop-shadow/.test(app.aisIcon(a.vessels[0]).html) && !/drop-shadow/.test(app.aisIcon(a.vessels[3]).html));
+  ok('cards: DX words, the claim, the implausible words, the held words',
+    /two reports agree/.test(app.aisCard(a.vessels[0], rx)) && /Claims/.test(app.aisCard(a.vessels[1], rx)) && /whole minutes/.test(web.aisCard(w.vessels[2], rx))
+    && /held, not believed/.test(app.aisCard(a.vessels[3], rx)));
+}
+{
+  const car = { key: 'G8TMV-9', from: 'G8TMV-9', kind: 'position', sym: '/>', symName: 'car', lat: 52.5, lon: -1.2, alt: 91796, seen: 1, age: 1, count: 1 };
+  const l = { stations: [car, { ...car, key: 'G8TMV-8', from: 'G8TMV-8', alt: 120 }, { ...car, key: 'B1', from: 'B1', sym: '/O', symName: 'balloon', alt: 38000 }], frames: 3 };
+  const wl = web.aprsSanitise(l)!, al = app.aprsSanitise(l)!;
+  ok('APRS: a car at 91 796 m is implausible, struck through (both)', /implausible for a car/.test(web.aprsCard(wl.stations[0], rx)) && /implausible for a car/.test(app.aprsCard(al.stations[0], rx)));
+  ok('APRS: a car at 120 m and a balloon at 38 km are not', !/implausible/.test(app.aprsCard(al.stations[1], rx)) && !/implausible/.test(web.aprsCard(wl.stations[2], rx)));
+  const marked = app.aprsSanitise({ stations: [{ ...car, alt: 300, altBad: 1 }], frames: 1 })!;
+  ok('APRS: the server\'s altBad mark is honoured', /implausible/.test(app.aprsCard(marked.stations[0], rx)));
+}
 
 console.log(`${fails ? 'FAIL' : 'ok'}  test_ais_aprs_app — ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

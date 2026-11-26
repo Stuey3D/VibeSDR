@@ -175,7 +175,7 @@ static void testNotice() {
     CHECK(n.shape == 0 && std::abs(n.lat - 50.79) < 1e-4 && std::abs(n.lon - -1.11) < 1e-4 && std::abs(n.sizeM - 1500) < 0.1, "circle 1.5 km at the place");
     CHECK(n.month == 11 && n.day == 16 && n.hour == 14 && n.minute == 0 && n.durationMin == 180 && n.text == "BERTH 44 DREDGER", "time, 3 h, the words '%s'", n.text.c_str());
     const std::string line = am::noticeLine(n);
-    CHECK(line == "Caution: fairway closed: BERTH 44 DREDGER \xc2\xb7 circle 1.5 km at 50.7900 -1.1100 \xc2\xb7 from 14:00 UTC 16-11, for 3 h", "the line: %s", line.c_str());
+    CHECK(line == "Caution: fairway closed: BERTH 44 DREDGER \xc2\xb7 circle 0.8 NM at 50.7900 -1.1100 \xc2\xb7 from 14:00 UTC 16-11, for 3 h", "the line (beta95 NM): %s", line.c_str());
 
     Builder R; hdr8(R, 2320003, 1, 22);
     R.u(1, 10); R.u(37, 7); R.u(11, 4); R.u(17, 5); R.u(8, 5); R.u(30, 6); R.u(262143, 18);

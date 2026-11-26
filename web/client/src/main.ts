@@ -51,7 +51,7 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
-import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
+import { seaCompose, seaAreasFor, seaAreasInView, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
 import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
          type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
@@ -67,7 +67,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
-import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
+import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
@@ -160,6 +160,7 @@ import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayCle
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';
 import { DIGI_STATS_JS } from '../../../src/utils/digiMapStats';
 import { digiGalCard, digiGalQuery, digiGalItemWindow } from '../../../src/utils/digiMapShared';   // ★ beta92 the gallery's digi map row (the app's same words)   // ★ beta92 the digi map's stats / legend / summary (the app's same code)   // ★ beta92 the digi map's FIT key (the app's same code)
+import { bandLabelPieces } from '../../../src/utils/bandLabelPiece';   // ★ beta95 the band strip's label room (the app's rule)
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★★★ beta92 ONE auto fit for every map — the ADS-B map's glide
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../../../src/utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend
 import { bandSkimTitle, bandSkimPassband, bandSkimLabels, withSkimLabels, bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, type BandSkim, type BandSkimSignal } from '../../../src/services/bandSkim';   // ★★ beta92 the BAND SKIMMER
@@ -4321,16 +4322,25 @@ function drawBands() {
 
   const region = ituRegion();
 
-  for (const b of BAND_PLAN_DRAW_ORDER) {                        // ★ widest first — see BAND_PLAN_DRAW_ORDER
+  // ★ the segments in view, widest first — see BAND_PLAN_DRAW_ORDER
+  const segs: Array<{ b: Band; x0: number; x1: number; lx0: number; lx1: number }> = [];
+  for (const b of BAND_PLAN_DRAW_ORDER) {
     if (b.hi < lo || b.lo > hi) continue;                       // not in view
     // Region-scoped: an 80m edge or an AM band-top from the wrong ITU region is
     // simply the wrong information.
     if (b.regions && b.regions.length && !b.regions.includes(region)) continue;
-
     const x0 = Math.max(0, xOf(b.lo));
     const x1 = Math.min(w, xOf(b.hi));
     if (x1 - x0 < 1) continue;
+    segs.push({ b, x0, x1, lx0: x0, lx1: x1 });
+  }
+  /* ★★ beta95 EACH LABEL IN ITS OWN BAND'S VISIBLE PIECE, NEVER OVERPRINTED — the app's rule (WaterfallView, main
+   *  35459577a; Stuart, 225.648 MHz: "DAB / DAB+ (Band III)" and "UHF Military Airband" printed on top of each other). A
+   *  band's bar is drawn under every narrower band on it, so its label belongs only in the part still showing: its span
+   *  less every later segment, the widest such piece. Too narrow for even the short name → no label. */
+  bandLabelPieces(segs).forEach(([p0, p1], i) => { segs[i].lx0 = p0; segs[i].lx1 = p1; });
 
+  for (const { b, x0, x1, lx0, lx1 } of segs) {
     ctx.fillStyle = bandColour(b);
     ctx.fillRect(x0, 0, x1 - x0, h);
 
@@ -4340,7 +4350,7 @@ function drawBands() {
     const short = b.bandLabel || b.name;
     const wFull = ctx.measureText(full).width;
     const wShort = ctx.measureText(short).width;
-    const room = x1 - x0;
+    const room = lx1 - lx0;   // ★ beta95 its visible piece, not its whole span
 
     let label = '';
     let tw = 0;
@@ -4353,15 +4363,15 @@ function drawBands() {
       //    way — so on a phone the last letter of "FM Broadcast Band" leaked into the band next
       //    to it. A label that escapes its block reads as belonging to the WRONG BAND, which on
       //    a band plan is not cosmetic. Clipping makes the overflow impossible rather than
-      //    unlikely, whatever the width, dpr or rounding.
+      //    unlikely, whatever the width, dpr or rounding. ★ beta95 clipped to its visible piece.
       ctx.save();
       ctx.beginPath();
-      ctx.rect(x0, 0, x1 - x0, h);
+      ctx.rect(lx0, 0, lx1 - lx0, h);
       ctx.clip();
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillText(label, (x0 + x1) / 2 - tw / 2 + dpr, h / 2 + dpr);
+      ctx.fillText(label, (lx0 + lx1) / 2 - tw / 2 + dpr, h / 2 + dpr);
       ctx.fillStyle = 'rgba(255,255,255,0.95)';
-      ctx.fillText(label, (x0 + x1) / 2 - tw / 2, h / 2);
+      ctx.fillText(label, (lx0 + lx1) / 2 - tw / 2, h / 2);
       ctx.restore();
     }
   }
@@ -10083,10 +10093,10 @@ function trkFlagHtml(flag: string | undefined): string {
   const iso = String.fromCharCode(...cps.map((c) => c - 0x1F1E6 + 65));
   return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
 }
-function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
-  return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean }): string {
+  return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
     + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
-    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
+    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
 function shipDscPins(now: number): DscPin2[] {
@@ -10107,7 +10117,8 @@ function shipKeyHtml(present: ShipLayerId[]): string {
   if (present.includes('warnings')) h += NAV_HAZARDS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id])}<span>${escapeHtml(x.words)}</span></div>`).join('')
     + NAV_MARK_ROWS.map((x) => `<div class="kr">${navMarkRowSvg(x, 16)}<span>${escapeHtml(x.words)}</span></div>`).join('');   // ★ v10 the not-working marks, as the app's legend
   if (present.includes('weather')) h += windLegendRows().map(([g, w]) => `<div class="kr">${g}<span>${escapeHtml(w)}</span></div>`).join('');
-  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m)));
+  // ★ beta95 the attribution follows the areas in VIEW (they are drawn worldwide now), the near set before the map is made
+  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasInView((navView?.open ? navView : aisView)?.viewBox() ?? null, myPos() ?? navLast.st?.rx ?? null, navLast.m)));
   return h;
 }
 /** ★★ ONE COMPOSITION for both views: the items, the RECEIVED list (a section per layer shown) and the status line.
@@ -10187,14 +10198,14 @@ function navDraw() {
   if (!navView?.open) return;
   const c = shipCompose(shipFocus, false);
   shipSetChrome(navView, c.present);
-  navView.update(c.items, c.rows, c.status, c.items.length, c.rx);
+  navView.update(c.items, c.rows, c.status, c.items.filter((i: any) => !i._nofit).length, c.rx);   // ★ beta95 the count is what was heard, not the chart (the sea areas are worldwide)
   navView.note(c.building);
 }
 /** ★ The view options both shipping views share: items carry their own icon, label and card (_ic, _lb, _cd); AIS mode's
  *  live ships are raw vessels and use the AIS layer's own. */
 function shipViewOpts() {
   return {
-    icon: (it: any) => it._ic ?? aisIcon(it), label: (it: any) => it._lb ?? aisName(it), card: (it: any) => it._cd ?? aisCard(it, myPos()),
+    icon: (it: any) => it._ic ?? aisIcon(it), label: (it: any) => it._lb ?? aisLabel(it), card: (it: any) => it._cd ?? aisCard(it, myPos()),
     heard: (it: any) => it._h ?? 0, labelRank: (it: any) => it._rk ?? 0, arc: (it: any) => !!it._arc,
     shape: (it: any) => it._sh, cluster: (it: any) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it: any) => it._aria || it._lb || '',
     // ★ the declutter's priority: the selected item, stations, warnings, then the weather labels — which give way first
@@ -17819,10 +17830,18 @@ function setDecLive(on: boolean) {
 }
 
 /** Copy the live canvas onto the visible one (used when viewing live, and on return-to-live). */
+/* ★★ beta95 METEOR: THE PICTURE IS AS TALL AS WHAT HAS ARRIVED (Stuart 11-25: "it did draw but scrolled to nothing").
+ *  The server pre-sizes the preview to 1 600 rows (0x07); shown whole, the SATELLITE box's follow went to the foot of an
+ *  empty canvas. The live LRPT picture is shown to its last row drawn — always a decoded one (the server sends a gap's
+ *  rows, hatched and labelled, only once picture follows it) — so following the foot follows the newest picture. */
+function visibleRows(src: HTMLCanvasElement): number {
+  return src === decLiveCv && activeDec === 'lrpt' && decLiveMaxY >= 0 ? Math.min(src.height, decLiveMaxY + 1) : src.height;
+}
 function blitToVisible(src: HTMLCanvasElement | null) {
   const c = $<HTMLCanvasElement>('decImage');
   if (!src) return;
-  if (c.width !== src.width || c.height !== src.height) { c.width = src.width; c.height = src.height; }
+  const h = visibleRows(src);
+  if (c.width !== src.width || c.height !== h) { c.width = src.width; c.height = h; }
   const ctx = c.getContext('2d');
   ctx?.clearRect(0, 0, c.width, c.height);
   ctx?.drawImage(src, 0, 0);
@@ -18230,7 +18249,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   // Mirror the just-drawn line to the visible canvas when we're watching live.
   if (!decViewingPrev) {
     const vis = $<HTMLCanvasElement>('decImage');
-    if (vis.width !== cv.width || vis.height !== cv.height) blitToVisible(cv);
+    if (vis.width !== cv.width || vis.height !== visibleRows(cv)) blitToVisible(cv);   // ★ beta95 LRPT: grows with its rows
     else vis.getContext('2d')?.putImageData(img, 0, y);
   }
 }
@@ -18971,7 +18990,7 @@ function cleanAprs(list) {
     kind: okStr(a.kind, /[^A-Za-z0-9 -]/g, 16), symName: okStr(a.symName, /[<>&"'\`]/g, 40),
     comment: okStr(a.comment, /[<>&"'\`]/g, 120), status: okStr(a.status, /[<>&"'\`]/g, 120), wx: okStr(a.wx, /[<>&"'\`]/g, 120),
     km: a.km == null ? null : Math.round(okNum(a.km)), speed: a.speed == null ? null : okNum(a.speed),
-    course: a.course == null ? null : okNum(a.course), alt: a.alt == null ? null : okNum(a.alt), svg: okSvg(a.svg),
+    course: a.course == null ? null : okNum(a.course), alt: a.alt == null ? null : okNum(a.alt), svg: okSvg(a.svg), count: Math.max(0, okNum(a.count)),
     trail: Array.isArray(a.trail) ? a.trail.slice(-200).filter((p) => Array.isArray(p) && isFinite(Number(p[0])) && isFinite(Number(p[1])))
       .map((p) => [Math.max(-90, Math.min(90, Number(p[0]))), Math.max(-180, Math.min(180, Number(p[1])))]) : [],
   }));
@@ -19337,7 +19356,7 @@ const pan = digiStatsHtml(st, {
   modes: MODES, modeColour: modeColour,
   rx: me ? RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') : '',
   aprs: { n: aprs.length, on: show.aprs, far: ak.length ? { km: ak[0].km, call: ak[0].call } : null, leg: APRS_LEG,
-          only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '' },
+          only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '', today: digiAprsToday(aprs, Date.now()) },   // ★ beta95
   svgOk: okSvg, overlay: overlay,
   tot: { srvOk: srvOk, winWords: (WINDOWS.find((w) => w.id === win) || { words: '' }).words, drawn: stored.size, total: srvTotal, trunc: srvTrunc,
          unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent,
@@ -19978,7 +19997,7 @@ async function renderGallery(page = galPage) {
         const n = document.createElement('span'); n.className = 'n';
         const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
         n.appendChild(document.createTextNode(`SHIPPING MAP · NAVTEX stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
-          + (far ? ` · furthest ${far.name} ${Math.round(far.km!).toLocaleString('en-GB')} km` : '')));
+          + (far ? ` · furthest ${far.name} ${Math.round(far.km! / 1.852).toLocaleString('en-GB')} NM` : '')));   // ★ beta95 NM on the shipping map
         n.appendChild(document.createElement('br'));
         const src = document.createElement('span'); src.className = 'src';
         src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';

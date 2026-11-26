@@ -318,6 +318,40 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(M.rangeRing(NaN, 0, km) === null && M.rangeRing(1, 1, null) === null, 'range outline: no centre or no bins = none');
 }
 
+// ── V12 beta95 THE LIVE OUTLINE (rangeConsistent / rangeOffer / rangeMerge) and NO NEEDLES (rangeSmooth) ──
+{
+  const t0 = 1000000;
+  ok(!M.rangeConsistent(null, { lat: 52, lon: 0, t: t0 }), 'live outline: a first position proves nothing');
+  ok(M.rangeConsistent({ lat: 52, lon: 0, t: t0 }, { lat: 52.05, lon: 0, t: t0 + 10000 }), 'live outline: 3 NM in 10 s (1 080 kt) is flight');
+  ok(!M.rangeConsistent({ lat: 52, lon: 0, t: t0 }, { lat: 53, lon: 0, t: t0 + 10000 }), 'live outline: 60 NM in 10 s is a bad fix');
+  ok(M.rangeConsistent({ lat: 52, lon: 0, t: t0 }, { lat: 52.003, lon: 0, t: t0 }), 'live outline: the same block (dt 0) floors at 1 s');
+  const km = new Array(M.RANGE_BINS).fill(0);
+  const east = M.destination(52.29, -0.85, 90.4, 100);         // 100 NM at 90.4° → bin 90
+  ok(M.rangeOffer(km, 52.29, -0.85, east.lat, east.lon) && Math.abs(km[90] - 185.2) < 0.2, 'live outline: 100 NM east grows bin 90 to 185 km');
+  ok(!M.rangeOffer(km, 52.29, -0.85, M.destination(52.29, -0.85, 90.6, 50).lat, M.destination(52.29, -0.85, 90.6, 50).lon), 'live outline: nearer on the same bearing never shrinks it');
+  const far = M.destination(52.29, -0.85, 200, 400);           // 741 km: past the 650 km cap
+  ok(!M.rangeOffer(km, 52.29, -0.85, far.lat, far.lon) && km[200] === 0, 'live outline: beyond 650 km is a bad fix, not range');
+  const merged = M.rangeMerge([10, 0, 30], [5, 20]);
+  ok(merged.length === 3 && merged[0] === 10 && merged[1] === 20 && merged[2] === 30, 'live outline: merge = max per bearing (server + live)');
+  ok(M.rangeMerge(null, [1, 2])[1] === 2, 'live outline: no server outline = the live one');
+}
+{
+  // a lone far aircraft among unheard bearings: a bump (neighbours lent 90 % / 75 %), never lowered itself
+  const km = new Array(360).fill(0);
+  km[0] = 100; km[90] = 100; km[180] = 100; km[270] = 300;
+  const sm = M.rangeSmooth(km);
+  ok(sm[270] === 300 && Math.abs(sm[269] - 270) < 1e-9 && Math.abs(sm[271] - 270) < 1e-9 && Math.abs(sm[268] - 225) < 1e-9, 'no needles: a far bearing lends its ±2° neighbours 90 % / 75 %');
+  ok(sm[267] === 0 && sm[273] === 0, 'no needles: nothing beyond ±2°');
+  ok(sm[0] === 100 && Math.abs(sm[359] - 90) < 1e-9 && Math.abs(sm[2] - 75) < 1e-9, 'no needles: wraps through north');
+  const flat = new Array(360).fill(120);
+  ok(M.rangeSmooth(flat).every((v) => v === 120), 'no needles: a smooth outline is unchanged');
+  const spike = new Array(360).fill(100); spike[45] = 200;
+  const ss = M.rangeSmooth(spike);
+  ok(ss[45] === 200 && ss[44] === 180 && ss[46] === 180 && ss[43] === 150 && ss[48] === 100, 'no needles: one far bearing in a full ring becomes a bump');
+  const r = M.rangeRing(52.29, -0.85, sm);
+  ok(r && r.length === 4 * 5 + 1, 'no needles: the ring joins only heard (and lent) bearings — no dive to the receiver');
+}
+
 // ── the generated copies (scripts/gen-adsblayer-source.mjs) ──
 {
   const copies = [['directory/public/mapgl/vendor/adsblayer.js', (t) => t],

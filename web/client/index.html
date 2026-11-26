@@ -1438,12 +1438,16 @@ body.adsbMap #srvHealth { right: 0 !important; }
 /* ★ V12 beta91 the Mictronics ODC-By notice at the list's foot (adsbInfo.ts ADSB_DATA_CREDIT — the card's words) */
 #adsbList .adsbCredit { padding: 6px 8px 4px; font: 10px/1.35 ui-monospace, Menlo, monospace; color: rgba(255, 184, 51, 0.55); border-top: 1px solid rgba(255, 160, 0, 0.14); }
 #adsbList .adsbCredit a { color: rgba(255, 184, 51, 0.92); }
-#adsbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0 10px; align-items: center;
+/* ★★ beta95 ONE COLUMN TEMPLATE FOR EVERY ROW: fixed widths for altitude / speed / range (was auto, so each row sized its
+   own and a row with "tracked 214 NM" squeezed its name column). Range fits "214 NM NE" and "tracked 999 NM". */
+#adsbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) 6.6em 4em 7.6em; gap: 0 8px; align-items: center;
   padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
 #adsbList .adsbRow:hover, #adsbList .adsbRow:focus-visible { background: var(--btn-active-bg); }
 #adsbList .adsbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
 #adsbList .adsbRow .id { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
-#adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#adsbList .adsbRow .id .l1 { display: flex; align-items: center; min-width: 0; }
+#adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+#adsbList .adsbRow .id .ex { flex: 0 0 auto; display: inline-flex; align-items: center; white-space: nowrap; }
 /* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
 #adsbList .adsbRow .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; margin-left: 6px; vertical-align: 0; }
 #adsbList .adsbRow .sig i { display: block; width: 2.5px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
@@ -1466,10 +1470,9 @@ body.adsbMap #srvHealth { right: 0 !important; }
   line-height: 10px; letter-spacing: .8px; font-weight: 700; }
 #adsbList .adsbRow .id small .oplogo { height: 11px; max-width: 48px; vertical-align: -2px; object-fit: contain; }
 #adsbList .adsbRow .alt, #adsbList .adsbRow .spd, #adsbList .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 11.5px; }
-#adsbList .adsbRow .alt { min-width: 4.9em; }
-#adsbList .adsbRow .spd { min-width: 3.4em; opacity: .8; }
-#adsbList .adsbRow .rng { min-width: 4.6em; }
-#adsbList .adsbRow .rng .trk { display: block; font-size: 10px; opacity: .7; }
+#adsbList .adsbRow .alt, #adsbList .adsbRow .rng { overflow: hidden; }
+#adsbList .adsbRow .spd { opacity: .8; }
+#adsbList .adsbRow .rng .trk { display: block; font-size: 10px; opacity: .7; overflow: hidden; text-overflow: ellipsis; }
 #adsbList .adsbRow i { font-style: normal; font-size: 8px; margin-left: 3px; vertical-align: 1px; }
 /* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
 #adsbList .adsbRow .brg, #adsbList .adsbRow .dim { opacity: .6; }
@@ -1498,7 +1501,7 @@ body.adsbMap #srvHealth { right: 0 !important; }
     mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); padding-left: 6px; padding-right: 14px; }
   #adsbTop { gap: 6px; }
   #adsbTop button { padding: 6px 9px; font-size: 12px; }
-  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) auto auto; }
+  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em 7.6em; }
   #adsbList .adsbRow .spd { display: none; }
   #adsbList { max-height: 222px; max-height: min(6 * 37px, 30vh); }
 }

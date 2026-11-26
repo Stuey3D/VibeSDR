@@ -45,6 +45,37 @@ inline double rotDegMin(int r) {
     return r < 0 ? -v * v : v * v;
 }
 
+/* ★★★ V12 beta95 IMPLAUSIBLE POSITIONS (Stuart, 2026-11-25: "no way that can be right" — a yacht moored in Schiedam
+ *  plotted in the Gulf of Guinea, 3 112 NM away, a dashed line from Rotterdam to it). The rules, in Stuart's words:
+ *   · NO DISTANCE REJECTION ("i dont want to rule out distance" — he has heard Spanish FM in Newcastle on Sporadic-E).
+ *     Distance never hides a ship. Further than kDxNm from the receiver = a DX CANDIDATE: "unconfirmed" (listed, no
+ *     dot) until a second report AGREES (the same place, or reached at a believable speed), then plotted with a "DX" tag.
+ *   · THE WHOLE-MINUTE CHECK rejects the fakes: a moving station's latitude AND longitude both on whole minutes
+ *     (vibe_ais.h Msg::wholeMin) is a transponder with no fix sending a default — dropped, counted ("position
+ *     implausible" while it has nothing better), never believed.
+ *   · A SINGLE REPORT THAT JUMPS far from a ship's known track (faster than kShipMaxKn from the last believed fix) is HELD,
+ *     not believed. A second report agreeing with the held one believes it (the ship really is there — its track starts
+ *     again, no line across the map); one agreeing with the track drops it.
+ *   · A position that is not believed never enters the trail, so never the ship store's track (vibe_ais_store.h). */
+static constexpr double kDxNm = 75;        ///< further than this from the receiver: a DX candidate (AIS is ~20–40 NM)
+static constexpr double kAgreeNm = 0.3;    ///< two reports this close agree, whatever the time between them
+static constexpr double kShipMaxKn = 60;   ///< the fastest a surface station believably moves (fast craft ~45 kn)
+static constexpr double kSarMaxKn = 600;   ///< a SAR aircraft (type 9)
+inline double gcNm(double la1, double lo1, double la2, double lo2) {
+    const double r = M_PI / 180, a = std::sin((la2 - la1) * r / 2), b = std::sin((lo2 - lo1) * r / 2);
+    const double h = a * a + std::cos(la1 * r) * std::cos(la2 * r) * b * b;
+    return 2 * 6371.0088 * std::asin(std::min(1.0, std::sqrt(h))) / 1.852;
+}
+/** Does a report at (la, lo, t) agree with one at (la0, lo0, t0) — the same place, or reached at ≤ maxKn? */
+inline bool agrees(double la0, double lo0, double t0, double la, double lo, double t, double maxKn) {
+    const double d = gcNm(la0, lo0, la, lo);
+    if (d <= kAgreeNm) return true;
+    return d / std::max(1.0, t - t0) * 3600.0 <= maxKn;
+}
+/** A station that moves (its own GPS): ships, SAR aircraft, SARTs. AtoNs and base stations send surveyed positions,
+ *  which may well be round. */
+inline bool movingType(int type) { return type == 1 || type == 2 || type == 3 || type == 18 || type == 19 || type == 9; }
+
 struct Vessel {
     uint32_t mmsi = 0;
     std::string kind = "A";          ///< A | B | base | aton | sar | sart
@@ -70,6 +101,11 @@ struct Vessel {
     std::deque<Pt> trail;
     std::string logLine, loggedName; double loggedAt = -1e9;
     double storedAt = -1, storedTrailT = -1;   ///< ★ V12 the ship store (vibe_ais_store.h): what was last handed to it
+    // ★★ beta95 implausible positions (kDxNm above): a report held, not believed (pAt < 0 = none); whole-minute fakes
+    double pLat = NAN, pLon = NAN, pAt = -1;
+    int held = 0, fakes = 0;
+    bool dx = false;       ///< the believed position is further than kDxNm from the receiver (confirmed by two reports)
+    bool coarse = false;   ///< the believed position came from type 27 (1/10-minute grid): no whole-minute test on it
 };
 
 inline std::string displayName(const Vessel& v) {
@@ -107,6 +143,9 @@ inline std::string readable(const Vessel& v) {
     }
     if (v.nav >= 0 && navStatusName(v.nav)[0] && v.nav != 0) s += dot + std::string(navStatusName(v.nav));
     if (!v.dest.empty()) s += " \xe2\x86\x92 " + v.dest;   // →
+    if (v.dx) s += dot + std::string("DX");
+    else if (v.lat != v.lat && v.pAt >= 0) s += dot + std::string("DX? unconfirmed position");
+    else if (v.lat != v.lat && v.fakes > 0) s += dot + std::string("position implausible");
     return s;
 }
 
@@ -120,6 +159,13 @@ public:
 
     ~Service() { stop(); }
 
+    /** ★ beta95 the receiver's place (the DX rule — kDxNm). NaN = unknown: then no report is a DX candidate. */
+    void setReceiver(double lat, double lon) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        const bool ok = lat == lat && lon == lon && std::fabs(lat) <= 90 && std::fabs(lon) <= 180 && !(lat == 0 && lon == 0);
+        rxLat_ = ok ? lat : NAN; rxLon_ = ok ? lon : NAN;
+    }
+
     /** Start with the radio tuned to `hwCentreHz` at `rateHz`. `keepList`: a restart on the same channels (the rate
      *  changed underneath) keeps the ships; entering the mode clears. `sink`: the gallery's day log (or null). */
     void start(double hwCentreHz, double rateHz, bool keepList = false, std::shared_ptr<vibestation::Sink> sink = nullptr) {
@@ -130,7 +176,7 @@ public:
         fe_.reset(new Front(rateHz, hwCentreHz));
         fe_->seedAfc(afcHz_);   // ★ the crystal's error from the last run (Front::afcStep_): no settling again
         queue_.clear(); queued_ = 0; dropped_ = 0;
-        if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); notices_.clear(); binary_ = 0; rateWin_.clear(); }
+        if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; fakePos_ = held_ = relocated_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); notices_.clear(); binary_ = 0; rateWin_.clear(); }
         cap_.reset(rateHz, now());
         storeLast_ = now();
         run_ = true;
@@ -175,6 +221,15 @@ public:
 
     /** ★ For tests and the offline tool: one frame as the worker takes it (channel 0/1), with no thread. */
     void acceptForTest(int ch, const RawFrame& f) { std::lock_guard<std::mutex> lk(mtx_); accept_(ch, f, now()); }
+    /** ★ beta95 a frame at a service time of the test's choosing (the jump / DX rules judge speed over time). */
+    void acceptAtForTest(int ch, const RawFrame& f, double t) { std::lock_guard<std::mutex> lk(mtx_); accept_(ch, f, t); }
+    /** ★ beta95 one ship's row as the report draws it ('' = not heard). */
+    std::string vesselJsonForTest(uint32_t mmsi) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = ships_.find(mmsi);
+        if (it == ships_.end()) return std::string();
+        std::string o; vesselJson(it->second, now(), o); return o;
+    }
 
     /** {"type":"ais", "centre", "rate", "now", "msgs", "msgRate", "chA", "chB", "repaired", "dropped", "capture", "noise", "afc",
      *  "vessels":[…], "safety":[…]} */
@@ -186,10 +241,12 @@ public:
         const double span = std::min(60.0, std::max(1.0, t));
         char b[400];
         std::snprintf(b, sizeof b, "{\"type\":\"ais\",\"centre\":%.0f,\"rate\":%.0f,\"now\":%.1f,\"msgs\":%llu,\"msgRate\":%.2f,"
-                      "\"chA\":%llu,\"chB\":%llu,\"repaired\":%llu,\"other\":%llu,\"dropped\":%llu,\"capture\":%d,\"noise\":%.1f,\"afc\":%.0f,\"vessels\":[",
+                      "\"chA\":%llu,\"chB\":%llu,\"repaired\":%llu,\"other\":%llu,\"dropped\":%llu,\"capture\":%d,\"noise\":%.1f,\"afc\":%.0f,"
+                      "\"implausible\":%llu,\"heldPos\":%llu,\"vessels\":[",
                       kCentreHz, rate_, t, (unsigned long long)msgs_, rateWin_.size() / span * 60.0,
                       (unsigned long long)perCh_[0], (unsigned long long)perCh_[1], (unsigned long long)repaired_,
-                      (unsigned long long)other_, (unsigned long long)dropped_, cap_.percent(t), health_.noiseDb, afcHz_);
+                      (unsigned long long)other_, (unsigned long long)dropped_, cap_.percent(t), health_.noiseDb, afcHz_,
+                      (unsigned long long)fakePos_, (unsigned long long)held_);
         std::string o = b;
         std::vector<const Vessel*> v;
         for (const auto& kv : ships_) v.push_back(&kv.second);
@@ -292,6 +349,7 @@ private:
                 c.bow = v.bow; c.stern = v.stern; c.port = v.port; c.stbd = v.stbd;
                 c.etaMonth = v.etaMonth; c.etaDay = v.etaDay; c.etaHour = v.etaHour; c.etaMin = v.etaMin;
                 c.virt = v.virt; c.offPos = v.offPos; c.atonStatus = v.atonStatus; c.first = v.first;
+                c.dx = v.dx; c.coarse = v.coarse; c.fakes = v.fakes;   // ★ beta95 (never the held report: it is not believed)
                 c.nMet = v.nMet; for (int k = 0; k < v.nMet; ++k) { c.met[k] = v.met[k]; c.metAt[k] = v.metAt[k]; } c.last = v.last; c.posAt = v.posAt; c.count = v.count; c.ch = v.ch;
                 for (const auto& p : v.trail) if (p.t > v.storedTrailT) c.trail.push_back(p);
                 if (!v.trail.empty()) v.storedTrailT = v.trail.back().t;
@@ -359,8 +417,13 @@ private:
         if (m.type == 9) v.altM = m.altM;
         if (m.nav >= 0) v.nav = m.nav;
         if (m.type == 1 || m.type == 2 || m.type == 3) v.rot = m.rot;
-        if (m.hasPos) {
-            v.lat = m.lat; v.lon = m.lon; v.posAt = t;
+        bool posOk = m.hasPos;
+        // ★★ beta95 the whole-minute fake (see kDxNm): dropped and counted, never believed
+        if (posOk && m.wholeMin && movingType(m.type)) { ++v.fakes; ++fakePos_; posOk = false; }
+        if (posOk) posOk = believe_(v, m, t);
+        if (posOk) {
+            v.lat = m.lat; v.lon = m.lon; v.posAt = t; v.coarse = m.type == 27;
+            v.dx = rxLat_ == rxLat_ && gcNm(rxLat_, rxLon_, m.lat, m.lon) > kDxNm;
             v.sog = m.sog; v.cog = m.cog; v.heading = m.heading;
             // ★ the trail: a point when it has moved 50 m or a minute has passed, at most kTrailMax
             bool add = v.trail.empty();
@@ -391,6 +454,28 @@ private:
                 v.logLine = line; v.loggedAt = t; v.loggedName = displayName(v);
             }
         }
+    }
+    /** ★★ beta95 believe this position? (the rules at kDxNm). False = held as the ship's pending report. */
+    bool believe_(Vessel& v, const Msg& m, double t) {
+        const bool moving = movingType(m.type);
+        const double maxKn = m.type == 9 ? kSarMaxKn : moving ? kShipMaxKn : 0;   // ★ a fixed station agrees only in place
+        const bool pend = v.pAt >= 0 && agrees(v.pLat, v.pLon, v.pAt, m.lat, m.lon, t, maxKn);
+        const bool far = rxLat_ == rxLat_ && gcNm(rxLat_, rxLon_, m.lat, m.lon) > kDxNm;
+        bool ok;
+        if (moving && v.lat == v.lat && v.posAt >= 0) {
+            if (agrees(v.lat, v.lon, v.posAt, m.lat, m.lon, t, maxKn)) ok = true;
+            else if (pend) { ok = true; v.trail.clear(); ++relocated_; }   // ★ two reports agree on the new place: no line across
+            else ok = false;
+        } else if (!moving && v.lat == v.lat && agrees(v.lat, v.lon, v.posAt, m.lat, m.lon, t, 0)) {
+            ok = true;   // ★ an AtoN / base station where it was
+        } else {
+            // ★ a first position (or a fixed station's own position, which beats one taken from its weather readings):
+            //   near = believed at once, far = a DX candidate until a second report agrees
+            ok = !far || pend;
+        }
+        if (ok) { v.pAt = -1; v.pLat = v.pLon = NAN; }
+        else { v.pLat = m.lat; v.pLon = m.lon; v.pAt = t; ++v.held; ++held_; }
+        return ok;
     }
     /** ★ A met report onto its sender: the same SITE (within 500 m, or both without a position) is replaced, a new one
      *  added, the oldest of kMetSites given up. A station with no position of its own is drawn at the readings'. */
@@ -475,6 +560,14 @@ public:
         if (v.etaMonth > 0 && v.etaDay > 0) { char b[24]; std::snprintf(b, sizeof b, "%02d-%02d %02d:%02d", v.etaMonth, v.etaDay, v.etaHour < 24 ? v.etaHour : 0, v.etaMin < 60 ? v.etaMin : 0); str("eta", b); }
         if (v.altM >= 0) inum("alt", v.altM);
         if (v.trend) o += ",\"trend\":" + std::to_string(v.trend);
+        // ★★ beta95 (kDxNm): dx = believed and far (two reports agreed); unconf = a far first report held, uLat/uLon where
+        //    it claims (listed, never a dot); held = a jump from the track held; fakes = whole-minute reports dropped
+        if (v.dx) o += ",\"dx\":1";
+        if (v.pAt >= 0) {
+            if (v.lat != v.lat) o += ",\"unconf\":1,\"uLat\":" + fmtNum(v.pLat, 5) + ",\"uLon\":" + fmtNum(v.pLon, 5);
+            else o += ",\"held\":1";
+        }
+        if (v.fakes > 0) o += ",\"fakes\":" + std::to_string(v.fakes);
         o += ",\"line\":\"" + jsonEsc(readable(v)) + "\"";
         char b[160];
         std::snprintf(b, sizeof b, ",\"ch\":\"%s\",\"level\":%.1f,\"snr\":%.1f,\"seen\":%.0f,\"age\":%.0f,\"posAge\":%.0f,\"count\":%d,\"trail\":%zu}",
@@ -497,6 +590,8 @@ private:
     std::deque<std::vector<cf>> queue_;
     size_t queued_ = 0;
     uint64_t clipN_ = 0, clipSeen_ = 0, repairUnknown_ = 0;
+    uint64_t fakePos_ = 0, held_ = 0, relocated_ = 0;   ///< ★ beta95 whole-minute fakes dropped · reports held · ships relocated
+    double rxLat_ = NAN, rxLon_ = NAN;                 ///< ★ beta95 the receiver (setReceiver) — the DX rule
     uint64_t dropped_ = 0, msgs_ = 0, perCh_[2] = {0, 0}, repaired_ = 0, other_ = 0;
     std::deque<double> rateWin_;
     vibeadsb::CaptureMeter cap_;
