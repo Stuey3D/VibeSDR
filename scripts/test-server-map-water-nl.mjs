@@ -161,15 +161,17 @@ async function serverServesPack() {
 
 /* ★★ MEASURE_MEM=1: the map WebView's memory, the app's WHOLE-read path against its RANGE path (beta96). A fresh page per run,
  *  the map opened over the Netherlands at z5 and then the same 6 views, idle, a forced GC, then the RSS of every renderer process
- *  (SystemInfo.getProcessInfo → ps). Alternated whole/range 3 times so drift shows. Chromium's renderer = the Android
- *  System WebView's engine; the ArrayBuffers the whole path holds are outside the JS heap, so RSS is the honest figure. */
+ *  (ps, this Edge's --user-data-dir). Alternated whole/range 3 times so drift shows. Chromium's renderer = the Android
+ *  System WebView's engine. The JUDGED figure is V8's ArrayBuffer backing stores (Runtime.getHeapUsage), where
+ *  the whole path's packs live; renderer RSS is printed too but swings by hundreds of MB under SwiftShader (11-26 runs). */
 async function measureMemory() {
   const views = [[5.4, 52.7, 5], [4.48, 51.91, 8], [-0.08, 51.505, 9], [106.7, 10.78, 8], [0, 30, 1], [5.4, 52.7, 7]];
   const rss = async () => {
-    const pi = await call('SystemInfo.getProcessInfo');
-    const ids = (pi.result?.processInfo || []).filter((p) => p.type === 'renderer').map((p) => p.id);
+    // ★ this test's own Edge only (its private --user-data-dir), renderer processes only (the page's JS + its ArrayBuffers)
     let kb = 0;
-    for (const id of ids) { try { kb += Number(execFileSync('ps', ['-o', 'rss=', '-p', String(id)]).toString().trim()) || 0; } catch {} }
+    for (const line of execFileSync('ps', ['-ax', '-ww', '-o', 'rss=,command=']).toString().split('\n')) {
+      if (line.includes('--type=renderer') && line.includes(dir)) kb += Number(line.trim().split(/\s+/)[0]) || 0;
+    }
     return kb / 1024;
   };
   const res = { whole: [], range: [] };
@@ -184,14 +186,18 @@ async function measureMemory() {
       }
       await call('HeapProfiler.collectGarbage'); await sleep(1500); await call('HeapProfiler.collectGarbage'); await sleep(500);
       const mb = await rss();
+      // ★ the deterministic figure: V8's ArrayBuffer backing stores + JS heap of the page (Runtime.getHeapUsage)
+      const hu = (await call('Runtime.getHeapUsage')).result || {};
+      const ab = (hu.backingStorageSize || 0) / 1048576, heap = (hu.usedSize || 0) / 1048576;
+      res[mode + 'Ab'] = (res[mode + 'Ab'] || []).concat(ab);
       const rr = await js(`JSON.stringify({ n: window.__rangeReads || 0, b: window.__rangeBytes || 0 })`);
       res[mode].push(mb);
-      console.log(`   ${mode.padEnd(5)} round ${round + 1}: renderer RSS ${mb.toFixed(1)} MB; range reads ${rr}`);
+      console.log(`   ${mode.padEnd(5)} round ${round + 1}: ArrayBuffers ${ab.toFixed(1)} MB, JS heap ${heap.toFixed(1)} MB, renderer RSS ${mb.toFixed(1)} MB (noisy); range reads ${rr}`);
     }
   }
   const med = (a) => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
-  console.log(`   median: whole ${med(res.whole).toFixed(1)} MB, range ${med(res.range).toFixed(1)} MB, saved ${(med(res.whole) - med(res.range)).toFixed(1)} MB`);
-  ok(med(res.whole) - med(res.range) > 15, 'the range path holds at least 15 MB less than the whole read');
+  console.log(`   median ArrayBuffers: whole ${med(res.wholeAb).toFixed(1)} MB, range ${med(res.rangeAb).toFixed(1)} MB, saved ${(med(res.wholeAb) - med(res.rangeAb)).toFixed(1)} MB`);
+  ok(med(res.wholeAb) - med(res.rangeAb) > 25, 'the range path holds at least 25 MB less in ArrayBuffers than the whole read (basic+relief+runways = 30.5 MB)');
 }
 
 try {

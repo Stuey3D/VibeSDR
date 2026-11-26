@@ -40,7 +40,7 @@ import { isMacHost } from '../services/macAudio';
 import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
 import { ensureMapPack, writeMapPage } from '../services/mapPack';
-import { ensureMapglPack } from '../services/mapglPack';
+import { ensureMapglPack, readPackRange } from '../services/mapglPack';
 import { detailInstalled, readDetailRange } from '../services/mapglDetail';
 import { jsStringLiteral, isAllowedHostFetchPath } from '../utils/pageSafety';
 import { wsOriginFor } from '../utils/safeUrl';
@@ -856,7 +856,13 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       var id='mg'+(++window.__mgSeq);window.__mgWait[id]=res;
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
-    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
+    /* ★★★ beta96 THE BUNDLED PACKS BY RANGE TOO (mapglPack.ts readPackRange): basic 18 MB + relief + runways used to sit
+     *  in this page whole (~30 MB) while a map was open. Same bridge and deliverer as the detail pack. */
+    var packRange=window.ReactNativeWebView?function(name,off,len){return new Promise(function(res){
+      var id='mp'+(++window.__mgSeq);window.__mgWait[id]=res;
+      window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgpack',id:id,f:name,off:off,len:len}));
+      setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
+    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,packRange:packRange,
       profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
       scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'nautical':'metric',scalePosition:'${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
@@ -2827,6 +2833,15 @@ export default function MapOverlay(
             if (m && (m as any).t === 'mgrange' && (m as any).id) {
               const id = String((m as any).id);
               const b64 = readDetailRange(Number((m as any).off) || 0, Number((m as any).len) || 0);
+              webRef.current?.injectJavaScript(
+                `window.__mgDeliver&&window.__mgDeliver(${JSON.stringify(id)},${b64 ? JSON.stringify(b64) : 'null'});true;`);
+              return;
+            }
+            /* ★★★ beta96 A BYTE RANGE OF A BUNDLED PACK (basic / relief / runways — mapglPack.ts readPackRange): read by
+             *  range like the detail pack, never whole into the page. */
+            if (m && (m as any).t === 'mgpack' && (m as any).id) {
+              const id = String((m as any).id);
+              const b64 = readPackRange(glBase, String((m as any).f || ''), Number((m as any).off) || 0, Number((m as any).len) || 0);
               webRef.current?.injectJavaScript(
                 `window.__mgDeliver&&window.__mgDeliver(${JSON.stringify(id)},${b64 ? JSON.stringify(b64) : 'null'});true;`);
               return;

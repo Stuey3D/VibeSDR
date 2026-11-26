@@ -40,6 +40,7 @@ const DIR_SCRIPTS = [...APP_SCRIPTS,
 function writeManifest() {
   const m = mapglManifest(DEST);
   writeFileSync(path.join(root, 'src/generated/mapglAssets.ts'), m.text);
+  writeFileSync(path.join(root, 'src/generated/mapglAssets.android.ts'), m.androidText);   // ★ beta96: Android embeds none (mapgl-manifest.mjs)
   console.log(`assets/mapgl: ${m.count} files, ${(m.total / 1048576).toFixed(1)} MB, version ${m.version} -> src/generated/mapglAssets.ts`);
 }
 /* ★★ THE BASIC PACK'S REVISION RIDES IN THE STYLE (beta96, the rivers made it 11 -> 18 MB). /mapgl/ is served with a
