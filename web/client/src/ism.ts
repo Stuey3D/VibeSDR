@@ -616,7 +616,7 @@ export class IsmBox {
     if (!c) return;
     const u = this.prefs.units;
     c.innerHTML = ISM_KINDS.map((k) => `<button data-k="${k.id}" class="${this.prefs.filter === k.id ? 'on' : ''}">${k.label}</button>`).join('')
-      + `<button class="ismUnits" data-u="speed" title="Wind speed units">${u.mph ? 'MPH' : 'KM/H'}</button>`
+      + `<button class="ismUnits" data-u="speed" title="Speed and distance units: km/h and km, or mph and miles (the mesh maps too)">${u.mph ? 'MPH' : 'KM/H'}</button>`
       + `<button data-u="pressure" title="Tyre pressure units">${u.pressure.toUpperCase()}</button>`;
     c.querySelectorAll('button').forEach((b) => {
       (b as HTMLButtonElement).onclick = () => {

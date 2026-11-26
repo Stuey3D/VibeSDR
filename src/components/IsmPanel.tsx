@@ -201,7 +201,7 @@ export default function IsmPanel(p: IsmPanelProps) {
                   onX={(x) => { chipX.current[`k:${k.id}`] = x; }} />
           ))}
           <View style={s.gap} />
-          <Chip s={s} label={units.mph ? 'MPH' : 'KM/H'} on={false} a11y="Wind speed units"
+          <Chip s={s} label={units.mph ? 'MPH' : 'KM/H'} on={false} a11y="Speed and distance units: km/h and km, or mph and miles (the mesh maps too)"
                 onPress={() => pickUnits({ ...units, mph: !units.mph })} hl={hl('u:speed')} onX={(x) => { chipX.current['u:speed'] = x; }} />
           <Chip s={s} label={units.pressure.toUpperCase()} on={false} a11y="Tyre pressure units"
                 onPress={() => pickUnits({ ...units, pressure: nextPressure(units.pressure) })} hl={hl('u:pressure')} onX={(x) => { chipX.current['u:pressure'] = x; }} />
