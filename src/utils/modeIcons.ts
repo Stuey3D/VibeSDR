@@ -158,7 +158,7 @@ export function modeIconFor(id: string): ModeIconName | null {
   const k = id.toLowerCase().replace(/[^a-z0-9]/g, '');
   switch (k) {
     case 'ale': return 'radio';   // ★ V12 2G HF ALE: a net's link-setting bursts
-    case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': case 'avdata': return 'aircraft';
+    case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': case 'avdata': case 'airsea': return 'aircraft';   // ★★★ beta96 AIR & SEA LIVE wears ADS-B's aircraft (ModeSelector's iconId="adsb")
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
     case 'ndb': case 'ncdxf': case 'vor': case 'ils': case 'vormap': return 'beacon';   // ★ V12 NCDXF / IARU beacons · VOR / ILS (a ground navaid, as an NDB)
     case 'sarsat': case 'epirb': case 'elt': case 'plb': return 'ship';  // ★ V12 406 MHz beacons (EPIRBs, mostly)
