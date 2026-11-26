@@ -12299,15 +12299,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the app's own stop) deletes this Impl and makes a new one — and the old tracker kept ticking: XCover SIGABRT "mutex_lock
      *  called on a destroyed mutex", Sony SIGSEGV, both in tid vibe-sat-track. It is now OWNED: it stops with the server
      *  (`stopping` / satTrackerStop_) and stopLocked JOINS it before anything it touches is freed (≤ one 200 ms nap). */
-    std::atomic<bool> satTrackerUp_{false};
+    /* ★★ (review, same day) The start and the stop are SERIALISED by satTrackerMtx_: a lock arriving on a connection
+     *  thread in the same instant as the stop could pass the quit check, lose the race to the stop's join (nothing to join
+     *  yet), and THEN assign the thread — a tracker started after the join, and a data race on the std::thread object
+     *  itself. Under the mutex the check and the start are one step, and satTrackerHalt() sets the flag and TAKES the thread
+     *  in one step, so after it returns no tracker can start on this Impl. The join is outside the mutex (the tracker
+     *  never takes it, but a lock that does must not wait 200 ms behind a join). */
+    std::mutex satTrackerMtx_;
     std::atomic<bool> satTrackerStop_{false};
-    std::thread satTrackerThread_;
+    std::thread satTrackerThread_;   // guarded by satTrackerMtx_
     bool satTrackerQuit() const { return satTrackerStop_.load() || stopping.load(); }
+    /** ★ Stop the tracker and hand back its thread to join (never joins under the mutex). Idempotent. */
+    std::thread satTrackerHalt() {
+        std::lock_guard<std::mutex> lk(satTrackerMtx_);
+        satTrackerStop_.store(true);
+        return std::move(satTrackerThread_);
+    }
     void satEnsureTracker() {
-        if (satTrackerQuit()) return;   // ★ a late lock during a stop starts nothing
-        bool f = false;
-        if (!satTrackerUp_.compare_exchange_strong(f, true)) return;
-        satTrackerThread_ = std::thread([this] {
+        std::lock_guard<std::mutex> lk(satTrackerMtx_);
+        if (satTrackerQuit()) return;                 // ★ a late lock during a stop starts nothing
+        if (satTrackerThread_.joinable()) return;     // ★ one per Impl (a NEW Impl after a restart starts its own)
+        try { satTrackerThread_ = std::thread([this] {
             vibeThreadName("vibe-sat-track");
             while (!satTrackerQuit()) {
                 const auto keys = satEngine().keys();
@@ -12364,7 +12376,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
             }
-        });
+        }); }
+        catch (const std::system_error& e) { LOGE("[sat] the Doppler tracker could not start (%s)", e.what()); }
     }
     /** {"type":"sat","op":"lock"|"unlock", norad?} — the Doppler button / the picker's TRACK. */
     /** ★ {"type":"sat","op":"lock"|"unlock", norad?} — the old Doppler button / picker TRACK (kept for old clients, one
@@ -44667,10 +44680,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ Any other way this Impl dies (a path that never ran stopLocked): stop and join the tracker here — a joinable
      *  std::thread destroyed is std::terminate. The LAST member of Impl, so it runs FIRST (members die in reverse order): the tracker stops before anything it reads is destroyed. */
     struct SatTrackerGuard { Impl* o; ~SatTrackerGuard() {
-        o->satTrackerStop_.store(true);
-        if (o->satTrackerThread_.joinable()) {
-            if (o->satTrackerThread_.get_id() == std::this_thread::get_id()) o->satTrackerThread_.detach();
-            else { try { o->satTrackerThread_.join(); } catch (...) { o->satTrackerThread_.detach(); } }
+        std::thread t = o->satTrackerHalt();
+        if (t.joinable()) {
+            if (t.get_id() == std::this_thread::get_id()) t.detach();
+            else { try { t.join(); } catch (...) { t.detach(); } }
         } } } satTrackerGuard_{this};
 };
 
@@ -50639,8 +50652,16 @@ void LocalSdrShim::stopLocked() {
         catch (const std::system_error& e) { LOGI("shim: %s join failed (%s)", what, e.what()); }
     };
     // ★★★ beta96 the satellite tracker first: it reads the clients, the decoders and the engine this stop is about to free
-    impl->satTrackerStop_.store(true);
-    joinSafely(impl->satTrackerThread_, "satellite tracker");
+    {
+        std::thread tracker = impl->satTrackerHalt();   // ★ flag + take, under its mutex: no tracker can start after this
+        joinSafely(tracker, "satellite tracker");
+        if (tracker.joinable()) tracker.detach();        // ★ a failed join must not leave a joinable thread to std::terminate
+        /* ★★ AND ITS LOCKS GO WITH THE RADIO. The engine is the PROCESS's singleton (vibe::sat::engine(), decoders reach
+         *  it) — on Linux a restart is a new process and starts with none; on a phone the old Impl's locks (the room's
+         *  pass, listeners' sessions that no longer exist) stayed in it, and the NEW Impl's first lock started a tracker
+         *  that ticked them — a dead pass's Doppler applied to the new dial. Orbits and the observer stay. */
+        for (const auto& k : satEngine().keys()) satEngine().stop(k);
+    }
     /* ★★★ NOTHING MAY ARRIVE WHILE THE RADIO IS TAKEN APART — SO EVERY CONNECTION IS FINISHED FIRST.
      *  (2026-10-16, Pi 500, radio 00000002, the setup page's save restarting every radio.)
      *  A listener arrived in the same second as the SIGTERM and asked for DAB. Its connection thread
