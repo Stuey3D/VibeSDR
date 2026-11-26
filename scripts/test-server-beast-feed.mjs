@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -260,7 +260,19 @@ console.log('\nC. adding and removing a Beast feed radio (POST /vibeserver/sdr-c
     r = await post({ action: 'remove', serial: 'beast-1' });
     const c2 = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     ok(r.status === 200 && !(c2.radios || []).some((x) => x.driver === 'beast'), `removed like any radio (${r.status} ${r.j.error || ''})`);
-  } finally { door.kill('SIGTERM'); }
+  } finally {
+    door.kill('SIGTERM');
+    // ★ the restarts this phase asks for (add, remove) start a NEW door process and the old one exits, so `door` is not
+    //   the process left listening — every run left one orphaned VibeServer on the Mac (found in the beta96 integration
+    //   run). Stop whatever listens on this phase's port, for long enough that the remove's restart (which comes up a
+    //   moment AFTER the answer) is caught too: until the port has been free for 4 s, at most 10 s.
+    const listeners = () => { try { return execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).split(/\s+/).filter(Boolean); } catch { return []; } };
+    for (let t = 0, quiet = 0; t < 10000 && quiet < 4000; t += 250) {
+      const pids = listeners();
+      if (pids.length) { quiet = 0; for (const pid of pids) try { process.kill(Number(pid), 'SIGTERM'); } catch {} } else quiet += 250;
+      await sleep(250);
+    }
+  }
 }
 console.log(`\ntest-server-beast-feed: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
