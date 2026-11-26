@@ -19,7 +19,10 @@
 //   (b) ONE UNEXPLAINED DEATH = NOTED, the same rate allowed again. Only a SECOND death at that rate within 24 h latches.
 //   (c) THE LATCH IS ONE RUNG DOWN, never further than it must: the boosts are capped BELOW the rate it died at
 //       (2.56 → 2.4), and a death above the ADS-B floor (2.4 MS/s) never caps below the floor — ADS-B stays.
-//       A death AT 2.4 caps at 2.048 (DAB still boosts; ADS-B cannot — there is no lower ADS-B rate to step to).
+//   ★★★ (c') 2.4 MS/s IS THE FLOOR, FULL STOP (Stuart, 2026-11-26: "2.4msps is the safe rate dont want to limit further
+//       as you will loose modes"). A latch NEVER caps below 2.4. A radio that stops twice AT 2.4 (or at DAB's 2.048) in
+//       24 h is not capped at all: the owner is told (`floor`, say()) — it is the radio, its USB power, cable or hub,
+//       not the rate — and every mode keeps its rate. (beta95 capped such a radio at 2.048, which took ADS-B away.)
 //   (d) IT CLEARS ITSELF: 24 h after it latched, the higher rate is tried again ONCE (probation). Another death there
 //       during the next 24 h latches again for good (until the owner clears it); 24 h clean on probation forgets it.
 //   (e) THE OWNER SEES IT (say(), the setup page and the app's server screen) and can clear it at any time.
@@ -44,12 +47,16 @@ static constexpr double kRateGuardAdsbFloorHz = 2.4e6;
  *  how long that retry must run clean to be forgotten. */
 static constexpr long long kRateGuardWindowSec = 24LL * 3600;
 
-/** The rates a boost can land on, in order — the rung below a death is the highest of these under it. */
+/** ★ (c') May a stop at `hz` step the boosts down at all? Only from above the 2.4 MS/s floor. */
+inline bool rateGuardCanStep(double hz) { return hz > kRateGuardAdsbFloorHz + 1000.0; }
+/** The rates a boost can land on, in order — the rung below a death is the highest of these under it, never below the
+ *  2.4 floor; 0 for a stop at or below the floor, which never steps down (c'). */
 inline double rateGuardRungBelow(double hz) {
+    if (!rateGuardCanStep(hz)) return 0;
     static const double kRungs[] = {2.048e6, 2.4e6, 2.56e6, 2.88e6, 3.0e6, 3.2e6, 4.0e6, 5.0e6, 6.0e6, 8.0e6, 10.0e6};
     double best = 0;
     for (double r : kRungs) if (r < hz - 1000.0) best = r;
-    if (hz > kRateGuardAdsbFloorHz + 1000.0 && best < kRateGuardAdsbFloorHz) best = kRateGuardAdsbFloorHz;
+    if (best < kRateGuardAdsbFloorHz) best = kRateGuardAdsbFloorHz;
     return best;
 }
 
@@ -77,8 +84,13 @@ struct RateFault {
     long long   probationAt = 0;
     int         noted = 0;           ///< stops in the last 24 h that have not latched (0 or 1)
     bool        legacy = false;      ///< loaded from a pre-beta95 record (see LocalSdrShim::setRateGuardBase)
+    // ── (c') stopped twice in 24 h AT the floor (2.4) or below: told to the owner, never capped ──
+    bool        floor = false;
+    double      floorRate = 0;
+    long long   floorAt = 0;
+    std::string floorMode;
 
-    bool any() const { return !kind.empty(); }
+    bool any() const { return !kind.empty() || floor; }
     static std::string rateText(double hz) {
         if (hz <= 0) return "a boosted rate";
         char b[32]; std::snprintf(b, sizeof b, "%.3f", hz / 1e6);
@@ -93,28 +105,41 @@ struct RateFault {
         const std::string where = rateText(rate) + (mode.empty() ? "" : " during " + mode);
         const std::string what = kind == "stalled" ? "SDR stopped responding at " : "SDR crashed at ";
         static const char* D = " \xe2\x80\x94 ";
+        // ★ (c') the floor note: nothing is held back, the owner is told it is the radio
+        const std::string floorWhy = floor
+            ? "The SDR stopped twice in 24 hours at " + rateText(floorRate) + (floorMode.empty() ? "" : " during " + floorMode)
+              + D + "kept at that rate, because a lower one would lose modes. A radio that stops at "
+              + rateText(floorRate) + " usually needs a better USB power supply, cable or hub."
+            : "";
+        if (floor && !latched && !probation) return floorWhy;
+        const std::string tail = floor ? " " + floorWhy : "";
         if (latched) {
             const std::string cap = ceiling >= 2.0e6
                 ? "modes now raise the rate only to " + rateText(ceiling)
                   + (ceiling >= kRateGuardAdsbFloorHz - 1000.0 ? " (ADS-B still runs)" : "")
                 : "no mode raises the rate (the radio stays at its own)";
             if (retried)
-                return what + where + D + "again after the 24-hour retry, so " + cap + " until you clear this.";
+                return what + where + D + "again after the 24-hour retry, so " + cap + " until you clear this." + tail;
             return what + where + " twice in 24 hours" + D + cap + ". It tries " + rateText(rate)
-                   + " again by itself after 24 hours, or clear this to try now.";
+                   + " again by itself after 24 hours, or clear this to try now." + tail;
         }
         if (probation)
-            return "Trying " + rateText(rate) + " again after 24 hours at a lower rate (it stopped there twice before).";
+            return "Trying " + rateText(rate) + " again after 24 hours at a lower rate (it stopped there twice before)." + tail;
+        if (!rateGuardCanStep(rate))   // (c') at the floor nothing is ever held lower
+            return what + where + D + "noted once; it will use that rate again (" + rateText(kRateGuardAdsbFloorHz)
+                   + " is never held lower, or modes would be lost).";
         return what + where + D + "noted once; it will use that rate again, and only a second stop within 24 hours "
                "holds it a step lower.";
     }
     std::string json() const {
-        char b[320];
+        char b[420];
         std::snprintf(b, sizeof b, "\",\"at\":%lld,\"rate\":%.0f,\"latched\":%s,\"ceiling\":%.0f,\"latchedAt\":%lld,"
-                      "\"retried\":%s,\"probation\":%s,\"probationAt\":%lld,\"noted\":%d,\"retryAt\":%lld,\"mode\":\"",
+                      "\"retried\":%s,\"probation\":%s,\"probationAt\":%lld,\"noted\":%d,\"retryAt\":%lld,"
+                      "\"floor\":%s,\"floorRate\":%.0f,\"floorAt\":%lld,\"floorMode\":\"%s\",\"mode\":\"",
                       at, rate, latched ? "true" : "false", ceiling, latchedAt, retried ? "true" : "false",
                       probation ? "true" : "false", probationAt, noted,
-                      latched && !retried ? latchedAt + kRateGuardWindowSec : 0LL);
+                      latched && !retried ? latchedAt + kRateGuardWindowSec : 0LL,
+                      floor ? "true" : "false", floorRate, floorAt, esc(floorMode).c_str());
         // ★ "blocked" = latched: what the pre-beta95 readers looked for (they no longer grey the switch on it)
         return "{\"v\":2,\"fault\":\"" + esc(kind) + b + esc(mode) + "\",\"blocked\":" + (latched ? "true" : "false")
              + ",\"say\":\"" + esc(say()) + "\"}";
@@ -263,7 +288,13 @@ private:
         if (f_.latched && !f_.retried && now >= f_.latchedAt + kRateGuardWindowSec) {
             f_.latched = false; f_.probation = true; f_.probationAt = now; f_.retried = true; changed = true;
         }
-        if (f_.probation && now >= f_.probationAt + kRateGuardWindowSec) { f_ = RateFault{}; deaths_.clear(); changed = true; }
+        if (f_.probation && now >= f_.probationAt + kRateGuardWindowSec) {
+            RateFault keep; keep.floor = f_.floor; keep.floorRate = f_.floorRate; keep.floorAt = f_.floorAt; keep.floorMode = f_.floorMode;
+            f_ = keep; deaths_.clear(); changed = true;
+        }
+        if (f_.floor && now >= f_.floorAt + kRateGuardWindowSec) {
+            f_.floor = false; f_.floorRate = 0; f_.floorAt = 0; f_.floorMode.clear(); changed = true;
+        }
         // stops that have aged out of the window are forgotten
         const size_t before = deaths_.size();
         for (size_t i = 0; i < deaths_.size();)
@@ -278,11 +309,12 @@ private:
     }
     /** One stop at a boosted rate. Returns true when it latched (rule b, or a failed retry — rule d). */
     bool deathLocked(const RateDeath& x, long long now) {
+        if (!rateGuardCanStep(x.rate)) return floorDeathLocked(x, now);
         f_.kind = x.kind; f_.at = x.at; f_.rate = x.rate; f_.mode = x.mode;
         if (f_.mode.size() > 16) f_.mode.resize(16);
         bool latch = false;
         if (f_.latched) {
-            // already held: a stop at the capped rate itself steps down once more
+            // already held: a stop at the capped rate itself steps down once more (never below the floor — (c'))
             if (x.rate <= f_.ceiling + 1000.0) { f_.ceiling = rateGuardRungBelow(x.rate); f_.latchedAt = now; }
             saveLocked();
             return true;
@@ -305,6 +337,25 @@ private:
         }
         saveLocked();
         return latch;
+    }
+    /** ★★★ (c') A stop AT the 2.4 floor or below (ADS-B at 2.4, DAB at 2.048): never a latch, never a cap. The first is
+     *  noted like any other; a second at that rate within 24 h raises the owner's note (`floor`) and nothing else.
+     *  While a latch or a probation stands, its own line stays and the floor note is added to it. Returns false. */
+    bool floorDeathLocked(const RateDeath& x, long long now) {
+        int same = 1;
+        for (const auto& d : deaths_) if (std::fabs(d.rate - x.rate) <= 1000.0 && x.at - d.at < kRateGuardWindowSec) ++same;
+        deaths_.push_back(x);
+        while (deaths_.size() > 4) deaths_.erase(deaths_.begin());
+        if (!f_.latched && !f_.probation) {
+            f_.kind = x.kind; f_.at = x.at; f_.rate = x.rate; f_.mode = x.mode;
+            if (f_.mode.size() > 16) f_.mode.resize(16);
+            f_.noted = int(deaths_.size());
+        }
+        if (same >= 2) {
+            f_.floor = true; f_.floorRate = x.rate; f_.floorAt = now; f_.floorMode = x.mode.substr(0, 16);
+        }
+        saveLocked();
+        return false;
     }
     void unmarkLocked() {
         if (!marked_) return;            // ★ cheap on every rate change that was never a boost
@@ -342,6 +393,10 @@ private:
         f_.retried = RateFault::flag(s, "retried");
         f_.probation = RateFault::flag(s, "probation");
         f_.probationAt = (long long)RateFault::num(s, "probationAt");
+        f_.floor = RateFault::flag(s, "floor");
+        f_.floorRate = RateFault::num(s, "floorRate");
+        f_.floorAt = (long long)RateFault::num(s, "floorAt");
+        f_.floorMode = RateFault::str(s, "floorMode").substr(0, 16);
         // the noted stops ("d<i>":"<kind>|<at>|<rate>|<mode>")
         for (int i = 0; i < 4; ++i) {
             const std::string k = "d" + std::to_string(i);

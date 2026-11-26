@@ -17681,7 +17681,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              why, rate / 1e6, mode.c_str(), mode.c_str(),
              latched ? ("the second stop there in 24 h: boosts held at " + vibe::RateFault::rateText(g_rateGuard.fault().ceiling)
                         + " or below").c_str()
-                     : "noted (the first): that rate is allowed again");
+                     : !vibe::rateGuardCanStep(rate)
+                       ? "at or below the 2.4 MS/s floor: never held lower (a second within 24 h tells the owner)"
+                       : "noted (the first): that rate is allowed again");
         vsSayVts("The radio stopped responding at " + vibe::RateFault::rateText(rate) + " during " + mode
                  + " \xe2\x80\x94 " + mode + " has ended and the radio is back at its own rate.");
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
@@ -45229,6 +45231,10 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
      *  one rung down. The owner's switches are NEVER written — vsGuardAllows is the override. */
     if (b == vibe::RateGuard::Boot::Explained)
         LOGI("rate guard: the last run stopped at a boosted rate, but its marker was %s — not counted as a crash", why.c_str());
+    else if (b == vibe::RateGuard::Boot::Noted && f.floor)   // (c') at the 2.4 floor: told, never capped
+        LOGE("the last run of this server died while the radio was at %s — the second time in 24 hours, but %s is the "
+             "floor: nothing is held lower (the owner is told to look at the radio's USB power, cable or hub)",
+             where.c_str(), vibe::RateFault::rateText(f.floorRate).c_str());
     else if (b == vibe::RateGuard::Boot::Noted)
         LOGE("the last run of this server died while the radio was at %s — noted once; that rate is allowed again, and "
              "only a second stop there within 24 hours holds it lower", where.c_str());

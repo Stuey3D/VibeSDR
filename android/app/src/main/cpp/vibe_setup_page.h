@@ -5768,7 +5768,8 @@ function rateGuardShow() {
   $("rateGuardText").textContent = line;
   // ★★★ beta95: the switch is NEVER greyed or unticked by it — it shows the OWNER's choice, which the guard only caps
   //     (vibe_rate_guard.h). Red while it holds a rate back; a plain note while it has only noted a stop or is retrying.
-  $("rateGuardText").style.color = st && st.latched ? "var(--bad)" : "";
+  //     beta96: red too when it stopped twice AT the 2.4 MS/s floor (st.floor) — never capped, but the radio needs a look.
+  $("rateGuardText").style.color = st && (st.latched || st.floor) ? "var(--bad)" : "";
 }
 async function rateGuardClear() {
   try {
