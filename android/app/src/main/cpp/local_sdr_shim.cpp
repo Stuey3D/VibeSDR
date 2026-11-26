@@ -12293,13 +12293,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** ★ The 25 Hz tracker. One thread for the process, started on the first lock, ~0 when there is none (a 200 ms
      *  nap). A tick is one SGP4 evaluation per lock (0.3 µs on the M5, test-sat-orbit §4) plus an NCO request. */
+    /* ★★★ beta96 (Stuart 11-26: "xcover keeps crashing when trying to use satellites specifically the orbcomm one" — "the
+     *  sony also crashed in the same way"): the tracker was a DETACHED thread holding `this`. On Linux a radio is a process,
+     *  so a stop was an exit. On a PHONE the server runs inside the app and a stop / restart (a rate change, a settings save,
+     *  the app's own stop) deletes this Impl and makes a new one — and the old tracker kept ticking: XCover SIGABRT "mutex_lock
+     *  called on a destroyed mutex", Sony SIGSEGV, both in tid vibe-sat-track. It is now OWNED: it stops with the server
+     *  (`stopping` / satTrackerStop_) and stopLocked JOINS it before anything it touches is freed (≤ one 200 ms nap). */
     std::atomic<bool> satTrackerUp_{false};
+    std::atomic<bool> satTrackerStop_{false};
+    std::thread satTrackerThread_;
+    bool satTrackerQuit() const { return satTrackerStop_.load() || stopping.load(); }
     void satEnsureTracker() {
+        if (satTrackerQuit()) return;   // ★ a late lock during a stop starts nothing
         bool f = false;
         if (!satTrackerUp_.compare_exchange_strong(f, true)) return;
-        std::thread([this] {
+        satTrackerThread_ = std::thread([this] {
             vibeThreadName("vibe-sat-track");
-            for (;;) {
+            while (!satTrackerQuit()) {
                 const auto keys = satEngine().keys();
                 if (keys.empty()) { std::this_thread::sleep_for(std::chrono::milliseconds(200)); continue; }
                 const vibe::sat::Clock clk = satClock();
@@ -12354,7 +12364,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
             }
-        }).detach();
+        });
     }
     /** {"type":"sat","op":"lock"|"unlock", norad?} — the Doppler button / the picker's TRACK. */
     /** ★ {"type":"sat","op":"lock"|"unlock", norad?} — the old Doppler button / picker TRACK (kept for old clients, one
@@ -44654,6 +44664,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (carry) buf[0] = buf[total - 1];
         }
     }
+    /** ★ Any other way this Impl dies (a path that never ran stopLocked): stop and join the tracker here — a joinable
+     *  std::thread destroyed is std::terminate. The LAST member of Impl, so it runs FIRST (members die in reverse order): the tracker stops before anything it reads is destroyed. */
+    struct SatTrackerGuard { Impl* o; ~SatTrackerGuard() {
+        o->satTrackerStop_.store(true);
+        if (o->satTrackerThread_.joinable()) {
+            if (o->satTrackerThread_.get_id() == std::this_thread::get_id()) o->satTrackerThread_.detach();
+            else { try { o->satTrackerThread_.join(); } catch (...) { o->satTrackerThread_.detach(); } }
+        } } } satTrackerGuard_{this};
 };
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -50620,6 +50638,9 @@ void LocalSdrShim::stopLocked() {
         try { t.join(); }
         catch (const std::system_error& e) { LOGI("shim: %s join failed (%s)", what, e.what()); }
     };
+    // ★★★ beta96 the satellite tracker first: it reads the clients, the decoders and the engine this stop is about to free
+    impl->satTrackerStop_.store(true);
+    joinSafely(impl->satTrackerThread_, "satellite tracker");
     /* ★★★ NOTHING MAY ARRIVE WHILE THE RADIO IS TAKEN APART — SO EVERY CONNECTION IS FINISHED FIRST.
      *  (2026-10-16, Pi 500, radio 00000002, the setup page's save restarting every radio.)
      *  A listener arrived in the same second as the SIGTERM and asked for DAB. Its connection thread
