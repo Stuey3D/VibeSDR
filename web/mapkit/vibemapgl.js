@@ -17,6 +17,9 @@
  *     base,           // where the packs live, e.g. 'mapgl/' (app) or '/mapgl/' (a server)
  *     rangeBase,      // OPTIONAL http(s) URL of the packs: stream them by HTTP range instead of loading
  *                     //   them whole (a browser should not download 18 MB per visit)
+ *     packRange,      // OPTIONAL (name, offset, length) => Promise<ArrayBuffer | null>: the host reads the BUNDLED packs
+ *                     //   (vibemap-basic/-relief/-runways.pmtiles) by byte range itself — the app, over its bridge
+ *                     //   (mapglPack.ts readPackRange). Without it (and without rangeBase) each pack is read whole.
  *     profile,        // 'directory' | 'aero' | 'marine' | 'spots' | 'admin'
  *     center, zoom,   // [lon, lat] and a MapLibre zoom (= Leaflet zoom - 1)
  *   });
@@ -34,7 +37,7 @@
     try { return !!document.createElement('canvas').getContext('webgl2'); } catch (e) { return false; }
   }
 
-  /** A pmtiles Source over a buffer already in memory (the app reads each pack whole, off disk). */
+  /** A pmtiles Source over a buffer already in memory (a host with neither rangeBase nor packRange). */
   function bufferSource(key, buf) {
     return {
       getKey: () => key,
@@ -242,8 +245,40 @@
         reliefUrl = 'pmtiles://' + o.rangeBase + 'vibemap-relief.pmtiles';
         runwaysUrl = 'pmtiles://' + o.rangeBase + 'vibemap-runways.pmtiles';
         if (o.detail) { hasDetail = true; detailUrl = 'pmtiles://' + o.rangeBase + 'vibemap-detail.pmtiles'; }
+      } else if (o.packRange) {
+        /* ★★★ V12 beta96 THE APP READS ITS BUNDLED PACKS BY RANGE, NOT WHOLE (Stuart, 11-26). Read whole they sat in the
+         *  map WebView as ~30 MB of ArrayBuffers for as long as a map was open (basic 18.2 MB since the rivers, relief
+         *  8.4, runways 3.9) — on a 32-bit 1 GB phone that is the difference between a map and an OOM kill. Now only the
+         *  header, the directories and the tiles in view cross, exactly as the detail pack always has (detailRange).
+         *  ★ Trade-off (stated, feedback_state_efficiency_tradeoffs): each tile is a bridge round trip (base64 over
+         *  postMessage, a few KB to ~200 KB for a world tile) instead of a memcpy — some CPU and a few ms per tile on
+         *  first draw, for ~30 MB less RAM the whole time a map is open. MapLibre keeps the decoded tiles, so a pan
+         *  back costs nothing either way.
+         *  ★ Each pack is probed (its 7-byte magic) before it is added, so a missing relief or runways pack is
+         *  simply not drawn, as the whole-read path did; a missing BASIC pack is the same hard failure as before. */
+        const rangeSource = (key, name) => ({
+          getKey: () => key,
+          getBytes: async (offset, length) => {
+            const data = await o.packRange(name, offset, length);
+            if (!data) throw new Error('vibemapgl: ' + name + ' read failed');
+            return { data };
+          },
+        });
+        const probe = async (name) => {
+          try {
+            const h = await o.packRange(name, 0, 7);
+            return !!h && h.byteLength === 7 && String.fromCharCode.apply(null, new Uint8Array(h)) === 'PMTiles';
+          } catch (e) { return false; }
+        };
+        const [hb, hr, hw] = await Promise.all([probe('vibemap-basic.pmtiles'), probe('vibemap-relief.pmtiles'),
+                                                probe('vibemap-runways.pmtiles')]);
+        if (!hb) throw new Error('vibemapgl: the basic pack could not be read');
+        protocol.add(new pm.PMTiles(rangeSource('basic', 'vibemap-basic.pmtiles'))); basicUrl = 'pmtiles://basic';
+        if (hr) { protocol.add(new pm.PMTiles(rangeSource('relief', 'vibemap-relief.pmtiles'))); reliefUrl = 'pmtiles://relief'; }
+        if (hw) { protocol.add(new pm.PMTiles(rangeSource('runways', 'vibemap-runways.pmtiles'))); runwaysUrl = 'pmtiles://runways'; }
+        else console.error('vibemapgl: vibemap-runways.pmtiles missing — no runways');
       } else {
-        // ★ The app: each bundled pack read ONCE off disk (milliseconds) and served from memory.
+        // ★ A host with no range reader: each bundled pack read ONCE whole and served from memory.
         const [b, r] = await Promise.all([o.load(base + 'vibemap-basic.pmtiles', 'arraybuffer'),
                                           o.load(base + 'vibemap-relief.pmtiles', 'arraybuffer')]);
         if (!b) throw new Error('vibemapgl: the basic pack could not be read');
@@ -252,20 +287,20 @@
         const rw = await o.load(base + 'vibemap-runways.pmtiles', 'arraybuffer');
         if (rw) { protocol.add(new pm.PMTiles(bufferSource('runways', rw))); runwaysUrl = 'pmtiles://runways'; }
         else console.error('vibemapgl: vibemap-runways.pmtiles missing — no runways');
-        /* ★★ THE OPTIONAL DETAIL PACK (~169 MB) IS NOT READ WHOLE: the host supplies ranged reads
-         *  (the app answers them over the bridge from the one file on disk — mapglDetail.ts). Only the
-         *  bytes a close-zoom view needs ever cross. */
-        if (o.detailRange) {
-          protocol.add(new pm.PMTiles({
-            getKey: () => 'detail',
-            getBytes: async (offset, length) => {
-              const data = await o.detailRange(offset, length);
-              if (!data) throw new Error('vibemapgl: detail read failed');
-              return { data };
-            },
-          }));
-          hasDetail = true; detailUrl = 'pmtiles://detail';
-        }
+      }
+      /* ★★ THE OPTIONAL DETAIL PACK (~169 MB) IS NOT READ WHOLE: the host supplies ranged reads
+       *  (the app answers them over the bridge from the one file on disk — mapglDetail.ts). Only the
+       *  bytes a close-zoom view needs ever cross. (Either app path: packRange or whole-read bundled packs.) */
+      if (!o.rangeBase && o.detailRange) {
+        protocol.add(new pm.PMTiles({
+          getKey: () => 'detail',
+          getBytes: async (offset, length) => {
+            const data = await o.detailRange(offset, length);
+            if (!data) throw new Error('vibemapgl: detail read failed');
+            return { data };
+          },
+        }));
+        hasDetail = true; detailUrl = 'pmtiles://detail';
       }
       const style = prepareStyle(o.style, { hasDetail, basicUrl, reliefUrl, detailUrl, runwaysUrl, profile });
       if (!reliefUrl) { delete style.sources.relief; style.layers = style.layers.filter((l) => l.source !== 'relief'); }
