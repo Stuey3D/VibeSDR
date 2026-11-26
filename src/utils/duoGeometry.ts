@@ -205,3 +205,34 @@ export function serversChipPlacement(regions: ReservedRegions, base: { left: num
   }
   return { left: base.left, top };
 }
+
+/**
+ * ★★ A FULL-WIDTH ROW OF FURNITURE that must keep clear of the system's rects — the FM-DX screen's header (name, ♥,
+ * DRUMS / KEYS, ?, the listener count) and the columns of its scrolling cards (Stuart 11-25: "the FM-DX screen was
+ * never checked on the Duo"). That screen keeps its safe-area insets (it has no spectrum to run full bleed), but on a
+ * hinged display the camera and the clock + Wi-Fi pill come as reserved rects, not always as insets:
+ *   • a full-width STATUS BAND over the rows (a Split View share reports its status bar across the whole share, the
+ *     pill drawn somewhere along it): the row drops below it — `top` is how far;
+ *   • a CORNER rect (the camera, the pill, the folded screen's status column — narrower than half the window) over the
+ *     rows [y0, y0 + rowsH] (after any drop): the row's content stops `gap` short of it, on the side it is on —
+ *     `left` / `right` are the distances from the window's edges (0 = nothing there).
+ * Rects outside the window (another share's) are ignored. No rect (every iPhone, iPad, Mac) = all 0.
+ */
+export function rowClearance(regions: ReservedRegions, y0: number, rowsH: number, windowW: number, windowH: number,
+                             gap = 8): { left: number; right: number; top: number } {
+  let top = 0, left = 0, right = 0;
+  const inWin = (r: RegionRect) => r.x < windowW && r.x + r.w > 0 && r.y < windowH && r.y + r.h > 0;
+  for (const r of avoidRects(regions)) {
+    if (!inWin(r) || r.w < windowW * 0.5) continue;
+    if (r.y >= y0 + rowsH || r.y + r.h <= y0) continue;
+    top = Math.max(top, Math.ceil(r.y + r.h - y0));
+  }
+  const a = y0 + top, b = a + rowsH;
+  for (const r of avoidRects(regions)) {
+    if (!inWin(r) || r.w >= windowW * 0.5) continue;
+    if (r.y >= b || r.y + r.h <= a) continue;
+    if (r.x + r.w / 2 >= windowW / 2) right = Math.max(right, Math.ceil(windowW - r.x) + gap);
+    else left = Math.max(left, Math.ceil(r.x + r.w) + gap);
+  }
+  return { left, right, top };
+}

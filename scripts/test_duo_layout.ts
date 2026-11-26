@@ -8,7 +8,7 @@
 import { edgeChipGeometry } from '../src/components/edgeChipGeometry.ts';
 import { namePlacement } from '../src/utils/duoGeometry.ts';
 import { isFoldedFrontWindow, isFrontScreenWindow, phonePortraitScale, clearBelow, rightLimitAt, deckClearance,
-         avoidRects, NO_REGIONS, halfOpenSplit, serversChipPlacement, type ReservedRegions, type RegionRect } from '../src/utils/duoGeometry.ts';
+         avoidRects, NO_REGIONS, halfOpenSplit, serversChipPlacement, rowClearance, type ReservedRegions, type RegionRect } from '../src/utils/duoGeometry.ts';
 
 let fails = 0;
 function ok(cond: boolean, what: string) {
@@ -190,5 +190,25 @@ ok(avoidRects({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 10, h: 10 }] }).leng
   ok(portrait.left === 12 && portrait.top === 108, 'iPhone portrait: 12, under the status row — as before');
 }
 
+
+// ── rowClearance: the FM-DX screen's header and card columns (TunerScreen) ─────────────────────────────────────
+{
+  const none = rowClearance(NO_REGIONS, 0, 46, 402, 874);
+  ok(none.left === 0 && none.right === 0 && none.top === 0, 'FM-DX header, any iPhone (no rects): nothing moves');
+  const f = rowClearance(FOLDED, 0, 46, 466, 678);
+  ok(f.right === 84 + 8 && f.left === 0 && f.top === 0, `FM-DX header, folded portrait: stops 8 short of the status column (right ${f.right})`);
+  const tl = rowClearance({ ...NO_REGIONS, occlusion: [{ x: 29, y: 29, w: 37, h: 37 }], statusBar: [{ x: 0, y: 0, w: 84, h: 174 }] }, 0, 46, 678, 466);
+  ok(tl.left === 84 + 8 && tl.right === 0, `FM-DX header, folded landscape camera top-left: starts right of the column (left ${tl.left})`);
+  const ol = rowClearance({ ...NO_REGIONS, statusBar: [{ x: 860, y: 0, w: 91, h: 34 }] }, 0, 46, 951, 669);
+  ok(ol.right === 91 + 8 && ol.top === 0, `FM-DX header, open landscape: the listener count clears the pill (right ${ol.right})`);
+  const below = rowClearance({ ...NO_REGIONS, statusBar: [{ x: 860, y: 0, w: 91, h: 34 }] }, 40, 46, 951, 669);
+  ok(below.right === 0, 'a row that starts below the pill: nothing moves');
+  const band = rowClearance({ ...NO_REGIONS, statusBar: [{ x: 0, y: 0, w: 469, h: 32 }] }, 0, 46, 469, 669);
+  ok(band.top === 32 && band.left === 0 && band.right === 0, `Split View share, full-width status band: the row drops below it (top ${band.top})`);
+  const other = rowClearance({ ...NO_REGIONS, statusBar: [{ x: 1000, y: 0, w: 91, h: 34 }] }, 0, 46, 469, 669);
+  ok(other.right === 0 && other.top === 0, "another share's pill (outside this window): ignored");
+  const land = rowClearance(LAND, 0, 400 + 37 + 10, 678, 466);
+  ok(land.right === 678 - 612 + 8, `FM-DX cards over a bottom-right camera's rows: the right column clears it (right ${land.right})`);
+}
 if (fails) { console.log(`\nduo layout: ${fails} FAILED`); process.exit(1); }
 console.log('\nduo layout: all passed');
