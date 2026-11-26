@@ -790,6 +790,22 @@ export class TrackView {
       else { if (this.acAuto != null) { this.acLayer.setPrefs?.({ autoZoom: this.acAuto }); this.acAuto = null; } this.af?.pause?.(); }
     } catch (e) { console.error('[tracks] camera', e); }
   }
+  /** ★★ beta96 stage 8 (NDB): another layer on THIS view's map (web/mapkit/ndblayer.js). `cb` gets the map as it is made
+   *  ({ gl: the VibeMapGL, or null; lm: the Leaflet map, or null }) and null just before it is destroyed (the view hidden).
+   *  Returns the unsubscribe. A host layer never makes a map of its own (one WebGL context per view). */
+  private mapCbs = new Set<(m: { gl: any; lm: any } | null) => void>();
+  whenMap(cb: (m: { gl: any; lm: any } | null) => void): () => void {
+    this.mapCbs.add(cb);
+    if (this.layer && (this.vm || this.lmap)) { try { cb({ gl: this.vm, lm: this.vm ? null : this.lmap }); } catch (e) { console.error('[tracks] whenMap', e); } }
+    return () => { this.mapCbs.delete(cb); };
+  }
+  private mapSay(m: { gl: any; lm: any } | null) { for (const cb of Array.from(this.mapCbs)) try { cb(m); } catch (e) { console.error('[tracks] whenMap', e); } }
+  /** ★ beta96 stage 8 a host layer's points for the shared auto fit (the NDB beacons heard) — null = none. */
+  morePoints: (() => [number, number][]) | null = null;
+  /** ★ beta96 the click order for a host layer: is an aircraft under this press? (it is selected if so) */
+  pickAircraft(x: number, y: number, touch: boolean): boolean {
+    try { return !!this.acLayer?.pickAt?.(x, y, touch); } catch { return false; }
+  }
   /** ★ an item to select when its row is pressed (a MESSAGES row names its aircraft's key) — `onRow` hears every press. */
   onRow: ((key: string) => void) | null = null;
   private keySig = '';
@@ -850,6 +866,10 @@ export class TrackView {
   private af: any = null;
   private fitBtn: HTMLButtonElement;
   /** The items changed: the auto fit considers a move (its hysteresis decides; a 1 s tick does the rest). */
+  /** ★ beta96 stage 8 a host layer's points changed (morePoints): the auto fit considers a move. */
+  pokeFit() { this.autoFitCheck(); }
+  /** ★ a host layer's item chosen: the auto fit pauses (FIT brings AUTO back), as a row chosen here does. */
+  pauseFit() { try { this.af?.pause(); } catch { /* none */ } }
   private autoFitCheck(_items?: any[]) { try { this.af?.poke(); } catch (e) { console.error('[tracks] auto fit', e); } }
   /** ★ The card again from its item (a fetched text arrived for it). */
   refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
@@ -899,6 +919,7 @@ export class TrackView {
     this.inerted = [];
     for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = ''; }
     this.gen++;
+    this.mapSay(null);   // ★ beta96 stage 8 a host layer (NDB) lets go first
     try { this.af?.destroy(); } catch (e) { console.error('[tracks] auto fit destroy', e); }
     this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
@@ -1005,7 +1026,7 @@ export class TrackView {
       const layer = this.layer;
       try {
         this.af = w.VibeAutoFit.attach(map, {
-          points: () => layer.points(), receiver: () => layer.receiver(), button: this.fitBtn,
+          points: () => { const p = layer.points(); const m = this.morePoints?.(); return m?.length ? [...p, ...m] : p; }, receiver: () => layer.receiver(), button: this.fitBtn,
           what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
           obstacle: () => {
             const r = this.list.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
@@ -1020,6 +1041,7 @@ export class TrackView {
       if (!this.wantFocus) this.autoFitCheck(p);
     }
     this.watchAttrib();
+    this.mapSay({ gl: this.vm, lm: this.vm ? null : this.lmap });   // ★ beta96 stage 8 a host layer (NDB) joins this map
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
 

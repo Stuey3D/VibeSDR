@@ -1620,7 +1620,7 @@ body.adsbMap #srvHealth { right: 0 !important; }
 .adsbChip:active { background: rgba(255, 160, 0, 0.20); }
 .adsbChip:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
 .adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
-#ndbList { max-height: 259px; max-height: min(7 * 37px, 38vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
+#ndbList { max-height: 259px; max-height: min(7 * 37px, 34vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
   border-top: 1px solid rgba(255, 160, 0, 0.14); scrollbar-width: thin; scrollbar-color: rgba(255, 160, 0, 0.35) transparent; }
 #ndbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0 10px; align-items: center;
   padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
@@ -1706,12 +1706,12 @@ body.adsbMap #srvHealth { right: 0 !important; }
 #ndbList .ndbRow .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
 #ndbList .ndbRow .tx bdi { direction: ltr; unicode-bidi: isolate; }
-#ndbView .q-high { color: #5BE36B; } #ndbView .q-medium { color: #E8C547; } #ndbView .q-low { color: #FF8A3D; } #ndbView .q-poor { color: #FF4B4B; }
-#ndbView .dim { color: var(--text-dim); }
-#ndbView .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 10px; }
-#ndbView .sig i { display: block; width: 3px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
-#ndbView .sig i:nth-child(1) { height: 40%; } #ndbView .sig i:nth-child(2) { height: 70%; } #ndbView .sig i:nth-child(3) { height: 100%; }
-#ndbView .sig.l1 i.on { background: #e04040; } #ndbView .sig.l2 i.on { background: #e0b020; } #ndbView .sig.l3 i.on { background: #33cc44; }
+.ndbPiece .q-high, #ndbDlg .q-high { color: #5BE36B; } .ndbPiece .q-medium { color: #E8C547; } .ndbPiece .q-low { color: #FF8A3D; } .ndbPiece .q-poor { color: #FF4B4B; }
+.ndbPiece .dim { color: var(--text-dim); }
+.ndbPiece .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 10px; }
+.ndbPiece .sig i { display: block; width: 3px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
+.ndbPiece .sig i:nth-child(1) { height: 40%; } .ndbPiece .sig i:nth-child(2) { height: 70%; } .ndbPiece .sig i:nth-child(3) { height: 100%; }
+.ndbPiece .sig.l1 i.on { background: #e04040; } .ndbPiece .sig.l2 i.on { background: #e0b020; } .ndbPiece .sig.l3 i.on { background: #33cc44; }
 #ndbTiles { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 4px; }
 #ndbTools { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 7px; }
 #ndbLive.min #ndbTiles, #ndbLive.min #ndbTools { display: none; }
@@ -5040,35 +5040,23 @@ select.btn { padding: 6px 8px; }
      airports with a 3 bar signal meter and in the list it should show the live readings coming in like the CW Skimmer
      does"). ADS-B's view, by id (#ndb…, styled from #adsbView's rules): EXIT NDB never scrolls away; the map's toggles
      in the bar; the live list over the map's corner, folding to a pill; the beacon card top right. ndb.ts NdbView. -->
-<div id="ndbView" data-navscope hidden>
-  <div id="ndbTop">
-    <button type="button" id="ndbExit" title="Leave NDB and give the receiver back as it was">EXIT NDB</button>
-    <div id="ndbTopScroll">
-    <div id="ndbTitle">NDB <span class="w">BEACON MAP</span></div>
-    <div id="ndbCntWrap" title="Beacons identified"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,3 L13,23 M8,8 Q13,3 18,8 M5,5 Q13,-3 21,5 M11,23 L15,23" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="ndbCnt">…</span></div>
-    <span id="ndbStat"></span>
-    <button type="button" id="ndbRings" title="Range rings (nautical miles)">RINGS</button>
-    <button type="button" id="ndbUnheard" title="The published beacons not heard, faint">UNHEARD</button>
-    <button type="button" id="ndbFit" title="Fit the map to the beacons heard (and keep fitting until you move it)">FIT</button>
-    </div>
+<!-- ★★★ beta96 (docs/v12/ONE-MAP.md stage 8): NDB is a live state of the AIR & SEA map. #ndbView is never shown now — it is
+     where NDB's pieces wait; ndb.ts NdbView.mount moves them into the map's slots while NDB is live (RINGS · UNHEARD in its
+     top bar; the tiles, HEARD LOG · FIND NDB · STATS and the beacon list under the NAVAIDS tab's header; the card over the
+     map) and park() brings them back. -->
+<div id="ndbView" hidden>
+  <button type="button" id="ndbRings" title="Range rings (nautical miles)">RINGS</button>
+  <button type="button" id="ndbUnheard" title="The published beacons not heard, faint">UNHEARD</button>
+  <div id="ndbCard" hidden role="dialog" aria-label="Beacon"></div>
+  <div id="ndbTiles"></div>
+  <div id="ndbTools">
+    <button type="button" id="ndbLogBtn" class="adsbChip" title="Every beacon identified, with its best SNR and when it was heard">HEARD LOG</button>
+    <button type="button" id="ndbFindBtn" class="adsbChip" title="Search every published NDB, nearest first">FIND NDB</button>
+    <button type="button" id="ndbStatsBtn" class="adsbChip" title="Reception stats, with CSV">STATS</button>
   </div>
-  <div id="ndbMain">
-    <div id="ndbMapHost"></div>
-    <div id="ndbNote" hidden></div>
-    <div id="ndbCard" hidden role="dialog" aria-label="Beacon"></div>
-    <div id="ndbLive" data-navbox data-navstart=".ndbRow">
-      <button type="button" id="ndbLiveHead" aria-expanded="true" title="Hide the list"><span id="ndbLiveTtl">BEACONS</span><span id="ndbLiveN"></span><span class="chev" aria-hidden="true"></span></button>
-      <div id="ndbTiles"></div>
-      <div id="ndbTools">
-        <button type="button" id="ndbLogBtn" class="adsbChip" title="Every beacon identified, with its best SNR and when it was heard">HEARD LOG</button>
-        <button type="button" id="ndbFindBtn" class="adsbChip" title="Search every published NDB, nearest first">FIND NDB</button>
-        <button type="button" id="ndbStatsBtn" class="adsbChip" title="Reception stats, with CSV">STATS</button>
-      </div>
-      <div id="ndbList" data-navscroll></div>
-      <!-- ★ Once, at the foot of the list (Stuart, 2026-10-29) — not on every unnamed beacon. Same words as NdbLiveList.tsx. -->
-      <div id="ndbListFoot" class="ndbNote">A beacon shown by its ident alone isn&rsquo;t in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</div>
-    </div>
-  </div>
+  <div id="ndbList" data-navscroll></div>
+  <!-- ★ Once, at the foot of the list (Stuart, 2026-10-29) — not on every unnamed beacon. Same words as NdbLiveList.tsx. -->
+  <div id="ndbListFoot" class="ndbNote">A beacon shown by its ident alone isn&rsquo;t in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</div>
 </div>
 
 <!-- ★★★ OUTSIDE #app ON PURPOSE. #app is display:none until it goes .live, and a child of a
