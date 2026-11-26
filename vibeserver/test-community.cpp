@@ -217,6 +217,29 @@ int main() {
         std::printf("   (fixture written to %s)\n", fx);
     }
 
+    std::printf("== beta95 the door's ONE merged feed: every radio's layers, rows once\n");
+    {
+        // the Pi 500 shape: RSP1B (marine: aircraft modes blocked), V4L 1 (ADS-B), V4L 4 (VDL2; ADS-B blocked)
+        const std::vector<std::string> radios = { "adsb,avdata,hfdl", "", "adsb" };
+        CHECK(layerAllowedAnyRadio("adsb", radios) && layerAllowedAnyRadio("vdl2", radios) && layerAllowedAnyRadio("dsc", radios),
+              "a layer ANY radio allows is shared");
+        CHECK(!layerAllowedAnyRadio("adsb", { "adsb", "ADSB" }) && !layerAllowedAnyRadio("ais", { "aisstore", "ais" }), "blocked on every radio: not shared (case-insensitive)");
+        CHECK(!layerAllowedAnyRadio("dsc", {}), "no radios: nothing");
+        CHECK(modeCsvHas("wfm; adsb ,dab", "ADSB") && !modeCsvHas("adsbx", "adsb"), "the list's own tokens");
+        // remembered rows from two radios: one per key, the newest, newest first
+        const std::string rows = "[\"S1\",\"RS41\",50.1,0.1,1000,2,100],[\"S2\",\"RS41\",50.2,0.2,900,1,300],"
+                                 "[\"S1\",\"RS41\",50.15,0.12,1100,2,200],[\"S\\\"3\",\"M10\",1,2,3,4,50]";
+        const std::string d = rowsDedupe(rows, 0, 6, 32);
+        CHECK(d == "[\"S2\",\"RS41\",50.2,0.2,900,1,300],[\"S1\",\"RS41\",50.15,0.12,1100,2,200],[\"S\\\"3\",\"M10\",1,2,3,4,50]",
+              "one row per key, the newest, newest first: %s", d.c_str());
+        CHECK(rowsDedupe(rows, 0, 6, 1) == "[\"S2\",\"RS41\",50.2,0.2,900,1,300]", "capped");
+        CHECK(rowsDedupe("", 0, 6, 8).empty() && rowsDedupe("[torn", 0, 6, 8).empty(), "empty and torn: nothing");
+        // bounded: 10 000 rows in, at most 4096 looked at
+        std::string many;
+        for (int i = 0; i < 10000; ++i) many += (i ? "," : "") + std::string("[\"K") + std::to_string(i) + "\"," + std::to_string(i) + "]";
+        CHECK(rowsDedupe(many, 0, 1, 100000).size() < many.size() / 2, "bounded");
+    }
+
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

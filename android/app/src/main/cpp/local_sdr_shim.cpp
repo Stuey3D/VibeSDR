@@ -7615,16 +7615,17 @@ static std::string communityWhyNot() {
     if (communityPinLocked()) return "pin";
     return "";
 }
+/** ★★ beta95 THE FRONT DOOR's radios — each enabled radio's blocked modes (setCommunityDoorRadios). Non-empty only in a
+ *  multi-radio machine's front door, which owns no radio: its answer is the WHOLE machine's (vibecommunity::layerAllowedAnyRadio). */
+static std::vector<std::string> g_communityDoorRadios;   // under g_communityMtx
 /** A layer this server may share now: not blocked by the owner's modes list, not left out of the map. */
 static bool communityLayerOk(const std::string& l, const std::set<std::string>& off) {
     if (off.count(l)) return false;
-    if (l == "adsb") return !vsModeBlocked("adsb");
-    if (l == "acars" || l == "vdl2") return !vsModeBlocked("avdata");
-    if (l == "hfdl") return !vsModeBlocked("hfdl");
-    if (l == "ais") return !vsModeBlocked("ais") && !vsModeBlocked("aisstore");
-    if (l == "vor") return !vsModeBlocked("vormap") && !vsModeBlocked("vor");
-    if (l == "mesh") return !vsModeBlocked("ism");
-    return !vsModeBlocked(l);
+    {
+        std::lock_guard<std::mutex> lk(g_communityMtx);
+        if (!g_communityDoorRadios.empty()) return vibecommunity::layerAllowedAnyRadio(l, g_communityDoorRadios);
+    }
+    return vibecommunity::layerAllowed(l, [](const char* m) { return vsModeBlocked(m); });
 }
 static std::string communityLiveDir() {
     const std::string d = vibe::gallery::shared().dir();
@@ -7662,7 +7663,9 @@ static std::string communityLive(int i, int64_t now) {
     static const size_t kMax[3] = { vibecommunity::kSondesMax, vibecommunity::kAprsMax, vibecommunity::kVorMax };
     std::string rows = vibecommunity::readLive(communityLiveDir(), kSec[i], now);
     { std::lock_guard<std::mutex> lk(g_communityMtx); if (!g_liveRows[i].empty()) rows = rows.empty() ? g_liveRows[i] : g_liveRows[i] + "," + rows; }
-    return vibecommunity::rowsSince(rows, kTimeField[i], (double)(now - kWin[i]), kMax[i] * 2);
+    // ★★ beta95 every radio's rows (and this process's own twice: memory + its file) → ONE per key, the newest
+    return vibecommunity::rowsDedupe(vibecommunity::rowsSince(rows, kTimeField[i], (double)(now - kWin[i]), kMax[i] * 4),
+                                     0, kTimeField[i], kMax[i] * 2);
 }
 
 /* ── the sections ── */
@@ -7776,8 +7779,24 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
             std::snprintf(b, sizeof b, "[%lld,%.4f,%.4f,%d,\"", (long long)t, lat, lon, (int)vibe::gallery::lineNum(l, "lv"));
             rows.push_back(b + title + "\",\"" + vibe::gallery::lineStr(l, "f") + "\"]");
         });
+        // ★★ beta95 two radios of one machine that heard the same call each filed it: one row per call (same title and
+        //    position within 2 min), the newest copy. Bounded: kDscMax rows are kept, each compared with those kept.
         std::string o;
-        for (size_t i = rows.size(), n = 0; i-- > 0 && n < kDscMax; ++n) { if (n) o += ','; o += rows[i]; }   // ★ newest first
+        std::vector<std::pair<std::string, int64_t>> kept;
+        for (size_t i = rows.size(), n = 0; i-- > 0 && n < kDscMax;) {
+            const std::string& row = rows[i];
+            const size_t c1 = row.find(','), c2 = row.find(",\"");
+            const int64_t t = std::atoll(row.c_str() + 1);
+            const std::string key = c1 == std::string::npos || c2 == std::string::npos ? row : row.substr(c1, std::string::npos);
+            std::string k2 = key;
+            if (const size_t lf = k2.rfind(",\""); lf != std::string::npos && lf > 0) k2.resize(lf);   // ★ less the file name
+            bool dup = false;
+            for (const auto& kk : kept) if (kk.first == k2 && std::llabs(kk.second - t) <= 120) { dup = true; break; }
+            if (dup) continue;
+            kept.push_back({ k2, t });
+            if (n++) o += ',';
+            o += row;
+        }
         if (!o.empty()) { r.json = "[" + o + "]"; r.layers = { "dsc" }; }
     } else if (k == "b" && gal && communityLayerOk("ndb", off)) {
         std::vector<NdbRow> rows;
@@ -17932,6 +17951,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (stopping.load() || restarting.load() || frontDoorOnly || decoderOnly) return;
         if (!g_vsAdsbKeep.load(std::memory_order_relaxed)) { adsbKeepLoggedWhy_ = false; return; }
         if (g_benchHold.load()) return;   // ★★★ never takes the radio back while a benchmark measures the machine
+        // ★★ beta95 a satellite pass has the radio (or is taking it): ADS-B resumes when its session ends
+        if (satPassBusy_.load() || satWantsRadio_.load()) return;
         if (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)) return;
         /* ★★★ NEVER OVER ANOTHER WHOLE-RADIO MODE — WAIT FOR ITS OWN LEAVE (2026-11-12). With ISM (or NDB, AIS) still on
          *  and its leave due, this entered ADS-B through the ADS-B key, which threw ISM off through ismLeave(true) — so the
@@ -38540,6 +38561,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::recursive_mutex satPassMtx_;                // ★ recursive: the pass's own tune runs through handleControl
     SatPassRun satPass_;
     std::atomic<bool> satPassBusy_{false};           // ★ beta94: a SESSION of unattended satellite work holds the radio
+    /** ★★ beta95 a pass is due and has taken the radio from a KEEP-RUNNING mode (ADS-B): that mode's keep tick stands aside
+     *  until the session ends (satWorkEndLocked), then puts it back. satKeepPaused_ names the mode (the admin line). */
+    std::atomic<bool> satWantsRadio_{false};
+    std::string satKeepPaused_;
+    /** ★★ beta95 the owner's warning while a keep-running mode and the passes share this radio ("" = none). */
+    std::string satKeepWarn() const {
+        if (!adsbKeepHolds()) return "";
+        return "a satellite pass takes the radio: ADS-B pauses for the pass, about 10\xe2\x80\x93" "15 min, and resumes after";
+    }
     std::string satPassWhy_, satPassLast_, satPassNow_;
     double satPassRetryAt_ = 0;
     bool satPassBoth_ = false;                       // ★ beta94 the pass and ORBCOMM run together on one capture now
@@ -38553,7 +38583,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_vsHandheld.load()) return "satellites are not on the handheld";
         if (useIcom()) return "not on an Icom radio (background work never runs there)";
         if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 an unattended pass would have to move it (not on a locked range in this version)";
-        if (adsbKeepHolds()) return "ADS-B is kept running on this radio when nobody is connected";
+        // ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): ADS-B kept running no longer refuses the passes — a pass takes the
+        //    radio from it and gives it back at LOS (satPassTick, satKeepPaused_; the warning is satKeepWarn()).
         if (g_ownerScan.load()) return "the owner's band scan has the radio";
         if (!satEngine().haveObserver()) return "this server has no location set (the setup page's locator)";
         if (satEngine().elementCount() == 0) return "no satellite orbit data yet";
@@ -38598,7 +38629,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (satPass_.on) satPassEndLocked(why);
         if (orbSkyOn_.load()) orbSkyStopLocked(why);
         satPassBoth_ = false; satPassCentre_ = 0;
-        if (!satWork_.on) { satPassBusy_.store(false); return; }
+        if (!satWork_.on) { satPassBusy_.store(false); satWantsRadio_.store(false); satKeepPaused_.clear(); return; }
         const SatWork w = satWork_;
         if (restore && w.saved && w.audio > 0) {
             satPassInternal() = true;
@@ -38614,6 +38645,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         satWork_ = SatWork{};
         satPassBusy_.store(false);
+        if (!satKeepPaused_.empty()) LOGI("[sat] %s was paused for the pass \xe2\x80\x94 it resumes now (kept running)", satKeepPaused_.c_str());
+        satKeepPaused_.clear();
+        satWantsRadio_.store(false);   // ★ beta95 the keep-running mode's tick takes the radio back on its next pass
         if (!resume) bgWanted_.store(false);
         LOGI("[sat] unattended satellite work over (%s)%s", why.c_str(), resume && w.pausedBg ? "; background decoding resumes" : "");
     }
@@ -38771,7 +38805,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!why.empty() || anyone) { satPassNow_ = !why.empty() ? why : "a listener has the radio"; return; }
         if (!satWork_.on) {
             if (nowSecs() < satPassRetryAt_) { satPassNow_ = "another program has the radio \xe2\x80\x94 trying again shortly"; return; }
-            if (g_dabMode.load() || g_adsbMode.load() || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
+            // ★★ beta95 ADS-B that KEEP RUNNING put there (nobody's use of it) is not waited for — a due pass takes it (step 5)
+            const bool keptAdsb = g_adsbMode.load() && adsbByKeep_.load();
+            if (g_dabMode.load() || (g_adsbMode.load() && !keptAdsb) || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
                 satPassWhy_ = satPassNow_ = "waiting for the last listener's mode to close"; return;
             }
         }
@@ -38800,7 +38836,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
         // 3. decide (a pass already running stays the pass — until LOS, a listener, or ORBCOMM first takes the radio)
         vibe::satsched::In in;
-        in.meteorOn = cfg.sat.meteor; in.orbcommOn = cfg.sat.orbcomm; in.orbcommFirst = cfg.sat.orbcommFirst;
+        /* ★★ beta95 a KEEP-RUNNING mode owns the idle radio between passes: ORBCOMM sky-plot monitoring (nearly always due)
+         *  would otherwise take it for good, so with ADS-B kept running ORBCOMM runs only beside a pass that holds both. */
+        const bool keepOwns = adsbKeepHolds();
+        in.meteorOn = cfg.sat.meteor; in.orbcommOn = cfg.sat.orbcomm && !keepOwns; in.orbcommFirst = cfg.sat.orbcommFirst;
         in.anyPasses = cfg.sat.meteor || !cfg.sat.birds.empty();
         in.now = clk.unix; in.nextPassAos = nextAos;
         in.usableHz = std::min(usableSpan(), (double)sampleRate * vibe::kBandFlatFrac);
@@ -38823,11 +38862,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (satPass_.on && !o.runPass) satPassEndLocked("ORBCOMM first (priority) \xe2\x80\x94 this radio's capture cannot hold both");
         if (orbSkyOn_.load() && !o.runOrbcomm) orbSkyStopLocked(o.orbcommWhyNot.empty() ? "not wanted now" : o.orbcommWhyNot);
         if (!o.runPass && !o.runOrbcomm) {
+            satWantsRadio_.store(false);
             if (satWork_.on) satWorkEndLocked(satPassLast_.empty() ? "nothing due" : "nothing due now", true, true);
             if (satPassWhy_.empty()) satPassWhy_ = o.state.rfind("waiting", 0) == 0 ? o.state : "waiting \xe2\x80\x94 " + o.state;
             return;
         }
         // 5. start what runs
+        /* ★★★ beta95 A PASS TAKES THE RADIO FROM KEPT-RUNNING ADS-B (Stuart 11-25: "warn, don't block"). ADS-B leaves through
+         *  its own door (the radio back on the owner's plain landing); the keep tick stands aside while satWantsRadio_ is
+         *  up; the session starts on the next tick and, at LOS, satWorkEndLocked lets ADS-B back in. Only for a PASS —
+         *  ORBCOMM monitoring alone never takes the radio from a keep-running mode (keepOwns above). */
+        if (!satWork_.on && g_adsbMode.load() && adsbByKeep_.load()) {
+            if (!o.runPass) { satPassNow_ = "ADS-B is kept running \xe2\x80\x94 waiting for a pass"; return; }
+            satWantsRadio_.store(true);
+            LOGI("[sat] %s pass due \xe2\x80\x94 ADS-B (kept running) pauses for it and resumes after LOS", in.passName.c_str());
+            satPassInternal() = true;
+            handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
+            satPassInternal() = false;
+            if (g_adsbMode.load()) {   // ★ refused (ADS-B is this radio's only mode): the pass is not taken
+                satWantsRadio_.store(false);
+                satPassWhy_ = satPassNow_ = "ADS-B is this radio's only mode \xe2\x80\x94 a pass cannot take it";
+                return;
+            }
+            satKeepPaused_ = "ADS-B";
+            satPassNow_ = "ADS-B paused \xe2\x80\x94 the " + in.passName + " pass starts";
+            return;
+        }
         if (!satWork_.on && !satWorkBeginLocked(o.runPass ? in.passName + " pass" : std::string("ORBCOMM monitoring"))) return;
         satPassBoth_ = o.both;
         if (o.runPass && !satPass_.on && best.tx >= 0) satPassStartLocked(best.norad, best.tx, best.sd, best.t, best.ps, clk);
@@ -38933,6 +38993,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (!satPassLast_.empty()) j += ",\"last\":\"" + vibe::gallery::jsonEsc(satPassLast_) + "\"";
         if (!orbSkyLast_.empty()) j += ",\"orbLast\":\"" + vibe::gallery::jsonEsc(orbSkyLast_) + "\"";
+        // ★★ beta95 warn, don't block: a keep-running mode shares the radio with the passes (adminBg.ts satPassLines)
+        if (cfg.sat.on) {
+            const std::string kw = satKeepWarn();
+            if (!kw.empty()) j += ",\"keepWarn\":\"" + vibe::gallery::jsonEsc(kw) + "\"";
+            if (!satKeepPaused_.empty()) j += ",\"keepPaused\":\"" + vibe::gallery::jsonEsc(satKeepPaused_) + "\"";
+        }
         return j + "}";
     }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
@@ -44087,6 +44153,17 @@ void LocalSdrShim::setDxLogFile(const std::string& path) {
     if (g_dxLogLoaded) dxLogFlushLocked("the log moved");
     g_dxLogPath = path; g_dxLogLoaded = false;
 }
+void LocalSdrShim::setCommunityDoorRadios(const std::vector<std::string>& blockedPerRadio) {
+    std::vector<std::string> v(blockedPerRadio.begin(), blockedPerRadio.begin() + std::min<size_t>(blockedPerRadio.size(), 16));
+    for (auto& x : v) if (x.size() > 1024) x.resize(1024);
+    {
+        std::lock_guard<std::mutex> lk(g_communityMtx);
+        if (v == g_communityDoorRadios) return;
+        g_communityDoorRadios = v;
+    }
+    { std::lock_guard<std::mutex> lk(g_communitySecsMtx()); g_communitySecs.clear(); }   // ★ the layers changed: rebuild
+    LOGI("community map: the front door answers for %zu radio%s", v.size(), v.size() == 1 ? "" : "s");
+}
 void LocalSdrShim::setAircraftShareDir(const std::string& dir) {
     vibeavshare::table().setDir(dir);
     LOGI("aircraft table: %s", dir.empty() ? "this process only" : (dir + "/" + vibeavshare::kFile).c_str());
@@ -44186,6 +44263,10 @@ void LocalSdrShim::noteConnectionClosed(const std::string& ip, const std::string
  *  second is five times the wake-ups on a Pi that is also running the DSP, and its panels can
  *  disagree with each other — the listener count from one fetch beside the bandwidth from
  *  another, taken 300 ms apart. One snapshot is one consistent moment. */
+/** ★★ beta95 the decoders losing input that a listener does NOT feel (their decodes, not their audio) — the admin page's
+ *  line (adminStatusJson "decodersBehind"), never the pill. Written by healthTick every two seconds. */
+static std::mutex g_adminBehindMtx;
+static std::vector<std::string> g_adminBehind;
 std::string LocalSdrShim::adminStatusJson() {
     const vibeadmin::SysStats sys = vibeadmin::readSys();
     std::string j = "{\"sys\":" + vibeadmin::sysJson(sys);
@@ -44384,6 +44465,16 @@ std::string LocalSdrShim::adminStatusJson() {
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"bgDecode\":" + bi->bgStatusJson();
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"dxScan\":" + bi->dxStatusJson();   // ★★★ V12
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"satPass\":" + bi->satPassStatusJson();   // ★★ V12 beta90
+    /* ★★ beta95 THE PILL AUDIT: decoders that lost input in the last minute but cost a listener nothing (their decodes, not
+     *  their audio) — the owner's to see, here; the pill names only what a listener feels (vsBehindListenerFeels). */
+    {
+        std::lock_guard<std::mutex> lk(g_adminBehindMtx);
+        if (!g_adminBehind.empty()) {
+            j += ",\"decodersBehind\":[";
+            for (size_t i = 0; i < g_adminBehind.size(); ++i) j += (i ? ",\"" : "\"") + vibe::gallery::jsonEsc(g_adminBehind[i]) + "\"";
+            j += "]";
+        }
+    }
     return j + "}";
 }
 
@@ -46770,6 +46861,13 @@ static std::string decoderLabel(const std::string& ext, bool spots) {
 /** ★★ Who lost input in the last minute — see vibehealth::BehindWatch. Listeners' decoders, background decoding,
  *  ADS-B and ISM: every decoder that runs behind a drop-never-wait queue. (Advanced RDS runs inside the DSP's own
  *  pass, with no queue of its own to fall behind on, so it is not judged here.) */
+/** ★★ beta95 THE PILL AUDIT: only a decoder whose loss is the listener's AUDIO — DRM and DAB+'s audio decoder — reaches the
+ *  pill. Spots, the skimmers, ADS-B, ISM, NDB, AIS, the datalink, sondes, the VOR map and a listener's text decoders lose
+ *  decodes when they drop input, never lag or broken audio (Stuart 11-25: "the pill is to inform users why they might be
+ *  having sluggish connection, lagging, broken audio etc."): the admin page names them. */
+static bool vsBehindListenerFeels(const std::string& key) {
+    return key.rfind("drm:", 0) == 0 || key == "dab:aac";
+}
 std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     static vibehealth::BehindWatch watch;
     if (p) {
@@ -46808,6 +46906,12 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
                      who.empty() ? "the decoder it feeds" : who.c_str());
                 tapLast = d; tapLogAt = nowMs;
             } else if (!p->skimTap_.running()) tapLast = d;
+            // ★★ beta95 and on the ADMIN page (never the pill — vsBehindListenerFeels): the owner sees it within the minute
+            if (p->skimTap_.running()) {
+                std::shared_ptr<DecoderHost> h = p->decoders_.shared();
+                const std::string who = h ? decoderLabel(h->name(), h->spotsOn()) : std::string();
+                watch.note("tap:wide", (who.empty() ? std::string("Wide-IQ slice") : who) + " (wide-IQ slice tap)", d, nowMs);
+            }
         }
         /* ★★★ V12 2026-11-24: background decoding giving way to a listener is the design working (vibe_bg_ease.h) — its drops
          *  are EXCUSED while a listener is on and the easing still has room to act. TOO HEAVY stays for real overload:
@@ -46841,7 +46945,10 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     /* ★★ V12: DAB+ through FAAD2 decodes on its own thread (vibe-faad2) behind a drop-never-wait ring; a unit it could
      *  not take in time is concealed — this box is too light for the decode on top of the multiplex. Monotonic. */
     watch.note("dab:aac", "DAB+ audio decoder", g_dab.aacDropped(), nowMs);
-    return watch.behind(nowMs);
+    std::vector<std::string> admin;
+    std::vector<std::string> pill = watch.behindSplit(nowMs, vsBehindListenerFeels, &admin);
+    { std::lock_guard<std::mutex> lk(g_adminBehindMtx); g_adminBehind.swap(admin); }
+    return pill;
 }
 
 /** ★★★ beta94: the pill's line when background decoding's load is degrading the listener — said from their side. */
@@ -46873,8 +46980,8 @@ void LocalSdrShim::healthTick() {
                             h.batPresent && !h.batCharging);
     h.behind = decodersBehind(now);
     if (p) {
-        const std::string en = p->bgRun_.running() ? p->bgRun_.easeNote() : std::string();
-        if (!en.empty()) h.notes.push_back("Background decoding: " + en);
+        /* ★★ beta95 THE PILL AUDIT: "Background decoding: eased for listeners" is the design working — nothing a listener
+         *  feels. The admin page's background line says it (adminBg.ts bgLines, runner.ease.note); the pill does not. */
         // ★★★ beta94: on the pill ONLY when its load is what the listener feels (vibe_bg_ease.h PillWatch)
         static vibe::bg::ease::PillWatch bgPill;
         const bool on = p->bgRun_.running();
@@ -46883,6 +46990,10 @@ void LocalSdrShim::healthTick() {
     }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
+    /* ★★ beta95 THE PILL AUDIT: the host's battery % is the OWNER's (the admin page's BATTERY card, with its suspend floor),
+     *  not a struggle a listener feels. What a listener does feel — connections suspended at the floor — is said to them
+     *  through the VTS line as it approaches (batteryTick). Read above (bgFullCpuTick) before it is taken off the pill. */
+    h.batPresent = false; h.batCharging = false; h.batPct = -1; h.bat = vibehealth::OK;
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);

@@ -4163,6 +4163,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                     A new listener sees every aircraft at once, instead of a map that fills over the next minute. It
                     costs CPU (and battery) all the time, and the radio never idles or powers down while it is on.
+                    Unattended satellite passes still run: a pass takes the radio, ADS-B pauses for it (about 10{'\u2013'}15
+                    min) and resumes after.
                   </Text>
                 </>)}
               </View>

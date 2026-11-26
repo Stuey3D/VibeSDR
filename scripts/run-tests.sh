@@ -1634,6 +1634,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta95 THE FRONT DOOR'S ONE MERGED COMMUNITY FEED: a layer any radio may share is at the door, the same DSC call /
+#    APRS station from two radios is one row, a save through the door follows. Door only, no radio. ~10 s.
+printf '\n\033[1m── community map: the front door answers for every radio (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-community-door.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE WHOLE MACHINE HOLDS STILL FOR A BENCHMARK (Stuart, 2026-11-20 — the Pi 2's quick run measured beside the radio
 #     process's DX scanner): a quick run from the FRONT DOOR holds every radio process still (no DX hop inside the run) and
 #     brings them back; a listener on any radio refuses it by name (forced, it runs); a radio that does not answer stops it;

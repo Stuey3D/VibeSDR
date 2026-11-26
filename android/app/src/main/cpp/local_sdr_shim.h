@@ -159,6 +159,9 @@ public:
     static std::string rateGuardJson();
     /** ★ beta95: after setRateGuardBase, a pre-beta95 record's give-back, ONCE: 0 none, 1 dabRateBoost on, 2 ism256 on. */
     static int rateGuardGaveBack();
+    /** ★★ beta95 a multi-radio machine's FRONT DOOR: each enabled radio's blocked modes, so the door's community.json is
+     *  ONE merged feed for the whole machine (a layer any radio may share). Empty = judge by this process's own. */
+    static void setCommunityDoorRadios(const std::vector<std::string>& blockedPerRadio);
     static void rateGuardClear();
     /** ADS-B at 2.56 MS/s on an RTL: the owner's own switch (not tied to the rate switch); never the default. */
     static void setVibeServerAdsb256(bool on);

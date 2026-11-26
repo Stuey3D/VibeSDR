@@ -43,6 +43,7 @@
 #include "vibe_aircraft_share.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -388,6 +389,78 @@ inline std::string rowsSince(const std::string& rows, int idx, double minT, size
         if (depth != 0 || fieldAt == std::string::npos) continue;
         const double t = std::atof(rows.c_str() + fieldAt);
         if (t >= minT) { if (n++) out += ','; out.append(rows, start, i - start); }
+    }
+    return out;
+}
+
+/** ★ Is `name` in the owner's comma/space/semicolon list of blocked modes? (Case-insensitive — vsModeBlocked's rule.) */
+inline bool modeCsvHas(const std::string& csv, const std::string& name) {
+    std::string want, tok;
+    for (char c : name) want += char(std::tolower((unsigned char)c));
+    for (size_t i = 0; i <= csv.size(); ++i) {
+        const char c = i < csv.size() ? csv[i] : ',';
+        if (c == ',' || c == ' ' || c == ';') { if (!tok.empty() && tok == want) return true; tok.clear(); }
+        else tok += char(std::tolower((unsigned char)c));
+    }
+    return false;
+}
+/** ★ May a radio whose blocked modes are `blocked` share community layer `l`? The modes behind each layer. */
+inline bool layerAllowed(const std::string& l, const std::function<bool(const char*)>& blocked) {
+    if (l == "adsb") return !blocked("adsb");
+    if (l == "acars" || l == "vdl2") return !blocked("avdata");
+    if (l == "hfdl") return !blocked("hfdl");
+    if (l == "ais") return !blocked("ais") && !blocked("aisstore");
+    if (l == "vor") return !blocked("vormap") && !blocked("vor");
+    if (l == "mesh") return !blocked("ism");
+    return !blocked(l.c_str());
+}
+/** ★★ beta95 THE FRONT DOOR'S ANSWER IS THE WHOLE MACHINE'S: a layer is shared when ANY of the machine's radios may share it
+ *  (each radio's own blocked modes — the door, which owns no radio, used to judge by the first radio's alone, so a
+ *  multi-radio server's door answered only what that one radio allowed: Stuart's Pi 500, the RSP1B, DSC only). */
+inline bool layerAllowedAnyRadio(const std::string& l, const std::vector<std::string>& radiosBlocked) {
+    for (const auto& csv : radiosBlocked)
+        if (layerAllowed(l, [&](const char* m) { return modeCsvHas(csv, m); })) return true;
+    return false;
+}
+
+/** ★★ beta95 ONE MERGED FEED PER MACHINE: the remembered rows of every radio (and a process's own, held in memory AND in its
+ *  file) can name the same sonde / APRS station / VOR twice. One row per key (field `keyIdx`, compared as written), the
+ *  newest by field `timeIdx`, newest first, at most `maxRows`. Pure; the input is already bounded (readLive). */
+inline std::string rowsDedupe(const std::string& rows, int keyIdx, int timeIdx, size_t maxRows) {
+    struct R { std::string key; double t; size_t a, b; };
+    std::vector<R> v;
+    size_t i = 0;
+    while (i < rows.size() && v.size() < 4096) {
+        while (i < rows.size() && rows[i] != '[') ++i;
+        if (i >= rows.size()) break;
+        const size_t start = i;
+        int depth = 0, field = 0; bool str = false;
+        size_t keyAt = std::string::npos, keyEnd = std::string::npos, tAt = std::string::npos;
+        for (; i < rows.size(); ++i) {
+            const char c = rows[i];
+            if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
+            if (c == '"') { str = true; continue; }
+            if (c == '[') { if (++depth == 1) { if (field == keyIdx) keyAt = i + 1; if (field == timeIdx) tAt = i + 1; } continue; }
+            if (c == ']') { if (--depth == 0) { if (field == keyIdx && keyEnd == std::string::npos) keyEnd = i; ++i; break; } continue; }
+            if (c == ',' && depth == 1) {
+                if (field == keyIdx) keyEnd = i;
+                ++field;
+                if (field == keyIdx) keyAt = i + 1;
+                if (field == timeIdx) tAt = i + 1;
+            }
+        }
+        if (depth != 0 || keyAt == std::string::npos || keyEnd == std::string::npos || tAt == std::string::npos) continue;
+        v.push_back({ rows.substr(keyAt, keyEnd - keyAt), std::atof(rows.c_str() + tAt), start, i });
+    }
+    std::stable_sort(v.begin(), v.end(), [](const R& x, const R& y) { return x.t > y.t; });
+    std::set<std::string> seen;
+    std::string out;
+    size_t n = 0;
+    for (const auto& r : v) {
+        if (n >= maxRows) break;
+        if (!seen.insert(r.key).second) continue;
+        if (n++) out += ',';
+        out.append(rows, r.a, r.b - r.a);
     }
     return out;
 }
