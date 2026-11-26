@@ -39,6 +39,32 @@
     ],
     "places": "major"
    },
+   "airsea": {
+    "hide": [
+     "grid",
+     "grid-labels",
+     "rail",
+     "roads-b",
+     "roads-d"
+    ],
+    "places": "major"
+   },
+   "airsea-plain": {
+    "hide": [
+     "airports-4",
+     "airports-6",
+     "airports-7",
+     "airports-8",
+     "grid",
+     "grid-labels",
+     "rail",
+     "roads-b",
+     "roads-d",
+     "runways",
+     "runway-ends"
+    ],
+    "places": "major"
+   },
    "marine": {
     "hide": [
      "airports-4",

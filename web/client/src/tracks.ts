@@ -401,6 +401,24 @@ const CSS = `
 .trkTop .rng .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkTop .tgl .btn[aria-pressed="true"]{background:#7fc8ff;border-color:#7fc8ff}
 .trkTop .rng[hidden],.trkKey[hidden]{display:none}
+.trkTop .tgl .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
+.trkTop .tgl .grp:first-child{margin-left:0}
+.trkTop .tgl .btn.live{box-shadow:inset 0 -3px 0 #ff5a4d}
+.trkTop .tgl .btn.live::after{content:" LIVE";font-size:9px;color:#ff5a4d;letter-spacing:.06em}
+.trkTop .tgl .btn.live[aria-pressed="true"]::after{color:#7a0d06}
+.trkList .hd .tabs{display:inline-flex;gap:2px;flex-wrap:wrap}
+.trkList .hd .tab{background:none;border:0;border-bottom:2px solid transparent;color:#8fa2b5;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.05em;padding:2px 5px;cursor:pointer}
+.trkList .hd .tab[aria-selected="true"]{color:#e8eef5;border-bottom-color:#ffd34d}
+.trkList .hd .tab .tn{color:#ffd34d;margin-left:4px}
+.trkList .hd .tab:focus-visible,.trkList .hd .srt button:focus-visible{outline:2px solid #ffd34d}
+.trkList .hd .srt{display:inline-flex;margin-left:4px}
+.trkList .hd .srt button{background:#1e2a36;color:#cfd9e3;border:1px solid #33475a;font:700 9.5px/1 ui-monospace,Menlo,monospace;padding:3px 5px;cursor:pointer;margin-left:-1px}
+.trkList .hd .srt button:first-child{border-radius:4px 0 0 4px;margin-left:0}.trkList .hd .srt button:last-child{border-radius:0 4px 4px 0}
+.trkList .hd .srt button[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkList .hd .srt[hidden],.trkList .hd .tabs[hidden],.trkList .hd .lt[hidden],.trkList .filt[hidden]{display:none}
+.trkList .filt{display:flex;align-items:center;gap:6px;padding:4px 10px;font-size:11px;color:#cfd9e3;background:#132030;border-bottom:1px solid #22303d}
+.trkList .filt button{background:#1e2a36;color:#e8eef5;border:1px solid #33475a;border-radius:4px;font:600 10px/1 system-ui,sans-serif;padding:3px 6px;cursor:pointer}
+.trkMsg .lbl{color:#7fc8ff}
 .trkCard .nvTr{background:#1d2a36;color:#e3eaf1;border:1px solid #3c5266;border-radius:5px;font:600 11px ui-monospace,Menlo,monospace;padding:3px 8px;cursor:pointer}
 .trkCard .nvTr.on{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkCard .nvTr:focus-visible{outline:2px solid #ffd34d}
@@ -517,6 +535,8 @@ export interface TrackViewOpts {
   /** ★ beta91 (aircraft:true) where this server serves the owner's logos and silhouettes ("…/adsb/", adsb.ts adsbImageBase);
    *  null / absent = none. Every source's aircraft carries the ADS-B data's keys (vibe_aircraft_info.h). */
   imageBase?: string | null;
+  /** ★★ beta96 THE AIR & SEA MAP: aircraft AND other layers on one map — both cameras made, setCamera picks one. */
+  mixed?: boolean;
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -552,8 +572,9 @@ export class TrackView {
       //   as layers gain or lose data on this server (a layer with nothing is absent, never an empty toggle)
       + `<span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span>`
       + `<span class="st"></span><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></div>`
-      + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span>${esc(o.listTitle)}</span> <span class="n">0</span>`
-      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="rows"></div></div>`
+      + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
+      + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
+      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
       + `<details class="trkKey"${o.legend ? '' : ' hidden'}><summary>KEY</summary><div class="kb">${o.legend || ''}</div></details>`
       + `</div>`;
     this.root = r;
@@ -578,8 +599,8 @@ export class TrackView {
     this.setToggles(o.toggles ?? [], o.toggled ?? {});
     const hd = r.querySelector('.hd') as HTMLElement;
     const toggle = () => this.setMin(!this.list.classList.contains('min'));
-    hd.onclick = toggle;
-    hd.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+    hd.onclick = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; toggle(); };
+    hd.onkeydown = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
     this.rowsEl.addEventListener('click', (e) => this.rowPick(e));
     this.rowsEl.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') this.rowPick(e); });
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
@@ -591,15 +612,19 @@ export class TrackView {
   get open() { return !this.root.hidden; }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
-    const sig = JSON.stringify([toggles.map((x) => x.id), toggles.map((x) => toggled[x.id] !== false)]);
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live]), toggles.map((x) => toggled[x.id] !== false)]);
     if (sig === this.tglSig) return;
     this.tglSig = sig;
     host.hidden = !toggles.length;
-    host.innerHTML = toggles.map((x) => `<button class="btn" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('');
+    // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, LIVE on the live layer's —
+    //   the live layer is what the receiver is doing, so its chip is always pressed
+    host.innerHTML = toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
+      + `<button class="btn${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${x.live || toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}"${x.live ? ' aria-disabled="true"' : ''}>${esc(x.label)}</button>`).join('');
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
+        if (b.classList.contains('live')) return;   // ★ beta96 the live layer cannot be switched off
         const on = b.getAttribute('aria-pressed') !== 'true';
         b.setAttribute('aria-pressed', String(on));
         this.o.onToggle?.(b.dataset.tgl || '', on);
@@ -615,18 +640,109 @@ export class TrackView {
     try {
       // ★ a server whose map pack predates 'aero-plain' says no: the airport layers are switched by name instead
       if (this.vm && this.vm.setProfile?.(name) === false) {
+        // ★ beta96 'airsea' / 'airsea-plain' on an older pack: its aero profile, then the ports switched on by name
+        const sea = name === 'airsea' || name === 'airsea-plain';
+        const base = name === 'airsea' ? 'aero' : name === 'airsea-plain' ? 'aero-plain' : name;
+        if (sea) this.vm.setProfile?.(base);
         const m = this.vm.map;
         for (const id of ['airports-4', 'airports-6', 'airports-7', 'airports-8', 'runways', 'runway-ends'])
-          if (m?.getLayer?.(id)) m.setLayoutProperty(id, 'visibility', name === 'aero-plain' ? 'none' : 'visible');
+          if (m?.getLayer?.(id)) m.setLayoutProperty(id, 'visibility', base === 'aero-plain' ? 'none' : 'visible');
+        if (sea && m?.getLayer?.('ports')) m.setLayoutProperty('ports', 'visibility', 'visible');
       }
     } catch (e) { console.error('[tracks] profile', e); }
-    try { this.vmL?.setProfile?.(name); } catch (e) { console.error('[tracks] profile', e); }
+    try { if (this.vmL?.setProfile?.(name) === false) this.vmL?.setProfile?.(name === 'airsea' ? 'aero' : name === 'airsea-plain' ? 'aero-plain' : name); } catch (e) { console.error('[tracks] profile', e); }
   }
   get profile(): string { return this.o.profile || ''; }
   /** ★ V12 2026-11-02: the time filter's pressed button, from outside (the two shipping views share one filter). */
   setRange(id: string) {
     for (const b of Array.from(this.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === id));
   }
+  /** ★★★ beta96 THE LIVE MAPS (liveMaps.ts liveChrome): the title and the exit key are COMPUTED from the current mode on
+   *  every render and set here — a view is never left wearing the mode it was made for (Mac Ha 11-26). */
+  setChrome(title: string, exitLabel: string) {
+    const t = this.root.querySelector('.ttl') as HTMLElement, x = this.root.querySelector('.exit') as HTMLElement;
+    if (t.textContent !== title) { t.textContent = title; this.root.setAttribute('aria-label', title + ' map'); }
+    if (x.textContent !== exitLabel) x.textContent = exitLabel;
+  }
+  get title(): string { return (this.root.querySelector('.ttl') as HTMLElement).textContent || ''; }
+  get exitLabel(): string { return (this.root.querySelector('.exit') as HTMLElement).textContent || ''; }
+  private rngSig: string | null = null;
+  /** ★ beta96 the segmented control, redrawn when what it offers changes (the time filter for the maritime layers, the
+   *  DATALINK's bands) — [] = none. `onRange` is the view's own. */
+  setRanges(ranges: Array<{ id: string; label: string; words: string }>, current: string, label = '', hint = '') {
+    const sig = JSON.stringify([ranges.map((r) => r.id), label, hint]);
+    let host = this.root.querySelector('.rng:not(.tgl)') as HTMLElement | null;
+    if (sig !== this.rngSig) {
+      this.rngSig = sig;
+      if (!host) { host = document.createElement('span'); host.className = 'rng'; host.setAttribute('role', 'group'); this.root.querySelector('.ttl')!.after(host); }
+      host.hidden = !ranges.length;
+      host.setAttribute('aria-label', label || 'Show what was heard in the last…'); host.title = hint;
+      host.innerHTML = ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('');
+      for (const b of Array.from(host.querySelectorAll('[data-rng]')) as HTMLButtonElement[]) {
+        b.onclick = () => {
+          for (const o2 of Array.from(host!.querySelectorAll('[data-rng]'))) o2.setAttribute('aria-pressed', String(o2 === b));
+          this.o.onRange?.(b.dataset.rng || '');
+          this.refit = true;
+        };
+      }
+    }
+    if (host) for (const b of Array.from(host.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === current));
+  }
+  private tabSig = '';
+  /** ★★ beta96 the list's TABS (AIRCRAFT · MESSAGES · SHIPS …, liveMaps.ts liveTabs) in its header, with their counts.
+   *  [] = the plain list title. A tab pressed calls `onTab`; the host draws that tab's rows. */
+  setTabs(tabs: Array<{ id: string; label: string; n: number }>, current: string, onTab: (id: string) => void) {
+    const host = this.root.querySelector('.hd .tabs') as HTMLElement, lt = this.root.querySelector('.hd .lt') as HTMLElement;
+    host.hidden = tabs.length < 2; lt.hidden = tabs.length >= 2; this.countEl.hidden = tabs.length >= 2;
+    const sig = JSON.stringify([tabs, current]);
+    if (sig === this.tabSig) return;
+    this.tabSig = sig;
+    if (tabs.length === 1) lt.textContent = tabs[0].label;
+    host.innerHTML = tabs.map((t) => `<button class="tab" type="button" role="tab" data-tab="${esc(t.id)}" aria-selected="${t.id === current}">${esc(t.label)}<span class="tn">${t.n}</span></button>`).join('');
+    for (const b of Array.from(host.querySelectorAll('[data-tab]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); if (this.list.classList.contains('min')) this.setMin(false); onTab(b.dataset.tab || ''); };
+  }
+  get tab(): string { return (this.root.querySelector('.hd .tab[aria-selected="true"]') as HTMLElement | null)?.dataset.tab || ''; }
+  private srtSig = '';
+  /** ★★ beta96 the AIRCRAFT list's sort chip, NEAREST | LATEST — null = none (another tab). */
+  setSort(sort: string | null, onSort: (s: string) => void) {
+    const host = this.root.querySelector('.hd .srt') as HTMLElement;
+    host.hidden = !sort;
+    const sig = sort || '';
+    if (sig === this.srtSig) return;
+    this.srtSig = sig;
+    host.innerHTML = sort ? [['nearest', 'NEAREST'], ['latest', 'LATEST']].map(([id, l]) => `<button type="button" data-srt="${id}" aria-pressed="${id === sort}">${l}</button>`).join('') : '';
+    for (const b of Array.from(host.querySelectorAll('[data-srt]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onSort(b.dataset.srt || ''); };
+  }
+  /** ★★ beta96 the MESSAGES filter line ("Messages from RYR12K · ALL") — '' = none. */
+  setFilter(words: string, onClear: () => void) {
+    const f = this.root.querySelector('.filt') as HTMLElement;
+    f.hidden = !words;
+    if (!words) { f.innerHTML = ''; return; }
+    if (f.dataset.w === words) return;
+    f.dataset.w = words;
+    f.innerHTML = `<span>${esc(words)}</span><button type="button" aria-label="Show every message">× ALL</button>`;
+    (f.querySelector('button') as HTMLButtonElement).onclick = () => { f.dataset.w = ''; onClear(); };
+  }
+  /** ★ beta96 the camera's owner on a map with aircraft AND other things: 'aircraft' = the ADS-B layer's AUTO / FIT (the
+   *  aviation layers live), 'track' = the shared auto fit over the other items (ships, sondes, NAVTEX live). */
+  private camOwner: 'aircraft' | 'track' = 'aircraft';
+  private acAuto: boolean | null = null;
+  setCamera(owner: 'aircraft' | 'track') {
+    if (owner === this.camOwner) return;
+    this.camOwner = owner;
+    this.applyCamera();
+  }
+  private applyCamera() {
+    if (!this.acLayer) { this.fitBtn.hidden = false; return; }
+    const track = this.camOwner === 'track';
+    this.fitBtn.hidden = !track;
+    try {
+      if (track) { if (this.acAuto == null) this.acAuto = !!this.acLayer.prefs?.().autoZoom; this.acLayer.setPrefs?.({ autoZoom: false }); this.af?.resume?.(); this.af?.fitNow?.(); }
+      else { if (this.acAuto != null) { this.acLayer.setPrefs?.({ autoZoom: this.acAuto }); this.acAuto = null; } this.af?.pause?.(); }
+    } catch (e) { console.error('[tracks] camera', e); }
+  }
+  /** ★ an item to select when its row is pressed (a MESSAGES row names its aircraft's key) — `onRow` hears every press. */
+  onRow: ((key: string) => void) | null = null;
   private keySig = '';
   /** ★★ V12 2026-11-02 the KEY, redrawn — it lists the glyphs of the layers this map has (ships, DSC, hazards, arrows). */
   setLegend(html: string) {
@@ -645,7 +761,9 @@ export class TrackView {
   private rowPick(e: Event) {
     const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
     if (!row) return;
-    const k = row.dataset.key || '';
+    const k = row.dataset.focus || row.dataset.key || '';
+    try { this.onRow?.(row.dataset.key || ''); } catch (e) { console.error('[tracks] onRow', e); }
+    if (row.dataset.nofocus) { this.markSel(row.dataset.key || ''); return; }
     const hex = this.acKeys.get(k);
     if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
@@ -778,7 +896,7 @@ export class TrackView {
   }
   /** The scale bar's units: NM beside km on the sea and air maps. */
   private scaleKind(): 'nautical' | 'metric' {
-    const n = this.o.nautical ?? (this.o.profile === 'marine' || this.o.profile === 'aero');
+    const n = this.o.nautical ?? (this.o.profile === 'marine' || this.o.profile === 'aero' || this.o.profile === 'airsea');
     return n ? 'nautical' : 'metric';
   }
   private attach(map: any, L: any) {
@@ -812,7 +930,9 @@ export class TrackView {
     /* ★★★ beta92 THE AUTO FIT — every item heard and the receiver, clear of the list's corner; the FIT key is its AUTO key.
      *  On the aviation map the ADS-B layer frames the aircraft (its own AUTO / FIT), so the key is hidden there. */
     this.fitBtn.hidden = !!this.acLayer;
-    if (!this.acLayer && w.VibeAutoFit) {
+    // ★ beta96 a map with aircraft AND other layers (the AIR & SEA map) has the shared auto fit too; setCamera says whose
+    //   camera it is (the ADS-B layer's while aviation is live, else this one's)
+    if ((!this.acLayer || this.o.mixed) && w.VibeAutoFit) {
       const layer = this.layer;
       try {
         this.af = w.VibeAutoFit.attach(map, {
@@ -825,6 +945,7 @@ export class TrackView {
         });
       } catch (e) { console.error('[tracks] auto fit', e); this.af = null; }
     }
+    if (this.o.mixed) this.applyCamera();
     if (this.pending) {
       const p = this.pending; this.pending = null; this.feed(p);
       if (!this.wantFocus) this.autoFitCheck(p);
