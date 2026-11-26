@@ -313,12 +313,15 @@ try {
   const T0 = Date.now();
   const t0 = Math.floor(T0 / 1000);
   const so50Aos = now + 38 * 60 + 20, son2Aos = now + 3 * 3600;
-  const priv = (pp = true, over = {}) => { const l = list(over); l.source.pickPrivate = pp; l.sats = l.sats.map((x) => x.id === 'SO-50' ? { ...x, tx: [{ ...x.tx[0], reach: true, why: undefined }] } : x); return l; };
-  await ev(`window.__fake = ${T0}; window.__p.show(); window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(false))})); document.querySelector('#satPanel details').open = true; true`);
-  ok(await ev(`document.querySelectorAll('#satPanel .sat-rem').length === 0`), 'a shared dial (pickPrivate false): REMIND hidden, not greyed');
-  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(true))})); true`);
+  // ★★★ beta96 (Stuart 11-26): REMIND is the SHARED DIAL's key now (pickPrivate false, nobody said to be alone); a private
+  //    radio gets SCHEDULE (its own section below). So this section runs on a shared dial: priv(false).
+  const priv = (pp = false, over = {}) => { const l = list(over); l.source.pickPrivate = pp; l.sats = l.sats.map((x) => x.id === 'SO-50' ? { ...x, tx: [{ ...x.tx[0], reach: true, why: undefined }] } : x); return l; };
+  await ev(`window.__fake = ${T0}; window.__p.show(); window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(true))})); document.querySelector('#satPanel details').open = true; true`);
+  ok(await ev(`document.querySelectorAll('#satPanel [data-act="remind"]').length === 0 && document.querySelectorAll('#satPanel [data-act="sched"]').length === 2`), 'beta96 a private radio: SCHEDULE keys, no REMIND');
+  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(false))})); true`);
   const rem = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .sat-rem')].map(b => b.dataset.norad + ':' + b.textContent))`));
-  ok(rem.length === 2 && rem.includes('27607:REMIND') && rem.includes('59112:REMIND'), `private: a REMIND key on each pass still to come, none on the up-now rows (${rem.join(', ')})`);
+  ok(rem.length === 2 && rem.includes('27607:REMIND') && rem.includes('59112:REMIND'), `beta96 a shared dial: a REMIND key on each pass still to come, none on the up-now rows (${rem.join(', ')})`);
+  ok(/A shared dial — tuning moves everyone/.test(await ev(`document.querySelector('#satPanel .sat-sline')?.textContent || ''`)), 'beta96 the line says why it is REMIND here');
   ok(/REMIND.*1.*2.*5.*10.*min before it rises/.test(await ev(`document.querySelector('#satPanel .sat-lead').textContent`)), 'the lead choice 1 / 2 / 5 / 10 min');
   await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').click(); true`);
   ok(await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').textContent`) === 'FORGET' && await ev('window.__p.reminders().length') === 1, 'pressed: lit "FORGET", one held');
@@ -336,16 +339,17 @@ try {
   ok(await ev('window.__entered') === 1 && await ev('window.__p.active'), 'LISTEN enters SATELLITE');
   ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":27607,"tx":0,"doppler":true}', 'LISTEN sends the ordinary pick');
   ok(await ev(`document.getElementById('satRemind').hidden`), 'the pop-up goes');
-  // the re-check: shared by the time it fires
+  // the re-check: out of range by the time it fires (★★★ beta96: a shared dial no longer blocks LISTEN — it is REMIND's home)
   await ev(`window.__fake = ${T0}; window.__p.onPicked({ norad: 27607, tx: 0, decoder: '' }); document.querySelector('#satPanel details').open = true; true`);
   await ev(`document.querySelector('#satPanel .sat-rem[data-norad="59112"]').click(); true`);
-  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(false))})); window.__fake = ${(son2Aos - 120) * 1000}; window.__p.remTick(); true`);
+  const gone = priv(false); gone.sats = gone.sats.map((x) => x.id === 'SONATE-2' ? { ...x, tx: [{ ...x.tx[0], reach: false, why: 'Out of this receiver’s range — it is locked to 430–440 MHz' }] } : x);
+  await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(gone)})); window.__fake = ${(son2Aos - 120) * 1000}; window.__p.remTick(); true`);
   const why = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
-  ok(/This radio is now shared — a pass cannot be picked for everyone/.test(why) && !(await ev(`!!document.querySelector('#satRemind [data-act="listen"]')`)), `can no longer be picked: says why, no LISTEN (${why})`);
+  ok(/locked to 430–440 MHz/.test(why) && !(await ev(`!!document.querySelector('#satRemind [data-act="listen"]')`)), `can no longer be picked: says why, no LISTEN (${why})`);
   await ev(`document.querySelector('#satRemind [data-act="dismiss"]').click(); true`);
   ok(await ev(`document.getElementById('satRemind').hidden`), 'DISMISS');
   // several at once — and "picking this ends SO-50"
-  const many = priv(true); many.sats = many.sats.concat([1, 2, 3, 4].map((k) => ({ id: 'B' + k, name: 'BIRD-' + k, norad: 90000 + k, note: '', age: 1, ageState: 'fresh', el: -20,
+  const many = priv(false); many.sats = many.sats.concat([1, 2, 3, 4].map((k) => ({ id: 'B' + k, name: 'BIRD-' + k, norad: 90000 + k, note: '', age: 1, ageState: 'fresh', el: -20,
     tx: [{ label: 'FM', hz: 145900000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice', band: 'U/v', modeName: 'Mode B' }], passes: [{ aos: now + 1200 + k, tca: now + 1500, los: now + 1800, maxEl: 40, aosAz: 0, losAz: 180 }] })));
   await ev(`window.__fake = ${T0}; window.__p.onList(__Sat.parseSatList(${JSON.stringify(many)})); document.querySelector('#satPanel details').open = true; true`);
   ok(/145\.900 MHz FM · Mode B · U\/v/.test(await ev(`document.querySelector('#satPanel .sat-row[data-norad="90001"]').textContent`)), '1.4 the row shows the mode label "Mode B · U/v"');
@@ -362,6 +366,65 @@ try {
   ok(await ev(`document.getElementById('satRemind').hidden && window.__p.reminders().length === 0`), 'no connection when it is due: dropped silently');
   await ev(`window.__conn = true; window.__fake = ${T0}; window.__p.render(); document.querySelector('#satPanel .sat-rem[data-norad="90002"]').click(); window.__p.remindClear(); true`);
   ok(await ev('window.__p.reminders().length') === 0, 'the session ending / leaving clears them');
+
+  console.log('— ★★★ beta96 SCHEDULE (a private radio; a fake clock)');
+  {
+    await ev(`window.__fake = ${T0}; localStorage.removeItem('vibe.satSchedule'); window.__back = []; window.__sess = {};
+      window.__p.deps.session = () => window.__sess; window.__p.deps.here = () => ({ hz: 101100000, mode: 'wfm' });
+      window.__p.deps.back = (hz, mode) => window.__back.push([hz, mode]); true`);
+    const sl = priv(true);
+    sl.sats.push({ id: 'OV-1', name: 'OV-1', norad: 90100, note: '', age: 1, ageState: 'fresh', el: -20,
+      tx: [{ label: 'FM', hz: 145900000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice' }], passes: [{ aos: now + 40 * 60, tca: now + 45 * 60, los: now + 50 * 60, maxEl: 70, aosAz: 0, losAz: 180 }] });
+    await ev(`window.__p.show(); window.__p.onList(__Sat.parseSatList(${JSON.stringify(sl)})); document.querySelector('#satPanel details').open = true; true`);
+    ok(/Only you on this radio: SCHEDULE tunes it/.test(await ev(`document.querySelector('#satPanel .sat-sline')?.textContent || ''`))
+       && /only while this page is open and connected/.test(await ev(`document.querySelector('#satPanel .sat-sline')?.textContent || ''`)), 'the line: why SCHEDULE, and only while the page is open');
+    await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="27607"]').click(); true`);
+    ok(await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="27607"]').textContent`) === 'CANCEL' && await ev('window.__p.scheduled().length') === 1, 'SCHEDULE pressed: lit CANCEL, one scheduled');
+    ok(/SCHEDULED · tunes \d\d:\d\d–\d\d:\d\d, then back/.test(await ev(`document.querySelector('#satPanel .sat-row[data-norad="27607"] .sat-s').textContent`)), 'the row says when it tunes');
+    ok(/27607/.test(await ev(`localStorage.getItem('vibe.satSchedule') || ''`)), 'kept in this browser (per server)');
+    await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="90100"]').click(); true`);
+    ok(await ev(`document.querySelectorAll('#satPanel [data-act="prio"]').length`) === 2, 'two overlapping scheduled passes: PRIORITISE on each');
+    ok(/only — OV-1 is the higher pass/.test(await ev(`document.querySelector('#satPanel .sat-row[data-norad="27607"] .sat-s').textContent`)), 'no choice: the higher pass wins, said on the other');
+    ok(await ev(`[...document.querySelectorAll('#satPanel .sat-sline')].some(e => /the higher pass wins unless you PRIORITISE/.test(e.textContent))`), 'the overlap rule is stated');
+    await shot('schedule-overlap');
+    await ev(`document.querySelector('#satPanel [data-act="prio"]').closest('.sat-rw').querySelector('[data-act="prio"]').click(); true`);
+    const pr = await ev(`[...document.querySelectorAll('#satPanel [data-act="prio"]')].map(b => b.textContent).sort().join(',')`);
+    ok(pr === 'PRIORITISE,PRIORITISED', `PRIORITISE: one lit (${pr})`);
+    await ev(`document.querySelector('#satPanel [data-act="prio"].on').click(); true`);
+    ok(await ev(`document.querySelectorAll('#satPanel [data-act="prio"].on').length`) === 0, 'pressed again: back to the default');
+    // the runner — out of the mode first: the schedule enters it
+    await ev(`document.querySelector('#satPanel [data-act="exit"]').click(); window.__sent = []; window.__entered = 0; true`);
+    await ev(`window.__fake = ${(so50Aos - 5) * 1000}; window.__p.remTick(); true`);
+    ok((await ev('window.__sent')).length === 0, 'before AOS: nothing sent');
+    await ev(`window.__fake = ${so50Aos * 1000}; window.__p.remTick(); true`);
+    ok(await ev('window.__entered') === 1 && JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":27607,"tx":0,"doppler":true}', 'AOS: into SATELLITE and the ordinary pick');
+    await ev(`window.__p.onPicked({ norad: 27607, tx: 0, decoder: '' }); window.__fake = ${(so50Aos + 30) * 1000}; window.__p.remTick(); true`);
+    ok((await ev('window.__sent')).filter((m) => m.op === 'pick').length === 1, 'tuned once, not every second');
+    ok(/SCHEDULE · on SO-50 until .*then back to 101\.100 MHz WFM/.test(await ev(`[...document.querySelectorAll('#satPanel .sat-sline')].map(e => e.textContent).join(' | ')`)), 'the status line: on SO-50, then back to 101.1 WFM');
+    await ev(`window.__fake = ${(now + 40 * 60) * 1000}; window.__p.remTick(); true`);
+    ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":90100,"tx":0,"doppler":true}', 'the higher overlapping pass takes over at its AOS (no back in between)');
+    ok(!(await ev('window.__back')).length, '…nothing put back yet');
+    await ev(`window.__p.onPicked({ norad: 90100, tx: 0, decoder: '' }); window.__fake = ${(now + 50 * 60) * 1000}; window.__p.remTick(); true`);
+    ok(JSON.stringify(await ev('window.__back')) === '[[101100000,"wfm"]]' && (await ev('window.__sent')).slice(-1)[0].op === 'drop' && !(await ev('window.__p.active')), 'after LOS: out of SATELLITE and back to 101.1 WFM');
+    ok(await ev('window.__p.scheduled().length') === 0, 'passes over leave the book');
+    // degrade: someone else on the dial at fire time
+    await ev(`window.__fake = ${T0}; window.__p.show(); window.__p.onList(__Sat.parseSatList(${JSON.stringify(sl)})); document.querySelector('#satPanel details').open = true;
+      document.querySelector('#satPanel [data-act="sched"][data-norad="59112"]').click(); window.__p.exit(); window.__sent = []; true`);
+    ok(await ev('window.__p.scheduled().length') === 1, 'SONATE-2 scheduled');
+    await ev(`window.__sess = { sharedDial: true, listeners: 2 }; window.__p.render(); true`);
+    ok(/your 1 scheduled pass will remind you/.test(await ev(`window.__p.show(), [...document.querySelectorAll('#satPanel .sat-sline')].map(e => e.textContent).join(' | ')`)), 'another listener on the dial: the line says scheduled passes remind instead');
+    await ev(`window.__p.exit(); window.__sent = []; window.__fake = ${(son2Aos - window.__lead0 * 60) * 1000}; true`.replace('window.__lead0', String(await ev('window.__p.lead'))));
+    await ev(`window.__p.remTick(); true`);
+    const dt = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
+    ok(/SONATE-2 rises in/.test(dt) && /did not tune by itself/.test(dt) && !(await ev('window.__sent')).some((m) => m.op === 'pick'), `degraded: a reminder (saying why), no tune (${dt})`);
+    await ev(`document.querySelector('#satRemind [data-act="dismiss"]')?.click(); window.__sess = {}; true`);
+    await ev(`window.__fake = ${son2Aos * 1000}; window.__p.onList(__Sat.parseSatList(${JSON.stringify(sl)})); window.__p.remTick(); true`);
+    ok((await ev('window.__sent')).some((m) => m.op === 'pick' && m.norad === 59112), 'alone again before AOS: it tunes');
+    await ev(`window.__sess = { sharedDial: true, listeners: 3 }; window.__p.onPicked({ norad: 59112, tx: 0, decoder: 'aprs' }); window.__back = []; window.__fake = ${(son2Aos + 60) * 1000}; window.__p.remTick(); true`);
+    await ev(`window.__fake = ${(son2Aos + 700) * 1000}; window.__p.remTick(); true`);
+    ok(!(await ev('window.__back')).length && await ev('window.__p.active'), 'someone joins mid-pass: nothing put back, the radio stays where it is');
+    await ev(`window.__p.exit(); window.__sess = {}; localStorage.removeItem('vibe.satSchedule'); window.__fake = ${T0}; true`);
+  }
   // 1.3 telemetry in the box
   const ao73 = priv(true); ao73.sats.push({ id: 'AO-73', name: 'AO-73', norad: 39444, note: '', age: 1, ageState: 'fresh', el: 20, inRangeFor: 400, lat: 50, lon: 0, rangeKm: 1500,
     tx: [{ label: 'BPSK telemetry', hz: 145935000, mode: 'usb', loop: 'fll', reach: true, use: 'packet' }], passes: [{ aos: now - 100, tca: now + 100, los: now + 400, maxEl: 30, aosAz: 0, losAz: 180 }] });
