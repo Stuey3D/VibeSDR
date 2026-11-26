@@ -153,7 +153,7 @@ object VibeServerBoot {
         "adminPassword", "autoRestore", "advertise")
     /** LAN_ONLY_OFF — community map, PSK Reporter / WSPRnet, DMR ID lookups, the ADS-B feed, background decoding, DX scan. */
     val LAN_ONLY_OFF_FALSE = listOf("communityMap", "pskrOn", "wsprnetOn", "dmrIdLookup")
-    val LAN_ONLY_OFF_EMPTY = listOf("adsbFeed", "bgDecode", "dxScan")
+    val LAN_ONLY_OFF_EMPTY = listOf("adsbFeed", "aircraftFeeds", "bgDecode", "dxScan")   // ★★ beta96 + feed sources (Simple = the defaults)
 
     fun isSimple(cfg: JSONObject): Boolean = cfg.optBoolean("simple", false)
 
@@ -411,6 +411,14 @@ object VibeServerBoot {
             val why = VibeLocalSDR.setAdsbFeed(cfg.s("adsbFeed"))
             if (why.isNotEmpty()) Log.w(TAG, "ADS-B flight-tracker sharing not applied: $why")
         }
+        /* ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEED SOURCES (Server mode → AIRCRAFT FEEDS FROM OTHER RECEIVERS) — main.cpp's
+         *  applyAircraftFeeds for a one-process server. Always a definite value: absent = "" = none. */
+        run {
+            val why = VibeLocalSDR.setAircraftFeeds(cfg.s("aircraftFeeds"))
+            if (why.isNotEmpty()) Log.w(TAG, "aircraft feeds not applied: $why")
+        }
+        // ★★ V12 beta96 the standalone AIR & SEA map's limits (Server mode → AIR & SEA MAP): absent = 20 viewers, no time limit
+        VibeLocalSDR.setAirSeaViewers(cfg.i("mapViewers", 20).coerceIn(0, 1000), cfg.i("mapTimeMin", 0).coerceIn(0, 1440))
         // ★★ V12 VibeAGC for SDRplay — the owner's choice; absent = 0 = automatic (on with the OpenRSP driver).
         VibeLocalSDR.setRspVibeAgc(cfg.i("rspVibeAgc", 0).coerceIn(0, 2))
         /* ★★★ THE SDRplay CARD (Server mode → SDRPLAY), the keys and defaults of RadioConfig — vibeserver_config.h: notches

@@ -23,7 +23,7 @@ export type SectionGroup = 'server' | 'radio';
 export const SERVER_ORDER: readonly string[] = [
   'bench', 'protocol', 'devicePassword', 'security',
   'network', 'location', 'proxy', 'webClient',
-  'community', 'adsbFeed', 'pskr',
+  'community', 'airSeaMap', 'aircraftFeeds', 'adsbFeed', 'pskr',
   'audio', 'frameRate', 'eibi',
   // the rest, in their old order
   'gallery', 'landingMsg', 'battery',

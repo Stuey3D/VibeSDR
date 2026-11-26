@@ -14,13 +14,15 @@ const inOrder = (got, want) => { let i = 0; for (const h of got) if (h === want[
 const radio = heads(pane('radioPane'));
 const wantRadio = ['SDR display name', 'Operating mode', 'Range', 'Listeners', 'Antenna', 'Radio', "This radio's hardware",
   'Where listeners may tune', 'Gain limits', 'Modes and decoders', 'Raw IQ', 'Where new listeners land', 'Background decoding',
-  'PIN for this radio', 'Share ADS-B with flight trackers', 'Broadcast FM defaults', 'Time limit'];
+  'PIN for this radio', 'Broadcast FM defaults', 'Time limit'];   // ★ beta96 b96-sbsfeed: flight-tracker sharing is the SERVER tab's now
 ok(inOrder(radio, wantRadio), `radio tab: ${radio.join(' · ')}`);
 const pos = (h) => radio.indexOf(h);
 ok(pos('Where new listeners land') === pos('Background decoding') - 1, '10 where new listeners land, then 11 background decoding');
 const server = heads(pane('serverPane', 'radioPane'));
 const wantServer = ['Radio order', 'What this box can carry', 'Processor', 'Wi-Fi', 'On your network', 'Where this receiver is', 'Network port',
-  'Behind a reverse proxy', 'Advertise on VibeSDR.net', 'SSH', 'VibeSDR community map', 'PSK Reporter', 'Sharing ADS-B with flight trackers',
+  'Behind a reverse proxy', 'Advertise on VibeSDR.net', 'SSH', 'VibeSDR community map',
+  // ★★ beta96 b96-sbsfeed: the standalone map's limits, the server-level feed sources and the flight-tracker hub, before PSK Reporter
+  'Air & sea map', 'Aircraft feeds from other receivers', 'Share ADS-B with flight trackers', 'PSK Reporter',
   'Audio', 'Frame rate', 'Shortwave schedule', "This phone's server", 'Start with Windows', 'Message on the landing screen'];
 ok(inOrder(server, wantServer), `server tab: ${server.join(' · ')}`);
 // the moves

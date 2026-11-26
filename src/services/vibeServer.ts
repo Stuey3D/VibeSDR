@@ -175,6 +175,11 @@ export type VibeServerConfig = {
   dxScan?: string;
   /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS — exactly RadioConfig::adsbFeed's JSON (vibe_beast.h parseConfig). '' = off. */
   adsbFeed?: string;
+  /** ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEED SOURCES — exactly ServerConfig::aircraftFeeds' JSON list (vibe_feeds.h). '' = none. */
+  aircraftFeeds?: string;
+  /** ★★ V12 beta96 the standalone AIR & SEA map's limits (vibe_airsea_viewers.h): viewers at once (0 = no limit), minutes each (0 = none). */
+  mapViewers?: number;
+  mapTimeMin?: number;
   /** ★★ V12 THE GALLERY — the owner's size in MB (0 keeps nothing; default 100), may everyone see it (default yes), are
    *  listeners' own decodes kept too (default yes). The Setup page's galleryMb / galleryPublic / gallerySaveLive. */
   galleryMb?: number;
@@ -422,6 +427,9 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     bgDecode: cfg.bgDecode ?? '',
     dxScan: cfg.dxScan ?? '',   // ★★★ V12 the idle DX scanner (VibeServerBoot: setDxScan + the log file)
     adsbFeed: cfg.adsbFeed ?? '',   // ★★ V12 beta96 flight trackers (VibeServerBoot: setAdsbFeed)
+    aircraftFeeds: cfg.aircraftFeeds ?? '',   // ★★ V12 beta96 feed sources (VibeServerBoot: setAircraftFeeds)
+    mapViewers: cfg.mapViewers != null && cfg.mapViewers >= 0 ? Math.min(1000, Math.floor(cfg.mapViewers)) : 20,   // ★★ beta96 (setAirSeaViewers)
+    mapTimeMin: cfg.mapTimeMin != null && cfg.mapTimeMin >= 0 ? Math.min(1440, Math.floor(cfg.mapTimeMin)) : 0,
     galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,

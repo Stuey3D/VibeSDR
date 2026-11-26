@@ -1852,6 +1852,19 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetAdsbFeed(JNIEnv* env, jobject, jstrin
     vibe::LocalSdrShim::setAdsbFeed(jstr(env, json), err);
     return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the old settings stay)
 }
+/* ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEED SOURCES on the Android server (ServerModeScreen → VibeServerBoot) — main.cpp's
+ *  applyAircraftFeeds for a one-process server: the phone owns them (no front door, no loopback ingest). */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAircraftFeeds(JNIEnv* env, jobject, jstring json) {
+    std::string err;
+    vibe::LocalSdrShim::setAircraftFeeds(jstr(env, json), err, false);
+    return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the running sources stay)
+}
+/* ★★ V12 beta96 the standalone AIR & SEA map's limits (vibe_airsea_viewers.h). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAirSeaViewers(JNIEnv*, jobject, jint maxViewers, jint minutes) {
+    vibe::LocalSdrShim::setAirSeaViewers((int)maxViewers, (int)minutes);
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDxLogFile(JNIEnv* env, jobject, jstring path) {
     vibe::LocalSdrShim::setDxLogFile(jstr(env, path));

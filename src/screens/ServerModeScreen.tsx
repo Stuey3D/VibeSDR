@@ -7,6 +7,8 @@ import AntennaBandsEditor from '../components/AntennaBandsEditor';
 import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
 import DxScanSetup, { collectDxScan, parseDxScan, type DxScanModel } from '../components/DxScanSetup';   // ★★★ V12
 import AdsbFeedSetup from '../components/AdsbFeedSetup';   // ★★ V12 beta96 share ADS-B with flight trackers
+import AircraftFeedsSetup, { AirSeaMapLimits } from '../components/AircraftFeedsSetup';   // ★★ V12 beta96 feed sources + the AIR & SEA map's limits
+import { feedsBlob, feedStatusLines, feedTitle, mapTimeMinOf, mapViewersLine, mapViewersOf, parseFeeds, MAP_VIEWERS_DEFAULT, type FeedSource } from '../utils/aircraftFeeds';
 import { adsbFeedOffered, adsbFeedStatusLine, collectAdsbFeed, parseAdsbFeed, type AdsbFeedModel } from '../utils/adsbFeed';
 import RspSetupCard from '../components/RspSetupCard';
 import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
@@ -432,6 +434,10 @@ const K = {
   dxScan: 'vs_dxscan',
   /** ★★ V12 beta96 share ADS-B with flight trackers — exactly RadioConfig::adsbFeed's JSON ('' = never set: off). */
   adsbFeed: 'vs_adsbfeed',
+  /** ★★ V12 beta96 server-level aircraft feed sources — exactly ServerConfig::aircraftFeeds' JSON list ('' = none). */
+  aircraftFeeds: 'vs_aircraftfeeds',
+  /** ★★ V12 beta96 the standalone AIR & SEA map's limits (ServerConfig::mapViewers, default 20; mapTimeMin, 0 = none). */
+  mapViewers: 'vs_mapviewers', mapTimeMin: 'vs_maptimemin',
   /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
   /** ★★ V12 beta94 the COMMUNITY MAP (vibe_community.h) — the owner's switch. Absent = off. */
@@ -727,6 +733,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (components/AdsbFeedSetup) — off by default; its status line. */
   const [afModel, setAfModel] = useState<AdsbFeedModel>(() => parseAdsbFeed(''));
   const [afStatus, setAfStatus] = useState('');
+  /** ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (components/AircraftFeedsSetup) — none by default; each source's status line. */
+  const [feeds, setFeeds] = useState<FeedSource[]>([]);
+  const [feedLines, setFeedLines] = useState<string[]>([]);
+  /** ★★ V12 beta96 the standalone AIR & SEA map's limits and its viewers now. */
+  const [mapViewers, setMapViewers] = useState(MAP_VIEWERS_DEFAULT);
+  const [mapTimeMin, setMapTimeMin] = useState(0);
+  const [mapViewersNow, setMapViewersNow] = useState('');
   /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
   const [rspVibeAgc, setRspVibeAgc] = useState(0);
   /** ★ The wide impulse blanker: 0 off, 1 auto (below 30 MHz — the Setup page's and the server's default), 2 on. */
@@ -1525,14 +1538,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /* ★★ V12 beta96 the flight-tracker sharing status line, from the running server (GET /vibeserver/adsb-feed over loopback,
    *  which takes the phone as its owner), every 30 s while it runs with sharing set. */
   useEffect(() => {
-    if (!running || !afJson) { setAfStatus(''); return; }
+    if (!running) { setAfStatus(''); setFeedLines([]); setMapViewersNow(''); return; }
     let gone = false;
     const look = async () => {
       try {
         const r = await fetch(`http://127.0.0.1:${running.port}/vibeserver/adsb-feed`, { cache: 'no-store' });
         const j = await r.json();
-        if (!gone) setAfStatus(adsbFeedStatusLine(j));
-      } catch { if (!gone) setAfStatus(''); }
+        // ★★ beta96 the same read carries the feed sources' lines and the standalone map's viewers
+        if (!gone) { setAfStatus(afJson ? adsbFeedStatusLine(j) : ''); setFeedLines(feedStatusLines(j)); setMapViewersNow(mapViewersLine(j)); }
+      } catch { if (!gone) { setAfStatus(''); setFeedLines([]); setMapViewersNow(''); } }
     };
     void look();
     const t = setInterval(() => void look(), 30000);
@@ -1841,6 +1855,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const bd = g(K.bgDecode); if (bd != null) { setBgModel(parseBg(bd)); setBgEpoch((e) => e + 1); } }
           { const dx = g(K.dxScan); if (dx != null && dx !== '') { setDxModel(parseDxScan(dx)); setDxWasSet(true); } }   // ★★★ V12
           { const af = g(K.adsbFeed); if (af != null && af !== '') setAfModel(parseAdsbFeed(af)); }   // ★★ V12 beta96
+          { const fs2 = g(K.aircraftFeeds); if (fs2 != null) setFeeds(parseFeeds(fs2)); }   // ★★ V12 beta96 feed sources
+          { const mv = g(K.mapViewers); if (mv != null && mv !== '') setMapViewers(mapViewersOf(mv)); }
+          { const mt = g(K.mapTimeMin); if (mt != null && mt !== '') setMapTimeMin(mapTimeMinOf(mt)); }
           { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
@@ -2515,6 +2532,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, communityOff, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson, afJson, afProblem,   // ★★ beta96
+    feedsJson: feedsBlob(feeds), mapViewers, mapTimeMin,   // ★★ beta96 feed sources + the AIR & SEA map's limits
     rspCard, ppbText,
   };
 
@@ -2575,6 +2593,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     dxScan: live.current.dxJson,
     // ★★ V12 beta96 sharing ADS-B with flight trackers (RadioConfig::adsbFeed) — VibeServerBoot applies it; the private scan drops it
     adsbFeed: live.current.afJson,
+    // ★★ V12 beta96 server-level aircraft feed sources + the standalone AIR & SEA map's limits — VibeServerBoot applies them
+    aircraftFeeds: live.current.feedsJson, mapViewers: live.current.mapViewers, mapTimeMin: live.current.mapTimeMin,
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
     communityMap: live.current.communityMap, communityOff: live.current.communityOff,   // ★★ V12 beta94
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — VibeServerBoot applies them on every start
@@ -2760,7 +2780,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
       [K.landingMap, live.current.mapOn ? live.current.mapWhich : ''], [K.landingModes, live.current.mapOn ? live.current.mapModes : ''],
       [K.mapKeep, live.current.mapKeep ? '1' : '0'], [K.bgMode, live.current.bgWhole ?? ''],
-      [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.adsbFeed, live.current.afJson], [K.galleryMb, String(live.current.galleryMb)],
+      [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.adsbFeed, live.current.afJson], [K.aircraftFeeds, live.current.feedsJson],
+      [K.mapViewers, String(live.current.mapViewers)], [K.mapTimeMin, String(live.current.mapTimeMin)], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
       [K.communityMap, live.current.communityMap ? '1' : '0'], [K.communityOff, live.current.communityOff],
       [K.pskrOn, live.current.pskrOn ? '1' : '0'], [K.pskrCall, live.current.pskrCall], [K.pskrAntenna, live.current.pskrAntenna],
@@ -3793,6 +3814,22 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                                  keepRunning={adsbKeepOn} />
                 </View>
   </>) : null;
+  /* ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (docs/v12/ADSB-FEED.md) — the Setup page's card, the same words. Every radio,
+   *  no driver gate: nothing is tuned (AGENTS.md: a feed does not depend on the radio). Saved on the next Start. */
+  const onFeeds = (l: FeedSource[]) => { setFeeds(l); void AsyncStorage.setItem(K.aircraftFeeds, feedsBlob(l)); };
+  const secBody_aircraftFeeds = (<>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <AircraftFeedsSetup C={C} F={F} list={feeds} onChange={onFeeds} status={feedLines} error="" />
+                </View>
+  </>);
+  /* ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's LIMITS — the Setup page's "Air & sea map" card, the same words. */
+  const secBody_airSeaMap = (<>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <AirSeaMapLimits C={C} F={F} viewers={mapViewers} minutes={mapTimeMin} status={mapViewersNow}
+                    onViewers={(n) => { setMapViewers(n); void AsyncStorage.setItem(K.mapViewers, String(n)); }}
+                    onMinutes={(n) => { setMapTimeMin(n); void AsyncStorage.setItem(K.mapTimeMin, String(n)); }} />
+                </View>
+  </>);
   const secBody_pskr = (<>
             {/* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md) — the Setup
                 page's card, the same words. Saved on the next Start, like its neighbours. */}
@@ -5853,6 +5890,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       summary: webServer ? 'Browsers can connect' : 'The app only', must: '' },
     { key: 'community', title: 'VibeSDR community map', body: vs ? secBody_community : null,
       summary: communityMap ? 'Sharing to the community map' : 'Not sharing', must: '' },
+    { key: 'airSeaMap', title: 'Air & sea map', body: vs ? secBody_airSeaMap : null,
+      summary: (mapViewers ? `Up to ${mapViewers} viewers` : 'No viewer limit') + (mapTimeMin ? ` · ${mapTimeMin} min each` : ''), must: '' },
+    { key: 'aircraftFeeds', title: 'Aircraft feeds from other receivers', body: vs ? secBody_aircraftFeeds : null,
+      summary: feeds.length ? feeds.map(feedTitle).join(' · ') : 'None', must: '' },
     { key: 'adsbFeed', title: 'Share ADS-B with flight trackers', body: vs ? secBody_adsbFeed : null,
       summary: [afModel.serve ? `Beast out :${afModel.port}` : '', afModel.push ? 'Feeding trackers' : ''].filter(Boolean).join(' · ') || 'Off',
       must: afProblem },
