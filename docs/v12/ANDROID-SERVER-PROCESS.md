@@ -214,6 +214,7 @@ Stuart: *"all settings for android need to be on the remote setup page"*.
 | Protocol rtl_tcp / VibeServer (`vs_proto`) | **device-only** — read-only row | main app |
 | Keep radio alive (`vs_keepalive`) | **device-only** — read-only row | all |
 | Admin password (`vs_adminpw`) | **never** on the page (security rule) | all |
+| Address on this network (`vs_mdnsname`, beta96) | **device-only** — the page shows the address the server took | all |
 | Start when power returns | **device-only** — read-only row | Android versions that allow it |
 | Remote access to server settings | **device-only** — read-only row | all |
 
@@ -235,6 +236,13 @@ Shown read-only on the page's "This phone" card, with where to change them:
 - **Protocol** (`vs_proto`, main app only) — rtl_tcp has no web page and no admin password: switching to it from the page
   would cut the page off with no way back.
 - **Remote access to server settings** — switched off from the page, it would lock the owner out of the page.
+  ★ beta96: a save naming it (`remoteAccess` / `remote` / `remoteSetup`) is now REFUSED with that reason
+  (vibe_android_setup.h settingsPatch), as is RESET ALL SETTINGS (`factoryReset` / `resetAll`) — the device's alone.
+- **The address on this network** (`vs_mdnsname`, beta96) — set with VibeServer Simple / Full on the device; '' = made
+  from the name. The page shows the `.local` address the server actually took (two servers cannot share one).
+- **The first admin password, from another device** (beta96, docs/v12/SERVER-CHOICE.md) — the ONE exception to "never
+  set from the page": only while the server has NO password, only through a one-time code shown on the device, only on
+  the local network. The page still never reads it, and can never change an existing one.
 - **The admin password** (`vs_adminpw`) — **never** sent to the page and **never** set from it (security rule, as on
   Linux: the page proves it with the nonce + HMAC challenge and never sees it). `configSetPatch` drops an
   `adminPassword` key whatever the patch says; `pageConfig`'s raw never contains it.

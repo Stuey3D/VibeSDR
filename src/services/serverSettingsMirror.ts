@@ -147,6 +147,7 @@ export const DEVICE_ONLY: Record<string, string> = {
   vs_proto: 'rtl_tcp or VibeServer — rtl_tcp has no web page, so switching from the page would cut the page off with no way back',
   vs_keepalive: 'keep radio alive — the phone holds the USB radio; Android decides what may hold it (shown read-only)',
   vs_adminpw: 'the admin password — never sent to the page and never set from it (security rule)',
+  vs_mdnsname: 'the address on this network (.local) — set on the device (VibeServer Simple / Full); the page shows the address the server took',
 };
 /** The screen's keys that are not settings at all. */
 export const NOT_SETTINGS: Record<string, string> = {

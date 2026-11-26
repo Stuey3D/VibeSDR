@@ -250,6 +250,13 @@ import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse,
          keepBgMigrate, keepBgNormal, keepMapKeepMirror, keepIsmOrder, keepIsmDefault } from '../utils/keepRun';
 import { rateGuardIsBad, rateGuardLine, type RateGuardState } from '../services/rateGuard';
 import * as NM from '../utils/newModes';   // ★★★ beta96 new modes off on a restricted radio
+// ★★★ beta96 SERVER CHOICE (b96-serverchoice, docs/v12/SERVER-CHOICE.md): START/STOP at the top, the device-only password /
+//     PIN change and RESET at the bottom, the address on this network. Kept to these components and the lines marked SC.
+import ServerTopBar from '../components/ServerTopBar';
+import DeviceCredentials from '../components/DeviceCredentials';
+import DeviceReset from '../components/DeviceReset';
+import { saveAdminPasswordOnDevice, savePinOnDevice } from '../services/serverChoiceStore';
+import { mdnsLabel } from '../utils/serverChoice';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -410,6 +417,7 @@ const K = {
   bgMode: 'vs_bgmode',   // ★★★ b96-bgsplit the BACKGROUND whole-radio mode ('' = manual; absent = derived once from mapKeep)
   singleMode: 'vs_singlemode',   // ★★★ beta96 the single-mode radio ('' = not chosen, 'general', or the token)
   radioLabel: 'vs_radiolabel',
+  mdnsName: 'vs_mdnsname',   // ★ SC beta96 the address on this network ('' = from the name) — DEVICE_ONLY in the mirror
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h), one JSON value — see FmDefaults. */
   fmDefaults: 'vs_fmdefaults',
   /** ★ An Icom's five settings (icomPhoneFields), one JSON value — see the ICOM TRANSCEIVER card. */
@@ -533,6 +541,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  'rtltcp' is never restored. The main app never passes it; nothing changes here for it. */
   const vibeServerOnly = !!(route.params as any)?.vibeServerOnly;
   const [name, setName]           = useState(route.params?.name ?? 'VibeSDR');
+  const [mdnsName, setMdnsNameSt] = useState('');   // ★ SC beta96
   const [advertise, setAdvertise] = useState(true);
   const [pinMode, setPinMode]     = useState<PinMode>('random');
   const [pin, setPin]             = useState(() => randomPin(Date.now()));
@@ -1724,6 +1733,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         } catch { city = ''; }
         unstable_batchedUpdates(() => {
           setName(g(NAME_KEY) || (route.params?.name ?? 'VibeSDR'));
+          setMdnsNameSt(g(K.mdnsName) ?? '');   // ★ SC beta96
           const p = g(K.proto);
           if (!vibeServerOnly && (p === 'rtltcp' || p === 'vibeserver')) setProto(p);
           { const a = g(K.advertise); if (a != null) setAdvertise(a !== '0'); }
@@ -2646,6 +2656,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       ? { mode: 'manual', lat: locPoint.lat, lon: locPoint.lon, label: locPoint.label ?? locCity, moving: locMoving }
       : { mode: 'off', moving: locMoving },
     publicName,
+    mdnsName: mdnsName.trim(),   // ★ SC beta96 the address on this network
   });
   const serverConfigRef = useRef(serverConfig);
   serverConfigRef.current = serverConfig;
@@ -2873,6 +2884,30 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     AsyncStorage.setItem(K.pin, p);   // persist immediately so it survives re-open
   }, []);
 
+  /* ★★★ SC beta96 — the top START runs the bottom START's checks (one closure, so they cannot drift); the device-only
+   *  admin password / PIN change (no old password: the device is the proof) and RESET ALL SETTINGS sit at the bottom. */
+  const pressStart = () => {
+    if (protoEff !== 'vibeserver') { navigation.replace('RtlTcpServer', { name: name.trim() || 'VibeSDR RTL-SDR', advertise }); return; }
+    if (isIcom && parseCivHex(icomCivTxt) === null) {
+      setError('The Icom\u2019s CI-V address is two hex digits (94 on an IC-7300), or empty for the radio\u2019s own.');
+      return;
+    }
+    if (needsAdminPw) {
+      setError('Set an admin password (below, or with "Change admin password / PIN" at the bottom), then Start.');
+      return;
+    }
+    if (!starting) void start();
+  };
+  const scInk = { text: C.text, textDim: C.textDim, key: C.key, keyAct: C.keyAct, border: C.border, borderBright: C.borderBright,
+                  placeholder: C.placeholder, bad: C.danger, ok: C.ok, fontFamily: F };
+  const scCredentials = (<>
+    <DeviceCredentials ink={scInk} hasPassword={!needsAdminPw}
+      onSavePassword={async (pw) => { setAdminPw(pw); await saveAdminPasswordOnDevice(pw); }}
+      onSavePin={async (p) => { setPinMode(p ? 'custom' : 'off'); if (p) setPin(p); await savePinOnDevice(p); }} />
+    <DeviceReset ink={scInk} hasPassword={!needsAdminPw} danger={C.danger}
+      onDone={() => { runningRef.current = false; setRunning(null); navigation.replace('ServerChoice', {}); }} />
+  </>);
+
   if (Platform.OS !== 'android' || !vibeServerSupported) {
     return (
       <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
@@ -2899,6 +2934,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     return (
       <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+          {/* ★ SC beta96 STOP first, and how to change settings from another device */}
+          <ServerTopBar C={C} F={F} running={running} mdnsHost={mdnsHost} starting={false} onStart={() => {}}
+            onStop={stopAndSetup} hasAdminPassword={!needsAdminPw} remoteOn={remoteAccess} />
           <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>VibeServer</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
             {isIcom
@@ -3208,6 +3246,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               server; NickB's report came from his listener phone because About was the only door.
               `server` adds the server section (version, radio, uptime) even when it is stopped. */}
           <ExportLogsLink color={C.keyQuiet} fontFamily={F} style={{ marginTop: 14 }} />
+          {scCredentials}{/* ★ SC beta96 */}
           <LiteUpdate C={C} F={F} />
         </ScrollView>
       </SafeAreaView>
@@ -3218,6 +3257,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+        {/* ★ SC beta96 START first — the same checks as the START at the bottom (pressStart) */}
+        <ServerTopBar C={C} F={F} running={null} mdnsHost="" starting={starting}
+          startBlockedBy={protoEff === 'vibeserver' && needsAdminPw ? 'Set an admin password to serve' : undefined}
+          onStart={pressStart} onStop={() => {}} hasAdminPassword={!needsAdminPw} remoteOn={remoteAccess}
+          onServerType={!vibeServerOnly ? undefined : () => navigation.replace('ServerChoice', { choose: true })} />
         <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>Server mode</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
           {!radio
@@ -3402,6 +3446,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         <TextInput value={name} onChangeText={setName}
           placeholder="VibeSDR" placeholderTextColor={C.placeholder}
           style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F }]} />
+        {/* ★ SC beta96 THE ADDRESS ON THIS NETWORK — VibeServer Simple's second field, shown here too (Simple ↔ Full keep it). */}
+        <Text style={[styles.section, { color: C.section, fontFamily: F }]}>ADDRESS ON THIS NETWORK</Text>
+        <TextInput value={mdnsName} onChangeText={(v) => { setMdnsNameSt(v); AsyncStorage.setItem(K.mdnsName, v); }}
+          placeholder={mdnsLabel(name)} placeholderTextColor={C.placeholder} autoCapitalize="none" autoCorrect={false}
+          style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F }]} />
+        <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+          {`Other devices can open ${mdnsLabel(mdnsName || name)}.local. Empty = made from the local name.`}
+        </Text>
 
         {/* Shared: auto-discovery */}
         <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
@@ -5962,6 +6014,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         </TouchableOpacity>
         {/* ★ The setup view is where an owner lands after a crash took the server down — see the note above. */}
         <ExportLogsLink color={C.keyQuiet} fontFamily={F} style={{ marginTop: 14 }} />
+        {scCredentials}{/* ★ SC beta96 */}
         <LiteUpdate C={C} F={F} />
       </ScrollView>
     </SafeAreaView>

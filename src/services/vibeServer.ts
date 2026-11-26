@@ -52,6 +52,8 @@ export type VibeServerConfig = {
   /** Pin the capture rate: clients cannot change it, and their picker is hidden.
    *  0 (the default) = client-controlled, as on the RTL-TCP server. */
   lockedRate?: number;
+  /** ★★ beta96 the address on this network ('' = made from the name) — VibeServerBoot.mdnsName. */
+  mdnsName?: string;
   /** mDNS advertise. Passed to native only so a crash-restored server re-advertises. */
   advertise?: boolean;
   /** Rebuild the server if the app process dies under it. Default true. */
@@ -360,6 +362,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     webServer: cfg.webServer ?? true,
     lockedRate: cfg.lockedRate ?? 0,
     advertise: cfg.advertise ?? true,
+    mdnsName: (cfg.mdnsName ?? '').trim().slice(0, 63),   // ★★ beta96 VibeServerBoot.mdnsName ('' = from the name)
     autoRestore: cfg.autoRestore ?? true,
     advanced: cfg.advanced ?? false,
     maxUsers: cfg.maxUsers ?? 1,
