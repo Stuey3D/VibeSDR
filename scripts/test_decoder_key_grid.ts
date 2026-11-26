@@ -96,7 +96,7 @@ ok(/<KeyGrid items=\{viewItems\} grid=\{keyGrid\}/.test(appSrc), 'VIEWS is drawn
   const html = readFileSync(new URL('../web/client/index.html', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
   // ★ beta90: VIEWS' map key is DIGI MODES (with AVIATION and SHIPPING beside it) — still no emoji
-  ok(/id="mapBtn"[^>]*>DIGI MODES<\/button>/.test(html) && !/&#128506;/.test(html), "the web's MAP (DIGI MODES) lost its emoji");
+  ok(/id="mapBtn"[^>]*>AMATEUR<\/button>/.test(html) && !/&#128506;/.test(html), "the web's MAP (AMATEUR — beta96 stage 7) lost its emoji");
   ok(/getElementById\('mapBtn'\); if \(b\) addModeIcon\(b, 'map'\)/.test(main), '…and got the line glyph');
 }
 
