@@ -151,10 +151,14 @@ interface Ws { bytes: Map<string, number>; count: Map<string, number>; last: Map
 function ws(port: number, q: string, keep = true): Ws {
   const key = crypto.randomBytes(16).toString('base64');
   const s = net.connect(port, '127.0.0.1');
+  let ping: ReturnType<typeof setInterval> | undefined;
   const st: Ws = { bytes: new Map(), count: new Map(), last: new Map(), msgs: [], keep,
     send(o) { const b = Buffer.from(JSON.stringify(o)); const h = Buffer.alloc(6); h[0] = 0x81; h[1] = 0x80 | b.length; h.writeUInt32BE(0, 2); s.write(Buffer.concat([h, b])); },
-    close() { s.destroy(); }, reset() { this.bytes.clear(); this.count.clear(); } };
+    close() { clearInterval(ping); s.destroy(); }, reset() { this.bytes.clear(); this.count.clear(); } };
   let hs = false, buf = Buffer.alloc(0);
+  // ★ the session's life: the server releases a proto ≥ 1 socket that sends nothing for 30 s (as the clients' heartbeat)
+  ping = setInterval(() => { if (hs) st.send({ type: 'ping', ka: 1 }); }, 5000);
+  s.on('close', () => clearInterval(ping));
   s.on('connect', () => s.write(`GET /ws/user-spectrum?user_session_id=${crypto.randomUUID()}&mode=binary8&bins=256&proto=1${q} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
   s.on('data', (d) => {
