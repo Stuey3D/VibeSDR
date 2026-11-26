@@ -184,6 +184,26 @@ try {
   await shot('community-receivers-radio-glyph.png');
   await js(`document.querySelector('[data-close=rx]').click(); selected = ''; render(); true`);
 
+  console.log('── a click picks the point over the area under it ──');
+  {
+    // ★ Stuart 11-26: an aircraft over a NAVTEX area opened the AREA's card. Find any point drawn over an area and click it.
+    await js(`document.getElementById('fitBtn').click(); true`); await sleep(1500);
+    const r = await js(`(() => {
+      const pts = gl.queryRenderedFeatures({ layers: ['cm-pts', 'cm-dense-pts'].filter(l => gl.getLayer(l)) });
+      for (const f of pts) {
+        const p = gl.project(f.geometry.coordinates);
+        if (!gl.queryRenderedFeatures(p, { layers: ['cm-area'] }).length) continue;
+        gl.fire('click', { point: p, lngLat: gl.unproject(p), originalEvent: {} });
+        const html = document.querySelector('.maplibregl-popup')?.innerHTML || '';
+        return { found: true, id: f.properties.id, html: html.slice(0, 400) };
+      }
+      return { found: false };
+    })()`);
+    if (r.found) ok(r.html && !/Drawn as an area/.test(r.html), 'a point over an area opens the POINT\'s card (' + r.id + '), not the area\'s');
+    else console.log('   note: no point over an area in this view (fixture) — click priority not exercised');
+    await js(`document.querySelector('.maplibregl-popup-close-button')?.click(); true`);
+  }
+
   console.log('── the pills\' totals ──');
   await sleep(500);
   const pills = await js(`Object.fromEntries([...document.querySelectorAll('#modes [data-mode]')].map(b => [b.dataset.mode, b.querySelector('.n')?.textContent]))`);

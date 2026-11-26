@@ -367,11 +367,25 @@ function ensureLayers() {
   sym('cm-dense-pts', 'cm-dense', { filter: ['!', ['has', 'point_count']] });
   sym('cm-pts', 'cm-pts');
   sym('cm-rx', 'cm-rx');
-  for (const id of ['cm-dense-pts', 'cm-pts', 'cm-rx', 'cm-area', 'cm-line']) {
-    gl.on('click', id, (e) => openCard(e));
-    gl.on('mouseenter', id, () => { gl.getCanvas().style.cursor = 'pointer'; });
-    gl.on('mouseleave', id, () => { gl.getCanvas().style.cursor = ''; });
-  }
+  // ★★ ONE click handler, in PRIORITY order (Stuart 11-26: an aircraft over a NAVTEX area opened the area's card — each layer's
+  //    own handler fired and the area's, registered last, replaced the aircraft's). Receivers, then points (aircraft, ships,
+  //    stations…) with a few px of slack so a small glyph is easy to hit, then lines, and areas only when nothing else is there.
+  const PICK_ORDER = [['cm-rx', 6], ['cm-pts', 6], ['cm-dense-pts', 6], ['cm-line', 3], ['cm-area', 0]];
+  const pickAt = (pt) => {
+    for (const [id, pad] of PICK_ORDER) {
+      if (!gl.getLayer(id)) continue;
+      const box = pad ? [[pt.x - pad, pt.y - pad], [pt.x + pad, pt.y + pad]] : pt;
+      const fs = gl.queryRenderedFeatures(box, { layers: [id] });
+      if (fs.length) return fs[0];
+    }
+    return null;
+  };
+  gl.on('click', (e) => {
+    if (gl.queryRenderedFeatures(e.point, { layers: ['cm-clusters'].filter((l) => gl.getLayer(l)) }).length) return;   // the cluster's own handler
+    const f = pickAt(e.point);
+    if (f) openCard({ features: [f], lngLat: e.lngLat });
+  });
+  gl.on('mousemove', (e) => { gl.getCanvas().style.cursor = pickAt(e.point) ? 'pointer' : ''; });
   gl.on('click', 'cm-clusters', (e) => {
     const f = e.features[0];
     gl.getSource('cm-dense').getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
