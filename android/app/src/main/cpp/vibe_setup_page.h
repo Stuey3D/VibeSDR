@@ -4001,6 +4001,10 @@ const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading
 const AVDATA_8M_NOTICE = "Adds \u201cACARS + VDL2\u201d to the aircraft datalink\u2019s bands: picking it raises this radio\u2019s "
   + "capture to 8 MS/s so both sets of channels fit inside the flat part of its filter, and leaving gives your own rate back. "
   + "Without it, ACARS + VDL2 is offered only when the radio already runs at 6.1 MS/s or more. Never while you have pinned the rate.";
+/* \u2605\u2605\u2605 beta96 MARITIME's 8 MS/s option's line. ONE TEXT, TWO READERS: ServerModeScreen.tsx AIS_8M_NOTICE. */
+const AIS_8M_NOTICE = "Lets MARITIME (AIS + DSC channel 70) raise this radio\u2019s capture to 8 MS/s so channel 70 and both AIS "
+  + "channels fit inside the flat part of its filter, and leaving gives your own rate back. Without it, MARITIME is offered "
+  + "only when the radio already runs at 6.2 MS/s or more. Never while you have pinned the rate.";
 /* ★ V12 tones (docs/v12/TONES.md): beside the 5-tone opt-in — what it is and who sees it. */
 /** ★ ONE TEXT, TWO READERS: src/screens/ServerModeScreen.tsx ALE_AMD_NOTICE. */
 const ALE_AMD_NOTICE = "Off the amateur bands an ALE text message (AMD) is a private message between government, military "
@@ -4161,6 +4165,9 @@ const BLOCKABLE = [
    *  (every radio on this server shows them, with nobody in AIS). Ticked = kept; off = the store is neither written nor
    *  served. Under AIS: nothing to keep without it. */
   { id: "aisstore", label: "AIS: keep the ships for the SHIPPING MAP (in the gallery)", parent: "ais" },
+  /* ★★★ beta96 (Stuart 11-26, the datalink's "avdata+8m" for the sea): "+" token, IN the CSV when ticked. `cap`: drawn only
+   *  where the radio itself can (vibe_radio_caps.h "ais+8m": channel 70 and AIS in reach, a rate of 8 MS/s or more). */
+  { id: "ais+8m", label: "MARITIME: AIS + DSC together (raise the capture to 8 MS/s)", parent: "ais", on: true, cap: true },
   { id: "aprs",   label: "APRS" },
   /* ★ ADS-B (aircraft on 1090 MHz, a whole-radio mode) — the server enforced "adsb"; the page never offered it. */
   { id: "adsb",   label: "ADS-B aircraft" },
@@ -4386,7 +4393,7 @@ const MODE_GENS = {
 };
 /** The options' generations — evidence of when a list was written, never a NEW switch themselves. */
 const MODE_GEN_OPTIONS = { "lora+all": 63, "tones+digits": 80, "avdata+text": 80, "dvsig+ids": 87, "ale+amd": 87,
-                           "ft8+deep": 91, "ft8-deep": 91, "avdata+8m": 93 };
+                           "ft8+deep": 91, "ft8-deep": 91, "avdata+8m": 93, "ais+8m": 96 };
 const LISTEN_DEMODS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
                        "drm", "freedv", "m17", "dvsig"];
 const WHOLE_MODES = ["dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap"];
@@ -4789,6 +4796,8 @@ function modeBlockRender() {
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (m.id === "avdata+8m") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdata8mHint" style="margin:2px 0 0 24px">`
                                  + esc(AVDATA_8M_NOTICE) + `</div></div>`;
+    if (m.id === "ais+8m") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="ais8mHint" style="margin:2px 0 0 24px">`
+                              + esc(AIS_8M_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
                                    + esc(TONES_DIGITS_NOTICE) + `</div></div>`;
     if (m.id === "dvsig+ids") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="dvsigIdsHint" style="margin:2px 0 0 24px">`
@@ -5115,7 +5124,9 @@ function keepFacts(r) {
       // ★★★ beta96 drawn only where the capture holds both (the server's word, or the form's new rate against its minRate)
       const need = s && s.minRate ? s.minRate : KEEP_MARITIME_MIN;
       const tunes = s ? s.tunes !== false : drv !== "icom" && drv !== "airspyhf";
-      hw = s && !(rate > 0 && rate !== (HW && HW.mapRate)) ? !!s.hw : tunes && rate >= need;
+      // ★★★ beta96 …or the owner's "ais+8m" ticked on a radio that can take 8 MS/s (the server's answer still wins once saved)
+      const boost = blocks.has("ais+8m") && capMode("ais+8m", r);
+      hw = s && !(rate > 0 && rate !== (HW && HW.mapRate)) ? !!s.hw || (tunes && boost) : tunes && (rate >= need || boost);
       why = blocks.has("ais") ? "AIS is switched off for this radio (Modes offered to listeners)."
           : blocks.has("dsc") ? "DSC is switched off for this radio (Modes offered to listeners)." : (s && s.hw && s.why && !/needs a capture/.test(s.why) ? s.why : "");
     } else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (Modes offered to listeners).`;
@@ -5720,6 +5731,7 @@ function modeBlockSummary() {
     + (ft8DeepOwner() ? ` FT8 / FT4 dig deeper: ${ft8DeepOwner() > 0 ? "on" : "off"} (your choice).` : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
     + (all.includes("avdata+8m") && drawn("avdata+8m") ? " The aircraft datalink may raise the capture to 8 MS/s for ACARS + VDL2." : "")
+    + (all.includes("ais+8m") && drawn("ais+8m") ? " MARITIME may raise the capture to 8 MS/s for AIS + DSC." : "")
     + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
     + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")
     + (all.includes("ale+amd") ? " ALE message text is shown to you." : "");

@@ -9,6 +9,9 @@
 //      to 162.000 keeping the ships; leaving gives the radio back;
 //   3. KEEP RUNNING AIS + DSC (landing map avmar, landingModes aisdsc, mapKeep): entered at start with nobody connected;
 //   4. SINGLE MODE AIS + DSC: kept from the start, a listener lands in it, every other mode blocked (AIS and DSC not).
+//   5. ★★★ beta96 THE OWNER'S 8 MS/s SWITCH ("ais+8m", the datalink's avdata+8m for the sea): an RTL never offers it (caps);
+//      a radio listing 8 MS/s at 2 MS/s: switch off → MARITIME not offered; switch on → offered, entering raises the capture
+//      to 8 MS/s at 159.2625 MHz (report rateNote, log), AIS alone gives the 2 MS/s back, leaving gives it back; pinned → never.
 // Silent: no audio socket is opened.
 //   VIBESERVER_BIN=…/vibeserver VIBE_MARITIME_CLIP=…/m.cu8 node scripts/test-server-maritime.mjs
 import net from 'node:net';
@@ -79,10 +82,10 @@ async function server(tag, radioExtra = {}, opt = {}) {
   const rtlPort = await freePort(), port = await freePort();
   const rate = opt.rate || 8000000;
   const rtl = spawn(process.execPath, ['--max-old-space-size=256', path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(rate),
-                                       '--hf', CLIP, '--hf-centre', '159262500'], { stdio: 'ignore' });
+                                       ...(opt.noClip ? [] : ['--hf', CLIP, '--hf-centre', '159262500'])], { stdio: 'ignore' });
   await sleep(500);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
-                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run'), ...(rate > 3e6 ? { VIBE_TEST_TCP_RATES: RSP_RATES } : {}) };
+                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run'), ...(rate > 3e6 || opt.rsp ? { VIBE_TEST_TCP_RATES: RSP_RATES } : {}) };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(rate), '--freq', '96100000', '--mode', 'wfm',
                           '--users', '4', '--admin-pass', PASS], { env, stdio: ['ignore', log, log] });
@@ -196,6 +199,66 @@ try {
       await sleep(1200);
       ok(!/\[ADS-B\] mode ON/.test(S.L()), 'cannot switch to ADS-B');
       sp.close();
+    } finally { S.stop(); }
+  }
+  // ── 5. ★★★ beta96 THE OWNER'S 8 MS/s SWITCH ("ais+8m") ───────────────────────────────────────────────────────────────
+  console.log('── 5. MARITIME rate boost: offered by radio, and raising the rate ──');
+  const caps = async (S) => { const h = await S.getJson('/vibeserver/hardware'); return (h && h.caps && h.caps.modes) || []; };
+  {
+    const S = await server('mar8rtl', { blockedModes: 'ais+8m' }, { rate: 2400000, noClip: true });
+    try {
+      const m = await caps(S);
+      ok(m.includes('ais') && !m.includes('ais+8m'), `an RTL's caps: ais, never the 8 MS/s switch (${m.filter((x) => x.startsWith('ais')).join(' ')})`);
+      const st = await S.status();
+      ok(st && st.ais === true && st.aisDsc === undefined, `an RTL with the switch ticked: still no MARITIME (aisDsc ${st && st.aisDsc})`);
+    } finally { S.stop(); }
+  }
+  {
+    const S = await server('mar8off', {}, { rate: 2000000, noClip: true, rsp: true });
+    try {
+      ok((await caps(S)).includes('ais+8m'), 'a radio listing 8 MS/s: its caps offer the owner the switch');
+      const st = await S.status();
+      ok(st && st.ais === true && st.aisDsc === undefined, `at 2 MS/s, switch OFF: MARITIME not offered (aisDsc ${st && st.aisDsc})`);
+      ok((await hwMode(S, 'aisdsc'))?.hw === false, '…nor on the landing / keep list');
+    } finally { S.stop(); }
+  }
+  {
+    const S = await server('mar8on', { blockedModes: 'ais+8m' }, { rate: 2000000, noClip: true, rsp: true });
+    try {
+      const st = await S.status();
+      ok(st && st.aisDsc === true, `switch ON at 2 MS/s: MARITIME offered (aisDsc ${st && st.aisDsc})`);
+      ok((await hwMode(S, 'aisdsc'))?.hw === true, '…and on the landing / keep list');
+      const sp = spectrum(S.port);
+      await until(() => sp.open && !!lastOf(sp, 'config'), 5000);
+      await sleep(800);
+      const before = lastOf(sp, 'config');
+      ok(before && Math.abs((before.maxBandwidth || 0) - 2e6) < 5e4, `starts at 2 MS/s (${before && before.maxBandwidth})`);
+      sp.send({ type: 'ais', on: 1, band: 'ais+dsc' });
+      ok(await until(() => { const c = lastOf(sp, 'config'); return c && Math.abs(c.centerFreq - 159.2625e6) < 1 && (c.maxBandwidth || 0) > 7.9e6; }, 10000),
+         `entering MARITIME: the radio on 159.2625 MHz at 8 MS/s (${lastOf(sp, 'config')?.centerFreq} @ ${lastOf(sp, 'config')?.maxBandwidth})`);
+      ok(await until(() => /capture raised to 8 MS\/s for AIS \+ DSC/.test(lastOf(sp, 'ais')?.rateNote || ''), 6000),
+         `the report says so: "${lastOf(sp, 'ais')?.rateNote}"`);
+      ok(lastOf(sp, 'ais')?.combo === 'ais+dsc', '…and it IS the combination');
+      ok(/\[AIS\] rate 2\.000 -> 8\.000 MS\/s for AIS \+ DSC/.test(S.L()), 'the log says the rate went up');
+      sp.send({ type: 'ais', on: 1 });
+      ok(await until(() => { const c = lastOf(sp, 'config'); return c && Math.abs(c.centerFreq - 162e6) < 1 && Math.abs((c.maxBandwidth || 0) - 2e6) < 5e4; }, 10000),
+         `AIS alone: 162.000 MHz and the owner's 2 MS/s back (${lastOf(sp, 'config')?.maxBandwidth})`);
+      ok(await until(() => { const r = lastOf(sp, 'ais'); return r && !r.combo && !r.rateNote; }, 5000), '…no combo, no rate note');
+      sp.send({ type: 'ais', on: 1, band: 'ais+dsc' });
+      ok(await until(() => (lastOf(sp, 'config')?.maxBandwidth || 0) > 7.9e6, 10000), 'back to MARITIME in place: 8 MS/s again');
+      sp.send({ type: 'ais', on: 0 });
+      ok(await until(() => !!lastOf(sp, 'ais_off'), 5000), 'ais_off');
+      ok(await until(() => { const c = lastOf(sp, 'config'); return c && Math.abs((c.maxBandwidth || 0) - 2e6) < 5e4 && Math.abs(c.centerFreq - 96.1e6) < 1; }, 10000),
+         `leaving: 2 MS/s and 96.1 MHz back (${lastOf(sp, 'config')?.maxBandwidth} @ ${lastOf(sp, 'config')?.centerFreq})`);
+      ok(/\[AIS\] rate back to the owner's 2\.000 MS\/s/.test(S.L()), 'the log says the rate came back');
+      sp.close();
+    } finally { S.stop(); }
+  }
+  {
+    const S = await server('mar8pin', { blockedModes: 'ais+8m', rateLock: true }, { rate: 2000000, noClip: true, rsp: true });
+    try {
+      const st = await S.status();
+      ok(st && st.aisDsc === undefined, `the rate pinned: MARITIME never offered at 2 MS/s, switch or not (aisDsc ${st && st.aisDsc})`);
     } finally { S.stop(); }
   }
 } catch (e) { fail++; console.log('   FAIL ' + (e && e.stack || e)); }

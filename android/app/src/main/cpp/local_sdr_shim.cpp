@@ -1028,6 +1028,10 @@ static vibendb::Service    g_ndb;
 static std::atomic<bool>   g_aisMode{false};
 /** ★★★ beta96 the AIS mode runs as THE MARITIME COMBINATION — AIS + DSC channel 70 from one wide capture (vibe_maritime_combo.h). */
 static std::atomic<bool>   g_aisDsc{false};
+/** ★★★ beta96 MARITIME RATE BOOST (Stuart 11-26; the datalink's "avdata+8m" in the sea's shape): while MARITIME (AIS + DSC)
+ *  has RAISED the capture to 8 MS/s under the owner's "ais+8m" switch, the rate it gives back (0 = it raised nothing). Never
+ *  persisted; the rate guard's marker is written before the raise — exactly as g_avBoostFrom. */
+static std::atomic<double> g_aisBoostFrom{0.0};
 static vibeais::Service    g_ais;
 /* ★★★ AIRCRAFT DATALINK MODE (V12, docs/v12/AVIATION.md). A whole-radio mode in AIS's shape with ISM's BANDS: ACARS
  *  (131.675 MHz, four channels) or VDL2 (136.8625 MHz, every channel 136.700–136.975) — or BOTH at once on a wide
@@ -1099,6 +1103,7 @@ static void endWholeRadioModesForStop() {
     const bool ism = g_ismMode.exchange(false), ndb = g_ndbMode.exchange(false), ais = g_aisMode.exchange(false),
                av = g_avMode.exchange(false), sd = g_sdMode.exchange(false), vor = g_vorMode.exchange(false);
     g_avBoostFrom.store(0.0);
+    g_aisBoostFrom.store(0.0);   // ★★★ beta96 the maritime boost too (never persisted; the next start opens at the owner's rate)
     g_av.stop();   // ★★★ beta96 b96-keeprun: the datalink's service too (kept VDL2, or VDL2 riding a pass) — the next start builds afresh
     const bool dab = g_dabMode.load();
     if (dab) dabModeEnd();
@@ -2138,6 +2143,7 @@ static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz 
 static std::string vsAisWhyNot();    // "" = AIS can run here now
 static std::string vsAisDscWhyNot(); // ★★★ beta96 "" = the maritime combination (AIS + DSC) can run here now
 static bool vsAisDscTunes();         // ★★★ beta96 …this radio tunes channel 70 and AIS together (the hw half)
+static double vsAisDscBoostRate();   // ★★★ beta96 the rate MARITIME would raise this radio to (the owner's "ais+8m"), or 0
 static bool vsAvdataReach(const vibeavi::Band& b);   // ★ V12 Aircraft datalink: this radio tunes the whole band (not an Icom) and may run it
 static double vsAvdataBoostRate();   // ★ the rate ACARS + VDL2 would raise the capture to (the owner's 8 MS/s switch), or 0
 static bool vsAvdataAnyBand();       // false = not offered at all
@@ -19154,6 +19160,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void sendAisAll() {
         std::string r = g_ais.report();
         burstGainFields(r, aisGainSet_, aisManual_);
+        aisRateNote(r);
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
         for (auto& sk : socks) sendText(sk, r);
@@ -19179,10 +19186,54 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         h.finish = [tap] { if (tap) tap->finish(false); };
         return std::unique_ptr<vibeais::PreFront>(new vibemar::ComboFront(rate, hw, std::move(h)));
     }
+    /** ★★★ beta96 THE OWNER'S 8 MS/s FOR MARITIME ("ais+8m", the datalink's avApplyRate in the sea's shape). Entering AIS +
+     *  DSC on a capture that does not hold both raises the rate (the guard's marker down FIRST, then the change); AIS alone,
+     *  or leaving, gives the owner's rate back. Called with rtlCenter already where the mode puts the radio. */
+    void aisApplyRate(bool dsc) {
+        const double from = g_aisBoostFrom.load();
+        const double running = from > 0 ? from : LocalSdrShim::instance().usableSpanHz();
+        const double boost = dsc ? vsAisDscBoostRate() : 0.0;
+        if (dsc && !vibemar::fits(running) && boost >= vibemar::minRateHz()) {
+            if (from <= 0) g_aisBoostFrom.store(sampleRate);
+            if (std::fabs(boost - sampleRate) > 1000.0) {
+                LOGI("[AIS] rate %.3f -> %.3f MS/s for AIS + DSC (the owner's 8 MS/s switch; given back on leaving)",
+                     sampleRate / 1e6, boost / 1e6);
+                g_rateGuard.mark(boost, "MARITIME", (long long)vsNowEpoch());   // ★ the marker FIRST — vibe_rate_guard.h
+                rateBoostFellBack_.store(false);
+                noteHwMoved();
+                LocalSdrShim::instance().setSampleRate(boost);
+                applyAutoIf();
+            }
+        } else if (from > 0) {
+            g_aisBoostFrom.store(0.0);
+            if (std::fabs(from - sampleRate) > 1000.0) {
+                LOGI("[AIS] rate back to the owner's %.3f MS/s", from / 1e6);
+                noteHwMoved();
+                LocalSdrShim::instance().setSampleRate(from);
+                applyAutoIf();
+            }
+        }
+    }
+    /** ★ The report's word while the capture is raised: what happened and that it is temporary. */
+    void aisRateNote(std::string& r) {
+        const double from = g_aisBoostFrom.load();
+        if (from <= 0 || r.empty() || r.back() != '}') return;
+        char n[200];
+        std::snprintf(n, sizeof n, ",\"rateNote\":\"capture raised to %g MS/s for AIS + DSC \xe2\x80\x94 back to %g MS/s when you leave\"}",
+                      std::round(sampleRate / 1e3) / 1e3, std::round(from / 1e3) / 1e3);
+        r.pop_back(); r += n;
+    }
+
     /** ★★★ beta96 AIS ↔ AIS + DSC while the mode is on: the radio moves (162.000 ↔ 159.2625 MHz) and the service restarts
      *  keeping its ships — what the listener had is still saved from the first entry. */
     void aisRetarget(bool dsc) {
         g_aisDsc.store(dsc);
+        g_ais.stop();
+        {   // ★★★ beta96 into AIS + DSC: raised (the owner's 8 MS/s switch); back to AIS alone: the owner's rate back
+            const double hw0 = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
+            rtlCenter.store(hw0 - hwOffsetHz());
+            aisApplyRate(dsc);
+        }
         const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         const double hw = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
         const double logical = hw - hwOffsetHz();
@@ -19243,12 +19294,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (aisGainIdx_ >= 0) LocalSdrShim::instance().setGain(aisGainSet_);
         aisLastReport_ = aisLastGain_ = aisQuietSince_ = nowSecs();
         applyAutoIf();
-        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         // ★★★ beta96 the maritime combination sits between channel 70 and AIS (159.2625 MHz); AIS alone on 162.000
         g_aisDsc.store(dsc);
         const double hw = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
         const double logical = hw - hwOffsetHz();
         rtlCenter.store(logical);
+        g_ais.stop();
+        aisApplyRate(dsc);   // ★★★ beta96 AIS + DSC on a narrower capture: the owner's 8 MS/s, if they allowed it (else no change)
+        rtlCenter.store(logical);
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         audioFreq.store(hw);
         viewCenter.store(hw);
         noteHwMoved();
@@ -19285,6 +19339,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         g_ais.stop();                                   // ★ the gallery's buffer and card are written here (Service::stop)
         g_aisDsc.store(false);                          // ★★★ beta96 (the combination's DSC log was written by the stop)
+        // ★★★ beta96 the owner's rate back FIRST, if MARITIME raised it — before the locked centre is put back (as avLeave)
+        aisApplyRate(false);
         aisOrigin_ = "live"; aisProfile_.clear();
         const AdsbSaved& s = aisSaved_;
         rx.setSpectrumOnly(false);
@@ -47059,7 +47115,22 @@ static bool vsAisDscTunes() {
 static double vsAisDscRunning() {
     double running = LocalSdrShim::instance().usableSpanHz();
     if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
+    // ★★★ beta96 while MARITIME itself raised the capture, the question is asked of the rate it will give back
+    if (g_aisBoostFrom.load(std::memory_order_relaxed) > 0) running = g_aisBoostFrom.load(std::memory_order_relaxed);
     return running;
+}
+/** ★★★ beta96 THE OWNER'S "ais+8m" (Stuart 11-26 — the datalink's "avdata+8m" for the sea): the rate MARITIME would raise this
+ *  radio to — the smallest listed rate at or above 8 MS/s — or 0: switch off, the rate pinned, the guard holding it, an Icom,
+ *  a radio whose list stops short (an RTL, the HF+: the switch is not drawn there either — vibe_radio_caps.h). */
+static double vsAisDscBoostRate() {
+    if (g_icomOn.load()) return 0;
+    const std::vector<double> rates = LocalSdrShim::instance().listedRatesHz();
+    return vibeavi::wideBoostRate(vsModeBlocked("ais+8m"), g_vsRateLock.load(std::memory_order_relaxed),
+                                  !vsGuardAllows(vibeavi::boostRateFrom(rates)), rates);
+}
+/** Does MARITIME hold here — the running capture, or the owner's switch raising it to 8 MS/s? */
+static bool vsAisDscFitsOrBoosts() {
+    return vibemar::fits(vsAisDscRunning()) || vsAisDscBoostRate() >= vibemar::minRateHz();
 }
 static std::string vsAisDscWhyNot() {
     const std::string a = vsAisWhyNot();
@@ -47067,7 +47138,7 @@ static std::string vsAisDscWhyNot() {
     if (vsModeBlocked("dsc")) return "the server owner has switched DSC off on this receiver";
     if (!vsAisDscTunes()) return "this radio cannot tune channel 70 (156.525 MHz) and AIS (162 MHz) together";
     const double running = vsAisDscRunning();
-    if (!vibemar::fits(running)) return vibemar::rateWhy(running);
+    if (!vsAisDscFitsOrBoosts()) return vibemar::rateWhy(running);
     return {};
 }
 /** ★ Drawn (offered) only where it can run now — or while it runs, so it can be left. */
@@ -47452,7 +47523,7 @@ static std::string vsMapModesJson() {
         else if (m.kind == vibekeep::Ais && *m.band) {
             /* ★★★ beta96 AIS + DSC: "hw" only where the capture holds it NOW (or it runs) — not drawn elsewhere (no dead row);
              *  `minRate` lets the Setup page follow a rate the owner is editing before it is saved. */
-            hw = vsAisDscTunes() && (g_aisDsc.load(std::memory_order_relaxed) || vibemar::fits(vsAisDscRunning()));
+            hw = vsAisDscTunes() && (g_aisDsc.load(std::memory_order_relaxed) || vsAisDscFitsOrBoosts());
             why = hw ? vsAisDscWhyNot() : std::string();   // ★ the owner's AIS / DSC switch off: greyed, with the reason
             extra = ",\"minRate\":" + std::to_string((long long)std::ceil(vibemar::minRateHz())) + ",\"tunes\":" + (vsAisDscTunes() ? "true" : "false");
         }

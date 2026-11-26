@@ -118,6 +118,9 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
+  /* ★★★ beta96 MARITIME at 8 MS/s ("ais+8m", IN the CSV when ticked; Stuart 11-26, the datalink's avdata+8m for the sea) —
+   *  drawn only where the radio can (caps "ais+8m": channel 70 and AIS in reach, 8 MS/s listed). */
+  { id: 'ais+8m', label: 'MARITIME: AIS + DSC together (raise the capture to 8 MS/s)', parent: 'ais', on: true, cap: true },
   { id: 'aprs', label: 'APRS' },
   { id: 'adsb', label: 'ADS-B aircraft' },
   // ★ V12 Mode S Comm-B (vibe_adsb_commb.h) — under ADS-B, as on the setup page
@@ -156,6 +159,10 @@ const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading
 const AVDATA_8M_NOTICE = 'Adds \u201cACARS + VDL2\u201d to the aircraft datalink\u2019s bands: picking it raises this radio\u2019s '
   + 'capture to 8 MS/s so both sets of channels fit inside the flat part of its filter, and leaving gives your own rate back. '
   + 'Without it, ACARS + VDL2 is offered only when the radio already runs at 6.1 MS/s or more. Never while you have pinned the rate.';
+/** ★★★ beta96 ONE TEXT, TWO READERS: vibe_setup_page.h AIS_8M_NOTICE. */
+const AIS_8M_NOTICE = 'Lets MARITIME (AIS + DSC channel 70) raise this radio\u2019s capture to 8 MS/s so channel 70 and both AIS '
+  + 'channels fit inside the flat part of its filter, and leaving gives your own rate back. Without it, MARITIME is offered '
+  + 'only when the radio already runs at 6.2 MS/s or more. Never while you have pinned the rate.';
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h ALE_AMD_NOTICE. */
 const ALE_AMD_NOTICE = 'Off the amateur bands an ALE text message (AMD) is a private message between government, military '
   + 'or commercial stations. Only switch this on if the law where this server is allows it. The text is shown only to you, '
@@ -196,7 +203,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
 const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'loraaprs', 'meshcom', 'fanet', 'ndb', 'ais', 'aisstore', 'adsb', 'commb', 'drm', 'tone',
-  'avdata', 'avdata+text', 'avdata+8m', 'sondes', 'vormap',
+  'avdata', 'avdata+text', 'avdata+8m', 'ais+8m', 'sondes', 'vormap',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
@@ -2370,6 +2377,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /* ── ★★★ beta96 THE LANDING MAP — the gate (one mode at a time; ACARS + VDL2 where the capture holds both) on this radio ── */
   const keepFacts = keepAvailLocal({ driver: radio?.driver ?? '', isIcom, blockedModes, rate, dabRateBoost,
                                      ismBands: bgReachNow.ismOk && bgCaps ? bgCaps.ismBands : [],
+                                     ais8mOk: capsAllowMode(radioCapsNow, 'ais+8m'),
                                      lockedOwnVfos: advanced && radioUseEff === 'locked' && maxUsers > 1 });
   if (!adsbLandOffered) { const a = keepFacts.avail.find((x) => x.id === 'adsb'); if (a && a.hw && !a.why) a.why = 'ADS-B cannot run on this radio with these settings'; }
   const mapOffers = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, keepParse(mapModes), mapWhich);
@@ -5628,6 +5636,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AVDATA_8M_NOTICE}</Text>
+                      </View>
+                    ) : m.id === 'ais+8m' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AIS_8M_NOTICE}</Text>
                       </View>
                     ) : m.id === 'ale+amd' ? (
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>

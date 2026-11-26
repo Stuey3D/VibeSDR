@@ -14,7 +14,7 @@ export const NO_MODE_GENS: ModeGens = { now: 0, gens: {} };
 /** The options' generations — evidence of when a list was written, never a NEW switch. Same as the server's table. */
 const OPTION_GENS: Record<string, number> = {
   'lora+all': 63, 'tones+digits': 80, 'avdata+text': 80, 'dvsig+ids': 87, 'ale+amd': 87,
-  'ft8+deep': 91, 'ft8-deep': 91, 'avdata+8m': 93,
+  'ft8+deep': 91, 'ft8-deep': 91, 'avdata+8m': 93, 'ais+8m': 96,
 };
 export const LISTEN_DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl',
   'drm', 'freedv', 'm17', 'dvsig'];
