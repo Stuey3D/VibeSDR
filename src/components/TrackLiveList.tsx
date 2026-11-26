@@ -58,6 +58,17 @@ export interface TrackLiveListProps {
   /** ★★ V12 beta91 the aviation map: a row shows the Mictronics aircraft data — ODC-By 1.0 §4.3's notice, one small line at
    *  the list's foot (the ADS-B layer's card words and links: aviationMap.ts AV_DATA_CREDIT). */
   credit?: boolean;
+  /** ★★★ beta96 THE LIVE MAPS (liveMaps.ts, docs/v12/ONE-MAP.md): the list's TABS (AIRCRAFT · MESSAGES · SHIPS · NAVTEX)
+   *  with their counts — fewer than two = none; the screen draws the chosen tab's rows. */
+  tabs?: Array<{ id: string; label: string; n: number }>;
+  tab?: string;
+  onTab?: (id: string) => void;
+  /** ★★ beta96 the AIRCRAFT tab's sort, NEAREST | LATEST — null / absent = none */
+  sort?: string | null;
+  onSort?: (s: string) => void;
+  /** ★★ beta96 MESSAGES filtered to one aircraft: the words ("Messages from RYR12K") and × ALL */
+  filter?: string;
+  onFilterClear?: () => void;
 }
 const RANGE_H = 30;
 
@@ -80,7 +91,9 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const innerH = p.areaH - p.insets.top - p.insets.bottom;
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
+  const tabs = (p.tabs?.length ?? 0) >= 2 ? p.tabs! : [];
   const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
+    + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0)
     + (p.credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
   const shown = Math.max(1, Math.min(fit, p.rows.length || 1));
@@ -97,6 +110,25 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         <NavRow>
           <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)} title={p.title} count={p.rows.length} placed={placed} />
         </NavRow>
+        {open && (tabs.length > 0 || !!p.sort) && (
+          <NavRow>
+            {/* ★★ beta96 the tabs, then (AIRCRAFT) the sort — walked by the pad like any row */}
+            <View style={s.ranges} accessibilityRole="tablist">
+              {tabs.map((t) => <RangeKey key={t.id} s={s} label={`${t.label} ${t.n}`} words={`${t.label}: ${t.n}`} on={p.tab === t.id} onPress={() => p.onTab?.(t.id)} />)}
+              {!!p.sort && <View style={{ width: 8 }} />}
+              {!!p.sort && (['nearest', 'latest'] as const).map((x) => <RangeKey key={x} s={s} label={x.toUpperCase()} words={`Sort the aircraft ${x === 'nearest' ? 'nearest first' : 'most recently heard first'}`}
+                                                                                   on={p.sort === x} onPress={() => p.onSort?.(x)} />)}
+            </View>
+          </NavRow>
+        )}
+        {open && !!p.filter && (
+          <NavRow>
+            <View style={s.ranges}>
+              <Text style={s.status} numberOfLines={1}>{p.filter}</Text>
+              <RangeKey s={s} label="× ALL" words="Show every message" on={false} onPress={() => p.onFilterClear?.()} />
+            </View>
+          </NavRow>
+        )}
         {open && (
           <Text style={[s.status, !!note && s.noteTxt]} numberOfLines={1}>{note || p.status}</Text>
         )}
@@ -110,10 +142,11 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         )}
         {open && !!p.toggles?.length && (
           <NavRow>
-            <View style={s.ranges}>
+            {/* ★ beta96 the AIR & SEA map's chips can be many: they scroll sideways (never off the edge) */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={s.ranges} keyboardShouldPersistTaps="handled">
               {p.toggles.map((x) => <ToggleKey key={x.id} s={s} label={x.label} words={x.words}
                                                on={p.toggled?.[x.id] !== false} onPress={() => p.onToggle?.(x.id, p.toggled?.[x.id] === false)} />)}
-            </View>
+            </ScrollView>
           </NavRow>
         )}
         {open && safety.map((l, i) => (

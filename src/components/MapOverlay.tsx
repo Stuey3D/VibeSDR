@@ -84,7 +84,8 @@ import TrackLiveList from './TrackLiveList';
 import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
 import { langName } from '../services/transcriber';
 import { NAV_HAZARDS, NAV_HAZARD_COLOURS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../services/navtexIcons';
-import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';   // ★ V12 2026-11-02 the SHIPPING MAP
+import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';
+import { MAP_TITLE } from '../services/liveMaps';   // ★★★ beta96 the AIR & SEA map   // ★ V12 2026-11-02 the SHIPPING MAP
 import { seaLegendRows, seaAttributionAll } from '../services/seaAreas';   // ★ beta95 every source: the areas are drawn worldwide   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
@@ -129,7 +130,12 @@ import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols'; 
 /* ★ 'vormap' (V12, beta93) = the VOR / ILS MAP mode's screen (docs/v12/VOR-MAP.md): every station heard at its published
  *  position, a VOR's radial towards the receiver and the FIX where radials cross (services/vorMap.ts), on the same track
  *  layer; EXIT VOR MAP leaves the mode and gives the receiver back, as NDB's. */
-export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap';
+/* ★★★ 'airsea' (V12 beta96, docs/v12/ONE-MAP.md) = THE AIR & SEA MAP: the aviation map ('avdata') and the shipping map
+ *  ('ais' / 'navtex' / 'dsc') as ONE page — aircraft on the ADS-B layer (made when the first one arrives), ships, DSC,
+ *  NAVTEX and the sea areas on the track layer. The page is built once; its TITLE, its EXIT key and whose camera it is are
+ *  pushed in (__trkChrome / __trkCamera) from the current mode on every change — never baked into the page, so a mode
+ *  change while it is open can never leave it wearing the old mode (Mac Ha 11-26). */
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap' | 'airsea';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -192,7 +198,16 @@ interface MapOverlayProps {
           /** a line over the map (the warnings index being built) — '' = none */
           note?: string;
           /** ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap profile ('aero' | 'aero-plain'), switched live */
-          profile?: string } | null;
+          profile?: string;
+          /** ★★★ beta96 THE AIR & SEA MAP (liveMaps.ts): the title and the exit key, computed from the current mode */
+          title?: string; exitLabel?: string;
+          /** ★★ beta96 whose camera: the ADS-B layer's (aviation live) or the shared auto fit's (ships, NAVTEX live) */
+          camera?: 'aircraft' | 'track';
+          /** ★★ beta96 the list's tabs, the AIRCRAFT sort, the MESSAGES filter (TrackLiveList) */
+          tabs?: Array<{ id: string; label: string; n: number }>; tab?: string; onTab?: (id: string) => void;
+          sort?: string | null; onSort?: (s: string) => void; filter?: string; onFilterClear?: () => void;
+          /** ★ beta96 a row chosen (an aircraft → MESSAGES filtered to it) */
+          onPick?: (key: string) => void } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
@@ -222,7 +237,7 @@ interface MapOverlayProps {
 
 /** ★ beta92 what a track map's auto fit keeps in view, in its FIT key's words ("every ship and the receiver"). */
 function trkWhat(kind: MapKind): string {
-  return kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : kind === 'vormap' ? 'navaid heard' : 'station';
+  return kind === 'ais' || kind === 'airsea' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : kind === 'vormap' ? 'navaid heard' : 'station';
 }
 
 function buildHtml(
@@ -279,7 +294,7 @@ function buildHtml(
   const isHfdl = kind === 'hfdl';
   const isAdsb = kind === 'adsb';
   const isNdb = kind === 'ndb';   // ★ V12 NDB — the aero look, its own layer, RN's live list (as ADS-B)
-  const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap';   // ★ V12 AIS / APRS / DSC / ISM — the shared track layer
+  const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap' || kind === 'airsea';   // ★ V12 AIS / APRS / DSC / ISM — the shared track layer
   /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
    *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
   const aero = isHfdl || isAdsb || isNdb;
@@ -293,11 +308,11 @@ function buildHtml(
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
   const TITLE = isHfdl ? 'HFDL MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'airsea' ? MAP_TITLE.airsea : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
-    : kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : kind === 'vormap' ? '&#11041;' : aero || kind === 'avdata'
+    : kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : kind === 'vormap' ? '&#11041;' : aero || kind === 'avdata' || kind === 'airsea'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
@@ -311,7 +326,7 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
-${isAdsb || isNdb || kind === 'avdata' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
+${isAdsb || isNdb || kind === 'avdata' || kind === 'airsea' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
 ${!isHfdl && !isAdsb ? `<script>${MAP_AUTOFIT_JS}</script>` : ''}
 ${isNdb ? `<script>${NDB_LAYER_JS}</script>` : ''}
 ${isTrk ? `<script>${TRACK_LAYER_JS}</script>` : ''}
@@ -619,6 +634,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     : kind === 'sondes' ? '<button id="back" aria-label="Exit SONDES and give the receiver back">EXIT SONDES</button>'   /* ★★ V12 the mode's screen, as the web's (2026-11-17) */
     : kind === 'vormap' ? '<button id="back" aria-label="Exit the VOR map and give the receiver back">EXIT VOR MAP</button>'   /* ★★ V12 the mode's screen, as NDB's */
     : kind === 'avdata' ? '<button id="back" aria-label="Close the map — the aircraft datalink carries on">CLOSE MAP</button>'
+    : kind === 'airsea' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'   /* ★ beta96 the words are pushed in (__trkChrome) */
     : kind === 'navtex' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}${opts?.only ? `<br><span style="font-size:10px;letter-spacing:1px;opacity:0.75">${esc(opts.only)}</span>` : ''}</div>
@@ -856,9 +872,9 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
-      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
+      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
-      scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'nautical':'metric',scalePosition:'${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
+      scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc'||KIND==='airsea')?'nautical':'metric',scalePosition:'${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -1104,11 +1120,11 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
    *  resolves to the FILESYSTEM ROOT — /mapdata/v1/... — which exists nowhere and fails silently,
    *  one layer at a time, exactly the quiet blank this rework exists to end. */
   dataBase: 'mapdata/v1/',
-  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap') ? 'aero'
+  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'airsea') ? 'aero'
     // ★ sea maps show PORTS, not airports (Stuart, 2026-11-01: "we need the ports instead, so felixstowe dover etc")
     : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots',
   // ★★ V12 beta90 the scale bar (vibemap.js attach) — NM under the km on the sea and air maps
-  scale: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'nautical' : 'metric',
+  scale: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc' || KIND === 'airsea') ? 'nautical' : 'metric',
   /* ★ beta91 (Stuart 11-22: "map scale is behind the aircraft list box") the bottom-left corner is the live list's
    *  (AdsbLiveList / NdbLiveList / TrackLiveList, React Native over this page): there the scale sits bottom-right with the
    *  zoom keys */
@@ -1187,7 +1203,7 @@ if(LOCAL){
 }else if(KIND==='ndb'){
   /* ★ V12 NDB: the beacon layer draws the receiver's house itself (ndblayer.js) — only the view is set here. */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],7);
-}else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'){
+}else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea'){
   /* ★ V12 AIS / APRS: the server's /location, injected; the track layer draws the receiver's house itself (setReceiver). */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],8);
 }else{
@@ -1723,7 +1739,7 @@ if(KIND==='ndb'){
  *  a tapped one's track and its card. Each item arrives with its icon, label and card already made (src/services/tracks.ts
  *  — one rule, two readers with the web), so this page holds no copy of what a ship looks like. A track is asked of React
  *  Native (AIS: the server's ais_trail; APRS: the list's own), answered through __trkTrail. */
-if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'){
+if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea'){
   var trkLayer=null,trkWait={},trkWantFocus=null;
   function trkPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
   function trkMake(){
@@ -1748,7 +1764,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
           if(b)b.addEventListener('click',function(){trkPost({t:'trkTr',f:f});});
           trkPost({t:'trkCard',f:f,title:b?(b.getAttribute('data-title')||''):''});
         },
-        labelZoom:KIND==='ism'?6:KIND==='navtex'?3:KIND==='sondes'?5:KIND==='avdata'?5:KIND==='vormap'?6:undefined,focusZoom:KIND==='ism'?11:KIND==='navtex'?6:KIND==='sondes'?9:KIND==='avdata'?8:undefined,
+        labelZoom:KIND==='ism'?6:KIND==='navtex'?3:KIND==='sondes'?5:KIND==='avdata'||KIND==='airsea'?5:KIND==='vormap'?6:undefined,focusZoom:KIND==='ism'?11:KIND==='navtex'?6:KIND==='sondes'?9:KIND==='avdata'||KIND==='airsea'?8:undefined,
         trail:function(key,done){
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
           setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
@@ -1758,7 +1774,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
       });
       /* ★★ beta95 THE SEA AREAS WORLDWIDE: the shipping maps tell React Native where the view is (padded, rounded out to 2°),
        *  which sends the areas in it — at most once per settled move. */
-      if((KIND==='navtex'||KIND==='ais')&&trkLayer.viewBox){
+      if((KIND==='navtex'||KIND==='ais'||KIND==='airsea')&&trkLayer.viewBox){
         var vbLast='',vbT=0;
         var vbSend=function(){var b=trkLayer&&trkLayer.viewBox();if(!b)return;
           var r=[Math.floor(b[0]/2)*2,Math.floor(b[1]/2)*2,Math.ceil(b[2]/2)*2,Math.ceil(b[3]/2)*2],k=r.join(',');
@@ -1786,12 +1802,13 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
    *  the last two fixes — the rest (HFDL ground stations) by the track layer. The web's TrackView aircraft:true. */
   var acLayer=null,acHexKey={},acKeyHex={};
   function acMake(){
-    if(acLayer||KIND!=='avdata'||!window.VibeAdsbLayer)return acLayer;
+    if(acLayer||(KIND!=='avdata'&&KIND!=='airsea')||!window.VibeAdsbLayer)return acLayer;
     /* ★ beta91 the owner's logos / silhouettes on this server, as on the ADS-B map (adsbMake) — the datalink's aircraft carry
      *  the same keys now (vibe_aircraft_info.h) */
     try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
       imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')},
-      onSelect:function(h){trkPost({t:'trkSel',key:h&&acHexKey[h]?acHexKey[h]:null});}});window.__acLayer=acLayer;}
+      onSelect:function(h){trkPost({t:'trkSel',key:h&&acHexKey[h]?acHexKey[h]:null});}});window.__acLayer=acLayer;
+      if(KIND==='airsea')trkCameraApply();}
     catch(e){console.error('aircraft layer could not start',e);acLayer=null;}
     return acLayer;
   }
@@ -1800,7 +1817,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
       var a=JSON.parse(json);if(!Array.isArray(a))return;
       var nH=0;for(var j=0;j<a.length;j++)if(!(a[j]&&a[j]._nofit))nH++;cnt.textContent=String(nH);   // ★ beta95 what was heard, not the chart
       var l=trkMake();if(!l)return;
-      var ac=acMake();
+      var ac=KIND==='airsea'&&!acLayer&&!a.some(function(it){return it&&it._adsb;})?null:acMake();   // ★ beta96 AIR & SEA: made when the first aircraft comes
       if(ac){var rest=[],planes=[];acHexKey={};acKeyHex={};
         for(var i=0;i<a.length;i++){var it=a[i],x=it&&it._adsb;
           if(x&&typeof x.hex==='string'){planes.push(x);acHexKey[x.hex]=String(it.key);acKeyHex[String(it.key)]=x.hex;}else rest.push(it);}
@@ -1811,13 +1828,26 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
       else if(af)af.poke();
     }catch(e){console.error('tracks: bad report',e);}
   };
+  /* ★★★ beta96 THE AIR & SEA MAP's chrome, from React Native on every mode change (liveMaps.ts liveChrome) */
+  window.__trkChrome=function(title,exit){try{var t=document.getElementById('title');if(t&&t.firstChild&&t.firstChild.nodeType===3)t.firstChild.nodeValue=String(title);else if(t)t.insertBefore(document.createTextNode(String(title)),t.firstChild);
+    var b=document.getElementById('back');if(b&&exit&&b.textContent!==String(exit)){b.textContent=String(exit);b.setAttribute('aria-label',String(exit)==='CLOSE MAP'?'Close the map':String(exit)+' and give the receiver back');}}catch(e){console.error('tracks chrome',e);}};
+  /* ★★ beta96 whose camera: 'aircraft' = the ADS-B layer's AUTO / FIT (aviation live), 'track' = the shared auto fit */
+  var trkCam='aircraft',acAuto=null;
+  function trkCameraApply(){try{var af=trkFitMake(),snap=document.getElementById('snap');
+    if(!acLayer){if(snap)snap.style.display='';return;}
+    if(trkCam==='track'){if(acAuto===null)acAuto=!!acLayer.prefs().autoZoom;acLayer.setPrefs({autoZoom:false});if(snap)snap.style.display='';if(af){af.resume();}}
+    else{if(acAuto!==null){acLayer.setPrefs({autoZoom:acAuto});acAuto=null;}if(snap)snap.style.display='none';if(af)af.pause();}
+  }catch(e){console.error('tracks camera',e);}}
+  window.__trkCamera=function(o){trkCam=o==='track'?'track':'aircraft';trkCameraApply();};
   window.__trkFit=function(){try{var af=trkFitMake();if(af){af.fitNow();return;}var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
   /* ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap profile, live. A map pack that predates 'aero-plain'
    *  says no — then the airport layers are switched by name. */
   window.__trkProfile=function(name){try{
-    if(GLVM){if(GLVM.setProfile(name)===false){var m=GLVM.map;['airports-4','airports-6','airports-7','airports-8','runways','runway-ends'].forEach(function(id){
-      if(m.getLayer(id))m.setLayoutProperty(id,'visibility',name==='aero-plain'?'none':'visible');});}}
-    else if(VM&&VM.setProfile)VM.setProfile(name);
+    // ★ beta96 'airsea' / 'airsea-plain' on an older pack: its aero profile, then the ports by name
+    var sea=name==='airsea'||name==='airsea-plain',base=name==='airsea'?'aero':name==='airsea-plain'?'aero-plain':name;
+    if(GLVM){if(GLVM.setProfile(name)===false){if(sea)GLVM.setProfile(base);var m=GLVM.map;['airports-4','airports-6','airports-7','airports-8','runways','runway-ends'].forEach(function(id){
+      if(m.getLayer(id))m.setLayoutProperty(id,'visibility',base==='aero-plain'?'none':'visible');});if(sea&&m.getLayer('ports'))m.setLayoutProperty('ports','visibility','visible');}}
+    else if(VM&&VM.setProfile){if(VM.setProfile(name)===false&&sea)VM.setProfile(base);}
   }catch(e){console.error('tracks profile',e);}};
   window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
@@ -2554,7 +2584,7 @@ export default function MapOverlay(
   };
   /* ★ V12 AIS / APRS: the items each report (they REPLACE — the server's list is the truth), double-encoded as ADS-B's are
    *  (a ship's name can never become source). Parked in __pendingTrk until the page's handler exists. */
-  const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap';
+  const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap' || kind === 'airsea';
   const trkRef = useRef(trk); trkRef.current = trk;
   /* ★★ V12 2026-11-01 THE NAVTEX CARDS' TEXT AND TRANSLATE: the page asks for a card's gallery file (only one of the
    *  items' own, by its safe name), React Native fetches it (the read auth) and sends it back as TEXT; then the gallery's
@@ -2596,7 +2626,10 @@ export default function MapOverlay(
   };
   useEffect(() => { if (!visible) cardTr.current.clear(); }, [visible]);
   // ★ the line over the map (the warnings index being built)
-  useEffect(() => { if (visible && kind === 'navtex') pageCall('__trkNote', trk?.note ?? ''); }, [visible, kind, trk?.note]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (visible && (kind === 'navtex' || kind === 'airsea')) pageCall('__trkNote', trk?.note ?? ''); }, [visible, kind, trk?.note]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ★★★ beta96 THE AIR & SEA MAP's title and exit, from the CURRENT mode (pushed whenever it changes, and on every new page)
+  useEffect(() => { if (visible && kind === 'airsea' && trk?.title) pageCall('__trkChrome', trk.title, trk.exitLabel ?? 'CLOSE MAP'); }, [visible, kind, trk?.title, trk?.exitLabel, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (visible && kind === 'airsea' && trk?.camera) pageCall('__trkCamera', trk.camera); }, [visible, kind, trk?.camera, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pushTrk = (items?: TrackItem[]) => {
     if (!isTrkKind || !items) return;
     const lit = JSON.stringify(JSON.stringify(items))
@@ -2770,6 +2803,7 @@ export default function MapOverlay(
             if (m && (m as any).t === 'trkSel') {
               const k = (m as any).key;
               setTrkSel(typeof k === 'string' && k.length <= 40 ? k : null);
+              if (typeof k === 'string' && k.length <= 40) trk?.onPick?.(k);   // ★ beta96 an aircraft tapped → its MESSAGES
               return;
             }
             if (m && (m as any).t === 'trkView') {   // ★ beta95 the view moved: the sea areas in it (numbers only, checked)
@@ -2909,11 +2943,12 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : kind === 'vormap' ? 'NAVAIDS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty} credit={!!trk.credit}
+          <TrackLiveList tabs={trk.tabs} tab={trk.tab} onTab={trk.onTab} sort={trk.sort} onSort={trk.onSort} filter={trk.filter} onFilterClear={trk.onFilterClear}
+                         title={kind === 'airsea' ? 'AIRCRAFT' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : kind === 'vormap' ? 'NAVAIDS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty} credit={!!trk.credit}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
-                         safety={trk.safety} onFocus={trkFocus} selected={trkSel} onFootprint={trkFootprint}
+                         safety={trk.safety} onFocus={(k) => { trk.onPick?.(k); trkFocus(k); }} selected={trkSel} onFootprint={trkFootprint}
                          ink={ink} areaW={winW} areaH={winH}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
