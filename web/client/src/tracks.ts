@@ -401,6 +401,24 @@ const CSS = `
 .trkTop .mapShLine.alone{color:#7bd88f;border-color:rgba(123,216,143,.45);background:rgba(123,216,143,.08)}
 .trkTop .mapShLine.locked{color:#ff9d8a;border-color:rgba(255,120,100,.55);background:rgba(255,90,70,.10)}
 .trkTop .btn.dialLocked{opacity:.4;filter:grayscale(.7);cursor:not-allowed}
+.trkTop .tune[hidden]{display:none}
+.trkTop .tune,.trkTop .tgl{align-items:center}
+.trkTop .tune .lbl,.trkTop .tgl .lbl{align-self:center;margin-right:6px;font:800 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#c9d6e2;padding:3px 5px;border-radius:4px;flex:none}
+.trkTop .tune .lbl{background:#5a1f1f;color:#ffd9d2}
+.trkTop .tgl .lbl{background:#1d3347;color:#bfe3ff}
+.trkTop .tune .btn{flex:none;border-radius:6px!important;margin-left:3px!important}
+.trkTop .tgl .lbl+.grp{margin-left:0}
+.trkTop .tune .btn[aria-pressed="true"]{background:#ff6b5a;color:#111;border-color:#ff6b5a}
+.trkTop .tune .btn.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#7a0d05;margin-right:5px;vertical-align:1px}
+.trkTop .tune .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
+.trkTop .tune .lbl+.grp{margin-left:0}
+.trkTop .tgl .btn.chip{border-radius:999px!important;margin-left:3px!important;display:inline-flex;align-items:center;gap:5px;padding:5px 9px}
+.trkTop .tgl .btn.chip .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.trkTop .tgl .btn.chip[aria-pressed="true"]{background:#1e2a36;color:#e8eef5;border-color:#7fc8ff}
+.trkTop .tgl .btn.chip[aria-pressed="false"]{opacity:.45}
+.trkTop .tgl .btn.chip[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
+.trkTop .tgl .btn.chip .n{font-size:9.5px;opacity:.7;font-variant-numeric:tabular-nums}
+.trkTop .tgl .btn.chip .n:empty{display:none}
 .trkKey{position:absolute;right:10px;bottom:30px;z-index:900;background:rgba(11,20,32,.92);border:1px solid #2c3e52;border-radius:8px;color:#d7dee6;font:12px/1.3 inherit;max-height:60%;overflow:auto}
 .trkKey>summary{cursor:pointer;padding:6px 10px;font-weight:600;letter-spacing:.08em;list-style:none}
 .trkKey>summary::-webkit-details-marker{display:none}
@@ -676,16 +694,31 @@ export class TrackView {
   }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
-    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live]), toggles.map((x) => toggled[x.id] !== false)]);
-    if (sig === this.tglSig) return;
+    // ★★★ beta96 SHOW (Stuart 11-26): the counts change every second — written in place (below), never a redraw, so a poll
+    //   cannot steal a focused chip
+    const counts = () => {
+      const by = new Map(toggles.map((x) => [x.id, x.n]));
+      for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLElement[]) {
+        const n = b.querySelector('.n') as HTMLElement | null; if (!n) continue;
+        const v = by.get(b.dataset.tgl || ''); const t = v != null ? String(v) : '';
+        if (n.textContent !== t) n.textContent = t;
+      }
+    };
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '']), toggles.map((x) => toggled[x.id] !== false)]);
+    if (sig === this.tglSig) { counts(); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
     // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, a red LIVE dot on the live
-    //   layer's (what the receiver is doing now)
-    host.innerHTML = toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
-      + `<button class="btn${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('');
+    //   layer's (what the receiver is doing now). ★★★ SHOW (Stuart 11-26): THIS viewer's own filter, labelled, the community
+    //   map's chips — a colour dot, the name, its count; nothing here is ever sent to the server.
+    host.innerHTML = (toggles.length ? '<span class="lbl" title="What this map shows you — your own view, nothing changes on the radio">SHOW</span>' : '')
+      + toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
+      + `<button class="btn chip${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">`
+      + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
+      + `${esc(x.label)}<span class="n"></span></button>`).join('');
+    counts();
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';
@@ -694,6 +727,34 @@ export class TrackView {
       };
     }
   }
+  private tuneSig = '';
+  /** ★★★ beta96 TUNE (Stuart 11-26): the keys that MOVE THE SHARED RADIO — the whole-radio modes and bands this map is a
+   *  live state of (ADS-B, the DATALINK's bands, AIS / MARITIME, the sonde bands, NDB, VOR MAP), labelled TUNE so nobody
+   *  mistakes one for a filter. The live one is pressed (red dot). The group carries data-dial, so the dial lock
+   *  (setDialLock) greys every key with its reason. [] = none (no radio behind the map — the standalone map). */
+  setTune(keys: Array<{ id: string; label: string; words: string; live?: boolean; group?: string }>, onTune: (id: string) => void) {
+    let host = this.root.querySelector('.trkTop .tune') as HTMLElement | null;
+    if (!host) {
+      host = document.createElement('span');
+      host.className = 'rng tune'; host.setAttribute('role', 'group'); host.setAttribute('aria-label', 'Tune the radio');
+      host.dataset.dial = '1';
+      (this.root.querySelector('.trkTop .tgl') as HTMLElement).before(host);
+    }
+    this.onTune = onTune;
+    const sig = JSON.stringify(keys.map((k) => [k.id, k.label, !!k.live, k.group || '']));
+    if (sig === this.tuneSig) return;
+    this.tuneSig = sig;
+    host.hidden = !keys.length;
+    host.innerHTML = keys.length ? '<span class="lbl" title="These move the radio — for everybody listening on a shared dial">TUNE</span>'
+      + keys.map((k) => (k.group ? `<span class="grp" aria-hidden="true">${esc(k.group)}</span>` : '')
+        + `<button class="btn${k.live ? ' live' : ''}" type="button" data-tune="${esc(k.id)}" aria-pressed="${!!k.live}" aria-label="${esc(k.words)}" title="${esc(k.words)}">${esc(k.label)}</button>`).join('') : '';
+    for (const b of Array.from(host.querySelectorAll('[data-tune]')) as HTMLButtonElement[]) {
+      b.onclick = () => { if (b.getAttribute('aria-pressed') !== 'true') this.onTune?.(b.dataset.tune || ''); };
+    }
+    // ★ a redraw makes new keys: the lock (if any) goes back on them
+    if (this.dialWhy) this.setDialLock(this.dialWhy, this.dialExit);
+  }
+  private onTune: ((id: string) => void) | null = null;
   /** ★★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap's profile, switched live ('aero' ↔ 'aero-plain'),
    *  on whichever map this view made (GPU or Leaflet). Remembered for a map made later. */
   setProfile(name: string) {
