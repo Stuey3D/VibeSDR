@@ -405,7 +405,8 @@ static void testLivePass(bool quick) {
         Run::Opts o; o.symbolRate = 72000; o.mod = ReceiverConfig::Oqpsk;
         o.dopplerHz = [&] { return kDop0 + kRate * tNow; };
         o.satInRange = [&] { return c.inRange; };
-        o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; } };
+        int picH = 0;   // ★ beta96 the gallery's picture keeps TRUE geometry (the gap at full height)
+        o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; picH = ps[0].h; } };
         // ★★ beta95 the gap drawn AS a gap (gapart): the preview rows and the status, kept for the one-picture case
         std::map<uint32_t, std::vector<uint8_t>> rows; std::string lastJson;
         if (c.inRange == 1) {
@@ -465,6 +466,7 @@ static void testLivePass(bool quick) {
             // the rows it names are the hatched ones
             int inGapHatched = 0; for (int y = r0; y < r1; y++) { auto it = rows.find(uint32_t(y)); if (it != rows.end() && it->second.size() >= 3 && (it->second[0] == 54 || it->second[0] == 26 || it->second[0] == 214)) inGapHatched++; }
             CHECK(r1 > r0 && inGapHatched == r1 - r0, "beta96: every row the gap names is a hatched row (%d of %d)", inGapHatched, r1 - r0);
+            CHECK(picH == (decoded + gapLines) && picH >= gln + 8, "beta96: the gallery picture keeps true geometry — %d rows = decoded %d + gap %d", picH, decoded, gapLines);
         }
     }
 }
