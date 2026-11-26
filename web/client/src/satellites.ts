@@ -233,7 +233,7 @@ const CSS = `
 #satPanel .sat-row .sat-s.skip{color:var(--text-dim)}
 #satPanel .sat-sk{display:flex;flex-direction:column;gap:4px;align-self:center}
 #satPanel .sat-sline{font-size:12px;margin:6px 0 2px}
-#satPanel .sat-watch{margin:2px 0 8px;padding:6px 8px;border:1px solid rgba(255,255,255,.18);border-radius:6px}
+#satPanel .sat-watch{margin:2px 0 8px;padding:6px 8px;border:1px solid var(--btn-border);border-radius:6px}
 #satPanel .sat-watch .sat-wh{font-weight:600;font-size:13px}
 #satPanel .sat-watch .sat-wp{font-size:12px;margin:2px 0;opacity:.85}
 #satPanel .sat-watch .sat-wp.live{opacity:1;font-weight:600}
