@@ -165,7 +165,8 @@ import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
-import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay } from './digiMap';
+import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay, type DigiMapLayer } from './digiMap';
+import { amMeshPoints, amBeaconPoints, amLiveOf, AMATEUR_JS, type AmLayer, type AmMeshPoint, type AmBeaconPoint } from '../../../src/utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';
 import { DIGI_STATS_JS } from '../../../src/utils/digiMapStats';
 import { digiGalCard, digiGalQuery, digiGalItemWindow } from '../../../src/utils/digiMapShared';   // ★ beta92 the gallery's digi map row (the app's same words)   // ★ beta92 the digi map's stats / legend / summary (the app's same code)   // ★ beta92 the digi map's FIT key (the app's same code)
@@ -10232,6 +10233,7 @@ async function ismGalMapOpen(it0: GalleryItem) {
   }, 60_000);
 }
 function ismMapRender() {
+  amMapRender();   // ★ beta96 the AMATEUR map's MESH layer (its window open or not — amMapRender is silent without one)
   if (!ismMapView?.open) return;
   const r0 = ismReport;
   // ★ beta92 the remembered nodes (ismStoredLoad) that this session has not heard itself — a live one always wins
@@ -15304,7 +15306,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec !== 'ncdxf') return;
       const r = ncdxfSanitise(d);
       if (!r) return;
-      ncdxfLast = r; renderNcdxf();
+      ncdxfLast = r; renderNcdxf(); amMapRender();
       if (r && r.now > 0) ncdxfClockOff = r.now - Date.now() / 1000;   // ★ FOLLOW keeps the server's clock, as the tracker does
       decStateText = ncdxfStatus(r);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
@@ -18615,9 +18617,25 @@ function pushSpotsToMap() {
     // ★★ NEVER '*': the window could have navigated somewhere else since it opened, and the spots
     //    would follow it there. '/' (and an http(s) origin, which is the same thing spelled out) means
     //    "only if it is still on this page's origin" — the popup is about:blank and inherits ours.
-    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay },
+    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay, ...amExtras() },
                             /^https?:$/.test(location.protocol) ? location.origin : '/');
   } catch { spotsMapWin = null; }      // window went away mid-push
+}
+/* ★★★ beta96 STAGE 7 THE AMATEUR MAP (src/utils/amateurMap.ts): MESH (this page's ISM report + the server's remembered
+ *  nodes, ismStoredLoad), BEACONS (the NCDXF tracker's report) and the LIVE layer — what this receiver's decoder feeds now,
+ *  only emphasised: every layer shows whatever is in the HEARD IN window. */
+function amExtras(): { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | '' } {
+  return {
+    mesh: amMeshPoints(ismReport?.devices ?? [], ismStored, Math.floor(Date.now() / 1000)),
+    beacons: amBeaconPoints(ncdxfLast, NCDXF_BANDS.map((b) => b.label)),
+    live: amLiveOf(activeDec ?? (decoders?.spotsEnabled ? 'spots' : ''), ismOn),
+  };
+}
+/** ★ A mesh or beacon update: the open map follows (at most every 2 s). */
+let amPushT: ReturnType<typeof setTimeout> | null = null;
+function amMapRender() {
+  if (!spotsMapWin || amPushT) return;
+  amPushT = setTimeout(() => { amPushT = null; pushSpotsToMap(); }, 2000);
 }
 
 /* ★★★ THE GPU MAP, SERVED BY THIS SERVER (Stuart, 2026-09-28: "Digital spots (sent from server
@@ -18658,10 +18676,11 @@ let digiOverlay: DigiMapOverlay | null = null;
 function digiMapWindowPref(): string { return digiWindowOf(prefs()['digiMapWindow']); }
 function openDigiModesMapImpl(o: DigiMapOpts = {}) {
   digiOverlay = o.overlay === undefined ? digiOverlay : digiOverlayClean(o.overlay);
-  const layer = o.layer === 'aprs' ? 'aprs' : 'spots';
+  const layer: DigiMapLayer = o.layer === 'aprs' || o.layer === 'mesh' || o.layer === 'beacons' ? o.layer : 'spots';
+  if (ismReport?.band && ismStoredBand !== ismReport.band) void ismStoredLoad();   // ★ beta96 the remembered mesh nodes
   if (spotsMapWin && !spotsMapWin.closed) {
     try {
-      spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay, layer, focus: o.focus || '' },
+      spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay, ...amExtras(), layer, focus: o.focus || '' },
                               /^https?:$/.test(location.protocol) ? location.origin : '/');
       spotsMapWin.focus();
       return;
@@ -18697,10 +18716,11 @@ addEventListener('message', (ev) => {
 });
 setDigiModesMapOpener(openDigiModesMapImpl);
 
-function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: 'spots' | 'aprs'; focus: string; window: string } = { layer: 'spots', focus: '', window: '24h' }): string {
+function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: DigiMapLayer; focus: string; window: string } = { layer: 'spots', focus: '', window: '24h' }): string {
   const me = myPos();
   const pts = spotsMapPoints();
   const aprsPts = aprsMapPoints();
+  const am = amExtras();   // ★ beta96 stage 7 MESH, BEACONS and the live layer
   // ★ This server's station store (vibe_station_store.h), absolute — the window is about:blank. readAuthUrl: a private
   //   gallery's stations need the owner's read ticket, as the gallery's own requests do.
   const srvUrl = /^https?:$/.test(location.protocol) ? new URL(galUrl('/vibeserver/stations.json'), location.href).href : '';
@@ -18718,7 +18738,7 @@ function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: '
 <script src="${mapglVendor(kit.base, 'vibemapgl-compat.js')}">${ES}` : '';
   const safe = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
 
-  return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digi Modes Map</title>
+  return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Amateur Map</title>
 ${glHead}
 <style>
   :root{--amber:#ffb833;--dim:rgba(255,160,0,0.45);--bg:rgba(8,6,2,0.94);
@@ -18794,6 +18814,25 @@ ${glHead}
     background:rgba(8,10,12,0.62);text-shadow:0 0 2px #000,0 1px 2px #000}
   body.aprsLb .apk .apl{display:block}
   .lrow .asym{display:inline-flex;width:16px;height:16px;flex:0 0 16px}
+  /* ★★★ beta96 stage 7 THE AMATEUR MAP: its title, the live layer's dot, and the list with its tabs (SPOTS · APRS · MESH ·
+     BEACONS) bottom-right, clear of the stats column (left) and the legend (top-right) */
+  #amTitle{letter-spacing:2px;color:var(--hi)}
+  #layers button.live::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff4b4b;margin-right:5px;vertical-align:1px}
+  #amList{right:10px;bottom:30px;width:300px;max-height:42%;display:flex;flex-direction:column;overflow:hidden}
+  #amList.hide{display:none}
+  #amTabs{display:flex;gap:4px;padding:6px 6px 4px;flex-wrap:wrap;border-bottom:1px solid rgba(255,160,0,0.15)}
+  #amTabs button{font:inherit;font-size:10px;letter-spacing:1px;color:var(--dim);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 6px;cursor:pointer}
+  #amTabs button[aria-selected="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
+  #amRows{overflow-y:auto;scrollbar-width:thin}
+  .amRow{display:flex;align-items:center;gap:7px;padding:3px 8px;cursor:pointer;font-size:11px}
+  .amRow:hover,.amRow:focus-visible{background:rgba(255,160,0,0.10);outline:none}
+  .amRow>i{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
+  .amRow .n{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+  .amRow .n b{color:var(--hi);font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .amRow .n small{font-size:9.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .amRow .r{color:var(--dim);white-space:nowrap;font-size:10px}
+  .amEmpty{padding:10px;color:var(--dim)}
+  @media (max-width:640px){#amList{width:calc(100% - 230px);max-height:35%}}
   @media (max-width:640px){#stats{width:200px}.maplibregl-ctrl-top-left{left:220px}.maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:220px}
     #top{flex-wrap:wrap;gap:8px}}
   .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:var(--dim);font-size:9px}
@@ -18801,6 +18840,7 @@ ${glHead}
 ${ST}
 <div id="wrap">
   <div id="top">
+    <span id="amTitle">AMATEUR MAP</span>
     <span id="count">0</span><span style="color:var(--dim)" id="countWhat">stations</span>
     <span id="layers" role="group" aria-label="Layers" hidden></span>
     <span id="wins" role="group" aria-label="Time window" hidden></span>
@@ -18809,6 +18849,7 @@ ${ST}
     <label><input type="checkbox" id="tStats" checked>Stats</label>
     <label><input type="checkbox" id="tSummary" checked>Summary</label>
     <label><input type="checkbox" id="tLegend" checked>Legend</label>
+    <label><input type="checkbox" id="tList" checked>List</label>
     <span class="sp"></span>
     <span id="clock" style="color:var(--dim)"></span>
   </div>
@@ -18818,6 +18859,7 @@ ${ST}
     <div class="panel" id="stats"></div>
     <div class="panel" id="legend"></div>
     <div class="panel" id="summary"></div>
+    <div class="panel" id="amList"><div id="amTabs" role="tablist" aria-label="Lists"></div><div id="amRows"></div></div>
   </div>
 </div>
 <script>
@@ -18829,12 +18871,20 @@ let spots = [];
 let live = ${safe(pts)};
 let aprs = ${safe(aprsPts)};
 let overlay = ${safe(digiOverlay)};
+/* ★★★ beta96 stage 7 THE AMATEUR MAP (src/utils/amateurMap.ts): MESH and BEACONS (pushed), the LIVE layer (what this
+ *  receiver's decoder feeds — emphasised only), and Stuart's rule: EVERY layer shows what was heard in the HEARD IN window,
+ *  background decoding's and every listener's alike (amKeep). */
+let mesh = ${safe(am.mesh)};
+let beacons = ${safe(am.beacons)};
+let liveLayer = ${safe(am.live)};
+let openedOn = ${safe(open.layer)};
+let tabPick = '';
 const SRV = ${safe(srvUrl)};
 const WINDOWS = ${safe(DIGI_WINDOWS)};
 let win = ${safe(open.window)};
 const FOCUS0 = ${safe(open.focus)};
 const APRS_LEG = ${safe(APRS_LEGEND.map((r) => ({ svg: aprsLegendIcon(r, 16).html, words: r.words })))};
-let show = { spots: ${safe(open.layer !== 'aprs')}, aprs: ${safe(open.layer === 'aprs')}, overlay: true };
+let show = { spots: true, aprs: true, mesh: true, beacons: true, overlay: true };   // ★ beta96 every layer in the window
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
  *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
@@ -18971,9 +19021,11 @@ function winSec() { return win === '1h' ? 3600 : win === '24h' ? 86400 : win ===
  *  keeps its count and its modes. Live spots are this page's own, all recent, and honour the window too. */
 function mergeSpots() {
   const by = new Map();
-  for (const s of stored.values()) if (radioOk(s)) by.set(s.callsign, s);   // ★ beta92 the radio filter (a view)
   const nowMs = srvNow ? srvNow * 1000 : Date.now();
   const w = winSec();
+  // ★ beta96 stage 7 the window holds for a stored station between polls too (the server answers for the window; a station
+  //   that ages out of a sliding window leaves at once, as APRS, MESH and BEACONS do — amKeep)
+  for (const s of stored.values()) if (radioOk(s) && amKeep((nowMs - (s.timestamp || 0)) / 1000, win)) by.set(s.callsign, s);   // ★ beta92 the radio filter (a view)
   for (const s of live) {
     if (w && s.timestamp && s.timestamp < nowMs - w * 1000) continue;
     const o = by.get(s.callsign);
@@ -19081,23 +19133,31 @@ function schedulePoll() {
  *  layer alone draws no keys), and the time window only where this server keeps stations. */
 function paintChrome() {
   const lay = document.getElementById('layers');
-  const have = [];
-  if (show.spots || spots.length || srvOk) have.push(['spots', 'SPOTS']);
-  if (show.aprs || aprs.length) have.push(['aprs', 'APRS']);
+  // ★★ beta96 stage 7: a key for each layer with something in the window (or live, or opened on) — the LIVE one first,
+  //   with its red dot (emphasised, never the only one shown)
+  let have = [];
+  const n = amCounts();
+  if (n.spots || srvOk || liveLayer === 'spots' || openedOn === 'spots') have.push(['spots', 'SPOTS']);
+  if (n.aprs || liveLayer === 'aprs' || openedOn === 'aprs') have.push(['aprs', 'APRS']);
+  if (n.mesh || liveLayer === 'mesh' || openedOn === 'mesh') have.push(['mesh', 'MESH']);
+  if (n.beacons || liveLayer === 'beacons' || openedOn === 'beacons') have.push(['beacons', 'BEACONS']);
+  have = have.filter((h) => h[0] === liveLayer).concat(have.filter((h) => h[0] !== liveLayer));
   if (overlay) have.push(['overlay', overlay.label]);
   lay.hidden = have.length < 2;
-  lay.innerHTML = have.map((h) => '<button type="button" data-layer="' + esc(h[0]) + '" aria-pressed="' + (show[h[0]] ? 'true' : 'false') + '">' + esc(h[1]) + '</button>').join('');
+  lay.innerHTML = have.map((h) => '<button type="button" data-layer="' + esc(h[0]) + '"' + (h[0] === liveLayer ? ' class="live" title="Live now — what this receiver is decoding"' : '')
+    + ' aria-pressed="' + (show[h[0]] ? 'true' : 'false') + '">' + esc(h[1]) + '</button>').join('');
   for (const b of lay.querySelectorAll('button')) b.onclick = () => {
     const k = b.dataset.layer; show[k] = !show[k]; paintChrome(); render();
   };
   const ws = document.getElementById('wins');
-  ws.hidden = !srvOk || !show.spots;
+  ws.hidden = !(srvOk || aprs.length || mesh.length || beacons.length);   // ★ beta96 every layer follows the window
   ws.innerHTML = WINDOWS.map((w) => '<button type="button" data-win="' + esc(w.id) + '" title="' + esc(w.words) + '" aria-pressed="' + (w.id === win ? 'true' : 'false') + '">' + esc(w.label) + '</button>').join('');
   for (const b of ws.querySelectorAll('button')) b.onclick = () => {
     if (b.dataset.win === win) return;
     win = b.dataset.win;
     try { if (window.opener) window.opener.postMessage({ type: 'vibesdr-digimap-window', window: win }, OPENER_ORIGIN); } catch (e) { /* the opener went */ }
     paintChrome();
+    render();   // ★ beta96 APRS, MESH and BEACONS follow at once (they are this page's); the spots when the store answers
     fetchStations(true);
   };
   const rs = document.getElementById('rads');
@@ -19161,7 +19221,7 @@ function ensureVibeMap() {
  *    server of its own — all three from web/mapkit/vibemap.js via gen-vibemap-source.mjs. */
 
 // ★ Filled by boot below: the GPU adapter's L, or Leaflet's. Everything that draws waits for it.
-let L = null, map = null, spotLayer = null, aprsLayer = null, overlayLayer = null, vm = null;
+let L = null, map = null, spotLayer = null, aprsLayer = null, overlayLayer = null, vm = null, meshLayer = null, beaconLayer = null;
 
 /* ★★★ THE GPU MAP FIRST — every file from the server that opened this window (GL.base). The
  *     adapter (vibemapgl-compat.js) answers the same L.map / circleMarker / circle / layerGroup
@@ -19227,6 +19287,8 @@ function setupMap() {
   // ★ beta90 the other layers, each its own group so a toggle or a redraw touches only it
   overlayLayer = L.layerGroup().addTo(map);
   aprsLayer = L.layerGroup().addTo(map);
+  meshLayer = L.layerGroup().addTo(map);      // ★ beta96 stage 7
+  beaconLayer = L.layerGroup().addTo(map);
   map.on('zoomend', aprsLabels); aprsLabels();
   if (me) {
     // ★ The receiver is the app's little house (Stuart, 2026-09-28), not a red dot — the same icon on
@@ -19251,6 +19313,8 @@ function drawMarkers() {
   spotLayer.clearLayers();
   drawAprs();
   drawOverlay();
+  if (meshLayer) { if (show.mesh) amDrawMesh(meshLayer, mesh, win, liveLayer === 'mesh'); else meshLayer.clearLayers(); }
+  if (beaconLayer) { if (show.beacons) amDrawBeacons(beaconLayer, beacons, win, liveLayer === 'beacons', me); else beaconLayer.clearLayers(); }
   if (!show.spots) return;
   for (const s of spots) {
     // ★★ V12: the MODE's colour, a dark rim, and (on the GPU map) the mode's LETTER inside — colour is never the only cue.
@@ -19296,7 +19360,7 @@ function drawAprs() {
   if (!aprsLayer) return;
   aprsLayer.clearLayers();
   if (!show.aprs) return;
-  for (const a of aprs) {
+  for (const a of aprsIn()) {
     if (a.trail && a.trail.length >= 2) L.polyline(a.trail, { color: '#88CCEE', weight: 1.5, opacity: 0.7 }).addTo(aprsLayer);
     // ★★ beta92 the symbol at 28 px (src/utils/aprsSymbols.ts), its callsign under it from zoom 8 (aprsLabels)
     const m = a.svg
@@ -19331,7 +19395,8 @@ function digiFitMake() {
   if (digiFit || !map || !window.VibeAutoFit) return digiFit;
   try {
     digiFit = window.VibeAutoFit.attach(map, {
-      points: () => digiShownPoints(show.spots ? spots : [], () => true, aprs, show.aprs),
+      points: () => digiShownPoints(show.spots ? spots : [], () => true, aprsIn(), show.aprs)
+        .concat(show.mesh ? meshIn().map((x) => [x.lat, x.lon]) : []).concat(show.beacons ? beaconsIn().map((x) => [x.lat, x.lon]) : []),
       receiver: () => me, button: document.getElementById('fitBtn'), what: 'station shown', maxZoom: ${DIGI_FIT_MAX_ZOOM} });
   } catch (e) { console.error('auto fit', e); digiFit = null; }
   return digiFit;
@@ -19340,7 +19405,8 @@ function digiFitMake() {
 let focusKey = FOCUS0;
 function focusOnce() {
   if (!focusKey || !map) return;
-  const a = aprs.find((x) => x.key === focusKey || x.call === focusKey);
+  const a = aprs.find((x) => x.key === focusKey || x.call === focusKey)
+    || mesh.find((x) => x.key === focusKey || x.name === focusKey) || beacons.find((x) => x.key === focusKey || x.call === focusKey);
   const s = a ? null : spots.find((x) => x.callsign === focusKey);
   const p = a || s;
   if (!p) return;
@@ -19372,22 +19438,77 @@ function statItems() {
 
 // ★ Everything below reads the spots list, so it all has to live in here to be re-runnable.
 // (No backticks in this comment: it sits inside a template literal and would end the string.)
+/* ★★★ beta96 stage 7 THE WINDOW FOR EVERY LAYER (amKeep, src/utils/amateurMap.ts AMATEUR_JS): APRS, MESH and BEACONS
+ *  show what was heard in the HEARD IN window — the same window as the spots (whose store answers for it). */
+${AMATEUR_JS}
+function aprsIn() { return aprs.filter((a) => amKeep(a.age, win)); }
+function meshIn() { return mesh.filter((x) => amKeep(x.age, win)); }
+function beaconsIn() { return beacons.filter((x) => amKeep(x.age, win)); }
+function amCounts() { return { spots: spots.length, aprs: aprsIn().length, mesh: meshIn().length, beacons: beaconsIn().length }; }
+function cleanMesh(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => ({
+    key: okStr(x.key, /[<>&"'\`]/g, 48), name: okStr(x.name, /[<>&"'\`]/g, 40) || '?', net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',
+    lat: Math.max(-90, Math.min(90, okNum(x.lat))), lon: Math.max(-180, Math.min(180, okNum(x.lon))), age: Math.max(0, okNum(x.age)),
+    approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live }));
+}
+function cleanBeacons(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 18).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => ({
+    key: okStr(x.key, /[<>&"'\`]/g, 20), call: okStr(x.call, /[^A-Za-z0-9/]/g, 12), where: okStr(x.where, /[<>&"'\`]/g, 60),
+    lat: Math.max(-90, Math.min(90, okNum(x.lat))), lon: Math.max(-180, Math.min(180, okNum(x.lon))), age: Math.max(0, okNum(x.age)),
+    bands: Array.isArray(x.bands) ? x.bands.slice(0, 5).map((b) => okStr(b, /[^0-9a-z ]/g, 8)) : [], best: Math.max(0, Math.min(4, Math.round(okNum(x.best)))) }));
+}
+mesh = cleanMesh(mesh); beacons = cleanBeacons(beacons);
+/* ★★ THE LIST, IN TABS (SPOTS · APRS · MESH · BEACONS): a tab for each layer with something in the window (and the live
+ *  one), the viewer's pick kept, else the live layer's, else the one opened on. Rows capped (300 — the 1 GB phones' rule);
+ *  a row centres its station. */
+function amTabsNow() {
+  const n = amCounts();
+  return ['spots', 'aprs', 'mesh', 'beacons'].filter((t) => n[t] > 0 || t === liveLayer || t === openedOn);
+}
+function amList() {
+  const host = document.getElementById('amRows'), th = document.getElementById('amTabs');
+  if (!host || !th) return;
+  const tabs = amTabsNow(), n = amCounts();
+  const tab = tabs.indexOf(tabPick) >= 0 ? tabPick : tabs.indexOf(liveLayer) >= 0 ? liveLayer : tabs.indexOf(openedOn) >= 0 ? openedOn : tabs[0] || 'spots';
+  const LBL = { spots: 'SPOTS', aprs: 'APRS', mesh: 'MESH', beacons: 'BEACONS' };
+  th.innerHTML = tabs.map((t) => '<button type="button" role="tab" data-tab="' + t + '" aria-selected="' + (t === tab) + '">' + LBL[t] + ' ' + n[t] + '</button>').join('');
+  for (const b of th.querySelectorAll('button')) b.onclick = () => { tabPick = b.dataset.tab; amList(); };
+  const nowMs = srvNow ? srvNow * 1000 : Date.now();
+  let rows = '';
+  if (tab === 'spots') rows = spots.slice().sort((a, b) => b.timestamp - a.timestamp).slice(0, 300).map((s) => amRow(s.callsign, s.colour, s.callsign,
+      [s.mode, s.band, s.country, s.stored ? amSrcWords(s.src) : 'Heard by this page\u2019s decoder'].filter(Boolean).join(' \u00b7 '),
+      (s.km != null ? s.km + ' km \u00b7 ' : '') + amAgo((nowMs - s.timestamp) / 1000))).join('');
+  else if (tab === 'aprs') rows = aprsIn().slice(0, 300).map((a) => amRow(a.key, '#88CCEE', a.call, [a.symName || 'APRS', a.comment].filter(Boolean).join(' \u00b7 '),
+      (a.km != null ? a.km + ' km \u00b7 ' : '') + amAgo(a.age))).join('');
+  else if (tab === 'mesh') rows = meshIn().slice(0, 300).map((x) => amRow(x.key, AM_MESH_COL[x.net] || '#67ea94', x.name, [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), amAgo(x.age))).join('');
+  else rows = beaconsIn().map((x) => amRow(x.key, '#d2a8ff', x.call, x.where + ' \u00b7 ' + x.bands.join(' '), amAgo(x.age))).join('');
+  host.innerHTML = rows || '<div class="amEmpty">' + esc(tab === 'mesh' ? 'No mesh node with a position in this window — ISM mode hears MeshCore and Meshtastic.'
+    : tab === 'beacons' ? 'No NCDXF beacon heard in this window — the NCDXF decoder tracks them.' : tab === 'aprs' ? 'No APRS station with a position in this window.' : 'No station with a locator in this window.') + '</div>';
+  for (const r of host.querySelectorAll('.amRow')) {
+    const go = () => { focusKey = r.dataset.k || ''; if (digiFit) digiFit.pause(); focusOnce(); };
+    r.onclick = go; r.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  }
+}
 function render() {
-const shown = (show.spots ? spots.length : 0) + (show.aprs ? aprs.length : 0);
+const nc = amCounts();
+const shown = (show.spots ? nc.spots : 0) + (show.aprs ? nc.aprs : 0) + (show.mesh ? nc.mesh : 0) + (show.beacons ? nc.beacons : 0);
 document.getElementById('count').textContent = String(shown);
 document.getElementById('countWhat').textContent = shown === 1 ? 'station' : 'stations';
 document.getElementById('empty').textContent = shown ? ''
-  : show.aprs && !show.spots ? 'No APRS station with a position yet — leave the APRS decoder running.'
+  : show.aprs && !show.spots ? 'No APRS station with a position in ' + (WINDOWS.find((w) => w.id === win) || { words: 'this window' }).words + ' — leave the APRS decoder running.'
   : 'No stations with a locator in ' + (WINDOWS.find((w) => w.id === win) || { words: 'this window' }).words + (srvOk ? '' : ' yet') + ' — leave DIGITAL SPOTS running.';
 drawMarkers();
 fitOnce();
 const st = digiStats(statItems(), me);
-const ak = aprs.filter((a) => a.km != null).sort((a, b) => b.km - a.km);
+const aw = aprsIn();
+const ak = aw.filter((a) => a.km != null).sort((a, b) => b.km - a.km);
 const pan = digiStatsHtml(st, {
   modes: MODES, modeColour: modeColour,
   rx: me ? RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') : '',
-  aprs: { n: aprs.length, on: show.aprs, far: ak.length ? { km: ak[0].km, call: ak[0].call } : null, leg: APRS_LEG,
-          only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '', today: digiAprsToday(aprs, Date.now()) },   // ★ beta95
+  aprs: { n: aw.length, on: show.aprs, far: ak.length ? { km: ak[0].km, call: ak[0].call } : null, leg: APRS_LEG,
+          only: !show.spots && show.aprs, newest: aw.length ? aw[0].call : '', today: digiAprsToday(aprs, Date.now()) },   // ★ beta95 · beta96 the window
   svgOk: okSvg, overlay: overlay,
   tot: { srvOk: srvOk, winWords: (WINDOWS.find((w) => w.id === win) || { words: '' }).words, drawn: stored.size, total: srvTotal, trunc: srvTrunc,
          unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent,
@@ -19396,6 +19517,7 @@ const pan = digiStatsHtml(st, {
 document.getElementById('stats').innerHTML = pan.stats;
 document.getElementById('legend').innerHTML = pan.legend;
 document.getElementById('summary').innerHTML = pan.summary;
+amList();   // ★ beta96 stage 7 the tabs
 
 }
 render();                                        // the statistics at once, map or no map
@@ -19409,9 +19531,13 @@ addEventListener('message', (ev) => {
   live = cleanSpots(ev.data.spots);
   if ('aprs' in ev.data) aprs = cleanAprs(ev.data.aprs);
   if ('overlay' in ev.data) overlay = cleanOverlay(ev.data.overlay);
-  // ★ opened again from somewhere else: that layer shown (and fitted), that station centred
-  if (ev.data.layer === 'aprs' || ev.data.layer === 'spots') {
+  if ('mesh' in ev.data) mesh = cleanMesh(ev.data.mesh);           // ★ beta96 stage 7
+  if ('beacons' in ev.data) beacons = cleanBeacons(ev.data.beacons);
+  if ('live' in ev.data) liveLayer = ['spots', 'aprs', 'mesh', 'beacons'].indexOf(ev.data.live) >= 0 ? ev.data.live : '';
+  // ★ opened again from somewhere else: that layer shown (and fitted), its tab, that station centred
+  if (ev.data.layer === 'aprs' || ev.data.layer === 'spots' || ev.data.layer === 'mesh' || ev.data.layer === 'beacons') {
     const l = ev.data.layer;
+    openedOn = l; tabPick = '';
     if (!show[l]) { show[l] = true; fitted = false; refitWanted = true; }
   }
   if (typeof ev.data.focus === 'string' && ev.data.focus) focusKey = okStr(ev.data.focus, /[<>&"'\`]/g, 40);
@@ -19450,7 +19576,7 @@ const bind = (id, el) => {
   document.getElementById(id).onchange = (e) =>
     document.getElementById(el).classList.toggle('hide', !e.target.checked);
 };
-bind('tStats', 'stats'); bind('tSummary', 'summary'); bind('tLegend', 'legend');
+bind('tStats', 'stats'); bind('tSummary', 'summary'); bind('tLegend', 'legend'); bind('tList', 'amList');   // ★ beta96 stage 7
 ${ES}`;
 }
 

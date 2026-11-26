@@ -177,6 +177,7 @@ import { parseSkimBands, skimPickable, type SkimBands, type SkimKind } from '../
 import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
          mergeRttyHistory, type CwList, type CwSpot } from '../services/cwList';
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
+import { amMeshPoints, amBeaconPoints, amLiveOf } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { NCDXF_BANDS, NCDXF_CALLS, ncdxfFollowAllowed, ncdxfFollowBand, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { TONES_DEFAULTS, type TonesOptions } from '../services/tones';   // ★ V12 DTMF + 5-tone
 import { BALLOON_AUTO, balloonMerge, type BalloonPayload, type BalloonPicture, type BalloonReport, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
@@ -12567,6 +12568,13 @@ export default function SDRScreen({ route, navigation }: Props) {
                        const a = Math.sin((la - rx.lat) * d2r / 2) ** 2 + Math.cos(rx.lat * d2r) * Math.cos(la * d2r) * Math.sin((lo - rx.lon) * d2r / 2) ** 2;
                        return Math.round(2 * r * Math.asin(Math.min(1, Math.sqrt(a)))); }) : null),
     [localMapOpen, digiAprsOn, aprsList, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta96 stage 7 THE AMATEUR MAP (src/utils/amateurMap.ts): MESH (ISM's live report + this band's remembered nodes),
+   *  BEACONS (the NCDXF tracker's report) and the LIVE layer — every layer follows the map's HEARD IN window (the page). */
+  const amateur = useMemo(() => (localMapOpen && digiStorePolling ? {
+    mesh: amMeshPoints(ismReport?.devices ?? [], ismStored?.nodes ?? [], Math.floor(Date.now() / 1000)),
+    beacons: amBeaconPoints(ncdxfReport, NCDXF_BANDS.map((b) => b.label)),
+    live: amLiveOf(activeDecoder ?? (spotsKind === 'digi' ? 'spots' : ''), ismOn),
+  } : null), [localMapOpen, digiStorePolling, ismReport, ismStored, ncdxfReport, activeDecoder, spotsKind, ismOn]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
@@ -18355,6 +18363,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDigiWindow={(w) => { setDigiWin(w); setDigiStore(new Map()); }}
         aprsPoints={digiAprs}
         aprsFocus={aprsFocus}
+        amateur={amateur}
         digiOverlay={digiOverlay}
         digiRadios={digiStorePolling ? digiRadios : null}
         digiWindow={digiWin}

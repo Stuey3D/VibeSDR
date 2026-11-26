@@ -91,6 +91,7 @@ import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM, DIGI_WINDOWS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
 import { DIGI_STATS_JS, DIGI_WIDE_PX, digiPanelsOf, type DigiPanelsShown } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
+import { AMATEUR_JS, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import DigiMapKeys from './DigiMapKeys';
 import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the window and panel keys (the pad reaches them)
 /* ★★★ beta92 ONE AUTO FIT FOR EVERY MAP (Stuart 11-23: "all maps to have an auto fit that gently glides the zoom in and out
@@ -225,6 +226,8 @@ interface MapOverlayProps {
   onDigiWindow?: (w: string) => void;
   /** ★★ V12 beta90 APRS on the DIGI MODES MAP: the APRS box's stations (digiMap.ts DigiAprsPoint shape), and a key to open on. */
   aprsPoints?: unknown[] | null;
+  /** ★★★ beta96 stage 7 THE AMATEUR MAP (kind 'digi', the server's): MESH, BEACONS and the live layer (src/utils/amateurMap.ts). */
+  amateur?: { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | '' } | null;
   aprsFocus?: string;
   /** ★★ V12 beta90 a caller's overlay on the DIGI MODES MAP (digiMapShared.ts DigiMapOverlay — a satellite pass). */
   digiOverlay?: unknown | null;
@@ -310,7 +313,7 @@ function buildHtml(
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
   const TITLE = isHfdl ? 'HFDL MAP' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'airsea' ? MAP_TITLE.airsea : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'airsea' ? MAP_TITLE.airsea : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'AMATEUR MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
   const CNT_ICON = kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : kind === 'vormap' ? '&#11041;' : aero || kind === 'avdata' || kind === 'airsea'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
@@ -712,6 +715,8 @@ ${isSpots ? `
   <span class="flabel">FILTER</span>
   ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${legendModes.map((m) => `<option>${esc(m)}</option>`).join('')}</select>` : ''}
   ${kind === 'digi' ? '<button type="button" id="fAprs" class="fkey" hidden title="APRS stations from the APRS decoder — tap to show or hide">APRS</button>' : ''}
+  ${kind === 'digi' ? '<button type="button" id="fMesh" class="fkey" hidden title="MeshCore and Meshtastic nodes (ISM) — tap to show or hide">MESH</button>' : ''}
+  ${kind === 'digi' ? '<button type="button" id="fBcn" class="fkey" hidden title="NCDXF / IARU beacons heard — tap to show or hide">BEACONS</button>' : ''}
   ${kind === 'digi' ? '<select id="fRadio" hidden aria-label="Radio" title="Which of this server\'s radios heard it"></select>' : ''}
   <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'].map((b) => `<option>${b}</option>`).join('')}</select>
   <select id="fAge">${kind === 'digi' && storeWindows
@@ -1988,9 +1993,9 @@ if(KIND==='digi'||KIND==='cw'){
   function aprsSvgOk(v){v=String(v||'');return v.length<4000&&/^<svg [^]*<.svg>$/.test(v)&&!/<scr[i]pt|<foreignObject|[\\s]on[\\w]+[\\s]*=|javascript:|href[\\s]*=/i.test(v)?v:'';}
   function aprsDraw(){
     aprsGroup.clearLayers();
-    var kb=document.getElementById('fAprs');if(kb){kb.hidden=!aprsPts.length;kb.textContent='APRS '+aprsPts.length;kb.classList.toggle('on',aprsOn);}
+    var kb=document.getElementById('fAprs'),na=aprsPts.filter(function(a){return amKeep(a.age,amWin());}).length;if(kb){kb.hidden=!na&&amLive!=='aprs';kb.textContent=(amLive==='aprs'?'\u25CF ':'')+'APRS '+na;kb.classList.toggle('on',aprsOn);}
     if(!aprsOn)return;
-    aprsPts.forEach(function(a){
+    aprsPts.filter(function(a){return amKeep(a.age,amWin());}).forEach(function(a){   // ★★ beta96 stage 7 the HEARD IN window, as the spots
       if(a.trail&&a.trail.length>=2)L.polyline(a.trail,{color:'#88CCEE',weight:1.5,opacity:0.7}).addTo(aprsGroup);
       var svg=aprsSvgOk(a.svg);
       // ★★ beta92 the symbol at 28 px (src/utils/aprsSymbols.ts), its callsign under it from zoom 8 (aprsLabels)
@@ -2015,6 +2020,37 @@ if(KIND==='digi'||KIND==='cw'){
     aprsDraw();}catch(e){console.error('aprs push',e);}};
   var aprsKey=document.getElementById('fAprs');
   if(aprsKey)aprsKey.addEventListener('click',function(){aprsOn=!aprsOn;aprsDraw();});
+  /* ★★★ beta96 STAGE 7 THE AMATEUR MAP (src/utils/amateurMap.ts AMATEUR_JS): MESH (MeshCore / Meshtastic, ISM's live report
+   *  and the server's remembered nodes) and BEACONS (NCDXF), pushed by React Native (__amPush); every layer follows the
+   *  HEARD IN window (the age keys — Stuart's rule: background decoding's and every listener's alike); the LIVE layer's key
+   *  (what this receiver decodes now) carries the red dot. */
+  ${kind === 'digi' ? AMATEUR_JS : ''}
+  var meshGroup=L.layerGroup().addTo(map),bcnGroup=L.layerGroup().addTo(map),amMesh=[],amBcn=[],amLive='',meshOn=true,bcnOn=true;
+  function amWin(){var v=fAge?String(fAge.value):'ALL';return v==='ALL'?'all':v;}
+  function amDraw(){
+    var mk=document.getElementById('fMesh'),bk=document.getElementById('fBcn');
+    var mIn=meshOn?amDrawMesh(meshGroup,amMesh,amWin(),amLive==='mesh'):(meshGroup.clearLayers(),[]);
+    var bIn=bcnOn?amDrawBeacons(bcnGroup,amBcn,amWin(),amLive==='beacons',(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null):(bcnGroup.clearLayers(),[]);
+    var nm=amMesh.filter(function(x){return amKeep(x.age,amWin());}).length,nb=amBcn.filter(function(x){return amKeep(x.age,amWin());}).length;
+    if(mk){mk.hidden=!nm&&amLive!=='mesh';mk.textContent=(amLive==='mesh'?'\u25CF ':'')+'MESH '+nm;mk.classList.toggle('on',meshOn);}
+    if(bk){bk.hidden=!nb&&amLive!=='beacons';bk.textContent=(amLive==='beacons'?'\u25CF ':'')+'BEACONS '+nb;bk.classList.toggle('on',bcnOn);}
+    if(digiFit)digiFit.poke();
+  }
+  window.__amPush=function(json){try{var o=JSON.parse(json);if(!o||typeof o!=='object')return;
+    var okp=function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));};
+    amMesh=(Array.isArray(o.mesh)?o.mesh:[]).filter(okp).slice(0,1000).map(function(x){return {key:String(x.key||'').slice(0,48),name:String(x.name||'?').slice(0,40),
+      net:x.net==='MeshCore'?'MeshCore':'Meshtastic',lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),age:Math.max(0,Number(x.age)||0),
+      approx:!!x.approx,what:String(x.what||'').slice(0,40),live:!!x.live};});
+    amBcn=(Array.isArray(o.beacons)?o.beacons:[]).filter(okp).slice(0,18).map(function(x){return {key:String(x.key||'').slice(0,20),call:String(x.call||'').slice(0,12),
+      where:String(x.where||'').slice(0,60),lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),age:Math.max(0,Number(x.age)||0),
+      bands:Array.isArray(x.bands)?x.bands.slice(0,5).map(function(b){return String(b).slice(0,8);}):[],best:Math.max(0,Math.min(4,Math.round(Number(x.best)||0)))};});
+    amLive=['spots','aprs','mesh','beacons'].indexOf(o.live)>=0?o.live:'';
+    amDraw();aprsDraw();}catch(e){console.error('amateur push',e);}};
+  var meshKey=document.getElementById('fMesh'),bcnKey=document.getElementById('fBcn');
+  if(meshKey)meshKey.addEventListener('click',function(){meshOn=!meshOn;amDraw();});
+  if(bcnKey)bcnKey.addEventListener('click',function(){bcnOn=!bcnOn;amDraw();});
+  if(fAge)fAge.addEventListener('change',function(){aprsDraw();amDraw();});
+  if(window.__pendingAm){window.__amPush(window.__pendingAm);window.__pendingAm=null;}
   function aprsLabels(){try{document.body.classList.toggle('aprsLb',map.getZoom()>=8);}catch(e){}}
   map.on('zoomend',aprsLabels);aprsLabels();
   /* ★★ beta92 THE FIT KEY (Stuart 11-23: "spots map could do with the auto fit button too") — the AIS / APRS maps' FIT,
@@ -2025,7 +2061,9 @@ if(KIND==='digi'||KIND==='cw'){
    *  (Stuart 11-23: "include the receiver"), keeps doing so as stations come and go, pauses when the map is moved by
    *  hand; the FIT key is its AUTO key. Never past DIGI_FIT_MAX_ZOOM. */
   digiFit=window.VibeAutoFit?VibeAutoFit.attach(map,{
-    points:function(){return digiShownPoints(spots,function(s){return !!markers[key(s)];},aprsPts,aprsOn);},
+    points:function(){return digiShownPoints(spots,function(s){return !!markers[key(s)];},aprsPts.filter(function(a){return amKeep(a.age,amWin());}),aprsOn)
+      .concat(meshOn?amMesh.filter(function(x){return amKeep(x.age,amWin());}).map(function(x){return [x.lat,x.lon];}):[])
+      .concat(bcnOn?amBcn.filter(function(x){return amKeep(x.age,amWin());}).map(function(x){return [x.lat,x.lon];}):[]);},
     receiver:function(){return (RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null;},
     button:document.getElementById('snap'),what:'station shown',maxZoom:${DIGI_FIT_MAX_ZOOM}}):null;
   if(window.__pendingAprs){window.__aprsPush(window.__pendingAprs[0],window.__pendingAprs[1]);window.__pendingAprs=null;}
@@ -2148,7 +2186,7 @@ if(KIND==='digi'||KIND==='cw'){
   window.__digiKeysH=function(h){document.body.style.setProperty('--dkh',(Number(h)||0)+'px');};
   /* the window keys (DigiMapKeys): the age filter follows (the server's answer comes in through the spots) */
   window.__digiWin=function(w){if(!fAge)return;var v=String(w)==='all'?'ALL':String(w);
-    for(var i=0;i<fAge.options.length;i++)if(fAge.options[i].value===v){if(fAge.value!==v){fAge.value=v;rebuild();}return;}};
+    for(var i=0;i<fAge.options.length;i++)if(fAge.options[i].value===v){if(fAge.value!==v){fAge.value=v;rebuild();if(typeof amDraw==='function'){aprsDraw();amDraw();}}return;}};
   if(!isCW){
     if(fAge&&STORE_WIN)fAge.hidden=true;   // ★ the 1H · 24H · 7D · 30D · ALL keys replace it
     Object.keys(dEls).forEach(function(k){var el=dEls[k];if(!el)return;
@@ -2285,7 +2323,7 @@ function spotToData(s: SpotRow) {
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
-    storeWindows, onDigiWindow, aprsPoints, aprsFocus, digiOverlay, digiRadios, digiWindow, digiTotals }:
+    storeWindows, onDigiWindow, aprsPoints, aprsFocus, amateur, digiOverlay, digiRadios, digiWindow, digiTotals }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2447,6 +2485,13 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`(window.__aprsPush?window.__aprsPush(${lit},${f}):(window.__pendingAprs=[${lit},${f}]));true;`);
   };
   useEffect(() => { if (visible) pushAprs(); }, [visible, aprsPoints, aprsFocus]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta96 stage 7 MESH, BEACONS and the live layer, double-encoded as the APRS points are; parked until the page's handler exists */
+  const pushAm = () => {
+    if (kind !== 'digi' || !amateur) return;
+    const lit = JSON.stringify(JSON.stringify(amateur)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    webRef.current?.injectJavaScript(`(window.__amPush?window.__amPush(${lit}):(window.__pendingAm=${lit}));true;`);
+  };
+  useEffect(() => { if (visible) pushAm(); }, [visible, amateur]); // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★ V12 beta92 the radio filter's choices (logRadio.ts): null → [] (the select hides). Double-encoded as the spots are. */
   const radiosKey = JSON.stringify(digiRadios ?? []);
   useEffect(() => {
@@ -2710,7 +2755,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
                                                     webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);

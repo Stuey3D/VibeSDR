@@ -13,7 +13,8 @@
 
 import type { DigiMapOverlay } from '../../../src/utils/digiMapShared';
 
-export type DigiMapLayer = 'spots' | 'aprs';
+/** ★★★ beta96 stage 7 THE AMATEUR MAP's layers (src/utils/amateurMap.ts): + MESH (MeshCore / Meshtastic) and BEACONS (NCDXF). */
+export type DigiMapLayer = 'spots' | 'aprs' | 'mesh' | 'beacons';
 
 export interface DigiMapOpts {
   /** The layer it opens on (shown, fitted, first). Default 'spots'. */
