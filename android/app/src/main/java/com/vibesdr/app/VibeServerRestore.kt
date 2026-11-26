@@ -466,7 +466,8 @@ object VibeServerRestore {
         //     lost the server". The switch is a STANDING INSTRUCTION, not a one-off action, so it
         //     is re-established here where the port it needs has just been bound.
         // ★ Never allowed to fail the start: restoreIfWanted swallows everything.
-        if (port > 0) VibeTunnel.restoreIfWanted(ctx, port)
+        // ★★★ beta96 …unless it is a VibeServer Simple, which is local network only (VibeServerBoot.isSimple).
+        if (port > 0 && !VibeServerBoot.isSimple(cfg)) VibeTunnel.restoreIfWanted(ctx, port)
         if (port > 0) VibeGeoData.start(ctx)
         if (port > 0) VibeMapGL.start(ctx)   // the GPU map — see VibeMapGL
         // ★★ STATION LOGOS FROM THE BROADCASTER, wired on BOTH start paths. The geo lookup above

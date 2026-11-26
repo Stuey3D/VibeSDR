@@ -133,7 +133,13 @@ object VibeServerOps {
             ?: return@stallWatched fail("no_usb", "USB service unavailable")
         val dev = findDevice(mgr, a) ?: return@stallWatched fail("no_device", "No SDR found")
         if (!mgr.hasPermission(dev)) return@stallWatched fail("no_permission", "Allow this app to use the radio, then press Start again")
-        val cfg = a.optJSONObject("cfg") ?: return@stallWatched fail("bad_config", "the server was not given its settings")
+        val cfgIn = a.optJSONObject("cfg") ?: return@stallWatched fail("bad_config", "the server was not given its settings")
+        /* ★★★ beta96 VIBESERVER SIMPLE sends only its four (src/utils/serverChoice.ts simpleStartConfig). They go INTO the
+         *  one settings store, which keeps every Full setting for the day the owner goes back to Full; the engine then runs
+         *  the Simple view of it (VibeServerBoot.effective — local network only). */
+        val cfg = if (VibeServerBoot.isSimple(cfgIn))
+            VibeServerBoot.simpleMerge(try { VibeRemoteSetup.settings(ctx) } catch (_: Throwable) { JSONObject() }, cfgIn)
+        else cfgIn
 
         stopEngine(ctx)
         rtlStop(ctx)
@@ -158,7 +164,10 @@ object VibeServerOps {
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = true,
                                                 keepRadioAlive = VibeServerBoot.keepRadioAlive(ctx, cfg))
         VibeServerBoot.startBatteryMonitor(ctx)
-        if (port > 0) VibeTunnel.restoreIfWanted(ctx, port)
+        // ★★★ beta96 a Simple server is LOCAL NETWORK ONLY: its public listing is not put back (the owner's standing
+        //     instruction is kept for Full — not a delist), and a tunnel still up from before is closed.
+        if (port > 0 && !VibeServerBoot.isSimple(cfg)) VibeTunnel.restoreIfWanted(ctx, port)
+        if (port > 0 && VibeServerBoot.isSimple(cfg)) try { VibeTunnel.pauseForServerStop() } catch (_: Throwable) {}
         if (port > 0) VibeGeoData.start(ctx)
         if (port > 0) VibeMapGL.start(ctx)
         if (port > 0) {
@@ -176,7 +185,7 @@ object VibeServerOps {
         val ip = localIp() ?: "0.0.0.0"
         if (ip != "0.0.0.0") {
             acquireMulticastLock(ctx)
-            VibeLocalSDR.startMdns(hostSlug(name), ip)
+            VibeLocalSDR.startMdns(hostSlug(VibeServerBoot.mdnsName(cfg)), ip)
         }
         RtlTcpServerService.start(ctx, name, ip, port, "vibeserver")
         if (icom) VibeIcom.onServerStarted(ctx)
@@ -232,7 +241,7 @@ object VibeServerOps {
                     return@synchronized
                 }
                 val ip = localIp() ?: ""
-                val name = VibeServerBoot.name(VibeRemoteSetup.settings(app))
+                val name = VibeServerBoot.mdnsName(VibeRemoteSetup.settings(app))
                 if (ip.isNotEmpty()) { acquireMulticastLock(app); VibeLocalSDR.startMdns(hostSlug(name), ip) }
                 Log.i(TAG, "restarted with the settings saved on the remote page")
             }

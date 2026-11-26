@@ -1245,6 +1245,12 @@ target_include_directories(test-mdns PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-mdns)
 target_link_libraries(test-mdns PRIVATE Threads::Threads)
 add_test(NAME mdns COMMAND test-mdns)
+# ★★★ beta96 "Set up on another device" — the one-time setup code (vibe_setup_code.h), first-time setup only.
+add_executable(test-setup-code "${CMAKE_CURRENT_SOURCE_DIR}/test-setup-code.cpp")
+target_include_directories(test-setup-code PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-setup-code)
+target_link_libraries(test-setup-code PRIVATE Threads::Threads)
+add_test(NAME setup-code COMMAND test-setup-code)
 # ★★ Wi-Fi QoS (vibe_wifi_qos.h, 2026-10-20, docs/BRIEF-portable-wifi-realtime.md): audio marked voice, the waterfall and
 #    the map never; on Linux SO_PRIORITY is read back AFTER IP_TOS (which rewrites it). And the audio-first rule — the
 #    waterfall yields while a listener's audio is queued — on a synthetic clock.

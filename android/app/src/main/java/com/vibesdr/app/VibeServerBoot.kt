@@ -132,7 +132,49 @@ object VibeServerBoot {
 
     /** The name the server advertises. Read here so both callers agree on the default. */
     fun name(cfg: JSONObject): String = cfg.s("name", "VibeSDR").ifEmpty { "VibeSDR" }
-    fun pin(cfg: JSONObject): String = cfg.s("pin", "")
+    fun pin(cfg: JSONObject): String = effective(cfg).s("pin", "")
+    /** ★★ beta96 the address on this network: the owner's own (VibeServer Simple / Full, "mdnsName") or, as it always was,
+     *  made from the server name. VibeServerOps.hostSlug turns either into the label. */
+    fun mdnsName(cfg: JSONObject): String = cfg.s("mdnsName").trim().ifEmpty { name(cfg) }
+
+    // ── ★★★ beta96 VIBESERVER SIMPLE (src/utils/serverChoice.ts — the same three lists, test_server_choice.ts compares) ──
+    // The store keeps every Full setting; a config marked "simple" RUNS a view of it: Simple's own four, the radio's own
+    // front-end settings, the engine's defaults for everything else, and LOCAL NETWORK ONLY (LAN_ONLY_OFF + no tunnel).
+    val SIMPLE_KEYS = listOf("name", "mdnsName", "sampleRate", "lockedRate", "rateLock", "maxFftRate", "simple")
+    val RADIO_KEYS = listOf(
+        "ppm", "ppb", "biasT", "directSampling", "autoDirectSampling", "directSamplingBelowHz",
+        "converterOffsetHz", "converterInputLoHz", "converterInputHiHz",
+        "rtlAgc", "tunerBwAuto", "restGain", "agcLock", "gainLimits", "gainLocks", "gainSplits", "gainCurves", "ifBwLimits",
+        "rspVibeAgc", "nbWide",
+        "rfNotch", "dabNotch", "rspAmNotch", "rspHdr", "rspExtRef", "rspDabDecim", "rfAgc", "autoNotch", "userNotch",
+        "dabAgcOverride", "dabAgcTarget", "agcSet", "agcSetLock",
+        "icomBaud", "icomCiv", "icomScopeSpeed", "icomTuneLock", "icomPowerOn", "icomAutoOff", "icomOffDelayMin",
+        "antennaSwitch", "antennaMap", "antennaLocked", "antennaNames", "radioLabel", "keepRadioAlive",
+        "adminPassword", "autoRestore", "advertise")
+    /** LAN_ONLY_OFF — community map, PSK Reporter / WSPRnet, DMR ID lookups, the ADS-B feed, background decoding, DX scan. */
+    val LAN_ONLY_OFF_FALSE = listOf("communityMap", "pskrOn", "wsprnetOn", "dmrIdLookup")
+    val LAN_ONLY_OFF_EMPTY = listOf("adsbFeed", "bgDecode", "dxScan")
+
+    fun isSimple(cfg: JSONObject): Boolean = cfg.optBoolean("simple", false)
+
+    /** What the engine runs for a Simple server (serverChoice.ts simpleView). Anything else = the config itself. */
+    fun effective(cfg: JSONObject): JSONObject {
+        if (!isSimple(cfg)) return cfg
+        val out = JSONObject()
+        for (k in SIMPLE_KEYS + RADIO_KEYS) if (cfg.has(k)) out.put(k, cfg.get(k))
+        for (k in LAN_ONLY_OFF_FALSE) out.put(k, false)
+        for (k in LAN_ONLY_OFF_EMPTY) out.put(k, "")
+        out.put("maxUsers", 1); out.put("advanced", false); out.put("pin", ""); out.put("webServer", true)
+        return out
+    }
+
+    /** The store after a Simple Start (serverChoice.ts simpleMerge): everything kept, Simple's own keys replaced. */
+    fun simpleMerge(stored: JSONObject, incoming: JSONObject): JSONObject {
+        val out = JSONObject(stored.toString())
+        for (k in SIMPLE_KEYS) if (incoming.has(k)) out.put(k, incoming.get(k))
+        out.put("simple", true)
+        return out
+    }
     fun advertise(cfg: JSONObject): Boolean = cfg.b("advertise", true)
     fun autoRestore(cfg: JSONObject): Boolean = cfg.b("autoRestore", true)
 
@@ -237,8 +279,11 @@ object VibeServerBoot {
     /** ★ Where the boosted-rate guard lives (vibe_rate_guard.h): one radio per phone, so one file. */
     fun rateGuardBase(filesDir: File): String = File(filesDir, "vibe_rate_guard").absolutePath
 
-    fun applyAndStart(cfg: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File,
+    fun applyAndStart(cfgIn: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File,
                       serveOnLan: Boolean, keepRadioAlive: Boolean): Int {
+        // ★★★ beta96 a Simple server runs its view (local network only) — on EVERY start path: the screen, the restore,
+        //     a restart for the /setup page. The stored config itself is never changed here.
+        val cfg = effective(cfgIn)
         val centerFreq = cfg.n("centerFreq", 100_000_000.0)
         val sampleRate = cfg.n("sampleRate", 2_400_000.0)
         // ★★★ THE RESTING GAIN IS ALSO THE STARTING GAIN, and until now it was neither.

@@ -289,6 +289,9 @@ object VibeRemoteSetup {
             val merged: JSONObject
             synchronized(this) {
                 merged = settings(ctx)
+                // ★★★ beta96 a VibeServer Simple is local network only — the page may not list it (Full in the app can).
+                if (listingAct == true && VibeServerBoot.isSimple(merged))
+                    return "This server runs as VibeServer Simple, which is local network only. Choose VibeServer Full in the app to list it on vibesdr.net."
                 if (listingAct == true && !listedNow) {
                     val trial = JSONObject(merged.toString())
                     val ks = p.keys(); while (ks.hasNext()) { val k = ks.next(); if (!p.isNull(k)) trial.put(k, p.get(k)) }
