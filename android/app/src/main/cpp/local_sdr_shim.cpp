@@ -1070,6 +1070,7 @@ static void endWholeRadioModesForStop() {
     const bool ism = g_ismMode.exchange(false), ndb = g_ndbMode.exchange(false), ais = g_aisMode.exchange(false),
                av = g_avMode.exchange(false), sd = g_sdMode.exchange(false), vor = g_vorMode.exchange(false);
     g_avBoostFrom.store(0.0);
+    g_av.stop();   // ★★★ beta96 b96-keeprun: the datalink's service too (kept VDL2, or VDL2 riding a pass) — the next start builds afresh
     const bool dab = g_dabMode.load();
     if (dab) dabModeEnd();
     if (adsb || ism || ndb || ais || av || sd || vor || dab)

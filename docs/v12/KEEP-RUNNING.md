@@ -23,7 +23,7 @@ memory `map_landing_toggles.md` specifies.
 | App's server screen | `ServerModeScreen.tsx` + `src/utils/keepRun.ts` | built; esbuild syntax OK; **not type-checked** (tsc on the screen needs > 1 GB) |
 | Single mode (General / Single) | `vsEnforcedBlocked`, `vsApplyLanding`, `singleSatRefuses`; page `radioUseWrap`; app RADIO USE | built; unit + page + e2e tested (VDL2 single, General restores ticks); SATELLITES server half only |
 | Copy | About beta96 note (+ the old ADS-B note pointed at the new control) | done; tours do not mention keep-running (checked) |
-| `vibe_web_page.h` | not changed: the only web-client change is `admin.ts` / `adminBg.ts` | **regenerate at integration** (the admin page ships in it) |
+| `vibe_web_page.h` | rebuilt on this branch (build-web via the lock) after the last merge of b96-integrate | regenerate again if integration changes web/ |
 
 ## ★★ The AMATEUR map: ISM (coordinator / Stuart 11-26, added on this branch)
 
@@ -172,6 +172,7 @@ Stuart 11-25: VDL2 136.7–136.975, ORBCOMM 137.2–137.8 and Meteor 137.1 / 137
 | `scripts/test_admin_bg.ts` | 63/63 | the admin keep-run line, the shared / rider satellite rows |
 | `check-android-settings-parity` | 206/1 | the 1 = b96-newmodes' `newModesPolOn/Off` unclassified — already failing on b96-integrate, not this branch's |
 | `check-setup-page`, `test-setup-adsb-landing`, `test-new-modes` 577/577, `test-server-ism-bg-return` 30/30 | clean | |
+| `scripts/test-keep-restart.sh` (`vibeserver/test-keep-restart.cpp`) | 7/7 | IN-PROCESS restarts (Android / the Mac app, after b96-adsbstart's endWholeRadioModesForStop, + `g_av.stop()`): kept VDL2 ×5, kept ISM 868 ×2 — every start re-tunes to the kept band |
 | CPU (Mac M5, fake rtl_tcp 2.4 MS/s, 20 s, nobody connected) | plain 3.0 %, kept VDL2 4.5 %, kept ISM 868 7.7 % of one core | the server process only |
 
 Not tested here: a real pass (orbit data), the ORBCOMM rider running, the narrow IF on air, Android gradle, the app's types.
