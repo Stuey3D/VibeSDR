@@ -15,7 +15,7 @@
 //    their own fixed rules, below: a ship is drawn while it is recent (SHIP_KEEP_SEC; faded past an hour), a DSC call for
 //    a day (DSC_KEEP_SEC) — a distress or urgency call for a week (DSC_ALERT_KEEP_SEC). Latest-message-wins stays the
 //    NAVTEX layers' own rule; a ship is drawn as its latest report says (live wins over the store, per MMSI).
-import { esc, rangeBearing, compass8, ago, aisIcon, aisName, aisCard, aisListRows, aisSanitise,
+import { esc, rangeBearing, compass8, ago, aisIcon, aisName, aisLabel, aisCard, aisListRows, aisSanitise,
          type AisVessel, type AisReport, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { NAV_LAYERS } from './navtexWarn';
 import { DSC_PIN_COLOURS, type DscCall } from './dsc';
@@ -111,9 +111,9 @@ export function shipItems(vessels: AisVessel[], rx: LatLon | null): TrackItem[] 
     return {
       key: `s:${v.mmsi}`, lat: v.lat as number, lon: v.lon as number,
       _ic: faded ? { ...ic, html: `<div style="opacity:.45">${ic.html}</div>` } : ic,
-      _lb: aisName(v), _cd: aisCard(v, rx),
-      // ★ the declutter: a ship's label above the weather's, below a distress
-      _rk: (v.kind === 'sart' ? 2e13 : 5e11) - Math.min(v.seen, 1e6), _aria: `${aisName(v)}: ${v.line || v.kind}. Press Enter for the card.`,
+      _lb: aisLabel(v), _cd: aisCard(v, rx),
+      // ★ the declutter: a ship's label above the weather's, below a distress; ★ beta95 a DX ship's above the other ships'
+      _rk: (v.kind === 'sart' ? 2e13 : v.dx ? 1e12 : 5e11) - Math.min(v.seen, 1e6), _aria: `${aisName(v)}: ${v.line || v.kind}. Press Enter for the card.`,
     } as TrackItem;
   });
 }

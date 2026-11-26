@@ -67,7 +67,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
-import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
+import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
@@ -10079,10 +10079,10 @@ function trkFlagHtml(flag: string | undefined): string {
   const iso = String.fromCharCode(...cps.map((c) => c - 0x1F1E6 + 65));
   return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
 }
-function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
-  return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean }): string {
+  return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
     + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
-    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
+    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
 function shipDscPins(now: number): DscPin2[] {
@@ -10190,7 +10190,7 @@ function navDraw() {
  *  live ships are raw vessels and use the AIS layer's own. */
 function shipViewOpts() {
   return {
-    icon: (it: any) => it._ic ?? aisIcon(it), label: (it: any) => it._lb ?? aisName(it), card: (it: any) => it._cd ?? aisCard(it, myPos()),
+    icon: (it: any) => it._ic ?? aisIcon(it), label: (it: any) => it._lb ?? aisLabel(it), card: (it: any) => it._cd ?? aisCard(it, myPos()),
     heard: (it: any) => it._h ?? 0, labelRank: (it: any) => it._rk ?? 0, arc: (it: any) => !!it._arc,
     shape: (it: any) => it._sh, cluster: (it: any) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it: any) => it._aria || it._lb || '',
     // ★ the declutter's priority: the selected item, stations, warnings, then the weather labels — which give way first
@@ -19974,7 +19974,7 @@ async function renderGallery(page = galPage) {
         const n = document.createElement('span'); n.className = 'n';
         const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
         n.appendChild(document.createTextNode(`SHIPPING MAP · NAVTEX stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
-          + (far ? ` · furthest ${far.name} ${Math.round(far.km! / 1.852).toLocaleString('en-GB')} NM` : '')   // ★ beta95 NM on the shipping map));
+          + (far ? ` · furthest ${far.name} ${Math.round(far.km! / 1.852).toLocaleString('en-GB')} NM` : '')));   // ★ beta95 NM on the shipping map
         n.appendChild(document.createElement('br'));
         const src = document.createElement('span'); src.className = 'src';
         src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';

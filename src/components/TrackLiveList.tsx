@@ -185,14 +185,16 @@ function Row({ s, r, sel, onPress }: { s: S; r: TrackRow; sel: boolean; onPress:
   const { ring } = useNavFocus();
   const where = r.range && r.range !== 'no position' ? `${r.range}${r.brg ? ' ' + r.brg : ''}` : r.range;
   return (
-    <TouchableOpacity ref={viewRef as never} style={[s.row, r.noPos && s.rowNoPos, sel && s.rowSel, r.em && s.rowEm]}
+    <TouchableOpacity ref={viewRef as never} style={[s.row, r.noPos && s.rowNoPos, r.dx && s.rowDx, sel && s.rowSel, r.em && s.rowEm]}
                       onPress={onPress} activeOpacity={0.7} accessibilityRole="button"
-                      accessibilityLabel={`${r.name}, ${r.second}${r.sp ? ', ' + r.sp : ''}${where ? ', ' + where : ''}${r.age ? ', heard ' + r.age + ' ago' : ''}`}>
+                      accessibilityLabel={`${r.name}${r.dx ? ', DX' : ''}, ${r.second}${r.sp ? ', ' + r.sp : ''}${where ? ', ' + where : ''}${r.age ? ', heard ' + r.age + ' ago' : ''}`}>
       <View style={s.idCol}>
         <View style={s.nameBox}>
           <View style={[s.sw, { backgroundColor: r.colour }]} />
           {!!r.flag && <Text style={s.flag}>{r.flag}</Text>}
           <Text style={[s.name, r.em && s.emName]} numberOfLines={1}>{r.name}</Text>
+          {/* ★ beta95 a DX ship (aisDx.ts): a gold tag beside the name that never shrinks — the exciting ones stand out */}
+          {r.dx ? <Text style={s.dxTag}>DX</Text> : null}
         </View>
         <Text style={s.second} numberOfLines={1}>{r.second}</Text>
       </View>
@@ -230,6 +232,10 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   rowSel: { backgroundColor: 'rgba(255,229,102,0.12)', borderLeftWidth: 2, borderLeftColor: 'rgba(255,229,102,0.7)', paddingLeft: 6 },
   rowNoPos: { opacity: 0.65 },
   rowEm:  { backgroundColor: 'rgba(120,20,20,0.75)' },
+  // ★ beta95 DX: the web's .trkRow.dx gold bar and .dxTag
+  rowDx:  { borderLeftWidth: 2, borderLeftColor: '#ffd34d', paddingLeft: 6 },
+  dxTag:  { marginLeft: 5, paddingHorizontal: 4, borderRadius: 3, overflow: 'hidden', backgroundColor: '#ffd34d', color: '#111',
+            fontFamily: F, fontSize: 8.5, fontWeight: '700', letterSpacing: 0.6, flexShrink: 0 },
   idCol:  { flex: 1, minWidth: 0, justifyContent: 'center' },
   nameBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center' },
   sw:     { width: 8, height: 8, borderRadius: 4, marginRight: 5 },

@@ -482,6 +482,7 @@ private:
         auto num = [&](const char* k, double x, int dp) { if (x == x) { o += ",\""; o += k; o += "\":" + fmt(x, dp); } };
         num("lat", s.lat, 5); num("lon", s.lon, 5); num("course", s.course, 0); num("speed", s.speedKn == s.speedKn ? s.speedKn * 1.852 : NAN, 1);
         num("alt", s.altFt == s.altFt ? s.altFt * 0.3048 : NAN, 0);
+        if (s.altFt == s.altFt && !altPlausible(s.symTable, s.symCode, s.altFt * 0.3048)) o += ",\"altBad\":1";   // ★ beta95 never shown as real
         auto str = [&](const char* k, const std::string& v) { if (!v.empty()) { o += ",\""; o += k; o += "\":\"" + jsonEsc(utf8Clean(v)) + "\""; } };
         str("comment", s.comment); str("status", s.status); str("micE", s.micE); str("path", s.path); str("via", s.via); str("raw", s.raw);
         str("sat", s.sat);   // ★ V12 beta90 1.9

@@ -115,6 +115,15 @@ static void testFormats() {
     CHECK(p.kind == "status" && p.status == "Net Control Center without timestamp", "status");
     p = parse("!4903.50N/07201.75W>/A=001234 hi");
     CHECK(p.altFt == 1234 && p.comment == "hi", "altitude in the comment (%.0f '%s')", p.altFt, p.comment.c_str());
+    // ★★ beta95 an altitude beyond physical sense for the symbol (G8TMV-9, a car, /A=301169 = 91 796 m): marked, not real
+    p = parse("!5230.12N/00110.34W>/A=301169 G8TMV-9 mobile", "APRS");
+    CHECK(!vibeaprs::altPlausible(p.symTable, p.symCode, p.altFt * 0.3048) && vibeaprs::readable(p).find("91796 m (implausible for a car)") != std::string::npos,
+          "a car at 91 796 m: implausible (%s)", vibeaprs::readable(p).c_str());
+    CHECK(vibeaprs::altPlausible('/', '>', 4500) && vibeaprs::altPlausible('/', '-', 8800) && !vibeaprs::altPlausible('/', '-', 12000), "a car on a high pass, a house on Everest: fine; a house at 12 km: not");
+    CHECK(vibeaprs::altPlausible('/', '^', 12000) && !vibeaprs::altPlausible('/', '^', 40000) && vibeaprs::altPlausible('/', 'O', 38000)
+          && !vibeaprs::altPlausible('/', 'O', 91796) && vibeaprs::altPlausible('\\', 'S', 408000) && !vibeaprs::altPlausible('/', '>', -900),
+          "an airliner at 12 km, a balloon at 38 km, a satellite at 408 km: fine; an airliner at 40 km, a balloon at 92 km, a car at -900 m: not");
+    CHECK(vibeaprs::readable(parse("!4903.50N/07201.75W>/A=001234 hi")).find("implausible") == std::string::npos, "an ordinary altitude is not marked");
     p = parse("!4903.50N/07201.75W>!W12!");
     CHECK(std::fabs(p.lat - (49 + 3.501 / 60)) < 1e-7 && std::fabs(p.lon + (72 + 1.752 / 60)) < 1e-7, "!DAO! precision");
     p = parse("$GPRMC,063909,A,3349.4302,N,11700.3721,W,43.022,89.3,291099,13.1,E*52");
