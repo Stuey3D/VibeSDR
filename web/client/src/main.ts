@@ -9633,7 +9633,7 @@ function mapSharedSync() {
   const slot = o.v.slot('share');
   if (g.parentElement !== slot) slot.appendChild(g);
   const st = mapSharedLine({
-    shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true,
+    shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true || (o.v === asView && asViewer),
     listeners: listenerCount, max: listenerMax, ask: askNow, scanLocked: scanLockOn,
     said: scanLockOn ? scanLockLine(scanLockPhase, scanLockDone, scanLockTotal) : bannerSaidText || null,
     exitMoves: o.exitMoves,
@@ -10564,9 +10564,12 @@ function asViewOpts() {
   };
 }
 /** ★★ Open the AIR & SEA map: `by` the mode (its own screen) or a key / box; on `tab`; on `key` when given. */
-function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; key?: string; sort?: AircraftSort }) {
+function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; key?: string; sort?: AircraftSort; viewer?: boolean }) {
   const wasOpen = !!asView?.open;
   if (o.by === 'mode') asBy = 'mode'; else if (!wasOpen) asBy = 'map';
+  // ★★★ beta96 the VIEWER (VIEWS' AIR & SEA): no TUNE keys, no shared line — a mode taking the map over ends it
+  if (o.by === 'mode') asViewer = false; else if (o.viewer !== undefined) asViewer = o.viewer; else if (!wasOpen) asViewer = false;
+  if (o.by === 'mode') { const m = asMode(); if (m) lsSet(AS_LAST_KEY, m === 'ais' && aisDscOn() ? 'maritime' : m === 'datalink' ? 'av' : m === 'sondes' ? 'sd' : m); }
   if (o.box !== undefined) asBox = o.box;
   if (o.tab) { asOpenedTab = o.tab; asPicked = null; }
   if (o.sort) asSort = o.sort;
@@ -10629,6 +10632,7 @@ function asExit() {
   asClose();
 }
 function asClose() {
+  asViewer = false;
   ndbView?.park();   // ★ beta96 stage 8 NDB's pieces back where they wait, its layer off the map
   asView?.hide();
   asBox = ''; asPicked = null; asMsgKey = '';
@@ -10651,30 +10655,80 @@ const AS_CHIP_COLOUR: Partial<Record<LiveLayerId, string>> = {
   ships: '#4fc3f7', dsc: '#ff6b6b', navst: '#f0c674', warnings: '#ff8a65', weather: '#81c784', areas: '#e0a040',
   vor: '#c792ea', ndb: '#ffb000', sondes: '#80deea',
 };
+/* ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): ONE "AIR & SEA LIVE" key in the mode menu's TUNES THE RADIO ITSELF in place
+ *  of ADS-B · AIS · MARITIME · DATALINK · NDB · VOR MAP · SONDES — it takes the radio into the last air / sea mode used here
+ *  (else ADS-B where reachable, else the first reachable) and the map's TUNE keys switch between them. VIEWS' AIR & SEA is
+ *  the VIEWER (openAirSeaViewer): the same map, nothing tuned. ISM, DAB and SATELLITE keep their own keys; HFDL stays a decoder. */
+const AS_LAST_KEY = 'vibesdr.airSeaLast';
+const AIR_SEA_LIVE_WORDS = 'AIR & SEA LIVE — the radio on aircraft or ships (ADS-B, the datalink, AIS, maritime, NDB, VOR, sondes), on one map: its TUNE keys switch between them';
+let asViewer = false;
+/** The air / sea whole-radio modes this radio can run now, in TUNE order. */
+function airSeaModes(): string[] {
+  const out: string[] = [];
+  if (asAllowed('adsb')) out.push('adsb');
+  if (asAllowed('avdata')) out.push('av');
+  if (asAllowed('vormap')) out.push('vormap');
+  if (asAllowed('ndb')) out.push('ndb');
+  if (asAllowed('ais')) { out.push('ais'); if (aisDscCap) out.push('maritime'); }
+  if (asAllowed('sondes')) out.push('sd');
+  return out;
+}
+/** May the radio go into this air / sea mode? Its capability, and the only-mode rule (a server set up for one mode only). */
+function asAllowed(m: 'adsb' | 'avdata' | 'vormap' | 'ndb' | 'ais' | 'sondes'): boolean {
+  const cap = { adsb: adsbCap, avdata: avCap, vormap: vmCap, ndb: ndbCap, ais: aisCap, sondes: sdCap }[m];
+  const only = onlyModeNow();
+  return !!cap?.ok && (!only || only === m);
+}
+function airSeaOn(): boolean { return adsbOn || aisOn || avOn || sdOn || ndbOn || vmOn; }
+/** null = no air / sea mode reachable here (no key at all — AGENTS.md); else ok (a mode that is on can always be left). */
+function airSeaCap(): { ok: boolean; why: string } | null {
+  return airSeaModes().length || airSeaOn() ? { ok: true, why: '' } : null;
+}
+/** The mode AIR & SEA LIVE lands on: the last one used here, else ADS-B, else the first reachable. */
+function airSeaLanding(): string {
+  const m = airSeaModes(), last = lsGet(AS_LAST_KEY) || '';
+  return m.includes(last) ? last : m.includes('adsb') ? 'adsb' : m[0] || '';
+}
+/** AIR & SEA LIVE pressed: on → leave the live air / sea mode (as every whole-radio key does); off → into the landing mode. */
+function toggleAirSeaLive() {
+  if (airSeaOn()) {
+    if (adsbOn) toggleAdsbMode(); else if (aisOn) aisSetMode(false); else if (avOn) toggleAvMode(); else if (sdOn) toggleSdMode();
+    else if (ndbOn) toggleNdbMode(); else if (vmOn) toggleVmMode();
+    return;
+  }
+  const m = airSeaLanding();
+  if (m) asTune(m === 'av' ? 'av:' : m === 'sd' ? 'sd:' : m);
+}
+/** ★★★ VIEWS' AIR & SEA: the map as a viewer — what this server holds, nothing tuned. ★ b96-sbsfeed's landing-screen map is the
+ *  same view without a radio; this is its entry on a page with one (no TUNE keys, no shared line). */
+function openAirSeaViewer() {
+  asOpen({ box: '', tab: adsbCap?.ok || avCap?.ok || viewsHave.aircraft ? 'aircraft' : 'ships', viewer: true });
+}
+(window as any).__vibeOpenAirSeaViewer = openAirSeaViewer;
 function asTuneKeys(): Array<{ id: string; label: string; words: string; live?: boolean; group?: string }> {
-  if (!spec || (window as any).__vibeMapStandalone === true) return [];
+  if (!spec || asViewer || (window as any).__vibeMapStandalone === true) return [];
   const keys: Array<{ id: string; label: string; words: string; live?: boolean; group?: string }> = [];
-  const ok = (c: { ok: boolean } | null) => !!c?.ok;
   let g = 'AVIATION';
   const add = (k: { id: string; label: string; words: string; live?: boolean }) => { keys.push(g ? { ...k, group: g } : k); g = ''; };
-  if (ok(adsbCap)) add({ id: 'adsb', label: 'ADS-B', words: 'ADS-B — aircraft on 1090 MHz (moves the radio)', live: adsbOn });
-  if (ok(avCap)) {
+  if (asAllowed('adsb')) add({ id: 'adsb', label: 'ADS-B', words: 'ADS-B — aircraft on 1090 MHz (moves the radio)', live: adsbOn });
+  if (asAllowed('avdata')) {
     if (avBands.length) for (const b of avBands) add({ id: `av:${b.id}`, label: b.name, words: `Aircraft datalink, ${b.name}: ${b.region} (moves the radio)`, live: avOn && avReport?.band === b.id });
     else add({ id: 'av:', label: 'DATALINK', words: 'Aircraft datalink — ACARS and VDL2 (moves the radio)', live: avOn });
   }
-  if (ok(vmCap)) add({ id: 'vormap', label: 'VOR MAP', words: 'VOR / ILS map — every navaid on 108–118 MHz (moves the radio)', live: vmOn });
-  if (ok(ndbCap)) add({ id: 'ndb', label: 'NDB', words: 'NDB — every beacon on 190–535 kHz (moves the radio)', live: ndbOn });
+  if (asAllowed('vormap')) add({ id: 'vormap', label: 'VOR MAP', words: 'VOR / ILS map — every navaid on 108–118 MHz (moves the radio)', live: vmOn });
+  if (asAllowed('ndb')) add({ id: 'ndb', label: 'NDB', words: 'NDB — every beacon on 190–535 kHz (moves the radio)', live: ndbOn });
   g = 'MARITIME';
-  if (ok(aisCap)) {
+  if (asAllowed('ais')) {
     add({ id: 'ais', label: 'AIS', words: 'AIS — ships on 161.975 and 162.025 MHz (moves the radio)', live: aisOn && !aisDscOn() });
     if (aisDscCap) add({ id: 'maritime', label: 'MARITIME', words: 'Maritime — AIS ships and DSC channel 70 together (moves the radio)', live: aisDscOn() });
   }
   g = 'WEATHER ALOFT';
-  if (ok(sdCap)) {
+  if (asAllowed('sondes')) {
     if (sdOn && sdBands.length) for (const b of sondeRanges(sdBands)) add({ id: `sd:${b.id}`, label: b.label, words: `${b.words} (moves the radio)`, live: sdReport?.band === b.id });
     else add({ id: 'sd:', label: 'SONDES', words: 'Radiosondes on 400–406 MHz (moves the radio)', live: sdOn });
   }
-  return keys;
+  // ★ one key is no choice (a single-mode server): no TUNE group at all
+  return keys.length > 1 ? keys : [];
 }
 /** A TUNE key pressed (never the live one — TrackView drops those): the mode menu's own entry, or the live mode's band. */
 function asTune(id: string) {
@@ -11700,6 +11754,7 @@ function buildControls() {
     toggleDab:     toggleDabMode,
     adsbCap:       () => adsbCap,
     adsbOn:        () => adsbOn,
+    airSeaCap:     airSeaCap, airSeaOn: airSeaOn, toggleAirSea: toggleAirSeaLive,   // ★★★ beta96 AIR & SEA LIVE
     toggleAdsb:    toggleAdsbMode,
     ismCap:        () => ismCap,
     ismOn:         () => ismOn,
@@ -15681,8 +15736,7 @@ function initDecoders(host: string, auth: AuthState) {
   for (const b of Array.from(document.querySelectorAll('#galFilter [data-kind]')) as HTMLElement[]) addModeIcon(b, b.dataset.kind || '');
   for (const id of ['spotsBtn', 'spotsBandBtn']) { const b = document.getElementById(id); if (b) addModeIcon(b, 'spots'); }
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
-  { const b = document.getElementById('avMapBtn'); if (b) addModeIcon(b, 'aircraft'); }   // ★ beta90 VIEWS' AVIATION / SHIPPING keys
-  { const b = document.getElementById('shipMapBtn'); if (b) addModeIcon(b, 'ship'); }
+  { const b = document.getElementById('avMapBtn'); if (b) addModeIcon(b, 'aircraft'); }   // ★ beta96 VIEWS' AIR & SEA key (the viewer)
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale';
@@ -15850,8 +15904,7 @@ function initDecoders(host: string, auth: AuthState) {
   };
   spotsBandRender();
   $('mapBtn').onclick = () => openDigiModesMap({ layer: blockedModes.has('spots') ? 'aprs' : 'spots' });
-  $('avMapBtn').onclick = () => avMapOpen(adsbCap?.ok ? 'adsb' : hfdlCap && !avCap?.ok ? 'hfdl' : 'datalink');
-  $('shipMapBtn').onclick = () => { void navMapOpen(aisCap?.ok ? 'ships' : dscCap ? 'dsc' : 'navtex'); };
+  $('avMapBtn').onclick = () => openAirSeaViewer();   // ★★★ beta96 VIEWS' AIR & SEA: the viewer (no tuning)
   $('sfMap').onclick = openSpotsMap;   // ★ the same map, from the spots box's header (syncSpotsMapKey)
   initGallery();   // ★★ V12: the GALLERY key in this menu — see initGallery
   initDxLog();     // ★★★ V12: the DX LOG key beside it — see initDxLog
@@ -16443,16 +16496,12 @@ setWholeRadioKeys(() => {
     keys.push({ id, label, on, dis: !cap.ok, title: cap.ok ? what : `${label} is not available: ${cap.why}`,
                 press: () => { toggle(); closePanels(); } });
   };
-  add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
-  add('ais', 'AIS', aisCap, aisOn && !aisDscOn(), toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
-  if (aisDscCap) add('maritime', 'MARITIME', aisCap, aisDscOn(), toggleMarMode, 'Maritime — AIS ships and DSC calls on channel 70 together, from one wide capture, with a map');
-  add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
-  add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
+  // ★★★ beta96 ONE key for every air / sea whole-radio mode (ADS-B, AIS, MARITIME, DATALINK, NDB, VOR MAP, SONDES): the
+  //     map's TUNE keys switch between them
+  add('airsea', 'AIR & SEA LIVE', airSeaCap(), airSeaOn(), toggleAirSeaLive, AIR_SEA_LIVE_WORDS);
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
-  add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
-  add('vormap', 'VOR MAP', vmCap, vmOn, toggleVmMode, 'VOR / ILS map — every VOR and localiser on 108–118 MHz, swept a window at a time, with their radials and your fix on a map');
   // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md): a whole-radio mode — every satellite, its passes, a pick tunes and
   //     decodes, AUTO DOPPLER. Only where the server offers `doppler` (the radio reaches a listed downlink); the menu's rule
   //     — not drawn while it cannot run, unless on (so it can be left).
@@ -18662,9 +18711,8 @@ function syncViewKeys(): void {
   const set = (id: string, on: boolean) => { const b = document.getElementById(id); if (b) b.hidden = !on; };
   set('mapBtn', !blockedModes.has('spots') || (aprsCap && !blockedModes.has('aprs')));
   const air = (!!adsbCap?.ok && !blockedModes.has('adsb')) || (!!avCap?.ok && !blockedModes.has('avdata')) || (hfdlCap && !blockedModes.has('hfdl'));
-  set('avMapBtn', air || viewsHave.aircraft);
   const sea = (!!aisCap?.ok && !blockedModes.has('ais')) || (dscCap && !blockedModes.has('dsc'));
-  set('shipMapBtn', sea || viewsHave.ships);
+  set('avMapBtn', air || sea || viewsHave.aircraft || viewsHave.ships);   // ★★★ beta96 ONE AIR & SEA key (the viewer)
 }
 let viewsProbed = 0;
 /** ★ What this server's OTHER radios kept (a two-radio server: one on ADS-B, this one on HF) — once a minute at most. */

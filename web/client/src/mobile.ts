@@ -112,6 +112,10 @@ export type MobileDeps = {
   toggleDab: () => void;
   /** ★★ ADS-B (V12) — a whole-radio mode like DAB, offered beside it. null = an older server (no entry);
    *  ok false = drawn DISABLED with the server's reason, never hidden (docs/v12/ADSB.md). */
+  /** ★★★ beta96 AIR & SEA LIVE — one key for every air / sea whole-radio mode (null = none reachable: no key). */
+  airSeaCap?: () => { ok: boolean; why: string } | null;
+  airSeaOn?: () => boolean;
+  toggleAirSea?: () => void;
   adsbCap: () => { ok: boolean; why: string } | null;
   adsbOn: () => boolean;
   toggleAdsb: () => void;
@@ -389,26 +393,19 @@ export function initMobileControls(deps: MobileDeps) {
       dabRow.onclick = () => { deps.toggleDab(); close(); refresh(); };
       grid.appendChild(dabRow);
     }
-    /* ★★ ADS-B beside DAB — the other whole-radio mode. When the server says it cannot run here the entry
-     *  is still drawn, greyed, and a tap says WHY (the server's own words) — a hidden entry teaches nobody
-     *  that the receiver could do it at 2.4 MS/s; a disabled <button> would swallow the tap on a phone,
-     *  where there is no tooltip to read.
-     *  ★★★ SUPERSEDED (Stuart, 2026-10-27, on his RSP1B — ADS-B, ISM, NDB and AIS all drawn dashed: "those dead buttons
-     *      can be hidden"). A REFUSED whole-radio mode is now NOT DRAWN, here and for ISM / NDB / AIS below. Every reason
-     *      the server gives (vsAdsbWhyNot and its siblings: the owner switched it off, the owner locked the centre on a
-     *      shared radio, the radio cannot tune there, the capture rate is below what the mode needs) is something a
-     *      listener cannot change from this menu — the owner changes it in Setup, which says why there. None of them is
-     *      a benchmark / load choice, so "the benchmark sets the default, never hides" is not in play. A mode that is ON
-     *      is always drawn, so it can always be left. AGENTS.md: a control that cannot work here is not there. */
-    const ac = deps.adsbCap();
-    if (ac && (ac.ok || deps.adsbOn())) {
-      const adsbRow = document.createElement('button');
-      adsbRow.className = 'mModeOpt' + (deps.adsbOn() ? ' on' : '') + (ac.ok ? '' : ' dis');
-      setModeLabel(adsbRow, 'adsb', 'ADS-B');
-      adsbRow.title = ac.ok ? 'ADS-B — aircraft on 1090 MHz, with a map' : `ADS-B is not available: ${ac.why}`;
-      if (!ac.ok) adsbRow.setAttribute('aria-disabled', 'true');
-      adsbRow.onclick = () => { deps.toggleAdsb(); close(); refresh(); };
-      grid.appendChild(adsbRow);
+    /* ★★★ beta96 AIR & SEA LIVE (Stuart 11-26) — ONE key for every air / sea whole-radio mode (ADS-B, the DATALINK, AIS,
+     *  MARITIME, NDB, VOR MAP, SONDES): the radio goes to the last one used here (else ADS-B, else the first reachable), on the
+     *  AIR & SEA map, whose TUNE keys switch between them. Absent where none is reachable (AGENTS.md); lit while one is on, and
+     *  pressed lit leaves it, as every whole-radio key does. Older pages' deps (no airSeaCap) keep the separate keys' deps unused. */
+    const asc = deps.airSeaCap?.();
+    if (asc && deps.toggleAirSea) {
+      const asRow = document.createElement('button');
+      asRow.className = 'mModeOpt' + (deps.airSeaOn?.() ? ' on' : '');
+      asRow.id = 'mModeAirSea';
+      setModeLabel(asRow, 'adsb', 'AIR & SEA LIVE');
+      asRow.title = 'AIR & SEA LIVE — the radio on aircraft or ships (ADS-B, the datalink, AIS, maritime, NDB, VOR, sondes), on one map: its TUNE keys switch between them';
+      asRow.onclick = () => { deps.toggleAirSea!(); close(); refresh(); };
+      grid.appendChild(asRow);
     }
     /* ★★ ISM beside ADS-B — the third whole-radio mode, the same three states. Absent where the radio reaches no ISM band
      *  (an HF+): a control that cannot work on this radio is not drawn (AGENTS.md). */
@@ -421,75 +418,6 @@ export function initMobileControls(deps: MobileDeps) {
       if (!ic.ok) ismRow.setAttribute('aria-disabled', 'true');
       ismRow.onclick = () => { deps.toggleIsm(); close(); refresh(); };
       grid.appendChild(ismRow);
-    }
-    /* ★★ NDB beside them — the LF beacon skimmer. Absent where the radio reaches no LF (an RTL without direct sampling,
-     *  a HackRF, an Airspy R2): a control that cannot work on this radio is not drawn (AGENTS.md). */
-    const nc = deps.ndbCap();
-    if (nc && (nc.ok || deps.ndbOn())) {   // ★ refused = not drawn (see ADS-B above)
-      const ndbRow = document.createElement('button');
-      ndbRow.className = 'mModeOpt' + (deps.ndbOn() ? ' on' : '') + (nc.ok ? '' : ' dis');
-      setModeLabel(ndbRow, 'ndb', 'NDB');
-      ndbRow.title = nc.ok ? 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map' : `NDB is not available: ${nc.why}`;
-      if (!nc.ok) ndbRow.setAttribute('aria-disabled', 'true');
-      ndbRow.onclick = () => { deps.toggleNdb(); close(); refresh(); };
-      grid.appendChild(ndbRow);
-    }
-    /* ★★ V12 THE VOR / ILS MAP beside NDB (Stuart, 2026-11-24: "the same places NDB does") — the same three states; absent
-     *  where the radio cannot tune 108–118 MHz (an HF+, an Icom, an HF-only radio). */
-    const vmc = deps.vmCap?.();
-    if (vmc && deps.toggleVm && (vmc.ok || deps.vmOn?.())) {
-      const vmRow = document.createElement('button');
-      vmRow.className = 'mModeOpt' + (deps.vmOn?.() ? ' on' : '') + (vmc.ok ? '' : ' dis');
-      setModeLabel(vmRow, 'vormap', 'VOR MAP');
-      vmRow.title = vmc.ok ? 'VOR / ILS map — every VOR and localiser on 108–118 MHz, swept a window at a time, with their radials and your fix on a map'
-                           : `The VOR / ILS map is not available: ${vmc.why}`;
-      if (!vmc.ok) vmRow.setAttribute('aria-disabled', 'true');
-      vmRow.onclick = () => { deps.toggleVm!(); close(); refresh(); };
-      grid.appendChild(vmRow);
-    }
-    /* ★★ AIS beside ISM — the fourth whole-radio mode, the same three states; absent where the radio cannot reach 162 MHz. */
-    const aic = deps.aisCap();
-    if (aic && (aic.ok || deps.aisOn())) {   // ★ refused = not drawn (see ADS-B above)
-      const aisRow = document.createElement('button');
-      aisRow.className = 'mModeOpt' + (deps.aisOn() && !deps.marOn?.() ? ' on' : '') + (aic.ok ? '' : ' dis');
-      setModeLabel(aisRow, 'ais', 'AIS');
-      aisRow.title = aic.ok ? 'AIS — ships on 161.975 and 162.025 MHz, with a map' : `AIS is not available: ${aic.why}`;
-      if (!aic.ok) aisRow.setAttribute('aria-disabled', 'true');
-      aisRow.onclick = () => { deps.toggleAis(); close(); refresh(); };
-      grid.appendChild(aisRow);
-    }
-    /* ★★★ beta96 MARITIME beside AIS — AIS + DSC channel 70 together; drawn only where the server offers it (the capture holds both). */
-    const mrc = deps.marCap?.();
-    if (mrc && deps.toggleMar && (mrc.ok || deps.marOn?.())) {
-      const marRow = document.createElement('button');
-      marRow.className = 'mModeOpt' + (deps.marOn?.() ? ' on' : '') + (mrc.ok ? '' : ' dis');
-      setModeLabel(marRow, 'ais', 'MARITIME');
-      marRow.title = mrc.ok ? 'Maritime — AIS ships and DSC calls on channel 70 together, from one wide capture, with a map' : `Maritime is not available: ${mrc.why}`;
-      if (!mrc.ok) marRow.setAttribute('aria-disabled', 'true');
-      marRow.onclick = () => { deps.toggleMar!(); close(); refresh(); };
-      grid.appendChild(marRow);
-    }
-    /* ★★ V12 THE AIRCRAFT DATALINK beside AIS — the same three states; absent where no band is reachable. */
-    const avc = deps.avCap?.();
-    if (avc && deps.toggleAv && (avc.ok || deps.avOn?.())) {
-      const avRow = document.createElement('button');
-      avRow.className = 'mModeOpt' + (deps.avOn?.() ? ' on' : '') + (avc.ok ? '' : ' dis');
-      setModeLabel(avRow, 'acars', 'DATALINK');
-      avRow.title = avc.ok ? 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz' : `The aircraft datalink is not available: ${avc.why}`;
-      if (!avc.ok) avRow.setAttribute('aria-disabled', 'true');
-      avRow.onclick = () => { deps.toggleAv!(); close(); refresh(); };
-      grid.appendChild(avRow);
-    }
-    /* ★★ V12 RADIOSONDES beside it — the same three states; absent where the radio cannot reach 400 MHz. */
-    const sdc = deps.sdCap?.();
-    if (sdc && deps.toggleSd && (sdc.ok || deps.sdOn?.())) {
-      const sdRow = document.createElement('button');
-      sdRow.className = 'mModeOpt' + (deps.sdOn?.() ? ' on' : '') + (sdc.ok ? '' : ' dis');
-      setModeLabel(sdRow, 'sondes', 'SONDES');
-      sdRow.title = sdc.ok ? 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map' : `Radiosondes are not available: ${sdc.why}`;
-      if (!sdc.ok) sdRow.setAttribute('aria-disabled', 'true');
-      sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
-      grid.appendChild(sdRow);
     }
     /* ★★★ V12 SATELLITE beside SONDES (Stuart, 2026-11-20: "put it in the tunes the whole radio section too next to ism sondes
      *  etc") — a whole-radio mode: every satellite's passes, a pick tunes + decodes, AUTO DOPPLER. The same three states:

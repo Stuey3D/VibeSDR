@@ -145,8 +145,8 @@ ok(/<KeyGrid items=\{keys\} grid=\{keyGrid\} openId=\{openDec\} options=\{openOp
 ok(/VIEWS/.test(app) && /\{ id: 'gallery'/.test(app) && /\{ id: 'transcribe'/.test(app) && /\{ id: 'map'/.test(app), 'VIEWS holds MAP, GALLERY and TRANSCRIBE');
 ok(/placeOptions\(activeDec\)/.test(readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8')), 'the web places the selected decoder\'s settings under its key');
 const html = readFileSync(new URL('../web/client/index.html', import.meta.url), 'utf8');
-ok(/<h2>VIEWS<\/h2>[\s\S]{0,1200}id="mapBtn"[\s\S]{0,400}id="avMapBtn"[\s\S]{0,400}id="shipMapBtn"[\s\S]{0,600}id="galleryBtn"/.test(html),
-   'the web\'s VIEWS holds DIGI MODES, AVIATION, SHIPPING and GALLERY (beta90)');
+ok(/<h2>VIEWS<\/h2>[\s\S]{0,1200}id="mapBtn"[\s\S]{0,1200}id="avMapBtn"[^>]*>AIR &amp; SEA<\/button>\s*<!--[\s\S]{0,200}-->\s*<button class="btn" id="galleryBtn"/.test(html) && !/id="shipMapBtn"/.test(html),
+   'the web\'s VIEWS holds AMATEUR, then ONE AIR & SEA key right beside GALLERY (beta96 — AVIATION and SHIPPING merged)');
 ok(!/<h2>DECODED SPOTS<\/h2>/.test(html), 'the web\'s DECODED SPOTS heading is gone');
 
 console.log(`test_decoder_key_grid: ${pass} passed, ${fail} failed`);

@@ -5637,8 +5637,10 @@ select.btn { padding: 6px 8px; }
            something for it (main.ts syncViewKeys; no dead keys). DIGI MODES = the digital spots (this server's station store
            and the live spots) and APRS; AVIATION = every aircraft source on the ADS-B map; SHIPPING = AIS, DSC and NAVTEX. -->
       <button class="btn" id="mapBtn" title="AMATEUR MAP — the stations heard on the digital modes, CW, RTTY and PSK, APRS, mesh nodes and the NCDXF beacons, background decoding and every listener — opens in a new tab">AMATEUR</button>
-      <button class="btn" id="avMapBtn" hidden title="The AVIATION &amp; MARITIME map on its aircraft — every aircraft this server heard: ADS-B, ACARS, VDL2, HFDL and ADS-C, beside its ships">AVIATION</button>
-      <button class="btn" id="shipMapBtn" hidden title="The AVIATION &amp; MARITIME map on its ships — the ships (AIS), DSC calls and NAVTEX stations, warnings and weather this server holds, beside its aircraft">SHIPPING</button>
+      <!-- ★★★ beta96 (Stuart 11-26) ONE AIR &amp; SEA key, beside GALLERY: the AIR &amp; SEA map as a VIEWER — what this server holds
+           (aircraft, ships, NAVTEX, sondes, navaids) with no tuning: no TUNE keys, nothing moves the radio. AVIATION and SHIPPING
+           were two doors into the same map. The radio-holding entry is AIR &amp; SEA LIVE in the mode menu. -->
+      <button class="btn" id="avMapBtn" hidden title="AIR &amp; SEA — every aircraft, ship, NAVTEX station, sonde and navaid this server holds, on one map. A viewer: nothing here moves the radio">AIR &amp; SEA</button>
       <!-- ★★ V12: what this SERVER's decoders have heard — background decoding and listeners' — kept on the server. -->
       <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
       <!-- ★★★ V12 THE DX LOG, beside the GALLERY (Stuart: "The DX Log should live next to the gallery"): the stations the
