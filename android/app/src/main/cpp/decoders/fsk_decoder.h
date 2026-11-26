@@ -208,7 +208,8 @@ private:
     static const int kRing = 256;
     double ringM_[kRing] = {0}, ringS_[kRing] = {0}; int ringPos_ = 0;
     double enbw_ = 0;
-    Counts slice_;
+    Counts slice_; long sliceClock_ = 0;
+    bool prevMark_[2] = {false, false}; double prevM_ = 0, prevS_ = 0; int prevBits_ = 0;   // the bit before, at its centre
     std::string tail_;                                 // the last four characters printed, for ZCZC / NNNN
 };
 

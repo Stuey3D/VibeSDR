@@ -743,12 +743,22 @@ void NavtexRx::measureBit(double bit) {
     const int back = (int)std::lround(bitSamples_ / 2);
     if (back >= kRing) return;
     const int i = (ringPos_ - 1 - back + 2 * kRing) % kRing;
-    const double on = bit > 0 ? ringM_[i] : ringS_[i], off = bit > 0 ? ringS_[i] : ringM_[i];
-    for (Counts* k : { &total, &message, &slice_ }) { k->on += on; k->off += off; k->bits++; }
-    if (slice_.bits >= (unsigned long)std::max(1.0, std::round(baud_))) {
+    /* ★ Only the MIDDLE BIT OF THREE ALIKE is read: the raised cosine is short (±140 Hz), so a bit next to a transition
+     *  leaks keying sidebands into the other tone at its centre, and a bit clock a few samples off in noise reads that
+     *  leak as noise (measured: every bit read 3 dB too much noise at +10 dB, and capped at 30 dB). With no transition
+     *  a bit either side, the other tone is noise alone. */
+    const bool mark = bit > 0;
+    if (mark == prevMark_[0] && mark == prevMark_[1] && prevBits_ >= 2) {
+        const double on = mark ? prevM_ : prevS_, off = mark ? prevS_ : prevM_;
+        for (Counts* k : { &total, &message, &slice_ }) { k->on += on; k->off += off; k->bits++; }
+    }
+    prevMark_[1] = prevMark_[0]; prevMark_[0] = mark; prevM_ = ringM_[i]; prevS_ = ringS_[i];
+    if (prevBits_ < 2) prevBits_++;
+    // a slice per second of BITS CLOCKED (not of bits measured): the timeline follows the clock, not the content
+    if (++sliceClock_ >= std::max(1L, std::lround(baud_))) {
         double sg, nz;
         if (onSlice && snrOf(slice_, sg, nz)) onSlice(sg, nz);
-        slice_ = Counts();
+        slice_ = Counts(); sliceClock_ = 0;
     }
 }
 bool NavtexRx::snrOf(const Counts& c, double& sigDbfs, double& noiseDbfs) const {
