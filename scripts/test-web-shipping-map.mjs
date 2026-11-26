@@ -134,7 +134,7 @@ try {
   //   nothing is live (a stored layer is never called live), NAVTEX's layers are put first
   ok(await until(`!!${view} && ${view}.querySelector('.ttl').textContent === 'AVIATION & MARITIME'`, 8000), `the title: ${await ev(`${view}?.querySelector('.ttl')?.textContent`)}`);
   ok(await ev(`${view}.querySelector('.exit').textContent`) === 'CLOSE MAP', 'CLOSE MAP (a box\'s map: the mode carries on)');
-  const tg = `JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent))`;
+  const tg = `JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => (b.textContent.slice(0, b.textContent.length - (b.querySelector('.n')?.textContent.length || 0)))))`;   // ★ beta96 SHOW: the chip's count (.n) is not its name
   ok(await until(`${tg} === JSON.stringify(['NAVTEX','WARNINGS','WEATHER','SHIPS','DSC','SEA AREAS'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row), SEA AREAS last: ${await ev(tg)}`);
   ok(await ev(`${view}.querySelectorAll('[data-tgl].live').length`) === 0, 'no decoder running: no layer marked LIVE');
   ok(await ev(`JSON.stringify([...${view}.querySelectorAll('.tgl .grp')].map(g => g.textContent))`) === JSON.stringify(['MARITIME']) || await ev(`${view}.querySelectorAll('.tgl .grp').length`) === 0, 'one group drawn: no group names, or MARITIME once');

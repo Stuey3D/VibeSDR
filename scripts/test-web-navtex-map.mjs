@@ -124,10 +124,10 @@ try {
   await sleep(4000);
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
   ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
-  ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
-     === 'NAVTEX:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: NAVTEX (stations) · WARNINGS · WEATHER · SEA AREAS (2026-11-02; beta96 the AIR & SEA map names), all on');
+  ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => (b.textContent.slice(0, b.textContent.length - (b.querySelector('.n')?.textContent.length || 0))) + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
+     === 'NAVTEX:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: NAVTEX (stations) · WARNINGS · WEATHER · SEA AREAS (2026-11-02; beta96 the AIR & SEA map names; read without SHOW\'s count), all on');
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
-     === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the time filter: five ranges, ALL by default (a received-stations view)');
+     === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true THIS SESSION:false', 'the time filter: five ranges, ALL by default (a received-stations view), and beta96 THIS SESSION (b96-mapchat)');
   const st = await ev(`${view}.querySelector('.st').textContent`);
   ok(/\d+ sites · \d+ stations · \d+ messages · furthest/.test(st), `status: ${st}`);
   const dc = JSON.parse(await ev(`JSON.stringify((() => { const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
