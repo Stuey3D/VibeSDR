@@ -6,7 +6,7 @@
  * Run: node --no-warnings scripts/test_dab_free_banner.ts
  */
 import { readFileSync } from 'node:fs';
-import { sharedTunerText, dabFreePhase, dabFreeText, DAB_FREE_FLIP_MS } from '../src/services/dialChat.ts';
+import { sharedTunerText, sharedBannerWords, dabFreePhase, dabFreeText, DAB_FREE_FLIP_MS } from '../src/services/dialChat.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -21,9 +21,16 @@ ok(!dabFreePhase(0) && dabFreePhase(DAB_FREE_FLIP_MS) && !dabFreePhase(2 * DAB_F
 
 const bar = src('src/components/ControlsBar.tsx'), scr = src('src/screens/SDRScreen.tsx');
 const fn = bar.slice(bar.indexOf('function sharedBannerText'), bar.indexOf('function sharedBannerLabel'));
-ok(fn.indexOf('dabFreeText()') > fn.indexOf('st.said') && fn.indexOf('dabFreeText()') < fn.indexOf('askBannerText'),
+// ★★ beta95 (the 11.0.17 banner count, ported with the Duo work): every state after the stations line goes through ONE
+//    helper, dialChat sharedBannerWords (the ask lock first, then the ask line) — so the order is checked there.
+const words = src('src/services/dialChat.ts');
+const hw = words.slice(words.indexOf('export function sharedBannerWords'), words.indexOf('export function sharedTunerText'));
+ok(fn.indexOf('dabFreeText()') > fn.indexOf('st.said') && fn.indexOf('dabFreeText()') < fn.indexOf('sharedBannerWords(')
+   && hw.indexOf('askBannerText') >= 0 && hw.indexOf('askBannerText') < hw.indexOf('sharedTunerText(false'),
    'app: a scan and a chat line still outrank it; it alternates with the ask-lock text too (a pick is not a dial move)');
-ok(/sharedTunerText\(false, st\.listeners, st\.max, false, !!st\.dabOwn\)/.test(fn), 'app: the ask line names EXIT DAB in DAB');
+ok(/sharedTunerText\(false, st\.listeners, st\.max, false, !!st\.dabOwn\)/.test(hw)
+   && sharedBannerWords({ listeners: 3, max: 5, dabOwn: true }, false) === 'SHARED TUNER · ASK TO TUNE / EXIT DAB · 3/5 👤',
+   `app: the ask line names EXIT DAB in DAB (${sharedBannerWords({ listeners: 3, max: 5, dabOwn: true }, false)})`);
 ok(/dabOwnFree \? \{ dabOwn: true, dabFree: dabFreeOn \}/.test(scr) && /const dabOwnFree = !!dabState\?\.own\?\.on/.test(scr),
    'app: SDRScreen passes own.on and the phase');
 ok(/pane === 'stations' && !!p\.d\?\.own\?\.on[\s\S]{0,200}Every user can choose their own station on this multiplex/.test(src('src/components/DabPanel.tsx')),
