@@ -82,7 +82,8 @@ const up = async (port) => { for (let i = 0; i < 100; i++) { if (await new Promi
 
 let call, js;
 const tab = (label) => js(`(() => { const b = [...document.querySelectorAll("#radioTabs button")].find(x => x.textContent.trim().startsWith(${JSON.stringify(label)})); if (!b) return false; b.click(); return true; })()`);
-const ticked = () => js(`[...document.querySelectorAll('#modeBlockList input[data-mode]:not([data-on])')].filter(b => b.checked).map(b => b.dataset.mode).sort().join(",")`);
+// ★ "ticked" = live and ticked: a box greyed under a switched-off parent (each digital-spots mode under Digital spots) is off
+const ticked = () => js(`[...document.querySelectorAll('#modeBlockList input[data-mode]:not([data-on])')].filter(b => b.checked && !b.disabled).map(b => b.dataset.mode).sort().join(",")`);
 const drawn = () => js(`[...document.querySelectorAll('#modeBlockList input[data-mode]:not([data-on])')].map(b => b.dataset.mode)`);
 async function openSetup() {
   await call('Page.navigate', { url: `http://127.0.0.1:${P}/setup` });
@@ -122,7 +123,7 @@ try {
   console.log('── All on / All off change the boxes only ──');
   const m0 = fs.statSync(cfgPath).mtimeMs, before = radio0 => radio0;
   await js(`document.getElementById("modeAllOn").click(); 1`);
-  ok(await until(async () => (await ticked()).split(',').length === shown.length), 'All on: every drawn switch ticked');
+  ok(await until(async () => (await js(`[...document.querySelectorAll('#modeBlockList input[data-mode]:not([data-on])')].every(b => b.checked)`))), 'All on: every drawn switch ticked');
   ok(await js(`!document.querySelector('input[data-mode="avdata+text"]') || document.querySelector('input[data-mode="avdata+text"]').checked === true`),
      'All on leaves the "+" opt-in (message text) exactly as it was');
   await js(`document.getElementById("modeAllOff").click(); 1`);
@@ -137,7 +138,8 @@ try {
   ok(s1.includes('seen@' + NOW), `the save records seen@${NOW}`);
   ok(NEWER.every((x) => s1.includes(x)) && !s1.includes('adsb'), 'every new switch saved OFF by name, ADS-B on');
   ok(s1.includes('avdata+text') && s1.includes('spots-ft8') && s1.includes('spotsband-ft4'), 'option and Band words kept');
-  ok(savedOf('HACKRF1').blockedModes === '' && savedOf('ICOM-A').blockedModes === '', 'the other radios’ lists untouched by the save');
+  ok(savedOf('ICOM-A').blockedModes === '' && savedOf('USRP' ) && savedOf('31A0B7C').blockedModes === '', 'radios never opened: their lists untouched by the save');
+  ok(savedOf('HACKRF1').blockedModes === 'seen@' + NOW, 'the HackRF (opened, nothing blocked): only "seen@" added — nothing switched off');
   await openSetup();
   ok(await tab('HackRF') && await tab('ADS-B'), 'reopened: HackRF, then ADS-B');
   ok(await until(async () => (await ticked()) === 'adsb', 10000), `reopened: still ADS-B only (ticked: ${await ticked()})`);
