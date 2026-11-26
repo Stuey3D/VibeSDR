@@ -141,13 +141,13 @@ export function snrOfItem(it: NavtexQualityFields): NavtexSnr | null {
 
 // ── Mapping onto what is SHOWN ───────────────────────────────────────────────────────────────────────────────────
 /** Character ranges [start, end) of the SHOWN text (offset `base`: where the message text starts in it, `total` its
- *  length) with each slice's dB. The first range reaches back to 0 (the ZCZC header line is the first slice's), the last
+ *  length) with each slice's dB. The first range reaches back to `from` (the ZCZC header line is the first slice's), the last
  *  to `total` (NNNN is the last slice's). Empty ranges (a fade with nothing printed) are kept — the bar shows them. */
-export function snrRanges(q: NavtexSnr, base: number, total: number): { start: number; end: number; db: number }[] {
+export function snrRanges(q: NavtexSnr, base: number, total: number, from = 0): { start: number; end: number; db: number }[] {
   const out: { start: number; end: number; db: number }[] = [];
   let prev = 0;
   for (let i = 0; i < q.tl.length; i++) {
-    const start = i === 0 ? 0 : base + prev;
+    const start = i === 0 ? from : base + prev;
     let end = base + Math.max(prev, q.tc[i]);
     if (i === q.tl.length - 1) end = total;
     out.push({ start, end: Math.max(start, end), db: q.tl[i] });
@@ -170,6 +170,8 @@ export function lineWorst(lines: { start: number; end: number }[], ranges: { sta
 }
 /** Where the message text starts in a navtexBody() string ("ZCZC GB98\n" / "[start lost]\n" first). */
 export function bodyTextBase(body: string): number { const i = body.indexOf('\n'); return i < 0 ? body.length : i + 1; }
+/** Where the header line (ZCZC …) starts in a gallery FILE — after the head and its blank line; -1 when not found. */
+export function fileBodyStart(file: string): number { const b = file.indexOf('\n\n'); return b < 0 ? -1 : b + 2; }
 /** Where the message text starts in a gallery FILE (navtexFileText / the server's fileText: a head, a blank line, then
  *  the header line). -1 when it cannot be found (not a NAVTEX file). */
 export function fileTextBase(file: string): number {
