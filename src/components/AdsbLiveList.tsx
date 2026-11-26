@@ -1,6 +1,8 @@
 /**
- * AdsbLiveList — the ADS-B map's live list, in the bottom-left corner (V12; Stuart, 2026-10-24: "the full-screen map
- * is on … a live list in the bottom corner"). What it says and how big it is: src/services/adsbList.ts.
+ * AdsbLiveList — the ADS-B live list (V12; Stuart, 2026-10-24: "the full-screen map is on … a live list in the bottom
+ * corner"). What it says and how big it is: src/services/adsbList.ts. ★★★ beta96: no longer a corner of its own — its
+ * body (useAdsbBody) heads the AIR & SEA map's AIRCRAFT tab while ADS-B is live (TrackLiveList), which now owns the
+ * corner, the header, the pill and the pad's walk described below.
  *
  * ★★★ DRAWN BY REACT NATIVE OVER THE WEBVIEW, NOT INSIDE THE MAP PAGE — because of the controller. A game pad and the
  *     keyboard reach the app through hardwareKeys → PanelNav, never through the page: on iOS and the Mac a pad is a
@@ -17,15 +19,12 @@
  *   the same on every faceplate, with transparency on or off — it is part of the map, not a panel of the receiver.
  * ★ The decoder font — the display font is for the main controls only.
  */
-import { scrollLane } from '../constants/popupTokens';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
+import { NavRow, NavRing, useNavButton, useNavFocus } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import type { Aircraft } from '../services/SDRBackend';
-import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
-import { adsbListRows, adsbListRowsFit, adsbListWidth, parseListOpen, adsbChips, LIST_HEAD_H, LIST_ROW_H, EDGE,
+import { adsbListRows, adsbChips, LIST_HEAD_H, LIST_ROW_H,
          type AdsbListRow, type AdsbChip, type AdsbChipSrc } from '../services/adsbList';
 import { adsbGainStep, type AdsbGainView } from '../services/adsbTypes';
 
@@ -35,24 +34,18 @@ const GAIN_CARD_H = 70;
 /** ★ The chips' row under the header (NEWEST · FURTHEST · LONGEST TRACKED) — one line, scrolled sideways on a phone. */
 const CHIP_ROW_H = 30;
 
-const OPEN_KEY = 'lsv_adsb_list_open';
-
-export interface AdsbLiveListProps {
+/** ★★★ beta96 (stage 6, docs/v12/ONE-MAP.md): ADS-B mode's map IS the AIR & SEA map — this list no longer has a corner
+ *  of its own. Its body (the chips, the GAIN key and card, the rows, the data credit) heads the AIR & SEA map's AIRCRAFT
+ *  tab while ADS-B is live (TrackLiveList `adsb`), exactly as the web's adsbListHtml heads asRender's AIRCRAFT rows. */
+export interface AdsbBodyInput {
   /** The report in the app's shape, ranged from the receiver (SDRScreen's `aircraft`). */
   aircraft: Aircraft[];
   /** False until the first report: "taking the receiver to 1090 MHz" rather than "no aircraft". */
   started: boolean;
-  /** A row was chosen — find it on the map (the layer's focus(hex)). */
+  /** A row (or a chip) was chosen — find it on the map. */
   onFocus: (hex: string) => void;
   /** ★ The map's selected aircraft (an icon tapped, or a row) — its row is highlighted, as on the web list. */
   selected?: string | null;
-  /** The (i) in the header: the map layer's colour key, opened above the list (toggleLegend). */
-  onLegend?: () => void;
-  /** The list's footprint changed (width and height, 0 × 0 as a pill) — the page keeps the attribution clear of it,
-   *  and the map layer keeps aircraft clear of it (setObstacle). */
-  onFootprint?: (w: number, h: number) => void;
-  /** The map's colours as rgb triplets (MapOverlay `ink`): text, controls, controls-as-legend. */
-  ink: { x: string; k: string; kt: string };
   /** ★ V12: where the server serves the owner's operator logos ("http(s)://host/adsb/"), or null — the row then shows
    *  the operator's ICAO code as a badge. The server names a logo only when the file exists. */
   logoBase?: string | null;
@@ -66,36 +59,37 @@ export interface AdsbLiveListProps {
   gainSteps?: readonly number[];
   onGainAuto?: () => void;
   onGainSet?: (tenthDb: number) => void;
-  /** The modal's window and the parent's safe-area insets (the hook reads 0 inside a Modal — BrowserOverlay's note). */
-  areaW: number;
-  areaH: number;
-  insets: { top: number; bottom: number; left: number; right: number };
+}
+export interface AdsbBody {
+  /** the room the chips' row, the GAIN card and the credit take (the rows are counted by the host) */
+  extra: number;
+  count: number;
+  placed: number;
+  credit: boolean;
+  head: React.ReactNode;
+  rows: React.ReactNode[];
+  empty: string;
 }
 
-export default function AdsbLiveList(p: AdsbLiveListProps) {
-  const [open, setOpen] = useState(true);
-  useEffect(() => { AsyncStorage.getItem(OPEN_KEY).then((v) => setOpen(parseListOpen(v))).catch(() => {}); }, []);
-  const setOpenKept = (v: boolean) => { setOpen(v); AsyncStorage.setItem(OPEN_KEY, v ? '1' : '0').catch(() => {}); };
-
-  const rows = useMemo(() => adsbListRows(p.aircraft), [p.aircraft]);
+/** ★★ The ADS-B list's body as a hook, so the host (TrackLiveList) can size itself around it. Always called (hooks);
+ *  `p` null = nothing (ADS-B not live, or another tab shown). */
+export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string; kt: string }): AdsbBody {
+  const rows = useMemo(() => (p ? adsbListRows(p.aircraft) : []), [p?.aircraft]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ When each aircraft first appeared (NEWEST) — kept across reports, forgotten with the report (leaving ADS-B). */
   const firstSeen = useRef(new Map<string, number>());
-  const chips = useMemo<AdsbChip[]>(() => adsbChips(p.raw ?? null, p.receiver ?? null, firstSeen.current, Date.now()),
-    [p.raw, p.receiver]);
-  const innerW = p.areaW - p.insets.left - p.insets.right;
-  const innerH = p.areaH - p.insets.top - p.insets.bottom;
-  const width = adsbListWidth(innerW);
+  const chips = useMemo<AdsbChip[]>(() => (p ? adsbChips(p.raw ?? null, p.receiver ?? null, firstSeen.current, Date.now()) : []),
+    [p?.raw, p?.receiver]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!p) firstSeen.current.clear(); }, [!p]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [gainOpen, setGainOpen] = useState(false);
   const gainLast = useRef<{ idx: number; at: number } | null>(null);
+  const s = useMemo(() => makeStyles(ink), [ink]);
+  if (!p) return { extra: 0, count: 0, placed: 0, credit: false, head: null, rows: [], empty: '' };
   const g = p.gain ?? null;
   const chipRow = chips.length > 0 || !!g;
   const cardH = g && gainOpen ? GAIN_CARD_H : 0;
   /* ★★ V12 beta91 ODC-By 1.0 §4.3: while a row shows the server's aircraft data (its second line, the operator badge) the
    *  Mictronics notice sits at the list's foot (AircraftDataCredit — the card's words), counted in the list's size */
-  const creditH = p.aircraft.some((a) => !!(a.info || a.op)) ? AIRCRAFT_CREDIT_H : 0;
-  const fit = adsbListRowsFit(innerH - (chipRow ? CHIP_ROW_H : 0) - cardH - creditH);   // ★ the chips' row takes a row's room
-  const shown = Math.max(1, Math.min(fit, rows.length || 1));
-  const height = LIST_HEAD_H + (chipRow ? CHIP_ROW_H : 0) + cardH + creditH + shown * LIST_ROW_H;
+  const credit = p.aircraft.some((a) => !!(a.info || a.op));
   const gainStep = (dir: -1 | 1) => {
     if (!g || !p.gainSteps) return;
     const now = Date.now();
@@ -106,82 +100,43 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
   // ★ the card shows the step the listener just chose until the report catches up (the web's 2.5 s touch window)
   const shownNow = g && gainLast.current && Date.now() - gainLast.current.at < 2500 && p.gainSteps
     ? `${((p.gainSteps[gainLast.current.idx] ?? 0) / 10).toFixed(1)} dB` : g?.now;
-  useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ★ Flat: up/down (and left/right) walk pill/header → rows. Back is not taken here, so it reaches the map's overlay.
-  const { navCtx, scrollProps } = usePanelNav(true, { flat: true });
-  const s = useMemo(() => makeStyles(p.ink), [p.ink]);
-  const placed = rows.filter((r) => r.placed).length;
-
-  const pos = { left: EDGE + p.insets.left, bottom: EDGE + p.insets.bottom };
-  return (
-    <NavCtx.Provider value={navCtx}>
-      <View style={[s.wrap, pos, open && { width }]} onTouchStart={noteTouchInteraction}>
+  const head = (
+    <>
+      {chipRow && (
         <NavRow>
-          <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)}
-                   label={open ? 'AIRCRAFT' : '✈'} count={rows.length} placed={placed} />
-          {open && p.onLegend && <LegendKey s={s} onPress={p.onLegend} />}
-        </NavRow>
-        {open && chipRow && (
-          <NavRow>
-            <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow}
-                        contentContainerStyle={s.chipRowIn} keyboardShouldPersistTaps="handled">
-              {!!g && <GainKey s={s} g={g} open={gainOpen} onPress={() => setGainOpen((o) => !o)} />}
-              {chips.map((c) => <Chip key={c.key} s={s} c={c} onPress={() => p.onFocus(c.hex)} />)}
-            </ScrollView>
-          </NavRow>
-        )}
-        {open && !!g && gainOpen && (
-          <View style={s.gainCard}>
-            <NavRow>
-              <View style={s.gainKeys}>
-                <Text style={s.gainNow}>{shownNow}</Text>
-                <CardKey s={s} label="AUTO" on={g.auto} a11y="Automatic gain — chosen by messages decoded"
-                         onPress={() => { gainLast.current = null; p.onGainAuto?.(); }} />
-                <CardKey s={s} label="−" on={false} a11y="Gain down one step" onPress={() => gainStep(-1)} />
-                <CardKey s={s} label="+" on={false} a11y="Gain up one step" onPress={() => gainStep(1)} />
-              </View>
-            </NavRow>
-            <Text style={s.gainNote} numberOfLines={2}>{g.note}</Text>
-          </View>
-        )}
-        {open && (
-          <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
-                      keyboardShouldPersistTaps="handled">
-            {rows.length ? rows.map((r) => (
-              <NavRow key={r.hex}><Row s={s} r={r} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
-            )) : (
-              <Text style={s.note} numberOfLines={2}>
-                {p.started ? 'Listening on 1090 MHz — no aircraft yet.' : 'Taking the receiver to 1090 MHz…'}
-              </Text>
-            )}
+          <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow}
+                      contentContainerStyle={s.chipRowIn} keyboardShouldPersistTaps="handled">
+            {!!g && <GainKey s={s} g={g} open={gainOpen} onPress={() => setGainOpen((o) => !o)} />}
+            {chips.map((c) => <Chip key={c.key} s={s} c={c} onPress={() => p.onFocus(c.hex)} />)}
           </ScrollView>
-        )}
-        {open && creditH > 0 && <AircraftDataCredit ink={p.ink} />}
-      </View>
-    </NavCtx.Provider>
+        </NavRow>
+      )}
+      {!!g && gainOpen && (
+        <View style={s.gainCard}>
+          <NavRow>
+            <View style={s.gainKeys}>
+              <Text style={s.gainNow}>{shownNow}</Text>
+              <CardKey s={s} label="AUTO" on={g.auto} a11y="Automatic gain — chosen by messages decoded"
+                       onPress={() => { gainLast.current = null; p.onGainAuto?.(); }} />
+              <CardKey s={s} label="−" on={false} a11y="Gain down one step" onPress={() => gainStep(-1)} />
+              <CardKey s={s} label="+" on={false} a11y="Gain up one step" onPress={() => gainStep(1)} />
+            </View>
+          </NavRow>
+          <Text style={s.gainNote} numberOfLines={2}>{g.note}</Text>
+        </View>
+      )}
+    </>
   );
+  return {
+    extra: (chipRow ? CHIP_ROW_H : 0) + cardH, count: rows.length, placed: rows.filter((r) => r.placed).length, credit, head,
+    rows: rows.map((r) => (
+      <NavRow key={`adsb:${r.hex}`}><Row s={s} r={r} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
+    )),
+    empty: p.started ? 'Listening on 1090 MHz — no aircraft yet.' : 'Taking the receiver to 1090 MHz…',
+  };
 }
 
 type S = ReturnType<typeof makeStyles>;
-
-function HeadKey({ s, open, onPress, label, count, placed }: {
-  s: S; open: boolean; onPress: () => void; label: string; count: number; placed: number;
-}) {
-  const { focused, viewRef } = useNavButton(onPress);
-  const { ring } = useNavFocus();
-  return (
-    <TouchableOpacity ref={viewRef as never} style={[s.head, !open && s.pill]} onPress={onPress} activeOpacity={0.75}
-                      accessibilityRole="button"
-                      accessibilityLabel={open ? `Aircraft list, ${count} aircraft. Hide the list` : `Show the aircraft list, ${count} aircraft`}>
-      <Text style={s.headTxt}>{label}</Text>
-      <Text style={s.headCnt}>{count}{open && placed < count ? ` · ${placed} on map` : ''}</Text>
-      {open && <View style={{ flex: 1 }} />}
-      <Text style={s.chev}>{open ? '▾' : '▸'}</Text>
-      <NavRing on={focused} color={ring} radius={open ? 8 : 15} />
-    </TouchableOpacity>
-  );
-}
 
 /** ★ The GAIN key — "GAIN 33.8 · AUTO" and, while the server is trying steps, TRAINING (Stuart, 2026-10-24: "a little AGC
  *  training icon so that a user knows why the message rate has dropped suddenly"). Opens the card. */
@@ -223,18 +178,6 @@ function Chip({ s, c, onPress }: { s: S; c: AdsbChip; onPress: () => void }) {
         <Text style={s.chipKey}>{c.key}</Text>{c.figure ? ` ${c.figure}` : ''}{` · ${c.name}`}
       </Text>
       <NavRing on={focused} color={ring} radius={7} />
-    </TouchableOpacity>
-  );
-}
-
-function LegendKey({ s, onPress }: { s: S; onPress: () => void }) {
-  const { focused, viewRef } = useNavButton(onPress);
-  const { ring } = useNavFocus();
-  return (
-    <TouchableOpacity ref={viewRef as never} style={s.legKey} onPress={onPress} activeOpacity={0.7}
-                      accessibilityRole="button" accessibilityLabel="What the colours mean">
-      <Text style={s.legTxt}>i</Text>
-      <NavRing on={focused} color={ring} radius={12} />
     </TouchableOpacity>
   );
 }

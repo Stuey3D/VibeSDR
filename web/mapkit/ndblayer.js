@@ -19,6 +19,10 @@
  *     pause-on-touch) when the host has loaded it: opts.fitButton (the web's FIT key) shows on / paused / off, and
  *     opts.onFitState({on, paused}) tells a host whose key lives elsewhere (the app's React Native chip). layer.fitKey()
  *     = a tap on that key. Without VibeAutoFit the old immediate fit is kept.
+ * ★★★ beta96 HOSTED ON THE AIR & SEA MAP (docs/v12/ONE-MAP.md stage 8): the host's map, not one of its own —
+ *     opts.autoFit === false: no auto fit here (the host's frames the beacons: layer.points()); opts.drawReceiver === false:
+ *     no house (the host draws it; the rings and the line still use the receiver); opts.yieldClick(clientX, clientY, touch)
+ *     → true: something higher in the click order (an aircraft) took the press, so no beacon is chosen.
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
 (function (global) {
   'use strict';
@@ -149,12 +153,14 @@
       gl.on('click', onClick);
       gl.on('mouseenter', 'vsndb-icons', () => { gl.getCanvas().style.cursor = 'pointer'; });
       gl.on('mouseleave', 'vsndb-icons', () => { gl.getCanvas().style.cursor = ''; });
-      rxImage();
+      if (opts.drawReceiver !== false) rxImage();
       ready = true;
       draw(); drawRings();
     }
     function onClick(e) {
       const r = 14, p = e.point;
+      const oe = e.originalEvent, t = oe && oe.changedTouches && oe.changedTouches[0] ? oe.changedTouches[0] : oe;
+      if (typeof opts.yieldClick === 'function' && t && opts.yieldClick(t.clientX, t.clientY, !!(oe && (oe.changedTouches || oe.pointerType === 'touch')))) return;
       const f = gl.queryRenderedFeatures([[p.x - r, p.y - r], [p.x + r, p.y + r]], { layers: ['vsndb-icons'] });
       const k = f.length ? f[0].properties.k : '';
       select(k, true);
@@ -172,7 +178,7 @@
           geometry: { type: 'Point', coordinates: [b.lon, b.lat] } })) });
         gl.getSource('vsndb-u').setData({ type: 'FeatureCollection', features: (prefs.unheard ? unheard : []).map((u) => ({ type: 'Feature', properties: { i: u.ident },
           geometry: { type: 'Point', coordinates: [u.lon, u.lat] } })) });
-        gl.getSource('vsndb-rx').setData({ type: 'FeatureCollection', features: rx ? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [rx.lon, rx.lat] } }] : [] });
+        gl.getSource('vsndb-rx').setData({ type: 'FeatureCollection', features: rx && opts.drawReceiver !== false ? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [rx.lon, rx.lat] } }] : [] });
         const l = link();
         gl.getSource('vsndb-link').setData({ type: 'FeatureCollection', features: l ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: l } }] : [] });
         gl.setFilter('vsndb-sel', ['==', ['get', 'k'], sel || '\u0000']);
@@ -189,7 +195,7 @@
         m.on('click', () => select(b.key, true));
         m.addTo(llMarks);
       }
-      if (rx) { if (llRx) lm.removeLayer(llRx); llRx = LL.marker([rx.lat, rx.lon], { interactive: false, icon: LL.divIcon({ className: '', iconSize: [22, 22], iconAnchor: [11, 22], html: S.RX_SVG }) }).addTo(lm); }
+      if (rx && opts.drawReceiver !== false) { if (llRx) lm.removeLayer(llRx); llRx = LL.marker([rx.lat, rx.lon], { interactive: false, icon: LL.divIcon({ className: '', iconSize: [22, 22], iconAnchor: [11, 22], html: S.RX_SVG }) }).addTo(lm); }
       llMarks.addTo(lm);
     }
     function fit(force) {
@@ -207,7 +213,7 @@
     const AF = global.VibeAutoFit || null;
     let af = null;
     try {
-      if (AF) af = AF.attach(gl || lm, { points: () => beacons.filter((b) => !b.stale).map((b) => [b.lat, b.lon]), receiver: () => rx,
+      if (AF && opts.autoFit !== false) af = AF.attach(gl || lm, { points: () => beacons.filter((b) => !b.stale).map((b) => [b.lat, b.lon]), receiver: () => rx,
                                          on: prefs.autofit !== false, button: opts.fitButton || null, what: 'beacon heard',
                                          onState: (st) => { prefs.autofit = st.on; if (typeof opts.onFitState === 'function') opts.onFitState(st); } });
     } catch (e) { console.error('ndblayer: auto fit', e); af = null; }
@@ -234,6 +240,7 @@
         draw();
         const key = beacons.filter((b) => !b.stale).map((b) => b.key).sort().join(',');
         if (af) af.poke();
+        else if (opts.autoFit === false) { /* the host frames them */ }
         else if (prefs.autofit && !userMoved && key !== fittedKey) { fittedKey = key; fit(false); }
       },
       select(k) { select(k, false); },
@@ -256,6 +263,8 @@
       fit() { if (af) af.fitNow(); else fit(true); },
       /** ★ beta92 a tap on the host's FIT key — ADS-B's AUTO: paused → resume, on → off, off → on */
       fitKey() { if (af) af.key(); else fit(true); },
+      /** ★ beta96 the beacons heard, for a host's auto fit ([[lat, lon], …]) */
+      points() { return beacons.filter((b) => !b.stale).map((b) => [b.lat, b.lon]); },
       fitState() { return af ? af.state() : { on: !!prefs.autofit, paused: userMoved }; },
       destroy() {
         destroyed = true;

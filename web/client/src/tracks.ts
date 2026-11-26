@@ -14,6 +14,7 @@
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { dataUrl } from './origin';
+import { padRehighlight } from './gamepad';
 import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
@@ -393,6 +394,7 @@ const CSS = `
 .trkTop .btn.exit{background:#5a1f1f;border-color:#8a3434}
 .trkTop .ttl{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkTop .st{color:#9fb0c2;font-size:12px;flex:1 1 200px;min-width:0}
+.trkTop .scr{display:contents}
 .trkKey{position:absolute;right:10px;bottom:30px;z-index:900;background:rgba(11,20,32,.92);border:1px solid #2c3e52;border-radius:8px;color:#d7dee6;font:12px/1.3 inherit;max-height:60%;overflow:auto}
 .trkKey>summary{cursor:pointer;padding:6px 10px;font-weight:600;letter-spacing:.08em;list-style:none}
 .trkKey>summary::-webkit-details-marker{display:none}
@@ -406,6 +408,28 @@ const CSS = `
 .trkTop .rng .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkTop .tgl .btn[aria-pressed="true"]{background:#7fc8ff;border-color:#7fc8ff}
 .trkTop .rng[hidden],.trkKey[hidden]{display:none}
+.trkTop .tgl{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.trkTop .tgl::-webkit-scrollbar{display:none}
+.trkTop .tgl .btn{flex:none}
+.trkTop .tgl .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
+.trkTop .tgl .grp:first-child{margin-left:0}
+.trkTop .tgl .btn.live{box-shadow:inset 0 -3px 0 #ff5a4d}
+.trkTop .tgl .btn.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff3b2f;margin-right:5px;vertical-align:1px;animation:trkLive 1.6s ease-in-out infinite}
+@keyframes trkLive{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.trkTop .tgl .btn.live::before{animation:none}}
+.trkList .hd .tabs{display:inline-flex;gap:2px;flex-wrap:wrap}
+.trkList .hd .tab{background:none;border:0;border-bottom:2px solid transparent;color:#8fa2b5;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.05em;padding:2px 5px;cursor:pointer}
+.trkList .hd .tab[aria-selected="true"]{color:#e8eef5;border-bottom-color:#ffd34d}
+.trkList .hd .tab .tn{color:#ffd34d;margin-left:4px}
+.trkList .hd .tab:focus-visible,.trkList .hd .srt button:focus-visible{outline:2px solid #ffd34d}
+.trkList .hd .srt{display:inline-flex;margin-left:4px}
+.trkList .hd .srt button{background:#1e2a36;color:#cfd9e3;border:1px solid #33475a;font:700 9.5px/1 ui-monospace,Menlo,monospace;padding:3px 5px;cursor:pointer;margin-left:-1px}
+.trkList .hd .srt button:first-child{border-radius:4px 0 0 4px;margin-left:0}.trkList .hd .srt button:last-child{border-radius:0 4px 4px 0}
+.trkList .hd .srt button[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkList .hd .srt[hidden],.trkList .hd .tabs[hidden],.trkList .hd .lt[hidden],.trkList .filt[hidden]{display:none}
+.trkList .filt{display:flex;align-items:center;gap:6px;padding:4px 10px;font-size:11px;color:#cfd9e3;background:#132030;border-bottom:1px solid #22303d}
+.trkList .filt button{background:#1e2a36;color:#e8eef5;border:1px solid #33475a;border-radius:4px;font:600 10px/1 system-ui,sans-serif;padding:3px 6px;cursor:pointer}
+.trkMsg .lbl{color:#7fc8ff}
 .trkCard .nvTr{background:#1d2a36;color:#e3eaf1;border:1px solid #3c5266;border-radius:5px;font:600 11px ui-monospace,Menlo,monospace;padding:3px 8px;cursor:pointer}
 .trkCard .nvTr.on{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkCard .nvTr:focus-visible{outline:2px solid #ffd34d}
@@ -449,6 +473,12 @@ const CSS = `
 .trkView .avCredit a{color:#9ccfff}
 .trkView .cc{font:700 10px/1 ui-monospace,monospace;background:#2a3a4a;border-radius:3px;padding:1px 3px}
 @media (max-width:520px){
+  .trkTop .scr{display:flex;align-items:center;gap:8px;flex:1 1 0;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;
+    -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 14px),transparent 100%);mask-image:linear-gradient(to right,#000 calc(100% - 14px),transparent 100%)}
+  .trkTop .scr::-webkit-scrollbar{display:none}
+  .trkTop .scr>*{flex:0 0 auto}
+  .trkTop .scr .ttl{white-space:nowrap}
+  .trkTop .st{flex:1 0 100%}
   .trkList{left:6px;right:6px;width:auto;max-height:34%}
   .trkRow{grid-template-columns:minmax(0,1fr) auto auto}
   .trkRow .ag{display:none}
@@ -522,6 +552,15 @@ export interface TrackViewOpts {
   /** ★ beta91 (aircraft:true) where this server serves the owner's logos and silhouettes ("…/adsb/", adsb.ts adsbImageBase);
    *  null / absent = none. Every source's aircraft carries the ADS-B data's keys (vibe_aircraft_info.h). */
   imageBase?: string | null;
+  /** ★★ beta96 THE AIR & SEA MAP: aircraft AND other layers on one map — both cameras made, setCamera picks one. */
+  mixed?: boolean;
+  /** ★★ beta96 elements (by id) the view leaves reachable while it covers the page, raised above it while it is shown —
+   *  ADS-B mode's CHAT panel, its key being in this view's top bar now. */
+  liveIds?: string[];
+}
+/** ★★ beta96 an AREA-class item (the click order's last tier): a sea area, an area-shaped NAVTEX warning, a forecast arrow. */
+export function isAreaItem(it: any): boolean {
+  return !!it && (!!it._nofit || it._cl === 'm' || (!!it._sh && it._sh.kind === 'area'));
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -550,15 +589,19 @@ export class TrackView {
     const r = document.createElement('div');
     r.className = 'trkView'; r.hidden = true;
     r.setAttribute('role', 'dialog'); r.setAttribute('aria-label', o.title + ' map');
-    r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
+    // ★ beta96 everything but EXIT and the status line sits in .scr: in the row as before on a wide window, ONE row that
+    //   scrolls sideways on a phone (ADS-B's own bar did, Stuart 2026-10-25: "the only thing that must stay anchored is the
+    //   Exit ADS-B button") — the AIR & SEA map's chips, ranges, GAIN and CHAT no longer stack four rows deep
+    r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="scr"><span class="ttl">${esc(o.title)}</span>`
       + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
          + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
       // ★ V12 2026-11-02 the SHIPPING MAP: the layer row is always in the page (hidden when empty) — setToggles() redraws it
       //   as layers gain or lose data on this server (a layer with nothing is absent, never an empty toggle)
       + `<span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span>`
-      + `<span class="st"></span><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></div>`
-      + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span>${esc(o.listTitle)}</span> <span class="n">0</span>`
-      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="rows"></div></div>`
+      + `<button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></span><span class="st"></span></div>`
+      + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
+      + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
+      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
       + `<details class="trkKey"${o.legend ? '' : ' hidden'}><summary>KEY</summary><div class="kb">${o.legend || ''}</div></details>`
       + `</div>`;
     this.root = r;
@@ -583,10 +626,19 @@ export class TrackView {
     this.setToggles(o.toggles ?? [], o.toggled ?? {});
     const hd = r.querySelector('.hd') as HTMLElement;
     const toggle = () => this.setMin(!this.list.classList.contains('min'));
-    hd.onclick = toggle;
-    hd.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+    hd.onclick = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; toggle(); };
+    hd.onkeydown = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+    this.rowsEl.addEventListener('pointerdown', (e) => {
+      const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
+      this.down = { key: row?.dataset.key || '', at: performance.now(), x: e.clientX, y: e.clientY };
+    });
     this.rowsEl.addEventListener('click', (e) => this.rowPick(e));
-    this.rowsEl.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') this.rowPick(e); });
+    this.rowsEl.addEventListener('keydown', (e) => {
+      const k = (e as KeyboardEvent).key;
+      if (k !== 'Enter' && !(k === ' ' && (e.target as HTMLElement).closest('.trkRow'))) return;
+      if (k === ' ') e.preventDefault();
+      this.rowPick(e);
+    });
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     r.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (this.sel) this.select(''); else o.onExit(); } });
     document.body.appendChild(r);
@@ -594,15 +646,32 @@ export class TrackView {
     this.setMin(min, false);
   }
   get open() { return !this.root.hidden; }
+  /** ★★ beta96 a host's own chrome in this view (ADS-B mode's GAIN, CHAT, capture warning; its list chips; its feed
+   *  warning and gain pop-over): 'top' = in the top bar before the status line, 'head' = under the list's header, 'over' =
+   *  over the map. Made on first use; the host moves its elements in and hides them when they do not apply. */
+  slot(where: 'top' | 'head' | 'over'): HTMLElement {
+    const cls = `slot-${where}`;
+    let el = this.root.querySelector(`.${cls}`) as HTMLElement | null;
+    if (el) return el;
+    el = document.createElement(where === 'top' ? 'span' : 'div');
+    el.className = `trkSlot ${cls}`;
+    if (where === 'top') this.fitBtn.before(el);
+    else if (where === 'head') this.rowsEl.before(el);
+    else this.mapHost.appendChild(el);
+    return el;
+  }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
-    const sig = JSON.stringify([toggles.map((x) => x.id), toggles.map((x) => toggled[x.id] !== false)]);
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live]), toggles.map((x) => toggled[x.id] !== false)]);
     if (sig === this.tglSig) return;
     this.tglSig = sig;
     host.hidden = !toggles.length;
-    host.innerHTML = toggles.map((x) => `<button class="btn" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('');
+    // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, a red LIVE dot on the live
+    //   layer's (what the receiver is doing now)
+    host.innerHTML = toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
+      + `<button class="btn${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('');
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';
@@ -620,18 +689,125 @@ export class TrackView {
     try {
       // ★ a server whose map pack predates 'aero-plain' says no: the airport layers are switched by name instead
       if (this.vm && this.vm.setProfile?.(name) === false) {
+        // ★ beta96 'airsea' / 'airsea-plain' on an older pack: its aero profile, then the ports switched on by name
+        const sea = name === 'airsea' || name === 'airsea-plain';
+        const base = name === 'airsea' ? 'aero' : name === 'airsea-plain' ? 'aero-plain' : name;
+        if (sea) this.vm.setProfile?.(base);
         const m = this.vm.map;
         for (const id of ['airports-4', 'airports-6', 'airports-7', 'airports-8', 'runways', 'runway-ends'])
-          if (m?.getLayer?.(id)) m.setLayoutProperty(id, 'visibility', name === 'aero-plain' ? 'none' : 'visible');
+          if (m?.getLayer?.(id)) m.setLayoutProperty(id, 'visibility', base === 'aero-plain' ? 'none' : 'visible');
+        if (sea && m?.getLayer?.('ports')) m.setLayoutProperty('ports', 'visibility', 'visible');
       }
     } catch (e) { console.error('[tracks] profile', e); }
-    try { this.vmL?.setProfile?.(name); } catch (e) { console.error('[tracks] profile', e); }
+    try { if (this.vmL?.setProfile?.(name) === false) this.vmL?.setProfile?.(name === 'airsea' ? 'aero' : name === 'airsea-plain' ? 'aero-plain' : name); } catch (e) { console.error('[tracks] profile', e); }
   }
   get profile(): string { return this.o.profile || ''; }
   /** ★ V12 2026-11-02: the time filter's pressed button, from outside (the two shipping views share one filter). */
   setRange(id: string) {
     for (const b of Array.from(this.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === id));
   }
+  /** ★★★ beta96 THE LIVE MAPS (liveMaps.ts liveChrome): the title and the exit key are COMPUTED from the current mode on
+   *  every render and set here — a view is never left wearing the mode it was made for (Mac Ha 11-26). */
+  setChrome(title: string, exitLabel: string) {
+    const t = this.root.querySelector('.ttl') as HTMLElement, x = this.root.querySelector('.exit') as HTMLElement;
+    if (t.textContent !== title) { t.textContent = title; this.root.setAttribute('aria-label', title + ' map'); }
+    if (x.textContent !== exitLabel) x.textContent = exitLabel;
+  }
+  get title(): string { return (this.root.querySelector('.ttl') as HTMLElement).textContent || ''; }
+  get exitLabel(): string { return (this.root.querySelector('.exit') as HTMLElement).textContent || ''; }
+  private rngSig: string | null = null;
+  /** ★ beta96 the segmented control, redrawn when what it offers changes (the time filter for the maritime layers, the
+   *  DATALINK's bands) — [] = none. `onRange` is the view's own. */
+  setRanges(ranges: Array<{ id: string; label: string; words: string }>, current: string, label = '', hint = '') {
+    const sig = JSON.stringify([ranges.map((r) => r.id), label, hint]);
+    let host = this.root.querySelector('.rng:not(.tgl)') as HTMLElement | null;
+    if (sig !== this.rngSig) {
+      this.rngSig = sig;
+      if (!host) { host = document.createElement('span'); host.className = 'rng'; host.setAttribute('role', 'group'); this.root.querySelector('.ttl')!.after(host); }
+      host.hidden = !ranges.length;
+      host.setAttribute('aria-label', label || 'Show what was heard in the last…'); host.title = hint;
+      host.innerHTML = ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('');
+      for (const b of Array.from(host.querySelectorAll('[data-rng]')) as HTMLButtonElement[]) {
+        b.onclick = () => {
+          for (const o2 of Array.from(host!.querySelectorAll('[data-rng]'))) o2.setAttribute('aria-pressed', String(o2 === b));
+          this.o.onRange?.(b.dataset.rng || '');
+          this.refit = true;
+        };
+      }
+    }
+    if (host) for (const b of Array.from(host.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === current));
+  }
+  private tabSig = '';
+  /** ★★ beta96 the list's TABS (AIRCRAFT · MESSAGES · SHIPS …, liveMaps.ts liveTabs) in its header, with their counts.
+   *  [] = the plain list title. A tab pressed calls `onTab`; the host draws that tab's rows. */
+  setTabs(tabs: Array<{ id: string; label: string; n: number }>, current: string, onTab: (id: string) => void) {
+    const host = this.root.querySelector('.hd .tabs') as HTMLElement, lt = this.root.querySelector('.hd .lt') as HTMLElement;
+    host.hidden = tabs.length < 2; lt.hidden = tabs.length >= 2; this.countEl.hidden = tabs.length >= 2;
+    const sig = JSON.stringify([tabs, current]);
+    if (sig === this.tabSig) return;
+    this.tabSig = sig;
+    if (tabs.length === 1) lt.textContent = tabs[0].label;
+    host.innerHTML = tabs.map((t) => `<button class="tab" type="button" role="tab" data-tab="${esc(t.id)}" aria-selected="${t.id === current}">${esc(t.label)}<span class="tn">${t.n}</span></button>`).join('');
+    for (const b of Array.from(host.querySelectorAll('[data-tab]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); if (this.list.classList.contains('min')) this.setMin(false); onTab(b.dataset.tab || ''); };
+  }
+  get tab(): string { return (this.root.querySelector('.hd .tab[aria-selected="true"]') as HTMLElement | null)?.dataset.tab || ''; }
+  private srtSig = '';
+  /** ★★ beta96 the AIRCRAFT list's sort chip, NEAREST | LATEST — null = none (another tab). */
+  setSort(sort: string | null, onSort: (s: string) => void) {
+    const host = this.root.querySelector('.hd .srt') as HTMLElement;
+    host.hidden = !sort;
+    const sig = sort || '';
+    if (sig === this.srtSig) return;
+    this.srtSig = sig;
+    host.innerHTML = sort ? [['nearest', 'NEAREST'], ['latest', 'LATEST']].map(([id, l]) => `<button type="button" data-srt="${id}" aria-pressed="${id === sort}">${l}</button>`).join('') : '';
+    for (const b of Array.from(host.querySelectorAll('[data-srt]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onSort(b.dataset.srt || ''); };
+  }
+  /** ★★ beta96 the MESSAGES filter line ("Messages from RYR12K · ALL") — '' = none. */
+  setFilter(words: string, onClear: () => void) {
+    const f = this.root.querySelector('.filt') as HTMLElement;
+    f.hidden = !words;
+    if (!words) { f.innerHTML = ''; return; }
+    if (f.dataset.w === words) return;
+    f.dataset.w = words;
+    f.innerHTML = `<span>${esc(words)}</span><button type="button" aria-label="Show every message">× ALL</button>`;
+    (f.querySelector('button') as HTMLButtonElement).onclick = () => { f.dataset.w = ''; onClear(); };
+  }
+  /** ★ beta96 the camera's owner on a map with aircraft AND other things: 'aircraft' = the ADS-B layer's AUTO / FIT (the
+   *  aviation layers live), 'track' = the shared auto fit over the other items (ships, sondes, NAVTEX live). */
+  private camOwner: 'aircraft' | 'track' = 'aircraft';
+  private acAuto: boolean | null = null;
+  setCamera(owner: 'aircraft' | 'track') {
+    if (owner === this.camOwner) return;
+    this.camOwner = owner;
+    this.applyCamera();
+  }
+  private applyCamera() {
+    if (!this.acLayer) { this.fitBtn.hidden = false; return; }
+    const track = this.camOwner === 'track';
+    this.fitBtn.hidden = !track;
+    try {
+      if (track) { if (this.acAuto == null) this.acAuto = !!this.acLayer.prefs?.().autoZoom; this.acLayer.setPrefs?.({ autoZoom: false }); this.af?.resume?.(); this.af?.fitNow?.(); }
+      else { if (this.acAuto != null) { this.acLayer.setPrefs?.({ autoZoom: this.acAuto }); this.acAuto = null; } this.af?.pause?.(); }
+    } catch (e) { console.error('[tracks] camera', e); }
+  }
+  /** ★★ beta96 stage 8 (NDB): another layer on THIS view's map (web/mapkit/ndblayer.js). `cb` gets the map as it is made
+   *  ({ gl: the VibeMapGL, or null; lm: the Leaflet map, or null }) and null just before it is destroyed (the view hidden).
+   *  Returns the unsubscribe. A host layer never makes a map of its own (one WebGL context per view). */
+  private mapCbs = new Set<(m: { gl: any; lm: any } | null) => void>();
+  whenMap(cb: (m: { gl: any; lm: any } | null) => void): () => void {
+    this.mapCbs.add(cb);
+    if (this.layer && (this.vm || this.lmap)) { try { cb({ gl: this.vm, lm: this.vm ? null : this.lmap }); } catch (e) { console.error('[tracks] whenMap', e); } }
+    return () => { this.mapCbs.delete(cb); };
+  }
+  private mapSay(m: { gl: any; lm: any } | null) { for (const cb of Array.from(this.mapCbs)) try { cb(m); } catch (e) { console.error('[tracks] whenMap', e); } }
+  /** ★ beta96 stage 8 a host layer's points for the shared auto fit (the NDB beacons heard) — null = none. */
+  morePoints: (() => [number, number][]) | null = null;
+  /** ★ beta96 the click order for a host layer: is an aircraft under this press? (it is selected if so) */
+  pickAircraft(x: number, y: number, touch: boolean): boolean {
+    try { return !!this.acLayer?.pickAt?.(x, y, touch); } catch { return false; }
+  }
+  /** ★ an item to select when its row is pressed (a MESSAGES row names its aircraft's key) — `onRow` hears every press. */
+  onRow: ((key: string) => void) | null = null;
   private keySig = '';
   /** ★★ V12 2026-11-02 the KEY, redrawn — it lists the glyphs of the layers this map has (ships, DSC, hazards, arrows). */
   setLegend(html: string) {
@@ -647,15 +823,36 @@ export class TrackView {
     (this.list.querySelector('.mn') as HTMLElement).textContent = min ? '▴' : '▾';
     if (save) try { localStorage.setItem(MIN_KEY, min ? '1' : '0'); } catch { /* private window */ }
   }
+  /** ★ the row under the last press — a list redrawn every second (ADS-B's live report) can replace it between the press
+   *  and its click: found again by its key (the ADS-B view's rule, adsbDown, carried over in beta96). */
+  private down = { key: '', at: 0, x: 0, y: 0 };
+  private rowOf(e: Event): HTMLElement | null {
+    let row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
+    const me = e as MouseEvent;
+    if (!row && e.type === 'click' && this.down.key && performance.now() - this.down.at < 1000
+        && Math.abs(me.clientX - this.down.x) < 12 && Math.abs(me.clientY - this.down.y) < 12) {
+      const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
+      row = this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(this.down.key) : this.down.key.replace(/["\\]/g, '')}"]`);
+    }
+    return row;
+  }
   private rowPick(e: Event) {
-    const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
+    const row = this.rowOf(e);
     if (!row) return;
-    const k = row.dataset.key || '';
+    const k = row.dataset.focus || row.dataset.key || '';
+    try { this.onRow?.(row.dataset.key || ''); } catch (e) { console.error('[tracks] onRow', e); }
+    if (row.dataset.nofocus) { this.markSel(row.dataset.key || ''); return; }
     const hex = this.acKeys.get(k);
+    // ★ beta96 a row chosen is where the person wants the map (mapAutoFit's own rule): the auto fit pauses, or its next
+    //   tick glides straight back out to everything (the AIR & SEA map pokes it on every feed) — FIT brings AUTO back
+    if (!hex || !this.acLayer) try { this.af?.pause(); } catch { /* none */ }
     if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
   }
+  /** ★ beta96 the selection changed (an icon tapped, a row pressed) — the AIR & SEA map filters its MESSAGES by it. */
+  onSel: ((key: string) => void) | null = null;
   private markSel(k: string) {
+    if (k !== this.sel) try { this.onSel?.(k); } catch (e) { console.error('[tracks] onSel', e); }
     this.sel = k;
     for (const el of Array.from(this.rowsEl.querySelectorAll('.trkRow.sel'))) el.classList.remove('sel');
     const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
@@ -669,6 +866,10 @@ export class TrackView {
   private af: any = null;
   private fitBtn: HTMLButtonElement;
   /** The items changed: the auto fit considers a move (its hysteresis decides; a 1 s tick does the rest). */
+  /** ★ beta96 stage 8 a host layer's points changed (morePoints): the auto fit considers a move. */
+  pokeFit() { this.autoFitCheck(); }
+  /** ★ a host layer's item chosen: the auto fit pauses (FIT brings AUTO back), as a row chosen here does. */
+  pauseFit() { try { this.af?.pause(); } catch { /* none */ } }
   private autoFitCheck(_items?: any[]) { try { this.af?.poke(); } catch (e) { console.error('[tracks] auto fit', e); } }
   /** ★ The card again from its item (a fetched text arrived for it). */
   refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
@@ -703,8 +904,10 @@ export class TrackView {
     for (const el of Array.from(document.body.children) as HTMLElement[]) {
       if (el === this.root || el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.inert) continue;
       if (el.classList.contains('trkView') || el.id === 'pill' || el.id === 'toast') continue;
+      if (this.o.liveIds?.includes(el.id)) continue;
       el.inert = true; this.inerted.push(el);
     }
+    for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = '700'; }
     (this.root.querySelector('.exit') as HTMLElement).focus();
     this.boot(++this.gen).catch((e) => { console.error('[tracks] the map could not load', e); this.note('The map did not finish loading — the list still updates.'); });
   }
@@ -714,11 +917,13 @@ export class TrackView {
     this.attribObs?.disconnect(); this.attribObs = null; this.list.style.bottom = '';
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
+    for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = ''; }
     this.gen++;
+    this.mapSay(null);   // ★ beta96 stage 8 a host layer (NDB) lets go first
     try { this.af?.destroy(); } catch (e) { console.error('[tracks] auto fit destroy', e); }
     this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
-    this.acLayer = null; this.acKeys.clear(); this.acHex.clear();
+    this.acLayer = null; this.acMap = null; this.acAuto = null; this.acKeys.clear(); this.acHex.clear();
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
     this.layer = null;
     try { this.vm?.destroy(); } catch (e) { console.error('[tracks] map destroy', e); }
@@ -727,7 +932,7 @@ export class TrackView {
     this.lmap = null; this.vmL = null;
     // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
     //   again had no KEY (and setLegend found nothing to fill)
-    for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey')) el.remove();
+    for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey') && !el.classList.contains('trkSlot')) el.remove();
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null;
   }
@@ -783,7 +988,7 @@ export class TrackView {
   }
   /** The scale bar's units: NM beside km on the sea and air maps. */
   private scaleKind(): 'nautical' | 'metric' {
-    const n = this.o.nautical ?? (this.o.profile === 'marine' || this.o.profile === 'aero');
+    const n = this.o.nautical ?? (this.o.profile === 'marine' || this.o.profile === 'aero' || this.o.profile === 'airsea');
     return n ? 'nautical' : 'metric';
   }
   private attach(map: any, L: any) {
@@ -796,32 +1001,32 @@ export class TrackView {
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,
       shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, yieldGroups: this.o.yieldGroups, aria: this.o.aria, onCard: this.o.onCard,
       onSelect: (k: string | null) => this.markSel(k || ''),
+      // ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a press on an AREA's marker (a sea area's name, a
+      //   NAVTEX area warning, a forecast arrow) goes to an aircraft under it first — Stuart's community-map bug
+      yieldClick: (it: any, ev: any) => {
+        if (!this.acLayer || !isAreaItem(it)) return false;
+        const t = ev?.changedTouches?.[0] ?? ev;
+        const took = !!this.acLayer.pickAt?.(t?.clientX, t?.clientY, !!ev?.changedTouches || ev?.pointerType === 'touch');
+        if (took) this.layer?.select?.(null);
+        return took;
+      },
       // ★ beta92 the first framing is the auto fit's (a glide's rules), not an immediate fitBounds — unless it is absent
-      firstFit: this.o.aircraft || !w.VibeAutoFit ? undefined : false,
+      firstFit: (this.o.aircraft && !this.o.mixed) || !w.VibeAutoFit ? undefined : false,   // ★ beta96 a mixed map is the auto fit's
     });
-    if (this.o.aircraft && w.VibeAdsbLayer) {
-      try {
-        let prefs: any = null;
-        try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || 'null'); } catch { /* private */ }
-        this.acLayer = w.VibeAdsbLayer.create(map, {
-          receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
-          imageBase: this.o.imageBase ?? null,
-          onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
-          // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
-          onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
-        });
-        this.placeAcObstacle();
-        w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
-      } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
-    }
+    this.acMap = map;
+    // ★ beta96 a MIXED map (AIR & SEA) makes the ADS-B layer only when it first has aircraft — a shipping-only view has no
+    //   dead AUTO / RINGS / RANGE keys and no rings over the sea (feed → makeAcLayer)
+    if (this.o.aircraft && !this.o.mixed) this.makeAcLayer();
     /* ★★★ beta92 THE AUTO FIT — every item heard and the receiver, clear of the list's corner; the FIT key is its AUTO key.
      *  On the aviation map the ADS-B layer frames the aircraft (its own AUTO / FIT), so the key is hidden there. */
     this.fitBtn.hidden = !!this.acLayer;
-    if (!this.acLayer && w.VibeAutoFit) {
+    // ★ beta96 a map with aircraft AND other layers (the AIR & SEA map) has the shared auto fit too; setCamera says whose
+    //   camera it is (the ADS-B layer's while aviation is live, else this one's)
+    if ((!this.acLayer || this.o.mixed) && w.VibeAutoFit) {
       const layer = this.layer;
       try {
         this.af = w.VibeAutoFit.attach(map, {
-          points: () => layer.points(), receiver: () => layer.receiver(), button: this.fitBtn,
+          points: () => { const p = layer.points(); const m = this.morePoints?.(); return m?.length ? [...p, ...m] : p; }, receiver: () => layer.receiver(), button: this.fitBtn,
           what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
           obstacle: () => {
             const r = this.list.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
@@ -830,14 +1035,37 @@ export class TrackView {
         });
       } catch (e) { console.error('[tracks] auto fit', e); this.af = null; }
     }
+    if (this.o.mixed) this.applyCamera();
     if (this.pending) {
       const p = this.pending; this.pending = null; this.feed(p);
       if (!this.wantFocus) this.autoFitCheck(p);
     }
     this.watchAttrib();
+    this.mapSay({ gl: this.vm, lm: this.vm ? null : this.lmap });   // ★ beta96 stage 8 a host layer (NDB) joins this map
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
 
+  private acMap: any = null;
+  /** ★ beta90 the ADS-B layer (aircraft:true) — at attach, or (mixed) when the first aircraft arrives. */
+  private makeAcLayer() {
+    const w = window as any, map = this.acMap;
+    if (this.acLayer || !map || !w.VibeAdsbLayer) return;
+    try {
+      let prefs: any = null;
+      // ★ beta96 ADS-B mode's own map is this one now: its toggles (RANGE, RINGS, AUTO …) carry over until set here
+      try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || localStorage.getItem('vibesdr.adsbMapPrefs') || 'null'); } catch { /* private */ }
+      this.acLayer = w.VibeAdsbLayer.create(map, {
+        receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
+        imageBase: this.o.imageBase ?? null,
+        onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
+        // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
+        onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
+      });
+      this.placeAcObstacle();
+      w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
+    } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
+    if (this.o.mixed) this.applyCamera();
+  }
   /** ★ The map's attribution (a licence line we may not hide) sits at the bottom; on a phone it wraps to three lines and
    *  the list's last row went under it. The list stands just above it, however tall it grows. */
   private attribObs: ResizeObserver | null = null;
@@ -859,6 +1087,7 @@ export class TrackView {
   /** Every report: the whole list (items with key/lat/lon), the rows' HTML, the status line, the count. */
   /** ★ beta90 the items to their layers: aircraft (`_adsb`) to the ADS-B layer, the rest to the track layer. */
   private feed(items: any[]) {
+    if (!this.acLayer && this.o.mixed && this.acMap && items.some((it) => it && it._adsb)) this.makeAcLayer();
     if (!this.acLayer) { this.layer.update(items); return; }
     const rest: any[] = [], ac: any[] = [];
     this.acKeys.clear(); this.acHex.clear();
@@ -895,9 +1124,18 @@ export class TrackView {
     else this.pending = items;
     if (rowsHtml !== this.lastRows) {
       const top = this.rowsEl.scrollTop;
+      /* ★ beta96 (ADS-B's live list, redrawn every second) the controller's highlight and the keyboard's focus are on an
+       *  element about to be replaced: found again by its key */
+      const hiKey = (this.rowsEl.querySelector('.trkRow.gpFocus') as HTMLElement | null)?.dataset.key || '';
+      const act = document.activeElement as HTMLElement | null;
+      const focusKey = act && this.rowsEl.contains(act) ? (act.closest('.trkRow') as HTMLElement | null)?.dataset.key || '' : '';
       this.rowsEl.innerHTML = rowsHtml; this.lastRows = rowsHtml;
       this.rowsEl.scrollTop = top;
       if (this.sel) this.markSel(this.sel);
+      const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
+      const byKey = (k: string) => this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(k) : k.replace(/["\\]/g, '')}"]`) as HTMLElement | null;
+      if (hiKey) { const r2 = byKey(hiKey); if (r2) padRehighlight(r2); }
+      if (focusKey) byKey(focusKey)?.focus({ preventScroll: true });
     }
     if (this.statEl.textContent !== status) this.statEl.textContent = status;
     this.countEl.textContent = String(count);

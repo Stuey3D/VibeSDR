@@ -16,6 +16,7 @@ const BIN = process.env.VIBESERVER_BIN || '', CLIP = process.env.VIBE_NDB_CLIP |
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP) || !fs.existsSync(EDGE)) { console.log('   not run — VIBESERVER_BIN, VIBE_NDB_CLIP and Edge needed'); process.exit(3); }
 let pass = 0, fail = 0;
+const V = "document.querySelector('.trkView:not([hidden])')";   // ★ beta96 the AIR & SEA map's view
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
@@ -67,8 +68,12 @@ try {
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
   ok(/\bNDB\b/.test(opts || ''), `the Mode sheet offers NDB: ${opts}`);
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'NDB'); b && b.click(); return !!b; })()`);
-  ok(await until(`!!document.getElementById('ndbView') && !document.getElementById('ndbView').hidden`, 6000), 'the NDB map view opens (map-first, over the waterfall)');
-  ok(await ev(`document.body.classList.contains('ndbMap') && document.getElementById('app').inert === true`), 'the page under the map is inert');
+  // ★★★ beta96 (docs/v12/ONE-MAP.md stage 8): NDB is a live state of the AIR & SEA map
+  ok(await until(`window.__vibeAirSea?.()?.open === true && window.__vibeAirSea().mode === 'ndb'`, 6000), 'NDB opens the AIR & SEA map, NDB live (map-first, over the waterfall)');
+  const ch = await ev(`JSON.stringify(window.__vibeAirSea())`);
+  ok(/AVIATION & MARITIME · NDB/.test(ch) && /"exit":"EXIT NDB"/.test(ch) && /"tab":"navaids"/.test(ch), `its title, EXIT NDB and the NAVAIDS tab: ${ch}`);
+  ok(await ev(`document.getElementById('app').inert === true`), 'the page under the map is inert');
+  ok(await ev(`!!${V}?.querySelector('.slot-head #ndbList') && !!${V}?.querySelector('.slot-top #ndbRings') && !${V}?.querySelector('.slot-top #ndbFit')`), 'the beacon list under the header, RINGS in the top bar, the map\'s own FIT (no second one)');
   ok(await until(`[...document.querySelectorAll('#ndbList .ndbRow .c.conf')].map(x => x.textContent).join() === '✓ CAM,✓ WOD'`, 120000),
      `✓ CAM and ✓ WOD in the list, lowest frequency first: ${await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].map(r => r.innerText.replace(/\\n/g, ' ')).join(' | ')`)}`);
   const row = await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD'))?.innerText.replace(/\\n/g, ' ') || ''`);
@@ -77,9 +82,13 @@ try {
   ok(await until(`!!document.querySelector('#ndbList .ndbRow .tx .q-high')`, 15000), `the live readings stream in, coloured by confidence: ${await ev(`[...document.querySelectorAll('#ndbList .ndbRow .tx')].map(x => x.innerHTML).join(' | ').slice(0, 200)`)}`);
   const tiles = await ev(`[...document.querySelectorAll('#ndbTiles .ndbTile')].map(t => t.textContent).join(' | ')`);
   ok(/IDENTIFIED 2/.test(tiles || '') && /FURTHEST WOD \d+ NM/.test(tiles || ''), `the tiles in the list's header: ${tiles}`);
-  ok(await until(`[...document.querySelectorAll('#ndbMapHost .leaflet-marker-icon, #ndbMapHost canvas')].length > 0`, 20000), 'the map draws (GPU, or Leaflet without WebGL 2)');
-  ok(await until(`/WOD/.test(document.getElementById('ndbMapHost').textContent) || !!document.querySelector('#ndbMapHost canvas')`, 10000), 'WOD is on the map at its published position');
-  ok(await until(`/\\d+ NM/.test(document.getElementById('ndbMapHost').textContent) || !!document.querySelector('#ndbMapHost canvas')`, 5000), `the range rings are labelled in NM: ${await ev(`[...document.querySelectorAll('#ndbMapHost .vsadsb-rl')].slice(0, 4).map(x => x.textContent).join(', ')`)}`);
+  const MH = `${V}.querySelector('.trkMapHost')`;
+  ok(await until(`[...${MH}.querySelectorAll('.leaflet-marker-icon, canvas')].length > 0`, 20000), 'the map draws (GPU, or Leaflet without WebGL 2)');
+  // ★ the beacon layer is on the map's OWN map (one WebGL context): its sources there (GPU), or WOD's marker (Leaflet)
+  ok(await until(`/WOD/.test(${MH}.textContent) || (window.__vibeNdbLayer?.points?.() || []).length >= 2`, 10000), `WOD and CAM are on the map at their published positions: ${await ev(`JSON.stringify(window.__vibeNdbLayer?.points?.())`)}`);
+  ok(await until(`/\\d+ NM/.test(${MH}.textContent) || !!${MH}.querySelector('canvas')`, 5000), `the range rings are labelled in NM: ${await ev(`[...${MH}.querySelectorAll('.vsadsb-rl')].slice(0, 4).map(x => x.textContent).join(', ')`)}`);
+  ok(await ev(`${V}.querySelectorAll('canvas.maplibregl-canvas').length <= 1`), 'one map, not two (no map of NDB\'s own)');
+  ok(await until(`/NDB/.test(${V}.querySelector('.trkKey')?.textContent || '')`, 3000), 'the KEY has the NDB rows');
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === true`), 'zoom is held');
   console.log('   screenshot', await shot('map'));
   await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD')).click()`);
@@ -101,20 +110,21 @@ try {
   await ev(`document.getElementById('ndbStatsBtn').click()`);
   ok(await until(`/BEACONS HEARD PER HOUR/.test(document.getElementById('ndbDlgBox')?.textContent || '') && /WOD/.test(document.getElementById('ndbDlgBox')?.textContent || '')`, 5000), 'the stats open with WOD');
   await ev(`document.getElementById('ndbDlgX').click()`);
-  await ev(`document.getElementById('ndbLiveHead').click()`);
-  ok(await until(`document.getElementById('ndbLive').classList.contains('min')`, 2000), 'the list folds to a pill');
-  await ev(`document.getElementById('ndbLiveHead').click()`);
+  await ev(`${V}.querySelector('.trkList .hd .mn').click()`);
+  ok(await until(`${V}.querySelector('.trkList').classList.contains('min')`, 2000), 'the list folds');
+  await ev(`${V}.querySelector('.trkList .hd .mn').click()`);
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1500);
-  const fit = JSON.parse(await ev(`JSON.stringify(document.getElementById('ndbLive').getBoundingClientRect())`));
-  ok(fit.left >= 9 && fit.right <= 390 - 9, `the list fits a phone: ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
+  const fit = JSON.parse(await ev(`JSON.stringify(${V}.querySelector('.trkList').getBoundingClientRect())`));
+  ok(fit.left >= 4 && fit.right <= 390 - 4, `the list fits a phone (the map's own list margins): ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
   ok(await ev(`document.documentElement.scrollWidth <= 390`), `nothing scrolls sideways (${await ev('document.documentElement.scrollWidth')})`);
-  ok(await ev(`(() => { const t = document.getElementById('ndbTop').getBoundingClientRect(), e = document.getElementById('ndbExit').getBoundingClientRect(); return e.left >= 0 && e.right <= 390; })()`), 'EXIT NDB stays on screen');
+  ok(await ev(`(() => { const e = ${V}.querySelector('.exit').getBoundingClientRect(); return e.left >= 0 && e.right <= 390 && e.width > 0; })()`), 'EXIT NDB stays on screen');
   console.log('   screenshot', await shot('phone'));
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(800);
-  await ev(`document.getElementById('ndbExit').click()`);
-  ok(await until(`document.getElementById('ndbView')?.hidden === true`, 6000), 'EXIT NDB closes the map');
+  await ev(`${V}.querySelector('.exit').click()`);
+  ok(await until(`!window.__vibeAirSea?.()?.open`, 6000), 'EXIT NDB closes the map');
+  ok(await ev(`document.getElementById('ndbView').contains(document.getElementById('ndbList')) && document.getElementById('ndbView').hidden`), 'its pieces are parked again');
   ok(await until(`/7[.,]074/.test(document.getElementById('mFreq')?.textContent || '')`, 6000), `the dial is back: ${await ev(`document.getElementById('mFreq')?.textContent`)}`);
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === false && document.getElementById('app').inert === false`), 'zoom and the page are given back');
 } catch (e) { ok(false, `driver: ${e}`); }

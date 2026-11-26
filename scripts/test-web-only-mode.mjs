@@ -69,9 +69,11 @@ try {
     await tap(at[0], at[1]);
     if (await until(`!document.getElementById("audioGate")`, 3000)) break;
   }
-  ok(await until(`!document.getElementById("adsbView").hidden`, 30000), '★ the page arrives IN ADS-B without anyone pressing ADS-B');
-  ok(await until(`getComputedStyle(document.getElementById("adsbExit")).display === "none"`, 8000), '★ EXIT ADS-B is not there');
-  ok(await until(`(() => { const n = document.querySelector("#adsbTop .onlyModeNote"); return !!n && !n.hidden && n.offsetParent !== null && n.textContent === "ADS-B only on this receiver"; })()`, 8000),
+  // ★ beta96 ADS-B mode's map is the AIR & SEA map (a .trkView) in its ADS-B-live state
+  const AS = '(() => { const v = [...document.querySelectorAll(".trkView")].find((x) => !x.hidden); return v || null; })()';
+  ok(await until(`(() => { const v = ${AS}; return !!v && /ADS-B/.test(v.querySelector(".ttl")?.textContent || ""); })()`, 30000), '★ the page arrives IN ADS-B without anyone pressing ADS-B');
+  ok(await until(`(() => { const v = ${AS}; const x = v && v.querySelector(".exit"); return !!x && getComputedStyle(x).display === "none"; })()`, 8000), '★ EXIT ADS-B is not there');
+  ok(await until(`(() => { const v = ${AS}; const n = v && v.querySelector(".trkTop .onlyModeNote"); return !!n && !n.hidden && n.offsetParent !== null && n.textContent === "ADS-B only on this receiver"; })()`, 8000),
      '★ the bar says "ADS-B only on this receiver"');
   await js(`document.activeElement && document.activeElement.blur(); 1`);
   for (const type of ['keyDown', 'keyUp']) await call('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -79,7 +81,7 @@ try {
   await sleep(2500);
   const sent = (await js(`window.__sent || []`)) || [];
   ok(!sent.some((m) => /"type":"adsb"/.test(m) && /"on":0/.test(m)), `★ no "ADS-B off" was sent (${sent.filter((m) => /adsb/.test(m)).slice(0, 3).join(' ')})`);
-  ok(!(await js(`document.getElementById("adsbView").hidden`)), '…and the page is still in ADS-B');
+  ok(!!(await js(`(() => { const v = ${AS}; return !!v && /ADS-B/.test(v.querySelector(".ttl")?.textContent || ""); })()`)), '…and the page is still in ADS-B');
   ok(!/only mode: a listener's/.test(fs.readFileSync(path.join(T, 'server.log'), 'utf8')), '…the server never had to refuse one');
   ok(errors.length === 0, `no page errors (${errors.slice(0, 2).join(' | ')})`);
 } finally {

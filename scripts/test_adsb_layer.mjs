@@ -352,6 +352,51 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(r && r.length === 4 * 5 + 1, 'no needles: the ring joins only heard (and lent) bearings — no dive to the receiver');
 }
 
+// ── ★★★ beta96 THE OUTLINE'S SHAPE (rangeShape — Stuart 11-26: "still a STAR" on the Sony / Almere) ──
+{
+  ok(M.RANGE_GAP_DEG === 10 && M.RANGE_CLOSE_DEG === 4 && M.RANGE_TAPER === 0.03 && M.RANGE_SPREAD_DEG === 8, 'shape: the named constants (gap 10°, close ±4°, taper 3 %/°, spread ±8°)');
+  // a STARRY set: a dense near core (60–90 km, dips where few aircraft were) plus a few far aircraft at isolated bearings,
+  // and a sea sector 200°–239° with nothing heard
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const km = new Array(360).fill(0);
+  for (let i = 0; i < 360; i++) if (i < 200 || i >= 240) km[i] = rnd() < 0.3 ? 0 : 60 + 30 * rnd();   // sparse core: 30 % empty, short runs
+  for (const [b, r] of [[20, 280], [75, 310], [130, 260], [300, 290], [341, 240]]) km[b] = r;          // the needles
+  for (let i = 200; i < 240; i++) km[i] = 0;
+  const sh = M.rangeShape(km);
+  let worst = 0, at = -1;
+  for (let i = 0; i < 360; i++) {
+    if (!(sh[i] > 0)) continue;
+    const a = sh[(i + 4) % 360], b = sh[(i + 356) % 360];
+    if (!(a > 0) || !(b > 0)) continue;     // an edge of the gap: no neighbour 4° that way
+    const r = sh[i] / Math.max(a, b);
+    if (r > worst) { worst = r; at = i; }
+  }
+  ok(worst <= 1.25, `shape: no vertex more than 25 % longer than both its neighbours 4° away (worst ${worst.toFixed(3)} at ${at}°)`);
+  let rawWorst = 0;
+  for (let i = 0; i < 360; i++) { const a = km[(i + 4) % 360], b = km[(i + 356) % 360]; if (km[i] > 0 && a > 0 && b > 0) rawWorst = Math.max(rawWorst, km[i] / Math.max(a, b)); }
+  ok(rawWorst > 2, `shape: …where the raw maxima were a star (worst ${rawWorst.toFixed(2)})`);
+  ok(km.every((v, i) => sh[i] >= v), 'shape: no bearing is ever lowered — each true furthest point stays on (or inside) the outline');
+  ok(sh[75] === 310, 'shape: the furthest aircraft (310 km at 75°) is a vertex of the outline');
+  let gapDrawn = 0; for (let i = 200; i < 240; i++) if (sh[i] > 0) gapDrawn++;
+  ok(gapDrawn === 0, `shape: the 40° sea sector invents no range (${gapDrawn} bearings drawn there)`);
+  // the dips: an empty or low bearing between two well-heard ones is lifted to their level
+  const dip = new Array(360).fill(100); dip[50] = 0; dip[51] = 40; dip[52] = 0;
+  const dd = M.rangeShape(dip);
+  ok(dd[50] >= 100 && dd[51] >= 100 && dd[52] >= 100, `shape: a dip between well-heard bearings is closed (${dd[50]}, ${dd[51]}, ${dd[52]})`);
+  // no spokes: the ring has no vertex at the receiver and no vertex in the gap
+  const ring = M.rangeRing(52.29, -0.85, sh);
+  const nearRx = ring.filter((p) => M.distNm(52.29, -0.85, p[1], p[0]) < 5).length;
+  const inGap = ring.slice(0, -1).filter((p) => { const b = M.bearingDeg(52.29, -0.85, p[1], p[0]); return b > 200.5 && b < 239.5; }).length;
+  ok(nearRx === 0 && inGap === 0, `shape: the outline closes across the gap — no spoke to the receiver (${nearRx}), no vertex in the gap (${inGap})`);
+  // a smooth outline is unchanged; an empty one stays empty
+  ok(M.rangeShape(new Array(360).fill(120)).every((v) => v === 120), 'shape: a smooth outline is unchanged');
+  ok(M.rangeShape(new Array(360).fill(0)).every((v) => v === 0), 'shape: nothing heard = nothing drawn');
+  // one far bearing in a full ring: a broad bump (8° each way), not a needle
+  const sp = new Array(360).fill(100); sp[45] = 200;
+  const ss = M.rangeShape(sp);
+  ok(ss[45] === 200 && Math.abs(ss[44] - 194) < 1e-9 && Math.abs(ss[41] - 176) < 1e-9 && Math.abs(ss[53] - 152) < 1e-9 && ss[60] === 100, 'shape: one far bearing becomes a broad bump (−3 % of it per degree)');
+}
+
 // ── ★★ beta96 the outline is LABELLED "ADS-B RANGE" (Stuart 11-26: never to be taken for the distance rings) ──
 {
   ok(M.RANGE_LABEL === 'ADS-B RANGE', 'the label reads ADS-B RANGE');

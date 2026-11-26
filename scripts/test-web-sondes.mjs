@@ -83,7 +83,9 @@ await session('snd', CLIP, 403005000, 96100000, 'wfm', async ({ ev, send, shot, 
   ok(/\bSONDES\b/.test(opts || ''), `the demodulator menu offers SONDES: ${opts}`);
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SONDES'); b && b.click(); return !!b; })()`);
   ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'the sondes view opens');
-  ok(await until(`/RADIOSONDES/.test(document.querySelector('.trkView:not([hidden]) .ttl')?.textContent || '')`, 3000), 'its title says RADIOSONDES');
+  ok(await until(`/AVIATION & MARITIME · RADIOSONDES/.test(document.querySelector('.trkView:not([hidden]) .ttl')?.textContent || '')`, 3000), '★ beta96 stage 8: the AIR & SEA map, SONDES live (its title says RADIOSONDES)');
+  ok(await until(`document.querySelector('.trkView:not([hidden]) .exit')?.textContent === 'EXIT SONDES'`, 3000), 'EXIT SONDES on the map');
+  ok(await until(`document.querySelector('.trkView:not([hidden]) .tab[aria-selected="true"]')?.dataset.tab === 'sondes' || !document.querySelector('.trkView:not([hidden]) .tabs:not([hidden])')`, 3000), 'on the SONDES tab');
   const bands = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) [data-rng]')].map(b => b.textContent.trim()).join(',')`);
   ok(bands === '400–402,402–404,404–406', `the band control: ${bands} (the whole 400–406 is not offered at 2.4 MS/s)`);
   ok(await until(`document.querySelector('.trkView:not([hidden]) [data-rng="mid"]')?.getAttribute('aria-pressed') === 'true'`, 8000), 'the band the radio is on is the lit one (402–404)');
@@ -98,7 +100,7 @@ await session('snd', CLIP, 403005000, 96100000, 'wfm', async ({ ev, send, shot, 
   // ★ the balloon glyph (sondes.ts sondeIcon) is the only ellipse on the map: one per sonde
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkMapHost ellipse').length === 3`, 15000),
      `the three sondes are on the map (${await ev(`document.querySelectorAll('.trkView:not([hidden]) .trkMapHost ellipse').length`)} balloons)`);
-  await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow')].find(r => r.dataset.key === 'S3310411')?.click()`);
+  await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow')].find(r => r.dataset.key === 'sd:S3310411')?.click()`);
   ok(await until(`/S3310411/.test(document.querySelector('.vtl-card')?.textContent || '')`, 6000), `a chosen sonde's card: ${(await ev(`document.querySelector('.vtl-card')?.textContent`) || '').slice(0, 120)}`);
   console.log('   screenshot', await shot('desktop'));
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

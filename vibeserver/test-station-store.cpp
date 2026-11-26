@@ -76,6 +76,27 @@ static void testValidation() {
     CHECK(j.find("\"grid\":\"\"") != std::string::npos && j.find("\"lat\"") == std::string::npos, "no grid = no position: %s", j.c_str());
 }
 
+/* ★★★ beta96 THE AMATEUR MAP SHOWS ANY SPOT IN ITS WINDOW (Stuart 11-26, via the coordinator): background decoding's AND a
+ *  listener's decoders' — not only the live mode's. One background FT8 spot and one listener-decoded CW skimmer spot: both
+ *  in the 1 h window, both gone from it two hours later (and both still in 24 h). */
+static void testBothOriginsInWindow() {
+    std::printf("── beta96 the AMATEUR map's window: a background spot and a listener's spot ──\n");
+    g_now = T0 + 6 * 3600;
+    vs::Store s([] { return g_now; }, false);
+    CHECK(s.spot(rx("K1ABC", "FN42", "FT8", "20m", -12, g_now - 600, vs::kBackground, 14075600)), "a background FT8 spot is kept");
+    CHECK(s.spot(rx("DL1ABC", "JO62", "CW", "40m", 18, g_now - 1200, vs::kLive, 7021000)), "a listener's CW skimmer spot is kept");
+    std::string j = s.mapJson(3600, 0, NAN, NAN);
+    CHECK(count(j, "\"call\":\"K1ABC\"") == 1 && count(j, "\"call\":\"DL1ABC\"") == 1, "1 h: both shown: %s", j.c_str());
+    const size_t a = j.find("\"call\":\"K1ABC\""), b = j.find("\"call\":\"DL1ABC\"");
+    CHECK(a != std::string::npos && num(j.substr(a, j.find('}', a) - a), "src") == vs::kBackground, "the background one says so (src 1)");
+    CHECK(b != std::string::npos && num(j.substr(b, j.find('}', b) - b), "src") == vs::kLive, "the listener's says so (src 2)");
+    g_now += 2 * 3600;   // two hours on: both outside the 1 h window
+    j = s.mapJson(3600, 0, NAN, NAN);
+    CHECK(count(j, "\"call\":\"K1ABC\"") == 0 && count(j, "\"call\":\"DL1ABC\"") == 0, "1 h, two hours later: both gone: %s", j.c_str());
+    j = s.mapJson(vs::kDaySec, 0, NAN, NAN);
+    CHECK(count(j, "\"call\":\"K1ABC\"") == 1 && count(j, "\"call\":\"DL1ABC\"") == 1, "24 h: both still there");
+}
+
 static void testRamOnly() {
     std::printf("── RAM only ──\n");
     g_now = T0 + 3600;
@@ -558,6 +579,7 @@ int main(int argc, char** argv) {
     vs::setDayCapForTest(3072);   // the bounds tests below model the smallest boards
     testValidation();
     testRamOnly();
+    testBothOriginsInWindow();
     testDisk();
     testProcesses();
     testSpotsSent();

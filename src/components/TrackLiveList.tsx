@@ -21,6 +21,8 @@ import { scrollLane } from '../constants/popupTokens';
 import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H, EDGE } from '../services/adsbList';
 import type { TrackRow } from '../services/tracks';
 import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
+import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
+import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
 
 /** ★ The status line and each safety line under the header. */
 const STATUS_H = 20;
@@ -58,6 +60,24 @@ export interface TrackLiveListProps {
   /** ★★ V12 beta91 the aviation map: a row shows the Mictronics aircraft data — ODC-By 1.0 §4.3's notice, one small line at
    *  the list's foot (the ADS-B layer's card words and links: aviationMap.ts AV_DATA_CREDIT). */
   credit?: boolean;
+  /** ★★★ beta96 THE LIVE MAPS (liveMaps.ts, docs/v12/ONE-MAP.md): the list's TABS (AIRCRAFT · MESSAGES · SHIPS · NAVTEX)
+   *  with their counts — fewer than two = none; the screen draws the chosen tab's rows. */
+  tabs?: Array<{ id: string; label: string; n: number }>;
+  tab?: string;
+  onTab?: (id: string) => void;
+  /** ★★ beta96 the AIRCRAFT tab's sort, NEAREST | LATEST — null / absent = none */
+  sort?: string | null;
+  onSort?: (s: string) => void;
+  /** ★★ beta96 MESSAGES filtered to one aircraft: the words ("Messages from RYR12K") and × ALL */
+  filter?: string;
+  onFilterClear?: () => void;
+  /** ★★★ beta96 stage 6 ADS-B LIVE (the AIR & SEA map is ADS-B mode's screen): the ADS-B list's own body — its chips
+   *  (NEWEST · FURTHEST · LONGEST TRACKED), the GAIN key and card, and its rows (emergencies, military, then the nearest)
+   *  — heads the AIRCRAFT tab, the other sources' aircraft after it. The web's adsbListHtml in asRender. null = not live. */
+  adsb?: AdsbBodyInput | null;
+  /** ★★★ beta96 stage 8 NDB LIVE: the beacon list's body (NdbLiveList useNdbBody — the tiles, RINGS · UNHEARD · HEARD LOG ·
+   *  FIND NDB · STATS, the rows with their readings, the card, the dialogs) is the NAVAIDS tab's. null = not live. */
+  ndb?: NdbBodyInput | null;
 }
 const RANGE_H = 30;
 
@@ -80,26 +100,54 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const innerH = p.areaH - p.insets.top - p.insets.bottom;
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
-  const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
-    + (p.credit && open ? AIRCRAFT_CREDIT_H : 0);
+  const tabs = (p.tabs?.length ?? 0) >= 2 ? p.tabs! : [];
+  const ab = useAdsbBody(p.adsb ?? null, p.ink);
+  const nb = useNdbBody(p.ndb ?? null, p.ink, p.insets, innerW);
+  const credit = !!p.credit || ab.credit;
+  const total = ab.count + nb.count + p.rows.length;
+  const extra = (open ? ab.extra + nb.extra : 0) + STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
+    + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0)
+    + (credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
-  const shown = Math.max(1, Math.min(fit, p.rows.length || 1));
+  const shown = Math.max(1, Math.min(fit, total || 1));
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
   useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { navCtx, scrollProps } = usePanelNav(true, { flat: true });
+  const { navCtx, scrollProps } = usePanelNav(!nb.modal, { flat: true });   // ★ an NDB dialog takes the pad
   const s = useMemo(() => makeStyles(p.ink), [p.ink]);
-  const placed = p.rows.filter((r) => !r.noPos).length;
+  const placed = ab.placed + p.rows.filter((r) => !r.noPos).length;
   const pos = { left: EDGE + p.insets.left, bottom: EDGE + p.insets.bottom };
   return (
+    <>
     <NavCtx.Provider value={navCtx}>
       <View style={[s.wrap, pos, open && { width }]} onTouchStart={noteTouchInteraction}>
         <NavRow>
-          <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)} title={p.title} count={p.rows.length} placed={placed} />
+          <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)} title={p.title} count={total} placed={placed} />
         </NavRow>
+        {open && (tabs.length > 0 || !!p.sort) && (
+          <NavRow>
+            {/* ★★ beta96 the tabs, then (AIRCRAFT) the sort — walked by the pad like any row */}
+            <View style={s.ranges} accessibilityRole="tablist">
+              {tabs.map((t) => <RangeKey key={t.id} s={s} label={`${t.label} ${t.n}`} words={`${t.label}: ${t.n}`} on={p.tab === t.id} onPress={() => p.onTab?.(t.id)} />)}
+              {!!p.sort && <View style={{ width: 8 }} />}
+              {!!p.sort && (['nearest', 'latest'] as const).map((x) => <RangeKey key={x} s={s} label={x.toUpperCase()} words={`Sort the aircraft ${x === 'nearest' ? 'nearest first' : 'most recently heard first'}`}
+                                                                                   on={p.sort === x} onPress={() => p.onSort?.(x)} />)}
+            </View>
+          </NavRow>
+        )}
+        {open && !!p.filter && (
+          <NavRow>
+            <View style={s.ranges}>
+              <Text style={s.status} numberOfLines={1}>{p.filter}</Text>
+              <RangeKey s={s} label="× ALL" words="Show every message" on={false} onPress={() => p.onFilterClear?.()} />
+            </View>
+          </NavRow>
+        )}
         {open && (
           <Text style={[s.status, !!note && s.noteTxt]} numberOfLines={1}>{note || p.status}</Text>
         )}
+        {open && ab.head}
+        {open && nb.head}
         {open && !!p.ranges?.length && (
           <NavRow>
             <View style={s.ranges} accessibilityRole="radiogroup">
@@ -110,10 +158,11 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         )}
         {open && !!p.toggles?.length && (
           <NavRow>
-            <View style={s.ranges}>
+            {/* ★ beta96 the AIR & SEA map's chips can be many: they scroll sideways (never off the edge) */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={s.ranges} keyboardShouldPersistTaps="handled">
               {p.toggles.map((x) => <ToggleKey key={x.id} s={s} label={x.label} words={x.words}
                                                on={p.toggled?.[x.id] !== false} onPress={() => p.onToggle?.(x.id, p.toggled?.[x.id] === false)} />)}
-            </View>
+            </ScrollView>
           </NavRow>
         )}
         {open && safety.map((l, i) => (
@@ -122,16 +171,20 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         {open && (
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane}
                       showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
-            {p.rows.length ? p.rows.map((r) => (
+            {ab.rows}
+            {nb.rows}
+            {p.rows.map((r) => (
               <NavRow key={r.key}><Row s={s} r={r} sel={!!p.selected && p.selected === r.key} onPress={() => pick(r)} /></NavRow>
-            )) : (
-              <Text style={s.empty} numberOfLines={3}>{p.empty}</Text>
-            )}
+            ))}
+            {!total && <Text style={s.empty} numberOfLines={3}>{p.adsb ? ab.empty : p.ndb ? nb.empty : p.empty}</Text>}
           </ScrollView>
         )}
-        {open && !!p.credit && <AircraftDataCredit ink={p.ink} />}
+        {open && credit && <AircraftDataCredit ink={p.ink} />}
       </View>
+      {nb.card}
     </NavCtx.Provider>
+    {nb.dialog}
+    </>
   );
 }
 

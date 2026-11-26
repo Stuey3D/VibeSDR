@@ -125,7 +125,7 @@ try {
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
   ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
-     === 'STATIONS:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: STATIONS · WARNINGS · WEATHER · SEA AREAS (2026-11-02), all on');
+     === 'NAVTEX:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: NAVTEX (stations) · WARNINGS · WEATHER · SEA AREAS (2026-11-02; beta96 the AIR & SEA map names), all on');
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the time filter: five ranges, ALL by default (a received-stations view)');
   const st = await ev(`${view}.querySelector('.st').textContent`);
@@ -262,7 +262,9 @@ try {
     ok(Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => (e.getAttribute('aria-label') || '').startsWith('Warning ${w.id}')).length`)) >= 1, `${name} on the map: ${w.id} (${kinds})`);
     console.log('   screenshot', await shot(`navtex-map-${name}.png`));
   }
+  // ★ beta96 a row chosen pauses the auto fit (mapAutoFit's rule), so FIT RESUMES it and GLIDES out — wait for it to settle
   await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
+  if (clusters) await until(`[...document.querySelectorAll('.vtl-mk')].some(x => { const b = x.querySelector('.vtl-cl'); return b && !b.hidden; })`, 6000);
   // a cluster: Enter zooms in to it
   if (clusters) {
     const z0 = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk')].find(x => { const b = x.querySelector('.vtl-cl'); return b && !b.hidden; }); if (!e) return ''; e.focus(); return e.getAttribute('aria-label'); })()`);
@@ -320,7 +322,7 @@ try {
   const without = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
   ok(without < before && Number(await ev(`document.querySelector('[data-vtl-shapes]')?.getAttribute('data-vtl-shapes') || 0`)) === 0, `WARNINGS off: ${before} → ${without} markers, no shapes`);
   // ★ V12 2026-11-02: the SHIPPING MAP keeps its layers under its own key (every layer, the NAVTEX ones among them)
-  ok(/"warnings":false/.test(await ev(`localStorage.getItem('vibesdr.shipMapLayers') || ''`)) && /"stations":true/.test(await ev(`localStorage.getItem('vibesdr.shipMapLayers') || ''`)), '…remembered');
+  ok(/"warnings":false/.test(await ev(`localStorage.getItem('vibesdr.airSeaLayers') || ''`)) && !/"navst":false/.test(await ev(`localStorage.getItem('vibesdr.airSeaLayers') || ''`)), '…remembered (beta96: the AIR & SEA map\'s toggles)');
   await ev(`${view}.querySelector('[data-tgl="weather"]').click()`); await sleep(1500);
   await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
   console.log('   screenshot', await shot('navtex-map-stations-only.png'));
