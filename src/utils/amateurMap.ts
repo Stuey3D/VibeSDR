@@ -37,6 +37,8 @@ export function amKeep(ageSec: number, win: string): boolean {
 }
 
 /** The layers and the store's origin bits (vibe_station_store.h Origin). */
+import { meshName, meshKm, meshDist, meshPlausible, meshHopsForRule, meshRelays, meshRoute, MESH_ROUTE_JS, type MeshKnown, type MeshRoute } from './meshRoute';
+
 export type AmLayer = 'spots' | 'aprs' | 'mesh' | 'beacons';
 export const AM_SRC_BACKGROUND = 1;
 export const AM_SRC_LIVE = 2;
@@ -58,29 +60,55 @@ export function amLiveOf(dec: string | null | undefined, ismOn = false): AmLayer
   }
 }
 
-/** One MESH node as the map draws it (a MeshCore / Meshtastic node with a position). */
-export interface AmMeshPoint { key: string; name: string; net: string; lat: number; lon: number; age: number; approx: boolean; what: string; live: boolean }
+/** One MESH node as the map draws it (a MeshCore / Meshtastic node with a position). ★★ beta96 (docs/v12/MESH-ROUTE.md):
+ *  `dist` its distance from the receiver in the ISM list's km / miles ('' when the receiver is not known); `rt` its route
+ *  (meshRoute — MESH_ROUTE_JS draws it when the node is tapped) and `rw` the route card's lines. */
+export interface AmMeshPoint { key: string; name: string; net: string; lat: number; lon: number; age: number; approx: boolean; what: string; live: boolean;
+                               dist?: string; km?: number; rt?: MeshRoute | null; rw?: string[] }
+/** ★★ beta96 a node's NAME is kept as it was advertised (meshName: printable text — "t::1" stays "t::1"); the pages
+ *  escape it where it meets HTML. Other fields keep the old strict filter. */
+const okName = (v: unknown, n: number) => meshName(v, n);
 const okTxt = (v: unknown, n: number) => String(v ?? '').replace(/[<>&"'`\\\u0000-\u001f]/g, '').slice(0, n);
 const okNum = (v: unknown, lo: number, hi: number): number | null => { const n = Number(v); return v == null || !Number.isFinite(n) ? null : Math.max(lo, Math.min(hi, n)); };
 const MESH_KINDS = new Set(['meshtastic', 'meshcore']);
 /** ★ The live ISM report's mesh nodes (age = since last heard) and the gallery's remembered ones (`last`, seconds), each
  *  node once (the newest wins), newest first, at most 1000. Anything not a mesh node, or with no position, is left out. */
-export function amMeshPoints(live: readonly any[] | null | undefined, stored: readonly any[] | null | undefined, nowSec: number): AmMeshPoint[] {
-  const by = new Map<string, AmMeshPoint>();
+export function amMeshPoints(live: readonly any[] | null | undefined, stored: readonly any[] | null | undefined, nowSec: number,
+                             opt: { rx?: { lat: number; lon: number } | null; miles?: boolean } = {}): AmMeshPoint[] {
+  const rx = opt.rx && Number.isFinite(opt.rx.lat) && Number.isFinite(opt.rx.lon) ? opt.rx : null;
+  const by = new Map<string, { p: AmMeshPoint; d: any }>();
   const add = (d: any, age: number, isLive: boolean) => {
     if (!d || !MESH_KINDS.has(String(d.kind))) return;
     const lat = okNum(d.lat, -90, 90), lon = okNum(d.lon, -180, 180);
     if (lat == null || lon == null || (lat === 0 && lon === 0)) return;
     const key = okTxt(d.node || d.id || d.key, 40);
     if (!key) return;
-    const p: AmMeshPoint = { key: `mesh:${key}`, name: okTxt(d.long || d.name || d.short || d.node || key, 40), net: d.kind === 'meshcore' ? 'MeshCore' : 'Meshtastic',
+    // ★★ beta96 an implausible fix (meshRoute.ts meshPlausible: beyond 500 km a hop) is never drawn
+    const km = rx ? meshKm(rx, lat, lon) : undefined;
+    if (km !== undefined && !meshPlausible(km, meshHopsForRule(d))) return;
+    const p: AmMeshPoint = { key: `mesh:${key}`, name: okName(d.long, 40) || okName(d.name, 40) || okName(d.short, 40) || okTxt(d.node || key, 40), net: d.kind === 'meshcore' ? 'MeshCore' : 'Meshtastic',
       lat, lon, age: Math.max(0, age), approx: d.approx === 1 || d.approx === true, what: okTxt(d.ntype || d.role || d.hw || '', 40), live: isLive };
+    if (km !== undefined) { p.km = km; p.dist = meshDist(km, !!opt.miles); }
     const was = by.get(p.key);
-    if (!was || p.age < was.age) by.set(p.key, p);
+    if (!was || p.age < was.p.age) by.set(p.key, { p, d });
   };
   for (const d of live ?? []) add(d, okNum(d?.age ?? d?.seen, 0, 1e9) ?? 0, true);
   for (const d of stored ?? []) add(d, Math.max(0, nowSec - (okNum(d?.last, 0, 1e11) ?? 0)), false);
-  return [...by.values()].sort((a, b) => a.age - b.age).slice(0, 1000);
+  const out = [...by.values()].sort((a, b) => a.p.age - b.p.age).slice(0, 1000);
+  // ★★ beta96 THE ROUTES: each MeshCore node's relays, matched to the repeaters and room servers on this map (never a
+  //   companion — a person's node is never a route's stop)
+  const known: MeshKnown[] = [];
+  for (const { p, d } of out) {
+    const id = String(d.node || '');
+    if (d.kind === 'meshcore' && (d.ntype === 'repeater' || d.ntype === 'room') && /^[0-9a-fA-F]{2,16}$/.test(id)) known.push({ id: id.toLowerCase(), name: p.name, lat: p.lat, lon: p.lon });
+  }
+  for (const { p, d } of out) {
+    if (d.kind !== 'meshcore') continue;
+    const rel = Array.isArray(d.relays) ? meshRelays(d.relays.join(' ')) : meshRelays(d.relays);
+    const rt = rel ? meshRoute({ lat: p.lat, lon: p.lon, relays: rel, node: String(d.node || '') }, known, rx) : null;
+    if (rt) { p.rt = rt; p.rw = rt.words; }
+  }
+  return out.map((x) => x.p);
 }
 
 /* ★★★ beta96 maps2 MESH REMEMBERS EVERY ISM BAND (Stuart's 11-26 decision): the AMATEUR map's remembered nodes are every band's
@@ -220,7 +248,7 @@ export function amListRows(tab: AmLayer, d: AmListIn, win: string, nowMs: number
   }
   if (tab === 'mesh') {
     return (d.mesh ?? []).filter((x) => amKeep(x.age, win)).slice(0, AM_ROWS_MAX).map((x) => row(x.key, x.net === 'MeshCore' ? '#ff9f43' : '#67ea94', x.name,
-      [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), '', x.age));
+      [x.net, x.what, x.live ? 'heard now' : 'remembered', x.rt ? `${x.rt.hops.length} hops` : ''].filter(Boolean).join(' \u00b7 '), x.dist || '', x.age));
   }
   return (d.beacons ?? []).filter((x) => amKeep(x.age, win)).slice(0, AM_ROWS_MAX).map((x) => row(x.key, '#d2a8ff', x.call,
     `${x.where} \u00b7 ${x.bands.join(' ')}`, '', x.age));
@@ -235,21 +263,37 @@ export function amEmptyWords(tab: AmLayer): string {
 /* ★★ THE SAME RULES AS PAGE TEXT (both map pages are their own documents): the window, the layer drawing for MESH and
  *  BEACONS (each marker kept in AM_MK by its key, so a list row can open it), the list's rows. Plain ES5; no backticks, no backslashes. The page supplies L (Leaflet or the GPU adapter),
  *  esc() and RIM. scripts/test_amateur_map.ts runs amKeepJs against amKeep. */
-export const AMATEUR_JS = `
+export const AMATEUR_JS = MESH_ROUTE_JS + `
 function amWinSec(win){switch(String(win||'').toLowerCase()){case '2m':return 120;case '5m':return 300;case '15m':return 900;case '30m':return 1800;
   case '1h':return 3600;case '3h':return 10800;case '24h':return 86400;case '7d':return 691200;case '30d':return 2678400;default:return 0;}}
 function amKeep(ageSec,win){var w=amWinSec(win);return !w||(isFinite(ageSec)&&ageSec>=0&&ageSec<=w);}
 function amAgo(s){s=Math.max(0,Math.round(s));return s<90?s+' s ago':s<5400?Math.round(s/60)+' min ago':s<172800?Math.round(s/3600)+' h ago':Math.round(s/86400)+' days ago';}
 var AM_MESH_COL={MeshCore:'#ff9f43',Meshtastic:'#67ea94'};
-function amMeshCard(n){return '<div class="pop"><b>'+esc(n.name)+'</b><br>'+esc(n.net)+(n.what?' &middot; '+esc(n.what):'')+'<br>'
-  +(n.approx?'Position rounded to about 1 km<br>':'')+(n.live?'Heard now on ISM':'Remembered by this server')+' &middot; '+esc(amAgo(n.age))+'</div>';}
+function amMeshCard(n){var rw='';if(n.rw&&n.rw.length)for(var i=0;i<n.rw.length&&i<70;i++)rw+='<br>'+esc(n.rw[i]);
+  return '<div class="pop"><b>'+esc(n.name)+'</b><br>'+esc(n.net)+(n.what?' &middot; '+esc(n.what):'')+(n.dist?' &middot; '+esc(n.dist):'')+'<br>'
+  +(n.approx?'Position rounded to about 1 km<br>':'')+(n.live?'Heard now on ISM':'Remembered by this server')+' &middot; '+esc(amAgo(n.age))+rw+'</div>';}
+/* ★★ beta96 THE ROUTE (meshRoute.ts MESH_ROUTE_JS, carried beside this): a MeshCore node tapped lights the repeaters its
+ *  packet came through, hop by hop; another tap (the same node, another, the empty map) clears it. The page calls
+ *  amRouteBind() once its map exists. amMeshExtra() cleans what React Native / the opener sent for it. */
+var AM_RT=null,AM_RT_KEY='',AM_RT_AT=0,AM_RT_HELD=false;
+/* a route shown HOLDS THE VIEW (the page's auto fit, digiFit, pauses until FIT or the route is cleared — Stuart 11-26) */
+function amFitOf(){try{return (typeof digiFit!=='undefined'&&digiFit&&digiFit.state)?digiFit:null;}catch(e){return null;}}
+function amRouteShow(n){var was=AM_RT_KEY,f=amFitOf();try{if(AM_RT)AM_RT.clear();}catch(e){}AM_RT=null;AM_RT_KEY='';
+  if(!n||!n.rt||was===n.key||typeof meshRouteDraw!=='function'){
+    if(AM_RT_HELD){AM_RT_HELD=false;try{var s0=f&&f.state();if(s0&&s0.on&&s0.paused)f.resume();}catch(e){}}return;}
+  try{AM_RT=meshRouteDraw(map,L,n.rt);AM_RT_KEY=n.key;AM_RT_AT=Date.now();var s1=f&&f.state();if(s1&&s1.on){if(!s1.paused)f.pause();AM_RT_HELD=true;}}catch(e){console.error('mesh route',e);}}
+function amRouteBind(){try{map.on('click',function(){if(Date.now()-AM_RT_AT>300&&AM_RT)amRouteShow(null);});}catch(e){}}
+function amMeshExtra(x,o){o.dist=String(x.dist||'').slice(0,16);o.rt=x.rt&&typeof x.rt==='object'&&Array.isArray(x.rt.seg)?x.rt:null;
+  o.rw=Array.isArray(x.rw)?x.rw.slice(0,70).map(function(w){return String(w).slice(0,300);}):[];return o;}
 function amBeaconCard(b){return '<div class="pop"><b>'+esc(b.call)+'</b> &middot; '+esc(b.where)+'<br>NCDXF / IARU beacon &middot; heard on '+esc(b.bands.join(', '))
   +'<br>Down to '+esc(['','100 W','10 W','1 W','0.1 W'][b.best]||'')+' &middot; '+esc(amAgo(b.age))+'</div>';}
 var AM_MK={};
 function amMkClear(pre){for(var k in AM_MK)if(k.indexOf(pre)===0)delete AM_MK[k];}
 function amDrawMesh(group,nodes,win,live){group.clearLayers();amMkClear('mesh:');var out=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];if(!amKeep(n.age,win))continue;out.push(n);
   AM_MK[n.key]=L.circleMarker([n.lat,n.lon],{radius:live?7:6,color:RIM,weight:1.2,fillColor:AM_MESH_COL[n.net]||'#67ea94',fillOpacity:n.live?0.95:0.55,label:'M',labelColor:'#000000'})
-   .addTo(group).bindPopup(amMeshCard(n));}return out;}
+   .addTo(group).bindPopup(amMeshCard(n));
+  if(n.rt&&AM_MK[n.key].on)(function(n){AM_MK[n.key].on('click',function(){amRouteShow(n);});})(n);}
+  if(AM_RT_KEY&&!out.some(function(x){return x.key===AM_RT_KEY;}))amRouteShow(null);return out;}
 function amDrawBeacons(group,list,win,live,me){group.clearLayers();amMkClear('bcn:');var out=[];for(var i=0;i<list.length;i++){var b=list[i];if(!amKeep(b.age,win))continue;out.push(b);
   if(me)L.polyline([[me.lat,me.lon],[b.lat,b.lon]],{color:'#d2a8ff',weight:1,opacity:0.45,dashArray:'3 5'}).addTo(group);
   AM_MK[b.key]=L.circleMarker([b.lat,b.lon],{radius:live?8:7,color:RIM,weight:1.2,fillColor:'#d2a8ff',fillOpacity:0.95,label:'B',labelColor:'#000000'})

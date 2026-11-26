@@ -30,11 +30,11 @@ import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus
 import { screenNavRef } from './ScreenNav';
 import { ISM_KINDS, ismAged, ismAgo, ismBandLabel, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
          ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, ismUnkRows, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
-         type IsmUnits, type IsmBand } from '../services/ism';
+         type IsmUnits, type IsmBand, ISM_PREF_KEY, ismMilesSet } from '../services/ism';
 import IsmBandSheet from './IsmBandSheet';
 
 const ISM_MAX_W = 760;
-const PREF_KEY = 'lsv_ism_prefs';
+const PREF_KEY = ISM_PREF_KEY;   // ★★ beta96 shared with the mesh maps (ismMilesSet)
 
 export interface IsmPanelProps {
   report: IsmReport | null;
@@ -75,13 +75,13 @@ export default function IsmPanel(p: IsmPanelProps) {
   const [bandsOpen, setBandsOpen] = useState(false);   // ★ beta72: the BANDS list (IsmBandSheet)   // ★ the meter row whose detail is open
   const [units, setUnits] = useState<IsmUnits>({ mph: false, pressure: 'psi' });
   useEffect(() => {
-    AsyncStorage.getItem(PREF_KEY).then((v) => { const pr = parseIsmPrefs(v); setFilter(pr.filter); setUnits(pr.units); }).catch(() => {});
+    AsyncStorage.getItem(PREF_KEY).then((v) => { const pr = parseIsmPrefs(v); setFilter(pr.filter); setUnits(pr.units); ismMilesSet(pr.units.mph); }).catch(() => {});
   }, []);
   const save = (f: string, u: IsmUnits) => {
     AsyncStorage.setItem(PREF_KEY, JSON.stringify({ filter: f, mph: u.mph, pressure: u.pressure })).catch(() => {});
   };
   const pickFilter = (f: string) => { setFilter(f); save(f, units); };
-  const pickUnits = (u: IsmUnits) => { setUnits(u); save(filter, u); };
+  const pickUnits = (u: IsmUnits) => { setUnits(u); save(filter, u); ismMilesSet(u.mph); };   // ★★ beta96 the mesh maps follow
 
   /* ★ The DAB box's sizing (AdsbPanel): SMALL 230 or the room down from topLimit; BIG up to the status row, offered only
    *  where it gains 40 pt. The header here is two rows (keys, then the status), and the chips a third. */
@@ -106,7 +106,7 @@ export default function IsmPanel(p: IsmPanelProps) {
   const unkRows = filter === 'unk' ? ismUnkRows(r) : [];   // ★ beta94 UNIDENTIFIED
   const canMap = !!p.onMap && !p.error && !!r && (!!p.remembered || r.devices.some(ismOnMap));
   // ★ a row with a detail: a meter, or a LoRa row (a node / a LoRaWAN device)
-  const detailOf = (d: IsmDevice): string[] => (d.kind === 'meter' ? ismMeterDetail(d) : LORA_KINDS.includes(d.kind) ? ismLoraDetail(d, p.rx ?? null) : []);
+  const detailOf = (d: IsmDevice): string[] => (d.kind === 'meter' ? ismMeterDetail(d) : LORA_KINDS.includes(d.kind) ? ismLoraDetail(d, p.rx ?? null, true, units.mph) : []);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const band = p.error ? 'not available' : r ? ismBandText(r) : 'finding the band…';

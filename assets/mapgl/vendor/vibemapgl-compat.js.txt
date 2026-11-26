@@ -117,6 +117,7 @@
       gl.on('click', 'lc-circles', (e) => {
         const f = e.features && e.features[0]; const c = f && circles.get(f.properties._id);
         if (c && c.html) new ml.Popup({ maxWidth: (c.maxWidth || 200) + 'px' }).setLngLat([c.ll.lng, c.ll.lat]).setHTML(c.html).addTo(gl);
+        if (c && c.click) { try { c.click({ latlng: c.ll }); } catch (err) { console.error('circle click', err); } }   // ★★ beta96 .on('click') (a mesh route)
       });
       flushCircles();
     });
@@ -132,6 +133,8 @@
         bindPopup: (html, po) => { c.html = html; c.maxWidth = po && po.maxWidth; return h; },
         setPopupContent: (html) => { c.html = html; return h; },
         getPopup: () => (c.html ? {} : null),
+        // ★★ beta96 Leaflet's layer.on('click', fn) — the one event a page asks of a circle (the AMATEUR map's mesh route)
+        on: (ev, fn) => { if (String(ev) === 'click' && typeof fn === 'function') c.click = fn; return h; },
         // ★ As Leaflet's circleMarker.openPopup — the spots pill opens the newest spot's card with it.
         openPopup: () => { if (c.html) new ml.Popup({ maxWidth: (c.maxWidth || 200) + 'px' }).setLngLat([c.ll.lng, c.ll.lat]).setHTML(c.html).addTo(gl); return h; },
       };
