@@ -981,6 +981,7 @@ std::string toJson(const ServerConfig& c) {
     B("communityMap", c.communityMap);   // ★★ V12 beta94 the community map — off unless the owner says
     S("communityOff", c.communityOff);
     S("aircraftFeeds", c.aircraftFeeds); S("adsbShare", c.adsbShare);   // ★★ V12 beta96 server-level feeds + flight-tracker hub
+    N("mapViewers", c.mapViewers); N("mapTimeMin", c.mapTimeMin);   // ★★ V12 beta96 the standalone AIR & SEA map's limits
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — machine-level, see ServerConfig.
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);
     B("dmrIdLookup", c.dmrIdLookup);
@@ -1142,6 +1143,9 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     S("aircraftFeeds", c.aircraftFeeds); S("adsbShare", c.adsbShare);
     if (c.aircraftFeeds.size() > 8000) c.aircraftFeeds.clear();
     if (c.adsbShare.size() > 8000) c.adsbShare.clear();
+    I("mapViewers", c.mapViewers); I("mapTimeMin", c.mapTimeMin);
+    c.mapViewers = std::max(0, std::min(1000, c.mapViewers));
+    c.mapTimeMin = std::max(0, std::min(1440, c.mapTimeMin));
     if (c.galleryMb < 0) c.galleryMb = 0;
     if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);

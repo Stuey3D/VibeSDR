@@ -47,6 +47,7 @@ import { ServerChoiceThemed, SimpleServerThemed, SetupElsewhereThemed } from './
 import LegacyPackageNotice  from './src/components/LegacyPackageNotice';
 import TlsTrustPrompt       from './src/components/TlsTrustPrompt';
 import TunerScreen          from './src/screens/TunerScreen';
+import AirSeaScreen, { type AirSeaParams } from './src/screens/AirSeaScreen';   // ★★★ beta96 the standalone AIR & SEA map (no radio)
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
@@ -240,6 +241,8 @@ export type RootStackParamList = {
   ServerChoice: { choose?: boolean } | undefined;
   SimpleServer: { keepOnExit?: boolean } | undefined;
   SetupElsewhere: undefined | Record<string, never>;
+  // ★★★ beta96 THE STANDALONE AIR & SEA MAP: a server's aircraft, ships, sondes and VOR stations with no radio taken
+  AirSea: AirSeaParams;
   // RTL-TCP server (Android): share this device's USB dongle over the network.
   // `advertise` (default true) lets the Server-mode picker honour the shared
   // auto-discovery toggle.
@@ -1106,6 +1109,7 @@ export default function App() {
             <Stack.Screen name="SimpleServer"   component={SimpleServerThemed}   options={{ headerShown: false }} />
             <Stack.Screen name="SetupElsewhere" component={SetupElsewhereThemed} options={{ headerShown: false }} />
             <Stack.Screen name="Tuner"          component={TunerScreen}          options={{ headerShown: false }} />
+            <Stack.Screen name="AirSea"         component={AirSeaScreen as any}  options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         {/* ★ GitHub #52: "Trust this server?" for a receiver with its own certificate — one place, any screen. */}

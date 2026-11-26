@@ -238,6 +238,8 @@ static void feedsPublic(std::string& feedsJson, std::string& warn) {
     }
     feedsJson = cj; warn = cw;
 }
+#include "vibe_aircraft_delta.h"     // ★★ V12 beta96 the shared aircraft table as deltas (the AIR & SEA maps' poll and socket)
+#include "vibe_airsea_viewers.h"     // ★★ V12 beta96 the standalone AIR & SEA map's viewer tickets and limits
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_lrpt_burn.h"         // ★ V12 METEOR LRPT: a picture with its map outline burnt in (?outline=1)
@@ -2114,6 +2116,40 @@ static bool vsModeBlocked(const std::string& name) {
         } else tok += char(std::tolower((unsigned char)c));
     }
     return false;
+}
+/** ★ An HFDL ground station's name and place (aircraft.json's "stations"). */
+static bool vsGsInfo(int id, std::string& name, double& lat, double& lon) {
+    for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
+    return false;
+}
+/** ★★ beta96 aircraft.json + the server-level feeds' labels and banner ("feeds", "feedWarn") — one place for every answer. */
+static std::string aircraftWithFeeds(std::string body) {
+    std::string fj, fw;
+    feedsPublic(fj, fw);
+    if (!fj.empty() && fj != "[]" && !body.empty() && body.back() == '}') {
+        body.pop_back();
+        body += ",\"feeds\":" + fj;
+        if (!fw.empty()) body += ",\"feedWarn\":\"" + vibe::beast::jsonEsc(fw) + "\"";
+        body += '}';
+    }
+    return body;
+}
+/** ★★ beta96 THE TABLE AS A DELTA for `cursor` (vibe_aircraft_delta.h) — aircraft.json's header, the delta, the stations
+ *  and the feeds. The store is rebuilt at most once a second, whoever asks (HTTP viewers, the radio's map sockets). */
+static std::string aircraftDeltaJson(const std::string& cursor, size_t* rowsSent = nullptr) {
+    const int64_t now = vibeavshare::wallMs();
+    if (vsModeBlocked("adsb") && vsModeBlocked("avdata") && vsModeBlocked("hfdl"))
+        return "{\"now\":" + std::to_string((long long)(now / 1000)) + ",\"count\":0,\"d\":1,\"c\":\"\",\"full\":1,\"a\":[],\"g\":[],\"stations\":[],\"off\":1}";
+    std::vector<vibeavshare::GsHeard> gs;
+    int64_t adsbLiveMs = 0;
+    auto& st = vibeacdelta::store();
+    // ★ one table read for the header + stations; the rows feed the store only when a rebuild is due (≥ 1 s)
+    const auto rows = vibeavshare::table().read(now, 0, &gs, &adsbLiveMs);
+    if (st.due(now)) st.update(rows, now, [](const std::string& l) { return std::string(vibeavi::labelName(l)); }, vibeavinfo::extraFn());
+    std::string o = "{\"now\":" + std::to_string((long long)(now / 1000)) + ",\"count\":" + std::to_string(rows.size())
+                  + vibeacdelta::adsbHeader(rows, now, adsbLiveMs, vsModeBlocked("adsb")) + "," + st.body(cursor, rowsSent)
+                  + ",\"stations\":" + vibeacdelta::stationsJson(gs, now, vsGsInfo) + "}";
+    return aircraftWithFeeds(std::move(o));
 }
 
 /* ★★ V12 FreeDV RADE V1: the owner's "rade" switch (under FreeDV on the setup page) is asked by vibe_freedv.h itself —
@@ -8758,6 +8794,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::lock_guard<std::mutex> lk(adsbDeltaMtx_);
         return !adsbDeltaSubs_.empty() && adsbDeltaSubs_.count(s) > 0;
     }
+    /* ★★ V12 beta96 THE SHARED AIRCRAFT TABLE OVER THE SOCKET (vibe_aircraft_delta.h): a socket that asked (`acd=1`) gets
+     *  `{"type":"acs",…}` — aircraft.json as a delta from its own cursor — every kAcsTickSec, so its AIR & SEA map needs no
+     *  aircraft.json poll: the feeds' and other radios' aircraft arrive with the one table build shared by every socket
+     *  and every HTTP viewer. The client's own word; an older client keeps polling. Value: the cursor it last got. */
+    static constexpr double kAcsTickSec = 3.0;
+    std::mutex acsMtx_;                                   // ★ leaf lock
+    std::map<net::Socket*, std::string> acsSubs_;         // ★ under acsMtx_
+    std::atomic<bool> acsAny_{false};
+    double acsLast_ = 0;
+    void acsSubscribe(net::Socket* s, bool subscribe) {
+        std::lock_guard<std::mutex> lk(acsMtx_);
+        if (subscribe) acsSubs_[s] = std::string(); else acsSubs_.erase(s);
+        acsAny_.store(!acsSubs_.empty());
+    }
+    /** The housekeeping thread's 10 Hz check: every kAcsTickSec, each subscribed socket its delta — one body per distinct
+     *  cursor (everyone who got the last tick shares one; a joiner gets the whole table). Network priority work only. */
+    void acsTick() {
+        if (!acsAny_.load(std::memory_order_relaxed)) return;
+        const double t = nowSecs();
+        if (t - acsLast_ < kAcsTickSec) return;
+        acsLast_ = t;
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        std::map<std::string, std::string> built;   // cursor → body
+        for (auto& sk : socks) {
+            std::string cur;
+            { std::lock_guard<std::mutex> lk(acsMtx_); auto it = acsSubs_.find(sk.get()); if (it == acsSubs_.end()) continue; cur = it->second; }
+            auto b = built.find(cur);
+            if (b == built.end()) {
+                std::string j = aircraftDeltaJson(cur);
+                if (j.size() > 1 && j[0] == '{') j = "{\"type\":\"acs\"," + j.substr(1);
+                b = built.emplace(cur, std::move(j)).first;
+            }
+            sendText(sk, b->second);
+            // ★ the cursor this body carried ("c":"…") — the socket's next answer is from there
+            const size_t c0 = b->second.find("\"c\":\""), c1 = c0 == std::string::npos ? c0 : b->second.find('"', c0 + 5);
+            if (c0 != std::string::npos && c1 != std::string::npos) {
+                std::lock_guard<std::mutex> lk(acsMtx_);
+                auto it = acsSubs_.find(sk.get());
+                if (it != acsSubs_.end()) it->second = b->second.substr(c0 + 5, c1 - c0 - 5);
+            }
+        }
+    }
+    /** {"type":"acs_resync"} — the client lost its place: the whole table at the next tick. */
+    void acsResync(net::Socket* s) { std::lock_guard<std::mutex> lk(acsMtx_); auto it = acsSubs_.find(s); if (it != acsSubs_.end()) it->second.clear(); }
     void stampSubscribe(net::Socket* s, bool subscribe) {
         std::lock_guard<std::mutex> lk(stampMtx_);
         if (subscribe) stampSubs_.insert(s); else stampSubs_.erase(s);
@@ -25443,6 +25524,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        if (type == "acs_resync") { if (sock) acsResync(sock.get()); return; }   // ★ beta96 the aircraft table: the whole of it next tick
         if (type == "ais_trail") { double m = 0; if (sock && jsonNum(msg, "mmsi", m) && m > 0) sendText(sock, g_ais.trailJson(uint32_t(m))); return; }
         if (type == "adsb") {
             // ★ The default is OFF, as DAB's: a malformed message must never seize the receiver
@@ -28528,6 +28610,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/community", 0) == 0
                 // ★★ V12 beta96 the SHARED AIRCRAFT TABLE is the machine's (every radio + the server-level feeds the door owns)
                 || path0.rfind("/vibeserver/aircraft.json", 0) == 0
+                // ★★ beta96 the standalone AIR & SEA map's viewer tickets (vibe_airsea_viewers.h) — the machine's, with the table
+                || path0.rfind("/vibeserver/airsea/", 0) == 0
                 // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
                 //   shared by every radio process, and the setup page that asks for it is served
                 //   by this door. Refusing it here made the page report "could not reach the
@@ -29138,6 +29222,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 wideSubscribe(sock.get(), queryParam(reqLine, "wide") == "1");
                 stampSubscribe(sock.get(), queryParam(reqLine, "span") == "1");   // ★ V12 beta83 the span stamp (sendSpecFrame)
                 adsbDeltaSubscribe(sock.get(), queryParam(reqLine, "adsbd") == "1");   // ★ V12 beta96 ADS-B as deltas
+                acsSubscribe(sock.get(), queryParam(reqLine, "acd") == "1");   // ★ V12 beta96 the shared aircraft table as deltas
                 const std::string bq = queryParam(reqLine, "bins");
                 wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
@@ -30230,7 +30315,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 std::string j = LocalSdrShim::adsbFeedStatusJson();
                 j.pop_back();
-                j += ",\"sources\":" + LocalSdrShim::aircraftFeedsStatusJson() + ",\"owner\":" + (g_feedsOwner.load() ? "true" : "false") + "}";
+                j += ",\"sources\":" + LocalSdrShim::aircraftFeedsStatusJson() + ",\"owner\":" + (g_feedsOwner.load() ? "true" : "false")
+                   + ",\"mapViewers\":" + LocalSdrShim::airSeaViewersJson() + "}";   // ★★ beta96 the standalone map's viewers (the door counts them)
                 reply(200, "OK", j);
                 return;
             }
@@ -31243,17 +31329,69 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + (head ? std::string() : body));
             sock->close();
             return;
+        } else if (reqLine.rfind("GET /vibeserver/airsea/", 0) == 0) {
+            /* ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's VIEWER TICKETS (vibe_airsea_viewers.h, docs/v12/ADSB-FEED.md): join
+             *  → {"ok":true,"vt","n","max","limit","left"} or {"ok":false,"full":true,"n","max"} / {"ok":false,"ended":true,
+             *  "back"}; leave?vt= ends one. The PIN gates it like aircraft.json; the admin is counted, never refused. */
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            const int64_t now = vibeavshare::wallMs();
+            std::string body;
+            if (reqLine.rfind("GET /vibeserver/airsea/join", 0) == 0) {
+                const bool owner = isLoopback(sock->peerAddress()) || adminOkFor(reqLine, sock);
+                const vibeasview::Join j = vibeasview::gate().join(sock->peerAddress(), now, owner);
+                if (j.ok) body = "{\"ok\":true,\"vt\":\"" + j.ticket + "\",\"n\":" + std::to_string(j.n) + ",\"max\":" + std::to_string(j.max)
+                               + ",\"limit\":" + std::to_string(j.limitSec) + ",\"left\":" + std::to_string(j.left) + ",\"warn\":" + std::to_string(vibeasview::kWarnSec) + "}";
+                else if (j.full) body = "{\"ok\":false,\"full\":true,\"n\":" + std::to_string(j.n) + ",\"max\":" + std::to_string(j.max) + "}";
+                else body = "{\"ok\":false,\"ended\":true,\"limit\":" + std::to_string(j.limitSec) + ",\"back\":" + std::to_string(j.back) + "}";
+                if (j.ok) LOGI("AIR & SEA map: viewer from %s (%d of %d%s)", sock->peerAddress().c_str(), j.n, j.max, owner ? ", the owner" : "");
+            } else if (reqLine.rfind("GET /vibeserver/airsea/leave", 0) == 0) {
+                const std::string vt = queryParam(reqLine, "vt");
+                if (vt.size() == 20) vibeasview::gate().leave(vt, now);
+                body = "{\"ok\":true}";
+            } else body = "{\"ok\":false}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+            return;
         } else if (reqLine.rfind("GET /vibeserver/aircraft.json", 0) == 0) {
             /* ★★ V12 2026-11-16 THE AVIATION MAP's aircraft (vibe_aircraft_share.h): every aircraft ANY radio on this machine
              *  heard — ADS-B, ACARS, VDL2, HFDL, ADS-C — one row each, with the sources that heard it, and the HFDL ground
              *  stations heard. ?since=<seconds back> (0 / absent = the hour the table keeps). Flight data only: never a
-             *  message body. "off":1 where the owner switched every aircraft mode off. CORS open, as /addon/hfdl/*. */
+             *  message body. "off":1 where the owner switched every aircraft mode off. CORS open, as /addon/hfdl/*.
+             *  ★★ beta96 ?d=<cursor> (vibe_aircraft_delta.h): only what changed since the cursor ("d=" alone = everything, with
+             *  a cursor to come back with) — the AIR & SEA viewer's poll. ?vt=<ticket> (vibe_airsea_viewers.h): the standalone
+             *  viewer's ticket — refreshed here; an unknown one answers {"viewer":"unknown"} (join again), a used-up turn
+             *  {"viewer":"ended"}. gzip where the client takes it (the full table is ~45 KB at 150 aircraft). */
             if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            const int64_t now = vibeavshare::wallMs();
+            std::string viewer;
+            {
+                const std::string vt = queryParam(reqLine, "vt");
+                if (!vt.empty()) {
+                    int left = -1, n = 0;
+                    const vibeasview::Poll pv = vibeasview::gate().poll(vt, sock->peerAddress(), now, &left, &n);
+                    std::string early;
+                    if (pv == vibeasview::Poll::Unknown) early = "{\"viewer\":\"unknown\"}";
+                    else if (pv == vibeasview::Poll::Ended) early = "{\"viewer\":\"ended\",\"limit\":" + std::to_string(vibeasview::gate().minutes() * 60) + "}";
+                    if (!early.empty()) {
+                        sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                                      "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: " + std::to_string(early.size()) + "\r\n\r\n" + early);
+                        sock->close();
+                        return;
+                    }
+                    viewer = ",\"viewer\":{\"left\":" + std::to_string(left) + ",\"n\":" + std::to_string(n) + "}";
+                }
+            }
+            bool deltaWanted = false;
+            { const size_t sp = reqLine.find(' ', 4), q1 = reqLine.find("?d="), q2 = reqLine.find("&d=");
+              deltaWanted = (q1 != std::string::npos && q1 < sp) || (q2 != std::string::npos && q2 < sp); }
+            std::string body;
+            if (deltaWanted) body = aircraftDeltaJson(queryParam(reqLine, "d"));
+            else {
             long since = 0;
             { const size_t q = reqLine.find("since="), sp = reqLine.find(' ', 4);
               if (q != std::string::npos && (sp == std::string::npos || q < sp)) since = std::max(0L, std::min(3600L, std::atol(reqLine.c_str() + q + 6))); }
-            const int64_t now = vibeavshare::wallMs();
-            std::string body;
             if (vsModeBlocked("adsb") && vsModeBlocked("avdata") && vsModeBlocked("hfdl"))
                 body = "{\"now\":" + std::to_string((long long)(now / 1000)) + ",\"count\":0,\"aircraft\":[],\"stations\":[],\"off\":1}";
             else {
@@ -31261,10 +31399,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 int64_t adsbLiveMs = 0;   // ★ beta88 the header's "a radio is decoding ADS-B" stamp
                 const auto rows = vibeavshare::table().read(now, since ? now - since * 1000 : 0, &gs, &adsbLiveMs);
                 body = vibeavshare::toJson(rows, gs, now, [](const std::string& l) { return std::string(vibeavi::labelName(l)); },
-                    [](int id, std::string& name, double& lat, double& lon) {
-                        for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
-                        return false;
-                    }, adsbLiveMs, vsModeBlocked("adsb"),
+                    vsGsInfo, adsbLiveMs, vsModeBlocked("adsb"),
                     // ★★ V12 beta91 the ADS-B aircraft data for EVERY row — a VDL2 / ACARS / HFDL-only aircraft's type,
                     //    operator, logo, country (vibe_aircraft_info.h: a cache read here; the lookups on its own
                     //    decoder-priority thread, never this one)
@@ -31273,18 +31408,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★ V12 beta96 the server-level aircraft feeds (vibe_feeds.h): which sources this server has, their state
              *  (labels and counts — never an address) and the banner the AIR & SEA map shows when one is down: "feeds":[…],
              *  "feedWarn":"ADS-B source lost — reconnecting… · HFDL still live". */
-            {
-                std::string fj, fw;
-                feedsPublic(fj, fw);
-                if (!fj.empty() && fj != "[]" && !body.empty() && body.back() == '}') {
-                    body.pop_back();
-                    body += ",\"feeds\":" + fj;
-                    if (!fw.empty()) body += ",\"feedWarn\":\"" + vibe::beast::jsonEsc(fw) + "\"";
-                    body += '}';
-                }
+            body = aircraftWithFeeds(std::move(body));
             }
+            if (!viewer.empty() && !body.empty() && body.back() == '}') { body.pop_back(); body += viewer; body += '}'; }
+            std::string enc;
+            if (acceptsGzip && body.size() > 1024) { body = vibegz::gzip(body); enc = "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n"; }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
-                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
+                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" + enc + "Connection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
             return;
@@ -33795,6 +33925,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
           stampSubscribe(sock.get(), false);  // ★ V12 beta83 the span stamp (stampMtx_ is a leaf lock too)
           adsbDeltaSubscribe(sock.get(), false);   // ★ V12 beta96 ADS-B deltas (a leaf lock too)
+          acsSubscribe(sock.get(), false);         // ★ V12 beta96 the shared aircraft table (a leaf lock too)
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent
@@ -44279,6 +44410,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 for (int i = 0; i < 20 && houseRun.load(); i++) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     if (g_beastOn.load(std::memory_order_relaxed) && !stopping.load()) beastTick();   // ★ beta96 no DSP loop to report from
+                    if (!stopping.load()) acsTick();   // ★ beta96 the shared aircraft table to the maps that asked (acd=1)
                 }
                 if (!houseRun.load()) break;
                 if (stopping.load() || restarting.load()) continue;
@@ -45564,6 +45696,15 @@ void LocalSdrShim::setAdsbIngest(const std::string& dir) {
 std::string LocalSdrShim::aircraftFeedsStatusJson() {
     if (g_feedsOwner.load()) return vibe::feeds::FeedSet::shared().statusJson();
     return "[]";
+}
+void LocalSdrShim::setAirSeaViewers(int maxViewers, int minutes) {
+    auto& g = vibeasview::gate();
+    if (g.max() == maxViewers && g.minutes() == minutes) return;
+    g.set(maxViewers, minutes);
+    LOGI("AIR & SEA map: at most %d viewers%s, %d min each%s", maxViewers, maxViewers ? "" : " (no limit)", minutes, minutes ? "" : " (no limit)");
+}
+std::string LocalSdrShim::airSeaViewersJson() {
+    return vibeasview::gate().json(vibeavshare::wallMs(), [](const std::string& ip) { return vsCountry(ip); });
 }
 void LocalSdrShim::setAircraftShareDir(const std::string& dir) {
     vibeavshare::table().setDir(dir);

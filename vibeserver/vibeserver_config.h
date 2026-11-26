@@ -1028,6 +1028,12 @@ struct ServerConfig {
      *  destinations, fed by every radio's own ADS-B and every ADS-B feed source. Each radio's old RadioConfig::adsbFeed is
      *  merged into this on load (duplicates by host:port kept once) and cleared. "" = off. */
     std::string adsbShare;
+    /** ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's limits (vibe_airsea_viewers.h — Stuart 11-26: "so people on limited or
+     *  sketchy connections can host it"). `mapViewers`: how many may have the map open at once (0 = no limit; default 20),
+     *  counted by the viewer's own ticket, not its address (accurate behind one router). `mapTimeMin`: how long one address
+     *  may keep it open (0 = no limit, the default) — a turn lapses after an absence as long as the limit, as a radio's. */
+    int         mapViewers = 20;
+    int         mapTimeMin = 0;
     /** ★★ V12 beta90 PSK REPORTER (android/app/src/main/cpp/vibe_spot_report.h, docs/v12/PSK-REPORTER.md) — MACHINE-level,
      *  beside Background Decoding on the setup page: every radio's digital spots go to PSK Reporter under ONE receiver
      *  callsign. OFF by default; nothing is sent without `pskrCall`. `pskrAntenna` is free text ("" = each radio's own

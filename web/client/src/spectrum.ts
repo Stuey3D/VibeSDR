@@ -22,6 +22,7 @@ import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
 import { AdsbDeltaStore } from '../../../src/services/adsbDelta';   // ★★ V12 beta96 ADS-B as deltas
+import { AircraftDeltaStore } from '../../../src/services/aircraftDelta';   // ★★ V12 beta96 the shared aircraft table as deltas (acd=1)
 import { ismSanitise, type IsmReport } from './ism';
 import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
@@ -765,6 +766,9 @@ export interface SpectrumCallbacks {
   /** ★ ADS-B (V12, docs/v12/ADSB.md): the aircraft report, once a second while the receiver is in ADS-B
    *  and at once on joining — its arrival MEANS ADS-B is on. null = the server left ADS-B (`adsb_off`). */
   onAdsb?: (r: AdsbReport | null) => void;
+  /** ★★ V12 beta96 the shared aircraft table (aircraft.json's object — every radio's and every feed's aircraft) from the
+   *  socket (`acd=1`, {"type":"acs"} every 3 s): the AIR & SEA map needs no aircraft.json poll while these arrive. */
+  onAircraftShared?: (j: Record<string, unknown>) => void;
   /** The server refused ADS-B (`adsb_error`) — the reason, in words, for the listener. */
   onAdsbError?: (why: string) => void;
   /** ★ ISM (V12, docs/v12/ISM-DECODER.md): the device list, once a second while the receiver is in ISM and at once on
@@ -1388,6 +1392,12 @@ export class SpectrumClient {
       msg = r.report;
     }
     if (msg.type === 'adsb_off') this.adsbDelta.clear();
+    if (msg.type === 'acs') {   // ★★ beta96 the shared aircraft table as a delta (aircraftDelta.ts, shared with the app)
+      const r = this.acsDelta.apply(msg);
+      if (!r.json) { this._send({ type: 'acs_resync' }); return; }
+      this.cb.onAircraftShared?.(r.json);
+      return;
+    }
     switch (msg.type) {
       /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts, shared with the app). `dab_list` / `dab_dls`
        *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
@@ -2643,6 +2653,8 @@ export class SpectrumClient {
   private adsbInfo = new AdsbInfoStore();
   /** ★★ V12 beta96 the ADS-B table as the delta listener holds it (adsbDelta.ts). */
   private adsbDelta = new AdsbDeltaStore();
+  /** ★★ V12 beta96 the shared aircraft table as the socket keeps it (aircraftDelta.ts). */
+  private acsDelta = new AircraftDeltaStore();
   /** ★ A report already on the wire when our `adsb off` lands is a ghost — the DAB rule (dabQuietUntil). */
   private adsbQuietUntil = 0;
   adsb(on: boolean) {

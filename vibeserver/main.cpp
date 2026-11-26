@@ -1263,6 +1263,7 @@ std::string g_feedLastApplied;   // ★★ V12 beta96: …the server-level hub (
  *  own ADS-B replies to the door's loopback ingest instead. Live; an unchanged config is not re-applied. */
 static void applyAircraftFeeds(const vsconfig::ServerConfig& c, bool frontDoor) {
     const bool owner = frontDoor || !vsconfig::needsFrontDoor(c);
+    vibe::LocalSdrShim::setAirSeaViewers(c.mapViewers, c.mapTimeMin);   // ★★ beta96 the standalone map's limits (cheap; every process)
     if (!owner) { vibe::LocalSdrShim::setAdsbIngest(handoffDir()); return; }
     const std::string k = c.aircraftFeeds + "\x01" + c.adsbShare + (frontDoor ? "D" : "S");
     if (k == g_feedLastApplied) return;
@@ -3535,6 +3536,7 @@ int main(int argc, char** argv) {
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", next.galleryMb, next.galleryPublic, next.gallerySaveLive);
             LocalSdrShim::setCommunityMap(next.communityMap);   // ★★ V12 beta94 the community map (the radios re-read the file)
+            LocalSdrShim::setAirSeaViewers(next.mapViewers, next.mapTimeMin);   // ★★ V12 beta96 the standalone AIR & SEA map's limits, live
             LocalSdrShim::setCommunityModesOff(next.communityOff);
             if (g_amFrontDoor.load()) applyCommunityDoorRadios(next);   // ★★ beta95 a radio's modes changed: the door's feed follows
             LocalSdrShim::setGalleryRedact(gallerySerials(next));

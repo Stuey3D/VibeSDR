@@ -202,6 +202,9 @@ flags_for() {
     #    labels (HFDL never ADS-B), a LISTEN source, two sources merged in the shared table, the banner, and the hub as a
     #    middle man (each reply once, byte-faithful, HFDL never forwarded, the loop guard, own-only). 127.0.0.1 only. ~12 s.
     test-aircraft-feeds)   echo "-O2 -pthread" ;;
+    # ★★ V12 beta96 THE SHARED AIRCRAFT TABLE AS DELTAS (vibe_aircraft_delta.h) + the standalone map's viewer tickets
+    #    (vibe_airsea_viewers.h): rows rebuilt field for field, cursors, the 150-aircraft bytes (full / gzip / delta), the gate.
+    test-aircraft-delta)   echo "-O2 -pthread" ;;
     # ★★ V12 beta96 the ADS-B DELTA protocol's encoder (vibe_adsb_delta.h): quantising, the header walk, ids, keyframes, the
     #    150-aircraft synthetic sky's bytes and cost. scripts/test_adsb_delta.ts runs its --stream against the clients' store.
     test-adsb-delta)       echo "-O2" ;;
@@ -2824,6 +2827,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 
 # ★★★ beta96 SUITES THE BRANCHES' DOCS NAME BUT NOBODY REGISTERED (beta96 prep, 11-26) — each runs alone as its doc says;
 #     exit 3 = not run (no VIBESERVER_BIN / no Edge / no CMake target built).
+printf '\n\033[1m── beta96: the standalone AIR & SEA map + aircraft deltas, clients (test_airsea_viewer, ADSB-FEED.md) ──\033[0m\n'
+npx tsx scripts/test_airsea_viewer.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+npx tsx scripts/test_airsea_standalone.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: the two live maps\x27 rules (test_live_maps, ONE-MAP.md) ──\033[0m\n'
 npx tsx scripts/test_live_maps.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
