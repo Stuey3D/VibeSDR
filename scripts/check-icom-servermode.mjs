@@ -75,18 +75,18 @@ has(S, 'const hasHwSetup = !isAhf && !isIcom;', 'no converter / hardware cards (
 has(S, "const radioUseEff: 'single' | 'locked' = isIcom ? 'single' : radioUse;", 'no locked centre for an Icom');
 has(S, "const protoEff: Proto = isIcom ? 'vibeserver' : proto;", 'VibeServer only (no RTL-TCP) for an Icom');
 has(S, "{isIcom ? (\n          <Text", 'the RTL-TCP card is replaced by a sentence for an Icom');
-has(S, '{advanced && !isIcom && (<>', 'HOW WILL IT BE USED hidden');
-has(S, "{!isIcom && (<>\n            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WATERFALL RATE</Text>", 'WATERFALL RATE hidden');
-has(S, "{!isIcom && (<>\n            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHERE LISTENERS START</Text>", 'WHERE LISTENERS START hidden');
+has(S, 'const secBody_howUsed = (advanced && !isIcom) ? (<>', 'HOW WILL IT BE USED hidden');   // ★ beta96 b96-setupux: each section's body keeps its condition
+has(S, 'const secBody_fps = (!isIcom) ? (<>', 'WATERFALL RATE hidden');
+has(S, 'const secBody_landing = (!isIcom) ? (<>', 'WHERE LISTENERS START hidden');
 has(S, "!!radio && radio.driver !== 'airspyhf' && !isIcom && dabBlocks.length > 0", 'no DAB landing');
 has(S, '{isIcom ? icomSetupBlock : isRtl ? (<>', 'the Icom card in place of the gain / VibeAGC / IF filter / DS / ppm block');
 has(S, "{radioUseEff !== 'locked' && !isIcom && rateBlock}", 'CAPTURE WIDTH hidden');
-has(S, '{!isIcom && (<>\n                {/* ★★★ REAL BINS AT DEEP ZOOM.', 'ZOOM DETAIL hidden');
-has(S, "{!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq') && (<>", 'RAW IQ OUT hidden');
+has(S, 'const secBody_zoom = (advanced && !isIcom) ? (<>', 'ZOOM DETAIL hidden');
+has(S, "const secBody_rawIq = (!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq')) ? (<>", 'RAW IQ OUT hidden');
 // ★★ V12 2026-11-05 (vibe_radio_caps.h): VFO A/B and the impulse blanker too — "people will think that they are setting up a standard USB port"
 has(S, "{!isIcom && capsAllowSetting(radioCapsNow, 'vfoB') && (", 'VFO A/B hidden');
 has(S, "{!isIcom && capsAllowSetting(radioCapsNow, 'nbWide') && (<>", 'IMPULSE NOISE BLANKER hidden');
-has(S, "{radioUseEff === 'single' && !isIcom && (<>\n                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PER-BAND CEILINGS</Text>", 'PER-BAND CEILINGS hidden');
+has(S, "const secBody_ceilings = (advanced && radioUseEff === 'single' && !isIcom) ? (<>", 'PER-BAND CEILINGS hidden');
 has(S, '{!isIcom && <Row C={C} F={F} k="SAMPLE RATE"', 'no sample-rate row while serving an Icom');
 // ★ e95282d89 (modes and decoders as a tree): the switches are modeTree() — BLOCKABLE plus the spots modes — filtered the same way.
 // ★★ V12 2026-11-05: and then by the engine's own caps (vibe_radio_caps.h — the Setup page's answer) for EVERY radio

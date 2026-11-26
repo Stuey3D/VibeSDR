@@ -76,6 +76,9 @@ public:
     // The client still interpolates the waterfall, so a throttled fps stays
     // smooth. Set BEFORE start() (honoured on the serving path only).
     static void setVibeServerLimits(double maxBandwidthHz, double maxFftRate);
+    /** ★★★ beta96 b96-setupux the frame rate's SOURCE, for hwinfo (`fpsEff` the rate this radio is set to run at, `fpsFollow`
+     *  it follows the server's, `fpsServer` the machine's default) — so a client never guesses which number applies. */
+    static void setVibeServerFpsSource(double effFps, bool follow, double serverFps);
     /** Require listeners to keep their idle power-saving on (they normally choose). For a host on
      *  solar/cellular where saving power outranks a listener's preference. Set BEFORE start(). */
     /** Hand the SDR to another program while nobody is listening. Off by default. */

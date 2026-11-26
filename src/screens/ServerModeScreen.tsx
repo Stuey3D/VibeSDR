@@ -250,6 +250,10 @@ import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse,
          keepBgMigrate, keepBgNormal, keepMapKeepMirror, keepIsmOrder, keepIsmDefault } from '../utils/keepRun';
 import { rateGuardIsBad, rateGuardLine, type RateGuardState } from '../services/rateGuard';
 import * as NM from '../utils/newModes';   // ★★★ beta96 new modes off on a restricted radio
+// ★★★ beta96 b96-setupux the screen in collapsible sections, in Stuart's order (src/utils/setupSections.ts)
+import SetupSection, { SectionAllRow } from '../components/SetupSection';
+import { EMPTY_MEMO, RADIO_ORDER, SECTIONS_KEY, SERVER_ORDER, locationMust, mustCleared, opModeSummary, orderSections, parseStored,
+         sectionOpen, setAllSections, toggleSection, type SectionMemo } from '../utils/setupSections';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -739,6 +743,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const isLite = !!(NativeModules as any).VibeLocalSDR?.isLite;
   /** ★ A television: no battery (its battery service is invented — see VibeServerBoot), mains power. */
   const isTv = !!(NativeModules as any).VibeLocalSDR?.isTv;
+  /* ★★★ beta96 b96-setupux which sections are open — remembered per device (AsyncStorage SECTIONS_KEY); a red "!" opens
+   *  its section by itself (sectionOpen). Read once; a failed read is "all closed", never an error. */
+  const [secMemo, setSecMemo] = useState<SectionMemo>(EMPTY_MEMO);
+  useEffect(() => {
+    AsyncStorage.getItem(SECTIONS_KEY).then((v) => setSecMemo((m) => ({ ...m, stored: parseStored(v) }))).catch(() => {});
+  }, []);
+  const secPersist = (m: SectionMemo) => { setSecMemo(m); AsyncStorage.setItem(SECTIONS_KEY, JSON.stringify(m.stored)).catch(() => {}); };
   /** ★ "Start automatically when power returns" — offered only on Android 5.0–7.0 (VibeBootStart.MAX_SDK), where
    *  Android may give the radio back after a restart (Kiko's Moto G, 2026-10-02). Stored natively: the boot
    *  receiver reads it with no JS running. */
@@ -3214,64 +3225,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     );
   }
 
-  // ── Config view ───────────────────────────────────────────────────────────
-  return (
-    <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
-      <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
-        <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>Server mode</Text>
-        <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          {!radio
-            ? `Share a radio plugged into this device over your network. ${SERVABLE_RADIOS}`
-            : icomHere === 'maybe'
-            ? 'Share this device\u2019s radio over your network \u2014 if it is an Icom, press Start and allow it.'
-            : `Share this device's ${radio.model || 'SDR'} over your network.`}
-        </Text>
-
-        {/* ★★★ WHAT THIS BOX CAN CARRY — at the top, because every setting below is a promise about work this
-            device will have to do (Stuart, 2026-09-19). Lite measures ITSELF the first time; the main app
-            offers the button, since a phone big enough to run the app is assumed to cope.
-            ★★ It costs the radio about two minutes off the air, so the panel says so before it is pressed. */}
-        {/* ★★★ THE SAME CONDITION AS THE ALERT IN start(), AND IT WAS NOT. The Alert fires on
-            `!prefsRead`; this banner rendered on `!!prefsError`. Those are DIFFERENT failures: a read
-            that never settles leaves prefsError NULL (see the deadline note on the load effect), so the
-            Alert told the owner to press "Try reading them again" and the banner holding that button was
-            never drawn at all. Stuart's Sony, 2026-09-26: *"it says reread your settings from the top of
-            the screen there is no button to do that"* — and his photograph proves the case, because the
-            dialog carried NO reason before "Everything here is a default", which only happens when
-            prefsError is null.
-            ★★ ONE RULE, TWO READERS, for the THIRD time in this one pair — the comment in start() already
-               records correcting the wording in both places and still left the CONDITIONS apart. Wording
-               is not the rule; the rule is "the read failed". ✗ Whoever changes one of these changes both.
-            ★ `!prefsRead` is the authority: it is what start() refuses on, so it is what must offer the
-              way out. prefsError, when there is one, only adds the reason.
-            ★★★ BUT NOT WHILE THE READ IS STILL RUNNING (2026-09-30) — prefsRead starts false, so this
-               drew "could not be read" on every cold start until the read landed; on slow storage that
-               was seconds. start() splits the same two cases the same way. */}
-        {!prefsRead && prefsLoading && prefsSlow && (
-          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 12 }]}>
-            {'Reading your saved settings — this device\'s storage is slow to answer. Start will work as '
-             + 'soon as they have loaded.'}
-          </Text>
-        )}
-        {!prefsRead && !prefsLoading && (
-          <View style={{ borderLeftWidth: 3, borderLeftColor: C.badSoft, paddingLeft: 10, marginBottom: 12 }}>
-            <Text style={[styles.hint, { ...meaningText(C.m, C.badSoft), fontFamily: F, marginBottom: 0 }]}>
-              {`Your saved settings could not be read${prefsError ? ` (${prefsError})` : ''}. What you see `
-               + `below are DEFAULTS — your settings are still stored on this device and have not been `
-               + `touched, so do not start the server until this is fixed, or they will be overwritten.`}
-            </Text>
-            {/* ★★ AN ACTION, not an instruction the device may be unable to carry out. It already
-                retried three times on its own; this is for the case where something was genuinely
-                holding the database and has since let go. */}
-            <TouchableOpacity onPress={() => setPrefsTry((n) => n + 1)}
-                              style={{ marginTop: 8, alignSelf: 'flex-start', paddingVertical: 6,
-                                       paddingHorizontal: 14, borderWidth: 1, borderColor: C.badSoft,
-                                       borderRadius: 6 }}>
-              <Text style={{ ...meaningText(C.m, C.badSoft), fontFamily: F, fontSize: 14 }}>↻ Try reading them again</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHAT THIS DEVICE CAN CARRY</Text>
+  /* ══ ★★★ beta96 b96-setupux THE SCREEN IN SECTIONS (Stuart 11-26) — each block below is one section's body, cut
+   *  unchanged from where it stood (its old heading is the section's header now). Each keeps its own condition: a
+   *  body that is null is not drawn as a section at all. Order and open/closed: src/utils/setupSections.ts. ══ */
+  const secBody_bench = (<>
         {/* ★★★ A TV SCROLLS BY MOVING FOCUS, so a block of text ABOVE the first focusable thing on
             the page is unreachable with a remote: the results sat over the Measure button and the
             D-pad had nothing to travel to, so nobody using the app the way it is meant to be used
@@ -3358,10 +3315,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             }
             runBench(true);
           }} />
-
-        {/* Protocol picker — absent in a VibeServer-only build (see vibeServerOnly) */}
-        {vibeServerOnly ? null : (<>
-        <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PROTOCOL</Text>
+  </>);
+  const secBody_protocol = (!vibeServerOnly) ? (<>
         {/* ★★★ PERSISTED THE MOMENT IT IS CHOSEN, not only when the server starts.
              Every other setting on this screen is written by start()'s multiSet, which means a
              choice you make and do not start is simply lost — and the hint two hundred lines
@@ -3391,8 +3346,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           title="RTL-TCP" tag="Compatible"
           desc="Raw IQ for SDR#, SDR++ or SDR Console, with VibeAGC. Local network only. Needs a fast, stable network. No PIN." />
         )}
-        </>)}
-
+  </>) : null;
+  const secBody_localName = (<>
         {/* ★★ "LOCAL NAME", not "advertised name" — it names this server ON THIS NETWORK, and
             the .local address is derived from it. It was renamed when public listing arrived
             (Stuart, 2026-08-22): with a PUBLIC name a few rows below, "advertised" no longer said
@@ -3419,24 +3374,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 (protoEff === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
         </View>
-
-        {protoEff === 'vibeserver' ? (
-          <>
-            {/* ─── SERVER SETTINGS ───────────────────────────────────────────────────────────
-                ★★ Everything from here to RADIO SETTINGS belongs to the SERVER — who may reach it,
-                   what it calls itself, what it costs the uplink. The radio in front of it is a
-                   separate group below, because they are separate ideas and eighteen sections in
-                   one undifferentiated scroll made them look like one. */}
-            <Text style={[styles.section, { color: C.heading, fontFamily: F, marginTop: 22 }]}>
-              SERVER SETTINGS
-            </Text>
-
+  </>);
+  const secBody_security = (<>
             {/* ★★ SECURITY — the PIN and the admin password TOGETHER, because they are two
                 secrets with two different jobs and having them in separate parts of the screen
                 invited the reading that one replaces the other (Stuart, 2026-07-27).
                 The distinction in one line each: the PIN is the DOOR, the password is the
                 CONTROLS INSIDE. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SECURITY</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <Text style={[styles.value, { color: C.text, fontFamily: F, fontSize: 14 }]}>
                 Two separate protections
@@ -3543,12 +3487,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 ? 'Anyone on the network can connect and tune. Use only on a trusted LAN.'
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
             </Text>
-
+  </>);
+  const secBody_location = (<>
             {/* Receiver location. A SEPARATE consent from the app's own location
                 permission: granting location to sort the instance list by distance is
                 not consent to BROADCAST that position to every client. So this is
                 opt-in, and 'off' is the default. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>RECEIVER LOCATION</Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
               HOME — where the receiver normally lives.
             </Text>
@@ -3606,13 +3550,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               Distances and band edges are properties of the ANTENNA, not the listener —
               80m is 3.5–3.8 MHz in Region 1 but 3.5–4.0 in Region 2.
             </Text>
-
+  </>);
+  const secBody_proxy = (<>
             {/* ★★★ NOT AN ADVANCED SETTING. This lived under Advanced, but a SIMPLE server put on
                 the internet through a tunnel needs it just as much — and without it every visitor
                 arrives as 127.0.0.1, which counts as the owner, so the time limit switches itself
                 OFF and the ban list cannot tell two people apart. We hit exactly that on the demo
                 (2026-08-11). It belongs wherever the server is reachable from outside. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BEHIND A REVERSE PROXY</Text>
             <TextInput value={proxies}
               onChangeText={(v) => { setProxies(v); AsyncStorage.setItem(K.proxies, v); }}
               placeholder="e.g. 127.0.0.1, 10.0.0.0/8  (empty = direct)" placeholderTextColor={C.placeholder}
@@ -3695,11 +3639,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   — a reboot needs the dongle replugged by hand, and Samsung ships scheduled
                   restarts ON, which kills an unattended receiver every few days. */}
 
+  </>);
+  const secBody_gallery = (<>
             {/* ★★ V12 THE GALLERY (2026-10-22) — what the decoders heard: background decoding's, and a listener's own.
                 The Setup page's Server tab, its words; the size is the limit (the oldest go first) with the space left
                 on this device beside it. Drawn for every radio, as on the Setup page: a listener's own decodes go there
                 too. VibeServerBoot applies it (setGallery) on every start. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>GALLERY</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Gallery size</Text>
@@ -3748,10 +3693,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.
               </Text>
             </View>
-
+  </>);
+  const secBody_community = (<>
             {/* ★★ V12 beta94 THE VibeSDR COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md) — the Setup page's card, the same words.
                 Off by default; saved on the next Start, like its neighbours. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>COMMUNITY MAP</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
@@ -3788,22 +3733,18 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 shares nothing; a gallery only you may see shares aircraft only. The server must be listed in the directory.
               </Text>
             </View>
-
+  </>);
+  const secBody_adsbFeed = (!!radio && !isIcom && adsbFeedOffered(radio.driver)) ? (<>
             {/* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (docs/v12/ADSB-FEED.md) — the Setup page's card, the same words, only
                 where this radio could run ADS-B (AGENTS.md). Saved on the next Start, like its neighbours. */}
-            {!!radio && !isIcom && adsbFeedOffered(radio.driver) && (
-              <>
-                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SHARE ADS-B WITH FLIGHT TRACKERS</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <AdsbFeedSetup C={C} F={F} model={afModel} onChange={onAfChange} status={afStatus} error={afProblem}
                                  keepRunning={adsbKeepOn} />
                 </View>
-              </>
-            )}
-
+  </>) : null;
+  const secBody_pskr = (<>
             {/* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md) — the Setup
                 page's card, the same words. Saved on the next Start, like its neighbours. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PSK REPORTER</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               {/* ★ V12 beta90: which decoders report — the Setup page's #pskrWhat, the same words */}
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
@@ -3885,7 +3826,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </>
               )}
             </View>
-
+  </>);
+  const secBody_audio = (<>
             {/* Web server. Turning this OFF means a browser gets nothing — only the
                 VibeSDR app can connect. It's the blunt lock for a server you don't
                 want a stranger stumbling into via a URL. */}
@@ -3917,11 +3859,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               This is audio, not IQ. For SDR#, SDR++ or SDR Console, use the RTL-TCP protocol above, or RAW IQ OUT below.
             </Text>
-
+  </>);
+  const secBody_rawIq = (!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq')) ? (<>
             {/* ★ Not in Lite: an rtl_tcp stream for external decoders — Lite is a VibeServer only (Stuart, 2026-09-18),
                 and the extra IQ stream is weight a small box should not carry. */}
             {/* ★ …nor for an Icom, which has no IQ to send. */}
-            {!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq') && (<>
             {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
                 channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
                 250 kHz on the local network — for a decoder the browser cannot run (DSD, a
@@ -3931,7 +3873,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 Advanced sections, so Simple showed no trace of it, and Sloper took UNCOMPRESSED AUDIO for it).
                 The choice is here in both modes; the local-network ceiling and the locked window's stream count
                 stay Advanced. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>RAW IQ OUT</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                 {/* ★ On a shared dial the server refuses it, so the choice is held at Off and
@@ -3992,28 +3933,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   : ''}
               </Text>
             </View>
-            </>)}
-
-            {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
-                controls, because that is the only half of this screen it affects. It used to lead
-                the whole page, which read as though it governed everything below it; the SERVER
-                settings are identical in both modes, and putting a mode question above them
-                implied a choice that was not there (Stuart, 2026-08-17: "the simple and advanced
-                toggle needs to be above the radio controls since the server controls are identical
-                in both modes").
-                It sat at the BOTTOM, under the last setting, where it read as one more option
-                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
-                simple and full button is at the bottom and doesnt change the GUI"). */}
+  </>) : null;
+  const secBody_fps = (!isIcom) ? (<>
             {/* Waterfall frame rate */}
             {/* ★ Not on an Icom: its waterfall is the radio's own scope, as fast as the CI-V baud lets it sweep
                 (the ICOM TRANSCEIVER card's baud and scope speed), so an FFT rate would be a dead control. */}
-            {!isIcom && (<>
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WATERFALL RATE</Text>
             {FPS_TIERS.map(t => (
               <OptRow key={t.key} C={C} F={F} active={fps === t.key} label={t.label} onPress={() => setFps(t.key)} />
             ))}
-            </>)}
-
+  </>) : null;
+  const secBody_webClient = (<>
             {/* ★★★ NO "COMPRESSED AUDIO" SWITCH — UNCOMPRESSED AUDIO above supersedes it. That
                 three-way setting already says what this server sends: Off (Opus only), Listener's
                 choice, or Compatibility. A separate switch for the same decision meant two
@@ -4030,7 +3959,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* ★★ UNCOMPRESSED AUDIO — the owner's UPLINK policy, three-way.
                 Raw is 48 kHz stereo int16: ~187 KB/s per listener, which is why this is not
                 a plain switch. Hans asked for it after hearing Opus on a good system. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WEB CLIENT</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -4055,14 +3983,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   : 'Browsers get nothing — only the VibeSDR app can connect.'}
               </Text>
             </View>
-
-
+  </>);
+  const secBody_landingMsg = (<>
             {/* ★★★ THE OWNER'S STANDING MESSAGE — the same field the Pi and the Mac carry, so a
                 phone server can say the same things: house rules, a donation link, or an
                 explanation of behaviour that looks wrong and is not.
                 ★★ NOT the temporary maintenance notice, which expires and can be dismissed. This
                    one stays up and sits on the landing screen before anybody connects. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>LANDING SCREEN MESSAGE</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <TextInput value={landingMsg} onChangeText={setLandingMsg}
                 placeholder="e.g. Shared receiver — please retune before you leave" multiline
@@ -4088,11 +4015,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {'\n'}Only http:// and https:// links are kept — the server drops anything else.
               </Text>
             </View>
-
+  </>);
+  const secBody_eibi = (<>
             {/* ★★ EiBi: the shortwave schedule, fetched from eibispace.de and handed to the shim so
                 every client sees station names. It has always happened silently at start-up, which
                 meant nobody could tell "no schedule" from "the phone had no signal that day". */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SHORTWAVE SCHEDULE</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
                 {eibiMsg || 'The EiBi schedule names shortwave stations for every client. Downloaded '
@@ -4107,12 +4034,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </Text>
               </TouchableOpacity>
             </View>
-
+  </>);
+  const secBody_name = (<>
             {/* ★★★ SDR DISPLAY NAME — the same card, the same words, as the Linux setup page (5.6.75),
                 just above the Simple/Advanced toggle (Stuart, 2026-09-28). Kiko's S8 listed its radio
                 as "Realtek RTL2838UHIDIR" in the directory with no way to change it. Display only:
                 nothing is written to the hardware, and blank is exactly today's name. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SDR DISPLAY NAME</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
                 Changes the displayed name of this SDR in the server and directory listings. This makes
@@ -4124,7 +4051,18 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 placeholder="Default: the name obtained from the USB port" placeholderTextColor={C.placeholder}
                 style={[styles.input, { marginTop: 8, color: C.text, fontFamily: F, borderColor: C.border }]} />
             </View>
-
+  </>);
+  const secBody_mode = (<>
+            {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
+                controls, because that is the only half of this screen it affects. It used to lead
+                the whole page, which read as though it governed everything below it; the SERVER
+                settings are identical in both modes, and putting a mode question above them
+                implied a choice that was not there (Stuart, 2026-08-17: "the simple and advanced
+                toggle needs to be above the radio controls since the server controls are identical
+                in both modes").
+                It sat at the BOTTOM, under the last setting, where it read as one more option
+                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
+                simple and full button is at the bottom and doesnt change the GUI"). */}
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>MODE</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {([false, true] as const).map(v => (
@@ -4160,21 +4098,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   + 'settings above. Choose Advanced to share it between several people, or to '
                   + 'limit where they may tune.'}
             </Text>
-
-
-            {/* ─── RADIO SETTINGS ────────────────────────────────────────────────────────────
-                ★★ The group heading matters as much as the contents: this screen was eighteen
-                   sections in one scroll with nothing to say which belonged to the SERVER and
-                   which to the RADIO in front of it. */}
-            <Text style={[styles.section, { color: C.heading, fontFamily: F, marginTop: 22 }]}>
-              RADIO SETTINGS
-            </Text>
-
+  </>);
+  const secBody_howUsed = (advanced && !isIcom) ? (<>
             {/* ★★★ IN ADVANCED, THIS QUESTION COMES FIRST BECAUSE IT DECIDES THE REST. A shared
                 radio has a locked range and a listener count; a single-user one has neither and
                 gets the allow/block lists instead. Asked last, as the web page once did, the
                 owner answers questions the next answer makes irrelevant. */}
-            {advanced && !isIcom && (<>
               <Text style={[styles.section, { color: C.section, fontFamily: F }]}>HOW WILL IT BE USED?</Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 {/* ★★★ NAMED FOR WHAT ACTUALLY DIFFERS: whether the centre is pinned, and so
@@ -4196,19 +4125,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   </TouchableOpacity>
                 ))}
               </View>
-            </>)}
-
-            {/* ★★ WHERE A LISTENER LANDS — not hardware, so it applies to either radio. Same name
-                as the macOS settings window uses, so an owner who runs both meets one idea once. */}
-            {radioUseEff === 'locked' && centreBlock}
-            {radioUseEff === 'locked' && rateBlock}
-            {/* ★★ NOT ON AN ICOM: the server never tunes it (plan, decision 7) — a new listener hears wherever its
-                owner left it — so a landing frequency would be a setting that does nothing. */}
+  </>) : null;
+  const secBody_fmDefaults = (!isIcom && !blockedModes.split(/[,;\s]+/).includes('wfm') && capsAllowSetting(radioCapsNow, 'fmDefaults')) ? (<>
             {/* ★★★ BROADCAST FM DEFAULTS — what a listener starts with in the audio menu's BROADCAST FM row, and whether the
                 server remembers the last listener's or returns to these (vibe_fm_defaults.h; the browser's Setup page has
                 the same card). Not on an Icom (it demodulates in the radio) or with WFM blocked: nothing to act on. */}
-            {!isIcom && !blockedModes.split(/[,;\s]+/).includes('wfm') && capsAllowSetting(radioCapsNow, 'fmDefaults') && (<>
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BROADCAST FM DEFAULTS</Text>
             <View style={[styles.card, { borderColor: C.border, marginBottom: 8 }]}>
               <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>FM de-emphasis</Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
@@ -4250,9 +4171,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {fmPolicyWords(fmDef.remember, radioUseEff === 'locked' && maxUsers > 1, maxUsers > 1)}
               </Text>
             </View>
-            </>)}
-            {!isIcom && (<>
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHERE LISTENERS START</Text>
+  </>) : null;
+  const secBody_landing = (!isIcom) ? (<>
+            {/* ★★ NOT ON AN ICOM: the server never tunes it (plan, decision 7) — a new listener hears wherever its
+                owner left it — so a landing frequency would be a setting that does nothing. */}
             {/* ★★★ A DAB STATION AS THE LANDING — Stuart's words, 2026-09-28: "just above the entry for
                 frequency and demod selector have a use DAB station as landing station? tap yes and then
                 a block selector pops up and you choose a block … then next to that a quick station
@@ -4555,8 +4477,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               Where a listener is tuned when they first open the page. Their browser remembers where
               they were after that, so this mostly affects first-time visitors.
             </Text>
-            </>)}
-
+  </>) : null;
+  const secBody_hardware = (<>
             {isIcom ? icomSetupBlock : isRtl ? (<>
             {/* ★★★ THE GAIN THE RADIO STARTS AT, and returns to when the last listener leaves.
                 It was buried in Advanced beside the gain LIMITS, which is a different idea —
@@ -4821,9 +4743,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 own blanker on their own channel, in the audio menu.
               </Text>
             </>)}
-
+  </>);
+  const secBody_timeLimit = (<>
             {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>
             {([[0, 'Unlimited'], [15, '15 minutes'], [30, '30 minutes'],
                [60, '1 hour'], [120, '2 hours']] as const).map(([v, label]) => (
               <OptRow key={v} C={C} F={F} active={limitMin === v} label={label}
@@ -4862,15 +4784,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 ))}
               </View>
             )}
-
+  </>);
+  const secBody_antenna = (advanced) ? (<>
             {/* ★★★ WHAT IS BOLTED TO THIS RADIO — ADVANCED ONLY. It exists to set a stranger's
                 expectations on a landing page they are choosing from, and a Simple server is one
                 person sharing a receiver with people who already know what is on the end of it
                 (Stuart, 2026-08-19: "remove the antenna details as its not really needed in simple
                 mode"). Same reasoning as everything else Advanced adds: it is about being read by
                 somebody who has never seen your receiver. */}
-            {advanced && (<>
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>ANTENNA</Text>
             {/* ★★ An external antenna switch, above the aerial's own details (Stuart's design, 2026-10-09). */}
             {(ANT_SWITCH_SETUP || antSwitchSaved.current) && <AntennaSwitchSetup value={antSwitch} onChange={setAntSwitch} C={C} F={F} />}
             <TextInput value={antenna} onChangeText={setAntenna}
@@ -4924,8 +4845,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 the bare port; an empty box shows just the port.
               </Text>
             </>)}
-            </>)}
-
+  </>) : null;
+  const secBody_power = (<>
             {/* ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON by default, and it never lets the
                 dongle go. The capture parks so the phone stops burning power on a radio nobody is
                 hearing; the device stays CLAIMED, so it starts again instantly.
@@ -4937,7 +4858,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 XCover). Android 5.0–7.0 with no lock screen gives it back (Kiko's Moto G), so the switch shows
                 there only; everywhere else the line below says what actually happens. Wording: Stuart's, tidied. */}
             {startOnPowerSupported ? (<>
-              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHEN POWER RETURNS</Text>
               <View style={[styles.card, { borderColor: C.border }]}>
                 <View style={styles.rowBetween}>
                   <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -4958,7 +4878,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               let an app take a USB radio by itself while the {isTv ? 'TV' : 'device'} is starting up.
             </Text>
             )}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHEN NOBODY IS LISTENING</Text>
+  </>);
+  const secBody_idle = (<>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -4981,7 +4902,27 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     + 'flatter battery, and the only way to draw the 24-hour spectrogram.'}
               </Text>
             </View>
-
+            {/* ★★ THE SPECTROGRAM AND THE POWER SAVER CANNOT BOTH BE ON, and the reason is
+                physical rather than a rule: a radio that stops capturing cannot picture a band it
+                is not listening to. Same on Linux. */}
+            {idleGrace === 0 && advanced && radioUseEff === 'locked' && (
+              <View style={[styles.card, { borderColor: C.border, marginTop: 10 }]}>
+                <View style={styles.rowBetween}>
+                  <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                    Draw the 24-hour spectrogram
+                  </Text>
+                  <Switch value={spectrogram} onValueChange={setSpectrogram}
+                    trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+                </View>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  The landing page shows what this receiver has actually been hearing all day —
+                  which says more about whether it is worth connecting to than any description.
+                  Only possible while the radio keeps capturing.
+                </Text>
+              </View>
+            )}
+  </>);
+  const secBody_bg = (<>
             {/* ★★★ V12 BACKGROUND DECODING (Stuart, 2026-10-22) — beside the power save, as on the Setup page's Radio tab:
                 the same question, what this radio does when nobody is listening. The Setup page's editor and words
                 (components/BackgroundDecodingSetup), the engine's own decoders. Not on an Icom: one physical receiver,
@@ -4992,7 +4933,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 modes — greyed WITH the reason, never dead. The first listener pauses it and lands where WHERE LISTENERS START
                 says; the last one leaving brings it back. Stored as bgMode (the engine reads it off the config). */}
             {!isIcom && bgWholeOffered && (<>
-              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BACKGROUND DECODING</Text>
               <View style={[styles.card, { borderColor: bgWhole ? C.keySelBorder : C.border, marginBottom: 8 }]}>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
                   What this radio does when nobody is connected. When the first listener arrives it pauses and they land where
@@ -5090,7 +5030,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 <DxScanSetup C={C} F={F} model={dxModel} onChange={onDxChange} driver={bgDriver} rate={bgRate} />
               </View>
             )}
-
+  </>);
+  const secBody_dropout = (<>
             {/* ★★★ KEEP RADIO ALIVE (2026-10-06). Stuart's idea and his wording — "use if USB ports go into powersave
                 mode when no traffic detected" — after the Sony dropped its dongle in standby and the five-minute rule
                 stopped the server six seconds before the radio came back. Android only, like this whole screen.
@@ -5098,7 +5039,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   (that card already says the radio stays powered), so both can be on — the processing rests, the
                   USB stays busy. What this changes is what happens when the radio GOES: wait for ever and take it
                   straight back, instead of stopping after five minutes. And the battery floor parks, not releases. */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>IF THE RADIO DROPS OUT</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -5122,31 +5062,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     + 'when you want it again. Applies straight away.'}
               </Text>
             </View>
-
-            {/* ★★ THE SPECTROGRAM AND THE POWER SAVER CANNOT BOTH BE ON, and the reason is
-                physical rather than a rule: a radio that stops capturing cannot picture a band it
-                is not listening to. Same on Linux. */}
-            {idleGrace === 0 && advanced && radioUseEff === 'locked' && (
-              <View style={[styles.card, { borderColor: C.border, marginTop: 10 }]}>
-                <View style={styles.rowBetween}>
-                  <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                    Draw the 24-hour spectrogram
-                  </Text>
-                  <Switch value={spectrogram} onValueChange={setSpectrogram}
-                    trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
-                </View>
-                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                  The landing page shows what this receiver has actually been hearing all day —
-                  which says more about whether it is worth connecting to than any description.
-                  Only possible while the radio keeps capturing.
-                </Text>
-              </View>
-            )}
-
-            {/* ★★★ THE ADVANCED SECTIONS. Everything from here down is applied to the radio this
-                app is already running — there is no second process and no second port. */}
-            {advanced && (
-              <>
+  </>);
+  const secBody_idleListeners = (advanced && radioUseEff === 'locked') ? (<>
                 {/* ★★★ THE LISTENER WHO WENT AWAY. Shared radios only — a one-at-a-time receiver
                     has nobody to reclaim the slot for, which is why this sits inside `advanced`
                     AND behind the listener count.
@@ -5154,7 +5071,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                        somebody sitting on one frequency for an hour is the best listener there
                        is. Watching a decoder counts as using the radio, so a weather-fax image is
                        never interrupted. */}
-                {radioUseEff === 'locked' && (<>
                 <Text style={[styles.section, { color: C.section, fontFamily: F }]}>IDLE LISTENERS</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
@@ -5179,15 +5095,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     before the ad break. Off by default.
                   </Text>
                 </View>
-                </>)}
+  </>) : null;
+  const secBody_battery = (advanced && !isTv) ? (<>
                 {/* ★★★ THE BATTERY FLOOR. A phone on a solar panel at the allotment: on a grey day
                     the battery drains under use, and a phone that shuts down flat does not come
                     back without a hand on it. At the floor the server warns listeners (VTS at
                     +10, +5 and at the floor), suspends every connection, releases the radio, and
                     comes back 20 points higher (Stuart, 2026-09-17). */}
                 {/* ★ Not on a TV: it has no battery, whatever its battery service claims — a floor there could never fire. */}
-                {!isTv && (<>
-                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BATTERY</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                     {[0, 10, 15, 20, 25, 30].map(n => (
@@ -5211,13 +5126,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     The level is shown on the admin page and beside this server in the directory.
                   </Text>
                 </View>
-                </>)}
-
+  </>) : null;
+  const secBody_decoders = (advanced) ? (<>
                 {/* ★★★ DECODERS AT ONCE (B6). Every listener on a locked range runs their OWN decoder on their
                     OWN frequency now, so the device's CPU — not the listener count — is what limits
                     them. The benchmark times each decoder here and sets this at first setup; the
                     next decoder past it is refused with a message the listener sees. */}
-                {advanced && (<>
                 <Text style={[styles.section, { color: C.section, fontFamily: F }]}>DECODERS</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -5257,8 +5171,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     The benchmark sets it from what this device measured.
                   </Text>
                 </View>
-                </>)}
-
+  </>) : null;
+  const secBody_howMany = (advanced) ? (<>
                 {/* ★★★ HOW MANY — ON EITHER KIND OF RECEIVER, and on an unlocked one this is the
                     control that turns it into an FM-DX receiver. It used to live inside the
                     locked-range block, so an unlocked radio was stuck at one listener and the
@@ -5369,18 +5283,17 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     </Text>
                   </View>
                 )}
-
+  </>) : null;
+  const secBody_zoom = (advanced && !isIcom) ? (<>
                 {/* ★★★ EVERY MODE, NOT LOCKED ONLY (2026-09-18). The zoom FFT engages whenever a listener's view
                     is finer than the wide FFT's bins — in single-user and shared-VFO modes as much as
                     locked — but this switch only showed (and was only SENT) in locked mode, so the
                     XCover's shared dial ran with it off and went blocky at depth (Stuart: "really
                     blocky… like there isnt enough bins at the highest zoom rate"). */}
                 {/* ★ Not on an Icom: its zoom is the radio's own span ladder, never our FFT. */}
-                {!isIcom && (<>
                 {/* ★★★ REAL BINS AT DEEP ZOOM. Without it a shared receiver interpolates, and the
                     waterfall turns to blocks the moment anybody zooms in — which a listener reads
                     as a poor receiver rather than a setting. */}
-                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>ZOOM DETAIL</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={styles.rowBetween}>
                     <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -5408,15 +5321,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   </Text>
                 </View>
 
-                </>)}
-
-
+  </>) : null;
+  const secBody_whereTune = (advanced && radioUseEff === 'single') ? (<>
                 {/* ★★★ NOT IN LOCKED-RANGE MODE. The window IS the limit there, so an allow/block
                     list is a second answer to a question already answered — and two ways to say
                     the same thing is how they end up disagreeing. The web setup page gates it the
                     same way, for the same reason. */}
-                {radioUseEff === 'single' && (<>
-                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHERE LISTENERS MAY TUNE</Text>
                 {/* ★★ PICK A BAND OR TYPE A RANGE — the browser's shape, and the same string on
                     the wire. The free-text box asked the owner to remember a syntax and told them
                     nothing until the server refused it. */}
@@ -5442,7 +5352,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   You are exempt: listening on this phone, and any session unlocked with the admin
                   password, tune anywhere the radio can hear.
                 </Text>
-
+  </>) : null;
+  const secBody_radioUse = (advanced && radioUseEff === 'single') ? (<>
                 {/* ★★★ WHAT THIS RECEIVER IS FOR, under WHERE it can tune. Stuart: "basically just
                     list all modes and decoders and allow the server owner to block them as needed"
                     — an RSP1B locked to HF has no business offering WFM or Adv RDS, and an aerial
@@ -5485,6 +5396,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     </>)}
                   </View>
                 )}
+  </>) : null;
+  const secBody_modes = (advanced && radioUseEff === 'single') ? (<>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
                   Modes and decoders — tap to switch off. A decoder's options sit under it.
                 </Text>
@@ -5779,16 +5692,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   Dimmed means switched off — listeners are never offered it at all. An option under a switch that is off
                   stays here, dimmed, until its switch is on again.
                 </Text>
-                </>)}
-
+  </>) : null;
+  const secBody_ceilings = (advanced && radioUseEff === 'single' && !isIcom) ? (<>
                 {/* ★★★ NOT IN LOCKED-RANGE MODE. A pinned window is ONE band, so a per-band
                     ceiling has no second band to differ from — the whole receiver takes the one
                     gain. The web page hides it in this mode for the same reason (Stuart,
                     2026-08-21: "per band gain isnt needed in this mode as it is a locked range").*/}
                 {/* ★ Not on an Icom: these are ceilings on OUR gain stages; an Icom's RF gain is the radio's own,
                     and who may touch it is the ICOM TRANSCEIVER card's "listeners may change its RF settings". */}
-                {radioUseEff === 'single' && !isIcom && (<>
-                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PER-BAND CEILINGS</Text>
                 <BandLimitEditor C={C} F={F} bands={bands} kind="gain" allowAll
                   /* ★★★ THE AIRSPY R2 / MINI's LIMIT IS A CURVE AND A POSITION ON IT, not dB — its
                        22 preset positions in the server's tenths, a Linearity / Sensitivity choice
@@ -5850,11 +5761,180 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       + 'automatic filter still narrows under; locked, it is the width, fixed.'
                     : ''}
                 </Text>
-                </>)}
+  </>) : null;
+  /* ── ★★★ beta96 b96-setupux the sections: title, the one line, the RED "!" (the refusals start() and the server make —
+   *     the admin password Start insists on, the flight-tracker entry Start refuses, PSK Reporter's "Not sending: it needs
+   *     your callsign", the satellite engine's "no location set"), and the body above. ── */
+  type SecDef = { key: string; title: string; summary: string; must: string; body: React.ReactNode };
+  /* ★★★ b96-serverchoice HOOKS: `serverChoiceTop` is drawn at the very top of the screen (the TOP BAR); a section put in
+   *  `serverChoiceSections.devicePassword` is drawn in the SERVER group at SERVER_ORDER's 'devicePassword' slot (after the
+   *  benchmark and protocol, before the admin password and PIN). Both empty on this branch. */
+  const serverChoiceTop: React.ReactNode = null;
+  const serverChoiceSections: { devicePassword?: SecDef } = {};
+  const vs = protoEff === 'vibeserver';
+  const n = (v: any) => Number(v) || 0;
+  const rangeCount = (csv: string) => String(csv || '').split(',').map((x) => x.trim()).filter(Boolean).length;
+  const serverSecs: SecDef[] = [
+    { key: 'bench', title: 'What this device can carry', body: (<>{secBody_bench}{vs && secBody_decoders}</>),
+      summary: benchBusy ? 'Measuring…' : benchRows.length ? `Measured · ${benchRows.length} decoders timed` : 'Not measured yet', must: '' },
+    { key: 'protocol', title: 'Protocol', body: secBody_protocol, summary: protoEff === 'vibeserver' ? 'VibeServer' : 'RTL-TCP', must: '' },
+    ...(serverChoiceSections.devicePassword ? [serverChoiceSections.devicePassword] : []),
+    { key: 'security', title: 'Admin password and PIN', body: vs ? secBody_security : null,
+      summary: [adminPw.trim() ? 'Admin password set' : 'No admin password', pinMode === 'off' ? 'no PIN' : 'PIN on'].join(' · '),
+      must: needsAdminPw ? 'No admin password: the server will not start without one' : '' },
+    { key: 'network', title: 'On your network', body: secBody_localName,
+      summary: (advertise ? 'Advertised as ' : 'Hidden · ') + (name.trim() || 'VibeSDR'), must: '' },
+    { key: 'location', title: 'Where this receiver is', body: vs ? secBody_location : null,
+      summary: locMoving ? 'On the move' : locMode === 'manual' ? locCity.trim() : 'Not set',
+      must: locationMust(locMode, !!locCity.trim(), !!locMoving) },
+    { key: 'proxy', title: 'Behind a reverse proxy', body: vs ? secBody_proxy : null,
+      summary: proxies.trim() ? 'Trusting ' + proxies.trim() : 'No proxy', must: '' },
+    { key: 'webClient', title: 'Web client', body: vs ? secBody_webClient : null,
+      summary: webServer ? 'Browsers can connect' : 'The app only', must: '' },
+    { key: 'community', title: 'VibeSDR community map', body: vs ? secBody_community : null,
+      summary: communityMap ? 'Sharing to the community map' : 'Not sharing', must: '' },
+    { key: 'adsbFeed', title: 'Share ADS-B with flight trackers', body: vs ? secBody_adsbFeed : null,
+      summary: [afModel.serve ? `Beast out :${afModel.port}` : '', afModel.push ? 'Feeding trackers' : ''].filter(Boolean).join(' · ') || 'Off',
+      must: afProblem },
+    { key: 'pskr', title: 'PSK Reporter', body: vs ? secBody_pskr : null,
+      summary: pskrOn ? 'On · ' + (pskrCall || '?') + (wsprnetOn ? ' · WSPRnet' : '') : 'Off',
+      must: pskrOn && !pskrCall.trim() ? 'PSK Reporter needs a receiver name (your callsign)' : '' },
+    { key: 'audio', title: 'Audio', body: vs ? secBody_audio : null,
+      summary: (['Off — everyone gets Opus', 'Listener’s choice', 'Only as a fallback for old browsers'] as const)[uncomp] ?? '', must: '' },
+    { key: 'frameRate', title: 'Frame rate', body: vs ? secBody_fps : null,
+      summary: (FPS_TIERS.find((t) => t.key === fps) || { label: '' }).label, must: '' },
+    { key: 'eibi', title: 'Shortwave schedule', body: vs ? secBody_eibi : null,
+      summary: (eibiMsg || 'Downloaded when the server starts').split('\n')[0], must: '' },
+    { key: 'gallery', title: 'Gallery', body: vs ? secBody_gallery : null,
+      summary: `${n(galleryMb)} MB` + (galleryPublic ? ' · public' : ' · only you'), must: '' },
+    { key: 'landingMsg', title: 'Landing screen message', body: vs ? secBody_landingMsg : null,
+      summary: landingMsg.trim() ? landingMsg.trim().slice(0, 60) : 'None', must: '' },
+    { key: 'battery', title: 'Battery', body: vs ? secBody_battery : null,
+      summary: batteryPauseAt > 0 ? `Suspend at ${batteryPauseAt}%` : 'Never suspend', must: '' },
+  ];
+  const radioSecs: SecDef[] = !vs ? [] : [
+    { key: 'name', title: 'SDR display name', body: secBody_name, summary: radioLabel.trim() || radio?.model || 'The name from the USB port', must: '' },
+    { key: 'opMode', title: 'Operating mode',
+      body: (secBody_howUsed || radioUseEff === 'locked' || secBody_radioUse)
+        ? (<>{secBody_howUsed}{radioUseEff === 'locked' && centreBlock}{secBody_radioUse}</>) : null,
+      summary: opModeSummary(radioUseEff, singleEff || '', singleEff ? singleWords(singleEff) : '', lockedCentre, rate), must: '' },
+    { key: 'listeners', title: 'Listeners', body: (secBody_howMany || secBody_idleListeners) ? (<>{secBody_howMany}{secBody_idleListeners}</>) : null,
+      summary: `${maxUsers} ${maxUsers === 1 ? 'listener' : 'listeners'}` + (askFirst ? ' · ask before tuning' : ''), must: '' },
+    { key: 'antenna', title: 'Antenna', body: secBody_antenna, summary: antenna.trim() ? antenna.trim().slice(0, 60) : 'Not described', must: '' },
+    { key: 'hardware', title: isIcom ? 'Icom transceiver' : 'This radio’s hardware',
+      body: (<>{radioUseEff === 'locked' && rateBlock}{secBody_hardware}</>),
+      summary: isIcom ? (radio?.model || '') : [rate > 0 ? benchRateWords(rate) : 'Listeners choose the span', isRtl ? (rtlAgc ? 'AGC' : 'gain set') : ''].filter(Boolean).join(' · '),
+      must: '' },
+    { key: 'whereTune', title: 'Where listeners may tune', body: secBody_whereTune,
+      summary: !rangeCount(allowRanges) && !rangeCount(blockRanges) ? 'Anywhere the radio reaches'
+        : [rangeCount(allowRanges) ? `${rangeCount(allowRanges)} allowed` : '', rangeCount(blockRanges) ? `${rangeCount(blockRanges)} blocked` : ''].filter(Boolean).join(' · '),
+      must: '' },
+    { key: 'gainLimits', title: 'Gain limits', body: secBody_ceilings,
+      summary: rangeCount(gainLimits) ? `${rangeCount(gainLimits)} band ${rangeCount(gainLimits) === 1 ? 'limit' : 'limits'}` : 'No limits', must: '' },
+    { key: 'modes', title: 'Modes and decoders', body: secBody_modes,
+      summary: singleEff ? 'Only ' + singleWords(singleEff) : (() => { const off = blockedModes.split(/[,;\s]+/).filter((t) => t && !/[+@-]/.test(t)).length; return off ? `${off} switched off` : 'Everything on'; })(),
+      must: '' },
+    { key: 'rawIq', title: 'Raw IQ', body: secBody_rawIq, summary: rawIq ? 'On' : 'Off', must: '' },
+    { key: 'landing', title: 'Where new listeners land', body: secBody_landing,
+      summary: mapLandOn ? 'Map · ' + (mapWhich === 'amateur' ? 'Amateur' : 'Aviation & Maritime') : dabLandOn ? 'A DAB station'
+        : landingHz > 0 ? `${Math.round(landingHz / 100) / 10} kHz ${String(landingMode).toUpperCase()}` : 'Where the last listener left it',
+      must: '' },
+    { key: 'background', title: 'Background decoding', body: !isIcom ? secBody_bg : null,
+      summary: bgWhole ? (bgChosen.length ? keepName(bgChosen, BG_ISM_WORDS) : String(bgWhole)) : 'Manual', must: '' },
+    { key: 'fmDefaults', title: 'Broadcast FM defaults', body: secBody_fmDefaults,
+      summary: fmDef.remember ? 'Remembers the last listener’s' : 'Returns to these', must: '' },
+    { key: 'timeLimit', title: 'Time limit per listener', body: secBody_timeLimit,
+      summary: limitMin > 0 ? (limitMin >= 60 ? `${limitMin / 60} h` : `${limitMin} min`) : 'Unlimited', must: '' },
+    { key: 'power', title: 'When power returns', body: secBody_power,
+      summary: startOnPowerSupported ? (startOnPower ? 'Starts by itself' : 'Waits for Start') : 'Press Start after a restart', must: '' },
+    { key: 'idle', title: 'When nobody is listening', body: secBody_idle,
+      summary: idleGrace > 0 ? 'Power down after five minutes' : 'Keeps capturing', must: '' },
+    { key: 'dropout', title: 'If the radio drops out', body: secBody_dropout,
+      summary: keepAlive ? 'Keep radio alive' : 'Stop after five minutes', must: '' },
+    { key: 'zoom', title: 'Zoom detail', body: secBody_zoom, summary: zoomSpec ? 'Real bins at deep zoom' : 'Off', must: '' },
+  ];
+  const secShownNow = [...serverSecs, ...radioSecs].filter((s) => !!s.body);
+  const secRender = (list: SecDef[], order: readonly string[]) => orderSections(list.filter((s) => !!s.body), order).map((s) => (
+    <SetupSection key={s.key} sectionKey={s.key} title={s.title} summary={s.summary} must={s.must}
+      open={sectionOpen(secMemo, s.key, s.must)}
+      onToggle={(k) => secPersist(toggleSection(secMemo, k, s.must))}
+      onMustCleared={(k) => setSecMemo((m) => mustCleared(m, k))} C={C} F={F}>{s.body}</SetupSection>
+  ));
 
-              </>
-            )}
 
+  // ── Config view ───────────────────────────────────────────────────────────
+  return (
+    <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
+      <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+        <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>Server mode</Text>
+        <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
+          {!radio
+            ? `Share a radio plugged into this device over your network. ${SERVABLE_RADIOS}`
+            : icomHere === 'maybe'
+            ? 'Share this device\u2019s radio over your network \u2014 if it is an Icom, press Start and allow it.'
+            : `Share this device's ${radio.model || 'SDR'} over your network.`}
+        </Text>
+
+        {/* ★★★ b96-serverchoice SLOT — THE TOP BAR (START / STOP SERVER first, the status with the /setup address) goes HERE,
+            above everything else; the first-open choice (SET UP HERE / REMOTE SETUP) and the Simple / Full / RTL-TCP entry
+            replace or precede the sections. `serverChoiceTop` is that branch's to fill; nothing else is drawn above it. */}
+        {serverChoiceTop}
+        {/* ★★★ WHAT THIS BOX CAN CARRY — at the top, because every setting below is a promise about work this
+            device will have to do (Stuart, 2026-09-19). Lite measures ITSELF the first time; the main app
+            offers the button, since a phone big enough to run the app is assumed to cope.
+            ★★ It costs the radio about two minutes off the air, so the panel says so before it is pressed. */}
+        {/* ★★★ THE SAME CONDITION AS THE ALERT IN start(), AND IT WAS NOT. The Alert fires on
+            `!prefsRead`; this banner rendered on `!!prefsError`. Those are DIFFERENT failures: a read
+            that never settles leaves prefsError NULL (see the deadline note on the load effect), so the
+            Alert told the owner to press "Try reading them again" and the banner holding that button was
+            never drawn at all. Stuart's Sony, 2026-09-26: *"it says reread your settings from the top of
+            the screen there is no button to do that"* — and his photograph proves the case, because the
+            dialog carried NO reason before "Everything here is a default", which only happens when
+            prefsError is null.
+            ★★ ONE RULE, TWO READERS, for the THIRD time in this one pair — the comment in start() already
+               records correcting the wording in both places and still left the CONDITIONS apart. Wording
+               is not the rule; the rule is "the read failed". ✗ Whoever changes one of these changes both.
+            ★ `!prefsRead` is the authority: it is what start() refuses on, so it is what must offer the
+              way out. prefsError, when there is one, only adds the reason.
+            ★★★ BUT NOT WHILE THE READ IS STILL RUNNING (2026-09-30) — prefsRead starts false, so this
+               drew "could not be read" on every cold start until the read landed; on slow storage that
+               was seconds. start() splits the same two cases the same way. */}
+        {!prefsRead && prefsLoading && prefsSlow && (
+          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 12 }]}>
+            {'Reading your saved settings — this device\'s storage is slow to answer. Start will work as '
+             + 'soon as they have loaded.'}
+          </Text>
+        )}
+        {!prefsRead && !prefsLoading && (
+          <View style={{ borderLeftWidth: 3, borderLeftColor: C.badSoft, paddingLeft: 10, marginBottom: 12 }}>
+            <Text style={[styles.hint, { ...meaningText(C.m, C.badSoft), fontFamily: F, marginBottom: 0 }]}>
+              {`Your saved settings could not be read${prefsError ? ` (${prefsError})` : ''}. What you see `
+               + `below are DEFAULTS — your settings are still stored on this device and have not been `
+               + `touched, so do not start the server until this is fixed, or they will be overwritten.`}
+            </Text>
+            {/* ★★ AN ACTION, not an instruction the device may be unable to carry out. It already
+                retried three times on its own; this is for the case where something was genuinely
+                holding the database and has since let go. */}
+            <TouchableOpacity onPress={() => setPrefsTry((n) => n + 1)}
+                              style={{ marginTop: 8, alignSelf: 'flex-start', paddingVertical: 6,
+                                       paddingHorizontal: 14, borderWidth: 1, borderColor: C.badSoft,
+                                       borderRadius: 6 }}>
+              <Text style={{ ...meaningText(C.m, C.badSoft), fontFamily: F, fontSize: 14 }}>↻ Try reading them again</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {/* ★★★ beta96 b96-setupux OPEN ALL / CLOSE ALL — every section on this screen */}
+        <SectionAllRow C={C} F={F}
+          onAll={(open) => secPersist(setAllSections(secMemo, secShownNow.map((s) => ({ key: s.key, must: s.must })), open))} />
+        <Text style={[styles.section, { color: C.heading, fontFamily: F, marginTop: 14 }]}>SERVER SETTINGS</Text>
+        {secRender(serverSecs, SERVER_ORDER)}
+        {protoEff === 'vibeserver' ? (
+          <>
+            {secBody_mode}
+            <Text style={[styles.section, { color: C.heading, fontFamily: F, marginTop: 22 }]}>
+              RADIO SETTINGS
+            </Text>
+            {secRender(radioSecs, RADIO_ORDER)}
             {/* ★★★ WARN WHILE SERVING, AND ONLY THEN. The phone is a SIMPLE-mode server: plug in
                 and share, which is the behaviour people like, so a password is NOT forced here.
                 But an owner who never opened this screen met the consequence as a stranger's

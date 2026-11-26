@@ -21,7 +21,7 @@ ok(pos('Where new listeners land') === pos('Background decoding') - 1, '10 where
 const server = heads(pane('serverPane', 'radioPane'));
 const wantServer = ['Radio order', 'What this box can carry', 'Processor', 'Wi-Fi', 'On your network', 'Where this receiver is', 'Network port',
   'Behind a reverse proxy', 'Advertise on VibeSDR.net', 'SSH', 'VibeSDR community map', 'PSK Reporter', 'Sharing ADS-B with flight trackers',
-  'Audio', 'Shortwave schedule', "This phone's server", 'Start with Windows', 'Message on the landing screen'];
+  'Audio', 'Frame rate', 'Shortwave schedule', "This phone's server", 'Start with Windows', 'Message on the landing screen'];
 ok(inOrder(server, wantServer), `server tab: ${server.join(' · ')}`);
 // the moves
 const rp = pane('radioPane');

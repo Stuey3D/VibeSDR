@@ -6,6 +6,9 @@ import fs from 'node:fs';
 
 const src = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');
 const fn = src.match(/\nfunction fpsShow\(r\) \{[\s\S]*?\n\}\n/);
+// ★★★ beta96 b96-setupux the helpers fpsShow calls (the server's frame rate, follow or own), lifted from the page too
+const helpers = ['fpsServerNow', 'fpsFollows', 'fpsEffWords'].map((n) => (src.match(new RegExp(`\\nfunction ${n}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`)) || [''])[0]).join('')
+  + (src.match(/\nconst FPS_CHOSEN = new WeakSet\(\);\n/) || [''])[0];
 if (!fn) { console.log('   FAIL fpsShow not found in the page'); process.exit(1); }
 let fail = 0;
 const ok = (c, what) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
@@ -13,6 +16,7 @@ const ok = (c, what) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (
 // ★ The menu's options as the PAGE writes them (not a copy that could drift): the 10-fps default (2026-10-20)
 //   renamed Full/Half/Quarter to Smoother · 20 / Default · 10 / Half · 5 — same VALUES, so saved configs read as before.
 const sel0 = src.match(/<select id="maxFps">([\s\S]*?)<\/select>/);
+ok(/<option value="server" id="maxFpsServer">Use the server&rsquo;s frame rate<\/option>/.test(sel0 ? sel0[1] : ''), 'beta96: the menu offers "Use the server\'s frame rate"');
 const PAGE = sel0 ? [...sel0[1].matchAll(/<option value="(\d+)">([^<]*)<\/option>/g)].map((m) => [m[1], m[2].replace(/&middot;/g, '·')]) : [];
 ok(JSON.stringify(PAGE) === JSON.stringify([['20', 'Smoother · 20 fps'], ['10', 'Default · 10 fps'], ['5', 'Half · 5 fps']]),
    `the menu reads Smoother · 20 / Default · 10 / Half · 5 (${JSON.stringify(PAGE)})`);
@@ -26,9 +30,14 @@ function makeSelect() {
   sel.appendChild = (o) => { o.remove = function () { sel.options = sel.options.filter((x) => x !== this); }; sel.options.push(o); };
   return sel;
 }
-const show = new Function('$', 'document', 'r', `${fn[0]}\nfpsShow(r);`);
+const show = new Function('$', 'document', 'r', 'cfg', 'ANDROID', 'radioList', `${helpers}${fn[0]}\nfpsShow(r);`);
+let CFG = { fpsDefault: 10 }, ANDR = false;
+const EFF = { textContent: '' };
 function run(sel, r) {
-  show(() => sel, { createElement: () => ({ value: '', textContent: '' }) }, r);
+  const stub = (id) => id === 'maxFps' ? sel : id === 'maxFpsEff' ? EFF : null;
+  // ★ an existing (configured) radio unless the case says otherwise — exactly the old behaviour
+  if (r.configured === undefined) r.configured = true;
+  show(stub, { createElement: () => ({ value: '', textContent: '' }) }, r, CFG, ANDR, () => [r]);
   const o = sel.options.find((x) => x.value === sel.value);
   return { value: sel.value, label: o ? o.textContent : '(blank)', n: sel.options.length };
 }
@@ -37,7 +46,7 @@ let sel = makeSelect();
 let r = run(sel, { fftRate: 15, maxFps: 15 });
 ok(r.value === '15' && r.label === '15 fps (set by hand)', `15 saved → "${r.label}", not Smoother · 20`);
 // What the save would write: the change handler is the ONLY writer, and it reads the selected value.
-const handler = src.match(/\$\("maxFps"\)\.addEventListener\("change", \(\) => \{\n\s*const v = parseFloat\(\$\("maxFps"\)\.value\) \|\| 10;/);
+const handler = src.match(/\$\("maxFps"\)\.addEventListener\("change", \(\) => \{[\s\S]{0,400}?const v = parseFloat\(\$\("maxFps"\)\.value\) \|\| 10;/);
 ok(!!handler && parseFloat(sel.value) === 15, 'the only writer is the change handler, and it would read 15 — never 20 or 10');
 ok(!/stashRadio[\s\S]{0,400}maxFps/.test(src.slice(src.indexOf('function stashRadio'), src.indexOf('function stashRadio') + 400)),
    'stashRadio (every save) does not write the rate');
@@ -57,6 +66,37 @@ ok(r.value === '12.5', `no ceiling, fftRate 12.5 → "${r.label}"`);
 sel = makeSelect();
 run(sel, { fftRate: 15 }); r = run(sel, { fftRate: 15 });
 ok(r.n === 4, `shown twice (a re-render) → one hand-set entry, not two (${r.n} options)`);
+
+// ★★★ beta96 b96-setupux THE SERVER'S FRAME RATE (Stuart 11-26). The menu's "server" entry is a VALUE the select holds.
+function makeSelectS() {
+  const s2 = makeSelect();
+  const o = { value: 'server', textContent: "Use the server's frame rate" };
+  o.remove = function () { s2.options = s2.options.filter((x) => x !== this); };
+  s2.options.unshift(o);
+  return s2;
+}
+CFG = { fpsDefault: 20 };
+r = run(makeSelectS(), { fftRate: 5, maxFps: 5, fpsFollow: true });
+ok(r.value === 'server', `a radio following the server shows "Use the server's frame rate" (${r.value})`);
+ok(/server\u2019s 20 fps/.test(EFF.textContent), `…and says the rate it runs at: "${EFF.textContent}"`);
+r = run(makeSelectS(), { fftRate: 5, maxFps: 5, fpsFollow: false });
+ok(r.value === '5' && EFF.textContent === '', 'an override (fpsFollow false) shows its own 5, no server words');
+r = run(makeSelectS(), { fftRate: 10, maxFps: 10 });
+ok(r.value === '10', 'an EXISTING radio saved before beta96 (no fpsFollow) keeps its own 10 — identical behaviour');
+const fresh = { fftRate: 10, maxFps: 10, configured: false };
+r = run(makeSelectS(), fresh);
+ok(r.value === 'server' && fresh.fpsFollow === true, 'a NEW radio (never set up) follows the server by default');
+ANDR = true;
+const ph = { fftRate: 10, maxFps: 10, configured: false };
+r = run(makeSelectS(), ph);
+ok(r.value === '10' && ph.fpsFollow !== true, "a phone's page never follows (one radio: its rate IS the server's)");
+ANDR = false;
+// the change handler: "server" sets the word and keeps the radio's own numbers; a value clears it
+const hsrc = src.match(/\$\("maxFps"\)\.addEventListener\("change", \(\) => \{[\s\S]*?\}\);/)[0];
+ok(/=== "server"\) \{ radio\(\)\.fpsFollow = true;[^}]*return; \}/.test(hsrc) && /radio\(\)\.fpsFollow = false;/.test(hsrc),
+   'the handler: "server" → fpsFollow true (own numbers untouched); a value → fpsFollow false + the value');
+ok(/fpsDefault: fpsServerNow\(\)/.test(src) && /cfg\.fpsDefault = fpsServerNow\(\)/.test(src), 'the Server tab\'s Frame rate is saved (collect + stashServer)');
+ok(/<div class="card" id="fpsDefaultCard">\s*<h2>Frame rate<\/h2>/.test(src), 'the Server tab has a Frame rate card');
 
 console.log(fail ? `\n${fail} FAILED` : '\nall good');
 process.exit(fail ? 1 : 0);
