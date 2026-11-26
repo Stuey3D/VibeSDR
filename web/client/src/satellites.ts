@@ -43,7 +43,7 @@ import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 // ★★★ beta96 SCHEDULE A PASS (src/services/satSchedule.ts — one set of rules with the app)
 import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_PRIO_WHAT, SAT_SCHED_REMIND_NOTE, SAT_SCHED_SET_WHAT,
          SatSchedule, satPassKey, satSchedDegradedText, satSchedKeyText, satSchedNowText, satSchedPlan, satSchedPrioText, satSchedRemindDue, satSchedRowText,
-         satSchedStep, satSchedWhy, satSession, satSessionLine, type SatSchedPrev, type SatSchedRun, type SatSessionFacts } from '../../../src/services/satSchedule';
+         satSchedStep, satSchedWhy, satSession, satSessionLine, satKeyKind, satOnSharedDial, SAT_SCHED_SHARED_NOTE, type SatSchedPrev, type SatSchedRun, type SatSessionFacts } from '../../../src/services/satSchedule';
 // ★★★ beta96 SINGLE MODE: SATELLITES — the watch-only view (src/services/satSingle.ts — one set of rules with the app)
 import { SAT_SINGLE_ONLY, SAT_SINGLE_WHY, satHybridText, satSingleHead, satSingleLastText, satSinglePlanRows, satSingleSub,
          type SatHybridInfo, type SatSingle } from '../../../src/services/satSingle';
@@ -898,7 +898,7 @@ export class SatPanel {
       const inactive = r.tx.status === 'inactive' ? ' · INACTIVE' : '';
       // ★★ 1.6 REMIND — only where a pick disturbs nobody (the server's pickPrivate), on a hearable row with a pass to come;
       //    hidden, not greyed, everywhere else
-      const pk = satPassKey(this.list, r, sess.kind);   // ★★★ beta96 REMIND (shared dial) / SCHEDULE (nobody else moved) / none
+      const pk = satPassKey(this.list, r, satKeyKind(sess));   // ★★★ beta96 shared dial: always SCHEDULE (decided at AOS)   // ★★★ beta96 REMIND (shared dial) / SCHEDULE (nobody else moved) / none
       const offer = pk === 'remind';
       const se = r.next ? this.sched.find(srvK, r.sat.norad, r.i, r.next.aos) : undefined;
       const held = offer ? (this.rem.find(srvK, r.sat.norad, r.i) ?? (se ? { key: se.key } : undefined)) : undefined;   // ★ a degraded schedule reads as a reminder
@@ -915,7 +915,7 @@ export class SatPanel {
             + ` title="${esc(held ? SAT_REMIND_FORGET_WHAT : SAT_REMIND_SET_WHAT)}" aria-label="${esc(held ? SAT_REMIND_FORGET_WHAT : 'Remind me before this pass')}">${esc(satRemindKeyText(!!held))}</button>` : '')
         // ★★★ beta96 SCHEDULE / CANCEL, and PRIORITISE on a scheduled pass that overlaps another
         + (pk === 'schedule' && r.next ? `<span class="sat-sk"><button class="sat-rem${se ? ' on' : ''}" data-act="sched" data-norad="${r.sat.norad}" data-tx="${r.i}" data-aos="${r.next.aos}" aria-pressed="${!!se}"`
-            + ` title="${esc(se ? SAT_SCHED_CANCEL_WHAT : SAT_SCHED_SET_WHAT)}" aria-label="${esc(se ? SAT_SCHED_CANCEL_WHAT : 'Schedule this pass: tune at AOS, back after LOS')}">${esc(satSchedKeyText(!!se))}</button>`
+            + ` title="${esc(se ? SAT_SCHED_CANCEL_WHAT : satOnSharedDial(sess) ? SAT_SCHED_SHARED_NOTE : SAT_SCHED_SET_WHAT)}" aria-label="${esc(se ? SAT_SCHED_CANCEL_WHAT : 'Schedule this pass: tune at AOS, back after LOS')}">${esc(satSchedKeyText(!!se))}</button>`
             + (se && slot?.over.length ? `<button class="sat-rem${se.prio ? ' on' : ''}" data-act="prio" data-key="${esc(se.key)}" aria-pressed="${!!se.prio}" title="${esc(SAT_SCHED_PRIO_WHAT)}">${esc(satSchedPrioText(!!se.prio))}</button>` : '')
             + `</span>` : '')
         + `</div>`;
@@ -926,7 +926,7 @@ export class SatPanel {
     if (sess.kind === 'remind' && sEntries.length) h += `<div class="sat-sline">${esc(satSchedDegradedText(sEntries.length))}</div>`;
     { const nt = sess.kind === 'schedule' ? satSchedNowText(this.schedRun, sEntries, plan, now) : ''; if (nt) h += `<div class="sat-sline">${esc(nt)}</div>`; }
     if (this.schedNote) h += `<div class="sat-sline">${esc(this.schedNote)}</div>`;
-    if (anyRemind) h += `<div class="sat-lead sat-dim"><span>REMIND</span>${[1, 2, 5, 10].map((v) => `<button data-act="lead" data-v="${v}" class="${v === this.lead ? 'on' : ''}" aria-pressed="${v === this.lead}">${v}</button>`).join('')}<span>min before it rises · this page only</span></div>`;
+    if (anyRemind || (anySched && satOnSharedDial(sess))) h += `<div class="sat-lead sat-dim"><span>REMIND</span>${[1, 2, 5, 10].map((v) => `<button data-act="lead" data-v="${v}" class="${v === this.lead ? 'on' : ''}" aria-pressed="${v === this.lead}">${v}</button>`).join('')}<span>min before it rises · this page only</span></div>`;
     if (this.list?.time === 'system') h += `<div class="sat-dim">TIME: SYSTEM — this server's clock has not been checked against a time server</div>`;
     /* ★★ beta91 (Stuart, Safari: "i think the satellite box is causing the stutters on the waterfall"): the timetable was
      *  REBUILT every second — up to 40 rows of buttons parsed, styled and laid out on the thread that draws the waterfall,
@@ -1292,11 +1292,12 @@ export class SatPanel {
       if (this.schedRun.key === ex.key) this.schedRun = { ...this.schedRun, took: true, prev: null };   // ★ cancelled mid-pass: stays, nothing put back
     } else {
       const row = satModeRows(this.list, now).find((r) => r.sat.norad === norad && r.i === tx && r.next?.aos === aos);
-      if (!row || satPassKey(this.list, row, this.session().kind) !== 'schedule') return;
+      if (!row || satPassKey(this.list, row, satKeyKind(this.session())) !== 'schedule') return;
       if (!this.sched.add(srv, row, now)) { this.refusal = SAT_SCHED_FULL; this.render(); return; }
       try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* none here */ }
     }
-    this.schedNote = '';
+    // ★★★ beta96 a shared receiver: say what the booking will do (Stuart 11-26)
+    this.schedNote = !ex && satOnSharedDial(this.session()) ? SAT_SCHED_SHARED_NOTE : '';
     this.schedSave(); this.remSchedule(); this.render();
   }
   /** One second of the schedule: prune, fire degraded reminders, step the runner, act. Nothing while disconnected. */

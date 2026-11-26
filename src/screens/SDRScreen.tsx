@@ -85,7 +85,7 @@ import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosonde
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';
 // ★★★ beta96 SCHEDULE A PASS (Stuart 11-26) — one set of rules with the web (src/services/satSchedule.ts)
 import { SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_REMIND_NOTE, SatSchedule, satPassKey, satSchedDegradedText,
-         satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine,
+         satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine, satKeyKind, satOnSharedDial, SAT_SCHED_SHARED_NOTE,
          type SatSchedPrev, type SatSchedRun } from '../services/satSchedule';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindWhy,
          SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
@@ -15579,10 +15579,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else {
       const now = Date.now() / 1000;
       const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx && r.next?.aos === aos);
-      if (!row || satPassKey(satList, row, satSess.kind) !== 'schedule') return;
+      if (!row || satPassKey(satList, row, satKeyKind(satSess)) !== 'schedule') return;
       if (!b.add(satSrvKey, row, now)) { setSatWhy(SAT_SCHED_FULL); return; }
     }
-    setSatSchedNote('');
+    // ★★★ beta96 a shared receiver: say what the booking will do (Stuart 11-26)
+    setSatSchedNote(!ex && satOnSharedDial(satSess) ? SAT_SCHED_SHARED_NOTE : '');
     satSchedSave();
   };
   const satSchedEntries = satSchedRef.current.all(satSrvKey);
@@ -17140,7 +17141,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           skyRadio={skyRadioFromBase(connectBase)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
-          passKind={satSess.kind}
+          passKind={satKeyKind(satSess)}
+          passShared={satOnSharedDial(satSess)}
           sessionLine={satSessionLine(satSess, 'app')}
           sched={{
             find: (n, t, aos) => satSchedRef.current.find(satSrvKey, n, t, aos),

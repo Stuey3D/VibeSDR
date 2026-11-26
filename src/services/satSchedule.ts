@@ -58,6 +58,18 @@ export function satPassKey(l: SatList | null, r: Pick<SatRow, 'grey' | 'up' | 'n
   if (kind === 'remind') return r.later ? null : 'remind';
   return 'schedule';
 }
+/** ★★★ beta96 (Stuart 11-26: "on shared vfo radios … if you are alone on the receiver it will tune and open the pass for
+ *  you, however if anybody else is on then its a reminder only"): THE KEY on a shared dial is always SCHEDULE — the
+ *  pass is booked, and who is on the receiver WHEN IT RISES decides: alone → it tunes and opens the pass; anyone else
+ *  on → a reminder only. (A REMIND pressed while others were on never tuned, even if they had left by AOS.) The
+ *  session's `kind` stays the runtime rule (schedTick); this is the key a row shows. */
+export function satKeyKind(s: { kind: SatSessionKind; why: SatSessionWhy }): SatSessionKind {
+  return s.why === 'shared' ? 'schedule' : s.kind;
+}
+/** A shared dial (with or without anyone else on it now) — where SCHEDULE may end up as a reminder. */
+export function satOnSharedDial(s: { why: SatSessionWhy }): boolean { return s.why === 'shared' || s.why === 'alone'; }
+/** Said when SCHEDULE is pressed on a shared dial, and the key's tooltip there. */
+export const SAT_SCHED_SHARED_NOTE = 'Scheduled — if you are alone on this receiver when it rises, it tunes and opens the pass for you; if anyone else is on, it is a reminder only';
 /** The line under the list that says why it is SCHEDULE or REMIND here, and the honest limit. `where` 'web' | 'app'. */
 export function satSessionLine(s: { kind: SatSessionKind; why: SatSessionWhy }, where: 'web' | 'app'): string {
   const lim = where === 'web' ? 'runs only while this page is open and connected'
@@ -66,8 +78,8 @@ export function satSessionLine(s: { kind: SatSessionKind; why: SatSessionWhy }, 
     case 'local': return `This device's own radio: SCHEDULE tunes it for the pass and goes back afterwards · ${lim}`;
     case 'single': return `Only you on this radio: SCHEDULE tunes it for the pass and goes back afterwards · ${lim}`;
     case 'locked': return `A locked range — your own channel: SCHEDULE moves only yours, and only passes inside the range are offered · ${lim}`;
-    case 'alone': return `You are the only listener on this shared dial: SCHEDULE tunes it for the pass — if someone joins, scheduled passes become reminders · ${lim}`;
-    case 'shared': return 'A shared dial — tuning moves everyone, so a pass REMINDS you instead of tuning by itself';
+    case 'alone':
+    case 'shared': return `A shared receiver: SCHEDULE tunes and opens the pass for you if you are alone on it when the pass rises — if anyone else is on, it is a reminder only · ${lim}`;
     default: return '';
   }
 }

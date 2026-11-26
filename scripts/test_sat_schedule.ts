@@ -7,7 +7,7 @@ process.env.TZ = 'UTC';
 import { parseSatList, satModeRows, type SatRow } from '../src/services/satellites';
 import {
   SAT_SCHED_BRIDGE_S, SAT_SCHED_IDLE, SAT_SCHED_MAX, SAT_SCHED_MIN_S, SatSchedule, satPassKey, satSchedDegradedText, satSchedNowText,
-  satSchedPlan, satSchedRemindDue, satSchedRowText, satSchedStep, satSchedTimeline, satSchedWhy, satSession, satSessionLine,
+  satSchedPlan, satSchedRemindDue, satSchedRowText, satSchedStep, satSchedTimeline, satSchedWhy, satSession, satSessionLine, satKeyKind, satOnSharedDial, SAT_SCHED_SHARED_NOTE,
   type SatSchedEntry, type SatSchedPrev, type SatSchedRun,
 } from '../src/services/satSchedule';
 
@@ -55,8 +55,16 @@ console.log('1. which key');
   ok(satPassKey(L, row(59051), 'none') === null, 'none → no key');
   ok(satPassKey(L, { ...row(59051), up: true, next: undefined }, sch) === null, 'a pass already up → no key');
   ok(/only while this page is open/.test(satSessionLine(al, 'web')) && /only while the app is open/.test(satSessionLine(al, 'app')), 'the line says it runs only while open (web / app)');
-  ok(/become reminders/.test(satSessionLine(al, 'app')), 'alone: says it becomes reminders if someone joins');
-  ok(/REMINDS you/.test(satSessionLine({ kind: 'remind', why: 'shared' }, 'web')), 'shared: says why it is REMIND');
+  // ★★★ beta96 (Stuart 11-26) a shared receiver: the key is ALWAYS SCHEDULE; who is on at AOS decides tune vs remind
+  ok(/alone on it when the pass rises/.test(satSessionLine(al, 'app')) && /reminder only/.test(satSessionLine(al, 'app')), 'alone on a shared dial: tunes if alone at AOS, a reminder only if anyone else is on');
+  const sh = satSession({ pickPrivate: false, sharedDial: true, listeners: 3 });
+  ok(satSessionLine(sh, 'web') === satSessionLine(al, 'web'), 'shared with others: the same words (the rule is decided when the pass rises)');
+  ok(satKeyKind(sh) === 'schedule' && satKeyKind(al) === 'schedule', 'a shared dial shows SCHEDULE whether or not others are on now');
+  ok(sh.kind === 'remind', '… while the runtime rule (who is on now) still says remind');
+  ok(satPassKey(L, row(59051), satKeyKind(sh)) === 'schedule' && satPassKey(L, row(59051, 0, true), satKeyKind(sh)) === 'schedule', 'any hearable pass can be booked on a shared dial');
+  ok(satOnSharedDial(sh) && satOnSharedDial(al) && !satOnSharedDial(satSession({ pickPrivate: true })), 'shared-dial test: shared/alone yes, single no');
+  ok(/alone on this receiver when it rises, it tunes and opens the pass/.test(SAT_SCHED_SHARED_NOTE) && /reminder only/.test(SAT_SCHED_SHARED_NOTE), 'the press says: alone → tunes and opens; anyone else → reminder only');
+  ok(satKeyKind(satSession({ pickPrivate: true })) === 'schedule' && satKeyKind(satSession({})) === 'none', 'single/older servers unchanged');
 }
 
 const srv = 'pi500:8073';
