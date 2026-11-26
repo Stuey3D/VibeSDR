@@ -1,0 +1,27 @@
+/* test_aircraft_feeds_app.ts — ★★ V12 beta96 the phone's AIRCRAFT FEEDS card rules (src/utils/aircraftFeeds.ts, the Setup page's
+ * feedsFromForm / feedsTitle / beastAddrWhy) and the AIR & SEA MAP limits' words. Silent, no network. */
+import { feedFromForm, feedsBlob, parseFeeds, feedTitle, feedAddrWhy, feedDefaults, feedStatusLines, mapViewersOf, mapTimeMinOf, mapCostLine, mapViewersLine } from '../src/utils/aircraftFeeds';
+let pass = 0, fail = 0;
+const ok = (c: boolean, w: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${w}`); };
+console.log('── the phone\'s aircraft feeds card ──');
+ok(feedDefaults('beast').dir === 'connect' && feedDefaults('beast').port === 30005 && feedDefaults('sbs').dir === 'listen' && feedDefaults('sbs').port === 32010 && feedDefaults('sbs').label === 'hfdl', 'defaults: Beast connect :30005; BaseStation listen :32010 HFDL (the Setup page\'s)');
+const pi = feedFromForm('beast', 'connect', '192.168.86.12:30005', '', 'hfdl', 'PiAware', []);
+ok(!!pi.src && pi.src.host === '192.168.86.12' && pi.src.port === 30005 && pi.src.label === 'adsb' && pi.src.name === 'PiAware', 'Stuart\'s PiAware: Beast, connect, forced ADS-B');
+const hf = feedFromForm('sbs', 'listen', '', '32010', 'hfdl', 'UberSDR HFDL', [pi.src!]);
+ok(!!hf.src && hf.src.port === 32010 && hf.src.label === 'hfdl' && !hf.src.host, 'Stuart\'s UberSDR HFDL: BaseStation, listen 32010, HFDL');
+ok(feedFromForm('sbs', 'listen', '', '32010', 'hfdl', '', [hf.src!]).error === 'another feed already listens on 32010', 'two listening on one port: refused');
+ok(/1024 to 65535/.test(feedFromForm('sbs', 'listen', '', '80', 'hfdl', '', []).error || ''), 'a listen port under 1024: refused');
+ok(/IPv4/.test(feedAddrWhy('192.168.1.300')) && /1 to 65535/.test(feedAddrWhy('host:99999')) && feedAddrWhy('[fe80::1]:30005') === '', 'addresses: a bad IPv4, a bad port, IPv6 in brackets');
+ok(feedFromForm('beast', 'connect', 'pi.local', '', 'adsb', '', []).src?.port === 30005, 'no port given: the format\'s usual one');
+const many = Array.from({ length: 8 }, (_, i) => feedFromForm('sbs', 'listen', '', String(40000 + i), 'vdl2', '', []).src!);
+ok(/at most 8/.test(feedFromForm('beast', 'connect', '10.0.0.1', '', 'adsb', '', many).error || ''), 'at most 8 feeds');
+const blob = feedsBlob([pi.src!, hf.src!]);
+ok(JSON.stringify(parseFeeds(blob)) === JSON.stringify([pi.src, hf.src]) && feedsBlob([]) === '', 'the stored text round-trips; none = ""');
+ok(parseFeeds('junk').length === 0 && parseFeeds('[{"fmt":"beast","dir":"connect","port":30005}]').length === 0 && parseFeeds('[{"fmt":"beast","label":"hfdl","dir":"connect","host":"h","port":1}]')[0].label === 'adsb', 'junk read as nothing; a connect without a host dropped; Beast is always ADS-B');
+ok(feedTitle(pi.src!) === 'PiAware' && feedTitle({ fmt: 'sbs', dir: 'listen', port: 32010, label: 'hfdl' }) === 'HFDL feed on port 32010', 'titles (the Setup page\'s)');
+ok(feedStatusLines({ sources: [{ title: 'PiAware', label: 'ADS-B', line: 'connected, 1500 messages a second' }] })[0] === 'PiAware (ADS-B): connected, 1500 messages a second', 'the running server\'s line per source');
+ok(mapViewersOf('') === 20 && mapViewersOf('0') === 0 && mapViewersOf('5000') === 1000 && mapTimeMinOf('x') === 0 && mapTimeMinOf('30') === 30, 'the map limits: 20 by default, 0 = none, clamped');
+ok(/At 20 viewers that is about 38 KB\/s/.test(mapCostLine(20)) && /no limit/.test(mapCostLine(0)), `the cost line ("${mapCostLine(20).slice(0, 90)}…")`);
+ok(mapViewersLine({ mapViewers: { now: 2, max: 20 } }) === '2 viewers on the map now of 20' && mapViewersLine({}) === '', 'the viewers-now line');
+console.log(`\ntest_aircraft_feeds_app: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

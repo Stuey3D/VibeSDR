@@ -30,4 +30,11 @@ ok(JSON.stringify(act(6)) === '{"do":"field","which":"pin"}' && JSON.stringify(a
 const noPin = chooserItems(radios, false);
 ok(chooserActivate(noPin, radios, 2).do === 'none', 'PIN-locked radio with no PIN row on screen: nothing to move to');
 ok(chooserActivate(items, radios, 99).do === 'none', 'out of range: nothing');
+// ★★★ beta96 the landing's AIR & SEA MAP (the standalone map): under the radios, before the PIN row; Enter opens it
+const withMap = chooserItems(radios, true, true);
+ok(withMap.map((x) => x.k).join(',') === 'back,radio,radio,radio,radio,radio,airsea,pin,pinGo,admin,adminGo', 'AIR & SEA MAP: under the radios, before the PIN row');
+ok(chooserActivate(withMap, radios, 6).do === 'airsea', 'Enter on AIR & SEA MAP opens the map');
+ok(chooserRowOf(withMap, 6) === 6 && chooserRowOf(withMap, 7) === chooserRowOf(withMap, 8), 'a row of its own; the PIN row still pairs');
+ok(chooserStart(withMap, radios) === 4, 'the highlight still starts on the first free radio, not the map');
+ok(JSON.stringify(chooserActivate(withMap, radios, 2)) === '{"do":"focus","index":7}', 'a PIN-locked radio still moves to the PIN field (past the map key)');
 process.exit(fails ? 1 : 0);

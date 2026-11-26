@@ -381,6 +381,13 @@ object VibeLocalSDR {
      *  the push feeds (vibe_beast.h). Live. "" = applied, else why not (the old settings stay). */
     fun setAdsbFeed(json: String): String { ensureLoaded(); return nativeSetAdsbFeed(json) }
     private external fun nativeSetAdsbFeed(json: String): String
+    /** ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEED SOURCES — ServerConfig::aircraftFeeds' JSON list ("" = none): another receiver's
+     *  Beast or BaseStation output into this server's shared aircraft table (vibe_feeds.h). Live. "" = applied, else why not. */
+    fun setAircraftFeeds(json: String): String { ensureLoaded(); return nativeSetAircraftFeeds(json) }
+    private external fun nativeSetAircraftFeeds(json: String): String
+    /** ★★ V12 beta96 the standalone AIR & SEA map's limits: viewers at once (0 = no limit), minutes each (0 = none). Live. */
+    fun setAirSeaViewers(maxViewers: Int, minutes: Int) { ensureLoaded(); nativeSetAirSeaViewers(maxViewers, minutes) }
+    private external fun nativeSetAirSeaViewers(maxViewers: Int, minutes: Int)
     /** ★★★ …and where its DX log lives (written every ~5 min when changed, and at shutdown). */
     fun setDxLogFile(path: String) { ensureLoaded(); nativeSetDxLogFile(path) }
     private external fun nativeSetDxLogFile(path: String)

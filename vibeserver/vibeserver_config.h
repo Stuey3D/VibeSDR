@@ -1019,6 +1019,21 @@ struct ServerConfig {
     /** ★ The modes the owner leaves OUT of the community map (comma-separated: adsb acars vdl2 hfdl ndb vor ais dsc navtex
      *  sondes aprs mesh). "" = every mode this server runs (the default). */
     std::string communityOff;
+    /** ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (vibe_feeds.h, docs/v12/ADSB-FEED.md — Stuart 11-26: "feeds are NOT
+     *  radios"): a JSON list of sources [{"fmt":"beast"|"sbs","dir":"connect"|"listen","host","port","label","name"}] that
+     *  feed the machine's shared aircraft table. Owned by the front door (or a Simple server's one process). "" = none.
+     *  A Beast feed RADIO from b96-adsbfeed (driver "beast") is migrated into this on load (migrateAircraftFeeds). */
+    std::string aircraftFeeds;
+    /** ★★ V12 beta96 THE SERVER-LEVEL FLIGHT-TRACKER HUB (vibe_beast.h Config as JSON): the local Beast output and the push
+     *  destinations, fed by every radio's own ADS-B and every ADS-B feed source. Each radio's old RadioConfig::adsbFeed is
+     *  merged into this on load (duplicates by host:port kept once) and cleared. "" = off. */
+    std::string adsbShare;
+    /** ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's limits (vibe_airsea_viewers.h — Stuart 11-26: "so people on limited or
+     *  sketchy connections can host it"). `mapViewers`: how many may have the map open at once (0 = no limit; default 20),
+     *  counted by the viewer's own ticket, not its address (accurate behind one router). `mapTimeMin`: how long one address
+     *  may keep it open (0 = no limit, the default) — a turn lapses after an absence as long as the limit, as a radio's. */
+    int         mapViewers = 20;
+    int         mapTimeMin = 0;
     /** ★★ V12 beta90 PSK REPORTER (android/app/src/main/cpp/vibe_spot_report.h, docs/v12/PSK-REPORTER.md) — MACHINE-level,
      *  beside Background Decoding on the setup page: every radio's digital spots go to PSK Reporter under ONE receiver
      *  callsign. OFF by default; nothing is sent without `pskrCall`. `pskrAntenna` is free text ("" = each radio's own
@@ -1073,6 +1088,9 @@ bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
  *    three-radio server does not.
  */
 bool needsFrontDoor(const ServerConfig& cfg);
+/** ★★ V12 beta96 a Beast feed radio → a server-level source; per-radio flight-tracker settings → the server-level hub.
+ *  Idempotent; true when it changed something (vibeserver_config.cpp). */
+bool migrateAircraftFeeds(ServerConfig& c);
 
 /** ★★★ AN OWNER-SUPPLIED LINK, MADE SAFE TO PUT IN AN href. Returns the URL, or "" if it is not
  *  something we are willing to render.

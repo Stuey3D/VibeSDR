@@ -16,7 +16,8 @@ const PAGE = read('android/app/src/main/cpp/vibe_setup_page.h');
 const SCREEN = read('src/screens/ServerModeScreen.tsx')
   + read('src/components/BackgroundDecodingSetup.tsx') + read('src/components/BandLimitEditor.tsx')
   + read('src/components/AntennaBandsEditor.tsx') + read('src/components/IcomSetupCard.tsx') + read('src/services/icomRadio.ts')
-  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx') + read('src/components/AdsbFeedSetup.tsx');
+  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx') + read('src/components/AdsbFeedSetup.tsx')
+  + read('src/components/AircraftFeedsSetup.tsx');
 const VS = read('src/services/vibeServer.ts') + read('src/services/rspCard.ts');
 const BOOT = read('android/app/src/main/java/com/vibesdr/app/VibeServerBoot.kt');
 const KT = BOOT + read('android/app/src/main/java/com/vibesdr/app/VibeIcom.kt');
@@ -48,7 +49,12 @@ const TABLE = [
   N(['reachAuto', 'reachOwn', 'reachHttps', 'dirAlias'], 'the phone server is always the Automatic tunnel (VibeTunnel.kt) — an own address and the vibesdr.net alias opt-out need a direct listing it cannot make'),
   // ★★ V12 beta96 an "ADS-B Beast feed (from another receiver)" radio: the phone serves the one radio it holds; a radio with
   //    no hardware beside it is a desktop server's (Stuart 11-26 — the Lenovo reading a PiAware Pi on the LAN)
-  N(['beastAddAddr', 'beastAddLabel', 'beastAddUsers', 'beastAddr'], 'an ADS-B Beast feed radio is a radio entry of its own on a multi-radio server; the phone serves the one radio it holds'),
+  // ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEED SOURCES (vibe_feeds.h) — the screen's AIRCRAFT FEEDS card (components/AircraftFeedsSetup),
+  //    VibeServerBoot's setAircraftFeeds; the Beast output's own-only switch rides the phone's one adsbFeed blob
+  P(['feedFmt', 'feedDir', 'feedAddr', 'feedPort', 'feedLabel', 'feedName'], 'Add aircraft feed', 'aircraftFeeds'),
+  N(['afServeOwn'], 'the "only this server\'s own radios" switches (Beast output and each site) are not on the phone\'s card yet: with feed sources on the phone, its Beast output and pushes send its radio\'s aircraft AND its ADS-B feeds\' (beta96, docs/v12/ADSB-FEED.md RESUME HERE)'),
+  // ★★ V12 beta96 the standalone AIR & SEA map's limits — the screen's AIR & SEA MAP card (AirSeaMapLimits), setAirSeaViewers
+  P(['mapViewers', 'mapTimeMin'], 'Map viewers', 'mapViewers'),
   N(['srvPort'], 'the phone takes the first free port of 48000-48049 itself (one VibeServer per device)'),
   N(['rtlSerialNow', 'serialA', 'serialB'], 'radio serials that tell several radios apart on one box — a phone serves one radio'),
   N(['radioPin', 'radioPinClear'], 'a per-radio PIN on a multi-radio box — the phone has the server PIN (PIN — WHO MAY CONNECT)'),

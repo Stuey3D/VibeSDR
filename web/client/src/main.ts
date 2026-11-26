@@ -67,6 +67,8 @@ import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } f
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
+import { airSeaOffer, AirSeaViewer, type AirSeaOffer } from '../../../src/services/airSeaViewer';
+import { AircraftDeltaStore } from '../../../src/services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★ beta96 the standalone AIR & SEA map: its gate, tickets, deltas
 import { vorMapItems, vorMapRows, vorMapStatus, VORMAP_LEGEND, VORMAP_ROW_CSS } from './vormap';   // ★ V12 the VOR / ILS map
 import { storedLoader, storedSondeItems, storedVorItems, storedSondeRows, storedVorRows, storedStatus, STORED_SONDE_LEGEND, STORED_VOR_LEGEND,
          type GalPos, type StoredKind } from '../../../src/services/storedLayers';   // ★★★ beta96 maps2 the stored sondes / VOR stations
@@ -7214,7 +7216,66 @@ async function tryDoorPin(): Promise<void> {
   if (opened) void showSplashRadios();
 }
 
+/* ★★ V12 beta96 THE STANDALONE AIR & SEA MAP (Stuart 11-26) — ONE ENTRY POINT: openAirSeaViewer(). The landing page's
+ *  AIR & SEA MAP button calls it (and a menu entry beside GALLERY may: window.openAirSeaViewer). It opens the SAME AIR & SEA
+ *  map (asOpen) with no radio: no spectrum socket, no tuner — only this server's HTTP reads, as the map already makes them
+ *  (aircraft.json every 3 s, the ship store, the gallery's remembered sondes / VOR), so it is LIVE (new aircraft, ships
+ *  and positions as the radios and feeds hear them, faded by age) and works when every radio is busy or there are none
+ *  (a server with only feeds). It controls nothing: a history-and-live viewer. CLOSE MAP goes back to the landing. */
+let asStandalone = false;
+/** ★★ beta96 the viewer's session (src/services/airSeaViewer.ts): its ticket (the owner's "Map viewers" limit), the aircraft
+ *  as deltas over HTTP (aircraft.json?d=<cursor>&vt=<ticket>), the time limit. Only while the map is open standalone. */
+let asViewer: AirSeaViewer | null = null;
+let asOffer: AirSeaOffer | null = null;
+/** ★ This server's own HTTP read (the landing page's P(), the gallery's read auth) → parsed JSON or null. */
+async function asGet(path: string): Promise<any | null> {
+  try {
+    // ★ the owner's admin ticket rides the join: the owner is counted, never turned away (vibe_airsea_viewers.h)
+    const tq = path.startsWith('/vibeserver/airsea/join') ? adminTicketQuery() : '';
+    const p2 = tq ? `${path}${path.includes('?') ? '&' : '?'}${tq}` : path;
+    const r = await fetch(path.startsWith('/vibeserver/gallery') ? galUrl(p2) : readAuthUrl(P(p2)), { cache: 'no-store' });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+/** The button only where there is something to show (AGENTS.md): aircraft, ships, remembered sondes / VOR stations, or an
+ *  aircraft feed (airSeaOffer — four small reads each time the landing draws its radios, never polled). It says what there
+ *  is ("34 HFDL aircraft · 12 ships") and the map opens on the most populated layer. */
+async function splashAirSeaOffer(): Promise<void> {
+  const b = document.getElementById('splashAirSea') as HTMLButtonElement | null;
+  if (!b) return;
+  let o: AirSeaOffer | null = null;
+  try { o = await airSeaOffer(asGet); } catch { o = null; }
+  asOffer = o;
+  b.hidden = !o?.show;
+  b.textContent = o?.line ? `AIR & SEA MAP \u00b7 ${o.line}` : 'AIR & SEA MAP';
+  b.onclick = () => { void openAirSeaViewer(); };
+}
+async function openAirSeaViewer(): Promise<void> {
+  const standalone = !document.getElementById('app')?.classList.contains('live');
+  if (standalone) {
+    // ★★ a ticket first: a full map (the owner's "Map viewers") or a used-up turn says so politely and opens nothing
+    const v = new AirSeaViewer(asGet);
+    if (!(await v.join())) { showPill(v.status().refusal, 9000); return; }
+    asViewer = v;
+    asStandalone = true;
+    if (v.left() >= 0) { if (asViewerT) clearInterval(asViewerT); asViewerT = setInterval(asViewerTick, 1000); }
+    $('splash').classList.add('hidden');
+    const tab = asOffer?.tab ?? 'aircraft';
+    asOpen({ by: 'map', tab, sort: asOffer?.label && asOffer.label !== 'ADS-B' ? 'latest' : undefined, viewer: true });
+    return;
+  }
+  // ★★★ on a page with a radio (VIEWS' AIR & SEA): the same map as a viewer — what this server holds, nothing tuned
+  asOpen({ box: '', tab: adsbCap?.ok || avCap?.ok || viewsHave.aircraft ? 'aircraft' : 'ships', viewer: true });
+}
+/** ★ The page going away: the ticket ends now (else it lapses in 30 s). keepalive so it survives the unload. */
+window.addEventListener('pagehide', () => {
+  const vt = asViewer?.ticket();
+  if (vt) { try { void fetch(readAuthUrl(P(`/vibeserver/airsea/leave?vt=${vt}`)), { keepalive: true, cache: 'no-store' }); } catch { /* gone anyway in 30 s */ } }
+});
+(window as any).openAirSeaViewer = openAirSeaViewer;
+(window as any).__vibeOpenAirSeaViewer = openAirSeaViewer;
 async function showSplashRadios(): Promise<void> {
+  void splashAirSeaOffer();
   const host = document.getElementById('splashRadios');
   if (!host) return;
   let dir: any;
@@ -9652,7 +9713,7 @@ function mapSharedSync() {
   const slot = o.v.slot('share');
   if (g.parentElement !== slot) slot.appendChild(g);
   const st = mapSharedLine({
-    shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true || (o.v === asView && asViewer),
+    shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true || (o.v === asView && asViewOnly),
     listeners: listenerCount, max: listenerMax, ask: askNow, scanLocked: scanLockOn,
     said: scanLockOn ? scanLockLine(scanLockPhase, scanLockDone, scanLockTotal) : bannerSaidText || null,
     exitMoves: o.exitMoves,
@@ -10519,10 +10580,19 @@ let avShared: SharedAircraft | null = null;
 let avSkew = 0;   // ★★★ beta96 aircraft.json's clock minus ours when it arrived (s)
 let avPollT: ReturnType<typeof setTimeout> | null = null;
 let avPollSeq = 0;
+/** ★★ beta96 a radio's map: the table as DELTAS over HTTP (aircraft.json?d=<cursor>, gzip on the wire — aircraftDelta.ts).
+ *  Measured at 150 aircraft (test-server-aircraft-delta): the whole table every 3 s 9.8 KB/s → this 1.4 KB/s. (The socket's
+ *  acs deltas were 7.1 KB/s: WebSocket frames are not compressed — so the map polls, it does not subscribe.) */
+const avDelta = new AircraftDeltaStore();
 async function avSharedFetch(): Promise<SharedAircraft | null> {
+  // ★★ beta96 the standalone viewer: its ticket and the table as deltas (airSeaViewer.ts); null at its time limit's end
+  if (asStandalone && asViewer) { const j = await asViewer.poll(); return j ? sharedSanitise(j) : null; }
   try {
-    const r = await fetch(P('/vibeserver/aircraft.json'), { cache: 'no-store' });
-    return r.ok ? sharedSanitise(await r.json()) : null;
+    const r = await fetch(P(`/vibeserver/aircraft.json?d=${encodeURIComponent(avDelta.cursor)}`), { cache: 'no-store' });
+    if (!r.ok) return null;
+    const res = avDelta.apply(await r.json());
+    if (!res.json) { avDelta.reset(); return null; }   // ★ lost its place: the next poll asks for everything
+    return sharedSanitise(res.json);
   } catch { return null; }
 }
 /** ★ LIVE: every 3 s while either view is open (the server's table is rewritten every 2 s by each radio). */
@@ -10534,6 +10604,7 @@ async function avPoll() {
   if (seq !== avPollSeq || !asView?.open) return;
   if (got) { avShared = got; avSkew = got.now ? got.now - Date.now() / 1000 : 0; }   // ★ beta96 the skew (THIS SESSION)
   asRender();
+  if (asStandalone && asViewer && asViewer.state !== 'live') { asViewerTick(); return; }   // ★ the time limit's end: polls stop
   avPollT = setTimeout(() => { void avPoll(); }, 3000);
 }
 function avUiOn() {
@@ -10649,7 +10720,7 @@ function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; 
   const wasOpen = !!asView?.open;
   if (o.by === 'mode') asBy = 'mode'; else if (!wasOpen) asBy = 'map';
   // ★★★ beta96 the VIEWER (VIEWS' AIR & SEA): no TUNE keys, no shared line — a mode taking the map over ends it
-  if (o.by === 'mode') asViewer = false; else if (o.viewer !== undefined) asViewer = o.viewer; else if (!wasOpen) asViewer = false;
+  if (o.by === 'mode') asViewOnly = false; else if (o.viewer !== undefined) asViewOnly = o.viewer; else if (!wasOpen) asViewOnly = false;
   if (o.by === 'mode') { const m = asMode(); if (m) lsSet(AS_LAST_KEY, m === 'ais' && aisDscOn() ? 'maritime' : m === 'datalink' ? 'av' : m === 'sondes' ? 'sd' : m); }
   if (o.box !== undefined) asBox = o.box;
   if (o.tab) { asOpenedTab = o.tab; asPicked = null; }
@@ -10715,13 +10786,16 @@ function asExit() {
   asClose();
 }
 function asClose() {
-  asViewer = false;
+  asViewOnly = false;
   ndbView?.park();   // ★ beta96 stage 8 NDB's pieces back where they wait, its layer off the map
   asView?.hide();
   asBox = ''; asPicked = null; asMsgKey = '';
   if (navTimer) { clearTimeout(navTimer); navTimer = null; }
   if (avPollT) { clearTimeout(avPollT); avPollT = null; }
   if (asStoredT) { clearInterval(asStoredT); asStoredT = null; }
+  if (asViewer) { void asViewer.leave(); asViewer = null; }   // ★★ beta96 the ticket ends at once
+  if (asViewerT) { clearInterval(asViewerT); asViewerT = null; }
+  if (asStandalone) { asStandalone = false; $('splash').classList.remove('hidden'); return; }   // ★ beta96 back to the landing
   renderFreq();
 }
 /** ★ A mode that was the map's screen has ended: the map goes if the mode brought it, else it just stops being live. */
@@ -10740,7 +10814,8 @@ const AS_CHIP_COLOUR = LIVE_CHIP_COLOUR;   // ★★★ beta96 one table for the
  *  the VIEWER (openAirSeaViewer): the same map, nothing tuned. ISM, DAB and SATELLITE keep their own keys; HFDL stays a decoder. */
 const AS_LAST_KEY = 'vibesdr.airSeaLast';
 const AIR_SEA_LIVE_WORDS = 'AIR & SEA LIVE — the radio on aircraft or ships (ADS-B, the datalink, AIS, maritime, NDB, VOR, sondes), on one map: its TUNE keys switch between them';
-let asViewer = false;
+/** ★★★ beta96 the map opened as a VIEWER (VIEWS' AIR & SEA, or the landing's standalone map): no TUNE, no shared line, no scope keys */
+let asViewOnly = false;
 /* ★★★ beta96 THE MAPS' SCOPE (mapScope.ts, Stuart 11-26): OTHER RADIOS ON THIS SERVER (on by default, remembered in this
  *  browser, never sent) and THIS SESSION (this visit's own: first heard since this viewer opened the mode; reset on
  *  re-entry). Only on a map on a radio — never the viewer. */
@@ -10750,7 +10825,7 @@ let asSess = false;
 let asSessSt: { mode: string; t0: number } | null = null;
 let asNavWin = false;   // ★ the maritime time window is drawn (its keys move navRange; ALL alone does not)
 const asFirst = new FirstSeen();
-function asOnRadio(): boolean { return !!spec && !asViewer && (window as any).__vibeMapStandalone !== true; }
+function asOnRadio(): boolean { return !!spec && !asViewOnly && (window as any).__vibeMapStandalone !== true; }
 function mapOthersSet(on: boolean, redraw: () => void) {
   mapOthers = on;
   try { if (on) localStorage.removeItem(OTHER_RADIOS_KEY); else localStorage.setItem(OTHER_RADIOS_KEY, '0'); } catch { /* private window */ }
@@ -10815,20 +10890,13 @@ function toggleAirSeaLive() {
   const m = airSeaLanding();
   if (m) asTune(m === 'av' ? 'av:' : m === 'sd' ? 'sd:' : m);
 }
-/** ★★★ VIEWS' AIR & SEA: the map as a viewer — what this server holds, nothing tuned. ★ b96-sbsfeed's landing-screen map is the
- *  same view without a radio; this is its entry on a page with one (no TUNE keys, no shared line). */
-function openAirSeaViewer() {
-  asOpen({ box: '', tab: adsbCap?.ok || avCap?.ok || viewsHave.aircraft ? 'aircraft' : 'ships', viewer: true });
-}
-(window as any).__vibeOpenAirSeaViewer = openAirSeaViewer;
-/* ★★★ beta96 b96-sbsfeed's standalone viewer calls window.openAirSeaViewer(): ONE function under both names, so the two
- *  branches meet whichever name the caller uses (the map is a viewer either way: no TUNE, no shared line, no scope keys). */
-if (typeof (window as any).openAirSeaViewer !== 'function') (window as any).openAirSeaViewer = openAirSeaViewer;
+/* ★★★ beta96 VIEWS' AIR & SEA and the landing's AIR & SEA MAP are ONE function, openAirSeaViewer() (by the landing's
+ *  splashAirSeaOffer): a viewer either way — no TUNE, no shared line, no scope keys. Both names reach it. */
 /** ★★★ beta96 the TUNE list's rows (airSeaTune.ts — THIS radio's vibeserver.json: its caps, its band tables, the cover rule),
  *  none for the viewer / a page with no radio; a list of one row is no choice (a single-mode server): no chip. */
 let asTuneSrc: { ndbLo?: number; ndbHi?: number; vormapLo?: number; vormapHi?: number } = {};
 function asTuneRows(): AirSeaTuneRow[] {
-  if (!spec || asViewer || (window as any).__vibeMapStandalone === true) return [];
+  if (!spec || asViewOnly || (window as any).__vibeMapStandalone === true) return [];
   const rows = airSeaTuneRows({ adsb: adsbCap, avdata: avCap, avBands, vormap: vmCap, ndb: ndbCap, ais: aisCap, aisDsc: aisDscCap,
                                 sondes: sdCap, sondeBands: sdBands, only: onlyModeNow(), ...asTuneSrc },
                               { mode: adsbOn ? 'adsb' : avOn ? 'avdata' : vmOn ? 'vormap' : ndbOn ? 'ndb' : aisOn ? 'ais' : sdOn ? 'sondes' : '',
@@ -10861,7 +10929,34 @@ function asTune(id: string) {
 }
 function asSec(t: string): string { return `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`; }
 /** ★★ THE ONE RENDER: chrome (computed), chips, tabs, the items of every layer on, the rows of the tab shown. */
+/** ★★ beta96 the banner over the AIR & SEA map: the live ADS-B report's warning (the antenna), else the server's aircraft
+ *  feeds' (aircraft.json feedWarn: "PiAware lost — reconnecting… · HFDL still live"). × hides it until the wording changes. */
+function asFeedWarnText(): string {
+  const vb = asStandalone && asViewer ? asViewer.status().banner : '';   // ★★ beta96 the map's time limit: the last minute, the end
+  if (vb) return vb;
+  const a = adsbOn && typeof adsbReport?.feedWarn === 'string' ? adsbReport.feedWarn : '';
+  return a || (asView?.open && avShared?.feedWarn ? avShared.feedWarn : '');
+}
+/** ★★ beta96 the standalone map's clock: once a second while there is a time limit (the banner's last minute, the end). */
+let asViewerT: ReturnType<typeof setInterval> | null = null;
+function asViewerTick() {
+  if (!asViewer) return;
+  if (asViewer.left() === 0 && asViewer.state === 'live') asViewer.end(0);   // ★ the clock ran out before the server said so
+  asFeedWarnSync();
+}
+function asFeedWarnSync() {
+  const w = asFeedWarnText(), el = document.getElementById('adsbFeedWarn');
+  if (!el) return;
+  const show = !!w && el.dataset.dismissed !== w;
+  el.hidden = !show;
+  if (!show) return;
+  const lbl = el.querySelector('b');
+  if (lbl) lbl.textContent = /on the map|Map time/.test(w) ? 'TIME LIMIT' : /reconnecting/.test(w) ? 'AIRCRAFT FEED' : 'CHECK THE ANTENNA';   // ★ a lost feed is not the antenna
+  const tx = document.getElementById('adsbFeedWarnTx');
+  if (tx && tx.textContent !== w) tx.textContent = w;
+}
 function asRender() {
+  asFeedWarnSync();
   const v = asView;
   if (!v?.open) return;
   const mode = asMode();
@@ -11005,7 +11100,7 @@ function asRender() {
   const avPresent = present.map((id) => avLayerOf(id)).filter((x): x is AvLayerId => !!x);
   v.setLegend((present.includes('ndb') ? NDB_LEGEND : '') + (present.includes('vor') ? (vmOn ? VORMAP_LEGEND : STORED_VOR_LEGEND) : '') + (present.includes('sondes') && !sdOn ? STORED_SONDE_LEGEND : '')
     + (avPresent.length ? avLegendHtml(avPresent, true) : '') + (shipPresent.length ? shipKeyHtml(shipPresent) : ''));
-  const status = [adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', vmOn ? vorMapStatus(vmReport) : on('vor') ? storedStatus('vormap', vmSt.length) : '',
+  const status = [asStandalone && asViewer ? asViewer.status().clock : '', adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', vmOn ? vorMapStatus(vmReport) : on('vor') ? storedStatus('vormap', vmSt.length) : '',
                   sdOn ? sondeStatus(sdReport) : on('sondes') ? storedStatus('sondes', sdSt.length) : '', ndbOn && ndbView ? ndbView.status() : '',
                   aviationAny ? avc.status : '', shc.status].filter(Boolean).join(' · ');
   v.update(items, rows, status, aircraftN + shipsN + vorItems.length + sondeIts.length + (ndbOn ? ndbView?.count() ?? 0 : 0), rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
@@ -11559,11 +11654,7 @@ function adsbRender() {
     /* ★★ THE FEED WARNING (GainControl::warning): full gain, a noise floor far under where a working ADS-B feed sits,
      *  and a thin sky — the FlightAware Pi's May–June 2025 antenna fault, which nobody knew of for two months. Plain
      *  words over the map; × hides it until the server's wording changes. */
-    const w = typeof adsbReport?.feedWarn === 'string' ? adsbReport.feedWarn : '';
-    const el = $('adsbFeedWarn');
-    const show = !!w && el.dataset.dismissed !== w;
-    el.hidden = !show;
-    if (show && $('adsbFeedWarnTx').textContent !== w) $('adsbFeedWarnTx').textContent = w;
+    asFeedWarnSync();
   }
   {
     // ★★ The receiver dropping samples — said in red beside the rate (adsbCaptureWarning). Built from text nodes.
@@ -11954,7 +12045,7 @@ function buildControls() {
   $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
   $('adsbFeedWarnX').onclick = () => {
     const el = $('adsbFeedWarn');
-    el.dataset.dismissed = adsbReport?.feedWarn ?? ''; el.hidden = true;
+    el.dataset.dismissed = asFeedWarnText(); el.hidden = true;
   };
   ($('adsbGainSl') as HTMLInputElement).oninput = () => {
     adsbGainTouchAt = performance.now();

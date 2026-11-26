@@ -518,7 +518,7 @@ static void testLoopGuard() {
     pollfd p{lfd, POLLIN, 0};
     CHECK(::poll(&p, 1, 0) == 0, "a push feed to the host this radio's ADS-B comes from is never connected");
     CHECK(waitFor([&] { return h.statusJson().find("\"state\":\"skipped\"") != std::string::npos; }, 2), "status: skipped");
-    CHECK(field(h.statusJson(), "line").find("comes from there") != std::string::npos, "and the line says why");
+    CHECK(field(h.statusJson(), "line").find("from there") != std::string::npos, "and the line says why");
     h.setInputHost("");
     CHECK(acceptWithin(lfd, 3) >= 0, "another source: the same feed connects");
     h.stop(); ::close(lfd);

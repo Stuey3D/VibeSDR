@@ -237,6 +237,9 @@ import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus, useListNav, NavRing, revealIn, useOverlay, useOverlayOpen, overlayOpenNow } from '../components/PanelNav';
 import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type ChooserRadio } from '../utils/radioChooserNav';
+import { airSeaOffer, type AirSeaOffer } from '../services/airSeaViewer';
+import { AircraftDeltaStore } from '../services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★★ beta96 the landing's AIR & SEA MAP (the standalone map)
+import { openAirSeaScreen } from './AirSeaScreen';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { NavCard, CardKey } from '../components/NavCard';
 import { bookmarkDefaultName } from '../utils/bookmarkName';
@@ -12566,6 +12569,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  AIRPORTS on by default (the basemap's 'aero' profile). Polled every 3 s while the map is open. */
   const [avLayers, setAvLayers] = useState<AvLayers>(avLayersOf(null));
   useEffect(() => { AsyncStorage.getItem('lsv_av_map_layers').then((v) => setAvLayers(avLayersOf(v))).catch(() => {}); }, []);
+  /** ★★ beta96 the table as DELTAS over HTTP (aircraft.json?d=<cursor>, gzip on the wire — aircraftDelta.ts): measured at 150
+   *  aircraft, the whole table every 3 s 9.8 KB/s → 1.4 KB/s (test-server-aircraft-delta). */
+  const avDelta = useRef(new AircraftDeltaStore());
   // ★★ beta96 and whenever the AIR & SEA map is up (AIS mode's, the shipping map's): its aircraft are this table
   const avSharedPolling = airSeaShown;   // ★ beta90 standalone too; beta96 whenever the AIR & SEA map is up (ADS-B, SONDES, VOR too)
   useEffect(() => {
@@ -12573,8 +12579,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     let live = true, t: ReturnType<typeof setTimeout> | null = null;
     const go = async () => {
       try {
-        const r = await fetch(`${connectBase.replace(/\/+$/, '')}/vibeserver/aircraft.json`, { cache: 'no-store' } as any);
-        const j = r.ok ? sharedSanitise(await r.json()) : null;
+        const r = await fetch(`${connectBase.replace(/\/+$/, '')}/vibeserver/aircraft.json?d=${encodeURIComponent(avDelta.current.cursor)}`, { cache: 'no-store' } as any);
+        const res = r.ok ? avDelta.current.apply(await r.json()) : null;
+        if (res && !res.json) avDelta.current.reset();   // ★ lost its place: the next poll asks for everything
+        const j = res?.json ? sharedSanitise(res.json) : null;
         if (live && j) { avSkewRef.current = j.now ? j.now - Date.now() / 1000 : 0; setAvShared(j); }   // ★ beta96 the skew
       } catch { /* the next poll */ }
       if (live) t = setTimeout(() => { void go(); }, 3000);
@@ -15252,7 +15260,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [pickOn, doorJustLeft]);
   const pickRadios = pickOn ? door!.radios.map(pickRadioState) : [];
-  const pickItems = chooserItems(pickRadios, pickShowPin);
+  /* ★★★ beta96 THE STANDALONE AIR & SEA MAP on the landing (AirSeaScreen — the web's #splashAirSea): this server's aircraft,
+   *  ships, remembered sondes and VOR stations with NO radio taken. Shown only where there is something (airSeaOffer: any
+   *  aircraft, ships, sondes / VOR, or an aircraft feed — AGENTS.md); asked once each time the landing opens, never polled. */
+  const [asOffer, setAsOffer] = useState<AirSeaOffer | null>(null);
+  useEffect(() => {
+    if (!pickOn || IS_TV) { setAsOffer(null); return; }
+    let live = true;
+    const auth = radioAuthSuffix || route.params.authSuffix || '';
+    void airSeaOffer(async (path) => {
+      try { const r = await fetch(withReadAuth(`${baseUrl.replace(/\/+$/, '')}${path}`, auth), { cache: 'no-store' } as any); return r.ok ? await r.json() : null; }
+      catch { return null; }
+    }).then((o) => { if (live) setAsOffer(o.show ? o : null); }).catch(() => {});
+    return () => { live = false; };
+  }, [pickOn, baseUrl]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const openAirSea = useCallback(() => {
+    openAirSeaScreen(navigation, { baseUrl, name: door?.name ?? instanceName ?? '', authSuffix: radioAuthSuffix || route.params.authSuffix || '', tab: asOffer?.tab });
+  }, [navigation, baseUrl, door?.name, instanceName, radioAuthSuffix, asOffer?.tab]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const pickItems = chooserItems(pickRadios, pickShowPin, !!asOffer);
   const pickScrollRef = useRef<ScrollView | null>(null);
   const pickScrollY = useRef(0);
   const pickRowViews = useRef<Record<string, View | null>>({});
@@ -15289,6 +15314,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       const a = chooserActivate(items, radios, i);
       switch (a.do) {
         case 'back': navigation.goBack(); return;
+        case 'airsea': openAirSea(); return;   // ★★★ beta96 the standalone AIR & SEA map
         case 'choose': {
           const r = door?.radios.find((x) => x.id === a.id);
           if (r) pressPickRadio(r);
@@ -16055,6 +16081,22 @@ export default function SDRScreen({ route, navigation }: Props) {
               <NavRing on={!pickHl && doorJustLeft === r.id} color={sdrMs.radioPickJustLeft.borderColor} radius={10} />
               </View>
             ); })}
+            {/* ★★★ beta96 THE STANDALONE AIR & SEA MAP — under the radios, where the server has something to show. It takes no
+                radio: this server's aircraft (every radio's and every feed's), ships, sondes and VOR stations, live. */}
+            {!!asOffer && (
+              <View style={{ marginBottom: 10 }}>
+                <Pressable /* nav-registered: the chooser list (pickItems 'airsea') */
+                  style={[sdrMs.radioPickRow, { marginBottom: 0 }]}
+                  onPress={openAirSea}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open this server's air and sea map — no radio is used"
+                >
+                  <Text style={sdrMs.radioPickName}>AIR &amp; SEA MAP</Text>
+                  <Text style={sdrMs.radioPickDetail}>{asOffer.line ? `${asOffer.line} · ` : ''}live, no radio used</Text>
+                </Pressable>
+                <NavRing on={pickItems[pickFocus]?.k === 'airsea'} color={navRing.ring} />
+              </View>
+            )}
             {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
             <PanelBoundary name="Band conditions">
             <DoorConditions base={baseUrl} readAuth={radioAuthSuffix || route.params.authSuffix || ''} />
@@ -18646,7 +18688,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★★ beta96 stage 6: ADS-B's screen is the AIR & SEA map ('airsea') — these are given only while ADS-B is live there */
         adsbAircraft={shownMap === 'airsea' && adsbLiveHere ? adsbReportS?.aircraft ?? null : undefined}   /* ★★★ beta96 through THIS SESSION */
         adsbCapture={shownMap === 'airsea' && adsbLiveHere ? adsbCaptureWarning(adsbReport) : undefined}
-        adsbFeedWarn={shownMap === 'airsea' && adsbLiveHere ? adsbReport?.feedWarn ?? '' : ''}
+        adsbFeedWarn={shownMap === 'airsea' ? ((adsbLiveHere ? adsbReport?.feedWarn : '') || avShared?.feedWarn || '') : ''}   // ★★ beta96 + the server's aircraft feeds (aircraft.json)
         /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null
          *  otherwise: an HF+, a fixed gain, an older server). AUTO hands it back to the server's ramp (19f2d603). */
         adsbGain={shownMap === 'airsea' && adsbLiveHere ? {

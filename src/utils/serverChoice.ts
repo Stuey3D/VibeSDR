@@ -127,7 +127,7 @@ export const RADIO_KEYS = [
  */
 export const LAN_ONLY_OFF: Record<string, string | boolean> = {
   communityMap: false, pskrOn: false, wsprnetOn: false, dmrIdLookup: false,
-  adsbFeed: '', bgDecode: '', dxScan: '',
+  adsbFeed: '', aircraftFeeds: '', bgDecode: '', dxScan: '',   // ★★ beta96 + the feed sources
   // ★★★ beta96 (Stuart 11-26) …and the engine REFUSES a client that is not on the home network (private IPv4, link-local,
   //     ULA, the box's own IPv6 prefixes) — the RTL-TCP door's rule, LocalSdrShim acceptLoop. Not only "nothing invites
   //     the internet in": a port an owner forwards by hand still answers nobody outside.

@@ -7,7 +7,9 @@
  * stopped listening) and had no key handling of its own (so nobody started). SDRScreen now runs a `useListNav` over
  * the items this builds, in the order they are drawn:
  *
- *   ‹ SERVERS · each radio · [PIN field, UNLOCK] · [admin field, UNLOCK]
+ *   ‹ SERVERS · each radio · [AIR & SEA MAP] · [PIN field, UNLOCK] · [admin field, UNLOCK]
+ *
+ * ★★★ beta96 AIR & SEA MAP (the standalone map, AirSeaScreen) sits under the radios where the server has something to show.
  *
  * ★ Blocked radios are FOCUSABLE — "listed and greyed, never hidden". Enter on one moves the highlight to the box that
  *   would open it (a PIN-locked radio → the PIN field; an occupied one → the admin field), so a member holding the
@@ -27,21 +29,24 @@ export interface ChooserRadio {
 export type ChooserItem =
   | { k: 'back' }
   | { k: 'radio'; id: string }
+  | { k: 'airsea' }
   | { k: 'pin' } | { k: 'pinGo' }
   | { k: 'admin' } | { k: 'adminGo' };
 
 export type ChooserAct =
   | { do: 'back' }
   | { do: 'choose'; id: string }
+  | { do: 'airsea' }
   | { do: 'focus'; index: number }
   | { do: 'field'; which: 'pin' | 'admin' }
   | { do: 'unlock'; which: 'pin' | 'admin' }
   | { do: 'none' };
 
-/** The focus order, top to bottom as drawn. `showPin` = the PIN row is on screen. */
-export function chooserItems(radios: readonly ChooserRadio[], showPin: boolean): ChooserItem[] {
+/** The focus order, top to bottom as drawn. `showPin` = the PIN row is on screen; `airSea` = the AIR & SEA MAP key is. */
+export function chooserItems(radios: readonly ChooserRadio[], showPin: boolean, airSea = false): ChooserItem[] {
   const out: ChooserItem[] = [{ k: 'back' }];
   for (const r of radios) out.push({ k: 'radio', id: r.id });
+  if (airSea) out.push({ k: 'airsea' });
   if (showPin) out.push({ k: 'pin' }, { k: 'pinGo' });
   out.push({ k: 'admin' }, { k: 'adminGo' });
   return out;
@@ -83,6 +88,7 @@ export function chooserActivate(items: readonly ChooserItem[], radios: readonly 
   if (!it) return { do: 'none' };
   switch (it.k) {
     case 'back': return { do: 'back' };
+    case 'airsea': return { do: 'airsea' };
     case 'pin': return { do: 'field', which: 'pin' };
     case 'admin': return { do: 'field', which: 'admin' };
     case 'pinGo': return { do: 'unlock', which: 'pin' };

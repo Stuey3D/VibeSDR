@@ -3,6 +3,7 @@
 #include "vibe_port_names.h"   // ★ V12: the owner's per-port antenna names (header-only)
 #include "vibe_serial.h"       // ★ configSerial — a serial with a space (an Icom's) migrated on read
 #include "vibe_keep_store.h"   // ★★★ beta96 the landing map + keep-running modes (header-only, no DSP)
+#include "vibe_feeds.h"        // ★★ beta96 server-level aircraft feeds + the flight-tracker hub (the migration from feed radios)
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -979,6 +980,8 @@ std::string toJson(const ServerConfig& c) {
     N("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     B("communityMap", c.communityMap);   // ★★ V12 beta94 the community map — off unless the owner says
     S("communityOff", c.communityOff);
+    S("aircraftFeeds", c.aircraftFeeds); S("adsbShare", c.adsbShare);   // ★★ V12 beta96 server-level feeds + flight-tracker hub
+    N("mapViewers", c.mapViewers); N("mapTimeMin", c.mapTimeMin);   // ★★ V12 beta96 the standalone AIR & SEA map's limits
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — machine-level, see ServerConfig.
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);
     B("dmrIdLookup", c.dmrIdLookup);
@@ -1017,6 +1020,65 @@ struct AskedKeys {
     ~AskedKeys() { t_keysAsked = outer; }
 };
 } // namespace
+
+/** ★★ V12 beta96 FEEDS ARE NOT RADIOS (Stuart 11-26). Idempotent, run on every read:
+ *   1. a Beast feed RADIO (driver "beast", b96-adsbfeed) becomes a server-level source {beast, connect, its beastIn,
+ *      ADS-B, named after the radio} — unless that host:port is already one — and its radio entry is dropped;
+ *   2. every radio's flight-tracker settings (RadioConfig::adsbFeed) merge into the server-level hub (adsbShare): the
+ *      local server on if any radio served (the first such port; "any address" if any radio had it), push on if any
+ *      pushed, the destinations once each by host:port (the first entry's UUID and switch win) — then cleared.
+ *  A list that does not parse is left exactly as it is (never half-rewritten). */
+bool migrateAircraftFeeds(ServerConfig& c) {
+    bool anyOld = false;
+    for (const auto& r : c.radios) if (r.driver == "beast" || !r.adsbFeed.empty()) anyOld = true;
+    if (!anyOld) return false;
+    std::vector<vibe::feeds::SourceCfg> src; std::string e;
+    if (!vibe::feeds::parseSources(c.aircraftFeeds, src, e)) return false;
+    vibe::beast::Config hub;
+    if (!vibe::beast::parseConfig(c.adsbShare, hub, e)) return false;
+    bool servedSeen = hub.serve;
+    for (auto it = c.radios.begin(); it != c.radios.end();) {
+        RadioConfig& r = *it;
+        if (!r.adsbFeed.empty()) {
+            vibe::beast::Config rc; std::string re;
+            if (vibe::beast::parseConfig(r.adsbFeed, rc, re)) {
+                if (rc.serve && !servedSeen) { hub.serve = true; hub.port = rc.port; servedSeen = true; }
+                hub.open = hub.open || (rc.serve && rc.open);
+                hub.push = hub.push || rc.push;
+                for (const auto& d : rc.feeds) {
+                    bool dup = false;
+                    for (const auto& h : hub.feeds) {
+                        std::string a = h.host, b = d.host;
+                        for (auto& ch : a) ch = char(std::tolower((unsigned char)ch));
+                        for (auto& ch : b) ch = char(std::tolower((unsigned char)ch));
+                        if (a == b && h.port == d.port) dup = true;
+                    }
+                    if (!dup && (int)hub.feeds.size() < vibe::beast::kMaxFeeds) hub.feeds.push_back(d);
+                }
+            }
+            r.adsbFeed.clear();
+        }
+        if (r.driver == "beast") {
+            std::string h; int p = 0, pt = 0; std::string pe;
+            if (vibe::beast::parseHostPort(r.beastIn, h, p, pe)) {
+                bool have = false;
+                for (const auto& s2 : src) if (s2.dir == "connect" && s2.host == h && s2.port == p) have = true;
+                if (!have && (int)src.size() < vibe::feeds::kMaxSources) {
+                    vibe::feeds::SourceCfg n; n.fmt = "beast"; n.dir = "connect"; n.host = h; n.port = p; n.label = "adsb";
+                    n.name = r.label.substr(0, 40);
+                    src.push_back(n);
+                }
+            }
+            (void)pt;
+            it = c.radios.erase(it);
+            continue;
+        }
+        ++it;
+    }
+    c.aircraftFeeds = src.empty() ? std::string() : vibe::feeds::sourcesJson(src);
+    c.adsbShare = hub.any() || hub.push || !hub.feeds.empty() ? vibe::beast::toJson(hub) : std::string();
+    return true;
+}
 
 bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     AskedKeys asked;   // ★ for the keys to KEEP — see just before the radios are merged
@@ -1078,6 +1140,12 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     c.rttySkimWorkers = std::max(0, std::min(8, c.rttySkimWorkers));
     I("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     B("communityMap", c.communityMap); S("communityOff", c.communityOff);
+    S("aircraftFeeds", c.aircraftFeeds); S("adsbShare", c.adsbShare);
+    if (c.aircraftFeeds.size() > 8000) c.aircraftFeeds.clear();
+    if (c.adsbShare.size() > 8000) c.adsbShare.clear();
+    I("mapViewers", c.mapViewers); I("mapTimeMin", c.mapTimeMin);
+    c.mapViewers = std::max(0, std::min(1000, c.mapViewers));
+    c.mapTimeMin = std::max(0, std::min(1440, c.mapTimeMin));
     if (c.galleryMb < 0) c.galleryMb = 0;
     if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;
     B("pskrOn", c.pskrOn); S("pskrCall", c.pskrCall); S("pskrAntenna", c.pskrAntenna); B("wsprnetOn", c.wsprnetOn); S("wsprnetCall", c.wsprnetCall);
@@ -1142,6 +1210,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
             if (!merged) c.radios.push_back(incoming);
         }
     }
+    migrateAircraftFeeds(c);
     (void)err;
     return true;
 }

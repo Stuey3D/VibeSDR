@@ -401,6 +401,23 @@ public:
     static bool setAdsbFeed(const std::string& json, std::string& err);
     /** …and their status ({"on","adsb","serve":{…},"feeds":[…],"line"}) — the admin page, the Setup card, the app. */
     static std::string adsbFeedStatusJson();
+    /** ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (vibe_feeds.h, docs/v12/ADSB-FEED.md — "feeds are NOT radios"): the
+     *  machine's sources (ServerConfig::aircraftFeeds) feeding the shared aircraft table. Called ONLY in the process that
+     *  owns them: the front door (`ingest` true: the radios' own ADS-B comes in over loopback for the server-level
+     *  flight-tracker hub), a Simple server's one process, or the Android server. Live; false (and `err`) when the list
+     *  does not parse — the running sources are kept. */
+    static bool setAircraftFeeds(const std::string& json, std::string& err, bool ingest);
+    /** ★★ beta96 A RADIO PROCESS BEHIND THE FRONT DOOR: its own ADS-B goes to the door's loopback ingest (the port the door
+     *  writes in `dir`), so the server-level destinations and Beast output get every radio's decodes. Re-read every 10 s. */
+    static void setAdsbIngest(const std::string& dir);
+    /** The feeds' status for the owner (with addresses) — this process's, or the owner's status file. */
+    static std::string aircraftFeedsStatusJson();
+    /** ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's limits (vibe_airsea_viewers.h): at most `maxViewers` open at once
+     *  (0 = no limit), each address for at most `minutes` (0 = no limit). Live; every process may call it (only the one
+     *  serving /vibeserver/airsea/join counts). */
+    static void setAirSeaViewers(int maxViewers, int minutes);
+    /** …and the viewers now, for the admin page and the Setup card ({"now","max","minutes","viewers":[…],"today":[…]}). */
+    static std::string airSeaViewersJson();
     /** ★★★ …and where this radio's DX log lives (one file per radio; written every ~5 min when changed, and at shutdown). */
     static void setDxLogFile(const std::string& path);
     /** ★★ V12 what a background-decoding editor may offer here — the engine's own decoder table (ids, labels,

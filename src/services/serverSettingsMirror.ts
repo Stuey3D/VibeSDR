@@ -116,6 +116,9 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'bgDecode',         storage: 'vs_bgdecode',        enc: 'str' },
   { native: 'dxScan',           storage: 'vs_dxscan',          enc: 'str' },
   { native: 'adsbFeed',         storage: 'vs_adsbfeed',        enc: 'str' },   // ★★ V12 beta96 flight trackers
+  { native: 'aircraftFeeds',    storage: 'vs_aircraftfeeds',   enc: 'str' },   // ★★ V12 beta96 server-level feed sources
+  { native: 'mapViewers',       storage: 'vs_mapviewers',      enc: 'num' },   // ★★ V12 beta96 the standalone AIR & SEA map's limits
+  { native: 'mapTimeMin',       storage: 'vs_maptimemin',      enc: 'num' },
   { native: 'rawIq',            storage: 'vs_rawiq',           enc: 'num' },
   { native: 'rawIqMax',         storage: 'vs_rawiqmax',        enc: 'num' },
   { native: 'rawIqLanMaxHz',    storage: 'vs_rawiqlanmaxhz',   enc: 'num' },

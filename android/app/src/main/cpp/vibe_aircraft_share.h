@@ -552,15 +552,26 @@ public:
     using Provider = std::function<void(int64_t sinceMs, std::vector<Update>& out, std::vector<GsHeard>& gs)>;
     Sharer() { (void)table(); }   // ★ the table is made first, so it outlives this thread at exit
     ~Sharer() { stop(); }
-    /** Register (or replace) a provider by name: "adsb", "avi". */
-    void provide(const std::string& name, Provider p) {
-        { std::lock_guard<std::mutex> lk(m_); prov_[name] = { std::move(p), 0 }; }
+    /** Register (or replace) a provider by name: "adsb", "avi". ★★ beta96 `asId`: the radio its updates are written as
+     *  ("" = this process's own radio; "feed" = the server-level aircraft feeds, vibe_feeds.h kFeedRadioId) — each provider's
+     *  updates go to Table::write in their own call with it, never mixed with another's. */
+    void provide(const std::string& name, Provider p, const std::string& asId = std::string()) {
+        { std::lock_guard<std::mutex> lk(m_); prov_[name] = { std::move(p), 0, asId }; }
         start_();
     }
+    /** Tests: see every write the Sharer makes (updates, ground stations, the ADS-B stamp, asId) instead of the table. */
+    using Writer = std::function<void(const std::vector<Update>&, const std::vector<GsHeard>&, int64_t, bool, const std::string&)>;
+    void writerForTest(Writer w) { std::lock_guard<std::mutex> lk(m_); writer_ = std::move(w); }
     void remove(const std::string& name) { std::lock_guard<std::mutex> lk(m_); prov_.erase(name); if (name == "adsb") adsbLive_ = nullptr; }
     /** ★ beta88: "is this process's ADS-B decoder running now?" — asked each flush; true stamps the header (kAdsbLiveSec),
      *  so every radio's map knows whether ANY radio on the server is decoding ADS-B. Cheap (an atomic read). */
     void adsbLive(std::function<bool()> f) { std::lock_guard<std::mutex> lk(m_); adsbLive_ = std::move(f); }
+    /** ★ beta96 …and another answer beside the decoder's: the server-level aircraft feeds (vibe_feeds.h) — an ADS-B feed
+     *  source that is live counts as "decoding ADS-B now". nullptr removes it. */
+    void adsbLiveExtra(const std::string& name, std::function<bool()> f) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (f) liveExtra_[name] = std::move(f); else liveExtra_.erase(name);
+    }
     /** Write now (a test; a mode leaving, so its last updates are not lost). Never from a DSP thread. */
     void flushNow() { std::lock_guard<std::mutex> fl(flushMtx_); flush_(); }
     void stop() {
@@ -589,28 +600,41 @@ private:
     void flush_() {
         std::vector<std::pair<std::string, Provider>> ps;
         std::map<std::string, int64_t> since;
-        { std::lock_guard<std::mutex> lk(m_); for (auto& kv : prov_) { ps.push_back({ kv.first, kv.second.fn }); since[kv.first] = kv.second.lastMs; } }
+        std::map<std::string, std::string> asOf;
+        Writer writer;
+        { std::lock_guard<std::mutex> lk(m_); for (auto& kv : prov_) { ps.push_back({ kv.first, kv.second.fn }); since[kv.first] = kv.second.lastMs; asOf[kv.first] = kv.second.asId; }
+          writer = writer_; }
         const int64_t now = wallMs();
-        std::vector<Update> ups;
+        std::map<std::string, std::vector<Update>> byAs;   // ★★ beta96 each asId's updates in a call of their own ("" = ours)
         std::vector<GsHeard> gs;
         for (auto& p : ps) {
             std::vector<Update> u;
             // ★ a little overlap: an update stamped just before the last flush's clock read is not lost
             p.second(since[p.first] > 0 ? since[p.first] - 500 : 0, u, gs);
             if (u.size() > kCap) u.resize(kCap);
+            auto& ups = byAs[asOf[p.first]];
             ups.insert(ups.end(), std::make_move_iterator(u.begin()), std::make_move_iterator(u.end()));
         }
+        std::vector<Update>& ups = byAs[std::string()];
         std::function<bool()> live;
-        { std::lock_guard<std::mutex> lk(m_); for (auto& p : ps) { auto it = prov_.find(p.first); if (it != prov_.end()) it->second.lastMs = now; } live = adsbLive_; }
-        const bool adsbOn = live && live();
-        if (ups.empty() && gs.empty() && !adsbOn) return;
-        table().write(ups, gs, now, adsbOn);
+        std::vector<std::function<bool()>> extra;
+        { std::lock_guard<std::mutex> lk(m_); for (auto& p : ps) { auto it = prov_.find(p.first); if (it != prov_.end()) it->second.lastMs = now; } live = adsbLive_;
+          for (auto& kv : liveExtra_) extra.push_back(kv.second); }
+        bool adsbOn = live && live();
+        for (auto& f : extra) if (!adsbOn && f && f()) adsbOn = true;
+        auto put = [&](const std::vector<Update>& u, const std::vector<GsHeard>& g, bool live, const std::string& as) {
+            if (writer) writer(u, g, now, live, as); else table().write(u, g, now, live, as);
+        };
+        if (!(ups.empty() && gs.empty() && !adsbOn)) put(ups, gs, adsbOn, std::string());
+        for (auto& kv : byAs) if (!kv.first.empty() && !kv.second.empty()) put(kv.second, {}, adsbOn, kv.first);
     }
-    struct P { Provider fn; int64_t lastMs = 0; };
+    struct P { Provider fn; int64_t lastMs = 0; std::string asId; };
     std::mutex m_, flushMtx_;
     std::condition_variable cv_;
     std::map<std::string, P> prov_;
     std::function<bool()> adsbLive_;
+    std::map<std::string, std::function<bool()>> liveExtra_;
+    Writer writer_;
     bool run_ = false;
     std::thread th_;
 };

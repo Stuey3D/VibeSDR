@@ -280,6 +280,10 @@ inline const std::vector<Control>& controlTable() {
         { "galleryMb galleryPublic gallerySaveLive",     D_ANY,   0 },
         // ★★ V12 beta94 the community map (vibe_community.h) — the owner's switch, off by default
         { "communityMap communityModes",                 D_ANY,   0 },
+        // ★★ V12 beta96 the standalone AIR & SEA map's limits and the server-level aircraft feed sources (vibe_feeds.h) — every
+        //    radio: nothing is tuned
+        { "mapViewers mapTimeMin",                       D_ANY,   0 },
+        { "feedFmt feedDir feedAddr feedPort feedLabel feedName", D_ANY, 0 },
         // ★ V12 beta90 PSK Reporter + WSPRnet (every radio's digital spots); the DMR ID lookup only where DV ID can run
         { "pskrOn pskrCall pskrAntenna wsprnetOn wsprnetCall", D_ANY, 0 },
         { "dmrIdLookup",                                 D_RADIO, 0 },
@@ -323,7 +327,7 @@ inline const std::vector<Control>& controlTable() {
         { "icomBaud icomCiv icomScopeSpeed icomTuneLock icomPowerOn icomAutoOff icomOffDelayMin", D_ICOM, 0 },
         { "bgOn bgWait bgKeepInRange bgProfiles",        D_RADIO, 0 },
         { "dxOn dxWait dxBands dxRaster dxOirt dxExt dxViewAdmin", D_RADIO, 0 },
-        { "afServe afPort afOpen afPush",                D_RADIO, 0 },   // ★★ V12 beta96 flight trackers (RadioConfig::adsbFeed)
+        { "afServe afPort afOpen afPush",                D_RADIO, 0 },   // ★★ V12 beta96 flight trackers (the phone's adsbFeed; the page's adsbShare)
         { "rawIqOn rawIqLan rawIqStreams rawIqLocalOnly", D_RADIO, P_NOT_LITE },
         { "rspVibeAgc rfNotch dabNotch rspAmNotch rspHdr rspExtRef rspDabDecim rfAgc autoNotch userNotch "
           "dabAgcOverride dabAgcTarget agcSet agcSetLock", D_RSP, 0 },
@@ -467,6 +471,12 @@ inline std::string pageConfig(const std::string& raw) {
     out.set("gallerySaveLive", J::boolean(boolOr(S("gallerySaveLive"), true)));
     out.set("communityMap", J::boolean(boolOr(S("communityMap"), false)));   // ★★ V12 beta94 absent = OFF
     out.set("communityOff", J::str(strOr(S("communityOff"), "")));
+    // ★★ V12 beta96 the server-level aircraft feed sources, the flight-tracker hub (the page's server-level adsbShare is the
+    //    phone's one adsbFeed) and the standalone AIR & SEA map's limits — absent = none / off / 20 viewers, no time limit
+    out.set("aircraftFeeds", J::str(strOr(S("aircraftFeeds"), "")));
+    out.set("adsbShare", J::str(strOr(S("adsbFeed"), "")));
+    out.set("mapViewers", J::num(numOr(S("mapViewers"), 20)));
+    out.set("mapTimeMin", J::num(numOr(S("mapTimeMin"), 0)));
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — absent = OFF
     out.set("pskrOn", J::boolean(boolOr(S("pskrOn"), false)));
     out.set("pskrCall", J::str(strOr(S("pskrCall"), "")));
@@ -720,6 +730,15 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
     flag(&b, "galleryPublic", "galleryPublic");
     flag(&b, "gallerySaveLive", "gallerySaveLive");
     flag(&b, "communityMap", "communityMap");   // ★★ V12 beta94 the community map
+    // ★★ V12 beta96 the standalone AIR & SEA map's limits; the feed sources (a JSON LIST — the engine checks each again)
+    if (on("mapViewers")) { num(&b, "mapViewers", "mapViewers", 0, 1000); num(&b, "mapTimeMin", "mapTimeMin", 0, 1440); }
+    if (on("feedFmt")) if (const J* v = b.get("aircraftFeeds"); v && v->t == J::Str) {
+        J chk;
+        if (!v->s.empty() && (v->s.size() > 8000 || !parse(v->s, chk) || chk.t != J::Arr || chk.a.size() > 8)) { err = "the aircraft feeds could not be read"; return false; }
+        p.set("aircraftFeeds", J::str(v->s));
+    }
+    // ★★ beta96 the page's flight-tracker card is SERVER-level now (adsbShare); the phone keeps it as its one adsbFeed
+    if (on("afServe") && !jsonText(&b, "adsbShare", "adsbFeed", 4000, "the flight-tracker sharing settings")) return false;
     str(&b, "communityOff", "communityOff", 200);
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup (the page refuses "on" without a callsign itself)
     flag(&b, "pskrOn", "pskrOn");
