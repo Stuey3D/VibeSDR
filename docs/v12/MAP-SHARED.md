@@ -51,10 +51,20 @@ ADS-B · datalink bands `acars`, `vdl2`, `acars+vdl2` (wide, ≥ 6.1 MS/s) · VO
    phone width, DigiMapKeys wrapping with SHOW + THIS SESSION + OTHER RADIOS, the pad walking them) — not run on a device.
 3. b96-sbsfeed's standalone landing map: `window.__vibeMapStandalone = true` (or `openAirSeaViewer`) → no shared line, no TUNE,
    no scope keys. The app's viewer is `asViewer` (SDRScreen).
-4. `scripts/test-web-avmap.mjs` was stale (the DATALINK key and chip labels predate SHOW counts / AIR & SEA LIVE) — fixed; its
-   VDL2 half did not decode on this busy Mac in two runs (see Tested how).
+4. `scripts/test-web-avmap.mjs` and `scripts/test-web-ais-aprs.mjs` were stale (the DATALINK / AIS mode keys, the DATALINK band
+   keys now TUNE rows, chip labels with SHOW counts) — fixed; both pass again.
 
 ## Tested how
+- **Scope (11-26):** `vibeserver/test-aircraft-share` 67/0 (radios mask: one radio, both, a feed's own id, untagged; JSON
+  `radios` + `first`; an older record = unknown); `scripts/test_map_scope.ts` 52/0; `scripts/test_map_scope_app.ts` 34/0;
+  `scripts/test-web-map-scope.mjs` 23/0 (real server, stubbed aircraft/ship answers tagged by this radio / another / a feed /
+  untagged); `scripts/test-web-avmap.mjs` 88/0 (TWO REAL radio processes: radio A's ADS-B-only 400F11 hidden on radio B's map
+  with OTHER RADIOS off, 4CA97B — heard by both — kept); `scripts/test-web-ais-aprs.mjs` 40/0 (the AMATEUR window's SHOW label,
+  dots, counts); regressions test-web-map-shared 36/0, test_amateur_map 187/0, test_ism_app 256/0, test_live_maps 63/0,
+  test_air_sea_tune 37/0, test_ais_aprs_app 181/0, test_vormap_app 52/0, test_ndb_app 204/0, test_map_page_kind 72/0,
+  test_stored_layers 37/0, test_log_radio 17/0, test_map_shared_app 28/0, test_map_autofit 64/0, test_nav_coverage ok; tsc clean
+  (outside scripts/ and handheld-ui/test). Not run: a device; the web ISM mesh map and the AMATEUR window's THIS SESSION / OTHER
+  RADIOS keys in a browser (source + unit only).
 This Mac; vibeserver built from this worktree through the build lock; headless Edge `--mute-audio`; fake rtl_tcp (no clip).
 - `scripts/test-web-map-shared.mjs` 36/0 (real server, `--users 4 --ask-before-tuning` / `--users 1`). FINDING: after a raw listener leaves, the server keeps counting it (`users` and the dial's `listeners` stay 2/4; the controls bar says the same) while the ask lock lifts — the line agrees with the bar; FREE TO EXIT after a leave is therefore not proven.
 - `scripts/test_air_sea_tune.ts` 37/0 (RTL 2.4 / RSP 8 / HF+ shapes, the line's states, 8 languages).

@@ -79,8 +79,9 @@ await session('ais', AIS, 162000000, 96100000, 'wfm', async ({ ev, send, shot, u
   await ev(`document.getElementById('mMode')?.click()`);
   await sleep(700);
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
-  ok(/\bAIS\b/.test(opts || ''), `the demodulator menu offers AIS: ${opts}`);
-  await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'AIS'); b && b.click(); return !!b; })()`);
+  // ★★★ beta96 ONE AIR & SEA LIVE key (MAP-SHARED.md): last used = AIS → it lands there
+  ok(/AIR & SEA LIVE/.test(opts || ''), `the demodulator menu offers AIR & SEA LIVE (AIS on its TUNE list): ${opts}`);
+  await ev(`localStorage.setItem('vibesdr.airSeaLast', 'ais'); document.getElementById('mModeAirSea')?.click(); true`);
   ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'the ship map opens');
   // ★★★ beta96 AIS mode's map IS the AIR & SEA map, AIS live: the title, EXIT AIS and the SHIPS tab come from the mode
   ok(await until(`document.querySelector('.trkView:not([hidden]) .ttl')?.textContent === 'AVIATION & MARITIME \u00b7 AIS 161.975 + 162.025 MHz'`, 4000),
@@ -162,8 +163,8 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
     ok(await mev(`aprs.filter(a => a.svg).length >= 3`), 'each drawn with its APRS symbol (our SVG)');
     ok(/1012/.test(await mev(`(aprs.find(a => /MB7UH/.test(a.call)) || {}).wx || ''`) || ''), `the weather station's report: ${await mev(`(aprs.find(a => /MB7UH/.test(a.call)) || {}).wx`)}`);
     ok(/Weather: .*1012/.test(await mev(`aprsCard(aprs.find(a => /MB7UH/.test(a.call)))`) || ''), 'its card says it');
-    ok(await mev(`(() => { const l = document.getElementById('layers'); const k = [...l.querySelectorAll('button')]; return !l.hidden && k[0].textContent === 'APRS' && k[0].classList.contains('live') && k.every(b => b.getAttribute('aria-pressed') === 'true'); })()`),
-       `the layer keys, the live one first: ${await mev(`[...document.getElementById('layers').querySelectorAll('button')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed') + (b.classList.contains('live') ? '(live)' : '')).join(',')`)}`);
+    ok(await mev(`(() => { const l = document.getElementById('layers'); const k = [...l.querySelectorAll('button')]; return !l.hidden && /^APRS[0-9]+$/.test(k[0].textContent) && k[0].querySelector('.dot') && l.querySelector('.lbl')?.textContent === 'SHOW' && k[0].classList.contains('live') && k.every(b => b.getAttribute('aria-pressed') === 'true'); })()`),
+       `the layer keys (SHOW: a colour dot, the name, its count — beta96), the live one first: ${await mev(`[...document.getElementById('layers').querySelectorAll('button')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed') + (b.classList.contains('live') ? '(live)' : '') + (b.querySelector('.dot') ? '(dot)' : '')).join(',') + ' lbl=' + (document.querySelector('#layers .lbl') || {}).textContent`)}`);
     ok(/APRS \d/.test(await mev(`document.getElementById('amTabs').textContent`) || '') && /G4ABC|MB7UH/.test(await mev(`document.getElementById('amRows').textContent`) || ''),
        `the list's APRS tab: ${await mev(`document.getElementById('amTabs').textContent + ' | ' + document.getElementById('amRows').textContent.slice(0, 120)`)}`);
     /* ★★★ STUART'S RULE: ANY station in the HEARD IN window — a background-decoded and a listener-decoded spot (the store's
