@@ -293,7 +293,7 @@ sources (APRS box stations, mesh nodes, NCDXF) must follow the same window when 
 
 ## RESUME HERE
 
-**State 2026-11-26 evening (branch `b96-onemap`, b96-integrate merged in, not pushed).**
+**State 2026-11-26 late (branch `b96-onemap`, b96-integrate merged in again at fd34f605d, not pushed).** Stages 6, 8 (SONDES + VOR) and the Leaflet polish done this session; NDB and stage 7 not started.
 
 | Stage | State | Where |
 |---|---|---|
@@ -327,11 +327,13 @@ row chosen now pauses it (mapAutoFit's own documented rule; the app already did)
    own auto fit while NDB is live (setCamera needs a third owner). App: the 'airsea' page loads NDB_LAYER_JS, __ndbPush etc.
    move into the track block on GLVM||map, NdbLiveList is the NAVAIDS tab's body (as useAdsbBody). test-web-ndb and
    test_ndb_app must follow. Stored VOR / sondes / NDB from the gallery when not live: not drawn yet.
-3. Stage 7: AMATEUR (spots map grown: MESH, BEACONS, tabs; CW/RTTY skimmer families).
-4. A device run of the app's 'airsea' page (AIS → exit → ADS-B and back, DATALINK MAP, NAVTEX MAP, 4" phone, the Duo).
-5. Polish seen in the Leaflet-fallback screenshots (pre-existing, not from this work): a Leaflet ADS-B card can sit
-   partly off a 390 px map's left edge under the zoom buttons; after a DPR change (device emulation) the Leaflet canvas
-   outline was drawn stale until the next move.
+3. Stage 7: AMATEUR (spots map grown: MESH, BEACONS, tabs SPOTS / APRS / MESH; CW/RTTY skimmer families) — with
+   Stuart's window rule above (ANY spot in the HEARD IN window, background and listeners alike; the store test proves the
+   store side). Not started.
+4. A device run of the app's 'airsea' page (AIS → exit → ADS-B and back, ADS-B's GAIN key and list, SONDES and VOR MAP,
+   DATALINK MAP, NAVTEX MAP, 4" phone, the Duo).
+5. ✓ Polish (Leaflet): done (c4053a924).
+6. The scratch clips in the session scratchpad (vdl2, adsb-syn, ais, aprs, rs41) stay until every stage is done.
 
 **Tested how (this Mac, headless Edge `--mute-audio`, a server built from this worktree via the build lock; synthetic
 clips and fixtures only, nothing on air):** see the end-of-session numbers in the commit messages; the stage-4 run:
