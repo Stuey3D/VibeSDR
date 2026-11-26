@@ -24,7 +24,7 @@ import { CHOICE_WORDS, choicesFor, routeFor, type ServerChoice } from '../utils/
 import { getChoice, setChoice, storeFacts, setupCodeSupported, adoptRemoteAdminPassword } from '../services/serverChoiceStore';
 import { rtlTcpServerSupported, getServerStatus, stopRtlTcpServer } from '../services/rtlTcpServer';
 import { getConnectedRadio, getVibeServerStatus, stopVibeServer } from '../services/vibeServer';
-import { icomPresence } from '../services/androidIcom';
+import { icomPresence } from '../services/icomRadio';
 
 const isLite = !!(NativeModules as any).VibeLocalSDR?.isLite;
 
@@ -74,7 +74,7 @@ export default function ServerChoiceScreen({ navigation, route, tokens }: Props)
     return () => { gone = true; };
   }, []);
 
-  const options = useMemo(() => choicesFor({ lite: isLite, rtlTcpSupported, icom }), [icom]);
+  const options = useMemo(() => choicesFor({ lite: isLite, rtlTcpSupported: rtlTcpServerSupported, icom }), [icom]);
   const remoteOk = noPassword && setupCodeSupported();
 
   const open = useCallback(async (c: ServerChoice) => {

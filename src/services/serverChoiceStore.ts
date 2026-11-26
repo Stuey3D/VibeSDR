@@ -44,6 +44,7 @@ export async function setupCodeIssue(): Promise<string> { return String(await Lo
 export async function setupCodeCancel(): Promise<void> { try { await Local?.setupCodeCancel?.(); } catch { /* nothing live */ } }
 export type SetupCodeState = {
   active: boolean; secondsLeft: number; wrong: number; session: boolean; peer: string; ended: string; passwordSet: boolean;
+  inProgress: boolean; finished: boolean;
 };
 export async function setupCodeState(): Promise<{ state: SetupCodeState; hasAdminPassword: boolean; remote: boolean } | null> {
   try {

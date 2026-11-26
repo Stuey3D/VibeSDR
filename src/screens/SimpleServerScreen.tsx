@@ -30,7 +30,7 @@ import {
   getConnectedRadio, getVibeServerStatus, stopVibeServer, FPS_TIERS, fpsForTier, DEFAULT_FPS_TIER,
   type FpsTier, type VibeServerStatus,
 } from '../services/vibeServer';
-import { icomPresence } from '../services/androidIcom';
+import { icomPresence } from '../services/icomRadio';
 import {
   getMdnsName, setMdnsName, setChoice, startSimpleServer, storeFacts, saveAdminPasswordOnDevice, setupAddressLine,
   adoptRemoteAdminPassword,

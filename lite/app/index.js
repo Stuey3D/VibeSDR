@@ -6,7 +6,7 @@
  * renders ../../src/screens/ServerModeScreen.tsx itself — not a copy — and supplies the one thing
  * it expects from the app around it: a `navigation` object.
  *
- * ★ Lite HAS no other screens, so each navigation call lands somewhere honest:
+ * ★ beta96: Lite now opens on the server ENTRY (see SCREENS below); before that each call landed here:
  *   goBack()                     — "Stop & back" / "Cancel": back to a fresh setup form (remount).
  *   navigate('InstancePicker')   — "keep serving and browse": there is no client here, so the app
  *                                   steps into the background and the server carries on.
@@ -32,20 +32,53 @@ import { recordCrash } from '../../src/services/crashGuard';
   });
 }
 
+/* ★★★ beta96 LITE GETS THE SAME ENTRY AS THE APP (docs/v12/SERVER-CHOICE.md): first open = SET UP HERE / REMOTE SETUP;
+ *  then VibeServer Simple or Full (no RTL-TCP — removed from Lite on purpose, Stuart 2026-09-18), the last one
+ *  remembered. A tiny stack stands in for react-navigation: the same four calls the screens make, the same names.
+ *  ★ Full is always VibeServer-only here (vibeServerOnly), as before. 'InstancePicker' (keep serving and browse) still
+ *    steps the app into the background — Lite has no client. */
+const SCREENS = {
+  ServerChoice: require('../../src/screens/ServerChoiceScreen').default,
+  SimpleServer: require('../../src/screens/SimpleServerScreen').default,
+  SetupElsewhere: require('../../src/screens/SetupElsewhereScreen').default,
+  ServerMode: ServerModeScreen,
+};
+
 function Lite() {
-  const [mount, setMount] = useState(0);
-  const navigation = useMemo(() => ({
-    goBack: () => setMount((n) => n + 1),
-    navigate: () => BackHandler.exitApp(),
-    replace: () => {},
-    addListener: () => () => {},
-    setOptions: () => {},
-    isFocused: () => true,
-  }), []);
+  const [stack, setStack] = useState([{ name: 'ServerChoice', params: {}, key: 0 }]);
+  const seq = React.useRef(1);
+  const top = stack[stack.length - 1];
+  const navigation = useMemo(() => {
+    const entry = (name, params) => {
+      const n = SCREENS[name] ? name : 'ServerChoice';
+      const p = n === 'ServerMode' ? { ...(params || {}), vibeServerOnly: true } : (params || {});
+      return { name: n, params: p, key: seq.current++ };
+    };
+    return {
+      navigate: (name, params) => {
+        if (name === 'InstancePicker') { BackHandler.exitApp(); return; }
+        setStack((st) => [...st, entry(name, params)]);
+      },
+      replace: (name, params) => setStack((st) => [...st.slice(0, -1), entry(name, params)]),
+      // ★ Back on the bottom screen: a fresh copy of it (Lite's old "Cancel" behaviour), never a dead press.
+      goBack: () => setStack((st) => st.length > 1 ? st.slice(0, -1) : [{ ...st[0], key: seq.current++ }]),
+      addListener: () => () => {},
+      setOptions: () => {},
+      isFocused: () => true,
+    };
+  }, []);
+  React.useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (stack.length > 1) { navigation.goBack(); return true; }
+      return false;   // ★ the system's own: Lite steps into the background, the server carries on
+    });
+    return () => sub.remove();
+  }, [stack.length, navigation]);
+  const Screen = SCREENS[top.name];
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
-      <ServerModeScreen key={mount} navigation={navigation} route={{ key: 'ServerMode', name: 'ServerMode', params: { vibeServerOnly: true } }} />
+      <Screen key={top.key} navigation={navigation} route={{ key: String(top.key), name: top.name, params: top.params }} />
     </SafeAreaProvider>
   );
 }
