@@ -21,6 +21,7 @@ import { scrollLane } from '../constants/popupTokens';
 import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H, EDGE } from '../services/adsbList';
 import type { TrackRow } from '../services/tracks';
 import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
+import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
 
 /** ★ The status line and each safety line under the header. */
 const STATUS_H = 20;
@@ -69,6 +70,10 @@ export interface TrackLiveListProps {
   /** ★★ beta96 MESSAGES filtered to one aircraft: the words ("Messages from RYR12K") and × ALL */
   filter?: string;
   onFilterClear?: () => void;
+  /** ★★★ beta96 stage 6 ADS-B LIVE (the AIR & SEA map is ADS-B mode's screen): the ADS-B list's own body — its chips
+   *  (NEWEST · FURTHEST · LONGEST TRACKED), the GAIN key and card, and its rows (emergencies, military, then the nearest)
+   *  — heads the AIRCRAFT tab, the other sources' aircraft after it. The web's adsbListHtml in asRender. null = not live. */
+  adsb?: AdsbBodyInput | null;
 }
 const RANGE_H = 30;
 
@@ -92,23 +97,26 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
   const tabs = (p.tabs?.length ?? 0) >= 2 ? p.tabs! : [];
-  const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
+  const ab = useAdsbBody(p.adsb ?? null, p.ink);
+  const credit = !!p.credit || ab.credit;
+  const total = ab.count + p.rows.length;
+  const extra = (open ? ab.extra : 0) + STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
     + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0)
-    + (p.credit && open ? AIRCRAFT_CREDIT_H : 0);
+    + (credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
-  const shown = Math.max(1, Math.min(fit, p.rows.length || 1));
+  const shown = Math.max(1, Math.min(fit, total || 1));
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
   useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const { navCtx, scrollProps } = usePanelNav(true, { flat: true });
   const s = useMemo(() => makeStyles(p.ink), [p.ink]);
-  const placed = p.rows.filter((r) => !r.noPos).length;
+  const placed = ab.placed + p.rows.filter((r) => !r.noPos).length;
   const pos = { left: EDGE + p.insets.left, bottom: EDGE + p.insets.bottom };
   return (
     <NavCtx.Provider value={navCtx}>
       <View style={[s.wrap, pos, open && { width }]} onTouchStart={noteTouchInteraction}>
         <NavRow>
-          <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)} title={p.title} count={p.rows.length} placed={placed} />
+          <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)} title={p.title} count={total} placed={placed} />
         </NavRow>
         {open && (tabs.length > 0 || !!p.sort) && (
           <NavRow>
@@ -132,6 +140,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         {open && (
           <Text style={[s.status, !!note && s.noteTxt]} numberOfLines={1}>{note || p.status}</Text>
         )}
+        {open && ab.head}
         {open && !!p.ranges?.length && (
           <NavRow>
             <View style={s.ranges} accessibilityRole="radiogroup">
@@ -155,14 +164,14 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         {open && (
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane}
                       showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
-            {p.rows.length ? p.rows.map((r) => (
+            {ab.rows}
+            {p.rows.map((r) => (
               <NavRow key={r.key}><Row s={s} r={r} sel={!!p.selected && p.selected === r.key} onPress={() => pick(r)} /></NavRow>
-            )) : (
-              <Text style={s.empty} numberOfLines={3}>{p.empty}</Text>
-            )}
+            ))}
+            {!total && <Text style={s.empty} numberOfLines={3}>{p.adsb ? ab.empty : p.empty}</Text>}
           </ScrollView>
         )}
-        {open && !!p.credit && <AircraftDataCredit ink={p.ink} />}
+        {open && credit && <AircraftDataCredit ink={p.ink} />}
       </View>
     </NavCtx.Provider>
   );

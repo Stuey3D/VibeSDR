@@ -74,7 +74,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs, type AdsbGainView } from '../services/adsbTypes';
 import { noteFault } from '../services/faultLog';
 import type { Aircraft } from '../services/SDRBackend';
-import AdsbLiveList from './AdsbLiveList';
 /* ★★★ V12 AIS / APRS: THE SHARED SHIP AND STATION LAYER, AS A STRING (web/mapkit/tracklayer.js — the web client's same
  *     file), interpolated only, for VIBEMAP_JS's reason. Regenerate with: node scripts/gen-tracklayer-source.mjs. What
  *     each item LOOKS like is worked out in React Native (src/services/tracks.ts) and handed in with it. */
@@ -101,7 +100,8 @@ import { MAP_AUTOFIT_JS } from '../utils/mapAutoFit';
 import { mapPageShown, mapPageWritten, type MapPage } from '../utils/mapPage';   // ★★★ beta96 the page kept with its kind and opening
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend rows   // ★ the spot card's HH:MM:SS UTC (the slot's start)
 
-/* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
+/* ★ 'adsb' (V12 — ★★★ RETIRED beta96 stage 6: ADS-B's screen is now the AIR & SEA map, 'airsea', below; kept as the
+ *  history of why it looks and behaves as it does) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
  *  profile (airports, runways), the same receiver marker, chrome and transitions — so opening it feels like
  *  opening the HFDL map (Stuart: "ASMR grade sublime"). Only the FEED differs: React Native pushes each report
  *  in (like the local spots map's pushSpots), and the shared layer draws the aircraft.
@@ -136,7 +136,7 @@ import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols'; 
  *  NAVTEX and the sea areas on the track layer. The page is built once; its TITLE, its EXIT key and whose camera it is are
  *  pushed in (__trkChrome / __trkCamera) from the current mode on every change — never baked into the page, so a mode
  *  change while it is open can never leave it wearing the old mode (Mac Ha 11-26). */
-export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap' | 'airsea';
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap' | 'airsea';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -165,17 +165,17 @@ interface MapOverlayProps {
   disconnected?: boolean;
   onBackToList?: () => void;
   onRetry?: () => void;
-  /** ★ kind 'adsb': the latest report's aircraft, in the SERVER's field names (the shared layer's input). */
+  /** ★ kind 'airsea' while ADS-B is live: the latest report's aircraft, in the SERVER's field names (the shared layer's input). */
   adsbAircraft?: AdsbAircraftRaw[] | null;
-  /** ★ kind 'adsb': the receiver is dropping samples (adsbTypes adsbCaptureWarning), or null. */
+  /** ★ kind 'airsea' while ADS-B is live: the receiver is dropping samples (adsbTypes adsbCaptureWarning), or null. */
   adsbCapture?: { short: string; rest: string } | null;
-  /** ★★ kind 'adsb': the server's feed warning (AdsbReport.feedWarn — full gain and hearing little), or empty. */
+  /** ★★ kind 'airsea' while ADS-B is live: the server's feed warning (AdsbReport.feedWarn — full gain and hearing little), or empty. */
   adsbFeedWarn?: string;
-  /** ★ kind 'adsb': the same report in the app's shape, ranged from the receiver — the live list's rows. */
+  /** ★ kind 'airsea' while ADS-B is live: the same report in the app's shape, ranged from the receiver — the live list's rows. */
   adsbList?: Aircraft[];
-  /** kind 'adsb': a report has arrived (the list then says "no aircraft yet", not "taking the receiver to 1090"). */
+  /** kind 'airsea' while ADS-B is live: a report has arrived (the list then says "no aircraft yet", not "taking the receiver to 1090"). */
   adsbStarted?: boolean;
-  /** ★★ kind 'adsb': the GAIN key (adsbTypes adsbGainView) — null/absent = no key (no gain list, owner-fixed, or unknown). */
+  /** ★★ kind 'airsea' while ADS-B is live: the GAIN key (adsbTypes adsbGainView) — null/absent = no key (no gain list, owner-fixed, or unknown). */
   adsbGain?: { view: AdsbGainView | null; steps: readonly number[]; onAuto: () => void; onSet: (tenthDb: number) => void } | null;
   /** ★★ kind 'ndb' (V12): the report, the readings kept, Find / stats and their answers (NdbLiveList). */
   ndb?: NdbOverlay | null;
@@ -244,7 +244,7 @@ function trkWhat(kind: MapKind): string {
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
   opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string;
-          /** kind 'adsb': the in-map toggles as this device last left them. */
+          /** kind 'airsea' while ADS-B is live: the in-map toggles as this device last left them. */
           adsbPrefs?: AdsbMapPrefs; radioUrl?: string; ndbPrefs?: NdbMapPrefs;
           /** ★ V12 kind 'digi': the modes THIS server decodes (vibeserver.json spotModes) — the filter and the legend. */
           spotModes?: string[];
@@ -293,12 +293,11 @@ function buildHtml(
     "form-action 'none'",
   ].join('; ');
   const isHfdl = kind === 'hfdl';
-  const isAdsb = kind === 'adsb';
   const isNdb = kind === 'ndb';   // ★ V12 NDB — the aero look, its own layer, RN's live list (as ADS-B)
   const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap' || kind === 'airsea';   // ★ V12 AIS / APRS / DSC / ISM — the shared track layer
   /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
    *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
-  const aero = isHfdl || isAdsb || isNdb;
+  const aero = isHfdl || isNdb;
   const isSpots = kind === 'digi' || kind === 'cw';
   /* ★★★ THE MAP'S MENUS FOLLOW THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere"; the map:
    *  "to change the colour of the map means youd have to exit its screen anyway"). They were HFDL amber and spots
@@ -308,7 +307,7 @@ function buildHtml(
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
-  const TITLE = isHfdl ? 'HFDL MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
+  const TITLE = isHfdl ? 'HFDL MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
     : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'airsea' ? MAP_TITLE.airsea : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
@@ -327,8 +326,8 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
-${isAdsb || isNdb || kind === 'avdata' || kind === 'airsea' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
-${!isHfdl && !isAdsb ? `<script>${MAP_AUTOFIT_JS}</script>` : ''}
+${isNdb || kind === 'avdata' || kind === 'airsea' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
+${!isHfdl ? `<script>${MAP_AUTOFIT_JS}</script>` : ''}
 ${isNdb ? `<script>${NDB_LAYER_JS}</script>` : ''}
 ${isTrk ? `<script>${TRACK_LAYER_JS}</script>` : ''}
 ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
@@ -609,7 +608,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   body.dsumOn #toast{bottom:calc(var(--dsh,0px) + 6px);}
   body.dsumOn:not(.dwide) .maplibregl-ctrl-bottom-left,body.dsumOn:not(.dwide) .leaflet-bottom.leaflet-left{bottom:var(--dsh,0px);}
   ` : ''}
-  ${isAdsb || isNdb || isTrk ? `
+  ${isNdb || isTrk ? `
   /* ★★ ADS-B (and V12 NDB, AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
      legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
      downwards from there. */
@@ -624,8 +623,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 <div id="topbar">
   ${opts?.only
     ? `<button id="back" aria-label="Close the map — ${esc(opts.only)}, and the mode carries on">CLOSE MAP</button>`   /* ★★ V12 the only mode: no EXIT */
-    : isAdsb
-    ? '<button id="back" aria-label="Exit ADS-B and give the receiver back">EXIT ADS-B</button>'
     : isNdb
     ? '<button id="back" aria-label="Exit NDB and give the receiver back">EXIT NDB</button>'
     : kind === 'ais' ? '<button id="back" aria-label="Exit AIS and give the receiver back">EXIT AIS</button>'
@@ -643,7 +640,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   ${/* ★ beta92 the shared AUTO FIT's key (trkFitMake). Not on the aviation map: the ADS-B layer's own AUTO / FIT frame it. */ ''}
   ${isTrk && kind !== 'avdata' ? `<button id="snap" class="trkfit" title="Auto fit: every ${trkWhat(kind)} and the receiver">FIT</button>` : ''}
   ${isSpots ? '<button id="snap" class="digifit" title="Auto fit: every station the filters show and the receiver">FIT</button>' : ''}
-  ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
+  ${kind === 'airsea' ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
 ${isSpots ? `
@@ -663,7 +660,8 @@ ${isSpots ? `
 </div>` : ''}
 <div id="map">
   <div id="lmap"></div>
-  ${isAdsb ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
+ ${/* ★★ beta96 stage 6: ADS-B mode's screen is the AIR & SEA map — its capture and antenna warnings live there */ ''}
+  ${kind === 'airsea' ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
   <div id="legend"${kind === 'digi' ? ' class="dgoff"' : ''}>
     <div id="legbtn" title="Legend">&#9432;</div>
     <div id="legbody">
@@ -741,13 +739,6 @@ ${isSpots ? `
       <div class="lg-sec">SEA AREAS</div>
       ${seaLegendRows(true).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
       <div class="lg-row"><span></span><span style="opacity:.7">${esc(seaAttributionAll())}</span></div>
-      ` : isAdsb ? `
-      <div class="lg-sec">ADS-B 1090</div>
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
-      <div class="lg-row"><span>&#9992;</span><span>Icon = aircraft type, turned to its track</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>Range rings in nautical miles</span></div>
-      <div class="lg-sec">ON THE MAP</div>
-      <div class="lg-row"><span>Auto-zoom &middot; Fit &middot; Rings</span></div>
       ` : isHfdl ? `
       <div class="lg-sec">AIRCRAFT AGE</div>
       <div class="lg-row"><span class="lg-dot" style="background:rgba(80,255,120,0.92);"></span><span>&lt; 2 min</span></div>
@@ -873,9 +864,9 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
-      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
+      profile:((KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
-      scale:(KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc'||KIND==='airsea')?'nautical':'metric',scalePosition:'${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
+      scale:(KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc'||KIND==='airsea')?'nautical':'metric',scalePosition:'${isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -1121,15 +1112,15 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
    *  resolves to the FILESYSTEM ROOT — /mapdata/v1/... — which exists nowhere and fails silently,
    *  one layer at a time, exactly the quiet blank this rework exists to end. */
   dataBase: 'mapdata/v1/',
-  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'airsea') ? 'aero'
+  profile: (KIND === 'hfdl' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'airsea') ? 'aero'
     // ★ sea maps show PORTS, not airports (Stuart, 2026-11-01: "we need the ports instead, so felixstowe dover etc")
     : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots',
   // ★★ V12 beta90 the scale bar (vibemap.js attach) — NM under the km on the sea and air maps
-  scale: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc' || KIND === 'airsea') ? 'nautical' : 'metric',
+  scale: (KIND === 'hfdl' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc' || KIND === 'airsea') ? 'nautical' : 'metric',
   /* ★ beta91 (Stuart 11-22: "map scale is behind the aircraft list box") the bottom-left corner is the live list's
    *  (AdsbLiveList / NdbLiveList / TrackLiveList, React Native over this page): there the scale sits bottom-right with the
    *  zoom keys */
-  scalePosition: '${isAdsb || isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'
+  scalePosition: '${isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
  *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
@@ -1183,7 +1174,7 @@ function age(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<5)return'just now';
 function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/180;var dLat=(lat-RX_LAT)*r,dLon=(lon-RX_LON)*r;var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(RX_LAT*r)*Math.cos(lat*r)*Math.sin(dLon/2)*Math.sin(dLon/2);return Math.round(R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)));}
 
 var RX_SVG='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
-function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:13px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:KIND==='adsb'?7:3);}}
+function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:13px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
 
 // Local/Kiwi (on-device decoder): RX position is injected (no /api/description).
 // 0,0 = Null Island = unknown → offer a "set location" button that asks RN for a
@@ -1197,10 +1188,6 @@ function showSetLoc(){
 }
 if(LOCAL){
   if(RX_LAT||RX_LON)addRx(); else showSetLoc();
-}else if(KIND==='adsb'){
-  /* ★ ADS-B: the receiver is the SERVER's own /location, which React Native already holds and injects (a VibeServer
-   *  has no UberSDR /api/description). Unknown = no marker; the aircraft still draw, without range. */
-  if(RX_LAT||RX_LON)addRx();
 }else if(KIND==='ndb'){
   /* ★ V12 NDB: the beacon layer draws the receiver's house itself (ndblayer.js) — only the view is set here. */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],7);
@@ -1634,44 +1621,10 @@ if(KIND==='hfdl'){
   setInterval(fetchAC,5000);
 }
 
-// ════════ ADS-B 1090 (V12) — the shared layer, fed by React Native ════════
-/* ★★★ THE LAYER DRAWS THE AIRCRAFT — icons by category, the glide, the breathe (never on the first batch), auto-zoom,
- *  fit and range rings with their in-map toggles (web/mapkit/adsblayer.js, the web client's same file). This page only
- *  hosts it on HFDL's map: the receiver marker above, the count in the top bar, and the prefs handed back to React
- *  Native to keep per device. ★ Reports arrive by injection (__adsbPush), never a socket of the page's own: the app's
- *  spectrum socket already carries them, and a second would be a second listener on somebody's radio. */
-if(KIND==='adsb'){
-  var ADSB_PREFS=${JSON.stringify(opts?.adsbPrefs ?? null)};
-  var adsbLayer=null;
-  function adsbMake(){
-    if(adsbLayer||!window.VibeAdsbLayer)return adsbLayer;
-    try{
-      adsbLayer=VibeAdsbLayer.create(map,{
-        receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,
-        prefs:ADSB_PREFS,
-        onPrefs:function(p){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'adsbPrefs',prefs:p}));},
-        // ★ an icon tapped on the map (or its card closed): the live list's row follows
-        onSelect:function(h){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'adsbSel',hex:h||null}));},
-        theme:'dark',
-        // ★ The page draws HFDL's receiver marker itself (addRx) — the layer is asked not to add a second.
-        drawReceiver:false,
-        // ★ V12: the owner's logos / silhouettes on this server (the card shows them when the server names one). Photos
-        //   stay OFF until the Planespotters terms are confirmed — the TODO in adsblayer.js.
-        imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')}
-      });
-    }catch(e){console.error('ADS-B layer could not start',e);adsbLayer=null;}
-    return adsbLayer;
-  }
-  window.__adsbPush=function(json){
-    try{
-      var a=JSON.parse(json);if(!Array.isArray(a))return;
-      var placed=0;for(var i=0;i<a.length;i++)if(a[i]&&a[i].lat!=null&&a[i].lon!=null)placed++;
-      cnt.textContent=String(placed);
-      var L2=adsbMake();if(L2)L2.update(a);
-    }catch(e){console.error('ADS-B: bad report',e);}
-  };
-  /* ★ FURTHEST (with NEWEST and LONGEST TRACKED) is the live list's header now — AdsbLiveList, adsbList.ts adsbChips —
-   *  as on the web, whose top bar crowded on a portrait iPhone (d48dfe43). */
+// ════════ ADS-B 1090 (V12) — beta96 stage 6: ADS-B mode's screen is the AIR & SEA map ('airsea') ════════
+/* ★★★ The ADS-B page ('adsb') is retired: the live report's aircraft arrive as the AIR & SEA map's _adsb items (the
+ *  track block below hands them to the same shared layer, acMake), and its two warnings live here. */
+if(KIND==='airsea'){
   /* ★ The capture warning, as text nodes (never HTML): [short, rest], or null to hide it. */
   window.__adsbCapture=function(w){
     var el=document.getElementById('capwarn');if(!el)return;
@@ -1687,15 +1640,6 @@ if(KIND==='adsb'){
     el.children[1].textContent=w;el.style.display='';
     el.children[2].onclick=function(){el.setAttribute('data-x',w);el.style.display='none';};
   };
-  window.__adsbRx=function(lat,lon){RX_LAT=lat;RX_LON=lon;if(adsbLayer&&adsbLayer.setReceiver)adsbLayer.setReceiver(lat,lon);};
-  /* ★ The live list (React Native, over this page): a row chosen = the layer's own focus (select, open the card, pan only
-   *  if it is off screen); and the list's width, so the attribution keeps clear of it (the CSS above). */
-  window.__adsbLegend=function(){try{var L5=adsbMake();if(L5&&L5.toggleLegend)L5.toggleLegend();}catch(e){console.error('ADS-B legend',e);}};
-  window.__adsbFocus=function(h){try{var L3=adsbMake();if(L3&&L3.focus)L3.focus(String(h));}catch(e){console.error('ADS-B focus',e);}};
-  window.__adsbListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');
-    /* ★ and the layer keeps aircraft out from under it: the list sits 10 px in from the bottom-left corner (EDGE) */
-    try{var L4=adsbMake();if(L4&&L4.setObstacle)L4.setObstacle(w>0&&h>0?{corner:'bottom-left',w:Number(w)+20,h:Number(h)+20}:null);}catch(e){console.error('ADS-B obstacle',e);}};
-  if(window.__pendingAdsb){window.__adsbPush(window.__pendingAdsb);window.__pendingAdsb=null;}
 }
 
 // ════════ NDB (V12) — the shared beacon layer, fed by React Native ════════
@@ -1805,14 +1749,20 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   /* ★★★ V12 beta90 THE AVIATION MAP ON THE ADS-B MAP (Stuart, 2026-11-21): an item with _adsb (aviationMap.ts avPlaneAdsb)
    *  is drawn by the ADS-B layer — its silhouettes, tones, rings, AUTO / FIT, the glide to each new fix, the heading from
    *  the last two fixes — the rest (HFDL ground stations) by the track layer. The web's TrackView aircraft:true. */
-  var acLayer=null,acHexKey={},acKeyHex={};
+  var acLayer=null,acHexKey={},acKeyHex={},acObst=null;
+  /* ★★ beta96 stage 6 the ADS-B layer's toggles (AUTO · FIT · RINGS · RANGE · LABELS) on the AIR & SEA map, remembered per
+   *  device as the ADS-B map's were (adsbPrefs → React Native → storage, never back into the page's source) */
+  var ADSB_PREFS=${JSON.stringify(opts?.adsbPrefs ?? null)};
   function acMake(){
     if(acLayer||(KIND!=='avdata'&&KIND!=='airsea')||!window.VibeAdsbLayer)return acLayer;
     /* ★ beta91 the owner's logos / silhouettes on this server, as on the ADS-B map (adsbMake) — the datalink's aircraft carry
      *  the same keys now (vibe_aircraft_info.h) */
     try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
+      prefs:KIND==='airsea'&&ADSB_PREFS?ADSB_PREFS:undefined,
+      onPrefs:KIND==='airsea'?function(p){trkPost({t:'adsbPrefs',prefs:p});}:undefined,
       imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')},
       onSelect:function(h){trkPost({t:'trkSel',key:h&&acHexKey[h]?acHexKey[h]:null});}});window.__acLayer=acLayer;
+      if(acObst&&acLayer.setObstacle)acLayer.setObstacle(acObst);
       if(KIND==='airsea')trkCameraApply();}
     catch(e){console.error('aircraft layer could not start',e);acLayer=null;}
     return acLayer;
@@ -1859,7 +1809,10 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   window.__trkFocus=function(k){try{var hx=acKeyHex[String(k)];if(hx&&acLayer){acLayer.focus(hx);return;}
     var l=trkMake();var af=trkFitMake();if(af)af.pause();   // ★ a row chosen is where the person wants the map (ADS-B's focus)
     if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
-  window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
+  window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');
+    /* ★ beta96 the aircraft keep out from under the list (the ADS-B map's obstacle: 10 px in from the corner, EDGE) */
+    acObst=w>0&&h>0?{corner:'bottom-left',w:Number(w)+20,h:Number(h)+20}:null;
+    try{if(acLayer&&acLayer.setObstacle)acLayer.setObstacle(acObst);}catch(e){console.error('aircraft obstacle',e);}};
   /* ★ V12 the NAVTEX cards: the text React Native fetched, TRANSLATE drawn when the phone can, and what it gave. Set as
    *  TEXT (textContent) — never parsed as HTML. */
   function trkCardEls(f){var c=document.querySelector('.vtl-card');if(!c)return null;var pre=c.querySelector('.nvTx');
@@ -2373,7 +2326,7 @@ export default function MapOverlay(
   const adsbPrefsRef = useRef<AdsbMapPrefs | null>(null);
   const [adsbPrefsReady, setAdsbPrefsReady] = useState(false);
   useEffect(() => {
-    if (kind !== 'adsb' || adsbPrefsReady) return;
+    if (kind !== 'airsea' || adsbPrefsReady) return;
     let dead = false;
     AsyncStorage.getItem(ADSB_PREFS_KEY)
       .then((v) => { adsbPrefsRef.current = parseAdsbMapPrefs(v); })
@@ -2397,7 +2350,7 @@ export default function MapOverlay(
   if (ndbPrefs && !ndbPrefsAtBuild.current) ndbPrefsAtBuild.current = ndbPrefs;
   const ndbPrefsReady = !!ndbPrefs;
   const html = useMemo(
-    () => (kind && glOk !== null && (kind !== 'adsb' || adsbPrefsReady) && (kind !== 'ndb' || ndbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
+    () => (kind && glOk !== null && (kind !== 'airsea' || adsbPrefsReady) && (kind !== 'ndb' || ndbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
         adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, storeWindows }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
@@ -2532,48 +2485,24 @@ export default function MapOverlay(
   const [digiKeysH, setDigiKeysH] = useState(0);
   useEffect(() => { if (visible && kind === 'digi') webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }, [visible, kind, digiKeysH]);
 
-  /* ★ ADS-B: the whole table each report (about once a second) — it REPLACES, it does not accumulate (the server drops
-   *  an aircraft after 60 s), so there is nothing to de-duplicate. Before the page's handler exists the latest is
-   *  parked in __pendingAdsb and picked up on start. ★★ Double-encoded: the JSON travels as a JS STRING literal, so a
-   *  callsign can never become source (and U+2028/2029 are escaped, the mapdata rule below). */
-  const pushAdsb = (list?: AdsbAircraftRaw[] | null) => {
-    if (kind !== 'adsb' || !list) return;
-    const lit = JSON.stringify(JSON.stringify(list))
-      .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
-      .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
-    webRef.current?.injectJavaScript(
-      `(window.__adsbPush?window.__adsbPush(${lit}):(window.__pendingAdsb=${lit}));true;`,
-    );
-  };
-  useEffect(() => { if (visible) pushAdsb(adsbAircraft); }, [kind, visible, adsbAircraft]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta96 stage 6: ADS-B mode's map is the AIR & SEA map. Its aircraft are that map's `_adsb` items (SDRScreen
+   *  airSeaTrk → pushTrk, the same double-encoded literal); only its warnings and its list's body are ADS-B's own here. */
+  const adsbLive = kind === 'airsea' && !!adsbList;
   // ★★ The capture warning in the top bar (adsbCaptureWarning) — JSON literal, never source; only on a change.
   const capKey = adsbCapture ? adsbCapture.short + adsbCapture.rest : '';
   const pushCap = () => {
-    if (kind !== 'adsb') return;
+    if (kind !== 'airsea') return;
     webRef.current?.injectJavaScript(
       `window.__adsbCapture&&window.__adsbCapture(${JSON.stringify(adsbCapture ? [adsbCapture.short, adsbCapture.rest] : null)});true;`);
   };
   useEffect(() => { if (visible) pushCap(); }, [kind, visible, capKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // ★★ The feed warning (AdsbReport.feedWarn) — JSON literal, never source; only on a change.
   const pushFeedWarn = () => {
-    if (kind !== 'adsb') return;
+    if (kind !== 'airsea') return;
     webRef.current?.injectJavaScript(`window.__adsbFeedWarn&&window.__adsbFeedWarn(${JSON.stringify(adsbFeedWarn ?? '')});true;`);
   };
   useEffect(() => { if (visible) pushFeedWarn(); }, [kind, visible, adsbFeedWarn]); // eslint-disable-line react-hooks/exhaustive-deps
-  /* ★ The live list's two calls into the page. The hex is the report's cleaned address (/^~?[0-9a-f]{6}$/, adsbTypes),
-   *  and JSON.stringify makes it a string literal whatever it is — never source. The width is kept, so a page that
-   *  (re)loads after the list measured itself still gets it (onLoadEnd). */
-  const adsbListW = useRef(0), adsbListH = useRef(0);
-  const adsbLegend = () => webRef.current?.injectJavaScript('window.__adsbLegend&&window.__adsbLegend();true;');
-  const [adsbSel, setAdsbSel] = useState<string | null>(null);
-  useEffect(() => { if (!visible || kind !== 'adsb') setAdsbSel(null); }, [visible, kind]);   // ★ beta96 no selection carried into another map
-  const adsbFocus = (hex: string) =>
-    webRef.current?.injectJavaScript(`window.__adsbFocus&&window.__adsbFocus(${JSON.stringify(String(hex))});true;`);
-  const adsbFootprint = (w: number, h: number) => {
-    adsbListW.current = w; adsbListH.current = h;
-    webRef.current?.injectJavaScript(`window.__adsbListW&&window.__adsbListW(${Math.round(w) || 0},${Math.round(h) || 0});true;`);
-  };
-
+  const adsbListW = useRef(0);   // ★ NDB's list width, kept for a page that (re)loads after it measured itself
   /* ★★ V12 NDB: the layer's feed (ndbMapFeed — the web's renderMap) each report, double-encoded as ADS-B's is; the
    *  selected beacon (a marker tapped, or a row) is kept here so the list and the card follow. */
   const [ndbSel, setNdbSel] = useState(0);
@@ -2764,10 +2693,9 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
                                                     webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
-                             if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current);
                              if (kind === 'ndb') ndbJs('__ndbListW', adsbListW.current);
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
                                               if (trkRef.current?.focus) trkFocus(trkRef.current.focus); } }}
@@ -2814,11 +2742,6 @@ export default function MapOverlay(
             if (m && (m as any).t === 'digiWindow') {
               const w = String((m as any).w ?? '');
               if (/^(1h|24h|7d|30d|all)$/.test(w)) onDigiWindow?.(w);
-              return;
-            }
-            if (m && (m as any).t === 'adsbSel') {
-              const h = (m as any).hex;
-              setAdsbSel(typeof h === 'string' && /^~?[0-9a-f]{6}$/.test(h) ? h : null);
               return;
             }
             /* ★ V12 AIS / APRS: the map's selection (the list's row follows), and a track asked for — answered with
@@ -2935,19 +2858,6 @@ export default function MapOverlay(
         />
         </MacPinch>
         )}
-        {/* ★★ V12 THE ADS-B LIVE LIST, bottom-left over the map — RN-drawn so the pad and keyboard reach it
-            (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
-        {kind === 'adsb' && !!pageUri && !packError && (
-          <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} selected={adsbSel} onFootprint={adsbFootprint} onLegend={adsbLegend}
-                        raw={adsbAircraft ?? null}
-                        gain={adsbGain?.view ?? null} gainSteps={adsbGain?.steps}
-                        onGainAuto={adsbGain?.onAuto} onGainSet={adsbGain?.onSet}
-                        receiver={Number.isFinite(rxLat as number) && Number.isFinite(rxLon as number) && (rxLat || rxLon)
-                          ? { lat: rxLat as number, lon: rxLon as number } : null}
-                        logoBase={local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/'}
-                        ink={ink} areaW={winW} areaH={winH}
-                        insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
-        )}
         {/* ★★ V12 THE NDB LIVE LIST, bottom-left over the map, and the beacon card and dialogs — RN-drawn so the pad and
             keyboard reach them (AdsbLiveList's reason). */}
         {kind === 'ndb' && !!pageUri && !packError && !!ndb && (
@@ -2973,6 +2883,17 @@ export default function MapOverlay(
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
                          safety={trk.safety} onFocus={(k) => { const to = trk.onPick?.(k); trkFocus(typeof to === 'string' && to ? to : k); }} selected={trkSel} onFootprint={trkFootprint}
                          ink={ink} areaW={winW} areaH={winH}
+                         /* ★★★ beta96 stage 6 ADS-B live: its own list heads the AIRCRAFT tab (useAdsbBody) — the GAIN key,
+                          *  NEWEST · FURTHEST · LONGEST TRACKED, emergencies and military first; its rows find the `adsb:` items */
+                         adsb={adsbLive && trk.tab === 'aircraft' ? {
+                           aircraft: adsbList ?? [], started: !!adsbStarted, raw: adsbAircraft ?? null,
+                           onFocus: (hex: string) => trkFocus(`adsb:${hex}`),
+                           selected: trkSel && trkSel.startsWith('adsb:') ? trkSel.slice(5) : null,
+                           gain: adsbGain?.view ?? null, gainSteps: adsbGain?.steps, onGainAuto: adsbGain?.onAuto, onGainSet: adsbGain?.onSet,
+                           receiver: Number.isFinite(rxLat as number) && Number.isFinite(rxLon as number) && (rxLat || rxLon)
+                             ? { lat: rxLat as number, lon: rxLon as number } : null,
+                           logoBase: local ? null : (radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/',
+                         } : null}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
         {disconnected && !ignored && (

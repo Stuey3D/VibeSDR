@@ -266,7 +266,8 @@ console.log('── every map uses it ──');
   const ndbLayer = readFileSync('web/mapkit/ndblayer.js', 'utf8');
   const trackLayer = readFileSync('web/mapkit/tracklayer.js', 'utf8');
   const ndbList = readFileSync('src/components/NdbLiveList.tsx', 'utf8');
-  ok(/\$\{!isHfdl && !isAdsb \? `<script>\$\{MAP_AUTOFIT_JS\}<\/script>` : ''\}/.test(app), 'the app\'s map page carries it for every kind but HFDL (SNAP follows a flight) and ADS-B (the reference)');
+  // ★ beta96 stage 6: the ADS-B page is retired (ADS-B's screen is the AIR & SEA map, whose ADS-B layer keeps its own AUTO / FIT)
+  ok(/\$\{!isHfdl \? `<script>\$\{MAP_AUTOFIT_JS\}<\/script>` : ''\}/.test(app), 'the app\'s map page carries it for every kind but HFDL (SNAP follows a flight)');
   ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{return l\.points\(\);\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:document\.getElementById\('snap'\)/.test(app),
      'app: AIS · APRS · DSC · ISM · NAVTEX · sondes — the FIT key is the auto fit\'s, framing the items AND the receiver');
   ok(/firstFit:\(KIND==='avdata'\|\|!window\.VibeAutoFit\)\?undefined:false/.test(app) && /isTrk && kind !== 'avdata' \?/.test(app),

@@ -182,7 +182,7 @@ existing `viewsProbe` rule.
 
 ✓ = on the new map and tested · ◐ = on the new map, not yet tested · ☐ = not yet carried over · ✗ = dropped (with reason)
 
-### ADS-B aircraft map — WEB DONE (stage 4: `#adsbView` and `AdsbMap` retired); APP STILL ITS OWN (stage 6: MapOverlay 'adsb' + AdsbLiveList)
+### ADS-B aircraft map — WEB DONE (stage 4: `#adsbView` and `AdsbMap` retired); APP DONE (stage 6: MapOverlay kind 'adsb' retired)
 On the web ADS-B mode IS the AIR & SEA map's ADS-B-live state (`adsbUiOn` → `asOpen({ by: 'mode', tab: 'aircraft' })`).
 Its own chrome waits hidden in `#adsbChrome` and `adsbChromeMount` moves it into the map's TrackView slots while ADS-B is
 live (`slot('top' | 'head' | 'over')`); `adsbChromePark` puts it back. The app's ADS-B mode keeps its own map until stage 6.
@@ -204,7 +204,18 @@ live (`slot('top' | 'head' | 'over')`); `adsbChromePark` puts it back. The app's
   under it — every track map, as ADS-B's own bar did (Stuart 2026-10-25)
 - ✗ the ⓘ legend button: the map's KEY lists the aircraft tones (avLegendHtml) — one key, not two
 - ✗ the health pill's place under the bar (`body.adsbMap`): the AIR & SEA map covers it as every track map does
-- ☐ (app) all of the above for the app: stage 6
+- ✓ (app, stage 6) ADS-B mode's screen is the 'airsea' page (`shownMapOf` adsbView → 'airsea'; `airSeaMode` 'adsb' while
+  `adsbLiveHere`). The report's raw rows are `adsb:<hex>` items with `_adsb` (the ADS-B layer draws them: card with squawk /
+  emergency, trails and logos from the radio) and win over the shared table's row for the same aircraft. EXIT ADS-B
+  (`closeAirSea` → `exitAdsb`), the only mode → CLOSE MAP + note. The capture warning (top bar) and CHECK THE ANTENNA
+  (`#capwarn` / `#feedwarn`, `__adsbCapture` / `__adsbFeedWarn`) on the 'airsea' page. The AIRCRAFT tab's body while ADS-B
+  is live is ADS-B's own list (`AdsbLiveList.tsx useAdsbBody` inside TrackLiveList `adsb`): the GAIN key and card, NEWEST /
+  FURTHEST / LONGEST TRACKED, emergencies then military then nearest, bars, operator logos, the ODC-By credit; the other
+  sources' aircraft after it; no sort chip. The ADS-B layer's toggles (AUTO · FIT · RINGS · RANGE · LABELS) remembered as
+  before (`adsbPrefs` → `lsv_adsb_map_prefs`); the list is the layer's obstacle (aircraft kept out from under it). The ⓘ
+  legend key on the list is gone (the map's KEY, as the web). CHAT: the app's ADS-B map never had one; the app's chat is
+  where it was. Tests: test_map_page_kind 72/0 (section 4: AIS ↔ ADS-B on the ONE page — re-titled, same WebView, no stale
+  page; Mac Ha's exit-then-pick path; the only mode), tsc clean. ◐ not run on a device.
 - ✓ ADS-B only while heard (`avNowRule`, the in-use words): test-web-avmap beta88 checks, on the AIR & SEA map
 - ✓ (web) Emergency pinned top of AIRCRAFT while ADS-B is live (ADS-B's own list order, from the live report's squawk /
   emergency). From the shared table alone (no squawk there) only MILITARY is pinned (`info.mil`)
@@ -286,7 +297,7 @@ live (`slot('top' | 'head' | 'over')`); `adsbChromePark` puts it back. The app's
 | 4 web ADS-B → AIR & SEA | ✓ `#adsbView` + `AdsbMap` retired | `main.ts` `adsbUiOn`/`adsbUiOff`, `adsbChromeMount`/`adsbChromePark`, `asRender` (live `_adsb` items, `adsbListHtml(…,'adsb:')`), `index.html #adsbChrome` |
 | 5 app AIR & SEA | ✓ built, tsc clean, **not run on a device** | `MapOverlay.tsx` 'airsea', `TrackLiveList.tsx`, `SDRScreen.tsx` `airSeaTrk` |
 | copy | ✓ About beta96 note (+ web ADS-B, + the range shape), web tutorial (ADS-B opens the same map) | |
-| 6 app ADS-B → 'airsea' | ☐ NOT STARTED | below |
+| 6 app ADS-B → 'airsea' | ✓ built, tsc clean, test_map_page_kind 72/0, **not run on a device**; kind 'adsb' retired | `SDRScreen` `adsbLiveHere` / `airSeaTrk`, `MapOverlay` 'airsea' (+ capwarn / feedwarn, ADS-B prefs, obstacle), `TrackLiveList` `adsb`, `AdsbLiveList.useAdsbBody` |
 | 8 NDB / VOR / SONDES live states | ☐ NOT STARTED | |
 | 7 AMATEUR map | ☐ NOT STARTED | |
 
@@ -295,11 +306,8 @@ every feed, so a ROW chosen flew in and the next tick glided straight back out (
 row chosen now pauses it (mapAutoFit's own documented rule; the app already did). FIT resumes it with a glide.
 
 **Next, in order:**
-1. Stage 6 (app): `shownMapOf` 'adsb' → 'airsea' (adsbView), `adsbAircraft` pushed as `_adsb` items into the 'airsea'
-   page (MapOverlay: the 'adsb' page's live update path), AdsbLiveList as the AIRCRAFT tab's body while ADS-B is live (its
-   chips, the GAIN key, the capture / feed warnings), `EXIT ADS-B` via `liveChrome`, `only` note for 'adsb'; then retire
-   kind 'adsb'. test_map_page_kind: AIS ↔ ADS-B becomes the SAME kind ('airsea') — the page then stays and its chrome is
-   pushed (`__trkChrome`), which is the design; rewrite those cases. Copy: the app's MODE tour card + About ("the app follows").
+1. ✓ Stage 6 (app) — done (see the table). Copy: the app's MODE tour card (sdrTour: ADS-B opens the same map, its list
+   and GAIN key) and the About beta96 note ("on the web page and in the app").
 2. Stage 8: NDB / VOR MAP / SONDES as live states (web `NdbView`, `vmView`, `sdView`; app kinds 'ndb', 'vormap', 'sondes').
    NDB's 3-bar meter list, Find, stats, owner confirm; VOR's radials, FIX words, KEY; sondes' band control and track.
 3. Stage 7: AMATEUR (spots map grown: MESH, BEACONS, tabs; CW/RTTY skimmer families).
