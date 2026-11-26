@@ -14,8 +14,9 @@ MARITIME offered at any running rate (`vsAisDscFitsOrBoosts` in WhyNot, mapModes
 entering AIS + DSC (the guard's marker first, "MARITIME"), gives the owner's rate back on AIS alone (retarget) and on leaving
 (before the locked centre returns); `g_aisBoostFrom` (never persisted; cleared by endWholeRadioModesForStop); the AIS report's
 `rateNote`. Web Setup + app: the row and its notice (`AIS_8M_NOTICE`, one text two readers), the keep / landing rule follows
-it (web keepFacts; app keepAvailLocal `ais8mOk` from the radio's caps). Default OFF, no benchmark auto-tick (unlike
-avdata+8m — a rate change moves every listener; say if you want dec_aisdsc to tick it like dec_avboth). Tests:
+it (web keepFacts; app keepAvailLocal `ais8mOk` from the radio's caps). Default OFF; **the benchmark's GREEN `dec_aisdsc` ticks it ON on a first setup**, exactly as `dec_avboth` does for
+avdata+8m (Stuart 11-26) — app `applyBench` (caps "ais+8m" only) and the page's `benchApplyDefaults` (fresh setup only, the
+box exists only where caps draw it); the owner's own choice always wins after that. Tests:
 **test-server-maritime.mjs §5 (19 new, 50/50)**: RTL caps never; 2 MS/s switch off → not offered; on → offered, enters at
 159.2625 MHz / 8 MS/s, rateNote, log, AIS alone → 2 MS/s back, back to 8, leave → 2 MS/s + 96.1 MHz; pinned → never.
 **test-radio-caps 285/0**, **test_keep_run.ts 60/0**. Not run on a real RSP.

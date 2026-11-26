@@ -110,6 +110,18 @@ export function opModeSummary(use: 'single' | 'locked', single: string, singleNa
   return 'Locked ' + mhz(centreHz - rateHz / 2) + '–' + mhz(centreHz + rateHz / 2) + ' MHz';
 }
 
+/** ★★★ beta96 (Stuart 11-26) PSK Reporter is ADVICE (amber), never a blocker — and the uploader sends NOTHING until the name is
+ *  valid (vibe_spot_report.h receiverNameOk: 3–20 of letters, digits, / -, with a letter — the Setup page's rule). */
+export function pskrNameOk(n: string): boolean {
+  const c = String(n || '').trim().replace(/[^A-Za-z0-9/-]/g, '').slice(0, 20);
+  return c.length >= 3 && /[A-Za-z]/.test(c);
+}
+export function pskrAdvice(on: boolean, call: string): string {
+  if (!on || pskrNameOk(call)) return '';
+  return String(call || '').trim() ? 'PSK Reporter: that receiver name is not valid, so no spots are sent'
+                                    : 'PSK Reporter: no callsign, so no spots are sent';
+}
+
 /** No location: satellites and maps need one (the satellite engine's own "this server has no location set"). */
 export function locationMust(mode: string, hasPlace: boolean, moving: boolean): string {
   if (moving) return '';   // ★ on the move: the nearest town is the location

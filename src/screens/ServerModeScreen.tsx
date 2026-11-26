@@ -269,7 +269,7 @@ import SetupSection, { SectionAllRow, SetupTabs } from '../components/SetupSecti
 import { EMPTY_MEMO, RADIO_ORDER, SECTIONS_KEY, SERVER_ORDER, locationMust, mustCleared, opModeSummary, orderSections, parseStored,
          sectionOpen, setAllSections, toggleSection, type SectionMemo,
          secState, startRefusal, triedAfterStart, triedPrune, reopenFor, FULL_TABS, radioTabLabel, type FullTab,
-         type SectionGroup } from '../utils/setupSections';
+         type SectionGroup, pskrAdvice } from '../utils/setupSections';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -872,6 +872,20 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       } else {
         if (has) { bm = bm.split(',').filter((t: string) => t !== 'avdata+8m').join(','); setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
         notes.push(`ACARS + VDL2 together is off — both decoders at 8 MS/s measured ${Math.round(avb.pct)}% of a core here at their busiest thread. Switch it on to use it anyway; ACARS and VDL2 each work either way.`);
+      }
+    }
+    /* ★★★ beta96 MARITIME AT 8 MS/s ("ais+8m", under AIS — Stuart 11-26: "exactly as dec_avboth does for the datalink"):
+     *  GREEN dec_aisdsc ticks it ON on a first setup, anything else leaves it off with the figure. Only where the radio can
+     *  run 8 MS/s and reach both (caps "ais+8m" — the row is drawn nowhere else). First setup only: the owner's choice wins. */
+    const amb = row('dec_aisdsc');
+    if (amb && amb.grade !== 'none' && capsAllowMode(radioCapsNow, 'ais+8m')) {
+      const has = new RegExp('(^|,)ais\\+8m(,|$)').test(bm);
+      if (amb.grade === 'green') {
+        if (!has) { bm = bm ? bm + ',ais+8m' : 'ais+8m'; setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`MARITIME at 8 MS/s is on — AIS + DSC together measured ${Math.round(amb.pct)}% of a core here at its busiest thread, so it was turned on.`);
+      } else {
+        if (has) { bm = bm.split(',').filter((t: string) => t !== 'ais+8m').join(','); setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`MARITIME at 8 MS/s is off — AIS + DSC together measured ${Math.round(amb.pct)}% of a core here at its busiest thread. Switch it on to use it anyway; AIS works either way.`);
       }
     }
     /* ★★★ EVERY OTHER DECODER (2026-10-31) — the server's defaults rule (vibe_benchmark_more.h ruleFor) says which owner
@@ -5865,7 +5879,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       must: blockOf('adsbFeed') },
     { key: 'pskr', title: 'PSK Reporter', body: vs ? secBody_pskr : null,
       summary: pskrOn ? 'On · ' + (pskrCall || '?') + (wsprnetOn ? ' · WSPRnet' : '') : 'Off',
-      must: '', advise: pskrOn && !pskrCall.trim() ? 'PSK Reporter needs a receiver name (your callsign)' : '' },
+      must: '', advise: pskrAdvice(pskrOn, pskrCall) },
     { key: 'audio', title: 'Audio', body: vs ? secBody_audio : null,
       summary: (['Off — everyone gets Opus', 'Listener’s choice', 'Only as a fallback for old browsers'] as const)[uncomp] ?? '', must: '' },
     { key: 'frameRate', title: 'Frame rate', body: vs ? secBody_fps : null,

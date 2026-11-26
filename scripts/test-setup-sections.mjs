@@ -128,7 +128,7 @@ try {
   await type('pskrCall', '');
   await sleep(150);
   s = await state('serverPane', 'PSK Reporter');
-  ok(s && !s.must && s.tone === 'amber' && /^PSK Reporter needs a receiver name/.test(s.sum), `PSK Reporter on, no name: AMBER (the server runs, sends nothing) ("${s && s.sum}")`);
+  ok(s && !s.must && s.tone === 'amber' && /^PSK Reporter: no callsign, so no spots are sent$/.test(s.sum), `PSK Reporter on, no name: AMBER, "no spots are sent" (the uploader refuses without one) ("${s && s.sum}")`);
   await type('pskrCall', 'X');
   await sleep(150);
   s = await state('serverPane', 'PSK Reporter');

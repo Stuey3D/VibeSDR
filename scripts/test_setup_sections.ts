@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { EMPTY_MEMO, RADIO_ORDER, SERVER_ORDER, headerLine, locationMust, mustCleared, opModeSummary, orderSections, parseStored,
          sectionOpen, setAllSections, toggleSection, secState, startRefusal, triedAfterStart, triedPrune, reopenFor, RULES, rulesAgree,
-         FULL_TABS, radioTabLabel } from '../src/utils/setupSections.ts';
+         FULL_TABS, radioTabLabel, pskrAdvice, pskrNameOk } from '../src/utils/setupSections.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
@@ -82,7 +82,7 @@ for (const b of bodies) {
 }
 ok(!/>WATERFALL RATE</.test(S) && /title: 'Frame rate'/.test(S), 'the waterfall rate is the Frame rate section');
 ok(/must: blockOf\('security'\)/.test(S) && /must: blockOf\('adsbFeed'\)/.test(S) && /must: blockOf\('hardware'\)/.test(S)
-   && /must: blockOf\('background'\)/.test(S) && /advise: locationMust\(/.test(S) && /advise: pskrOn && !pskrCall\.trim\(\)/.test(S)
+   && /must: blockOf\('background'\)/.test(S) && /advise: locationMust\(/.test(S) && /advise: pskrAdvice\(pskrOn, pskrCall\)/.test(S)
    && /advise: remoteAccess \? '' :/.test(S),
    'blocking = Start\'s own refusals (admin password, flight trackers, Icom CI-V, background); amber = location, PSK Reporter name, remote settings off');
 
@@ -127,6 +127,25 @@ ok(/must: blockOf\('security'\)/.test(S) && /must: blockOf\('adsbFeed'\)/.test(S
   ok(!!m2 && pl(m2[1]) === RULES.web.block.join() && pl(m2[2]) === RULES.web.advise.join(), 'the web page\'s SEC_RULES is this file\'s RULES.web, word for word');
   ok(/const SEC_BLOCK = \{/.test(page) && /const SEC_ADVISE = \{/.test(page) && /function secSaveStops\(master\)/.test(page) && !/const SEC_MUST/.test(page),
      'the web page: blocking / advisory tables and the Save gate (the old always-red SEC_MUST is gone)');
+  // ★★★ PSK Reporter: advice only, in the words the uploader keeps (no valid name = no spots sent)
+  ok(pskrAdvice(true, '') === 'PSK Reporter: no callsign, so no spots are sent', 'PSK Reporter on, no callsign: amber, "no spots are sent"');
+  ok(/not valid, so no spots are sent/.test(pskrAdvice(true, 'X')) && pskrAdvice(true, 'G4ABC-SDR') === '' && pskrAdvice(false, '') === '',
+     'an invalid name: amber too; a valid one or off: nothing');
+  ok(pskrNameOk('Stuey3D-VibeSDR') && pskrNameOk('PI4NOS/LPK') && !pskrNameOk('ab') && !pskrNameOk('2024'), 'the name rule = vibe_spot_report.h receiverNameOk');
+  const sr = readFileSync(new URL('../android/app/src/main/cpp/vibe_spot_report.h', import.meta.url), 'utf8');
+  ok(/if \(!receiverNameOk\(c\.call\)\) c\.call\.clear\(\);/.test(sr), 'the uploader refuses to send under an invalid or empty name');
+  // ★★★ MARITIME 8 MS/s: the benchmark's dec_aisdsc ticks ais+8m exactly as dec_avboth ticks avdata+8m (first setup, caps only)
+  {
+    const appB = S.slice(S.indexOf("const amb = row('dec_aisdsc')"), S.indexOf("const amb = row('dec_aisdsc')") + 1200);
+    ok(/capsAllowMode\(radioCapsNow, 'ais\+8m'\)/.test(appB) && /amb\.grade === 'green'/.test(appB) && /'ais\+8m'/.test(appB)
+       && S.indexOf("const amb = row('dec_aisdsc')") > S.indexOf('if (!j || !firstSetup) return;'),
+       'app: GREEN dec_aisdsc ticks ais+8m, only where the radio can (caps), only on a first setup (the owner\'s choice wins)');
+    const pg = page.slice(page.indexOf('const amb = row("dec_aisdsc")'), page.indexOf('const amb = row("dec_aisdsc")') + 1200);
+    const fnAt = page.indexOf('function benchApplyDefaults()');
+    ok(/input\[data-mode="ais\+8m"\]/.test(pg) && /amb\.grade === "green"/.test(pg) && page.indexOf('const amb = row("dec_aisdsc")') > fnAt
+       && /cfg\.configured\)\) return;/.test(page.slice(fnAt, fnAt + 400)),
+       'web: the same rule in benchApplyDefaults (fresh setup only; the box exists only where caps draw it)');
+  }
   // the tabs
   ok(FULL_TABS.map((t) => t.label).join() === 'SERVER,RADIO' && radioTabLabel('RSP1B') === 'RADIO · RSP1B' && radioTabLabel('') === 'RADIO', 'the tabs: SERVER | RADIO · <the radio>');
   ok(!/const secBody_mode =/.test(S) && !/setAdvanced/.test(S) && /const advanced = webServer;/.test(S), 'Full\'s Simple / Advanced toggle is gone (advanced follows the web client)');

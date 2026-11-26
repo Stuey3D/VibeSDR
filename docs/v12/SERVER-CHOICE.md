@@ -27,7 +27,12 @@ scripts/test_new_modes_clients.ts` (no tsx in this worktree); Lite gradle (no Li
 **Builds (b96-appserver2):** vibeserver + test-radio-caps (lock) ✓; tsc whole project — 45 errors, identical to
 b96-integrate's (none new); app gradle — see the final report.
 
-### Open decisions for Stuart (b96-appserver2, one line each)
+### Stuart's answers (11-26) — applied
+1 separate keys: as built. 2 PSK Reporter with no callsign = amber "PSK Reporter: no callsign, so no spots are sent" (app +
+web); the uploader now refuses an INVALID name too (vibe_spot_report.h `receiverNameOk`, the page's 3–20 / a-letter rule —
+test-spot-report 103/0). 3 kept as built. 4 kept. 5 dec_aisdsc auto-ticks ais+8m (MARITIME-COMBO.md). 6 kept.
+
+### Open decisions for Stuart (b96-appserver2, one line each — answered above)
 - Simple's PIN and RAW IQ are their own keys (`simplePin`, `simpleRawIq`) — not Full's PIN. OK?
 - PSK Reporter with no callsign no longer blocks the web Save (amber, your example); a typed name that is not valid still does.
 - A radio never set up: red at the master Save but the Save still goes through (the other radios go on air). OK, or refuse?

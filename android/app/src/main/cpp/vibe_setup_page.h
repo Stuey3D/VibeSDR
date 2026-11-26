@@ -3273,6 +3273,20 @@ function benchApplyDefaults() {
       benchNote(avbBox, "ACARS + VDL2 together is off: both decoders at 8 MS/s measured " + Math.round(avb.pct) + "% of a core here at their busiest thread. Tick it to use it anyway — ACARS and VDL2 each work either way.");
     }
   }
+  // ★★★ beta96 MARITIME AT 8 MS/s ("ais+8m", under AIS — Stuart 11-26: exactly as dec_avboth): a GREEN dec_aisdsc ticks it
+  //     ON on a fresh setup, anything else leaves it off with the figure. Only where the box is drawn (caps "ais+8m").
+  //     Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
+  const amb = row("dec_aisdsc");
+  const ambBox = document.querySelector('input[data-mode="ais+8m"]');
+  if (amb && amb.grade !== "none" && ambBox) {
+    if (amb.grade === "green") {
+      if (!ambBox.checked) { ambBox.checked = true; ambBox.dispatchEvent(new Event("change")); }
+      benchNote(ambBox, "MARITIME at 8 MS/s is on: AIS + DSC together measured " + Math.round(amb.pct) + "% of a core here at its busiest thread, so it was turned on.");
+    } else {
+      if (ambBox.checked) { ambBox.checked = false; ambBox.dispatchEvent(new Event("change")); }
+      benchNote(ambBox, "MARITIME at 8 MS/s is off: AIS + DSC together measured " + Math.round(amb.pct) + "% of a core here at its busiest thread. Tick it to use it anyway — AIS works either way.");
+    }
+  }
   // ★★ V12 beta91 FT8 / FT4 DIG DEEPER is AUTOMATIC (ft8DeepAuto): nothing is written here — the box shows what the server
   //    decides from this benchmark until the owner makes a choice of their own (ft8DeepRefresh, from renderBench).
   // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
@@ -12147,7 +12161,7 @@ function pskrWhy() {
   /* \u2605\u2605\u2605 beta96 (Stuart 11-26) "PSK Reporter ticked with no callsign" is AMBER: the server runs and simply sends nothing
    *  (vibeserver_config.h: nothing is sent without pskrCall) — the app's Start never refused it either. A name TYPED but not
    *  a valid one is an invalid field the save refuses (RED). */
-  return { box: "pskrCall", short: c ? "PSK Reporter: that receiver name is not valid" : "PSK Reporter needs a receiver name (your callsign)",
+  return { box: "pskrCall", short: c ? "PSK Reporter: that receiver name is not valid" : "PSK Reporter: no callsign, so no spots are sent",
            blocking: !!c };
 }
 function pskrStops() {
@@ -12158,7 +12172,7 @@ function pskrStops() {
     $("wsprnetCall").scrollIntoView({behavior: "smooth", block: "center"}); $("wsprnetCall").focus();
     return true;
   }
-  $("saveErr").textContent = "Not saved \u2014 PSK Reporter needs a receiver name (your callsign, or e.g. G4ABC-SDR), or switch it off.";
+  $("saveErr").textContent = "Not saved \u2014 PSK Reporter: that receiver name is not valid (3\u201320 letters, digits, / or -, with a letter, e.g. G4ABC-SDR). Fix it, empty it (no spots are sent then), or switch it off.";
   $("pskrCall").scrollIntoView({behavior: "smooth", block: "center"}); $("pskrCall").focus();
   return true;
 }
