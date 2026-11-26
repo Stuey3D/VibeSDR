@@ -87,6 +87,8 @@ A1 light (< 7 t: light prop) · A2 small (7–34 t: regional/bizjet) · A3 large
 A4 high-vortex large (B757) · A5 heavy (> 136 t: wide-body/jumbo) · A6 high performance (> 5 g, > 400 kt: fighter) ·
 A7 rotorcraft (helicopter) · B1 glider · B2 lighter-than-air (balloon) · B3 parachutist · B4 ultralight · B6 UAV ·
 B7 space vehicle · C1 emergency surface vehicle · C2 service surface vehicle · C3 obstacle · A0/none = generic jet.
+★ beta96: A0 / none no longer means the jet outright — `iconClassOf` (adsblayer.js) then asks the aircraft data (type,
+wake, engines, description letter), so datalink and remembered aircraft get their class too. docs/v12/AIRCRAFT-ICONS.md.
 
 ## Client behaviour (Stuart, 2026-10-23/24)
 
