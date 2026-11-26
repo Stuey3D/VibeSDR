@@ -35,11 +35,14 @@ const list = adsbToAircraft([
 ], rx);
 const rows = adsbListRows(list);
 eq('nearest first, unplaced by signal last', rows.map((r) => r.label), ['EMG', 'NEAR', 'FAR', '400003', '400004']);
-eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, bars: 0, trend: '●', altCol: 'hsl(265,90%,62%)',
+eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, trend: '●', altCol: 'hsl(265,90%,62%)',
                         info: '', flag: '', op: '', logo: '' });
-// ★ Signal bars (adsbBars): 3 from -12 dBFS, 2 from -22, else 1; none without a level.
-{ const { adsbBars } = await import('../src/services/adsbList.ts');
-  eq('bars', [adsbBars(-3), adsbBars(-12), adsbBars(-15), adsbBars(-22), adsbBars(-30), adsbBars(undefined)], [3, 3, 2, 2, 1, 0]); }
+// ★★ beta96 (Stuart 11-26): the 3-bar meter gave way to the server's SNR (dB over the floor) — the row carries the number,
+//    SnrChip colours it ('adsb' scale, src/utils/snrColour.ts); nothing from a server without it.
+{ const m = await import('../src/services/adsbList.ts');
+  eq('no bars any more', 'adsbBars' in m, false);
+  const r2 = adsbListRows(adsbToAircraft([{ hex: '400009', flight: 'SNR', snr: 18.4, rssi: -20 }, { hex: '40000a', flight: 'OLD', rssi: -20 }], rx));
+  eq('the SNR rides on the row', r2.map((r) => [r.label, r.snr]), [['SNR', 18.4], ['OLD', undefined]]); }
 eq('ground + emergency', [rows[0].alt, rows[0].emergency], ['GND', true]);
 eq('unplaced cannot be focused', rows[3].placed, false);
 eq('hex label is capitals', adsbListRows([{ icao: 'abc123' }])[0].label, 'ABC123');

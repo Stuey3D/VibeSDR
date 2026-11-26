@@ -28,8 +28,9 @@ export interface AdsbListRow {
   /** The emergency's badge ("7700 EMERGENCY", "7600 RADIO FAIL", "7500 HIJACK", "EMERGENCY"), '' when none. */
   badge: string;
   military: boolean;
-  /** Signal, 1–3 bars (adsbBars), 0 when the report has no level. */
-  bars: number;
+  /** ★ beta96 the reply SNR over the 1090 MHz floor, dB (the server's, smoothed over the last few replies); undefined from
+   *  an older server or another source — the row then shows no chip (Stuart 11-26: the 3-bar meter gave way to it). */
+  snr?: number;
   /** ▲ ▼ ● beside the altitude (trendGlyph), and the altitude's colour (altColour) — '' when none. */
   trend: string;
   altCol: string;
@@ -41,13 +42,9 @@ export interface AdsbListRow {
   logo: string;
 }
 
-/** ★ SIGNAL BARS (Stuart, 2026-10-24: "a little 3 bar graph like everywhere else next to the flight number"). From
- *  the reply level in dBFS — relative to the radio's gain, so it compares aircraft with each other, not with other
- *  servers: 3 bars from −12 dBFS, 2 from −22, else 1. ★ ONE RULE, TWO READERS: web/client/src/adsb.ts adsbBars. */
-export function adsbBars(rssi: number | undefined | null): number {
-  if (rssi == null || !Number.isFinite(rssi)) return 0;
-  return rssi >= -12 ? 3 : rssi >= -22 ? 2 : 1;
-}
+/* ★★ beta96 (Stuart 11-26: "adsb should drop its 3 bar signal meter for the new colour coded snr"): the bars (3 from
+ *  −12 dBFS, 2 from −22 — a level relative to the radio's gain) are gone; the row shows the server's SNR in dB over the
+ *  noise floor, coloured by its margin over ADS-B's decode threshold (src/utils/snrColour.ts 'adsb'). */
 
 export function altText(a: Aircraft): string {
   if (a.onGround) return 'GND';
@@ -131,7 +128,7 @@ export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
     emergency: !!emergencyBadge(a.squawk, a.emergency),
     badge: emergencyBadge(a.squawk, a.emergency),
     military: mil(a),
-    bars: adsbBars(a.rssi),
+    snr: a.snr != null && Number.isFinite(a.snr) ? a.snr : undefined,
     trend: trendGlyph(a),
     altCol: !a.onGround && a.altitude != null && Number.isFinite(a.altitude) ? altColour(a.altitude) : '',
     info: a.info ?? '',

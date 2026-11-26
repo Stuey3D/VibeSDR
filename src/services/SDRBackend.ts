@@ -95,6 +95,7 @@ export interface Aircraft {
   course?:   number;      // degrees
   squawk?:   string;
   rssi?:     number;      // dB
+  snr?:      number;      // ★ beta96 dB over the receiver's noise floor (VibeServer ADS-B) — the list's SNR chip
   msgs?:     number;
   lat?:      number;
   lon?:      number;

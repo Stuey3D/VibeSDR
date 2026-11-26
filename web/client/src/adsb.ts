@@ -13,6 +13,7 @@
  */
 import type { AdsbAircraft, AdsbReport } from './spectrum';
 import { dataUrl } from './origin';
+import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the reply SNR chip
 import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
 
 export type LatLon = { lat: number; lon: number };
@@ -211,16 +212,9 @@ export function adsbRows(r: AdsbReport, rx: LatLon | null) {
 
 /** ★ The live list's rows. Each is a button to the highlight (role) and to Tab (tabindex): tapped, clicked
  *  or entered, it shows that aircraft on the map (AdsbMap.focus). */
-/** ★ SIGNAL BARS — 3 from −12 dBFS, 2 from −22, else 1; 0 = no level. ONE RULE, TWO READERS: src/services/adsbList.ts. */
-export function adsbBars(rssi: unknown): number {
-  const v = num(rssi);
-  if (v == null) return 0;
-  return v >= -12 ? 3 : v >= -22 ? 2 : 1;
-}
-function barsHtml(n: number): string {
-  if (!n) return '';
-  return `<span class="sig l${n}" title="Signal ${n} of 3">${[1, 2, 3].map((k) => `<i class="${k <= n ? 'on' : ''}"></i>`).join('')}</span>`;
-}
+/* ★★ beta96 (Stuart 11-26: "adsb should drop its 3 bar signal meter for the new colour coded snr"): the 3 bars are gone —
+ *  the row shows the server's reply SNR over the 1090 MHz floor (smoothed over the last few replies), coloured by its margin
+ *  over ADS-B's decode threshold: src/utils/snrColour.ts snrChipHtml('adsb'), the app's SnrChip the same. */
 
 /** Where this server serves the owner's logos ("…/adsb/"), '' where the page has no http(s) origin. Machine-wide, like
  *  /mapgl/: the front door answers it too. */
@@ -276,13 +270,13 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
     const trk = num(a.tracked_nm);
     const tracked = trk != null && trk >= 1 ? `<small class="trk">tracked ${Math.round(trk)} NM</small>` : '';
     const em = emergency(a);
-    const bars = barsHtml(adsbBars(a.rssi));
+    const bars = snrChipHtml('adsb', num(a.snr));   // ★ beta96 (replaced the 3-bar meter)
     const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
     return `<div class="adsbRow${keyPrefix ? ' trkRow' : ''}${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
       + (keyPrefix ? ` data-key="${esc(keyPrefix + hex)}"` : '')
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
-      // ★★ beta95 (Stuart 11-25: rows with an operator logo lost their bars): ONLY the name ellipsises; the bars and the
-      //    MIL/emergency tag sit beside it in a span that never shrinks, so a squeezed row loses letters, never the bars.
+      // ★★ beta95 (Stuart 11-25: rows with an operator logo lost their bars): ONLY the name ellipsises; the SNR chip (beta96,
+      //    in the bars' place) and the MIL/emergency tag sit beside it in a span that never shrinks.
       + `<span class="id"><span class="l1"><b>${flagHtml(a.country)}${esc(call || a.r || hex.toUpperCase())}</b>`
       + `${bars || tag ? `<span class="ex">${bars}${tag}</span>` : ''}</span>`
       + `<small>${adsbSecondLine(a, hex, sq, imgBase)}</small></span>`

@@ -23,6 +23,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { NavRow, NavRing, useNavButton, useNavFocus } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
+import { SnrChip } from './SnrChip';   // ★ beta96 the reply SNR, colour-coded (replaced the 3-bar meter)
 import type { Aircraft } from '../services/SDRBackend';
 import { adsbListRows, adsbChips, LIST_HEAD_H, LIST_ROW_H,
          type AdsbListRow, type AdsbChip, type AdsbChipSrc } from '../services/adsbList';
@@ -194,7 +195,7 @@ function Row({ s, r, sel, onPress, logoBase }: { s: S; r: AdsbListRow; sel: bool
         <View style={s.callBox}>
           {!!r.flag && <Text style={s.flag}>{r.flag}</Text>}
           <Text style={[s.call, r.emergency && s.emerg, r.military && !r.emergency && s.mil]} numberOfLines={1}>{r.label}</Text>
-          {r.bars > 0 && <SigBars n={r.bars} />}
+          <SnrChip mode="adsb" db={r.snr} />
           {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
             : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
         </View>
@@ -241,21 +242,6 @@ function EmBreath() {
     opacity: still ? 0.22 : v.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.30] }) }]} />;
 }
 
-/** ★ Three ascending bars, the lit ones in the link colours (LinkBars / DabMeter's) — adsbBars decides how many. */
-function SigBars({ n }: { n: number }) {
-  const lit = n >= 3 ? '#33cc44' : n === 2 ? '#e0b020' : '#e04040';
-  return (
-    <View style={sig.box} accessibilityLabel={`signal ${n} of 3`}>
-      {[0.4, 0.7, 1].map((h, i) => (
-        <View key={i} style={[sig.bar, { height: 9 * h, backgroundColor: i < n ? lit : 'rgba(255,184,51,0.22)' }]} />
-      ))}
-    </View>
-  );
-}
-const sig = StyleSheet.create({
-  box: { flexDirection: 'row', alignItems: 'flex-end', gap: 1.5, height: 9, marginLeft: 5 },
-  bar: { width: 2.5, borderRadius: 1 },
-});
 
 const F = DECODER_FONT;
 /* ★ The page's own chrome values (MapOverlay #topbar / #legbtn): the amber-black at 0.92, a controls-colour border at

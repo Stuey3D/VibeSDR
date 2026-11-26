@@ -70,5 +70,12 @@ ok(/kSnrRed = 9, kSnrGreen = 12;/.test(gal), 'the server\'s NAVTEX red % uses th
 const html = fs.readFileSync(new URL('../web/client/index.html', import.meta.url), 'utf8');
 for (const [b, col] of Object.entries(SNR_COLOURS)) ok(new RegExp(`\\.snrChip\\.${b}\\s*\\{[^}]*background:\\s*${col}`, 'i').test(html), `index.html .snrChip.${b} is ${col}`);
 
+// 6. The shared ADS-B map layer's card (plain JS, no imports) carries its own copy of the ADS-B scale — held to this one.
+const layer = fs.readFileSync(new URL('../web/mapkit/adsblayer.js', import.meta.url), 'utf8');
+const lm = /const SNR_ADSB = \{ thr: (-?[\d.]+), red: '(#[0-9a-f]{6})', amber: '(#[0-9a-f]{6})', green: '(#[0-9a-f]{6})' \};/i.exec(layer);
+ok(!!lm && Number(lm[1]) === SNR_SCALES.adsb.thr && lm[2] === SNR_COLOURS.red && lm[3] === SNR_COLOURS.amber && lm[4] === SNR_COLOURS.green,
+   'adsblayer.js SNR_ADSB = snrColour.ts adsb scale + colours');
+ok(!/class="sig l/.test(layer) && !/adsbBars/.test(fs.readFileSync(new URL('../web/client/src/adsb.ts', import.meta.url), 'utf8')), 'ADS-B: the 3-bar meter is gone (web)');
+
 console.log(`snr colour: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
