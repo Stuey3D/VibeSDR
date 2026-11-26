@@ -2246,6 +2246,12 @@ static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
     }
 }
 
+/** ★★ beta95 the front door's ONE merged community feed: every enabled radio's blocked modes (LocalSdrShim::setCommunityDoorRadios). */
+static void applyCommunityDoorRadios(const vsconfig::ServerConfig& c) {
+    std::vector<std::string> v;
+    for (const auto& r : c.radios) if (r.enabled && r.configured) v.push_back(r.blockedModes);
+    vibe::LocalSdrShim::setCommunityDoorRadios(v);
+}
 int main(int argc, char** argv) {
     g_argv = argv;
     /* ★ TEST-ONLY (scripts/test-server-quick-stop.mjs, docs/v12/SHUTDOWN-HANG.md): an object whose destructor never
@@ -3456,6 +3462,7 @@ int main(int argc, char** argv) {
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", next.galleryMb, next.galleryPublic, next.gallerySaveLive);
             LocalSdrShim::setCommunityMap(next.communityMap);   // ★★ V12 beta94 the community map (the radios re-read the file)
             LocalSdrShim::setCommunityModesOff(next.communityOff);
+            if (g_amFrontDoor.load()) applyCommunityDoorRadios(next);   // ★★ beta95 a radio's modes changed: the door's feed follows
             LocalSdrShim::setGalleryRedact(gallerySerials(next));
             applySpotReporting(next, nullptr);   // ★ V12 beta90 PSK Reporter: the front door's own process (the radios re-read the file)
             // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
@@ -4804,6 +4811,7 @@ int main(int argc, char** argv) {
         }
         frontDoorOnly = true;
         g_amFrontDoor.store(true);
+        applyCommunityDoorRadios(g_serverConfig);   // ★★ beta95 the door's community.json = every radio's layers
         // ★ NOW the port is real — same deferral as the mDNS advert above.
         g_dirPort = port;
         g_pocketPort.store(port);

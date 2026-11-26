@@ -7615,16 +7615,17 @@ static std::string communityWhyNot() {
     if (communityPinLocked()) return "pin";
     return "";
 }
+/** ★★ beta95 THE FRONT DOOR's radios — each enabled radio's blocked modes (setCommunityDoorRadios). Non-empty only in a
+ *  multi-radio machine's front door, which owns no radio: its answer is the WHOLE machine's (vibecommunity::layerAllowedAnyRadio). */
+static std::vector<std::string> g_communityDoorRadios;   // under g_communityMtx
 /** A layer this server may share now: not blocked by the owner's modes list, not left out of the map. */
 static bool communityLayerOk(const std::string& l, const std::set<std::string>& off) {
     if (off.count(l)) return false;
-    if (l == "adsb") return !vsModeBlocked("adsb");
-    if (l == "acars" || l == "vdl2") return !vsModeBlocked("avdata");
-    if (l == "hfdl") return !vsModeBlocked("hfdl");
-    if (l == "ais") return !vsModeBlocked("ais") && !vsModeBlocked("aisstore");
-    if (l == "vor") return !vsModeBlocked("vormap") && !vsModeBlocked("vor");
-    if (l == "mesh") return !vsModeBlocked("ism");
-    return !vsModeBlocked(l);
+    {
+        std::lock_guard<std::mutex> lk(g_communityMtx);
+        if (!g_communityDoorRadios.empty()) return vibecommunity::layerAllowedAnyRadio(l, g_communityDoorRadios);
+    }
+    return vibecommunity::layerAllowed(l, [](const char* m) { return vsModeBlocked(m); });
 }
 static std::string communityLiveDir() {
     const std::string d = vibe::gallery::shared().dir();
@@ -7662,7 +7663,9 @@ static std::string communityLive(int i, int64_t now) {
     static const size_t kMax[3] = { vibecommunity::kSondesMax, vibecommunity::kAprsMax, vibecommunity::kVorMax };
     std::string rows = vibecommunity::readLive(communityLiveDir(), kSec[i], now);
     { std::lock_guard<std::mutex> lk(g_communityMtx); if (!g_liveRows[i].empty()) rows = rows.empty() ? g_liveRows[i] : g_liveRows[i] + "," + rows; }
-    return vibecommunity::rowsSince(rows, kTimeField[i], (double)(now - kWin[i]), kMax[i] * 2);
+    // ★★ beta95 every radio's rows (and this process's own twice: memory + its file) → ONE per key, the newest
+    return vibecommunity::rowsDedupe(vibecommunity::rowsSince(rows, kTimeField[i], (double)(now - kWin[i]), kMax[i] * 4),
+                                     0, kTimeField[i], kMax[i] * 2);
 }
 
 /* ── the sections ── */
@@ -7776,8 +7779,24 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
             std::snprintf(b, sizeof b, "[%lld,%.4f,%.4f,%d,\"", (long long)t, lat, lon, (int)vibe::gallery::lineNum(l, "lv"));
             rows.push_back(b + title + "\",\"" + vibe::gallery::lineStr(l, "f") + "\"]");
         });
+        // ★★ beta95 two radios of one machine that heard the same call each filed it: one row per call (same title and
+        //    position within 2 min), the newest copy. Bounded: kDscMax rows are kept, each compared with those kept.
         std::string o;
-        for (size_t i = rows.size(), n = 0; i-- > 0 && n < kDscMax; ++n) { if (n) o += ','; o += rows[i]; }   // ★ newest first
+        std::vector<std::pair<std::string, int64_t>> kept;
+        for (size_t i = rows.size(), n = 0; i-- > 0 && n < kDscMax;) {
+            const std::string& row = rows[i];
+            const size_t c1 = row.find(','), c2 = row.find(",\"");
+            const int64_t t = std::atoll(row.c_str() + 1);
+            const std::string key = c1 == std::string::npos || c2 == std::string::npos ? row : row.substr(c1, std::string::npos);
+            std::string k2 = key;
+            if (const size_t lf = k2.rfind(",\""); lf != std::string::npos && lf > 0) k2.resize(lf);   // ★ less the file name
+            bool dup = false;
+            for (const auto& kk : kept) if (kk.first == k2 && std::llabs(kk.second - t) <= 120) { dup = true; break; }
+            if (dup) continue;
+            kept.push_back({ k2, t });
+            if (n++) o += ',';
+            o += row;
+        }
         if (!o.empty()) { r.json = "[" + o + "]"; r.layers = { "dsc" }; }
     } else if (k == "b" && gal && communityLayerOk("ndb", off)) {
         std::vector<NdbRow> rows;
@@ -44133,6 +44152,17 @@ void LocalSdrShim::setDxLogFile(const std::string& path) {
     if (path == g_dxLogPath) return;
     if (g_dxLogLoaded) dxLogFlushLocked("the log moved");
     g_dxLogPath = path; g_dxLogLoaded = false;
+}
+void LocalSdrShim::setCommunityDoorRadios(const std::vector<std::string>& blockedPerRadio) {
+    std::vector<std::string> v(blockedPerRadio.begin(), blockedPerRadio.begin() + std::min<size_t>(blockedPerRadio.size(), 16));
+    for (auto& x : v) if (x.size() > 1024) x.resize(1024);
+    {
+        std::lock_guard<std::mutex> lk(g_communityMtx);
+        if (v == g_communityDoorRadios) return;
+        g_communityDoorRadios = v;
+    }
+    { std::lock_guard<std::mutex> lk(g_communitySecsMtx()); g_communitySecs.clear(); }   // ★ the layers changed: rebuild
+    LOGI("community map: the front door answers for %zu radio%s", v.size(), v.size() == 1 ? "" : "s");
 }
 void LocalSdrShim::setAircraftShareDir(const std::string& dir) {
     vibeavshare::table().setDir(dir);
