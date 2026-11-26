@@ -1460,7 +1460,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
               <span>Keep ADS-B running when nobody is connected</span></label>
             <div class="hint" id="adsbKeepNote">A new listener sees every aircraft at once, instead of a map that fills
               over the next minute. <b>It costs CPU all the time</b> (about 13&nbsp;% of a Pi&nbsp;3 core) and this radio
-              never idles: it is not parked or handed to another program, and its Background Decoding does not run.</div>
+              never idles: it is not parked or handed to another program, and its Background Decoding does not run.
+              Unattended satellite passes still run: a pass takes the radio, ADS-B pauses for it (about 10&ndash;15 min)
+              and resumes after.</div>
           </div>
         </div>
         <div class="hint" id="adsbLandNote"></div>
@@ -2414,6 +2416,11 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <p class="why" style="margin:8px 0 2px 0"><b>Other downlinks</b></p>
         </div>
         <div id="spBirds"></div>
+        <!-- ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): with ADS-B kept running (Where listeners start) both run — the server
+             pauses ADS-B for a pass and resumes it after LOS. The app's server screen says the same. -->
+        <p class="why hide" id="spKeepNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is kept
+          running on this radio: a satellite pass takes the radio &mdash; ADS-B pauses for the pass, about 10&ndash;15 min,
+          and resumes after. ORBCOMM sky-plot monitoring runs only beside a pass while ADS-B is kept running.</p>
         <p class="why hide" id="spLockedNote" style="border-left:3px solid var(--amber);padding-left:8px">This radio's range
           is locked, so passes are not followed on it in this version (a pass has to move the radio).</p>
         <!-- ★★★ beta94 the owner's reset of this radio's ORBCOMM sky plot (POST /vibeserver/admin/skyplot-reset, answered by
@@ -4660,7 +4667,7 @@ function dabLandInit() {
     else r.adsbKeepRunning = false;
     dabLandRender();
   });
-  $("adsbKeep").addEventListener("change", () => { radio().adsbKeepRunning = $("adsbKeep").checked; dabLandRender(); });
+  $("adsbKeep").addEventListener("change", () => { radio().adsbKeepRunning = $("adsbKeep").checked; dabLandRender(); if (typeof spRender === "function") spRender(); });
   // ★ The offer follows the rate and the rate switch as they change, not only on the next tab switch.
   for (const id of ["rate", "dabRateBoost"]) if ($(id)) $(id).addEventListener("change", dabLandRender);
   // ★ The sentence names the fallback, so it follows the fallback when the owner edits it.
@@ -8201,6 +8208,7 @@ function spRender() {
   if ($("spFirst")) { $("spFirst").value = spModel.first; $("spFirst").disabled = !spModel.on; }
   const locked = bgRadio && (bgRadio.mode === "locked" || +bgRadio.lockedCentre > 0 || +bgRadio.lockCentre > 0);
   if ($("spLockedNote")) $("spLockedNote").classList.toggle("hide", !locked);
+  if ($("spKeepNote")) $("spKeepNote").classList.toggle("hide", !(spModel.on && bgRadio && bgRadio.landingAdsb && bgRadio.adsbKeepRunning));
 }
 let bgRadio = null;   // ★ the radio the editor shows — its mode decides "locked", its users the user slots
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }

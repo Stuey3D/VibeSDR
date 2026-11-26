@@ -202,6 +202,11 @@ export interface SatPassStatus {
   name?: string; label?: string; decoder?: string; los?: number; maxEl?: number; pausedBg?: boolean;
   orbSky?: { since: number; dots: number };
   last?: string; orbLast?: string;
+  /** ★★ beta95 (Stuart 11-25 "warn, don't block"): a keep-running mode shares this radio with the passes — the server's
+   *  sentence, e.g. "a satellite pass takes the radio: ADS-B pauses for the pass, about 10–15 min, and resumes after". */
+  keepWarn?: string;
+  /** ★ beta95 the pass running now took the radio from that mode (it resumes at LOS). */
+  keepPaused?: string;
 }
 export function satPassLines(sp: SatPassStatus | null | undefined, nowSec = Date.now() / 1000): { head: string; rows: string[]; warn: boolean } | null {
   if (!sp || (sp.state === 'off' && !sp.meteor && !sp.orbcomm && !sp.birds)) return null;
@@ -217,7 +222,9 @@ export function satPassLines(sp: SatPassStatus | null | undefined, nowSec = Date
   }
   if (sp.orbSky) rows.push(`ORBCOMM sky plot · ${sp.orbSky.dots} dot${sp.orbSky.dots === 1 ? '' : 's'} since ${hhmm(sp.orbSky.since)} (positions + SNR, no packets)`);
   if (typeof sp.centre === 'number' && sp.centre > 0 && sp.state === 'running') rows.push(`capture held at ${(sp.centre / 1e6).toFixed(4)} MHz`);
+  if (sp.state === 'running' && sp.keepPaused) rows.push(`${sp.keepPaused} paused for this pass — it resumes after LOS`);
   if (sp.last) rows.push(`last pass: ${sp.last}`);
   if (sp.orbLast) rows.push(`last: ${sp.orbLast}`);
-  return { head: `Unattended satellites · ${head}`, rows, warn: sp.state === 'blocked' };
+  if (sp.keepWarn) rows.push(`Warning: ${sp.keepWarn}`);
+  return { head: `Unattended satellites · ${head}`, rows, warn: sp.state === 'blocked' || !!sp.keepWarn };
 }

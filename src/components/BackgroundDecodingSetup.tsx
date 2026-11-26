@@ -387,6 +387,13 @@ export default function BackgroundDecodingSetup(p: Props) {
         <Text style={hint}>and nobody is listening, the radio follows it {'—'} tuned, Doppler-corrected and decoding {'—'} and what it
           decodes goes to the gallery. Background decoding pauses for the pass and carries on when the satellite has set. The
           moment anybody connects, the pass is given up and the radio is theirs.</Text>
+        {/* ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): ADS-B kept running and the passes both run — the server pauses ADS-B
+             for a pass and resumes it at LOS (the Setup page's spKeepNote, the same words). */}
+        {p.adsbKeeps && model.sat.on && (
+          <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>ADS-B is kept running on
+            this radio: a satellite pass takes the radio {'—'} ADS-B pauses for the pass, about 10{'–'}15 min, and resumes
+            after. ORBCOMM sky-plot monitoring runs only beside a pass while ADS-B is kept running.</Text>
+        )}
         {/* ★★★ beta94 THE TWO GROUPS + THEIR PRIORITY (Stuart 11-25; the Setup page's spGroups, the same words). Where one
              capture holds both (caps.satBoth) they run together and the priority is not drawn (AGENTS.md: no control that
              does nothing on this radio). An older engine (no satBoth) keeps the beta90 ticks. */}

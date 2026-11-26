@@ -17932,6 +17932,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (stopping.load() || restarting.load() || frontDoorOnly || decoderOnly) return;
         if (!g_vsAdsbKeep.load(std::memory_order_relaxed)) { adsbKeepLoggedWhy_ = false; return; }
         if (g_benchHold.load()) return;   // ★★★ never takes the radio back while a benchmark measures the machine
+        // ★★ beta95 a satellite pass has the radio (or is taking it): ADS-B resumes when its session ends
+        if (satPassBusy_.load() || satWantsRadio_.load()) return;
         if (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)) return;
         /* ★★★ NEVER OVER ANOTHER WHOLE-RADIO MODE — WAIT FOR ITS OWN LEAVE (2026-11-12). With ISM (or NDB, AIS) still on
          *  and its leave due, this entered ADS-B through the ADS-B key, which threw ISM off through ismLeave(true) — so the
@@ -38540,6 +38542,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::recursive_mutex satPassMtx_;                // ★ recursive: the pass's own tune runs through handleControl
     SatPassRun satPass_;
     std::atomic<bool> satPassBusy_{false};           // ★ beta94: a SESSION of unattended satellite work holds the radio
+    /** ★★ beta95 a pass is due and has taken the radio from a KEEP-RUNNING mode (ADS-B): that mode's keep tick stands aside
+     *  until the session ends (satWorkEndLocked), then puts it back. satKeepPaused_ names the mode (the admin line). */
+    std::atomic<bool> satWantsRadio_{false};
+    std::string satKeepPaused_;
+    /** ★★ beta95 the owner's warning while a keep-running mode and the passes share this radio ("" = none). */
+    std::string satKeepWarn() const {
+        if (!adsbKeepHolds()) return "";
+        return "a satellite pass takes the radio: ADS-B pauses for the pass, about 10\xe2\x80\x93" "15 min, and resumes after";
+    }
     std::string satPassWhy_, satPassLast_, satPassNow_;
     double satPassRetryAt_ = 0;
     bool satPassBoth_ = false;                       // ★ beta94 the pass and ORBCOMM run together on one capture now
@@ -38553,7 +38564,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_vsHandheld.load()) return "satellites are not on the handheld";
         if (useIcom()) return "not on an Icom radio (background work never runs there)";
         if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 an unattended pass would have to move it (not on a locked range in this version)";
-        if (adsbKeepHolds()) return "ADS-B is kept running on this radio when nobody is connected";
+        // ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): ADS-B kept running no longer refuses the passes — a pass takes the
+        //    radio from it and gives it back at LOS (satPassTick, satKeepPaused_; the warning is satKeepWarn()).
         if (g_ownerScan.load()) return "the owner's band scan has the radio";
         if (!satEngine().haveObserver()) return "this server has no location set (the setup page's locator)";
         if (satEngine().elementCount() == 0) return "no satellite orbit data yet";
@@ -38598,7 +38610,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (satPass_.on) satPassEndLocked(why);
         if (orbSkyOn_.load()) orbSkyStopLocked(why);
         satPassBoth_ = false; satPassCentre_ = 0;
-        if (!satWork_.on) { satPassBusy_.store(false); return; }
+        if (!satWork_.on) { satPassBusy_.store(false); satWantsRadio_.store(false); satKeepPaused_.clear(); return; }
         const SatWork w = satWork_;
         if (restore && w.saved && w.audio > 0) {
             satPassInternal() = true;
@@ -38614,6 +38626,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         satWork_ = SatWork{};
         satPassBusy_.store(false);
+        if (!satKeepPaused_.empty()) LOGI("[sat] %s was paused for the pass \xe2\x80\x94 it resumes now (kept running)", satKeepPaused_.c_str());
+        satKeepPaused_.clear();
+        satWantsRadio_.store(false);   // ★ beta95 the keep-running mode's tick takes the radio back on its next pass
         if (!resume) bgWanted_.store(false);
         LOGI("[sat] unattended satellite work over (%s)%s", why.c_str(), resume && w.pausedBg ? "; background decoding resumes" : "");
     }
@@ -38771,7 +38786,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!why.empty() || anyone) { satPassNow_ = !why.empty() ? why : "a listener has the radio"; return; }
         if (!satWork_.on) {
             if (nowSecs() < satPassRetryAt_) { satPassNow_ = "another program has the radio \xe2\x80\x94 trying again shortly"; return; }
-            if (g_dabMode.load() || g_adsbMode.load() || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
+            // ★★ beta95 ADS-B that KEEP RUNNING put there (nobody's use of it) is not waited for — a due pass takes it (step 5)
+            const bool keptAdsb = g_adsbMode.load() && adsbByKeep_.load();
+            if (g_dabMode.load() || (g_adsbMode.load() && !keptAdsb) || g_ismMode.load() || g_aisMode.load() || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0) {
                 satPassWhy_ = satPassNow_ = "waiting for the last listener's mode to close"; return;
             }
         }
@@ -38800,7 +38817,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
         // 3. decide (a pass already running stays the pass — until LOS, a listener, or ORBCOMM first takes the radio)
         vibe::satsched::In in;
-        in.meteorOn = cfg.sat.meteor; in.orbcommOn = cfg.sat.orbcomm; in.orbcommFirst = cfg.sat.orbcommFirst;
+        /* ★★ beta95 a KEEP-RUNNING mode owns the idle radio between passes: ORBCOMM sky-plot monitoring (nearly always due)
+         *  would otherwise take it for good, so with ADS-B kept running ORBCOMM runs only beside a pass that holds both. */
+        const bool keepOwns = adsbKeepHolds();
+        in.meteorOn = cfg.sat.meteor; in.orbcommOn = cfg.sat.orbcomm && !keepOwns; in.orbcommFirst = cfg.sat.orbcommFirst;
         in.anyPasses = cfg.sat.meteor || !cfg.sat.birds.empty();
         in.now = clk.unix; in.nextPassAos = nextAos;
         in.usableHz = std::min(usableSpan(), (double)sampleRate * vibe::kBandFlatFrac);
@@ -38823,11 +38843,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (satPass_.on && !o.runPass) satPassEndLocked("ORBCOMM first (priority) \xe2\x80\x94 this radio's capture cannot hold both");
         if (orbSkyOn_.load() && !o.runOrbcomm) orbSkyStopLocked(o.orbcommWhyNot.empty() ? "not wanted now" : o.orbcommWhyNot);
         if (!o.runPass && !o.runOrbcomm) {
+            satWantsRadio_.store(false);
             if (satWork_.on) satWorkEndLocked(satPassLast_.empty() ? "nothing due" : "nothing due now", true, true);
             if (satPassWhy_.empty()) satPassWhy_ = o.state.rfind("waiting", 0) == 0 ? o.state : "waiting \xe2\x80\x94 " + o.state;
             return;
         }
         // 5. start what runs
+        /* ★★★ beta95 A PASS TAKES THE RADIO FROM KEPT-RUNNING ADS-B (Stuart 11-25: "warn, don't block"). ADS-B leaves through
+         *  its own door (the radio back on the owner's plain landing); the keep tick stands aside while satWantsRadio_ is
+         *  up; the session starts on the next tick and, at LOS, satWorkEndLocked lets ADS-B back in. Only for a PASS —
+         *  ORBCOMM monitoring alone never takes the radio from a keep-running mode (keepOwns above). */
+        if (!satWork_.on && g_adsbMode.load() && adsbByKeep_.load()) {
+            if (!o.runPass) { satPassNow_ = "ADS-B is kept running \xe2\x80\x94 waiting for a pass"; return; }
+            satWantsRadio_.store(true);
+            LOGI("[sat] %s pass due \xe2\x80\x94 ADS-B (kept running) pauses for it and resumes after LOS", in.passName.c_str());
+            satPassInternal() = true;
+            handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
+            satPassInternal() = false;
+            if (g_adsbMode.load()) {   // ★ refused (ADS-B is this radio's only mode): the pass is not taken
+                satWantsRadio_.store(false);
+                satPassWhy_ = satPassNow_ = "ADS-B is this radio's only mode \xe2\x80\x94 a pass cannot take it";
+                return;
+            }
+            satKeepPaused_ = "ADS-B";
+            satPassNow_ = "ADS-B paused \xe2\x80\x94 the " + in.passName + " pass starts";
+            return;
+        }
         if (!satWork_.on && !satWorkBeginLocked(o.runPass ? in.passName + " pass" : std::string("ORBCOMM monitoring"))) return;
         satPassBoth_ = o.both;
         if (o.runPass && !satPass_.on && best.tx >= 0) satPassStartLocked(best.norad, best.tx, best.sd, best.t, best.ps, clk);
@@ -38933,6 +38974,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (!satPassLast_.empty()) j += ",\"last\":\"" + vibe::gallery::jsonEsc(satPassLast_) + "\"";
         if (!orbSkyLast_.empty()) j += ",\"orbLast\":\"" + vibe::gallery::jsonEsc(orbSkyLast_) + "\"";
+        // ★★ beta95 warn, don't block: a keep-running mode shares the radio with the passes (adminBg.ts satPassLines)
+        if (cfg.sat.on) {
+            const std::string kw = satKeepWarn();
+            if (!kw.empty()) j += ",\"keepWarn\":\"" + vibe::gallery::jsonEsc(kw) + "\"";
+            if (!satKeepPaused_.empty()) j += ",\"keepPaused\":\"" + vibe::gallery::jsonEsc(satKeepPaused_) + "\"";
+        }
         return j + "}";
     }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */

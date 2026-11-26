@@ -100,6 +100,12 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   ok(pr.head.includes('ORBCOMM paused (priority;') && pr.rows.some((r) => r.startsWith('last: ORBCOMM monitoring, 3 h 4 min')), `the priority on an HF+: ${pr.head}`);
   const bl = satPassLines({ state: 'blocked', why: 'ADS-B is kept running on this radio when nobody is connected', meteor: true }, now)!;
   ok(bl.warn && bl.head === 'Unattended satellites \u00b7 cannot run \u2014 ADS-B is kept running on this radio when nobody is connected', `blocked, warned: ${bl.head}`);
+  // ★★ beta95 warn, don't block: a keep-running ADS-B radio still runs the passes, and says what that costs
+  const kw = 'a satellite pass takes the radio: ADS-B pauses for the pass, about 10\u201315 min, and resumes after';
+  const w = satPassLines({ state: 'waiting', now: 'waiting \u2014 next Meteor pass in 40 min', meteor: true, keepWarn: kw }, now)!;
+  ok(w.warn && w.rows.includes(`Warning: ${kw}`) && !w.head.includes('cannot run'), `keep-running warning, not a block: ${w.rows.join(' | ')}`);
+  const wp = satPassLines({ state: 'running', now: 'METEOR-M2 4 LRPT pass', meteor: true, name: 'METEOR-M2 4', label: 'LRPT', decoder: 'lrpt', los: now + 300, maxEl: 40, keepPaused: 'ADS-B', keepWarn: kw }, now)!;
+  ok(wp.rows.includes('ADS-B paused for this pass \u2014 it resumes after LOS'), `ADS-B paused row: ${wp.rows.join(' | ')}`);
 }
 // ★★★ beta94 nobody listening — background may use the whole machine
 {
