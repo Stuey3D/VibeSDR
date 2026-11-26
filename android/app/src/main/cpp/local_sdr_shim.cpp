@@ -45804,7 +45804,9 @@ static std::string vsSatReachWhy(double lo, double hi) {
         return b;
     }
     const double lc = g_vsLockedCentre.load();
-    if (lc > 0.0 && g_vsMaxUsers.load() > 1) {
+    /* ★★★ beta96 ANY locked centre, not only one with more than one listener (Paul's ADS-B radio, locked at 1090 MHz with one
+     *  listener, was offered SATELLITE): a locked hardware centre never moves (retune returns early), whatever the count. */
+    if (lc > 0.0) {
         const double half = LocalSdrShim::instance().captureSpanHz() * 0.45;   // ★ clear of the anti-alias roll-off
         if (lo < lc - half || hi > lc + half) {
             std::snprintf(b, sizeof b, "Outside the range the owner has locked this receiver to (%.3f\xe2\x80\x93%.3f MHz)",
