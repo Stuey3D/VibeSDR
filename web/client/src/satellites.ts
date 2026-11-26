@@ -21,7 +21,7 @@
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import {
-  GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead, satRemindOffered,
+  GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeGlyph, globeLayers, satReadoutLayout, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead, satRemindOffered,
   satRemindText, satRemindWhy, satTelemetryAbsentText, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
@@ -133,6 +133,10 @@ const CSS = `
 #satPanel .sat-box[hidden]{display:none}
 #satPanel .sat-ro{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;align-items:center}
 #satPanel.big .sat-ro{grid-template-columns:minmax(0,1fr)}
+/* ★★ beta96 too narrow for the words AND the small globe (satReadoutLayout): the globe goes under them, never over */
+#satPanel .sat-ro.stack{grid-template-columns:minmax(0,1fr)}
+#satPanel .sat-ro.stack canvas.sat-globe{margin:0 auto}
+#satPanel .sat-ro > div{min-width:0;overflow-wrap:anywhere}
 #satPanel .sat-ro.coast .sat-big{opacity:.55}
 #satPanel .sat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #satPanel .sat-big{font-size:18px;font-variant-numeric:tabular-nums;margin:2px 0}
@@ -152,7 +156,7 @@ const CSS = `
    both lines have a decoder view; the one shown is lit) */
 #satPanel .sat-vb{display:flex;flex-direction:column;gap:4px;margin-top:4px}
 #satPanel .sat-vb[hidden]{display:none}
-#satPanel .sat-vb button.sat-vbk{align-self:flex-start;font-size:11px;padding:2px 8px;min-height:28px;letter-spacing:.04em}
+#satPanel .sat-vb button.sat-vbk{align-self:flex-start;max-width:100%;white-space:normal;text-align:left;font-size:11px;padding:2px 8px;min-height:28px;letter-spacing:.04em}
 #satPanel .sat-ln{border-radius:6px;padding:2px 6px;margin:0 -6px}
 #satPanel .sat-ln.sw{cursor:pointer;border:1px solid transparent}
 #satPanel .sat-ln.sw.on{border-color:var(--btn-active-bdr);background:var(--btn-active-bg);color:var(--btn-active-tx)}
@@ -872,6 +876,10 @@ export class SatPanel {
     const r = this.readout();
     const mine = r && r.norad === sat.norad ? r : null;
     this.sRo.classList.toggle('coast', mine?.state === 'COAST');
+    // ★★ beta96 the small globe beside the words only where they keep their column (one rule with the app); the globe is
+    //    150 px (120 px on a narrow window), 10 px gap
+    const gw = this.sGlobe.clientWidth || 150;
+    this.sRo.classList.toggle('stack', !this.big && satReadoutLayout(this.sRo.clientWidth, this.big, gw, 10) === 'stacked');
     const ml = satTxModeLabel(t);
     this.sName.textContent = `${sat.name} · ${t.label}${ml ? ' · ' + ml : ''}`;
     this.sHz.textContent = satHzText(satCorrectedHz(t, mine));
@@ -1164,6 +1172,7 @@ export class SatPanel {
     // ★ scene units per CSS pixel — the dot, the lines and the words are sized on SCREEN, so they read at SMALL and BIG
     const sc = W / Math.max(60, cv.clientWidth || (this.big ? 420 : 150));
     const css = getComputedStyle(this.el);
+    const ly = globeLayers(!this.big);   // ★★ beta96 (Stuart 11-26) SMALL: orbit, footprint, receiver dot, the glyph — no words
     const ink = css.color || '#ccc';
     const amber = css.getPropertyValue('--amber').trim() || '#ffb000';
     const ground = css.backgroundColor || 'rgba(8,6,2,.96)';
@@ -1177,14 +1186,14 @@ export class SatPanel {
     // ★ rough land (globeCoast.ts) — beta91 neutral, never the faceplate's hue, so it reads through the beam (globeLandInk)
     if (g.coast) { ctx.globalAlpha = 0.7; ctx.lineWidth = 1; ctx.strokeStyle = globeLandInk(ground); ctx.stroke(new Path2D(g.coast)); ctx.strokeStyle = ink; }
     if (g.foot) { ctx.globalAlpha = 0.28; ctx.fillStyle = amber; ctx.fill(new Path2D(g.foot)); }
-    if (g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
+    if (ly.beam && g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
     // ★ 1.7 the orbit, dotted, and its highest point
     if (g.orbit) {
       ctx.globalAlpha = 0.85; ctx.strokeStyle = amber; ctx.lineWidth = 1.5 * sc; ctx.lineCap = 'round';
       ctx.setLineDash([1.5 * sc, 4 * sc]); ctx.stroke(new Path2D(g.orbit)); ctx.setLineDash([]);
-      if (g.tcaTick) { ctx.lineWidth = 1.5 * sc; ctx.stroke(new Path2D(g.tcaTick)); }
+      if (ly.tick && g.tcaTick) { ctx.lineWidth = 1.5 * sc; ctx.stroke(new Path2D(g.tcaTick)); }
       // ★ beta91 which way it travels: open chevrons along increasing time, haloed in the ground so they read over the land
-      if (g.arrows.length) {
+      if (ly.arrows && g.arrows.length) {
         const ar = new Path2D(globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc));
         ctx.lineJoin = 'round';
         ctx.globalAlpha = 0.8; ctx.strokeStyle = ground; ctx.lineWidth = 3.6 * sc; ctx.stroke(ar);
@@ -1199,7 +1208,13 @@ export class SatPanel {
       ctx.lineWidth = GLOBE_RX_DOT.ringW * sc; ctx.strokeStyle = GLOBE_RX_DOT.ring; ctx.stroke();
     }
     // ★ 1.8 the bird: tube, dish towards the Earth, panels along its heading (cells ruled)
-    if (g.bird) {
+    // ★★ beta96 SMALL: the satellite as a glyph — a square body, a line either side, on the BIG bird's heading, whole pixels
+    if (ly.glyph && g.bird && g.sat) {
+      const gl = globeGlyph(g.sat, g.bird.u, sc), bird = globeLandInk(ground);
+      ctx.globalAlpha = 1; ctx.lineCap = 'butt'; ctx.strokeStyle = bird; ctx.lineWidth = GLOBE_GLYPH.line * sc; ctx.stroke(new Path2D(gl.panels));
+      ctx.fillStyle = bird; ctx.fill(new Path2D(gl.body));
+    }
+    if (ly.bird && g.bird) {
       const b = g.bird;
       const bird = globeLandInk(ground);   // ★ beta91 the bird is neutral too, so it stands off the beam (Stuart 11-22)
       ctx.lineJoin = 'round';
@@ -1213,7 +1228,7 @@ export class SatPanel {
     }
     // ★ the labels: the receiver (the server's name, else RECEIVER) and the bird's name, kept off each other
     const font = 10 * sc;
-    const L = globeLabels(g, this.deps.rxName?.() || '', sat.name, font);
+    const L = ly.labels ? globeLabels(g, this.deps.rxName?.() || '', sat.name, font) : { rx: null, sat: null };
     ctx.font = `${font.toFixed(1)}px system-ui,sans-serif`; ctx.textBaseline = 'alphabetic';
     for (const lb of [L.rx, L.sat]) {
       if (!lb) continue;

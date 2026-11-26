@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
+import { decoderTextBacking } from '../constants/decoderTokens';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch
 import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
@@ -39,7 +40,7 @@ import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
-import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
+import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeGlyph, globeLayers, globeLandInk, globeArrowPath, globeLabels, satReadoutLayout, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -194,9 +195,12 @@ function HalfGlobeView({ rx, sat, ink, beam, ground, small = false, orbit, tcaId
   const [wPx, setWPx] = useState(small ? GLOBE_SMALL_W : GLOBE_MAX_W);
   const sc = GLOBE_W / Math.max(60, wPx);
   const font = 10 * sc;
-  const L = globeLabels(g, rxName, sat?.name, font);
-  const arrowD = g.arrows.length ? globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc) : '';
+  // ★★ beta96 (Stuart 11-26) SMALL: orbit, footprint, receiver dot and the satellite glyph only — no words (globeLayers)
+  const ly = globeLayers(small);
+  const L = ly.labels ? globeLabels(g, rxName, sat?.name, font) : { rx: null, sat: null };
+  const arrowD = ly.arrows && g.arrows.length ? globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc) : '';
   const birdInk = globeLandInk(ground);
+  const glyph = ly.glyph && g.bird && g.sat ? globeGlyph(g.sat, g.bird.u, sc) : null;
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
     <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}
@@ -207,18 +211,23 @@ function HalfGlobeView({ rx, sat, ink, beam, ground, small = false, orbit, tcaId
       {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.12} strokeWidth={1} />}
       {!!g.coast && <Path d={g.coast} fill="none" stroke={globeLandInk(ground)} strokeOpacity={0.7} strokeWidth={1} />}
       {!!g.foot && <Path d={g.foot} fill={beam} fillOpacity={0.28} />}
-      {!!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
+      {ly.beam && !!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
       {!!g.orbit && <Path d={g.orbit} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round"
                           strokeDasharray={`${(1.5 * sc).toFixed(1)} ${(4 * sc).toFixed(1)}`} />}
-      {!!g.tcaTick && <Path d={g.tcaTick} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round" />}
+      {ly.tick && !!g.tcaTick && <Path d={g.tcaTick} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round" />}
       {/* ★ beta91 which way it travels: open chevrons along increasing time, haloed in the ground so they read over the land */}
-      {g.arrows.length > 0 && <>
+      {!!arrowD && <>
         <Path d={arrowD} fill="none" stroke={ground} strokeOpacity={0.8} strokeWidth={3.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
         <Path d={arrowD} fill="none" stroke={beam} strokeWidth={1.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
       </>}
       {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={GLOBE_RX_DOT.r * sc} fill={GLOBE_RX_DOT.fill} stroke={GLOBE_RX_DOT.ring} strokeWidth={GLOBE_RX_DOT.ringW * sc} />}
       {/* ★ beta91 the bird is neutral like the land, so it stands off the beam (Stuart 11-22) */}
-      {!!g.bird && <>
+      {/* ★★ beta96 SMALL: the glyph — a square body, a line either side, on the BIG bird's heading; whole pixels */}
+      {!!glyph && <>
+        <Path d={glyph.panels} fill="none" stroke={birdInk} strokeWidth={GLOBE_GLYPH.line * sc} strokeLinecap="butt" />
+        <Path d={glyph.body} fill={birdInk} />
+      </>}
+      {ly.bird && !!g.bird && <>
         <Path d={g.bird.panels} fill={birdInk} fillOpacity={0.45} stroke={birdInk} strokeWidth={1.2 * sc} strokeLinejoin="round" />
         <Path d={g.bird.cells} fill="none" stroke={birdInk} strokeOpacity={0.9} strokeWidth={0.8 * sc} />
         <Path d={g.bird.boom} fill="none" stroke={birdInk} strokeWidth={1.6 * sc} strokeLinecap="round" />
@@ -297,6 +306,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const [bigPick, setBigPick] = useState(false);
   const [listOpen, setListOpen] = useState(true);   // ★ beta92 declared before bodyH: SMALL grows while the list is open
   const [minimised, setMinimised] = useState(false);
+  /** ★★ beta96 the readout's width — the small globe goes beside the words only where they keep their column (satReadoutLayout) */
+  const [roW, setRoW] = useState(0);
   const handBig = useRef(false);
   const sized = useRef(false);
   const big = bigPick && bigUseful;
@@ -448,10 +459,13 @@ export default function SatellitePanel(p: SatellitePanelProps) {
       {!minimised && !placeNeed && <DecoderBody>
         {/* ★ beta91 (Stuart 11-22, a screenshot: BIG with the list folded and nothing decoded yet, half the box empty) the box
              holds its full BIG height only while a picture is on show; otherwise it fits what is in it, up to that height */}
-        <ScrollView style={big && showPic ? { height: bodyH } : { maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
+        {/* ★★ beta96 the body is OPAQUE behind its text (decoderTextBacking): the waterfall's labels no longer read through it */}
+        <ScrollView style={[big && showPic ? { height: bodyH } : { maxHeight: bodyH }, { backgroundColor: decoderTextBacking(tk), borderRadius: 6 }]}
+                    contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
           {!!sel && !!sat && !!tx && (
             <View style={s.box}>
-              <View style={[big ? s.ro : s.roSmall, mine?.state === 'COAST' && s.coast]}
+              <View style={[satReadoutLayout(roW, big, GLOBE_SMALL_W) === 'beside' ? s.roSmall : s.ro, mine?.state === 'COAST' && s.coast]}
+                    onLayout={(e) => { const w = Math.round(e.nativeEvent.layout.width); if (w > 0 && Math.abs(w - roW) > 2) setRoW(w); }}
                     accessibilityLabel={`${sat.name} ${tx.label}, ${satHzText(satCorrectedHz(tx, mine))}, ${countdown}`}>
                 <View style={s.txtCol}>
                   <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}${satTxModeLabel(tx) ? ' · ' + satTxModeLabel(tx) : ''}`}</Text>
@@ -478,7 +492,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   ))}
                 </View>
                 {!!p.rxPos && (
-                  <View style={!big ? undefined : { alignSelf: 'stretch' }}>
+                  <View style={!big ? (satReadoutLayout(roW, big, GLOBE_SMALL_W) === 'beside' ? s.globeSide : s.globeUnder) : { alignSelf: 'stretch' }}>
                     <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} ground={ground} small={!big}
                                orbit={confirmed ? p.orbit : null} tcaIdx={p.tcaIdx} rxName={p.rxName} />
                     {/* ★ BIG: the one-line key (the dotted half only when there is an orbit to see) */}
@@ -778,7 +792,9 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   lnOn:    { borderColor: T.accent, backgroundColor: T.rowActive },
   lnTxt:   { paddingHorizontal: 8 },
   lnTxtOn: { color: T.value },
-  vbKey:   { alignSelf: 'flex-start', paddingLeft: 8, paddingTop: 2 },
+  vbKey:   { alignSelf: 'flex-start', paddingLeft: 8, paddingTop: 2, maxWidth: '100%', flexShrink: 1 },   // ★★ beta96 never wider than the words' column
+  globeSide: { flexShrink: 0 },                         // ★★ beta96 beside the words: its own width, never over them
+  globeUnder:{ alignSelf: 'center' },                   // ★★ beta96 too narrow for both: under the words
   mono:    { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.value },
   sumRow:  { paddingHorizontal: 10, paddingVertical: 8, minHeight: 36, justifyContent: 'center' },
   // ★★ beta94 SHOW — the drop-down above the rows
