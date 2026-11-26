@@ -54,7 +54,10 @@ The full wire format is in the header of `android/app/src/main/cpp/vibe_adsb_del
   - lat/lon: 1e-5°, the report's own 5 decimals;
   - altitudes: 25 ft;
   - gs, track and heading: 1;
-  - rssi and snr: 1 dB, rounded down, so a threshold on the whole number reads the same either way;
+  - rssi: 1 dB, rounded down, so a threshold on the whole number reads the same either way;
+  - snr (beta96): 3 dB BANDS on ADS-B's colour edges — k = floor((snr − 10) / 3), shown as 11.5 + 3k — so rounding never
+    changes the colour and the column goes out only when the band changes (Stuart: "use coarser to save resources");
+    measured on the 172-aircraft stream: no column 2.52 KB a tick, whole dB 2.80, bands 2.61;
   - tracked_nm: 1 NM, as in the report.
 
   Each value is quantised from the text the full report prints. The quantisation can never disagree with an older

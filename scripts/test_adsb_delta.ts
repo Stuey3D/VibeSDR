@@ -28,7 +28,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'adsb-delta-'));
 const bin = path.join(tmp, 'test-adsb-delta');
 let lines: any[] = [];
 try {
-  execFileSync('nice', ['-n', '10', 'c++', '-std=c++17', '-O2', '-I', path.join(root, 'android/app/src/main/cpp'),
+  // ★ beta96 VIBE_ADSB_SNR_STEP=0|10|30 (env): measure the delta bytes with no SNR column, whole dB, or the 3 dB bands
+  const step = process.env.VIBE_ADSB_SNR_STEP ? ['-DVIBE_ADSB_SNR_STEP=' + Number(process.env.VIBE_ADSB_SNR_STEP)] : [];
+  execFileSync('nice', ['-n', '10', 'c++', '-std=c++17', '-O2', ...step, '-I', path.join(root, 'android/app/src/main/cpp'),
     path.join(root, 'vibeserver/test-adsb-delta.cpp'), '-o', bin], { stdio: 'inherit' });
   const out = execFileSync(bin, ['--stream', String(TICKS)], { maxBuffer: 1 << 30 }).toString();
   lines = out.trim().split('\n').map((l) => JSON.parse(l));
@@ -43,7 +45,7 @@ function quant(a: Rec): Rec {
   if (typeof q.alt_geom === 'number') q.alt_geom = Math.round(q.alt_geom / 25) * 25;
   for (const k of ['gs', 'track', 'mag_heading']) if (typeof q[k] === 'number') q[k] = Math.round(q[k] as number);
   if (typeof q.rssi === 'number') q.rssi = Math.floor(q.rssi);
-  if (typeof q.snr === 'number') q.snr = Math.floor(q.snr);
+  if (typeof q.snr === 'number') q.snr = 11.5 + 3 * Math.floor((Math.round(q.snr * 10) - 100) / 30);   // ★ the 3 dB band (snrBand)
   return q;
 }
 const AGE_TOL = 0.65;
