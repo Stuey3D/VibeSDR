@@ -19635,7 +19635,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** {"type":"avdata", on, band?, step?}. ★ The default is OFF, as every whole-radio mode's. Entering with nothing named:
-     *  where the mode last was, else ACARS (else the first band this radio reaches). */
+     *  where the mode last was, else VDL2 (beta96), else the first band this radio reaches. */
     void avControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
         if (onV == 0 && onlyModeRefusesLeave(sock, "avdata", "AVDATA", "avdata_error")) return;   // ★★ V12 the only mode
@@ -19655,6 +19655,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             want = vibeavi::bandById(bid);
             if (!want) { if (sock) sendText(sock, "{\"type\":\"avdata_error\",\"why\":\"there is no such band\"}"); return; }
         }
+        // ★★ beta96 (Stuart 11-26: "default to VDL2 as that is in use"): with nothing named and no band from earlier this
+        //    run, VDL2 when this radio reaches it (it carries most traffic in Europe now), else the first band it reaches.
+        if (!want && !avBand_) for (const auto* b : can) if (std::string(b->id) == "vdl2") { want = b; break; }
         if (!want) want = avBand_ ? avBand_ : (can.empty() ? nullptr : can.front());
         const std::string why = vsAvdataWhyNot(want);
         if (!why.empty() || !want) {
