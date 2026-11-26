@@ -9443,7 +9443,20 @@ function syncAudioQuiet() {
   audio.setQuiet(q);
   updateMediaSession();
 }
+/** ★★★ beta96 ONE WHOLE-RADIO MAP AT A TIME, WHOEVER CHANGED THE MODE (Mac Ha, 11-26, on the app: the AIS map's title
+ *  over the ADS-B aircraft list — the app's MapOverlay kept the old page; src/utils/mapPage.ts). Here every mode has its
+ *  own view, but a mode entered — by our key, or by a report arriving because another listener moved the shared dial —
+ *  must still put the other map modes' views away itself rather than leave it to their `_off` (the server sends it first
+ *  today; a screen must not depend on it). The app's wholeMapYield, the same five modes. ★ The UI half only: nothing sent. */
+function wholeMapYield(k: 'adsb' | 'ais' | 'ndb' | 'sondes' | 'vormap') {
+  if (k !== 'adsb' && adsbOn) adsbUiOff();
+  if (k !== 'ais' && aisOn) aisUiOff();
+  if (k !== 'ndb' && ndbOn) ndbUiOff();
+  if (k !== 'sondes' && sdOn) sdUiOff();
+  if (k !== 'vormap' && vmOn) vmUiOff();
+}
 function adsbUiOn() {
+  wholeMapYield('adsb');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   adsbOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   avAdsbProbe(true);   // ★ V12 2026-11-16 the AVIATION MAP key, when another source has aircraft here
@@ -9830,6 +9843,7 @@ function ndbReadCap(j: any) {
 /** ★ The UI half of entering NDB — ADS-B's (adsbUiOn): a running decoder stopped, the box closed, the controls held,
  *  the audio let go (nothing to hear), the map view up over the (throttled) waterfall. */
 function ndbUiOn() {
+  wholeMapYield('ndb');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   ndbOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10358,6 +10372,7 @@ function aisReadCap(j: any) {
   } else aisCap = null;
 }
 function aisUiOn() {
+  wholeMapYield('ais');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   aisOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10602,6 +10617,7 @@ function sdReadCap(j: any) {
   sdBands = parseSondeBands(j?.sondesBands);
 }
 function sdUiOn() {
+  wholeMapYield('sondes');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   sdOn = true;
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10659,6 +10675,7 @@ function vmReadCap(j: any) {
   } else vmCap = null;
 }
 function vmUiOn() {
+  wholeMapYield('vormap');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   vmOn = true;
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();

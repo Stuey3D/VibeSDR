@@ -283,6 +283,7 @@ import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
 import { IS_TV, IS_APPLE_TV } from '../utils/tv';
+import { shownMapOf } from '../utils/mapPage';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig } from '../utils/airband';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -3705,6 +3706,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (leave) c?.ais?.(false);
     aisUiOff();
   }, [aisUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★★ beta96 ONE WHOLE-RADIO MAP AT A TIME, WHOEVER CHANGED THE MODE (Mac Ha, 11-26: the AIS map's title over the
+   *  ADS-B aircraft list). A report that ARRIVES for a mode we were not in means the radio is in that mode now — another
+   *  listener moved the shared dial, or the server answered a mode_resume — so the other map modes' screens are put away
+   *  here, not left to their `_off` alone (the server sends it first today; a screen must not depend on it). The keys
+   *  (toggleAdsb / toggleAis) already did this for our own presses. ★ The UI half only: nothing is sent. */
+  const wholeMapYield = (k: 'adsb' | 'ais' | 'ndb' | 'sondes' | 'vormap') => {
+    if (k !== 'adsb' && adsbOnRef.current) adsbUiOff();
+    if (k !== 'ais' && aisOnRef.current) aisUiOff();
+    if (k !== 'ndb' && ndbOnRef.current) ndbUiOff();
+    if (k !== 'sondes' && sdOnRef.current) sdUiOff();
+    if (k !== 'vormap' && vmOnRef.current) vmUiOff();
+  };
   /** ★★ V12 Leave SONDES from its map (it opens into the map now) — the box's EXIT, the same steps. */
   const exitSondes = useCallback(() => {
     const c = client.current as unknown as { sondes?: (on: boolean) => void } | null;
@@ -4692,17 +4705,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
   /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
-  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : ndbViewOpen && !IS_APPLE_TV ? 'ndb'   // ★ V12 NDB: its map, as ADS-B's
-    // ★ V12 AIS's ship map is the mode's screen; APRS's station map is the decoder box's MAP (neither on Apple TV)
-    : aisViewOpen && !IS_APPLE_TV ? 'ais' : aprsMapOpen && !IS_APPLE_TV ? 'aprs'
-    // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
-    : dscMapOpen && !IS_APPLE_TV ? 'dsc'
-    : navMapOpen && !IS_APPLE_TV ? 'navtex'
-    : ismGal && !IS_APPLE_TV ? 'ism'
-    : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism'
-    : vmMapOpen && !IS_APPLE_TV && vmOn ? 'vormap'   // ★ V12 the VOR / ILS map: the mode's own screen, as NDB's
-    : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes'   // ★ V12 the SONDES box's MAP (the mode carries on)
-    : avMapOpen && !IS_APPLE_TV && (avOn || avMapFocus !== 'datalink') ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on); beta90 VIEWS' AVIATION standalone
+  // ★★ beta96 the precedence lives in utils/mapPage.ts (shownMapOf) so the mode changes can be driven in a test
+  //   (scripts/test_map_page_kind.ts — Mac Ha's AIS ↔ ADS-B mismatch).
+  const shownMap: MapKind | null = shownMapOf({
+    appleTv: IS_APPLE_TV, adsbView: adsbViewOpen, ndbView: ndbViewOpen,   // ★ V12 NDB: its map, as ADS-B's
+    aisView: aisViewOpen, aprsMap: aprsMapOpen,   // ★ V12 AIS's ship map is the mode's screen; APRS's station map is the decoder box's MAP
+    dscMap: dscMapOpen, navMap: navMapOpen,   // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
+    ismGallery: !!ismGal, ismMap: ismMapOpen, ismOn,
+    vmMap: vmMapOpen, vmOn,   // ★ V12 the VOR / ILS map: the mode's own screen, as NDB's
+    sdMap: sdMapOpen, sdOn,   // ★ V12 the SONDES box's MAP (the mode carries on)
+    avMap: avMapOpen, avOn, avFocusDatalink: avMapFocus === 'datalink',   // ★ V12 the DATALINK box's MAP; beta90 VIEWS' AVIATION standalone
+    picked: mapKind,
+  });
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -8314,7 +8328,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         if (!r) { adsbUiOff(); return; }
-        if (!adsbOnRef.current) { adsbOnRef.current = true; setAdsbViewOpen(true); setAdsbError(undefined); }
+        if (!adsbOnRef.current) { wholeMapYield('adsb'); adsbOnRef.current = true; setAdsbViewOpen(true); setAdsbError(undefined); }
         setAdsbOn(true);
         setAdsbReport(r);
       },
@@ -8350,6 +8364,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
         if (!r) { ndbUiOff(); return; }
         if (!ndbOnRef.current) {
+          wholeMapYield('ndb');   // ★★★ beta96 one whole-radio map at a time
           ndbOnRef.current = true; setNdbViewOpen(!IS_APPLE_TV);
           client.current?.ndbFind?.('', 300);
         }
@@ -8481,7 +8496,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         if (why) { vmUiOff(); setTimeout(() => { if (!destroyed.current) appAlert('VOR map unavailable', why); }, 450); return; }
         if (!r) { vmUiOff(); return; }
-        if (!vmOnRef.current) { vmOnRef.current = true; if (!IS_APPLE_TV) setVmMapOpen(true); }
+        if (!vmOnRef.current) { wholeMapYield('vormap'); vmOnRef.current = true; if (!IS_APPLE_TV) setVmMapOpen(true); }
         setVmOn(true);
         setVmReport(r);
       },
@@ -8490,7 +8505,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         if (why) { sdOnRef.current = false; setSdOn(false); setSdError(why); setSdBoxOpen(true); return; }
         if (!r) { sdUiOff(); return; }
-        if (!sdOnRef.current) { sdOnRef.current = true; if (IS_APPLE_TV) setSdBoxOpen(true); else setSdMapOpen(true); }   // ★★ V12 into the map
+        if (!sdOnRef.current) { wholeMapYield('sondes'); sdOnRef.current = true; if (IS_APPLE_TV) setSdBoxOpen(true); else setSdMapOpen(true); }   // ★★ V12 into the map
         setSdOn(true); setSdError(undefined);
         setSdReport(r);
       },
@@ -8502,7 +8517,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         if (!r) { aisUiOff(); return; }
-        if (!aisOnRef.current) { aisOnRef.current = true; if (!IS_APPLE_TV) setAisViewOpen(true); }
+        if (!aisOnRef.current) { wholeMapYield('ais'); aisOnRef.current = true; if (!IS_APPLE_TV) setAisViewOpen(true); }
         setAisOn(true);
         setAisReport(r);
       },
