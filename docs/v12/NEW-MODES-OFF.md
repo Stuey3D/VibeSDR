@@ -29,9 +29,14 @@ Branch `b96-newmodes` (off v12-experimental = beta95). Stuart 11-26, from Paul's
     saw on) — ALWAYS, whatever the answer: the exit lock must hold;
   * or `newmodes@off`;
   * or automatic and the owner blocked ANY switch of the table (restricted). Nothing blocked = new modes ON, as ever.
-* **Migration (no `seen@`)**: unrestricted → everything seen. Restricted → `seen` = the newest generation any token in the
-  list names (switches, `+id`, and the options `lora+all`, `avdata+8m`, `ft8±deep` …) — the oldest release that can have
-  written it.
+* **Migration (no `seen@`)**: unrestricted → everything seen. Restricted AND single-mode → `seen` = the newest generation
+  any token in the list names (switches, `+id`, and the options `lora+all`, `avdata+8m`, `ft8±deep` …) — a single-mode
+  list names everything of its era, so that dates it (Paul's: 80). Restricted but NOT single-mode → `seen` =
+  max(that, `kUnstampedRestrictedSeen` = 95): a short list ("dab", a benchmark's "rade,spotsband") cannot be dated, and
+  dating it by its newest token switched off every mode since 11.x (ADS-B, ISM, SAM …) on servers whose owners chose
+  none of that — found by test-setup-radio-caps' Icom ("dab,wfm,rtty" → seen 0). So on such a radio only the switches
+  new in THIS update (SATELLITE) come in off. ★ OPEN DECISION: the brief said "restricted → new-since-unknown OFF"; this
+  is the narrower reading. Flip by setting the constant to 0 (C++, page `MODE_GEN_UNSTAMPED`; the app reads it).
 * **Save** (`newModesStamp`, called by `collect()` for every radio whose card was drawn this visit): each new switch keeps
   exactly the state it has (off → its id written, on → not; a region default's `+id` kept), then `seen@<now>`. The
   enforced list is identical before and after. On opening a card, a list with no stamp gets its derived `seen@N`
@@ -80,7 +85,5 @@ Branch `b96-newmodes` (off v12-experimental = beta95). Stuart 11-26, from Paul's
   "missing" alarm (Stuart's rule: a radio on loan is never called unplugged — left as it was).
 * ★ When a switch is added to BLOCKABLE: add it to `modeGens()` with the release it ships in, raise `kModeGenNow`, and
   copy it into the page's `MODE_GENS` / `MODE_GEN_NOW` — `test-new-modes` fails otherwise.
-* ★ Collateral to know: a restricted list with no stamp whose newest token is old (e.g. only `dab` blocked) gets every
-  switch since that generation OFF after this update (ADS-B, ISM … for an 11.x-era `dab`). That is the brief's rule
-  ("restricted → new modes off"); the notice on the Setup page names them. A benchmark-written list (a weak box's
-  `rds`, `spotsband`, `rade` …) counts as restricted too.
+* ★ Collateral to know: a restricted, non-single-mode list saved before beta96 has SATELLITE (new switch) off after this
+  update — the Setup page's notice and NEW mark say so; one tick brings it back.
