@@ -52,7 +52,7 @@ export function mapPageShown<K extends string>(page: MapPage<K> | null, visible:
 /* ★★ WHICH SERVER MAP THE RECEIVER SCREEN SHOWS — the precedence SDRScreen used inline, lifted out so the mode changes
  *    can be driven in a test (AIS → ADS-B by the shared dial; exit then another mode). The whole-radio modes' maps are
  *    their screens; the decoder boxes' MAPs follow; `picked` is a server map opened from the Mode sheet. */
-export type ShownMapKind = 'hfdl' | 'digi' | 'cw' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap'
+export type ShownMapKind = 'hfdl' | 'digi' | 'cw' | 'ais' | 'aprs' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap'
   | 'airsea';   // ★★★ beta96 THE AIR & SEA MAP (docs/v12/ONE-MAP.md): ADS-B and AIS modes' map, the shipping map and the aviation map
 export interface ShownMapState {
   appleTv: boolean;
@@ -65,7 +65,8 @@ export interface ShownMapState {
 export function shownMapOf(s: ShownMapState): ShownMapKind | null {
   if (s.appleTv) return s.picked;   // ★ no WebView on Apple TV — only the Mode sheet's server maps were ever offered there
   // ★★★ beta96 stage 6: ADS-B's screen is the AIR & SEA map too — AIS ↔ ADS-B is the SAME page, re-titled (__trkChrome)
-  return s.adsbView ? 'airsea' : s.ndbView ? 'ndb'
+  // ★★★ beta96 stage 8: NDB too (the 'ndb' page is retired)
+  return s.adsbView ? 'airsea' : s.ndbView ? 'airsea'
     : s.aisView ? 'airsea' : s.aprsMap ? 'aprs'
     : s.dscMap ? 'dsc'
     : s.navMap ? 'airsea'

@@ -268,21 +268,22 @@ console.log('── every map uses it ──');
   const ndbList = readFileSync('src/components/NdbLiveList.tsx', 'utf8');
   // ★ beta96 stage 6: the ADS-B page is retired (ADS-B's screen is the AIR & SEA map, whose ADS-B layer keeps its own AUTO / FIT)
   ok(/\$\{!isHfdl \? `<script>\$\{MAP_AUTOFIT_JS\}<\/script>` : ''\}/.test(app), 'the app\'s map page carries it for every kind but HFDL (SNAP follows a flight)');
-  ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{return l\.points\(\);\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:document\.getElementById\('snap'\)/.test(app),
+  // ★ beta96 stage 8 on the AIR & SEA map the NDB beacons heard are among its points (one camera, one FIT key)
+  ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{var p=l\.points\(\);if\(KIND==='airsea'&&ndbLayer&&ndbLayer\.points\)\{var q=ndbLayer\.points\(\);if\(q\.length\)p=p\.concat\(q\);\}return p;\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:document\.getElementById\('snap'\)/.test(app),
      'app: AIS · APRS · DSC · ISM · NAVTEX · sondes — the FIT key is the auto fit\'s, framing the items AND the receiver');
   ok(/firstFit:\(KIND==='avdata'\|\|!window\.VibeAutoFit\)\?undefined:false/.test(app) && /isTrk && kind !== 'avdata' \?/.test(app),
      'app: the aviation map keeps the ADS-B layer\'s own AUTO / FIT (no second key)');
   ok(/digiFit=window\.VibeAutoFit\?VibeAutoFit\.attach\(map,\{/.test(app), 'app: digi / CW spots maps');
-  ok(/onFitState:function\(st\)/.test(app) && /__ndbFitKey/.test(app) && /onFitKey=\{\(\) => ndbJs\('__ndbFitKey', 1\)\} fitPaused=\{ndbFitPaused\}/.test(app)
-     && /paused=\{p\.prefs\.autofit && p\.fitPaused\}/.test(ndbList), 'app: NDB — the RN FIT chip is the AUTO key (on / paused / off)');
+  // ★★ beta96 stage 8 NDB is a live state of the AIR & SEA map: no FIT chip of its own — the map's FIT frames the beacons
+  ok(/autoFit:false,drawReceiver:false/.test(app) && !/__ndbFitKey|label="FIT"/.test(app + ndbList), 'app: NDB — on the AIR & SEA map, framed by its FIT (no second chip)');
   ok(/if \(trkWantFocus\)|af\)af\.pause\(\)/.test(app) && /var af=trkFitMake\(\);if\(af\)af\.pause\(\);/.test(app), 'app: a row chosen pauses it (ADS-B\'s focus)');
-  ok(/if \(!w\.VibeAutoFit\) runSource\(MAP_AUTOFIT_JS\);/.test(tracksWeb) && /this\.af = w\.VibeAutoFit\.attach\(map, \{\s*points: \(\) => layer\.points\(\), receiver: \(\) => layer\.receiver\(\), button: this\.fitBtn/.test(tracksWeb),
+  ok(/if \(!w\.VibeAutoFit\) runSource\(MAP_AUTOFIT_JS\);/.test(tracksWeb) && /this\.af = w\.VibeAutoFit\.attach\(map, \{\s*points: \(\) => \{ const p = layer\.points\(\); const m = this\.morePoints\?\.\(\); return m\?\.length \? \[\.\.\.p, \.\.\.m\] : p; \}, receiver: \(\) => layer\.receiver\(\), button: this\.fitBtn/.test(tracksWeb),
      'web: every track view (AIS, APRS, DSC, ISM + gallery, NAVTEX, sondes, datalink) — the FIT key is the auto fit\'s, with the receiver');
   ok(!/this\.autoFit\b|fitKeys/.test(tracksWeb), 'web: the old per-view fit-on-new-item logic is gone (one implementation)');
   ok(/this\.fitBtn\.hidden = !!this\.acLayer;/.test(tracksWeb), 'web: the aviation map keeps the ADS-B layer\'s AUTO / FIT');
   ok(/\$\{MAP_AUTOFIT_JS\}\nlet digiFit = null/.test(main) && /receiver: \(\) => me, button: document\.getElementById\('fitBtn'\)/.test(main), 'web: the digi modes / spots window (and the satellite pass map, which is it)');
   ok(/\$\{MAP_AUTOFIT_JS\}\nfunction autoFit\(\)/.test(dsc) && /receiver: \(\) => me,\s*button: document\.getElementById\('fitBtn'\)/.test(dsc), 'web: the DSC positions window');
-  ok(/if \(!w\.VibeAutoFit\) runSource\(MAP_AUTOFIT_JS\);/.test(ndbWeb) && /l\.fitKey\(\)/.test(ndbWeb), 'web: the NDB map (its FIT key is the AUTO key)');
+  ok(/autoFit: false, drawReceiver: false/.test(ndbWeb) && /host\.morePoints = \(\) =>/.test(ndbWeb), 'web: NDB on the AIR & SEA map — the map\'s FIT frames the beacons (morePoints), no second auto fit');
   ok(/const AF = global\.VibeAutoFit \|\| null;/.test(ndbLayer) && /receiver: \(\) => rx/.test(ndbLayer), 'ndblayer.js frames with it (beacons heard + the receiver)');
   ok(/function points\(\)/.test(trackLayer) && /opts\.firstFit !== false/.test(trackLayer), 'tracklayer.js: points() for it, and no immediate first fit under it');
   ok(!/l\.fit\(\);\}catch\(e\)\{console\.error\('tracks fit'/.test(app.replace(/window\.__trkFit=[^\n]*/, '')), 'app: no one-shot FIT click left');

@@ -22,6 +22,7 @@ import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H,
 import type { TrackRow } from '../services/tracks';
 import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
 import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
+import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
 
 /** ★ The status line and each safety line under the header. */
 const STATUS_H = 20;
@@ -74,6 +75,9 @@ export interface TrackLiveListProps {
    *  (NEWEST · FURTHEST · LONGEST TRACKED), the GAIN key and card, and its rows (emergencies, military, then the nearest)
    *  — heads the AIRCRAFT tab, the other sources' aircraft after it. The web's adsbListHtml in asRender. null = not live. */
   adsb?: AdsbBodyInput | null;
+  /** ★★★ beta96 stage 8 NDB LIVE: the beacon list's body (NdbLiveList useNdbBody — the tiles, RINGS · UNHEARD · HEARD LOG ·
+   *  FIND NDB · STATS, the rows with their readings, the card, the dialogs) is the NAVAIDS tab's. null = not live. */
+  ndb?: NdbBodyInput | null;
 }
 const RANGE_H = 30;
 
@@ -98,9 +102,10 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const safety = p.safety ?? [];
   const tabs = (p.tabs?.length ?? 0) >= 2 ? p.tabs! : [];
   const ab = useAdsbBody(p.adsb ?? null, p.ink);
+  const nb = useNdbBody(p.ndb ?? null, p.ink, p.insets, innerW);
   const credit = !!p.credit || ab.credit;
-  const total = ab.count + p.rows.length;
-  const extra = (open ? ab.extra : 0) + STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
+  const total = ab.count + nb.count + p.rows.length;
+  const extra = (open ? ab.extra + nb.extra : 0) + STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
     + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0)
     + (credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
@@ -108,11 +113,12 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
   useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { navCtx, scrollProps } = usePanelNav(true, { flat: true });
+  const { navCtx, scrollProps } = usePanelNav(!nb.modal, { flat: true });   // ★ an NDB dialog takes the pad
   const s = useMemo(() => makeStyles(p.ink), [p.ink]);
   const placed = ab.placed + p.rows.filter((r) => !r.noPos).length;
   const pos = { left: EDGE + p.insets.left, bottom: EDGE + p.insets.bottom };
   return (
+    <>
     <NavCtx.Provider value={navCtx}>
       <View style={[s.wrap, pos, open && { width }]} onTouchStart={noteTouchInteraction}>
         <NavRow>
@@ -141,6 +147,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
           <Text style={[s.status, !!note && s.noteTxt]} numberOfLines={1}>{note || p.status}</Text>
         )}
         {open && ab.head}
+        {open && nb.head}
         {open && !!p.ranges?.length && (
           <NavRow>
             <View style={s.ranges} accessibilityRole="radiogroup">
@@ -165,15 +172,19 @@ export default function TrackLiveList(p: TrackLiveListProps) {
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane}
                       showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
             {ab.rows}
+            {nb.rows}
             {p.rows.map((r) => (
               <NavRow key={r.key}><Row s={s} r={r} sel={!!p.selected && p.selected === r.key} onPress={() => pick(r)} /></NavRow>
             ))}
-            {!total && <Text style={s.empty} numberOfLines={3}>{p.adsb ? ab.empty : p.empty}</Text>}
+            {!total && <Text style={s.empty} numberOfLines={3}>{p.adsb ? ab.empty : p.ndb ? nb.empty : p.empty}</Text>}
           </ScrollView>
         )}
         {open && credit && <AircraftDataCredit ink={p.ink} />}
       </View>
+      {nb.card}
     </NavCtx.Provider>
+    {nb.dialog}
+    </>
   );
 }
 

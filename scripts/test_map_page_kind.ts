@@ -169,7 +169,7 @@ for (const [from, to] of [['airsea', 'ndb'], ['ndb', 'airsea']] as [K, K][]) {
   eq('AIS → ADS-B, report first (both up a beat): the SAME page', S({ aisView: true, adsbView: true }), 'airsea');
   eq('AIS → ADS-B, ais_off first: nothing, then the AIR & SEA map', [S({}), S({ adsbView: true })], [null, 'airsea']);
   eq('ADS-B → AIS: adsb_off then the report', [S({}), S({ aisView: true })], [null, 'airsea']);
-  eq('NDB under AIS: NDB', S({ ndbView: true, aisView: true }), 'ndb');
+  eq('★ stage 8 NDB: the AIR & SEA map (the ndb page retired), under AIS too', [S({ ndbView: true }), S({ ndbView: true, aisView: true })], ['airsea', 'airsea']);
   eq('ISM map only while ISM is on', [S({ ismMap: true }), S({ ismMap: true, ismOn: true }), S({ ismGallery: true })], [null, 'ism', 'ism']);
   eq('VOR map only while on — ★ stage 8 the AIR & SEA map', [S({ vmMap: true }), S({ vmMap: true, vmOn: true })], [null, 'airsea']);
   eq('SONDES map only while on — ★ stage 8 the AIR & SEA map', [S({ sdMap: true }), S({ sdMap: true, sdOn: true })], [null, 'airsea']);
@@ -177,7 +177,7 @@ for (const [from, to] of [['airsea', 'ndb'], ['ndb', 'airsea']] as [K, K][]) {
   eq('a picked server map under the modes', [S({ picked: 'hfdl' }), S({ picked: 'hfdl', aisView: true })], ['hfdl', 'airsea']);
   eq('NAVTEX / shipping MAP: the AIR & SEA map; DSC keeps its own', [S({ navMap: true }), S({ dscMap: true })], ['airsea', 'dsc']);
   eq('★ stage 6 AIS ↔ ADS-B: one kind, so the page stays (its chrome is pushed — section 4)', [S({ aisView: true }), S({ aisView: true, adsbView: true }), S({ adsbView: true })], ['airsea', 'airsea', 'airsea']);
-  eq('NDB and ADS-B both up a beat: ADS-B\'s map wins (the precedence as before), then NDB\'s own kind', [S({ ndbView: true, adsbView: true }), S({ ndbView: true })], ['airsea', 'ndb']);
+  eq('★ stage 8 NDB ↔ ADS-B: one kind, so the page stays (its chrome is pushed)', [S({ ndbView: true, adsbView: true }), S({ ndbView: true })], ['airsea', 'airsea']);
   eq('Apple TV: only the picked map (no WebView for the modes)', [S({ appleTv: true, adsbView: true }), S({ appleTv: true, picked: 'digi', aisView: true })], [null, 'digi']);
 }
 

@@ -68,7 +68,7 @@ import { ADSB_LAYER_JS } from '../generated/adsbLayerSource';
 /* ★★ V12 NDB: the shared beacon layer (web/mapkit/ndblayer.js), the same string rule — it uses the ADS-B layer's rings,
  *  so it is injected AFTER it. Regenerate with: node scripts/gen-ndblayer-source.mjs */
 import { NDB_LAYER_JS } from '../generated/ndbLayerSource';
-import NdbLiveList, { type NdbOverlay } from './NdbLiveList';
+import { type NdbOverlay } from './NdbLiveList';
 import { ndbMapFeed, parseNdbMapPrefs, type NdbMapPrefs } from '../services/ndb';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs, type AdsbGainView } from '../services/adsbTypes';
@@ -110,9 +110,9 @@ import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols'; 
  *  So where HFDL's key reads "← SDR" and only puts the map away, this one reads EXIT ADS-B and its onClose LEAVES THE
  *  MODE (SDRScreen exitAdsb) — the key, Android back, and a pad's or keyboard's Back alike. The live list in the
  *  bottom-left (AdsbLiveList) is React Native's, over the page. */
-/* ★★ 'ndb' (V12) = VibeServer's NDB skimmer — ADS-B's pattern exactly: the mode's screen (EXIT NDB leaves the mode), the
- *  aero look and basemap, the shared layer fed by React Native (the beacons at their published positions, each with a
- *  3-bar meter; ADS-B's NM rings), and an RN live list in the bottom-left (NdbLiveList). */
+/* ★★ NDB (V12) — since beta96 (docs/v12/ONE-MAP.md stage 8) a live state of the AIR & SEA map ('airsea'): EXIT NDB leaves
+ *  the mode, the shared beacon layer joins the page's map (the beacons at their published positions, each with a 3-bar
+ *  meter; ADS-B's NM rings), and the NAVAIDS tab's body is NDB's (NdbLiveList useNdbBody). The 'ndb' page is retired. */
 /* ★★ 'ais' (V12) = VibeServer's AIS MODE — ADS-B's shape exactly: the map IS the mode's screen, its key reads EXIT AIS and
  *  leaves the mode (SDRScreen exitAis). 'aprs' = the APRS decoder's station map (the box's MAP key); CLOSE MAP goes back to
  *  the box and the decoder carries on. Both draw with the shared track layer, fed by React Native (no socket of the
@@ -136,7 +136,7 @@ import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols'; 
  *  NAVTEX and the sea areas on the track layer. The page is built once; its TITLE, its EXIT key and whose camera it is are
  *  pushed in (__trkChrome / __trkCamera) from the current mode on every change — never baked into the page, so a mode
  *  change while it is open can never leave it wearing the old mode (Mac Ha 11-26). */
-export type MapKind = 'hfdl' | 'digi' | 'cw' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap' | 'airsea';
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'ais' | 'aprs' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap' | 'airsea';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -177,13 +177,16 @@ interface MapOverlayProps {
   adsbStarted?: boolean;
   /** ★★ kind 'airsea' while ADS-B is live: the GAIN key (adsbTypes adsbGainView) — null/absent = no key (no gain list, owner-fixed, or unknown). */
   adsbGain?: { view: AdsbGainView | null; steps: readonly number[]; onAuto: () => void; onSet: (tenthDb: number) => void } | null;
-  /** ★★ kind 'ndb' (V12): the report, the readings kept, Find / stats and their answers (NdbLiveList). */
+  /** ★★ V12 NDB — since beta96 on the AIR & SEA map ('airsea') while NDB is live: the report, the readings kept, Find /
+   *  stats and their answers (NdbLiveList useNdbBody, the NAVAIDS tab's body). */
   ndb?: NdbOverlay | null;
   /** ★ kinds 'ais' / 'aprs': the items on the map (each with its icon, label and card — tracks.ts aisItems / aprsItems),
    *  the live list's rows, its status line and empty text, and the AIS safety strip. */
   trk?: { items: TrackItem[]; rows: TrackRow[]; status: string; empty: string; safety?: string[];
           /** ★ V12 beta91 the aviation map: a row shows the aircraft data — the list carries its ODC-By notice */
           credit?: boolean;
+          /** ★ beta96 stage 8 the AIR & SEA map's NDB chip: false = no beacons on the map (the list stays — it is the mode's) */
+          ndbShown?: boolean;
           /** One item's track for its card: [lat, lon] oldest first ([] = none). */
           trail: (key: string) => Promise<[number, number][]>;
           /** Find this item when the map opens (a row tapped in the APRS box); '' = none. */
@@ -293,11 +296,10 @@ function buildHtml(
     "form-action 'none'",
   ].join('; ');
   const isHfdl = kind === 'hfdl';
-  const isNdb = kind === 'ndb';   // ★ V12 NDB — the aero look, its own layer, RN's live list (as ADS-B)
   const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap' || kind === 'airsea';   // ★ V12 AIS / APRS / DSC / ISM — the shared track layer
   /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
    *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
-  const aero = isHfdl || isNdb;
+  const aero = isHfdl;
   const isSpots = kind === 'digi' || kind === 'cw';
   /* ★★★ THE MAP'S MENUS FOLLOW THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere"; the map:
    *  "to change the colour of the map means youd have to exit its screen anyway"). They were HFDL amber and spots
@@ -307,17 +309,81 @@ function buildHtml(
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
-  const TITLE = isHfdl ? 'HFDL MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
+  const TITLE = isHfdl ? 'HFDL MAP' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
     : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'airsea' ? MAP_TITLE.airsea : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
-  const CNT_ICON = isNdb
-    // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
-    ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
-    : kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : kind === 'vormap' ? '&#11041;' : aero || kind === 'avdata' || kind === 'airsea'
+  const CNT_ICON = kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : kind === 'vormap' ? '&#11041;' : aero || kind === 'avdata' || kind === 'airsea'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
     : '&#128225;';
 
+  /* ★★ the page's ⓘ legend sections — shared by their own maps and (beta96) the AIR & SEA map, which shows the aviation and
+   *  maritime ones always and NDB / VOR / SONDES only while that mode is live (__legLive) */
+  const legAv = `
+      <div class="lg-sec">AVIATION MAP (ADS-B · ACARS · VDL2 · HFDL · ADS-C)</div>
+      <div class="lg-row"><span style="color:rgb(80,255,120)">&#9992;</span><span>a fresh position &mdash; under 10 s (ADS-B) or 2 min (datalink)</span></div>
+      <div class="lg-row"><span style="color:rgb(180,255,80)">&#9992;</span><span>ageing &mdash; 10&ndash;30 s (ADS-B) or 2&ndash;10 min (datalink)</span></div>
+      <div class="lg-row"><span style="color:rgb(255,190,40)">&#9992;</span><span>old &mdash; it has flown on</span></div>
+      <div class="lg-row"><span>&#10138;</span><span>pointing the way it is going: its track, or the line between its last two fixes; each new fix glides in</span></div>
+      <div class="lg-row"><span>&#9678;</span><span>RINGS in NM &middot; AUTO / FIT keep every aircraft in view &middot; the card says which sources heard it</span></div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+`;
+  const legVor = `
+      <div class="lg-sec">VOR / ILS MAP</div>
+      <div class="lg-row"><span style="color:#ffb000">&#11041;</span><span>a VOR, its radial drawn towards you (true bearing)</span></div>
+      <div class="lg-row"><span style="color:#ffb000">&#9650;</span><span>an ILS localiser</span></div>
+      <div class="lg-row"><span style="color:#7cff8a">&#8853;</span><span>FIX &mdash; where radials from two stations cross, and its circle of uncertainty</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Faded = not heard this sweep</span></div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+`;
+  const legSd = `
+      <div class="lg-sec">RADIOSONDES (RS41 · DFM · M10 · M20)</div>
+      <div class="lg-row"><span class="lg-dot" style="background:#7fd4ff;"></span><span>climbing (or level)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ff8a4d;"></span><span>falling &mdash; after the balloon burst</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Pick one for its track</span></div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+`;
+  const legShip = `
+      <div class="lg-sec">SHIPS (AIS)</div>
+      ${Object.entries(AIS_COLOURS).map(([f, c]) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${f === 'hsc' ? 'high-speed craft' : f}</span></div>`).join('')}
+      ${shipLegendRows(['ships']).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-sec">DSC POSITIONS</div>
+      ${shipLegendRows(['dsc']).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-sec">NAVTEX · STATIONS RECEIVED</div>
+      <div class="lg-row"><span class="lg-dot" style="background:#4fc3f7;"></span><span>518 kHz (international)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#c792ea;"></span><span>490 kHz (national)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ffb74d;"></span><span>4209.5 kHz (HF)</span></div>
+      <div class="lg-row"><span>?</span><span>Not certain which station</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Dashed rim = likely</span></div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+      <div class="lg-sec">WARNINGS</div>
+      ${NAV_HAZARDS.map((h) => `<div class="lg-row"><span>${navGlyphSvg(h.id, 14, NAV_HAZARD_COLOURS[h.id])}</span><span>${esc(h.words)}</span></div>`).join('')}
+      ${NAV_MARK_ROWS.map((h) => `<div class="lg-row"><span>${navMarkRowSvg(h, 14)}</span><span>${esc(h.words)}</span></div>`).join('')}
+      <div class="lg-row"><span>&#9675;</span><span>Faded = expired or cancelled (ALL only)</span></div>
+      <div class="lg-row"><span>&#9312;</span><span>A number = warnings gathered; tap to zoom in</span></div>
+      <div class="lg-sec">WEATHER</div>
+      ${windLegendRows().map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-row"><span style="color:#cfe6ff">&#9645;</span><span>Latest forecast per sea area (an older server: no arrow)</span></div>
+      <div class="lg-row"><span style="color:#ff6b5a">&#9645;</span><span>Gale or worse</span></div>
+      <div class="lg-sec">SEA AREAS</div>
+      ${seaLegendRows(true).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-row"><span></span><span style="opacity:.7">${esc(seaAttributionAll())}</span></div>
+`;
+  const legNdb = `
+      <div class="lg-sec">NDB BEACONS</div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ffb000;"></span><span>&#10003; identified, at its published place</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ffe066;"></span><span>&#8776; read one letter off the published ident</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(255,184,51,0.55);"></span><span>? not read yet &mdash; the likeliest beacon</span></div>
+      <div class="lg-row"><span class="lg-dot" style="width:5px;height:5px;background:rgba(170,170,170,0.6);"></span><span>published, not heard</span></div>
+      <div class="lg-sec">SIGNAL</div>
+      <div class="lg-row"><span style="color:#e04040">&#9646;</span><span>&lt; 10 dB</span></div>
+      <div class="lg-row"><span style="color:#e0b020">&#9646;&#9646;</span><span>&lt; 20 dB</span></div>
+      <div class="lg-row"><span style="color:#33cc44">&#9646;&#9646;&#9646;</span><span>20 dB and over &middot; dim = not heard this minute</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Range rings in nautical miles</span></div>
+`;
+  const airSeaLegend = () => `<div class="lgLive" data-l="ndb" style="display:none">${legNdb}</div><div class="lgLive" data-l="vor" style="display:none">${legVor}</div>`
+    + `<div class="lgLive" data-l="sondes" style="display:none">${legSd}</div>${legAv}${legShip}`;
   return `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -326,9 +392,9 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
-${isNdb || kind === 'avdata' || kind === 'airsea' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
+${kind === 'avdata' || kind === 'airsea' ? `<script>${ADSB_LAYER_JS}</script>` : ''}
 ${!isHfdl ? `<script>${MAP_AUTOFIT_JS}</script>` : ''}
-${isNdb ? `<script>${NDB_LAYER_JS}</script>` : ''}
+${kind === 'airsea' ? `<script>${NDB_LAYER_JS}</script>` : ''}
 ${isTrk ? `<script>${TRACK_LAYER_JS}</script>` : ''}
 ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
 <style>
@@ -608,7 +674,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   body.dsumOn #toast{bottom:calc(var(--dsh,0px) + 6px);}
   body.dsumOn:not(.dwide) .maplibregl-ctrl-bottom-left,body.dsumOn:not(.dwide) .leaflet-bottom.leaflet-left{bottom:var(--dsh,0px);}
   ` : ''}
-  ${isNdb || isTrk ? `
+  ${isTrk ? `
   /* ★★ ADS-B (and V12 NDB, AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
      legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
      downwards from there. */
@@ -623,8 +689,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 <div id="topbar">
   ${opts?.only
     ? `<button id="back" aria-label="Close the map — ${esc(opts.only)}, and the mode carries on">CLOSE MAP</button>`   /* ★★ V12 the only mode: no EXIT */
-    : isNdb
-    ? '<button id="back" aria-label="Exit NDB and give the receiver back">EXIT NDB</button>'
     : kind === 'ais' ? '<button id="back" aria-label="Exit AIS and give the receiver back">EXIT AIS</button>'
     : kind === 'aprs' ? '<button id="back" aria-label="Close the map — the APRS decoder carries on">CLOSE MAP</button>'
     : kind === 'dsc' ? '<button id="back" aria-label="Close the map — the DSC decoder carries on">CLOSE MAP</button>'
@@ -666,19 +730,7 @@ ${isSpots ? `
     <div id="legbtn" title="Legend">&#9432;</div>
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
-      ${isNdb ? `
-      <div class="lg-sec">NDB BEACONS</div>
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:#ffb000;"></span><span>&#10003; identified, at its published place</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:#ffe066;"></span><span>&#8776; read one letter off the published ident</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:rgba(255,184,51,0.55);"></span><span>? not read yet &mdash; the likeliest beacon</span></div>
-      <div class="lg-row"><span class="lg-dot" style="width:5px;height:5px;background:rgba(170,170,170,0.6);"></span><span>published, not heard</span></div>
-      <div class="lg-sec">SIGNAL</div>
-      <div class="lg-row"><span style="color:#e04040">&#9646;</span><span>&lt; 10 dB</span></div>
-      <div class="lg-row"><span style="color:#e0b020">&#9646;&#9646;</span><span>&lt; 20 dB</span></div>
-      <div class="lg-row"><span style="color:#33cc44">&#9646;&#9646;&#9646;</span><span>20 dB and over &middot; dim = not heard this minute</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>Range rings in nautical miles</span></div>
-      ` : kind === 'aprs' ? `
+      ${kind === 'airsea' ? airSeaLegend() : kind === 'aprs' ? `
       <div class="lg-sec">APRS STATIONS</div>
       <div class="lg-row"><span class="lg-dot" style="background:#59c26b;"></span><span>station</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:#4fa3ff;"></span><span>moving</span></div>
@@ -688,26 +740,11 @@ ${isSpots ? `
       <div class="lg-row"><span>&#9711;</span><span>Dashed rim = alternate symbol table</span></div>
       <div class="lg-row"><span>?</span><span>A character = a symbol not drawn here</span></div>
       ` : kind === 'avdata' ? `
-      <div class="lg-sec">AVIATION MAP (ADS-B · ACARS · VDL2 · HFDL · ADS-C)</div>
-      <div class="lg-row"><span style="color:rgb(80,255,120)">&#9992;</span><span>a fresh position &mdash; under 10 s (ADS-B) or 2 min (datalink)</span></div>
-      <div class="lg-row"><span style="color:rgb(180,255,80)">&#9992;</span><span>ageing &mdash; 10&ndash;30 s (ADS-B) or 2&ndash;10 min (datalink)</span></div>
-      <div class="lg-row"><span style="color:rgb(255,190,40)">&#9992;</span><span>old &mdash; it has flown on</span></div>
-      <div class="lg-row"><span>&#10138;</span><span>pointing the way it is going: its track, or the line between its last two fixes; each new fix glides in</span></div>
-      <div class="lg-row"><span>&#9678;</span><span>RINGS in NM &middot; AUTO / FIT keep every aircraft in view &middot; the card says which sources heard it</span></div>
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+${legAv}
       ` : kind === 'vormap' ? `
-      <div class="lg-sec">VOR / ILS MAP</div>
-      <div class="lg-row"><span style="color:#ffb000">&#11041;</span><span>a VOR, its radial drawn towards you (true bearing)</span></div>
-      <div class="lg-row"><span style="color:#ffb000">&#9650;</span><span>an ILS localiser</span></div>
-      <div class="lg-row"><span style="color:#7cff8a">&#8853;</span><span>FIX &mdash; where radials from two stations cross, and its circle of uncertainty</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>Faded = not heard this sweep</span></div>
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+${legVor}
       ` : kind === 'sondes' ? `
-      <div class="lg-sec">RADIOSONDES (RS41 · DFM · M10 · M20)</div>
-      <div class="lg-row"><span class="lg-dot" style="background:#7fd4ff;"></span><span>climbing (or level)</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:#ff8a4d;"></span><span>falling &mdash; after the balloon burst</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>Pick one for its track</span></div>
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+${legSd}
       ` : kind === 'ism' ? `
       <div class="lg-sec">ISM · MESH NODES</div>
       <div class="lg-row"><span class="lg-dot" style="background:#67ea94;"></span><span>Meshtastic</span></div>
@@ -715,30 +752,7 @@ ${isSpots ? `
       <div class="lg-row"><span>&#9711;</span><span>Hollow = not heard for 15 min</span></div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       ` : kind === 'navtex' || kind === 'ais' || kind === 'dsc' ? `
-      <div class="lg-sec">SHIPS (AIS)</div>
-      ${Object.entries(AIS_COLOURS).map(([f, c]) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${f === 'hsc' ? 'high-speed craft' : f}</span></div>`).join('')}
-      ${shipLegendRows(['ships']).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
-      <div class="lg-sec">DSC POSITIONS</div>
-      ${shipLegendRows(['dsc']).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
-      <div class="lg-sec">NAVTEX · STATIONS RECEIVED</div>
-      <div class="lg-row"><span class="lg-dot" style="background:#4fc3f7;"></span><span>518 kHz (international)</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:#c792ea;"></span><span>490 kHz (national)</span></div>
-      <div class="lg-row"><span class="lg-dot" style="background:#ffb74d;"></span><span>4209.5 kHz (HF)</span></div>
-      <div class="lg-row"><span>?</span><span>Not certain which station</span></div>
-      <div class="lg-row"><span>&#9711;</span><span>Dashed rim = likely</span></div>
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
-      <div class="lg-sec">WARNINGS</div>
-      ${NAV_HAZARDS.map((h) => `<div class="lg-row"><span>${navGlyphSvg(h.id, 14, NAV_HAZARD_COLOURS[h.id])}</span><span>${esc(h.words)}</span></div>`).join('')}
-      ${NAV_MARK_ROWS.map((h) => `<div class="lg-row"><span>${navMarkRowSvg(h, 14)}</span><span>${esc(h.words)}</span></div>`).join('')}
-      <div class="lg-row"><span>&#9675;</span><span>Faded = expired or cancelled (ALL only)</span></div>
-      <div class="lg-row"><span>&#9312;</span><span>A number = warnings gathered; tap to zoom in</span></div>
-      <div class="lg-sec">WEATHER</div>
-      ${windLegendRows().map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
-      <div class="lg-row"><span style="color:#cfe6ff">&#9645;</span><span>Latest forecast per sea area (an older server: no arrow)</span></div>
-      <div class="lg-row"><span style="color:#ff6b5a">&#9645;</span><span>Gale or worse</span></div>
-      <div class="lg-sec">SEA AREAS</div>
-      ${seaLegendRows(true).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
-      <div class="lg-row"><span></span><span style="opacity:.7">${esc(seaAttributionAll())}</span></div>
+${legShip}
       ` : isHfdl ? `
       <div class="lg-sec">AIRCRAFT AGE</div>
       <div class="lg-row"><span class="lg-dot" style="background:rgba(80,255,120,0.92);"></span><span>&lt; 2 min</span></div>
@@ -866,7 +880,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
       profile:((KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
-      scale:(KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc'||KIND==='airsea')?'nautical':'metric',scalePosition:'${isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'});
+      scale:(KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc'||KIND==='airsea')?'nautical':'metric',scalePosition:'${isTrk ? 'bottom-right' : 'bottom-left'}'});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -1120,7 +1134,7 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
   /* ★ beta91 (Stuart 11-22: "map scale is behind the aircraft list box") the bottom-left corner is the live list's
    *  (AdsbLiveList / NdbLiveList / TrackLiveList, React Native over this page): there the scale sits bottom-right with the
    *  zoom keys */
-  scalePosition: '${isNdb || isTrk ? 'bottom-right' : 'bottom-left'}'
+  scalePosition: '${isTrk ? 'bottom-right' : 'bottom-left'}'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
  *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
@@ -1188,9 +1202,6 @@ function showSetLoc(){
 }
 if(LOCAL){
   if(RX_LAT||RX_LON)addRx(); else showSetLoc();
-}else if(KIND==='ndb'){
-  /* ★ V12 NDB: the beacon layer draws the receiver's house itself (ndblayer.js) — only the view is set here. */
-  if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],7);
 }else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea'){
   /* ★ V12 AIS / APRS: the server's /location, injected; the track layer draws the receiver's house itself (setReceiver). */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],8);
@@ -1648,7 +1659,13 @@ if(KIND==='airsea'){
  *  is why the ADS-B layer is injected first). Reports arrive by injection (__ndbPush): the app's spectrum socket already
  *  carries them. The layer takes the VibeMapGL instance (GLVM) on the GPU map, else the Leaflet map — never the compat
  *  adapter, which it does not know. A marker tapped is posted back (ndbSel) so the live list's row follows. */
-if(KIND==='ndb'){
+/* ★★★ beta96 (docs/v12/ONE-MAP.md stage 8): NDB is a live state of the AIR & SEA map — the beacon layer joins THIS page's
+ *  map while NDB is live (made on the first report, gone on __ndbOff). The page's own house (the track layer draws it) and
+ *  its auto fit (trkFitMake: the beacons heard are among its points) are the map's; an aircraft under a press wins it. */
+/* ★★ the ⓘ legend's live sections (NDB · VOR · SONDES): shown only while that layer is on the map */
+var legLive={};
+function legShow(k,on){if(!!legLive[k]===!!on)return;legLive[k]=!!on;var els=document.querySelectorAll('.lgLive[data-l="'+k+'"]');for(var i=0;i<els.length;i++)els[i].style.display=on?'':'none';}
+if(KIND==='airsea'){
   var NDB_PREFS=${JSON.stringify(opts?.ndbPrefs ?? null)};
   var ndbLayer=null;
   function ndbMake(){
@@ -1656,9 +1673,8 @@ if(KIND==='ndb'){
     try{
       ndbLayer=VibeNdbLayer.create(GLVM||map,{
         receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,
-        theme:'dark',prefs:NDB_PREFS||undefined,
-        // ★ beta92 the shared auto fit's state (on · paused by a touch · off) for React Native's FIT chip
-        onFitState:function(st){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'ndbFit',on:!!(st&&st.on),paused:!!(st&&st.paused)}));},
+        theme:'dark',prefs:NDB_PREFS||undefined,autoFit:false,drawReceiver:false,
+        yieldClick:function(x,y,t){try{return !!(acLayer&&acLayer.pickAt&&acLayer.pickAt(x,y,t));}catch(e){return false;}},
         onSelect:function(k){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'ndbSel',key:k||null}));}
       });
     }catch(e){console.error('NDB layer could not start',e);ndbLayer=null;}
@@ -1667,16 +1683,15 @@ if(KIND==='ndb'){
   window.__ndbPush=function(json){
     try{
       var d=JSON.parse(json);if(!d||!Array.isArray(d.beacons))return;
-      cnt.textContent=String(d.identified|0);
       var L2=ndbMake();if(L2)L2.update(d.beacons,Array.isArray(d.unheard)?d.unheard:[]);
+      legShow('ndb',true);
+      var af=typeof trkFitMake==='function'?trkFitMake():null;if(af)af.poke();
     }catch(e){console.error('NDB: bad report',e);}
   };
-  window.__ndbFocus=function(k){try{var L3=ndbMake();if(L3)L3.focus(String(k));}catch(e){console.error('NDB focus',e);}};
+  window.__ndbOff=function(){try{if(ndbLayer)ndbLayer.destroy();}catch(e){console.error('NDB off',e);}ndbLayer=null;legShow('ndb',false);};
+  window.__ndbFocus=function(k){try{var L3=ndbMake();if(L3){var af=typeof trkFitMake==='function'?trkFitMake():null;if(af)af.pause();L3.focus(String(k));}}catch(e){console.error('NDB focus',e);}};
   window.__ndbSelect=function(k){try{var L3=ndbMake();if(L3)L3.select(String(k||''));}catch(e){console.error('NDB select',e);}};
   window.__ndbPrefs=function(p){try{var L4=ndbMake();if(L4)L4.setPrefs(p);}catch(e){console.error('NDB prefs',e);}};
-  /* ★ beta92 the FIT chip tapped — ADS-B's AUTO key: paused → resume, on → off, off → on (ndblayer fitKey) */
-  window.__ndbFitKey=function(){try{var L4=ndbMake();if(L4)L4.fitKey();}catch(e){console.error('NDB fit',e);}};
-  window.__ndbListW=function(w){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
   if(window.__pendingNdb){window.__ndbPush(window.__pendingNdb);window.__pendingNdb=null;}
 }
 // ════════ V12 AIS / APRS — the shared track layer, fed by React Native ════════
@@ -1741,7 +1756,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   function trkFitMake(){
     if(trkFit||KIND==='avdata'||!window.VibeAutoFit)return trkFit;
     var l=trkMake();if(!l)return null;
-    try{trkFit=VibeAutoFit.attach(map,{points:function(){return l.points();},receiver:function(){return l.receiver();},
+    try{trkFit=VibeAutoFit.attach(map,{points:function(){var p=l.points();if(KIND==='airsea'&&ndbLayer&&ndbLayer.points){var q=ndbLayer.points();if(q.length)p=p.concat(q);}return p;},receiver:function(){return l.receiver();},
       button:document.getElementById('snap'),what:${JSON.stringify(trkWhat(kind))}});}
     catch(e){console.error('auto fit could not start',e);trkFit=null;}
     return trkFit;
@@ -1771,6 +1786,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
       var nH=0;for(var j=0;j<a.length;j++)if(!(a[j]&&a[j]._nofit))nH++;cnt.textContent=String(nH);   // ★ beta95 what was heard, not the chart
+      if(KIND==='airsea'){var hv=false,hs=false;for(var j2=0;j2<a.length;j2++){var kk=String(a[j2]&&a[j2].key||'');if(kk.indexOf('vor:')===0)hv=true;else if(kk.indexOf('sd:')===0)hs=true;}legShow('vor',hv);legShow('sondes',hs);}
       var l=trkMake();if(!l)return;
       var ac=KIND==='airsea'&&!acLayer&&!a.some(function(it){return it&&it._adsb;})?null:acMake();   // ★ beta96 AIR & SEA: made when the first aircraft comes
       if(ac){var rest=[],planes=[];acHexKey={};acKeyHex={};
@@ -2337,10 +2353,9 @@ export default function MapOverlay(
   /* ★★ V12 NDB: its toggles (RINGS · UNHEARD · FIT) are remembered per device the same way — read once before the page
    *  is built and passed IN; a change goes to the layer by injection and to storage, never back into the page's source. */
   const [ndbPrefs, setNdbPrefs] = useState<NdbMapPrefs | null>(null);
-  const [ndbFitPaused, setNdbFitPaused] = useState(false);   // ★ beta92 the auto fit paused by a touch (the chip striped)
   const ndbPrefsAtBuild = useRef<NdbMapPrefs | null>(null);
   useEffect(() => {
-    if (kind !== 'ndb' || ndbPrefs) return;
+    if (kind !== 'airsea' || ndbPrefs) return;   // ★ beta96 NDB lives on the AIR & SEA map
     let dead = false;
     AsyncStorage.getItem(NDB_PREFS_KEY)
       .then((v) => { if (!dead) setNdbPrefs(parseNdbMapPrefs(v)); })
@@ -2350,7 +2365,7 @@ export default function MapOverlay(
   if (ndbPrefs && !ndbPrefsAtBuild.current) ndbPrefsAtBuild.current = ndbPrefs;
   const ndbPrefsReady = !!ndbPrefs;
   const html = useMemo(
-    () => (kind && glOk !== null && (kind !== 'airsea' || adsbPrefsReady) && (kind !== 'ndb' || ndbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
+    () => (kind && glOk !== null && (kind !== 'airsea' || (adsbPrefsReady && ndbPrefsReady)) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
         adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, storeWindows }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
@@ -2502,23 +2517,25 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`window.__adsbFeedWarn&&window.__adsbFeedWarn(${JSON.stringify(adsbFeedWarn ?? '')});true;`);
   };
   useEffect(() => { if (visible) pushFeedWarn(); }, [kind, visible, adsbFeedWarn]); // eslint-disable-line react-hooks/exhaustive-deps
-  const adsbListW = useRef(0);   // ★ NDB's list width, kept for a page that (re)loads after it measured itself
   /* ★★ V12 NDB: the layer's feed (ndbMapFeed — the web's renderMap) each report, double-encoded as ADS-B's is; the
    *  selected beacon (a marker tapped, or a row) is kept here so the list and the card follow. */
   const [ndbSel, setNdbSel] = useState(0);
   const ndbFeedLit = useMemo(() => {
-    if (kind !== 'ndb' || !ndb?.report) return null;
+    if (kind !== 'airsea' || !ndb?.report) return null;
     const f = ndbMapFeed(ndb.report, ndb.found);
-    return JSON.stringify(JSON.stringify({ identified: ndb.report.identified, beacons: f.beacons, unheard: f.unheard }))
+    const shown = trk?.ndbShown !== false;   // ★ beta96 the NDB chip
+    return JSON.stringify(JSON.stringify({ identified: ndb.report.identified, beacons: shown ? f.beacons : [], unheard: shown ? f.unheard : [] }))
       .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
       .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
-  }, [kind, ndb?.report, ndb?.found]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kind, ndb?.report, ndb?.found, trk?.ndbShown]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pushNdb = () => {
-    if (kind !== 'ndb' || !ndbFeedLit) return;
+    if (kind !== 'airsea' || !ndbFeedLit) return;
     webRef.current?.injectJavaScript(`(window.__ndbPush?window.__ndbPush(${ndbFeedLit}):(window.__pendingNdb=${ndbFeedLit}));true;`);
   };
   useEffect(() => { if (visible) pushNdb(); }, [visible, ndbFeedLit]);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (kind !== 'ndb') setNdbSel(0); }, [kind]);
+  // ★ beta96 NDB ended while the map stays (opened from a menu, or the mode carried on): its layer leaves the map
+  const ndbLive = kind === 'airsea' && !!ndb;
+  useEffect(() => { if (!ndbLive) { setNdbSel(0); webRef.current?.injectJavaScript('window.__pendingNdb=null;window.__ndbOff&&window.__ndbOff();true;'); } }, [ndbLive]);
   const ndbJs = (fn: string, arg: unknown) =>
     webRef.current?.injectJavaScript(`window.${fn}&&window.${fn}(${JSON.stringify(arg)});true;`);
   const ndbChoose = (id: number, fromList: boolean) => {
@@ -2696,7 +2713,6 @@ export default function MapOverlay(
           onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
                                                     webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
-                             if (kind === 'ndb') ndbJs('__ndbListW', adsbListW.current);
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
                                               if (trkRef.current?.focus) trkFocus(trkRef.current.focus); } }}
           onMessage={(e) => {
@@ -2712,17 +2728,6 @@ export default function MapOverlay(
             /* ★ The ADS-B layer's toggles changed — remember them for this device (see adsbPrefsRef). Re-parsed, so
              *  only three booleans ever reach storage whatever the page sent. */
             // ★ V12 NDB: a marker tapped (or the selection cleared) — the list's row and the card follow
-            // ★ beta92 the NDB auto fit's state — the FIT chip's look (on / paused), and `on` remembered as the pref
-            if (m && (m as any).t === 'ndbFit') {
-              const on = (m as any).on === true, paused = (m as any).paused === true;
-              setNdbFitPaused(on && paused);
-              if (ndbPrefs && ndbPrefs.autofit !== on) {
-                const next = { ...ndbPrefs, autofit: on };
-                setNdbPrefs(next);
-                AsyncStorage.setItem(NDB_PREFS_KEY, JSON.stringify(next)).catch(() => {});
-              }
-              return;
-            }
             if (m && (m as any).t === 'ndbSel') {
               const k = Number((m as any).key);
               ndbChoose(Number.isFinite(k) && k > 0 ? Math.floor(k) : 0, false);
@@ -2858,16 +2863,6 @@ export default function MapOverlay(
         />
         </MacPinch>
         )}
-        {/* ★★ V12 THE NDB LIVE LIST, bottom-left over the map, and the beacon card and dialogs — RN-drawn so the pad and
-            keyboard reach them (AdsbLiveList's reason). */}
-        {kind === 'ndb' && !!pageUri && !packError && !!ndb && (
-          <NdbLiveList ndb={ndb} selected={ndbSel} onSelect={(id) => ndbChoose(id, true)}
-                       prefs={ndbPrefs ?? parseNdbMapPrefs(null)} onPrefs={ndbSetPrefs}
-                       onFitKey={() => ndbJs('__ndbFitKey', 1)} fitPaused={ndbFitPaused}
-                       onFootprint={(w) => { adsbListW.current = w; ndbJs('__ndbListW', w); }}
-                       ink={ink} areaW={winW} areaH={winH}
-                       insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
-        )}
         {/* ★★ beta92 THE DIGI MODES MAP's keys — the window and the panels, over the map's top-left (DigiMapKeys). */}
         {kind === 'digi' && !!pageUri && !packError && digiMapTop > 0 && (
           <DigiMapKeys top={digiMapTop} left={safeInsets?.left ?? 0} windows={!!storeWindows} win={digiWinShown}
@@ -2893,6 +2888,11 @@ export default function MapOverlay(
                            receiver: Number.isFinite(rxLat as number) && Number.isFinite(rxLon as number) && (rxLat || rxLon)
                              ? { lat: rxLat as number, lon: rxLon as number } : null,
                            logoBase: local ? null : (radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/',
+                         } : null}
+                         /* ★★★ beta96 stage 8 NDB live: its list, tiles, keys, card and dialogs are the NAVAIDS tab's (useNdbBody) */
+                         ndb={ndbLive && trk.tab === 'navaids' && ndb ? {
+                           ndb, selected: ndbSel, onSelect: (id: number) => ndbChoose(id, true),
+                           prefs: ndbPrefs ?? parseNdbMapPrefs(null), onPrefs: ndbSetPrefs,
                          } : null}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
