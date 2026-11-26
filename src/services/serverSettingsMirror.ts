@@ -109,6 +109,7 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'landingMap',       storage: 'vs_landingmap',      enc: 'str' },      // ★★★ beta96 the landing map
   { native: 'landingModes',     storage: 'vs_landingmodes',    enc: 'str' },
   { native: 'mapKeep',          storage: 'vs_mapkeep',         enc: 'bool01' },
+  { native: 'bgMode',           storage: 'vs_bgmode',          enc: 'str' },      // ★★★ b96-bgsplit the background whole-radio mode ('' = manual) — the page always sends a definite value
   { native: 'singleMode',       storage: 'vs_singlemode',      enc: 'str' },      // ★★★ beta96 the single-mode radio
   { native: 'biasT',            storage: 'vs_biast',           enc: 'bool01' },
   { native: 'autoDirectSampling', storage: 'vs_autods',        enc: 'bool01' },
