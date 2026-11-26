@@ -142,6 +142,18 @@ inline bool holds(const vibebands::Ranges& r, double lo, double hi) {
 inline Caps compute(const Facts& f) {
     Caps c;
     const std::string& d = f.driver;
+    /* ★★ V12 beta96 AN "ADS-B BEAST FEED (from another receiver)" RADIO: no hardware — its ADS-B comes from another
+     *  receiver's Beast output. ADS-B is its ONLY mode; none of an SDR's settings mean anything for it (AGENTS.md: no dead
+     *  controls) — no landing, gain, hardware, usage, raw IQ, VFO B, background decoding. */
+    if (d == "beast") {
+        c.iq = false;
+        c.modes = {"adsb"};
+        Settings& s = c.s;
+        s.usage = s.vfoB = s.rawIq = s.nbWide = s.landing = s.gain = s.hardware = s.fmDefaults = s.dabLanding = false;
+        s.adsbLanding = s.dxScan = s.bgDecode = s.converter = false;
+        c.hints.push_back("This radio reads another receiver's ADS-B (Beast) output, so the aircraft map is all it offers.");
+        return c;
+    }
     const vibebands::Ranges& R = f.ranges;
     const bool icom = d == "icom";
     c.iq = !icom;

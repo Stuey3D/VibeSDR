@@ -1033,6 +1033,12 @@ public:
         double freqHint = 0;
     };
     int startIcom(const IcomStart& o, std::string& err);
+    /** ★★ V12 beta96 AN "ADS-B BEAST FEED (from another receiver)" RADIO (Stuart 11-26; docs/v12/ADSB-FEED.md): no
+     *  hardware at all — the server reads another receiver's Beast output at host:port (dump1090-fa beside PiAware on the
+     *  LAN, say) and serves the ADS-B map from it. ADS-B is its only mode (no waterfall, tuning, gain or rate). Returns
+     *  the port it serves on, or -1 and `err`. */
+    int startBeast(const std::string& host, int beastPort, std::string& err);
+    static bool isBeastFeed();
     bool isIcom() const;
     /** ★ An Icom's power for the front door's radio list: "on" (CI-V answering), "switchingOn", "off" (USB there, CI-V
      *  silent — switched off or not answering), "absent" (USB gone), or "" (not an Icom). `autoOn` = "Power on the radio

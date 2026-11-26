@@ -1045,6 +1045,18 @@ static int startIcomFrom(const Opts& o, const std::string& port, const std::stri
     return vibe::LocalSdrShim::instance().startIcom(s, err);
 }
 
+/** ★★ V12 beta96 THE BEAST FEED RADIO this process is to be, or nullptr: the radio named (`--radio-serial`) when its
+ *  entry's driver is "beast"; on a SIMPLE server (no front door, no radio named), the primary radio when it is one. */
+static const vsconfig::RadioConfig* beastRadioFor(const Opts& o, bool frontDoor, const vsconfig::ServerConfig& cfg) {
+    if (frontDoor || !o.useUsb) return nullptr;
+    if (o.radioGiven) {
+        for (const auto& r : cfg.radios) if (r.serial == o.radioSerial && r.driver == "beast") return &r;
+        return nullptr;
+    }
+    const int pi = vsconfig::primaryRadio(cfg);
+    if (pi >= 0 && pi < (int)cfg.radios.size() && cfg.radios[(size_t)pi].driver == "beast") return &cfg.radios[(size_t)pi];
+    return nullptr;
+}
 static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv) {
     if (haveServiceManager()) return;   // ★ systemd is doing it; two supervisors would fight
     // ★ TEST-ONLY: the test starts the radio processes itself, as systemd's vibeserver@<serial> units do on a Linux box
@@ -4873,6 +4885,15 @@ int main(int argc, char** argv) {
         // ★ Someone else owns the radios (Android: the app itself). Route to them, start none.
         if (!o.noSupervise) superviseRadios(argv[0], g_serverConfig);
         else std::printf("VibeServer: not starting radios — the host runs them\n");
+    } else if (const vsconfig::RadioConfig* bz = beastRadioFor(o, willBeFrontDoor, g_serverConfig)) {
+        /* ★★ V12 beta96 AN "ADS-B BEAST FEED (from another receiver)" RADIO — no hardware, nothing detected or claimed: the
+         *  ADS-B map from another receiver's Beast output (docs/v12/ADSB-FEED.md). Named, never inferred. */
+        std::string h; int bp = 0;
+        if (!vibe::beast::parseHostPort(bz->beastIn, h, bp, err)) { err = "the Beast feed's address: " + err; port = -1; }
+        else {
+            std::printf("VibeServer: ADS-B Beast feed radio %s — reading %s (no SDR)\n", bz->serial.c_str(), vibe::beast::hostPortText(h, bp).c_str());
+            port = shim.startBeast(h, bp, err);
+        }
     } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);

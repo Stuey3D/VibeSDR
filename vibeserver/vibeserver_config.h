@@ -781,6 +781,9 @@ struct RadioConfig {
      *  {"serve","port","open","push","feeds":[{"host","port","on","uuid"}]}. Empty = everything off (the default per
      *  radio). Validated at the save (vibe::beast::parseConfig); applied live. */
     std::string adsbFeed;
+    /** ★★ V12 beta96 driver "beast" only: the other receiver's Beast output, "host:port" (vibe_beast.h parseHostPort —
+     *  IPv4, [IPv6]:port or a name; no port = 30005). Such a radio has no hardware; ADS-B is its only mode. */
+    std::string beastIn;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.

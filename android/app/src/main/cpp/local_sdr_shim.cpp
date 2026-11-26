@@ -2148,6 +2148,10 @@ static constexpr double    kDialShowSec = 120.0;
 /** ★★★ AN ICOM IS ALWAYS A SHARED DIAL (plan §2.2): there is ONE physical receiver, so a locked
  *  centre cannot give anybody a VFO of their own. Set for the life of an Icom session. */
 static std::atomic<bool> g_icomOn{false};
+/* ★★ V12 beta96 THE BEAST FEED RADIO (startBeast): no hardware; ADS-B read from another receiver's Beast output. */
+static std::atomic<bool> g_beastOn{false};
+static vibe::beast::BeastInput& g_beastIn() { static auto* b = new vibe::beast::BeastInput(); return *b; }
+static std::string g_beastHost; static int g_beastPort = 0;
 // ★ Android: the owner's Icom settings for the next start(fd…) of an Icom — see LocalSdrShim::setIcomNext.
 static std::mutex g_icomNextMtx;
 static LocalSdrShim::IcomStart g_icomNext;
@@ -17761,8 +17765,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  it (set by adsbKeepTick, cleared by any other entry and by the leave). modeResume reads it: a listener coming back
      *  to the mode they left may have it back over the idle default (2026-11-12). */
     std::atomic<bool> adsbByKeep_{false};
+    /* ★★ V12 beta96 THE BEAST FEED RADIO'S ENTRY: the decoder service with no demodulator, fed by the Beast input; the same
+     *  report, shared table, range outline and flight-tracker sink as a local decode. Nothing to tune, no gain, no rate. */
+    void beastEnter() {
+        g_adsb.start(0, g_bgLat.load(), g_bgLon.load(), !vsModeBlocked("commb"));
+        vibeavshare::sharer().provide("adsb", [](int64_t since, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>&) {
+            g_adsb.shareSince(since, out);
+        });
+        vibeavshare::sharer().adsbLive([] { return g_adsb.running(); });
+        vibe::beast::Hub::shared().setInputHost(g_beastHost);   // ★ the loop guard
+        g_beastIn().start(g_beastHost, g_beastPort, [](const std::vector<vibe::beast::Decoded>& ds) {
+            std::vector<vibeadsb::Frame> fs; fs.reserve(ds.size());
+            for (const auto& d : ds) {
+                const vibeadsb::Frame f = vibeadsb::frameFromBeast(d.msg.data(), int(d.msg.size()), d.ts, d.sig);
+                if (f.len) fs.push_back(f);
+            }
+            g_adsb.injectFrames(fs);
+        });
+        adsbLastReport_ = nowSecs();
+        g_adsbMode.store(true);
+        LOGI("[ADS-B] Beast feed radio: reading %s", vibe::beast::hostPortText(g_beastHost, g_beastPort).c_str());
+        sendAdsbAll();
+    }
+    void beastTick() {
+        const double t = nowSecs();
+        if (g_adsbMode.load(std::memory_order_relaxed) && t - adsbLastReport_ >= 1.0) { adsbLastReport_ = t; sendAdsbAll(); }
+    }
     void adsbEnter(bool preSaved = false) {
         if (g_adsbMode.load()) { sendAdsbAll(); return; }
+        if (g_beastOn.load()) { beastEnter(); return; }   // ★ beta96 nothing to tune: the replies come from the feed
         adsbByKeep_.store(false);
         AdsbSaved& s = adsbSaved_;
         if (!preSaved) {
@@ -24860,6 +24891,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("[ADS-B] %s asked%s (ADS-B is %s)", onV != 0 ? "ON" : "OFF", sock ? " by a client" : " internally",
                  g_adsbMode.load() ? "on" : "off");
             if (onV == 0 && onlyModeRefusesLeave(sock, "adsb", "ADS-B", "adsb_error")) return;   // ★★ V12 the only mode
+            // ★★ beta96 a Beast feed radio has nothing else — not even for the admin; only the server's own stop leaves
+            if (onV == 0 && sock && g_beastOn.load()) {
+                sendText(sock, "{\"type\":\"adsb_error\",\"why\":\"this receiver is an ADS-B feed from another receiver \xe2\x80\x94 the map is all it has\"}");
+                return;
+            }
             if (onV == 0) { if (g_adsbMode.load()) noteDialMover(sock); adsbLeave(true); return; }
             const std::string why = vsAdsbWhyNot();
             if (!why.empty()) {
@@ -27067,7 +27103,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       + std::string(",\"dabOnly\":") + ((dabOnlyNow() && !adminNow(sock)) ? "true" : "false")
                       /* ★★ V12 THE ONLY MODE, any whole-radio mode ("dab", "adsb", … or "" — always sent, so a client knows
                        *    this server says; "" for the signed-in admin, who may leave). `dabOnly` stays for older clients. */
-                      + ",\"onlyMode\":\"" + (adminNow(sock) ? std::string() : onlyModeNow()) + "\""
+                      + ",\"onlyMode\":\"" + (g_beastOn.load() ? std::string("adsb") : adminNow(sock) ? std::string() : onlyModeNow()) + "\""
                       + ",\"agcLocked\":"
                       + ((LocalSdrShim::agcLocked() && !adminNow(sock)) ? "true" : "false")
                       /* ★★★ AND WHETHER THE GAIN CAN MOVE AT ALL. `gainCap` alone says "no higher
@@ -42976,8 +43012,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         houseThread = std::thread([this]{
             vibeThreadName("vibe-house");
             while (houseRun.load()) {
-                for (int i = 0; i < 20 && houseRun.load(); i++)
+                for (int i = 0; i < 20 && houseRun.load(); i++) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (g_beastOn.load(std::memory_order_relaxed) && !stopping.load()) beastTick();   // ★ beta96 no DSP loop to report from
+                }
                 if (!houseRun.load()) break;
                 if (stopping.load() || restarting.load()) continue;
                 enforceSessionLimit();
@@ -44181,6 +44219,7 @@ std::string LocalSdrShim::adsbFeedStatusJson() {
     // ★ whether this radio could feed at all — the admin row and the Setup card are drawn only where it could
     const std::string why = vsAdsbHwWhyNot();
     j.pop_back();
+    if (g_beastOn.load()) j += ",\"input\":" + g_beastIn().statusJson();   // ★ the Beast feed radio's own source
     j += std::string(",\"available\":") + (why.empty() ? "true" : "false");
     if (!why.empty()) j += ",\"why\":\"" + vibe::beast::jsonEsc(why) + "\"";
     return j + "}";
@@ -45570,6 +45609,7 @@ static bool vsDabDecoderAvailable() {
  *  while a block or a rate the owner can change is said in words beside it. Ignores the owner's block, the running
  *  rate and the rate switch — the page reads those from its own form. */
 static std::string vsAdsbHwWhyNot() {
+    if (g_beastOn.load()) return {};   // ★ beta96 a Beast feed radio IS ADS-B
     if (g_icomOn.load()) return "this radio is a transceiver's audio, not a wideband capture";
     if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
         return "this receiver's centre frequency is locked by its owner";
@@ -45583,6 +45623,7 @@ static std::string vsAdsbHwWhyNot() {
     return {};
 }
 static std::string vsAdsbWhyNot() {
+    if (g_beastOn.load()) return {};   // ★ beta96 a Beast feed radio IS ADS-B (nothing to tune, no rate)
     if (vsModeBlocked("adsb")) return "the server owner has switched ADS-B off on this receiver";
     if (g_icomOn.load()) return "this radio is a transceiver's audio, not a wideband capture";
     if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
@@ -45980,6 +46021,7 @@ static vibecaps::Caps vsRadioCaps() {
         f.ranges = vsTunableRanges();
         return vibecaps::compute(f);
     }
+    if (g_beastOn.load()) { f.driver = "beast"; return vibecaps::compute(f); }   // ★ beta96 ADS-B only
     f.driver = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf" : shim.isHackRf() ? "hackrf"
              : shim.isAirspy() ? "airspy" : shim.isUsrp() ? "usrp" : "rtl";
     if (f.driver == "rtl") {
@@ -48683,6 +48725,7 @@ void LocalSdrShim::stopLocked() {
      *     running) 1.3 s after that — status=6/ABRT on every settings save. The flag was set
      *     AFTER the clients were stopped, which is exactly too late. */
     impl->stopping.store(true);
+    if (g_beastOn.load()) { g_beastIn().stop(); g_adsb.stop(); g_adsbMode.store(false); }   // ★ beta96 the Beast feed radio
     impl->rtlDoorStop();   // ★ the RTL-TCP door first: its threads read this engine (startRtlTcpDoor)
     // ★★★ V12: the DX scanner stops (the radio is the teardown's now) and its log is written — before the DAB wait below.
     impl->dxShutdown();
@@ -52529,6 +52572,46 @@ int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
          o.ownerLock ? "ON (only the owner tunes)" : "off (the ordinary dial rules)");
     return chosen;
 #endif
+}
+/* ★★ V12 beta96 THE BEAST FEED RADIO (docs/v12/ADSB-FEED.md) — startIcom's shape with no source at all: the listener,
+ *  the accept loop and housekeeping (which sends the 1 fps report — there is no DSP loop), and ADS-B entered at once. */
+bool LocalSdrShim::isBeastFeed() { return g_beastOn.load(); }
+int LocalSdrShim::startBeast(const std::string& host, int beastPort, std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on Beast feed start — tearing down"); stopLocked(); }
+    { std::string h; int pt = 0;
+      if (!vibe::beast::parseHostPort(vibe::beast::hostPortText(host, beastPort), h, pt, err)) return -1; }
+    auto* impl = new Impl();
+    impl->sampleRate = 2400000;       // ★ nominal: nothing is captured here
+    impl->fftSize = 1024;
+    impl->fftRate = 1.0; impl->baseFftRate = 1.0;
+    impl->mode = "am";
+    impl->audioFreq.store(1090e6); impl->rtlCenter.store(1090e6); impl->viewCenter.store(1090e6);
+    g_beastHost = host; g_beastPort = beastPort;
+    g_beastOn.store(true);
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0 ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+                                  : "no free port in 48000-48049";
+        g_beastOn.store(false); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startHousekeeping();
+    p = impl;
+    impl->beastEnter();
+    LOGI("Beast feed radio started: ADS-B from %s, port=%d", vibe::beast::hostPortText(host, beastPort).c_str(), chosen);
+    return chosen;
 }
 bool LocalSdrShim::isHackRf()   const { return p && p->useHackRf(); }
 bool LocalSdrShim::isAirspy()   const { return p && p->useAirspy(); }

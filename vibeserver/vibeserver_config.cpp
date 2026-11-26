@@ -704,6 +704,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     if (r.dxScan.size() > 1000) r.dxScan.clear();
     S("adsbFeed", r.adsbFeed);                 // ★★ V12 beta96 sharing ADS-B with flight trackers — written in radioToJson too
     if (r.adsbFeed.size() > 4000) r.adsbFeed.clear();
+    S("beastIn", r.beastIn);                   // ★★ V12 beta96 a Beast feed radio's source — written in radioToJson too
+    if (r.beastIn.size() > 300) r.beastIn.clear();
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
     I("dabOwnStation", r.dabOwnStation);   // ★★ V12 own station per listener (docs/v12/DAB-OWN-STATION.md)
@@ -784,6 +786,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("bgDecode", r.bgDecode);                 // ★ V12 — see the reader
     S("dxScan", r.dxScan);                     // ★★★ V12 — see the reader
     S("adsbFeed", r.adsbFeed);                 // ★★ V12 beta96 — see the reader
+    S("beastIn", r.beastIn);                   // ★★ V12 beta96 — see the reader
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
     N("dabOwnStation", r.dabOwnStation);
