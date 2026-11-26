@@ -147,6 +147,8 @@ export type VibeServerConfig = {
   landingMap?: string;
   landingModes?: string;
   mapKeep?: boolean;
+  /** ★★★ beta96 the single-mode radio ('' / 'general' = General; else the token — vibe_keep_store.h singleOk). */
+  singleMode?: string;
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h). Sent to the engine as its config's
    *  flat fm* keys; absent = the engine's defaults (de-emphasis by region, NR off, the rest on, RETURN). */
   fmDefaults?: FmDefaults;
@@ -397,9 +399,10 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     landingAdsb: cfg.landingAdsb === true,
     adsbKeepRunning: cfg.landingAdsb === true && cfg.adsbKeepRunning === true,
     // ★★★ beta96 on EVERY start at definite values (an absent key would leave a kept VDL2 of an earlier start in force)
-    landingMap: cfg.landingMap === 'avmar' && !!cfg.landingModes ? 'avmar' : '',
-    landingModes: cfg.landingMap === 'avmar' ? (cfg.landingModes ?? '') : '',
-    mapKeep: cfg.landingMap === 'avmar' && !!cfg.landingModes && cfg.mapKeep === true,
+    landingMap: (cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur') && !!cfg.landingModes ? cfg.landingMap : '',
+    landingModes: cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur' ? (cfg.landingModes ?? '') : '',
+    mapKeep: (cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur') && !!cfg.landingModes && cfg.mapKeep === true,
+    singleMode: cfg.singleMode ?? '',   // ★★★ beta96 on every start, a definite value
     ...fmDefaultsKeys(cfg.fmDefaults ?? FM_DEFAULTS),   // ★ on EVERY start, at definite values, like its neighbours
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,

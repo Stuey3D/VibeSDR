@@ -235,6 +235,41 @@ console.log('\nKeep ISM 868 running (the Amateur map)');
   } finally { S.stop(); }
 }
 
+// ── 9. THE SINGLE-MODE RADIO (Stuart 11-26) ───────────────────────────────────────────────────────────────────────
+console.log('\nSingle mode: VDL2 (explicit, over General ticks)');
+{
+  const S = await server({ singleMode: 'vdl2', blockedModes: 'dab' }, 'single');
+  try {
+    await waitFor(() => /\[AVDATA\] mode ON: VDL2/.test(S.log()), 8000);
+    ok(/\[SINGLE\] radio use: single mode vdl2/.test(S.log()) && /\[AVDATA\] mode ON: VDL2/.test(S.log()), '★ single mode VDL2: kept running from the start (no landing card set)');
+    const A = spectrum(S.port, crypto.randomUUID());
+    await waitFor(() => parsed(A, 'hwinfo').length > 0 && parsed(A, 'avdata').length > 0, 3000);
+    const hw = parsed(A, 'hwinfo').slice(-1)[0] || {};
+    const bl = new Set(hw.blocked || []);
+    ok(hw.singleMode === 'vdl2' && bl.has('wfm') && bl.has('adsb') && bl.has('sat') && bl.has('ais') && !bl.has('avdata'), `hwinfo: singleMode vdl2, every other mode (SATELLITE too) blocked, the datalink not (${[...bl].length} blocked)`);
+    ok(parsed(A, 'avdata').some((m) => m.band === 'vdl2'), 'a listener lands in VDL2');
+    A.send({ type: 'avdata', on: 0 });
+    await waitFor(() => parsed(A, 'avdata_error').length > 0, 3000);
+    ok(parsed(A, 'avdata_error').some((m) => /aircraft datalink only/.test(m.why || '')), '★ a listener cannot leave (the only-mode lock, with the reason)');
+    A.send({ type: 'adsb', on: 1 });
+    await waitFor(() => parsed(A, 'adsb_error').length > 0, 3000);
+    ok(parsed(A, 'adsb_error').length > 0 && !/\[ADS-B\] mode ON/.test(S.log()), '★ nor switch to ADS-B (blocked by the single mode)');
+    A.send({ type: 'sat', op: 'pick', norad: 25544, tx: 0 });
+    await sleep(800);
+    ok(parsed(A, 'sat').some((m) => m.state === 'OFF' && /only/.test(m.why || '')), '★ nor pick a satellite (SATELLITE is a way out)');
+    A.close(); await sleep(300);
+  } finally { S.stop(); }
+  const G = await server({ singleMode: 'general', blockedModes: 'dab,ais' }, 'general');
+  try {
+    const A = spectrum(G.port, crypto.randomUUID());
+    await waitFor(() => parsed(A, 'hwinfo').length > 0, 3000);
+    const hw = parsed(A, 'hwinfo').slice(-1)[0] || {};
+    ok(!hw.singleMode && JSON.stringify((hw.blocked || []).filter((x) => x === 'dab' || x === 'ais' || x === 'wfm').sort()) === '["ais","dab"]',
+       '★ General: the owner\'s own ticks are back exactly (dab, ais off; WFM on)');
+    A.close(); await sleep(300);
+  } finally { G.stop(); }
+}
+
 // ── 8. A beta95 CONFIG ────────────────────────────────────────────────────────────────────────────────────────────
 console.log('\nA beta95 config (landingAdsb + adsbKeepRunning only) still keeps ADS-B');
 {

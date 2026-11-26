@@ -59,6 +59,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta96 2026-11-26 — RADIO USE: General / Single mode (vibe_setup_page.h radioUseWrap, above the tick boxes of Modes
+  //     and decoders; the app's server screen RADIO USE). Wording checked against both.
+  { v: 'V12 (experimental)', detail: 'SINGLE-MODE RADIOS, SAID PLAINLY \u2014 on the Setup page, Modes and decoders now starts with Radio use: \u201cGeneral: listeners choose from the modes ticked below\u201d or \u201cSingle mode\u201d with the one mode, from what this radio can actually do (ADS\u2011B, AIS, VDL2 or ACARS, DAB, ISM on its band, NDB, SONDES, the VOR map, one listening mode such as WFM, or SATELLITES). Single mode is where listeners land, it keeps running where that applies, listeners cannot leave it (the admin can), and new modes from updates never appear. Your ticks stay as they were underneath: choose General and they are back. A radio you had set up that way with its ticks shows as Single mode on first open. The same choice is on the app\u2019s own server screen. Needs a VibeServer updated to this beta.' },
   // ★★★ V12 beta96 2026-11-26 — THE LANDING MAP AND ITS KEEP-RUNNING MODES (docs/v12/KEEP-RUNNING.md; Stuart on the Sony's Setup
   //     page: "I thought I'd be able to set VDL2 as the Sony's background mode"). Wording checked against the Setup page
   //     (vibe_setup_page.h mapLandWrap: "Start new listeners on a map?", "Keep VDL2 running when nobody is

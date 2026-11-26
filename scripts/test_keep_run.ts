@@ -1,7 +1,7 @@
 // test_keep_run.ts — the app's landing map + keep-running rule (src/utils/keepRun.ts, beta96): the SAME gate cases as
 // vibeserver/test-keep-run.cpp §3/§4 and scripts/test-setup-keep-run.mjs, the local radio's facts, the ADS-B mirror and
 // beta95's migration. Run: node --no-warnings scripts/test_keep_run.ts
-import { keepGate, keepAvailLocal, keepMirror, keepMigrate, keepParse, keepRateWords, keepSatWords, keepName, KEEP_MODES } from '../src/utils/keepRun.ts';
+import { singleOptionsLocal, singleFromTicks, singleWords, keepGate, keepAvailLocal, keepMirror, keepMigrate, keepParse, keepRateWords, keepSatWords, keepName, KEEP_MODES } from '../src/utils/keepRun.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 const all = () => KEEP_MODES.map((m) => ({ id: m.id, hw: true, why: '' }));
@@ -65,6 +65,19 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
   ok(/switched off/.test(keepAvailLocal({ ...base, ismBands: ['868'], blockedModes: 'ism' }).avail.find((a) => a.id === 'ism')!.why), 'ISM switched off: greyed');
   ok(keepName(['ism:868'], { '868': '868 MHz SRD' }) === 'ISM 868 MHz SRD' && /ISM 868 MHz SRD pauses/.test(keepSatWords('ism:868', true, { '868': '868 MHz SRD' })), 'named from ISM\'s own words; pauses for a pass');
   ok(!keepMirror(true, 'ism:868', true).landingAdsb, 'no ADS-B pair');
+}
+// ★★★ the single-mode radio (the Setup page's same rules)
+{
+  const paul = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig,dab,ism,ndb,ais,avdata,sondes,vormap,sat';
+  ok(singleFromTicks(paul, '', []) === 'adsb' && singleFromTicks('dab', '', []) === '', "Paul's ticks read as ADS-B; ordinary ticks as nothing");
+  const base = { driver: 'rtlsdr', isIcom: false, blockedModes: '', rate: 2_400_000, dabRateBoost: false, lockedOwnVfos: false, ismBands: ['868'] };
+  const f = keepAvailLocal(base);
+  const opts = singleOptionsLocal({ avail: f.avail, ismBands: ['868'], dab: true, ndb: false, shown: (id) => id !== 'drm', sat: false }).map((o) => o.tok);
+  ok(['adsb', 'vdl2', 'acars', 'ais', 'vor', 'ism:868', 'dab', 'sondes', 'wfm'].every((t) => opts.includes(t)) && !opts.includes('sat') && !opts.includes('ndb') && !opts.includes('drm'),
+     'the dropdown: what this radio can do, nothing else: ' + opts.join(' '));
+  const hf = keepAvailLocal({ ...base, driver: 'airspyhf', ismBands: [] });
+  ok(!singleOptionsLocal({ avail: hf.avail, ismBands: [], dab: false, ndb: true, shown: () => true, sat: true }).some((o) => o.tok === 'adsb' || o.tok.startsWith('ism')), 'HF+: no ADS-B, no ISM');
+  ok(singleWords('vdl2') === 'VDL2' && singleWords('sat') === 'SATELLITES' && singleWords('ism:868', { '868': '868 MHz SRD' }) === 'ISM 868 MHz SRD', 'the words');
 }
 console.log(`keep run (app): ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

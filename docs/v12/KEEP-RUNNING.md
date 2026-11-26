@@ -21,6 +21,7 @@ memory `map_landing_toggles.md` specifies.
 | Setup page card | `vibe_setup_page.h` `mapLandWrap` | built, tested against stand-in elements |
 | Android: bridge + engine | `vibe_android_setup.h`; the engine reads the keys off the config JSON (`vsMapFromConfigJson`) — **no new JNI** | built (the shim compiled on the Mac), test-android-setup passes; **gradle not run** |
 | App's server screen | `ServerModeScreen.tsx` + `src/utils/keepRun.ts` | built; esbuild syntax OK; **not type-checked** (tsc on the screen needs > 1 GB) |
+| Single mode (General / Single) | `vsEnforcedBlocked`, `vsApplyLanding`, `singleSatRefuses`; page `radioUseWrap`; app RADIO USE | built; unit + page + e2e tested (VDL2 single, General restores ticks); SATELLITES server half only |
 | Copy | About beta96 note (+ the old ADS-B note pointed at the new control) | done; tours do not mention keep-running (checked) |
 | `vibe_web_page.h` | not changed: the only web-client change is `admin.ts` / `adminBg.ts` | **regenerate at integration** (the admin page ships in it) |
 
@@ -41,6 +42,53 @@ Stuart's estate plan: Sony → VDL2; a Pi 500 RTL-SDR V4 → 868 ISM for MeshCor
 - Tested: test-keep-run §7, test-setup-keep-run (the Amateur card), test_keep_run, and **e2e** (test-server-keep-run 7b: kept
   ISM 868 entered at start, a client gets ISM reports, the last listener leaving does not take it away).
 - Live check owed: the Pi 500 V4 on 868, MeshCore repeaters on the community map with nobody connected.
+
+## ★★★ Single mode (Stuart 11-26, via the coordinator)
+
+**RADIO USE**, on the Setup page's Modes and decoders card (above the tick boxes) and the app's server screen:
+*General: listeners choose from the modes ticked below* / *Single mode: [ADS-B ▾] — "Use this to lock the radio to a single mode
+such as ADS-B / AIS / VDL2. Only the selected decoder is available."*
+
+- Stored explicitly: `RadioConfig::singleMode` — "" (not chosen), "general", or a token: `adsb`, `vdl2`, `acars`, `vor`, `ais`,
+  `ism:<band>`, `dab`, `ndb`, `sondes`, `wfm` / `nfm` / `am` / `usb` / `lsb` / `drm`, `sat` (vibe_keep_store.h `singleOk`).
+- **The server enforces it directly** (`vsEnforcedBlocked`): every other listening demodulator, whole-radio mode and SATELLITE
+  is added to the ENFORCED list on top of the owner's, and the single one is taken off it — so `vsModeBlocked`, the published
+  `blocked`, `onlyModeNow` / `dabOnlyNow` (the exit lock) and every client read one list. The owner's `blockedModes` is never
+  touched: General gives the old ticks back (e2e-tested). New modes from updates can never appear. hwinfo carries `singleMode`.
+- It is the landing and, where keep-running applies (ADS-B, VDL2, ACARS, VOR map, AIS, ISM), kept running — whatever the
+  landing card says (`vsApplyLanding`: the owner's landing is remembered and comes back with General).
+- The dropdown lists only what THIS radio can do (hwinfo `mapModes`, `ismHwBands`, `dab`, `ndbHw`, the caps tree,
+  `singleSat`) — no dead entries; an entry the rate rules out is shown disabled with the server's reason.
+- ALL OFF (b96-newmodes) keeps the single mode's switch on (`modeLandingId`); Save's "no modes" refusal does not apply to a
+  single-mode radio.
+- **Migration:** a radio single-mode by its ticks (Paul's ADS-B-only shape) shows as *Single mode: ADS-B* on first open
+  (`singleFromTicks`, "worked out from the modes ticked below — saved when you save"); a chosen General is never re-derived.
+- **The DAB-only B210** (56 MS/s locked range, per-listener DAB): `singleMode "dab"` makes every one of `dabOnlyNow`'s others
+  blocked, so the existing per-listener DAB path applies (unit-tested on the rule; **not driven on a B210 / a fake wide radio**).
+
+### Single mode: SATELLITES (built: the server half)
+
+- `sat` offered only where a listed downlink is in reach and the server has a location (hwinfo `singleSat`).
+- Every whole-radio mode is off; the demodulators stay (the passes tune with them). The unattended scheduler runs the passes by
+  the owner's Unattended-satellites picks and priority — and **listeners neither end nor hold off a session**
+  (`satPassTick`, `satPassGiveUp`).
+- Listeners WATCH: `singleSatRefuses` refuses every frame that would move what the room hears (tune, mode, gain, whole modes,
+  SATELLITE picks — the ask-before-tuning list) for anybody but the signed-in admin, sends the room's state back and a notice
+  (`{"type":"notice","single":"sat",…}`); a pick gets the usual `sat` OFF with the reason.
+- ✗ **NOT BUILT: the clients' watch-only SATELLITE view** (land straight in SATELLITE, the pass now / next with a countdown, the
+  live decode, the timetable + the last pass's gallery between passes). The server publishes `singleMode:"sat"` for it; the
+  web/app view change belongs with b96-satsched / b96-onemap's owners. **Not e2e-tested** (needs orbit data and a pass).
+- ✗ **NOT BUILT: Stuart's HYBRID for linear transponder passes** — during a transponder pass the radio becomes a locked range over
+  the passband (+ Doppler) with a VFO per listener and per-listener AUTO DOPPLER, back to watch-only at LOS. Design for the next
+  agent: `perClientDsp()` is DERIVED (`g_vsLockedCentre > 0 && g_vsMaxUsers > 1`), so the pass's session would set
+  `g_vsLockedCentre` / `g_vsLockedRate` to the passband's centre / a rate holding it at AOS (saving the owner's, as
+  `satWorkBeginLocked` saves the dial) and restore them at LOS; each listener's ClientDsp then needs its VFO placed at the
+  passband centre (a joiner too), its own Doppler lock (`satEngine().start(key=session …)`, the per-listener SATELLITE pick
+  path that exists for locked ranges), tune clamped to the passband (the locked-window clamp does this), and `singleSatRefuses`
+  must let per-VFO tunes through while refusing the rest. The risk is the live switch of every connected client between the
+  shared pipeline and per-client DSP mid-session (their sockets, audio chains, the spectrum crop) — it needs the coordinator's
+  live test on a real transponder pass. Not attempted on this branch: it is a restart-class change to the DSP topology that
+  I could not test here.
 
 ## What the owner sees
 

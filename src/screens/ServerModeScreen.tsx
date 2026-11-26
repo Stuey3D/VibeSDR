@@ -244,7 +244,7 @@ import {
 } from '../services/icomRadio';
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
-import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse, keepSatWords, keepRateWords, keepBase, keepModeSwitch, MAP_AVMAR, MAP_AMATEUR, KEEP_GROUP_WORDS, type KeepMap } from '../utils/keepRun';
+import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse, keepSatWords, keepRateWords, keepBase, keepModeSwitch, singleOptionsLocal, singleFromTicks, singleWords, MAP_AVMAR, MAP_AMATEUR, KEEP_GROUP_WORDS, type KeepMap } from '../utils/keepRun';
 import { rateGuardIsBad, rateGuardLine, type RateGuardState } from '../services/rateGuard';
 import * as NM from '../utils/newModes';   // ★★★ beta96 new modes off on a restricted radio
 
@@ -404,6 +404,7 @@ const K = {
   landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
   landingAdsb: 'vs_landingadsb', adsbKeep: 'vs_adsbkeep',
   landingMap: 'vs_landingmap', landingModes: 'vs_landingmodes', mapKeep: 'vs_mapkeep',   // ★★★ beta96 the landing map
+  singleMode: 'vs_singlemode',   // ★★★ beta96 the single-mode radio ('' = not chosen, 'general', or the token)
   radioLabel: 'vs_radiolabel',
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h), one JSON value — see FmDefaults. */
   fmDefaults: 'vs_fmdefaults',
@@ -976,6 +977,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [mapWhich, setMapWhich] = useState<KeepMap>('avmar');   // ★★ Aviation & Maritime, or Amateur (ISM — Stuart 11-26)
   const [mapModes, setMapModes] = useState('');
   const [mapKeep, setMapKeep]   = useState(false);
+  /** ★★★ beta96 RADIO USE (Stuart 11-26): '' = not chosen (derived from the ticks), 'general', or the single mode's token. */
+  const [singleMode, setSingleMode] = useState('');
   const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
   const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
   const [dabScanBusy, setDabScanBusy]     = useState(false);
@@ -1754,6 +1757,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           setLandingDabSvc(s(K.landingDabSvc));
           setLandingAdsb(g(K.landingAdsb) === '1'); setAdsbKeep(g(K.adsbKeep) === '1');
           {   // ★★★ beta96 the landing map — beta95's ADS-B pair migrates in once (keepMigrate), unchanged
+            setSingleMode(s(K.singleMode));   // ★★★ beta96
             const mig = keepMigrate({ map: g(K.landingMap), landingAdsb: g(K.landingAdsb) === '1', adsbKeep: g(K.adsbKeep) === '1' });
             if (mig) { setMapOn(mig.map); setMapModes(mig.modes); setMapKeep(mig.keep); }
             else {
@@ -2327,6 +2331,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     AsyncStorage.multiSet([[K.landingMap, on ? which : ''], [K.landingModes, on ? modes : ''], [K.mapKeep, k ? '1' : '0'],
                            [K.landingAdsb, mir.landingAdsb ? '1' : '0'], [K.adsbKeep, mir.adsbKeepRunning ? '1' : '0']]);
   };
+  /* ── ★★★ beta96 RADIO USE: General / Single mode — what THIS radio can do (no dead entries), the ticks' own answer as the
+   *  default for a radio single-mode by its ticks (Paul's), the ticks themselves untouched underneath ── */
+  const singleOpts = singleOptionsLocal({
+    avail: keepFacts.avail, ismBands: mapIsmBands, ismWords: BG_ISM_WORDS, dab: dabLandCapable, ndb: bgReachNow.ndbOk,
+    shown: (id) => { const full = modeTree(); const m = full.find((x) => x.id === id); return !!m && modeCapShown(full, m); },
+    sat: !isIcom && !!bgCaps && bgCaps.satPasses.length > 0,
+  });
+  const singleDerived = singleMode === '' ? singleFromTicks(blockedModes, mapModes, mapIsmBands) : '';
+  const singleEff = singleMode && singleMode !== 'general' ? singleMode : singleDerived;
+  const setSingle = (v: string) => { setSingleMode(v); AsyncStorage.setItem(K.singleMode, v); };
   const adsbLandOn = mapLandOn && mapChosen.length === 1 && mapChosen[0] === 'adsb';
   const adsbKeepOn = adsbLandOn && mapKeep;
   // ★ One landing at a time: with ADS-B chosen the DAB toggle steps aside (the engine lets ADS-B win the same way).
@@ -2426,7 +2440,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
-    landingAdsb, adsbKeep, fmDef, mapOn, mapModes, mapKeep, mapWhich,
+    landingAdsb, adsbKeep, fmDef, mapOn, mapModes, mapKeep, mapWhich, singleSend: singleEff || singleMode,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, communityOff, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson,
@@ -2479,6 +2493,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingMap: live.current.mapOn && live.current.mapModes ? live.current.mapWhich : '',
     landingModes: live.current.mapOn ? live.current.mapModes : '',
     mapKeep: !!(live.current.mapOn && live.current.mapModes && live.current.mapKeep),
+    singleMode: live.current.singleSend ?? '',   // ★★★ beta96 the engine reads it off the config (vsMapFromConfigJson)
     fmDefaults: live.current.fmDef,
     radioLabel: live.current.radioLabel,
     // ★★★ V12 background decoding (RadioConfig::bgDecode) and the gallery — VibeServerBoot applies them on every start.
@@ -5289,6 +5304,40 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       refused: a control whose every use fails reads as a broken receiver instead
                       of somebody's decision (AGENTS.md). The server enforces it too, so it holds
                       for an old client or a hand-rolled tool. */}
+                {/* ★★★ beta96 RADIO USE (Stuart 11-26) — the Setup page's radioUseWrap, the same choice */}
+                {singleOpts.length > 0 && (
+                  <View style={{ marginTop: 14 }}>
+                    <Text style={[styles.section, { color: C.section, fontFamily: F }]}>RADIO USE</Text>
+                    {([['general', 'General: listeners choose from the modes ticked below'], ['single', 'Single mode']] as const).map(([k, label]) => {
+                      const on = k === 'general' ? !singleEff : !!singleEff;
+                      return (
+                        <TouchableOpacity key={k} onPress={() => setSingle(k === 'general' ? 'general' : (singleEff || (singleOpts.find((o) => !o.why)?.tok ?? 'general')))}
+                          style={[styles.card, { borderColor: on ? C.keySelBorder : C.border, marginBottom: 6 }]}>
+                          <Text style={{ color: on ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 13 }}>{label}{k === 'single' && singleEff ? ': ' + singleWords(singleEff, BG_ISM_WORDS) : ''}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                      Use this to lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected decoder is available.
+                    </Text>
+                    {!!singleEff && (<>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                        {singleOpts.map((o) => (
+                          <TouchableOpacity key={o.tok} disabled={!!o.why} onPress={() => setSingle(o.tok)}
+                            style={[styles.card, { borderColor: singleEff === o.tok ? C.keySelBorder : C.border, paddingVertical: 4, opacity: o.why ? 0.5 : 1 }]}>
+                            <Text style={{ color: singleEff === o.tok ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                        {`This radio is single mode: ${singleWords(singleEff, BG_ISM_WORDS)}. `
+                          + (singleDerived && !singleMode ? '(Worked out from the modes ticked below — kept when you next change it.) ' : '')
+                          + (singleEff === 'sat' ? 'It follows the satellite passes itself; listeners land in SATELLITE and watch.'
+                             : 'Listeners land in it and cannot leave it; new modes from updates never appear on this radio. The ticks below stay as they were for General.')}
+                      </Text>
+                    </>)}
+                  </View>
+                )}
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
                   Modes and decoders — tap to switch off. A decoder's options sit under it.
                 </Text>
@@ -5296,6 +5345,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {(radioCapsNow?.hints ?? []).map((h) => (
                   <Text key={h} style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>{h}</Text>
                 ))}
+                <View style={singleEff ? { opacity: 0.4 } : undefined} pointerEvents={singleEff ? 'none' : 'auto'}>
                 {(() => {
                   /* ★★★ THE TREE (2026-10-31) — the setup page's, drawn the same way: a decoder's options indented under
                    *  its switch, greyed with the reason while it is off (never hidden). */
@@ -5575,6 +5625,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     </View>
                   );
                 })()}
+                </View>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                   Dimmed means switched off — listeners are never offered it at all. An option under a switch that is off
                   stays here, dimmed, until its switch is on again.

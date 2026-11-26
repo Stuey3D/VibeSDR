@@ -137,3 +137,43 @@ export function keepModeSwitch(modes: string): string {
   if (!ids.length) return '';
   return KEEP_MODES.find((m) => m.id === keepBase(ids[0]))?.block ?? '';
 }
+
+// ══ ★★★ beta96 THE SINGLE-MODE RADIO (the Setup page's singleOptions / singleFromTicks; vibe_keep_store.h singleOk) ═════════
+const LISTEN_DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl', 'drm', 'freedv', 'm17', 'dvsig'];
+const WHOLE_MODES = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes', 'vormap'];
+export type SingleOption = { tok: string; label: string; why: string };
+/** What this radio can be single-mode in — no dead entries. */
+export function singleOptionsLocal(f: { avail: KeepAvail[]; ismBands: string[]; ismWords?: Record<string, string>; dab: boolean;
+  ndb: boolean; shown: (id: string) => boolean; sat: boolean }): SingleOption[] {
+  const out: SingleOption[] = [];
+  const av = (id: string) => f.avail.find((a) => a.id === id);
+  const rateWhy = (id: string) => { const a = av(id); return a && a.why && !/switched off/.test(a.why) ? a.why : ''; };
+  for (const id of ['adsb', 'vdl2', 'acars', 'ais', 'vor'])
+    if (av(id)?.hw) out.push({ tok: id, label: id === 'vdl2' ? 'DATALINK: VDL2' : id === 'acars' ? 'DATALINK: ACARS' : id === 'vor' ? 'VOR MAP' : keepName([id]), why: rateWhy(id) });
+  if (av('ism')?.hw) for (const b of f.ismBands) out.push({ tok: 'ism:' + b, label: 'ISM ' + (f.ismWords?.[b] ?? b + ' MHz'), why: '' });
+  if (f.dab) out.push({ tok: 'dab', label: 'DAB', why: '' });
+  if (f.ndb) out.push({ tok: 'ndb', label: 'NDB', why: '' });
+  if (f.shown('sondes')) out.push({ tok: 'sondes', label: 'SONDES', why: '' });
+  for (const d of ['wfm', 'nfm', 'am', 'usb', 'lsb', 'drm']) if (f.shown(d)) out.push({ tok: d, label: d.toUpperCase() + ' listening only', why: '' });
+  if (f.sat) out.push({ tok: 'sat', label: 'SATELLITES (the radio follows the passes; listeners watch)', why: '' });
+  return out;
+}
+/** The token the owner's TICKS imply — Paul's ADS-B-only radio reads as "adsb" (shown, saved when the owner next changes it). */
+export function singleFromTicks(blockedModes: string, landingModes: string, ismBands: string[]): string {
+  const off = new Set(String(blockedModes || '').split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
+  if (!LISTEN_DEMODS.every((d) => off.has(d))) return '';
+  const left = WHOLE_MODES.filter((w) => !off.has(w));
+  if (left.length !== 1) return '';
+  const w = left[0];
+  if (w === 'avdata') return keepParse(landingModes)[0] === 'acars' ? 'acars' : 'vdl2';
+  if (w === 'vormap') return 'vor';
+  if (w === 'ism') return 'ism:' + (ismBands[0] ?? '868');
+  return w;
+}
+/** The words for a token. */
+export function singleWords(t: string, ismWords?: Record<string, string>): string {
+  if (!t || t === 'general') return '';
+  if (t === 'sat') return 'SATELLITES';
+  const named: Record<string, string> = { dab: 'DAB', ndb: 'NDB', sondes: 'SONDES', wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', drm: 'DRM' };
+  return named[t] ?? keepName([t], ismWords);
+}

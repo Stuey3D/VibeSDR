@@ -2877,6 +2877,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLandingAdsb(g_runtimeConfig.landingAdsb, g_runtimeConfig.adsbKeepRunning);
     // ★★★ beta96 the landing map and its keep-running mode (VDL2, ACARS, AIS, the VOR map — ADS-B's own setter above)
     LocalSdrShim::setVibeServerMap(g_runtimeConfig.landingMap, g_runtimeConfig.landingModes, g_runtimeConfig.mapKeep);
+    LocalSdrShim::setVibeServerSingle(g_runtimeConfig.singleMode);   // ★★★ beta96 the single-mode radio (enforced over blockedModes)
     // ★★ The owner's Broadcast FM defaults and REMEMBER / RETURN (vibe_fm_defaults.h) — before anyone can connect.
     LocalSdrShim::setVibeServerFmDefaults("{" + vibefm::toJson(g_runtimeConfig.fm) + "}");
 
@@ -3241,6 +3242,7 @@ int main(int argc, char** argv) {
                 r.landingDabService = c.landingDabService;
                 r.landingAdsb = c.landingAdsb; r.adsbKeepRunning = c.adsbKeepRunning;
                 r.landingMap = c.landingMap; r.landingModes = c.landingModes; r.mapKeep = c.mapKeep;   // ★★★ beta96
+                r.singleMode = c.singleMode;
                 r.fm = c.fm;   // ★ Broadcast FM defaults
                 r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
                 r.uncompressed = c.uncompressed;
@@ -3539,6 +3541,7 @@ int main(int argc, char** argv) {
                                                           uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
                     LocalSdrShim::setVibeServerLandingAdsb(g_runtimeConfig.landingAdsb, g_runtimeConfig.adsbKeepRunning);
                     LocalSdrShim::setVibeServerMap(g_runtimeConfig.landingMap, g_runtimeConfig.landingModes, g_runtimeConfig.mapKeep);   // ★★★ beta96
+                    LocalSdrShim::setVibeServerSingle(g_runtimeConfig.singleMode);
                     // ★ The Broadcast FM defaults too — read at a NEW session, so nobody is disturbed (the shim
                     //   applies them to the radio now only when nobody is listening).
                     LocalSdrShim::setVibeServerFmDefaults("{" + vibefm::toJson(g_runtimeConfig.fm) + "}");
@@ -4479,6 +4482,7 @@ int main(int argc, char** argv) {
             r.landingDabService = disk.landingDabService;
             r.landingAdsb = disk.landingAdsb; r.adsbKeepRunning = disk.adsbKeepRunning;
             r.landingMap = disk.landingMap; r.landingModes = disk.landingModes; r.mapKeep = disk.mapKeep;   // ★★★ beta96
+            r.singleMode = disk.singleMode;
             r.fm = disk.fm;   // ★ Broadcast FM defaults
             r.users = disk.users; r.maxBw = disk.maxBw; r.maxFps = disk.maxFps;
             r.fftRate = disk.fftRate; r.uncompressed = disk.uncompressed;
@@ -6236,10 +6240,11 @@ int main(int argc, char** argv) {
                                 static int lastAdsb = -1;
                                 // ★★★ beta96 the landing map's mode + keep ride the same re-read (VDL2 kept, from the door's save)
                                 static std::string lastMap = "\x01";
-                                const std::string mapNow = mine->landingMap + "|" + mine->landingModes + "|" + (mine->mapKeep ? "1" : "0");
+                                const std::string mapNow = mine->landingMap + "|" + mine->landingModes + "|" + (mine->mapKeep ? "1" : "0") + "|" + mine->singleMode;
                                 if (mapNow != lastMap) {
                                     if (lastMap != "\x01") {
                                         LocalSdrShim::setVibeServerMap(mine->landingMap, mine->landingModes, mine->mapKeep);
+                                        LocalSdrShim::setVibeServerSingle(mine->singleMode);   // ★★★ beta96
                                         std::printf("VibeServer: landing map re-read from %s (%s)\n", g_configPath.c_str(), mapNow.c_str());
                                     }
                                     lastMap = mapNow;

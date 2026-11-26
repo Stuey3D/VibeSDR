@@ -30,13 +30,14 @@ struct Mode {
     const char* band;    ///< the datalink band (Avdata only)
     const char* bench;   ///< the benchmark row that prices it (prefix for ADS-B's per-rate rows)
     const char* map = kMapAvMar;   ///< the landing map it belongs to
+    const char* block = nullptr;   ///< the modes-card switch it stands on (nullptr = its id)
 };
 inline const std::vector<Mode>& modes() {
     static const std::vector<Mode> v = {
         { "adsb",  "ADS-B",          "aviation", Adsb,   "",      "adsb_" },
-        { "vdl2",  "VDL2",           "aviation", Avdata, "vdl2",  "dec_vdl2" },
-        { "acars", "ACARS",          "aviation", Avdata, "acars", "dec_acars" },
-        { "vor",   "VOR / ILS map",  "aviation", Vormap, "",      "dec_vormap" },
+        { "vdl2",  "VDL2",           "aviation", Avdata, "vdl2",  "dec_vdl2", kMapAvMar, "avdata" },
+        { "acars", "ACARS",          "aviation", Avdata, "acars", "dec_acars", kMapAvMar, "avdata" },
+        { "vor",   "VOR / ILS map",  "aviation", Vormap, "",      "dec_vormap", kMapAvMar, "vormap" },
         { "ais",   "AIS",            "maritime", Ais,    "",      "dec_ais" },
         // ★★ the band is the owner's pick from ISM's own plan, carried in the token: "ism:868" (no frequency typed)
         { "ism",   "ISM",            "ism",      Ism,    "",      "dec_ism", kMapAmateur },
@@ -172,6 +173,55 @@ inline void applyRead(Stored& s, bool sawOld, bool sawNew) {
         else if (s.landingModes == "adsb") { s.landingMap.clear(); s.landingModes.clear(); s.mapKeep = false; }
     }
     migrate(s);
+}
+
+// ══ ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26) ═══════════════════════════════════════════════════════════════════════
+/* "RADIO USE: General | Single mode: [ADS-B ▾] — lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected
+ *  decoder is available." Today's "only mode" is inferred from the blocked list, which broke when new modes arrived; this is
+ *  an EXPLICIT field (RadioConfig::singleMode) the server enforces directly: every other listening demodulator, whole-radio
+ *  mode and SATELLITE is blocked on top of the owner's list (which is kept untouched underneath, so General gives the old
+ *  ticks back), the mode is the landing, kept running where keep-running applies, and the only-mode exit lock holds.
+ *  Tokens: the keep tokens (adsb, vdl2, acars, vor, ais, ism:<band>) + dab, ndb, sondes + the plain demodulators below. */
+inline const std::vector<const char*>& singleDemods() {
+    static const std::vector<const char*> v = { "wfm", "nfm", "am", "usb", "lsb", "drm" };   // ★ listening "where sensible"
+    return v;
+}
+inline const std::vector<const char*>& singleWholeOnly() {
+    static const std::vector<const char*> v = { "dab", "ndb", "sondes" };   // ★ whole-radio modes with no keep-running
+    return v;
+}
+/** A token the single-mode field accepts ("" = General). */
+inline bool singleOk(const std::string& t) {
+    if (t.empty() || t == "sat" || t == "general") return true;   // ★ "general" = the owner chose General (no derivation from ticks)   // ★★ "sat" = SATELLITES: the radio follows the passes, listeners watch
+    if (tokenOk(t)) return true;
+    for (const char* m : singleWholeOnly()) if (t == m) return true;
+    for (const char* m : singleDemods()) if (t == m) return true;
+    return false;
+}
+/** The modes-card switch a single token stands on: VDL2 / ACARS → "avdata", the VOR map → "vormap", ISM 868 → "ism". */
+inline std::string singleBlockOf(const std::string& t) {
+    if (t.empty()) return {};
+    if (const Mode* m = modeById(t); m && tokenOk(t)) return m->block ? m->block : m->id;
+    return t;
+}
+/** Is the single mode one that keeps running (and so lands kept, through the landing map's machinery)? */
+inline bool singleKeepable(const std::string& t) { return !t.empty() && t != "general" && tokenOk(t); }
+/** The landing map a keepable single token belongs to. */
+inline std::string singleMap(const std::string& t) { const Mode* m = modeById(t); return m ? m->map : ""; }
+/** ★★ THE ENFORCEMENT RULE (vsModeBlocked): with `single` set, is mode `id` switched off REGARDLESS of the owner's list? Every
+ *  listening demodulator, whole-radio mode and satellite switch but the single one. Options ("+…", "commb") are untouched. */
+template <class Lists> inline bool singleBlocks(const std::string& single, const std::string& id, const Lists& demods, const Lists& whole) {
+    if (single.empty() || single == "general") return false;
+    const std::string keep = singleBlockOf(single);
+    if (id == keep) return false;
+    if (single == "sat") {   // ★ the passes need the demodulators (the pass's own tune); listeners are held by singleSatRefuses
+        if (id == "sat_vfob") return false;
+        for (const char* m : demods) if (id == m) return false;
+    }
+    if (id == "sat" || id == "sat_vfob") return true;
+    for (const char* m : demods) if (id == m) return true;
+    for (const char* m : whole) if (id == m) return true;
+    return false;
 }
 
 }  // namespace vibekeep

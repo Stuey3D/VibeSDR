@@ -1952,6 +1952,30 @@ static std::mutex          g_vsBlockedModesMtx;
  *  either the list or the region changes, so every reader below sees one list and needs no change. */
 static std::string         g_vsBlockedModesCsv;
 static std::string         g_vsBlockedModesOwner;
+/* ★★★ beta96 THE SINGLE-MODE RADIO (vibe_keep_store.h singleBlocks; Stuart 11-26): "" = General. Set, every other listening
+ *  demodulator, whole-radio mode and SATELLITE is added to the ENFORCED list on top of the owner's (which stays as saved, so
+ *  General gives the old ticks back) and the single one is taken off it — so every reader (vsModeBlocked, the published
+ *  `blocked`, onlyModeNow / dabOnlyNow, the clients' keys) sees one list. g_vsBlockedModesMtx. */
+static std::string         g_vsSingleMode;
+static std::string vsEnforcedBlocked(const std::string& owner, int region) {
+    std::string csv = vibereach::effectiveBlocked(owner, region);
+    if (g_vsSingleMode.empty()) return csv;
+    const std::string keep = vibekeep::singleBlockOf(g_vsSingleMode);
+    std::string out, tok;
+    for (size_t i = 0; i <= csv.size(); ++i) {   // ★ the single mode itself is never blocked, whatever the owner's list says
+        const char c = i < csv.size() ? csv[i] : ',';
+        if (c == ',' || c == ' ' || c == ';') { if (!tok.empty() && tok != keep) out += (out.empty() ? "" : ",") + tok; tok.clear(); }
+        else tok += char(std::tolower((unsigned char)c));
+    }
+    std::vector<const char*> all(vibereach::listeningDemods().begin(), vibereach::listeningDemods().end());
+    for (const char* m : vibereach::wholeRadioModes()) all.push_back(m);
+    for (const char* m : { "sat", "sat_vfob" }) all.push_back(m);
+    for (const char* m : all)
+        if (vibekeep::singleBlocks(g_vsSingleMode, m, vibereach::listeningDemods(), vibereach::wholeRadioModes())
+            || ((std::string(m) == "sat" || std::string(m) == "sat_vfob") && keep != "sat"))
+            out += (out.empty() ? "" : ",") + std::string(m);
+    return out;
+}
 static int                 g_vsRegionKnown = 0;   // ★ the ITU region from the owner's position; 0 = unknown (no default)
 
 /** ★ Hex of a fixed length range — the shape every broadcast identifier has (PI 4, ECC 2, EId 4, SId 4 or 8). */
@@ -14244,7 +14268,40 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     std::map<const void*, double> scanLockNoticeAt_, scanLockStateAt_;   // under clientMtx
 
+    /** ★★★ beta96 SINGLE MODE: SATELLITES (Stuart 11-26 — "an owner may set a radio up purely to monitor satellite passes"):
+     *  the radio follows the passes itself (the unattended scheduler, the owner's picks and priority) and listeners WATCH —
+     *  every frame that would move what the room hears (ask-before-tuning's list, picks included) is refused for anybody but
+     *  the signed-in admin, with the room's state sent back and a notice once per 10 s. */
+    static bool singleSatNow() { std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx); return g_vsSingleMode == "sat"; }
+    std::map<const void*, double> singleSatNoticeAt_;   // under clientMtx
+    bool singleSatRefuses(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (!sock || !singleSatNow() || adminNow(sock)) return false;
+        const std::string type = jsonStr(msg, "type");
+        static const std::set<std::string> kMoves = {
+            "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "ndb", "ais", "mode_resume", "iqtune", "avdata",
+            "sondes", "vormap", "sat", "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control",
+            "hackrf_control", "antenna", "tunerbw", "sampleRate", "directSampling", "freedv_sub", "icom_control", "watch" };
+        if (!kMoves.count(type)) return false;
+        if (type == "sat") { const std::string op = jsonStr(msg, "op"); if (op == "drop" || op == "unlock") return false; }
+        bool notice = false;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            double& at = singleSatNoticeAt_[sock.get()];
+            const double now = Impl::nowSecs();
+            if (now - at >= 10.0) { at = now; notice = true; }
+            if (singleSatNoticeAt_.size() > 512) singleSatNoticeAt_.clear();
+        }
+        LOGI("[SINGLE] satellites: a listener's \"%s\" refused \xe2\x80\x94 the radio follows the passes itself", type.c_str());
+        if (type == "sat") satRefuse(sock, "pick", "this receiver follows the satellite passes itself \xe2\x80\x94 its owner has set it up to watch them");
+        else sendFullState(sock);
+        if (notice)
+            sendText(sock, "{\"type\":\"notice\",\"single\":\"sat\",\"why\":\"This receiver follows the satellite passes itself "
+                           "\xe2\x80\x94 watch what it decodes; the owner has set it up that way.\"}");
+        return true;
+    }
+
     void clientFrame(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (singleSatRefuses(sock, msg)) return;   // ★★★ beta96 single mode: satellites — listeners watch
         if (scanLockRefuses(sock, msg)) return;
         if (askRefuses(sock, msg)) return;
         struct ViewOnly { explicit ViewOnly(bool on) { t_askViewOnly = on; } ~ViewOnly() { t_askViewOnly = false; } } vo(askViewOnly(sock, msg));
@@ -27234,6 +27291,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       /* ★ The owner's switched-off modes. spectrum.ts has read this array since
                        *  it was written; this is the first thing that has ever sent it. */
                       + std::string(",\"blocked\":") + vsBlockedModesJson()
+                      // ★★★ beta96 the single-mode radio: the clients grey their modes and (SATELLITES) watch only
+                      + [] { std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+                             return g_vsSingleMode.empty() ? std::string() : ",\"singleMode\":\"" + g_vsSingleMode + "\""; }()
                       /* ★★★ THIS SERVER HONOURS `squelch.on` — so a threshold below -100 dBFS is a
                        *  THRESHOLD here, not "off" (vibe_squelch_msg.h). A client seeing no flag is
                        *  on an older server and must treat <= -100 as off, or it would draw a gate
@@ -29089,6 +29149,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   if (!aw.empty()) j += ",\"adsbHwWhy\":\"" + dabEscape(aw) + "\""; }
                 // ★★★ beta96 the landing map's modes on this radio + the ACARS + VDL2 combination + the rate (the Setup page's gate)
                 if (!g_icomOn.load()) j += ",\"mapModes\":" + vsMapModesJson();
+                // ★★★ beta96 the single-mode radio (the clients' watch-only SATELLITE view and the greyed modes read it)
+                { std::string sm; { std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx); sm = g_vsSingleMode; }
+                  if (!sm.empty()) j += ",\"singleMode\":\"" + dabEscape(sm) + "\""; }
+                // ★★★ beta96 may "Single mode: SATELLITES" be offered here? A listed downlink in reach and a location (the
+                //     satellite reach rules — no dead entry); `why` when not
+                { std::string sw = !vsSatAnyReach() ? std::string("this radio reaches none of the listed satellite downlinks")
+                                 : !satEngine().haveObserver() ? std::string("this server has no location set (the locator, on this page)") : std::string();
+                  j += std::string(",\"singleSat\":{\"ok\":") + (sw.empty() ? "true" : "false") + (sw.empty() ? std::string() : ",\"why\":\"" + dabEscape(sw) + "\"") + "}"; }
                 // ★★ V12 2026-10-25: the ISM bands THIS radio reaches — the setup page offers an ISM background profile
                 //    only on these (none on an HF+ or an Icom: the control is not drawn there).
                 { j += ",\"ismHwBands\":[";
@@ -39165,6 +39233,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const std::string why = satPassWhyNot(cfg.sat);
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+        // ★★★ beta96 single mode: satellites — the radio is the passes', listeners only watch (singleSatRefuses), so a
+        //     listener neither ends a session nor holds one off
+        if (singleSatNow()) anyone = false;
         const vibe::sat::Clock clk = satClock();
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
         keepOrbRiderTickLocked(cfg, why);   // ★★★ beta96 the sky plot beside kept VDL2 (no session, any listener welcome)
@@ -39371,6 +39442,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ A listener (or a decoder socket) arrived: the session is given up — the radio back as it was found. */
     void satPassGiveUp(const char* who) {
         if (!satPassBusy_.load() || satPassInternal()) return;
+        if (singleSatNow()) return;   // ★★★ beta96 single mode: satellites — an arrival watches, it never takes the radio
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
         if (satWork_.on) satWorkEndLocked(who ? who : "a listener arrived", true, false);
     }
@@ -45784,7 +45856,7 @@ void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
     {
         std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
         g_vsBlockedModesOwner = csv;
-        g_vsBlockedModesCsv = vibereach::effectiveBlocked(csv, g_vsRegionKnown);
+        g_vsBlockedModesCsv = vsEnforcedBlocked(csv, g_vsRegionKnown);   // ★★★ beta96 + the single-mode radio
     }
     /* ★★ V12 beta91 FT8 / FT4 "dig deeper": automatic, the owner's "ft8+deep" / "ft8-deep" wins (vsFt8DeepApply). One
      *  answer for every FT8 / FT4 / FT2 engine this radio runs; each reads it at its next slot, and still only digs deeper
@@ -45847,7 +45919,7 @@ void LocalSdrShim::setBandRegion(int region, bool known) {
      *  rest on a guess, so an unknown position switches nothing off. */
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
     g_vsRegionKnown = known ? vibebands::defaultRegion() : 0;
-    g_vsBlockedModesCsv = vibereach::effectiveBlocked(g_vsBlockedModesOwner, g_vsRegionKnown);
+    g_vsBlockedModesCsv = vsEnforcedBlocked(g_vsBlockedModesOwner, g_vsRegionKnown);
     for (const auto& d : vibereach::regionDefaults())
         if (vibereach::regionOff(d.id, g_vsRegionKnown)) LOGI("region default: %s off unless the owner switches it on", d.id);
 }
@@ -47848,7 +47920,48 @@ void LocalSdrShim::setVibeServerFmDefaults(const std::string& json) {
      *  on a locked range every listener has their own channel and the new defaults reach the next one to arrive. */
     { auto* P = instance().p; if (P && !P->perClientDsp() && !P->useIcom() && P->specListenerCount() == 0) P->fmApplyShared(st); }
 }
+/* ★★★ beta96 THE OWNER'S LANDING, AND THE SINGLE MODE OVER IT: the setters keep what the owner saved (g_vsOwn*) and
+ *  vsApplyLanding works out what runs — a keepable single mode (ADS-B, VDL2, ACARS, the VOR map, AIS, ISM on its band) is the
+ *  landing AND kept running whatever the landing card says; General gives the owner's landing back. g_vsMapMtx. */
+static bool        g_vsOwnAdsbLand = false, g_vsOwnAdsbKeep = false, g_vsOwnMapKeep = false;
+static std::string g_vsOwnMap, g_vsOwnModes;
+static void vsApplyLandingAdsb(bool land, bool keepRunning);
+static void vsApplyMap(const std::string& map, const std::string& modesCsv, bool keep);
+static void vsApplyLanding() {
+    bool al, ak, mk; std::string m, mo, single;
+    { std::lock_guard<std::mutex> lk(g_vsMapMtx); al = g_vsOwnAdsbLand; ak = g_vsOwnAdsbKeep; m = g_vsOwnMap; mo = g_vsOwnModes; mk = g_vsOwnMapKeep; }
+    { std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx); single = g_vsSingleMode; }
+    if (vibekeep::singleKeepable(single)) {
+        if (single == "adsb") { vsApplyLandingAdsb(true, true); vsApplyMap("", "", false); }
+        else { vsApplyLandingAdsb(false, false); vsApplyMap(vibekeep::singleMap(single), single, true); }
+        return;
+    }
+    vsApplyLandingAdsb(al, ak);
+    vsApplyMap(m, mo, mk);
+}
 void LocalSdrShim::setVibeServerLandingAdsb(bool land, bool keepRunning) {
+    { std::lock_guard<std::mutex> lk(g_vsMapMtx); g_vsOwnAdsbLand = land; g_vsOwnAdsbKeep = keepRunning; }
+    vsApplyLanding();
+}
+void LocalSdrShim::setVibeServerMap(const std::string& map, const std::string& modesCsv, bool keep) {
+    { std::lock_guard<std::mutex> lk(g_vsMapMtx); g_vsOwnMap = map; g_vsOwnModes = modesCsv; g_vsOwnMapKeep = keep; }
+    vsApplyLanding();
+}
+void LocalSdrShim::setVibeServerSingle(const std::string& tokIn) {
+    const std::string tok = vibekeep::singleOk(tokIn) && tokIn != "general" ? tokIn : std::string();   // ★ "general" = General
+    std::string was;
+    {
+        std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+        was = g_vsSingleMode; g_vsSingleMode = tok;
+        g_vsBlockedModesCsv = vsEnforcedBlocked(g_vsBlockedModesOwner, g_vsRegionKnown);
+    }
+    if (was != tok || !tok.empty())
+        LOGI("[SINGLE] radio use: %s", tok.empty() ? "General (listeners choose from the modes ticked)"
+                                                   : ("single mode " + tok + " \xe2\x80\x94 every other mode is off for listeners; it is the landing"
+                                                      + std::string(vibekeep::singleKeepable(tok) ? " and kept running" : "")).c_str());
+    vsApplyLanding();
+}
+static void vsApplyLandingAdsb(bool land, bool keepRunning) {
     // ★ Keep-running is a refinement of the landing, never on its own: the page shows it only beneath the choice.
     const bool keep = land && keepRunning;
     const bool was = g_vsLandingAdsb.exchange(land, std::memory_order_relaxed);
@@ -47857,7 +47970,7 @@ void LocalSdrShim::setVibeServerLandingAdsb(bool land, bool keepRunning) {
         LOGI("[ADS-B] landing: %s%s", land ? "a new listener lands in ADS-B" : "off",
              keep ? " — and it keeps running when nobody is connected" : "");
 }
-void LocalSdrShim::setVibeServerMap(const std::string& map, const std::string& modesCsv, bool keep) {
+static void vsApplyMap(const std::string& map, const std::string& modesCsv, bool keep) {
     vibekeep::Stored st; st.landingMap = map; st.landingModes = modesCsv; st.mapKeep = keep;
     vibekeep::migrate(st);
     vibekeep::Entry e;
@@ -47895,6 +48008,7 @@ static void vsMapFromConfigJson(const std::string& json) {
     { const size_t p = json.find("\"mapKeep\""); if (p != std::string::npos) { const size_t c = json.find(':', p);
         if (c != std::string::npos) { size_t v = c + 1; while (v < json.size() && json[v] == ' ') ++v; keep = json.compare(v, 4, "true") == 0 || json.compare(v, 1, "1") == 0; } } }
     LocalSdrShim::setVibeServerMap(str("landingMap"), str("landingModes"), keep);
+    LocalSdrShim::setVibeServerSingle(str("singleMode"));   // ★★★ beta96 the single-mode radio rides the same JSON
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
 void LocalSdrShim::setNativeSetup(bool on) { g_vsNativeSetup.store(on); }

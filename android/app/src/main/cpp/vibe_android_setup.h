@@ -300,7 +300,7 @@ inline const std::vector<Control>& controlTable() {
         { "idleGrace",                                   D_ANY,   0 },
         { "spectrogram",                                 D_RADIO, P_ADV },
         { "rate rateLock maxFps",                        D_RADIO, 0 },
-        { "modeBlockList bandModeList",                  D_ANY,   0 },   // the modes this aerial is offered (blockedModes)
+        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
         { "dabRateBoost",                                D_RADIO, 0 },
         { "adsb256 ism256",                              D_RTL,   0 },
         { "dabScanLabels",                               D_RADIO, P_LITE },
@@ -566,6 +566,7 @@ inline std::string pageConfig(const std::string& raw) {
         r.set("landingMap", J::str(ks.landingMap)); r.set("landingModes", J::str(ks.landingModes)); r.set("mapKeep", J::boolean(ks.mapKeep));
         r.set("landingAdsb", J::boolean(ks.landingAdsb)); r.set("adsbKeepRunning", J::boolean(ks.adsbKeepRunning));
     }
+    { const std::string sm = strOr(S("singleMode"), ""); r.set("singleMode", J::str(vibekeep::singleOk(sm) ? sm : "")); }   // ★★★ beta96
     // ── Broadcast FM defaults (FM_DEFAULTS in services/fmDefaults.ts) ──
     r.set("fmDeemph", J::num(numOr(S("fmDeemph"), -1)));
     r.set("fmStereo", J::boolean(boolOr(S("fmStereo"), true)));
@@ -816,7 +817,10 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             }
             if (const J* v = r->get("maxFps"); v && v->t == J::Num) p.set("maxFftRate", J::num(snapTo({ 5, 10, 20 }, v->n)));
         }
-        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 1200);   // ★ beta96 was 400: every switch off + "seen@N" passes 400 and a cut list loses its last ids
+        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 1200);
+        // ★★★ beta96 the single-mode radio — a token the server knows, else General
+        if (on("modeBlockList")) if (const J* v = r->get("singleMode"); v && v->t == J::Str)
+            p.set("singleMode", J::str(vibekeep::singleOk(v->s) ? v->s : ""));   // ★ beta96 was 400: every switch off + "seen@N" passes 400 and a cut list loses its last ids
         if (on("dabRateBoost")) flag(r, "dabRateBoost", "dabRateBoost");
         if (on("adsb256")) { flag(r, "adsb256", "adsb256"); flag(r, "ism256", "ism256"); }
         if (on("dabScanLabels")) num(r, "dabScanLabels", "dabScanLabels", -1, 1);

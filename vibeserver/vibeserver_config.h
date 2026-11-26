@@ -223,6 +223,10 @@ struct Config {
     std::string landingMap;
     std::string landingModes;
     bool   mapKeep = false;
+    /* ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26; vibe_keep_store.h singleBlocks): "" = General (listeners choose from the
+     *  ticked modes); else the one mode ("adsb", "vdl2", "ais", "ism:868", "dab", "wfm" …) — the server blocks every other mode
+     *  ON TOP of blockedModes (kept untouched underneath), lands and keeps it, and holds the only-mode exit lock. */
+    std::string singleMode;
 
     // Listeners and ceilings
     int    users = 1;
@@ -513,6 +517,7 @@ struct RadioConfig {
     std::string landingMap;              // ★★★ beta96 the landing map + modes + keep — see Config::landingMap
     std::string landingModes;
     bool   mapKeep = false;
+    std::string singleMode;              // ★★★ beta96 the single-mode radio — see Config::singleMode
     int    users = 1;
     /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers
      *  Full 20 / Half 10 / Quarter 5, but only wrote maxFps (a CEILING), so "Full" meant "no

@@ -13,6 +13,7 @@
 // Silent. Run: VIBE_TESTS="test-keep-run" scripts/run-tests.sh
 #include "vibe_band_slice.h"
 #include "vibe_keep_run.h"
+#include "vibe_decoder_reach.h"
 
 #include <cstdio>
 #include <string>
@@ -224,6 +225,40 @@ int main() {
         CHECK(toCsv(normalise({"ism:433"}, av, false, kMapAmateur)) == "ism:433", "normalise keeps the band");
         std::vector<Avail> blk = { {"ism", true, "the server owner has switched ISM off on this receiver"} };
         CHECK(!gate(blk, false, "", 2.4e6, {"ism:868"}, kMapAmateur)[0].on, "ISM blocked: not on, greyed");
+    }
+
+    std::printf("── §8 the SINGLE-MODE RADIO (Stuart 11-26)\n");
+    {
+        const auto& D = vibereach::listeningDemods(); const auto& W = vibereach::wholeRadioModes();
+        CHECK(singleOk("") && singleOk("adsb") && singleOk("vdl2") && singleOk("ism:868") && singleOk("dab") && singleOk("ndb")
+              && singleOk("sondes") && singleOk("wfm") && singleOk("sat") && !singleOk("ism") && !singleOk("dsc") && !singleOk("cwu"), "the tokens");
+        CHECK(singleBlockOf("vdl2") == "avdata" && singleBlockOf("acars") == "avdata" && singleBlockOf("vor") == "vormap"
+              && singleBlockOf("ism:868") == "ism" && singleBlockOf("adsb") == "adsb" && singleBlockOf("dab") == "dab", "the switch each stands on");
+        CHECK(singleKeepable("vdl2") && singleKeepable("ism:868") && !singleKeepable("dab") && !singleKeepable("ndb") && !singleKeepable("wfm") && !singleKeepable("sat"),
+              "kept running where keep-running applies");
+        // ADS-B single: every demod, every other whole mode, satellites off; ADS-B never; options untouched
+        bool all = true;
+        for (const char* m : D) all = all && singleBlocks("adsb", m, D, W);
+        for (const char* m : W) all = all && (std::string(m) == "adsb" ? !singleBlocks("adsb", m, D, W) : singleBlocks("adsb", m, D, W));
+        CHECK(all && singleBlocks("adsb", "sat", D, W) && !singleBlocks("adsb", "commb", D, W) && !singleBlocks("adsb", "avdata+text", D, W),
+              "ADS-B single: everything else off (SATELLITE too), ADS-B on, options untouched");
+        CHECK(!singleBlocks("vdl2", "avdata", D, W) && singleBlocks("vdl2", "adsb", D, W), "VDL2 single stands on the datalink switch");
+        CHECK(!singleBlocks("", "wfm", D, W) && !singleBlocks("", "adsb", D, W), "General: nothing added");
+        // ★ the DAB-only B210 (56 MS/s locked range, per-listener DAB): with single "dab" every one of dabOnlyNow's others is off
+        static const char* kOthers[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
+                                         "drm", "freedv", "m17", "dvsig", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" };
+        bool dabOnly = !singleBlocks("dab", "dab", D, W);
+        for (const char* m : kOthers) dabOnly = dabOnly && singleBlocks("dab", m, D, W);
+        CHECK(dabOnly, "★ DAB single = dabOnlyNow's shape (the B210 locked range's per-listener DAB path)");
+        // the only-mode rule reads it straight off: onlyModeLeft on the enforced list
+        auto blk = [](const std::string& single) { return [single](const char* m) {
+            return singleBlocks(single, m, vibereach::listeningDemods(), vibereach::wholeRadioModes()); }; };
+        CHECK(vibereach::onlyModeLeft(blk("adsb")) == "adsb" && vibereach::onlyModeLeft(blk("vdl2")) == "avdata"
+              && vibereach::onlyModeLeft(blk("ism:868")) == "ism" && vibereach::onlyModeLeft(blk("")) == "", "★ onlyModeLeft returns the single mode — independent of the owner's ticks");
+        CHECK(vibereach::onlyModeLeft(blk("wfm")) == "", "WFM only: a demodulator, no whole-mode exit lock (the others are simply off)");
+        // satellites: the demodulators stay (the passes tune), every whole mode off, sat on
+        CHECK(!singleBlocks("sat", "nfm", D, W) && !singleBlocks("sat", "sat", D, W) && singleBlocks("sat", "adsb", D, W) && singleBlocks("sat", "dab", D, W),
+              "SATELLITES single: whole modes off, the passes' demodulators and SATELLITE on (listeners held by the server's gate)");
     }
 
     std::printf("── §6 cost words\n");

@@ -364,6 +364,7 @@ std::string toJson(const Config& c) {
     S("landingDabService", c.landingDabService);
     B("landingAdsb", c.landingAdsb); B("adsbKeepRunning", c.adsbKeepRunning);   // ★ V12 — see Config::landingAdsb
     S("landingMap", c.landingMap); S("landingModes", c.landingModes); B("mapKeep", c.mapKeep);   // ★★★ beta96 — see Config::landingMap
+    S("singleMode", c.singleMode);   // ★★★ beta96 — see Config::singleMode
     j += "  " + vibefm::toJson(c.fm) + ",\n";   // ★ Broadcast FM defaults — see Config::fm
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
     N("uncompressed", c.uncompressed);
@@ -459,6 +460,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
         c.landingAdsb = ks.landingAdsb; c.adsbKeepRunning = ks.adsbKeepRunning;
         c.landingMap = ks.landingMap; c.landingModes = ks.landingModes; c.mapKeep = ks.mapKeep;
     }
+    if (getStr(s, "singleMode", c.singleMode) && !vibekeep::singleOk(c.singleMode)) c.singleMode.clear();   // ★★★ beta96
     fmFromJson(s, c.fm);   // ★ Broadcast FM defaults — see Config::fm
     if (getNum(s, "users", d))       c.users = (int)d;
     if (getNum(s, "maxBw", d))       c.maxBw = d;
@@ -685,6 +687,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
         r.landingAdsb = ks.landingAdsb; r.adsbKeepRunning = ks.adsbKeepRunning;
         r.landingMap = ks.landingMap; r.landingModes = ks.landingModes; r.mapKeep = ks.mapKeep;
     }
+    if (getStr(j, "singleMode", t)) r.singleMode = vibekeep::singleOk(t) ? t : std::string();   // ★★★ beta96 read AND written
     fmFromJson(j, r.fm);   // ★ Broadcast FM defaults — read AND written (radioToJson)
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
@@ -767,6 +770,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("landingDabService", r.landingDabService);
     B("landingAdsb", r.landingAdsb); B("adsbKeepRunning", r.adsbKeepRunning);   // ★ V12 — see the reader
     S("landingMap", r.landingMap); S("landingModes", r.landingModes); B("mapKeep", r.mapKeep);   // ★★★ beta96 — see the reader
+    S("singleMode", r.singleMode);
     o += vibefm::toJson(r.fm) + ",";   // ★ Broadcast FM defaults — see the reader
     // ★★★ THE BAND LISTS MUST TRAVEL. There are TWO radio writers — one for the file and one for
     //     the config API — and only the file one had these. The setup page reads the API, so the
@@ -872,6 +876,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.landingDabService = one.landingDabService;
     r.landingAdsb = one.landingAdsb; r.adsbKeepRunning = one.adsbKeepRunning;
     r.landingMap = one.landingMap; r.landingModes = one.landingModes; r.mapKeep = one.mapKeep;   // ★★★ beta96
+    r.singleMode = one.singleMode;
     r.fm = one.fm;   // ★ Broadcast FM defaults
     r.users = one.users; r.maxBw = one.maxBw; r.maxFps = one.maxFps; r.fftRate = one.fftRate;
     r.uncompressed = one.uncompressed;
@@ -1371,6 +1376,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.landingDabService = r.landingDabService;
     c.landingAdsb = r.landingAdsb; c.adsbKeepRunning = r.adsbKeepRunning;   // ★ V12 — or the worker never sees them
     c.landingMap = r.landingMap; c.landingModes = r.landingModes; c.mapKeep = r.mapKeep;   // ★★★ beta96 likewise
+    c.singleMode = r.singleMode;
     c.fm = r.fm;   // ★ Broadcast FM defaults — or the worker never sees them
     // ★★★ AN UNLOCKED RADIO STARTS WHERE ITS LISTENERS WILL. A locked radio's centre is the
     //     owner's fixed window and must not move. An unlocked one has no window to protect, and

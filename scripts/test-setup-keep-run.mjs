@@ -16,7 +16,7 @@ const grab = (name) => {
 };
 // ★ a const: one line, or an array literal up to its closing "];"
 const constOf = (name) => {
-  const m = src.match(new RegExp(`\\nconst ${name} = (\\[[\\s\\S]*?\\n\\];|[^\\n]*)`));
+  const m = src.match(new RegExp(`\\nconst ${name} = (\\[[\\s\\S]*?\\];|[^\\n]*)`));
   if (!m) { console.log(`FAIL const ${name}`); process.exit(1); }
   return m[0] + '\n';
 };
@@ -32,11 +32,11 @@ class El {
 const els = {};
 const $ = (id) => (els[id] ||= new El(id));
 
-const fnNames = ['modeLandingId', 'keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
+const fnNames = ['singleBlockOf', 'singleWords', 'singleOptions', 'singleFromTicks', 'singleRender', 'singleKeepable', 'modeLandingId', 'keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
                  'mapLandRender', 'keepSetModes', 'keepMirror', 'keepMigrate', 'adsbLandOffer'];
-const body = constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
+const body = constOf('LISTEN_DEMODS') + constOf('WHOLE_MODES') + constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
 const make = new Function('env', `
-  let { $, radio, HW, adsbLandForm, modeBlockSet, plainLandingWords, esc, bgIsmBands } = env;
+  let { $, radio, HW, adsbLandForm, modeBlockSet, plainLandingWords, esc, bgIsmBands, modeTree, modeCapShown, dabLandHwCan, DAB_DECODER } = env;
   const setHW = (h) => { HW = h; };
   ${body}
   return { ${fnNames.join(', ')}, setHW };`);
@@ -46,7 +46,9 @@ let FORM = { users: 1, rate: 2400000, boost: false, blocked: false };
 let BLOCKS = new Set();
 const P = make({ $, radio: () => RADIO, HW: null, adsbLandForm: () => FORM, modeBlockSet: () => BLOCKS,
                  plainLandingWords: () => '96.100 MHz WFM', esc: (t) => String(t),
-                 bgIsmBands: () => [{ id: '433', label: '433.92 MHz' }, { id: '868', label: '868 MHz SRD' }] });
+                 bgIsmBands: () => [{ id: '433', label: '433.92 MHz' }, { id: '868', label: '868 MHz SRD' }],
+                 modeTree: () => ['wfm', 'nfm', 'am', 'usb', 'lsb', 'drm', 'sondes'].map((id) => ({ id })), modeCapShown: (t, m) => m.id !== 'drm',
+                 dabLandHwCan: () => true, DAB_DECODER: true });
 const all = () => ['adsb', 'vdl2', 'acars', 'vor', 'ais'].map(id => ({ id, hw: true, why: '', pct: -1 }));
 const find = (v, id) => v.find(o => o.id === id);
 
@@ -157,6 +159,40 @@ console.log('── ALL OFF keeps the kept-running mode on (b96-newmodes modeLan
   ok(P.modeLandingId() === 'adsb', 'beta95 ADS-B as before');
   RADIO = { demodMode: 'wfm' };
   ok(P.modeLandingId() === 'wfm', 'no map: the demodulator landing');
+}
+
+console.log('── the SINGLE-MODE RADIO (Stuart 11-26)');
+{
+  // Paul's ADS-B-only radio: every demodulator and every other whole mode off by its ticks → shown as Single mode: ADS-B
+  const paul = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig,dab,ism,ndb,ais,avdata,sondes,vormap,sat';
+  P.setHW(hwRtl(2400000)); FORM = { users: 1, rate: 2400000, boost: false, blocked: false }; BLOCKS = new Set();
+  RADIO = { driver: 'rtlsdr', blockedModes: paul, singleMode: '' };
+  ok(P.singleFromTicks(RADIO) === 'adsb', "★ Paul's ticks read as ADS-B");
+  P.singleRender();
+  ok(RADIO.singleMode === 'adsb' && $('radioUseSingle').checked && /single mode: ADS-B/.test($('singleNote').textContent)
+     && /saved when you save/.test($('singleNote').textContent), '★ shown as Single mode: ADS-B on first open (derived, saved on save)');
+  ok($('modeBlockList').style.opacity === '.4' && $('modeAllRow').style.display === 'none', 'the tick boxes greyed, ALL ON / OFF hidden');
+  ok(RADIO.blockedModes === paul, 'the ticks themselves untouched underneath');
+  ok(P.modeLandingId() === 'adsb', 'ALL OFF / the landing id follow the single mode');
+  // the dropdown: only what THIS radio can do
+  const opts = P.singleOptions(RADIO).map((o) => o.tok);
+  ok(['adsb', 'vdl2', 'acars', 'ais', 'vor', 'ism:433', 'ism:868', 'dab', 'sondes', 'wfm', 'nfm', 'am', 'usb', 'lsb'].every((t) => opts.includes(t)),
+     `the list for an RTL at 2.4: ${opts.join(' ')}`);
+  ok(!opts.includes('drm') && !opts.includes('sat') && !opts.includes('ndb'), 'nothing it cannot do (DRM not in its caps, no NDB reach, no satellite location)');
+  P.setHW({ ...hwRtl(2400000), ndbHw: true, singleSat: { ok: true } });
+  ok(P.singleOptions(RADIO).some((o) => o.tok === 'sat') && P.singleOptions(RADIO).some((o) => o.tok === 'ndb'), 'SATELLITES and NDB where the server says so');
+  P.setHW({ offline: false, mapRate: 912000, mapModes: [{ id: 'adsb', hw: false }, { id: 'vdl2', hw: true }, { id: 'acars', hw: true }, { id: 'vor', hw: false }, { id: 'ais', hw: true }, { id: 'ism', hw: false }] });
+  const hf = P.singleOptions({ driver: 'airspyhf' }).map((o) => o.tok);
+  ok(!hf.includes('adsb') && !hf.includes('vor') && hf.includes('vdl2'), 'an HF+: no ADS-B or VOR entry');
+  // back to General: the ticks are what they were
+  P.setHW(hwRtl(2400000));
+  RADIO = { driver: 'rtlsdr', blockedModes: 'dab', singleMode: 'general' };
+  P.singleRender();
+  ok($('radioUseGeneral').checked && $('modeBlockList').style.opacity === '' && RADIO.blockedModes === 'dab', '★ General: the owner\'s ticks, live again');
+  RADIO = { driver: 'rtlsdr', blockedModes: paul, singleMode: 'general' }; P.singleRender();
+  ok(RADIO.singleMode === 'general', 'a chosen General is never re-derived from the ticks');
+  RADIO = { driver: 'rtlsdr', singleMode: 'sat' }; P.setHW({ ...hwRtl(2400000), singleSat: { ok: true } }); P.singleRender();
+  ok(/follows the satellite passes itself/.test($('singleNote').textContent), 'SATELLITES: the note says listeners watch');
 }
 
 console.log('── migration of a beta95 radio');

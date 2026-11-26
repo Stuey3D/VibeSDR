@@ -2034,6 +2034,18 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
         <!-- ★★★ beta96 NEW MODES (docs/v12/NEW-MODES-OFF.md): the one-line notice after an update added switches, and ALL ON /
              ALL OFF for this radio — they change the ticks on screen only; nothing is saved until Save (a mis-tap undoes). -->
+        <!-- ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26): an EXPLICIT choice, not inferred from the ticks (which broke when new
+             modes arrived). The server enforces it over the ticks (vsEnforcedBlocked), which stay as they were underneath, so
+             General gives them back. The list is what THIS radio can do (the server's hwinfo; no dead entries). -->
+        <div id="radioUseWrap" style="margin-top:12px">
+          <span class="lbl">Radio use</span>
+          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="radioUseKind" id="radioUseGeneral" value="general">
+            <span>General: listeners choose from the modes ticked below</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px"><input type="radio" name="radioUseKind" id="radioUseSingle" value="single">
+            <span>Single mode:</span> <select id="singlePick"></select></label>
+          <div class="hint">Use this to lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected decoder is available.</div>
+          <div class="hint" id="singleNote"></div>
+        </div>
         <div id="newModesNote" class="note hide" style="margin-top:10px"></div>
         <div class="row" id="modeAllRow" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
           <button type="button" class="ghost" id="modeAllOn">All on</button>
@@ -4397,9 +4409,81 @@ function loraAllHint() {
   return t;
 }
 
+/* ── ★★★ beta96 THE SINGLE-MODE RADIO (vibe_keep_store.h singleOk / singleBlockOf; the server's vsEnforcedBlocked) ─────────
+ *  radio().singleMode: "" (not chosen yet: derived from the ticks on open — Paul's ADS-B-only radio shows as Single mode:
+ *  ADS-B, saved when the owner saves), "general", or the token ("adsb", "vdl2", "ism:868", "dab", "wfm", "sat" …). */
+function singleBlockOf(t) {
+  if (!t || t === "general") return "";
+  if (t === "sat") return "sat";
+  const m = KEEP_MODES.find(x => x.id === keepBase(t));
+  return m ? m.block : t;
+}
+function singleWords(t) {
+  if (!t || t === "general") return "";
+  if (t === "sat") return "SATELLITES";
+  const named = { dab: "DAB", ndb: "NDB", sondes: "SONDES", wfm: "WFM", nfm: "NFM", am: "AM", usb: "USB", lsb: "LSB", drm: "DRM" };
+  return named[t] || keepTokName(t);
+}
+/** What THIS radio can be single-mode in: [{tok, label, why}] — the server's facts (mapModes, ismHwBands, dab, ndbHw, the caps
+ *  tree, singleSat); a mode it can never do is not listed; the owner's ticks do not matter (single mode overrides them). */
+function singleOptions(r) {
+  const out = [];
+  const F = keepFacts(r);
+  const av = id => F.avail.find(a => a.id === id) || { hw: false };
+  const rateWhy = id => { const a = av(id); return a.why && !/switched off/.test(a.why) ? a.why : ""; };
+  for (const id of ["adsb", "vdl2", "acars", "ais", "vor"]) if (av(id).hw) out.push({ tok: id, label: id === "vdl2" ? "DATALINK: VDL2" : id === "acars" ? "DATALINK: ACARS" : id === "vor" ? "VOR MAP" : keepTokName(id), why: rateWhy(id) });
+  if (av("ism").hw) for (const b of (typeof bgIsmBands === "function" ? bgIsmBands() : [])) out.push({ tok: "ism:" + b.id, label: "ISM " + b.label, why: "" });
+  if (typeof dabLandHwCan === "function" && dabLandHwCan() && DAB_DECODER) out.push({ tok: "dab", label: "DAB", why: "" });
+  const hw = typeof HW !== "undefined" && HW && !HW.offline ? HW : null;
+  if (hw && hw.ndbHw) out.push({ tok: "ndb", label: "NDB", why: "" });
+  const full = typeof modeTree === "function" ? modeTree() : [];
+  const shown = id => { const m = full.find(x => x.id === id); return !!m && (typeof modeCapShown !== "function" || modeCapShown(full, m)); };
+  if (shown("sondes")) out.push({ tok: "sondes", label: "SONDES", why: "" });
+  for (const d of ["wfm", "nfm", "am", "usb", "lsb", "drm"]) if (shown(d)) out.push({ tok: d, label: d.toUpperCase() + " listening only", why: "" });
+  if (hw && hw.singleSat && hw.singleSat.ok) out.push({ tok: "sat", label: "SATELLITES (the radio follows the passes; listeners watch)", why: "" });
+  return out;
+}
+/** The token the owner's TICKS imply (one mode left on) — the migration of a radio that is single-mode by its ticks. */
+function singleFromTicks(r) {
+  const off = new Set(String(r.blockedModes || "").split(/[,;\s]+/).filter(Boolean).map(t => t.toLowerCase()));
+  if (!LISTEN_DEMODS.every(d => off.has(d))) return "";
+  const left = WHOLE_MODES.filter(w => !off.has(w));
+  if (left.length !== 1) return "";
+  const w = left[0];
+  if (w === "avdata") { const ids = keepParse(r.landingModes); return ids[0] === "acars" ? "acars" : "vdl2"; }
+  if (w === "vormap") return "vor";
+  if (w === "ism") { const b = (typeof bgIsmBands === "function" ? bgIsmBands() : [])[0]; return "ism:" + (b ? b.id : "868"); }
+  return w;
+}
+function singleRender() {
+  const wrap = $("radioUseWrap"); if (!wrap) return;
+  const r = radio();
+  if (!r.singleMode) { const d = singleFromTicks(r); if (d) { r.singleMode = d; r._singleDerived = true; } }
+  const single = r.singleMode && r.singleMode !== "general" ? r.singleMode : "";
+  const opts = singleOptions(r);
+  if (single && !opts.some(o => o.tok === single)) opts.unshift({ tok: single, label: singleWords(single), why: "this radio cannot run it now" });
+  wrap.classList.toggle("hide", !opts.length && !single);
+  $("radioUseGeneral").checked = !single; $("radioUseSingle").checked = !!single;
+  const sel = $("singlePick");
+  sel.innerHTML = opts.map(o => `<option value="${esc(o.tok)}"${o.why ? " disabled" : ""}>${esc(o.label)}${o.why ? " — " + esc(o.why) : ""}</option>`).join("");
+  if (single) sel.value = single;
+  sel.disabled = !single;
+  $("singleNote").textContent = !single ? ""
+    : `This radio is single mode: ${singleWords(single)}. ` + (r._singleDerived ? "(Worked out from the modes ticked below — saved when you save.) " : "")
+      + (single === "sat"
+          ? "It follows the satellite passes itself (Unattended satellites, below, says which and their priority); listeners land in SATELLITE and watch — they cannot retune it. The admin may."
+          : "Listeners land in it and cannot leave it (the admin may)" + (singleKeepable(single) ? "; it keeps running when nobody is connected." : ".")
+            + " New modes from updates never appear on this radio.");
+  // ★ the ticks stay as they were (General gives them back), greyed while single mode decides
+  const list = $("modeBlockList"), allRow = $("modeAllRow");
+  if (list) { list.style.opacity = single ? ".4" : ""; list.style.pointerEvents = single ? "none" : ""; }
+  if (allRow) allRow.style.display = single ? "none" : "";
+}
+function singleKeepable(t) { return !!t && t !== "general" && t !== "sat" && KEEP_MODES.some(m => m.id === keepBase(t)) && (keepBase(t) !== "ism" || t.includes(":")); }
 function modeBlockRender() {
   const host = $("modeBlockList");
   if (!host) return;
+  singleRender();   // ★★★ beta96 Radio use: General / Single mode
   // ★★★ beta96 this radio's new switches judged from what its owner had seen when the card opened (newModesFreeze)
   newModesFreeze(radio()); modeDrawn().add(modeRadioKey(radio(), curRadio));
   // ★ moved controls out first, so emptying the list cannot take them with it
@@ -5148,6 +5232,7 @@ function newModesPolicySet(v) {
 /** The mode new listeners land in on this radio — what ALL OFF keeps on ("" = none it can name). */
 function modeLandingId() {
   const r = radio();
+  if (r.singleMode && r.singleMode !== "general" && typeof singleBlockOf === "function") return singleBlockOf(r.singleMode);   // ★★★ beta96
   // ★★★ beta96 the landing map's mode (b96-keeprun): VDL2 / ACARS stand on "avdata", then "vormap", "ais", "ism", "adsb"
   if ((r.landingMap === "avmar" || r.landingMap === "amateur") && typeof keepParse === "function") {
     const ids = keepParse(r.landingModes);
@@ -5195,6 +5280,16 @@ function modeAllSet(on) {
 }
 if ($("modeAllOn")) $("modeAllOn").addEventListener("click", () => modeAllSet(true));
 if ($("modeAllOff")) $("modeAllOff").addEventListener("click", () => modeAllSet(false));
+// ★★★ beta96 Radio use: General / Single mode
+for (const id of ["radioUseGeneral", "radioUseSingle"])
+  if ($(id)) $(id).addEventListener("change", () => {
+    const r = radio();
+    r._singleDerived = false;
+    if ($("radioUseGeneral").checked) r.singleMode = "general";
+    else { const o = singleOptions(r).find(x => !x.why); r.singleMode = ($("singlePick").value && !$("singlePick").selectedOptions[0]?.disabled ? $("singlePick").value : o ? o.tok : "general"); }
+    modeBlockRender(); dabLandRender();
+  });
+if ($("singlePick")) $("singlePick").addEventListener("change", () => { const r = radio(); r._singleDerived = false; r.singleMode = $("singlePick").value; modeBlockRender(); dabLandRender(); });
 for (const id of ["newModesPolOn", "newModesPolOff"])
   if ($(id)) $(id).addEventListener("change", (e) => { if (e.target.checked) newModesPolicySet(e.target.value); });
 /** ★ Save refused when a drawn radio would have no modes at all (both save buttons ask). */
@@ -5202,6 +5297,7 @@ function modesStop() {
   const list = radioList();
   for (let i = 0; i < list.length; i++) {
     if (!modeDrawn().has(modeRadioKey(list[i], i)) || !modeNoneLeft(list[i].blockedModes)) continue;
+    if (list[i].singleMode && list[i].singleMode !== "general") continue;   // ★★★ beta96 single mode decides, the ticks are underneath
     $("saveErr").textContent = "Not saved — " + (list[i].label || "a radio") + " has every mode switched off, so nobody could listen. "
       + "Tick at least one under “Modes and decoders”.";
     return true;
@@ -9361,6 +9457,7 @@ function collectRadio() {
   const drv = radio().driver || "";
   return {
     mode: radio().mode,
+    singleMode: String(radio().singleMode || ""),   // ★★★ beta96 the single-mode radio ("general" = chosen General)
     // ★ The band lists are edited as chips straight onto the radio object, so they are carried
     //   through here rather than read back off a form field that does not exist. Blank in shared
     //   mode, because a locked range is already the limit and a stale list left behind would be

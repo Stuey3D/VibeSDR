@@ -1006,6 +1006,27 @@ int main() {
         ok(none.landingMap.empty() && none.landingModes.empty() && !none.mapKeep, "★ never default on");
     }
 
+    std::printf("\nThe single-mode radio travels every hop; the owner's ticks stay underneath\n");
+    {
+        ServerConfig s;
+        s.configured = true; s.adminPass = "Test123";
+        RadioConfig p; p.serial = "PAUL"; p.driver = "rtlsdr"; p.enabled = p.configured = true;
+        p.singleMode = "adsb"; p.blockedModes = "dab,ais";
+        RadioConfig g; g.serial = "GEN"; g.driver = "rtlsdr"; g.enabled = g.configured = true;
+        s.radios = { p, g };
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && back.radios.size() == 2 && back.radios[0].singleMode == "adsb" && back.radios[1].singleMode.empty(),
+           "★ singleMode per radio, General by default", err);
+        if (back.radios.size() == 2) {
+            ok(back.radios[0].blockedModes == "dab,ais", "★ the owner's own ticks are kept untouched underneath (General gives them back)");
+            ok(effectiveFor(back, back.radios[0]).singleMode == "adsb", "the flatten carries it to the worker");
+        }
+        Config c;
+        ok(fromJson(R"({"singleMode":"ism:868"})", c, err, false) && c.singleMode == "ism:868", "ISM on its band", err);
+        ok(fromJson(R"({"singleMode":"rm -rf"})", c, err, false) && c.singleMode.empty(), "a token it does not know is General", err);
+        ok(fromJson(R"({"singleMode":"sat"})", c, err, false) && c.singleMode == "sat", "SATELLITES", err);
+    }
+
     // ★★ beta91 a GET body sent back whole: spotReportStatus (read-only status, folded into GET /vibeserver/config) carries
     //    its OWN "radios" list AHEAD of the real one — the radios must come from the top level, never the status rows
     {
