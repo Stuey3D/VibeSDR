@@ -145,8 +145,9 @@ const tmp = mkdtempSync(path.join(os.tmpdir(), 'span-stamp-'));
 rmSync(tmp, { recursive: true, force: true });
 
 // ── 3. the wiring ──
-ok(/wideSuffix\(this\.baseUrl\)\}&span=1`/.test(src('src/services/VibeServerWsClient.ts')), 'the app asks with span=1');
-ok(/&wide=1&span=1'/.test(src('web/client/src/main.ts')), 'the web page asks with span=1');
+ok(/wideSuffix\(this\.baseUrl\)\}&span=1(&[a-z0-9]+=[0-9]+)*`/.test(   // ★ beta96 more asks may follow (&adsbd=1, ADS-B deltas)
+  src('src/services/VibeServerWsClient.ts')), 'the app asks with span=1');
+ok(/&wide=1&span=1(&[a-z0-9]+=[0-9]+)*'/.test(src('web/client/src/main.ts')), 'the web page asks with span=1');
 ok(/it\.binHz \?\? 0/.test(src('src/services/nativeSpecSocket.ts')) && /"binHz", it\.binHz/.test(src('android/app/src/main/cpp/spectrum/spectrum_jsi.cpp')),
    'Android\'s native socket hands the stamp to the client');
 ok(!/span=1/.test(src('handheld-ui/src/engine.h')), 'the R36S does not ask (it reads a 22-byte header)');
