@@ -5710,11 +5710,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   const landingId = mapSwitch || (landingAdsb ? 'adsb' : landingDabCh >= 0 ? 'dab' : (landingMode === 'cw' ? 'cwu' : landingMode));
                   const allSet = (on: boolean) => {
                     // ★ ON: what this radio draws; OFF: every switch (hidden ones too, so one whole-radio mode left IS single-mode)
-                    const v0 = NM.allSet(ownCsv, on, plainIds(!on), landingId, regionDefaults, modeGens);
+                    const bgSwitch = bgWhole ? keepModeSwitch(bgWhole) : '';   // ★★★ b96-bgsplit the background mode stays on too
+                    const v0 = NM.allSet(ownCsv, on, plainIds(!on), landingId, regionDefaults, modeGens, bgSwitch);
                     if (v0 == null) { setModeAllNote('Not changed \u2014 a radio needs one mode left on. Set where new listeners start, then All off keeps that one.'); return; }
                     setModeUndo(blockedModes);
                     keepCsv(NM.stamp(v0, modeGens, regionDefaults));
-                    setModeAllNote(on ? 'Every mode switched on.' : `Everything off except ${label(landingId)}, where new listeners start.`);
+                    setModeAllNote(on ? 'Every mode switched on.' : `Everything off except ${label(landingId)}, where new listeners start`
+                      + (bgSwitch && bgSwitch !== landingId ? `, and ${label(bgSwitch)}, the background decoding.` : '.'));
                     if (!on && landingId !== 'dab' && landingDabCh >= 0) setDabLanding(-1, 0, '');
                   };
                   const btn = (key: string, text: string, onPress: () => void, active = false, disabled = false) => (

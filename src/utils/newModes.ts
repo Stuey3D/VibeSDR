@@ -116,13 +116,14 @@ export function noneLeft(csv: string, regionDefaults: Record<string, string>, mg
 /** ALL ON / ALL OFF over `ids` (the plain switches; never a "+" option). ALL OFF keeps `keep` (the landing mode) on;
  *  null = refused (no landing mode among `ids`), the caller says why. */
 export function allSet(csv: string, on: boolean, ids: string[], keep: string, regionDefaults: Record<string, string>,
-                       mg: ModeGens): string | null {
+                       mg: ModeGens, keepAlso = ''): string | null {
   const own = ownSet(csv);
   const tick = (id: string) => { own.delete(id); if (regionDefaults[id] || modeIsNew(id, own, mg)) own.add('+' + id); };
   if (on) { for (const id of ids) tick(id); return [...own].join(','); }
   if (!keep || !ids.includes(keep)) return null;
   for (const id of ids) {
-    if (id === keep) { tick(id); continue; }
+    // ★★★ b96-bgsplit `keepAlso` = the background whole-radio mode's switch: ALL OFF keeps it on beside the landing's
+    if (id === keep || (keepAlso && id === keepAlso)) { tick(id); continue; }
     own.delete('+' + id); own.add(id);
   }
   return [...own].join(',');

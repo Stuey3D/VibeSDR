@@ -5522,6 +5522,14 @@ function newModesPolicySet(v) {
   radio().blockedModes = [...set].join(",");
   modeBlockRender(); modeBlockSummary();
 }
+/** ★★★ b96-bgsplit the BACKGROUND whole-radio mode's switch ("" = manual) — ALL OFF keeps it on as well as the landing's. */
+function modeBgId() {
+  const r = radio();
+  if (typeof keepParse !== "function") return "";
+  const ids = keepParse(r.bgMode);
+  const m = ids.length ? KEEP_MODES.find(x => x.id === keepBase(ids[0])) : null;
+  return m ? m.block : "";
+}
 /** The mode new listeners land in on this radio — what ALL OFF keeps on ("" = none it can name). */
 function modeLandingId() {
   const r = radio();
@@ -5560,14 +5568,16 @@ function modeAllSet(on) {
       if (note) note.textContent = "Not changed — a radio needs one mode left on. Set where new listeners start (above), then All off keeps that one.";
       return;
     }
+    const bgKeep = modeBgId();   // ★★★ b96-bgsplit the background mode stays on too
     for (const m of full.filter(plain)) {
-      if (m.id === keep) { set.delete(m.id); if (REGION_DEFAULTS[m.id] || modeIsNew(m.id, set)) set.add("+" + m.id); continue; }
+      if (m.id === keep || (bgKeep && m.id === bgKeep)) { set.delete(m.id); if (REGION_DEFAULTS[m.id] || modeIsNew(m.id, set)) set.add("+" + m.id); continue; }
       set.delete("+" + m.id); set.add(m.id);
     }
     radio().blockedModes = [...set].join(",");
     if (keep !== "dab") dabLandOnBlockedChange("dab", true);
+    const bgLbl = bgKeep && bgKeep !== keep ? ((full.find(m => m.id === bgKeep) || {}).label || bgKeep) : "";
     if (note) note.textContent = "Everything off except " + ((full.find(m => m.id === keep) || {}).label || keep)
-      + ", where new listeners start — not saved yet.";
+      + ", where new listeners land" + (bgLbl ? ", and " + bgLbl + ", the background decoding" : "") + " — not saved yet.";
   }
   modeBlockRender(); modeBlockSummary();
 }
