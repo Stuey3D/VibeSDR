@@ -1557,7 +1557,16 @@ export function satTelemetryHead(t: SatTelemetry | null): string {
 /** ★★ beta94 "No EPS data in this frame (its data-valid flag is off)" — '' when every board sent data. */
 export function satTelemetryAbsentText(t: SatTelemetry | null): string { return tlmAbsentText(t?.absent, 'this frame'); }
 /** A value in words: "Battery voltage 7.876 V" / "Reboot count 14" / "Receiver RSSI 181 raw" (no published conversion). */
-export function satTelemetryLine(v: SatTlmValue): string { return `${v.name} ${v.value}${v.unit ? ' ' + v.unit : ''}${v.raw ? ' raw' : ''}`; }
+/** ★★ beta96 (Stuart 11-26, an AO-73 pass: "Photo voltage 1 3.98⏎V", "Boost converter temp⏎1 24 °C"): a reading never
+ *  breaks inside itself. NO-BREAK SPACES join the value to its unit (and "raw"), and a short last word of the name (an
+ *  index or axis: "1", "X+", "Y−") to the word before it, so a line can only wrap between words of the name or between
+ *  the name and its reading. Web and app both draw this string. */
+const NBSP = '\u00a0';
+export function satTelemetryLine(v: SatTlmValue): string {
+  const name = String(v.name).replace(/ (\S{1,3})$/, NBSP + '$1');
+  const reading = `${v.value}${v.unit ? NBSP + v.unit : ''}${v.raw ? NBSP + 'raw' : ''}`;
+  return `${name} ${reading}`;
+}
 /** The RAW switch's text: the payload hex in groups of 4 bytes. */
 export function satTelemetryHex(t: SatTelemetry | null): string { return (t?.hex ?? '').replace(/(.{8})/g, '$1 ').trim(); }
 
