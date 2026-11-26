@@ -56,7 +56,7 @@ object VibeMapGL {
     @Volatile private var nativeReady = false
 
     /**
-     * Wire the map into the server. Idempotent and cheap after the first call; the ~22 MB copy runs
+     * Wire the map into the server. Idempotent and cheap after the first call; the copy (~3 MB since beta96) runs
      * on its own low-priority thread, never on the caller's (a bridge thread or a service start).
      */
     fun start(ctx: Context) {
