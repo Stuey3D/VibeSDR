@@ -117,6 +117,7 @@ const TABLE = [
   P(['dabScanLabels'], 'dabScanLabels', 'dabScanLabels'),
   P(['rate', 'rateLock'], 'CAPTURE WIDTH', 'rateLock'),
   P(['maxFps'], "title: 'Frame rate'", 'maxFftRate'),   // ★ beta96 b96-setupux: the section was WATERFALL RATE
+  N(['setupCode', 'codePw', 'codePw2', 'codeRemote'], 'beta96 first-time REMOTE SETUP on the page itself (the one-time code, the first admin password typed twice, the remote-access tick at Finish) — the way IN, not a setting; the phone\'s side is SetupElsewhereScreen'),
   N(['fpsDefault'], 'the machine\'s frame rate for every radio (beta96) — a phone serves one radio, so its one rate (the Frame rate section, maxFps above) IS the server\'s'),
   P(['dabRateBoost'], 'dabRateBoost', 'dabRateBoost'),
   P(['adsb256'], 'adsb256', 'adsb256'),
@@ -156,7 +157,6 @@ const TABLE = [
   // ── ★★ beta88: rows the Setup page draws ONLY on a phone (.androidOnly) — the phone's own settings, for the remote page ──
   P(['androidWebServer'], 'Serve the web client', 'webServer'),
   P(['androidCompress'], 'K.compress', 'compressAudio'),
-  P(['androidAdvanced'], 'Shared, managed, public', 'advanced'),
   P(['androidTunerBw'], 'K.tunerBwAuto', 'tunerBwAuto'),
   P(['androidDsFixed'], 'K.directSampling', 'directSampling'),
   P(['androidConvInLo'], 'K.convLoMhz', 'converterInputLoHz'),

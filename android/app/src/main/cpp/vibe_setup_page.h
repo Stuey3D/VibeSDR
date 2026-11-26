@@ -1131,12 +1131,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <div class="hint">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>
         <label><input type="checkbox" id="androidCompress"> <span class="lbl">Compress the spectrum and audio for the app</span>
           <div class="hint">On is right for nearly everyone; off sends far more data.</div></label>
-        <label><span class="lbl">Mode</span>
-          <select id="androidAdvanced">
-            <option value="0">Simple &mdash; plug in and share</option>
-            <option value="1">Advanced &mdash; shared, managed, public</option>
-          </select>
-          <div class="hint" id="androidAdvancedHint"></div></label>
+        <!-- ★★★ beta96 (Stuart 11-26) the phone's old Simple / Advanced choice is gone: the phone's Full server is always the
+             full screen, with the web client (its admin page) on; "Simple" is only the app's VibeServer Simple entry. One
+             listener or many is the radio tab's Listeners and Operating mode. -->
       </div>
       <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
            Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
@@ -4531,8 +4528,9 @@ function androidKeeps(e, keep, advOff) {
 function androidPrune() {
   androidSrvCard();   // ★ first: the Simple/Advanced choice below is read from it
   const keep = new Set((cfg.android && Array.isArray(cfg.android.supported)) ? cfg.android.supported : []);
-  const adv = $("androidAdvanced") ? $("androidAdvanced").value === "1"
-            : !!(cfg.android && cfg.android.server && cfg.android.server.advanced);
+  // ★★★ beta96 no Simple / Advanced choice any more: the full set whenever the web client (the admin page) is on
+  const adv = $("androidWebServer") ? $("androidWebServer").checked
+            : !!(cfg.android && cfg.android.server && cfg.android.server.webServer !== false);
   const advOff = new Set(!adv && cfg.android && Array.isArray(cfg.android.advancedOnly) ? cfg.android.advancedOnly : []);
   const root = document.getElementById("setup");
   if (!root || !root.querySelectorAll) return;
@@ -4563,7 +4561,7 @@ function androidPrune() {
     + "The phone's own server screen shows every change made here.";
   androidDeviceCard();
 }
-/** ★★ beta88: the three server settings only a phone has — the web client, Opus for listeners, Simple/Advanced. */
+/** ★★ beta88: the server settings only a phone has — the web client, Opus for listeners (beta96: no Simple/Advanced). */
 function androidSrvCard() {
   const card = $("androidSrvCard");
   if (!card || card.__filled) return;
@@ -4571,26 +4569,13 @@ function androidSrvCard() {
   const s = (cfg.android && cfg.android.server) || {};
   $("androidWebServer").checked = s.webServer !== false;
   $("androidCompress").checked = s.compressAudio !== false;
-  $("androidAdvanced").value = s.advanced ? "1" : "0";
-  const sync = () => {
-    const web = $("androidWebServer").checked;
-    // ★ The phone's rule: no web client, no Advanced (the admin page IS the web client).
-    if (!web) $("androidAdvanced").value = "0";
-    $("androidAdvanced").disabled = !web;
-    $("androidAdvancedHint").textContent = !web
-      ? "Advanced needs the web client: its admin page is served to a browser."
-      : $("androidAdvanced").value === "1"
-        ? "Adds shared listening, tuning and gain limits, and the admin page. Its settings are shown below."
-        : "One listener at a time with the whole radio. Choose Advanced to share it or to limit where people may tune.";
-  };
-  $("androidWebServer").addEventListener("change", () => { sync(); androidPrune(); });
-  $("androidAdvanced").addEventListener("change", () => { sync(); androidPrune(); });
-  sync();
+  // ★ The phone's rule: no web client, no admin page — so the sharing / banning / limits rows go with it (androidPrune)
+  $("androidWebServer").addEventListener("change", () => { androidPrune(); });
 }
 function androidSrvCollect() {
   if (!$("androidWebServer")) return {};
   return { webServer: $("androidWebServer").checked, compressAudio: $("androidCompress").checked,
-           advanced: $("androidWebServer").checked && $("androidAdvanced").value === "1" };
+           advanced: $("androidWebServer").checked };   // ★★★ beta96 the phone's Full = the full set with the web client on
 }
 /** ★★ beta88: the phone's own front-end rows on the radio tab (filled from the radio, posted with it). */
 function androidRadioFill(r) {

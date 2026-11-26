@@ -3,7 +3,8 @@
 //   node --no-warnings scripts/test_setup_sections.ts
 import { readFileSync } from 'node:fs';
 import { EMPTY_MEMO, RADIO_ORDER, SERVER_ORDER, headerLine, locationMust, mustCleared, opModeSummary, orderSections, parseStored,
-         sectionOpen, setAllSections, toggleSection } from '../src/utils/setupSections.ts';
+         sectionOpen, setAllSections, toggleSection, secState, startRefusal, triedAfterStart, triedPrune, reopenFor, RULES, rulesAgree,
+         FULL_TABS, radioTabLabel } from '../src/utils/setupSections.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
@@ -68,9 +69,10 @@ ok(srv.length >= 15 && srv.every((k) => SERVER_ORDER.includes(k)), `every server
 ok(rad.length >= 17 && rad.every((k) => RADIO_ORDER.includes(k)), `every radio section has a place in RADIO_ORDER (${rad.join(' ')})`);
 ok(orderSections(rad.map((key) => ({ key })), RADIO_ORDER).map((s) => s.key).join() === RADIO_ORDER.filter((k) => rad.includes(k)).join(),
    'the radio sections come out in Stuart\'s order');
-ok(/\{secRender\(serverSecs, SERVER_ORDER\)\}/.test(S) && /\{secRender\(radioSecs, RADIO_ORDER\)\}/.test(S), 'both groups are drawn through the order');
+ok(/\{tabNow === 'server' && secRender\(serverSecs, SERVER_ORDER\)\}/.test(S) && /\{tabNow === 'radio' && secRender\(radioSecs, RADIO_ORDER\)\}/.test(S),
+   'both groups are drawn through the order — each on its own TAB (SERVER | RADIO)');
 ok(/serverChoiceSections\.devicePassword \? \[serverChoiceSections\.devicePassword\]/.test(S), 'b96-serverchoice: the device password section has its slot');
-const top = S.indexOf('{serverChoiceTop}'), all = S.indexOf('<SectionAllRow'), firstSec = S.indexOf('{secRender(serverSecs');
+const top = S.indexOf('{serverChoiceTop}'), all = S.indexOf('<SectionAllRow'), firstSec = S.indexOf("{tabNow === 'server' && secRender(serverSecs");
 ok(top > 0 && top < all && all < firstSec, 'b96-serverchoice: the TOP BAR slot is above OPEN ALL / CLOSE ALL and every section');
 ok(/AsyncStorage\.getItem\(SECTIONS_KEY\)/.test(S) && /AsyncStorage\.setItem\(SECTIONS_KEY/.test(S), 'remembered per device (AsyncStorage)');
 const bodies = [...S.matchAll(/const secBody_([a-zA-Z]+) =/g)].map((m) => m[1]);
@@ -79,8 +81,58 @@ for (const b of bodies) {
   ok(uses >= 1, `secBody_${b} is drawn (${uses})`);
 }
 ok(!/>WATERFALL RATE</.test(S) && /title: 'Frame rate'/.test(S), 'the waterfall rate is the Frame rate section');
-ok(/must: needsAdminPw \?/.test(S) && /must: afProblem/.test(S) && /must: locationMust\(/.test(S),
-   'the red "!" comes from Start\'s own refusals (admin password, flight trackers) and the satellite engine\'s location rule');
+ok(/must: blockOf\('security'\)/.test(S) && /must: blockOf\('adsbFeed'\)/.test(S) && /must: blockOf\('hardware'\)/.test(S)
+   && /must: blockOf\('background'\)/.test(S) && /advise: locationMust\(/.test(S) && /advise: pskrOn && !pskrCall\.trim\(\)/.test(S)
+   && /advise: remoteAccess \? '' :/.test(S),
+   'blocking = Start\'s own refusals (admin password, flight trackers, Icom CI-V, background); amber = location, PSK Reporter name, remote settings off');
+
+// ── ★★★ beta96 (Stuart 11-26) THREE STATES, RED ONLY ON START ──
+{
+  const g = secState({ summary: 'Opus', block: '', advise: '', tried: false });
+  ok(g.tone === 'green' && g.line === 'Opus' && !g.must, 'nothing to say: GREEN, the summary');
+  const a = secState({ summary: 'Not set', block: '', advise: 'Location not set: satellites and maps need it', tried: true });
+  ok(a.tone === 'amber' && /^Location not set/.test(a.line) && !a.must, 'advice: AMBER with the reason, never red (even after START), never opens');
+  const b0 = secState({ summary: 'No admin password', block: 'No admin password: the server will not start without one', advise: '', tried: false });
+  ok(b0.tone === 'amber' && !b0.must && !b0.line.startsWith('!'), 'a blocker BEFORE any START: amber and calm — browsing never shouts');
+  const b1 = secState({ summary: '', block: 'No admin password: the server will not start without one', advise: '', tried: true });
+  ok(b1.tone === 'red' && b1.must && b1.line === '! No admin password: the server will not start without one', 'after a refused START: RED with "!" and the reason');
+  ok(sectionOpen(EMPTY_MEMO, 'security', b1.must) && !sectionOpen(EMPTY_MEMO, 'security', b0.must), '…and only then does it open by itself');
+  // a fresh config: the app's classification
+  const fresh = [
+    { key: 'security', group: 'server' as const, title: 'Admin password and PIN', block: 'No admin password: the server will not start without one' },
+    { key: 'adsbFeed', group: 'server' as const, title: 'Share ADS-B with flight trackers', block: '' },
+    { key: 'hardware', group: 'radio' as const, title: 'Icom transceiver', block: 'The Icom\u2019s CI-V address is two hex digits' },
+    { key: 'background', group: 'radio' as const, title: 'Background decoding', block: '' },
+  ];
+  const r = startRefusal(fresh)!;
+  ok(r && r.first.key === 'security' && r.first.group === 'server' && r.all.length === 2, 'START on a fresh config: refused, the SERVER tab\'s blocker first, both marked');
+  ok(/^Not started — Admin password and PIN: No admin password/.test(r.line) && /1 more, marked red/.test(r.line), `the one line names what is missing: "${r.line}"`);
+  ok(startRefusal(fresh.map((x) => ({ ...x, block: '' }))) === null, 'nothing missing: START goes');
+  const onlyRadio = startRefusal(fresh.map((x) => (x.key === 'security' ? { ...x, block: '' } : x)))!;
+  ok(onlyRadio.first.group === 'radio', 'a blocker only on the RADIO tab: that tab is selected');
+  let tried = triedAfterStart({}, r.all.map((x) => x.key));
+  ok(tried.security && tried.hardware, 'every blocker marked tried');
+  tried = triedPrune(tried, (k) => k === 'hardware');
+  ok(!tried.security && tried.hardware, 'fixed = forgotten (red until fixed, then calm); the other stays red');
+  ok(triedPrune(tried, () => true) === tried, 'nothing fixed: the same object (no re-render)');
+  const m = reopenFor({ ...EMPTY_MEMO, dismissed: { security: 'x' } }, ['security']);
+  ok(!('security' in m.dismissed), 'a refused START reopens a section closed by hand while red');
+  // one rule set with the web page
+  ok(rulesAgree().length === 0, `a rule on both sides is the same kind on both (${rulesAgree().join() || 'all agree'})`);
+  ok(RULES.web.advise.includes('pskr-no-callsign') && RULES.app.advise.includes('pskr-no-callsign') && RULES.web.advise.includes('location') && RULES.app.advise.includes('location')
+     && RULES.web.block.includes('flight-trackers') && RULES.app.block.includes('flight-trackers'), 'the shared rules: location + PSK Reporter name amber, flight trackers blocking — on both');
+  const page = readFileSync(new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');
+  const m2 = page.match(/const SEC_RULES = \{ block: \[([^\]]*)\],\s*advise: \[([^\]]*)\] \}/);
+  const pl = (x: string) => [...x.matchAll(/"([a-z-]+)"/g)].map((y) => y[1]).join();
+  ok(!!m2 && pl(m2[1]) === RULES.web.block.join() && pl(m2[2]) === RULES.web.advise.join(), 'the web page\'s SEC_RULES is this file\'s RULES.web, word for word');
+  ok(/const SEC_BLOCK = \{/.test(page) && /const SEC_ADVISE = \{/.test(page) && /function secSaveStops\(master\)/.test(page) && !/const SEC_MUST/.test(page),
+     'the web page: blocking / advisory tables and the Save gate (the old always-red SEC_MUST is gone)');
+  // the tabs
+  ok(FULL_TABS.map((t) => t.label).join() === 'SERVER,RADIO' && radioTabLabel('RSP1B') === 'RADIO · RSP1B' && radioTabLabel('') === 'RADIO', 'the tabs: SERVER | RADIO · <the radio>');
+  ok(!/const secBody_mode =/.test(S) && !/setAdvanced/.test(S) && /const advanced = webServer;/.test(S), 'Full\'s Simple / Advanced toggle is gone (advanced follows the web client)');
+  ok(!/startBlockedBy=/.test(S) && /refusal=\{startRefused/.test(S) && /onPress=\{pressStart\} disabled=\{starting\}/.test(S),
+     'no red START while browsing: both START keys are green and run pressStart; the refusal line only after a press');
+}
 // the hooks live before the screen's early returns
 const hookAt = S.indexOf('useState<SectionMemo>'), early = S.indexOf("if (Platform.OS !== 'android' || !vibeServerSupported)");
 ok(hookAt > 0 && hookAt < early, 'the section memory is a hook declared before the early returns');
