@@ -180,3 +180,16 @@ export function fileTextBase(file: string): number {
   const h = file.indexOf('\n', b + 2);
   return h < 0 ? -1 : h + 1;
 }
+/** ★ The app's laid-out lines (React Native onTextLayout: each rendered line's own text, in order) → their character
+ *  ranges in `text`. The line texts are the source cut where it wrapped; a platform that trims a line's text is re-found
+ *  from where the last line ended. A line's ending '\n' is not one of its characters. */
+export function lineRangesOf(text: string, lines: { text: string }[]): { start: number; end: number }[] {
+  let at = 0;
+  return lines.map((l) => {
+    let start = at;
+    if (text.substr(start, l.text.length) !== l.text) { const f = text.indexOf(l.text.replace(/\n$/, ''), start); if (f >= 0) start = f; }
+    const end = start + l.text.length;
+    at = end;
+    return { start, end: Math.max(start, end - (l.text.endsWith('\n') ? 1 : 0)) };
+  });
+}

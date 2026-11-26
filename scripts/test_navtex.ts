@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { NavtexAssembler, NAVTEX_END_LOST_MS, navtexTitle, navtexLostPct, navtexBody, navtexFileName, navtexFileText }
   from '../src/utils/navtex.ts';
-import { snrBand, snrOfItem, splitOfItem, navtexQualityLine, navtexQualityDetail, navtexSnrLine, snrRanges, lineWorst, bodyTextBase, fileTextBase,
+import { lineRangesOf, snrBand, snrOfItem, splitOfItem, navtexQualityLine, navtexQualityDetail, navtexSnrLine, snrRanges, lineWorst, bodyTextBase, fileTextBase,
          SNR_MAX_SLICES } from '../src/utils/navtexQuality.ts';
 import { navtexStationLabel, navtexPositions, navtexResolve, navtexLabelOf, navtexSelfId, navtexStartLostLabel } from '../src/utils/navtexStations.generated.ts';
 let pass = 0, fail = 0;
@@ -501,6 +501,14 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   const nW = lineWorst(narrow, rg);
   const redLines = narrow.filter((_, i) => nW[i] !== null && snrBand(nW[i]!) === 'red').map((l) => body.slice(l.start, l.end)).join('|');
   ok(redLines === 'LINE TWO| RED|LINE THR|EE RED', 'narrow: exactly the wrapped pieces of the two faded lines are red → ' + redLines);
+  // ★ the APP's path: onTextLayout's line texts at two widths (a wide phone, a narrow split) → the same colours
+  const layout = (w: number) => { const out: { text: string }[] = []; for (const ln of body.split('\n')) { const parts = ln.match(new RegExp(`.{1,${w}}`, 'g')) ?? ['']; parts.forEach((p, i) => out.push({ text: p + (i === parts.length - 1 ? '\n' : '') })); } out[out.length - 1].text = out[out.length - 1].text.replace(/\n$/, ''); return out; };
+  for (const w of [80, 6]) {
+    const lt = layout(w), lr = lineRangesOf(body, lt), lw = lineWorst(lr, rg);
+    const reds = lt.filter((_, i) => lw[i] !== null && snrBand(lw[i]!) === 'red').map((l) => l.text.replace(/\n$/, '')).join('|');
+    ok(lr.every((r, i) => body.slice(r.start, r.end) === lt[i].text.replace(/\n$/, '')), `app layout ${w} chars: each line's characters found`);
+    ok(reds === (w === 80 ? 'LINE TWO RED|LINE THREE RED' : 'LINE T|WO RED|LINE T|HREE R|ED'), `app layout ${w} chars: the faded lines red → ${reds}`);
+  }
   // a line that spans slices of two colours takes the WORST
   ok(lineWorst([{ start: base + m.text.indexOf('LINE ONE'), end: base + m.text.indexOf('LINE TWO') + 4 }], rg)[0] === 2, 'a line across green and red slices: red (the worst)');
   // the server's count: the 21-byte form splits it; the 13-byte one does not
