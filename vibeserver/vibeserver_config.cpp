@@ -457,7 +457,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
         const bool sawOld = getBool(s, "landingAdsb", c.landingAdsb) | getBool(s, "adsbKeepRunning", c.adsbKeepRunning);
         const bool sawNew = getStr(s, "landingMap", c.landingMap) | getStr(s, "landingModes", c.landingModes) | getBool(s, "mapKeep", c.mapKeep);
         const bool sawBg = getStr(s, "bgMode", c.bgMode);   // ★★★ b96-bgsplit
-        vibekeep::Stored ks{ c.landingAdsb, c.adsbKeepRunning, c.landingMap, c.landingModes, c.mapKeep, c.bgMode, true };   // ★ seeded: bgMode stands unless this read carries the keep words
+        vibekeep::Stored ks{ c.landingAdsb, c.adsbKeepRunning, c.landingMap, c.landingModes, c.mapKeep, c.bgMode, !(c.bgMode.empty() && c.mapKeep) };   // ★ seeded: bgMode stands unless this read carries the keep words (a keep with no bgMode was never derived)
         vibekeep::applyRead(ks, sawOld, sawNew, sawBg);
         c.landingAdsb = ks.landingAdsb; c.adsbKeepRunning = ks.adsbKeepRunning;
         c.landingMap = ks.landingMap; c.landingModes = ks.landingModes; c.mapKeep = ks.mapKeep; c.bgMode = ks.bgMode;
@@ -685,7 +685,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
         if (getStr(j, "landingMap", t)) { r.landingMap = t; sawNew = true; }
         if (getStr(j, "landingModes", t)) { r.landingModes = t; sawNew = true; }
         if (getBool(j, "mapKeep", b)) { r.mapKeep = b; sawNew = true; }
-        vibekeep::Stored ks{ r.landingAdsb, r.adsbKeepRunning, r.landingMap, r.landingModes, r.mapKeep, r.bgMode, true };   // ★ seeded: bgMode stands unless this read carries the keep words
+        vibekeep::Stored ks{ r.landingAdsb, r.adsbKeepRunning, r.landingMap, r.landingModes, r.mapKeep, r.bgMode, !(r.bgMode.empty() && r.mapKeep) };   // ★ seeded: bgMode stands unless this read carries the keep words (a keep with no bgMode was never derived)
         vibekeep::applyRead(ks, sawOld, sawNew, sawBg);
         r.landingAdsb = ks.landingAdsb; r.adsbKeepRunning = ks.adsbKeepRunning;
         r.landingMap = ks.landingMap; r.landingModes = ks.landingModes; r.mapKeep = ks.mapKeep; r.bgMode = ks.bgMode;

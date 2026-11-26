@@ -1004,6 +1004,41 @@ int main() {
            "★ a single-radio beta95 file: ADS-B landing, not kept", err);
         Config none;
         ok(none.landingMap.empty() && none.landingModes.empty() && !none.mapKeep, "★ never default on");
+        // ★★★ b96-bgsplit the BACKGROUND choice, every hop
+        ok(none.bgMode.empty(), "★ background: manual by default");
+        if (back.radios.size() == 3) {
+            ok(back.radios[0].bgMode == "adsb" && back.radios[1].bgMode == "vdl2" && back.radios[2].bgMode.empty(),
+               "★ the old words become the background: beta95 ADS-B kept → adsb, VDL2 kept → vdl2, not kept → manual");
+        }
+        ServerConfig sp; sp.configured = true; sp.adminPass = "Test123";
+        RadioConfig la2; la2.serial = "LA"; la2.driver = "rtlsdr"; la2.enabled = la2.configured = true;
+        la2.bgMode = "ais"; la2.landingFreq = 96.6e6; la2.demodMode = "wfm";                  // Listen-Amateur: bg AIS, FM landing
+        RadioConfig mx; mx.serial = "MX"; mx.driver = "rtlsdr"; mx.enabled = mx.configured = true;
+        mx.bgMode = "ais"; mx.landingMap = "avmar"; mx.landingModes = "adsb";                // bg AIS, land on the map in ADS-B
+        sp.radios = { la2, mx };
+        ServerConfig sb;
+        ok(fromJson(toJson(sp), sb, err) && sb.radios.size() == 2, "two split radios round-trip", err);
+        if (sb.radios.size() == 2) {
+            const RadioConfig& L = sb.radios[0]; const RadioConfig& M = sb.radios[1];
+            ok(L.bgMode == "ais" && L.landingMap.empty() && !L.mapKeep && !L.landingAdsb && !L.adsbKeepRunning,
+               "★ bg AIS + FM landing: kept; the mirrors OFF (an older build idles, never lands in AIS)");
+            ok(M.bgMode == "ais" && M.landingModes == "adsb" && M.landingAdsb && !M.adsbKeepRunning && !M.mapKeep,
+               "★ bg AIS + map in ADS-B: the ADS-B landing mirrored, no keep mirror");
+            const Config cl = effectiveFor(sb, sb.radios[0]);
+            ok(cl.bgMode == "ais", "★ the flatten carries the background to the worker");
+            Config c3; ok(fromJson(toJson(cl), c3, err, false) && c3.bgMode == "ais", "the flat Config round-trips it", err);
+        }
+        Config part; part.bgMode = "ais";
+        ok(fromJson(R"({"users":3})", part, err, false) && part.bgMode == "ais", "a partial update leaves the background alone", err);
+        Config old2; old2.bgMode = "ais";
+        ok(fromJson(R"({"landingAdsb":false,"adsbKeepRunning":false})", old2, err, false) && old2.bgMode == "ais",
+           "a beta95 writer's ADS-B off never clears background AIS", err);
+        Config k96; k96.bgMode = "ais";
+        ok(fromJson(R"({"landingMap":"avmar","landingModes":"vdl2","mapKeep":true})", k96, err, false) && k96.bgMode == "vdl2",
+           "a b96-keeprun writer (keep words, no bgMode): the background follows them", err);
+        Config both;
+        ok(fromJson(R"({"landingMap":"avmar","landingModes":"vdl2","mapKeep":true,"bgMode":"ism:915"})", both, err, false) && both.bgMode == "ism:915" && !both.mapKeep,
+           "bgMode in the body wins over mapKeep (ISM 915 — any band of the plan)", err);
     }
 
     std::printf("\nThe single-mode radio travels every hop; the owner's ticks stay underneath\n");
