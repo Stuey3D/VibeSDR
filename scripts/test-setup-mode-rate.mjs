@@ -31,12 +31,14 @@ for (const [p, what] of [['../android/app/src/main/cpp/vibe_setup_page.h', 'the 
   ok(/ism256|Ism256/.test(t), `${what} carries ism256 (V12 ISM at 2.56 MS/s)`);
 }
 ok(/<span>Use 2\.56 MS\/s sample rate for ISM \(may drop some samples\)<\/span>/.test(src), 'the page reads "Use 2.56 MS/s sample rate for ISM (may drop some samples)"');
-ok(/rtl && g_ism256\.load\(std::memory_order_relaxed\) && !g_rateGuard\.blocked\(\)/.test(read('../android/app/src/main/cpp/local_sdr_shim.cpp')),
+// ★★ beta95 the rate guard is an OVERRIDE asked per rate (vsGuardAllows, vibe_rate_guard.h — one rung down, never the owner's
+//    switch rewritten), no longer a single blocked() latch: the 2.56 is taken only while the guard allows 2.56.
+ok(/rtl && g_ism256\.load\(std::memory_order_relaxed\) && vsGuardAllows\(2\.56e6\)/.test(read('../android/app/src/main/cpp/local_sdr_shim.cpp')),
    'the shim: an RTL with ISM 2.56 on takes 2.56 MS/s in ISM, unless the rate guard holds a fall-over');
 ok(/B\("ism256", r\.ism256\)/.test(read('../vibeserver/vibeserver_config.cpp')) && /getBool\(s, "ism256", c\.ism256\)/.test(read('../vibeserver/vibeserver_config.cpp')),
    'vibeserver_config.cpp reads and writes ism256, on the live path too');
 ok(/<span>Use 2\.56 MS\/s sample rate for ADS-B \(may drop some samples\)<\/span>/.test(src), 'the page reads "Use 2.56 MS/s sample rate for ADS-B (may drop some samples)"');
-ok(/rtl && g_adsb256\.load\(std::memory_order_relaxed\) && !g_rateGuard\.blocked\(\)\) return 2\.56e6;/.test(read('../android/app/src/main/cpp/local_sdr_shim.cpp')),
+ok(/const bool own256 = rtl && g_adsb256\.load\(std::memory_order_relaxed\);\s*if \(own256 && vsGuardAllows\(2\.56e6\)\) return 2\.56e6;/.test(read('../android/app/src/main/cpp/local_sdr_shim.cpp')),
    'the shim: an RTL with it on takes 2.56 MS/s in ADS-B, unless the rate guard holds a fall-over');
 const cfg = read('../vibeserver/vibeserver_config.cpp');
 ok((cfg.match(/B\("dabRateBoost", r\.dabRateBoost\)/g) || []).length >= 2, 'vibeserver_config.cpp still reads and writes dabRateBoost');
