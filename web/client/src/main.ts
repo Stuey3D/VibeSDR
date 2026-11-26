@@ -37,9 +37,10 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
 import { rangeBearing as adsbRangeBearing, adsbListHtml, adsbStatus, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, adsbImageBase } from './adsb';
-import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
+import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
-         ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
+         ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode,
+         ismPlotted, ismRouteKnown, ismRouteOf, ismMilesPref, ISM_UNITS_EVENT, type IsmDevice } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
@@ -9886,10 +9887,14 @@ function ismMapOpen(key = '') {
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(), fitOnOpen: true,   // ★ 11-21 auto fit
     icon: ismMapIcon, label: ismMapLabel, labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     // ★ beta92 a node remembered from the gallery (no longer in this ISM session) gets the gallery's card: first / last heard
-    card: (d) => ('first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos()) : ismMapCard(d, myPos())),
+    card: (d) => { const rt = ismRouteOf(d, ismKnown, myPos()), mi = ismMilesPref();   // ★★ beta96 the route card, km or miles
+                   return 'first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos(), mi, rt) : ismMapCard(d, myPos(), mi, rt); },
     ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
     onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
+    // ★★ beta96 a tap opens the card AND zooms in; the card's ROUTE draws the route and fits the path (meshRoute.ts)
+    zoomOnSelect: true, onCard: (k, el) => ismMapView?.routeCard(k, el),
   });
+  ismMapView.setRouteSource((k) => { const d = ismMapDevs.find((x) => x.key === k); return d ? ismRouteOf(d, ismKnown, myPos()) : null; });
   // ★ a link to a node outside the chosen range widens it, so the node asked for is there
   if (key && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === key), ismMapRange).length) {
     ismMapRange = '24h';
@@ -10210,21 +10215,28 @@ async function ismGalMapOpen(it0: GalleryItem) {
   const rx = myPos() ?? cardRx;
   let range = ismRangeOf(lsGet(ISM_RANGE_GAL_KEY), false);
   const days = new Set(cards.map((c) => Math.floor(c.t / 86400))).size;
+  let known: ReturnType<typeof ismRouteKnown> = [], shown: IsmGalNode[] = [];
   const draw = () => {
     const all = ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
-    const nodes = ismInRange(all, range);
-    ismGalView?.update(nodes, ismGalRows(nodes, rx), per.size ? `${ismGalStatus(nodes, rx)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
+    known = ismRouteKnown(all, rx);   // ★★ beta96 every day's repeaters may place a route
+    const nodes = ismInRange(all, range).filter((d) => ismPlotted(d, rx));
+    shown = nodes;
+    const mi = ismMilesPref();
+    ismGalView?.update(nodes, ismGalRows(nodes, rx, mi), per.size ? `${ismGalStatus(nodes, rx, mi)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
   };
+  ismGalRedraw = draw;
   ismGalView?.destroy();
   if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; }
-  const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; };
+  const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; if (ismGalRedraw === draw) ismGalRedraw = null; };
   const t = `LoRa nodes heard · ${band ? band + ' MHz' : ''}`;
   ismGalView = new TrackView({ fitOnOpen: true,   // ★ 11-21 AUTO fit, as the live mesh map
     title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close,
-    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
+    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx, ismMilesPref(), ismRouteOf(d, known, rx)), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,
     onRange: (id) => { range = id; lsSet(ISM_RANGE_GAL_KEY, id); draw(); },
+    zoomOnSelect: true, onCard: (k, el) => ismGalView?.routeCard(k, el),   // ★★ beta96 a tap zooms in; the card's ROUTE
   });
+  ismGalView.setRouteSource((k) => { const d = shown.find((x) => x.key === k); return d ? ismRouteOf(d, known, rx) : null; });
   ismGalView.show(rx);
   draw();
   /* ★ LIVE: today's card is rewritten at most once a minute while ISM runs (a listener, or background decoding) — while
@@ -10247,10 +10259,20 @@ function ismMapRender() {
   const stored = r0 && r0.band === ismStoredBand
     ? ismStored.filter((n) => !(n.node && liveIds.has(`${n.kind}|n|${n.node.slice(0, 16)}`)) && !(n.name && liveIds.has(`${n.kind}|m|${n.name}`)))
     : [];
+  // ★★ beta96 the repeaters a route may place: every node this map holds (live + remembered), not only the time filter's
+  ismKnown = ismRouteKnown([...(r0?.devices ?? []), ...stored], myPos());
   const r = r0 ? { ...r0, devices: ismInRange([...r0.devices, ...stored], ismMapRange) } : null;   // ★ the time filter
-  const items = r ? r.devices.filter(ismOnMap) : [];
-  ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
+  const items = r ? r.devices.filter((d) => ismPlotted(d, myPos())) : [];   // ★★ beta96 an implausible fix is never drawn
+  ismMapDevs = items;
+  const mi = ismMilesPref();
+  ismMapView.update(items, r ? ismMapRows(r, myPos(), mi) : '', ismMapStatus(r, myPos(), mi), items.length, myPos());
 }
+/** ★★ beta96 the live mesh map's nodes drawn, and the repeaters its routes may place (ismMapRender) */
+let ismMapDevs: IsmDevice[] = [];
+let ismKnown: ReturnType<typeof ismRouteKnown> = [];
+/* ★★ beta96 ONE km ↔ miles (the ISM list's KM/H ↔ MPH key): every mesh map open redraws in the new units */
+let ismGalRedraw: (() => void) | null = null;
+window.addEventListener(ISM_UNITS_EVENT, () => { ismMapRender(); ismGalRedraw?.(); });   // (ismMapRender → amMapRender: the AMATEUR map too)
 
 /* ★★★ AIS MODE (V12, docs/v12/AIS-APRS.md) — ADS-B's shape on the page: the map IS the mode. The server puts the whole radio
  *  on 162.000 MHz and decodes both AIS channels; the page covers itself with the ship map and its live list (tracks.ts
@@ -18700,7 +18722,7 @@ function amMeshStart() {
 }
 function amExtras(): { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | '' } {
   return {
-    mesh: amMeshPoints(ismReport?.devices ?? [], amMeshStored ?? ismStored, Math.floor(Date.now() / 1000)),
+    mesh: amMeshPoints(ismReport?.devices ?? [], amMeshStored ?? ismStored, Math.floor(Date.now() / 1000), { rx: myPos(), miles: ismMilesPref() }),   // ★★ beta96 km / miles, routes
     beacons: amBeaconPoints(ncdxfLast, NCDXF_BANDS.map((b) => b.label)),
     live: amLiveOf(activeDec ?? (decoders?.spotsEnabled ? 'spots' : ''), ismOn),
   };
@@ -19364,6 +19386,7 @@ function setupMap() {
   overlayLayer = L.layerGroup().addTo(map);
   aprsLayer = L.layerGroup().addTo(map);
   meshLayer = L.layerGroup().addTo(map);      // ★ beta96 stage 7
+  amRouteBind();                              // ★★ beta96 a click on the empty map clears a mesh route
   beaconLayer = L.layerGroup().addTo(map);
   map.on('zoomend', aprsLabels); aprsLabels();
   if (me) {
@@ -19523,8 +19546,8 @@ function beaconsIn() { return beacons.filter((x) => amKeep(x.age, win)); }
 function amCounts() { return { spots: spots.length, aprs: aprsIn().length, mesh: meshIn().length, beacons: beaconsIn().length }; }
 function cleanMesh(list) {
   if (!Array.isArray(list)) return [];
-  return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => ({
-    key: okStr(x.key, /[<>&"'\`]/g, 48), name: okStr(x.name, /[<>&"'\`]/g, 40) || '?', net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',
+  return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => amMeshExtra(x, {
+    key: okStr(x.key, /[<>&"'\`]/g, 48), name: String(x.name || '?').slice(0, 40), net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',   // ★★ beta96 the name as advertised (esc() where shown)
     lat: Math.max(-90, Math.min(90, okNum(x.lat))), lon: Math.max(-180, Math.min(180, okNum(x.lon))), age: Math.max(0, okNum(x.age)),
     approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live }));
 }
@@ -19558,7 +19581,7 @@ function amList() {
       (s.km != null ? s.km + ' km \u00b7 ' : '') + amAgo((nowMs - s.timestamp) / 1000))).join('');
   else if (tab === 'aprs') rows = aprsIn().slice(0, 300).map((a) => amRow(a.key, '#88CCEE', a.call, [a.symName || 'APRS', a.comment].filter(Boolean).join(' \u00b7 '),
       (a.km != null ? a.km + ' km \u00b7 ' : '') + amAgo(a.age))).join('');
-  else if (tab === 'mesh') rows = meshIn().slice(0, 300).map((x) => amRow(x.key, AM_MESH_COL[x.net] || '#67ea94', x.name, [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), amAgo(x.age))).join('');
+  else if (tab === 'mesh') rows = meshIn().slice(0, 300).map((x) => amRow(x.key, AM_MESH_COL[x.net] || '#67ea94', x.name, [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), (x.dist ? x.dist + ' \u00b7 ' : '') + amAgo(x.age))).join('');
   else rows = beaconsIn().map((x) => amRow(x.key, '#d2a8ff', x.call, x.where + ' \u00b7 ' + x.bands.join(' '), amAgo(x.age))).join('');
   host.innerHTML = rows || '<div class="amEmpty">' + esc(tab === 'mesh' ? 'No mesh node with a position in this window — ISM mode hears MeshCore and Meshtastic.'
     : tab === 'beacons' ? 'No NCDXF beacon heard in this window — the NCDXF decoder tracks them.' : tab === 'aprs' ? 'No APRS station with a position in this window.' : 'No station with a locator in this window.') + '</div>';

@@ -1046,6 +1046,9 @@ if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fai
 # ★★★ beta96 THE AMATEUR MAP (src/utils/amateurMap.ts): the HEARD IN window for every layer, MESH (every ISM band's remembered
 #     nodes) and BEACONS, the app's list in tabs (amListRows, TrackLiveList), the pages wired
 if npx tsx scripts/test_amateur_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE MESH ROUTE (src/utils/meshRoute.ts, docs/v12/MESH-ROUTE.md): names, furthest direct / via mesh, the flood
+#    path, matching, the ordered drawing + the path fit, the card's ROUTE key (only with a path), km / miles, the app pages
+if npx tsx scripts/test_mesh_route.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 maps2 STORED SONDES AND VOR STATIONS on the AIR & SEA map (src/services/storedLayers.ts — the gallery's day cards)
 if npx tsx scripts/test_stored_layers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 THE MAP FOLLOWS THE MODE (Mac Ha 11-26: the AIS map's title over the ADS-B aircraft list) — the app's map page

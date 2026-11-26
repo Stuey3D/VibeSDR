@@ -142,7 +142,29 @@ struct NodeRow {
     std::string net, type, name, node, origin;
     double lat = 0, lon = 0; bool approx = false; int hops = -1; float snr = 0; double freqHz = 0;
     int64_t first = 0, last = 0; uint64_t count = 0;
+    /** ★ beta96 MeshCore: the relays (repeater key hashes, first relay first, "a3 9f 1c") of the newest packet heard —
+     *  written in the card's "Routes" section after the table (old readers skip it: two fields, not twelve). */
+    std::string relays;
 };
+/** ★ beta96 (Stuart 11-26, "furthest t::1 334 km"): a mesh node's position is PLAUSIBLE when one LoRa hop could span
+ *  ~500 km at most (a tropospheric duct across the North Sea does; ground wave is far less): no further than 500 km per
+ *  hop (first-hand = one hop of air), and 3000 km when the hop count is unknown. A fix beyond that is a bad fix (a typo'd
+ *  advert, a node moved without re-advertising) — never "the furthest". Same rule in src/services/ism.ts ismMeshPlausible. */
+constexpr double kMeshHopKm = 500.0, kMeshUnknownKm = 3000.0;
+inline bool meshPlausibleKm(double km, int hops) { return hops >= 0 ? km <= kMeshHopKm * (hops + 1) : km <= kMeshUnknownKm; }
+/** A relays field as the card may keep it: lowercase hex groups of 2-6 digits, space-separated, at most 64 of them. */
+inline std::string relaysSafe(const std::string& s) {
+    std::string o, g; int n = 0;
+    auto put = [&] { if (g.size() >= 2 && g.size() <= 6 && g.size() % 2 == 0 && n < 64) { if (!o.empty()) o += ' '; o += g; ++n; } g.clear(); };
+    for (char c : s) {
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) g += c;
+        else if (c >= 'A' && c <= 'F') g += char(c - 'A' + 'a');
+        else if (c == ' ') put();
+        else return "";
+    }
+    put();
+    return o;
+}
 inline const char* netWord(const std::string& n) { return n == "meshcore" ? "MeshCore" : n == "meshtastic" ? "Meshtastic" : "LoRa"; }
 inline std::string netFromWord(const std::string& w) { return w == "MeshCore" ? "meshcore" : w == "Meshtastic" ? "meshtastic" : ""; }
 inline const char* typeWord(const std::string& t, int n) {
@@ -257,7 +279,10 @@ public:
         if (n.count == 0) { n.first = t; n.net = f.net; n.node = f.node; }
         n.count++; n.last = t;
         n.type = f.type; n.name = f.name; n.lat = f.lat; n.lon = f.lon; n.approx = f.approx;   // ★ newest wins
-        if (f.hops >= 0) n.hops = f.hops;
+        // ★ beta96 the FEWEST hops of the day (0 = heard first-hand: the aerial reached it — "furthest direct"); a flood
+        //   advert arrives first-hand and again from each relay, the relayed copies last
+        if (f.hops >= 0 && (n.hops < 0 || f.hops < n.hops)) n.hops = f.hops;
+        if (f.hops >= 0) n.relays = relaysSafe(f.relays);   // ★ the newest packet's route (empty when it came first-hand)
         n.snr = f.snr; n.freqHz = f.freqHz;
         n.origin = n.origin.empty() || n.origin == o_.origin ? o_.origin : "both";
         nodesDirty_ = true;
@@ -557,11 +582,18 @@ private:
         for (const auto& kv : nodes_) { mc |= kv.second.net == "meshcore"; mt |= kv.second.net == "meshtastic"; }
         return mc && mt ? "MeshCore + Meshtastic" : mc ? "MeshCore" : mt ? "Meshtastic" : "mesh";
     }
-    const NodeRow* furthest(double& km) const {
+    /** ★ beta96 (Stuart 11-26): the furthest node heard FIRST-HAND (`direct`: fewest hops 0 — the aerial's own reach), or
+     *  the furthest heard only VIA THE MESH (hops > 0 or unknown). A position beyond belief (meshPlausibleKm) is neither. */
+    const NodeRow* furthest(double& km, bool direct = true) const {
         km = 0;
         if (!std::isfinite(o_.rxLat) || !std::isfinite(o_.rxLon)) return nullptr;
         const NodeRow* best = nullptr;
-        for (const auto& kv : nodes_) { const double k = kmBetween(o_.rxLat, o_.rxLon, kv.second.lat, kv.second.lon); if (k > km) { km = k; best = &kv.second; } }
+        for (const auto& kv : nodes_) {
+            if ((kv.second.hops == 0) != direct) continue;
+            const double k = kmBetween(o_.rxLat, o_.rxLon, kv.second.lat, kv.second.lon);
+            if (!meshPlausibleKm(k, kv.second.hops)) continue;
+            if (k > km) { km = k; best = &kv.second; }
+        }
         return best;
     }
     /** "23 nodes heard · 9 repeaters · 2 room servers · 12 companions" */
@@ -581,7 +613,9 @@ private:
                       + (nodes_.size() + nodesDropped_ == 1 ? " node heard" : " nodes heard");
         auto add = [&](const std::string& part) { if (t.size() + 4 + part.size() <= 120) t += kDot + part; };
         if (n["repeater"]) add(std::to_string(n["repeater"]) + " " + typeWord("repeater", n["repeater"]));
-        double km; if (furthest(km)) add("furthest " + kmText(km));
+        double km, mk; const NodeRow* d = furthest(km, true); const NodeRow* v = furthest(mk, false);
+        if (d) add("furthest direct " + kmText(km));
+        if (v && (!d || mk > km)) add((d ? "via mesh " : "furthest via mesh ") + kmText(mk));
         return t;
     }
     static std::string posText(const NodeRow& n) {
@@ -599,10 +633,14 @@ private:
         o += "Repeaters, room servers and sensors are shown where they advertise. Companion nodes are people: their positions are "
              "rounded to about 1 km and marked approx. No message is ever kept here.\n\n";
         o += nodesMix();
-        double km; if (const NodeRow* f = furthest(km)) o += std::string(kDot) + "furthest " + kmText(km) + " (" + fieldSafe(f->name) + ")";
+        {
+            double km, mk; const NodeRow* d = furthest(km, true); const NodeRow* v = furthest(mk, false);
+            if (d) o += std::string(kDot) + "furthest direct " + kmText(km) + " (" + fieldSafe(d->name) + ")";
+            if (v && (!d || mk > km)) o += std::string(kDot) + (d ? "via mesh " : "furthest via mesh ") + kmText(mk) + " (" + fieldSafe(v->name) + ")";
+        }
         o += "\n";
         if (nodesDropped_) o += "Not listed:   " + std::to_string((unsigned long long)nodesDropped_) + " (this card keeps the " + std::to_string(kMaxNodes) + " most recently heard)\n";
-        o += "\nEach node, most recent first (last heard \xc2\xb7 first heard \xc2\xb7 times heard \xc2\xb7 heard by \xc2\xb7 network \xc2\xb7 type \xc2\xb7 name \xc2\xb7 id \xc2\xb7 position \xc2\xb7 hops \xc2\xb7 SNR dB \xc2\xb7 MHz):\n";
+        o += "\nEach node, most recent first (last heard \xc2\xb7 first heard \xc2\xb7 times heard \xc2\xb7 heard by \xc2\xb7 network \xc2\xb7 type \xc2\xb7 name \xc2\xb7 id \xc2\xb7 position \xc2\xb7 fewest hops \xc2\xb7 SNR dB \xc2\xb7 MHz):\n";
         std::vector<const NodeRow*> v;
         for (const auto& kv : nodes_) v.push_back(&kv.second);
         std::sort(v.begin(), v.end(), [](const NodeRow* a, const NodeRow* b) { return a->last != b->last ? a->last > b->last : a->name < b->name; });
@@ -613,6 +651,14 @@ private:
                + std::to_string((unsigned long long)n->count) + kTimes + kDot + (n->origin.empty() ? o_.origin : n->origin) + kDot
                + netWord(n->net) + kDot + typeWord(n->type, 1) + kDot + fieldSafe(n->name) + kDot + fieldSafe(n->node) + kDot
                + posText(*n) + kDot + (n->hops >= 0 ? std::to_string(n->hops) : std::string("-")) + tail + "\n";
+        }
+        // ★ beta96 THE ROUTES (Stuart 11-26: "show the route"): a MeshCore node's newest packet's relays, by id. Its own
+        //   section, two fields a line, so a reader that knows only the twelve-field table skips it.
+        bool any = false;
+        for (const NodeRow* n : v) {
+            if (n->net != "meshcore" || n->node.empty() || n->relays.empty()) continue;
+            if (!any) { o += "\nRoutes heard (id " + std::string(kDot) + "the relays of its newest packet, first relay first; each the first byte(s) of a repeater's key):\n"; any = true; }
+            o += fieldSafe(n->node) + kDot + n->relays + "\n";
         }
         return o;
     }
@@ -651,6 +697,19 @@ private:
             n.hops = f[9] == "-" ? -1 : std::atoi(f[9].c_str());
             n.snr = float(std::atof(f[10].c_str())); n.freqHz = std::atof(f[11].c_str()) * 1e6;
             nodes_[n.net + "|" + (n.node.empty() ? n.name : n.node)] = n;
+        }
+        // ★ beta96 the routes section (after the table): "<id> · a3 9f 1c"
+        if (const size_t rp = body.find("\nRoutes heard ("); rp != std::string::npos) {
+            size_t q = body.find('\n', rp + 1);
+            while (q != std::string::npos && q + 1 < body.size()) {
+                const size_t e = body.find('\n', q + 1);
+                const std::string row = body.substr(q + 1, e == std::string::npos ? std::string::npos : e - q - 1);
+                q = e;
+                const size_t d = row.find(dot);
+                if (d == std::string::npos) continue;
+                auto it = nodes_.find("meshcore|" + row.substr(0, d));
+                if (it != nodes_.end()) it->second.relays = relaysSafe(row.substr(d + dot.size()));
+            }
         }
         if (const size_t np = body.find("Not listed:"); np != std::string::npos) { unsigned long long d = 0; if (std::sscanf(body.c_str() + np, "Not listed: %llu", &d) == 1) nodesDropped_ = d; }
     }

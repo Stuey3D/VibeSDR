@@ -92,6 +92,7 @@ import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM, DIGI_WINDOWS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
 import { DIGI_STATS_JS, DIGI_WIDE_PX, digiPanelsOf, type DigiPanelsShown } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
+import { MESH_ROUTE_JS } from '../utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop (ISM and AMATEUR maps)
 import { AMATEUR_JS, AM_TAB_LABEL, amTabs, amTabNow, amCountsOf, amListRows, amEmptyWords, type AmAprsIn, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import DigiMapKeys from './DigiMapKeys';
 import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the window and panel keys (the pad reaches them)
@@ -1726,6 +1727,25 @@ if(KIND==='airsea'){
  *  Native (AIS: the server's ais_trail; APRS: the list's own), answered through __trkTrail. */
 if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea'){
   var trkLayer=null,trkWait={},trkWantFocus=null;
+  /* ★★ beta96 THE ROUTE (src/utils/meshRoute.ts; Stuart 11-26): a tap on a node opens its card and zooms in; the card's
+   *  ROUTE key (and React Native's, the pad's — __trkRoute) draws its route hop by hop and fits the whole path; ROUTE again,
+   *  another node or the card closing clears it. React Native hears {t:'trkRoute',key} to light its own key. */
+  ${kind === 'ism' ? MESH_ROUTE_JS : ''}
+  var trkRt={},trkRtH=null,trkRtKey=null;
+  function trkRtBtn(){var bs=document.querySelectorAll('.vmrBtn[data-rtk]');for(var i=0;i<bs.length;i++){var on=!!trkRtKey&&bs[i].getAttribute('data-rtk')===trkRtKey;
+    bs[i].setAttribute('aria-pressed',String(on));bs[i].textContent=on?'HIDE ROUTE':'ROUTE';}}
+  window.__trkRoute=function(k){trkRoute(k==null?null:String(k));};
+  /* ★★ beta96 A SELECTION HOLDS THE VIEW (Stuart's 11-26 recording: a node picked on the ISM mesh map was flown to, then the
+   *  next refresh glided back out). Any selection — a row (__trkFocus), a tap on the map, a route shown — PAUSES the auto
+   *  fit until FIT is pressed or the selection is cleared (then it resumes). Not while the ADS-B layer owns the camera. */
+  var trkSelHeld=false,trkSelNow=null;
+  function trkSelFit(k){try{var af=trkFitMake();if(!af||!af.state||(acLayer&&trkCam!=='track'))return;var st=af.state();
+    if(k!=null){trkSelNow=String(k);if(st.on){if(!st.paused)af.pause();trkSelHeld=true;}}
+    else{trkSelNow=null;if(trkSelHeld){trkSelHeld=false;if(st.on&&st.paused)af.resume();}}}catch(e){console.error('tracks hold',e);}}
+  function trkRoute(k){try{var same=k!=null&&trkRtKey===String(k),had=trkRtKey;if(trkRtH){trkRtH.clear();trkRtH=null;}trkRtKey=null;
+    var rt=k!=null&&!same&&trkRt[String(k)];
+    if(rt&&typeof meshRouteDraw==='function'){trkRtH=meshRouteDraw(map,L,rt);trkRtKey=String(k);}
+    window.__trkRouteShown=!!trkRtH;trkRtBtn();if(had!==trkRtKey)trkPost({t:'trkRoute',key:trkRtKey});}catch(e){console.error('mesh route',e);}}
   function trkPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
   function trkMake(){
     if(trkLayer||!window.VibeTrackLayer)return trkLayer;
@@ -1743,6 +1763,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
         clusterZoom:8,clusterAlways:['m'],yieldGroups:['m'],
         aria:function(it){return it&&(it._aria||it._lb)?String(it._aria||it._lb):'';},
         onCard:function(k,el){
+          if(KIND==='ism'){var rb=el.querySelector('.vmrBtn[data-rtk]');   // ★★ beta96 the card's ROUTE key
+            if(rb){rb.addEventListener('click',function(ev){ev.stopPropagation();trkRoute(rb.getAttribute('data-rtk'));});trkRtBtn();}return;}
           // ★ V12 the NAVTEX cards: the gallery text is React Native's to fetch (the read auth), and so is TRANSLATE
           var pre=el.querySelector('.nvTx');if(!pre)return;
           var f=pre.getAttribute('data-f')||'';var b=el.querySelector('.nvTr');
@@ -1754,7 +1776,9 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
           setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
         },
-        onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});},
+        onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});trkSelFit(k);
+          if(KIND==='ism'){if(trkRtKey&&String(k)!==trkRtKey)trkRoute(null);   // ★★ beta96 another node / the card closed: no route
+            if(k!=null)setTimeout(function(){try{if(trkLayer)trkLayer.focus(String(k));}catch(e){}},0);}},   // ★★ a tap zooms in too
         /* ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a press on an AREA's marker (a sea area's name, an
          *  area warning, a forecast arrow) goes to an aircraft under it first (Stuart's community-map bug) */
         yieldClick:function(it,ev){if(!acLayer||!acLayer.pickAt||!it||!(it._nofit||it._cl==='m'||(it._sh&&it._sh.kind==='area')))return false;
@@ -1810,6 +1834,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   window.__trkPush=function(json){
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
+      if(KIND==='ism'){trkRt={};for(var r0=0;r0<a.length;r0++)if(a[r0]&&a[r0]._rt)trkRt[String(a[r0].key)]=a[r0]._rt;}   // ★★ beta96
       var nH=0;for(var j=0;j<a.length;j++)if(!(a[j]&&a[j]._nofit))nH++;cnt.textContent=String(nH);   // ★ beta95 what was heard, not the chart
       if(KIND==='airsea'){var hv=false,hs=false,hvs=false,hss=false;for(var j2=0;j2<a.length;j2++){var kk=String(a[j2]&&a[j2].key||'');if(kk.indexOf('vor:')===0)hv=true;else if(kk.indexOf('sd:')===0)hs=true;else if(kk.indexOf('vos:')===0)hvs=true;else if(kk.indexOf('sds:')===0)hss=true;}
         legShow('vor',hv);legShow('sondes',hs);legShow('vos',hvs);legShow('sds',hss);}   // ★ maps2 the remembered ones' rows too
@@ -1849,7 +1874,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
   window.__trkFocus=function(k){try{var hx=acKeyHex[String(k)];if(hx&&acLayer){acLayer.focus(hx);return;}
-    var l=trkMake();var af=trkFitMake();if(af)af.pause();   // ★ a row chosen is where the person wants the map (ADS-B's focus)
+    var l=trkMake();var af=trkFitMake();trkSelFit(String(k));   // ★ a row chosen is where the person wants the map (ADS-B's focus) — held until FIT or the selection is cleared
     if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
   window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');
     /* ★ beta96 the aircraft keep out from under the list (the ADS-B map's obstacle: 10 px in from the corner, EDGE) */
@@ -2047,6 +2072,7 @@ if(KIND==='digi'||KIND==='cw'){
    *  (what this receiver decodes now) carries the red dot. */
   ${kind === 'digi' ? AMATEUR_JS : ''}
   var meshGroup=L.layerGroup().addTo(map),bcnGroup=L.layerGroup().addTo(map),amMesh=[],amBcn=[],amLive='',meshOn=true,bcnOn=true;
+  amRouteBind();   // ★★ beta96 a tap on the empty map clears a mesh route
   function amWin(){var v=fAge?String(fAge.value):'ALL';return v==='ALL'?'all':v;}
   function amDraw(){
     var mk=document.getElementById('fMesh'),bk=document.getElementById('fBcn');
@@ -2059,9 +2085,9 @@ if(KIND==='digi'||KIND==='cw'){
   }
   window.__amPush=function(json){try{var o=JSON.parse(json);if(!o||typeof o!=='object')return;
     var okp=function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));};
-    amMesh=(Array.isArray(o.mesh)?o.mesh:[]).filter(okp).slice(0,1000).map(function(x){return {key:String(x.key||'').slice(0,48),name:String(x.name||'?').slice(0,40),
+    amMesh=(Array.isArray(o.mesh)?o.mesh:[]).filter(okp).slice(0,1000).map(function(x){return amMeshExtra(x,{key:String(x.key||'').slice(0,48),name:String(x.name||'?').slice(0,40),
       net:x.net==='MeshCore'?'MeshCore':'Meshtastic',lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),age:Math.max(0,Number(x.age)||0),
-      approx:!!x.approx,what:String(x.what||'').slice(0,40),live:!!x.live};});
+      approx:!!x.approx,what:String(x.what||'').slice(0,40),live:!!x.live});});   // ★★ beta96 + dist, route
     amBcn=(Array.isArray(o.beacons)?o.beacons:[]).filter(okp).slice(0,18).map(function(x){return {key:String(x.key||'').slice(0,20),call:String(x.call||'').slice(0,12),
       where:String(x.where||'').slice(0,60),lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),age:Math.max(0,Number(x.age)||0),
       bands:Array.isArray(x.bands)?x.bands.slice(0,5).map(function(b){return String(b).slice(0,8);}):[],best:Math.max(0,Math.min(4,Math.round(Number(x.best)||0)))};});
@@ -2687,6 +2713,9 @@ export default function MapOverlay(
   // ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer (the basemap profile), live
   useEffect(() => { if (visible && trk?.profile) webRef.current?.injectJavaScript(`window.__trkProfile&&window.__trkProfile(${JSON.stringify(trk.profile)});true;`); }, [visible, kind, trk?.profile]); // eslint-disable-line react-hooks/exhaustive-deps
   const [trkSel, setTrkSel] = useState<string | null>(null);
+  /** ★★ beta96 the mesh route shown on the 'ism' page (its key) — the list's ROUTE key lights with it */
+  const [trkRouteKey, setTrkRouteKey] = useState<string | null>(null);
+  useEffect(() => { if (!visible) setTrkRouteKey(null); }, [visible]);
   const trkFocus = (key: string) => {
     setTrkSel(key);
     webRef.current?.injectJavaScript(`window.__trkFocus&&window.__trkFocus(${JSON.stringify(String(key))});true;`);
@@ -2710,9 +2739,10 @@ export default function MapOverlay(
   const amKeysNav = useMemo(() => (amNav.navCtx ? { ...amNav.navCtx, scrollRef: { current: null } } : null), [amNav.navCtx]);   // ★ the keys never scroll the list
   const [amPick, setAmPick] = useState<AmLayer | ''>('');
   const [amSel, setAmSel] = useState<string | null>(null);
+  const [amRouteKey, setAmRouteKey] = useState<string | null>(null);   // ★★ beta96 the AMATEUR page's mesh route shown
   const [amTick, setAmTick] = useState(0);
   useEffect(() => { if (!visible || !amOn) return; const t = setInterval(() => setAmTick((n) => n + 1), 30_000); return () => clearInterval(t); }, [visible, amOn]);   // ★ the ages move on
-  useEffect(() => { if (!visible) { setAmPick(''); setAmSel(null); } }, [visible]);
+  useEffect(() => { if (!visible) { setAmPick(''); setAmSel(null); setAmRouteKey(null); } }, [visible]);
   const amList = useMemo(() => {
     if (!amOn || !amateur) return null;
     const now = Date.now(), win = digiWinShown;
@@ -2865,6 +2895,16 @@ export default function MapOverlay(
             }
             /* ★ V12 AIS / APRS: the map's selection (the list's row follows), and a track asked for — answered with
              *  [lat, lon] numbers only, whatever the asker returns. The key is checked against the items we sent. */
+            if (m && (m as any).t === 'amRoute') {   // ★★ beta96 the AMATEUR page drew / cleared a mesh route
+              const k = (m as any).key;
+              setAmRouteKey(typeof k === 'string' && k.length <= 60 ? k : null);
+              return;
+            }
+            if (m && (m as any).t === 'trkRoute') {   // ★★ beta96 the page drew / cleared a mesh route
+              const k = (m as any).key;
+              setTrkRouteKey(typeof k === 'string' && k.length <= 40 ? k : null);
+              return;
+            }
             if (m && (m as any).t === 'trkSel') {
               const k = (m as any).key;
               setTrkSel(typeof k === 'string' && k.length <= 40 ? k : null);
@@ -2998,6 +3038,9 @@ export default function MapOverlay(
           <TrackLiveList title="STATIONS" rows={amList.rows} status={amList.status} empty={amList.empty}
                          tabs={amList.tabs} tab={amList.tab} onTab={(id) => setAmPick(id as AmLayer)}
                          onFocus={amFocus} selected={amSel} onFootprint={amFootprint}
+                         /* ★★ beta96 the pad's ROUTE key: only for a chosen mesh node whose packet carried relays */
+                         route={amSel && amateur?.mesh.some((x) => x.key === amSel && !!x.rt) ? { name: amateur.mesh.find((x) => x.key === amSel)?.name ?? '', on: amRouteKey === amSel } : null}
+                         onRoute={() => { if (amSel) webRef.current?.injectJavaScript(`window.__amRoute&&window.__amRoute(${JSON.stringify(String(amSel).slice(0, 120))});true;`); }}
                          nav={{ navCtx: amNav.navCtx, scrollProps: amNav.scrollProps }} leftExtra={amLeft}
                          ink={ink} areaW={winW - amLeft} areaH={winH}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
@@ -3010,6 +3053,11 @@ export default function MapOverlay(
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
                          safety={trk.safety} onFocus={(k) => { const to = trk.onPick?.(k); trkFocus(typeof to === 'string' && to ? to : k); }} selected={trkSel} onFootprint={trkFootprint}
+                         /* ★★ beta96 THE ROUTE KEY, for the pad (the card's ROUTE is in the page, out of its reach): only while the
+                          *  chosen node carries a route — no dead control */
+                         route={kind === 'ism' && trkSel && trk.items.some((it) => it.key === trkSel && !!(it as { _rt?: unknown })._rt)
+                           ? { name: String(trk.items.find((it) => it.key === trkSel)?._lb ?? ''), on: trkRouteKey === trkSel } : null}
+                         onRoute={() => { if (trkSel) webRef.current?.injectJavaScript(`window.__trkRoute&&window.__trkRoute(${JSON.stringify(trkSel)});true;`); }}
                          ink={ink} areaW={winW} areaH={winH}
                          /* ★★★ beta96 stage 6 ADS-B live: its own list heads the AIRCRAFT tab (useAdsbBody) — the GAIN key,
                           *  NEWEST · FURTHEST · LONGEST TRACKED, emergencies and military first; its rows find the `adsb:` items */

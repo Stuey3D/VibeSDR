@@ -1067,7 +1067,7 @@ private:
                     // ★ V12: positioned mesh nodes — the gallery's "stations received" card (vibe_ism_gallery.h NodeCard)
                     for (const auto& f : fx) {
                         NodeFix n; n.net = f.net; n.type = f.type; n.name = f.name; n.node = f.node; n.lat = f.lat; n.lon = f.lon;
-                        n.approx = f.approx; n.hops = f.hops; n.snr = f.snr; n.freqHz = f.freqHz; s->node(n);
+                        n.approx = f.approx; n.hops = f.hops; n.snr = f.snr; n.freqHz = f.freqHz; n.relays = f.relays; s->node(n);
                     }
                     lk.lock();
                 }

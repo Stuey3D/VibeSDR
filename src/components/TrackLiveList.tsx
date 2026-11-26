@@ -65,6 +65,10 @@ export interface TrackLiveListProps {
   tabs?: Array<{ id: string; label: string; n: number }>;
   tab?: string;
   onTab?: (id: string) => void;
+  /** ★★ beta96 THE MESH ROUTE KEY (docs/v12/MESH-ROUTE.md): shown only while the chosen node carries a route — ROUTE draws
+   *  it on the map and fits the path, again hides it. The card's own ROUTE is in the map page, which a pad cannot reach. */
+  route?: { name: string; on: boolean } | null;
+  onRoute?: () => void;
   /** ★★ beta96 the AIRCRAFT tab's sort, NEAREST | LATEST — null / absent = none */
   sort?: string | null;
   onSort?: (s: string) => void;
@@ -112,7 +116,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const credit = !!p.credit || ab.credit;
   const total = ab.count + nb.count + p.rows.length;
   const extra = (open ? ab.extra + nb.extra : 0) + STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
-    + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0)
+    + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0) + (p.route && open ? RANGE_H : 0)
     + (credit && open ? AIRCRAFT_CREDIT_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
   const shown = Math.max(1, Math.min(fit, total || 1));
@@ -152,6 +156,15 @@ export default function TrackLiveList(p: TrackLiveListProps) {
         )}
         {open && (
           <Text style={[s.status, !!note && s.noteTxt]} numberOfLines={1}>{note || p.status}</Text>
+        )}
+        {open && !!p.route && (
+          <NavRow>
+            <View style={s.ranges}>
+              <ToggleKey s={s} label={p.route.on ? 'HIDE ROUTE' : 'ROUTE'} on={p.route.on}
+                         words={`${p.route.on ? 'Hide' : 'Show'} the route ${p.route.name}'s message came by, hop by hop`} onPress={() => p.onRoute?.()} />
+              <Text style={[s.status, { flexShrink: 1 }]} numberOfLines={1}>{p.route.name}</Text>
+            </View>
+          </NavRow>
         )}
         {open && ab.head}
         {open && nb.head}

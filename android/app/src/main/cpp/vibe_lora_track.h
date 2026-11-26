@@ -91,6 +91,7 @@ inline PubPos publishedPos(const std::string& proto, const std::string& role, do
  *  (vibe_ism_sink.h NodeFix carries it). The position is already the PUBLISHED one. */
 struct Fix {
     std::string net, type, name, node; double lat = NAN, lon = NAN; bool approx = false; int hops = -1; float snr = 0; double freqHz = 0;
+    std::string relays;   ///< ★ beta96 MeshCore: this packet's relays, first relay first (Msg::relays); empty = none / first-hand
 };
 
 class MeshTable {
@@ -136,6 +137,11 @@ public:
         if (m.chUtil == m.chUtil) r.chUtil = m.chUtil;
         if (m.hopStart >= 0 && m.hopLimit >= 0 && m.hopStart >= m.hopLimit) r.hops = m.hopStart - m.hopLimit;
         if (m.pathLen >= 0) r.hops = m.pathLen;
+        // ★ beta96 the FEWEST hops this node has come in by (0 = heard first-hand: the aerial reached it) — a flood advert
+        //   arrives direct AND again from each relay, the relayed copies last, so the newest hop count alone would call a
+        //   node heard first-hand "via mesh". And the route of the newest flood packet (Msg::relays).
+        if (r.hops >= 0 && (r.minHops < 0 || r.hops < r.minHops)) r.minHops = r.hops;
+        if (m.proto == "meshcore" && m.route == "flood") r.relays = m.relays;
         if (!m.channel.empty()) r.channel = m.channel;
         r.found = m.found;   // ★ V12: on a channel found on air (the latest frame says)
         if (m.privateCh) ++r.priv; else ++r.open;
@@ -170,7 +176,7 @@ public:
         if (fixes && r.lat == r.lat && (r.proto == "meshtastic" || r.proto == "meshcore")) {
             const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon);
             Fix f; f.net = r.proto; f.type = nodeType(r.proto, r.role); f.name = r.longName.empty() ? r.node : r.longName; f.node = r.node;
-            f.lat = p.lat; f.lon = p.lon; f.approx = p.approx; f.hops = r.hops; f.snr = r.snr; f.freqHz = r.freq;
+            f.lat = p.lat; f.lon = p.lon; f.approx = p.approx; f.hops = r.hops; f.snr = r.snr; f.freqHz = r.freq; f.relays = r.relays;
             fixes->push_back(std::move(f));
         }
         prune(t);
@@ -226,6 +232,8 @@ private:
         double lat = NAN, lon = NAN, alt = NAN, posT = -1; int prec = 0;
         int batt = -1; double volt = NAN, temp = NAN, hum = NAN, hpa = NAN, chUtil = NAN;
         int hops = -1, fcnt = -1, fport = -1, encLen = -1;
+        int minHops = -1;          ///< ★ beta96 the fewest hops it has been heard by (0 = first-hand)
+        std::string relays;        ///< ★ beta96 MeshCore: the newest flood packet's relays ("a3 9f 1c")
         bool found = false;
         double speed = NAN, course = NAN, climb = NAN, wind = NAN, windDir = NAN, gust = NAN;
         bool online = false;
@@ -313,6 +321,8 @@ private:
         if (r.batt >= 0) num("battPct", r.batt, 0);
         num("volt", r.volt, 2); num("temp", r.temp, 1); num("hum", r.hum, 0); num("baro", r.hpa, 1); num("chUtil", r.chUtil, 1);
         if (r.hops >= 0) num("hops", r.hops, 0);
+        if (r.minHops == 0) o += ",\"direct\":1";   // ★ beta96 heard first-hand at least once (the aerial's reach)
+        if (!r.relays.empty()) str("relays", r.relays);
         if (r.fcnt >= 0) num("fcnt", r.fcnt, 0);
         if (r.fport >= 0) num("fport", r.fport, 0);
         if (r.encLen >= 0) num("encLen", r.encLen, 0);

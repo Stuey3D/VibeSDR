@@ -66,7 +66,8 @@ eq(amLiveOf('aprs', true), 'mesh', 'ISM mode: MESH is live');
                   { kind: 'meshtastic', node: '!aa', long: 'Old <b>', lat: 52, lon: 0, last: now - 3 * 86400 }];
   const m = amMeshPoints(live, stored, now);
   eq(m.map((x) => `${x.key}:${x.net}:${x.live}:${x.age}`), ['mesh:!0f:Meshtastic:true:5', 'mesh:ab12:MeshCore:true:30', `mesh:!aa:Meshtastic:false:${3 * 86400}`], 'MESH: live + remembered, once each, newest first');
-  eq(m[2].name, 'Old b', 'MESH: a name is cleaned');
+  // ★★ beta96 a node's name is kept as advertised (meshRoute.ts meshName — "t::1" stays "t::1"); the pages escape it
+  eq(m[2].name, 'Old <b>', 'MESH: a printable name is kept as advertised (escaped where shown)');
   eq(m.filter((x) => amKeep(x.age, '24h')).length, 2, 'MESH follows the window (the 3-day-old node out of 24 H)');
   eq(m.filter((x) => amKeep(x.age, '7d')).length, 3, '…and in 7 D');
 }
