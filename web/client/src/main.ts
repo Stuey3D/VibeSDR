@@ -199,6 +199,7 @@ import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type Cw
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, mapSharedLine, type AskState } from '../../../src/services/dialChat';
+import { airSeaTuneRows, airSeaTuneChip, TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../../../src/services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE list
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost, dataUrl, dataOrigin, assetOrigin, watchDirectFetches, relearnDirectHost } from './origin';
@@ -1018,6 +1019,8 @@ async function loadAudioPolicy(httpBase: string) {
     avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
     sdReadCap(j);                // ★ V12 radiosondes (RS41): the same three states, and its bands
     vmReadCap(j);                // ★ V12 the VOR / ILS map: NDB's three states
+    { const n = (v: unknown) => (typeof v === 'number' && isFinite(v) && v > 0 ? v : undefined);   // ★★★ beta96 the TUNE list's frequencies
+      asTuneSrc = { ndbLo: n(j.ndbLo), ndbHi: n(j.ndbHi), vormapLo: n(j.vormapLo), vormapHi: n(j.vormapHi) }; }
     satReadCap(j);               // ★ V12 satellites: `doppler` (a version) / `dopplerWhy` — absent = no entry at all
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
@@ -10346,9 +10349,10 @@ function ismMapRender() {
   ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
   // ★★★ beta96 TUNE (Stuart 11-26): ISM's bands move the radio — labelled, live one pressed, under the ask / lock rules
   const ib = ismCap?.bands ?? [];
-  ismMapView.setTune(ismOn && spec && (window as any).__vibeMapStandalone !== true && ib.length > 1
-    ? ib.map((b, i) => ({ id: b.id, label: b.name.replace(/ MHz$/, ''), words: `ISM ${b.name}${b.region ? ' (' + b.region + ')' : ''} — moves the radio`, live: ismReport?.band === b.id, group: i === 0 ? 'ISM BAND' : undefined }))
-    : [], (id) => { if (spec?.isTuneLocked() || scanLockOn) { nudgeAsk(); return; } ismPickBand(id); });
+  const ismRows = ismOn && spec && (window as any).__vibeMapStandalone !== true && ib.length > 1
+    ? ib.map((b) => ({ id: b.id, name: 'ISM', freq: `${b.name}${b.region ? ' \u00b7 ' + b.region : ''}`, icon: TUNE_ICON_PATH.beacon, group: 'ISM BAND', live: ismReport?.band === b.id, why: '' })) : [];
+  const ismLive = ismRows.find((r) => r.live);
+  ismMapView.setTune(ismRows, ismLive ? `TUNE \u00b7 ISM ${ismLive.freq.split(' \u00b7 ')[0]}` : 'TUNE', (id) => { if (spec?.isTuneLocked() || scanLockOn) { nudgeAsk(); return; } ismPickBand(id); });
   mapSharedSync();   // ★★★ beta96 the SHARED TUNER line + CHAT on the mesh map too
 }
 
@@ -10544,6 +10548,7 @@ function asViewOpts() {
     labelZoom: 3, focusZoom: 6, nautical: true, profile: 'airsea',
     aircraft: true, mixed: true, imageBase: adsbImageBase() || null,
     liveIds: ['chatPanel'],   // ★ ADS-B mode's CHAT key is in this map's top bar: its panel stays reachable, over the map
+    onTuneRefused: (why: string) => showPill(why, 5000),   // ★★★ beta96 a TUNE row this radio cannot run: the server's reason
     labelRank: (it: any) => it._rk ?? 0,
     // ★ beta96 stage 8 a sonde's track is in its report (no request); the rest as the shipping map's
     trail: (key: string, done: (pts: [number, number][]) => void) => {
@@ -10705,30 +10710,21 @@ function openAirSeaViewer() {
   asOpen({ box: '', tab: adsbCap?.ok || avCap?.ok || viewsHave.aircraft ? 'aircraft' : 'ships', viewer: true });
 }
 (window as any).__vibeOpenAirSeaViewer = openAirSeaViewer;
-function asTuneKeys(): Array<{ id: string; label: string; words: string; live?: boolean; group?: string }> {
+/** ★★★ beta96 the TUNE list's rows (airSeaTune.ts — THIS radio's vibeserver.json: its caps, its band tables, the cover rule),
+ *  none for the viewer / a page with no radio; a list of one row is no choice (a single-mode server): no chip. */
+let asTuneSrc: { ndbLo?: number; ndbHi?: number; vormapLo?: number; vormapHi?: number } = {};
+function asTuneRows(): AirSeaTuneRow[] {
   if (!spec || asViewer || (window as any).__vibeMapStandalone === true) return [];
-  const keys: Array<{ id: string; label: string; words: string; live?: boolean; group?: string }> = [];
-  let g = 'AVIATION';
-  const add = (k: { id: string; label: string; words: string; live?: boolean }) => { keys.push(g ? { ...k, group: g } : k); g = ''; };
-  if (asAllowed('adsb')) add({ id: 'adsb', label: 'ADS-B', words: 'ADS-B — aircraft on 1090 MHz (moves the radio)', live: adsbOn });
-  if (asAllowed('avdata')) {
-    if (avBands.length) for (const b of avBands) add({ id: `av:${b.id}`, label: b.name, words: `Aircraft datalink, ${b.name}: ${b.region} (moves the radio)`, live: avOn && avReport?.band === b.id });
-    else add({ id: 'av:', label: 'DATALINK', words: 'Aircraft datalink — ACARS and VDL2 (moves the radio)', live: avOn });
-  }
-  if (asAllowed('vormap')) add({ id: 'vormap', label: 'VOR MAP', words: 'VOR / ILS map — every navaid on 108–118 MHz (moves the radio)', live: vmOn });
-  if (asAllowed('ndb')) add({ id: 'ndb', label: 'NDB', words: 'NDB — every beacon on 190–535 kHz (moves the radio)', live: ndbOn });
-  g = 'MARITIME';
-  if (asAllowed('ais')) {
-    add({ id: 'ais', label: 'AIS', words: 'AIS — ships on 161.975 and 162.025 MHz (moves the radio)', live: aisOn && !aisDscOn() });
-    if (aisDscCap) add({ id: 'maritime', label: 'MARITIME', words: 'Maritime — AIS ships and DSC channel 70 together (moves the radio)', live: aisDscOn() });
-  }
-  g = 'WEATHER ALOFT';
-  if (asAllowed('sondes')) {
-    if (sdOn && sdBands.length) for (const b of sondeRanges(sdBands)) add({ id: `sd:${b.id}`, label: b.label, words: `${b.words} (moves the radio)`, live: sdReport?.band === b.id });
-    else add({ id: 'sd:', label: 'SONDES', words: 'Radiosondes on 400–406 MHz (moves the radio)', live: sdOn });
-  }
-  // ★ one key is no choice (a single-mode server): no TUNE group at all
-  return keys.length > 1 ? keys : [];
+  const rows = airSeaTuneRows({ adsb: adsbCap, avdata: avCap, avBands, vormap: vmCap, ndb: ndbCap, ais: aisCap, aisDsc: aisDscCap,
+                                sondes: sdCap, sondeBands: sdBands, only: onlyModeNow(), ...asTuneSrc },
+                              { mode: adsbOn ? 'adsb' : avOn ? 'avdata' : vmOn ? 'vormap' : ndbOn ? 'ndb' : aisOn ? 'ais' : sdOn ? 'sondes' : '',
+                                avBand: avReport?.band, sdBand: sdReport?.band, aisDsc: aisDscOn() });
+  return rows.length > 1 ? rows : [];
+}
+function asTuneSet(v: TrackView) {
+  const rows = asTuneRows();
+  v.setTune(rows.map((r) => ({ id: r.id, name: r.name, freq: r.freq, icon: TUNE_ICON_PATH[r.icon], group: TUNE_GROUP_LABEL[r.group], live: r.live, why: r.why })),
+            airSeaTuneChip(rows), asTune);
 }
 /** A TUNE key pressed (never the live one — TrackView drops those): the mode menu's own entry, or the live mode's band. */
 function asTune(id: string) {
@@ -10785,8 +10781,8 @@ function asRender() {
   // ★★★ beta96 SHOW (Stuart 11-26): the layer chips carry their counts and colours, as the community map's
   v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id] })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
-  // ★★★ beta96 TUNE: the keys that move the radio (none without one)
-  v.setTune(asTuneKeys(), asTune);
+  // ★★★ beta96 TUNE: ONE chip, the list of what THIS radio can run (none without one)
+  asTuneSet(v);
   v.setProfile(liveProfile('airsea', present, on));
   v.setCamera(live.layers.some((l) => SEA_ID_SET.has(l) || l === 'vor' || l === 'sondes' || l === 'ndb') ? 'track' : 'aircraft');
   // ── aviation (aviationMap.ts avCompose, unchanged: our toggles in its terms) ──

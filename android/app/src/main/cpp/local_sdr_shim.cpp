@@ -47896,6 +47896,8 @@ static std::string vsTunableJson() {
         if (running > 0 && vibevormap::plan(running, vp)) {
             char e[80]; std::snprintf(e, sizeof e, ",\"vormapWins\":%zu,\"vormapDwell\":%.0f", vp.w.size(), vibevormap::kDwellSec); j += e;
         }
+        // ★★★ beta96 the band the sweep covers (the AIR & SEA map's TUNE list: "VOR / ILS scan · 108.00–117.95 MHz")
+        { char e[64]; std::snprintf(e, sizeof e, ",\"vormapLo\":%lld,\"vormapHi\":%lld", (long long)vibevormap::kFirstChanHz, (long long)vibevormap::kLastChanHz); j += e; }
     }
     /* ★★ AIS (V12): offered, or shown DISABLED with its reason — and NOT AT ALL where the radio does not reach 162 MHz
      *  (an HF-only radio, an Icom: AGENTS.md; the HF+ reaches it and is offered since 2026-11-24). ★ APRS (V12) is a listener's decoder on their NFM/USB audio
@@ -47923,9 +47925,13 @@ static std::string vsTunableJson() {
         bool first = true;
         for (const auto& b : vibeavi::bands()) {
             if (!vsAvdataReach(b)) continue;
-            char e[256];
-            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f,\"channels\":%zu}", first ? "" : ",",
-                          b.id, b.name, b.region, b.centreHz, b.chans.size());
+            // ★★★ beta96 `chLo` / `chHi`: the first and last channel (Hz) — the AIR & SEA map's TUNE list says the band's real
+            //     frequencies ("ACARS · 131.525–131.825 MHz") from this table, never a copy of its own
+            double cl = b.chans.front(), ch = b.chans.front();
+            for (double c : b.chans) { cl = std::min(cl, c); ch = std::max(ch, c); }
+            char e[320];
+            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f,\"channels\":%zu,\"chLo\":%.0f,\"chHi\":%.0f}", first ? "" : ",",
+                          b.id, b.name, b.region, b.centreHz, b.chans.size(), cl, ch);
             j += e; first = false;
         }
         j += "]";
