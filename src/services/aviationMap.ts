@@ -106,7 +106,12 @@ export interface AvPlane {
 export interface AvStation { id: number; name: string; lat: number; lon: number; khz: number; age: number }
 /** ★ beta88 the server's ADS-B state (vibe_aircraft_share.h toJson). `live` null = an older server that cannot say. */
 export interface AvAdsbState { live: boolean | null; last: number; off: boolean }
-export interface SharedAircraft { now: number; count: number; off: boolean; aircraft: AvPlane[]; stations: AvStation[]; adsb: AvAdsbState }
+/** ★★ beta96 a server-level aircraft feed (vibe_feeds.h — another receiver's Beast or BaseStation output): its name, label
+ *  and state as aircraft.json says (never an address). */
+export interface AvFeed { title: string; label: string; state: string; aircraft: number }
+export interface SharedAircraft { now: number; count: number; off: boolean; aircraft: AvPlane[]; stations: AvStation[]; adsb: AvAdsbState;
+  /** ★★ beta96 the server's aircraft feeds, and the banner when one is down ("PiAware lost — reconnecting… · HFDL still live") */
+  feeds: AvFeed[]; feedWarn: string }
 
 const str = (v: unknown, max: number): string | undefined =>
   typeof v === 'string' && v.length ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : undefined;
@@ -152,7 +157,12 @@ export function sharedSanitise(j: any): SharedAircraft | null {
     stations.push({ id, name: str(s.name, 40) ?? `station ${id}`, lat, lon, khz: num(s.khz) ?? 0, age: Math.max(0, num(s.age) ?? 0) });
   }
   const adsb: AvAdsbState = { live: j.adsbLive === 1 ? true : j.adsbLive === 0 ? false : null, last: num(j.adsbLast) ?? -1, off: j.adsbOff === 1 };
-  return { now: num(j.now) ?? 0, count: num(j.count) ?? aircraft.length, off: j.off === 1, aircraft, stations, adsb };
+  const feeds: AvFeed[] = [];
+  if (Array.isArray(j.feeds)) for (const f of j.feeds.slice(0, 8)) {
+    if (!f || typeof f !== 'object') continue;
+    feeds.push({ title: str(f.title, 40) ?? 'feed', label: str(f.label, 6) ?? '', state: str(f.state, 12) ?? '', aircraft: Math.max(0, num(f.aircraft) ?? 0) });
+  }
+  return { now: num(j.now) ?? 0, count: num(j.count) ?? aircraft.length, off: j.off === 1, aircraft, stations, adsb, feeds, feedWarn: str(j.feedWarn, 300) ?? '' };
 }
 
 /** ★ The datalink mode's live row → the map's shape (its sources from how it was heard). */

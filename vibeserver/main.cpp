@@ -4815,7 +4815,7 @@ int main(int argc, char** argv) {
     // ★ Decided once: a front door owns no device and needs no lock; anything else is about to
     //   claim one, and must be the only process doing so.
     const bool willBeFrontDoor =
-        o.useUsb && !o.radioGiven && vsconfig::needsFrontDoor(g_serverConfig);
+        o.useUsb && !o.radioGiven && o.beastIn.empty() && vsconfig::needsFrontDoor(g_serverConfig);   // ★ beta96 --beast-in is one process
 
     // ★★★ ARM THE PARENT-DEATH WATCH BEFORE CLAIMING THE RADIO, not after. The whole point is to
     //     guarantee the device is released if the front door dies; arming it after the claim

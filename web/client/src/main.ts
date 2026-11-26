@@ -10543,7 +10543,25 @@ function asModeEnded() {
 }
 function asSec(t: string): string { return `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`; }
 /** ★★ THE ONE RENDER: chrome (computed), chips, tabs, the items of every layer on, the rows of the tab shown. */
+/** ★★ beta96 the banner over the AIR & SEA map: the live ADS-B report's warning (the antenna), else the server's aircraft
+ *  feeds' (aircraft.json feedWarn: "PiAware lost — reconnecting… · HFDL still live"). × hides it until the wording changes. */
+function asFeedWarnText(): string {
+  const a = adsbOn && typeof adsbReport?.feedWarn === 'string' ? adsbReport.feedWarn : '';
+  return a || (asView?.open && avShared?.feedWarn ? avShared.feedWarn : '');
+}
+function asFeedWarnSync() {
+  const w = asFeedWarnText(), el = document.getElementById('adsbFeedWarn');
+  if (!el) return;
+  const show = !!w && el.dataset.dismissed !== w;
+  el.hidden = !show;
+  if (!show) return;
+  const lbl = el.querySelector('b');
+  if (lbl) lbl.textContent = /reconnecting/.test(w) ? 'AIRCRAFT FEED' : 'CHECK THE ANTENNA';   // ★ a lost feed is not the antenna
+  const tx = document.getElementById('adsbFeedWarnTx');
+  if (tx && tx.textContent !== w) tx.textContent = w;
+}
 function asRender() {
+  asFeedWarnSync();
   const v = asView;
   if (!v?.open) return;
   const mode = asMode();
@@ -11224,11 +11242,7 @@ function adsbRender() {
     /* ★★ THE FEED WARNING (GainControl::warning): full gain, a noise floor far under where a working ADS-B feed sits,
      *  and a thin sky — the FlightAware Pi's May–June 2025 antenna fault, which nobody knew of for two months. Plain
      *  words over the map; × hides it until the server's wording changes. */
-    const w = typeof adsbReport?.feedWarn === 'string' ? adsbReport.feedWarn : '';
-    const el = $('adsbFeedWarn');
-    const show = !!w && el.dataset.dismissed !== w;
-    el.hidden = !show;
-    if (show && $('adsbFeedWarnTx').textContent !== w) $('adsbFeedWarnTx').textContent = w;
+    asFeedWarnSync();
   }
   {
     // ★★ The receiver dropping samples — said in red beside the rate (adsbCaptureWarning). Built from text nodes.
@@ -11618,7 +11632,7 @@ function buildControls() {
   $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
   $('adsbFeedWarnX').onclick = () => {
     const el = $('adsbFeedWarn');
-    el.dataset.dismissed = adsbReport?.feedWarn ?? ''; el.hidden = true;
+    el.dataset.dismissed = asFeedWarnText(); el.hidden = true;
   };
   ($('adsbGainSl') as HTMLInputElement).oninput = () => {
     adsbGainTouchAt = performance.now();

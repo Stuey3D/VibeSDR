@@ -1673,6 +1673,7 @@ if(KIND==='airsea'){
     var el=document.getElementById('feedwarn');if(!el)return;
     w=String(w||'');
     if(!w||el.getAttribute('data-x')===w){el.style.display='none';return;}
+    el.children[0].textContent=/reconnecting/.test(w)?'AIRCRAFT FEED':'CHECK THE ANTENNA';   /* ★★ beta96 a lost feed is not the antenna */
     el.children[1].textContent=w;el.style.display='';
     el.children[2].onclick=function(){el.setAttribute('data-x',w);el.style.display='none';};
   };

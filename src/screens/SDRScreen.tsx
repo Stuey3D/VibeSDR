@@ -18380,7 +18380,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★★ beta96 stage 6: ADS-B's screen is the AIR & SEA map ('airsea') — these are given only while ADS-B is live there */
         adsbAircraft={shownMap === 'airsea' && adsbLiveHere ? adsbReport?.aircraft ?? null : undefined}
         adsbCapture={shownMap === 'airsea' && adsbLiveHere ? adsbCaptureWarning(adsbReport) : undefined}
-        adsbFeedWarn={shownMap === 'airsea' && adsbLiveHere ? adsbReport?.feedWarn ?? '' : ''}
+        adsbFeedWarn={shownMap === 'airsea' ? ((adsbLiveHere ? adsbReport?.feedWarn : '') || avShared?.feedWarn || '') : ''}   // ★★ beta96 + the server's aircraft feeds (aircraft.json)
         /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null
          *  otherwise: an HF+, a fixed gain, an older server). AUTO hands it back to the server's ramp (19f2d603). */
         adsbGain={shownMap === 'airsea' && adsbLiveHere ? {
