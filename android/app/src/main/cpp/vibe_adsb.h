@@ -95,6 +95,7 @@ struct Frame {
     uint8_t  b[14] = {};
     int      len = 0;          ///< 7 or 14
     float    level = 0;        ///< pulse power, dBFS (mean of the four preamble pulses; |IQ|² of 1.0 = 0 dBFS)
+    float    snr = 0;          ///< ★ beta96 that pulse power over the noise floor (noiseP_), dB — the preamble gate is 9 dB
     uint64_t sample = 0;       ///< position on the fine grid (125 ns units), for ordering
 };
 
@@ -403,6 +404,9 @@ private:
         f.len = dfLengthBytes(f.b[0] >> 3);
         for (int i = 8; i < f.len * 8; ++i) if (bitNext()) f.b[i >> 3] |= uint8_t(0x80 >> (i & 7));
         f.level = 10.0f * std::log10(std::max(hi, 1e-12f));   // hi is a mean POWER — dBFS, 1.0 = full scale
+        // ★ beta96 (Stuart 11-26: a colour-coded SNR per message, for antenna comparisons): the same pulse power over the
+        //   floor the preamble gate judged (hi ≥ 7.84 × noiseP_ = 9 dB) — one log a DECODED reply, nothing per sample.
+        f.snr = noiseP_ > 0 ? 10.0f * std::log10(std::max(hi, 1e-12f) / noiseP_) : 0.0f;
         f.sample = base_ + uint64_t(std::max(0.0, (double(i0) + off) / q_));
         return true;
     }
@@ -641,6 +645,7 @@ struct Aircraft {
     std::vector<TrailPt> trail;        ///< where it has been — see kTrailStepNm
     uint32_t messages = 0;
     float    level = -99;              ///< dBFS, smoothed
+    float    snr = 0;                  ///< ★ beta96 dB over the noise floor, smoothed the same way as level (×0.25 a reply)
     // CPR state
     bool     haveE = false, haveO = false, cprSurface = false;
     double   tE = 0, tO = 0; uint32_t latE = 0, lonE = 0, latO = 0, lonO = 0;
@@ -812,7 +817,7 @@ public:
             if (a.emergency) VIBE_ADSB_ADD(",\"emergency\":%d", a.emergency);
             if (a.trackedNm >= 0.5) VIBE_ADSB_ADD(",\"tracked_nm\":%.0f", a.trackedNm);
             if (a.cb) { const std::string cb = commb::json(*a.cb, now); if (!cb.empty() && n + cb.size() < sizeof b - 96) { std::memcpy(b + n, cb.data(), cb.size()); n += int(cb.size()); b[n] = 0; } }
-            VIBE_ADSB_ADD(",\"seen\":%.1f,\"messages\":%u,\"rssi\":%.1f}", now - a.seen, a.messages, a.level);
+            VIBE_ADSB_ADD(",\"seen\":%.1f,\"messages\":%u,\"rssi\":%.1f,\"snr\":%.1f}", now - a.seen, a.messages, a.level, a.snr);
             o.append(b, size_t(std::min(n, int(sizeof b) - 1)));
 #undef VIBE_ADSB_ADD
         }
@@ -835,7 +840,7 @@ private:
     Aircraft& touch(uint32_t addr, const Frame& f, double now) {
         Aircraft& a = ac_[addr];
         if (a.messages == 0) {
-            a.icao = addr; a.level = f.level;
+            a.icao = addr; a.level = f.level; a.snr = f.snr;
             // ★ back within kGoneKeepSec: it carries on with the trail it had (see Gone)
             auto g = gone_.find(addr);
             if (g != gone_.end()) { a.trail = std::move(g->second.trail); a.trackedNm = g->second.trackedNm; gone_.erase(g); }
@@ -843,6 +848,7 @@ private:
         a.seen = now;
         ++a.messages;
         a.level += (f.level - a.level) * 0.25f;
+        a.snr += (f.snr - a.snr) * 0.25f;
         return a;
     }
 

@@ -158,7 +158,7 @@ struct Sky {
             if (U(0, 1) > q.rx) continue;   // not heard this second
             const int altQ = int(std::round(q.alt / 25) * 25);
             double t = t0 + U(0.0, 0.5);
-            auto send = [&](const Frame& f) { Frame g = f; g.level = float(-30 + 25 * q.rx + U(-2, 2)); tr.accept(g, t); t += U(0.01, 0.2); };
+            auto send = [&](const Frame& f) { Frame g = f; g.level = float(-30 + 25 * q.rx + U(-2, 2)); g.snr = float(12 + 25 * q.rx + U(-2, 2)); tr.accept(g, t); t += U(0.01, 0.2); };
             if (q.ground) send(survFrame(q.icao, 4, 1, 0));
             else { send(posFrame(q.icao, q.lat, q.lon, altQ, false)); send(posFrame(q.icao, q.lat, q.lon, altQ, true)); }
             if (U(0, 1) < 0.7) send(velFrame(q.icao, q.gs, q.trk, int(q.vr)));

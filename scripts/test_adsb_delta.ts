@@ -43,6 +43,7 @@ function quant(a: Rec): Rec {
   if (typeof q.alt_geom === 'number') q.alt_geom = Math.round(q.alt_geom / 25) * 25;
   for (const k of ['gs', 'track', 'mag_heading']) if (typeof q[k] === 'number') q[k] = Math.round(q[k] as number);
   if (typeof q.rssi === 'number') q.rssi = Math.floor(q.rssi);
+  if (typeof q.snr === 'number') q.snr = Math.floor(q.snr);
   return q;
 }
 const AGE_TOL = 0.65;

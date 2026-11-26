@@ -44,7 +44,8 @@ The full wire format is in the header of `android/app/src/main/cpp/vibe_adsb_del
   is reused, lowest first, and the client applies `g` before `n`.
 - **Columns (mask bits).** In order, most often changed first:
   - differences: lat, lon, posAt, seenAt, msgs;
-  - absolute: alt, rssi, gs, track, baro_rate, alt_geom, mag_heading, tas, ias, squawk, emergency, tracked_nm;
+  - absolute: alt, rssi, gs, track, baro_rate, alt_geom, mag_heading, tas, ias, squawk, emergency, tracked_nm, snr
+    (★ added beta96 before release — docs/v12/MESSAGE-SNR.md; it moved flight/category/Comm-B up one bit);
   - text: flight, category;
   - the Comm-B object, as is.
 
@@ -53,7 +54,7 @@ The full wire format is in the header of `android/app/src/main/cpp/vibe_adsb_del
   - lat/lon: 1e-5°, the report's own 5 decimals;
   - altitudes: 25 ft;
   - gs, track and heading: 1;
-  - rssi: 1 dB, rounded down, so the 1/2/3-bar thresholds at −22 and −12 read the same;
+  - rssi and snr: 1 dB, rounded down, so a threshold on the whole number reads the same either way;
   - tracked_nm: 1 NM, as in the report.
 
   Each value is quantised from the text the full report prints. The quantisation can never disagree with an older

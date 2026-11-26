@@ -15,7 +15,8 @@
 /** Columns, in the server's order (vibe_adsb_delta.h Col). The first five are differences. */
 const C_LAT = 0, C_LON = 1, C_POSAT = 2, C_SEENAT = 3, C_MSGS = 4, C_ALT = 5, C_RSSI = 6, C_GS = 7, C_TRACK = 8,
   C_VR = 9, C_GEOM = 10, C_HDG = 11, C_TAS = 12, C_IAS = 13, C_SQUAWK = 14, C_EMERG = 15, C_TRACKED = 16,
-  C_FLIGHT = 17, C_CAT = 18, C_COMMB = 19, N_COLS = 20, N_NUM = 17;
+  C_SNR = 17,   // ★ beta96 SNR over the 1090 MHz floor, whole dB (vibe_adsb_delta.h cSnr)
+  C_FLIGHT = 18, C_CAT = 19, C_COMMB = 20, N_COLS = 21, N_NUM = 18;
 const DIFF_COLS = 5;
 const MAX_ROWS = 2000;   // the server's kMaxRows (and the web client's own cap on the full list)
 const MAX_ID = 1_000_000;
@@ -167,6 +168,7 @@ export class AdsbDeltaStore {
       if (v[C_SEENAT] !== undefined) a.seen = age(v[C_SEENAT]);
       if (v[C_MSGS] !== undefined) a.messages = v[C_MSGS];
       if (v[C_RSSI] !== undefined) a.rssi = v[C_RSSI];
+      if (v[C_SNR] !== undefined) a.snr = v[C_SNR];
       aircraft.push(a);
     }
     return { type: 'adsb', ...this.header, aircraft };

@@ -15,15 +15,15 @@
  *   amber, > 10 green.
  */
 
-export const SNR_RED_DB = 5;
-export const SNR_GREEN_DB = 10;
+import { SNR_COLOURS, SNR_SCALES, snrBandFor, type SnrBand } from './snrColour.ts';
+export { SNR_COLOURS, type SnrBand };
+/** ★ The shared scale's NAVTEX thresholds (src/utils/snrColour.ts — one scale for every mode's messages). */
+export const SNR_RED_DB = SNR_SCALES.navtex.red;
+export const SNR_GREEN_DB = SNR_SCALES.navtex.green;
 /** ≤ this many slices a message; longer ones merge pairs (each slice then covers twice the time). */
 export const SNR_MAX_SLICES = 120;
 
-export type SnrBand = 'red' | 'amber' | 'green';
-export function snrBand(db: number): SnrBand { return db < SNR_RED_DB ? 'red' : db <= SNR_GREEN_DB ? 'amber' : 'green'; }
-/** The scale's colours — one set for web and app (readable on the default, silver and black themes). */
-export const SNR_COLOURS: Record<SnrBand, string> = { red: '#e5484d', amber: '#f0a020', green: '#3dbb5f' };
+export function snrBand(db: number): SnrBand { return snrBandFor('navtex', db); }
 export function snrColour(db: number): string { return SNR_COLOURS[snrBand(db)]; }
 
 /** The FEC split of one message, as counts. */

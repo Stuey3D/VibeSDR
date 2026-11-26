@@ -23,7 +23,7 @@
 // The first five columns are DIFFERENCES from the value the client holds (absolute when it holds none): positions in
 // 1e-5°, the two "heard at" times in whole seconds of the server's ADS-B clock, and the message count. The rest are
 // absolute. Quantised: lat/lon 1e-5° (the report's own 5 decimals), altitudes 25 ft, speeds 1 kt, track and heading 1°,
-// signal 1 dB (rounded down, so the 1/2/3-bar thresholds read the same), tracked distance 1 NM (as the report).
+// signal and SNR 1 dB (rounded down, so a colour threshold reads the same), tracked distance 1 NM (as the report).
 //
 // TIMES ON THE TICK GRID. The two "heard at" times are whole ticks: stamp(x) = floor(x − φ), where φ is fixed when
 // ADS-B starts so that each tick's own T = floor(now − φ) sits 0.85 s into its second. So everything heard since the last
@@ -62,6 +62,7 @@ namespace delta {
 enum Col {
     cLat = 0, cLon, cPosAt, cSeenAt, cMsgs,          // ★ differences (kDiffCols)
     cAlt, cRssi, cGs, cTrack, cVr, cGeom, cHdg, cTas, cIas, cSquawk, cEmerg, cTracked,   // absolute numbers
+    cSnr,                                            // ★ beta96 SNR over the floor, whole dB (rounded down, as cRssi)
     cFlight, cCat, cCommb,                           // text / an object
     kCols
 };
@@ -138,6 +139,7 @@ inline Row rowOf(const Aircraft& a, double now, double phi) {
     put(cSeenAt, stampOf(a.seen, phi));
     put(cMsgs, a.messages);
     put(cRssi, floorDiv(fixedOf(a.level, 1), 10));
+    put(cSnr, floorDiv(fixedOf(a.snr, 1), 10));
     return r;
 }
 

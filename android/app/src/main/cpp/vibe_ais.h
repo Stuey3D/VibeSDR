@@ -263,6 +263,7 @@ public:
         pwA_ = float(1.0 - std::exp(-1.0 / (fs / kBaud * 4)));
         dcAcq_ = float(1.0 - std::exp(-1.0 / (fs / kBaud * 2)));
         pwSlowA_ = float(1.0 - std::exp(-1.0 / (fs / kBaud * 150)));
+        spb_ = fs / kBaud;
     }
 
     /** `n` samples of this channel. `out(RawFrame)` for each new frame. */
@@ -273,6 +274,9 @@ public:
             prev_ = s;
             const float p = std::norm(s);
             pw_ += (p - pw_) * pwA_;
+            // ★ beta96 the burst's power, one mean a BIT into a ring (one add a sample) — see burstSnr_
+            bitAcc_ += p; ++bitN_;
+            if (++bitPh_ >= spb_) { bitPh_ -= spb_; bitP_[bitW_++ & (kBitRing - 1)] = bitAcc_ / float(bitN_); bitAcc_ = 0; bitN_ = 0; }
             // ★ the noise floor: a slow follower that falls fast and climbs very slowly (frames are short and rare)
             if (pw_ < floor_ || floor_ <= 0) floor_ += (pw_ - floor_) * 0.02f; else floor_ += (pw_ - floor_) * 2e-6f;
             afcSample_(d);
@@ -364,7 +368,27 @@ private:
     void fill_(const vibehdlc::Frame& fr) {
         pend_.bytes = fr.bytes; pend_.repaired = fr.repaired; pend_.quality = fr.quality; pend_.flipConf = fr.flipConf;
         pend_.levelDb = pw_ > 0 ? float(10 * std::log10(pw_)) : -120.f;
-        pend_.snrDb = pw_ > 0 && floor_ > 0 ? float(10 * std::log10(pw_ / floor_)) : 0.f;
+        pend_.snrDb = burstSnr_(fr.bytes.size());
+    }
+    /** ★★ beta96 (Stuart 11-26: a colour-coded SNR per message, to compare antennas) THE FRAME'S SNR, honestly: the mean
+     *  power over the frame's own bits against the noise floor, S/N = (P − floor) / floor in the channel bandwidth.
+     *  (Before, pw_ was read when the frame was DELIVERED — for the coherent detector W + Wf bits after the burst had
+     *  ended, so it read the noise: ~3 dB at any strength.) The frame is the loudest run of its length (bytes × 8 + 24
+     *  bits: FCS, flags, stuffing allowance) in the last run + W + Wf + 16 bits of the ring — wherever either detector's
+     *  lag put it. Per FRAME: ≤ ~1100 adds, nothing per sample beyond bitAcc_. */
+    float burstSnr_(size_t nBytes) const {
+        const int run = int(nBytes) * 8 + 24;
+        const int span = std::min(int(kBitRing) - 1, run + tuning().W + tuning().Wf + 16);
+        if (floor_ <= 0 || bitW_ < uint64_t(span)) return 0.f;
+        double sum = 0, best = 0;
+        const uint64_t a = bitW_ - uint64_t(span);
+        for (int k = 0; k < span; ++k) {
+            sum += bitP_[(a + uint64_t(k)) & (kBitRing - 1)];
+            if (k >= run) sum -= bitP_[(a + uint64_t(k - run)) & (kBitRing - 1)];
+            if (k >= run - 1 && sum > best) best = sum;
+        }
+        const double P = best / run, S = P - floor_;
+        return S > 0 ? float(10 * std::log10(S / floor_)) : -30.f;
     }
     template <class Out> void flush_(Out& out) {
         hasPend_ = false;
@@ -439,6 +463,9 @@ private:
     float dcAcq_ = 0;
     float pwSlow_ = 0, pwSlowA_ = 0;
     float dc_ = 0, dcFast_, dcSlow_, pw_ = 0, pwA_, floor_ = 0;
+    static constexpr size_t kBitRing = 2048;            // ★ beta96 per-bit power (burstSnr_): 8 KB a channel
+    float bitP_[kBitRing] = {};
+    float bitAcc_ = 0; int bitN_ = 0; double bitPh_ = 0, spb_ = 4; uint64_t bitW_ = 0;
     std::unique_ptr<vibehdlc::BitClock> clk_[kSlicers];
     std::unique_ptr<vibehdlc::Deframer> df_[kSlicers];
     struct Rec { uint32_t h = 0; uint64_t t = 0; };

@@ -260,7 +260,9 @@ static void testEncoded() {
 /** Make a capture: `n` frames from `n/6` ships (each sends a type 5 then positions), alternating channels, at `ebn0` dB,
  *  rate fs, with a crystal offset. Frames are counted through the SERVICE's rule: a repaired frame counts only when its
  *  MMSI was heard cleanly before (Service::accept_). */
-struct E2E { int sent = 0, heard = 0, repaired = 0, wrong = 0, dropped = 0; double cpuS = 0, capS = 0; };
+struct E2E { int sent = 0, heard = 0, repaired = 0, wrong = 0, dropped = 0; double cpuS = 0, capS = 0;
+             std::vector<float> snr;   // ★ beta96 the frames' reported SNR (RawFrame::snrDb) — docs/v12/MESSAGE-SNR.md
+             float snrMed() const { if (snr.empty()) return -99; auto v = snr; std::sort(v.begin(), v.end()); return v[v.size() / 2]; } };
 static E2E endToEnd(double fs, double ebn0, int n, bool repair, uint64_t seed, double xtalHz = 1200, std::vector<cf>* keep = nullptr,
                     const Cond* cond = nullptr) {
     E2E r;
@@ -326,6 +328,7 @@ static E2E endToEnd(double fs, double ebn0, int n, bool repair, uint64_t seed, d
         if (f.repaired && (!repair || !known.count(m.mmsi))) { ++r.dropped; return; }
         if (!f.repaired) known.insert(m.mmsi);
         got.push_back(f.bytes); gotRep.push_back(f.repaired); if (f.repaired) ++r.repaired;
+        r.snr.push_back(f.snrDb);
     });
     r.cpuS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (std::getenv("AIS_DEBUG")) std::printf("   [afc %.0f Hz, crystal %.0f]\n", fe.afcHz(), cd.xtalHz);
@@ -380,14 +383,16 @@ static void testReceiver() {
         CHECK(hf14.heard >= 59 && hf14.wrong == 0, "HF+ %.0f kS/s at 14 dB: %d of %d, %d wrong", fs / 1e3, hf14.heard, hf14.sent, hf14.wrong);
         std::printf("   HF+ %.0f kS/s: clean %d/%d, 14 dB %d/%d\n", fs / 1e3, hf.heard, hf.sent, hf14.heard, hf14.sent);
     }
-    std::printf("   Eb/N0 (dB)   decoded of 120: no repair   with repair (repaired)   wrong\n");
+    std::printf("   Eb/N0 (dB)   decoded of 120: no repair   with repair (repaired)   wrong   reported SNR (median)\n");
     const double snrs[] = { 8, 10, 11, 12, 13, 14, 16, 18 };
     int at14 = 0, at18 = 0, at12r = 0, at12n = 0, at10 = 0, at8 = 0;
     for (double e : snrs) {
         E2E a = endToEnd(2.4e6, e, 120, false, 100 + uint64_t(e));
         E2E r = endToEnd(2.4e6, e, 120, true, 100 + uint64_t(e));
-        std::printf("   %5.0f        %3d (%5.1f %%)           %3d (%5.1f %%) (%3d)         %d\n", e, a.heard, 100.0 * a.heard / a.sent,
-                    r.heard, 100.0 * r.heard / r.sent, r.repaired, r.wrong + a.wrong);
+        std::printf("   %5.0f        %3d (%5.1f %%)           %3d (%5.1f %%) (%3d)         %d       %5.1f dB\n", e, a.heard, 100.0 * a.heard / a.sent,
+                    r.heard, 100.0 * r.heard / r.sent, r.repaired, r.wrong + a.wrong, r.snrMed());
+        // ★ beta96 the reported SNR is honest: it rises with the transmitted Eb/N0 (MESSAGE-SNR.md's AIS row is read here)
+        if (e >= 10 && r.snr.size() >= 10) CHECK(std::fabs(r.snrMed() - (float(e) - 1)) <= 2.5f, "AIS reported SNR %.1f dB at Eb/N0 %.0f dB", r.snrMed(), e);
         CHECK(r.wrong == 0 && a.wrong == 0, "no wrong frames at %.0f dB", e);
         if (e == 14) at14 = r.heard;
         if (e == 10) at10 = r.heard;

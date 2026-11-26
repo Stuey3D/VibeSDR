@@ -245,18 +245,23 @@ int main(int argc, char** argv) {
     for (double rate : {2.0e6, 2.048e6, 2.4e6, 2.5e6, 3.0e6, 4.0e6}) {
         for (double snrDb : {20.0, 14.0}) {
             int heard = 0, total = 0;
+            std::vector<float> snrs;                              // ★ beta96 Frame::snr of every decoded reply
             for (uint32_t seed = 1; seed <= 20; ++seed) {
                 const double noise = 0.02;
                 const double amp = noise * std::pow(10.0, snrDb / 20.0);
                 auto iq = modulate(frames, rate, amp, noise, seed);
                 Demod d(rate);
                 Tracker t;
-                d.feed(iq.data(), iq.size(), [&](const Frame& f) { t.accept(f, 0); }, [&](uint32_t a) { return t.known(a, 0); });
+                d.feed(iq.data(), iq.size(), [&](const Frame& f) { if (t.accept(f, 0)) snrs.push_back(f.snr); }, [&](uint32_t a) { return t.known(a, 0); });
                 total += int(frames.size());
                 heard += int(t.good());
             }
             const double pct = 100.0 * heard / total;
-            printf("  %.3f MS/s, %2.0f dB: %3.0f%% of frames\n", rate / 1e6, snrDb, pct);
+            std::sort(snrs.begin(), snrs.end());
+            const float med = snrs.empty() ? -99.f : snrs[snrs.size() / 2];
+            printf("  %.3f MS/s, %2.0f dB: %3.0f%% of frames, reported SNR median %.1f dB\n", rate / 1e6, snrDb, pct, med);
+            // ★ beta96 the per-reply SNR is honest: within 3 dB of the pulse-to-noise power the test transmitted
+            if (rate >= 2.4e6) CHECK(std::fabs(med - snrDb) <= 3.0, "reported SNR %.1f dB for a %.0f dB reply at %.3f MS/s", med, snrDb, rate / 1e6);
             if (rate >= 2.4e6) CHECK(pct >= (snrDb >= 20 ? 97 : 85), "demod %.3f MS/s at %.0f dB heard %.0f%%", rate / 1e6, snrDb, pct);
         }
     }
