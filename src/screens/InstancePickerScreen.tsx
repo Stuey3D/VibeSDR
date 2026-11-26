@@ -3412,7 +3412,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   {rtlTcpServerSupported && (
                     <ChooserRow
                       style={[styles.row, { borderColor: serving.running ? C.green : C.borderBright }]}
-                      onPress={() => navigation.navigate('ServerMode', { keepOnExit: serving.running } as never)}
+                      onPress={() => navigation.navigate('ServerChoice', {} as never)}   // ★★★ beta96 the entry: remembered type, or the choice
                     >
                       <View style={styles.rowMain}>
                         <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.text }} numberOfLines={1}>

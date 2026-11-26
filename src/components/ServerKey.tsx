@@ -24,6 +24,7 @@ export function useKeyList(count: number, onEnter: (i: number) => void, onBack?:
     const sub = addKeyListener('down', (e: any) => {
       if (e?.typing) return;
       const r = ref.current;
+      if (r.count <= 0) return;   // ★ nothing of ours on screen: the key is somebody else's
       if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { setIdx((i) => Math.min(r.count - 1, i + 1)); return true; }
       if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { setIdx((i) => Math.max(0, i - 1)); return true; }
       if (e.key === 'Enter') { r.onEnter(r.idx); return true; }

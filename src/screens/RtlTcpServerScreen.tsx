@@ -16,6 +16,8 @@ import {
   type ServerInfo, type ServerStatus,
 } from '../services/rtlTcpServer';
 import { advertiseRtlTcp, stopAdvertiseRtlTcp } from '../services/mdns';
+import ServerKey, { useKeyList } from '../components/ServerKey';   // ★★★ beta96 its own short setup screen
+import { setChoice } from '../services/serverChoiceStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RtlTcpServer'>;
 
@@ -60,6 +62,10 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   // The unmount cleanup closes over the first render, so it can't read `persist`
   // state. Mirror it into a ref that the cleanup can see.
   const persistRef = useRef(false);
+  /* ★★★ beta96 RTL-TCP IS ITS OWN ENTRY ("Use as a server" → RTL-TCP), so it has its own short screen first: the name
+   *  and START. Opened with `setup` (from the entry) and nothing already running; any other way in starts at once, as
+   *  it always did (the Full screen's protocol path, a running server adopted). */
+  const [setupPhase, setSetupPhase] = useState(false);
 
   // Start the server (once) + advertise — or ADOPT one already running (persist
   // mode left it up when the screen was last closed). Starting a second server on
@@ -91,28 +97,37 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       const initialName = await getServerName(route.params?.name ?? 'VibeSDR RTL-SDR');
       if (cancelled) return;
       setName(initialName);
+      if ((route.params as any)?.setup) { setStarting(false); setSetupPhase(true); return; }
+      await beginRef.current(initialName, () => cancelled);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /** The start itself — from the effect above, or from the short setup screen's START. */
+  const beginRef = useRef(async (initialName: string, isCancelled: () => boolean) => {
+    {
+      if (isCancelled()) return;
       // Android 13+: the FGS notification is suppressed without POST_NOTIFICATIONS.
       if (Platform.OS === 'android' && Platform.Version >= 33) {
         try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
       }
-      if (cancelled) return;
+      if (isCancelled()) return;
       try {
         const res = await startRtlTcpServer({ name: initialName });
-        if (cancelled) return;
+        if (isCancelled()) return;
         setInfo(res);
         setStarting(false);
         adv(res.name, res.port);
       } catch (e: any) {
-        if (cancelled) return;
+        if (isCancelled()) return;
         setStarting(false);
         // ★★ WRONG UNTIL 2026-11-25: this said an Airspy HF+ "shares over rtl_tcp too". It never did — the
         //    server opened it through librtlsdr, sent the header and then no IQ at all (Sloper). RTL-TCP is
         //    an RTL-SDR's; the native start now refuses anything else and its message says what to use.
         setError(e?.message ?? 'Could not start the server. Is a radio plugged in via USB OTG?');
       }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    }
+  });
 
   // Teardown on unmount (any way of leaving the screen) — UNLESS persist mode is
   // on, in which case the server outlives the screen and only the explicit STOP
@@ -195,6 +210,38 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     : dropping ? C.bad
     : dropped > 0 ? C.warn
     : C.green;
+
+  const startFromSetup = () => {
+    const n = name.trim() || 'VibeSDR RTL-SDR';
+    setName(n); saveServerName(n); void setChoice('rtltcp');
+    setSetupPhase(false); setStarting(true);
+    void beginRef.current(n, () => false);
+  };
+  const toChoice = () => navigation.replace('ServerChoice' as any, { choose: true } as any);
+  const setupKeys = [startFromSetup, toChoice];
+  const [hl, setHl] = useKeyList(setupPhase ? setupKeys.length : 0, (i) => setupKeys[i]?.(), setupPhase ? () => navigation.goBack() : undefined);
+
+  if (setupPhase) {
+    return (
+      <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
+        <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+          <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>RTL-TCP</Text>
+          <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
+            The radio&rsquo;s raw IQ for SDR#, SDR++ or SDR Console, with VibeAGC. Local network only, one program at a
+            time, no PIN. Any radio but an Icom.
+          </Text>
+          <ServerKey big first color={C.green} dim={C.textDim} border={C.green} fontFamily={F} focused={hl === 0}
+            onFocusHere={() => setHl(0)} testID="rtltcp-start" title="▶ START RTL-TCP" onPress={startFromSetup} />
+          <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 18 }]}>LOCAL NAME</Text>
+          <TextInput value={name} onChangeText={setName} placeholder="VibeSDR RTL-SDR" placeholderTextColor={C.textFaint}
+            style={[styles.input, { color: C.value, borderColor: C.border, fontFamily: F }]} />
+          <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>Shown to programs discovering this server on the network.</Text>
+          <ServerKey color={C.key} dim={C.textDim} border={C.border} fontFamily={F} focused={hl === 1}
+            onFocusHere={() => setHl(1)} title="‹ Server type" sub="VibeServer Simple, Full or RTL-TCP." onPress={toChoice} />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>

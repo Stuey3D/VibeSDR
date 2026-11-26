@@ -43,6 +43,7 @@ import { ControllerKeyboardHost } from './src/components/ControllerKeyboard';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
+import { ServerChoiceThemed, SimpleServerThemed, SetupElsewhereThemed } from './src/screens/ServerChoiceThemed';   // ★★★ beta96 the server entry
 import LegacyPackageNotice  from './src/components/LegacyPackageNotice';
 import TlsTrustPrompt       from './src/components/TlsTrustPrompt';
 import TunerScreen          from './src/screens/TunerScreen';
@@ -233,11 +234,16 @@ export type RootStackParamList = {
   };
   // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
   // this device's USB dongle, with shared PIN + auto-discovery options.
-  ServerMode: { name?: string } | undefined;
+  ServerMode: { name?: string; vibeServerOnly?: boolean; keepOnExit?: boolean } | undefined;
+  // ★★★ beta96 "Use as a server": the entry (first open: SET UP HERE / REMOTE SETUP; then Simple · Full · RTL-TCP, the last
+  // one remembered), VibeServer Simple (local network only) and Remote setup (first-time, one-time code).
+  ServerChoice: { choose?: boolean } | undefined;
+  SimpleServer: { keepOnExit?: boolean } | undefined;
+  SetupElsewhere: undefined | Record<string, never>;
   // RTL-TCP server (Android): share this device's USB dongle over the network.
   // `advertise` (default true) lets the Server-mode picker honour the shared
   // auto-discovery toggle.
-  RtlTcpServer: { name?: string; advertise?: boolean } | undefined;
+  RtlTcpServer: { name?: string; advertise?: boolean; setup?: boolean } | undefined;
   // FM-DX Webserver (v7): single shared FM tuner, server-side demod + RDS, MP3
   // audio. Distinct tuner UI (no waterfall) — see TunerScreen.
   Tuner: {
@@ -1096,6 +1102,9 @@ export default function App() {
             <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
             <Stack.Screen name="ServerMode"     component={ServerModeScreen}     options={{ headerShown: false }} />
             <Stack.Screen name="RtlTcpServer"   component={RtlTcpServerScreen}   options={{ headerShown: false }} />
+            <Stack.Screen name="ServerChoice"   component={ServerChoiceThemed}   options={{ headerShown: false }} />
+            <Stack.Screen name="SimpleServer"   component={SimpleServerThemed}   options={{ headerShown: false }} />
+            <Stack.Screen name="SetupElsewhere" component={SetupElsewhereThemed} options={{ headerShown: false }} />
             <Stack.Screen name="Tuner"          component={TunerScreen}          options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
