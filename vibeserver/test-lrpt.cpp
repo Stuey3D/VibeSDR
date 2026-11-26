@@ -4,6 +4,7 @@
 //
 //   test-lrpt                 the synthetic suite
 //   test-lrpt --quick         the same, shorter
+//   test-lrpt --write-clip F.cu8 RATE [night] [periods]   ★ beta96 a bench clip (scripts/test-web-lrpt-channels.mjs)
 //   test-lrpt --wav F [DIR] [--rate-auto] [--qpsk|--oqpsk] [--80k] [--noise R]   decode a 16-bit IQ .wav recording; PNGs into DIR
 #include "vibe_lrpt.h"
 #include "vibe_lrpt_run.h"
@@ -675,6 +676,20 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--scalar")) c.forceScalar = true;
         if (!std::strcmp(argv[i], "--rate-auto")) c.rateAuto = true;   // ★ what the clients send until the satellite engine names the rate
         if (!std::strcmp(argv[i], "--noise") && i + 1 < argc) g_addNoise = std::atof(argv[i + 1]);
+    }
+    /* ★★★ beta96 a bench clip for scripts/test-web-lrpt-channels.mjs: unsigned 8-bit IQ at RATE, a 1-2-4 METEOR pass of P
+     *  scan periods (QPSK 72k, strong), `night` = channels 1 and 2 dark — replayed by fake-rtl-tcp.mjs --hf at 137.9 MHz. */
+    if (argc >= 4 && !std::strcmp(argv[1], "--write-clip")) {
+        tx::TxConfig t; t.sampleRate = std::atof(argv[3]); t.apids = {64, 65, 67}; t.esn0Db = 18; t.seed = 5;
+        bool night = false; int P = 24;
+        for (int i = 4; i < argc; i++) { if (!std::strcmp(argv[i], "night")) night = true; else if (std::atoi(argv[i]) > 0) P = std::min(60, std::atoi(argv[i])); }
+        if (night) t.dark = {64, 65};
+        const auto iq = tx::modulate(t, tx::codeBits(t, tx::buildVcdus(t, P)), 0.3, 0.3);
+        std::string out(iq.size(), '\0');
+        for (size_t i = 0; i < iq.size(); i++) out[i] = char(uint8_t(std::max(0.0, std::min(255.0, 127.5 + 40.0 * iq[i]))));
+        if (!writeFile(argv[2], out)) { std::printf("cannot write %s\n", argv[2]); return 1; }
+        std::printf("wrote %s: %d periods, %.1f s at %.0f S/s, %s\n", argv[2], P, double(iq.size() / 2) / t.sampleRate, t.sampleRate, night ? "NIGHT (ch 1 + 2 dark)" : "day");
+        return 0;
     }
     if (argc >= 3 && !std::strcmp(argv[1], "--wav")) return decodeWav(argv[2], argc >= 4 && argv[3][0] != '-' ? argv[3] : ".", c);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--es")) {
