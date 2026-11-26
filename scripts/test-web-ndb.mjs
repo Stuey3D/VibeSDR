@@ -66,8 +66,9 @@ try {
   await ev(`document.getElementById('mMode')?.click()`);
   await sleep(700);
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
-  ok(/\bNDB\b/.test(opts || ''), `the Mode sheet offers NDB: ${opts}`);
-  await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'NDB'); b && b.click(); return !!b; })()`);
+  // ★★★ beta96 ONE AIR & SEA LIVE key in the mode menu (MAP-SHARED.md, menu consolidation): last used = NDB → it lands there
+  ok(/AIR & SEA LIVE/.test(opts || '') && !/(^|,)NDB(,|$)/.test(opts || ''), `the Mode sheet offers AIR & SEA LIVE (NDB on its TUNE list), no NDB key of its own: ${opts}`);
+  await ev(`localStorage.setItem('vibesdr.airSeaLast', 'ndb'); document.getElementById('mModeAirSea')?.click(); true`);
   // ★★★ beta96 (docs/v12/ONE-MAP.md stage 8): NDB is a live state of the AIR & SEA map
   ok(await until(`window.__vibeAirSea?.()?.open === true && window.__vibeAirSea().mode === 'ndb'`, 6000), 'NDB opens the AIR & SEA map, NDB live (map-first, over the waterfall)');
   const ch = await ev(`JSON.stringify(window.__vibeAirSea())`);
