@@ -42,10 +42,10 @@ int main() {
             //    names dvsig (generation 87), so the 90+ switches are new on it and — the radio being single-mode — off.
             const std::string D = "wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig";
             const std::string adsbOnly = D + ",dab,ism,ndb,ais,avdata,sondes";
-            const std::string NEW = ",fctlm,satlabels,orbcomm,vormap";
+            const std::string NEW = ",fctlm,satlabels,orbcomm,vormap,sat";
             ok(effectiveBlocked(adsbOnly, 0) == adsbOnly + NEW, "★ an ADS-B-only list saved before VOR MAP: VOR MAP (and the 90+ switches) off, still ADS-B only");
-            ok(effectiveBlocked(adsbOnly + ",+vormap", 0) == adsbOnly, "…the owner ticked VOR MAP on (beta93's word, so the list is from 93+: nothing newer is new): on, and the + token is not published");
-            ok(effectiveBlocked(adsbOnly + ",vormap", 0) == adsbOnly + ",vormap", "…the owner switched it off themselves: off once, not doubled");
+            ok(effectiveBlocked(adsbOnly + ",+vormap", 0) == adsbOnly + ",sat", "…the owner ticked VOR MAP on (beta93's word, so the list is from 93+: nothing newer is new): on, and the + token is not published");
+            ok(effectiveBlocked(adsbOnly + ",vormap", 0) == adsbOnly + ",vormap,sat", "…the owner switched it off themselves: off once, not doubled");
             ok(effectiveBlocked("", 0) == "", "a fresh config: nothing off");
             ok(effectiveBlocked(D, 1) == D + ",same" + NEW, "every demodulator off, Region 1: SAME's default and the new switches'");
             const std::string vorOnly = adsbOnly + ",adsb";
