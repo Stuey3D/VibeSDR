@@ -142,17 +142,38 @@ inline bool entryFor(const std::vector<std::string>& ids, Entry& e) {
 }
 
 // ══ THE STORED SETTINGS AND THEIR MIGRATION ═════════════════════════════════════════════════════════════════════════════
+/* ★★★ beta96 b96-bgsplit — TWO SEPARATE CHOICES PER RADIO (Stuart 11-26: "for ADS-B, VDL2, AIS etc to work the user needs to
+ *  have the map as the landing page. Listen-Amateur uses FM radio as his landing zone, so if he enabled background AIS that
+ *  would break that"):
+ *    BACKGROUND DECODING — what the radio does when NOBODY is connected: `bgMode` "" = MANUAL (the centre + VFO profiles,
+ *      BgRunner, exactly as before), or ONE whole-radio mode token ("ais", "aisdsc", "adsb", "vdl2", "acars,vdl2", "vor",
+ *      "ism:868" …) — any map's mode, the same table, the same rate gate.
+ *    WHERE NEW LISTENERS LAND — the plain landing (landingFreq + demodMode), a DAB station (landingDab*), or a MAP
+ *      (landingMap + landingModes: the decoder it starts on). Unchanged words.
+ *  The first listener's arrival switches the radio from the background choice to the landing (the background mode pauses,
+ *  as background decoding does); the last one leaving gives it back. `mapKeep` / `adsbKeepRunning` are now MIRRORS of
+ *  "background = the landing map's own mode" (an older build reads the same thing), never read where bgMode was written. */
 struct Stored {
     // beta95's two (still written, mirroring the ADS-B case — an older build reads the same landing)
     bool landingAdsb = false, adsbKeepRunning = false;
     // beta96
     std::string landingMap;     ///< "" | "avmar" | "amateur"
     std::string landingModes;   ///< "vdl2" | "acars,vdl2" | "adsb" …
-    bool mapKeep = false;       ///< keep the mode running when nobody is connected
+    bool mapKeep = false;       ///< MIRROR: background = the landing map's mode (b96-keeprun's "keep it running")
+    // beta96 b96-bgsplit
+    std::string bgMode;         ///< "" = manual background decoding; else the whole-radio mode with nobody here
+    bool bgSet = false;         ///< bgMode is authoritative (its key was read, or a seeded config); false = derive it from the keep words
 };
+/** A background token set as stored: known ids of ANY map, one mode or the ACARS + VDL2 combination (else the first). */
+inline std::string bgNormalise(const std::string& csv) {
+    std::vector<std::string> ids = parseCsv(csv);
+    if (ids.size() > 1 && !isCombo(ids)) ids.resize(1);
+    return toCsv(ids);
+}
 /** ★★ Read side: a config with no landingMap but beta95's ADS-B landing becomes the same thing in the new words; then the
- *  set is normalised (known ids, one mode or the one combination — a bad CSV keeps its FIRST mode), and the old two are
- *  mirrored from it. Idempotent. */
+ *  set is normalised (known ids, one mode or the one combination — a bad CSV keeps its FIRST mode), the BACKGROUND choice is
+ *  derived where it was never written (b96-keeprun's mapKeep = background is the landing map's mode; else manual), and the
+ *  old words are mirrored from it. Idempotent. */
 inline void migrate(Stored& s) {
     if (s.landingMap.empty() && s.landingAdsb) {
         s.landingMap = kMapAvMar; s.landingModes = "adsb"; s.mapKeep = s.adsbKeepRunning;
@@ -164,21 +185,37 @@ inline void migrate(Stored& s) {
     if (ids.empty()) s.landingMap.clear();          // ★ a map with no mode is no landing (the plain one applies)
     if (s.landingMap.empty()) { ids.clear(); s.mapKeep = false; }
     s.landingModes = toCsv(ids);
+    // ★★★ b96-bgsplit: "map + VDL2 + keep it running" = background VDL2 + landing on the map in VDL2 — identical behaviour
+    if (!s.bgSet) { s.bgMode = s.mapKeep ? s.landingModes : std::string(); s.bgSet = true; }
+    s.bgMode = bgNormalise(s.bgMode);
     s.landingAdsb = !s.landingMap.empty() && s.landingModes == "adsb";
-    s.adsbKeepRunning = s.landingAdsb && s.mapKeep;
+    s.mapKeep = !s.landingMap.empty() && !s.bgMode.empty() && s.bgMode == s.landingModes;   // ★ mirror
+    s.adsbKeepRunning = s.landingAdsb && s.bgMode == "adsb";                                // ★ mirror
 }
 
-/** ★★ A READ that may come from an OLDER WRITER (beta95's page or app, which know only landingAdsb / adsbKeepRunning):
- *  `sawOld` / `sawNew` = which of the two sets of keys the JSON being read carried. Old words alone speak only for the
- *  ADS-B case — ADS-B landed (and kept or not) as they say; "ADS-B off" from them clears an ADS-B landing but never a VDL2
- *  or AIS one they cannot know about. Then migrate(). A partial live update ({"adsbKeepRunning":false}) works the same. */
-inline void applyRead(Stored& s, bool sawOld, bool sawNew) {
+/** ★★ A READ that may come from an OLDER WRITER: `sawOld` / `sawNew` / `sawBg` = which keys the JSON being read carried —
+ *  beta95's (landingAdsb / adsbKeepRunning), b96-keeprun's (landingMap / landingModes / mapKeep), this one's (bgMode).
+ *    · Old words alone speak only for the ADS-B case — ADS-B landed (and kept or not) as they say; "ADS-B off" from them
+ *      clears an ADS-B landing (and the ADS-B background it implied) but never a VDL2 or AIS one they cannot know about.
+ *    · Keep words without bgMode (b96-keeprun's page or app): the background follows them (derived in migrate).
+ *    · bgMode read: it is the background, whatever the mirrors say.
+ *  Then migrate(). A partial live update ({"adsbKeepRunning":false}) works the same. */
+inline void applyRead(Stored& s, bool sawOld, bool sawNew, bool sawBg = false) {
+    const std::string priorModes = s.landingModes;
+    if (sawBg) s.bgSet = true;
     if (sawOld && !sawNew) {
         if (s.landingAdsb) { s.landingMap = kMapAvMar; s.landingModes = "adsb"; s.mapKeep = s.adsbKeepRunning; }
         else if (s.landingModes == "adsb") { s.landingMap.clear(); s.landingModes.clear(); s.mapKeep = false; }
-    }
+        if (!sawBg) {
+            if (s.landingAdsb && s.adsbKeepRunning) s.bgMode = "adsb";
+            else if (s.bgMode == "adsb" && (priorModes == "adsb" || !s.bgSet)) s.bgMode.clear();   // ★ the ADS-B they knew, switched off
+            s.bgSet = true;
+        }
+    } else if (sawNew && !sawBg) s.bgSet = false;   // ★ b96-keeprun's words: the background follows mapKeep
     migrate(s);
 }
+/** The Entry the background choice runs as (false = manual). The same doors as the landing. */
+inline bool bgEntry(const Stored& s, Entry& e) { return entryFor(parseCsv(s.bgMode), e); }
 
 // ══ ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26) ═══════════════════════════════════════════════════════════════════════
 /* "RADIO USE: General | Single mode: [ADS-B ▾] — lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected
