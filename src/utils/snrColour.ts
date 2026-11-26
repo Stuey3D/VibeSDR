@@ -90,6 +90,10 @@ export const SNR_SCALES = {
   lora10: { thr: -16.5, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF10: 75 % at −16 dB (Semtech −15)' },
   lora11: { thr: -19, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF11: 37 % at −19.5 dB, 82 % at −18.5 (Semtech −17.5)' },
   lora12: { thr: -21.5, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF12: 60 % at −22 dB (Semtech −20)' },
+  /** APRS / AX.25 1200 Bd on the IQ paths: the carrier over the floor in the widest IQ channel filter (vibe_aprs_run.h
+   *  frameSnr_) — reads ~CNR(12.5 kHz) + 1.5 dB. A frame heard only on a listener's audio has no SNR (none is claimed). */
+  aprs: { thr: 6, what: 'carrier over the noise floor in the channel filter',
+          src: 'test-aprs-onair --curve (flat ±3 kHz): 50 % at CNR 3.6 dB, where packets report ~6 dB' },
 } satisfies Record<string, SnrScale>;
 export type SnrMode = keyof typeof SNR_SCALES;
 

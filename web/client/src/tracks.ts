@@ -79,6 +79,8 @@ export interface AprsStation {
   course?: number; speed?: number; alt?: number; altBad?: number; comment?: string; status?: string; micE?: string; path?: string; via?: string;
   raw?: string; line?: string; wx?: Record<string, number>; killed?: number; msg?: number; seen: number; age: number; count: number;
   posAge: number; trail?: [number, number][];
+  /** ★ beta96 its last frame's SNR (dB, the carrier over the widest IQ filter's floor) — none from an audio-only frame */
+  snr?: number;
 }
 export interface AprsList {
   baud: number; frames: number; repaired: number; dupes: number; stations: AprsStation[];
@@ -135,7 +137,7 @@ export function aprsSanitise(d: any): AprsList | null {
               alt: num(s.alt) ?? undefined, altBad: s.altBad === 1 ? 1 : undefined, comment: str(s.comment, 200), status: str(s.status, 200), micE: str(s.micE, 20), path: str(s.path, 80),
               via: str(s.via, 16), raw: str(s.raw, 400), line: str(s.line, 300), wx: Object.keys(wx).length ? wx : undefined,
               killed: num(s.killed) ?? undefined, msg: num(s.msg) ?? undefined, seen: num(s.seen) ?? 0, age: num(s.age) ?? 0,
-              count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail });
+              count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail, ...(num(s.snr) != null ? { snr: num(s.snr)! } : {}) });
   }
   const messages = Array.isArray(d.messages) ? d.messages.slice(-60).map((m: any) => ({ age: num(m?.age) ?? 0, from: str(m?.from, 16), to: str(m?.to, 12), text: str(m?.text, 200), kind: str(m?.kind, 10), id: str(m?.id, 8) || undefined })) : [];
   return { baud: num(d.baud) ?? 1200, frames: num(d.frames) ?? 0, repaired: num(d.repaired) ?? 0, dupes: num(d.dupes) ?? 0, stations: st, messages };
@@ -379,7 +381,8 @@ export function aprsRows(l: AprsList, rx: LatLon | null): string {
   return l.stations.map((s) => {
     const rb = rx && s.lat != null && s.lon != null ? rangeBearing(rx, s.lat, s.lon) : null;
     const second = [s.symName, s.comment || s.status].filter(Boolean).map((x) => esc(x)).join(' · ');
-    const where = rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km <span class="brg">${compass8(rb.brg)}</span>` : s.lat != null ? '' : '<span class="dim">no position</span>';
+    const where = snrChipHtml('aprs', s.snr)   // ★ beta96 its last frame's SNR (IQ only)
+      + (rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km <span class="brg">${compass8(rb.brg)}</span>` : s.lat != null ? '' : '<span class="dim">no position</span>');
     const sp = s.speed != null && s.speed >= 2 ? `${Math.round(s.speed)} km/h` : s.wx?.tempC != null ? `${s.wx.tempC.toFixed(1)} °C` : '';
     return `<div class="trkRow${s.lat == null ? ' nopos' : ''}" role="button" tabindex="0" data-key="${esc(s.key)}">`
       + `<span class="id"><b><i class="sw" style="background:${aprsColour(s)}"></i>${esc(aprsName(s))}</b><small>${second || esc(s.kind)}</small></span>`

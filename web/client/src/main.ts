@@ -16407,7 +16407,7 @@ function renderAprs() {
     const line = (st.line || '').replace(/^[^·]*·\s*/, '');
     return `<div class="ar${st.lat == null ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(st.key)}" title="${escapeHtml(st.raw || '')}">`
       + `<span class="c"><i style="background:${aprsColourOf(st)}"></i>${escapeHtml(st.name || st.from)}</span><span class="l">${escapeHtml(line || st.kind)}</span>`
-      + `<span class="a">${rb ? rb + ' km · ' : ''}${escapeHtml(aprsAgo(st.seen))}</span></div>`;
+      + `<span class="a">${snrChipHtml('aprs', st.snr)}${rb ? rb + ' km · ' : ''}${escapeHtml(aprsAgo(st.seen))}</span></div>`;   // ★ beta96 SNR chip
   }).join('');
   for (const el of Array.from(rows.querySelectorAll('.ar')) as HTMLElement[]) {
     el.onclick = () => aprsMapOpen(el.dataset.key || '');

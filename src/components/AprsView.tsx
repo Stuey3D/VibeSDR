@@ -14,6 +14,7 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, t
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { aprsLogTime, type AprsBoxRow } from '../services/tracks';
+import { SnrChip } from './SnrChip';
 import { packetFrameHead, packetHexGrouped, type PacketFrame } from '../services/packet';   // ★ V12 the frame log
 
 export interface AprsViewProps {
@@ -67,6 +68,8 @@ export default function AprsView({ rows, messages, log, baud, frames = [], idle,
             <View style={s.line}>
               <View style={[s.sw, { backgroundColor: r.colour }]} />
               <Text style={[s.cell, s.call, { color: tk.accent }]} numberOfLines={1}>{r.call}</Text>
+              {/* ★ beta96 the last frame's SNR, coloured by its margin over APRS's threshold */}
+              <SnrChip mode="aprs" db={r.snr} />
               <Text style={[s.cell, s.right, { color: tk.muted }]} numberOfLines={1}>{r.right}</Text>
             </View>
             <Text style={[s.tx, { color: tk.value }]} numberOfLines={2}>{r.line}</Text>

@@ -31,6 +31,7 @@ const typical: Record<SnrMode, { good: number; edge: number; some: number }> = {
   m10: { good: 12, edge: 2, some: 5 },
   m20: { good: 10, edge: 1, some: 4 },
   ism: { good: 25, edge: 7, some: 10 },
+  aprs: { good: 15, edge: 7, some: 10 },
   wspr: { good: -18, edge: -27, some: -24 },
   jtty: { good: -6, edge: -14, some: -11 },
   lora7: { good: -2, edge: -8, some: -5.5 },      // Pi 500 recordings 10-27: −12.8 … 0 dB (below the noise, as LoRa is)

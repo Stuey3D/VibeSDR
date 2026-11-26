@@ -170,6 +170,14 @@ const pk = app.aprsPacketSanitise({ key: 'M0ABC-9', from: 'M0ABC-9', kind: 'posi
 eq('APRS packet sanitised', pk, { key: 'M0ABC-9', from: 'M0ABC-9', kind: 'position', line: 'M0ABC-9 · car', raw: 'r', lat: 50.96, lon: -1.34, to: undefined, text: undefined });
 eq('APRS packet without a key', app.aprsPacketSanitise({ from: 'X' }), null);
 const trails = new Map<string, [number, number][]>([['M0ABC-9', [[50.95, -1.35]]]]);
+// ★★ beta96 a station's last frame's SNR (IQ only): read alike, the same chip on the map list, the box and the web
+{ const d2 = { ...aprsData, stations: (aprsData as any).stations.map((x: any, i: number) => (i === 0 ? { ...x, snr: 11.6 } : x)) };
+  const a2 = app.aprsSanitise(d2)!, w2 = web.aprsSanitise(d2)!;
+  ok('APRS SNR read alike', a2.stations[0].snr === 11.6 && w2.stations[0].snr === 11.6 && a2.stations[1]?.snr === undefined);
+  const r2 = app.aprsListRows(a2, rx);
+  ok('APRS map row carries the chip', r2.some((r) => r.snr === 11.6 && r.snrMode === 'aprs') && r2.filter((r) => r.snrMode).length === 1);
+  ok('APRS web row has the same 12 dB chip', web.aprsRows(w2, rx).includes('>12 dB</span>') && (web.aprsRows(w2, rx).match(/snrChip/g) || []).length === 1);
+  ok('APRS box row carries it', app.aprsBoxRows(a2, rx)[0].snr === 11.6); }
 const copy = app.aprsSanitise(aprsData)!;
 eq('APRS packet moves its station', app.aprsApplyPacket(copy, trails, pk), true);
 eq('… to the new position, heard now', [copy.stations[0].lat, copy.stations[0].lon, copy.stations[0].seen], [50.96, -1.34, 0]);

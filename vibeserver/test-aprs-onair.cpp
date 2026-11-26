@@ -138,7 +138,8 @@ static std::string field(const std::string& j, const char* name) {
 }
 
 /** The packets (by number) a run's JSON announced. */
-struct Heard { std::set<int> got; int wrong = 0; int frames = 0; };
+struct Heard { std::set<int> got; int wrong = 0; int frames = 0; std::vector<float> snr;   // ★ beta96 the packets' reported SNR
+               float med() const { if (snr.empty()) return -99; auto v = snr; std::sort(v.begin(), v.end()); return v[v.size() / 2]; } };
 static void noteJson(const std::string& j, Heard& h) {
     if (j.find("\"type\":\"aprs_frame\"") != std::string::npos) {
         ++h.frames;
@@ -156,6 +157,8 @@ static void noteJson(const std::string& j, Heard& h) {
     const size_t p = j.find("on-air test #");
     if (p == std::string::npos) { ++h.wrong; return; }
     h.got.insert(std::atoi(j.c_str() + p + 13));
+    const size_t q = j.find("\"snr\":");
+    if (q != std::string::npos) h.snr.push_back(float(std::atof(j.c_str() + q + 6)));
 }
 
 /** The server's chain: RxPipeline NFM → audio (+ channel IQ, + ★ beta92 the decoder tap) → Run AUTO — several decoders
@@ -456,8 +459,9 @@ int main(int argc, char** argv) {
                     const int w = M.pipe.wrong + M.iq.wrong + M.audio.wrong;
                     xs.push_back(cnr); yb.push_back(int(M.pipe.got.size())); yi.push_back(int(M.iq.got.size())); ya.push_back(int(M.audio.got.size()));
                     totB += yb.back(); totI += yi.back(); totA += ya.back(); totW += w; totF += M.pipe.frames;
-                    std::printf("  dev %.1fk err %+5.0f TX %-8s CNR %4.1f   both %3d  iq %3d  aud %3d  wrong %d\n", s.dev / 1000, s.err,
-                                tilt > 0 ? "pre-emph" : tilt < 0 ? "de-emph" : "flat", cnr, yb.back(), yi.back(), ya.back(), w);
+                    std::printf("  dev %.1fk err %+5.0f TX %-8s CNR %4.1f   both %3d  iq %3d  aud %3d  wrong %d   reported SNR iq %.1f both %.1f aud %s\n", s.dev / 1000, s.err,
+                                tilt > 0 ? "pre-emph" : tilt < 0 ? "de-emph" : "flat", cnr, yb.back(), yi.back(), ya.back(), w, M.iq.med(), M.pipe.med(),
+                                M.audio.snr.empty() ? "none" : "SOME (wrong)");
                     std::fflush(stdout);
                 }
                 auto half = [&](const std::vector<int>& y) {
@@ -734,6 +738,19 @@ int main(int argc, char** argv) {
             }
             check(frames == 0, "20 minutes of noise into the IQ receiver + 9600: " + std::to_string(frames) + " frames");
             check(afcMax < 500, "…and the AFC stayed home in it (at most " + std::to_string(int(afcMax)) + " Hz off; it moves on a carrier only)");
+        }
+    }
+    {   // ★★ beta96 THE PACKET'S SNR (docs/v12/MESSAGE-SNR.md): the carrier over the floor in the widest IQ filter. The
+        //    --curve run (flat, ±3 kHz) read it CNR + 1.3 dB at 10–14 dB and the 50 % point (CNR 3.6) at ~6 dB; an
+        //    audio-only run claims nothing.
+        std::printf("── the packet SNR (IQ: carrier over the widest filter's floor; audio: none) ──\n");
+        for (double cnr : { 6.0, 12.0 }) {
+            Cfg c; c.cnrDb = cnr; c.devHz = 3000; c.tiltDb = 0; c.packets = 10; c.seed = 77;
+            const double fs = 240000, off = 37000;
+            const Multi M = viaPipelineAll(c, makeIq(c, fs, off), fs, off);
+            std::printf("   CNR %.0f dB: IQ %zu packets, reported %.1f dB; audio %zu packets, %zu SNRs\n", cnr, M.iq.got.size(), M.iq.med(), M.audio.got.size(), M.audio.snr.size());
+            check(M.iq.snr.size() >= 5 && std::fabs(M.iq.med() - float(cnr + 1.5)) <= 2.0f, "IQ packets at CNR " + std::to_string(int(cnr)) + " dB report " + std::to_string(M.iq.med()) + " dB");
+            check(M.audio.snr.empty(), "audio-only packets claim no SNR");
         }
     }
     std::printf("   (%.1f s)\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
