@@ -42,9 +42,15 @@ static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, do
     for (size_t i = 0; i < mono.size(); i += 960) d.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
     std::printf("%s\n", out.c_str());
     std::fprintf(stderr, "── %.1f s, %ld chars, resyncs %lu\n", frames / 48000.0, chars, d.resyncs());
-    if (const vibe::NavtexRx* n = d.navtex())
+    if (const vibe::NavtexRx* n = d.navtex()) {
         std::fprintf(stderr, "── NAVTEX: %lu clean, %lu repaired, %lu lost; %s polarity; AFC %+.1f Hz\n", n->total.clean,
                      n->total.repaired, n->total.failed, n->invertedNow() ? "inverted" : "normal", n->afcOffsetHz());
+        // ★ beta96 (display only): the split by the two copies, and the SNR in the 100 Hz bit bandwidth
+        double sg = 0, nz = 0;
+        std::fprintf(stderr, "── NAVTEX beta96: %lu both copies agreed, %lu copies disagreed", n->total.agreed, n->total.disagreed);
+        if (const_cast<vibe::NavtexRx*>(n)->snrOf(n->total, sg, nz)) std::fprintf(stderr, "; SNR %.1f dB (signal %.1f dBFS, noise %.1f dBFS in 100 Hz)", sg - nz, sg, nz);
+        std::fprintf(stderr, "\n");
+    }
     else std::fprintf(stderr, "── RTTY AFC %+.1f Hz\n", d.afcOffsetHz());
     return 0;
 }
