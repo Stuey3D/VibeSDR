@@ -273,6 +273,42 @@ int main(int argc, char** argv) {
         m.write({}, {}, T, true); m.read(T, 0, nullptr, &ml);
         CHECK(ml == T, "the memory table (the app's one radio) carries the stamp too");
     }
+    // ── 12. ★★★ beta96 WHICH RADIOS HEARD IT (the maps' OTHER RADIOS switch) and "first" (THIS SESSION) ──
+    {
+        std::printf("── 12. radios + first ──\n");
+        const std::string d = tmpDir();
+        Table t; t.setDir(d);
+        vibe::logradio::setMine("aaaa0001");
+        t.write({ adsb(0x111111, "ONE", "", T, 51, -1), adsb(0x222222, "TWO", "", T, 52, -1) }, {}, T);
+        vibe::logradio::setMine("bbbb0002");
+        t.write({ adsb(0x222222, "TWO", "", T + 5000, 52.1, -1), dl(kVdl2, 0x333333, "", "THREE", T + 5000) }, {}, T + 5000);
+        t.write({ adsb(0x444444, "FEED", "", T + 6000, 53, -1) }, {}, T + 6000, false, "feed");   // ★ a feed: its own id
+        vibe::logradio::setMine("");
+        t.write({ adsb(0x555555, "NOID", "", T + 6000, 54, -1) }, {}, T + 6000);                  // ★ no id: untagged
+        const auto v = t.read(T + 10000, 0);
+        const auto reg = t.radioRegistry();
+        CHECK(reg.size() == 3 && reg[0] == "aaaa0001" && reg[1] == "bbbb0002" && reg[2] == "feed", "the registry beside the file: %zu", reg.size());
+        const Row* a1 = find(v, 0x111111); const Row* a2 = find(v, 0x222222); const Row* a3 = find(v, 0x333333);
+        const Row* a4 = find(v, 0x444444); const Row* a5 = find(v, 0x555555);
+        CHECK(a1 && a1->radios == 1u, "heard by the first radio only (%u)", a1 ? a1->radios : 99);
+        CHECK(a2 && a2->radios == 3u, "heard by both: one row, both bits (%u)", a2 ? a2->radios : 99);
+        CHECK(a3 && a3->radios == 2u, "the second radio's VDL2 (%u)", a3 ? a3->radios : 99);
+        CHECK(a4 && a4->radios == 4u, "the feed's own bit (%u)", a4 ? a4->radios : 99);
+        CHECK(a5 && a5->radios == 0u, "no id: untagged (%u)", a5 ? a5->radios : 99);
+        const std::string j = toJson(v, {}, T + 10000, nullptr, nullptr, -1, false, nullptr, reg);
+        CHECK(j.find("\"key\":\"222222\"") != std::string::npos && j.find("\"radios\":[\"aaaa0001\",\"bbbb0002\"]") != std::string::npos, "JSON: both radios named");
+        CHECK(j.find("\"radios\":[\"feed\"]") != std::string::npos, "JSON: the feed named");
+        { const size_t at = j.find("\"key\":\"555555\""); const size_t end = j.find('}', at);
+          CHECK(at != std::string::npos && j.substr(at, end - at).find("radios") == std::string::npos, "JSON: an untagged row has no radios"); }
+        { const size_t at = j.find("\"key\":\"222222\""); const size_t f = j.find("\"first\":", at);
+          CHECK(f != std::string::npos && std::atoi(j.c_str() + f + 8) == 10, "JSON: first = 10 s since the first radio heard it (%d)", f != std::string::npos ? std::atoi(j.c_str() + f + 8) : -1); }
+        CHECK(toJson(v, {}, T + 10000).find("\"radios\"") == std::string::npos, "no registry given: no radios (as before)");
+        // a record an older build wrote (radios bytes zero) reads as unknown
+        Rec old = toRec(*a1); std::memset(&old.radios, 0, sizeof old.radios);
+        CHECK(fromRec(old).radios == 0, "an older record: unknown");
+        CHECK(sizeof(Rec) <= kRecSize, "the record still fits %u bytes (%zu)", kRecSize, sizeof(Rec));
+        t.reset(); ::unlink((d + "/radios.idx").c_str()); ::rmdir(d.c_str());
+    }
     std::printf("test-aircraft-share: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

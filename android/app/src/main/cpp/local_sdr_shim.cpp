@@ -31237,7 +31237,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     // ★★ V12 beta91 the ADS-B aircraft data for EVERY row — a VDL2 / ACARS / HFDL-only aircraft's type,
                     //    operator, logo, country (vibe_aircraft_info.h: a cache read here; the lookups on its own
                     //    decoder-priority thread, never this one)
-                    vibeavinfo::extraFn());
+                    vibeavinfo::extraFn(),
+                    vibeavshare::table().radioRegistry());   // ★★★ beta96 each row's "radios" (the maps' OTHER RADIOS switch)
             }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
@@ -47899,6 +47900,11 @@ static std::string vsTunableJson() {
         // ★★★ beta96 the band the sweep covers (the AIR & SEA map's TUNE list: "VOR / ILS scan · 108.00–117.95 MHz")
         { char e[64]; std::snprintf(e, sizeof e, ",\"vormapLo\":%lld,\"vormapHi\":%lld", (long long)vibevormap::kFirstChanHz, (long long)vibevormap::kLastChanHz); j += e; }
     }
+    /* ★★★ beta96 THE MAPS' "OTHER RADIOS ON THIS SERVER" switch (docs/v12/MAP-SHARED.md): this radio's id (the tag its
+     *  decodes carry in the shared stores — vibe_log_radio.h) and how many radios the machine has. Absent = no id (the
+     *  Android app's own radio, the front door): the clients draw no switch. */
+    { const std::string me = vibe::logradio::mine();
+      if (!me.empty()) j += ",\"radioId\":\"" + me + "\",\"radioCount\":" + std::to_string(vibe::logradio::machineRadios().size()); }
     /* ★★ AIS (V12): offered, or shown DISABLED with its reason — and NOT AT ALL where the radio does not reach 162 MHz
      *  (an HF-only radio, an Icom: AGENTS.md; the HF+ reaches it and is offered since 2026-11-24). ★ APRS (V12) is a listener's decoder on their NFM/USB audio
      *  ("aprs": false only where the owner switched it off; absent on an older server, so no button there). */
