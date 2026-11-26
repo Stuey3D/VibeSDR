@@ -80,8 +80,9 @@ await session('snd', CLIP, 403005000, 96100000, 'wfm', async ({ ev, send, shot, 
   await ev(`document.getElementById('mMode')?.click()`);
   await sleep(700);
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
-  ok(/\bSONDES\b/.test(opts || ''), `the demodulator menu offers SONDES: ${opts}`);
-  await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SONDES'); b && b.click(); return !!b; })()`);
+  // ★★★ beta96 ONE AIR & SEA LIVE key in the mode menu (menu consolidation, b96-mapchat): last used = SONDES → it lands there
+  ok(/AIR & SEA LIVE/.test(opts || ''), `the demodulator menu offers AIR & SEA LIVE (SONDES on its TUNE list): ${opts}`);
+  await ev(`localStorage.setItem('vibesdr.airSeaLast', 'sd'); document.getElementById('mModeAirSea')?.click(); true`);
   ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'the sondes view opens');
   ok(await until(`/AVIATION & MARITIME · RADIOSONDES/.test(document.querySelector('.trkView:not([hidden]) .ttl')?.textContent || '')`, 3000), '★ beta96 stage 8: the AIR & SEA map, SONDES live (its title says RADIOSONDES)');
   ok(await until(`document.querySelector('.trkView:not([hidden]) .exit')?.textContent === 'EXIT SONDES'`, 3000), 'EXIT SONDES on the map');

@@ -79,8 +79,9 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   await ev(`document.getElementById('mMode')?.click()`);
   await sleep(700);
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
-  ok(/\bDATALINK\b/.test(opts || ''), `the demodulator menu offers DATALINK: ${opts}`);
-  await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'DATALINK'); b && b.click(); return !!b; })()`);
+  // ★★★ beta96 ONE AIR & SEA LIVE key in the mode menu (menu consolidation, b96-mapchat): last used = DATALINK → it lands there
+  ok(/AIR & SEA LIVE/.test(opts || ''), `the demodulator menu offers AIR & SEA LIVE (DATALINK on its TUNE list): ${opts}`);
+  await ev(`localStorage.setItem('vibesdr.airSeaLast', 'av'); document.getElementById('mModeAirSea')?.click(); true`);
   ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'the datalink view opens');
   // ★ the server lands on the first band (ACARS) — pick VDL2, where the clip's aircraft are
   ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) button')].some(b => b.textContent.trim() === 'VDL2')`, 8000), 'the band control offers VDL2');
