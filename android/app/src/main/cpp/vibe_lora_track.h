@@ -158,6 +158,7 @@ public:
             Text x; x.t = t; x.net = m.proto; x.node = m.node; x.text = m.text; x.channel = m.channel;
             x.from = (m.proto == "meshcore" || amateur(m.proto)) ? m.from : (r.longName.empty() ? m.node : r.longName);
             x.freq = m.freqHz;
+            x.snr = m.snrDb; x.sf = m.sf;
             msgs_.push_back(x);
             while (msgs_.size() > kMaxMsgs) msgs_.pop_front();
             r.msgs.push_back(x);
@@ -217,13 +218,15 @@ public:
             if (o.size() > 1) o += ',';
             o += "{\"ago\":" + f1(std::max(0.0, t - it->t), 0) + ",\"net\":\"" + jesc(it->net) + "\",\"from\":\"" + jesc(it->from)
                + "\",\"node\":\"" + jesc(it->node) + "\",\"ch\":\"" + jesc(it->channel) + "\",\"freq\":" + f1(it->freq, 0)
-               + ",\"text\":\"" + jesc(it->text) + "\"}";
+               + snrJson(*it) + ",\"text\":\"" + jesc(it->text) + "\"}";
         }
         return o + "]";
     }
 
 private:
-    struct Text { double t = 0; std::string net, node, from, text, channel; double freq = 0; };
+    struct Text { double t = 0; std::string net, node, from, text, channel; double freq = 0; float snr = NAN; int sf = 0; };   // ★ beta96 snr/sf: the frame's (Frame::snrDb, LoRa's in-band definition)
+    /** ★ beta96 a message's SNR and spreading factor (the colour's scale is per SF): ",\"snr\":-7.5,\"sf\":9" or "". */
+    static std::string snrJson(const Text& x) { return x.snr == x.snr && x.sf >= 5 ? ",\"snr\":" + f1(x.snr, 1) + ",\"sf\":" + std::to_string(x.sf) : std::string(); }
     struct Row {
         uint64_t id = 0; std::string proto, node;
         double first = 0, last = 0, freq = 0; float snr = 0, level = -99; int sf = 0, cr = 0; double bw = 0; uint8_t sync = 0;
@@ -334,7 +337,7 @@ private:
             for (size_t i = r.msgs.size(); i-- > 0;) {
                 const Text& x = r.msgs[i];
                 if (i + 1 != r.msgs.size()) o += ',';
-                o += "{\"ago\":" + f1(std::max(0.0, t - x.t), 0) + ",\"from\":\"" + jesc(x.from) + "\",\"text\":\"" + jesc(x.text) + "\"}";
+                o += "{\"ago\":" + f1(std::max(0.0, t - x.t), 0) + ",\"from\":\"" + jesc(x.from) + "\"" + snrJson(x) + ",\"text\":\"" + jesc(x.text) + "\"}";
             }
             o += "]";
         }

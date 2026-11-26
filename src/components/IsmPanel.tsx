@@ -32,6 +32,8 @@ import { ISM_KINDS, ismAged, ismAgo, ismBandLabel, ismBandText, ismEmptyText, is
          ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, ismUnkRows, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
          type IsmUnits, type IsmBand, ISM_PREF_KEY, ismMilesSet } from '../services/ism';
 import IsmBandSheet from './IsmBandSheet';
+import { SnrChip } from './SnrChip';   // ★ beta96 the colour-coded SNR per message
+import { ismSnrMode, loraSnrMode } from '../utils/snrColour';
 
 const ISM_MAX_W = 760;
 const PREF_KEY = ISM_PREF_KEY;   // ★★ beta96 shared with the mesh maps (ismMilesSet)
@@ -222,8 +224,7 @@ export default function IsmPanel(p: IsmPanelProps) {
               <View style={s.txtCol}>
                 <Text style={s.txt}>{u.text}</Text>
               </View>
-              <Text style={[s.snr, u.snr != null && { color: u.snr >= 20 ? tk.good : u.snr >= 10 ? tk.warn : tk.bad }]}
-                    numberOfLines={1}>{u.snr != null ? `${Math.round(u.snr)} dB` : ''}</Text>
+              <View style={s.snrCol}><SnrChip mode="ism" db={u.snr} /></View>
             </View>
           )) : <Text style={s.note}>{ismEmptyText(filter)}</Text>
           ) : filter === 'msgs' ? (msgLines.length ? msgLines.map((m, i) => (
@@ -231,6 +232,8 @@ export default function IsmPanel(p: IsmPanelProps) {
               <Text style={s.ago} numberOfLines={1}>{m.ago}</Text>
               <Text style={s.rowBand} numberOfLines={1}>{m.band}</Text>
               <View style={s.txtCol}><Text style={s.txt}>{m.text}</Text></View>
+              {/* ★ beta96 the frame's SNR, coloured by its margin over that spreading factor's threshold */}
+              <View style={s.snrCol}>{loraSnrMode(m.sf) ? <SnrChip mode={loraSnrMode(m.sf)!} db={m.snr} /> : null}</View>
             </View>
           )) : <Text style={s.note}>{ismEmptyText(filter)}</Text>
           ) : rows.length ? rows.map((d, i) => {
@@ -255,10 +258,10 @@ export default function IsmPanel(p: IsmPanelProps) {
                   ) : <Text style={s.txt}>{line}</Text>}
                   {open && detail.map((t, k) => <Text key={k} style={s.detail}>{t}</Text>)}
                 </View>
-                {/* ★ beta92 (Stuart 11-23): each reading's SNR, measured per burst by the server — blank where not known */}
-                {/* ★ coloured by strength (Stuart: "coloured red amber green"): ≥ 20 dB green · 10-19 amber · under 10 red */}
-                <Text style={[s.snr, d.snr > 0 && { color: d.snr >= 20 ? tk.good : d.snr >= 10 ? tk.warn : tk.bad }]}
-                      numberOfLines={1}>{d.snr > 0 ? `${Math.round(d.snr)} dB` : ''}</Text>
+                {/* ★ beta92 (Stuart 11-23): each reading's SNR, measured per burst by the server — blank where not known.
+                     ★★ beta96 the shared chip (src/utils/snrColour.ts): coloured by the margin over THIS row's threshold — a
+                     sensor's burst gate, a LoRa node's spreading factor (a LoRa SNR below zero is shown, never hidden) */}
+                <View style={s.snrCol}>{ismSnrMode(d.kind, d.sf) ? <SnrChip mode={ismSnrMode(d.kind, d.sf)!} db={LORA_KINDS.includes(d.kind) || d.snr > 0 ? d.snr : undefined} /> : null}</View>
               </>
             );
             // ★ a meter row opens its detail on a press; every other row is read, not pressed
@@ -326,6 +329,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   txt:     { fontFamily: F, fontSize: 12, lineHeight: 17, color: T.value },
   txtCol:  { flex: 1, minWidth: 0 },
   snr:     { width: 40, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
+  snrCol:  { width: 44, alignItems: 'flex-end', justifyContent: 'flex-start', paddingTop: 2 },   // ★ beta96 the chip's column
   posLink: { textDecorationLine: 'underline' },
   detail:  { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted, marginTop: 2 },
   note:    { fontFamily: F, fontSize: 13, color: T.muted, padding: 12, lineHeight: 18 },

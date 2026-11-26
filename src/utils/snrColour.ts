@@ -75,10 +75,30 @@ export const SNR_SCALES = {
   dfm: { thr: 5, what: 'sonde power over the floor in a 10 kHz box', src: 'test-sondes-types: 0 at 4 dB, 12 of 15 at 6 (reported 6.0)' },
   m10: { thr: 1.5, what: 'sonde power over the floor in a 20 kHz box', src: 'test-sondes-types: 0 at 10 dB, 14 of 19 at 12 (reported 2.2)' },
   m20: { thr: 0, what: 'sonde power over the floor in a 20 kHz box', src: 'test-sondes-types: 1 at 10 dB (−1.4), 16 of 19 at 12 (0.6)' },
+  /** ISM bursts (rtl_433-style sensors, meters, the unidentified): the burst's 95th-percentile envelope over the band's
+   *  median before it (vibe_ism.h Burst). A burst is only sliced from 6.5 dB (kMinBurstSnrDb; noise alone reads ~4.5). */
+  ism: { thr: 6.5, what: 'burst over the band’s noise just before it', src: 'vibe_ism.h kMinBurstSnrDb: the decoder slices nothing under 6.5 dB' },
+  /** LoRa (Meshtastic, MeshCore, LoRaWAN, LoRa-APRS, MeshCom, FANET): per spreading factor. test-lora shows the reported SNR
+   *  within 0.5 dB of the transmitted; its 50 % points sit ~1.5 dB under Semtech's datasheet figures. */
+  lora7: { thr: -9, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF7: 37 % at −8.5 dB, 82 % at −7.5 (Semtech −7.5)' },
+  lora8: { thr: -11.5, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF8: 40 % at −11 dB, 82 % at −10 (Semtech −10)' },
+  lora9: { thr: -14, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF9: 67 % at −13.5 dB (Semtech −12.5)' },
+  lora10: { thr: -16.5, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF10: 75 % at −16 dB (Semtech −15)' },
+  lora11: { thr: -19, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF11: 37 % at −19.5 dB, 82 % at −18.5 (Semtech −17.5)' },
+  lora12: { thr: -21.5, signed: true, what: 'LoRa SNR in the bandwidth (the chips’ own definition, from the preamble)', src: 'test-lora SF12: 60 % at −22 dB (Semtech −20)' },
 } satisfies Record<string, SnrScale>;
 export type SnrMode = keyof typeof SNR_SCALES;
 
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/** ★ The LoRa scale for a spreading factor (7–12), or null (unknown SF: no colour, never a guessed one). */
+export function loraSnrMode(sf: unknown): SnrMode | null {
+  return num(sf) && sf >= 7 && sf <= 12 && Math.round(sf) === sf ? (`lora${sf}` as SnrMode) : null;
+}
+/** ★ An ISM-mode row's scale: a LoRa kind by its SF (null without one), everything else the burst scale. */
+export function ismSnrMode(kind: string | undefined, sf?: unknown, loraKinds: readonly string[] = ISM_LORA_KINDS): SnrMode | null {
+  return kind && loraKinds.includes(kind) ? loraSnrMode(sf) : 'ism';
+}
+const ISM_LORA_KINDS = ['meshtastic', 'meshcore', 'lorawan', 'lora', 'loraaprs', 'meshcom', 'fanet'];
 /** A mode key from the wire, or null (an unknown key draws nothing — never a guessed scale). */
 export function snrModeOf(v: unknown): SnrMode | null {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(SNR_SCALES, v) ? (v as SnrMode) : null;

@@ -7,6 +7,7 @@
  * ★ The server's `line` is metric with PSI for tyres. A listener who picks mph or kPa/bar gets the line rebuilt here from
  *   the numeric fields (ismLine) — one rule, the same order as the server's readable(). */
 
+import { snrChipHtml, ismSnrMode, loraSnrMode } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml,
          type MeshKnown, type MeshRoute } from '../../../src/utils/meshRoute';
 
@@ -38,7 +39,9 @@ export interface IsmDevice {
   relays?: string[]; direct?: number;
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
-export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
+export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number;
+  /** ★ beta96 the frame's SNR (dB, LoRa's in-band definition) and spreading factor — the chip's scale is per SF */
+  snr?: number; sf?: number }
 export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number;
   /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
   found: number; foundKnown: number }
@@ -107,7 +110,8 @@ export function ismSanitise(msg: any): IsmReport | null {
     });
   }
   const msgsOf = (a: any): IsmMsg[] => (Array.isArray(a) ? a.slice(0, 60) : []).filter((m: any) => m && typeof m.text === 'string')
-    .map((m: any) => ({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '', net: str(m.net, 12), node: str(m.node, 16), ch: str(m.ch, 20), freq: num(m.freq) }));
+    .map((m: any) => ({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '', net: str(m.net, 12), node: str(m.node, 16), ch: str(m.ch, 20), freq: num(m.freq),
+      ...(num(m.snr) !== undefined && num(m.sf) !== undefined ? { snr: num(m.snr), sf: num(m.sf) } : {}) }));
   const lo = msg.lora && typeof msg.lora === 'object' ? msg.lora : null;
   return {
     type: 'ism', band: str(msg.band, 8), bandName: str(msg.bandName, 40), centre: num(msg.centre) ?? 0, custom: num(msg.custom),
@@ -174,7 +178,8 @@ function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n
   const lat = num(d.lat), lon = num(d.lon);
   const pos = lat !== undefined && lon !== undefined && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0);
   const msgs: IsmMsg[] = [];
-  for (const m of Array.isArray(d.msgs) ? d.msgs.slice(0, 5) : []) if (m && typeof m.text === 'string') msgs.push({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '' });
+  for (const m of Array.isArray(d.msgs) ? d.msgs.slice(0, 5) : []) if (m && typeof m.text === 'string') msgs.push({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '',
+    ...(num(m.snr) !== undefined && num(m.sf) !== undefined ? { snr: num(m.snr), sf: num(m.sf) } : {}) });
   return {
     node: str(d.node, 16), short: meshName(d.short, 8) || undefined, long: meshName(d.long, 40) || undefined, hw: str(d.hw, 40), role: str(d.role, 20), chan: str(d.chan, 20),
     net: str(d.net, 30), mtype: str(d.mtype, 24), what: str(d.what, 24), lat: pos ? lat : undefined, lon: pos ? lon : undefined,
@@ -429,8 +434,9 @@ export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey =
          // ★ beta92 (Stuart 11-23: "on ism is it possible to have a SNR readout?"): each reading's SNR, measured per burst
          //   by the server — blank where it is not known
          //   coloured by strength (Stuart: "coloured red amber green"): ≥ 20 dB green · 10-19 amber · under 10 red
-         + `<span class="ismSnr${d.snr <= 0 ? '' : d.snr >= 20 ? ' ok' : d.snr >= 10 ? ' warn' : ' bad'}" title="signal over the band's noise">`
-         + `${d.snr > 0 ? `${Math.round(d.snr)} dB` : ''}</span></div>`;
+         //   ★★ beta96 the shared chip (src/utils/snrColour.ts): the colour is the margin over THIS row's decode threshold —
+         //   a sensor's burst gate, a LoRa node's spreading factor (a LoRa SNR is often below zero: shown, never hidden)
+         + `<span class="ismSnr">${snrChipHtml(ismSnrMode(d.kind, d.sf, LORA_KINDS), LORA_KINDS.includes(d.kind) || d.snr > 0 ? d.snr : undefined)}</span></div>`;
   }).join('');
 }
 /** ★★ V12 (Stuart, 2026-11-01: "make the coordinates clickable so that you can see where they are on the map"): the
@@ -454,7 +460,8 @@ export function ismMsgsHtml(r: IsmReport, bands: IsmBand[] = []): string {
   const m = r.msgs ?? [];
   if (!m.length) return `<div class="ismEmpty">${esc(ismEmptyText('msgs'))}</div>`;
   return m.map((x) => `<div class="ismRow k-msg"><span class="ismAgo">${esc(ismAgo(x.ago))}</span><span class="ismBand">${esc(ismBandLabel(x.freq, bands))}</span><span class="ismTxt">`
-    + `${esc(ismNetName(x.net || ''))}${x.ch ? ' ' + esc(x.ch) : ''} · <b>${esc(x.from || x.node || '?')}</b>: ${esc(x.text)}</span></div>`).join('');
+    + `${esc(ismNetName(x.net || ''))}${x.ch ? ' ' + esc(x.ch) : ''} · <b>${esc(x.from || x.node || '?')}</b>: ${esc(x.text)}</span>`
+    + `<span class="ismSnr">${snrChipHtml(loraSnrMode(x.sf), x.snr)}</span></div>`).join('');   // ★ beta96 the frame's SNR chip
 }
 /** ★ beta94 UNIDENTIFIED: the steady carriers first (they explain a busy waterfall with nothing decoded), then the bursts
  *  nobody named, newest first, each described by its shape only. */
@@ -467,7 +474,7 @@ export function ismUnkHtml(r: IsmReport, bands: IsmBand[] = []): string {
     const tip = `${u.unit ? `shortest run ${Math.round(u.unit)} µs · ` : ''}${Math.round(u.snr)} dB over the noise`;
     rows.push(`<div class="ismRow k-unk" title="${esc(tip)}"><span class="ismAgo">${esc(ismAgo(u.ago))}</span><span class="ismBand">${esc(ismBandLabel(u.hz, bands))}</span>`
       + `<span class="ismTxt">${esc(ismUnkLine(u))}</span>`
-      + `<span class="ismSnr${u.snr >= 20 ? ' ok' : u.snr >= 10 ? ' warn' : ' bad'}" title="signal over the band's noise">${Math.round(u.snr)} dB</span></div>`);
+      + `<span class="ismSnr">${snrChipHtml('ism', u.snr)}</span></div>`);   // ★ beta96 the shared chip
   }
   return rows.join('');
 }
@@ -526,7 +533,7 @@ const CSS = `
 .ismAgo { flex: 0 0 4.6em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
 .ismBand { flex: 0 0 2.6em; text-align: right; color: rgba(255, 190, 40, 0.75); font-variant-numeric: tabular-nums; }
 .ismSnr { flex: 0 0 3.4em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
-.ismSnr.ok { color: #7dff9a; } .ismSnr.warn { color: #ffd479; } .ismSnr.bad { color: #ff8a7d; }
+.ismSnr .snrChip { margin-left: 0; }   /* ★ beta96 the shared chip (snrColour.ts) replaced the ok/warn/bad text colours */
 .ismTxt { flex: 1 1 auto; min-width: 0; }
 .ismEmpty { padding: 12px; color: rgba(255, 190, 40, 0.6); }
 .ismTap { cursor: pointer; }

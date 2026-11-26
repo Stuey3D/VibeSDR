@@ -179,6 +179,10 @@ int main() {
         std::string all; for (auto& r : mt.rowsJson(2)) all += r.second;
         ok(has(all, "\"lat\":48.205") && !has(all, "approx"), "an amateur station's position exact (public by design)");
         ok(has(mt.msgsJson(2), "\"from\":\"OE1KBC-12\"") && has(mt.msgsJson(2), "Servus aus Wien"), "the text in the public messages");
+        // ★ beta96 each message keeps its frame's SNR and spreading factor (the chip's colour is per SF)
+        ok(!has(mt.msgsJson(2), "\"sf\":"), "a message with no spreading factor (made by hand) carries no SNR — the colour needs the SF");
+        { Msg y = x; y.sf = 11; y.snrDb = -5.5f; y.text = "snr test"; MeshTable m2; m2.accept(y, 3, nullptr);
+          ok(has(m2.msgsJson(3), "\"snr\":-5.5,\"sf\":11"), "a message carries its frame's SNR + SF: " + m2.msgsJson(3).substr(0, 160)); }
         bool evOk = false; for (auto& e : ev) evOk |= e.kind == "meshmsg" && has(e.line, "MeshCom");
         ok(evOk, "the gallery's message line says MeshCom");
     }
