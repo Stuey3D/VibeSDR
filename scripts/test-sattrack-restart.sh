@@ -12,11 +12,12 @@ cd "$(dirname "$0")/.."
 B=${BUILD:-vibeserver/build}
 if [ -n "${SAN:-}" ]; then
   B="vibeserver/build-${SAN}-sattrack"
-  F="-fsanitize=${SAN} -fno-omit-frame-pointer -g -O1"
+  F="-fsanitize=${SAN} -fno-omit-frame-pointer -g -O1"; T0=$(mktemp -d /tmp/vs-sattrack-build-XXXXXX)
   LOCK=/Users/stuey3d/VibeSDR/.claude/build-lock.sh; [ -x "$LOCK" ] || LOCK=
   $LOCK nice -n 10 cmake -S vibeserver -B "$B" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="$F" -DCMAKE_C_FLAGS="$F" \
         -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=${SAN}" > /dev/null || exit 1
-  $LOCK nice -n 10 cmake --build "$B" -j6 --target test-sattrack-restart > "$B.build.log" 2>&1 || { tail -30 "$B.build.log"; exit 1; }
+  $LOCK nice -n 10 cmake --build "$B" -j6 --target test-sattrack-restart > "$T0/build.log" 2>&1 || { tail -30 "$T0/build.log"; exit 1; }
+  rm -rf "$T0"
   export ASAN_OPTIONS="detect_leaks=0:abort_on_error=0:halt_on_error=1:print_stacktrace=1"
   export TSAN_OPTIONS="halt_on_error=0:second_deadlock_stack=1:report_signal_unsafe=0"
 fi
