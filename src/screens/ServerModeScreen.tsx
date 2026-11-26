@@ -4978,7 +4978,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   skimOk={(k) => !isIcom && !bgOff.has(k)}
                   users={advanced ? maxUsers : 1} decoderMax={decoderMax}
                   adsbKeeps={landingAdsb && adsbKeep} keepName={mapKeepOn ? keepName(mapChosen, BG_ISM_WORDS) : ''}
-                  keepSat={mapKeepOn ? keepSatWords(mapChosen.join(','), true, BG_ISM_WORDS) : ''} problem={bgProblem} />
+                  keepSat={mapKeepOn ? keepSatWords(mapChosen.join(','), true, BG_ISM_WORDS) : ''} problem={bgProblem}
+                  satSingle={singleEff === 'sat'} />
               </View>
             )}
 

@@ -42,6 +42,8 @@ import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListena
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
 import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_PRIO_WHAT, satPassKey, satSchedKeyText, satSchedPrioText, satSchedRowText,
          type SatSchedEntry, type SatSchedSlot, type SatSessionKind } from '../services/satSchedule';
+import { SAT_SINGLE_ONLY, SAT_SINGLE_WHY, satHybridText, satSingleHead, satSingleLastText, satSinglePlanRows, satSingleSub,
+         type SatHybridInfo, type SatSingle } from '../services/satSingle';   // ★★★ beta96 single mode: satellites
 import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeGlyph, globeLayers, globeLandInk, globeArrowPath, globeLabels, satReadoutLayout, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
@@ -118,6 +120,10 @@ export interface SatellitePanelProps {
     onToggle: (norad: number, tx: number, aos: number) => void;
     onPrio: (key: string) => void;
   };
+  /** ★★★ beta96 SINGLE MODE: SATELLITES (services/satSingle.ts) — this listener WATCHES: no EXIT (the note in its place), no
+   *  picks, AUTO DOPPLER only during a transponder pass (their own VFO); the header, the line under it, the last pass, the
+   *  radio's timetable and GALLERY above the box. null / absent = an ordinary SATELLITE. */
+  watch?: { single: SatSingle | null; hybrid: SatHybridInfo | null; onGallery?: () => void } | null;
   /** ★ 1.9 the MAP key (a packet downlink, once a station with a position is heard) → the DIGI MODES map's APRS layer */
   mapOffered?: boolean;
   onMap?: () => void;
@@ -346,6 +352,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const [tlmAcrossNote, setTlmAcrossNote] = useState('');
   useEffect(() => { if (p.picked) setListOpen(false); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
+  // ★★★ beta96 the watch view's words, from the panel's own 1 s tick (the countdowns run here, not in the screen)
+  const wv = p.watch ? (() => {
+    const s1 = p.watch.single ? { ...p.watch.single, ...(p.watch.hybrid ? { hybrid: p.watch.hybrid } : {}) } : null;
+    return { head: satSingleHead(s1, now), sub: p.watch.hybrid ? satHybridText(p.watch.hybrid, now) : satSingleSub(s1, now),
+             last: satSingleLastText(s1), plan: satSinglePlanRows(s1, now) };
+  })() : null;
   const greyed = !p.cap.ok;
   const placeNeed = !!p.place?.need;          // ★★ beta94 no position on this phone's engine: the prompt, not the timetable
   const [placeEdit, setPlaceEdit] = useState(false);
@@ -456,13 +468,16 @@ export default function SatellitePanel(p: SatellitePanelProps) {
         {!minimised && !!p.mapOffered && !!p.onMap && (
           <DecoderKey label="MAP" onPress={p.onMap} accessibilityLabel="The stations heard through this satellite, on the DIGI MODES map" />
         )}
+        {(!p.watch || !!p.watch.hybrid) && (
         <DecoderKey label="AUTO DOPPLER" active={p.autoDoppler} disabled={greyed} onPress={p.onDoppler}
                     accessibilityLabel={greyed ? `Auto Doppler unavailable: ${p.cap.why}` : `Auto Doppler ${p.autoDoppler ? 'on' : 'off'}: keep the satellite centred for the whole pass`} />
+        )}
         {bigUseful && !minimised && (
           <DecoderKey label={big ? 'SMALL' : 'BIG'} active={big} onPress={() => setBigByHand(!big)}
                       accessibilityLabel={big ? 'Smaller box' : 'Bigger box'} />
         )}
-        <DecoderKey label="EXIT" onPress={p.onExit} accessibilityLabel="Leave SATELLITE (the Doppler lock and the decoder stop)" />
+        {p.watch ? <Text style={s.detail} accessibilityLabel={SAT_SINGLE_WHY}>{SAT_SINGLE_ONLY}</Text>
+          : <DecoderKey label="EXIT" onPress={p.onExit} accessibilityLabel="Leave SATELLITE (the Doppler lock and the decoder stop)" />}
         <DecoderKey label={minimised ? '□' : '−'} onPress={() => setMinimised((v) => !v)}
                     accessibilityLabel={minimised ? 'Restore' : 'Minimise'} />
       </DecoderHeader>
@@ -478,6 +493,22 @@ export default function SatellitePanel(p: SatellitePanelProps) {
         {/* ★★ beta96 the body is OPAQUE behind its text (decoderTextBacking): the waterfall's labels no longer read through it */}
         <ScrollView style={[big && showPic ? { height: bodyH } : { maxHeight: bodyH }, { backgroundColor: decoderTextBacking(tk), borderRadius: 6 }]}
                     contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
+          {/* ★★★ beta96 THE WATCH VIEW (single mode: satellites): the pass now / next with its countdown, what the radio does,
+               the last pass + GALLERY, and this receiver's timetable — never a dead screen between passes */}
+          {!!wv && !!p.watch && (
+            <View style={s.box}>
+              <Text style={s.txt}>{wv.head}</Text>
+              {!!wv.sub && <Text style={s.detail}>{wv.sub}</Text>}
+              {!!wv.last && <Text style={s.detail}>{wv.last}</Text>}
+              {!!p.watch.onGallery && (
+                <View style={s.vbKey}>
+                  <DecoderKey label="GALLERY" onPress={p.watch.onGallery} accessibilityLabel="The pictures, packets and telemetry this receiver has kept" />
+                </View>
+              )}
+              {wv.plan.length > 0 && <Text style={s.detail}>THIS RECEIVER'S PASSES</Text>}
+              {wv.plan.map((r) => <Text key={r.key} style={[s.detail, r.live && s.up]} numberOfLines={1}>{r.text}</Text>)}
+            </View>
+          )}
           {!!sel && !!sat && !!tx && (
             <View style={s.box}>
               <View style={[satReadoutLayout(roW, big, GLOBE_SMALL_W) === 'beside' ? s.roSmall : s.ro, mine?.state === 'COAST' && s.coast]}
@@ -674,6 +705,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
             </View>
           )}
           {!!sync && <Text style={s.detail}>{sync}</Text>}
+          {!p.watch && <>
           <Pressable onPress={() => setListOpen((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: listOpen }}
                      style={s.sumRow}>
             <Text style={s.sum}>{`${listOpen ? '▾' : '▸'} ${p.picked ? 'ALL SATELLITES' : 'SATELLITES'}`}</Text>
@@ -786,6 +818,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               <Text style={s.detailNp}>min before it rises · this app session only</Text>
             </View>
           )}
+          </>}
           {/* ★★ beta94 Local Hardware: which position is in use, CHANGE / CLEAR (an entered one) */}
           {!!p.place && !!p.place.line && (
             <View style={s.leadRow}>

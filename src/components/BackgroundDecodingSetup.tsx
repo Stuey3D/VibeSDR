@@ -53,6 +53,8 @@ type Props = {
   keepSat?: string;
   /** The engine's sentence when the profiles would be refused ('' = good). */
   problem: string;
+  /** ★★★ beta96 the radio is Single mode: SATELLITES — its linear transponders are offered (nowhere else: a dead control) */
+  satSingle?: boolean;
 };
 
 const clone = (m: BgModel): BgModel => JSON.parse(JSON.stringify(m));
@@ -446,6 +448,26 @@ export default function BackgroundDecodingSetup(p: Props) {
             </View>
           );
         })}
+        {/* ★★★ beta96 SINGLE MODE: SATELLITES — linear transponders: for the pass every listener has their own VFO across the
+             passband with their own AUTO DOPPLER (the Setup page's spXpdr, the same words) */}
+        {!!p.satSingle && (caps.satXpdr ?? []).length > 0 && (<>
+          <Text style={[hint, { color: C.text }]}>Linear transponders {'—'} for the pass every listener gets their own VFO across the
+            passband, SSB or CW, with their own AUTO DOPPLER; at loss of signal everyone is back to watching.</Text>
+          {caps.satXpdr.map((d) => {
+            const on = model.sat.birds.some((b) => b.norad === d.norad && b.label === d.label);
+            return (
+              <View key={'x' + d.norad + ':' + d.label} style={[st.row, { justifyContent: 'space-between', paddingLeft: 12 }]}>
+                <Text style={{ color: model.sat.on ? C.text : C.textDim, fontFamily: F, fontSize: 13, flex: 1 }}>{d.name + ' \u00b7 ' + d.label + ' \u00b7 ' + d.what}</Text>
+                <Switch value={on} disabled={!model.sat.on}
+                  onValueChange={(v) => set((m) => {
+                    m.sat.birds = m.sat.birds.filter((b) => !(b.norad === d.norad && b.label === d.label));
+                    if (v) m.sat.birds.push({ norad: d.norad, label: d.label });
+                  })}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+            );
+          })}
+        </>)}
         {locked && <Text style={hint}>This radio{'’'}s range is locked, so passes are not followed on it in this version (a pass has to move the radio).</Text>}
       </>)}
     </View>

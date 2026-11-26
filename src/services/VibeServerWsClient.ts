@@ -3266,6 +3266,7 @@ export abstract class VibeServerWsClient {
       if (typeof msg.dabOnly === 'boolean') this.callbacks.onHwDabOnly?.(msg.dabOnly);
       // ★★ V12 THE ONLY MODE — likewise only when sent ("" none); an older server is read from its blocked modes
       if (typeof msg.onlyMode === 'string') this.callbacks.onHwOnlyMode?.(msg.onlyMode);
+      this.callbacks.onHwSingleMode?.(typeof msg.singleMode === 'string' ? msg.singleMode : '');   // ★★★ beta96 (absent = General)
       // ★ Same rule again: the server refuses, so the client must not offer. Absent = not locked,
       //   which is what every server before this one meant.
       this.callbacks.onHwGainLocked?.(msg.gainLocked === true);

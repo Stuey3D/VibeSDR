@@ -26,7 +26,9 @@ const mkSelect = (vals) => { const s = new El('select'); let v = ''; Object.defi
 const els = { bgProfiles: new El('div'), hwBg: new El('div'), bgOn: new El('input'), bgWait: mkSelect(['1', '2', '5', '10', '15', '30', '60']),
               hwSatPass: new El('div'), spOn: new El('input'), spMinEl: mkSelect(['10', '20', '30', '45']), spBirds: new El('div'), spLockedNote: new El('p'),
               // ★★★ beta94 the groups and their priority
-              spMeteor: new El('input'), spOrbcomm: new El('input'), spBothNote: new El('p'), spFirstRow: new El('label'), spFirst: mkSelect(['meteor', 'orbcomm']) };
+              spMeteor: new El('input'), spOrbcomm: new El('input'), spBothNote: new El('p'), spFirstRow: new El('label'), spFirst: mkSelect(['meteor', 'orbcomm']),
+              // ★★★ beta96 the linear transponders (Single mode: SATELLITES only)
+              spXpdrWrap: new El('div'), spXpdr: new El('div') };
 const document = { createElement: (t) => (t === 'select' ? mkSelect([]) : new El(t)) };
 const $ = (id) => els[id];
 const cfg = { serverUtcOffsetMin: 0 };
@@ -86,5 +88,15 @@ api.bgLoad({ driver: 'rtlsdr', mode: 'locked', bgDecode: JSON.stringify(BOTH) })
 ok(!els.spLockedNote.classList.contains('hide'), 'a locked range: the note says passes are not followed there');
 api.bgLoad({ driver: 'rtlsdr', mode: 'open', bgDecode: JSON.stringify(BOTH) });
 ok(els.spLockedNote.classList.contains('hide'), 'an open radio: no note');
+// ★★★ beta96 SINGLE MODE: SATELLITES — the linear transponders, drawn only on a SATELLITES radio; a tick stores norad + label
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 2400000, bgDecode: JSON.stringify({ on: false, satPasses: { on: true, minEl: 10, birds: [] } }) });
+ok(els.spXpdrWrap.classList.contains('hide') && els.spXpdr.all().filter((e) => e.tag === 'input').length === 0, 'General radio: no transponder rows (a control that only works on a SATELLITES radio is not drawn)');
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 2400000, singleMode: 'sat', bgDecode: JSON.stringify({ on: false, satPasses: { on: true, minEl: 10, birds: [] } }) });
+const xb = () => els.spXpdr.all().filter((e) => e.tag === 'input');
+ok(!els.spXpdrWrap.classList.contains('hide') && xb().length === 8, `SATELLITES radio: the transponders drawn (${xb().length})`);
+ok(/RS-44 · Transponder · 435\.610–435\.670 MHz/.test(els.spXpdr.text()), 'RS-44 named with its passband');
+xb()[0].checked = true; xb()[0].onchange();
+ok(JSON.stringify(api.sp().birds) === '[{"norad":44909,"label":"Transponder"}]', `a tick stores the transponder (${JSON.stringify(api.sp().birds)})`);
+ok(/"birds":\[\{"norad":44909,"label":"Transponder"\}\]/.test(api.bgCollect() || ''), 'saved inside satPasses');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

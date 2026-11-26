@@ -1085,6 +1085,8 @@ if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fa
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 SCHEDULE A PASS, the pure half: which key, the book, overlaps + PRIORITISE, the runner, degrade (satSchedule.ts)
 if TZ=UTC npx tsx scripts/test_sat_schedule.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 SINGLE MODE: SATELLITES, the pure half: who watches, the messages, the header / line / hybrid words, the timetable
+if TZ=UTC npx tsx scripts/test_sat_single.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta96 satellite box polish: no address on the globe, SMALL without words + the glyph, the readout layout, opaque text
 if npx tsx scripts/test_sat_layout.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SATELLITE IN LOCAL HARDWARE: the key / the position prompt / which position / nothing published (satPlace.ts)
@@ -2173,6 +2175,11 @@ fi
 printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 SINGLE MODE: SATELLITES end to end (fake rtl_tcp + VIBESERVER_SAT_TEST_CLOCK): watch-only before AOS, the
+#     linear-transponder HYBRID at AOS (own VFO + AUTO DOPPLER each, independent tuning, outside refused, a joiner), LOS back.
+printf '\n\033[1m── Single mode: SATELLITES (watch only + the transponder hybrid) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-sat-single.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta94 ORBCOMM: another ORBCOMM pick KEEPS the whole-band decoder (no second attach, its counts run on), a joiner who
 #     opens SATELLITE is told the room's pick and joins the same run; then the web box following the decoder after the pick's
 #     LOS (headless Edge, --mute-audio). The follow on a real synthetic pass is test-orbcomm-run §1b.
@@ -2225,6 +2232,9 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★★ SATELLITE MODE's web window alone against a fake sat_list (no server): order, greying, the synced line, the pick box sizes
 #     (compact / big with the decoder canvas lent / ISS SSTV growing), APRS lines, AUTO DOPPLER, EXIT → drop; 390 px. Needs Edge + web/dist.
 node --max-old-space-size=512 scripts/test-web-satellite-mode.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 the web window's WATCH view (single mode: satellites): no EXIT / list, refusals, LIVE, the hybrid, the admin; 390 px
+node --max-old-space-size=512 scripts/test-web-sat-single.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SHOW on the web window (fake sat_list): a tick hides the others' passes, a group shortcut, kept across a reload,
 #    the pick stays, reminders follow it; default/silver/black, 390 px. Needs Edge + web/dist.
