@@ -681,11 +681,12 @@ public:
             if (df == 18 && (m[0] & 7) == 1) a.nonIcao = true;
             extended(a, m + 4, now);
             ++good_;
+            keepLast(m, f.len);
             return true;
         }
         if (df == 11) {
             const uint32_t addr = uint32_t(m[1]) << 16 | uint32_t(m[2]) << 8 | m[3];
-            if (s == 0 || ((s & ~0x7Fu) == 0 && known(addr, now))) { touch(addr, f, now); ++good_; return true; }
+            if (s == 0 || ((s & ~0x7Fu) == 0 && known(addr, now))) { touch(addr, f, now); ++good_; keepLast(m, f.len); return true; }
             ++rejected_; return false;
         }
         // address/parity replies: the syndrome IS the address
@@ -712,8 +713,14 @@ public:
         if (df == 5 || df == 21) a.squawk = squawk13(bits(m, 20, 32));
         if ((df == 20 || df == 21) && commbOn_) commB(a, m, now, dp >= 0 ? commb::regCode(dp) : -1);
         ++good_;
+        keepLast(m, f.len);
         return true;
     }
+
+    /** ★ V12 beta96 the bytes of the frame accept() last believed, AS CORRECTED (a repaired DF17/18 bit put right) —
+     *  what the Beast feed sends (vibe_beast.h, docs/v12/ADSB-FEED.md). Valid until the next accept(). */
+    const uint8_t* lastBytes() const { return last_; }
+    int lastLen() const { return lastLen_; }
 
     /** Comm-B counters: MB fields read, registers identified, confirmed, ambiguous. */
     const commb::Stats& commbStats() const { return cbStats_; }
@@ -1010,6 +1017,8 @@ private:
     uint64_t good_ = 0, rejected_ = 0, repaired_ = 0;
     commb::Stats cbStats_;
     bool commbOn_ = true;
+    uint8_t last_[14] = {}; int lastLen_ = 0;           // ★ beta96 lastBytes()
+    void keepLast(const uint8_t* m, int len) { std::memcpy(last_, m, size_t(len)); lastLen_ = len; }
 };
 
 } // namespace vibeadsb

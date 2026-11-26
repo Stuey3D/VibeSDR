@@ -215,7 +215,9 @@ object VibeServerBoot {
                          // ★ V12: a private scan never runs the owner's background profiles (it is nobody's idle radio)
                          "bgDecode",
                          // ★★★ V12: …nor the DX scanner (the owner's scan is the screen's, and borrows the radio briefly)
-                         "dxScan"))
+                         "dxScan",
+                         // ★★ V12 beta96: …nor share ADS-B (a scan never listens on the Beast port or pushes to a site)
+                         "adsbFeed"))
             c.remove(k)
         c.put("advertise", false)
         c.put("maxUsers", 1)
@@ -351,6 +353,12 @@ object VibeServerBoot {
         run {
             val why = VibeLocalSDR.setDxScan(cfg.s("dxScan"))
             if (why.isNotEmpty()) Log.w(TAG, "DX scanner not applied: $why")
+        }
+        /* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (Server mode → SHARE ADS-B WITH FLIGHT TRACKERS) — main.cpp's
+         *  setAdsbFeed. Always a definite value: absent = "" = off (the Beast port closed, no pushes). */
+        run {
+            val why = VibeLocalSDR.setAdsbFeed(cfg.s("adsbFeed"))
+            if (why.isNotEmpty()) Log.w(TAG, "ADS-B flight-tracker sharing not applied: $why")
         }
         // ★★ V12 VibeAGC for SDRplay — the owner's choice; absent = 0 = automatic (on with the OpenRSP driver).
         VibeLocalSDR.setRspVibeAgc(cfg.i("rspVibeAgc", 0).coerceIn(0, 2))

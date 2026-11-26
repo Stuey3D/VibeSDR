@@ -110,6 +110,7 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'autoDirectSampling', storage: 'vs_autods',        enc: 'bool01' },
   { native: 'bgDecode',         storage: 'vs_bgdecode',        enc: 'str' },
   { native: 'dxScan',           storage: 'vs_dxscan',          enc: 'str' },
+  { native: 'adsbFeed',         storage: 'vs_adsbfeed',        enc: 'str' },   // ★★ V12 beta96 flight trackers
   { native: 'rawIq',            storage: 'vs_rawiq',           enc: 'num' },
   { native: 'rawIqMax',         storage: 'vs_rawiqmax',        enc: 'num' },
   { native: 'rawIqLanMaxHz',    storage: 'vs_rawiqlanmaxhz',   enc: 'num' },

@@ -393,6 +393,11 @@ public:
     /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): this radio's settings, as RadioConfig::dxScan stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
     static bool setDxScan(const std::string& json, std::string& err);
+    /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): this radio's settings, as RadioConfig::adsbFeed
+     *  stores them — the local Beast server and the push feeds. Live. false (and `err`) when it does not parse. */
+    static bool setAdsbFeed(const std::string& json, std::string& err);
+    /** …and their status ({"on","adsb","serve":{…},"feeds":[…],"line"}) — the admin page, the Setup card, the app. */
+    static std::string adsbFeedStatusJson();
     /** ★★★ …and where this radio's DX log lives (one file per radio; written every ~5 min when changed, and at shutdown). */
     static void setDxLogFile(const std::string& path);
     /** ★★ V12 what a background-decoding editor may offer here — the engine's own decoder table (ids, labels,
@@ -1028,6 +1033,12 @@ public:
         double freqHint = 0;
     };
     int startIcom(const IcomStart& o, std::string& err);
+    /** ★★ V12 beta96 AN "ADS-B BEAST FEED (from another receiver)" RADIO (Stuart 11-26; docs/v12/ADSB-FEED.md): no
+     *  hardware at all — the server reads another receiver's Beast output at host:port (dump1090-fa beside PiAware on the
+     *  LAN, say) and serves the ADS-B map from it. ADS-B is its only mode (no waterfall, tuning, gain or rate). Returns
+     *  the port it serves on, or -1 and `err`. */
+    int startBeast(const std::string& host, int beastPort, std::string& err);
+    static bool isBeastFeed();
     bool isIcom() const;
     /** ★ An Icom's power for the front door's radio list: "on" (CI-V answering), "switchingOn", "off" (USB there, CI-V
      *  silent — switched off or not answering), "absent" (USB gone), or "" (not an Icom). `autoOn` = "Power on the radio

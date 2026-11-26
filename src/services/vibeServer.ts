@@ -160,6 +160,8 @@ export type VibeServerConfig = {
   bgDecode?: string;
   /** ★★★ V12 THE IDLE DX SCANNER — exactly RadioConfig::dxScan's JSON (vibe_dxscan.h parseConfig). '' = off. */
   dxScan?: string;
+  /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS — exactly RadioConfig::adsbFeed's JSON (vibe_beast.h parseConfig). '' = off. */
+  adsbFeed?: string;
   /** ★★ V12 THE GALLERY — the owner's size in MB (0 keeps nothing; default 100), may everyone see it (default yes), are
    *  listeners' own decodes kept too (default yes). The Setup page's galleryMb / galleryPublic / gallerySaveLive. */
   galleryMb?: number;
@@ -399,6 +401,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     // ★★ V12 background decoding + the gallery, at definite values on every start (VibeServerBoot applies them)
     bgDecode: cfg.bgDecode ?? '',
     dxScan: cfg.dxScan ?? '',   // ★★★ V12 the idle DX scanner (VibeServerBoot: setDxScan + the log file)
+    adsbFeed: cfg.adsbFeed ?? '',   // ★★ V12 beta96 flight trackers (VibeServerBoot: setAdsbFeed)
     galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,

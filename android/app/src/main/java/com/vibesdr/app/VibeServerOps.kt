@@ -375,7 +375,7 @@ object VibeServerOps {
         cfg.put("gainTenthDb", -1)                  // ★ VibeAGC (or the radio's AGC) until the client says otherwise
         cfg.put("advanced", false)                  // ★ one listener: the rtl_tcp client
         cfg.put("webServer", false)
-        cfg.put("bgDecode", ""); cfg.put("dxScan", "")
+        cfg.put("bgDecode", ""); cfg.put("dxScan", ""); cfg.put("adsbFeed", "")   // ★★ beta96 no Beast port / pushes here
         cfg.put("rawIq", 0); cfg.put("rawIqMax", 0)
         cfg.put("pskrOn", false); cfg.put("wsprnetOn", false)
         cfg.put("landingAdsb", false); cfg.put("adsbKeepRunning", false)

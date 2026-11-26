@@ -1755,6 +1755,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDxScan(JNIEnv* env, jobject, jstring 
     vibe::LocalSdrShim::setDxScan(jstr(env, json), err);
     return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the old settings stay)
 }
+/* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS on the Android server (ServerModeScreen → VibeServerBoot) — main.cpp's
+ *  setAdsbFeed. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAdsbFeed(JNIEnv* env, jobject, jstring json) {
+    std::string err;
+    vibe::LocalSdrShim::setAdsbFeed(jstr(env, json), err);
+    return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the old settings stay)
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDxLogFile(JNIEnv* env, jobject, jstring path) {
     vibe::LocalSdrShim::setDxLogFile(jstr(env, path));

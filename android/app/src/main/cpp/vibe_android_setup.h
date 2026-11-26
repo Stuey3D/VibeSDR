@@ -321,6 +321,7 @@ inline const std::vector<Control>& controlTable() {
         { "icomBaud icomCiv icomScopeSpeed icomTuneLock icomPowerOn icomAutoOff icomOffDelayMin", D_ICOM, 0 },
         { "bgOn bgWait bgKeepInRange bgProfiles",        D_RADIO, 0 },
         { "dxOn dxWait dxBands dxRaster dxOirt dxExt dxViewAdmin", D_RADIO, 0 },
+        { "afServe afPort afOpen afPush",                D_RADIO, 0 },   // ★★ V12 beta96 flight trackers (RadioConfig::adsbFeed)
         { "rawIqOn rawIqLan rawIqStreams rawIqLocalOnly", D_RADIO, P_NOT_LITE },
         { "rspVibeAgc rfNotch dabNotch rspAmNotch rspHdr rspExtRef rspDabDecim rfAgc autoNotch userNotch "
           "dabAgcOverride dabAgcTarget agcSet agcSetLock", D_RSP, 0 },
@@ -593,6 +594,7 @@ inline std::string pageConfig(const std::string& raw) {
     // ── background decoding and the DX scanner, one JSON text each (RadioConfig::bgDecode / dxScan) ──
     r.set("bgDecode", J::str(strOr(S("bgDecode"), "")));
     r.set("dxScan", J::str(strOr(S("dxScan"), "")));
+    r.set("adsbFeed", J::str(strOr(S("adsbFeed"), "")));   // ★★ V12 beta96
     // ── raw IQ out (the phone stores the LAN ceiling as text — see nativeServerConfig) ──
     r.set("rawIq", J::num(numOr(S("rawIq"), 0)));
     r.set("rawIqMax", J::num(numOr(S("rawIqMax"), 0)));
@@ -901,6 +903,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
         // ── background decoding and the DX scanner ──
         if (on("bgOn") && !jsonText(r, "bgDecode", "bgDecode", 16000, "the background decoding profiles")) return false;
         if (on("dxOn") && !jsonText(r, "dxScan", "dxScan", 4000, "the DX scanner's settings")) return false;
+        if (on("afServe") && !jsonText(r, "adsbFeed", "adsbFeed", 4000, "the flight-tracker sharing settings")) return false;   // ★★ beta96
         // ── raw IQ out ──
         if (on("rawIqOn")) {
             num(r, "rawIq", "rawIq", 0, 2);

@@ -6,6 +6,8 @@ import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
 import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
 import DxScanSetup, { collectDxScan, parseDxScan, type DxScanModel } from '../components/DxScanSetup';   // ★★★ V12
+import AdsbFeedSetup from '../components/AdsbFeedSetup';   // ★★ V12 beta96 share ADS-B with flight trackers
+import { adsbFeedOffered, adsbFeedStatusLine, collectAdsbFeed, parseAdsbFeed, type AdsbFeedModel } from '../utils/adsbFeed';
 import RspSetupCard from '../components/RspSetupCard';
 import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
 import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
@@ -411,6 +413,8 @@ const K = {
   bgDecode: 'vs_bgdecode',
   /** ★★★ V12 the idle DX scanner — exactly RadioConfig::dxScan's JSON ('' = never set: off). */
   dxScan: 'vs_dxscan',
+  /** ★★ V12 beta96 share ADS-B with flight trackers — exactly RadioConfig::adsbFeed's JSON ('' = never set: off). */
+  adsbFeed: 'vs_adsbfeed',
   /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
   /** ★★ V12 beta94 the COMMUNITY MAP (vibe_community.h) — the owner's switch. Absent = off. */
@@ -702,6 +706,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [wsprnetCall, setWsprnetCall] = useState('');
   const [dmrIdLookup, setDmrIdLookup] = useState(false);
   const [pskrStatus, setPskrStatus] = useState('');
+  /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (components/AdsbFeedSetup) — off by default; its status line. */
+  const [afModel, setAfModel] = useState<AdsbFeedModel>(() => parseAdsbFeed(''));
+  const [afStatus, setAfStatus] = useState('');
   /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
   const [rspVibeAgc, setRspVibeAgc] = useState(0);
   /** ★ The wide impulse blanker: 0 off, 1 auto (below 30 MHz — the Setup page's and the server's default), 2 on. */
@@ -1168,6 +1175,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const bgJson = collectBg(bgModel);
   const onBgChange = (m: BgModel) => { setBgModel(m); void AsyncStorage.setItem(K.bgDecode, collectBg(m)); };
   const dxJson = collectDxScan(dxModel, dxWasSet);
+  const afOut = collectAdsbFeed(afModel);   // ★★ beta96 — {blob} or {error} (said under the card, refused at Start)
+  const afJson = afOut.blob ?? '';
+  const afProblem = afOut.error ?? '';
+  const onAfChange = (m: AdsbFeedModel) => { setAfModel(m); const o = collectAdsbFeed(m); if (o.blob !== undefined) void AsyncStorage.setItem(K.adsbFeed, o.blob); };
   const onDxChange = (m: DxScanModel) => { setDxModel(m); setDxWasSet(true); void AsyncStorage.setItem(K.dxScan, collectDxScan(m, true)); };
   /* ★ The engine's save rule, as the owner edits — the Setup page refuses a save in these words, so this screen says them
    *  under the profiles and Start refuses the same profiles (start()). */
@@ -1473,6 +1484,22 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     const t = setInterval(() => void look(), 60000);
     return () => { gone = true; clearInterval(t); };
   }, [running, pskrOn, pskrCall]);
+  /* ★★ V12 beta96 the flight-tracker sharing status line, from the running server (GET /vibeserver/adsb-feed over loopback,
+   *  which takes the phone as its owner), every 30 s while it runs with sharing set. */
+  useEffect(() => {
+    if (!running || !afJson) { setAfStatus(''); return; }
+    let gone = false;
+    const look = async () => {
+      try {
+        const r = await fetch(`http://127.0.0.1:${running.port}/vibeserver/adsb-feed`, { cache: 'no-store' });
+        const j = await r.json();
+        if (!gone) setAfStatus(adsbFeedStatusLine(j));
+      } catch { if (!gone) setAfStatus(''); }
+    };
+    void look();
+    const t = setInterval(() => void look(), 30000);
+    return () => { gone = true; clearInterval(t); };
+  }, [running, afJson]);
   /* ★★ V12 beta94 THE ADS-B RANGE OUTLINE (vibe_adsb_range.h; Stuart 11-25: "an option to reset the adsb range ring") —
    *  read from the running server (GET /adsb/range over loopback) when the screen opens and every minute; RESET and the
    *  window go to POST /vibeserver/adsb-range, which takes loopback as the owner (the host is the operator). */
@@ -1762,6 +1789,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           // ★★ V12 background decoding + the gallery. Absent = off / the Setup page's defaults (100 MB, yes, yes).
           { const bd = g(K.bgDecode); if (bd != null) { setBgModel(parseBg(bd)); setBgEpoch((e) => e + 1); } }
           { const dx = g(K.dxScan); if (dx != null && dx !== '') { setDxModel(parseDxScan(dx)); setDxWasSet(true); } }   // ★★★ V12
+          { const af = g(K.adsbFeed); if (af != null && af !== '') setAfModel(parseAdsbFeed(af)); }   // ★★ V12 beta96
           { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
@@ -2390,7 +2418,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingAdsb, adsbKeep, fmDef,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, communityOff, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
-    dxJson,
+    dxJson, afJson, afProblem,   // ★★ beta96
     rspCard, ppbText,
   };
 
@@ -2443,6 +2471,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     bgDecode: live.current.bgJson,
     // ★★★ V12 the idle DX scanner (RadioConfig::dxScan) — VibeServerBoot applies it; the private DAB scan engine drops it
     dxScan: live.current.dxJson,
+    // ★★ V12 beta96 sharing ADS-B with flight trackers (RadioConfig::adsbFeed) — VibeServerBoot applies it; the private scan drops it
+    adsbFeed: live.current.afJson,
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
     communityMap: live.current.communityMap, communityOff: live.current.communityOff,   // ★★ V12 beta94
     // ★★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup — VibeServerBoot applies them on every start
@@ -2625,7 +2655,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
-      [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
+      [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.adsbFeed, live.current.afJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
       [K.communityMap, live.current.communityMap ? '1' : '0'], [K.communityOff, live.current.communityOff],
       [K.pskrOn, live.current.pskrOn ? '1' : '0'], [K.pskrCall, live.current.pskrCall], [K.pskrAntenna, live.current.pskrAntenna],
@@ -2657,6 +2687,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
     /* ★★ V12 BACKGROUND PROFILES THE ENGINE WOULD REFUSE ARE REFUSED HERE TOO — the Setup page will not save them, and a
      *  server started with them would quietly run none (the engine keeps its old settings and logs why). Its own words. */
+    if (live.current.afProblem) {   // ★★ beta96 the Setup page refuses the same entry at its save
+      setStarting(false);
+      setError('Share ADS-B with flight trackers — ' + live.current.afProblem + '.');
+      return;
+    }
     if (live.current.bgProblem) {
       setStarting(false);
       setError('Background Decoding — ' + live.current.bgProblem
@@ -3670,6 +3705,18 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 shares nothing; a gallery only you may see shares aircraft only. The server must be listed in the directory.
               </Text>
             </View>
+
+            {/* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (docs/v12/ADSB-FEED.md) — the Setup page's card, the same words, only
+                where this radio could run ADS-B (AGENTS.md). Saved on the next Start, like its neighbours. */}
+            {!!radio && !isIcom && adsbFeedOffered(radio.driver) && (
+              <>
+                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SHARE ADS-B WITH FLIGHT TRACKERS</Text>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <AdsbFeedSetup C={C} F={F} model={afModel} onChange={onAfChange} status={afStatus} error={afProblem}
+                                 keepRunning={adsbKeepOn} />
+                </View>
+              </>
+            )}
 
             {/* ★★ V12 beta90 PSK REPORTER / WSPRnet / THE DMR ID LOOKUP (docs/v12/PSK-REPORTER.md, DMR-ID.md) — the Setup
                 page's card, the same words. Saved on the next Start, like its neighbours. */}

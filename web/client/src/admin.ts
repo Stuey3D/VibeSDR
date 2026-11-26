@@ -1155,6 +1155,53 @@ async function renderAdsbRange(): Promise<void> {
   } finally { rangeBusy = false; }
 }
 
+/* ── ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS, per radio (vibe_beast.h statusJson via GET /vibeserver/admin/adsbfeed) ──
+ *  Stuart 2026-11-26 ("like we did for PSKReporter"): what each radio sends, where, and whether it is getting there. Only
+ *  where sharing is set up on a radio that can run ADS-B. Read-only; the settings are on the Setup page's radio tab. */
+const fmtBytes = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`);
+export function adsbFeedLines(d: any): string[] {
+  const out: string[] = [];
+  // ★ a Beast feed radio: where its ADS-B comes from, first (connected, msg/s — or what is wrong, in words)
+  if (d && d.input) out.push(String(d.input.line || ''));
+  if (!d || !d.on) return out;
+  const s = d.serve || {};
+  if (s.on) {
+    const rd: any[] = Array.isArray(s.readers) ? s.readers : [];
+    let l = s.listening ? `Beast on port ${s.port} (${s.open ? 'any address' : 'this network only'}): ${rd.length} ${rd.length === 1 ? 'reader' : 'readers'}`
+                        : `Beast port ${s.port}: ${s.error || 'opening'}`;
+    for (const r of rd) l += ` \u00b7 ${r.peer} ${Number(r.msgs).toLocaleString()} messages, ${fmtBytes(Number(r.bytes))}${Number(r.dropped) ? `, ${Number(r.dropped).toLocaleString()} dropped` : ''}`;
+    if (Number(s.refused)) l += ` \u00b7 ${s.refused} refused (last ${s.lastRefused})`;
+    out.push(l);
+  }
+  if (d.push) for (const f of (Array.isArray(d.feeds) ? d.feeds : [])) {
+    if (!f.on) continue;
+    let l = `${f.host}:${f.port}${f.uuid ? ' (station UUID)' : ''} \u2014 `;
+    if (f.state === 'skipped') l += 'not sent \u2014 this radio\'s ADS-B comes from there (the loop guard)';
+    else if (f.state === 'connected') l += `connected, ${Number(f.msgs).toLocaleString()} messages, ${fmtBytes(Number(f.bytes))}`;
+    else if (f.state === 'waiting') l += `retrying in ${f.retryIn} s${f.error ? ` (${f.error})` : ''}`;
+    else if (f.state === 'connecting') l += 'connecting';
+    else l += 'waits for ADS-B to run';
+    if (Number(f.dropped)) l += ` \u00b7 ${Number(f.dropped).toLocaleString()} dropped (the link was too slow)`;
+    out.push(l);
+  }
+  if (!d.adsb && !d.input) out.push('ADS-B is not running on this radio now, so nothing is being sent.');
+  return out;
+}
+let feedBusy = false;
+async function renderAdsbFeed(): Promise<void> {
+  const box = document.getElementById('admAdsbFeed');
+  if (!box || feedBusy) return;
+  feedBusy = true;
+  try {
+    const all = await fromEveryRadio('adsbfeed');
+    const rows = all.filter((r) => r.data && !r.data.none && (r.data.on || r.data.input));
+    const many = rows.length > 1;
+    box.innerHTML = rows.map((r) => `<div class="admScanRow"><b>${r.data.input && !r.data.on ? 'ADS-B BEAST FEED' : 'SHARING ADS-B WITH FLIGHT TRACKERS'}${many ? ` \u2014 ${esc(r.radio)}` : ''}</b>`
+      + adsbFeedLines(r.data).map((l) => `<p class="wrap">${esc(l)}</p>`).join('')
+      + `<p class="dim wrap">Set up on the Setup page, this radio's tab. Only what aircraft broadcast is sent; MLAT is not supported.</p></div>`).join('');
+  } finally { feedBusy = false; }
+}
+
 async function qCached(): Promise<string> {
   const have = adminTicketQuery();
   if (have) return have;
@@ -1831,6 +1878,7 @@ async function refresh() {
       void renderScans();   // ★★ V12: the owner's DAB / FM scans, per radio
       void renderAfc();     // ★★ V12: auto-PPM, per radio
       void renderAdsbRange();   // ★★ V12 beta94: the ADS-B range outline, per radio
+      void renderAdsbFeed();    // ★★ V12 beta96: sharing ADS-B with flight trackers, per radio
       const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
       const sec = document.getElementById('secMaintenance');
       // ★ High Detail Maps live here too, and a server can offer them with no package actions at

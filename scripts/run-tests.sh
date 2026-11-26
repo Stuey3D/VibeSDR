@@ -195,6 +195,9 @@ flags_for() {
     test-adsb-commb)       echo "-O2" ;;
     # ★ V12 beta94 the ADS-B RANGE OUTLINE (vibe_adsb_range.h): bins, the rolling window, the record, the file, reset, a move.
     test-adsb-range)       echo "-O2" ;;
+    # ★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): Beast round trip, settings, the local server and a push
+    #   feed against 127.0.0.1 test sockets only (never a real aggregator), the service's sink end to end.
+    test-adsb-feed)        echo "-O2 -pthread" ;;
     # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
     #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
     test-tdf)              echo "-O2" ;;
@@ -445,6 +448,8 @@ deps_for() {
     test-config-alias)  echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ V12 beta90 the PSK Reporter / WSPRnet / DMR ID lookup settings round-trip, OFF by default.
     test-config-pskr)   echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ V12 beta96 sharing ADS-B with flight trackers: RadioConfig::adsbFeed round-trips, OFF by default.
+    test-config-adsbfeed) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
     test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
@@ -1006,6 +1011,8 @@ if npx tsx scripts/test_packet.ts; then pass=$((pass+1)); else fail=$((fail+1));
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
 if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
 if npx tsx scripts/test_spot_ranks.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta90 the gallery's ranking card
+if npx tsx scripts/test_adsb_feed.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta96 flight trackers: the app's copy
+if node scripts/test-setup-adsb-feed.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta96 flight trackers: the Setup card
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
@@ -1650,6 +1657,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     nothing, switching it off gives the dial back. Front door + one radio process, as systemd runs them. ~40 s.
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE ADS-B BEAST FEED RADIO (docs/v12/ADSB-FEED.md): a server whose only radio reads a synthetic dump1090 (no SDR),
+#    one beside a fake RTL, add/remove through sdr-change, the outage banner and its logs. Local sockets only. ~60 s.
+printf '\n\033[1m── ADS-B Beast feed radio (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-beast-feed.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta95 THE FRONT DOOR'S ONE MERGED COMMUNITY FEED: a layer any radio may share is at the door, the same DSC call /
 #    APRS station from two radios is one row, a save through the door follows. Door only, no radio. ~10 s.

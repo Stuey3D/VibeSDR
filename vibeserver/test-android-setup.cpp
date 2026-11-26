@@ -167,6 +167,7 @@ int main(int argc, char** argv) {
         "antennaSwitch":"{\"enabled\":true,\"host\":\"10.0.0.9\",\"port\":1883,\"antennas\":[{\"name\":\"Loop\",\"cmd\":\"a\"},{\"name\":\"Dipole\",\"cmd\":\"b\"}]}",
         "antennaMap":"hf Loop, fm Dipole","antennaLocked":true,
         "bgDecode":"{\"on\":true,\"profiles\":[]}","dxScan":"{\"on\":true}",
+        "adsbFeed":"{\"serve\":true,\"port\":30005,\"open\":false,\"push\":true,\"feeds\":[{\"host\":\"feed.adsb.lol\",\"port\":30004,\"on\":true}]}",
         "rawIq":1,"rawIqMax":1,"rawIqLanMaxHz":"250000",
         "converterOffsetHz":-125000000,"converterInputLoHz":1000000,"converterInputHiHz":30000000)") + extra + "}";
     };
@@ -373,6 +374,7 @@ int main(int argc, char** argv) {
             {"blockPick","r:blockRanges"},{"blockLo","r:blockRanges"},{"blockHi","r:blockRanges"},
             {"dabLandOn","r:landingDabChannel"},{"dabLandBlock","r:landingDabChannel"},{"dabLandStation","r:landingDabSid"},
             {"adsbLandOn","r:landingAdsb"},{"adsbKeep","r:adsbKeepRunning"},
+            {"afServe","r:adsbFeed"},{"afPort","r:adsbFeed"},{"afOpen","r:adsbFeed"},{"afPush","r:adsbFeed"},   // ★★ beta96
             {"fmDeemph","r:fmDeemph"},{"fmStereo","r:fmStereo"},{"fmNr","r:fmNr"},{"fmIms","r:fmIms"},{"fmCeq","r:fmCeq"},
             {"fmAutoBw","r:fmAutoBw"},{"fmNb","r:fmNb"},{"fmReturn","r:fmRemember"},{"fmRemember","r:fmRemember"},
             {"antRangePreset","r:antennaRanges"},{"antFilterPreset","r:antennaFilters"},{"antPortNames","r:antennaNames"},
