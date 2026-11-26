@@ -3,6 +3,8 @@
 import fs from 'node:fs';
 import { NavtexAssembler, NAVTEX_END_LOST_MS, navtexTitle, navtexLostPct, navtexBody, navtexFileName, navtexFileText }
   from '../src/utils/navtex.ts';
+import { lineRangesOf, snrBand, snrOfItem, splitOfItem, navtexQualityLine, navtexQualityDetail, navtexSnrLine, snrRanges, lineWorst, bodyTextBase, fileTextBase,
+         SNR_MAX_SLICES } from '../src/utils/navtexQuality.ts';
 import { navtexStationLabel, navtexPositions, navtexResolve, navtexLabelOf, navtexSelfId, navtexStartLostLabel } from '../src/utils/navtexStations.generated.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
@@ -466,6 +468,86 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(t.startsWith('B · Oostende, Belgium \u{1F1E7}\u{1F1EA} · Nav warning · #10'), 'the title carries the station: ' + t);
   ok(navtexTitle(m.live!).startsWith('Station B · Nav warning'), 'no place → "Station B" as before');
   ok(navtexFileText(m.live!, { dialHz: 489500, lat: LA, lon: LO }).startsWith('NAVTEX · B · Oostende'), 'SAVE writes the station too');
+}
+
+// ★★ beta96 (Stuart 11-26) — DECODE QUALITY + the SNR TIMELINE (display only). Slices arrive as op 0x08 between chunks.
+{
+  const a = new NavtexAssembler();
+  let t = T0;
+  ok(!a.slice(-30, -50), 'a slice between messages: dropped (nothing to tie it to)');
+  a.push('ZCZC GA01\r\r\n', t += 1000); a.slice(-30, -50);
+  a.push('LINE ONE GREEN\r\r\n', t += 1000); a.slice(-30, -50);
+  a.push('LINE TWO RED\r\r\n', t += 1000); a.slice(-30, -32);
+  a.push('LINE THREE RED\r\r\n', t += 1000); a.slice(-30, -33);
+  ok(!!a.live?.snr && a.live.snr.tl.length === 4 && !a.live.done, 'LIVE: the timeline grows while the message arrives (' + a.live?.snr?.tl.length + ')');
+  a.push('LINE FOUR GREEN\r\r\n', t += 1000); a.slice(-30, -45);
+  a.push('NNNN\r\r\n', t += 1000);
+  const m = a.live!;
+  ok(m.done && !!m.snr, 'finished, measured');
+  const q = m.snr!;
+  ok(q.tl.join(',') === '20,20,2,3,15', 'slices (dB): ' + q.tl.join(','));
+  ok(q.tc[1] === m.text.indexOf('LINE TWO') && q.tc[2] === m.text.indexOf('LINE THREE') && q.tc[4] === m.text.length,
+     'slice ends on the cleaned text (CR CR LF folded): ' + q.tc.join(','));
+  const nonSp = (s: string) => s.replace(/\s/g, '').length;
+  ok(q.redPct === Math.round(100 * nonSp('LINE TWO REDLINE THREE RED') / nonSp(m.text)) && q.min === 2, `redPct ${q.redPct} %, lowest ${q.min} dB`);
+  ok(navtexSnrLine(q) === `SNR ${Math.round(q.avg)} dB avg · ${q.redPct} % weak`, 'card line: ' + navtexSnrLine(q));
+  // the vertical strip: the body's lines, worst slice per line — and at a NARROW width (wrapped every 8 characters)
+  const body = navtexBody(m), base = bodyTextBase(body), rg = snrRanges(q, base, body.length);
+  const wide: { start: number; end: number }[] = []; { let s = 0; for (const l of body.split('\n')) { wide.push({ start: s, end: s + l.length }); s += l.length + 1; } }
+  const wW = lineWorst(wide, rg).map((d) => (d === null ? '-' : snrBand(d)[0])).join('');
+  ok(wW === 'ggrrgg', 'wide: header g, ONE g, TWO r, THREE r, FOUR g, NNNN g → ' + wW);
+  const narrow: { start: number; end: number }[] = [];
+  for (const l of wide) for (let s = l.start; s < Math.max(l.end, l.start + 1); s += 8) narrow.push({ start: s, end: Math.min(l.end, s + 8) });
+  const nW = lineWorst(narrow, rg);
+  const redLines = narrow.filter((_, i) => nW[i] !== null && snrBand(nW[i]!) === 'red').map((l) => body.slice(l.start, l.end)).join('|');
+  ok(redLines === 'LINE TWO| RED|LINE THR|EE RED', 'narrow: exactly the wrapped pieces of the two faded lines are red → ' + redLines);
+  // ★ the APP's path: onTextLayout's line texts at two widths (a wide phone, a narrow split) → the same colours
+  const layout = (w: number) => { const out: { text: string }[] = []; for (const ln of body.split('\n')) { const parts = ln.match(new RegExp(`.{1,${w}}`, 'g')) ?? ['']; parts.forEach((p, i) => out.push({ text: p + (i === parts.length - 1 ? '\n' : '') })); } out[out.length - 1].text = out[out.length - 1].text.replace(/\n$/, ''); return out; };
+  for (const w of [80, 6]) {
+    const lt = layout(w), lr = lineRangesOf(body, lt), lw = lineWorst(lr, rg);
+    const reds = lt.filter((_, i) => lw[i] !== null && snrBand(lw[i]!) === 'red').map((l) => l.text.replace(/\n$/, '')).join('|');
+    ok(lr.every((r, i) => body.slice(r.start, r.end) === lt[i].text.replace(/\n$/, '')), `app layout ${w} chars: each line's characters found`);
+    ok(reds === (w === 80 ? 'LINE TWO RED|LINE THREE RED' : 'LINE T|WO RED|LINE T|HREE R|ED'), `app layout ${w} chars: the faded lines red → ${reds}`);
+  }
+  // a line that spans slices of two colours takes the WORST
+  ok(lineWorst([{ start: base + m.text.indexOf('LINE ONE'), end: base + m.text.indexOf('LINE TWO') + 4 }], rg)[0] === 2, 'a line across green and red slices: red (the worst)');
+  // the server's count: the 21-byte form splits it; the 13-byte one does not
+  ok(a.setFec({ clean: 60, repaired: 3, lost: 1, agreed: 58, disagreed: 1 }) && m.split?.clean === 58 && m.split.fec === 5 && m.split.lost === 1,
+     'op 0x07 (21 bytes): 58 clean, 5 FEC (60 + 3 − 58), 1 lost');
+  ok(navtexQualityLine(m.split) === 'Decode quality: 90.6 % clean · 7.8 % FEC · 1.6 % lost' && navtexQualityDetail(m.split) === '64 characters · copies disagreed 1.6 %',
+     navtexQualityLine(m.split) + ' / ' + navtexQualityDetail(m.split));
+  ok(navtexFileText(m).includes('\nDecode quality: 90.6 % clean') && navtexFileText(m).includes('\nSNR '), 'SAVE writes both lines');
+  const o = new NavtexAssembler(); feed(o, GALE, 7);
+  ok(o.setFec({ clean: 50, repaired: 2, lost: 0 }) && !o.live!.split && !o.live!.snr && navtexFileText(o.live!).indexOf('Decode quality') < 0,
+     'an older server (13-byte count, no slices): no split, no SNR, nothing invented');
+  // an all-green message
+  const g = new NavtexAssembler(); g.push('ZCZC GA02\r\r\n', T0); g.slice(-30, -45); g.push('ALL GREEN\r\r\nNNNN\r\r\n', T0 + 1000);
+  ok(g.live!.snr?.redPct === 0 && g.live!.snr?.min === 15, 'all green: 0 % weak');
+  // the cap: 300 s → 75 slices of 4 s, the fade still red
+  const c = new NavtexAssembler(); c.push('ZCZC GA03\r\r\n', T0);
+  for (let i = 0; i < 300; i++) { c.push(`W${i} `, T0 + i * 1000); c.slice(-30, i >= 140 && i < 160 ? -31 : -45); }
+  c.push('\r\r\nNNNN\r\r\n', T0 + 301000);
+  const cq = c.live!.snr!;
+  ok(cq.tl.length === 75 && cq.sliceSec === 4 && cq.tl.length <= SNR_MAX_SLICES, `the cap: ${cq.tl.length} slices of ${cq.sliceSec} s`);
+  ok(cq.tl.filter((d) => d < 5).length === 5, 'the 20 s fade: 5 red slices after merging');
+  // a fade that cost the lock: its slices land on the gap marker line
+  const f = new NavtexAssembler(); let ft = T0;
+  f.lockState(3, ft); f.push('ZCZC VA28\r\r\nDOVER STRAIT\r\r\n', ft += 1000); f.slice(-30, -45);
+  f.lockState(1, ft += 100); f.push('XQ_', ft += 500); f.slice(-30, -28); f.slice(-30, -29);
+  f.lockState(3, ft += 8000); f.push('THAMES\r\r\nNNNN\r\r\n', ft += 1000); f.slice(-30, -45);
+  const fm = f.live!, fb = navtexBody(fm), fr = snrRanges(fm.snr!, bodyTextBase(fb), fb.length);
+  const fl: { start: number; end: number }[] = []; { let s = 0; for (const l of fb.split('\n')) { fl.push({ start: s, end: s + l.length }); s += l.length + 1; } }
+  const marker = fb.split('\n').findIndex((l) => l.includes('signal lost'));
+  ok(marker > 0 && lineWorst(fl, fr)[marker]! < 5, 'the gap marker line is red: ' + fb.split('\n')[marker]);
+}
+// ★ beta96 gallery records: what is there, nothing else
+{
+  ok(splitOfItem({}) === null && snrOfItem({}) === null, 'an old record: no split, no SNR');
+  ok(splitOfItem({ nqc: 38, nqf: 4, nql: 1, nqd: 1 })?.fec === 4, 'a record with the split');
+  ok(snrOfItem({ snr: 6.3, tl: [20, 2], tc: [0, 9], red: 47, smin: 2, ts: 1 })?.redPct === 47, 'a record with the timeline');
+  ok(snrOfItem({ snr: 6.3, tl: [20, 2], tc: [0] }) === null, 'a malformed timeline (lengths differ): dropped, never half-drawn');
+  const file = 'NAVTEX · Station G · Met warning · #42\nReceived 2026-11-26 10:00 UTC\nDecode quality: …\n\nZCZC GA42\nGALE\nNNNN\n';
+  ok(file.slice(fileTextBase(file)).startsWith('GALE'), 'the message text in a gallery file starts after its ZCZC line');
 }
 
 console.log(`navtex: ${pass} passed, ${fail} failed`);

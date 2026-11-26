@@ -22,16 +22,18 @@ export interface BalloonViewProps {
   log: string;
   bodySize: StyleProp<ViewStyle>;
   scrollRef?: React.RefObject<ScrollView | null>;
+  /** ★★ beta96 iPhone Duo half-open BIG: 'upper' = the payloads heard, 'lower' = the pictures and the report log. */
+  part?: 'upper' | 'lower';
 }
 
-export default function BalloonView({ report, pictures, log, bodySize, scrollRef }: BalloonViewProps) {
+export default function BalloonView({ report, pictures, log, bodySize, scrollRef, part }: BalloonViewProps) {
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const lines = useMemo(() => log.split('\n').filter((l) => l.trim()).slice(-8).reverse(), [log]);
   return (
     <ScrollView ref={scrollRef as any} style={[cs.body, bodySize]} contentContainerStyle={[cs.content, scrollLane]} showsVerticalScrollIndicator>
-      {(!report || !report.payloads.length) && <Text style={[cs.idle, { color: tk.muted }]}>{balloonStatus(report)}</Text>}
-      {report?.payloads.map((p) => (
+      {part !== 'lower' && (!report || !report.payloads.length) && <Text style={[cs.idle, { color: tk.muted }]}>{balloonStatus(report)}</Text>}
+      {part !== 'lower' && report?.payloads.map((p) => (
         <View key={p.call} style={[cs.row, { borderTopColor: tk.divider }]} accessibilityLabel={`${p.call}: ${balloonLine(p)}`}>
           <Text style={[cs.call, { color: tk.accent }]} numberOfLines={1}>{p.call}</Text>
           <Text style={[cs.nums, { color: tk.value }]}>{balloonLine(p)}</Text>
@@ -39,7 +41,10 @@ export default function BalloonView({ report, pictures, log, bodySize, scrollRef
           {!!p.sentence && <Text style={[cs.sent, { color: tk.muted }]} numberOfLines={2}>{p.sentence}</Text>}
         </View>
       ))}
-      {pictures.map((pic) => {
+      {part === 'lower' && !pictures.length && !lines.length && (
+        <Text style={[cs.idle, { color: tk.muted }]}>SSDV pictures and the report log appear here</Text>
+      )}
+      {part !== 'upper' && pictures.map((pic) => {
         const info = report?.images.find((i) => i.key === pic.key);
         return (
           <View key={pic.key} style={cs.pic}>
@@ -49,7 +54,7 @@ export default function BalloonView({ report, pictures, log, bodySize, scrollRef
           </View>
         );
       })}
-      {lines.map((l, i) => <Text key={i} style={[cs.log, { color: tk.value }]} numberOfLines={2}>{l}</Text>)}
+      {part !== 'upper' && lines.map((l, i) => <Text key={i} style={[cs.log, { color: tk.value }]} numberOfLines={2}>{l}</Text>)}
     </ScrollView>
   );
 }

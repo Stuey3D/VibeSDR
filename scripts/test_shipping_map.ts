@@ -16,16 +16,16 @@ const eq = (what: string, got: unknown, want: unknown) => {
 };
 const yes = (what: string, c: boolean) => eq(what, c, true);
 
-console.log('── the layers present (no dead controls) ──');
+console.log('── the layers present (no dead controls; beta96: SEA AREAS on every server, last) ──');
 const none: ShipHave = { ships: 0, dsc: 0, stations: 0, warnings: 0, weather: 0, aisMode: false };
-eq('NAVTEX only: the NAVTEX layers present, no SHIPS or DSC', shipLayersPresent({ ...none, stations: 3, warnings: 2, weather: 5 }, 'navtex'), ['stations', 'warnings', 'weather']);
-eq('NAVTEX with no warnings: WARNINGS absent', shipLayersPresent({ ...none, stations: 3, weather: 5 }, 'navtex'), ['stations', 'weather']);
+eq('NAVTEX only: the NAVTEX layers present, no SHIPS or DSC', shipLayersPresent({ ...none, stations: 3, warnings: 2, weather: 5 }, 'navtex'), ['stations', 'warnings', 'weather', 'areas']);
+eq('NAVTEX with no warnings: WARNINGS absent', shipLayersPresent({ ...none, stations: 3, weather: 5 }, 'navtex'), ['stations', 'weather', 'areas']);
 eq('NAVTEX + a ship store + DSC alerts: all five, NAVTEX first', shipLayersPresent({ ...none, stations: 3, warnings: 1, weather: 1, ships: 12, dsc: 2 }, 'navtex'),
-   ['stations', 'warnings', 'weather', 'ships', 'dsc']);
-eq('AIS mode with nothing heard yet: SHIPS is there (the mode is the map)', shipLayersPresent({ ...none, aisMode: true }, 'ships'), ['ships']);
+   ['stations', 'warnings', 'weather', 'ships', 'dsc', 'areas']);
+eq('AIS mode with nothing heard yet: SHIPS is there (the mode is the map)', shipLayersPresent({ ...none, aisMode: true }, 'ships'), ['ships', 'areas']);
 eq('AIS mode on a NAVTEX server: SHIPS first, then the NAVTEX layers with data', shipLayersPresent({ ...none, aisMode: true, stations: 4, weather: 9 }, 'ships'),
-   ['ships', 'stations', 'weather']);
-eq("DSC's MAP: DSC first, ships from the store next", shipLayersPresent({ ...none, dsc: 1, ships: 3 }, 'dsc'), ['dsc', 'ships']);
+   ['ships', 'stations', 'weather', 'areas']);
+eq("DSC's MAP: DSC first, ships from the store next", shipLayersPresent({ ...none, dsc: 1, ships: 3 }, 'dsc'), ['dsc', 'ships', 'areas']);
 eq('one layer alone: no toggle row at all', shipToggles(['ships']), []);
 eq('the toggles in the order present', shipToggles(['dsc', 'ships', 'weather']).map((t) => t.label), ['DSC', 'SHIPS', 'WEATHER']);
 const L = shipLayersOf('{"ships":false}', '{"weather":false}');

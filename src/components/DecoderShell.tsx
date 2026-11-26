@@ -42,7 +42,7 @@
  *   anywhere with Transparency OFF.
  */
 
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Animated, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
   type PressableProps, type StyleProp, type TextStyle, type ViewStyle,
@@ -305,6 +305,30 @@ function ShellFrame({ tall, borderColor, maxWidth, maxHeight, onTouchStart, fram
         {children}
       </View>
   );
+}
+
+/**
+ * ★★ beta96 A BODY THAT DRAWS INTO BOTH PANELS FROM ONE INSTANCE (half-open BIG — the scanner: its START / HOLD / SKIP
+ * keys above the fold and its band fields, FOUND and settings below share one set of state, so it cannot be drawn
+ * twice). The body renders its upper half where it is and hands its lower half to the slot; the slot's outlet, in the
+ * lower panel, draws it. Only the outlet re-renders when the hand-over changes (no render loop).
+ *   const slot = usePanelSlot() · body: useLayoutEffect(() => slot.set(<…lower…/>)) · lower panel: <PanelSlotOutlet slot={slot} />
+ */
+export interface PanelSlot { set: (n: React.ReactNode) => void; get: () => React.ReactNode; sub: (f: () => void) => () => void }
+export function usePanelSlot(): PanelSlot {
+  return useMemo(() => {
+    let node: React.ReactNode = null;
+    const subs = new Set<() => void>();
+    return {
+      set: (n: React.ReactNode) => { node = n; subs.forEach((f) => f()); },
+      get: () => node,
+      sub: (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; },
+    };
+  }, []);
+}
+export function PanelSlotOutlet({ slot }: { slot: PanelSlot }) {
+  const n = useSyncExternalStore(slot.sub, slot.get, slot.get);
+  return <>{n}</>;
 }
 
 /**

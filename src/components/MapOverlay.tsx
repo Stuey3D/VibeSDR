@@ -98,6 +98,7 @@ import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the 
  *  like the adsb maps") — the ADS-B map's camera, shared: src/utils/mapAutoFit.ts. Every kind but HFDL (its SNAP follows
  *  the latest flight) and ADS-B (the reference, its own AUTO key). */
 import { MAP_AUTOFIT_JS } from '../utils/mapAutoFit';
+import { mapPageShown, mapPageWritten, type MapPage } from '../utils/mapPage';   // ★★★ beta96 the page kept with its kind and opening
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend rows   // ★ the spot card's HH:MM:SS UTC (the slot's start)
 
 /* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
@@ -2419,16 +2420,31 @@ export default function MapOverlay(
    *     still works: the very thing the instance origin was there to buy.
    *  ★ Rewritten on every open. It is a few hundred KB and it must track the code that generates
    *    it — a cached page from a previous build is the kind of ghost nobody thinks to look for. */
-  const [pageUri, setPageUri] = useState<string | null>(null);
+  /* ★★★ beta96 THE PAGE IS KEPT WITH THE KIND IT WAS BUILT FOR AND THE OPENING IT WAS BUILT IN (utils/mapPage.ts — Mac
+   *  Ha, 11-26: "EXIT AIS · SHIPPING MAP" over the ADS-B aircraft list). The file is the same file for every map, so a
+   *  bare uri could not tell a new page from the old one: a mode changed under the open map (the shared dial) never
+   *  reloaded the WebView, and the next opening mounted the WebView on the file still holding the LAST mode's page.
+   *  Now a page is shown only for its own kind in its own opening, and a new one comes with a new id — the WebView's
+   *  key — so it is loaded fresh. A rewrite for the same kind in the same opening keeps its id (no reload, as before). */
+  const [page, setPage] = useState<MapPage<MapKind> | null>(null);
+  const openSeq = useRef(0);
+  const wasVisible = useRef(false);
+  if (visible && !wasVisible.current) openSeq.current++;   // ★ counted in render, so the opening's first frame is already new
+  wasVisible.current = visible;
+  const pageIds = useRef(0);
+  const shownPage = mapPageShown(page, visible, kind, openSeq.current);
+  const pageUri = shownPage?.uri ?? null;
+  useEffect(() => { if (!visible) setPage(null); }, [visible]);   // ★ nothing of this opening survives it
   const [packError, setPackError] = useState<string | null>(null);
   useEffect(() => {
     if (!visible || !kind || !html) return;
     let dead = false;
+    const open = openSeq.current;
     (async () => {
       try {
         await ensureMapPack();
         const uri = await writeMapPage(html);
-        if (!dead) { setPageUri(uri); setPackError(null); }
+        if (!dead) { setPage((p) => mapPageWritten(p, uri, kind, open, () => ++pageIds.current)); setPackError(null); }
       } catch (e) {
         /* ★ Say so rather than showing an empty map for ever. A failure here means no basemap at
          *  all, which is exactly the silent-blank case this rework exists to end. */
@@ -2550,6 +2566,7 @@ export default function MapOverlay(
   const adsbListW = useRef(0), adsbListH = useRef(0);
   const adsbLegend = () => webRef.current?.injectJavaScript('window.__adsbLegend&&window.__adsbLegend();true;');
   const [adsbSel, setAdsbSel] = useState<string | null>(null);
+  useEffect(() => { if (!visible || kind !== 'adsb') setAdsbSel(null); }, [visible, kind]);   // ★ beta96 no selection carried into another map
   const adsbFocus = (hex: string) =>
     webRef.current?.injectJavaScript(`window.__adsbFocus&&window.__adsbFocus(${JSON.stringify(String(hex))});true;`);
   const adsbFootprint = (w: number, h: number) => {
@@ -2682,6 +2699,8 @@ export default function MapOverlay(
         ) : !pageUri ? null : (
         <MacPinch webRef={webRef}>
         <WebView
+          /* ★★★ beta96 a new page (another kind, another opening) is a NEW WebView — see `page` above */
+          key={shownPage?.id ?? 0}
           ref={webRef}
           // baseUrl gives the document the INSTANCE's origin so in-page
           // fetches (/addon/hfdl/*, /api/*) are same-origin — CORS is a

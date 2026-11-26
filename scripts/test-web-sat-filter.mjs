@@ -48,7 +48,7 @@ const pas = (inMin, maxEl = 40) => [{ aos: now + inMin * 60, tca: now + inMin * 
 const SO50_AOS = now + 38 * 60, SON2_AOS = now + 70 * 60;
 const list = (sats) => ({
   type: 'sat_list', time: 'ok', located: true, now,
-  source: { orbits: 'Orbits: CelesTrak (celestrak.org) GP data', via: 'vibesdr.net', fetched: now - 7200, synced: now - 7200, fetching: false, pickPrivate: true },
+  source: { orbits: 'Orbits: CelesTrak (celestrak.org) GP data', via: 'vibesdr.net', fetched: now - 7200, synced: now - 7200, fetching: false, pickPrivate: false },   // ★★★ beta96 REMIND lives on a shared dial now (a private radio gets SCHEDULE — test-web-satellite-mode),
   sats: sats ?? [
     { id: 'METEOR-M2-3', name: 'METEOR-M2 3', norad: 57166, note: '', age: 0.4, ageState: 'fresh', el: -20, passes: pas(20, 62),
       tx: [{ label: 'LRPT', hz: 137900000, mode: 'lrpt', loop: 'costas', consumer: 'lrpt', reach: true, use: 'image', decoder: 'lrpt' }] },

@@ -13,6 +13,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <string>
 #include <vector>
@@ -57,6 +58,10 @@ struct Health {
     bool  batPresent = false, batCharging = false;
     int   batPct = -1;
     Level bat = OK;
+    /** ★★ beta96 (Stuart 11-26: "the listeners should know that info so they can work out how long they have left"):
+     *  minutes of listening left on battery — to the owner's suspend floor when one is set, else to empty — from the
+     *  measured discharge rate (BatteryEta). -1 = not known yet (charging, or under 10 min / 2 % of discharge seen). */
+    int   batMins = -1;
     /** ★★ DECODERS THAT CANNOT KEEP UP (Stuart, 2026-10-25: "a little addition to the health card that says something
      *  like Decoder too heavy"). Their readable names, sorted — see BehindWatch. Empty = all keeping up. */
     std::vector<std::string> behind;
@@ -846,6 +851,50 @@ inline const char* kindName(TempKind k) {
     }
 }
 
+/** ★★ beta96 — HOW LONG THE BATTERY LASTS (Stuart 11-26). Pure: fed the level (whole %) every health tick while the
+ *  server is on battery. The level moves in 1 % steps, so the rate is taken between STEP EDGES (the first change seen
+ *  and the latest), never from the first sample (which may sit anywhere inside a step). A step that is overdue — longer
+ *  than twice the average — means the drain slowed, and the rate is taken to now instead, so the figure never promises
+ *  less than it should. Points older than 3 h are dropped (the load changes). Charging, or the level rising, forgets
+ *  everything. Rounded (5 min under an hour, 10 min above), capped at 48 h — a guide, not a gauge. */
+struct BatteryEta {
+    struct P { double t; int pct; };
+    std::vector<P> pts;
+    int last = -1;
+    void reset() { pts.clear(); last = -1; }
+    /** Minutes until `floorPct` (0 = empty), or -1 while not known. */
+    int feed(int pct, bool discharging, double tSec, int floorPct = 0) {
+        if (pct < 0 || !discharging) { reset(); return -1; }
+        if (last >= 0 && pct > last) pts.clear();
+        if (pts.empty() || pct != last) { pts.push_back({tSec, pct}); if (pts.size() > 64) pts.erase(pts.begin()); }
+        last = pct;
+        while (pts.size() > 3 && tSec - pts[1].t > 3 * 3600.0) pts.erase(pts.begin());
+        if (pts.size() < 3) return -1;            // the first sample + at least two step edges
+        const P& e0 = pts[1]; const P& eN = pts.back();
+        const int drop = e0.pct - eN.pct;
+        const double dt = eN.t - e0.t;
+        if (drop < 2 || dt < 600.0) return -1;
+        double rate = drop / dt;                  // % per second
+        if (tSec - eN.t > 2.0 / rate) rate = (e0.pct - pct) / (tSec - e0.t);   // overdue: the drain slowed
+        if (!(rate > 0)) return -1;
+        const int floor = floorPct > 0 && floorPct < 100 ? floorPct : 0;
+        double mins = (pct - floor) / rate / 60.0;
+        if (mins <= 0) return 0;
+        if (mins > 48 * 60) mins = 48 * 60;
+        const int step = mins < 60 ? 5 : 10;
+        return int(std::lround(mins / step)) * step;
+    }
+};
+/** The listener's line for it — "Battery: about 2 h 10 min of listening left". Empty when not known. */
+inline std::string batteryEtaText(int mins, bool toFloor) {
+    if (mins < 0) return "";
+    if (mins < 5) return toFloor ? "Battery: listening pauses within minutes" : "Battery: within minutes of empty";
+    std::string t;
+    if (mins >= 60) { t = std::to_string(mins / 60) + " h"; if (mins % 60) t += " " + std::to_string(mins % 60) + " min"; }
+    else t = std::to_string(mins) + " min";
+    return "Battery: about " + t + " of listening left";
+}
+
 /** The public message. ★ Levels and the battery percentage only — no °C, no MHz, no RAM figure. */
 inline std::string json(const Health& h) {
     /* ★★ ONE DECIMAL IS ENOUGH AND IS THE POINT. The colour is interpolated from this, and the eye
@@ -868,7 +917,8 @@ inline std::string json(const Health& h) {
     if (h.batPresent) {
         j += ",\"bat\":{\"present\":true,\"pct\":" + std::to_string(h.batPct)
            + ",\"charging\":" + (h.batCharging ? "true" : "false")
-           + ",\"level\":" + std::to_string((int)h.bat) + "}";
+           + ",\"level\":" + std::to_string((int)h.bat)
+           + (h.batMins >= 0 ? ",\"mins\":" + std::to_string(h.batMins) : std::string()) + "}";
     } else {
         j += ",\"bat\":{\"present\":false}";
     }
@@ -899,7 +949,7 @@ inline std::string json(const Health& h) {
 inline bool differs(const Health& a, const Health& b) {
     return a.cpu != b.cpu || a.ram != b.ram || a.temp != b.temp || a.tempKind != b.tempKind
         || a.bat != b.bat || a.batPresent != b.batPresent || a.batCharging != b.batCharging
-        || a.batPct != b.batPct || a.behind != b.behind || a.usb != b.usb || a.notes != b.notes || a.warns != b.warns;
+        || a.batPct != b.batPct || a.batMins != b.batMins || a.behind != b.behind || a.usb != b.usb || a.notes != b.notes || a.warns != b.warns;
 }
 
 }  // namespace vibehealth

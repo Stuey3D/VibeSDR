@@ -338,6 +338,38 @@ int main() {
         const auto pill = w.behindSplit(t + 4000, feels, &admin);
         ok(pill.empty() && admin.size() == 1 && admin[0] == "ADS-B", "a decoder not noted this tick is forgotten in both lists");
     }
+    {   // ★★★ beta96 (Stuart 11-26): the battery is listener-facing again — the % on the pill, and how long is left
+        vibehealth::BatteryEta e;
+        // 1 % every 3 min (20 %/h) from 80 %, sampled every 2 s, the floor at 20 %
+        int got = -2; double t = 100.0;
+        const double startStep = 100.0 + 50;   // the first drop comes 50 s in (mid-step start)
+        for (; t < 100.0 + 50 + 3 * 180 + 1; t += 2) {
+            const int pct = 80 - (t < startStep ? 0 : 1 + int((t - startStep) / 180));
+            got = e.feed(pct, true, t, 20);
+        }
+        ok(got == -1, "under 10 min of drain seen: no figure yet");
+        for (; t < 100.0 + 50 + 10 * 180 + 1; t += 2) {
+            const int pct = 80 - (t < startStep ? 0 : 1 + int((t - startStep) / 180));
+            got = e.feed(pct, true, t, 20);
+        }
+        // at 69 %, 20 %/h, floor 20 → 49 % / 20 %/h = 147 min → rounds to 150
+        ok(got >= 140 && got <= 160, ("20 %/h at 69 % to a 20 % floor: about 2 h 30 min (got " + std::to_string(got) + ")").c_str());
+        ok(vibehealth::batteryEtaText(got, true).find("Battery: about 2 h") == 0, vibehealth::batteryEtaText(got, true).c_str());
+        const int toEmpty = e.feed(69, true, t, 0);
+        ok(toEmpty >= 200 && toEmpty <= 210, ("no floor: to empty, about 3 h 27 min (got " + std::to_string(toEmpty) + ")").c_str());
+        // the drain stops (the step is overdue): the figure grows, never shrinks as if still draining
+        const int slowed = e.feed(69, true, t + 3600, 20);
+        ok(slowed > got, ("an overdue step reads as a slower drain (" + std::to_string(slowed) + " > " + std::to_string(got) + ")").c_str());
+        ok(e.feed(69, false, t + 3602, 20) == -1 && e.pts.empty(), "charging forgets it");
+        ok(e.feed(70, true, t + 3604, 20) == -1, "and starts again from nothing");
+        ok(vibehealth::batteryEtaText(-1, true).empty() && vibehealth::batteryEtaText(35, false) == "Battery: about 35 min of listening left"
+           && vibehealth::batteryEtaText(120, true) == "Battery: about 2 h of listening left", "the words");
+        vibehealth::Health h; h.batPresent = true; h.batPct = 55; h.batMins = 130;
+        ok(vibehealth::json(h).find("\"bat\":{\"present\":true,\"pct\":55,\"charging\":false,\"level\":0,\"mins\":130}") != std::string::npos,
+           "the json carries pct AND mins on the pill's message");
+        vibehealth::Health h2 = h; h2.batMins = 140;
+        ok(vibehealth::differs(h, h2), "a new estimate is sent");
+    }
     fs::remove_all(g_root);
     std::printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;

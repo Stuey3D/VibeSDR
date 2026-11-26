@@ -1053,6 +1053,53 @@ export function globeLabelText(s: string | undefined, max = 18): string {
   const t = (s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
   return t.length > max ? t.slice(0, max - 1) + '…' : t;
 }
+/** ★★ beta96 (a tester's screenshot, 11-26: "192.168.1.2:48000" beside the bird) THE RECEIVER's LABEL IS A NAME, NEVER AN
+ *  ADDRESS. The app passes the server entry's name, which for a server added by address IS the address — a listener must
+ *  never see a server's LAN address, port or host on the globe. An IP (v4 / v6), anything with a port, a URL, localhost
+ *  and the private suffixes (.local .lan .home .internal .localdomain) → '' (the label reads RECEIVER). */
+export function globeRxName(s: string | undefined | null): string {
+  const t = (s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!t) return '';
+  if (/:\/\//.test(t)) return '';                                            // a URL
+  if (/^\[?[0-9a-f:]*:[0-9a-f:]*\]?(:\d+)?$/i.test(t) && /:/.test(t)) return '';   // IPv6 (bracketed or bare)
+  if (/\b\d{1,3}(\.\d{1,3}){3}\b/.test(t)) return '';                      // an IPv4 anywhere in it
+  if (/^[\w.-]+:\d{1,5}$/.test(t)) return '';                               // host:port
+  if (/^localhost$/i.test(t) || /\.(local|lan|home|internal|localdomain|home\.arpa)\.?$/i.test(t)) return '';
+  return t;
+}
+/** ★★ beta96 (Stuart 11-26) WHAT THE HALF-GLOBE DRAWS AT EACH SIZE. SMALL (the box not BIG): only the orbit line, the
+ *  footprint, the receiver dot and a simple satellite GLYPH — no words, no drawn bird, no beam cone, no arrows, no tick
+ *  (at 120 px they overprinted each other and the text beside). BIG keeps everything it had. One answer for both clients. */
+export interface GlobeLayers { labels: boolean; bird: boolean; glyph: boolean; beam: boolean; arrows: boolean; tick: boolean; orbit: boolean; foot: boolean; rx: boolean }
+export function globeLayers(small: boolean): GlobeLayers {
+  return small
+    ? { labels: false, bird: false, glyph: true, beam: false, arrows: false, tick: false, orbit: true, foot: true, rx: true }
+    : { labels: true, bird: true, glyph: false, beam: true, arrows: true, tick: true, orbit: true, foot: true, rx: true };
+}
+/** ★★ beta96 (Stuart 11-26) THE SMALL GLOBE's SATELLITE: a small SQUARE body with a short line either side for the panels,
+ *  turned to the BIG bird's heading (its boom axis `u`, so the two views agree), corners and ends snapped to whole screen
+ *  pixels (`sc` = scene units per pixel) so it stays crisp. `body` is filled, `panels` stroked ~1.5 px; both in the bird's
+ *  colour. Sizes in screen px: body 5 px square, panels from 4 to 9 px out from the centre. */
+export const GLOBE_GLYPH = { half: 2.5, p0: 4, p1: 9, line: 1.5 } as const;
+export function globeGlyph(at: { x: number; y: number }, u: [number, number], sc: number): { body: string; panels: string } {
+  const n = Math.hypot(u[0], u[1]) || 1;
+  const ux = u[0] / n, uy = u[1] / n, px = -uy, py = ux;
+  const snap = (v: number) => Math.round(v / sc) * sc;
+  const cx = snap(at.x), cy = snap(at.y);
+  const pt = (a: number, b: number): [number, number] => [snap(cx + (ux * a + px * b) * sc), snap(cy + (uy * a + py * b) * sc)];
+  const h = GLOBE_GLYPH.half;
+  const body = poly([pt(-h, -h), pt(h, -h), pt(h, h), pt(-h, h)]);
+  const panels = poly([pt(-GLOBE_GLYPH.p1, 0), pt(-GLOBE_GLYPH.p0, 0)], false) + poly([pt(GLOBE_GLYPH.p0, 0), pt(GLOBE_GLYPH.p1, 0)], false);
+  return { body, panels };
+}
+/** ★★ beta96 THE READOUT's LAYOUT (a tester's phone, 11-26: the small globe sat over the right of the text): the globe
+ *  beside the words only where the words keep a column of at least SAT_TEXT_MIN_W px next to it; otherwise (and BIG) it
+ *  sits on its own row under them. `boxW` = the readout's inner width in px, `globeW` the small globe's width. */
+export const SAT_TEXT_MIN_W = 200;
+export function satReadoutLayout(boxW: number, big: boolean, globeW: number, gap = 8): 'beside' | 'stacked' {
+  if (big) return 'stacked';
+  return boxW > 0 && boxW - globeW - gap >= SAT_TEXT_MIN_W ? 'beside' : 'stacked';
+}
 export function globeLabels(g: GlobeScene, rxName: string | undefined, satName: string | undefined, font: number): { rx: GlobeLabel | null; sat: GlobeLabel | null } {
   const cw = font * 0.62, pad = font * 0.25;
   type Box = { l: number; t: number; r: number; b: number };
@@ -1083,7 +1130,7 @@ export function globeLabels(g: GlobeScene, rxName: string | undefined, satName: 
     satL = tries.find((L) => inside(boxOf(L)) && !hit(boxOf(L), birdBox!)) ?? null;
   }
   let rxL: GlobeLabel | null = null;
-  const rt = globeLabelText(rxName) || 'RECEIVER';
+  const rt = globeLabelText(globeRxName(rxName)) || 'RECEIVER';   // ★★ beta96 never an address
   if (g.rx) {
     const dr = font * 0.6;
     const tries: GlobeLabel[] = [
@@ -1149,7 +1196,10 @@ export const SAT_REMIND_SET_WHAT = 'A pop-up shortly before this pass rises — 
 /** ★ The re-check as it fires: why it can no longer be picked ('' = it can). The server's own words where it gave them. */
 export function satRemindWhy(l: SatList | null, r: Pick<SatReminder, 'norad' | 'tx' | 'name'>): string {
   if (!l) return '';
-  if (l.source?.pickPrivate !== true) return SAT_REMIND_SHARED_WHY;
+  /* ★★★ beta96 (Stuart 11-26: "Shared VFOs keep the remind system") REMIND is the SHARED DIAL's key now — where tuning would
+   *  move everyone, a pass reminds instead of tuning by itself (satSchedule.ts satSession). Its LISTEN is the listener's own
+   *  pick, through ask-before-tuning like a tap on the row, so a shared dial no longer blocks it here. Where nobody else
+   *  is affected the row's key is SCHEDULE. (SAT_REMIND_SHARED_WHY stays for callers that still say it.) */
   const sat = l.sats.find((s) => s.norad === r.norad);
   const t = sat?.tx[r.tx];
   if (!sat || !t) return `${r.name} is no longer listed on this server`;

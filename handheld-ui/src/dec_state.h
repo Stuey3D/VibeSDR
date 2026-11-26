@@ -944,8 +944,20 @@ inline void decOnBinary(App& a, const RadioState& s, const std::string& b) {
     else if (op == 0x06 && b.size() >= 3 && u.active == "rtty") u.tuneHint = decTuneHint((int16_t)((uint8_t)b[1] << 8 | (uint8_t)b[2]), s.mode);
     else if (op == 0x07 && b.size() >= 13 && u.active == "navtex") {
         // ★ the server's own FEC count for the message its NNNN just closed (2026-10-05)
-        char t[128]; std::snprintf(t, sizeof t, "— message: %u clean · %u repaired · %u lost —", decU32(b, 1), decU32(b, 5), decU32(b, 9));
-        u.log.line(t);
+        char t[160];
+        const uint32_t c = decU32(b, 1), r = decU32(b, 5), l = decU32(b, 9), n = c + r + l;
+        if (b.size() >= 21 && n > 0) {
+            // ★★ beta96 (display only): split by the two copies — clean = both agreed, FEC = one copy / soft, lost
+            const uint32_t ag = std::min(decU32(b, 13), c + r), dis = decU32(b, 17);
+            std::snprintf(t, sizeof t, "— decode quality: %.1f %% clean · %.1f %% FEC · %.1f %% lost (%u chars%s",
+                          100.0 * ag / n, 100.0 * (c + r - ag) / n, 100.0 * l / n, n, dis ? "" : ") —");
+            std::string line = t;
+            if (dis) { std::snprintf(t, sizeof t, "; copies disagreed %.1f %%) —", 100.0 * dis / n); line += t; }
+            u.log.line(line);
+        } else {
+            std::snprintf(t, sizeof t, "— message: %u clean · %u repaired · %u lost —", c, r, l);
+            u.log.line(t);
+        }
     }
 }
 
@@ -1376,7 +1388,7 @@ inline void decCannedTick(App& a, const RadioState& s) {
         static const std::string txt = "ZCZC GA42\nWZ 1534\nNORTH SEA. HUMBER. FISHING VESSEL ADRIFT 53-41N 000-52E.\nVESSELS IN VICINITY KEEP SHARP LOOKOUT.\nNNNN\n";
         const size_t at = (size_t)(k * 7) % txt.size();
         decOnBinary(a, s, decTextFrame(txt.substr(at, 7)));
-        if (at + 7 >= txt.size()) { std::string f(13, '\0'); f[0] = 0x07; f[4] = 44; f[8] = 2; decOnBinary(a, s, f); }
+        if (at + 7 >= txt.size()) { std::string f(21, '\0'); f[0] = 0x07; f[4] = 44; f[8] = 2; f[16] = 42; f[20] = 1; decOnBinary(a, s, f); }   // ★ beta96 21 bytes
         if (k == 1) decOnBinary(a, s, std::string("\x03\x03", 2));
     } else if (m == "cw" || m == "psk") {
         if (k % 4 == 0) {

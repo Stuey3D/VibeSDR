@@ -17,6 +17,7 @@ import React, { useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
+import type { LinkedList } from './LinkedList';
 import { DSC_IDLE, DSC_LEVEL_BG, DSC_LEVEL_BORDER, DSC_LEVEL_NAMES, DSC_LEVEL_TEXT, dscFreqText, dscTimeText, type DscCall } from '../services/dsc';
 
 /** A key at the top of the box: the tune offer (`offer`), or a channel (lit while the dial is on it). */
@@ -32,41 +33,60 @@ export interface DscViewProps {
   onMap?: (c: DscCall) => void;
   scrollRef?: React.RefObject<ScrollView | null>;
   onScrollY?: (y: number) => void;
+  /** ★★★ beta96 iPhone Duo half-open BIG: DSC is ONE list (the keys at its head, then the calls), so it CONTINUES across the
+   *  fold — both panels draw it and scroll together (LinkedList; Stuart 2026-11-26). The upper copy measures and brings
+   *  the pad's row into view. Absent = the one box, as always. */
+  linked?: { part: 'upper' | 'lower'; list: LinkedList };
+}
+
+/**
+ * The column's blocks in drawing order — the tune offer, the channel keys (one block), the idle line or the calls — and
+ * the block a list-zone index (`focusIdx`: the keys first, then the calls) is drawn in. Pure, for the linked list.
+ */
+export function dscBlocks(keys: readonly { offer?: boolean }[], calls: number): { count: number; of: (fi: number) => number } {
+  const hasOffer = keys.some((k) => k.offer), hasChans = keys.some((k) => !k.offer);
+  const offerB = hasOffer ? 0 : -1, chansB = hasChans ? (hasOffer ? 1 : 0) : -1;
+  const first = (hasOffer ? 1 : 0) + (hasChans ? 1 : 0);
+  return { count: first + Math.max(1, calls),
+           of: (fi: number) => (fi < keys.length ? (keys[fi]?.offer ? offerB : chansB) : first + (fi - keys.length)) };
 }
 
 export const dscHasPos = (c: DscCall) => c.lat !== null && c.lon !== null;
 
-export default function DscView({ calls, keys = [], bodySize, focusIdx, onMap, scrollRef, onScrollY }: DscViewProps) {
+export default function DscView({ calls, keys = [], bodySize, focusIdx, onMap, scrollRef, onScrollY, linked }: DscViewProps) {
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const own = useRef<ScrollView | null>(null);
   const sv = scrollRef ?? own;
   const rowY = useRef<number[]>([]);
   const nk = keys.length;
+  const blocks = dscBlocks(keys, calls.length);
+  const measure = linked?.part === 'upper' ? linked.list : null;
+  if (measure) measure.count(blocks.count);
+  const boxAt = (k: number) => (measure ? measure.box(k) : undefined);
+  const first = blocks.count - Math.max(1, calls.length);
   useEffect(() => {
     if (focusIdx < 0) return;
+    if (linked) { if (linked.part === 'upper') linked.list.reveal(blocks.of(focusIdx)); return; }
     if (focusIdx < nk) { try { sv.current?.scrollTo({ y: 0, animated: false }); } catch { /* detached */ } return; }
     const y = rowY.current[focusIdx - nk];
     if (y == null) return;
     try { sv.current?.scrollTo({ y: Math.max(0, y - 40), animated: false }); } catch { /* detached */ }
-  }, [focusIdx, sv, nk]);
+  }, [focusIdx, sv, nk]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ring = (i: number) => (i + nk === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
   const offer = keys.find((k) => k.offer);
   const chans = keys.filter((k) => !k.offer);
 
-  return (
-    <ScrollView ref={sv as any} style={[cs.body, bodySize]} contentContainerStyle={[cs.content, scrollLane]}
-                showsVerticalScrollIndicator scrollEventThrottle={32}
-                onScroll={(e) => onScrollY?.(e?.nativeEvent?.contentOffset?.y ?? 0)}>
+  const column = (<>
       {!!offer && (
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel={offer.a11y} onPress={offer.press}
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel={offer.a11y} onPress={offer.press} onLayout={boxAt(0)}
                           style={[cs.offer, { borderColor: tk.chipBorderAct, backgroundColor: tk.chipBgAct }, keys.indexOf(offer) === focusIdx && { borderColor: tk.focus, borderWidth: 2 }]}>
           <Text style={[cs.offerTxt, { color: tk.accent }]}>{offer.label}</Text>
           <Text style={[cs.offerWhy, { color: tk.muted }]}>A listed DSC frequency is the assigned one — the dial goes 1.7 kHz below it in USB.</Text>
         </TouchableOpacity>
       )}
       {chans.length > 0 && (
-        <View style={cs.keys}>
+        <View style={cs.keys} onLayout={boxAt(offer ? 1 : 0)}>
           {chans.map((k) => {
             const i = keys.indexOf(k);
             return (
@@ -81,7 +101,7 @@ export default function DscView({ calls, keys = [], bodySize, focusIdx, onMap, s
           })}
         </View>
       )}
-      {!calls.length && <Text style={[cs.idle, { color: tk.muted }]}>{DSC_IDLE}</Text>}
+      {!calls.length && <Text style={[cs.idle, { color: tk.muted }]} onLayout={boxAt(first)}>{DSC_IDLE}</Text>}
       {calls.map((c, i) => {
         const rule = DSC_LEVEL_BORDER[c.level];
         const colour = DSC_LEVEL_TEXT[c.level] ?? tk.value;
@@ -104,7 +124,7 @@ export default function DscView({ calls, keys = [], bodySize, focusIdx, onMap, s
           </View>
         );
         return (
-          <View key={`${c.id}:${c.rf}`} onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
+          <View key={`${c.id}:${c.rf}`} onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; boxAt(first + i)?.(e); }}
                 accessible accessibilityLabel={`${level}${c.repeat > 1 ? `, sent ${c.repeat} times` : ''}: ${c.line}`}
                 style={[cs.row, { borderBottomColor: tk.divider }, !!rule && { borderLeftColor: rule, borderLeftWidth: 3 }, !!wash && { backgroundColor: wash },
                         ring(i), c.check === 'unconfirmed' && cs.unconf]}>
@@ -113,13 +133,25 @@ export default function DscView({ calls, keys = [], bodySize, focusIdx, onMap, s
           </View>
         );
       })}
+  </>);
+
+  return (
+    linked ? (
+      <linked.list.Panel part={linked.part} style={cs.body} contentStyle={[cs.content, cs.linkedContent, scrollLane]}>{column}</linked.list.Panel>
+    ) : (
+    <ScrollView ref={sv as any} style={[cs.body, bodySize]} contentContainerStyle={[cs.content, scrollLane]}
+                showsVerticalScrollIndicator scrollEventThrottle={32}
+                onScroll={(e) => onScrollY?.(e?.nativeEvent?.contentOffset?.y ?? 0)}>
+      {column}
     </ScrollView>
+    )
   );
 }
 
 const makeCs = (_T: DecoderTokens) => StyleSheet.create({
   body:    {},
   content: { paddingHorizontal: 8, paddingVertical: 6 },
+  linkedContent: { paddingBottom: 0 },   // ★ beta96 the linked list's end is its own (LinkedList endPad)
   idle:    { fontFamily: DECODER_FONT, fontSize: 11, padding: 10, textAlign: 'center' },
   // ★ The channel keys: 44 pt targets with their hitSlop, wrapped; a distress channel's rule in the distress red.
   keys:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },

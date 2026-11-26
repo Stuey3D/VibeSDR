@@ -13,6 +13,8 @@
  *     0x01 | u64 BE timestamp | u32 BE length | UTF-8 text
  *     0x03 | u8 state
  *     0x07 | u32 BE clean | u32 BE repaired | u32 BE lost   NAVTEX: one message's FEC count, after its NNNN
+ *            [| u32 BE agreed | u32 BE disagreed]          ★ beta96: both copies agreed / both valid but different
+ *     0x08 | i16 BE signal | i16 BE noise (dBFS × 10)     ★ beta96 NAVTEX: a second's SNR slice, before its text
  *
  *   WEFAX
  *     0x01 | u32 BE line | u32 BE width | width bytes greyscale
@@ -144,7 +146,9 @@ export interface DecoderCallbacks {
   /** ★ RTTY AUTO's tuning guide (server 0x06 | i16 BE): audio-pitch move in Hz (+ = up), 0 = fine. */
   onTuneHint?: (audioHz: number) => void;
   /** ★ NAVTEX: the message just closed by NNNN, as the server's FEC counted it (0x07, 2026-10-05). */
-  onNavtexFec?: (fec: { clean: number; repaired: number; lost: number }) => void;
+  onNavtexFec?: (fec: { clean: number; repaired: number; lost: number; agreed?: number; disagreed?: number }) => void;
+  /** ★ beta96 NAVTEX: a second's SNR slice (0x08) — signal and noise, dBFS (noise in the 100 Hz bit bandwidth). */
+  onNavtexSlice?: (sigDb: number, noiseDb: number) => void;
   /** A new image is starting. height is 0 for WEFAX (it grows without bound). */
   onImageStart?: (width: number, height: number) => void;
   /** One image line. `rgb` is true for SSTV (3 bytes/px), false for WEFAX (grey). */
@@ -737,7 +741,10 @@ export class DecoderClient {
         } else if (op === 0x06 && buf.byteLength >= 3 && this.mode === 'rtty') {
           this.cb.onTuneHint?.(dv.getInt16(1, false));
         } else if (op === 0x07 && buf.byteLength >= 13 && this.mode === 'navtex') {
-          this.cb.onNavtexFec?.({ clean: dv.getUint32(1, false), repaired: dv.getUint32(5, false), lost: dv.getUint32(9, false) });
+          this.cb.onNavtexFec?.({ clean: dv.getUint32(1, false), repaired: dv.getUint32(5, false), lost: dv.getUint32(9, false),
+                                  ...(buf.byteLength >= 21 ? { agreed: dv.getUint32(13, false), disagreed: dv.getUint32(17, false) } : {}) });
+        } else if (op === 0x08 && buf.byteLength >= 5 && this.mode === 'navtex') {
+          this.cb.onNavtexSlice?.(dv.getInt16(1, false) / 10, dv.getInt16(3, false) / 10);
         }
         return;
 

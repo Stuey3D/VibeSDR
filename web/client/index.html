@@ -2157,6 +2157,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #galGeo { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 #galGeo[hidden] { display: none; }
 #galOutline.on, .satOutline.on { border-color: var(--accent, #ffd600); color: var(--accent, #ffd600); }
+#galWrap { margin: 8px 0; }
+#galWrap > #galText { margin: 0; }
+#galWrap.snr > #galText { padding-left: 16px; }
+#galStrip { left: 6px; top: 11px; bottom: 11px; }
+#galQual { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+#galQual[hidden] { display: none; }
+#galSnrBar { flex: 1 1 auto; max-width: 260px; }
+.sres .galSnr { margin-top: 3px; max-width: 200px; height: 3px; }
 #galText { white-space: pre-wrap; word-break: break-word; max-height: 55vh; overflow-y: auto;
            font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--btn-text);
            background: rgba(0,0,0,0.25); border: 1px solid var(--btn-border); border-radius: 8px; padding: 10px; margin: 8px 0; }
@@ -3174,6 +3182,23 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #nvMeta { margin-left: auto; color: var(--text-dim); font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
 #nvText { margin: 0; color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 #nvIdle { color: var(--text-dim); font-size: 12px; padding: 12px; text-align: center; }
+/* ★★ beta96 NAVTEX decode quality + SNR (navtexSnrDom.ts): a 4 px strip + 6 px gap down the left of the text, each line
+   coloured by the SNR it was decoded at; thin horizontal timelines for the status and the gallery rows. Colours are the
+   same on every theme (red / amber / green read on default, silver and black). */
+.snrWrap { position: relative; }
+.snrStrip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; overflow: hidden; pointer-events: none; display: none; }
+.snrWrap.snr .snrStrip { display: block; }
+.snrStrip i { position: absolute; left: 0; width: 4px; display: block; border-radius: 1px; }
+.snrWrap.snr #nvText { padding-left: 10px; }
+.snrBar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: rgba(127,127,127,0.25); }
+.snrBar i { display: block; flex: 1 1 0; min-width: 0; }
+.snrBar[hidden], .nqBar[hidden] { display: none; }
+.nqBar { display: inline-flex; width: 64px; height: 6px; border-radius: 2px; overflow: hidden; background: rgba(127,127,127,0.25); flex: none; }
+.nqBar i { display: block; height: 100%; flex-basis: 0; }
+#nvQual { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 10px; letter-spacing: 0.4px;
+          color: var(--text-dim); margin: -2px 0 6px; }
+#nvQual[hidden] { display: none; }
+#nvSnrBar { flex: 1 1 100px; min-width: 60px; max-width: 220px; }
 #navtexView.has #nvIdle, #navtexView:not(.has) #nvHead, #navtexView:not(.has) #nvText { display: none; }
 #decImage { display: none; width: 100%; background: #000; image-rendering: pixelated; }
 #decImage.on { display: block; }
@@ -4569,7 +4594,11 @@ select.btn { padding: 6px 8px; }
          src/utils/navtex.ts, the same file the app uses. LIVE / PREV and SAVE are the image decoders' keys. -->
     <div id="navtexView">
       <div id="nvHead"><span id="nvTitle"></span><span id="nvMeta"></span></div>
-      <pre id="nvText"></pre>
+      <!-- ★★ beta96 (Stuart 11-26) decode quality + the SNR timeline, growing while the message arrives (navtexSnrDom.ts);
+           each part only when the server measured it. The strip beside the text colours each line by its SNR. -->
+      <div id="nvQual" hidden><span class="nqBar" id="nvQBar" hidden></span><span id="nvQText"></span>
+        <span class="snrBar" id="nvSnrBar" hidden></span><span id="nvSnrText"></span></div>
+      <div class="snrWrap" id="nvWrap"><div class="snrStrip" id="nvStrip"></div><pre id="nvText"></pre></div>
       <div id="nvIdle">standing by — each message appears here as it arrives</div>
     </div>
     <div id="decImgWrap"><div id="decOutlineBar" hidden><button class="btn" id="decOutline" aria-pressed="false">MAP OUTLINE: OFF</button></div><canvas id="decImage"></canvas><svg id="decGeo" hidden aria-hidden="true"></svg><div id="decAlignCover" style="display:none"
@@ -6180,7 +6209,9 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="hint" id="galViewMeta"></div>
     <div class="hint" id="galTrNote" hidden></div>
-    <pre id="galText"></pre>
+    <!-- ★★ beta96 a NAVTEX message's decode-quality bar, and the SNR strip down the left of its text (navtexSnrDom.ts) -->
+    <div id="galQual" hidden><span class="nqBar" id="galQBar" hidden></span><span class="snrBar" id="galSnrBar" hidden></span></div>
+    <div class="snrWrap" id="galWrap"><pre id="galText"></pre><div class="snrStrip" id="galStrip"></div></div>
     <div class="hint" id="galOutlineWhy" hidden></div>
     <div id="galImgWrap"><img id="galImg" alt="" hidden><svg id="galGeo" hidden aria-hidden="true"></svg></div>
   </div>

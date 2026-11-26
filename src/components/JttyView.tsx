@@ -32,22 +32,26 @@ export interface JttyViewProps {
   onTune: (rfHz: number) => void;
   scrollRef?: React.RefObject<ScrollView | null>;
   onScrollY?: (y: number) => void;
+  /** ★★ beta96 iPhone Duo half-open BIG: 'upper' = the stations, 'lower' = SPOTS (each panel its own scroll). */
+  part?: 'upper' | 'lower';
 }
 
-export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scrollRef, onScrollY }: JttyViewProps) {
+export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scrollRef, onScrollY, part }: JttyViewProps) {
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const sigs = useMemo(() => sortJtty(list), [list]);
   const shownSpots = spots.slice(0, JTTY_SPOTS_SHOWN);
   const now = Date.now();
-  const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
+  const showSigs = part !== 'lower', showSpots = part !== 'upper';
+  const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx,
+    part ? (i: number) => (i < sigs.length) === (part === 'upper') : undefined);
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
 
   return (
     <ScrollView {...scrollProps} style={[cs.body, bodySize]} contentContainerStyle={[cs.content, scrollLane]}
                 showsVerticalScrollIndicator>
-      {!sigs.length && <Text style={[cs.idle, { color: tk.muted }]}>{JTTY_IDLE_ROWS}</Text>}
-      {sigs.map((sg, i) => {
+      {showSigs && !sigs.length && <Text style={[cs.idle, { color: tk.muted }]}>{JTTY_IDLE_ROWS}</Text>}
+      {showSigs && sigs.map((sg, i) => {
         const qc = CW_Q_COLOURS[sg.q];
         return (
           <TouchableOpacity key={`s${sg.id}`} activeOpacity={0.6}
@@ -68,11 +72,13 @@ export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scro
           </TouchableOpacity>
         );
       })}
-      <View style={[cs.head, { borderBottomColor: tk.divider }]}>
+      {showSpots && (
+      <View style={[cs.head, { borderBottomColor: tk.divider }, part === 'lower' && { paddingTop: 2 }]}>
         <Text style={[cs.headTxt, { color: tk.label }]}>SPOTS</Text>
       </View>
-      {!shownSpots.length && <Text style={[cs.idle, { color: tk.muted }]}>{JTTY_IDLE_SPOTS}</Text>}
-      {shownSpots.map((s, j) => {
+      )}
+      {showSpots && !shownSpots.length && <Text style={[cs.idle, { color: tk.muted }]}>{JTTY_IDLE_SPOTS}</Text>}
+      {showSpots && shownSpots.map((s, j) => {
         const i = sigs.length + j;
         return (
           <TouchableOpacity key={`p${s.callsign}`} activeOpacity={0.6}

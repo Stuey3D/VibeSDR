@@ -18,17 +18,19 @@ export interface NcdxfViewProps {
   log: string;
   bodySize: StyleProp<ViewStyle>;
   scrollRef?: React.RefObject<ScrollView | null>;
+  /** ★★ beta96 iPhone Duo half-open BIG: 'upper' = the grid, 'lower' = the heard log (each panel its own scroll). */
+  part?: 'upper' | 'lower';
 }
 
-export default function NcdxfView({ report, log, bodySize, scrollRef }: NcdxfViewProps) {
+export default function NcdxfView({ report, log, bodySize, scrollRef, part }: NcdxfViewProps) {
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const rows = useMemo(() => (report ? ncdxfRows(report) : []), [report]);
   const lines = useMemo(() => log.split('\n').filter((l) => l.trim()).slice(-12).reverse(), [log]);
   return (
     <ScrollView ref={scrollRef as any} style={[cs.body, bodySize]} contentContainerStyle={[cs.content, scrollLane]} showsVerticalScrollIndicator>
-      {!report && <Text style={[cs.idle, { color: tk.muted }]}>waiting for the first ten-second slot…</Text>}
-      {!!report && (
+      {part !== 'lower' && !report && <Text style={[cs.idle, { color: tk.muted }]}>waiting for the first ten-second slot…</Text>}
+      {part !== 'lower' && !!report && (
         <View>
           <View style={cs.row}>
             <Text style={[cs.call, { color: tk.label }]} />
@@ -48,7 +50,8 @@ export default function NcdxfView({ report, log, bodySize, scrollRef }: NcdxfVie
           ))}
         </View>
       )}
-      {lines.map((l, i) => <Text key={i} style={[cs.log, { color: tk.value }]} numberOfLines={2}>{l}</Text>)}
+      {part === 'lower' && !lines.length && <Text style={[cs.idle, { color: tk.muted }]}>each beacon heard is logged here</Text>}
+      {part !== 'upper' && lines.map((l, i) => <Text key={i} style={[cs.log, { color: tk.value }]} numberOfLines={2}>{l}</Text>)}
     </ScrollView>
   );
 }

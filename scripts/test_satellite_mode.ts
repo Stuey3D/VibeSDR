@@ -279,7 +279,9 @@ console.log('— 1.6 REMIND: the re-check as it fires');
   const r = { norad: 27607, tx: 0, name: 'SO-50' };
   const priv = parseSatList({ ...raw, source: { ...raw.source, pickPrivate: true } })!;
   ok(satRemindWhy(priv, r) === '', 'still pickable → no why');
-  ok(satRemindWhy(parseSatList({ ...raw, source: { ...raw.source, pickPrivate: false } }), r) === SAT_REMIND_SHARED_WHY, 'now shared → "This radio is now shared…"');
+  // ★★★ beta96 ON PURPOSE (Stuart 11-26: "Shared VFOs keep the remind system"): REMIND is the shared dial's key now, its
+  //    LISTEN the listener's own pick through ask-before-tuning — a shared dial no longer blocks it
+  ok(satRemindWhy(parseSatList({ ...raw, source: { ...raw.source, pickPrivate: false } }), r) === '' && typeof SAT_REMIND_SHARED_WHY === 'string', 'beta96 a shared dial → LISTEN offered (its own pick, ask-before-tuning)');
   const off = parseSatList({ ...raw, source: { ...raw.source, pickPrivate: true }, sats: raw.sats.map((s) => s.id === 'SO-50' ? { ...s, tx: [{ ...s.tx[0], reach: false, why: 'Out of this receiver’s range — it is locked to 130–170 MHz' }] } : s) })!;
   ok(satRemindWhy(off, r) === 'Out of this receiver’s range — it is locked to 130–170 MHz', 'reach false → the server\'s why');
   ok(/no longer listed/.test(satRemindWhy(parseSatList({ ...raw, source: { ...raw.source, pickPrivate: true }, sats: [] }), r)), 'gone from the list → says so');

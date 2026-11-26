@@ -63,7 +63,7 @@ ok(/ex\.style\.display = here \? 'none' : '';/.test(main) && /note\.textContent 
 for (const [f, k] of [['adsbSetMode', 'adsb'], ['ismSetMode', 'ism'], ['ndbSetMode', 'ndb'], ['aisSetMode', 'ais'], ['avSetMode', 'avdata'], ['sdSetMode', 'sondes'], ['vmSetMode', 'vormap']])
   ok(new RegExp(`function ${f}\\(on: boolean\\) \\{\\n  if \\(!on && onlyModeRefuses\\('${k}'\\)\\) return;`).test(main), `web: every way out of ${k} goes through the guard (${f})`);
 for (const f of ['adsbUiOn', 'ismUiOn', 'ndbUiOn', 'aisUiOn', 'avUiOn', 'sdUiOn', 'vmUiOn'])
-  ok(new RegExp(`function ${f}\\(\\) \\{\\n[^\\n]*\\n  setTimeout\\(syncOnlyMode, 0\\);`).test(main), `web: ${f} re-reads the rule once its view is drawn`);
+  ok(new RegExp(`function ${f}\\(\\) \\{\\n(?:  wholeMapYield\\('[a-z]+'\\);[^\\n]*\\n)?[^\\n]*\\n  setTimeout\\(syncOnlyMode, 0\\);`).test(main), `web: ${f} re-reads the rule once its view is drawn`);
 ok(/onlyModeNow\(\) === 'adsb' \? 'This receiver is ADS-B only/.test(main), 'web: the locked-dial message does not say "press EXIT ADS-B" on an ADS-B-only receiver');
 
 // ── the app ──

@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { seaAreas, seaAreaById, seaAreasFor, seaAreasInView, seaAttributionAll, seaCompose, seaSeverity, seaPlaceMet, seaLabel, seaLegendRows, seaAttribution, SEA_NAME_ZOOM } from '../src/services/seaAreas.ts';
-import { shipLayersPresent, shipToggles } from '../src/services/shippingMap.ts';
+import { shipLayersPresent, shipToggles, shipLayersOf, shipLayersFor, shipToggle, shipOn } from '../src/services/shippingMap.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, w: string) => { console.log(`  [${c ? 'PASS' : 'FAIL'}] ${w}`); c ? pass++ : fail++; };
@@ -102,19 +102,33 @@ console.log('── pass 2: JMA and the high-seas sub-areas as broadcast ──'
   ok(seaAreasFor({ lat: -33.92, lon: 18.42 }, null).some((a) => a.src === 'za'), 'a Cape Town receiver: SAWS areas within reach');
   ok(['nz', 'za', 're', 'ar', 'cl', 'au', 'jp'].every((s) => /\S/.test(seaAttribution(all.filter((a) => a.src === s)))), 'every new source has its attribution line');
 }
-console.log('── presence: absent where no area is near ──');
+console.log('── presence: on every server (beta96), the default follows the coast ──');
 {
   const london = { lat: 51.5, lon: -0.1 }, tokyo = { lat: 35.6, lon: 139.7 }, astana = { lat: 51.17, lon: 71.45 }, halifax = { lat: 44.65, lon: -63.57 };
   const nUk = seaAreasFor(london, null).length, nJp = seaAreasFor(tokyo, null).filter((a) => a.src === 'jp').length, nKz = seaAreasFor(astana, null).length;
   ok(nUk >= 31 && nUk < 120, `a London receiver: the UK and nearby areas (${nUk})`);
-  ok(nKz === 0, `an Astana receiver (inland Asia): none — no SEA AREAS toggle (${nKz})`);
+  ok(nKz === 0, `an Astana receiver (inland Asia): none near (${nKz})`);
   ok(nJp >= 20, `a Tokyo receiver: JMA's marine forecast areas since pass 2 (${nJp})`);
   ok(seaAreasFor(astana, { areas: [{ id: 'dogger', lat: 0, lon: 0, stale: false, fc: [] }] }).length === 1, 'a forecast names an area far away: that one is drawn');
   const nHx = seaAreasFor(halifax, null);
   ok(nHx.some((a) => a.src === 'ca') && nHx.some((a) => a.src === 'us'), `Halifax: Canadian and US areas (${nHx.length})`);
   const base = { ships: 0, dsc: 0, stations: 1, warnings: 0, weather: 1, aisMode: false };
   ok(shipLayersPresent({ ...base, areas: nUk }, 'navtex').join() === 'stations,weather,areas', 'NAVTEX map near the UK: STATIONS, WEATHER, SEA AREAS');
-  ok(!shipLayersPresent({ ...base, areas: 0 }, 'navtex').includes('areas'), 'no area near: no SEA AREAS layer');
+  // ★★ beta96 (Stuart 11-26: "Sea areas on all servers since community map is on them")
+  const inland = shipLayersPresent({ ...base, areas: 0 }, 'navtex');
+  ok(inland.includes('areas'), 'no area near (inland): the SEA AREAS toggle is there all the same');
+  ok(shipLayersPresent({ ...base, stations: 0, weather: 0, areas: 0 }, 'ships').includes('areas'), 'on the ships map too, inland');
+  const fresh = shipLayersOf(null);
+  ok(shipOn('areas', inland, shipLayersFor(fresh, false)) === false, 'inland, never touched: SEA AREAS defaults OFF');
+  ok(shipOn('areas', inland, shipLayersFor(fresh, true)) === true, 'coastal, never touched: SEA AREAS defaults ON (as before)');
+  const turnedOn = shipToggle(shipLayersFor(fresh, false), 'areas', true);
+  ok(shipOn('areas', inland, shipLayersFor(turnedOn, false)) === true && turnedOn.areasSet === true, 'inland, switched on: stays on');
+  const saved = shipLayersOf(JSON.stringify(turnedOn));
+  ok(saved.areasSet === true && shipLayersFor(saved, false).areas === true, 'the choice survives a reload');
+  const other = shipToggle(shipLayersFor(fresh, false), 'ships', false);
+  ok(!other.areasSet && shipLayersFor(shipLayersOf(JSON.stringify(other)), true).areas === true, 'flipping another layer does not fix SEA AREAS to the inland default');
+  ok(shipLayersOf(JSON.stringify({ areas: false })).areasSet === true, 'a beta95 save with SEA AREAS off is the listener\'s choice');
+  ok(shipLayersFor(shipLayersOf(JSON.stringify({ areas: true })), false).areas === false, 'a beta95 save with it on (the old default) follows the coast');
   ok(shipToggles(['stations', 'weather', 'areas']).some((t) => t.label === 'SEA AREAS'), 'the toggle is labelled SEA AREAS');
 }
 console.log('── the tint and the names ──');

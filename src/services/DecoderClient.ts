@@ -237,7 +237,9 @@ export interface DecoderCallbacks {
   /** ★ RTTY AUTO's tuning guide (server 0x06): how far the tones should move in AUDIO pitch (+ = up), 0 = fine. */
   onTuneHint?:  (audioHz: number) => void;
   /** ★ NAVTEX: the message just closed by NNNN, as the server's FEC counted it (0x07, VibeServer 2026-10-05). */
-  onNavtexFec?: (fec: { clean: number; repaired: number; lost: number }) => void;
+  onNavtexFec?: (fec: { clean: number; repaired: number; lost: number; agreed?: number; disagreed?: number }) => void;
+  /** ★ beta96 NAVTEX: a second's SNR slice (0x08) — signal and noise, dBFS (noise in the 100 Hz bit bandwidth). */
+  onNavtexSlice?: (sigDb: number, noiseDb: number) => void;
   /** ★ NAVTEX: the server decoder's state (0x03: 0 no signal, 1 hunting, 3 reading) — a lock lost ends the open
    *  message (NavtexAssembler.lockState; NickB 2026-10-12, a co-channel station taking over 490). */
   onNavtexState?: (state: number) => void;
@@ -1147,7 +1149,10 @@ export class DecoderClient {
         this.cb.onTuneHint?.(v.getInt16(1, false));
       } else if (name === 'navtex' && t === 0x07 && u8.length >= 13) {
         // ★ A server older than 2026-10-05 never sends this; the box then keeps its '_'-derived "% lost".
-        this.cb.onNavtexFec?.({ clean: v.getUint32(1, false), repaired: v.getUint32(5, false), lost: v.getUint32(9, false) });
+        this.cb.onNavtexFec?.({ clean: v.getUint32(1, false), repaired: v.getUint32(5, false), lost: v.getUint32(9, false),
+                                ...(u8.length >= 21 ? { agreed: v.getUint32(13, false), disagreed: v.getUint32(17, false) } : {}) });   // ★ beta96 split
+      } else if (name === 'navtex' && t === 0x08 && u8.length >= 5) {
+        this.cb.onNavtexSlice?.(v.getInt16(1, false) / 10, v.getInt16(3, false) / 10);   // ★ beta96 SNR slice
       }
 
     } else if (name === 'wefax') {
