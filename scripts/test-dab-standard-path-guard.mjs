@@ -59,7 +59,12 @@ ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged 
  *  applying an rtl_tcp client's gain commands (0x03 / 0x04 / 0x08 / 0x0d), reached only while a client is on the door,
  *  never on DAB's path; none was removed (checked with this gainish pattern from c0282cfe5 to the merge). DAB's AGC / gain
  *  sources are still held to BASE byte for byte above. */
-const SHIM_BASE = process.env.SHIM_BASE || '6a4bd8ea9';
+/* ★ beta96: moved to d5b761c30 (b96-integrate, 11-26). The only gain-ish lines added since 6a4bd8ea9 are (a) the words "gain",
+ *  "agc" in singleSatRefuses' list of message TYPES a listener may not send on a SATELLITES single-mode radio (a refusal —
+ *  it stops a gain change, never makes one) and (b) one READ of g_gainTarget for the once-a-minute log line while VDL2 rides
+ *  a satellite pass's 137 MHz capture (b96-keeprun). Neither is on DAB's path; none was removed (checked with this gainish
+ *  pattern from 6a4bd8ea9 to d5b761c30). DAB's AGC / gain sources are still held to BASE byte for byte above. */
+const SHIM_BASE = process.env.SHIM_BASE || 'd5b761c30';
 const shim = git('diff', '-U0', SHIM_BASE, '--', C + 'local_sdr_shim.cpp').split('\n');
 const gainish = /setGain|setTunerGain|g_gain|dabSeedGain|vibeAgc|Agc\(|agc_|rtlAgc|gainSteps|setLna|setIfGain/;
 ok(!shim.some((l) => l.startsWith('-') && !l.startsWith('---') && gainish.test(l)), 'the shim removes no line that touches the gain or AGC');
