@@ -147,7 +147,7 @@ export function drawBand(o: Uint8Array | Uint8ClampedArray, w: number, oy: numbe
   o.set(band, oy * w * 4);
 }
 /** A band on its own (the web page puts it on the canvas). */
-export function bandPixels(w: number, h: number, label: string[]): Uint8ClampedArray {
+export function bandPixels(w: number, h: number, label: string[]): Uint8ClampedArray<ArrayBuffer> {
   const o = new Uint8ClampedArray(w * h * 4); drawBand(o, w, 0, h, label); return o;
 }
 /** The whole shown picture (the app): `src` RGBA, w wide, true rows → the squashed RGBA (plan.h rows). */
