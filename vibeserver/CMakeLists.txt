@@ -1075,6 +1075,12 @@ endif()
 add_executable(test-radio-api "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-api.cpp")
 vibe_sanitize(test-radio-api)
 target_link_libraries(test-radio-api PRIVATE vibeserver_core)
+# ★ b96 kept-running ADS-B at 2.56 MS/s across IN-PROCESS restarts (the Sony) — needs fake-rtl-tcp: scripts/test-adsb-restart.sh
+add_executable(test-adsb-restart "${CMAKE_CURRENT_SOURCE_DIR}/test-adsb-restart.cpp")
+target_link_libraries(test-adsb-restart PRIVATE vibeserver_core)
+# ★★★ b96-keeprun kept VDL2 / kept ISM 868 across IN-PROCESS restarts — needs fake-rtl-tcp: scripts/test-keep-restart.sh
+add_executable(test-keep-restart "${CMAKE_CURRENT_SOURCE_DIR}/test-keep-restart.cpp")
+target_link_libraries(test-keep-restart PRIVATE vibeserver_core)
 # ★ V12 USRP: the B2xx policy + hwinfo shape, and — only where UHD is linked — "no USRP here" answered cleanly by the
 #   real source (scripts/run-tests.sh builds the same file header-only, against the stub).
 if(VIBE_USRP_BUILT)
@@ -1295,6 +1301,11 @@ add_executable(test-decoder-reach "${CMAKE_CURRENT_SOURCE_DIR}/test-decoder-reac
 target_include_directories(test-decoder-reach PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-decoder-reach)
 add_test(NAME decoder-reach COMMAND test-decoder-reach)
+# ★★★ beta96 a mode an update adds stays off on a restricted / single-mode radio (docs/v12/NEW-MODES-OFF.md)
+add_executable(test-new-modes "${CMAKE_CURRENT_SOURCE_DIR}/test-new-modes.cpp")
+target_include_directories(test-new-modes PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-new-modes)
+add_test(NAME new-modes COMMAND test-new-modes WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # ★★ V12 (2026-11-05) what each radio can do — its modes, decoders and the settings that mean anything on it
 #    (vibe_radio_caps.h), per driver, from its config: the Setup page's per-radio tabs and the shim's `modes` offer.
 add_executable(test-radio-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-caps.cpp")

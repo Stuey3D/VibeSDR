@@ -16208,7 +16208,7 @@ setWholeRadioKeys(() => {
   // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md): a whole-radio mode — every satellite, its passes, a pick tunes and
   //     decodes, AUTO DOPPLER. Only where the server offers `doppler` (the radio reaches a listed downlink); the menu's rule
   //     — not drawn while it cannot run, unless on (so it can be left).
-  add('sat', 'SATELLITE', satCap, !!satPanel?.active, toggleSatMode, 'Satellites — pick one from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets');
+  add('sat', 'SATELLITE', onlyModeNow() && !satPanel?.active ? null : satCap, !!satPanel?.active, toggleSatMode, 'Satellites — pick one from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets');
   return keys;
 });
 

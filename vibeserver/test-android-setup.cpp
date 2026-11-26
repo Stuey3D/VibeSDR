@@ -161,12 +161,13 @@ int main(int argc, char** argv) {
         "blockedModes":"drm,ft8","dabRateBoost":true,"dabScanLabels":1,
         "gainLimits":"all:250,fm:150","gainLocks":"fm","gainSplits":"fm:60","gainCurves":"fm:1",
         "allowRanges":"fm,mw","blockRanges":"air",
-        "landingDabChannel":5,"landingDabSid":49537,"landingDabService":"BBC R4","landingAdsb":true,"adsbKeepRunning":true,
+        "landingDabChannel":5,"landingDabSid":49537,"landingDabService":"BBC R4","landingAdsb":true,"adsbKeepRunning":true,"landingMap":"avmar","landingModes":"adsb","mapKeep":true,"singleMode":"",
         "fmDeemph":50,"fmStereo":false,"fmNr":true,"fmIms":false,"fmCeq":false,"fmAutoBw":false,"fmNb":false,"fmRemember":true,
         "antennaIcon":"discone","antennaRanges":"25-1300","antennaFilters":"fm","antennaNames":"A=Loop",
         "antennaSwitch":"{\"enabled\":true,\"host\":\"10.0.0.9\",\"port\":1883,\"antennas\":[{\"name\":\"Loop\",\"cmd\":\"a\"},{\"name\":\"Dipole\",\"cmd\":\"b\"}]}",
         "antennaMap":"hf Loop, fm Dipole","antennaLocked":true,
         "bgDecode":"{\"on\":true,\"profiles\":[]}","dxScan":"{\"on\":true}",
+        "adsbFeed":"{\"serve\":true,\"port\":30005,\"open\":false,\"push\":true,\"feeds\":[{\"host\":\"feed.adsb.lol\",\"port\":30004,\"on\":true}]}",
         "rawIq":1,"rawIqMax":1,"rawIqLanMaxHz":"250000",
         "converterOffsetHz":-125000000,"converterInputLoHz":1000000,"converterInputHiHz":30000000)") + extra + "}";
     };
@@ -311,6 +312,24 @@ int main(int argc, char** argv) {
         ok(pj.get("landingDabChannel")->n == -1 && pj.get("landingDabSid")->n == 0 && pj.get("landingDabService")->s.empty(), "never a DAB landing beside a DAB block");
         ok(settingsPatch(R"({"radios":[{"landingAdsb":false,"adsbKeepRunning":true}]})", rtlRaw, patch, restart, err)
            && !parsed(patch).get("adsbKeepRunning")->b, "ADS-B keep-running never without the ADS-B landing");
+        // ★★★ beta96 a beta95 phone config (the ADS-B pair, no map keys) reads on the page as the map + ADS-B, kept
+        {
+            J pc; ok(parse(pageConfig(rawFor(R"({"landingAdsb":true,"adsbKeepRunning":true})", "rtl", "")), pc), "a beta95 config reads");
+            const J* r0 = pc.get("radios") && !pc.get("radios")->a.empty() ? &pc.get("radios")->a[0] : nullptr;
+            ok(r0 && r0->get("landingMap") && r0->get("landingMap")->s == "avmar" && r0->get("landingModes")->s == "adsb" && r0->get("mapKeep")->b,
+               "★ beta95's ADS-B landing + keep shows as the map, ADS-B, kept");
+        }
+        // ★★★ beta96 the landing map: the page's words win, the ADS-B pair mirrored from them
+        ok(settingsPatch(R"({"radios":[{"landingMap":"avmar","landingModes":"vdl2","mapKeep":true,"landingAdsb":true,"adsbKeepRunning":true}]})", rtlRaw, patch, restart, err), "a VDL2 keep accepted", err);
+        pj = parsed(patch);
+        ok(pj.get("landingMap")->s == "avmar" && pj.get("landingModes")->s == "vdl2" && pj.get("mapKeep")->b
+           && !pj.get("landingAdsb")->b && !pj.get("adsbKeepRunning")->b, "VDL2 kept stored; the ADS-B pair OFF (an older engine never lands in ADS-B)", patch);
+        ok(settingsPatch(R"({"radios":[{"landingMap":"avmar","landingModes":"adsb","mapKeep":true}]})", rtlRaw, patch, restart, err)
+           && parsed(patch).get("landingAdsb")->b && parsed(patch).get("adsbKeepRunning")->b, "ADS-B on the map mirrors the pair (the boot's setVibeServerLandingAdsb)");
+        ok(settingsPatch(R"({"radios":[{"landingMap":"avmar","landingModes":"ais,adsb","mapKeep":true}]})", rtlRaw, patch, restart, err)
+           && parsed(patch).get("landingModes")->s == "adsb", "two modes no single mode decodes: the first (table order)");
+        ok(settingsPatch(R"({"radios":[{"landingMap":"","landingModes":"vdl2","mapKeep":true}]})", rtlRaw, patch, restart, err)
+           && parsed(patch).get("landingModes")->s.empty() && !parsed(patch).get("mapKeep")->b, "no map: nothing kept");
         ok(settingsPatch(R"({"place":"Northampton","lat":"52.2405","lon":"-0.9027","country":"gb","locFollow":false})", rtlRaw, patch, restart, err), "a place accepted");
         pj = parsed(patch);
         const J* loc = pj.get("serverLocation");
@@ -362,7 +381,7 @@ int main(int argc, char** argv) {
             {"zoomSpectrum","r:zoomSpectrum"},{"landingFreq","r:landingFreq"},{"demodMode","r:demodMode"},
             {"sessionLimit","r:sessionLimitMin"},{"sessionLimitMode","r:sessionLimitSoft"},{"idleKick","r:idleKickMin"},
             {"nbWide","r:nbWide"},{"vfoB","r:vfoB"},{"idleGrace","r:idleGrace"},{"spectrogram","r:spectrogram"},
-            {"rate","r:rate"},{"rateLock","r:rateLock"},{"maxFps","r:maxFps"},{"modeBlockList","r:blockedModes"},{"bandModeList","r:blockedModes"},
+            {"rate","r:rate"},{"rateLock","r:rateLock"},{"maxFps","r:maxFps"},{"modeBlockList","r:blockedModes"},{"radioUseGeneral","r:singleMode"},{"radioUseSingle","r:singleMode"},{"singlePick","r:singleMode"},{"bandModeList","r:blockedModes"},
             {"dabRateBoost","r:dabRateBoost"},{"adsb256","r:adsb256"},{"ism256","r:ism256"},{"dabScanLabels","r:dabScanLabels"},
             {"gainRestSlider","r:restGain"},{"gainRest","r:restGain"},{"gainRestLock","r:restGain"},{"rtlAgc","r:rtlAgc"},
             {"androidTunerBw","r:tunerBwAuto"},{"gainAgcLock","r:agcLock"},{"gainPick","r:gainLimits"},{"gainCurve","r:gainCurves"},
@@ -372,7 +391,8 @@ int main(int argc, char** argv) {
             {"allowPick","r:allowRanges"},{"allowLo","r:allowRanges"},{"allowHi","r:allowRanges"},
             {"blockPick","r:blockRanges"},{"blockLo","r:blockRanges"},{"blockHi","r:blockRanges"},
             {"dabLandOn","r:landingDabChannel"},{"dabLandBlock","r:landingDabChannel"},{"dabLandStation","r:landingDabSid"},
-            {"adsbLandOn","r:landingAdsb"},{"adsbKeep","r:adsbKeepRunning"},
+            {"adsbLandOn","r:landingAdsb"},{"adsbKeep","r:adsbKeepRunning"},{"mapLandOn","r:landingMap"},{"mapLandWhich","r:landingMap"},{"mapModeList","r:landingModes"},
+            {"afServe","r:adsbFeed"},{"afPort","r:adsbFeed"},{"afOpen","r:adsbFeed"},{"afPush","r:adsbFeed"},   // ★★ beta96
             {"fmDeemph","r:fmDeemph"},{"fmStereo","r:fmStereo"},{"fmNr","r:fmNr"},{"fmIms","r:fmIms"},{"fmCeq","r:fmCeq"},
             {"fmAutoBw","r:fmAutoBw"},{"fmNb","r:fmNb"},{"fmReturn","r:fmRemember"},{"fmRemember","r:fmRemember"},
             {"antRangePreset","r:antennaRanges"},{"antFilterPreset","r:antennaFilters"},{"antPortNames","r:antennaNames"},

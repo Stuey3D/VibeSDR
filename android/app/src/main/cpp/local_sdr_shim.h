@@ -393,6 +393,11 @@ public:
     /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): this radio's settings, as RadioConfig::dxScan stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
     static bool setDxScan(const std::string& json, std::string& err);
+    /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): this radio's settings, as RadioConfig::adsbFeed
+     *  stores them — the local Beast server and the push feeds. Live. false (and `err`) when it does not parse. */
+    static bool setAdsbFeed(const std::string& json, std::string& err);
+    /** …and their status ({"on","adsb","serve":{…},"feeds":[…],"line"}) — the admin page, the Setup card, the app. */
+    static std::string adsbFeedStatusJson();
     /** ★★★ …and where this radio's DX log lives (one file per radio; written every ~5 min when changed, and at shutdown). */
     static void setDxLogFile(const std::string& path);
     /** ★★ V12 what a background-decoding editor may offer here — the engine's own decoder table (ids, labels,
@@ -855,6 +860,13 @@ public:
      *  meaningful with `land`). Both ignored where ADS-B cannot run on this radio (vsAdsbWhyNot). See the landing block
      *  in the spectrum accept path and adsbKeepTick for the precedence against DAB, background decoding and the park. */
     static void setVibeServerLandingAdsb(bool land, bool keepRunning);
+    /** ★★★ beta96 THE LANDING MAP (vibe_keep_store.h): map "avmar" | "", modes "vdl2" | "acars,vdl2" | "ais" | "vor" | "adsb",
+     *  keep = that mode runs with nobody here. ADS-B stays with setVibeServerLandingAdsb (called first; the config mirrors
+     *  it); this one owns every other mode. Android: read off the config JSON in setVibeServerFmDefaults (no new JNI). */
+    static void setVibeServerMap(const std::string& map, const std::string& modesCsv, bool keep);
+    /** ★★★ beta96 THE SINGLE-MODE RADIO ("" = General): every other mode blocked over the owner's list (vsModeBlocked), the
+     *  mode landed and kept running where keep-running applies, the only-mode lock (onlyModeNow). vibe_keep_store.h. */
+    static void setVibeServerSingle(const std::string& token);
     /** ★★ THE OWNER'S BROADCAST FM DEFAULTS, AND WHETHER THE SERVER REMEMBERS OR RETURNS (vibe_fm_defaults.h).
      *  `json` is a flat object with the config's fm* keys (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb,
      *  fmRemember); absent keys take the defaults. An UNCHANGED set is ignored, so re-applying a config forgets
@@ -1028,6 +1040,12 @@ public:
         double freqHint = 0;
     };
     int startIcom(const IcomStart& o, std::string& err);
+    /** ★★ V12 beta96 AN "ADS-B BEAST FEED (from another receiver)" RADIO (Stuart 11-26; docs/v12/ADSB-FEED.md): no
+     *  hardware at all — the server reads another receiver's Beast output at host:port (dump1090-fa beside PiAware on the
+     *  LAN, say) and serves the ADS-B map from it. ADS-B is its only mode (no waterfall, tuning, gain or rate). Returns
+     *  the port it serves on, or -1 and `err`. */
+    int startBeast(const std::string& host, int beastPort, std::string& err);
+    static bool isBeastFeed();
     bool isIcom() const;
     /** ★ An Icom's power for the front door's radio list: "on" (CI-V answering), "switchingOn", "off" (USB there, CI-V
      *  silent — switched off or not answering), "absent" (USB gone), or "" (not an Icom). `autoOn` = "Power on the radio

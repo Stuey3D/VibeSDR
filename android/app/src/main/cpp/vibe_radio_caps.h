@@ -72,6 +72,11 @@ inline const std::vector<const char*>& allModes() {
         "vormap",           // ★ V12 the VOR / ILS MAP (docs/v12/VOR-MAP.md): a whole-radio mode sweeping 108–118 MHz, NDB's rules
         "sarsat",           // ★ V12 406 MHz beacons (docs/v12/SARSAT.md): a listener's decoder on the channel IQ, 406.0–406.1 MHz
         "ale",              // ★ V12 2G HF ALE (docs/v12/HF-DATA.md): a listener's decoder on USB, HF
+        /* ★★★ beta96 three switches the Setup page drew but this list never named — so on any radio with caps they were
+         *  HIDDEN (capMode false): the VARA tag, satellite labels, and SATELLITE mode itself (new, "sat"). */
+        "varatag",          // the VARA HF tag on the spectrum: HF
+        "satlabels",        // satellite names on the waterfall: where a satellite downlink can be received
+        "sat",              // ★★★ beta96 SATELLITE mode (vsSatModesAllowed): the same reach
     };
     return v;
 }
@@ -142,6 +147,18 @@ inline bool holds(const vibebands::Ranges& r, double lo, double hi) {
 inline Caps compute(const Facts& f) {
     Caps c;
     const std::string& d = f.driver;
+    /* ★★ V12 beta96 AN "ADS-B BEAST FEED (from another receiver)" RADIO: no hardware — its ADS-B comes from another
+     *  receiver's Beast output. ADS-B is its ONLY mode; none of an SDR's settings mean anything for it (AGENTS.md: no dead
+     *  controls) — no landing, gain, hardware, usage, raw IQ, VFO B, background decoding. */
+    if (d == "beast") {
+        c.iq = false;
+        c.modes = {"adsb"};
+        Settings& s = c.s;
+        s.usage = s.vfoB = s.rawIq = s.nbWide = s.landing = s.gain = s.hardware = s.fmDefaults = s.dabLanding = false;
+        s.adsbLanding = s.dxScan = s.bgDecode = s.converter = false;
+        c.hints.push_back("This radio reads another receiver's ADS-B (Beast) output, so the aircraft map is all it offers.");
+        return c;
+    }
     const vibebands::Ranges& R = f.ranges;
     const bool icom = d == "icom";
     c.iq = !icom;
@@ -224,7 +241,11 @@ inline Caps compute(const Facts& f) {
         }
         if (id == "wefax") return touches(R, 2e6, 23e6);
         if (id == "sitora") return touches(R, 1.6e6, 23e6);           // ★ the maritime HF bands in use
-        if (id == "rtty" || id == "mfsk" || id == "hell" || id == "ale") return hf;   // ★ ALE: 2G nets live 2–30 MHz
+        if (id == "rtty" || id == "mfsk" || id == "hell" || id == "ale" || id == "varatag") return hf;
+        // ★★★ beta96 the satellite downlinks' bands (vibe_sat_engine's list: 10 m, 137 MHz, 2 m, 70 cm, 23 cm / L-band)
+        if (id == "sat" || id == "satlabels")
+            return touches(R, 29.3e6, 29.6e6) || touches(R, 137.0e6, 138.0e6) || touches(R, 144.0e6, 146.0e6)
+                || touches(R, 435.0e6, 438.0e6) || touches(R, 1260.0e6, 1270.0e6);   // ★ ALE: 2G nets live 2–30 MHz
         if (id == "sstv" || id == "ft8" || id == "spots") return anyAmateur;
         if (id == "spotsband") return !icom && anyAmateur;                 // ★ Band reads IQ across a band
         if (id == "lrpt") return !icom && tableOk("lrpt");                // ★ V12 an IQ slice at 137.1 / 137.9 MHz (an Icom: no IQ)

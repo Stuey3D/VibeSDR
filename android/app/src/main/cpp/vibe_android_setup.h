@@ -22,6 +22,8 @@
 // ★ The JSON reader below is small and strict: it accepts what JSON.stringify and org.json write, and refuses the rest.
 #pragma once
 
+#include "vibe_keep_store.h"   // ★★★ beta96 the landing map + keep-running modes (migration, the mirrored ADS-B pair)
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -298,7 +300,7 @@ inline const std::vector<Control>& controlTable() {
         { "idleGrace",                                   D_ANY,   0 },
         { "spectrogram",                                 D_RADIO, P_ADV },
         { "rate rateLock maxFps",                        D_RADIO, 0 },
-        { "modeBlockList bandModeList",                  D_ANY,   0 },   // the modes this aerial is offered (blockedModes)
+        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
         { "dabRateBoost",                                D_RADIO, 0 },
         { "adsb256 ism256",                              D_RTL,   0 },
         { "dabScanLabels",                               D_RADIO, P_LITE },
@@ -308,7 +310,7 @@ inline const std::vector<Control>& controlTable() {
           "bandCopyFrom gainList gainAdd",               D_RADIO, P_ADV },
         { "gainIfBw",                                    D_RTL,   P_ADV },
         { "allowPick allowLo allowHi blockPick blockLo blockHi", D_ANY, P_ADV },
-        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep", D_RADIO, 0 },
+        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList mapKeep", D_RADIO, 0 },   // ★★★ beta96 the landing map
         { "fmDeemph fmStereo fmNr fmIms fmCeq fmAutoBw fmNb fmReturn fmRemember", D_RADIO, 0 },
         { "antRangePreset antFilterPreset antPortNames", D_ANY,   0 },
         { "swYes swNo swBroker swUser swPass swLocked swAntennas", D_ANY, 0 },
@@ -321,6 +323,7 @@ inline const std::vector<Control>& controlTable() {
         { "icomBaud icomCiv icomScopeSpeed icomTuneLock icomPowerOn icomAutoOff icomOffDelayMin", D_ICOM, 0 },
         { "bgOn bgWait bgKeepInRange bgProfiles",        D_RADIO, 0 },
         { "dxOn dxWait dxBands dxRaster dxOirt dxExt dxViewAdmin", D_RADIO, 0 },
+        { "afServe afPort afOpen afPush",                D_RADIO, 0 },   // ★★ V12 beta96 flight trackers (RadioConfig::adsbFeed)
         { "rawIqOn rawIqLan rawIqStreams rawIqLocalOnly", D_RADIO, P_NOT_LITE },
         { "rspVibeAgc rfNotch dabNotch rspAmNotch rspHdr rspExtRef rspDabDecim rfAgc autoNotch userNotch "
           "dabAgcOverride dabAgcTarget agcSet agcSetLock", D_RSP, 0 },
@@ -555,6 +558,16 @@ inline std::string pageConfig(const std::string& raw) {
     r.set("landingDabService", J::str(strOr(S("landingDabService"), "")));
     r.set("landingAdsb", J::boolean(boolOr(S("landingAdsb"), false)));
     r.set("adsbKeepRunning", J::boolean(boolOr(S("adsbKeepRunning"), false)));
+    {   // ★★★ beta96 the landing map — a beta95 config's ADS-B pair reads as the map + ADS-B (vibekeep::applyRead)
+        const J* lm = S("landingMap"); const J* lmo = S("landingModes"); const J* mk = S("mapKeep");
+        vibekeep::Stored ks;
+        ks.landingAdsb = boolOr(S("landingAdsb"), false); ks.adsbKeepRunning = boolOr(S("adsbKeepRunning"), false);
+        ks.landingMap = strOr(lm, ""); ks.landingModes = strOr(lmo, ""); ks.mapKeep = boolOr(mk, false);
+        vibekeep::applyRead(ks, true, lm || lmo || mk);
+        r.set("landingMap", J::str(ks.landingMap)); r.set("landingModes", J::str(ks.landingModes)); r.set("mapKeep", J::boolean(ks.mapKeep));
+        r.set("landingAdsb", J::boolean(ks.landingAdsb)); r.set("adsbKeepRunning", J::boolean(ks.adsbKeepRunning));
+    }
+    { const std::string sm = strOr(S("singleMode"), ""); r.set("singleMode", J::str(vibekeep::singleOk(sm) ? sm : "")); }   // ★★★ beta96
     // ── Broadcast FM defaults (FM_DEFAULTS in services/fmDefaults.ts) ──
     r.set("fmDeemph", J::num(numOr(S("fmDeemph"), -1)));
     r.set("fmStereo", J::boolean(boolOr(S("fmStereo"), true)));
@@ -593,6 +606,7 @@ inline std::string pageConfig(const std::string& raw) {
     // ── background decoding and the DX scanner, one JSON text each (RadioConfig::bgDecode / dxScan) ──
     r.set("bgDecode", J::str(strOr(S("bgDecode"), "")));
     r.set("dxScan", J::str(strOr(S("dxScan"), "")));
+    r.set("adsbFeed", J::str(strOr(S("adsbFeed"), "")));   // ★★ V12 beta96
     // ── raw IQ out (the phone stores the LAN ceiling as text — see nativeServerConfig) ──
     r.set("rawIq", J::num(numOr(S("rawIq"), 0)));
     r.set("rawIqMax", J::num(numOr(S("rawIqMax"), 0)));
@@ -805,7 +819,10 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             }
             if (const J* v = r->get("maxFps"); v && v->t == J::Num) p.set("maxFftRate", J::num(snapTo({ 5, 10, 20 }, v->n)));
         }
-        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 400);
+        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 1200);
+        // ★★★ beta96 the single-mode radio — a token the server knows, else General
+        if (on("modeBlockList")) if (const J* v = r->get("singleMode"); v && v->t == J::Str)
+            p.set("singleMode", J::str(vibekeep::singleOk(v->s) ? v->s : ""));   // ★ beta96 was 400: every switch off + "seen@N" passes 400 and a cut list loses its last ids
         if (on("dabRateBoost")) flag(r, "dabRateBoost", "dabRateBoost");
         if (on("adsb256")) { flag(r, "adsb256", "adsb256"); flag(r, "ism256", "ism256"); }
         if (on("dabScanLabels")) num(r, "dabScanLabels", "dabScanLabels", -1, 1);
@@ -841,6 +858,17 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             flag(r, "landingAdsb", "landingAdsb");
             if (const J* la = r->get("landingAdsb"); la && (la->t == J::Bool || la->t == J::Num))
                 p.set("adsbKeepRunning", J::boolean(boolOr(la, false) && boolOr(r->get("adsbKeepRunning"), false)));
+            /* ★★★ beta96 THE LANDING MAP: the page's words win; the ADS-B pair is mirrored from them (vibekeep::migrate), so the
+             *  boot's setVibeServerLandingAdsb and the engine's map (read off this same config) can never disagree. */
+            const J* lm = r->get("landingMap"); const J* lmo = r->get("landingModes"); const J* mk = r->get("mapKeep");
+            if ((lm && lm->t == J::Str) || (lmo && lmo->t == J::Str)) {
+                vibekeep::Stored ks;
+                ks.landingAdsb = boolOr(r->get("landingAdsb"), false); ks.adsbKeepRunning = boolOr(r->get("adsbKeepRunning"), false);
+                ks.landingMap = strOr(lm, "").substr(0, 16); ks.landingModes = strOr(lmo, "").substr(0, 64); ks.mapKeep = boolOr(mk, false);
+                vibekeep::applyRead(ks, false, true);
+                p.set("landingMap", J::str(ks.landingMap)); p.set("landingModes", J::str(ks.landingModes)); p.set("mapKeep", J::boolean(ks.mapKeep));
+                p.set("landingAdsb", J::boolean(ks.landingAdsb)); p.set("adsbKeepRunning", J::boolean(ks.adsbKeepRunning));
+            }
         }
         if (on("fmDeemph")) {
             if (const J* v = r->get("fmDeemph"); v && v->t == J::Num) {
@@ -901,6 +929,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
         // ── background decoding and the DX scanner ──
         if (on("bgOn") && !jsonText(r, "bgDecode", "bgDecode", 16000, "the background decoding profiles")) return false;
         if (on("dxOn") && !jsonText(r, "dxScan", "dxScan", 4000, "the DX scanner's settings")) return false;
+        if (on("afServe") && !jsonText(r, "adsbFeed", "adsbFeed", 4000, "the flight-tracker sharing settings")) return false;   // ★★ beta96
         // ── raw IQ out ──
         if (on("rawIqOn")) {
             num(r, "rawIq", "rawIq", 0, 2);

@@ -44,6 +44,8 @@ nothing told it to. This branch ports them, end to end, plus the other V12 setti
 | (gallery directory, radio label, serial redaction) | — | **ports** | `VibeServerBoot` → `setGallery(files/gallery, …)`, label = SDR display name or the USB model, the USB serial kept out of every item (as `main.cpp`'s `gallerySerials`). |
 | (private DAB scan engine) | `bgDecode` | — | `privateScanConfig` drops `bgDecode`: a scan never runs the owner's profiles. |
 | **DX Scanner** (switch) — V12 2026-11-04 | `RadioConfig::dxScan` → `on` | **ports** | RADIO SETTINGS → WHEN NOBODY IS LISTENING, under Background Decoding (Setup: Radio tab, under Background Decoding). `components/DxScanSetup.tsx`; one JSON blob as the Setup page saves it. **Lite too** — the brief allowed Lite to ship without it, but the engine is the same shim and the benchmark's `dec_dxscan` row already makes a weak box sweep in smaller steps, so leaving it out would only take the feature away. Not drawn on an Icom. |
+| **Share ADS-B with flight trackers** — V12 beta96 | `RadioConfig::adsbFeed` (serve, port, open, push, feeds) | **ports** | RADIO SETTINGS → SHARE ADS-B WITH FLIGHT TRACKERS (`components/AdsbFeedSetup.tsx`, `utils/adsbFeed.ts`); one JSON blob as the Setup page saves it; not drawn on an HF+ or an Icom. docs/v12/ADSB-FEED.md. |
+| Add an ADS-B Beast feed radio / its address — V12 beta96 | `driver:"beast"`, `beastIn` | **not ported** | A radio of its own beside others on a desktop server; the phone serves the one radio it holds. |
 | DX Scanner: bands (FM and DAB / FM only / DAB only) | `dxScan.bands` | **ports** | Not offered on an Airspy HF+ (FM only — it cannot hold a DAB multiplex), as on the Setup page. |
 | DX Scanner: start after nobody has listened for [N] | `dxScan.waitMin` | **ports** | The same seven choices; a stored odd value is kept and shown. Default 5 min. |
 | DX Scanner: FM channel raster 100 / 50 kHz | `dxScan.raster` | **ports** | Only while FM is swept; with the hop count at the radio's rate. |
@@ -69,6 +71,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Broadcast FM defaults (+ remember / return) | `fm*` | ports (verified) | `setVibeServerFmDefaults(cfg)` reads the flat keys. |
 | Antenna port names | `antennaNames` | ports — **fixed** (this branch) | The screen called `NativeModules.VibeLocalSdrModule`, which does not exist (the module is `VibeLocalSDR`), so the radio's ports were never read and the names card never drew. Also the antenna switch's live apply and search. |
 | ADS-B as the landing / keep it running | `landingAdsb`, `adsbKeepRunning` | ports (verified) | |
+| ★ beta96 the landing map + keep-running modes (VDL2, ACARS, ACARS + VDL2, the VOR map, AIS, ADS-B) | `landingMap`, `landingModes`, `mapKeep` (+ the ADS-B pair mirrored) | ports | The screen's card (utils/keepRun.ts, the page's rule); the engine reads the three off the config JSON (`vsMapFromConfigJson`, no new JNI). docs/v12/KEEP-RUNNING.md. |
 | ADS-B at 2.56 MS/s (RTL) | `adsb256` | ports (verified) | |
 | ISM at 2.56 MS/s (RTL) | `ism256` | ports | V12 2026-11-16: the ADS-B switch's twin (MeshCom 433.175 beside LoRa APRS 433.775). |
 | Change the sample rate when a mode needs it + the rate guard | `dabRateBoost` | ports (verified) | |

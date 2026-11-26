@@ -16,7 +16,7 @@ const PAGE = read('android/app/src/main/cpp/vibe_setup_page.h');
 const SCREEN = read('src/screens/ServerModeScreen.tsx')
   + read('src/components/BackgroundDecodingSetup.tsx') + read('src/components/BandLimitEditor.tsx')
   + read('src/components/AntennaBandsEditor.tsx') + read('src/components/IcomSetupCard.tsx') + read('src/services/icomRadio.ts')
-  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx');
+  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx') + read('src/components/AdsbFeedSetup.tsx');
 const VS = read('src/services/vibeServer.ts') + read('src/services/rspCard.ts');
 const BOOT = read('android/app/src/main/java/com/vibesdr/app/VibeServerBoot.kt');
 const KT = BOOT + read('android/app/src/main/java/com/vibesdr/app/VibeIcom.kt');
@@ -43,6 +43,9 @@ const TABLE = [
   // ★★ V12 2026-11-12 how listeners reach it: the phone's server can only register a Cloudflare tunnel (VibeTunnel.kt
   //    sends kind:"tunnel"; there is no address box), so the three-way choice and the alias opt-out cannot work there.
   N(['reachAuto', 'reachOwn', 'reachHttps', 'dirAlias'], 'the phone server is always the Automatic tunnel (VibeTunnel.kt) — an own address and the vibesdr.net alias opt-out need a direct listing it cannot make'),
+  // ★★ V12 beta96 an "ADS-B Beast feed (from another receiver)" radio: the phone serves the one radio it holds; a radio with
+  //    no hardware beside it is a desktop server's (Stuart 11-26 — the Lenovo reading a PiAware Pi on the LAN)
+  N(['beastAddAddr', 'beastAddLabel', 'beastAddUsers', 'beastAddr'], 'an ADS-B Beast feed radio is a radio entry of its own on a multi-radio server; the phone serves the one radio it holds'),
   N(['srvPort'], 'the phone takes the first free port of 48000-48049 itself (one VibeServer per device)'),
   N(['rtlSerialNow', 'serialA', 'serialB'], 'radio serials that tell several radios apart on one box — a phone serves one radio'),
   N(['radioPin', 'radioPinClear'], 'a per-radio PIN on a multi-radio box — the phone has the server PIN (PIN — WHO MAY CONNECT)'),
@@ -88,6 +91,10 @@ const TABLE = [
   P(['antRangePreset', 'antFilterPreset'], 'AntennaBandsEditor', 'antennaRanges'),
   P(['adsbLandOn'], 'landingAdsb', 'landingAdsb'),
   P(['adsbKeep'], 'adsbKeep', 'adsbKeepRunning'),
+  // ★★★ beta96 the landing map + keep-running modes (utils/keepRun.ts on the screen; the engine reads them off the config)
+  P(['mapLandOn', 'mapLandWhich'], 'landingMap', 'landingMap'),
+  P(['mapKeep'], 'mapKeep', 'mapKeep'),
+  P(['radioUseGeneral', 'radioUseSingle', 'singlePick'], 'RADIO USE', 'singleMode'),
   P(['dabLandOn', 'dabLandBlock', 'dabLandStation'], 'landingDabCh', 'landingDabChannel'),
   P(['landingFreq', 'demodMode'], 'WHERE LISTENERS START', { sent: 'centerFreq: landingHz', applied: 'setVibeServerLanding(centerFreq, mode)' }),
   P(['fmDeemph', 'fmStereo', 'fmNr', 'fmIms', 'fmCeq', 'fmAutoBw', 'fmNb', 'fmReturn', 'fmRemember'], 'BROADCAST FM DEFAULTS', { sent: 'fmDefaultsKeys(cfg.fmDefaults', applied: 'setVibeServerFmDefaults(cfg.toString())' }),
@@ -119,6 +126,8 @@ const TABLE = [
   P(['spMeteor', 'spOrbcomm', 'spFirst'], 'Satellite passes', 'bgDecode'),
   // ★★★ V12 the idle DX scanner (components/DxScanSetup) — one JSON blob, RadioConfig::dxScan; Lite too (the same engine)
   P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxOirt', 'dxExt', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
+  // ★★ V12 beta96 share ADS-B with flight trackers (components/AdsbFeedSetup) — one JSON blob, RadioConfig::adsbFeed
+  P(['afServe', 'afPort', 'afOpen', 'afPush'], 'SHARE ADS-B WITH FLIGHT TRACKERS', 'adsbFeed'),
   P(['rspVibeAgc'], 'VibeAGC (SDRplay)', 'rspVibeAgc'),
   P(['nbWide'], 'IMPULSE NOISE BLANKER', 'nbWide'),
   // ── the SDRplay card (Stuart 2026-11-04: "all the ones currently in Linux go to android") and the HF+ calibration ──
@@ -180,7 +189,9 @@ ok(/VibeLocalSDR\.setGallery\(galleryDir\(filesDir\)/.test(BOOT), 'VibeServerBoo
 {
   const priv = BOOT.slice(BOOT.indexOf('fun privateScanConfig'), BOOT.indexOf('fun privateScanConfig') + 1700);
   ok(/"bgDecode",?/.test(priv) && /\.remove\(k\)/.test(priv), 'the private DAB scan engine never runs the owner\'s profiles');
-  ok(/"dxScan"\)\)/.test(priv), '…nor the owner\'s DX scanner (V12)');
+  ok(/"dxScan",?/.test(priv), '…nor the owner\'s DX scanner (V12)');
+  ok(/"adsbFeed"\)\)/.test(priv), '…nor share ADS-B with flight trackers (beta96)');
+  ok(/VibeLocalSDR\.setAdsbFeed\(cfg\.s\("adsbFeed"\)\)/.test(BOOT) && JNI.includes('nativeSetAdsbFeed'), 'VibeServerBoot applies adsbFeed on every start (beta96)');
   ok(/VibeLocalSDR\.setDxScan\(cfg\.s\("dxScan"\)\)/.test(BOOT) && /VibeLocalSDR\.setDxLogFile\(/.test(BOOT), 'VibeServerBoot applies dxScan and the DX log file on every start');
 }
 ok(JNI.includes('nativeSetBackgroundDecoding') && JNI.includes('nativeSetGallery') && JNI.includes('nativeBackgroundCaps') && JNI.includes('nativeValidateBackgroundDecoding'), 'JNI: background decoding, gallery, caps and the save rule');

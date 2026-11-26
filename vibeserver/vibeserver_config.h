@@ -214,6 +214,19 @@ struct Config {
      *  way to it. ★ Both OFF by default, and both ignored by the shim where ADS-B cannot run (vsAdsbWhyNot). */
     bool   landingAdsb = false;
     bool   adsbKeepRunning = false;
+    /* ★★★ beta96 THE LANDING MAP AND ITS KEEP-RUNNING MODES (vibe_keep_store.h / vibe_keep_run.h, docs/v12/KEEP-RUNNING.md —
+     *  Stuart 11-26: "I thought I'd be able to set VDL2 as the Sony's background mode"). landingMap "avmar" = a new listener
+     *  lands on the Aviation & Maritime map in landingModes ("adsb" | "vdl2" | "acars" | "vor" | "ais", or "vdl2,acars" where
+     *  the capture holds both); mapKeep = that mode runs with nobody here. The ADS-B case is MIRRORED into landingAdsb /
+     *  adsbKeepRunning above (the reader migrates beta95's two into these; the writer writes both), so an older build reads
+     *  the same ADS-B landing and never lands anywhere it does not know. ★ All OFF by default. */
+    std::string landingMap;
+    std::string landingModes;
+    bool   mapKeep = false;
+    /* ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26; vibe_keep_store.h singleBlocks): "" = General (listeners choose from the
+     *  ticked modes); else the one mode ("adsb", "vdl2", "ais", "ism:868", "dab", "wfm" …) — the server blocks every other mode
+     *  ON TOP of blockedModes (kept untouched underneath), lands and keeps it, and holds the only-mode exit lock. */
+    std::string singleMode;
 
     // Listeners and ceilings
     int    users = 1;
@@ -501,6 +514,10 @@ struct RadioConfig {
     std::string landingDabService;
     bool   landingAdsb = false;          // ★ V12: land in ADS-B — see Config::landingAdsb
     bool   adsbKeepRunning = false;      // ★ ...and stay in it with nobody here — see Config::adsbKeepRunning
+    std::string landingMap;              // ★★★ beta96 the landing map + modes + keep — see Config::landingMap
+    std::string landingModes;
+    bool   mapKeep = false;
+    std::string singleMode;              // ★★★ beta96 the single-mode radio — see Config::singleMode
     int    users = 1;
     /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers
      *  Full 20 / Half 10 / Quarter 5, but only wrote maxFps (a CEILING), so "Full" meant "no
@@ -777,6 +794,13 @@ struct RadioConfig {
     /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): one JSON blob, as bgDecode — {"on","bands","waitMin","raster",
      *  "viewAdmin","proof","gapMin"}. Empty = off (the default per radio). */
     std::string dxScan;
+    /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h, docs/v12/ADSB-FEED.md): one JSON blob, as dxScan —
+     *  {"serve","port","open","push","feeds":[{"host","port","on","uuid"}]}. Empty = everything off (the default per
+     *  radio). Validated at the save (vibe::beast::parseConfig); applied live. */
+    std::string adsbFeed;
+    /** ★★ V12 beta96 driver "beast" only: the other receiver's Beast output, "host:port" (vibe_beast.h parseHostPort —
+     *  IPv4, [IPv6]:port or a name; no port = 30005). Such a radio has no hardware; ADS-B is its only mode. */
+    std::string beastIn;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.

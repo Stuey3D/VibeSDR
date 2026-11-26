@@ -141,6 +141,14 @@ export type VibeServerConfig = {
    *  ignored by the server where ADS-B cannot run on the radio. */
   landingAdsb?: boolean;
   adsbKeepRunning?: boolean;
+  /** ★★★ beta96 THE LANDING MAP (vibe_keep_store.h): "avmar" | "", the mode(s) it opens in ("vdl2" | "vdl2,acars" | "adsb" |
+   *  "ais" | "vor") and keep-running. The engine reads them off the config (vsMapFromConfigJson); the ADS-B case is mirrored
+   *  into landingAdsb / adsbKeepRunning above. */
+  landingMap?: string;
+  landingModes?: string;
+  mapKeep?: boolean;
+  /** ★★★ beta96 the single-mode radio ('' / 'general' = General; else the token — vibe_keep_store.h singleOk). */
+  singleMode?: string;
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h). Sent to the engine as its config's
    *  flat fm* keys; absent = the engine's defaults (de-emphasis by region, NR off, the rest on, RETURN). */
   fmDefaults?: FmDefaults;
@@ -160,6 +168,8 @@ export type VibeServerConfig = {
   bgDecode?: string;
   /** ★★★ V12 THE IDLE DX SCANNER — exactly RadioConfig::dxScan's JSON (vibe_dxscan.h parseConfig). '' = off. */
   dxScan?: string;
+  /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS — exactly RadioConfig::adsbFeed's JSON (vibe_beast.h parseConfig). '' = off. */
+  adsbFeed?: string;
   /** ★★ V12 THE GALLERY — the owner's size in MB (0 keeps nothing; default 100), may everyone see it (default yes), are
    *  listeners' own decodes kept too (default yes). The Setup page's galleryMb / galleryPublic / gallerySaveLive. */
   galleryMb?: number;
@@ -390,6 +400,11 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     landingDabService: cfg.landingDabService ?? '',
     landingAdsb: cfg.landingAdsb === true,
     adsbKeepRunning: cfg.landingAdsb === true && cfg.adsbKeepRunning === true,
+    // ★★★ beta96 on EVERY start at definite values (an absent key would leave a kept VDL2 of an earlier start in force)
+    landingMap: (cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur') && !!cfg.landingModes ? cfg.landingMap : '',
+    landingModes: cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur' ? (cfg.landingModes ?? '') : '',
+    mapKeep: (cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur') && !!cfg.landingModes && cfg.mapKeep === true,
+    singleMode: cfg.singleMode ?? '',   // ★★★ beta96 on every start, a definite value
     ...fmDefaultsKeys(cfg.fmDefaults ?? FM_DEFAULTS),   // ★ on EVERY start, at definite values, like its neighbours
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,
@@ -399,6 +414,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     // ★★ V12 background decoding + the gallery, at definite values on every start (VibeServerBoot applies them)
     bgDecode: cfg.bgDecode ?? '',
     dxScan: cfg.dxScan ?? '',   // ★★★ V12 the idle DX scanner (VibeServerBoot: setDxScan + the log file)
+    adsbFeed: cfg.adsbFeed ?? '',   // ★★ V12 beta96 flight trackers (VibeServerBoot: setAdsbFeed)
     galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,

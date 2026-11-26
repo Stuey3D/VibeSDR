@@ -106,10 +106,15 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'landingDabService', storage: 'vs_landingdabsvc',  enc: 'str' },
   { native: 'landingAdsb',      storage: 'vs_landingadsb',     enc: 'bool01' },
   { native: 'adsbKeepRunning',  storage: 'vs_adsbkeep',        enc: 'bool01' },
+  { native: 'landingMap',       storage: 'vs_landingmap',      enc: 'str' },      // ★★★ beta96 the landing map
+  { native: 'landingModes',     storage: 'vs_landingmodes',    enc: 'str' },
+  { native: 'mapKeep',          storage: 'vs_mapkeep',         enc: 'bool01' },
+  { native: 'singleMode',       storage: 'vs_singlemode',      enc: 'str' },      // ★★★ beta96 the single-mode radio
   { native: 'biasT',            storage: 'vs_biast',           enc: 'bool01' },
   { native: 'autoDirectSampling', storage: 'vs_autods',        enc: 'bool01' },
   { native: 'bgDecode',         storage: 'vs_bgdecode',        enc: 'str' },
   { native: 'dxScan',           storage: 'vs_dxscan',          enc: 'str' },
+  { native: 'adsbFeed',         storage: 'vs_adsbfeed',        enc: 'str' },   // ★★ V12 beta96 flight trackers
   { native: 'rawIq',            storage: 'vs_rawiq',           enc: 'num' },
   { native: 'rawIqMax',         storage: 'vs_rawiqmax',        enc: 'num' },
   { native: 'rawIqLanMaxHz',    storage: 'vs_rawiqlanmaxhz',   enc: 'num' },

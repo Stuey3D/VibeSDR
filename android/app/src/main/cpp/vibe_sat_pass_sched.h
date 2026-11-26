@@ -122,6 +122,11 @@ struct In {
     double usableHz = 0;            ///< the capture's usable span now
     bool loaded = false;            ///< ★ the box is busy — NOT a reason to drop either (decoders go light instead); here so the tests say so
     double now = 0;
+    /** ★★★ beta96 THE SHARED 137 MHz CAPTURE: what the capture must ALSO hold for a kept-running mode riding the session (kept
+     *  VDL2 — vibe_keep_run.h). Every fit includes it and the tuner is always placed; ORBCOMM is the one that gives way
+     *  when all three do not fit. Empty = beta94's behaviour, unchanged. */
+    std::vector<Region> hold;
+    std::string holdName;           ///< "VDL2" — the admin line
 };
 struct Out {
     bool runPass = false, runOrbcomm = false;
@@ -135,6 +140,27 @@ inline Out decide(const In& in) {
     Out o;
     if (!in.blocked.empty()) { o.state = in.blocked; return o; }
     if (in.listener) { o.state = "a listener has the radio"; return o; }
+    // ★★★ beta96 a kept mode riding the session: its regions join every fit (decideHeld below)
+    auto with = [&](std::vector<Region> rs) { for (const auto& h : in.hold) rs.push_back(h); return rs; };
+    const std::string plus = in.hold.empty() ? std::string() : " + " + (in.holdName.empty() ? std::string("the kept mode") : in.holdName);
+    if (!in.hold.empty() && in.passUp) {
+        const bool wantOrb0 = in.orbcommOn && in.orbcommUp && in.orbcommReachWhy.empty();
+        if (wantOrb0) {
+            const Fit f = fitCapture(in.usableHz, with({ in.passRegion, orbcommRegion() }));
+            if (f.ok) {
+                o.runPass = o.runOrbcomm = o.both = true; o.placeCentre = true; o.centreHz = f.centreHz;
+                o.state = in.passName + " pass" + plus + " + ORBCOMM monitoring (sky plot) together \xe2\x80\x94 one capture holds them all";
+                return o;
+            }
+        }
+        const Fit f = fitCapture(in.usableHz, with({ in.passRegion }));
+        o.runPass = true;
+        if (f.ok) { o.placeCentre = true; o.centreHz = f.centreHz; }
+        o.state = in.passName + " pass" + (f.ok ? plus + " on one capture" : " \xe2\x80\x94 " + f.why);
+        if (wantOrb0) o.orbcommWhyNot = "paused for the " + in.passName + " pass (the capture holds the pass" + plus + ", not ORBCOMM too)";
+        if (!o.orbcommWhyNot.empty()) o.state += " \xe2\x80\x94 ORBCOMM paused";
+        return o;
+    }
     const bool wantOrb = in.orbcommOn && in.orbcommUp && in.orbcommReachWhy.empty();
     if (in.orbcommOn && !in.orbcommReachWhy.empty()) o.orbcommWhyNot = in.orbcommReachWhy;
     else if (in.orbcommOn && !in.orbcommUp) o.orbcommWhyNot = "no ORBCOMM satellite above the horizon";

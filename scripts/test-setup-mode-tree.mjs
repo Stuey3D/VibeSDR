@@ -82,7 +82,8 @@ const R = () => {
 const up = async (port) => { for (let i = 0; i < 100; i++) { if (await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); })) return true; await sleep(100); } return false; };
 /** The radio's blocked-modes CSV as saved in config.json, as a sorted list. */
 const savedCsv = () => { const r = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).radios.find((x) => x.serial === SERIAL) || {};
-                         return String(r.blockedModes || '').split(',').filter(Boolean).sort().join(','); };
+                         // ★ beta96: a save stamps "seen@N" (and may carry "newmodes@…") — the owner's words, not modes
+                         return String(r.blockedModes || '').split(',').filter((t) => t && !/^(seen|newmodes)@/.test(t)).sort().join(','); };
 
 const CDP = await distinctPort();
 const br = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', '--no-first-run', `--remote-debugging-port=${CDP}`,

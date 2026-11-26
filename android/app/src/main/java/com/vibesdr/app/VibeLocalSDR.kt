@@ -377,6 +377,10 @@ object VibeLocalSDR {
      *  else why not. */
     fun setDxScan(json: String): String { ensureLoaded(); return nativeSetDxScan(json) }
     private external fun nativeSetDxScan(json: String): String
+    /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS — RadioConfig::adsbFeed's JSON ("" = off): the local Beast server and
+     *  the push feeds (vibe_beast.h). Live. "" = applied, else why not (the old settings stay). */
+    fun setAdsbFeed(json: String): String { ensureLoaded(); return nativeSetAdsbFeed(json) }
+    private external fun nativeSetAdsbFeed(json: String): String
     /** ★★★ …and where its DX log lives (written every ~5 min when changed, and at shutdown). */
     fun setDxLogFile(path: String) { ensureLoaded(); nativeSetDxLogFile(path) }
     private external fun nativeSetDxLogFile(path: String)
