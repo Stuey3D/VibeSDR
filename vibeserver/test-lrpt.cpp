@@ -408,9 +408,9 @@ static void testLivePass(bool quick) {
         int picH = 0;   // ★ beta96 the gallery's picture keeps TRUE geometry (the gap at full height)
         o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; picH = ps[0].h; } };
         // ★★ beta95 the gap drawn AS a gap (gapart): the preview rows and the status, kept for the one-picture case
-        std::map<uint32_t, std::vector<uint8_t>> rows; std::string lastJson;
+        std::map<uint32_t, std::vector<uint8_t>> rows, chanRows; std::string lastJson;
         if (c.inRange == 1) {
-            o.frame = [&](const uint8_t* d, size_t n) { if (n > 9 && d[0] == 0x01) { const uint32_t y = (uint32_t(d[1]) << 24) | (uint32_t(d[2]) << 16) | (uint32_t(d[3]) << 8) | d[4]; rows[y].assign(d + 9, d + n); } };
+            o.frame = [&](const uint8_t* d, size_t n) { if (n > 9 && (d[0] == 0x01 || d[0] == Run::kChannelRowOp)) { const uint32_t y = (uint32_t(d[1]) << 24) | (uint32_t(d[2]) << 16) | (uint32_t(d[3]) << 8) | d[4]; (d[0] == 0x01 ? rows : chanRows)[y].assign(d + 9, d + n); } };
             o.json = [&](const std::string& j) { if (j.find("lrpt_status") != std::string::npos) lastJson = j; };
         }
         {
@@ -466,6 +466,16 @@ static void testLivePass(bool quick) {
             // the rows it names are the hatched ones
             int inGapHatched = 0; for (int y = r0; y < r1; y++) { auto it = rows.find(uint32_t(y)); if (it != rows.end() && it->second.size() >= 3 && (it->second[0] == 54 || it->second[0] == 26 || it->second[0] == 214)) inGapHatched++; }
             CHECK(r1 > r0 && inGapHatched == r1 - r0, "beta96: every row the gap names is a hatched row (%d of %d)", inGapHatched, r1 - r0);
+            // ★★★ beta96 the channel picker: the gap's rows of the extra channel (ch 5) are hatched / labelled the same way
+            int chGap = 0, chGapOk = 0;
+            for (int y = r0; y < r1; y++) {
+                auto it = chanRows.find(uint32_t(y));
+                if (it == chanRows.end() || it->second.size() < 4 + 392 || it->second[2] != 1 || it->second[3] != 68) continue;
+                chGap++; bool good = true;
+                for (size_t i = 4; i < 4 + 392; i++) { const uint8_t v = it->second[i]; if (v != 54 && v != 26 && v != 214) good = false; }
+                chGapOk += good;
+            }
+            CHECK(r1 > r0 && chGap == r1 - r0 && chGapOk == chGap, "beta96: the gap reads as a gap in channel 5 too (%d of %d rows, %d hatched)", chGap, r1 - r0, chGapOk);
             CHECK(picH == (decoded + gapLines) && picH >= gln + 8, "beta96: the gallery picture keeps true geometry — %d rows = decoded %d + gap %d", picH, decoded, gapLines);
         }
     }
@@ -575,6 +585,87 @@ static void testPassSummary() {
     }
 }
 
+/* ★★★ beta96 THE VIEWER'S CHANNEL PICKER (kChannelRowOp) and the NIGHT pass (kDarkHi). A Meteor-M2-3-shaped pass (channels
+ *  1, 2, 4) through the server's Run, by DAY and by NIGHT (channels 1 and 2 sent as the sensor's dark noise): beside every
+ *  0x01 preview row a 0x09 with the same y says the 0x01 carries R = ch 2, B = ch 1 and brings ch 4 (the only channel the
+ *  composite does not carry); ch 4 carries a picture both times; lrpt_status lists the APIDs and, at night only, ch 1 and
+ *  ch 2 as dark; the gallery files every channel both times, the night composite named for what it is. The extra bytes are
+ *  measured against the 0x01 rows, and the preview's whole cost (old + new) against a run with no client. */
+static void testChannelPicker() {
+    std::printf("\nThe viewer's channel picker + the night pass (beta96)\n");
+    for (int night = 0; night <= 1; night++) {
+        tx::TxConfig t; t.apids = {64, 65, 67}; t.carrierHz = 400; t.seed = 21;
+        if (night) t.dark = {64, 65};
+        const int P = 12;
+        const auto iq = tx::modulate(t, tx::codeBits(t, tx::buildVcdus(t, P)));
+        std::map<uint32_t, std::vector<uint8_t>> rows, chan;
+        size_t bytes01 = 0, bytes09 = 0; int badOrder = 0; uint32_t lastY01 = 0xffffffff;
+        std::string lastStatus; std::vector<std::string> names;
+        double cpu[2] = {0, 0};
+        for (int withClient = 1; withClient >= 0; withClient--) {
+            Run::Opts o; o.symbolRate = 72000; o.mod = ReceiverConfig::Qpsk;
+            if (withClient) {
+                o.frame = [&](const uint8_t* d, size_t n) {
+                    if (n < 9) return;
+                    const uint32_t y = (uint32_t(d[1]) << 24) | (uint32_t(d[2]) << 16) | (uint32_t(d[3]) << 8) | d[4];
+                    if (d[0] == 0x01) { rows[y].assign(d + 9, d + n); bytes01 += n; lastY01 = y; }
+                    if (d[0] == Run::kChannelRowOp) { chan[y].assign(d, d + n); bytes09 += n; if (y != lastY01) badOrder++; }
+                };
+                o.json = [&](const std::string& j) { if (j.find("lrpt_status") != std::string::npos && j.find("\"apids\"") != std::string::npos) lastStatus = j; };
+                o.pictures = [&](const std::vector<Picture>& ps, bool) { for (auto& p : ps) names.push_back(p.name); };
+            }
+            Run run(o);
+            const size_t blk = size_t(t.sampleRate / 20);
+            const auto t0 = std::chrono::steady_clock::now();
+            for (size_t at = 0; at < iq.size() / 2; at += blk) {
+                const size_t n = std::min(blk, iq.size() / 2 - at);
+                run.feedIq(reinterpret_cast<const std::complex<float>*>(&iq[at * 2]), int(n), t.sampleRate, 0);
+            }
+            run.finish(true);
+            cpu[withClient] = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+        const char* what = night ? "NIGHT" : "DAY";
+        // every 0x01 row has its 0x09: R = ch 2 (65), B = ch 1 (64), one extra = ch 4 (67), 392 grey bytes
+        int paired = 0, shaped = 0, ch4Varied = 0;
+        for (auto& kv : rows) {
+            auto it = chan.find(kv.first);
+            if (it == chan.end()) continue;
+            paired++;
+            const auto& m = it->second;
+            const uint32_t w = (uint32_t(m[5]) << 24) | (uint32_t(m[6]) << 16) | (uint32_t(m[7]) << 8) | m[8];
+            if (w == 392 && m[9] == 65 && m[10] == 64 && m[11] == 1 && m[12] == 67 && m.size() == 13 + 392) shaped++;
+            if (m.size() == 13 + 392) { int mn = 255, mx = 0; for (size_t i = 13; i < m.size(); i++) { mn = std::min(mn, int(m[i])); mx = std::max(mx, int(m[i])); } if (mx - mn > 60) ch4Varied++; }
+        }
+        const int nRows = int(rows.size());
+        const bool d64 = lastStatus.find("\"dark\":[64,65]") != std::string::npos, d0 = lastStatus.find("\"dark\":[]") != std::string::npos;
+        const bool apids = lastStatus.find("\"apids\":[64,65,67]") != std::string::npos;
+        int compNight = 0, chans = 0;
+        for (auto& n : names) { if (n.find("night (visible channels dark)") != std::string::npos) compNight++; if (n.rfind("channel ", 0) == 0) chans++; }
+        std::printf("  %s: %d preview rows, %d with their 0x09 (%d shaped 65/64 + ch 4), ch 4 has picture in %d; 0x09 %zu B vs 0x01 %zu B (+%.0f %%); "
+                    "status apids %s dark %s; pictures %zu (%d channels, night-named composite %d); preview cost %.0f ms of %.0f ms run\n",
+                    what, nRows, paired, shaped, ch4Varied, bytes09, bytes01, bytes01 ? 100.0 * double(bytes09) / double(bytes01) : 0.0,
+                    apids ? "64,65,67" : "?", d64 ? "[64,65]" : d0 ? "[]" : "?", names.size(), chans, compNight, 1000 * (cpu[1] - cpu[0]), 1000 * cpu[1]);
+        CHECK(nRows >= 16 && paired == nRows && shaped == nRows, "%s: every preview row has its channel row (%d / %d / %d)", what, nRows, paired, shaped);
+        CHECK(badOrder == 0, "%s: each 0x09 follows its own 0x01 (%d out of order)", what, badOrder);
+        CHECK(ch4Varied >= nRows / 2, "%s: channel 4 carries a picture (%d of %d rows)", what, ch4Varied, nRows);
+        CHECK(apids, "%s: lrpt_status lists the live APIDs", what);
+        CHECK(night ? d64 : d0, "%s: lrpt_status dark = %s", what, night ? "[64,65]" : "[]");
+        CHECK(chans == 3 && names.size() == 4, "%s: the gallery still files every channel and the composite (%zu pictures)", what, names.size());
+        CHECK(compNight == (night ? 1 : 0), "%s: the composite is named a night picture only at night (%d)", what, compNight);
+        CHECK(!names.empty() && names.back().find("4 MWIR") != std::string::npos, "%s: channel 4 is filed last (the top of the gallery's newest-first list)", what);
+        CHECK(bytes01 > 0 && double(bytes09) <= 0.40 * double(bytes01), "%s: the channel rows cost at most 40 %% of the preview's bytes (%.0f %%)", what, bytes01 ? 100.0 * double(bytes09) / double(bytes01) : 0.0);
+    }
+    // the dark rule itself: a thermal channel is never dark; a visible one is dark only under kDarkHi
+    Channel th(67), vis(64), lit(65);
+    uint8_t blk[kMcuPerPacket][64];
+    for (int b = 0; b < kMcuPerPacket; b++) for (int i = 0; i < 64; i++) blk[b][i] = uint8_t(i % 5);
+    for (int s = 0; s < 4; s++) for (int m = 0; m < kMcuPerLine; m += kMcuPerPacket) { th.put(s, m, blk, kMcuPerPacket); vis.put(s, m, blk, kMcuPerPacket); }
+    for (int b = 0; b < kMcuPerPacket; b++) for (int i = 0; i < 64; i++) blk[b][i] = uint8_t(i < 4 ? 200 : 10);   // ≈ 6 % bright cloud
+    for (int s = 0; s < 4; s++) for (int m = 0; m < kMcuPerLine; m += kMcuPerPacket) lit.put(s, m, blk, kMcuPerPacket);
+    CHECK(channelDark(vis) && !channelDark(th) && !channelDark(lit), "the dark rule: visible noise dark %d, thermal never %d, 6 %% cloud lit %d",
+          int(channelDark(vis)), int(channelDark(th)), int(channelDark(lit)));
+}
+
 int main(int argc, char** argv) {
     ReceiverConfig c;
     for (int i = 1; i < argc; i++) {
@@ -601,6 +692,7 @@ int main(int argc, char** argv) {
     testGapMerge();
     testLivePass(quick);
     testPassSummary();
+    testChannelPicker();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
