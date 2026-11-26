@@ -351,6 +351,11 @@ static void hostTap() {
     const std::string list = s.listJson("navtex", 10);
     ok(list.find("\"o\":\"live\"") != std::string::npos && list.find("Station G") != std::string::npos,
        "★ the message is in the gallery, labelled live: " + list.substr(0, 200));
+    // ★★ beta96 the real host end to end: the 21-byte op 0x07 and the op 0x08 SNR slices reach the record
+    ok(list.find("\"nqc\":") != std::string::npos && list.find("\"nql\":0") != std::string::npos,
+       "★ beta96: the decode-quality split (nqc / nqf / nql) is in the record");
+    ok(list.find("\"snr\":") != std::string::npos && list.find("\"tl\":[") != std::string::npos && list.find("\"tc\":[") != std::string::npos,
+       "★ beta96: …and the SNR timeline (op 0x08 slices tied to the text): " + list.substr(list.find("\"nqc\"") == std::string::npos ? 0 : list.find("\"nqc\""), 160));
 }
 
 // ── 5b. a real-shaped NAVTEX transmission with a short GAP mid-message: one item, ZCZC to NNNN ─────────────────────
