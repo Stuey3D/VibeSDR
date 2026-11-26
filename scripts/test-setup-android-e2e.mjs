@@ -126,8 +126,15 @@ if (posted) {
   ok(patch.ppm === -4 && patch.tunerBwAuto === false && patch.directSampling === 2, 'ppm, the IF filter and the fixed branch');
   ok(patch.maxFftRate === 20, 'the waterfall rate');
   ok(patch.lockedRate === 0 && patch.rateLock === false, 'the capture width stays the listener\'s choice');
-  ok(patch.rttySkimWorkers === 2 && patch.blockedModes === 'drm' && patch.fmDeemph === 50 && patch.radioUse === 'single',
-     'untouched new settings come back as they were');
+  // ★★★ beta96 NEW MODES OFF (docs/v12/NEW-MODES-OFF.md): an UNSTAMPED list that blocks anything is a restricted radio, so the
+  //     page stamps it "seen@<now>" on opening and the switch added since (SATELLITE, generation 96) comes back OFF by name —
+  //     the owner's "drm" kept exactly. Nothing else is touched.
+  const reach = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_decoder_reach.h', import.meta.url), 'utf8');
+  const genNow = Number((reach.match(/constexpr int kModeGenNow = (\d+);/) || [])[1]);
+  const bm = String(patch.blockedModes || '').split(',');
+  ok(patch.rttySkimWorkers === 2 && patch.fmDeemph === 50 && patch.radioUse === 'single'
+     && bm.includes('drm') && bm.includes('seen@' + genNow) && bm.includes('sat') && !bm.includes('wfm') && !bm.includes('am'),
+     `untouched new settings come back as they were (blocked: "drm" kept, + the seen@${genNow} stamp and SATELLITE off as new — ${patch.blockedModes})`);
   ok(!('ppb' in patch) && !('rfNotch' in patch) && !('icomBaud' in patch), 'no other radio\'s settings');
 }
 fs.rmSync(tmp, { recursive: true, force: true });
