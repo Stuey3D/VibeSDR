@@ -44219,7 +44219,8 @@ std::string LocalSdrShim::adsbFeedStatusJson() {
     // ★ whether this radio could feed at all — the admin row and the Setup card are drawn only where it could
     const std::string why = vsAdsbHwWhyNot();
     j.pop_back();
-    if (g_beastOn.load()) j += ",\"input\":" + g_beastIn().statusJson();   // ★ the Beast feed radio's own source
+    if (g_beastOn.load()) j += ",\"input\":" + g_beastIn().statusJson()
+                             + ",\"aircraft\":" + std::to_string(g_adsb.health().aircraft);   // ★ the Beast feed radio's own source
     j += std::string(",\"available\":") + (why.empty() ? "true" : "false");
     if (!why.empty()) j += ",\"why\":\"" + vibe::beast::jsonEsc(why) + "\"";
     return j + "}";

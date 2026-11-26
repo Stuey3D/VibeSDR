@@ -3759,7 +3759,7 @@ int main(int argc, char** argv) {
                     r.serial = ser; r.driver = "beast"; r.enabled = true; r.configured = true;
                     r.label = label.empty() ? "ADS-B from " + h : label;
                     r.beastIn = vibe::beast::hostPortText(h, bp);
-                    r.users = 10;
+                    { const int u = std::atoi(field("users").c_str()); r.users = u >= 1 && u <= 200 ? u : 10; }
                     next.radios.push_back(r);
                 }
                 if (!vsconfig::saveServer(g_configPath, next, err)) return fail(400, err);

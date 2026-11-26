@@ -133,7 +133,7 @@ running when nobody is connected**; the card says this until it is ticked. A Bea
 |---|---|
 | `RadioConfig::adsbFeed` | one JSON blob per radio, as `dxScan`: `{"serve","port","open","push","feeds":[{"host","port","on","uuid"}]}`. Empty = off. Checked at the save (`vibe::beast::parseConfig`, refused in words), applied live (`LocalSdrShim::setAdsbFeed`, main.cpp's re-read like dxScan). |
 | `RadioConfig::beastIn` + `driver:"beast"` | the Beast feed radio: "host:port" (`parseHostPort`: IPv4, `[IPv6]:port`, a name; no port = 30005). |
-| Setup page | radio tab → **Share ADS-B with flight trackers** (`#adsbFeedCard`, drawn only where `adsbLandOffer(...).hw`); top → **Add an ADS-B Beast feed…** (`#beastAddBox`, POST `/vibeserver/sdr-change {"action":"addbeast"}`); a Beast radio's tab → its own card (`#beastCard`: address via `{"action":"beastaddr"}`, status); every SDR card hidden there (`beastTabApply`). |
+| Setup page | radio tab → **Share ADS-B with flight trackers** (`#adsbFeedCard`, drawn only where `adsbLandOffer(...).hw`); top, under the detected radios and before the tabs (Stuart's layout 11-26) → **Add ADS-B feed from another receiver** (`#beastAddBox`: Address host:port, Name, How many users, ADD → POST `/vibeserver/sdr-change {"action":"addbeast","beastIn","label","users"}`); a Beast radio's tab → its own card (`#beastCard`: address via `{"action":"beastaddr"}`, status line with aircraft, REMOVE); every SDR card hidden there (`beastTabApply`) except the flight-tracker card. |
 | Admin page | `GET /r/<serial>/vibeserver/admin/adsbfeed` (admin-gated) → `admin.ts renderAdsbFeed` rows. |
 | Android | `vibe_android_setup.h` (afServe afPort afOpen afPush → adsbFeed), `vibeServer.ts adsbFeed`, `serverSettingsMirror`, `ServerModeScreen` + `components/AdsbFeedSetup.tsx`, `VibeServerBoot` → `VibeLocalSDR.setAdsbFeed` (JNI), loopback status `GET /vibeserver/adsb-feed`. A Beast feed radio is not offered on the phone (it serves the one radio it holds). |
 
@@ -196,8 +196,9 @@ Enterprise status are untouched.
    Verified from FlightAware's dump1090 source on GitHub (2026-11-26), not from a docs page. A firewall on the Pi
    (ufw, say) would still have to allow 30005.
 2. Give the Pi a fixed address (Stuart's: 192.168.86.12).
-3. On the VibeServer's Setup page (the Lenovo in Stuart's case): **Add an ADS-B Beast feed…** → address
-   `192.168.86.12:30005` → a name → **Add this feed**. VibeServer restarts and the new radio is on air.
+3. On the VibeServer's Setup page (the Lenovo in Stuart's case), in the box **Add ADS-B feed from another receiver**
+   under the detected radios, enter Address `192.168.86.12:30005`, a Name and How many users, then press **ADD**.
+   VibeServer restarts and the new radio is on air as a tab of its own.
 4. Its tab shows "Now: Beast feed from 192.168.86.12:30005: connected, N messages a second". If it shows "nothing is
    listening on …", check that dump1090-fa is running on the Pi and that nothing blocks 30005.
 5. Leave **Send to flight-tracking sites** off for this radio unless you mean it: the Pi already feeds FlightAware. The
@@ -244,6 +245,48 @@ For an owner whose dongle VibeServer itself runs. Steps are from FlightAware's o
 Our Beast stream against our own reader and a test client.
 
 **Not verified:** PiAware actually reading our port. A person has to run it once (see Live checks).
+
+## Listener bandwidth on the ADS-B map (for "How many users")
+
+**What we know today (beta95 protocol, unchanged in this branch).** Stuart measured the Sony: 60 s as one listener on its
+ADS-B map with 45–66 aircraft used **12.7 KB/s** in total.
+
+- 11.75 KB/s of that was the `adsb` report, which re-sends the full aircraft list every second;
+- 0.38 KB/s was `adsb_info`;
+- everything else was under 0.6 KB/s.
+
+That is about **0.2 KB/s per aircraft per listener**. At 150 aircraft it is roughly 30 KB/s per listener, so 100 listeners
+would need about 25 Mbit/s of upload. The Setup box's "How many users" hint quotes the 0.2 KB/s-per-aircraft figure so an
+owner can size it.
+
+**The DELTA protocol: NOT BUILT in this branch.** Stuart approved it on 11-26 and it reached this agent late in the job. It
+needs:
+
+- a negotiated message;
+- changes in two clients (web `adsb.ts` / `main.ts` and the app);
+- a field-for-field replay test.
+
+Done in a hurry on the release branch, it would risk the ADS-B map for every listener. The proposed design is below so
+the next agent can start from it:
+
+- **Negotiation:** the spectrum socket's query adds `adsbd=1`. An older client gets today's `adsb` unchanged.
+- **Built once per tick per radio** in `sendAdsbAll` (it already builds one shared report string), then sent to every
+  `adsbd` socket.
+- **Keyframe `adsb_k`** (on join, on `{"type":"adsb_resync"}`, and every 60 s) carries every aircraft as a compact array.
+- **Delta `adsb_d`** carries:
+  - `u`: aircraft that changed beyond the quantisation, with only the fields that changed;
+  - `n`: new aircraft;
+  - `g`: hexes gone.
+- **Quantisation:** lat/lon to 1e-5°, alt to 25 ft, track to 1°, gs to 1 kt.
+- **Time-relative fields:** `seen` and `seen_pos` are sent as absolute "heard at" times only when they change, and the
+  client works out the ages.
+- **Fields left out of the delta:** `messages` and `rssi` only on the keyframe, or ≥ 3 dB. Static fields already come once
+  through `adsb_info`.
+
+Estimate at 150 aircraft: about 10–15 bytes per changed aircraft per second, which is within the 2–3 KB/s target. It has
+**not been measured**. The measuring method is ready: a ws client counting bytes per message type for 60 s against a
+synthetic 150-aircraft Beast replay (the `Feeder` in `test-adsb-feed.cpp` and `test-server-beast-feed.mjs` already
+drive a Beast feed radio).
 
 ## Tests
 

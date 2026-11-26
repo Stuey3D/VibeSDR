@@ -310,24 +310,26 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div id="sdrChanges"></div>
       <div style="display:flex;gap:10px;align-items:center">
         <button type="button" class="ghost" id="sdrCheckAgain" style="padding:6px 12px;font-size:13px">Check again</button>
-        <button type="button" class="ghost" id="beastAddOpen" style="padding:6px 12px;font-size:13px">Add an ADS-B Beast feed&hellip;</button>
         <span class="hint" id="sdrCheckMsg" style="margin:0"></span>
       </div>
-      <!-- ★★ V12 beta96 ADD RADIO: "ADS-B Beast feed (from another receiver)" (Stuart 11-26). Added by hand — there is no
-           hardware to detect. A radio entry of its own that drives the ADS-B map only: an address and a name, nothing else. -->
-      <div id="beastAddBox" class="card hide" style="margin-top:10px">
-        <h2>ADS-B Beast feed (from another receiver)</h2>
-        <p class="why">The aircraft another ADS-B receiver hears &mdash; dump1090-fa beside FlightAware&rsquo;s PiAware, for one &mdash;
-          as a radio of its own here: the map and the list, nothing to tune. VibeServer only reads it, so that receiver
+      <!-- ★★ V12 beta96 ADD ADS-B FEED FROM ANOTHER RECEIVER (Stuart's layout, 11-26): just under the detected radios, before
+           the tabs. Three fields and ADD. It becomes a radio tab like any other, ADS-B only. Added by hand — nothing to detect. -->
+      <div id="beastAddBox" class="card" style="margin-top:10px">
+        <h2>Add ADS-B feed from another receiver</h2>
+        <p class="why">Another ADS-B receiver&rsquo;s aircraft &mdash; dump1090-fa beside FlightAware&rsquo;s PiAware, for one &mdash; as a
+          radio of its own here: the map and the list, nothing to tune. VibeServer only reads its Beast output, so that receiver
           and its own feeds carry on untouched.</p>
-        <label><span class="lbl">Address of its Beast output</span>
-          <input type="text" id="beastAddAddr" value="127.0.0.1:30005" maxlength="120" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px">
-          <div class="hint">host:port &mdash; e.g. <b>192.168.1.20:30005</b> for a Pi on your network, <b>127.0.0.1:30005</b>
-            on this machine. dump1090-fa offers Beast on port 30005.</div></label>
+        <label><span class="lbl">Address</span>
+          <input type="text" id="beastAddAddr" maxlength="120" placeholder="e.g. 192.168.86.12:30005" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px">
+          <div class="hint">host:port &mdash; the port is 30005 if you leave it out (dump1090-fa&rsquo;s Beast output).</div></label>
         <label><span class="lbl">Name</span>
-          <input type="text" id="beastAddLabel" maxlength="40" placeholder="e.g. PiAware in the loft" style="max-width:280px"></label>
+          <input type="text" id="beastAddLabel" maxlength="40" placeholder="what listeners see, e.g. PiAware in the loft" style="max-width:280px"></label>
+        <label><span class="lbl">How many users</span>
+          <input type="number" id="beastAddUsers" min="1" max="200" step="1" value="10" style="max-width:100px">
+          <div class="hint" id="beastAddUsersHint">The most listeners at once on this feed. Each one on the map takes about 0.2&nbsp;KB/s of
+            upload per aircraft shown (about 12&nbsp;KB/s with 60 aircraft) &mdash; set it from your upload speed.</div></label>
         <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
-          <button type="button" class="btn" id="beastAddGo">Add this feed</button>
+          <button type="button" class="btn" id="beastAddGo">ADD</button>
           <span class="hint" id="beastAddMsg" style="margin:0"></span></div>
       </div>
     </div>
@@ -1097,6 +1099,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <button type="button" class="ghost" id="beastAddrSave">Change the address</button>
           <span class="hint" id="beastAddrMsg" style="margin:0"></span></div>
         <div class="hint" id="beastStatus" style="color:var(--amber)"></div>
+        <div style="margin-top:8px"><button type="button" class="ghost" id="beastRemove">REMOVE this feed</button></div>
         <div class="hint">If it says nothing is listening: on that machine dump1090-fa (or readsb) must be running with its
           Beast output on port 30005, and reachable from here (the same network, no firewall in the way). To stop using
           it, pause or remove this radio above.</div>
@@ -8555,18 +8558,19 @@ async function beastStatusPoll(r) {
   const el = $("beastStatus"); if (!el || !r || r.driver !== "beast") return;
   try {
     const j = await (await fetch(`/r/${encodeURIComponent(r.serial)}/vibeserver/admin/adsbfeed?${await authQuery()}`, {cache: "no-store"})).json();
-    el.textContent = j && j.input ? "Now: " + (j.input.line || "") : "Not running yet — it starts when the server restarts.";
+    el.textContent = j && j.input ? "Now: " + (j.input.line || "") + (j.aircraft != null ? ` \u00b7 ${j.aircraft} aircraft` : "") : "Not running yet — it starts when the server restarts.";
   } catch (e) { el.textContent = ""; }
 }
-if ($("beastAddOpen")) {
-  $("beastAddOpen").onclick = () => { $("beastAddBox").classList.toggle("hide"); $("beastAddAddr").focus(); };
+if ($("beastAddGo")) {
+  $("beastRemove").onclick = () => { const r0 = radio(); if (r0 && r0.serial) sdrAct("remove", r0.serial, ""); };
   $("beastAddGo").onclick = async () => {
     const why = beastAddrWhy($("beastAddAddr").value);
     if (why) { $("beastAddMsg").textContent = "Not added — " + why + "."; return; }
     $("beastAddMsg").textContent = "Adding…";
     try {
       const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), { method: "POST",
-        body: JSON.stringify({ action: "addbeast", beastIn: $("beastAddAddr").value.trim(), label: $("beastAddLabel").value.trim() }) });
+        body: JSON.stringify({ action: "addbeast", beastIn: $("beastAddAddr").value.trim(), label: $("beastAddLabel").value.trim(),
+                               users: String(Math.max(1, Math.min(200, parseInt($("beastAddUsers").value, 10) || 10))) }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { $("beastAddMsg").textContent = "Not added — " + (j.error || r.status) + "."; return; }
       $("beastAddMsg").textContent = "Added. VibeServer is restarting so it goes on air…";

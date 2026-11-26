@@ -102,8 +102,11 @@ ok(why('192.168.86.12:30005') === '' && why('127.0.0.1:30005') === '' && why('pi
    'IPv4:port, a name, [IPv6]:port are taken');
 ok(/IPv4/.test(why('192.168.86:30005')) && /IPv4/.test(why('300.1.1.1')), 'a short or out-of-range IPv4 is refused');
 ok(/port/.test(why('pi:99999')) && /e\.g\./.test(why('')) && /not a host/.test(why('my pi')), 'bad port, empty, a space: refused in words');
-ok(/id="beastAddOpen"/.test(src) && /ADS-B Beast feed \(from another receiver\)/.test(src), 'ADD RADIO offers "ADS-B Beast feed (from another receiver)"');
-ok(/value="127\.0\.0\.1:30005"/.test(src), 'its address starts at 127.0.0.1:30005');
+{ const box = src.indexOf('id="beastAddBox"'), tabs = src.indexOf('id="radioTabsWrap"'), det = src.indexOf('id="sdrChanges"');
+  ok(det > 0 && det < box && box < tabs, 'ADD ADS-B FEED FROM ANOTHER RECEIVER sits under the detected radios, before the tabs (Stuart\'s layout)'); }
+ok(/Add ADS-B feed from another receiver/.test(src) && /id="beastAddAddr"/.test(src) && /id="beastAddLabel"/.test(src) && /id="beastAddUsers"/.test(src)
+   && /id="beastAddGo">ADD</.test(src), 'three fields (address, name, how many users) and ADD');
+ok(/id="beastRemove"/.test(src), 'its tab has REMOVE');
 // ★ the tab: every SDR card hidden, the name, its own card and the flight-tracker card kept
 {
   const mk = (id, extra = '') => ({ id, dataset: {}, cls: new Set(extra ? [extra] : []), inner: id === 'name' ? '#radioName' : '',
