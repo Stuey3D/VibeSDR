@@ -4,6 +4,7 @@
  *
  *   node scripts/gen-river-areas.mjs        -> build/maptiles/riverareas.ndjson   (then gen-map-tiles.mjs)
  *   node scripts/gen-river-areas.mjs --overlay[=150] -> build/maptiles/vibemap-water.pmtiles (the directory's water overlay)
+ *   node scripts/gen-river-areas.mjs --basic  -> build/maptiles/vibemap-basicwater.pmtiles (the BASIC pack's rivers, beta96)
  *
  * ★★★ WHY. Stuart, 2026-11-20: "wisbech port is on land" — and Mac Ha (Vietnam) the same day: AIS ships "float like
  *     over land" on the Saigon river. The land at z10 is the OSM COASTLINE, which stops at the river mouths; the
@@ -30,6 +31,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { BASIC_WATER_ATTRIBUTION, BASIC_WATER_LAYER, BASIC_WATER_MAXZ, BASIC_WATER_MIN_WIDTH_M, joinBasicWater, packLayers } from './lib/basic-water.mjs';
 
 const RELEASE = '2026-11-18.0';
 const MIN_WIDTH_M = 20;
@@ -81,13 +83,13 @@ COPY (
  * ★ Zoom by width, so a z5 tile is not asked to carry a 150 m river: ≥ 1500 m from z5, ≥ 750 m z6, ≥ 400 m z7, the rest
  *   from z8; all to --maxzoom (default 10). Simplified to a quarter of the river's width, 15–100 m. */
 const overlayArg = process.argv.find((a) => a.startsWith('--overlay'));
-if (overlayArg) {
-  const minW = Number(overlayArg.split('=')[1] || 150);
-  const maxZ = Number((process.argv.find((a) => a.startsWith('--maxzoom=')) || '=10').split('=')[1]);
-  const nd = path.join(OUT, 'water-overlay.ndjson'), pm = path.join(OUT, 'vibemap-water.pmtiles');
+const basicArg = process.argv.includes('--basic');
+/** One water pack: layer `layer`, zoom by width (rule above) from z5 to maxZ, rivers at least minW metres wide. */
+function buildWaterPack({ minW, maxZ, layer, pm, name, attribution }) {
+  const nd = pm.replace(/\.pmtiles$/, '.ndjson');
   run(`${head.replace("'8GB'", "'6GB'").replace('threads=6', 'threads=4')}
 COPY (
-  SELECT '{"type":"Feature","tippecanoe":{"layer":"water","minzoom":'
+  SELECT '{"type":"Feature","tippecanoe":{"layer":"${layer}","minzoom":'
          || (CASE WHEN w >= 1500 THEN 5 WHEN w >= 750 THEN 6 WHEN w >= 400 THEN 7 ELSE 8 END)
          || ',"maxzoom":' || ${maxZ} || '},"properties":{},"geometry":'
          || ST_AsGeoJSON(ST_ReducePrecision(ST_SimplifyPreserveTopology(geometry, least(greatest(w / 4, 15), 100) / 111000.0), 0.0001))
@@ -98,9 +100,31 @@ COPY (
   renameSync(`${nd}.part`, nd);
   try {
     execFileSync('tippecanoe', ['-o', pm, '--force', '-Z5', `-z${maxZ}`, '--no-feature-limit', '--no-tile-size-limit', '--quiet',
-      '-n', 'VibeSDR water overlay', '-A', '© OpenStreetMap contributors (rivers via Overture Maps) · ODbL', '-P', nd], { stdio: 'inherit' });
+      '-n', name, '-A', attribution, '-P', nd], { stdio: 'inherit' });
   } finally { rmSync(nd, { force: true }); }   // ★ the intermediate is big — never left behind (mac_disk_cleanup, 09-28)
-  console.log(`gen-river-areas: ${pm} ${(statSync(pm).size / 1048576).toFixed(2)} MB (width ≥ ${minW} m)`);
+  console.log(`gen-river-areas: ${pm} ${(statSync(pm).size / 1048576).toFixed(2)} MB (width ≥ ${minW} m, z5–${maxZ})`);
+}
+if (overlayArg) {
+  buildWaterPack({ minW: Number(overlayArg.split('=')[1] || 150),
+    maxZ: Number((process.argv.find((a) => a.startsWith('--maxzoom=')) || '=10').split('=')[1]),
+    layer: 'water', pm: path.join(OUT, 'vibemap-water.pmtiles'), name: 'VibeSDR water overlay', attribution: BASIC_WATER_ATTRIBUTION });
+  process.exit(0);
+}
+
+/* ── 2b. --basic: THE BASIC PACK'S RIVERS (beta96, Stuart 11-26: Rotterdam's 600 AIS ships "on land" without High Detail
+ * Maps). >= 200 m, z5–8 (measured in docs/v12/BASIC-MAP-WATER.md: the only cut that keeps Rotterdam's city reach, Tower
+ * Bridge, Antwerp and Saigon's north reach; +~7 MB) -> build/maptiles/vibemap-basicwater.pmtiles, layer `riverareas`.
+ * gen-map-tiles.mjs merges it into vibemap-basic.pmtiles (lib/basic-water.mjs) and refuses to build basic without it.
+ * ★ If build/maptiles/vibemap-basic.pmtiles is already there WITHOUT the rivers, it is joined here too (so a river
+ *   rebuild never needs the minutes-long tier rebuild). */
+if (basicArg) {
+  const wp = path.join(OUT, 'vibemap-basicwater.pmtiles'), bp = path.join(OUT, 'vibemap-basic.pmtiles');
+  buildWaterPack({ minW: BASIC_WATER_MIN_WIDTH_M, maxZ: BASIC_WATER_MAXZ, layer: BASIC_WATER_LAYER, pm: wp,
+    name: 'VibeSDR basic rivers', attribution: BASIC_WATER_ATTRIBUTION });
+  if (existsSync(bp) && !packLayers(bp).includes(BASIC_WATER_LAYER)) {
+    const n = joinBasicWater(bp, wp, bp);
+    console.log(`gen-river-areas: joined into ${bp} -> ${(n / 1048576).toFixed(2)} MB`);
+  }
   process.exit(0);
 }
 
