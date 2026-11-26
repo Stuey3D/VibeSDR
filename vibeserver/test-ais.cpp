@@ -472,7 +472,7 @@ static void testService() {
     std::printf("── the service: rows, readable lines, JSON, trail ──\n");
     vibeais::Service s;
     auto put = [&](int ch, const std::vector<uint8_t>& b) { vibeais::RawFrame f; f.bytes = b; f.levelDb = -30; f.snrDb = 25; s.acceptForTest(ch, f); };
-    put(0, msgType1(235012345, 50.8, -1.3, 12.3, 245.6, 247, 0));
+    put(0, msgType1(235012345, 50.800004, -1.300004, 12.3, 245.6, 247, 0));   // ★ beta95 off the whole minute, as a real fix
     put(1, msgType5(235012345, "WILSON GOOLE", "MXYZ7", "ROTTERDAM", 70));
     put(0, msgType1(235012345, 50.801, -1.302, 12.4, 245.0, 246, 0));
     put(0, msgType21(992351234, 20, "NAB TOWER", 50.668, -0.952, false));
@@ -487,6 +487,78 @@ static void testService() {
     const std::string tr = s.trailJson(235012345);
     CHECK(tr.find("[50.80000,-1.30000") != std::string::npos && tr.find("[50.80100,-1.30200") != std::string::npos, "the trail: %s", tr.c_str());
     CHECK(vibeais::readable(vibeais::Vessel{}).find("MMSI 0") == 0, "a nameless row reads as its MMSI");
+}
+
+/* ★★★ beta95 IMPLAUSIBLE POSITIONS (vibe_ais_service.h kDxNm; Stuart 11-25). The real case first: MMSI 244780619
+ *  (HOOIHANDEL, moored in Schiedam, 51°54.832′N 004°23.817′E) sent 00°15.000′N 008°50.000′E with no fix. */
+static void testPlausible() {
+    std::printf("── beta95 implausible positions: whole minutes, DX candidates, jumps ──\n");
+    using vibeais::Msg;
+    auto has = [](const std::string& j, const char* k) { return j.find(k) != std::string::npos; };
+    {
+        Msg m;
+        CHECK(vibeais::decode(msgType1(244780619, 0.25, 8.0 + 50.0 / 60, 0, 0, 511, 5), m) && m.hasPos && m.wholeMin, "00°15.000′N 008°50.000′E reads as whole minutes");
+        CHECK(vibeais::decode(msgType1(244780619, 51 + 54.832 / 60, 4 + 23.817 / 60, 0, 0, 511, 5), m) && m.hasPos && !m.wholeMin, "51°54.832′N 004°23.817′E does not");
+        CHECK(vibeais::decode(msgType1(244780619, 51 + 54.0 / 60, 4 + 23.817 / 60, 0, 0, 511, 5), m) && !m.wholeMin, "a whole-minute latitude alone is not the mark (both, or nothing)");
+    }
+    vibeais::Service s;
+    s.setReceiver(51.95, 4.10);   // a receiver near Rotterdam (Listen-Amateur-VLD's area)
+    double t = 1000;
+    auto put = [&](const std::vector<uint8_t>& b, double dt) { t += dt; vibeais::RawFrame f; f.bytes = b; f.levelDb = -30; f.snrDb = 3; s.acceptAtForTest(0, f, t); };
+    const double sLat = 51 + 54.832 / 60, sLon = 4 + 23.817 / 60;
+    // the fake first: listed, no position, counted
+    put(msgType1(244780619, 0.25, 8.0 + 50.0 / 60, 0, 0, 511, 5), 0);
+    std::string j = s.vesselJsonForTest(244780619);
+    CHECK(!j.empty() && !has(j, "\"lat\":") && has(j, "\"fakes\":1") && has(j, "position implausible"), "the fake alone: listed, no dot, \"position implausible\": %s", j.c_str());
+    put(msgType1(244780619, sLat, sLon, 0, 0, 511, 5), 10);
+    j = s.vesselJsonForTest(244780619);
+    CHECK(has(j, "\"lat\":51.91387") && !has(j, "\"dx\"") && !has(j, "implausible"), "then its true position: believed at once (4 NM, not DX): %s", j.c_str());
+    put(msgType1(244780619, 0.25, 8.0 + 50.0 / 60, 0, 0, 511, 5), 180);
+    j = s.vesselJsonForTest(244780619);
+    const std::string tr = s.trailJson(244780619);
+    CHECK(has(j, "\"lat\":51.91387") && has(j, "\"fakes\":2") && !has(tr, "[0.25"), "the fake again: the ship keeps its position, the TRAIL never gets the point: %s", tr.c_str());
+    CHECK(has(s.report(), "\"implausible\":2"), "counted in the report");
+
+    // ★ an AtoN's surveyed position may be round: kept
+    put(msgType21(992446001, 1, "MAASMOND", 52.0, 4.0, false), 1);
+    CHECK(has(s.vesselJsonForTest(992446001), "\"lat\":52.00000"), "an AtoN on whole minutes is kept (surveyed, not a fix)");
+
+    // ★★ DX: 200 NM away — unconfirmed until a second report agrees, then plotted with the tag
+    const double dLat = 48.75432, dLon = -2.12345;   // ~205 NM SW, the Channel Islands
+    put(msgType1(227000001, dLat, dLon, 12, 30, 30, 0), 1);
+    j = s.vesselJsonForTest(227000001);
+    CHECK(has(j, "\"unconf\":1") && has(j, "\"uLat\":48.75432") && !has(j, "\"lat\":") && has(j, "DX? unconfirmed"), "a far first report: unconfirmed, no dot: %s", j.c_str());
+    put(msgType1(227000001, dLat + 0.0010, dLon + 0.0010, 12, 30, 30, 0), 20);   // 0.07 NM on, 20 s later: agrees
+    j = s.vesselJsonForTest(227000001);
+    CHECK(has(j, "\"dx\":1") && has(j, "\"lat\":48.75532") && !has(j, "unconf") && has(j, "\xc2\xb7 DX"), "a second agreeing: plotted, tagged DX: %s", j.c_str());
+    // a far report that does not agree with the first stays unconfirmed (it is the newest claim)
+    put(msgType1(227000002, 45.12345, -8.54321, 12, 30, 30, 0), 1);
+    put(msgType1(227000002, 40.12345, -12.54321, 12, 30, 30, 0), 30);
+    j = s.vesselJsonForTest(227000002);
+    CHECK(has(j, "\"unconf\":1") && has(j, "\"uLat\":40.12345") && !has(j, "\"lat\":"), "two far reports that disagree: still unconfirmed: %s", j.c_str());
+
+    // ★★ A JUMP from a known track: held, not believed; the track's next report drops it
+    put(msgType1(244000100, 51.98765, 4.05432, 10, 90, 90, 0), 1);
+    put(msgType1(244000100, 51.98765, 4.05800, 10, 90, 90, 0), 10);   // 0.14 NM in 10 s: ~50 kn — fine (agrees: ≤ 0.3 NM)
+    put(msgType1(244000100, 53.12345, 6.54321, 10, 90, 90, 0), 10);    // 110 NM in 10 s
+    j = s.vesselJsonForTest(244000100);
+    CHECK(has(j, "\"lat\":51.98765") && has(j, "\"held\":1") && !has(s.trailJson(244000100), "[53.12"), "a single jump: held, the ship stays, the trail untouched: %s", j.c_str());
+    put(msgType1(244000100, 51.98765, 4.06100, 10, 90, 90, 0), 10);
+    j = s.vesselJsonForTest(244000100);
+    CHECK(has(j, "\"lat\":51.98765") && has(j, "\"lon\":4.06100") && !has(j, "\"held\""), "the track's next report: believed, the held one dropped");
+    // two reports agreeing on a new place: believed, and the trail starts again (no line across the map)
+    put(msgType1(244000100, 52.45678, 5.01234, 10, 90, 90, 0), 10);
+    put(msgType1(244000100, 52.45700, 5.01300, 10, 90, 90, 0), 10);
+    j = s.vesselJsonForTest(244000100);
+    const std::string tr2 = s.trailJson(244000100);
+    CHECK(has(j, "\"lat\":52.45700") && !has(j, "\"held\"") && !has(tr2, "[51.98"), "two agreeing on a new place: believed, trail restarted: %s", tr2.c_str());
+
+    // ★ no receiver known: nothing is a DX candidate (believed at once)
+    vibeais::Service s2;
+    vibeais::RawFrame f; f.bytes = msgType1(227000009, dLat, dLon, 12, 30, 30, 0); f.levelDb = -30; f.snrDb = 10; s2.acceptAtForTest(0, f, 5);
+    CHECK(has(s2.vesselJsonForTest(227000009), "\"lat\":48.75432"), "no receiver: a position is believed (no DX rule without a centre)");
+    // ★ a SAR aircraft (type 9) may move at 600 kn — never a whole-minute exemption though (it has GPS)
+    CHECK(vibeais::movingType(9) && !vibeais::movingType(21) && !vibeais::movingType(4) && !vibeais::movingType(27), "moving types: 1/2/3/18/19/9; not AtoN / base / type 27");
 }
 
 static void testCpu() {
@@ -614,6 +686,7 @@ int main(int argc, char** argv) {
     testConditions(false);   // ★ the full table: test-ais --conditions
     testNoise();
     testService();
+    testPlausible();
     testCpu();
     std::printf("\ntest-ais: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

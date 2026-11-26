@@ -18665,6 +18665,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         noteHwMoved();
         g_ais.stop();
         g_ais.setStore(aisMakeStore());
+        g_ais.setReceiver(g_bgLat.load(), g_bgLon.load());   // ★ beta95 the DX rule (vibe_ais_service.h kDxNm): far = unconfirmed until two agree
         g_ais.start(hw, rate, /*keepList=*/false, aisMakeLog());
         tuneHw(logical);
         zoomFactor.store(1.0);

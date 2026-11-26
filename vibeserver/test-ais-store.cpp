@@ -26,6 +26,11 @@ static int g_pass = 0, g_fail = 0;
 #define CHECK(c, ...) do { if (c) ++g_pass; else { ++g_fail; std::printf("   FAIL %s:%d: ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
 
 namespace st = vibeais::store;
+/* ★ beta95 the store drops a moving ship's WHOLE-MINUTE positions (st::scrub — a transponder's fake), so a fixture's
+ *  round figures (50.8, -1.3 = 50°48.000′ 1°18.000′) are nudged off the minute as every real fix is: 3e-7° here (a
+ *  record's 1e-7° grid), 4e-6° in an AIS message (its 1/10 000′ grid). */
+static int32_t E7(double d) { return st::e7(d) + 3; }
+static constexpr double kOff = 0.000004;
 
 static std::string tmpDir(const char* tag) {
     char b[256]; std::snprintf(b, sizeof b, "/tmp/vibe-ais-store-%s-%d", tag, (int)::getpid());
@@ -36,10 +41,10 @@ static std::string tmpDir(const char* tag) {
 static void rmDir(const std::string& d) { std::string cmd = "rm -rf " + d; if (std::system(cmd.c_str())) {} }
 
 static st::Rec ship(uint32_t mmsi, uint32_t seen, double lat, double lon, const char* name = "") {
-    st::Rec r; r.mmsi = mmsi; r.seen = seen; r.first = seen; r.posAt = seen; r.lat = st::e7(lat); r.lon = st::e7(lon);
+    st::Rec r; r.mmsi = mmsi; r.seen = seen; r.first = seen; r.posAt = seen; r.lat = E7(lat); r.lon = E7(lon);
     r.sog10 = 105; r.cog10 = 2450; r.hdg = 246; r.stype = 70; r.kind = 0;
     st::putStr(r.name, sizeof r.name, name);
-    r.nTrk = 1; r.trk[0] = { seen, st::e7(lat), st::e7(lon) };
+    r.nTrk = 1; r.trk[0] = { seen, E7(lat), E7(lon) };
     return r;
 }
 static uint64_t fsize(const std::string& p) { struct stat s{}; return ::stat(p.c_str(), &s) == 0 ? (uint64_t)s.st_size : 0; }
@@ -48,9 +53,9 @@ static void testRoundTrip() {
     std::printf("── a ship round trip ──\n");
     const std::string d = tmpDir("rt");
     vibeais::Vessel v; v.mmsi = 235012345; v.kind = "A"; v.name = "WILSON GOOLE"; v.callsign = "MXYZ7"; v.dest = "ROTTERDAM";
-    v.shipType = 70; v.nav = 0; v.heading = 246; v.lat = 50.8; v.lon = -1.3; v.sog = 12.3; v.cog = 245.6; v.bow = 100; v.stern = 20; v.port = 10; v.stbd = 10;
+    v.shipType = 70; v.nav = 0; v.heading = 246; v.lat = 50.8 + kOff; v.lon = -1.3 - kOff; v.sog = 12.3; v.cog = 245.6; v.bow = 100; v.stern = 20; v.port = 10; v.stbd = 10;
     v.first = 10; v.last = 100; v.posAt = 100; v.count = 7; v.etaMonth = 11; v.etaDay = 3; v.etaHour = 14; v.etaMin = 30;
-    for (int i = 0; i < 100; ++i) v.trail.push_back({ 10.0 + i * 60.0 / 1.0 * 0.5, 50.7 + i * 0.001, -1.3 });   // every 30 s, 111 m apart
+    for (int i = 0; i < 100; ++i) v.trail.push_back({ 10.0 + i * 60.0 / 1.0 * 0.5, 50.7 + i * 0.001, -1.3 - kOff });   // every 30 s, 111 m apart
     const int64_t wall = 1'800'000'000;
     st::Rec r = st::fromVessel(v, 100.0, wall);
     CHECK(r.seen == wall && r.first == wall - 90, "times to UTC: seen %u first %u", r.seen, r.first);
@@ -79,18 +84,18 @@ static void testMerge() {
     st::Rec a = ship(1, 100, 50, -1, "OLD NAME");
     st::putStr(a.dest, sizeof a.dest, "LE HAVRE"); a.imo = 9134270; a.len = 120;
     st::Rec b = ship(1, 200, 50.1, -1.1);      // a position report: no name
-    b.trk[0] = { 200, st::e7(50.1), st::e7(-1.1) };
+    b.trk[0] = { 200, E7(50.1), E7(-1.1) };
     st::merge(a, b);
     CHECK(a.seen == 200 && st::getStr(a.name, sizeof a.name) == "OLD NAME" && st::getStr(a.dest, sizeof a.dest) == "LE HAVRE" && a.imo == 9134270 && a.len == 120,
           "the newer report wins, the static fields it lacks are kept");
     CHECK(std::fabs(st::de7(a.lat) - 50.1) < 1e-6, "the newest position");
     CHECK(a.nTrk == 2 && a.trk[0].t == 100 && a.trk[1].t == 200, "both points, in time order");
     st::Rec c = ship(1, 150, 49, 0);           // an OLDER report from another radio
-    c.trk[0] = { 150, st::e7(49.9), st::e7(-1.05) };
+    c.trk[0] = { 150, E7(49.9), E7(-1.05) };
     st::merge(a, c);
     CHECK(a.seen == 200 && std::fabs(st::de7(a.lat) - 50.1) < 1e-6, "an older report does not move the ship back");
     CHECK(a.nTrk == 3 && a.trk[1].t == 150, "…but its track point goes in between");
-    st::Rec dup = ship(1, 210, 50.1, -1.1); dup.trk[0] = { 210, st::e7(50.1), st::e7(-1.1) };
+    st::Rec dup = ship(1, 210, 50.1, -1.1); dup.trk[0] = { 210, E7(50.1), E7(-1.1) };
     st::merge(a, dup);
     CHECK(a.nTrk == 3, "the same fix 10 s later (another radio) is one point");
 }
@@ -258,8 +263,8 @@ static void testService() {
         vibeais::RawFrame f; f.bytes = o; f.levelDb = -30; f.snrDb = 20;
         return f;
     };
-    s.acceptForTest(0, type18(235000001, 50.8, -1.3));
-    s.acceptForTest(1, type18(235000002, 50.9, -1.2));
+    s.acceptForTest(0, type18(235000001, 50.8 + kOff, -1.3 - kOff));
+    s.acceptForTest(1, type18(235000002, 50.9 + kOff, -1.2 - kOff));
     s.flushStoreForTest();
     CHECK(got.size() == 1 && got[0].size() == 2, "two ships handed over (%zu)", got.empty() ? 0 : got[0].size());
     s.flushStoreForTest();
@@ -298,6 +303,46 @@ static void testProfile() {
     CHECK(bg::toJson(plain).find("ais") == std::string::npos, "an ordinary profile writes no \"ais\" key (older settings read back unchanged)");
 }
 
+/* ★★★ beta95 THE WHOLE-MINUTE SCRUB: a store written before beta95 kept HOOIHANDEL's fake (00°15.000′N 008°50.000′E) as
+ *  its position and a track point — the dashed line from Rotterdam to Africa. Read back, it is gone; a merge drops it for
+ *  good; an AtoN's round position and type 27's coarse grid are left alone; the DX mark travels with the position. */
+static void testScrub() {
+    std::printf("── beta95 the whole-minute scrub, the DX mark ──\n");
+    const std::string d = tmpDir("scrub");
+    st::Rec bad = ship(244780619, 1000, 0.25, 8.0 + 50.0 / 60, "HOOIHANDEL");
+    bad.lat = st::e7(0.25); bad.lon = st::e7(8.0 + 50.0 / 60);           // exactly on the minutes, as it was sent
+    bad.nTrk = 3;
+    bad.trk[0] = { 900, E7(51.91387), E7(4.39695) };
+    bad.trk[1] = { 950, st::e7(0.25), st::e7(8.0 + 50.0 / 60) };
+    bad.trk[2] = { 990, E7(51.91390), E7(4.39700) };
+    CHECK(st::fakePosE7(bad.lat, bad.lon) && !st::fakePosE7(E7(51.91387), E7(4.39695)) && !st::fakePosE7(st::e7(0.25), E7(4.39695)),
+          "the mark: both on whole minutes (one alone is not)");
+    st::Rec aton = ship(992446001, 1000, 52.0, 4.0, "MAASMOND"); aton.kind = 3; aton.lat = st::e7(52.0); aton.lon = st::e7(4.0);
+    st::Rec coarse = ship(244000027, 1000, 52.5, 4.5); coarse.lat = st::e7(52.5); coarse.lon = st::e7(4.5); coarse.spare = 2;
+    st::Rec dx = ship(227000001, 1000, 48.75432, -2.12345); dx.spare = 1;
+    st::write(d, 100ull << 20, { bad, aton, coarse, dx });
+    st::Query q; q.tracks = true;
+    const auto got = st::read(d, q);
+    const st::Rec* b = nullptr; const st::Rec* a = nullptr; const st::Rec* c = nullptr; const st::Rec* x = nullptr;
+    for (const auto& r : got) { if (r.mmsi == 244780619) b = &r; if (r.mmsi == 992446001) a = &r; if (r.mmsi == 244000027) c = &r; if (r.mmsi == 227000001) x = &r; }
+    CHECK(b && b->lat == st::kNoPos && b->nTrk == 2 && b->trk[0].t == 900 && b->trk[1].t == 990, "the fake ship: listed, no position, its fake track point gone");
+    const std::string j = st::toJson(got, 1060, true, got.size());
+    CHECK(j.find("[0.25000,") == std::string::npos && j.find("\"lat\":0.25") == std::string::npos, "…never in the JSON (no dot, no line to Africa)");
+    CHECK(a && a->lat == st::e7(52.0), "an AtoN's round position is kept (surveyed)");
+    CHECK(c && c->lat == st::e7(52.5), "a type 27 (coarse grid) position is kept");
+    CHECK(x && (x->spare & 1) && j.find("\"dx\":1") != std::string::npos, "the DX mark round-trips (spare bit 0) into the JSON");
+    // a merge (the next write) drops the fake for good, and the DX mark follows the older position it keeps
+    st::Rec newer = ship(244780619, 1100, 0, 0); newer.lat = newer.lon = st::kNoPos; newer.posAt = 0; newer.nTrk = 0;
+    st::Rec have = bad; st::merge(have, newer);
+    bool clean = have.nTrk >= 1;
+    for (int i = 0; i < have.nTrk; ++i) if (st::fakePosE7(have.trk[i].lat, have.trk[i].lon)) clean = false;
+    CHECK(have.lat == st::kNoPos && clean, "merge: the fake never survives a write (%d track points, none fake)", have.nTrk);
+    st::Rec far1 = dx; st::Rec later = ship(227000001, 1200, 0, 0); later.lat = later.lon = st::kNoPos; later.posAt = 0; later.spare = 0; later.nTrk = 0;
+    st::merge(far1, later);
+    CHECK((far1.spare & 1) && std::fabs(st::de7(far1.lat) - 48.75432) < 1e-6, "merge: the DX mark stays with the position kept");
+    rmDir(d);
+}
+
 int main(int argc, char** argv) {
     // ★ `test-ais-store --write <gallery dir>`: three ships in the Solent with tracks, heard now (the web map test's fixture)
     if (argc > 2 && std::string(argv[1]) == "--write") {
@@ -308,7 +353,7 @@ int main(int argc, char** argv) {
             st::Rec r = ship(235100001 + i, now - 60 * i, 50.75 + i * 0.02, -1.2 + i * 0.05, names[i]);
             r.stype = i == 1 ? 60 : i == 2 ? 50 : 70;
             r.nTrk = 3;
-            for (int k = 0; k < 3; ++k) r.trk[k] = { now - 60 * i - 600 * (2 - k), st::e7(50.74 + i * 0.02 + k * 0.004), st::e7(-1.21 + i * 0.05) };
+            for (int k = 0; k < 3; ++k) r.trk[k] = { now - 60 * i - 600 * (2 - k), E7(50.74 + i * 0.02 + k * 0.004), E7(-1.21 + i * 0.05) };
             v.push_back(r);
         }
         const size_t n = st::write(argv[2], 100ull << 20, v);
@@ -319,6 +364,7 @@ int main(int argc, char** argv) {
     testProfile();
     testRoundTrip();
     testMerge();
+    testScrub();
     testBounded();
     testFilters();
     testProcesses();
