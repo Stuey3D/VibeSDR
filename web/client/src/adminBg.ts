@@ -228,3 +228,17 @@ export function satPassLines(sp: SatPassStatus | null | undefined, nowSec = Date
   if (sp.keepWarn) rows.push(`Warning: ${sp.keepWarn}`);
   return { head: `Unattended satellites · ${head}`, rows, warn: sp.state === 'blocked' || !!sp.keepWarn };
 }
+
+/* ── ★★ beta95 THE PILL AUDIT (Stuart 11-25: "the pill is to inform users why they might be having sluggish connection,
+ *    lagging, broken audio etc."): a decoder that lost input in the last minute — spots, the skimmers, ADS-B, ISM, AIS, the
+ *    datalink, the wide-IQ slice tap … — loses DECODES, never a listener's audio, so it is the owner's line here and not the
+ *    health pill's (adminStatusJson "decodersBehind"; the pill keeps DRM and DAB+ audio, which a listener hears break). ── */
+export function behindLines(list: string[] | null | undefined): { head: string; rows: string[]; warn: boolean } | null {
+  const l = (list || []).filter((x) => typeof x === 'string' && x);
+  if (!l.length) return null;
+  return {
+    head: `Decoders losing input \u00b7 ${l.join(', ')}`,
+    rows: [`${l.length === 1 ? 'it' : 'they'} dropped some input in the last minute, so some decodes may be missed \u2014 listeners\u2019 audio is not affected`],
+    warn: true,
+  };
+}

@@ -117,6 +117,24 @@ public:
         if (dropped > e.dropped && !excused) e.lastDropMs = nowMs;
         e.dropped = dropped;
     }
+    /** ★★ beta95 THE PILL AUDIT (Stuart 11-25, feedback_health_pill_genuine_only): which entries a LISTENER can feel —
+     *  `listenerFeels(key)` true = the pill (their audio breaks: DRM, DAB+'s audio decoder); the rest — a decoder losing
+     *  input loses DECODES, never lag or broken audio — go to `adminOut` (the admin page). One pass, the same forgetting. */
+    template <class Pred>
+    std::vector<std::string> behindSplit(int64_t nowMs, Pred listenerFeels, std::vector<std::string>* adminOut) {
+        std::vector<std::string> pill;
+        for (auto it = m_.begin(); it != m_.end();) {
+            if (it->second.seenMs != nowMs) { it = m_.erase(it); continue; }
+            if (nowMs - it->second.lastDropMs < kHoldMs) {
+                std::vector<std::string>* to = listenerFeels(it->first) ? &pill : adminOut;
+                if (to && std::find(to->begin(), to->end(), it->second.label) == to->end()) to->push_back(it->second.label);
+            }
+            ++it;
+        }
+        std::sort(pill.begin(), pill.end());
+        if (adminOut) std::sort(adminOut->begin(), adminOut->end());
+        return pill;
+    }
     std::vector<std::string> behind(int64_t nowMs) {
         std::vector<std::string> out;
         for (auto it = m_.begin(); it != m_.end();) {

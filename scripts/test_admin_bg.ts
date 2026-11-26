@@ -1,5 +1,5 @@
 // test_admin_bg.ts — the admin page's background-decoding line (web/client/src/adminBg.ts, V12 beta 4).
-import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines, bgFullCpuText } from '../web/client/src/adminBg.ts';
+import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines, bgFullCpuText, behindLines } from '../web/client/src/adminBg.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -106,6 +106,14 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   ok(w.warn && w.rows.includes(`Warning: ${kw}`) && !w.head.includes('cannot run'), `keep-running warning, not a block: ${w.rows.join(' | ')}`);
   const wp = satPassLines({ state: 'running', now: 'METEOR-M2 4 LRPT pass', meteor: true, name: 'METEOR-M2 4', label: 'LRPT', decoder: 'lrpt', los: now + 300, maxEl: 40, keepPaused: 'ADS-B', keepWarn: kw }, now)!;
   ok(wp.rows.includes('ADS-B paused for this pass \u2014 it resumes after LOS'), `ADS-B paused row: ${wp.rows.join(' | ')}`);
+}
+// ★★ beta95 the pill audit: decoders losing input are the owner's line
+{
+  ok(behindLines(undefined) === null && behindLines([]) === null, 'nothing behind: no line');
+  const one = behindLines(['ADS-B'])!;
+  ok(one.head === 'Decoders losing input \u00b7 ADS-B' && one.warn && one.rows[0].startsWith('it dropped'), `one: ${one.head} | ${one.rows[0]}`);
+  const two = behindLines(['ADS-B', 'ORBCOMM (wide-IQ slice tap)'])!;
+  ok(two.head.endsWith('ADS-B, ORBCOMM (wide-IQ slice tap)') && two.rows[0].includes('audio is not affected'), `two: ${two.head}`);
 }
 // ★★★ beta94 nobody listening — background may use the whole machine
 {

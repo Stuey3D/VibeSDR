@@ -44263,6 +44263,10 @@ void LocalSdrShim::noteConnectionClosed(const std::string& ip, const std::string
  *  second is five times the wake-ups on a Pi that is also running the DSP, and its panels can
  *  disagree with each other — the listener count from one fetch beside the bandwidth from
  *  another, taken 300 ms apart. One snapshot is one consistent moment. */
+/** ★★ beta95 the decoders losing input that a listener does NOT feel (their decodes, not their audio) — the admin page's
+ *  line (adminStatusJson "decodersBehind"), never the pill. Written by healthTick every two seconds. */
+static std::mutex g_adminBehindMtx;
+static std::vector<std::string> g_adminBehind;
 std::string LocalSdrShim::adminStatusJson() {
     const vibeadmin::SysStats sys = vibeadmin::readSys();
     std::string j = "{\"sys\":" + vibeadmin::sysJson(sys);
@@ -44461,6 +44465,16 @@ std::string LocalSdrShim::adminStatusJson() {
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"bgDecode\":" + bi->bgStatusJson();
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"dxScan\":" + bi->dxStatusJson();   // ★★★ V12
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"satPass\":" + bi->satPassStatusJson();   // ★★ V12 beta90
+    /* ★★ beta95 THE PILL AUDIT: decoders that lost input in the last minute but cost a listener nothing (their decodes, not
+     *  their audio) — the owner's to see, here; the pill names only what a listener feels (vsBehindListenerFeels). */
+    {
+        std::lock_guard<std::mutex> lk(g_adminBehindMtx);
+        if (!g_adminBehind.empty()) {
+            j += ",\"decodersBehind\":[";
+            for (size_t i = 0; i < g_adminBehind.size(); ++i) j += (i ? ",\"" : "\"") + vibe::gallery::jsonEsc(g_adminBehind[i]) + "\"";
+            j += "]";
+        }
+    }
     return j + "}";
 }
 
@@ -46847,6 +46861,13 @@ static std::string decoderLabel(const std::string& ext, bool spots) {
 /** ★★ Who lost input in the last minute — see vibehealth::BehindWatch. Listeners' decoders, background decoding,
  *  ADS-B and ISM: every decoder that runs behind a drop-never-wait queue. (Advanced RDS runs inside the DSP's own
  *  pass, with no queue of its own to fall behind on, so it is not judged here.) */
+/** ★★ beta95 THE PILL AUDIT: only a decoder whose loss is the listener's AUDIO — DRM and DAB+'s audio decoder — reaches the
+ *  pill. Spots, the skimmers, ADS-B, ISM, NDB, AIS, the datalink, sondes, the VOR map and a listener's text decoders lose
+ *  decodes when they drop input, never lag or broken audio (Stuart 11-25: "the pill is to inform users why they might be
+ *  having sluggish connection, lagging, broken audio etc."): the admin page names them. */
+static bool vsBehindListenerFeels(const std::string& key) {
+    return key.rfind("drm:", 0) == 0 || key == "dab:aac";
+}
 std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     static vibehealth::BehindWatch watch;
     if (p) {
@@ -46885,6 +46906,12 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
                      who.empty() ? "the decoder it feeds" : who.c_str());
                 tapLast = d; tapLogAt = nowMs;
             } else if (!p->skimTap_.running()) tapLast = d;
+            // ★★ beta95 and on the ADMIN page (never the pill — vsBehindListenerFeels): the owner sees it within the minute
+            if (p->skimTap_.running()) {
+                std::shared_ptr<DecoderHost> h = p->decoders_.shared();
+                const std::string who = h ? decoderLabel(h->name(), h->spotsOn()) : std::string();
+                watch.note("tap:wide", (who.empty() ? std::string("Wide-IQ slice") : who) + " (wide-IQ slice tap)", d, nowMs);
+            }
         }
         /* ★★★ V12 2026-11-24: background decoding giving way to a listener is the design working (vibe_bg_ease.h) — its drops
          *  are EXCUSED while a listener is on and the easing still has room to act. TOO HEAVY stays for real overload:
@@ -46918,7 +46945,10 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     /* ★★ V12: DAB+ through FAAD2 decodes on its own thread (vibe-faad2) behind a drop-never-wait ring; a unit it could
      *  not take in time is concealed — this box is too light for the decode on top of the multiplex. Monotonic. */
     watch.note("dab:aac", "DAB+ audio decoder", g_dab.aacDropped(), nowMs);
-    return watch.behind(nowMs);
+    std::vector<std::string> admin;
+    std::vector<std::string> pill = watch.behindSplit(nowMs, vsBehindListenerFeels, &admin);
+    { std::lock_guard<std::mutex> lk(g_adminBehindMtx); g_adminBehind.swap(admin); }
+    return pill;
 }
 
 /** ★★★ beta94: the pill's line when background decoding's load is degrading the listener — said from their side. */
@@ -46950,8 +46980,8 @@ void LocalSdrShim::healthTick() {
                             h.batPresent && !h.batCharging);
     h.behind = decodersBehind(now);
     if (p) {
-        const std::string en = p->bgRun_.running() ? p->bgRun_.easeNote() : std::string();
-        if (!en.empty()) h.notes.push_back("Background decoding: " + en);
+        /* ★★ beta95 THE PILL AUDIT: "Background decoding: eased for listeners" is the design working — nothing a listener
+         *  feels. The admin page's background line says it (adminBg.ts bgLines, runner.ease.note); the pill does not. */
         // ★★★ beta94: on the pill ONLY when its load is what the listener feels (vibe_bg_ease.h PillWatch)
         static vibe::bg::ease::PillWatch bgPill;
         const bool on = p->bgRun_.running();
@@ -46960,6 +46990,10 @@ void LocalSdrShim::healthTick() {
     }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
+    /* ★★ beta95 THE PILL AUDIT: the host's battery % is the OWNER's (the admin page's BATTERY card, with its suspend floor),
+     *  not a struggle a listener feels. What a listener does feel — connections suspended at the floor — is said to them
+     *  through the VTS line as it approaches (batteryTick). Read above (bgFullCpuTick) before it is taken off the pill. */
+    h.batPresent = false; h.batCharging = false; h.batPct = -1; h.bat = vibehealth::OK;
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);

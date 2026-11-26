@@ -318,6 +318,26 @@ int main() {
         ok(vibehealth::json(b).find("\"usb\":3") != std::string::npos, "critical is sent as usb:3");
         ok(vibehealth::differs(a, b), "a USB change is news (sent on change)");
     }
+    {   // ★★ beta95 THE PILL AUDIT: only what a listener feels reaches the pill; the rest is the admin page's
+        vibehealth::BehindWatch w;
+        const int64_t t = 1000000;
+        auto feels = [](const std::string& k) { return k.rfind("drm:", 0) == 0 || k == "dab:aac"; };
+        for (int64_t at : { t, t + 2000 }) {
+            const uint64_t d = at == t ? 0 : 5;
+            w.note("adsb", "ADS-B", d, at); w.note("spots:x", "Digital spots", d, at); w.note("drm:shared", "DRM", d, at); w.note("dab:aac", "DAB+ audio decoder", 0, at);
+            std::vector<std::string> admin;
+            const auto pill = w.behindSplit(at, feels, &admin);
+            if (at == t) ok(pill.empty() && admin.empty(), "first sight is a baseline: nothing named");
+            else {
+                ok(pill.size() == 1 && pill[0] == "DRM", "the pill names only DRM (a listener hears it break)");
+                ok(admin.size() == 2 && admin[0] == "ADS-B" && admin[1] == "Digital spots", "ADS-B and spots go to the admin page");
+            }
+        }
+        std::vector<std::string> admin;
+        w.note("adsb", "ADS-B", 5, t + 4000);
+        const auto pill = w.behindSplit(t + 4000, feels, &admin);
+        ok(pill.empty() && admin.size() == 1 && admin[0] == "ADS-B", "a decoder not noted this tick is forgotten in both lists");
+    }
     fs::remove_all(g_root);
     std::printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
