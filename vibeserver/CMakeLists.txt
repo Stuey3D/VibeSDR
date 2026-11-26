@@ -1075,6 +1075,9 @@ endif()
 add_executable(test-radio-api "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-api.cpp")
 vibe_sanitize(test-radio-api)
 target_link_libraries(test-radio-api PRIVATE vibeserver_core)
+# ★ b96 kept-running ADS-B at 2.56 MS/s across IN-PROCESS restarts (the Sony) — needs fake-rtl-tcp: scripts/test-adsb-restart.sh
+add_executable(test-adsb-restart "${CMAKE_CURRENT_SOURCE_DIR}/test-adsb-restart.cpp")
+target_link_libraries(test-adsb-restart PRIVATE vibeserver_core)
 # ★ V12 USRP: the B2xx policy + hwinfo shape, and — only where UHD is linked — "no USRP here" answered cleanly by the
 #   real source (scripts/run-tests.sh builds the same file header-only, against the stub).
 if(VIBE_USRP_BUILT)
