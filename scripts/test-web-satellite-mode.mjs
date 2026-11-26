@@ -309,40 +309,46 @@ try {
   await ev(`window.__p.exit(); true`);
   ok((await ev('window.__sent')).filter((m) => m.op === 'drop').length === 1, 'leaving twice sends one drop');
 
-  console.log('— 1.6 REMIND (a fake clock)');
+  console.log('— ★★★ beta96 SCHEDULE on a SHARED receiver: others on when it rises → a reminder only (a fake clock)');
   await desk(); await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
   const T0 = Date.now();
   const t0 = Math.floor(T0 / 1000);
   const so50Aos = now + 38 * 60 + 20, son2Aos = now + 3 * 3600;
-  // ★★★ beta96 (Stuart 11-26): REMIND is the SHARED DIAL's key now (pickPrivate false, nobody said to be alone); a private
-  //    radio gets SCHEDULE (its own section below). So this section runs on a shared dial: priv(false).
+  // ★★★ beta96 (Stuart 11-26, faa4192c8): "if you are alone on the receiver it will tune and open the pass for you, however if
+  //    anybody else is on then its a reminder only" — the key is SCHEDULE on a shared dial too (satKeyKind); who is on WHEN IT
+  //    RISES decides. This section runs on a shared dial with the listener count unknown (pickPrivate false): every booking
+  //    fires as a reminder. (REMIND keys are no longer drawn; the reminder pop-ups are the same.)
   const priv = (pp = false, over = {}) => { const l = list(over); l.source.pickPrivate = pp; l.sats = l.sats.map((x) => x.id === 'SO-50' ? { ...x, tx: [{ ...x.tx[0], reach: true, why: undefined }] } : x); return l; };
+  const book = () => ev('window.__p.scheduled().length');
   await ev(`window.__fake = ${T0}; window.__p.show(); window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(true))})); document.querySelector('#satPanel details').open = true; true`);
   ok(await ev(`document.querySelectorAll('#satPanel [data-act="remind"]').length === 0 && document.querySelectorAll('#satPanel [data-act="sched"]').length === 2`), 'beta96 a private radio: SCHEDULE keys, no REMIND');
   await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(priv(false))})); true`);
   const rem = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .sat-rem')].map(b => b.dataset.norad + ':' + b.textContent))`));
-  ok(rem.length === 2 && rem.includes('27607:REMIND') && rem.includes('59112:REMIND'), `beta96 a shared dial: a REMIND key on each pass still to come, none on the up-now rows (${rem.join(', ')})`);
-  ok(/A shared dial — tuning moves everyone/.test(await ev(`document.querySelector('#satPanel .sat-sline')?.textContent || ''`)), 'beta96 the line says why it is REMIND here');
-  ok(/REMIND.*1.*2.*5.*10.*min before it rises/.test(await ev(`document.querySelector('#satPanel .sat-lead').textContent`)), 'the lead choice 1 / 2 / 5 / 10 min');
-  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').click(); true`);
-  ok(await ev(`document.querySelector('#satPanel .sat-rem[data-norad="27607"]').textContent`) === 'FORGET' && await ev('window.__p.reminders().length') === 1, 'pressed: lit "FORGET", one held');
+  ok(rem.length === 2 && rem.includes('27607:SCHEDULE') && rem.includes('59112:SCHEDULE') && await ev(`document.querySelectorAll('#satPanel [data-act="remind"]').length === 0`),
+     `beta96 a shared dial: a SCHEDULE key on each pass still to come, none on the up-now rows, no REMIND (${rem.join(', ')})`);
+  ok(/A shared receiver: SCHEDULE tunes and opens the pass for you if you are alone on it when the pass rises — if anyone else is on, it is a reminder only/.test(await ev(`document.querySelector('#satPanel .sat-sline')?.textContent || ''`)), 'beta96 the line says what SCHEDULE does on a shared receiver');
+  ok(/REMIND.*1.*2.*5.*10.*min before it rises/.test(await ev(`document.querySelector('#satPanel .sat-lead')?.textContent || ''`)), 'the lead choice 1 / 2 / 5 / 10 min (a booking may end as a reminder)');
+  await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="27607"]').click(); true`);
+  ok(await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="27607"]').textContent`) === 'CANCEL' && await book() === 1, 'pressed: lit "CANCEL", one booked');
+  ok(await ev(`[...document.querySelectorAll('#satPanel .sat-sline')].some(e => /if anyone else is on, it is a reminder only/.test(e.textContent) && /^Scheduled — if you are alone/.test(e.textContent))`), 'pressing it says what the booking will do');
   await shot('remind-list');
   await ev(`document.querySelector('#satPanel [data-act="exit"]').click(); true`);
-  ok(await ev('window.__p.reminders().length') === 1, 'leaving the mode keeps it (this page still on this server)');
+  ok(await book() === 1, 'leaving the mode keeps it (this page still on this server)');
   await ev(`window.__fake = ${(so50Aos - 121) * 1000}; window.__p.remTick(); true`);
   ok(await ev(`document.getElementById('satRemind').hidden`), '2:01 before AOS: nothing yet');
   await ev(`window.__fake = ${(so50Aos - 120) * 1000}; window.__p.remTick(); true`);
   const toast = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
-  ok(/^SO-50 rises in 2:00 — LISTEN\?/.test(toast) && /LISTEN/.test(toast) && /DISMISS/.test(toast), `2:00 before AOS: the pop-up (${toast})`);
-  ok(await ev('window.__p.reminders().length') === 0, 'fired once (out of the book)');
+  ok(/^SO-50 rises in 2:00 — LISTEN\?/.test(toast) && /did not tune by itself/.test(toast) && /LISTEN/.test(toast) && /DISMISS/.test(toast), `2:00 before AOS: the pop-up, saying it did not tune (${toast})`);
+  await ev(`window.__p.remTick(); true`);
+  ok(await ev(`document.querySelectorAll('#satRemind .sat-toast').length`) === 1, 'fired once');
   await shot('remind-toast');
   await ev(`document.querySelector('#satRemind [data-act="listen"]').click(); true`);
   ok(await ev('window.__entered') === 1 && await ev('window.__p.active'), 'LISTEN enters SATELLITE');
   ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":27607,"tx":0,"doppler":true}', 'LISTEN sends the ordinary pick');
   ok(await ev(`document.getElementById('satRemind').hidden`), 'the pop-up goes');
-  // the re-check: out of range by the time it fires (★★★ beta96: a shared dial no longer blocks LISTEN — it is REMIND's home)
+  // the re-check: out of range by the time it fires
   await ev(`window.__fake = ${T0}; window.__p.onPicked({ norad: 27607, tx: 0, decoder: '' }); document.querySelector('#satPanel details').open = true; true`);
-  await ev(`document.querySelector('#satPanel .sat-rem[data-norad="59112"]').click(); true`);
+  await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="59112"]').click(); true`);
   const gone = priv(false); gone.sats = gone.sats.map((x) => x.id === 'SONATE-2' ? { ...x, tx: [{ ...x.tx[0], reach: false, why: 'Out of this receiver’s range — it is locked to 430–440 MHz' }] } : x);
   await ev(`window.__p.onList(__Sat.parseSatList(${JSON.stringify(gone)})); window.__fake = ${(son2Aos - 120) * 1000}; window.__p.remTick(); true`);
   const why = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
@@ -350,12 +356,13 @@ try {
   await ev(`document.querySelector('#satRemind [data-act="dismiss"]').click(); true`);
   ok(await ev(`document.getElementById('satRemind').hidden`), 'DISMISS');
   // several at once — and "picking this ends SO-50"
+  await ev(`window.__p.sched.clearServer(window.__p.srv()); window.__p.schedFired.clear(); true`);
   const many = priv(false); many.sats = many.sats.concat([1, 2, 3, 4].map((k) => ({ id: 'B' + k, name: 'BIRD-' + k, norad: 90000 + k, note: '', age: 1, ageState: 'fresh', el: -20,
     tx: [{ label: 'FM', hz: 145900000, mode: 'nfm', loop: 'fll', reach: true, use: 'voice', band: 'U/v', modeName: 'Mode B' }], passes: [{ aos: now + 1200 + k, tca: now + 1500, los: now + 1800, maxEl: 40, aosAz: 0, losAz: 180 }] })));
   await ev(`window.__fake = ${T0}; window.__p.onList(__Sat.parseSatList(${JSON.stringify(many)})); document.querySelector('#satPanel details').open = true; true`);
   ok(/145\.900 MHz FM · Mode B · U\/v/.test(await ev(`document.querySelector('#satPanel .sat-row[data-norad="90001"]').textContent`)), '1.4 the row shows the mode label "Mode B · U/v"');
-  for (const k of [1, 2, 3, 4]) await ev(`document.querySelector('#satPanel .sat-rem[data-norad="${90000 + k}"]').click(); true`);
-  ok(await ev('window.__p.reminders().length') === 4, 'four held');
+  for (const k of [1, 2, 3, 4]) await ev(`document.querySelector('#satPanel [data-act="sched"][data-norad="${90000 + k}"]').click(); true`);
+  ok(await book() === 4, 'four booked');
   await ev(`window.__fake = ${(now + 1200 + 4 - 120) * 1000}; window.__p.remTick(); true`);
   const st = JSON.parse(await ev(`JSON.stringify({ n: document.querySelectorAll('#satRemind .sat-toast').length, more: document.querySelector('#satRemind .sat-more')?.textContent, first: document.querySelector('#satRemind .sat-toast').textContent })`));
   ok(st.n === 3 && st.more === '+1 more', `several: three shown, "+1 more" (${st.n}, ${st.more})`);
@@ -363,10 +370,10 @@ try {
   await shot('remind-stack');
   for (let k = 0; k < 4; k++) await ev(`document.querySelector('#satRemind [data-act="dismiss"]')?.click(); true`);
   // no connection at fire time: never fires
-  await ev(`window.__fake = ${T0}; document.querySelector('#satPanel .sat-rem[data-norad="90001"]').click(); window.__conn = false; window.__fake = ${(now + 1201 - 60) * 1000}; window.__p.remTick(); true`);
-  ok(await ev(`document.getElementById('satRemind').hidden && window.__p.reminders().length === 0`), 'no connection when it is due: dropped silently');
-  await ev(`window.__conn = true; window.__fake = ${T0}; window.__p.render(); document.querySelector('#satPanel .sat-rem[data-norad="90002"]').click(); window.__p.remindClear(); true`);
-  ok(await ev('window.__p.reminders().length') === 0, 'the session ending / leaving clears them');
+  await ev(`window.__p.sched.clearServer(window.__p.srv()); window.__p.schedFired.clear(); window.__fake = ${T0}; window.__p.render(); document.querySelector('#satPanel [data-act="sched"][data-norad="90001"]').click(); window.__conn = false; window.__fake = ${(now + 1201 - 60) * 1000}; window.__p.remTick(); true`);
+  ok(await ev(`document.getElementById('satRemind').hidden`), 'no connection when it is due: nothing fires');
+  await ev(`window.__conn = true; window.__p.remindClear(); window.__p.sched.clearServer(window.__p.srv()); window.__p.schedFired.clear(); window.__p.schedSave(); window.__fake = ${T0}; true`);
+  ok(await book() === 0 && await ev(`document.getElementById('satRemind').hidden`), 'cleared for the next section');
 
   console.log('— ★★★ beta96 SCHEDULE (a private radio; a fake clock)');
   {
@@ -440,12 +447,12 @@ try {
   await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ sat: 'AO-73', format: 'funcube-rt', t: 1763700000, mode: 'Safe', hex: '0a1b2c3d4e5f',
     values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.21, unit: 'V' }, { k: 'pa.t', name: 'PA temp', v: 930, unit: 'C', raw: true }] })); true`);
   const tl = await ev(`document.querySelector('#satPanel .sat-tlm').innerText`);
-  ok(/3 frames · 2 good · 1 failed · Safe/.test(tl) && /Battery voltage 8\.21 V/.test(tl) && /PA temp 930 raw/.test(tl) && !/930 C/.test(tl), `1.3 values with units, raw labelled with no unit (${tl.replace(/\n/g, ' / ')})`);
+  ok(/3 frames · 2 good · 1 failed · Safe/.test(tl) && /Battery voltage 8\.21[ \u00a0]V/.test(tl) && /PA temp 930[ \u00a0]raw/.test(tl) && !/930 C/.test(tl), `1.3 values with units (joined by a no-break space, 6361ed846), raw labelled with no unit (${tl.replace(/\n/g, ' / ')})`);
   // ★★ beta94 a frame whose EPS data is not valid: said, its values not shown
   await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ sat: 'JO-97', format: 'funcube-rt', t: 1795600005, absent: ['EPS', 'iMTQ'],
     values: [{ k: 'rf.temp', name: 'RF temperature', v: -1.6, unit: '\u00b0C' }, { k: 'rf.rssi', name: 'Receiver RSSI', v: 255, raw: true, note: 'no conversion' }] })); true`);
   const tla = await ev(`document.querySelector('#satPanel .sat-tlm').innerText`);
-  ok(/No EPS or iMTQ data in this frame \(their data-valid flags are off\)/.test(tla) && /RF temperature -1\.6 \u00b0C/.test(tla) && !/Battery voltage/.test(tla),
+  ok(/No EPS or iMTQ data in this frame \(their data-valid flags are off\)/.test(tla) && /RF temperature -1\.6[ \u00a0]\u00b0C/.test(tla) && !/Battery voltage/.test(tla),
      `a board with no valid data is said, not shown as zeros (${tla.replace(/\n/g, ' / ')})`);
   await ev(`window.__p.telemetry(__Sat.parseSatTelemetry({ frames: 3, good: 2, failed: 1, sync: true, sat: 'AO-73', format: 'funcube-rt', mode: 'Safe', t: 1795600010, absent: [],
     values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.21, unit: 'V' }, { k: 'pa.t', name: 'PA temp', v: 930, unit: 'C', raw: true }] })); true`);
