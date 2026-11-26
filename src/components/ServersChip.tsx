@@ -219,6 +219,9 @@ export default function ServersChip({
           // ── Tucked: the icon-only edge tab (the health / time tabs mirrored onto the left edge) ──
           <Animated.View style={{ opacity: fade }}>
             <Pressable
+              /* ★ beta95: the tucked tab IS the Servers chip, so it keeps the chip's place in the pad's focus order
+               *  (test_nav_coverage) — only one of the two is ever drawn. */
+              ref={screenNavRef('serversChip', () => setExpanded(true))}
               onPress={() => setExpanded(true)}
               hitSlop={{ top: 6, bottom: 6, left: 4, right: 44 - EDGE_TAB_W - 4 }}
               accessibilityRole="button"
